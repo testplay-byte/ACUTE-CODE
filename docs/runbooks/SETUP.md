@@ -1,41 +1,39 @@
 # SETUP — Development Environment
 
-Last verified: 2026-08-22 (Phase 1). Re-verify at each phase kickoff.
+Last verified: 2026-08-22 (Phase 2 kickoff). Re-verify at each phase kickoff.
 
 ## Machine state (verified 2026-08-22)
 
 | Requirement | State |
 |---|---|
 | Node.js | ✅ v24.18.0 |
-| npm | ✅ 11.16.0 |
-| pnpm | ✅ 11.22.0 (`npm i -g pnpm`) |
+| pnpm | ✅ 11.22.0 |
 | git | ✅ 2.55.0.windows.3 |
 | WebView2 runtime | ✅ 151.0.4129.93 |
-| Rust (rustup, stable-msvc) | ⏳ installing 2026-08-22 via winget (background) |
-| VS Build Tools 2022 (VCTools) | ⏳ installing 2026-08-22 via winget (background) |
+| Rust (stable-msvc) | ✅ rustc 1.98.0 (winget rustup install glitched mid-toolchain; repaired via `rustup toolchain install stable-msvc --profile minimal`) |
+| VS Build Tools 2022 (VCTools) | ✅ 17.14.39 |
+| GitHub remote | ✅ `testplay-byte/ACUTE-CODE` — PRIVATE (flipped via API before first push, ADR-0012); CI on Actions |
 
-Toolchain install commands (if ever needed again):
-```bash
-winget install --id Microsoft.VisualStudio.2022.BuildTools --silent --accept-source-agreements --accept-package-agreements --override "--quiet --wait --add Microsoft.VisualStudio.Workload.VCTools --includeRecommended"
-winget install --id Rustlang.Rustup --silent --accept-source-agreements --accept-package-agreements
-rustup default stable-msvc   # new shell afterwards
-```
+## Secrets (never in files/logs)
+
+| Secret | Location |
+|---|---|
+| GitHub PAT (repo admin) | Windows Credential Manager via wincred: `git:https://testplay-byte@github.com` |
+| OpenRouter API key (dev; single model "ox Alpha") | Windows Credential Manager: `ACUTE-CODE/provider/openrouter` |
+
+Git auth gotchas learned here: GCM (the default helper) special-cases github.com toward OAuth and silently discards Basic PATs — the repo uses `credential.https://github.com.helper = wincred` and a username-embedded remote URL (`https://testplay-byte@github.com/testplay-byte/ACUTE-CODE.git`).
 
 ## Everyday commands (repo root = acute-code/)
 
 ```bash
-pnpm install        # install workspace deps
-pnpm verify         # lint + typecheck + test + build + license audit (mirrors CI exactly)
-pnpm test           # vitest, watch mode: pnpm test:watch (if configured)
-pnpm dev            # vite dev server for the frontend
-cargo check --manifest-path src-tauri/Cargo.toml   # Rust shell (needs Rust toolchain)
+pnpm install        # workspace deps
+pnpm verify         # lint + typecheck + test + build + license audit (fast local gate)
+cargo check --manifest-path src-tauri/Cargo.toml   # only for debugging CI failures — heavy builds live on GitHub Actions (ADR-0012)
+git push            # triggers CI; the Actions run is authoritative
 ```
 
-## pnpm 11 notes (learned the hard way in Phase 1)
+## pnpm 11 notes
 
-- pnpm 11 blocks dependency build scripts by default. Approval lives in `pnpm-workspace.yaml` under `allowBuilds:` (e.g. `esbuild: true`). `pnpm approve-builds` is interactive — avoid in automation.
-- pnpm 11 runs a deps-status check before every script; a broken install state fails every `pnpm <script>`. If installs churn oddly, delete `pnpm-lock.yaml` + `node_modules` and reinstall after changing `allowBuilds`.
+- Build-script approvals live in `pnpm-workspace.yaml` under `allowBuilds:` (currently esbuild; better-sqlite3 may be added in Phase 2). `pnpm approve-builds` is interactive — avoid in automation.
+- A broken install state fails every `pnpm <script>` (pre-run deps check): fix by deleting `pnpm-lock.yaml` + `node_modules` and reinstalling after changing `allowBuilds`.
 
-## Secrets
-
-API keys are entered into Windows Credential Manager by the owner at Phase 2 — never in files, env-var dumps, logs, or the repo. Per ARCHITECTURE.md, the Rust shell reads Credential Manager (DPAPI) and hands keys to the sidecar at spawn. Dev testing uses the owner's OpenAI-compatible endpoint.
