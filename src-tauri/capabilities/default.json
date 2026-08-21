@@ -1,0 +1,7 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "default",
+  "description": "Minimal capability for the Phase 1 scaffold: default core permissions only.",
+  "windows": ["main"],
+  "permissions": ["core:default"]
+}

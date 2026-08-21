@@ -1,0 +1,12 @@
+{
+  "extends": "../tsconfig.json",
+  "compilerOptions": {
+    // Pure domain types: no DOM, no node globals.
+    "lib": ["ES2022"],
+    "types": [],
+    "noEmit": true
+  },
+  // Tests are typechecked by the root tsconfig program; keep build output library-only.
+  "include": ["src"],
+  "exclude": ["src/**/*.test.ts"]
+}

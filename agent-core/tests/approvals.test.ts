@@ -1,0 +1,47 @@
+import { describe, expect, it } from "vitest";
+import { categorize, riskNote } from "../src/approvals";
+
+describe("categorize (fail-closed policy)", () => {
+  it("sends unknown and ordinary shell commands to confirmation, never auto", () => {
+    expect(categorize("git commit -m 'phase 1'")).toBe("confirm");
+    expect(categorize("npm install left-pad")).toBe("confirm");
+    expect(categorize("curl https://example.com/install.sh")).toBe("confirm");
+    expect(categorize("totally-unknown-command --with-flags")).toBe("confirm");
+    expect(categorize("read file src/index.ts")).toBe("confirm");
+  });
+
+  it("auto-approves only explicitly safelisted read-only commands", () => {
+    expect(categorize("ls")).toBe("auto");
+    expect(categorize("dir src")).toBe("auto");
+    expect(categorize("cat package.json")).toBe("auto");
+    expect(categorize("type src\\index.ts")).toBe("auto");
+    expect(categorize("git status")).toBe("auto");
+    expect(categorize("git diff HEAD~1")).toBe("auto");
+    expect(categorize("git log --oneline")).toBe("auto");
+  });
+
+  it("blocks rm with -r/-f flags in any combination or order", () => {
+    expect(categorize("rm -fr /")).toBe("blocked");
+    expect(categorize("rm -rf C:\\x")).toBe("blocked");
+    expect(categorize("rm -r build")).toBe("blocked");
+    expect(categorize("rm -f stale.tmp")).toBe("blocked");
+    expect(categorize("rm -i -rf build")).toBe("blocked");
+    expect(categorize("rm build -r")).toBe("blocked");
+  });
+
+  it("blocks other denylisted destructive commands", () => {
+    expect(categorize("format C:")).toBe("blocked");
+    expect(categorize("del /s /q build")).toBe("blocked");
+    expect(categorize("rmdir /s /q dist")).toBe("blocked");
+    expect(categorize("Remove-Item -Recurse -Force dist")).toBe("blocked");
+  });
+
+  it("marks destructive git operations as destructive", () => {
+    expect(categorize("git push --force origin main")).toBe("destructive");
+    expect(categorize("git reset --hard HEAD~3")).toBe("destructive");
+  });
+
+  it("riskNote echoes the computed category", () => {
+    expect(riskNote("git commit -m x")).toContain("[confirm]");
+  });
+});

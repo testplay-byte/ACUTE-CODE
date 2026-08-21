@@ -1,0 +1,14 @@
+{
+  "extends": "../tsconfig.json",
+  "compilerOptions": {
+    // Node-only package: no DOM globals.
+    "lib": ["ES2022"],
+    "types": ["node"],
+    "noEmit": true
+  },
+  "include": ["src"],
+  // NOTE: rootDir is intentionally unset. "shared" resolves to its TypeScript
+  // source (see shared/package.json), which lives outside this package; setting
+  // rootDir would fail the build with TS6059. Test files under tests/ are
+  // typechecked by the root tsconfig program instead.
+}

@@ -18,3 +18,5 @@ Owner: Orchestrator · Planner artifact · 2026-08-21
 ## Exit criterion
 
 Owner approves SPEC.md after reviewing it alongside the research memos.
+
+**APPROVED 2026-08-22** — owner approved the SPEC and all three non-blocking defaults (skills shape as written; vision model deferred to Phase 2; UI direction to be collected at Phase 2 kickoff).
