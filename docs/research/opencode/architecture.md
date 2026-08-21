@@ -1,119 +1,147 @@
 # OpenCode — Architecture
 
-Verified against `github.com/anomalyco/opencode` (branch `dev`) and `opencode.ai/docs/` on 2026-08-21. Anything not directly observed is marked `[UNVERIFIED]`.
+Verified against `github.com/anomalyco/opencode` (branch `dev`) and `opencode.ai/docs/` on 2026-08-21. Anything not directly observed is marked [UNVERIFIED].
 
-## Process model: one server, many thin clients
+## Process model: one stateful server, many thin clients
 
-OpenCode's core is a single **TypeScript server process** ("opencode core", package `@opencode-ai/opencode`) that owns everything stateful: sessions, messages, agent definitions, tool execution, LLM provider calls, MCP/LSP connections, permissions, storage. Every user-facing surface is a **client** of its local HTTP API:
+- `opencode` (no args) starts a **server and attaches a TUI client** to it in one process; the TUI normally binds a random port but accepts `--hostname`/`--port`.
+- `opencode serve` runs a **headless server**: `--port` (default 4096), `--hostname` (default `127.0.0.1`), `--cors <origin>` (repeatable, for browser clients), `--mdns`/`--mdns-domain`. If a TUI is already running, `serve` spawns an *additional* server instance.
+- Server binds loopback by default. Optional **HTTP Basic auth**: set `OPENCODE_SERVER_PASSWORD` (username via `OPENCODE_SERVER_USERNAME`, defaults to `opencode`).
+- **OpenAPI 3.1 spec served at `GET /doc`** (routes built with `HttpApiBuilder.layer(Api, { openapiPath: "/openapi.json" })`); docs state the SDK clients are generated from this spec.
+- Other clients — desktop (Electron beta), web (`opencode web`), IDE plugins, SDK programs — are pure API consumers. IDE plugins additionally drive a live TUI through dedicated `/tui/*` endpoints (prefill/submit prompt, open dialogs, toasts, `tui/control/next` + `tui/control/response` request-response pair).
 
-- `opencode` (no args) starts a server **and** attaches a TUI client to it; the TUI normally binds a random port but accepts `--hostname`/`--port`.
-- `opencode serve` starts a **headless** server (flags: `--port` 4096 default, `--hostname` 127.0.0.1, `--cors <origin>` repeatable, `--mdns`, `--mdns-domain`). If a TUI is already running, `serve` spins up a *separate* server instance.
-- The desktop app, web console, and IDE extensions connect the same way; IDE plugins additionally drive a live TUI through dedicated `/tui/*` endpoints.
-- The published SDK (`@opencode-ai/sdk`) offers both modes: `createOpencode({hostname, port})` boots server+client together; `createOpencodeClient({baseUrl})` attaches to an existing instance.
-
-The server binds loopback by default. Optional auth: HTTP basic auth enabled by setting `OPENCODE_SERVER_PASSWORD` (username defaults to `opencode`, override `OPENCODE_SERVER_USERNAME`). OpenAPI 3.1 spec is served at `GET /doc` and is the input for SDK generation.
+## ASCII diagram
 
 ```
-                 ┌────────────────────────────────────────────────────────┐
-                 │        opencode server  (TypeScript / Bun)             │
-                 │  packages/opencode/src:                                 │
-                 │  session/ agent/ tool/ permission/ provider/ mcp/ lsp/ │
-                 │  bus/ (in-process event bus)  storage/  plugin/        │
-                 │        │                    │                          │
-                 │   Effect HTTP router   JSON-file store (legacy)        │
-                 │   + OpenAPI 3.1        Drizzle/SQLite tables (new)     │
-                 │        │                                                │
-                 │   REST endpoints    SSE /event (+WS tracker on dev)    │
-                 └───────┬──────────────┬──────────────┬──────────────────┘
-                         │ HTTP + SSE   │              │
-              ┌──────────┴───┐  ┌───────┴──────┐  ┌────┴─────────┐
-              │ TUI client   │  │ Desktop app  │  │ IDE / Web /  │
-              │ OpenTUI +    │  │ packages/    │  │ SDK clients  │
-              │ SolidJS      │  │ desktop      │  │ @opencode-ai │
-              │ packages/tui │  │              │  │ /sdk (gen)   │
-              └──────────────┘  └──────────────┘  └──────────────┘
-                         all clients are pure API consumers
+                 ┌───────────────────────────────────────────────────────────┐
+                 │            opencode server (TypeScript / Bun)            │
+                 │                                                           │
+                 │  packages/core (@opencode-ai/core, Effect services)       │
+                 │  ┌──────────┐ ┌──────────┐ ┌──────────┐ ┌──────────────┐  │
+                 │  │ session/ │ │ tool/    │ │permission│ │ provider/    │  │
+                 │  │ runner,  │ │ bash,edit│ │ allow/   │ │ AI SDK pkgs  │  │
+                 │  │ compaction│ │ read,grep│ │ ask/deny │ │ + models.dev │  │
+                 │  │ revert   │ │ webfetch │ │ engine   │ │ catalog      │  │
+                 │  └────┬─────┘ └────┬─────┘ └────┬─────┘ └──────┬───────┘  │
+                 │       └────────────┴─────┬──────┴───────────────┘         │
+                 │                     event bus                             │
+                 │       ┌─────────────────┴──────────────────┐              │
+                 │  packages/server: Effect Http router      │              │
+                 │  REST (OpenAPI 3.1 @ /doc)   SSE /event   │              │
+                 │       │                          │        │              │
+                 │  SQLite opencode.db (Drizzle,   │        │── LLM APIs ──► cloud
+                 │  WAL, migrations)               │        │
+                 └───────┼──────────────────────────┼────────┴──────────────┘
+                         │ REST + SSE               │
+        ┌────────────────┼──────────┐───────────────┼───────────────┐
+        │                │          │               │               │
+  ┌─────┴─────┐   ┌──────┴────┐ ┌───┴─────┐ ┌───────┴────┐ ┌────────┴────┐
+  │ TUI       │   │ Web app   │ │ Electron│ │ IDE plugins│ │ SDK programs│
+  │ OpenTUI + │   │ opencode  │ │ desktop │ │ (also call │ │ @opencode-ai│
+  │ SolidJS   │   │ web       │ │ (beta)  │ │ /tui/* to  │ │ /sdk (gen   │
+  │ packages/ │   │ packages/ │ │ packages│ │ drive TUI) │ │ from spec)  │
+  │ tui       │   │ app, web  │ │ /desktop│ └────────────┘ └─────────────┘
+  └───────────┘   └───────────┘ └─────────┘
+        every client is a pure consumer of http://127.0.0.1:4096 + SSE /event
 ```
 
-## Monorepo module map (packages/, 32 dirs)
+## Monorepo module map (`packages/`, 32 dirs, verified listing)
 
-| Package | Role |
+| Package | Role (verified / inferred) |
 |---|---|
-| `opencode` | Core server: 36 src modules — `account, acp (Agent Client Protocol), agent, auth, background, bus, cli, command, config, control-plane, effect, env, format, git, id, ide, image, installation, lsp, mcp, patch, permission, plugin, project, provider, question, server, session, share, skill, snapshot, storage, sync, tool, util, worktree` |
-| `server` | HTTP server support layer (incl. CORS helper `@opencode-ai/server/cors` used by core) |
-| `tui` | Terminal client, OpenTUI + SolidJS (`.tsx`), v1.18.x |
-| `client` / `sdk` / `sdk-next` | Client libraries; `client` is **code-generated** from the API spec via `httpapi-codegen` |
-| `protocol`, `schema` | Shared protocol/type definitions — the single source both server routes and clients derive from |
-| `core` | New shared core incl. Drizzle SQL table definitions (`session/sql`, `project/sql`, `account/sql`, …) |
-| `llm` | LLM abstraction layer |
-| `plugin` | Plugin types (`@opencode-ai/plugin`) |
-| `desktop`, `web`, `console`, `ui`, `session-ui` | GUI surfaces and shared UI |
-| `effect-drizzle-sqlite`, `effect-sqlite-node` | SQLite via Drizzle, wrapped in Effect |
-| `httpapi-codegen` | Generates server/client code from the protocol |
-| `cli`, `app`, `function`, `slack`, `enterprise`, `identity`, `stats`, `codemode`, `containers`, `http-recorder`, `storybook`, `script`, `docs` | Supporting packages |
+| `opencode` | CLI binary (`bin/opencode`): boots server + TUI; deps include MCP SDK, ACP SDK, `web-tree-sitter` (bash/powershell), `ws`, `yargs` |
+| `core` (`@opencode-ai/core`) | Domain core: session/ (runner, compaction, revert, store, sql), permission/, tool/, database/, event/, plugin/, project/, pty/, skill/, share/, oauth/, credential/, observability/, plus root modules (`agent.ts`, `provider.ts`, `models-dev.ts`, `snapshot.ts`, `git.ts`, …) |
+| `server` (`@opencode-ai/server`) | HTTP API: `api.ts` (contract), `handlers/`, `middleware/`, `auth.ts`, `cors.ts`, `routes.ts` |
+| `protocol` | Shared API schema/types consumed by server + SDK codegen (role inferred from name + docs) |
+| `tui` (`@opencode-ai/tui`) | Terminal client: OpenTUI + SolidJS |
+| `app`, `web` | Web client(s) |
+| `desktop` (`@opencode-ai/desktop`) | Electron 42 + SolidJS shell |
+| `sdk`, `sdk-next` | Published SDK; generated from the OpenAPI spec (per docs/server) |
+| `plugin` (`@opencode-ai/plugin`) | Plugin TypeScript types |
+| `llm` | LLM abstraction over the AI SDK (pulls in the `ai` package) |
+| `schema` | Shared schema package |
+| `ui`, `session-ui` | Shared SolidJS UI components |
+| `effect-drizzle-sqlite`, `effect-sqlite-node` | Effect wrappers for Drizzle/SQLite on Bun and Node |
+| `cli`, `client` | [UNVERIFIED] auxiliary CLI/client packages |
+| `codemode`, `console`, `containers`, `enterprise`, `function`, `github-copilot` (in core/src), `http-recorder`, `httpapi-codegen`, `identity`, `slack`, `stats`, `storybook`, `script` | Ancillary: console/stats apps, enterprise features, OpenAPI codegen tooling, HTTP recording for tests |
 
-## Server implementation (from `src/server/server.ts`)
+## API surface (from docs/server — the live OpenAPI spec is at `/doc`)
 
-- Framework: **Effect v4-beta HTTP stack** — `NodeHttpServer` from `@effect/platform-node`, `HttpRouter`/`HttpServer` from `effect/unstable/http`, OpenAPI from `effect/unstable/httpapi`. No Hono.
-- Routes are declared in `routes/instance/httpapi/` and mounted via `HttpApiApp.createRoutes(opts)`; only a `disposeMiddleware` is attached here; CORS options (`@opencode-ai/server/cors`) flow through `opts`.
-- Port resolution: explicit `0` prefers 4096, then any free port; graceful shutdown with 1s timeout; `closeAllConnections()` on force-stop, plus tracked WebSocket connections (`WebSocketTracker`) closed together.
-- mDNS publish when enabled and hostname is not loopback.
-- An in-process `webHandler()` lets tests/clients call the API without a socket.
-- The in-process event bus lives in `src/bus/`; `event-manifest.ts` and `event-v2-bridge.ts` at src root suggest an event-schema versioning/bridging effort `[partially UNVERIFIED — files observed, contents not read]`.
+**Global / infrastructure**
+- `GET /global/health` — health/version
+- `GET /global/event` — SSE stream of global events
+- `GET /event` — SSE stream of bus events; **first event `server.connected`**, then all events
+- `GET /project` (list projects), `GET /project/current`, `GET /path`, `GET /vcs`
+- `POST /instance/dispose`, `GET /doc` (OpenAPI 3.1), `POST /log` `{service, level, message, extra}`
 
-## API surface (documented endpoints, quoted exactly)
+**Config & providers**
+- `GET /config`, `PATCH /config`, `GET /config/providers`
+- `GET /provider` → `{all, default, connected}`; `GET /provider/auth`
+- `POST /provider/{id}/oauth/authorize`, `POST /provider/{id}/oauth/callback`; `PUT /auth/:id` (set credentials matching provider schema)
 
-Serve default base `http://127.0.0.1:4096`; spec at `GET /doc`.
+**Sessions** (`/session`, per-session `/session/:id/...`)
+- CRUD: `GET /session`, `POST /session` `{parentID?, title?}`, `GET/PATCH/DELETE /session/:id`
+- `GET /session/status`, `/children`, `/todo`, `/diff?messageID=` → `FileDiff[]`
+- Actions: `POST /init` (analyze app, generate AGENTS.md), `/fork` `{messageID?}`, `/abort`, `/share` + `DELETE /share`, `/summarize` `{providerID, modelID}`, `/revert` `{messageID, partID?}` + `/unrevert`
+- **Approvals: `POST /session/:id/permissions/:permissionID`** body `{response, remember?}` — the programmatic human-in-the-loop reply
 
-- **Global/system:** `GET /global/health` (health+version) · `GET /global/event` (SSE) · `GET /path` · `GET /vcs` · `POST /instance/dispose` · `POST /log` (`{service, level, message, extra?}`)
-- **Events:** `GET /event` — main SSE bus stream; first event is `server.connected`, then bus events
-- **Config:** `GET /config` · `PATCH /config` · `GET /config/providers`
-- **Projects:** `GET /project` · `GET /project/current`
-- **Providers/auth:** `GET /provider` · `GET /provider/auth` · `POST /provider/{id}/oauth/authorize` · `POST /provider/{id}/oauth/callback` · `PUT /auth/:id`
-- **Sessions:** `GET /session` · `POST /session` (`{parentID?, title?}`) · `GET /session/status` · `GET/DELETE/PATCH /session/:id` · `GET /session/:id/children` · `GET /session/:id/todo` · `POST /session/:id/init` · `POST /session/:id/fork` · `POST /session/:id/abort` · `POST|DELETE /session/:id/share` · `GET /session/:id/diff` · `POST /session/:id/summarize` · `POST /session/:id/revert` · `POST /session/:id/unrevert` · **`POST /session/:id/permissions/:permissionID`** (respond to a permission request)
-- **Messages:** `GET /session/:id/message` (`limit?`) · `POST /session/:id/message` (send-and-wait) · `GET /session/:id/message/:messageID` · `POST /session/:id/prompt_async` (fire-and-forget, 204) · `POST /session/:id/command` (slash command) · `POST /session/:id/shell`
-- **Files/search:** `GET /find?pattern=` · `GET /find/file?query=` · `GET /find/symbol?query=` · `GET /file?path=` · `GET /file/content?path=` · `GET /file/status`
-- **Introspection:** `GET /agent` · `GET /command` · `GET /lsp` · `GET /formatter` · `GET /mcp` · `POST /mcp` (`{name, config}` — add MCP server at runtime) · `GET /experimental/tool/ids` · `GET /experimental/tool?provider=&model=`
-- **TUI remote control (used by IDE plugins):** `POST /tui/append-prompt` · `POST /tui/submit-prompt` · `POST /tui/clear-prompt` · `POST /tui/execute-command` · `POST /tui/show-toast` · `POST /tui/open-help|sessions|themes|models` · `GET /tui/control/next` · `POST /tui/control/response`
+**Messages**
+- `GET /session/:id/message?limit=`, `POST /session/:id/message` `{messageID?, model?, agent?, noReply?, system?, tools?, parts}`; response shape `{info: Message, parts: Part[]}`
+- `GET /session/:id/message/:messageID`, `POST /prompt_async` (202-style, returns 204), `/command` `{command, arguments...}`, `/shell` `{agent, command}`
 
-SDK surface mirrors this: sessions CRUD, `session.prompt()` (with `noReply` and `json_schema` structured output), `event.subscribe()` async iteration.
+**Tools, search, integrations**
+- `GET /experimental/tool/ids`, `GET /experimental/tool?provider=&model=` (tools + JSON schemas)
+- `GET /find?pattern=`, `/find/file?query=`, `/find/symbol?query=`, `GET /file?path=`, `/file/content`, `/file/status`
+- `GET /lsp`, `GET /formatter`, `GET /mcp` (status map), `POST /mcp` `{name, config}` (dynamic MCP add)
+- `GET /agent`, `GET /command`
 
-## Data flow (one turn of conversation)
+**TUI remote control** (used by IDE plugins)
+- `POST /tui/append-prompt`, `/submit-prompt`, `/clear-prompt`, `/open-help`, `/open-sessions`, `/open-themes`, `/open-models`, `/execute-command` `{command}`, `/show-toast` `{title?, message, variant}`
+- `GET /tui/control/next` (long-poll for control request) + `POST /tui/control/response` `{body}`
 
-1. Client `POST /session/:id/message` (or `prompt_async`) with text/parts.
-2. `session/` module assembles the prompt (`prompt.ts`, `instruction.ts`, `system.ts`), applies agent config (`agent/`) — `build` grants tool access, `plan` denies edits and asks before bash.
-3. Request routed through `provider/` to the chosen `provider/model-id` via the Vercel AI SDK (`llm.ts`, `session/llm/`); reasoning/retry handled in `retry.ts`, overflow in `overflow.ts`.
-4. Model tool calls hit `tool/` + `permission/`: permission config evaluated (bash `command` filters → allow/ask/deny); if `ask`, a `permission.asked` event flows over `/event` and the client answers via `POST /session/:id/permissions/:permissionID` (`permission.replied`).
-5. Tool executions emit lifecycle events; every mutation is published on the bus and streamed to all connected clients (message.updated, message.part.updated, session.idle, …).
-6. Long sessions are compacted (`compaction.ts`, hooks `experimental.session.compacting`); snapshots/revert via `snapshot/`, `revert.ts`.
+**Event names** (from docs/plugins): `server.connected`, `session.created/updated/deleted/error/idle/status/compacted/diff`, `message.updated/removed`, `message.part.updated/removed`, `permission.asked`, `permission.replied`, `file.edited`, `file.watcher.updated`, `lsp.updated`, `lsp.client.diagnostics`, `command.executed`, `installation.updated`, `todo.updated`, `shell.env`, `tool.execute.before/after`, `tui.prompt.append`, `tui.command.execute`, `tui.toast.show`.
 
-## Storage design
+## Data flow (one user turn)
 
-**Legacy (verified from `storage/storage.ts`):** a JSON-file store under `<global-data>/storage/`, one pretty-printed JSON per entity, keys are path segments:
+1. Client POSTs a message to `/session/:id/message` (or `/prompt_async`), selecting `agent` + `model`.
+2. Core resolves the agent (markdown/JSON definition merged with defaults), its permission set, and the provider (`providerID/modelID` → AI SDK package instance + models.dev limits).
+3. The session runner loops: LLM call → tool calls intercepted by (a) plugin `tool.execute.before` hooks (may mutate args or throw to block), then (b) the permission engine (allow = run, deny = block, ask = pause).
+4. An "ask" persists a permission request; `permission.asked` is emitted on the event bus → SSE → all clients. The TUI shows once/always/reject (with a suggested safe pattern); programmatic clients reply via `POST /session/:id/permissions/:id` `{response, remember?}`; `permission.replied` unblocks the runner.
+5. Approved tools execute in the server process (bash via PTY/spawn, edits with snapshot/diff support — `snapshot.ts`, `revert.ts`); outputs stream back as `message.part.updated` events.
+6. Everything (sessions, messages, parts, todos) persists to SQLite; compaction/summarize/title hidden agents run server-side when needed.
+7. Clients re-render purely from REST reads + SSE events; no client owns state.
 
-- `session/<projectID>/<sessionID>.json` · `message/<sessionID>/<messageID>.json` · `part/<messageID>/<partID>.json` · `project/<projectID>.json` · `session_diff/<sessionID>.json`
-- API: `read/write/remove/list/update(key: string[])`; `update` is read-modify-write under a **per-file reentrant lock** (`RcMap` + `TxReentrantLock`).
-- Numbered `MIGRATIONS` array with a `<dir>/migration` marker file storing the completed index; migration 1 imports legacy `../project` data using the git root-commit hash as a stable project ID; migration 2 extracts `summary.diffs` into separate files.
+## Storage design (verified from source)
 
-**Current direction (verified from `storage/schema.ts` + package layout):** Drizzle SQLite tables re-exported from `@opencode-ai/core` — `SessionTable, MessageTable, PartTable, TodoTable, AccountTable, AccountStateTable, ControlAccountTable, ProjectTable, SessionShareTable, WorkspaceTable` — supported by dedicated `effect-drizzle-sqlite` / `effect-sqlite-node` packages. I.e., the entity model (session → message → part, plus todo/project/account) survives; the substrate moves to SQLite. Auth credentials live separately in `~/.local/share/opencode/auth.json`.
-
-## Config model
-
-`opencode.json` / `opencode.jsonc`; global at `~/.config/opencode/opencode.json`, project at repo root; `.opencode/` directory holds `agents/ commands/ modes/ plugins/ skills/ tools/ themes/`. Files are **merged, not replaced**, in precedence order: remote (`.well-known/opencode`) < global < `OPENCODE_CONFIG` < project < `.opencode` dirs < inline `OPENCODE_CONFIG_CONTENT` < managed config < MDM mobileconfig (not user-overridable). Schema: `https://opencode.ai/config.json`. Top-level keys include `model`, `small_model`, `provider`, `agent`, `default_agent`, `subagent_depth`, `permission`, `mcp`, `plugin`, `lsp`, `formatter`, `snapshot`, `compaction`, `share`, `instructions`, `experimental`. Values support `{env:VAR}` and `{file:path}` indirection.
+- Single SQLite DB: `~/.local/share/opencode/opencode.db` (XDG data dir; `Global.Path.data`), or `opencode-<channel>.db` when running a non-prod release channel (`OPENCODE_DISABLE_CHANNEL_DB=1` opts out); `OPENCODE_DB` env or `:memory:` override.
+- Connection pragmas set at init: `journal_mode = WAL`, `synchronous = NORMAL`, `busy_timeout = 5000`, `cache_size = -64000`, `foreign_keys = ON`. Failures are fatal (`Effect.orDie`).
+- Schema via generated migrations (`migration.gen.ts`, `schema.sql.ts`, `schema.gen.ts`) through `@opencode-ai/effect-drizzle-sqlite`; runtime-adaptive driver (`sqlite.bun.ts` = `@effect/sql-sqlite-bun` on Bun; `sqlite.node.ts` for Node). A root `data-migration.sql.ts` handles legacy-data migration [details UNVERIFIED — pre-SQLite JSON-file layout inferred from migration naming].
+- Credentials: `~/.local/share/opencode/auth.json`. Config: `opencode.json` / `~/.config/opencode/opencode.jsonc` (JSONC, merged global→project).
+- Session domain modules in `packages/core/src/session/`: `runner/`, `execution/`, `store.ts`, `sql.ts`, `schema.ts`, `compaction.ts`, `revert.ts`, `history.ts`, `projector.ts`, `run-coordinator.ts`, `todo.ts`, `prompt.ts`, `message*.ts` — an event-sourced-flavored design [exact internals UNVERIFIED beyond file names].
 
 ## Sources
 
-- https://github.com/anomalyco/opencode
 - https://opencode.ai/docs/server/
-- https://opencode.ai/docs/sdk/
-- https://opencode.ai/docs/config/
+- https://opencode.ai/docs/plugins/
+- https://opencode.ai/docs/providers/
+- https://opencode.ai/docs/permissions/
+- https://opencode.ai/docs/agents/
+- https://opencode.ai/docs/windows-wsl
+- https://opencode.ai/docs/ (index)
+- https://raw.githubusercontent.com/anomalyco/opencode/dev/packages/server/src/routes.ts
+- https://raw.githubusercontent.com/anomalyco/opencode/dev/packages/server/package.json
+- https://raw.githubusercontent.com/anomalyco/opencode/dev/packages/core/package.json
+- https://raw.githubusercontent.com/anomalyco/opencode/dev/packages/core/src/database/database.ts
 - https://api.github.com/repos/anomalyco/opencode/contents/packages?ref=dev
-- https://api.github.com/repos/anomalyco/opencode/contents/packages/opencode/src?ref=dev
-- https://api.github.com/repos/anomalyco/opencode/contents/packages/opencode/src/storage?ref=dev
-- https://api.github.com/repos/anomalyco/opencode/contents/packages/opencode/src/session?ref=dev
-- https://api.github.com/repos/anomalyco/opencode/contents/packages/opencode/src/server?ref=dev
-- https://raw.githubusercontent.com/anomalyco/opencode/dev/packages/opencode/src/storage/storage.ts
-- https://raw.githubusercontent.com/anomalyco/opencode/dev/packages/opencode/src/storage/schema.ts
-- https://raw.githubusercontent.com/anomalyco/opencode/dev/packages/opencode/src/server/server.ts
-- https://raw.githubusercontent.com/anomalyco/opencode/dev/packages/client/package.json
+- https://api.github.com/repos/anomalyco/opencode/contents/packages/core/src?ref=dev
+- https://api.github.com/repos/anomalyco/opencode/contents/packages/core/src/session?ref=dev
+- https://api.github.com/repos/anomalyco/opencode/contents/packages/core/src/database?ref=dev
 - https://raw.githubusercontent.com/anomalyco/opencode/dev/packages/tui/package.json
+- https://raw.githubusercontent.com/anomalyco/opencode/dev/packages/desktop/package.json
+- https://raw.githubusercontent.com/anomalyco/opencode/dev/packages/opencode/package.json
+- https://raw.githubusercontent.com/anomalyco/opencode/dev/package.json
+- https://raw.githubusercontent.com/anomalyco/opencode/dev/LICENSE
+- https://api.github.com/repos/anomalyco/opencode
+- https://api.github.com/repos/sst/opencode
+- https://api.github.com/repos/opencode-ai/opencode
+- https://registry.npmjs.org/opencode-ai/latest

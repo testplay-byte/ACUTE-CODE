@@ -6,13 +6,13 @@ Researched: 2026-08-21. Primary source: https://github.com/Kilo-Org/kilocode (ve
 
 Kilo Code is an **open-source agentic engineering platform / AI coding agent** distributed as a VS Code extension, a JetBrains plugin, a CLI (`@kilocode/cli`, a fork of OpenCode), a TUI, and a web "Cloud Agent". Repo stats at time of research: ~27.0k stars, ~3.1k forks, monorepo version `7.4.23`.
 
-Important lineage note: despite its historical Cline -> Roo Code fork origin, the **current repo is no longer a classic Cline-style extension**. The extension was rebuilt on top of the Kilo CLI (an OpenCode fork) as its core engine; `packages/kilo-vscode/src` still contains `roo-import/` and `legacy-migration/` modules, confirming the lineage, but the agent loop now lives in `packages/opencode` (the CLI core). All editor products are thin clients that spawn/connect to `kilo serve` over HTTP + SSE.
+Important lineage note: despite its historical Cline -> Roo Code fork origin, the **current repo is no longer a classic Cline-style extension**. In **April 2026** the extension was rebuilt on top of the Kilo CLI (an OpenCode fork) as its shared core engine ("the biggest update since launch"); `packages/kilo-vscode/src` still contains `roo-import/` and `legacy-migration/` modules, confirming the lineage, but the agent loop now lives in `packages/opencode` (the CLI core). All editor products are thin clients that spawn/connect to `kilo serve` over HTTP + SSE. Modes were renamed **agents**, the Orchestrator mode was **deprecated** in favor of native subagents, checkpoints became git-backed **snapshots**, and the old auto-approve allowlist became a granular per-tool **Allow/Ask/Deny** permission system.
 
 Key user-facing concepts:
 
 - **Agents** (formerly "modes"): Code, Ask, Plan, Debug + custom agents; Orchestrator mode is **deprecated** — full-access agents now spawn subagents natively via the `task` tool.
 - **Agent Manager** (VS Code panel): parallel agents, each isolated in its own git worktree/branch with its own terminal, gated by a semaphore.
-- **Skills**: folders with `SKILL.md` implementing the open Agent Skills standard (agentskills.io), with progressive disclosure.
+- **Skills**: folders with `SKILL.md` implementing the open "Agent Skills" format ("a lightweight, open format for extending AI agent capabilities" — per docs), with progressive disclosure.
 - **MCP**: local (stdio) and remote (HTTP/SSE) servers configured in `kilo.jsonc`; MCP tools go through the same allow/ask/deny permission system as built-in tools.
 - **Marketplace**: installs Agents, Skills, and MCP servers as plain config/instruction files (project or global scope) from the `Kilo-Org/kilo-marketplace` GitHub registry.
 
@@ -30,15 +30,15 @@ Key user-facing concepts:
 | Monorepo | Bun 1.3.14 workspaces + Turborepo 2.x, 35 packages, changesets |
 | Core engine | `packages/opencode` (`@kilocode/cli`) — TypeScript, fork of OpenCode |
 | Runtime effects | Effect 4.0.0-beta (with local patches) |
-| LLM plumbing | Vercel AI SDK (`ai` 6.x), `@ai-sdk/anthropic`, `@ai-sdk/openai`, `@openrouter/ai-sdk-provider` (via `kilo-gateway`) |
-| API server | Hono 4.x inside the CLI (`kilo serve`, HTTP + SSE) |
-| Storage | SQLite via Drizzle ORM 1.0-rc (`packages/effect-drizzle-sqlite`, `packages/effect-sqlite-node`) |
+| LLM plumbing | Vercel AI SDK (`ai`, catalog-pinned), `@ai-sdk/anthropic`, `@ai-sdk/openai`, `@openrouter/ai-sdk-provider` (via `kilo-gateway`) |
+| API server | `kilo serve` inside the CLI: local HTTP + SSE (`/event` per instance, multiplexed `/global/event`, 10s heartbeat); web framework [UNVERIFIED — not identifiable from fetched manifests] |
+| Storage | **SQLite** (`kilo.db`, WAL, 5s busy timeout) via Drizzle ORM migrations (`packages/effect-drizzle-sqlite`, `packages/effect-sqlite-node`); tables incl. projects, sessions, messages, parts, todos, permissions, workspaces; some JSON files remain (config, auth, session diffs) |
 | Validation | Zod 4 |
 | VS Code extension | `packages/kilo-vscode` (`kilo-code` v7.4.23), esbuild + Vite, bundles the CLI binary |
 | Webview UI | **SolidJS 1.9.x** (migrated off React), Storybook, xterm.js, simple-git, web-tree-sitter, js-tiktoken |
-| Other clients | JetBrains plugin (Java 21), TUI package, Zed extension via ACP |
+| Other clients | JetBrains plugin, TUI package, Zed extension via ACP (`@agentclientprotocol/sdk` 0.21.0) |
 | SDK | `@kilocode/sdk` — auto-generated from the server (`src/gen/` is generated code) |
-| Tooling | oxlint, tsgo typecheck, knip, Playwright + axe-core a11y tests, 16 patched dependencies (incl. effect, solid-js, MCP SDK) |
+| Tooling | oxlint, tsgo typecheck, knip, Playwright (`@playwright/test` 1.57.0), 15 patched dependencies (incl. effect, solid-js, MCP SDK) |
 
 ## Top adoptable patterns (details in patterns-for-acute-code.md)
 
@@ -49,7 +49,7 @@ Key user-facing concepts:
 ## What to avoid (one line each)
 
 - `kilo run --auto` blanket disabling of all permission prompts — directly contradicts ACUTE-CODE's human-approval safety layer.
-- Effect 4 beta + 16 patched dependencies as foundation — operational complexity we do not need.
+- Effect 4 beta + 15 patched dependencies as foundation — operational complexity we do not need.
 - Fork-merge machinery (`kilocode_change` markers, upstream-sync discipline) — only valuable if we fork a live upstream; we are building original code.
 - Marketplace installs that trigger a full config reload interrupting running sessions — a UX hazard ACUTE-CODE should design around.
 - Trusting the README license text — the repo itself has an MIT/Apache-2.0 doc mismatch; always read the LICENSE file.
@@ -64,6 +64,7 @@ Kilo Code is the most architecturally similar of our reference targets despite t
 - https://raw.githubusercontent.com/Kilo-Org/kilocode/main/LICENSE
 - https://raw.githubusercontent.com/Kilo-Org/kilocode/main/README.md
 - https://github.com/Kilo-Org/kilocode/blob/main/package.json
+- https://raw.githubusercontent.com/Kilo-Org/kilocode/main/packages/opencode/package.json
 - https://github.com/Kilo-Org/kilocode/tree/main/packages
 - https://github.com/Kilo-Org/kilocode/tree/main/packages/kilo-vscode
 - https://raw.githubusercontent.com/Kilo-Org/kilocode/main/packages/kilo-vscode/LICENSE
@@ -75,12 +76,20 @@ Kilo Code is the most architecturally similar of our reference targets despite t
 - https://raw.githubusercontent.com/Kilo-Org/kilocode/main/packages/kilo-gateway/README.md
 - https://raw.githubusercontent.com/Kilo-Org/kilocode/main/packages/kilo-gateway/package.json
 - https://raw.githubusercontent.com/Kilo-Org/kilocode/main/AGENTS.md
+- https://kilo.ai/docs
+- https://kilo.ai/docs/code-with-ai/platforms/vscode/whats-new
+- https://kilo.ai/docs/contributing
+- https://kilo.ai/docs/contributing/architecture
+- https://kilo.ai/docs/contributing/architecture/cli-runtime
+- https://kilo.ai/docs/contributing/architecture/vscode-extension
 - https://kilo.ai/docs/code-with-ai/agents/using-agents
 - https://kilo.ai/docs/code-with-ai/agents/orchestrator-mode
 - https://kilo.ai/docs/customize/custom-modes
 - https://kilo.ai/docs/customize/custom-subagents
 - https://kilo.ai/docs/customize/skills
 - https://kilo.ai/docs/customize/marketplace
-- https://kilo.ai/docs/automate/mcp/using-in-kilo-code (via search result excerpts)
+- https://kilo.ai/docs/automate/mcp/using-in-kilo-code
 - https://kilo.ai/docs/automate/mcp/using-in-cli (via search result excerpts)
 - https://kilo.ai/docs/getting-started/settings/auto-approving-actions (via search result excerpts)
+- https://kilo.ai/docs/getting-started/faq
+- https://kilo.ai/docs/getting-started/faq/general

@@ -1,111 +1,73 @@
 # Cline — Research Summary (ACUTE-CODE Reference Study)
 
 - **Target:** https://github.com/cline/cline (canonical; not moved)
-- **Studied:** 2026-08-21, `main` branch (monorepo mid-migration; see notes)
-- **Scale at time of study:** ~66.6k stars, ~7.2k forks
+- **Studied:** 2026-08-21, `main` branch (Bun-workspace monorepo; VS Code extension mid-migration onto the SDK engine)
+- **Scale at time of study:** ~66.6k stars, ~7.2k forks, ~7.1k commits
 
 ## What It Is
 
-Cline is an open-source autonomous coding agent that ships in multiple forms on top of one shared
-agent core: a VS Code extension (the original and primary product), a CLI (`npm i -g cline`,
-including headless JSON output for CI/CD), a web-based Kanban task board for parallel agents
-(separate repo `cline/kanban`), a closed-source JetBrains plugin ("Currently we are not
-open-sourcing JetBrains plugins" — it is a client that "talks to the shared agent core"), and a
-published TypeScript SDK (`@cline/sdk`) that packages "the same engine" as an embeddable library.
-The agent reads/writes files across a whole project, runs terminal commands (including monitoring
-long-running dev servers), drives a browser, connects to MCP servers, and takes git-based
-checkpoints after every tool use. The repo is currently migrating from "extension code at repo
-root" to a Bun-workspace monorepo (`apps/vscode`, `apps/cli`, `apps/cline-hub`, `sdk/packages/*`);
-the README marks the VS Code location as "/ (WIP migrating)" but `apps/vscode` already exists and
-is where the extension source lives.
+Cline is an open-source autonomous coding agent ("The open source coding agent in your IDE and terminal"; repo description: "Autonomous coding agent as an SDK, IDE extension, or CLI assistant."). One shared agent engine powers several shipped forms:
+
+| Product | Location | Notes |
+|---|---|---|
+| SDK | `sdk/packages/*` — `@cline/sdk` (umbrella, v0.0.77), `@cline/core`, `@cline/agents`, `@cline/llms`, `@cline/shared`, `@cline/ui` | npm-published engine ("the same engine that powers Cline, packaged as a library") |
+| CLI | `apps/cli` | Interactive OpenTUI app + headless JSON mode for CI/CD |
+| VS Code extension | `apps/vscode` (npm name `claude-dev` v4.1.12, publisher `saoudrizwan`) | Extension host (Node) + React 18 webview; README marks repo-root location "(WIP migrating)" |
+| JetBrains plugin | Closed source | "JetBrains-hosted client that talks to the shared agent core" (README) |
+| Kanban board | Separate repo `cline/kanban` | Web multi-agent task board; one git worktree per card |
+| Desktop example | `apps/examples/desktop-app`, `apps/examples/menubar` | **Tauri 2 shell + Bun sidecar backend + web UI** — the exact topology ACUTE-CODE chose |
+
+Agent capabilities: whole-project file edits, terminal commands (incl. long-running dev-server monitoring and "Proceed While Running" detachment), browser use, MCP servers, git-based checkpoints (undo agent work), `.clinerules`/skills/workflows, multi-agent teams, cron-scheduled agents, connectors (Slack/Telegram/etc.). Plan/Act mode split; every edit/command approvable or auto-approved.
 
 ## License
 
-**SPDX: Apache-2.0** — verified directly from the LICENSE file ("Apache License, Version 2.0,
-January 2004", copyright Cline Bot Inc.). Plain Apache-2.0: commercial use permitted, derivative
-works permitted with notice retention; Section 6 does **not** grant trademark rights, so any
-derivative must not use the "Cline" name/branding.
+**SPDX: `Apache-2.0`** — verified from the LICENSE file on `main`: stock Apache License 2.0 text (201 lines), `Copyright 2026 Cline Bot Inc.`; the only "Cline" occurrence is the copyright line; no appended attribution/branding clause today. `apps/vscode/package.json`, `@cline/sdk`, and `@cline/agents` manifests also declare `Apache-2.0` (the other sdk package manifests omit the field; the repo LICENSE covers them). License history: created 2024-07-10, switched to Apache-2.0 2024-10-09; whether any intermediate revision carried an extra attribution clause is [UNVERIFIED] — none exists now. Standard Section 6 applies: no rights to the "Cline" trade name/mark.
 
-**Compatibility with ACUTE-CODE's allowed set (MIT, Apache-2.0, BSD, ISC, MPL-2.0): compatible.**
-Apache-2.0 is on our allow-list both for pattern study and, if ever needed, as a dependency.
-(Study-only rule still applies: we learn patterns, we do not copy code.) The JetBrains plugin is
-closed source and out of bounds entirely.
+**Compatibility with ACUTE-CODE's allowed set (MIT, Apache-2.0, BSD, ISC, MPL-2.0): COMPATIBLE.** `@cline/sdk` would be a legal dependency; we still choose patterns-over-code. The closed-source JetBrains plugin is out of bounds entirely.
 
 ## Tech-Stack Table
 
 | Layer | Technology (verified) |
 |---|---|
-| Language | TypeScript throughout ("type": "module") |
-| Repo/build | Bun workspace (`bun@1.3.13` pinned, Node >= 22), Biome lint/format, Vitest, Husky + lint-staged, changesets |
-| Monorepo | `apps/` (cli, cline-hub, examples, vscode, vscode-rollout) + `sdk/packages/` (shared, llms, agents, core, sdk, ui) |
-| SDK packages | `@cline/sdk` (umbrella) → `@cline/core` (sessions, storage, RPC) → `@cline/agents` (stateless loop) → `@cline/llms` (provider gateway) → `@cline/shared` (types, zod schemas, hooks engine) |
-| Extension UI | React 18.3 + Vite + Tailwind v4 + Radix/shadcn-style components, react-virtuoso, react-markdown + remark-gfm + rehype-highlight, mermaid, DOMPurify, framer-motion, Storybook |
-| RPC (webview↔host) | gRPC-style "protobus" over VS Code postMessage: unary + streaming + cancellation, codegen'd service handler maps, record/replay middleware |
-| Daemon (SDK) | Hub-spoke: singleton hub daemon on `127.0.0.1:25463`, WebSocket clients, worker "spokes" running `@cline/core`; lock-file discovery `~/.cline/locks/hub/owners/` |
-| Storage | File-backed settings stores + debounced batched persistence (StateManager); SDK sessions: SQLite index + JSON snapshots under `~/.cline/data/sessions/`; shadow-git checkpoints |
-| MCP | Official MCP SDK clients; stdio / SSE / streamable-HTTP transports; zod-validated JSON config; OAuth manager; chokidar settings watcher |
-| Providers | Anthropic, OpenAI, Google, Bedrock, OpenRouter, Vertex, Azure, Cerebras/Groq, Ollama/LM Studio, any OpenAI-compatible endpoint; 30+ documented configs |
-| AI plumbing | Provider gateway in `@cline/llms`; model-family-optimized planning prompts; patched dep `ollama-ai-provider-v2` [patch noted in root package.json] |
+| Language / tooling | TypeScript 5 throughout, ESM; Bun (lockfile, scripts), Biome lint/format, Vitest + Playwright, Husky, Changesets, Gitleaks |
+| Monorepo | npm-style workspaces: `apps/*` (cli, cline-hub, examples, vscode, vscode-rollout) + `sdk/packages/*` + nested webviews |
+| Agent engine | `@cline/shared` (types/schemas/hooks) → `@cline/llms` (provider gateway, model catalogs; AI SDK-backed) → `@cline/agents` (stateless loop, browser-compatible) → `@cline/core` (Node: sessions, tools, persistence, hub, cron) → hosts |
+| VS Code host | Node extension host (`engines.vscode ^1.101.0`), esbuild bundle, `@grpc/grpc-js`, `chokidar` 4, PostHog + OpenTelemetry |
+| Webview UI | React 18.3 + Vite + Tailwind + styled-components, mermaid, Storybook; `@cline/ui` shared web components |
+| RPC contracts | Protobuf (`buf`): `proto/cline/*.proto` (17 webview-facing services), `proto/host/*.proto` (5 host-capability services); gRPC-style unary + streaming over VS Code `postMessage` |
+| MCP | Official `@modelcontextprotocol/sdk ^1.25.1`; stdio / SSE / StreamableHTTP; OAuth manager; chokidar-watched `cline_mcp_settings.json`; per-server timeout; per-tool auto-approve |
+| Storage | `~/.cline` home: per-task JSON (`ui_messages.json`, `api_conversation_history.json`, `task_metadata.json`, `settings.json`); in-memory `StateManager` with 500 ms debounced persistence; SQLite in SDK core (`tasks.db`, `cron.db`, connector store; sessions separate) |
+| Checkpoints | Native git plumbing: stash-compatible `commit-tree` snapshots under private refs; restore transactions with commit/rollback |
+| Providers | ~50 typed `ApiProvider` ids (Anthropic, OpenRouter default, OpenAI, Gemini, Bedrock, Vertex, Ollama, LM Studio, xAI, Groq, …) with per-model `ModelInfo` (context window, pricing tiers, capabilities, modalities) |
 
-## Top Adoptable Patterns
+## Top Adoptable Patterns (one line each)
 
-1. **Layered agent SDK with one-way dependencies** (`shared → llms → agents → core → hosts`):
-   one stateless loop, one stateful orchestrator, one provider gateway — each independently
-   testable and reusable across hosts.
-2. **Hub-spoke local daemon**: coordination-only hub on loopback with WebSocket
-   client routing, worker processes owned by the daemon, SQLite index + JSON snapshots — sessions
-   survive client restarts and a runaway agent cannot freeze the UI.
-3. **Typed RPC over the UI transport ("protobus")**: request-id correlation, streaming with
-   sequence numbers, cancellation registry, and record/replay middleware — a rigorous upgrade to
-   ad-hoc postMessage/WebSocket message handling.
+1. **Layered engine with one-way deps** (`shared → llms → agents(stateless) → core(stateful) → hosts`): the agent loop owns no storage; the core owns no UI/host concerns.
+2. **Plan/Act as a tool-gated mode switch**: the model calls `switch_to_act_mode` only after explicit user approval; the run ends, the session is rebuilt with act-mode tools, and a synthetic continuation prompt drives execution.
+3. **Tauri + sidecar with typed command/event transport and per-launch auth token**: `apps/examples/desktop-app` ships exactly our topology — Bun HTTP+WS sidecar, random `approvalToken` compared with `timingSafeEqual`, origin allowlist, tool approvals pushed over WS scoped to connection+session.
 
 ## What to Avoid (one line each)
 
-- **Shadow-git checkpoint after every tool use**: Cline's own docs warn it "may use significant
-  storage and slow down Cline" on big projects.
-- **Permissive auto-approve defaults** (e.g. legacy `executeAllCommands: true`): the model-judged
-  `requires_approval` flag as primary safety gate is non-deterministic and conflicts with
-  ACUTE-CODE's human-approval-first layer.
-- **Monorepo sprawl**: cron schedulers, messaging connectors, marketplace, enterprise remote
-  config, patched/vendored dependencies — scope and maintenance burden far beyond ACUTE-CODE v1.
+- **Hub-daemon subsystem** (detached WebSocket daemon, discovery records, build fingerprints, multi-client attach/detach): complexity for a local-first single-user app with max 5 agents.
+- **gRPC-over-postMessage toolchain**: buf/protoc/grpc-js in the UI path is heavy machinery; typed JSON schemas over our REST+WS achieve the same guarantees cheaper.
+- **Permissive auto-approve defaults**: shipped defaults auto-approve file edits and *all* commands (`executeAllCommands: true`, `editFiles: true`) — invert for ACUTE-CODE's human-approval-first stance.
+- **Scope sprawl** (cron/agenda, marketplace, remote-config, connectors, baked-in PostHog telemetry): enterprise/cloud features that conflict with a closed-source local-first v1.
 
 ## Relevance to ACUTE-CODE
 
-Cline is the single most architecturally relevant reference in our study set. Its SDK hub-spoke
-model is nearly isomorphic to ACUTE-CODE's planned shape: a Tauri 2 UI (Cline: React 18 webview;
-ours: React 18/TS) talking over a localhost channel (Cline: WebSocket to a loopback daemon;
-ours: REST+WS to a Node sidecar) to a process that owns SQLite and runs agent workers (Cline:
-spokes running `@cline/core`; ours: the sidecar running max-5 concurrent agents). Cline's own SDK
-examples reportedly include "a Tauri desktop app with a Bun sidecar backend" and a VS Code
-extension running sessions over RPC, which validates the exact process topology we chose. Beyond
-topology, its Plan/Act mode split, category-based auto-approve UX with per-command "Always
-approve", MCP hub with fingerprint-guarded reconcile loops, and compaction strategy (canonical
-transcript + separate compaction artifact with hash validation) all map directly onto features in
-our scope. The license (Apache-2.0) is compatible with our dependency policy, and the parts that
-are off-limits (closed-source JetBrains plugin) or off-scope (cron, marketplace, enterprise
-config) are cleanly separable. Verdict: **primary reference for sidecar architecture, approval
-UX, and MCP integration; treat its storage defaults and permissive auto-approve stance as
-anti-patterns for us.**
+Cline is the most architecturally isomorphic project in our study set. Its desktop example *is* our topology — a Tauri shell with a Bun sidecar backend serving a web UI over localhost HTTP+WS — and its SDK layering (`shared → llms → agents → core`) is the dependency discipline our sidecar should copy: a stateless agent loop, a stateful core owning SQLite persistence, thin host adapters. Every focus area transferred cleanly: Plan/Act implemented as a tool-gated mode switch with per-mode toolsets; MCP managed through one watched settings file with fingerprint-guarded reconciliation and per-tool auto-approve; a provider model of typed provider IDs plus a capability/pricing catalog isolated in one package; and an approval vocabulary (`yes`/`no`/free-text + per-tool policies) that matches our human-approval safety layer — with defaults we must invert. Apache-2.0 makes everything safe to study and even to depend on. The cautionary tale is accretion: a once-simple extension grew a hub daemon, cron scheduler, and enterprise remote-config around its core; ACUTE-CODE should keep the core loop small and push such extras out of v1 scope.
 
 ## Sources
 
-- https://github.com/cline/cline (repo README, stars/forks, feature claims)
-- https://github.com/cline/cline/blob/main/LICENSE
-- https://github.com/cline/cline/blob/main/package.json (monorepo root manifest)
-- https://github.com/cline/cline/blob/main/sdk/README.md (packages, Agent/createTool, ClineCore, examples)
-- https://raw.githubusercontent.com/cline/cline/main/sdk/ARCHITECTURE.md (layering rules, seams, compaction, agenda, cron)
-- https://github.com/cline/cline/blob/main/docs/cline-overview.mdx (forms, shared core)
-- https://github.com/cline/cline/blob/main/docs/core-workflows/plan-and-act.mdx
-- https://github.com/cline/cline/blob/main/docs/core-workflows/checkpoints.mdx
-- https://github.com/cline/cline/blob/main/docs/core-workflows/task-management.mdx
-- https://github.com/cline/cline/blob/main/docs/features/auto-approve.mdx (raw fetch)
-- https://github.com/cline/cline/blob/main/docs/features/subagents.mdx
-- https://github.com/cline/cline/blob/main/docs/sdk/tools.mdx (toolPolicies)
-- https://github.com/cline/cline/blob/main/docs/sdk/architecture/hub-spoke.mdx
-- https://api.github.com/repos/cline/cline/contents/apps/vscode/src (and subpaths: core, core/controller, core/controller/task, core/controller/checkpoints, core/storage, services, services/mcp, integrations, shared, hosts)
-- https://github.com/cline/cline/blob/main/apps/vscode/webview-ui/package.json
-- https://github.com/cline/cline/blob/main/apps/vscode/src/services/mcp/McpHub.ts
-- https://github.com/cline/cline/blob/main/apps/vscode/src/core/storage/StateManager.ts
-- https://github.com/cline/cline/blob/main/apps/vscode/src/core/controller/grpc-handler.ts
-- https://github.com/cline/cline/blob/main/apps/vscode/src/shared/AutoApprovalSettings.ts
-- https://api.github.com/repos/cline/cline/contents/{apps, sdk, sdk/packages, sdk/packages/core, sdk/packages/core/src, sdk/packages/core/src/session, sdk/packages/core/src/session/stores, sdk/examples, docs, docs/core-workflows, docs/features, docs/provider-config, docs/sdk, docs/sdk/architecture, docs/mcp}
+- https://github.com/cline/cline (README, tree, stats)
+- https://github.com/cline/cline/blob/main/LICENSE (stock Apache-2.0, © 2026 Cline Bot Inc.) + GitHub API `/contents/LICENSE`, `/commits?path=LICENSE`
+- https://api.github.com/repos/cline/cline (metadata)
+- https://github.com/cline/cline/tree/main, `/tree/main/apps/vscode`, `/tree/main/sdk`, recursive git tree
+- https://github.com/cline/cline/blob/main/sdk/ARCHITECTURE.md (layering, RuntimeHost, hub, design seams, constraints)
+- https://github.com/cline/cline/blob/main/sdk/README.md (SDK positioning, quickstart)
+- https://docs.cline.bot/cline-sdk/overview (package table, Node 22+)
+- Raw: `package.json` (root), `apps/vscode/package.json`, `apps/vscode/webview-ui/package.json`, `sdk/packages/{sdk,core,shared,llms,agents}/package.json`
+- Raw sources `apps/vscode/src/`: `hosts/host-provider.ts`, `core/controller/grpc-handler.ts`, `core/webview/WebviewProvider.ts`, `core/storage/StateManager.ts`, `core/storage/disk.ts`, `core/controller/checkpoints/checkpointRestore.ts`, `services/mcp/McpHub.ts`, `shared/api.ts`, `shared/AutoApprovalSettings.ts`, `shared/WebviewMessage.ts`, `shared/constants.ts`; `proto/cline/task.proto`, `proto/cline/common.proto`
+- Raw: `apps/cli/src/runtime/interactive/mode.ts`, `approvals.ts`
+- Raw: `sdk/packages/core/src/hooks/checkpoint-hooks.ts`, `session/checkpoint-restore.ts`, `runtime/tools/tool-approval.ts`
+- Raw: `apps/examples/desktop-app/README.md`, `sidecar/server.ts`, `sidecar/commands.ts` (Tauri + Bun sidecar example)

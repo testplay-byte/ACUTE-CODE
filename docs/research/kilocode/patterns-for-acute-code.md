@@ -51,7 +51,7 @@ Mapping context: Kilo = VS Code/JetBrains/CLI clients -> `kilo serve` core (HTTP
 - `task` is a built-in tool in the sidecar registry: input = target agent slug + prompt; creates a new `sessions` row with `parent_session_id`, own message history, inherits model unless the agent overrides.
 - On completion the sidecar injects a single summary message into the parent session (never the full transcript).
 - Global concurrency cap = 5 enforced at spawn time: a queue (or simple rejection with retry guidance) in the sidecar; the parent's `task` call blocks/streams until a slot frees.
-- UI: a tree view of parent/subagent sessions (Kilo ships a literal `SubAgentViewerProvider` — proof users want to inspect subagent transcripts even though parents only see summaries).
+- UI: a tree view of parent/subagent sessions so users can inspect subagent transcripts even though parents only see summaries (Kilo exposes subagent activity in its UI; the exact viewer component name is [UNVERIFIED]).
 
 ## Pattern 5 — Parallel-agent workspace isolation: semaphore + git-worktree-per-agent
 
@@ -68,14 +68,14 @@ Mapping context: Kilo = VS Code/JetBrains/CLI clients -> `kilo serve` core (HTTP
 
 ## Pattern 6 — Skills with progressive disclosure (open Agent Skills standard)
 
-**WHAT (Kilo Code).** Skills are folders with `SKILL.md` (frontmatter `name` <= 64 chars matching the dir name, `description` <= 1024 chars; optional `scripts/`, `references/`, `assets/`), following the open agentskills.io standard. At session start **only name + description are scanned** and injected into the system prompt; the full SKILL.md (and bundled resources) load only when the model decides one applies — no keyword/semantic matcher, the LLM judges from descriptions. Sources: `~/.kilo/skills/`, `.kilo/skills/` (project wins), compat dirs (`.agents/skills/`, `.claude/skills/`), `skills.paths`, and remote `skills.urls` whose servers host an `index.json` (version bump -> atomic cache replacement).
+**WHAT (Kilo Code).** Skills are folders with `SKILL.md` (frontmatter `name` <= 64 chars matching the dir name, `description` <= 1024 chars; optional `scripts/`, `references/`, `assets/`) — docs describe this as implementing "Agent Skills, a lightweight, open format for extending AI agent capabilities". At session start **only name + description are scanned** and injected into the system prompt; the full SKILL.md (and bundled resources) load only when the model decides one applies, surfacing as a `skill` tool call — no keyword/semantic matcher, the LLM judges from descriptions. Sources: `~/.kilo/skills/`, `.kilo/skills/` (project wins), compat dirs (`.agents/skills/` by default, `.claude/skills/` if enabled), `skills.paths`, and remote `skills.urls` whose servers must host an `index.json` manifest; `/reload` rescans mid-session.
 
 **WHY (fits ACUTE-CODE).** Near-zero-context-cost extensibility that interoperates with a growing ecosystem (Kilo, Claude-compatible layouts) while staying local-first. Progressive disclosure keeps our system prompts small — the difference between a toy and a scalable skill library.
 
 **HOW (map to our stack).**
 - Sidecar scans `.acute/skills/` (workspace) and a global skills dir at session start; parses frontmatter only; stores the index in SQLite (`skills (name, description, version, origin_path)`); injects the compact index into the system prompt.
 - Reading a full SKILL.md is itself a permission-gated tool call (`skill_read`) so the approval layer stays in control; bundled `scripts/` execute only via the normal `bash` tool + permission rules (never auto-run).
-- Remote skill sources: fetch `index.json`, cache in SQLite, swap atomically on version change (Kilo's exact behavior, worth copying conceptually).
+- Remote skill sources: fetch `index.json`, cache in SQLite, and refresh safely on change (Kilo requires remote servers to serve `index.json`; its exact cache-swap semantics are [UNVERIFIED]).
 - Ship our internal ACUTE skills (ADR, phase-report, dispatch-research) in this format so the product dogfoods its own mechanism.
 
 ## Pattern 7 — Marketplace as files, not plugins
@@ -91,7 +91,7 @@ Mapping context: Kilo = VS Code/JetBrains/CLI clients -> `kilo serve` core (HTTP
 
 ## Pattern 8 — Checkpoints (snapshots) for undoable agent steps
 
-**WHAT (Kilo Code).** The core has a `snapshot/` module ("checkpointing file state for undo") beside the edit/patch pipeline, giving per-step restore of the workspace. (Module existence verified; exact semantics [UNVERIFIED — internals not read].)
+**WHAT (Kilo Code).** The core has a `snapshot/` module: git-backed file baselines captured before/after agent edits, stored in a **separate git directory per worktree** under `${data}/snapshot/<project-id>/<worktree-hash>`, powering diffs and revert flows. Agent Manager turns request `snapshotInitialization: "wait"` so baseline capture never blocks parallel sessions; a process-wide slow-snapshot guard caps runaway captures, and slow interactive tracking prompts after ~10 seconds. (Verified from CLI Runtime docs + what's-new page; module internals not read.)
 
 **WHY (fits ACUTE-CODE).** Human approval is much easier to grant when every step is reversible; checkpoints also implement "undo last agent action" cheaply.
 
@@ -103,8 +103,8 @@ Mapping context: Kilo = VS Code/JetBrains/CLI clients -> `kilo serve` core (HTTP
 
 1. **Blanket "auto" modes (`kilo run --auto` disables ALL permission prompts).** Directly violates ACUTE-CODE's human-approval safety layer; even Kilo restricts it to "trusted environments." If we add a CI mode, scope it per-tool/per-path via the normal permission rules rather than a global off switch.
 2. **Delegation-as-a-mode (the deprecated Orchestrator pattern).** Kilo itself retired it: a dedicated orchestrator persona adds mode-switching UX and still needs the same `task` tool underneath. Build delegation as a capability of full-access agents from day one.
-3. **Effect 4 beta + 16 patched dependencies as the sidecar's foundation.** Powerful but operationally heavy (they maintain local patches of effect, solid-js, even the MCP SDK). Our sidecar is small; plain TypeScript with zod and a thin HTTP+WS layer is the right size.
-4. **Full config reload on marketplace installs.** Kilo's docs concede it "may interrupt running sessions." Design per-loader hot-reload from the start (our SQLite-backed loaders make this easy).
+3. **Effect 4 beta + 15 patched dependencies as the sidecar's foundation.** Powerful but operationally heavy (they maintain local patches of effect, solid-js, even the MCP SDK). Our sidecar is small; plain TypeScript with zod and a thin HTTP+WS layer is the right size.
+4. **Full config reload on marketplace installs.** Kilo's docs note "sessions may reload after changes." Design per-loader hot-reload from the start (our SQLite-backed loaders make this easy).
 5. **Migrating UI frameworks mid-flight (React -> SolidJS).** Kilo's webview is now SolidJS 1.9 with Storybook/xterm/dnd rebuilt for it — evidence of a costly rewrite, not a reason to avoid React. ACUTE-CODE stays React 18/TS.
 6. **Fork-merge machinery (`kilocode_change` markers, upstream-sync ratchets).** Only sensible when tracking a live upstream (their OpenCode fork). We build original code; adopting marker discipline would be pure overhead.
 7. **Doc/license drift.** Their repo literally ships a README claiming Apache-2.0 over MIT LICENSE files. Process lesson: ACUTE-CODE should generate license metadata from the LICENSE file / package manifest, not hand-written prose.
@@ -116,6 +116,7 @@ Mapping context: Kilo = VS Code/JetBrains/CLI clients -> `kilo serve` core (HTTP
 - https://raw.githubusercontent.com/Kilo-Org/kilocode/main/AGENTS.md
 - https://raw.githubusercontent.com/Kilo-Org/kilocode/main/README.md
 - https://github.com/Kilo-Org/kilocode/blob/main/package.json
+- https://raw.githubusercontent.com/Kilo-Org/kilocode/main/packages/opencode/package.json
 - https://github.com/Kilo-Org/kilocode/tree/main/packages
 - https://github.com/Kilo-Org/kilocode/tree/main/packages/opencode/src
 - https://github.com/Kilo-Org/kilocode/tree/main/packages/kilo-vscode
@@ -124,12 +125,15 @@ Mapping context: Kilo = VS Code/JetBrains/CLI clients -> `kilo serve` core (HTTP
 - https://raw.githubusercontent.com/Kilo-Org/kilocode/main/packages/kilo-vscode/package.json
 - https://raw.githubusercontent.com/Kilo-Org/kilocode/main/packages/kilo-vscode/README.md
 - https://raw.githubusercontent.com/Kilo-Org/kilocode/main/packages/kilo-gateway/README.md
+- https://kilo.ai/docs
+- https://kilo.ai/docs/code-with-ai/platforms/vscode/whats-new
+- https://kilo.ai/docs/contributing/architecture
+- https://kilo.ai/docs/contributing/architecture/cli-runtime
+- https://kilo.ai/docs/contributing/architecture/vscode-extension
 - https://kilo.ai/docs/code-with-ai/agents/using-agents
 - https://kilo.ai/docs/code-with-ai/agents/orchestrator-mode
 - https://kilo.ai/docs/customize/custom-modes
 - https://kilo.ai/docs/customize/custom-subagents
 - https://kilo.ai/docs/customize/skills
 - https://kilo.ai/docs/customize/marketplace
-- https://kilo.ai/docs/automate/mcp/using-in-kilo-code (search excerpts)
-- https://kilo.ai/docs/automate/mcp/using-in-cli (search excerpts)
-- https://kilo.ai/docs/getting-started/settings/auto-approving-actions (search excerpts)
+- https://kilo.ai/docs/automate/mcp/using-in-kilo-code

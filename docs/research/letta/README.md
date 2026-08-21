@@ -1,61 +1,92 @@
 # Letta (formerly MemGPT) — Research Summary
 
-> Target: <https://github.com/letta-ai/letta>
-> Verified 2026-08-21 against the live repository, its `archive` branch, `letta-ai/letta-code`, and docs.letta.com.
+**Target:** ACUTE-CODE reference-project analysis
+**Date:** 2026-08-21
+**Canonical repo:** https://github.com/letta-ai/letta (verified against the live repo, its `archive` branch, `letta-ai/letta-code`, and docs.letta.com)
+
+## Repo status warning (read first)
+
+`letta-ai/letta` `main` is **no longer the main codebase** — its README states "This repository now serves as a landing page for the Letta project." Current state:
+
+- **Active development** lives in [`letta-ai/letta-code`](https://github.com/letta-ai/letta-code) — a TypeScript agent harness (npm `@letta-ai/letta-code`, Bun runtime) with terminal UI, channels (Slack/Telegram/Discord), desktop app, and git-backed memory ("MemFS" / context repositories).
+- The **Letta V1 server** (Python/FastAPI, the system the memory-block architecture is famous for) is archived on the repo's `archive` branch (`letta` v0.16.8), explicitly unsupported — "should not be used in production" per the README.
+- Per Letta's "Our Next Phase" blog, the V1 model itself is being sunset: memory moves "from specialized memory tools that edit memory in a database to generalized computer use tools like bash" operating on git-backed context repositories; `core_memory_replace` and other legacy server memory tools are being **removed**; sleep-time agents and multi-agent orchestration move from server-side to client-side skills/subagents. The V1 SDK docs now warn: "We do not recommend building on memory blocks anymore."
+
+**Implication:** the V1 block architecture is the mature, well-documented expression of the ideas in our focus hints (stateful agents, memory blocks, agent-server REST API, self-editing memory, sleep-time compute, shared blocks). We study it as a *pattern source* — while noting that Letta, the pioneer of database memory blocks, is migrating to **file-based, git-versioned memory edited with general tools**, which converges on the Hermes-style markdown memory ACUTE-CODE already plans. That convergence is a validation signal, not a reason to abandon either idea (synthesis in `patterns-for-acute-code.md`).
 
 ## What it is
 
-Letta is a platform for **stateful LLM agents with persistent, self-editing memory** ("AI with advanced memory that can learn and self-improve over time"). It originated as MemGPT (2023), which treated the LLM context window like OS virtual memory: a small in-context "core memory" managed by the agent itself, backed by larger out-of-context stores (conversation history + vector-searchable archival memory) paged in via tools.
+Letta is the company/product born from **MemGPT** (2023) — a platform for **stateful LLM agents with persistent, self-editing memory** ("AI with advanced memory that can learn and self-improve over time"). MemGPT's founding idea: treat the LLM context window like OS virtual memory — a small in-context "core memory" managed by the agent itself, backed by larger out-of-context stores paged in via tools. Verified core concepts:
 
-**Critical repo-state finding (verified):** `letta-ai/letta` `main` is now only a **landing page**. Active development has moved to **`letta-ai/letta-code`** (TypeScript agent harness + terminal UI + local "App Server", npm `@letta-ai/letta-code`). The **legacy Letta V1 API server** — the Python/FastAPI implementation carrying all the memory architecture we studied — is preserved on the **`archive` branch** (`letta` v0.16.8), explicitly unsupported, no fixes or security patches. This memo analyzes that V1 architecture (where the patterns live) plus the current letta-code direction (MemFS, "dreaming").
+1. **Agents are server-side stateful resources.** An agent is a row (not a process): system prompt + attached memory blocks + message history + attached tools, all persisted in a database. Runs (invocations), steps (single LLM inference passes), and messages are recorded; the same agent resumes across sessions and clients.
+2. **Tiered memory**: *core memory* (labeled text **blocks** rendered into every prompt, always in-context), *archival memory* (unlimited vector store of passages, semantic search on demand), and *recall memory* (full persisted message history, searchable even after context-window eviction/compaction).
+3. **Agents edit their own memory** via built-in tools — verified in source: `core_memory_append`, `core_memory_replace`, `archival_memory_insert`, `archival_memory_search`, `conversation_search`, and the newer file-like family `memory_create`, `memory_insert`, `memory_replace`, `memory_rethink`, `memory_apply_patch` (unified diffs), `memory_str_replace`, `memory_str_insert`, `memory_rename`, `memory_delete`, `memory_update_description`, `memory_finish_edits`.
+4. **Sleep-time agents**: background agents sharing a primary agent's memory blocks, rewriting them during idle time (paper: "Sleep-time Compute: Beyond Inference Scaling at Test-time", arXiv 2504.13171); reborn in letta-code as "dreaming".
+5. **Multi-agent memory sharing**: blocks are first-class resources attachable to many agents — "When one agent updates the block, all others see the change immediately."
 
 ## License
 
-- `letta-ai/letta` LICENSE (main and archive branches): **SPDX: Apache-2.0**, "Copyright 2023, Letta authors". Standard, unmodified text.
-- `letta-ai/letta-code` LICENSE: **SPDX: Apache-2.0**, "Copyright 2025, Letta authors", with an appended **"Brand Assets Exclusion"** (name/logo/ASCII art remain Letta, Inc. property; not usable in derivative works).
+- `letta-ai/letta` LICENSE (main): **SPDX: `Apache-2.0`**, "Copyright 2023, Letta authors" — verified. `pyproject.toml` on `archive` declares `license = { text = "Apache License" }`.
+- `letta-ai/letta-code` LICENSE: **SPDX: `Apache-2.0`**, with an appended **"Brand Assets Exclusion"** (Letta name, logo, wordmark, ASCII art remain Letta, Inc. property, not licensed for derivative works) — verified from the LICENSE tail.
 
-**Compatibility verdict:** Apache-2.0 is in ACUTE-CODE's allowed set. No GPL-family components found in either LICENSE. The letta-code brand carve-out only restricts trademarks — irrelevant since we study patterns and copy no code, name, or logo.
+**Compatibility: fully compatible** with ACUTE-CODE's allowed set (MIT, Apache-2.0, BSD, ISC, MPL-2.0). No GPL-family code found in anything inspected. The brand carve-out is trademark-only and irrelevant to pattern study (we copy no code, names, or logos regardless).
 
-## Tech stack
+## Tech stack (verified from manifests and source)
 
-| Layer | Technology (verified) |
-|---|---|
-| Legacy server (archive branch) | Python >=3.11,<3.14; Pydantic v2; SQLAlchemy 2 (async) + SQLModel + Alembic migrations; FastAPI/uvicorn (in `server` extra, not core dep); OpenTelemetry; Docker/compose deploy |
-| Storage (legacy) | SQLite and PostgreSQL (both first-class extras; `sqlite_functions.py` in ORM); pgvector-style embeddings for archival; optional Redis, Pinecone |
-| LLM providers | Cloud-only SDKs: openai, anthropic, google-genai, mistralai, bedrock — matches ACUTE-CODE's cloud-APIs-only stance (local-LLM code existed but is legacy) |
-| Active code (letta-code) | TypeScript / npm package `@letta-ai/letta-code`; terminal UI, local App Server (`letta server`), desktop apps, Slack/Telegram/Discord channels |
-| Memory model (legacy V1) | Pydantic schemas: `Block` (label/value/limit/description/read_only), `Memory` (in-context block list), `Passage` (archival), message/step/run tables; `block_history` for edit auditing |
-| Memory model (current) | MemFS — git-backed memory filesystem; sleep-time agents rebranded as "dreaming"; `/init`, `/remember`, `/doctor`, `/sleeptime` commands |
+Two codebases share the name:
 
-## Top adoptable patterns
+| Layer | Letta V1 server (`archive` branch, `letta` 0.16.8) | Letta Code (`letta-ai/letta-code`, active) |
+|---|---|---|
+| Language | Python >=3.11,<3.14 (`pyproject.toml`) | TypeScript, Bun runtime (`bun.lock`, `bunfig.toml`) |
+| API server | FastAPI (`server` extra, `fastapi>=0.115.6`), REST routers under `/v1/*` | Local harness; `letta server` exposes the machine as a remote environment |
+| ORM / schemas | SQLAlchemy 2 (async) + sqlmodel + alembic migrations; pydantic v2 | n/a — git-tracked context repositories (MemFS) |
+| Primary DB | PostgreSQL + pgvector (`postgres` extra) | Local filesystem + git; optional GitHub repo sync |
+| Embedded DB | **SQLite** — default when no `letta_pg_uri` is set (`DatabaseChoice.SQLITE` in `settings.py`); dedicated sqlite baseline schema + `letta/orm/sqlite_functions.py` + CI workflow `core-unit-sqlite-test.yaml` | n/a |
+| LLM clients | `openai[realtime]`, `anthropic`, `mistralai`, `google-genai`, bedrock extra; llama-index embeddings | model-agnostic ("You own the memory. You choose the model.") |
+| Agent loop | `LettaAgent` v1–v3; `Summarizer` (message_buffer_min/max, partial-evict modes) for context compaction; `LettaCoreToolExecutor` for built-in tools | Harness with subagents, hooks, permissions, "heartbeats and crons", skills |
+| Multi-agent | `ManagerType` groups: `round_robin`, `supervisor`, `dynamic`, `sleeptime`, `voice_sleeptime` (`schemas/group.py`) | Client-side skills + dynamic subagents |
+| Observability | OpenTelemetry, sentry, temporalio, ddtrace extras | [UNVERIFIED — not inspected] |
+| Distribution | `pip install letta[postgres]` (legacy, archived) | `npm install -g @letta-ai/letta-code`; desktop app macOS/Win/Linux; chat.letta.com; Letta Cloud |
 
-1. **Memory blocks as server-owned, budgeted, in-context state** — labeled text blocks (value + char limit + description + read_only) rendered into the system prompt and editable both by the agent via tools and by the developer via REST.
-2. **Agent as a stateful REST resource** — `POST/GET/PATCH /v1/agents`, per-agent `/messages`, `/runs`, `/steps`, `/blocks` subresources; all state (messages, tool calls, memory edits) persisted server-side so nothing is lost on context eviction.
-3. **Sleep-time (background) memory agents + shared blocks** — a secondary agent attached to the same blocks reorganizes memory in the background between runs; one block attached to N agents gives instant shared state.
+## Top adoptable patterns (details in `patterns-for-acute-code.md`)
 
-## What to avoid
+1. **Labeled memory blocks as first-class, attachable resources** — memory as typed rows (`label`, `description`, `value`, `limit`, `read_only`, `version` + `block_history`) with many-to-many agent attachment; blocks render into the prompt as `<memory_blocks>` XML and are editable by both agent tools and the host application through one API.
+2. **Agent-owned memory-editing tools with structured verbs** — append/replace/patch primitives over the agent's own persistent memory, every edit versioned and auditable, instead of free-form edits only.
+3. **Sleep-time memory curation** — a background pass over recent history that consolidates lessons into memory while primary agents are idle (after N steps or on compaction), with an optional "agent reviews before applying" mode.
 
-1. **The V1 server codebase itself** — archived/unsupported, and a Python/FastAPI monolith wired to cloud infra (Temporal, Sentry, ClickHouse, OTel) we do not want; study it, don't import it.
-2. **Whole-value block writes ("last write wins")** — direct API updates replace the entire block; under concurrent agents this loses updates (Letta's own docs flag this).
-3. **Heartbeat-forced tool-call loops and deprecated API churn** — `memory` vs `blocks`, `shared_block_ids` already deprecated; blocks themselves flagged "may be deprecated in the future" in favor of git-backed MemFS.
+## What to avoid (one line each)
 
-## Relevance to ACUTE-CODE
+- **Standing up the V1 server model wholesale** — archived/unsupported, and a Python monolith wired to cloud infra (Temporal, Sentry, ClickHouse, OTel) we don't want; Letta itself moved orchestration client-side.
+- **Per-verb memory tools as the end-state** — Letta is *removing* `core_memory_replace`-style tools in favor of general file operations on git-backed memory; treat specialized memory verbs as an ergonomics layer over file memory, not the foundation.
+- **Postgres+pgvector as the local-first default** — fleet-server thinking; ACUTE-CODE's single-user profile should stay on SQLite (Letta's own embedded fallback) with FTS first, vectors only if proven necessary.
+- **Whole-value block writes under concurrency** — `blocks.update()` "replaces the entire block content - it does not append"; Letta's own docs flag simultaneous `memory_rethink` on one block as a lost-update anti-pattern.
+- **Treating blocks as stable API surface** — official docs: "Memory blocks may be deprecated in the future … We do not recommend building on memory blocks anymore"; adopt the *pattern*, not the API.
 
-Letta is the reference implementation for exactly ACUTE-CODE's hardest problem: durable, self-editing agent memory behind a localhost server. Its verified architecture — a state-owning server (our Node/TS sidecar + SQLite plays this role) exposing agents, blocks, and messages as REST resources, with in-context budgeted blocks distinct from out-of-context searchable history — maps almost one-to-one onto our design. The block model **complements** (not replaces) our planned Hermes-style markdown memory: markdown files are the durable, git-friendly store (where Letta itself is heading with MemFS), while blocks are the compiled, size-budgeted, in-context projection of that store, with agent-facing edit tools and per-block read-only control. Sleep-time agents and shared blocks directly inform our ≤5-concurrent-agent workbench (background memory curation, shared project-state blocks), and the `block_history` table suggests how to make memory edits reviewable under our human-approval layer. License-clean (Apache-2.0), patterns-only adoption recommended.
+## Relevance to ACUTE-CODE — verdict
+
+**Highly relevant as a pattern source; not a dependency candidate.** Letta is the most fully articulated reference for exactly ACUTE-CODE's central problem: keeping multiple long-lived agents stateful on a local machine with human approval in the loop. Its verified architecture — stateful agent resources behind a localhost REST API, tiered memory (in-context blocks vs out-of-context searchable history), agent-self-edited versioned memory, background sleep-time curation, and shared blocks across agents — maps almost one-to-one onto our Tauri + Node sidecar + SQLite design, with SQLite literally being Letta's own embedded-mode default. Even its Message schema carries `approval_request_id` / `approve` / `denial_reason` fields — server-side tool approval is in the data model, mirroring our safety layer. Strategically, the most valuable signal is Letta's own migration from database memory blocks to **git-backed filesystem memory edited with general tools** — external validation that Hermes-style markdown memory is the right foundation, with Letta's block model supplying the missing structural layer (labeled, bounded, attachable, versioned projections of that markdown into every agent's context). Apache-2.0, license-clean; adopt patterns only.
 
 ## Sources
 
-- https://github.com/letta-ai/letta
-- https://raw.githubusercontent.com/letta-ai/letta/main/README.md
-- https://raw.githubusercontent.com/letta-ai/letta/main/LICENSE
-- https://github.com/letta-ai/letta/tree/archive
-- https://raw.githubusercontent.com/letta-ai/letta/archive/pyproject.toml
-- https://github.com/letta-ai/letta-code (read via web reader)
-- https://raw.githubusercontent.com/letta-ai/letta-code/main/LICENSE
-- https://docs.letta.com/guides/agents/memory
-- https://docs.letta.com/v1-sdk/concepts/stateful-agents/
-- https://docs.letta.com/v1-sdk/memory/memory-blocks
-- https://docs.letta.com/v1-sdk/memory/shared-memory
-- https://docs.letta.com/v1-sdk/memory/archival-memory
-- https://docs.letta.com/configuration/memory/
-- https://arxiv.org/abs/2504.13171
+- https://github.com/letta-ai/letta (README, repo status, stats)
+- https://raw.githubusercontent.com/letta-ai/letta/main/LICENSE (Apache-2.0, copyright line)
+- https://github.com/letta-ai/letta-code (active repo README, TS/Bun stack, MemFS)
+- https://raw.githubusercontent.com/letta-ai/letta-code/main/LICENSE (Apache-2.0 + Brand Assets Exclusion)
+- https://raw.githubusercontent.com/letta-ai/letta/archive/pyproject.toml (deps, python version, license field)
+- https://raw.githubusercontent.com/letta-ai/letta/archive/letta/settings.py (DatabaseChoice POSTGRES/SQLITE default)
+- https://raw.githubusercontent.com/letta-ai/letta/archive/letta/orm/block.py (Block columns incl. version/read_only/history)
+- https://raw.githubusercontent.com/letta-ai/letta/archive/letta/orm/message.py (approval fields, step/run/conversation ids)
+- https://raw.githubusercontent.com/letta-ai/letta/archive/letta/services/tool_executor/core_tool_executor.py (verified memory tool names)
+- https://raw.githubusercontent.com/letta-ai/letta/archive/letta/server/rest_api/routers/v1/agents.py (verified agent REST routes)
+- https://raw.githubusercontent.com/letta-ai/letta/archive/letta/server/rest_api/routers/v1/blocks.py (verified block REST routes)
+- https://raw.githubusercontent.com/letta-ai/letta/archive/letta/schemas/group.py (ManagerType.sleeptime, sleeptime_agent_frequency)
+- https://raw.githubusercontent.com/letta-ai/letta/archive/letta/agents/letta_agent.py (Summarizer, in-context message prep)
+- https://raw.githubusercontent.com/letta-ai/letta/archive/letta/constants.py (CORE_MEMORY_BLOCK_CHAR_LIMIT = 100000)
+- https://docs.letta.com/guides/agents/memory (stateful agents, blocks, in/out-of-context messages, runs/steps/conversations)
+- https://docs.letta.com/v1-sdk/memory/memory-blocks/ (block anatomy, XML rendering, read-only)
+- https://docs.letta.com/v1-sdk/memory/archival-memory/ (passages, agent tools, tags)
+- https://docs.letta.com/v1-sdk/memory/shared-memory/ (sharing semantics, concurrency guidance, deprecation warning)
+- https://docs.letta.com/guides/agents/sleep-time-agents (newer "Dreaming" feature docs)
+- https://www.letta.com/blog/our-next-phase/ (architecture shift: MemFS, tool removals, timeline)
+- https://www.letta.com/blog/sleep-time-compute/ (sleep-time compute announcement)
+- https://arxiv.org/html/2504.13171v1 (Sleep-time Compute paper)
