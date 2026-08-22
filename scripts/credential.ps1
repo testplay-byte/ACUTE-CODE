@@ -47,13 +47,13 @@ if ($Action -eq "Read") {
 elseif ($Action -eq "Write") {
   if (-not $Value) { Write-Error "Value required for Write"; exit 1 }
   $blob = [Text.Encoding]::Unicode.GetBytes($Value)
-  $hGlobal = [Runtime.InteropServices.Marshal]::AllocHGlobal $blob.Length
+  $hGlobal = [Runtime.InteropServices.Marshal]::AllocHGlobal($blob.Length)
   [Runtime.InteropServices.Marshal]::Copy($blob, 0, $hGlobal, $blob.Length)
   $cred = New-Object CredMan+CREDENTIAL
   $cred.Flags = 0; $cred.Type = 1; $cred.TargetName = $Target; $cred.UserName = $User
   $cred.CredentialBlobSize = $blob.Length; $cred.CredentialBlob = $hGlobal; $cred.Persist = 2
   $ok = [CredMan]::CredWrite([ref]$cred, 0)
-  [Runtime.InteropServices.Marshal]::FreeHGlobal $hGlobal
+  [Runtime.InteropServices.Marshal]::FreeHGlobal($hGlobal)
   if ($ok) { Write-Output "stored: $Target" } else { Write-Error "CredWrite failed"; exit 1 }
 }
 else { Write-Error "Action must be Read or Write"; exit 1 }
