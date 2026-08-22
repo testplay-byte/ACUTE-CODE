@@ -72,7 +72,7 @@ export function SetupWizard() {
           </div>
         ) : (
           <div
-            className={`h-full overflow-y-auto custom-scrollbar ${WIZARD_CONTAINER} ${isDark ? "dark-scroll" : ""}`}
+            className={`h-full overflow-y-auto overflow-x-clip custom-scrollbar ${WIZARD_CONTAINER} ${isDark ? "dark-scroll" : ""}`}
           >
             <div key={step} className="wizard-step min-h-full">
               {step === 0 && <WelcomeScreen />}

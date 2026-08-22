@@ -76,4 +76,16 @@ describe("Setup wizard", () => {
     // Completion/dismissal sets the first-run flag.
     expect(localStorage.getItem("acute.setupDone")).toBe("1");
   });
+
+  it("PlugBrain offers OpenRouter by default even when the providers list is empty (owner-reported bug)", async () => {
+    renderWizard(); // providers query fails (no sidecar) -> client-side fallback must kick in
+    fireEvent.click(screen.getByRole("button", { name: /get started/i }));
+    fireEvent.click(screen.getByRole("button", { name: /continue/i }));
+    fireEvent.click(screen.getByRole("button", { name: /configure now/i }));
+    fireEvent.click(screen.getByRole("button", { name: /configure model/i }));
+    // The selector merges OPENROUTER_FALLBACK when the server list is empty —
+    // the owner's exact complaint was an empty provider picker on fresh boot.
+    const openrouter = await screen.findAllByText(/openrouter/i);
+    expect(openrouter.length).toBeGreaterThan(0);
+  });
 });

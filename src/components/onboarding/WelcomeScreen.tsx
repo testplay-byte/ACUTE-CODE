@@ -286,7 +286,7 @@ export function WelcomeScreen() {
 
         {/* Floating Decorations */}
         <div
-          className="absolute -right-6 top-[38%] hidden lg:block w-16 h-16 rounded-[16px] border-[1.5px] grid place-items-center text-[22px] animate-float"
+          className="absolute -right-6 top-[38%] hidden lg:block w-16 h-16 rounded-[16px] border-[1.5px] grid place-items-center text-[22px] animate-float pointer-events-none"
           style={{
             backgroundColor: s.accent,
             borderColor: s.borderStrong,
@@ -296,7 +296,7 @@ export function WelcomeScreen() {
           ✦
         </div>
         <div
-          className="absolute left-[58%] -bottom-10 hidden xl:flex w-12 h-12 rounded-full border-[1.5px] items-center justify-center text-[18px] animate-float2"
+          className="absolute left-[58%] -bottom-10 hidden xl:flex w-12 h-12 rounded-full border-[1.5px] items-center justify-center text-[18px] animate-float2 pointer-events-none"
           style={{
             background: s.card,
             borderColor: s.borderStrong,

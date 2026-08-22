@@ -55,7 +55,7 @@ export function PlugBrainScreen() {
           smoothly 320→460px with the viewport (clamp), no discrete jumps */}
       <div className="mt-4 md:mt-6 short:mt-3 flex-1 min-h-0 grid gap-5 md:gap-6 lg:grid-cols-[minmax(0,1fr)_clamp(320px,26vw,460px)]">
         {/* LEFT COLUMN (scrolls internally) */}
-        <div className={`min-h-0 overflow-y-auto pr-1 md:pr-2 pb-6 flex flex-col gap-4 md:gap-5 custom-scrollbar ${s.isDark ? "dark-scroll" : ""}`}>
+        <div className={`min-h-0 overflow-y-auto overflow-x-clip pr-1 md:pr-2 pb-6 flex flex-col gap-4 md:gap-5 custom-scrollbar ${s.isDark ? "dark-scroll" : ""}`}>
           {/* Provider card */}
           <div
             className="rounded-[24px] border-[1.5px] p-4 md:p-5"
@@ -85,7 +85,7 @@ export function PlugBrainScreen() {
         </div>
 
         {/* RIGHT COLUMN (summary rail; scrolls internally on short windows) */}
-        <div className={`min-h-0 overflow-y-auto pb-6 custom-scrollbar ${s.isDark ? "dark-scroll" : ""}`}>
+        <div className={`min-h-0 overflow-y-auto overflow-x-clip pb-6 custom-scrollbar ${s.isDark ? "dark-scroll" : ""}`}>
           <ModelSummary
             onBack={() => setStep(2)}
             onSave={() => {
