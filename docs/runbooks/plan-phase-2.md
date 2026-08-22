@@ -8,12 +8,12 @@ Owner: Orchestrator · Planner artifact · 2026-08-22 · Prerequisite: Phase 1 A
 
 | # | Task | Owner | Status |
 |---|---|---|---|
-| 1 | **Wave 1a — Sidecar core**: Fastify 5 server (ADR-0006) with bearer-token auth middleware (ADR-0008), stdout ready-line + ephemeral port, `/health`, agents CRUD + duplicate per API.md §4, better-sqlite3 (ADR-0007) with numbered migrations + schema v1 (agents, providers, sessions, session_events, usage_events, approvals, audit_log, settings), integration tests | Developer A | DISPATCHED |
-| 2 | **Wave 1b — Frontend foundation**: Tailwind + shadcn/ui + Zustand + TanStack Query wiring; theme system + motion variants ported from design demos (docs/design/ui-direction.md); app shell (sidebar+topbar); Agent Registry screen (list/editor/templates) against a typed API client with msw-free fixture tests | Developer B | DISPATCHED |
-| 3 | **Wave 2a — Providers + chat**: Vercel AI SDK provider layer (openai-compatible adapter first — OpenRouter live), provider manager (keys from Credential Manager via shell-injected env), model listing, single-agent chat loop with streaming WS events + usage telemetry rows | Developer | PENDING |
-| 4 | **Wave 2b — Shell integration**: Rust spawns sidecar (token via env, ready-line parse, health poll, shutdown), frontend boots against live sidecar | Developer | PENDING |
-| 5 | **Wave 3 — E2E + demo**: owner-facing demo path (create agent → chat round trip), DEMO.md, perf baseline (cold start, idle RAM) | Tester + Orchestrator | PENDING |
-| 6 | Reviewer pass; Scribe: docs/ADRs/SETUP; commit + push (CI green) | Reviewer/Scribe | PENDING |
+| 1 | **Wave 1a — Sidecar core**: Fastify server, bearer auth, ready-line, agents CRUD, better-sqlite3 migrations + seeds | Developer A + Orchestrator fixes | DONE (verify green, live smoke test) |
+| 2 | **Wave 1b — Frontend foundation**: Tailwind/shadcn/Zustand/TanStack, theme system, app shell, Agent Registry | Developer B | DONE |
+| 3 | **Wave 2a — Providers + chat**: AI SDK v7 openai-compatible, keyring via env, model listing, single-agent chat + usage telemetry | Developer C + Orchestrator (main.js entry, db-dir fix) | DONE (LIVE OpenRouter round trip PASSED on stealth/ox-alpha) |
+| 4 | **Wave 2b — Shell integration**: Rust spawns sidecar (token, ready-line, health poll, shutdown), provider keys Credential Manager → env (keyring crate) | Developer D + Orchestrator | DONE (cargo check green, spawn contract test PASSED) |
+| 5 | **Wave 3 — Chat UI + E2E**: sessions screen, chat view, error banners, fixtures; orchestrator hands-on live + contract tests | Developer E + Orchestrator | DONE (107/107 tests) |
+| 6 | Reviewer pass; Scribe: docs/ADRs/SETUP; commit + push (CI green) | Reviewer/Scribe | commit DONE (455bc7c/774f441/be13e95 + keyring); push/CI BLOCKED on expired GitHub PAT |
 
 ## Constraints & notes
 
