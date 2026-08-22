@@ -84,7 +84,9 @@ export function SetupWizard() {
         )}
       </main>
 
-      <Footer />
+      {/* Footer chrome only on Welcome (owner directive: the ©/status band
+          wasted vertical space on every working step). */}
+      {step === 0 && <Footer />}
     </div>
   );
 }

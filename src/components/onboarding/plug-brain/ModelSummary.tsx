@@ -74,7 +74,7 @@ export function ModelSummary({ onBack, onSave }: { onBack: () => void; onSave: (
   };
 
   return (
-    <div className="grid gap-4">
+    <div className="grid gap-3">
       {/* --- MODEL SUMMARY CARD --- */}
       <div
         className="rounded-[24px] border-[1.5px] p-4"
@@ -99,7 +99,7 @@ export function ModelSummary({ onBack, onSave }: { onBack: () => void; onSave: (
         </div>
 
         {/* Tags */}
-        <div className="mt-4 flex flex-wrap gap-2">
+        <div className="mt-3 flex flex-wrap gap-2">
           {provider && (
             <span
               className="px-3 py-1.5 rounded-full text-[11px] font-bold flex items-center gap-1.5"
@@ -129,7 +129,7 @@ export function ModelSummary({ onBack, onSave }: { onBack: () => void; onSave: (
         </div>
 
         {/* Stats grid */}
-        <div className="grid grid-cols-2 gap-2 mt-4">
+        <div className="grid grid-cols-2 gap-2 mt-3">
           {[
             { label: "Context", value: formatContextLabel(contextWindow) },
             { label: "Max Out", value: formatContextLabel(maxOutput) },
@@ -153,7 +153,7 @@ export function ModelSummary({ onBack, onSave }: { onBack: () => void; onSave: (
 
         {/* Reasoning row */}
         <div
-          className="mt-4 rounded-[14px] border p-3 flex items-center justify-between"
+          className="mt-3 rounded-[14px] border p-3 flex items-center justify-between"
           style={{ borderColor: s.border }}
         >
           <div>
@@ -182,7 +182,7 @@ export function ModelSummary({ onBack, onSave }: { onBack: () => void; onSave: (
 
         {/* Cost card (THEMED) */}
         <div
-          className="mt-4 rounded-[14px] border-[1.5px] p-3 flex items-center justify-between"
+          className="mt-3 rounded-[14px] border-[1.5px] p-3 flex items-center justify-between"
           style={{
             backgroundColor: s.accent,
             borderColor: s.accent,

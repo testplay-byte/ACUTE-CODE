@@ -2,6 +2,7 @@ import { useCallback } from "react";
 import { useOnboardingStore } from "../onboarding-store";
 import { CONTEXT_OPTIONS, REASONING_LEVELS } from "../onboarding-types";
 import { useThemeStyles } from "../../../lib/use-theme-styles";
+import { NumberField, ThemedSlider } from "./controls";
 
 /** Tuning card — ported from the demo's plug-brain/ModelTuningCard.tsx. */
 export function ModelTuningCard() {
@@ -21,17 +22,13 @@ export function ModelTuningCard() {
   const reasoning = useOnboardingStore((st) => st.reasoning);
   const setReasoning = useOnboardingStore((st) => st.setReasoning);
 
+  // Presets just pick a value — the MANUAL toggle alone controls whether the
+  // free-form token field is shown.
   const handleContextSelect = useCallback(
     (val: number) => {
       setContextWindow(val);
-      setContextManual(true);
     },
-    [setContextWindow, setContextManual],
-  );
-
-  const handleTempSlider = useCallback(
-    (val: string) => setTemperature(parseFloat(val)),
-    [setTemperature],
+    [setContextWindow],
   );
 
   const activeContext = contextWindow;
@@ -119,6 +116,25 @@ export function ModelTuningCard() {
             })}
           </div>
 
+          {/* Manual context window — the MANUAL toggle reveals a free numeric
+              field so any exact token count can be configured */}
+          {contextManual && (
+            <div className="mt-3 flex items-center gap-3">
+              <div className="w-[180px] shrink-0">
+                <NumberField
+                  value={contextWindow}
+                  onChange={setContextWindow}
+                  step={1000}
+                  min={1000}
+                  ariaLabel="Custom context window in tokens"
+                />
+              </div>
+              <span className="text-[11px] font-medium" style={{ color: s.textTertiary }}>
+                Custom tokens — presets stay clickable above.
+              </span>
+            </div>
+          )}
+
           <div className="mt-2 flex items-center justify-between">
             <span className="text-[11px] font-mono font-bold" style={{ color: s.text }}>
               {String(activeContext)} tokens
@@ -138,18 +154,12 @@ export function ModelTuningCard() {
             >
               Max output
             </label>
-            <input
-              type="number"
-              className="w-full h-11 rounded-[12px] border-[1.5px] px-3 text-[13px] font-mono outline-none transition-colors"
-              style={{
-                background: s.inputBg,
-                borderColor: s.inputBorder,
-                color: s.text,
-              }}
-              onFocus={(e) => (e.target.style.borderColor = s.inputFocusBorder)}
-              onBlur={(e) => (e.target.style.borderColor = s.inputBorder)}
+            <NumberField
               value={maxOutput}
-              onChange={(e) => setMaxOutput(parseInt(e.target.value, 10) || 0)}
+              onChange={setMaxOutput}
+              step={256}
+              min={256}
+              ariaLabel="Max output tokens"
             />
           </div>
           <div>
@@ -160,27 +170,22 @@ export function ModelTuningCard() {
               Temperature
             </label>
             <div
-              className="h-11 rounded-[12px] border-[1.5px] px-3 flex items-center gap-2"
+              className="h-11 rounded-[12px] border-[1.5px] px-3 flex items-center gap-3"
               style={{
                 background: s.inputBg,
                 borderColor: s.inputBorder,
               }}
             >
-              <input
-                type="range"
+              <ThemedSlider
+                value={temperature}
                 min={0}
                 max={2}
                 step={0.1}
-                value={temperature}
-                onChange={(e) => handleTempSlider(e.target.value)}
-                className="flex-1 accent-current"
-                style={{
-                  accentColor: s.accent,
-                  background: `linear-gradient(to right, ${s.accent} ${(temperature / 2) * 100}%, ${s.border} ${(temperature / 2) * 100}%)`,
-                }}
+                onChange={setTemperature}
+                ariaLabel="Temperature"
               />
               <span
-                className="px-2 py-1 rounded-full text-[11px] font-bold shrink-0"
+                className="px-2 py-1 rounded-full text-[11px] font-bold shrink-0 font-mono w-[44px] text-center"
                 style={{ background: s.pillBg, color: s.pillText }}
               >
                 {temperature.toFixed(1)}
@@ -198,19 +203,12 @@ export function ModelTuningCard() {
             >
               Input $/1M tokens
             </label>
-            <input
-              type="number"
-              step={0.01}
-              className="w-full h-11 rounded-[12px] border-[1.5px] px-3 text-[13px] font-mono outline-none transition-colors"
-              style={{
-                background: s.inputBg,
-                borderColor: s.inputBorder,
-                color: s.text,
-              }}
-              onFocus={(e) => (e.target.style.borderColor = s.inputFocusBorder)}
-              onBlur={(e) => (e.target.style.borderColor = s.inputBorder)}
+            <NumberField
               value={inputCost}
-              onChange={(e) => setInputCost(parseFloat(e.target.value) || 0)}
+              onChange={setInputCost}
+              step={0.01}
+              min={0}
+              ariaLabel="Input cost per million tokens"
             />
           </div>
           <div>
@@ -220,19 +218,12 @@ export function ModelTuningCard() {
             >
               Output $/1M tokens
             </label>
-            <input
-              type="number"
-              step={0.01}
-              className="w-full h-11 rounded-[12px] border-[1.5px] px-3 text-[13px] font-mono outline-none transition-colors"
-              style={{
-                background: s.inputBg,
-                borderColor: s.inputBorder,
-                color: s.text,
-              }}
-              onFocus={(e) => (e.target.style.borderColor = s.inputFocusBorder)}
-              onBlur={(e) => (e.target.style.borderColor = s.inputBorder)}
+            <NumberField
               value={outputCost}
-              onChange={(e) => setOutputCost(parseFloat(e.target.value) || 0)}
+              onChange={setOutputCost}
+              step={0.01}
+              min={0}
+              ariaLabel="Output cost per million tokens"
             />
           </div>
         </div>

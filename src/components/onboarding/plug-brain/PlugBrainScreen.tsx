@@ -51,9 +51,12 @@ export function PlugBrainScreen() {
         </div>
       </div>
 
-      {/* Two-region grid — fills remaining height; summary rail scales
-          smoothly 320→460px with the viewport (clamp), no discrete jumps */}
-      <div className="mt-4 md:mt-6 short:mt-3 flex-1 min-h-0 grid gap-5 md:gap-6 lg:grid-cols-[minmax(0,1fr)_clamp(320px,26vw,460px)]">
+      {/* Two-region grid — fills remaining height. Owner directive: LEFT half
+          scrolls internally; RIGHT half (model summary + actions) does NOT
+          scroll — it is compact enough to fit and top-aligns with breathing
+          room inset from the right edge (lg:pr / 2xl:pr create that empty
+          area instead of hugging the window border). */}
+      <div className="mt-4 md:mt-6 short:mt-3 flex-1 min-h-0 grid gap-5 md:gap-8 lg:grid-cols-[minmax(0,1fr)_clamp(320px,25vw,430px)] lg:pr-4 xl:pr-10">
         {/* LEFT COLUMN (scrolls internally) */}
         <div className={`min-h-0 overflow-y-auto overflow-x-clip pr-1 md:pr-2 pb-6 flex flex-col gap-4 md:gap-5 custom-scrollbar ${s.isDark ? "dark-scroll" : ""}`}>
           {/* Provider card */}
@@ -84,8 +87,8 @@ export function PlugBrainScreen() {
           <ModelTuningCard />
         </div>
 
-        {/* RIGHT COLUMN (summary rail; scrolls internally on short windows) */}
-        <div className={`min-h-0 overflow-y-auto overflow-x-clip pb-6 custom-scrollbar ${s.isDark ? "dark-scroll" : ""}`}>
+        {/* RIGHT COLUMN (summary + actions; top-aligned, never scrolls) */}
+        <div className="min-w-0 self-start pt-1">
           <ModelSummary
             onBack={() => setStep(2)}
             onSave={() => {

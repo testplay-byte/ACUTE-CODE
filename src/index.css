@@ -321,3 +321,52 @@
 .dark-scroll::-webkit-scrollbar-thumb {
   background: var(--ac-border-strong);
 }
+
+/*
+ * Themed range slider (plug-brain/controls.tsx ThemedSlider). The track and
+ * fill are drawn by the component; only the thumb is styled here. Track is
+ * 20px tall so the 18px thumb centers without margin-top math.
+ */
+.ac-slider {
+  -webkit-appearance: none;
+  appearance: none;
+  height: 20px;
+  background: transparent;
+  cursor: pointer;
+}
+.ac-slider:focus {
+  outline: none;
+}
+.ac-slider::-webkit-slider-runnable-track {
+  height: 20px;
+  background: transparent;
+}
+.ac-slider::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  height: 18px;
+  width: 18px;
+  border-radius: 999px;
+  background: var(--ac-card);
+  border: 2px solid var(--ac-accent);
+  box-shadow: var(--ac-bento-shadow-sm);
+  transition: transform 0.15s cubic-bezier(0.25, 0.1, 0.25, 1);
+}
+.ac-slider:hover::-webkit-slider-thumb {
+  transform: scale(1.12);
+}
+.ac-slider:active::-webkit-slider-thumb {
+  transform: scale(1.2);
+}
+.ac-slider::-moz-range-track {
+  height: 20px;
+  background: transparent;
+}
+.ac-slider::-moz-range-thumb {
+  height: 14px;
+  width: 14px;
+  border-radius: 999px;
+  background: var(--ac-card);
+  border: 2px solid var(--ac-accent);
+  box-shadow: var(--ac-bento-shadow-sm);
+}

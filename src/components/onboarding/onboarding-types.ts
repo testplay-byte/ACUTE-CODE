@@ -22,6 +22,13 @@ export const WIZARD_CONTAINER =
 
 export type ReasoningLevel = "none" | "low" | "med" | "high" | "extra";
 
+/**
+ * Model id prefilled for the default provider (owner directive: the dev
+ * OpenRouter key only serves "ox Alpha" = stealth/ox-alpha, so the wizard
+ * opens with it already entered instead of an empty field).
+ */
+export const DEFAULT_MODEL_ID = "stealth/ox-alpha";
+
 export const REASONING_LEVELS: {
   id: ReasoningLevel;
   label: string;

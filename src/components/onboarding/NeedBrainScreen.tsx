@@ -14,6 +14,11 @@ export function NeedBrainScreen() {
   const isNow = brainChoice === "now";
   const isLater = brainChoice === "later";
   const checkColor = s.isDark ? "#111" : "white";
+  // Selected-card emphasis: accent border + bento lift + a soft accent ring
+  const selectedRing = (on: boolean) =>
+    on
+      ? `${s.bentoShadow}, 0 0 0 4px color-mix(in srgb, ${s.accent} 20%, transparent)`
+      : s.softShadow;
 
   const handleBack = () => setStep(1);
   const handleNext = () => {
@@ -31,17 +36,19 @@ export function NeedBrainScreen() {
         ACUTE-CODE needs a model to think with. Set it up now or skip for later.
       </p>
 
-      {/* Cards Grid — two choices side by side, filling the container width */}
-      <div className="mt-6 md:mt-8 short:mt-4 grid flex-1 items-start md:grid-cols-2 gap-4 md:gap-5 2xl:gap-8">
+      {/* Cards Grid — two equal-height choices, centered in the leftover
+          height (content-center) so tall windows don't leave them stranded
+          at the top */}
+      <div className="mt-6 md:mt-8 short:mt-4 grid flex-1 content-center md:grid-cols-2 gap-4 md:gap-5 2xl:gap-8">
         {/* Card 1 – Configure Now */}
         <div
-          className={`text-left rounded-[28px] border-[2px] p-5 md:p-6 short:p-4 transition-all group cursor-pointer ${
+          className={`h-full flex flex-col text-left rounded-[28px] border-[2px] p-5 md:p-6 short:p-4 transition-all group cursor-pointer ${
             isNow ? "translate-y-[-2px]" : ""
           }`}
           style={{
             background: s.card,
-            borderColor: isNow ? s.borderStrong : s.border,
-            boxShadow: isNow ? s.bentoShadow : s.softShadow,
+            borderColor: isNow ? s.accent : s.border,
+            boxShadow: selectedRing(isNow),
           }}
           onClick={() => setBrainChoice("now")}
           role="button"
@@ -122,28 +129,33 @@ export function NeedBrainScreen() {
             <span className="text-[11px] font-bold" style={{ color: s.textTertiary }}>+ custom</span>
           </div>
 
-          {/* EST. TIME */}
+          {/* EST. TIME — anchored to the card bottom so equal-height cards
+              align their footers */}
           <div
-            className="mt-5 short:mt-3 rounded-[14px] border px-3 py-2.5 flex items-center justify-between"
-            style={{
-              background: s.subtle,
-              borderColor: s.border,
-            }}
+            className="mt-auto pt-5 short:pt-3"
           >
-            <span className="text-[11px] font-bold" style={{ color: s.textTertiary }}>EST. TIME</span>
-            <span className="text-[12px] font-bold" style={{ color: s.text }}>~35 sec</span>
+            <div
+              className="rounded-[14px] border px-3 py-2.5 flex items-center justify-between"
+              style={{
+                background: s.subtle,
+                borderColor: s.border,
+              }}
+            >
+              <span className="text-[11px] font-bold" style={{ color: s.textTertiary }}>EST. TIME</span>
+              <span className="text-[12px] font-bold" style={{ color: s.text }}>~35 sec</span>
+            </div>
           </div>
         </div>
 
         {/* Card 2 – I'll do it later */}
         <div
-          className={`text-left rounded-[28px] border-[2px] p-5 md:p-6 short:p-4 transition-all group cursor-pointer ${
+          className={`h-full flex flex-col text-left rounded-[28px] border-[2px] p-5 md:p-6 short:p-4 transition-all group cursor-pointer ${
             isLater ? "translate-y-[-2px]" : ""
           }`}
           style={{
             background: s.card,
-            borderColor: isLater ? s.borderStrong : s.border,
-            boxShadow: isLater ? s.bentoShadow : s.softShadow,
+            borderColor: isLater ? s.accent : s.border,
+            boxShadow: selectedRing(isLater),
           }}
           onClick={() => setBrainChoice("later")}
           role="button"
@@ -210,16 +222,17 @@ export function NeedBrainScreen() {
             </div>
           </div>
 
-          {/* Footer note */}
-          <p className="mt-5 text-[11px] font-bold" style={{ color: s.textTertiary }}>
+          {/* Footer note — anchored to the card bottom to match card 1 */}
+          <p className="mt-auto pt-5 short:pt-3 text-[11px] font-bold" style={{ color: s.textTertiary }}>
             You can configure in Settings anytime.
           </p>
         </div>
       </div>
 
-      {/* Bottom Buttons — pinned to the bottom of the step area, primary on
-          the right (same action-row contract as every other step) */}
-      <div className="mt-auto pt-5 md:pt-8 short:pt-3 flex items-center justify-between">
+      {/* Bottom Buttons — primary on the right (same action-row contract as
+          every other step). Bottom padding keeps the pair off the window edge
+          even when mt-auto pins the row down (owner directive). */}
+      <div className="mt-auto pt-5 md:pt-8 short:pt-3 pb-6 md:pb-8 short:pb-4 flex items-center justify-between">
         <button
           onClick={handleBack}
           className="h-12 px-5 rounded-full border-[1.5px] font-bold text-[14px] hover:opacity-80 transition-opacity cursor-pointer"

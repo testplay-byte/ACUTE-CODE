@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { useOnboardingStore } from "../onboarding-store";
+import { DEFAULT_MODEL_ID } from "../onboarding-types";
 import {
   fetchProviders,
   OPENROUTER_FALLBACK,
@@ -53,7 +54,10 @@ export function ProviderSelector() {
   );
 
   // Default selection: OpenRouter, applied exactly once client-side. A
-  // server-provided openrouter row wins over the synthesized constant.
+  // server-provided openrouter row wins over the synthesized constant. The
+  // model field prefills with the owner's default model for OpenRouter
+  // (read from the store, not subscribed — typing in the model field must
+  // never re-trigger this effect).
   useEffect(() => {
     if (userChosenRef.current) return;
     const preferred =
@@ -62,8 +66,11 @@ export function ProviderSelector() {
     if (providerId !== preferred.id) {
       setProvider(preferred.id);
       setBaseUrl(preferred.baseUrl ?? "");
+      if (preferred.id === OPENROUTER_FALLBACK.id && !useOnboardingStore.getState().modelId) {
+        setModelId(DEFAULT_MODEL_ID);
+      }
     }
-  }, [options, providerId, setProvider, setBaseUrl]);
+  }, [options, providerId, setProvider, setBaseUrl, setModelId]);
 
   const provider = useMemo(
     () => options.find((o) => o.provider.id === providerId)?.provider,
@@ -101,7 +108,9 @@ export function ProviderSelector() {
       userChosenRef.current = true;
       setProvider(p.id);
       setBaseUrl(p.baseUrl ?? "");
-      setModelId("");
+      // OpenRouter keeps the owner's default model; other providers start
+      // empty so the user picks from THEIR catalog.
+      setModelId(p.id === OPENROUTER_FALLBACK.id ? DEFAULT_MODEL_ID : "");
       setOpen(false);
       setSearch("");
     },

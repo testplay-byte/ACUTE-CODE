@@ -39,7 +39,7 @@ export function AllSetScreen() {
     resize();
     window.addEventListener("resize", resize);
 
-    const colors = [s.accent, "#D6FF57", "#7A5CFA", "#5A8CFF", "#FF6B2C"];
+    const colors = [s.accent, s.theme.accent2, "#7A5CFA", "#5A8CFF", "#FF6B2C"];
     const particles: {
       x: number;
       y: number;

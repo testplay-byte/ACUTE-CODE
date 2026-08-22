@@ -198,7 +198,9 @@ export function ConnectionCard() {
           </p>
         </div>
 
-        {/* Model ID */}
+        {/* Model ID — a proper picker: typing commits LIVE (manual entry),
+            the chevron always opens the catalog list, and the list degrades
+            gracefully when the catalog is loading/unavailable */}
         <div ref={modelRef}>
           <label
             className="block text-[11px] font-bold uppercase tracking-widest mb-1.5"
@@ -209,41 +211,98 @@ export function ConnectionCard() {
           <div className="relative">
             <input
               type="text"
-              className="w-full h-12 rounded-[14px] border-[1.5px] px-4 pr-[120px] text-[13px] font-mono outline-none transition-colors"
+              className="w-full h-12 rounded-[14px] border-[1.5px] px-4 pr-[128px] text-[13px] font-mono outline-none transition-colors"
               style={{ ...inputStyle, borderColor: modelOpen ? s.borderStrong : s.inputBorder }}
-              onFocus={() => {
+              onFocus={(e) => {
                 setModelOpen(true);
-                setModelSearch("");
+                setModelSearch(modelId);
+                setTimeout(() => e.target.select(), 0);
               }}
               placeholder={providerId ? "e.g. gpt-4o" : "Pick a provider first"}
               value={modelOpen ? modelSearch : modelId}
-              onChange={(e) => setModelSearch(e.target.value)}
-            />
-            <button
-              type="button"
-              className="absolute right-1.5 top-1.5 bottom-1.5 px-3 rounded-[10px] border-[1.5px] text-[11px] font-bold flex items-center gap-1 cursor-pointer transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
-              style={{
-                background: s.card,
-                borderColor: s.borderStrong,
-                color: s.text,
+              onChange={(e) => {
+                // Live commit: what you type IS the model id; the dropdown
+                // simultaneously filters the catalog around it.
+                setModelSearch(e.target.value);
+                setModelId(e.target.value);
               }}
-              onClick={handleAutoDetect}
-              disabled={models.length === 0}
-              title={modelsQuery.isError ? "Model catalog unavailable" : "Pick first model from the live catalog"}
-            >
-              ◍ Auto-detect
-            </button>
+            />
+            <div className="absolute right-1.5 top-1.5 bottom-1.5 flex items-center gap-1">
+              <button
+                type="button"
+                aria-label={modelOpen ? "Close model list" : "Open model list"}
+                className="h-9 w-9 rounded-[10px] border grid place-items-center cursor-pointer transition-colors"
+                style={{
+                  background: s.card,
+                  borderColor: s.border,
+                  color: s.textSecondary,
+                }}
+                onClick={() => {
+                  if (modelOpen) {
+                    setModelOpen(false);
+                    setModelSearch("");
+                  } else {
+                    setModelOpen(true);
+                    setModelSearch(modelId);
+                  }
+                }}
+              >
+                <svg
+                  width="14"
+                  height="14"
+                  viewBox="0 0 16 16"
+                  fill="none"
+                  className={`transition-transform ${modelOpen ? "rotate-180" : ""}`}
+                >
+                  <path d="M4 6L8 10L12 6" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
+                </svg>
+              </button>
+              <button
+                type="button"
+                className="h-9 px-3 rounded-[10px] border-[1.5px] text-[11px] font-bold flex items-center gap-1 cursor-pointer transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                style={{
+                  background: s.card,
+                  borderColor: s.borderStrong,
+                  color: s.text,
+                }}
+                onClick={handleAutoDetect}
+                disabled={models.length === 0}
+                title={modelsQuery.isError ? "Model catalog unavailable" : "Pick first model from the live catalog"}
+              >
+                ◍ Auto
+              </button>
+            </div>
 
-            {/* Model dropdown */}
-            {modelOpen && filteredModels.length > 0 && (
+            {/* Model dropdown — always rendered while open, with explicit
+                empty states so manual entry is never blocked */}
+            {modelOpen && (
               <div
-                className="absolute z-20 top-[56px] left-0 right-0 rounded-[16px] border-[1.5px] p-1.5 animate-slideDown max-h-[240px] overflow-y-auto"
+                className="absolute z-20 top-[56px] left-0 right-0 rounded-[16px] border-[1.5px] p-1.5 animate-slideDown max-h-[260px] overflow-y-auto custom-scrollbar"
                 style={{
                   background: s.card,
                   borderColor: s.borderStrong,
                   boxShadow: s.bentoShadow,
                 }}
               >
+                {modelsQuery.isPending && (
+                  <div className="py-5 text-center text-[12px] font-medium" style={{ color: s.textTertiary }}>
+                    Loading models…
+                  </div>
+                )}
+                {!modelsQuery.isPending && models.length === 0 && (
+                  <div className="py-5 text-center text-[12px] font-medium px-3" style={{ color: s.textTertiary }}>
+                    {modelsQuery.isError
+                      ? "Catalog unavailable — type any model id by hand."
+                      : providerId
+                        ? "No catalog for this provider yet — type any model id."
+                        : "Pick a provider first."}
+                  </div>
+                )}
+                {!modelsQuery.isPending && models.length > 0 && filteredModels.length === 0 && (
+                  <div className="py-5 text-center text-[12px] font-medium" style={{ color: s.textTertiary }}>
+                    No catalog matches “{modelSearch}” — press Enter to keep it.
+                  </div>
+                )}
                 {filteredModels.map((m) => (
                   <button
                     key={m.id}
