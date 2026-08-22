@@ -1,20 +1,24 @@
-# dependencies / builds
+# build output
 node_modules/
 dist/
 target/
-*.exe
-*.msi
+out/
+build/
+
+# local data / secrets
 *.db
-*.db-journal
 *.db-wal
 *.db-shm
-
-# secrets & local config
 .env
 .env.*
-secrets/
+*.local
 
-# logs & OS noise
+# logs & OS
 *.log
-Thumbs.db
 .DS_Store
+Thumbs.db
+
+# tooling caches
+.vite/
+.turbo/
+coverage/

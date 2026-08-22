@@ -1,0 +1,148 @@
+@import "tailwindcss";
+
+/*
+ * ACUTE-CODE theme system — CSS-variable theming per the owner's design demos
+ * (design-demos/acute-agent-dashboard DASHBOARD_THEMES + acute-agent-ui
+ * use-theme-styles). Values are ported verbatim from the demo theme table.
+ *
+ * The <html> element carries data-theme="<nova|bento>" and data-mode="<light|dark>"
+ * (set by src/lib/theme-store.ts before first paint). All four combinations are
+ * defined below; `:root` repeats the nova/light default so the app never renders
+ * unstyled even if the attributes are missing.
+ */
+:root,
+[data-theme="nova"][data-mode="light"] {
+  --bg: #fffbf0;
+  --card: #ffffff;
+  --text: #1a1a1a;
+  --muted: #8a7a68;
+  --border: #ede0d0;
+  --input: #fff6ea;
+  --hover: #fff3e6;
+  --accent: #ff6b2c;
+  --accent-2: #ffd9c0;
+  --accent-faded: color-mix(in srgb, #ff6b2c 16%, transparent);
+  --accent-soft: color-mix(in srgb, #ff6b2c 9%, transparent);
+}
+
+[data-theme="nova"][data-mode="dark"] {
+  --bg: #1a1a1c;
+  --card: #242426;
+  --text: #f0ebe3;
+  --muted: #8a8a88;
+  --border: #363638;
+  --input: #2c2c2e;
+  --hover: #2e2e30;
+  --accent: #ff6b2c;
+  --accent-2: #ffd9c0;
+  --accent-faded: color-mix(in srgb, #ff6b2c 26%, transparent);
+  --accent-soft: color-mix(in srgb, #ff6b2c 11%, transparent);
+}
+
+[data-theme="bento"][data-mode="light"] {
+  --bg: #eff4ff;
+  --card: #ffffff;
+  --text: #121214;
+  --muted: #6b7aa1;
+  --border: #c7d0fe;
+  --input: #e8edff;
+  --hover: #e0e7ff;
+  --accent: #6366f1;
+  --accent-2: #a5b4ff;
+  --accent-faded: color-mix(in srgb, #6366f1 16%, transparent);
+  --accent-soft: color-mix(in srgb, #6366f1 9%, transparent);
+}
+
+[data-theme="bento"][data-mode="dark"] {
+  --bg: #141620;
+  --card: #1c1f30;
+  --text: #e0e3ee;
+  --muted: #7a7e96;
+  --border: #2a2e42;
+  --input: #181b2a;
+  --hover: #22253a;
+  --accent: #6366f1;
+  --accent-2: #a5b4ff;
+  --accent-faded: color-mix(in srgb, #6366f1 26%, transparent);
+  --accent-soft: color-mix(in srgb, #6366f1 11%, transparent);
+}
+
+/*
+ * Map the runtime variables into Tailwind's theme so utilities like
+ * `bg-card`, `text-muted`, `border-line`, `bg-accent` resolve to var(--*) at
+ * use-site — switching data-theme/data-mode restyles the app with no rebuild.
+ */
+@theme inline {
+  --color-bg: var(--bg);
+  --color-card: var(--card);
+  --color-input: var(--input);
+  --color-hover: var(--hover);
+  --color-ink: var(--text);
+  --color-muted: var(--muted);
+  --color-line: var(--border);
+  --color-accent: var(--accent);
+  --color-accent-2: var(--accent-2);
+  --color-accent-faded: var(--accent-faded);
+  --color-accent-soft: var(--accent-soft);
+
+  --font-sans: "Space Grotesk", ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+  --font-mono: ui-monospace, "Cascadia Code", "JetBrains Mono", Consolas, monospace;
+}
+
+@layer base {
+  html,
+  body,
+  #root {
+    height: 100%;
+  }
+
+  body {
+    background-color: var(--bg);
+    color: var(--text);
+    font-family: var(--font-sans);
+    letter-spacing: -0.01em;
+    transition:
+      background-color 0.35s ease,
+      color 0.35s ease;
+  }
+
+  /* Slim scrollbars in the demo's visual language (webkit/Chromium webview). */
+  * {
+    scrollbar-width: thin;
+    scrollbar-color: var(--border) transparent;
+  }
+  *::-webkit-scrollbar {
+    width: 6px;
+    height: 6px;
+  }
+  *::-webkit-scrollbar-thumb {
+    background: var(--border);
+    border-radius: 3px;
+  }
+}
+
+/* Radix dialog open/close transitions (used by the ui/dialog wrapper). */
+@keyframes overlay-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+@keyframes content-in {
+  from {
+    opacity: 0;
+    transform: translate(-50%, -48%) scale(0.97);
+  }
+  to {
+    opacity: 1;
+    transform: translate(-50%, -50%) scale(1);
+  }
+}
+.dialog-overlay[data-state="open"] {
+  animation: overlay-in 0.2s ease;
+}
+.dialog-content[data-state="open"] {
+  animation: content-in 0.25s cubic-bezier(0.25, 0.1, 0.25, 1);
+}

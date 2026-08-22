@@ -1,20 +1,357 @@
 /**
- * Placeholder sidecar HTTP server. The real REST/WebSocket API
- * (docs/architecture/api/) replaces the body of createServer in Phase 2;
- * the GET /health contract stays as the shell's liveness probe.
+ * Sidecar HTTP server (API.md; ADR-0006). Wave 1: health + bearer-token auth +
+ * agent registry CRUD. WebSocket, sessions, and the remaining resources come
+ * in later waves.
  */
-import { createServer as createHttpServer, type Server } from "node:http";
+import { randomUUID, timingSafeEqual } from "node:crypto";
+import Fastify, { type FastifyError, type FastifyInstance } from "fastify";
+import type { MemoryPolicy } from "shared";
+import { openDatabase, type SqliteDatabase } from "./storage/db.js";
+import {
+  TOOL_NAMES,
+  createAgent,
+  deleteAgent,
+  duplicateAgent,
+  getAgent,
+  listAgents,
+  updateAgent,
+  type Agent,
+  type AgentInput,
+} from "./storage/agents.js";
+import { providerExists } from "./storage/providers.js";
 
-export const VERSION = "0.1.0";
+export const VERSION = "0.2.0";
 
-export function createServer(): Server {
-  return createHttpServer((request, response) => {
-    if (request.method === "GET" && request.url === "/health") {
-      response.writeHead(200, { "content-type": "application/json" });
-      response.end(JSON.stringify({ status: "ok", app: "acute-code" }));
-      return;
+/** API.md §1.3: every non-2xx response carries this single shape. */
+function errorBody(code: string, message: string, details?: Record<string, unknown>): unknown {
+  return { error: { code, message, ...(details === undefined ? {} : { details }) } };
+}
+
+/** Constant-time bearer comparison; the token is per-spawn and loopback-only. */
+function isAuthorized(header: unknown, token: string): boolean {
+  if (typeof header !== "string") return false;
+  const expected = Buffer.from(`Bearer ${token}`);
+  const actual = Buffer.from(header);
+  return expected.length === actual.length && timingSafeEqual(expected, actual);
+}
+
+function isHealthRequest(method: string, url: string): boolean {
+  return method === "GET" && url.split("?")[0] === "/health";
+}
+
+interface FieldIssue {
+  field: string;
+  message: string;
+}
+
+const MEMORY_POLICIES: readonly MemoryPolicy[] = ["none", "on-start", "every-turn"];
+const KNOWN_TOOLS: readonly string[] = TOOL_NAMES;
+
+/**
+ * Hand-rolled validation (no schema dependency in Wave 1): validates an agent
+ * body for create (`partial: false`, name required) or patch (`partial: true`).
+ * Unknown keys are ignored; absent keys stay undefined in the returned input.
+ */
+function validateAgentInput(
+  body: unknown,
+  options: { partial: boolean; db: SqliteDatabase },
+): { issues: FieldIssue[]; input: AgentInput } {
+  const issues: FieldIssue[] = [];
+  const input: AgentInput = {};
+  if (typeof body !== "object" || body === null || Array.isArray(body)) {
+    return { issues: [{ field: "body", message: "body must be a JSON object" }], input };
+  }
+  const raw = body as Record<string, unknown>;
+  const present = (key: string): boolean => raw[key] !== undefined;
+
+  if (present("name")) {
+    if (typeof raw.name !== "string" || raw.name.trim() === "") {
+      issues.push({ field: "body.name", message: "name must be a non-empty string" });
+    } else {
+      input.name = raw.name;
     }
-    response.writeHead(404, { "content-type": "application/json" });
-    response.end(JSON.stringify({ error: "not found" }));
+  } else if (!options.partial) {
+    issues.push({ field: "body.name", message: "name is required" });
+  }
+
+  for (const key of ["role", "systemPrompt"] as const) {
+    if (!present(key)) continue;
+    if (typeof raw[key] !== "string") {
+      issues.push({ field: `body.${key}`, message: `${key} must be a string` });
+    } else {
+      input[key] = raw[key];
+    }
+  }
+
+  for (const key of ["providerId", "model", "visionModel"] as const) {
+    if (!present(key)) continue;
+    const value = raw[key];
+    if (value === null) {
+      input[key] = null;
+    } else if (typeof value !== "string") {
+      issues.push({ field: `body.${key}`, message: `${key} must be a string or null` });
+    } else if (key === "providerId" && !providerExists(options.db, value)) {
+      issues.push({ field: "body.providerId", message: `unknown providerId: ${value}` });
+    } else {
+      input[key] = value;
+    }
+  }
+
+  if (present("allowedTools")) {
+    const value = raw.allowedTools;
+    if (!Array.isArray(value) || value.some((tool) => typeof tool !== "string")) {
+      issues.push({
+        field: "body.allowedTools",
+        message: `allowedTools must be an array of tool names (${KNOWN_TOOLS.join(", ")})`,
+      });
+    } else {
+      const unknown = (value as string[]).filter((tool) => !KNOWN_TOOLS.includes(tool));
+      if (unknown.length > 0) {
+        issues.push({
+          field: "body.allowedTools",
+          message: `unknown tool names: ${unknown.join(", ")}`,
+        });
+      } else {
+        input.allowedTools = value as string[];
+      }
+    }
+  }
+
+  if (present("skills")) {
+    const value = raw.skills;
+    if (!Array.isArray(value) || value.some((skill) => typeof skill !== "string")) {
+      issues.push({ field: "body.skills", message: "skills must be an array of strings" });
+    } else {
+      input.skills = value as string[];
+    }
+  }
+
+  if (present("memoryPolicy")) {
+    const value = raw.memoryPolicy;
+    if (typeof value !== "string" || !MEMORY_POLICIES.includes(value as MemoryPolicy)) {
+      issues.push({
+        field: "body.memoryPolicy",
+        message: `body.memoryPolicy must be one of: ${MEMORY_POLICIES.join(", ")}`,
+      });
+    } else {
+      input.memoryPolicy = value as MemoryPolicy;
+    }
+  }
+
+  if (present("maxTurns")) {
+    const value = raw.maxTurns;
+    if (typeof value !== "number" || !Number.isInteger(value) || value < 0) {
+      issues.push({
+        field: "body.maxTurns",
+        message: "maxTurns must be a non-negative integer",
+      });
+    } else {
+      input.maxTurns = value;
+    }
+  }
+
+  if (present("temperature")) {
+    const value = raw.temperature;
+    if (typeof value !== "number" || !Number.isFinite(value) || value < 0 || value > 2) {
+      issues.push({
+        field: "body.temperature",
+        message: "temperature must be a number between 0 and 2",
+      });
+    } else {
+      input.temperature = value;
+    }
+  }
+
+  return { issues, input };
+}
+
+export interface ServerOptions {
+  token: string;
+  db: SqliteDatabase;
+}
+
+/** Builds the Fastify app without binding a port (tests drive it with inject()). */
+export function buildServer(options: ServerOptions): FastifyInstance {
+  const { token, db } = options;
+  const app = Fastify();
+
+  // ARCHITECTURE §2.3/§7: every route except GET /health requires the bearer token.
+  app.addHook("preHandler", async (request, reply) => {
+    if (isHealthRequest(request.method, request.url)) return;
+    if (!isAuthorized(request.headers.authorization, token)) {
+      return reply
+        .code(401)
+        .send(errorBody("UNAUTHORIZED", "missing or invalid bearer token"));
+    }
   });
+
+  // Unknown paths keep the token wall too; known+authed misses get the envelope.
+  app.setNotFoundHandler((request, reply) => {
+    if (!isHealthRequest(request.method, request.url) && !isAuthorized(request.headers.authorization, token)) {
+      return reply
+        .code(401)
+        .send(errorBody("UNAUTHORIZED", "missing or invalid bearer token"));
+    }
+    return reply
+      .code(404)
+      .send(errorBody("NOT_FOUND", `no route for ${request.method} ${request.url.split("?")[0]}`));
+  });
+
+  // Everything unexpected still comes back in the uniform envelope.
+  const codeByStatus: Record<number, string> = {
+    400: "VALIDATION",
+    401: "UNAUTHORIZED",
+    403: "FORBIDDEN",
+    404: "NOT_FOUND",
+    409: "CONFLICT",
+    422: "VALIDATION",
+    429: "RATE_LIMITED",
+    502: "PROVIDER_ERROR",
+  };
+  app.setErrorHandler((error: FastifyError, request, reply) => {
+    const status = error.statusCode ?? 500;
+    if (status >= 500) {
+      const correlationId = randomUUID();
+      request.log.error({ err: error, correlationId });
+      return reply
+        .status(500)
+        .send(errorBody("INTERNAL", `internal error (correlation id: ${correlationId})`));
+    }
+    return reply
+      .status(status)
+      .send(errorBody(codeByStatus[status] ?? "INTERNAL", error.message));
+  });
+
+  app.get("/health", async () => ({
+    status: "ok",
+    app: "acute-code",
+    version: VERSION,
+  }));
+
+  app.register(
+    async (scope) => {
+      scope.get("/agents", async (request) => {
+        const query = request.query as Record<string, string | undefined>;
+        const includeTemplates = (query.includeTemplates ?? "true").toLowerCase() !== "false";
+        return { agents: listAgents(db, includeTemplates) };
+      });
+
+      scope.post("/agents", async (request, reply) => {
+        const { issues, input } = validateAgentInput(request.body, {
+          partial: false,
+          db,
+        });
+        const firstIssue = issues[0];
+        if (firstIssue !== undefined || input.name === undefined) {
+          const issue =
+            firstIssue ?? { field: "body.name", message: "name is required" };
+          return reply
+            .code(400)
+            .send(errorBody("VALIDATION", issue.message, { field: issue.field }));
+        }
+        const agent = createAgent(db, { ...input, name: input.name });
+        return reply.code(201).send(agent);
+      });
+
+      scope.get("/agents/:id", async (request, reply) => {
+        const { id } = request.params as Record<string, string>;
+        const agent: Agent | undefined = getAgent(db, id);
+        if (agent === undefined) {
+          return reply.code(404).send(errorBody("NOT_FOUND", `no agent with id ${id}`));
+        }
+        return agent;
+      });
+
+      scope.patch("/agents/:id", async (request, reply) => {
+        const { id } = request.params as Record<string, string>;
+        if (getAgent(db, id) === undefined) {
+          return reply.code(404).send(errorBody("NOT_FOUND", `no agent with id ${id}`));
+        }
+        const { issues, input } = validateAgentInput(request.body, { partial: true, db });
+        if (issues.length > 0) {
+          return reply
+            .code(400)
+            .send(errorBody("VALIDATION", issues[0].message, { field: issues[0].field }));
+        }
+        return updateAgent(db, id, input) as Agent;
+      });
+
+      scope.delete("/agents/:id", async (request, reply) => {
+        const { id } = request.params as Record<string, string>;
+        const result = deleteAgent(db, id);
+        if (result === "missing") {
+          return reply.code(404).send(errorBody("NOT_FOUND", `no agent with id ${id}`));
+        }
+        if (result === "template") {
+          return reply
+            .code(409)
+            .send(
+              errorBody("CONFLICT", "template agents cannot be deleted", { reason: "template" }),
+            );
+        }
+        return reply.code(204).send();
+      });
+
+      scope.post("/agents/:id/duplicate", async (request, reply) => {
+        const { id } = request.params as Record<string, string>;
+        if (getAgent(db, id) === undefined) {
+          return reply.code(404).send(errorBody("NOT_FOUND", `no agent with id ${id}`));
+        }
+        let name: string | undefined;
+        const body: unknown = request.body;
+        if (body !== undefined && body !== null) {
+          if (typeof body !== "object" || Array.isArray(body)) {
+            return reply
+              .code(400)
+              .send(errorBody("VALIDATION", "body must be a JSON object", { field: "body" }));
+          }
+          const rawName = (body as Record<string, unknown>).name;
+          if (rawName !== undefined) {
+            if (typeof rawName !== "string" || rawName.trim() === "") {
+              return reply.code(400).send(
+                errorBody("VALIDATION", "name must be a non-empty string", {
+                  field: "body.name",
+                }),
+              );
+            }
+            name = rawName;
+          }
+        }
+        return reply.code(201).send(duplicateAgent(db, id, name));
+      });
+    },
+    { prefix: "/api/v1" },
+  );
+
+  return app;
+}
+
+export interface StartServerOptions {
+  /** 0 (default) binds an ephemeral port; the shell never picks it (ARCHITECTURE §2.1). */
+  port?: number;
+  token: string;
+  dbPath: string;
+}
+
+export interface RunningSidecar {
+  server: FastifyInstance;
+  port: number;
+}
+
+/** Opens the database, binds 127.0.0.1 (loopback only), prints the ready line. */
+export async function startServer(options: StartServerOptions): Promise<RunningSidecar> {
+  const db = openDatabase(options.dbPath);
+  const app = buildServer({ token: options.token, db });
+  app.addHook("onClose", async () => {
+    db.close();
+  });
+  await app.listen({ port: options.port ?? 0, host: "127.0.0.1" });
+  const address = app.server.address();
+  if (address === null || typeof address === "string") {
+    await app.close();
+    throw new Error("sidecar failed to bind a TCP port");
+  }
+  // The shell parses this exact line (ARCHITECTURE §2); nothing else may print to stdout.
+  console.log(`ACUTE_READY ${JSON.stringify({ port: address.port })}`);
+  return { server: app, port: address.port };
 }

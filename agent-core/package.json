@@ -6,10 +6,15 @@
   "type": "module",
   "scripts": {
     "test": "vitest run",
-    "build": "tsc -p tsconfig.json --noEmit false --outDir dist",
+    "build": "tsc -p tsconfig.json --noEmit false --outDir dist && node -e \"require('node:fs').cpSync('src/storage/migrations', 'dist/storage/migrations', { recursive: true })\"",
     "typecheck": "tsc --noEmit -p tsconfig.json"
   },
   "dependencies": {
+    "better-sqlite3": "^13.0.3",
+    "fastify": "^5.12.1",
     "shared": "workspace:*"
+  },
+  "devDependencies": {
+    "@types/better-sqlite3": "^9.6.0"
   }
 }

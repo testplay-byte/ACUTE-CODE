@@ -1,0 +1,93 @@
+# Frontend (`src/`)
+
+React 18 + TypeScript UI for ACUTE-CODE, built with Vite. The design language
+(visual + motion) is ported from the owner's demos in
+`C:\Users\khurr\Desktop\ZCODE\ACUTE_CODE\design-demos\` — see
+`docs/design/ui-direction.md`.
+
+## Layout
+
+```
+src/
+├── main.tsx                  Entry: providers (QueryClient, BrowserRouter), theme
+│                             painted onto <html> before first render
+├── App.tsx                   Route table — the six SPEC F9 screens
+├── index.css                 Tailwind v4 entry + CSS-variable theme tokens
+│                             (4 blocks: {nova,bento} × {light,dark}) mapped into
+│                             Tailwind via @theme inline → utilities like
+│                             bg-card / text-muted / border-line / bg-accent
+├── vite-env.d.ts             Vite client types + VITE_ACUTE_* env declarations
+├── test-utils.tsx            renderWithProviders + store/fixture reset for tests
+│
+├── lib/
+│   ├── version.ts            APP_NAME + delivery-phase marker
+│   ├── theme-store.ts        Zustand theme store (themeId nova|bento, light|dark),
+│   │                         persisted to localStorage; applies data-theme/-mode
+│   ├── config-store.ts       Sidecar connection config (baseUrl, bearer token,
+│   │                         demoData toggle). Token is memory-only — never
+│   │                         persisted (AGENTS.md secrets rule)
+│   ├── api.ts                Typed REST client for the sidecar (API.md contract):
+│   │                         ApiError (error-envelope aware), AgentsBackend
+│   │                         interface, httpAgents(), backend selector
+│   ├── agent-fixtures.ts     In-memory AgentsBackend (demo data + tests)
+│   ├── motion.ts             Shared motion variants (fadeInUp, stagger*,
+│   │                         scaleIn, shared ease) from the dashboard demo
+│   └── utils.ts              cn() class composer (clsx + tailwind-merge)
+│
+├── hooks/
+│   └── use-agents.ts         TanStack Query hooks for the agent registry;
+│                             query keys embed the data source (demo|live)
+│
+├── components/
+│   ├── shell/                AppShell (bento layout: dot grid, accent glows,
+│   │                         sidebar card, main card), Sidebar (six F9 nav
+│   │                         items), TopBar (app name, accent-theme switch,
+│   │                         light/dark toggle)
+│   ├── agents/               Agent Registry screen: AgentsScreen (filter +
+│   │                         list + states), AgentCard (registry row),
+│   │                         AgentFormDialog (create/edit, all AgentRecord
+│   │                         fields), ConfirmDialog (delete confirm)
+│   └── ui/                   dialog.tsx (Radix Dialog skin), controls.tsx
+│                             (Button, Field, Badge, inputClass)
+│
+└── pages/
+    ├── PlaceholderPage.tsx   Titled stub for the not-yet-built F9 screens
+    └── SettingsPage.tsx      Data-source panel (demo ⇄ live sidecar, base URL,
+                              dev token) — rest arrives in later waves
+```
+
+## Routes
+
+| Path | Screen | Status |
+|---|---|---|
+| `/` | Dashboard (F7) | placeholder |
+| `/project` | Project (F1) | placeholder |
+| `/agents` | **Agent Registry (F2)** | **real** — list/create/edit/duplicate/delete, template filter |
+| `/sessions` | Sessions (F3) | placeholder |
+| `/usage` | Usage (F7) | placeholder |
+| `/settings` | Settings (F9) | data-source panel only |
+
+## Theming
+
+`useThemeStore` (zustand, persisted) holds `themeId` (`nova` | `bento`) and
+`mode` (`light` | `dark`). `applyTheme` mirrors them onto
+`<html data-theme data-mode>`; the CSS token blocks in `index.css` do the rest —
+no rebuild, no re-render churn. Accent-derived alphas use `color-mix`, so a new
+accent theme only needs one CSS block + one catalog entry in `theme-store.ts`.
+
+## Data flow
+
+`use-agents.ts` → `getAgentsBackend()` → fixture (`demoData: true`, the default
+until the sidecar lands) or `httpAgents()` (fetch + bearer token + error
+envelope → `ApiError`). Flip the source in Settings → "Data source"; agents keys
+include the source so the switch refetches. The token later arrives from the
+Tauri shell (`adoptEndpoint({port, token})`); dev fallback is
+`VITE_ACUTE_TOKEN` / `VITE_ACUTE_BASE_URL`.
+
+## Testing
+
+Vitest with happy-dom (opt-in per file via `// @vitest-environment happy-dom`).
+Component tests render through `renderWithProviders` (fresh QueryClient +
+MemoryRouter) and `resetTestState` (re-seed fixtures, reset stores). Vitest
+globals are off, so RTL auto-cleanup doesn't hook in — component test files call
+`afterEach(cleanup)` explicitly.

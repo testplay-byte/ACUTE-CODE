@@ -1,22 +1,22 @@
 # ADR-0002: pnpm workspaces as the package manager / monorepo tool
 
-- **Status:** ACCEPTED (owner delegated the choice, 2026-08-21: "most reliable and functional")
+- **Status:** ACCEPTED (owner delegated the choice, 2026-08-21)
 - **Date:** 2026-08-21
 
 ## Context
 
-ACUTE-CODE spans three TypeScript workspaces (frontend, agent-core sidecar, shared types) plus the Rust shell. The stack table fixes the layers but not the JS package manager. Installed base: Node 24.18 + npm 11.16; bun 1.3.14 also present; pnpm was missing (now installed, 11.22.0).
+ACUTE-CODE spans three TS packages (frontend, agent-core sidecar, shared types) plus the Rust shell. The owner asked for "the most appropriate, most reliable and functional" option. Existing toolchain: Node 24.18, npm 11.16, Bun 1.3.14; pnpm was missing (installed 11.22.0 during Phase 0).
 
 ## Options considered
 
-- **A. npm workspaces** — zero extra install; slower installs, weaker dependency isolation (hoisting surprises), no built-in license listing suitable for audit.
-- **B. pnpm workspaces** — strict, content-addressed store (disk- and RAM-friendly on an 8 GB machine), first-class workspace filtering, `pnpm licenses ls` feeds the compliance audit directly.
-- **C. Bun** — fastest runtime+manager, but younger ecosystem; native-module builds (better-sqlite3) and Tauri tooling have more edge cases.
+- **npm workspaces** — zero install, but slower installs, looser phantom-dependency isolation, and no built-in license report worth using.
+- **pnpm workspaces** — strict dependency isolation (important for a license-audited closed-source product), fast content-addressed installs, `pnpm licenses list` feeds the compliance audit directly, mature Tauri/AI-SDK ecosystem compatibility.
+- **Bun workspaces** — fastest, already installed; but younger runtime, and native-module edge cases (better-sqlite3) plus a smaller track record for Tauri sidecar builds add risk.
 
 ## Decision
 
-**pnpm workspaces** (Option B). Reliability and audit support beat marginal install convenience.
+pnpm workspaces, installed globally (done).
 
 ## Consequences
 
-Every contributor/runbook step uses pnpm (SETUP.md). `pnpm licenses ls --json` becomes the data source for `docs/compliance/dependency-licenses.md` in CI, failing on GPL/AGPL/LGPL. Node 24 + pnpm 11 are the pinned baseline. Reversal cost: low-moderate (workspaces port between managers).
+Every contributor/CI image needs pnpm (corepack or `npm i -g pnpm` — documented in SETUP.md). The license audit script uses `pnpm licenses list --json`. Bun remains usable for one-off scripts if ever needed, but the product does not depend on it.

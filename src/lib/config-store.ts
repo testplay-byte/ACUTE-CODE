@@ -1,0 +1,48 @@
+import { create } from "zustand";
+import { persist } from "zustand/middleware";
+
+/**
+ * Runtime connection config for the agent-core sidecar REST API.
+ *
+ * In production the Tauri shell hands {port, token} to the webview in memory
+ * (sidecar_endpoint command); the token is deliberately NOT persisted — it is
+ * an ephemeral bearer minted per sidecar spawn, and nothing secret belongs in
+ * localStorage. Dev fallbacks come from VITE_ACUTE_TOKEN / VITE_ACUTE_BASE_URL.
+ */
+interface ConfigState {
+  /** Sidecar REST base URL, no trailing slash; loopback only. */
+  baseUrl: string;
+  /** Bearer token; null until the shell provides one (or dev env sets it). */
+  token: string | null;
+  /** Use the in-memory fixture adapter instead of HTTP (sidecar not running). */
+  demoData: boolean;
+  setBaseUrl: (url: string) => void;
+  setToken: (token: string | null) => void;
+  setDemoData: (on: boolean) => void;
+  /** Shell handoff: adopt a freshly spawned sidecar endpoint wholesale. */
+  adoptEndpoint: (endpoint: { port: number; token: string }) => void;
+}
+
+const env = import.meta.env as Record<string, string | undefined>;
+
+export const useConfigStore = create<ConfigState>()(
+  persist(
+    (set) => ({
+      baseUrl: env.VITE_ACUTE_BASE_URL ?? "http://127.0.0.1:5178",
+      token: env.VITE_ACUTE_TOKEN ?? null,
+      // Defaults on: the sidecar lands in a parallel workstream, so the UI must
+      // be usable before it exists. Flipped off from Settings once it does.
+      demoData: true,
+      setBaseUrl: (baseUrl) => set({ baseUrl: baseUrl.replace(/\/+$/, "") }),
+      setToken: (token) => set({ token }),
+      setDemoData: (demoData) => set({ demoData }),
+      adoptEndpoint: ({ port, token }) =>
+        set({ baseUrl: `http://127.0.0.1:${port}`, token, demoData: false }),
+    }),
+    {
+      name: "acute-code.config",
+      version: 1,
+      partialize: (s) => ({ baseUrl: s.baseUrl, demoData: s.demoData }),
+    },
+  ),
+);

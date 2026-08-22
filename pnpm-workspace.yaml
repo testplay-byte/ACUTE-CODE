@@ -5,6 +5,8 @@ packages:
   - shared
 
 # pnpm 11 blocks dependency build scripts unless explicitly allowed; esbuild
-# (used by vite/vitest) is the only Phase 1 dependency that needs one.
+# (used by vite/vitest) and better-sqlite3 (native addon prebuild/fallback
+# build, ADR-0007) are the dependencies that need one.
 allowBuilds:
   esbuild: true
+  better-sqlite3: true
