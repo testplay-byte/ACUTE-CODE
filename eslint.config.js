@@ -4,7 +4,11 @@
 import tseslint from "typescript-eslint";
 
 export default tseslint.config(
-  { ignores: ["**/dist/**", "coverage/**", "src-tauri/target/**"] },
+  {
+    // design/demos are the owner's reference mockups, not product code —
+    // they don't meet (and don't need to meet) our lint rules.
+    ignores: ["**/dist/**", "coverage/**", "src-tauri/target/**", "design/demos/**"],
+  },
   ...tseslint.configs.recommended,
   {
     rules: {
