@@ -4,6 +4,8 @@
 
 You are picking up **ACUTE-CODE**, a local-first, closed-source multi-agent engineering workbench for Windows. This file gives you everything needed to continue: state, rules, environment, gotchas, and next steps. It contains **no secrets** — secrets live only in Windows Credential Manager (§7).
 
+**This repository is self-contained.** You received the repo URL + credentials and cloned it — everything you need is in this tree: the operating rules (`AGENTS.md` at repo root), the orchestrator's workflow skills (`.agents/skills/` — they become invocable if you open this repo as your workspace), the owner's UI design demos (`design/demos/`), and all product code and docs. Clone → read §1 → work.
+
 ---
 
 ## 1. Read this first (in order)
@@ -31,7 +33,7 @@ ACUTE-CODE (NOT "Forge" — the brief's old codename) is a Windows desktop app: 
 | Live proof | Real OpenRouter round trip PASSED (model replied exactly `ACUTE-CODE LIVE ROUND TRIP OK`, usage 113→46 tok recorded); shell-spawn contract test PASSED (env token → ready line → auth wall → key injection) |
 | **Git remote** | `https://github.com/testplay-byte/ACUTE-CODE` (PRIVATE — if you find it public, PATCH it private before any push). **Remote is BEHIND local**: remote tip = `8807a16` (research set), local tip includes Phase 1 completion + all of Phase 2. **The previous GitHub PAT expired** — the owner supplies a fresh one; storing + pushing is your FIRST task (§6). |
 | Working copy | `C:\Users\khurr\Desktop\ZCODE\ACUTE_CODE\acute-code` (branch `main`, all commits local) |
-| Design demos (owner's) | Extracted at `C:\Users\khurr\Desktop\ZCODE\ACUTE_CODE\design-demos\` (3 projects; summarized in `docs/design/ui-direction.md`) — not part of the repo |
+| Design demos (owner's) | **Backed up in-repo at `design/demos/`** (3 source-only projects, no build artifacts) — summarized in `docs/design/ui-direction.md` |
 
 ## 4. Repo map (every path has a purpose — anti-drift rule §13)
 
@@ -91,12 +93,12 @@ acute-code/
 
 ## 7. Secrets (exact locations — never write them anywhere else)
 
-| Secret | Credential Manager target | Notes |
+| Secret | Where | Notes |
 |---|---|---|
-| OpenRouter API key (dev) | `ACUTE-CODE/provider/openrouter` (user "api-key") | Single allowed model: `stealth/ox-alpha` (the owner calls it "ox Alpha"; 1M ctx, 0-cost). Do NOT test other models on his key. |
-| GitHub PAT | git credential store (wincred): `git:https://testplay-byte@github.com` | Replace with the fresh one per §6 |
+| OpenRouter API key (dev) | Windows Credential Manager on the owner's machine: `ACUTE-CODE/provider/openrouter` (user "api-key"). On a fresh machine: ask the owner for the key and store it with `powershell -File scripts/credential.ps1 Write "ACUTE-CODE/provider/openrouter" "api-key" "<key>"`. | Single allowed model: `stealth/ox-alpha` (the owner calls it "ox Alpha"; 1M ctx, 0-cost). Do NOT test other models on his key. |
+| GitHub PAT | The owner hands it to you directly. Store per §6 (wincred) before pushing. | If the remote appears PUBLIC, PATCH it private before pushing anything. |
 
-The Rust shell reads provider keys from Credential Manager at spawn and injects them as `ACUTE_PROVIDER_<ID>` env into the sidecar (`src-tauri/src/sidecar.rs`). For CLI/live testing read them with `scripts/credential.ps1` (or PowerShell CredRead) into a shell variable — **never echo the value** (printing only its length is the established pattern). API keys never appear in SQLite, REST bodies, logs, or test fixtures.
+The Rust shell reads provider keys from Credential Manager at spawn and injects them as `ACUTE_PROVIDER_<ID>` env into the sidecar (`src-tauri/src/sidecar.rs`). For CLI/live testing read them with `scripts/credential.ps1` into a shell variable — **never echo the value** (printing only its length is the established pattern). API keys never appear in SQLite, REST bodies, logs, or test fixtures.
 
 ## 8. Environment facts (this machine — Windows 10 x64, 8 GB RAM)
 
