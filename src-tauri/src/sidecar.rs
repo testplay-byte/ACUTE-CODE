@@ -120,6 +120,13 @@ fn spawn_and_handshake() -> Result<RunningSidecar, String> {
         .stdout(Stdio::piped())
         // Stderr stays inherited so dev sees sidecar errors in their terminal.
         .stderr(Stdio::inherit());
+    // ARCHITECTURE §7: provider keys flow Credential Manager (DPAPI) -> child env,
+    // never through the sidecar's REST surface or any file on disk.
+    for (env_name, provider_id) in provider_key_targets() {
+        if let Some(key) = read_provider_key(&provider_id) {
+            command.env(env_name, key);
+        }
+    }
     #[cfg(windows)]
     {
         use std::os::windows::process::CommandExt;
@@ -169,6 +176,27 @@ fn mint_token() -> Result<String, String> {
     let mut bytes = [0u8; 32];
     getrandom::fill(&mut bytes).map_err(|e| format!("minting token: {e}"))?;
     Ok(bytes.iter().map(|b| format!("{b:02x}")).collect())
+}
+
+/// Credential Manager targets whose values become ACUTE_PROVIDER_<ID> env vars.
+/// The Settings UI will grow this list when custom providers gain key entry.
+fn provider_key_targets() -> [(&'static str, &'static str); 1] {
+    [("ACUTE_PROVIDER_OPENROUTER", "openrouter")]
+}
+
+fn read_provider_key(provider_id: &str) -> Option<String> {
+    let entry = keyring::Entry::new(&format!("ACUTE-CODE/provider/{provider_id}"), "api-key")
+        .ok()?;
+    match entry.get_password() {
+        Ok(key) if !key.is_empty() => Some(key),
+        // No credential stored yet (owner hasn't entered a key) is normal, not an error.
+        Ok(_) => None,
+        Err(keyring::Error::NoEntry) => None,
+        Err(e) => {
+            eprintln!("[sidecar] reading key for {provider_id} failed: {e}");
+            None
+        }
+    }
 }
 
 fn default_db_path() -> Result<PathBuf, String> {
