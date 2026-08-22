@@ -1,6 +1,6 @@
 # ACUTE-CODE — Agent Handoff Document
 
-**Last updated:** 2026-08-22 (end of Phase 2) · **Maintained by:** the orchestrator agent · **Audience:** any AI agent (or human) taking over development
+**Last updated:** 2026-08-22 (backup complete, CI green) · **Maintained by:** the orchestrator agent · **Audience:** any AI agent (or human) taking over development
 
 You are picking up **ACUTE-CODE**, a local-first, closed-source multi-agent engineering workbench for Windows. This file gives you everything needed to continue: state, rules, environment, gotchas, and next steps. It contains **no secrets** — secrets live only in Windows Credential Manager (§7).
 
@@ -31,7 +31,7 @@ ACUTE-CODE (NOT "Forge" — the brief's old codename) is a Windows desktop app: 
 | Phase 2 (core skeleton) | **Functionally complete, all tests green, owner walkthrough PENDING** (exit criterion: owner creates an agent in the UI and completes one conversation) |
 | Tests | `pnpm verify` green: lint + typecheck + **107/107 tests** + build + license audit (107 prod deps, all permissive); `cargo check` green |
 | Live proof | Real OpenRouter round trip PASSED (model replied exactly `ACUTE-CODE LIVE ROUND TRIP OK`, usage 113→46 tok recorded); shell-spawn contract test PASSED (env token → ready line → auth wall → key injection) |
-| **Git remote** | `https://github.com/testplay-byte/ACUTE-CODE` (PRIVATE — if you find it public, PATCH it private before any push). **Remote is BEHIND local**: remote tip = `8807a16` (research set), local tip includes Phase 1 completion + all of Phase 2. **The previous GitHub PAT expired** — the owner supplies a fresh one; storing + pushing is your FIRST task (§6). |
+| **Git remote** | `https://github.com/testplay-byte/ACUTE-CODE` (PRIVATE — if you ever find it public, PATCH it private before any push). **Fully synced: remote tip = `895c05d`, CI GREEN on Actions** (lint + typecheck + 107 tests + build + license audit + cargo check). Run `git pull` / clone and confirm `git log --oneline -1` shows `895c05d`. |
 | Working copy | `C:\Users\khurr\Desktop\ZCODE\ACUTE_CODE\acute-code` (branch `main`, all commits local) |
 | Design demos (owner's) | **Backed up in-repo at `design/demos/`** (3 source-only projects, no build artifacts) — summarized in `docs/design/ui-direction.md` |
 
@@ -78,18 +78,17 @@ acute-code/
 
 ## 6. First tasks for you, in order
 
-1. **Store the fresh GitHub PAT** the owner gives you (the old one expired — API returns 404):
+1. **Confirm you have current code**: `git log --oneline -1` → must be `895c05d` or newer (pull if behind). If your machine lacks push credentials, store the PAT the owner gives you:
    ```bash
    git config --global credential.https://github.com.helper ""          # clear inherited GCM for this host
    git config --global credential.https://github.com.helper wincred     # GCM itself special-cases github.com to OAuth and silently discards PATs — wincred works
-   printf "protocol=https\nhost=github.com\nusername=testplay-byte\npassword=<THE_NEW_PAT>\n\n" | git credential approve
+   printf "protocol=https\nhost=github.com\nusername=testplay-byte\npassword=<THE_PAT>\n\n" | git credential approve
    ```
-   The remote already embeds the username (`git remote -v` → `https://testplay-byte@github.com/testplay-byte/ACUTE-CODE.git`) — keep that form; username-scoped lookup is what makes wincred reliable.
+   Keep the remote in the username-embedded form (`https://testplay-byte@github.com/testplay-byte/ACUTE-CODE.git`) — username-scoped lookup is what makes wincred reliable. (On the owner's machine the PAT may already be stored — test with a `git pull` first.)
 2. **Verify repo visibility is PRIVATE** (`curl -H "Authorization: Bearer <PAT>" https://api.github.com/repos/testplay-byte/ACUTE-CODE | grep private`) — closed-source product; if public, `PATCH` it `{"private":true}` before pushing.
-3. **Push** the local commits (5+ commits ahead). Confirm the **CI run goes green** on GitHub Actions (that's where heavy builds live).
-4. **Confirm the environment** (§8) and run `pnpm verify` + `cargo check` yourself — you must see green with your own eyes.
-5. **Get the owner to do the Phase 2 walkthrough**: he runs the app (`cd src-tauri && cargo run`), creates an agent in the UI (provider `openrouter`, model `stealth/ox-alpha`), completes one conversation. Record results + performance numbers (cold start, idle RAM vs budget) in `docs/runbooks/DEMO.md`, then deliver the Phase 2 report and request approval.
-6. On approval → **Phase 3** (§9).
+3. **Confirm the environment** (§8) and run `pnpm verify` + `cargo check` yourself — you must see green with your own eyes. Every push triggers CI; keep it green.
+4. **Get the owner to do the Phase 2 walkthrough**: he runs the app (`cd src-tauri && cargo run`), creates an agent in the UI (provider `openrouter`, model `stealth/ox-alpha`), completes one conversation. Record results + performance numbers (cold start, idle RAM vs budget) in `docs/runbooks/DEMO.md`, then deliver the Phase 2 report and request approval.
+5. On approval → **Phase 3** (§9).
 
 ## 7. Secrets (exact locations — never write them anywhere else)
 
