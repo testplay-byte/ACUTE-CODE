@@ -1,76 +1,108 @@
 @import "tailwindcss";
 
 /*
- * ACUTE-CODE theme system — CSS-variable theming per the owner's design demos
- * (design-demos/acute-agent-dashboard DASHBOARD_THEMES + acute-agent-ui
- * use-theme-styles). Values are ported verbatim from the demo theme table.
- *
- * The <html> element carries data-theme="<nova|bento>" and data-mode="<light|dark>"
- * (set by src/lib/theme-store.ts before first paint). All four combinations are
- * defined below; `:root` repeats the nova/light default so the app never renders
- * unstyled even if the attributes are missing.
+ * ── Typography ────────────────────────────────────────────────────────────
+ * Space Grotesk (SIL Open Font License 1.1 — bundled verbatim in
+ * src/assets/fonts/OFL.txt; OFL permits redistribution and embedding in any
+ * product). Loaded LOCALLY — no CDN dependency, works fully offline.
+ * Variable weight 300–700 covers every demo weight (the demo's `font-black`
+ * renders at 700 with browser synthesis, exactly as the demos did).
  */
-:root,
-[data-theme="nova"][data-mode="light"] {
-  --bg: #fffbf0;
-  --card: #ffffff;
-  --text: #1a1a1a;
-  --muted: #8a7a68;
-  --border: #ede0d0;
-  --input: #fff6ea;
-  --hover: #fff3e6;
-  --accent: #ff6b2c;
-  --accent-2: #ffd9c0;
-  --accent-faded: color-mix(in srgb, #ff6b2c 16%, transparent);
-  --accent-soft: color-mix(in srgb, #ff6b2c 9%, transparent);
+@font-face {
+  font-family: "Space Grotesk";
+  src: url("./assets/fonts/SpaceGrotesk-latin-var.woff2") format("woff2-variations");
+  font-weight: 300 700;
+  font-style: normal;
+  font-display: swap;
+  unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA,
+    U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193,
+    U+2212, U+2215, U+FEFF, U+FFFD;
+}
+@font-face {
+  font-family: "Space Grotesk";
+  src: url("./assets/fonts/SpaceGrotesk-latin-ext-var.woff2") format("woff2-variations");
+  font-weight: 300 700;
+  font-style: normal;
+  font-display: swap;
+  unicode-range: U+0100-02BA, U+02BD-02C5, U+02C7-02CC, U+02CE-02D7, U+02DD-02FF,
+    U+0304, U+0308, U+0329, U+1D00-1DBF, U+1E00-1E9F, U+1EF2-1EFF, U+2020,
+    U+20A0-20AB, U+20AD-20C0, U+2113, U+2C60-2C7F, U+A720-A7FF;
 }
 
-[data-theme="nova"][data-mode="dark"] {
-  --bg: #1a1a1c;
-  --card: #242426;
-  --text: #f0ebe3;
-  --muted: #8a8a88;
-  --border: #363638;
-  --input: #2c2c2e;
-  --hover: #2e2e30;
-  --accent: #ff6b2c;
-  --accent-2: #ffd9c0;
-  --accent-faded: color-mix(in srgb, #ff6b2c 26%, transparent);
-  --accent-soft: color-mix(in srgb, #ff6b2c 11%, transparent);
+/*
+ * ── Theme engine bridge ───────────────────────────────────────────────────
+ * The palette lives in the THEMES table (src/lib/themes.ts) and is computed
+ * per theme+mode by deriveThemeStyles(). applyTheme()/useThemeStyles() write
+ * the derived values onto :root as --ac-* custom properties BEFORE first
+ * paint, so this file never needs a block per theme — adding a theme is one
+ * table entry in themes.ts, nothing here.
+ *
+ * The :root literals below are only the nova/light fallback so the app never
+ * renders unstyled before the JS bridge runs (e.g. plain-HTML snapshots).
+ * Legacy token names (--bg, --card, --accent, …) map onto the bridge vars so
+ * every existing component keeps working unchanged.
+ */
+:root {
+  /* Fallback = derived nova/light values from the table. */
+  --ac-bg: #fffbf0;
+  --ac-card: #ffffff;
+  --ac-text: #111111;
+  --ac-accent: #ff6b2c;
+  --ac-accent-2: #ffd9c0;
+  --ac-accent-text: #ffffff;
+  --ac-border: rgba(0, 0, 0, 0.1);
+  --ac-border-strong: rgba(0, 0, 0, 0.18);
+  --ac-border-subtle: rgba(0, 0, 0, 0.06);
+  --ac-subtle: rgba(0, 0, 0, 0.04);
+  --ac-subtle-hover: rgba(0, 0, 0, 0.08);
+  --ac-input-bg: rgba(0, 0, 0, 0.02);
+  --ac-input-border: rgba(0, 0, 0, 0.1);
+  --ac-input-focus-border: rgba(0, 0, 0, 0.9);
+  --ac-bento-shadow: 4px 4px 0px 0px black;
+  --ac-bento-shadow-sm: 3px 3px 0px 0px black;
+  --ac-soft-shadow: 0 8px 32px rgba(0, 0, 0, 0.06), 0 2px 8px rgba(0, 0, 0, 0.04);
+  --ac-primary-btn-shadow: 3px 3px 0px 0px black;
+  --ac-text-secondary: rgba(0, 0, 0, 0.6);
+  --ac-text-tertiary: rgba(0, 0, 0, 0.4);
+  --ac-pill-bg: black;
+  --ac-pill-text: white;
+  --ac-toggle-track: rgba(0, 0, 0, 0.04);
+  --ac-toggle-active: black;
+  --ac-dot-color: rgba(0, 0, 0, 0.06);
+  --ac-dot: #ff6b2c;
+
+  /* Legacy token names → bridge vars (consumed via the @theme mapping below). */
+  --bg: var(--ac-bg);
+  --card: var(--ac-card);
+  --text: var(--ac-text);
+  --muted: var(--ac-text-secondary);
+  --border: var(--ac-border);
+  --input: var(--ac-input-bg);
+  --hover: var(--ac-subtle-hover);
+  --accent: var(--ac-accent);
+  --accent-2: var(--ac-accent-2);
 }
 
-[data-theme="bento"][data-mode="light"] {
-  --bg: #eff4ff;
-  --card: #ffffff;
-  --text: #121214;
-  --muted: #6b7aa1;
-  --border: #c7d0fe;
-  --input: #e8edff;
-  --hover: #e0e7ff;
-  --accent: #6366f1;
-  --accent-2: #a5b4ff;
-  --accent-faded: color-mix(in srgb, #6366f1 16%, transparent);
-  --accent-soft: color-mix(in srgb, #6366f1 9%, transparent);
+/* Accent fades keep their mode-specific strength; they derive from whatever
+   accent the active theme bridges in. */
+[data-mode="light"] {
+  --accent-faded: color-mix(in srgb, var(--ac-accent) 16%, transparent);
+  --accent-soft: color-mix(in srgb, var(--ac-accent) 9%, transparent);
 }
-
-[data-theme="bento"][data-mode="dark"] {
-  --bg: #141620;
-  --card: #1c1f30;
-  --text: #e0e3ee;
-  --muted: #7a7e96;
-  --border: #2a2e42;
-  --input: #181b2a;
-  --hover: #22253a;
-  --accent: #6366f1;
-  --accent-2: #a5b4ff;
-  --accent-faded: color-mix(in srgb, #6366f1 26%, transparent);
-  --accent-soft: color-mix(in srgb, #6366f1 11%, transparent);
+[data-mode="dark"] {
+  --accent-faded: color-mix(in srgb, var(--ac-accent) 26%, transparent);
+  --accent-soft: color-mix(in srgb, var(--ac-accent) 11%, transparent);
+}
+/* No data-mode yet (pre-sync snapshot): light strengths on the fallbacks. */
+:root:not([data-mode]) {
+  --accent-faded: color-mix(in srgb, var(--ac-accent) 16%, transparent);
+  --accent-soft: color-mix(in srgb, var(--ac-accent) 9%, transparent);
 }
 
 /*
  * Map the runtime variables into Tailwind's theme so utilities like
  * `bg-card`, `text-muted`, `border-line`, `bg-accent` resolve to var(--*) at
- * use-site — switching data-theme/data-mode restyles the app with no rebuild.
+ * use-site — switching theme/mode restyles the app with no rebuild.
  */
 @theme inline {
   --color-bg: var(--bg);
@@ -145,4 +177,137 @@
 }
 .dialog-content[data-state="open"] {
   animation: content-in 0.25s cubic-bezier(0.25, 0.1, 0.25, 1);
+}
+
+/*
+ * ── Setup-wizard motion language ──────────────────────────────────────────
+ * Ported from the demo's CSS/animations: step transitions, dropdown slide,
+ * pulsing badge dot, floating decorations, confetti-day flourishes. All pure
+ * CSS/keyframes — no new dependencies.
+ */
+@keyframes wizard-step-in {
+  from {
+    opacity: 0;
+    transform: translateY(14px) scale(0.99);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+.wizard-step {
+  animation: wizard-step-in 0.32s cubic-bezier(0.25, 0.1, 0.25, 1) both;
+}
+
+@keyframes slide-down {
+  from {
+    opacity: 0;
+    transform: translateY(-6px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+.animate-slideDown {
+  animation: slide-down 0.18s cubic-bezier(0.25, 0.1, 0.25, 1) both;
+}
+
+@keyframes pulse-dot {
+  0%,
+  100% {
+    opacity: 1;
+    transform: scale(1);
+  }
+  50% {
+    opacity: 0.55;
+    transform: scale(0.82);
+  }
+}
+.animate-pulse-dot {
+  animation: pulse-dot 1.6s ease-in-out infinite;
+}
+
+@keyframes float-y {
+  0%,
+  100% {
+    translate: 0 0;
+    rotate: 12deg;
+  }
+  50% {
+    translate: 0 -10px;
+    rotate: 9deg;
+  }
+}
+.animate-float {
+  animation: float-y 4.5s ease-in-out infinite;
+}
+@keyframes float-y2 {
+  0%,
+  100% {
+    translate: 0 0;
+    rotate: -8deg;
+  }
+  50% {
+    translate: 0 -8px;
+    rotate: -5deg;
+  }
+}
+.animate-float2 {
+  animation: float-y2 5.5s ease-in-out infinite;
+}
+
+@keyframes bounce-in {
+  0% {
+    opacity: 0;
+    transform: scale(0.4);
+  }
+  60% {
+    opacity: 1;
+    transform: scale(1.08);
+  }
+  100% {
+    transform: scale(1);
+  }
+}
+
+@keyframes draw-check {
+  from {
+    stroke-dashoffset: 48;
+  }
+  to {
+    stroke-dashoffset: 0;
+  }
+}
+.animate-draw {
+  stroke-dasharray: 48;
+  animation: draw-check 0.6s 0.25s cubic-bezier(0.65, 0, 0.35, 1) both;
+}
+
+@keyframes shine-sweep {
+  from {
+    transform: translateX(-100%);
+  }
+  to {
+    transform: translateX(200%);
+  }
+}
+.animate-shine::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(to right, transparent, rgb(255 255 255 / 0.3), transparent);
+  animation: shine-sweep 2.2s ease-in-out infinite;
+}
+
+/* Demo scrollbars for wizard scroll containers (light + dark variants). */
+.custom-scrollbar::-webkit-scrollbar {
+  width: 6px;
+}
+.custom-scrollbar::-webkit-scrollbar-thumb {
+  background: var(--ac-border);
+  border-radius: 999px;
+}
+.dark-scroll::-webkit-scrollbar-thumb {
+  background: var(--ac-border-strong);
 }

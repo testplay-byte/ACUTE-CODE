@@ -1,18 +1,22 @@
 import { useEffect } from "react";
 import { create } from "zustand";
 import { persist } from "zustand/middleware";
+import { deriveThemeStyles, syncThemeCssVars, THEMES } from "./themes";
 
 /**
- * Accent theme catalog (ids/names/accents mirror the CSS token blocks in
- * src/index.css — nova + bento from the owner's dashboard demo). The colors
- * here are for UI chrome (swatch dots); the real palette lives in CSS.
+ * Theme state store — absorbed into the demo-fidelity theme engine
+ * (src/lib/themes.ts + use-theme-styles.ts). This module keeps its original
+ * public surface so existing consumers (TopBar theme toggles, main.tsx
+ * pre-paint sync) keep working unchanged:
+ *
+ * - THEMES now re-exports the full ThemeColors table (superset of the old
+ *   {id, name, accent} shape TopBar reads).
+ * - applyTheme() mirrors themeId/mode onto <html data-theme data-mode> AND
+ *   bridges the derived palette onto :root as --ac-* custom properties before
+ *   first paint.
  */
-export const THEMES = [
-  { id: "nova", name: "Nova", accent: "#ff6b2c" },
-  { id: "bento", name: "Bento", accent: "#6366f1" },
-] as const;
-
-export type ThemeId = (typeof THEMES)[number]["id"];
+export { THEMES };
+export type ThemeId = string;
 export type ThemeMode = "light" | "dark";
 
 interface ThemeState {
@@ -36,11 +40,14 @@ export const useThemeStore = create<ThemeState>()(
   ),
 );
 
-/** Mirror the store onto <html data-theme data-mode>; call before first paint. */
+/** Mirror the store onto <html> attributes + :root --ac-* vars; run pre-paint. */
 export function applyTheme(themeId: ThemeId, mode: ThemeMode) {
   const root = document.documentElement;
   root.dataset.theme = themeId;
   root.dataset.mode = mode;
+  // Unknown ids fall back to THEMES[0] inside deriveThemeStyles, so a stale
+  // persisted id can never leave the bridge unstyled.
+  syncThemeCssVars(deriveThemeStyles(themeId, mode === "dark"));
 }
 
 /** Subscribe the document to the store for the app's lifetime. */

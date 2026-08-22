@@ -61,7 +61,7 @@ pub fn shutdown(app: &AppHandle) {
     let Some(mut sidecar) = app.state::<SidecarState>().0.write().unwrap().take() else {
         return;
     };
-    let _ = http_status("POST", sidecar.port, "/internal/shutdown", Some(&sidecar.token));
+    let _ = http_status("POST", sidecar.port, "/internal/shutdown", Some(&sidecar.token), None);
     let deadline = Instant::now() + SHUTDOWN_GRACE;
     while sidecar.child.try_wait().ok().flatten().is_none() {
         if Instant::now() >= deadline {
@@ -79,6 +79,14 @@ pub fn shutdown(app: &AppHandle) {
 pub struct SidecarInfo {
     pub port: u16,
     pub token: String,
+}
+
+/// Loopback endpoint of the running sidecar, for shell-internal pushes such
+/// as the provider-key vault handoff (API.md §2.3). None while down.
+pub fn endpoint(app: &AppHandle) -> Option<(u16, String)> {
+    let state = app.state::<SidecarState>();
+    let guard = state.0.read().ok()?;
+    guard.as_ref().map(|s| (s.port, s.token.clone()))
 }
 
 #[tauri::command]
@@ -99,7 +107,7 @@ pub fn sidecar_info(state: State<SidecarState>) -> Result<SidecarInfo, String> {
 pub fn ping_sidecar(state: State<SidecarState>) -> Result<String, String> {
     let guard = state.0.read().unwrap();
     let sidecar = guard.as_ref().ok_or("sidecar not running")?;
-    match http_status("GET", sidecar.port, "/health", None) {
+    match http_status("GET", sidecar.port, "/health", None, None) {
         Ok(200) => Ok("ok".into()),
         Ok(code) => Err(format!("health check returned HTTP {code}")),
         Err(e) => Err(format!("health check failed: {e}")),
@@ -269,7 +277,7 @@ fn health_poll(child: &mut Child, port: u16) -> Result<(), String> {
                 status.code()
             ));
         }
-        match http_status("GET", port, "/health", None) {
+        match http_status("GET", port, "/health", None, None) {
             Ok(200) => return Ok(()),
             Ok(code) => eprintln!("[sidecar] /health returned HTTP {code}, retrying"),
             Err(_) => {} // not listening yet — keep polling
@@ -301,10 +309,17 @@ fn kill_tree(child: &mut Child) {
 }
 
 /// Minimal loopback HTTP/1.1 request — we only ever need the status code for
-/// a fixed-shape GET/POST to 127.0.0.1, so a raw TcpStream avoids pulling in
+/// a fixed-shape request to 127.0.0.1, so a raw TcpStream avoids pulling in
 /// an HTTP client crate. `Connection: close` means "read to EOF/first buffer"
-/// is the whole response lifecycle we care about.
-fn http_status(method: &str, port: u16, path: &str, token: Option<&str>) -> std::io::Result<u16> {
+/// is the whole response lifecycle we care about. `body` carries a UTF-8
+/// payload (e.g. JSON for the internal vault handoff).
+pub(crate) fn http_status(
+    method: &str,
+    port: u16,
+    path: &str,
+    token: Option<&str>,
+    body: Option<&str>,
+) -> std::io::Result<u16> {
     let mut stream = TcpStream::connect(("127.0.0.1", port))?;
     stream.set_read_timeout(Some(Duration::from_secs(2)))?;
     stream.set_write_timeout(Some(Duration::from_secs(2)))?;
@@ -312,8 +327,13 @@ fn http_status(method: &str, port: u16, path: &str, token: Option<&str>) -> std:
     let auth = token
         .map(|t| format!("Authorization: Bearer {t}\r\n"))
         .unwrap_or_default();
+    let (content_type, content) = match body {
+        Some(b) => ("Content-Type: application/json\r\n", b),
+        None => ("", ""),
+    };
     let request = format!(
-        "{method} {path} HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\n{auth}Connection: close\r\nContent-Length: 0\r\n\r\n"
+        "{method} {path} HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\n{auth}{content_type}Content-Length: {}\r\nConnection: close\r\n\r\n{content}",
+        content.len(),
     );
     stream.write_all(request.as_bytes())?;
 

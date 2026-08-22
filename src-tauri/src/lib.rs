@@ -1,3 +1,4 @@
+mod keys;
 mod sidecar;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -10,7 +11,9 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             sidecar::sidecar_info,
-            sidecar::ping_sidecar
+            sidecar::ping_sidecar,
+            keys::store_provider_key,
+            keys::provider_key_status
         ])
         .build(tauri::generate_context!())
         .expect("error while running the tauri application")
