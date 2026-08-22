@@ -4,6 +4,15 @@
  * src/lib/themes.ts, providers fetched LIVE from GET /api/v1/providers).
  */
 
+/**
+ * Shared responsive container for the wizard chrome (Header, main, Footer).
+ * Widens with the window — 1280 → 1480 (xl) → 1640 (2xl) — so wide viewports
+ * get wider grids instead of dead side gutters. Import from here (not from
+ * SetupWizard) to keep the chrome modules cycle-free.
+ */
+export const WIZARD_CONTAINER =
+  "mx-auto w-full max-w-[1280px] px-5 md:px-8 xl:max-w-[1480px] 2xl:max-w-[1640px] 2xl:px-12";
+
 export type ReasoningLevel = "none" | "low" | "med" | "high" | "extra";
 
 export const REASONING_LEVELS: {

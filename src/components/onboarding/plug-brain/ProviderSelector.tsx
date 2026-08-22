@@ -1,7 +1,12 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { useOnboardingStore } from "../onboarding-store";
-import { fetchProviders, type ProviderView } from "../providers-api";
+import {
+  fetchProviders,
+  OPENROUTER_FALLBACK,
+  withClientDefaults,
+  type ProviderView,
+} from "../providers-api";
 import { useThemeStyles } from "../../../lib/use-theme-styles";
 
 /** First letter avatar chip — derived, never a hard-coded brand letter. */
@@ -13,6 +18,12 @@ function providerLetter(p: ProviderView): string {
 /**
  * Provider dropdown — demo anatomy (components/plug-brain/ProviderSelector.tsx)
  * with the catalog fetched LIVE from GET /api/v1/providers.
+ *
+ * Owner directive: the selector ALWAYS includes "OpenRouter" (label
+ * "OpenRouter", hint "recommended · your keys stay local") as the default
+ * selected option, resolved client-side — the UI never gates on the server
+ * list containing it. Server rows merge in additionally; a user-picked
+ * provider is never overridden by the auto-selection.
  */
 export function ProviderSelector() {
   const s = useThemeStyles();
@@ -25,38 +36,50 @@ export function ProviderSelector() {
   const [search, setSearch] = useState("");
   const inputRef = useRef<HTMLInputElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
+  // Set once the user explicitly picks a row; stops all auto-selection.
+  const userChosenRef = useRef(false);
 
   const providersQuery = useQuery({
     queryKey: ["onboarding.providers"],
     queryFn: fetchProviders,
     staleTime: 30_000,
   });
-  const providers = providersQuery.data ?? [];
 
-  // Preselect the first listed provider once the catalog arrives.
+  // Server rows first, then the client-side OpenRouter default — non-empty
+  // even while pending or when the sidecar is unreachable.
+  const options = useMemo(
+    () => withClientDefaults(providersQuery.data ?? []),
+    [providersQuery.data],
+  );
+
+  // Default selection: OpenRouter, applied exactly once client-side. A
+  // server-provided openrouter row wins over the synthesized constant.
   useEffect(() => {
-    if (!providersQuery.isSuccess || providers.length === 0) return;
-    if (providerId && providers.some((p) => p.id === providerId)) return;
-    const first = providers[0];
-    setProvider(first.id);
-    if (first.baseUrl) setBaseUrl(first.baseUrl);
-  }, [providersQuery.isSuccess, providers, providerId, setProvider, setBaseUrl]);
+    if (userChosenRef.current) return;
+    const preferred =
+      options.find((o) => o.provider.id === OPENROUTER_FALLBACK.id)?.provider ??
+      OPENROUTER_FALLBACK;
+    if (providerId !== preferred.id) {
+      setProvider(preferred.id);
+      setBaseUrl(preferred.baseUrl ?? "");
+    }
+  }, [options, providerId, setProvider, setBaseUrl]);
 
   const provider = useMemo(
-    () => providers.find((p) => p.id === providerId),
-    [providers, providerId],
+    () => options.find((o) => o.provider.id === providerId)?.provider,
+    [options, providerId],
   );
 
   const filtered = useMemo(() => {
-    if (!search.trim()) return providers;
+    if (!search.trim()) return options;
     const q = search.toLowerCase();
-    return providers.filter(
-      (p) =>
-        p.name.toLowerCase().includes(q) ||
-        p.id.toLowerCase().includes(q) ||
-        (p.baseUrl ?? "").toLowerCase().includes(q),
+    return options.filter(
+      (o) =>
+        o.provider.name.toLowerCase().includes(q) ||
+        o.provider.id.toLowerCase().includes(q) ||
+        (o.provider.baseUrl ?? "").toLowerCase().includes(q),
     );
-  }, [providers, search]);
+  }, [options, search]);
 
   useEffect(() => {
     function handler(e: MouseEvent) {
@@ -75,6 +98,7 @@ export function ProviderSelector() {
 
   const handleSelect = useCallback(
     (p: ProviderView) => {
+      userChosenRef.current = true;
       setProvider(p.id);
       setBaseUrl(p.baseUrl ?? "");
       setModelId("");
@@ -124,15 +148,15 @@ export function ProviderSelector() {
 
       {open && (
         <div className="absolute z-20 top-[64px] left-0 right-0 rounded-[16px] border-[1.5px] p-1.5 max-h-[320px] overflow-y-auto animate-slideDown" style={{ background: s.card, borderColor: s.borderStrong, boxShadow: s.bentoShadow }}>
-          {providersQuery.isPending && (
+          {filtered.length === 0 && providersQuery.isPending && (
             <div className="py-6 text-center text-[13px] font-medium" style={{ color: s.textTertiary }}>Loading providers…</div>
           )}
-          {!providersQuery.isPending && filtered.length === 0 && (
+          {filtered.length === 0 && !providersQuery.isPending && (
             <div className="py-6 text-center text-[13px] font-medium" style={{ color: s.textTertiary }}>
-              {providersQuery.isError ? "Agent core unreachable — start it or enable demo data." : "No providers found"}
+              {providersQuery.isError ? "No matches — agent core unreachable." : "No providers found"}
             </div>
           )}
-          {filtered.map((p) => {
+          {filtered.map(({ provider: p, clientDefault }) => {
             const isSelected = p.id === providerId;
             return (
               <button
@@ -150,7 +174,9 @@ export function ProviderSelector() {
                 <span className="flex-1 min-w-0">
                   <span className="block text-[13px] font-bold truncate" style={{ color: s.text }}>{p.name}</span>
                   <span className="block text-[11px] truncate" style={{ color: s.textTertiary }}>
-                    {p.baseUrl ?? `${p.kind} • built-in`}
+                    {clientDefault
+                      ? "recommended · your keys stay local"
+                      : (p.baseUrl ?? `${p.kind} • built-in`)}
                     {p.hasKey ? " • ✓ key" : ""}
                   </span>
                 </span>

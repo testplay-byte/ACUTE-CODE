@@ -30,4 +30,6 @@ export function resetTestState() {
   useConfigStore.setState({ baseUrl: "http://127.0.0.1:5178", token: null, demoData: true });
   useThemeStore.setState({ themeId: "nova", mode: "dark" });
   localStorage.clear();
+  // Shell tests exercise the main app, not first-run onboarding — mark setup done.
+  localStorage.setItem("acute.setupDone", "1");
 }

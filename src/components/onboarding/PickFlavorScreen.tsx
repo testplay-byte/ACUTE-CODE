@@ -49,7 +49,7 @@ function MiniPreview({ theme, isDark, border }: { theme: ThemeColors; isDark: bo
 
   return (
     <div
-      className="mt-3 h-[54px] rounded-[14px] border overflow-hidden relative flex"
+      className="mt-3 h-[54px] short:h-[38px] rounded-[14px] border overflow-hidden relative flex"
       style={{
         borderColor: border,
         background: previewBg,
@@ -78,7 +78,13 @@ function MiniPreview({ theme, isDark, border }: { theme: ThemeColors; isDark: bo
 
 /** Step 1 — ported from the demo's components/onboarding/PickFlavorScreen.tsx.
  * Theme choices come straight from the THEMES table; adding a theme there
- * adds a card here with zero code changes. */
+ * adds a card here with zero code changes.
+ *
+ * Layout (adaptable, no page scroll): title shares a band with the live mode
+ * toggle; theme cards run FULL-WIDTH (1 col → 2 cols → 3 across from laptop
+ * widths up); the live preview becomes a second band beside a stats/tip
+ * rail; Back/Continue pin to the bottom via mt-auto. `short:` compresses the
+ * vertical rhythm so the step fits e.g. 1024×640 untouched. */
 export function PickFlavorScreen() {
   const themeId = useThemeStore((s) => s.themeId);
   const setTheme = useThemeStore((s) => s.setTheme);
@@ -91,19 +97,24 @@ export function PickFlavorScreen() {
   const darkBtnColor = s.isDark ? getContrastText(s.toggleActive) : s.textSecondary;
 
   return (
-    <div className="mt-8 md:mt-10 grid lg:grid-cols-[1.2fr_0.8fr] gap-6 md:gap-8 items-start pb-12">
-      {/* LEFT COLUMN */}
-      <div>
-        <h1 className="text-[32px] md:text-[44px] font-black tracking-[-0.03em] leading-[0.95]" style={{ color: s.text }}>
-          Pick your flavor.
-        </h1>
-        <p className="mt-2 text-[15px] font-medium" style={{ color: s.textSecondary }}>
-          Make it yours. You can always change this later.
-        </p>
+    <div className="flex min-h-full flex-col pt-4 md:pt-8 short:pt-2">
+      {/* ── Header band: heading left · live mode toggle right ── */}
+      <div className="flex flex-wrap items-end justify-between gap-x-8 gap-y-3">
+        <div>
+          <h1
+            className="text-[32px] md:text-[44px] short:text-[28px] font-black tracking-[-0.03em] leading-[0.95]"
+            style={{ color: s.text }}
+          >
+            Pick your flavor.
+          </h1>
+          <p className="mt-2 short:mt-1 text-[15px] font-medium" style={{ color: s.textSecondary }}>
+            Make it yours. You can always change this later.
+          </p>
+        </div>
 
         {/* MODE TOGGLE */}
         <div
-          className="mt-8 rounded-[22px] border-[1.5px] p-1.5 md:p-2"
+          className="w-full max-w-[420px] sm:w-[300px] lg:w-auto lg:min-w-[330px] rounded-[22px] border-[1.5px] p-1.5 md:p-2"
           style={{
             background: s.card,
             borderColor: s.border,
@@ -142,149 +153,121 @@ export function PickFlavorScreen() {
             />
             <button
               onClick={toggleMode}
-              className="relative z-10 h-11 rounded-[12px] font-bold text-[14px] transition-colors cursor-pointer bg-transparent border-none flex items-center justify-center gap-2"
+              className="relative z-10 h-11 short:h-9 rounded-[12px] font-bold text-[14px] transition-colors cursor-pointer bg-transparent border-none flex items-center justify-center gap-2"
               style={{ color: lightBtnColor }}
             >
               <SunIcon className="w-4 h-4" /> Light
             </button>
             <button
               onClick={toggleMode}
-              className="relative z-10 h-11 rounded-[12px] font-bold text-[14px] transition-colors cursor-pointer bg-transparent border-none flex items-center justify-center gap-2"
+              className="relative z-10 h-11 short:h-9 rounded-[12px] font-bold text-[14px] transition-colors cursor-pointer bg-transparent border-none flex items-center justify-center gap-2"
               style={{ color: darkBtnColor }}
             >
               <MoonIcon className="w-4 h-4" /> Dark
             </button>
           </div>
         </div>
+      </div>
 
-        {/* THEME CARDS - Palette Style */}
-        <div className="mt-6 grid grid-cols-2 md:grid-cols-3 gap-3 md:gap-4">
-          {THEMES.map((t) => {
-            const selected = t.id === themeId;
-            return (
-              <button
-                key={t.id}
-                onClick={() => setTheme(t.id)}
-                className="group relative rounded-[20px] border-[1.5px] p-3 transition-all hover:translate-y-[-2px] text-left cursor-pointer"
+      {/* ── Theme cards: full-width adaptive grid ── */}
+      <div className="mt-4 md:mt-5 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3 md:gap-4">
+        {THEMES.map((t) => {
+          const selected = t.id === themeId;
+          return (
+            <button
+              key={t.id}
+              onClick={() => setTheme(t.id)}
+              className="group relative rounded-[20px] border-[1.5px] p-3 short:p-2.5 transition-all hover:translate-y-[-2px] text-left cursor-pointer"
+              style={{
+                background: s.card,
+                borderColor: selected ? s.borderStrong : s.border,
+                boxShadow: selected ? s.bentoShadowSm : s.softShadow,
+              }}
+            >
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-2">
+                  <div
+                    className="w-8 h-8 rounded-full border grid place-items-center text-[13px] font-black"
+                    style={{
+                      background: t.accent,
+                      borderColor: s.border,
+                      color: getContrastText(t.accent),
+                    }}
+                  >
+                    Aa
+                  </div>
+                  <span className="text-[13px] font-bold tracking-tight" style={{ color: s.text }}>
+                    {t.name}
+                  </span>
+                </div>
+                {selected && (
+                  <div
+                    className="w-6 h-6 rounded-full grid place-items-center text-[11px]"
+                    style={{ background: s.accent, color: s.accentText }}
+                  >
+                    ✓
+                  </div>
+                )}
+              </div>
+
+              {/* Palette strip (mode-aware) */}
+              <PaletteStrip theme={t} isDark={s.isDark} />
+
+              {/* Mini preview (mode-aware) */}
+              <MiniPreview theme={t} isDark={s.isDark} border={s.border} />
+            </button>
+          );
+        })}
+
+        {/* COMING SOON CARD */}
+        <div
+          className="relative rounded-[20px] border-[1.5px] border-dashed p-3 short:p-2.5 opacity-70 cursor-not-allowed"
+          style={{
+            background: s.card,
+            borderColor: s.border,
+          }}
+        >
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-2">
+              <div
+                className="w-8 h-8 rounded-full border grid place-items-center text-[13px] font-black"
                 style={{
-                  background: s.card,
-                  borderColor: selected ? s.borderStrong : s.border,
-                  boxShadow: selected ? s.bentoShadowSm : s.softShadow,
+                  background: s.subtle,
+                  borderColor: s.border,
+                  color: s.textTertiary,
                 }}
               >
-                <div className="flex items-center justify-between">
-                  <div className="flex items-center gap-2">
-                    <div
-                      className="w-8 h-8 rounded-full border grid place-items-center text-[13px] font-black"
-                      style={{
-                        background: t.accent,
-                        borderColor: s.border,
-                        color: getContrastText(t.accent),
-                      }}
-                    >
-                      Aa
-                    </div>
-                    <span className="text-[13px] font-bold tracking-tight" style={{ color: s.text }}>
-                      {t.name}
-                    </span>
-                  </div>
-                  {selected && (
-                    <div
-                      className="w-6 h-6 rounded-full grid place-items-center text-[11px]"
-                      style={{ background: s.accent, color: s.accentText }}
-                    >
-                      ✓
-                    </div>
-                  )}
-                </div>
-
-                {/* Palette strip (mode-aware) */}
-                <PaletteStrip theme={t} isDark={s.isDark} />
-
-                {/* Mini preview (mode-aware) */}
-                <MiniPreview theme={t} isDark={s.isDark} border={s.border} />
-              </button>
-            );
-          })}
-
-          {/* COMING SOON CARD */}
-          <div
-            className="relative rounded-[20px] border-[1.5px] border-dashed p-3 opacity-70 cursor-not-allowed"
-            style={{
-              background: s.card,
-              borderColor: s.border,
-            }}
-          >
-            <div className="flex items-center justify-between">
-              <div className="flex items-center gap-2">
-                <div
-                  className="w-8 h-8 rounded-full border grid place-items-center text-[13px] font-black"
-                  style={{
-                    background: s.subtle,
-                    borderColor: s.border,
-                    color: s.textTertiary,
-                  }}
-                >
-                  Aa
-                </div>
-                <span className="text-[13px] font-bold tracking-tight" style={{ color: s.textTertiary }}>
-                  {COMING_SOON_THEME.name}
-                </span>
+                Aa
               </div>
+              <span className="text-[13px] font-bold tracking-tight" style={{ color: s.textTertiary }}>
+                {COMING_SOON_THEME.name}
+              </span>
             </div>
-            <div
-              className="mt-3 h-[54px] rounded-[14px] border overflow-hidden relative flex"
-              style={{ borderColor: s.border, background: s.subtle }}
-            >
-              <div className="flex-1 p-2">
-                <div className="flex gap-1">
-                  <div className="w-2 h-2 rounded-full" style={{ background: s.border }} />
-                  <div className="w-2 h-2 rounded-full" style={{ background: s.border }} />
-                  <div className="w-2 h-2 rounded-full" style={{ background: s.border }} />
-                </div>
-                <div className="mt-1.5 h-1.5 w-12 rounded-full" style={{ background: s.border }} />
-                <div className="mt-1.5 h-1.5 w-8 rounded-full" style={{ background: s.border }} />
+          </div>
+          <div
+            className="mt-3 h-[54px] short:h-[38px] rounded-[14px] border overflow-hidden relative flex"
+            style={{ borderColor: s.border, background: s.subtle }}
+          >
+            <div className="flex-1 p-2">
+              <div className="flex gap-1">
+                <div className="w-2 h-2 rounded-full" style={{ background: s.border }} />
+                <div className="w-2 h-2 rounded-full" style={{ background: s.border }} />
+                <div className="w-2 h-2 rounded-full" style={{ background: s.border }} />
               </div>
-              <div className="w-[34%] border-l p-2 flex flex-col gap-1.5" style={{ borderColor: s.border }}>
-                <div className="h-1.5 rounded-full w-full" style={{ background: s.border }} />
-                <div className="h-1.5 rounded-full w-3/4" style={{ background: s.border }} />
-                <div className="mt-auto w-6 h-6 rounded-full mx-auto" style={{ background: s.border }} />
-              </div>
+              <div className="mt-1.5 h-1.5 w-12 rounded-full" style={{ background: s.border }} />
+              <div className="mt-1.5 h-1.5 w-8 rounded-full" style={{ background: s.border }} />
+            </div>
+            <div className="w-[34%] border-l p-2 flex flex-col gap-1.5" style={{ borderColor: s.border }}>
+              <div className="h-1.5 rounded-full w-full" style={{ background: s.border }} />
+              <div className="h-1.5 rounded-full w-3/4" style={{ background: s.border }} />
+              <div className="mt-auto w-6 h-6 rounded-full mx-auto" style={{ background: s.border }} />
             </div>
           </div>
         </div>
-
-        {/* BUTTONS */}
-        <div className="mt-8 flex items-center justify-between gap-3">
-          <button
-            onClick={() => setStep(0)}
-            className="h-12 px-5 rounded-full border-[1.5px] font-bold text-[14px] hover:opacity-80 transition-opacity cursor-pointer"
-            style={{
-              background: s.card,
-              borderColor: s.border,
-              color: s.text,
-              boxShadow: s.softShadow,
-            }}
-          >
-            ← Back
-          </button>
-          <button
-            onClick={() => setStep(2)}
-            className="h-12 px-7 rounded-full font-bold text-[14px] flex items-center gap-2 hover:scale-[1.02] active:scale-[0.98] transition-transform cursor-pointer border-[1.5px]"
-            style={{
-              background: s.accent,
-              color: s.accentText,
-              borderColor: s.accent,
-              boxShadow: s.bentoShadow,
-            }}
-          >
-            Continue → <span className="opacity-60 text-[11px]">↵</span>
-          </button>
-        </div>
       </div>
 
-      {/* RIGHT COLUMN */}
-      <div className="lg:sticky lg:top-8">
+      {/* ── Live preview band: code window + stats/tip rail ── */}
+      <div className="mt-4 md:mt-5 grid flex-1 items-start gap-3 md:gap-4 lg:grid-cols-[minmax(0,1.15fr)_minmax(280px,0.85fr)]">
         {/* LIVE PREVIEW */}
         <div
           className="rounded-[28px] border-[1.5px] p-4 md:p-5"
@@ -370,9 +353,11 @@ export function PickFlavorScreen() {
               </div>
             </div>
           </div>
+        </div>
 
-          {/* Stats row */}
-          <div className="mt-4 grid grid-cols-2 gap-3">
+        {/* Stats + tip rail */}
+        <div className="flex flex-col gap-3 min-w-0">
+          <div className="grid grid-cols-2 gap-3">
             <div
               className="rounded-[14px] border p-3"
               style={{
@@ -398,26 +383,54 @@ export function PickFlavorScreen() {
               <div className="mt-1 text-[13px] font-bold" style={{ color: s.text }}>Playful • Bento</div>
             </div>
           </div>
-        </div>
 
-        {/* TIP CARD - themed */}
-        <div
-          className="mt-3 rounded-[16px] border-[1.5px] px-4 py-3 flex items-center gap-2 rotate-[-0.6deg]"
+          {/* TIP CARD - themed */}
+          <div
+            className="rounded-[16px] border-[1.5px] px-4 py-3 flex items-center gap-2 rotate-[-0.6deg]"
+            style={{
+              background: s.accent,
+              color: s.accentText,
+              borderColor: s.borderStrong,
+              boxShadow: s.bentoShadowSm,
+            }}
+          >
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke={s.accentText} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M9 18h6M10 22h4M12 2v1M4.93 4.93l.7.7M2 12h1M20 12h1M18.36 4.93l-.7.7" />
+              <path d="M12 6a6 6 0 0 0-3.6 10.8V18h7.2v-1.2A6 6 0 0 0 12 6z" />
+            </svg>
+            <span className="text-[12px] font-bold">
+              Tip: {s.theme.name} loves dark mode.
+            </span>
+          </div>
+        </div>
+      </div>
+
+      {/* ── Actions — pinned to the bottom of the step area ── */}
+      <div className="mt-auto pt-4 md:pt-5 flex items-center justify-between gap-3">
+        <button
+          onClick={() => setStep(0)}
+          className="h-12 px-5 rounded-full border-[1.5px] font-bold text-[14px] hover:opacity-80 transition-opacity cursor-pointer"
+          style={{
+            background: s.card,
+            borderColor: s.border,
+            color: s.text,
+            boxShadow: s.softShadow,
+          }}
+        >
+          ← Back
+        </button>
+        <button
+          onClick={() => setStep(2)}
+          className="h-12 px-7 rounded-full font-bold text-[14px] flex items-center gap-2 hover:scale-[1.02] active:scale-[0.98] transition-transform cursor-pointer border-[1.5px]"
           style={{
             background: s.accent,
             color: s.accentText,
-            borderColor: s.borderStrong,
-            boxShadow: s.bentoShadowSm,
+            borderColor: s.accent,
+            boxShadow: s.bentoShadow,
           }}
         >
-          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke={s.accentText} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-            <path d="M9 18h6M10 22h4M12 2v1M4.93 4.93l.7.7M2 12h1M20 12h1M18.36 4.93l-.7.7" />
-            <path d="M12 6a6 6 0 0 0-3.6 10.8V18h7.2v-1.2A6 6 0 0 0 12 6z" />
-          </svg>
-          <span className="text-[12px] font-bold">
-            Tip: {s.theme.name} loves dark mode.
-          </span>
-        </div>
+          Continue → <span className="opacity-60 text-[11px]">↵</span>
+        </button>
       </div>
     </div>
   );

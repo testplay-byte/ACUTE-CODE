@@ -89,6 +89,39 @@ export async function fetchProviders(): Promise<ProviderView[]> {
   return body.providers;
 }
 
+/**
+ * Client-side OpenRouter default (owner directive): the wizard must render
+ * fully EVEN IF GET /providers returns [] or fails — so OpenRouter is always
+ * available as the DEFAULT SELECTED provider, chosen entirely client-side.
+ * Server rows are merged in additionally when present; a server-provided
+ * openrouter row supersedes this synthesized one.
+ */
+export const OPENROUTER_FALLBACK: ProviderView = {
+  id: "openrouter",
+  name: "OpenRouter",
+  kind: "openai-compatible",
+  baseUrl: "https://openrouter.ai/api/v1",
+  enabled: true,
+  createdAt: "",
+  hasKey: false,
+};
+
+export interface ProviderOption {
+  provider: ProviderView;
+  /** True when the row was synthesized client-side (not served by the API). */
+  clientDefault?: boolean;
+}
+
+/** Server rows (in order), plus the client-side OpenRouter default when the
+ *  catalog does not already contain it. Never empty — always ≥1 option. */
+export function withClientDefaults(server: ProviderView[]): ProviderOption[] {
+  const options: ProviderOption[] = server.map((provider) => ({ provider }));
+  if (!server.some((p) => p.id === OPENROUTER_FALLBACK.id)) {
+    options.push({ provider: OPENROUTER_FALLBACK, clientDefault: true });
+  }
+  return options;
+}
+
 export async function fetchModels(providerId: string): Promise<ProviderModel[]> {
   const body = await request<{ models: ProviderModel[] }>(`/providers/${encodeURIComponent(providerId)}/models`);
   return body.models;
@@ -157,16 +190,15 @@ export function markSetupDone(): void {
 
 /**
  * Tri-state first-run answer:
- * - true  → flag absent AND live providers all lack keys (definitive first run)
- * - false → flag set, or at least one provider has a key
- * - null  → inconclusive (sidecar unreachable — browser dev, tests, slow boot)
+ * - true  → the completion flag is absent (true first run for this profile).
+ *           Key state does NOT gate the wizard — it already having a key is
+ *           surfaced as connection status inside PlugBrain instead (owner
+ *           directive: the wizard must actually show on first run).
+ * - false → flag set (completed or skipped)
+ * - null  → never returned today; kept for callers that treat it as
+ *           "inconclusive, retry" (slow boot window).
  */
 export async function shouldRunSetup(): Promise<boolean | null> {
   if (isSetupDone()) return false;
-  try {
-    const providers = await fetchProviders();
-    return providers.every((p) => !p.hasKey);
-  } catch {
-    return null;
-  }
+  return true;
 }

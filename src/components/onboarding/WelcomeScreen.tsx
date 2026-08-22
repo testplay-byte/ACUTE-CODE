@@ -51,15 +51,16 @@ export function WelcomeScreen() {
   const codeText = s.isDark ? "rgba(255,255,255,0.9)" : "#333333";
 
   return (
-    <div className="mt-10 md:mt-16 grid lg:grid-cols-[0.85fr_1.15fr] gap-6 md:gap-8 items-start pb-12">
-      {/* LEFT COLUMN */}
-      <div className="space-y-5">
+    <div className="flex min-h-full flex-col pt-4 md:pt-8 short:pt-2">
+      <div className="grid flex-1 items-start gap-6 pb-4 md:gap-8 lg:grid-cols-[0.85fr_1.15fr] 2xl:gap-12">
+        {/* LEFT COLUMN */}
+        <div className="space-y-4 short:space-y-3 md:space-y-5">
         {/* Step Cards Grid */}
         <div className="grid gap-3">
           {STEP_CARDS.map((card) => (
             <div
               key={card.num}
-              className="group relative rounded-[22px] border-[1.5px] p-4 md:p-5 flex items-center gap-4 transition-all hover:translate-y-[-2px] hover:rotate-[0.3deg]"
+              className="group relative rounded-[22px] border-[1.5px] p-4 md:p-5 short:p-3 flex items-center gap-4 transition-all hover:translate-y-[-2px] hover:rotate-[0.3deg]"
               style={{
                 background: s.card,
                 borderColor: s.borderStrong,
@@ -139,7 +140,7 @@ export function WelcomeScreen() {
             </div>
           </div>
           <pre
-            className="p-4 pt-3 font-mono text-[12px] md:text-[13px] leading-[1.6] whitespace-pre-wrap min-h-[120px]"
+            className="p-4 pt-3 font-mono text-[12px] md:text-[13px] leading-[1.6] whitespace-pre-wrap min-h-[120px] short:min-h-[84px]"
             style={{ color: codeText }}
           >
             {typed}
@@ -152,7 +153,7 @@ export function WelcomeScreen() {
 
         {/* Tip Bar */}
         <div
-          className="rounded-[18px] border-[1.5px] px-4 py-3 flex items-center gap-3 text-[12px] font-medium"
+          className="rounded-[18px] border-[1.5px] px-4 py-3 short:py-2 flex items-center gap-3 text-[12px] font-medium"
           style={{
             background: s.card,
             borderColor: s.border,
@@ -187,18 +188,18 @@ export function WelcomeScreen() {
         </span>
 
         {/* Heading */}
-        <h1 className="mt-8">
+        <h1 className="mt-8 short:mt-4">
           <span
             className="block text-[14px] md:text-[15px] font-bold tracking-[0.18em] mb-3"
             style={{ color: s.textSecondary }}
           >
             WELCOME TO
           </span>
-          <span className="block text-[56px] md:text-[86px] font-black leading-none" style={{ color: s.text }}>
+          <span className="block text-[56px] md:text-[86px] short:text-[42px] font-black leading-none" style={{ color: s.text }}>
             ACUTE
           </span>
           <span
-            className="inline-block px-3 md:px-4 -ml-1 md:-ml-2 rounded-[18px] md:rounded-[24px] text-[56px] md:text-[86px] font-black leading-none border-[2.5px] rotate-[-1deg]"
+            className="inline-block px-3 md:px-4 -ml-1 md:-ml-2 rounded-[18px] md:rounded-[24px] text-[56px] md:text-[86px] short:text-[42px] font-black leading-none border-[2.5px] rotate-[-1deg]"
             style={{
               background: s.accent,
               color: s.accentText,
@@ -212,7 +213,7 @@ export function WelcomeScreen() {
 
         {/* Description */}
         <p
-          className="mt-6 max-w-[520px] text-[16px] md:text-[18px] leading-[1.4] font-medium"
+          className="mt-6 short:mt-3 max-w-[520px] text-[16px] md:text-[18px] leading-[1.4] font-medium"
           style={{ color: s.text, opacity: 0.8 }}
         >
           {"Let's get you set up in under 1 minute. We'll configure your first workspace, theme, and first brain."}
@@ -225,7 +226,7 @@ export function WelcomeScreen() {
         </p>
 
         {/* Get Started Button */}
-        <div className="mt-8 flex items-center justify-between gap-4">
+        <div className="mt-8 short:mt-5 flex items-center justify-between gap-4">
           <div className="flex items-center gap-2">
             <kbd
               className="px-2 py-1 rounded-md border text-[11px] font-bold"
@@ -262,7 +263,7 @@ export function WelcomeScreen() {
         </div>
 
         {/* Stats */}
-        <div className="mt-10 grid grid-cols-3 gap-3 max-w-[520px]">
+        <div className="mt-10 short:mt-5 grid grid-cols-3 gap-3 max-w-[520px]">
           {[
             { value: "100%", label: "local" },
             { value: "<1m", label: "setup" },
@@ -270,7 +271,7 @@ export function WelcomeScreen() {
           ].map((stat) => (
             <div
               key={stat.label}
-              className="rounded-[18px] border-[1.5px] p-3"
+              className="rounded-[18px] border-[1.5px] p-3 short:p-2"
               style={{
                 background: s.card,
                 borderColor: s.border,
@@ -295,7 +296,7 @@ export function WelcomeScreen() {
           ✦
         </div>
         <div
-          className="absolute left-[58%] -bottom-10 hidden lg:flex w-12 h-12 rounded-full border-[1.5px] items-center justify-center text-[18px] animate-float2"
+          className="absolute left-[58%] -bottom-10 hidden xl:flex w-12 h-12 rounded-full border-[1.5px] items-center justify-center text-[18px] animate-float2"
           style={{
             background: s.card,
             borderColor: s.borderStrong,
@@ -304,6 +305,7 @@ export function WelcomeScreen() {
         >
           ◐
         </div>
+      </div>
       </div>
     </div>
   );

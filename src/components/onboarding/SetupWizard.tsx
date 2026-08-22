@@ -1,6 +1,7 @@
 import { useThemeStore } from "../../lib/theme-store";
 import { useThemeStyles } from "../../lib/use-theme-styles";
 import { useOnboardingStore } from "./onboarding-store";
+import { WIZARD_CONTAINER } from "./onboarding-types";
 import { Header } from "./Header";
 import { Footer } from "./Footer";
 import { WelcomeScreen } from "./WelcomeScreen";
@@ -14,7 +15,16 @@ import { AllSetScreen } from "./AllSetScreen";
  * app/page.tsx: full-bleed themed background, 28px dot-grid overlay at 4%
  * opacity, three ambient accent glows, Header/Footer chrome, and a CSS
  * keyframe transition per step (.wizard-step in index.css).
+ *
+ * Layout contract (owner directive: full-fledged adaptable layouts):
+ * - Header/Footer are fixed-height chrome; the step area fills the rest.
+ * - The content container widens with the window (1280 → 1480 → 1640) so
+ *   wide viewports get wider grids instead of dead side gutters.
+ * - Each screen is a `min-h-full flex flex-col` region: content fills the
+ *   height, action rows pin to the bottom, and only genuinely overflowing
+ *   content scrolls (inside this wrapper or inside PlugBrain's columns).
  */
+
 export function SetupWizard() {
   const step = useOnboardingStore((s) => s.step);
   const isDark = useThemeStore((s) => s.mode) === "dark";
@@ -54,17 +64,17 @@ export function SetupWizard() {
 
       <Header />
 
-      <main className="flex-1 min-h-0 overflow-hidden relative z-10">
+      <main className="relative z-10 flex-1 min-h-0 overflow-hidden">
         {step === 3 ? (
-          // PlugBrainScreen manages its own internal scroll
-          <div className="h-full max-w-[1200px] mx-auto px-5 md:px-8">
+          // PlugBrainScreen manages its own internal column scroll
+          <div className={`h-full ${WIZARD_CONTAINER}`}>
             <PlugBrainScreen />
           </div>
         ) : (
           <div
-            className={`h-full max-w-[1200px] mx-auto px-5 md:px-8 overflow-y-auto custom-scrollbar ${isDark ? "dark-scroll" : ""}`}
+            className={`h-full overflow-y-auto custom-scrollbar ${WIZARD_CONTAINER} ${isDark ? "dark-scroll" : ""}`}
           >
-            <div key={step} className="wizard-step h-full">
+            <div key={step} className="wizard-step min-h-full">
               {step === 0 && <WelcomeScreen />}
               {step === 1 && <PickFlavorScreen />}
               {step === 2 && <NeedBrainScreen />}

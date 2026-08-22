@@ -1,10 +1,14 @@
 import { useOnboardingStore } from "./onboarding-store";
+import { WIZARD_CONTAINER } from "./onboarding-types";
 import { useThemeStyles } from "../../lib/use-theme-styles";
 import { APP_NAME } from "../../lib/version";
 
 /**
  * Wizard chrome — ported from the demo's components/onboarding/Header.tsx.
  * Step indicator shows for steps 1–3; the PlugBrain step (3) counts as 2/3.
+ * FIXED-HEIGHT: the paddings below are the same on every step and collapse
+ * on short windows (`short:`), so the step area gets a predictable share of
+ * the viewport at every size.
  */
 export function Header() {
   const step = useOnboardingStore((s) => s.step);
@@ -14,9 +18,9 @@ export function Header() {
   const currentStep = step === 3 ? 2 : step;
 
   return (
-    <header>
-      <div className="relative z-10 max-w-[1200px] mx-auto px-5 md:px-8 py-5 md:py-7">
-        <div className="flex items-center justify-between">
+    <header className="shrink-0">
+      <div className={`relative z-10 py-4 md:py-6 short:py-3 ${WIZARD_CONTAINER}`}>
+        <div className="flex h-10 items-center justify-between">
           {/* Logo pill */}
           <div
             className="flex items-center gap-2.5 px-4 h-10 rounded-full border-[1.5px]"

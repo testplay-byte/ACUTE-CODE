@@ -105,18 +105,19 @@ export function AllSetScreen() {
   }, [s.accent]);
 
   return (
-    <div className="relative pb-12">
+    <div className="relative flex min-h-full flex-col items-center justify-center py-6 short:py-3">
       {/* Confetti canvas */}
       <canvas
         ref={canvasRef}
         className="fixed inset-0 pointer-events-none z-0"
       />
 
-      {/* Content */}
-      <div className="mt-12 md:mt-16 max-w-[820px] mx-auto text-center relative z-10">
+      {/* Content — centered in the leftover height so the step never scrolls
+          at common window sizes; `short:` trims the celebration chrome */}
+      <div className="max-w-[860px] xl:max-w-[980px] w-full mx-auto text-center relative z-10">
         {/* Success icon */}
         <div
-          className="mx-auto w-[96px] h-[96px] rounded-[28px] grid place-items-center"
+          className="mx-auto w-[96px] h-[96px] short:w-16 short:h-16 rounded-[28px] grid place-items-center"
           style={{
             background: s.accent,
             border: `2.5px solid ${s.borderStrong}`,
@@ -124,7 +125,7 @@ export function AllSetScreen() {
             animation: "bounce-in 0.7s cubic-bezier(.2,1.4,.4,1)",
           }}
         >
-          <svg viewBox="0 0 42 42" className="w-12 h-12">
+          <svg viewBox="0 0 42 42" className="w-12 h-12 short:w-8 short:h-8">
             <path
               d="M8 22 L18 30 L34 14"
               fill="none"
@@ -139,7 +140,7 @@ export function AllSetScreen() {
 
         {/* Heading */}
         <h1
-          className="mt-6 text-[40px] md:text-[64px] font-black tracking-[-0.04em] leading-[0.9]"
+          className="mt-6 short:mt-3 text-[40px] md:text-[64px] short:text-[34px] font-black tracking-[-0.04em] leading-[0.9]"
           style={{ color: s.text }}
         >
           You&apos;re all set!
@@ -147,7 +148,7 @@ export function AllSetScreen() {
 
         {/* Description */}
         <p
-          className="mt-4 text-[15px] md:text-[17px] font-medium max-w-[560px] mx-auto leading-[1.5]"
+          className="mt-4 short:mt-2 text-[15px] md:text-[17px] font-medium max-w-[560px] mx-auto leading-[1.5]"
           style={{ color: s.textSecondary }}
         >
           ACUTE-CODE is configured and ready to rip. Your theme is{" "}
@@ -172,7 +173,7 @@ export function AllSetScreen() {
         </p>
 
         {/* Summary cards */}
-        <div className="mt-8 grid grid-cols-1 md:grid-cols-3 gap-3 text-left">
+        <div className="mt-8 short:mt-4 grid grid-cols-1 md:grid-cols-3 gap-3 text-left">
           {/* Theme card */}
           <div
             className="rounded-[20px] p-4 flex gap-3 items-center"
@@ -262,7 +263,7 @@ export function AllSetScreen() {
         </div>
 
         {/* CTA buttons */}
-        <div className="mt-8 flex flex-col md:flex-row items-center justify-center gap-3">
+        <div className="mt-8 short:mt-5 flex flex-col md:flex-row items-center justify-center gap-3">
           {/* Primary button */}
           <button
             onClick={() => navigate("/")}
@@ -286,7 +287,7 @@ export function AllSetScreen() {
 
         {/* Tip bar */}
         <div
-          className="mt-8 inline-flex items-center gap-2 px-4 py-2 rounded-full text-[12px] font-medium"
+          className="mt-8 short:mt-4 inline-flex items-center gap-2 px-4 py-2 rounded-full text-[12px] font-medium"
           style={{
             background: s.card,
             border: `1.5px solid ${s.border}`,
@@ -314,7 +315,7 @@ export function AllSetScreen() {
         </div>
 
         {/* Restart link */}
-        <div className="mt-12 flex justify-center pb-4">
+        <div className="mt-12 short:mt-6 flex justify-center">
           <button
             className="text-[12px] font-bold hover:underline underline-offset-4 cursor-pointer bg-transparent border-none p-0 transition-opacity"
             style={{ color: s.textTertiary }}

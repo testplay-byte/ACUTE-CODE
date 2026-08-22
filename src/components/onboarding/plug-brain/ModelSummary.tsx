@@ -1,7 +1,7 @@
 import { useMemo, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useOnboardingStore } from "../onboarding-store";
-import { fetchProviders, isTauri, markSetupDone, storeProviderKey } from "../providers-api";
+import { fetchProviders, isTauri, markSetupDone, storeProviderKey, withClientDefaults } from "../providers-api";
 import { CONTEXT_LABELS, estimateCost, formatContext, formatCost, REASONING_LEVELS } from "../onboarding-types";
 import { useThemeStyles } from "../../../lib/use-theme-styles";
 
@@ -36,8 +36,13 @@ export function ModelSummary({ onBack, onSave }: { onBack: () => void; onSave: (
     queryFn: fetchProviders,
     staleTime: 30_000,
   });
+  // Same merged catalog as the selector (server rows + client-side OpenRouter
+  // default) so the summary tag resolves even when the sidecar list is empty.
   const provider = useMemo(
-    () => (providersQuery.data ?? []).find((p) => p.id === providerId),
+    () =>
+      withClientDefaults(providersQuery.data ?? []).find(
+        (o) => o.provider.id === providerId,
+      )?.provider,
     [providersQuery.data, providerId],
   );
   const providerLetter = provider ? provider.name.trim().charAt(0).toUpperCase() || "?" : "?";
@@ -252,7 +257,7 @@ export function ModelSummary({ onBack, onSave }: { onBack: () => void; onSave: (
       )}
 
       {/* --- BUTTONS --- */}
-      <div className="mt-2 flex items-center gap-3 pb-8">
+      <div className="mt-2 flex items-center gap-3">
         <button
           type="button"
           className="h-12 px-5 rounded-full border-[1.5px] font-bold text-[14px] flex-1 hover:opacity-80 transition-opacity cursor-pointer"

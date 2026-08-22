@@ -22,20 +22,20 @@ export function NeedBrainScreen() {
   };
 
   return (
-    <div className="mt-10 max-w-[980px] mx-auto pb-12">
+    <div className="flex min-h-full flex-col pt-4 md:pt-8 short:pt-2">
       {/* Heading */}
-      <h2 className="text-center text-[36px] md:text-[52px] font-black tracking-[-0.03em] leading-[0.9]" style={{ color: s.text }}>
+      <h2 className="text-center text-[36px] md:text-[52px] short:text-[30px] font-black tracking-[-0.03em] leading-[0.9]" style={{ color: s.text }}>
         Need a brain?
       </h2>
-      <p className="mt-3 text-center text-[15px] md:text-[16px] font-medium max-w-[520px] mx-auto" style={{ color: s.textSecondary }}>
+      <p className="mt-3 short:mt-2 text-center text-[15px] md:text-[16px] font-medium max-w-[520px] mx-auto" style={{ color: s.textSecondary }}>
         ACUTE-CODE needs a model to think with. Set it up now or skip for later.
       </p>
 
-      {/* Cards Grid */}
-      <div className="mt-8 grid md:grid-cols-2 gap-4 md:gap-5">
+      {/* Cards Grid — two choices side by side, filling the container width */}
+      <div className="mt-6 md:mt-8 short:mt-4 grid flex-1 items-start md:grid-cols-2 gap-4 md:gap-5 2xl:gap-8">
         {/* Card 1 – Configure Now */}
         <div
-          className={`text-left rounded-[28px] border-[2px] p-5 md:p-6 transition-all group cursor-pointer ${
+          className={`text-left rounded-[28px] border-[2px] p-5 md:p-6 short:p-4 transition-all group cursor-pointer ${
             isNow ? "translate-y-[-2px]" : ""
           }`}
           style={{
@@ -90,7 +90,7 @@ export function NeedBrainScreen() {
           <div className="text-[12px] font-medium" style={{ color: s.textSecondary }}>Most devs start here</div>
 
           {/* Checklist */}
-          <div className="mt-5 space-y-2">
+          <div className="mt-5 short:mt-3 space-y-2">
             {["Connect API • secure & local", "Test connection • instant feedback", "Tune reasoning • none → extra"].map((item) => (
               <div key={item} className="flex items-center gap-2 text-[13px] font-medium" style={{ color: s.text }}>
                 <span
@@ -105,7 +105,7 @@ export function NeedBrainScreen() {
           </div>
 
           {/* Provider logos */}
-          <div className="mt-5 flex items-center gap-2">
+          <div className="mt-5 short:mt-3 flex items-center gap-2">
             {["O", "A", "G", "R"].map((letter) => (
               <span
                 key={letter}
@@ -124,7 +124,7 @@ export function NeedBrainScreen() {
 
           {/* EST. TIME */}
           <div
-            className="mt-5 rounded-[14px] border px-3 py-2.5 flex items-center justify-between"
+            className="mt-5 short:mt-3 rounded-[14px] border px-3 py-2.5 flex items-center justify-between"
             style={{
               background: s.subtle,
               borderColor: s.border,
@@ -137,7 +137,7 @@ export function NeedBrainScreen() {
 
         {/* Card 2 – I'll do it later */}
         <div
-          className={`text-left rounded-[28px] border-[2px] p-5 md:p-6 transition-all group cursor-pointer ${
+          className={`text-left rounded-[28px] border-[2px] p-5 md:p-6 short:p-4 transition-all group cursor-pointer ${
             isLater ? "translate-y-[-2px]" : ""
           }`}
           style={{
@@ -193,7 +193,7 @@ export function NeedBrainScreen() {
 
           {/* Demo brain card */}
           <div
-            className="mt-6 rounded-[14px] border-[1.5px] border-dashed p-3 flex items-center gap-3"
+            className="mt-6 short:mt-4 rounded-[14px] border-[1.5px] border-dashed p-3 flex items-center gap-3"
             style={{
               borderColor: s.border,
             }}
@@ -217,8 +217,9 @@ export function NeedBrainScreen() {
         </div>
       </div>
 
-      {/* Bottom Buttons */}
-      <div className="mt-8 flex items-center justify-between">
+      {/* Bottom Buttons — pinned to the bottom of the step area, primary on
+          the right (same action-row contract as every other step) */}
+      <div className="mt-auto pt-5 md:pt-8 short:pt-3 flex items-center justify-between">
         <button
           onClick={handleBack}
           className="h-12 px-5 rounded-full border-[1.5px] font-bold text-[14px] hover:opacity-80 transition-opacity cursor-pointer"

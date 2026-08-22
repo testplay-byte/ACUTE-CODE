@@ -1,6 +1,16 @@
 @import "tailwindcss";
 
 /*
+ * ── Wizard viewport variant ───────────────────────────────────────────────
+ * `short:` targets short windows (≤760px tall — e.g. 1024×640, the desktop
+ * app's minimum sensible size). Setup-wizard screens use it to compress
+ * vertical rhythm so every step fits the viewport without page scrolling.
+ * Width adaptation stays in Tailwind's stock breakpoints; only HEIGHT needed
+ * a custom axis.
+ */
+@custom-variant short (@media (max-height: 760px));
+
+/*
  * ── Typography ────────────────────────────────────────────────────────────
  * Space Grotesk (SIL Open Font License 1.1 — bundled verbatim in
  * src/assets/fonts/OFL.txt; OFL permits redistribution and embedding in any
