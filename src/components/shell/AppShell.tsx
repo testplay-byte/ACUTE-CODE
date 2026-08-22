@@ -13,9 +13,10 @@ export function AppShell() {
       {/* Subtle dot grid + accent ambient glows (demo DashboardPage pattern). */}
       <div
         aria-hidden
-        className="pointer-events-none absolute inset-0 opacity-[0.025]"
+        className="pointer-events-none absolute inset-0"
         style={{
-          backgroundImage: "radial-gradient(circle at 1px 1px, var(--text) 1px, transparent 0)",
+          backgroundImage:
+            "radial-gradient(circle at 1px 1px, var(--ac-dot-color) 1px, transparent 0)",
           backgroundSize: "24px 24px",
         }}
       />
@@ -34,7 +35,7 @@ export function AppShell() {
         <TopBar />
         <div className="flex min-h-0 flex-1 gap-3 p-3 md:p-4">
           <Sidebar />
-          <main className="min-w-0 flex-1 overflow-y-auto rounded-xl border-[1.5px] border-line bg-card">
+          <main className="min-w-0 flex-1 overflow-y-auto rounded-lg border-[1.5px] border-line bg-card">
             <Outlet />
           </main>
         </div>

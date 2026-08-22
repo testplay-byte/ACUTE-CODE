@@ -3,6 +3,7 @@ import { Route, Routes, useNavigate } from "react-router";
 import { AppShell } from "./components/shell/AppShell";
 import { AgentsScreen } from "./components/agents/AgentsScreen";
 import { SessionsScreen } from "./components/sessions/SessionsScreen";
+import { DashboardScreen } from "./components/dashboard";
 import { PlaceholderPage } from "./pages/PlaceholderPage";
 import { SettingsPage } from "./pages/SettingsPage";
 import { SetupWizard } from "./components/onboarding/SetupWizard";
@@ -57,16 +58,7 @@ export function App() {
       <Routes>
         <Route path="/setup" element={<SetupWizard />} />
         <Route element={<AppShell />}>
-          <Route
-            index
-            element={
-              <PlaceholderPage
-                title="Dashboard"
-                spec="F7"
-                detail="Overview with stat cards, token chart and recent activity — lands with the usage API hookup."
-              />
-            }
-          />
+          <Route index element={<DashboardScreen />} />
           <Route
             path="project"
             element={

@@ -162,7 +162,7 @@ export function SessionsScreen() {
           )}
         </aside>
 
-        <section aria-label="Chat" className="min-h-0 min-w-0 flex-1">
+        <section aria-label="Chat" className="min-h-0 min-w-0 flex-1 p-1.5 md:p-2">
           {selected ? (
             <ChatView
               key={selected.id}
@@ -170,7 +170,10 @@ export function SessionsScreen() {
               agent={agentById.get(selected.agentId ?? "")}
             />
           ) : (
-            <div className="flex h-full flex-col items-center justify-center gap-3 text-center">
+            <div
+              className="flex h-full flex-col items-center justify-center gap-3 rounded-2xl border-[1.5px] text-center"
+              style={{ borderColor: "var(--ac-border)", backgroundColor: "var(--ac-card)" }}
+            >
               <MessagesSquare size={22} className="text-muted" />
               <div>
                 <p className="text-[13px] font-semibold">No session selected</p>

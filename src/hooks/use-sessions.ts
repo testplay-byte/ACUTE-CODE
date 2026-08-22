@@ -1,5 +1,9 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { type CreateSessionInput, getSessionsBackend } from "../lib/api";
+import {
+  type CreateSessionInput,
+  fetchUsageSummary,
+  getSessionsBackend,
+} from "../lib/api";
 import { useConfigStore } from "../lib/config-store";
 
 /**
@@ -56,5 +60,20 @@ export function useSendMessage() {
       void qc.invalidateQueries({ queryKey: ["session", source, sessionId] });
       void qc.invalidateQueries({ queryKey: ["sessions", source] });
     },
+  });
+}
+
+/**
+ * Per-day usage totals for the dashboard chart (GET /usage/summary). The
+ * fixture backend has no usage log, so the query only runs against the live
+ * sidecar — in demo mode it stays idle and callers render zero/empty states.
+ */
+export function useUsageSummary(days = 14) {
+  const source = useDataSource();
+  return useQuery({
+    queryKey: ["usage-summary", source, days],
+    queryFn: () => fetchUsageSummary(days),
+    enabled: source === "live",
+    staleTime: 60_000,
   });
 }

@@ -20,8 +20,12 @@ describe("App shell", () => {
       expect(screen.getByRole("link", { name: label })).toBeTruthy();
     }
 
-    // Index route is the Dashboard placeholder.
-    expect(screen.getByRole("heading", { level: 1, name: "Dashboard" })).toBeTruthy();
+    // Index route is the live Dashboard: time-of-day greeting + quick actions.
+    const greeting = screen
+      .getAllByRole("heading", { level: 1 })
+      .find((h) => /Good (morning|afternoon|evening|night)/.test(h.textContent ?? ""));
+    expect(greeting).toBeTruthy();
+    expect(screen.getByRole("button", { name: /start a session/i })).toBeTruthy();
   });
 
   it("routes /agents to the Agent Registry", async () => {

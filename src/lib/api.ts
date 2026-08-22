@@ -254,6 +254,38 @@ export function getSessionsBackend(): SessionsBackend {
   return httpSessions();
 }
 
+// ---------------------------------------------------------------------------
+// Usage summary (API.md §F7 dashboard chart; agent-core storage/usage.ts)
+// ---------------------------------------------------------------------------
+
+/** One UTC day bucket as served by GET /usage/summary (zero-filled by server). */
+export interface UsageDayBucket {
+  /** UTC calendar date, "YYYY-MM-DD". */
+  date: string;
+  inputTokens: number;
+  outputTokens: number;
+  requests: number;
+  costUsd: number;
+}
+
+export interface UsageTotals {
+  inputTokens: number;
+  outputTokens: number;
+  requests: number;
+  costUsd: number;
+}
+
+export interface UsageSummary {
+  days: UsageDayBucket[];
+  totals: UsageTotals;
+  generatedAt: string;
+}
+
+/** Per-day token/request/cost totals over the trailing `days` UTC days (1–90). */
+export function fetchUsageSummary(days = 14): Promise<UsageSummary> {
+  return request<UsageSummary>(`/usage/summary?days=${days}`);
+}
+
 /** A chat bubble narrowed from the event log; non-message events arrive in later waves. */
 export interface ChatEntry {
   seq: number;

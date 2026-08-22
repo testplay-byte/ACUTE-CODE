@@ -1,22 +1,31 @@
 import { useEffect, useMemo, useRef, useState, type KeyboardEvent } from "react";
 import { motion } from "framer-motion";
-import { AlertTriangle, RotateCcw, Send, X } from "lucide-react";
+import { AlertTriangle, ArrowUp, RotateCcw, Sparkles, X } from "lucide-react";
 import type { UsageRecord } from "shared";
 import { type Agent, type ChatEntry, type Session, ApiError, toChatEntries } from "../../lib/api";
 import { formatTime } from "../../lib/format";
 import { useSendMessage, useSession } from "../../hooks/use-sessions";
 import { ease, fadeInUp } from "../../lib/motion";
+import { useThemeStyles } from "../../lib/use-theme-styles";
 import { cn } from "../../lib/utils";
-import { Button, inputClass } from "../ui/controls";
+import { Button } from "../ui/controls";
 
 /**
  * Chat pane for one session: event-log history as bubbles, a composer with
  * synchronous turns, and per-turn error/usage affordances. Mounted keyed by
  * session id so switching sessions resets composer + usage state.
+ *
+ * Visual layer follows the project-chat demo (AgentChatPanel.tsx): a
+ * rounded-2xl bordered panel, user bubbles right with a squared bottom-right
+ * corner, assistant bubbles as bordered cards left, w-7 h-7 avatar chips,
+ * mono chips for model/token info, thinking dots, and a pill composer with an
+ * arrow-up send affordance. All data logic (event log, optimistic echo,
+ * retry/error banner) is unchanged.
  */
 export function ChatView({ session, agent }: { session: Session; agent: Agent | undefined }) {
   const detail = useSession(session.id);
   const send = useSendMessage();
+  const styles = useThemeStyles();
 
   const [draft, setDraft] = useState("");
   const [pendingUser, setPendingUser] = useState<string | null>(null);
@@ -67,88 +76,118 @@ export function ChatView({ session, agent }: { session: Session; agent: Agent | 
       ? err.details.providerError
       : null;
 
+  const canSend = !send.isPending && draft.trim().length > 0;
+
   return (
-    <div className="flex h-full min-h-0 flex-col">
-      <div className="flex shrink-0 items-center gap-2.5 border-b-[1.5px] border-line px-4 py-3">
-        <div className="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg bg-accent-soft text-accent">
-          <Send size={12} />
+    <div
+      className="flex h-full min-h-0 flex-col overflow-hidden rounded-2xl border-[1.5px]"
+      style={{ backgroundColor: styles.card, borderColor: styles.border }}
+    >
+      {/* Panel header: avatar tile · name · mono model chip · status chip */}
+      <div
+        className="flex shrink-0 items-center gap-2.5 px-3 py-2.5"
+        style={{ borderBottom: `1.5px solid ${styles.border}` }}
+      >
+        <div
+          className="flex h-6 w-6 shrink-0 items-center justify-center rounded-lg"
+          style={{ backgroundColor: styles.accent, color: styles.accentText }}
+        >
+          <Sparkles size={12} />
         </div>
-        <div className="min-w-0">
-          <div className="truncate text-[13px] font-bold tracking-tight">
-            {session.title ?? agentName}
-          </div>
-          <div className="truncate text-[11px] text-muted">
-            {agent ? `${agent.name} · ${agent.model}` : (session.agentId ?? "no agent")}
-            {" · "}
-            <span>{session.status}</span>
-          </div>
-        </div>
+        <span className="truncate text-[13px] font-semibold" style={{ color: styles.text }}>
+          {session.title ?? agentName}
+        </span>
+        {agent ? (
+          <span
+            className="shrink-0 rounded-lg border px-1.5 py-0.5 font-mono text-[10px]"
+            style={{
+              backgroundColor: styles.inputBg,
+              borderColor: styles.border,
+              color: styles.textSecondary,
+            }}
+          >
+            {agent.model}
+          </span>
+        ) : null}
+        <span
+          className="ml-auto shrink-0 rounded-lg px-1.5 py-0.5 font-mono text-[10px]"
+          style={
+            session.status === "failed"
+              ? { color: "#ef4444", backgroundColor: "#ef44441a" }
+              : session.status === "running"
+                ? { color: "#22c55e", backgroundColor: "#22c55e14" }
+                : { color: styles.textSecondary, backgroundColor: styles.inputBg }
+          }
+        >
+          {session.status}
+        </span>
       </div>
 
-      <div ref={scrollRef} aria-label="Message history" className="min-h-0 flex-1 overflow-y-auto px-4 py-4">
-        <div className="mx-auto flex max-w-[720px] flex-col gap-3">
-          {detail.isPending ? (
-            <div className="flex flex-col gap-3" aria-label="Loading messages">
-              {[0, 1].map((i) => (
-                <div
-                  key={i}
-                  className={`h-12 w-2/3 animate-pulse rounded-xl border-[1.5px] border-line bg-hover/50 ${i % 2 ? "self-end" : ""}`}
-                />
-              ))}
-            </div>
-          ) : entries.length === 0 && !pendingEcho ? (
-            <div className="flex flex-col items-center gap-1.5 py-12 text-center">
-              <p className="text-[13px] font-semibold">Empty session</p>
-              <p className="text-[11px] text-muted">
-                Send the first message to start the turn — {agentName} answers synchronously.
-              </p>
-            </div>
-          ) : (
-            <>
-              {entries.map((entry) => (
-                <Bubble
-                  key={entry.seq}
-                  entry={entry}
-                  agentName={agentName}
-                  usage={usageBySeq[entry.seq]}
-                />
-              ))}
-              {pendingEcho ? (
-                <Bubble
-                  entry={{ seq: -1, role: "user", content: pendingEcho, agentId: null, ts: "" }}
-                  agentName={agentName}
-                />
-              ) : null}
-            </>
-          )}
-
-          {send.isPending ? (
-            <motion.div
-              variants={fadeInUp}
-              initial="initial"
-              animate="animate"
-              className="flex items-center gap-2 px-1"
-            >
-              <span className="flex gap-1" aria-hidden>
-                {[0, 1, 2].map((i) => (
-                  <motion.span
+      <div className="relative min-h-0 flex-1 overflow-hidden">
+        <div ref={scrollRef} aria-label="Message history" className="absolute inset-0 overflow-y-auto px-4 py-4">
+          <div className="flex flex-col gap-3">
+            {detail.isPending ? (
+              <div className="flex flex-col gap-3" aria-label="Loading messages">
+                {[0, 1].map((i) => (
+                  <motion.div
                     key={i}
-                    className="h-1.5 w-1.5 rounded-full bg-muted"
-                    animate={{ opacity: [0.25, 1, 0.25] }}
-                    transition={{ duration: 1.1, repeat: Infinity, delay: i * 0.18, ease }}
+                    variants={fadeInUp}
+                    initial="initial"
+                    animate="animate"
+                    className={cn("h-12 w-2/3 animate-pulse rounded-2xl", i % 2 ? "self-end" : "")}
+                    style={{ backgroundColor: styles.subtle, border: `1.5px solid ${styles.border}` }}
                   />
                 ))}
-              </span>
-              <span className="text-[11px] text-muted">{agentName} is thinking…</span>
-            </motion.div>
-          ) : null}
+              </div>
+            ) : entries.length === 0 && !pendingEcho ? (
+              <div className="flex items-center gap-3 py-8">
+                <div
+                  className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl border-[1.5px]"
+                  style={{ borderColor: styles.border, backgroundColor: styles.inputBg }}
+                >
+                  <Sparkles size={16} style={{ color: styles.accent }} />
+                </div>
+                <div className="min-w-0">
+                  <p className="text-[13px] font-semibold" style={{ color: styles.text }}>
+                    Empty session
+                  </p>
+                  <p className="font-mono text-[11px]" style={{ color: styles.textSecondary }}>
+                    Send the first message to start the turn — {agentName} answers synchronously.
+                  </p>
+                </div>
+              </div>
+            ) : (
+              <>
+                {entries.map((entry) => (
+                  <Bubble
+                    key={entry.seq}
+                    entry={entry}
+                    agentName={agentName}
+                    usage={usageBySeq[entry.seq]}
+                    styles={styles}
+                  />
+                ))}
+                {pendingEcho ? (
+                  <Bubble
+                    entry={{ seq: -1, role: "user", content: pendingEcho, agentId: null, ts: "" }}
+                    agentName={agentName}
+                    styles={styles}
+                  />
+                ) : null}
+              </>
+            )}
+
+            {send.isPending ? (
+              <ThinkingRow agentName={agentName} model={agent?.model} styles={styles} />
+            ) : null}
+          </div>
         </div>
       </div>
 
       {send.isError && lastSent ? (
         <div
           role="alert"
-          className="mx-4 mb-2 flex shrink-0 items-start gap-2 rounded-lg border-[1.5px] border-red-500/30 bg-red-500/10 px-3 py-2"
+          className="mx-3 mb-2 flex shrink-0 items-start gap-2 rounded-xl border-[1.5px] border-red-500/30 bg-red-500/10 px-3 py-2"
         >
           <AlertTriangle size={13} className="mt-0.5 shrink-0 text-red-500" />
           <div className="min-w-0 flex-1">
@@ -159,7 +198,7 @@ export function ChatView({ session, agent }: { session: Session; agent: Agent | 
               {err instanceof Error ? err.message : String(err)}
             </p>
             {providerDetail ? (
-              <p className="mt-0.5 font-mono text-[10px] break-words text-red-500/70">
+              <p className="mt-0.5 break-words font-mono text-[10px] text-red-500/70">
                 {providerDetail}
               </p>
             ) : null}
@@ -180,17 +219,21 @@ export function ChatView({ session, agent }: { session: Session; agent: Agent | 
         </div>
       ) : null}
 
+      {/* Composer: pill strip on the page background, arrow-up send affordance */}
       <form
         onSubmit={(e) => {
           e.preventDefault();
           void runTurn(draft);
         }}
-        className="shrink-0 border-t-[1.5px] border-line px-4 py-3"
+        className="shrink-0 p-3"
       >
-        <div className="mx-auto flex w-full max-w-[720px] items-end gap-2">
+        <div
+          className="flex items-end gap-2 rounded-2xl border-[1.5px] p-1.5"
+          style={{ backgroundColor: styles.inputBg, borderColor: styles.border }}
+        >
           <textarea
             aria-label="Message"
-            rows={2}
+            rows={1}
             value={draft}
             onChange={(e) => setDraft(e.target.value)}
             onKeyDown={onComposerKeyDown}
@@ -198,26 +241,111 @@ export function ChatView({ session, agent }: { session: Session; agent: Agent | 
             placeholder={
               send.isPending
                 ? "Waiting for the reply…"
-                : `Message ${agentName}… (Enter to send, Shift+Enter for a newline)`
+                : `Ask ${agentName} to build, explain, test…`
             }
-            className={cn(inputClass, "min-h-[46px] flex-1 resize-none")}
+            className="max-h-32 min-h-[34px] flex-1 resize-none bg-transparent px-2 py-1.5 text-[13px] outline-none placeholder:text-muted/70"
+            style={{ color: styles.text }}
           />
-          <Button
+          <button
             type="submit"
-            variant="primary"
-            disabled={send.isPending || !draft.trim()}
+            disabled={!canSend}
             aria-label="Send message"
+            className="flex h-8 w-8 shrink-0 cursor-pointer items-center justify-center rounded-xl transition-all duration-200 enabled:hover:scale-105 enabled:active:scale-95 disabled:cursor-not-allowed"
+            style={{
+              backgroundColor: canSend ? styles.accent : styles.inputBg,
+              color: canSend ? styles.accentText : styles.textSecondary,
+              border: `1px solid ${canSend ? styles.accent : styles.border}`,
+              opacity: canSend ? 1 : 0.6,
+            }}
           >
-            {send.isPending ? "Sending…" : "Send"}
-            <Send size={12} strokeWidth={2.5} />
-          </Button>
+            {send.isPending ? (
+              <span className="h-3.5 w-3.5 animate-spin rounded-full border-[1.5px] border-current border-t-transparent" />
+            ) : (
+              <ArrowUp size={14} strokeWidth={2.5} />
+            )}
+          </button>
+        </div>
+        <div className="mt-1.5 flex items-center justify-between px-1">
+          <span className="font-mono text-[10px]" style={{ color: styles.textSecondary }}>
+            Enter to send · Shift+Enter for a newline
+          </span>
+          <span className="font-mono text-[10px]" style={{ color: styles.textSecondary }}>
+            {agent ? agent.model : "no agent"}
+          </span>
         </div>
       </form>
     </div>
   );
 }
 
-function Bubble({ entry, agentName, usage }: { entry: ChatEntry; agentName: string; usage?: UsageRecord }) {
+/** Assistant-in-flight indicator: avatar chip + name/model chips + dots (demo AgentThinking). */
+function ThinkingRow({
+  agentName,
+  model,
+  styles,
+}: {
+  agentName: string;
+  model?: string;
+  styles: ReturnType<typeof useThemeStyles>;
+}) {
+  return (
+    <motion.div
+      variants={fadeInUp}
+      initial="initial"
+      animate="animate"
+      exit={{ opacity: 0, y: -8, transition: { duration: 0.2, ease } }}
+      className="flex items-center gap-3 px-1 py-1"
+      aria-label={`${agentName} is thinking`}
+    >
+      <div
+        className="grid h-7 w-7 shrink-0 place-items-center rounded-xl border-[1.5px]"
+        style={{ borderColor: styles.border, backgroundColor: styles.inputBg }}
+      >
+        <Sparkles size={13} style={{ color: styles.accent }} />
+      </div>
+      <div className="flex min-w-0 items-center gap-2">
+        <span className="text-[13px] font-semibold" style={{ color: styles.text }}>
+          {agentName}
+        </span>
+        {model ? (
+          <span
+            className="rounded-lg border px-1.5 py-0.5 font-mono text-[10px]"
+            style={{
+              backgroundColor: styles.inputBg,
+              borderColor: styles.border,
+              color: styles.textSecondary,
+            }}
+          >
+            {model}
+          </span>
+        ) : null}
+      </div>
+      <div className="ml-auto flex items-center gap-1" aria-hidden>
+        {[0, 1, 2].map((i) => (
+          <motion.span
+            key={i}
+            className="h-1 w-1 rounded-full"
+            style={{ backgroundColor: styles.textSecondary }}
+            animate={{ opacity: [0.25, 1, 0.25] }}
+            transition={{ duration: 1.1, repeat: Infinity, delay: i * 0.15, ease }}
+          />
+        ))}
+      </div>
+    </motion.div>
+  );
+}
+
+function Bubble({
+  entry,
+  agentName,
+  usage,
+  styles,
+}: {
+  entry: ChatEntry;
+  agentName: string;
+  usage?: UsageRecord;
+  styles: ReturnType<typeof useThemeStyles>;
+}) {
   const mine = entry.role === "user";
   return (
     <motion.div
@@ -227,21 +355,35 @@ function Bubble({ entry, agentName, usage }: { entry: ChatEntry; agentName: stri
       data-role={entry.role}
       className={cn("flex w-full flex-col", mine ? "items-end" : "items-start")}
     >
+      {/* Bubble anatomy from AgentChatPanel: user right rounded-br-md on accent,
+          assistant left as a bordered card. */}
       <div
         className={cn(
-          "max-w-[85%] rounded-xl border-[1.5px] px-3.5 py-2.5 text-[13px] leading-relaxed break-words whitespace-pre-wrap",
-          mine ? "border-accent-faded bg-accent-soft" : "border-line bg-hover",
+          "max-w-[85%] whitespace-pre-wrap break-words px-3.5 py-2.5 text-[13px]",
+          mine ? "rounded-2xl rounded-br-md" : "rounded-2xl border-[1.5px] leading-[1.6]",
         )}
+        style={
+          mine
+            ? { backgroundColor: styles.accent, color: styles.accentText, lineHeight: 1.5 }
+            : { backgroundColor: styles.card, borderColor: styles.border, color: styles.text }
+        }
       >
         {entry.content}
       </div>
-      <div className="mt-1 flex flex-wrap items-center gap-1.5 px-1 text-[10px] text-muted">
+      <div
+        className="mt-1 flex flex-wrap items-center gap-1.5 px-1 font-mono text-[10px]"
+        style={{ color: styles.textSecondary }}
+      >
         <span>{mine ? "you" : agentName}</span>
         <span aria-hidden>·</span>
         <span>{formatTime(entry.ts)}</span>
         {usage ? (
-          <span className="whitespace-nowrap" title="Tokens in → out for this turn">
-            · {usage.inputTokens} → {usage.outputTokens} tok
+          <span
+            className="whitespace-nowrap rounded-lg border px-1.5 py-px"
+            title="Tokens in → out for this turn"
+            style={{ borderColor: styles.border, backgroundColor: styles.inputBg }}
+          >
+            {usage.inputTokens} → {usage.outputTokens} tok
           </span>
         ) : null}
       </div>

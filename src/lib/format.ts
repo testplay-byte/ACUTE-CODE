@@ -12,3 +12,12 @@ export function formatWhen(iso: string): string {
   if (new Date().toDateString() === date.toDateString()) return formatTime(iso);
   return date.toLocaleDateString([], { month: "short", day: "numeric" });
 }
+
+/**
+ * Compact token count for stat cards and chart labels ("12K", "1.3K", "850"),
+ * ported from the dashboard demo's fmtTokens.
+ */
+export function formatTokenCount(n: number): string {
+  if (n >= 1000) return `${(n / 1000).toFixed(n >= 10000 ? 0 : 1)}K`;
+  return String(n);
+}
