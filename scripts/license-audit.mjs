@@ -72,6 +72,15 @@ function verdictFor(license) {
   if (/GPL/i.test(license)) return "FORBIDDEN (copyleft)";
   if (FIRST_PARTY.has(license)) return "FIRST-PARTY (proprietary)";
   if (ALLOWED.has(license)) return "OK";
+  // SPDX choice expressions ("A OR B", e.g. json-schema's "AFL-2.1 OR
+  // BSD-3-Clause") let the licensee pick a branch: OK when at least one branch
+  // is allowed. Copyleft branches are still rejected by the GPL check above.
+  const branches = license
+    .split(/\s+or\s+/i)
+    .map((branch) => branch.replace(/[()]/g, "").trim());
+  if (branches.length > 1 && branches.some((branch) => ALLOWED.has(branch))) {
+    return "OK (SPDX OR)";
+  }
   return "FORBIDDEN (unknown license)";
 }
 

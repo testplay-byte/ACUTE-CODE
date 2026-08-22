@@ -64,6 +64,29 @@ describe("openDatabase", () => {
           "schema_migrations",
         ]),
       );
+      const sessionColumns = (
+        db.prepare("PRAGMA table_info(sessions)").all() as { name: string }[]
+      ).map((column) => column.name);
+      expect(sessionColumns).toContain("agent_id");
+    } finally {
+      db.close();
+    }
+  });
+
+  it("keeps a per-session monotonic seq on the append-only event log", () => {
+    const db = openDatabase(join(dir, "events.db"));
+    try {
+      const insert = db.prepare(
+        "INSERT INTO session_events (session_id, seq, type, payload, ts) VALUES (?, ?, ?, ?, ?)",
+      );
+      const now = new Date().toISOString();
+      insert.run("sess_a", 1, "message.user", "{}", now);
+      insert.run("sess_a", 2, "message.assistant", "{}", now);
+      insert.run("sess_b", 1, "message.user", "{}", now);
+      // The UNIQUE (session_id, seq) constraint rejects seq reuse within a session…
+      expect(() => insert.run("sess_a", 2, "message.user", "{}", now)).toThrow();
+      // …while other sessions carry their own counters.
+      expect(() => insert.run("sess_b", 2, "message.user", "{}", now)).not.toThrow();
     } finally {
       db.close();
     }
@@ -83,7 +106,10 @@ describe("openDatabase", () => {
       .all() as { version: number; name: string }[];
     second.close();
 
-    expect(appliedFirst).toEqual([{ version: 1, name: "0001_init.sql" }]);
+    expect(appliedFirst).toEqual([
+      { version: 1, name: "0001_init.sql" },
+      { version: 2, name: "0002_sessions_usage.sql" },
+    ]);
     expect(appliedSecond).toEqual(appliedFirst);
   });
 });

@@ -1,11 +1,23 @@
 /**
  * Sidecar HTTP server (API.md; ADR-0006). Wave 1: health + bearer-token auth +
- * agent registry CRUD. WebSocket, sessions, and the remaining resources come
- * in later waves.
+ * agent registry CRUD. Wave 2 adds the provider registry (keyring-backed) and
+ * single-agent sessions/chat. WebSocket and the remaining resources come in
+ * later waves.
  */
 import { randomUUID, timingSafeEqual } from "node:crypto";
 import Fastify, { type FastifyError, type FastifyInstance } from "fastify";
-import type { MemoryPolicy } from "shared";
+import type { MemoryPolicy, RunMode } from "shared";
+import { aiSdkChat, type ChatFn } from "./agents/chat.js";
+import { runSingleAgentTurn } from "./agents/runtime.js";
+import { ProviderKeyring, fetchProviderModels, listProviderViews, resolveProvider } from "./providers/registry.js";
+import {
+  RESERVED_PROVIDER_IDS,
+  createProviderRecord,
+  providerExists,
+  providerRecordIdExists,
+  slugifyProviderId,
+} from "./storage/providers.js";
+import { createSession, getSession, lastSessionSeq, listSessionEvents, listSessions } from "./storage/sessions.js";
 import { openDatabase, type SqliteDatabase } from "./storage/db.js";
 import {
   TOOL_NAMES,
@@ -18,9 +30,8 @@ import {
   type Agent,
   type AgentInput,
 } from "./storage/agents.js";
-import { providerExists } from "./storage/providers.js";
 
-export const VERSION = "0.2.0";
+export const VERSION = "0.3.0";
 
 /** API.md §1.3: every non-2xx response carries this single shape. */
 function errorBody(code: string, message: string, details?: Record<string, unknown>): unknown {
@@ -168,11 +179,17 @@ function validateAgentInput(
 export interface ServerOptions {
   token: string;
   db: SqliteDatabase;
+  /** Snapshots `ACUTE_PROVIDER_*` env vars; defaults to the spawn environment. */
+  keyring?: ProviderKeyring;
+  /** Chat function used by session turns; defaults to the AI SDK adapter. */
+  chat?: ChatFn;
 }
 
 /** Builds the Fastify app without binding a port (tests drive it with inject()). */
 export function buildServer(options: ServerOptions): FastifyInstance {
   const { token, db } = options;
+  const keyring = options.keyring ?? new ProviderKeyring();
+  const chat = options.chat ?? aiSdkChat;
   const app = Fastify();
 
   // ARCHITECTURE §2.3/§7: every route except GET /health requires the bearer token.
@@ -318,6 +335,208 @@ export function buildServer(options: ServerOptions): FastifyInstance {
           }
         }
         return reply.code(201).send(duplicateAgent(db, id, name));
+      });
+
+      // ---- Providers (API.md §8) ---- keys never appear in any response.
+
+      scope.get("/providers", async () => {
+        return { providers: listProviderViews(db, keyring) };
+      });
+
+      scope.post("/providers", async (request, reply) => {
+        const body: unknown = request.body;
+        if (typeof body !== "object" || body === null || Array.isArray(body)) {
+          return reply
+            .code(400)
+            .send(errorBody("VALIDATION", "body must be a JSON object", { field: "body" }));
+        }
+        const raw = body as Record<string, unknown>;
+
+        if (typeof raw.name !== "string" || raw.name.trim() === "") {
+          return reply
+            .code(400)
+            .send(errorBody("VALIDATION", "name must be a non-empty string", { field: "body.name" }));
+        }
+        let baseUrl: URL;
+        if (typeof raw.baseUrl !== "string") {
+          return reply.code(400).send(
+            errorBody("VALIDATION", "baseUrl must be a http(s) URL string", {
+              field: "body.baseUrl",
+            }),
+          );
+        }
+        try {
+          baseUrl = new URL(raw.baseUrl);
+        } catch {
+          return reply.code(400).send(
+            errorBody("VALIDATION", "baseUrl must be a valid URL", { field: "body.baseUrl" }),
+          );
+        }
+        if (baseUrl.protocol !== "http:" && baseUrl.protocol !== "https:") {
+          return reply.code(400).send(
+            errorBody("VALIDATION", "baseUrl must use http or https", { field: "body.baseUrl" }),
+          );
+        }
+
+        let id = slugifyProviderId(raw.name);
+        if (raw.id !== undefined) {
+          if (typeof raw.id !== "string" || raw.id.trim() === "") {
+            return reply.code(400).send(
+              errorBody("VALIDATION", "id must be a non-empty string", { field: "body.id" }),
+            );
+          }
+          id = raw.id.trim();
+        }
+        if (id === "" || RESERVED_PROVIDER_IDS.includes(id)) {
+          return reply.code(400).send(
+            errorBody("VALIDATION", `id is reserved or unusable: ${id}`, { field: "body.id" }),
+          );
+        }
+        if (providerRecordIdExists(db, id)) {
+          return reply
+            .code(409)
+            .send(errorBody("CONFLICT", `provider '${id}' already exists`, { field: "body.id" }));
+        }
+
+        const record = createProviderRecord(db, {
+          id,
+          name: raw.name.trim(),
+          baseUrl: baseUrl.toString(),
+        });
+        return reply.code(201).send({ ...record, hasKey: keyring.has(record.id) });
+      });
+
+      scope.get("/providers/:id/models", async (request, reply) => {
+        const { id } = request.params as Record<string, string>;
+        if (resolveProvider(db, id) === undefined) {
+          return reply.code(404).send(errorBody("NOT_FOUND", `no provider with id ${id}`));
+        }
+        try {
+          const result = await fetchProviderModels(db, keyring, id);
+          if (result === undefined) {
+            return reply.code(404).send(errorBody("NOT_FOUND", `no provider with id ${id}`));
+          }
+          return result;
+        } catch (error) {
+          // ProviderFetchError carries sanitized upstream context; anything
+          // else still maps to the same envelope without internals.
+          const message =
+            error instanceof Error ? error.message : `provider '${id}' models fetch failed`;
+          return reply
+            .code(502)
+            .send(errorBody("PROVIDER_ERROR", message, { providerId: id }));
+        }
+      });
+
+      // ---- Sessions + single-agent chat (API.md §5) ----
+
+      scope.post("/sessions", async (request, reply) => {
+        const body: unknown = request.body;
+        if (typeof body !== "object" || body === null || Array.isArray(body)) {
+          return reply
+            .code(400)
+            .send(errorBody("VALIDATION", "body must be a JSON object", { field: "body" }));
+        }
+        const raw = body as Record<string, unknown>;
+
+        if (raw.mode === undefined || raw.mode !== "single") {
+          return reply.code(400).send(
+            errorBody("VALIDATION", "body.mode must be 'single' (team modes arrive in a later wave)", {
+              field: "body.mode",
+            }),
+          );
+        }
+        if (typeof raw.agentId !== "string" || raw.agentId.trim() === "") {
+          return reply.code(400).send(
+            errorBody("VALIDATION", "agentId is required (no default agent is configured yet)", {
+              field: "body.agentId",
+            }),
+          );
+        }
+        if (getAgent(db, raw.agentId) === undefined) {
+          return reply
+            .code(404)
+            .send(errorBody("NOT_FOUND", `no agent with id ${raw.agentId}`));
+        }
+        let title: string | null = null;
+        if (raw.title !== undefined) {
+          if (typeof raw.title !== "string") {
+            return reply
+              .code(400)
+              .send(errorBody("VALIDATION", "title must be a string", { field: "body.title" }));
+          }
+          title = raw.title.trim() === "" ? null : raw.title;
+        }
+        let projectId: string | null = null;
+        if (raw.projectId !== undefined) {
+          if (typeof raw.projectId !== "string" || raw.projectId.trim() === "") {
+            return reply.code(400).send(
+              errorBody("VALIDATION", "projectId must be a non-empty string", {
+                field: "body.projectId",
+              }),
+            );
+          }
+          projectId = raw.projectId;
+        }
+
+        const session = createSession(db, {
+          agentId: raw.agentId,
+          mode: "single" as RunMode,
+          projectId,
+          title,
+        });
+        return reply.code(202).send(session);
+      });
+
+      scope.get("/sessions", async (request) => {
+        const query = request.query as Record<string, string | undefined>;
+        const limitRaw = Number(query.limit ?? 50);
+        const offsetRaw = Number(query.offset ?? 0);
+        const limit = Number.isInteger(limitRaw) ? Math.min(Math.max(limitRaw, 1), 200) : 50;
+        const offset = Number.isInteger(offsetRaw) && offsetRaw > 0 ? offsetRaw : 0;
+        return listSessions(db, { limit, offset });
+      });
+
+      scope.get("/sessions/:id", async (request, reply) => {
+        const { id } = request.params as Record<string, string>;
+        const session = getSession(db, id);
+        if (session === undefined) {
+          return reply.code(404).send(errorBody("NOT_FOUND", `no session with id ${id}`));
+        }
+        return {
+          ...session,
+          events: listSessionEvents(db, id),
+          lastSeq: lastSessionSeq(db, id),
+        };
+      });
+
+      scope.post("/sessions/:id/messages", async (request, reply) => {
+        const { id } = request.params as Record<string, string>;
+        const body: unknown = request.body;
+        if (typeof body !== "object" || body === null || Array.isArray(body)) {
+          return reply
+            .code(400)
+            .send(errorBody("VALIDATION", "body must be a JSON object", { field: "body" }));
+        }
+        const content = (body as Record<string, unknown>).content;
+        if (typeof content !== "string" || content.trim() === "") {
+          return reply.code(400).send(
+            errorBody("VALIDATION", "content must be a non-empty string", {
+              field: "body.content",
+            }),
+          );
+        }
+
+        const outcome = await runSingleAgentTurn({ db, keyring, chat }, id, content);
+        if (outcome.ok) {
+          return reply.code(200).send({
+            assistantMessage: outcome.assistantMessage,
+            usage: outcome.usage,
+          });
+        }
+        return reply
+          .code(outcome.status)
+          .send(errorBody(outcome.code, outcome.message, outcome.details));
       });
     },
     { prefix: "/api/v1" },

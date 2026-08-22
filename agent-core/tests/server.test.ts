@@ -51,11 +51,11 @@ describe("health (unauthenticated)", () => {
   it("answers GET /health without a token", async () => {
     const response = await app.inject({ method: "GET", url: "/health" });
     expect(response.statusCode).toBe(200);
-    expect(response.json()).toEqual({ status: "ok", app: "acute-code", version: "0.2.0" });
+    expect(response.json()).toEqual({ status: "ok", app: "acute-code", version: "0.3.0" });
   });
 
   it("exports VERSION matching the health payload", () => {
-    expect(VERSION).toBe("0.2.0");
+    expect(VERSION).toBe("0.3.0");
   });
 });
 

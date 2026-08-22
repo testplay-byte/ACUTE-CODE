@@ -6,10 +6,14 @@ Policy (SPEC section 6): allowed - MIT, Apache-2.0, BSD-2-Clause, BSD-3-Clause, 
 Forbidden - GPL, AGPL, LGPL and any license that cannot be classified (closed-source distribution).
 Every license exception must be recorded as an ADR under `docs/decisions/`.
 
-Audited production dependencies: 95. Verdict: CLEAN.
+Audited production dependencies: 107. Verdict: CLEAN.
 
 | Package | Version | License | Verdict |
 |---|---|---|---|
+| @ai-sdk/gateway | 4.0.59 | Apache-2.0 | OK |
+| @ai-sdk/openai-compatible | 3.0.34 | Apache-2.0 | OK |
+| @ai-sdk/provider | 4.0.7 | Apache-2.0 | OK |
+| @ai-sdk/provider-utils | 5.0.28 | Apache-2.0 | OK |
 | @fastify/ajv-compiler | 4.0.6 | MIT | OK |
 | @fastify/error | 4.2.0 | MIT | OK |
 | @fastify/fast-json-stringify-compiler | 5.1.0 | MIT | OK |
@@ -33,12 +37,16 @@ Audited production dependencies: 95. Verdict: CLEAN.
 | @radix-ui/react-use-controllable-state | 1.2.6 | MIT | OK |
 | @radix-ui/react-use-effect-event | 0.0.5 | MIT | OK |
 | @radix-ui/react-use-layout-effect | 1.1.4 | MIT | OK |
+| @standard-schema/spec | 1.1.0 | MIT | OK |
 | @tanstack/query-core | 5.101.4 | MIT | OK |
 | @tanstack/react-query | 5.101.4 | MIT | OK |
 | @types/prop-types | 15.7.15 | MIT | OK |
 | @types/react | 18.3.31 | MIT | OK |
 | @types/react-dom | 18.3.7 | MIT | OK |
+| @vercel/oidc | 3.2.0 | Apache-2.0 | OK |
+| @workflow/serde | 4.1.0 | Apache-2.0 | OK |
 | abstract-logging | 2.0.1 | MIT | OK |
+| ai | 7.0.73 | Apache-2.0 | OK |
 | ajv | 8.20.0 | MIT | OK |
 | ajv-formats | 3.0.1 | MIT | OK |
 | aria-hidden | 1.2.6 | MIT | OK |
@@ -50,6 +58,7 @@ Audited production dependencies: 95. Verdict: CLEAN.
 | csstype | 3.2.3 | MIT | OK |
 | dequal | 2.0.3 | MIT | OK |
 | detect-node-es | 1.1.0 | MIT | OK |
+| eventsource-parser | 3.1.1 | MIT | OK |
 | fast-decode-uri-component | 1.0.1 | MIT | OK |
 | fast-deep-equal | 3.1.3 | MIT | OK |
 | fast-json-stringify | 7.0.1 | MIT | OK |
@@ -63,6 +72,7 @@ Audited production dependencies: 95. Verdict: CLEAN.
 | get-nonce | 1.0.1 | MIT | OK |
 | ipaddr.js | 2.5.0 | MIT | OK |
 | js-tokens | 4.0.0 | MIT | OK |
+| json-schema | 0.4.0 | (AFL-2.1 OR BSD-3-Clause) | OK (SPDX OR) |
 | json-schema-ref-resolver | 3.0.0 | MIT | OK |
 | json-schema-traverse | 1.0.0 | MIT | OK |
 | light-my-request | 6.6.0 | BSD-3-Clause | OK |
@@ -102,6 +112,8 @@ Audited production dependencies: 95. Verdict: CLEAN.
 | thread-stream | 4.2.0 | MIT | OK |
 | toad-cache | 3.7.4 | MIT | OK |
 | tslib | 2.8.1 | 0BSD | OK |
+| undici | 7.29.0 | MIT | OK |
 | use-callback-ref | 1.3.3 | MIT | OK |
 | use-sidecar | 1.1.3 | MIT | OK |
+| zod | 4.4.3 | MIT | OK |
 | zustand | 5.0.15 | MIT | OK |
