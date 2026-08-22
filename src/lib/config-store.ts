@@ -1,5 +1,6 @@
 import { create } from "zustand";
 import { persist } from "zustand/middleware";
+import { isTauri, getSidecarInfo } from "./sidecar";
 
 /**
  * Runtime connection config for the agent-core sidecar REST API.
@@ -46,3 +47,12 @@ export const useConfigStore = create<ConfigState>()(
     },
   ),
 );
+
+// Shell handoff (§2.3): adopt the shell-spawned sidecar endpoint as soon as
+// the command answers — adoptEndpoint flips demoData off. Browser dev without
+// env vars resolves to null and keeps the defaults above.
+if (isTauri()) {
+  void getSidecarInfo().then((info) => {
+    if (info) useConfigStore.getState().adoptEndpoint(info);
+  });
+}

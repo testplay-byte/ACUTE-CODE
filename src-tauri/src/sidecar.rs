@@ -141,7 +141,7 @@ fn spawn_and_handshake() -> Result<RunningSidecar, String> {
 /// `src-tauri/`.
 fn resolve_repo_root() -> PathBuf {
     let mut dir = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
-    while !dir.join("agent-core").join("dist").join("server.js").is_file() {
+    while !dir.join("agent-core").join("dist").join("main.js").is_file() {
         if !dir.pop() {
             return std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
         }
@@ -160,7 +160,7 @@ fn build_command() -> Command {
         }
     }
     let mut command = Command::new("node");
-    command.arg("agent-core/dist/server.js");
+    command.arg("agent-core/dist/main.js");
     command
 }
 

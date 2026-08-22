@@ -3,8 +3,8 @@
  * migrations recorded in schema_migrations, one-time template seeding.
  * This module (and the repositories next to it) is the only code that issues SQL.
  */
-import { readdirSync, readFileSync } from "node:fs";
-import { join } from "node:path";
+import { mkdirSync, readdirSync, readFileSync } from "node:fs";
+import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import Database from "better-sqlite3";
 import { TOOL_NAMES, type Agent } from "./agents.js";
@@ -142,6 +142,8 @@ function seedTemplates(db: SqliteDatabase): void {
 
 /** Opens (creating if needed) the database, applies pending migrations, seeds templates once. */
 export function openDatabase(path: string): SqliteDatabase {
+  // The shell normally creates the app-data dir; be robust when spawned standalone.
+  mkdirSync(dirname(path), { recursive: true });
   const db = new Database(path);
   db.pragma("journal_mode = WAL");
   db.pragma("synchronous = NORMAL");

@@ -3,6 +3,7 @@ import { render } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { MemoryRouter } from "react-router";
 import { resetFixtureAgents } from "./lib/agent-fixtures";
+import { resetFixtureSessions } from "./lib/session-fixtures";
 import { useConfigStore } from "./lib/config-store";
 import { useThemeStore } from "./lib/theme-store";
 
@@ -25,6 +26,7 @@ export function renderWithProviders(ui: ReactNode, { route = "/" } = {}) {
 /** Isolated demo fixture + reset stores; call in beforeEach of UI tests. */
 export function resetTestState() {
   resetFixtureAgents();
+  resetFixtureSessions();
   useConfigStore.setState({ baseUrl: "http://127.0.0.1:5178", token: null, demoData: true });
   useThemeStore.setState({ themeId: "nova", mode: "dark" });
   localStorage.clear();

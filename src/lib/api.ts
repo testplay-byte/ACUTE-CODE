@@ -1,5 +1,6 @@
-import type { AgentRecord } from "shared";
+import type { AgentRecord, RunMode, SessionStatus, UsageRecord } from "shared";
 import { getFixtureAgents } from "./agent-fixtures";
+import { getFixtureSessions } from "./session-fixtures";
 import { useConfigStore } from "./config-store";
 
 /**
@@ -157,4 +158,127 @@ export function getAgentsBackend(): AgentsBackend {
     return getFixtureAgents();
   }
   return httpAgents();
+}
+
+// ---------------------------------------------------------------------------
+// Sessions + single-agent chat (API.md §5, Wave 2 single-agent scope)
+// ---------------------------------------------------------------------------
+
+/** Session row as served by the sidecar (agent-core storage/sessions.ts). */
+export interface Session {
+  id: string;
+  projectId: string | null;
+  agentId: string | null;
+  mode: RunMode;
+  status: SessionStatus;
+  title: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+/**
+ * Append-only event-log row (ADR-0010). `payload` is typed per `type`; the
+ * chat events ("message.user" | "message.assistant") carry
+ * { role, content, agentId, ts } — narrowed via toChatEntries().
+ */
+export interface SessionEvent {
+  seq: number;
+  type: string;
+  agentId: string | null;
+  payload: unknown;
+  ts: string;
+}
+
+/** GET /sessions/{id} body: the session plus its event log and backfill anchor. */
+export interface SessionDetail extends Session {
+  events: SessionEvent[];
+  lastSeq: number;
+}
+
+/** Final assistant message of a synchronous turn (POST /sessions/{id}/messages). */
+export interface AssistantMessage {
+  seq: number;
+  role: "assistant";
+  agentId: string;
+  content: string;
+  ts: string;
+}
+
+export interface SendMessageResult {
+  assistantMessage: AssistantMessage;
+  usage: UsageRecord;
+}
+
+/** Phase 2 scope is single-agent sessions only (ADR-0001); team modes come later. */
+export interface CreateSessionInput {
+  agentId: string;
+  mode: "single";
+  title?: string;
+}
+
+/** The session/chat operations the UI needs. */
+export interface SessionsBackend {
+  /** Newest-first (API.md §5.2). */
+  list(): Promise<Session[]>;
+  create(input: CreateSessionInput): Promise<Session>;
+  get(id: string): Promise<SessionDetail>;
+  /**
+   * One synchronous turn; may take several seconds. 409 CONFLICT when the
+   * bound agent is unconfigured, 502 PROVIDER_ERROR on upstream failure.
+   */
+  sendMessage(sessionId: string, content: string): Promise<SendMessageResult>;
+}
+
+/** HTTP implementation talking to the sidecar. */
+export function httpSessions(): SessionsBackend {
+  return {
+    list: () =>
+      request<{ sessions: Session[]; total: number }>("/sessions?limit=50").then(
+        (b) => b.sessions,
+      ),
+    create: (input) => request<Session>("/sessions", { method: "POST", json: input }),
+    get: (id) => request<SessionDetail>(`/sessions/${id}`),
+    sendMessage: (id, content) =>
+      request<SendMessageResult>(`/sessions/${id}/messages`, {
+        method: "POST",
+        json: { content },
+      }),
+  };
+}
+
+/** Session-chat backend selector, same demoData rule as getAgentsBackend(). */
+export function getSessionsBackend(): SessionsBackend {
+  if (useConfigStore.getState().demoData) {
+    return getFixtureSessions();
+  }
+  return httpSessions();
+}
+
+/** A chat bubble narrowed from the event log; non-message events arrive in later waves. */
+export interface ChatEntry {
+  seq: number;
+  role: "user" | "assistant";
+  content: string;
+  agentId: string | null;
+  ts: string;
+}
+
+export function toChatEntries(events: SessionEvent[]): ChatEntry[] {
+  return events.flatMap((event) => {
+    if (event.type !== "message.user" && event.type !== "message.assistant") return [];
+    const payload =
+      event.payload && typeof event.payload === "object"
+        ? (event.payload as Record<string, unknown>)
+        : null;
+    if (!payload || typeof payload.content !== "string") return [];
+    return [
+      {
+        seq: event.seq,
+        role: event.type === "message.user" ? "user" : "assistant",
+        content: payload.content,
+        agentId: event.agentId,
+        ts: event.ts,
+      },
+    ];
+  });
 }

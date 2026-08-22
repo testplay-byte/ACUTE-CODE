@@ -1,10 +1,11 @@
 import { Route, Routes } from "react-router";
 import { AppShell } from "./components/shell/AppShell";
 import { AgentsScreen } from "./components/agents/AgentsScreen";
+import { SessionsScreen } from "./components/sessions/SessionsScreen";
 import { PlaceholderPage } from "./pages/PlaceholderPage";
 import { SettingsPage } from "./pages/SettingsPage";
 
-/** Six SPEC F9 screens; Agents is real in Wave 1, the rest are titled placeholders. */
+/** Six SPEC F9 screens; Agents and Sessions are real, the rest are placeholders. */
 export function App() {
   return (
     <Routes>
@@ -30,16 +31,7 @@ export function App() {
           }
         />
         <Route path="agents" element={<AgentsScreen />} />
-        <Route
-          path="sessions"
-          element={
-            <PlaceholderPage
-              title="Sessions"
-              spec="F3"
-              detail="Session list, chat stream and the Kanban task board, fed by the sidecar REST + WS APIs."
-            />
-          }
-        />
+        <Route path="sessions" element={<SessionsScreen />} />
         <Route
           path="usage"
           element={
