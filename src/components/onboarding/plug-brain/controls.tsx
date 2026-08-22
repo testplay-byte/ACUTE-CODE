@@ -50,7 +50,7 @@ export function NumberField({
   });
 
   return (
-    <div className="relative">
+    <div className="relative group/num">
       <input
         type="number"
         inputMode="decimal"
@@ -72,7 +72,13 @@ export function NumberField({
         value={value}
         onChange={(e) => onChange(parseFloat(e.target.value) || 0)}
       />
-      <div className="absolute right-1.5 top-1.5 bottom-1.5 flex flex-col gap-[2px]">
+      {/* Owner round-5: steppers appear on hover/focus only — like the
+          browser's native spinners, not permanently bolted onto the field. */}
+      <div
+        className={`absolute right-1.5 top-1.5 bottom-1.5 flex flex-col gap-[2px] transition-opacity duration-150 ${
+          focused ? "opacity-100" : "opacity-0 group-hover/num:opacity-100"
+        }`}
+      >
         <button
           type="button"
           tabIndex={-1}

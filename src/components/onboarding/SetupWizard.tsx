@@ -66,9 +66,13 @@ export function SetupWizard() {
 
       <main className="relative z-10 flex-1 min-h-0 overflow-hidden">
         {step === 3 ? (
-          // PlugBrainScreen manages its own internal column scroll
-          <div className={`h-full ${WIZARD_CONTAINER}`}>
-            <PlugBrainScreen />
+          // PlugBrainScreen manages its own internal column scroll. Edge
+          // padding + centered container match the other steps (owner round-5:
+          // this screen previously had NO horizontal padding at all).
+          <div className={`h-full ${WIZARD_EDGE}`}>
+            <div className={`h-full ${WIZARD_CONTAINER}`}>
+              <PlugBrainScreen />
+            </div>
           </div>
         ) : (
           <div

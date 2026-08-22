@@ -1,6 +1,7 @@
 import { useOnboardingStore } from "./onboarding-store";
 import { isSetupDone, markSetupDone } from "./providers-api";
 import { useThemeStyles } from "../../lib/use-theme-styles";
+import { ActionButton } from "./ActionButton";
 
 /** Step 2 — ported from the demo's components/onboarding/NeedBrainScreen.tsx.
  * "Skip for now" (brainChoice 'later') dismisses setup: it jumps straight to
@@ -233,30 +234,12 @@ export function NeedBrainScreen() {
           every other step). Bottom padding keeps the pair off the window edge
           even when mt-auto pins the row down (owner directive). */}
       <div className="mt-auto pt-5 md:pt-8 short:pt-3 pb-6 md:pb-8 short:pb-4 flex items-center justify-between">
-        <button
-          onClick={handleBack}
-          className="h-12 px-5 rounded-full border-[1.5px] font-bold text-[14px] hover:opacity-80 transition-opacity cursor-pointer"
-          style={{
-            background: s.card,
-            borderColor: s.border,
-            color: s.text,
-            boxShadow: s.softShadow,
-          }}
-        >
+        <ActionButton variant="secondary" onClick={handleBack}>
           ← Back
-        </button>
-        <button
-          onClick={handleNext}
-          className="h-12 px-7 rounded-full font-bold text-[14px] flex items-center gap-2 hover:scale-[1.02] active:scale-[0.98] transition-transform cursor-pointer border-[1.5px]"
-          style={{
-            backgroundColor: s.accent,
-            color: s.accentText,
-            borderColor: s.accent,
-            boxShadow: s.bentoShadow,
-          }}
-        >
+        </ActionButton>
+        <ActionButton variant="primary" onClick={handleNext}>
           {isNow ? "Configure Model →" : "Skip to Finish →"}
-        </button>
+        </ActionButton>
       </div>
     </div>
   );

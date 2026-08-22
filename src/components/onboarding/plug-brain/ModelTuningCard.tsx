@@ -93,33 +93,11 @@ export function ModelTuningCard() {
             </div>
           </div>
 
-          {/* Discrete context buttons */}
-          <div className="flex items-center gap-2">
-            {CONTEXT_OPTIONS.map((opt) => {
-              const isActive = activeContext === opt.value;
-              return (
-                <button
-                  key={opt.value}
-                  type="button"
-                  className="flex-1 h-10 rounded-[12px] border-[1.5px] text-[12px] font-bold cursor-pointer transition-all"
-                  style={{
-                    background: isActive ? s.accent : s.card,
-                    borderColor: isActive ? s.accent : s.border,
-                    color: isActive ? s.accentText : s.text,
-                    boxShadow: isActive ? "none" : s.softShadow,
-                  }}
-                  onClick={() => handleContextSelect(opt.value)}
-                >
-                  {opt.label}
-                </button>
-              );
-            })}
-          </div>
-
-          {/* Manual context window — the MANUAL toggle reveals a free numeric
-              field so any exact token count can be configured */}
-          {contextManual && (
-            <div className="mt-3 flex items-center gap-3">
+          {/* AUTO → preset chips only · MANUAL → free token entry only
+              (owner round-5: the two modes must be genuinely different,
+              not the same chips plus an extra input) */}
+          {contextManual ? (
+            <div className="flex items-center gap-3">
               <div className="w-[180px] shrink-0">
                 <NumberField
                   value={contextWindow}
@@ -130,8 +108,30 @@ export function ModelTuningCard() {
                 />
               </div>
               <span className="text-[11px] font-medium" style={{ color: s.textTertiary }}>
-                Custom tokens — presets stay clickable above.
+                Exact tokens — switch to AUTO for quick presets.
               </span>
+            </div>
+          ) : (
+            <div className="flex items-center gap-2">
+              {CONTEXT_OPTIONS.map((opt) => {
+                const isActive = activeContext === opt.value;
+                return (
+                  <button
+                    key={opt.value}
+                    type="button"
+                    className="flex-1 h-10 rounded-[12px] border-[1.5px] text-[12px] font-bold cursor-pointer transition-all"
+                    style={{
+                      background: isActive ? s.accent : s.card,
+                      borderColor: isActive ? s.accent : s.border,
+                      color: isActive ? s.accentText : s.text,
+                      boxShadow: isActive ? "none" : s.softShadow,
+                    }}
+                    onClick={() => handleContextSelect(opt.value)}
+                  >
+                    {opt.label}
+                  </button>
+                );
+              })}
             </div>
           )}
 

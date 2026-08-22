@@ -44,6 +44,20 @@ export const useConfigStore = create<ConfigState>()(
       name: "acute-code.config",
       version: 1,
       partialize: (s) => ({ baseUrl: s.baseUrl, demoData: s.demoData }),
+      // Explicit dev wiring (VITE_ACUTE_BASE_URL / VITE_ACUTE_TOKEN on the
+      // vite process) outranks stale persisted values from earlier sessions —
+      // otherwise a leftover localStorage baseUrl points the UI at a dead
+      // port no matter how the dev server was started.
+      merge: (persisted, current) => {
+        const p = (persisted ?? {}) as Partial<ConfigState>;
+        const envOverride: Partial<ConfigState> = {};
+        if (env.VITE_ACUTE_BASE_URL) {
+          envOverride.baseUrl = env.VITE_ACUTE_BASE_URL;
+          envOverride.demoData = false;
+        }
+        if (env.VITE_ACUTE_TOKEN) envOverride.token = env.VITE_ACUTE_TOKEN;
+        return { ...current, ...p, ...envOverride };
+      },
     },
   ),
 );

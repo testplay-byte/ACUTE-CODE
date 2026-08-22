@@ -26,7 +26,7 @@ export function PlugBrainScreen() {
   const canProceed = apiKey.length > 6 && modelId.length > 2;
 
   return (
-    <div className="h-full flex flex-col pt-2 md:pt-4 short:pt-1">
+    <div className="h-full flex flex-col pt-2 md:pt-4 short:pt-1 pb-6 md:pb-8 short:pb-4">
       {/* Header row */}
       <div className="flex flex-wrap items-end justify-between gap-3 shrink-0">
         <div>
@@ -54,9 +54,10 @@ export function PlugBrainScreen() {
       {/* Two-region grid — fills remaining height. Owner directive: LEFT half
           scrolls internally; RIGHT half (model summary + actions) does NOT
           scroll — it is compact enough to fit and top-aligns with breathing
-          room inset from the right edge (lg:pr / 2xl:pr create that empty
-          area instead of hugging the window border). */}
-      <div className="mt-4 md:mt-6 short:mt-3 flex-1 min-h-0 grid gap-5 md:gap-8 lg:grid-cols-[minmax(0,1fr)_clamp(320px,25vw,430px)] lg:pr-4 xl:pr-10">
+          room inset from the right edge (lg:pr / xl:pr create that empty
+          area instead of hugging the window border). Rail width 360→540px
+          (owner round-5: the right side was too narrow). */}
+      <div className="mt-4 md:mt-6 short:mt-3 flex-1 min-h-0 grid gap-5 md:gap-8 lg:grid-cols-[minmax(0,1fr)_clamp(360px,30vw,540px)] lg:pr-2 xl:pr-8">
         {/* LEFT COLUMN (scrolls internally) */}
         <div className={`min-h-0 overflow-y-auto overflow-x-clip pr-1 md:pr-2 pb-6 flex flex-col gap-4 md:gap-5 custom-scrollbar ${s.isDark ? "dark-scroll" : ""}`}>
           {/* Provider card */}

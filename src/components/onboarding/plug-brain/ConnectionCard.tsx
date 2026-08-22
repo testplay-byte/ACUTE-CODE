@@ -31,7 +31,10 @@ export function ConnectionCard() {
   const modelsQuery = useQuery({
     queryKey: ["onboarding.models", providerId],
     queryFn: () => fetchModels(providerId),
-    enabled: providerId !== "",
+    // Owner directive: the catalog search starts ONLY once the user has
+    // entered an API key — never on provider selection alone (it just failed
+    // with "Failed to fetch" before).
+    enabled: providerId !== "" && apiKey.length > 6,
     staleTime: 60_000,
     retry: 1,
   });
@@ -284,21 +287,23 @@ export function ConnectionCard() {
                   boxShadow: s.bentoShadow,
                 }}
               >
-                {modelsQuery.isPending && (
+                {modelsQuery.isFetching && (
                   <div className="py-5 text-center text-[12px] font-medium" style={{ color: s.textTertiary }}>
                     Loading models…
                   </div>
                 )}
-                {!modelsQuery.isPending && models.length === 0 && (
+                {!modelsQuery.isFetching && models.length === 0 && (
                   <div className="py-5 text-center text-[12px] font-medium px-3" style={{ color: s.textTertiary }}>
-                    {modelsQuery.isError
-                      ? "Catalog unavailable — type any model id by hand."
-                      : providerId
-                        ? "No catalog for this provider yet — type any model id."
-                        : "Pick a provider first."}
+                    {apiKey.length <= 6
+                      ? "Enter your API key above to load this provider's model list."
+                      : modelsQuery.isError
+                        ? "Catalog unavailable — type any model id by hand."
+                        : providerId
+                          ? "No catalog for this provider yet — type any model id."
+                          : "Pick a provider first."}
                   </div>
                 )}
-                {!modelsQuery.isPending && models.length > 0 && filteredModels.length === 0 && (
+                {!modelsQuery.isFetching && models.length > 0 && filteredModels.length === 0 && (
                   <div className="py-5 text-center text-[12px] font-medium" style={{ color: s.textTertiary }}>
                     No catalog matches “{modelSearch}” — press Enter to keep it.
                   </div>

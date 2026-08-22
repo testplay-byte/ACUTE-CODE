@@ -2,6 +2,7 @@ import { useThemeStore } from "../../lib/theme-store";
 import { COMING_SOON_THEME, getContrastText, THEMES, type ThemeColors } from "../../lib/themes";
 import { useThemeStyles } from "../../lib/use-theme-styles";
 import { useOnboardingStore } from "./onboarding-store";
+import { ActionButton } from "./ActionButton";
 
 /* ── SVG Icons ────────────────────────────────────────── */
 function SunIcon({ className }: { className?: string }) {
@@ -253,30 +254,12 @@ export function PickFlavorScreen() {
           {/* BUTTONS — flow directly under the grid inside the left column
               (owner directive: never glued to the window bottom edge) */}
           <div className="mt-8 flex items-center justify-between gap-3">
-            <button
-              onClick={() => setStep(0)}
-              className="h-12 px-5 rounded-full border-[1.5px] font-bold text-[14px] hover:opacity-80 transition-opacity cursor-pointer"
-              style={{
-                background: s.card,
-                borderColor: s.border,
-                color: s.text,
-                boxShadow: s.softShadow,
-              }}
-            >
+            <ActionButton variant="secondary" onClick={() => setStep(0)}>
               ← Back
-            </button>
-            <button
-              onClick={() => setStep(2)}
-              className="h-12 px-7 rounded-full font-bold text-[14px] flex items-center gap-2 hover:scale-[1.02] active:scale-[0.98] transition-transform cursor-pointer border-[1.5px]"
-              style={{
-                background: s.accent,
-                color: s.accentText,
-                borderColor: s.accent,
-                boxShadow: s.bentoShadow,
-              }}
-            >
-              Continue → <span className="opacity-60 text-[11px]">↵</span>
-            </button>
+            </ActionButton>
+            <ActionButton variant="primary" onClick={() => setStep(2)} hint="↵">
+              Continue →
+            </ActionButton>
           </div>
         </div>
 

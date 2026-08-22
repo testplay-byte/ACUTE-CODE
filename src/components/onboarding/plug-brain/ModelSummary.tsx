@@ -4,6 +4,7 @@ import { useOnboardingStore } from "../onboarding-store";
 import { fetchProviders, isTauri, markSetupDone, storeProviderKey, withClientDefaults } from "../providers-api";
 import { CONTEXT_LABELS, estimateCost, formatContext, formatCost, REASONING_LEVELS } from "../onboarding-types";
 import { useThemeStyles } from "../../../lib/use-theme-styles";
+import { ActionButton } from "../ActionButton";
 
 function formatContextLabel(val: number): string {
   if (CONTEXT_LABELS[val]) return CONTEXT_LABELS[val];
@@ -258,41 +259,17 @@ export function ModelSummary({ onBack, onSave }: { onBack: () => void; onSave: (
 
       {/* --- BUTTONS --- */}
       <div className="mt-2 flex items-center gap-3">
-        <button
-          type="button"
-          className="h-12 px-5 rounded-full border-[1.5px] font-bold text-[14px] flex-1 hover:opacity-80 transition-opacity cursor-pointer"
-          style={{
-            background: s.card,
-            borderColor: s.border,
-            color: s.text,
-            boxShadow: s.softShadow,
-          }}
-          onClick={onBack}
-        >
+        <ActionButton variant="secondary" onClick={onBack}>
           ← Back
-        </button>
-        <button
-          type="button"
-          className="h-12 px-7 rounded-full font-bold text-[14px] flex-1 cursor-pointer transition-all border-[1.5px] disabled:cursor-not-allowed disabled:opacity-60"
-          disabled={!canProceed || saving}
-          style={
-            canProceed && !saving
-              ? {
-                  backgroundColor: s.accent,
-                  color: s.accentText,
-                  borderColor: s.accent,
-                  boxShadow: s.bentoShadow,
-                }
-              : {
-                  backgroundColor: s.subtle,
-                  color: s.textTertiary,
-                  borderColor: s.border,
-                }
-          }
+        </ActionButton>
+        <ActionButton
+          variant="primary"
           onClick={handleSave}
+          disabled={!canProceed || saving}
+          ariaLabel={saving ? "Storing key" : "Save and continue"}
         >
           {saving ? "Storing key…" : "Save & Continue →"}
-        </button>
+        </ActionButton>
       </div>
     </div>
   );

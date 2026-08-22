@@ -199,6 +199,29 @@ export function buildServer(options: ServerOptions): FastifyInstance {
   const chat = options.chat ?? aiSdkChat;
   const app = Fastify();
 
+  // CORS: loopback-only product, but the webview (tauri.localhost) and the
+  // dev vite server (localhost:5173) are cross-origin callers — without
+  // these headers the browser blocks every response ("Failed to fetch").
+  // Strict origin allowlist; unknown origins get no CORS headers.
+  const CORS_ORIGINS = new Set([
+    "http://tauri.localhost",
+    "https://tauri.localhost",
+    "tauri://localhost",
+    "http://localhost:5173",
+    "http://127.0.0.1:5173",
+  ]);
+  app.addHook("onRequest", async (request, reply) => {
+    const origin = request.headers.origin;
+    if (typeof origin === "string" && CORS_ORIGINS.has(origin)) {
+      reply.header("access-control-allow-origin", origin);
+      reply.header("access-control-allow-headers", "authorization, content-type");
+      reply.header("access-control-allow-methods", "GET, POST, PATCH, DELETE, OPTIONS");
+      if (request.method === "OPTIONS") {
+        return reply.code(204).send();
+      }
+    }
+  });
+
   // ARCHITECTURE §2.3/§7: every route except GET /health requires the bearer token.
   app.addHook("preHandler", async (request, reply) => {
     if (isHealthRequest(request.method, request.url)) return;
