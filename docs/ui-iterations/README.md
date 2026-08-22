@@ -33,6 +33,14 @@ UI stands and what is still open.
 - [`round-03.md`](round-03.md) — owner verdict: PickFlavor & PlugBrain rejected, NeedBrain approved
 - [`round-04.md`](round-04.md) — PickFlavor demo-anatomy rebuild (approved) + NeedBrain padding
 - [`round-05.md`](round-05.md) — primary-button polish, PlugBrain full pass, live-key verification
+- [`round-06.md`](round-06.md) — persistent dev backend (`pnpm dev:full`): fixes models list & test connection in the browser
+
+## Running the UI with a live backend (dev)
+
+Plain `pnpm dev` = UI only (no sidecar — model catalog and connection tests
+cannot work). For the full live workflow run **`pnpm dev:full`**: sidecar on
+127.0.0.1:5178 with the OpenRouter key from Credential Manager + vite. See
+[`round-06.md`](round-06.md).
 
 ## Verification method (per round)
 

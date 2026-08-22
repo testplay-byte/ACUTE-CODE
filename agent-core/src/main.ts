@@ -3,6 +3,10 @@
  * with ACUTE_TOKEN (bearer auth) and ACUTE_DB_PATH (SQLite location) in the
  * environment (ARCHITECTURE §2/§7); provider keys arrive as
  * ACUTE_PROVIDER_<ID> vars held only in the in-memory keyring.
+ *
+ * ACUTE_PORT (optional): bind a fixed port instead of an ephemeral one —
+ * used only by the dev workflow (scripts/dev.mjs) so the browser UI can
+ * expect a deterministic address; the shell always uses the ready-line port.
  */
 import { startServer } from "./server.js";
 
@@ -13,7 +17,8 @@ if (!token || !dbPath) {
   process.exit(1);
 }
 
-startServer({ port: 0, token, dbPath }).catch((error: unknown) => {
+const fixedPort = Number(process.env.ACUTE_PORT ?? 0);
+startServer({ port: Number.isInteger(fixedPort) && fixedPort > 0 ? fixedPort : 0, token, dbPath }).catch((error: unknown) => {
   console.error("sidecar failed to start:", error);
   process.exit(1);
 });

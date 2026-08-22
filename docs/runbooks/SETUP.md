@@ -28,7 +28,11 @@ Rationale for deferral: nothing in Phases 0–1 research/design compiles Rust; t
 ```bash
 pnpm install          # workspace deps
 pnpm verify           # lint + typecheck + test + build + license audit (local gate = CI)
-pnpm dev              # Vite UI dev server on 5173 (UI only)
+pnpm dev              # Vite UI dev server on 5173 (UI only — NO sidecar)
+pnpm dev:full         # sidecar (127.0.0.1:5178, OpenRouter key from Credential
+                      #   Manager, stable .dev/acute.db) + vite — REQUIRED for
+                      #   the model catalog, connection test, and any live data
+                      #   in a browser; one Ctrl+C stops both
 pnpm build            # shared + agent-core dist + frontend dist (the desktop app serves ../dist)
 cd src-tauri && cargo run   # launch the desktop app; the shell spawns the sidecar itself
 cargo check --manifest-path src-tauri/Cargo.toml   # Rust-only check (heavy Rust builds belong on CI, ADR-0012)
