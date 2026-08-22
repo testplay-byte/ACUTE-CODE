@@ -9,7 +9,13 @@ import Fastify, { type FastifyError, type FastifyInstance } from "fastify";
 import type { MemoryPolicy, RunMode } from "shared";
 import { aiSdkChat, type ChatFn } from "./agents/chat.js";
 import { runSingleAgentTurn } from "./agents/runtime.js";
-import { ProviderKeyring, fetchProviderModels, listProviderViews, resolveProvider } from "./providers/registry.js";
+import {
+  ProviderKeyring,
+  fetchProviderModels,
+  listProviderViews,
+  resolveProvider,
+  testProviderConnection,
+} from "./providers/registry.js";
 import {
   RESERVED_PROVIDER_IDS,
   createProviderRecord,
@@ -423,6 +429,55 @@ export function buildServer(options: ServerOptions): FastifyInstance {
           // else still maps to the same envelope without internals.
           const message =
             error instanceof Error ? error.message : `provider '${id}' models fetch failed`;
+          return reply
+            .code(502)
+            .send(errorBody("PROVIDER_ERROR", message, { providerId: id }));
+        }
+      });
+
+      // Wizard connection-test pill (API.md §8.6, cheap variant): proves the
+      // provider exists, the keyring holds a key, and the key is accepted
+      // upstream — without spending tokens on a completion.
+      scope.post("/providers/:id/test", async (request, reply) => {
+        const { id } = request.params as Record<string, string>;
+        const provider = resolveProvider(db, id);
+        if (provider === undefined) {
+          return reply.code(404).send(errorBody("NOT_FOUND", `no provider with id ${id}`));
+        }
+        if (!keyring.has(id)) {
+          return reply.code(409).send(
+            errorBody(
+              "CONFLICT",
+              `no API key stored for provider '${id}' — save one in Windows Credential Manager before testing`,
+              { providerId: id },
+            ),
+          );
+        }
+        let model: string | undefined;
+        const body: unknown = request.body;
+        if (body !== undefined && body !== null) {
+          if (typeof body !== "object" || Array.isArray(body)) {
+            return reply
+              .code(400)
+              .send(errorBody("VALIDATION", "body must be a JSON object", { field: "body" }));
+          }
+          const rawModel = (body as Record<string, unknown>).model;
+          if (rawModel !== undefined) {
+            if (typeof rawModel !== "string" || rawModel.trim() === "") {
+              return reply.code(400).send(
+                errorBody("VALIDATION", "model must be a non-empty string", {
+                  field: "body.model",
+                }),
+              );
+            }
+            model = rawModel;
+          }
+        }
+        try {
+          return await testProviderConnection(keyring, provider, model);
+        } catch (error) {
+          const message =
+            error instanceof Error ? error.message : `provider '${id}' connection test failed`;
           return reply
             .code(502)
             .send(errorBody("PROVIDER_ERROR", message, { providerId: id }));

@@ -9,16 +9,13 @@
  */
 import type Database from "better-sqlite3";
 import {
-  createProviderRecord,
   getProviderRecord,
   listProviderRecords,
-  providerRecordIdExists,
   type ProviderRecord,
 } from "../storage/providers.js";
 
 export type SqliteDatabase = Database.Database;
 
-const OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1";
 const MODEL_CACHE_TTL_MS = 5 * 60 * 1000;
 const MODEL_FETCH_TIMEOUT_MS = 10_000;
 
@@ -56,24 +53,16 @@ export class ProviderKeyring {
   }
 }
 
-/** The built-in openrouter row is created lazily on first use — nothing is seeded. */
-function ensureOpenrouter(db: SqliteDatabase): void {
-  if (providerRecordIdExists(db, "openrouter")) return;
-  createProviderRecord(db, { id: "openrouter", name: "OpenRouter", baseUrl: OPENROUTER_BASE_URL });
-}
-
 function toView(record: ProviderRecord, keyring: ProviderKeyring): ProviderView {
   return { ...record, hasKey: keyring.has(record.id) };
 }
 
+/** The openrouter row is seeded by openDatabase (storage/providers.ts), so this is a plain read. */
 export function listProviderViews(db: SqliteDatabase, keyring: ProviderKeyring): ProviderView[] {
-  ensureOpenrouter(db);
   return listProviderRecords(db).map((record) => toView(record, keyring));
 }
 
-/** Resolves a provider id to its row, materializing the openrouter row on demand. */
 export function resolveProvider(db: SqliteDatabase, id: string): ProviderRecord | undefined {
-  if (id === "openrouter") ensureOpenrouter(db);
   return getProviderRecord(db, id);
 }
 
@@ -166,4 +155,52 @@ export async function fetchProviderModels(
   }
   modelCache.set(id, { expiresAt: Date.now() + MODEL_CACHE_TTL_MS, models });
   return { models, cached: false };
+}
+
+/** Result of the wizard's usability probe (API.md §8.6): `model` echoes the requested one. */
+export interface ProviderTestResult {
+  ok: boolean;
+  latencyMs: number;
+  model?: string;
+}
+
+/**
+ * Minimal authenticated usability probe behind POST /providers/:id/test: a
+ * cheap `GET {baseUrl}/models` WITH the key (no tokens spent). Deliberately
+ * bypasses the model cache and never writes it; failures surface as
+ * ProviderFetchError with key-scrubbed messages (route maps to 502).
+ * The caller has already checked provider existence (404) and key presence
+ * (409); the empty-header fallback keeps this function safe standalone.
+ */
+export async function testProviderConnection(
+  keyring: ProviderKeyring,
+  provider: ProviderRecord,
+  model?: string,
+): Promise<ProviderTestResult> {
+  if (provider.baseUrl === null) {
+    throw new ProviderFetchError(`provider '${provider.id}' has no baseUrl to test`);
+  }
+  const apiKey = keyring.get(provider.id);
+  const endpoint = `${provider.baseUrl.replace(/\/+$/, "")}/models`;
+  const startedAt = Date.now();
+  let response: Response;
+  try {
+    response = await fetch(endpoint, {
+      headers: apiKey === undefined ? {} : { authorization: `Bearer ${apiKey}` },
+      signal: AbortSignal.timeout(MODEL_FETCH_TIMEOUT_MS),
+    });
+  } catch (error) {
+    throw new ProviderFetchError(scrub(`GET ${endpoint} failed: ${errorMessage(error)}`, apiKey));
+  }
+  const latencyMs = Date.now() - startedAt;
+  if (!response.ok) {
+    throw new ProviderFetchError(`GET ${endpoint} answered HTTP ${response.status}`);
+  }
+  // Drain the body so the socket is released — only the status proves reachability.
+  try {
+    await response.arrayBuffer();
+  } catch {
+    // A truncated body after HTTP 200 still proves the connection worked.
+  }
+  return { ok: true, latencyMs, ...(model === undefined ? {} : { model }) };
 }

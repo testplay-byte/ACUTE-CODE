@@ -1,6 +1,7 @@
 /**
  * SQLite entry point (ADR-0007): better-sqlite3, WAL mode, numbered plain-SQL
- * migrations recorded in schema_migrations, one-time template seeding.
+ * migrations recorded in schema_migrations, one-time template + built-in
+ * provider seeding.
  * This module (and the repositories next to it) is the only code that issues SQL.
  */
 import { mkdirSync, readdirSync, readFileSync } from "node:fs";
@@ -8,6 +9,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import Database from "better-sqlite3";
 import { TOOL_NAMES, type Agent } from "./agents.js";
+import { seedBuiltinProviders } from "./providers.js";
 
 export type SqliteDatabase = Database.Database;
 
@@ -140,7 +142,10 @@ function seedTemplates(db: SqliteDatabase): void {
   })();
 }
 
-/** Opens (creating if needed) the database, applies pending migrations, seeds templates once. */
+/**
+ * Opens (creating if needed) the database, applies pending migrations, seeds
+ * templates and the built-in provider rows (openrouter, SPEC §F4) once.
+ */
 export function openDatabase(path: string): SqliteDatabase {
   // The shell normally creates the app-data dir; be robust when spawned standalone.
   mkdirSync(dirname(path), { recursive: true });
@@ -150,5 +155,6 @@ export function openDatabase(path: string): SqliteDatabase {
   db.pragma("foreign_keys = ON");
   applyMigrations(db);
   seedTemplates(db);
+  seedBuiltinProviders(db);
   return db;
 }

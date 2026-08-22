@@ -1,8 +1,8 @@
 /**
  * Provider registry repository (API.md §8). Rows only — API keys never live in
- * this table (ARCHITECTURE §7: env-injected keyring held in memory). The
- * built-in openrouter row is created lazily by the registry layer on first
- * use, not seeded here.
+ * this table (ARCHITECTURE §7: env-injected keyring held in memory). Built-in
+ * rows are seeded once per database open (see seedBuiltinProviders), so the
+ * primary dev provider is visible before any request.
  */
 import type Database from "better-sqlite3";
 
@@ -18,6 +18,46 @@ export const RESERVED_PROVIDER_IDS: readonly string[] = [
 
 /** The only provider kind registerable through the API in v1. */
 export const CUSTOM_PROVIDER_KIND = "openai-compatible";
+
+/** Row spec for a built-in provider seeded at openDatabase (SPEC §F4). */
+interface BuiltinProviderSeed {
+  id: string;
+  name: string;
+  baseUrl: string;
+}
+
+/**
+ * Built-ins that must exist as rows on every database. OpenRouter is the
+ * primary dev provider (SPEC §F4): seeding it here — not lazily on first use —
+ * guarantees `GET /providers` lists it immediately after a fresh boot. Ids are
+ * reserved, so custom rows can never collide with these.
+ */
+const BUILTIN_PROVIDER_SEEDS: readonly BuiltinProviderSeed[] = [
+  { id: "openrouter", name: "OpenRouter", baseUrl: "https://openrouter.ai/api/v1" },
+];
+
+/**
+ * Inserts any built-in provider whose row is missing; a no-op for ids already
+ * present, so repeated opens never duplicate rows (providers.id is the PK).
+ */
+export function seedBuiltinProviders(db: SqliteDatabase): void {
+  const insert = db.prepare(
+    `INSERT INTO providers (id, name, kind, base_url, enabled, created_at)
+     VALUES (@id, @name, @kind, @baseUrl, 1, @createdAt)`,
+  );
+  db.transaction(() => {
+    for (const seed of BUILTIN_PROVIDER_SEEDS) {
+      if (providerRecordIdExists(db, seed.id)) continue;
+      insert.run({
+        id: seed.id,
+        name: seed.name,
+        kind: CUSTOM_PROVIDER_KIND,
+        baseUrl: seed.baseUrl,
+        createdAt: new Date().toISOString(),
+      });
+    }
+  })();
+}
 
 export interface ProviderRecord {
   id: string;
