@@ -1,6 +1,7 @@
 # Development Environment Setup (ACUTE-CODE)
 
 Status: Phase 0 snapshot — updated each phase by the Scribe.
+(The toolchain rows below are stale as of Phase 2: Rust stable-msvc and VS Build Tools are installed — see the repo `HANDOFF.md` §8 for the current environment.)
 
 ## Machine state (verified 2026-08-21)
 
@@ -22,13 +23,17 @@ Status: Phase 0 snapshot — updated each phase by the Scribe.
 
 Rationale for deferral: nothing in Phases 0–1 research/design compiles Rust; the toolchain is only needed at the first native build, and rustup without MSVC produces a half-broken toolchain.
 
-## Everyday commands (from Phase 1 onward)
+## Everyday commands
 
 ```bash
 pnpm install          # workspace deps
-pnpm dev              # frontend + sidecar dev servers
-pnpm test / pnpm lint / pnpm typecheck
-pnpm tauri dev        # shell + UI + sidecar, hot reload
+pnpm verify           # lint + typecheck + test + build + license audit (local gate = CI)
+pnpm dev              # Vite UI dev server on 5173 (UI only)
+pnpm build            # shared + agent-core dist + frontend dist (the desktop app serves ../dist)
+cd src-tauri && cargo run   # launch the desktop app; the shell spawns the sidecar itself
+cargo check --manifest-path src-tauri/Cargo.toml   # Rust-only check (heavy Rust builds belong on CI, ADR-0012)
 ```
+
+There is no `pnpm tauri` CLI script yet; the app is launched with `cargo run` from `src-tauri/`.
 
 API keys: never in files or env scripts committed to the repo. At Phase 2 the owner's OpenAI-compatible keys are entered into Windows Credential Manager directly by the owner.

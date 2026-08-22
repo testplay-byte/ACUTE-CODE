@@ -10,9 +10,10 @@
     "lint": "eslint .",
     "typecheck": "tsc --noEmit -p tsconfig.json",
     "test": "vitest run",
+    "test:e2e": "vitest run --config tests/e2e/vitest.config.ts",
     "build": "pnpm --filter shared run build && pnpm --filter agent-core run build && vite build",
     "license:audit": "node scripts/license-audit.mjs",
-    "verify": "pnpm lint && pnpm typecheck && pnpm test && pnpm build && pnpm license:audit"
+    "verify": "pnpm lint && pnpm typecheck && pnpm test && pnpm build && pnpm test:e2e && pnpm license:audit"
   },
   "dependencies": {
     "@radix-ui/react-dialog": "^1.1.23",

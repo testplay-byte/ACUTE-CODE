@@ -18,6 +18,7 @@ import {
   slugifyProviderId,
 } from "./storage/providers.js";
 import { createSession, getSession, lastSessionSeq, listSessionEvents, listSessions } from "./storage/sessions.js";
+import { getUsageSummary } from "./storage/usage.js";
 import { openDatabase, type SqliteDatabase } from "./storage/db.js";
 import {
   TOOL_NAMES,
@@ -537,6 +538,25 @@ export function buildServer(options: ServerOptions): FastifyInstance {
         return reply
           .code(outcome.status)
           .send(errorBody(outcome.code, outcome.message, outcome.details));
+      });
+
+      // ---- Usage summary (SPEC §F7 dashboard chart) ----
+
+      scope.get("/usage/summary", async (request, reply) => {
+        const query = request.query as Record<string, string | undefined>;
+        let days = 14;
+        if (query.days !== undefined) {
+          const parsed = Number(query.days);
+          if (!Number.isInteger(parsed) || parsed < 1 || parsed > 90) {
+            return reply.code(400).send(
+              errorBody("VALIDATION", "days must be an integer between 1 and 90", {
+                field: "query.days",
+              }),
+            );
+          }
+          days = parsed;
+        }
+        return getUsageSummary(db, { days });
       });
     },
     { prefix: "/api/v1" },

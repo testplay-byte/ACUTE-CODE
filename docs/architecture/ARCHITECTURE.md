@@ -2,7 +2,7 @@
 
 | | |
 |---|---|
-| **Status** | PROPOSED — Phase 1 deliverable, awaiting owner approval |
+| **Status** | ACCEPTED — Phase 1 deliverable, owner-approved · module map reconciled with Phase 2 reality (2026-08-22) |
 | **Date** | 2026-08-21 |
 | **Inputs** | `docs/specs/SPEC.md` (product truth) · `docs/research/*` (nine verified reference analyses) · ADRs 0001–0005 |
 | **Companion docs** | `docs/architecture/api/API.md` (REST + WS contracts) · ADRs 0006–0011 |
@@ -135,10 +135,9 @@ Owns the window, process lifecycle, and OS credentials. Contains **no** product 
 
 | Module | Responsibility |
 |---|---|
-| `src-tauri/src/main.rs` | App entry: single-instance guard, window creation, supervisor start, teardown wiring. |
-| `src-tauri/src/supervisor/` | Sidecar lifecycle state machine: spawn (token mint, env assembly), ready-line/stderr parsing, health polling, restart-once policy, diagnostics event file, graceful stop + `taskkill` fallback (§2). |
-| `src-tauri/src/credentials/` | The only reader/writer of Windows Credential Manager: reads provider keys at spawn (DPAPI at rest), exposes Tauri command `store_provider_key(providerId, keyName, value)` for the Settings UI, and pushes key updates to the running sidecar via the internal handoff endpoint (§7.3). Uses the `keyring` crate (MIT OR Apache-2.0). |
-| `src-tauri/src/commands/` | Thin Tauri invoke surface for the webview: `sidecar_endpoint()`, `store_provider_key()`, `delete_provider_key()`, `open_path_in_explorer()`, window controls. Nothing else — the frontend reaches the sidecar over HTTP, not through Tauri IPC. |
+| `src-tauri/src/main.rs` | Binary entry; `lib.rs` wires plugins, starts the sidecar on setup, and tears it down on app exit. |
+| `src-tauri/src/sidecar.rs` | Sidecar lifecycle state machine, currently in one file: spawn (256-bit token mint via `getrandom`, env assembly incl. Credential-Manager provider-key injection — `keyring` reads `ACUTE-CODE/provider/<id>` and exports `ACUTE_PROVIDER_<ID>`, §7.3), stdout ready-line (`ACUTE_READY {port}`) parsing, health polling, graceful stop + `taskkill /T /F` fallback (§2). Also hosts today's whole Tauri invoke surface: `sidecar_info()`, `ping_sidecar()`. |
+| `src-tauri/src/supervisor/` · `credentials/` · `commands/` *(planned split)* | Future home of the same responsibilities once Settings key entry (`store_provider_key()`, `delete_provider_key()`), key-update push to the running sidecar, and window controls arrive — purposes stay as declared here; files move out of `sidecar.rs`. |
 | `src-tauri/tauri.conf.json` | Window config, external-binary registration of the sidecar bundle (ADR-0009), CSP allowing only the sidecar origin. |
 
 ### 3.2 `src/` — React frontend
@@ -158,8 +157,8 @@ A pure client of the sidecar API (opencode thin-client pattern). No business rul
 | Module | Responsibility |
 |---|---|
 | `server/` | Fastify app assembly (ADR-0006): REST routes per resource, `/ws` gateway (auth frame, subscriptions, fan-out), bearer-token middleware, uniform error envelope, request logging with secret redaction, graceful shutdown hook. Routes are thin: validate → call a module → return. |
-| `providers/` | The LLM egress point and the **only** code allowed to open network connections to model APIs. Wraps Vercel AI SDK (Apache-2.0): native adapters (Anthropic, OpenAI, Google) + OpenAI-compatible escape hatch; model catalog fetch/cache; vision-model routing (global default + per-agent override, SPEC §F4); per-request telemetry emission into `usage_events` with cost provenance (§6.5); recorded-fixture test mode for native adapters. Keys live in an in-memory vault populated at spawn. |
-| `agents/` | Agent-as-data (SPEC §F2): load/validate agent YAML/JSON definitions; template registry (Planner, Researcher, Coder, Reviewer, Tester — seeded, never hard-coded); per-agent context assembly — system prompt tiers: stable identity+tools, then memory snapshot (frozen per session), then skills index (hermes prompt tiers); the runner: one agent's LLM↔tool loop with abort propagation. |
+| `providers/` | The LLM egress point and the **only** code allowed to open network connections to model APIs. Wraps Vercel AI SDK (Apache-2.0): native adapters (Anthropic, OpenAI, Google) + OpenAI-compatible escape hatch; model catalog fetch/cache; vision-model routing (global default + per-agent override, SPEC §F4); per-request telemetry emission into `usage_events` with cost provenance (§6.5); recorded-fixture test mode for native adapters. Keys live in an in-memory vault populated at spawn. **In place after Phase 2** (ADR-0013): `registry.ts` — env-borne keyring (`ACUTE_PROVIDER_<ID>`, never persisted, only `hasKey` ever leaves), model listing with a 5-minute cache, secret scrubbing on errors; the SDK call seam is `agents/chat.ts` (`aiSdkChat` via `@ai-sdk/openai-compatible`, live through OpenRouter). Native adapters stay fixture-tested until their keys exist. |
+| `agents/` | Agent-as-data (SPEC §F2): load/validate agent YAML/JSON definitions; template registry (Planner, Researcher, Coder, Reviewer, Tester — seeded, never hard-coded); per-agent context assembly — system prompt tiers: stable identity+tools, then memory snapshot (frozen per session), then skills index (hermes prompt tiers); the runner: one agent's LLM↔tool loop with abort propagation. **In place after Phase 2:** `chat.ts` (the AI SDK seam) + `runtime.ts` (single-agent turn: append user event → provider call → assistant event + usage row; failed turns keep their seq — ADR-0010 semantics). The multi-agent runner loop is Phase 3+. |
 | `orchestration/` | Session engine for the three run modes (ADR-0001): run coordinator, typed pub/sub message bus (metagpt), Kanban task-board state, `delegate_task` tool implementation (kilocode/openhands delegation-as-tool: child gets isolated context, returns a summary), topology-as-data loader (roles/wiring stored as JSON, not code), global 5-slot runner semaphore with queueing (ADR-0011). |
 | `tools/` | Tool registry and implementations: every tool declares `{name, description, JSON-Schema params, permission category}`; dispatch is the single execution choke point routed through `approvals/` (§7). Built-ins: file read/write/edit (workspace-scoped; edit ladder with structured errors per aider), shell exec, web search, code execution. Enforces the <25-tools guidance (goose). |
 | `approvals/` | The security boundary (SPEC §F6): policy evaluation in fixed denylist-supreme order (§7.2); pending-request store; round-trip coordination with `server/` (parked promise per request, resolved by the decision endpoint); remembered grants (project-scoped, `tool + hash(args)` key, non-destructive only — goose); audit writer (every decision, every category, no exceptions); configurable expiry that fails closed. |
@@ -167,7 +166,8 @@ A pure client of the sidecar API (opencode thin-client pattern). No business rul
 | `memory/` | Hermes-inspired memory (SPEC §F8): bounded markdown files on disk (`%APPDATA%\acute-code\memories\<agentId>\MEMORY.md` / `USER.md`) as source of truth, mirrored into SQLite + FTS5 for recall; per-session frozen snapshot injection (never mutated mid-session — protects prompt cache, resists injection); agent-initiated memory writes staged through approvals, while user-initiated edits via the memory API bypass the modal but are audit-logged (API.md §4.7–4.11). |
 | `skills/` | SKILL.md folder standard (SPEC §F8; hermes/kilocode): scan global (`%APPDATA%\acute-code\skills\`) and per-project (`<project>\.acute\skills\`) locations; parse optional frontmatter; index into SQLite; per-agent enable; inject enabled skills into the agent's context per its policy. |
 | `mcp/` | MCP client manager (SPEC §F5): connect user-configured servers (stdio + streamable HTTP) via `@modelcontextprotocol/sdk` (MIT), lazily on first use; bridge discovered tools into `tools/` registry with `mcp__<server>__<tool>` names and `confirm` default; status reporting for Settings. |
-| `config.ts` | Process entry composition: CLI args, env parsing (port/token/keys), data-dir resolution, logger bootstrap, Fastify start. |
+| `main.ts` | Process entry: requires env-borne `ACUTE_TOKEN` + `ACUTE_DB_PATH` (exits if missing), opens SQLite, binds 127.0.0.1 on an ephemeral port, prints the one stdout ready line the shell parses (`ACUTE_READY {port}`, §2.1). Provider keys arrive as `ACUTE_PROVIDER_<ID>` env vars held only in memory (§7.3). |
+| `config.ts` *(future)* | CLI args / settings-file composition on top of the env contract when the surface grows beyond the spawn env. |
 
 ### 3.4 `shared/` — `@acute/shared`
 
@@ -175,7 +175,7 @@ Single source of truth for API DTOs and event schemas, authored in TypeBox (MIT)
 
 ### 3.5 `scripts/` and `tests/`
 
-- `scripts/`: `build-sidecar.mjs` (esbuild single-file bundle + native addon copy, ADR-0009), `package-portable.mjs` (assembles exe + sidecar + node runtime folder), `license-audit.mjs` (feeds `docs/compliance/dependency-licenses.md`, fails on GPL family — SPEC §6), `verify.mjs` (lint + typecheck + test + build mirror of CI, ADR-0005).
+- `scripts/`: `license-audit.mjs` exists today (feeds `docs/compliance/dependency-licenses.md`, fails on GPL family and unknown licenses, parses SPDX OR expressions — SPEC §6); `build-sidecar.mjs` (esbuild single-file bundle + native addon copy, ADR-0009) and `package-portable.mjs` (assembles exe + sidecar + node runtime folder) are planned for the packaging workstream. `pnpm verify` is a root package.json script chain (lint + typecheck + test + build + license audit, ADR-0005), not a file here.
 - `tests/`: cross-workspace integration tests (boot sidecar → migrate → full multi-agent run against fixture providers → assert event log + usage rows + audit rows), recorded provider fixtures (SPEC §F4 dev/test note), boot/smoke e2e.
 
 ---
@@ -255,6 +255,8 @@ runner needs completion
   → WS usage.recorded → live dashboard tile updates (no polling)
   → GET /usage aggregates by day/provider/model/agent/project (SQL GROUP BY)
 ```
+
+Phase 2 note: `GET /api/v1/usage/summary?days=N` — daily request/token/cost buckets over the trailing N days (UTC-day SQL aggregation over `usage_events`, zero-filled so the chart gets a dense series) — lands this phase to feed the dashboard chart; the full group-by `GET /usage` contract above is unchanged.
 
 Vision routing: an image attachment or image-bearing tool result is wrapped and sent to the configured vision model; its analysis returns as text into the requesting agent's context; telemetry attributes the call to the vision model with the original agentId (SPEC §F4, §F10).
 

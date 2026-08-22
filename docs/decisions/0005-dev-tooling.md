@@ -19,4 +19,6 @@ Phase 1 requires CI green across lint, typecheck, test, build, and license audit
 
 ## Consequences
 
-One lint/test/CI convention across all TS workspaces; fast watch-mode tests; CI requires the owner to eventually provide the private GitHub repo (local `pnpm verify` is the interim gate — the workflow file ships now and runs when a remote exists). Biome/OxLint remain a possible future swap via ADR if lint speed ever matters.
+One lint/test/CI convention across all TS workspaces; fast watch-mode tests; CI requires the owner to eventually provide the private GitHub repo (local `pnpm verify` is the interim gate — the workflow file ships now and runs when a remote exists; realized via ADR-0012). Biome/OxLint remain a possible future swap via ADR if lint speed ever matters.
+
+**Addendum (2026-08-22, Phase 2):** the license-audit script gained SPDX OR-expression parsing — a choice expression such as `(AFL-2.1 OR BSD-3-Clause)` (the `json-schema` dependency) passes when at least one branch is allowlisted; copyleft branches are still rejected by the GPL check first. Parser support only: the allowlist policy itself is unchanged.

@@ -24,3 +24,12 @@ Source: three demo projects provided by the owner, extracted to `C:\Users\khurr\
 - API keys entered in onboarding MUST route through the Tauri shell command (ADR-0012 secrets scheme) — never sent to the sidecar via REST bodies.
 - Approvals modals (F6) and the Kanban task board (F3) have no demo counterpart — design them in the same visual language.
 - `project-chat`'s dependency list is broader than our v1 scope; take composition patterns, not dependencies.
+
+## Owner directive (2026-08-22)
+
+The owner restated the demos' role when kicking off the UI fidelity pass:
+
+- **Nova and Bento are starting themes only** — not defaults, not constraints. The theme table must not hard-code assumptions from those two; they merely prove the pattern.
+- **The theme system must make adding themes trivial** — adding one is appending an object literal to the themes table (id, name, accent(s), light/dark surfaces, text, dot color, palette); no component changes.
+- **The three demo screen families — setup wizard, dashboard, chat — are the visual spec.** Current screens that diverge are wrong, not the demos ("the demos ARE the design spec").
+- Execution plan, normative token extractions, and per-wave ownership live in `docs/runbooks/plan-ui-fidelity.md`; verify each wave visually before moving on.

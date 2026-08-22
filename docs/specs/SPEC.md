@@ -139,6 +139,8 @@ Every phase: unit tests for core modules (orchestration loop, provider adapters,
 
 ## 9. Open items
 
-1. `[NON-BLOCKING]` Which OpenAI-compatible endpoint/model serves as the dev **vision model** — decide at Phase 2 with the owner's key list.
-2. `[NON-BLOCKING]` GitHub private repo + token: not needed yet (owner offered); revisit when CI or heavy Rust builds justify offloading from the local machine.
-3. `[NON-BLOCKING]` Owner UI direction — collected at Phase 2 kickoff.
+Statuses updated 2026-08-22 by the Scribe against Phase 2 reality.
+
+1. `[NON-BLOCKING]` **OPEN** — Which endpoint/model serves as the dev **vision model**. The original blocker ("decide at Phase 2 with the owner's key list") is half-gone: dev provider keys now exist (OpenRouter via Windows Credential Manager; single allowed model `stealth/ox-alpha`). A vision-capable model is still unchosen and untested — decide before the Phase 5 image-attachment/vision-routing work.
+2. `[RESOLVED 2026-08-22]` ~~GitHub private repo + token~~ — done: `testplay-byte/ACUTE-CODE` created and set **private**, PAT lives only in Windows Credential Manager, Actions CI green (`docs/decisions/0012-github-remote-ci.md`).
+3. `[RESOLVED 2026-08-22]` ~~Owner UI direction~~ — collected: the owner's three demo projects (setup wizard, dashboard, chat) are the visual spec; design language recorded in `docs/design/ui-direction.md`, implementation plan in `docs/runbooks/plan-ui-fidelity.md`.

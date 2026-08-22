@@ -17,6 +17,7 @@ the remaining resources arrive in later waves.
 | `src/storage/agents.ts` | Agent registry repository (list/get/create/update/duplicate/delete, JSON column mapping, version bumps); owns the canonical v1 tool-name list | real (Wave 1) |
 | `src/storage/providers.ts` | Provider registry rows (list/get/create, reserved built-in ids, id slugification) — rows never contain keys | real (Wave 2) |
 | `src/storage/sessions.ts` | Sessions, the append-only `session_events` log (per-session monotonic seq minted transactionally, ADR-0010), and `usage_events` billing lines | real (Wave 2) |
+| `src/storage/usage.ts` | Daily usage aggregation over `usage_events` for `GET /api/v1/usage/summary` (dashboard chart): zero-filled ascending day buckets + totals | real (Wave 2) |
 | `src/providers/registry.ts` | `ProviderKeyring` (in-memory snapshot of `ACUTE_PROVIDER_<ID_UPPER>` env vars — keys NEVER touch SQLite or any response), lazy built-in `openrouter` row, model-catalog fetch (`{baseUrl}/models`, 5-minute in-memory cache, sanitized `ProviderFetchError`) | real (Wave 2) |
 | `src/agents/chat.ts` | `ChatFn` seam + `aiSdkChat`: the only module that touches the Vercel AI SDK (`generateText` via `@ai-sdk/openai-compatible`; agent `maxTurns` maps to `stopWhen(stepCountIs(n))` in SDK v7) | real (Wave 2) |
 | `src/agents/runtime.ts` | Single-agent turn (ADR-0001 "single" mode): append user event → one provider call → append assistant event + usage row; 404/409/502 outcome mapping | real (Wave 2) |
