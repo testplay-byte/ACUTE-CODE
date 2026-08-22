@@ -22,7 +22,7 @@ export function NeedBrainScreen() {
   };
 
   return (
-    <div className="flex min-h-full flex-col pt-4 md:pt-8 short:pt-2">
+    <div className="mx-auto w-full max-w-[1280px] xl:max-w-[1480px] 2xl:max-w-[1640px] flex min-h-full flex-col pt-4 md:pt-8 short:pt-2">
       {/* Heading */}
       <h2 className="text-center text-[36px] md:text-[52px] short:text-[30px] font-black tracking-[-0.03em] leading-[0.9]" style={{ color: s.text }}>
         Need a brain?

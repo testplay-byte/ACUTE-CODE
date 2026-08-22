@@ -51,8 +51,13 @@ export function WelcomeScreen() {
   const codeText = s.isDark ? "rgba(255,255,255,0.9)" : "#333333";
 
   return (
-    <div className="flex min-h-full flex-col pt-4 md:pt-8 short:pt-2">
-      <div className="grid flex-1 items-start gap-6 pb-4 md:gap-8 lg:grid-cols-[0.85fr_1.15fr] 2xl:gap-12">
+    // Owner directive (adaptable layouts): the hero composition is vertically
+    // CENTERED in the available height and bounded to a readable width — wide
+    // displays get larger type (2xl bumps) instead of a stretched, sparse grid.
+    <div className="flex flex-1 flex-col justify-center py-6 short:py-2">
+      {/* Bounded, centered composition: on very wide displays the layout stays
+          proportional and centered instead of stretching into sparse columns. */}
+      <div className="grid mx-auto w-full max-w-[1280px] 2xl:max-w-[1480px] flex-1 items-center gap-6 pb-4 md:gap-8 lg:grid-cols-[0.85fr_1.15fr] 2xl:gap-14">
         {/* LEFT COLUMN */}
         <div className="space-y-4 short:space-y-3 md:space-y-5">
         {/* Step Cards Grid */}
@@ -195,11 +200,11 @@ export function WelcomeScreen() {
           >
             WELCOME TO
           </span>
-          <span className="block text-[56px] md:text-[86px] short:text-[42px] font-black leading-none" style={{ color: s.text }}>
+          <span className="block text-[56px] md:text-[86px] short:text-[42px] 2xl:text-[104px] font-black leading-none" style={{ color: s.text }}>
             ACUTE
           </span>
           <span
-            className="inline-block px-3 md:px-4 -ml-1 md:-ml-2 rounded-[18px] md:rounded-[24px] text-[56px] md:text-[86px] short:text-[42px] font-black leading-none border-[2.5px] rotate-[-1deg]"
+            className="inline-block px-3 md:px-4 -ml-1 md:-ml-2 rounded-[18px] md:rounded-[24px] text-[56px] md:text-[86px] short:text-[42px] 2xl:text-[104px] font-black leading-none border-[2.5px] rotate-[-1deg]"
             style={{
               background: s.accent,
               color: s.accentText,
@@ -213,7 +218,7 @@ export function WelcomeScreen() {
 
         {/* Description */}
         <p
-          className="mt-6 short:mt-3 max-w-[520px] text-[16px] md:text-[18px] leading-[1.4] font-medium"
+          className="mt-6 short:mt-3 max-w-[520px] text-[16px] md:text-[18px] 2xl:text-[20px] leading-[1.4] font-medium"
           style={{ color: s.text, opacity: 0.8 }}
         >
           {"Let's get you set up in under 1 minute. We'll configure your first workspace, theme, and first brain."}

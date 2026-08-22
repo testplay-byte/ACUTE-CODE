@@ -10,8 +10,15 @@
  * get wider grids instead of dead side gutters. Import from here (not from
  * SetupWizard) to keep the chrome modules cycle-free.
  */
+export const WIZARD_EDGE =
+  "w-full px-5 md:px-8 2xl:px-14";
+
+/** Per-screen readable content cap (chrome is full-bleed via WIZARD_EDGE). */
+export const WIZARD_CONTENT =
+  "mx-auto w-full max-w-[1280px] xl:max-w-[1480px] 2xl:max-w-[1640px]";
+
 export const WIZARD_CONTAINER =
-  "mx-auto w-full max-w-[1280px] px-5 md:px-8 xl:max-w-[1480px] 2xl:max-w-[1640px] 2xl:px-12";
+  "mx-auto w-full max-w-[1280px] xl:max-w-[1480px] 2xl:max-w-[1640px]";
 
 export type ReasoningLevel = "none" | "low" | "med" | "high" | "extra";
 

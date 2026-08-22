@@ -1,5 +1,5 @@
 import { useOnboardingStore } from "./onboarding-store";
-import { WIZARD_CONTAINER } from "./onboarding-types";
+import { WIZARD_EDGE } from "./onboarding-types";
 import { useThemeStyles } from "../../lib/use-theme-styles";
 import { APP_NAME } from "../../lib/version";
 
@@ -19,7 +19,8 @@ export function Header() {
 
   return (
     <header className="shrink-0">
-      <div className={`relative z-10 py-4 md:py-6 short:py-3 ${WIZARD_CONTAINER}`}>
+      {/* Full-bleed chrome: logo/steps pin to the true window corners at every size. */}
+      <div className={`relative z-10 py-4 md:py-6 short:py-3 ${WIZARD_EDGE}`}>
         <div className="flex h-10 items-center justify-between">
           {/* Logo pill */}
           <div

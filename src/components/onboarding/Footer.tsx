@@ -1,5 +1,5 @@
 import { useThemeStyles } from "../../lib/use-theme-styles";
-import { WIZARD_CONTAINER } from "./onboarding-types";
+import { WIZARD_EDGE } from "./onboarding-types";
 
 /**
  * Wizard footer — ported from the demo's components/onboarding/Footer.tsx.
@@ -12,7 +12,8 @@ export function Footer() {
 
   return (
     <footer className="shrink-0">
-      <div className={`relative z-10 pb-4 pt-5 md:pb-5 md:pt-6 short:pb-3 short:pt-4 ${WIZARD_CONTAINER}`}>
+      {/* Full-bleed chrome: corner items pin to the true window edges. */}
+      <div className={`relative z-10 pb-4 pt-5 md:pb-5 md:pt-6 short:pb-3 short:pt-4 ${WIZARD_EDGE}`}>
         <div
           className="flex h-4 items-center justify-between text-[11px] font-bold"
           style={{ opacity: 0.4, color: s.text }}

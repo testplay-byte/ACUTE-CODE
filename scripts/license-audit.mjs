@@ -2,9 +2,11 @@
 /**
  * Dependency license audit (SPEC section 6, closed-source distribution).
  *
- * Runs `pnpm licenses ls --json --prod`, writes
- * docs/compliance/dependency-licenses.md as a package/version/license/verdict
- * table, and exits 1 when any production dependency carries a copyleft
+ * Runs `pnpm licenses ls --json --prod` in every workspace package (frontend
+ * root, agent-core sidecar, shared types — a root-only run misses shipped
+ * sidecar dependencies), merges the results into a deduplicated
+ * package/version/license table at docs/compliance/dependency-licenses.md,
+ * and exits 1 when any production dependency carries a copyleft
  * (GPL/AGPL/LGPL) license or a license that cannot be classified.
  *
  * Policy: allowed = MIT, Apache-2.0, BSD-2/3-Clause, 0BSD, ISC, MPL-2.0,
@@ -30,23 +32,38 @@ const ALLOWED = new Set([
 ]);
 const FIRST_PARTY = new Set(["UNLICENSED", "LicenseRef-Proprietary"]);
 
+const WORKSPACE_PACKAGES = [".", "agent-core", "shared"];
+
 function run() {
-  // Static command string (no interpolation) so running it through a shell is
-  // safe; the shell is required because pnpm is a .cmd shim on Windows.
-  const result = spawnSync("pnpm licenses ls --json --prod", {
-    cwd: repoRoot,
-    encoding: "utf8",
-    shell: true,
-  });
-  if (result.error) {
-    console.error(`license-audit: could not start pnpm: ${result.error.message}`);
-    return { code: 1, rows: [] };
+  const rows = [];
+  const seen = new Set();
+  for (const pkg of WORKSPACE_PACKAGES) {
+    const cwd = resolve(repoRoot, pkg);
+    // Static command string (no interpolation) so running it through a shell is
+    // safe; the shell is required because pnpm is a .cmd shim on Windows.
+    const result = spawnSync("pnpm licenses ls --json --prod", {
+      cwd,
+      encoding: "utf8",
+      shell: true,
+    });
+    if (result.error) {
+      console.error(`license-audit: could not start pnpm in ${pkg}: ${result.error.message}`);
+      return { code: 1, rows: [] };
+    }
+    if (result.status !== 0) {
+      console.error(`license-audit: pnpm licenses ls failed in ${pkg}:\n${result.stderr}`);
+      return { code: 1, rows: [] };
+    }
+    for (const row of collectRows(JSON.parse(result.stdout))) {
+      const key = `${row.name}@${row.version}@${row.license}`;
+      if (!seen.has(key)) {
+        seen.add(key);
+        rows.push(row);
+      }
+    }
   }
-  if (result.status !== 0) {
-    console.error(`license-audit: pnpm licenses ls failed:\n${result.stderr}`);
-    return { code: 1, rows: [] };
-  }
-  return { code: 0, rows: collectRows(JSON.parse(result.stdout)) };
+  rows.sort((a, b) => a.name.localeCompare(b.name) || a.version.localeCompare(b.version));
+  return { code: 0, rows };
 }
 
 /** Flatten pnpm's "grouped by license" JSON into one row per package+version. */

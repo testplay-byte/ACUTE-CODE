@@ -105,7 +105,7 @@ export function AllSetScreen() {
   }, [s.accent]);
 
   return (
-    <div className="relative flex min-h-full flex-col items-center justify-center py-6 short:py-3">
+    <div className="relative flex min-h-full flex-col items-center justify-center py-6 short:py-3 mx-auto w-full max-w-[1280px] xl:max-w-[1480px] 2xl:max-w-[1640px]">
       {/* Confetti canvas */}
       <canvas
         ref={canvasRef}

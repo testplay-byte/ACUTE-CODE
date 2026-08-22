@@ -1,7 +1,7 @@
 import { useThemeStore } from "../../lib/theme-store";
 import { useThemeStyles } from "../../lib/use-theme-styles";
 import { useOnboardingStore } from "./onboarding-store";
-import { WIZARD_CONTAINER } from "./onboarding-types";
+import { WIZARD_EDGE, WIZARD_CONTAINER } from "./onboarding-types";
 import { Header } from "./Header";
 import { Footer } from "./Footer";
 import { WelcomeScreen } from "./WelcomeScreen";
@@ -72,9 +72,9 @@ export function SetupWizard() {
           </div>
         ) : (
           <div
-            className={`h-full overflow-y-auto overflow-x-clip custom-scrollbar ${WIZARD_CONTAINER} ${isDark ? "dark-scroll" : ""}`}
+            className={`h-full flex flex-col overflow-y-auto overflow-x-clip custom-scrollbar ${WIZARD_EDGE} ${isDark ? "dark-scroll" : ""}`}
           >
-            <div key={step} className="wizard-step min-h-full">
+            <div key={step} className="wizard-step flex min-h-0 flex-1 flex-col">
               {step === 0 && <WelcomeScreen />}
               {step === 1 && <PickFlavorScreen />}
               {step === 2 && <NeedBrainScreen />}
