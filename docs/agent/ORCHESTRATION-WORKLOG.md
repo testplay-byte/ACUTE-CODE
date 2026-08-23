@@ -232,3 +232,22 @@ Work Log:
 
 Stage Summary:
 - Agentic MVP M3+M4 DELIVERED and pushed; CI green ×2; awaiting owner review of the project-chat screen (round-09). Open items for owner: Linux-deviation acceptance, [ASSUMPTION] scope list (TodoPanel/thought/diff bodies/timestamps/model picker), optional acute.mjs agents-cmd fix, sessions projectId filter (Phase 3), secrets rotation (both transited chat), ntfy topic privacy, agent picker in chat header. Phase 2 gate approval + Phase 3 start remain owner-gated.
+
+---
+Task ID: R1–R10 (round-10 session)
+Agent: orchestrator (Z.ai Code) — ALL WORK INLINE per owner revision (no sub-agents)
+Task: Owner round-10 directives — rules revision, acute.mjs fix, local-PC one-click runner, agent memory doc, sandbox-resilience backup
+
+Work Log:
+- Owner verdicts processed: Linux OK permanently; round-9 atomic commit OK; M3 deferrals OK; sessions-projectId filter deferred ("let's see"); acute.mjs modelId bug = FIX NOW (done); ntfy OK; rotation later; chat agent-binding stays; runner + sandbox-backup = the main asks
+- Rules revised in AGENTS.md + HANDOFF §5: sub-agents OPTIONAL, never default; inline preferred (owner correction recorded)
+- scripts/acute.mjs: agents cmd fixed (a.modelId → a.model, field never existed; + providerId column); raw made pipe-safe (status → stderr, body → stdout) — both verified live
+- NEW scripts/acute-desktop.mjs (454 lines, zero deps, win/linux/mac): toolchain (node≥20, git, pnpm via corepack incl. per-user shim fallback), update check (fetch → behind? stop live servers on :5173/:5178 → pull --ff-only → install → rebuild), first-run install/build, .env.development write-once, OpenRouter key (win: Credential Manager with one-time prompt; linux: env/~/.acute/openrouter.key), port pre-flight kill, launch pnpm dev:full with env passthrough, boxed copyable errors + acute-runner.log + pause (ACUTE_RUNNER_NO_PAUSE=1 for automation), modes run/start/update/status, --verbose
+- NEW ACUTE.bat + acute.sh bootstraps: prereq checks, clone-once with credential-store auth (wincred / store-file), self-heal branch for clones predating the runner (pull --ff-only then hand off), own the final pause
+- scripts/dev.mjs: honest key resolution chain (env → Credential Manager → ~/.acute key file), length-only logging
+- Tests on Linux: status/update/start modes; dirty-tree skip; dummy listener on 5178 reaped by pre-flight; full launch with key injected end-to-end (providers ●); failure path (killed servers) shows boxed error + log + clean exit; OWNER-PC SIMULATION: scratch clone at 2d217e7 + new acute.sh → bootstrap self-heal pull → runner full setup → HEAD 13a313f, deps+backend built, key picked up. The simulation caught a real flaw (runner missing on old clones) before shipping — fixed same session
+- docs/runbooks/LOCAL-PC-RUNNER.md (owner guide: first run, update flow, persistence table, troubleshooting); docs/runbooks/AGENT-MEMORY.md (15 mandated lessons); docs/runbooks/SANDBOX-RESTORE.md (zero-to-resume + inventory + session-end backup rule); docs/agent/ORCHESTRATION-WORKLOG.md (snapshot, refreshed each session); HANDOFF.md §1/§4/§9 updated; .gitignore += .runner-bin/, acute-runner.log.old
+- pnpm verify GREEN after all changes; commits 13a313f (round 10) + 8d504b8 (bootstrap self-heal fixup) pushed; repo verified private before each push
+
+Stage Summary:
+- Owner can now run ACUTE-CODE on his PC: copy ACUTE.bat into any folder → double-click → clone (PAT once) → everything automatic, updates+restarts on later double-clicks, credentials/sessions persist, errors visible+copyable. Dev-stack scope (packaged exe = later milestone, ADR-0003). Sandbox wipe recoverable from repo alone (SANDBOX-RESTORE + worklog snapshot). Open: CI confirm on 8d504b8, owner's first real Windows run, secrets rotation when he chooses.
