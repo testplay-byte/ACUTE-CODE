@@ -128,23 +128,22 @@ export async function fetchModels(providerId: string): Promise<ProviderModel[]> 
 }
 
 /**
- * POST /providers/{id}/test — one-token completion through the sidecar. When
- * the route is not implemented yet (404), fall back to a models fetch, which
- * proves the same two things that matter: sidecar reachable + key accepted
- * upstream enough to list the catalog.
+ * POST /providers/{id}/test — a real one-token completion through the sidecar
+ * (validates the stored key AND the model). Failures are honest: a missing
+ * route, a rejected key, or an unknown model all come back ok:false with the
+ * reason; nothing is masked as a success.
  */
 export async function testConnection(providerId: string, model?: string): Promise<ConnectionTestResult> {
   try {
-    const body = await request<{ ok: boolean; latencyMs?: number; model?: string }>(
+    const body = await request<{ ok: boolean; latencyMs?: number; model?: string; message?: string }>(
       `/providers/${encodeURIComponent(providerId)}/test`,
       { method: "POST", json: model ? { model } : {} },
     );
-    return { ok: body.ok, latencyMs: body.latencyMs, model: body.model };
+    return { ok: body.ok, latencyMs: body.latencyMs, model: body.model, message: body.message };
   } catch (error) {
     const status = (error as { status?: number }).status;
     if (status === 404) {
-      await fetchModels(providerId);
-      return { ok: true, message: "Catalog fetched — provider reachable." };
+      return { ok: false, message: "Provider or test route not found on this sidecar." };
     }
     if (status === 409) {
       return { ok: false, message: "No key stored for this provider yet." };

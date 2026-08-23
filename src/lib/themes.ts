@@ -16,6 +16,13 @@ export interface ThemeColors {
   id: string;
   name: string;
   accent: string;
+  /**
+   * Accent for DARK mode. Optional — themes whose accent stays legible on a
+   * dark background omit it. Needed when the light-mode accent is too dark
+   * (Mono Stone's #111111 disappears against #242426); the dark-mode accent
+   * must keep ~4.5:1 against bgDark for text/icons/charts.
+   */
+  accentDark?: string;
   accent2: string;
   bgLight: string;
   bgDark: string;
@@ -140,6 +147,7 @@ export const THEMES: ThemeColors[] = [
     id: "mono",
     name: "Mono Stone",
     accent: "#111111",
+    accentDark: "#E0E0E0",
     accent2: "#A0A0A0",
     bgLight: "#F5F5F0",
     bgDark: "#242426",
@@ -312,8 +320,8 @@ export function deriveThemeStyles(themeIdOrTheme: string | ThemeColors, isDark: 
     bg: isDark ? theme.bgDark : theme.bgLight,
     card: isDark ? theme.cardDark : theme.cardLight,
     text: isDark ? theme.textDark : theme.textLight,
-    accent: theme.accent,
-    accentText: getContrastText(theme.accent),
+    accent: isDark ? theme.accentDark ?? theme.accent : theme.accent,
+    accentText: getContrastText(isDark ? theme.accentDark ?? theme.accent : theme.accent),
 
     // Borders
     border: isDark ? "rgba(255,255,255,0.10)" : "rgba(0,0,0,0.10)",

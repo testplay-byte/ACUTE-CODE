@@ -18,6 +18,7 @@ export type SqliteDatabase = Database.Database;
 
 const MODEL_CACHE_TTL_MS = 5 * 60 * 1000;
 const MODEL_FETCH_TIMEOUT_MS = 10_000;
+const TEST_TIMEOUT_MS = 15_000;
 
 /** Provider JSON as served by the API: the row plus a key-presence flag, never the key. */
 export interface ProviderView {
@@ -35,7 +36,7 @@ export class ProviderKeyring {
   readonly #env: Record<string, string | undefined>;
 
   constructor(env: Record<string, string | undefined> = process.env) {
-    this.#env = env;
+    this.#env = { ...env };
   }
 
   /** `ACUTE_PROVIDER_<ID_UPPER>` with non-alphanumerics folded to underscores. */
@@ -50,6 +51,18 @@ export class ProviderKeyring {
   get(providerId: string): string | undefined {
     const value = this.#env[ProviderKeyring.envVarName(providerId)];
     return typeof value === "string" && value !== "" ? value : undefined;
+  }
+
+  /**
+   * Shell handoff (POST /internal/providers/keys): rotate a key in-memory so
+   * a connection test right after Save uses the new key without a respawn.
+   * Empty string deletes. Never logged, never returned.
+   */
+  set(providerId: string, key: string): void {
+    const name = ProviderKeyring.envVarName(providerId);
+    if (key === "") delete this.#env[name];
+    else this.#env[name] = key;
+    modelCache.delete(providerId);
   }
 }
 
@@ -78,6 +91,13 @@ export interface ProviderModelsResult {
 
 /** Distinguishes upstream fetch failures (route-mapped to 502 PROVIDER_ERROR). */
 export class ProviderFetchError extends Error {}
+
+/**
+ * The probe RAN and the provider answered negatively (bad key, unknown
+ * model, …). The route maps this to HTTP 200 {ok:false, message} — a test
+ * that executed and failed is a successful test call, not a server error.
+ */
+export class ProviderTestError extends Error {}
 
 const modelCache = new Map<string, { expiresAt: number; models: ModelSummary[] }>();
 
@@ -162,6 +182,8 @@ export interface ProviderTestResult {
   ok: boolean;
   latencyMs: number;
   model?: string;
+  /** Present on ok:false (reason) and on model-less reachability probes. */
+  message?: string;
 }
 
 /**
@@ -181,12 +203,68 @@ export async function testProviderConnection(
     throw new ProviderFetchError(`provider '${provider.id}' has no baseUrl to test`);
   }
   const apiKey = keyring.get(provider.id);
-  const endpoint = `${provider.baseUrl.replace(/\/+$/, "")}/models`;
+  if (apiKey === undefined) {
+    throw new ProviderTestError(`no API key held for provider '${provider.id}'`);
+  }
+  const base = provider.baseUrl.replace(/\/+$/, "");
+
+  // With a model: REAL probe — a one-token completion. This is the only way
+  // to validate both the key and the model (owner round-8: the old /models
+  // ping "succeeded" for garbage keys — OpenRouter's catalog is public — and
+  // never checked the model id at all).
+  if (model !== undefined) {
+    const endpoint = `${base}/chat/completions`;
+    const startedAt = Date.now();
+    let response: Response;
+    try {
+      response = await fetch(endpoint, {
+        method: "POST",
+        headers: {
+          authorization: `Bearer ${apiKey}`,
+          "content-type": "application/json",
+        },
+        body: JSON.stringify({
+          model,
+          max_tokens: 1,
+          messages: [{ role: "user", content: "ping" }],
+        }),
+        signal: AbortSignal.timeout(TEST_TIMEOUT_MS),
+      });
+    } catch (error) {
+      throw new ProviderFetchError(
+        scrub(`POST ${endpoint} failed: ${errorMessage(error)}`, apiKey),
+      );
+    }
+    const latencyMs = Date.now() - startedAt;
+    if (response.ok) {
+      // Drain so the socket is released; the status already proved both sides.
+      try {
+        await response.arrayBuffer();
+      } catch {
+        // Truncated 200 body still proves key + model accepted.
+      }
+      return { ok: true, latencyMs, model };
+    }
+    const detail = await upstreamErrorDetail(response, apiKey);
+    if (response.status === 401 || response.status === 403) {
+      throw new ProviderTestError(`key rejected by provider (HTTP ${response.status})${detail}`);
+    }
+    if (response.status === 404 || response.status === 400 || response.status === 422) {
+      throw new ProviderTestError(
+        `provider rejected the request (HTTP ${response.status})${detail} — check the model id`,
+      );
+    }
+    throw new ProviderTestError(`provider answered HTTP ${response.status}${detail}`);
+  }
+
+  // Without a model: transport-level reachability probe only (some providers'
+  // /models endpoints are public, so this does NOT prove the key).
+  const endpoint = `${base}/models`;
   const startedAt = Date.now();
   let response: Response;
   try {
     response = await fetch(endpoint, {
-      headers: apiKey === undefined ? {} : { authorization: `Bearer ${apiKey}` },
+      headers: { authorization: `Bearer ${apiKey}` },
       signal: AbortSignal.timeout(MODEL_FETCH_TIMEOUT_MS),
     });
   } catch (error) {
@@ -194,13 +272,36 @@ export async function testProviderConnection(
   }
   const latencyMs = Date.now() - startedAt;
   if (!response.ok) {
+    if (response.status === 401 || response.status === 403) {
+      throw new ProviderTestError(`key rejected by provider (HTTP ${response.status})`);
+    }
     throw new ProviderFetchError(`GET ${endpoint} answered HTTP ${response.status}`);
   }
-  // Drain the body so the socket is released — only the status proves reachability.
   try {
     await response.arrayBuffer();
   } catch {
     // A truncated body after HTTP 200 still proves the connection worked.
   }
-  return { ok: true, latencyMs, ...(model === undefined ? {} : { model }) };
+  return {
+    ok: true,
+    latencyMs,
+    message: "Reachable — pick a model for a full key + model test.",
+  };
+}
+
+/** Best-effort upstream error message, scrubbed and length-capped. */
+async function upstreamErrorDetail(response: Response, apiKey: string): Promise<string> {
+  try {
+    const text = await response.text();
+    const parsed: unknown = JSON.parse(text);
+    if (parsed !== null && typeof parsed === "object" && "error" in parsed) {
+      const err = (parsed as { error?: { message?: unknown } }).error;
+      if (err !== null && typeof err === "object" && typeof err.message === "string") {
+        return `: ${scrub(err.message.slice(0, 160), apiKey)}`;
+      }
+    }
+  } catch {
+    // Non-JSON body — no extra detail.
+  }
+  return "";
 }

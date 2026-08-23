@@ -1,7 +1,13 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { useOnboardingStore } from "../onboarding-store";
-import { fetchModels, testConnection, type ConnectionTestResult } from "../providers-api";
+import {
+  fetchModels,
+  isTauri,
+  storeProviderKey,
+  testConnection,
+  type ConnectionTestResult,
+} from "../providers-api";
 import { useThemeStyles } from "../../../lib/use-theme-styles";
 
 /**
@@ -72,16 +78,25 @@ export function ConnectionCard() {
     if (models.length > 0) setModelId(models[0].id);
   }, [models, setModelId]);
 
+  /**
+   * Test what the user actually typed: in the desktop app the typed key is
+   * stored first (Credential Manager + live push to the sidecar keyring), so
+   * the probe validates the CURRENT inputs. In a plain browser the sidecar's
+   * server-side key is tested (and the result says so).
+   */
   const handleTest = useCallback(async () => {
     setTesting(true);
     setTestResult(null);
     try {
+      if (isTauri() && apiKey.length > 6) {
+        await storeProviderKey(providerId, apiKey);
+      }
       const result = await testConnection(providerId, modelId || undefined);
       setTestResult(result);
     } finally {
       setTesting(false);
     }
-  }, [providerId, modelId]);
+  }, [providerId, modelId, apiKey]);
 
   const inputStyle = {
     background: s.inputBg,
@@ -383,7 +398,7 @@ export function ConnectionCard() {
               title={testResult.message}
             >
               {testResult.ok
-                ? `Connected${testResult.latencyMs ? ` • ${testResult.latencyMs}ms` : ""}${testResult.model ? ` • ${testResult.model}` : ""}`
+                ? `Connected${testResult.latencyMs ? ` • ${testResult.latencyMs}ms` : ""}${testResult.model ? ` • ${testResult.model}` : ""}${!isTauri() ? " • server key" : ""}`
                 : (testResult.message ?? "Test failed.")}
             </span>
           )}

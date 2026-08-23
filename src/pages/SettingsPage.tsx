@@ -1,18 +1,391 @@
-import { useState } from "react";
-import { motion } from "framer-motion";
-import { Database, Server } from "lucide-react";
-import { fadeInUp } from "../lib/motion";
+import { useMemo, useState } from "react";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { useSearchParams } from "react-router";
+import { Bot, Palette, Server, SlidersHorizontal } from "lucide-react";
 import { useConfigStore } from "../lib/config-store";
+import { useThemeStore } from "../lib/theme-store";
+import { THEMES } from "../lib/themes";
+import { useThemeStyles } from "../lib/use-theme-styles";
+import { AgentsScreen } from "../components/agents/AgentsScreen";
 import { Button, Field, inputClass } from "../components/ui/controls";
+import {
+  fetchProviders,
+  isTauri,
+  storeProviderKey,
+  testConnection,
+  withClientDefaults,
+  type ConnectionTestResult,
+} from "../components/onboarding/providers-api";
+import { bdr, withAlpha } from "../components/dashboard/helpers";
+
+const TABS = [
+  { id: "appearance", label: "Appearance", icon: Palette },
+  { id: "agents", label: "Agents", icon: Bot },
+  { id: "api", label: "API & Providers", icon: Server },
+  { id: "advanced", label: "Advanced", icon: SlidersHorizontal },
+] as const;
+
+type TabId = (typeof TABS)[number]["id"];
 
 /**
- * Settings shell — only the data-source panel is functional in Wave 1 (the
- * rest lands with the real settings screens). The panel exists so the app is
- * switchable between the fixture adapter and the live sidecar before/after
- * the backend lands.
+ * Settings (owner round-8): the ONE place for configuration — appearance
+ * (theme + mode moved here from the deleted top bar), agents management
+ * (moved out of the sidebar), API keys per provider with a live connection
+ * test, and the advanced data-source panel. Deep-linkable via ?tab=.
  */
 export function SettingsPage() {
+  const styles = useThemeStyles();
+  const [params, setParams] = useSearchParams();
+  const tabParam = params.get("tab");
+  const tab: TabId = (TABS.find((t) => t.id === tabParam)?.id ?? "appearance") as TabId;
+
+  return (
+    <div className="flex h-full flex-col">
+      <div className="shrink-0 border-b-[1.5px] px-5 py-3.5" style={{ borderColor: "var(--ac-border)" }}>
+        <h1 className="text-[15px] font-bold tracking-tight" style={{ color: styles.text }}>
+          Settings
+        </h1>
+        <p className="mt-0.5 text-[11px]" style={{ color: styles.textTertiary }}>
+          Everything configurable lives here — no scattered chrome.
+        </p>
+        <div className="mt-3 flex flex-wrap gap-1.5">
+          {TABS.map(({ id, label, icon: Icon }) => {
+            const active = id === tab;
+            return (
+              <button
+                key={id}
+                onClick={() => setParams({ tab: id }, { replace: true })}
+                className="flex cursor-pointer items-center gap-1.5 rounded-lg border-[1.5px] px-3 py-1.5 text-[12px] font-semibold transition-colors duration-200"
+                style={{
+                  backgroundColor: active ? withAlpha(styles.accent, 0.1) : "transparent",
+                  borderColor: active ? withAlpha(styles.accent, 0.3) : styles.border,
+                  color: active ? styles.accent : styles.textSecondary,
+                }}
+              >
+                <Icon size={13} />
+                {label}
+              </button>
+            );
+          })}
+        </div>
+      </div>
+
+      <div className="min-h-0 flex-1 overflow-y-auto p-4 md:p-5">
+        {tab === "appearance" && <AppearanceTab />}
+        {tab === "agents" && <AgentsScreen embedded />}
+        {tab === "api" && <ApiTab />}
+        {tab === "advanced" && <AdvancedTab />}
+      </div>
+    </div>
+  );
+}
+
+/* ── Appearance ─────────────────────────────────────────── */
+
+function AppearanceTab() {
+  const styles = useThemeStyles();
+  const themeId = useThemeStore((s) => s.themeId);
+  const setTheme = useThemeStore((s) => s.setTheme);
+  const mode = useThemeStore((s) => s.mode);
+  const setMode = useThemeStore((s) => s.setMode);
+
+  return (
+    <div className="mx-auto flex max-w-2xl flex-col gap-5">
+      <section>
+        <SectionTitle>Mode</SectionTitle>
+        <div
+          className="relative grid w-full max-w-[320px] grid-cols-2 gap-1.5 rounded-[14px] p-1"
+          style={{ background: styles.toggleTrack, border: bdr("1px", styles.borderSubtle) }}
+        >
+          <div
+            className="absolute bottom-1 top-1 w-[calc(50%-6px)] rounded-[10px] transition-all duration-300"
+            style={{ left: mode === "dark" ? "calc(50% + 2px)" : "4px", background: styles.toggleActive }}
+          />
+          {(["light", "dark"] as const).map((m) => (
+            <button
+              key={m}
+              onClick={() => setMode(m)}
+              className="relative z-10 h-9 cursor-pointer rounded-[10px] border-none bg-transparent text-[13px] font-bold capitalize"
+              style={{ color: mode === m ? styles.text : styles.textTertiary }}
+            >
+              {m}
+            </button>
+          ))}
+        </div>
+      </section>
+
+      <section>
+        <SectionTitle>Theme</SectionTitle>
+        <div className="flex flex-col gap-2">
+          {THEMES.map((t) => {
+            const selected = t.id === themeId;
+            const colors = mode === "dark" ? t.paletteDark : t.paletteLight;
+            return (
+              <button
+                key={t.id}
+                onClick={() => setTheme(t.id)}
+                className="flex cursor-pointer items-center gap-3 rounded-[14px] border-[1.5px] px-4 py-3 text-left transition-all hover:translate-y-[-1px]"
+                style={{
+                  background: styles.card,
+                  borderColor: selected ? styles.accent : styles.border,
+                  boxShadow: selected
+                    ? `${styles.bentoShadowSm}, 0 0 0 3px ${withAlpha(styles.accent, 0.18)}`
+                    : "none",
+                }}
+              >
+                <span
+                  className="grid h-9 w-9 shrink-0 place-items-center rounded-full border text-[13px] font-black"
+                  style={{ background: t.accent, borderColor: styles.border, color: styles.accentText }}
+                >
+                  Aa
+                </span>
+                <span className="min-w-0 flex-1">
+                  <span className="block truncate text-[14px] font-bold" style={{ color: styles.text }}>
+                    {t.name}
+                  </span>
+                  <span className="mt-1 flex gap-[3px]">
+                    {colors.map((c, i) => (
+                      <span
+                        key={i}
+                        className="h-[14px] w-[14px] rounded-[5px] border"
+                        style={{ background: c, borderColor: styles.borderSubtle }}
+                      />
+                    ))}
+                  </span>
+                </span>
+                {selected ? (
+                  <span
+                    className="grid h-7 w-7 shrink-0 place-items-center rounded-full text-[12px]"
+                    style={{ background: styles.accent, color: styles.accentText }}
+                  >
+                    ✓
+                  </span>
+                ) : null}
+              </button>
+            );
+          })}
+        </div>
+      </section>
+    </div>
+  );
+}
+
+function SectionTitle({ children }: { children: React.ReactNode }) {
+  const styles = useThemeStyles();
+  return (
+    <h2
+      className="mb-2 text-[11px] font-bold uppercase tracking-widest"
+      style={{ color: styles.textTertiary }}
+    >
+      {children}
+    </h2>
+  );
+}
+
+/* ── API & Providers ────────────────────────────────────── */
+
+function ApiTab() {
+  const styles = useThemeStyles();
+  const queryClient = useQueryClient();
+  const providersQuery = useQuery({
+    queryKey: ["settings.providers"],
+    queryFn: fetchProviders,
+    staleTime: 30_000,
+  });
+  const options = useMemo(
+    () => withClientDefaults(providersQuery.data ?? []),
+    [providersQuery.data],
+  );
+
+  return (
+    <div className="mx-auto flex max-w-2xl flex-col gap-4">
+      <p className="text-[12px] leading-relaxed" style={{ color: styles.textSecondary }}>
+        Keys are stored ONLY in Windows Credential Manager (DPAPI) and pushed to the local
+        agent core — never in the database, never in logs.
+      </p>
+      {providersQuery.isError ? (
+        <div
+          role="alert"
+          className="rounded-lg border-[1.5px] px-3 py-2 text-[11px]"
+          style={{ borderColor: withAlpha("#D64545", 0.4), color: "#D64545" }}
+        >
+          Agent core unreachable — run the app (or <code>pnpm dev:full</code>) to configure keys.
+        </div>
+      ) : null}
+      {options.map(({ provider }) => (
+        <ProviderKeyCard
+          key={provider.id}
+          providerId={provider.id}
+          name={provider.name}
+          baseUrl={provider.baseUrl}
+          hasKey={provider.hasKey}
+          onKeyStored={() =>
+            void queryClient.invalidateQueries({ queryKey: ["settings.providers"] })
+          }
+        />
+      ))}
+    </div>
+  );
+}
+
+function ProviderKeyCard({
+  providerId,
+  name,
+  baseUrl,
+  hasKey,
+  onKeyStored,
+}: {
+  providerId: string;
+  name: string;
+  baseUrl: string | null;
+  hasKey: boolean;
+  onKeyStored: () => void;
+}) {
+  const styles = useThemeStyles();
+  const [key, setKey] = useState("");
+  const [model, setModel] = useState(providerId === "openrouter" ? "stealth/ox-alpha" : "");
+  const [saving, setSaving] = useState(false);
+  const [testing, setTesting] = useState(false);
+  const [result, setResult] = useState<ConnectionTestResult | null>(null);
+
+  const saveKey = async () => {
+    if (key.trim().length <= 6 || saving) return;
+    setSaving(true);
+    try {
+      if (isTauri()) {
+        await storeProviderKey(providerId, key.trim());
+        onKeyStored();
+      }
+      setKey("");
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const runTest = async () => {
+    if (testing) return;
+    setTesting(true);
+    setResult(null);
+    try {
+      if (isTauri() && key.trim().length > 6) {
+        await storeProviderKey(providerId, key.trim());
+        onKeyStored();
+      }
+      setResult(await testConnection(providerId, model.trim() || undefined));
+    } finally {
+      setTesting(false);
+    }
+  };
+
+  const inputStyle = {
+    background: styles.inputBg,
+    borderColor: styles.inputBorder,
+    color: styles.text,
+  } as const;
+
+  return (
+    <div
+      className="rounded-[16px] border-[1.5px] p-4"
+      style={{ background: styles.card, borderColor: styles.border }}
+    >
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <div className="min-w-0">
+          <div className="flex items-center gap-2">
+            <span
+              className="grid h-7 w-7 shrink-0 place-items-center rounded-full text-[11px] font-bold"
+              style={{ background: styles.accent, color: styles.accentText }}
+            >
+              {name.charAt(0).toUpperCase()}
+            </span>
+            <span className="text-[14px] font-bold" style={{ color: styles.text }}>
+              {name}
+            </span>
+          </div>
+          {baseUrl ? (
+            <div className="mt-1 truncate font-mono text-[10px]" style={{ color: styles.textTertiary }}>
+              {baseUrl}
+            </div>
+          ) : null}
+        </div>
+        <span
+          className="rounded-full border px-2 py-0.5 text-[10px] font-bold"
+          style={{
+            background: hasKey ? withAlpha("#27C93F", 0.12) : styles.subtle,
+            borderColor: hasKey ? withAlpha("#27C93F", 0.4) : styles.border,
+            color: hasKey ? "#27C93F" : styles.textTertiary,
+          }}
+        >
+          {hasKey ? "● key stored" : "no key"}
+        </span>
+      </div>
+
+      <div className="mt-3 grid gap-2 md:grid-cols-2">
+        <div>
+          <label className="mb-1 block text-[10px] font-bold uppercase tracking-widest" style={{ color: styles.textTertiary }}>
+            API key
+          </label>
+          <input
+            type="password"
+            autoComplete="off"
+            value={key}
+            onChange={(e) => setKey(e.target.value)}
+            placeholder={hasKey ? "•••• stored — type to replace" : "sk-..."}
+            className="h-10 w-full rounded-[10px] border-[1.5px] px-3 font-mono text-[12px] outline-none"
+            style={inputStyle}
+          />
+        </div>
+        <div>
+          <label className="mb-1 block text-[10px] font-bold uppercase tracking-widest" style={{ color: styles.textTertiary }}>
+            Test model
+          </label>
+          <input
+            value={model}
+            onChange={(e) => setModel(e.target.value)}
+            placeholder="provider/model"
+            className="h-10 w-full rounded-[10px] border-[1.5px] px-3 font-mono text-[12px] outline-none"
+            style={inputStyle}
+          />
+        </div>
+      </div>
+
+      <div className="mt-3 flex flex-wrap items-center gap-2">
+        <Button
+          variant="outline"
+          onClick={() => void saveKey()}
+          disabled={key.trim().length <= 6 || saving || !isTauri()}
+          title={isTauri() ? "Store in Windows Credential Manager" : "Key storage requires the desktop app"}
+        >
+          {saving ? "Storing…" : "Store key"}
+        </Button>
+        <Button variant="outline" onClick={() => void runTest()} disabled={testing || (!hasKey && key.trim().length <= 6)}>
+          {testing ? "Testing…" : "Test connection"}
+        </Button>
+        {result ? (
+          <span
+            className="min-w-0 truncate text-[11px] font-medium"
+            style={{ color: result.ok ? styles.textSecondary : "#D64545" }}
+            title={result.message}
+          >
+            {result.ok
+              ? `Connected${result.latencyMs ? ` • ${result.latencyMs}ms` : ""}${result.model ? ` • ${result.model}` : ""}${!isTauri() ? " • server key" : ""}`
+              : (result.message ?? "Test failed.")}
+          </span>
+        ) : null}
+        {!isTauri() ? (
+          <span className="text-[10px]" style={{ color: styles.textTertiary }}>
+            browser dev: tests the key held server-side
+          </span>
+        ) : null}
+      </div>
+    </div>
+  );
+}
+
+/* ── Advanced (data source) ─────────────────────────────── */
+
+function AdvancedTab() {
   const { baseUrl, token, demoData, setBaseUrl, setToken, setDemoData } = useConfigStore();
+  const styles = useThemeStyles();
   const [urlDraft, setUrlDraft] = useState(baseUrl);
   const [tokenDraft, setTokenDraft] = useState(token ?? "");
   const [saved, setSaved] = useState(false);
@@ -25,89 +398,53 @@ export function SettingsPage() {
   };
 
   return (
-    <div className="flex h-full flex-col">
-      <div className="border-b-[1.5px] border-line px-5 py-3.5">
-        <h1 className="text-[15px] font-bold tracking-tight">Settings</h1>
-        <p className="mt-0.5 text-[11px] text-muted">
-          F9 · permissions, denylist and defaults arrive in a later wave
-        </p>
-      </div>
-
-      <div className="flex-1 overflow-y-auto p-4">
-        <motion.section
-          variants={fadeInUp}
-          initial="initial"
-          animate="animate"
-          className="max-w-xl rounded-lg border-[1.5px] border-line p-4"
-        >
-          <div className="mb-3 flex items-center gap-2">
-            <Server size={14} className="text-accent" />
-            <h2 className="text-[13px] font-bold">Agent core connection</h2>
+    <div className="mx-auto flex max-w-2xl flex-col gap-4">
+      <section
+        className="rounded-lg p-4"
+        style={{ background: styles.card, border: bdr("1.5px", styles.border) }}
+      >
+        <div className="mb-3 flex items-center gap-2">
+          <Server size={13} style={{ color: styles.accent, opacity: 0.7 }} />
+          <span className="text-[12px] font-semibold" style={{ color: styles.text }}>
+            Agent core connection
+          </span>
+        </div>
+        <div className="flex flex-col gap-3">
+          <Field label="Base URL" hint="Loopback REST address of the sidecar">
+            <input
+              value={urlDraft}
+              onChange={(e) => setUrlDraft(e.target.value)}
+              className={inputClass}
+              style={{ background: styles.inputBg, borderColor: styles.inputBorder, color: styles.text }}
+            />
+          </Field>
+          <Field label="Bearer token" hint="Ephemeral in production; fixed for dev:full">
+            <input
+              value={tokenDraft}
+              onChange={(e) => setTokenDraft(e.target.value)}
+              className={inputClass}
+              style={{ background: styles.inputBg, borderColor: styles.inputBorder, color: styles.text }}
+            />
+          </Field>
+          <label className="flex cursor-pointer items-center gap-2 text-[12px]" style={{ color: styles.text }}>
+            <input
+              type="checkbox"
+              checked={demoData}
+              onChange={(e) => setDemoData(e.target.checked)}
+              className="h-4 w-4 cursor-pointer"
+            />
+            Demo data (fixture adapter when the sidecar is unreachable)
+          </label>
+          <div className="flex items-center gap-2">
+            <Button onClick={save}>Save connection</Button>
+            {saved ? (
+              <span className="text-[11px]" style={{ color: styles.textTertiary }}>
+                Saved — reload to apply.
+              </span>
+            ) : null}
           </div>
-
-          <div className="flex flex-col gap-3.5">
-            <Field label="Data source" hint="Demo data uses an in-memory fixture backend; live reads the sidecar REST API.">
-              <div className="flex gap-0.5 rounded-lg bg-hover p-0.5" role="group" aria-label="Data source">
-                <button
-                  onClick={() => setDemoData(true)}
-                  aria-pressed={demoData}
-                  className="flex flex-1 cursor-pointer items-center justify-center gap-1.5 rounded-md border-[1.5px] px-2.5 py-1.5 text-[11px] font-semibold transition-all duration-200"
-                  style={{
-                    borderColor: demoData ? "var(--accent)" : "transparent",
-                    backgroundColor: demoData ? "var(--card)" : "transparent",
-                    color: demoData ? "var(--accent)" : "var(--muted)",
-                  }}
-                >
-                  <Database size={12} />
-                  Demo data
-                </button>
-                <button
-                  onClick={() => setDemoData(false)}
-                  aria-pressed={!demoData}
-                  className="flex flex-1 cursor-pointer items-center justify-center gap-1.5 rounded-md border-[1.5px] px-2.5 py-1.5 text-[11px] font-semibold transition-all duration-200"
-                  style={{
-                    borderColor: !demoData ? "var(--accent)" : "transparent",
-                    backgroundColor: !demoData ? "var(--card)" : "transparent",
-                    color: !demoData ? "var(--accent)" : "var(--muted)",
-                  }}
-                >
-                  <Server size={12} />
-                  Live sidecar
-                </button>
-              </div>
-            </Field>
-
-            <Field label="Base URL" hint="Loopback only; the Tauri shell overrides this at runtime via sidecar_endpoint().">
-              <input
-                className={`${inputClass} font-mono text-xs`}
-                value={urlDraft}
-                onChange={(e) => setUrlDraft(e.target.value)}
-                placeholder="http://127.0.0.1:5178"
-              />
-            </Field>
-
-            <Field
-              label="Bearer token (dev only)"
-              hint="Kept in memory only — never persisted. In the packaged app this arrives from the shell; dev fallback is VITE_ACUTE_TOKEN."
-            >
-              <input
-                type="password"
-                className={`${inputClass} font-mono text-xs`}
-                value={tokenDraft}
-                onChange={(e) => setTokenDraft(e.target.value)}
-                placeholder="dev token"
-              />
-            </Field>
-
-            <div className="flex items-center gap-2">
-              <Button variant="primary" onClick={save}>
-                Save connection
-              </Button>
-              {saved ? <span className="text-[11px] text-accent">Saved</span> : null}
-            </div>
-          </div>
-        </motion.section>
-      </div>
+        </div>
+      </section>
     </div>
   );
 }

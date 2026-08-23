@@ -1,10 +1,11 @@
 import { motion } from "framer-motion";
-import { Activity, Bot, MessageSquare, Zap } from "lucide-react";
+import { Activity, FolderOpen, MessageSquare, Zap } from "lucide-react";
 import { useNavigate } from "react-router";
 import { useAgents } from "../../hooks/use-agents";
 import { useSessions, useUsageSummary } from "../../hooks/use-sessions";
 import { formatTokenCount } from "../../lib/format";
 import { ease, fadeInUp, staggerContainer } from "../../lib/motion";
+import { useProjectsStore } from "../../lib/projects-store";
 import { useThemeStyles } from "../../lib/use-theme-styles";
 import { useGreeting, withAlpha } from "./helpers";
 import { StatCard } from "./StatCard";
@@ -26,6 +27,7 @@ export function DashboardScreen() {
   const sessionsQuery = useSessions();
   const agentsQuery = useAgents(false);
   const usage = useUsageSummary(14);
+  const projectCount = useProjectsStore((s) => s.projects.length);
 
   const sessions = sessionsQuery.data ?? [];
   const agentById = new Map((agentsQuery.data ?? []).map((a) => [a.id, a]));
@@ -91,6 +93,7 @@ export function DashboardScreen() {
           animate="animate"
           className="mb-5 grid grid-cols-2 gap-2.5 md:grid-cols-4"
         >
+          <StatCard value={String(projectCount)} label="Projects" icon={FolderOpen} styles={styles} />
           <StatCard value={String(sessions.length)} label="Sessions" icon={MessageSquare} styles={styles} />
           <StatCard
             value={formatTokenCount(totalTokens)}
@@ -106,7 +109,6 @@ export function DashboardScreen() {
             title="Model calls over the last 14 days"
             styles={styles}
           />
-          <StatCard value={String(agentsQuery.data?.length ?? 0)} label="Agents" icon={Bot} styles={styles} />
         </motion.div>
 
         {/* Weekly chart + quick actions */}

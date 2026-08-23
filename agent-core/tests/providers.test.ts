@@ -336,10 +336,10 @@ describe("GET /api/v1/providers/:id/models", () => {
 });
 
 describe("POST /api/v1/providers/:id/test", () => {
-  it("probes {baseUrl}/models with the key and answers ok + latency, without touching the cache", async () => {
+  it("with a model: runs a one-token completion against {baseUrl}/chat/completions — the REAL key+model probe", async () => {
     const fetchMock = vi.fn(
       async (_url: string, _init: RequestInit | undefined) =>
-        new Response(JSON.stringify(modelsPayload()), {
+        new Response(JSON.stringify({ choices: [] }), {
           status: 200,
           headers: { "content-type": "application/json" },
         }),
@@ -358,22 +358,74 @@ describe("POST /api/v1/providers/:id/test", () => {
       model: "test/model-a",
     });
     const [url, init] = fetchMock.mock.calls[0];
-    expect(url).toBe("https://openrouter.ai/api/v1/models");
+    expect(url).toBe("https://openrouter.ai/api/v1/chat/completions");
+    expect(init?.method).toBe("POST");
     expect((init?.headers as Record<string, string>).authorization).toBe(`Bearer ${KEY}`);
+    expect(JSON.parse(String(init?.body)).model).toBe("test/model-a");
 
-    // The probe is not a catalog fetch: nothing was cached by it.
-    const models = await authInject({ method: "GET", url: "/api/v1/providers/openrouter/models" });
-    expect(models.json().cached).toBe(false);
-    expect(fetchMock).toHaveBeenCalledTimes(2);
+    // The completion probe never touches the model catalog.
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
 
-    // An empty body (what the wizard sends without a model choice) is fine too.
+  it("without a model: probes {baseUrl}/models for reachability and says so", async () => {
+    const fetchMock = vi.fn(
+      async (_url: string, _init: RequestInit | undefined) =>
+        new Response(JSON.stringify(modelsPayload()), { status: 200 }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
     const bare = await authInject({
       method: "POST",
       url: "/api/v1/providers/openrouter/test",
       payload: {},
     });
     expect(bare.statusCode).toBe(200);
-    expect(bare.json()).toEqual({ ok: true, latencyMs: expect.any(Number) });
+    const body = bare.json();
+    expect(body.ok).toBe(true);
+    expect(body.message).toContain("Reachable");
+    expect(fetchMock.mock.calls[0][0]).toBe("https://openrouter.ai/api/v1/models");
+  });
+
+  it("reports ok:false (HTTP 200) when the upstream rejects the KEY — never a fake success", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(
+        async () =>
+          new Response(JSON.stringify({ error: { message: "Invalid API key" } }), { status: 401 }),
+      ),
+    );
+    const response = await authInject({
+      method: "POST",
+      url: "/api/v1/providers/openrouter/test",
+      payload: { model: "test/model-a" },
+    });
+    expect(response.statusCode).toBe(200);
+    const body = response.json();
+    expect(body.ok).toBe(false);
+    expect(body.message).toContain("key rejected");
+    expect(body.message).toContain("Invalid API key");
+  });
+
+  it("reports ok:false (HTTP 200) when the upstream rejects the MODEL id", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(
+        async () =>
+          new Response(JSON.stringify({ error: { message: "No endpoints found for model" } }), {
+            status: 404,
+          }),
+      ),
+    );
+    const response = await authInject({
+      method: "POST",
+      url: "/api/v1/providers/openrouter/test",
+      payload: { model: "totally/bogus-model" },
+    });
+    expect(response.statusCode).toBe(200);
+    const body = response.json();
+    expect(body.ok).toBe(false);
+    expect(body.message).toContain("model id");
+    expect(body.message).toContain("No endpoints found");
   });
 
   it("returns 409 CONFLICT when no key is stored for the provider", async () => {
@@ -403,7 +455,7 @@ describe("POST /api/v1/providers/:id/test", () => {
     expect(fetchMock).not.toHaveBeenCalled();
   });
 
-  it("maps an upstream failure to 502 PROVIDER_ERROR with a scrubbed message", async () => {
+  it("maps an upstream transport failure to 502 PROVIDER_ERROR with a scrubbed message", async () => {
     vi.stubGlobal(
       "fetch",
       vi.fn(async () => {
@@ -422,15 +474,15 @@ describe("POST /api/v1/providers/:id/test", () => {
     expect(response.json().error.details.providerId).toBe("openrouter");
   });
 
-  it("maps a non-200 upstream answer to 502 PROVIDER_ERROR naming the status", async () => {
-    vi.stubGlobal("fetch", vi.fn(async () => new Response("denied", { status: 401 })));
+  it("maps a non-200 reachability answer (no model) to 502 PROVIDER_ERROR naming the status", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => new Response("denied", { status: 500 })));
     const response = await authInject({
       method: "POST",
       url: "/api/v1/providers/openrouter/test",
       payload: {},
     });
     expect(response.statusCode).toBe(502);
-    expect(response.json().error.message).toContain("HTTP 401");
+    expect(response.json().error.message).toContain("HTTP 500");
   });
 
   it("rejects a malformed body with 400 VALIDATION", async () => {
@@ -441,5 +493,70 @@ describe("POST /api/v1/providers/:id/test", () => {
     });
     expect(badModel.statusCode).toBe(400);
     expect(badModel.json().error.details.field).toBe("body.model");
+  });
+});
+
+describe("POST /internal/providers/keys (shell key handoff)", () => {
+  it("rotates the in-memory key so the next test uses it — and hasKey reflects it", async () => {
+    const rotated = buildServer({ token: TOKEN, db, keyring: new ProviderKeyring({}) });
+    try {
+      const push = await rotated.inject({
+        method: "POST",
+        url: "/internal/providers/keys",
+        headers: { authorization: `Bearer ${TOKEN}` },
+        payload: { providerId: "openrouter", keyName: "main", value: `rotated-${KEY}`, action: "set" },
+      });
+      expect(push.statusCode).toBe(204);
+
+      const listed = await rotated.inject({
+        method: "GET",
+        url: "/api/v1/providers",
+        headers: { authorization: `Bearer ${TOKEN}` },
+      });
+      const row = (listed.json().providers as Array<{ id: string; hasKey: boolean }>).find(
+        (p) => p.id === "openrouter",
+      );
+      expect(row?.hasKey).toBe(true);
+
+      // The probe actually carries the rotated key.
+      let seenAuth = "";
+      vi.stubGlobal(
+        "fetch",
+        vi.fn(async (_url: string, init: RequestInit | undefined) => {
+          seenAuth = (init?.headers as Record<string, string>).authorization ?? "";
+          return new Response(JSON.stringify({ choices: [] }), { status: 200 });
+        }),
+      );
+      const test = await rotated.inject({
+        method: "POST",
+        url: "/api/v1/providers/openrouter/test",
+        headers: { authorization: `Bearer ${TOKEN}` },
+        payload: { model: "test/model-a" },
+      });
+      expect(test.statusCode).toBe(200);
+      expect(test.json().ok).toBe(true);
+      expect(seenAuth).toBe(`Bearer rotated-${KEY}`);
+    } finally {
+      await rotated.close();
+    }
+  });
+
+  it("requires the bearer token like every other route", async () => {
+    const response = await app.inject({
+      method: "POST",
+      url: "/internal/providers/keys",
+      payload: { providerId: "openrouter", value: "x" },
+    });
+    expect(response.statusCode).toBe(401);
+  });
+
+  it("rejects a malformed payload with 400 and never echoes the value", async () => {
+    const response = await authInject({
+      method: "POST",
+      url: "/internal/providers/keys",
+      payload: { providerId: "NOT-A-SLUG", value: "x" },
+    });
+    expect(response.statusCode).toBe(400);
+    expect(response.body).not.toContain("x");
   });
 });

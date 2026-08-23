@@ -11,6 +11,7 @@ import { aiSdkChat, type ChatFn } from "./agents/chat.js";
 import { runSingleAgentTurn } from "./agents/runtime.js";
 import {
   ProviderKeyring,
+  ProviderTestError,
   fetchProviderModels,
   listProviderViews,
   resolveProvider,
@@ -275,6 +276,45 @@ export function buildServer(options: ServerOptions): FastifyInstance {
     version: VERSION,
   }));
 
+  // Internal key handoff (API.md §2.3): ONLY the Tauri shell calls this —
+  // same bearer wall as everything else — to rotate a provider key inside
+  // the in-memory keyring right after Credential Manager is updated, so a
+  // connection test immediately reflects a freshly saved key. The key value
+  // is never logged and never echoed back.
+  app.post("/internal/providers/keys", async (request, reply) => {
+    const body = request.body;
+    if (typeof body !== "object" || body === null || Array.isArray(body)) {
+      return reply
+        .code(400)
+        .send(errorBody("VALIDATION", "body must be a JSON object", { field: "body" }));
+    }
+    const raw = body as Record<string, unknown>;
+    const providerId = raw.providerId;
+    const value = raw.value;
+    const action = raw.action === undefined ? "set" : raw.action;
+    if (typeof providerId !== "string" || !/^[a-z0-9_-]+$/.test(providerId)) {
+      return reply.code(400).send(
+        errorBody("VALIDATION", "body.providerId must be a lowercase slug", {
+          field: "body.providerId",
+        }),
+      );
+    }
+    if (typeof value !== "string" || value === "") {
+      return reply
+        .code(400)
+        .send(errorBody("VALIDATION", "body.value must be a non-empty string", { field: "body.value" }));
+    }
+    if (action !== "set" && action !== "delete") {
+      return reply
+        .code(400)
+        .send(errorBody("VALIDATION", "body.action must be 'set' or 'delete'", { field: "body.action" }));
+    }
+    // 'delete' uses the same shape with a sentinel value; the shell only
+    // sends 'set' today.
+    keyring.set(providerId, action === "delete" ? "" : value);
+    return reply.code(204).send();
+  });
+
   app.register(
     async (scope) => {
       scope.get("/agents", async (request) => {
@@ -499,6 +539,11 @@ export function buildServer(options: ServerOptions): FastifyInstance {
         try {
           return await testProviderConnection(keyring, provider, model);
         } catch (error) {
+          // The probe executed and the provider answered NO (bad key, unknown
+          // model): HTTP 200 with ok:false — the test call itself succeeded.
+          if (error instanceof ProviderTestError) {
+            return { ok: false, message: error.message };
+          }
           const message =
             error instanceof Error ? error.message : `provider '${id}' connection test failed`;
           return reply

@@ -26,7 +26,7 @@ const FILTERS: { id: Filter; label: string; includeTemplates: boolean }[] = [
   { id: "templates", label: "Templates", includeTemplates: true },
 ];
 
-export function AgentsScreen() {
+export function AgentsScreen({ embedded = false }: { embedded?: boolean }) {
   const [filter, setFilter] = useState<Filter>("all");
   const [formOpen, setFormOpen] = useState(false);
   const [editing, setEditing] = useState<string | null>(null);
@@ -49,12 +49,16 @@ export function AgentsScreen() {
     createAgent.isPending || updateAgent.isPending || deleteAgent.isPending || duplicateAgent.isPending;
 
   return (
-    <div className="flex h-full min-h-0 flex-col">
+    <div className={embedded ? "flex h-full min-h-0 flex-col" : "flex h-full min-h-0 flex-col"}>
       <motion.div
         variants={fadeInUp}
         initial="initial"
         animate="animate"
-        className="flex flex-wrap items-center gap-3 border-b-[1.5px] border-line px-5 py-3.5"
+        className={
+          embedded
+            ? "flex flex-wrap items-center gap-3 pb-3"
+            : "flex flex-wrap items-center gap-3 border-b-[1.5px] border-line px-5 py-3.5"
+        }
       >
         <div>
           <h1 className="text-[15px] font-bold tracking-tight">Agents</h1>

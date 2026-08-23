@@ -1,8 +1,8 @@
 import { useEffect } from "react";
 import { Route, Routes, useNavigate } from "react-router";
 import { AppShell } from "./components/shell/AppShell";
-import { AgentsScreen } from "./components/agents/AgentsScreen";
 import { SessionsScreen } from "./components/sessions/SessionsScreen";
+import { ProjectView } from "./components/projects/ProjectView";
 import { DashboardScreen } from "./components/dashboard";
 import { PlaceholderPage } from "./pages/PlaceholderPage";
 import { SettingsPage } from "./pages/SettingsPage";
@@ -49,8 +49,12 @@ function FirstRunCheck() {
   return null;
 }
 
-/** Six SPEC F9 screens; Agents and Sessions are real, the rest are placeholders.
- * /setup is the full-bleed first-run wizard and lives outside the app shell. */
+/**
+ * Route map (owner round-8): / (dashboard) · /project/:id (sidebar projects) ·
+ * /usage · /settings (agents management + API keys + appearance live there) ·
+ * /sessions stays routed for the upcoming chat-window flow but is NOT in the
+ * sidebar. /setup is the full-bye first-run wizard, outside the app shell.
+ */
 export function App() {
   return (
     <>
@@ -59,17 +63,7 @@ export function App() {
         <Route path="/setup" element={<SetupWizard />} />
         <Route element={<AppShell />}>
           <Route index element={<DashboardScreen />} />
-          <Route
-            path="project"
-            element={
-              <PlaceholderPage
-                title="Project"
-                spec="F1"
-                detail="File tree, editor hookup and git panel, executed through the approval engine."
-              />
-            }
-          />
-          <Route path="agents" element={<AgentsScreen />} />
+          <Route path="project/:id" element={<ProjectView />} />
           <Route path="sessions" element={<SessionsScreen />} />
           <Route
             path="usage"

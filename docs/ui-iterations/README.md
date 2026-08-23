@@ -23,7 +23,11 @@ UI stands and what is still open.
 | Welcome (step 0) | R1 port → R2 adaptable layouts | **APPROVED** (footer stays here only) |
 | Pick your flavor (step 1) | R1 port → R3 two-half layout REJECTED → R4 demo-anatomy rebuild → R5 button polish | **APPROVED layout** (R4); R5 primary-button polish delivered, awaiting next look |
 | Need a brain (step 2) | R1 port → R3 equal heights + accent selection → R5 bottom-button padding | **APPROVED** (R3: "proper, no huge issues"; R5 padding fix delivered) |
-| Plug in your brain (step 3) | R1 port → R3 layout REJECTED → R5 padding/rail/key-gating → R6 live backend → R7 full-catalog expand + unified scroll | **IN REVIEW** — R7 delivered: expand lists all 422 models; whole step scrolls as one (summary never clipped) |
+| Plug in your brain (step 3) | R1 port → R3 layout REJECTED → R5 padding/rail/key-gating → R6 live backend → R7 full-catalog expand + unified scroll | **APPROVED** (owner: "working properly… how they are meant to be") |
+| Connection test | R8 honesty fix (one-token completion probe; garbage key/model honestly fail) | **DELIVERED** — live-verified |
+| Dashboard / shell | R1–R2 restyle → R8 redo (topbar removed, sidebar restructure, Settings hub) | **IN REVIEW** — R8 delivered |
+| Sidebar projects | R8 (local-first store + ProjectView; chat flow = orchestration phase) | **IN REVIEW** |
+| Mono theme dark mode | R8 accentDark fix | **DELIVERED** — visually verified |
 | All set (step 4) | R1 port → R3 theme-derived confetti | **APPROVED** ("perfect") |
 | Dashboard / Agents / Sessions / Chat | R1–R2 theme-engine restyle | Approved in the Phase-2 walkthrough ("everything is working properly… UI looks much better"); further polish on request |
 
@@ -35,6 +39,7 @@ UI stands and what is still open.
 - [`round-05.md`](round-05.md) — primary-button polish, PlugBrain full pass, live-key verification
 - [`round-06.md`](round-06.md) — persistent dev backend (`pnpm dev:full`): fixes models list & test connection in the browser
 - [`round-07.md`](round-07.md) — expand button lists the full catalog; PlugBrain scrolls as one unified flow
+- [`round-08.md`](round-08.md) — honest connection test; dashboard/shell redo; Settings hub; mono dark; PROJECT-MAP + dev CLI
 
 ## Running the UI with a live backend (dev)
 

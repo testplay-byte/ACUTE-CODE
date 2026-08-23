@@ -18,7 +18,7 @@ function renderDashboard() {
     <Routes>
       <Route path="/" element={<DashboardScreen />} />
       <Route path="/sessions" element={<div>sessions screen stub</div>} />
-      <Route path="/agents" element={<div>agents screen stub</div>} />
+      <Route path="/settings" element={<div>settings screen stub</div>} />
       <Route path="*" element={<div>not found</div>} />
     </Routes>,
   );
@@ -34,25 +34,25 @@ describe("DashboardScreen (fixture backend)", () => {
     ).toBeTruthy();
     expect(screen.getByText(/Welcome back to/)).toBeTruthy();
 
-    // All four SPEC F7 stat cards.
+    // The four stat cards (owner round-8: Projects replaces Agents here —
+    // agents management lives in Settings now).
+    expect(screen.getByText("Projects")).toBeTruthy();
     expect(screen.getByText("Sessions")).toBeTruthy();
     expect(screen.getByText("Tokens Used")).toBeTruthy();
     expect(screen.getByText("API Requests")).toBeTruthy();
-    expect(screen.getByText("Agents")).toBeTruthy();
   });
 
   it("stat values come from the fixture backends", async () => {
     renderDashboard();
 
-    // Wait for data-driven content (a session row + an agent name) so both
-    // queries have settled before reading the stat card values.
+    // Wait for data-driven content (a session row) so the queries have
+    // settled before reading the stat card values.
     await screen.findByText("Phase 2 report draft");
-    await screen.findByText("Scribe");
 
-    // Fixtures seed exactly 2 sessions and 2 non-template agents (both stat
-    // cards read "2"); usage stays empty in demo mode (no usage log), so
-    // tokens/requests show zero.
-    expect(screen.getAllByText("2").length).toBeGreaterThanOrEqual(2);
+    // Fixtures seed exactly 2 sessions (Sessions reads "2"); no local
+    // projects exist in the test profile (Projects reads "0"); usage stays
+    // empty in demo mode (no usage log) so tokens/requests read zero.
+    expect(screen.getAllByText("2").length).toBeGreaterThanOrEqual(1);
     expect(screen.getAllByText("0").length).toBeGreaterThanOrEqual(2);
   });
 

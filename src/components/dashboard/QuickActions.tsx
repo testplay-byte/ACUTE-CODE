@@ -6,11 +6,12 @@ import { bdr } from "./helpers";
 
 /**
  * Quick actions ported from the dashboard demo (QuickActions.tsx), pointed at
- * real app destinations instead of the demo's mock project creation.
+ * real app destinations. Agents management lives in Settings now (owner
+ * round-8 sidebar directive).
  */
 const ACTIONS = [
   { label: "Start a session", to: "/sessions", icon: Plus },
-  { label: "Manage agents", to: "/agents", icon: Bot },
+  { label: "Manage agents", to: "/settings?tab=agents", icon: Bot },
   { label: "Open settings", to: "/settings", icon: Settings },
 ] as const;
 

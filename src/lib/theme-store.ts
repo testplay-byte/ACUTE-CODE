@@ -6,11 +6,11 @@ import { deriveThemeStyles, syncThemeCssVars, THEMES } from "./themes";
 /**
  * Theme state store — absorbed into the demo-fidelity theme engine
  * (src/lib/themes.ts + use-theme-styles.ts). This module keeps its original
- * public surface so existing consumers (TopBar theme toggles, main.tsx
+ * public surface so existing consumers (Settings appearance panel, main.tsx
  * pre-paint sync) keep working unchanged:
  *
  * - THEMES now re-exports the full ThemeColors table (superset of the old
- *   {id, name, accent} shape TopBar reads).
+ *   {id, name, accent} shape Settings reads).
  * - applyTheme() mirrors themeId/mode onto <html data-theme data-mode> AND
  *   bridges the derived palette onto :root as --ac-* custom properties before
  *   first paint.
