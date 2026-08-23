@@ -12,10 +12,11 @@ import { ModelSummary } from "./ModelSummary";
  * and the key is stored through the Tauri shell command (Credential Manager)
  * — never a REST body, never localStorage.
  *
- * Layout: fixed header band, then a two-region grid that fills the remaining
- * height. The summary rail's width grows smoothly with the window via
- * clamp() (no breakpoint jumps); each column scrolls INTERNALLY when its
- * content overflows, so the page itself never double-scrolls.
+ * Layout (owner round-7): the step lives in the wizard's shared scroll
+ * wrapper — the WHOLE screen scrolls as one unit (configuration sections at
+ * the top, Model Summary at the bottom of the flow; on wide windows the two
+ * sit side by side, summary right). No internal column scroll and no fixed
+ * rail: nothing can be clipped out of reach on short or tall displays.
  */
 export function PlugBrainScreen() {
   const s = useThemeStyles();
@@ -26,7 +27,7 @@ export function PlugBrainScreen() {
   const canProceed = apiKey.length > 6 && modelId.length > 2;
 
   return (
-    <div className="h-full flex flex-col pt-2 md:pt-4 short:pt-1 pb-6 md:pb-8 short:pb-4">
+    <div className="mx-auto w-full max-w-[1280px] xl:max-w-[1480px] 2xl:max-w-[1640px] flex min-h-full flex-col pt-4 md:pt-8 short:pt-2 pb-8 md:pb-10">
       {/* Header row */}
       <div className="flex flex-wrap items-end justify-between gap-3 shrink-0">
         <div>
@@ -51,15 +52,12 @@ export function PlugBrainScreen() {
         </div>
       </div>
 
-      {/* Two-region grid — fills remaining height. Owner directive: LEFT half
-          scrolls internally; RIGHT half (model summary + actions) does NOT
-          scroll — it is compact enough to fit and top-aligns with breathing
-          room inset from the right edge (lg:pr / xl:pr create that empty
-          area instead of hugging the window border). Rail width 360→540px
-          (owner round-5: the right side was too narrow). */}
-      <div className="mt-4 md:mt-6 short:mt-3 flex-1 min-h-0 grid gap-5 md:gap-8 lg:grid-cols-[minmax(0,1fr)_clamp(360px,30vw,540px)] lg:pr-2 xl:pr-8">
-        {/* LEFT COLUMN (scrolls internally) */}
-        <div className={`min-h-0 overflow-y-auto overflow-x-clip pr-1 md:pr-2 pb-6 flex flex-col gap-4 md:gap-5 custom-scrollbar ${s.isDark ? "dark-scroll" : ""}`}>
+      {/* Two-section grid. Wide windows: configuration left · summary right.
+          Narrow/short windows: stacks with the summary below the
+          configuration — the page scrolls as ONE flow either way. */}
+      <div className="mt-4 md:mt-6 short:mt-3 grid gap-5 md:gap-8 items-start lg:grid-cols-[minmax(0,1fr)_clamp(360px,30vw,540px)] lg:pr-2 xl:pr-8">
+        {/* LEFT SECTION — provider, connection, tuning */}
+        <div className="min-w-0 flex flex-col gap-4 md:gap-5">
           {/* Provider card */}
           <div
             className="rounded-[24px] border-[1.5px] p-4 md:p-5"
@@ -88,8 +86,9 @@ export function PlugBrainScreen() {
           <ModelTuningCard />
         </div>
 
-        {/* RIGHT COLUMN (summary + actions; top-aligned, never scrolls) */}
-        <div className="min-w-0 self-start pt-1">
+        {/* RIGHT SECTION — model summary + actions; top-aligned with
+            breathing room inset from the right edge */}
+        <div className="min-w-0">
           <ModelSummary
             onBack={() => setStep(2)}
             onSave={() => {

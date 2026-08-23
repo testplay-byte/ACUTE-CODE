@@ -23,7 +23,7 @@ UI stands and what is still open.
 | Welcome (step 0) | R1 port → R2 adaptable layouts | **APPROVED** (footer stays here only) |
 | Pick your flavor (step 1) | R1 port → R3 two-half layout REJECTED → R4 demo-anatomy rebuild → R5 button polish | **APPROVED layout** (R4); R5 primary-button polish delivered, awaiting next look |
 | Need a brain (step 2) | R1 port → R3 equal heights + accent selection → R5 bottom-button padding | **APPROVED** (R3: "proper, no huge issues"; R5 padding fix delivered) |
-| Plug in your brain (step 3) | R1 port → R3 layout (padding/width/functionality REJECTED) → R5 full pass | **IN REVIEW** — R5 delivered: padding, wider rail, key-gated model search, hover steppers, AUTO/MANUAL split, live catalog + connection test verified |
+| Plug in your brain (step 3) | R1 port → R3 layout REJECTED → R5 padding/rail/key-gating → R6 live backend → R7 full-catalog expand + unified scroll | **IN REVIEW** — R7 delivered: expand lists all 422 models; whole step scrolls as one (summary never clipped) |
 | All set (step 4) | R1 port → R3 theme-derived confetti | **APPROVED** ("perfect") |
 | Dashboard / Agents / Sessions / Chat | R1–R2 theme-engine restyle | Approved in the Phase-2 walkthrough ("everything is working properly… UI looks much better"); further polish on request |
 
@@ -34,6 +34,7 @@ UI stands and what is still open.
 - [`round-04.md`](round-04.md) — PickFlavor demo-anatomy rebuild (approved) + NeedBrain padding
 - [`round-05.md`](round-05.md) — primary-button polish, PlugBrain full pass, live-key verification
 - [`round-06.md`](round-06.md) — persistent dev backend (`pnpm dev:full`): fixes models list & test connection in the browser
+- [`round-07.md`](round-07.md) — expand button lists the full catalog; PlugBrain scrolls as one unified flow
 
 ## Running the UI with a live backend (dev)
 

@@ -1,7 +1,7 @@
 import { useThemeStore } from "../../lib/theme-store";
 import { useThemeStyles } from "../../lib/use-theme-styles";
 import { useOnboardingStore } from "./onboarding-store";
-import { WIZARD_EDGE, WIZARD_CONTAINER } from "./onboarding-types";
+import { WIZARD_EDGE } from "./onboarding-types";
 import { Header } from "./Header";
 import { Footer } from "./Footer";
 import { WelcomeScreen } from "./WelcomeScreen";
@@ -65,27 +65,20 @@ export function SetupWizard() {
       <Header />
 
       <main className="relative z-10 flex-1 min-h-0 overflow-hidden">
-        {step === 3 ? (
-          // PlugBrainScreen manages its own internal column scroll. Edge
-          // padding + centered container match the other steps (owner round-5:
-          // this screen previously had NO horizontal padding at all).
-          <div className={`h-full ${WIZARD_EDGE}`}>
-            <div className={`h-full ${WIZARD_CONTAINER}`}>
-              <PlugBrainScreen />
-            </div>
+        {/* All steps share ONE scroll wrapper (owner round-7: PlugBrain used
+            to manage internal column scroll, which clipped the fixed summary
+            rail on short/tall windows — the whole step now scrolls as one). */}
+        <div
+          className={`h-full flex flex-col overflow-y-auto overflow-x-clip custom-scrollbar ${WIZARD_EDGE} ${isDark ? "dark-scroll" : ""}`}
+        >
+          <div key={step} className="wizard-step flex min-h-0 flex-1 flex-col">
+            {step === 0 && <WelcomeScreen />}
+            {step === 1 && <PickFlavorScreen />}
+            {step === 2 && <NeedBrainScreen />}
+            {step === 3 && <PlugBrainScreen />}
+            {step === 4 && <AllSetScreen />}
           </div>
-        ) : (
-          <div
-            className={`h-full flex flex-col overflow-y-auto overflow-x-clip custom-scrollbar ${WIZARD_EDGE} ${isDark ? "dark-scroll" : ""}`}
-          >
-            <div key={step} className="wizard-step flex min-h-0 flex-1 flex-col">
-              {step === 0 && <WelcomeScreen />}
-              {step === 1 && <PickFlavorScreen />}
-              {step === 2 && <NeedBrainScreen />}
-              {step === 4 && <AllSetScreen />}
-            </div>
-          </div>
-        )}
+        </div>
       </main>
 
       {/* Footer chrome only on Welcome (owner directive: the ©/status band

@@ -245,8 +245,10 @@ export function ConnectionCard() {
                     setModelOpen(false);
                     setModelSearch("");
                   } else {
+                    // Expand = show the WHOLE catalog (owner round-7: the
+                    // list must not arrive pre-filtered by the current id).
                     setModelOpen(true);
-                    setModelSearch(modelId);
+                    setModelSearch("");
                   }
                 }}
               >
