@@ -1,101 +1,80 @@
-# LOCAL PC RUNNER — one file, double-click, done
+# LOCAL PC RUNNER — one double-click, everything handled
 
-**Owner round-10 request (2026-08-23):** "I select a folder on my PC, put one
-file in it, double-click it, and it sets everything up, keeps itself updated,
-restarts the servers, keeps my credentials/sessions, shows progress, and shows
-me copyable errors instead of closing the window."
+**Owner round-11 redesign (2026-08-23):** the round-10 pure-`.bat` approach
+failed on Windows (a `.bat` written from Linux shipped with LF line endings —
+cmd.exe disintegrates: `'cho' is not recognized…`). Redesigned per owner
+direction: a tiny CRLF-safe `ACUTE.bat` coordinator plus a Python workhorse
+with a rich terminal UI.
 
-This runbook documents that system exactly as built.
+## The launcher (canonical owner path)
 
-## The two layers
+Lives in **`launcher/`** in this repo:
 
-| File | Where it lives | What it does |
-|---|---|---|
-| **`ACUTE.bat`** (Windows) / **`acute.sh`** (Linux/macOS) | any folder YOU choose — copy it out of the repo (GitHub web UI → open the file → Raw → copy → save as `ACUTE.bat`) or double-click it inside an existing clone | checks git + Node are installed, clones the private repo ONCE (asking for your GitHub username + PAT a single time — stored safely by the OS credential store), then hands off to the runner |
-| **`scripts/acute-desktop.mjs`** | inside the repo (delivered by the clone) | everything else: toolchain, updates, installs, builds, credentials, server lifecycle, error reporting |
+| File | Role |
+|---|---|
+| `launcher/ACUTE.bat` | the double-click entry (Windows). Tiny coordinator: finds Python (`py -3` → `python`), offers to install Python via winget if absent, then runs the workhorse. **Written with explicit CRLF line endings** (verified) — regenerate the same way if ever edited. |
+| `launcher/acute.sh` | the same entry for Linux/macOS (`bash acute.sh`) |
+| `launcher/acute_launcher.py` | the workhorse (~800 lines, stdlib-only baseline): rich terminal UI (panels, spinners, status tables — `rich` auto-installed with consent, clean plain-text fallback if unavailable), toolchain check with **winget auto-install** (git / Node.js missing or old), pnpm via corepack into `.acute/bin` (no global installs), **`credentials.txt` reading**, first-run clone, update-with-server-restart, dependency install, backend build, `.env.development`, OpenRouter key distribution (Windows Credential Manager via `scripts/credential.ps1`; `~/.acute/openrouter.key` on Linux), **launcher self-update** from the repo, port pre-flight, launch `pnpm dev:full` with the key injected, boxed copyable errors that keep the window open |
+| `launcher/credentials.example.txt` | template the owner renames to `credentials.txt` and fills (`GITHUB_PAT`, `OPENROUTER_KEY`); local-only file, never uploaded; placeholder values are detected and rejected |
+| `launcher/README.md` | owner-facing first-time setup instructions (also printed by the launcher when `credentials.txt` is missing) |
 
-Both are idempotent: double-clicking the same file again never re-does
-completed work. A local copy that PREDATES the runner (cloned before
-round-10) is self-healed: the bootstrap notices the missing runner and
-fast-forwards the clone first.
+**Folder layout on the owner's PC after first run** (his explicit design):
 
-## First run (what you will see)
+```
+C:\ACUTE\
+├── ACUTE.bat            ← double-clicked
+├── acute_launcher.py    ← the workhorse
+├── credentials.txt      ← his secrets (local only)
+├── ACUTE-CODE\          ← the app (cloned; updates itself; .dev\acute.db persists)
+└── .acute\              ← isolated git credentials (0600), pnpm shims, launcher.log
+```
 
-1. Git asks for credentials **once**: username `testplay-byte`, password =
-   your GitHub PAT. Stored via Windows Credential Manager (wincred) — never
-   retyped, never written into the repo.
-2. The runner checks Node ≥ 20, git, and activates **pnpm** automatically via
-   corepack (the exact version pinned in `package.json` — no global installs,
-   no admin rights).
-3. Dependencies install (first time only — a few minutes), `shared` +
-   `agent-core` build.
-4. `.env.development` is written (browser wiring; gitignored, persists).
-5. OpenRouter key: on Windows you're offered a one-time prompt to store it in
-   Windows Credential Manager (`ACUTE-CODE/provider/openrouter`). Declining is
-   fine — the app runs; live model calls need the key. On Linux it is read
-   from the `ACUTE_PROVIDER_OPENROUTER` env var or `~/.acute/openrouter.key`
-   (chmod 600).
-6. Servers start: sidecar `127.0.0.1:5178` + UI `http://localhost:5173`.
-   Open the URL in your browser. Keep the window open while using the app;
-   **Ctrl+C in the window stops both servers cleanly**.
+Auth design: git runs with a per-command credential store
+(`-c credential.helper= -c credential.helper=store --file=.acute/git-credentials`,
+URL-line format) — **the owner's global git config is never touched**, and the
+GitHub Credential Manager popup can never hijack the clone.
 
-## Every later run (update + restart)
+Commands: default = update + launch · `status` = read-only report ·
+`update` = update only · `start` = launch without update check. Flags:
+`--no-update`, `--verbose`, `--no-pause` (automation), `--no-rich-install`.
 
-1. Update check against `origin/main`:
-   - **behind** → any running ACUTE servers on :5173/:5178 are stopped
-     automatically → `git pull --ff-only` → `pnpm install` → backend rebuild →
-     servers start on the new version.
-   - **up to date** → straight to launch (seconds).
-   - **offline** → warning, continues on the local version.
-   - **local modifications** in the repo folder → update is skipped with a
-     warning (never destroys your changes).
-2. Ports are pre-flighted: leftovers from a crashed previous run are killed
-   before launch.
+## Verification performed (Linux sandbox, 2026-08-23)
 
-## What persists where (survives every update)
+- No `credentials.txt` → setup-instructions panel, exit 1
+- Placeholder credentials → rejected with clear message
+- Full first run in a scratch folder: clone (silent auth, no prompt) →
+  install → build → `.env` → key file → clean exit in 8s
+- Behind-origin run (repo reset 1 commit back): update detected, pulled
+  `8d504b8 → fe38f41`, reinstalled, rebuilt
+- `status` mode: rich panel with versions/commit/credential-lengths/ports/log
+- `start` mode: sidecar health `{"status":"ok"}` + UI HTTP 200 in 4s,
+  provider key `●` end-to-end, clean teardown
+- Failure path (servers killed underneath): red FAILED panel + log path +
+  clean exit; window kept open (in tty mode)
+- `ACUTE.bat` byte-verified CRLF (`file` → "DOS batch file … with CRLF line
+  terminators"); `acute.sh` + `py_compile` clean
+
+## Advanced: the Node runner (round-10, still maintained)
+
+`scripts/acute-desktop.mjs` (run via `node scripts/acute-desktop.mjs`) is the
+headless/terminal alternative — same lifecycle (toolchain, update, install,
+build, key, launch) without the rich UI. Useful from inside an existing clone
+or in automation. Documented in git history (round-10); the Python launcher
+above is the canonical owner-facing path.
+
+## Data persistence
 
 | Data | Location |
 |---|---|
-| Agents, sessions, projects, usage (SQLite) | `<repo>/.dev/acute.db` (gitignored, untouched by `git pull`) |
-| GitHub PAT | Windows Credential Manager (wincred) / `~/.acute-git-credentials` (600) |
-| OpenRouter key | Windows Credential Manager `ACUTE-CODE/provider/openrouter` / env var / `~/.acute/openrouter.key` |
-| Browser wiring | `<repo>/.env.development` (kept as-is once written) |
-| UI preferences (theme, panel sizes…) | browser localStorage |
-| Runner log | `<repo>/acute-runner.log` (auto-rotates at 2 MB) |
+| Agents, sessions, projects, usage | `ACUTE-CODE/.dev/acute.db` (gitignored; untouched by updates) |
+| GitHub PAT / OpenRouter key | `credentials.txt` (+ Windows Credential Manager / `~/.acute/openrouter.key`) |
+| Isolated git credentials | `.acute/git-credentials` (0600) |
+| Browser wiring | `ACUTE-CODE/.env.development` (write-once) |
+| UI preferences | browser localStorage |
+| Launcher log | `.acute/launcher.log` |
 
-## When something goes wrong
+## Scope
 
-- The runner prints a **boxed error** with the failing step, the captured
-  output, and the log path — and the window **stays open** (press Enter to
-  close) so you can copy everything.
-- Everything is also in `acute-runner.log` inside the ACUTE-CODE folder.
-- Common fixes:
-  - *git clone/pull auth fails* → the PAT was rejected; regenerate it on
-    GitHub and update Credential Manager (Windows: Control Panel → Credential
-    Manager → Windows Credentials → `git:https://github.com`) — or just delete
-    that entry and the next run re-prompts.
-  - *Port stuck busy* → the runner already auto-kills :5173/:5178; if Windows
-    still complains, reboot or `netstat -ano | findstr :5173` →
-    `taskkill /F /PID <pid>`.
-  - *Build failed* → the log has the full compiler output; re-run the
-    launcher (idempotent) after fixing (e.g. disk full, antivirus lock).
-
-## Commands (optional, for terminals)
-
-```
-ACUTE.bat                 → update + launch (the default double-click)
-ACUTE.bat update          → update only, then exit
-ACUTE.bat start           → launch without the update pass
-ACUTE.bat status          → versions, commit, ports, key, DB — read-only
-ACUTE.bat -- --verbose    → stream all sub-command output live
-```
-
-(On Linux/macOS: `bash acute.sh <same args>`. `ACUTE_RUNNER_NO_PAUSE=1`
-skips the keep-window-open waits — used by automation.)
-
-## Scope note (honest)
-
-This runs the **dev stack** (Vite UI + Node sidecar in a console window) —
-not yet a packaged `.exe`. The portable single-exe build is a later milestone
-(ADR-0003); until then this runner is the supported way to run ACUTE-CODE on
-your PC. The runner will keep working unchanged when packaging lands.
+Runs the **dev stack** (console + browser at http://localhost:5173). The
+packaged single-`.exe` is a later milestone (ADR-0003) and will slot into the
+same launcher flow.

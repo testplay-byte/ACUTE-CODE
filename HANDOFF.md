@@ -44,7 +44,7 @@ ACUTE-CODE (NOT "Forge" — the brief's old codename) is a Windows desktop app: 
 acute-code/
 ├── HANDOFF.md              ← this file
 ├── AGENTS.md (workspace, ../)  operating rules — phase gates, question protocol, hard rules
-├── ACUTE.bat / acute.sh    one-click local-PC launcher (owner round-10): clone-once → update → run (docs/runbooks/LOCAL-PC-RUNNER.md)
+├── launcher/               owner's one-click local-PC entry (round-11): ACUTE.bat (CRLF coordinator) + acute.sh + acute_launcher.py (rich-UI workhorse: auto-install, credentials.txt, update+restart, self-update) + credentials.example.txt — see docs/runbooks/LOCAL-PC-RUNNER.md
 ├── docs/
 │   ├── agent/ORCHESTRATION-WORKLOG.md   session history snapshot (sandbox-resilience backup, refreshed each session)
 │   ├── specs/SPEC.md           master requirements (F1–F11 features)
@@ -118,9 +118,9 @@ The Rust shell reads provider keys from Credential Manager at spawn and injects 
 - Tauri on Windows needs `src-tauri/icons/icon.ico` even with bundling disabled.
 - Git Bash kills don't always take node children down — check `tasklist` for orphans after sidecar tests (`taskkill //F //PID <pid>`).
 
-## 9. What's next: owner reviews the MVP (round-09) and tests locally via the one-click runner (round-10); then Phase 3 — Orchestration engine (after owner approval)
+## 9. What's next: owner tests locally via the round-11 launcher; MVP review; then Phase 3 — Orchestration engine (after owner approval)
 
-**Round-10 delivery (2026-08-23, owner-directed):** the local-PC runner — `ACUTE.bat` / `acute.sh` (copy into any folder, double-click: clone-once → update-check with server restart → install/build → key setup → launch `dev:full`; boxed copyable errors that keep the window open; full docs in `docs/runbooks/LOCAL-PC-RUNNER.md`). Also: `scripts/acute.mjs` fixes (agents `model` field; pipe-safe `raw`), sub-agent rule revision (AGENTS.md §working discipline + §5 below), `docs/runbooks/AGENT-MEMORY.md` (owner-mandated lessons log) and the sandbox-resilience backup (`docs/runbooks/SANDBOX-RESTORE.md` + `docs/agent/ORCHESTRATION-WORKLOG.md`). The owner runs the app on his own PC with the runner; M4 can be re-confirmed there. The full owner vision (three products) is recorded in `docs/architecture/PROJECT-MAP.md` §1/§6.
+**Round-11 delivery (2026-08-23, owner-directed redesign):** the round-10 `.bat` failed on the owner's PC (LF line endings — cmd.exe disintegration; lesson #16 in AGENT-MEMORY). Replaced per owner direction with `launcher/`: `ACUTE.bat` (tiny CRLF-verified coordinator — finds/installs Python) + `acute_launcher.py` (rich-terminal workhorse: toolchain auto-install via winget, `credentials.txt` local secrets file, clean-folder layout `ACUTE-CODE/` + `.acute/`, update-with-server-restart, OpenRouter key → Credential Manager, launcher SELF-UPDATE, boxed copyable errors, plain-text fallback). Fully tested on Linux incl. first-run, behind-update, status, live start (key `●` end-to-end) and failure paths; docs in `docs/runbooks/LOCAL-PC-RUNNER.md` + `launcher/README.md`. `scripts/acute-desktop.mjs` (round-10 node runner) remains as the advanced headless path. The owner runs the app on his PC with the launcher; M4 can be re-confirmed there. The full owner vision (three products) is recorded in `docs/architecture/PROJECT-MAP.md` §1/§6.
 
 Phase 3 scope per SPEC §F3 + ADR-0001 (read `docs/research/README.md` synthesis §4 first — delegation-as-task-tool is the proven pattern): multi-agent run loop; shared message bus (typed pub/sub, MetaGPT pattern); Kanban task board events; **approval-gate engine live** (modal round-trip, audit log, denylist-supreme, 15-min deny-on-expiry default, remembered grants for non-destructive); the three run modes with auto-team composition; WS streaming (`@fastify/websocket` — first-message auth frame per ADR-0008; replaces today's refetch-after-turn). Exit demo (owner watches live): 3-agent coding task (Planner→Coder→Reviewer) + 2-agent research task.
 

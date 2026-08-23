@@ -1,0 +1,816 @@
+#!/usr/bin/env python3
+# ACUTE-CODE launcher — the workhorse behind ACUTE.bat / acute.sh.
+#
+# Owner round-11 redesign (2026-08-23): the .bat file is only a tiny
+# double-clickable coordinator; THIS Python program does the real work with a
+# rich, beautiful terminal UI (panels, spinners, progress, tables). It:
+#
+#   • reads credentials.txt next to itself (GITHUB_PAT + OPENROUTER_KEY —
+#     you fill it once; rotate/clear it whenever you like)
+#   • checks the toolchain and AUTO-INSTALLS what is missing
+#     (git / Node.js via winget on Windows, with your confirmation;
+#      pnpm is activated through corepack — no global installs)
+#   • keeps your folder clean: launcher files stay at the top level, and
+#     everything downloaded lives inside ./ACUTE-CODE (the app) and
+#     ./.acute (credentials cache + logs) in the SAME directory
+#   • on every run: checks GitHub for updates → stops the live servers →
+#     pulls → reinstalls → rebuilds → relaunches (your data persists)
+#   • self-updates: if the repo ships a newer launcher, it copies it over
+#   • shows every failure in a red panel with the full log tail and the log
+#     file path, and KEEPS THE WINDOW OPEN so you can copy it
+#
+# Zero required third-party packages. If `rich` is available (installed
+# automatically on first run — MIT licensed) you get the full graphical
+# terminal; otherwise it degrades to clean plain text and keeps working.
+#
+# Python 3.9+ · Windows / Linux / macOS · run via ACUTE.bat (Windows) or
+# acute.sh (Linux/macOS), or directly: python3 acute_launcher.py [command]
+#
+# Commands:  (default) update-check then launch   · start = no update pass
+#            update = update only, then exit      · status = read-only report
+# Flags:     --no-update   --verbose
+
+import hashlib
+import os
+import re
+import shutil
+import subprocess
+import sys
+import time
+from pathlib import Path
+
+IS_WIN = os.name == "nt"
+LAUNCHER_DIR = Path(__file__).resolve().parent
+APP_DIR = LAUNCHER_DIR / "ACUTE-CODE"
+DOT_DIR = LAUNCHER_DIR / ".acute"
+BIN_DIR = DOT_DIR / "bin"
+LOG_PATH = DOT_DIR / "launcher.log"
+CRED_PATH = LAUNCHER_DIR / "credentials.txt"
+ENV_PATH = APP_DIR / ".env.development"
+REPO_URL = "https://github.com/testplay-byte/ACUTE-CODE.git"
+GIT_USER = "testplay-byte"
+UI_PORT = 5173
+SIDECAR_PORT = 5178
+NODE_MIN_MAJOR = 20
+STARTED = time.time()
+
+# ─────────────────────────────────────────────────────────────────────────────
+# rich bootstrap (optional, auto-installed on first run; plain fallback)
+# ─────────────────────────────────────────────────────────────────────────────
+
+RICH = None
+
+
+def _try_install_rich():
+    # Ask before touching the machine — plain question, rich isn't loaded yet.
+    print("The beautiful terminal UI needs the free 'rich' package (MIT license).")
+    answer = input("Install it now for this user? [Y/n] ").strip().lower()
+    if answer in ("", "y", "yes"):
+        for args in (
+            [sys.executable, "-m", "pip", "install", "--user", "--quiet", "rich"],
+            [sys.executable, "-m", "pip", "install", "--quiet", "rich"],
+        ):
+            try:
+                r = subprocess.run(args, capture_output=True, text=True, timeout=300)
+                if r.returncode == 0:
+                    return True
+            except Exception:
+                continue
+        print("Could not auto-install rich — continuing with the plain text UI.")
+    else:
+        print("Skipping rich — continuing with the plain text UI.")
+    return False
+
+
+if "--no-rich-install" in sys.argv or "--no-pause" in sys.argv or not sys.stdin.isatty():
+    try:
+        import rich  # noqa: F401
+
+        RICH = "present"
+    except ImportError:
+        RICH = None
+else:
+    try:
+        import rich  # noqa: F401
+
+        RICH = "present"
+    except ImportError:
+        if _try_install_rich():
+            try:
+                import rich  # noqa: F401
+
+                RICH = "present"
+            except ImportError:
+                RICH = None
+
+if RICH:
+    from rich.console import Console
+    from rich.panel import Panel
+    from rich.rule import Rule
+    from rich.table import Table
+    from rich.text import Text
+
+    console = Console()
+
+LOGO = [
+    r"╔═╗╔═╗╦ ╦╔╦╗╔═╗",
+    r"╠═╣║  ║ ║ ║ ║╣ ",
+    r"╩ ╩╚═╝╚═╝═╩╝╚═╝",
+]
+
+STEP_N = 0
+
+
+def banner():
+    if RICH:
+        art = "\n".join(LOGO)
+        console.print()
+        console.print(
+            Panel(
+                Text(f"{art}  ‑ C O D E\n", style="bold cyan", justify="center")
+                + Text("local-first multi-agent workbench · one-click launcher\n",
+                       style="dim", justify="center")
+                + Text(time.strftime("%Y-%m-%d %H:%M") + f"  ·  {'Windows' if IS_WIN else sys.platform}",
+                       style="dim", justify="center"),
+                border_style="cyan",
+                title="[bold cyan]ACUTE-CODE[/]",
+            )
+        )
+    else:
+        print("=" * 62)
+        print("  ACUTE-CODE — local-first multi-agent workbench launcher")
+        print(f"  {time.strftime('%Y-%m-%d %H:%M')}  ·  {sys.platform}")
+        print("=" * 62)
+
+
+def rule(title=""):
+    if RICH:
+        console.print(Rule(title=title, style="dim cyan"))
+    else:
+        print(f"──── {title} ".ljust(62, "─") if title else "─" * 62)
+
+
+def step(name):
+    """Numbered step header; returns a context manager wrapping a spinner."""
+    global STEP_N
+    STEP_N += 1
+    label = f"[{STEP_N}] {name}"
+
+    class _Step:
+        def __enter__(self):
+            if RICH:
+                self._s = console.status(f"[bold cyan]{label}[/]", spinner="dots12")
+                self._s.start()
+            else:
+                print(f"\n── {label} " + "─" * max(2, 56 - len(label)))
+            return self
+
+        def __exit__(self, *exc):
+            if RICH:
+                self._s.stop()
+            return False
+
+    return _Step()
+
+
+def ok(msg):
+    if RICH:
+        console.print(f"  [bold green]✓[/] {msg}")
+    else:
+        print(f"  [OK] {msg}")
+
+
+def note(msg):
+    if RICH:
+        console.print(f"    [dim]{msg}[/]")
+    else:
+        print(f"       {msg}")
+
+
+def warn(msg):
+    if RICH:
+        console.print(f"  [bold yellow]![/bold] [yellow]{msg}[/]")
+    else:
+        print(f"  [!] {msg}")
+
+
+def confirm(question, default=True):
+    if RICH:
+        from rich.prompt import Confirm
+
+        return Confirm.ask(question, default=default)
+    hint = "[Y/n]" if default else "[y/N]"
+    a = input(f"{question} {hint} ").strip().lower()
+    if not a:
+        return default
+    return a in ("y", "yes")
+
+
+def panel(text, style="cyan", title=None):
+    if RICH:
+        console.print(Panel(Text(text, justify="left"), border_style=style, title=title))
+    else:
+        print(f"┌─ {title or ''}".ljust(64, "─"))
+        for line in text.splitlines():
+            print(f"│ {line}")
+        print("└" + "─" * 63)
+
+
+def fail(where, detail):
+    """Visible, copyable failure. Keeps the window open, never raises."""
+    tail = "\n".join(str(detail).strip().splitlines()[-40:])
+    log_hint = f"Full log: {LOG_PATH}"
+    body = (
+        f"{tail}\n\n"
+        f"{log_hint}\n"
+        "Fix the issue above, then double-click the launcher again —\n"
+        "everything is idempotent and resumes where it stopped."
+    )
+    log(f"!!! FAILED at {where}\n{detail}")
+    try:
+        if RICH:
+            console.print(Panel(body, title=f"✗ FAILED — {where}", border_style="red"))
+        else:
+            raise RuntimeError("plain mode")
+    except Exception:  # noqa: BLE001 — plain fallback can not fail
+        print("╔" + "═" * 63)
+        print(f"║  FAILED — {where}")
+        print("╠" + "═" * 63)
+        for line in body.splitlines():
+            print(f"║  {line}")
+        print("╚" + "═" * 63)
+    wait_close()
+    sys.exit(1)
+
+
+def wait_close():
+    if "--no-pause" in sys.argv or not sys.stdin.isatty():
+        return
+    try:
+        input("\nPress Enter to close this window… ")
+    except EOFError:
+        pass
+
+
+def log(msg):
+    try:
+        DOT_DIR.mkdir(parents=True, exist_ok=True)
+        with LOG_PATH.open("a", encoding="utf-8") as fh:
+            fh.write(str(msg).rstrip() + "\n")
+    except Exception:
+        pass
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# subprocess helpers
+# ─────────────────────────────────────────────────────────────────────────────
+
+CMD_SHIMS = {"pnpm", "corepack", "winget", "npm", "npx"}
+
+
+def wrap(cmd):
+    """Windows .cmd shims need cmd /c; everything else runs directly."""
+    if IS_WIN and (cmd[0] in CMD_SHIMS or Path(cmd[0].lower()).suffix in (".cmd", ".bat")):
+        return ["cmd", "/c", *cmd]
+    return cmd
+
+
+def run(cmd, cwd=None, env=None, check=True, timeout=None):
+    cmd = wrap(cmd)
+    display = " ".join(str(c) for c in cmd)
+    log(f"$ {display} (cwd={cwd or LAUNCHER_DIR})")
+    try:
+        proc = subprocess.run(
+            cmd,
+            cwd=str(cwd) if cwd else None,
+            env=env,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=timeout,
+        )
+    except subprocess.TimeoutExpired:
+        if check:
+            fail(display, f"timed out after {timeout}s")
+        return None
+    except FileNotFoundError:
+        if check:
+            fail(display, "command not found — is it installed and on PATH?")
+        return None
+    out = (proc.stdout or "") + (proc.stderr or "")
+    log(out.strip())
+    if "--verbose" in sys.argv and out.strip():
+        for line in out.strip().splitlines():
+            note(line)
+    if proc.returncode != 0 and check:
+        fail(display, out or f"exited with code {proc.returncode}")
+    return proc
+
+
+def probe(cmd, timeout=20):
+    """Run without check; returns (returncode, output) — returncode None if missing."""
+    try:
+        cmd = wrap(cmd)
+        proc = subprocess.run(
+            cmd, capture_output=True, text=True, encoding="utf-8",
+            errors="replace", timeout=timeout,
+        )
+        return proc.returncode, ((proc.stdout or "") + (proc.stderr or "")).strip()
+    except (FileNotFoundError, subprocess.TimeoutExpired):
+        return None, ""
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# credentials
+# ─────────────────────────────────────────────────────────────────────────────
+
+SETUP_INSTRUCTIONS = """\
+FIRST-TIME SETUP — 4 steps, about 2 minutes:
+
+  1.  Create a folder anywhere (e.g.  C:\\ACUTE  )  — done, you are here.
+  2.  Put exactly THREE files in it (from the private GitHub repo,
+      folder  launcher/  → click each file → Raw → right-click → Save as):
+        • ACUTE.bat            (the file you double-click)
+        • acute_launcher.py    (the program doing all the work)
+        • credentials.example.txt
+  3.  Rename  credentials.example.txt  →  credentials.txt ,
+      open it in Notepad, and paste your two values on the marked lines:
+        GITHUB_PAT=...        (your GitHub token, starts with github_pat_)
+        OPENROUTER_KEY=...    (your OpenRouter key, starts with sk-or-)
+      Save. That file stays on YOUR PC only — never uploaded anywhere.
+  4.  Double-click  ACUTE.bat . Watch the pretty terminal do the rest.
+
+Later runs: just double-click ACUTE.bat — it checks GitHub for updates,
+restarts the servers, and keeps all your data (agents/sessions/projects).
+"""
+
+
+def read_credentials():
+    """Parse credentials.txt → (github_pat, openrouter_key)."""
+    if not CRED_PATH.exists():
+        panel(SETUP_INSTRUCTIONS, style="yellow", title="credentials.txt not found yet")
+        log("no credentials.txt")
+        wait_close()
+        sys.exit(1)
+
+    values = {}
+    try:
+        for raw in CRED_PATH.read_text(encoding="utf-8", errors="replace").splitlines():
+            line = raw.strip()
+            if not line or line.startswith("#"):
+                continue
+            m = re.match(r"^([A-Za-z_]+)\s*=\s*(.+)$", line)
+            if m:
+                values[m.group(1).upper()] = m.group(2).strip().strip('"').strip("'")
+    except Exception as exc:
+        fail("reading credentials.txt", f"{exc}\nPath: {CRED_PATH}")
+
+    pat = values.get("GITHUB_PAT") or values.get("GITHUB_TOKEN") or ""
+    key = values.get("OPENROUTER_KEY") or values.get("OPENROUTER_API_KEY") or ""
+
+    def is_placeholder(v, kind):
+        v = v.strip()
+        if not v:
+            return True
+        if "PASTE_YOURS" in v.upper() or "YOUR_" in v.upper() or "XXX" in v.upper():
+            return True
+        return kind == "pat" and not v.startswith(("github_pat_", "ghp_", "gho_")) or \
+               kind == "key" and not v.startswith("sk-or-")
+
+    problems = []
+    if is_placeholder(pat, "pat"):
+        problems.append("GITHUB_PAT is missing/placeholder — paste your real token (starts with github_pat_).")
+    if is_placeholder(key, "key"):
+        problems.append("OPENROUTER_KEY is missing/placeholder — paste your real key (starts with sk-or-).")
+    if problems:
+        fail(
+            "credentials.txt is incomplete",
+            "\n".join(problems)
+            + f"\n\nFile: {CRED_PATH}\nOpen it in Notepad, fill both lines, save, run again.",
+        )
+
+    log("credentials loaded (values never logged)")
+    return pat, key
+
+
+def git_base_args(pat):
+    """Per-command git auth: an isolated credential store inside .acute —
+    your global git configuration is never touched."""
+    from urllib.parse import quote
+
+    store = DOT_DIR / "git-credentials"
+    store.parent.mkdir(parents=True, exist_ok=True)
+    # The git-credential-store FILE format is one URL per line:
+    #   https://user:password@host   (NOT the credential-approve stdin format!)
+    store.write_text(
+        f"https://{quote(GIT_USER, safe='')}:{quote(pat, safe='')}@github.com\n",
+        encoding="utf-8",
+    )
+    try:
+        os.chmod(store, 0o600)
+    except OSError:
+        pass
+    # An empty credential.helper RESETS the helper list (stops the GitHub
+    # Credential Manager popup from hijacking the clone), then our isolated
+    # store becomes the only helper used.
+    fw = str(store).replace("\\", "/")
+    # Inner quotes: git runs credential helpers through a shell; they keep the
+    # path one argument even when the launcher folder contains spaces.
+    return ["-c", "credential.helper=", "-c", f'credential.helper=store --file="{fw}"']
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# toolchain
+# ─────────────────────────────────────────────────────────────────────────────
+
+def winget_install(pkg_id, what):
+    code, _ = probe(["winget", "--version"])
+    if code is None:
+        panel(
+            f"{what} is not installed and winget is unavailable.\n"
+            "Install it manually:\n"
+            "  git  → https://git-scm.com/downloads\n"
+            "  Node → https://nodejs.org  (LTS, 20 or newer)",
+            style="red",
+            title=f"missing: {what}",
+        )
+        wait_close()
+        sys.exit(1)
+    if not confirm(f"{what} is missing. Install it automatically with winget now?"):
+        fail(f"{what} is required", "Install it manually, then run the launcher again.")
+    run(
+        ["winget", "install", "-e", "--id", pkg_id, "--silent",
+         "--accept-package-agreements", "--accept-source-agreements"],
+        timeout=1800,
+    )
+    panel(
+        f"{what} has been installed.\n"
+        "PATH changes only apply to NEW windows — please CLOSE this window\n"
+        "and double-click the launcher again. Everything resumes from here.",
+        style="green",
+        title="installed — restart needed",
+    )
+    wait_close()
+    sys.exit(0)
+
+
+def check_toolchain():
+    results = []
+    with step("Checking the toolchain (git · Node.js)"):
+        code, out = probe(["git", "--version"])
+        results.append(("git", (out.splitlines() or ["?"])[0] if code == 0 else None))
+
+        code, out = probe(["node", "--version"])
+        node_ver = (out.splitlines() or ["?"])[0] if code == 0 else None
+        results.append(("Node.js", node_ver))
+
+    if RICH:
+        t = Table(show_header=False, box=None, padding=(0, 2))
+        t.add_column(style="dim bold")
+        t.add_column()
+        for name, ver in results:
+            mark = "[bold green]✓[/]" if ver else "[bold red]✗[/]"
+            t.add_row(name, ver or "not installed", mark)
+        console.print(t)
+    else:
+        for name, ver in results:
+            print(f"    {name:<10} {ver or 'not installed':<24} {'OK' if ver else 'MISSING'}")
+
+    git_ver, node_verv = results[0][1], results[1][1]
+    if not git_ver:
+        winget_install("Git.Git", "git")
+
+    if not node_verv:
+        winget_install("OpenJS.NodeJS.LTS", "Node.js")
+    else:
+        major = int((re.search(r"v(\d+)", node_verv) or [None, "0"])[1] or 0)
+        if major < NODE_MIN_MAJOR:
+            warn(f"Node.js {node_verv} is older than v{NODE_MIN_MAJOR} — the app may misbehave.")
+            if confirm("Upgrade Node.js to the current LTS with winget now?"):
+                winget_install("OpenJS.NodeJS.LTS", "Node.js (upgrade)")
+            note("continuing with the installed version…")
+    ok("toolchain ready")
+
+
+def ensure_pnpm(env):
+    """Activate pnpm via corepack into .acute/bin (version pinned by the repo)."""
+    with step("Activating pnpm (via corepack — no global install)"):
+        BIN_DIR.mkdir(parents=True, exist_ok=True)
+        env["PATH"] = str(BIN_DIR) + os.pathsep + env.get("PATH", "")
+        env["COREPACK_ENABLE_DOWNLOAD_PROMPT"] = "0"
+        run(["corepack", "enable", "--install-directory", str(BIN_DIR)], env=env, check=False)
+        code, out = probe(["pnpm", "--version"], timeout=120)
+        if code is None or code != 0:
+            run(["corepack", "prepare", "pnpm@11.22.0", "--activate"], env=env, check=False)
+            code, out = probe(["pnpm", "--version"], timeout=300)
+        if code is None or code != 0:
+            fail("activating pnpm", out or "corepack could not provide pnpm")
+        ok(f"pnpm {(out.splitlines() or ['?'])[0]}")
+        return env
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# repo lifecycle
+# ─────────────────────────────────────────────────────────────────────────────
+
+def stop_live_servers(reason):
+    """Kill anything listening on :5173 / :5178 (a previous ACUTE run)."""
+    pids = []
+    for port in (UI_PORT, SIDECAR_PORT):
+        if IS_WIN:
+            code, out = probe(["netstat", "-ano", "-p", "tcp"])
+            if code == 0 and out:
+                for line in out.splitlines():
+                    m = re.search(rf":{port}\s+\S+\s+\S*\s+LISTENING\s+(\d+)", line)
+                    if m and m.group(1) != str(os.getpid()):
+                        pids.append(m.group(1))
+        else:
+            code, out = probe(["bash", "-c", f"lsof -t -i :{port}"])
+            if code == 0 and out.strip():
+                pids += [p.strip() for p in out.split() if p.strip()]
+            else:
+                code, out = probe(["bash", "-c", f"ss -ltnp 2>/dev/null | grep ':{port} '"])
+                if code == 0 and out:
+                    pids += re.findall(r"pid=(\d+)", out)
+    pids = [p for p in dict.fromkeys(pids) if p != str(os.getpid())]
+    if not pids:
+        return
+    note(f"stopping previous ACUTE servers ({reason}): pid {', '.join(pids)}")
+    for pid in pids:
+        if IS_WIN:
+            run(["taskkill", "/F", "/PID", pid], check=False, timeout=30)
+        else:
+            run(["kill", "-9", pid], check=False, timeout=30)
+    time.sleep(2)
+
+
+def repo_state(pat, env):
+    head = run(["git"] + git_base_args(pat) + ["rev-parse", "--short", "HEAD"],
+               cwd=APP_DIR, env=env, check=False)
+    if head.returncode != 0:
+        return None
+    head = head.stdout.strip()
+    dirty = bool(
+        run(["git"] + git_base_args(pat) + ["status", "--porcelain"],
+            cwd=APP_DIR, env=env, check=False).stdout.strip()
+    )
+    fetch = run(["git"] + git_base_args(pat) + ["fetch", "origin", "main"],
+                cwd=APP_DIR, env=env, check=False, timeout=180)
+    if fetch.returncode != 0:
+        return {"head": head, "behind": -1, "dirty": dirty}
+    count = run(["git"] + git_base_args(pat) + ["rev-list", "--count", "HEAD..origin/main"],
+                cwd=APP_DIR, env=env, check=False).stdout.strip()
+    return {"head": head, "behind": int(count or 0), "dirty": dirty}
+
+
+def clone_or_update(pat, env):
+    if not (APP_DIR / ".git").exists():
+        with step("Downloading ACUTE-CODE from GitHub (first run)"):
+            if APP_DIR.exists():
+                shutil.rmtree(APP_DIR)
+            run(["git"] + git_base_args(pat) + ["clone", REPO_URL, str(APP_DIR)],
+                env=env, timeout=1800)
+            head = run(["git"] + git_base_args(pat) + ["rev-parse", "--short", "HEAD"],
+                       cwd=APP_DIR, env=env).stdout.strip()
+            ok(f"repository downloaded  ·  folder ACUTE-CODE/  ·  commit {head}")
+            note("the app lives in its own subfolder — your launcher files never mix with it")
+        return True  # fresh clone ⇒ needs install + build
+
+    with step("Checking GitHub for updates"):
+        state = repo_state(pat, env)
+        if state is None:
+            fail("reading the local repository", f"{APP_DIR} exists but is not a git checkout")
+        if state["behind"] == -1:
+            warn("GitHub unreachable (offline?) — continuing with the local version")
+            return False
+        if state["dirty"]:
+            warn("local changes inside ACUTE-CODE/ detected — update skipped to protect them")
+            note("commit or revert them inside ACUTE-CODE, or delete the folder to re-download")
+            return False
+        if state["behind"] == 0:
+            ok(f"already up to date  ·  commit {state['head']}")
+            return False
+        stop_live_servers("applying update")
+        run(["git"] + git_base_args(pat) + ["pull", "--ff-only", "origin", "main"],
+            cwd=APP_DIR, env=env, timeout=600)
+        new_head = run(["git"] + git_base_args(pat) + ["rev-parse", "--short", "HEAD"],
+                       cwd=APP_DIR, env=env).stdout.strip()
+        ok(f"updated  ·  {state['head']} → {new_head}  ·  {state['behind']} new commit(s)")
+        return True
+
+
+def install_and_build(env, updated):
+    if updated or not (APP_DIR / "node_modules").exists():
+        with step("Installing dependencies (first time takes a few minutes)"):
+            run(["pnpm", "install"], cwd=APP_DIR, env=env, timeout=1800)
+            ok("dependencies ready")
+    else:
+        with step("Dependencies"):
+            ok("already installed (nothing to do)")
+
+    if updated or not (APP_DIR / "agent-core" / "dist" / "main.js").exists():
+        with step("Building the backend (agent-core + shared)"):
+            run(["pnpm", "--filter", "shared", "run", "build"], cwd=APP_DIR, env=env, timeout=900)
+            run(["pnpm", "--filter", "agent-core", "run", "build"], cwd=APP_DIR, env=env, timeout=900)
+            ok("backend build ready")
+    else:
+        with step("Backend build"):
+            ok("already built (nothing to do)")
+
+
+def write_env_file():
+    with step("Browser wiring (.env.development)"):
+        if ENV_PATH.exists():
+            ok("present — kept as-is")
+            return
+        ENV_PATH.write_text(
+            "# Written by the ACUTE-CODE launcher — safe to delete, regenerated.\n"
+            "VITE_ACUTE_BASE_URL=http://127.0.0.1:5178\n"
+            "VITE_ACUTE_TOKEN=acute-dev-local\n",
+            encoding="utf-8",
+        )
+        ok("written (gitignored, survives updates)")
+
+
+def distribute_key(key):
+    with step("OpenRouter key → secure store"):
+        shown = f"length {len(key)}"
+        if IS_WIN:
+            script = APP_DIR / "scripts" / "credential.ps1"
+            run(
+                ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File",
+                 str(script), "Write", "ACUTE-CODE/provider/openrouter", "api-key", key],
+                check=False, timeout=60,
+            )
+            ok(f"stored in Windows Credential Manager ({shown})")
+        else:
+            kf = Path.home() / ".acute" / "openrouter.key"
+            kf.parent.mkdir(parents=True, exist_ok=True)
+            kf.write_text(key + "\n", encoding="utf-8")
+            try:
+                os.chmod(kf, 0o600)
+            except OSError:
+                pass
+            ok(f"stored at {kf} ({shown}, chmod 600)")
+        note("the key is also injected directly into the servers at launch")
+
+
+def self_update_check():
+    """If the repo ships a newer launcher, copy it over (takes effect next run)."""
+    with step("Launcher self-update check"):
+        repo_copy = APP_DIR / "launcher" / "acute_launcher.py"
+        if not repo_copy.exists():
+            note("no launcher copy in the repo — skipping")
+            return
+
+        def sha(p):
+            return hashlib.sha256(Path(p).read_bytes()).hexdigest()
+
+        mine = Path(__file__).resolve()
+        if sha(mine) == sha(repo_copy):
+            ok("launcher is current")
+            return
+        shutil.copy2(repo_copy, mine)
+        ok("a newer launcher was delivered with this update — copied over")
+        note("the new version takes effect on the NEXT double-click")
+
+        bat_repo = APP_DIR / "launcher" / "ACUTE.bat"
+        mine_bat = LAUNCHER_DIR / "ACUTE.bat"
+        if bat_repo.exists() and (not mine_bat.exists() or sha(mine_bat) != sha(bat_repo)):
+            warn("ACUTE.bat also changed — please re-download it from the repo's launcher/ folder")
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# modes
+# ─────────────────────────────────────────────────────────────────────────────
+
+def mode_status(pat, key, env):
+    rule("status (read-only)")
+    lines = []
+    for name, cmd in (("git", ["git", "--version"]), ("Node.js", ["node", "--version"]),
+                      ("Python", [sys.executable, "--version"])):
+        code, out = probe(cmd)
+        lines.append(f"{name:<10} {(out.splitlines() or ['?'])[0] if code == 0 else 'not found'}")
+
+    code, out = probe(["pnpm", "--version"])
+    lines.append(f"{'pnpm':<10} {(out.splitlines() or ['?'])[0] if code == 0 else 'not active yet (activated during setup)'}")
+
+    lines.append("")
+    if (APP_DIR / ".git").exists():
+        state = repo_state(pat, env)
+        if state:
+            lines.append(f"app commit   {state['head']}"
+                         + ("  (up to date)" if state["behind"] == 0
+                            else f"  ({state['behind']} behind GitHub)" if state["behind"] > 0
+                            else "  (GitHub unreachable)"))
+            lines.append(f"app folder   {'MODIFIED locally' if state['dirty'] else 'clean'}  ·  {APP_DIR}")
+            lines.append(f"dev database {'present — agents/sessions/projects persist' if (APP_DIR / '.dev' / 'acute.db').exists() else 'not created yet'}")
+    else:
+        lines.append("app          not downloaded yet (first run will fetch it)")
+    lines.append(f"GitHub PAT   length {len(pat)}")
+    lines.append(f"Router key   length {len(key)}")
+
+    busy = []
+    for port in (UI_PORT, SIDECAR_PORT):
+        if IS_WIN:
+            code, out = probe(["netstat", "-ano", "-p", "tcp"])
+            if code == 0 and out and re.search(rf":{port}\s+\S+\s+\S*\s+LISTENING", out):
+                busy.append(f":{port} running")
+        else:
+            code, out = probe(["bash", "-c", f"lsof -t -i :{port}"])
+            if code == 0 and out.strip():
+                busy.append(f":{port} running")
+    lines.append("servers      " + (", ".join(busy) if busy else "stopped"))
+    lines.append(f"log          {LOG_PATH}")
+    panel("\n".join(lines), title="ACUTE-CODE status")
+
+
+def launch(env, key):
+    with step("Launching ACUTE-CODE (sidecar :5178 + UI :5173)"):
+        stop_live_servers("clean restart")
+        if key:
+            env["ACUTE_PROVIDER_OPENROUTER"] = key
+    panel(
+        "Everything is ready. The servers are starting.\n\n"
+        "  ➜  Open  http://localhost:5173  in your browser\n"
+        "  ➜  Keep this window open while using the app\n"
+        "  ➜  Press Ctrl+C here to stop both servers cleanly\n\n"
+        "Server output follows (live):",
+        style="green",
+        title="▲ ACUTE-CODE is starting",
+    )
+    log(f"=== launch {time.strftime('%Y-%m-%d %H:%M:%S')} ===")
+    try:
+        code = subprocess.call(wrap(["pnpm", "dev:full"]), cwd=str(APP_DIR), env=env)
+    except KeyboardInterrupt:
+        code = 0
+    except FileNotFoundError:
+        fail("starting the servers", "pnpm not found — rerun the launcher")
+    if code == 0:
+        ok(f"servers stopped cleanly (session {int(time.time() - STARTED)}s)")
+        wait_close()
+    else:
+        fail(
+            f"servers exited with code {code}",
+            "Common causes:\n"
+            "  • a port is still occupied (the launcher clears it on the next run)\n"
+            "  • the OpenRouter key is missing/invalid (catalog and chats fail)\n"
+            "  • a build step failed — see the log tail below",
+        )
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# main
+# ─────────────────────────────────────────────────────────────────────────────
+
+def main():
+    args = [a for a in sys.argv[1:] if not a.startswith("-")]
+    cmd = args[0] if args else "run"
+
+    banner()
+    log(f"===== launcher start {time.strftime('%Y-%m-%d %H:%M:%S')} args={sys.argv[1:]} =====")
+
+    pat, key = read_credentials()
+    env = dict(os.environ)
+
+    if cmd == "status":
+        mode_status(pat, key, env)
+        return
+
+    check_toolchain()
+    env = ensure_pnpm(env)
+
+    if cmd != "start" and "--no-update" not in sys.argv:
+        updated = clone_or_update(pat, env)
+    else:
+        with step("Update check skipped (start mode)"):
+            updated = False
+
+    install_and_build(env, updated)
+    write_env_file()
+    distribute_key(key)
+    self_update_check()
+
+    if cmd == "update":
+        rule()
+        ok(f"update pass complete ({int(time.time() - STARTED)}s) — everything ready")
+        note("double-click the launcher again to start the app")
+        wait_close()
+        return
+
+    launch(env, key)
+
+
+if __name__ == "__main__":
+    try:
+        main()
+    except KeyboardInterrupt:
+        print("\nCancelled.")
+        sys.exit(130)
+    except SystemExit:
+        raise
+    except Exception:  # noqa: BLE001 — the window must never close silently
+        import traceback
+
+        fail("unexpected launcher error", traceback.format_exc())

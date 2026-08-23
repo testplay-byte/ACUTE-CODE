@@ -25,3 +25,4 @@ coverage/
 .dev
 .runner-bin/
 acute-runner.log.old
+__pycache__/

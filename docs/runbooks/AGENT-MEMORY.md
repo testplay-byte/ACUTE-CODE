@@ -101,3 +101,40 @@ Format per entry: `N. TITLE (date, source)` → mistake → root cause → rule.
 15. **Verify the repo is PRIVATE before every push** (`GET
     /repos/testplay-byte/ACUTE-CODE` with the PAT → `"private": true`).
     Cheap check, closed-source product, one bad push is fatal.
+
+## Round-11 lessons (the Windows .bat failure + launcher redesign)
+
+16. **.bat files written from Linux MUST get explicit CRLF endings**
+    (2026-08-23, owner-reported failure). The round-10 `ACUTE.bat` shipped
+    LF-only; cmd.exe ate characters (`echo`→`cho`) and broke every `goto`
+    label — the whole script disintegrated (`'/d' is not recognized`…).
+    RULE: generate .bat files via a script that inserts `\r\n` deliberately
+    and verify with `file` → must say "with CRLF line terminators". Keep
+    .bat files tiny coordinators (no big logic, minimal labels) — real logic
+    belongs in Python/Node where line endings don't matter.
+
+17. **git credential `store` helper FILE format is URL LINES**
+    (`https://user:token@host`), NOT the `credential approve` stdin format
+    (`protocol=`/`host=`/…). The wrong format fails silently: the helper
+    matches nothing and git falls through to an interactive prompt
+    (`fatal: could not read Username`). Hit while building the launcher's
+    isolated auth. Also: quote the `--file=` path inside the helper value
+    (`credential.helper=store --file="C:/A B/x"`) — git runs helpers through
+    a shell, and launcher folders can contain spaces.
+
+18. **`rich` version quirks**: `Panel(box="double")` crashes on some
+    versions (`'str' object has no attribute 'substitute'`) — use the
+    default box. And `rich.__version__` doesn't exist in every version —
+    probe library availability with `try: import`, never `__version__`.
+
+19. **Never hide your own diagnostics** (2026-08-23): my rich-availability
+    check piped a traceback through `sed -n 1p`, which kept only the first
+    line — the actual error was invisible and I misdiagnosed rich as
+    "missing". Same family as the PIPESTATUS lesson: when a check fails,
+    print its FULL output before concluding anything.
+
+20. **Credentials-file pattern (owner-approved)**: the owner explicitly
+    accepts a plain local `credentials.txt` (launcher folder, never
+    committed, never uploaded) holding GITHUB_PAT + OPENROUTER_KEY — he
+    rotates/clears them himself. The launcher still rejects placeholder
+    values and never logs the contents (lengths only).
