@@ -269,3 +269,21 @@ Work Log:
 
 Stage Summary:
 - Owner path is now: 3 files from launcher/ + credentials.txt rename/paste → double-click ACUTE.bat → everything automatic (auto-install, clone, update+restart, self-update, copyable errors). Node runner (scripts/acute-desktop.mjs) kept as advanced headless path. Open: owner's first real Windows double-click (bat itself untestable here — minimized via tiny CRLF-verified design), then MVP review + Phase 3 on approval.
+
+---
+Task ID: R12 (round-12 session)
+Agent: orchestrator (Z.ai Code) — all inline
+Task: Fix owner-reported Windows launcher failure (clone died on credential prompt; UI borders mojibake) + UI improvements
+
+Work Log:
+- Diagnosis from owner's console log: (a) credential.helper='store --file="C:/..."' contains shell metachars → Git-for-Windows routed the helper through MSYS sh → helper never answered → git fell back to a tty prompt that cannot exist in a double-clicked subprocess ('bash: /dev/tty', 'failed to execute prompt script', 'could not read Username'); (b) round-11 .bat dropped round-10's chcp 65001 → Unicode panel borders mojibake
+- git auth rebuilt: per-command env HOME=.acute + GIT_CONFIG_NOSYSTEM=1 + helper reset + single-word 'store' (no path/quotes/shell); token only in .acute/.git-credentials (0600 URL-line format); owner's global gitconfig + GCM untouched
+- validate_github_access() pre-flight via GitHub API (urllib): 401/403 → precise regeneration instructions; 404 → repo hidden from token; offline → warn+continue; PUBLIC-repo flag
+- ACUTE.bat: chcp 65001 + PYTHONUTF8=1 + PYTHONIOENCODING + PYTHONDONTWRITEBYTECODE (CRLF byte-verified)
+- UI: run-plan panel; ok/note/warn via style= (markup-proof — old warn() MarkupError-crashed this rich version, discovered by the self-update test exercising the never-tested warn path); spinner labels via literal Text(); fail() stops active spinner (ghost-line fix); secret redaction in log(); disk-space check
+- Tests: invalid-token panel; fresh first run (8 steps green); update path incl. self-update copy + bat warn; post-push fresh clone at 0db8556 → 'launcher is current'; live start sidecar-ok + UI 200 in 5s + provider ●; token grep-proof in launcher.log; py_compile; pnpm verify green
+- Memory lessons #21–#23; README 'Updating the launcher itself' + round-12 re-download note; LOCAL-PC-RUNNER auth section rewritten
+- Commit 0db8556 pushed; CI 32626380123 SUCCESS; repo private-verified; ntfy delivered
+
+Stage Summary:
+- Owner action: re-download BOTH ACUTE.bat + acute_launcher.py from launcher/ (credentials.txt unchanged), double-click. Root causes eliminated structurally (no shell-quoting auth path exists anymore; console forced UTF-8; UI text can no longer crash markup). Next: owner's Windows retest; then MVP review + Phase 3 on approval.
