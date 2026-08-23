@@ -58,7 +58,9 @@ git config --global credential.https://github.com.helper ""
 git config --global credential.https://github.com.helper wincred
 printf "protocol=https\nhost=github.com\nusername=testplay-byte\npassword=<GITHUB_PAT>\n\n" | git credential approve
 
-# 2. Clone (username-embedded URL makes wincred reliable)
+# 2. Clone into a DEDICATED folder (your workspace root for this project —
+#    e.g. C:/Users/<you>/Projects/ACUTE-CODE or your agent workspace root;
+#    do NOT clone into a temp or downloads folder; you will work here long-term).
 git clone https://testplay-byte@github.com/testplay-byte/ACUTE-CODE.git
 cd ACUTE-CODE
 
@@ -80,17 +82,30 @@ pnpm dev:full      # sidecar (127.0.0.1:5178, key auto-loaded from Credential
 node scripts/acute.mjs health    # dev CLI: providers/models/test/agents/sessions/usage
 ```
 
-## 3. Understand the project FIRST (in this order)
+## 3. Understand the project FIRST (in this order) — think before acting
+
+**Never guess.** Before writing any code, read the docs below and the actual
+source involved; when something is unclear, check the code and docs first,
+and only ask the owner when it is genuinely his decision (then batch the
+questions, numbered, with your recommended default). Prefer understanding a
+system over patching around it; prefer small verified changes over big
+assumptions. If you are about to make a decision that is hard to reverse,
+pause and re-read the relevant doc. Mistakes in this project cost the owner
+real review time — accuracy first, always.
 
 1. `HANDOFF.md` — state, rules, environment, gotchas (READ FULLY).
-2. `docs/architecture/PROJECT-MAP.md` — the living map: what ACUTE-CODE is,
+2. `AGENTS.md` (repo root) — the workspace operating rules (phase gates,
+   question protocol, hard rules) this prompt summarizes.
+3. `docs/architecture/PROJECT-MAP.md` — the living map: what ACUTE-CODE is,
    how the four layers link, naming conventions, data model, future pillars.
-3. `docs/runbooks/plan-agentic-mvp.md` — the CURRENT task.
-4. `docs/ui-iterations/README.md` — per-screen owner-approval status board +
-   round history 01–08 (what was approved, what was rejected, why).
-5. `docs/specs/SPEC.md`, `docs/architecture/ARCHITECTURE.md` + `api/API.md`,
+4. `docs/runbooks/plan-agentic-mvp.md` — the CURRENT task.
+5. `docs/ui-iterations/README.md` — per-screen owner-approval status board +
+   round history 01–08.
+6. `docs/specs/SPEC.md`, `docs/architecture/ARCHITECTURE.md` + `api/API.md`,
    `docs/decisions/` (ADRs 0001–0013).
-6. `design/demos/` — the owner's three design demos. `acute-agent-ui` (the
+7. `.agents/skills/` — workflow skills (ADR writing, research dispatch,
+   phase reports) that become invocable when this repo is your workspace.
+8. `design/demos/` — the owner's three design demos. `acute-agent-ui` (the
    wizard) is COMPLETE and approved; `acute-agent-dashboard` guides the
    dashboard; `project-chat` is the NORMATIVE spec for the coding UI you are
    about to port.
