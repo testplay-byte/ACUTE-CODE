@@ -7,6 +7,7 @@ import { useThemeStore } from "../lib/theme-store";
 import { THEMES } from "../lib/themes";
 import { useThemeStyles } from "../lib/use-theme-styles";
 import { AgentsScreen } from "../components/agents/AgentsScreen";
+import { ModelsProvidersTab } from "../components/settings/ModelsProvidersTab";
 import { Button, Field, inputClass } from "../components/ui/controls";
 import {
   fetchProviders,
@@ -21,7 +22,7 @@ import { bdr, withAlpha } from "../components/dashboard/helpers";
 const TABS = [
   { id: "appearance", label: "Appearance", icon: Palette },
   { id: "agents", label: "Agents", icon: Bot },
-  { id: "api", label: "API & Providers", icon: Server },
+  { id: "api", label: "Models & Providers", icon: Server },
   { id: "advanced", label: "Advanced", icon: SlidersHorizontal },
 ] as const;
 
@@ -73,7 +74,7 @@ export function SettingsPage() {
       <div className="min-h-0 flex-1 overflow-y-auto p-4 md:p-5">
         {tab === "appearance" && <AppearanceTab />}
         {tab === "agents" && <AgentsScreen embedded />}
-        {tab === "api" && <ApiTab />}
+        {tab === "api" && <ModelsProvidersTab />}
         {tab === "advanced" && <AdvancedTab />}
       </div>
     </div>
@@ -184,7 +185,7 @@ function SectionTitle({ children }: { children: React.ReactNode }) {
 
 /* ── API & Providers ────────────────────────────────────── */
 
-function ApiTab() {
+export function ApiTab() {
   const styles = useThemeStyles();
   const queryClient = useQueryClient();
   const providersQuery = useQuery({

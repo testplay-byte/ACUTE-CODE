@@ -44,6 +44,8 @@ here. Last refreshed: round-17 (2026-08-23).
 
 ## Cross-cutting
 
+- done (R19): model management (providers, models, pricing, keys, testing, hiding) + dashboard v2 (light, multi-file, GH Pages) + folder dialog .ps1 fix
+
 - done (R17): governance docs (WORKFLOW/ROADMAP/TESTING/SECURITY/docs index),
   ADR backfill 0014–0021, IMPLEMENTED-API, PILLARS.md, public dashboard
 - queued: Phase-2 ADR ratifications · cargo-deny for Rust deps in CI ·

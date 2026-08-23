@@ -1,80 +1,50 @@
 /**
- * Native OS folder picker (round-14/15/16: "select the folder itself, don't
- * paste paths"). The sidecar runs as a local process on the user's machine,
- * so IT can open the real OS dialog even while the UI runs in a plain browser
- * (the launcher/dev setup). The Tauri shell keeps its own rfd-based
- * pick_folder command; the UI tries Tauri first, then this endpoint.
+ * Native OS folder picker (round-14→19). The sidecar runs as a local process
+ * on the user's machine, so IT can open the real OS dialog.
  *
- * Round-15: marker protocol (ACUTE_PICK/ACUTE_CANCEL) so a real cancel is
- * distinguishable from a FAILED dialog run; failures surface as `error`.
- * Round-16: Windows method 1 is now the MODERN Vista-style picker (an
- * OpenFileDialog with validation disabled — the standard trick), and every
- * WinForms dialog gets a hidden TOPMOST owner form so it can never appear
- * behind other windows (owner report: "Browse Folder" appeared without
- * proper focus). Three methods total, first success wins, always async
- * (a sync spawn would freeze the whole sidecar while a human decides).
+ * Round-19 FIX (owner-reported: two dialogs opened, neither result reached
+ * the form): the previous inline `-Command` strings were fragile on Windows
+ * (quoting, output capture, STA threading). The fix writes a temporary .ps1
+ * script file and executes it with `-ExecutionPolicy Bypass -STA -File` —
+ * the canonical reliable pattern. The script writes the result to a
+ * temporary FILE (not stdout), which the Node side reads — eliminating all
+ * stdout-capture issues.
  *
  * NEVER call this from tests: the dialog blocks waiting for a human.
  */
 import { spawn } from "node:child_process";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 
 export interface PickFolderResult {
-  /** Chosen absolute path; null = user cancelled (clean) or no backend. */
+  /** Chosen absolute path; null = user cancelled or no backend. */
   path: string | null;
-  /** Set when the dialog ATTEMPTED but failed — shown verbatim to the user. */
+  /** Set when the dialog ATTEMPTED but failed — shown to the user. */
   error?: string;
 }
 
-function runCapture(
-  cmd: string,
-  args: string[],
-  timeoutMs: number,
-): Promise<{ code: number | null; out: string; err: string }> {
-  return new Promise((resolve) => {
-    let out = "";
-    let err = "";
-    let settled = false;
-    const finish = (code: number | null) => {
-      if (settled) return;
-      settled = true;
-      clearTimeout(timer);
-      resolve({ code, out: out.trim(), err: err.trim() });
-    };
-    const child = spawn(cmd, args, { stdio: ["ignore", "pipe", "pipe"], windowsHide: true });
-    const timer = setTimeout(() => {
-      child.kill();
-      finish(-1);
-    }, timeoutMs);
-    child.stdout.on("data", (d: Buffer) => (out += d.toString("utf8")));
-    child.stderr.on("data", (d: Buffer) => (err += d.toString("utf8")));
-    child.on("error", (e) => {
-      err += String(e);
-      finish(-1);
-    });
-    child.on("close", (code) => finish(code));
-  });
-}
-
-/** Interpret marker-protocol output: ACUTE_PICK:<path> | ACUTE_CANCEL | failure. */
-function interpret(
-  res: { code: number | null; out: string; err: string },
-  method: string,
-): { picked: string | null; cancelled: boolean; error?: string } {
-  const line = res.out
-    .split("\n")
-    .map((l) => l.trim())
-    .find((l) => l.startsWith("ACUTE_PICK:") || l === "ACUTE_CANCEL");
-  if (res.code === 0 && line === "ACUTE_CANCEL") return { picked: null, cancelled: true };
-  if (res.code === 0 && line?.startsWith("ACUTE_PICK:")) {
-    const picked = line.slice("ACUTE_PICK:".length).trim();
-    if (picked) return { picked, cancelled: false };
-  }
-  const detail = res.err.split("\n").filter(Boolean).slice(0, 3).join(" | ") || `exit code ${res.code}`;
-  return { picked: null, cancelled: false, error: `${method} failed: ${detail}` };
-}
-
 const DIALOG_TIMEOUT_MS = 15 * 60 * 1000;
-const TITLE = "Select the ACUTE-CODE project folder";
+
+/**
+ * Write the picker script to a temp .ps1, run it, read the result file.
+ * The script uses a classic FolderBrowserDialog (the most reliable from
+ * console-spawned PowerShell) and writes its output to a sibling .txt file.
+ */
+const PS_SCRIPT = `
+param([string]$ResultFile)
+Add-Type -AssemblyName System.Windows.Forms | Out-Null
+$dialog = New-Object System.Windows.Forms.FolderBrowserDialog
+$dialog.Description = 'Select the ACUTE-CODE project folder'
+$dialog.ShowNewFolderButton = $true
+$dialog.RootFolder = [System.Environment+SpecialFolder]::Desktop
+$result = $dialog.ShowDialog()
+if ($result -eq [System.Windows.Forms.DialogResult]::OK) {
+  [System.IO.File]::WriteAllText($ResultFile, 'OK:' + $dialog.SelectedPath)
+} else {
+  [System.IO.File]::WriteAllText($ResultFile, 'CANCEL')
+}
+`;
 
 export async function pickFolder(): Promise<PickFolderResult> {
   if (process.platform === "win32") return pickWindows();
@@ -83,92 +53,74 @@ export async function pickFolder(): Promise<PickFolderResult> {
 }
 
 async function pickWindows(): Promise<PickFolderResult> {
-  // Method 1: MODERN Vista-style picker (OpenFileDialog, validation off).
-  const modern = await runCapture(
-    "powershell",
-    [
-      "-NoProfile",
-      "-STA",
-      "-Command",
-      [
-        "Add-Type -AssemblyName System.Windows.Forms | Out-Null",
-        "$owner = New-Object System.Windows.Forms.Form -Property @{ TopMost = $true; ShowInTaskbar = $false }",
-        "$d = New-Object System.Windows.Forms.OpenFileDialog",
-        "$d.Title = 'Select the ACUTE-CODE project folder'",
-        "$d.ValidateNames = $false",
-        "$d.CheckFileExists = $false",
-        "$d.CheckPathExists = $true",
-        "$d.FileName = 'Select this folder'",
-        "if ($d.ShowDialog($owner) -eq [System.Windows.Forms.DialogResult]::OK) { Write-Output ('ACUTE_PICK:' + (Split-Path -Parent $d.FileName)) }",
-        "else { Write-Output 'ACUTE_CANCEL' }",
-      ].join("; "),
-    ],
-    DIALOG_TIMEOUT_MS,
-  );
-  const r1 = interpret(modern, "modern folder picker");
-  if (r1.picked !== null || r1.cancelled) return { path: r1.picked };
+  const tempDir = mkdtempSync(join(tmpdir(), "acute-dialog-"));
+  const scriptPath = join(tempDir, "pick.ps1");
+  const resultPath = join(tempDir, "result.txt");
+  try {
+    writeFileSync(scriptPath, PS_SCRIPT, "utf8");
 
-  // Method 2: classic FolderBrowserDialog with a topmost owner.
-  const classic = await runCapture(
-    "powershell",
-    [
-      "-NoProfile",
-      "-STA",
-      "-Command",
-      [
-        "Add-Type -AssemblyName System.Windows.Forms | Out-Null",
-        "$owner = New-Object System.Windows.Forms.Form -Property @{ TopMost = $true; ShowInTaskbar = $false }",
-        "$d = New-Object System.Windows.Forms.FolderBrowserDialog",
-        "$d.Description = 'Select the ACUTE-CODE project folder'",
-        "$d.ShowNewFolderButton = $true",
-        "if ($d.ShowDialog($owner) -eq [System.Windows.Forms.DialogResult]::OK) { Write-Output ('ACUTE_PICK:' + $d.SelectedPath) }",
-        "else { Write-Output 'ACUTE_CANCEL' }",
-      ].join("; "),
-    ],
-    DIALOG_TIMEOUT_MS,
-  );
-  const r2 = interpret(classic, "FolderBrowserDialog");
-  if (r2.picked !== null || r2.cancelled) return { path: r2.picked };
+    const exitCode = await new Promise<number | null>((resolve) => {
+      const child = spawn(
+        "powershell",
+        ["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-STA", "-File", scriptPath, "-ResultFile", resultPath],
+        { stdio: ["ignore", "ignore", "ignore"], windowsHide: true, timeout: DIALOG_TIMEOUT_MS },
+      );
+      child.on("error", () => resolve(-1));
+      child.on("close", (code) => resolve(code));
+    });
 
-  // Method 3: Shell.Application COM BrowseForFolder (no WinForms at all).
-  const com = await runCapture(
-    "powershell",
-    [
-      "-NoProfile",
-      "-Command",
-      [
-        "$shell = New-Object -ComObject Shell.Application",
-        `$f = $shell.BrowseForFolder(0, '${TITLE}', 0x40)`,
-        "if ($f) { Write-Output ('ACUTE_PICK:' + $f.Self.Path) }",
-        "else { Write-Output 'ACUTE_CANCEL' }",
-      ].join("; "),
-    ],
-    DIALOG_TIMEOUT_MS,
-  );
-  const r3 = interpret(com, "Shell.BrowseForFolder");
-  if (r3.picked !== null || r3.cancelled) return { path: r3.picked };
+    if (exitCode !== 0) {
+      return {
+        path: null,
+        error: `folder dialog exited with code ${exitCode} — PowerShell may be blocked or missing`,
+      };
+    }
 
-  return {
-    path: null,
-    error: `${r1.error ?? ""}; ${r2.error ?? ""}; ${r3.error ?? "no dialog method worked"}`,
-  };
+    // Read the result file (the .ps1 always writes it).
+    let result = "";
+    try {
+      result = readFileSync(resultPath, "utf8").trim();
+    } catch {
+      return { path: null, error: "folder dialog completed but produced no result" };
+    }
+
+    if (result === "CANCEL") return { path: null };
+    if (result.startsWith("OK:")) {
+      const path = result.slice(3).trim();
+      if (path) return { path };
+    }
+    return { path: null, error: `unexpected dialog result: ${result.slice(0, 100)}` };
+  } catch (error) {
+    return { path: null, error: `folder dialog failed: ${error instanceof Error ? error.message : String(error)}` };
+  } finally {
+    try {
+      rmSync(tempDir, { recursive: true, force: true });
+    } catch {
+      /* best-effort cleanup */
+    }
+  }
 }
 
 async function pickUnix(): Promise<PickFolderResult> {
+  const { spawn } = await import("node:child_process");
   const candidates: Array<readonly [string, readonly string[]]> = [
-    ["zenity", ["--file-selection", "--directory", `--title=${TITLE}`]],
+    ["zenity", ["--file-selection", "--directory", "--title=Select the ACUTE-CODE project folder"]],
     ["kdialog", ["--getexistingdirectory", "."]],
   ];
   const failures: string[] = [];
   for (const [cmd, args] of candidates) {
-    const res = await runCapture(cmd, [...args], DIALOG_TIMEOUT_MS);
-    if (res.code === 0) {
-      const picked = res.out.split("\n").map((l) => l.trim()).filter(Boolean)[0] ?? "";
-      if (picked) return { path: picked };
-      return { path: null }; // ran, user cancelled
-    }
-    if (res.code === 1 && !res.err) return { path: null }; // zenity cancel = exit 1, quiet
-    failures.push(`${cmd}: exit ${res.code}${res.err ? ` (${res.err.split("\n")[0]})` : ""}`);
+    const result = await new Promise<{ code: number | null; out: string; err: string }>((resolve) => {
+      const child = spawn(cmd, [...args], { stdio: ["ignore", "pipe", "pipe"] });
+      let out = "";
+      let err = "";
+      child.stdout?.on("data", (d: Buffer) => (out += d.toString("utf8")));
+      child.stderr?.on("data", (d: Buffer) => (err += d.toString("utf8")));
+      child.on("error", () => resolve({ code: -1, out: "", err: String(cmd) }));
+      child.on("close", (code) => resolve({ code, out: out.trim(), err: err.trim() }));
+    });
+    if (result.code === 0 && result.out) return { path: result.out.split("\n")[0].trim() };
+    if (result.code === 1 && !result.err) return { path: null }; // zenity cancel = exit 1, quiet
+    failures.push(`${cmd}: exit ${result.code}`);
   }
   return { path: null, error: `no folder dialog available (${failures.join("; ")})` };
 }
