@@ -13,7 +13,7 @@ describe("App shell (owner round-8 structure)", () => {
     renderWithProviders(<App />);
 
     // Brand area carries the product name.
-    expect(screen.getAllByText("ACUTE-CODE").length).toBeGreaterThan(0);
+    expect(screen.getAllByText("Acute").length).toBeGreaterThan(0);
 
     // Sidebar structure: Dashboard button + PROJECTS section + Usage + Settings.
     expect(screen.getByRole("button", { name: /^dashboard$/i })).toBeTruthy();

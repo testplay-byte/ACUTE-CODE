@@ -11,16 +11,14 @@ import {
   Trash2,
 } from "lucide-react";
 import { motion } from "framer-motion";
-import { APP_NAME } from "../../lib/version";
 import { ApiError, pickFolderViaBackend, type Project } from "../../lib/api";
 import { cn } from "../../lib/utils";
-import { slideInLeft } from "../../lib/motion";
 import { SEMANTIC_COLORS } from "../../lib/semantics";
 import { isTauri } from "../../lib/sidecar";
 import { useConfigStore } from "../../lib/config-store";
-import { useThemeStyles } from "../../lib/use-theme-styles";
+import { useThemeStyles, } from "../../lib/use-theme-styles";
 import { useCreateProject, useDeleteProject, useProjects } from "../../hooks/use-projects";
-import { bdr, withAlpha } from "../dashboard/helpers";
+import { withAlpha } from "../dashboard/helpers";
 
 type TauriGlobal = {
   core: {
@@ -28,7 +26,6 @@ type TauriGlobal = {
   };
 };
 
-/** Tauri shell invoke (pattern from onboarding/providers-api.ts, pick_folder). */
 async function tauriInvoke<T>(command: string, args?: Record<string, unknown>): Promise<T> {
   const tauri = (window as { __TAURI__?: TauriGlobal }).__TAURI__;
   if (!tauri) throw new Error("Tauri shell unavailable");
@@ -46,358 +43,382 @@ function readCollapsed(): boolean {
 }
 
 /**
- * Sidebar (owner round-8 structure):
- * - TOP highlighted area: brand + Dashboard — the primary surface.
- * - PROJECTS section below, deliberately separated: project list + Add
- *   Project (backend /api/v1/projects via use-projects; Tauri folder picker
- *   when running inside the desktop shell).
- * - Usage.
- * - Bottom: Settings (agents management + API config + appearance live in
- *   there now, NOT in the sidebar) + collapse toggle.
- * Sessions are intentionally absent: they open from a project's activity,
- * not from the sidebar (chat-window flow arrives with orchestration).
+ * Sidebar (round-21 UI overhaul): wizard design DNA applied —
+ * solid accent fills for active states, 1.5px borderStrong borders,
+ * softShadow on the card, generous radii (12-20px), 11px bold uppercase
+ * tracked labels, and the wizard's selected-card recipe (accent border +
+ * ring + shadow + lift) for active projects.
  */
 export function Sidebar() {
-  const [collapsed, setCollapsed] = useState(readCollapsed);
   const styles = useThemeStyles();
-  const navigate = useNavigate();
-  const location = useLocation();
-  const projectsQuery = useProjects();
-  const projects = projectsQuery.data ?? [];
+  const [collapsed, setCollapsed] = useState(readCollapsed);
 
-  // Active project follows the URL (routing owns selection now, not a store).
-  const activeProjectId = /^\/project\/([^/]+)/.exec(location.pathname)?.[1] ?? null;
-
-  const toggleCollapsed = () => {
-    setCollapsed((c) => {
-      try {
-        localStorage.setItem(COLLAPSE_KEY, c ? "0" : "1");
-      } catch {
-        /* private-mode localStorage failures just skip persistence */
-      }
-      return !c;
-    });
-  };
-
-  const openProject = useCallback((id: string) => navigate(`/project/${id}/chat`), [navigate]);
+  useEffect(() => {
+    try {
+      localStorage.setItem(COLLAPSE_KEY, collapsed ? "1" : "0");
+    } catch {
+      /* private mode */
+    }
+  }, [collapsed]);
 
   return (
     <motion.aside
-      variants={slideInLeft}
-      initial="initial"
-      animate="animate"
-      className={cn(
-        "hidden shrink-0 flex-col overflow-hidden rounded-lg border-[1.5px] transition-all duration-200 md:flex",
-        collapsed ? "w-[60px]" : "w-[250px] xl:w-[270px]",
-      )}
-      style={{ backgroundColor: styles.card, borderColor: styles.border }}
+      initial={false}
+      animate={{ width: collapsed ? 64 : 264 }}
+      transition={{ duration: 0.25, ease: [0.25, 0.1, 0.25, 1] }}
+      className="shrink-0 flex flex-col overflow-hidden rounded-[20px] border-[1.5px]"
+      style={{
+        backgroundColor: styles.card,
+        borderColor: styles.borderStrong,
+        boxShadow: styles.softShadow,
+      }}
     >
-      {/* ── TOP highlighted area: brand + Dashboard ── */}
-      <div
-        className={cn("shrink-0 pb-2 pt-3", collapsed ? "px-2" : "px-3")}
-        style={{
-          background: withAlpha(styles.accent, 0.05),
-          borderBottom: bdr("1.5px", withAlpha(styles.accent, 0.15)),
-        }}
-      >
-        <div className={cn("mb-2 flex items-center gap-2.5", collapsed && "justify-center")}>
-          <div
-            className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg text-sm font-bold"
-            style={{ backgroundColor: styles.accent, color: styles.accentText }}
-            title={APP_NAME}
-          >
-            A
+      {/* Brand row — wizard pill style */}
+      <div className={cn("shrink-0 flex items-center gap-2.5 px-3 pt-4", collapsed && "justify-center px-2")}>
+        <div
+          className="w-8 h-8 shrink-0 rounded-[10px] grid place-items-center font-black text-[14px]"
+          style={{ background: styles.accent, color: styles.accentText }}
+        >
+          {"\u25D0"}
+        </div>
+        {!collapsed && (
+          <div className="flex items-center gap-2 min-w-0">
+            <span className="text-[13px] font-bold tracking-[-0.02em] truncate" style={{ color: styles.text }}>
+              Acute
+            </span>
+            <span
+              className="shrink-0 px-1.5 py-0.5 rounded-full text-[9px] font-bold font-mono"
+              style={{ background: styles.accent, color: styles.accentText }}
+            >
+              "v0.1.0"
+            </span>
           </div>
-          {!collapsed ? (
-            <div className="min-w-0">
-              <div className="truncate text-[13px] font-bold tracking-tight" style={{ color: styles.text }}>
-                {APP_NAME}
-              </div>
-              <div className="truncate text-[10px]" style={{ color: styles.textSecondary }}>
-                multi-agent workbench
-              </div>
-            </div>
-          ) : null}
-        </div>
+        )}
+      </div>
+
+      {/* Nav items */}
+      <nav className={cn("flex flex-col gap-1 px-2.5 pt-4", collapsed && "px-1.5")} aria-label="Main navigation">
         <DashboardButton collapsed={collapsed} />
-      </div>
-
-      {/* ── PROJECTS section (separate concern, visually separated) ── */}
-      <div className="flex min-h-0 flex-1 flex-col">
-        {!collapsed ? (
-          <>
-            <div className="flex items-center gap-2 px-3 pb-1.5 pt-3">
-              <h2 className="flex-1 text-[12px] font-bold" style={{ color: styles.text }}>
-                Projects
-              </h2>
-              <span
-                className="rounded-full px-1.5 py-0.5 text-[10px] font-bold"
-                style={{ background: styles.subtle, color: styles.textTertiary }}
-              >
-                {projects.length}
-              </span>
-            </div>
-            <div className="mx-3" style={{ borderTop: bdr("1.5px", styles.border) }} />
-          </>
-        ) : null}
-        <div className="custom-scrollbar flex flex-1 flex-col gap-0.5 overflow-y-auto p-1.5">
-          {projects.map((p) => (
-            <ProjectItem
-              key={p.id}
-              project={p}
-              collapsed={collapsed}
-              isActive={p.id === activeProjectId}
-              onSelect={() => openProject(p.id)}
-            />
-          ))}
-          {!collapsed && projects.length === 0 ? (
-            <p className="px-2.5 py-2 text-[11px] leading-relaxed" style={{ color: styles.textTertiary }}>
-              No projects yet — add one to give your agents a home.
-            </p>
-          ) : null}
-        </div>
-        <div className={cn("shrink-0 pb-1.5", collapsed ? "px-1.5" : "px-2")}>
-          <AddProjectButton collapsed={collapsed} onCreated={openProject} />
-        </div>
-      </div>
-
-      {/* ── Usage + Settings + collapse ── */}
-      <div className="shrink-0 p-2" style={{ borderTop: bdr("1.5px", styles.border) }}>
         <UsageButton collapsed={collapsed} />
+      </nav>
+
+      {/* Projects section */}
+      <div className="flex-1 flex flex-col min-h-0 overflow-hidden pt-4">
+        <ProjectSection collapsed={collapsed} />
+      </div>
+
+      {/* Bottom */}
+      <div className={cn("shrink-0 border-t px-2.5 pb-3 pt-2", collapsed && "px-1.5")} style={{ borderColor: styles.borderSubtle }}>
         <SettingsButton collapsed={collapsed} />
         <button
-          onClick={toggleCollapsed}
+          onClick={() => setCollapsed(!collapsed)}
           aria-label={collapsed ? "Expand sidebar" : "Collapse sidebar"}
-          title={collapsed ? "Expand sidebar" : "Collapse sidebar"}
-          className={cn(
-            "mt-1 flex h-7 w-full cursor-pointer items-center gap-2 rounded-lg px-2 transition-colors duration-200",
-            collapsed && "justify-center px-0",
-          )}
+          className="w-full h-8 mt-1 flex items-center justify-center rounded-[10px] transition-colors"
           style={{ color: styles.textTertiary }}
-          onMouseEnter={(e) => {
-            e.currentTarget.style.background = styles.subtleHover;
-            e.currentTarget.style.color = styles.text;
-          }}
-          onMouseLeave={(e) => {
-            e.currentTarget.style.background = "transparent";
-            e.currentTarget.style.color = styles.textTertiary;
-          }}
+          onMouseEnter={(e) => (e.currentTarget.style.background = styles.subtleHover)}
+          onMouseLeave={(e) => (e.currentTarget.style.background = "transparent")}
         >
-          {collapsed ? <ChevronsRight size={13} /> : <ChevronsLeft size={13} />}
-          {!collapsed ? (
-            <span className="truncate font-mono text-[10px]">local-first · no telemetry</span>
-          ) : null}
+          {collapsed ? <ChevronsRight size={14} /> : <ChevronsLeft size={14} />}
         </button>
       </div>
     </motion.aside>
   );
 }
 
-function navButtonClass(collapsed: boolean): string {
-  return cn(
-    "flex w-full shrink-0 cursor-pointer items-center gap-2.5 rounded-lg border-[1.5px] px-2.5 py-2 text-[12px] font-semibold transition-colors duration-200",
-    collapsed && "justify-center px-0",
+/** Nav button — active = solid accent fill + bentoShadowSm (wizard recipe). */
+function NavButton({
+  icon: Icon,
+  label,
+  active,
+  collapsed,
+  onClick,
+}: {
+  icon: typeof LayoutDashboard;
+  label: string;
+  active: boolean;
+  collapsed: boolean;
+  onClick: () => void;
+}) {
+  const styles = useThemeStyles();
+  return (
+    <button
+      onClick={onClick}
+      aria-current={active ? "page" : undefined}
+      title={collapsed ? label : undefined}
+      className={cn(
+        "h-10 flex items-center rounded-[12px] transition-all duration-200 text-[13px] font-bold",
+        collapsed ? "justify-center w-full" : "px-3 gap-2.5",
+      )}
+      style={{
+        background: active ? styles.accent : "transparent",
+        color: active ? styles.accentText : styles.textSecondary,
+        boxShadow: active ? styles.bentoShadowSm : "none",
+      }}
+      onMouseEnter={(e) => {
+        if (!active) {
+          e.currentTarget.style.background = styles.subtleHover;
+          e.currentTarget.style.color = styles.text;
+        }
+      }}
+      onMouseLeave={(e) => {
+        if (!active) {
+          e.currentTarget.style.background = "transparent";
+          e.currentTarget.style.color = styles.textSecondary;
+        }
+      }}
+    >
+      <Icon size={16} strokeWidth={2} className="shrink-0" />
+      {!collapsed && <span>{label}</span>}
+    </button>
   );
 }
 
 function DashboardButton({ collapsed }: { collapsed: boolean }) {
-  const styles = useThemeStyles();
   const navigate = useNavigate();
+  const { pathname } = useLocation();
+  const active = pathname === "/";
   return (
-    <button
+    <NavButton
+      icon={LayoutDashboard}
+      label="Dashboard"
+      active={active}
+      collapsed={collapsed}
       onClick={() => navigate("/")}
-      title={collapsed ? "Dashboard" : undefined}
-      className={navButtonClass(collapsed)}
-      style={{
-        backgroundColor: withAlpha(styles.accent, 0.1),
-        borderColor: withAlpha(styles.accent, 0.3),
-        color: styles.accent,
-      }}
-    >
-      <LayoutDashboard size={15} strokeWidth={2.25} className="shrink-0" />
-      {!collapsed ? <span className="truncate">Dashboard</span> : null}
-    </button>
+    />
   );
 }
 
 function UsageButton({ collapsed }: { collapsed: boolean }) {
-  const styles = useThemeStyles();
   const navigate = useNavigate();
+  const { pathname } = useLocation();
+  const active = pathname.startsWith("/usage");
   return (
-    <button
+    <NavButton
+      icon={BarChart3}
+      label="Usage"
+      active={active}
+      collapsed={collapsed}
       onClick={() => navigate("/usage")}
-      title={collapsed ? "Usage" : undefined}
-      className={navButtonClass(collapsed)}
-      style={{ borderColor: "transparent", color: styles.textSecondary }}
-      onMouseEnter={(e) => {
-        e.currentTarget.style.background = styles.subtleHover;
-        e.currentTarget.style.color = styles.text;
-      }}
-      onMouseLeave={(e) => {
-        e.currentTarget.style.background = "transparent";
-        e.currentTarget.style.color = styles.textSecondary;
-      }}
-    >
-      <BarChart3 size={15} strokeWidth={2.25} className="shrink-0" />
-      {!collapsed ? <span className="truncate">Usage</span> : null}
-    </button>
+    />
   );
 }
 
 function SettingsButton({ collapsed }: { collapsed: boolean }) {
-  const styles = useThemeStyles();
   const navigate = useNavigate();
+  const { pathname } = useLocation();
+  const active = pathname.startsWith("/settings");
   return (
-    <button
+    <NavButton
+      icon={Settings}
+      label="Settings"
+      active={active}
+      collapsed={collapsed}
       onClick={() => navigate("/settings")}
-      title={collapsed ? "Settings" : undefined}
-      className={cn(navButtonClass(collapsed), "mt-0.5")}
-      style={{ borderColor: "transparent", color: styles.textSecondary }}
-      onMouseEnter={(e) => {
-        e.currentTarget.style.background = styles.subtleHover;
-        e.currentTarget.style.color = styles.text;
-      }}
-      onMouseLeave={(e) => {
-        e.currentTarget.style.background = "transparent";
-        e.currentTarget.style.color = styles.textSecondary;
-      }}
-    >
-      <Settings size={15} strokeWidth={2.25} className="shrink-0" />
-      {!collapsed ? <span className="truncate">Settings</span> : null}
-    </button>
+    />
   );
 }
 
-function ProjectItem({
-  project,
-  isActive,
-  collapsed,
-  onSelect,
-}: {
-  project: Project;
-  isActive: boolean;
-  collapsed: boolean;
-  onSelect: () => void;
-}) {
+/** Projects section — header label + project list + Add Project button. */
+function ProjectSection({ collapsed }: { collapsed: boolean }) {
   const styles = useThemeStyles();
-  const deleteProject = useDeleteProject();
-  const letter = project.name.charAt(0).toUpperCase();
+  const navigate = useNavigate();
+  const { pathname } = useLocation();
+  const projectsQuery = useProjects();
+  const projects = projectsQuery.data ?? [];
+  const [showAddDialog, setShowAddDialog] = useState(false);
+
+  const activeProjectMatch = pathname.match(/^\/project\/([^/]+)/);
+  const activeProjectId = activeProjectMatch?.[1] ?? null;
 
   if (collapsed) {
     return (
-      <button
-        onClick={onSelect}
-        title={project.name}
-        aria-label={project.name}
-        className="mx-auto flex h-8 w-8 shrink-0 cursor-pointer items-center justify-center rounded-lg text-sm font-bold text-white transition-transform duration-200 hover:scale-105"
-        style={{
-          backgroundColor: `${project.color}CC`,
-          outline: isActive ? `2px solid ${styles.accent}` : "none",
-        }}
-      >
-        {letter}
-      </button>
+      <div className="flex flex-col items-center gap-1.5 px-1.5 pb-2">
+        {projects.slice(0, 5).map((project) => (
+          <button
+            key={project.id}
+            onClick={() => navigate(`/project/${project.id}/chat`)}
+            title={project.name}
+            aria-label={`Open ${project.name}`}
+            className="w-9 h-9 rounded-[10px] grid place-items-center font-black text-[12px] transition-transform hover:scale-105"
+            style={{
+              background: project.color,
+              color: "#fff",
+              outline: activeProjectId === project.id ? `2px solid ${styles.accent}` : "none",
+              outlineOffset: 2,
+            }}
+          >
+            {project.name.charAt(0).toUpperCase()}
+          </button>
+        ))}
+        <button
+          onClick={() => setShowAddDialog(true)}
+          aria-label="Add project"
+          title="Add project"
+          className="w-9 h-9 rounded-[12px] grid place-items-center border-[1.5px] border-dashed transition-transform hover:scale-105"
+          style={{ borderColor: styles.border, color: styles.textTertiary }}
+        >
+          <Plus size={14} strokeWidth={2.5} />
+        </button>
+        {showAddDialog && (
+          <AddProjectDialog
+            onCreated={(id) => navigate(`/project/${id}/chat`)}
+            onClose={() => setShowAddDialog(false)}
+          />
+        )}
+      </div>
     );
   }
 
   return (
+    <>
+      <div className="flex items-center justify-between px-4 pb-2">
+        <span
+          className="text-[11px] font-bold uppercase tracking-widest"
+          style={{ color: styles.textTertiary }}
+        >
+          Projects
+        </span>
+        {projects.length > 0 && (
+          <span
+            className="px-1.5 py-0.5 rounded-full text-[10px] font-bold"
+            style={{ background: styles.subtle, color: styles.textTertiary }}
+          >
+            {projects.length}
+          </span>
+        )}
+      </div>
+      <div className="flex-1 overflow-y-auto px-2.5 pb-2 space-y-1" style={{ scrollbarWidth: "thin" }}>
+        {projects.map((project) => (
+          <ProjectItem
+            key={project.id}
+            project={project}
+            active={activeProjectId === project.id}
+          />
+        ))}
+        <AddProjectButton onOpen={() => setShowAddDialog(true)} />
+      </div>
+      {showAddDialog && (
+        <AddProjectDialog
+          onCreated={(id) => navigate(`/project/${id}/chat`)}
+          onClose={() => setShowAddDialog(false)}
+        />
+      )}
+    </>
+  );
+}
+
+function ProjectItem({ project, active }: { project: Project; active: boolean }) {
+  const styles = useThemeStyles();
+  const navigate = useNavigate();
+  const deleteProject = useDeleteProject();
+  const [hovered, setHovered] = useState(false);
+
+  return (
     <div
-      onClick={onSelect}
+      className="group relative h-11 flex items-center gap-2.5 rounded-[12px] px-2 cursor-pointer transition-all duration-200"
+      style={{
+        border: active ? `1.5px solid ${styles.accent}` : "1.5px solid transparent",
+        background: active ? "transparent" : hovered ? styles.subtleHover : "transparent",
+        boxShadow: active ? `0 0 0 3px ${withAlpha(styles.accent, 0.15)}` : "none",
+        transform: active ? "translateY(-1px)" : "none",
+      }}
+      onMouseEnter={() => setHovered(true)}
+      onMouseLeave={() => setHovered(false)}
+      onClick={() => navigate(`/project/${project.id}/chat`)}
       role="button"
       tabIndex={0}
       onKeyDown={(e) => {
-        if (e.key === "Enter" || e.key === " ") onSelect();
+        if (e.key === "Enter") navigate(`/project/${project.id}/chat`);
       }}
-      className="group relative cursor-pointer rounded-lg px-2.5 py-2 transition-colors duration-200"
-      style={{
-        backgroundColor: isActive ? withAlpha(project.color, 0.1) : "transparent",
-        border: bdr("1.5px", isActive ? withAlpha(project.color, 0.3) : "transparent"),
-      }}
-      onMouseEnter={(e) => {
-        if (!isActive) e.currentTarget.style.backgroundColor = styles.subtleHover;
-      }}
-      onMouseLeave={(e) => {
-        if (!isActive) e.currentTarget.style.backgroundColor = "transparent";
-      }}
+      aria-label={`Open project ${project.name}`}
     >
-      <div className="flex items-center gap-2.5">
-        <div
-          className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg text-sm font-bold text-white transition-transform duration-200 group-hover:scale-105"
-          style={{ backgroundColor: `${project.color}CC` }}
+      <span
+        className="w-8 h-8 shrink-0 rounded-[10px] grid place-items-center font-black text-[13px]"
+        style={{ background: project.color, color: "#fff" }}
+      >
+        {project.name.charAt(0).toUpperCase()}
+      </span>
+      <div className="flex min-w-0 flex-1 flex-col">
+        <span
+          className="text-[12px] font-bold truncate transition-colors"
+          style={{ color: active ? styles.text : styles.textSecondary }}
         >
-          {letter}
-        </div>
-        <div className="min-w-0 flex-1">
-          <div
-            className="truncate text-[12px] font-semibold"
-            style={{ color: isActive ? styles.text : styles.text }}
-          >
-            {project.name}
-          </div>
-          <div
-            className="mt-0.5 truncate font-mono text-[10px]"
-            style={{ color: styles.textTertiary }}
-          >
-            {project.rootPath}
-          </div>
-        </div>
-        <button
-          onClick={(e) => {
-            e.stopPropagation();
-            deleteProject.mutate(project.id);
-          }}
-          aria-label={`Delete ${project.name}`}
-          className="flex h-6 w-6 shrink-0 cursor-pointer items-center justify-center rounded-md opacity-0 transition-all duration-150 group-hover:opacity-100"
+          {project.name}
+        </span>
+        <span
+          className="font-mono text-[9.5px] truncate"
           style={{ color: styles.textTertiary }}
+          title={project.rootPath}
         >
-          <Trash2 size={11} />
-        </button>
+          {project.rootPath}
+        </span>
       </div>
+      <button
+        onClick={(e) => {
+          e.stopPropagation();
+          deleteProject.mutate(project.id);
+        }}
+        aria-label={`Delete ${project.name}`}
+        title={`Delete ${project.name}`}
+        className="absolute right-1.5 w-6 h-6 grid place-items-center rounded-md opacity-0 transition-opacity group-hover:opacity-100"
+        style={{ color: styles.textTertiary }}
+      >
+        <Trash2 size={11} />
+      </button>
     </div>
   );
 }
 
-function AddProjectButton({
-  collapsed,
+function AddProjectButton({ onOpen }: { onOpen: () => void }) {
+  const styles = useThemeStyles();
+  return (
+    <button
+      onClick={onOpen}
+      className="h-10 flex items-center justify-center gap-2 rounded-[14px] border-[1.5px] border-dashed text-[12px] font-bold transition-all duration-200 hover:-translate-y-px"
+      style={{
+        borderColor: styles.border,
+        background: styles.subtle,
+        color: styles.textTertiary,
+      }}
+      onMouseEnter={(e) => {
+        e.currentTarget.style.borderColor = styles.borderStrong;
+        e.currentTarget.style.color = styles.textSecondary;
+      }}
+      onMouseLeave={(e) => {
+        e.currentTarget.style.borderColor = styles.border;
+        e.currentTarget.style.color = styles.textTertiary;
+      }}
+    >
+      <Plus size={13} strokeWidth={2.5} />
+      <span>Add Project</span>
+    </button>
+  );
+}
+
+// ─── Add Project Dialog (wizard-style: h-12 inputs, 24px radius) ─────────────
+
+function AddProjectDialog({
   onCreated,
+  onClose,
 }: {
-  collapsed: boolean;
-  onCreated: (id: string) => void;
+  onCreated: (projectId: string) => void;
+  onClose: () => void;
 }) {
   const styles = useThemeStyles();
   const createProject = useCreateProject();
-  const [open, setOpen] = useState(false);
   const [name, setName] = useState("");
   const [rootPath, setRootPath] = useState("");
   const [picking, setPicking] = useState(false);
   const [pickHint, setPickHint] = useState<string | null>(null);
-  // Browse hits the real sidecar dialog — fixture mode has none (demo data).
-  const demoData = useConfigStore((s) => s.demoData);
+  const [formError, setFormError] = useState<string | null>(null);
   const nameRef = useRef<HTMLInputElement>(null);
+  const demoData = useConfigStore((s) => s.demoData);
 
   useEffect(() => {
-    if (open) setTimeout(() => nameRef.current?.focus(), 60);
-  }, [open]);
+    const timer = setTimeout(() => nameRef.current?.focus(), 60);
+    return () => clearTimeout(timer);
+  }, []);
 
-  const handleAdd = useCallback(() => {
-    if (!name.trim() || !rootPath.trim() || createProject.isPending) return;
-    createProject.mutate(
-      { name: name.trim(), rootPath: rootPath.trim() },
-      {
-        onSuccess: (project) => {
-          setName("");
-          setRootPath("");
-          setOpen(false);
-          onCreated(project.id);
-        },
-      },
-    );
-  }, [name, rootPath, createProject, onCreated]);
-
-  /** Folder picker (round-15): Tauri shell's native dialog when packed,
-   * otherwise the SIDECAR opens the real OS dialog (PowerShell ×2 methods /
-   * zenity) — so Browse works in plain browser dev too. Every failure mode is
-   * SHOWN to the user; nothing is silent. */
   const handleBrowse = useCallback(async () => {
     setPicking(true);
     setPickHint(null);
@@ -411,11 +432,10 @@ function AddProjectButton({
       if (picked.path) {
         setRootPath(picked.path);
       } else if (picked.unavailable) {
-        setPickHint("No folder dialog on this machine — please paste the path instead.");
+        setPickHint("No folder dialog on this machine — paste the path.");
       } else if (picked.error) {
         setPickHint(`Folder dialog failed: ${picked.error}`);
       }
-      // path null + no error = user closed the dialog — stay quiet.
     } catch (cause) {
       setPickHint(`Folder dialog failed: ${cause instanceof Error ? cause.message : String(cause)}`);
     } finally {
@@ -423,140 +443,143 @@ function AddProjectButton({
     }
   }, []);
 
-  if (collapsed) {
-    return (
-      <button
-        onClick={() => {
-          setCollapsedExpandHint();
-        }}
-        title="Expand the sidebar to add a project"
-        className="mx-auto flex h-8 w-8 cursor-pointer items-center justify-center rounded-lg"
-        style={{ color: styles.textTertiary }}
-      >
-        <Plus size={14} strokeWidth={2.5} />
-      </button>
+  const submit = useCallback(() => {
+    if (name.trim().length === 0 || rootPath.trim().length === 0 || createProject.isPending) return;
+    setFormError(null);
+    createProject.mutate(
+      { name: name.trim(), rootPath: rootPath.trim() },
+      {
+        onSuccess: (project) => {
+          onClose();
+          onCreated(project.id);
+        },
+        onError: (error) => {
+          setFormError(
+            error instanceof ApiError
+              ? error.message
+              : error instanceof Error
+                ? error.message
+                : "Failed to create the project.",
+          );
+        },
+      },
     );
-  }
+  }, [name, rootPath, createProject, onClose, onCreated]);
 
-  const inputStyle = {
+  const is = {
     background: styles.inputBg,
     borderColor: styles.inputBorder,
     color: styles.text,
   } as const;
 
   return (
-    <>
-      <button
-        onClick={() => setOpen(true)}
-        className="flex w-full cursor-pointer items-center justify-center gap-1.5 rounded-lg px-2.5 py-2 text-[11px] font-semibold transition-all duration-200 hover:scale-[1.01] active:scale-[0.99]"
+    <div
+      className="fixed inset-0 z-50 grid place-items-center"
+      style={{ background: "rgba(0,0,0,0.55)" }}
+      onClick={onClose}
+    >
+      <div
+        className="w-[min(440px,90vw)] rounded-[24px] border-[1.5px] p-5"
         style={{
-          backgroundColor: styles.subtle,
-          border: bdr("1.5px", styles.border),
-          borderStyle: "dashed",
-          color: styles.textTertiary,
+          background: styles.card,
+          borderColor: styles.borderStrong,
+          boxShadow: styles.bentoShadow,
         }}
+        onClick={(e) => e.stopPropagation()}
+        role="dialog"
+        aria-modal="true"
+        aria-label="Add a new project"
       >
-        <Plus size={12} strokeWidth={2.5} />
-        <span>Add Project</span>
-      </button>
-
-      {open ? (
-        <div
-          className="fixed inset-0 z-50 grid place-items-center"
-          style={{ background: "rgba(0,0,0,0.45)" }}
-          onClick={() => setOpen(false)}
-        >
-          <div
-            className="w-[min(420px,90vw)] rounded-[14px] border-2 p-5"
-            style={{ background: styles.card, borderColor: styles.borderStrong }}
-            onClick={(e) => e.stopPropagation()}
-          >
-            <h3 className="text-[15px] font-bold" style={{ color: styles.text }}>
-              Add New Project
-            </h3>
-            <div className="mt-3 flex flex-col gap-3">
-              <div>
-                <label className="mb-1.5 block text-[11px] font-semibold" style={{ color: styles.textTertiary }}>
-                  Project Name
-                </label>
-                <input
-                  ref={nameRef}
-                  value={name}
-                  onChange={(e) => setName(e.target.value)}
-                  onKeyDown={(e) => e.key === "Enter" && handleAdd()}
-                  placeholder="my-awesome-project"
-                  className="h-10 w-full rounded-[8px] border-[1.5px] px-3 text-sm outline-none"
-                  style={inputStyle}
-                />
-              </div>
-              <div>
-                <label className="mb-1.5 block text-[11px] font-semibold" style={{ color: styles.textTertiary }}>
-                  Folder Path
-                </label>
-                <div className="flex gap-1.5">
-                  <input
-                    value={rootPath}
-                    onChange={(e) => setRootPath(e.target.value)}
-                    onKeyDown={(e) => e.key === "Enter" && handleAdd()}
-                    placeholder="~/projects/my-awesome-project"
-                    className="h-10 min-w-0 flex-1 rounded-[8px] border-[1.5px] px-3 font-mono text-[12px] outline-none"
-                    style={inputStyle}
-                  />
-                  {isTauri() || !demoData ? (
-                    <button
-                      onClick={() => void handleBrowse()}
-                      disabled={picking}
-                      title="Pick a folder from your machine"
-                      className="flex h-10 shrink-0 cursor-pointer items-center justify-center gap-1 rounded-[8px] border-[1.5px] px-2.5 text-[11px] font-semibold transition-colors duration-200 disabled:cursor-not-allowed disabled:opacity-60"
-                      style={{
-                        background: styles.inputBg,
-                        borderColor: styles.inputBorder,
-                        color: styles.textSecondary,
-                      }}
-                    >
-                      <FolderOpen size={12} />
-                      Browse…
-                    </button>
-                  ) : null}
-                </div>
-                {pickHint ? (
-                  <p className="mt-1.5 text-[11px]" style={{ color: styles.textTertiary }}>
-                    {pickHint}
-                  </p>
-                ) : null}
-              </div>
-              {createProject.isError ? (
-                <p
-                  role="alert"
-                  className="rounded-md px-2.5 py-1.5 text-[12px] leading-relaxed"
-                  style={{
-                    color: SEMANTIC_COLORS.danger,
-                    background: withAlpha(SEMANTIC_COLORS.danger, 0.08),
-                    border: bdr("1px", withAlpha(SEMANTIC_COLORS.danger, 0.3)),
-                  }}
-                >
-                  {createProject.error instanceof ApiError
-                    ? createProject.error.message
-                    : "Could not create the project."}
-                </p>
-              ) : null}
-              <button
-                onClick={handleAdd}
-                disabled={!name.trim() || !rootPath.trim() || createProject.isPending}
-                className="mt-1 h-10 cursor-pointer rounded-[8px] text-sm font-semibold transition-opacity disabled:cursor-not-allowed disabled:opacity-50"
-                style={{ backgroundColor: styles.accent, color: styles.accentText }}
-              >
-                Create Project
-              </button>
-            </div>
+        <h3 className="text-[15px] font-black tracking-tight mb-4" style={{ color: styles.text }}>
+          Add New Project
+        </h3>
+        <div className="flex flex-col gap-3.5">
+          <div>
+            <label
+              className="mb-1.5 block text-[11px] font-bold uppercase tracking-widest"
+              style={{ color: styles.textTertiary }}
+            >
+              Project Name
+            </label>
+            <input
+              ref={nameRef}
+              value={name}
+              onChange={(e) => setName(e.target.value)}
+              onKeyDown={(e) => e.key === "Enter" && submit()}
+              placeholder="my-awesome-project"
+              className="h-12 w-full rounded-[14px] border-[1.5px] px-4 text-[13px] outline-none transition-colors"
+              style={is}
+              onFocus={(e) => (e.currentTarget.style.borderColor = styles.inputFocusBorder)}
+              onBlur={(e) => (e.currentTarget.style.borderColor = styles.inputBorder)}
+            />
           </div>
+          <div>
+            <label
+              className="mb-1.5 block text-[11px] font-bold uppercase tracking-widest"
+              style={{ color: styles.textTertiary }}
+            >
+              Folder
+            </label>
+            <div className="flex gap-2">
+              <input
+                value={rootPath}
+                onChange={(e) => setRootPath(e.target.value)}
+                onKeyDown={(e) => e.key === "Enter" && submit()}
+                placeholder="/path/to/project"
+                className="h-12 min-w-0 flex-1 rounded-[14px] border-[1.5px] px-4 font-mono text-[12px] outline-none transition-colors"
+                style={is}
+                onFocus={(e) => (e.currentTarget.style.borderColor = styles.inputFocusBorder)}
+                onBlur={(e) => (e.currentTarget.style.borderColor = styles.inputBorder)}
+              />
+              {isTauri() || !demoData ? (
+                <button
+                  onClick={() => void handleBrowse()}
+                  disabled={picking}
+                  title="Browse for a folder"
+                  className="h-12 shrink-0 flex items-center justify-center gap-1.5 rounded-[14px] border-[1.5px] px-3.5 text-[12px] font-bold transition-all disabled:opacity-60"
+                  style={{ background: styles.subtle, borderColor: styles.border, color: styles.textSecondary }}
+                  onMouseEnter={(e) => (e.currentTarget.style.background = styles.subtleHover)}
+                  onMouseLeave={(e) => (e.currentTarget.style.background = styles.subtle)}
+                >
+                  <FolderOpen size={13} />
+                  Browse
+                </button>
+              ) : null}
+            </div>
+            {pickHint && (
+              <p className="mt-1.5 text-[11px]" style={{ color: styles.textTertiary }}>
+                {pickHint}
+              </p>
+            )}
+          </div>
+          {formError && (
+            <p
+              role="alert"
+              className="rounded-[12px] border px-3 py-2 text-[12px]"
+              style={{
+                borderColor: withAlpha(SEMANTIC_COLORS.danger, 0.3),
+                background: withAlpha(SEMANTIC_COLORS.danger, 0.08),
+                color: SEMANTIC_COLORS.danger,
+              }}
+            >
+              {formError}
+            </p>
+          )}
+          <button
+            onClick={submit}
+            disabled={name.trim().length === 0 || rootPath.trim().length === 0 || createProject.isPending}
+            className="h-12 w-full rounded-full font-black text-[14px] tracking-[-0.01em] transition-all hover:scale-[1.02] active:scale-[0.98] disabled:opacity-50 disabled:hover:scale-100"
+            style={{
+              background: `linear-gradient(135deg, ${styles.accent}, ${styles.accent})`,
+              color: styles.accentText,
+              border: `1.5px solid ${styles.accent}`,
+              boxShadow: styles.bentoShadowSm,
+            }}
+          >
+            {createProject.isPending ? "Creating…" : "Create Project"}
+          </button>
         </div>
-      ) : null}
-    </>
+      </div>
+    </div>
   );
-}
-
-/** Collapsed mode keeps the + inert (expanding is one click away). */
-function setCollapsedExpandHint() {
-  /* intentionally a no-op hint target; the collapse toggle is right below */
 }

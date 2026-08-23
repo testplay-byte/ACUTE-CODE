@@ -1,18 +1,19 @@
 import { motion } from "framer-motion";
+import { useState } from "react";
 import { Plus, Bot, Settings, Terminal } from "lucide-react";
 import type { ThemeStyles } from "../../lib/themes";
 import { scaleIn } from "../../lib/motion";
-import { bdr } from "./helpers";
 
 /**
- * Quick actions ported from the dashboard demo (QuickActions.tsx), pointed at
- * real app destinations. Agents management lives in Settings now (owner
- * round-8 sidebar directive).
+ * Quick actions (round-21 wizard DNA): 24px-radius card with softShadow,
+ * uppercase tracked label header, action buttons with solid accent icons
+ * and wizard hover physics (subtleHover bg + translate-x). The primary
+ * action ("Start a session") is an accent-filled pill.
  */
 const ACTIONS = [
-  { label: "Start a session", to: "/sessions", icon: Plus },
-  { label: "Manage agents", to: "/settings?tab=agents", icon: Bot },
-  { label: "Open settings", to: "/settings", icon: Settings },
+  { label: "Start a session", to: "/sessions", icon: Plus, primary: true },
+  { label: "Manage agents", to: "/settings?tab=agents", icon: Bot, primary: false },
+  { label: "Open settings", to: "/settings", icon: Settings, primary: false },
 ] as const;
 
 export function QuickActions({
@@ -22,35 +23,48 @@ export function QuickActions({
   onNavigate: (to: string) => void;
   styles: ThemeStyles;
 }) {
-  const { card, border, text, accent, isDark } = styles;
+  const { card, border, text, textSecondary, accent, accentText, subtle, subtleHover, softShadow, bentoShadowSm } = styles;
+  const [hoveredIndex, setHoveredIndex] = useState<number | null>(null);
+
   return (
     <motion.div
       variants={scaleIn}
-      className="rounded-lg p-4"
-      style={{ backgroundColor: card, border: bdr("1.5px", border) }}
+      className="rounded-[24px] border-[1.5px] p-4 md:p-5"
+      style={{ backgroundColor: card, borderColor: border, boxShadow: softShadow }}
     >
-      <div className="mb-3 flex items-center gap-2">
-        <Terminal size={13} style={{ color: accent, opacity: 0.7 }} />
-        <span className="text-[12px] font-semibold" style={{ color: text }}>
+      <div className="mb-3 flex items-center gap-2.5">
+        <Terminal size={13} style={{ color: accent }} strokeWidth={2} />
+        <span className="text-[11px] font-bold uppercase tracking-widest" style={{ color: textSecondary }}>
           Quick Actions
         </span>
       </div>
-      <div className="flex flex-col gap-1.5">
-        {ACTIONS.map(({ label, to, icon: Icon }) => (
+      <div className="flex flex-col gap-2">
+        {ACTIONS.map(({ label, to, icon: Icon, primary }, i) => (
           <button
             key={to}
             onClick={() => onNavigate(to)}
-            className="w-full cursor-pointer rounded-lg px-3 py-2.5 text-left text-[12px] font-medium transition-all duration-200 hover:translate-x-0.5"
-            style={{
-              backgroundColor: isDark ? "rgba(255,255,255,0.03)" : "rgba(0,0,0,0.015)",
-              border: bdr("1.5px", border),
-              color: text,
-            }}
+            onMouseEnter={() => setHoveredIndex(i)}
+            onMouseLeave={() => setHoveredIndex(null)}
+            className={primary ? "w-full cursor-pointer rounded-full h-12 px-5 flex items-center gap-2.5 text-[14px] font-bold transition-all duration-200" : "w-full cursor-pointer rounded-[14px] border-[1.5px] h-11 px-4 flex items-center gap-2.5 text-[13px] font-bold transition-all duration-200"}
+            style={
+              primary
+                ? {
+                    backgroundColor: accent,
+                    color: accentText,
+                    border: `1.5px solid ${accent}`,
+                    boxShadow: hoveredIndex === i ? bentoShadowSm : "none",
+                    transform: hoveredIndex === i ? "scale(1.02)" : "scale(1)",
+                  }
+                : {
+                    backgroundColor: hoveredIndex === i ? subtleHover : subtle,
+                    borderColor: border,
+                    color: text,
+                    transform: hoveredIndex === i ? "translateX(3px)" : "translateX(0)",
+                  }
+            }
           >
-            <span className="flex items-center gap-2">
-              <Icon size={12} style={{ color: accent, opacity: 0.7 }} />
-              {label}
-            </span>
+            <Icon size={primary ? 15 : 13} strokeWidth={2} style={{ color: primary ? accentText : accent, opacity: 1 }} />
+            {label}
           </button>
         ))}
       </div>

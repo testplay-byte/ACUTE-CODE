@@ -30,16 +30,16 @@ describe("DashboardScreen (fixture backend)", () => {
 
     // Greeting header (time-of-day line + accent welcome line).
     expect(
-      await screen.findByText(/Good (morning|afternoon|evening|night)/),
+      await screen.findByText(/Workspace Overview/i),
     ).toBeTruthy();
-    expect(screen.getByText(/Welcome back to/)).toBeTruthy();
+    expect(screen.getByText(/what.s happening/i)).toBeTruthy();
 
     // The four stat cards (owner round-8: Projects replaces Agents here —
     // agents management lives in Settings now).
     expect(screen.getByText("Projects")).toBeTruthy();
     expect(screen.getByText("Sessions")).toBeTruthy();
-    expect(screen.getByText("Tokens Used")).toBeTruthy();
-    expect(screen.getByText("API Requests")).toBeTruthy();
+    expect(screen.getByText("Tokens")).toBeTruthy();
+    expect(screen.getByText("Requests")).toBeTruthy();
   });
 
   it("stat values come from the fixture backends", async () => {
