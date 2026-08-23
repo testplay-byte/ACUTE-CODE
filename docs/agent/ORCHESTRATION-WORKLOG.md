@@ -472,3 +472,18 @@ Work Log:
 
 Stage Summary:
 - Dashboard is live at https://testplay-byte.github.io/DASHBOARD/ with the plan prominently displayed. Future publishes: DASHBOARD_PAT=$(cat /home/z/.secrets/dashboard.pat) node scripts/dashboard/publish-dashboard.mjs (per WORKFLOW §6). Next per owner: UI improvement + proper UI documentation round.
+
+---
+Task ID: R19 (model management + dashboard v2 + dialog fix)
+Agent: orchestrator (Z.ai Code) — inline for model mgmt + dialog; dashboard dispatched to full-stack dev sub-agent (timed out but work landed; I verified + pushed it)
+Task: Owner round-19: model management system, dashboard rebuild, folder dialog fix
+
+Work Log:
+- Folder dialog FIXED: root cause = inline PowerShell -Command stdout capture unreliable → wrote temp .ps1 file + result FILE (not stdout); single dialog, reliable
+- Dashboard v2: dispatched to full-stack-dev sub-agent; multi-file build (template.html + style.css 1189 lines + app.js + build.mjs reading data.json); light theme (#fafaf9 bg); pushed to DASHBOARD repo via token-in-URL; browser-verified 8/8 (light theme, contrast, all sections, clean)
+- Model Management BACKEND: migration 0004 (models table with pricing/context/thinking/hidden + providers.api_format); models.ts storage CRUD (upsert by provider+modelId); 6 new routes (models-config GET, models POST/PATCH/DELETE, key GET/PUT)
+- Model Management FRONTEND: ModelsProvidersTab replaces API & Providers tab — provider cards (expandable) with API key View/Copy/Edit + model list; Add Provider dialog (preset: OpenRouter | custom: name/baseUrl/apiKey/apiFormat 3 options); Add Model dialog (modelId + displayName + contextWindow + maxOutput + 3 pricing fields); per-model Test (⚡ inline latency/error), Hide (moves to Hidden section, dims), Delete
+- verify GREEN (migration test updated for 0004); screenshots VLM-verified 4/4; merged 53ade3b; CI 32649516184 SUCCESS; ntfy delivered
+
+Stage Summary:
+- Owner action: re-test on Windows via launcher — Browse (single dialog now), Settings → Models & Providers (add a custom provider, manage keys/models), chat streaming. Chat model picker enhancement (grouped by provider with context/pricing) is queued next round.
