@@ -98,13 +98,13 @@ describe("sidecar e2e (skipped without a prior build)", { skip: !existsSync(MAIN
     assert.equal(denied.json.error.code, "UNAUTHORIZED");
   });
 
-  it("seeds the five templates + the plug-and-play default agent (round-15)", async () => {
+  it("seeds the five templates + the plug-and-play default agent (round-15/16)", async () => {
     const { status, json } = await api("GET", "/api/v1/agents");
     assert.equal(status, 200);
     assert.equal(json.agents.length, 6);
     assert.deepEqual(
       json.agents.map((a) => a.name).sort(),
-      ["Coder", "Acute", "Planner", "Researcher", "Reviewer", "Tester"],
+      ["Acute", "Coder", "Planner", "Researcher", "Reviewer", "Tester"],
     );
     const nova = json.agents.find((a) => a.name === "Acute");
     assert.ok(nova && nova.isTemplate === false);
