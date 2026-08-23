@@ -553,3 +553,18 @@ Work Log:
 
 Stage Summary:
 - Owner can now: expand projects in the sidebar to see sessions, toggle code/explorer from the explorer panel header, use chat-only full-screen mode, and the /sessions route is gone. Settings pages (Appearance/Agents/Models/Advanced) are the next round's focus.
+
+---
+Task ID: R23 (sidebar behavior + chat polish + settings)
+Agent: orchestrator (Z.ai Code) — inline, working directly on main per owner direction
+Task: Owner round-23: sidebar click behavior (expand only), New Session button, chat polish, settings wizard treatment
+
+Work Log:
+- Sidebar: project click = expand/collapse ONLY (removed the overlay button hack that navigated); sessions are now clickable sub-items (navigate to /project/:id/chat?session=:id); NewSessionButton component per project (creates a session via the API with the default agent + navigates to it); sessions show up to 8 with "+N more"
+- Chat panel: header tightened (h-10, borderSubtle divider), composer tightened (p-2.5), messages use 16px radius (was 24px), error banner 12px radius, panel root 16px radius
+- Settings: CONFIGURATION kicker + font-black 'Settings' H1 + solid-accent pill tabs with shadow (wizard DNA)
+- Browser-verified 7/7: project expands (stays on dashboard ✓), sessions visible ✓, New Session button ✓, settings kicker ✓, accent tabs ✓, clean layout ✓
+- verify GREEN; pushed 97bcdf5 to main directly (backup branch: backup/pre-round-23); CI 32658426145 SUCCESS; ntfy delivered
+
+Stage Summary:
+- Sidebar behavior matches owner spec exactly (click=expand, sessions=navigate, +New Session). Chat + settings polished. Next: continue improving (settings sub-pages deep polish, chat streaming feel, research reference repos for UX patterns).
