@@ -276,7 +276,8 @@ type JsonSchemaFreeTool = {
   execute: (input: Record<string, unknown>) => Promise<{ ok: boolean; output: string }>;
 };
 
-export function buildProjectTools(root: string): ToolSet {
+export function buildProjectTools(root: string, allowedTools?: readonly string[]): ToolSet {
+  const allow = allowedTools && allowedTools.length > 0 ? new Set(allowedTools) : null;
   const tools: Record<string, JsonSchemaFreeTool> = {
     list_dir: {
       description:
@@ -384,5 +385,10 @@ export function buildProjectTools(root: string): ToolSet {
         ),
     },
   };
+  if (allow !== null) {
+    for (const name of Object.keys(tools)) {
+      if (!allow.has(name)) delete tools[name as keyof typeof tools];
+    }
+  }
   return tools as unknown as ToolSet;
 }

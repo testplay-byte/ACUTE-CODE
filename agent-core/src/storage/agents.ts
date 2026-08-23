@@ -8,13 +8,19 @@ import type { MemoryPolicy } from "shared";
 
 export type SqliteDatabase = Database.Database;
 
-/** Canonical v1 tool ids (ARCHITECTURE §3.3 tools/ built-ins). */
+/**
+ * Canonical tool ids — the REAL project tool set (agent-core/src/tools/index.ts,
+ * ADR-0019). Single source of truth for server-side agent validation; the
+ * frontend catalog mirrors this list (src/lib/api.ts TOOL_CATALOG).
+ */
 export const TOOL_NAMES = [
-  "file_read",
-  "file_write",
-  "file_edit",
-  "shell_exec",
-  "web_search",
+  "list_dir",
+  "read_file",
+  "write_file",
+  "edit_file",
+  "create_dir",
+  "delete_file",
+  "search_files",
 ] as const;
 
 /** Agent JSON as served by the API: AgentRecord plus bookkeeping columns. */

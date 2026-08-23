@@ -133,11 +133,13 @@ describe("template seeding", () => {
         expect(row.provider_id).toBeNull();
         expect(row.model).toBeNull();
         expect(JSON.parse(row.allowed_tools)).toEqual([
-          "file_read",
-          "file_write",
-          "file_edit",
-          "shell_exec",
-          "web_search",
+          "list_dir",
+          "read_file",
+          "write_file",
+          "edit_file",
+          "create_dir",
+          "delete_file",
+          "search_files",
         ]);
         expect(row.memory_policy).toBe("on-start");
         expect(row.max_turns).toBe(40);

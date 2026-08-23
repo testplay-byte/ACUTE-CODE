@@ -168,7 +168,11 @@ function prepareTurn(
       },
     };
   }
-  const tools = project !== undefined ? buildProjectTools(project.rootPath) : undefined;
+  // Tools: the project set, intersected with the agent's allowlist when one
+  // is set (ADR-0019). Empty/omitted allowlist = ALL tools (the default
+  // agents rely on this; an explicit non-empty list is a real restriction).
+  const tools =
+    project !== undefined ? buildProjectTools(project.rootPath, agent.allowedTools) : undefined;
   const system = project
     ? [
         agent.systemPrompt,
