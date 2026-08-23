@@ -31,6 +31,7 @@ ACUTE-CODE (NOT "Forge" — the brief's old codename) is a Windows desktop app: 
 |---|---|
 | Phases 0–2 | **DONE, owner-approved** (Phase-2 report in `docs/runbooks/review-phase-2.md`) |
 | UI fidelity | Wizard rounds 1–7 APPROVED; round 8 (shell/dashboard/Settings/mono) delivered — owner reviewing |
+| Round-14 (agentic system) | **DELIVERED** (OS folder-picker endpoint, 7 file tools incl. create_dir/delete-refusal/search_files, demo-parity chat UI with TopBar agent-picker/search/theme/experimental + To-Do, live P1 proof) — `round-10.md`; dashboard redo QUEUED next |
 | Agentic MVP | **M1–M4 DONE** (migration 0003, `/api/v1/projects` CRUD + `/tree` + `/file`, file tools sandboxed to project root, `tool.use` audit events, Tauri `pick_folder`; M3 project-chat UI at `/project/:id/chat` + Add Project on backend + `projects-store.ts` deleted; M4 live run verified on disk) — **awaiting owner review** (`round-09.md`) |
 | Tests | `pnpm verify` green: lint + typecheck + **175 unit + 6 sidecar-E2E** + build + license audit (107 prod deps, CLEAN); `cargo check` green on CI |
 | Dev stack | `pnpm dev:full` = sidecar on 127.0.0.1:5178 (OpenRouter key auto-read from Credential Manager) + vite. Plain `pnpm dev` = UI only, NO backend. Dev CLI: `node scripts/acute.mjs <cmd>` |
@@ -118,7 +119,9 @@ The Rust shell reads provider keys from Credential Manager at spawn and injects 
 - Tauri on Windows needs `src-tauri/icons/icon.ico` even with bundling disabled.
 - Git Bash kills don't always take node children down — check `tasklist` for orphans after sidecar tests (`taskkill //F //PID <pid>`).
 
-## 9. What's next: owner tests locally via the round-11 launcher; MVP review; then Phase 3 — Orchestration engine (after owner approval)
+## 9. What's next: dashboard UI redo (owner verdict: "way too simple"), then Phase 3 — Orchestration engine (after owner approval)
+
+**Round-14 delivery (2026-08-23, owner-directed):** the agentic coding system works for real — `/internal/dialog/folder` (sidecar opens the REAL OS folder dialog: PowerShell `-STA` on Windows / zenity on Linux; Browse… now works in the launcher/browser too), tools `create_dir`/`delete_file` (directories refused — approval-gated)/`search_files`, and the project-chat UI at full demo parity (TopBar with live AGENT picker + ⌘K file search + theme grid + Experimental freeform layout hosting the real panels + To-Do). Live P1 proof: 6-tool turn (create/search/read/mkdir/write/edit) + read-back + deletion-refusal under pressure; all disk assertions exact. Three-pillar planning: `docs/research/n8n/` (automation pillar, additive). Owner's launcher works on his PC (rounds 11–13 auth fixes).
 
 **Round-11 delivery (2026-08-23, owner-directed redesign):** the round-10 `.bat` failed on the owner's PC (LF line endings — cmd.exe disintegration; lesson #16 in AGENT-MEMORY). Replaced per owner direction with `launcher/`: `ACUTE.bat` (tiny CRLF-verified coordinator — finds/installs Python) + `acute_launcher.py` (rich-terminal workhorse: toolchain auto-install via winget, `credentials.txt` local secrets file, clean-folder layout `ACUTE-CODE/` + `.acute/`, update-with-server-restart, OpenRouter key → Credential Manager, launcher SELF-UPDATE, boxed copyable errors, plain-text fallback). Fully tested on Linux incl. first-run, behind-update, status, live start (key `●` end-to-end) and failure paths; docs in `docs/runbooks/LOCAL-PC-RUNNER.md` + `launcher/README.md`. `scripts/acute-desktop.mjs` (round-10 node runner) remains as the advanced headless path. The owner runs the app on his PC with the launcher; M4 can be re-confirmed there. The full owner vision (three products) is recorded in `docs/architecture/PROJECT-MAP.md` §1/§6.
 

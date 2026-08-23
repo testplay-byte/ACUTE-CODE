@@ -186,3 +186,28 @@ Format per entry: `N. TITLE (date, source)` → mistake → root cause → rule.
     helper machinery to break. Also: pre-flight the token via the GitHub API
     and DECODE git failures into human diagnoses (auth / network / disk /
     leftover-folder patterns).
+
+## Round-14 lessons (agentic-system round)
+
+25. **`/internal/*` routes mount WITHOUT the `/api/v1` prefix** (they sit at
+    the app root next to /health, outside the versioned scope — see
+    /internal/providers/keys). The frontend `request()` helper always
+    prefixes `/api/v1`, so internal endpoints need a direct `fetch()` with
+    the bearer header. Hit this when the folder-picker client 404'd.
+
+26. **zustand selectors must return STABLE references** — `(s) =>
+    s.todos[id] ?? []` builds a fresh array on every snapshot → React
+    "getSnapshot should be cached" infinite loop → the whole screen dies.
+    Use a module-level `const EMPTY: T[] = []`. Same class of bug applies to
+    any `?? {}` / `?? derived` inside a selector.
+
+27. **CLI batteries must filter template agents** (`GET
+    /agents?includeTemplates=false`); a bare GET returns templates, a
+    template has no provider/model and every message POST 409s confusingly.
+    (The UI hooks already filtered correctly — only my raw CLI call was
+    wrong.)
+
+28. **Blocking dialogs in a server: always async spawn.** A spawnSync folder
+    dialog would freeze the ENTIRE sidecar (health checks included) for as
+    long as the human takes to click. Same rule applies to any subprocess
+    that waits on a human.

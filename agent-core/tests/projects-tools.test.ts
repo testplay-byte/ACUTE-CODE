@@ -8,11 +8,14 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
+  createDir,
+  deleteFile,
   editFile,
   listDir,
   projectTree,
   readFile,
   resolveInsideRoot,
+  searchFiles,
   writeFile,
 } from "../src/tools/index";
 import { openDatabase, type SqliteDatabase } from "../src/storage/db";
@@ -182,5 +185,41 @@ describe("/api/v1/projects", () => {
   it("requires the bearer token", async () => {
     const response = await app.inject({ method: "GET", url: "/api/v1/projects" });
     expect(response.statusCode).toBe(401);
+  });
+});
+
+describe("round-14 tools: create_dir / delete_file / search_files", () => {
+  it("create_dir creates nested folders and stays sandboxed", () => {
+    const ok = createDir(tempDir, "pkg/nested/folders");
+    expect(ok.ok).toBe(true);
+    expect(listDir(tempDir, "pkg/nested").output).toContain("folders");
+    const escape = createDir(tempDir, "../outside");
+    expect(escape.ok).toBe(false);
+  });
+
+  it("delete_file removes one file but refuses directories and escapes", () => {
+    writeFile(tempDir, "tmp/a.txt", "x");
+    mkdirSync(join(tempDir, "adir"));
+    expect(deleteFile(tempDir, "tmp/a.txt").ok).toBe(true);
+    expect(readFile(tempDir, "tmp/a.txt").ok).toBe(false);
+    const dir = deleteFile(tempDir, "adir");
+    expect(dir.ok).toBe(false);
+    expect(dir.output).toContain("directory");
+    expect(deleteFile(tempDir, "../x").ok).toBe(false);
+    expect(deleteFile(tempDir, "").ok).toBe(false); // the root itself
+  });
+
+  it("search_files finds paths case-insensitively and respects ignore rules", () => {
+    writeFile(tempDir, "src/auth/Login.ts", "x");
+    writeFile(tempDir, "src/util/loginHelpers.ts", "x");
+    mkdirSync(join(tempDir, "node_modules"));
+    writeFileSync(join(tempDir, "node_modules", "login-evil.js"), "x");
+    const hits = searchFiles(tempDir, "login");
+    expect(hits.ok).toBe(true);
+    expect(hits.output).toContain("src/auth/Login.ts");
+    expect(hits.output).toContain("src/util/loginHelpers.ts");
+    expect(hits.output).not.toContain("node_modules");
+    expect(searchFiles(tempDir, "  ").ok).toBe(false);
+    expect(searchFiles(tempDir, "zzz-nothing").output).toContain("no paths matching");
   });
 });

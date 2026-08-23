@@ -12,11 +12,12 @@ import {
 } from "lucide-react";
 import { motion } from "framer-motion";
 import { APP_NAME } from "../../lib/version";
-import { ApiError, type Project } from "../../lib/api";
+import { ApiError, pickFolderViaBackend, type Project } from "../../lib/api";
 import { cn } from "../../lib/utils";
 import { slideInLeft } from "../../lib/motion";
 import { SEMANTIC_COLORS } from "../../lib/semantics";
 import { isTauri } from "../../lib/sidecar";
+import { useConfigStore } from "../../lib/config-store";
 import { useThemeStyles } from "../../lib/use-theme-styles";
 import { useCreateProject, useDeleteProject, useProjects } from "../../hooks/use-projects";
 import { bdr, withAlpha } from "../dashboard/helpers";
@@ -369,6 +370,9 @@ function AddProjectButton({
   const [name, setName] = useState("");
   const [rootPath, setRootPath] = useState("");
   const [picking, setPicking] = useState(false);
+  const [pickHint, setPickHint] = useState<string | null>(null);
+  // Browse hits the real sidecar dialog — fixture mode has none (demo data).
+  const demoData = useConfigStore((s) => s.demoData);
   const nameRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
@@ -390,14 +394,24 @@ function AddProjectButton({
     );
   }, [name, rootPath, createProject, onCreated]);
 
-  /** Tauri-only folder picker; null (cancelled) leaves the field untouched. */
+  /** Folder picker (round-14): the Tauri shell's native dialog when packed,
+   * otherwise the SIDECAR opens the real OS dialog (PowerShell / zenity) —
+   * so Browse works in plain browser dev too. null (cancelled) is a no-op;
+   * `undefined` (no dialog backend) tells the user to paste the path. */
   const handleBrowse = useCallback(async () => {
     setPicking(true);
     try {
-      const folder = await tauriInvoke<string | null>("pick_folder");
-      if (typeof folder === "string" && folder) setRootPath(folder);
+      if (isTauri()) {
+        const folder = await tauriInvoke<string | null>("pick_folder");
+        if (typeof folder === "string" && folder) setRootPath(folder);
+        return;
+      }
+      const picked = await pickFolderViaBackend();
+      if (typeof picked === "string" && picked) setRootPath(picked);
+      else if (picked === undefined)
+        setPickHint("No folder dialog on this machine — please paste the path instead.");
     } catch {
-      /* a failed dialog leaves manual path entry as the fallback */
+      setPickHint("The folder dialog failed — please paste the path instead.");
     } finally {
       setPicking(false);
     }
@@ -482,7 +496,7 @@ function AddProjectButton({
                     className="h-10 min-w-0 flex-1 rounded-[8px] border-[1.5px] px-3 font-mono text-[12px] outline-none"
                     style={inputStyle}
                   />
-                  {isTauri() ? (
+                  {isTauri() || !demoData ? (
                     <button
                       onClick={() => void handleBrowse()}
                       disabled={picking}
@@ -499,6 +513,11 @@ function AddProjectButton({
                     </button>
                   ) : null}
                 </div>
+                {pickHint ? (
+                  <p className="mt-1.5 text-[11px]" style={{ color: styles.textTertiary }}>
+                    {pickHint}
+                  </p>
+                ) : null}
               </div>
               {createProject.isError ? (
                 <p

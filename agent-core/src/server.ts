@@ -10,6 +10,7 @@ import Fastify, { type FastifyError, type FastifyInstance } from "fastify";
 import type { MemoryPolicy, RunMode } from "shared";
 import { aiSdkChat, type ChatFn } from "./agents/chat.js";
 import { runSingleAgentTurn } from "./agents/runtime.js";
+import { pickFolder } from "./dialogs.js";
 import { projectTree, readFile } from "./tools/index.js";
 import {
   ProviderKeyring,
@@ -322,6 +323,25 @@ export function buildServer(options: ServerOptions): FastifyInstance {
     // sends 'set' today.
     keyring.set(providerId, action === "delete" ? "" : value);
     return reply.code(204).send();
+  });
+
+  // Native OS folder picker (round-14): the sidecar opens the REAL dialog
+  // (PowerShell FolderBrowserDialog / zenity / kdialog) so folder selection
+  // works even in browser dev (no Tauri). Same bearer wall as everything
+  // else. 200 {path: string|null} — null = cancelled; 501 DIALOG_UNAVAILABLE
+  // when this machine has no dialog backend (UI falls back to manual entry).
+  // Never hit by tests: the dialog blocks on a human.
+  app.post("/internal/dialog/folder", async (_request, reply) => {
+    const picked = await pickFolder();
+    if (picked === undefined) {
+      return reply.code(501).send(
+        errorBody(
+          "DIALOG_UNAVAILABLE",
+          "no folder-dialog backend on this machine (powershell / zenity / kdialog)",
+        ),
+      );
+    }
+    return { path: picked };
   });
 
   app.register(

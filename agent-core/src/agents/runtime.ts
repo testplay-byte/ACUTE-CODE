@@ -152,9 +152,9 @@ export async function runSingleAgentTurn(
         agent.systemPrompt,
         "",
         `You are working inside the project "${project.name}" located at "${project.rootPath}".`,
-        "You have file tools (list_dir, read_file, write_file, edit_file). Paths are RELATIVE to the project root.",
-        "Workflow: list_dir → read_file before editing → edit_file for small changes / write_file only for new files or full rewrites.",
-        "After making changes, briefly summarize what you changed and why. If asked to create something, actually create it with the tools.",
+        "You have file tools (list_dir, read_file, write_file, edit_file, create_dir, delete_file, search_files). Paths are RELATIVE to the project root.",
+        "Workflow: search_files/list_dir to explore → read_file before editing → edit_file for small changes / write_file for new files or full rewrites → create_dir for new folders.",
+        "delete_file only when the user explicitly asked for a deletion. After making changes, briefly summarize what you changed and why. If asked to create something, actually create it with the tools.",
       ].join("\n")
     : agent.systemPrompt;
 

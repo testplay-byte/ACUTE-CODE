@@ -30,3 +30,4 @@ All nine are MIT or Apache-2.0 — compatible with our allowlist for pattern stu
 ## How this feeds Phase 1+
 
 `ARCHITECTURE.md` and `API.md` cite these memos directly (sidecar lifecycle ← goose/cline; permission model ← kilocode/opencode/hermes; event sourcing ← openhands; memory ← hermes/letta; delegation ← kilocode/metagpt/openhands; edit formats ← aider). Phase 3–5 design work continues to draw from them.
+- `n8n/` — automation-pillar reference (owner-directed 2026-08-23): trigger→nodes→items model, graph-as-data, executions-as-history, additive adoption plan

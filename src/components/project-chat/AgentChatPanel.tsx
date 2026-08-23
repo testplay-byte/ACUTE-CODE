@@ -339,7 +339,16 @@ function AgentThinking({ agent }: { agent: Agent | null }) {
   );
 }
 
-export function AgentChatPanel({ projectId, project }: { projectId: string; project: Project }) {
+export function AgentChatPanel({
+  projectId,
+  project,
+  compact = false,
+}: {
+  projectId: string;
+  project: Project;
+  /** Freeform (experimental) windows host a denser variant. */
+  compact?: boolean;
+}) {
   const styles = useThemeStyles();
 
   // Latest session bound to this project (list has no server-side project
@@ -354,11 +363,15 @@ export function AgentChatPanel({ projectId, project }: { projectId: string; proj
   );
   const sessionDetail = useSession(session?.id ?? null);
 
-  // Agent: first non-template agent by default; a picker lands with the
-  // session-header menu.
+  // Agent resolution (round-14): the SESSION's bound agent wins; for NEW
+  // sessions the hamburger picker's choice (persisted) applies; else first.
   const agents = useAgents(false).data ?? [];
-  const [agentId] = useState<string | null>(null);
-  const agent = agents.find((a) => a.id === agentId) ?? agents[0] ?? null;
+  const selectedAgentId = useProjectChatStore((s) => s.selectedAgentId);
+  const agent =
+    agents.find((a) => a.id === session?.agentId) ??
+    agents.find((a) => a.id === selectedAgentId) ??
+    agents[0] ??
+    null;
 
   const createSession = useCreateSession();
   const sendMessage = useSendMessage();
@@ -391,16 +404,8 @@ export function AgentChatPanel({ projectId, project }: { projectId: string; proj
     if (el) el.scrollTo({ top: el.scrollHeight, behavior: "smooth" });
   }, [items.length, busy, pendingUser]);
 
-  useEffect(() => {
-    const handler = (e: KeyboardEvent) => {
-      if ((e.metaKey || e.ctrlKey) && e.key === "k") {
-        e.preventDefault();
-        inputRef.current?.focus();
-      }
-    };
-    window.addEventListener("keydown", handler);
-    return () => window.removeEventListener("keydown", handler);
-  }, []);
+  // NOTE: ⌘K now focuses the TopBar file search (demo behavior); the composer
+  // keeps Enter-to-send and gets focus after sending.
 
   const runTurn = async (content: string) => {
     const text = content.trim();
@@ -589,9 +594,11 @@ export function AgentChatPanel({ projectId, project }: { projectId: string; proj
             <ArrowUp size={14} strokeWidth={2.5} />
           </button>
         </div>
-        <div className="px-1 pt-1.5 flex justify-between font-mono text-[10px]" style={{ color: styles.textTertiary }}>
-          <span>⌘K to focus · ↵ to send</span>
-        </div>
+        {!compact ? (
+          <div className="px-1 pt-1.5 flex justify-between font-mono text-[10px]" style={{ color: styles.textTertiary }}>
+            <span>⌘K search · ↵ to send</span>
+          </div>
+        ) : null}
       </div>
     </div>
   );

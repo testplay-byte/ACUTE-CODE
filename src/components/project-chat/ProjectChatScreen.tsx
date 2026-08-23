@@ -1,28 +1,31 @@
 import {
   useCallback,
   useEffect,
+  useMemo,
   useRef,
   type KeyboardEvent,
   type MouseEvent as ReactMouseEvent,
 } from "react";
 import { motion } from "framer-motion";
-import { ChevronRight, Code2, Files, type LucideIcon } from "lucide-react";
+import { ChevronRight, Files } from "lucide-react";
 import { Link, useParams } from "react-router";
-import { useProjects } from "../../hooks/use-projects";
+import { useProjectTree, useProjects } from "../../hooks/use-projects";
 import { ease } from "../../lib/motion";
 import { useProjectChatStore } from "../../lib/project-chat-store";
 import { useThemeStyles } from "../../lib/use-theme-styles";
 import { AgentChatPanel } from "./AgentChatPanel";
 import { CodeView } from "./CodeView";
+import { ExperimentalLayout } from "./ExperimentalLayout";
 import { LeftSidebar } from "./LeftSidebar";
+import { TopBar, flattenTreeFiles } from "./TopBar";
 
 /**
- * Project-chat screen (M3): slim header (project chip + Code/Explorer toggles)
- * over the demo's NormalLayout — resizable Explorer / Code / Chat columns
- * driven by the persisted project-chat store instead of local state.
- * Ported from design/demos/project-chat/src/components/project-chat/
- * ProjectChatView.tsx (TopBar/ExperimentalLayout are NOT ported — AppShell
- * provides global chrome; only the two panel toggles survive here).
+ * Project-chat screen (M3 + round-14 demo parity): the demo's FULL TopBar
+ * (hamburger: agent picker + file search + theme grid; Code/Experimental/
+ * dark toggles) over NormalLayout — resizable Explorer / Code / Chat columns
+ * driven by the persisted project-chat store — or the freeform
+ * ExperimentalLayout when experimental mode is on.
+ * Ported from design/demos/project-chat/src/components/project-chat/.
  */
 
 /**
@@ -104,42 +107,6 @@ function GapHandle({ onResize }: { onResize: (delta: number) => void }) {
   );
 }
 
-/** Demo TopBar ViewToggle (h-7 pill): active = accent fill, hover = subtleHover. */
-function ViewToggle({
-  icon: Icon,
-  label,
-  active,
-  onClick,
-}: {
-  icon: LucideIcon;
-  label: string;
-  active: boolean;
-  onClick: () => void;
-}) {
-  const styles = useThemeStyles();
-  return (
-    <button
-      onClick={onClick}
-      aria-pressed={active}
-      className="h-7 px-2.5 rounded-lg border flex items-center gap-1.5 transition-all active:scale-95 text-[11px] font-medium shrink-0"
-      style={{
-        background: active ? styles.accent : styles.inputBg,
-        color: active ? styles.accentText : styles.textSecondary,
-        borderColor: active ? styles.accent : styles.border,
-      }}
-      onMouseEnter={(e) => {
-        if (!active) e.currentTarget.style.background = styles.subtleHover;
-      }}
-      onMouseLeave={(e) => {
-        if (!active) e.currentTarget.style.background = styles.inputBg;
-      }}
-    >
-      <Icon size={12} />
-      <span>{label}</span>
-    </button>
-  );
-}
-
 /** Demo CollapsedSidebar rail (w-12 card strip with expand + explorer buttons). */
 function CollapsedSidebar({ onExpand }: { onExpand: () => void }) {
   const styles = useThemeStyles();
@@ -186,11 +153,21 @@ export default function ProjectChatScreen() {
   const projectsQuery = useProjects();
   const project = projectsQuery.data?.find((p) => p.id === id) ?? null;
 
+  // Real tree feeds both the explorer and the TopBar file search.
+  const treeQuery = useProjectTree(id ?? null);
+  const files = useMemo(() => flattenTreeFiles(treeQuery.data?.tree ?? []), [treeQuery.data]);
+
   const sidebarOpen = useProjectChatStore((s) => s.sidebarOpen);
   const codeVisible = useProjectChatStore((s) => s.codeVisible);
   const chatWidth = useProjectChatStore((s) => s.chatWidth);
+  const experimentalMode = useProjectChatStore((s) => s.experimentalMode);
   const setSidebarOpen = useProjectChatStore((s) => s.setSidebarOpen);
-  const setCodeVisible = useProjectChatStore((s) => s.setCodeVisible);
+
+  const pickFile = useCallback((path: string) => {
+    const s = useProjectChatStore.getState();
+    s.selectFile(path);
+    s.setCodeVisible(true);
+  }, []);
 
   // getState() keeps every mousemove delta fresh without re-baselining closures.
   const handleSidebarResize = useCallback((delta: number) => {
@@ -235,73 +212,42 @@ export default function ProjectChatScreen() {
       animate={{ opacity: 1 }}
       transition={{ duration: 0.3, ease }}
     >
-      {/* Slim header (replaces the demo TopBar; global chrome lives in AppShell) */}
-      <header
-        className="shrink-0 h-9 flex items-center gap-2 rounded-xl border px-3"
-        style={{ backgroundColor: styles.card, borderColor: styles.border }}
-      >
-        <div
-          className="w-5 h-5 rounded-md grid place-items-center shrink-0"
-          style={{ backgroundColor: project.color }}
-        >
-          {/* white icon reads on the project's own color chip, not a theme surface */}
-          <Files size={11} color="#fff" />
-        </div>
-        <span className="text-[12px] font-semibold truncate" style={{ color: styles.text }}>
-          {project.name}
-        </span>
-        <span
-          className="font-mono text-[10px] truncate"
-          style={{ color: styles.textTertiary }}
-          title={project.rootPath}
-        >
-          {project.rootPath}
-        </span>
-        <span className="flex-1" />
-        <ViewToggle
-          icon={Code2}
-          label="Code"
-          active={codeVisible}
-          onClick={() => setCodeVisible(!codeVisible)}
-        />
-        <ViewToggle
-          icon={Files}
-          label="Explorer"
-          active={sidebarOpen}
-          onClick={() => setSidebarOpen(!sidebarOpen)}
-        />
-      </header>
+      {/* Demo TopBar (round-14 parity): hamburger menu + toggles */}
+      <TopBar onPickFile={pickFile} files={files} />
 
-      {/* Body — demo NormalLayout structure exactly */}
-      <div
-        className={`flex-1 flex min-h-0 ${onlyChat ? "justify-center items-center" : ""} overflow-hidden`}
-      >
-        {!onlyChat &&
-          (sidebarOpen ? (
+      {experimentalMode ? (
+        <ExperimentalLayout project={project} />
+      ) : (
+        <div
+          className={`flex-1 flex min-h-0 ${onlyChat ? "justify-center items-center" : ""} overflow-hidden`}
+        >
+          {!onlyChat &&
+            (sidebarOpen ? (
+              <>
+                <LeftSidebar project={project} />
+                <GapHandle onResize={handleSidebarResize} />
+              </>
+            ) : (
+              <CollapsedSidebar onExpand={() => setSidebarOpen(true)} />
+            ))}
+
+          {codeVisible && (
             <>
-              <LeftSidebar project={project} />
-              <GapHandle onResize={handleSidebarResize} />
+              <div className="flex-1 flex flex-col min-w-0 overflow-hidden">
+                <CodeView projectId={project.id} />
+              </div>
+              <GapHandle onResize={handleChatResize} />
             </>
-          ) : (
-            <CollapsedSidebar onExpand={() => setSidebarOpen(true)} />
-          ))}
+          )}
 
-        {codeVisible && (
-          <>
-            <div className="flex-1 flex flex-col min-w-0 overflow-hidden">
-              <CodeView projectId={project.id} />
-            </div>
-            <GapHandle onResize={handleChatResize} />
-          </>
-        )}
-
-        <div
-          className="shrink-0 overflow-hidden rounded-2xl"
-          style={{ width: chatWidth, maxWidth: onlyChat ? "90%" : undefined }}
-        >
-          <AgentChatPanel projectId={project.id} project={project} />
+          <div
+            className="shrink-0 overflow-hidden rounded-2xl"
+            style={{ width: chatWidth, maxWidth: onlyChat ? "90%" : undefined }}
+          >
+            <AgentChatPanel projectId={project.id} project={project} />
+          </div>
         </div>
-      </div>
+      )}
     </motion.div>
   );
 }

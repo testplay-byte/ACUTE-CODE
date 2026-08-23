@@ -7,7 +7,7 @@
  * denied outright (denylist-supreme; the interactive approval modal lands
  * with Phase 3 — see docs/runbooks/plan-agentic-mvp.md).
  */
-import { mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
+import { mkdirSync, readdirSync, readFileSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 import { isAbsolute, join, posix, sep } from "node:path";
 import { jsonSchema, type ToolSet } from "ai";
 
@@ -181,6 +181,86 @@ export function editFile(root: string, relative: string, oldString: string, newS
   return { ok: true, output: `edited '${toRelative(root, resolved.abs)}' (1 replacement)` };
 }
 
+/* ── Round-14 additions: create_dir / delete_file / search_files ─────────── */
+
+/** create_dir — create a folder (with parents) inside the project. */
+export function createDir(root: string, relative: string): ToolResult {
+  const resolved = resolveInsideRoot(root, relative);
+  if ("error" in resolved) return { ok: false, output: resolved.error };
+  try {
+    mkdirSync(resolved.abs, { recursive: true });
+    return { ok: true, output: `directory ready: '${toRelative(root, resolved.abs)}'` };
+  } catch (error) {
+    return {
+      ok: false,
+      output: `cannot create directory '${relative}': ${error instanceof Error ? error.message : "unknown error"}`,
+    };
+  }
+}
+
+/** delete_file — remove ONE file inside the project. Directories are
+ * refused: deleting a tree is destructive and belongs behind the Phase-3
+ * approval engine, not a silent tool call.
+ */
+export function deleteFile(root: string, relative: string): ToolResult {
+  const resolved = resolveInsideRoot(root, relative);
+  if ("error" in resolved) return { ok: false, output: resolved.error };
+  if (resolved.abs === root) return { ok: false, output: "refusing to delete the project root" };
+  try {
+    if (statSync(resolved.abs).isDirectory()) {
+      return {
+        ok: false,
+        output: `'${relative}' is a directory — deleting folders needs your approval (not available in this version yet)`,
+      };
+    }
+  } catch {
+    return { ok: false, output: `cannot delete '${relative}': no such file` };
+  }
+  try {
+    unlinkSync(resolved.abs);
+    return { ok: true, output: `deleted '${toRelative(root, resolved.abs)}'` };
+  } catch (error) {
+    return {
+      ok: false,
+      output: `cannot delete '${relative}': ${error instanceof Error ? error.message : "unknown error"}`,
+    };
+  }
+}
+
+/** search_files — substring search over relative paths (recursive, capped,
+ * same ignore rules as the explorer tree). The workhorse for "where is X".
+ */
+export function searchFiles(root: string, query: string, dir?: string): ToolResult {
+  const needle = query.trim().toLowerCase();
+  if (needle === "") return { ok: false, output: "search_files needs a non-empty 'query'" };
+  const base = dir !== undefined && dir.trim() !== "" ? resolveInsideRoot(root, dir) : ({ abs: root } as const);
+  if ("error" in base) return { ok: false, output: base.error };
+  const hits: string[] = [];
+  const walk = (absDir: string, rel: string, depth: number) => {
+    if (depth > MAX_DEPTH || hits.length >= 50) return;
+    let entries: string[];
+    try {
+      entries = readdirSync(absDir);
+    } catch {
+      return;
+    }
+    for (const name of entries.slice(0, MAX_ENTRIES)) {
+      if (hits.length >= 50) return;
+      if (IGNORED_DIRS.has(name) || (name.startsWith(".") && name !== ".github")) continue;
+      const relPath = rel === "" ? name : `${rel}/${name}`;
+      if (relPath.toLowerCase().includes(needle)) hits.push(relPath);
+      try {
+        if (statSync(join(absDir, name)).isDirectory()) walk(join(absDir, name), relPath, depth + 1);
+      } catch {
+        /* unreadable entry — skip */
+      }
+    }
+  };
+  walk(base.abs, base.abs === root ? "" : toRelative(root, base.abs), 0);
+  if (hits.length === 0) return { ok: true, output: `no paths matching '${query}'` };
+  return { ok: true, output: `${hits.length} match(es) for '${query}':\n${hits.join("\n")}` };
+}
+
 /* ── AI SDK tool-set adapter ───────────────────────────────────────────────
  * The ChatFn hands these to generateText; each execute() returns a string the
  * model can read. Tool invocations are logged by the runtime into the session
@@ -259,6 +339,48 @@ export function buildProjectTools(root: string): ToolSet {
           typeof input.path === "string" ? input.path : "",
           typeof input.oldString === "string" ? input.oldString : "",
           typeof input.newString === "string" ? input.newString : "",
+        ),
+    },
+    create_dir: {
+      description:
+        "Create a folder inside the project (parents created as needed). Use before writing files into a new subfolder.",
+      inputSchema: jsonSchema({
+        type: "object",
+        properties: {
+          path: { type: "string", description: "Folder path relative to the project root" },
+        },
+        required: ["path"],
+      }),
+      execute: async (input) => createDir(root, typeof input.path === "string" ? input.path : ""),
+    },
+    delete_file: {
+      description:
+        "Delete ONE file inside the project. Directories cannot be deleted with this tool (needs owner approval). Always confirm the user really asked for the deletion before calling.",
+      inputSchema: jsonSchema({
+        type: "object",
+        properties: {
+          path: { type: "string", description: "File path relative to the project root" },
+        },
+        required: ["path"],
+      }),
+      execute: async (input) => deleteFile(root, typeof input.path === "string" ? input.path : ""),
+    },
+    search_files: {
+      description:
+        "Search the project for files/folders whose PATH contains the query substring (case-insensitive). Use it to locate files before reading or editing them.",
+      inputSchema: jsonSchema({
+        type: "object",
+        properties: {
+          query: { type: "string", description: "Substring to look for in relative paths" },
+          dir: { type: "string", description: "Optional folder to search within ('' = whole project)" },
+        },
+        required: ["query"],
+      }),
+      execute: async (input) =>
+        searchFiles(
+          root,
+          typeof input.query === "string" ? input.query : "",
+          typeof input.dir === "string" ? input.dir : undefined,
         ),
     },
   };
