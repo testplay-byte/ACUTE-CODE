@@ -42,6 +42,7 @@ UI stands and what is still open.
 - [`round-06.md`](round-06.md) — persistent dev backend (`pnpm dev:full`): fixes models list & test connection in the browser
 - [`round-07.md`](round-07.md) — expand button lists the full catalog; PlugBrain scrolls as one unified flow
 - [`round-08.md`](round-08.md) — honest connection test; dashboard/shell redo; Settings hub; mono dark; PROJECT-MAP + dev CLI
+- [`round-14.md`](round-14.md) — dashboard live on GitHub Pages (DASHBOARD repo, plan section, browser-verified)
 - [`round-13.md`](round-13.md) — governance round: docs/ADRs/blueprints/workflow + tool-truth fixes + public dashboard (sub-agent audits)
 - [`round-12.md`](round-12.md) — live streaming (SSE), per-reply stats + copy + ctx meter + model picker, borderless tight chat UI, drag fix, Nova→Acute, modern always-on-top folder dialog, DESIGN-SYSTEM.md, sandbox-wipe recovery via work branch
 - [`round-11.md`](round-11.md) — owner Windows-verdict fixes: real folder dialog (2 methods + error surfacing), fullscreen chat with hamburger sidebar toggle, plug-and-play Nova agent seed, dialog centering fix, HTML-build live proof

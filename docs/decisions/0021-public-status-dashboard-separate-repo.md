@@ -17,7 +17,7 @@ registries" applies to source, not to curated status.
 - **Separate PUBLIC repo containing only a generated static page** — the
   private repo keeps a hand-curated `docs/status.json`; a zero-dep builder
   renders a self-contained `index.html` and publishes it to
-  `testplay-byte/ACUTE-DASH` (Pages from `main`).
+  `testplay-byte/DASHBOARD` (Pages from `main`; repo + scoped PAT created by the owner round-18).
 
 ## Decision
 
@@ -26,12 +26,12 @@ reads ONLY `docs/status.json` + git metadata, HTML-escapes everything, and
 runs a DENYLIST assert on the output (tokens/key patterns, the owner's
 private model id, internal paths, env names, ports, the ntfy topic, id
 prefixes, repo paths) — **exit 1 before publishing** if anything matches
-(fail-closed). v1 publishing is agent-driven via
-`scripts/dashboard/publish-dashboard.mjs` (uses the orchestrator's PAT,
-token-in-URL + sanitization, per ADR-0018); CI automation with a repo secret
-is deferred until the owner sets `ACUTE_DASH_PAT` via `gh secret set` (a
-deliberately dash-only fine-grained PAT). Pages stays DISABLED on the private
-repo — part of the pre-push checks.
+(fail-closed). Publishing is agent-driven via
+`scripts/dashboard/publish-dashboard.mjs` (uses the owner-provided
+DASHBOARD-scoped PAT via the `DASHBOARD_PAT` env var, token-in-URL +
+sanitization per ADR-0018). The dashboard carries a "The Plan" section
+(current focus, upcoming phases, principles) per owner request round-18.
+Pages stays DISABLED on the private repo — part of the pre-push checks.
 
 ## Consequences
 

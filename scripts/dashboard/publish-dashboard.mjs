@@ -1,16 +1,17 @@
 #!/usr/bin/env node
 /**
  * Publish the public status dashboard to the separate PUBLIC repo
- * testplay-byte/ACUTE-DASH (ADR-0021). Run AFTER a merged, CI-green round
- * when docs/status.json moved (WORKFLOW §6).
+ * testplay-byte/DASHBOARD (ADR-0021; repo + scoped PAT provided by the owner
+ * round-18). Run AFTER a merged, CI-green round when docs/status.json moved
+ * (WORKFLOW §6).
  *
- * Steps: build dashboard.html (denylist-checked) → clone/refresh ACUTE-DASH
+ * Steps: build dashboard.html (denylist-checked) → clone/refresh DASHBOARD
  * via token-in-URL (ADR-0018 pattern; remote sanitized) → commit + push →
  * ensure Pages (API, idempotent) → verify the live URL answers 200.
  *
- * Env: GITHUB_PAT (required; the orchestrator's PAT — dashboard-only
- * fine-grained PAT works too), ACUTE_DASH_NAME (default ACUTE-DASH).
- * The PAT value is never printed.
+ * Env: DASHBOARD_PAT (required; the owner-provided PAT scoped to the
+ * DASHBOARD repo). ACUTE_DASH_NAME (default: DASHBOARD). The PAT value is
+ * never printed.
  */
 import { spawnSync } from "node:child_process";
 import { existsSync, mkdtempSync, rmSync, copyFileSync, readFileSync, writeFileSync } from "node:fs";
@@ -19,11 +20,11 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..");
-const PAT = process.env.GITHUB_PAT;
+const PAT = process.env.DASHBOARD_PAT;
 const OWNER = "testplay-byte";
-const NAME = process.env.ACUTE_DASH_NAME ?? "ACUTE-DASH";
+const NAME = process.env.ACUTE_DASH_NAME ?? "DASHBOARD";
 if (!PAT) {
-  console.error("GITHUB_PAT env required (value never printed)");
+  console.error("DASHBOARD_PAT env required (value never printed)");
   process.exit(1);
 }
 
@@ -49,8 +50,8 @@ const run = (cmd, args, opts = {}) => {
         "  A) github.com → Settings → Developer settings → Fine-grained tokens → edit this token →\n" +
         `     Repository access → add ${OWNER}/${NAME} → Contents: Read and write → Save.\n` +
         `  B) Create a NEW fine-grained token scoped to ONLY ${NAME} (Contents R/W) and set it as\n` +
-        "     the ACUTE_DASH_PAT repo secret / GITHUB_PAT when publishing.\n" +
-        "Then re-run: GITHUB_PAT=<token> node scripts/dashboard/publish-dashboard.mjs",
+        "     the DASHBOARD_PAT env var when publishing.\n" +
+        "Then re-run: DASHBOARD_PAT=<token> node scripts/dashboard/publish-dashboard.mjs",
       );
       process.exit(2);
     }
@@ -74,7 +75,7 @@ if (repoRes.status === 404) {
       has_issues: false,
       has_wiki: false,
       has_projects: false,
-      description: "Acute — public status dashboard (generated; no source)",
+      description: "Acute — public status dashboard (generated; no source code)",
     }),
   });
   if (!created.ok) {
