@@ -15,7 +15,9 @@ This runbook documents that system exactly as built.
 | **`scripts/acute-desktop.mjs`** | inside the repo (delivered by the clone) | everything else: toolchain, updates, installs, builds, credentials, server lifecycle, error reporting |
 
 Both are idempotent: double-clicking the same file again never re-does
-completed work.
+completed work. A local copy that PREDATES the runner (cloned before
+round-10) is self-healed: the bootstrap notices the missing runner and
+fast-forwards the clone first.
 
 ## First run (what you will see)
 

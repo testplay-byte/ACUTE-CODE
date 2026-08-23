@@ -17,6 +17,8 @@ if errorlevel 1 goto :nonode
 
 if exist "ACUTE-CODE\scripts\acute-desktop.mjs" goto :run
 
+if exist "ACUTE-CODE\.git" goto :oldclone
+
 echo First run: cloning the private ACUTE-CODE repository from GitHub.
 echo Git will ask for your credentials ONCE and Windows stores them
 echo safely in Windows Credential Manager (you never retype them).
@@ -29,6 +31,15 @@ git config --global credential.https://github.com.helper wincred
 git clone https://github.com/testplay-byte/ACUTE-CODE.git ACUTE-CODE
 if errorlevel 1 goto :clonefail
 echo.
+goto :run
+
+:oldclone
+rem Local copy predates the runner (round-10): bring it forward first.
+echo Existing ACUTE-CODE folder found (older version) - updating it…
+git -C ACUTE-CODE pull --ff-only origin main
+if errorlevel 1 goto :clonefail
+echo.
+goto :run
 
 :run
 cd /d "%~dp0ACUTE-CODE"

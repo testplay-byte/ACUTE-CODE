@@ -26,6 +26,16 @@ if ! command -v node >/dev/null 2>&1; then
 fi
 
 if [ ! -f "ACUTE-CODE/scripts/acute-desktop.mjs" ]; then
+  if [ -d "ACUTE-CODE/.git" ]; then
+    # Local copy predates the runner (round-10): bring it forward first.
+    echo "Existing ACUTE-CODE folder found (older version) - updating it…"
+    if ! git -C ACUTE-CODE pull --ff-only origin main; then
+      echo
+      echo "[ERROR] Updating the existing ACUTE-CODE folder failed."
+      echo "  Commit or remove local changes inside ACUTE-CODE and retry."
+      pause; exit 1
+    fi
+  else
   echo "First run: cloning the private ACUTE-CODE repository from GitHub."
   echo "Git will ask for your credentials ONCE and they are stored in"
   echo "~/.acute-git-credentials (permission 600)."
@@ -43,6 +53,7 @@ if [ ! -f "ACUTE-CODE/scripts/acute-desktop.mjs" ]; then
     echo "  - No internet connection"
     echo "Fix it and run this file again - the clone retries."
     pause; exit 1
+  fi
   fi
   echo
 fi
