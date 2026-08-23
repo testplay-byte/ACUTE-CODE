@@ -7,7 +7,7 @@ import { useCallback, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { motion } from "framer-motion";
 import {
-  ChevronDown, Copy, Check, Eye, EyeOff, Plus, Server, Trash2, Zap, RefreshCw,
+  ChevronDown, Copy, Check, Edit2, Eye, EyeOff, Plus, Server, Trash2, Zap, RefreshCw,
 } from "lucide-react";
 import { useThemeStyles } from "../../lib/use-theme-styles";
 import { withAlpha } from "../dashboard/helpers";
@@ -94,7 +94,7 @@ function ProviderCard({ provider, api, expanded, onToggle, onInvalidate }: {
   const styles = useThemeStyles();
   const [showKey, setShowKey] = useState(false);
   const [keyValue, setKeyValue] = useState<string | null>(null);
-  const [keyInput, setKeyInput] = useState("");
+  const [keyInput, setKeyInput] = useState(""); const [showKeyInput, setShowKeyInput] = useState(false);
   const [editingKey, setEditingKey] = useState(false);
   const [copied, setCopied] = useState(false);
   const [showAddModel, setShowAddModel] = useState(false);
@@ -114,21 +114,33 @@ function ProviderCard({ provider, api, expanded, onToggle, onInvalidate }: {
       setKeyValue(r.key);
     } catch { setKeyValue(null); }
   };
+  const [keyError, setKeyError] = useState<string | null>(null);
   const saveKey = async () => {
-    if (keyInput.trim().length <= 6) return;
+    if (keyInput.trim().length <= 6) { setKeyError("Key must be at least 7 characters"); return; }
+    setKeyError(null);
     try {
       await api(`/providers/${provider.id}/key`, { method: "PUT", body: JSON.stringify({ value: keyInput.trim() }) });
-      setKeyInput(""); setEditingKey(false); setKeyValue(keyInput.trim()); onInvalidate();
-    } catch { /* show error */ }
+      setKeyInput(""); setEditingKey(false); setKeyValue(keyInput.trim()); setKeyError(null);
+      onInvalidate();
+    } catch (e) {
+      setKeyError(e instanceof Error ? e.message : "Failed to save key");
+    }
   };
   const testModel = async (mid: string) => {
     setTestingModel(mid); setTestResult(null);
     try {
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), 30_000);
       const r = await api<{ ok: boolean; message?: string; latencyMs?: number }>(
-        `/providers/${provider.id}/test`, { method: "POST", body: JSON.stringify({ model: mid }) });
+        `/providers/${provider.id}/test`, { method: "POST", body: JSON.stringify({ model: mid }), signal: controller.signal });
+      clearTimeout(timer);
       setTestResult({ ok: r.ok, message: r.ok ? `${r.latencyMs}ms` : r.message ?? "failed" });
-    } catch (e) { setTestResult({ ok: false, message: e instanceof Error ? e.message : "error" }); }
-    finally { setTestingModel(null); }
+    } catch (e) {
+      const msg = e instanceof DOMException && e.name === "AbortError"
+        ? "timeout (30s) — provider unreachable"
+        : e instanceof Error ? e.message : "error";
+      setTestResult({ ok: false, message: msg });
+    } finally { setTestingModel(null); }
   };
 
   const models = modelsQuery.data?.models ?? [];
@@ -189,13 +201,23 @@ function ProviderCard({ provider, api, expanded, onToggle, onInvalidate }: {
                 style={{ background: styles.inputBg, color: styles.text }}>{keyValue}</code>
             )}
             {editingKey && (
-              <div className="flex gap-2">
-                <input value={keyInput} onChange={(e) => setKeyInput(e.target.value)}
-                  placeholder={provider.hasKey ? "Enter new key to replace…" : "Enter API key…"}
-                  className="h-9 flex-1 rounded-lg border-[1.5px] px-3 font-mono text-[11px] outline-none" style={is} />
-                <button onClick={() => void saveKey()} disabled={keyInput.trim().length <= 6}
-                  className="rounded-lg px-3 py-2 text-[11px] font-semibold disabled:opacity-50"
-                  style={{ background: styles.accent, color: styles.accentText }}>Save</button>
+              <div className="flex flex-col gap-1.5">
+                <div className="flex gap-2">
+                  <div className="relative flex-1">
+                    <input value={keyInput} onChange={(e) => { setKeyInput(e.target.value); setKeyError(null); }}
+                      placeholder={provider.hasKey ? "Enter new key to replace…" : "Enter API key…"}
+                      type={showKeyInput ? "text" : "password"}
+                      className="h-9 w-full rounded-lg border-[1.5px] px-3 pr-9 font-mono text-[11px] outline-none" style={is} />
+                    <button type="button" onClick={() => setShowKeyInput(!showKeyInput)}
+                      className="absolute right-2 top-1/2 -translate-y-1/2" style={{ color: styles.textSecondary }}>
+                      {showKeyInput ? <EyeOff size={11} /> : <Eye size={11} />}
+                    </button>
+                  </div>
+                  <button onClick={() => void saveKey()} disabled={keyInput.trim().length <= 6}
+                    className="shrink-0 rounded-lg px-3 py-2 text-[11px] font-semibold disabled:opacity-50"
+                    style={{ background: styles.accent, color: styles.accentText }}>Save</button>
+                </div>
+                {keyError && <p className="text-[10px]" style={{ color: "#ef4444" }}>{keyError}</p>}
               </div>
             )}
           </div>
@@ -255,6 +277,7 @@ function ModelRow({ model, api, onTest, testing, testResult, onInvalidate }: {
   testResult: { ok: boolean; message: string } | null; onInvalidate: () => void;
 }) {
   const styles = useThemeStyles();
+  const [showEdit, setShowEdit] = useState(false);
   const toggleHidden = async () => {
     try { await api(`/models/${model.id}`, { method: "PATCH", body: JSON.stringify({ hidden: !model.hidden }) }); onInvalidate(); } catch {}
   };
@@ -290,6 +313,10 @@ function ModelRow({ model, api, onTest, testing, testResult, onInvalidate }: {
         className="grid h-6 w-6 shrink-0 place-items-center rounded-md disabled:opacity-50" style={{ color: styles.textSecondary }}>
         {testing ? <RefreshCw size={11} className="animate-spin" /> : <Zap size={11} />}
       </button>
+      <button onClick={() => setShowEdit(true)} title="Edit model"
+        className="grid h-6 w-6 shrink-0 place-items-center rounded-md" style={{ color: styles.textSecondary }}>
+        <Edit2 size={11} />
+      </button>
       <button onClick={() => void toggleHidden()} title={model.hidden ? "Unhide" : "Hide from chat"}
         className="grid h-6 w-6 shrink-0 place-items-center rounded-md" style={{ color: model.hidden ? styles.accent : styles.textSecondary }}>
         {model.hidden ? <EyeOff size={11} /> : <Eye size={11} />}
@@ -298,6 +325,10 @@ function ModelRow({ model, api, onTest, testing, testResult, onInvalidate }: {
         className="grid h-6 w-6 shrink-0 place-items-center rounded-md" style={{ color: styles.textSecondary }}>
         <Trash2 size={11} />
       </button>
+      {showEdit && (
+        <EditModelDialog model={model} api={api}
+          onClose={() => setShowEdit(false)} onSaved={onInvalidate} />
+      )}
     </div>
   );
 }
@@ -308,7 +339,7 @@ function AddProviderDialog({ api, onClose, onCreated }: {
   const styles = useThemeStyles();
   const [mode, setMode] = useState<"choose" | "preset" | "custom">("choose");
   const [name, setName] = useState(""); const [baseUrl, setBaseUrl] = useState("");
-  const [apiKey, setApiKey] = useState(""); const [apiFormat, setApiFormat] = useState<ApiFormat>("chat-completions");
+  const [apiKey, setApiKey] = useState(""); const [showApiKey, setShowApiKey] = useState(false); const [apiFormat, setApiFormat] = useState<ApiFormat>("chat-completions");
   const [error, setError] = useState<string | null>(null); const [creating, setCreating] = useState(false);
   const is = { background: styles.inputBg, borderColor: styles.inputBorder, color: styles.text } as const;
 
@@ -350,8 +381,17 @@ function AddProviderDialog({ api, onClose, onCreated }: {
               className="h-10 w-full rounded-lg border-[1.5px] px-3 text-[13px] outline-none" style={is} autoFocus />
             <input value={baseUrl} onChange={(e) => setBaseUrl(e.target.value)} placeholder="https://api.example.com/v1"
               className="h-10 w-full rounded-lg border-[1.5px] px-3 font-mono text-[12px] outline-none" style={is} />
-            <input value={apiKey} onChange={(e) => setApiKey(e.target.value)} placeholder="API key" type="password"
-              className="h-10 w-full rounded-lg border-[1.5px] px-3 font-mono text-[12px] outline-none" style={is} />
+            <div className="relative">
+              <input value={apiKey} onChange={(e) => setApiKey(e.target.value)} placeholder="API key"
+                type={showApiKey ? "text" : "password"}
+                className="h-10 w-full rounded-lg border-[1.5px] px-3 pr-10 font-mono text-[12px] outline-none" style={is} />
+              <button type="button" onClick={() => setShowApiKey(!showApiKey)}
+                className="absolute right-2 top-1/2 -translate-y-1/2 rounded-md p-1"
+                style={{ color: styles.textSecondary }}
+                aria-label={showApiKey ? "Hide API key" : "Show API key"}>
+                {showApiKey ? <EyeOff size={13} /> : <Eye size={13} />}
+              </button>
+            </div>
             <div className="flex gap-2">
               {(["chat-completions", "anthropic-messages", "responses"] as const).map((f) => (
                 <button key={f} onClick={() => setApiFormat(f)}
@@ -461,6 +501,82 @@ function AddModelDialog({ providerId, api, onClose, onCreated }: {
               className="flex-1 rounded-lg py-2.5 text-[12px] font-semibold disabled:opacity-50"
               style={{ background: styles.accent, color: styles.accentText }}>
               {creating ? "Adding…" : "Add Model"}
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function EditModelDialog({ model, api, onClose, onSaved }: {
+  model: ModelRecord;
+  api: <T>(p: string, i?: RequestInit) => Promise<T>;
+  onClose: () => void; onSaved: () => void;
+}) {
+  const styles = useThemeStyles();
+  const [displayName, setDisplayName] = useState(model.displayName);
+  const [contextWindow, setContextWindow] = useState(model.contextWindow?.toString() ?? "");
+  const [maxOutput, setMaxOutput] = useState(model.maxOutputTokens?.toString() ?? "");
+  const [inputPrice, setInputPrice] = useState(model.inputPricePerMtok?.toString() ?? "");
+  const [cachedPrice, setCachedPrice] = useState(model.inputPriceCachedPerMtok?.toString() ?? "");
+  const [outputPrice, setOutputPrice] = useState(model.outputPricePerMtok?.toString() ?? "");
+  const [error, setError] = useState<string | null>(null);
+  const [saving, setSaving] = useState(false);
+  const is = { background: styles.inputBg, borderColor: styles.inputBorder, color: styles.text } as const;
+  const small = "h-9 w-full rounded-lg border-[1.5px] px-2.5 text-[12px] font-mono outline-none";
+
+  const save = async () => {
+    if (saving) return;
+    setSaving(true); setError(null);
+    try {
+      await api(`/models/${model.id}`, {
+        method: "PATCH",
+        body: JSON.stringify({
+          displayName: displayName.trim() || model.modelId,
+          ...(contextWindow !== "" ? { contextWindow: Number(contextWindow) } : { contextWindow: null }),
+          ...(maxOutput !== "" ? { maxOutputTokens: Number(maxOutput) } : { maxOutputTokens: null }),
+          ...(inputPrice !== "" ? { inputPricePerMtok: Number(inputPrice) } : { inputPricePerMtok: null }),
+          ...(cachedPrice !== "" ? { inputPriceCachedPerMtok: Number(cachedPrice) } : { inputPriceCachedPerMtok: null }),
+          ...(outputPrice !== "" ? { outputPricePerMtok: Number(outputPrice) } : { outputPricePerMtok: null }),
+        }),
+      });
+      onSaved(); onClose();
+    } catch (e) { setError(e instanceof Error ? e.message : "Failed to save"); }
+    finally { setSaving(false); }
+  };
+
+  return (
+    <div className="fixed inset-0 z-50 grid place-items-center" style={{ background: "rgba(0,0,0,0.5)" }} onClick={onClose}>
+      <div className="max-h-[85vh] w-[min(440px,92vw)] overflow-y-auto rounded-[16px] border-[1.5px] p-5"
+        style={{ background: styles.card, borderColor: styles.borderStrong }} onClick={(e) => e.stopPropagation()}>
+        <h3 className="mb-1 text-[16px] font-bold" style={{ color: styles.text }}>Edit Model</h3>
+        <p className="mb-4 text-[10px] font-mono" style={{ color: styles.textTertiary }}>{model.modelId}</p>
+        <div className="flex flex-col gap-3">
+          <input value={displayName} onChange={(e) => setDisplayName(e.target.value)}
+            placeholder="Display name" className={small} style={is} autoFocus />
+          <div className="grid grid-cols-2 gap-2">
+            <input value={contextWindow} onChange={(e) => setContextWindow(e.target.value.replace(/[^0-9]/g, ""))}
+              placeholder="Context window" className={small} style={is} inputMode="numeric" />
+            <input value={maxOutput} onChange={(e) => setMaxOutput(e.target.value.replace(/[^0-9]/g, ""))}
+              placeholder="Max output tokens" className={small} style={is} inputMode="numeric" />
+          </div>
+          <div className="grid grid-cols-3 gap-2">
+            <input value={inputPrice} onChange={(e) => setInputPrice(e.target.value.replace(/[^0-9.]/g, ""))}
+              placeholder="$/Mt in" className={small} style={is} inputMode="decimal" />
+            <input value={cachedPrice} onChange={(e) => setCachedPrice(e.target.value.replace(/[^0-9.]/g, ""))}
+              placeholder="$/Mt cached" className={small} style={is} inputMode="decimal" />
+            <input value={outputPrice} onChange={(e) => setOutputPrice(e.target.value.replace(/[^0-9.]/g, ""))}
+              placeholder="$/Mt out" className={small} style={is} inputMode="decimal" />
+          </div>
+          {error && <p className="text-[11px]" style={{ color: "#ef4444" }}>{error}</p>}
+          <div className="mt-1 flex gap-2">
+            <button onClick={onClose} className="flex-1 rounded-lg border-[1.5px] py-2.5 text-[12px] font-semibold"
+              style={{ background: styles.inputBg, color: styles.textSecondary, borderColor: styles.border }}>Cancel</button>
+            <button onClick={() => void save()} disabled={saving}
+              className="flex-1 rounded-lg py-2.5 text-[12px] font-semibold disabled:opacity-50"
+              style={{ background: styles.accent, color: styles.accentText }}>
+              {saving ? "Saving…" : "Save Changes"}
             </button>
           </div>
         </div>
