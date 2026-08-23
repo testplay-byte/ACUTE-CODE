@@ -1,12 +1,22 @@
-import { Outlet } from "react-router";
+import { Outlet, useLocation } from "react-router";
+import { useProjectChatStore } from "../../lib/project-chat-store";
 import { Sidebar } from "./Sidebar";
 
 /**
  * Bento layout from the dashboard demo. Owner round-8: the top bar is GONE
  * (useless chrome) — theme/mode controls moved into Settings. What remains:
  * padded app background, sidebar card, main card, all with four-side padding.
+ *
+ * Owner round-15: the project-chat screen is FULLSCREEN — the app sidebar is
+ * hidden there by default and the chat TopBar's hamburger toggles it back.
  */
 export function AppShell() {
+  const { pathname } = useLocation();
+  const appSidebarVisible = useProjectChatStore((s) => s.appSidebarVisible);
+  // /project/:id/chat hides the app sidebar unless the user toggled it on.
+  const isChatRoute = /^\/project\/[^/]+\/chat\/?$/.test(pathname);
+  const showSidebar = !isChatRoute || appSidebarVisible;
+
   return (
     <div className="relative h-screen w-full overflow-hidden">
       {/* Subtle dot grid + accent ambient glows (demo DashboardPage pattern). */}
@@ -31,7 +41,7 @@ export function AppShell() {
       />
 
       <div className="relative z-10 flex h-full gap-3 p-3 md:p-4">
-        <Sidebar />
+        {showSidebar && <Sidebar />}
         <main className="min-w-0 flex-1 overflow-y-auto rounded-lg border-[1.5px] border-line bg-card">
           <Outlet />
         </main>

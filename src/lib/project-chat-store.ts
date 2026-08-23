@@ -10,7 +10,7 @@ import { persist } from "zustand/middleware";
  * freeform layout survive reloads.
  *
  * collapsedPanels/expandedFolders are persisted as plain arrays (the demo
- * used Sets, which do not serialize). hamburgerOpen is transient (excluded
+ * used Sets, which do not serialize). appSidebarVisible is transient (excluded
  * via partialize).
  */
 
@@ -65,8 +65,9 @@ export interface ProjectChatState {
   selectedAgentId: string | null;
   /** Per-project local to-do lists (no backend task events yet — Phase 3). */
   todos: Record<string, TodoItem[]>;
-  /** Transient: hamburger dropdown (never persisted). */
-  hamburgerOpen: boolean;
+  /** Round-15 (owner): on the chat screen the APP sidebar is HIDDEN; the
+   * TopBar hamburger toggles it. Transient — never persisted. */
+  appSidebarVisible: boolean;
   setSidebarOpen: (open: boolean) => void;
   setCodeVisible: (visible: boolean) => void;
   /** Clamps to [MIN_SIDEBAR_WIDTH, MAX_SIDEBAR_WIDTH]. */
@@ -84,7 +85,7 @@ export interface ProjectChatState {
   setSelectedAgentId: (id: string | null) => void;
   addTodo: (projectId: string, text: string) => void;
   toggleTodo: (projectId: string, todoId: string) => void;
-  setHamburgerOpen: (open: boolean) => void;
+  setAppSidebarVisible: (visible: boolean) => void;
 }
 
 const toggleMember = (list: string[], value: string): string[] =>
@@ -106,7 +107,7 @@ export const useProjectChatStore = create<ProjectChatState>()(
       freeformPanels: DEFAULT_FREEFORM_PANELS,
       selectedAgentId: null,
       todos: {},
-      hamburgerOpen: false,
+      appSidebarVisible: false,
       setSidebarOpen: (sidebarOpen) => set({ sidebarOpen }),
       setCodeVisible: (codeVisible) => set({ codeVisible }),
       setSidebarWidth: (sidebarWidth) =>
@@ -152,14 +153,14 @@ export const useProjectChatStore = create<ProjectChatState>()(
             ),
           },
         })),
-      setHamburgerOpen: (hamburgerOpen) => set({ hamburgerOpen }),
+      setAppSidebarVisible: (appSidebarVisible) => set({ appSidebarVisible }),
     }),
     {
       name: "acute-code.projectChat",
       version: 1,
       // Transient UI state must not survive reloads.
       partialize: (s) => {
-        const { hamburgerOpen: _hamburgerOpen, ...rest } = s;
+        const { appSidebarVisible: _appSidebarVisible, ...rest } = s;
         return rest as ProjectChatState;
       },
     },

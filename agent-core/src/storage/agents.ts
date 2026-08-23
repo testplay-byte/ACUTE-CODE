@@ -249,3 +249,53 @@ export function duplicateAgent(db: SqliteDatabase, id: string, name?: string): A
   );
   return getAgent(db, agent.id) as Agent;
 }
+
+/** Fixed id for the plug-and-play default agent (round-15: a fresh install
+ * must be able to chat OUT OF THE BOX — no manual agent setup required). */
+const DEFAULT_AGENT_ID = "agt_default_nova";
+
+/**
+ * Seed the default working agent once, when NO non-template agent exists and
+ * the openrouter provider row is present (it always is — provider seed).
+ * Model hardcoded to the owner's single allowed key model ("stealth/ox-alpha");
+ * owners with other providers simply edit or duplicate the agent in Settings.
+ * Idempotent by fixed id + existence check.
+ */
+export function ensureDefaultAgent(db: SqliteDatabase): void {
+  const exists = db
+    .prepare("SELECT COUNT(*) AS n FROM agents WHERE id = ?")
+    .get(DEFAULT_AGENT_ID) as { n: number };
+  if (exists.n > 0) return;
+  const anyAgent = db
+    .prepare("SELECT COUNT(*) AS n FROM agents WHERE is_template = 0")
+    .get() as { n: number };
+  if (anyAgent.n > 0) return; // user already created their own — never crowd them
+  const hasOpenRouter = db
+    .prepare("SELECT COUNT(*) AS n FROM providers WHERE id = 'openrouter'")
+    .get() as { n: number };
+  if (hasOpenRouter.n === 0) return;
+  const now = new Date().toISOString();
+  db.prepare(INSERT_AGENT).run(
+    bind(
+      {
+        id: DEFAULT_AGENT_ID,
+        name: "Nova",
+        role: "coder",
+        systemPrompt: [
+          "You are Nova, a careful hands-on coding agent working inside the user's project.",
+          "Prefer minimal, precise changes; read before editing; verify paths stay inside the project root.",
+          "When asked to build something, actually create the files with your tools, then summarize what you made.",
+        ].join("\n"),
+        providerId: "openrouter",
+        model: "stealth/ox-alpha",
+        visionModel: null,
+        allowedTools: [],
+        memoryPolicy: "every-turn",
+        skills: [],
+        maxTurns: 40,
+        temperature: 0.2,
+      },
+      { version: 1, isTemplate: 0, createdAt: now, updatedAt: now },
+    ),
+  );
+}

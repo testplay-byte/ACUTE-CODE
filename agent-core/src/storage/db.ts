@@ -9,6 +9,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import Database from "better-sqlite3";
 import { TOOL_NAMES, type Agent } from "./agents.js";
+import { ensureDefaultAgent } from "./agents.js";
 import { seedBuiltinProviders } from "./providers.js";
 
 export type SqliteDatabase = Database.Database;
@@ -156,5 +157,6 @@ export function openDatabase(path: string): SqliteDatabase {
   applyMigrations(db);
   seedTemplates(db);
   seedBuiltinProviders(db);
+  ensureDefaultAgent(db);
   return db;
 }

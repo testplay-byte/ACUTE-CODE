@@ -185,6 +185,12 @@
 .dialog-overlay[data-state="open"] {
   animation: overlay-in 0.2s ease;
 }
+/* Base transform MUST match the animation's end state — without it the dialog
+ * jumps half off-screen the moment the animation ends (owner-reported glitch:
+ * "centered for a moment then goes outside the view"). */
+.dialog-content {
+  transform: translate(-50%, -50%);
+}
 .dialog-content[data-state="open"] {
   animation: content-in 0.25s cubic-bezier(0.25, 0.1, 0.25, 1);
 }

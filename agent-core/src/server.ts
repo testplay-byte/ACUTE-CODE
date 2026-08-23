@@ -325,23 +325,21 @@ export function buildServer(options: ServerOptions): FastifyInstance {
     return reply.code(204).send();
   });
 
-  // Native OS folder picker (round-14): the sidecar opens the REAL dialog
-  // (PowerShell FolderBrowserDialog / zenity / kdialog) so folder selection
-  // works even in browser dev (no Tauri). Same bearer wall as everything
-  // else. 200 {path: string|null} — null = cancelled; 501 DIALOG_UNAVAILABLE
-  // when this machine has no dialog backend (UI falls back to manual entry).
+  // Native OS folder picker (round-14/15): the sidecar opens the REAL dialog
+  // (PowerShell FolderBrowserDialog + Shell fallback / zenity / kdialog) so
+  // folder selection works even in browser dev (no Tauri). Same bearer wall
+  // as everything else. 200 {path, error?} — path null + no error = user
+  // cancelled; error set = the dialog FAILED (UI shows the cause); 501
+  // DIALOG_UNAVAILABLE only when this machine has no dialog backend.
   // Never hit by tests: the dialog blocks on a human.
   app.post("/internal/dialog/folder", async (_request, reply) => {
     const picked = await pickFolder();
-    if (picked === undefined) {
+    if (picked.error && picked.error.includes("not supported on")) {
       return reply.code(501).send(
-        errorBody(
-          "DIALOG_UNAVAILABLE",
-          "no folder-dialog backend on this machine (powershell / zenity / kdialog)",
-        ),
+        errorBody("DIALOG_UNAVAILABLE", picked.error),
       );
     }
-    return { path: picked };
+    return { path: picked.path, ...(picked.error ? { error: picked.error } : {}) };
   });
 
   app.register(

@@ -98,15 +98,18 @@ describe("sidecar e2e (skipped without a prior build)", { skip: !existsSync(MAIN
     assert.equal(denied.json.error.code, "UNAUTHORIZED");
   });
 
-  it("seeds exactly the five templates on a fresh database", async () => {
+  it("seeds the five templates + the plug-and-play default agent (round-15)", async () => {
     const { status, json } = await api("GET", "/api/v1/agents");
     assert.equal(status, 200);
-    assert.equal(json.agents.length, 5);
+    assert.equal(json.agents.length, 6);
     assert.deepEqual(
       json.agents.map((a) => a.name).sort(),
-      ["Coder", "Planner", "Researcher", "Reviewer", "Tester"],
+      ["Coder", "Nova", "Planner", "Researcher", "Reviewer", "Tester"],
     );
-    assert.ok(json.agents.every((a) => a.isTemplate));
+    const nova = json.agents.find((a) => a.name === "Nova");
+    assert.ok(nova && nova.isTemplate === false);
+    assert.equal(nova.providerId, "openrouter");
+    assert.equal(nova.model, "stealth/ox-alpha");
   });
 
   it("creates, duplicates, patches, and deletes an agent", async () => {
@@ -136,7 +139,8 @@ describe("sidecar e2e (skipped without a prior build)", { skip: !existsSync(MAIN
 
   it("protects templates and rejects invalid input", async () => {
     const { json } = await api("GET", "/api/v1/agents");
-    const template = json.agents[0];
+    // Round-15: Nova (non-template) may sort first — target a real template.
+    const template = json.agents.find((a) => a.name === "Coder");
     const del = await api("DELETE", `/api/v1/agents/${template.id}`);
     assert.equal(del.status, 409);
 

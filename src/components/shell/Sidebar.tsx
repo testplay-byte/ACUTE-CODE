@@ -394,12 +394,13 @@ function AddProjectButton({
     );
   }, [name, rootPath, createProject, onCreated]);
 
-  /** Folder picker (round-14): the Tauri shell's native dialog when packed,
-   * otherwise the SIDECAR opens the real OS dialog (PowerShell / zenity) —
-   * so Browse works in plain browser dev too. null (cancelled) is a no-op;
-   * `undefined` (no dialog backend) tells the user to paste the path. */
+  /** Folder picker (round-15): Tauri shell's native dialog when packed,
+   * otherwise the SIDECAR opens the real OS dialog (PowerShell ×2 methods /
+   * zenity) — so Browse works in plain browser dev too. Every failure mode is
+   * SHOWN to the user; nothing is silent. */
   const handleBrowse = useCallback(async () => {
     setPicking(true);
+    setPickHint(null);
     try {
       if (isTauri()) {
         const folder = await tauriInvoke<string | null>("pick_folder");
@@ -407,11 +408,16 @@ function AddProjectButton({
         return;
       }
       const picked = await pickFolderViaBackend();
-      if (typeof picked === "string" && picked) setRootPath(picked);
-      else if (picked === undefined)
+      if (picked.path) {
+        setRootPath(picked.path);
+      } else if (picked.unavailable) {
         setPickHint("No folder dialog on this machine — please paste the path instead.");
-    } catch {
-      setPickHint("The folder dialog failed — please paste the path instead.");
+      } else if (picked.error) {
+        setPickHint(`Folder dialog failed: ${picked.error}`);
+      }
+      // path null + no error = user closed the dialog — stay quiet.
+    } catch (cause) {
+      setPickHint(`Folder dialog failed: ${cause instanceof Error ? cause.message : String(cause)}`);
     } finally {
       setPicking(false);
     }

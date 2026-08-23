@@ -11,6 +11,8 @@ import {
 import { AnimatePresence, motion, type Variants } from "framer-motion";
 import {
   ArrowUp,
+  Check,
+  ChevronDown,
   Edit3,
   FileCode2,
   Paperclip,
@@ -367,11 +369,26 @@ export function AgentChatPanel({
   // sessions the hamburger picker's choice (persisted) applies; else first.
   const agents = useAgents(false).data ?? [];
   const selectedAgentId = useProjectChatStore((s) => s.selectedAgentId);
+  const setSelectedAgentId = useProjectChatStore((s) => s.setSelectedAgentId);
   const agent =
     agents.find((a) => a.id === session?.agentId) ??
     agents.find((a) => a.id === selectedAgentId) ??
     agents[0] ??
     null;
+
+  // Agent picker popover (round-15: moved here from the removed TopBar menu).
+  const [agentMenuOpen, setAgentMenuOpen] = useState(false);
+  const agentMenuRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (!agentMenuOpen) return;
+    const handler = (e: MouseEvent) => {
+      if (agentMenuRef.current && !agentMenuRef.current.contains(e.target as Node)) {
+        setAgentMenuOpen(false);
+      }
+    };
+    document.addEventListener("mousedown", handler);
+    return () => document.removeEventListener("mousedown", handler);
+  }, [agentMenuOpen]);
 
   const createSession = useCreateSession();
   const sendMessage = useSendMessage();
@@ -448,7 +465,7 @@ export function AgentChatPanel({
       className="flex flex-col h-full min-w-0 rounded-2xl border overflow-hidden"
       style={{ backgroundColor: styles.card, borderColor: styles.border }}
     >
-      {/* Panel header: accent chip · agent name · model chip · status chip */}
+      {/* Panel header: accent chip · agent picker (round-15) · status chip */}
       <div
         className="shrink-0 h-11 px-3 border-b flex items-center gap-2"
         style={{ borderColor: styles.border }}
@@ -459,21 +476,101 @@ export function AgentChatPanel({
         >
           <Sparkles size={12} />
         </div>
-        <span className="text-[13px] font-semibold truncate" style={{ color: styles.text }}>
-          {agent?.name ?? "No agent"}
-        </span>
+        <div className="relative min-w-0">
+          <button
+            onClick={() => setAgentMenuOpen((v) => !v)}
+            className="flex items-center gap-1.5 rounded-lg px-1.5 py-1 transition-colors"
+            style={{ color: styles.text }}
+            aria-haspopup="listbox"
+            aria-expanded={agentMenuOpen}
+            aria-label="Choose agent"
+            title="Choose the agent for new sessions"
+            onMouseEnter={(e) => {
+              e.currentTarget.style.background = styles.subtleHover;
+            }}
+            onMouseLeave={(e) => {
+              e.currentTarget.style.background = "transparent";
+            }}
+          >
+            <span className="text-[13px] font-semibold truncate">{agent?.name ?? "No agent"}</span>
+            <ChevronDown size={12} style={{ color: styles.textSecondary }} />
+          </button>
+          <span
+            className="text-[10px] px-1.5 py-0.5 rounded-lg border font-mono shrink-0 ml-1"
+            style={{
+              backgroundColor: styles.inputBg,
+              borderColor: styles.inputBorder,
+              color: styles.textTertiary,
+            }}
+          >
+            {agent?.model ?? "no model"}
+          </span>
+          {agentMenuOpen && (
+            <div
+              ref={agentMenuRef}
+              className="absolute top-10 left-0 w-64 rounded-2xl border overflow-hidden z-50 p-1.5"
+              style={{ background: styles.card, borderColor: styles.border, boxShadow: styles.bentoShadow }}
+              role="listbox"
+            >
+              {agents.length === 0 ? (
+                <div className="text-[12px] px-2.5 py-2" style={{ color: styles.textSecondary }}>
+                  No agents yet — create one in Settings → Agents.
+                </div>
+              ) : (
+                agents.map((a) => (
+                  <button
+                    key={a.id}
+                    role="option"
+                    aria-selected={a.id === (selectedAgentId ?? agents[0]?.id)}
+                    onClick={() => {
+                      setSelectedAgentId(a.id);
+                      setAgentMenuOpen(false);
+                    }}
+                    className="w-full flex items-center gap-2.5 px-2.5 py-2 rounded-xl text-left"
+                    style={{
+                      background: a.id === (selectedAgentId ?? agents[0]?.id) ? withAlpha(styles.accent, 0.09) : "transparent",
+                    }}
+                    onMouseEnter={(e) => {
+                      if (a.id !== (selectedAgentId ?? agents[0]?.id))
+                        e.currentTarget.style.background = styles.subtleHover;
+                    }}
+                    onMouseLeave={(e) => {
+                      if (a.id !== (selectedAgentId ?? agents[0]?.id))
+                        e.currentTarget.style.background = "transparent";
+                    }}
+                  >
+                    <div
+                      className="w-7 h-7 rounded-lg grid place-items-center text-[11px] font-bold shrink-0"
+                      style={{
+                        background: a.id === (selectedAgentId ?? agents[0]?.id) ? styles.accent : styles.inputBg,
+                        color: a.id === (selectedAgentId ?? agents[0]?.id) ? styles.accentText : styles.textSecondary,
+                      }}
+                    >
+                      {a.name.charAt(0).toUpperCase()}
+                    </div>
+                    <div className="min-w-0 flex-1">
+                      <div className="text-[12px] font-semibold truncate" style={{ color: styles.text }}>
+                        {a.name}
+                      </div>
+                      <div className="text-[10px] font-mono truncate" style={{ color: styles.textSecondary }}>
+                        {a.providerId ?? "—"} · {a.model ?? "—"}
+                      </div>
+                    </div>
+                    {a.id === (selectedAgentId ?? agents[0]?.id) && (
+                      <Check size={12} style={{ color: styles.accent, flexShrink: 0 }} />
+                    )}
+                  </button>
+                ))
+              )}
+              <div className="px-2.5 pt-1.5 pb-1 text-[10px] font-mono" style={{ color: styles.textTertiary }}>
+                applies to new sessions
+              </div>
+            </div>
+          )}
+        </div>
+        <span className="flex-1" />
         <span
-          className="text-[10px] px-1.5 py-0.5 rounded-lg border font-mono shrink-0"
-          style={{
-            backgroundColor: styles.inputBg,
-            borderColor: styles.inputBorder,
-            color: styles.textTertiary,
-          }}
-        >
-          {agent?.model ?? "no model"}
-        </span>
-        <span
-          className="ml-auto text-[10px] font-mono px-1.5 py-0.5 rounded-full shrink-0"
+          className="text-[10px] font-mono px-1.5 py-0.5 rounded-full shrink-0"
           style={
             busy
               ? {

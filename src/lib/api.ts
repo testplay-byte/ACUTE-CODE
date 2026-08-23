@@ -530,18 +530,24 @@ export function toProjectChatItems(events: SessionEvent[]): ProjectChatItem[] {
  * Returns the chosen path, null when the user cancelled, or undefined when
  * this machine has no dialog backend (caller falls back to manual entry).
  */
-export async function pickFolderViaBackend(): Promise<string | null | undefined> {
+export async function pickFolderViaBackend(): Promise<{
+  path: string | null;
+  error?: string;
+  unavailable?: boolean;
+}> {
   const { baseUrl, token } = useConfigStore.getState();
   try {
     const res = await fetch(`${baseUrl}/internal/dialog/folder`, {
       method: "POST",
       ...(token ? { headers: { Authorization: `Bearer ${token}` } } : {}),
     });
-    if (res.status === 501) return undefined;
-    if (!res.ok) return undefined;
-    const body = (await res.json()) as { path: string | null };
-    return body.path;
-  } catch {
-    return undefined; // sidecar unreachable → manual paste fallback
+    if (res.status === 501) return { path: null, unavailable: true };
+    if (!res.ok) {
+      // Surface HTTP failures too — never silently pretend "cancelled".
+      return { path: null, error: `sidecar answered HTTP ${res.status}` };
+    }
+    return (await res.json()) as { path: string | null; error?: string };
+  } catch (cause) {
+    return { path: null, error: `could not reach the sidecar (${String(cause)})` };
   }
 }

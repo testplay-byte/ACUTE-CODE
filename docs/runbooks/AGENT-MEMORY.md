@@ -211,3 +211,37 @@ Format per entry: `N. TITLE (date, source)` → mistake → root cause → rule.
     dialog would freeze the ENTIRE sidecar (health checks included) for as
     long as the human takes to click. Same rule applies to any subprocess
     that waits on a human.
+
+## Round-15 lessons (owner's Windows test verdicts)
+
+29. **A "user cancelled" result is only trustworthy with a protocol.**
+   Mapping ANY failed dialog run to "cancelled" made the folder picker fail
+   SILENTLY on the owner's Windows (he clicked Browse; nothing happened).
+   RULE: human-facing dialogs must emit explicit markers (ACUTE_PICK:/
+   ACUTE_CANCEL), treat anything else as a failure, and return the failure
+   text to the UI — a cancel and a crash are never the same event. Windows
+   dialogs also need a fallback method (WinForms FolderBrowserDialog →
+   Shell.Application BrowseForFolder COM) because WinForms can refuse to
+   pump from background console processes.
+
+30. **CSS-animated dialogs must carry the end-state transform as their BASE
+   style.** An animation from/to translate(-50%,-50%) with no base transform
+   makes the dialog jump half off-screen the instant the animation ends —
+   on the owner's PC the agent dialog "centered for a moment then went
+   outside the view" and create/edit looked like dead buttons because the
+   dialog opened OFF-SCREEN. Rule: base style == animation's final keyframe
+   (position, transform, opacity) for every animated surface.
+
+31. **Never ship a chat product that requires setup before first message.**
+   A fresh install had zero agents → "Create an agent in settings" dead-end
+   (owner: "by default there is actually no need for any agents or anything
+   like that to be set up"). Fixed with ensureDefaultAgent seeding Nova at
+   DB open (guarded: never when the user already created an agent). Rule:
+   fresh-DB smoke tests must cover the FIRST-USER JOURNEY (open → send
+   message), not just API CRUD.
+
+32. **Test the whole journey on a fresh DB before claiming "works"** — most
+   round-15 bugs were invisible on my long-lived dev databases (agent
+   existed; dialog untested on Windows). The fresh-DB battery (seed →
+   project → session → owner-scenario prompt → disk assertions) is now the
+   standard pre-handover gate for anything touching agents or projects.

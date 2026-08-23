@@ -86,28 +86,37 @@ describe("bearer-token auth", () => {
 });
 
 describe("agents CRUD", () => {
-  it("lists the five seeded templates by default", async () => {
+  it("lists the seeded templates + plug-and-play default agent", async () => {
     const response = await authInject({ method: "GET", url: "/api/v1/agents" });
     expect(response.statusCode).toBe(200);
     const agents = response.json().agents;
     // Seeds share one timestamp, so ordering falls through to the id tie-break.
-    expect(agents.map((agent: { name: string }) => agent.name)).toEqual([
+    // Order depends on same-millisecond timestamp ties — assert as a set.
+    expect([...agents.map((agent: { name: string }) => agent.name)].sort()).toEqual([
       "Coder",
+      "Nova",
       "Planner",
       "Researcher",
       "Reviewer",
       "Tester",
     ]);
-    expect(agents.every((agent: { isTemplate: boolean }) => agent.isTemplate)).toBe(true);
   });
 
-  it("excludes templates with ?includeTemplates=false", async () => {
+  it("excludes templates with ?includeTemplates=false — Nova (round-15 seed) remains", async () => {
     const response = await authInject({
       method: "GET",
       url: "/api/v1/agents?includeTemplates=false",
     });
     expect(response.statusCode).toBe(200);
-    expect(response.json().agents).toEqual([]);
+    const agents = response.json().agents;
+    expect(agents).toHaveLength(1);
+    expect(agents[0]).toMatchObject({
+      id: "agt_default_nova",
+      name: "Nova",
+      providerId: "openrouter",
+      model: "stealth/ox-alpha",
+      isTemplate: false,
+    });
   });
 
   it("creates, reads, patches, duplicates, and deletes an agent", async () => {

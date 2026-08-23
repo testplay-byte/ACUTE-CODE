@@ -158,7 +158,8 @@ describe("template seeding", () => {
       const { total } = db.prepare("SELECT COUNT(*) AS total FROM agents").get() as {
         total: number;
       };
-      expect(total).toBe(5);
+      // 5 templates + the round-15 plug-and-play default agent (Nova).
+      expect(total).toBe(6);
     } finally {
       db.close();
     }
