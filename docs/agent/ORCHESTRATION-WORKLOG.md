@@ -337,3 +337,19 @@ Work Log:
 
 Stage Summary:
 - All four owner verdicts closed with root-cause fixes (not patches); fresh-DB journey test is now a standing pre-handover gate (#32). Open: owner Windows re-test (Browse must show a dialog or an exact error), hamburger→actions (future), sessions switcher, dashboard redo (owner-gated).
+
+---
+Task ID: R16 (streaming + polish session; survived a mid-round sandbox wipe)
+Agent: orchestrator (Z.ai Code) — all inline
+Task: Owner round-16: live streaming responses, per-reply stats/copy/ctx/model, borderless chat + drag fix, Nova→Acute, better folder dialog, design system doc
+
+Work Log:
+- EVENT: sandbox wiped mid-round — /home/z/acute-workspace + .secrets lost, ALL uncommitted round-16 work lost. Restored per SANDBOX-RESTORE.md (secrets re-staged 93/73 chars, clone at 0892ed1, verify green) and REDID the round from session context; NEW DISCIPLINE: work branch work/round-16-streaming with WIP pushes at every green milestone (lesson #33) — merged to main only when fully green
+- Backend: streamAiSdkChat (streamText; part.text deltas; usage = totals cross-checked vs summed finish-step usage — lesson #34), runStreamedAgentTurn (same event-sourced ordering, live emit, per-tool persistence), prepareTurn shared + modelOverride, POST /sessions/:id/messages/stream SSE (hijack, abort on disconnect), Acute rename (fixed id kept), dialogs.ts 3-method topmost modern picker; +2 streaming runtime tests; seed-order test fixes
+- Frontend: streamSessionMessage SSE client; stats in toProjectChatItems (the mapper the lost copy had missed — root cause of the missing stats row); live tool pills (dots→✓/✗) + streaming bubble with cursor; file-tool invalidation → live explorer/code refresh; CopyButton + ReplyStats chips; ComposerFooter (ctx meter with per-model limits + model picker via provider catalog); borderless panels (TopBar/Explorer/Code/Chat) + 3px gaps + 2px route padding + 5px handles; chat-drag sign fix; Acute chip
+- Live proofs (single-invocation discipline, disk-poll completion — lesson #35): SSE curl battery (frames timestamped live; ms=51655 in=7391 out=776; live/index.html on disk) and browser E2E (composer → streamed → ui-demo/hello.txt exact content; stats rows ×3; explorer live-refresh; zero console errors after transient ruled out via clean reproduction with empty [role=alert])
+- Docs: round-12.md; docs/design/DESIGN-SYSTEM.md (owner-mandated living reference: tokens, spacing scale incl. 2px chat rule, borderless language, motion, anatomy inventory, new-screen checklist); memory #33–#35; board + HANDOFF
+- pnpm verify GREEN; merged 2d31671 to main; CI 32636961329 SUCCESS; repo private-verified; ntfy delivered
+
+Stage Summary:
+- Chat is now a live streaming agentic UI with full per-reply telemetry and clean borderless design; design-system doc anchors all future UI. Open: owner Windows re-test (Browse dialog presentation, streaming feel, drag, stats), streamed-finish live-chip refinement, dashboard usage redo (next, owner-gated).
