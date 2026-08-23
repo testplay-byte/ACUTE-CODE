@@ -487,3 +487,21 @@ Work Log:
 
 Stage Summary:
 - Owner action: re-test on Windows via launcher — Browse (single dialog now), Settings → Models & Providers (add a custom provider, manage keys/models), chat streaming. Chat model picker enhancement (grouped by provider with context/pricing) is queued next round.
+
+---
+Task ID: R20 (model management fixes)
+Agent: orchestrator (Z.ai Code) — inline
+Task: Owner round-20 feedback: fix key save, add Edit Model, show API key input, fix test timeout, live-test everything
+
+Work Log:
+- ROOT CAUSE key save: apiFormat column added to providers table but INSERTs (seed + custom) were missing the @apiFormat binding → "6 values for 7 columns" crashed every server test; fixed both INSERTs + run() bindings + tests
+- apiFormat now: persisted on create, shown in provider list views (toRecord), tested in providers.test.ts
+- Edit Model dialog: full field editing (displayName, contextWindow, maxOutput, 3 pricing fields) via PATCH /models/:id
+- Show/hide API key toggles: Add Provider dialog (eye icon next to password field) + key edit form (eye icon on the replacement key input)
+- Test model: 30s AbortController timeout (shows "timeout — provider unreachable" instead of hanging forever); error messages surfaced inline
+- Key save: error display under the input (e.g. "Key must be at least 7 characters" or the server error); key saved → invalidation refreshes the provider list hasKey dot
+- LIVE E2E battery (fresh DB, real OpenRouter key): create provider (prv_test-provider) → PUT key (204) → GET key (73 chars) → POST model (stealth/ox-alpha with pricing) → models-config shows model → TEST (ok:true, 1357ms) → PATCH hidden:true → verify hidden. ALL PASS.
+- verify GREEN (providers test updated for apiFormat); merged 48e3066; CI 32651459051 SUCCESS; ntfy delivered
+
+Stage Summary:
+- Owner can now: create custom providers (with visible API key input), save/edit keys, add/edit models with pricing, test models (with timeout + error messages), hide models from chat picker. All verified live. Next: chat composer model picker enhancement (grouped by provider with context/pricing display).
