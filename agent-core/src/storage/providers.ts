@@ -42,8 +42,8 @@ const BUILTIN_PROVIDER_SEEDS: readonly BuiltinProviderSeed[] = [
  */
 export function seedBuiltinProviders(db: SqliteDatabase): void {
   const insert = db.prepare(
-    `INSERT INTO providers (id, name, kind, base_url, enabled, created_at)
-     VALUES (@id, @name, @kind, @baseUrl, 1, @createdAt)`,
+    `INSERT INTO providers (id, name, kind, base_url, api_format, enabled, created_at)
+     VALUES (@id, @name, @kind, @baseUrl, @apiFormat, 1, @createdAt)`,
   );
   db.transaction(() => {
     for (const seed of BUILTIN_PROVIDER_SEEDS) {
@@ -51,6 +51,7 @@ export function seedBuiltinProviders(db: SqliteDatabase): void {
       insert.run({
         id: seed.id,
         name: seed.name,
+        apiFormat: "chat-completions",
         kind: CUSTOM_PROVIDER_KIND,
         baseUrl: seed.baseUrl,
         createdAt: new Date().toISOString(),
@@ -64,6 +65,7 @@ export interface ProviderRecord {
   name: string;
   kind: string;
   baseUrl: string | null;
+  apiFormat?: string;
   enabled: boolean;
   createdAt: string;
 }
@@ -90,6 +92,7 @@ function toRecord(row: ProviderRow): ProviderRecord {
     name: row.name,
     kind: row.kind,
     baseUrl: row.base_url,
+    apiFormat: (row as { api_format?: string }).api_format ?? "chat-completions",
     enabled: row.enabled === 1,
     createdAt: row.created_at,
   };
@@ -131,9 +134,9 @@ export function createProviderRecord(
   kind: string = CUSTOM_PROVIDER_KIND,
 ): ProviderRecord {
   db.prepare(
-    `INSERT INTO providers (id, name, kind, base_url, enabled, created_at)
-     VALUES (@id, @name, @kind, @baseUrl, 1, @createdAt)`,
-  ).run({ ...input, kind, createdAt: new Date().toISOString() });
+    `INSERT INTO providers (id, name, kind, base_url, api_format, enabled, created_at)
+     VALUES (@id, @name, @kind, @baseUrl, @apiFormat, 1, @createdAt)`,
+  ).run({ ...input, kind, apiFormat: input.apiFormat ?? "chat-completions", createdAt: new Date().toISOString() });
   return getProviderRecord(db, input.id) as ProviderRecord;
 }
 

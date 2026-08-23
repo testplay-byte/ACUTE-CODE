@@ -107,6 +107,7 @@ describe("GET /api/v1/providers", () => {
             name: "OpenRouter",
             kind: "openai-compatible",
             baseUrl: "https://openrouter.ai/api/v1",
+            apiFormat: "chat-completions",
             enabled: true,
             createdAt: expect.any(String),
             hasKey: false,
