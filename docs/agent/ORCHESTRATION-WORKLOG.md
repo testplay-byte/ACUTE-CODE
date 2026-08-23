@@ -454,3 +454,21 @@ Work Log:
 
 Stage Summary:
 - Project now runs on documented rails: index → WORKFLOW → ROADMAP/TESTING/SECURITY → PILLARS → 21 ADRs; pillar-2/3 has a guardrailed blueprint with candidate ADRs before code. Dashboard pending one owner token edit. Next: owner token action → publish; R16 Windows re-test; dashboard-redo round (owner-gated).
+
+---
+Task ID: R18 (dashboard live session)
+Agent: orchestrator (Z.ai Code) — inline
+Task: Owner round-18: set up the dedicated DASHBOARD GitHub repo he created, publish the dashboard, verify live
+
+Work Log:
+- Owner created blank public repo testplay-byte/DASHBOARD + provided a scoped PAT (stored at /home/z/.secrets/dashboard.pat, 0600, separate from main PAT — verified both tokens work on their respective repos only)
+- Publisher updated: default repo DASHBOARD, DASHBOARD_PAT env var (all refs cleaned)
+- Dashboard enhanced with "The Plan" section (owner request): NOW card (orange highlight, current focus), upcoming phases with status chips (queued/owner-gated), Principles list — driven by new status.json.plan field
+- Denylist re-tested with poisoned plan content: still fail-closed (3 pattern classes blocked)
+- Published: first push to DASHBOARD repo (token-in-URL per ADR-0018), Pages enabled from main/, live URL HTTP 200
+- Browser-verified: agent-browser navigated to https://testplay-byte.github.io/DASHBOARD/, screenshot captured, VLM confirmed 7/7 elements (header, pillars, plan+NOW+principles, quality, milestones, clean layout)
+- Docs updated: ADR-0021 (new repo + live URL), PUBLIC-DASHBOARD.md (LIVE status + publish command), docs/README.md + SECURITY.md (repo name refs), round-14.md + board
+- pnpm verify GREEN; merged 33a019c to main; CI 32645915316 SUCCESS; repo private ✓; secret scan clean; ntfy delivered
+
+Stage Summary:
+- Dashboard is live at https://testplay-byte.github.io/DASHBOARD/ with the plan prominently displayed. Future publishes: DASHBOARD_PAT=$(cat /home/z/.secrets/dashboard.pat) node scripts/dashboard/publish-dashboard.mjs (per WORKFLOW §6). Next per owner: UI improvement + proper UI documentation round.
