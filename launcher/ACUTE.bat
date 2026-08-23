@@ -1,5 +1,10 @@
 @echo off
 setlocal
+rem UTF-8 console so the rich-UI panels render correctly (fixes broken borders)
+chcp 65001 >nul
+set PYTHONUTF8=1
+set PYTHONIOENCODING=utf-8
+set PYTHONDONTWRITEBYTECODE=1
 cd /d "%~dp0"
 title ACUTE-CODE
 

@@ -29,10 +29,13 @@ C:\ACUTE\
 └── .acute\              ← isolated git credentials (0600), pnpm shims, launcher.log
 ```
 
-Auth design: git runs with a per-command credential store
-(`-c credential.helper= -c credential.helper=store --file=.acute/git-credentials`,
-URL-line format) — **the owner's global git config is never touched**, and the
-GitHub Credential Manager popup can never hijack the clone.
+Auth design (round-12, after the owner-reported Windows failure): every git
+command runs with **HOME → `.acute/`** + `GIT_CONFIG_NOSYSTEM=1` + the
+single-word `store` helper reading `.acute/.git-credentials` (URL-line
+format, 0600). No quoted paths in helper config (that broke the clone on
+Windows via MSYS sh — memory lesson #21), **the owner's global git config is
+never touched**, the GCM popup can never hijack auth, and the token is
+pre-validated against the GitHub API for precise invalid-token errors.
 
 Commands: default = update + launch · `status` = read-only report ·
 `update` = update only · `start` = launch without update check. Flags:

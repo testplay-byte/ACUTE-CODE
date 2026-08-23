@@ -138,3 +138,34 @@ Format per entry: `N. TITLE (date, source)` → mistake → root cause → rule.
     committed, never uploaded) holding GITHUB_PAT + OPENROUTER_KEY — he
     rotates/clears them himself. The launcher still rejects placeholder
     values and never logs the contents (lengths only).
+
+## Round-12 lessons (the Windows credential-helper failure)
+
+21. **Never put quoted paths inside `credential.helper` config** (2026-08-23,
+    owner-reported). `credential.helper=store --file="C:/..."` works on Linux
+    but Git-for-Windows routes helpers with shell metacharacters through MSYS
+    `sh`; from a non-tty Python subprocess the helper never answered and git
+    fell back to a terminal prompt → `bash: /dev/tty: No such device or
+    address` → `fatal: could not read Username` → clone dead. ROBUST PATTERN
+    (now in the launcher): per-command env with **HOME → isolated dir** +
+    **GIT_CONFIG_NOSYSTEM=1** + the **single word** `store` helper (no path,
+    no quotes, no shell) + credentials in the store helper's native
+    `<HOME>/.git-credentials` URL-line format (`https://user:token@host`).
+    Bonus: the user's real global gitconfig and GCM are never touched. And
+    ALWAYS pre-flight the token against the GitHub API so a bad token shows a
+    precise "generate a new one" message instead of git prompt gibberish.
+
+22. **A .bat that shows a rich Unicode UI must set the console to UTF-8**
+    (`chcp 65001 >nul`) AND run Python with `PYTHONUTF8=1` — without it the
+    panel borders render as garbage in the default OEM codepage ("breaking up
+    at the top", owner-reported). Round-10's .bat had chcp; the round-11
+    rewrite dropped it — regressions of erased hard-won fixes are a real
+    failure class: when rewriting a file, diff it against the OLD version's
+    hardening touches first.
+
+23. **Never build rich console output with inline markup around dynamic
+    text.** `console.print(f"[bold yellow]![/bold] {msg}")` crashed with
+    MarkupError on this rich version — and ANY user-visible string containing
+    brackets (paths, "[1]" prefixes) can break markup parsing. Use
+    `console.print(text, style=...)` and `Text(...)` (literal) instead;
+    `Panel(Text(...))` is safe by construction.

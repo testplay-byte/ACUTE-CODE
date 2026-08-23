@@ -77,6 +77,21 @@ The launcher even updates itself when the repo ships a newer one.
   - `ACUTE.bat update` — update everything but don't start the servers
   - `ACUTE.bat start` — start without the update check
 
+## Updating the launcher itself
+
+Most of the time you never touch the files again: when the repository ships a
+newer `acute_launcher.py`, the launcher **copies it over automatically** on
+its next run. Only `ACUTE.bat` cannot self-overwrite (Windows locks the file
+while it runs), so if the launcher prints
+`! ACUTE.bat also changed — please re-download it`:
+
+1. Open the repo → `launcher/` → `ACUTE.bat` → Raw → save over your old one.
+2. Double-click again.
+
+> **Changed in round-12 (2026-08-23):** re-download BOTH `ACUTE.bat` and
+> `acute_launcher.py` — the .bat now switches the console to UTF-8 (fixes the
+> broken-looking borders) and the .py contains a Windows authentication fix.
+
 ## Notes
 
 - **Python**: the coordinator uses it for the workhorse. If it isn't
