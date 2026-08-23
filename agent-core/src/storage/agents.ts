@@ -262,6 +262,11 @@ const DEFAULT_AGENT_ID = "agt_default_nova";
  * Idempotent by fixed id + existence check.
  */
 export function ensureDefaultAgent(db: SqliteDatabase): void {
+  // Round-16 rename (owner): the default agent is "Acute", not "Nova". The
+  // fixed id stays (sessions reference it); an unmodified seed row is renamed
+  // in place, a user who renamed it themselves keeps their name.
+  db.prepare("UPDATE agents SET name = 'Acute', updated_at = ? WHERE id = ? AND name = 'Nova'")
+    .run(new Date().toISOString(), DEFAULT_AGENT_ID);
   const exists = db
     .prepare("SELECT COUNT(*) AS n FROM agents WHERE id = ?")
     .get(DEFAULT_AGENT_ID) as { n: number };
@@ -279,7 +284,7 @@ export function ensureDefaultAgent(db: SqliteDatabase): void {
     bind(
       {
         id: DEFAULT_AGENT_ID,
-        name: "Nova",
+        name: "Acute",
         role: "coder",
         systemPrompt: [
           "You are Nova, a careful hands-on coding agent working inside the user's project.",

@@ -1,9 +1,10 @@
 /**
- * Single-agent chat turn (ADR-0001 "single" mode; tools arrive in a later
- * wave). One HTTP message = append the user event -> one provider call ->
- * append the assistant event + a usage_events row. The event log is
- * append-only (ADR-0010): a failed provider call leaves the user event and its
- * seq in place so the next turn continues the sequence without gaps in reuse.
+ * Single-agent chat turn (ADR-0001 "single" mode). Round-16: the turn prep
+ * is shared between the SYNC path (runSingleAgentTurn) and the STREAMED path
+ * (runStreamedAgentTurn — live text deltas + tool events over SSE); both
+ * persist the identical append-only event sequence (ADR-0010):
+ * message.user → tool.use (one per executed call, as each completes) →
+ * message.assistant (with per-reply usage+ms stats) → usage_events row.
  */
 import type { SessionStatus, UsageRecord } from "shared";
 import { getAgent } from "../storage/agents.js";
@@ -22,7 +23,7 @@ import {
   setSessionStatus,
   touchSession,
 } from "../storage/sessions.js";
-import type { ChatFn, ChatTurnMessage, ChatTurnOutput } from "./chat.js";
+import type { ChatFn, ChatTurnMessage, ChatTurnOutput, StreamChatFn } from "./chat.js";
 
 export type SqliteDatabase = Database.Database;
 
@@ -51,6 +52,8 @@ export interface TurnDeps {
   db: SqliteDatabase;
   keyring: ProviderKeyring;
   chat: ChatFn;
+  /** Streaming adapter (round-16); the streamed turn refuses without one. */
+  chatStream?: StreamChatFn;
 }
 
 /** Narrows an event payload back to the {role, content} chat shape we write. */
@@ -69,81 +72,100 @@ function providerErrorDetail(error: unknown, apiKey: string): string {
   return scrubbed.length > 500 ? `${scrubbed.slice(0, 500)}…` : scrubbed;
 }
 
-export async function runSingleAgentTurn(
-  deps: TurnDeps,
+/** Everything a turn needs after validation (shared by sync + streamed). */
+interface PreparedTurn {
+  session: NonNullable<ReturnType<typeof getSession>>;
+  agent: NonNullable<ReturnType<typeof getAgent>>;
+  provider: { id: string; baseUrl: string };
+  apiKey: string;
+  model: string;
+  tools: ReturnType<typeof buildProjectTools> | undefined;
+  system: string;
+}
+
+/** Shared pre-flight: validation, provider/key resolution, tools, system,
+ * history. modelOverride lets one call use a different model than the
+ * agent's default (the chat UI's per-send model picker). */
+function prepareTurn(
+  db: SqliteDatabase,
+  keyring: ProviderKeyring,
   sessionId: string,
-  content: string,
-): Promise<TurnOutcome> {
-  const { db, keyring, chat } = deps;
+  modelOverride?: string,
+): PreparedTurn | { error: Extract<TurnOutcome, { ok: false }> } {
   const session = getSession(db, sessionId);
   if (session === undefined) {
-    return { ok: false, status: 404, code: "NOT_FOUND", message: `no session with id ${sessionId}` };
+    return { error: { ok: false, status: 404, code: "NOT_FOUND", message: `no session with id ${sessionId}` } };
   }
   if (TERMINAL_STATUSES.includes(session.status)) {
     return {
-      ok: false,
-      status: 409,
-      code: "CONFLICT",
-      message: `session ${sessionId} is ${session.status} and no longer accepts messages`,
+      error: {
+        ok: false,
+        status: 409,
+        code: "CONFLICT",
+        message: `session ${sessionId} is ${session.status} and no longer accepts messages`,
+      },
     };
   }
   if (session.agentId === null) {
-    return { ok: false, status: 409, code: "CONFLICT", message: `session ${sessionId} has no bound agent` };
+    return { error: { ok: false, status: 409, code: "CONFLICT", message: `session ${sessionId} has no bound agent` } };
   }
   const agent = getAgent(db, session.agentId);
   if (agent === undefined) {
     return {
-      ok: false,
-      status: 409,
-      code: "CONFLICT",
-      message: `session agent ${session.agentId} no longer exists`,
+      error: {
+        ok: false,
+        status: 409,
+        code: "CONFLICT",
+        message: `session agent ${session.agentId} no longer exists`,
+      },
     };
   }
   if (agent.providerId === null || agent.model === null) {
     return {
-      ok: false,
-      status: 409,
-      code: "CONFLICT",
-      message: `agent '${agent.name}' has no providerId/model configured`,
-      details: { agentId: agent.id, field: "providerId" },
+      error: {
+        ok: false,
+        status: 409,
+        code: "CONFLICT",
+        message: `agent '${agent.name}' has no providerId/model configured`,
+        details: { agentId: agent.id, field: "providerId" },
+      },
     };
   }
   const provider = resolveProvider(db, agent.providerId);
   if (provider === undefined || provider.baseUrl === null) {
     return {
-      ok: false,
-      status: 409,
-      code: "CONFLICT",
-      message: `agent '${agent.name}' references provider '${agent.providerId}' without a usable baseUrl`,
-      details: { agentId: agent.id, providerId: agent.providerId },
+      error: {
+        ok: false,
+        status: 409,
+        code: "CONFLICT",
+        message: `agent '${agent.name}' references provider '${agent.providerId}' without a usable baseUrl`,
+        details: { agentId: agent.id, providerId: agent.providerId },
+      },
     };
   }
   const apiKey = keyring.get(provider.id);
   if (apiKey === undefined) {
     return {
-      ok: false,
-      status: 409,
-      code: "CONFLICT",
-      message:
-        `no API key for provider '${provider.id}' — set ${ProviderKeyring.envVarName(provider.id)} ` +
-        "in the sidecar environment",
-      details: { providerId: provider.id },
+      error: {
+        ok: false,
+        status: 409,
+        code: "CONFLICT",
+        message:
+          `no API key for provider '${provider.id}' — set ${ProviderKeyring.envVarName(provider.id)} ` +
+          "in the sidecar environment",
+        details: { providerId: provider.id },
+      },
     };
   }
-
-  // First message flips a queued session to running (API.md §5 semantics).
-  if (session.status === "queued") setSessionStatus(db, session.id, "running");
-
-  // Agentic Coding MVP: a session bound to a project hands the model real
-  // file tools sandboxed to that project's root. Every executed tool call is
-  // appended to the event log (audit trail) before the assistant message.
   const project = session.projectId !== null ? getProject(db, session.projectId) : undefined;
   if (session.projectId !== null && project === undefined) {
     return {
-      ok: false,
-      status: 409,
-      code: "CONFLICT",
-      message: `session ${sessionId} references missing project ${session.projectId}`,
+      error: {
+        ok: false,
+        status: 409,
+        code: "CONFLICT",
+        message: `session ${sessionId} references missing project ${session.projectId}`,
+      },
     };
   }
   const tools = project !== undefined ? buildProjectTools(project.rootPath) : undefined;
@@ -157,6 +179,30 @@ export async function runSingleAgentTurn(
         "delete_file only when the user explicitly asked for a deletion. After making changes, briefly summarize what you changed and why. If asked to create something, actually create it with the tools.",
       ].join("\n")
     : agent.systemPrompt;
+  return {
+    session,
+    agent,
+    provider: { id: provider.id, baseUrl: provider.baseUrl },
+    apiKey,
+    model: modelOverride && modelOverride.trim() !== "" ? modelOverride.trim() : agent.model,
+    tools,
+    system,
+  };
+}
+
+export async function runSingleAgentTurn(
+  deps: TurnDeps,
+  sessionId: string,
+  content: string,
+  modelOverride?: string,
+): Promise<TurnOutcome> {
+  const { db, keyring, chat } = deps;
+  const prepared = prepareTurn(db, keyring, sessionId, modelOverride);
+  if ("error" in prepared) return prepared.error;
+  const { session, agent, provider, apiKey, model, tools, system } = prepared;
+
+  // First message flips a queued session to running (API.md §5 semantics).
+  if (session.status === "queued") setSessionStatus(db, session.id, "running");
 
   appendSessionEvent(db, session.id, {
     type: "message.user",
@@ -167,12 +213,13 @@ export async function runSingleAgentTurn(
     .map(asChatMessage)
     .filter((message): message is ChatTurnMessage => message !== undefined);
 
+  const startedAt = Date.now();
   let result: ChatTurnOutput;
   try {
     result = await chat({
       provider: { id: provider.id, baseUrl: provider.baseUrl },
       apiKey,
-      model: agent.model,
+      model,
       system,
       messages,
       temperature: agent.temperature,
@@ -189,6 +236,7 @@ export async function runSingleAgentTurn(
       details: { providerError: providerErrorDetail(normalized, apiKey) },
     };
   }
+  const ms = Date.now() - startedAt;
 
   // Audit trail: one event per executed tool call, in order (ADR-0010 log).
   for (const call of result.toolCalls) {
@@ -202,13 +250,20 @@ export async function runSingleAgentTurn(
   const assistantEvent = appendSessionEvent(db, session.id, {
     type: "message.assistant",
     agentId: agent.id,
-    payload: { role: "assistant", content: result.text },
+    payload: {
+      role: "assistant",
+      content: result.text,
+      // Round-16 per-reply stats (owner request) ride on the event payload.
+      usage: { inputTokens: result.usage.inputTokens, outputTokens: result.usage.outputTokens },
+      ms,
+      model,
+    },
   });
   const usage: UsageRecord = {
     agentId: agent.id,
     sessionId: session.id,
     provider: provider.id,
-    model: agent.model,
+    model,
     inputTokens: result.usage.inputTokens,
     outputTokens: result.usage.outputTokens,
     costUsd: 0, // cost estimation arrives in a later wave; providers without pricing report 0
@@ -224,6 +279,127 @@ export async function runSingleAgentTurn(
       role: "assistant",
       agentId: agent.id,
       content: result.text,
+      ts: assistantEvent.ts,
+    },
+    usage,
+  };
+}
+
+/** Streaming turn outcome: same shape as the sync turn. */
+export type StreamedTurnOutcome = TurnOutcome;
+
+/**
+ * STREAMED turn (round-16): identical persistence/ordering to the sync turn
+ * (user event → tool.use events as each call completes → assistant event
+ * with usage+ms → usage row), but every stream event is emitted LIVE via
+ * `emit` so the UI can render text deltas and tool calls as they happen.
+ */
+export async function runStreamedAgentTurn(
+  deps: TurnDeps,
+  sessionId: string,
+  content: string,
+  emit: (event: unknown) => void,
+  modelOverride?: string,
+  signal?: AbortSignal,
+): Promise<StreamedTurnOutcome> {
+  const { db, keyring, chatStream } = deps;
+  if (chatStream === undefined) {
+    return {
+      ok: false,
+      status: 409,
+      code: "CONFLICT",
+      message: "streaming is not available in this build",
+    };
+  }
+  const prepared = prepareTurn(db, keyring, sessionId, modelOverride);
+  if ("error" in prepared) return prepared.error;
+  const { session, agent, provider, apiKey, model, tools, system } = prepared;
+
+  if (session.status === "queued") setSessionStatus(db, session.id, "running");
+
+  appendSessionEvent(db, session.id, {
+    type: "message.user",
+    agentId: agent.id,
+    payload: { role: "user", content },
+  });
+  const messages = listSessionEvents(db, session.id)
+    .map(asChatMessage)
+    .filter((message): message is ChatTurnMessage => message !== undefined);
+
+  const startedAt = Date.now();
+  let text = "";
+  let inputTokens = 0;
+  let outputTokens = 0;
+  try {
+    for await (const event of chatStream({
+      provider: { id: provider.id, baseUrl: provider.baseUrl },
+      apiKey,
+      model,
+      system,
+      messages,
+      temperature: agent.temperature,
+      maxTurns: agent.maxTurns,
+      ...(tools !== undefined ? { tools } : {}),
+      ...(signal !== undefined ? { signal } : {}),
+    })) {
+      emit(event);
+      if (event.type === "text-delta") {
+        text += event.delta;
+      } else if (event.type === "tool-result") {
+        // Persist each tool call the moment it completes (live ordering).
+        appendSessionEvent(db, session.id, {
+          type: "tool.use",
+          agentId: agent.id,
+          payload: { role: "tool", toolName: event.toolName, argsSummary: event.argsSummary, ok: event.ok },
+        });
+      } else if (event.type === "finish") {
+        inputTokens = event.usage.inputTokens;
+        outputTokens = event.usage.outputTokens;
+      }
+    }
+  } catch (error) {
+    const normalized = error instanceof Error ? error : new Error(String(error));
+    return {
+      ok: false,
+      status: 502,
+      code: "PROVIDER_ERROR",
+      message: `provider '${provider.id}' call failed for session ${session.id}`,
+      details: { providerError: providerErrorDetail(normalized, apiKey) },
+    };
+  }
+  const ms = Date.now() - startedAt;
+
+  const assistantEvent = appendSessionEvent(db, session.id, {
+    type: "message.assistant",
+    agentId: agent.id,
+    payload: {
+      role: "assistant",
+      content: text,
+      usage: { inputTokens, outputTokens },
+      ms,
+      model,
+    },
+  });
+  const usage: UsageRecord = {
+    agentId: agent.id,
+    sessionId: session.id,
+    provider: provider.id,
+    model,
+    inputTokens,
+    outputTokens,
+    costUsd: 0,
+    ts: assistantEvent.ts,
+  };
+  recordUsage(db, usage);
+  touchSession(db, session.id);
+
+  return {
+    ok: true,
+    assistantMessage: {
+      seq: assistantEvent.seq,
+      role: "assistant",
+      agentId: agent.id,
+      content: text,
       ts: assistantEvent.ts,
     },
     usage,

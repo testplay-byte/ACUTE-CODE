@@ -104,9 +104,9 @@ describe("sidecar e2e (skipped without a prior build)", { skip: !existsSync(MAIN
     assert.equal(json.agents.length, 6);
     assert.deepEqual(
       json.agents.map((a) => a.name).sort(),
-      ["Coder", "Nova", "Planner", "Researcher", "Reviewer", "Tester"],
+      ["Coder", "Acute", "Planner", "Researcher", "Reviewer", "Tester"],
     );
-    const nova = json.agents.find((a) => a.name === "Nova");
+    const nova = json.agents.find((a) => a.name === "Acute");
     assert.ok(nova && nova.isTemplate === false);
     assert.equal(nova.providerId, "openrouter");
     assert.equal(nova.model, "stealth/ox-alpha");

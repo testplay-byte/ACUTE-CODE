@@ -14,6 +14,9 @@ vi.mock("ai", () => ({
 }));
 
 import { aiSdkChat } from "../src/agents/chat";
+import { runStreamedAgentTurn } from "../src/agents/runtime";
+import { getUsageSummary } from "../src/storage/usage";
+import { listSessionEvents } from "../src/storage/sessions";
 import { ProviderKeyring } from "../src/providers/registry";
 import { openDatabase, type SqliteDatabase } from "../src/storage/db";
 import { buildServer } from "../src/server";
@@ -275,6 +278,10 @@ describe("POST /api/v1/sessions/:id/messages", () => {
           content: "Fixed reply.",
           agentId: agent.id,
           ts: expect.any(String),
+          // Round-16 per-reply stats ride on the assistant payload.
+          usage: { inputTokens: 12, outputTokens: 34 },
+          ms: expect.any(Number),
+          model: "test/model-1",
         },
         ts: expect.any(String),
       },
@@ -479,5 +486,77 @@ describe("aiSdkChat usage mapping", () => {
     expect(firstCall.system).toBeUndefined();
     const secondCall = generateTextMock.mock.calls[1][0] as Record<string, unknown>;
     expect(secondCall.system).toBe("keep");
+  });
+});
+
+describe("streamed turn runtime (round-16)", () => {
+  it("emits live events and persists user → tool.use → assistant(+stats) in order", async () => {
+    const agent = await createAgent();
+    const session = await createSession(agent.id);
+    const streamKeyring = new ProviderKeyring({ ACUTE_PROVIDER_OPENROUTER: KEY });
+
+    const emitted: Array<{ type: string }> = [];
+    const chatStream = async function* (): AsyncGenerator<import("../src/agents/chat").StreamChatEvent> {
+      yield { type: "text-delta", delta: "Let me " };
+      yield { type: "text-delta", delta: "look." };
+      yield { type: "tool-call", toolName: "list_dir", argsSummary: "path: ''" };
+      yield { type: "tool-result", toolName: "list_dir", argsSummary: "path: ''", ok: true };
+      yield { type: "tool-result", toolName: "write_file", argsSummary: "path: a.ts, content: 10 chars", ok: true };
+      yield { type: "finish", usage: { inputTokens: 100, outputTokens: 20, totalTokens: 120 } };
+    };
+
+    const outcome = await runStreamedAgentTurn(
+      { db, keyring: streamKeyring, chat: aiSdkChat, chatStream },
+      session.id,
+      "do it",
+      (e) => emitted.push(e as { type: string }),
+    );
+
+    expect(outcome.ok).toBe(true);
+    expect(emitted.map((e) => e.type)).toEqual([
+      "text-delta",
+      "text-delta",
+      "tool-call",
+      "tool-result",
+      "tool-result",
+      "finish",
+    ]);
+
+    const events = listSessionEvents(db, session.id);
+    expect(events.map((e) => e.type)).toEqual([
+      "message.user",
+      "tool.use",
+      "tool.use",
+      "message.assistant",
+    ]);
+    const tools = events
+      .filter((e) => e.type === "tool.use")
+      .map((e) => e.payload as Record<string, unknown>);
+    expect(tools.map((x) => x.toolName)).toEqual(["list_dir", "write_file"]);
+    expect(tools.every((x) => x.ok === true)).toBe(true);
+
+    const assistant = events.find((e) => e.type === "message.assistant")
+      ?.payload as Record<string, unknown>;
+    expect(assistant.content).toBe("Let me look.");
+    expect(assistant.usage).toEqual({ inputTokens: 100, outputTokens: 20 });
+    expect(typeof assistant.ms).toBe("number");
+    expect(assistant.model).toBe("test/model-1");
+
+    const usage = getUsageSummary(db, { days: 1 });
+    expect(usage.totals.inputTokens).toBe(100);
+    expect(usage.totals.outputTokens).toBe(20);
+  });
+
+  it("refuses to stream when no streaming adapter is configured", async () => {
+    const agent = await createAgent();
+    const session = await createSession(agent.id);
+    const streamKeyring = new ProviderKeyring({ ACUTE_PROVIDER_OPENROUTER: KEY });
+    const outcome = await runStreamedAgentTurn(
+      { db, keyring: streamKeyring, chat: aiSdkChat },
+      session.id,
+      "hi",
+      () => undefined,
+    );
+    expect(outcome.ok).toBe(false);
   });
 });
