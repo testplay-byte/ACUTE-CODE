@@ -88,9 +88,14 @@ while it runs), so if the launcher prints
 1. Open the repo → `launcher/` → `ACUTE.bat` → Raw → save over your old one.
 2. Double-click again.
 
-> **Changed in round-12 (2026-08-23):** re-download BOTH `ACUTE.bat` and
-> `acute_launcher.py` — the .bat now switches the console to UTF-8 (fixes the
-> broken-looking borders) and the .py contains a Windows authentication fix.
+> **Changed in round-13 (2026-08-23):** re-download **only
+> `acute_launcher.py`** — git authentication no longer uses credential
+> helpers at all (they failed on Git-for-Windows); the token now goes into
+> the one-off clone/fetch URL and is never stored anywhere. `ACUTE.bat` and
+> `credentials.txt` stay as they are.
+>
+> Round-12 (superseded): re-download both `ACUTE.bat` (UTF-8 console) and
+> `acute_launcher.py`.
 
 ## Notes
 

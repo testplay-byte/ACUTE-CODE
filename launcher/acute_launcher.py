@@ -503,46 +503,86 @@ def check_disk_space(need_gb=2.0):
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# git auth (isolated HOME — works identically on Windows / Linux / macOS)
+# git auth — token-in-URL (round-13). The CI-proven, environment-independent
+# pattern: the token goes into the URL for THE ONE COMMAND, and the stored
+# remote is sanitized to a tokenless URL right after the clone. No credential
+# helpers at all (both helper variants failed on the owner's Git-for-Windows
+# even when correctly configured — memory lesson #24), no helper files, no
+# HOME games for auth. GIT_TERMINAL_PROMPT=0 makes git FAIL FAST instead of
+# trying to ask a question in a window that cannot answer one.
 # ─────────────────────────────────────────────────────────────────────────────
 
-GIT_ARGS = ["-c", "credential.helper=", "-c", "credential.helper=store"]
+GIT_CLEAN_URL = "https://github.com/testplay-byte/ACUTE-CODE.git"
 
 
-def git_setup(pat):
-    """Prepare isolated, shell-free git authentication:
-    • $HOME → .acute/ for git commands only → git reads .acute/.git-credentials
-      (the store helper's NATIVE default filename) and ignores YOUR real
-      global gitconfig — nothing of yours is touched
-    • GIT_CONFIG_NOSYSTEM=1 → ignores the machine-wide gitconfig, which kills
-      the GitHub Credential Manager popup that would otherwise hijack auth
-    • helper reset + the SINGLE WORD `store` — no path, no quotes, no shell
-      involvement at all. (Round-11 used `store --file="C:/..."`; the quoted
-      path went through MSYS sh on Windows and the helper never answered —
-      git fell back to a terminal prompt that cannot work without a tty.)
-    • the token lives ONLY in the 0600 credential file, never in a command
-      line, never in the log
-    """
+def authed_url(pat):
+    """One-command authenticated repo URL (redacted from every log/panel)."""
     from urllib.parse import quote
 
-    DOT_DIR.mkdir(parents=True, exist_ok=True)
-    cred_file = DOT_DIR / ".git-credentials"  # store helper's default under HOME
-    cred_file.write_text(
-        f"https://{quote(GIT_USER, safe='')}:{quote(pat, safe='')}@github.com\n",
-        encoding="utf-8",
+    return (
+        f"https://{quote(GIT_USER, safe='')}:{quote(pat, safe='')}"
+        "@github.com/testplay-byte/ACUTE-CODE.git"
     )
-    try:
-        os.chmod(cred_file, 0o600)
-    except OSError:
-        pass
 
 
 def git_env(env):
-    """Environment for git commands: isolated HOME + no system config."""
+    """Environment for git commands: isolated from the user's config, and
+    NEVER allowed to sit waiting for an interactive answer."""
     out = dict(env)
-    out["HOME"] = str(DOT_DIR)
-    out["GIT_CONFIG_NOSYSTEM"] = "1"
+    out["HOME"] = str(DOT_DIR)           # user's gitconfig / GCM not consulted
+    out["GIT_CONFIG_NOSYSTEM"] = "1"     # machine gitconfig (GCM) not consulted
+    out["GIT_TERMINAL_PROMPT"] = "0"     # fail fast instead of prompting
     return out
+
+
+def explain_git_failure(proc, cmd_display=""):
+    """Turn git's output into a human diagnosis + fix (owner round-13 request
+    for proper error displaying). Patterns cover the failures seen in the
+    wild on this project."""
+    out = ((proc.stdout or "") + (proc.stderr or "")).strip()
+    low = out.lower()
+    head = [
+        f"command exited with code {proc.returncode}",
+    ]
+    if cmd_display:
+        head.append(f"command: {cmd_display}")
+    head.append("")
+    head.append(out if out else "(git produced no output)")
+    head.append("")
+
+    if ("could not read username" in low or "authentication failed" in low
+            or "invalid username or password" in low or " 403 " in low
+            or "access denied or repository not enrolled" in low):
+        head += [
+            "Diagnosis: GitHub rejected the download — almost always the token.",
+            "Fix: open credentials.txt, replace the GITHUB_PAT line with a fresh",
+            "token (github.com → Settings → Developer settings → Personal access",
+            "tokens → it needs read access to the private repo), save, re-run.",
+        ]
+    elif ("could not resolve host" in low or "timed out" in low
+          or "connection" in low and ("reset" in low or "refused" in low)
+          or "ssl" in low or "proxy" in low):
+        head += [
+            "Diagnosis: network problem — GitHub was unreachable.",
+            "Fix: check your internet connection (or VPN/proxy) and re-run.",
+            "      The launcher continues from where it stopped — nothing is lost.",
+        ]
+    elif "already exists and is not an empty directory" in low:
+        head += [
+            "Diagnosis: a leftover folder blocked the download.",
+            "Fix: delete the ACUTE-CODE folder next to the launcher, then re-run.",
+        ]
+    elif "no space left" in low or "disk quota" in low:
+        head += [
+            "Diagnosis: the disk is full.",
+            "Fix: free a few GB (the app needs ~2 GB) and re-run.",
+        ]
+    else:
+        head += [
+            "If this is not self-explanatory, copy this whole panel and send it",
+            "to the developer — the full log is referenced at the bottom.",
+        ]
+    return "\n".join(head)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -670,42 +710,46 @@ def stop_live_servers(reason):
     time.sleep(2)
 
 
-def repo_state(env):
+def repo_state(pat, env):
     genv = git_env(env)
-    head = run(["git", *GIT_ARGS, "rev-parse", "--short", "HEAD"],
+    head = run(["git", "rev-parse", "--short", "HEAD"],
                cwd=APP_DIR, env=genv, check=False)
     if head.returncode != 0:
         return None
     head = head.stdout.strip()
     dirty = bool(
-        run(["git", *GIT_ARGS, "status", "--porcelain"],
-            cwd=APP_DIR, env=genv, check=False).stdout.strip()
+        run(["git", "status", "--porcelain"], cwd=APP_DIR, env=genv, check=False).stdout.strip()
     )
-    fetch = run(["git", *GIT_ARGS, "fetch", "origin", "main"],
+    fetch = run(["git", "fetch", authed_url(pat), "main"],
                 cwd=APP_DIR, env=genv, check=False, timeout=180)
     if fetch.returncode != 0:
         return {"head": head, "behind": -1, "dirty": dirty}
-    count = run(["git", *GIT_ARGS, "rev-list", "--count", "HEAD..origin/main"],
+    count = run(["git", "rev-list", "--count", "HEAD..FETCH_HEAD"],
                 cwd=APP_DIR, env=genv, check=False).stdout.strip()
     return {"head": head, "behind": int(count or 0), "dirty": dirty}
 
 
-def clone_or_update(env):
+def clone_or_update(pat, env):
     if not (APP_DIR / ".git").exists():
         with step("Downloading ACUTE-CODE from GitHub (first run)"):
             check_disk_space()
             if APP_DIR.exists():
                 shutil.rmtree(APP_DIR)
-            run(["git", *GIT_ARGS, "clone", REPO_URL, str(APP_DIR)],
-                env=git_env(env), timeout=1800)
-            head = run(["git", *GIT_ARGS, "rev-parse", "--short", "HEAD"],
+            r = run(["git", "clone", authed_url(pat), str(APP_DIR)],
+                    env=git_env(env), timeout=1800, check=False)
+            if r.returncode != 0 or not (APP_DIR / ".git").exists():
+                fail("downloading the ACUTE-CODE repository", explain_git_failure(r))
+            # Never persist the token: sanitize the stored remote right away.
+            run(["git", "remote", "set-url", "origin", GIT_CLEAN_URL],
+                cwd=APP_DIR, env=git_env(env))
+            head = run(["git", "rev-parse", "--short", "HEAD"],
                        cwd=APP_DIR, env=git_env(env)).stdout.strip()
             ok(f"repository downloaded  ·  folder ACUTE-CODE/  ·  commit {head}")
             note("the app lives in its own subfolder — your launcher files never mix with it")
         return True  # fresh clone ⇒ needs install + build
 
     with step("Checking GitHub for updates"):
-        state = repo_state(env)
+        state = repo_state(pat, env)
         if state is None:
             fail("reading the local repository", f"{APP_DIR} exists but is not a git checkout")
         if state["behind"] == -1:
@@ -719,9 +763,11 @@ def clone_or_update(env):
             ok(f"already up to date  ·  commit {state['head']}")
             return False
         stop_live_servers("applying update")
-        run(["git", *GIT_ARGS, "pull", "--ff-only", "origin", "main"],
-            cwd=APP_DIR, env=git_env(env), timeout=600)
-        new_head = run(["git", *GIT_ARGS, "rev-parse", "--short", "HEAD"],
+        r = run(["git", "pull", "--ff-only", authed_url(pat), "main"],
+                cwd=APP_DIR, env=git_env(env), timeout=600, check=False)
+        if r.returncode != 0:
+            fail("updating ACUTE-CODE to the latest version", explain_git_failure(r))
+        new_head = run(["git", "rev-parse", "--short", "HEAD"],
                        cwd=APP_DIR, env=git_env(env)).stdout.strip()
         ok(f"updated  ·  {state['head']} → {new_head}  ·  {state['behind']} new commit(s)")
         return True
@@ -812,7 +858,7 @@ def self_update_check():
 # modes
 # ─────────────────────────────────────────────────────────────────────────────
 
-def mode_status(key, env):
+def mode_status(pat, key, env):
     rule("status (read-only)")
     lines = []
     for name, cmd in (("git", ["git", "--version"]), ("Node.js", ["node", "--version"]),
@@ -825,7 +871,7 @@ def mode_status(key, env):
 
     lines.append("")
     if (APP_DIR / ".git").exists():
-        state = repo_state(env)
+        state = repo_state(pat, env)
         if state:
             lines.append(f"app commit   {state['head']}"
                          + ("  (up to date)" if state["behind"] == 0
@@ -899,12 +945,11 @@ def main():
     log(f"===== launcher start {time.strftime('%Y-%m-%d %H:%M:%S')} args={sys.argv[1:]} =====")
 
     pat, key = read_credentials()
-    register_secrets(pat, key)
+    register_secrets(pat, key, authed_url(pat))
     env = dict(os.environ)
 
     if cmd == "status":
-        git_setup(pat)
-        mode_status(key, env)
+        mode_status(pat, key, env)
         return
 
     with step("Verifying GitHub access (token + private repository)"):
@@ -925,12 +970,11 @@ def main():
         title="the plan",
     )
 
-    git_setup(pat)
     check_toolchain()
     env = ensure_pnpm(env)
 
     if cmd != "start" and "--no-update" not in sys.argv:
-        updated = clone_or_update(env)
+        updated = clone_or_update(pat, env)
     else:
         with step("Update check skipped (start mode)"):
             updated = False

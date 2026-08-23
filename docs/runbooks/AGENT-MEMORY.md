@@ -169,3 +169,20 @@ Format per entry: `N. TITLE (date, source)` → mistake → root cause → rule.
     brackets (paths, "[1]" prefixes) can break markup parsing. Use
     `console.print(text, style=...)` and `Text(...)` (literal) instead;
     `Panel(Text(...))` is safe by construction.
+
+24. **Git credential HELPERS are environment-sensitive — token-in-URL is not**
+    (2026-08-23, two owner-reported Windows failures). Both helper variants
+    (`store --file="C:/..."` AND the single-word `store` reading
+    `$HOME/.git-credentials` under an isolated HOME) worked on Linux but never
+    answered on the owner's Git-for-Windows 2.55 — git fell back to a prompt
+    that cannot exist in a double-clicked console (`/dev/tty` /
+    `failed to execute prompt script`). RULE for unattended/launcher git:
+    authenticate by passing `https://user:token@host/...` directly to the ONE
+    command (clone/fetch/pull), then `remote set-url` back to the tokenless
+    URL immediately (never persist); set `GIT_TERMINAL_PROMPT=0` +
+    `GIT_CONFIG_NOSYSTEM=1` + isolated `HOME` so git can never hang or consult
+    foreign config; register the token AND the full authed URL with the log
+    redactor. This is the CI-proven pattern precisely because it has no
+    helper machinery to break. Also: pre-flight the token via the GitHub API
+    and DECODE git failures into human diagnoses (auth / network / disk /
+    leftover-folder patterns).
