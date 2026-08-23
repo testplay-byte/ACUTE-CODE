@@ -320,3 +320,20 @@ Work Log:
 
 Stage Summary:
 - The coding pillar is genuinely usable end-to-end (folder pick → project → session → 7-tool agent → verified disk changes → refusal boundaries). Owner tests on Windows via launcher (only-model rule kept). Next: dashboard UI redo (owner verdict recorded), sessions-per-project switcher, Phase 3 on approval. Automation pillar planned additively per n8n research.
+
+---
+Task ID: R15 (owner-verdict session)
+Agent: orchestrator (Z.ai Code) — all inline
+Task: Fix owner's four Windows-test failures + prove HTML-build capability
+
+Work Log:
+- Browse silent failure → dialogs.ts rebuilt: ACUTE_PICK/ACUTE_CANCEL marker protocol (cancel ≠ failure), WinForms FolderBrowserDialog (-STA) + Shell.Application BrowseForFolder COM fallback, {path, error?} end-to-end, UI shows exact failure inline (lesson #29)
+- Fullscreen chat: AppShell route-aware sidebar hide on /project/:id/chat; TopBar hamburger = toggle (dropdown REMOVED per owner — agent picker now a popover on the chat header agent chip); DOM-verified + toggle screenshots
+- Plug-and-play agent: ensureDefaultAgent seeds Nova (openrouter/stealth/ox-alpha, agt_default_nova, guarded) at DB open — fresh-DB GET proves zero-setup chat (lesson #31); seed-contract tests updated (order-independent after a millisecond-timing flake; e2e targets a real template)
+- Dialog glitch root cause: .dialog-content lacked base transform → jumped half off-screen when animation ended ('nothing happens' = opened off-view); fixed + NUMERIC proof center X=960/1920, Y=540/1080 (lesson #30)
+- Owner HTML scenario on FRESH DB: 'build demo/index.html beautiful demo UI' → list_dir→create_dir→write_file (57s) → file on disk, title/gradient/button assertions PASS
+- pnpm verify GREEN after test-contract updates (113 core + frontend + 6 e2e + build + license); screenshots ×4 machine-verified; secret scan clean
+- Commit 4803b8a pushed; CI 32631271442 SUCCESS; repo private-verified; ntfy delivered; lessons #29–#32 recorded; round-11.md + board + HANDOFF
+
+Stage Summary:
+- All four owner verdicts closed with root-cause fixes (not patches); fresh-DB journey test is now a standing pre-handover gate (#32). Open: owner Windows re-test (Browse must show a dialog or an exact error), hamburger→actions (future), sessions switcher, dashboard redo (owner-gated).
