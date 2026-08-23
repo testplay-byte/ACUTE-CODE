@@ -81,7 +81,7 @@ function GapHandle({ onResize }: { onResize: (delta: number) => void }) {
       aria-orientation="vertical"
       aria-label="Resize panel"
       tabIndex={0}
-      className="w-[10px] shrink-0 cursor-ew-resize relative group flex items-center justify-center outline-none"
+      className="w-[5px] shrink-0 cursor-ew-resize relative group flex items-center justify-center outline-none"
       onMouseDown={(e) => {
         e.preventDefault();
         isResizing.current = true;
@@ -175,8 +175,11 @@ export default function ProjectChatScreen() {
     s.setSidebarWidth(s.sidebarWidth + delta);
   }, []);
   const handleChatResize = useCallback((delta: number) => {
+    // The chat's drag handle sits on the chat's LEFT edge: dragging right
+    // SHRINKS the chat (and grows the code pane) — the owner-reported bug was
+    // this sign being inverted (right moved it left).
     const s = useProjectChatStore.getState();
-    s.setChatWidth(s.chatWidth + delta);
+    s.setChatWidth(s.chatWidth - delta);
   }, []);
 
   if (projectsQuery.isLoading) {
@@ -206,7 +209,7 @@ export default function ProjectChatScreen() {
 
   return (
     <motion.div
-      className="h-full min-h-0 flex flex-col gap-2"
+      className="h-full min-h-0 flex flex-col gap-[3px]"
       style={{ backgroundColor: styles.bg }}
       initial={{ opacity: 0 }}
       animate={{ opacity: 1 }}

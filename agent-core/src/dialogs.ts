@@ -1,22 +1,18 @@
 /**
- * Native OS folder picker (round-14/15: "select the folder itself, don't
+ * Native OS folder picker (round-14/15/16: "select the folder itself, don't
  * paste paths"). The sidecar runs as a local process on the user's machine,
  * so IT can open the real OS dialog even while the UI runs in a plain browser
- * (the launcher/dev setup) — PowerShell dialogs on Windows, zenity/kdialog on
- * Linux. The Tauri shell keeps its own rfd-based pick_folder command; the UI
- * tries Tauri first, then this endpoint.
+ * (the launcher/dev setup). The Tauri shell keeps its own rfd-based
+ * pick_folder command; the UI tries Tauri first, then this endpoint.
  *
- * Round-15 hardening (owner-reported: Browse did nothing on Windows):
- * • Windows uses TWO methods with a fallback — WinForms FolderBrowserDialog
- *   first, then the Shell.Application COM BrowseForFolder (works from
- *   background console processes where WinForms can refuse to pump).
- * • Protocol markers (ACUTE_PICK:<path> / ACUTE_CANCEL) distinguish a real
- *   cancel from a FAILED dialog run — previously a failure looked like a
- *   cancel and the UI silently did nothing.
- * • Failures are returned as an `error` string so the UI can SHOW the cause
- *   instead of no-op'ing; nothing is silent anymore.
- * • Always async — a sync spawn would freeze the whole sidecar while the
- *   dialog waits for a human.
+ * Round-15: marker protocol (ACUTE_PICK/ACUTE_CANCEL) so a real cancel is
+ * distinguishable from a FAILED dialog run; failures surface as `error`.
+ * Round-16: Windows method 1 is now the MODERN Vista-style picker (an
+ * OpenFileDialog with validation disabled — the standard trick), and every
+ * WinForms dialog gets a hidden TOPMOST owner form so it can never appear
+ * behind other windows (owner report: "Browse Folder" appeared without
+ * proper focus). Three methods total, first success wins, always async
+ * (a sync spawn would freeze the whole sidecar while a human decides).
  *
  * NEVER call this from tests: the dialog blocks waiting for a human.
  */
@@ -29,7 +25,11 @@ export interface PickFolderResult {
   error?: string;
 }
 
-function runCapture(cmd: string, args: string[], timeoutMs: number): Promise<{ code: number | null; out: string; err: string }> {
+function runCapture(
+  cmd: string,
+  args: string[],
+  timeoutMs: number,
+): Promise<{ code: number | null; out: string; err: string }> {
   return new Promise((resolve) => {
     let out = "";
     let err = "";
@@ -60,7 +60,10 @@ function interpret(
   res: { code: number | null; out: string; err: string },
   method: string,
 ): { picked: string | null; cancelled: boolean; error?: string } {
-  const line = res.out.split("\n").map((l) => l.trim()).find((l) => l.startsWith("ACUTE_PICK:") || l === "ACUTE_CANCEL");
+  const line = res.out
+    .split("\n")
+    .map((l) => l.trim())
+    .find((l) => l.startsWith("ACUTE_PICK:") || l === "ACUTE_CANCEL");
   if (res.code === 0 && line === "ACUTE_CANCEL") return { picked: null, cancelled: true };
   if (res.code === 0 && line?.startsWith("ACUTE_PICK:")) {
     const picked = line.slice("ACUTE_PICK:".length).trim();
@@ -80,8 +83,8 @@ export async function pickFolder(): Promise<PickFolderResult> {
 }
 
 async function pickWindows(): Promise<PickFolderResult> {
-  // Method 1: WinForms FolderBrowserDialog (needs -STA).
-  const winforms = await runCapture(
+  // Method 1: MODERN Vista-style picker (OpenFileDialog, validation off).
+  const modern = await runCapture(
     "powershell",
     [
       "-NoProfile",
@@ -89,20 +92,45 @@ async function pickWindows(): Promise<PickFolderResult> {
       "-Command",
       [
         "Add-Type -AssemblyName System.Windows.Forms | Out-Null",
-        "$d = New-Object System.Windows.Forms.FolderBrowserDialog",
-        `$d.Description = '${TITLE}'`,
-        "$d.ShowNewFolderButton = $true",
-        "if ($d.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK) { Write-Output ('ACUTE_PICK:' + $d.SelectedPath) }",
+        "$owner = New-Object System.Windows.Forms.Form -Property @{ TopMost = $true; ShowInTaskbar = $false }",
+        "$d = New-Object System.Windows.Forms.OpenFileDialog",
+        "$d.Title = 'Select the ACUTE-CODE project folder'",
+        "$d.ValidateNames = $false",
+        "$d.CheckFileExists = $false",
+        "$d.CheckPathExists = $true",
+        "$d.FileName = 'Select this folder'",
+        "if ($d.ShowDialog($owner) -eq [System.Windows.Forms.DialogResult]::OK) { Write-Output ('ACUTE_PICK:' + (Split-Path -Parent $d.FileName)) }",
         "else { Write-Output 'ACUTE_CANCEL' }",
       ].join("; "),
     ],
     DIALOG_TIMEOUT_MS,
   );
-  const r1 = interpret(winforms, "FolderBrowserDialog");
+  const r1 = interpret(modern, "modern folder picker");
   if (r1.picked !== null || r1.cancelled) return { path: r1.picked };
 
-  // Method 2 (fallback): Shell.Application COM BrowseForFolder — historically
-  // more reliable from background/console processes.
+  // Method 2: classic FolderBrowserDialog with a topmost owner.
+  const classic = await runCapture(
+    "powershell",
+    [
+      "-NoProfile",
+      "-STA",
+      "-Command",
+      [
+        "Add-Type -AssemblyName System.Windows.Forms | Out-Null",
+        "$owner = New-Object System.Windows.Forms.Form -Property @{ TopMost = $true; ShowInTaskbar = $false }",
+        "$d = New-Object System.Windows.Forms.FolderBrowserDialog",
+        "$d.Description = 'Select the ACUTE-CODE project folder'",
+        "$d.ShowNewFolderButton = $true",
+        "if ($d.ShowDialog($owner) -eq [System.Windows.Forms.DialogResult]::OK) { Write-Output ('ACUTE_PICK:' + $d.SelectedPath) }",
+        "else { Write-Output 'ACUTE_CANCEL' }",
+      ].join("; "),
+    ],
+    DIALOG_TIMEOUT_MS,
+  );
+  const r2 = interpret(classic, "FolderBrowserDialog");
+  if (r2.picked !== null || r2.cancelled) return { path: r2.picked };
+
+  // Method 3: Shell.Application COM BrowseForFolder (no WinForms at all).
   const com = await runCapture(
     "powershell",
     [
@@ -117,10 +145,13 @@ async function pickWindows(): Promise<PickFolderResult> {
     ],
     DIALOG_TIMEOUT_MS,
   );
-  const r2 = interpret(com, "Shell.BrowseForFolder");
-  if (r2.picked !== null || r2.cancelled) return { path: r2.picked };
+  const r3 = interpret(com, "Shell.BrowseForFolder");
+  if (r3.picked !== null || r3.cancelled) return { path: r3.picked };
 
-  return { path: null, error: `${r1.error ?? ""}; ${r2.error ?? "no dialog method worked"}` };
+  return {
+    path: null,
+    error: `${r1.error ?? ""}; ${r2.error ?? ""}; ${r3.error ?? "no dialog method worked"}`,
+  };
 }
 
 async function pickUnix(): Promise<PickFolderResult> {

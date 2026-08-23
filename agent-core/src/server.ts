@@ -8,8 +8,8 @@ import { randomUUID, timingSafeEqual } from "node:crypto";
 import { statSync } from "node:fs";
 import Fastify, { type FastifyError, type FastifyInstance } from "fastify";
 import type { MemoryPolicy, RunMode } from "shared";
-import { aiSdkChat, type ChatFn } from "./agents/chat.js";
-import { runSingleAgentTurn } from "./agents/runtime.js";
+import { aiSdkChat, streamAiSdkChat, type ChatFn } from "./agents/chat.js";
+import { runSingleAgentTurn, runStreamedAgentTurn } from "./agents/runtime.js";
 import { pickFolder } from "./dialogs.js";
 import { projectTree, readFile } from "./tools/index.js";
 import {
@@ -769,7 +769,8 @@ export function buildServer(options: ServerOptions): FastifyInstance {
             .code(400)
             .send(errorBody("VALIDATION", "body must be a JSON object", { field: "body" }));
         }
-        const content = (body as Record<string, unknown>).content;
+        const raw = body as Record<string, unknown>;
+        const content = raw.content;
         if (typeof content !== "string" || content.trim() === "") {
           return reply.code(400).send(
             errorBody("VALIDATION", "content must be a non-empty string", {
@@ -777,8 +778,10 @@ export function buildServer(options: ServerOptions): FastifyInstance {
             }),
           );
         }
+        const modelOverride =
+          typeof raw.model === "string" && raw.model.trim() !== "" ? raw.model : undefined;
 
-        const outcome = await runSingleAgentTurn({ db, keyring, chat }, id, content);
+        const outcome = await runSingleAgentTurn({ db, keyring, chat }, id, content, modelOverride);
         if (outcome.ok) {
           return reply.code(200).send({
             assistantMessage: outcome.assistantMessage,
@@ -788,6 +791,67 @@ export function buildServer(options: ServerOptions): FastifyInstance {
         return reply
           .code(outcome.status)
           .send(errorBody(outcome.code, outcome.message, outcome.details));
+      });
+
+      // STREAMED turn (round-16): same validation + persistence as the sync
+      // route, but Server-Sent Events stream out live: {type:'text-delta'},
+      // {type:'tool-call'}, {type:'tool-result'}, {type:'finish'} and a
+      // terminal {type:'done'|'error'} envelope. Client disconnects (closed
+      // tab / stop) abort the provider call via AbortSignal.
+      scope.post("/sessions/:id/messages/stream", async (request, reply) => {
+        const { id } = request.params as Record<string, string>;
+        const body: unknown = request.body;
+        if (typeof body !== "object" || body === null || Array.isArray(body)) {
+          return reply
+            .code(400)
+            .send(errorBody("VALIDATION", "body must be a JSON object", { field: "body" }));
+        }
+        const raw = body as Record<string, unknown>;
+        const content = raw.content;
+        if (typeof content !== "string" || content.trim() === "") {
+          return reply.code(400).send(
+            errorBody("VALIDATION", "content must be a non-empty string", {
+              field: "body.content",
+            }),
+          );
+        }
+        const modelOverride =
+          typeof raw.model === "string" && raw.model.trim() !== "" ? raw.model : undefined;
+
+        reply.hijack();
+        const res = reply.raw;
+        res.writeHead(200, {
+          "content-type": "text/event-stream; charset=utf-8",
+          "cache-control": "no-cache, no-transform",
+          connection: "keep-alive",
+          "x-accel-buffering": "no",
+        });
+        const send = (event: unknown) => {
+          if (!res.writableEnded) res.write(`data: ${JSON.stringify(event)}\n\n`);
+        };
+        const abort = new AbortController();
+        res.on("close", () => abort.abort());
+
+        const outcome = await runStreamedAgentTurn(
+          { db, keyring, chat, chatStream: streamAiSdkChat },
+          id,
+          content,
+          send,
+          modelOverride,
+          abort.signal,
+        );
+        if (outcome.ok) {
+          send({ type: "done", assistantMessage: outcome.assistantMessage, usage: outcome.usage });
+        } else {
+          send({
+            type: "error",
+            status: outcome.status,
+            code: outcome.code,
+            message: outcome.message,
+            ...(outcome.details ? { details: outcome.details } : {}),
+          });
+        }
+        res.end();
       });
 
       // ---- Usage summary (SPEC §F7 dashboard chart) ----

@@ -34,8 +34,8 @@ export function LeftSidebar({ project }: { project: Project }) {
       initial={{ width: 0, opacity: 0 }}
       animate={{ width: sidebarWidth, opacity: 1 }}
       transition={{ duration: 0.25, ease }}
-      className="shrink-0 flex flex-col overflow-hidden rounded-2xl border"
-      style={{ backgroundColor: styles.card, borderColor: styles.border }}
+      className="shrink-0 flex flex-col overflow-hidden rounded-2xl"
+      style={{ backgroundColor: styles.card }}
     >
       {/* Sidebar minimize row */}
       <div className="shrink-0 flex items-center justify-between px-2 h-9">

@@ -93,8 +93,8 @@ describe("agents CRUD", () => {
     // Seeds share one timestamp, so ordering falls through to the id tie-break.
     // Order depends on same-millisecond timestamp ties — assert as a set.
     expect([...agents.map((agent: { name: string }) => agent.name)].sort()).toEqual([
+      "Acute",
       "Coder",
-      "Nova",
       "Planner",
       "Researcher",
       "Reviewer",
@@ -102,7 +102,7 @@ describe("agents CRUD", () => {
     ]);
   });
 
-  it("excludes templates with ?includeTemplates=false — Nova (round-15 seed) remains", async () => {
+  it("excludes templates with ?includeTemplates=false — Acute (default seed) remains", async () => {
     const response = await authInject({
       method: "GET",
       url: "/api/v1/agents?includeTemplates=false",
@@ -112,7 +112,7 @@ describe("agents CRUD", () => {
     expect(agents).toHaveLength(1);
     expect(agents[0]).toMatchObject({
       id: "agt_default_nova",
-      name: "Nova",
+      name: "Acute",
       providerId: "openrouter",
       model: "stealth/ox-alpha",
       isTemplate: false,

@@ -245,3 +245,27 @@ Format per entry: `N. TITLE (date, source)` → mistake → root cause → rule.
    existed; dialog untested on Windows). The fresh-DB battery (seed →
    project → session → owner-scenario prompt → disk assertions) is now the
    standard pre-handover gate for anything touching agents or projects.
+
+## Round-16 lessons (streaming + the sandbox wipe)
+
+33. **Push large rounds to a WORK BRANCH incrementally.** The sandbox was
+   wiped mid-round and the entire uncommitted round was lost (the repo is the
+   single source of truth — an uncommitted working tree is worth nothing).
+   RULE: for any round touching many files, `git checkout -b work/<round>`
+   at the start, commit+push after each green milestone (backend green,
+   frontend green, docs), merge to main only when the full verify + live
+   battery pass. Restore afterward = clone + `SANDBOX-RESTORE.md` + cherry
+   -pick nothing. Cost of the wipe this time: one full redo; with branches
+   it would have been zero.
+
+34. **AI SDK v7 streaming details**: text deltas arrive as
+    `part.text` (NOT `.delta`); usage may only be reported per
+    `finish-step` — cross-check `await result.totalUsage` against summed
+    per-step usage and take the larger, or streamed turns persist 0/0.
+
+35. **End-to-end test completion signals must be OUTCOME-based, not
+    time-based**: poll the on-disk file / the specific new DOM text, never
+    "sleep 40s". Also verify you drove the RIGHT element (I typed a prompt
+    into the TopBar file-search twice before snapshotting refs), and beware
+    stale assertions (a "tok/s" poll matched the PREVIOUS turn's stats).
+   Disk is the ground truth for file-mutation turns.
