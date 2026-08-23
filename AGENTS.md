@@ -10,7 +10,7 @@ Stack (fixed, changes need owner approval): Tauri 2 (Rust) shell · React 18 + T
 - **Spec before code.** No implementation code before the phase's spec is approved by the owner.
 - **Phase gates.** Phases 0–6 each end with a report (deliverables, pass/fail acceptance checklist, ≤2-min demo, assumptions/ADRs, open questions) and explicit owner approval. Never start the next phase without it.
 - **ADR discipline.** Every non-trivial decision gets `docs/decisions/NNN-*.md` (Context → Options → Decision → Consequences). Smaller-scope assumptions get `[ASSUMPTION]` tags and are surfaced in the next report.
-- **Sub-agent protocol.** The orchestrator dispatches Researcher / Planner / Architect / Developer / Reviewer / Tester / Scribe sub-agents and integrates; it does not hand-write large implementation code. Every sub-agent returns: what it did, artifacts, open questions. Review failures go back to the producer.
+- **Sub-agent protocol (owner revision, 2026-08-23).** Sub-agents are an OPTIONAL tool, never a default. Dispatch one only when the task genuinely warrants it — e.g. large parallel research sweeps or exploration across many files — and the orchestrator first checks whether doing the work inline would be simpler and safer. Implementation work is normally done inline by the orchestrator; do not force dispatches, do not hand off work a sub-agent doesn't need to do. When a sub-agent IS used, it returns: what it did, artifacts, open questions; review failures go back to the producer.
 - **Question protocol.** Batch questions once per phase, numbered, labeled `[BLOCKING]`/`[NON-BLOCKING]`, each with a recommended default, max 10. Check docs first — don't ask what's already answered.
 
 ## Hard rules

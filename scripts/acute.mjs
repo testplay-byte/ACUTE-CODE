@@ -13,7 +13,8 @@
  *   agents [--all]                  agent registry (templates with --all)
  *   sessions                        recent sessions
  *   usage [days]                    usage summary (default 14 days)
- *   raw <METHOD> <path> [jsonBody]  authenticated raw request (escape hatch)
+ *   raw <METHOD> <path> [jsonBody]  authenticated raw request (escape hatch;
+ *                                    status -> stderr, JSON body -> stdout)
  */
 const BASE = process.env.ACUTE_BASE_URL ?? "http://127.0.0.1:5178";
 const TOKEN = process.env.ACUTE_TOKEN ?? "acute-dev-local";
@@ -85,7 +86,9 @@ switch (cmd) {
     const { status, json } = await call("GET", `/agents${includeAll ? "" : "?includeTemplates=false"}`);
     if (status !== 200) die(JSON.stringify(json));
     for (const a of json.agents) {
-      console.log(`${a.id.padEnd(16)} ${a.name.padEnd(16)} ${a.role ?? ""} ${a.modelId ?? ""}`);
+      console.log(
+        `${a.id.padEnd(16)} ${a.name.padEnd(16)} ${a.role ?? ""} ${a.providerId ?? ""} ${a.model ?? ""}`,
+      );
     }
     break;
   }
@@ -105,10 +108,13 @@ switch (cmd) {
     break;
   }
   case "raw": {
+    // Pipe-safe (owner round-10 fix): the HTTP status goes to STDERR so the
+    // JSON body on stdout can be piped straight into jq without post-processing.
     const [method, path, body] = args;
     if (!method || !path) die("usage: raw <METHOD> <path> [jsonBody]");
     const { status, json } = await call(method, path, body ? JSON.parse(body) : undefined);
-    console.log(status, JSON.stringify(json, null, 1));
+    console.error(`${status} ${BASE}/api/v1${path}`);
+    console.log(JSON.stringify(json, null, 1));
     break;
   }
   default:

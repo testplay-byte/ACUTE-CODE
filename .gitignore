@@ -23,3 +23,5 @@ Thumbs.db
 .turbo/
 coverage/
 .dev
+.runner-bin/
+acute-runner.log.old

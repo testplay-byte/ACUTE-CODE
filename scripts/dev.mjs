@@ -13,7 +13,7 @@
  * Plain `pnpm dev` (UI only, no sidecar) keeps working exactly as before.
  */
 import { spawn, spawnSync } from "node:child_process";
-import { existsSync, mkdirSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -23,8 +23,23 @@ const DEV_TOKEN = "acute-dev-local";
 const devDir = resolve(repoRoot, ".dev");
 mkdirSync(devDir, { recursive: true });
 
-/** Read the OpenRouter key from Credential Manager; absence is non-fatal. */
+/** Resolve the OpenRouter key: env passthrough (how the desktop runner injects
+ *  it on every platform) → Windows Credential Manager → Linux/macOS key file.
+ *  Absence is non-fatal. Never printed — length only. */
 function readProviderKey() {
+  if (process.env.ACUTE_PROVIDER_OPENROUTER) {
+    const fromEnv = process.env.ACUTE_PROVIDER_OPENROUTER;
+    console.error(`[dev] OpenRouter key from ACUTE_PROVIDER_OPENROUTER env (length ${fromEnv.length}).`);
+    return fromEnv;
+  }
+  const keyFile = resolve(process.env.HOME ?? ".", ".acute", "openrouter.key");
+  if (process.platform !== "win32" && existsSync(keyFile)) {
+    const fromFile = readFileSync(keyFile, "utf8").trim();
+    if (fromFile) {
+      console.error(`[dev] OpenRouter key from ${keyFile} (length ${fromFile.length}).`);
+      return fromFile;
+    }
+  }
   const res = spawnSync(
     "powershell",
     [
@@ -39,7 +54,7 @@ function readProviderKey() {
   const key = res.stdout ? res.stdout.trim() : "";
   if (!key) {
     console.error(
-      "[dev] No OpenRouter key in Credential Manager (ACUTE-CODE/provider/openrouter) — model catalog and connection tests will fail until one is stored.",
+      "[dev] No OpenRouter key found (Credential Manager ACUTE-CODE/provider/openrouter, ACUTE_PROVIDER_OPENROUTER env, or ~/.acute/openrouter.key) — model catalog and connection tests will fail until one is stored.",
     );
     return "";
   }
