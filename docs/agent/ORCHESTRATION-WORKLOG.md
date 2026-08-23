@@ -287,3 +287,19 @@ Work Log:
 
 Stage Summary:
 - Owner action: re-download BOTH ACUTE.bat + acute_launcher.py from launcher/ (credentials.txt unchanged), double-click. Root causes eliminated structurally (no shell-quoting auth path exists anymore; console forced UTF-8; UI text can no longer crash markup). Next: owner's Windows retest; then MVP review + Phase 3 on approval.
+
+---
+Task ID: R13 (round-13 session)
+Agent: orchestrator (Z.ai Code) — all inline, surgical scope per owner instruction
+Task: Fix recurring Windows clone failure (credential helper never answers) + proper error display
+
+Work Log:
+- Second identical owner failure (git 2.55.0.windows.3, single-word 'store' helper + isolated HOME): helper never answered → prompt fallback → /dev/tty. Conclusion: the helper MECHANISM is environment-sensitive on Git-for-Windows — abandoned it entirely
+- New auth: token-in-URL for the single clone/fetch/pull command (CI-proven, nothing to break); remote sanitized to tokenless URL immediately after clone; GIT_TERMINAL_PROMPT=0 + GIT_CONFIG_NOSYSTEM=1 + isolated HOME (can never hang/prompt); authed URL + token registered with redactor — grep-verified absent from .git/config and launcher.log
+- explain_git_failure(): exit code + command + output + Diagnosis/Fix decoding (auth / network / disk / leftover folder); clone and pull route through it
+- Minimal verification per owner instruction: py_compile, scratch first-run green (8s, remote sanitized, no leaks), lint+typecheck green
+- Memory lesson #24; README round-13 note (re-download ONLY acute_launcher.py)
+- Commit 6f7d620 pushed; CI 32627050197 SUCCESS; repo private-verified; ntfy delivered
+
+Stage Summary:
+- Owner action: replace acute_launcher.py only (ACUTE.bat + credentials.txt unchanged) → double-click. Auth flow now has zero platform-dependent parts. Next: owner's Windows retest → then MVP review + Phase 3 on approval.
