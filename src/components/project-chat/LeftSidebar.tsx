@@ -1,6 +1,6 @@
 import { useRef } from "react";
 import { AnimatePresence, motion } from "framer-motion";
-import { CheckSquare, ChevronLeft, ChevronRight, Files } from "lucide-react";
+import { CheckSquare, ChevronLeft, ChevronRight, Code2, Files } from "lucide-react";
 import type { Project } from "../../lib/api";
 import { ease } from "../../lib/motion";
 import { useProjectChatStore } from "../../lib/project-chat-store";
@@ -19,6 +19,8 @@ export function LeftSidebar({ project }: { project: Project }) {
   const styles = useThemeStyles();
   const sidebarWidth = useProjectChatStore((s) => s.sidebarWidth);
   const setSidebarOpen = useProjectChatStore((s) => s.setSidebarOpen);
+  const codeVisible = useProjectChatStore((s) => s.codeVisible);
+  const setCodeVisible = useProjectChatStore((s) => s.setCodeVisible);
   const collapsedPanels = useProjectChatStore((s) => s.collapsedPanels);
   const togglePanel = useProjectChatStore((s) => s.togglePanel);
   const explorerCollapsed = collapsedPanels.includes("explorer");
@@ -37,29 +39,50 @@ export function LeftSidebar({ project }: { project: Project }) {
       className="shrink-0 flex flex-col overflow-hidden rounded-2xl"
       style={{ backgroundColor: styles.card }}
     >
-      {/* Sidebar minimize row */}
-      <div className="shrink-0 flex items-center justify-between px-2 h-9">
+      {/* Sidebar header: project name + code toggle + minimize */}
+      <div className="shrink-0 flex items-center justify-between px-2 h-9 gap-1">
         <span
-          className="text-[11px] font-semibold uppercase tracking-[0.1em] px-1"
+          className="text-[11px] font-semibold uppercase tracking-[0.1em] px-1 truncate"
           style={{ color: styles.textSecondary }}
         >
-          Project
+          {project.name}
         </span>
-        <button
-          onClick={() => setSidebarOpen(false)}
-          aria-label="Collapse explorer"
-          title="Minimize sidebar"
-          className="w-7 h-7 rounded-lg grid place-items-center transition-colors"
-          style={{ color: styles.textSecondary }}
-          onMouseEnter={(e) => {
-            e.currentTarget.style.background = styles.subtleHover;
-          }}
-          onMouseLeave={(e) => {
-            e.currentTarget.style.background = "transparent";
-          }}
-        >
-          <ChevronLeft size={13} />
-        </button>
+        <div className="flex items-center gap-0.5">
+          <button
+            onClick={() => setCodeVisible(!codeVisible)}
+            aria-pressed={codeVisible}
+            aria-label="Toggle code panel"
+            title={codeVisible ? "Hide code panel" : "Show code panel"}
+            className="w-7 h-7 rounded-lg grid place-items-center transition-colors"
+            style={{
+              color: codeVisible ? styles.accent : styles.textSecondary,
+              background: codeVisible ? `rgba(255,107,44,0.08)` : "transparent",
+            }}
+            onMouseEnter={(e) => {
+              if (!codeVisible) e.currentTarget.style.background = styles.subtleHover;
+            }}
+            onMouseLeave={(e) => {
+              if (!codeVisible) e.currentTarget.style.background = "transparent";
+            }}
+          >
+            <Code2 size={13} />
+          </button>
+          <button
+            onClick={() => setSidebarOpen(false)}
+            aria-label="Collapse explorer"
+            title="Hide explorer"
+            className="w-7 h-7 rounded-lg grid place-items-center transition-colors"
+            style={{ color: styles.textSecondary }}
+            onMouseEnter={(e) => {
+              e.currentTarget.style.background = styles.subtleHover;
+            }}
+            onMouseLeave={(e) => {
+              e.currentTarget.style.background = "transparent";
+            }}
+          >
+            <ChevronLeft size={13} />
+          </button>
+        </div>
       </div>
 
       {/* Explorer section */}

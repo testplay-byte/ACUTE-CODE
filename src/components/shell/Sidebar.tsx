@@ -6,24 +6,26 @@ import {
   ChevronsRight,
   FolderOpen,
   LayoutDashboard,
+  Menu,
+  MessageSquare,
   Plus,
   Settings,
   Trash2,
 } from "lucide-react";
-import { motion } from "framer-motion";
+import { motion, AnimatePresence } from "framer-motion";
 import { ApiError, pickFolderViaBackend, type Project } from "../../lib/api";
 import { cn } from "../../lib/utils";
 import { SEMANTIC_COLORS } from "../../lib/semantics";
 import { isTauri } from "../../lib/sidecar";
 import { useConfigStore } from "../../lib/config-store";
-import { useThemeStyles, } from "../../lib/use-theme-styles";
-import { useCreateProject, useDeleteProject, useProjects } from "../../hooks/use-projects";
+import { useThemeStyles } from "../../lib/use-theme-styles";
+import { useProjects, useCreateProject, useDeleteProject } from "../../hooks/use-projects";
+import { useSessions } from "../../hooks/use-sessions";
+import { useProjectChatStore } from "../../lib/project-chat-store";
 import { withAlpha } from "../dashboard/helpers";
 
 type TauriGlobal = {
-  core: {
-    invoke: (command: string, args?: Record<string, unknown>) => Promise<unknown>;
-  };
+  core: { invoke: (cmd: string, args?: Record<string, unknown>) => Promise<unknown> };
 };
 
 async function tauriInvoke<T>(command: string, args?: Record<string, unknown>): Promise<T> {
@@ -33,82 +35,104 @@ async function tauriInvoke<T>(command: string, args?: Record<string, unknown>): 
 }
 
 const COLLAPSE_KEY = "acute-code.sidebar.collapsed";
+const EXPANDED_KEY = "acute-code.sidebar.expandedProjects";
 
 function readCollapsed(): boolean {
-  try {
-    return localStorage.getItem(COLLAPSE_KEY) === "1";
-  } catch {
-    return false;
-  }
+  try { return localStorage.getItem(COLLAPSE_KEY) === "1"; } catch { return false; }
+}
+function readExpanded(): string[] {
+  try { return JSON.parse(localStorage.getItem(EXPANDED_KEY) ?? "[]") as string[]; } catch { return []; }
 }
 
 /**
- * Sidebar (round-21 UI overhaul): wizard design DNA applied —
- * solid accent fills for active states, 1.5px borderStrong borders,
- * softShadow on the card, generous radii (12-20px), 11px bold uppercase
- * tracked labels, and the wizard's selected-card recipe (accent border +
- * ring + shadow + lift) for active projects.
+ * Sidebar (round-22 owner redesign):
+ * - DISTINCT surface color (subtle, differentiable from the main area's bg)
+ * - Hamburger toggle on the TOP-LEFT of the sidebar itself (shows/hides sidebar)
+ * - NAV section (Dashboard/Usage) cleanly separated from PROJECTS section
+ * - Projects are expandable: click → sessions list underneath
+ * - Each session navigates directly to /project/:id/chat (no separate window)
+ * - Collapsed rail: icon tiles only
  */
 export function Sidebar() {
   const styles = useThemeStyles();
   const [collapsed, setCollapsed] = useState(readCollapsed);
+  const setAppSidebarVisible = useProjectChatStore((s) => s.setAppSidebarVisible);
+  const appSidebarVisible = useProjectChatStore((s) => s.appSidebarVisible);
+  const isChatRoute = /^\/project\/[^/]+\/chat\/?$/.test(useLocation().pathname);
+  const showSidebar = !isChatRoute || appSidebarVisible;
 
   useEffect(() => {
-    try {
-      localStorage.setItem(COLLAPSE_KEY, collapsed ? "1" : "0");
-    } catch {
-      /* private mode */
-    }
+    try { localStorage.setItem(COLLAPSE_KEY, collapsed ? "1" : "0"); } catch { /* */ }
   }, [collapsed]);
+
+  if (!showSidebar) return null;
 
   return (
     <motion.aside
       initial={false}
-      animate={{ width: collapsed ? 64 : 264 }}
+      animate={{ width: collapsed ? 64 : 270 }}
       transition={{ duration: 0.25, ease: [0.25, 0.1, 0.25, 1] }}
       className="shrink-0 flex flex-col overflow-hidden rounded-[20px] border-[1.5px]"
       style={{
-        backgroundColor: styles.card,
+        backgroundColor: styles.subtle,
         borderColor: styles.borderStrong,
-        boxShadow: styles.softShadow,
       }}
     >
-      {/* Brand row — wizard pill style */}
+      {/* Top row: hamburger (toggles sidebar visibility on chat route) + brand */}
       <div className={cn("shrink-0 flex items-center gap-2.5 px-3 pt-4", collapsed && "justify-center px-2")}>
-        <div
-          className="w-8 h-8 shrink-0 rounded-[10px] grid place-items-center font-black text-[14px]"
-          style={{ background: styles.accent, color: styles.accentText }}
-        >
-          {"\u25D0"}
-        </div>
+        {isChatRoute && (
+          <button
+            onClick={() => setAppSidebarVisible(!appSidebarVisible)}
+            aria-label={appSidebarVisible ? "Hide sidebar" : "Show sidebar"}
+            title={appSidebarVisible ? "Hide sidebar" : "Show sidebar"}
+            className="w-8 h-8 shrink-0 rounded-[10px] grid place-items-center transition-colors"
+            style={{ background: styles.card, color: styles.textSecondary, border: `1.5px solid ${styles.border}` }}
+          >
+            <Menu size={14} />
+          </button>
+        )}
         {!collapsed && (
-          <div className="flex items-center gap-2 min-w-0">
-            <span className="text-[13px] font-bold tracking-[-0.02em] truncate" style={{ color: styles.text }}>
-              Acute
-            </span>
-            <span
-              className="shrink-0 px-1.5 py-0.5 rounded-full text-[9px] font-bold font-mono"
+          <>
+            <div
+              className="w-8 h-8 shrink-0 rounded-[10px] grid place-items-center font-black text-[14px]"
               style={{ background: styles.accent, color: styles.accentText }}
             >
-              "v0.1.0"
-            </span>
-          </div>
+              {"\u25D0"}
+            </div>
+            <div className="flex items-center gap-2 min-w-0">
+              <span className="text-[13px] font-bold tracking-[-0.02em] truncate" style={{ color: styles.text }}>
+                Acute
+              </span>
+              <span
+                className="shrink-0 px-1.5 py-0.5 rounded-full text-[9px] font-bold font-mono"
+                style={{ background: styles.accent, color: styles.accentText }}
+              >
+                v0.1.0
+              </span>
+            </div>
+          </>
         )}
       </div>
 
-      {/* Nav items */}
-      <nav className={cn("flex flex-col gap-1 px-2.5 pt-4", collapsed && "px-1.5")} aria-label="Main navigation">
+      {/* NAV SECTION — cleanly separated */}
+      <nav className={cn("flex flex-col gap-1 px-2.5 pt-4 pb-3", collapsed && "px-1.5")} aria-label="Main navigation">
         <DashboardButton collapsed={collapsed} />
         <UsageButton collapsed={collapsed} />
       </nav>
 
-      {/* Projects section */}
-      <div className="flex-1 flex flex-col min-h-0 overflow-hidden pt-4">
+      {/* Divider */}
+      <div className="shrink-0 mx-3 border-t-[1.5px]" style={{ borderColor: styles.border }} />
+
+      {/* PROJECTS SECTION — expandable tree */}
+      <div className="flex-1 flex flex-col min-h-0 overflow-hidden pt-3">
         <ProjectSection collapsed={collapsed} />
       </div>
 
-      {/* Bottom */}
-      <div className={cn("shrink-0 border-t px-2.5 pb-3 pt-2", collapsed && "px-1.5")} style={{ borderColor: styles.borderSubtle }}>
+      {/* Bottom: Settings + collapse toggle */}
+      <div
+        className={cn("shrink-0 border-t px-2.5 pb-3 pt-2", collapsed && "px-1.5")}
+        style={{ borderColor: styles.border }}
+      >
         <SettingsButton collapsed={collapsed} />
         <button
           onClick={() => setCollapsed(!collapsed)}
@@ -125,19 +149,10 @@ export function Sidebar() {
   );
 }
 
-/** Nav button — active = solid accent fill + bentoShadowSm (wizard recipe). */
 function NavButton({
-  icon: Icon,
-  label,
-  active,
-  collapsed,
-  onClick,
+  icon: Icon, label, active, collapsed, onClick,
 }: {
-  icon: typeof LayoutDashboard;
-  label: string;
-  active: boolean;
-  collapsed: boolean;
-  onClick: () => void;
+  icon: typeof LayoutDashboard; label: string; active: boolean; collapsed: boolean; onClick: () => void;
 }) {
   const styles = useThemeStyles();
   return (
@@ -152,19 +167,13 @@ function NavButton({
       style={{
         background: active ? styles.accent : "transparent",
         color: active ? styles.accentText : styles.textSecondary,
-        boxShadow: active ? styles.bentoShadowSm : "none",
+        boxShadow: active ? `0 2px 8px ${withAlpha(styles.accent, 0.3)}` : "none",
       }}
       onMouseEnter={(e) => {
-        if (!active) {
-          e.currentTarget.style.background = styles.subtleHover;
-          e.currentTarget.style.color = styles.text;
-        }
+        if (!active) { e.currentTarget.style.background = styles.subtleHover; e.currentTarget.style.color = styles.text; }
       }}
       onMouseLeave={(e) => {
-        if (!active) {
-          e.currentTarget.style.background = "transparent";
-          e.currentTarget.style.color = styles.textSecondary;
-        }
+        if (!active) { e.currentTarget.style.background = "transparent"; e.currentTarget.style.color = styles.textSecondary; }
       }}
     >
       <Icon size={16} strokeWidth={2} className="shrink-0" />
@@ -175,65 +184,61 @@ function NavButton({
 
 function DashboardButton({ collapsed }: { collapsed: boolean }) {
   const navigate = useNavigate();
-  const { pathname } = useLocation();
-  const active = pathname === "/";
-  return (
-    <NavButton
-      icon={LayoutDashboard}
-      label="Dashboard"
-      active={active}
-      collapsed={collapsed}
-      onClick={() => navigate("/")}
-    />
-  );
+  const active = useLocation().pathname === "/";
+  return <NavButton icon={LayoutDashboard} label="Dashboard" active={active} collapsed={collapsed} onClick={() => navigate("/")} />;
 }
 
 function UsageButton({ collapsed }: { collapsed: boolean }) {
   const navigate = useNavigate();
-  const { pathname } = useLocation();
-  const active = pathname.startsWith("/usage");
-  return (
-    <NavButton
-      icon={BarChart3}
-      label="Usage"
-      active={active}
-      collapsed={collapsed}
-      onClick={() => navigate("/usage")}
-    />
-  );
+  const active = useLocation().pathname.startsWith("/usage");
+  return <NavButton icon={BarChart3} label="Usage" active={active} collapsed={collapsed} onClick={() => navigate("/usage")} />;
 }
 
 function SettingsButton({ collapsed }: { collapsed: boolean }) {
   const navigate = useNavigate();
-  const { pathname } = useLocation();
-  const active = pathname.startsWith("/settings");
-  return (
-    <NavButton
-      icon={Settings}
-      label="Settings"
-      active={active}
-      collapsed={collapsed}
-      onClick={() => navigate("/settings")}
-    />
-  );
+  const active = useLocation().pathname.startsWith("/settings");
+  return <NavButton icon={Settings} label="Settings" active={active} collapsed={collapsed} onClick={() => navigate("/settings")} />;
 }
 
-/** Projects section — header label + project list + Add Project button. */
+/** Projects section — expandable tree with sessions under each project. */
 function ProjectSection({ collapsed }: { collapsed: boolean }) {
   const styles = useThemeStyles();
   const navigate = useNavigate();
   const { pathname } = useLocation();
   const projectsQuery = useProjects();
+  const sessionsQuery = useSessions();
   const projects = projectsQuery.data ?? [];
+  const sessions = sessionsQuery.data ?? [];
+  const [expandedProjects, setExpandedProjects] = useState<string[]>(readExpanded);
   const [showAddDialog, setShowAddDialog] = useState(false);
 
   const activeProjectMatch = pathname.match(/^\/project\/([^/]+)/);
   const activeProjectId = activeProjectMatch?.[1] ?? null;
 
+  // Auto-expand the active project
+  useEffect(() => {
+    if (activeProjectId && !expandedProjects.includes(activeProjectId)) {
+      setExpandedProjects((prev) => [...prev, activeProjectId]);
+    }
+  }, [activeProjectId]);
+
+  useEffect(() => {
+    try { localStorage.setItem(EXPANDED_KEY, JSON.stringify(expandedProjects)); } catch { /* */ }
+  }, [expandedProjects]);
+
+  const toggleProject = (projectId: string) => {
+    setExpandedProjects((prev) =>
+      prev.includes(projectId) ? prev.filter((id) => id !== projectId) : [...prev, projectId],
+    );
+  };
+
+  const projectSessions = (projectId: string) =>
+    sessions.filter((s) => s.projectId === projectId).sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
+
   if (collapsed) {
     return (
       <div className="flex flex-col items-center gap-1.5 px-1.5 pb-2">
-        {projects.slice(0, 5).map((project) => (
+        {projects.map((project) => (
           <button
             key={project.id}
             onClick={() => navigate(`/project/${project.id}/chat`)}
@@ -253,17 +258,13 @@ function ProjectSection({ collapsed }: { collapsed: boolean }) {
         <button
           onClick={() => setShowAddDialog(true)}
           aria-label="Add project"
-          title="Add project"
           className="w-9 h-9 rounded-[12px] grid place-items-center border-[1.5px] border-dashed transition-transform hover:scale-105"
           style={{ borderColor: styles.border, color: styles.textTertiary }}
         >
           <Plus size={14} strokeWidth={2.5} />
         </button>
         {showAddDialog && (
-          <AddProjectDialog
-            onCreated={(id) => navigate(`/project/${id}/chat`)}
-            onClose={() => setShowAddDialog(false)}
-          />
+          <AddProjectDialog onCreated={(id) => navigate(`/project/${id}/chat`)} onClose={() => setShowAddDialog(false)} />
         )}
       </div>
     );
@@ -272,65 +273,125 @@ function ProjectSection({ collapsed }: { collapsed: boolean }) {
   return (
     <>
       <div className="flex items-center justify-between px-4 pb-2">
-        <span
-          className="text-[11px] font-bold uppercase tracking-widest"
-          style={{ color: styles.textTertiary }}
-        >
+        <span className="text-[11px] font-bold uppercase tracking-widest" style={{ color: styles.textTertiary }}>
           Projects
         </span>
-        {projects.length > 0 && (
-          <span
-            className="px-1.5 py-0.5 rounded-full text-[10px] font-bold"
-            style={{ background: styles.subtle, color: styles.textTertiary }}
+        <button
+          onClick={() => setShowAddDialog(true)}
+          className="flex items-center gap-1 rounded-md px-1.5 py-0.5 text-[10px] font-bold transition-colors"
+          style={{ color: styles.accent }}
+          onMouseEnter={(e) => (e.currentTarget.style.background = withAlpha(styles.accent, 0.1))}
+          onMouseLeave={(e) => (e.currentTarget.style.background = "transparent")}
+        >
+          <Plus size={10} /> Add
+        </button>
+      </div>
+
+      <div className="flex-1 overflow-y-auto px-2.5 pb-2 space-y-0.5" style={{ scrollbarWidth: "thin" }}>
+        {projects.map((project) => {
+          const isExpanded = expandedProjects.includes(project.id);
+          const isActive = activeProjectId === project.id;
+          const projSessions = projectSessions(project.id);
+
+          return (
+            <div key={project.id}>
+              {/* Project row */}
+              <ProjectRow
+                project={project}
+                active={isActive}
+                expanded={isExpanded}
+                sessionCount={projSessions.length}
+                onToggle={() => toggleProject(project.id)}
+              />
+              {/* Sessions underneath */}
+              <AnimatePresence initial={false}>
+                {isExpanded && projSessions.length > 0 && (
+                  <motion.div
+                    initial={{ height: 0, opacity: 0 }}
+                    animate={{ height: "auto", opacity: 1 }}
+                    exit={{ height: 0, opacity: 0 }}
+                    transition={{ duration: 0.2, ease: [0.25, 0.1, 0.25, 1] }}
+                    className="overflow-hidden"
+                  >
+                    <div className="ml-5 pl-3 border-l-[1.5px] space-y-0.5 py-1" style={{ borderColor: styles.border }}>
+                      {projSessions.slice(0, 6).map((session) => (
+                        <button
+                          key={session.id}
+                          onClick={() => navigate(`/project/${project.id}/chat`)}
+                          className="w-full h-7 flex items-center gap-2 px-2 rounded-[8px] text-[11px] font-medium transition-colors truncate"
+                          style={{ color: styles.textTertiary }}
+                          onMouseEnter={(e) => {
+                            e.currentTarget.style.background = styles.subtleHover;
+                            e.currentTarget.style.color = styles.textSecondary;
+                          }}
+                          onMouseLeave={(e) => {
+                            e.currentTarget.style.background = "transparent";
+                            e.currentTarget.style.color = styles.textTertiary;
+                          }}
+                          title={session.title ?? "Untitled"}
+                        >
+                          <MessageSquare size={10} className="shrink-0" />
+                          <span className="truncate">{session.title ?? "Untitled"}</span>
+                        </button>
+                      ))}
+                      {projSessions.length > 6 && (
+                        <span className="block px-2 py-1 text-[10px]" style={{ color: styles.textTertiary }}>
+                          +{projSessions.length - 6} more
+                        </span>
+                      )}
+                    </div>
+                  </motion.div>
+                )}
+              </AnimatePresence>
+            </div>
+          );
+        })}
+
+        {projects.length === 0 && (
+          <button
+            onClick={() => setShowAddDialog(true)}
+            className="h-10 w-full flex items-center justify-center gap-2 rounded-[14px] border-[1.5px] border-dashed text-[12px] font-bold transition-all hover:-translate-y-px"
+            style={{ borderColor: styles.border, background: "transparent", color: styles.textTertiary }}
           >
-            {projects.length}
-          </span>
+            <Plus size={13} strokeWidth={2.5} />
+            <span>Add your first project</span>
+          </button>
         )}
       </div>
-      <div className="flex-1 overflow-y-auto px-2.5 pb-2 space-y-1" style={{ scrollbarWidth: "thin" }}>
-        {projects.map((project) => (
-          <ProjectItem
-            key={project.id}
-            project={project}
-            active={activeProjectId === project.id}
-          />
-        ))}
-        <AddProjectButton onOpen={() => setShowAddDialog(true)} />
-      </div>
+
       {showAddDialog && (
-        <AddProjectDialog
-          onCreated={(id) => navigate(`/project/${id}/chat`)}
-          onClose={() => setShowAddDialog(false)}
-        />
+        <AddProjectDialog onCreated={(id) => navigate(`/project/${id}/chat`)} onClose={() => setShowAddDialog(false)} />
       )}
     </>
   );
 }
 
-function ProjectItem({ project, active }: { project: Project; active: boolean }) {
+function ProjectRow({
+  project, active, expanded, sessionCount, onToggle,
+}: {
+  project: Project; active: boolean; expanded: boolean; sessionCount: number; onToggle: () => void;
+}) {
   const styles = useThemeStyles();
   const navigate = useNavigate();
-  const deleteProject = useDeleteProject();
   const [hovered, setHovered] = useState(false);
+  const [showDelete, setShowDelete] = useState(false);
 
   return (
     <div
       className="group relative h-11 flex items-center gap-2.5 rounded-[12px] px-2 cursor-pointer transition-all duration-200"
       style={{
         border: active ? `1.5px solid ${styles.accent}` : "1.5px solid transparent",
-        background: active ? "transparent" : hovered ? styles.subtleHover : "transparent",
-        boxShadow: active ? `0 0 0 3px ${withAlpha(styles.accent, 0.15)}` : "none",
-        transform: active ? "translateY(-1px)" : "none",
+        background: active ? styles.card : hovered ? styles.subtleHover : "transparent",
+        boxShadow: active ? `0 0 0 2px ${withAlpha(styles.accent, 0.12)}` : "none",
       }}
       onMouseEnter={() => setHovered(true)}
-      onMouseLeave={() => setHovered(false)}
-      onClick={() => navigate(`/project/${project.id}/chat`)}
+      onMouseLeave={() => { setHovered(false); setShowDelete(false); }}
+      onClick={onToggle}
       role="button"
       tabIndex={0}
-      onKeyDown={(e) => {
-        if (e.key === "Enter") navigate(`/project/${project.id}/chat`);
-      }}
-      aria-label={`Open project ${project.name}`}
+      onKeyDown={(e) => { if (e.key === "Enter") onToggle(); }}
+      aria-expanded={expanded}
+      aria-label={`Project ${project.name}`}
     >
       <span
         className="w-8 h-8 shrink-0 rounded-[10px] grid place-items-center font-black text-[13px]"
@@ -340,77 +401,81 @@ function ProjectItem({ project, active }: { project: Project; active: boolean })
       </span>
       <div className="flex min-w-0 flex-1 flex-col">
         <span
-          className="text-[12px] font-bold truncate transition-colors"
+          className="text-[12px] font-bold truncate"
           style={{ color: active ? styles.text : styles.textSecondary }}
         >
           {project.name}
         </span>
-        <span
-          className="font-mono text-[9.5px] truncate"
-          style={{ color: styles.textTertiary }}
-          title={project.rootPath}
-        >
-          {project.rootPath}
-        </span>
       </div>
+      {sessionCount > 0 && (
+        <span
+          className="shrink-0 px-1.5 py-0.5 rounded-full text-[9px] font-bold font-mono"
+          style={{ background: styles.subtle, color: styles.textTertiary }}
+        >
+          {sessionCount}
+        </span>
+      )}
+      <motion.span animate={{ rotate: expanded ? 90 : 0 }} transition={{ duration: 0.15 }} className="shrink-0">
+        <ChevronsRight size={12} style={{ color: styles.textTertiary }} />
+      </motion.span>
+      <DeleteProjectButton projectId={project.id} projectName={project.name} visible={hovered || showDelete} />
+      {/* Double-click opens the chat; single click toggles expand */}
       <button
-        onClick={(e) => {
-          e.stopPropagation();
-          deleteProject.mutate(project.id);
-        }}
-        aria-label={`Delete ${project.name}`}
-        title={`Delete ${project.name}`}
-        className="absolute right-1.5 w-6 h-6 grid place-items-center rounded-md opacity-0 transition-opacity group-hover:opacity-100"
-        style={{ color: styles.textTertiary }}
-      >
-        <Trash2 size={11} />
-      </button>
+        onClick={(e) => { e.stopPropagation(); navigate(`/project/${project.id}/chat`); }}
+        onDoubleClick={(e) => { e.stopPropagation(); navigate(`/project/${project.id}/chat`); }}
+        className="absolute inset-0 z-0 rounded-[12px]"
+        aria-label={`Open ${project.name} chat`}
+        style={{ background: "transparent", cursor: "pointer" }}
+      />
     </div>
   );
 }
 
-function AddProjectButton({ onOpen }: { onOpen: () => void }) {
+function DeleteProjectButton({
+  projectId, projectName, visible,
+}: {
+  projectId: string; projectName: string; visible: boolean;
+}) {
   const styles = useThemeStyles();
+  const { remove } = useDeleteProjectSimple();
   return (
     <button
-      onClick={onOpen}
-      className="h-10 flex items-center justify-center gap-2 rounded-[14px] border-[1.5px] border-dashed text-[12px] font-bold transition-all duration-200 hover:-translate-y-px"
-      style={{
-        borderColor: styles.border,
-        background: styles.subtle,
-        color: styles.textTertiary,
-      }}
-      onMouseEnter={(e) => {
-        e.currentTarget.style.borderColor = styles.borderStrong;
-        e.currentTarget.style.color = styles.textSecondary;
-      }}
-      onMouseLeave={(e) => {
-        e.currentTarget.style.borderColor = styles.border;
-        e.currentTarget.style.color = styles.textTertiary;
-      }}
+      onClick={(e) => { e.stopPropagation(); remove(projectId); }}
+      aria-label={`Delete ${projectName}`}
+      title={`Delete ${projectName}`}
+      className="relative z-20 w-6 h-6 grid place-items-center rounded-md transition-opacity"
+      style={{ color: styles.textTertiary, opacity: visible ? 1 : 0 }}
     >
-      <Plus size={13} strokeWidth={2.5} />
-      <span>Add Project</span>
+      <Trash2 size={11} />
     </button>
   );
 }
 
-// ─── Add Project Dialog (wizard-style: h-12 inputs, 24px radius) ─────────────
+function useDeleteProjectSimple() {
+  const deleteProject = useDeleteProject();
+  const remove = useCallback(
+    (id: string) => deleteProject.mutate(id),
+    [deleteProject],
+  );
+  return { remove };
+}
+
+
+
+// ─── Add Project Dialog ──────────────────────────────────────────────────────
 
 function AddProjectDialog({
-  onCreated,
-  onClose,
+  onCreated, onClose,
 }: {
-  onCreated: (projectId: string) => void;
-  onClose: () => void;
+  onCreated: (projectId: string) => void; onClose: () => void;
 }) {
   const styles = useThemeStyles();
-  const createProject = useCreateProject();
   const [name, setName] = useState("");
   const [rootPath, setRootPath] = useState("");
   const [picking, setPicking] = useState(false);
   const [pickHint, setPickHint] = useState<string | null>(null);
   const [formError, setFormError] = useState<string | null>(null);
+  
   const nameRef = useRef<HTMLInputElement>(null);
   const demoData = useConfigStore((s) => s.demoData);
 
@@ -420,8 +485,7 @@ function AddProjectDialog({
   }, []);
 
   const handleBrowse = useCallback(async () => {
-    setPicking(true);
-    setPickHint(null);
+    setPicking(true); setPickHint(null);
     try {
       if (isTauri()) {
         const folder = await tauriInvoke<string | null>("pick_folder");
@@ -429,19 +493,15 @@ function AddProjectDialog({
         return;
       }
       const picked = await pickFolderViaBackend();
-      if (picked.path) {
-        setRootPath(picked.path);
-      } else if (picked.unavailable) {
-        setPickHint("No folder dialog on this machine — paste the path.");
-      } else if (picked.error) {
-        setPickHint(`Folder dialog failed: ${picked.error}`);
-      }
+      if (picked.path) setRootPath(picked.path);
+      else if (picked.unavailable) setPickHint("No folder dialog — paste the path.");
+      else if (picked.error) setPickHint(`Dialog failed: ${picked.error}`);
     } catch (cause) {
-      setPickHint(`Folder dialog failed: ${cause instanceof Error ? cause.message : String(cause)}`);
-    } finally {
-      setPicking(false);
-    }
+      setPickHint(`Dialog failed: ${cause instanceof Error ? cause.message : String(cause)}`);
+    } finally { setPicking(false); }
   }, []);
+
+  const createProject = useCreateProject();
 
   const submit = useCallback(() => {
     if (name.trim().length === 0 || rootPath.trim().length === 0 || createProject.isPending) return;
@@ -466,116 +526,54 @@ function AddProjectDialog({
     );
   }, [name, rootPath, createProject, onClose, onCreated]);
 
-  const is = {
-    background: styles.inputBg,
-    borderColor: styles.inputBorder,
-    color: styles.text,
-  } as const;
+  const is = { background: styles.inputBg, borderColor: styles.inputBorder, color: styles.text } as const;
 
   return (
-    <div
-      className="fixed inset-0 z-50 grid place-items-center"
-      style={{ background: "rgba(0,0,0,0.55)" }}
-      onClick={onClose}
-    >
+    <div className="fixed inset-0 z-50 grid place-items-center" style={{ background: "rgba(0,0,0,0.55)" }} onClick={onClose}>
       <div
         className="w-[min(440px,90vw)] rounded-[24px] border-[1.5px] p-5"
-        style={{
-          background: styles.card,
-          borderColor: styles.borderStrong,
-          boxShadow: styles.bentoShadow,
-        }}
+        style={{ background: styles.card, borderColor: styles.borderStrong, boxShadow: styles.bentoShadow }}
         onClick={(e) => e.stopPropagation()}
-        role="dialog"
-        aria-modal="true"
-        aria-label="Add a new project"
+        role="dialog" aria-modal="true" aria-label="Add a new project"
       >
-        <h3 className="text-[15px] font-black tracking-tight mb-4" style={{ color: styles.text }}>
-          Add New Project
-        </h3>
+        <h3 className="text-[15px] font-black tracking-tight mb-4" style={{ color: styles.text }}>Add New Project</h3>
         <div className="flex flex-col gap-3.5">
           <div>
-            <label
-              className="mb-1.5 block text-[11px] font-bold uppercase tracking-widest"
-              style={{ color: styles.textTertiary }}
-            >
-              Project Name
-            </label>
-            <input
-              ref={nameRef}
-              value={name}
-              onChange={(e) => setName(e.target.value)}
-              onKeyDown={(e) => e.key === "Enter" && submit()}
+            <label className="mb-1.5 block text-[11px] font-bold uppercase tracking-widest" style={{ color: styles.textTertiary }}>Project Name</label>
+            <input ref={nameRef} value={name} onChange={(e) => setName(e.target.value)}
+              onKeyDown={(e) => e.key === "Enter" && void submit()}
               placeholder="my-awesome-project"
-              className="h-12 w-full rounded-[14px] border-[1.5px] px-4 text-[13px] outline-none transition-colors"
-              style={is}
-              onFocus={(e) => (e.currentTarget.style.borderColor = styles.inputFocusBorder)}
-              onBlur={(e) => (e.currentTarget.style.borderColor = styles.inputBorder)}
-            />
+              className="h-12 w-full rounded-[14px] border-[1.5px] px-4 text-[13px] outline-none"
+              style={is} />
           </div>
           <div>
-            <label
-              className="mb-1.5 block text-[11px] font-bold uppercase tracking-widest"
-              style={{ color: styles.textTertiary }}
-            >
-              Folder
-            </label>
+            <label className="mb-1.5 block text-[11px] font-bold uppercase tracking-widest" style={{ color: styles.textTertiary }}>Folder</label>
             <div className="flex gap-2">
-              <input
-                value={rootPath}
-                onChange={(e) => setRootPath(e.target.value)}
-                onKeyDown={(e) => e.key === "Enter" && submit()}
+              <input value={rootPath} onChange={(e) => setRootPath(e.target.value)}
+                onKeyDown={(e) => e.key === "Enter" && void submit()}
                 placeholder="/path/to/project"
-                className="h-12 min-w-0 flex-1 rounded-[14px] border-[1.5px] px-4 font-mono text-[12px] outline-none transition-colors"
-                style={is}
-                onFocus={(e) => (e.currentTarget.style.borderColor = styles.inputFocusBorder)}
-                onBlur={(e) => (e.currentTarget.style.borderColor = styles.inputBorder)}
-              />
+                className="h-12 min-w-0 flex-1 rounded-[14px] border-[1.5px] px-4 font-mono text-[12px] outline-none"
+                style={is} />
               {isTauri() || !demoData ? (
-                <button
-                  onClick={() => void handleBrowse()}
-                  disabled={picking}
-                  title="Browse for a folder"
-                  className="h-12 shrink-0 flex items-center justify-center gap-1.5 rounded-[14px] border-[1.5px] px-3.5 text-[12px] font-bold transition-all disabled:opacity-60"
-                  style={{ background: styles.subtle, borderColor: styles.border, color: styles.textSecondary }}
-                  onMouseEnter={(e) => (e.currentTarget.style.background = styles.subtleHover)}
-                  onMouseLeave={(e) => (e.currentTarget.style.background = styles.subtle)}
-                >
-                  <FolderOpen size={13} />
-                  Browse
+                <button onClick={() => void handleBrowse()} disabled={picking}
+                  className="h-12 shrink-0 flex items-center gap-1.5 rounded-[14px] border-[1.5px] px-3.5 text-[12px] font-bold disabled:opacity-60"
+                  style={{ background: styles.subtle, borderColor: styles.border, color: styles.textSecondary }}>
+                  <FolderOpen size={13} /> Browse
                 </button>
               ) : null}
             </div>
-            {pickHint && (
-              <p className="mt-1.5 text-[11px]" style={{ color: styles.textTertiary }}>
-                {pickHint}
-              </p>
-            )}
+            {pickHint && <p className="mt-1.5 text-[11px]" style={{ color: styles.textTertiary }}>{pickHint}</p>}
           </div>
           {formError && (
-            <p
-              role="alert"
-              className="rounded-[12px] border px-3 py-2 text-[12px]"
-              style={{
-                borderColor: withAlpha(SEMANTIC_COLORS.danger, 0.3),
-                background: withAlpha(SEMANTIC_COLORS.danger, 0.08),
-                color: SEMANTIC_COLORS.danger,
-              }}
-            >
+            <p role="alert" className="rounded-[12px] border px-3 py-2 text-[12px]"
+              style={{ borderColor: withAlpha(SEMANTIC_COLORS.danger, 0.3), background: withAlpha(SEMANTIC_COLORS.danger, 0.08), color: SEMANTIC_COLORS.danger }}>
               {formError}
             </p>
           )}
-          <button
-            onClick={submit}
+          <button onClick={() => void submit()}
             disabled={name.trim().length === 0 || rootPath.trim().length === 0 || createProject.isPending}
             className="h-12 w-full rounded-full font-black text-[14px] tracking-[-0.01em] transition-all hover:scale-[1.02] active:scale-[0.98] disabled:opacity-50 disabled:hover:scale-100"
-            style={{
-              background: `linear-gradient(135deg, ${styles.accent}, ${styles.accent})`,
-              color: styles.accentText,
-              border: `1.5px solid ${styles.accent}`,
-              boxShadow: styles.bentoShadowSm,
-            }}
-          >
+            style={{ background: styles.accent, color: styles.accentText, border: `1.5px solid ${styles.accent}`, boxShadow: `0 4px 16px ${withAlpha(styles.accent, 0.25)}` }}>
             {createProject.isPending ? "Creating…" : "Create Project"}
           </button>
         </div>
