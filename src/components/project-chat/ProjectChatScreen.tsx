@@ -1,7 +1,6 @@
 import {
   useCallback,
   useEffect,
-  useMemo,
   useRef,
   type KeyboardEvent,
   type MouseEvent as ReactMouseEvent,
@@ -9,7 +8,7 @@ import {
 import { motion } from "framer-motion";
 import { ChevronRight, Files } from "lucide-react";
 import { Link, useParams } from "react-router";
-import { useProjectTree, useProjects } from "../../hooks/use-projects";
+import { useProjects } from "../../hooks/use-projects";
 import { ease } from "../../lib/motion";
 import { useProjectChatStore } from "../../lib/project-chat-store";
 import { useThemeStyles } from "../../lib/use-theme-styles";
@@ -17,7 +16,6 @@ import { AgentChatPanel } from "./AgentChatPanel";
 import { CodeView } from "./CodeView";
 import { ExperimentalLayout } from "./ExperimentalLayout";
 import { LeftSidebar } from "./LeftSidebar";
-import { TopBar, flattenTreeFiles } from "./TopBar";
 
 /**
  * Project-chat screen (M3 + round-14 demo parity): the demo's FULL TopBar
@@ -153,9 +151,7 @@ export default function ProjectChatScreen() {
   const projectsQuery = useProjects();
   const project = projectsQuery.data?.find((p) => p.id === id) ?? null;
 
-  // Real tree feeds both the explorer and the TopBar file search.
-  const treeQuery = useProjectTree(id ?? null);
-  const files = useMemo(() => flattenTreeFiles(treeQuery.data?.tree ?? []), [treeQuery.data]);
+
 
   const sidebarOpen = useProjectChatStore((s) => s.sidebarOpen);
   const codeVisible = useProjectChatStore((s) => s.codeVisible);
@@ -163,11 +159,7 @@ export default function ProjectChatScreen() {
   const experimentalMode = useProjectChatStore((s) => s.experimentalMode);
   const setSidebarOpen = useProjectChatStore((s) => s.setSidebarOpen);
 
-  const pickFile = useCallback((path: string) => {
-    const s = useProjectChatStore.getState();
-    s.selectFile(path);
-    s.setCodeVisible(true);
-  }, []);
+
 
   // getState() keeps every mousemove delta fresh without re-baselining closures.
   const handleSidebarResize = useCallback((delta: number) => {
@@ -216,13 +208,12 @@ export default function ProjectChatScreen() {
       transition={{ duration: 0.3, ease }}
     >
       {/* Demo TopBar (round-14 parity): hamburger menu + toggles */}
-      <TopBar onPickFile={pickFile} files={files} />
 
       {experimentalMode ? (
         <ExperimentalLayout project={project} />
       ) : (
         <div
-          className={`flex-1 flex min-h-0 ${onlyChat ? "justify-center items-center" : ""} overflow-hidden`}
+          className="flex-1 flex min-h-0 overflow-hidden"
         >
           {!onlyChat &&
             (sidebarOpen ? (
@@ -244,8 +235,8 @@ export default function ProjectChatScreen() {
           )}
 
           <div
-            className="shrink-0 overflow-hidden rounded-2xl"
-            style={{ width: chatWidth, maxWidth: onlyChat ? "90%" : undefined }}
+            className={onlyChat ? "flex-1 min-w-0 overflow-hidden rounded-2xl" : "shrink-0 overflow-hidden rounded-2xl"}
+            style={onlyChat ? undefined : { width: chatWidth }}
           >
             <AgentChatPanel projectId={project.id} project={project} />
           </div>

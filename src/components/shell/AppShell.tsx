@@ -1,5 +1,7 @@
 import { Outlet, useLocation } from "react-router";
+import { Menu } from "lucide-react";
 import { useProjectChatStore } from "../../lib/project-chat-store";
+import { useThemeStyles } from "../../lib/use-theme-styles";
 import { Sidebar } from "./Sidebar";
 
 /**
@@ -16,9 +18,12 @@ import { Sidebar } from "./Sidebar";
 export function AppShell() {
   const { pathname } = useLocation();
   const appSidebarVisible = useProjectChatStore((s) => s.appSidebarVisible);
-  // /project/:id/chat hides the app sidebar unless the user toggled it on.
+  // /project/:id/chat hides the app sidebar unless the user toggled it on
+  // (the hamburger lives ON the sidebar itself per round-22 owner direction).
   const isChatRoute = /^\/project\/[^/]+\/chat\/?$/.test(pathname);
   const showSidebar = !isChatRoute || appSidebarVisible;
+  // On chat routes when the sidebar is hidden, show a floating hamburger to bring it back.
+  const showFloatingHamburger = isChatRoute && !appSidebarVisible;
 
   return (
     <div className="relative h-screen w-full overflow-hidden" style={{ backgroundColor: "var(--ac-bg)" }}>
@@ -54,7 +59,7 @@ export function AppShell() {
       <div
         className={`relative z-10 flex h-full ${isChatRoute ? "gap-[3px] p-[2px]" : "gap-3 p-3 md:p-4"}`}
       >
-        {showSidebar && <Sidebar />}
+        {showFloatingHamburger && <FloatingSidebarToggle />}        {showSidebar && <Sidebar />}
         {/* Chat route = borderless tight; other routes = transparent (cards float) */}
         <main
           className={
@@ -67,5 +72,27 @@ export function AppShell() {
         </main>
       </div>
     </div>
+  );
+}
+
+/** Floating hamburger shown on chat routes when the sidebar is hidden. */
+function FloatingSidebarToggle() {
+  const styles = useThemeStyles();
+  const setAppSidebarVisible = useProjectChatStore((s) => s.setAppSidebarVisible);
+  return (
+    <button
+      onClick={() => setAppSidebarVisible(true)}
+      aria-label="Show sidebar"
+      title="Show sidebar"
+      className="fixed top-3 left-2 z-50 w-9 h-9 rounded-[10px] grid place-items-center transition-colors"
+      style={{
+        background: styles.card,
+        color: styles.textSecondary,
+        border: `1.5px solid ${styles.border}`,
+        boxShadow: styles.softShadow,
+      }}
+    >
+      <Menu size={15} />
+    </button>
   );
 }
