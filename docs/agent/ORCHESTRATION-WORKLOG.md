@@ -251,3 +251,21 @@ Work Log:
 
 Stage Summary:
 - Owner can now run ACUTE-CODE on his PC: copy ACUTE.bat into any folder → double-click → clone (PAT once) → everything automatic, updates+restarts on later double-clicks, credentials/sessions persist, errors visible+copyable. Dev-stack scope (packaged exe = later milestone, ADR-0003). Sandbox wipe recoverable from repo alone (SANDBOX-RESTORE + worklog snapshot). Open: CI confirm on 8d504b8, owner's first real Windows run, secrets rotation when he chooses.
+
+---
+Task ID: L1–L7 (round-11 session)
+Agent: orchestrator (Z.ai Code) — all inline
+Task: Fix the Windows .bat failure; redesign launcher per owner direction (Python rich-terminal workhorse + tiny .bat coordinator, credentials.txt, auto-install, clean folder layout)
+
+Work Log:
+- ROOT CAUSE of owner's failure verified with hard evidence: round-10 ACUTE.bat shipped LF-only (zero CRs) — cmd.exe ate chars (echo→cho) and broke labels; whole script disintegrated. Memory lesson #16 recorded
+- Built launcher/acute_launcher.py (~800 lines, stdlib baseline): rich UI (panels/spinners/status tables, auto-install rich with consent, plain fallback, crash-proof fail()), credentials.txt (placeholder rejection, lengths-only logging), toolchain check + winget auto-install (git/Node incl. old-version detection), pnpm via corepack → .acute/bin, per-command git credential store (URL-line format — hit and fixed the wrong-format bug: store file must be https://user:token@host lines, not the approve-stdin format; lesson #17), first-run clone into ./ACUTE-CODE (owner's clean layout), update flow (stop servers → pull --ff-only → install → rebuild), .env write-once, OpenRouter key → Credential Manager/win+~/.acute/linux, launcher SELF-UPDATE (sha256 vs repo copy), port pre-flight, dev:full launch with key env, status/update/start modes
+- launcher/ACUTE.bat regenerated via python with forced \r\n; `file` confirms "DOS batch file … with CRLF line terminators"; tiny coordinator (py -3 → python → winget Python offer → pause)
+- launcher/acute.sh + credentials.example.txt + README.md (owner setup guide); deleted broken root ACUTE.bat/acute.sh; __pycache__ ignored
+- Caught during testing (all fixed same session): rich Panel(box="double") crash (lesson #18), placeholder creds passing emptiness check, rich __version__ probe misdiagnosis (lesson #19), credential-store format bug
+- Full Linux verification: no-creds instructions panel; placeholder rejection; scratch-folder first run (clone silent-auth, 8s total); behind-origin updates (8d504b8→fe38f41, fe38f41→b6b5d93 with 'launcher is current' self-update check); status panel; live start (sidecar ok + UI 200 in 4s, provider ● end-to-end); failure path (red panel + clean exit); acute.sh wrapper; pnpm verify green (175+6); secret scan of launcher/ = prefixes/placeholders only
+- Docs: LOCAL-PC-RUNNER.md rewritten around launcher/; HANDOFF §4/§9 round-11; AGENT-MEMORY #16–#20
+- Commit b6b5d93 pushed; CI run 32624903291 SUCCESS; repo verified private; ntfy delivered
+
+Stage Summary:
+- Owner path is now: 3 files from launcher/ + credentials.txt rename/paste → double-click ACUTE.bat → everything automatic (auto-install, clone, update+restart, self-update, copyable errors). Node runner (scripts/acute-desktop.mjs) kept as advanced headless path. Open: owner's first real Windows double-click (bat itself untestable here — minimized via tiny CRLF-verified design), then MVP review + Phase 3 on approval.
