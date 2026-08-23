@@ -305,7 +305,7 @@ function ProjectSection({ collapsed }: { collapsed: boolean }) {
               />
               {/* Sessions underneath */}
               <AnimatePresence initial={false}>
-                {isExpanded && projSessions.length > 0 && (
+                {isExpanded && (
                   <motion.div
                     initial={{ height: 0, opacity: 0 }}
                     animate={{ height: "auto", opacity: 1 }}
@@ -314,10 +314,10 @@ function ProjectSection({ collapsed }: { collapsed: boolean }) {
                     className="overflow-hidden"
                   >
                     <div className="ml-5 pl-3 border-l-[1.5px] space-y-0.5 py-1" style={{ borderColor: styles.border }}>
-                      {projSessions.slice(0, 6).map((session) => (
+                      {projSessions.slice(0, 8).map((session) => (
                         <button
                           key={session.id}
-                          onClick={() => navigate(`/project/${project.id}/chat`)}
+                          onClick={() => navigate(`/project/${project.id}/chat?session=${session.id}`)}
                           className="w-full h-7 flex items-center gap-2 px-2 rounded-[8px] text-[11px] font-medium transition-colors truncate"
                           style={{ color: styles.textTertiary }}
                           onMouseEnter={(e) => {
@@ -334,11 +334,13 @@ function ProjectSection({ collapsed }: { collapsed: boolean }) {
                           <span className="truncate">{session.title ?? "Untitled"}</span>
                         </button>
                       ))}
-                      {projSessions.length > 6 && (
+                      {projSessions.length > 8 && (
                         <span className="block px-2 py-1 text-[10px]" style={{ color: styles.textTertiary }}>
-                          +{projSessions.length - 6} more
+                          +{projSessions.length - 8} more
                         </span>
                       )}
+                      {/* New Session button — always at the bottom of each project's sessions */}
+                      <NewSessionButton projectId={project.id} projectName={project.name} />
                     </div>
                   </motion.div>
                 )}
@@ -372,7 +374,6 @@ function ProjectRow({
   project: Project; active: boolean; expanded: boolean; sessionCount: number; onToggle: () => void;
 }) {
   const styles = useThemeStyles();
-  const navigate = useNavigate();
   const [hovered, setHovered] = useState(false);
   const [showDelete, setShowDelete] = useState(false);
 
@@ -380,9 +381,8 @@ function ProjectRow({
     <div
       className="group relative h-11 flex items-center gap-2.5 rounded-[12px] px-2 cursor-pointer transition-all duration-200"
       style={{
-        border: active ? `1.5px solid ${styles.accent}` : "1.5px solid transparent",
-        background: active ? styles.card : hovered ? styles.subtleHover : "transparent",
-        boxShadow: active ? `0 0 0 2px ${withAlpha(styles.accent, 0.12)}` : "none",
+        border: active ? `1.5px solid ${withAlpha(styles.accent, 0.4)}` : "1.5px solid transparent",
+        background: active ? withAlpha(styles.accent, 0.06) : hovered ? styles.subtleHover : "transparent",
       }}
       onMouseEnter={() => setHovered(true)}
       onMouseLeave={() => { setHovered(false); setShowDelete(false); }}
@@ -391,7 +391,7 @@ function ProjectRow({
       tabIndex={0}
       onKeyDown={(e) => { if (e.key === "Enter") onToggle(); }}
       aria-expanded={expanded}
-      aria-label={`Project ${project.name}`}
+      aria-label={`Project ${project.name} — click to ${expanded ? "collapse" : "expand"} sessions`}
     >
       <span
         className="w-8 h-8 shrink-0 rounded-[10px] grid place-items-center font-black text-[13px]"
@@ -419,14 +419,6 @@ function ProjectRow({
         <ChevronsRight size={12} style={{ color: styles.textTertiary }} />
       </motion.span>
       <DeleteProjectButton projectId={project.id} projectName={project.name} visible={hovered || showDelete} />
-      {/* Double-click opens the chat; single click toggles expand */}
-      <button
-        onClick={(e) => { e.stopPropagation(); navigate(`/project/${project.id}/chat`); }}
-        onDoubleClick={(e) => { e.stopPropagation(); navigate(`/project/${project.id}/chat`); }}
-        className="absolute inset-0 z-0 rounded-[12px]"
-        aria-label={`Open ${project.name} chat`}
-        style={{ background: "transparent", cursor: "pointer" }}
-      />
     </div>
   );
 }
@@ -579,5 +571,61 @@ function AddProjectDialog({
         </div>
       </div>
     </div>
+  );
+}
+
+function NewSessionButton({ projectId, projectName }: { projectId: string; projectName: string }) {
+  const styles = useThemeStyles();
+  const navigate = useNavigate();
+  const [creating, setCreating] = useState(false);
+  const [hovered, setHovered] = useState(false);
+
+  const createSession = async () => {
+    if (creating) return;
+    setCreating(true);
+    try {
+      const { baseUrl, token } = useConfigStore.getState();
+      // Get the default agent (first non-template)
+      const agentsRes = await fetch(`${baseUrl}/api/v1/agents?includeTemplates=false`, {
+        headers: token ? { Authorization: `Bearer ${token}` } : {},
+      });
+      const agentsBody = await agentsRes.json();
+      const agentId = agentsBody.agents?.[0]?.id;
+      if (!agentId) return;
+
+      const res = await fetch(`${baseUrl}/api/v1/sessions`, {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          ...(token ? { Authorization: `Bearer ${token}` } : {}),
+        },
+        body: JSON.stringify({ mode: "single", agentId, projectId, title: `New chat · ${projectName}` }),
+      });
+      const body = await res.json();
+      if (res.ok && body.id) {
+        navigate(`/project/${projectId}/chat?session=${body.id}`);
+      }
+    } catch {
+      /* silently fail — user can try again */
+    } finally {
+      setCreating(false);
+    }
+  };
+
+  return (
+    <button
+      onClick={() => void createSession()}
+      disabled={creating}
+      className="w-full h-7 flex items-center gap-2 px-2 rounded-[8px] text-[11px] font-bold transition-colors"
+      style={{ color: hovered ? styles.accent : styles.textTertiary }}
+      onMouseEnter={() => setHovered(true)}
+      onMouseLeave={() => setHovered(false)}
+      onMouseOver={(e) => { e.currentTarget.style.background = withAlpha(styles.accent, 0.08); }}
+      onMouseOut={(e) => { e.currentTarget.style.background = "transparent"; }}
+      aria-label={`Start new session in ${projectName}`}
+    >
+      <Plus size={10} strokeWidth={2.5} className="shrink-0" />
+      <span>{creating ? "Creating…" : "New Session"}</span>
+    </button>
   );
 }

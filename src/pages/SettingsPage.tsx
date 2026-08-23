@@ -42,28 +42,37 @@ export function SettingsPage() {
 
   return (
     <div className="flex h-full flex-col">
-      <div className="shrink-0 border-b-[1.5px] px-5 py-3.5" style={{ borderColor: "var(--ac-border)" }}>
-        <h1 className="text-[15px] font-bold tracking-tight" style={{ color: styles.text }}>
+      <div className="shrink-0 border-b-[1.5px] px-5 md:px-8 py-4" style={{ borderColor: styles.border }}>
+        <p
+          className="text-[11px] font-bold uppercase tracking-[0.18em] mb-1"
+          style={{ color: styles.textTertiary }}
+        >
+          Configuration
+        </p>
+        <h1 className="text-[22px] font-black tracking-tight" style={{ color: styles.text }}>
           Settings
         </h1>
-        <p className="mt-0.5 text-[11px]" style={{ color: styles.textTertiary }}>
-          Everything configurable lives here — no scattered chrome.
-        </p>
-        <div className="mt-3 flex flex-wrap gap-1.5">
+        <div className="mt-3.5 flex flex-wrap gap-1.5">
           {TABS.map(({ id, label, icon: Icon }) => {
             const active = id === tab;
             return (
               <button
                 key={id}
                 onClick={() => setParams({ tab: id }, { replace: true })}
-                className="flex cursor-pointer items-center gap-1.5 rounded-lg border-[1.5px] px-3 py-1.5 text-[12px] font-semibold transition-colors duration-200"
+                className="flex cursor-pointer items-center gap-1.5 rounded-[12px] h-9 px-3.5 text-[12px] font-bold transition-all duration-200"
                 style={{
-                  backgroundColor: active ? withAlpha(styles.accent, 0.1) : "transparent",
-                  borderColor: active ? withAlpha(styles.accent, 0.3) : styles.border,
-                  color: active ? styles.accent : styles.textSecondary,
+                  backgroundColor: active ? styles.accent : "transparent",
+                  color: active ? styles.accentText : styles.textSecondary,
+                  boxShadow: active ? `0 2px 8px ${withAlpha(styles.accent, 0.3)}` : "none",
+                }}
+                onMouseEnter={(e) => {
+                  if (!active) e.currentTarget.style.background = styles.subtleHover;
+                }}
+                onMouseLeave={(e) => {
+                  if (!active) e.currentTarget.style.background = "transparent";
                 }}
               >
-                <Icon size={13} />
+                <Icon size={14} strokeWidth={2} />
                 {label}
               </button>
             );
@@ -71,7 +80,7 @@ export function SettingsPage() {
         </div>
       </div>
 
-      <div className="min-h-0 flex-1 overflow-y-auto p-4 md:p-5">
+      <div className="min-h-0 flex-1 overflow-y-auto px-5 md:px-8 py-5">
         {tab === "appearance" && <AppearanceTab />}
         {tab === "agents" && <AgentsScreen embedded />}
         {tab === "api" && <ModelsProvidersTab />}

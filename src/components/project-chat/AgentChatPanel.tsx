@@ -178,7 +178,7 @@ function UserMessage({ content }: { content: string }) {
           <CopyButton text={content} />
         </div>
         <div
-          className="rounded-2xl rounded-br-md px-3.5 py-2.5 text-[13px] leading-[1.5]"
+          className="rounded-[16px] rounded-br-md px-3.5 py-2.5 text-[13px] leading-[1.5]"
           style={{ background: styles.accent, color: styles.accentText }}
         >
           {content}
@@ -255,7 +255,7 @@ function AiMessage({
   return (
     <motion.div variants={msgVariants} initial="initial" animate="animate" className="group">
       <div
-        className="rounded-2xl px-3.5 py-3 text-[13px] leading-[1.6]"
+        className="rounded-[16px] px-3.5 py-3 text-[13px] leading-[1.6]"
         style={{ background: styles.card, color: styles.text }}
       >
         <RichText content={content} />
@@ -763,13 +763,13 @@ export function AgentChatPanel({
 
   return (
     <div
-      className="flex flex-col h-full min-w-0 rounded-2xl overflow-hidden"
+      className="flex flex-col h-full min-w-0 rounded-[16px] overflow-hidden"
       style={{ backgroundColor: styles.card }}
     >
-      {/* Panel header: accent chip · agent picker (round-15) · status chip */}
+      {/* Panel header — compact, clean */}
       <div
-        className="shrink-0 h-11 px-3 border-b flex items-center gap-2"
-        style={{ borderColor: styles.border }}
+        className="shrink-0 h-10 px-3 border-b flex items-center gap-2"
+        style={{ borderColor: styles.borderSubtle }}
       >
         <div
           className="w-6 h-6 rounded-lg grid place-items-center shrink-0"
@@ -1007,7 +1007,7 @@ export function AgentChatPanel({
       {sendError && lastSent ? (
         <div
           role="alert"
-          className="mx-3 mb-2 flex shrink-0 items-start gap-2 rounded-xl border px-3 py-2 text-[12px]"
+          className="mx-3 mb-1.5 flex shrink-0 items-start gap-2 rounded-[12px] border px-3 py-2 text-[12px]"
           style={{
             borderColor: withAlpha(SEMANTIC_COLORS.danger, 0.4),
             color: SEMANTIC_COLORS.danger,
@@ -1025,7 +1025,7 @@ export function AgentChatPanel({
       ) : null}
 
       {/* Composer */}
-      <div className="shrink-0 p-3 border-t" style={{ borderColor: styles.border }}>
+      <div className="shrink-0 p-2.5 border-t" style={{ borderColor: styles.borderSubtle }}>
         <div
           className="flex items-center gap-2 p-1.5 rounded-2xl border"
           style={{ background: styles.bg, borderColor: styles.border }}
