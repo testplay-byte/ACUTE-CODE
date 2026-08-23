@@ -537,3 +537,19 @@ Work Log:
 
 Stage Summary:
 - The dashboard now looks like the wizard — same design DNA, same quality bar. The owner's "ugly, looks bad" verdict addressed: solid accents replace tinted soup, cards have shadows and float on the themed background, typography uses font-black with extreme contrast, labels are uppercase tracked. Next: owner re-test on Windows; chat window customizability improvements queued.
+
+---
+Task ID: R22 (sidebar redesign + chat cleanup)
+Agent: orchestrator (Z.ai Code) — inline
+Task: Owner round-22: sidebar redesign (distinct color, separated sections, expandable projects, hamburger on sidebar), TopBar removal, /sessions route deletion, chat-only fix
+
+Work Log:
+- Sidebar: distinct surface (styles.subtle — differentiable from main bg); hamburger ON sidebar top-left (toggles visibility on chat routes; floating hamburger when sidebar hidden); nav (Dashboard/Usage) SEPARATED from Projects by border divider; projects EXPANDABLE (click → sessions underneath with animated expand, session count pill, auto-expand active project, per-project localStorage persistence); Add button (compact pill); Add Project dialog uses useCreateProject hook (fixture-backend compatible); collapsed rail with icon tiles
+- AppShell: floating hamburger (fixed top-left, z-50) when sidebar hidden on chat routes
+- Chat screen: TopBar COMPLETELY removed (owner: "makes the whole user experience bad"); chat-only mode now fills full width (flex-1, not fixed chatWidth with centering — functional and full-screen); explorer panel header shows project name + Code2 toggle + minimize buttons; /sessions route REMOVED from App.tsx (owner: "completely remove it — there is no separate session window")
+- Tests: 183 pass (button names updated to exact /^Add$/i, rootPath assertion removed from DOM, delete test uses waitFor, sessions route removal)
+- Browser-verified: sidebar 4/4 VLM (distinct color ✓, separated sections ✓, expandable ✓, Add button ✓); chat 5/6 (3-panel ✓, no topbar ✓, chat-only fills ✓, sidebar toggle ✓, no bugs ✓ — hamburger position noted)
+- Merged 7b8c486 to main; CI 32656687440 SUCCESS; ntfy delivered
+
+Stage Summary:
+- Owner can now: expand projects in the sidebar to see sessions, toggle code/explorer from the explorer panel header, use chat-only full-screen mode, and the /sessions route is gone. Settings pages (Appearance/Agents/Models/Advanced) are the next round's focus.
