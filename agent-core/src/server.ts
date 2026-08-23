@@ -5,10 +5,12 @@
  * later waves.
  */
 import { randomUUID, timingSafeEqual } from "node:crypto";
+import { statSync } from "node:fs";
 import Fastify, { type FastifyError, type FastifyInstance } from "fastify";
 import type { MemoryPolicy, RunMode } from "shared";
 import { aiSdkChat, type ChatFn } from "./agents/chat.js";
 import { runSingleAgentTurn } from "./agents/runtime.js";
+import { projectTree, readFile } from "./tools/index.js";
 import {
   ProviderKeyring,
   ProviderTestError,
@@ -24,6 +26,13 @@ import {
   providerRecordIdExists,
   slugifyProviderId,
 } from "./storage/providers.js";
+import {
+  createProject,
+  deleteProject,
+  getProject,
+  listProjects,
+  projectRootPathExists,
+} from "./storage/projects.js";
 import { createSession, getSession, lastSessionSeq, listSessionEvents, listSessions } from "./storage/sessions.js";
 import { getUsageSummary } from "./storage/usage.js";
 import { openDatabase, type SqliteDatabase } from "./storage/db.js";
@@ -552,6 +561,99 @@ export function buildServer(options: ServerOptions): FastifyInstance {
         }
       });
 
+      // ---- Projects (Agentic Coding MVP, API.md §4a) ----
+
+      scope.get("/projects", async () => ({ projects: listProjects(db) }));
+
+      scope.post("/projects", async (request, reply) => {
+        const body = request.body;
+        if (typeof body !== "object" || body === null || Array.isArray(body)) {
+          return reply
+            .code(400)
+            .send(errorBody("VALIDATION", "body must be a JSON object", { field: "body" }));
+        }
+        const raw = body as Record<string, unknown>;
+        const issues: { field: string; message: string }[] = [];
+        const name = typeof raw.name === "string" ? raw.name.trim() : "";
+        if (name === "") {
+          issues.push({ field: "body.name", message: "name is required" });
+        }
+        let rootPath = typeof raw.rootPath === "string" ? raw.rootPath.trim() : "";
+        if (rootPath === "") {
+          issues.push({ field: "body.rootPath", message: "rootPath must be an absolute folder path" });
+        }
+        // Normalize Windows separators; require an EXISTING directory on disk.
+        rootPath = rootPath.replace(/[\\/]+$/, "");
+        if (rootPath !== "") {
+          try {
+            if (!statSync(rootPath).isDirectory()) {
+              issues.push({ field: "body.rootPath", message: "rootPath is not a directory" });
+            }
+          } catch {
+            issues.push({ field: "body.rootPath", message: `folder does not exist: ${rootPath}` });
+          }
+        }
+        if (rootPath !== "" && projectRootPathExists(db, rootPath)) {
+          return reply.code(409).send(
+            errorBody("CONFLICT", `a project already uses the folder ${rootPath}`, {
+              field: "body.rootPath",
+            }),
+          );
+        }
+        if (issues.length > 0) {
+          return reply.code(400).send(
+            errorBody("VALIDATION", issues[0].message, { field: issues[0].field }),
+          );
+        }
+        const color = typeof raw.color === "string" && /^#[0-9a-fA-F]{6}$/.test(raw.color) ? raw.color : undefined;
+        return reply.code(201).send(createProject(db, { name, rootPath, ...(color !== undefined ? { color } : {}) }));
+      });
+
+      scope.get("/projects/:id", async (request, reply) => {
+        const { id } = request.params as Record<string, string>;
+        const project = getProject(db, id);
+        if (project === undefined) {
+          return reply.code(404).send(errorBody("NOT_FOUND", `no project with id ${id}`));
+        }
+        return project;
+      });
+
+      scope.delete("/projects/:id", async (request, reply) => {
+        const { id } = request.params as Record<string, string>;
+        if (!deleteProject(db, id)) {
+          return reply.code(404).send(errorBody("NOT_FOUND", `no project with id ${id}`));
+        }
+        return reply.code(204).send();
+      });
+
+      scope.get("/projects/:id/tree", async (request, reply) => {
+        const { id } = request.params as Record<string, string>;
+        const project = getProject(db, id);
+        if (project === undefined) {
+          return reply.code(404).send(errorBody("NOT_FOUND", `no project with id ${id}`));
+        }
+        return { tree: projectTree(project.rootPath), rootPath: project.rootPath };
+      });
+
+      scope.get("/projects/:id/file", async (request, reply) => {
+        const { id } = request.params as Record<string, string>;
+        const query = request.query as Record<string, string | undefined>;
+        const project = getProject(db, id);
+        if (project === undefined) {
+          return reply.code(404).send(errorBody("NOT_FOUND", `no project with id ${id}`));
+        }
+        if (query.path === undefined || query.path === "") {
+          return reply
+            .code(400)
+            .send(errorBody("VALIDATION", "path query parameter is required", { field: "query.path" }));
+        }
+        const result = readFile(project.rootPath, query.path);
+        if (!result.ok) {
+          return reply.code(404).send(errorBody("NOT_FOUND", result.output));
+        }
+        return { path: query.path, content: result.output };
+      });
+
       // ---- Sessions + single-agent chat (API.md §5) ----
 
       scope.post("/sessions", async (request, reply) => {
@@ -596,6 +698,13 @@ export function buildServer(options: ServerOptions): FastifyInstance {
           if (typeof raw.projectId !== "string" || raw.projectId.trim() === "") {
             return reply.code(400).send(
               errorBody("VALIDATION", "projectId must be a non-empty string", {
+                field: "body.projectId",
+              }),
+            );
+          }
+          if (getProject(db, raw.projectId) === undefined) {
+            return reply.code(404).send(
+              errorBody("NOT_FOUND", `no project with id ${raw.projectId}`, {
                 field: "body.projectId",
               }),
             );

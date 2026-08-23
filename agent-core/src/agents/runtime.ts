@@ -7,11 +7,13 @@
  */
 import type { SessionStatus, UsageRecord } from "shared";
 import { getAgent } from "../storage/agents.js";
+import { getProject } from "../storage/projects.js";
 import type Database from "better-sqlite3";
 import {
   ProviderKeyring,
   resolveProvider,
 } from "../providers/registry.js";
+import { buildProjectTools } from "../tools/index.js";
 import {
   appendSessionEvent,
   getSession,
@@ -132,6 +134,30 @@ export async function runSingleAgentTurn(
   // First message flips a queued session to running (API.md §5 semantics).
   if (session.status === "queued") setSessionStatus(db, session.id, "running");
 
+  // Agentic Coding MVP: a session bound to a project hands the model real
+  // file tools sandboxed to that project's root. Every executed tool call is
+  // appended to the event log (audit trail) before the assistant message.
+  const project = session.projectId !== null ? getProject(db, session.projectId) : undefined;
+  if (session.projectId !== null && project === undefined) {
+    return {
+      ok: false,
+      status: 409,
+      code: "CONFLICT",
+      message: `session ${sessionId} references missing project ${session.projectId}`,
+    };
+  }
+  const tools = project !== undefined ? buildProjectTools(project.rootPath) : undefined;
+  const system = project
+    ? [
+        agent.systemPrompt,
+        "",
+        `You are working inside the project "${project.name}" located at "${project.rootPath}".`,
+        "You have file tools (list_dir, read_file, write_file, edit_file). Paths are RELATIVE to the project root.",
+        "Workflow: list_dir → read_file before editing → edit_file for small changes / write_file only for new files or full rewrites.",
+        "After making changes, briefly summarize what you changed and why. If asked to create something, actually create it with the tools.",
+      ].join("\n")
+    : agent.systemPrompt;
+
   appendSessionEvent(db, session.id, {
     type: "message.user",
     agentId: agent.id,
@@ -147,10 +173,11 @@ export async function runSingleAgentTurn(
       provider: { id: provider.id, baseUrl: provider.baseUrl },
       apiKey,
       model: agent.model,
-      system: agent.systemPrompt,
+      system,
       messages,
       temperature: agent.temperature,
       maxTurns: agent.maxTurns,
+      ...(tools !== undefined ? { tools } : {}),
     });
   } catch (error) {
     const normalized = error instanceof Error ? error : new Error(String(error));
@@ -161,6 +188,15 @@ export async function runSingleAgentTurn(
       message: `provider '${provider.id}' call failed for session ${session.id}`,
       details: { providerError: providerErrorDetail(normalized, apiKey) },
     };
+  }
+
+  // Audit trail: one event per executed tool call, in order (ADR-0010 log).
+  for (const call of result.toolCalls) {
+    appendSessionEvent(db, session.id, {
+      type: "tool.use",
+      agentId: agent.id,
+      payload: { role: "tool", toolName: call.name, argsSummary: call.argsSummary, ok: call.ok },
+    });
   }
 
   const assistantEvent = appendSessionEvent(db, session.id, {
