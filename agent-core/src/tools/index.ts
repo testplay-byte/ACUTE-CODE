@@ -9,7 +9,7 @@
  */
 import { mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { isAbsolute, join, posix, sep } from "node:path";
-import type { ToolSet } from "ai";
+import { jsonSchema, type ToolSet } from "ai";
 
 export interface ToolResult {
   ok: boolean;
@@ -189,11 +189,10 @@ export function editFile(root: string, relative: string, oldString: string, newS
 
 type JsonSchemaFreeTool = {
   description: string;
-  inputSchema: {
-    type: "object";
-    properties: Record<string, { type: string; description: string }>;
-    required: string[];
-  };
+  /** AI SDK v7 contract: raw JSON Schema must be wrapped in jsonSchema() so the
+   * SDK gets its validation callables — a bare object fails at generateText
+   * time with "schema is not a function" (found live in the M4 run). */
+  inputSchema: ReturnType<typeof jsonSchema>;
   execute: (input: Record<string, unknown>) => Promise<{ ok: boolean; output: string }>;
 };
 
@@ -202,39 +201,39 @@ export function buildProjectTools(root: string): ToolSet {
     list_dir: {
       description:
         "List the entries of a folder inside the project. Use '' for the project root. Always list before writing to discover structure.",
-      inputSchema: {
+      inputSchema: jsonSchema({
         type: "object",
         properties: {
           path: { type: "string", description: "Folder path relative to the project root ('' = root)" },
         },
         required: [],
-      },
+      }),
       execute: async (input) => listDir(root, typeof input.path === "string" ? input.path : ""),
     },
     read_file: {
       description:
         "Read a text file's content. Path is relative to the project root. Read BEFORE editing so you know the exact current text.",
-      inputSchema: {
+      inputSchema: jsonSchema({
         type: "object",
         properties: {
           path: { type: "string", description: "File path relative to the project root" },
         },
         required: ["path"],
-      },
+      }),
       execute: async (input) =>
         readFile(root, typeof input.path === "string" ? input.path : ""),
     },
     write_file: {
       description:
         "Create a new file OR completely overwrite an existing one with the given full content. For small changes to existing files prefer edit_file.",
-      inputSchema: {
+      inputSchema: jsonSchema({
         type: "object",
         properties: {
           path: { type: "string", description: "File path relative to the project root" },
           content: { type: "string", description: "The complete file content to write" },
         },
         required: ["path", "content"],
-      },
+      }),
       execute: async (input) =>
         writeFile(
           root,
@@ -245,7 +244,7 @@ export function buildProjectTools(root: string): ToolSet {
     edit_file: {
       description:
         "Replace ONE exact occurrence of oldString with newString in an existing file. The oldString must match exactly once — include enough surrounding lines to make it unique.",
-      inputSchema: {
+      inputSchema: jsonSchema({
         type: "object",
         properties: {
           path: { type: "string", description: "File path relative to the project root" },
@@ -253,7 +252,7 @@ export function buildProjectTools(root: string): ToolSet {
           newString: { type: "string", description: "Replacement text" },
         },
         required: ["path", "oldString", "newString"],
-      },
+      }),
       execute: async (input) =>
         editFile(
           root,

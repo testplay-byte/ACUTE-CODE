@@ -2,10 +2,10 @@ import { motion } from "framer-motion";
 import { Activity, FolderOpen, MessageSquare, Zap } from "lucide-react";
 import { useNavigate } from "react-router";
 import { useAgents } from "../../hooks/use-agents";
+import { useProjects } from "../../hooks/use-projects";
 import { useSessions, useUsageSummary } from "../../hooks/use-sessions";
 import { formatTokenCount } from "../../lib/format";
 import { ease, fadeInUp, staggerContainer } from "../../lib/motion";
-import { useProjectsStore } from "../../lib/projects-store";
 import { useThemeStyles } from "../../lib/use-theme-styles";
 import { useGreeting, withAlpha } from "./helpers";
 import { StatCard } from "./StatCard";
@@ -27,7 +27,8 @@ export function DashboardScreen() {
   const sessionsQuery = useSessions();
   const agentsQuery = useAgents(false);
   const usage = useUsageSummary(14);
-  const projectCount = useProjectsStore((s) => s.projects.length);
+  const projectsQuery = useProjects();
+  const projectCount = projectsQuery.data?.length ?? 0;
 
   const sessions = sessionsQuery.data ?? [];
   const agentById = new Map((agentsQuery.data ?? []).map((a) => [a.id, a]));

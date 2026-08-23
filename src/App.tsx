@@ -3,6 +3,7 @@ import { Route, Routes, useNavigate } from "react-router";
 import { AppShell } from "./components/shell/AppShell";
 import { SessionsScreen } from "./components/sessions/SessionsScreen";
 import { ProjectView } from "./components/projects/ProjectView";
+import { ProjectChatScreen } from "./components/project-chat";
 import { DashboardScreen } from "./components/dashboard";
 import { PlaceholderPage } from "./pages/PlaceholderPage";
 import { SettingsPage } from "./pages/SettingsPage";
@@ -64,6 +65,7 @@ export function App() {
         <Route element={<AppShell />}>
           <Route index element={<DashboardScreen />} />
           <Route path="project/:id" element={<ProjectView />} />
+          <Route path="project/:id/chat" element={<ProjectChatScreen />} />
           <Route path="sessions" element={<SessionsScreen />} />
           <Route
             path="usage"

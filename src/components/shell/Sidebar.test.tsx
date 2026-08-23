@@ -4,24 +4,26 @@ import { cleanup, fireEvent, screen, waitFor } from "@testing-library/react";
 import { Route, Routes } from "react-router";
 import { Sidebar } from "./Sidebar";
 import { ProjectView } from "../projects/ProjectView";
-import { useProjectsStore } from "../../lib/projects-store";
+import { getFixtureProjects } from "../../lib/project-fixtures";
 import { renderWithProviders, resetTestState } from "../../test-utils";
 
+// Vitest globals are off, so RTL's auto-cleanup does not hook in — do it by hand.
 afterEach(cleanup);
 
 beforeEach(() => {
+  // demoData defaults true → the sidebar reads the fixture ProjectsBackend
+  // (re-seeded here: ACUTE-CODE + marketing-site).
   resetTestState();
-  useProjectsStore.setState({ projects: [], selectedProjectId: null });
 });
 
-describe("Sidebar projects section", () => {
-  it("creates a project through the Add Project dialog and navigates to its view", async () => {
+describe("Sidebar projects section (fixture ProjectsBackend)", () => {
+  it("creates a project through the Add Project dialog and navigates to its chat", async () => {
     renderWithProviders(
       <>
         <Sidebar />
         <Routes>
           <Route path="/" element={<div>dashboard stub</div>} />
-          <Route path="/project/:id" element={<ProjectView />} />
+          <Route path="/project/:id/chat" element={<div>chat stub</div>} />
         </Routes>
       </>,
     );
@@ -37,32 +39,21 @@ describe("Sidebar projects section", () => {
     });
     fireEvent.click(screen.getByRole("button", { name: /create project/i, hidden: true }));
 
-    // The project view opens with the honest orchestration note.
-    expect(await screen.findByText("Project chat")).toBeTruthy();
-    // The path shows in both the sidebar item and the project view header.
-    expect(screen.getAllByText("~/projects/acute-code").length).toBeGreaterThanOrEqual(2);
+    // Creating a project navigates straight to its chat screen.
+    expect(await screen.findByText("chat stub")).toBeTruthy();
+    // The root path shows in the sidebar item (backend Project.rootPath).
+    expect(await screen.findByText("~/projects/acute-code")).toBeTruthy();
 
-    // The store persisted exactly one project with a slug id and a color.
-    const { projects } = useProjectsStore.getState();
-    expect(projects).toHaveLength(1);
-    expect(projects[0].name).toBe("acute-code");
-    expect(projects[0].id).toMatch(/^p-/);
-    expect(projects[0].color).toMatch(/^#/);
+    // The fixture backend persisted exactly the created project on top of the
+    // seeds, with a backend id and a palette color.
+    const projects = await getFixtureProjects().list();
+    const created = projects.find((p) => p.rootPath === "~/projects/acute-code");
+    expect(created?.name).toBe("acute-code");
+    expect(created?.id).toMatch(/^prj_/);
+    expect(created?.color).toMatch(/^#/);
   });
 
   it("deletes a project from the sidebar list", async () => {
-    useProjectsStore.setState({
-      projects: [
-        {
-          id: "p-test1",
-          name: "demo",
-          path: "~/demo",
-          color: "#FF6B2C",
-          createdAt: new Date().toISOString(),
-        },
-      ],
-      selectedProjectId: null,
-    });
     renderWithProviders(
       <>
         <Sidebar />
@@ -71,10 +62,42 @@ describe("Sidebar projects section", () => {
         </Routes>
       </>,
     );
-    expect(screen.getByText("demo")).toBeTruthy();
-    fireEvent.click(screen.getByRole("button", { name: "Delete demo", hidden: true }));
-    expect(screen.queryByText("demo")).toBeNull();
-    expect(useProjectsStore.getState().projects).toHaveLength(0);
+    // Fixture seeds include marketing-site; deleting it clears list + backend.
+    expect(await screen.findByText("marketing-site")).toBeTruthy();
+    fireEvent.click(
+      screen.getByRole("button", { name: "Delete marketing-site", hidden: true }),
+    );
+    await waitFor(() => expect(screen.queryByText("marketing-site")).toBeNull());
+    const remaining = await getFixtureProjects().list();
+    expect(remaining.some((p) => p.name === "marketing-site")).toBe(false);
+  });
+
+  it("shows the ApiError message inline when the backend rejects a duplicate root path", async () => {
+    renderWithProviders(
+      <>
+        <Sidebar />
+        <Routes>
+          <Route path="/" element={<div>dashboard stub</div>} />
+        </Routes>
+      </>,
+    );
+    fireEvent.click(screen.getByRole("button", { name: /add project/i, hidden: true }));
+    expect(await screen.findByText("Add New Project")).toBeTruthy();
+    fireEvent.change(await screen.findByPlaceholderText("my-awesome-project"), {
+      target: { value: "duplicate" },
+    });
+    // The seeded fixture already uses this rootPath (409 CONFLICT).
+    fireEvent.change(screen.getByPlaceholderText("~/projects/my-awesome-project"), {
+      target: { value: "/home/dev/ACUTE-CODE" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: /create project/i, hidden: true }));
+
+    expect(await screen.findByRole("alert")).toBeTruthy();
+    expect(
+      screen.getByText(/a project already uses the folder \/home\/dev\/ACUTE-CODE/),
+    ).toBeTruthy();
+    // The modal stays open so the path can be fixed.
+    expect(screen.getByText("Add New Project")).toBeTruthy();
   });
 
   it("sidebar exposes Dashboard/Usage/Settings but no Sessions or Agents nav", () => {

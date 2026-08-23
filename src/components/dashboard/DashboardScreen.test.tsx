@@ -49,9 +49,9 @@ describe("DashboardScreen (fixture backend)", () => {
     // settled before reading the stat card values.
     await screen.findByText("Phase 2 report draft");
 
-    // Fixtures seed exactly 2 sessions (Sessions reads "2"); no local
-    // projects exist in the test profile (Projects reads "0"); usage stays
-    // empty in demo mode (no usage log) so tokens/requests read zero.
+    // Fixtures seed exactly 2 sessions and 2 projects (Sessions/Projects
+    // read "2"); usage stays empty in demo mode (no usage log) so
+    // tokens/requests read zero.
     expect(screen.getAllByText("2").length).toBeGreaterThanOrEqual(1);
     expect(screen.getAllByText("0").length).toBeGreaterThanOrEqual(2);
   });

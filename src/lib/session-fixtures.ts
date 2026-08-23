@@ -185,7 +185,7 @@ export function createFixtureSessions(seed: SessionSeed[] = SEED): SessionsBacke
       // Fixture sessions keep the live shape: created "queued", no events yet.
       const session: Session = {
         id: uid("sess"),
-        projectId: null,
+        projectId: input.projectId ?? null,
         agentId: input.agentId,
         mode: "single",
         status: "queued",

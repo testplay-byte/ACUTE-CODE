@@ -1,31 +1,38 @@
-import { useEffect } from "react";
 import { useNavigate, useParams } from "react-router";
 import { MessagesSquare } from "lucide-react";
-import { useProjectsStore } from "../../lib/projects-store";
+import { useProjects } from "../../hooks/use-projects";
 import { useSessions } from "../../hooks/use-sessions";
+import { formatWhen } from "../../lib/format";
 import { useThemeStyles } from "../../lib/use-theme-styles";
 import { bdr, withAlpha } from "../dashboard/helpers";
 
 /**
  * Project view (owner round-8): selecting a sidebar project opens THIS — the
- * project's home inside the main card. Sessions are not project-linked in the
- * backend yet (that lands with the orchestration phase, which also brings the
- * dedicated chat-window flow from the project-chat demo); until then this
- * shows an honest state plus the workspace's recent sessions for context.
+ * project's home inside the main card. The dedicated chat window is live at
+ * /project/:id/chat (M3 project-chat port); this screen remains the project's
+ * landing page with its bound sessions for context.
  */
 export function ProjectView() {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
   const styles = useThemeStyles();
-  const project = useProjectsStore((s) => s.projects.find((p) => p.id === id));
-  const selectProject = useProjectsStore((s) => s.selectProject);
-
-  useEffect(() => {
-    if (id) selectProject(id);
-  }, [id, selectProject]);
+  const projectsQuery = useProjects();
+  const project = id ? projectsQuery.data?.find((p) => p.id === id) : undefined;
 
   const sessionsQuery = useSessions();
-  const sessions = (sessionsQuery.data ?? []).slice(0, 5);
+  // Sessions list has no server-side projectId filter — filter client-side,
+  // newest first (spec F3 project-chat integration).
+  const sessions = (sessionsQuery.data ?? [])
+    .filter((s) => s.projectId === id)
+    .sort((a, b) => (a.updatedAt < b.updatedAt ? 1 : -1));
+
+  if (projectsQuery.isPending) {
+    return (
+      <div className="grid h-full place-items-center p-6">
+        <div className="h-11 w-11 animate-pulse rounded-xl" style={{ background: styles.subtle }} />
+      </div>
+    );
+  }
 
   if (!project) {
     return (
@@ -64,12 +71,12 @@ export function ProjectView() {
               {project.name}
             </h1>
             <div className="truncate font-mono text-[11px]" style={{ color: styles.textTertiary }}>
-              {project.path}
+              {project.rootPath}
             </div>
           </div>
         </div>
 
-        {/* Chat-window integration note (honest until orchestration lands) */}
+        {/* Project chat entry point (M3 project-chat screen) */}
         <div
           className="mt-5 rounded-[14px] border-[1.5px] p-4"
           style={{
@@ -84,18 +91,24 @@ export function ProjectView() {
             </span>
           </div>
           <p className="mt-1.5 text-[12px] leading-relaxed" style={{ color: styles.textSecondary }}>
-            Agents will work on this project in a dedicated chat window — clicking a session from
-            recent activity will open it here. This flow arrives with the orchestration phase
-            (SPEC F3); the project registry itself is live and local-first.
+            Agents work on this project in a dedicated chat window — files, tools and turns side
+            by side. Opening it starts (or resumes) a session bound to this workspace.
           </p>
+          <button
+            onClick={() => id && navigate(`/project/${id}/chat`)}
+            className="mt-3 h-10 cursor-pointer rounded-[8px] px-4 text-sm font-semibold transition-opacity hover:opacity-90"
+            style={{ backgroundColor: styles.accent, color: styles.accentText }}
+          >
+            Open project chat
+          </button>
         </div>
 
-        {/* Recent workspace sessions (context until project-linked sessions exist) */}
+        {/* Sessions bound to this project (client-side projectId filter) */}
         <h2
           className="mb-2 mt-6 text-[11px] font-bold uppercase tracking-widest"
           style={{ color: styles.textTertiary }}
         >
-          Recent workspace sessions
+          Sessions
         </h2>
         {sessionsQuery.isPending ? (
           <div className="h-[52px] w-full animate-pulse rounded-lg" style={{ background: styles.subtle }} />
@@ -104,14 +117,14 @@ export function ProjectView() {
             className="rounded-lg px-3 py-4 text-[12px]"
             style={{ border: bdr("1.5px", styles.border), color: styles.textTertiary }}
           >
-            No sessions yet — create one from the dashboard&apos;s quick actions.
+            No sessions yet
           </div>
         ) : (
           <div className="flex flex-col gap-1.5">
             {sessions.map((s) => (
               <button
                 key={s.id}
-                onClick={() => void navigate("/sessions")}
+                onClick={() => id && navigate(`/project/${id}/chat`)}
                 className="flex w-full cursor-pointer items-center justify-between rounded-lg px-3 py-2.5 text-left transition-colors"
                 style={{ border: bdr("1.5px", styles.border) }}
                 onMouseEnter={(e) => (e.currentTarget.style.background = styles.subtleHover)}
@@ -119,14 +132,14 @@ export function ProjectView() {
               >
                 <span className="min-w-0">
                   <span className="block truncate text-[12px] font-semibold" style={{ color: styles.text }}>
-                    {s.title ?? s.id}
+                    {s.title ?? "Untitled"}
                   </span>
                   <span className="block text-[10px]" style={{ color: styles.textTertiary }}>
-                    {s.status} · {s.mode}
+                    {s.status}
                   </span>
                 </span>
                 <span className="shrink-0 text-[10px]" style={{ color: styles.textTertiary }}>
-                  open →
+                  {formatWhen(s.updatedAt)}
                 </span>
               </button>
             ))}

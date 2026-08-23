@@ -3,7 +3,9 @@ import {
   ApiError,
   getAgentsBackend,
   httpAgents,
+  toProjectChatItems,
   type Agent,
+  type SessionEvent,
 } from "./api";
 import { createFixtureAgents, getFixtureAgents, resetFixtureAgents } from "./agent-fixtures";
 import { useConfigStore } from "./config-store";
@@ -197,5 +199,150 @@ describe("backend selection", () => {
     useConfigStore.setState({ demoData: false });
     const live = getAgentsBackend();
     expect(live).not.toBe(demo);
+  });
+});
+
+// --- toProjectChatItems helpers -------------------------------------------
+
+const TS = (seq: number) => `2026-08-22T09:00:${String(seq).padStart(2, "0")}Z`;
+
+function ev(
+  seq: number,
+  type: string,
+  payload: unknown,
+  agentId: string | null = null,
+): SessionEvent {
+  return { seq, type, agentId, payload, ts: TS(seq) };
+}
+
+/** tool.use event exactly as agent-core's runtime appends it. */
+function toolUse(seq: number, toolName: string, argsSummary: string, ok = true): SessionEvent {
+  return ev(
+    seq,
+    "tool.use",
+    { role: "tool", toolName, argsSummary, ok, agentId: "agt_scribe", ts: TS(seq) },
+    "agt_scribe",
+  );
+}
+
+describe("toProjectChatItems", () => {
+  it("orders user → grouped tools → diff → ai from an event log", () => {
+    const items = toProjectChatItems([
+      ev(
+        1,
+        "message.user",
+        { role: "user", content: "Add rate limiting to the middleware" },
+        "agt_scribe",
+      ),
+      toolUse(2, "list_dir", "path: src"),
+      toolUse(3, "write_file", "path: src/middleware.ts, content: 128 chars"),
+      ev(
+        4,
+        "message.assistant",
+        { role: "assistant", content: "Done — limiter added." },
+        "agt_scribe",
+      ),
+    ]);
+
+    expect(items.map((item) => item.kind)).toEqual(["user", "tools", "diff", "ai"]);
+    expect(items[0]).toEqual({
+      kind: "user",
+      seq: 1,
+      content: "Add rate limiting to the middleware",
+      ts: TS(1),
+    });
+    expect(items[1]).toEqual({
+      kind: "tools",
+      seqStart: 2,
+      seqEnd: 3,
+      tools: [
+        { seq: 2, toolName: "list_dir", argsSummary: "path: src", ok: true, ts: TS(2) },
+        {
+          seq: 3,
+          toolName: "write_file",
+          argsSummary: "path: src/middleware.ts, content: 128 chars",
+          ok: true,
+          ts: TS(3),
+        },
+      ],
+      ts: TS(2),
+    });
+    expect(items[2]).toEqual({
+      kind: "diff",
+      entry: {
+        seq: 3,
+        toolName: "write_file",
+        path: "src/middleware.ts",
+        chars: 128,
+        ok: true,
+        ts: TS(3),
+      },
+    });
+    expect(items[3]).toEqual({
+      kind: "ai",
+      seq: 4,
+      content: "Done — limiter added.",
+      agentId: "agt_scribe",
+      ts: TS(4),
+    });
+  });
+
+  it("merges a consecutive tool.use run into ONE tools item; separate runs stay separate", () => {
+    const items = toProjectChatItems([
+      toolUse(1, "list_dir", "path: ."),
+      toolUse(2, "read_file", "path: package.json"),
+      ev(3, "message.assistant", { role: "assistant", content: "thinking…" }, "agt_scribe"),
+      toolUse(4, "read_file", "path: src/index.ts"),
+    ]);
+
+    expect(items.map((item) => item.kind)).toEqual(["tools", "ai", "tools"]);
+    const toolsRuns = items.flatMap((item) => (item.kind === "tools" ? [item] : []));
+    expect(toolsRuns).toHaveLength(2);
+    expect(toolsRuns[0]).toMatchObject({ seqStart: 1, seqEnd: 2 });
+    expect(toolsRuns[0].tools).toHaveLength(2);
+    expect(toolsRuns[1]).toMatchObject({ seqStart: 4, seqEnd: 4 });
+    expect(toolsRuns[1].tools).toHaveLength(1);
+  });
+
+  it("emits one diff card per write/edit call in a run, in order", () => {
+    const items = toProjectChatItems([
+      toolUse(1, "write_file", "path: a.ts, content: 10 chars"),
+      toolUse(2, "read_file", "path: b.ts"),
+      toolUse(3, "edit_file", "path: c.ts, content: 30 chars", false),
+    ]);
+
+    expect(items.map((item) => item.kind)).toEqual(["tools", "diff", "diff"]);
+    const entries = items.flatMap((item) => (item.kind === "diff" ? [item.entry] : []));
+    expect(entries.map((entry) => entry.path)).toEqual(["a.ts", "c.ts"]);
+    expect(entries.map((entry) => entry.ok)).toEqual([true, false]);
+  });
+
+  it("parses argsSummary tolerantly (full format, missing chars, missing path)", () => {
+    const items = toProjectChatItems([
+      toolUse(1, "write_file", "path: src/full.ts, content: 128 chars"),
+      toolUse(2, "write_file", "path: src/no-chars.ts"),
+      toolUse(3, "edit_file", "content: 64 chars"),
+      toolUse(4, "edit_file", "touched something, details unknown"),
+    ]);
+
+    const entries = items.flatMap((item) => (item.kind === "diff" ? [item.entry] : []));
+    expect(entries).toHaveLength(4);
+    expect(entries[0]).toMatchObject({ path: "src/full.ts", chars: 128 });
+    expect(entries[1]).toMatchObject({ path: "src/no-chars.ts", chars: null });
+    expect(entries[2]).toMatchObject({ path: null, chars: 64 });
+    expect(entries[3]).toMatchObject({ path: null, chars: null });
+  });
+
+  it("ignores unknown event types (and messages without string content)", () => {
+    const items = toProjectChatItems([
+      ev(1, "session.started", { at: TS(1) }),
+      ev(2, "todo.updated", { items: [] }),
+      ev(3, "message.user", { role: "user" }),
+      ev(4, "message.assistant", { role: "assistant", content: "Still here." }, "agt_scribe"),
+    ]);
+
+    expect(items).toEqual([
+      { kind: "ai", seq: 4, content: "Still here.", agentId: "agt_scribe", ts: TS(4) },
+    ]);
   });
 });

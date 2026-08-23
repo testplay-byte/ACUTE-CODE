@@ -26,7 +26,8 @@ UI stands and what is still open.
 | Plug in your brain (step 3) | R1 port → R3 layout REJECTED → R5 padding/rail/key-gating → R6 live backend → R7 full-catalog expand + unified scroll | **APPROVED** (owner: "working properly… how they are meant to be") |
 | Connection test | R8 honesty fix (one-token completion probe; garbage key/model honestly fail) | **DELIVERED** — live-verified |
 | Dashboard / shell | R1–R2 restyle → R8 redo (topbar removed, sidebar restructure, Settings hub) | **IN REVIEW** — R8 delivered |
-| Sidebar projects | R8 (local-first store + ProjectView; chat flow = orchestration phase) | **IN REVIEW** |
+| Sidebar projects | R8 (local-first store + ProjectView) → R9 backend swap (`/api/v1/projects`, pick_folder Browse under Tauri, projects-store deleted) | **IN REVIEW** (R9) |
+| Project chat (`/project/:id/chat`) | R9 M3 port (Explorer/Code/Chat live panels, action pills, diff cards, thinking indicator) | **IN REVIEW** — R9 delivered, live-verified |
 | Mono theme dark mode | R8 accentDark fix | **DELIVERED** — visually verified |
 | All set (step 4) | R1 port → R3 theme-derived confetti | **APPROVED** ("perfect") |
 | Dashboard / Agents / Sessions / Chat | R1–R2 theme-engine restyle | Approved in the Phase-2 walkthrough ("everything is working properly… UI looks much better"); further polish on request |
@@ -40,6 +41,7 @@ UI stands and what is still open.
 - [`round-06.md`](round-06.md) — persistent dev backend (`pnpm dev:full`): fixes models list & test connection in the browser
 - [`round-07.md`](round-07.md) — expand button lists the full catalog; PlugBrain scrolls as one unified flow
 - [`round-08.md`](round-08.md) — honest connection test; dashboard/shell redo; Settings hub; mono dark; PROJECT-MAP + dev CLI
+- [`round-09.md`](round-09.md) — Agentic MVP M3 (project-chat UI port onto live data) + M4 (live ACUTEST run, files verified on disk) + live-call bug fix (`jsonSchema()` tool wrapping)
 
 ## Running the UI with a live backend (dev)
 

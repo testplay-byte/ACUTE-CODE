@@ -1,5 +1,6 @@
 import type { AgentRecord, RunMode, SessionStatus, UsageRecord } from "shared";
 import { getFixtureAgents } from "./agent-fixtures";
+import { getFixtureProjects } from "./project-fixtures";
 import { getFixtureSessions } from "./session-fixtures";
 import { useConfigStore } from "./config-store";
 
@@ -214,6 +215,9 @@ export interface CreateSessionInput {
   agentId: string;
   mode: "single";
   title?: string;
+  /** Optional project binding (M3 project-chat screen; server-side list
+   * filtering does not exist yet — callers filter client-side). */
+  projectId?: string;
 }
 
 /** The session/chat operations the UI needs. */
@@ -252,6 +256,66 @@ export function getSessionsBackend(): SessionsBackend {
     return getFixtureSessions();
   }
   return httpSessions();
+}
+
+// ---------------------------------------------------------------------------
+// Projects + file explorer (API.md §4a, M3 project-chat screen)
+// ---------------------------------------------------------------------------
+
+/** Project row as served by the sidecar (agent-core storage/projects.ts). */
+export interface Project {
+  id: string;
+  name: string;
+  rootPath: string;
+  color: string;
+  createdAt: string;
+}
+
+/**
+ * One node of GET /projects/{id}/tree (agent-core tools/index.ts). `path` is
+ * root-relative with "/" separators; folders carry `children`, files an
+ * optional byte-ish `size` hint.
+ */
+export interface TreeNode {
+  name: string;
+  type: "file" | "folder";
+  path: string;
+  size?: number;
+  children?: TreeNode[];
+}
+
+/** The project/workspace operations the project-chat screen needs. */
+export interface ProjectsBackend {
+  list(): Promise<Project[]>;
+  create(name: string, rootPath: string, color?: string): Promise<Project>;
+  get(id: string): Promise<Project>;
+  remove(id: string): Promise<void>;
+  tree(id: string): Promise<{ tree: TreeNode[]; rootPath: string }>;
+  file(id: string, path: string): Promise<{ path: string; content: string }>;
+}
+
+/** HTTP implementation talking to the sidecar. */
+export function httpProjects(): ProjectsBackend {
+  return {
+    list: () => request<{ projects: Project[] }>("/projects").then((b) => b.projects),
+    create: (name, rootPath, color) =>
+      request<Project>("/projects", { method: "POST", json: { name, rootPath, color } }),
+    get: (id) => request<Project>(`/projects/${id}`),
+    remove: (id) => request<void>(`/projects/${id}`, { method: "DELETE" }),
+    tree: (id) => request<{ tree: TreeNode[]; rootPath: string }>(`/projects/${id}/tree`),
+    file: (id, path) =>
+      request<{ path: string; content: string }>(
+        `/projects/${id}/file?path=${encodeURIComponent(path)}`,
+      ),
+  };
+}
+
+/** Project backend selector, same demoData rule as getAgentsBackend(). */
+export function getProjectsBackend(): ProjectsBackend {
+  if (useConfigStore.getState().demoData) {
+    return getFixtureProjects();
+  }
+  return httpProjects();
 }
 
 // ---------------------------------------------------------------------------
@@ -313,4 +377,145 @@ export function toChatEntries(events: SessionEvent[]): ChatEntry[] {
       },
     ];
   });
+}
+
+// ---------------------------------------------------------------------------
+// project-chat timeline (M3): fold the event log into chat items
+// ---------------------------------------------------------------------------
+
+/** One executed tool call as rendered by the grouped action-pills row. */
+export interface ToolUseEntry {
+  seq: number;
+  toolName: string;
+  argsSummary: string;
+  ok: boolean;
+  ts: string;
+}
+
+/** A write_file/edit_file call surfaced as a diff card (path/chars parsed
+ * tolerantly from argsSummary — null when the summary lacks them). */
+export interface DiffEntry {
+  seq: number;
+  toolName: "write_file" | "edit_file";
+  path: string | null;
+  chars: number | null;
+  ok: boolean;
+  ts: string;
+}
+
+/** Renderable timeline item for the project-chat screen (see toProjectChatItems). */
+export type ProjectChatItem =
+  | { kind: "user"; seq: number; content: string; ts: string }
+  | { kind: "tools"; seqStart: number; seqEnd: number; tools: ToolUseEntry[]; ts: string }
+  | { kind: "diff"; entry: DiffEntry }
+  | { kind: "ai"; seq: number; content: string; agentId: string | null; ts: string };
+
+/** tool.use payload fields as agent-core's runtime writes them. */
+interface ToolUsePayload {
+  toolName?: unknown;
+  argsSummary?: unknown;
+  ok?: unknown;
+}
+
+function toToolUseEntry(event: SessionEvent): ToolUseEntry {
+  const payload =
+    event.payload && typeof event.payload === "object"
+      ? (event.payload as ToolUsePayload)
+      : {};
+  return {
+    seq: event.seq,
+    toolName: typeof payload.toolName === "string" ? payload.toolName : "",
+    argsSummary: typeof payload.argsSummary === "string" ? payload.argsSummary : "",
+    ok: typeof payload.ok === "boolean" ? payload.ok : true,
+    ts: event.ts,
+  };
+}
+
+/** write/edit tool names that warrant a diff card. */
+const DIFF_TOOLS = new Set(["write_file", "edit_file"]);
+
+/**
+ * Tolerant argsSummary parsing. The canonical format is
+ * `path: <relpath>, content: <N> chars`, but summaries may carry extra or
+ * missing segments — parse whatever is there, null otherwise.
+ */
+function parseDiffArgs(argsSummary: string): { path: string | null; chars: number | null } {
+  const pathMatch = /path:\s*([^,]+)/.exec(argsSummary);
+  const charsMatch = /(\d+)\s*chars?/i.exec(argsSummary);
+  return {
+    path: pathMatch ? pathMatch[1].trim() : null,
+    chars: charsMatch ? Number(charsMatch[1]) : null,
+  };
+}
+
+/**
+ * Fold the append-only event log (ADR-0010) into the project-chat timeline:
+ * user bubbles, ONE grouped tools item per maximal run of consecutive
+ * tool.use events (diff cards for the write_file/edit_file calls in the run
+ * follow immediately, in order), and assistant bubbles. Unknown event types
+ * are ignored; a message event whose payload lacks a string content is too.
+ */
+export function toProjectChatItems(events: SessionEvent[]): ProjectChatItem[] {
+  const ordered = [...events].sort((a, b) => a.seq - b.seq);
+  const items: ProjectChatItem[] = [];
+
+  let index = 0;
+  while (index < ordered.length) {
+    const event = ordered[index];
+
+    if (event.type === "tool.use") {
+      // Maximal run of consecutive tool.use events → one grouped pills item.
+      const tools: ToolUseEntry[] = [];
+      while (index < ordered.length && ordered[index].type === "tool.use") {
+        tools.push(toToolUseEntry(ordered[index]));
+        index += 1;
+      }
+      items.push({
+        kind: "tools",
+        seqStart: tools[0].seq,
+        seqEnd: tools[tools.length - 1].seq,
+        tools,
+        ts: tools[0].ts,
+      });
+      for (const tool of tools) {
+        if (DIFF_TOOLS.has(tool.toolName)) {
+          items.push({
+            kind: "diff",
+            entry: {
+              ...parseDiffArgs(tool.argsSummary),
+              seq: tool.seq,
+              toolName: tool.toolName as "write_file" | "edit_file",
+              ok: tool.ok,
+              ts: tool.ts,
+            },
+          });
+        }
+      }
+      continue;
+    }
+
+    if (event.type === "message.user" || event.type === "message.assistant") {
+      const payload =
+        event.payload && typeof event.payload === "object"
+          ? (event.payload as Record<string, unknown>)
+          : null;
+      if (payload && typeof payload.content === "string") {
+        if (event.type === "message.user") {
+          items.push({ kind: "user", seq: event.seq, content: payload.content, ts: event.ts });
+        } else {
+          items.push({
+            kind: "ai",
+            seq: event.seq,
+            content: payload.content,
+            agentId: event.agentId,
+            ts: event.ts,
+          });
+        }
+      }
+    }
+
+    index += 1;
+  }
+
+  return items;
 }

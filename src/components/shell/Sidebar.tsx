@@ -1,9 +1,10 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { useNavigate } from "react-router";
+import { useLocation, useNavigate } from "react-router";
 import {
   BarChart3,
   ChevronsLeft,
   ChevronsRight,
+  FolderOpen,
   LayoutDashboard,
   Plus,
   Settings,
@@ -11,11 +12,27 @@ import {
 } from "lucide-react";
 import { motion } from "framer-motion";
 import { APP_NAME } from "../../lib/version";
+import { ApiError, type Project } from "../../lib/api";
 import { cn } from "../../lib/utils";
 import { slideInLeft } from "../../lib/motion";
+import { SEMANTIC_COLORS } from "../../lib/semantics";
+import { isTauri } from "../../lib/sidecar";
 import { useThemeStyles } from "../../lib/use-theme-styles";
-import { useProjectsStore, type Project } from "../../lib/projects-store";
+import { useCreateProject, useDeleteProject, useProjects } from "../../hooks/use-projects";
 import { bdr, withAlpha } from "../dashboard/helpers";
+
+type TauriGlobal = {
+  core: {
+    invoke: (command: string, args?: Record<string, unknown>) => Promise<unknown>;
+  };
+};
+
+/** Tauri shell invoke (pattern from onboarding/providers-api.ts, pick_folder). */
+async function tauriInvoke<T>(command: string, args?: Record<string, unknown>): Promise<T> {
+  const tauri = (window as { __TAURI__?: TauriGlobal }).__TAURI__;
+  if (!tauri) throw new Error("Tauri shell unavailable");
+  return tauri.core.invoke(command, args) as Promise<T>;
+}
 
 const COLLAPSE_KEY = "acute-code.sidebar.collapsed";
 
@@ -31,7 +48,8 @@ function readCollapsed(): boolean {
  * Sidebar (owner round-8 structure):
  * - TOP highlighted area: brand + Dashboard — the primary surface.
  * - PROJECTS section below, deliberately separated: project list + Add
- *   Project (local-first store until the workspace engine lands).
+ *   Project (backend /api/v1/projects via use-projects; Tauri folder picker
+ *   when running inside the desktop shell).
  * - Usage.
  * - Bottom: Settings (agents management + API config + appearance live in
  *   there now, NOT in the sidebar) + collapse toggle.
@@ -42,9 +60,12 @@ export function Sidebar() {
   const [collapsed, setCollapsed] = useState(readCollapsed);
   const styles = useThemeStyles();
   const navigate = useNavigate();
-  const projects = useProjectsStore((s) => s.projects);
-  const selectedProjectId = useProjectsStore((s) => s.selectedProjectId);
-  const selectProject = useProjectsStore((s) => s.selectProject);
+  const location = useLocation();
+  const projectsQuery = useProjects();
+  const projects = projectsQuery.data ?? [];
+
+  // Active project follows the URL (routing owns selection now, not a store).
+  const activeProjectId = /^\/project\/([^/]+)/.exec(location.pathname)?.[1] ?? null;
 
   const toggleCollapsed = () => {
     setCollapsed((c) => {
@@ -57,13 +78,7 @@ export function Sidebar() {
     });
   };
 
-  const openProject = useCallback(
-    (id: string) => {
-      selectProject(id);
-      navigate(`/project/${id}`);
-    },
-    [navigate, selectProject],
-  );
+  const openProject = useCallback((id: string) => navigate(`/project/${id}/chat`), [navigate]);
 
   return (
     <motion.aside
@@ -130,7 +145,7 @@ export function Sidebar() {
               key={p.id}
               project={p}
               collapsed={collapsed}
-              isActive={p.id === selectedProjectId}
+              isActive={p.id === activeProjectId}
               onSelect={() => openProject(p.id)}
             />
           ))}
@@ -189,10 +204,7 @@ function DashboardButton({ collapsed }: { collapsed: boolean }) {
   const navigate = useNavigate();
   return (
     <button
-      onClick={() => {
-        useProjectsStore.getState().selectProject(null);
-        navigate("/");
-      }}
+      onClick={() => navigate("/")}
       title={collapsed ? "Dashboard" : undefined}
       className={navButtonClass(collapsed)}
       style={{
@@ -267,7 +279,7 @@ function ProjectItem({
   onSelect: () => void;
 }) {
   const styles = useThemeStyles();
-  const deleteProject = useProjectsStore((s) => s.deleteProject);
+  const deleteProject = useDeleteProject();
   const letter = project.name.charAt(0).toUpperCase();
 
   if (collapsed) {
@@ -325,13 +337,13 @@ function ProjectItem({
             className="mt-0.5 truncate font-mono text-[10px]"
             style={{ color: styles.textTertiary }}
           >
-            {project.path}
+            {project.rootPath}
           </div>
         </div>
         <button
           onClick={(e) => {
             e.stopPropagation();
-            deleteProject(project.id);
+            deleteProject.mutate(project.id);
           }}
           aria-label={`Delete ${project.name}`}
           className="flex h-6 w-6 shrink-0 cursor-pointer items-center justify-center rounded-md opacity-0 transition-all duration-150 group-hover:opacity-100"
@@ -352,10 +364,11 @@ function AddProjectButton({
   onCreated: (id: string) => void;
 }) {
   const styles = useThemeStyles();
-  const addProject = useProjectsStore((s) => s.addProject);
+  const createProject = useCreateProject();
   const [open, setOpen] = useState(false);
   const [name, setName] = useState("");
-  const [path, setPath] = useState("");
+  const [rootPath, setRootPath] = useState("");
+  const [picking, setPicking] = useState(false);
   const nameRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
@@ -363,13 +376,32 @@ function AddProjectButton({
   }, [open]);
 
   const handleAdd = useCallback(() => {
-    if (!name.trim() || !path.trim()) return;
-    const project = addProject(name.trim(), path.trim());
-    setName("");
-    setPath("");
-    setOpen(false);
-    onCreated(project.id);
-  }, [name, path, addProject, onCreated]);
+    if (!name.trim() || !rootPath.trim() || createProject.isPending) return;
+    createProject.mutate(
+      { name: name.trim(), rootPath: rootPath.trim() },
+      {
+        onSuccess: (project) => {
+          setName("");
+          setRootPath("");
+          setOpen(false);
+          onCreated(project.id);
+        },
+      },
+    );
+  }, [name, rootPath, createProject, onCreated]);
+
+  /** Tauri-only folder picker; null (cancelled) leaves the field untouched. */
+  const handleBrowse = useCallback(async () => {
+    setPicking(true);
+    try {
+      const folder = await tauriInvoke<string | null>("pick_folder");
+      if (typeof folder === "string" && folder) setRootPath(folder);
+    } catch {
+      /* a failed dialog leaves manual path entry as the fallback */
+    } finally {
+      setPicking(false);
+    }
+  }, []);
 
   if (collapsed) {
     return (
@@ -441,18 +473,51 @@ function AddProjectButton({
                 <label className="mb-1.5 block text-[11px] font-semibold" style={{ color: styles.textTertiary }}>
                   Folder Path
                 </label>
-                <input
-                  value={path}
-                  onChange={(e) => setPath(e.target.value)}
-                  onKeyDown={(e) => e.key === "Enter" && handleAdd()}
-                  placeholder="~/projects/my-awesome-project"
-                  className="h-10 w-full rounded-[8px] border-[1.5px] px-3 font-mono text-[12px] outline-none"
-                  style={inputStyle}
-                />
+                <div className="flex gap-1.5">
+                  <input
+                    value={rootPath}
+                    onChange={(e) => setRootPath(e.target.value)}
+                    onKeyDown={(e) => e.key === "Enter" && handleAdd()}
+                    placeholder="~/projects/my-awesome-project"
+                    className="h-10 min-w-0 flex-1 rounded-[8px] border-[1.5px] px-3 font-mono text-[12px] outline-none"
+                    style={inputStyle}
+                  />
+                  {isTauri() ? (
+                    <button
+                      onClick={() => void handleBrowse()}
+                      disabled={picking}
+                      title="Pick a folder from your machine"
+                      className="flex h-10 shrink-0 cursor-pointer items-center justify-center gap-1 rounded-[8px] border-[1.5px] px-2.5 text-[11px] font-semibold transition-colors duration-200 disabled:cursor-not-allowed disabled:opacity-60"
+                      style={{
+                        background: styles.inputBg,
+                        borderColor: styles.inputBorder,
+                        color: styles.textSecondary,
+                      }}
+                    >
+                      <FolderOpen size={12} />
+                      Browse…
+                    </button>
+                  ) : null}
+                </div>
               </div>
+              {createProject.isError ? (
+                <p
+                  role="alert"
+                  className="rounded-md px-2.5 py-1.5 text-[12px] leading-relaxed"
+                  style={{
+                    color: SEMANTIC_COLORS.danger,
+                    background: withAlpha(SEMANTIC_COLORS.danger, 0.08),
+                    border: bdr("1px", withAlpha(SEMANTIC_COLORS.danger, 0.3)),
+                  }}
+                >
+                  {createProject.error instanceof ApiError
+                    ? createProject.error.message
+                    : "Could not create the project."}
+                </p>
+              ) : null}
               <button
                 onClick={handleAdd}
-                disabled={!name.trim() || !path.trim()}
+                disabled={!name.trim() || !rootPath.trim() || createProject.isPending}
                 className="mt-1 h-10 cursor-pointer rounded-[8px] text-sm font-semibold transition-opacity disabled:cursor-not-allowed disabled:opacity-50"
                 style={{ backgroundColor: styles.accent, color: styles.accentText }}
               >
