@@ -505,3 +505,35 @@ Work Log:
 
 Stage Summary:
 - Owner can now: create custom providers (with visible API key input), save/edit keys, add/edit models with pricing, test models (with timeout + error messages), hide models from chat picker. All verified live. Next: chat composer model picker enhancement (grouped by provider with context/pricing display).
+
+---
+Task ID: U1-design
+Agent: Explore (wizard design DNA)
+Task: Extract the exact design language of the ACUTE-CODE setup wizard (owner-praised) and contrast it with the Dashboard/Sidebar UI (owner: "ugly, looks bad") to drive the UI overhaul. READ-ONLY analysis.
+
+Work Log:
+- Read all 10 onboarding files (SetupWizard, WelcomeScreen, NeedBrainScreen, PickFlavorScreen, PlugBrainScreen, ConnectionCard, AllSetScreen, Header, Footer, ActionButton), all 6 shell/dashboard files (Sidebar, AppShell, DashboardScreen, StatCard, QuickActions, RecentActivity), design tokens (themes.ts, use-theme-styles.ts, dashboard/helpers.ts), DESIGN-SYSTEM.md, motion.ts, onboarding-types.ts, index.css keyframes/font-face, TokenBarChart.tsx
+- Extracted WIZARD DNA: full-bleed bg with 28px dot-grid @4% + 3 accent glows (420px/blur-80/op-0.20, 520px/blur-90/op-0.08, 220px accent2/blur-70/op-0.06); container ladder max-w 1280→1480(xl)→1640(2xl), edge px-5→md:px-8→2xl:px-14; Space Grotesk with font-black display 56/86/104px leading-none + tracking −0.03em; labels 11px bold uppercase tracking-widest; bold full-accent moments (filled tiles, pills, highlight box around "CODE."); 3-tier shadows (bentoShadow 4px4px0 black, bentoShadowSm 3px, softShadow 0 8px 32px); radii 14–28px with 1.5–2.5px borders; hover translate-y-[-2px] + shadow-lift; step-in 0.32s cubic-bezier(0.25,0.1,0.25,1); playful tilts ±0.5–1.5deg, floating shapes, confetti; primary ActionButton = h-12 rounded-full gradient(accent→accent2) font-black 15px + bentoShadow + scale 1.03/0.98
+- Diagnosed DASHBOARD/SIDEBAR problems: card-on-card nesting (AppShell main is bg-card, cards inside are bg-card → zero surface separation); max-w-3xl wastes 50%+ of wide windows; rounded-lg 8px vs wizard 14–28px; NO shadows anywhere (flat); accent reduced to withAlpha tints 0.10–0.18 + icons opacity 0.7 (washed); greeting font-bold not black, accent-colored subheading @80% opacity; 9px meta text; hard-coded violations (red-500 classes, rgba literals, `${project.color}CC` suffix hack, hsl() chipColor); Sidebar ProjectItem isActive bug (`color: isActive ? text : text` identical branches); hover lifts of 1px; anemic atmosphere (glows op 0.03–0.05 vs wizard 0.20); Add-Project modal inputs h-10/rounded-8 vs wizard h-12/rounded-14
+- Delivered concrete rebuild spec: sidebar = wizard Header logo-pill anatomy (px-4 h-10 rounded-full borderStrong + bentoShadowSm), nav items h-10 rounded-[12px] with FULL-accent active state, project rows with accent ring `0 0 0 3px color-mix(accent 20%)` + bentoShadowSm on active; dashboard = transparent main over themed bg, wizard container ladder, kicker+font-black greeting with accent highlight box, stat cards rounded-[20px] softShadow + full-accent icon tiles + font-black values, uppercase tracked section labels, error banner via SEMANTIC_COLORS, adopt wizard-step entrance + ActionButton app-wide
+- Key insight for implementer: the wizard never uses translucent accent as a surface (only as a 20% ring or glow); the dashboard uses it as its ONLY accent expression. Flip that: accent = solid fill on icons/active/primary; subtle/subtleHover = surfaces.
+
+Stage Summary:
+- Full A/B design analysis delivered (wizard DNA vs dashboard problems vs exact rebuild spec with Tailwind values). Theme system, motion.ts, data wiring, a11y, collapse persistence, TokenBarChart internals = KEEP. AppShell surface layering, Sidebar skin, StatCard/QuickActions/RecentActivity, greeting hero, Add-Project modal = REBUILD to wizard anatomy. No files modified except this worklog entry.
+
+---
+Task ID: R21 (UI overhaul + streaming fix)
+Agent: orchestrator (Z.ai Code) — design analysis by Explore sub-agent (U1-design); implementation inline
+Task: Owner round-21: complete UI overhaul (wizard design DNA) + streaming error fix
+
+Work Log:
+- Design DNA analysis (sub-agent): extracted the wizard's exact visual language (typography hierarchy, solid accent fills, 1.5px borderStrong borders, softShadow/bentoShadow, 14-28px radii, uppercase tracked labels, dot grid + 3 ambient glows at 0.20/0.08/0.06, font-black values, extreme typographic contrast) and cataloged the dashboard's problems (card-on-card nesting, max-w-3xl, translucent accent soup, no shadows, no hover states, hard-coded red-500, 9px text)
+- AppShell: transparent main for non-chat routes (cards float like the wizard); wizard atmosphere (28px dot grid at 4%, three ambient glows); borderless chat route preserved
+- Sidebar: complete visual rebuild — 20px-radius floating card, wizard pill brand row, nav items with SOLID accent fill for active, PROJECTS label + count pill, project rows with 8×8 letter tiles + wizard selected-card recipe (accent border + ring + shadow + lift), dashed Add Project pill, collapsed rail with icon tiles; Add Project modal at 24px-radius with h-12 inputs and accent-pill Create button
+- Dashboard: wizard container ladder (1280→1640px), kicker + font-black greeting with accent highlight box (rotated, bentoShadow), StatCards with solid accent icon tiles + softShadow + one accent-filled highlight card, TokenBarChart + QuickActions at 24px-radius, QuickActions primary = accent pill with hover scale, RecentActivity rows with hover lift + shadow, SEMANTIC_COLORS error banner
+- Streaming fix: error-then-response — catch now invalidates session queries before showing error (so the response appears if the backend completed despite the frontend stream error)
+- Tests updated for new UI text; verify GREEN; browser-verified: VLM 7/7 (sidebar ✓, greeting with accent box ✓, solid accent tiles ✓, QuickActions pill ✓, chart ✓, premium feel ✓, no bugs ✓)
+- Merged a4a73f6 to main; CI 32654620460 SUCCESS; ntfy delivered
+
+Stage Summary:
+- The dashboard now looks like the wizard — same design DNA, same quality bar. The owner's "ugly, looks bad" verdict addressed: solid accents replace tinted soup, cards have shadows and float on the themed background, typography uses font-black with extreme contrast, labels are uppercase tracked. Next: owner re-test on Windows; chat window customizability improvements queued.
