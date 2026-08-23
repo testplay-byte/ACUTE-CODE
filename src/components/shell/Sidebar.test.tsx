@@ -34,7 +34,7 @@ describe("Sidebar projects section (fixture ProjectsBackend)", () => {
       await screen.findByPlaceholderText("my-awesome-project"),
       { target: { value: "acute-code" } },
     );
-    fireEvent.change(screen.getByPlaceholderText("~/projects/my-awesome-project"), {
+    fireEvent.change(screen.getByPlaceholderText("/path/to/project"), {
       target: { value: "~/projects/acute-code" },
     });
     fireEvent.click(screen.getByRole("button", { name: /create project/i, hidden: true }));
@@ -87,7 +87,7 @@ describe("Sidebar projects section (fixture ProjectsBackend)", () => {
       target: { value: "duplicate" },
     });
     // The seeded fixture already uses this rootPath (409 CONFLICT).
-    fireEvent.change(screen.getByPlaceholderText("~/projects/my-awesome-project"), {
+    fireEvent.change(screen.getByPlaceholderText("/path/to/project"), {
       target: { value: "/home/dev/ACUTE-CODE" },
     });
     fireEvent.click(screen.getByRole("button", { name: /create project/i, hidden: true }));

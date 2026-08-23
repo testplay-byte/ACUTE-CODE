@@ -675,8 +675,8 @@ export function AgentChatPanel({
     setSendError(null);
     setLiveText("");
     setLiveTools([]);
+    let sid = session?.id;
     try {
-      let sid = session?.id;
       if (!sid) {
         const created = await createSession.mutateAsync({
           mode: "single" as const,
@@ -711,6 +711,9 @@ export function AgentChatPanel({
               void queryClient.invalidateQueries({ queryKey: ["project-file"] });
             }
           } else if (event.type === "error") {
+            // SSE error event — show it but DON'T clear live text; the
+            // backend may still complete the turn (invalidation on catch
+            // will resolve it).
             setSendError(event.message);
           }
         }, { model: effectiveModel ?? undefined });
@@ -727,7 +730,21 @@ export function AgentChatPanel({
         await sendMessage.mutateAsync({ sessionId: sid, content: text });
       }
     } catch (err) {
-      setSendError(err instanceof Error ? err.message : String(err));
+      // The stream may have errored client-side (network, CORS, abort) while
+      // the backend actually completed the turn. Always re-fetch the session
+      // so the canonical response appears even after a stream failure.
+      await queryClient.invalidateQueries({ queryKey: ["session"] });
+      await queryClient.invalidateQueries({ queryKey: ["sessions"] });
+      void queryClient.invalidateQueries({ queryKey: ["project-tree"] });
+      const hasResponse = queryClient.getQueryData(["session", session?.id ?? sid]);
+      if (!hasResponse) {
+        setSendError(err instanceof Error ? err.message : String(err));
+      } else {
+        // The response landed despite the stream error — clear the error.
+        setSendError(null);
+        setLiveText("");
+        setLiveTools([]);
+      }
     } finally {
       setStreamBusy(false);
       // Both hooks invalidate their queries on settle; drop the optimistic echo.

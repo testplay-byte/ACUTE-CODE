@@ -81,7 +81,7 @@ export function TokenBarChart({
   delay?: number;
   styles: ThemeStyles;
 }) {
-  const { card, border, text, textSecondary, accent, isDark } = styles;
+  const { card, border, text, textSecondary, textTertiary, accent, isDark, softShadow } = styles;
   const [hoveredIdx, setHoveredIdx] = useState<number | null>(null);
 
   const maxTokens = useMemo(() => Math.max(0, ...days.map(dayTotal)), [days]);
@@ -92,13 +92,13 @@ export function TokenBarChart({
   return (
     <motion.div
       variants={scaleIn}
-      className="rounded-lg p-4"
-      style={{ backgroundColor: card, border: bdr("1.5px", border) }}
+      className="rounded-[24px] border-[1.5px] p-4 md:p-5"
+      style={{ backgroundColor: card, borderColor: border, boxShadow: softShadow }}
     >
       <div className="mb-4 flex items-center justify-between">
         <div className="flex items-center gap-2">
           <Zap size={13} style={{ color: accent, opacity: 0.7 }} />
-          <span className="text-[12px] font-semibold" style={{ color: text }}>
+          <span className="text-[11px] font-bold uppercase tracking-widest" style={{ color: textTertiary }}>
             Token Usage · 14 days
           </span>
         </div>
