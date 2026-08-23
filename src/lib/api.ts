@@ -30,13 +30,15 @@ export type AgentDraft = Omit<AgentRecord, "id">;
 export type AgentPatch = Partial<AgentDraft>;
 
 /** Tool names the sidecar validates against (API.md §4.2 "unknown tool names"). */
+/** Mirrors the backend TOOL_NAMES (agent-core storage/agents.ts, ADR-0019). */
 export const TOOL_CATALOG = [
-  "file_read",
-  "file_write",
-  "file_edit",
-  "shell_exec",
-  "web_search",
-  "code_exec",
+  "list_dir",
+  "read_file",
+  "write_file",
+  "edit_file",
+  "create_dir",
+  "delete_file",
+  "search_files",
 ] as const;
 
 export const PROVIDER_IDS = ["openrouter", "openai", "anthropic", "google"] as const;

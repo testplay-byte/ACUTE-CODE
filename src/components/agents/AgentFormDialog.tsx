@@ -30,7 +30,7 @@ const DEFAULTS: FormState = {
   model: "",
   visionModel: "",
   memoryPolicy: "every-turn",
-  allowedTools: ["file_read"],
+  allowedTools: [], // empty = all tools (ADR-0019)
   skills: [],
   maxTurns: "40",
   temperature: "0.2",

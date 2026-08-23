@@ -223,3 +223,46 @@ describe("round-14 tools: create_dir / delete_file / search_files", () => {
     expect(searchFiles(tempDir, "zzz-nothing").output).toContain("no paths matching");
   });
 });
+
+describe("round-17: tool-name truth + allowedTools enforcement (ADR-0019)", () => {
+  it("TOOL_NAMES equals the real 7-tool set", async () => {
+    const { TOOL_NAMES } = await import("../src/storage/agents");
+    expect([...TOOL_NAMES].sort()).toEqual([
+      "create_dir",
+      "delete_file",
+      "edit_file",
+      "list_dir",
+      "read_file",
+      "search_files",
+      "write_file",
+    ]);
+  });
+
+  it("buildProjectTools filters by allowlist; empty allowlist = all tools", async () => {
+    const { buildProjectTools } = await import("../src/tools/index");
+    const all = buildProjectTools(tempDir) as unknown as Record<string, unknown>;
+    expect(Object.keys(all).sort()).toEqual([
+      "create_dir",
+      "delete_file",
+      "edit_file",
+      "list_dir",
+      "read_file",
+      "search_files",
+      "write_file",
+    ]);
+    const two = buildProjectTools(tempDir, ["read_file", "search_files"]) as unknown as Record<string, unknown>;
+    expect(Object.keys(two).sort()).toEqual(["read_file", "search_files"]);
+    const empty = buildProjectTools(tempDir, []) as unknown as Record<string, unknown>;
+    expect(Object.keys(empty)).toHaveLength(7);
+  });
+
+  it("server rejects SPEC-era tool names in allowedTools (drift guard)", async () => {
+    const res = await app.inject({
+      method: "POST",
+      url: "/api/v1/agents",
+      headers: { authorization: `Bearer ${TOKEN}` },
+      payload: { name: "Drift", allowedTools: ["file_read"] },
+    });
+    expect(res.statusCode).toBe(400);
+  });
+});

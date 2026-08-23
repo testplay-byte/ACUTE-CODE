@@ -1,0 +1,57 @@
+{
+  "schema": "acute-status/1",
+  "product": {
+    "name": "Acute",
+    "tagline": "Local-first multi-agent engineering workbench",
+    "version": "0.1.0",
+    "availability": "Private build — not yet distributed",
+    "chips": ["Windows desktop", "Tauri 2", "React 18", "Node sidecar", "SQLite", "BYO provider key"]
+  },
+  "pillars": [
+    {
+      "id": "coding",
+      "title": "Coding",
+      "state": "usable",
+      "progress": 70,
+      "summary": "Projects, sandboxed file tools, streaming agent chat"
+    },
+    {
+      "id": "agentic",
+      "title": "Agentic system",
+      "state": "building",
+      "progress": 35,
+      "summary": "Multi-agent orchestration — blueprint set, build owner-gated"
+    },
+    {
+      "id": "automation",
+      "title": "Automation",
+      "state": "planned",
+      "progress": 10,
+      "summary": "Scheduling & workflow pillar — researched, additive plan ready"
+    }
+  ],
+  "milestones": [
+    { "date": "2026-08-21", "label": "Phase 0 — SPEC approved" },
+    { "date": "2026-08-22", "label": "Phase 1 — architecture skeleton + CI green" },
+    { "date": "2026-08-22", "label": "Phase 2 — first live agent conversation" },
+    { "date": "2026-08-22", "label": "Setup wizard — owner-approved screen by screen" },
+    { "date": "2026-08-22", "label": "Shell redo — Settings hub, honest connection test" },
+    { "date": "2026-08-23", "label": "Agentic MVP — projects, sandboxed tools, live-proven file writes" },
+    { "date": "2026-08-23", "label": "Demo-parity chat UI + 7-tool agent" },
+    { "date": "2026-08-23", "label": "One-double-click launcher for the owner's PC" },
+    { "date": "2026-08-23", "label": "Full agentic coding system; zero-setup default agent" },
+    { "date": "2026-08-23", "label": "Live streaming replies + per-reply telemetry + design system" },
+    { "date": "2026-08-23", "label": "Governance round — blueprints, ADR backfill, workflow, this dashboard" }
+  ],
+  "quality": {
+    "ci": "success",
+    "suites": [
+      { "name": "agent-core", "tests": 117 },
+      { "name": "frontend", "tests": 66 },
+      { "name": "sidecar e2e", "tests": 6 }
+    ],
+    "cargoCheck": "green",
+    "licenseAudit": { "deps": 107, "verdict": "CLEAN" }
+  },
+  "publicLinks": [{ "label": "Owner's site", "url": "https://testplay-byte.github.io/ANI-KUTA/" }]
+}

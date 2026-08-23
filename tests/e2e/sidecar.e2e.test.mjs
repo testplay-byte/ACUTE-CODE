@@ -117,7 +117,7 @@ describe("sidecar e2e (skipped without a prior build)", { skip: !existsSync(MAIN
       name: "E2E Bot",
       role: "tester",
       memoryPolicy: "on-start",
-      allowedTools: ["file_read"],
+      allowedTools: ["read_file"],
       maxTurns: 5,
       temperature: 0.3,
     });

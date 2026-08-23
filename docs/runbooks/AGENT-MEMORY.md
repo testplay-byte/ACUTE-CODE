@@ -269,3 +269,10 @@ Format per entry: `N. TITLE (date, source)` → mistake → root cause → rule.
     into the TopBar file-search twice before snapshotting refs), and beware
     stale assertions (a "tok/s" poll matched the PREVIOUS turn's stats).
    Disk is the ground truth for file-mutation turns.
+
+36. **Fine-grained PATs have a FIXED repository selection** — repos created
+    after the token are invisible to it (API says push:true, then contents
+    PUT / git push 403 with "Resource not accessible by personal access
+    token"). RULE: a new repo + existing PAT requires the OWNER to edit the
+    token's Repository access (or mint a scoped token); design publishers to
+    detect 403 and print the exact owner fix (publish-dashboard.mjs does).

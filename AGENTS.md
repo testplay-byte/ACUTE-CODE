@@ -10,13 +10,14 @@ Stack (fixed, changes need owner approval): Tauri 2 (Rust) shell · React 18 + T
 - **Spec before code.** No implementation code before the phase's spec is approved by the owner.
 - **Phase gates.** Phases 0–6 each end with a report (deliverables, pass/fail acceptance checklist, ≤2-min demo, assumptions/ADRs, open questions) and explicit owner approval. Never start the next phase without it.
 - **ADR discipline.** Every non-trivial decision gets `docs/decisions/NNN-*.md` (Context → Options → Decision → Consequences). Smaller-scope assumptions get `[ASSUMPTION]` tags and are surfaced in the next report.
+- **Workflow.** `docs/runbooks/WORKFLOW.md` is the normative session spine (branch policy, gates, doc duties); `docs/README.md` indexes all documentation.
 - **Sub-agent protocol (owner revision, 2026-08-23).** Sub-agents are an OPTIONAL tool, never a default. Dispatch one only when the task genuinely warrants it — e.g. large parallel research sweeps or exploration across many files — and the orchestrator first checks whether doing the work inline would be simpler and safer. Implementation work is normally done inline by the orchestrator; do not force dispatches, do not hand off work a sub-agent doesn't need to do. When a sub-agent IS used, it returns: what it did, artifacts, open questions; review failures go back to the producer.
 - **Question protocol.** Batch questions once per phase, numbered, labeled `[BLOCKING]`/`[NON-BLOCKING]`, each with a recommended default, max 10. Check docs first — don't ask what's already answered.
 
 ## Hard rules
 
 - License allowlist for dependencies: MIT, Apache-2.0, BSD, ISC, MPL-2.0. GPL/AGPL/LGPL forbidden (closed-source product). No open-source LICENSE file in the repo; nothing published to public registries.
-- Secrets live only in Windows Credential Manager (DPAPI) — never in the repo, logs, transcripts, or error messages.
+- Secrets live only in the custody surface appropriate to the context (packaged app: Windows Credential Manager/DPAPI; owner launcher: local `credentials.txt` + isolated 0600 store; dev sandbox: 0600 files outside any repo) — never in the repo, logs, transcripts, error messages, or REST bodies. Details: `docs/runbooks/SECURITY.md`.
 - The human-in-the-loop approval engine is the security boundary (no sandbox in v1): it must be complete, unbypassable, and never offers "always allow" for destructive categories.
 - No telemetry or crash reporting unless the owner opts in.
 - Performance budget: <700 MB idle (shell+UI+agent core), <2.5 GB with 5 agents, cold start <5 s. Max 5 concurrent agents, queued beyond.
@@ -25,7 +26,7 @@ Stack (fixed, changes need owner approval): Tauri 2 (Rust) shell · React 18 + T
 
 ## Map
 
-Product repo: `acute-code/` (this workspace). `docs/specs/SPEC.md` = master requirements · `docs/architecture/` = design · `docs/decisions/` = ADRs · `docs/research/` = reference analyses · `docs/runbooks/` = SETUP/DEMO/plans · `docs/compliance/` = license audit · `docs/design/ui-direction.md` = owner's design language from demos. The owner will iterate on UI design during Phase 2+.
+Product repo: `acute-code/` (this workspace). Documentation index: `docs/README.md`. `docs/specs/SPEC.md` = master requirements · `docs/architecture/` = design · `docs/decisions/` = ADRs · `docs/research/` = reference analyses · `docs/runbooks/` = SETUP/DEMO/plans · `docs/compliance/` = license audit · `docs/design/ui-direction.md` = owner's design language from demos. The owner will iterate on UI design during Phase 2+.
 
 ## Notifications & infrastructure
 
