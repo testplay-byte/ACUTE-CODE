@@ -92,11 +92,10 @@ export function TopBar({ onPickFile, files }: { onPickFile: (path: string) => vo
 
   return (
     <header
-      className="relative z-40 flex items-center gap-3 h-[48px] shrink-0 px-3 rounded-2xl border"
+      className="relative z-40 flex items-center gap-3 h-[48px] shrink-0 px-3 rounded-2xl"
       style={{
         backgroundColor: styles.card,
-        borderColor: styles.border,
-        transition: "background-color 0.3s ease, border-color 0.3s ease",
+        transition: "background-color 0.3s ease",
       }}
     >
       {/* Left: hamburger toggles the app sidebar (round-15) + brand */}

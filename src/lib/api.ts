@@ -408,7 +408,17 @@ export type ProjectChatItem =
   | { kind: "user"; seq: number; content: string; ts: string }
   | { kind: "tools"; seqStart: number; seqEnd: number; tools: ToolUseEntry[]; ts: string }
   | { kind: "diff"; entry: DiffEntry }
-  | { kind: "ai"; seq: number; content: string; agentId: string | null; ts: string };
+  | {
+      kind: "ai";
+      seq: number;
+      content: string;
+      agentId: string | null;
+      ts: string;
+      /** Round-16 per-reply stats (from the assistant event payload). */
+      usage?: { inputTokens: number; outputTokens: number };
+      ms?: number;
+      model?: string;
+    };
 
 /** tool.use payload fields as agent-core's runtime writes them. */
 interface ToolUsePayload {
@@ -503,12 +513,22 @@ export function toProjectChatItems(events: SessionEvent[]): ProjectChatItem[] {
         if (event.type === "message.user") {
           items.push({ kind: "user", seq: event.seq, content: payload.content, ts: event.ts });
         } else {
+          const usageRaw = payload.usage;
+          const usage =
+            typeof usageRaw === "object" && usageRaw !== null
+              ? (usageRaw as { inputTokens: number; outputTokens: number })
+              : undefined;
+          const msRaw = payload.ms;
+          const modelRaw = payload.model;
           items.push({
             kind: "ai",
             seq: event.seq,
             content: payload.content,
             agentId: event.agentId,
             ts: event.ts,
+            ...(usage ? { usage } : {}),
+            ...(typeof msRaw === "number" ? { ms: msRaw } : {}),
+            ...(typeof modelRaw === "string" ? { model: modelRaw } : {}),
           });
         }
       }
@@ -550,4 +570,96 @@ export async function pickFolderViaBackend(): Promise<{
   } catch (cause) {
     return { path: null, error: `could not reach the sidecar (${String(cause)})` };
   }
+}
+
+// ---------------------------------------------------------------------------
+// Streaming messages (round-16: live responses in the chat UI)
+// ---------------------------------------------------------------------------
+
+/** Events arriving over POST /sessions/:id/messages/stream (SSE). */
+export type StreamTurnEvent =
+  | { type: "text-delta"; delta: string }
+  | { type: "tool-call"; toolName: string; argsSummary: string }
+  | { type: "tool-result"; toolName: string; argsSummary: string; ok: boolean }
+  | {
+      type: "finish";
+      usage: { inputTokens: number; outputTokens: number; totalTokens: number };
+    }
+  | { type: "done"; assistantMessage: AssistantMessage; usage: UsageRecord }
+  | {
+      type: "error";
+      status: number;
+      code: string;
+      message: string;
+      details?: Record<string, unknown>;
+    };
+
+/**
+ * Run one streamed turn; `onEvent` fires for every SSE event as it lands
+ * (text deltas, tool calls/results, finish, done/error). Resolves when the
+ * stream ends. Fixture (demo-data) mode has no sidecar — callers fall back
+ * to the sync hook instead of calling this.
+ */
+export async function streamSessionMessage(
+  sessionId: string,
+  content: string,
+  onEvent: (event: StreamTurnEvent) => void,
+  options?: { model?: string; signal?: AbortSignal },
+): Promise<void> {
+  const { baseUrl, token } = useConfigStore.getState();
+  const res = await fetch(`${baseUrl}/api/v1/sessions/${sessionId}/messages/stream`, {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+      ...(token ? { Authorization: `Bearer ${token}` } : {}),
+    },
+    body: JSON.stringify({
+      content,
+      ...(options?.model ? { model: options.model } : {}),
+    }),
+    signal: options?.signal,
+  });
+  if (!res.ok || !res.body) {
+    // Non-2xx: the error envelope is JSON, not SSE.
+    let message = `sidecar answered HTTP ${res.status}`;
+    try {
+      const body = (await res.json()) as { error?: { message?: string } };
+      if (body.error?.message) message = body.error.message;
+    } catch {
+      /* keep the status text */
+    }
+    onEvent({ type: "error", status: res.status, code: "PROVIDER_ERROR", message });
+    return;
+  }
+  const reader = res.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    buffer += decoder.decode(value, { stream: true });
+    let sep = buffer.indexOf("\n\n");
+    while (sep >= 0) {
+      const chunk = buffer.slice(0, sep);
+      buffer = buffer.slice(sep + 2);
+      for (const line of chunk.split("\n")) {
+        if (line.startsWith("data: ")) {
+          try {
+            onEvent(JSON.parse(line.slice(6)) as StreamTurnEvent);
+          } catch {
+            /* skip malformed frame */
+          }
+        }
+      }
+      sep = buffer.indexOf("\n\n");
+    }
+  }
+}
+
+/** Provider model catalog for the composer's model picker (round-16). */
+export async function fetchProviderModels(providerId: string): Promise<string[]> {
+  const body = await request<{ models: Array<{ id: string; name?: string }> }>(
+    `/providers/${providerId}/models`,
+  );
+  return body.models.map((m) => m.id);
 }

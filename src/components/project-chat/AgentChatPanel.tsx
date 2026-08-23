@@ -13,6 +13,7 @@ import {
   ArrowUp,
   Check,
   ChevronDown,
+  Copy,
   Edit3,
   FileCode2,
   Paperclip,
@@ -22,6 +23,7 @@ import {
   type LucideIcon,
 } from "lucide-react";
 import { Link } from "react-router";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useAgents } from "../../hooks/use-agents";
 import {
   useCreateSession,
@@ -34,9 +36,13 @@ import {
   type DiffEntry,
   type Project,
   type ProjectChatItem,
+  type StreamTurnEvent,
   type ToolUseEntry,
+  fetchProviderModels,
+  streamSessionMessage,
   toProjectChatItems,
 } from "../../lib/api";
+import { useConfigStore } from "../../lib/config-store";
 import { withAlpha } from "../dashboard/helpers";
 import { ease } from "../../lib/motion";
 import { useProjectChatStore } from "../../lib/project-chat-store";
@@ -70,6 +76,81 @@ const TOOL_ICONS: Record<string, LucideIcon> = {
 
 const basename = (p: string): string => p.split("/").pop() ?? p;
 
+const fmtTokens = (n: number): string =>
+  n >= 1000 ? `${(n / 1000).toFixed(n >= 10_000 ? 0 : 1)}k` : String(n);
+
+/** Known context windows (tokens) for the context meter. */
+const CONTEXT_LIMITS: Record<string, number> = {
+  "stealth/ox-alpha": 1_048_576,
+};
+const DEFAULT_CONTEXT_LIMIT = 1_000_000;
+
+/** Hover copy button with a "Copied" flash (round-16 owner request). */
+function CopyButton({ text }: { text: string }) {
+  const styles = useThemeStyles();
+  const [copied, setCopied] = useState(false);
+  return (
+    <button
+      onClick={() => {
+        void navigator.clipboard?.writeText(text).then(() => {
+          setCopied(true);
+          setTimeout(() => setCopied(false), 1200);
+        });
+      }}
+      aria-label="Copy message"
+      title="Copy"
+      className="w-6 h-6 rounded-md grid place-items-center transition-colors"
+      style={{ color: styles.textTertiary }}
+      onMouseEnter={(e) => {
+        e.currentTarget.style.background = styles.subtleHover;
+      }}
+      onMouseLeave={(e) => {
+        e.currentTarget.style.background = "transparent";
+      }}
+    >
+      {copied ? <Check size={11} style={{ color: SEMANTIC_COLORS.success }} /> : <Copy size={11} />}
+    </button>
+  );
+}
+
+/** Per-reply stats chips (owner spec: time · in · out · tok/s). */
+function ReplyStats({
+  usage,
+  ms,
+  model,
+}: {
+  usage?: { inputTokens: number; outputTokens: number };
+  ms?: number;
+  model?: string;
+}) {
+  const styles = useThemeStyles();
+  if (usage === undefined && ms === undefined) return null;
+  const seconds = ms !== undefined ? ms / 1000 : undefined;
+  const tps =
+    usage && seconds && seconds > 0 ? usage.outputTokens / seconds : undefined;
+  const chips: string[] = [];
+  if (seconds !== undefined) chips.push(`${seconds < 10 ? seconds.toFixed(1) : Math.round(seconds)}s`);
+  if (usage) {
+    chips.push(`↑ ${fmtTokens(usage.inputTokens)}`);
+    chips.push(`↓ ${fmtTokens(usage.outputTokens)}`);
+  }
+  if (tps !== undefined) chips.push(`${tps < 10 ? tps.toFixed(1) : Math.round(tps)} tok/s`);
+  if (model) chips.push(model);
+  return (
+    <div className="flex flex-wrap items-center gap-1.5 pt-1.5">
+      {chips.map((c) => (
+        <span
+          key={c}
+          className="text-[9.5px] font-mono px-1.5 py-0.5 rounded-md"
+          style={{ color: styles.textTertiary, background: styles.subtle }}
+        >
+          {c}
+        </span>
+      ))}
+    </div>
+  );
+}
+
 const itemKey = (item: ProjectChatItem): string => {
   switch (item.kind) {
     case "user":
@@ -87,16 +168,21 @@ function UserMessage({ content }: { content: string }) {
   const styles = useThemeStyles();
   return (
     <motion.div
-      className="flex justify-end"
+      className="flex justify-end group"
       variants={msgVariants}
       initial="initial"
       animate="animate"
     >
-      <div
-        className="max-w-[85%] rounded-2xl rounded-br-md px-3.5 py-2.5 text-[13px] leading-[1.5]"
-        style={{ background: styles.accent, color: styles.accentText }}
-      >
-        {content}
+      <div className="flex items-end gap-1 max-w-[85%]">
+        <div className="opacity-0 group-hover:opacity-100 transition-opacity">
+          <CopyButton text={content} />
+        </div>
+        <div
+          className="rounded-2xl rounded-br-md px-3.5 py-2.5 text-[13px] leading-[1.5]"
+          style={{ background: styles.accent, color: styles.accentText }}
+        >
+          {content}
+        </div>
       </div>
     </motion.div>
   );
@@ -154,15 +240,31 @@ function RichText({ content }: { content: string }) {
   return <>{elements}</>;
 }
 
-function AiMessage({ content }: { content: string }) {
+function AiMessage({
+  content,
+  usage,
+  ms,
+  model,
+}: {
+  content: string;
+  usage?: { inputTokens: number; outputTokens: number };
+  ms?: number;
+  model?: string;
+}) {
   const styles = useThemeStyles();
   return (
-    <motion.div variants={msgVariants} initial="initial" animate="animate">
+    <motion.div variants={msgVariants} initial="initial" animate="animate" className="group">
       <div
-        className="rounded-2xl px-3.5 py-3 text-[13px] leading-[1.6] border"
-        style={{ background: styles.card, borderColor: styles.border, color: styles.text }}
+        className="rounded-2xl px-3.5 py-3 text-[13px] leading-[1.6]"
+        style={{ background: styles.card, color: styles.text }}
       >
         <RichText content={content} />
+      </div>
+      <div className="flex items-start gap-1">
+        <div className="opacity-0 group-hover:opacity-100 transition-opacity pt-1">
+          <CopyButton text={content} />
+        </div>
+        <ReplyStats usage={usage} ms={ms} model={model} />
       </div>
     </motion.div>
   );
@@ -273,7 +375,7 @@ const MessageRenderer = forwardRef<HTMLDivElement, { item: ProjectChatItem }>(
       case "ai":
         return (
           <div ref={ref}>
-            <AiMessage content={item.content} />
+            <AiMessage content={item.content} usage={item.usage} ms={item.ms} model={item.model} />
           </div>
         );
       case "tools":
@@ -341,6 +443,134 @@ function AgentThinking({ agent }: { agent: Agent | null }) {
   );
 }
 
+
+/**
+ * Composer footer (round-16): context-window meter (approx from the last
+ * reply's usage), model picker (per-send override; the agent's model is the
+ * default), and the keyboard hint.
+ */
+function ComposerFooter({
+  agent,
+  modelOverride,
+  onModelChange,
+  items,
+  disabled,
+}: {
+  agent: Agent | null;
+  modelOverride: string | null;
+  onModelChange: (model: string | null) => void;
+  items: ProjectChatItem[];
+  disabled: boolean;
+}) {
+  const styles = useThemeStyles();
+  const [open, setOpen] = useState(false);
+  const menuRef = useRef<HTMLDivElement>(null);
+  const effective = modelOverride ?? agent?.model ?? null;
+
+  const providerId = agent?.providerId ?? null;
+  const modelsQuery = useQuery({
+    queryKey: ["provider-models", providerId],
+    queryFn: () => fetchProviderModels(providerId as string),
+    enabled: providerId !== null && !disabled,
+    staleTime: 5 * 60 * 1000,
+  });
+  const models = (modelsQuery.data ?? []).slice(0, 60);
+
+  useEffect(() => {
+    if (!open) return;
+    const handler = (e: MouseEvent) => {
+      if (menuRef.current && !menuRef.current.contains(e.target as Node)) setOpen(false);
+    };
+    document.addEventListener("mousedown", handler);
+    return () => document.removeEventListener("mousedown", handler);
+  }, [open]);
+
+  // Approximate current context = last reply's in+out tokens (good enough
+  // for a meter; exact per-model accounting is a later refinement).
+  const lastUsage = [...items].reverse().find((it) => it.kind === "ai" && it.usage);
+  const ctxTokens =
+    lastUsage && lastUsage.kind === "ai" && lastUsage.usage
+      ? lastUsage.usage.inputTokens + lastUsage.usage.outputTokens
+      : 0;
+  const limit = (effective !== null ? CONTEXT_LIMITS[effective] : undefined) ?? DEFAULT_CONTEXT_LIMIT;
+  const pct = Math.min(100, (ctxTokens / limit) * 100);
+
+  return (
+    <div className="px-1 pt-1.5 flex items-center justify-between gap-2 font-mono text-[10px]" style={{ color: styles.textTertiary }}>
+      <div className="flex items-center gap-2 min-w-0" title="Approximate context window usage (from the last reply)">
+        <span className="shrink-0">ctx</span>
+        <div className="w-16 h-1 rounded-full overflow-hidden shrink-0" style={{ background: styles.subtle }}>
+          <div className="h-full rounded-full" style={{ width: `${Math.max(2, pct)}%`, background: styles.accent }} />
+        </div>
+        <span className="shrink-0">{fmtTokens(ctxTokens)} / {fmtTokens(limit)}</span>
+      </div>
+      <div className="flex items-center gap-2 shrink-0">
+        <span>⌘K search · ↵ to send</span>
+        <div className="relative" ref={menuRef}>
+          <button
+            onClick={() => setOpen((v) => !v)}
+            disabled={disabled}
+            aria-haspopup="listbox"
+            aria-expanded={open}
+            aria-label="Choose model"
+            title="Model for the next message"
+            className="flex items-center gap-1 px-1.5 py-0.5 rounded-md transition-colors disabled:opacity-50 max-w-[180px]"
+            style={{ color: styles.textSecondary }}
+            onMouseEnter={(e) => {
+              if (!disabled) e.currentTarget.style.background = styles.subtleHover;
+            }}
+            onMouseLeave={(e) => {
+              e.currentTarget.style.background = "transparent";
+            }}
+          >
+            <span className="truncate">{effective ?? "no model"}</span>
+            <ChevronDown size={10} />
+          </button>
+          {open ? (
+            <div
+              role="listbox"
+              className="absolute bottom-7 right-0 w-64 max-h-64 overflow-y-auto auto-scroll rounded-2xl border p-1.5 z-50"
+              style={{ background: styles.card, borderColor: styles.border, boxShadow: styles.bentoShadow }}
+            >
+              {models.length === 0 ? (
+                <div className="text-[11px] px-2 py-1.5" style={{ color: styles.textTertiary }}>
+                  {modelsQuery.isLoading ? "loading models…" : "no models listed"}
+                </div>
+              ) : (
+                models.map((m) => (
+                  <button
+                    key={m}
+                    role="option"
+                    aria-selected={m === effective}
+                    onClick={() => {
+                      onModelChange(m === agent?.model ? null : m);
+                      setOpen(false);
+                    }}
+                    className="w-full text-left px-2.5 py-1.5 rounded-lg font-mono text-[10.5px] truncate"
+                    style={{
+                      color: styles.textSecondary,
+                      background: m === effective ? withAlpha(styles.accent, 0.09) : "transparent",
+                    }}
+                    onMouseEnter={(e) => {
+                      if (m !== effective) e.currentTarget.style.background = styles.subtleHover;
+                    }}
+                    onMouseLeave={(e) => {
+                      if (m !== effective) e.currentTarget.style.background = "transparent";
+                    }}
+                    title={m}
+                  >
+                    {m}
+                  </button>
+                ))
+              )}
+            </div>
+          ) : null}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 export function AgentChatPanel({
   projectId,
   project,
@@ -403,7 +633,19 @@ export function AgentChatPanel({
   const [lastSent, setLastSent] = useState<string | null>(null);
   const [sendError, setSendError] = useState<string | null>(null);
 
-  const busy = createSession.isPending || sendMessage.isPending || pendingUser !== null;
+  // ── Round-16 live streaming state ────────────────────────────────────────
+  const [liveText, setLiveText] = useState("");
+  const [liveTools, setLiveTools] = useState<Array<{ toolName: string; argsSummary: string; ok: boolean | null }>>([]);
+  const [streamBusy, setStreamBusy] = useState(false);
+  const queryClient = useQueryClient();
+  const liveMode = useConfigStore((s) => !s.demoData);
+  // Per-send model override (composer picker); null = the agent's own model.
+  const [modelOverride, setModelOverride] = useState<string | null>(null);
+  const effectiveModel = modelOverride ?? agent?.model ?? null;
+
+  const FILE_MUTATING_TOOLS = new Set(["write_file", "edit_file", "create_dir", "delete_file"]);
+
+  const busy = createSession.isPending || sendMessage.isPending || pendingUser !== null || streamBusy;
 
   // Optimistic echo lives only until the refetched log contains it (ChatView pattern).
   const pendingEcho =
@@ -419,7 +661,7 @@ export function AgentChatPanel({
   useEffect(() => {
     const el = scrollRef.current;
     if (el) el.scrollTo({ top: el.scrollHeight, behavior: "smooth" });
-  }, [items.length, busy, pendingUser]);
+  }, [items.length, busy, pendingUser, liveText, liveTools.length]);
 
   // NOTE: ⌘K now focuses the TopBar file search (demo behavior); the composer
   // keeps Enter-to-send and gets focus after sending.
@@ -431,6 +673,8 @@ export function AgentChatPanel({
     setLastSent(text);
     setPendingUser(text);
     setSendError(null);
+    setLiveText("");
+    setLiveTools([]);
     try {
       let sid = session?.id;
       if (!sid) {
@@ -442,10 +686,50 @@ export function AgentChatPanel({
         });
         sid = created.id;
       }
-      await sendMessage.mutateAsync({ sessionId: sid, content: text });
+      if (liveMode) {
+        // STREAMED turn: text deltas + tool calls land live (owner round-16).
+        setStreamBusy(true);
+        await streamSessionMessage(sid, text, (event: StreamTurnEvent) => {
+          if (event.type === "text-delta") {
+            setLiveText((prev) => prev + event.delta);
+          } else if (event.type === "tool-call") {
+            setLiveTools((prev) => [...prev, { toolName: event.toolName, argsSummary: event.argsSummary, ok: null }]);
+          } else if (event.type === "tool-result") {
+            setLiveTools((prev) => {
+              // Attach the result to the matching in-flight pill (last null-ok).
+              const idx = [...prev].reverse().findIndex((x) => x.toolName === event.toolName && x.ok === null);
+              if (idx === -1) return [...prev, { toolName: event.toolName, argsSummary: event.argsSummary, ok: event.ok }];
+              const real = prev.length - 1 - idx;
+              const next = [...prev];
+              next[real] = { ...next[real], ok: event.ok };
+              return next;
+            });
+            // LIVE VIEW (owner request): file mutations refresh the explorer
+            // + open file immediately, not after the turn ends.
+            if (FILE_MUTATING_TOOLS.has(event.toolName)) {
+              void queryClient.invalidateQueries({ queryKey: ["project-tree"] });
+              void queryClient.invalidateQueries({ queryKey: ["project-file"] });
+            }
+          } else if (event.type === "error") {
+            setSendError(event.message);
+          }
+        }, { model: effectiveModel ?? undefined });
+        setStreamBusy(false);
+        await queryClient.invalidateQueries({ queryKey: ["session"] });
+        await queryClient.invalidateQueries({ queryKey: ["sessions"] });
+        await queryClient.invalidateQueries({ queryKey: ["usage"] });
+        void queryClient.invalidateQueries({ queryKey: ["project-tree"] });
+        // Canonical assistant item now renders from the event log.
+        setLiveText("");
+        setLiveTools([]);
+      } else {
+        // Fixture/demo mode: no sidecar → sync hook (canned reply).
+        await sendMessage.mutateAsync({ sessionId: sid, content: text });
+      }
     } catch (err) {
       setSendError(err instanceof Error ? err.message : String(err));
     } finally {
+      setStreamBusy(false);
       // Both hooks invalidate their queries on settle; drop the optimistic echo.
       setPendingUser(null);
     }
@@ -462,8 +746,8 @@ export function AgentChatPanel({
 
   return (
     <div
-      className="flex flex-col h-full min-w-0 rounded-2xl border overflow-hidden"
-      style={{ backgroundColor: styles.card, borderColor: styles.border }}
+      className="flex flex-col h-full min-w-0 rounded-2xl overflow-hidden"
+      style={{ backgroundColor: styles.card }}
     >
       {/* Panel header: accent chip · agent picker (round-15) · status chip */}
       <div
@@ -627,8 +911,76 @@ export function AgentChatPanel({
               {pendingEcho !== null ? <UserMessage content={pendingEcho} /> : null}
             </AnimatePresence>
 
+            {/* ── LIVE STREAM (round-16): tool pills + streaming text ─────── */}
+            {liveTools.length > 0 ? (
+              <div className="flex flex-wrap gap-1.5">
+                {liveTools.map((tool, i) => {
+                  const Icon = TOOL_ICONS[tool.toolName] ?? Terminal;
+                  const full = `${tool.toolName} ${tool.argsSummary}`.trim();
+                  const label = full.length > 48 ? `${full.slice(0, 48)}…` : full;
+                  return (
+                    <div
+                      key={`${tool.toolName}-${i}`}
+                      title={full}
+                      className="inline-flex items-center gap-1.5 h-7 px-3 rounded-full border font-mono text-[11px] max-w-full"
+                      style={{
+                        background: styles.isDark ? styles.bg : styles.card,
+                        borderColor: tool.ok === false ? withAlpha(SEMANTIC_COLORS.danger, 0.5) : styles.border,
+                        color: styles.textSecondary,
+                      }}
+                    >
+                      <Icon size={11} className="shrink-0" />
+                      <span className="truncate">{label}</span>
+                      {tool.ok === null ? (
+                        <span className="flex gap-0.5 shrink-0">
+                          {[0, 0.15, 0.3].map((d, j) => (
+                            <span
+                              key={j}
+                              className="w-1 h-1 rounded-full"
+                              style={{
+                                background: styles.textSecondary,
+                                animation: `bounceDot 1s infinite ${d}s`,
+                              }}
+                            />
+                          ))}
+                        </span>
+                      ) : (
+                        <span
+                          className="opacity-50 shrink-0"
+                          style={{ color: tool.ok ? SEMANTIC_COLORS.success : SEMANTIC_COLORS.danger }}
+                        >
+                          {tool.ok ? "✓" : "✗"}
+                        </span>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            ) : null}
+
+            {streamBusy || liveText !== "" ? (
+              <div
+                className="rounded-2xl px-3.5 py-3 text-[13px] leading-[1.6]"
+                style={{ background: styles.card, color: styles.text }}
+              >
+                {liveText === "" ? (
+                  <span className="text-[12px] font-mono" style={{ color: styles.textSecondary }}>
+                    thinking…
+                  </span>
+                ) : (
+                  <>
+                    <RichText content={liveText} />
+                    <span
+                      className="inline-block w-[7px] h-[14px] ml-0.5 align-middle rounded-sm"
+                      style={{ background: styles.accent, animation: "bounceDot 1s infinite" }}
+                    />
+                  </>
+                )}
+              </div>
+            ) : null}
+
             <AnimatePresence>
-              {busy ? <AgentThinking agent={agent} /> : null}
+              {busy && !streamBusy && liveText === "" ? <AgentThinking agent={agent} /> : null}
             </AnimatePresence>
           </div>
         </div>
@@ -692,9 +1044,13 @@ export function AgentChatPanel({
           </button>
         </div>
         {!compact ? (
-          <div className="px-1 pt-1.5 flex justify-between font-mono text-[10px]" style={{ color: styles.textTertiary }}>
-            <span>⌘K search · ↵ to send</span>
-          </div>
+          <ComposerFooter
+            agent={agent}
+            modelOverride={modelOverride}
+            onModelChange={setModelOverride}
+            items={items}
+            disabled={!liveMode}
+          />
         ) : null}
       </div>
     </div>

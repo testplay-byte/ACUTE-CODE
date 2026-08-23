@@ -40,9 +40,17 @@ export function AppShell() {
         style={{ backgroundColor: "var(--ac-accent)" }}
       />
 
-      <div className="relative z-10 flex h-full gap-3 p-3 md:p-4">
+      <div
+        className={`relative z-10 flex h-full ${isChatRoute ? "gap-[3px] p-[2px]" : "gap-3 p-3 md:p-4"}`}
+      >
         {showSidebar && <Sidebar />}
-        <main className="min-w-0 flex-1 overflow-y-auto rounded-lg border-[1.5px] border-line bg-card">
+        <main
+          className={
+            isChatRoute
+              ? "min-w-0 flex-1 overflow-hidden"
+              : "min-w-0 flex-1 overflow-y-auto rounded-lg border-[1.5px] border-line bg-card"
+          }
+        >
           <Outlet />
         </main>
       </div>

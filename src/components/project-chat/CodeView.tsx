@@ -31,7 +31,7 @@ export function CodeView({ projectId, busy = false }: { projectId: string; busy?
 
   return (
     <div
-      className="flex flex-col h-full rounded-2xl border overflow-hidden"
+      className="flex flex-col h-full rounded-2xl overflow-hidden"
       style={{
         backgroundColor: styles.card,
         borderColor: styles.border,
@@ -73,7 +73,7 @@ export function CodeView({ projectId, busy = false }: { projectId: string; busy?
             className="w-1.5 h-1.5 rounded-full animate-pulse"
             style={{ backgroundColor: SEMANTIC_COLORS.success }}
           />
-          Nova editing
+          Acute editing
           {busy && (
             <span className="flex gap-0.5 ml-1">
               {[0, 0.15, 0.3].map((delay, i) => (
