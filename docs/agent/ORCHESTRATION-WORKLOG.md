@@ -303,3 +303,20 @@ Work Log:
 
 Stage Summary:
 - Owner action: replace acute_launcher.py only (ACUTE.bat + credentials.txt unchanged) → double-click. Auth flow now has zero platform-dependent parts. Next: owner's Windows retest → then MVP review + Phase 3 on approval.
+
+---
+Task ID: R14 (agentic-system session)
+Agent: orchestrator (Z.ai Code) — all inline
+Task: Owner round-14: real agentic coding system — folder selection, full tools, demo-parity chat UI, live P1 proof, three-pillar planning (n8n research)
+
+Work Log:
+- Backend: agent-core/src/dialogs.ts (async pickFolder: PowerShell -STA FolderBrowserDialog / zenity / kdialog) + POST /internal/dialog/folder (root-mounted, bearer-walled, 501 DIALOG_UNAVAILABLE; async so the sidecar never freezes on a human) — REAL folder selection works in launcher/browser dev, not just Tauri
+- Tools: create_dir (nested), delete_file (ONE file; directories refused — Phase-3 approval boundary), search_files (recursive, shared ignore rules, cap 50); system prompt updated; +3 tests (113 agent-core)
+- Frontend demo parity: TopBar.tsx (hamburger: live AGENT picker persisted for new sessions, FILES search, THEME grid, Hide Sidebar; center ⌘K Search-files bar with live dropdown → click opens file; Code/Experimental/dark toggles; ACUTE AGENT brand), ExperimentalLayout.tsx (freeform windows 1:1 hosting REAL panels), panels/TodoPanel.tsx (ring/mission/counter/toggle + add-row, per-project persisted), LeftSidebar EXPLORER+TO-DO, Sidebar Browse… (Tauri→sidecar→hint), store extended + partialize
+- Live P1 (Linux stand-in of ACUTEST\P1): turn1 38s 6-tool chain (list→search→read→mkdir→write→edit) exact disk PASS×2; turn2 20s read-back verbatim + docs/ + delete_file-on-directory REFUSED & quoted by model (survivor confirmed) — approval boundary held live; 8.5k/1.2k tokens/2 requests
+- Bugs fixed during verification: zustand ?? [] unstable selector infinite loop (NO_TODOS const — lesson #26), internal route prefix mismatch in picker client (#25), CLI template-agent 409 trap (#27), spawnSync-would-freeze-sidecar → async dialogs (#28)
+- Docs: round-10.md + board rows; docs/research/n8n (README/architecture/patterns — additive automation-pillar plan; research README indexed); AGENT-MEMORY #25–#28; HANDOFF §3/§9 (dashboard redo = next, owner-gated)
+- pnpm verify green (178+6, build, license clean); screenshots ×5 machine-verified, zero console errors; secret scan clean; commit 4dbb6bd pushed; CI 32629497675 SUCCESS; ntfy delivered
+
+Stage Summary:
+- The coding pillar is genuinely usable end-to-end (folder pick → project → session → 7-tool agent → verified disk changes → refusal boundaries). Owner tests on Windows via launcher (only-model rule kept). Next: dashboard UI redo (owner verdict recorded), sessions-per-project switcher, Phase 3 on approval. Automation pillar planned additively per n8n research.
