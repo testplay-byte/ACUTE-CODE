@@ -21,19 +21,20 @@ You are picking up **ACUTE-CODE**, a local-first, closed-source multi-agent engi
 
 ACUTE-CODE (NOT "Forge" — the brief's old codename) is a Windows desktop app: **Tauri 2 (Rust) shell + React 18/TS frontend + Node/TS sidecar ("agent-core") that exclusively owns SQLite (WAL) and serves localhost REST+WS**. "Local-first" = all processing on-device; LLMs are cloud APIs only. It orchestrates up to 5 concurrent agents (templates: Planner, Researcher, Coder, Reviewer, Tester) in three run modes — **single-agent (default)**, **auto-team** (cheap orchestrator model delegates to a powerful worker), **manual** (advanced). No sandbox in v1, so the **human-approval engine is the security boundary**. Providers: Anthropic/OpenAI/Google (fixture-tested only — no keys) + OpenRouter (live) + custom OpenAI-compatible. Owner runs it as a portable folder with an exe (ADR-0003). Budget: <700 MB idle, <2.5 GB with 5 agents, cold start <5 s.
 
-## 3. Exact current state (2026-08-22)
+## 3. Exact current state (2026-08-23, agent-handoff snapshot)
 
-**Phase 2 is complete and owner-walked; the formal end-of-phase report is delivered and awaiting explicit gate approval. Phase 3 (orchestration engine) must NOT start until the owner approves.**
+**The setup wizard is COMPLETE and owner-approved (UI rounds 1–7, all logged in `docs/ui-iterations/`). Rounds 8 redid the shell (topbar deleted; sidebar = Dashboard/PROJECTS/Usage/Settings; Settings hub with Appearance/Agents/API/Advanced) and fixed the connection test to be honest. The CURRENT TASK is the Agentic Coding MVP (`docs/runbooks/plan-agentic-mvp.md`): M1 (projects backend + REST + tree/file endpoints) and M2 (path-sandboxed file tools wired into the agent turn loop) are DONE and tested; **M3 (project-chat UI port from `design/demos/project-chat`) and M4 (live run on `C:\Users\khurr\Desktop\ACUTEST`) REMAIN — that is where the next agent picks up.**
 
 | Item | State |
 |---|---|
-| Phases 0 (research+spec), 1 (architecture+skeleton) | **DONE, owner-approved** |
-| Phase 2 (core skeleton) | **Complete: all acceptance criteria pass; owner did a live walkthrough ("everything is working properly") and approved two rounds of wizard/dashboard UI-fidelity polish. Formal gate approval pending on the Phase 2 report.** |
-| Tests | `pnpm verify` green: lint + typecheck + **143 unit + 6 sidecar-E2E tests** + build + license audit (**all workspace packages, 107 prod deps**, all permissive); `cargo check` green |
-| Live proof | Real OpenRouter round trip PASSED (model replied exactly `ACUTE-CODE LIVE ROUND TRIP OK`, usage 113→46 tok recorded); shell-spawn contract test PASSED (env token → ready line → auth wall → key injection) |
-| **Git remote** | `https://github.com/testplay-byte/ACUTE-CODE` (PRIVATE — if you ever find it public, PATCH it private before any push). **Fully synced: remote tip = `3265ddd`, CI GREEN on Actions** (lint + typecheck + tests + build + license audit + cargo check). Run `git pull` / clone and confirm `git log --oneline -1` shows `3265ddd`. |
-| Working copy | `C:\Users\khurr\Desktop\ZCODE\ACUTE_CODE\acute-code` (branch `main`, all commits local) |
-| Design demos (owner's) | **Backed up in-repo at `design/demos/`** (3 source-only projects, no build artifacts) — summarized in `docs/design/ui-direction.md` |
+| Phases 0–2 | **DONE, owner-approved** (Phase-2 report in `docs/runbooks/review-phase-2.md`) |
+| UI fidelity | Wizard rounds 1–7 APPROVED; round 8 (shell/dashboard/Settings/mono) delivered — owner reviewing |
+| Agentic MVP | M1+M2 DONE (migration 0003, `/api/v1/projects` CRUD + `/tree` + `/file`, file tools sandboxed to project root, `tool.use` audit events, Tauri `pick_folder`); M3 UI + M4 live test REMAIN |
+| Tests | `pnpm verify` green: lint + typecheck + **169 unit + 6 sidecar-E2E** + build + license audit (107 prod deps, CLEAN); `cargo check` green |
+| Dev stack | `pnpm dev:full` = sidecar on 127.0.0.1:5178 (OpenRouter key auto-read from Credential Manager) + vite. Plain `pnpm dev` = UI only, NO backend. Dev CLI: `node scripts/acute.mjs <cmd>` |
+| **Git remote** | `https://github.com/testplay-byte/ACUTE-CODE` (PRIVATE — verify before any push). **Fully synced: remote tip = `98abfde`, CI GREEN**. Clone and confirm `git log --oneline -1` shows `98abfde` or newer. |
+| Working copy (previous agent) | `C:\Users\khurr\Desktop\ZCODE\ACUTE_CODE\acute-code` (branch `main`) — the new agent clones fresh from GitHub |
+| Design demos (owner's) | **Backed up in-repo at `design/demos/`** — `acute-agent-ui` (wizard, DONE), `acute-agent-dashboard` (dashboard), `project-chat` (the coding UI to port for M3 — the normative spec) |
 
 ## 4. Repo map (every path has a purpose — anti-drift rule §13)
 
@@ -78,7 +79,7 @@ acute-code/
 
 ## 6. First tasks for you, in order
 
-1. **Confirm you have current code**: `git log --oneline -1` → must be `895c05d` or newer (pull if behind). If your machine lacks push credentials, store the PAT the owner gives you:
+1. **Confirm you have current code**: `git log --oneline -1` → must be `98abfde` or newer (pull if behind). If your machine lacks push credentials, store the PAT the owner gives you:
    ```bash
    git config --global credential.https://github.com.helper ""          # clear inherited GCM for this host
    git config --global credential.https://github.com.helper wincred     # GCM itself special-cases github.com to OAuth and silently discards PATs — wincred works
@@ -87,8 +88,8 @@ acute-code/
    Keep the remote in the username-embedded form (`https://testplay-byte@github.com/testplay-byte/ACUTE-CODE.git`) — username-scoped lookup is what makes wincred reliable. (On the owner's machine the PAT may already be stored — test with a `git pull` first.)
 2. **Verify repo visibility is PRIVATE** (`curl -H "Authorization: Bearer <PAT>" https://api.github.com/repos/testplay-byte/ACUTE-CODE | grep private`) — closed-source product; if public, `PATCH` it `{"private":true}` before pushing.
 3. **Confirm the environment** (§8) and run `pnpm verify` + `cargo check` yourself — you must see green with your own eyes. Every push triggers CI; keep it green.
-4. **Deliver the Phase 2 report and collect the explicit gate approval** (the owner already did his live walkthrough and approved the UI-fidelity rounds). Record any remaining performance numbers in `docs/runbooks/DEMO.md`.
-5. On approval → **Phase 3** (§9).
+4. **Pick up the Agentic Coding MVP** (`docs/runbooks/plan-agentic-mvp.md`): M1+M2 are DONE and tested — your work starts at **M3: port the project-chat UI** from `design/demos/project-chat` (Explorer/Code/Chat resizable panels, message anatomy incl. action pills + diff cards) onto live data (`/api/v1/projects/:id/tree`, `/file`, sessions with projectId), then **M4: live run on `C:/Users/khurr/Desktop/ACUTEST`** — create the project, start a session, ask the agent to create a file, verify on disk. The owner tests everything himself and expects screenshot verification of UIs before handover.
+5. After the MVP: **Phase 3 orchestration** (§9) — only on explicit owner approval.
 
 ## 7. Secrets (exact locations — never write them anywhere else)
 
@@ -112,9 +113,11 @@ The Rust shell reads provider keys from Credential Manager at spawn and injects 
 - Tauri on Windows needs `src-tauri/icons/icon.ico` even with bundling disabled.
 - Git Bash kills don't always take node children down — check `tasklist` for orphans after sidecar tests (`taskkill //F //PID <pid>`).
 
-## 9. What's next: Phase 3 — Orchestration engine (after owner approval)
+## 9. What's next: finish the Agentic Coding MVP (M3+M4), then Phase 3 — Orchestration engine (after owner approval)
 
-Scope per SPEC §F3 + ADR-0001 (read `docs/research/README.md` synthesis §4 first — delegation-as-task-tool is the proven pattern): multi-agent run loop; shared message bus (typed pub/sub, MetaGPT pattern); Kanban task board events; **approval-gate engine live** (modal round-trip, audit log, denylist-supreme, 15-min deny-on-expiry default, remembered grants for non-destructive); the three run modes with auto-team composition; WS streaming (`@fastify/websocket` — first-message auth frame per ADR-0008; replaces today's refetch-after-turn). Exit demo (owner watches live): 3-agent coding task (Planner→Coder→Reviewer) + 2-agent research task.
+**IMMEDIATE (M3+M4, see `docs/runbooks/plan-agentic-mvp.md`):** port the project-chat demo UI to live data; wire the sidebar's Add Project dialog to the new native `pick_folder` Tauri command (browser dev falls back to a text prompt — gate with `isTauri()`, pattern in `providers-api.ts`); replace the local-only `src/lib/projects-store.ts` with backend `/api/v1/projects`; run M4 live on `C:/Users/khurr/Desktop/ACUTEST` and record results in `docs/ui-iterations/round-09.md`. The full owner vision (three products: coding env + agentic system + n8n-class automations) is recorded in `docs/architecture/PROJECT-MAP.md` §1/§6.
+
+Phase 3 scope per SPEC §F3 + ADR-0001 (read `docs/research/README.md` synthesis §4 first — delegation-as-task-tool is the proven pattern): multi-agent run loop; shared message bus (typed pub/sub, MetaGPT pattern); Kanban task board events; **approval-gate engine live** (modal round-trip, audit log, denylist-supreme, 15-min deny-on-expiry default, remembered grants for non-destructive); the three run modes with auto-team composition; WS streaming (`@fastify/websocket` — first-message auth frame per ADR-0008; replaces today's refetch-after-turn). Exit demo (owner watches live): 3-agent coding task (Planner→Coder→Reviewer) + 2-agent research task.
 
 **Also queued:** ratify Phase 2 assumptions (ADR list in the Phase 2 report — SPDX OR-expression audit parsing, failed-turn session semantics); `cargo-deny` license audit for Rust deps in CI; native provider adapters remain fixture-only until keys exist; approval-decision metadata wrapper type; `UsageRecord.costSource` provenance field.
 
