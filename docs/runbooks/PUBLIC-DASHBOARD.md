@@ -1,9 +1,10 @@
 # PUBLIC DASHBOARD — ACUTE-DASH
 
 The owner's public, visual status page (round-17, ADR-0021):
-**https://testplay-byte.github.io/ACUTE-DASH/** — dark bento cards, three
-pillar progress bars, quality chips, milestone timeline. Screenshot of the
-render: `docs/ui-iterations/assets/round-13/public-dashboard.png`.
+**https://testplay-byte.github.io/DASHBOARD/** — dark bento cards, three
+pillar progress bars, quality chips, milestone timeline. Round-18: the owner created the dedicated blank repo + a scoped PAT —
+first publish succeeded and was browser-verified (screenshot:
+`assets/round-14/dashboard-live.png`).
 
 ## Architecture
 
@@ -24,23 +25,17 @@ render: `docs/ui-iterations/assets/round-13/public-dashboard.png`.
 - **Pages stays DISABLED on the private repo** — part of the pre-push
   checklist (`SECURITY.md`).
 
-## One-time setup STILL NEEDED (owner action — the only blocker)
+## Setup status: LIVE ✅
 
-The public repo `ACUTE-DASH` is created, but pushes are denied: fine-grained
-PATs have a FIXED repository selection, and this repo was created after the
-token. Owner picks ONE:
+Published round-18: https://testplay-byte.github.io/DASHBOARD/ — the owner
+created the repo + scoped PAT; `publish-dashboard.mjs` pushed the generated
+page, enabled Pages, and the live URL was browser-verified (all sections
+confirmed by VLM). Future updates:
 
-- **A (easiest):** github.com → Settings → Developer settings →
-  Fine-grained tokens → edit the current token → *Repository access* → add
-  `testplay-byte/ACUTE-DASH` → *Contents: Read and write* → Save.
-- **B (least privilege):** create a NEW fine-grained token scoped to ONLY
-  `ACUTE-DASH` (Contents R/W, expiry ≤1y) — this is the recommended shape
-  for the future CI secret `ACUTE_DASH_PAT`.
-
-Then (once): `GITHUB_PAT=<token> node scripts/dashboard/publish-dashboard.mjs`
-— future publishes are the orchestrator's job per WORKFLOW §6 (CI automation
-via the repo secret can come later; the publisher prints exact guidance on a
-403).
+```bash
+DASHBOARD_PAT="$(cat /home/z/.secrets/dashboard.pat)" \
+  node scripts/dashboard/publish-dashboard.mjs
+```
 
 ## Content rules (binding)
 

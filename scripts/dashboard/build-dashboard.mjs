@@ -72,6 +72,16 @@ const milestoneRow = (m) => `
 
 const suiteChip = (s) => `<span class="chip">${esc(s.name)} · ${Number(s.tests) || 0} tests</span>`;
 
+const PLAN_STATUS = { queued: "#8b8b8b", "owner-gated": "#FF6B2C", planned: "#8b8b8b", active: "#22c55e" };
+const planRow = (item) => `
+      <div class="plan-row">
+        <span class="dot" style="background:${PLAN_STATUS[item.status] ?? "#8b8b8b"}"></span>
+        <span class="plan-phase">${esc(item.phase)}</span>
+        <span class="chip">${esc(item.status)}</span>
+        <span class="muted plan-note">${esc(item.note)}</span>
+      </div>`;
+const principle = (s) => `      <li>${esc(s)}</li>`;
+
 const html = `<!DOCTYPE html>
 <html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -104,6 +114,16 @@ const html = `<!DOCTYPE html>
   .ms{display:flex;gap:14px;padding:5px 0;border-bottom:1px dashed #232329;font-size:12.5px}
   .ms:last-child{border-bottom:0}
   .ms .mono{min-width:86px}
+  .plan-row{display:flex;align-items:center;gap:10px;padding:8px 0;border-bottom:1px dashed #232329;font-size:13px}
+  .plan-row:last-child{border-bottom:0}
+  .plan-phase{font-weight:600;min-width:180px}
+  .plan-note{flex:1;font-size:12px}
+  .plan-current{display:flex;align-items:center;gap:10px;padding:10px 14px;border-radius:12px;background:rgba(255,107,44,.08);border:1.5px solid rgba(255,107,44,.25);margin-bottom:12px}
+  .plan-current-label{font-size:10px;text-transform:uppercase;letter-spacing:.12em;color:var(--accent);font-weight:700}
+  .plan-current-title{font-weight:700;font-size:14px}
+  .plan-current-detail{color:var(--muted);font-size:12px}
+  .principles{margin:0;padding:0 0 0 16px;font-size:12.5px;color:var(--muted)}
+  .principles li{padding:2px 0}
   footer{color:var(--muted);font:11px ui-monospace,monospace;text-align:center;margin-top:6px}
   a{color:var(--accent);text-decoration:none}
 </style></head><body>
@@ -121,7 +141,27 @@ const html = `<!DOCTYPE html>
 ${status.pillars.map(pillarCard).join("\n")}
   </div>
 
+${status.plan ? `
   <div class="card">
+    <h2>The Plan</h2>
+    <div class="plan-current">
+      <div style="flex:1">
+        <div class="plan-current-label">Now</div>
+        <div class="plan-current-title">${esc(status.plan.current.title)}</div>
+        <div class="plan-current-detail">${esc(status.plan.current.detail)}</div>
+      </div>
+    </div>
+${status.plan.upcoming.map(planRow).join("\n")}
+    ${status.plan.principles ? `
+    <div style="margin-top:14px">
+      <h2>Principles</h2>
+      <ul class="principles">
+${status.plan.principles.map(principle).join("\n")}
+      </ul>
+    </div>` : ""}
+  </div>
+
+` : ""}  <div class="card">
     <h2>Quality</h2>
     <div class="chips">
 ${status.quality.suites.map(suiteChip).join("\n")}

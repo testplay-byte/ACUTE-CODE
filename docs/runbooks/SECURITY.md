@@ -41,7 +41,7 @@ tool outputs sent to it; (3) the local filesystem outside a project root;
    - NEVER in: the repo, transcripts, error messages, REST bodies (sole
      exception: the shell-only `/internal/providers/keys` handoff), the
      public dashboard (see below).
-5. **Public dashboard**: separate public repo `ACUTE-DASH` carries a
+5. **Public dashboard**: separate public repo `DASHBOARD` carries a
    hand-curated `status.json` render only; the builder enforces a DENYLIST
    (tokens, model ids, internal paths, env names, ntfy topic…) and fails
    closed before publishing. Pages stays DISABLED on the private repo — part
