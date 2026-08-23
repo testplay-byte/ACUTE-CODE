@@ -36,6 +36,12 @@ import {
 } from "./storage/projects.js";
 import { createSession, getSession, lastSessionSeq, listSessionEvents, listSessions } from "./storage/sessions.js";
 import { getUsageSummary } from "./storage/usage.js";
+import {
+  deleteModel,
+  listModels,
+  updateModel,
+  upsertModel,
+} from "./storage/models.js";
 import { openDatabase, type SqliteDatabase } from "./storage/db.js";
 import {
   TOOL_NAMES,
@@ -495,10 +501,15 @@ export function buildServer(options: ServerOptions): FastifyInstance {
             .send(errorBody("CONFLICT", `provider '${id}' already exists`, { field: "body.id" }));
         }
 
+        const apiFormat =
+          raw.apiFormat === "anthropic-messages" || raw.apiFormat === "responses"
+            ? (raw.apiFormat as string)
+            : "chat-completions";
         const record = createProviderRecord(db, {
           id,
           name: raw.name.trim(),
           baseUrl: baseUrl.toString(),
+          apiFormat,
         });
         return reply.code(201).send({ ...record, hasKey: keyring.has(record.id) });
       });
@@ -577,6 +588,112 @@ export function buildServer(options: ServerOptions): FastifyInstance {
             .code(502)
             .send(errorBody("PROVIDER_ERROR", message, { providerId: id }));
         }
+      });
+
+      // ---- Models (round-19: per-provider model metadata + pricing) ----
+
+      scope.get("/providers/:id/models-config", async (request, reply) => {
+        const { id } = request.params as Record<string, string>;
+        if (resolveProvider(db, id) === undefined) {
+          return reply.code(404).send(errorBody("NOT_FOUND", `no provider with id ${id}`));
+        }
+        return { models: listModels(db, id) };
+      });
+
+      scope.post("/providers/:id/models", async (request, reply) => {
+        const { id } = request.params as Record<string, string>;
+        if (resolveProvider(db, id) === undefined) {
+          return reply.code(404).send(errorBody("NOT_FOUND", `no provider with id ${id}`));
+        }
+        const body: unknown = request.body;
+        if (typeof body !== "object" || body === null || Array.isArray(body)) {
+          return reply
+            .code(400)
+            .send(errorBody("VALIDATION", "body must be a JSON object", { field: "body" }));
+        }
+        const raw = body as Record<string, unknown>;
+        if (typeof raw.modelId !== "string" || raw.modelId.trim() === "") {
+          return reply.code(400).send(
+            errorBody("VALIDATION", "modelId must be a non-empty string", { field: "body.modelId" }),
+          );
+        }
+        const model = upsertModel(db, id, {
+          modelId: raw.modelId.trim(),
+          displayName: typeof raw.displayName === "string" ? raw.displayName : undefined,
+          contextWindow: typeof raw.contextWindow === "number" ? raw.contextWindow : undefined,
+          maxOutputTokens: typeof raw.maxOutputTokens === "number" ? raw.maxOutputTokens : undefined,
+          inputPricePerMtok: typeof raw.inputPricePerMtok === "number" ? raw.inputPricePerMtok : undefined,
+          inputPriceCachedPerMtok: typeof raw.inputPriceCachedPerMtok === "number" ? raw.inputPriceCachedPerMtok : undefined,
+          outputPricePerMtok: typeof raw.outputPricePerMtok === "number" ? raw.outputPricePerMtok : undefined,
+          supportsThinking: raw.supportsThinking === true,
+          hidden: raw.hidden === true,
+        });
+        return reply.code(201).send(model);
+      });
+
+      scope.patch("/models/:id", async (request, reply) => {
+        const { id } = request.params as Record<string, string>;
+        const body: unknown = request.body;
+        if (typeof body !== "object" || body === null || Array.isArray(body)) {
+          return reply
+            .code(400)
+            .send(errorBody("VALIDATION", "body must be a JSON object", { field: "body" }));
+        }
+        const raw = body as Record<string, unknown>;
+        const patch: Record<string, unknown> = {};
+        if (typeof raw.displayName === "string") patch.displayName = raw.displayName;
+        if (typeof raw.contextWindow === "number" || raw.contextWindow === null) patch.contextWindow = raw.contextWindow;
+        if (typeof raw.maxOutputTokens === "number" || raw.maxOutputTokens === null) patch.maxOutputTokens = raw.maxOutputTokens;
+        if (typeof raw.inputPricePerMtok === "number" || raw.inputPricePerMtok === null) patch.inputPricePerMtok = raw.inputPricePerMtok;
+        if (typeof raw.inputPriceCachedPerMtok === "number" || raw.inputPriceCachedPerMtok === null) patch.inputPriceCachedPerMtok = raw.inputPriceCachedPerMtok;
+        if (typeof raw.outputPricePerMtok === "number" || raw.outputPricePerMtok === null) patch.outputPricePerMtok = raw.outputPricePerMtok;
+        if (typeof raw.supportsThinking === "boolean") patch.supportsThinking = raw.supportsThinking;
+        if (typeof raw.hidden === "boolean") patch.hidden = raw.hidden;
+        const model = updateModel(db, id, patch);
+        if (model === undefined) {
+          return reply.code(404).send(errorBody("NOT_FOUND", `no model with id ${id}`));
+        }
+        return model;
+      });
+
+      scope.delete("/models/:id", async (request, reply) => {
+        const { id } = request.params as Record<string, string>;
+        if (!deleteModel(db, id)) {
+          return reply.code(404).send(errorBody("NOT_FOUND", `no model with id ${id}`));
+        }
+        return reply.code(204).send();
+      });
+
+      // Read the provider's API key (settings UI: view/copy — round-19 owner request).
+      scope.get("/providers/:id/key", async (request, reply) => {
+        const { id } = request.params as Record<string, string>;
+        if (resolveProvider(db, id) === undefined) {
+          return reply.code(404).send(errorBody("NOT_FOUND", `no provider with id ${id}`));
+        }
+        const key = keyring.get(id);
+        return { hasKey: key !== undefined, key: key ?? null };
+      });
+
+      // Update the provider's API key (settings UI: edit — round-19 owner request).
+      scope.put("/providers/:id/key", async (request, reply) => {
+        const { id } = request.params as Record<string, string>;
+        if (resolveProvider(db, id) === undefined) {
+          return reply.code(404).send(errorBody("NOT_FOUND", `no provider with id ${id}`));
+        }
+        const body: unknown = request.body;
+        if (typeof body !== "object" || body === null || Array.isArray(body)) {
+          return reply
+            .code(400)
+            .send(errorBody("VALIDATION", "body must be a JSON object", { field: "body" }));
+        }
+        const value = (body as Record<string, unknown>).value;
+        if (typeof value !== "string" || value.trim() === "") {
+          return reply.code(400).send(
+            errorBody("VALIDATION", "value must be a non-empty string", { field: "body.value" }),
+          );
+        }
+        keyring.set(id, value.trim());
+        return reply.code(204).send();
       });
 
       // ---- Projects (Agentic Coding MVP, API.md §4a) ----

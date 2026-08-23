@@ -72,6 +72,7 @@ export interface ProviderRecordInput {
   id: string;
   name: string;
   baseUrl: string;
+  apiFormat?: string;
 }
 
 interface ProviderRow {
