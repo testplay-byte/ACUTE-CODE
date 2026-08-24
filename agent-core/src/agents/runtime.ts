@@ -26,6 +26,7 @@ import {
 import type { ChatFn, ChatTurnMessage, ChatTurnOutput, StreamChatFn } from "./chat.js";
 import { buildProjectSystemPrompt, readCustomRules } from "./prompts.js";
 import { lookupPricing } from "../storage/models.js";
+import { assembleWithinBudget, type ContextBudget } from "../context.js";
 
 export type SqliteDatabase = Database.Database;
 
@@ -213,9 +214,17 @@ export async function runSingleAgentTurn(
     agentId: agent.id,
     payload: { role: "user", content },
   });
-  const messages = listSessionEvents(db, session.id)
+  const rawMessages = listSessionEvents(db, session.id)
     .map(asChatMessage)
     .filter((message): message is ChatTurnMessage => message !== undefined);
+
+  // Context-window management: trim oldest messages if over budget (round-25)
+  const budget: ContextBudget = {
+    contextWindow: getModelContextWindow(db, provider.id, model),
+    maxOutputTokens: 32_768,
+    margin: 8_000,
+  };
+  const { messages } = assembleWithinBudget(rawMessages, budget);
 
   const startedAt = Date.now();
   let result: ChatTurnOutput;
@@ -326,9 +335,16 @@ export async function runStreamedAgentTurn(
     agentId: agent.id,
     payload: { role: "user", content },
   });
-  const messages = listSessionEvents(db, session.id)
+  const rawMessages = listSessionEvents(db, session.id)
     .map(asChatMessage)
     .filter((message): message is ChatTurnMessage => message !== undefined);
+
+  const budget: ContextBudget = {
+    contextWindow: getModelContextWindow(db, provider.id, model),
+    maxOutputTokens: 32_768,
+    margin: 8_000,
+  };
+  const { messages } = assembleWithinBudget(rawMessages, budget);
 
   const startedAt = Date.now();
   let text = "";
@@ -424,4 +440,12 @@ function computeCost(
     (inputTokens / 1_000_000) * pricing.inputPricePerMtok +
     (outputTokens / 1_000_000) * pricing.outputPricePerMtok
   );
+}
+
+/** Look up the model's context window (fallback 200k if not configured). */
+function getModelContextWindow(db: SqliteDatabase, providerId: string, modelId: string): number {
+  const row = db
+    .prepare("SELECT context_window FROM models WHERE provider_id = ? AND model_id = ?")
+    .get(providerId, modelId) as { context_window: number | null } | undefined;
+  return row?.context_window ?? 200_000;
 }

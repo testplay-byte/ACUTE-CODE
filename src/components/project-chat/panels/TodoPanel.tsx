@@ -1,40 +1,29 @@
-import { useState } from "react";
-import { Check, Plus } from "lucide-react";
+import { Check } from "lucide-react";
 import { motion } from "framer-motion";
-import { useProjectChatStore, type TodoItem } from "../../../lib/project-chat-store";
 import { useThemeStyles } from "../../../lib/use-theme-styles";
-
-/** Stable reference — a fresh `[]` in the selector would re-render forever
- * (React's getSnapshot caching contract). */
-const NO_TODOS: TodoItem[] = [];
+import { useSession } from "../../../hooks/use-sessions";
+import { toLatestTodo } from "../../../lib/api";
+import { withAlpha } from "../../dashboard/helpers";
 
 /**
- * Demo TodoPanel ported 1:1 (progress ring, MISSION header, counter, toggle
- * rows) with real per-project data: items live in the persisted project-chat
- * store (no backend task events until Phase 3), plus a minimal add-row so the
- * panel is actually usable. Mission line = the project's name.
+ * TodoPanel (round-25): driven by the model's `todo_write` tool.
+ * Reads the LATEST todo snapshot from the session event log (todo.update
+ * events) — replaces the fixture store. The model manages the list;
+ * the panel renders it with status-aware styling.
  */
 export function TodoPanel({ projectId, mission }: { projectId: string; mission: string }) {
   const styles = useThemeStyles();
-  const todos = useProjectChatStore((s) => s.todos[projectId] ?? NO_TODOS);
-  const addTodo = useProjectChatStore((s) => s.addTodo);
-  const toggleTodo = useProjectChatStore((s) => s.toggleTodo);
-  const [draft, setDraft] = useState("");
+  const { data: sessionDetail } = useSession(projectId);
+  const todoSnapshot = sessionDetail ? toLatestTodo(sessionDetail.events) : null;
+  const todos = todoSnapshot?.todos ?? [];
 
-  const done = todos.filter((x) => x.done).length;
+  const done = todos.filter((x) => x.status === "completed").length;
   const total = todos.length;
   const percent = total > 0 ? Math.round((done / total) * 100) : 0;
 
-  const submit = () => {
-    const text = draft.trim();
-    if (text === "") return;
-    addTodo(projectId, text);
-    setDraft("");
-  };
-
   return (
     <div className="p-3">
-      {/* Progress ring + mission header (demo-exact) */}
+      {/* Progress ring + mission header */}
       <div className="flex items-center gap-3 mb-3">
         <div className="relative w-11 h-11 shrink-0">
           <svg viewBox="0 0 100 100" className="w-full h-full -rotate-90">
@@ -87,63 +76,63 @@ export function TodoPanel({ projectId, mission }: { projectId: string; mission: 
         </span>
       </div>
 
-      {/* Items (demo-exact rows) */}
+      {/* Items — driven by the model's todo_write tool */}
       <div className="space-y-1">
-        {todos.map((item) => (
-          <button
-            key={item.id}
-            onClick={() => toggleTodo(projectId, item.id)}
-            className="w-full flex items-center gap-2.5 p-2 rounded-xl border transition-all text-left"
-            style={{
-              background: item.done ? styles.inputBg : "transparent",
-              borderColor: item.done ? styles.border : "transparent",
-            }}
-          >
-            <motion.div
-              className="w-[18px] h-[18px] rounded-full border grid place-items-center shrink-0"
+        {todos.map((item, i) => {
+          const isDone = item.status === "completed";
+          const isProgress = item.status === "in_progress";
+          return (
+            <div
+              key={`${i}-${item.content.slice(0, 20)}`}
+              className="w-full flex items-center gap-2.5 p-2 rounded-xl border transition-all text-left"
               style={{
-                background: item.done ? styles.accent : "transparent",
-                borderColor: item.done ? styles.accent : styles.border,
-                color: styles.accentText,
-              }}
-              whileTap={{ scale: 0.9 }}
-            >
-              {item.done && <Check size={11} strokeWidth={3} />}
-            </motion.div>
-            <span
-              className="text-[12px] leading-tight text-left"
-              style={{
-                color: item.done ? styles.textSecondary : styles.text,
-                textDecoration: item.done ? "line-through" : "none",
+                background: isDone ? styles.inputBg : "transparent",
+                borderColor: isDone ? styles.border : isProgress ? withAlpha(styles.accent, 0.3) : "transparent",
               }}
             >
-              {item.text}
-            </span>
-          </button>
-        ))}
+              <motion.div
+                className="w-[18px] h-[18px] rounded-full border grid place-items-center shrink-0"
+                style={{
+                  background: isDone ? styles.accent : isProgress ? withAlpha(styles.accent, 0.3) : "transparent",
+                  borderColor: isDone ? styles.accent : isProgress ? styles.accent : styles.border,
+                  color: styles.accentText,
+                }}
+                whileTap={{ scale: 0.9 }}
+              >
+                {isDone && <Check size={11} strokeWidth={3} />}
+              </motion.div>
+              <span
+                className="text-[12px] leading-tight text-left"
+                style={{
+                  color: isDone ? styles.textSecondary : styles.text,
+                  textDecoration: isDone ? "line-through" : "none",
+                }}
+              >
+                {item.content}
+              </span>
+              {isProgress && (
+                <span
+                  className="ml-auto shrink-0 px-1.5 py-0.5 rounded-full text-[9px] font-bold font-mono"
+                  style={{ background: withAlpha(styles.accent, 0.1), color: styles.accent }}
+                >
+                  active
+                </span>
+              )}
+            </div>
+          );
+        })}
 
-        {/* Add row (minimal, demo-styled) */}
-        <div
-          className="flex items-center gap-2.5 p-2 rounded-xl border"
-          style={{ borderColor: styles.border, borderStyle: "dashed" }}
-        >
-          <div
-            className="w-[18px] h-[18px] rounded-full border grid place-items-center shrink-0"
-            style={{ borderColor: styles.border, color: styles.textSecondary }}
-          >
-            <Plus size={10} />
-          </div>
-          <input
-            value={draft}
-            onChange={(e) => setDraft(e.target.value)}
-            onKeyDown={(e) => {
-              if (e.key === "Enter") submit();
-            }}
-            placeholder="Add a task…"
-            className="flex-1 bg-transparent outline-none text-[12px] min-w-0"
-            style={{ color: styles.text }}
-          />
-        </div>
+        {todos.length === 0 && (
+          <p className="px-2 py-3 text-[11px] text-center" style={{ color: styles.textTertiary }}>
+            No active todos — the agent will use todo_write for multi-step tasks.
+          </p>
+        )}
+
+        {todos.length > 0 && (
+          <p className="px-2 pt-1.5 text-[10px] font-mono" style={{ color: styles.textTertiary }}>
+            managed by the agent · todo_write tool
+          </p>
+        )}
       </div>
     </div>
   );

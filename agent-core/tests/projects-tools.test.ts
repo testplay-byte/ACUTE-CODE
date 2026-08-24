@@ -239,6 +239,7 @@ describe("round-17: tool-name truth + allowedTools enforcement (ADR-0019)", () =
       "run_command",
       "search_code",
       "search_files",
+      "todo_write",
       "write_file",
     ]);
   });
@@ -258,12 +259,13 @@ describe("round-17: tool-name truth + allowedTools enforcement (ADR-0019)", () =
       "run_command",
       "search_code",
       "search_files",
+      "todo_write",
       "write_file",
     ]);
     const two = buildProjectTools(tempDir, ["read_file", "search_files"]) as unknown as Record<string, unknown>;
     expect(Object.keys(two).sort()).toEqual(["read_file", "search_files"]);
     const empty = buildProjectTools(tempDir, []) as unknown as Record<string, unknown>;
-    expect(Object.keys(empty)).toHaveLength(12);
+    expect(Object.keys(empty)).toHaveLength(13);
   });
 
   it("server rejects SPEC-era tool names in allowedTools (drift guard)", async () => {

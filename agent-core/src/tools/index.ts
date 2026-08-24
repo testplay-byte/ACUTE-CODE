@@ -12,6 +12,7 @@ import { isAbsolute, join, posix, sep } from "node:path";
 import { jsonSchema, type ToolSet } from "ai";
 import { gitDiff, gitLog, gitStatus } from "./git.js";
 import { runCommand } from "./exec.js";
+import { writeTodo, type TodoItem } from "./todo.js";
 
 export interface ToolResult {
   ok: boolean;
@@ -332,8 +333,15 @@ type JsonSchemaFreeTool = {
   execute: (input: Record<string, unknown>) => Promise<{ ok: boolean; output: string }>;
 };
 
-export function buildProjectTools(root: string, allowedTools?: readonly string[]): ToolSet {
+export interface ToolDeps {
+  db: import("better-sqlite3").Database;
+  sessionId: string;
+  agentId: string;
+}
+
+export function buildProjectTools(root: string, allowedTools?: readonly string[], deps?: ToolDeps): ToolSet {
   const allow = allowedTools && allowedTools.length > 0 ? new Set(allowedTools) : null;
+  const toolDeps = deps;
   const tools: Record<string, JsonSchemaFreeTool> = {
     list_dir: {
       description:
@@ -500,6 +508,34 @@ export function buildProjectTools(root: string, allowedTools?: readonly string[]
       }),
       execute: async (input) =>
         runCommand(root, typeof input.command === "string" ? input.command : ""),
+    },
+    todo_write: {
+      description:
+        "Write the FULL todo list for the current task (snapshot, not a delta). Use for multi-step tasks to track progress. Each item: {content, status: 'pending'|'in_progress'|'completed'}. Provide ALL items every time.",
+      inputSchema: jsonSchema({
+        type: "object",
+        properties: {
+          todos: {
+            type: "array",
+            items: {
+              type: "object",
+              properties: {
+                content: { type: "string", description: "What needs to be done (one line)" },
+                status: { type: "string", description: "pending | in_progress | completed" },
+              },
+              required: ["content", "status"],
+            },
+            description: "The complete todo list snapshot",
+          },
+        },
+        required: ["todos"],
+      }),
+      execute: async (input) => {
+        const deps = toolDeps;
+        if (!deps) return { ok: false, output: "todo tracking unavailable in this context" };
+        const todos = Array.isArray(input.todos) ? (input.todos as TodoItem[]) : [];
+        return writeTodo(deps, todos);
+      },
     },
   };
   if (allow !== null) {

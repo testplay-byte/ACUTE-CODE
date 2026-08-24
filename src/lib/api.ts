@@ -44,6 +44,7 @@ export const TOOL_CATALOG = [
   "git_diff",
   "git_log",
   "run_command",
+  "todo_write",
 ] as const;
 
 export const PROVIDER_IDS = ["openrouter", "openai", "anthropic", "google"] as const;
@@ -364,6 +365,31 @@ export interface ChatEntry {
   content: string;
   agentId: string | null;
   ts: string;
+}
+
+export interface TodoSnapshot {
+  seq: number;
+  todos: Array<{ content: string; status: "pending" | "in_progress" | "completed" }>;
+  ts: string;
+}
+
+/** Extract the LATEST todo snapshot from the session event log. */
+export function toLatestTodo(events: SessionEvent[]): TodoSnapshot | null {
+  let latest: TodoSnapshot | null = null;
+  for (const event of events) {
+    if (event.type !== "todo.update") continue;
+    const payload =
+      event.payload && typeof event.payload === "object"
+        ? (event.payload as Record<string, unknown>)
+        : null;
+    if (!payload || !Array.isArray(payload.todos)) continue;
+    latest = {
+      seq: event.seq,
+      ts: event.ts,
+      todos: payload.todos as TodoSnapshot["todos"],
+    };
+  }
+  return latest;
 }
 
 export function toChatEntries(events: SessionEvent[]): ChatEntry[] {

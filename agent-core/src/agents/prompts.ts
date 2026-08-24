@@ -78,6 +78,16 @@ export function buildProjectSystemPrompt(ctx: PromptContext): string {
   lines.push("5. When done, summarize what you changed and why — briefly.");
   lines.push("");
 
+  // ── Todo tracking ────────────────────────────────────────────────────────
+  if (ctx.toolNames.includes("todo_write")) {
+    lines.push("## TODO TRACKING");
+    lines.push("For tasks with 3+ steps, use todo_write to maintain a task list:");
+    lines.push("- Write the FULL list every time (snapshot, not a delta)");
+    lines.push("- Mark items 'in_progress' when starting, 'completed' when done");
+    lines.push("- Update after EACH step so the user can see progress");
+    lines.push("");
+  }
+
   // ── Communication ───────────────────────────────────────────────────────
   lines.push("## COMMUNICATION");
   lines.push("- Be concise. No fluff, no restating the question.");

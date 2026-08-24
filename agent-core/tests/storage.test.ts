@@ -146,6 +146,7 @@ describe("template seeding", () => {
           "git_diff",
           "git_log",
           "run_command",
+          "todo_write",
         ]);
         expect(row.memory_policy).toBe("on-start");
         expect(row.max_turns).toBe(40);

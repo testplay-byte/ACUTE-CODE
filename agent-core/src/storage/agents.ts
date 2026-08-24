@@ -26,6 +26,7 @@ export const TOOL_NAMES = [
   "git_diff",
   "git_log",
   "run_command",
+  "todo_write",
 ] as const;
 
 /** Agent JSON as served by the API: AgentRecord plus bookkeeping columns. */
