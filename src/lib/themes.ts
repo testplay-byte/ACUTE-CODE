@@ -345,20 +345,16 @@ export function deriveThemeStyles(themeIdOrTheme: string | ThemeColors, isDark: 
     accent: isDark ? theme.accentDark ?? theme.accent : theme.accent,
     accentText: getContrastText(isDark ? theme.accentDark ?? theme.accent : theme.accent),
 
-    // Round-30 sidebar surface: a clear accent-tinted panel. Light mode mixes
-    // ~12% of the accent into the bg (Nova cream + orange → warm sand; Bento
-    // pale blue + indigo → periwinkle). Dark mode mixes ~16% accent into the
-    // card color → a clearly lighter, warm-tinted rail against bgDark. Border
-    // is a stronger accent mix; hover is a translucent white/black overlay.
-    // (First pass at 7–8% read as "subtly distinct" in VLM review — the owner
-    // asked for a color that is clearly DIFFERENT, so the mix was raised.)
+    // Round-32 sidebar surface (owner-approved design Acute-Ui-Screens.html,
+    // Frame 1): a SUBTLE warm tint — light #FFF6E5 ≈ 4.5% accent into bgLight,
+    // dark #2E2A26 ≈ 5.5% accent into cardDark. The separation from the main
+    // area comes from the floating-panel treatment + the pure-white chat
+    // panel, NOT from a strong tint (the R30 12–16% mix read as muddy).
     sidebarBg: isDark
-      ? mixHex(theme.cardDark, theme.accentDark ?? theme.accent, 0.16)
-      : mixHex(theme.bgLight, theme.accent, 0.12),
-    sidebarBorder: isDark
-      ? "rgba(255,255,255,0.16)"
-      : mixHex(theme.bgLight, theme.accent, 0.35),
-    sidebarHover: isDark ? "rgba(255,255,255,0.08)" : "rgba(0,0,0,0.06)",
+      ? mixHex(theme.cardDark, theme.accentDark ?? theme.accent, 0.055)
+      : mixHex(theme.bgLight, theme.accent, 0.045),
+    sidebarBorder: isDark ? "rgba(255,255,255,0.12)" : "rgba(0,0,0,0.14)",
+    sidebarHover: isDark ? "rgba(255,255,255,0.08)" : "rgba(0,0,0,0.05)",
 
     // Borders
     border: isDark ? "rgba(255,255,255,0.10)" : "rgba(0,0,0,0.10)",

@@ -1,4 +1,4 @@
-<!-- last-reviewed: 2026-08-24 round-31 -->
+<!-- last-reviewed: 2026-08-24 round-32 -->
 # ACUTE-CODE — Master AI Design Prompt (Round 31)
 
 **Purpose:** the owner feeds this prompt into an AI-powered design tool to
@@ -228,7 +228,7 @@ DISTINCT from chat bubbles (this is machine work, not conversation):
      works in multiple rounds; each round is a labeled group.
   2. **Tool rows** (each 32–36px): tool icon (12px, in a tiny 22px tinted
      square), mono tool name + short arg summary (`read_file
-     src/App.tsx`), right-side status (spinner dots while running → green ✓
+     package.json`), right-side status (spinner dots while running → green ✓
      / red ✗ when done), and hover-reveal chevron if the tool produced
      output.
   3. **File-change rows get UPGRADED treatment** (the owner's explicit

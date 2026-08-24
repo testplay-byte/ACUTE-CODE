@@ -11,21 +11,21 @@ afterEach(cleanup);
 beforeEach(() => {
   resetTestState();
   // chatFocusMode defaults true; tests assert on the layout's structure.
-  useProjectChatStore.setState({ chatFocusMode: true });
+  useProjectChatStore.setState({ chatFocusMode: true, appSidebarVisible: true });
 });
 
-describe("ChatFocusLayout (Round 28 WS-D1)", () => {
-  it("renders the ChatTopBar with back-to-dashboard, project name, and Show panels toggle", async () => {
+describe("ChatFocusLayout (Round 32 — no top bar, floating chat panel)", () => {
+  it("renders the chat panel WITHOUT the old top navigation bar", async () => {
     const projects = await getFixtureProjects().list();
     const project = projects[0];
     renderWithProviders(<ChatFocusLayout project={project} />);
 
-    // Back-to-dashboard affordance is present (aria-label).
-    expect(screen.getByRole("link", { name: /back to dashboard/i })).toBeTruthy();
-    // Project name is shown.
-    expect(screen.getByText(project.name)).toBeTruthy();
-    // "Show panels" toggle is present and labelled.
-    expect(screen.getByRole("button", { name: /show panels/i })).toBeTruthy();
+    // The removed ChatTopBar's affordances must NOT exist.
+    expect(screen.queryByRole("link", { name: /back to dashboard/i })).toBeNull();
+    // The agent chip + theme toggle now live INSIDE the chat panel's own
+    // slim header (the merged round-32 toolbar).
+    expect(screen.getByRole("button", { name: /Agent:/i })).toBeTruthy();
+    expect(screen.getByRole("button", { name: /switch to light mode/i })).toBeTruthy();
   });
 
   it("the Show-panels button flips chatFocusMode to false (exits focus mode)", async () => {
@@ -38,20 +38,17 @@ describe("ChatFocusLayout (Round 28 WS-D1)", () => {
     expect(useProjectChatStore.getState().chatFocusMode).toBe(false);
   });
 
-  it("renders the agent chip with the agent's initial", async () => {
+  it("renders the composer (textarea) for messaging the agent", async () => {
     const projects = await getFixtureProjects().list();
     const project = projects[0];
     renderWithProviders(<ChatFocusLayout project={project} />);
-    // The agent chip button has aria-label starting "Agent:".
-    const chip = screen.getByRole("button", { name: /Agent:/i });
-    expect(chip).toBeTruthy();
+    expect(screen.getByRole("textbox", { name: /message composer/i })).toBeTruthy();
   });
 
-  it("renders the theme toggle (Sun/Moon)", async () => {
+  it("renders the ⌘K search affordance in the panel header", async () => {
     const projects = await getFixtureProjects().list();
     const project = projects[0];
     renderWithProviders(<ChatFocusLayout project={project} />);
-    // Default mode is dark (resetTestState) → the toggle offers "light".
-    expect(screen.getByRole("button", { name: /switch to light mode/i })).toBeTruthy();
+    expect(screen.getByRole("button", { name: /search project/i })).toBeTruthy();
   });
 });

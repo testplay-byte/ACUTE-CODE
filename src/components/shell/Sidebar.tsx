@@ -281,12 +281,11 @@ function ProjectSection({ collapsed }: { collapsed: boolean }) {
         </span>
         <button
           onClick={() => setShowAddDialog(true)}
-          className="flex items-center gap-1 rounded-md px-1.5 py-0.5 text-[10px] font-bold transition-colors"
-          style={{ color: styles.accent }}
-          onMouseEnter={(e) => (e.currentTarget.style.background = withAlpha(styles.accent, 0.1))}
-          onMouseLeave={(e) => (e.currentTarget.style.background = "transparent")}
+          title="Add project"
+          className="flex items-center gap-1 rounded-full px-2 py-0.5 text-[10px] font-bold transition-transform hover:scale-[1.03] active:scale-95"
+          style={{ background: styles.accent, color: styles.accentText }}
         >
-          <Plus size={10} /> Add
+          <Plus size={10} strokeWidth={3} /> Add
         </button>
       </div>
 

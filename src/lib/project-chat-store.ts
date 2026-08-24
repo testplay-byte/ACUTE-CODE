@@ -113,7 +113,10 @@ export const useProjectChatStore = create<ProjectChatState>()(
       freeformPanels: DEFAULT_FREEFORM_PANELS,
       selectedAgentId: null,
       todos: {},
-      appSidebarVisible: false,
+      // Round-32: defaults TRUE — the owner-approved design (Acute-Ui-Screens
+      // Frame 5) shows the floating sidebar beside the chat window; hiding it
+      // by default on chat routes was the old top-bar era behavior.
+      appSidebarVisible: true,
       chatFocusMode: true,
       setSidebarOpen: (sidebarOpen) => set({ sidebarOpen }),
       setCodeVisible: (codeVisible) => set({ codeVisible }),

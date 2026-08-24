@@ -389,6 +389,59 @@ export async function fetchSnapshot(sessionId: string, seq: number): Promise<Fil
   }
 }
 
+/** Metadata row from GET /sessions/:id/checkpoints (no content BLOBs). */
+export interface CheckpointMeta {
+  id: string;
+  seq: number;
+  path: string;
+  toolName: string;
+  ts: string;
+  hadBefore: boolean;
+}
+
+/**
+ * Round-32: list a session's file-mutation checkpoints. The ActivityBlock's
+ * file-change cards use this to resolve which snapshot belongs to a given
+ * tool.use event — the runtime stamps snapshots with the TURN's starting seq
+ * (computed before the user event lands), not the tool event's own seq, so a
+ * direct (sessionId, toolSeq) lookup misses. Resolution rule: same path,
+ * greatest snapshot seq ≤ the tool event's seq.
+ */
+export async function fetchSessionCheckpoints(sessionId: string): Promise<CheckpointMeta[]> {
+  try {
+    const body = await request<{ checkpoints: CheckpointMeta[] }>(`/sessions/${sessionId}/checkpoints`);
+    return body.checkpoints;
+  } catch (err) {
+    if (err instanceof ApiError && (err.status === 404 || err.status === 400)) return [];
+    throw err;
+  }
+}
+
+/** Pick the snapshot row for a tool.use event (see fetchSessionCheckpoints). */
+export function resolveSnapshotForTool(
+  checkpoints: CheckpointMeta[],
+  path: string | null,
+  toolSeq: number,
+): CheckpointMeta | null {
+  if (path === null) return null;
+  let best: CheckpointMeta | null = null;
+  for (const cp of checkpoints) {
+    if (cp.path !== path) continue;
+    if (cp.seq <= toolSeq && (best === null || cp.seq > best.seq)) best = cp;
+  }
+  // Fallback for same-path writes whose turn seq landed AFTER the tool seq
+  // (ordering quirk): accept the closest seq overall.
+  if (best === null) {
+    let closest: CheckpointMeta | null = null;
+    for (const cp of checkpoints) {
+      if (cp.path !== path) continue;
+      if (closest === null || Math.abs(cp.seq - toolSeq) < Math.abs(closest.seq - toolSeq)) closest = cp;
+    }
+    best = closest;
+  }
+  return best;
+}
+
 /**
  * Round-28 WS-D3: compute a minimal unified diff (line-level LCS) between
  * before/after content. Returns lines tagged +/- / context for the DiffCard
@@ -499,7 +552,9 @@ export interface ToolUseEntry {
   seq: number;
   toolName: string;
   argsSummary: string;
-  ok: boolean;
+  /** null while the call is in flight (live streaming rows); the persisted
+   * event log always carries a concrete boolean. */
+  ok: boolean | null;
   ts: string;
 }
 
@@ -517,8 +572,19 @@ export interface DiffEntry {
 /** Renderable timeline item for the project-chat screen (see toProjectChatItems). */
 export type ProjectChatItem =
   | { kind: "user"; seq: number; content: string; ts: string }
-  | { kind: "tools"; seqStart: number; seqEnd: number; tools: ToolUseEntry[]; ts: string }
-  | { kind: "diff"; entry: DiffEntry }
+  | {
+      /** Round-32: one ACTIVITY BLOCK per turn — every tool.use event of the
+       * turn, grouped into rounds (outer-loop iterations), rendered as the
+       * collapsible activity timeline card. Diff/terminal/web visuals render
+       * INSIDE the block from the tool entries. */
+      kind: "activity";
+      seqStart: number;
+      seqEnd: number;
+      rounds: ToolUseEntry[][];
+      ts: string;
+      /** Last event ts of the block — elapsed = endTs − ts. */
+      endTs: string;
+    }
   | {
       kind: "ai";
       seq: number;
@@ -552,15 +618,22 @@ function toToolUseEntry(event: SessionEvent): ToolUseEntry {
   };
 }
 
-/** write/edit tool names that warrant a diff card. */
-const DIFF_TOOLS = new Set(["write_file", "edit_file"]);
+/** write/edit tool names that warrant a diff card (round-32: consumed by the
+ * ActivityBlock to upgrade those tool rows into file-change cards). */
+export const DIFF_TOOLS = new Set(["write_file", "edit_file"]);
+
+/** Tool names rendered as command terminal cards. */
+export const TERMINAL_TOOLS = new Set(["run_command"]);
+
+/** Tool names rendered as compact web-action rows. */
+export const WEB_TOOLS = new Set(["web_search", "web_fetch"]);
 
 /**
  * Tolerant argsSummary parsing. The canonical format is
  * `path: <relpath>, content: <N> chars`, but summaries may carry extra or
  * missing segments — parse whatever is there, null otherwise.
  */
-function parseDiffArgs(argsSummary: string): { path: string | null; chars: number | null } {
+export function parseDiffArgs(argsSummary: string): { path: string | null; chars: number | null } {
   const pathMatch = /path:\s*([^,]+)/.exec(argsSummary);
   const charsMatch = /(\d+)\s*chars?/i.exec(argsSummary);
   return {
@@ -570,47 +643,103 @@ function parseDiffArgs(argsSummary: string): { path: string | null; chars: numbe
 }
 
 /**
- * Fold the append-only event log (ADR-0010) into the project-chat timeline:
- * user bubbles, ONE grouped tools item per maximal run of consecutive
- * tool.use events (diff cards for the write_file/edit_file calls in the run
- * follow immediately, in order), and assistant bubbles. Unknown event types
- * are ignored; a message event whose payload lacks a string content is too.
+ * Fold the append-only event log (ADR-0010) into the project-chat timeline
+ * (round-32): user bubbles, ONE ACTIVITY BLOCK per turn (all tool.use events
+ * of the turn, grouped into rounds — a new round starts after each interim
+ * message.assistant the outer loop records), and assistant bubbles in their
+ * chronological positions. Unknown event types are ignored; a message event
+ * whose payload lacks a string content is too.
+ *
+ * Turn = one message.user … until the next message.user. The activity item
+ * is emitted at the position of the turn's FIRST tool.use so the card reads
+ * “here is the work that happened”, followed by the assistant notes.
  */
 export function toProjectChatItems(events: SessionEvent[]): ProjectChatItem[] {
   const ordered = [...events].sort((a, b) => a.seq - b.seq);
   const items: ProjectChatItem[] = [];
+
+  // ── Pass 1: collect each turn's tool events (rounds split at assistant
+  //    messages) + remember the seq where the turn's tools START. ──────────
+  interface TurnActivity {
+    seqStart: number;
+    seqEnd: number;
+    rounds: ToolUseEntry[][];
+    ts: string;
+    endTs: string;
+    emitted: boolean;
+  }
+  const turnActivities: TurnActivity[] = [];
+  let current: TurnActivity | null = null;
+
+  for (const event of ordered) {
+    if (event.type === "message.user") {
+      // A new turn starts; the previous turn's activity (if any) is complete.
+      current = null;
+    } else if (event.type === "tool.use") {
+      const entry = toToolUseEntry(event);
+      if (current === null) {
+        current = {
+          seqStart: entry.seq,
+          seqEnd: entry.seq,
+          rounds: [[entry]],
+          ts: entry.ts,
+          endTs: entry.ts,
+          emitted: false,
+        };
+        turnActivities.push(current);
+      } else {
+        current.seqEnd = entry.seq;
+        current.endTs = entry.ts;
+        const lastRound = current.rounds[current.rounds.length - 1];
+        if (lastRound.length === 0) {
+          lastRound.push(entry);
+        } else {
+          current.rounds[current.rounds.length - 1].push(entry);
+        }
+      }
+    } else if (event.type === "message.assistant") {
+      // An assistant message closes the current round; subsequent tools in
+      // the same turn open a NEW round (outer-loop iteration).
+      if (current !== null) {
+        current.rounds.push([]);
+      }
+    }
+  }
+
+  // Drop the trailing empty round (the final assistant message closes a
+  // round that never gets more tools).
+  for (const activity of turnActivities) {
+    if (activity.rounds.length > 0 && activity.rounds[activity.rounds.length - 1].length === 0) {
+      activity.rounds.pop();
+    }
+  }
+
+  // ── Pass 2: emit. Activity items go at their FIRST tool.use position. ────
+  const activityByFirstSeq = new Map<number, TurnActivity>();
+  for (const activity of turnActivities) {
+    activityByFirstSeq.set(activity.seqStart, activity);
+  }
 
   let index = 0;
   while (index < ordered.length) {
     const event = ordered[index];
 
     if (event.type === "tool.use") {
-      // Maximal run of consecutive tool.use events → one grouped pills item.
-      const tools: ToolUseEntry[] = [];
-      while (index < ordered.length && ordered[index].type === "tool.use") {
-        tools.push(toToolUseEntry(ordered[index]));
-        index += 1;
+      const activity = activityByFirstSeq.get(event.seq);
+      if (activity !== undefined && !activity.emitted) {
+        activity.emitted = true;
+        items.push({
+          kind: "activity",
+          seqStart: activity.seqStart,
+          seqEnd: activity.seqEnd,
+          rounds: activity.rounds,
+          ts: activity.ts,
+          endTs: activity.endTs,
+        });
       }
-      items.push({
-        kind: "tools",
-        seqStart: tools[0].seq,
-        seqEnd: tools[tools.length - 1].seq,
-        tools,
-        ts: tools[0].ts,
-      });
-      for (const tool of tools) {
-        if (DIFF_TOOLS.has(tool.toolName)) {
-          items.push({
-            kind: "diff",
-            entry: {
-              ...parseDiffArgs(tool.argsSummary),
-              seq: tool.seq,
-              toolName: tool.toolName as "write_file" | "edit_file",
-              ok: tool.ok,
-              ts: tool.ts,
-            },
-          });
-        }
+      // Skip the whole run of tool events (they're all inside the block).
+      while (index < ordered.length && ordered[index].type === "tool.use") {
+        index += 1;
       }
       continue;
     }
@@ -692,6 +821,9 @@ export type StreamTurnEvent =
   | { type: "text-delta"; delta: string }
   | { type: "tool-call"; toolName: string; argsSummary: string }
   | { type: "tool-result"; toolName: string; argsSummary: string; ok: boolean }
+  /** Round-32: the outer loop starts a new iteration — the live activity
+   * block opens a new ROUND group on this event. */
+  | { type: "meta.continuation"; iteration: number; reason?: string }
   | {
       type: "finish";
       usage: { inputTokens: number; outputTokens: number; totalTokens: number };

@@ -751,7 +751,7 @@ When preparing a turn, `runtime.ts` injects a "Project index summary" into the s
 - `package.json` — add `docs:check` script
 - `.github/workflows/ci.yml` — add `pnpm docs:check` step before `pnpm verify`
 - Backfill the 12 missing docs + 8 missing ADRs (list TBD during execution)
-- Add `<!-- last-reviewed: 2026-08-24 round-28 -->` to every existing doc
+- Add `<!-- last-reviewed: 2026-08-24 round-32 -->` to every existing doc
 
 ### 12.5 Verification
 - `pnpm docs:check` exits 0

@@ -13,15 +13,14 @@ import {
   Check,
   ChevronDown,
   Copy,
-  Edit3,
-  FileCode2,
   FolderOpen,
   GitBranch,
   ListChecks,
+  Moon,
+  PanelsTopLeft,
   Search,
   Sparkles,
-  Terminal,
-  Trash2,
+  Sun,
   type LucideIcon,
 } from "lucide-react";
 import { Link, useSearchParams } from "react-router";
@@ -33,17 +32,15 @@ import {
   useSession,
   useSessions,
 } from "../../hooks/use-sessions";
+import { CommandPalette } from "./CommandPalette";
+import { ActivityBlock } from "./ActivityBlock";
 import {
   type Agent,
-  type DiffEntry,
-  type DiffLine,
   type Project,
   type ProjectChatItem,
   type StreamTurnEvent,
   type ToolUseEntry,
-  computeUnifiedDiff,
   fetchProviderModels,
-  fetchSnapshot,
   streamSessionMessage,
   toProjectChatItems,
 } from "../../lib/api";
@@ -51,6 +48,7 @@ import { useConfigStore } from "../../lib/config-store";
 import { withAlpha } from "../dashboard/helpers";
 import { ease } from "../../lib/motion";
 import { useProjectChatStore } from "../../lib/project-chat-store";
+import { useThemeStore } from "../../lib/theme-store";
 import { SEMANTIC_COLORS } from "../../lib/semantics";
 import { useThemeStyles } from "../../lib/use-theme-styles";
 import { useScrollFade } from "../../lib/useScrollFade";
@@ -69,25 +67,6 @@ const msgVariants: Variants = {
   animate: { opacity: 1, y: 0, transition: { duration: 0.35, ease } },
   exit: { opacity: 0, y: -8, transition: { duration: 0.2, ease } },
 };
-
-/** Backend tool names (M2) → demo action-pill icons; unknown tools get Terminal. */
-const TOOL_ICONS: Record<string, LucideIcon> = {
-  list_dir: Search,
-  read_file: FileCode2,
-  write_file: Edit3,
-  edit_file: Edit3,
-  web_search: Search,
-  search_code: Search,
-  search_files: Search,
-  git_status: FileCode2,
-  git_diff: FileCode2,
-  git_log: FileCode2,
-  run_command: Terminal,
-  create_dir: FolderOpen,
-  delete_file: Trash2,
-};
-
-const basename = (p: string): string => p.split("/").pop() ?? p;
 
 const fmtTokens = (n: number): string =>
   n >= 1000 ? `${(n / 1000).toFixed(n >= 10_000 ? 0 : 1)}k` : String(n);
@@ -194,10 +173,8 @@ const itemKey = (item: ProjectChatItem): string => {
       return `u-${item.seq}`;
     case "ai":
       return `a-${item.seq}`;
-    case "tools":
-      return `t-${item.seqStart}-${item.seqEnd}`;
-    case "diff":
-      return `d-${item.entry.seq}`;
+    case "activity":
+      return `act-${item.seqStart}-${item.seqEnd}`;
   }
 };
 
@@ -432,197 +409,6 @@ function AiMessage({
   );
 }
 
-/** One row of action pills — one pill per executed tool call in the run. */
-function ToolsRow({ tools }: { tools: ToolUseEntry[] }) {
-  const styles = useThemeStyles();
-  return (
-    <motion.div
-      className="flex flex-wrap gap-1.5"
-      variants={msgVariants}
-      initial="initial"
-      animate="animate"
-    >
-      {tools.map((tool) => {
-        const Icon = TOOL_ICONS[tool.toolName] ?? Terminal;
-        const full = `${tool.toolName} ${tool.argsSummary}`.trim();
-        const label = full.length > 48 ? `${full.slice(0, 48)}…` : full;
-        return (
-          <div
-            key={tool.seq}
-            title={full}
-            className="inline-flex items-center gap-1.5 h-7 px-3 rounded-full border font-mono text-[11px] max-w-full"
-            style={{
-              background: styles.isDark ? styles.bg : styles.card,
-              borderColor: styles.border,
-              color: styles.textSecondary,
-            }}
-          >
-            <Icon size={11} className="shrink-0" />
-            <span className="truncate">{label}</span>
-            <span
-              className="opacity-50 shrink-0"
-              style={{ color: tool.ok ? SEMANTIC_COLORS.success : SEMANTIC_COLORS.danger }}
-            >
-              {tool.ok ? "✓" : "✗"}
-            </span>
-          </div>
-        );
-      })}
-    </motion.div>
-  );
-}
-
-/**
- * Diff card for a write_file/edit_file call. Clicking a diff with a parsed
- * path reveals the code pane at that file. Real +/- diff bodies land with git
- * integration in Phase 3 — until then the card shows path + size + status.
- */
-/**
- * Round-28 WS-D3 DiffCard: renders a REAL unified diff (before/after content
- * fetched from GET /sessions/:id/snapshots/:seq) with +/- green/red coloring.
- * Collapsed by default (path + chars summary); expands on click to show the
- * full diff body. Falls back to the path/chars card if the snapshot is empty
- * (older sessions pre-R25, or non-mutating events).
- */
-function DiffCard({ entry, sessionId }: { entry: DiffEntry; sessionId: string | null }) {
-  const styles = useThemeStyles();
-  const selectFile = useProjectChatStore((s) => s.selectFile);
-  const setCodeVisible = useProjectChatStore((s) => s.setCodeVisible);
-  const [expanded, setExpanded] = useState(false);
-  const [diffLines, setDiffLines] = useState<DiffLine[] | null>(null);
-  const [loading, setLoading] = useState(false);
-  const [fetchErr, setFetchErr] = useState<string | null>(null);
-
-  // Lazy-fetch the snapshot content on first expand.
-  const loadDiff = async () => {
-    if (diffLines !== null || !sessionId) return;
-    setLoading(true);
-    setFetchErr(null);
-    try {
-      const snap = await fetchSnapshot(sessionId, entry.seq);
-      if (!snap) {
-        // No snapshot recorded — fall back to the path/chars card.
-        setDiffLines([]);
-      } else {
-        setDiffLines(computeUnifiedDiff(snap.beforeContent, snap.afterContent));
-      }
-    } catch (err) {
-      setFetchErr(err instanceof Error ? err.message : String(err));
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  const toggle = () => {
-    const next = !expanded;
-    setExpanded(next);
-    if (next) void loadDiff();
-  };
-
-  return (
-    <motion.div variants={msgVariants} initial="initial" animate="animate">
-      <div
-        className="block w-full text-left rounded-2xl border overflow-hidden"
-        style={{ background: styles.bg, borderColor: styles.border }}
-      >
-        {/* Header — click toggles the diff body */}
-        <button
-          type="button"
-          onClick={toggle}
-          aria-expanded={expanded}
-          aria-label={`${expanded ? "Collapse" : "Expand"} diff for ${entry.path ?? entry.toolName}`}
-          className="w-full h-8 px-3 border-b flex items-center justify-between font-mono text-[11px] transition-colors"
-          style={{ borderColor: expanded ? styles.border : "transparent", color: styles.textSecondary }}
-          onMouseEnter={(e) => (e.currentTarget.style.background = styles.subtleHover)}
-          onMouseLeave={(e) => (e.currentTarget.style.background = "transparent")}
-        >
-          <span className="truncate flex items-center gap-1.5">
-            <ChevronDown
-              size={11}
-              style={{ transform: expanded ? "rotate(0deg)" : "rotate(-90deg)", transition: "transform 0.2s" }}
-            />
-            {entry.path ? basename(entry.path) : entry.toolName}{" "}
-            {`+${entry.chars ?? "?"} chars`}
-          </span>
-          <span className="flex items-center gap-1.5 shrink-0">
-            <span
-              className="w-2 h-2 rounded-full"
-              style={{ background: entry.ok ? SEMANTIC_COLORS.success : SEMANTIC_COLORS.danger }}
-            />
-            <span className="text-[10px]">{entry.ok ? "applied" : "failed"}</span>
-          </span>
-        </button>
-
-        {/* Expandable path link (open in CodeView) — always visible */}
-        <button
-          type="button"
-          onClick={() => {
-            if (entry.path) {
-              selectFile(entry.path);
-              setCodeVisible(true);
-            }
-          }}
-          className="w-full px-3 py-2 font-mono text-[11px] truncate text-left transition-colors hover:bg-opacity-50"
-          style={{ color: styles.textSecondary, background: "transparent" }}
-          onMouseEnter={(e) => (e.currentTarget.style.background = styles.subtleHover)}
-          onMouseLeave={(e) => (e.currentTarget.style.background = "transparent")}
-          title={entry.path ?? entry.toolName}
-        >
-          {entry.path ?? entry.toolName}
-        </button>
-
-        {/* Real unified diff body (expanded) */}
-        {expanded && (
-          <div
-            className="border-t max-h-80 overflow-y-auto auto-scroll font-mono text-[11px] leading-[1.5]"
-            style={{ borderColor: styles.border, background: styles.inputBg }}
-          >
-            {loading ? (
-              <div className="px-3 py-3" style={{ color: styles.textTertiary }}>
-                Loading diff…
-              </div>
-            ) : fetchErr ? (
-              <div className="px-3 py-3" style={{ color: SEMANTIC_COLORS.danger }}>
-                {fetchErr}
-              </div>
-            ) : diffLines === null ? null : diffLines.length === 0 ? (
-              <div className="px-3 py-3" style={{ color: styles.textTertiary }}>
-                No snapshot content recorded for this mutation.
-              </div>
-            ) : (
-              diffLines.map((line, i) => (
-                <div
-                  key={i}
-                  className="px-3 whitespace-pre"
-                  style={{
-                    background:
-                      line.type === "add"
-                        ? withAlpha(SEMANTIC_COLORS.success, 0.1)
-                        : line.type === "del"
-                          ? withAlpha(SEMANTIC_COLORS.danger, 0.1)
-                          : "transparent",
-                    color:
-                      line.type === "add"
-                        ? SEMANTIC_COLORS.success
-                        : line.type === "del"
-                          ? SEMANTIC_COLORS.danger
-                          : styles.textTertiary,
-                  }}
-                >
-                  <span className="select-none mr-2">
-                    {line.type === "add" ? "+" : line.type === "del" ? "-" : " "}
-                  </span>
-                  {line.text}
-                </div>
-              ))
-            )}
-          </div>
-        )}
-      </div>
-    </motion.div>
-  );
-}
-
 /** Direct child of AnimatePresence mode="popLayout": framer-motion attaches a
  * measurement ref to this element (React 18 requires forwardRef — the demo
  * could skip it on React 19). The wrapper div is the presence child. */
@@ -649,16 +435,15 @@ const MessageRenderer = forwardRef<
             />
           </div>
         );
-      case "tools":
+      case "activity":
         return (
           <div ref={ref}>
-            <ToolsRow tools={item.tools} />
-          </div>
-        );
-      case "diff":
-        return (
-          <div ref={ref}>
-            <DiffCard entry={item.entry} sessionId={sessionId} />
+            <ActivityBlock
+              rounds={item.rounds}
+              ts={item.ts}
+              endTs={item.endTs}
+              sessionId={sessionId}
+            />
           </div>
         );
     }
@@ -847,6 +632,26 @@ export function AgentChatPanel({
   // Agent picker popover (round-15: moved here from the removed TopBar menu).
   const [agentMenuOpen, setAgentMenuOpen] = useState(false);
   const agentMenuRef = useRef<HTMLDivElement>(null);
+
+  // ROUND-32: controls absorbed from the removed ChatTopBar — theme, ⌘K
+  // palette, and the chat-focus escape hatch now live in the panel header.
+  const mode = useThemeStore((s) => s.mode);
+  const toggleMode = useThemeStore((s) => s.toggleMode);
+  const chatFocusMode = useProjectChatStore((s) => s.chatFocusMode);
+  const setChatFocusMode = useProjectChatStore((s) => s.setChatFocusMode);
+  const [paletteOpen, setPaletteOpen] = useState(false);
+
+  // ⌘K / Ctrl+K opens the CommandPalette (WS-H).
+  useEffect(() => {
+    const handler = (e: KeyboardEvent) => {
+      if ((e.metaKey || e.ctrlKey) && e.key === "k") {
+        e.preventDefault();
+        setPaletteOpen((v) => !v);
+      }
+    };
+    window.addEventListener("keydown", handler);
+    return () => window.removeEventListener("keydown", handler);
+  }, []);
   useEffect(() => {
     if (!agentMenuOpen) return;
     const handler = (e: MouseEvent) => {
@@ -867,13 +672,15 @@ export function AgentChatPanel({
   );
 
   const [input, setInput] = useState("");
+  const [composerFocused, setComposerFocused] = useState(false);
   const [pendingUser, setPendingUser] = useState<string | null>(null);
   const [lastSent, setLastSent] = useState<string | null>(null);
   const [sendError, setSendError] = useState<string | null>(null);
 
-  // ── Round-16 live streaming state ────────────────────────────────────────
+  // ── Round-16 live streaming state (round-32: tools now grouped into ROUNDS
+  //     for the live ActivityBlock — a meta.continuation event opens a new one) ─
   const [liveText, setLiveText] = useState("");
-  const [liveTools, setLiveTools] = useState<Array<{ toolName: string; argsSummary: string; ok: boolean | null }>>([]);
+  const [liveRounds, setLiveRounds] = useState<ToolUseEntry[][]>([]);
   const [streamBusy, setStreamBusy] = useState(false);
   const queryClient = useQueryClient();
   const liveMode = useConfigStore((s) => !s.demoData);
@@ -893,6 +700,8 @@ export function AgentChatPanel({
 
   const scrollRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
+  const selectProjectFile = useProjectChatStore((s) => s.selectFile);
+  const setCodeVisibleForPick = useProjectChatStore((s) => s.setCodeVisible);
   // Round-28 WS-D3: AbortController for the streaming fetch — the Stop button
   // calls abortRef.current?.abort() to cancel mid-stream. Passed as the
   // `signal` option to streamSessionMessage (api.ts L642 already supports it).
@@ -903,11 +712,8 @@ export function AgentChatPanel({
   useEffect(() => {
     const el = scrollRef.current;
     if (el) el.scrollTo({ top: el.scrollHeight, behavior: "smooth" });
-  }, [items.length, busy, pendingUser, liveText, liveTools.length]);
+  }, [items.length, busy, pendingUser, liveText, liveRounds.length]);
 
-  // NOTE (Round-28 WS-D3): ⌘K will open the CommandPalette (Workstream H —
-  // symbol/file/content search popover). Until H lands, ⌘K is a no-op in the
-  // composer; Enter-to-send + Shift+Enter for newline are the active shortcuts.
 
   const runTurn = async (content: string) => {
     const text = content.trim();
@@ -917,7 +723,7 @@ export function AgentChatPanel({
     setPendingUser(text);
     setSendError(null);
     setLiveText("");
-    setLiveTools([]);
+    setLiveRounds([]);
     let sid = session?.id;
     try {
       if (!sid) {
@@ -949,16 +755,44 @@ export function AgentChatPanel({
           if (event.type === "text-delta") {
             setLiveText((prev) => prev + event.delta);
           } else if (event.type === "tool-call") {
-            setLiveTools((prev) => [...prev, { toolName: event.toolName, argsSummary: event.argsSummary, ok: null }]);
-          } else if (event.type === "tool-result") {
-            setLiveTools((prev) => {
-              // Attach the result to the matching in-flight pill (last null-ok).
-              const idx = [...prev].reverse().findIndex((x) => x.toolName === event.toolName && x.ok === null);
-              if (idx === -1) return [...prev, { toolName: event.toolName, argsSummary: event.argsSummary, ok: event.ok }];
-              const real = prev.length - 1 - idx;
-              const next = [...prev];
-              next[real] = { ...next[real], ok: event.ok };
+            setLiveRounds((prev) => {
+              const next = prev.length ? prev.map((r) => [...r]) : [[]];
+              if (next.length === 0) next.push([]);
+              next[next.length - 1].push({
+                seq: -Date.now(),
+                toolName: event.toolName,
+                argsSummary: event.argsSummary,
+                ok: null,
+                ts: new Date().toISOString(),
+              });
               return next;
+            });
+          } else if (event.type === "tool-result") {
+            setLiveRounds((prev) => {
+              // Attach the result to the matching in-flight row (last null-ok).
+              const flat = prev.flat();
+              const idx = [...flat].reverse().findIndex((x) => x.toolName === event.toolName && x.ok === null);
+              if (idx === -1) {
+                const next = prev.map((r) => [...r]);
+                if (next.length === 0) next.push([]);
+                next[next.length - 1].push({
+                  seq: -Date.now(),
+                  toolName: event.toolName,
+                  argsSummary: event.argsSummary,
+                  ok: event.ok,
+                  ts: new Date().toISOString(),
+                });
+                return next;
+              }
+              const realIdx = flat.length - 1 - idx;
+              let consumed = 0;
+              return prev.map((round) =>
+                round.map((tool) => {
+                  const index = consumed;
+                  consumed += 1;
+                  return index === realIdx ? { ...tool, ok: event.ok } : tool;
+                }),
+              );
             });
             // LIVE VIEW (owner request): file mutations refresh the explorer
             // + open file immediately, not after the turn ends.
@@ -966,6 +800,9 @@ export function AgentChatPanel({
               void queryClient.invalidateQueries({ queryKey: ["project-tree"] });
               void queryClient.invalidateQueries({ queryKey: ["project-file"] });
             }
+          } else if (event.type === "meta.continuation") {
+            // The outer loop starts a new iteration → new ROUND group.
+            setLiveRounds((prev) => [...prev.map((r) => [...r]), []]);
           } else if (event.type === "error") {
             // SSE error event — show it but DON'T clear live text; the
             // backend may still complete the turn (invalidation on catch
@@ -981,7 +818,7 @@ export function AgentChatPanel({
         void queryClient.invalidateQueries({ queryKey: ["project-tree"] });
         // Canonical assistant item now renders from the event log.
         setLiveText("");
-        setLiveTools([]);
+        setLiveRounds([]);
       } else {
         // Fixture/demo mode: no sidecar → sync hook (canned reply).
         await sendMessage.mutateAsync({ sessionId: sid, content: text });
@@ -1000,7 +837,7 @@ export function AgentChatPanel({
         // The response landed despite the stream error — clear the error.
         setSendError(null);
         setLiveText("");
-        setLiveTools([]);
+        setLiveRounds([]);
       }
     } finally {
       setStreamBusy(false);
@@ -1021,25 +858,22 @@ export function AgentChatPanel({
       className="flex flex-col h-full min-w-0 rounded-[16px] overflow-hidden"
       style={{ backgroundColor: styles.card }}
     >
-      {/* Panel header — compact, clean */}
+      {/* ROUND-32 header — the ONE slim toolbar (the app-level ChatTopBar is
+          removed per the owner's directive; its essential controls live here):
+          agent picker + model chip on the left; ⌘K search, theme toggle, and
+          the Show-panels escape hatch on the right. */}
       <div
-        className="shrink-0 h-10 px-3 border-b flex items-center gap-2"
-        style={{ borderColor: styles.borderSubtle }}
+        className="shrink-0 h-12 px-3 border-b flex items-center gap-2"
+        style={{ borderColor: styles.border }}
       >
-        <div
-          className="w-6 h-6 rounded-lg grid place-items-center shrink-0"
-          style={{ backgroundColor: withAlpha(styles.accent, 0.13), color: styles.accent }}
-        >
-          <Sparkles size={12} />
-        </div>
-        <div className="relative min-w-0">
+        <div className="relative min-w-0 flex items-center gap-2">
           <button
             onClick={() => setAgentMenuOpen((v) => !v)}
-            className="flex items-center gap-1.5 rounded-lg px-1.5 py-1 transition-colors"
+            className="flex items-center gap-1.5 rounded-[10px] px-1.5 py-1 transition-colors"
             style={{ color: styles.text }}
             aria-haspopup="listbox"
             aria-expanded={agentMenuOpen}
-            aria-label="Choose agent"
+            aria-label={`Agent: ${agent?.name ?? "none"}. Pick agent.`}
             title="Choose the agent for new sessions"
             onMouseEnter={(e) => {
               e.currentTarget.style.background = styles.subtleHover;
@@ -1048,11 +882,17 @@ export function AgentChatPanel({
               e.currentTarget.style.background = "transparent";
             }}
           >
+            <span
+              className="w-6 h-6 rounded-full grid place-items-center text-[10px] font-black shrink-0"
+              style={{ background: styles.accent, color: styles.accentText }}
+            >
+              {(agent?.name ?? "A").charAt(0).toUpperCase()}
+            </span>
             <span className="text-[13px] font-semibold truncate">{agent?.name ?? "No agent"}</span>
             <ChevronDown size={12} style={{ color: styles.textSecondary }} />
           </button>
           <span
-            className="text-[10px] px-1.5 py-0.5 rounded-lg border font-mono shrink-0 ml-1"
+            className="text-[10px] px-1.5 py-0.5 rounded-lg border font-mono shrink-0"
             style={{
               backgroundColor: styles.inputBg,
               borderColor: styles.inputBorder,
@@ -1125,20 +965,57 @@ export function AgentChatPanel({
           )}
         </div>
         <span className="flex-1" />
-        <span
-          className="text-[10px] font-mono px-1.5 py-0.5 rounded-full shrink-0"
-          style={
-            busy
-              ? {
-                  color: SEMANTIC_COLORS.success,
-                  backgroundColor: withAlpha(SEMANTIC_COLORS.success, 0.08),
-                }
-              : { color: styles.textTertiary, backgroundColor: styles.subtle }
-          }
+        {/* ⌘K search */}
+        <button
+          onClick={() => setPaletteOpen(true)}
+          aria-label="Search project (⌘K)"
+          title="Search project (⌘K)"
+          className="shrink-0 w-8 h-8 rounded-[10px] grid place-items-center transition-colors"
+          style={{ color: styles.textSecondary }}
+          onMouseEnter={(e) => (e.currentTarget.style.background = styles.subtleHover)}
+          onMouseLeave={(e) => (e.currentTarget.style.background = "transparent")}
         >
-          {busy ? "running" : "idle"}
-        </span>
+          <Search size={14} />
+        </button>
+        {/* Theme toggle */}
+        <button
+          onClick={toggleMode}
+          aria-label={`Switch to ${mode === "dark" ? "light" : "dark"} mode`}
+          title={`Switch to ${mode === "dark" ? "light" : "dark"} mode`}
+          className="shrink-0 w-8 h-8 rounded-[10px] grid place-items-center transition-colors"
+          style={{ color: styles.textSecondary }}
+          onMouseEnter={(e) => (e.currentTarget.style.background = styles.subtleHover)}
+          onMouseLeave={(e) => (e.currentTarget.style.background = "transparent")}
+        >
+          {mode === "dark" ? <Sun size={14} /> : <Moon size={14} />}
+        </button>
+        {/* Show panels — exit chat focus mode (the escape hatch to the 3-panel layout) */}
+        {chatFocusMode && (
+          <button
+            onClick={() => setChatFocusMode(false)}
+            aria-label="Show panels — exit chat focus mode"
+            title="Show panels — exit chat focus mode"
+            className="shrink-0 h-8 px-2.5 rounded-[10px] flex items-center gap-1.5 text-[11px] font-bold transition-colors"
+            style={{ color: styles.textSecondary }}
+            onMouseEnter={(e) => (e.currentTarget.style.background = styles.subtleHover)}
+            onMouseLeave={(e) => (e.currentTarget.style.background = "transparent")}
+          >
+            <PanelsTopLeft size={13} />
+            <span className="hidden sm:inline">Panels</span>
+          </button>
+        )}
       </div>
+      {/* ⌘K CommandPalette (files/symbols/content search — WS-H) */}
+      <CommandPalette
+        projectId={projectId}
+        open={paletteOpen}
+        onClose={() => setPaletteOpen(false)}
+        onPickFile={(path) => {
+          selectProjectFile(path);
+          setCodeVisibleForPick(true);
+          setPaletteOpen(false);
+        }}
+      />
 
       {/* Scroll body with top fade (demo structure) */}
       <div className="relative flex-1 min-h-0 overflow-hidden">
@@ -1226,51 +1103,11 @@ export function AgentChatPanel({
               {pendingEcho !== null ? <UserMessage content={pendingEcho} /> : null}
             </AnimatePresence>
 
-            {/* ── LIVE STREAM (round-16): tool pills + streaming text ─────── */}
-            {liveTools.length > 0 ? (
-              <div className="flex flex-wrap gap-1.5">
-                {liveTools.map((tool, i) => {
-                  const Icon = TOOL_ICONS[tool.toolName] ?? Terminal;
-                  const full = `${tool.toolName} ${tool.argsSummary}`.trim();
-                  const label = full.length > 48 ? `${full.slice(0, 48)}…` : full;
-                  return (
-                    <div
-                      key={`${tool.toolName}-${i}`}
-                      title={full}
-                      className="inline-flex items-center gap-1.5 h-7 px-3 rounded-full border font-mono text-[11px] max-w-full"
-                      style={{
-                        background: styles.isDark ? styles.bg : styles.card,
-                        borderColor: tool.ok === false ? withAlpha(SEMANTIC_COLORS.danger, 0.5) : styles.border,
-                        color: styles.textSecondary,
-                      }}
-                    >
-                      <Icon size={11} className="shrink-0" />
-                      <span className="truncate">{label}</span>
-                      {tool.ok === null ? (
-                        <span className="flex gap-0.5 shrink-0">
-                          {[0, 0.15, 0.3].map((d, j) => (
-                            <span
-                              key={j}
-                              className="w-1 h-1 rounded-full"
-                              style={{
-                                background: styles.textSecondary,
-                                animation: `bounceDot 1s infinite ${d}s`,
-                              }}
-                            />
-                          ))}
-                        </span>
-                      ) : (
-                        <span
-                          className="opacity-50 shrink-0"
-                          style={{ color: tool.ok ? SEMANTIC_COLORS.success : SEMANTIC_COLORS.danger }}
-                        >
-                          {tool.ok ? "✓" : "✗"}
-                        </span>
-                      )}
-                    </div>
-                  );
-                })}
-              </div>
+            {/* ── LIVE ACTIVITY BLOCK (round-32): the streaming turn's tool
+                work renders in the SAME activity card as completed turns —
+                rounds, diff cards with "writing…" states, terminal cards. ── */}
+            {liveRounds.length > 0 ? (
+              <ActivityBlock rounds={liveRounds} sessionId={session?.id ?? null} live />
             ) : null}
 
             {(streamBusy || liveText !== "" || (busy && !streamBusy)) ? (
@@ -1352,15 +1189,16 @@ export function AgentChatPanel({
         </div>
       ) : null}
 
-      {/* Composer — ROUND-30 OVERHAUL: auto-growing textarea (Enter sends,
-          Shift+Enter newlines — a single-line <input> can't hold multi-line
-          prompts), no dead attach button. */}
+      {/* Composer — ROUND-32 (design Frame 5): radius 18, warm bg, accent
+          border + soft glow ring on focus. Auto-growing textarea (Enter sends,
+          Shift+Enter newlines). */}
       <div className="shrink-0 p-2.5 border-t" style={{ borderColor: styles.borderSubtle }}>
         <div
-          className="flex items-end gap-2 p-2 rounded-[18px] border transition-shadow"
+          className="flex items-end gap-2 p-2 rounded-[18px] border transition-all"
           style={{
-            background: styles.bg,
-            borderColor: styles.inputFocusBorder ? styles.border : styles.border,
+            background: styles.isDark ? "rgba(255,255,255,0.04)" : styles.bg,
+            borderColor: composerFocused ? withAlpha(styles.accent, 0.4) : styles.border,
+            boxShadow: composerFocused ? `0 0 0 4px ${withAlpha(styles.accent, 0.13)}` : "none",
           }}
         >
           <textarea
@@ -1373,6 +1211,8 @@ export function AgentChatPanel({
               el.style.height = "auto";
               el.style.height = `${Math.min(el.scrollHeight, 132)}px`;
             }}
+            onFocus={() => setComposerFocused(true)}
+            onBlur={() => setComposerFocused(false)}
             onKeyDown={onInputKeyDown}
             rows={1}
             aria-label="Message composer"

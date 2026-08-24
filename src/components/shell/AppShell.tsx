@@ -6,10 +6,12 @@ import { useThemeStyles } from "../../lib/use-theme-styles";
 import { Sidebar } from "./Sidebar";
 
 /**
- * App shell (round-21 UI overhaul): themed full-bleed background with the
- * wizard's atmosphere (dot grid + three ambient glows at wizard intensities),
- * floating sidebar card, transparent main area for non-chat routes (cards
- * float like the wizard's), and the round-16 borderless/tight chat route.
+ * App shell (round-32 redesign per the owner-approved design
+ * Acute-Ui-Screens.html Frame 1/5): themed full-bleed background with the
+ * wizard's atmosphere (dot grid + three ambient glows), and BOTH the sidebar
+ * and the chat window are FLOATING panels with 12px spacing on all sides
+ * (owner: "the sidebar was a floating kind of one with proper spacing on all
+ * 4 sides of it and the right side chat window was separate from it").
  *
  * Design language: docs/design/DESIGN-SYSTEM.md + the wizard's DNA (the
  * owner's approved aesthetic): solid accent fills for interactive elements,
@@ -62,11 +64,10 @@ export function AppShell() {
         style={{ backgroundColor: "var(--ac-accent-2, var(--ac-accent))" }}
       />
 
-      <div
-        className={`relative z-10 flex h-full ${isChatRoute ? "gap-[3px] p-[2px]" : "gap-3 p-3 md:p-4"}`}
-      >
+      <div className="relative z-10 flex h-full gap-3 p-3">
         {showFloatingHamburger && <FloatingSidebarToggle />}        {showSidebar && <Sidebar />}
-        {/* Chat route = borderless tight; other routes = transparent (cards float) */}
+        {/* Round-32: every route keeps the floating-panel language — the chat
+            route renders its own rounded/bordered/soft-shadowed panel inside. */}
         <main
           className={
             isChatRoute

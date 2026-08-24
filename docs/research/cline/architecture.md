@@ -1,4 +1,4 @@
-<!-- last-reviewed: 2026-08-24 round-28 -->
+<!-- last-reviewed: 2026-08-24 round-32 -->
 # Cline — Architecture (verified against `main`, 2026-08-21)
 
 ## Process / Component Model

@@ -1,4 +1,4 @@
-<!-- last-reviewed: 2026-08-24 round-28 -->
+<!-- last-reviewed: 2026-08-24 round-32 -->
 # Cline — Patterns for ACUTE-CODE
 
 All claims verified against `github.com/cline/cline` `main` on 2026-08-21 (Apache-2.0; pattern study only — no code copying, none needed for any pattern below).

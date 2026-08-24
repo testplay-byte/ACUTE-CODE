@@ -4,6 +4,7 @@ import {
   computeUnifiedDiff,
   getAgentsBackend,
   httpAgents,
+  parseDiffArgs,
   toProjectChatItems,
   type Agent,
   type SessionEvent,
@@ -227,7 +228,7 @@ function toolUse(seq: number, toolName: string, argsSummary: string, ok = true):
 }
 
 describe("toProjectChatItems", () => {
-  it("orders user → grouped tools → diff → ai from an event log", () => {
+  it("orders user → activity (all tools of the turn) → ai from an event log", () => {
     const items = toProjectChatItems([
       ev(
         1,
@@ -245,7 +246,7 @@ describe("toProjectChatItems", () => {
       ),
     ]);
 
-    expect(items.map((item) => item.kind)).toEqual(["user", "tools", "diff", "ai"]);
+    expect(items.map((item) => item.kind)).toEqual(["user", "activity", "ai"]);
     expect(items[0]).toEqual({
       kind: "user",
       seq: 1,
@@ -253,33 +254,25 @@ describe("toProjectChatItems", () => {
       ts: TS(1),
     });
     expect(items[1]).toEqual({
-      kind: "tools",
+      kind: "activity",
       seqStart: 2,
       seqEnd: 3,
-      tools: [
-        { seq: 2, toolName: "list_dir", argsSummary: "path: src", ok: true, ts: TS(2) },
-        {
-          seq: 3,
-          toolName: "write_file",
-          argsSummary: "path: src/middleware.ts, content: 128 chars",
-          ok: true,
-          ts: TS(3),
-        },
+      rounds: [
+        [
+          { seq: 2, toolName: "list_dir", argsSummary: "path: src", ok: true, ts: TS(2) },
+          {
+            seq: 3,
+            toolName: "write_file",
+            argsSummary: "path: src/middleware.ts, content: 128 chars",
+            ok: true,
+            ts: TS(3),
+          },
+        ],
       ],
       ts: TS(2),
+      endTs: TS(3),
     });
     expect(items[2]).toEqual({
-      kind: "diff",
-      entry: {
-        seq: 3,
-        toolName: "write_file",
-        path: "src/middleware.ts",
-        chars: 128,
-        ok: true,
-        ts: TS(3),
-      },
-    });
-    expect(items[3]).toEqual({
       kind: "ai",
       seq: 4,
       content: "Done — limiter added.",
@@ -288,34 +281,59 @@ describe("toProjectChatItems", () => {
     });
   });
 
-  it("merges a consecutive tool.use run into ONE tools item; separate runs stay separate", () => {
+  it("groups a multi-round turn into ONE activity block with rounds split at assistant messages", () => {
     const items = toProjectChatItems([
       toolUse(1, "list_dir", "path: ."),
       toolUse(2, "read_file", "path: package.json"),
-      ev(3, "message.assistant", { role: "assistant", content: "thinking…" }, "agt_scribe"),
+      ev(3, "message.assistant", { role: "assistant", content: "continuing…" }, "agt_scribe"),
       toolUse(4, "read_file", "path: src/index.ts"),
+      ev(5, "message.assistant", { role: "assistant", content: "done" }, "agt_scribe"),
     ]);
 
-    expect(items.map((item) => item.kind)).toEqual(["tools", "ai", "tools"]);
-    const toolsRuns = items.flatMap((item) => (item.kind === "tools" ? [item] : []));
-    expect(toolsRuns).toHaveLength(2);
-    expect(toolsRuns[0]).toMatchObject({ seqStart: 1, seqEnd: 2 });
-    expect(toolsRuns[0].tools).toHaveLength(2);
-    expect(toolsRuns[1]).toMatchObject({ seqStart: 4, seqEnd: 4 });
-    expect(toolsRuns[1].tools).toHaveLength(1);
+    // ONE activity block containing both rounds (the interim assistant
+    // messages render as chat replies after the block).
+    expect(items.map((item) => item.kind)).toEqual(["activity", "ai", "ai"]);
+    const activity = items[0];
+    if (activity.kind !== "activity") throw new Error("expected activity");
+    expect(activity.rounds).toHaveLength(2);
+    expect(activity.rounds[0].map((t) => t.seq)).toEqual([1, 2]);
+    expect(activity.rounds[1].map((t) => t.seq)).toEqual([4]);
+    expect(activity.seqStart).toBe(1);
+    expect(activity.seqEnd).toBe(4);
   });
 
-  it("emits one diff card per write/edit call in a run, in order", () => {
+  it("splits tool runs of DIFFERENT turns into separate activity blocks", () => {
+    const items = toProjectChatItems([
+      toolUse(1, "list_dir", "path: ."),
+      ev(2, "message.assistant", { role: "assistant", content: "first done" }, "agt_scribe"),
+      ev(3, "message.user", { role: "user", content: "next task" }, "agt_scribe"),
+      toolUse(4, "read_file", "path: src/index.ts"),
+      ev(5, "message.assistant", { role: "assistant", content: "second done" }, "agt_scribe"),
+    ]);
+
+    expect(items.map((item) => item.kind)).toEqual(["activity", "ai", "user", "activity", "ai"]);
+    const blocks = items.filter((i) => i.kind === "activity");
+    expect(blocks).toHaveLength(2);
+  });
+
+
+
+  it("keeps write/edit tools inside the activity block (diff cards render there)", () => {
     const items = toProjectChatItems([
       toolUse(1, "write_file", "path: a.ts, content: 10 chars"),
       toolUse(2, "read_file", "path: b.ts"),
       toolUse(3, "edit_file", "path: c.ts, content: 30 chars", false),
     ]);
 
-    expect(items.map((item) => item.kind)).toEqual(["tools", "diff", "diff"]);
-    const entries = items.flatMap((item) => (item.kind === "diff" ? [item.entry] : []));
-    expect(entries.map((entry) => entry.path)).toEqual(["a.ts", "c.ts"]);
-    expect(entries.map((entry) => entry.ok)).toEqual([true, false]);
+    expect(items.map((item) => item.kind)).toEqual(["activity"]);
+    const activity = items[0];
+    if (activity.kind !== "activity") throw new Error("expected activity");
+    expect(activity.rounds[0].map((t) => t.toolName)).toEqual([
+      "write_file",
+      "read_file",
+      "edit_file",
+    ]);
+    expect(activity.rounds[0].map((t) => t.ok)).toEqual([true, true, false]);
   });
 
   it("parses argsSummary tolerantly (full format, missing chars, missing path)", () => {
@@ -326,12 +344,16 @@ describe("toProjectChatItems", () => {
       toolUse(4, "edit_file", "touched something, details unknown"),
     ]);
 
-    const entries = items.flatMap((item) => (item.kind === "diff" ? [item.entry] : []));
-    expect(entries).toHaveLength(4);
-    expect(entries[0]).toMatchObject({ path: "src/full.ts", chars: 128 });
-    expect(entries[1]).toMatchObject({ path: "src/no-chars.ts", chars: null });
-    expect(entries[2]).toMatchObject({ path: null, chars: 64 });
-    expect(entries[3]).toMatchObject({ path: null, chars: null });
+    const activity = items[0];
+    if (activity.kind !== "activity") throw new Error("expected activity");
+    const parsed = activity.rounds[0]
+      .filter((t) => t.toolName === "write_file" || t.toolName === "edit_file")
+      .map((t) => parseDiffArgs(t.argsSummary));
+    expect(parsed).toHaveLength(4);
+    expect(parsed[0]).toMatchObject({ path: "src/full.ts", chars: 128 });
+    expect(parsed[1]).toMatchObject({ path: "src/no-chars.ts", chars: null });
+    expect(parsed[2]).toMatchObject({ path: null, chars: 64 });
+    expect(parsed[3]).toMatchObject({ path: null, chars: null });
   });
 
   it("ignores unknown event types (and messages without string content)", () => {

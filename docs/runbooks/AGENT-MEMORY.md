@@ -1,4 +1,4 @@
-<!-- last-reviewed: 2026-08-24 round-28 -->
+<!-- last-reviewed: 2026-08-24 round-32 -->
 # AGENT MEMORY — lessons learned, rules going forward
 
 **Owner directive (2026-08-23):** "learn from the mistakes you made, document
@@ -436,3 +436,25 @@ Format per entry: `N. TITLE (date, source)` → mistake → root cause → rule.
     every battery script starts with `pkill -f "agent-core/dist/main.js";
     pkill -f vite`, and each script covers ONE phase (boot+seed / streaming /
     UI interactions) rather than one giant end-to-end run.
+
+50. **Design references arrive as compiled React HTML — extract specs from the
+    live DOM, not the source.** The owner's AI design tool exports a bundled
+    artifact (one 200KB+ minified file, React runtime included) where the
+    visual structure only exists after render. RULE: open it with
+    agent-browser (`file://`), find the scaled canvases
+    (`getBoundingClientRect` ≈ 52% of 1920 — the computed styles carry the
+    REAL design values; divide bounding rects by the transform scale), and
+    pull computed styles for every component (background, radius, border,
+    shadow, fontSize). VLM alone misreads exact colors/shadows; DOM
+    extraction + VLM cross-check together give faithful specs.
+
+51. **Snapshot rows are stamped with the TURN's starting seq, not the tool
+    event's seq.** `runtime.ts` computes `turnSeq = lastSessionSeq + 1` BEFORE
+    the user message lands, so a write_file tool.use at event seq 2+ has its
+    file_snapshots row at seq 1 (or wherever the turn started). A direct
+    `GET /sessions/:id/snapshots/:toolSeq` 404s and diffs render "no snapshot
+    recorded". RULE: resolve via the checkpoints list
+    (`fetchSessionCheckpoints`) — same path, greatest snapshot seq ≤ tool seq
+    (`resolveSnapshotForTool` in api.ts). If the runtime is ever touched,
+    consider recording snapshots AFTER the tool.use event with its actual seq
+    — but that's a backend change requiring a migration story.

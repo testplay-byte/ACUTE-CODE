@@ -1,7 +1,7 @@
-<!-- last-reviewed: 2026-08-24 round-30 -->
+<!-- last-reviewed: 2026-08-24 round-32 -->
 # ACUTE-CODE — Agent Handoff Document
 
-**Last updated:** 2026-08-24 (round-30 DELIVERED — all 6 owner-reported Windows bugs fixed: hijacked-SSE CORS drop behind "Failed to fetch"+no-streaming, ignored ?session= param behind "all sessions the same", DELETE /sessions/:id full stack, selected-session highlight, Demos nav removed + distinct accent-tinted sidebar, chat overhaul. **212 tests green** incl. live-browser battery with real OpenRouter streaming) · **Maintained by:** the orchestrator agent · **Audience:** any AI agent (or human) taking over development
+**Last updated:** 2026-08-24 (round-32 DELIVERED — the owner's AI-designed UI implemented: floating warm-tinted sidebar + separate white chat panel, top navigation bar REMOVED (controls merged into one slim panel header), the full ActivityBlock system (rounds timeline + file-change diff cards with real +N −M stats + command terminal cards + web rows + Detailed/Compact/Hidden customization + live streaming variant), snapshot seq-resolution fix. **213 tests green** + live OpenRouter battery + VLM verification. Next: owner generates composer/model/context demos from `docs/design/AI-DESIGN-PROMPT-2.md`) · **Maintained by:** the orchestrator agent · **Audience:** any AI agent (or human) taking over development
 
 You are picking up **ACUTE-CODE**, a local-first, closed-source multi-agent engineering workbench for Windows. This file gives you everything needed to continue: state, rules, environment, gotchas, and next steps. It contains **no secrets** — secrets live only in Windows Credential Manager (§7).
 

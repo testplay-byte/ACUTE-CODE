@@ -796,7 +796,7 @@ token-in-URL auth-doc URL noise). The CI step is `continue-on-error: true`
 **J2 work delivered (commit 65246ca):**
 - Created `scripts/docs/stamp-all.mjs` — the bulk idempotent stamper that
   DOC-STANDARDS §8 references but never existed. Reads round from status.json.
-- Backfilled the `<!-- last-reviewed: 2026-08-24 round-28 -->` stamp on 103
+- Backfilled the `<!-- last-reviewed: 2026-08-24 round-32 -->` stamp on 103
   docs (105 failures → 0).
 - Hardened `scripts/docs/check-stale.mjs`:
   1. **indented-fence support** (`/^ {0,3}```/m`) — the actual root bug;
@@ -924,3 +924,50 @@ Stage Summary:
 - 212 tests green (5 new), build green, pushed to GitHub.
 - The owner should re-test on Windows via ACUTE.bat: streaming should now show live typing with no "Failed to fetch", sessions should be independent + deletable, the sidebar should be clearly distinct with the selected session highlighted.
 - round-30.zip published to DASHBOARD/screenshots/ with real testing captures.
+
+---
+Task ID: R31
+Agent: orchestrator (Z.ai Code, inline — no subagents)
+Task: Owner's R30 verdict — functionality is right (streaming works live, sessions independent + deletable, no errors) but the sidebar UI and chat-window UI are "ugly, bad, not proper". Their plan: the owner will generate perfect-looking UI screens with an AI-powered design tool, share them back, and I implement from those. This round's deliverable: the master design prompt for that tool — capturing the design language they like (setup wizard + dashboard DNA) and every element the screens must contain.
+
+Work Log:
+- Studied the liked screens to extract the design language precisely:
+  - SetupWizard.tsx + WelcomeScreen.tsx + PickFlavorScreen.tsx: Space Grotesk, font-black display type (-0.03em tracking), kicker labels (0.18em uppercase), accent highlight boxes rotated -1deg with 2.5px borders + bentoShadow, dot-grid background (28px, 4%), ambient accent glows, traffic-light code windows, playful step cards with slight rotations, stat tiles (font-black value + uppercase label), full-round CTA with circular arrow chip, sliding mode toggle, palette strips.
+  - DashboardScreen.tsx: same DNA applied — container ladder 1280→1640px, greeting with accent highlight box, 20px stat cards with solid accent icon tiles, uppercase tracked section labels.
+  - docs/design/DESIGN-SYSTEM.md + ui-direction.md: token rules, borderless-chat exception, motion curve, component anatomy.
+- Inventoried every functional element the two hated screens must contain:
+  - Sidebar: hamburger, NAVIGATION section (Dashboard/Usage), PROJECTS section (expandable project rows, session rows with active highlight + hover delete, New Session, Add project, empty state), Settings, collapse rail + 64px collapsed variant.
+  - Chat window: top bar (back/agent picker/model chip/search/theme/panels), empty state (hero + suggestion chips), user bubbles, assistant rows (avatar + name + stats), the TOOL-ACTIVITY system (owner's explicit complaint: file writes not shown properly + no customization): rounds, tool rows, file-change diff cards with diff-stat chips, command terminal cards, web action rows, thinking dividers, streaming states with caret, customization popover (Detailed/Compact/Hidden), composer (growing textarea + stop/send + ctx meter + model picker), error banner.
+- Wrote docs/design/AI-DESIGN-PROMPT.md (333 lines): PART 1 design language (typography, color/theme system, bento shape/border/shadow DNA, texture, components vocabulary, motion) + PART 2 app shell/sidebar + PART 3 chat empty state + PART 4 chat mid-task with the full activity-block spec (the money screen) + PART 5 variant checklist (7 frames incl. dark + component sheet) + style guardrails (what NOT to do). Ends with implementation notes for the agent who receives the designs.
+- Committed a62ae7a + pushed. No product code changes — visual-layer planning round.
+
+Stage Summary:
+- The master design prompt is delivered: docs/design/AI-DESIGN-PROMPT.md (also pushed to GitHub so the owner can pull it via ACUTE.bat or read it on the repo).
+- It captures the wizard/dashboard DNA the owner likes and specifies every element of the two screens they hate, including the complete tool-activity visualization system addressing their file-action + customization complaints.
+- Next: owner generates designs with their AI design tool → shares screens → implementing agent follows the "After the designs come back" section at the end of the prompt file (implementation order: sidebar → activity block → empty state → composer → top bar; verify each step with the live battery + VLM vs reference).
+
+---
+Task ID: R32
+Agent: orchestrator (Z.ai Code, inline — no subagents)
+Task: The owner generated UI demos from the R31 design prompt and shared Acute-Ui-Screens.html with their verdicts. Implement what they liked (floating sidebar, separate white chat panel, minimized rail, dark mode, the mid-task activity block, diff cards, terminal cards, session/project/nav states), do NOT implement what they disliked (empty state, top navigation bar, component-sheet pills/tips/buttons/user-bubble/assistant-row), and write the NEXT design prompt for the composer/model/context refinements.
+
+Work Log:
+- Pulled the owner's design file (DASHBOARD repo, 211KB compiled React artifact). Rendered it in Chromium via agent-browser (file://), mapped its 7 frames by scrolling positions, and captured each frame individually.
+- Extracted EXACT design specs from the live DOM (computed styles + bounding rects ÷ 0.52 transform scale): sidebar 270px radius 20 bg #FFF6E5 border rgba(0,0,0,0.14) floating 12px; chat panel white radius 24 border rgba(0,0,0,0.12) softShadow; dark #2E2A26/#2C2C2E; user bubble #FF6B2C radius 16-16-6; activity card radius 16; nested cards radius 12; in-flight writes #FFF6E5 + accent@0.35 border; composer radius 18 accent@0.4 border + 4px accent glow; Detailed/Compact/Hidden pills. Cross-checked with VLM per frame (AGENT-MEMORY #50).
+- Implemented the floating-panel shell: AppShell keeps 12px gaps on every route; ChatFocusLayout renders the chat as its own floating panel; appSidebarVisible defaults true.
+- Retuned the sidebar surface to the design's SUBTLE warm tint (light 4.5% / dark 5.5% accent mix — R30's 12-16% was muddier than the owner's design); "+ Add" became a solid accent pill.
+- REMOVED the top navigation bar (ChatTopBar.tsx deleted): its controls merged into ONE slim h-12 toolbar inside AgentChatPanel (agent chip picker, model chip, ⌘K search, theme toggle, Panels escape hatch); CommandPalette hosted directly with the ⌘K handler.
+- Built the ActivityBlock component (the money screen): collapsible card per turn with header (pulsing avatar live / "Completed N actions · M rounds" + elapsed chip + mode popover + chevron), rounds timeline with ROUND pills + "planning next round…" dividers, tool rows, file-change diff cards (real +N −M stat chips from snapshots, Open pill, expandable green/red diff body, warm "writing…" in-flight state), command terminal cards (traffic lights + exit chip), web rows, and the persisted Detailed/Compact/Hidden customization.
+- Rewrote toProjectChatItems: ProjectChatItem = user | activity | ai — one activity item per turn with rounds split at interim assistant messages; widened ToolUseEntry.ok to boolean|null; added meta.continuation to StreamTurnEvent; live streaming now renders the same ActivityBlock with round bumps.
+- Fixed snapshot resolution (the runtime stamps snapshots with the TURN's start seq, not the tool event's seq): added fetchSessionCheckpoints + resolveSnapshotForTool; the diff body now actually renders ("+ hello aurora" verified live). AGENT-MEMORY #51.
+- Rewrote the api tests for the activity model (rounds grouping, split turns, tolerant parsing) and the ChatFocusLayout tests for no-top-bar; fixed the Add button's accessible name so the sidebar tests pass unchanged.
+- Live battery with a REAL OpenRouter turn (created greeting.txt): the canonical view shows "Completed 2 actions · 6s" + the greeting.txt +13 Open card + assistant reply with stats; diff expansion verified; dark mode + collapsed rail verified; 0 console errors.
+- Full pipeline: lint 0 / typecheck 0 / test 213 / build GREEN / docs:check 0-0.
+- Wrote docs/design/AI-DESIGN-PROMPT-2.md — the owner's next demo round: the composer zone (resting/active/streaming/error states), the model-picker popover (search + provider grouping + manage link), the context/usage strip with the >80% warning state, and the everything-together money shot.
+- Published round-32.zip (6 real-product screenshots) to the DASHBOARD repo.
+
+Stage Summary:
+- The owner's liked designs are implemented faithfully in the real stack; their dislikes were deliberately skipped (documented in round-32.md).
+- The chat window now shows every agent action properly (the R32 complaint) with real diff stats and full customization.
+- 213 tests green, live OpenRouter-verified, VLM cross-checked, pushed.
+- Next: the owner generates the composer/model/context demos from AI-DESIGN-PROMPT-2.md and shares their pick.

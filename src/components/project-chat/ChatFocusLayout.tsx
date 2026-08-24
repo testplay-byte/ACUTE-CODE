@@ -1,49 +1,48 @@
 import { motion } from "framer-motion";
-import { useProjectChatStore } from "../../lib/project-chat-store";
 import { useThemeStyles } from "../../lib/use-theme-styles";
 import { ease } from "../../lib/motion";
 import { AgentChatPanel } from "./AgentChatPanel";
-import { ChatTopBar } from "./ChatTopBar";
 import type { Project } from "../../lib/api";
 
 /**
- * ChatFocusLayout (Round 28 WS-D1): the chat-focus-mode layout. Renders the
- * ChatTopBar (slim, back/agent/theme/panels) + the AgentChatPanel alone.
+ * ChatFocusLayout (Round 32 redesign per the owner-approved design
+ * Acute-Ui-Screens.html Frame 5 — "THE MONEY SCREEN"):
  *
- * The chat is LEFT-aligned on desktop (mr-auto, not mx-auto — 6-e review fix:
- * owner said "left side or center on the LEFT side"; mx-auto centers, mr-auto
- * left-aligns with the right margin absorbing slack). On mobile (<1024px) the
- * chat fills the full width (no maxWidth constraint).
- *
- * Owner R28 directive: "the chat window should be made to show on the left
- * side or in the center on the left side. These infos will not show, like the
- * folder structures and the actual code window or other windows. Those will
- * not show there."
+ * - NO TOP NAVIGATION BAR (owner R32 directive: "at the very top there is no
+ *   need to show the top navigation bar… unnecessary, unusual, unneeded, and a
+ *   bad experience"). The old ChatTopBar (back/agent/theme/panels) is gone;
+ *   the essential controls (agent picker, model chip, ⌘K, theme, panels) live
+ *   in the chat panel's own slim header inside AgentChatPanel.
+ * - The chat window is its own FLOATING PANEL: pure white in light mode /
+ *   cardDark in dark, radius 24, 1.5px border, softShadow — visually separate
+ *   from the sidebar (owner: "the right side chat window was separate from
+ *   it"), with the app shell providing the 12px spacing on all sides.
+ * - The conversation column stays left-leaning on desktop (mr-auto), full
+ *   width on mobile.
  */
 export function ChatFocusLayout({ project }: { project: Project }) {
   const styles = useThemeStyles();
-  const appSidebarVisible = useProjectChatStore((s) => s.appSidebarVisible);
 
   return (
     <motion.div
       className="h-full min-h-0 flex flex-col"
-      style={{ backgroundColor: styles.bg }}
       initial={{ opacity: 0 }}
       animate={{ opacity: 1 }}
       transition={{ duration: 0.3, ease }}
     >
-      <ChatTopBar project={project} />
-      {/* Chat takes flex-1, left-aligned on desktop (mr-auto), full-width on
-          mobile. max-w-3xl (768px) keeps the chat readable on wide screens. */}
+      {/* The floating chat window — its own surface, separate from the rail. */}
       <div
-        className={
-          appSidebarVisible
-            ? "flex-1 min-h-0 flex justify-center px-2 py-2"
-            : "flex-1 min-h-0 flex justify-center lg:justify-start px-2 py-2"
-        }
+        className="flex-1 min-h-0 flex rounded-[24px] border-[1.5px] overflow-hidden"
+        style={{
+          backgroundColor: styles.card,
+          borderColor: styles.border,
+          boxShadow: styles.softShadow,
+        }}
       >
-        <div className="w-full max-w-3xl lg:mr-auto min-h-0 flex">
-          <AgentChatPanel projectId={project.id} project={project} />
+        <div className="flex-1 min-h-0 flex justify-center lg:justify-start">
+          <div className="w-full max-w-3xl lg:mr-auto min-h-0 flex">
+            <AgentChatPanel projectId={project.id} project={project} />
+          </div>
         </div>
       </div>
     </motion.div>

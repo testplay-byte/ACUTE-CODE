@@ -96,6 +96,10 @@
     },
     {
       "label": "Round 30 — Windows bug fixes (CORS streaming + sessions) + sidebar/chat redesign"
+    },
+    {
+      "date": "2026-08-24",
+      "label": "Round 32 — owner-designed UI: floating panels + activity block"
     }
   ],
   "quality": {
@@ -132,14 +136,19 @@
   ],
   "plan": {
     "current": {
-      "title": "Round 30 DELIVERED — Windows bug fixes + session management + sidebar/chat redesign",
-      "detail": "Fixed the hijacked-SSE CORS drop behind the owner's 'Failed to fetch' + no-streaming bug; fixed the ignored ?session= param behind 'all sessions the same'; added DELETE /sessions/:id with hover trash in the sidebar; selected-session highlight; Demos nav removed; distinct accent-tinted sidebar; chat overhaul (hero empty state, suggestion chips, avatar+name rows, growing composer). 212 tests + live browser battery with real OpenRouter streaming."
+      "title": "Round 32 DELIVERED — owner-designed UI: floating panels + activity block + no top bar",
+      "detail": "Implemented the owner's AI-designed screens: floating sidebar (4.5% warm tint) + separate white chat panel with 12px gaps, top navigation bar REMOVED (controls merged into one slim panel header), the full ActivityBlock system (rounds timeline, file-change diff cards with real +/- stats, command terminal cards, web rows, Detailed/Compact/Hidden customization, live streaming variant), snapshot resolution fix, composer focus ring. 213 tests + live OpenRouter battery with VLM verification. Next: owner generates composer/model/context demos from AI-DESIGN-PROMPT-2.md."
     },
     "upcoming": [
       {
+        "phase": "Owner generates composer/model/context demos (AI-DESIGN-PROMPT-2.md)",
+        "status": "awaiting-owner",
+        "note": "Design prompt 2 delivered; implementation follows the owner’s picked design"
+      },
+      {
         "phase": "Owner re-test on Windows (ACUTE.bat)",
         "status": "awaiting-verdict",
-        "note": "Round 30 targeted the owner real-device reports; re-test streaming + sessions + sidebar"
+        "note": "Round 32 targeted the owner’s UI complaints"
       },
       {
         "phase": "Phase 3 — Orchestration engine",
@@ -163,5 +172,5 @@
       "Quality over speed — every round verified before push"
     ]
   },
-  "round": 30
+  "round": 32
 }
