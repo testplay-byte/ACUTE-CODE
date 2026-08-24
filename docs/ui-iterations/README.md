@@ -43,7 +43,7 @@ UI stands and what is still open.
 | **Round 24–25** (Kilo Code parity: tools + prompt + context + checkpoints) | 5 new tools (search_code, git_status/diff/log, run_command) + Cline-grade 150-line system prompt + cost tracking + code blocks w/ line numbers + 13th tool todo_write + context-window management + checkpoint system (migration 0005 file_snapshots) | **DELIVERED** — see ORCHESTRATION-WORKLOG (round files not written per lesson #33 gap) |
 | **Round 26** (100 review items) | Stop button on busy + composer placeholder + settings max-width + traffic light size + loading skeletons + error recovery + agent picker empty state + retry button + sidebar empty state + divider visibility + exec safe list (40+ commands) + brand logo hover 180° rotation + aria-labels + focus-visible + 6 themes + dark/light toggle + Enter/Shift+Enter keyboard + GapHandle a11y | **DELIVERED** — see ORCHESTRATION-WORKLOG (split across R26/R26b/R26c/R26-final) |
 | **Round 27** (web tools + deps fix + testing + demo) | web_fetch + web_search (15 tools total) + CRITICAL deps-wiring fix (todo_write + checkpoints now live in real turns) + 14 web-tools tests + L4 live battery + L5 browser verification (19 screenshots) + demo project (YouTube-like 545-line app) built BY the agent + zip uploaded to GitHub release | **DELIVERED** — see round-27.md |
-| **Round 28** (UX + agentic-quality overhaul) | Master plan proposed (1123L, 13 workstreams A-M, 5 milestones, 6 sub-agent reviews). MS-1 in progress: A1 governance done, A2 board backfill in progress, B sidebar + C settings next. | **IN PROGRESS** — see ROUND-28-MASTER-PLAN.md |
+| **Round 28** (UX + agentic-quality overhaul) | Master plan v2 (1123L, 13 workstreams A-M, 5 milestones, 30 sub-agent review fixes). MS-1 DELIVERED: A1+A2 governance + ORCHESTRATOR-METHOD.md (owner explicit ask) + K1 dashboard screenshot publish infra (publish-screenshots.mjs) + B sidebar redesign (brand block removed, NAVIGATION section header) + C settings appearance (getContrastText contrast fix + Sun/Moon icons + swatch borders + 2-col grid). 197 tests green, VLM-verified. R28 screenshots → DASHBOARD repo. | **MS-1 DONE** — MS-2 (chat redesign) in progress — see round-28.md |
 
 ## Round files
 
@@ -72,6 +72,7 @@ UI stands and what is still open.
 - **round-24–25** — Kilo Code parity (5 new tools + Cline-grade prompt + cost tracking + context-window management + 13th tool todo_write + checkpoint system) — *no round file; see ORCHESTRATION-WORKLOG*
 - **round-26** — 100 review items (stop button, composer placeholder, loading skeletons, error recovery, 6 themes, GapHandle a11y, etc.) — *no round file; see ORCHESTRATION-WORKLOG (split across R26/R26b/R26c/R26-final)*
 - [`round-27.md`](round-27.md) — web tools (web_fetch + web_search) + critical deps-wiring fix + demo project built by the agent
+- [`round-28.md`](round-28.md) — UX + agentic-quality overhaul (13 workstreams A-M, 5 milestones; MS-1: governance + sidebar + settings + screenshot infra)
 - **round-28** (in progress) — UX + agentic-quality overhaul; see [`ROUND-28-MASTER-PLAN.md`](../ROUND-28-MASTER-PLAN.md)
 
 ## Running the UI with a live backend (dev)
