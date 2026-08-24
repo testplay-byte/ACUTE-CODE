@@ -1,6 +1,6 @@
 # ACUTE-CODE — Agent Handoff Document
 
-**Last updated:** 2026-08-24 (round-28 master plan proposed, CI green) · **Maintained by:** the orchestrator agent · **Audience:** any AI agent (or human) taking over development
+**Last updated:** 2026-08-24 (round-28 DELIVERED — 5 milestones, 213 tests green, CI green) · **Maintained by:** the orchestrator agent · **Audience:** any AI agent (or human) taking over development
 
 You are picking up **ACUTE-CODE**, a local-first, closed-source multi-agent engineering workbench for Windows. This file gives you everything needed to continue: state, rules, environment, gotchas, and next steps. It contains **no secrets** — secrets live only in Windows Credential Manager (§7).
 
@@ -23,9 +23,9 @@ You are picking up **ACUTE-CODE**, a local-first, closed-source multi-agent engi
 
 ACUTE-CODE (NOT "Forge" — the brief's old codename) is a Windows desktop app: **Tauri 2 (Rust) shell + React 18/TS frontend + Node/TS sidecar ("agent-core") that exclusively owns SQLite (WAL) and serves localhost REST+WS**. "Local-first" = all processing on-device; LLMs are cloud APIs only. It orchestrates up to 5 concurrent agents (templates: Planner, Researcher, Coder, Reviewer, Tester) in three run modes — **single-agent (default)**, **auto-team** (cheap orchestrator model delegates to a powerful worker), **manual** (advanced). No sandbox in v1, so the **human-approval engine is the security boundary**. Providers: Anthropic/OpenAI/Google (fixture-tested only — no keys) + OpenRouter (live) + custom OpenAI-compatible. Owner runs it as a portable folder with an exe (ADR-0003). Budget: <700 MB idle, <2.5 GB with 5 agents, cold start <5 s.
 
-## 3. Exact current state (2026-08-23, agent-handoff snapshot)
+## 3. Exact current state (2026-08-24, round-28 DELIVERED)
 
-**The setup wizard is COMPLETE and owner-approved (UI rounds 1–7, all logged in `docs/ui-iterations/`). Rounds 8 redid the shell (topbar deleted; sidebar = Dashboard/PROJECTS/Usage/Settings; Settings hub with Appearance/Agents/API/Advanced) and fixed the connection test to be honest. The Agentic Coding MVP (`docs/runbooks/plan-agentic-mvp.md`) is now feature-complete pending owner review: M1 (projects backend + REST + tree/file endpoints), M2 (path-sandboxed file tools wired into the agent turn loop), M3 (project-chat UI ported onto live data at `/project/:id/chat`) and M4 (live ACUTEST run — files verified on disk) are all delivered and recorded in `docs/ui-iterations/round-09.md`. The M4 live run also exposed and fixed a latent M2-era bug: tool schemas must be wrapped in `jsonSchema()` for AI SDK v7 (`agent-core/src/tools/index.ts`). The next agent picks up at: owner review verdicts on the project-chat screen, then Phase 3 upon explicit approval.**
+**Round 28 is COMPLETE — all 5 milestones delivered, 213 tests green (207 + 6 e2e), CI green. The owner's 9 R28 directives are realized: (1) sidebar brand block removed + NAVIGATION/PROJECTS sections; (2) settings appearance contrast fix + Sun/Moon + swatch borders + 2-col grid; (3) chat screen complete redesign — chatFocusMode + ChatFocusLayout + ChatTopBar, chat on LEFT, no Explorer/Code panels in focus mode; (4) live streaming typing effect via useSidecarHealth (demo-mode auto-detect → SSE path) + caret-blink cursor + aria-live; (5) multi-turn agentic continuation — AGENTIC LOOP prompt section + outer loop (maxOuterLoops 5) + inverted continueIfUnfinished; (6) project indexing — codebase_index table + index_project 16th tool + CODEBASE AWARENESS prompt injection; (7) advanced search — search_code case_sensitive/whole_word/file_glob/max_results + CommandPalette ⌘K + POST /projects/:id/search; (8) in-app demo viewer — /demos route + DemoViewerScreen + sandboxed iframe; (9) documentation proper + manageable — DOC-STANDARDS.md + check-stale.mjs CI gate + REVIEW-CADENCE.md + ORCHESTRATOR-METHOD.md (the cognitive workflow doc). Plus K1+K2 (DASHBOARD screenshot publish infra + UI section), L (verify-round.mjs). See `docs/ui-iterations/round-28.md` for the full evidence (live batteries: MS-3 = 5 tool calls + Done. + file written; MS-4 = 318 files + 2384 symbols indexed in 124ms + symbol search match). The next agent picks up at: owner verdict on R28, then J2 (docs stamp backfill) + Phase 3 orchestration upon explicit approval.**
 
 | Item | State |
 |---|---|
@@ -134,9 +134,9 @@ The Rust shell reads provider keys from Credential Manager at spawn and injects 
 - Tauri on Windows needs `src-tauri/icons/icon.ico` even with bundling disabled.
 - Git Bash kills don't always take node children down — check `tasklist` for orphans after sidecar tests (`taskkill //F //PID <pid>`).
 
-## 9. What's next: Round 28 master plan (UX + agentic-quality overhaul) — then Phase 3 — Orchestration engine (after owner approval)
+## 9. What's next: J2 docs stamp backfill — then Phase 3 — Orchestration engine (after owner approval)
 
-**Round-28 master plan (2026-08-24, proposed):** the full plan is at `docs/ROUND-28-MASTER-PLAN.md` (1123 lines, v2 with 30 sub-agent review fixes applied). It covers 13 workstreams A-M across 5 milestones:
+**Round-28 (2026-08-24, DELIVERED):** the full plan was at `docs/ROUND-28-MASTER-PLAN.md` (1123 lines, v2 with 30 sub-agent review fixes applied). All 5 milestones delivered; see `docs/ui-iterations/round-28.md` for the complete evidence. The 13 workstreams A-M across 5 milestones were:
 - **MS-1**: A1+A2 (governance + docs sync) + B (sidebar redesign — remove brand block) + C (settings appearance contrast fix)
 - **MS-2**: D1+D2+D3 (chat screen complete redesign — chatFocusMode + ChatFocusLayout + AgentChatPanel modernization + streaming hook merged with E + composer wiring + DiffCard real diff + delete orphaned TopBar)
 - **MS-3**: F (multi-turn agentic continuation — AGENTIC LOOP prompt section + inverted continueIfUnfinished + maxOuterLoops 5 + context/request guards)

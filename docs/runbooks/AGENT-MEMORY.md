@@ -319,3 +319,84 @@ Format per entry: `N. TITLE (date, source)` → mistake → root cause → rule.
     `index.html` / `assets/` — the `screenshots/` directory isn't touched
     by the build, so it's safe). Publish via
     `pnpm dashboard:publish-screenshots <NN>` (Workstream K).
+
+41. **The DASHBOARD repo's GitHub Pages CI auto-rebuilds `index.html` on every
+    push — this creates a divergent commit that blocks the next push.** When
+    `publish-screenshots.mjs` pushes a new screenshot zip + data.json, the
+    CI runs `node build.mjs` + commits the rebuilt `index.html`. By the time
+    the next push arrives, `origin/main` is ahead by that CI commit →
+    `git push` fails with "non-fast-forward". RULE: after EVERY DASHBOARD
+    push, the NEXT DASHBOARD operation must `git fetch && git pull --rebase`
+    first. The `publish-screenshots.mjs` script's token-in-URL push can
+    fail on this; recover with `cd /home/z/PROJECT/DASHBOARD && git fetch
+    origin && git pull --rebase origin main` then re-push. The rebase
+    sometimes conflicts on the generated `index.html` — resolve by running
+    `node build.mjs` (regenerate from source) then `git add index.html &&
+    git rebase --continue`. Lesson: prefer pushing SOURCE files only
+    (template.html, app.js, style.css) and let CI rebuild index.html; if you
+    must push a rebuilt index.html, expect the rebase dance.
+
+42. **pnpm is NOT on the default PATH post-sandbox-wipe — install via
+    corepack, then shim.** `corepack enable` fails on this sandbox (needs
+    root to write to /usr/bin), but `corepack prepare pnpm@11.22.0 --activate`
+    works and lands the binary at `/home/z/.cache/node/corepack/v1/pnpm/`.
+    `corepack pnpm` invokes it, but plain `pnpm` isn't on PATH. RULE: create
+    a shim at `/home/z/.local/bin/pnpm` (a 3-line bash script that `exec
+    corepack pnpm "$@"`), then prefix EVERY Bash call that runs pnpm with
+    `export PATH=/home/z/.local/bin:$PATH`. The shim survives across shell
+    invocations; the corepack binary doesn't need re-activation once cached.
+
+43. **Background processes (vite, sidecar) die between Bash invocations in
+    this sandbox — run live batteries as ONE self-contained script.** The
+    sandbox kills the whole process group when a Bash call returns. `nohup
+    cmd &` + `disown` + `setsid` all fail to survive across invocations.
+    RULE: for any live battery (sidecar boot + curl SSE, vite + agent-browser
+    screenshots), write ONE Bash command that: setsid-launches the process,
+    polls for readiness, runs the test, kills the process, all in sequence.
+    The ORCHESTRATOR-METHOD §3.4 documents this as the "single self-contained
+    invocation" pattern. Vite binds to localhost which may resolve to ::1
+    (IPv6) — use `--host 127.0.0.1` to force IPv4 so curl + agent-browser
+    can reach it.
+
+44. **The demo-mode auto-detect is THE fix for "completes all tasks then
+    shows results" (owner R28 complaint #4).** Root cause: `demoData`
+    defaults `true`; in demo mode `AgentChatPanel` falls back to the
+    SYNCHRONOUS `POST /sessions/:id/messages` route (entire turn returns
+    only AFTER all tool calls + final text complete). The SSE streaming
+    route exists + works (R16), but never activated because `liveMode =
+    !demoData` was false. FIX (WS-D2 `useSidecarHealth`): on app boot, ping
+    `GET {baseUrl}/api/v1/health`; if 200 + token, `setDemoData(false)` →
+    streaming activates. The config-store already flips demoData false when
+    `VITE_ACUTE_BASE_URL` is set (env path); the health-ping covers
+    browser-dev + Tauri-shell-not-yet-answered. RULE: when the owner reports
+    "no typing effect" or "completes then shows", FIRST check whether
+    demoData is true (the sidecar may be unreachable) — the streaming
+    pipeline itself is sound.
+
+45. **The "model is not capable" attribution was wrong — the issues were in
+    OUR project code (owner R28 directive #5).** The `stealth/ox-alpha`
+    model IS capable. The multi-turn continuation complaint was a missing
+    OUTER LOOP in the runtime (the SDK's internal multi-step loop ran, but
+    the runtime did NOT start a NEW SDK call when the task wasn't
+    genuinely complete) + a missing AGENTIC LOOP section in the system
+    prompt (no instruction to use 4-7+ tool calls, verify saves, not stop
+    after one). FIX (WS-F): outer loop (maxOuterLoops 5) + AGENTIC LOOP
+    prompt + inverted continueIfUnfinished (continue UNLESS explicit
+    completion signal AND all todos done). RULE: before attributing an
+    agentic-quality issue to the model, audit the runtime (is there an
+    outer loop?) + the prompt (is there a multi-turn instruction?). The
+    MS-3 live battery proved this: with the outer loop + prompt, the model
+    made 5 tool calls + verified its own save + emitted "Done." — exactly
+    the owner's workflow.
+
+46. **Doc-stamp CI gate (WS-J1) is warn-only until the stamp backfill
+    (WS-J2) lands.** `scripts/docs/check-stale.mjs` fails on docs missing
+    the `<!-- last-reviewed: YYYY-MM-DD round-NN -->` stamp. Existing docs
+    (21 ADRs, ~20 runbooks, ~10 research notes) don't have it yet. CI is
+    `continue-on-error: true` for now (R28 shipped the infra + the
+    contract; J2 will bulk-add stamps via `scripts/docs/stamp-all.mjs`
+    + flip CI to fail-closed). RULE: when adding the stamp contract to a
+    repo that didn't have it, ship the check + the one-shot stamp script
+    in the same round, then flip CI to fail-closed once the backfill lands.
+    Don't ship the check fail-closed on day 1 — every existing doc fails.
+
