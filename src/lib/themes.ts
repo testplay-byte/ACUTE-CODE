@@ -250,6 +250,21 @@ export function isLightColor(color: string): boolean {
   return (0.299 * r + 0.587 * g + 0.114 * b) / 255 > 0.55;
 }
 
+/**
+ * Linear-interpolate two colors (round-30). `t=0` returns `a`, `t=1` returns
+ * `b`. Used to derive the distinct sidebar surface from bg + accent so every
+ * theme gets a harmonious tint without per-theme hand-picking. Falls back to
+ * `a` when either input can't be parsed (non-DOM fallback parses hex only).
+ */
+export function mixHex(a: string, b: string, t: number): string {
+  const [ar, ag, ab] = parseColor(a);
+  const [br, bg, bb] = parseColor(b);
+  const r = Math.round(ar + (br - ar) * t);
+  const g = Math.round(ag + (bg - ag) * t);
+  const bl = Math.round(ab + (bb - ab) * t);
+  return `#${((1 << 24) | (r << 16) | (g << 8) | bl).toString(16).slice(1).toUpperCase()}`;
+}
+
 // ---------------------------------------------------------------------------
 // Derived style object — the exact key set of the demo's useThemeStyles hook
 // (design/demos/acute-agent-ui/acute-agent-ui/lib/use-theme-styles.ts).
@@ -266,6 +281,13 @@ export interface ThemeStyles {
   text: string;
   accent: string;
   accentText: string;
+  // Round-30: distinct sidebar surface (owner: "give the sidebar a different
+  // kind of color and try to make it separate from the other elements").
+  // Derived from the theme accent so EVERY theme gets a harmonious but
+  // clearly-different sidebar without per-theme hand-picking.
+  sidebarBg: string;
+  sidebarBorder: string;
+  sidebarHover: string;
   // Borders
   border: string;
   borderStrong: string;
@@ -322,6 +344,21 @@ export function deriveThemeStyles(themeIdOrTheme: string | ThemeColors, isDark: 
     text: isDark ? theme.textDark : theme.textLight,
     accent: isDark ? theme.accentDark ?? theme.accent : theme.accent,
     accentText: getContrastText(isDark ? theme.accentDark ?? theme.accent : theme.accent),
+
+    // Round-30 sidebar surface: a clear accent-tinted panel. Light mode mixes
+    // ~12% of the accent into the bg (Nova cream + orange → warm sand; Bento
+    // pale blue + indigo → periwinkle). Dark mode mixes ~16% accent into the
+    // card color → a clearly lighter, warm-tinted rail against bgDark. Border
+    // is a stronger accent mix; hover is a translucent white/black overlay.
+    // (First pass at 7–8% read as "subtly distinct" in VLM review — the owner
+    // asked for a color that is clearly DIFFERENT, so the mix was raised.)
+    sidebarBg: isDark
+      ? mixHex(theme.cardDark, theme.accentDark ?? theme.accent, 0.16)
+      : mixHex(theme.bgLight, theme.accent, 0.12),
+    sidebarBorder: isDark
+      ? "rgba(255,255,255,0.16)"
+      : mixHex(theme.bgLight, theme.accent, 0.35),
+    sidebarHover: isDark ? "rgba(255,255,255,0.08)" : "rgba(0,0,0,0.06)",
 
     // Borders
     border: isDark ? "rgba(255,255,255,0.10)" : "rgba(0,0,0,0.10)",
@@ -408,8 +445,9 @@ export function syncThemeCssVars(styles: ThemeStyles): void {
     "--ac-dot": styles.isDark ? t.dotDark : t.dot,
     "--ac-selected-bg": t.selectedBg,
     "--ac-selected-text": t.selectedText,
-    "--ac-sidebar-bg": styles.isDark ? t.bgDark : t.sidebarBg,
-    "--ac-sidebar-border": styles.isDark ? styles.border : t.sidebarBorder,
+    "--ac-sidebar-bg": styles.sidebarBg,
+    "--ac-sidebar-border": styles.sidebarBorder,
+    "--ac-sidebar-hover": styles.sidebarHover,
   };
   for (const [name, value] of Object.entries(vars)) {
     root.setProperty(name, value);

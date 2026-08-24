@@ -236,6 +236,8 @@ export interface SessionsBackend {
   list(): Promise<Session[]>;
   create(input: CreateSessionInput): Promise<Session>;
   get(id: string): Promise<SessionDetail>;
+  /** DELETE /sessions/:id — removes the session + its events/usage/snapshots. */
+  remove(id: string): Promise<void>;
   /**
    * One synchronous turn; may take several seconds. 409 CONFLICT when the
    * bound agent is unconfigured, 502 PROVIDER_ERROR on upstream failure.
@@ -252,6 +254,7 @@ export function httpSessions(): SessionsBackend {
       ),
     create: (input) => request<Session>("/sessions", { method: "POST", json: input }),
     get: (id) => request<SessionDetail>(`/sessions/${id}`),
+    remove: (id) => request<void>(`/sessions/${id}`, { method: "DELETE" }),
     sendMessage: (id, content) =>
       request<SendMessageResult>(`/sessions/${id}/messages`, {
         method: "POST",

@@ -168,4 +168,54 @@ describe("sidecar e2e (skipped without a prior build)", { skip: !existsSync(MAIN
     assert.equal(turn.status, 409);
     assert.equal(turn.json.error.code, "CONFLICT");
   });
+
+  it("DELETE /sessions/:id removes the session (round-30) and 404s afterwards", async () => {
+    const { json } = await api("GET", "/api/v1/agents");
+    const agent = json.agents.find((a) => a.isTemplate === false);
+    const created = await api("POST", "/api/v1/sessions", {
+      agentId: agent.id,
+      mode: "single",
+      title: "e2e delete target",
+    });
+    const id = created.json.session?.id ?? created.json.id;
+    const del = await api("DELETE", `/api/v1/sessions/${id}`);
+    assert.equal(del.status, 204);
+    const gone = await api("GET", `/api/v1/sessions/${id}`);
+    assert.equal(gone.status, 404);
+  });
+
+  it("SSE streaming responses carry CORS headers (round-30 'Failed to fetch' fix)", async () => {
+    // The hijacked SSE reply historically shipped WITHOUT Access-Control-Allow-
+    // Origin — the browser blocked the cross-origin response and every streamed
+    // message failed with "TypeError: Failed to fetch" (owner Windows bug).
+    // The headers are written into the raw writeHead BEFORE any turn logic, so
+    // an unconfigured agent (409 error event over SSE) still proves the fix.
+    const { json } = await api("GET", "/api/v1/agents");
+    const agent = json.agents.find((a) => a.isTemplate === false);
+    const created = await api("POST", "/api/v1/sessions", {
+      agentId: agent.id,
+      mode: "single",
+      title: "e2e cors probe",
+    });
+    const id = created.json.session?.id ?? created.json.id;
+    const res = await fetch(`${baseUrl}/api/v1/sessions/${id}/messages/stream`, {
+      method: "POST",
+      headers: {
+        authorization: `Bearer ${TOKEN}`,
+        "content-type": "application/json",
+        origin: "http://localhost:5173",
+      },
+      body: JSON.stringify({ content: "hello" }),
+    });
+    assert.equal(res.status, 200);
+    assert.equal(res.headers.get("content-type").split(";")[0], "text/event-stream");
+    assert.equal(
+      res.headers.get("access-control-allow-origin"),
+      "http://localhost:5173",
+      "hijacked SSE response must include the CORS origin or browsers reject it with 'Failed to fetch'",
+    );
+    // Drain the stream so the sidecar turn finishes cleanly.
+    await res.text();
+    await api("DELETE", `/api/v1/sessions/${id}`);
+  });
 });

@@ -891,3 +891,36 @@ Stage Summary:
 - ntfy correctly sent at end of session per the corrected canon.
 
 **End of R29 entry.**
+
+---
+Task ID: R30
+Agent: orchestrator (Z.ai Code, inline — no subagents)
+Task: Owner tested the real product on Windows (ACUTE.bat) and reported 6 issues: ugly sidebar + unneeded Demos section, no session deletion + all sessions identical, no selected-session highlight, chat window needs complete overhaul, no live streaming, and "Failed to fetch" after every message on Windows.
+
+Work Log:
+- Investigated all 6 issues hands-on in the codebase BEFORE touching anything. Found the root causes:
+  1. **"Failed to fetch" + no streaming (CRITICAL)**: the SSE route `POST /sessions/:id/messages/stream` calls `reply.hijack()` + raw `res.writeHead()` — headers set via `reply.header()` in the CORS onRequest hook are silently DROPPED. The SSE response shipped without `Access-Control-Allow-Origin`; the browser (localhost:5173 page → 127.0.0.1:5178 sidecar, cross-origin) blocked it; fetch() rejected with "TypeError: Failed to fetch" on EVERY streamed message. One bug, both owner symptoms (the error banner AND the "completes then shows results" non-streaming — the catch-block invalidation rendered the reply only after the server finished).
+  2. **"All sessions exactly the same"**: AgentChatPanel always bound the project's MOST-RECENTLY-UPDATED session — the `?session=` URL param was completely ignored. Clicking any session showed the same conversation and every message went into the latest session.
+  3. **No session deletion**: no DELETE /sessions/:id route existed anywhere (server, storage, api client, hooks, UI).
+  4. Sidebar: Demos nav not wanted; surface color (4% alpha overlay) read as "not distinct"; no per-session active highlight.
+- Verified the CORS hypothesis EMPIRICALLY before fixing: booted the sidecar in the sandbox, curl'ed the streaming route with an Origin header — the response headers had NO access-control-allow-origin (while normal GET routes did). Confirmed root cause, then fixed.
+- FIX 1 (server.ts): extracted `corsHeadersFor(origin)`; the hijacked SSE reply now spreads the CORS headers into its raw writeHead. E2E test added asserting the header on the live sidecar.
+- FIX 2 (AgentChatPanel.tsx): `?session=` is now the authoritative session selection (falls back to the project's latest when absent/foreign); creating a session pins the param via setSearchParams.
+- FIX 3 (full stack): storage deleteSession (one transaction: session_events, usage_events, approvals, file_snapshots, sessions) + DELETE /sessions/:id route + api.ts remove() + useDeleteSession hook + Sidebar hover-trash per session (deleting the open session drops the param). 3 unit tests + 1 e2e test.
+- FIX 4 (Sidebar.tsx): Demos nav button REMOVED; distinct sidebar surface via new derived theme tokens sidebarBg/sidebarBorder/sidebarHover (light: 12% accent mixed into bg; dark: 16% accent into cardDark — first pass at 7-8% read "subtly distinct" in VLM review and was raised); all hovers/dividers use the new tokens.
+- FIX 5 (SessionRow): active session (matching the ?session= param) gets accent-tinted fill + bold text + 2.5px accent indicator bar.
+- FIX 6 (chat overhaul, in-place): hero empty state (accent icon tile with glow + "How can I help with {project}?" + agent/model subtitle + 4 suggestion chips that pre-fill the composer); assistant messages get avatar tile + name header (Claude/ChatGPT pattern); the live streaming row mirrors the final layout (avatar + name + "streaming…" + pulsing avatar + caret); composer replaced with an auto-growing textarea (Enter/Shift+Enter, max ~6 rows); dead Paperclip button removed; ac-pulse CSS keyframe (reduced-motion safe).
+- Live battery with the REAL OpenRouter key, real sidecar + vite + Chromium browser:
+  - Session B: typed → Enter → model reply "bananas are yellow" arrived LIVE; 0 fetch/CORS console errors; progressive poem screenshots (mid-stream 6 of 10 lines → complete).
+  - Session isolation verified at the SQLite level: Session A empty, Session B has the exchange — same project, different event logs.
+  - Session A deleted via the sidebar hover trash in the browser; API list then shows only Session B.
+  - VLM-verified screenshots: sidebar "clearly distinct" (warm reddish-brown vs plain dark gray in dark; peach-tinted vs white in light); "Session B math is highlighted with an orange accent bar"; no visual defects.
+- Full pipeline green hands-on: lint 0 / typecheck 0 (frontend + agent-core) / test 212 (was 207: +3 DELETE unit, +2 e2e) / build GREEN.
+- Sandbox lessons learned + codified as AGENT-MEMORY #47 (hijack drops headers), #48 (URL param = source of truth), #49 (pkill orphans before batteries; keep scripts short).
+- Published round-30.zip (9 REAL product-testing screenshots) to the DASHBOARD repo per the owner's standing directive (AGENT-MEMORY #40).
+
+Stage Summary:
+- All 6 owner-reported Windows issues FIXED with root-cause-level understanding (not patches), each verified hands-on: the CORS fix verified at the HTTP level (curl + e2e test + 0 browser console errors), the session fix verified at the DB level, the UI changes VLM-verified in both themes.
+- 212 tests green (5 new), build green, pushed to GitHub.
+- The owner should re-test on Windows via ACUTE.bat: streaming should now show live typing with no "Failed to fetch", sessions should be independent + deletable, the sidebar should be clearly distinct with the selected session highlighted.
+- round-30.zip published to DASHBOARD/screenshots/ with real testing captures.

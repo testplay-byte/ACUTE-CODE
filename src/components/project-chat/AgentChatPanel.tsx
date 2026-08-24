@@ -5,7 +5,6 @@ import {
   useRef,
   useState,
   type KeyboardEvent as ReactKeyboardEvent,
-  type MouseEvent as ReactMouseEvent,
   type ReactNode,
 } from "react";
 import { AnimatePresence, motion, type Variants } from "framer-motion";
@@ -17,14 +16,15 @@ import {
   Edit3,
   FileCode2,
   FolderOpen,
-  Paperclip,
+  GitBranch,
+  ListChecks,
   Search,
   Sparkles,
   Terminal,
   Trash2,
   type LucideIcon,
 } from "lucide-react";
-import { Link } from "react-router";
+import { Link, useSearchParams } from "react-router";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useAgents } from "../../hooks/use-agents";
 import {
@@ -97,6 +97,30 @@ const CONTEXT_LIMITS: Record<string, number> = {
   "stealth/ox-alpha": 1_048_576,
 };
 const DEFAULT_CONTEXT_LIMIT = 1_000_000;
+
+/** Round-30 empty-state suggestion chips (fill the composer on click). */
+const SUGGESTIONS: Array<{ label: string; prompt: string; icon: LucideIcon }> = [
+  {
+    label: "Explore this project",
+    prompt: "Explore this project: list the top-level structure, then summarize what this codebase does and its tech stack.",
+    icon: FolderOpen,
+  },
+  {
+    label: "Find a bug",
+    prompt: "Search the code for likely bugs or edge cases and report the top findings with file paths.",
+    icon: Search,
+  },
+  {
+    label: "Explain the architecture",
+    prompt: "Explain this project's architecture: entry points, main modules, and how data flows between them.",
+    icon: GitBranch,
+  },
+  {
+    label: "Write a plan",
+    prompt: "Write a short, ordered implementation plan for adding a small feature to this project.",
+    icon: ListChecks,
+  },
+];
 
 /** Hover copy button with a "Copied" flash (round-16 owner request). */
 function CopyButton({ text }: { text: string }) {
@@ -365,26 +389,44 @@ function AiMessage({
   usage,
   ms,
   model,
+  agentName,
 }: {
   content: string;
   usage?: { inputTokens: number; outputTokens: number };
   ms?: number;
   model?: string;
+  agentName?: string;
 }) {
   const styles = useThemeStyles();
   return (
-    <motion.div variants={msgVariants} initial="initial" animate="animate" className="group">
+    <motion.div variants={msgVariants} initial="initial" animate="animate" className="group flex gap-3">
+      {/* Round-30 overhaul: assistant messages get an avatar tile + name row
+          (Claude/ChatGPT pattern) instead of an anonymous card bubble. */}
       <div
-        className="rounded-[16px] px-3.5 py-3 text-[13px] leading-[1.6]"
-        style={{ background: styles.card, color: styles.text }}
+        className="w-7 h-7 rounded-[10px] grid place-items-center shrink-0 mt-0.5"
+        style={{
+          background: withAlpha(styles.accent, styles.isDark ? 0.16 : 0.1),
+          color: styles.accent,
+        }}
+        aria-hidden
       >
-        <RichText content={content} />
+        <Sparkles size={13} />
       </div>
-      <div className="flex items-start gap-1">
-        <div className="opacity-0 group-hover:opacity-100 transition-opacity pt-1">
-          <CopyButton text={content} />
+      <div className="min-w-0 flex-1">
+        <div className="flex items-baseline gap-2 mb-1">
+          <span className="text-[12px] font-bold" style={{ color: styles.text }}>
+            {agentName ?? "Acute"}
+          </span>
         </div>
-        <ReplyStats usage={usage} ms={ms} model={model} />
+        <div className="text-[13px] leading-[1.65]" style={{ color: styles.text }}>
+          <RichText content={content} />
+        </div>
+        <div className="flex items-center gap-1">
+          <div className="opacity-0 group-hover:opacity-100 transition-opacity pt-0.5">
+            <CopyButton text={content} />
+          </div>
+          <ReplyStats usage={usage} ms={ms} model={model} />
+        </div>
       </div>
     </motion.div>
   );
@@ -584,8 +626,10 @@ function DiffCard({ entry, sessionId }: { entry: DiffEntry; sessionId: string | 
 /** Direct child of AnimatePresence mode="popLayout": framer-motion attaches a
  * measurement ref to this element (React 18 requires forwardRef — the demo
  * could skip it on React 19). The wrapper div is the presence child. */
-const MessageRenderer = forwardRef<HTMLDivElement, { item: ProjectChatItem; sessionId: string | null }>(
-  function MessageRenderer({ item, sessionId }, ref) {
+const MessageRenderer = forwardRef<
+  HTMLDivElement,
+  { item: ProjectChatItem; sessionId: string | null; agentName?: string }
+>(function MessageRenderer({ item, sessionId, agentName }, ref) {
     switch (item.kind) {
       case "user":
         return (
@@ -596,7 +640,13 @@ const MessageRenderer = forwardRef<HTMLDivElement, { item: ProjectChatItem; sess
       case "ai":
         return (
           <div ref={ref}>
-            <AiMessage content={item.content} usage={item.usage} ms={item.ms} model={item.model} />
+            <AiMessage
+              content={item.content}
+              usage={item.usage}
+              ms={item.ms}
+              model={item.model}
+              agentName={agentName}
+            />
           </div>
         );
       case "tools":
@@ -754,16 +804,33 @@ export function AgentChatPanel({
 }) {
   const styles = useThemeStyles();
 
-  // Latest session bound to this project (list has no server-side project
-  // filter — client-side, per API.md §5).
+  // ROUND-30 FIX (owner bug: "All of the sessions are exactly the same"):
+  // the ?session= URL param — written by the sidebar's session rows and the
+  // New Session button — is now the AUTHORITATIVE selection. The panel used
+  // to always bind the project's MOST-RECENTLY-UPDATED session, so clicking
+  // a different session showed the same conversation and every message went
+  // into the latest one. Now: param session wins; fallback (no param) is the
+  // latest session, matching the sidebar's default navigation target.
+  const [searchParams, setSearchParams] = useSearchParams();
+  const sessionIdParam = searchParams.get("session");
   const sessions = useSessions().data ?? [];
-  const session = useMemo(
+  const projectSessions = useMemo(
     () =>
       sessions
         .filter((s) => s.projectId === projectId)
-        .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))[0] ?? null,
+        .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt)),
     [sessions, projectId],
   );
+  const session = useMemo(() => {
+    if (sessionIdParam !== null) {
+      const fromParam = projectSessions.find((s) => s.id === sessionIdParam);
+      // Param points at a session in ANOTHER project (or a deleted one):
+      // fall through to the latest of THIS project rather than rendering
+      // a foreign conversation.
+      if (fromParam !== undefined) return fromParam;
+    }
+    return projectSessions[0] ?? null;
+  }, [projectSessions, sessionIdParam]);
   const sessionDetail = useSession(session?.id ?? null);
 
   // Agent resolution (round-14): the SESSION's bound agent wins; for NEW
@@ -825,7 +892,7 @@ export function AgentChatPanel({
       : null;
 
   const scrollRef = useRef<HTMLDivElement>(null);
-  const inputRef = useRef<HTMLInputElement>(null);
+  const inputRef = useRef<HTMLTextAreaElement>(null);
   // Round-28 WS-D3: AbortController for the streaming fetch — the Stop button
   // calls abortRef.current?.abort() to cancel mid-stream. Passed as the
   // `signal` option to streamSessionMessage (api.ts L642 already supports it).
@@ -861,6 +928,17 @@ export function AgentChatPanel({
           title: project.name,
         });
         sid = created.id;
+        // Round-30: the URL is the authoritative session selection — pin the
+        // freshly created session so a later "New Session" elsewhere doesn't
+        // steal this conversation mid-turn.
+        setSearchParams(
+          (prev) => {
+            const next = new URLSearchParams(prev);
+            next.set("session", sid as string);
+            return next;
+          },
+          { replace: true },
+        );
       }
       if (liveMode) {
         // STREAMED turn: text deltas + tool calls land live (owner round-16).
@@ -931,14 +1009,12 @@ export function AgentChatPanel({
     }
   };
 
-  const onInputKeyDown = (e: ReactKeyboardEvent<HTMLInputElement>) => {
+  const onInputKeyDown = (e: ReactKeyboardEvent<HTMLTextAreaElement>) => {
     if (e.key === "Enter" && !e.shiftKey) {
       e.preventDefault();
       void runTurn(input);
     }
   };
-
-  const noop = (_e: ReactMouseEvent<HTMLButtonElement>) => undefined;
 
   return (
     <div
@@ -1071,24 +1147,32 @@ export function AgentChatPanel({
           style={{ background: `linear-gradient(to bottom, ${styles.card}, transparent)` }}
         />
         <div ref={scrollRef} className="absolute inset-0 overflow-y-auto auto-scroll">
-          <div className="px-3 py-4 flex flex-col gap-3">
+          <div className="px-4 py-4 flex flex-col gap-4">
             {items.length === 0 && !pendingEcho ? (
-              <div className="flex items-center gap-3">
+              /* ROUND-30 OVERHAUL: modern empty state — centered greeting with
+                 the project name + suggestion chips that pre-fill the composer
+                 (ChatGPT/Claude pattern) instead of a one-line header row. */
+              <div className="flex flex-col items-center justify-center text-center py-14 gap-5">
                 <div
-                  className="w-9 h-9 rounded-xl grid place-items-center border shrink-0"
-                  style={{ borderColor: styles.border, backgroundColor: styles.inputBg }}
+                  className="w-14 h-14 rounded-[18px] grid place-items-center"
+                  style={{
+                    background: withAlpha(styles.accent, styles.isDark ? 0.16 : 0.1),
+                    color: styles.accent,
+                    boxShadow: `0 8px 24px ${withAlpha(styles.accent, 0.18)}`,
+                  }}
+                  aria-hidden
                 >
-                  <Sparkles size={16} style={{ color: styles.accent }} />
+                  <Sparkles size={24} />
                 </div>
-                <div className="min-w-0">
-                  <div className="text-[14px] font-semibold" style={{ color: styles.text }}>
-                    {agent?.name ?? "Acute Agent"}
+                <div className="min-w-0 max-w-md">
+                  <div className="text-[22px] font-black tracking-tight leading-tight" style={{ color: styles.text }}>
+                    How can I help with {project.name}?
                   </div>
-                  <div className="text-[11px] font-mono" style={{ color: styles.textSecondary }}>
-                    {`Acute Agent · ${agent?.model ?? "no model"}`}
+                  <div className="text-[12.5px] mt-2 leading-relaxed" style={{ color: styles.textSecondary }}>
+                    {agent?.name ?? "Acute"} · {agent?.model ?? "no model"} · streaming replies with live tool calls
                   </div>
                   {agents.length === 0 ? (
-                    <div className="text-[12px] mt-1.5" style={{ color: styles.textSecondary }}>
+                    <div className="text-[12px] mt-3" style={{ color: styles.textSecondary }}>
                       Create an agent in{" "}
                       <Link to="/settings" style={{ color: styles.accent }}>
                         Settings
@@ -1097,12 +1181,47 @@ export function AgentChatPanel({
                     </div>
                   ) : null}
                 </div>
+                {agents.length > 0 ? (
+                  <div className="flex flex-wrap items-center justify-center gap-2 max-w-lg">
+                    {SUGGESTIONS.map((s) => (
+                      <button
+                        key={s.label}
+                        onClick={() => {
+                          setInput(s.prompt);
+                          inputRef.current?.focus();
+                        }}
+                        className="flex items-center gap-2 h-9 px-3.5 rounded-full border text-[12px] font-medium transition-all hover:-translate-y-px"
+                        style={{
+                          borderColor: styles.border,
+                          background: styles.bg,
+                          color: styles.textSecondary,
+                        }}
+                        onMouseEnter={(e) => {
+                          e.currentTarget.style.borderColor = withAlpha(styles.accent, 0.5);
+                          e.currentTarget.style.color = styles.text;
+                        }}
+                        onMouseLeave={(e) => {
+                          e.currentTarget.style.borderColor = styles.border;
+                          e.currentTarget.style.color = styles.textSecondary;
+                        }}
+                      >
+                        <s.icon size={12} style={{ color: styles.accent }} className="shrink-0" />
+                        {s.label}
+                      </button>
+                    ))}
+                  </div>
+                ) : null}
               </div>
             ) : null}
 
             <AnimatePresence mode="popLayout">
               {items.map((item) => (
-                <MessageRenderer key={itemKey(item)} item={item} sessionId={session?.id ?? null} />
+                <MessageRenderer
+                  key={itemKey(item)}
+                  item={item}
+                  sessionId={session?.id ?? null}
+                  agentName={agent?.name}
+                />
               ))}
               {pendingEcho !== null ? <UserMessage content={pendingEcho} /> : null}
             </AnimatePresence>
@@ -1155,31 +1274,54 @@ export function AgentChatPanel({
             ) : null}
 
             {(streamBusy || liveText !== "" || (busy && !streamBusy)) ? (
-              <div
-                className="rounded-2xl px-3.5 py-3 text-[13px] leading-[1.6]"
-                style={{ background: styles.card, color: styles.text }}
-                aria-live="polite"
-                aria-atomic="false"
-              >
-                {liveText === "" ? (
-                  // Thinking state (merged AgentThinking — owner R28: the
-                  // streaming bubble grows with a "Thinking…" ellipsis before
-                  // the first text-delta; the separate AgentThinking row is
-                  // gone). The ellipsis animates via the CSS `ac-ellipsis`
-                  // keyframe (prefers-reduced-motion: static "…").
-                  <span className="text-[12px] font-mono" style={{ color: styles.textSecondary }}>
-                    Thinking<span className="ac-ellipsis" aria-hidden />
-                  </span>
-                ) : (
-                  <>
-                    <RichText content={liveText} />
-                    <span
-                      className="inline-block w-[7px] h-[14px] ml-0.5 align-middle rounded-sm ac-caret-blink"
-                      style={{ background: styles.accent }}
-                      aria-hidden
-                    />
-                  </>
-                )}
+              /* ROUND-30 OVERHAUL: the live streaming row mirrors the final
+                 AiMessage layout (avatar + name) so the transition from
+                 streaming to canonical message is seamless — the bubble grows
+                 in place with the blinking caret. */
+              <div className="flex gap-3" aria-live="polite" aria-atomic="false">
+                <div
+                  className="w-7 h-7 rounded-[10px] grid place-items-center shrink-0 mt-0.5 ac-pulse"
+                  style={{
+                    background: withAlpha(styles.accent, styles.isDark ? 0.16 : 0.1),
+                    color: styles.accent,
+                  }}
+                  aria-hidden
+                >
+                  <Sparkles size={13} />
+                </div>
+                <div className="min-w-0 flex-1">
+                  <div className="flex items-baseline gap-2 mb-1">
+                    <span className="text-[12px] font-bold" style={{ color: styles.text }}>
+                      {agent?.name ?? "Acute"}
+                    </span>
+                    {streamBusy ? (
+                      <span className="text-[10px] font-mono" style={{ color: styles.accent }}>
+                        streaming…
+                      </span>
+                    ) : null}
+                  </div>
+                  <div className="text-[13px] leading-[1.65]" style={{ color: styles.text }}>
+                    {liveText === "" ? (
+                      // Thinking state (merged AgentThinking — owner R28: the
+                      // streaming bubble grows with a "Thinking…" ellipsis before
+                      // the first text-delta; the separate AgentThinking row is
+                      // gone). The ellipsis animates via the CSS `ac-ellipsis`
+                      // keyframe (prefers-reduced-motion: static "…").
+                      <span className="text-[12px] font-mono" style={{ color: styles.textSecondary }}>
+                        Thinking<span className="ac-ellipsis" aria-hidden />
+                      </span>
+                    ) : (
+                      <>
+                        <RichText content={liveText} />
+                        <span
+                          className="inline-block w-[7px] h-[14px] ml-0.5 align-middle rounded-sm ac-caret-blink"
+                          style={{ background: styles.accent }}
+                          aria-hidden
+                        />
+                      </>
+                    )}
+                  </div>
+                </div>
               </div>
             ) : null}
 
@@ -1210,29 +1352,32 @@ export function AgentChatPanel({
         </div>
       ) : null}
 
-      {/* Composer */}
+      {/* Composer — ROUND-30 OVERHAUL: auto-growing textarea (Enter sends,
+          Shift+Enter newlines — a single-line <input> can't hold multi-line
+          prompts), no dead attach button. */}
       <div className="shrink-0 p-2.5 border-t" style={{ borderColor: styles.borderSubtle }}>
         <div
-          className="flex items-center gap-2 p-1.5 rounded-2xl border"
-          style={{ background: styles.bg, borderColor: styles.border }}
+          className="flex items-end gap-2 p-2 rounded-[18px] border transition-shadow"
+          style={{
+            background: styles.bg,
+            borderColor: styles.inputFocusBorder ? styles.border : styles.border,
+          }}
         >
-          <button
-            onClick={noop}
-            aria-label="Attach file (coming soon)"
-            title="File attach — coming soon (WS-D3 scaffolded)"
-            className="w-8 h-8 rounded-xl grid place-items-center shrink-0 transition-colors cursor-not-allowed opacity-50"
-            style={{ backgroundColor: styles.inputBg, color: styles.textSecondary }}
-            tabIndex={-1}
-          >
-            <Paperclip size={13} />
-          </button>
-          <input
+          <textarea
             ref={inputRef}
             value={input}
-            onChange={(e) => setInput(e.target.value)}
+            onChange={(e) => {
+              setInput(e.target.value);
+              // Auto-grow to fit content (max 6 rows), then scroll inside.
+              const el = e.currentTarget;
+              el.style.height = "auto";
+              el.style.height = `${Math.min(el.scrollHeight, 132)}px`;
+            }}
             onKeyDown={onInputKeyDown}
-            placeholder="Message Acute…"
-            className="flex-1 min-w-0 bg-transparent outline-none text-[13px]"
+            rows={1}
+            aria-label="Message composer"
+            placeholder={`Message ${agent?.name ?? "Acute"}…`}
+            className="flex-1 min-w-0 bg-transparent outline-none resize-none text-[13px] leading-[1.5] max-h-[132px] py-1.5 px-1"
             style={{ color: styles.text }}
           />
           {busy ? (
@@ -1243,7 +1388,7 @@ export function AgentChatPanel({
               onClick={() => abortRef.current?.abort()}
               aria-label="Stop generation"
               title="Stop generation"
-              className="w-8 h-8 rounded-xl grid place-items-center shrink-0 transition-transform hover:scale-105 active:scale-95"
+              className="w-9 h-9 rounded-xl grid place-items-center shrink-0 transition-transform hover:scale-105 active:scale-95"
               style={{ backgroundColor: SEMANTIC_COLORS.danger, color: "#fff" }}
             >
               <span className="w-3 h-3 rounded-sm bg-white/90" />
@@ -1251,15 +1396,21 @@ export function AgentChatPanel({
           ) : null}
           <button
             onClick={() => void runTurn(input)}
+            disabled={!input.trim()}
             aria-label="Send message"
-            className="w-8 h-8 rounded-xl grid place-items-center shrink-0 transition-transform hover:scale-105 active:scale-95"
+            title="Send (Enter · Shift+Enter for a new line)"
+            className="w-9 h-9 rounded-xl grid place-items-center shrink-0 transition-all hover:scale-105 active:scale-95 disabled:hover:scale-100"
             style={
               input.trim()
-                ? { backgroundColor: styles.accent, color: styles.accentText }
+                ? {
+                    backgroundColor: styles.accent,
+                    color: styles.accentText,
+                    boxShadow: `0 2px 10px ${withAlpha(styles.accent, 0.35)}`,
+                  }
                 : { backgroundColor: styles.inputBg, color: styles.textTertiary }
             }
           >
-            <ArrowUp size={14} strokeWidth={2.5} />
+            <ArrowUp size={15} strokeWidth={2.5} />
           </button>
         </div>
         {!compact ? (

@@ -44,6 +44,23 @@ export function useCreateSession() {
 }
 
 /**
+ * DELETE /sessions/:id (round-30, owner request). Invalidates the session
+ * LIST on success; the detail query for the deleted id is removed outright so
+ * a stale cache entry can't keep rendering the deleted conversation.
+ */
+export function useDeleteSession() {
+  const qc = useQueryClient();
+  const source = useDataSource();
+  return useMutation({
+    mutationFn: (id: string) => getSessionsBackend().remove(id),
+    onSuccess: (_result, id) => {
+      void qc.removeQueries({ queryKey: ["session", source, id] });
+      void qc.invalidateQueries({ queryKey: ["sessions", source] });
+    },
+  });
+}
+
+/**
  * One synchronous chat turn. Invalidates the session detail (event log) and
  * the list (updatedAt / status changes) on success AND failure — a failed
  * provider call still leaves the turn's user event in the log (ADR-0010).

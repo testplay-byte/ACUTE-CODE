@@ -35,7 +35,7 @@ import {
   listProjects,
   projectRootPathExists,
 } from "./storage/projects.js";
-import { createSession, getSession, lastSessionSeq, listSessionEvents, listSessions } from "./storage/sessions.js";
+import { createSession, deleteSession, getSession, lastSessionSeq, listSessionEvents, listSessions } from "./storage/sessions.js";
 import { getUsageSummary } from "./storage/usage.js";
 import {
   deleteModel,
@@ -230,6 +230,25 @@ export function buildServer(options: ServerOptions): FastifyInstance {
     "http://localhost:5173",
     "http://127.0.0.1:5173",
   ]);
+  /**
+   * CORS headers for a request Origin when it is allow-listed; `{}` otherwise.
+   * Shared by the onRequest hook AND the hijacked SSE streaming route —
+   * reply.hijack() bypasses Fastify's reply serialization, so headers set via
+   * reply.header() BEFORE hijack are silently DROPPED from the raw response.
+   * Without this, the streaming POST returns no Access-Control-Allow-Origin,
+   * the browser blocks the response, and fetch() rejects with "Failed to
+   * fetch" on EVERY streamed message (owner-reported round-30 Windows bug).
+   */
+  const corsHeadersFor = (origin: unknown): Record<string, string> => {
+    if (typeof origin === "string" && CORS_ORIGINS.has(origin)) {
+      return {
+        "access-control-allow-origin": origin,
+        "access-control-allow-headers": "authorization, content-type",
+        "access-control-allow-methods": "GET, POST, PATCH, DELETE, OPTIONS",
+      };
+    }
+    return {};
+  };
   app.addHook("onRequest", async (request, reply) => {
     const origin = request.headers.origin;
     if (typeof origin === "string" && CORS_ORIGINS.has(origin)) {
@@ -1045,6 +1064,22 @@ export function buildServer(options: ServerOptions): FastifyInstance {
         };
       });
 
+      // DELETE /sessions/:id (round-30, owner request: "I am not able to
+      // delete any of the sessions"). Transactionally removes the session row
+      // AND its dependent rows (event log, usage lines, approvals, file
+      // snapshots). The append-only contract (ADR-0010) governs in-flight
+      // operation — a wholesale session delete at the owner's request is the
+      // documented exception, executed as one transaction.
+      scope.delete("/sessions/:id", async (request, reply) => {
+        const { id } = request.params as Record<string, string>;
+        const session = getSession(db, id);
+        if (session === undefined) {
+          return reply.code(404).send(errorBody("NOT_FOUND", `no session with id ${id}`));
+        }
+        deleteSession(db, id);
+        return reply.code(204).send();
+      });
+
       scope.post("/sessions/:id/messages", async (request, reply) => {
         const { id } = request.params as Record<string, string>;
         const body: unknown = request.body;
@@ -1104,11 +1139,18 @@ export function buildServer(options: ServerOptions): FastifyInstance {
 
         reply.hijack();
         const res = reply.raw;
+        // ROUND-30 FIX (owner Windows bug "Failed to fetch" after every
+        // message): headers set via reply.header() in the onRequest hook are
+        // dropped once the reply is hijacked, so the SSE response previously
+        // shipped WITHOUT Access-Control-Allow-Origin — the browser blocked
+        // the cross-origin response and fetch() rejected. Write the CORS
+        // headers directly into the raw writeHead here.
         res.writeHead(200, {
           "content-type": "text/event-stream; charset=utf-8",
           "cache-control": "no-cache, no-transform",
           connection: "keep-alive",
           "x-accel-buffering": "no",
+          ...corsHeadersFor(request.headers.origin),
         });
         const send = (event: unknown) => {
           if (!res.writableEnded) res.write(`data: ${JSON.stringify(event)}\n\n`);

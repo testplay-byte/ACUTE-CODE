@@ -8,20 +8,19 @@ import {
   LayoutDashboard,
   Menu,
   MessageSquare,
-  MonitorPlay,
   Plus,
   Settings,
   Trash2,
 } from "lucide-react";
 import { motion, AnimatePresence } from "framer-motion";
-import { ApiError, pickFolderViaBackend, type Project } from "../../lib/api";
+import { ApiError, pickFolderViaBackend, type Project, type Session } from "../../lib/api";
 import { cn } from "../../lib/utils";
 import { SEMANTIC_COLORS } from "../../lib/semantics";
 import { isTauri } from "../../lib/sidecar";
 import { useConfigStore } from "../../lib/config-store";
 import { useThemeStyles } from "../../lib/use-theme-styles";
 import { useProjects, useCreateProject, useDeleteProject } from "../../hooks/use-projects";
-import { useSessions } from "../../hooks/use-sessions";
+import { useDeleteSession, useSessions } from "../../hooks/use-sessions";
 import { useProjectChatStore } from "../../lib/project-chat-store";
 import { withAlpha } from "../dashboard/helpers";
 
@@ -46,12 +45,19 @@ function readExpanded(): string[] {
 }
 
 /**
- * Sidebar (round-22 owner redesign):
- * - DISTINCT surface color (subtle, differentiable from the main area's bg)
+ * Sidebar (round-30 owner redesign):
+ * - DISTINCT accent-tinted surface (styles.sidebarBg — derived per-theme from
+ *   bg + accent, round-30) so the rail reads as its own element, separate
+ *   from the main content area (owner: "give the sidebar a different kind of
+ *   color and try to make it separate from the other elements")
  * - Hamburger toggle on the TOP-LEFT of the sidebar itself (shows/hides sidebar)
  * - NAV section (Dashboard/Usage) cleanly separated from PROJECTS section
+ *   (round-30: Demos nav REMOVED — owner: "not needed at all")
  * - Projects are expandable: click → sessions list underneath
- * - Each session navigates directly to /project/:id/chat (no separate window)
+ * - Each session navigates to /project/:id/chat?session=<id> and the ACTIVE
+ *   session is clearly highlighted (accent fill + left indicator bar)
+ * - Session rows have hover delete (round-30: owner "not able to delete any
+ *   of the sessions")
  * - Collapsed rail: icon tiles only
  */
 export function Sidebar() {
@@ -76,8 +82,8 @@ export function Sidebar() {
       className="shrink-0 flex flex-col overflow-hidden rounded-[20px] border-[1.5px]"
       aria-label="Main sidebar"
       style={{
-        backgroundColor: styles.subtle,
-        borderColor: styles.borderStrong,
+        backgroundColor: styles.sidebarBg,
+        borderColor: styles.sidebarBorder,
       }}
     >
       {/* Top row: hamburger ONLY on chat routes (toggles sidebar visibility).
@@ -112,11 +118,10 @@ export function Sidebar() {
       <nav className={cn("flex flex-col gap-1 px-2.5 pb-3", collapsed ? "px-1.5 pt-4" : "pt-1")} aria-label="Main navigation">
         <DashboardButton collapsed={collapsed} />
         <UsageButton collapsed={collapsed} />
-        <DemosButton collapsed={collapsed} />
       </nav>
 
       {/* Divider */}
-      <div className="shrink-0 mx-3 border-t-[1.5px]" style={{ borderColor: styles.border }} />
+      <div className="shrink-0 mx-3 border-t-[1.5px]" style={{ borderColor: styles.sidebarBorder }} />
 
       {/* PROJECTS SECTION — expandable tree */}
       <div className="flex-1 flex flex-col min-h-0 overflow-hidden pt-3">
@@ -126,7 +131,7 @@ export function Sidebar() {
       {/* Bottom: Settings + collapse toggle */}
       <div
         className={cn("shrink-0 border-t px-2.5 pb-3 pt-2", collapsed && "px-1.5")}
-        style={{ borderColor: styles.border }}
+        style={{ borderColor: styles.sidebarBorder }}
       >
         <SettingsButton collapsed={collapsed} />
         <button
@@ -134,7 +139,7 @@ export function Sidebar() {
           aria-label={collapsed ? "Expand sidebar" : "Collapse sidebar"}
           className="w-full h-8 mt-1 flex items-center justify-center rounded-[10px] transition-colors"
           style={{ color: styles.textTertiary }}
-          onMouseEnter={(e) => (e.currentTarget.style.background = styles.subtleHover)}
+          onMouseEnter={(e) => (e.currentTarget.style.background = styles.sidebarHover)}
           onMouseLeave={(e) => (e.currentTarget.style.background = "transparent")}
         >
           {collapsed ? <ChevronsRight size={14} /> : <ChevronsLeft size={14} />}
@@ -165,7 +170,7 @@ function NavButton({
         boxShadow: active ? `0 2px 8px ${withAlpha(styles.accent, 0.3)}` : "none",
       }}
       onMouseEnter={(e) => {
-        if (!active) { e.currentTarget.style.background = styles.subtleHover; e.currentTarget.style.color = styles.text; }
+        if (!active) { e.currentTarget.style.background = styles.sidebarHover; e.currentTarget.style.color = styles.text; }
       }}
       onMouseLeave={(e) => {
         if (!active) { e.currentTarget.style.background = "transparent"; e.currentTarget.style.color = styles.textSecondary; }
@@ -195,18 +200,11 @@ function SettingsButton({ collapsed }: { collapsed: boolean }) {
   return <NavButton icon={Settings} label="Settings" active={active} collapsed={collapsed} onClick={() => navigate("/settings")} />;
 }
 
-/** Round-28 WS-I: Demos nav button (in-app demo viewer). */
-function DemosButton({ collapsed }: { collapsed: boolean }) {
-  const navigate = useNavigate();
-  const active = useLocation().pathname.startsWith("/demos");
-  return <NavButton icon={MonitorPlay} label="Demos" active={active} collapsed={collapsed} onClick={() => navigate("/demos")} />;
-}
-
 /** Projects section — expandable tree with sessions under each project. */
 function ProjectSection({ collapsed }: { collapsed: boolean }) {
   const styles = useThemeStyles();
   const navigate = useNavigate();
-  const { pathname } = useLocation();
+  const { pathname, search } = useLocation();
   const projectsQuery = useProjects();
   const sessionsQuery = useSessions();
   const projects = projectsQuery.data ?? [];
@@ -216,6 +214,9 @@ function ProjectSection({ collapsed }: { collapsed: boolean }) {
 
   const activeProjectMatch = pathname.match(/^\/project\/([^/]+)/);
   const activeProjectId = activeProjectMatch?.[1] ?? null;
+  // ROUND-30: the ?session= param is the authoritative selection (the chat
+  // panel binds to it too) — highlight the matching session row.
+  const activeSessionId = new URLSearchParams(search).get("session");
 
   // Auto-expand the active project
   useEffect(() => {
@@ -315,26 +316,14 @@ function ProjectSection({ collapsed }: { collapsed: boolean }) {
                     transition={{ duration: 0.2, ease: [0.25, 0.1, 0.25, 1] }}
                     className="overflow-hidden"
                   >
-                    <div className="ml-5 pl-3 border-l-[1.5px] space-y-0.5 py-1" style={{ borderColor: styles.border }}>
+                    <div className="ml-5 pl-3 border-l-[1.5px] space-y-0.5 py-1" style={{ borderColor: styles.sidebarBorder }}>
                       {projSessions.slice(0, 8).map((session) => (
-                        <button
+                        <SessionRow
                           key={session.id}
-                          onClick={() => navigate(`/project/${project.id}/chat?session=${session.id}`)}
-                          className="w-full h-7 flex items-center gap-2 px-2 rounded-[8px] text-[11px] font-medium transition-colors truncate"
-                          style={{ color: styles.textTertiary }}
-                          onMouseEnter={(e) => {
-                            e.currentTarget.style.background = styles.subtleHover;
-                            e.currentTarget.style.color = styles.textSecondary;
-                          }}
-                          onMouseLeave={(e) => {
-                            e.currentTarget.style.background = "transparent";
-                            e.currentTarget.style.color = styles.textTertiary;
-                          }}
-                          title={session.title ?? "Untitled"}
-                        >
-                          <MessageSquare size={10} className="shrink-0" />
-                          <span className="truncate">{session.title ?? "Untitled"}</span>
-                        </button>
+                          session={session}
+                          projectId={project.id}
+                          active={session.id === activeSessionId}
+                        />
                       ))}
                       {projSessions.length > 8 && (
                         <span className="block px-2 py-1 text-[10px]" style={{ color: styles.textTertiary }}>
@@ -384,7 +373,7 @@ function ProjectRow({
       className="group relative h-11 flex items-center gap-2.5 rounded-[12px] px-2 cursor-pointer transition-all duration-200"
       style={{
         border: active ? `1.5px solid ${withAlpha(styles.accent, 0.4)}` : "1.5px solid transparent",
-        background: active ? withAlpha(styles.accent, 0.06) : hovered ? styles.subtleHover : "transparent",
+        background: active ? withAlpha(styles.accent, 0.1) : hovered ? styles.sidebarHover : "transparent",
       }}
       onMouseEnter={() => setHovered(true)}
       onMouseLeave={() => { setHovered(false); setShowDelete(false); }}
@@ -421,6 +410,90 @@ function ProjectRow({
         <ChevronsRight size={12} style={{ color: styles.textTertiary }} />
       </motion.span>
       <DeleteProjectButton projectId={project.id} projectName={project.name} visible={hovered || showDelete} />
+    </div>
+  );
+}
+
+/**
+ * ROUND-30 SessionRow: one session under a project. The ACTIVE session
+ * (matching the ?session= URL param — same source of truth as the chat
+ * panel) gets an accent-tinted fill + bold text + a 2px left indicator bar
+ * (owner: "When I click on any one of those sessions … those should be
+ * clearly highlighted as the currently selected one"). Hover reveals the
+ * delete button (owner: "I am not able to delete any of the sessions").
+ */
+function SessionRow({
+  session,
+  projectId,
+  active,
+}: {
+  session: Session;
+  projectId: string;
+  active: boolean;
+}) {
+  const styles = useThemeStyles();
+  const navigate = useNavigate();
+  const location = useLocation();
+  const deleteSession = useDeleteSession();
+  const [hovered, setHovered] = useState(false);
+
+  const remove = () => {
+    deleteSession.mutate(session.id, {
+      onSuccess: () => {
+        // If the deleted session was open, drop the ?session param so the
+        // chat panel falls back to the project's latest remaining session.
+        if (location.search.includes(session.id)) {
+          navigate(`/project/${projectId}/chat`, { replace: true });
+        }
+      },
+    });
+  };
+
+  return (
+    <div
+      className="group relative flex items-center rounded-[8px] transition-colors"
+      style={{
+        background: active ? withAlpha(styles.accent, 0.12) : hovered ? styles.sidebarHover : "transparent",
+      }}
+      onMouseEnter={() => setHovered(true)}
+      onMouseLeave={() => setHovered(false)}
+    >
+      {/* Active indicator bar — the clear "currently selected" signal. */}
+      <span
+        className="absolute left-0 top-1 bottom-1 w-[2.5px] rounded-full transition-opacity"
+        style={{ background: styles.accent, opacity: active ? 1 : 0 }}
+        aria-hidden
+      />
+      <button
+        onClick={() => navigate(`/project/${projectId}/chat?session=${session.id}`)}
+        aria-current={active ? "true" : undefined}
+        className="flex-1 min-w-0 h-7 flex items-center gap-2 px-2.5 text-[11px] truncate"
+        style={{
+          color: active ? styles.text : hovered ? styles.textSecondary : styles.textTertiary,
+          fontWeight: active ? 700 : 500,
+        }}
+        title={session.title ?? "Untitled"}
+      >
+        <MessageSquare
+          size={10}
+          className="shrink-0"
+          style={{ color: active ? styles.accent : undefined }}
+        />
+        <span className="truncate">{session.title ?? "Untitled"}</span>
+      </button>
+      <button
+        onClick={(e) => { e.stopPropagation(); remove(); }}
+        disabled={deleteSession.isPending}
+        aria-label={`Delete session ${session.title ?? "Untitled"}`}
+        title="Delete session"
+        className="relative z-10 w-5 h-5 mr-1 grid place-items-center rounded-md transition-opacity"
+        style={{
+          color: styles.textTertiary,
+          opacity: hovered ? 1 : 0,
+        }}
+      >
+        <Trash2 size={10} />
+      </button>
     </div>
   );
 }

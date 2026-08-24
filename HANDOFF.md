@@ -1,7 +1,7 @@
-<!-- last-reviewed: 2026-08-24 round-29 -->
+<!-- last-reviewed: 2026-08-24 round-30 -->
 # ACUTE-CODE — Agent Handoff Document
 
-**Last updated:** 2026-08-24 (round-29 close-out — Next.js showcase hub built on port 3000 so the ACUTE-CODE product is finally visible inside the sandbox Preview Pane; AGENT-MEMORY #39 corrected — ntfy IS the task-completion channel per owner R29 directive; ping SENT at end of session; R28 product code unchanged, no regression) · **Maintained by:** the orchestrator agent · **Audience:** any AI agent (or human) taking over development
+**Last updated:** 2026-08-24 (round-30 DELIVERED — all 6 owner-reported Windows bugs fixed: hijacked-SSE CORS drop behind "Failed to fetch"+no-streaming, ignored ?session= param behind "all sessions the same", DELETE /sessions/:id full stack, selected-session highlight, Demos nav removed + distinct accent-tinted sidebar, chat overhaul. **212 tests green** incl. live-browser battery with real OpenRouter streaming) · **Maintained by:** the orchestrator agent · **Audience:** any AI agent (or human) taking over development
 
 You are picking up **ACUTE-CODE**, a local-first, closed-source multi-agent engineering workbench for Windows. This file gives you everything needed to continue: state, rules, environment, gotchas, and next steps. It contains **no secrets** — secrets live only in Windows Credential Manager (§7).
 

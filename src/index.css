@@ -423,6 +423,19 @@
   animation: ac-ellipsis-cycle 1.5s steps(1) infinite;
 }
 
+/* pulse: soft breathing opacity for the streaming avatar tile (round-30 —
+   signals "the model is generating" on the avatar while text streams in). */
+@keyframes ac-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.55; }
+}
+.ac-pulse {
+  animation: ac-pulse 1.6s ease-in-out infinite;
+}
+@media (prefers-reduced-motion: reduce) {
+  .ac-pulse { animation: none !important; opacity: 1 !important; }
+}
+
 /* Global reduced-motion retrofits ALL existing animations (6-e accessibility
  * fix). Users who prefer reduced motion get static states, no bouncing/
  * sliding/fading/pulsing. Existing keyframes are left intact; this block

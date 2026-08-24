@@ -57,7 +57,7 @@ afterAll(() => {
 });
 
 async function authInject(options: {
-  method: "GET" | "POST";
+  method: "GET" | "POST" | "DELETE";
   url: string;
   payload?: Record<string, unknown>;
 }): Promise<LightMyRequestResponse> {
@@ -212,6 +212,56 @@ describe("GET /api/v1/sessions", () => {
     const response = await authInject({ method: "GET", url: "/api/v1/sessions/sess_missing" });
     expect(response.statusCode).toBe(404);
     expect(response.json().error.code).toBe("NOT_FOUND");
+  });
+});
+
+describe("DELETE /api/v1/sessions/:id (round-30)", () => {
+  it("deletes a session with its events and usage rows, leaving others intact", async () => {
+    const agent = await createAgent();
+    const victim = await createSession(agent.id);
+    const survivor = await createSession(agent.id);
+
+    // Give the victim a user message + a completed turn (usage row + events).
+    const turn = await authInject({
+      method: "POST",
+      url: `/api/v1/sessions/${victim.id}/messages`,
+      payload: { content: "hello" },
+    });
+    expect(turn.statusCode).toBe(200);
+    expect(listSessionEvents(db, victim.id).length).toBeGreaterThan(0);
+
+    const del = await authInject({ method: "DELETE", url: `/api/v1/sessions/${victim.id}` });
+    expect(del.statusCode).toBe(204);
+
+    // The victim is gone — row, events, usage.
+    await expect(
+      authInject({ method: "GET", url: `/api/v1/sessions/${victim.id}` }),
+    ).resolves.toMatchObject({ statusCode: 404 });
+    expect(listSessionEvents(db, victim.id)).toEqual([]);
+    const usageLeft = db
+      .prepare("SELECT COUNT(*) AS n FROM usage_events WHERE session_id = ?")
+      .get(victim.id) as { n: number };
+    expect(usageLeft.n).toBe(0);
+
+    // The survivor is untouched.
+    const survivorGet = await authInject({ method: "GET", url: `/api/v1/sessions/${survivor.id}` });
+    expect(survivorGet.statusCode).toBe(200);
+  });
+
+  it("404s on an unknown session", async () => {
+    const response = await authInject({ method: "DELETE", url: "/api/v1/sessions/sess_missing" });
+    expect(response.statusCode).toBe(404);
+    expect(response.json().error.code).toBe("NOT_FOUND");
+  });
+
+  it("requires the bearer token", async () => {
+    const agent = await createAgent();
+    const session = await createSession(agent.id);
+    const response = await app.inject({
+      method: "DELETE",
+      url: `/api/v1/sessions/${session.id}`,
+    });
+    expect(response.statusCode).toBe(401);
   });
 });
 

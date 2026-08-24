@@ -197,6 +197,13 @@ export function createFixtureSessions(seed: SessionSeed[] = SEED): SessionsBacke
       return ok({ ...session });
     },
     get: (id) => ok(toDetail(row(id))),
+    remove: (id) => {
+      // Mirrors DELETE /sessions/:id (round-30): 404 via row() when missing,
+      // otherwise the session (and its events, which live on the row) is gone.
+      row(id);
+      rows.delete(id);
+      return ok(undefined, 5);
+    },
     sendMessage: (id, content) => {
       const target = row(id);
       // The user event lands before the provider call (ADR-0010): a failed

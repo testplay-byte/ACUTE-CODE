@@ -134,6 +134,24 @@ export function setSessionStatus(db: SqliteDatabase, id: string, status: Session
   ).run(status, new Date().toISOString(), id);
 }
 
+/**
+ * Delete a session and every dependent row in ONE transaction (round-30,
+ * owner request). session_events / usage_events / approvals carry no FK
+ * constraints (schema v1), so each is deleted explicitly; file_snapshots has
+ * ON DELETE CASCADE but is also deleted explicitly so the statement order is
+ * deterministic and the whole operation is atomic either way.
+ */
+export function deleteSession(db: SqliteDatabase, id: string): void {
+  const run = db.transaction((sid: string) => {
+    db.prepare("DELETE FROM session_events WHERE session_id = ?").run(sid);
+    db.prepare("DELETE FROM usage_events WHERE session_id = ?").run(sid);
+    db.prepare("DELETE FROM approvals WHERE session_id = ?").run(sid);
+    db.prepare("DELETE FROM file_snapshots WHERE session_id = ?").run(sid);
+    db.prepare("DELETE FROM sessions WHERE id = ?").run(sid);
+  });
+  run(id);
+}
+
 export function touchSession(db: SqliteDatabase, id: string): void {
   db.prepare("UPDATE sessions SET updated_at = ? WHERE id = ?").run(
     new Date().toISOString(),

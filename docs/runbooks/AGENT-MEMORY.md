@@ -410,3 +410,29 @@ Format per entry: `N. TITLE (date, source)` → mistake → root cause → rule.
     in the same round, then flip CI to fail-closed once the backfill lands.
     Don't ship the check fail-closed on day 1 — every existing doc fails.
 
+47. **`reply.hijack()` silently drops headers set via `reply.header()` — the
+    round-30 "Failed to fetch" root cause.** The SSE streaming route hijacks
+    the Fastify reply and writes the raw response itself; CORS headers set in
+    an onRequest hook never reach the wire, so every cross-origin streamed
+    message was rejected by the browser with a bare `TypeError: Failed to
+    fetch`. RULE: any hijacked route must spread its CORS/security headers
+    into the raw `res.writeHead()` explicitly (see `corsHeadersFor()` in
+    server.ts). If a fetch works via curl but fails in the browser, suspect
+    exactly this class of bug.
+
+48. **URL params are the single source of truth for "which session am I in".**
+    Round-30's "all the sessions are exactly the same" bug was the chat panel
+    binding the project's latest session instead of the `?session=` param the
+    sidebar writes. RULE: any per-entity screen (chat, editor, viewer) reads
+    its entity id from the URL, falls back to a sensible default, and UPDATES
+    the URL when it creates a new entity — otherwise every navigation surface
+    (sidebar rows, New buttons, browser back) desyncs from the screen.
+
+49. **Live batteries: kill orphan listeners BEFORE booting, and keep each
+    battery script under ~2 minutes.** A timed-out Bash call leaves servers
+    running (the sandbox reaps them late, not immediately), so the NEXT
+    battery can hit `EADDRINUSE` and silently test against a STALE sidecar
+    (old code, wrong DB — the battery looks green but proves nothing). RULE:
+    every battery script starts with `pkill -f "agent-core/dist/main.js";
+    pkill -f vite`, and each script covers ONE phase (boot+seed / streaming /
+    UI interactions) rather than one giant end-to-end run.
