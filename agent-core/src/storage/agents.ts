@@ -44,6 +44,11 @@ export interface Agent {
   memoryPolicy: MemoryPolicy;
   skills: string[];
   maxTurns: number;
+  /** Round-28 WS-F: outer-loop cap (default 5). After the SDK's internal
+   * multi-step loop ends, the runtime auto-continues unless the task is
+   * genuinely complete (explicit signal + all todos done). 5 × 80 = 400
+   * tool round-trips max per user message. */
+  maxOuterLoops: number;
   temperature: number;
   isTemplate: boolean;
   version: number;
@@ -63,6 +68,7 @@ export interface AgentInput {
   memoryPolicy?: MemoryPolicy;
   skills?: string[];
   maxTurns?: number;
+  maxOuterLoops?: number;
   temperature?: number;
 }
 
@@ -80,6 +86,7 @@ interface AgentRow {
   memory_policy: MemoryPolicy;
   skills: string;
   max_turns: number;
+  max_outer_loops: number;
   temperature: number;
   version: number;
   is_template: number;
@@ -90,11 +97,11 @@ interface AgentRow {
 const SELECT_AGENT = `SELECT * FROM agents WHERE id = ?`;
 const INSERT_AGENT = `INSERT INTO agents (
   id, name, role, system_prompt, provider_id, model, vision_model,
-  allowed_tools, memory_policy, skills, max_turns, temperature,
+  allowed_tools, memory_policy, skills, max_turns, max_outer_loops, temperature,
   version, is_template, created_at, updated_at
 ) VALUES (
   @id, @name, @role, @systemPrompt, @providerId, @model, @visionModel,
-  @allowedTools, @memoryPolicy, @skills, @maxTurns, @temperature,
+  @allowedTools, @memoryPolicy, @skills, @maxTurns, @maxOuterLoops, @temperature,
   @version, @isTemplate, @createdAt, @updatedAt
 )`;
 
@@ -111,6 +118,7 @@ function toJson(row: AgentRow): Agent {
     memoryPolicy: row.memory_policy,
     skills: JSON.parse(row.skills) as string[],
     maxTurns: row.max_turns,
+    maxOuterLoops: row.max_outer_loops,
     temperature: row.temperature,
     isTemplate: row.is_template === 1,
     version: row.version,
@@ -135,6 +143,7 @@ function bind(
     memoryPolicy: fields.memoryPolicy,
     skills: JSON.stringify(fields.skills),
     maxTurns: fields.maxTurns,
+    maxOuterLoops: fields.maxOuterLoops,
     temperature: fields.temperature,
     ...extra,
   };
@@ -150,7 +159,8 @@ const CREATE_DEFAULTS = {
   allowedTools: [] as string[],
   memoryPolicy: "none" as MemoryPolicy,
   skills: [] as string[],
-  maxTurns: 40,
+  maxTurns: 80,
+  maxOuterLoops: 5,
   temperature: 0.2,
 };
 
@@ -186,6 +196,7 @@ export function createAgent(
     memoryPolicy: input.memoryPolicy ?? CREATE_DEFAULTS.memoryPolicy,
     skills: input.skills ?? CREATE_DEFAULTS.skills,
     maxTurns: input.maxTurns ?? CREATE_DEFAULTS.maxTurns,
+    maxOuterLoops: input.maxOuterLoops ?? CREATE_DEFAULTS.maxOuterLoops,
     temperature: input.temperature ?? CREATE_DEFAULTS.temperature,
   };
   db.prepare(INSERT_AGENT).run(
@@ -210,6 +221,7 @@ export function updateAgent(db: SqliteDatabase, id: string, patch: AgentInput): 
     memoryPolicy: patch.memoryPolicy ?? current.memoryPolicy,
     skills: patch.skills ?? current.skills,
     maxTurns: patch.maxTurns ?? current.maxTurns,
+    maxOuterLoops: patch.maxOuterLoops ?? current.maxOuterLoops,
     temperature: patch.temperature ?? current.temperature,
   };
   db.prepare(
@@ -217,7 +229,7 @@ export function updateAgent(db: SqliteDatabase, id: string, patch: AgentInput): 
       name = @name, role = @role, system_prompt = @systemPrompt,
       provider_id = @providerId, model = @model, vision_model = @visionModel,
       allowed_tools = @allowedTools, memory_policy = @memoryPolicy, skills = @skills,
-      max_turns = @maxTurns, temperature = @temperature,
+      max_turns = @maxTurns, max_outer_loops = @maxOuterLoops, temperature = @temperature,
       version = @version, updated_at = @updatedAt
     WHERE id = @id`,
   ).run(
@@ -256,6 +268,7 @@ export function duplicateAgent(db: SqliteDatabase, id: string, name?: string): A
     memoryPolicy: source.memoryPolicy,
     skills: source.skills,
     maxTurns: source.maxTurns,
+    maxOuterLoops: source.maxOuterLoops,
     temperature: source.temperature,
   };
   db.prepare(INSERT_AGENT).run(
@@ -311,7 +324,8 @@ export function ensureDefaultAgent(db: SqliteDatabase): void {
         allowedTools: [],
         memoryPolicy: "every-turn",
         skills: [],
-        maxTurns: 40,
+        maxTurns: 80,
+        maxOuterLoops: 5,
         temperature: 0.2,
       },
       { version: 1, isTemplate: 0, createdAt: now, updatedAt: now },

@@ -31,6 +31,33 @@ import { assembleWithinBudget, type ContextBudget } from "../context.js";
 
 export type SqliteDatabase = Database.Database;
 
+/**
+ * Round-28 WS-F: read the latest todo.update snapshot from the session event
+ * log. Returns true if ALL todo items are marked "completed" (vacuously true
+ * if the model never called todo_write — no plan = not a completion blocker).
+ * Used by the inverted continueIfUnfinished heuristic: the outer loop
+ * continues UNLESS (a) explicit completion signal AND (b) all todos done.
+ */
+function latestTodosAllDone(db: SqliteDatabase, sessionId: string): boolean {
+  const events = listSessionEvents(db, sessionId);
+  // Walk backwards to find the latest todo.update.
+  for (let i = events.length - 1; i >= 0; i--) {
+    const ev = events[i];
+    if (ev.type === "todo.update") {
+      const todos = (ev.payload as { todos?: Array<{ status?: string }> }).todos;
+      if (!Array.isArray(todos) || todos.length === 0) return true; // no plan → not a blocker
+      return todos.every((t) => t.status === "completed");
+    }
+  }
+  return true; // no todo.update event → no plan → not a blocker
+}
+
+/** Completion-signal regex (6-e inverted heuristic — phrase matching was
+ * brittle; now we require BOTH the signal AND all todos done to STOP). No
+ * trailing \b: the signal often ends the message, and \b after a period
+ * requires a following word char (absent at end-of-string). */
+const COMPLETION_SIGNAL = /\b(Done\.|Task complete\.|Finished\.|All set\.|All done\.)/i;
+
 /** API.md §5.4: these session statuses refuse follow-up turns. */
 const TERMINAL_STATUSES: readonly SessionStatus[] = ["completed", "failed", "cancelled"];
 
@@ -193,6 +220,9 @@ function prepareTurn(
         rootPath: project.rootPath,
         toolNames: Object.keys(buildProjectTools(project.rootPath, agent.allowedTools, toolDeps)),
         customRules: readCustomRules(project.rootPath),
+        // Round-28 WS-F: inject the agent's maxTurns budget into the AGENTIC
+        // LOOP section so the model knows how many tool round-trips it has.
+        maxTurns: agent.maxTurns,
       })
     : agent.systemPrompt;
   return {
@@ -346,80 +376,164 @@ export async function runStreamedAgentTurn(
     agentId: agent.id,
     payload: { role: "user", content },
   });
-  const rawMessages = listSessionEvents(db, session.id)
-    .map(asChatMessage)
-    .filter((message): message is ChatTurnMessage => message !== undefined);
 
   const budget: ContextBudget = {
     contextWindow: getModelContextWindow(db, provider.id, model),
     maxOutputTokens: 32_768,
     margin: 8_000,
   };
-  const { messages } = assembleWithinBudget(rawMessages, budget);
 
+  // Round-28 WS-F: multi-turn agentic continuation (owner R28 directive:
+  // "It should automatically continue… 4, 5, 6, or 7 iterations… research →
+  // save files → restart → next research"). The AI SDK's internal multi-step
+  // loop (maxTurns tool round-trips) is ONE "SDK call". The OUTER loop here
+  // starts a NEW SDK call when the task isn't genuinely complete — the
+  // conversation context (with the previous assistant message + tool results)
+  // is re-assembled from the event log each iteration.
+  const maxOuterLoops = agent.maxOuterLoops ?? 5;
   const startedAt = Date.now();
-  let text = "";
-  let inputTokens = 0;
-  let outputTokens = 0;
-  try {
-    for await (const event of chatStream({
-      provider: { id: provider.id, baseUrl: provider.baseUrl },
-      apiKey,
-      model,
-      system,
-      messages,
-      temperature: agent.temperature,
-      maxTurns: agent.maxTurns,
-      ...(tools !== undefined ? { tools } : {}),
-      ...(signal !== undefined ? { signal } : {}),
-    })) {
-      emit(event);
-      if (event.type === "text-delta") {
-        text += event.delta;
-      } else if (event.type === "tool-result") {
-        // Persist each tool call the moment it completes (live ordering).
-        appendSessionEvent(db, session.id, {
-          type: "tool.use",
-          agentId: agent.id,
-          payload: { role: "tool", toolName: event.toolName, argsSummary: event.argsSummary, ok: event.ok },
-        });
-      } else if (event.type === "finish") {
-        inputTokens = event.usage.inputTokens;
-        outputTokens = event.usage.outputTokens;
-      }
+  let totalInputTokens = 0;
+  let totalOutputTokens = 0;
+  let totalRequests = 0;
+  let lastAssistantEvent: { seq: number; ts: string; content: string } | null = null;
+  let lastText = "";
+
+  for (let outerIter = 0; outerIter < maxOuterLoops; outerIter++) {
+    // Re-assemble messages from the event log — picks up the previous
+    // iteration's assistant message + any tool results.
+    const rawMessages = listSessionEvents(db, session.id)
+      .map(asChatMessage)
+      .filter((message): message is ChatTurnMessage => message !== undefined);
+    const { messages, usedTokens } = assembleWithinBudget(rawMessages, budget);
+
+    // Context guard (6-f R-F5): abort if assembled context > 800K tokens
+    // (the 1M window is a LIMIT, not headroom; 200+ tool round-trips approach
+    // 500KB of tool I/O alone).
+    if (usedTokens > 800_000) {
+      emit({ type: "meta.context_limit", tokens: usedTokens, limit: 800_000 });
+      break;
     }
-  } catch (error) {
-    const normalized = error instanceof Error ? error : new Error(String(error));
-    return {
-      ok: false,
-      status: 502,
-      code: "PROVIDER_ERROR",
-      message: `provider '${provider.id}' call failed for session ${session.id}`,
-      details: { providerError: providerErrorDetail(normalized, apiKey) },
-    };
+    // Request guard (6-f R-F6): abort if > 200 total requests (OpenRouter
+    // rate limits apply even on 0-cost models).
+    if (totalRequests > 200) {
+      emit({ type: "meta.request_limit", requests: totalRequests, limit: 200 });
+      break;
+    }
+
+    // Emit a continuation event so the frontend can show "Continuing…" (the
+    // streaming bubble from WS-D2 handles this event type).
+    if (outerIter > 0) {
+      emit({ type: "meta.continuation", iteration: outerIter, reason: "incomplete_todos" });
+    }
+
+    let iterText = "";
+    let iterInputTokens = 0;
+    let iterOutputTokens = 0;
+    totalRequests++;
+
+    try {
+      for await (const event of chatStream({
+        provider: { id: provider.id, baseUrl: provider.baseUrl },
+        apiKey,
+        model,
+        system,
+        messages,
+        temperature: agent.temperature,
+        maxTurns: agent.maxTurns,
+        ...(tools !== undefined ? { tools } : {}),
+        ...(signal !== undefined ? { signal } : {}),
+      })) {
+        emit(event);
+        if (event.type === "text-delta") {
+          iterText += event.delta;
+        } else if (event.type === "tool-result") {
+          // Persist each tool call the moment it completes (live ordering).
+          appendSessionEvent(db, session.id, {
+            type: "tool.use",
+            agentId: agent.id,
+            payload: { role: "tool", toolName: event.toolName, argsSummary: event.argsSummary, ok: event.ok },
+          });
+        } else if (event.type === "finish") {
+          iterInputTokens = event.usage.inputTokens;
+          iterOutputTokens = event.usage.outputTokens;
+        }
+      }
+    } catch (error) {
+      const normalized = error instanceof Error ? error : new Error(String(error));
+      return {
+        ok: false,
+        status: 502,
+        code: "PROVIDER_ERROR",
+        message: `provider '${provider.id}' call failed for session ${session.id}`,
+        details: { providerError: providerErrorDetail(normalized, apiKey) },
+      };
+    }
+
+    totalInputTokens += iterInputTokens;
+    totalOutputTokens += iterOutputTokens;
+    lastText = iterText;
+
+    // Append this iteration's assistant message (if it produced text).
+    if (iterText.trim() !== "") {
+      const iterMs = Date.now() - startedAt;
+      const ev = appendSessionEvent(db, session.id, {
+        type: "message.assistant",
+        agentId: agent.id,
+        payload: {
+          role: "assistant",
+          content: iterText,
+          usage: { inputTokens: iterInputTokens, outputTokens: iterOutputTokens },
+          ms: iterMs,
+          model,
+        },
+      });
+      lastAssistantEvent = { seq: ev.seq, ts: ev.ts, content: iterText };
+    }
+
+    // Inverted continueIfUnfinished (6-e fix — phrase matching was brittle):
+    // continue UNLESS BOTH (a) explicit completion signal AND (b) all todos
+    // completed. If either is false, the outer loop continues to the next
+    // SDK call (the model gets another chance to make progress).
+    const hasCompletionSignal = COMPLETION_SIGNAL.test(iterText);
+    const todosDone = latestTodosAllDone(db, session.id);
+    if (hasCompletionSignal && todosDone) {
+      break;
+    }
+    // Last iteration — emit a cap-reached event so the UI knows.
+    if (outerIter === maxOuterLoops - 1) {
+      emit({ type: "meta.continuation_complete", iterations: maxOuterLoops });
+    }
   }
+
   const ms = Date.now() - startedAt;
 
-  const assistantEvent = appendSessionEvent(db, session.id, {
-    type: "message.assistant",
-    agentId: agent.id,
-    payload: {
-      role: "assistant",
-      content: text,
-      usage: { inputTokens, outputTokens },
-      ms,
-      model,
-    },
-  });
+  // If no iteration produced text (edge case: model only called tools with no
+  // final message), append an empty assistant marker so the event log closes
+  // cleanly + the UI can resolve.
+  if (lastAssistantEvent === null) {
+    const fallback = appendSessionEvent(db, session.id, {
+      type: "message.assistant",
+      agentId: agent.id,
+      payload: {
+        role: "assistant",
+        content: lastText,
+        usage: { inputTokens: totalInputTokens, outputTokens: totalOutputTokens },
+        ms,
+        model,
+      },
+    });
+    lastAssistantEvent = { seq: fallback.seq, ts: fallback.ts, content: lastText };
+  }
+
   const usage: UsageRecord = {
     agentId: agent.id,
     sessionId: session.id,
     provider: provider.id,
     model,
-    inputTokens,
-    outputTokens,
-    costUsd: computeCost(db, provider.id, model, inputTokens, outputTokens),
-    ts: assistantEvent.ts,
+    inputTokens: totalInputTokens,
+    outputTokens: totalOutputTokens,
+    costUsd: computeCost(db, provider.id, model, totalInputTokens, totalOutputTokens),
+    ts: lastAssistantEvent.ts,
   };
   recordUsage(db, usage);
   touchSession(db, session.id);
@@ -427,11 +541,11 @@ export async function runStreamedAgentTurn(
   return {
     ok: true,
     assistantMessage: {
-      seq: assistantEvent.seq,
+      seq: lastAssistantEvent.seq,
       role: "assistant",
       agentId: agent.id,
-      content: text,
-      ts: assistantEvent.ts,
+      content: lastText,
+      ts: lastAssistantEvent.ts,
     },
     usage,
   };

@@ -498,7 +498,7 @@ describe("streamed turn runtime (round-16)", () => {
     const emitted: Array<{ type: string }> = [];
     const chatStream = async function* (): AsyncGenerator<import("../src/agents/chat").StreamChatEvent> {
       yield { type: "text-delta", delta: "Let me " };
-      yield { type: "text-delta", delta: "look." };
+      yield { type: "text-delta", delta: "look. Done." };
       yield { type: "tool-call", toolName: "list_dir", argsSummary: "path: ''" };
       yield { type: "tool-result", toolName: "list_dir", argsSummary: "path: ''", ok: true };
       yield { type: "tool-result", toolName: "write_file", argsSummary: "path: a.ts, content: 10 chars", ok: true };
@@ -537,7 +537,7 @@ describe("streamed turn runtime (round-16)", () => {
 
     const assistant = events.find((e) => e.type === "message.assistant")
       ?.payload as Record<string, unknown>;
-    expect(assistant.content).toBe("Let me look.");
+    expect(assistant.content).toBe("Let me look. Done.");
     expect(assistant.usage).toEqual({ inputTokens: 100, outputTokens: 20 });
     expect(typeof assistant.ms).toBe("number");
     expect(assistant.model).toBe("test/model-1");
@@ -545,6 +545,39 @@ describe("streamed turn runtime (round-16)", () => {
     const usage = getUsageSummary(db, { days: 1 });
     expect(usage.totals.inputTokens).toBe(100);
     expect(usage.totals.outputTokens).toBe(20);
+  });
+
+  // Round-28 WS-F: multi-turn agentic continuation (outer loop).
+  it("continues the outer loop when there's no completion signal, capped at maxOuterLoops", async () => {
+    const agent = await createAgent();
+    const session = await createSession(agent.id);
+    const streamKeyring = new ProviderKeyring({ ACUTE_PROVIDER_OPENROUTER: KEY });
+
+    const emitted: Array<{ type: string }> = [];
+    // Mock that produces text WITHOUT a completion signal — the outer loop
+    // should continue up to maxOuterLoops (5), emitting meta.continuation
+    // between iterations and meta.continuation_complete at the cap.
+    const chatStream = async function* (): AsyncGenerator<import("../src/agents/chat").StreamChatEvent> {
+      yield { type: "text-delta", delta: "still working" };
+      yield { type: "finish", usage: { inputTokens: 10, outputTokens: 5, totalTokens: 15 } };
+    };
+
+    await runStreamedAgentTurn(
+      { db, keyring: streamKeyring, chat: aiSdkChat, chatStream },
+      session.id,
+      "do a multi-step task",
+      (e) => emitted.push(e as { type: string }),
+    );
+
+    // Should have run 5 iterations (maxOuterLoops default) + 4 continuation
+    // events between them + 1 continuation_complete at the end.
+    const iterations = emitted.filter((e) => e.type === "finish").length;
+    const continuations = emitted.filter((e) => e.type === "meta.continuation").length;
+    const capEvent = emitted.find((e) => e.type === "meta.continuation_complete");
+    expect(iterations).toBe(5);
+    expect(continuations).toBe(4);
+    expect(capEvent).toBeTruthy();
+    expect((capEvent as { iterations?: number }).iterations).toBe(5);
   });
 
   it("refuses to stream when no streaming adapter is configured", async () => {

@@ -9,6 +9,9 @@ export interface PromptContext {
   rootPath: string;
   toolNames: string[];
   customRules?: string;
+  /** Round-28 WS-F: the agent's maxTurns budget — injected into the AGENTIC
+   * LOOP section so the model knows how many tool round-trips it has. */
+  maxTurns?: number;
 }
 
 export function buildProjectSystemPrompt(ctx: PromptContext): string {
@@ -28,6 +31,40 @@ export function buildProjectSystemPrompt(ctx: PromptContext): string {
   lines.push("- Each tool call is executed and its result is shown to you before your next turn.");
   lines.push("- Use tools to actually perform actions — never just describe what you would do.");
   lines.push("- If the user asks you to create something, CREATE IT with the tools, then summarize.");
+  lines.push("");
+
+  // ── AGENTIC LOOP (Round 28 WS-F) ────────────────────────────────────────
+  // Owner R28 directive: "It should automatically continue with the next
+  // sessions… 4, 5, 6, or 7 iterations… research → save files → restart →
+  // next research." This section instructs the model to use multiple tool
+  // calls across reasoning steps instead of stopping after one.
+  lines.push("## AGENTIC LOOP — MULTI-TURN COMPLETION");
+  lines.push("You are a multi-turn agent. A single user request typically requires 4–7+ tool calls across multiple reasoning steps. DO NOT attempt to complete the entire task in one assistant message. DO NOT summarize and stop after one tool call.");
+  lines.push("");
+  lines.push("Workflow:");
+  lines.push("1. Read the user's request. Identify the FIRST concrete action.");
+  lines.push("2. Call the relevant tool (read_file, search_code, list_dir, web_fetch, etc.).");
+  lines.push("3. Read the tool result. Decide the NEXT action based on what you learned.");
+  lines.push("4. Repeat 2–3 until the task is GENUINELY complete and verified.");
+  lines.push("5. Only when the work is done and verified, write a brief summary (1–3 sentences).");
+  lines.push("");
+  lines.push("Rules:");
+  lines.push("- DO NOT ask the user for confirmation between steps. Proceed autonomously.");
+  lines.push("- DO NOT stop after a single tool call because \"you have the info.\" Apply it.");
+  lines.push("- If a tool call fails, diagnose (read the error), fix, retry. Do not abort.");
+  lines.push("- If you save a file, that's NOT the end of the task — verify the save (read_file it back) and continue with the next step.");
+  lines.push("- Use the todo_write tool to track multi-step plans. Mark items complete as you go.");
+  lines.push("- For research tasks: research → save findings to a file → research the next sub-topic → append → repeat. Do NOT put all findings in one final message.");
+  lines.push(`- You have a budget of up to ${ctx.maxTurns ?? 80} tool round-trips. Use it when needed. Stopping early on a multi-step task is a FAILURE.`);
+  lines.push("");
+  lines.push("Example (research task \"investigate how the auth system works\"):");
+  lines.push("  turn 1: list_dir src/ → see auth/, sessions/, providers/");
+  lines.push("  turn 2: read_file src/auth/index.ts → see login() flow");
+  lines.push("  turn 3: read_file src/sessions/manager.ts → see session creation");
+  lines.push("  turn 4: read_file src/providers/registry.ts → see key injection");
+  lines.push("  turn 5: write_file research/auth-system.md with findings");
+  lines.push("  turn 6: read_file research/auth-system.md (verify save)");
+  lines.push("  turn 7: assistant message: \"Done. Findings in research/auth-system.md.\"");
   lines.push("");
 
   // ── File editing discipline ─────────────────────────────────────────────
@@ -75,7 +112,7 @@ export function buildProjectSystemPrompt(ctx: PromptContext): string {
   lines.push("2. List your plan briefly (2-4 steps max, one line each).");
   lines.push("3. Execute steps in order, one tool call at a time.");
   lines.push("4. After each step, confirm it worked before moving to the next.");
-  lines.push("5. When done, summarize what you changed and why — briefly.");
+  lines.push("5. **Only when the work is GENUINELY complete and verified**, write a brief 1–3 sentence summary. Do NOT summarize prematurely — a summary after one tool call is a FAILURE (see AGENTIC LOOP).");
   lines.push("");
 
   // ── Todo tracking ────────────────────────────────────────────────────────
