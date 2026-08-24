@@ -85,6 +85,10 @@
     {
       "date": "2026-08-24",
       "label": "Round 27 — web tools (web_fetch + web_search) + critical deps-wiring fix (todos + checkpoints now live) + demo project built by the agent"
+    },
+    {
+      "date": "2026-08-24",
+      "label": "Round 28 — sandbox restore + master plan (1123L, 13 workstreams A-M, 5 milestones, 6 sub-agent reviews)"
     }
   ],
   "quality": {
@@ -92,11 +96,15 @@
     "suites": [
       {
         "name": "agent-core",
-        "tests": 131
+        "tests": 132
+      },
+      {
+        "name": "shared",
+        "tests": 4
       },
       {
         "name": "frontend",
-        "tests": 66
+        "tests": 55
       },
       {
         "name": "sidecar e2e",
@@ -112,19 +120,39 @@
   "publicLinks": [
     {
       "label": "Owner's site",
-      "url": "https://testplay-byte.github.io/ANI-KUTA/"
+      "url": "https://testplay-byte.github.io/DASHBOARD/"
     }
   ],
   "plan": {
     "current": {
-      "title": "Round 27 complete — web tools + deps-wiring fix verified",
-      "detail": "15 tools (web_fetch + web_search added); todo_write + checkpoints now live in real turns; demo project built by the agent"
+      "title": "Round 28 — UX + agentic-quality overhaul (master plan v2, 13 workstreams A-M, 5 milestones)",
+      "detail": "Sidebar redesign, settings appearance contrast fix, chat screen complete redesign, live streaming typing effect, multi-turn agentic continuation, project indexing, grep integration, in-app demo viewer, dashboard screenshot zip uploads, docs management system — see docs/ROUND-28-MASTER-PLAN.md"
     },
     "upcoming": [
       {
-        "phase": "Dashboard UI redesign",
+        "phase": "Round 28 MS-1 — governance + sidebar + settings appearance",
+        "status": "in-progress",
+        "note": "Workstreams A1+A2+B+C — see docs/ROUND-28-MASTER-PLAN.md"
+      },
+      {
+        "phase": "Round 28 MS-2 — chat screen complete redesign (split D1/D2/D3)",
         "status": "queued",
-        "note": "Owner verdict: current home is too simple — full visual redo"
+        "note": "chatFocusMode + ChatFocusLayout + AgentChatPanel modernization + streaming hook + composer wiring"
+      },
+      {
+        "phase": "Round 28 MS-3 — multi-turn agentic continuation",
+        "status": "queued",
+        "note": "AGENTIC LOOP prompt + inverted continueIfUnfinished + maxOuterLoops 5 + context/request guards"
+      },
+      {
+        "phase": "Round 28 MS-4 — project indexing + grep integration",
+        "status": "queued",
+        "note": "codebase_index table + index_project 16th tool + CommandPalette ⌘K popover"
+      },
+      {
+        "phase": "Round 28 MS-5 — demo viewer + docs management + dashboard uploads + verify script + cadence",
+        "status": "queued",
+        "note": "In-app demo viewer + docs CI gate + screenshot zips to DASHBOARD repo + verify-round.mjs + REVIEW-CADENCE.md"
       },
       {
         "phase": "Phase 3 — Orchestration engine",

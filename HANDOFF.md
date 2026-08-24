@@ -1,6 +1,6 @@
 # ACUTE-CODE — Agent Handoff Document
 
-**Last updated:** 2026-08-23 (round-17 governance round, CI green) · **Maintained by:** the orchestrator agent · **Audience:** any AI agent (or human) taking over development
+**Last updated:** 2026-08-24 (round-28 master plan proposed, CI green) · **Maintained by:** the orchestrator agent · **Audience:** any AI agent (or human) taking over development
 
 You are picking up **ACUTE-CODE**, a local-first, closed-source multi-agent engineering workbench for Windows. This file gives you everything needed to continue: state, rules, environment, gotchas, and next steps. It contains **no secrets** — secrets live only in Windows Credential Manager (§7).
 
@@ -39,8 +39,8 @@ ACUTE-CODE (NOT "Forge" — the brief's old codename) is a Windows desktop app: 
 | Agentic MVP | **M1–M4 DONE** (migration 0003, `/api/v1/projects` CRUD + `/tree` + `/file`, file tools sandboxed to project root, `tool.use` audit events, Tauri `pick_folder`; M3 project-chat UI at `/project/:id/chat` + Add Project on backend + `projects-store.ts` deleted; M4 live run verified on disk) — **awaiting owner review** (`round-09.md`) |
 | Tests | `pnpm verify` green: lint + typecheck + **175 unit + 6 sidecar-E2E** + build + license audit (107 prod deps, CLEAN); `cargo check` green on CI |
 | Dev stack | `pnpm dev:full` = sidecar on 127.0.0.1:5178 (OpenRouter key auto-read from Credential Manager) + vite. Plain `pnpm dev` = UI only, NO backend. Dev CLI: `node scripts/acute.mjs <cmd>` |
-| **Git remote** | `https://github.com/testplay-byte/ACUTE-CODE` (PRIVATE — verify before any push). **Fully synced: code tip = `ba461bc` (Round 9), CI GREEN** (verify + cargo check on windows-latest). The handoff-refresh commit sits on top of it. Clone and confirm `git log --oneline -1` shows `ba461bc` or newer. |
-| Working copy (previous agent) | `C:\Users\khurr\Desktop\ZCODE\ACUTE_CODE\acute-code` (branch `main`) — the new agent clones fresh from GitHub |
+| **Git remote** | `https://github.com/testplay-byte/ACUTE-CODE` (PRIVATE — verify before any push). **Fully synced: code tip = `a727b43` (Round 28 plan + R28 worklog entry, on top of `1498a30` Round 27)**, CI GREEN. The handoff-refresh commit sits on top of it. Clone and confirm `git log --oneline -1` shows `a727b43` or newer. |
+| Working copy (previous agent) | `C:\Users\khurr\Desktop\ZCODE\ACUTE_CODE\acute-code` (branch `main`) — the new agent clones fresh from GitHub into `/home/z/PROJECT/ACUTECODE` (Linux sandbox) per `docs/runbooks/SANDBOX-RESTORE.md` (round-28 layout) |
 | Design demos (owner's) | **Backed up in-repo at `design/demos/`** — `acute-agent-ui` (wizard, DONE), `acute-agent-dashboard` (dashboard), `project-chat` (the coding UI to port for M3 — the normative spec) |
 
 ## 4. Repo map (every path has a purpose — anti-drift rule §13)
@@ -89,7 +89,7 @@ acute-code/
 
 ## 6. First tasks for you, in order
 
-1. **Confirm you have current code**: `git log --oneline -1` → must be `98abfde` or newer (pull if behind). If your machine lacks push credentials, store the PAT the owner gives you:
+1. **Confirm you have current code**: `git log --oneline -1` → must be `a727b43` or newer (pull if behind). If your machine lacks push credentials, follow `docs/runbooks/SANDBOX-RESTORE.md` (round-28 layout: `/home/z/PROJECT/ACUTECODE` + per-repo credential helpers + token-in-URL clone per lesson #24).
    ```bash
    git config --global credential.https://github.com.helper ""          # clear inherited GCM for this host
    git config --global credential.https://github.com.helper wincred     # GCM itself special-cases github.com to OAuth and silently discards PATs — wincred works
@@ -110,10 +110,21 @@ acute-code/
 
 The Rust shell reads provider keys from Credential Manager at spawn and injects them as `ACUTE_PROVIDER_<ID>` env into the sidecar (`src-tauri/src/sidecar.rs`). For CLI/live testing read them with `scripts/credential.ps1` into a shell variable — **never echo the value** (printing only its length is the established pattern). API keys never appear in SQLite, REST bodies, logs, or test fixtures.
 
-## 8. Environment facts (this machine — Windows 10 x64, 8 GB RAM)
+## 8. Environment facts
 
-- **Installed:** Node 24.18, pnpm 11.22 (`npm i -g pnpm`), git 2.55, WebView2 151.x, Rust 1.98 stable-msvc (`%USERPROFILE%\.cargo\bin` — export PATH in Git Bash shells), VS Build Tools 17.14 (VCTools).
-- **Everyday:** repo root → `pnpm install`, `pnpm verify` (the local gate = exactly CI), `pnpm dev` (Vite UI only). Rust: `cargo check --manifest-path src-tauri/Cargo.toml` — full builds belong on GitHub Actions (ADR-0012; the owner corrected us once for compiling locally).
+**Two environments matter:** (a) the **Linux sandbox** where the orchestrator agent runs (this is where dev + live tests happen), and (b) the **owner's Windows 10 x64 machine** (where the launcher + packaged app run). Both are documented in `docs/runbooks/SANDBOX-RESTORE.md` (the canonical env reference — read that first).
+
+**Linux sandbox (current dev environment):**
+- Linux x64, ~2 CPUs / 4 GB RAM / ~8 GB disk; non-root user `z` (uid 1001).
+- Toolchain: Node 24.18 (`/usr/bin/node`), pnpm 11.22 (via `corepack enable` — NOT pre-installed post-wipe, lesson 6-f finding), git 2.47, jq, corepack 0.35.
+- No Rust toolchain: `cargo check` happens on CI only (ADR-0012).
+- `api.openrouter.ai` DNS-blocked; use apex `https://openrouter.ai/api/v1` (already seeded in DB).
+- Background processes die between shell invocations (lesson #4): live tests run as ONE self-contained invocation.
+- CI takes ~4–6 minutes (windows-latest + cargo) — a Bash timeout that kills a polling loop is NOT a CI failure.
+
+**Owner's Windows 10 x64, 8 GB RAM (where the launcher runs):**
+- Installed: Node 24.18, pnpm 11.22 (`npm i -g pnpm`), git 2.55, WebView2 151.x, Rust 1.98 stable-msvc, VS Build Tools 17.14.
+- Owner runs the app via `launcher/ACUTE.bat` (Python rich-UI workhorse + tiny CRLF-verified coordinator; token-in-URL auth per lesson #24).
 
 **Hard-won gotchas (each cost real debugging time):**
 - `pnpm 11` blocks dependency postinstall scripts; allow them in `pnpm-workspace.yaml` `allowBuilds:` (currently `esbuild`, `better-sqlite3`). A stale blocked state breaks EVERY `pnpm <script>` — fix by deleting `pnpm-lock.yaml` + `node_modules` and reinstalling.
@@ -123,9 +134,20 @@ The Rust shell reads provider keys from Credential Manager at spawn and injects 
 - Tauri on Windows needs `src-tauri/icons/icon.ico` even with bundling disabled.
 - Git Bash kills don't always take node children down — check `tasklist` for orphans after sidecar tests (`taskkill //F //PID <pid>`).
 
-## 9. What's next: dashboard UI redo (owner verdict: "way too simple"), then Phase 3 — Orchestration engine (after owner approval)
+## 9. What's next: Round 28 master plan (UX + agentic-quality overhaul) — then Phase 3 — Orchestration engine (after owner approval)
 
-**Round-14 delivery (2026-08-23, owner-directed):** the agentic coding system works for real — `/internal/dialog/folder` (sidecar opens the REAL OS folder dialog: PowerShell `-STA` on Windows / zenity on Linux; Browse… now works in the launcher/browser too), tools `create_dir`/`delete_file` (directories refused — approval-gated)/`search_files`, and the project-chat UI at full demo parity (TopBar with live AGENT picker + ⌘K file search + theme grid + Experimental freeform layout hosting the real panels + To-Do). Live P1 proof: 6-tool turn (create/search/read/mkdir/write/edit) + read-back + deletion-refusal under pressure; all disk assertions exact. Three-pillar planning: `docs/research/n8n/` (automation pillar, additive). Owner's launcher works on his PC (rounds 11–13 auth fixes).
+**Round-28 master plan (2026-08-24, proposed):** the full plan is at `docs/ROUND-28-MASTER-PLAN.md` (1123 lines, v2 with 30 sub-agent review fixes applied). It covers 13 workstreams A-M across 5 milestones:
+- **MS-1**: A1+A2 (governance + docs sync) + B (sidebar redesign — remove brand block) + C (settings appearance contrast fix)
+- **MS-2**: D1+D2+D3 (chat screen complete redesign — chatFocusMode + ChatFocusLayout + AgentChatPanel modernization + streaming hook merged with E + composer wiring + DiffCard real diff + delete orphaned TopBar)
+- **MS-3**: F (multi-turn agentic continuation — AGENTIC LOOP prompt section + inverted continueIfUnfinished + maxOuterLoops 5 + context/request guards)
+- **MS-4**: G1+G2 (project indexing — 0007 codebase_index migration + index_project 16th tool + frontend CodebasePanel) + H (grep integration — search_code schema extension + CommandPalette ⌘K popover)
+- **MS-5**: I (in-app demo viewer) + J1+J2 (docs management CI gate) + K1+K2 (dashboard screenshot zip uploads to DASHBOARD repo) + L (verify-round.mjs one-shot battery) + M (review cadence doc)
+
+6 parallel sub-agents ran (6-a/6-b/6-c research + 6-d/6-e/6-f review); 30 fixes applied. See plan §0.1 v2 changelog for every fix. Owner verdicts gate each MS.
+
+**Round-27 delivery (2026-08-24, owner-directed):** web tools (web_fetch + web_search) + critical deps-wiring fix (todo_write + checkpoints were silently dead in real turns — now live) + 14 web-tools unit tests + L4 live battery + L5 browser verification (19 screenshots) + demo project (YouTube-like app, 545 lines) built BY the agent + zip uploaded to GitHub release `round-27-testing`. Kilo Code parity achieved (15 tools, Cline-grade prompt, cost tracking, context-window management, checkpoint/revert, todo tracking).
+
+**Round-14 delivery (2026-08-23, owner-directed):** the agentic coding system works for real — `/internal/dialog/folder` (sidecar opens the REAL OS folder dialog), tools `create_dir`/`delete_file`/`search_files`, demo-parity chat UI (TopBar with live AGENT picker + ⌘K file search + theme grid + Experimental freeform layout + To-Do). Live P1 proof: 6-tool turn + read-back + deletion-refusal. Three-pillar planning: `docs/research/n8n/` (automation pillar, additive).
 
 **Round-11 delivery (2026-08-23, owner-directed redesign):** the round-10 `.bat` failed on the owner's PC (LF line endings — cmd.exe disintegration; lesson #16 in AGENT-MEMORY). Replaced per owner direction with `launcher/`: `ACUTE.bat` (tiny CRLF-verified coordinator — finds/installs Python) + `acute_launcher.py` (rich-terminal workhorse: toolchain auto-install via winget, `credentials.txt` local secrets file, clean-folder layout `ACUTE-CODE/` + `.acute/`, update-with-server-restart, OpenRouter key → Credential Manager, launcher SELF-UPDATE, boxed copyable errors, plain-text fallback). Fully tested on Linux incl. first-run, behind-update, status, live start (key `●` end-to-end) and failure paths; docs in `docs/runbooks/LOCAL-PC-RUNNER.md` + `launcher/README.md`. `scripts/acute-desktop.mjs` (round-10 node runner) remains as the advanced headless path. The owner runs the app on his PC with the launcher; M4 can be re-confirmed there. The full owner vision (three products) is recorded in `docs/architecture/PROJECT-MAP.md` §1/§6.
 

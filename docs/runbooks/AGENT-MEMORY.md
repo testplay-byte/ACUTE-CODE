@@ -276,3 +276,46 @@ Format per entry: `N. TITLE (date, source)` → mistake → root cause → rule.
     token"). RULE: a new repo + existing PAT requires the OWNER to edit the
     token's Repository access (or mint a scoped token); design publishers to
     detect 403 and print the exact owner fix (publish-dashboard.mjs does).
+
+## Round-28 lessons (sandbox wipe + restore governance)
+
+37. **Sandbox wipes happen — GitHub is the backup, not the working tree.**
+    On 2026-08-24 the entire `/home/z/acute-workspace/` was wiped between
+    sessions; only `/home/z/my-project/worklog.md` (330 lines, rounds 1–15
+    sandbox-local copy) + the GitHub remotes survived. The owner had pushed
+    everything before the wipe, so NOTHING was lost — the restore was just
+    re-clone + re-stage secrets. RULE: push every green milestone, not just
+    round-end. The new `/home/z/PROJECT/{ACUTECODE,DASHBOARD}` layout is the
+    permanent restore target. If the sandbox wipes again, DO NOT attempt
+    autonomous recovery — ntfy the owner
+    (`curl -d "ACUTE-CODE sandbox wiped" https://ntfy.sh/TASKISDONE`) and
+    stop. The owner re-supplies tokens in chat in <5 min.
+
+38. **Per-repo suffixed secret files when two PATs are scoped to two
+    different repos on the same host.** GitHub fine-grained PATs are
+    per-repo-scoped, so the ACUTE-CODE PAT can't push to DASHBOARD and
+    vice versa. Use per-repo credential stores (`git-credentials-acute` +
+    `git-credentials-dashboard`) and per-repo `credential.helper` config
+    in each clone's `.git/config`. Don't try to mix two tokens in one
+    credential store — git's longest-prefix match is correct but fragile,
+    and debugging it wastes hours. The suffixed naming
+    (`github-acute-code.pat`, `github-dashboard.pat`) makes it obvious
+    which token is which at a glance.
+
+39. **ntfy is the sandbox-wipe notification channel, not the routine-progress
+    channel (owner revision R28).** Prior practice of ntfy-after-every-milestone
+    is retired — the owner finds it noisy and sees GitHub pushes in real time.
+    RULE: ntfy ONLY for (a) sandbox-wipe notifications, and (b) one
+    round-close-out notification on owner-APPROVE. Do NOT ntfy for individual
+    MS verdicts, workstream completions, or routine pushes. If the owner
+    says CHANGES/PIVOT, no ntfy — just iterate.
+
+40. **Screenshot zip upload target changed (owner revision R28).** Round 27's
+    `round-27-testing-screenshots.zip` lives at the ACUTE-CODE repo root.
+    From round 28 on, screenshot zips go to the **public DASHBOARD repo**
+    at `screenshots/round-NN.zip` with an index entry in `data.json`. The
+    DASHBOARD repo's `build.mjs` denylist was updated to allow `screenshots/`
+    paths (the denylist scan only applies to files that end up in
+    `index.html` / `assets/` — the `screenshots/` directory isn't touched
+    by the build, so it's safe). Publish via
+    `pnpm dashboard:publish-screenshots <NN>` (Workstream K).
