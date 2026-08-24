@@ -307,14 +307,72 @@ Verify GREEN (213 tests: 207 + 6 e2e).
 
 ---
 
-## MS-4 — Project Indexing + Advanced Search (PENDING)
+## MS-4 — Project Indexing + Advanced Search (DELIVERED)
 
-**Workstreams:** G1 (codebase_index migration + indexer + index_project 16th
-tool), G2 (GET /projects/:id/index + CodebasePanel), H (search_code schema
-extension + CommandPalette ⌘K + POST /projects/:id/search).
+**Workstreams landed:** G1 (codebase_index migration + indexer + index_project
+16th tool), G2 (GET /projects/:id/index + CodebasePanel), H (search_code
+schema extension + CommandPalette ⌘K + POST /projects/:id/search).
 
 Owner words: *"implement proper project or such indexing… utilize advanced
 searching techniques too, like a grep."*
+
+### G1 — backend indexer (commit in work/round-28-g-h merge)
+- NEW migration `0007_codebase_index.sql` (codebase_index table: project_id,
+  path, symbol, kind, line, signature, docstring; 3 indexes).
+- NEW `storage/index.ts`: `reindexProject` (walk tree, regex symbol extraction
+  for .ts/.tsx/.js/.jsx/.py/.rs/.go/.md, batch INSERT, 50k symbol cap, 30-day
+  snapshot cleanup), `getIndexSummary`, `reindexFile` (delta-update),
+  `searchIndexSymbols` (prefix match).
+- `tools/index.ts`: `index_project` tool (16th tool) registered; `ToolDeps`
+  gained `projectId`; wired from `session.projectId` in runtime.ts prepareTurn.
+- `prompts.ts`: added "## CODEBASE AWARENESS" section — explains index_project,
+  injects the index summary (top files + sample symbols) into every turn.
+
+### G2 — frontend codebase panel
+- NEW `GET /projects/:id/index` route (returns the index summary).
+- NEW `src/hooks/use-project-index.ts` (React Query wrapper).
+- NEW `src/components/project-chat/panels/CodebasePanel.tsx` — tree view of
+  indexed symbols grouped by file; clicking opens the file in CodeView.
+
+### H — advanced search (grep)
+- `search_code` schema extended: `case_sensitive`, `whole_word`, `file_glob`,
+  `max_results` options. wholeWord wraps pattern in `\b..\b`; fileGlob filters
+  by filename regex; maxResults caps at 200.
+- NEW `POST /projects/:id/search` route (unified: files/symbols/content).
+- NEW `src/components/project-chat/CommandPalette.tsx` — ⌘K popover with 3
+  search modes, debounced search, clickable results. Built with existing
+  primitives — NO new cmdk dependency (6-f R-H3).
+- `ChatTopBar`: ⌘K listener + Search button open the CommandPalette.
+
+### MS-4 live battery (canonical proof)
+**Setup:** rebuilt agent-core, booted sidecar on :5180, fresh DB. Created a
+project pointing at the ACUTE-CODE repo itself (rootPath:
+/home/z/PROJECT/ACUTECODE).
+
+**Steps:**
+1. `GET /projects/:id/index` → `{"index":null}` (project not yet indexed) ✓
+2. Created a session, sent "Index this project using the index_project tool,
+   then tell me how many files and symbols were indexed."
+3. SSE events: `tool-call: index_project` → `tool-result ok: true` → 15+
+   `text-delta` events: "Indexing complete: 328 files and 2,384 symbols
+   were indexed (in 124ms). The codebase summary is now injected into my
+   context, so I can navigate the project structure and search for symbols
+   without needing to explore manually. Done."
+4. `GET /projects/:id/index` AFTER → `files=318, symbols=2384` ✓
+5. `POST /projects/:id/search` `{query: "buildProjectTools", kind: "symbols"}`
+   → 1 match: `agent-core/src/tools/index.ts:367 [function] buildProjectTools` ✓
+
+**Assertions:**
+- ✅ The agent called `index_project` (the 16th tool) on its own initiative
+  (the prompt instructed it to)
+- ✅ 318 files + 2384 symbols indexed in 124ms (codebase_index table populated)
+- ✅ The agent's CODEBASE AWARENESS prompt injection worked (it said "The
+  codebase summary is now injected into my context")
+- ✅ Symbol search returns correct matches (path:line:kind:symbol)
+- ✅ "Done." completion signal → outer loop stopped after 1 iteration
+
+Verify GREEN (213 tests: 207 + 6 e2e). Tests updated: TOOL_NAMES 15→16,
+buildProjectTools 15→16, migrations 6→7, template seeding +index_project.
 
 ---
 
