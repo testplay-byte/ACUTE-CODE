@@ -42,7 +42,7 @@ import {
   updateModel,
   upsertModel,
 } from "./storage/models.js";
-import { listSnapshots, restoreSnapshot } from "./storage/snapshots.js";
+import { listSnapshots, restoreSnapshot, getSnapshotBySeq } from "./storage/snapshots.js";
 import { openDatabase, type SqliteDatabase } from "./storage/db.js";
 import {
   TOOL_NAMES,
@@ -714,6 +714,32 @@ export function buildServer(options: ServerOptions): FastifyInstance {
           hadBefore: s.beforeContent !== null,
         }));
         return { checkpoints: snapshots };
+      });
+
+      // Round-28 WS-D3: fetch before/after content for a single snapshot (by
+      // seq) — DiffCard renders a real unified diff from this. Content is
+      // excluded from the list route (large BLOBs) but included here on
+      // demand. 404 if no snapshot for that seq (older sessions pre-R25).
+      scope.get("/sessions/:id/snapshots/:seq", async (request, reply) => {
+        const { id, seq } = request.params as Record<string, string>;
+        const seqNum = Number(seq);
+        if (!Number.isInteger(seqNum) || seqNum < 0) {
+          return reply.code(400).send(errorBody("BAD_REQUEST", `invalid seq ${seq}`));
+        }
+        const snapshot = getSnapshotBySeq(db, id, seqNum);
+        if (!snapshot) {
+          return reply.code(404).send(errorBody("NOT_FOUND", `no snapshot for session ${id} seq ${seq}`));
+        }
+        return {
+          id: snapshot.id,
+          sessionId: snapshot.sessionId,
+          seq: snapshot.seq,
+          path: snapshot.path,
+          toolName: snapshot.toolName,
+          ts: snapshot.ts,
+          beforeContent: snapshot.beforeContent,
+          afterContent: snapshot.afterContent,
+        };
       });
 
       scope.post("/checkpoints/:id/restore", async (request, reply) => {

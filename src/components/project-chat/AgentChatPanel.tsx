@@ -36,11 +36,14 @@ import {
 import {
   type Agent,
   type DiffEntry,
+  type DiffLine,
   type Project,
   type ProjectChatItem,
   type StreamTurnEvent,
   type ToolUseEntry,
+  computeUnifiedDiff,
   fetchProviderModels,
+  fetchSnapshot,
   streamSessionMessage,
   toProjectChatItems,
 } from "../../lib/api";
@@ -432,29 +435,70 @@ function ToolsRow({ tools }: { tools: ToolUseEntry[] }) {
  * path reveals the code pane at that file. Real +/- diff bodies land with git
  * integration in Phase 3 — until then the card shows path + size + status.
  */
-function DiffCard({ entry }: { entry: DiffEntry }) {
+/**
+ * Round-28 WS-D3 DiffCard: renders a REAL unified diff (before/after content
+ * fetched from GET /sessions/:id/snapshots/:seq) with +/- green/red coloring.
+ * Collapsed by default (path + chars summary); expands on click to show the
+ * full diff body. Falls back to the path/chars card if the snapshot is empty
+ * (older sessions pre-R25, or non-mutating events).
+ */
+function DiffCard({ entry, sessionId }: { entry: DiffEntry; sessionId: string | null }) {
   const styles = useThemeStyles();
   const selectFile = useProjectChatStore((s) => s.selectFile);
   const setCodeVisible = useProjectChatStore((s) => s.setCodeVisible);
+  const [expanded, setExpanded] = useState(false);
+  const [diffLines, setDiffLines] = useState<DiffLine[] | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [fetchErr, setFetchErr] = useState<string | null>(null);
+
+  // Lazy-fetch the snapshot content on first expand.
+  const loadDiff = async () => {
+    if (diffLines !== null || !sessionId) return;
+    setLoading(true);
+    setFetchErr(null);
+    try {
+      const snap = await fetchSnapshot(sessionId, entry.seq);
+      if (!snap) {
+        // No snapshot recorded — fall back to the path/chars card.
+        setDiffLines([]);
+      } else {
+        setDiffLines(computeUnifiedDiff(snap.beforeContent, snap.afterContent));
+      }
+    } catch (err) {
+      setFetchErr(err instanceof Error ? err.message : String(err));
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const toggle = () => {
+    const next = !expanded;
+    setExpanded(next);
+    if (next) void loadDiff();
+  };
 
   return (
     <motion.div variants={msgVariants} initial="initial" animate="animate">
-      <button
-        type="button"
-        onClick={() => {
-          if (entry.path) {
-            selectFile(entry.path);
-            setCodeVisible(true);
-          }
-        }}
+      <div
         className="block w-full text-left rounded-2xl border overflow-hidden"
         style={{ background: styles.bg, borderColor: styles.border }}
       >
-        <div
-          className="h-8 px-3 border-b flex items-center justify-between font-mono text-[11px]"
-          style={{ borderColor: styles.border, color: styles.textSecondary }}
+        {/* Header — click toggles the diff body */}
+        <button
+          type="button"
+          onClick={toggle}
+          aria-expanded={expanded}
+          aria-label={`${expanded ? "Collapse" : "Expand"} diff for ${entry.path ?? entry.toolName}`}
+          className="w-full h-8 px-3 border-b flex items-center justify-between font-mono text-[11px] transition-colors"
+          style={{ borderColor: expanded ? styles.border : "transparent", color: styles.textSecondary }}
+          onMouseEnter={(e) => (e.currentTarget.style.background = styles.subtleHover)}
+          onMouseLeave={(e) => (e.currentTarget.style.background = "transparent")}
         >
-          <span className="truncate">
+          <span className="truncate flex items-center gap-1.5">
+            <ChevronDown
+              size={11}
+              style={{ transform: expanded ? "rotate(0deg)" : "rotate(-90deg)", transition: "transform 0.2s" }}
+            />
             {entry.path ? basename(entry.path) : entry.toolName}{" "}
             {`+${entry.chars ?? "?"} chars`}
           </span>
@@ -465,14 +509,74 @@ function DiffCard({ entry }: { entry: DiffEntry }) {
             />
             <span className="text-[10px]">{entry.ok ? "applied" : "failed"}</span>
           </span>
-        </div>
-        <div
-          className="px-3 py-2 font-mono text-[11px] truncate"
-          style={{ color: styles.textSecondary }}
+        </button>
+
+        {/* Expandable path link (open in CodeView) — always visible */}
+        <button
+          type="button"
+          onClick={() => {
+            if (entry.path) {
+              selectFile(entry.path);
+              setCodeVisible(true);
+            }
+          }}
+          className="w-full px-3 py-2 font-mono text-[11px] truncate text-left transition-colors hover:bg-opacity-50"
+          style={{ color: styles.textSecondary, background: "transparent" }}
+          onMouseEnter={(e) => (e.currentTarget.style.background = styles.subtleHover)}
+          onMouseLeave={(e) => (e.currentTarget.style.background = "transparent")}
+          title={entry.path ?? entry.toolName}
         >
           {entry.path ?? entry.toolName}
-        </div>
-      </button>
+        </button>
+
+        {/* Real unified diff body (expanded) */}
+        {expanded && (
+          <div
+            className="border-t max-h-80 overflow-y-auto auto-scroll font-mono text-[11px] leading-[1.5]"
+            style={{ borderColor: styles.border, background: styles.inputBg }}
+          >
+            {loading ? (
+              <div className="px-3 py-3" style={{ color: styles.textTertiary }}>
+                Loading diff…
+              </div>
+            ) : fetchErr ? (
+              <div className="px-3 py-3" style={{ color: SEMANTIC_COLORS.danger }}>
+                {fetchErr}
+              </div>
+            ) : diffLines === null ? null : diffLines.length === 0 ? (
+              <div className="px-3 py-3" style={{ color: styles.textTertiary }}>
+                No snapshot content recorded for this mutation.
+              </div>
+            ) : (
+              diffLines.map((line, i) => (
+                <div
+                  key={i}
+                  className="px-3 whitespace-pre"
+                  style={{
+                    background:
+                      line.type === "add"
+                        ? withAlpha(SEMANTIC_COLORS.success, 0.1)
+                        : line.type === "del"
+                          ? withAlpha(SEMANTIC_COLORS.danger, 0.1)
+                          : "transparent",
+                    color:
+                      line.type === "add"
+                        ? SEMANTIC_COLORS.success
+                        : line.type === "del"
+                          ? SEMANTIC_COLORS.danger
+                          : styles.textTertiary,
+                  }}
+                >
+                  <span className="select-none mr-2">
+                    {line.type === "add" ? "+" : line.type === "del" ? "-" : " "}
+                  </span>
+                  {line.text}
+                </div>
+              ))
+            )}
+          </div>
+        )}
+      </div>
     </motion.div>
   );
 }
@@ -480,8 +584,8 @@ function DiffCard({ entry }: { entry: DiffEntry }) {
 /** Direct child of AnimatePresence mode="popLayout": framer-motion attaches a
  * measurement ref to this element (React 18 requires forwardRef — the demo
  * could skip it on React 19). The wrapper div is the presence child. */
-const MessageRenderer = forwardRef<HTMLDivElement, { item: ProjectChatItem }>(
-  function MessageRenderer({ item }, ref) {
+const MessageRenderer = forwardRef<HTMLDivElement, { item: ProjectChatItem; sessionId: string | null }>(
+  function MessageRenderer({ item, sessionId }, ref) {
     switch (item.kind) {
       case "user":
         return (
@@ -504,7 +608,7 @@ const MessageRenderer = forwardRef<HTMLDivElement, { item: ProjectChatItem }>(
       case "diff":
         return (
           <div ref={ref}>
-            <DiffCard entry={item.entry} />
+            <DiffCard entry={item.entry} sessionId={sessionId} />
           </div>
         );
     }
@@ -722,6 +826,10 @@ export function AgentChatPanel({
 
   const scrollRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
+  // Round-28 WS-D3: AbortController for the streaming fetch — the Stop button
+  // calls abortRef.current?.abort() to cancel mid-stream. Passed as the
+  // `signal` option to streamSessionMessage (api.ts L642 already supports it).
+  const abortRef = useRef<AbortController | null>(null);
 
   useScrollFade(scrollRef);
 
@@ -730,8 +838,9 @@ export function AgentChatPanel({
     if (el) el.scrollTo({ top: el.scrollHeight, behavior: "smooth" });
   }, [items.length, busy, pendingUser, liveText, liveTools.length]);
 
-  // NOTE: ⌘K now focuses the TopBar file search (demo behavior); the composer
-  // keeps Enter-to-send and gets focus after sending.
+  // NOTE (Round-28 WS-D3): ⌘K will open the CommandPalette (Workstream H —
+  // symbol/file/content search popover). Until H lands, ⌘K is a no-op in the
+  // composer; Enter-to-send + Shift+Enter for newline are the active shortcuts.
 
   const runTurn = async (content: string) => {
     const text = content.trim();
@@ -755,7 +864,9 @@ export function AgentChatPanel({
       }
       if (liveMode) {
         // STREAMED turn: text deltas + tool calls land live (owner round-16).
+        // Round-28 WS-D3: abortRef lets the Stop button cancel mid-stream.
         setStreamBusy(true);
+        abortRef.current = new AbortController();
         await streamSessionMessage(sid, text, (event: StreamTurnEvent) => {
           if (event.type === "text-delta") {
             setLiveText((prev) => prev + event.delta);
@@ -783,7 +894,8 @@ export function AgentChatPanel({
             // will resolve it).
             setSendError(event.message);
           }
-        }, { model: effectiveModel ?? undefined });
+        }, { model: effectiveModel ?? undefined, signal: abortRef.current.signal });
+        abortRef.current = null;
         setStreamBusy(false);
         await queryClient.invalidateQueries({ queryKey: ["session"] });
         await queryClient.invalidateQueries({ queryKey: ["sessions"] });
@@ -990,7 +1102,7 @@ export function AgentChatPanel({
 
             <AnimatePresence mode="popLayout">
               {items.map((item) => (
-                <MessageRenderer key={itemKey(item)} item={item} />
+                <MessageRenderer key={itemKey(item)} item={item} sessionId={session?.id ?? null} />
               ))}
               {pendingEcho !== null ? <UserMessage content={pendingEcho} /> : null}
             </AnimatePresence>
@@ -1106,9 +1218,11 @@ export function AgentChatPanel({
         >
           <button
             onClick={noop}
-            aria-label="Attach file"
-            className="w-8 h-8 rounded-xl grid place-items-center shrink-0 transition-colors"
+            aria-label="Attach file (coming soon)"
+            title="File attach — coming soon (WS-D3 scaffolded)"
+            className="w-8 h-8 rounded-xl grid place-items-center shrink-0 transition-colors cursor-not-allowed opacity-50"
             style={{ backgroundColor: styles.inputBg, color: styles.textSecondary }}
+            tabIndex={-1}
           >
             <Paperclip size={13} />
           </button>
@@ -1123,8 +1237,11 @@ export function AgentChatPanel({
           />
           {busy ? (
             <button
-              onClick={() => { /* stop logic: abort the fetch */ }}
-              aria-label="Stop"
+              // Round-28 WS-D3: abort the in-flight streaming fetch. The
+              // backend sees the client close; the catch block re-fetches
+              // the session so any partial response renders from the log.
+              onClick={() => abortRef.current?.abort()}
+              aria-label="Stop generation"
               title="Stop generation"
               className="w-8 h-8 rounded-xl grid place-items-center shrink-0 transition-transform hover:scale-105 active:scale-95"
               style={{ backgroundColor: SEMANTIC_COLORS.danger, color: "#fff" }}

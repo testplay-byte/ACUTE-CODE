@@ -360,6 +360,79 @@ export function fetchUsageSummary(days = 14): Promise<UsageSummary> {
   return request<UsageSummary>(`/usage/summary?days=${days}`);
 }
 
+/**
+ * Round-28 WS-D3: a single file snapshot (before/after content) for the
+ * DiffCard's real unified-diff rendering. Returns null if the snapshot
+ * doesn't exist (older sessions pre-R25 have none; non-mutating events have
+ * none). Throws ApiError on non-404 failures.
+ */
+export interface FileSnapshotContent {
+  id: string;
+  sessionId: string;
+  seq: number;
+  path: string;
+  toolName: string;
+  ts: string;
+  beforeContent: string | null;
+  afterContent: string | null;
+}
+
+export async function fetchSnapshot(sessionId: string, seq: number): Promise<FileSnapshotContent | null> {
+  try {
+    return await request<FileSnapshotContent>(`/sessions/${sessionId}/snapshots/${seq}`);
+  } catch (err) {
+    if (err instanceof ApiError && err.status === 404) return null;
+    throw err;
+  }
+}
+
+/**
+ * Round-28 WS-D3: compute a minimal unified diff (line-level LCS) between
+ * before/after content. Returns lines tagged +/- / context for the DiffCard
+ * to render with green/red/muted coloring. Not a full git-quality diff —
+ * good enough for visual review of agent file mutations.
+ */
+export interface DiffLine {
+  type: "add" | "del" | "ctx";
+  text: string;
+}
+export function computeUnifiedDiff(before: string | null, after: string | null): DiffLine[] {
+  const beforeLines = before ? before.split("\n") : [];
+  const afterLines = after ? after.split("\n") : [];
+  const truncate = (lines: DiffLine[]): DiffLine[] =>
+    lines.length > 200 ? lines.slice(0, 200) : lines;
+  // File created (before null) → all-add. File deleted (after null) → all-del.
+  if (before === null && after !== null) return truncate(afterLines.map((t) => ({ type: "add" as const, text: t })));
+  if (after === null && before !== null) return truncate(beforeLines.map((t) => ({ type: "del" as const, text: t })));
+  // LCS table (cap at 500 lines each to bound memory).
+  const m = Math.min(beforeLines.length, 500);
+  const n = Math.min(afterLines.length, 500);
+  const dp: number[][] = Array.from({ length: m + 1 }, () => new Array<number>(n + 1).fill(0));
+  for (let i = m - 1; i >= 0; i--) {
+    for (let j = n - 1; j >= 0; j--) {
+      dp[i][j] = beforeLines[i] === afterLines[j] ? dp[i + 1][j + 1] + 1 : Math.max(dp[i + 1][j], dp[i][j + 1]);
+    }
+  }
+  const out: DiffLine[] = [];
+  let i = 0, j = 0;
+  while (i < m && j < n) {
+    if (beforeLines[i] === afterLines[j]) {
+      out.push({ type: "ctx", text: beforeLines[i] });
+      i++; j++;
+    } else if (dp[i + 1][j] >= dp[i][j + 1]) {
+      out.push({ type: "del", text: beforeLines[i] });
+      i++;
+    } else {
+      out.push({ type: "add", text: afterLines[j] });
+      j++;
+    }
+  }
+  while (i < m) out.push({ type: "del", text: beforeLines[i++] });
+  while (j < n) out.push({ type: "add", text: afterLines[j++] });
+  // Truncate huge diffs so the chat stays readable (cap 200 lines).
+  return truncate(out);
+}
+
 /** A chat bubble narrowed from the event log; non-message events arrive in later waves. */
 export interface ChatEntry {
   seq: number;

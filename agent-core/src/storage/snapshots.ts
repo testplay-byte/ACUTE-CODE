@@ -80,6 +80,23 @@ export function listSnapshots(db: SqliteDatabase, sessionId: string): FileSnapsh
   return rows.map(toSnapshot);
 }
 
+/**
+ * Round-28 WS-D3: fetch a single snapshot by (sessionId, seq) — used by the
+ * DiffCard to render a real unified diff (before/after content). Returns null
+ * if no snapshot exists for that seq (e.g. the mutation was a no-op or the
+ * snapshot wasn't recorded — older sessions pre-R25 have none).
+ */
+export function getSnapshotBySeq(
+  db: SqliteDatabase,
+  sessionId: string,
+  seq: number,
+): FileSnapshot | null {
+  const row = db
+    .prepare("SELECT * FROM file_snapshots WHERE session_id = ? AND seq = ?")
+    .get(sessionId, seq) as SnapshotRow | undefined;
+  return row ? toSnapshot(row) : null;
+}
+
 /** Restore a snapshot: write the 'before' content back (or delete if before=NULL). */
 export function restoreSnapshot(
   db: SqliteDatabase,

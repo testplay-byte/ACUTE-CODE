@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   ApiError,
+  computeUnifiedDiff,
   getAgentsBackend,
   httpAgents,
   toProjectChatItems,
@@ -344,5 +345,54 @@ describe("toProjectChatItems", () => {
     expect(items).toEqual([
       { kind: "ai", seq: 4, content: "Still here.", agentId: "agt_scribe", ts: TS(4) },
     ]);
+  });
+});
+
+// Round-28 WS-D3: unified-diff computation for the DiffCard.
+describe("computeUnifiedDiff", () => {
+  it("returns all-add lines when before is null (file created)", () => {
+    const lines = computeUnifiedDiff(null, "line1\nline2\nline3");
+    expect(lines).toEqual([
+      { type: "add", text: "line1" },
+      { type: "add", text: "line2" },
+      { type: "add", text: "line3" },
+    ]);
+  });
+
+  it("returns all-del lines when after is null (file deleted)", () => {
+    const lines = computeUnifiedDiff("gone1\ngone2", null);
+    expect(lines).toEqual([
+      { type: "del", text: "gone1" },
+      { type: "del", text: "gone2" },
+    ]);
+  });
+
+  it("marks changed lines as add/del and unchanged as ctx", () => {
+    const before = "keep\nold\nshared";
+    const after = "keep\nnew\nshared";
+    const lines = computeUnifiedDiff(before, after);
+    expect(lines).toEqual([
+      { type: "ctx", text: "keep" },
+      { type: "del", text: "old" },
+      { type: "add", text: "new" },
+      { type: "ctx", text: "shared" },
+    ]);
+  });
+
+  it("handles insertion at the end", () => {
+    const before = "a\nb";
+    const after = "a\nb\nc";
+    const lines = computeUnifiedDiff(before, after);
+    expect(lines).toEqual([
+      { type: "ctx", text: "a" },
+      { type: "ctx", text: "b" },
+      { type: "add", text: "c" },
+    ]);
+  });
+
+  it("truncates diffs longer than 200 lines", () => {
+    const big = Array.from({ length: 300 }, (_, i) => `line${i}`).join("\n");
+    const lines = computeUnifiedDiff(null, big);
+    expect(lines).toHaveLength(200);
   });
 });
