@@ -623,3 +623,17 @@ Work Log:
 
 Stage Summary:
 - The agent has 13 tools (Kilo Code-level), Cline-grade prompt discipline, real cost tracking, context-window management, checkpoint/revert system, todo tracking, a stop button, code blocks with line numbers + copy, git tools, terminal execution, and 60+ polish items verified. Continuing toward 100 review items and more feature improvements.
+
+---
+Task ID: R26c (review 61-80 + exec list expansion)
+Agent: orchestrator (Z.ai Code) — inline, on main, not stopping
+Task: Owner: "100 review improvements"
+
+Work Log:
+- Review 61-70: jest/vitest/pip/go safe, sed -i/chmod blocked, rg safe, checkpoint awareness in prompt, timeout configurable via env
+- Review 71-80: npm install/pnpm add/yarn safe, mv/cp blocked, binary file skip in searchCode verified, prompt: 3+ step todos ✓, git_status before changes ✓, path containment ✓, error retry ✓
+- All CI green; pushed 9aa83ec + c17ce5c to main; ntfy delivered
+- 80/100 review items complete
+
+Stage Summary:
+- Agent now has: 13 tools (search_code, git_status/diff/log, run_command, todo_write + the original 7), Cline-grade prompt, cost tracking, context management, checkpoints, stop button, code blocks. Exec safe list covers: ls/cat/grep/rg/find, git (status/diff/log/commit/add), npm/pnpm/jest/vitest/cargo/go/tsc, echo/pwd/du/df/help, node/npm/npx/pip/yarn. Blocked: rm -rf, sed -i, chmod, mv, cp, sudo, curl/wget/ssh, dev servers (pnpm dev/npm start/vite/next dev). Continuing toward 100.
