@@ -2,6 +2,7 @@ import { useEffect } from "react";
 import { Route, Routes, useNavigate } from "react-router";
 import { AppShell } from "./components/shell/AppShell";
 import { ProjectView } from "./components/projects/ProjectView";
+import { DemoViewerScreen } from "./components/demos/DemoViewerScreen";
 import { ProjectChatScreen } from "./components/project-chat";
 import { DashboardScreen } from "./components/dashboard";
 import { PlaceholderPage } from "./pages/PlaceholderPage";
@@ -77,6 +78,7 @@ export function App() {
             }
           />
           <Route path="settings" element={<SettingsPage />} />
+          <Route path="demos" element={<DemoViewerScreen />} />
           <Route
             path="*"
             element={

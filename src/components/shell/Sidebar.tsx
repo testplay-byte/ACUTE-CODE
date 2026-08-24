@@ -8,6 +8,7 @@ import {
   LayoutDashboard,
   Menu,
   MessageSquare,
+  MonitorPlay,
   Plus,
   Settings,
   Trash2,
@@ -111,6 +112,7 @@ export function Sidebar() {
       <nav className={cn("flex flex-col gap-1 px-2.5 pb-3", collapsed ? "px-1.5 pt-4" : "pt-1")} aria-label="Main navigation">
         <DashboardButton collapsed={collapsed} />
         <UsageButton collapsed={collapsed} />
+        <DemosButton collapsed={collapsed} />
       </nav>
 
       {/* Divider */}
@@ -191,6 +193,13 @@ function SettingsButton({ collapsed }: { collapsed: boolean }) {
   const navigate = useNavigate();
   const active = useLocation().pathname.startsWith("/settings");
   return <NavButton icon={Settings} label="Settings" active={active} collapsed={collapsed} onClick={() => navigate("/settings")} />;
+}
+
+/** Round-28 WS-I: Demos nav button (in-app demo viewer). */
+function DemosButton({ collapsed }: { collapsed: boolean }) {
+  const navigate = useNavigate();
+  const active = useLocation().pathname.startsWith("/demos");
+  return <NavButton icon={MonitorPlay} label="Demos" active={active} collapsed={collapsed} onClick={() => navigate("/demos")} />;
 }
 
 /** Projects section — expandable tree with sessions under each project. */

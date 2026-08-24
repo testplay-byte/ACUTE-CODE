@@ -5,7 +5,8 @@
  * later waves.
  */
 import { randomUUID, timingSafeEqual } from "node:crypto";
-import { statSync } from "node:fs";
+import { existsSync, readdirSync, statSync } from "node:fs";
+import { join } from "node:path";
 import Fastify, { type FastifyError, type FastifyInstance } from "fastify";
 import type { MemoryPolicy, RunMode } from "shared";
 import { aiSdkChat, streamAiSdkChat, type ChatFn } from "./agents/chat.js";
@@ -905,6 +906,54 @@ export function buildServer(options: ServerOptions): FastifyInstance {
         // kind === "files"
         const res = searchFiles(project.rootPath, query, undefined);
         return { kind: "files", results: res.ok ? res.output : "" };
+      });
+
+      // Round-28 WS-I: in-app demo viewer. Walks <project>/demos/ for HTML
+      // files; each demo is viewable in a sandboxed iframe. The agent's
+      // write_file tool can create demos as part of a task.
+      scope.get("/projects/:id/demos", async (request, reply) => {
+        const { id } = request.params as Record<string, string>;
+        const project = getProject(db, id);
+        if (project === undefined) {
+          return reply.code(404).send(errorBody("NOT_FOUND", `no project with id ${id}`));
+        }
+        const demosDir = join(project.rootPath, "demos");
+        if (!existsSync(demosDir)) {
+          return { demos: [] };
+        }
+        const demos: Array<{ name: string; path: string; size: number; modifiedAt: string }> = [];
+        try {
+          for (const entry of readdirSync(demosDir)) {
+            const abs = join(demosDir, entry);
+            try {
+              const stats = statSync(abs);
+              if (stats.isDirectory()) {
+                // demo is a folder with index.html (or other .html)
+                const indexHtml = join(abs, "index.html");
+                if (existsSync(indexHtml)) {
+                  demos.push({
+                    name: entry,
+                    path: `demos/${entry}/index.html`,
+                    size: statSync(indexHtml).size,
+                    modifiedAt: stats.mtime.toISOString(),
+                  });
+                }
+              } else if (entry.endsWith(".html")) {
+                demos.push({
+                  name: entry.replace(/\.html$/, ""),
+                  path: `demos/${entry}`,
+                  size: stats.size,
+                  modifiedAt: stats.mtime.toISOString(),
+                });
+              }
+            } catch {
+              /* unreadable entry — skip */
+            }
+          }
+        } catch {
+          /* demos dir unreadable — return empty */
+        }
+        return { demos };
       });
 
       // ---- Sessions + single-agent chat (API.md §5) ----

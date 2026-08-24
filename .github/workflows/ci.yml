@@ -28,6 +28,10 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
+      - name: Docs check (freshness + drift — round 28 WS-J1)
+        run: pnpm docs:check
+        continue-on-error: true  # warn-only for now (existing docs need stamp backfill)
+
       - name: Verify (lint, typecheck, test, build, license audit)
         run: pnpm verify
 

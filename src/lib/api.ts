@@ -818,3 +818,16 @@ export async function searchProject(
     json: { query, kind, ...options },
   });
 }
+
+// ── Round-28 WS-I: in-app demo viewer ────────────────────────────────────────
+
+export interface ProjectDemo {
+  name: string;
+  path: string;       // root-relative, e.g. "demos/test/index.html"
+  size: number;
+  modifiedAt: string;
+}
+export async function fetchProjectDemos(projectId: string): Promise<ProjectDemo[]> {
+  const body = await request<{ demos: ProjectDemo[] }>(`/projects/${projectId}/demos`);
+  return body.demos;
+}
