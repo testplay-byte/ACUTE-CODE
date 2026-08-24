@@ -132,17 +132,102 @@ deferred to R29):**
 
 ---
 
-## MS-2 — Chat Screen Complete Redesign (PENDING)
+## MS-2 — Chat Screen Complete Redesign (DELIVERED)
 
-**Workstreams:** D1 (chatFocusMode + ProjectChatScreen rewire +
+**Workstreams landed:** D1 (chatFocusMode + ProjectChatScreen rewire +
 ChatFocusLayout + ChatTopBar), D2 (AgentChatPanel modernization + streaming
-hook MERGED with WS-E + aria-live), D3 (composer wiring: Stop + Paperclip +
-DiffCard real diff + delete orphaned TopBar).
+hook MERGED with WS-E + aria-live + useSidecarHealth), D3 (composer Stop
+abort + DiffCard real diff + delete orphaned TopBar).
 
 Owner words: *"the chat screen win UI… I was hoping for a complete redesign…
 the chat window should be made to show on the left side or in the center on
 the left side. These infos will not show, like the folder structures and the
 actual code window or other windows. Those will not show there."*
+
+### D1 — chatFocusMode + ChatFocusLayout + ChatTopBar (commit 4c10328)
+- `project-chat-store.ts`: added `chatFocusMode` (default true) +
+  `setChatFocusMode`. Persisted. When true, chat screen shows ONLY the chat.
+- NEW `ChatTopBar.tsx` (~180L): slim 56px top bar — back-to-dashboard +
+  project name + agent chip (popover picker reusing `useAgents`) + theme
+  toggle (Sun/Moon) + "Show panels" toggle (flips chatFocusMode → 3-panel).
+- NEW `ChatFocusLayout.tsx` (~45L): ChatTopBar + AgentChatPanel. Chat takes
+  `flex-1 max-w-3xl mr-auto` (LEFT-aligned on desktop per 6-e — `mx-auto`
+  would center; `mr-auto` left-aligns). Full-width on mobile (<1024px).
+- `ProjectChatScreen.tsx`: branches on `chatFocusMode` (default true) →
+  returns ChatFocusLayout; else existing 3-panel layout. Experimental mode
+  still takes precedence.
+- NEW `ChatFocusLayout.test.tsx` (4 tests): back-to-dashboard + project name
+  + Show panels present; Show-panels flips chatFocusMode false; agent chip;
+  theme toggle.
+
+### D2 — AgentChatPanel modernization + streaming hook (merged WS-E) + aria-live (commit c24eb52)
+**THE REAL FIX for owner complaint "completes all tasks then shows the
+results. It does not show the typing effect":** the demo-mode auto-detect.
+
+Root cause (plan §7.2): `demoData` defaults `true`. In demo mode,
+AgentChatPanel falls back to the SYNCHRONOUS `POST /sessions/:id/messages`
+route — entire turn returns only AFTER all tool calls + final text complete.
+Owner saw exactly this symptom.
+
+- NEW `src/hooks/use-sidecar-health.ts`: boot-time health ping. On app
+  mount, `GET {baseUrl}/api/v1/health`; if 200 + token, `setDemoData(false)`
+  → activates the SSE streaming path (text deltas + tool calls land live).
+  The config-store already flips demoData false when `VITE_ACUTE_BASE_URL`
+  is set (env path); this hook covers browser-dev + Tauri-shell-not-answered.
+- Wired `useSidecarHealth()` into AppShell (runs once on mount, ref-guarded).
+- NEW `src/hooks/use-stream-session-message.ts`: React Query wrapper around
+  `streamSessionMessage` with AbortController (`stopRef`) — infra for D3's
+  Stop button. Centralizes post-stream invalidations.
+- AgentChatPanel streaming bubble: replaced `bounceDot` cursor with
+  `ac-caret-blink` (thin vertical bar that blinks); added `aria-live="polite"`
+  + `aria-atomic="false"` on the bubble (6-e — screen readers announce
+  streaming tokens); merged AgentThinking into the bubble ("Thinking" +
+  animated ellipsis before first text-delta, covers both stream + sync busy).
+  Deleted the orphaned AgentThinking component.
+- `src/index.css`: added `ac-caret-blink` + `ac-ellipsis-cycle` keyframes +
+  a global `@media (prefers-reduced-motion: reduce)` block retrofits ALL
+  existing animations (bounceDot, float-y, slide-down, etc.) to static states.
+  Caret + ellipsis stay visible (static) under reduced motion.
+
+### D3 — composer Stop abort + DiffCard real diff + delete TopBar (commit cc85fa7)
+- AgentChatPanel Stop button: wired to local `abortRef` (AbortController).
+  `runTurn` creates the controller before `streamSessionMessage`, passes its
+  signal via `options.signal`. Stop click aborts mid-stream; catch block
+  re-fetches the session so any partial response renders from the event log.
+- Paperclip: scaffolded as disabled (cursor-not-allowed + "coming soon"
+  title) per plan §6.3.4.3 minimal option.
+- DiffCard REWRITE: fetches `GET /sessions/:id/snapshots/:seq` (new route)
+  for before/after content, renders a real line-level unified diff (LCS) with
+  + green / - red / context muted coloring. Collapsed by default; expands on
+  click (max-h-80 scroll, capped 200 lines). Falls back to "No snapshot" for
+  old sessions.
+- NEW backend: `getSnapshotBySeq()` in `storage/snapshots.ts` +
+  `GET /sessions/:id/snapshots/:seq` route in `server.ts` (404 if no snapshot).
+- NEW frontend: `fetchSnapshot()` + `computeUnifiedDiff()` (LCS) in `api.ts`.
+- 5 new unit tests for `computeUnifiedDiff` (all-add, all-del, mixed change,
+  end-insertion, 200-line truncation).
+- DELETED `src/components/project-chat/TopBar.tsx` (213L, truly orphaned per
+  6-d grep — zero imports; only comments referenced it).
+- ⌘K comment updated (will open CommandPalette in WS-H; no-op until then).
+
+### MS-2 screenshots (published to DASHBOARD repo — round-28.zip, 6 entries)
+- `01-sidebar-light.png` — dashboard with new NAVIGATION/PROJECTS sidebar
+- `02-settings-light.png` — settings appearance (dark mode readable knob)
+- `03-settings-dark.png` — settings dark mode
+- `04-sidebar-dark.png` — dashboard dark
+- `01-chat-focus.png` — chat-focus layout (desktop 1920×1080)
+- `02-chat-focus-mobile.png` — chat-focus layout (mobile 375×812)
+
+### MS-2 verification
+- `pnpm verify` GREEN (212 tests: 206 + 6 e2e).
+- Browser VLM-verified (01-chat-focus.png): "The chat area is positioned on
+  the LEFT side of the screen. Yes, there is a slim top bar containing the
+  project name 'ACUTE-CODE', an agent chip labeled 'Scribe', a theme toggle
+  icon, and a 'Panels' button. A chat input/composer is located at the bottom
+  with the placeholder text 'Message Acute...'. No file-explorer or code
+  panels visible alongside the chat; the right side is currently empty."
+- Mobile VLM-verified (02-chat-focus-mobile.png): "the chat fills the full
+  width, the top bar is present, no visible errors."
 
 ---
 
