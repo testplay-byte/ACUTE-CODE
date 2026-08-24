@@ -21,7 +21,7 @@ const SAFE_PREFIXES = [
 
 /** Commands that are always blocked (destructive, system-level, or network). */
 const BLOCKED = [
-  "rm -rf /", "sed -i", "mv ", "cp ", "chmod ", "pnpm dev", "npm start", "vite", "next dev", "sudo ", "su ", "shutdown", "reboot", "mkfs", "dd if=",
+  "rm -rf /", "sed -i", "mv ", "cp ", "chmod ", "pnpm dev", "npm start", "vite", "next dev", "npx playwright", "npx puppeteer", "sudo ", "su ", "shutdown", "reboot", "mkfs", "dd if=",
   "curl ", "wget ", "ssh ", "scp ", "nc ", "telnet ",
 ];
 
