@@ -1,5 +1,6 @@
 import { Outlet, useLocation } from "react-router";
 import { Menu } from "lucide-react";
+import { useSidecarHealth } from "../../hooks/use-sidecar-health";
 import { useProjectChatStore } from "../../lib/project-chat-store";
 import { useThemeStyles } from "../../lib/use-theme-styles";
 import { Sidebar } from "./Sidebar";
@@ -17,6 +18,11 @@ import { Sidebar } from "./Sidebar";
  */
 export function AppShell() {
   const { pathname } = useLocation();
+  // Round-28 WS-D2: boot-time health ping. If the sidecar is up + token is
+  // set, flip demoData false so the streaming SSE path activates (the real
+  // fix for the owner's "completes all tasks then shows the results"
+  // complaint — root cause was demo mode falling back to the sync route).
+  useSidecarHealth();
   const appSidebarVisible = useProjectChatStore((s) => s.appSidebarVisible);
   // /project/:id/chat hides the app sidebar unless the user toggled it on
   // (the hamburger lives ON the sidebar itself per round-22 owner direction).

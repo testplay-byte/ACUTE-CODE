@@ -511,56 +511,6 @@ const MessageRenderer = forwardRef<HTMLDivElement, { item: ProjectChatItem }>(
   },
 );
 
-/** Demo AgentThinking row: avatar chip, name/model, "Working…" + bounceDot dots. */
-function AgentThinking({ agent }: { agent: Agent | null }) {
-  const styles = useThemeStyles();
-  return (
-    <motion.div
-      initial={{ opacity: 0, y: 8 }}
-      animate={{ opacity: 1, y: 0 }}
-      exit={{ opacity: 0, y: -8 }}
-      className="flex items-center gap-3 px-1"
-    >
-      <div
-        className="w-7 h-7 rounded-xl grid place-items-center border shrink-0"
-        style={{ borderColor: styles.border, background: styles.inputBg }}
-      >
-        <Sparkles size={13} style={{ color: styles.accent }} />
-      </div>
-      <div className="flex items-center gap-2 min-w-0">
-        <span className="text-[13px] font-semibold" style={{ color: styles.text }}>
-          {agent?.name ?? "Agent"}
-        </span>
-        <span
-          className="text-[10px] px-1.5 py-0.5 rounded-lg border font-mono"
-          style={{ background: styles.inputBg, borderColor: styles.border, color: styles.textSecondary }}
-        >
-          {agent?.model ?? "no model"}
-        </span>
-      </div>
-      <div
-        className="flex items-center gap-1.5 text-[11px] font-mono ml-auto"
-        style={{ color: styles.textSecondary }}
-      >
-        <span>Working…</span>
-        <span className="flex gap-0.5">
-          {[0, 0.15, 0.3].map((delay, i) => (
-            <span
-              key={i}
-              className="w-1 h-1 rounded-full"
-              style={{
-                background: styles.textSecondary,
-                animation: `bounceDot 1s infinite ${delay}s`,
-              }}
-            />
-          ))}
-        </span>
-      </div>
-    </motion.div>
-  );
-}
-
-
 /**
  * Composer footer (round-16): context-window meter (approx from the last
  * reply's usage), model picker (per-send override; the agent's model is the
@@ -1092,30 +1042,37 @@ export function AgentChatPanel({
               </div>
             ) : null}
 
-            {streamBusy || liveText !== "" ? (
+            {(streamBusy || liveText !== "" || (busy && !streamBusy)) ? (
               <div
                 className="rounded-2xl px-3.5 py-3 text-[13px] leading-[1.6]"
                 style={{ background: styles.card, color: styles.text }}
+                aria-live="polite"
+                aria-atomic="false"
               >
                 {liveText === "" ? (
+                  // Thinking state (merged AgentThinking — owner R28: the
+                  // streaming bubble grows with a "Thinking…" ellipsis before
+                  // the first text-delta; the separate AgentThinking row is
+                  // gone). The ellipsis animates via the CSS `ac-ellipsis`
+                  // keyframe (prefers-reduced-motion: static "…").
                   <span className="text-[12px] font-mono" style={{ color: styles.textSecondary }}>
-                    thinking…
+                    Thinking<span className="ac-ellipsis" aria-hidden />
                   </span>
                 ) : (
                   <>
                     <RichText content={liveText} />
                     <span
-                      className="inline-block w-[7px] h-[14px] ml-0.5 align-middle rounded-sm"
-                      style={{ background: styles.accent, animation: "bounceDot 1s infinite" }}
+                      className="inline-block w-[7px] h-[14px] ml-0.5 align-middle rounded-sm ac-caret-blink"
+                      style={{ background: styles.accent }}
+                      aria-hidden
                     />
                   </>
                 )}
               </div>
             ) : null}
 
-            <AnimatePresence>
-              {busy && !streamBusy && liveText === "" ? <AgentThinking agent={agent} /> : null}
-            </AnimatePresence>
+            {/* AgentThinking merged into the streaming bubble above (the
+                "Thinking…" state covers both stream + sync busy states). */}
           </div>
         </div>
       </div>
