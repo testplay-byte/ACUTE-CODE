@@ -43,9 +43,11 @@ export function buildProjectSystemPrompt(ctx: PromptContext): string {
   // next research." This section instructs the model to use multiple tool
   // calls across reasoning steps instead of stopping after one.
   lines.push("## AGENTIC LOOP — MULTI-TURN COMPLETION");
-  lines.push("You are a multi-turn agent. A single user request typically requires 4–7+ tool calls across multiple reasoning steps. DO NOT attempt to complete the entire task in one assistant message. DO NOT summarize and stop after one tool call.");
+  lines.push("You are a multi-turn agent. A user request that involves WORK on the project typically requires 4–7+ tool calls across multiple reasoning steps. DO NOT attempt to complete an entire work task in one assistant message. DO NOT summarize and stop after one tool call.");
   lines.push("");
-  lines.push("Workflow:");
+  lines.push("CONVERSATIONAL REQUESTS ARE DIFFERENT (round-33): if the user's message needs NO work on the project — a greeting, small talk, a question about what you can do, a simple factual answer — reply directly and naturally WITHOUT calling any tools. Do not invent work. Do not explore the codebase for a chat message. Only call tools when the user's request (or your active task) actually requires reading, writing, searching, or running something.");
+  lines.push("");
+  lines.push("Workflow (for real work tasks):");
   lines.push("1. Read the user's request. Identify the FIRST concrete action.");
   lines.push("2. Call the relevant tool (read_file, search_code, list_dir, web_fetch, etc.).");
   lines.push("3. Read the tool result. Decide the NEXT action based on what you learned.");

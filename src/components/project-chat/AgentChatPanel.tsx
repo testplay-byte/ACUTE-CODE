@@ -16,11 +16,8 @@ import {
   FolderOpen,
   GitBranch,
   ListChecks,
-  Moon,
-  PanelsTopLeft,
   Search,
   Sparkles,
-  Sun,
   type LucideIcon,
 } from "lucide-react";
 import { Link, useSearchParams } from "react-router";
@@ -48,7 +45,6 @@ import { useConfigStore } from "../../lib/config-store";
 import { withAlpha } from "../dashboard/helpers";
 import { ease } from "../../lib/motion";
 import { useProjectChatStore } from "../../lib/project-chat-store";
-import { useThemeStore } from "../../lib/theme-store";
 import { SEMANTIC_COLORS } from "../../lib/semantics";
 import { useThemeStyles } from "../../lib/use-theme-styles";
 import { useScrollFade } from "../../lib/useScrollFade";
@@ -76,6 +72,11 @@ const CONTEXT_LIMITS: Record<string, number> = {
   "stealth/ox-alpha": 1_048_576,
 };
 const DEFAULT_CONTEXT_LIMIT = 1_000_000;
+
+/** ROUND-33 (owner: "the command + K option… I am on Windows and it should
+ * not show me these kinds of things"): show Ctrl labels on Windows. */
+const IS_WINDOWS =
+  typeof navigator !== "undefined" && /Win/i.test(navigator.userAgent);
 
 /** Round-30 empty-state suggestion chips (fill the composer on click). */
 const SUGGESTIONS: Array<{ label: string; prompt: string; icon: LucideIcon }> = [
@@ -439,7 +440,7 @@ const MessageRenderer = forwardRef<
         return (
           <div ref={ref}>
             <ActivityBlock
-              rounds={item.rounds}
+              tools={item.tools}
               ts={item.ts}
               endTs={item.endTs}
               sessionId={sessionId}
@@ -511,7 +512,7 @@ function ComposerFooter({
         <span className="shrink-0">{fmtTokens(ctxTokens)} / {fmtTokens(limit)}</span>
       </div>
       <div className="flex items-center gap-2 shrink-0">
-        <span>⌘K search · ↵ to send</span>
+        <span>{IS_WINDOWS ? "Ctrl K search" : "⌘K search"} · ↵ to send</span>
         <div className="relative" ref={menuRef}>
           <button
             onClick={() => setOpen((v) => !v)}
@@ -622,23 +623,15 @@ export function AgentChatPanel({
   // sessions the hamburger picker's choice (persisted) applies; else first.
   const agents = useAgents(false).data ?? [];
   const selectedAgentId = useProjectChatStore((s) => s.selectedAgentId);
-  const setSelectedAgentId = useProjectChatStore((s) => s.setSelectedAgentId);
   const agent =
     agents.find((a) => a.id === session?.agentId) ??
     agents.find((a) => a.id === selectedAgentId) ??
     agents[0] ??
     null;
 
-  // Agent picker popover (round-15: moved here from the removed TopBar menu).
-  const [agentMenuOpen, setAgentMenuOpen] = useState(false);
-  const agentMenuRef = useRef<HTMLDivElement>(null);
-
-  // ROUND-32: controls absorbed from the removed ChatTopBar — theme, ⌘K
-  // palette, and the chat-focus escape hatch now live in the panel header.
-  const mode = useThemeStore((s) => s.mode);
-  const toggleMode = useThemeStore((s) => s.toggleMode);
-  const chatFocusMode = useProjectChatStore((s) => s.chatFocusMode);
-  const setChatFocusMode = useProjectChatStore((s) => s.setChatFocusMode);
+  // ROUND-33: the panel header is REMOVED entirely (owner: "All of that is
+  // unnecessary. It is not needed and it is better for you to just outright
+  // not implement it"). ⌘K/Ctrl+K palette stays available via keyboard.
   const [paletteOpen, setPaletteOpen] = useState(false);
 
   // ⌘K / Ctrl+K opens the CommandPalette (WS-H).
@@ -652,24 +645,36 @@ export function AgentChatPanel({
     window.addEventListener("keydown", handler);
     return () => window.removeEventListener("keydown", handler);
   }, []);
-  useEffect(() => {
-    if (!agentMenuOpen) return;
-    const handler = (e: MouseEvent) => {
-      if (agentMenuRef.current && !agentMenuRef.current.contains(e.target as Node)) {
-        setAgentMenuOpen(false);
-      }
-    };
-    document.addEventListener("mousedown", handler);
-    return () => document.removeEventListener("mousedown", handler);
-  }, [agentMenuOpen]);
-
   const createSession = useCreateSession();
   const sendMessage = useSendMessage();
 
-  const items = useMemo(
-    () => (sessionDetail.data ? toProjectChatItems(sessionDetail.data.events) : []),
-    [sessionDetail.data],
-  );
+  const items = useMemo(() => {
+    if (!sessionDetail.data) return [];
+    const raw = toProjectChatItems(sessionDetail.data.events);
+    // ROUND-33 (owner: summaries "should be shown at the very bottom of them.
+    // It should not be shown on each and every single one of them"): only the
+    // FINAL assistant message of each turn keeps its stat chips — earlier
+    // interim replies render clean. A turn = everything after a user message
+    // until the next user message; its final ai item is the last one before
+    // the turn ends (or the log ends).
+    const finalSeqs = new Set<number>();
+    let turnAiSeqs: number[] = [];
+    for (const item of raw) {
+      if (item.kind === "user") {
+        if (turnAiSeqs.length > 0) finalSeqs.add(turnAiSeqs[turnAiSeqs.length - 1]);
+        turnAiSeqs = [];
+      } else if (item.kind === "ai") {
+        turnAiSeqs.push(item.seq);
+      }
+      // activity items don't reset the turn's ai sequence
+    }
+    if (turnAiSeqs.length > 0) finalSeqs.add(turnAiSeqs[turnAiSeqs.length - 1]);
+    return raw.map((item) =>
+      item.kind === "ai" && !finalSeqs.has(item.seq)
+        ? { ...item, usage: undefined, ms: undefined, model: undefined }
+        : item,
+    );
+  }, [sessionDetail.data]);
 
   const [input, setInput] = useState("");
   const [composerFocused, setComposerFocused] = useState(false);
@@ -858,154 +863,7 @@ export function AgentChatPanel({
       className="flex flex-col h-full min-w-0 rounded-[16px] overflow-hidden"
       style={{ backgroundColor: styles.card }}
     >
-      {/* ROUND-32 header — the ONE slim toolbar (the app-level ChatTopBar is
-          removed per the owner's directive; its essential controls live here):
-          agent picker + model chip on the left; ⌘K search, theme toggle, and
-          the Show-panels escape hatch on the right. */}
-      <div
-        className="shrink-0 h-12 px-3 border-b flex items-center gap-2"
-        style={{ borderColor: styles.border }}
-      >
-        <div className="relative min-w-0 flex items-center gap-2">
-          <button
-            onClick={() => setAgentMenuOpen((v) => !v)}
-            className="flex items-center gap-1.5 rounded-[10px] px-1.5 py-1 transition-colors"
-            style={{ color: styles.text }}
-            aria-haspopup="listbox"
-            aria-expanded={agentMenuOpen}
-            aria-label={`Agent: ${agent?.name ?? "none"}. Pick agent.`}
-            title="Choose the agent for new sessions"
-            onMouseEnter={(e) => {
-              e.currentTarget.style.background = styles.subtleHover;
-            }}
-            onMouseLeave={(e) => {
-              e.currentTarget.style.background = "transparent";
-            }}
-          >
-            <span
-              className="w-6 h-6 rounded-full grid place-items-center text-[10px] font-black shrink-0"
-              style={{ background: styles.accent, color: styles.accentText }}
-            >
-              {(agent?.name ?? "A").charAt(0).toUpperCase()}
-            </span>
-            <span className="text-[13px] font-semibold truncate">{agent?.name ?? "No agent"}</span>
-            <ChevronDown size={12} style={{ color: styles.textSecondary }} />
-          </button>
-          <span
-            className="text-[10px] px-1.5 py-0.5 rounded-lg border font-mono shrink-0"
-            style={{
-              backgroundColor: styles.inputBg,
-              borderColor: styles.inputBorder,
-              color: styles.textTertiary,
-            }}
-          >
-            {agent?.model ?? "no model"}
-          </span>
-          {agentMenuOpen && (
-            <div
-              ref={agentMenuRef}
-              className="absolute top-10 left-0 w-64 rounded-2xl border overflow-hidden z-50 p-1.5"
-              style={{ background: styles.card, borderColor: styles.border, boxShadow: styles.bentoShadow }}
-              role="listbox"
-            >
-              {agents.length === 0 ? (
-                <div className="text-[12px] px-2.5 py-2" style={{ color: styles.textSecondary }}>
-                  No agents yet — create one in Settings → Agents.
-                </div>
-              ) : (
-                agents.map((a) => (
-                  <button
-                    key={a.id}
-                    role="option"
-                    aria-selected={a.id === (selectedAgentId ?? agents[0]?.id)}
-                    onClick={() => {
-                      setSelectedAgentId(a.id);
-                      setAgentMenuOpen(false);
-                    }}
-                    className="w-full flex items-center gap-2.5 px-2.5 py-2 rounded-xl text-left"
-                    style={{
-                      background: a.id === (selectedAgentId ?? agents[0]?.id) ? withAlpha(styles.accent, 0.09) : "transparent",
-                    }}
-                    onMouseEnter={(e) => {
-                      if (a.id !== (selectedAgentId ?? agents[0]?.id))
-                        e.currentTarget.style.background = styles.subtleHover;
-                    }}
-                    onMouseLeave={(e) => {
-                      if (a.id !== (selectedAgentId ?? agents[0]?.id))
-                        e.currentTarget.style.background = "transparent";
-                    }}
-                  >
-                    <div
-                      className="w-7 h-7 rounded-lg grid place-items-center text-[11px] font-bold shrink-0"
-                      style={{
-                        background: a.id === (selectedAgentId ?? agents[0]?.id) ? styles.accent : styles.inputBg,
-                        color: a.id === (selectedAgentId ?? agents[0]?.id) ? styles.accentText : styles.textSecondary,
-                      }}
-                    >
-                      {a.name.charAt(0).toUpperCase()}
-                    </div>
-                    <div className="min-w-0 flex-1">
-                      <div className="text-[12px] font-semibold truncate" style={{ color: styles.text }}>
-                        {a.name}
-                      </div>
-                      <div className="text-[10px] font-mono truncate" style={{ color: styles.textSecondary }}>
-                        {a.providerId ?? "—"} · {a.model ?? "—"}
-                      </div>
-                    </div>
-                    {a.id === (selectedAgentId ?? agents[0]?.id) && (
-                      <Check size={12} style={{ color: styles.accent, flexShrink: 0 }} />
-                    )}
-                  </button>
-                ))
-              )}
-              <div className="px-2.5 pt-1.5 pb-1 text-[10px] font-mono" style={{ color: styles.textTertiary }}>
-                applies to new sessions
-              </div>
-            </div>
-          )}
-        </div>
-        <span className="flex-1" />
-        {/* ⌘K search */}
-        <button
-          onClick={() => setPaletteOpen(true)}
-          aria-label="Search project (⌘K)"
-          title="Search project (⌘K)"
-          className="shrink-0 w-8 h-8 rounded-[10px] grid place-items-center transition-colors"
-          style={{ color: styles.textSecondary }}
-          onMouseEnter={(e) => (e.currentTarget.style.background = styles.subtleHover)}
-          onMouseLeave={(e) => (e.currentTarget.style.background = "transparent")}
-        >
-          <Search size={14} />
-        </button>
-        {/* Theme toggle */}
-        <button
-          onClick={toggleMode}
-          aria-label={`Switch to ${mode === "dark" ? "light" : "dark"} mode`}
-          title={`Switch to ${mode === "dark" ? "light" : "dark"} mode`}
-          className="shrink-0 w-8 h-8 rounded-[10px] grid place-items-center transition-colors"
-          style={{ color: styles.textSecondary }}
-          onMouseEnter={(e) => (e.currentTarget.style.background = styles.subtleHover)}
-          onMouseLeave={(e) => (e.currentTarget.style.background = "transparent")}
-        >
-          {mode === "dark" ? <Sun size={14} /> : <Moon size={14} />}
-        </button>
-        {/* Show panels — exit chat focus mode (the escape hatch to the 3-panel layout) */}
-        {chatFocusMode && (
-          <button
-            onClick={() => setChatFocusMode(false)}
-            aria-label="Show panels — exit chat focus mode"
-            title="Show panels — exit chat focus mode"
-            className="shrink-0 h-8 px-2.5 rounded-[10px] flex items-center gap-1.5 text-[11px] font-bold transition-colors"
-            style={{ color: styles.textSecondary }}
-            onMouseEnter={(e) => (e.currentTarget.style.background = styles.subtleHover)}
-            onMouseLeave={(e) => (e.currentTarget.style.background = "transparent")}
-          >
-            <PanelsTopLeft size={13} />
-            <span className="hidden sm:inline">Panels</span>
-          </button>
-        )}
-      </div>
-      {/* ⌘K CommandPalette (files/symbols/content search — WS-H) */}
+      {/* ⌘K / Ctrl+K CommandPalette (files/symbols/content search — WS-H) */}
       <CommandPalette
         projectId={projectId}
         open={paletteOpen}
@@ -1016,7 +874,6 @@ export function AgentChatPanel({
           setPaletteOpen(false);
         }}
       />
-
       {/* Scroll body with top fade (demo structure) */}
       <div className="relative flex-1 min-h-0 overflow-hidden">
         <div
@@ -1107,7 +964,11 @@ export function AgentChatPanel({
                 work renders in the SAME activity card as completed turns —
                 rounds, diff cards with "writing…" states, terminal cards. ── */}
             {liveRounds.length > 0 ? (
-              <ActivityBlock rounds={liveRounds} sessionId={session?.id ?? null} live />
+              <ActivityBlock
+                tools={liveRounds.flat()}
+                sessionId={session?.id ?? null}
+                live
+              />
             ) : null}
 
             {(streamBusy || liveText !== "" || (busy && !streamBusy)) ? (

@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { motion } from "framer-motion";
 import {
@@ -184,7 +184,20 @@ function ToolRow({ tool }: { tool: ToolUseEntry }) {
 
 // ─── File-change diff card (write_file / edit_file) ──────────────────────────
 
-function FileChangeCard({ tool, sessionId, writing }: { tool: ToolUseEntry; sessionId: string | null; writing?: boolean }) {
+function FileChangeCard({
+  tool,
+  sessionId,
+  writing,
+  live = false,
+}: {
+  tool: ToolUseEntry;
+  sessionId: string | null;
+  writing?: boolean;
+  /** Round-33: during a LIVE turn the card AUTO-EXPANDS the moment the write
+   * lands and the content reveals line-by-line — the owner's "live file
+   * creation and live file populating… inside the chat". */
+  live?: boolean;
+}) {
   const styles = useThemeStyles();
   const selectFile = useProjectChatStore((s) => s.selectFile);
   const setCodeVisible = useProjectChatStore((s) => s.setCodeVisible);
@@ -217,6 +230,18 @@ function FileChangeCard({ tool, sessionId, writing }: { tool: ToolUseEntry; sess
       setLoading(false);
     }
   };
+
+  // Round-33 live view: the moment an in-flight write completes, expand +
+  // fetch — the diff lines then reveal with the staggered animation below.
+  useEffect(() => {
+    if (live && !writing && !expanded && diffLines === null) {
+      setExpanded(true);
+      void loadDiff();
+    }
+    // loadDiff depends on query state; expanding on write-completion is the
+    // only trigger we care about.
+    // eslint-disable-next-line
+  }, [live, writing]);
 
   const toggle = () => {
     const next = !expanded;
@@ -322,8 +347,9 @@ function FileChangeCard({ tool, sessionId, writing }: { tool: ToolUseEntry; sess
             diffLines.map((line, i) => (
               <div
                 key={i}
-                className="flex"
+                className={`flex ${live ? "ac-line-reveal" : ""}`}
                 style={{
+                  ...(live ? { animationDelay: `${Math.min(i * 70, 1400)}ms` } : {}),
                   background:
                     line.type === "add"
                       ? withAlpha(SEMANTIC_COLORS.success, 0.07)
@@ -415,13 +441,13 @@ function WebRow({ tool }: { tool: ToolUseEntry }) {
 // ─── The block itself ─────────────────────────────────────────────────────────
 
 export function ActivityBlock({
-  rounds,
+  tools,
   ts,
   endTs,
   sessionId,
   live = false,
 }: {
-  rounds: ToolUseEntry[][];
+  tools: ToolUseEntry[];
   ts?: string;
   endTs?: string;
   sessionId: string | null;
@@ -439,15 +465,16 @@ export function ActivityBlock({
     }
   }, [mode]);
 
-  const totalActions = useMemo(() => rounds.reduce((a, r) => a + r.length, 0), [rounds]);
-  const roundCount = rounds.length;
+  const totalActions = tools.length;
   const elapsed = ts && endTs ? elapsedSeconds(ts, endTs) : 0;
 
   if (mode === "hidden" && !live) return null;
 
+  // Round-33 (owner: "the working one is unnecessary"): never label pure
+  // chatter — but when tools DID run, the header stays informative.
   const headerLabel = live
     ? "Working…"
-    : `Completed ${totalActions} ${totalActions === 1 ? "action" : "actions"}${roundCount > 1 ? ` · ${roundCount} rounds` : ""}`;
+    : `Completed ${totalActions} ${totalActions === 1 ? "action" : "actions"}`;
 
   const header = (
     <div
@@ -508,65 +535,43 @@ export function ActivityBlock({
       {header}
       {expanded && (
         <div className="px-3 pb-3">
-          {/* Timeline body — one group per round */}
-          {rounds.map((round, roundIndex) => {
-            const last = roundIndex === rounds.length - 1;
-            return (
-              <div key={roundIndex} className="relative ml-[11px] pl-4 border-l-2" style={{ borderColor: withAlpha(styles.accent, 0.25) }}>
-                {/* ROUND pill */}
-                {roundCount > 1 && (
-                  <div className="flex items-center h-7">
-                    <span
-                      className="px-2 py-0.5 rounded-full font-mono text-[9px] font-bold tracking-wide"
-                      style={{ background: styles.subtle, color: styles.textTertiary }}
-                    >
-                      ROUND {roundIndex + 1}
-                    </span>
+          {/* Round-33: ONE continuous timeline (owner: "it was supposed to be a
+              continuous session" — no ROUND labels, no planning dividers).
+              The guide line connects the work top-to-bottom. */}
+          <div className="relative ml-[11px] pl-4 border-l-2" style={{ borderColor: withAlpha(styles.accent, 0.25) }}>
+            {tools.map((tool) => {
+              if (DIFF_TOOLS.has(tool.toolName)) {
+                return (
+                  <div key={tool.seq} className="py-1">
+                    <FileChangeCard tool={tool} sessionId={sessionId} writing={tool.ok === null} live={live} />
                   </div>
-                )}
-                {round.map((tool) => {
-                  if (DIFF_TOOLS.has(tool.toolName)) {
-                    return (
-                      <div key={tool.seq} className="py-1">
-                        <FileChangeCard tool={tool} sessionId={sessionId} writing={tool.ok === null} />
-                      </div>
-                    );
-                  }
-                  if (TERMINAL_TOOLS.has(tool.toolName)) {
-                    return (
-                      <div key={tool.seq} className="py-1">
-                        <TerminalCard tool={tool} />
-                      </div>
-                    );
-                  }
-                  if (WEB_TOOLS.has(tool.toolName)) {
-                    return (
-                      <div key={tool.seq} className="py-0.5">
-                        <WebRow tool={tool} />
-                      </div>
-                    );
-                  }
-                  return <ToolRow key={tool.seq} tool={tool} />;
-                })}
-                {/* Between rounds: the planning divider */}
-                {!last && (
-                  <div className="flex items-center gap-2 h-8">
-                    <span className="text-[11px] font-mono" style={{ color: styles.textTertiary }}>
-                      planning next round<span className="ac-ellipsis" aria-hidden />
-                    </span>
+                );
+              }
+              if (TERMINAL_TOOLS.has(tool.toolName)) {
+                return (
+                  <div key={tool.seq} className="py-1">
+                    <TerminalCard tool={tool} />
                   </div>
-                )}
+                );
+              }
+              if (WEB_TOOLS.has(tool.toolName)) {
+                return (
+                  <div key={tool.seq} className="py-0.5">
+                    <WebRow tool={tool} />
+                  </div>
+                );
+              }
+              return <ToolRow key={tool.seq} tool={tool} />;
+            })}
+            {/* Live tail: work in progress, nothing landed yet */}
+            {live && tools.length === 0 && (
+              <div className="flex items-center gap-2 h-8">
+                <span className="text-[11px] font-mono" style={{ color: styles.textTertiary }}>
+                  starting<span className="ac-ellipsis" aria-hidden />
+                </span>
               </div>
-            );
-          })}
-          {/* Live tail: nothing after the last round yet */}
-          {live && rounds.length === 0 && (
-            <div className="flex items-center gap-2 h-8 ml-[11px] pl-4 border-l-2" style={{ borderColor: withAlpha(styles.accent, 0.25) }}>
-              <span className="text-[11px] font-mono" style={{ color: styles.textTertiary }}>
-                starting<span className="ac-ellipsis" aria-hidden />
-              </span>
-            </div>
-          )}
+            )}
+          </div>
         </div>
       )}
     </motion.div>

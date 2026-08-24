@@ -30,9 +30,13 @@ export function ChatFocusLayout({ project }: { project: Project }) {
       animate={{ opacity: 1 }}
       transition={{ duration: 0.3, ease }}
     >
-      {/* The floating chat window — its own surface, separate from the rail. */}
+      {/* The floating chat window — its own surface, separate from the rail.
+          ROUND-33: explicit 4-corner rounding (owner reported the bottom-left
+          + top-right corners reading square) and a wider reading column with
+          comfortable side padding (owner: "somewhat more padding" instead of
+          big empty voids at the sides). */}
       <div
-        className="flex-1 min-h-0 flex rounded-[24px] border-[1.5px] overflow-hidden"
+        className="flex-1 min-h-0 flex rounded-tl-[24px] rounded-tr-[24px] rounded-br-[24px] rounded-bl-[24px] border-[1.5px] overflow-hidden"
         style={{
           backgroundColor: styles.card,
           borderColor: styles.border,
@@ -40,7 +44,7 @@ export function ChatFocusLayout({ project }: { project: Project }) {
         }}
       >
         <div className="flex-1 min-h-0 flex justify-center lg:justify-start">
-          <div className="w-full max-w-3xl lg:mr-auto min-h-0 flex">
+          <div className="w-full max-w-4xl lg:mr-auto min-h-0 flex">
             <AgentChatPanel projectId={project.id} project={project} />
           </div>
         </div>

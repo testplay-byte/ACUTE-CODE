@@ -57,7 +57,7 @@ afterAll(() => {
 });
 
 async function authInject(options: {
-  method: "GET" | "POST" | "DELETE";
+  method: "GET" | "POST" | "PATCH" | "DELETE";
   url: string;
   payload?: Record<string, unknown>;
 }): Promise<LightMyRequestResponse> {
@@ -260,6 +260,57 @@ describe("DELETE /api/v1/sessions/:id (round-30)", () => {
     const response = await app.inject({
       method: "DELETE",
       url: `/api/v1/sessions/${session.id}`,
+    });
+    expect(response.statusCode).toBe(401);
+  });
+});
+
+describe("PATCH /api/v1/sessions/:id (round-33 rename)", () => {
+  it("renames a session and trims whitespace; empty title clears it", async () => {
+    const agent = await createAgent();
+    const session = await createSession(agent.id);
+
+    const renamed = await authInject({
+      method: "PATCH",
+      url: `/api/v1/sessions/${session.id}`,
+      payload: { title: "  Fix the login bug  " },
+    });
+    expect(renamed.statusCode).toBe(200);
+    expect(renamed.json().title).toBe("Fix the login bug");
+
+    const cleared = await authInject({
+      method: "PATCH",
+      url: `/api/v1/sessions/${session.id}`,
+      payload: { title: "   " },
+    });
+    expect(cleared.statusCode).toBe(200);
+    expect(cleared.json().title).toBeNull();
+  });
+
+  it("404s on an unknown session and 400s on a bad body", async () => {
+    const missing = await authInject({
+      method: "PATCH",
+      url: "/api/v1/sessions/sess_missing",
+      payload: { title: "x" },
+    });
+    expect(missing.statusCode).toBe(404);
+
+    const bad = await authInject({
+      method: "PATCH",
+      url: "/api/v1/sessions/any",
+      payload: { title: 42 },
+    });
+    expect(bad.statusCode).toBe(400);
+    expect(bad.json().error.code).toBe("VALIDATION");
+  });
+
+  it("requires the bearer token", async () => {
+    const agent = await createAgent();
+    const session = await createSession(agent.id);
+    const response = await app.inject({
+      method: "PATCH",
+      url: `/api/v1/sessions/${session.id}`,
+      payload: { title: "no auth" },
     });
     expect(response.statusCode).toBe(401);
   });
@@ -598,16 +649,44 @@ describe("streamed turn runtime (round-16)", () => {
   });
 
   // Round-28 WS-F: multi-turn agentic continuation (outer loop).
-  it("continues the outer loop when there's no completion signal, capped at maxOuterLoops", async () => {
+  it("ROUND-33: a text-only reply with NO tool calls STOPS the outer loop (the 'hello' bug)", async () => {
     const agent = await createAgent();
     const session = await createSession(agent.id);
     const streamKeyring = new ProviderKeyring({ ACUTE_PROVIDER_OPENROUTER: KEY });
 
     const emitted: Array<{ type: string }> = [];
-    // Mock that produces text WITHOUT a completion signal — the outer loop
-    // should continue up to maxOuterLoops (5), emitting meta.continuation
-    // between iterations and meta.continuation_complete at the cap.
+    // Mock that produces a conversational reply with ZERO tool calls — the
+    // owner's "hello, how are you" case. The turn must end after ONE
+    // iteration; the old behavior (continue up to maxOuterLoops) forced the
+    // model to invent work in an infinite-feeling loop.
     const chatStream = async function* (): AsyncGenerator<import("../src/agents/chat").StreamChatEvent> {
+      yield { type: "text-delta", delta: "Hey, doing great, thanks for asking!" };
+      yield { type: "finish", usage: { inputTokens: 10, outputTokens: 5, totalTokens: 15 } };
+    };
+
+    await runStreamedAgentTurn(
+      { db, keyring: streamKeyring, chat: aiSdkChat, chatStream },
+      session.id,
+      "hello, how are you",
+      (e) => emitted.push(e as { type: string }),
+    );
+
+    expect(emitted.filter((e) => e.type === "finish").length).toBe(1);
+    expect(emitted.filter((e) => e.type === "meta.continuation").length).toBe(0);
+    expect(emitted.find((e) => e.type === "meta.continuation_complete")).toBeUndefined();
+  });
+
+  it("continues the outer loop for TOOL-USING iterations without a completion signal, capped at maxOuterLoops", async () => {
+    const agent = await createAgent();
+    const session = await createSession(agent.id);
+    const streamKeyring = new ProviderKeyring({ ACUTE_PROVIDER_OPENROUTER: KEY });
+
+    const emitted: Array<{ type: string }> = [];
+    // Mock that CALLS TOOLS but never signals completion — the outer loop
+    // continues up to maxOuterLoops (5).
+    const chatStream = async function* (): AsyncGenerator<import("../src/agents/chat").StreamChatEvent> {
+      yield { type: "tool-call", toolName: "list_dir", argsSummary: "path: ." };
+      yield { type: "tool-result", toolName: "list_dir", argsSummary: "path: .", ok: true };
       yield { type: "text-delta", delta: "still working" };
       yield { type: "finish", usage: { inputTokens: 10, outputTokens: 5, totalTokens: 15 } };
     };
@@ -619,8 +698,6 @@ describe("streamed turn runtime (round-16)", () => {
       (e) => emitted.push(e as { type: string }),
     );
 
-    // Should have run 5 iterations (maxOuterLoops default) + 4 continuation
-    // events between them + 1 continuation_complete at the end.
     const iterations = emitted.filter((e) => e.type === "finish").length;
     const continuations = emitted.filter((e) => e.type === "meta.continuation").length;
     const capEvent = emitted.find((e) => e.type === "meta.continuation_complete");

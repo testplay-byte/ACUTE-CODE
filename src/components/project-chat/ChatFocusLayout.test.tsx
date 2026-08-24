@@ -10,45 +10,29 @@ afterEach(cleanup);
 
 beforeEach(() => {
   resetTestState();
-  // chatFocusMode defaults true; tests assert on the layout's structure.
   useProjectChatStore.setState({ chatFocusMode: true, appSidebarVisible: true });
 });
 
-describe("ChatFocusLayout (Round 32 — no top bar, floating chat panel)", () => {
-  it("renders the chat panel WITHOUT the old top navigation bar", async () => {
+describe("ChatFocusLayout (Round 33 — headerless chat panel)", () => {
+  it("renders the chat with NO top navigation bar at all (owner R33)", async () => {
     const projects = await getFixtureProjects().list();
     const project = projects[0];
     renderWithProviders(<ChatFocusLayout project={project} />);
 
-    // The removed ChatTopBar's affordances must NOT exist.
-    expect(screen.queryByRole("link", { name: /back to dashboard/i })).toBeNull();
-    // The agent chip + theme toggle now live INSIDE the chat panel's own
-    // slim header (the merged round-32 toolbar).
-    expect(screen.getByRole("button", { name: /Agent:/i })).toBeTruthy();
-    expect(screen.getByRole("button", { name: /switch to light mode/i })).toBeTruthy();
+    // NONE of the old header affordances exist — the owner removed the whole
+    // bar: no agent chip, no search button, no theme toggle in the chat.
+    expect(screen.queryByRole("button", { name: /Agent:/i })).toBeNull();
+    expect(screen.queryByRole("button", { name: /search project/i })).toBeNull();
+    expect(screen.queryByRole("button", { name: /switch to (light|dark) mode/i })).toBeNull();
+    expect(screen.queryByRole("button", { name: /show panels/i })).toBeNull();
+    // The composer is the panel's only chrome at the bottom.
+    expect(screen.getByRole("textbox", { name: /message composer/i })).toBeTruthy();
   });
 
-  it("the Show-panels button flips chatFocusMode to false (exits focus mode)", async () => {
-    const projects = await getFixtureProjects().list();
-    const project = projects[0];
-    renderWithProviders(<ChatFocusLayout project={project} />);
-
-    expect(useProjectChatStore.getState().chatFocusMode).toBe(true);
-    screen.getByRole("button", { name: /show panels/i }).click();
-    expect(useProjectChatStore.getState().chatFocusMode).toBe(false);
-  });
-
-  it("renders the composer (textarea) for messaging the agent", async () => {
+  it("renders the composer for messaging the agent", async () => {
     const projects = await getFixtureProjects().list();
     const project = projects[0];
     renderWithProviders(<ChatFocusLayout project={project} />);
     expect(screen.getByRole("textbox", { name: /message composer/i })).toBeTruthy();
-  });
-
-  it("renders the ⌘K search affordance in the panel header", async () => {
-    const projects = await getFixtureProjects().list();
-    const project = projects[0];
-    renderWithProviders(<ChatFocusLayout project={project} />);
-    expect(screen.getByRole("button", { name: /search project/i })).toBeTruthy();
   });
 });

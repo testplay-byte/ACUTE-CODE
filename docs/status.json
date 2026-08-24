@@ -100,6 +100,10 @@
     {
       "date": "2026-08-24",
       "label": "Round 32 — owner-designed UI: floating panels + activity block"
+    },
+    {
+      "date": "2026-08-24",
+      "label": "Round 33 — hello-loop fix + sidebar/logo system + headerless chat"
     }
   ],
   "quality": {
@@ -107,7 +111,7 @@
     "suites": [
       {
         "name": "agent-core",
-        "tests": 135
+        "tests": 138
       },
       {
         "name": "shared",
@@ -136,8 +140,8 @@
   ],
   "plan": {
     "current": {
-      "title": "Round 32 DELIVERED — owner-designed UI: floating panels + activity block + no top bar",
-      "detail": "Implemented the owner's AI-designed screens: floating sidebar (4.5% warm tint) + separate white chat panel with 12px gaps, top navigation bar REMOVED (controls merged into one slim panel header), the full ActivityBlock system (rounds timeline, file-change diff cards with real +/- stats, command terminal cards, web rows, Detailed/Compact/Hidden customization, live streaming variant), snapshot resolution fix, composer focus ring. 213 tests + live OpenRouter battery with VLM verification. Next: owner generates composer/model/context demos from AI-DESIGN-PROMPT-2.md."
+      "title": "Round 33 DELIVERED — behavioral fixes + sidebar/logo system + headerless chat",
+      "detail": "Fixed the infinite-continuation bug ('hello, how are you' now stops after one reply — zero tool calls breaks the outer loop, live-proven), interleaved the activity display at the point tools ran (no ROUND labels, stats only on the final message), live file-population view, custom SVG logo with hover-morph toggle + collapse at top-right + prominent Settings + renameable sessions + on-project +button + name-from-folder + instant session updates, chat panel fully headerless with Ctrl K labels on Windows + floating logo show-sidebar. 215 tests + live battery. Design Prompt 3 (settings restructure) delivered for the next demo round."
     },
     "upcoming": [
       {
@@ -172,5 +176,5 @@
       "Quality over speed — every round verified before push"
     ]
   },
-  "round": 32
+  "round": 33
 }

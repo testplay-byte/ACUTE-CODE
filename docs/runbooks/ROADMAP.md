@@ -1,4 +1,4 @@
-<!-- last-reviewed: 2026-08-24 round-32 -->
+<!-- last-reviewed: 2026-08-24 round-33 -->
 # ROADMAP — milestones per pillar
 
 Statuses: `done` · `in-flight` · `queued` · `owner-gated` (do not start

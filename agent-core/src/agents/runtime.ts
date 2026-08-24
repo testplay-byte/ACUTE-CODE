@@ -434,6 +434,7 @@ export async function runStreamedAgentTurn(
     let iterText = "";
     let iterInputTokens = 0;
     let iterOutputTokens = 0;
+    let iterToolCalls = 0;
     totalRequests++;
 
     try {
@@ -451,6 +452,8 @@ export async function runStreamedAgentTurn(
         emit(event);
         if (event.type === "text-delta") {
           iterText += event.delta;
+        } else if (event.type === "tool-call") {
+          iterToolCalls += 1;
         } else if (event.type === "tool-result") {
           // Persist each tool call the moment it completes (live ordering).
           appendSessionEvent(db, session.id, {
@@ -495,10 +498,18 @@ export async function runStreamedAgentTurn(
       lastAssistantEvent = { seq: ev.seq, ts: ev.ts, content: iterText };
     }
 
+    // ROUND-33 FIX (owner report: "hello, how are you" kept planning +
+    // running tools in an infinite loop): an iteration that produced a text
+    // reply with ZERO tool calls is a CONVERSATIONAL response — the model
+    // considered the request answered. Continuing would force the model to
+    // invent work nobody asked for. Break immediately.
+    if (iterToolCalls === 0) {
+      break;
+    }
+
     // Inverted continueIfUnfinished (6-e fix — phrase matching was brittle):
-    // continue UNLESS BOTH (a) explicit completion signal AND (b) all todos
-    // completed. If either is false, the outer loop continues to the next
-    // SDK call (the model gets another chance to make progress).
+    // for tool-using iterations, continue UNLESS BOTH (a) explicit completion
+    // signal AND (b) all todos completed.
     const hasCompletionSignal = COMPLETION_SIGNAL.test(iterText);
     const todosDone = latestTodosAllDone(db, session.id);
     if (hasCompletionSignal && todosDone) {

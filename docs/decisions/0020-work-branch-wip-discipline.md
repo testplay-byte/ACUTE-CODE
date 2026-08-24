@@ -1,4 +1,4 @@
-<!-- last-reviewed: 2026-08-24 round-32 -->
+<!-- last-reviewed: 2026-08-24 round-33 -->
 # ADR-0020: Work-branch WIP discipline for multi-file rounds
 
 - **Status:** ACCEPTED (backfilled round-17; decided round-16)

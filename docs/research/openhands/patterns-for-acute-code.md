@@ -1,4 +1,4 @@
-<!-- last-reviewed: 2026-08-24 round-32 -->
+<!-- last-reviewed: 2026-08-24 round-33 -->
 # OpenHands — Patterns for ACUTE-CODE
 
 Patterns only — never code. All OpenHands material consulted is MIT-licensed (allowed set); nothing below proposes copying implementation. Each pattern: WHAT it is in OpenHands → WHY it fits us → HOW it maps onto Tauri + Node sidecar + SQLite + React.

@@ -423,6 +423,20 @@
   animation: ac-ellipsis-cycle 1.5s steps(1) infinite;
 }
 
+/* line-reveal: staggered per-line reveal for the live file-population view
+   (round-33 — the owner's "live file creation and live file populating"
+   inside the chat). Capped delays keep long files snappy. */
+@keyframes ac-line-reveal {
+  from { opacity: 0; transform: translateY(4px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+.ac-line-reveal {
+  animation: ac-line-reveal 0.35s cubic-bezier(0.25, 0.1, 0.25, 1) both;
+}
+@media (prefers-reduced-motion: reduce) {
+  .ac-line-reveal { animation: none !important; opacity: 1 !important; }
+}
+
 /* pulse: soft breathing opacity for the streaming avatar tile (round-30 —
    signals "the model is generating" on the avatar while text streams in). */
 @keyframes ac-pulse {

@@ -152,6 +152,19 @@ export function deleteSession(db: SqliteDatabase, id: string): void {
   run(id);
 }
 
+/** ROUND-33 (owner: "the user will be given the ability to edit the names of
+ * the sessions"). Returns the updated session, or undefined when the id is
+ * unknown. An empty/whitespace title stores null (back to "Untitled"). */
+export function updateSessionTitle(db: SqliteDatabase, id: string, title: string): Session | undefined {
+  const existing = getSession(db, id);
+  if (existing === undefined) return undefined;
+  const trimmed = title.trim();
+  db.prepare(
+    "UPDATE sessions SET title = ?, updated_at = ? WHERE id = ?",
+  ).run(trimmed === "" ? null : trimmed, new Date().toISOString(), id);
+  return getSession(db, id);
+}
+
 export function touchSession(db: SqliteDatabase, id: string): void {
   db.prepare("UPDATE sessions SET updated_at = ? WHERE id = ?").run(
     new Date().toISOString(),

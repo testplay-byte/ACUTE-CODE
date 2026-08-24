@@ -1,4 +1,4 @@
-<!-- last-reviewed: 2026-08-24 round-32 -->
+<!-- last-reviewed: 2026-08-24 round-33 -->
 # AGENT MEMORY — lessons learned, rules going forward
 
 **Owner directive (2026-08-23):** "learn from the mistakes you made, document
@@ -458,3 +458,17 @@ Format per entry: `N. TITLE (date, source)` → mistake → root cause → rule.
     (`resolveSnapshotForTool` in api.ts). If the runtime is ever touched,
     consider recording snapshots AFTER the tool.use event with its actual seq
     — but that's a backend change requiring a migration story.
+
+52. **A conversational reply (zero tool calls) is a STOP signal for agentic
+    loops.** The R28 inverted heuristic ("continue unless completion-signal
+    AND todos-done") loops forever on chat messages — greetings have neither
+    signal nor todos, so the model gets re-invoked and invents work. RULE:
+    any outer-loop/continuation heuristic MUST break when an iteration
+    produced text but NO tool calls. Completion-phrase matching alone is
+    never sufficient.
+
+53. **Sidebar identity lives in ONE component.** The AcuteLogo (rounded
+    orange tile, geometric white "A", hover-morph to a panel toggle) is used
+    in BOTH the sidebar header and the floating show-sidebar button — import
+    from Sidebar.tsx (`export function AcuteLogo`). Changing the mark means
+    changing ONE SVG; never re-draw the logo inline elsewhere.

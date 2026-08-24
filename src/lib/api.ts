@@ -238,6 +238,8 @@ export interface SessionsBackend {
   get(id: string): Promise<SessionDetail>;
   /** DELETE /sessions/:id — removes the session + its events/usage/snapshots. */
   remove(id: string): Promise<void>;
+  /** PATCH /sessions/:id — rename a session (owner round-33). */
+  rename(id: string, title: string): Promise<Session>;
   /**
    * One synchronous turn; may take several seconds. 409 CONFLICT when the
    * bound agent is unconfigured, 502 PROVIDER_ERROR on upstream failure.
@@ -255,6 +257,8 @@ export function httpSessions(): SessionsBackend {
     create: (input) => request<Session>("/sessions", { method: "POST", json: input }),
     get: (id) => request<SessionDetail>(`/sessions/${id}`),
     remove: (id) => request<void>(`/sessions/${id}`, { method: "DELETE" }),
+    rename: (id, title) =>
+      request<Session>(`/sessions/${id}`, { method: "PATCH", json: { title } }),
     sendMessage: (id, content) =>
       request<SendMessageResult>(`/sessions/${id}/messages`, {
         method: "POST",
@@ -573,14 +577,14 @@ export interface DiffEntry {
 export type ProjectChatItem =
   | { kind: "user"; seq: number; content: string; ts: string }
   | {
-      /** Round-32: one ACTIVITY BLOCK per turn — every tool.use event of the
-       * turn, grouped into rounds (outer-loop iterations), rendered as the
-       * collapsible activity timeline card. Diff/terminal/web visuals render
-       * INSIDE the block from the tool entries. */
+      /** Round-33: one ACTIVITY BLOCK per maximal run of consecutive tool.use
+       * events — rendered EXACTLY where the work happened in the conversation
+       * (owner: "it should show within the chat at the point of the tools
+       * being called"). One continuous timeline, no round labels. */
       kind: "activity";
       seqStart: number;
       seqEnd: number;
-      rounds: ToolUseEntry[][];
+      tools: ToolUseEntry[];
       ts: string;
       /** Last event ts of the block — elapsed = endTs − ts. */
       endTs: string;
@@ -644,103 +648,35 @@ export function parseDiffArgs(argsSummary: string): { path: string | null; chars
 
 /**
  * Fold the append-only event log (ADR-0010) into the project-chat timeline
- * (round-32): user bubbles, ONE ACTIVITY BLOCK per turn (all tool.use events
- * of the turn, grouped into rounds — a new round starts after each interim
- * message.assistant the outer loop records), and assistant bubbles in their
- * chronological positions. Unknown event types are ignored; a message event
- * whose payload lacks a string content is too.
- *
- * Turn = one message.user … until the next message.user. The activity item
- * is emitted at the position of the turn's FIRST tool.use so the card reads
- * “here is the work that happened”, followed by the assistant notes.
+ * (round-33): user bubbles, ONE activity block per MAXIMAL RUN of consecutive
+ * tool.use events (positioned exactly where the work happened — the owner's
+ * "show tools at the point they're called"), and assistant messages in
+ * chronological order. A turn's interim assistant replies interleave between
+ * activity blocks naturally. No round grouping — one continuous session.
  */
 export function toProjectChatItems(events: SessionEvent[]): ProjectChatItem[] {
   const ordered = [...events].sort((a, b) => a.seq - b.seq);
   const items: ProjectChatItem[] = [];
-
-  // ── Pass 1: collect each turn's tool events (rounds split at assistant
-  //    messages) + remember the seq where the turn's tools START. ──────────
-  interface TurnActivity {
-    seqStart: number;
-    seqEnd: number;
-    rounds: ToolUseEntry[][];
-    ts: string;
-    endTs: string;
-    emitted: boolean;
-  }
-  const turnActivities: TurnActivity[] = [];
-  let current: TurnActivity | null = null;
-
-  for (const event of ordered) {
-    if (event.type === "message.user") {
-      // A new turn starts; the previous turn's activity (if any) is complete.
-      current = null;
-    } else if (event.type === "tool.use") {
-      const entry = toToolUseEntry(event);
-      if (current === null) {
-        current = {
-          seqStart: entry.seq,
-          seqEnd: entry.seq,
-          rounds: [[entry]],
-          ts: entry.ts,
-          endTs: entry.ts,
-          emitted: false,
-        };
-        turnActivities.push(current);
-      } else {
-        current.seqEnd = entry.seq;
-        current.endTs = entry.ts;
-        const lastRound = current.rounds[current.rounds.length - 1];
-        if (lastRound.length === 0) {
-          lastRound.push(entry);
-        } else {
-          current.rounds[current.rounds.length - 1].push(entry);
-        }
-      }
-    } else if (event.type === "message.assistant") {
-      // An assistant message closes the current round; subsequent tools in
-      // the same turn open a NEW round (outer-loop iteration).
-      if (current !== null) {
-        current.rounds.push([]);
-      }
-    }
-  }
-
-  // Drop the trailing empty round (the final assistant message closes a
-  // round that never gets more tools).
-  for (const activity of turnActivities) {
-    if (activity.rounds.length > 0 && activity.rounds[activity.rounds.length - 1].length === 0) {
-      activity.rounds.pop();
-    }
-  }
-
-  // ── Pass 2: emit. Activity items go at their FIRST tool.use position. ────
-  const activityByFirstSeq = new Map<number, TurnActivity>();
-  for (const activity of turnActivities) {
-    activityByFirstSeq.set(activity.seqStart, activity);
-  }
 
   let index = 0;
   while (index < ordered.length) {
     const event = ordered[index];
 
     if (event.type === "tool.use") {
-      const activity = activityByFirstSeq.get(event.seq);
-      if (activity !== undefined && !activity.emitted) {
-        activity.emitted = true;
-        items.push({
-          kind: "activity",
-          seqStart: activity.seqStart,
-          seqEnd: activity.seqEnd,
-          rounds: activity.rounds,
-          ts: activity.ts,
-          endTs: activity.endTs,
-        });
-      }
-      // Skip the whole run of tool events (they're all inside the block).
+      // Maximal run of consecutive tool.use events → ONE activity block.
+      const tools: ToolUseEntry[] = [];
       while (index < ordered.length && ordered[index].type === "tool.use") {
+        tools.push(toToolUseEntry(ordered[index]));
         index += 1;
       }
+      items.push({
+        kind: "activity",
+        seqStart: tools[0].seq,
+        seqEnd: tools[tools.length - 1].seq,
+        tools,
+        ts: tools[0].ts,
+        endTs: tools[tools.length - 1].ts,
+      });
       continue;
     }
 

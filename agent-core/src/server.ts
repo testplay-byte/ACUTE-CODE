@@ -35,7 +35,7 @@ import {
   listProjects,
   projectRootPathExists,
 } from "./storage/projects.js";
-import { createSession, deleteSession, getSession, lastSessionSeq, listSessionEvents, listSessions } from "./storage/sessions.js";
+import { createSession, deleteSession, getSession, lastSessionSeq, listSessionEvents, listSessions, updateSessionTitle } from "./storage/sessions.js";
 import { getUsageSummary } from "./storage/usage.js";
 import {
   deleteModel,
@@ -1062,6 +1062,36 @@ export function buildServer(options: ServerOptions): FastifyInstance {
           events: listSessionEvents(db, id),
           lastSeq: lastSessionSeq(db, id),
         };
+      });
+
+      // PATCH /sessions/:id (round-33, owner request: renameable sessions).
+      // Currently only the title is mutable; body: { title: string }.
+      scope.patch("/sessions/:id", async (request, reply) => {
+        const { id } = request.params as Record<string, string>;
+        const body: unknown = request.body;
+        if (typeof body !== "object" || body === null || Array.isArray(body)) {
+          return reply
+            .code(400)
+            .send(errorBody("VALIDATION", "body must be a JSON object", { field: "body" }));
+        }
+        const raw = body as Record<string, unknown>;
+        if (typeof raw.title !== "string") {
+          return reply.code(400).send(
+            errorBody("VALIDATION", "title must be a string", { field: "body.title" }),
+          );
+        }
+        if (raw.title.length > 200) {
+          return reply.code(400).send(
+            errorBody("VALIDATION", "title must be at most 200 characters", {
+              field: "body.title",
+            }),
+          );
+        }
+        const updated = updateSessionTitle(db, id, raw.title);
+        if (updated === undefined) {
+          return reply.code(404).send(errorBody("NOT_FOUND", `no session with id ${id}`));
+        }
+        return reply.code(200).send(updated);
       });
 
       // DELETE /sessions/:id (round-30, owner request: "I am not able to

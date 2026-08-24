@@ -1,4 +1,4 @@
-<!-- last-reviewed: 2026-08-24 round-32 -->
+<!-- last-reviewed: 2026-08-24 round-33 -->
 
 # ORCHESTRATOR-METHOD — how the orchestrator agent thinks and works
 

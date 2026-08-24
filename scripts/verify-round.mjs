@@ -68,8 +68,8 @@ if (hasVite && hasAgentBrowser) {
   const browserScript = `
 set -e
 export PATH=/home/z/.local/bin:$PATH
-setsid node_modules/.bin/vite --host 127.0.0.1 --port 5173 > /tmp/vite-verify.log 2>&1 < /dev/null & disown
-for i in $(seq 1 15); do sleep 1; if curl -s -o /dev/null -w "%{http_code}" http://127.0.0.1:5173/ 2>/dev/null | grep -q 200; then echo "vite ready ${i}s"; break; fi; done
+setsid node_modules/.bin/vite --host 127.0.0.1 --port 5173 > /tmp/vite-verify.log 2>&1 < /dev/null &
+for i in $(seq 1 15); do sleep 1; if curl -s -o /dev/null -w "%{http_code}" http://127.0.0.1:5173/ 2>/dev/null | grep -q 200; then echo "vite ready $i s"; break; fi; done
 agent-browser open http://127.0.0.1:5173/ 2>&1 | tail -1
 agent-browser set viewport 1920 1080 2>&1 | tail -1
 agent-browser eval "localStorage.setItem('acute.setupDone','1')" 2>&1 | tail -1

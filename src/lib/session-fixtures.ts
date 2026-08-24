@@ -204,6 +204,14 @@ export function createFixtureSessions(seed: SessionSeed[] = SEED): SessionsBacke
       rows.delete(id);
       return ok(undefined, 5);
     },
+    rename: (id, title) => {
+      // Mirrors PATCH /sessions/:id (round-33).
+      const target = row(id);
+      const trimmed = title.trim();
+      target.session.title = trimmed === "" ? null : trimmed;
+      target.session.updatedAt = now();
+      return ok({ ...target.session });
+    },
     sendMessage: (id, content) => {
       const target = row(id);
       // The user event lands before the provider call (ADR-0010): a failed

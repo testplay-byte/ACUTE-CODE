@@ -796,7 +796,7 @@ token-in-URL auth-doc URL noise). The CI step is `continue-on-error: true`
 **J2 work delivered (commit 65246ca):**
 - Created `scripts/docs/stamp-all.mjs` — the bulk idempotent stamper that
   DOC-STANDARDS §8 references but never existed. Reads round from status.json.
-- Backfilled the `<!-- last-reviewed: 2026-08-24 round-32 -->` stamp on 103
+- Backfilled the `<!-- last-reviewed: 2026-08-24 round-33 -->` stamp on 103
   docs (105 failures → 0).
 - Hardened `scripts/docs/check-stale.mjs`:
   1. **indented-fence support** (`/^ {0,3}```/m`) — the actual root bug;
@@ -971,3 +971,24 @@ Stage Summary:
 - The chat window now shows every agent action properly (the R32 complaint) with real diff stats and full customization.
 - 213 tests green, live OpenRouter-verified, VLM cross-checked, pushed.
 - Next: the owner generates the composer/model/context demos from AI-DESIGN-PROMPT-2.md and shares their pick.
+
+---
+Task ID: R33
+Agent: orchestrator (Z.ai Code, inline — no subagents)
+Task: The owner's R33 feedback: mixed-positive verdict on R32 + a long fix list (sidebar logo + spacing + project/session row changes + settings prominence, name-from-folder, session rename, instant updates, the hello-loop behavioral bug, interleaved activity without rounds, stats on final message only, headerless chat, Ctrl+K on Windows, floating logo show-sidebar, live file view) + FIRST deliver the settings design prompt.
+
+Work Log:
+- Delivered docs/design/AI-DESIGN-PROMPT-3.md first (per instruction): the settings sidebar TRANSFORMATION concept + full specs for Appearance / Agents / Models & Providers (incl. the Add Custom Provider dialog with in-dialog connection test, masked keys, provider cards) / Advanced (danger zone + confirm dialogs) + variant checklist + guardrails.
+- THE hello-loop fix (runtime.ts): an outer-loop iteration with ZERO tool calls now breaks immediately — a conversational reply IS the stop signal (AGENT-MEMORY #52). The AGENTIC LOOP prompt gained a CONVERSATIONAL REQUESTS paragraph. Live-proven: "hello, how are you" → event log exactly user|assistant (0 tools, 1 reply); the work task still runs tools + "Done."
+- Activity display: toProjectChatItems emits one block per maximal tool-run, interleaved chronologically (interim replies between blocks); ActivityBlock flattened (no ROUND pills, no planning dividers); stats chips only on the final assistant message of each turn (computed in the panel); live file-population view (auto-expand on write-completion + staggered ac-line-reveal animation, reduced-motion safe).
+- Sidebar system: AcuteLogo SVG (rounded square, white A, hover-morph to panel toggle; exported for reuse) at top-left with click=hide-on-chat/collapse-elsewhere; collapse button top-right beside the logo; my-4 spacing band between NAVIGATION and PROJECTS; ProjectRow lost the chevron + count and gained the on-row accent + new-session button; SessionRow gained inline rename (pencil → input → PATCH); Settings became a prominent card (accent icon tile + bold + border + hover lift); NewSessionButton replaced by the useCreateSession hook path (instant list updates — the raw fetch never invalidated the query); AddProjectDialog lost the name field (name = folder basename, Windows+POSIX safe).
+- Chat: the entire panel header REMOVED (owner: outright not implemented); Ctrl K label on Windows (IS_WINDOWS const); explicit 4-corner rounding + px-5→px-7 + max-w-4xl column; floating show-sidebar = the AcuteLogo at the chat window's top-left.
+- Backend: PATCH /sessions/:id + updateSessionTitle (trim; empty → null) + api.rename + fixture + useRenameSession + 3 unit tests.
+- Tests updated: api tests (flat interleaved model), ChatFocusLayout tests (headerless assertions), Sidebar dialog tests (name-from-folder), the outer-loop test split into hello-stops + tools-continue. 215 green.
+- Live battery: hello test, rename test (title verified over API: "Greetings test"), work task interleave (user → Completed 2 actions + notes.txt +24 Open → Done.), sidebar visuals, hide-sidebar floating logo, 0 console errors; VLM cross-checks all ✓.
+- Pushed + published round-33.zip (7 screenshots) to DASHBOARD + ntfy.
+
+Stage Summary:
+- The owner's biggest complaint (forced continuation / infinite rounds) is fixed at the root and live-proven with the exact "hello, how are you" scenario.
+- Every sidebar/chat directive implemented; Design Prompt 3 delivered for the settings round.
+- 215 tests, build green, live battery + VLM verified.

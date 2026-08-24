@@ -1,9 +1,7 @@
 import { Outlet, useLocation } from "react-router";
-import { Menu } from "lucide-react";
 import { useSidecarHealth } from "../../hooks/use-sidecar-health";
 import { useProjectChatStore } from "../../lib/project-chat-store";
-import { useThemeStyles } from "../../lib/use-theme-styles";
-import { Sidebar } from "./Sidebar";
+import { AcuteLogo, Sidebar } from "./Sidebar";
 
 /**
  * App shell (round-32 redesign per the owner-approved design
@@ -82,24 +80,22 @@ export function AppShell() {
   );
 }
 
-/** Floating hamburger shown on chat routes when the sidebar is hidden. */
+/**
+ * ROUND-33: floating show-sidebar button — the APP LOGO (owner: "I would
+ * like you to handle it properly and make it the logo of our application"),
+ * pinned to the very top-left of the chat window when the sidebar is hidden.
+ */
 function FloatingSidebarToggle() {
-  const styles = useThemeStyles();
   const setAppSidebarVisible = useProjectChatStore((s) => s.setAppSidebarVisible);
   return (
-    <button
-      onClick={() => setAppSidebarVisible(true)}
-      aria-label="Show sidebar"
-      title="Show sidebar"
-      className="fixed top-3 left-2 z-50 w-9 h-9 rounded-[10px] grid place-items-center transition-colors"
-      style={{
-        background: styles.card,
-        color: styles.textSecondary,
-        border: `1.5px solid ${styles.border}`,
-        boxShadow: styles.softShadow,
-      }}
-    >
-      <Menu size={15} />
-    </button>
+    <div className="fixed top-[18px] left-[18px] z-50">
+      <AcuteLogo
+        size={38}
+        hoverToggle
+        onClick={() => setAppSidebarVisible(true)}
+        ariaLabel="Acute — show sidebar"
+        title="Show sidebar"
+      />
+    </div>
   );
 }

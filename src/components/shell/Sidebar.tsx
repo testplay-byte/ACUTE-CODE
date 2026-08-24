@@ -6,11 +6,12 @@ import {
   ChevronsRight,
   FolderOpen,
   LayoutDashboard,
-  Menu,
   MessageSquare,
+  Pencil,
   Plus,
   Settings,
   Trash2,
+  X,
 } from "lucide-react";
 import { motion, AnimatePresence } from "framer-motion";
 import { ApiError, pickFolderViaBackend, type Project, type Session } from "../../lib/api";
@@ -20,7 +21,8 @@ import { isTauri } from "../../lib/sidecar";
 import { useConfigStore } from "../../lib/config-store";
 import { useThemeStyles } from "../../lib/use-theme-styles";
 import { useProjects, useCreateProject, useDeleteProject } from "../../hooks/use-projects";
-import { useDeleteSession, useSessions } from "../../hooks/use-sessions";
+import { useCreateSession, useDeleteSession, useRenameSession, useSessions } from "../../hooks/use-sessions";
+import { useAgents } from "../../hooks/use-agents";
 import { useProjectChatStore } from "../../lib/project-chat-store";
 import { withAlpha } from "../dashboard/helpers";
 
@@ -45,20 +47,109 @@ function readExpanded(): string[] {
 }
 
 /**
- * Sidebar (round-30 owner redesign):
- * - DISTINCT accent-tinted surface (styles.sidebarBg — derived per-theme from
- *   bg + accent, round-30) so the rail reads as its own element, separate
- *   from the main content area (owner: "give the sidebar a different kind of
- *   color and try to make it separate from the other elements")
- * - Hamburger toggle on the TOP-LEFT of the sidebar itself (shows/hides sidebar)
- * - NAV section (Dashboard/Usage) cleanly separated from PROJECTS section
- *   (round-30: Demos nav REMOVED — owner: "not needed at all")
- * - Projects are expandable: click → sessions list underneath
- * - Each session navigates to /project/:id/chat?session=<id> and the ACTIVE
- *   session is clearly highlighted (accent fill + left indicator bar)
- * - Session rows have hover delete (round-30: owner "not able to delete any
- *   of the sessions")
- * - Collapsed rail: icon tiles only
+ * AcuteLogo (round-33): the custom app mark — a rounded-square accent tile
+ * with a geometric white "A" (two strokes: the peak + the crossbar). Doubles
+ * as the sidebar toggle: hover morphs the "A" into a panel-left icon
+ * (cross-fade), click toggles. Used in the sidebar header AND as the
+ * floating show-sidebar button when the rail is hidden.
+ */
+export function AcuteLogo({
+  size = 32,
+  hoverToggle = false,
+  onClick,
+  ariaLabel,
+  title,
+}: {
+  size?: number;
+  hoverToggle?: boolean;
+  onClick?: () => void;
+  ariaLabel?: string;
+  title?: string;
+}) {
+  const [hovered, setHovered] = useState(false);
+  const stroke = Math.max(2, Math.round(size / 13));
+  return (
+    <button
+      onClick={onClick}
+      onMouseEnter={() => setHovered(true)}
+      onMouseLeave={() => setHovered(false)}
+      aria-label={ariaLabel ?? "Acute"}
+      title={title}
+      className="relative grid place-items-center transition-transform hover:scale-[1.05] active:scale-95"
+      style={{
+        width: size,
+        height: size,
+        borderRadius: Math.round(size * 0.28),
+        background: "#FF6B2C",
+        boxShadow: "0 2px 10px rgba(255,107,44,0.35)",
+      }}
+    >
+      {/* The geometric "A" — fades out on hover when hoverToggle */}
+      <svg
+        width={size}
+        height={size}
+        viewBox="0 0 32 32"
+        fill="none"
+        aria-hidden
+        style={{
+          position: "absolute",
+          inset: 0,
+          opacity: hoverToggle && hovered ? 0 : 1,
+          transition: "opacity 0.15s",
+        }}
+      >
+        <path
+          d="M10 22.5 L16 9.5 L22 22.5"
+          stroke="#FFFFFF"
+          strokeWidth={stroke}
+          strokeLinecap="round"
+          strokeLinejoin="round"
+        />
+        <path
+          d="M12.7 18 H19.3"
+          stroke="#FFFFFF"
+          strokeWidth={stroke}
+          strokeLinecap="round"
+        />
+      </svg>
+      {/* The panel-left toggle icon — fades in on hover when hoverToggle */}
+      {hoverToggle && (
+        <svg
+          width={size * 0.55}
+          height={size * 0.55}
+          viewBox="0 0 24 24"
+          fill="none"
+          stroke="#FFFFFF"
+          strokeWidth={2.2}
+          strokeLinecap="round"
+          strokeLinejoin="round"
+          aria-hidden
+          style={{
+            position: "absolute",
+            opacity: hovered ? 1 : 0,
+            transition: "opacity 0.15s",
+          }}
+        >
+          <rect x="3" y="3" width="18" height="18" rx="3" />
+          <path d="M9 3v18" />
+        </svg>
+      )}
+    </button>
+  );
+}
+
+/**
+ * Sidebar (round-33 owner redesign):
+ * - HEADER: the Acute logo tile at the TOP-LEFT (click toggles the sidebar;
+ *   hover morphs the mark into a panel-toggle icon) + the collapse button at
+ *   the TOP-RIGHT, beside the logo (moved from the footer per owner).
+ * - GENEROUS spacing between NAVIGATION and PROJECTS (owner: "way too close
+ *   together").
+ * - PROJECTS: no chevron, no session-count chip; the "+ new session" button
+ *   lives ON the project row itself (owner directive); sessions are
+ *   renameable (round-33).
+ * - FOOTER: a PROMINENT Settings button (card-style, not a plain nav row).
+ * - Collapsed rail: logo + icon tiles.
  */
 export function Sidebar() {
   const styles = useThemeStyles();
@@ -74,6 +165,17 @@ export function Sidebar() {
 
   if (!showSidebar) return null;
 
+  // Logo click (owner round-33): on chat routes it hides the sidebar (the
+  // floating logo appears at the chat window's top-left to bring it back);
+  // elsewhere it toggles the collapsed rail.
+  const onLogoClick = () => {
+    if (isChatRoute) {
+      setAppSidebarVisible(false);
+    } else {
+      setCollapsed((v) => !v);
+    }
+  };
+
   return (
     <motion.aside
       initial={false}
@@ -86,30 +188,34 @@ export function Sidebar() {
         borderColor: styles.sidebarBorder,
       }}
     >
-      {/* Top row: hamburger ONLY on chat routes (toggles sidebar visibility).
-          No app name, no logo, no version pill at the top of the sidebar
-          (owner R28 directive: "at the very top it should not show the app's
-          name like that and the logo like that"). The product name lives in
-          the document <title> and the Settings/About surfaces. */}
-      {isChatRoute && (
-        <div className={cn("shrink-0 flex items-center px-3 pt-4", collapsed && "justify-center px-2")}>
-          <button
-            onClick={() => setAppSidebarVisible(!appSidebarVisible)}
-            aria-label={appSidebarVisible ? "Hide sidebar" : "Show sidebar"}
-            title={appSidebarVisible ? "Hide sidebar" : "Show sidebar"}
-            className="w-8 h-8 shrink-0 rounded-[10px] grid place-items-center transition-colors"
-            style={{ background: styles.card, color: styles.textSecondary, border: `1.5px solid ${styles.border}` }}
-          >
-            <Menu size={14} />
-          </button>
-        </div>
-      )}
+      {/* HEADER — logo (top-left) + collapse button (top-right, beside it). */}
+      <div className={cn("shrink-0 flex items-center gap-2 px-3 pt-3", collapsed && "flex-col gap-2.5 px-0")}>
+        <AcuteLogo
+          size={collapsed ? 36 : 32}
+          hoverToggle
+          onClick={onLogoClick}
+          ariaLabel={isChatRoute ? "Acute — hide sidebar" : collapsed ? "Acute — expand sidebar" : "Acute — collapse sidebar"}
+          title={isChatRoute ? "Hide sidebar" : collapsed ? "Expand sidebar" : "Collapse sidebar"}
+        />
+        {!collapsed && (
+          <span className="flex-1" />
+        )}
+        <button
+          onClick={() => setCollapsed(!collapsed)}
+          aria-label={collapsed ? "Expand sidebar" : "Collapse sidebar"}
+          title={collapsed ? "Expand sidebar" : "Collapse sidebar"}
+          className="w-8 h-8 shrink-0 rounded-[10px] grid place-items-center transition-colors"
+          style={{ color: styles.textTertiary }}
+          onMouseEnter={(e) => (e.currentTarget.style.background = styles.sidebarHover)}
+          onMouseLeave={(e) => (e.currentTarget.style.background = "transparent")}
+        >
+          {collapsed ? <ChevronsRight size={14} /> : <ChevronsLeft size={14} />}
+        </button>
+      </div>
 
-      {/* NAVIGATION SECTION — dedicated section for Dashboard + Usage.
-          Section header matches the PROJECTS header style for visual parity;
-          hidden when collapsed (icons are self-explanatory). */}
+      {/* NAVIGATION SECTION — dedicated section for Dashboard + Usage. */}
       {!collapsed && (
-        <div className="shrink-0 flex items-center px-4 pt-4 pb-1.5">
+        <div className="shrink-0 flex items-center px-4 pt-5 pb-1.5">
           <span className="text-[11px] font-bold uppercase tracking-widest" style={{ color: styles.textTertiary }}>
             Navigation
           </span>
@@ -120,30 +226,21 @@ export function Sidebar() {
         <UsageButton collapsed={collapsed} />
       </nav>
 
-      {/* Divider */}
-      <div className="shrink-0 mx-3 border-t-[1.5px]" style={{ borderColor: styles.sidebarBorder }} />
+      {/* Divider — generous spacing around it (owner round-33: the sections
+          were "way too close together"). */}
+      <div className="shrink-0 mx-3 my-4 border-t-[1.5px]" style={{ borderColor: styles.sidebarBorder }} />
 
       {/* PROJECTS SECTION — expandable tree */}
-      <div className="flex-1 flex flex-col min-h-0 overflow-hidden pt-3">
+      <div className="flex-1 flex flex-col min-h-0 overflow-hidden">
         <ProjectSection collapsed={collapsed} />
       </div>
 
-      {/* Bottom: Settings + collapse toggle */}
+      {/* FOOTER — a PROMINENT Settings button (owner round-33). */}
       <div
-        className={cn("shrink-0 border-t px-2.5 pb-3 pt-2", collapsed && "px-1.5")}
+        className={cn("shrink-0 border-t px-2.5 pb-3 pt-2.5", collapsed && "px-1.5")}
         style={{ borderColor: styles.sidebarBorder }}
       >
         <SettingsButton collapsed={collapsed} />
-        <button
-          onClick={() => setCollapsed(!collapsed)}
-          aria-label={collapsed ? "Expand sidebar" : "Collapse sidebar"}
-          className="w-full h-8 mt-1 flex items-center justify-center rounded-[10px] transition-colors"
-          style={{ color: styles.textTertiary }}
-          onMouseEnter={(e) => (e.currentTarget.style.background = styles.sidebarHover)}
-          onMouseLeave={(e) => (e.currentTarget.style.background = "transparent")}
-        >
-          {collapsed ? <ChevronsRight size={14} /> : <ChevronsLeft size={14} />}
-        </button>
       </div>
     </motion.aside>
   );
@@ -194,10 +291,56 @@ function UsageButton({ collapsed }: { collapsed: boolean }) {
   return <NavButton icon={BarChart3} label="Usage" active={active} collapsed={collapsed} onClick={() => navigate("/usage")} />;
 }
 
+/** Prominent Settings button (owner round-33): a card-style row — icon tile
+ * in an accent-tinted square + bold label — visually distinct from the plain
+ * nav rows above the divider. Collapsed = a large gear icon tile. */
 function SettingsButton({ collapsed }: { collapsed: boolean }) {
+  const styles = useThemeStyles();
   const navigate = useNavigate();
   const active = useLocation().pathname.startsWith("/settings");
-  return <NavButton icon={Settings} label="Settings" active={active} collapsed={collapsed} onClick={() => navigate("/settings")} />;
+  const [hovered, setHovered] = useState(false);
+  if (collapsed) {
+    return (
+      <button
+        onClick={() => navigate("/settings")}
+        aria-label="Settings"
+        title="Settings"
+        className="w-9 h-9 mx-auto rounded-[12px] grid place-items-center transition-all hover:scale-105"
+        style={{
+          background: active ? styles.accent : withAlpha(styles.accent, hovered ? 0.16 : 0.1),
+          color: active ? styles.accentText : styles.accent,
+        }}
+        onMouseEnter={() => setHovered(true)}
+        onMouseLeave={() => setHovered(false)}
+      >
+        <Settings size={16} />
+      </button>
+    );
+  }
+  return (
+    <button
+      onClick={() => navigate("/settings")}
+      aria-current={active ? "page" : undefined}
+      className="w-full h-11 flex items-center gap-2.5 px-2.5 rounded-[12px] border-[1.5px] transition-all hover:-translate-y-px"
+      style={{
+        background: active ? withAlpha(styles.accent, 0.12) : styles.card,
+        borderColor: active ? withAlpha(styles.accent, 0.4) : styles.border,
+        boxShadow: hovered ? styles.softShadow : "none",
+      }}
+      onMouseEnter={() => setHovered(true)}
+      onMouseLeave={() => setHovered(false)}
+    >
+      <span
+        className="w-7 h-7 rounded-[9px] grid place-items-center shrink-0"
+        style={{ background: withAlpha(styles.accent, 0.13), color: styles.accent }}
+      >
+        <Settings size={14} />
+      </span>
+      <span className="text-[13px] font-bold" style={{ color: styles.text }}>
+        Settings
+      </span>
+    </button>
+  );
 }
 
 /** Projects section — expandable tree with sessions under each project. */
@@ -237,6 +380,29 @@ function ProjectSection({ collapsed }: { collapsed: boolean }) {
 
   const projectSessions = (projectId: string) =>
     sessions.filter((s) => s.projectId === projectId).sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
+
+  // ROUND-33: session creation happens from the project row's + button (and
+  // still from the bottom row). Uses the query hook so the list UPDATES
+  // INSTANTLY (owner: "I have to refresh the whole page" — the old raw-fetch
+  // button never invalidated the sessions query).
+  const createSession = useCreateSession();
+  const createSessionFor = async (projectId: string, projectName: string) => {
+    const agentId = agentsForNewSessions();
+    if (!agentId) return;
+    try {
+      const created = await createSession.mutateAsync({
+        mode: "single" as const,
+        agentId,
+        projectId,
+        title: `New chat · ${projectName}`,
+      });
+      navigate(`/project/${projectId}/chat?session=${created.id}`);
+    } catch {
+      /* surfaced by the mutation state; keep the sidebar stable */
+    }
+  };
+  const agentsQueryForSessions = useAgents(false);
+  const agentsForNewSessions = () => (agentsQueryForSessions.data ?? [])[0]?.id ?? null;
 
   if (collapsed) {
     return (
@@ -297,13 +463,14 @@ function ProjectSection({ collapsed }: { collapsed: boolean }) {
 
           return (
             <div key={project.id}>
-              {/* Project row */}
+              {/* Project row — click toggles sessions; the + button starts a
+                  new session directly (owner round-33). */}
               <ProjectRow
                 project={project}
                 active={isActive}
                 expanded={isExpanded}
-                sessionCount={projSessions.length}
                 onToggle={() => toggleProject(project.id)}
+                onNewSession={() => void createSessionFor(project.id, project.name)}
               />
               {/* Sessions underneath */}
               <AnimatePresence initial={false}>
@@ -329,8 +496,6 @@ function ProjectSection({ collapsed }: { collapsed: boolean }) {
                           +{projSessions.length - 8} more
                         </span>
                       )}
-                      {/* New Session button — always at the bottom of each project's sessions */}
-                      <NewSessionButton projectId={project.id} projectName={project.name} />
                     </div>
                   </motion.div>
                 )}
@@ -359,13 +524,12 @@ function ProjectSection({ collapsed }: { collapsed: boolean }) {
 }
 
 function ProjectRow({
-  project, active, expanded, sessionCount, onToggle,
+  project, active, expanded, onToggle, onNewSession,
 }: {
-  project: Project; active: boolean; expanded: boolean; sessionCount: number; onToggle: () => void;
+  project: Project; active: boolean; expanded: boolean; onToggle: () => void; onNewSession: () => void;
 }) {
   const styles = useThemeStyles();
   const [hovered, setHovered] = useState(false);
-  const [showDelete, setShowDelete] = useState(false);
 
   return (
     <div
@@ -375,7 +539,7 @@ function ProjectRow({
         background: active ? withAlpha(styles.accent, 0.1) : hovered ? styles.sidebarHover : "transparent",
       }}
       onMouseEnter={() => setHovered(true)}
-      onMouseLeave={() => { setHovered(false); setShowDelete(false); }}
+      onMouseLeave={() => setHovered(false)}
       onClick={onToggle}
       role="button"
       tabIndex={0}
@@ -397,29 +561,32 @@ function ProjectRow({
           {project.name}
         </span>
       </div>
-      {sessionCount > 0 && (
-        <span
-          className="shrink-0 px-1.5 py-0.5 rounded-full text-[9px] font-bold font-mono"
-          style={{ background: styles.subtle, color: styles.textTertiary }}
-        >
-          {sessionCount}
-        </span>
-      )}
-      <motion.span animate={{ rotate: expanded ? 90 : 0 }} transition={{ duration: 0.15 }} className="shrink-0">
-        <ChevronsRight size={12} style={{ color: styles.textTertiary }} />
-      </motion.span>
-      <DeleteProjectButton projectId={project.id} projectName={project.name} visible={hovered || showDelete} />
+      {/* ROUND-33 (owner): the "+ new session" button lives ON the project row
+          itself; no chevron, no session count. */}
+      <button
+        onClick={(e) => { e.stopPropagation(); onNewSession(); }}
+        aria-label={`Start new session in ${project.name}`}
+        title="New session"
+        className="relative z-20 w-6 h-6 grid place-items-center rounded-md transition-all hover:scale-110"
+        style={{
+          color: styles.accent,
+          opacity: hovered ? 1 : 0,
+          background: hovered ? withAlpha(styles.accent, 0.1) : "transparent",
+        }}
+      >
+        <Plus size={13} strokeWidth={2.5} />
+      </button>
+      <DeleteProjectButton projectId={project.id} projectName={project.name} visible={hovered} />
     </div>
   );
 }
 
 /**
- * ROUND-30 SessionRow: one session under a project. The ACTIVE session
- * (matching the ?session= URL param — same source of truth as the chat
- * panel) gets an accent-tinted fill + bold text + a 2px left indicator bar
- * (owner: "When I click on any one of those sessions … those should be
- * clearly highlighted as the currently selected one"). Hover reveals the
- * delete button (owner: "I am not able to delete any of the sessions").
+ * ROUND-33 SessionRow: one session under a project. ACTIVE session (matching
+ * the ?session= URL param — same source of truth as the chat panel) gets the
+ * accent-tinted fill + bold text + 2.5px indicator bar. Hover reveals the
+ * RENAME (pencil, round-33) and DELETE (round-30) buttons. Rename switches
+ * the row to an inline input (Enter saves · Escape cancels).
  */
 function SessionRow({
   session,
@@ -434,19 +601,61 @@ function SessionRow({
   const navigate = useNavigate();
   const location = useLocation();
   const deleteSession = useDeleteSession();
+  const renameSession = useRenameSession();
   const [hovered, setHovered] = useState(false);
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState(session.title ?? "");
 
   const remove = () => {
     deleteSession.mutate(session.id, {
       onSuccess: () => {
-        // If the deleted session was open, drop the ?session param so the
-        // chat panel falls back to the project's latest remaining session.
         if (location.search.includes(session.id)) {
           navigate(`/project/${projectId}/chat`, { replace: true });
         }
       },
     });
   };
+
+  const commitRename = () => {
+    const next = draft.trim();
+    setEditing(false);
+    if (next !== (session.title ?? "")) {
+      renameSession.mutate({ id: session.id, title: next });
+    }
+  };
+
+  // Inline rename input state.
+  if (editing) {
+    return (
+      <div className="flex items-center gap-1.5 px-1 py-0.5">
+        <input
+          autoFocus
+          value={draft}
+          onChange={(e) => setDraft(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === "Enter") commitRename();
+            if (e.key === "Escape") setEditing(false);
+          }}
+          onBlur={commitRename}
+          aria-label="Rename session"
+          className="flex-1 min-w-0 h-6 px-2 rounded-[6px] border-[1.5px] text-[11px] outline-none"
+          style={{
+            background: styles.card,
+            borderColor: withAlpha(styles.accent, 0.5),
+            color: styles.text,
+          }}
+        />
+        <button
+          onClick={() => setEditing(false)}
+          aria-label="Cancel rename"
+          className="w-5 h-5 grid place-items-center rounded-md shrink-0"
+          style={{ color: styles.textTertiary }}
+        >
+          <X size={10} />
+        </button>
+      </div>
+    );
+  }
 
   return (
     <div
@@ -480,16 +689,23 @@ function SessionRow({
         />
         <span className="truncate">{session.title ?? "Untitled"}</span>
       </button>
+      {/* Rename (round-33) */}
+      <button
+        onClick={(e) => { e.stopPropagation(); setDraft(session.title ?? ""); setEditing(true); }}
+        aria-label={`Rename session ${session.title ?? "Untitled"}`}
+        title="Rename session"
+        className="relative z-10 w-5 h-5 grid place-items-center rounded-md transition-opacity"
+        style={{ color: styles.textTertiary, opacity: hovered ? 1 : 0 }}
+      >
+        <Pencil size={10} />
+      </button>
       <button
         onClick={(e) => { e.stopPropagation(); remove(); }}
         disabled={deleteSession.isPending}
         aria-label={`Delete session ${session.title ?? "Untitled"}`}
         title="Delete session"
         className="relative z-10 w-5 h-5 mr-1 grid place-items-center rounded-md transition-opacity"
-        style={{
-          color: styles.textTertiary,
-          opacity: hovered ? 1 : 0,
-        }}
+        style={{ color: styles.textTertiary, opacity: hovered ? 1 : 0 }}
       >
         <Trash2 size={10} />
       </button>
@@ -536,17 +752,16 @@ function AddProjectDialog({
   onCreated: (projectId: string) => void; onClose: () => void;
 }) {
   const styles = useThemeStyles();
-  const [name, setName] = useState("");
   const [rootPath, setRootPath] = useState("");
   const [picking, setPicking] = useState(false);
   const [pickHint, setPickHint] = useState<string | null>(null);
   const [formError, setFormError] = useState<string | null>(null);
   
-  const nameRef = useRef<HTMLInputElement>(null);
+  const pathRef = useRef<HTMLInputElement>(null);
   const demoData = useConfigStore((s) => s.demoData);
 
   useEffect(() => {
-    const timer = setTimeout(() => nameRef.current?.focus(), 60);
+    const timer = setTimeout(() => pathRef.current?.focus(), 60);
     return () => clearTimeout(timer);
   }, []);
 
@@ -570,10 +785,14 @@ function AddProjectDialog({
   const createProject = useCreateProject();
 
   const submit = useCallback(() => {
-    if (name.trim().length === 0 || rootPath.trim().length === 0 || createProject.isPending) return;
+    if (rootPath.trim().length === 0 || createProject.isPending) return;
     setFormError(null);
+    // ROUND-33 (owner): the project name IS the folder's name — no manual
+    // name picking. Derive from the path's basename (Windows + POSIX safe).
+    const sep = /[/\\]/;
+    const folderName = rootPath.trim().split(sep).filter(Boolean).pop() ?? "project";
     createProject.mutate(
-      { name: name.trim(), rootPath: rootPath.trim() },
+      { name: folderName, rootPath: rootPath.trim() },
       {
         onSuccess: (project) => {
           onClose();
@@ -590,7 +809,7 @@ function AddProjectDialog({
         },
       },
     );
-  }, [name, rootPath, createProject, onClose, onCreated]);
+  }, [rootPath, createProject, onClose, onCreated]);
 
   const is = { background: styles.inputBg, borderColor: styles.inputBorder, color: styles.text } as const;
 
@@ -605,19 +824,11 @@ function AddProjectDialog({
         <h3 className="text-[15px] font-black tracking-tight mb-4" style={{ color: styles.text }}>Add New Project</h3>
         <div className="flex flex-col gap-3.5">
           <div>
-            <label className="mb-1.5 block text-[11px] font-bold uppercase tracking-widest" style={{ color: styles.textTertiary }}>Project Name</label>
-            <input ref={nameRef} value={name} onChange={(e) => setName(e.target.value)}
-              onKeyDown={(e) => e.key === "Enter" && void submit()}
-              placeholder="my-awesome-project"
-              className="h-12 w-full rounded-[14px] border-[1.5px] px-4 text-[13px] outline-none"
-              style={is} />
-          </div>
-          <div>
-            <label className="mb-1.5 block text-[11px] font-bold uppercase tracking-widest" style={{ color: styles.textTertiary }}>Folder</label>
+            <label className="mb-1.5 block text-[11px] font-bold uppercase tracking-widest" style={{ color: styles.textTertiary }}>Project Folder</label>
             <div className="flex gap-2">
-              <input value={rootPath} onChange={(e) => setRootPath(e.target.value)}
+              <input ref={pathRef} value={rootPath} onChange={(e) => setRootPath(e.target.value)}
                 onKeyDown={(e) => e.key === "Enter" && void submit()}
-                placeholder="/path/to/project"
+                placeholder="C:\projects\my-app  —  the project takes the folder's name"
                 className="h-12 min-w-0 flex-1 rounded-[14px] border-[1.5px] px-4 font-mono text-[12px] outline-none"
                 style={is} />
               {isTauri() || !demoData ? (
@@ -637,7 +848,7 @@ function AddProjectDialog({
             </p>
           )}
           <button onClick={() => void submit()}
-            disabled={name.trim().length === 0 || rootPath.trim().length === 0 || createProject.isPending}
+            disabled={rootPath.trim().length === 0 || createProject.isPending}
             className="h-12 w-full rounded-full font-black text-[14px] tracking-[-0.01em] transition-all hover:scale-[1.02] active:scale-[0.98] disabled:opacity-50 disabled:hover:scale-100"
             style={{ background: styles.accent, color: styles.accentText, border: `1.5px solid ${styles.accent}`, boxShadow: `0 4px 16px ${withAlpha(styles.accent, 0.25)}` }}>
             {createProject.isPending ? "Creating…" : "Create Project"}
@@ -645,61 +856,5 @@ function AddProjectDialog({
         </div>
       </div>
     </div>
-  );
-}
-
-function NewSessionButton({ projectId, projectName }: { projectId: string; projectName: string }) {
-  const styles = useThemeStyles();
-  const navigate = useNavigate();
-  const [creating, setCreating] = useState(false);
-  const [hovered, setHovered] = useState(false);
-
-  const createSession = async () => {
-    if (creating) return;
-    setCreating(true);
-    try {
-      const { baseUrl, token } = useConfigStore.getState();
-      // Get the default agent (first non-template)
-      const agentsRes = await fetch(`${baseUrl}/api/v1/agents?includeTemplates=false`, {
-        headers: token ? { Authorization: `Bearer ${token}` } : {},
-      });
-      const agentsBody = await agentsRes.json();
-      const agentId = agentsBody.agents?.[0]?.id;
-      if (!agentId) return;
-
-      const res = await fetch(`${baseUrl}/api/v1/sessions`, {
-        method: "POST",
-        headers: {
-          "content-type": "application/json",
-          ...(token ? { Authorization: `Bearer ${token}` } : {}),
-        },
-        body: JSON.stringify({ mode: "single", agentId, projectId, title: `New chat · ${projectName}` }),
-      });
-      const body = await res.json();
-      if (res.ok && body.id) {
-        navigate(`/project/${projectId}/chat?session=${body.id}`);
-      }
-    } catch {
-      /* silently fail — user can try again */
-    } finally {
-      setCreating(false);
-    }
-  };
-
-  return (
-    <button
-      onClick={() => void createSession()}
-      disabled={creating}
-      className="w-full h-7 flex items-center gap-2 px-2 rounded-[8px] text-[11px] font-bold transition-colors"
-      style={{ color: hovered ? styles.accent : styles.textTertiary }}
-      onMouseEnter={() => setHovered(true)}
-      onMouseLeave={() => setHovered(false)}
-      onMouseOver={(e) => { e.currentTarget.style.background = withAlpha(styles.accent, 0.08); }}
-      onMouseOut={(e) => { e.currentTarget.style.background = "transparent"; }}
-      aria-label={`Start new session in ${projectName}`}
-    >
-      <Plus size={10} strokeWidth={2.5} className="shrink-0" />
-      <span>{creating ? "Creating…" : "New Session"}</span>
-    </button>
   );
 }

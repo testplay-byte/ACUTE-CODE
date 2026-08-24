@@ -1,4 +1,4 @@
-<!-- last-reviewed: 2026-08-24 round-32 -->
+<!-- last-reviewed: 2026-08-24 round-33 -->
 # n8n — Architecture Notes (what's under the hood)
 
 Companion to [`README.md`](README.md). Focused on the parts that should shape

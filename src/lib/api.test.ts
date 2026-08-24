@@ -257,17 +257,15 @@ describe("toProjectChatItems", () => {
       kind: "activity",
       seqStart: 2,
       seqEnd: 3,
-      rounds: [
-        [
-          { seq: 2, toolName: "list_dir", argsSummary: "path: src", ok: true, ts: TS(2) },
-          {
-            seq: 3,
-            toolName: "write_file",
-            argsSummary: "path: src/middleware.ts, content: 128 chars",
-            ok: true,
-            ts: TS(3),
-          },
-        ],
+      tools: [
+        { seq: 2, toolName: "list_dir", argsSummary: "path: src", ok: true, ts: TS(2) },
+        {
+          seq: 3,
+          toolName: "write_file",
+          argsSummary: "path: src/middleware.ts, content: 128 chars",
+          ok: true,
+          ts: TS(3),
+        },
       ],
       ts: TS(2),
       endTs: TS(3),
@@ -281,7 +279,7 @@ describe("toProjectChatItems", () => {
     });
   });
 
-  it("groups a multi-round turn into ONE activity block with rounds split at assistant messages", () => {
+  it("interleaves activity blocks at the point tools ran — one block per maximal tool run (round-33)", () => {
     const items = toProjectChatItems([
       toolUse(1, "list_dir", "path: ."),
       toolUse(2, "read_file", "path: package.json"),
@@ -290,16 +288,15 @@ describe("toProjectChatItems", () => {
       ev(5, "message.assistant", { role: "assistant", content: "done" }, "agt_scribe"),
     ]);
 
-    // ONE activity block containing both rounds (the interim assistant
-    // messages render as chat replies after the block).
-    expect(items.map((item) => item.kind)).toEqual(["activity", "ai", "ai"]);
-    const activity = items[0];
-    if (activity.kind !== "activity") throw new Error("expected activity");
-    expect(activity.rounds).toHaveLength(2);
-    expect(activity.rounds[0].map((t) => t.seq)).toEqual([1, 2]);
-    expect(activity.rounds[1].map((t) => t.seq)).toEqual([4]);
-    expect(activity.seqStart).toBe(1);
-    expect(activity.seqEnd).toBe(4);
+    // Tools split by an interim assistant reply → TWO activity blocks,
+    // interleaved exactly where the work happened.
+    expect(items.map((item) => item.kind)).toEqual(["activity", "ai", "activity", "ai"]);
+    const [first, second] = items.filter((i) => i.kind === "activity");
+    expect(first.tools.map((t) => t.seq)).toEqual([1, 2]);
+    expect(second.tools.map((t) => t.seq)).toEqual([4]);
+    expect(first.seqStart).toBe(1);
+    expect(first.seqEnd).toBe(2);
+    expect(second.seqStart).toBe(4);
   });
 
   it("splits tool runs of DIFFERENT turns into separate activity blocks", () => {
@@ -328,12 +325,12 @@ describe("toProjectChatItems", () => {
     expect(items.map((item) => item.kind)).toEqual(["activity"]);
     const activity = items[0];
     if (activity.kind !== "activity") throw new Error("expected activity");
-    expect(activity.rounds[0].map((t) => t.toolName)).toEqual([
+    expect(activity.tools.map((t) => t.toolName)).toEqual([
       "write_file",
       "read_file",
       "edit_file",
     ]);
-    expect(activity.rounds[0].map((t) => t.ok)).toEqual([true, true, false]);
+    expect(activity.tools.map((t) => t.ok)).toEqual([true, true, false]);
   });
 
   it("parses argsSummary tolerantly (full format, missing chars, missing path)", () => {
@@ -346,7 +343,7 @@ describe("toProjectChatItems", () => {
 
     const activity = items[0];
     if (activity.kind !== "activity") throw new Error("expected activity");
-    const parsed = activity.rounds[0]
+    const parsed = activity.tools
       .filter((t) => t.toolName === "write_file" || t.toolName === "edit_file")
       .map((t) => parseDiffArgs(t.argsSummary));
     expect(parsed).toHaveLength(4);

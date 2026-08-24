@@ -1,4 +1,4 @@
-<!-- last-reviewed: 2026-08-24 round-32 -->
+<!-- last-reviewed: 2026-08-24 round-33 -->
 # ADR-0001: Run-mode architecture — single-agent default, orchestrator-driven auto-team, manual as advanced option
 
 - **Status:** ACCEPTED (owner direction, 2026-08-21)

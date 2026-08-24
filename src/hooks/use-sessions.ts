@@ -44,6 +44,20 @@ export function useCreateSession() {
 }
 
 /**
+ * PATCH /sessions/:id — rename a session (owner round-33: "the user will be
+ * given the ability to edit the names of the sessions").
+ */
+export function useRenameSession() {
+  const qc = useQueryClient();
+  const source = useDataSource();
+  return useMutation({
+    mutationFn: ({ id, title }: { id: string; title: string }) =>
+      getSessionsBackend().rename(id, title),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["sessions", source] }),
+  });
+}
+
+/**
  * DELETE /sessions/:id (round-30, owner request). Invalidates the session
  * LIST on success; the detail query for the deleted id is removed outright so
  * a stale cache entry can't keep rendering the deleted conversation.

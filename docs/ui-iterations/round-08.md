@@ -1,4 +1,4 @@
-<!-- last-reviewed: 2026-08-24 round-32 -->
+<!-- last-reviewed: 2026-08-24 round-33 -->
 # Round 08 — Honest connection test, dashboard/shell redo, Settings, mono dark, project map, dev CLI (2026-08-22)
 
 Owner direction: fix the test-connection lie; the dashboard "needs quite a
