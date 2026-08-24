@@ -1,4 +1,4 @@
-<!-- last-reviewed: 2026-08-24 round-33 -->
+<!-- last-reviewed: 2026-08-24 round-34 -->
 # ACUTE-CODE — Master AI Design Prompt (Round 31)
 
 **Purpose:** the owner feeds this prompt into an AI-powered design tool to

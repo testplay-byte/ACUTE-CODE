@@ -1,4 +1,4 @@
-<!-- last-reviewed: 2026-08-24 round-33 -->
+<!-- last-reviewed: 2026-08-24 round-34 -->
 # AGENT MEMORY — lessons learned, rules going forward
 
 **Owner directive (2026-08-23):** "learn from the mistakes you made, document
@@ -472,3 +472,18 @@ Format per entry: `N. TITLE (date, source)` → mistake → root cause → rule.
     in BOTH the sidebar header and the floating show-sidebar button — import
     from Sidebar.tsx (`export function AcuteLogo`). Changing the mark means
     changing ONE SVG; never re-draw the logo inline elsewhere.
+
+54. **Tool results MUST feed back into agentic conversation history.** The
+    R34 root cause of "does not handle multi-step tasks properly": the event
+    log recorded tool calls but assembleHistory only rebuilt user/assistant
+    text — outer-loop iterations re-planned blind. RULE: any agentic loop
+    that re-assembles context from a persisted log must fold tool calls AND
+    results into the model-facing messages (Cline parity), wrapped in
+    data-markers with a system-prompt injection guard.
+
+55. **Scrub secrets at EVERY boundary: persist AND emit.** Tool output
+    (especially run_command, which inherits process.env holding
+    ACUTE_PROVIDER_* keys) must pass through scrubSecrets() (keyring.list()
+    values + sk-/pat- patterns) before BOTH the SQLite write and the SSE
+    emission — the R34 review caught the sync path skipping it entirely.
+    RULE: when adding any output-persisting feature, grep for both sinks.

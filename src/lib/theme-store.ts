@@ -18,13 +18,20 @@ import { deriveThemeStyles, syncThemeCssVars, THEMES } from "./themes";
 export { THEMES };
 export type ThemeId = string;
 export type ThemeMode = "light" | "dark";
+/** ROUND-34 (settings appearance page): layout density + sidebar tint strength. */
+export type Density = "comfortable" | "compact";
+export type SidebarTint = "subtle" | "warm" | "bold";
 
 interface ThemeState {
   themeId: ThemeId;
   mode: ThemeMode;
+  density: Density;
+  sidebarTint: SidebarTint;
   setTheme: (id: ThemeId) => void;
   setMode: (mode: ThemeMode) => void;
   toggleMode: () => void;
+  setDensity: (density: Density) => void;
+  setSidebarTint: (tint: SidebarTint) => void;
 }
 
 export const useThemeStore = create<ThemeState>()(
@@ -32,29 +39,36 @@ export const useThemeStore = create<ThemeState>()(
     (set) => ({
       themeId: "nova",
       mode: "dark",
+      density: "comfortable",
+      sidebarTint: "subtle",
       setTheme: (themeId) => set({ themeId }),
       setMode: (mode) => set({ mode }),
       toggleMode: () => set((s) => ({ mode: s.mode === "dark" ? "light" : "dark" })),
+      setDensity: (density) => set({ density }),
+      setSidebarTint: (sidebarTint) => set({ sidebarTint }),
     }),
+    // version stays 1: zustand shallow-merges persisted state over the new
+    // defaults, so existing users keep their theme/mode and gain the defaults.
     { name: "acute-code.theme", version: 1 },
   ),
 );
 
 /** Mirror the store onto <html> attributes + :root --ac-* vars; run pre-paint. */
-export function applyTheme(themeId: ThemeId, mode: ThemeMode) {
+export function applyTheme(themeId: ThemeId, mode: ThemeMode, sidebarTint?: SidebarTint) {
   const root = document.documentElement;
   root.dataset.theme = themeId;
   root.dataset.mode = mode;
   // Unknown ids fall back to THEMES[0] inside deriveThemeStyles, so a stale
   // persisted id can never leave the bridge unstyled.
-  syncThemeCssVars(deriveThemeStyles(themeId, mode === "dark"));
+  syncThemeCssVars(deriveThemeStyles(themeId, mode === "dark", sidebarTint));
 }
 
 /** Subscribe the document to the store for the app's lifetime. */
 export function useThemeSync() {
   const themeId = useThemeStore((s) => s.themeId);
   const mode = useThemeStore((s) => s.mode);
+  const sidebarTint = useThemeStore((s) => s.sidebarTint);
   useEffect(() => {
-    applyTheme(themeId, mode);
-  }, [themeId, mode]);
+    applyTheme(themeId, mode, sidebarTint);
+  }, [themeId, mode, sidebarTint]);
 }

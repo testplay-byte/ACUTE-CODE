@@ -24,9 +24,11 @@ import {
 import {
   RESERVED_PROVIDER_IDS,
   createProviderRecord,
+  deleteProviderRecord,
   providerExists,
   providerRecordIdExists,
   slugifyProviderId,
+  updateProviderRecord,
 } from "./storage/providers.js";
 import {
   createProject,
@@ -534,6 +536,83 @@ export function buildServer(options: ServerOptions): FastifyInstance {
           apiFormat,
         });
         return reply.code(201).send({ ...record, hasKey: keyring.has(record.id) });
+      });
+
+      // ROUND-34 (owner's provider settings): update a CUSTOM provider's
+      // name/baseUrl/apiFormat/enabled. Built-ins refuse edits (409).
+      scope.patch("/providers/:id", async (request, reply) => {
+        const { id } = request.params as Record<string, string>;
+        const record = resolveProvider(db, id);
+        if (record === undefined) {
+          return reply.code(404).send(errorBody("NOT_FOUND", `no provider with id ${id}`));
+        }
+        if (RESERVED_PROVIDER_IDS.includes(id)) {
+          return reply.code(409).send(
+            errorBody("CONFLICT", `built-in provider '${id}' cannot be edited`, { field: "params.id" }),
+          );
+        }
+        const body: unknown = request.body;
+        if (typeof body !== "object" || body === null || Array.isArray(body)) {
+          return reply
+            .code(400)
+            .send(errorBody("VALIDATION", "body must be a JSON object", { field: "body" }));
+        }
+        const raw = body as Record<string, unknown>;
+        let baseUrl = record.baseUrl;
+        if (raw.baseUrl !== undefined) {
+          if (typeof raw.baseUrl !== "string") {
+            return reply.code(400).send(
+              errorBody("VALIDATION", "baseUrl must be a http(s) URL string", { field: "body.baseUrl" }),
+            );
+          }
+          try {
+            const parsed = new URL(raw.baseUrl);
+            if (parsed.protocol !== "http:" && parsed.protocol !== "https:") throw new Error("bad protocol");
+            baseUrl = parsed.toString();
+          } catch {
+            return reply.code(400).send(
+              errorBody("VALIDATION", "baseUrl must be a valid URL", { field: "body.baseUrl" }),
+            );
+          }
+        }
+        const name =
+          typeof raw.name === "string" && raw.name.trim() !== "" ? raw.name.trim() : record.name;
+        const apiFormat =
+          raw.apiFormat === "anthropic-messages" || raw.apiFormat === "responses" || raw.apiFormat === "chat-completions"
+            ? raw.apiFormat
+            : record.apiFormat;
+        const enabled = typeof raw.enabled === "boolean" ? raw.enabled : record.enabled;
+        const updated = updateProviderRecord(db, { ...record, name, baseUrl, apiFormat, enabled });
+        return reply.code(200).send({ ...updated, hasKey: keyring.has(updated.id) });
+      });
+
+      // ROUND-34: delete a CUSTOM provider (built-ins refuse; 409). Agents
+      // referencing the provider block deletion (review fix #5) — their next
+      // turn would 409 on a dead provider otherwise.
+      scope.delete("/providers/:id", async (request, reply) => {
+        const { id } = request.params as Record<string, string>;
+        const record = resolveProvider(db, id);
+        if (record === undefined) {
+          return reply.code(404).send(errorBody("NOT_FOUND", `no provider with id ${id}`));
+        }
+        if (RESERVED_PROVIDER_IDS.includes(id)) {
+          return reply.code(409).send(
+            errorBody("CONFLICT", `built-in provider '${id}' cannot be deleted`, { field: "params.id" }),
+          );
+        }
+        const referencing = listAgents(db, true).filter((a) => a.providerId === id);
+        if (referencing.length > 0) {
+          return reply.code(409).send(
+            errorBody(
+              "CONFLICT",
+              `${referencing.length} agent${referencing.length === 1 ? "" : "s"} still use '${record.name}' (${referencing.map((a) => a.name).join(", ")}) — reassign or delete them first`,
+              { field: "params.id", agents: referencing.map((a) => a.id) },
+            ),
+          );
+        }
+        deleteProviderRecord(db, id);
+        keyring.set(id, "");
+        return reply.code(204).send();
       });
 
       scope.get("/providers/:id/models", async (request, reply) => {

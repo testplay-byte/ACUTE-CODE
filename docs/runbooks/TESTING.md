@@ -1,4 +1,4 @@
-<!-- last-reviewed: 2026-08-24 round-33 -->
+<!-- last-reviewed: 2026-08-24 round-34 -->
 # TESTING — the verification ladder
 
 Five layers; each has a defined "when mandatory". Rules here are binding

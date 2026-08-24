@@ -1,15 +1,20 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useLocation, useNavigate } from "react-router";
 import {
+  ArrowLeft,
   BarChart3,
+  Bot,
   ChevronsLeft,
   ChevronsRight,
   FolderOpen,
   LayoutDashboard,
   MessageSquare,
+  Palette,
   Pencil,
   Plus,
+  Server,
   Settings,
+  SlidersHorizontal,
   Trash2,
   X,
 } from "lucide-react";
@@ -151,13 +156,30 @@ export function AcuteLogo({
  * - FOOTER: a PROMINENT Settings button (card-style, not a plain nav row).
  * - Collapsed rail: logo + icon tiles.
  */
+/** ROUND-34 (owner design frame 1a): the settings sections that REPLACE the
+ * normal navigation when the sidebar is in settings mode. ids stay the
+ * SettingsPage tab ids so ?tab= deep links keep working. */
+const SETTINGS_SECTIONS = [
+  { id: "appearance", label: "Appearance", icon: Palette },
+  { id: "agents", label: "Agents", icon: Bot },
+  { id: "api", label: "Models & Providers", icon: Server },
+  { id: "advanced", label: "Advanced", icon: SlidersHorizontal },
+] as const;
+
 export function Sidebar() {
   const styles = useThemeStyles();
   const [collapsed, setCollapsed] = useState(readCollapsed);
   const setAppSidebarVisible = useProjectChatStore((s) => s.setAppSidebarVisible);
   const appSidebarVisible = useProjectChatStore((s) => s.appSidebarVisible);
-  const isChatRoute = /^\/project\/[^/]+\/chat\/?$/.test(useLocation().pathname);
+  const { pathname, search } = useLocation();
+  const isChatRoute = /^\/project\/[^/]+\/chat\/?$/.test(pathname);
+  // ROUND-34: settings mode — the sidebar TRANSFORMS into the settings nav
+  // (owner design: "the whole sidebar should change into the settings sidebar").
+  const isSettingsRoute = pathname.startsWith("/settings");
+  const activeTab = new URLSearchParams(search).get("tab") ?? "appearance";
   const showSidebar = !isChatRoute || appSidebarVisible;
+  // Hooks BEFORE any early return (rules-of-hooks — review finding #1).
+  const navigate = useNavigate();
 
   useEffect(() => {
     try { localStorage.setItem(COLLAPSE_KEY, collapsed ? "1" : "0"); } catch { /* */ }
@@ -167,10 +189,12 @@ export function Sidebar() {
 
   // Logo click (owner round-33): on chat routes it hides the sidebar (the
   // floating logo appears at the chat window's top-left to bring it back);
-  // elsewhere it toggles the collapsed rail.
+  // in settings mode it's the BACK affordance; elsewhere it toggles the rail.
   const onLogoClick = () => {
     if (isChatRoute) {
       setAppSidebarVisible(false);
+    } else if (isSettingsRoute) {
+      navigate("/");
     } else {
       setCollapsed((v) => !v);
     }
@@ -188,16 +212,36 @@ export function Sidebar() {
         borderColor: styles.sidebarBorder,
       }}
     >
-      {/* HEADER — logo (top-left) + collapse button (top-right, beside it). */}
+      {/* HEADER — logo (top-left) + collapse button (top-right, beside it).
+          ROUND-34: in settings mode the header gains a back affordance and a
+          "Settings" title beside the logo (owner design frame 1a). */}
       <div className={cn("shrink-0 flex items-center gap-2 px-3 pt-3", collapsed && "flex-col gap-2.5 px-0")}>
         <AcuteLogo
           size={collapsed ? 36 : 32}
           hoverToggle
           onClick={onLogoClick}
-          ariaLabel={isChatRoute ? "Acute — hide sidebar" : collapsed ? "Acute — expand sidebar" : "Acute — collapse sidebar"}
-          title={isChatRoute ? "Hide sidebar" : collapsed ? "Expand sidebar" : "Collapse sidebar"}
+          ariaLabel={isSettingsRoute ? "Acute — back to dashboard" : isChatRoute ? "Acute — hide sidebar" : collapsed ? "Acute — expand sidebar" : "Acute — collapse sidebar"}
+          title={isSettingsRoute ? "Back to dashboard" : isChatRoute ? "Hide sidebar" : collapsed ? "Expand sidebar" : "Collapse sidebar"}
         />
-        {!collapsed && (
+        {!collapsed && isSettingsRoute && (
+          <>
+            <button
+              onClick={() => navigate("/")}
+              aria-label="Back to dashboard"
+              title="Back to dashboard"
+              className="w-7 h-7 shrink-0 rounded-[9px] grid place-items-center transition-colors"
+              style={{ color: styles.textTertiary }}
+              onMouseEnter={(e) => (e.currentTarget.style.background = styles.sidebarHover)}
+              onMouseLeave={(e) => (e.currentTarget.style.background = "transparent")}
+            >
+              <ArrowLeft size={14} />
+            </button>
+            <span className="text-[13px] font-black tracking-tight truncate" style={{ color: styles.text }}>
+              Settings
+            </span>
+          </>
+        )}
+        {!collapsed && !isSettingsRoute && (
           <span className="flex-1" />
         )}
         <button
@@ -213,35 +257,96 @@ export function Sidebar() {
         </button>
       </div>
 
-      {/* NAVIGATION SECTION — dedicated section for Dashboard + Usage. */}
-      {!collapsed && (
-        <div className="shrink-0 flex items-center px-4 pt-5 pb-1.5">
-          <span className="text-[11px] font-bold uppercase tracking-widest" style={{ color: styles.textTertiary }}>
-            Navigation
-          </span>
-        </div>
+      {isSettingsRoute ? (
+        /* ── SETTINGS MODE (owner design frame 1a): the sidebar's whole body
+           becomes the settings section list. ─────────────────────────────── */
+        <nav className={cn("flex-1 flex flex-col gap-1 px-2.5 pt-5 overflow-y-auto", collapsed && "px-1.5")} aria-label="Settings sections">
+          {SETTINGS_SECTIONS.map(({ id, label, icon: Icon }) => {
+            const active = activeTab === id;
+            return (
+              <button
+                key={id}
+                onClick={() => navigate(`/settings?tab=${id}`)}
+                aria-current={active ? "true" : undefined}
+                title={collapsed ? label : undefined}
+                className={cn(
+                  "relative h-11 flex items-center rounded-[12px] transition-all duration-200 text-[13px] font-bold",
+                  collapsed ? "justify-center w-full" : "gap-2.5 px-2.5",
+                )}
+                style={{
+                  background: active ? withAlpha(styles.accent, 0.12) : "transparent",
+                  color: active ? styles.text : styles.textSecondary,
+                }}
+                onMouseEnter={(e) => {
+                  if (!active) e.currentTarget.style.background = styles.sidebarHover;
+                }}
+                onMouseLeave={(e) => {
+                  if (!active) e.currentTarget.style.background = "transparent";
+                }}
+              >
+                {/* Active indicator bar — same language as session rows. */}
+                {active && (
+                  <span
+                    className="absolute left-0 top-1.5 bottom-1.5 w-[2.5px] rounded-full"
+                    style={{ background: styles.accent }}
+                    aria-hidden
+                  />
+                )}
+                <span
+                  className="w-7 h-7 shrink-0 rounded-[9px] grid place-items-center"
+                  style={{
+                    background: active ? withAlpha(styles.accent, 0.14) : styles.inputBg,
+                    color: active ? styles.accent : styles.textSecondary,
+                  }}
+                >
+                  <Icon size={14} />
+                </span>
+                {!collapsed && <span className="truncate">{label}</span>}
+              </button>
+            );
+          })}
+          {/* The dashed "more coming" slot (owner design: future sections). */}
+          {!collapsed && (
+            <div
+              className="mt-1 h-10 flex items-center justify-center rounded-[12px] border-[1.5px] border-dashed text-[11px] font-bold"
+              style={{ borderColor: styles.sidebarBorder, color: styles.textTertiary }}
+            >
+              More settings coming soon
+            </div>
+          )}
+        </nav>
+      ) : (
+        <>
+          {/* NAVIGATION SECTION — dedicated section for Dashboard + Usage. */}
+          {!collapsed && (
+            <div className="shrink-0 flex items-center px-4 pt-5 pb-1.5">
+              <span className="text-[11px] font-bold uppercase tracking-widest" style={{ color: styles.textTertiary }}>
+                Navigation
+              </span>
+            </div>
+          )}
+          <nav className={cn("flex flex-col gap-1 px-2.5 pb-3", collapsed ? "px-1.5 pt-4" : "pt-1")} aria-label="Main navigation">
+            <DashboardButton collapsed={collapsed} />
+            <UsageButton collapsed={collapsed} />
+          </nav>
+
+          {/* Divider — generous spacing around it (owner round-33). */}
+          <div className="shrink-0 mx-3 my-4 border-t-[1.5px]" style={{ borderColor: styles.sidebarBorder }} />
+
+          {/* PROJECTS SECTION — expandable tree */}
+          <div className="flex-1 flex flex-col min-h-0 overflow-hidden">
+            <ProjectSection collapsed={collapsed} />
+          </div>
+
+          {/* FOOTER — a PROMINENT Settings button (owner round-33). */}
+          <div
+            className={cn("shrink-0 border-t px-2.5 pb-3 pt-2.5", collapsed && "px-1.5")}
+            style={{ borderColor: styles.sidebarBorder }}
+          >
+            <SettingsButton collapsed={collapsed} />
+          </div>
+        </>
       )}
-      <nav className={cn("flex flex-col gap-1 px-2.5 pb-3", collapsed ? "px-1.5 pt-4" : "pt-1")} aria-label="Main navigation">
-        <DashboardButton collapsed={collapsed} />
-        <UsageButton collapsed={collapsed} />
-      </nav>
-
-      {/* Divider — generous spacing around it (owner round-33: the sections
-          were "way too close together"). */}
-      <div className="shrink-0 mx-3 my-4 border-t-[1.5px]" style={{ borderColor: styles.sidebarBorder }} />
-
-      {/* PROJECTS SECTION — expandable tree */}
-      <div className="flex-1 flex flex-col min-h-0 overflow-hidden">
-        <ProjectSection collapsed={collapsed} />
-      </div>
-
-      {/* FOOTER — a PROMINENT Settings button (owner round-33). */}
-      <div
-        className={cn("shrink-0 border-t px-2.5 pb-3 pt-2.5", collapsed && "px-1.5")}
-        style={{ borderColor: styles.sidebarBorder }}
-      >
-        <SettingsButton collapsed={collapsed} />
-      </div>
     </motion.aside>
   );
 }

@@ -34,6 +34,12 @@ interface BuiltinProviderSeed {
  */
 const BUILTIN_PROVIDER_SEEDS: readonly BuiltinProviderSeed[] = [
   { id: "openrouter", name: "OpenRouter", baseUrl: "https://openrouter.ai/api/v1" },
+  // ROUND-34: the remaining built-in adapter rows — they render in the
+  // provider list as "add a key" entries; the chat adapter only speaks
+  // OpenAI-compatible endpoints today (apiFormat stays chat-completions).
+  { id: "anthropic", name: "Anthropic", baseUrl: "https://api.anthropic.com/v1" },
+  { id: "openai", name: "OpenAI", baseUrl: "https://api.openai.com/v1" },
+  { id: "google", name: "Google", baseUrl: "https://generativelanguage.googleapis.com/v1beta/openai" },
 ];
 
 /**
@@ -45,6 +51,10 @@ export function seedBuiltinProviders(db: SqliteDatabase): void {
     `INSERT INTO providers (id, name, kind, base_url, api_format, enabled, created_at)
      VALUES (@id, @name, @kind, @baseUrl, @apiFormat, 1, @createdAt)`,
   );
+  // ROUND-34: ONE shared timestamp for the whole seed batch — a per-insert
+  // clock read raced the millisecond tick and made list order (created_at,
+  // id) non-deterministic across tests.
+  const createdAt = new Date().toISOString();
   db.transaction(() => {
     for (const seed of BUILTIN_PROVIDER_SEEDS) {
       if (providerRecordIdExists(db, seed.id)) continue;
@@ -54,7 +64,7 @@ export function seedBuiltinProviders(db: SqliteDatabase): void {
         apiFormat: "chat-completions",
         kind: CUSTOM_PROVIDER_KIND,
         baseUrl: seed.baseUrl,
-        createdAt: new Date().toISOString(),
+        createdAt,
       });
     }
   })();
@@ -138,6 +148,29 @@ export function createProviderRecord(
      VALUES (@id, @name, @kind, @baseUrl, @apiFormat, 1, @createdAt)`,
   ).run({ ...input, kind, apiFormat: input.apiFormat ?? "chat-completions", createdAt: new Date().toISOString() });
   return getProviderRecord(db, input.id) as ProviderRecord;
+}
+
+/** ROUND-34: update a custom provider row (name/baseUrl/apiFormat/enabled). */
+export function updateProviderRecord(
+  db: SqliteDatabase,
+  record: ProviderRecord,
+): ProviderRecord {
+  db.prepare(
+    `UPDATE providers SET name = @name, base_url = @baseUrl, api_format = @apiFormat, enabled = @enabled WHERE id = @id`,
+  ).run({
+    id: record.id,
+    name: record.name,
+    baseUrl: record.baseUrl,
+    apiFormat: record.apiFormat,
+    enabled: record.enabled ? 1 : 0,
+  });
+  return getProviderRecord(db, record.id) as ProviderRecord;
+}
+
+/** ROUND-34: delete a custom provider row (idempotent). */
+export function deleteProviderRecord(db: SqliteDatabase, id: string): void {
+  db.prepare("DELETE FROM providers WHERE id = ?").run(id);
+  db.prepare("DELETE FROM models WHERE provider_id = ?").run(id);
 }
 
 /** Deterministic id for a custom provider when the request omits one. */

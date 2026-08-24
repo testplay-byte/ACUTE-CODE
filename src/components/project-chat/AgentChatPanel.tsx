@@ -42,6 +42,7 @@ import {
   toProjectChatItems,
 } from "../../lib/api";
 import { useConfigStore } from "../../lib/config-store";
+import { useThemeStore } from "../../lib/theme-store";
 import { withAlpha } from "../dashboard/helpers";
 import { ease } from "../../lib/motion";
 import { useProjectChatStore } from "../../lib/project-chat-store";
@@ -633,6 +634,7 @@ export function AgentChatPanel({
   // unnecessary. It is not needed and it is better for you to just outright
   // not implement it"). ⌘K/Ctrl+K palette stays available via keyboard.
   const [paletteOpen, setPaletteOpen] = useState(false);
+  const density = useThemeStore((s) => s.density);
 
   // ⌘K / Ctrl+K opens the CommandPalette (WS-H).
   useEffect(() => {
@@ -786,6 +788,7 @@ export function AgentChatPanel({
                   argsSummary: event.argsSummary,
                   ok: event.ok,
                   ts: new Date().toISOString(),
+                  ...(event.outputSummary ? { outputSummary: event.outputSummary } : {}),
                 });
                 return next;
               }
@@ -795,7 +798,13 @@ export function AgentChatPanel({
                 round.map((tool) => {
                   const index = consumed;
                   consumed += 1;
-                  return index === realIdx ? { ...tool, ok: event.ok } : tool;
+                  return index === realIdx
+                    ? {
+                        ...tool,
+                        ok: event.ok,
+                        ...(event.outputSummary ? { outputSummary: event.outputSummary } : {}),
+                      }
+                    : tool;
                 }),
               );
             });
@@ -881,7 +890,8 @@ export function AgentChatPanel({
           style={{ background: `linear-gradient(to bottom, ${styles.card}, transparent)` }}
         />
         <div ref={scrollRef} className="absolute inset-0 overflow-y-auto auto-scroll">
-          <div className="px-4 py-4 flex flex-col gap-4">
+          {/* ROUND-34: density (settings appearance) drives the column padding. */}
+          <div className={`${density === "compact" ? "px-4 py-4" : "px-5 md:px-7 py-5"} flex flex-col gap-4`}>
             {items.length === 0 && !pendingEcho ? (
               /* ROUND-30 OVERHAUL: modern empty state — centered greeting with
                  the project name + suggestion chips that pre-fill the composer

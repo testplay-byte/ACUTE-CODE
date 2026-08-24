@@ -71,7 +71,12 @@ describe("GET /api/v1/providers", () => {
         id: string;
         enabled: number;
       }>;
-      expect(rows).toEqual([{ id: "openrouter", enabled: 1 }]);
+      expect(rows).toEqual([
+        { id: "openrouter", enabled: 1 },
+        { id: "anthropic", enabled: 1 },
+        { id: "openai", enabled: 1 },
+        { id: "google", enabled: 1 },
+      ]);
     } finally {
       fresh.close();
     }
@@ -85,7 +90,7 @@ describe("GET /api/v1/providers", () => {
     try {
       // The PK on providers.id backstops the existence check: no duplicates.
       const rows = second.prepare("SELECT id FROM providers").all() as { id: string }[];
-      expect(rows.map((row) => row.id)).toEqual(["openrouter"]);
+      expect(rows.map((row) => row.id)).toEqual(["anthropic", "google", "openai", "openrouter"]);
     } finally {
       second.close();
     }
@@ -102,6 +107,36 @@ describe("GET /api/v1/providers", () => {
       expect(response.statusCode).toBe(200);
       expect(response.json()).toEqual({
         providers: [
+          {
+            id: "anthropic",
+            name: "Anthropic",
+            kind: "openai-compatible",
+            baseUrl: "https://api.anthropic.com/v1",
+            apiFormat: "chat-completions",
+            enabled: true,
+            createdAt: expect.any(String),
+            hasKey: false,
+          },
+          {
+            id: "google",
+            name: "Google",
+            kind: "openai-compatible",
+            baseUrl: "https://generativelanguage.googleapis.com/v1beta/openai",
+            apiFormat: "chat-completions",
+            enabled: true,
+            createdAt: expect.any(String),
+            hasKey: false,
+          },
+          {
+            id: "openai",
+            name: "OpenAI",
+            kind: "openai-compatible",
+            baseUrl: "https://api.openai.com/v1",
+            apiFormat: "chat-completions",
+            enabled: true,
+            createdAt: expect.any(String),
+            hasKey: false,
+          },
           {
             id: "openrouter",
             name: "OpenRouter",
@@ -133,7 +168,7 @@ describe("GET /api/v1/providers", () => {
     await authInject({ method: "GET", url: "/api/v1/providers" });
     await authInject({ method: "GET", url: "/api/v1/providers" });
     const rows = db.prepare("SELECT id FROM providers").all() as { id: string }[];
-    expect(rows.map((row) => row.id)).toEqual(["openrouter"]);
+    expect(rows.map((row) => row.id)).toEqual(["anthropic", "google", "openai", "openrouter"]);
   });
 
   it("keeps custom rows and adds no duplicates when an existing database is reopened", () => {
@@ -151,7 +186,13 @@ describe("GET /api/v1/providers", () => {
     const second = openDatabase(path);
     try {
       const rows = second.prepare("SELECT id FROM providers").all() as { id: string }[];
-      expect(rows.map((row) => row.id).sort()).toEqual(["openrouter", "prv_groq"]);
+      expect(rows.map((row) => row.id).sort()).toEqual([
+        "anthropic",
+        "google",
+        "openai",
+        "openrouter",
+        "prv_groq",
+      ]);
     } finally {
       second.close();
     }
@@ -186,7 +227,7 @@ describe("POST /api/v1/providers", () => {
       .json()
       .providers.map((provider: { id: string }) => provider.id)
       .sort();
-    expect(ids).toEqual(["openrouter", "prv_groq"]);
+    expect(ids).toEqual(["anthropic", "google", "openai", "openrouter", "prv_groq"]);
   });
 
   it("accepts an explicit id and honors an env-injected key for it", async () => {

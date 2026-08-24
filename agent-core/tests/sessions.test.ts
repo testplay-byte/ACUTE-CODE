@@ -16,7 +16,7 @@ vi.mock("ai", () => ({
 import { aiSdkChat } from "../src/agents/chat";
 import { runStreamedAgentTurn } from "../src/agents/runtime";
 import { getUsageSummary } from "../src/storage/usage";
-import { listSessionEvents } from "../src/storage/sessions";
+import { appendSessionEvent, listSessionEvents } from "../src/storage/sessions";
 import { ProviderKeyring } from "../src/providers/registry";
 import { openDatabase, type SqliteDatabase } from "../src/storage/db";
 import { buildServer } from "../src/server";
@@ -313,6 +313,82 @@ describe("PATCH /api/v1/sessions/:id (round-33 rename)", () => {
       payload: { title: "no auth" },
     });
     expect(response.statusCode).toBe(401);
+  });
+});
+
+describe("ROUND-34: tool results feed back into the conversation (multi-step fix)", () => {
+  it("assembles history with <tool_results> blocks so iteration 2+ sees what tools did", async () => {
+    const agent = await createAgent();
+    const session = await createSession(agent.id);
+
+    // Simulate a tool-using turn: user → tool.use (with output) → assistant.
+    await authInject({
+      method: "POST",
+      url: `/api/v1/sessions/${session.id}/messages`,
+      payload: { content: "create notes.txt" },
+    }).catch(() => undefined);
+    // Direct event-log writes (the runtime normally does this):
+    const db2 = db;
+    appendSessionEvent(db2, session.id, {
+      type: "tool.use",
+      agentId: agent.id,
+      payload: { role: "tool", toolName: "write_file", argsSummary: "path: notes.txt", ok: true, outputSummary: "wrote 24 chars" },
+    });
+    // Now run a SYNC turn with a mock that RECORDS the messages it receives.
+    const seenMessages: Array<{ role: string; content: string }> = [];
+    generateTextMock.mockReset();
+    generateTextMock.mockImplementation((input: { messages: Array<{ role: string; content: string }> }) => {
+      seenMessages.push(...input.messages);
+      return {
+        text: "Done.",
+        usage: { inputTokens: 1, outputTokens: 1, totalTokens: 2 },
+      };
+    });
+    const turn = await authInject({
+      method: "POST",
+      url: `/api/v1/sessions/${session.id}/messages`,
+      payload: { content: "what did you do?" },
+    });
+    expect(turn.statusCode).toBe(200);
+    // The second turn's conversation MUST include the tool result block.
+    const toolBlock = seenMessages.find((m) => m.content.includes("<tool_results>"));
+    expect(toolBlock).toBeTruthy();
+    expect(toolBlock!.content).toContain("write_file(path: notes.txt) → ok: wro");
+  });
+});
+
+describe("ROUND-34: PATCH/DELETE /api/v1/providers/:id", () => {
+  it("custom providers can be renamed, re-pointed, disabled, and deleted; built-ins refuse", async () => {
+    const created = await authInject({
+      method: "POST",
+      url: "/api/v1/providers",
+      payload: { name: "My Gateway", baseUrl: "https://gw.example.com/v1" },
+    });
+    expect(created.statusCode).toBe(201);
+    const id = created.json().id;
+
+    const patched = await authInject({
+      method: "PATCH",
+      url: `/api/v1/providers/${id}`,
+      payload: { name: "Renamed GW", baseUrl: "https://gw2.example.com/v1", enabled: false },
+    });
+    expect(patched.statusCode).toBe(200);
+    expect(patched.json()).toMatchObject({ name: "Renamed GW", baseUrl: "https://gw2.example.com/v1", enabled: false });
+
+    const gone = await authInject({ method: "DELETE", url: `/api/v1/providers/${id}` });
+    expect(gone.statusCode).toBe(204);
+    const missing = await authInject({ method: "GET", url: `/api/v1/providers/${id}/models` });
+    expect(missing.statusCode).toBe(404);
+
+    // Built-ins refuse edits and deletion.
+    const editBuiltin = await authInject({
+      method: "PATCH",
+      url: "/api/v1/providers/openrouter",
+      payload: { name: "Nope" },
+    });
+    expect(editBuiltin.statusCode).toBe(409);
+    const delBuiltin = await authInject({ method: "DELETE", url: "/api/v1/providers/openrouter" });
+    expect(delBuiltin.statusCode).toBe(409);
   });
 });
 

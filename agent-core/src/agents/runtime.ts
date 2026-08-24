@@ -97,6 +97,71 @@ function asChatMessage(event: { type: string; payload: unknown }): ChatTurnMessa
   return { role: event.type === "message.user" ? "user" : "assistant", content: payload.content };
 }
 
+/**
+ * ROUND-34 (review fix #2/#3): scrub keyring-held secrets from tool output
+ * BEFORE persisting AND before emitting over SSE — one helper, both paths.
+ */
+function scrubSecrets(text: string, secrets: readonly string[]): string {
+  let out = text;
+  for (const secret of secrets) {
+    if (secret.length >= 8) out = out.split(secret).join("***");
+  }
+  return out;
+}
+
+/**
+ * ROUND-34 (Cline-pattern tool feedback): fold the append-only event log into
+ * a model-facing conversation that INCLUDES tool results — the fix for
+ * multi-step tasks. Event order is user → tool.use×N → assistant, so the
+ * model previously saw its own replies but never what its tools returned;
+ * outer-loop iteration 2+ would re-plan blind (or repeat work). Now the
+ * history carries a <tool_results> block after each assistant turn. The
+ * markers keep tool output as DATA, never instructions (injection guard);
+ * old events without an outputSummary still fold (ok flag only).
+ */
+function assembleHistory(db: SqliteDatabase, sessionId: string): ChatTurnMessage[] {
+  const events = listSessionEvents(db, sessionId);
+  const messages: ChatTurnMessage[] = [];
+  let pendingToolLines: string[] = [];
+
+  const flushTools = () => {
+    if (pendingToolLines.length === 0) return;
+    messages.push({
+      role: "user",
+      content: `<tool_results>\n${pendingToolLines.join("\n")}\n</tool_results>`,
+    });
+    pendingToolLines = [];
+  };
+
+  for (const event of events) {
+    if (event.type === "message.user" || event.type === "message.assistant") {
+      flushTools();
+      const msg = asChatMessage(event);
+      if (msg) messages.push(msg);
+    } else if (event.type === "tool.use") {
+      const payload =
+        event.payload && typeof event.payload === "object"
+          ? (event.payload as Record<string, unknown>)
+          : {};
+      const toolName = typeof payload.toolName === "string" ? payload.toolName : "tool";
+      const argsSummary = typeof payload.argsSummary === "string" ? payload.argsSummary : "";
+      const ok = payload.ok === false ? false : true;
+      const outputSummary =
+        typeof payload.outputSummary === "string" && payload.outputSummary.length > 0
+          ? payload.outputSummary
+          : null;
+      // Review fix #7: neutralize the closing marker inside tool output so
+      // injected content can't escape the <tool_results> data block.
+      const safeOutput = outputSummary?.replace(/<\/tool_results>/g, "<\/tool_results>");
+      pendingToolLines.push(
+        `${toolName}(${argsSummary}) → ${ok ? "ok" : "FAILED"}${safeOutput ? `: ${safeOutput}` : ""}`,
+      );
+    }
+  }
+  flushTools();
+  return messages;
+}
+
 /** Error text for a 502 envelope — scrubbed of the API key, then length-capped. */
 function providerErrorDetail(error: unknown, apiKey: string): string {
   const raw = error instanceof Error ? error.message : String(error);
@@ -260,9 +325,8 @@ export async function runSingleAgentTurn(
     agentId: agent.id,
     payload: { role: "user", content },
   });
-  const rawMessages = listSessionEvents(db, session.id)
-    .map(asChatMessage)
-    .filter((message): message is ChatTurnMessage => message !== undefined);
+  // ROUND-34: history INCLUDES tool results (multi-step fix — Cline parity).
+  const rawMessages = assembleHistory(db, session.id);
 
   // Context-window management: trim oldest messages if over budget (round-25)
   const budget: ContextBudget = {
@@ -299,10 +363,21 @@ export async function runSingleAgentTurn(
 
   // Audit trail: one event per executed tool call, in order (ADR-0010 log).
   for (const call of result.toolCalls) {
+    // Review fix #2: the sync path scrubbed NOTHING before — a custom
+    // provider key echoed by run_command env would land in SQLite verbatim.
+    const keySecrets = keyring.list();
     appendSessionEvent(db, session.id, {
       type: "tool.use",
       agentId: agent.id,
-      payload: { role: "tool", toolName: call.name, argsSummary: call.argsSummary, ok: call.ok },
+      payload: {
+        role: "tool",
+        toolName: call.name,
+        argsSummary: call.argsSummary,
+        ok: call.ok,
+        ...(call.outputSummary !== undefined
+          ? { outputSummary: scrubSecrets(call.outputSummary, keySecrets) }
+          : {}),
+      },
     });
   }
 
@@ -362,6 +437,9 @@ export async function runStreamedAgentTurn(
   signal?: AbortSignal,
 ): Promise<StreamedTurnOutcome> {
   const { db, keyring, chatStream } = deps;
+  // ROUND-34: values the keyring holds — scrubbed from persisted tool output
+  // summaries (run_command inherits process.env which carries ACUTE_* keys).
+  const keySecrets = keyring.list().filter((v) => v.length >= 8);
   if (chatStream === undefined) {
     return {
       ok: false,
@@ -404,11 +482,10 @@ export async function runStreamedAgentTurn(
   let lastText = "";
 
   for (let outerIter = 0; outerIter < maxOuterLoops; outerIter++) {
-    // Re-assemble messages from the event log — picks up the previous
-    // iteration's assistant message + any tool results.
-    const rawMessages = listSessionEvents(db, session.id)
-      .map(asChatMessage)
-      .filter((message): message is ChatTurnMessage => message !== undefined);
+    // Re-assemble messages from the event log — ROUND-34: now WITH tool
+    // results, so iteration 2+ sees exactly what its tools did instead of
+    // re-planning blind (the multi-step fix).
+    const rawMessages = assembleHistory(db, session.id);
     const { messages, usedTokens } = assembleWithinBudget(rawMessages, budget);
 
     // Context guard (6-f R-F5): abort if assembled context > 800K tokens
@@ -449,17 +526,36 @@ export async function runStreamedAgentTurn(
         ...(tools !== undefined ? { tools } : {}),
         ...(signal !== undefined ? { signal } : {}),
       })) {
-        emit(event);
+        if (event.type === "tool-result") {
+          // handled below with a scrubbed outputSummary — do NOT emit raw.
+        } else {
+          emit(event);
+        }
         if (event.type === "text-delta") {
           iterText += event.delta;
         } else if (event.type === "tool-call") {
           iterToolCalls += 1;
         } else if (event.type === "tool-result") {
           // Persist each tool call the moment it completes (live ordering).
+          // ROUND-34 (review fix #3): scrub the output summary BEFORE it is
+          // emitted over SSE AND persisted — the UI must never see secrets.
+          const outputSummary =
+            event.outputSummary !== undefined
+              ? scrubSecrets(event.outputSummary, keySecrets)
+              : null;
+          // Always emit the tool-result (scrubbed when it carries output) —
+          // the UI's live rows key off these events.
+          emit({ ...event, ...(outputSummary !== null ? { outputSummary } : {}) });
           appendSessionEvent(db, session.id, {
             type: "tool.use",
             agentId: agent.id,
-            payload: { role: "tool", toolName: event.toolName, argsSummary: event.argsSummary, ok: event.ok },
+            payload: {
+              role: "tool",
+              toolName: event.toolName,
+              argsSummary: event.argsSummary,
+              ok: event.ok,
+              ...(outputSummary !== null ? { outputSummary } : {}),
+            },
           });
         } else if (event.type === "finish") {
           iterInputTokens = event.usage.inputTokens;

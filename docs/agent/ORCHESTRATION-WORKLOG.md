@@ -796,7 +796,7 @@ token-in-URL auth-doc URL noise). The CI step is `continue-on-error: true`
 **J2 work delivered (commit 65246ca):**
 - Created `scripts/docs/stamp-all.mjs` — the bulk idempotent stamper that
   DOC-STANDARDS §8 references but never existed. Reads round from status.json.
-- Backfilled the `<!-- last-reviewed: 2026-08-24 round-33 -->` stamp on 103
+- Backfilled the `<!-- last-reviewed: 2026-08-24 round-34 -->` stamp on 103
   docs (105 failures → 0).
 - Hardened `scripts/docs/check-stale.mjs`:
   1. **indented-fence support** (`/^ {0,3}```/m`) — the actual root bug;
@@ -992,3 +992,23 @@ Stage Summary:
 - The owner's biggest complaint (forced continuation / infinite rounds) is fixed at the root and live-proven with the exact "hello, how are you" scenario.
 - Every sidebar/chat directive implemented; Design Prompt 3 delivered for the settings round.
 - 215 tests, build green, live battery + VLM verified.
+
+---
+Task ID: R34
+Agent: orchestrator (Z.ai Code + 2 review sub-agents)
+Task: Owner: chat "does not handle multi-step tasks properly" — analyze the open-source references and fix; implement the settings designs (Acute-Settings.html appearance + ZCode screenshot provider master-detail); use sub-agents to review planning AND work; test by building a real project.
+
+Work Log:
+- Pulled + rendered the owner's design files; extracted specs via DOM + VLM (appearance page anatomy; provider master-detail anatomy).
+- Researched the Cline pattern set; identified the root causes: F1 tool results never fed back across outer iterations (asChatMessage only extracted text), F2 outputs never persisted, F3 UI showed calls but not outputs.
+- Wrote docs/agent/R34-PLAN.md; SUB-AGENT PLAN REVIEW (agent-2c35017, opus): 17 findings — sync-path parity, missing PATCH/DELETE backend + seeds, truncation strategy, secret scrubbing, live plumbing, injection guards, context-trim interplay, stop-brittleness, test gaps. All incorporated.
+- Implemented Part 1: summarizeToolOutput (scrub + 4000-char head+tail), ChatToolCall/StreamChatEvent outputSummary, assembleHistory with <tool_results> blocks (+ escaped markers + system-prompt DATA guard), persistence in both paths, ToolRow output previews, TerminalCard stdout rendering, live SSE mapping.
+- Implemented Part 2: sidebar settings-mode transformation; Appearance page (Interface Mode, theme grid, Density wired to chat padding, Sidebar Tint wired to themes.ts mix levels with live mini-rail preview); Models & Providers master-detail (list + detail + model CRUD + test connection + draft-pane add flow); PATCH/DELETE /providers/:id + 4 built-in seeds with shared createdAt; keyring.list() for scrubbing.
+- SUB-AGENT CODE REVIEW (agent-43921f, opus): 8 findings — hooks-order landmine, asymmetric secret scrub, un-scrubbed SSE, Tauri key-store inconsistency, dangling agents on provider delete, injection escape, placeholder polish. ALL FIXED + retested (217 green).
+- Live battery ×2: the 4-step project task completed perfectly both times (todos tracked; math.js + test.js created on disk; read-back verified; exact BUILD COMPLETE reply; all tool.use events carry outputSummary; 0 console errors). Settings verified visually + via API (provider list, theme switch, tint).
+- Pushed ACUTE-CODE + published round-34.zip (9 screenshots) to DASHBOARD + ntfy.
+
+Stage Summary:
+- The owner's core complaint (multi-step reliability) is fixed at the root and live-proven twice with a real project build.
+- The settings experience now matches the owner's chosen designs (transformation sidebar + appearance + master-detail providers).
+- The sub-agent review process the owner mandated caught 25 real issues across plan + code — documented in AGENT-MEMORY #54/#55.

@@ -560,6 +560,9 @@ export interface ToolUseEntry {
    * event log always carries a concrete boolean. */
   ok: boolean | null;
   ts: string;
+  /** ROUND-34: compact tool-output summary (what the tool DID) — shown in
+   * the activity rows/terminal cards and used for live command output. */
+  outputSummary?: string;
 }
 
 /** A write_file/edit_file call surfaced as a diff card (path/chars parsed
@@ -606,6 +609,7 @@ interface ToolUsePayload {
   toolName?: unknown;
   argsSummary?: unknown;
   ok?: unknown;
+  outputSummary?: unknown;
 }
 
 function toToolUseEntry(event: SessionEvent): ToolUseEntry {
@@ -619,6 +623,9 @@ function toToolUseEntry(event: SessionEvent): ToolUseEntry {
     argsSummary: typeof payload.argsSummary === "string" ? payload.argsSummary : "",
     ok: typeof payload.ok === "boolean" ? payload.ok : true,
     ts: event.ts,
+    ...(typeof payload.outputSummary === "string" && payload.outputSummary.length > 0
+      ? { outputSummary: payload.outputSummary }
+      : {}),
   };
 }
 
@@ -756,7 +763,7 @@ export async function pickFolderViaBackend(): Promise<{
 export type StreamTurnEvent =
   | { type: "text-delta"; delta: string }
   | { type: "tool-call"; toolName: string; argsSummary: string }
-  | { type: "tool-result"; toolName: string; argsSummary: string; ok: boolean }
+  | { type: "tool-result"; toolName: string; argsSummary: string; ok: boolean; outputSummary?: string }
   /** Round-32: the outer loop starts a new iteration — the live activity
    * block opens a new ROUND group on this event. */
   | { type: "meta.continuation"; iteration: number; reason?: string }

@@ -36,9 +36,13 @@ type TabId = (typeof TABS)[number]["id"];
  */
 export function SettingsPage() {
   const styles = useThemeStyles();
-  const [params, setParams] = useSearchParams();
+  const [params] = useSearchParams();
   const tabParam = params.get("tab");
   const tab: TabId = (TABS.find((t) => t.id === tabParam)?.id ?? "appearance") as TabId;
+
+  // ROUND-34: the in-page tab bar is GONE — the sidebar is the settings nav
+  // (owner design frame 1a). The page header adapts per section.
+  const activeMeta = TABS.find((t) => t.id === tab) ?? TABS[0];
 
   return (
     <div className="flex h-full flex-col">
@@ -47,40 +51,16 @@ export function SettingsPage() {
           className="text-[11px] font-bold uppercase tracking-[0.18em] mb-1"
           style={{ color: styles.textTertiary }}
         >
-          Configuration
-        </p>
-        <h1 className="text-[22px] font-black tracking-tight" style={{ color: styles.text }}>
           Settings
+        </p>
+        <h1 className="text-[24px] font-black tracking-tight" style={{ color: styles.text }}>
+          {activeMeta.label}
         </h1>
-        <div className="mt-3.5 flex flex-wrap gap-1.5">
-          {TABS.map(({ id, label, icon: Icon }) => {
-            const active = id === tab;
-            return (
-              <button
-                key={id}
-                onClick={() => setParams({ tab: id }, { replace: true })}
-                className="flex cursor-pointer items-center gap-1.5 rounded-[12px] h-9 px-3.5 text-[12px] font-bold transition-all duration-200"
-                style={{
-                  backgroundColor: active ? styles.accent : "transparent",
-                  color: active ? styles.accentText : styles.textSecondary,
-                  boxShadow: active ? `0 2px 8px ${withAlpha(styles.accent, 0.3)}` : "none",
-                }}
-                onMouseEnter={(e) => {
-                  if (!active) e.currentTarget.style.background = styles.subtleHover;
-                }}
-                onMouseLeave={(e) => {
-                  if (!active) e.currentTarget.style.background = "transparent";
-                }}
-              >
-                <Icon size={14} strokeWidth={2} />
-                {label}
-              </button>
-            );
-          })}
-        </div>
       </div>
 
-      <div className="min-h-0 flex-1 overflow-y-auto px-5 md:px-8 py-5 mx-auto w-full max-w-3xl">
+      {/* ROUND-34: wider content (the master-detail provider screen needs the
+          room); the appearance page constrains itself internally. */}
+      <div className="min-h-0 flex-1 overflow-y-auto px-5 md:px-8 py-5 mx-auto w-full max-w-5xl">
         {tab === "appearance" && <AppearanceTab />}
         {tab === "agents" && <AgentsScreen embedded />}
         {tab === "api" && <ModelsProvidersTab />}
@@ -98,25 +78,25 @@ function AppearanceTab() {
   const setTheme = useThemeStore((s) => s.setTheme);
   const mode = useThemeStore((s) => s.mode);
   const setMode = useThemeStore((s) => s.setMode);
-
-  // Active-knob text color: getContrastText(toggleActive) returns black on a
-  // white knob (dark mode) and white on a black knob (light mode) — fixes the
-  // owner's R28 complaint "in dark mode the darker text was not showing"
-  // (root cause: styles.text = #FFFBF0 cream → white-on-white in dark mode).
-  const activeKnobText = getContrastText(styles.toggleActive);
+  // ROUND-34 (owner's appearance design): density + sidebar tint controls.
+  const density = useThemeStore((s) => s.density);
+  const setDensity = useThemeStore((s) => s.setDensity);
+  const sidebarTint = useThemeStore((s) => s.sidebarTint);
+  const setSidebarTint = useThemeStore((s) => s.setSidebarTint);
 
   return (
     <div className="mx-auto flex max-w-3xl flex-col gap-5">
+      {/* ── Interface Mode (owner design: segmented toggle + LIVE badge) ── */}
       <section>
-        <SectionTitle>Mode</SectionTitle>
+        <SectionTitle>Interface Mode</SectionTitle>
         <div
-          className="relative grid w-full max-w-[320px] grid-cols-2 gap-1.5 rounded-[14px] p-1"
+          className="relative grid w-full max-w-[320px] grid-cols-2 gap-1.5 rounded-[16px] p-1"
           role="radiogroup"
-          aria-label="Color mode"
-          style={{ background: styles.toggleTrack, border: bdr("1px", styles.borderSubtle) }}
+          aria-label="Interface mode"
+          style={{ background: styles.toggleTrack, border: bdr("1.5px", styles.border) }}
         >
           <div
-            className="absolute bottom-1 top-1 w-[calc(50%-6px)] rounded-[10px] transition-all duration-300"
+            className="absolute bottom-1 top-1 w-[calc(50%-6px)] rounded-[12px] transition-all duration-300"
             style={{ left: mode === "dark" ? "calc(50% + 2px)" : "4px", background: styles.toggleActive }}
           />
           {(["light", "dark"] as const).map((m) => {
@@ -129,8 +109,8 @@ function AppearanceTab() {
                 role="radio"
                 aria-checked={active}
                 aria-label={`${m} mode`}
-                className="relative z-10 flex h-9 cursor-pointer items-center justify-center gap-1.5 rounded-[10px] border-none bg-transparent text-[13px] font-bold capitalize transition-colors"
-                style={{ color: active ? activeKnobText : styles.textTertiary }}
+                className="relative z-10 flex h-10 cursor-pointer items-center justify-center gap-1.5 rounded-[12px] border-none bg-transparent text-[13px] font-bold capitalize transition-colors"
+                style={{ color: active ? getContrastText(styles.toggleActive) : styles.textTertiary }}
               >
                 <Icon size={14} />
                 {m}
@@ -138,6 +118,9 @@ function AppearanceTab() {
             );
           })}
         </div>
+        <p className="mt-2 text-[11px]" style={{ color: styles.textTertiary }}>
+          Changes apply live across the whole app.
+        </p>
       </section>
 
       <section>
@@ -198,6 +181,97 @@ function AppearanceTab() {
               </button>
             );
           })}
+        </div>
+      </section>
+
+      {/* ── Density (owner design frame 2) ──────────────────────────────── */}
+      <section>
+        <SectionTitle>Density</SectionTitle>
+        <div
+          className="relative grid w-full max-w-[320px] grid-cols-2 gap-1.5 rounded-[16px] p-1"
+          role="radiogroup"
+          aria-label="Density"
+          style={{ background: styles.toggleTrack, border: bdr("1.5px", styles.border) }}
+        >
+          <div
+            className="absolute bottom-1 top-1 w-[calc(50%-6px)] rounded-[12px] transition-all duration-300"
+            style={{ left: density === "compact" ? "calc(50% + 2px)" : "4px", background: styles.toggleActive }}
+          />
+          {(["comfortable", "compact"] as const).map((d) => {
+            const active = density === d;
+            return (
+              <button
+                key={d}
+                onClick={() => setDensity(d)}
+                role="radio"
+                aria-checked={active}
+                aria-label={`${d} density`}
+                className="relative z-10 flex h-10 cursor-pointer items-center justify-center rounded-[12px] border-none bg-transparent text-[13px] font-bold capitalize transition-colors"
+                style={{ color: active ? getContrastText(styles.toggleActive) : styles.textTertiary }}
+              >
+                {d}
+              </button>
+            );
+          })}
+        </div>
+        <p className="mt-2 text-[11px]" style={{ color: styles.textTertiary }}>
+          Comfortable adds breathing room to the chat; compact fits more on screen.
+        </p>
+      </section>
+
+      {/* ── Sidebar tint (owner design frame 2) + live mini rail preview ── */}
+      <section>
+        <SectionTitle>Sidebar Tint</SectionTitle>
+        <div className="flex items-start gap-4 flex-wrap">
+          <div
+            className="relative grid w-full max-w-[320px] grid-cols-3 gap-1.5 rounded-[16px] p-1"
+            role="radiogroup"
+            aria-label="Sidebar tint strength"
+            style={{ background: styles.toggleTrack, border: bdr("1.5px", styles.border) }}
+          >
+            <div
+              className="absolute bottom-1 top-1 w-[calc(33.33%-4.66px)] rounded-[12px] transition-all duration-300"
+              style={{
+                left:
+                  sidebarTint === "subtle"
+                    ? "4px"
+                    : sidebarTint === "warm"
+                      ? "calc(33.33% + 0.33px)"
+                      : "calc(66.66% - 4.33px)",
+                background: styles.toggleActive,
+              }}
+            />
+            {(["subtle", "warm", "bold"] as const).map((t) => {
+              const active = sidebarTint === t;
+              return (
+                <button
+                  key={t}
+                  onClick={() => setSidebarTint(t)}
+                  role="radio"
+                  aria-checked={active}
+                  aria-label={`${t} sidebar tint`}
+                  className="relative z-10 flex h-10 cursor-pointer items-center justify-center rounded-[12px] border-none bg-transparent text-[12px] font-bold capitalize transition-colors"
+                  style={{ color: active ? getContrastText(styles.toggleActive) : styles.textTertiary }}
+                >
+                  {t}
+                </button>
+              );
+            })}
+          </div>
+          {/* Live mini rail preview — shows the resulting sidebar surface. */}
+          <div
+            className="w-[104px] h-[112px] rounded-[14px] border-[1.5px] overflow-hidden shrink-0"
+            style={{ borderColor: styles.border, background: styles.bg }}
+            aria-hidden
+          >
+            <div className="h-full w-[42px] p-2 flex flex-col gap-1.5" style={{ background: styles.sidebarBg }}>
+              <div className="h-3 w-3 rounded-[4px]" style={{ background: styles.accent }} />
+              <div className="h-[5px] w-full rounded-full" style={{ background: withAlpha(styles.text, 0.18) }} />
+              <div className="h-[5px] w-3/4 rounded-full" style={{ background: withAlpha(styles.text, 0.14) }} />
+              <div className="h-[5px] w-2/3 rounded-full mt-2" style={{ background: withAlpha(styles.accent, 0.45) }} />
+              <div className="h-[5px] w-1/2 rounded-full" style={{ background: withAlpha(styles.text, 0.12) }} />
+            </div>
+          </div>
         </div>
       </section>
     </div>

@@ -104,6 +104,10 @@
     {
       "date": "2026-08-24",
       "label": "Round 33 — hello-loop fix + sidebar/logo system + headerless chat"
+    },
+    {
+      "date": "2026-08-24",
+      "label": "Round 34 — multi-step tool feedback + settings redesign"
     }
   ],
   "quality": {
@@ -111,7 +115,7 @@
     "suites": [
       {
         "name": "agent-core",
-        "tests": 138
+        "tests": 140
       },
       {
         "name": "shared",
@@ -140,8 +144,8 @@
   ],
   "plan": {
     "current": {
-      "title": "Round 33 DELIVERED — behavioral fixes + sidebar/logo system + headerless chat",
-      "detail": "Fixed the infinite-continuation bug ('hello, how are you' now stops after one reply — zero tool calls breaks the outer loop, live-proven), interleaved the activity display at the point tools ran (no ROUND labels, stats only on the final message), live file-population view, custom SVG logo with hover-morph toggle + collapse at top-right + prominent Settings + renameable sessions + on-project +button + name-from-folder + instant session updates, chat panel fully headerless with Ctrl K labels on Windows + floating logo show-sidebar. 215 tests + live battery. Design Prompt 3 (settings restructure) delivered for the next demo round."
+      "title": "Round 34 DELIVERED — multi-step reliability (Cline parity) + settings redesign",
+      "detail": "Tool results now feed back into the conversation (assembleHistory + persisted outputSummary) — live-proven with a real 4-step project build (math.js → test.js → verify → BUILD COMPLETE). Settings: sidebar transforms into the settings nav; Appearance page (mode + themes + density + sidebar tint with live preview); Models & Providers master-detail per the owner's screenshot (provider list + detail pane + model CRUD + test connection + PATCH/DELETE backend + 4 built-in seeds). Sub-agent plan review (17 findings) + code review (8 findings) — all fixed. 217 tests."
     },
     "upcoming": [
       {
@@ -176,5 +180,5 @@
       "Quality over speed — every round verified before push"
     ]
   },
-  "round": 33
+  "round": 34
 }

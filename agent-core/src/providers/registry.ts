@@ -54,6 +54,17 @@ export class ProviderKeyring {
   }
 
   /**
+   * ROUND-34: all held key VALUES (ids not included) — used by the runtime to
+   * scrub secrets from persisted tool-output summaries. Never logged.
+   */
+  list(): string[] {
+    return Object.entries(this.#env)
+      .filter(([name]) => name.startsWith("ACUTE_PROVIDER_"))
+      .map(([, value]) => value)
+      .filter((value): value is string => typeof value === "string" && value !== "");
+  }
+
+  /**
    * Shell handoff (POST /internal/providers/keys): rotate a key in-memory so
    * a connection test right after Save uses the new key without a respawn.
    * Empty string deletes. Never logged, never returned.

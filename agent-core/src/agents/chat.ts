@@ -27,6 +27,8 @@ export interface ChatToolCall {
   name: string;
   argsSummary: string;
   ok: boolean;
+  /** Round-34: compact model-facing output summary (persisted for history). */
+  outputSummary?: string;
 }
 
 export interface ChatTurnOutput {
@@ -85,10 +87,52 @@ function extractToolCalls(steps: Array<unknown>): ChatToolCall[] {
           typeof r.output === "object" && r.output !== null && "ok" in r.output
             ? Boolean((r.output as { ok: unknown }).ok)
             : true,
+        outputSummary: summarizeToolOutput(r.output),
       });
     }
   }
   return calls;
+}
+
+/**
+ * ROUND-34 (Cline-pattern tool feedback): compact, model-facing summary of a
+ * tool's OUTPUT. Head+tail truncation keeps the informative ends (test/build
+ * errors live at the END of command output); the raw string is truncated
+ * BEFORE wrapping so the result stays valid. Secrets (keyring-held API keys,
+ * sk-… patterns) are scrubbed — run_command inherits process.env which holds
+ * ACUTE_PROVIDER_* values.
+ */
+export function summarizeToolOutput(output: unknown): string {
+  let text: string;
+  if (typeof output === "string") {
+    text = output;
+  } else if (
+    typeof output === "object" &&
+    output !== null &&
+    "output" in output &&
+    typeof (output as { output: unknown }).output === "string"
+  ) {
+    text = (output as { output: string }).output;
+  } else {
+    try {
+      text = JSON.stringify(output) ?? "";
+    } catch {
+      text = String(output);
+    }
+  }
+  // Scrub obvious secret shapes (defense-in-depth; the runtime scrubs
+  // keyring values too, but this guard lives at the source).
+  text = text.replace(/sk-[A-Za-z0-9_-]{16,}/g, "sk-***");
+  text = text.replace(/github_pat_[A-Za-z0-9_]+/g, "github_pat_***");
+  // Head+tail budget: command/read outputs keep 2000 head + 2000 tail chars.
+  const BUDGET = 4000;
+  if (text.length > BUDGET) {
+    const head = text.slice(0, BUDGET / 2);
+    const tail = text.slice(-BUDGET / 2);
+    const omitted = text.length - BUDGET;
+    text = `${head}\n…[truncated ${omitted} chars]…\n${tail}`;
+  }
+  return text;
 }
 
 /** Compact, log-safe argument summary (paths yes; full file contents no). */
@@ -116,7 +160,7 @@ function summarizeArgs(input: unknown): string {
 export type StreamChatEvent =
   | { type: "text-delta"; delta: string }
   | { type: "tool-call"; toolName: string; argsSummary: string }
-  | { type: "tool-result"; toolName: string; argsSummary: string; ok: boolean }
+  | { type: "tool-result"; toolName: string; argsSummary: string; ok: boolean; outputSummary?: string }
   | { type: "finish"; usage: { inputTokens: number; outputTokens: number; totalTokens: number } };
 
 export interface StreamChatInput extends ChatTurnInput {
@@ -169,6 +213,7 @@ export const streamAiSdkChat: StreamChatFn = async function* (input) {
         toolName: part.toolName,
         argsSummary: summarizeArgs(part.input),
         ok,
+        outputSummary: summarizeToolOutput(part.output),
       };
     } else if (part.type === "finish-step") {
       const stepUsage = (part as { usage?: { inputTokens?: number; outputTokens?: number } }).usage;

@@ -1,4 +1,4 @@
-<!-- last-reviewed: 2026-08-24 round-33 -->
+<!-- last-reviewed: 2026-08-24 round-34 -->
 # Round 01–02 — Initial port & adaptable layouts (2026-08-22)
 
 ## Round 1 — Port from the design demo

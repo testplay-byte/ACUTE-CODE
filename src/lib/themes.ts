@@ -330,7 +330,20 @@ function achromaticAccent(theme: ThemeColors): boolean {
 }
 
 /** Compute every dark/light-mode-aware style value for a theme + mode. */
-export function deriveThemeStyles(themeIdOrTheme: string | ThemeColors, isDark: boolean): ThemeStyles {
+/** ROUND-34: sidebar tint strength (settings appearance) → mix percentages.
+ * subtle = the R32 owner-design values; warm/bold step up the accent mix. */
+const SIDEBAR_TINT_MIX: Record<SidebarTintStrength, { light: number; dark: number }> = {
+  subtle: { light: 0.045, dark: 0.055 },
+  warm: { light: 0.08, dark: 0.09 },
+  bold: { light: 0.16, dark: 0.18 },
+};
+type SidebarTintStrength = "subtle" | "warm" | "bold";
+
+export function deriveThemeStyles(
+  themeIdOrTheme: string | ThemeColors,
+  isDark: boolean,
+  sidebarTint: SidebarTintStrength = "subtle",
+): ThemeStyles {
   const theme =
     typeof themeIdOrTheme === "string" ? getTheme(themeIdOrTheme) : themeIdOrTheme;
 
@@ -351,8 +364,8 @@ export function deriveThemeStyles(themeIdOrTheme: string | ThemeColors, isDark: 
     // area comes from the floating-panel treatment + the pure-white chat
     // panel, NOT from a strong tint (the R30 12–16% mix read as muddy).
     sidebarBg: isDark
-      ? mixHex(theme.cardDark, theme.accentDark ?? theme.accent, 0.055)
-      : mixHex(theme.bgLight, theme.accent, 0.045),
+      ? mixHex(theme.cardDark, theme.accentDark ?? theme.accent, SIDEBAR_TINT_MIX[sidebarTint].dark)
+      : mixHex(theme.bgLight, theme.accent, SIDEBAR_TINT_MIX[sidebarTint].light),
     sidebarBorder: isDark ? "rgba(255,255,255,0.12)" : "rgba(0,0,0,0.14)",
     sidebarHover: isDark ? "rgba(255,255,255,0.08)" : "rgba(0,0,0,0.05)",
 

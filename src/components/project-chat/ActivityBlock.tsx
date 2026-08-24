@@ -163,21 +163,36 @@ function ToolRow({ tool }: { tool: ToolUseEntry }) {
   const styles = useThemeStyles();
   const Icon = TOOL_ICONS[tool.toolName] ?? Terminal;
   const full = `${tool.toolName} ${tool.argsSummary}`.trim();
+  // ROUND-34: one-line output preview under the tool call (what it DID).
+  const outputPreview =
+    tool.outputSummary && tool.outputSummary.length > 0
+      ? tool.outputSummary.replace(/\s+/g, " ").slice(0, 90)
+      : null;
   return (
-    <div className="flex items-center gap-2.5 h-8 px-1" title={full}>
-      <span
-        className="w-[22px] h-[22px] shrink-0 rounded-[7px] grid place-items-center"
-        style={{ background: styles.inputBg, color: styles.textSecondary }}
-      >
-        <Icon size={11} />
-      </span>
-      <span className="min-w-0 flex-1 truncate font-mono text-[11px]" style={{ color: styles.textSecondary }}>
-        <span style={{ color: styles.text, fontWeight: 600 }}>{tool.toolName}</span>
-        {tool.argsSummary ? ` ${tool.argsSummary}` : ""}
-      </span>
-      <span className="shrink-0 w-4 text-center text-[11px]" style={{ color: tool.ok ? SEMANTIC_COLORS.success : SEMANTIC_COLORS.danger }}>
-        {tool.ok ? "✓" : "✗"}
-      </span>
+    <div className="py-1 px-1" title={full + (tool.outputSummary ? `\n→ ${tool.outputSummary}` : "")}>
+      <div className="flex items-center gap-2.5 h-7">
+        <span
+          className="w-[22px] h-[22px] shrink-0 rounded-[7px] grid place-items-center"
+          style={{ background: styles.inputBg, color: styles.textSecondary }}
+        >
+          <Icon size={11} />
+        </span>
+        <span className="min-w-0 flex-1 truncate font-mono text-[11px]" style={{ color: styles.textSecondary }}>
+          <span style={{ color: styles.text, fontWeight: 600 }}>{tool.toolName}</span>
+          {tool.argsSummary ? ` ${tool.argsSummary}` : ""}
+        </span>
+        <span className="shrink-0 w-4 text-center text-[11px]" style={{ color: tool.ok === false ? SEMANTIC_COLORS.danger : SEMANTIC_COLORS.success }}>
+          {tool.ok === null ? "…" : tool.ok ? "✓" : "✗"}
+        </span>
+      </div>
+      {outputPreview && (
+        <div
+          className="ml-[32px] truncate font-mono text-[10px] leading-[1.5]"
+          style={{ color: styles.textTertiary }}
+        >
+          → {outputPreview}
+        </div>
+      )}
     </div>
   );
 }
@@ -240,7 +255,6 @@ function FileChangeCard({
     }
     // loadDiff depends on query state; expanding on write-completion is the
     // only trigger we care about.
-    // eslint-disable-next-line
   }, [live, writing]);
 
   const toggle = () => {
@@ -387,8 +401,15 @@ function FileChangeCard({
 
 function TerminalCard({ tool }: { tool: ToolUseEntry }) {
   const styles = useThemeStyles();
+  const [expanded, setExpanded] = useState(false);
   // argsSummary carries the command; ok doubles as the exit status.
   const command = tool.argsSummary || tool.toolName;
+  // ROUND-34: the actual command OUTPUT (persisted by the runtime) renders in
+  // the card body — expandable when long, auto-shown for the first ~3 lines.
+  const output = tool.outputSummary ?? null;
+  const outputLines = output ? output.split("\n").filter((l) => l.length > 0) : [];
+  const preview = outputLines.slice(0, 3);
+  const rest = outputLines.slice(3);
   return (
     <div className="rounded-[12px] border overflow-hidden" style={{ borderColor: styles.border }}>
       {/* Title bar — traffic lights + command */}
@@ -407,13 +428,38 @@ function TerminalCard({ tool }: { tool: ToolUseEntry }) {
         <span
           className="shrink-0 px-1.5 py-0.5 rounded-full font-mono text-[9px] font-bold"
           style={{
-            background: tool.ok ? withAlpha(SEMANTIC_COLORS.success, 0.18) : withAlpha(SEMANTIC_COLORS.danger, 0.18),
-            color: tool.ok ? SEMANTIC_COLORS.success : SEMANTIC_COLORS.danger,
+            background: tool.ok === false ? withAlpha(SEMANTIC_COLORS.danger, 0.18) : withAlpha(SEMANTIC_COLORS.success, 0.18),
+            color: tool.ok === false ? SEMANTIC_COLORS.danger : SEMANTIC_COLORS.success,
           }}
         >
           {tool.ok === null ? "running" : tool.ok ? "exit 0" : "failed"}
         </span>
       </div>
+      {/* Output body — the command's actual stdout (round-34). */}
+      {preview.length > 0 && (
+        <div
+          className="px-3 py-2 font-mono text-[10.5px] leading-[1.55] max-h-64 overflow-y-auto auto-scroll"
+          style={{ background: styles.isDark ? "rgba(0,0,0,0.35)" : "#FAFAFA", color: styles.textSecondary }}
+        >
+          {preview.map((line, i) => (
+            <div key={i} className="whitespace-pre-wrap break-words">{line}</div>
+          ))}
+          {rest.length > 0 && (
+            <>
+              {expanded && rest.map((line, i) => (
+                <div key={`r-${i}`} className="whitespace-pre-wrap break-words">{line}</div>
+              ))}
+              <button
+                onClick={() => setExpanded((v) => !v)}
+                className="mt-1 text-[10px] font-bold underline"
+                style={{ color: styles.accent }}
+              >
+                {expanded ? "Show less" : `+${rest.length} more line${rest.length === 1 ? "" : "s"}`}
+              </button>
+            </>
+          )}
+        </div>
+      )}
     </div>
   );
 }

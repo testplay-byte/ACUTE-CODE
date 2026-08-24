@@ -4,7 +4,12 @@ import { THEMES, applyTheme, useThemeStore } from "./theme-store";
 
 function reset() {
   localStorage.clear();
-  useThemeStore.setState({ themeId: "nova", mode: "dark" });
+  useThemeStore.setState({
+    themeId: "nova",
+    mode: "dark",
+    density: "comfortable",
+    sidebarTint: "subtle",
+  });
 }
 
 beforeEach(reset);
@@ -33,7 +38,12 @@ describe("theme store", () => {
     useThemeStore.getState().setMode("light");
     const raw = localStorage.getItem("acute-code.theme");
     expect(raw).toBeTruthy();
-    expect(JSON.parse(raw!).state).toEqual({ themeId: "bento", mode: "light" });
+    expect(JSON.parse(raw!).state).toEqual({
+      themeId: "bento",
+      mode: "light",
+      density: "comfortable",
+      sidebarTint: "subtle",
+    });
   });
 
   it("applyTheme mirrors the store onto the document element", () => {
