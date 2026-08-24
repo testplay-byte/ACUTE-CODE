@@ -68,6 +68,11 @@ export interface ProjectChatState {
   /** Round-15 (owner): on the chat screen the APP sidebar is HIDDEN; the
    * TopBar hamburger toggles it. Transient — never persisted. */
   appSidebarVisible: boolean;
+  /** Round-28 (WS-D1, owner R28 directive): when true the chat screen shows
+   * ONLY the chat (left/center-left aligned, maxWidth, no Explorer/Code
+   * panels). Default true on chat routes. The ChatTopBar's "Show panels"
+   * toggle flips it false → 3-panel layout. Persisted (survives reloads). */
+  chatFocusMode: boolean;
   setSidebarOpen: (open: boolean) => void;
   setCodeVisible: (visible: boolean) => void;
   /** Clamps to [MIN_SIDEBAR_WIDTH, MAX_SIDEBAR_WIDTH]. */
@@ -86,6 +91,7 @@ export interface ProjectChatState {
   addTodo: (projectId: string, text: string) => void;
   toggleTodo: (projectId: string, todoId: string) => void;
   setAppSidebarVisible: (visible: boolean) => void;
+  setChatFocusMode: (on: boolean) => void;
 }
 
 const toggleMember = (list: string[], value: string): string[] =>
@@ -108,6 +114,7 @@ export const useProjectChatStore = create<ProjectChatState>()(
       selectedAgentId: null,
       todos: {},
       appSidebarVisible: false,
+      chatFocusMode: true,
       setSidebarOpen: (sidebarOpen) => set({ sidebarOpen }),
       setCodeVisible: (codeVisible) => set({ codeVisible }),
       setSidebarWidth: (sidebarWidth) =>
@@ -154,6 +161,7 @@ export const useProjectChatStore = create<ProjectChatState>()(
           },
         })),
       setAppSidebarVisible: (appSidebarVisible) => set({ appSidebarVisible }),
+      setChatFocusMode: (chatFocusMode) => set({ chatFocusMode }),
     }),
     {
       name: "acute-code.projectChat",

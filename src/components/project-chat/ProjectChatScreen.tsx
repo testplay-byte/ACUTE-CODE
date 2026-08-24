@@ -13,6 +13,7 @@ import { ease } from "../../lib/motion";
 import { useProjectChatStore } from "../../lib/project-chat-store";
 import { useThemeStyles } from "../../lib/use-theme-styles";
 import { AgentChatPanel } from "./AgentChatPanel";
+import { ChatFocusLayout } from "./ChatFocusLayout";
 import { CodeView } from "./CodeView";
 import { ExperimentalLayout } from "./ExperimentalLayout";
 import { LeftSidebar } from "./LeftSidebar";
@@ -157,6 +158,7 @@ export default function ProjectChatScreen() {
   const codeVisible = useProjectChatStore((s) => s.codeVisible);
   const chatWidth = useProjectChatStore((s) => s.chatWidth);
   const experimentalMode = useProjectChatStore((s) => s.experimentalMode);
+  const chatFocusMode = useProjectChatStore((s) => s.chatFocusMode);
   const setSidebarOpen = useProjectChatStore((s) => s.setSidebarOpen);
 
 
@@ -198,6 +200,14 @@ export default function ProjectChatScreen() {
   }
 
   const onlyChat = !sidebarOpen && !codeVisible;
+
+  // Round-28 WS-D1: chatFocusMode (default true on chat routes) shows ONLY the
+  // chat — left/center-left aligned, no Explorer/Code panels. The ChatTopBar's
+  // "Show panels" toggle flips this false → 3-panel layout below. Experimental
+  // mode still takes precedence (it's the freeform windows view).
+  if (!experimentalMode && chatFocusMode) {
+    return <ChatFocusLayout project={project} />;
+  }
 
   return (
     <motion.div
