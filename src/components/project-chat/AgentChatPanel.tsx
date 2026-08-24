@@ -1160,10 +1160,21 @@ export function AgentChatPanel({
             value={input}
             onChange={(e) => setInput(e.target.value)}
             onKeyDown={onInputKeyDown}
-            placeholder="Message…"
+            placeholder="Message Acute…"
             className="flex-1 min-w-0 bg-transparent outline-none text-[13px]"
             style={{ color: styles.text }}
           />
+          {busy ? (
+            <button
+              onClick={() => { /* stop logic: abort the fetch */ }}
+              aria-label="Stop"
+              title="Stop generation"
+              className="w-8 h-8 rounded-xl grid place-items-center shrink-0 transition-transform hover:scale-105 active:scale-95"
+              style={{ backgroundColor: SEMANTIC_COLORS.danger, color: "#fff" }}
+            >
+              <span className="w-3 h-3 rounded-sm bg-white/90" />
+            </button>
+          ) : null}
           <button
             onClick={() => void runTurn(input)}
             aria-label="Send message"

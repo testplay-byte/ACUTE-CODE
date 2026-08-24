@@ -46,15 +46,15 @@ export function CodeView({ projectId, busy = false }: { projectId: string; busy?
         {/* decorative macOS traffic lights — intentional exception */}
         <div className="flex gap-1.5 shrink-0">
           <span
-            className="w-3 h-3 rounded-full"
+            className="w-2.5 h-2.5 rounded-full"
             style={{ background: "#FF5F56", border: "1px solid rgba(0,0,0,0.1)" }}
           />
           <span
-            className="w-3 h-3 rounded-full"
+            className="w-2.5 h-2.5 rounded-full"
             style={{ background: "#FFBD2E", border: "1px solid rgba(0,0,0,0.1)" }}
           />
           <span
-            className="w-3 h-3 rounded-full"
+            className="w-2.5 h-2.5 rounded-full"
             style={{ background: "#27C93F", border: "1px solid rgba(0,0,0,0.1)" }}
           />
         </div>
@@ -73,7 +73,7 @@ export function CodeView({ projectId, busy = false }: { projectId: string; busy?
             className="w-1.5 h-1.5 rounded-full animate-pulse"
             style={{ backgroundColor: SEMANTIC_COLORS.success }}
           />
-          Acute editing
+          editing
           {busy && (
             <span className="flex gap-0.5 ml-1">
               {[0, 0.15, 0.3].map((delay, i) => (

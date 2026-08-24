@@ -80,7 +80,7 @@ export function SettingsPage() {
         </div>
       </div>
 
-      <div className="min-h-0 flex-1 overflow-y-auto px-5 md:px-8 py-5">
+      <div className="min-h-0 flex-1 overflow-y-auto px-5 md:px-8 py-5 mx-auto w-full max-w-3xl">
         {tab === "appearance" && <AppearanceTab />}
         {tab === "agents" && <AgentsScreen embedded />}
         {tab === "api" && <ModelsProvidersTab />}
