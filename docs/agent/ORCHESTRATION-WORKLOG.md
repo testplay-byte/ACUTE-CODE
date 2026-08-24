@@ -696,3 +696,74 @@ Stage Summary:
 - SUB-AGENT REVIEW COMPLETE: 6 parallel agents (6-a/6-b/6-c research + 6-d/6-e/6-f review) all appended to /home/z/my-project/worklog.md (now 960 lines). 30 fixes applied to plan.
 - NEXT: begin execution per master plan §17. MS-1 first (A1 governance + A2 worklog sync + B sidebar + C settings — all unblock MS-2). pnpm install via corepack needed first (6-f finding).
 - Owner rule (R28): if sandbox wipes again, DO NOT attempt autonomous recovery — just `curl -d "ACUTE-CODE sandbox wiped — re-supply credentials to resume" https://ntfy.sh/TASKISDONE` and stop. Repo + canonical worklog survive on GitHub; owner re-supplies tokens in chat.
+
+---
+
+## Round 28 (2026-08-24) — UX + Agentic-Quality Overhaul — DELIVERED
+
+**Owner directive (opening message):** *"Quality over speed or time. Take as
+much time as needed. It is a very huge task… handle each and every single
+one of the things properly… highly customizable, flexible, and easily
+manageable… implement proper project or such indexing… utilize advanced
+searching techniques too, like a grep… everything should be well optimized."*
+
+Plus the mid-session directive: *"you did not rush on anything… a proper
+to-do list, you properly followed it, you took your time… document this, the
+proper workflow… good luck and continue and execute the plan properly. Do
+the proper testing afterwards too… complete everything in this exact same
+one now."*
+
+**Plan:** `docs/ROUND-28-MASTER-PLAN.md` (1123 lines, v2 with 30 sub-agent
+review fixes applied — 6-d architecture, 6-e UX, 6-f risk/scope).
+
+**Execution (5 milestones, 13 workstreams A-M):**
+- MS-1: A1+A2 (governance docs) + B (sidebar — brand block removed,
+  NAVIGATION/PROJECTS sections) + C (settings — getContrastText contrast
+  fix + Sun/Moon + swatch borders + 2-col grid) + K1 (publish-screenshots.mjs
+  infra). VLM-verified: sidebar NO brand; settings knob readable.
+- MS-2: D1 (chatFocusMode + ChatFocusLayout + ChatTopBar) + D2
+  (AgentChatPanel modernization + useSidecarHealth demo-mode auto-detect +
+  caret-blink + aria-live + streaming hook) + D3 (Stop abort + DiffCard real
+  unified diff + delete orphaned TopBar). VLM-verified: chat on LEFT, no
+  panels alongside.
+- MS-3: F (AGENTIC LOOP prompt + outer loop maxOuterLoops 5 + inverted
+  continueIfUnfinished + context/request guards + meta.continuation SSE
+  events). Live-battery-verified: 5 tool calls (read x2, create_dir, write,
+  read-verify) + "Done." + research/summary.md written. The model IS capable
+  — the issue was in our runtime (no outer loop) + prompt (no AGENTIC LOOP).
+- MS-4: G1 (0007 codebase_index migration + storage/index.ts indexer +
+  index_project 16th tool + CODEBASE AWARENESS prompt injection) + G2
+  (GET /projects/:id/index + useProjectIndex + CodebasePanel) + H
+  (search_code case_sensitive/whole_word/file_glob/max_results + CommandPalette
+  ⌘K + POST /projects/:id/search). Live-battery-verified: 318 files + 2384
+  symbols indexed in 124ms + symbol search match (buildProjectTools →
+  agent-core/src/tools/index.ts:367).
+- MS-5: I (/demos route + DemoViewerScreen + sandboxed iframe via srcDoc) +
+  J1 (DOC-STANDARDS.md + check-stale.mjs + docs:check CI gate) + L
+  (verify-round.mjs one-shot battery) + M (REVIEW-CADENCE.md) + K2 (DASHBOARD
+  UI screenshots section). VLM-verified: Demos sidebar button + viewer page
+  render cleanly.
+
+**Plus the ORCHESTRATOR-METHOD.md** cognitive workflow doc (owner explicit
+ask: "document this, the proper workflow") — the companion to WORKFLOW.md
+that captures the session-opening ritual, planning ritual (research → plan →
+sub-agent review → apply fixes → execute), execution ritual (per-milestone
+verify gates), verification ladder (5 rungs), documentation ritual,
+push/backup/notify ritual, close-out checklist, anti-patterns.
+
+**Verification:**
+- pnpm verify GREEN: 213 tests (207 + 6 e2e), build + license clean.
+- Live batteries: MS-3 (5 tool calls + Done.) + MS-4 (318 files indexed).
+- Browser VLM: MS-1 (sidebar/settings) + MS-2 (chat on LEFT) + MS-5 (demo
+  viewer) — all render cleanly, no errors.
+- 8 screenshots published to DASHBOARD repo (round-28.zip, 675 KB, 30 total
+  across R27+R28).
+
+**AGENT-MEMORY lessons #41-46 appended** (DASHBOARD CI rebase dance, pnpm
+corepack shim, background-process single-invocation pattern, demo-mode
+auto-detect root cause, "model not capable" was wrong, doc-stamp CI gate
+warn-only).
+
+**Git tip:** 23ed35b (Round 28 close-out). CI green throughout.
+
+**Awaiting owner verdict.** Per AGENT-MEMORY #39: ntfy ONLY on owner APPROVE.
