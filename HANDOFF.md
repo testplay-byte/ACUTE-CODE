@@ -1,7 +1,7 @@
 <!-- last-reviewed: 2026-08-24 round-28 -->
 # ACUTE-CODE — Agent Handoff Document
 
-**Last updated:** 2026-08-24 (round-28 DELIVERED — 5 milestones, 213 tests green, CI green) · **Maintained by:** the orchestrator agent · **Audience:** any AI agent (or human) taking over development
+**Last updated:** 2026-08-24 (round-28 DELIVERED + J2 follow-up — 5 milestones, **207 tests green** (incl. 6 e2e vs built dist), CI green, docs:check 0/0) · **Maintained by:** the orchestrator agent · **Audience:** any AI agent (or human) taking over development
 
 You are picking up **ACUTE-CODE**, a local-first, closed-source multi-agent engineering workbench for Windows. This file gives you everything needed to continue: state, rules, environment, gotchas, and next steps. It contains **no secrets** — secrets live only in Windows Credential Manager (§7).
 
@@ -26,7 +26,7 @@ ACUTE-CODE (NOT "Forge" — the brief's old codename) is a Windows desktop app: 
 
 ## 3. Exact current state (2026-08-24, round-28 DELIVERED)
 
-**Round 28 is COMPLETE — all 5 milestones delivered, 213 tests green (207 + 6 e2e), CI green. The owner's 9 R28 directives are realized: (1) sidebar brand block removed + NAVIGATION/PROJECTS sections; (2) settings appearance contrast fix + Sun/Moon + swatch borders + 2-col grid; (3) chat screen complete redesign — chatFocusMode + ChatFocusLayout + ChatTopBar, chat on LEFT, no Explorer/Code panels in focus mode; (4) live streaming typing effect via useSidecarHealth (demo-mode auto-detect → SSE path) + caret-blink cursor + aria-live; (5) multi-turn agentic continuation — AGENTIC LOOP prompt section + outer loop (maxOuterLoops 5) + inverted continueIfUnfinished; (6) project indexing — codebase_index table + index_project 16th tool + CODEBASE AWARENESS prompt injection; (7) advanced search — search_code case_sensitive/whole_word/file_glob/max_results + CommandPalette ⌘K + POST /projects/:id/search; (8) in-app demo viewer — /demos route + DemoViewerScreen + sandboxed iframe; (9) documentation proper + manageable — DOC-STANDARDS.md + check-stale.mjs CI gate + REVIEW-CADENCE.md + ORCHESTRATOR-METHOD.md (the cognitive workflow doc). Plus K1+K2 (DASHBOARD screenshot publish infra + UI section), L (verify-round.mjs). See `docs/ui-iterations/round-28.md` for the full evidence (live batteries: MS-3 = 5 tool calls + Done. + file written; MS-4 = 318 files + 2384 symbols indexed in 124ms + symbol search match). The next agent picks up at: owner verdict on R28, then J2 (docs stamp backfill) + Phase 3 orchestration upon explicit approval.**
+**Round 28 is COMPLETE — all 5 milestones delivered, 207 tests green (incl. 6 e2e vs the built dist), CI green, docs:check 0/0. The owner's 9 R28 directives are realized: (1) sidebar brand block removed + NAVIGATION/PROJECTS sections; (2) settings appearance contrast fix + Sun/Moon + swatch borders + 2-col grid; (3) chat screen complete redesign — chatFocusMode + ChatFocusLayout + ChatTopBar, chat on LEFT, no Explorer/Code panels in focus mode; (4) live streaming typing effect via useSidecarHealth (demo-mode auto-detect → SSE path) + caret-blink cursor + aria-live; (5) multi-turn agentic continuation — AGENTIC LOOP prompt section + outer loop (maxOuterLoops 5) + inverted continueIfUnfinished; (6) project indexing — codebase_index table + index_project 16th tool + CODEBASE AWARENESS prompt injection; (7) advanced search — search_code case_sensitive/whole_word/file_glob/max_results + CommandPalette ⌘K + POST /projects/:id/search; (8) in-app demo viewer — /demos route + DemoViewerScreen + sandboxed iframe; (9) documentation proper + manageable — DOC-STANDARDS.md + check-stale.mjs CI gate + REVIEW-CADENCE.md + ORCHESTRATOR-METHOD.md (the cognitive workflow doc). Plus K1+K2 (DASHBOARD screenshot publish infra + UI section), L (verify-round.mjs). **J2 (docs stamp backfill) — DELIVERED this session (commit 65246ca):** created `scripts/docs/stamp-all.mjs` (the tool DOC-STANDARDS §8 references but never existed), backfilled the `<!-- last-reviewed -->` stamp on 103 docs (docs:check 105 failures → 0), and hardened `check-stale.mjs` (indented-fence support — the real bug; inline-code skip for path+URL; template/placeholder/non-TLD URL guards; parallel `fetch`+retry replacing the sequential curl-spawn loop: 229 URLs 120s+ → 15s). See `docs/ui-iterations/round-28.md` for the full evidence (live batteries: MS-3 = 5 tool calls + Done. + file written; MS-4 = 318 files + 2384 symbols indexed in 124ms + symbol search match). The next agent picks up at: owner verdict on R28 (now with J2 closed + honest 207 test count — the prior "213 (207+6 e2e)" double-counted; 6 e2e are already in the 207), then Phase 3 orchestration upon explicit approval.**
 
 | Item | State |
 |---|---|
@@ -38,9 +38,9 @@ ACUTE-CODE (NOT "Forge" — the brief's old codename) is a Windows desktop app: 
 | Round-15 (owner verdicts) | **DELIVERED** — folder dialog 2-method + error surfacing, fullscreen chat (hamburger toggles app sidebar), plug-and-play Nova agent seed (fresh DB chats out of the box), dialog centering fix (numeric proof), owner HTML scenario live-proven (`round-11.md`) |
 | Round-14 (agentic system) | **DELIVERED** (OS folder-picker endpoint, 7 file tools incl. create_dir/delete-refusal/search_files, demo-parity chat UI with TopBar agent-picker/search/theme/experimental + To-Do, live P1 proof) — `round-10.md`; dashboard redo QUEUED next |
 | Agentic MVP | **M1–M4 DONE** (migration 0003, `/api/v1/projects` CRUD + `/tree` + `/file`, file tools sandboxed to project root, `tool.use` audit events, Tauri `pick_folder`; M3 project-chat UI at `/project/:id/chat` + Add Project on backend + `projects-store.ts` deleted; M4 live run verified on disk) — **awaiting owner review** (`round-09.md`) |
-| Tests | `pnpm verify` green: lint + typecheck + **175 unit + 6 sidecar-E2E** + build + license audit (107 prod deps, CLEAN); `cargo check` green on CI |
+| Tests | `pnpm verify` green: lint + typecheck + **207 tests** (incl. 6 sidecar-E2E vs the built dist) + build + license audit (107 prod deps, CLEAN); `cargo check` green on CI |
 | Dev stack | `pnpm dev:full` = sidecar on 127.0.0.1:5178 (OpenRouter key auto-read from Credential Manager) + vite. Plain `pnpm dev` = UI only, NO backend. Dev CLI: `node scripts/acute.mjs <cmd>` |
-| **Git remote** | `https://github.com/testplay-byte/ACUTE-CODE` (PRIVATE — verify before any push). **Fully synced: code tip = `a727b43` (Round 28 plan + R28 worklog entry, on top of `1498a30` Round 27)**, CI GREEN. The handoff-refresh commit sits on top of it. Clone and confirm `git log --oneline -1` shows `a727b43` or newer. |
+| **Git remote** | `https://github.com/testplay-byte/ACUTE-CODE` (PRIVATE — verify before any push). **Fully synced: code tip = `65246ca` (Round 28 J2 docs-stamp-backfill + check-stale hardening, on top of `23ed35b` Round 28 close-out)**, CI GREEN. Clone and confirm `git log --oneline -1` shows `65246ca` or newer. |
 | Working copy (previous agent) | `C:\Users\khurr\Desktop\ZCODE\ACUTE_CODE\acute-code` (branch `main`) — the new agent clones fresh from GitHub into `/home/z/PROJECT/ACUTECODE` (Linux sandbox) per `docs/runbooks/SANDBOX-RESTORE.md` (round-28 layout) |
 | Design demos (owner's) | **Backed up in-repo at `design/demos/`** — `acute-agent-ui` (wizard, DONE), `acute-agent-dashboard` (dashboard), `project-chat` (the coding UI to port for M3 — the normative spec) |
 
@@ -90,7 +90,7 @@ acute-code/
 
 ## 6. First tasks for you, in order
 
-1. **Confirm you have current code**: `git log --oneline -1` → must be `a727b43` or newer (pull if behind). If your machine lacks push credentials, follow `docs/runbooks/SANDBOX-RESTORE.md` (round-28 layout: `/home/z/PROJECT/ACUTECODE` + per-repo credential helpers + token-in-URL clone per lesson #24).
+1. **Confirm you have current code**: `git log --oneline -1` → must be `65246ca` or newer (pull if behind). If your machine lacks push credentials, follow `docs/runbooks/SANDBOX-RESTORE.md` (round-28 layout: `/home/z/PROJECT/ACUTECODE` + per-repo credential helpers + token-in-URL clone per lesson #24).
    ```bash
    git config --global credential.https://github.com.helper ""          # clear inherited GCM for this host
    git config --global credential.https://github.com.helper wincred     # GCM itself special-cases github.com to OAuth and silently discards PATs — wincred works
@@ -135,7 +135,7 @@ The Rust shell reads provider keys from Credential Manager at spawn and injects 
 - Tauri on Windows needs `src-tauri/icons/icon.ico` even with bundling disabled.
 - Git Bash kills don't always take node children down — check `tasklist` for orphans after sidecar tests (`taskkill //F //PID <pid>`).
 
-## 9. What's next: J2 docs stamp backfill — then Phase 3 — Orchestration engine (after owner approval)
+## 9. What's next: owner verdict on R28 (J2 closed) — then Phase 3 — Orchestration engine (after owner approval)
 
 **Round-28 (2026-08-24, DELIVERED):** the full plan was at `docs/ROUND-28-MASTER-PLAN.md` (1123 lines, v2 with 30 sub-agent review fixes applied). All 5 milestones delivered; see `docs/ui-iterations/round-28.md` for the complete evidence. The 13 workstreams A-M across 5 milestones were:
 - **MS-1**: A1+A2 (governance + docs sync) + B (sidebar redesign — remove brand block) + C (settings appearance contrast fix)
