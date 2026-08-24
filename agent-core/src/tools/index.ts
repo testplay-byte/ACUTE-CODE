@@ -10,6 +10,8 @@
 import { mkdirSync, readdirSync, readFileSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 import { isAbsolute, join, posix, sep } from "node:path";
 import { jsonSchema, type ToolSet } from "ai";
+import { gitDiff, gitLog, gitStatus } from "./git.js";
+import { runCommand } from "./exec.js";
 
 export interface ToolResult {
   ok: boolean;
@@ -261,6 +263,60 @@ export function searchFiles(root: string, query: string, dir?: string): ToolResu
   return { ok: true, output: `${hits.length} match(es) for '${query}':\n${hits.join("\n")}` };
 }
 
+/** search_code — content search over file contents (Kilo/Cline parity).
+ * Finds WHERE a string/regex is used: "where is X imported", "what calls Y".
+ */
+export function searchCode(root: string, query: string, dir?: string): ToolResult {
+  const needle = query.trim();
+  if (needle === "") return { ok: false, output: "search_code needs a non-empty 'query'" };
+  const isRegex = needle.startsWith("/") && needle.endsWith("/") && needle.length > 2;
+  const pattern = isRegex ? needle.slice(1, -1) : needle.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  let regex: RegExp;
+  try {
+    regex = new RegExp(pattern, "i");
+  } catch {
+    return { ok: false, output: `invalid regex: ${needle}` };
+  }
+  const base = dir !== undefined && dir.trim() !== "" ? resolveInsideRoot(root, dir) : ({ abs: root } as const);
+  if ("error" in base) return { ok: false, output: base.error };
+  const hits: string[] = [];
+  const walk = (absDir: string, rel: string, depth: number) => {
+    if (depth > MAX_DEPTH || hits.length >= 50) return;
+    let entries: string[];
+    try {
+      entries = readdirSync(absDir);
+    } catch {
+      return;
+    }
+    for (const name of entries.slice(0, MAX_ENTRIES)) {
+      if (hits.length >= 50) return;
+      if (IGNORED_DIRS.has(name) || (name.startsWith(".") && name !== ".github")) continue;
+      const relPath = rel === "" ? name : `${rel}/${name}`;
+      try {
+        const stats = statSync(join(absDir, name));
+        if (stats.isDirectory()) {
+          walk(join(absDir, name), relPath, depth + 1);
+        } else if (stats.size < 512 * 1024) {
+          const buf = readFileSync(join(absDir, name));
+          if (buf.includes(0)) continue; // binary
+          const content = buf.toString("utf8");
+          const lines = content.split("\n");
+          for (let i = 0; i < lines.length && hits.length < 50; i++) {
+            if (regex.test(lines[i])) {
+              hits.push(`${relPath}:${i + 1}: ${lines[i].trim().slice(0, 120)}`);
+            }
+          }
+        }
+      } catch {
+        /* unreadable — skip */
+      }
+    }
+  };
+  walk(base.abs, base.abs === root ? "" : toRelative(root, base.abs), 0);
+  if (hits.length === 0) return { ok: true, output: `no content matches for '${needle}'` };
+  return { ok: true, output: `${hits.length} match(es) for '${needle}':\n${hits.join("\n")}` };
+}
+
 /* ── AI SDK tool-set adapter ───────────────────────────────────────────────
  * The ChatFn hands these to generateText; each execute() returns a string the
  * model can read. Tool invocations are logged by the runtime into the session
@@ -383,6 +439,67 @@ export function buildProjectTools(root: string, allowedTools?: readonly string[]
           typeof input.query === "string" ? input.query : "",
           typeof input.dir === "string" ? input.dir : undefined,
         ),
+    },
+    search_code: {
+      description:
+        "Search the project for files whose CONTENT matches the query (case-insensitive substring or /regex/). Use it to find where a function is defined, what imports a module, where a string is used. Returns file:line: text matches.",
+      inputSchema: jsonSchema({
+        type: "object",
+        properties: {
+          query: { type: "string", description: "Text to search for (or /regex/ for pattern matching)" },
+          dir: { type: "string", description: "Optional folder to search within ('' = whole project)" },
+        },
+        required: ["query"],
+      }),
+      execute: async (input) =>
+        searchCode(
+          root,
+          typeof input.query === "string" ? input.query : "",
+          typeof input.dir === "string" ? input.dir : undefined,
+        ),
+    },
+    git_status: {
+      description: "Show the current git repository status: branch, staged/unstaged files, ahead/behind. Use before making changes to understand the state.",
+      inputSchema: jsonSchema({
+        type: "object",
+        properties: {},
+        required: [],
+      }),
+      execute: async () => gitStatus(root),
+    },
+    git_diff: {
+      description: "Show git diff of the working directory (optionally for a specific file). Use to review pending changes.",
+      inputSchema: jsonSchema({
+        type: "object",
+        properties: {
+          file: { type: "string", description: "Optional file path to diff (empty = all changes)" },
+        },
+        required: [],
+      }),
+      execute: async (input) =>
+        gitDiff(root, typeof input.file === "string" && input.file.trim() !== "" ? input.file : undefined),
+    },
+    git_log: {
+      description: "Show the last 20 git commits (oneline + branch decorations). Use to understand recent history.",
+      inputSchema: jsonSchema({
+        type: "object",
+        properties: {},
+        required: [],
+      }),
+      execute: async () => gitLog(root),
+    },
+    run_command: {
+      description:
+        "Run a terminal command inside the project root. Auto-approved for safe commands (ls, cat, grep, git status/diff/log, npm/pnpm test/build/lint, cargo check/build, node --version). Blocked commands return an explanation.",
+      inputSchema: jsonSchema({
+        type: "object",
+        properties: {
+          command: { type: "string", description: "The shell command to execute" },
+        },
+        required: ["command"],
+      }),
+      execute: async (input) =>
+        runCommand(root, typeof input.command === "string" ? input.command : ""),
     },
   };
   if (allow !== null) {

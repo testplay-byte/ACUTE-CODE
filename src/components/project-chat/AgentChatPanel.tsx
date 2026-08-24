@@ -16,10 +16,12 @@ import {
   Copy,
   Edit3,
   FileCode2,
+  FolderOpen,
   Paperclip,
   Search,
   Sparkles,
   Terminal,
+  Trash2,
   type LucideIcon,
 } from "lucide-react";
 import { Link } from "react-router";
@@ -72,6 +74,14 @@ const TOOL_ICONS: Record<string, LucideIcon> = {
   write_file: Edit3,
   edit_file: Edit3,
   web_search: Search,
+  search_code: Search,
+  search_files: Search,
+  git_status: FileCode2,
+  git_diff: FileCode2,
+  git_log: FileCode2,
+  run_command: Terminal,
+  create_dir: FolderOpen,
+  delete_file: Trash2,
 };
 
 const basename = (p: string): string => p.split("/").pop() ?? p;
@@ -189,6 +199,49 @@ function UserMessage({ content }: { content: string }) {
 }
 
 /** Demo inline-markup parser, verbatim: **bold** and `code` per line. */
+
+/** Inline code block renderer with copy button (round-24: Kilo Code parity). */
+function CodeBlock({ code }: { code: string }) {
+  const styles = useThemeStyles();
+  const [copied, setCopied] = useState(false);
+  const lines = code.split("\n");
+  return (
+    <div className="my-1.5 rounded-[12px] overflow-hidden border" style={{ borderColor: styles.border }}>
+      <div
+        className="flex items-center justify-between px-3 py-1.5 border-b"
+        style={{ background: styles.subtle, borderColor: styles.border }}
+      >
+        <span className="font-mono text-[10px] font-bold" style={{ color: styles.textTertiary }}>
+          {lines.length} {lines.length === 1 ? "line" : "lines"}
+        </span>
+        <button
+          onClick={() => {
+            void navigator.clipboard?.writeText(code);
+            setCopied(true);
+            setTimeout(() => setCopied(false), 1200);
+          }}
+          className="flex items-center gap-1 rounded-md px-2 py-0.5 text-[10px] font-semibold transition-colors"
+          style={{ color: styles.textTertiary }}
+          aria-label="Copy code"
+        >
+          {copied ? <Check size={10} style={{ color: "#22c55e" }} /> : <Copy size={10} />}
+          {copied ? "Copied" : "Copy"}
+        </button>
+      </div>
+      <pre className="overflow-x-auto p-3 font-mono text-[11.5px] leading-[1.6]" style={{ color: styles.text }}>
+        {lines.map((line, i) => (
+          <div key={i} className="flex">
+            <span className="w-7 shrink-0 text-right pr-3 select-none font-mono text-[10px] leading-[1.6]" style={{ color: styles.textTertiary }}>
+              {i + 1}
+            </span>
+            <span className="flex-1 whitespace-pre-wrap break-words">{line || " "}</span>
+          </div>
+        ))}
+      </pre>
+    </div>
+  );
+}
+
 function RichText({ content }: { content: string }) {
   const styles = useThemeStyles();
   const lines = content.split("\n");
@@ -237,6 +290,70 @@ function RichText({ content }: { content: string }) {
     elements.push(<span key={`l-${i}`}>{lineEl}</span>);
   }
 
+  // Detect fenced code blocks (```...```) and render them as CodeBlock
+  const codeBlockRegex = /```[a-zA-Z]*\n([\s\S]*?)```/g;
+  const parts: ReactNode[] = [];
+  let lastIndex = 0;
+  let match;
+  let keyIdx = 0;
+  while ((match = codeBlockRegex.exec(content)) !== null) {
+    // Render text before the code block
+    if (match.index > lastIndex) {
+      parts.push(<RichTextInline key={`rt-${keyIdx++}`} content={content.slice(lastIndex, match.index)} />);
+    }
+    parts.push(<CodeBlock key={`cb-${keyIdx++}`} code={match[1].trimEnd()} />);
+    lastIndex = match.index + match[0].length;
+  }
+  // Render remaining text
+  if (lastIndex < content.length) {
+    parts.push(<RichTextInline key={`rt-${keyIdx++}`} content={content.slice(lastIndex)} />);
+  }
+  return <>{parts}</>;
+}
+
+/** Original inline parser (bold + `code`) — used for non-code-block text. */
+function RichTextInline({ content }: { content: string }) {
+  const styles = useThemeStyles();
+  const elements: ReactNode[] = [];
+  const lines = content.split("\n");
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    const parts = line.split(/\*\*(.*?)\*\*/g);
+    const lineEl: ReactNode[] = [];
+    for (let j = 0; j < parts.length; j++) {
+      if (j % 2 === 1) {
+        lineEl.push(
+          <strong key={`b-${i}-${j}`} style={{ fontWeight: 700 }}>
+            {parts[j]}
+          </strong>,
+        );
+      } else if (parts[j]) {
+        const codeParts = parts[j].split(/`(.*?)`/g);
+        for (let k = 0; k < codeParts.length; k++) {
+          if (k % 2 === 1) {
+            lineEl.push(
+              <code
+                key={`c-${i}-${j}-${k}`}
+                className="px-1.5 py-0.5 rounded-md text-[11.5px] font-mono"
+                style={{
+                  background: withAlpha(styles.accent, styles.isDark ? 0.13 : 0.08),
+                  color: styles.text,
+                }}
+              >
+                {codeParts[k]}
+              </code>,
+            );
+          } else if (codeParts[k]) {
+            lineEl.push(<span key={`s-${i}-${j}-${k}`}>{codeParts[k]}</span>);
+          }
+        }
+      }
+    }
+    if (i > 0) {
+      elements.push(<div key={`br-${i}`} className="mt-1.5" />);
+    }
+    elements.push(<span key={`l-${i}`}>{lineEl}</span>);
+  }
   return <>{elements}</>;
 }
 

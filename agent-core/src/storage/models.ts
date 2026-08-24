@@ -175,3 +175,18 @@ export function deleteModel(db: SqliteDatabase, id: string): boolean {
 export function deleteModelsByProvider(db: SqliteDatabase, providerId: string): void {
   db.prepare("DELETE FROM models WHERE provider_id = ?").run(providerId);
 }
+
+/** Look up pricing for a provider+model (round-24: cost tracking). */
+export function lookupPricing(
+  db: SqliteDatabase,
+  providerId: string,
+  modelId: string,
+): { inputPricePerMtok: number | null; outputPricePerMtok: number | null } {
+  const row = db
+    .prepare("SELECT input_price_per_mtok, output_price_per_mtok FROM models WHERE provider_id = ? AND model_id = ?")
+    .get(providerId, modelId) as
+    | { input_price_per_mtok: number | null; output_price_per_mtok: number | null }
+    | undefined;
+  if (!row) return { inputPricePerMtok: null, outputPricePerMtok: null };
+  return { inputPricePerMtok: row.input_price_per_mtok, outputPricePerMtok: row.output_price_per_mtok };
+}

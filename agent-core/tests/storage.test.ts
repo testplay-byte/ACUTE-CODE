@@ -141,6 +141,11 @@ describe("template seeding", () => {
           "create_dir",
           "delete_file",
           "search_files",
+          "search_code",
+          "git_status",
+          "git_diff",
+          "git_log",
+          "run_command",
         ]);
         expect(row.memory_policy).toBe("on-start");
         expect(row.max_turns).toBe(40);

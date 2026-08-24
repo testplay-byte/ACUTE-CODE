@@ -21,6 +21,11 @@ export const TOOL_NAMES = [
   "create_dir",
   "delete_file",
   "search_files",
+  "search_code",
+  "git_status",
+  "git_diff",
+  "git_log",
+  "run_command",
 ] as const;
 
 /** Agent JSON as served by the API: AgentRecord plus bookkeeping columns. */

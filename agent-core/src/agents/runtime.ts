@@ -24,6 +24,8 @@ import {
   touchSession,
 } from "../storage/sessions.js";
 import type { ChatFn, ChatTurnMessage, ChatTurnOutput, StreamChatFn } from "./chat.js";
+import { buildProjectSystemPrompt, readCustomRules } from "./prompts.js";
+import { lookupPricing } from "../storage/models.js";
 
 export type SqliteDatabase = Database.Database;
 
@@ -174,14 +176,12 @@ function prepareTurn(
   const tools =
     project !== undefined ? buildProjectTools(project.rootPath, agent.allowedTools) : undefined;
   const system = project
-    ? [
-        agent.systemPrompt,
-        "",
-        `You are working inside the project "${project.name}" located at "${project.rootPath}".`,
-        "You have file tools (list_dir, read_file, write_file, edit_file, create_dir, delete_file, search_files). Paths are RELATIVE to the project root.",
-        "Workflow: search_files/list_dir to explore → read_file before editing → edit_file for small changes / write_file for new files or full rewrites → create_dir for new folders.",
-        "delete_file only when the user explicitly asked for a deletion. After making changes, briefly summarize what you changed and why. If asked to create something, actually create it with the tools.",
-      ].join("\n")
+    ? buildProjectSystemPrompt({
+        projectName: project.name,
+        rootPath: project.rootPath,
+        toolNames: Object.keys(buildProjectTools(project.rootPath)),
+        customRules: readCustomRules(project.rootPath),
+      })
     : agent.systemPrompt;
   return {
     session,
@@ -270,7 +270,7 @@ export async function runSingleAgentTurn(
     model,
     inputTokens: result.usage.inputTokens,
     outputTokens: result.usage.outputTokens,
-    costUsd: 0, // cost estimation arrives in a later wave; providers without pricing report 0
+    costUsd: computeCost(db, provider.id, model, result.usage.inputTokens, result.usage.outputTokens),
     ts: assistantEvent.ts,
   };
   recordUsage(db, usage);
@@ -391,7 +391,7 @@ export async function runStreamedAgentTurn(
     model,
     inputTokens,
     outputTokens,
-    costUsd: 0,
+    costUsd: computeCost(db, provider.id, model, inputTokens, outputTokens),
     ts: assistantEvent.ts,
   };
   recordUsage(db, usage);
@@ -408,4 +408,20 @@ export async function runStreamedAgentTurn(
     },
     usage,
   };
+}
+
+/** Compute cost from the models table pricing (round-24). */
+function computeCost(
+  db: SqliteDatabase,
+  providerId: string,
+  modelId: string,
+  inputTokens: number,
+  outputTokens: number,
+): number {
+  const pricing = lookupPricing(db, providerId, modelId);
+  if (pricing.inputPricePerMtok === null || pricing.outputPricePerMtok === null) return 0;
+  return (
+    (inputTokens / 1_000_000) * pricing.inputPricePerMtok +
+    (outputTokens / 1_000_000) * pricing.outputPricePerMtok
+  );
 }
