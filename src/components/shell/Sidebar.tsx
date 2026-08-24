@@ -73,14 +73,19 @@ export function Sidebar() {
       animate={{ width: collapsed ? 64 : 270 }}
       transition={{ duration: 0.25, ease: [0.25, 0.1, 0.25, 1] }}
       className="shrink-0 flex flex-col overflow-hidden rounded-[20px] border-[1.5px]"
+      aria-label="Main sidebar"
       style={{
         backgroundColor: styles.subtle,
         borderColor: styles.borderStrong,
       }}
     >
-      {/* Top row: hamburger (toggles sidebar visibility on chat route) + brand */}
-      <div className={cn("shrink-0 flex items-center gap-2.5 px-3 pt-4", collapsed && "justify-center px-2")}>
-        {isChatRoute && (
+      {/* Top row: hamburger ONLY on chat routes (toggles sidebar visibility).
+          No app name, no logo, no version pill at the top of the sidebar
+          (owner R28 directive: "at the very top it should not show the app's
+          name like that and the logo like that"). The product name lives in
+          the document <title> and the Settings/About surfaces. */}
+      {isChatRoute && (
+        <div className={cn("shrink-0 flex items-center px-3 pt-4", collapsed && "justify-center px-2")}>
           <button
             onClick={() => setAppSidebarVisible(!appSidebarVisible)}
             aria-label={appSidebarVisible ? "Hide sidebar" : "Show sidebar"}
@@ -90,34 +95,20 @@ export function Sidebar() {
           >
             <Menu size={14} />
           </button>
-        )}
-        {!collapsed && (
-          <>
-            <div
-              className="w-8 h-8 shrink-0 rounded-[10px] grid place-items-center font-black text-[14px]"
-              style={{ background: styles.accent, color: styles.accentText, transition: "transform 0.3s ease" }}
-              onMouseEnter={(e) => (e.currentTarget.style.transform = "rotate(180deg)")}
-              onMouseLeave={(e) => (e.currentTarget.style.transform = "rotate(0deg)")}
-            >
-              {"\u25D0"}
-            </div>
-            <div className="flex items-center gap-2 min-w-0">
-              <span className="text-[13px] font-bold tracking-[-0.02em] truncate" style={{ color: styles.text }}>
-                Acute
-              </span>
-              <span
-                className="shrink-0 px-1.5 py-0.5 rounded-full text-[9px] font-bold font-mono"
-                style={{ background: styles.accent, color: styles.accentText }}
-              >
-                v0.1.0
-              </span>
-            </div>
-          </>
-        )}
-      </div>
+        </div>
+      )}
 
-      {/* NAV SECTION — cleanly separated */}
-      <nav className={cn("flex flex-col gap-1 px-2.5 pt-4 pb-3", collapsed && "px-1.5")} aria-label="Main navigation">
+      {/* NAVIGATION SECTION — dedicated section for Dashboard + Usage.
+          Section header matches the PROJECTS header style for visual parity;
+          hidden when collapsed (icons are self-explanatory). */}
+      {!collapsed && (
+        <div className="shrink-0 flex items-center px-4 pt-4 pb-1.5">
+          <span className="text-[11px] font-bold uppercase tracking-widest" style={{ color: styles.textTertiary }}>
+            Navigation
+          </span>
+        </div>
+      )}
+      <nav className={cn("flex flex-col gap-1 px-2.5 pb-3", collapsed ? "px-1.5 pt-4" : "pt-1")} aria-label="Main navigation">
         <DashboardButton collapsed={collapsed} />
         <UsageButton collapsed={collapsed} />
       </nav>

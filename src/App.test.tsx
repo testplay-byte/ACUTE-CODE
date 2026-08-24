@@ -8,14 +8,18 @@ import { renderWithProviders, resetTestState } from "./test-utils";
 afterEach(cleanup);
 
 describe("App shell (owner round-8 structure)", () => {
-  it("renders the app name, the Dashboard shortcut, Projects section, Usage and Settings — and NO topbar/sessions/agents nav", () => {
+  it("renders the Dashboard shortcut, Navigation + Projects sections, Usage and Settings — and NO app name/logo/brand at the sidebar top", () => {
     resetTestState();
     renderWithProviders(<App />);
 
-    // Brand area carries the product name.
-    expect(screen.getAllByText("Acute").length).toBeGreaterThan(0);
+    // Round-28 sidebar redesign: NO app name, logo, or version pill at the
+    // top of the sidebar (owner directive). The product name lives in the
+    // document <title> and Settings/About surfaces, not the sidebar chrome.
+    expect(screen.queryByText("Acute")).toBeNull();
+    expect(screen.queryByText("v0.1.0")).toBeNull();
 
-    // Sidebar structure: Dashboard button + PROJECTS section + Usage + Settings.
+    // Sidebar structure: NAVIGATION section header + Dashboard button + PROJECTS section + Usage + Settings.
+    expect(screen.getByText("Navigation")).toBeTruthy();
     expect(screen.getByRole("button", { name: /^dashboard$/i })).toBeTruthy();
     // "Projects" appears in the sidebar section header and the dashboard stat card.
     expect(screen.getAllByText("Projects").length).toBeGreaterThanOrEqual(2);
