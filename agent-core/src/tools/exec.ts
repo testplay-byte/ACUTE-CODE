@@ -11,17 +11,17 @@ const MAX_OUTPUT = 64 * 1024;
 
 /** Commands that are safe to auto-execute (read-only / build / test). */
 const SAFE_PREFIXES = [
-  "ls", "cat", "head", "tail", "wc", "find", "grep", "rg", "which", "where",
+  "ls", "cat", "head", "tail", "wc", "find", "grep", "rg ", "which", "where",
   "node --version", "npm --version", "pnpm --version", "python --version", "python3 --version",
   "git status", "git diff", "git log", "git branch", "git show", "git tag", "git commit", "git add",
   "npm test", "npm run", "pnpm test", "pnpm run", "pnpm lint", "pnpm typecheck", "pnpm verify",
-  "npx tsc", "cargo check", "cargo test", "cargo build",
-  "echo", "help", "pwd", "date", "env",
+  "npx tsc", "jest", "vitest ", "cargo check", "cargo test", "cargo build",
+  "echo", "help", "pip ", "pip3 ", "go ", "go test", "go build", "pwd", "date", "env",
 ];
 
 /** Commands that are always blocked (destructive, system-level, or network). */
 const BLOCKED = [
-  "rm -rf /", "pnpm dev", "npm start", "vite", "next dev", "sudo ", "su ", "shutdown", "reboot", "mkfs", "dd if=",
+  "rm -rf /", "sed -i", "chmod ", "pnpm dev", "npm start", "vite", "next dev", "sudo ", "su ", "shutdown", "reboot", "mkfs", "dd if=",
   "curl ", "wget ", "ssh ", "scp ", "nc ", "telnet ",
 ];
 
