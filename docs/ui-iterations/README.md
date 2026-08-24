@@ -32,6 +32,18 @@ UI stands and what is still open.
 | Mono theme dark mode | R8 accentDark fix | **DELIVERED** — visually verified |
 | All set (step 4) | R1 port → R3 theme-derived confetti | **APPROVED** ("perfect") |
 | Dashboard / Agents / Sessions / Chat | R1–R2 theme-engine restyle | Approved in the Phase-2 walkthrough ("everything is working properly… UI looks much better"); further polish on request |
+| **Round 16** (streaming) | SSE live streaming + per-reply stats + borderless tight chat UI + Nova→Acute rename + modern folder dialog + DESIGN-SYSTEM.md | **DELIVERED** — see ORCHESTRATION-WORKLOG (no round file written; lesson #33 sandbox-wipe mid-round codified ADR-0020 work-branch discipline) |
+| **Round 17** (governance) | docs index/WORKFLOW/ROADMAP/TESTING/SECURITY + ADR backfill 0014–0021 + PILLARS.md blueprint + IMPLEMENTED-API truth doc + tool-name truth + allowlist enforcement | **DELIVERED** — see ORCHESTRATION-WORKLOG |
+| **Round 18** (dashboard live) | Public DASHBOARD repo on GitHub Pages + plan section + browser-verified | **DELIVERED** — see ORCHESTRATION-WORKLOG |
+| **Round 19** (model management) | Models table migration 0004 (pricing/context/thinking) + 6 new routes + ModelsProvidersTab replaces "API & Providers" tab | **DELIVERED** — see ORCHESTRATION-WORKLOG |
+| **Round 20** (model fixes) | apiFormat column INSERT bug fix + Edit Model dialog + show/hide API key toggles + 30s test timeout + key save error display + live E2E battery | **DELIVERED** — see ORCHESTRATION-WORKLOG |
+| **Round 21** (UI overhaul) | Wizard DNA design system (Space Grotesk font-black, 28px dot grid, accent glows, bentoShadow) + AppShell transparent main + Sidebar visual rebuild + Dashboard wizard container + StatCards solid accent icon tiles | **DELIVERED** — see ORCHESTRATION-WORKLOG |
+| **Round 22** (sidebar redesign + chat cleanup) | Sidebar distinct surface + hamburger ON sidebar + nav/projects separated by divider + projects EXPANDABLE (sessions underneath) + TopBar COMPLETELY removed (owner: "makes the whole user experience bad") + chat-only full width + /sessions route REMOVED | **DELIVERED** — see ORCHESTRATION-WORKLOG |
+| **Round 23** (sidebar behavior + chat polish + settings) | Project click = expand/collapse ONLY + sessions clickable sub-items + NewSessionButton per project + chat panel tightened (h-10 header, p-2.5 composer, 16px radii) + settings CONFIGURATION kicker + font-black H1 + solid-accent pill tabs | **DELIVERED** — see ORCHESTRATION-WORKLOG |
+| **Round 24–25** (Kilo Code parity: tools + prompt + context + checkpoints) | 5 new tools (search_code, git_status/diff/log, run_command) + Cline-grade 150-line system prompt + cost tracking + code blocks w/ line numbers + 13th tool todo_write + context-window management + checkpoint system (migration 0005 file_snapshots) | **DELIVERED** — see ORCHESTRATION-WORKLOG (round files not written per lesson #33 gap) |
+| **Round 26** (100 review items) | Stop button on busy + composer placeholder + settings max-width + traffic light size + loading skeletons + error recovery + agent picker empty state + retry button + sidebar empty state + divider visibility + exec safe list (40+ commands) + brand logo hover 180° rotation + aria-labels + focus-visible + 6 themes + dark/light toggle + Enter/Shift+Enter keyboard + GapHandle a11y | **DELIVERED** — see ORCHESTRATION-WORKLOG (split across R26/R26b/R26c/R26-final) |
+| **Round 27** (web tools + deps fix + testing + demo) | web_fetch + web_search (15 tools total) + CRITICAL deps-wiring fix (todo_write + checkpoints now live in real turns) + 14 web-tools tests + L4 live battery + L5 browser verification (19 screenshots) + demo project (YouTube-like 545-line app) built BY the agent + zip uploaded to GitHub release | **DELIVERED** — see round-27.md |
+| **Round 28** (UX + agentic-quality overhaul) | Master plan proposed (1123L, 13 workstreams A-M, 5 milestones, 6 sub-agent reviews). MS-1 in progress: A1 governance done, A2 board backfill in progress, B sidebar + C settings next. | **IN PROGRESS** — see ROUND-28-MASTER-PLAN.md |
 
 ## Round files
 
@@ -49,6 +61,18 @@ UI stands and what is still open.
 - [`round-11.md`](round-11.md) — owner Windows-verdict fixes: real folder dialog (2 methods + error surfacing), fullscreen chat with hamburger sidebar toggle, plug-and-play Nova agent seed, dialog centering fix, HTML-build live proof
 - [`round-10.md`](round-10.md) — agentic coding system for real: OS folder picker, create_dir/delete_file/search_files, demo-parity chat UI (TopBar/To-Do/Experimental), live P1 proof incl. deletion refusal
 - [`round-09.md`](round-09.md) — Agentic MVP M3 (project-chat UI port onto live data) + M4 (live ACUTEST run, files verified on disk) + live-call bug fix (`jsonSchema()` tool wrapping)
+- **round-16** — streaming + polish (SSE live, per-reply stats, borderless chat, Nova→Acute, modern folder dialog, DESIGN-SYSTEM.md) — *no round file written; see ORCHESTRATION-WORKLOG + lesson #33 (sandbox-wipe mid-round codified ADR-0020)*
+- **round-17** — governance round (docs index, WORKFLOW/ROADMAP/TESTING/SECURITY, ADR backfill 0014–0021, PILLARS.md, IMPLEMENTED-API, tool-name truth, public dashboard) — *no round file; see ORCHESTRATION-WORKLOG*
+- **round-18** — dashboard live on GitHub Pages (DASHBOARD repo, plan section, browser-verified) — *no round file; see ORCHESTRATION-WORKLOG*
+- **round-19** — model management (migration 0004 models table, 6 routes, ModelsProvidersTab) — *no round file; see ORCHESTRATION-WORKLOG*
+- **round-20** — model management fixes (apiFormat INSERT bug, Edit Model dialog, show/hide key toggles, live E2E battery) — *no round file; see ORCHESTRATION-WORKLOG*
+- **round-21** — UI overhaul (wizard DNA design system, AppShell transparent main, Sidebar visual rebuild, Dashboard wizard container, StatCards) — *no round file; see ORCHESTRATION-WORKLOG*
+- **round-22** — sidebar redesign + chat cleanup (hamburger ON sidebar, projects expandable, TopBar COMPLETELY removed, /sessions route removed) — *no round file; see ORCHESTRATION-WORKLOG*
+- **round-23** — sidebar behavior + chat polish + settings (project click = expand only, NewSessionButton, chat panel tightening, settings CONFIGURATION kicker) — *no round file; see ORCHESTRATION-WORKLOG*
+- **round-24–25** — Kilo Code parity (5 new tools + Cline-grade prompt + cost tracking + context-window management + 13th tool todo_write + checkpoint system) — *no round file; see ORCHESTRATION-WORKLOG*
+- **round-26** — 100 review items (stop button, composer placeholder, loading skeletons, error recovery, 6 themes, GapHandle a11y, etc.) — *no round file; see ORCHESTRATION-WORKLOG (split across R26/R26b/R26c/R26-final)*
+- [`round-27.md`](round-27.md) — web tools (web_fetch + web_search) + critical deps-wiring fix + demo project built by the agent
+- **round-28** (in progress) — UX + agentic-quality overhaul; see [`ROUND-28-MASTER-PLAN.md`](../ROUND-28-MASTER-PLAN.md)
 
 ## Running the UI with a live backend (dev)
 
@@ -69,4 +93,17 @@ cannot work). For the full live workflow run **`pnpm dev:full`**: sidecar on
   `VITE_ACUTE_BASE_URL`/`VITE_ACUTE_TOKEN`, verify real catalog + connection
   test in the UI. See `round-05.md`.
 
-- **round-27** (2026-08-24): web tools (web_fetch + web_search) + critical deps-wiring fix + demo project built by the agent. See round-27.md.
+## Round-file vs session-number decoupling (lesson from rounds 16–26)
+
+The `round-NN.md` files go round-01-02 → round-15, then a **GAP** (no
+round-16..round-26 files exist), then round-27.md. The actual session-by-session
+history for R16–R26 lives in `docs/agent/ORCHESTRATION-WORKLOG.md` — those
+rounds happened (streaming, governance, dashboard live, model management, UI
+overhaul, sidebar redesign, Kilo parity, 100 review items) but the per-round
+evidence files weren't written (sandbox-wipe mid-round-16 codified ADR-0020
+work-branch discipline; subsequent rounds inherited the gap).
+
+**Convention going forward (round 28+):** every round gets a `round-NN.md`
+evidence file with screenshots + verify output + owner verdict. The
+`scripts/verify-round.mjs` (Workstream L) will auto-generate the evidence-file
+skeleton to make this trivial.
