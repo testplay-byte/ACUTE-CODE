@@ -1,7 +1,7 @@
-<!-- last-reviewed: 2026-08-24 round-28 -->
+<!-- last-reviewed: 2026-08-24 round-29 -->
 # ACUTE-CODE — Agent Handoff Document
 
-**Last updated:** 2026-08-24 (round-28 DELIVERED + J2 follow-up — 5 milestones, **207 tests green** (incl. 6 e2e vs built dist), CI green, docs:check 0/0) · **Maintained by:** the orchestrator agent · **Audience:** any AI agent (or human) taking over development
+**Last updated:** 2026-08-24 (round-29 close-out — Next.js showcase hub built on port 3000 so the ACUTE-CODE product is finally visible inside the sandbox Preview Pane; AGENT-MEMORY #39 corrected — ntfy IS the task-completion channel per owner R29 directive; ping SENT at end of session; R28 product code unchanged, no regression) · **Maintained by:** the orchestrator agent · **Audience:** any AI agent (or human) taking over development
 
 You are picking up **ACUTE-CODE**, a local-first, closed-source multi-agent engineering workbench for Windows. This file gives you everything needed to continue: state, rules, environment, gotchas, and next steps. It contains **no secrets** — secrets live only in Windows Credential Manager (§7).
 

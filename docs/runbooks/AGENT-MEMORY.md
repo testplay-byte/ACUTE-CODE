@@ -303,13 +303,22 @@ Format per entry: `N. TITLE (date, source)` → mistake → root cause → rule.
     (`github-acute-code.pat`, `github-dashboard.pat`) makes it obvious
     which token is which at a glance.
 
-39. **ntfy is the sandbox-wipe notification channel, not the routine-progress
-    channel (owner revision R28).** Prior practice of ntfy-after-every-milestone
-    is retired — the owner finds it noisy and sees GitHub pushes in real time.
-    RULE: ntfy ONLY for (a) sandbox-wipe notifications, and (b) one
-    round-close-out notification on owner-APPROVE. Do NOT ntfy for individual
-    MS verdicts, workstream completions, or routine pushes. If the owner
-    says CHANGES/PIVOT, no ntfy — just iterate.
+39. **ntfy is the task-completion notification channel, NOT just sandbox-wipe
+    (owner revision R29 — supersedes the R28 rule).** The R28 rule
+    ("ntfy ONLY for sandbox-wipe + owner-APPROVE") was WRONG — the owner
+    explicitly told R29: "Make sure to send me a notification properly
+    too afterwards so that I can be notified that the task has been
+    completed and such. And to send the notification use the topic
+    'TASKISDONE'." Corrected RULE: send an ntfy ping to
+    `https://ntfy.sh/TASKISDONE` at the END of every session in which the
+    owner gave a task directive and the work was completed. Title the
+    message with the round number + a one-line summary; body = brief
+    outcome (what was delivered, what was verified, what remains if
+    anything). Do NOT ntfy mid-session for individual milestones — only
+    the end-of-session close-out. If the owner said CHANGES/PIVOT and
+    you're still iterating, no ntfy — wait until the iteration converges
+    and the session is wrapping up. The sandbox-wipe case is unchanged:
+    that ping remains mandatory the moment a wipe is detected.
 
 40. **Screenshot zip upload target changed (owner revision R28).** Round 27's
     `round-27-testing-screenshots.zip` lives at the ACUTE-CODE repo root.
