@@ -14,6 +14,7 @@
     "test:e2e": "vitest run --config tests/e2e/vitest.config.ts",
     "build": "pnpm --filter shared run build && pnpm --filter agent-core run build && vite build",
     "license:audit": "node scripts/license-audit.mjs",
+    "dashboard:publish-screenshots": "node scripts/dashboard/publish-screenshots.mjs",
     "verify": "pnpm lint && pnpm typecheck && pnpm test && pnpm build && pnpm test:e2e && pnpm license:audit"
   },
   "dependencies": {
