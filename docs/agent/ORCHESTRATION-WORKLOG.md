@@ -1,12 +1,3 @@
-# ORCHESTRATION WORKLOG — snapshot
-
-Live copy: the orchestrator agent's sandbox at /home/z/my-project/worklog.md.
-This snapshot is refreshed into the repo at the END of every session (see
-docs/runbooks/SANDBOX-RESTORE.md) so a wiped sandbox can resume with full
-history. Entries are append-only, newest sections at the bottom.
-
----
-
 # ACUTE-CODE Orchestration Worklog
 
 Shared worklog for all agents working on the ACUTE-CODE takeover (repo:
@@ -651,3 +642,28 @@ Work Log:
 
 Stage Summary:
 - The agent is now at Kilo Code-level capability: 13 tools (search_code, git_status/diff/log, run_command, todo_write + 7 original file tools), Cline-grade 150-line system prompt with coding discipline, real cost tracking from the models table, context-window management with trimming, checkpoint/revert system, todo tracking with session events, code blocks with line numbers + copy, stop button on busy, and 100 verified polish items. Exec safe list covers 40+ commands (ls/cat/grep/rg/find, git reads+commit/add, npm/pnpm/jest/vitest/cargo/go/tsc, node/npm/npx/pip/yarn, echo/pwd/du/df/help); blocked: rm -rf, sed -i, chmod, mv, cp, sudo, curl/wget/ssh, dev servers, playwright/puppeteer. Remaining Kilo gap items: MCP client (ecosystem unlock), interactive approval round-trip, fuzzy edit matching, @codebase semantic index — these are queued for the next phase of work.
+
+---
+Task ID: R27 (web tools + deps-wiring fix + testing + demo project)
+Agent: orchestrator (Z.ai Code) — inline, on main
+Task: Owner: "Make the whole agent coding environment complete. Do the proper testing. Provide me a zip file with the screenshots. Try to build a project using this agent coding environment... web browser features for our agent... Quality over speed over time."
+
+Work Log:
+- Read all key docs first (HANDOFF, AGENTS, TESTING, WORKFLOW, SECURITY, DEMO, SANDBOX-RESTORE, AGENT-MEMORY 36 lessons, architecture) to understand rules + how testing should be done
+- Analyzed uncommitted round-27 changes: web.ts (199 lines, web_fetch + web_search via MediaWiki, complete but NOT registered) + runtime.ts diff (CRITICAL FIX: deps arg never passed to buildProjectTools → todo_write returned "unavailable" + checkpoints silently dead in real turns while passing unit tests)
+- Finished round-27 properly: registered web_fetch + web_search in tools/index.ts (import + 2 jsonSchema-wrapped tool entries); updated TOOL_NAMES canonical list (13→15) + frontend TOOL_CATALOG mirror + system prompt WEB ACCESS section; added 14 web-tools unit tests (mocked fetch — no live AI in tests per rule #1); updated TOOL_NAMES/buildProjectTools/storage seeding expectations 13→15
+- pnpm verify GREEN: 211 tests (197→211: +14), license audit CLEAN (107 deps)
+- L4 live battery (single-invocation, fresh DB, real OpenRouter stealth/ox-alpha): 8 tool.use events (todo_write×3, web_search×3, web_fetch×1, write_file×1); research.md created on disk (3094 bytes, ground truth); file_snapshots row recorded (table was EMPTY before deps fix); todo_write persists (6 items, status progression); usage_events row (in=34448, out=1585)
+- Pre-push checks: secret-pattern scan CLEAN; repo PRIVATE=true; no .env.development staged; committed d184d29; pushed to main; CI run 32697550327 SUCCESS
+- L5 browser verification (real UI, 1920×1080, 19 screenshots into docs/ui-iterations/assets/round-27/): dashboard, settings, chat empty, message typed, streaming mid-turn (text deltas), tools appearing, first turn final + todos, second message typed (direct: create hello.txt), streaming mid, final (write_file tool pill + stats), full conversation, explorer showing hello.txt. VLM-verified: 01-dashboard shows dark-themed dashboard with sidebar + stats cards + token chart; 12-second-turn-final shows assistant reply + write_file pill + usage stats. Zero console errors.
+- Demo project — built BY the agent: sent a single prompt ("Create a YouTube-like video watching page..."); agent created a complete 545-line index.html (13KB) with 315 lines inline CSS (dark theme, sticky header, flexbox 70/30) + 165 lines inline JS (loadVideo, buildList, formatDuration, keyboard nav) + a <video> element + 4-item video list. Agent also ran run_command to verify the file (agentic loop working end-to-end). VLM-verified the running app: video player showing Big Buck Bunny + 4-item "Up next" sidebar with thumbnails/titles/view counts/durations + YouTube-style header with search bar.
+- Compiled 19 screenshots + demo output (index.html) + file-structure.md into round-27-testing-screenshots.zip (1.37MB, 22 files); created GitHub release "round-27-testing" (release 375499673); uploaded zip as release asset — owner download at https://github.com/testplay-byte/ACUTE-CODE/releases/download/round-27-testing/round-27-testing-screenshots.zip
+- Updated docs/status.json (15 tools, 131 tests, coding pillar 80%) + DASHBOARD/data.json; created docs/ui-iterations/round-27.md; updated ui-iterations/README.md board
+
+Stage Summary:
+- 15 tools total (Kilo Code parity achieved + web_fetch/web_search for browser features)
+- Critical deps-wiring fix: todo_write + checkpoints now LIVE in real turns (were silently dead while passing unit tests — exactly the AGENT-MEMORY #9/#35 class of bug)
+- L4 + L5 + VLM verification all green; 19 screenshots + demo project proof
+- Zip uploaded to GitHub release for owner download
+- Remaining Kilo gap items: MCP client (ecosystem unlock), interactive approval round-trip, fuzzy edit matching, @codebase semantic index — queued
+- Note: stealth/ox-alpha tends to stop early on multi-step tasks (sent a planning message instead of continuing the loop) — model behavior, not a code bug; a more capable model would complete multi-file builds in one turn

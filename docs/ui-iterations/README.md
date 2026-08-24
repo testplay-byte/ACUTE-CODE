@@ -68,3 +68,5 @@ cannot work). For the full live workflow run **`pnpm dev:full`**: sidecar on
   `ACUTE_PROVIDER_OPENROUTER` env, point vite at it via
   `VITE_ACUTE_BASE_URL`/`VITE_ACUTE_TOKEN`, verify real catalog + connection
   test in the UI. See `round-05.md`.
+
+- **round-27** (2026-08-24): web tools (web_fetch + web_search) + critical deps-wiring fix + demo project built by the agent. See round-27.md.

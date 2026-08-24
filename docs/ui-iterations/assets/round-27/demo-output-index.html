@@ -1,0 +1,545 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>YouTube-Demo</title>
+<style>
+  * {
+    margin: 0;
+    padding: 0;
+    box-sizing: border-box;
+    font-family: "Roboto", "Segoe UI", Arial, sans-serif;
+  }
+
+  body {
+    background-color: #0f0f0f;
+    color: #f1f1f1;
+    min-height: 100vh;
+  }
+
+  /* ---------- Header ---------- */
+  header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 10px 24px;
+    position: sticky;
+    top: 0;
+    background-color: #0f0f0f;
+    border-bottom: 1px solid #272727;
+    z-index: 10;
+  }
+
+  .logo {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 20px;
+    font-weight: 700;
+    letter-spacing: -0.5px;
+    cursor: pointer;
+  }
+
+  .logo-icon {
+    background-color: #ff0000;
+    color: #fff;
+    width: 32px;
+    height: 22px;
+    border-radius: 6px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 12px;
+  }
+
+  .search-bar {
+    flex: 0 1 480px;
+    display: flex;
+  }
+
+  .search-bar input {
+    flex: 1;
+    background-color: #121212;
+    border: 1px solid #303030;
+    border-right: none;
+    border-radius: 20px 0 0 20px;
+    padding: 8px 16px;
+    color: #f1f1f1;
+    font-size: 14px;
+    outline: none;
+  }
+
+  .search-bar button {
+    background-color: #222222;
+    color: #f1f1f1;
+    border: 1px solid #303030;
+    border-radius: 0 20px 20px 0;
+    padding: 8px 18px;
+    cursor: pointer;
+    font-size: 14px;
+  }
+
+  .avatar {
+    width: 34px;
+    height: 34px;
+    border-radius: 50%;
+    background: linear-gradient(135deg, #7b4dff, #ff4d88);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-weight: 700;
+    font-size: 14px;
+    cursor: pointer;
+  }
+
+  /* ---------- Layout ---------- */
+  .page {
+    display: flex;
+    gap: 24px;
+    padding: 24px;
+    max-width: 1800px;
+    margin: 0 auto;
+  }
+
+  .player-section {
+    flex: 0 0 70%;
+    max-width: 70%;
+    min-width: 0;
+  }
+
+  .sidebar {
+    flex: 0 0 30%;
+    max-width: 30%;
+    min-width: 0;
+  }
+
+  /* ---------- Player ---------- */
+  .video-wrapper {
+    width: 100%;
+    aspect-ratio: 16 / 9;
+    background-color: #000;
+    border-radius: 12px;
+    overflow: hidden;
+  }
+
+  video {
+    width: 100%;
+    height: 100%;
+    display: block;
+    background-color: #000;
+  }
+
+  .video-title {
+    font-size: 20px;
+    font-weight: 700;
+    margin-top: 14px;
+    line-height: 1.3;
+  }
+
+  .video-meta-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    flex-wrap: wrap;
+    gap: 12px;
+    margin-top: 12px;
+  }
+
+  .channel-info {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+  }
+
+  .channel-avatar {
+    width: 40px;
+    height: 40px;
+    border-radius: 50%;
+    background: linear-gradient(135deg, #00c6ff, #0072ff);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-weight: 700;
+  }
+
+  .channel-name {
+    font-size: 15px;
+    font-weight: 600;
+  }
+
+  .channel-subs {
+    font-size: 12px;
+    color: #aaaaaa;
+  }
+
+  .subscribe-btn {
+    background-color: #f1f1f1;
+    color: #0f0f0f;
+    border: none;
+    border-radius: 18px;
+    padding: 9px 18px;
+    font-size: 14px;
+    font-weight: 600;
+    cursor: pointer;
+    margin-left: 16px;
+  }
+
+  .actions {
+    display: flex;
+    gap: 8px;
+  }
+
+  .action-btn {
+    background-color: #272727;
+    color: #f1f1f1;
+    border: none;
+    border-radius: 18px;
+    padding: 9px 16px;
+    font-size: 14px;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+  }
+
+  .action-btn:hover {
+    background-color: #3f3f3f;
+  }
+
+  .description {
+    background-color: #272727;
+    border-radius: 12px;
+    padding: 12px 16px;
+    margin-top: 16px;
+    font-size: 14px;
+    line-height: 1.5;
+  }
+
+  .description .stats {
+    font-weight: 600;
+    margin-bottom: 6px;
+  }
+
+  /* ---------- Sidebar / playlist ---------- */
+  .sidebar h2 {
+    font-size: 16px;
+    font-weight: 700;
+    margin-bottom: 12px;
+  }
+
+  .video-card {
+    display: flex;
+    gap: 10px;
+    padding: 6px;
+    border-radius: 10px;
+    cursor: pointer;
+    transition: background-color 0.15s ease;
+  }
+
+  .video-card:hover {
+    background-color: #1f1f1f;
+  }
+
+  .video-card.active {
+    background-color: #272727;
+  }
+
+  .thumb {
+    position: relative;
+    flex: 0 0 168px;
+    aspect-ratio: 16 / 9;
+    border-radius: 8px;
+    overflow: hidden;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 26px;
+  }
+
+  .thumb .duration {
+    position: absolute;
+    bottom: 6px;
+    right: 6px;
+    background-color: rgba(0, 0, 0, 0.85);
+    color: #fff;
+    font-size: 12px;
+    font-weight: 600;
+    padding: 2px 5px;
+    border-radius: 4px;
+  }
+
+  .card-info {
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    gap: 4px;
+  }
+
+  .card-title {
+    font-size: 14px;
+    font-weight: 600;
+    line-height: 1.35;
+    display: -webkit-box;
+    -webkit-line-clamp: 2;
+    -webkit-box-orient: vertical;
+    overflow: hidden;
+  }
+
+  .card-channel,
+  .card-views {
+    font-size: 12px;
+    color: #aaaaaa;
+  }
+
+  .now-playing {
+    font-size: 11px;
+    color: #3ea6ff;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+  }
+
+  /* ---------- Responsive ---------- */
+  @media (max-width: 900px) {
+    .page {
+      flex-direction: column;
+      padding: 12px;
+      gap: 16px;
+    }
+
+    .player-section,
+    .sidebar {
+      flex: 1 1 auto;
+      max-width: 100%;
+    }
+
+    .search-bar {
+      display: none;
+    }
+  }
+</style>
+</head>
+<body>
+
+<header>
+  <div class="logo">
+    <span class="logo-icon">&#9654;</span>
+    <span>YouTube-Demo</span>
+  </div>
+  <div class="search-bar">
+    <input type="text" placeholder="Search" aria-label="Search">
+    <button>&#128269;</button>
+  </div>
+  <div class="avatar">Z</div>
+</header>
+
+<main class="page">
+  <!-- Main player (70%) -->
+  <section class="player-section">
+    <div class="video-wrapper">
+      <video id="mainPlayer" controls autoplay muted playsinline></video>
+    </div>
+
+    <h1 class="video-title" id="playerTitle"></h1>
+
+    <div class="video-meta-row">
+      <div class="channel-info">
+        <div class="channel-avatar" id="playerChannelAvatar"></div>
+        <div>
+          <div class="channel-name" id="playerChannelName"></div>
+          <div class="channel-subs" id="playerChannelSubs"></div>
+        </div>
+        <button class="subscribe-btn">Subscribe</button>
+      </div>
+      <div class="actions">
+        <button class="action-btn">&#128077; 128K</button>
+        <button class="action-btn">&#128078;</button>
+        <button class="action-btn">&#86180; Share</button>
+        <button class="action-btn">&#8942;</button>
+      </div>
+    </div>
+
+    <div class="description">
+      <div class="stats" id="playerStats"></div>
+      <div id="playerDescription"></div>
+    </div>
+  </section>
+
+  <!-- Up-next list (30%) -->
+  <aside class="sidebar">
+    <h2>Up next</h2>
+    <div id="videoList"></div>
+  </aside>
+</main>
+
+<script>
+  // Sample video data — public Google-hosted demo clips
+  var videos = [
+    {
+      id: 0,
+      title: "Big Buck Bunny — Full Animated Short Film",
+      channel: "Blender Foundation",
+      subs: "1.2M subscribers",
+      views: "48,203,114 views",
+      date: "12 years ago",
+      duration: "9:56",
+      description: "A big rabbit takes revenge on three bullying rodents in this classic open-source animated short by the Blender Institute.",
+      gradient: "linear-gradient(135deg, #43cea2, #185a9d)",
+      icon: "\uD83D\uDC30",
+      src: "https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/BigBuckBunny.mp4"
+    },
+    {
+      id: 1,
+      title: "Elephants Dream — The First Open Movie",
+      channel: "Orange Open Movie Project",
+      subs: "845K subscribers",
+      views: "21,884,502 views",
+      date: "13 years ago",
+      duration: "10:53",
+      description: "Two strange characters explore a capricious and seemingly infinite machine in the world's first open movie project.",
+      gradient: "linear-gradient(135deg, #f7971e, #ffd200)",
+      icon: "\uD83D\uDC18",
+      src: "https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/ElephantsDream.mp4"
+    },
+    {
+      id: 2,
+      title: "For Bigger Blazes — Chromecast Demo",
+      channel: "Google Chromecast",
+      subs: "5.6M subscribers",
+      views: "9,412,337 views",
+      date: "9 years ago",
+      duration: "0:15",
+      description: "Cast your favorite entertainment to the big screen — a quick look at streaming bigger, brighter blazes.",
+      gradient: "linear-gradient(135deg, #cb2d3e, #ef473a)",
+      icon: "\uD83D\uDD25",
+      src: "https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/ForBiggerBlazes.mp4"
+    },
+    {
+      id: 3,
+      title: "For Bigger Fun — Cast Everything You Love",
+      channel: "Google Chromecast",
+      subs: "5.6M subscribers",
+      views: "7,205,981 views",
+      date: "9 years ago",
+      duration: "1:00",
+      description: "Movies, shows, music, games and more — see how one small device makes screen time way more fun.",
+      gradient: "linear-gradient(135deg, #7b4dff, #ff4d88)",
+      icon: "\uD83C\uDF89",
+      src: "https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/ForBiggerFun.mp4"
+    }
+  ];
+
+  var player = document.getElementById("mainPlayer");
+  var playerTitle = document.getElementById("playerTitle");
+  var playerChannelName = document.getElementById("playerChannelName");
+  var playerChannelSubs = document.getElementById("playerChannelSubs");
+  var playerChannelAvatar = document.getElementById("playerChannelAvatar");
+  var playerStats = document.getElementById("playerStats");
+  var playerDescription = document.getElementById("playerDescription");
+  var videoList = document.getElementById("videoList");
+
+  function formatDuration(seconds) {
+    var m = Math.floor(seconds / 60);
+    var s = Math.floor(seconds % 60);
+    return m + ":" + (s < 10 ? "0" : "") + s;
+  }
+
+  function loadVideo(id) {
+    var v = videos[id];
+
+    player.src = v.src;
+    player.load();
+    player.play().catch(function () {
+      // Autoplay may be blocked until the user interacts — that's fine.
+    });
+
+    playerTitle.textContent = v.title;
+    playerChannelName.textContent = v.channel;
+    playerChannelSubs.textContent = v.subs;
+    playerChannelAvatar.textContent = v.channel.charAt(0);
+    playerStats.textContent = v.views + " \u2022 " + v.date;
+    playerDescription.textContent = v.description;
+
+    // Highlight the active card and show live duration once metadata loads
+    var cards = videoList.querySelectorAll(".video-card");
+    cards.forEach(function (card, i) {
+      card.classList.toggle("active", i === id);
+      var np = card.querySelector(".now-playing");
+      if (np) np.remove();
+      if (i === id) {
+        var badge = document.createElement("div");
+        badge.className = "now-playing";
+        badge.textContent = "\u25B6 Now playing";
+        card.querySelector(".card-info").prepend(badge);
+      }
+    });
+  }
+
+  function buildList() {
+    videos.forEach(function (v, i) {
+      var card = document.createElement("div");
+      card.className = "video-card";
+      card.setAttribute("role", "button");
+      card.setAttribute("tabindex", "0");
+
+      var thumb = document.createElement("div");
+      thumb.className = "thumb";
+      thumb.style.background = v.gradient;
+      thumb.textContent = v.icon;
+
+      var dur = document.createElement("span");
+      dur.className = "duration";
+      dur.textContent = v.duration;
+      thumb.appendChild(dur);
+
+      var info = document.createElement("div");
+      info.className = "card-info";
+
+      var t = document.createElement("div");
+      t.className = "card-title";
+      t.textContent = v.title;
+
+      var ch = document.createElement("div");
+      ch.className = "card-channel";
+      ch.textContent = v.channel;
+
+      var vw = document.createElement("div");
+      vw.className = "card-views";
+      vw.textContent = v.views.split(" ")[0] + " \u2022 " + v.duration;
+
+      info.appendChild(t);
+      info.appendChild(ch);
+      info.appendChild(vw);
+
+      card.appendChild(thumb);
+      card.appendChild(info);
+
+      function select() { loadVideo(i); }
+      card.addEventListener("click", select);
+      card.addEventListener("keydown", function (e) {
+        if (e.key === "Enter" || e.key === " ") {
+          e.preventDefault();
+          select();
+        }
+      });
+
+      videoList.appendChild(card);
+    });
+  }
+
+  // Keep the sidebar duration badge accurate for the playing video
+  player.addEventListener("loadedmetadata", function () {
+    if (!isNaN(player.duration)) {
+      var activeCard = videoList.querySelector(".video-card.active .duration");
+      if (activeCard) activeCard.textContent = formatDuration(player.duration);
+    }
+  });
+
+  buildList();
+  loadVideo(0);
+</script>
+
+</body>
+</html>
