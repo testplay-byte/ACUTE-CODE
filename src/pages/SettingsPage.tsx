@@ -1,10 +1,10 @@
 import { useMemo, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useSearchParams } from "react-router";
-import { Bot, Palette, Server, SlidersHorizontal } from "lucide-react";
+import { Bot, Moon, Palette, Server, SlidersHorizontal, Sun } from "lucide-react";
 import { useConfigStore } from "../lib/config-store";
 import { useThemeStore } from "../lib/theme-store";
-import { THEMES } from "../lib/themes";
+import { THEMES, getContrastText } from "../lib/themes";
 import { useThemeStyles } from "../lib/use-theme-styles";
 import { AgentsScreen } from "../components/agents/AgentsScreen";
 import { ModelsProvidersTab } from "../components/settings/ModelsProvidersTab";
@@ -99,34 +99,51 @@ function AppearanceTab() {
   const mode = useThemeStore((s) => s.mode);
   const setMode = useThemeStore((s) => s.setMode);
 
+  // Active-knob text color: getContrastText(toggleActive) returns black on a
+  // white knob (dark mode) and white on a black knob (light mode) — fixes the
+  // owner's R28 complaint "in dark mode the darker text was not showing"
+  // (root cause: styles.text = #FFFBF0 cream → white-on-white in dark mode).
+  const activeKnobText = getContrastText(styles.toggleActive);
+
   return (
-    <div className="mx-auto flex max-w-2xl flex-col gap-5">
+    <div className="mx-auto flex max-w-3xl flex-col gap-5">
       <section>
         <SectionTitle>Mode</SectionTitle>
         <div
           className="relative grid w-full max-w-[320px] grid-cols-2 gap-1.5 rounded-[14px] p-1"
+          role="radiogroup"
+          aria-label="Color mode"
           style={{ background: styles.toggleTrack, border: bdr("1px", styles.borderSubtle) }}
         >
           <div
             className="absolute bottom-1 top-1 w-[calc(50%-6px)] rounded-[10px] transition-all duration-300"
             style={{ left: mode === "dark" ? "calc(50% + 2px)" : "4px", background: styles.toggleActive }}
           />
-          {(["light", "dark"] as const).map((m) => (
-            <button
-              key={m}
-              onClick={() => setMode(m)}
-              className="relative z-10 h-9 cursor-pointer rounded-[10px] border-none bg-transparent text-[13px] font-bold capitalize"
-              style={{ color: mode === m ? styles.text : styles.textTertiary }}
-            >
-              {m}
-            </button>
-          ))}
+          {(["light", "dark"] as const).map((m) => {
+            const Icon = m === "light" ? Sun : Moon;
+            const active = mode === m;
+            return (
+              <button
+                key={m}
+                onClick={() => setMode(m)}
+                role="radio"
+                aria-checked={active}
+                aria-label={`${m} mode`}
+                className="relative z-10 flex h-9 cursor-pointer items-center justify-center gap-1.5 rounded-[10px] border-none bg-transparent text-[13px] font-bold capitalize transition-colors"
+                style={{ color: active ? activeKnobText : styles.textTertiary }}
+              >
+                <Icon size={14} />
+                {m}
+              </button>
+            );
+          })}
         </div>
       </section>
 
       <section>
         <SectionTitle>Theme</SectionTitle>
-        <div className="flex flex-col gap-2">
+        {/* 2-column grid (1 per row on mobile) — modern, compact, shows more at once */}
+        <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
           {THEMES.map((t) => {
             const selected = t.id === themeId;
             const colors = mode === "dark" ? t.paletteDark : t.paletteLight;
@@ -134,6 +151,8 @@ function AppearanceTab() {
               <button
                 key={t.id}
                 onClick={() => setTheme(t.id)}
+                aria-pressed={selected}
+                aria-label={`Theme ${t.name}`}
                 className="flex cursor-pointer items-center gap-3 rounded-[14px] border-[1.5px] px-4 py-3 text-left transition-all hover:translate-y-[-1px]"
                 style={{
                   background: styles.card,
@@ -145,7 +164,7 @@ function AppearanceTab() {
               >
                 <span
                   className="grid h-9 w-9 shrink-0 place-items-center rounded-full border text-[13px] font-black"
-                  style={{ background: t.accent, borderColor: styles.border, color: styles.accentText }}
+                  style={{ background: t.accent, borderColor: styles.border, color: getContrastText(t.accent) }}
                 >
                   Aa
                 </span>
@@ -153,12 +172,17 @@ function AppearanceTab() {
                   <span className="block truncate text-[14px] font-bold" style={{ color: styles.text }}>
                     {t.name}
                   </span>
-                  <span className="mt-1 flex gap-[3px]">
+                  {/* Swatch strip: subtle bg + strong border so dark swatches
+                       stay visible against the dark card bg (owner R28 fix). */}
+                  <span
+                    className="mt-1 flex gap-[3px] rounded-[5px] p-[2px]"
+                    style={{ background: withAlpha(styles.text, 0.06), border: `1px solid ${withAlpha(styles.text, 0.18)}` }}
+                  >
                     {colors.map((c, i) => (
                       <span
                         key={i}
-                        className="h-[14px] w-[14px] rounded-[5px] border"
-                        style={{ background: c, borderColor: styles.borderSubtle }}
+                        className="h-[14px] w-[14px] rounded-[4px]"
+                        style={{ background: c, border: `1px solid ${withAlpha(styles.text, 0.22)}` }}
                       />
                     ))}
                   </span>
@@ -166,7 +190,7 @@ function AppearanceTab() {
                 {selected ? (
                   <span
                     className="grid h-7 w-7 shrink-0 place-items-center rounded-full text-[12px]"
-                    style={{ background: styles.accent, color: styles.accentText }}
+                    style={{ background: styles.accent, color: getContrastText(styles.accent) }}
                   >
                     ✓
                   </span>
