@@ -45,6 +45,8 @@ export const TOOL_CATALOG = [
   "git_log",
   "run_command",
   "todo_write",
+  "web_fetch",
+  "web_search",
 ] as const;
 
 export const PROVIDER_IDS = ["openrouter", "openai", "anthropic", "google"] as const;

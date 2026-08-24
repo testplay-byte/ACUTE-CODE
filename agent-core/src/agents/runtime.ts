@@ -18,6 +18,7 @@ import { buildProjectTools } from "../tools/index.js";
 import {
   appendSessionEvent,
   getSession,
+  lastSessionSeq,
   listSessionEvents,
   recordUsage,
   setSessionStatus,
@@ -174,13 +175,23 @@ function prepareTurn(
   // Tools: the project set, intersected with the agent's allowlist when one
   // is set (ADR-0019). Empty/omitted allowlist = ALL tools (the default
   // agents rely on this; an explicit non-empty list is a real restriction).
+  //
+  // round-27 fix: the `deps` arg (db/sessionId/agentId/seq) was NEVER passed
+  // before — so todo_write returned "todo tracking unavailable" and the
+  // write_file/edit_file/delete_file snapshot recording (checkpoints) were
+  // silently dead in real turns while the tools existed on paper. Now wired
+  // so todos persist + every mutating tool records a revertible snapshot.
+  const turnSeq = lastSessionSeq(db, session.id) + 1;
+  const toolDeps = { db, sessionId: session.id, agentId: agent.id, seq: turnSeq };
   const tools =
-    project !== undefined ? buildProjectTools(project.rootPath, agent.allowedTools) : undefined;
+    project !== undefined
+      ? buildProjectTools(project.rootPath, agent.allowedTools, toolDeps)
+      : undefined;
   const system = project
     ? buildProjectSystemPrompt({
         projectName: project.name,
         rootPath: project.rootPath,
-        toolNames: Object.keys(buildProjectTools(project.rootPath)),
+        toolNames: Object.keys(buildProjectTools(project.rootPath, agent.allowedTools, toolDeps)),
         customRules: readCustomRules(project.rootPath),
       })
     : agent.systemPrompt;

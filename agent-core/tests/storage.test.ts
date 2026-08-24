@@ -148,6 +148,8 @@ describe("template seeding", () => {
           "git_log",
           "run_command",
           "todo_write",
+          "web_fetch",
+          "web_search",
         ]);
         expect(row.memory_policy).toBe("on-start");
         expect(row.max_turns).toBe(40);

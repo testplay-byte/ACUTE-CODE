@@ -13,6 +13,7 @@ import { jsonSchema, type ToolSet } from "ai";
 import { gitDiff, gitLog, gitStatus } from "./git.js";
 import { runCommand } from "./exec.js";
 import { writeTodo, type TodoItem } from "./todo.js";
+import { webFetch, webSearch } from "./web.js";
 import { recordSnapshot } from "../storage/snapshots.js";
 
 export interface ToolResult {
@@ -599,6 +600,30 @@ export function buildProjectTools(root: string, allowedTools?: readonly string[]
         const todos = Array.isArray(input.todos) ? (input.todos as TodoItem[]) : [];
         return writeTodo(deps, todos);
       },
+    },
+    web_fetch: {
+      description:
+        "Fetch a public http(s) URL and return its content as readable text. Use this to read documentation pages (MDN, react.dev, vitejs.dev), RFCs, GitHub raw files, blog posts, and any public web page. HTML is stripped to readable text (scripts/styles removed); non-HTML content is returned raw. Response is capped at 16KB. This is the agent's 'open a URL in a browser and read it' capability.",
+      inputSchema: jsonSchema({
+        type: "object",
+        properties: {
+          url: { type: "string", description: "The absolute http(s) URL to fetch" },
+        },
+        required: ["url"],
+      }),
+      execute: async (input) => webFetch(typeof input.url === "string" ? input.url : ""),
+    },
+    web_search: {
+      description:
+        "Search the web for a query and return ranked results (title, url, snippet). Use to find documentation, API references, library usage examples, or explanations of technical concepts. Returns up to 6 results from encyclopedic knowledge sources. This is a knowledge search, not a generic web crawler — for reading a specific known URL, use web_fetch instead.",
+      inputSchema: jsonSchema({
+        type: "object",
+        properties: {
+          query: { type: "string", description: "The search query (a few words works best)" },
+        },
+        required: ["query"],
+      }),
+      execute: async (input) => webSearch(typeof input.query === "string" ? input.query : ""),
     },
   };
   if (allow !== null) {

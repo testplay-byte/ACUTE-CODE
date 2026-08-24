@@ -88,6 +88,17 @@ export function buildProjectSystemPrompt(ctx: PromptContext): string {
     lines.push("");
   }
 
+  // ── Web access ──────────────────────────────────────────────────────────
+  if (ctx.toolNames.includes("web_fetch") || ctx.toolNames.includes("web_search")) {
+    lines.push("## WEB ACCESS");
+    lines.push("- Use web_search to FIND information: documentation, API references, library examples, concept explanations.");
+    lines.push("- Use web_fetch to READ a specific public URL: a docs page, an RFC, a GitHub raw file, a blog post.");
+    lines.push("- Always web_search first when you don't know the exact URL; then web_fetch the most relevant result.");
+    lines.push("- Cite the URL you fetched in your answer so the user can verify.");
+    lines.push("- Web content is capped at 16KB — for longer pages, fetch the most relevant section.");
+    lines.push("");
+  }
+
   // ── Communication ───────────────────────────────────────────────────────
   lines.push("## COMMUNICATION");
   lines.push("- Be concise. No fluff, no restating the question.");
