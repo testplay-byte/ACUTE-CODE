@@ -95,7 +95,9 @@ export function Sidebar() {
           <>
             <div
               className="w-8 h-8 shrink-0 rounded-[10px] grid place-items-center font-black text-[14px]"
-              style={{ background: styles.accent, color: styles.accentText }}
+              style={{ background: styles.accent, color: styles.accentText, transition: "transform 0.3s ease" }}
+              onMouseEnter={(e) => (e.currentTarget.style.transform = "rotate(180deg)")}
+              onMouseLeave={(e) => (e.currentTarget.style.transform = "rotate(0deg)")}
             >
               {"\u25D0"}
             </div>
