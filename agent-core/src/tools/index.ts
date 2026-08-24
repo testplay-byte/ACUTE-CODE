@@ -13,6 +13,7 @@ import { jsonSchema, type ToolSet } from "ai";
 import { gitDiff, gitLog, gitStatus } from "./git.js";
 import { runCommand } from "./exec.js";
 import { writeTodo, type TodoItem } from "./todo.js";
+import { recordSnapshot } from "../storage/snapshots.js";
 
 export interface ToolResult {
   ok: boolean;
@@ -337,6 +338,7 @@ export interface ToolDeps {
   db: import("better-sqlite3").Database;
   sessionId: string;
   agentId: string;
+  seq?: number;
 }
 
 export function buildProjectTools(root: string, allowedTools?: readonly string[], deps?: ToolDeps): ToolSet {
@@ -379,12 +381,30 @@ export function buildProjectTools(root: string, allowedTools?: readonly string[]
         },
         required: ["path", "content"],
       }),
-      execute: async (input) =>
-        writeFile(
-          root,
-          typeof input.path === "string" ? input.path : "",
-          typeof input.content === "string" ? input.content : "",
-        ),
+      execute: async (input) => {
+        const relPath = typeof input.path === "string" ? input.path : "";
+        const newContent = typeof input.content === "string" ? input.content : "";
+        // Record the "before" state for checkpoint/revert
+        let beforeContent: string | null = null;
+        try {
+          const resolved = resolveInsideRoot(root, relPath);
+          if (!("error" in resolved)) {
+            beforeContent = readFileSync(resolved.abs, "utf8");
+          }
+        } catch { /* new file — before = null */ }
+        const result = writeFile(root, relPath, newContent);
+        if (result.ok && toolDeps) {
+          recordSnapshot(toolDeps.db, {
+            sessionId: toolDeps.sessionId,
+            seq: toolDeps.seq ?? 0,
+            path: relPath,
+            beforeContent,
+            afterContent: newContent,
+            toolName: "write_file",
+          });
+        }
+        return result;
+      },
     },
     edit_file: {
       description:
@@ -398,13 +418,37 @@ export function buildProjectTools(root: string, allowedTools?: readonly string[]
         },
         required: ["path", "oldString", "newString"],
       }),
-      execute: async (input) =>
-        editFile(
+      execute: async (input) => {
+        const relPath = typeof input.path === "string" ? input.path : "";
+        // Record the "before" state
+        let beforeContent: string | null = null;
+        try {
+          const resolved = resolveInsideRoot(root, relPath);
+          if (!("error" in resolved)) beforeContent = readFileSync(resolved.abs, "utf8");
+        } catch { /* file doesn't exist — edit will fail anyway */ }
+        const result = editFile(
           root,
-          typeof input.path === "string" ? input.path : "",
+          relPath,
           typeof input.oldString === "string" ? input.oldString : "",
           typeof input.newString === "string" ? input.newString : "",
-        ),
+        );
+        if (result.ok && toolDeps && beforeContent !== null) {
+          let afterContent: string | null = null;
+          try {
+            const resolved = resolveInsideRoot(root, relPath);
+            if (!("error" in resolved)) afterContent = readFileSync(resolved.abs, "utf8");
+          } catch { /* */ }
+          recordSnapshot(toolDeps.db, {
+            sessionId: toolDeps.sessionId,
+            seq: toolDeps.seq ?? 0,
+            path: relPath,
+            beforeContent,
+            afterContent,
+            toolName: "edit_file",
+          });
+        }
+        return result;
+      },
     },
     create_dir: {
       description:
@@ -428,7 +472,26 @@ export function buildProjectTools(root: string, allowedTools?: readonly string[]
         },
         required: ["path"],
       }),
-      execute: async (input) => deleteFile(root, typeof input.path === "string" ? input.path : ""),
+      execute: async (input) => {
+        const relPath = typeof input.path === "string" ? input.path : "";
+        let beforeContent: string | null = null;
+        try {
+          const resolved = resolveInsideRoot(root, relPath);
+          if (!("error" in resolved)) beforeContent = readFileSync(resolved.abs, "utf8");
+        } catch { /* */ }
+        const result = deleteFile(root, relPath);
+        if (result.ok && toolDeps) {
+          recordSnapshot(toolDeps.db, {
+            sessionId: toolDeps.sessionId,
+            seq: toolDeps.seq ?? 0,
+            path: relPath,
+            beforeContent,
+            afterContent: null,
+            toolName: "delete_file",
+          });
+        }
+        return result;
+      },
     },
     search_files: {
       description:

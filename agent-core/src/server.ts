@@ -42,6 +42,7 @@ import {
   updateModel,
   upsertModel,
 } from "./storage/models.js";
+import { listSnapshots, restoreSnapshot } from "./storage/snapshots.js";
 import { openDatabase, type SqliteDatabase } from "./storage/db.js";
 import {
   TOOL_NAMES,
@@ -694,6 +695,50 @@ export function buildServer(options: ServerOptions): FastifyInstance {
         }
         keyring.set(id, value.trim());
         return reply.code(204).send();
+      });
+
+      // ---- Checkpoints (round-25: revert agent changes) ----
+
+      scope.get("/sessions/:id/checkpoints", async (request, reply) => {
+        const { id } = request.params as Record<string, string>;
+        const session = getSession(db, id);
+        if (session === undefined) {
+          return reply.code(404).send(errorBody("NOT_FOUND", `no session with id ${id}`));
+        }
+        const snapshots = listSnapshots(db, id).map((s) => ({
+          id: s.id,
+          seq: s.seq,
+          path: s.path,
+          toolName: s.toolName,
+          ts: s.ts,
+          hadBefore: s.beforeContent !== null,
+        }));
+        return { checkpoints: snapshots };
+      });
+
+      scope.post("/checkpoints/:id/restore", async (request, reply) => {
+        const { id } = request.params as Record<string, string>;
+        const session = db
+          .prepare("SELECT session_id FROM file_snapshots WHERE id = ?")
+          .get(id) as { session_id: string } | undefined;
+        if (!session) {
+          return reply.code(404).send(errorBody("NOT_FOUND", `no checkpoint with id ${id}`));
+        }
+        const fullSession = getSession(db, session.session_id);
+        if (!fullSession?.projectId) {
+          return reply.code(409).send(errorBody("CONFLICT", "session has no project — cannot determine root"));
+        }
+        const project = db
+          .prepare("SELECT root_path FROM projects WHERE id = ?")
+          .get(fullSession.projectId) as { root_path: string } | undefined;
+        if (!project) {
+          return reply.code(409).send(errorBody("CONFLICT", "project not found"));
+        }
+        const result = restoreSnapshot(db, id, project.root_path);
+        if (!result.ok) {
+          return reply.code(500).send(errorBody("INTERNAL", result.message));
+        }
+        return { restored: true, message: result.message };
       });
 
       // ---- Projects (Agentic Coding MVP, API.md §4a) ----

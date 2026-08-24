@@ -111,6 +111,7 @@ describe("openDatabase", () => {
       { version: 2, name: "0002_sessions_usage.sql" },
       { version: 3, name: "0003_projects.sql" },
       { version: 4, name: "0004_models.sql" },
+      { version: 5, name: "0005_snapshots.sql" },
     ]);
     expect(appliedSecond).toEqual(appliedFirst);
   });
