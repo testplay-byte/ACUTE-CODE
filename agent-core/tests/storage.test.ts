@@ -113,6 +113,7 @@ describe("openDatabase", () => {
       { version: 4, name: "0004_models.sql" },
       { version: 5, name: "0005_snapshots.sql" },
       { version: 6, name: "0006_agents_max_outer_loops.sql" },
+      { version: 7, name: "0007_codebase_index.sql" },
     ]);
     expect(appliedSecond).toEqual(appliedFirst);
   });
@@ -151,6 +152,7 @@ describe("template seeding", () => {
           "todo_write",
           "web_fetch",
           "web_search",
+          "index_project",
         ]);
         expect(row.memory_policy).toBe("on-start");
         expect(row.max_turns).toBe(40);

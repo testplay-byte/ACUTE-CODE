@@ -771,3 +771,50 @@ export async function fetchProviderModels(providerId: string): Promise<string[]>
   );
   return body.models.map((m) => m.id);
 }
+
+// ── Round-28 WS-G2/WS-H: codebase index + unified search ────────────────────
+
+/** Codebase index summary (GET /projects/:id/index) — for the CodebasePanel. */
+export interface IndexSummarySymbol {
+  path: string;
+  symbol: string;
+  kind: string;
+  line: number;
+}
+export interface ProjectIndexSummary {
+  projectId: string;
+  totalFiles: number;
+  totalSymbols: number;
+  topFiles: Array<{ path: string; count: number }>;
+  topSymbols: IndexSummarySymbol[];
+  indexedAt: string;
+}
+export async function fetchProjectIndex(projectId: string): Promise<ProjectIndexSummary | null> {
+  const body = await request<{ index: ProjectIndexSummary | null }>(`/projects/${projectId}/index`);
+  return body.index;
+}
+
+/** Unified project search (POST /projects/:id/search) — for the CommandPalette.
+ * kind: "files" (filename substring) | "symbols" (index prefix match) |
+ * "content" (grep). */
+export interface ProjectSearchOptions {
+  caseSensitive?: boolean;
+  wholeWord?: boolean;
+  fileGlob?: string;
+  maxResults?: number;
+}
+export interface ProjectSearchResult {
+  kind: string;
+  results: unknown;
+}
+export async function searchProject(
+  projectId: string,
+  query: string,
+  kind: "files" | "symbols" | "content",
+  options?: ProjectSearchOptions,
+): Promise<ProjectSearchResult> {
+  return request<ProjectSearchResult>(`/projects/${projectId}/search`, {
+    method: "POST",
+    json: { query, kind, ...options },
+  });
+}

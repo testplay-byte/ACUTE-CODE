@@ -225,7 +225,7 @@ describe("round-14 tools: create_dir / delete_file / search_files", () => {
 });
 
 describe("round-17: tool-name truth + allowedTools enforcement (ADR-0019)", () => {
-  it("TOOL_NAMES equals the real 15-tool set (round-27: +web_fetch +web_search)", async () => {
+  it("TOOL_NAMES equals the real 16-tool set (round-28: +index_project)", async () => {
     const { TOOL_NAMES } = await import("../src/storage/agents");
     expect([...TOOL_NAMES].sort()).toEqual([
       "create_dir",
@@ -234,6 +234,7 @@ describe("round-17: tool-name truth + allowedTools enforcement (ADR-0019)", () =
       "git_diff",
       "git_log",
       "git_status",
+      "index_project",
       "list_dir",
       "read_file",
       "run_command",
@@ -246,7 +247,7 @@ describe("round-17: tool-name truth + allowedTools enforcement (ADR-0019)", () =
     ]);
   });
 
-  it("buildProjectTools filters by allowlist; empty allowlist = all tools (15)", async () => {
+  it("buildProjectTools filters by allowlist; empty allowlist = all tools (16)", async () => {
     const { buildProjectTools } = await import("../src/tools/index");
     const all = buildProjectTools(tempDir) as unknown as Record<string, unknown>;
     expect(Object.keys(all).sort()).toEqual([
@@ -256,6 +257,7 @@ describe("round-17: tool-name truth + allowedTools enforcement (ADR-0019)", () =
       "git_diff",
       "git_log",
       "git_status",
+      "index_project",
       "list_dir",
       "read_file",
       "run_command",
@@ -269,7 +271,7 @@ describe("round-17: tool-name truth + allowedTools enforcement (ADR-0019)", () =
     const two = buildProjectTools(tempDir, ["read_file", "search_files"]) as unknown as Record<string, unknown>;
     expect(Object.keys(two).sort()).toEqual(["read_file", "search_files"]);
     const empty = buildProjectTools(tempDir, []) as unknown as Record<string, unknown>;
-    expect(Object.keys(empty)).toHaveLength(15);
+    expect(Object.keys(empty)).toHaveLength(16);
   });
 
   it("server rejects SPEC-era tool names in allowedTools (drift guard)", async () => {

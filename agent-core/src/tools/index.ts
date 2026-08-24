@@ -15,6 +15,7 @@ import { runCommand } from "./exec.js";
 import { writeTodo, type TodoItem } from "./todo.js";
 import { webFetch, webSearch } from "./web.js";
 import { recordSnapshot } from "../storage/snapshots.js";
+import { reindexProject } from "../storage/index.js";
 
 export interface ToolResult {
   ok: boolean;
@@ -268,23 +269,41 @@ export function searchFiles(root: string, query: string, dir?: string): ToolResu
 
 /** search_code — content search over file contents (Kilo/Cline parity).
  * Finds WHERE a string/regex is used: "where is X imported", "what calls Y".
+ * Round-28 WS-H: extended with case_sensitive, whole_word, file_glob, max_results.
  */
-export function searchCode(root: string, query: string, dir?: string): ToolResult {
+export interface SearchCodeOptions {
+  caseSensitive?: boolean;
+  wholeWord?: boolean;
+  fileGlob?: string;
+  maxResults?: number;
+}
+export function searchCode(root: string, query: string, dir?: string, options?: SearchCodeOptions): ToolResult {
   const needle = query.trim();
   if (needle === "") return { ok: false, output: "search_code needs a non-empty 'query'" };
   const isRegex = needle.startsWith("/") && needle.endsWith("/") && needle.length > 2;
-  const pattern = isRegex ? needle.slice(1, -1) : needle.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  // wholeWord wraps the pattern in \b...\b (only for non-regex mode).
+  let pattern: string;
+  if (isRegex) {
+    pattern = needle.slice(1, -1);
+  } else {
+    pattern = needle.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    if (options?.wholeWord) pattern = `\\b${pattern}\\b`;
+  }
+  const flags = options?.caseSensitive ? "" : "i";
   let regex: RegExp;
   try {
-    regex = new RegExp(pattern, "i");
+    regex = new RegExp(pattern, flags);
   } catch {
     return { ok: false, output: `invalid regex: ${needle}` };
   }
+  const maxHits = options?.maxResults ?? 50;
+  const cap = Math.min(maxHits, 200);
+  const globRe = options?.fileGlob ? new RegExp("^" + options.fileGlob.replace(/\./g, "\\.").replace(/\*/g, ".*") + "$", "i") : null;
   const base = dir !== undefined && dir.trim() !== "" ? resolveInsideRoot(root, dir) : ({ abs: root } as const);
   if ("error" in base) return { ok: false, output: base.error };
   const hits: string[] = [];
   const walk = (absDir: string, rel: string, depth: number) => {
-    if (depth > MAX_DEPTH || hits.length >= 50) return;
+    if (depth > MAX_DEPTH || hits.length >= cap) return;
     let entries: string[];
     try {
       entries = readdirSync(absDir);
@@ -292,19 +311,19 @@ export function searchCode(root: string, query: string, dir?: string): ToolResul
       return;
     }
     for (const name of entries.slice(0, MAX_ENTRIES)) {
-      if (hits.length >= 50) return;
+      if (hits.length >= cap) return;
       if (IGNORED_DIRS.has(name) || (name.startsWith(".") && name !== ".github")) continue;
       const relPath = rel === "" ? name : `${rel}/${name}`;
       try {
         const stats = statSync(join(absDir, name));
         if (stats.isDirectory()) {
           walk(join(absDir, name), relPath, depth + 1);
-        } else if (stats.size < 512 * 1024) {
+        } else if (stats.size < 512 * 1024 && (!globRe || globRe.test(name))) {
           const buf = readFileSync(join(absDir, name));
           if (buf.includes(0)) continue; // binary
           const content = buf.toString("utf8");
           const lines = content.split("\n");
-          for (let i = 0; i < lines.length && hits.length < 50; i++) {
+          for (let i = 0; i < lines.length && hits.length < cap; i++) {
             if (regex.test(lines[i])) {
               hits.push(`${relPath}:${i + 1}: ${lines[i].trim().slice(0, 120)}`);
             }
@@ -340,6 +359,9 @@ export interface ToolDeps {
   sessionId: string;
   agentId: string;
   seq?: number;
+  /** Round-28 WS-G: the project id (for codebase_index + searchIndexSymbols).
+   * Optional for back-compat (older call sites that don't pass it). */
+  projectId?: string;
 }
 
 export function buildProjectTools(root: string, allowedTools?: readonly string[], deps?: ToolDeps): ToolSet {
@@ -514,21 +536,28 @@ export function buildProjectTools(root: string, allowedTools?: readonly string[]
     },
     search_code: {
       description:
-        "Search the project for files whose CONTENT matches the query (case-insensitive substring or /regex/). Use it to find where a function is defined, what imports a module, where a string is used. Returns file:line: text matches.",
+        "Search the project for files whose CONTENT matches the query (case-insensitive substring or /regex/ by default; use case_sensitive + whole_word for precise matches). Use it to find where a function is defined, what imports a module, where a string is used. Returns file:line: text matches. Also queries the codebase index (index_project) for symbol matches if available.",
       inputSchema: jsonSchema({
         type: "object",
         properties: {
           query: { type: "string", description: "Text to search for (or /regex/ for pattern matching)" },
           dir: { type: "string", description: "Optional folder to search within ('' = whole project)" },
+          case_sensitive: { type: "boolean", description: "Match case exactly (default false = case-insensitive)" },
+          whole_word: { type: "boolean", description: "Match whole words only (default false = substring match)" },
+          file_glob: { type: "string", description: "Optional glob filter on file names, e.g. '*.ts' or '*.tsx' (default = all files)" },
+          max_results: { type: "number", description: "Max matches to return (default 50, cap 200)" },
         },
         required: ["query"],
       }),
-      execute: async (input) =>
-        searchCode(
-          root,
-          typeof input.query === "string" ? input.query : "",
-          typeof input.dir === "string" ? input.dir : undefined,
-        ),
+      execute: async (input) => {
+        const query = typeof input.query === "string" ? input.query : "";
+        const dir = typeof input.dir === "string" && input.dir.trim() !== "" ? input.dir : undefined;
+        const caseSensitive = input.case_sensitive === true;
+        const wholeWord = input.whole_word === true;
+        const fileGlob = typeof input.file_glob === "string" && input.file_glob.trim() !== "" ? input.file_glob : undefined;
+        const maxResults = typeof input.max_results === "number" && input.max_results > 0 ? Math.min(200, Math.floor(input.max_results)) : 50;
+        return searchCode(root, query, dir, { caseSensitive, wholeWord, fileGlob, maxResults });
+      },
     },
     git_status: {
       description: "Show the current git repository status: branch, staged/unstaged files, ahead/behind. Use before making changes to understand the state.",
@@ -624,6 +653,25 @@ export function buildProjectTools(root: string, allowedTools?: readonly string[]
         required: ["query"],
       }),
       execute: async (input) => webSearch(typeof input.query === "string" ? input.query : ""),
+    },
+    index_project: {
+      description:
+        "Index the project's codebase: walk the tree, extract symbols (functions, classes, constants, types, interfaces, imports) from .ts/.tsx/.js/.jsx/.py/.rs/.go/.md files, store them in the codebase_index table. Call this on the FIRST turn for a new project, or after large refactors. Subsequent turns get an index summary injected into context (codebase awareness). Also enables symbol search via search_code. Returns { indexedFiles, indexedSymbols, durationMs }.",
+      inputSchema: jsonSchema({
+        type: "object",
+        properties: {},
+        required: [],
+      }),
+      execute: async () => {
+        const deps = toolDeps;
+        if (!deps?.db) return { ok: false, output: "indexing unavailable (no db in this context)" };
+        if (!deps.projectId) return { ok: false, output: "indexing unavailable (no project bound to this session)" };
+        const result = reindexProject(deps.db, deps.projectId, root);
+        return {
+          ok: true,
+          output: `indexed ${result.indexedFiles} files, ${result.indexedSymbols} symbols in ${result.durationMs}ms. The index summary is now injected into your context for codebase awareness.`,
+        };
+      },
     },
   };
   if (allow !== null) {

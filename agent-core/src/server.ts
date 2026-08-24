@@ -11,7 +11,7 @@ import type { MemoryPolicy, RunMode } from "shared";
 import { aiSdkChat, streamAiSdkChat, type ChatFn } from "./agents/chat.js";
 import { runSingleAgentTurn, runStreamedAgentTurn } from "./agents/runtime.js";
 import { pickFolder } from "./dialogs.js";
-import { projectTree, readFile } from "./tools/index.js";
+import { projectTree, readFile, searchCode, searchFiles } from "./tools/index.js";
 import {
   ProviderKeyring,
   ProviderTestError,
@@ -43,6 +43,7 @@ import {
   upsertModel,
 } from "./storage/models.js";
 import { listSnapshots, restoreSnapshot, getSnapshotBySeq } from "./storage/snapshots.js";
+import { getIndexSummary, searchIndexSymbols } from "./storage/index.js";
 import { openDatabase, type SqliteDatabase } from "./storage/db.js";
 import {
   TOOL_NAMES,
@@ -858,6 +859,52 @@ export function buildServer(options: ServerOptions): FastifyInstance {
           return reply.code(404).send(errorBody("NOT_FOUND", result.output));
         }
         return { path: query.path, content: result.output };
+      });
+
+      // Round-28 WS-G2: codebase index summary for the frontend CodebasePanel.
+      scope.get("/projects/:id/index", async (request, reply) => {
+        const { id } = request.params as Record<string, string>;
+        const project = getProject(db, id);
+        if (project === undefined) {
+          return reply.code(404).send(errorBody("NOT_FOUND", `no project with id ${id}`));
+        }
+        const summary = getIndexSummary(db, id);
+        return { index: summary };
+      });
+
+      // Round-28 WS-H: unified search (files + symbols + content) for the
+      // CommandPalette. Reuses search_files + search_code + the codebase index.
+      scope.post("/projects/:id/search", async (request, reply) => {
+        const { id } = request.params as Record<string, string>;
+        const body = request.body as Record<string, unknown> | null;
+        if (body === null || typeof body !== "object" || Array.isArray(body)) {
+          return reply.code(400).send(errorBody("VALIDATION", "body must be a JSON object", { field: "body" }));
+        }
+        const project = getProject(db, id);
+        if (project === undefined) {
+          return reply.code(404).send(errorBody("NOT_FOUND", `no project with id ${id}`));
+        }
+        const query = typeof body.query === "string" ? body.query : "";
+        const kind = body.kind === "symbols" || body.kind === "content" ? body.kind : "files";
+        if (query.trim() === "") {
+          return reply.code(400).send(errorBody("VALIDATION", "query is required", { field: "body.query" }));
+        }
+        if (kind === "symbols") {
+          const symbols = searchIndexSymbols(db, id, query, 50);
+          return { kind: "symbols", results: symbols };
+        }
+        if (kind === "content") {
+          const res = searchCode(project.rootPath, query, undefined, {
+            caseSensitive: body.case_sensitive === true,
+            wholeWord: body.whole_word === true,
+            fileGlob: typeof body.file_glob === "string" ? body.file_glob : undefined,
+            maxResults: typeof body.max_results === "number" ? body.max_results : 50,
+          });
+          return { kind: "content", results: res.ok ? res.output : "" };
+        }
+        // kind === "files"
+        const res = searchFiles(project.rootPath, query, undefined);
+        return { kind: "files", results: res.ok ? res.output : "" };
       });
 
       // ---- Sessions + single-agent chat (API.md §5) ----

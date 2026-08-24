@@ -1,6 +1,6 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { motion, AnimatePresence } from "framer-motion";
-import { ArrowLeft, Moon, PanelsTopLeft, Sun, X } from "lucide-react";
+import { ArrowLeft, Moon, PanelsTopLeft, Search, Sun, X } from "lucide-react";
 import { Link } from "react-router";
 import { useAgents } from "../../hooks/use-agents";
 import { useProjectChatStore } from "../../lib/project-chat-store";
@@ -8,6 +8,7 @@ import { useThemeStore } from "../../lib/theme-store";
 import { useThemeStyles } from "../../lib/use-theme-styles";
 import { withAlpha } from "../dashboard/helpers";
 import type { Project } from "../../lib/api";
+import { CommandPalette } from "./CommandPalette";
 
 /**
  * ChatTopBar (Round 28 WS-D1): slim 56px top bar that appears in chat-focus
@@ -35,8 +36,24 @@ export function ChatTopBar({ project }: { project: Project }) {
   const agents = agentsQuery.data ?? [];
   const currentAgent = agents.find((a) => a.id === selectedAgentId) ?? agents[0] ?? null;
   const [pickerOpen, setPickerOpen] = useState(false);
+  const [paletteOpen, setPaletteOpen] = useState(false);
+  const selectFile = useProjectChatStore((s) => s.selectFile);
+  const setCodeVisible = useProjectChatStore((s) => s.setCodeVisible);
+
+  // ⌘K / Ctrl+K opens the CommandPalette (WS-H).
+  useEffect(() => {
+    const handler = (e: KeyboardEvent) => {
+      if ((e.metaKey || e.ctrlKey) && e.key === "k") {
+        e.preventDefault();
+        setPaletteOpen((v) => !v);
+      }
+    };
+    window.addEventListener("keydown", handler);
+    return () => window.removeEventListener("keydown", handler);
+  }, []);
 
   return (
+    <>
     <header
       className="shrink-0 h-14 flex items-center gap-2 px-3 border-b-[1.5px]"
       style={{ background: styles.card, borderColor: styles.border }}
@@ -164,6 +181,19 @@ export function ChatTopBar({ project }: { project: Project }) {
         {mode === "dark" ? <Sun size={16} /> : <Moon size={16} />}
       </button>
 
+      {/* Search (⌘K opens CommandPalette — WS-H) */}
+      <button
+        onClick={() => setPaletteOpen(true)}
+        aria-label="Search project (⌘K)"
+        title="Search project (⌘K)"
+        className="shrink-0 w-9 h-9 rounded-[10px] grid place-items-center transition-colors"
+        style={{ color: styles.textSecondary, background: "transparent" }}
+        onMouseEnter={(e) => (e.currentTarget.style.background = styles.subtleHover)}
+        onMouseLeave={(e) => (e.currentTarget.style.background = "transparent")}
+      >
+        <Search size={16} />
+      </button>
+
       {/* Show panels (exit focus mode → 3-panel layout) */}
       <button
         onClick={() => { setChatFocusMode(false); navigate(); }}
@@ -176,6 +206,21 @@ export function ChatTopBar({ project }: { project: Project }) {
         <span className="hidden sm:inline">Panels</span>
       </button>
     </header>
+    {/* Round-28 WS-H: ⌘K CommandPalette (files/symbols/content search) */}
+    <CommandPalette
+      open={paletteOpen}
+      onClose={() => setPaletteOpen(false)}
+      projectId={project.id}
+      onPickFile={(path, line) => {
+        selectFile(path);
+        setCodeVisible(true);
+        setChatFocusMode(false);
+        setPaletteOpen(false);
+        // line is unused for now (CodeView would jump to it in a future round)
+        void line;
+      }}
+    />
+    </>
   );
 }
 

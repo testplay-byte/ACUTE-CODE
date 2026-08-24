@@ -26,6 +26,7 @@ import {
 } from "../storage/sessions.js";
 import type { ChatFn, ChatTurnMessage, ChatTurnOutput, StreamChatFn } from "./chat.js";
 import { buildProjectSystemPrompt, readCustomRules } from "./prompts.js";
+import { getIndexSummary } from "../storage/index.js";
 import { lookupPricing } from "../storage/models.js";
 import { assembleWithinBudget, type ContextBudget } from "../context.js";
 
@@ -209,7 +210,7 @@ function prepareTurn(
   // silently dead in real turns while the tools existed on paper. Now wired
   // so todos persist + every mutating tool records a revertible snapshot.
   const turnSeq = lastSessionSeq(db, session.id) + 1;
-  const toolDeps = { db, sessionId: session.id, agentId: agent.id, seq: turnSeq };
+  const toolDeps = { db, sessionId: session.id, agentId: agent.id, seq: turnSeq, projectId: session.projectId ?? undefined };
   const tools =
     project !== undefined
       ? buildProjectTools(project.rootPath, agent.allowedTools, toolDeps)
@@ -223,6 +224,10 @@ function prepareTurn(
         // Round-28 WS-F: inject the agent's maxTurns budget into the AGENTIC
         // LOOP section so the model knows how many tool round-trips it has.
         maxTurns: agent.maxTurns,
+        // Round-28 WS-G: inject the codebase index summary (if the project
+        // has been indexed) so the agent has codebase awareness without
+        // needing list_dir + read_file every turn.
+        indexSummary: session.projectId !== null ? getIndexSummary(db, session.projectId) ?? undefined : undefined,
       })
     : agent.systemPrompt;
   return {

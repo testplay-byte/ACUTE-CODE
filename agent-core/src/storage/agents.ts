@@ -29,6 +29,7 @@ export const TOOL_NAMES = [
   "todo_write",
   "web_fetch",
   "web_search",
+  "index_project",
 ] as const;
 
 /** Agent JSON as served by the API: AgentRecord plus bookkeeping columns. */

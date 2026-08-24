@@ -12,6 +12,10 @@ export interface PromptContext {
   /** Round-28 WS-F: the agent's maxTurns budget — injected into the AGENTIC
    * LOOP section so the model knows how many tool round-trips it has. */
   maxTurns?: number;
+  /** Round-28 WS-G: the codebase index summary (if the project has been
+   * indexed). Injected into the CODEBASE AWARENESS section so the agent
+   * knows the project's file/symbol structure without list_dir/read_file. */
+  indexSummary?: import("../storage/index.js").IndexSummary;
 }
 
 export function buildProjectSystemPrompt(ctx: PromptContext): string {
@@ -143,6 +147,31 @@ export function buildProjectSystemPrompt(ctx: PromptContext): string {
   lines.push("- If something is ambiguous, make the most reasonable assumption and note it briefly.");
   lines.push("- Use **bold** for file names and `code` for identifiers in responses.");
   lines.push("");
+
+  // ── Codebase awareness (Round 28 WS-G) ────────────────────────────────
+  // Owner R28 directive: "Implement proper project or such indexing so that
+  // our model properly knows about the project, can manage it, can handle
+  // things."
+  if (ctx.toolNames.includes("index_project")) {
+    lines.push("## CODEBASE AWARENESS");
+    lines.push("- You have an index_project tool that builds a symbol index of this project (functions, classes, constants, types, interfaces, imports per file).");
+    lines.push("- Call index_project on the FIRST turn for a new project, or after a large refactor. It takes no arguments.");
+    lines.push("- After indexing, a summary of the codebase is injected here on every turn so you know the structure without list_dir/read_file.");
+    lines.push("- Use search_code (with case_sensitive/whole_word/file_glob options) to find symbols + content; it queries both the live tree AND the index.");
+    lines.push("");
+    if (ctx.indexSummary && ctx.indexSummary.totalSymbols > 0) {
+      lines.push(`### Project index (indexed ${ctx.indexSummary.totalFiles} files, ${ctx.indexSummary.totalSymbols} symbols):`);
+      lines.push("Top files by symbol count:");
+      for (const f of ctx.indexSummary.topFiles.slice(0, 10)) {
+        lines.push(`  - ${f.path} (${f.count} symbols)`);
+      }
+      lines.push("Sample of indexed symbols (first 30):");
+      for (const s of ctx.indexSummary.topSymbols.slice(0, 30)) {
+        lines.push(`  - ${s.path}:${s.line} [${s.kind}] ${s.symbol}`);
+      }
+      lines.push("");
+    }
+  }
 
   // ── Environment ─────────────────────────────────────────────────────────
   lines.push("## ENVIRONMENT");
