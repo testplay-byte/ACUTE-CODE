@@ -19,7 +19,6 @@
 // Owner R28 directive: "Make sure that the documentation is proper and
 // easily manageable."
 
-import { execSync } from "node:child_process";
 import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
 import { join, dirname, relative, resolve } from "node:path";
 
@@ -86,11 +85,13 @@ for (const doc of docs) {
   }
 
   // 2. file-path references (drift guard). Only check paths OUTSIDE fenced
-  //    code blocks (a path in a code example is illustrative, not a ref).
-  const codeFenceRegex = /^```/m;
+  //    code blocks (a path in a code example is illustrative, not a ref)
+  //    AND outside inline-code spans (round-28 J2 hardening: an illustrative
+  //    `src/foo.ts` in backticks is not a reference to verify either).
+  const codeFenceRegex = /^ {0,3}```/m;
   const segments = content.split(codeFenceRegex);
   for (let i = 0; i < segments.length; i += 2) {
-    const seg = segments[i] ?? "";
+    const seg = (segments[i] ?? "").replace(/`[^`\n]+`/g, "");
     const pathRefs = seg.match(/(?:^|\s|[(\[])((?:src|agent-core\/src|shared\/src|scripts|tests)\/[A-Za-z0-9_./-]+\.(?:ts|tsx|js|mjs|sql|md|json))/g) ?? [];
     for (const raw of pathRefs) {
       const refPath = raw.trim().replace(/^[(\[]/, "");
@@ -104,26 +105,67 @@ for (const doc of docs) {
 }
 
 // 3. URL HTTP HEAD checks (allow MAX_URL_FAILURES before failing)
+//    Round-28 J2 hardening: only check URLs OUTSIDE fenced code blocks
+//    (parity with the path extractor) and skip shell-template URLs (the
+//    token-in-URL auth docs use $(cat ...) / ${VAR} which are not real URLs)
+//    and non-resolvable hosts (e.g. `https://user:token@host` has no TLD).
 let urlFailures = 0;
 const urls = new Set();
+const codeFenceRegexUrl = /^ {0,3}```/m;
 for (const doc of docs) {
   const content = readFileSync(doc, "utf8");
-  const urlMatches = content.match(/https:\/\/[A-Za-z0-9._~:/?#@!$&'()*+,;=%-]+/g) ?? [];
-  for (const url of urlMatches) {
-    // skip ntfy + localhost + GitHub API (auth-gated) URLs to avoid noise
-    if (url.includes("ntfy.sh") || url.includes("127.0.0.1") || url.includes("localhost")) continue;
-    if (url.includes("api.github.com")) continue;
-    urls.add(url.split(")")[0].split("]")[0].split(">")[0]); // trim trailing punct
+  const segments = content.split(codeFenceRegexUrl);
+  for (let i = 0; i < segments.length; i += 2) {
+    const seg = (segments[i] ?? "").replace(/`[^`\n]+`/g, ""); // skip inline-code (round-28 J2: token-in-URL auth docs use `https://user@host` in backticks)
+    const urlMatches = seg.match(/https:\/\/[A-Za-z0-9._~:/?#@!$&'()*+,;=%-]+/g) ?? [];
+    for (const url of urlMatches) {
+      // skip ntfy + localhost + GitHub API (auth-gated) URLs to avoid noise
+      if (url.includes("ntfy.sh") || url.includes("127.0.0.1") || url.includes("localhost")) continue;
+      if (url.includes("api.github.com")) continue;
+      // skip shell-template URLs (token-in-URL auth docs use $(cat ...) / ${VAR})
+      if (url.includes("$")) continue;
+      // skip placeholder URLs (e.g. `https://host/...` — never a real URL)
+      if (url.includes("...")) continue;
+      // skip non-resolvable hosts (e.g. `https://user:token@host` — no dot/TLD)
+      const hostPart = url.replace(/^https:\/\/([^/]+).*/, "$1").split("@").pop();
+      if (!hostPart.includes(".")) continue;
+      urls.add(url.split(")")[0].split("]")[0].split(">")[0]); // trim trailing punct
+    }
   }
 }
-for (const url of urls) {
-  if (urlFailures >= MAX_URL_FAILURES) break;
-  try {
-    execSync(`curl -s -o /dev/null -I -w "%{http_code}" --max-time 5 "${url}"`, { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] });
-  } catch {
-    urlFailures++;
-    if (urlFailures < MAX_URL_FAILURES) console.warn(`WARN  ${url}: HTTP HEAD failed (transient?)`);
+// 3b. HEAD-check the collected URLs in parallel (round-28 J2: replaced the
+//     sequential curl-spawn loop with global fetch + AbortSignal.timeout for
+//     a ~10x speedup on large URL sets; same "network-failure-only" semantics
+//     as the old curl-exit-code check — any HTTP response, even 4xx, counts
+//     as reachable; only DNS/timeout/network errors count as failures).
+async function headCheck(url) {
+  // One retry on transient failure (round-28 J2: sandbox egress to
+  // raw.githubusercontent.com is occasionally flaky; a single retry absorbs
+  // the flake without weakening the broken-link signal).
+  for (let attempt = 0; attempt < 2; attempt++) {
+    try {
+      await fetch(url, { method: "HEAD", redirect: "follow", signal: AbortSignal.timeout(3000) });
+      return true;
+    } catch {
+      if (attempt === 1) return false;
+    }
   }
+  return false;
+}
+const CONCURRENCY = 10;
+const urlList = [...urls];
+const failedUrls = [];
+for (let i = 0; i < urlList.length; i += CONCURRENCY) {
+  if (failedUrls.length >= MAX_URL_FAILURES) break;
+  const batch = urlList.slice(i, i + CONCURRENCY);
+  const results = await Promise.allSettled(batch.map(headCheck));
+  results.forEach((r, idx) => {
+    if (r.status !== "fulfilled" || r.value === false) failedUrls.push(batch[idx]);
+  });
+}
+urlFailures = failedUrls.length;
+for (const u of failedUrls.slice(0, MAX_URL_FAILURES)) {
+  console.warn(`WARN  ${u}: HTTP HEAD failed (transient?)`);
 }
 if (urlFailures >= MAX_URL_FAILURES) {
   console.error(`FAIL  ${urlFailures} URLs unreachable (cap ${MAX_URL_FAILURES})`);

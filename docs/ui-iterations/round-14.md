@@ -1,3 +1,4 @@
+<!-- last-reviewed: 2026-08-24 round-28 -->
 # Round 14 — Dashboard live on GitHub Pages (2026-08-23)
 
 **Owner direction:** "I have created a new GitHub repository explicitly for

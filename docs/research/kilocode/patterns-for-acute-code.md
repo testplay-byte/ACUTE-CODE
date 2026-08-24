@@ -1,3 +1,4 @@
+<!-- last-reviewed: 2026-08-24 round-28 -->
 # Kilo Code — Patterns for ACUTE-CODE
 
 Study-only document. Kilo Code is MIT licensed (LICENSE file verified; the package README's stale "Apache 2.0" sentence notwithstanding) — compatible with our allowed dependency set (MIT, Apache-2.0, BSD, ISC, MPL-2.0), but per project constraints we adopt **patterns, never code**.

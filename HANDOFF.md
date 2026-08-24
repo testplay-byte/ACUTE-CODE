@@ -1,3 +1,4 @@
+<!-- last-reviewed: 2026-08-24 round-28 -->
 # ACUTE-CODE — Agent Handoff Document
 
 **Last updated:** 2026-08-24 (round-28 DELIVERED — 5 milestones, 213 tests green, CI green) · **Maintained by:** the orchestrator agent · **Audience:** any AI agent (or human) taking over development

@@ -1,3 +1,4 @@
+<!-- last-reviewed: 2026-08-24 round-28 -->
 # ADR-NNN: <short title>
 
 - **Status:** ACCEPTED | PROPOSED | SUPERSEDED by ADR-XXX

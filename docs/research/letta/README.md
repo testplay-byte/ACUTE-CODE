@@ -1,3 +1,4 @@
+<!-- last-reviewed: 2026-08-24 round-28 -->
 # Letta (formerly MemGPT) — Research Summary
 
 **Target:** ACUTE-CODE reference-project analysis

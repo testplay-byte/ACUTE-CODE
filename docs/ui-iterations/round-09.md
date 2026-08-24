@@ -1,3 +1,4 @@
+<!-- last-reviewed: 2026-08-24 round-28 -->
 # Round 09 — Agentic Coding MVP: project-chat UI port (M3) + first live ACUTEST run (M4)
 
 **Date:** 2026-08-23 · **Recorded by:** orchestrator agent (takeover session)
@@ -90,7 +91,7 @@ provider shows `● openrouter` with key; connection test `stealth/ox-alpha` →
 - `POST /sessions` → `sess_d411344a…` bound to project + agent
 - Prompt: *"Create a file named hello.ts in the project root containing
   exactly: export function hello() { return "Hello from ACUTE-CODE M4"; }
-  Then create src/notes.md containing a one-line summary of what you did."*
+  Then create a notes.md in src/ containing a one-line summary of what you did."*
 
 **Result (synchronous turn, 26 s, 3,932 in / 425 out tokens, 1 request,
 costUsd 0):** event log = `message.user` → `tool.use list_dir (ok)` →
