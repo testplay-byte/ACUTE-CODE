@@ -244,9 +244,13 @@ export default function ProjectChatScreen() {
             </>
           )}
 
+          {/* ROUND-37 (owner: "a lot of the right side area was completely
+              empty"): when the Code panel is hidden the chat FILLS the freed
+              space instead of staying a fixed-width column with dead space
+              to its right. */}
           <div
-            className={onlyChat ? "flex-1 min-w-0 overflow-hidden rounded-2xl" : "shrink-0 overflow-hidden rounded-2xl"}
-            style={onlyChat ? undefined : { width: chatWidth }}
+            className={codeVisible ? "shrink-0 overflow-hidden rounded-2xl" : "flex-1 min-w-0 overflow-hidden rounded-2xl"}
+            style={codeVisible ? { width: chatWidth } : undefined}
           >
             <AgentChatPanel projectId={project.id} project={project} />
           </div>

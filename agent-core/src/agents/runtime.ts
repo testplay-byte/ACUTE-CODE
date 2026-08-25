@@ -544,6 +544,11 @@ export async function runStreamedAgentTurn(
 
     let iterText = "";
     let iterThinking = "";
+    // ROUND-37: measured thinking duration per segment ("Thought for Ns").
+    // Starts at the first reasoning delta; freezes when the segment's text
+    // begins (the thought is done the moment the model starts writing).
+    let iterThinkingStart: number | null = null;
+    let iterThinkingMs: number | null = null;
     let iterAllText = ""; // never reset — completion-signal detection across segments
     let iterInputTokens = 0;
     let iterOutputTokens = 0;
@@ -568,13 +573,24 @@ export async function runStreamedAgentTurn(
     const flushSegment = (withStats: boolean): boolean => {
       if (iterText.trim() === "" && iterThinking.trim() === "") return false;
       const iterMs = Date.now() - startedAt;
+      const thinkingMs =
+        iterThinkingMs !== null
+          ? iterThinkingMs
+          : iterThinkingStart !== null
+            ? Date.now() - iterThinkingStart
+            : null;
       const ev = appendSessionEvent(db, session.id, {
         type: "message.assistant",
         agentId: agent.id,
         payload: {
           role: "assistant",
           content: iterText,
-          ...(iterThinking.trim() !== "" ? { thinking: capThinking(iterThinking) } : {}),
+          ...(iterThinking.trim() !== ""
+            ? {
+                thinking: capThinking(iterThinking),
+                ...(thinkingMs !== null && thinkingMs > 0 ? { thinkingMs } : {}),
+              }
+            : {}),
           ...(withStats
             ? {
                 usage: { inputTokens: iterInputTokens, outputTokens: iterOutputTokens },
@@ -589,6 +605,8 @@ export async function runStreamedAgentTurn(
       }
       iterText = "";
       iterThinking = "";
+      iterThinkingStart = null;
+      iterThinkingMs = null;
       return true;
     };
 
@@ -610,9 +628,15 @@ export async function runStreamedAgentTurn(
           emit(event);
         }
         if (event.type === "text-delta") {
+          // ROUND-37: the first text token completes the in-flight thought —
+          // freeze its measured duration ("Thought for Ns").
+          if (iterThinkingStart !== null && iterThinkingMs === null) {
+            iterThinkingMs = Date.now() - iterThinkingStart;
+          }
           iterText += event.delta;
           iterAllText += event.delta;
         } else if (event.type === "thinking-delta") {
+          if (iterThinkingStart === null) iterThinkingStart = Date.now();
           iterThinking += event.delta;
         } else if (event.type === "tool-call") {
           iterToolCalls += 1;

@@ -227,101 +227,74 @@ function toolUse(seq: number, toolName: string, argsSummary: string, ok = true):
   );
 }
 
-describe("toProjectChatItems", () => {
-  it("orders user → activity (all tools of the turn) → ai from an event log", () => {
+describe("toProjectChatItems (ROUND-37 turn model)", () => {
+  it("folds one user message + its whole iteration into ONE turn: tools in working, answer as finalText", () => {
     const items = toProjectChatItems([
-      ev(
-        1,
-        "message.user",
-        { role: "user", content: "Add rate limiting to the middleware" },
-        "agt_scribe",
-      ),
-      toolUse(2, "list_dir", "path: src"),
-      toolUse(3, "write_file", "path: src/middleware.ts, content: 128 chars"),
-      ev(
-        4,
-        "message.assistant",
-        { role: "assistant", content: "Done — limiter added." },
-        "agt_scribe",
-      ),
+      ev(1, "message.user", { role: "user", content: "Add rate limiting" }, "agt_scribe"),
+      ev(2, "message.assistant", { role: "assistant", content: "Let me inspect first.", thinking: "plan: read middleware" }, "agt_scribe"),
+      toolUse(3, "list_dir", "path: src"),
+      toolUse(4, "write_file", "path: src/middleware.ts, content: 128 chars"),
+      ev(5, "message.assistant", { role: "assistant", content: "Done — limiter added." }, "agt_scribe"),
     ]);
 
-    expect(items.map((item) => item.kind)).toEqual(["user", "activity", "ai"]);
-    expect(items[0]).toEqual({
-      kind: "user",
-      seq: 1,
-      content: "Add rate limiting to the middleware",
-      ts: TS(1),
-    });
-    expect(items[1]).toEqual({
-      kind: "activity",
-      seqStart: 2,
-      seqEnd: 3,
-      tools: [
-        { seq: 2, toolName: "list_dir", argsSummary: "path: src", ok: true, ts: TS(2) },
-        {
-          seq: 3,
-          toolName: "write_file",
-          argsSummary: "path: src/middleware.ts, content: 128 chars",
-          ok: true,
-          ts: TS(3),
-        },
-      ],
-      ts: TS(2),
-      endTs: TS(3),
-    });
-    expect(items[2]).toEqual({
-      kind: "ai",
-      seq: 4,
-      content: "Done — limiter added.",
-      agentId: "agt_scribe",
-      ts: TS(4),
-    });
+    expect(items.map((i) => i.kind)).toEqual(["user", "turn"]);
+    const turn = items[1];
+    if (turn.kind !== "turn") throw new Error("expected turn");
+    // ONE header per turn — the R37 fix for repeated avatars/names.
+    expect(turn.seq).toBe(2);
+    expect(turn.agentId).toBe("agt_scribe");
+    expect(turn.ts).toBe(TS(2));
+    expect(turn.endTs).toBe(TS(5));
+    // working: the pre-tool narration, both tool calls (in order), and the
+    // thinking for the FIRST segment (all thinking folds into working).
+    expect(turn.working.map((w) => w.type)).toEqual(["thinking", "text", "tool", "tool"]);
+    expect(turn.finalText).toBe("Done — limiter added.");
   });
 
-  it("interleaves activity blocks at the point tools ran — one block per maximal tool run (round-33)", () => {
+  it("final answer = text AFTER the last tool; earlier post-tool texts become narration (outer-loop iterations)", () => {
     const items = toProjectChatItems([
-      toolUse(1, "list_dir", "path: ."),
-      toolUse(2, "read_file", "path: package.json"),
-      ev(3, "message.assistant", { role: "assistant", content: "continuing…" }, "agt_scribe"),
-      toolUse(4, "read_file", "path: src/index.ts"),
-      ev(5, "message.assistant", { role: "assistant", content: "done" }, "agt_scribe"),
+      ev(1, "message.user", { role: "user", content: "go" }, "agt_scribe"),
+      ev(2, "message.assistant", { role: "assistant", content: "Checking the folder." }, "agt_scribe"),
+      toolUse(3, "list_dir", "path: ."),
+      // iteration 1 final flush (post-tool narration with stats)
+      ev(4, "message.assistant", { role: "assistant", content: "Found 2 files, verifying.", usage: { inputTokens: 10, outputTokens: 5 }, ms: 800, model: "m1" }, "agt_scribe"),
+      // iteration 2 (no tools → conversational break): the true answer
+      ev(5, "message.assistant", { role: "assistant", content: "The folder has 2 files.", usage: { inputTokens: 12, outputTokens: 7 }, ms: 1100, model: "m1" }, "agt_scribe"),
     ]);
 
-    // Tools split by an interim assistant reply → TWO activity blocks,
-    // interleaved exactly where the work happened.
-    expect(items.map((item) => item.kind)).toEqual(["activity", "ai", "activity", "ai"]);
-    const [first, second] = items.filter((i) => i.kind === "activity");
-    expect(first.tools.map((t) => t.seq)).toEqual([1, 2]);
-    expect(second.tools.map((t) => t.seq)).toEqual([4]);
-    expect(first.seqStart).toBe(1);
-    expect(first.seqEnd).toBe(2);
-    expect(second.seqStart).toBe(4);
+    const turn = items[1];
+    if (turn.kind !== "turn") throw new Error("expected turn");
+    expect(turn.finalText).toBe("The folder has 2 files.");
+    // narration entries: pre-tool + post-tool-iteration-1 text, in order
+    const narration = turn.working.filter((w) => w.type === "text").map((w) => (w as { content: string }).content);
+    expect(narration).toEqual(["Checking the folder.", "Found 2 files, verifying."]);
+    // LAST stats win (turn-level)
+    expect(turn.usage).toEqual({ inputTokens: 12, outputTokens: 7 });
+    expect(turn.ms).toBe(1100);
+    expect(turn.model).toBe("m1");
   });
 
-  it("ROUND-35: parses thinking into ai items and merges stats carriers into the previous message", () => {
+  it("ROUND-35 semantics preserved: stats carrier (empty content + usage) merges into TURN stats, no empty bubble", () => {
     const items = toProjectChatItems([
       ev(1, "message.user", { role: "user", content: "go" }, "agt_scribe"),
       ev(2, "message.assistant", { role: "assistant", content: "Creating now.", thinking: "plan first" }, "agt_scribe"),
       toolUse(3, "write_file", "path: a.ts, content: 5 chars"),
-      // stats carrier: empty content + usage → merges into item at seq 2
       ev(4, "message.assistant", { role: "assistant", content: "", usage: { inputTokens: 7, outputTokens: 3 }, ms: 120, model: "m" }, "agt_scribe"),
     ]);
 
-    // Chronological: user → ai(segment) → activity; the carrier (seq 4)
-    // merged into the ai item and vanished.
-    expect(items.map((i) => i.kind)).toEqual(["user", "ai", "activity"]);
-    const ai = items[1];
-    if (ai.kind !== "ai") throw new Error("expected ai");
-    // The carrier vanished; its stats landed on the real message; thinking parsed.
-    expect(ai.content).toBe("Creating now.");
-    expect(ai.thinking).toBe("plan first");
-    expect(ai.usage).toEqual({ inputTokens: 7, outputTokens: 3 });
-    expect(ai.ms).toBe(120);
-    expect(ai.model).toBe("m");
+    expect(items.map((i) => i.kind)).toEqual(["user", "turn"]);
+    const turn = items[1];
+    if (turn.kind !== "turn") throw new Error("expected turn");
+    expect(turn.finalText).toBe(""); // text preceded the tool → narration only
+    const thinking = turn.working.find((w) => w.type === "thinking");
+    expect(thinking).toMatchObject({ text: "plan first" });
+    expect(turn.working.some((w) => w.type === "text" && (w as { content: string }).content === "Creating now.")).toBe(true);
+    expect(turn.usage).toEqual({ inputTokens: 7, outputTokens: 3 });
+    expect(turn.ms).toBe(120);
+    expect(turn.model).toBe("m");
   });
 
-  it("splits tool runs of DIFFERENT turns into separate activity blocks", () => {
+  it("splits DIFFERENT turns at each user message (one turn per user message)", () => {
     const items = toProjectChatItems([
       toolUse(1, "list_dir", "path: ."),
       ev(2, "message.assistant", { role: "assistant", content: "first done" }, "agt_scribe"),
@@ -330,49 +303,137 @@ describe("toProjectChatItems", () => {
       ev(5, "message.assistant", { role: "assistant", content: "second done" }, "agt_scribe"),
     ]);
 
-    expect(items.map((item) => item.kind)).toEqual(["activity", "ai", "user", "activity", "ai"]);
-    const blocks = items.filter((i) => i.kind === "activity");
-    expect(blocks).toHaveLength(2);
+    // leading assistant events → synthetic turn (no user message before it)
+    expect(items.map((i) => i.kind)).toEqual(["turn", "user", "turn"]);
+    const [first, second] = items.filter((i) => i.kind === "turn");
+    if (first.kind !== "turn" || second.kind !== "turn") throw new Error("expected turns");
+    expect(first.finalText).toBe("first done");
+    expect(first.working).toHaveLength(1); // the tool
+    expect(second.finalText).toBe("second done");
   });
 
-
-
-  it("keeps write/edit tools inside the activity block (diff cards render there)", () => {
+  it("turn ending on a tool call has empty finalText (working-only turn)", () => {
     const items = toProjectChatItems([
-      toolUse(1, "write_file", "path: a.ts, content: 10 chars"),
-      toolUse(2, "read_file", "path: b.ts"),
-      toolUse(3, "edit_file", "path: c.ts, content: 30 chars", false),
+      ev(1, "message.user", { role: "user", content: "clean up" }, "agt_scribe"),
+      ev(2, "message.assistant", { role: "assistant", content: "Removing the file now." }, "agt_scribe"),
+      toolUse(3, "delete_file", "path: tmp/old.log"),
     ]);
 
-    expect(items.map((item) => item.kind)).toEqual(["activity"]);
-    const activity = items[0];
-    if (activity.kind !== "activity") throw new Error("expected activity");
-    expect(activity.tools.map((t) => t.toolName)).toEqual([
-      "write_file",
-      "read_file",
-      "edit_file",
-    ]);
-    expect(activity.tools.map((t) => t.ok)).toEqual([true, true, false]);
+    expect(items.map((i) => i.kind)).toEqual(["user", "turn"]);
+    const turn = items[1];
+    if (turn.kind !== "turn") throw new Error("expected turn");
+    expect(turn.finalText).toBe("");
+    expect(turn.working.map((w) => w.type)).toEqual(["text", "tool"]);
   });
 
-  it("parses argsSummary tolerantly (full format, missing chars, missing path)", () => {
+  it("consecutive user messages: empty turns drop, both user items render (failed provider turn)", () => {
+    const items = toProjectChatItems([
+      ev(1, "message.user", { role: "user", content: "hello?" }, "agt_scribe"),
+      // provider failed — no assistant events at all
+      ev(2, "message.user", { role: "user", content: "you there?" }, "agt_scribe"),
+      ev(3, "message.assistant", { role: "assistant", content: "Yes, sorry." }, "agt_scribe"),
+    ]);
+
+    expect(items.map((i) => i.kind)).toEqual(["user", "user", "turn"]);
+    expect(items[0]).toMatchObject({ content: "hello?" });
+    expect(items[1]).toMatchObject({ content: "you there?" });
+  });
+
+  it("failed turn that ran tools renders working-only (user + tools, no assistant)", () => {
+    const items = toProjectChatItems([
+      ev(1, "message.user", { role: "user", content: "run the build" }, "agt_scribe"),
+      toolUse(2, "run_command", "npm test"),
+      toolUse(3, "run_command", "npm run build", false),
+    ]);
+
+    expect(items.map((i) => i.kind)).toEqual(["user", "turn"]);
+    const turn = items[1];
+    if (turn.kind !== "turn") throw new Error("expected turn");
+    expect(turn.finalText).toBe("");
+    expect(turn.working).toHaveLength(2);
+  });
+
+  it("thinking-only turn (no tools): thinking folds into working, answer stays finalText", () => {
+    const items = toProjectChatItems([
+      ev(1, "message.user", { role: "user", content: "hi" }, "agt_scribe"),
+      ev(2, "message.assistant", { role: "assistant", content: "Hello!", thinking: "simple greeting", thinkingMs: 3200 }, "agt_scribe"),
+    ]);
+
+    const turn = items[1];
+    if (turn.kind !== "turn") throw new Error("expected turn");
+    expect(turn.working).toHaveLength(1);
+    expect(turn.working[0]).toMatchObject({ type: "thinking", text: "simple greeting", thinkingMs: 3200 });
+    expect(turn.finalText).toBe("Hello!");
+  });
+
+  it("approval.requested/resolved fold into working entries and resolve in place", () => {
+    const items = toProjectChatItems([
+      ev(1, "message.user", { role: "user", content: "install deps" }, "agt_scribe"),
+      ev(2, "approval.requested", { approvalId: "appr_1", toolName: "run_command", argsSummary: "npm install left-pad", category: "confirm" }, "agt_scribe"),
+      ev(3, "approval.resolved", { approvalId: "appr_1", decision: "approved", remember: "always" }, "agt_scribe"),
+      toolUse(4, "run_command", "npm install left-pad"),
+      ev(5, "message.assistant", { role: "assistant", content: "Installed." }, "agt_scribe"),
+    ]);
+
+    const turn = items[1];
+    if (turn.kind !== "turn") throw new Error("expected turn");
+    const approval = turn.working.find((w) => w.type === "approval");
+    expect(approval).toMatchObject({
+      approvalId: "appr_1",
+      toolName: "run_command",
+      argsSummary: "npm install left-pad",
+      category: "confirm",
+      status: "approved",
+      remember: "always",
+    });
+    // a pending (unresolved) approval keeps status pending
+    const pending = toProjectChatItems([
+      ev(1, "message.user", { role: "user", content: "go" }, "agt_scribe"),
+      ev(2, "approval.requested", { approvalId: "appr_9", toolName: "run_command", argsSummary: "rm tmp", category: "confirm" }, "agt_scribe"),
+    ]);
+    const pTurn = pending[1];
+    if (pTurn.kind !== "turn") throw new Error("expected turn");
+    expect(pTurn.working.find((w) => w.type === "approval")).toMatchObject({ status: "pending" });
+  });
+
+  it("keeps write/edit tools inside working with ok flags (diff cards render there) + tolerant argsSummary parse", () => {
     const items = toProjectChatItems([
       toolUse(1, "write_file", "path: src/full.ts, content: 128 chars"),
-      toolUse(2, "write_file", "path: src/no-chars.ts"),
-      toolUse(3, "edit_file", "content: 64 chars"),
-      toolUse(4, "edit_file", "touched something, details unknown"),
+      toolUse(2, "read_file", "path: b.ts"),
+      toolUse(3, "edit_file", "path: c.ts, content: 30 chars", false),
+      toolUse(4, "edit_file", "content: 64 chars"),
+      toolUse(5, "edit_file", "touched something, details unknown"),
+      toolUse(6, "write_file", "path: src/no-chars.ts"),
     ]);
 
-    const activity = items[0];
-    if (activity.kind !== "activity") throw new Error("expected activity");
-    const parsed = activity.tools
+    expect(items.map((i) => i.kind)).toEqual(["turn"]);
+    const turn = items[0];
+    if (turn.kind !== "turn") throw new Error("expected turn");
+    const tools = turn.working.filter((w) => w.type === "tool").map((w) => (w as { tool: { toolName: string; ok: boolean; argsSummary: string } }).tool);
+    expect(tools.map((t) => t.toolName)).toEqual(["write_file", "read_file", "edit_file", "edit_file", "edit_file", "write_file"]);
+    expect(tools.map((t) => t.ok)).toEqual([true, true, false, true, true, true]);
+    const parsed = tools
       .filter((t) => t.toolName === "write_file" || t.toolName === "edit_file")
       .map((t) => parseDiffArgs(t.argsSummary));
-    expect(parsed).toHaveLength(4);
+    expect(parsed).toHaveLength(5);
     expect(parsed[0]).toMatchObject({ path: "src/full.ts", chars: 128 });
-    expect(parsed[1]).toMatchObject({ path: "src/no-chars.ts", chars: null });
+    expect(parsed[1]).toMatchObject({ path: "c.ts", chars: 30 });
     expect(parsed[2]).toMatchObject({ path: null, chars: 64 });
     expect(parsed[3]).toMatchObject({ path: null, chars: null });
+    expect(parsed[4]).toMatchObject({ path: "src/no-chars.ts", chars: null });
+  });
+
+  it("delegate_task tool rows keep their args/output summaries intact (SubAgentCard parses them)", () => {
+    const items = toProjectChatItems([
+      ev(1, "message.user", { role: "user", content: "delegate" }, "agt_scribe"),
+      toolUse(2, "delegate_task", "role: coder, task: write tests"),
+    ]);
+    const turn = items[1];
+    if (turn.kind !== "turn") throw new Error("expected turn");
+    const entry = turn.working[0];
+    if (entry.type !== "tool") throw new Error("expected tool entry");
+    expect(entry.tool.toolName).toBe("delegate_task");
+    expect(entry.tool.argsSummary).toBe("role: coder, task: write tests");
   });
 
   it("ignores unknown event types (and messages without string content)", () => {
@@ -384,8 +445,17 @@ describe("toProjectChatItems", () => {
     ]);
 
     expect(items).toEqual([
-      { kind: "ai", seq: 4, content: "Still here.", agentId: "agt_scribe", ts: TS(4) },
+      { kind: "turn", seq: 4, agentId: "agt_scribe", ts: TS(4), endTs: TS(4), working: [], finalText: "Still here." },
     ]);
+  });
+
+  it("drops fully-empty turns (no working, no final text)", () => {
+    const items = toProjectChatItems([
+      ev(1, "message.user", { role: "user", content: "hi" }, "agt_scribe"),
+      ev(2, "message.assistant", { role: "assistant", content: "" }, "agt_scribe"),
+      ev(3, "message.user", { role: "user", content: "again" }, "agt_scribe"),
+    ]);
+    expect(items.map((i) => i.kind)).toEqual(["user", "user"]);
   });
 });
 

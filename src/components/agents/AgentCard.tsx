@@ -1,5 +1,5 @@
 import { motion } from "framer-motion";
-import { Copy, Pencil, Sparkles, Trash2 } from "lucide-react";
+import { Bot, Copy, Pencil, Trash2 } from "lucide-react";
 import type { Agent } from "../../lib/api";
 import { staggerItem } from "../../lib/motion";
 import { Badge } from "../ui/controls";
@@ -34,7 +34,7 @@ export function AgentCard({
             <Badge>{agent.role}</Badge>
             {agent.isTemplate ? (
               <Badge tone="accent">
-                <Sparkles size={9} />
+                <Bot size={9} />
                 template
               </Badge>
             ) : null}
