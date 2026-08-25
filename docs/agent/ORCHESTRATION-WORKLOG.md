@@ -1050,3 +1050,26 @@ Stage Summary:
 - Phase 3's core is LIVE: real sub-agents, real concurrency limits, real key pools, real recovery — built additively on the existing runtime exactly as PILLARS §1 prescribed.
 - The owner's monitoring ask (tap running sessions → status) is the SubAgentCard + child-log dialog.
 - Future (owner's note): smarter key management per sub-agent — the pool infra is the foundation.
+
+---
+Task ID: R37
+Agent: orchestrator (Z.ai Code)
+Task: Owner R37 directives — chat continuity (Working section per turn, minimal tools, no sparkle iconography, width fixes), settings/providers rebuild (flat list, Add Provider dialog, 3 API formats), run_command approvals (Allow once/Always/Deny), proper logging + docs.
+
+Work Log:
+- SANDBOX WIPED at round start. Per the round-28 rule: ntfy fired, then ASKED THE OWNER for credentials directly (lesson #61 — no filesystem hunting). Owner re-supplied all three; full restore in ~15 min (secrets 0700/0600, clones token-in-URL + sanitized remotes, per-repo credential stores, pnpm shim, .env.development, install, verify).
+- Found + fixed a pre-existing R36 defect during restore: authInject method union lacked DELETE (typecheck red on main).
+- Wrote docs/agent/R37-PLAN.md; sub-agent plan review APPROVED-WITH-AMENDMENTS (7 amendments folded in: policy unification, resolver map, fold semantics, live-reducer fix preservation, fail-fast non-interactive, 9-site sparkle scope, call-site migrations).
+- MS-A: toProjectChatItems rewritten to the TURN model (working entries + finalText + turn stats; approval events fold); new WorkingSection.tsx (borderless section: live mm:ss timer → "Worked for Ns · N actions"; one-line ThoughtRow/ToolLine/ApprovalRow; auto-expand live / auto-collapse done; activityMode + ModePopover relocated); AgentChatPanel rewritten (AssistantTurn, live-turn reducer preserving R35 fixes #2/#6, thinkingMs); Sparkles removed at all 9 sites (AcuteLogo on the empty state); ChatFocusLayout 900px→1500px cap; 3-panel chat flexes when Code hidden; ActivityBlock deleted.
+- MS-B: ModelsProvidersTab rebuilt (flat list, Add Provider dialog: presets+custom, every provider editable+deletable via migration 0010 tombstones); apiFormat REAL: prepareTurn→chat.ts branch (createOpenAICompatible | createAnthropic | createOpenAI.responses), ProviderView.apiFormat, @ai-sdk/anthropic + @ai-sdk/openai added (Apache-2.0).
+- MS-C: approvals engine v1 (ADR-0024): migration 0009; layered policy (blocked→deny / destructive→always-ask-never-rule / auto read-only+build-test / project exact-match rule / else ask); in-process resolver map (no polling); 120s timeout + abort-race; boot sweep wakes zombies + persists expired events; POST /approvals/:id/decision with remember downgrade for destructive; run_command gate rewritten (exec.ts delegates); interactive = streamed parent only; SSE + session events for the ApprovalCard; decideApproval frontend API.
+- MS-D: agent-core/src/lib/log.ts JSON-lines logger (turn/tool/approval lifecycle; names+argsSummary only, never outputs/keys; .dev/acute.log gitignored); wired into runtime/server/approvals.
+- Sub-agent code review: 1 BLOCKER (compound-command policy bypass "pnpm test && curl …" — fixed with segment-wise categorize + regression tests), 2 MAJOR (live-thought never collapsed on thinking→answer; tool_results injection-guard no-op), 9 minors — fixed 8 (query-key source segment, live-entry index, seq collisions, compact-mode live visibility, stopped timer, stranded Add dialog, anthropic seed format, sweep events, pendingEcho forwardRef), documented 1 (approval/tool fold order).
+- LIVE battery (scripts/live-r37.sh + live-r37-settings.sh, one-invocation discipline): REAL 32.9s multi-step turn ("Which files are in the COW folder?") — live Working 0:26 → folded "Worked for 2s · 1 action" + answer BELOW (H8.jpeg/L3.jpeg), zero repeated headers, full width; approval flow LIVE-PROVEN (amber card + Allow once → file "live-proof" on disk); settings flat list + detail (3 format buttons) + Add dialog verified; ZERO console errors; structured log captured the full lifecycle. VLM cross-checked all 10 screenshots.
+- Docs: ADR-0023/0024, IMPLEMENTED-API (R37 additions), DESIGN-SYSTEM chat anatomy, round-37.md, HANDOFF, SANDBOX-RESTORE pnpm tip, AGENT-MEMORY #60-62; docs:check 0/0.
+- Merged work/round-37 → main (03fa113) + pushed; DASHBOARD round-37.zip (10 shots) pushed; ntfy sent.
+
+Stage Summary:
+- All five owner directives delivered and browser-proven: continuous turns with the collapsible Working section, minimal tool presentation, sparkle-free, full-width chat, rebuilt providers with real API-format selection, and the interactive approval flow (file-on-disk proof).
+- 251 tests green (+24), verify fully green, 112 prod deps license-clean.
+- SECURITY: the review's compound-command bypass is fixed with regression tests; denylist-supreme verified (vite/vitest collision caught + tested).
