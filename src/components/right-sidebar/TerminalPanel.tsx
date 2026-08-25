@@ -1,29 +1,32 @@
 import { useEffect, useRef, useState, type KeyboardEvent } from "react";
 import { runProjectTerminal } from "../../lib/api";
 import { useConfigStore } from "../../lib/config-store";
-import { useRightSidebarStore } from "../../lib/right-sidebar-store";
+import { useRightSidebarStore, type RightSidebarTab } from "../../lib/right-sidebar-store";
 import { SEMANTIC_COLORS } from "../../lib/semantics";
 import { useThemeStyles } from "../../lib/use-theme-styles";
 import { useScrollFade } from "../../lib/useScrollFade";
 
 /**
- * ROUND-38 right-sidebar Terminal tab (owner: "I can see the terminal on the
- * right sidebar"). A user-driven command runner: type a command, Enter runs it
- * in the PROJECT ROOT via POST /projects/:id/terminal, output appends to a
- * per-project scrollback. Arrow-up/down recalls history. NOT a full PTY (no
- * cd persistence, no pipes) — that requires a native PTY channel; this is the
- * feasible, honest command-runner that satisfies the "see the terminal" need.
+ * ROUND-38/39 right-sidebar Terminal tab (owner: "I can see the terminal on
+ * the right sidebar"). ROUND-39: each terminal tab has its OWN scrollback
+ * (keyed by tab id in right-sidebar-store.terminalLinesByTab). A user-driven
+ * command runner: type a command, Enter runs it in the PROJECT ROOT via POST
+ * /projects/:id/terminal, output appends to this tab's scrollback. Arrow-up/
+ * down recalls history. NOT a full PTY (no cd persistence, no pipes) — that
+ * requires a native PTY channel; this is the feasible, honest command-runner
+ * that satisfies the "see the terminal" need.
  *
  * Bypasses the agent approvals engine because the HUMAN is the approver for
  * commands they type themselves (the sidecar endpoint enforces the project
  * root + timeout + output cap).
  */
-export function TerminalPanel({ projectId }: { projectId: string }) {
+export function TerminalPanel({ projectId, tab }: { projectId: string; tab: RightSidebarTab }) {
   const styles = useThemeStyles();
   const slice = useRightSidebarStore((s) => s.byProject[projectId]);
   const appendTerminal = useRightSidebarStore((s) => s.appendTerminal);
   const clearTerminal = useRightSidebarStore((s) => s.clearTerminal);
-  const lines = slice?.terminalLines ?? [];
+  const tabId = tab.id;
+  const lines = slice?.terminalLinesByTab[tabId] ?? [];
   const [input, setInput] = useState("");
   const [running, setRunning] = useState(false);
   const [history, setHistory] = useState<string[]>([]);
@@ -46,23 +49,23 @@ export function TerminalPanel({ projectId }: { projectId: string }) {
     setInput("");
     setHistory((h) => [...h, text]);
     setHistoryIdx(-1);
-    appendTerminal(projectId, { kind: "in", text });
+    appendTerminal(projectId, tabId, { kind: "in", text });
     if (!liveMode) {
-      appendTerminal(projectId, { kind: "err", text: "Terminal unavailable in demo mode (start the sidecar)." });
+      appendTerminal(projectId, tabId, { kind: "err", text: "Terminal unavailable in demo mode (start the sidecar)." });
       setRunning(false);
       return;
     }
     try {
       const res = await runProjectTerminal(projectId, text);
-      appendTerminal(projectId, {
+      appendTerminal(projectId, tabId, {
         kind: res.ok ? "out" : "err",
         text: res.output || "(no output)",
       });
       if (res.exitCode !== null && res.exitCode !== 0) {
-        appendTerminal(projectId, { kind: "err", text: `[exit ${res.exitCode}]` });
+        appendTerminal(projectId, tabId, { kind: "err", text: `[exit ${res.exitCode}]` });
       }
     } catch (err) {
-      appendTerminal(projectId, {
+      appendTerminal(projectId, tabId, {
         kind: "err",
         text: err instanceof Error ? err.message : "command failed",
       });
@@ -95,7 +98,7 @@ export function TerminalPanel({ projectId }: { projectId: string }) {
       }
     } else if (e.key === "l" && (e.ctrlKey || e.metaKey)) {
       e.preventDefault();
-      clearTerminal(projectId);
+      clearTerminal(projectId, tabId);
     }
   };
 

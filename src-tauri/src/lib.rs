@@ -1,3 +1,4 @@
+mod browser;
 mod dialogs;
 mod keys;
 mod sidecar;
@@ -15,7 +16,8 @@ pub fn run() {
             sidecar::ping_sidecar,
             keys::store_provider_key,
             keys::provider_key_status,
-            dialogs::pick_folder
+            dialogs::pick_folder,
+            browser::open_browser_window
         ])
         .build(tauri::generate_context!())
         .expect("error while running the tauri application")

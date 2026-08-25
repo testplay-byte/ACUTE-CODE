@@ -387,83 +387,132 @@ export async function runSingleAgentTurn(
     agentId: agent.id,
     payload: { role: "user", content },
   });
-  // ROUND-34: history INCLUDES tool results (multi-step fix — Cline parity).
-  const rawMessages = assembleHistory(db, session.id);
 
-  // Context-window management: trim oldest messages if over budget (round-25)
-  const budget: ContextBudget = {
-    contextWindow: getModelContextWindow(db, provider.id, model),
-    maxOutputTokens: 32_768,
-    margin: 8_000,
-  };
-  const { messages } = assembleWithinBudget(rawMessages, budget);
+  const keySecrets = keyring.list();
 
-  const startedAt = Date.now();
-  let result: ChatTurnOutput;
-  try {
-    result = await chat({
-      provider: { id: provider.id, baseUrl: provider.baseUrl, apiFormat: provider.apiFormat },
-      apiKey,
-      model,
-      system,
-      messages,
-      temperature: agent.temperature,
-      maxTurns: agent.maxTurns,
-      ...(tools !== undefined ? { tools } : {}),
+  // ROUND-39 (owner: "sub-agents were only able to respond one time and they
+  // were not able to perform complex tasks like multi-stage tasks like the
+  // main agent could"). The sync path (used by the orchestrator for
+  // sub-agents) previously did ONE chat() call — which CAN iterate up to
+  // maxTurns tool round-trips internally, but had NO outer loop to continue
+  // beyond a single chat completion. The streamed path (main agent) has an
+  // outer loop up to maxOuterLoops. We mirror that here so sub-agents get
+  // full multi-round parity: each iteration can do up to maxTurns tool
+  // round-trips; if the model keeps calling tools, the outer loop kicks off
+  // another iteration with the accumulated history (tool results included).
+  const maxOuterLoops = agent.maxOuterLoops ?? 5;
+  let totalInputTokens = 0;
+  let totalOutputTokens = 0;
+  let lastAssistantEvent: { seq: number; ts: string; content: string } | null = null;
+  let lastError: { ok: false; status: 502; code: "PROVIDER_ERROR"; message: string; details: { providerError: string } } | null = null;
+
+  for (let outerIter = 0; outerIter < maxOuterLoops; outerIter++) {
+    // ROUND-34: history INCLUDES tool results (multi-step fix — Cline parity).
+    // Re-assembled each iteration so the model sees the prior iteration's
+    // tool results + assistant text.
+    const rawMessages = assembleHistory(db, session.id);
+    const budget: ContextBudget = {
+      contextWindow: getModelContextWindow(db, provider.id, model),
+      maxOutputTokens: 32_768,
+      margin: 8_000,
+    };
+    const { messages } = assembleWithinBudget(rawMessages, budget);
+
+    const startedAt = Date.now();
+    let result: ChatTurnOutput;
+    try {
+      result = await chat({
+        provider: { id: provider.id, baseUrl: provider.baseUrl, apiFormat: provider.apiFormat },
+        apiKey,
+        model,
+        system,
+        messages,
+        temperature: agent.temperature,
+        maxTurns: agent.maxTurns,
+        ...(tools !== undefined ? { tools } : {}),
+      });
+    } catch (error) {
+      const normalized = error instanceof Error ? error : new Error(String(error));
+      lastError = {
+        ok: false,
+        status: 502,
+        code: "PROVIDER_ERROR",
+        message: `provider '${provider.id}' call failed for session ${session.id}`,
+        details: { providerError: providerErrorDetail(normalized, apiKey) },
+      };
+      break;
+    }
+    const ms = Date.now() - startedAt;
+    totalInputTokens += result.usage.inputTokens;
+    totalOutputTokens += result.usage.outputTokens;
+
+    // Audit trail: one event per executed tool call, in order (ADR-0010 log).
+    for (const call of result.toolCalls) {
+      appendSessionEvent(db, session.id, {
+        type: "tool.use",
+        agentId: agent.id,
+        payload: {
+          role: "tool",
+          toolName: call.name,
+          argsSummary: call.argsSummary,
+          ok: call.ok,
+          ...(call.outputSummary !== undefined
+            ? { outputSummary: scrubSecrets(call.outputSummary, keySecrets) }
+            : {}),
+        },
+      });
+    }
+
+    const assistantEvent = appendSessionEvent(db, session.id, {
+      type: "message.assistant",
+      agentId: agent.id,
+      payload: {
+        role: "assistant",
+        content: result.text,
+        usage: { inputTokens: result.usage.inputTokens, outputTokens: result.usage.outputTokens },
+        ms,
+        model,
+      },
     });
-  } catch (error) {
-    const normalized = error instanceof Error ? error : new Error(String(error));
-    return {
+    lastAssistantEvent = { seq: assistantEvent.seq, ts: assistantEvent.ts, content: result.text };
+
+    // ROUND-33 (owner report: "hello, how are you" kept planning + running
+    // tools in an infinite loop): an iteration that produced a text reply
+    // with ZERO tool calls is a CONVERSATIONAL response — break.
+    if (result.toolCalls.length === 0) {
+      break;
+    }
+
+    // Inverted continueIfUnfinished (mirrors the streamed path): for
+    // tool-using iterations, continue UNLESS BOTH (a) explicit completion
+    // signal AND (b) all todos completed.
+    const hasCompletionSignal = COMPLETION_SIGNAL.test(result.text);
+    const todosDone = latestTodosAllDone(db, session.id);
+    if (hasCompletionSignal && todosDone) {
+      break;
+    }
+  }
+
+  if (lastAssistantEvent === null) {
+    // No iteration produced an assistant event — provider errored on iter 0.
+    return lastError ?? {
       ok: false,
       status: 502,
       code: "PROVIDER_ERROR",
       message: `provider '${provider.id}' call failed for session ${session.id}`,
-      details: { providerError: providerErrorDetail(normalized, apiKey) },
+      details: { providerError: "no response produced" },
     };
   }
-  const ms = Date.now() - startedAt;
 
-  // Audit trail: one event per executed tool call, in order (ADR-0010 log).
-  for (const call of result.toolCalls) {
-    // Review fix #2: the sync path scrubbed NOTHING before — a custom
-    // provider key echoed by run_command env would land in SQLite verbatim.
-    const keySecrets = keyring.list();
-    appendSessionEvent(db, session.id, {
-      type: "tool.use",
-      agentId: agent.id,
-      payload: {
-        role: "tool",
-        toolName: call.name,
-        argsSummary: call.argsSummary,
-        ok: call.ok,
-        ...(call.outputSummary !== undefined
-          ? { outputSummary: scrubSecrets(call.outputSummary, keySecrets) }
-          : {}),
-      },
-    });
-  }
-
-  const assistantEvent = appendSessionEvent(db, session.id, {
-    type: "message.assistant",
-    agentId: agent.id,
-    payload: {
-      role: "assistant",
-      content: result.text,
-      // Round-16 per-reply stats (owner request) ride on the event payload.
-      usage: { inputTokens: result.usage.inputTokens, outputTokens: result.usage.outputTokens },
-      ms,
-      model,
-    },
-  });
   const usage: UsageRecord = {
     agentId: agent.id,
     sessionId: session.id,
     provider: provider.id,
     model,
-    inputTokens: result.usage.inputTokens,
-    outputTokens: result.usage.outputTokens,
-    costUsd: computeCost(db, provider.id, model, result.usage.inputTokens, result.usage.outputTokens),
-    ts: assistantEvent.ts,
+    inputTokens: totalInputTokens,
+    outputTokens: totalOutputTokens,
+    costUsd: computeCost(db, provider.id, model, totalInputTokens, totalOutputTokens),
+    ts: lastAssistantEvent.ts,
   };
   recordUsage(db, usage);
   touchSession(db, session.id);
@@ -471,16 +520,16 @@ export async function runSingleAgentTurn(
   // (owner: sessions should rename after the first interaction, like the
   // reference repos). No-op once the title is no longer the default.
   maybeAutoTitleSession(db, session.id);
-  logTurnEnd(session.id, true, Date.now() - syncStartedAt, result.usage.inputTokens, result.usage.outputTokens);
+  logTurnEnd(session.id, true, Date.now() - syncStartedAt, totalInputTokens, totalOutputTokens);
 
   return {
     ok: true,
     assistantMessage: {
-      seq: assistantEvent.seq,
+      seq: lastAssistantEvent.seq,
       role: "assistant",
       agentId: agent.id,
-      content: result.text,
-      ts: assistantEvent.ts,
+      content: lastAssistantEvent.content,
+      ts: lastAssistantEvent.ts,
     },
     usage,
   };

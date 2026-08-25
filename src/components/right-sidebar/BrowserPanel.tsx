@@ -1,17 +1,16 @@
 import { useState, type FormEvent } from "react";
-import { ArrowLeft, ArrowRight, Globe, RotateCw } from "lucide-react";
-import { useRightSidebarStore } from "../../lib/right-sidebar-store";
+import { ArrowLeft, ArrowRight, Globe, RotateCw, ExternalLink } from "lucide-react";
+import { useRightSidebarStore, type RightSidebarTab } from "../../lib/right-sidebar-store";
 import { useThemeStyles } from "../../lib/use-theme-styles";
 
 /**
- * ROUND-38 right-sidebar Browser tab (owner: "a full-fledged kind of a
+ * ROUND-38/39 right-sidebar Browser tab (owner: "a full-fledged kind of a
  * browser… storing the credentials, saving the sessions… kept logged in…
  * used throughout all of the sessions, projects").
  *
- * WHAT'S HERE: an embedded webview (iframe) with an address bar, back/forward
- * through the per-project history, reload, and a per-project history list
- * (persisted in right-sidebar-store). The address bar accepts URLs or search
- * terms (defaults to a search engine).
+ * ROUND-39: each browser tab has its OWN URL + history (keyed by tab id in
+ * right-sidebar-store). The address bar accepts URLs or search terms
+ * (defaults to a search engine).
  *
  * HONEST SCOPE: full credential/session persistence across the app requires
  * the native Tauri shell (WebView2 on Windows) configured with a persistent
@@ -19,7 +18,10 @@ import { useThemeStyles } from "../../lib/use-theme-styles";
  * app launches. An in-page iframe can't replicate that (browsers isolate
  * iframe storage + many sites block framing via X-Frame-Options). The native
  * shell wiring (src-tauri) is the production path; this panel is the
- * functional UI + per-project history that the native webview mounts into.
+ * functional UI + per-tab history that the native webview mounts into. The
+ * "Open in app browser" button (Phase H) launches a separate persistent
+ * Tauri WebviewWindow when available — falls back to the system browser
+ * when not.
  */
 function normalizeUrl(raw: string): string {
   const trimmed = raw.trim();
@@ -32,13 +34,12 @@ function normalizeUrl(raw: string): string {
   return `https://duckduckgo.com/?q=${encodeURIComponent(trimmed)}`;
 }
 
-export function BrowserPanel({ projectId }: { projectId: string }) {
+export function BrowserPanel({ projectId, tab }: { projectId: string; tab: RightSidebarTab }) {
   const styles = useThemeStyles();
-  const slice = useRightSidebarStore((s) => s.byProject[projectId]);
   const setBrowserUrl = useRightSidebarStore((s) => s.setBrowserUrl);
-  const pushBrowserHistory = useRightSidebarStore((s) => s.pushBrowserHistory);
-  const browserUrl = slice?.browserUrl ?? null;
-  const history = slice?.browserHistory ?? [];
+  const tabId = tab.id;
+  const browserUrl = tab.browserUrl ?? null;
+  const history = tab.browserHistory ?? [];
   // Pointer into history for back/forward.
   const [histIdx, setHistIdx] = useState(0);
   const [draft, setDraft] = useState(browserUrl ?? "");
@@ -47,8 +48,7 @@ export function BrowserPanel({ projectId }: { projectId: string }) {
   const go = (raw: string) => {
     const url = normalizeUrl(raw);
     if (url === "") return;
-    setBrowserUrl(projectId, url);
-    pushBrowserHistory(projectId, url);
+    setBrowserUrl(projectId, tabId, url);
     setHistIdx(0);
     setDraft(url);
   };
@@ -57,7 +57,7 @@ export function BrowserPanel({ projectId }: { projectId: string }) {
     if (histIdx + 1 < history.length) {
       const next = histIdx + 1;
       setHistIdx(next);
-      setBrowserUrl(projectId, history[next]);
+      setBrowserUrl(projectId, tabId, history[next]);
       setDraft(history[next]);
     }
   };
@@ -65,11 +65,31 @@ export function BrowserPanel({ projectId }: { projectId: string }) {
     if (histIdx > 0) {
       const next = histIdx - 1;
       setHistIdx(next);
-      setBrowserUrl(projectId, history[next]);
+      setBrowserUrl(projectId, tabId, history[next]);
       setDraft(history[next]);
     }
   };
   const onReload = () => setIframeKey((k) => k + 1);
+
+  // ROUND-39 Phase H: launch a separate persistent Tauri WebviewWindow for
+  // this URL (cookies/login state survive across launches). The Tauri API is
+  // only available in the native shell; in the dev (vite-only) preview the
+  // button is a no-op (graceful fallback).
+  const onOpenAppBrowser = async () => {
+    const url = browserUrl ?? normalizeUrl(draft);
+    if (url === "") return;
+    const w = (window as unknown as { __TAURI__?: { core?: { invoke?: (cmd: string, args?: unknown) => Promise<unknown> } } }).__TAURI__?.core;
+    if (w?.invoke) {
+      try {
+        await w.invoke("open_browser_window", { url });
+        return;
+      } catch (err) {
+        // Fall through to window.open.
+        console.warn("open_browser_window failed:", err);
+      }
+    }
+    window.open(url, "_blank", "noopener,noreferrer");
+  };
 
   const onSubmit = (e: FormEvent) => {
     e.preventDefault();
@@ -139,6 +159,20 @@ export function BrowserPanel({ projectId }: { projectId: string }) {
             />
           </div>
         </form>
+        {/* ROUND-39 Phase H: launch the persistent in-app browser (separate
+            Tauri WebviewWindow with its own cookies/login state). Falls back
+            to the system browser in the dev (vite-only) preview. */}
+        <button
+          onClick={onOpenAppBrowser}
+          aria-label="Open in app browser"
+          title="Open in app browser (persistent logins)"
+          className="w-6 h-6 grid place-items-center rounded-md transition-colors shrink-0"
+          style={{ color: styles.textSecondary }}
+          onMouseEnter={(e) => (e.currentTarget.style.background = styles.subtleHover)}
+          onMouseLeave={(e) => (e.currentTarget.style.background = "transparent")}
+        >
+          <ExternalLink size={12} />
+        </button>
       </div>
 
       {/* Viewport */}

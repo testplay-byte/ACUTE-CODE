@@ -41,12 +41,9 @@ import {
   type AssistantTurnItem,
   type Project,
   type ProjectChatItem,
-  type StreamTurnEvent,
-  type ToolUseEntry,
   type WorkingEntry,
   decideApproval,
   fetchProviderModels,
-  streamSessionMessage,
   toProjectChatItems,
 } from "../../lib/api";
 import { useConfigStore } from "../../lib/config-store";
@@ -55,7 +52,9 @@ import { withAlpha } from "../dashboard/helpers";
 import { ease } from "../../lib/motion";
 import { useProjectChatStore } from "../../lib/project-chat-store";
 import { useActiveStreams } from "../../lib/active-streams";
+import { useStreamStore } from "../../lib/stream-store";
 import { useRightSidebarStore } from "../../lib/right-sidebar-store";
+import { useRightSidebarEvents } from "../../lib/right-sidebar-events";
 import { SEMANTIC_COLORS } from "../../lib/semantics";
 import { useThemeStyles } from "../../lib/use-theme-styles";
 import { useScrollFade } from "../../lib/useScrollFade";
@@ -530,18 +529,9 @@ function ComposerFooter({
   );
 }
 
-/** ROUND-37 live turn state: the same shape the folded log produces. */
-interface LiveTurn {
-  startedAtMs: number;
-  /** Completed working entries (thoughts done, narration flushed in, tools). */
-  working: WorkingEntry[];
-  /** The presumptive-FINAL text streaming below the section. */
-  streamText: string;
-  /** The in-flight thought (auto-expanded row in the section). */
-  streamThinking: string;
-  /** Terminal state after a stream error — frozen "Stopped" section. */
-  stopped: boolean;
-}
+/** ROUND-39: LiveTurn now lives in src/lib/stream-store.ts so the streaming
+ * state survives panel remounts (background sessions). The interface is
+ * re-exported from there. */
 
 export function AgentChatPanel({
   projectId,
@@ -608,6 +598,19 @@ export function AgentChatPanel({
     window.addEventListener("keydown", handler);
     return () => window.removeEventListener("keydown", handler);
   }, []);
+
+  // ROUND-39: the right sidebar's quick-menu "File" option requests the file
+  // picker via the events store (the palette lives here, not in the sidebar).
+  // The counter pattern lets consecutive requests each fire.
+  const filePickerRequest = useRightSidebarEvents((s) => s.filePickerRequest);
+  const prevFilePickerRef = useRef(0);
+  useEffect(() => {
+    if (filePickerRequest !== prevFilePickerRef.current && filePickerRequest > 0) {
+      prevFilePickerRef.current = filePickerRequest;
+      setPaletteOpen(true);
+    }
+  }, [filePickerRequest]);
+
   const createSession = useCreateSession();
   const sendMessage = useSendMessage();
 
@@ -624,43 +627,53 @@ export function AgentChatPanel({
   const [lastSent, setLastSent] = useState<string | null>(null);
   const [sendError, setSendError] = useState<string | null>(null);
 
-  // ── ROUND-37 live streaming state: ONE live turn building the same
-  //    Working-section shape the folded log renders. The presumptive-final
-  //    text streams BELOW the section; a tool-call flushes it INTO the
-  //    section as narration (owner: interim commentary lives inside the
-  //    working area).
-  const [liveTurn, setLiveTurn] = useState<LiveTurn | null>(null);
-  const [streamBusy, setStreamBusy] = useState(false);
-  // R37 review #3: monotonic live entry keys (two tool-calls in the same
-  // millisecond collided with -Date.now()).
-  const liveSeqRef = useRef(0);
+  // ── ROUND-39: live streaming state moved to src/lib/stream-store.ts so
+  //    sessions keep streaming in the background across panel remounts
+  //    (project switch / settings nav). The panel just reads its session's
+  //    slice; the store handles the AbortController + event mutations.
+  const activeSessionId = session?.id ?? null;
+  const streamSlice = useStreamStore((s) =>
+    activeSessionId !== null ? s.bySession[activeSessionId] : undefined,
+  );
+  const liveTurn = streamSlice?.liveTurn ?? null;
+  const streamBusy = streamSlice?.streamBusy ?? false;
+  const streamSendError = streamSlice?.sendError ?? null;
+  const streamPendingEcho = streamSlice?.pendingEcho ?? null;
+  const lastLiveEndMs = streamSlice?.lastLiveEndMs ?? 0;
   // R37 review #4: turns that JUST finished while the user watched start
   // collapsed ("Worked for Ns" + answer); cold-loaded sessions use the
   // Detailed preference.
   const lastLiveEndRef = useRef(0);
+  // Keep the ref in sync so MessageRenderer's collapseHint logic works
+  // against the live store value.
+  useEffect(() => {
+    lastLiveEndRef.current = lastLiveEndMs;
+  }, [lastLiveEndMs]);
+
   const queryClient = useQueryClient();
   const liveMode = useConfigStore((s) => !s.demoData);
   // Per-send model override (composer picker); null = the agent's own model.
   const [modelOverride, setModelOverride] = useState<string | null>(null);
   const effectiveModel = modelOverride ?? agent?.model ?? null;
 
-  const FILE_MUTATING_TOOLS = new Set(["write_file", "edit_file", "create_dir", "delete_file"]);
+  // ROUND-39: file-mutation invalidation moved into the stream store so it
+  // fires even when no panel is mounted (background session writes refresh
+  // the explorer live).
 
   const busy = createSession.isPending || sendMessage.isPending || pendingUser !== null || streamBusy;
 
   // Optimistic echo lives only until the refetched log contains it (ChatView pattern).
+  // ROUND-39: prefer the stream store's pendingEcho (survives remounts); fall
+  // back to local pendingUser for fixture mode.
   const pendingEcho =
-    pendingUser !== null && !items.some((it) => it.kind === "user" && it.content === pendingUser)
-      ? pendingUser
-      : null;
+    (streamPendingEcho !== null && !items.some((it) => it.kind === "user" && it.content === streamPendingEcho))
+      ? streamPendingEcho
+      : pendingUser !== null && !items.some((it) => it.kind === "user" && it.content === pendingUser)
+        ? pendingUser
+        : null;
 
   const scrollRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
-  // ROUND-38: file picking now opens in the right sidebar's Files tab via
-  // useRightSidebarStore.getState().openFile (see onPickFile + DiffDetail).
-  // Round-28 WS-D3: AbortController for the streaming fetch — the Stop button
-  // calls abortRef.current?.abort() to cancel mid-stream.
-  const abortRef = useRef<AbortController | null>(null);
 
   useScrollFade(scrollRef);
 
@@ -672,44 +685,40 @@ export function AgentChatPanel({
     setActiveProject(projectId);
   }, [projectId, setActiveProject]);
 
-  // ROUND-38 (owner: switching sessions mid-stream bled the previous
-  // session's live text into the new one): when the authoritative session id
-  // changes, abort any in-flight stream and clear the live/pending/echo
-  // state so the new session renders from its own log.
-  const prevSessionIdRef = useRef<string | null>(session?.id ?? null);
+  // ROUND-39 (owner: "It should keep the sessions going in the background
+  // even if I change any pages"). The session's streaming state now lives in
+  // the global stream store — switching sessions or unmounting the panel
+  // does NOT abort the stream. We only clear LOCAL composer state
+  // (input/lastSent/pendingUser) so the composer is fresh for the new
+  // session. The previous session's stream keeps running.
+  const prevSessionIdRef = useRef<string | null>(activeSessionId);
   useEffect(() => {
-    const cur = session?.id ?? null;
-    if (prevSessionIdRef.current === cur) return;
-    abortRef.current?.abort();
-    abortRef.current = null;
-    setLiveTurn(null);
-    setStreamBusy(false);
+    if (prevSessionIdRef.current === activeSessionId) return;
+    // Local composer state reset only — the store's per-session state
+    // persists so the user can switch back to a running session and see
+    // its live progress.
     setPendingUser(null);
-    setSendError(null);
     setLastSent(null);
     setInput("");
-    lastLiveEndRef.current = 0;
-    prevSessionIdRef.current = cur;
-  }, [session?.id]);
+    prevSessionIdRef.current = activeSessionId;
+  }, [activeSessionId]);
 
-  // ROUND-38 (owner: running session shows a pixelated animation in the
-  // sidebar). Mark this session active in the global registry while a turn
-  // is in flight (streaming OR sync send). The sidebar SessionRow reads it.
+  // ROUND-38/39 (owner: running session shows a pixelated animation in the
+  // sidebar). The stream store already marks the session active when
+  // startStream begins; here we keep the indicator in sync with the panel's
+  // view of streamBusy + sendMessage. Note: the stream store's
+  // active-streams.start fires when the stream BEGINS (so the sidebar
+  // animates even when the panel isn't mounted). The stop here fires only
+  // when streamBusy transitions to false AND the panel is still mounted —
+  // if the panel unmounted, the store's abort/clear path handles the stop.
   const startStream = useActiveStreams((s) => s.start);
   const stopStream = useActiveStreams((s) => s.stop);
-  const activeSessionId = session?.id ?? null;
   const isRunning = streamBusy || sendMessage.isPending;
   useEffect(() => {
     if (activeSessionId === null) return;
     if (isRunning) startStream(activeSessionId);
     else stopStream(activeSessionId);
   }, [isRunning, activeSessionId, startStream, stopStream]);
-  // Clear the indicator if the panel unmounts mid-turn (project switch).
-  useEffect(() => {
-    return () => {
-      if (activeSessionId !== null) stopStream(activeSessionId);
-    };
-  }, [activeSessionId, stopStream]);
 
   // Auto-scroll: new items, busy transitions, the live section's entry count,
   // and the growing streaming text (review fix #4 + R37 amendment #11).
@@ -727,7 +736,6 @@ export function AgentChatPanel({
     setLastSent(text);
     setPendingUser(text);
     setSendError(null);
-    setLiveTurn({ startedAtMs: Date.now(), working: [], streamText: "", streamThinking: "", stopped: false });
     let sid = session?.id;
     try {
       if (!sid) {
@@ -751,163 +759,33 @@ export function AgentChatPanel({
         );
       }
       if (liveMode) {
-        // STREAMED turn (round-16): deltas + tool calls land live; the
-        // Working section builds itself (R37).
-        setStreamBusy(true);
-        abortRef.current = new AbortController();
-        await streamSessionMessage(sid, text, (event: StreamTurnEvent) => {
-          if (event.type === "text-delta") {
-            setLiveTurn((prev) => {
-              if (prev === null) return prev;
-              // Text starting = the in-flight thought is COMPLETE (owner:
-              // "when the thought has been completed then it will collapse").
-              const working =
-                prev.streamThinking.trim() !== ""
-                  ? [
-                      ...prev.working,
-                      { type: "thinking" as const, text: prev.streamThinking, ts: new Date().toISOString() },
-                    ]
-                  : prev.working;
-              return {
-                ...prev,
-                working,
-                streamThinking: "",
-                streamText: prev.streamText + event.delta,
-              };
-            });
-          } else if (event.type === "thinking-delta") {
-            setLiveTurn((prev) =>
-              prev === null
-                ? prev
-                : { ...prev, streamThinking: prev.streamThinking + event.delta },
-            );
-          } else if (event.type === "tool-call") {
-            setLiveTurn((prev) => {
-              if (prev === null) return prev;
-              // The streamed-so-far text is narration once a tool lands —
-              // flush it (and any trailing thought) INTO the section.
-              // R35 review fix #2 preserved: build NEW arrays/entries, never
-              // mutate (StrictMode double-invoke safe).
-              const entry: ToolUseEntry = {
-                seq: --liveSeqRef.current,
-                toolName: event.toolName,
-                argsSummary: event.argsSummary,
-                ok: null,
-                ts: new Date().toISOString(),
-              };
-              const working: WorkingEntry[] = [
-                ...prev.working,
-                ...(prev.streamThinking.trim() !== ""
-                  ? [{ type: "thinking" as const, text: prev.streamThinking, ts: new Date().toISOString() }]
-                  : []),
-                ...(prev.streamText.trim() !== ""
-                  ? [{ type: "text" as const, content: prev.streamText, ts: new Date().toISOString() }]
-                  : []),
-                { type: "tool" as const, tool: entry },
-              ];
-              return { ...prev, working, streamThinking: "", streamText: "" };
-            });
-          } else if (event.type === "tool-result") {
-            setLiveTurn((prev) => {
-              if (prev === null) return prev;
-              // Attach the result to the matching in-flight row (last null-ok
-              // tool entry). R35 review fix #6 preserved: results with no
-              // matching in-flight row append a completed entry instead of
-              // being silently dropped.
-              const flat = prev.working.flatMap((e) => (e.type === "tool" ? [e.tool] : []));
-              const idx = [...flat].reverse().findIndex((x) => x.toolName === event.toolName && x.ok === null);
-              if (idx === -1) {
-                const entry: ToolUseEntry = {
-                  seq: --liveSeqRef.current,
-                  toolName: event.toolName,
-                  argsSummary: event.argsSummary,
-                  ok: event.ok,
-                  ts: new Date().toISOString(),
-                  ...(event.outputSummary ? { outputSummary: event.outputSummary } : {}),
-                };
-                return { ...prev, working: [...prev.working, { type: "tool", tool: entry }] };
-              }
-              const matched = flat.length - 1 - idx;
-              let consumed = 0;
-              const working = prev.working.map((entry) => {
-                if (entry.type !== "tool") return entry;
-                const index = consumed;
-                consumed += 1;
-                if (index === matched) {
-                  return {
-                    ...entry,
-                    tool: {
-                      ...entry.tool,
-                      ok: event.ok,
-                      ...(event.outputSummary ? { outputSummary: event.outputSummary } : {}),
-                    },
-                  };
-                }
-                return entry;
-              });
-              return { ...prev, working };
-            });
-            // LIVE VIEW (owner request): file mutations refresh the explorer
-            // + open file immediately, not after the turn ends.
-            if (FILE_MUTATING_TOOLS.has(event.toolName)) {
-              void queryClient.invalidateQueries({ queryKey: ["project-tree"] });
-              void queryClient.invalidateQueries({ queryKey: ["project-file"] });
-            }
-          } else if (event.type === "approval.requested") {
-            setLiveTurn((prev) =>
-              prev === null
-                ? prev
-                : {
-                    ...prev,
-                    working: [
-                      ...prev.working,
-                      {
-                        type: "approval" as const,
-                        approvalId: event.approvalId,
-                        toolName: event.toolName,
-                        argsSummary: event.argsSummary,
-                        category: event.category,
-                        status: "pending" as const,
-                        ts: new Date().toISOString(),
-                      },
-                    ],
-                  },
-            );
-          } else if (event.type === "approval.resolved") {
-            setLiveTurn((prev) => {
-              if (prev === null) return prev;
-              const working = prev.working.map((entry) => {
-                if (entry.type !== "approval" || entry.approvalId !== event.approvalId) return entry;
-                return {
-                  ...entry,
-                  status:
-                    event.decision === "approved"
-                      ? ("approved" as const)
-                      : event.decision === "denied"
-                        ? ("denied" as const)
-                        : ("expired" as const),
-                  ...(event.remember ? { remember: event.remember } : {}),
-                };
-              });
-              return { ...prev, working };
-            });
-          } else if (event.type === "error") {
-            // SSE error event — show it but DON'T clear live state; the
-            // backend may still complete the turn (invalidation on catch
-            // will resolve it).
-            setSendError(event.message);
-          }
-        }, { model: effectiveModel ?? undefined, signal: abortRef.current.signal });
-        abortRef.current = null;
-        setStreamBusy(false);
+        // ROUND-39: the streaming fetch + state mutations live in the global
+        // stream store so the session keeps streaming in the BACKGROUND when
+        // the panel unmounts (project switch / settings nav). The store
+        // handles the AbortController + every SSE event → liveTurn update;
+        // we just await the stream's end and then invalidate queries.
+        useStreamStore.getState().setPendingEcho(sid, text);
+        await useStreamStore.getState().startStream(sid, text, {
+          model: effectiveModel ?? undefined,
+        });
+        // The store's startStream resolved — the stream ended (or errored).
+        // Invalidate so the canonical folded turn renders from the event log.
         await queryClient.invalidateQueries({ queryKey: ["session"] });
         await queryClient.invalidateQueries({ queryKey: ["sessions"] });
         await queryClient.invalidateQueries({ queryKey: ["usage"] });
         void queryClient.invalidateQueries({ queryKey: ["project-tree"] });
-        // The canonical folded turn now renders from the event log (and the
-        // live section auto-collapses to "Worked for Ns").
-        lastLiveEndRef.current = Date.now();
-        setLiveTurn(null);
+        // The live turn is now folded into the event log; clear the store's
+        // echo + liveTurn for this session (the folded turn owns the render).
+        useStreamStore.getState().setPendingEcho(sid, null);
+        // Only clear liveTurn if the store hasn't frozen it as "Stopped"
+        // (which happens on error/abort — we want the frozen state to render
+        // until the next message).
+        const slice = useStreamStore.getState().bySession[sid];
+        if (slice?.liveTurn && !slice.liveTurn.stopped) {
+          // The folded turn owns the render now; clear the live section.
+          useStreamStore.getState().clearStream(sid);
+          useActiveStreams.getState().stop(sid);
+        }
       } else {
         // Fixture/demo mode: no sidecar → sync hook (canned reply).
         await sendMessage.mutateAsync({ sessionId: sid, content: text });
@@ -928,18 +806,12 @@ export function AgentChatPanel({
       ]);
       if (!hasResponse) {
         setSendError(err instanceof Error ? err.message : String(err));
-        // Freeze the live section in its terminal "Stopped" state (R37
-        // amendment: no dead timer — the header reads "Stopped · Ns").
-        setLiveTurn((prev) => (prev === null ? prev : { ...prev, stopped: true }));
       } else {
-        // The response landed despite the stream error — clear the error.
         setSendError(null);
-        lastLiveEndRef.current = Date.now();
-        setLiveTurn(null);
       }
     } finally {
-      setStreamBusy(false);
-      // Both hooks invalidate their queries on settle; drop the optimistic echo.
+      // Drop the optimistic local echo (the store's pendingEcho was cleared
+      // above for live mode; for demo mode it's the local pendingUser).
       setPendingUser(null);
     }
   };
@@ -1020,12 +892,18 @@ export function AgentChatPanel({
         />
         <div ref={scrollRef} className="absolute inset-0 overflow-y-auto auto-scroll">
           {/* ROUND-34: density (settings appearance) drives the column padding.
-              ROUND-37: the panel fills its width (owner: no dead right side). */}
-          <div className={`${density === "compact" ? "px-4 py-4" : "px-5 md:px-10 py-5"} flex flex-col gap-5`}>
+              ROUND-37: the panel fills its width (owner: no dead right side).
+              ROUND-39: wrapper is min-h-full + flex-col so SHORT content
+              sticks to the bottom (just above the composer) — no dead
+              vertical gap below the last message (owner screenshot showed
+              big empty space). When content overflows, the spacer collapses
+              to 0 and natural scroll takes over. */}
+          <div className={`${density === "compact" ? "px-4 py-4" : "px-5 md:px-10 py-5"} min-h-full flex flex-col gap-5`}>
+            {/* Empty-state greeting fills the available space and centers. */}
             {items.length === 0 && !pendingEcho ? (
               /* ROUND-30 OVERHAUL: centered greeting + suggestion chips.
                  ROUND-37: the approved AcuteLogo replaces the Sparkles tile. */
-              <div className="flex flex-col items-center justify-center text-center py-14 gap-5">
+              <div className="flex-1 flex flex-col items-center justify-center text-center gap-5">
                 <AcuteLogo size={52} ariaLabel="Acute" />
                 <div className="min-w-0 max-w-md">
                   <div className="text-[22px] font-black tracking-tight leading-tight" style={{ color: styles.text }}>
@@ -1077,6 +955,13 @@ export function AgentChatPanel({
               </div>
             ) : null}
 
+            {/* ROUND-39: top spacer grows when content is short, pushing
+                messages down to the composer (no dead gap below). Collapses
+                to 0 when content overflows the viewport. */}
+            {(items.length > 0 || pendingEcho !== null) && (
+              <div className="flex-1 min-h-0" aria-hidden />
+            )}
+
             <AnimatePresence mode="popLayout">
               {items.map((item) => (
                 <MessageRenderer
@@ -1122,8 +1007,10 @@ export function AgentChatPanel({
         </div>
       </div>
 
-      {/* Error banner (ChatView pattern): keeps the failed text for Retry. */}
-      {sendError && lastSent ? (
+      {/* Error banner (ChatView pattern): keeps the failed text for Retry.
+          ROUND-39: prefer the stream store's sendError (survives remounts);
+          fall back to the local one for demo-mode sync errors. */}
+      {(streamSendError ?? sendError) && lastSent ? (
         <div
           role="alert"
           className="mx-3 mb-1.5 flex shrink-0 items-start gap-2 rounded-[12px] border px-3 py-2 text-[12px]"
@@ -1132,7 +1019,7 @@ export function AgentChatPanel({
             color: SEMANTIC_COLORS.danger,
           }}
         >
-          <span className="min-w-0 flex-1 break-words">{sendError}</span>
+          <span className="min-w-0 flex-1 break-words">{streamSendError ?? sendError}</span>
           <button
             onClick={() => void runTurn(lastSent)}
             className="shrink-0 underline font-medium"
@@ -1176,10 +1063,16 @@ export function AgentChatPanel({
           />
           {busy ? (
             <button
-              // Round-28 WS-D3: abort the in-flight streaming fetch. The
-              // backend sees the client close; the catch block re-fetches
+              // ROUND-39: stop is now routed through the stream store so it
+              // works regardless of which panel is mounted (background
+              // sessions can be stopped from their sidebar row, too). The
+              // backend sees the client close; the runTurn catch re-fetches
               // the session so any partial response renders from the log.
-              onClick={() => abortRef.current?.abort()}
+              onClick={() => {
+                if (activeSessionId !== null) {
+                  useStreamStore.getState().abortStream(activeSessionId);
+                }
+              }}
               aria-label="Stop generation"
               title="Stop generation"
               className="w-9 h-9 rounded-xl grid place-items-center shrink-0 transition-transform hover:scale-105 active:scale-95"

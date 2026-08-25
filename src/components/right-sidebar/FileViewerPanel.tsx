@@ -1,21 +1,21 @@
 import { useRef, type ReactNode } from "react";
-import { X } from "lucide-react";
 import { useProjectFile } from "../../hooks/use-projects";
-import { useRightSidebarStore } from "../../lib/right-sidebar-store";
+import type { RightSidebarTab } from "../../lib/right-sidebar-store";
 import { useThemeStyles } from "../../lib/use-theme-styles";
 import { useScrollFade } from "../../lib/useScrollFade";
 import { highlightLine, getFileColor, SYNTAX_COLORS } from "../project-chat/highlight";
 import { withAlpha } from "../dashboard/helpers";
 
 /**
- * ROUND-38 right-sidebar Files tab (owner: "for the codes… it can display and
- * render various kinds of files like .md files and various other code files
- * too"). Shows the OPEN-FILE STACK (tabs along the top — click to switch, x
- * to close); the active file's content renders below — code with line numbers
- * + token highlight, or a rendered markdown view for .md/.mdx.
+ * ROUND-38/39 right-sidebar File tab (owner: "for the codes… it can display
+ * and render various kinds of files like .md files and various other code
+ * files too"). ROUND-39: each file is its OWN tab in the right-sidebar strip
+ * (browser-style), so this panel renders ONE file (no internal open-file
+ * strip anymore — that was the old design). Code renders with line numbers +
+ * token highlight; .md/.mdx renders through a lightweight markdown renderer.
  *
- * The open-file state is per-project (right-sidebar-store); the chat's tool
- * rows (DiffDetail "Open") and the Explorer call openFile(projectId, path).
+ * The active file's path comes from the tab. The chat's tool rows (DiffDetail
+ * "Open") and the Explorer call openFile(projectId, path) which adds a tab.
  */
 function isMarkdown(path: string): boolean {
   return /\.(md|mdx|markdown)$/i.test(path);
@@ -142,14 +142,10 @@ function inlineMd(text: string): ReactNode[] {
   return parts;
 }
 
-export function FileViewerPanel({ projectId }: { projectId: string }) {
+export function FileViewerPanel({ projectId, tab }: { projectId: string; tab: RightSidebarTab }) {
   const styles = useThemeStyles();
-  const slice = useRightSidebarStore((s) => s.byProject[projectId]);
-  const setActiveFile = useRightSidebarStore((s) => s.setActiveFile);
-  const closeFile = useRightSidebarStore((s) => s.closeFile);
-  const openFiles = slice?.openFiles ?? [];
-  const activeFile = slice?.activeFile ?? null;
-  const fileQuery = useProjectFile(projectId, activeFile);
+  const filePath = tab.filePath ?? null;
+  const fileQuery = useProjectFile(projectId, filePath);
   const scrollRef = useRef<HTMLDivElement>(null);
   useScrollFade(scrollRef);
 
@@ -157,80 +153,43 @@ export function FileViewerPanel({ projectId }: { projectId: string }) {
   const loading = fileQuery.isLoading;
   const error = fileQuery.error;
 
-  if (openFiles.length === 0 || activeFile === null) {
+  if (filePath === null) {
     return (
       <div className="h-full grid place-items-center px-6 text-center">
-        <div>
-          <div className="text-[12.5px] font-medium" style={{ color: styles.textSecondary }}>
-            No file open
-          </div>
-          <div className="text-[11px] mt-1.5" style={{ color: styles.textTertiary }}>
-            Files the agent edits appear here. Click an action in the chat to open it.
-          </div>
+        <div className="text-[11.5px]" style={{ color: styles.textTertiary }}>
+          No file bound to this tab.
         </div>
       </div>
     );
   }
 
-  const isMd = isMarkdown(activeFile);
+  const isMd = isMarkdown(filePath);
   const lines = content.split("\n");
+  const fileName = filePath.split("/").pop() ?? filePath;
+  const fileColor = getFileColor(fileName);
 
   return (
     <div className="h-full flex flex-col min-h-0">
-      {/* Open-file tabs */}
-      <div
-        className="shrink-0 flex items-stretch gap-0.5 px-1.5 h-8 border-b overflow-x-auto auto-scroll"
-        style={{ borderColor: styles.border }}
-      >
-        {openFiles.map((path) => {
-          const name = path.split("/").pop() ?? path;
-          const isActive = path === activeFile;
-          const color = getFileColor(name);
-          return (
-            <div
-              key={path}
-              role="tab"
-              tabIndex={0}
-              aria-selected={isActive}
-              onClick={() => setActiveFile(projectId, path)}
-              onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); setActiveFile(projectId, path); } }}
-              className="group flex items-center gap-1.5 h-7 my-0.5 px-2 rounded-md cursor-pointer transition-colors shrink-0"
-              style={{
-                background: isActive ? withAlpha(styles.accent, 0.1) : "transparent",
-                color: isActive ? styles.text : styles.textTertiary,
-              }}
-              title={path}
-            >
-              <span className="w-1.5 h-1.5 rounded-full shrink-0" style={{ background: color }} aria-hidden />
-              <span className="text-[10.5px] font-semibold truncate max-w-[120px]">{name}</span>
-              <button
-                onClick={(e) => { e.stopPropagation(); closeFile(projectId, path); }}
-                aria-label={`Close ${name}`}
-                className="w-4 h-4 grid place-items-center rounded transition-opacity"
-                style={{ opacity: isActive ? 0.7 : 0 }}
-                onMouseEnter={(e) => (e.currentTarget.style.background = styles.subtleHover)}
-                onMouseLeave={(e) => (e.currentTarget.style.background = "transparent")}
-              >
-                <X size={9} />
-              </button>
-            </div>
-          );
-        })}
-      </div>
-
       {/* File path breadcrumb */}
       <div
-        className="shrink-0 flex items-center gap-1.5 px-3 h-6 border-b font-mono text-[10px] truncate"
-        style={{ borderColor: styles.border, color: styles.textTertiary, background: styles.isDark ? "rgba(0,0,0,0.15)" : styles.subtle }}
-        title={activeFile}
+        className="shrink-0 flex items-center gap-1.5 px-3 h-7 border-b font-mono text-[10.5px] truncate"
+        style={{
+          borderColor: styles.border,
+          color: styles.textSecondary,
+          background: styles.isDark ? "rgba(0,0,0,0.15)" : styles.subtle,
+        }}
+        title={filePath}
       >
-        {activeFile}
+        <span className="w-1.5 h-1.5 rounded-full shrink-0" style={{ background: fileColor }} aria-hidden />
+        <span className="truncate">{filePath}</span>
       </div>
 
       {/* Body */}
       <div ref={scrollRef} className="flex-1 min-h-0 overflow-y-auto auto-scroll">
         {loading ? (
-          <div className="px-3 py-2 text-[11px] font-mono" style={{ color: styles.textTertiary }}>loading…</div>
+          <div className="px-3 py-2 text-[11px] font-mono" style={{ color: styles.textTertiary }}>
+            loading…
+          </div>
         ) : error ? (
           <div className="px-3 py-2 text-[11px] font-mono" style={{ color: "#ef4444" }}>
             {error instanceof Error ? error.message : "failed to load file"}
