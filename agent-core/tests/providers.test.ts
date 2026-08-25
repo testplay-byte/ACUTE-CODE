@@ -276,14 +276,26 @@ describe("POST /api/v1/providers", () => {
     });
   }
 
-  it("rejects a reserved id (400) and a duplicate id (409)", async () => {
-    const reserved = await authInject({
+  it("ROUND-37: a reserved id with an EXISTING row is 409; an absent one is claimable (deleted-built-in resurrection)", async () => {
+    // anthropic is seeded → its row exists → conflict.
+    const seeded = await authInject({
       method: "POST",
       url: "/api/v1/providers",
       payload: { id: "anthropic", name: "Fake Anthropic", baseUrl: "https://x.test/v1" },
     });
-    expect(reserved.statusCode).toBe(400);
-    expect(reserved.json().error.details.field).toBe("body.id");
+    expect(seeded.statusCode).toBe(409);
+    expect(seeded.json().error.code).toBe("CONFLICT");
+
+    // A reserved id whose row was deleted (tombstoned) can be re-claimed.
+    const del = await authInject({ method: "DELETE", url: "/api/v1/providers/anthropic" });
+    expect(del.statusCode).toBe(204);
+    const resurrected = await authInject({
+      method: "POST",
+      url: "/api/v1/providers",
+      payload: { id: "anthropic", name: "Anthropic", baseUrl: "https://api.anthropic.com/v1", apiFormat: "anthropic-messages" },
+    });
+    expect(resurrected.statusCode).toBe(201);
+    expect(resurrected.json()).toMatchObject({ id: "anthropic", apiFormat: "anthropic-messages" });
 
     const first = await authInject({
       method: "POST",

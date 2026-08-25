@@ -26,6 +26,9 @@ export interface ProviderView {
   name: string;
   kind: string;
   baseUrl: string | null;
+  /** ROUND-37: the provider's wire format — surfaced so Settings can show
+   * and change it (chat-completions | anthropic-messages | responses). */
+  apiFormat?: string;
   enabled: boolean;
   createdAt: string;
   hasKey: boolean;

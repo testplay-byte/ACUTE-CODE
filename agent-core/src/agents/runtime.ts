@@ -177,7 +177,7 @@ function providerErrorDetail(error: unknown, apiKey: string): string {
 interface PreparedTurn {
   session: NonNullable<ReturnType<typeof getSession>>;
   agent: NonNullable<ReturnType<typeof getAgent>>;
-  provider: { id: string; baseUrl: string };
+  provider: { id: string; baseUrl: string; apiFormat?: string };
   apiKey: string;
   model: string;
   tools: Awaited<ReturnType<typeof buildProjectTools>> | undefined;
@@ -332,7 +332,9 @@ async function prepareTurn(
   return {
     session,
     agent,
-    provider: { id: provider.id, baseUrl: provider.baseUrl },
+    // ROUND-37: apiFormat rides along so chat.ts can branch per provider
+    // (chat-completions | anthropic-messages | responses).
+    provider: { id: provider.id, baseUrl: provider.baseUrl, apiFormat: provider.apiFormat },
     apiKey,
     model: modelOverride && modelOverride.trim() !== "" ? modelOverride.trim() : agent.model,
     tools,
@@ -374,7 +376,7 @@ export async function runSingleAgentTurn(
   let result: ChatTurnOutput;
   try {
     result = await chat({
-      provider: { id: provider.id, baseUrl: provider.baseUrl },
+      provider: { id: provider.id, baseUrl: provider.baseUrl, apiFormat: provider.apiFormat },
       apiKey,
       model,
       system,
@@ -612,7 +614,7 @@ export async function runStreamedAgentTurn(
 
     try {
       for await (const event of chatStream({
-        provider: { id: provider.id, baseUrl: provider.baseUrl },
+        provider: { id: provider.id, baseUrl: provider.baseUrl, apiFormat: provider.apiFormat },
         apiKey,
         model,
         system,

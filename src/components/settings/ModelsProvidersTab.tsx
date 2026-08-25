@@ -1,6 +1,7 @@
 import { useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
+  ArrowLeft,
   Check,
   Eye,
   EyeOff,
@@ -20,18 +21,22 @@ import { fetchKeyPool } from "../../lib/api";
 import type { ProviderView } from "../onboarding/providers-api";
 
 /**
- * ModelsProvidersTab (ROUND-34 — the owner's screenshot layout):
- * a master-detail screen replacing the stacked provider cards.
+ * ModelsProvidersTab — ROUND-37 REBUILD (owner directive):
  *
- *   LEFT (~30%): provider list — grouped "Providers" (built-ins) and
- *   "Custom providers"; rows = globe icon + name + green/grey status dot;
- *   selected row = tinted fill + accent indicator; "+ Add provider" at the
- *   bottom (selects a draft in the detail pane — no modal dialog).
+ * > "there is no need to show the providers at all. There will be only
+ * > providers, all of them all together… When the user clicks 'Add Provider',
+ * > the user will be prompted which provider he is wanting to add: is he
+ * > going to add a custom provider or is he going to add others from the
+ * > list… He will be given these options to delete it, to change the base
+ * > URL, to change the name… and the API key. He can also select the API
+ * > format… Anthropic messages / Chat completion / Responses."
  *
- *   RIGHT (~70%): the selected provider's detail panel — header (name +
- *   Enabled badge + Disable + trash for custom), Base URL, API format, API
- *   key (masked + eye toggle + Save), Test connection (latency/error), and
- *   the model list (+ Add model inline, per-row edit/delete).
+ * So: ONE FLAT list of every provider (no built-in/custom groups, no nested
+ * pick-a-vendor-inside-a-provider flow). "Add provider" opens a DIALOG that
+ * first asks preset-or-custom, then takes name / base URL / API key / API
+ * format. Every provider — presets included — is fully editable and
+ * deletable (deleting a preset tombstones it so the boot seed doesn't
+ * resurrect it; re-adding from the dialog clears the tombstone).
  */
 
 /* ── API plumbing ─────────────────────────────────────────────────────────── */
@@ -71,7 +76,61 @@ function useApi() {
   };
 }
 
-const BUILTIN_IDS = new Set(["openrouter", "anthropic", "openai", "google"]);
+/** The three wire formats the runtime speaks (ROUND-37). */
+const API_FORMATS: Array<{ id: string; label: string; hint: string }> = [
+  { id: "chat-completions", label: "Chat completions", hint: "OpenAI-compatible /v1/chat/completions — works with OpenRouter, vLLM, Ollama, gateways" },
+  { id: "anthropic-messages", label: "Anthropic messages", hint: "/v1/messages — Anthropic and Anthropic-compatible endpoints" },
+  { id: "responses", label: "Responses", hint: "OpenAI /v1/responses — the Responses API" },
+];
+
+/** Presets offered by the Add Provider dialog (owner: "is he going to add a
+ * custom provider or is he going to add others from the list"). */
+const PRESETS: Array<{
+  id: string;
+  name: string;
+  baseUrl: string;
+  apiFormat: string;
+  blurb: string;
+}> = [
+  {
+    id: "custom",
+    name: "Custom provider",
+    baseUrl: "",
+    apiFormat: "chat-completions",
+    blurb: "Any endpoint — fill in the details yourself.",
+  },
+  {
+    id: "openrouter",
+    name: "OpenRouter",
+    baseUrl: "https://openrouter.ai/api/v1",
+    apiFormat: "chat-completions",
+    blurb: "One key, hundreds of models.",
+  },
+  {
+    id: "anthropic",
+    name: "Anthropic",
+    baseUrl: "https://api.anthropic.com/v1",
+    apiFormat: "anthropic-messages",
+    blurb: "Claude models via the Messages API.",
+  },
+  {
+    id: "openai",
+    name: "OpenAI",
+    baseUrl: "https://api.openai.com/v1",
+    apiFormat: "chat-completions",
+    blurb: "GPT models (chat completions).",
+  },
+  {
+    id: "google",
+    name: "Google",
+    baseUrl: "https://generativelanguage.googleapis.com/v1beta/openai",
+    apiFormat: "chat-completions",
+    blurb: "Gemini models via the OpenAI-compatible surface.",
+  },
+];
+
+const formatLabel = (id: string | undefined): string =>
+  API_FORMATS.find((f) => f.id === id)?.label ?? "Chat completions";
 
 /* ── Component ────────────────────────────────────────────────────────────── */
 
@@ -80,15 +139,14 @@ export function ModelsProvidersTab() {
   const api = useApi();
   const queryClient = useQueryClient();
   const [selectedId, setSelectedId] = useState<string | null>(null);
-  const [creating, setCreating] = useState(false);
+  const [adding, setAdding] = useState(false);
 
   const providersQuery = useQuery({
     queryKey: ["settings-providers"],
     queryFn: () => api<{ providers: ProviderView[] }>("/providers"),
   });
+  // ROUND-37: ONE flat list — every provider together, order = created.
   const providers = providersQuery.data?.providers ?? [];
-  const builtins = providers.filter((p) => BUILTIN_IDS.has(p.id));
-  const custom = providers.filter((p) => !BUILTIN_IDS.has(p.id));
 
   const invalidate = () =>
     void queryClient.invalidateQueries({ queryKey: ["settings-providers"] });
@@ -100,58 +158,31 @@ export function ModelsProvidersTab() {
 
   return (
     <div className="flex gap-4 min-h-[480px]">
-      {/* ── LEFT: the provider list (master) ─────────────────────────────── */}
+      {/* ── LEFT: the FLAT provider list (ROUND-37: no groups) ─────────── */}
       <div
         className="w-[280px] shrink-0 rounded-[16px] border-[1.5px] overflow-hidden flex flex-col"
         style={{ background: styles.card, borderColor: styles.border }}
       >
         <div className="flex-1 overflow-y-auto auto-scroll p-1.5">
-          {/* Built-in providers */}
-          <div className="px-2.5 pt-2 pb-1.5">
-            <span className="text-[10px] font-bold uppercase tracking-widest" style={{ color: styles.textTertiary }}>
-              Providers
-            </span>
-          </div>
-          {builtins.map((p) => (
-            <ProviderListRow
-              key={p.id}
-              provider={p}
-              active={p.id === selectedId && !creating}
-              onClick={() => {
-                setSelectedId(p.id);
-                setCreating(false);
-              }}
-            />
-          ))}
-          {/* Custom providers */}
-          <div className="px-2.5 pt-4 pb-1.5">
-            <span className="text-[10px] font-bold uppercase tracking-widest" style={{ color: styles.textTertiary }}>
-              Custom providers
-            </span>
-          </div>
-          {custom.length === 0 && !creating && (
+          {providers.length === 0 && (
             <div className="px-2.5 py-1.5 text-[11px]" style={{ color: styles.textTertiary }}>
-              None yet — add one below.
+              No providers — add one below.
             </div>
           )}
-          {custom.map((p) => (
+          {providers.map((p) => (
             <ProviderListRow
               key={p.id}
               provider={p}
-              active={p.id === selectedId && !creating}
-              onClick={() => {
-                setSelectedId(p.id);
-                setCreating(false);
-              }}
+              active={p.id === selectedId}
+              onClick={() => setSelectedId(p.id)}
             />
           ))}
-          {creating && <NewProviderDraftRow active />}
         </div>
-        {/* + Add provider (owner: at the bottom of the list) */}
+        {/* + Add provider → the preset-or-custom DIALOG (owner R37) */}
         <div className="p-1.5 border-t" style={{ borderColor: styles.border }}>
           <button
             onClick={() => {
-              setCreating(true);
+              setAdding(true);
               setSelectedId(null);
             }}
             className="w-full h-9 flex items-center justify-center gap-1.5 rounded-[10px] text-[12px] font-bold transition-colors"
@@ -166,16 +197,7 @@ export function ModelsProvidersTab() {
 
       {/* ── RIGHT: the detail panel ──────────────────────────────────────── */}
       <div className="flex-1 min-w-0">
-        {creating ? (
-          <NewProviderPane
-            onCreated={(id) => {
-              setCreating(false);
-              setSelectedId(id);
-              invalidate();
-            }}
-            onCancel={() => setCreating(false)}
-          />
-        ) : selected ? (
+        {selected ? (
           <ProviderDetailPane
             key={selected.id}
             provider={selected}
@@ -199,17 +221,30 @@ export function ModelsProvidersTab() {
                 Select a provider
               </p>
               <p className="mt-1 text-[12px]" style={{ color: styles.textSecondary }}>
-                Pick one from the list to configure its key, endpoint, and models — or add a custom provider.
+                Pick one from the list to configure its key, endpoint, and models — or add a provider.
               </p>
             </div>
           </div>
         )}
       </div>
+
+      {/* Add Provider DIALOG (preset choice → fields) */}
+      {adding && (
+        <AddProviderDialog
+          existingIds={new Set(providers.map((p) => p.id))}
+          onClose={() => setAdding(false)}
+          onCreated={(id) => {
+            setAdding(false);
+            setSelectedId(id);
+            invalidate();
+          }}
+        />
+      )}
     </div>
   );
 }
 
-/* ── Left list row ────────────────────────────────────────────────────────── */
+/* ── Left list row (flat — one line per provider) ─────────────────────────── */
 
 function ProviderListRow({
   provider,
@@ -225,7 +260,7 @@ function ProviderListRow({
     <button
       onClick={onClick}
       aria-current={active ? "true" : undefined}
-      className="relative w-full h-10 flex items-center gap-2.5 px-2.5 rounded-[10px] transition-colors text-left"
+      className="relative w-full h-11 flex items-center gap-2.5 px-2.5 rounded-[10px] transition-colors text-left"
       style={{
         background: active ? withAlpha(styles.accent, 0.1) : "transparent",
       }}
@@ -249,11 +284,16 @@ function ProviderListRow({
       >
         <Globe size={13} />
       </span>
-      <span
-        className="min-w-0 flex-1 truncate text-[12.5px] font-semibold"
-        style={{ color: active ? styles.text : styles.textSecondary }}
-      >
-        {provider.name}
+      <span className="min-w-0 flex-1 flex flex-col items-start">
+        <span
+          className="w-full truncate text-[12.5px] font-semibold"
+          style={{ color: active ? styles.text : styles.textSecondary }}
+        >
+          {provider.name}
+        </span>
+        <span className="w-full truncate font-mono text-[9.5px]" style={{ color: styles.textTertiary }}>
+          {provider.baseUrl ? new URL(provider.baseUrl).host : "no url"} · {formatLabel(provider.apiFormat)}
+        </span>
       </span>
       {/* Status dot: green = key stored; grey = no key. */}
       <span
@@ -267,34 +307,7 @@ function ProviderListRow({
   );
 }
 
-function NewProviderDraftRow({ active }: { active: boolean }) {
-  const styles = useThemeStyles();
-  return (
-    <div
-      className="relative w-full h-10 flex items-center gap-2.5 px-2.5 rounded-[10px]"
-      style={{ background: withAlpha(styles.accent, 0.1) }}
-    >
-      <span
-        className="absolute left-0 top-1.5 bottom-1.5 w-[2.5px] rounded-full"
-        style={{ background: styles.accent }}
-        aria-hidden
-      />
-      <span className="w-7 h-7 shrink-0 rounded-[8px] grid place-items-center" style={{ background: styles.inputBg, color: styles.accent }}>
-        <Plus size={13} />
-      </span>
-      <span className="min-w-0 flex-1 truncate text-[12.5px] font-semibold" style={{ color: styles.text }}>
-        New provider…
-      </span>
-      {active && (
-        <span className="shrink-0 text-[9px] font-bold px-1.5 py-0.5 rounded-full" style={{ background: styles.accent, color: styles.accentText }}>
-          DRAFT
-        </span>
-      )}
-    </div>
-  );
-}
-
-/* ── Right detail pane (existing provider) ────────────────────────────────── */
+/* ── Right detail pane (ROUND-37: EVERY provider fully editable) ──────────── */
 
 function ProviderDetailPane({
   provider,
@@ -308,7 +321,6 @@ function ProviderDetailPane({
   const styles = useThemeStyles();
   const api = useApi();
   const queryClient = useQueryClient();
-  const isBuiltin = BUILTIN_IDS.has(provider.id);
 
   const [showKey, setShowKey] = useState(false);
   const [keyInput, setKeyInput] = useState("");
@@ -317,6 +329,7 @@ function ProviderDetailPane({
   const [nameDraft, setNameDraft] = useState(provider.name);
   const [baseUrlDraft, setBaseUrlDraft] = useState(provider.baseUrl ?? "");
   const [saveMsg, setSaveMsg] = useState<string | null>(null);
+  const [confirmDelete, setConfirmDelete] = useState(false);
   const [testState, setTestState] = useState<
     { kind: "idle" } | { kind: "testing" } | { kind: "ok"; ms: number } | { kind: "fail"; message: string }
   >({ kind: "idle" });
@@ -393,12 +406,12 @@ function ProviderDetailPane({
 
   return (
     <div className="flex flex-col gap-4">
-      {/* Header: name (editable for custom) + Enabled badge + actions */}
+      {/* Header: name (editable for ALL) + Enabled badge + actions */}
       <div
         className="rounded-[16px] border-[1.5px] p-4 flex items-center gap-3 flex-wrap"
         style={{ background: styles.card, borderColor: styles.border }}
       >
-        {editingName && !isBuiltin ? (
+        {editingName ? (
           <div className="flex items-center gap-2 flex-1 min-w-[200px]">
             <input
               autoFocus
@@ -429,54 +442,62 @@ function ProviderDetailPane({
           </div>
         ) : (
           <button
-            onClick={() => !isBuiltin && setEditingName(true)}
+            onClick={() => setEditingName(true)}
             className="flex items-center gap-2 min-w-0"
-            disabled={isBuiltin}
-            title={isBuiltin ? undefined : "Click to rename"}
+            title="Click to rename"
           >
             <span className="text-[16px] font-black truncate" style={{ color: styles.text }}>
               {provider.name}
             </span>
-            {!isBuiltin && <Pencil size={12} style={{ color: styles.textTertiary }} />}
+            <Pencil size={12} style={{ color: styles.textTertiary }} />
           </button>
         )}
         <span className="flex-1" />
-        {/* Enabled badge + Disable/Enable */}
-        {!isBuiltin && (
-          <>
-            <span
-              className="px-2 py-0.5 rounded-full text-[10px] font-bold"
-              style={{
-                background: provider.enabled ? withAlpha("#22c55e", 0.12) : styles.subtle,
-                color: provider.enabled ? "#22c55e" : styles.textTertiary,
-              }}
-            >
-              {provider.enabled ? "● Enabled" : "○ Disabled"}
-            </span>
-            <button
-              onClick={() => saveDetails.mutate({ enabled: !provider.enabled })}
-              className="text-[11px] font-bold underline"
-              style={{ color: styles.textSecondary }}
-            >
-              {provider.enabled ? "Disable" : "Enable"}
-            </button>
-            <button
-              onClick={() => {
-                if (window.confirm(`Delete provider "${provider.name}" and its model list?`)) {
-                  removeProvider.mutate();
-                }
-              }}
-              aria-label={`Delete provider ${provider.name}`}
-              title="Delete provider"
-              className="w-7 h-7 grid place-items-center rounded-[8px] transition-colors"
-              style={{ color: styles.textTertiary }}
-              onMouseEnter={(e) => (e.currentTarget.style.background = withAlpha("#ef4444", 0.12))}
-              onMouseLeave={(e) => (e.currentTarget.style.background = "transparent")}
-            >
-              <Trash2 size={13} />
-            </button>
-          </>
-        )}
+        {/* Enabled badge + Disable/Enable (every provider) */}
+        <>
+          <span
+            className="px-2 py-0.5 rounded-full text-[10px] font-bold"
+            style={{
+              background: provider.enabled ? withAlpha("#22c55e", 0.12) : styles.subtle,
+              color: provider.enabled ? "#22c55e" : styles.textTertiary,
+            }}
+          >
+            {provider.enabled ? "● Enabled" : "○ Disabled"}
+          </span>
+          <button
+            onClick={() => saveDetails.mutate({ enabled: !provider.enabled })}
+            className="text-[11px] font-bold underline"
+            style={{ color: styles.textSecondary }}
+          >
+            {provider.enabled ? "Disable" : "Enable"}
+          </button>
+          <button
+            onClick={() => {
+              if (confirmDelete) {
+                removeProvider.mutate();
+              } else {
+                setConfirmDelete(true);
+                setTimeout(() => setConfirmDelete(false), 3000);
+              }
+            }}
+            aria-label={`Delete provider ${provider.name}`}
+            title="Delete provider"
+            className="h-7 px-2.5 rounded-[8px] text-[11px] font-bold flex items-center gap-1.5 transition-colors"
+            style={
+              confirmDelete
+                ? { background: "#ef4444", color: "#fff" }
+                : { color: styles.textTertiary }
+            }
+            onMouseEnter={(e) => {
+              if (!confirmDelete) e.currentTarget.style.background = withAlpha("#ef4444", 0.12);
+            }}
+            onMouseLeave={(e) => {
+              if (!confirmDelete) e.currentTarget.style.background = "transparent";
+            }}
+          >
+            <Trash2 size={12} /> {confirmDelete ? "Confirm delete" : "Delete"}
+          </button>
+        </>
         {saveMsg && (
           <span className="text-[11px] font-bold" style={{ color: styles.accent }}>
             {saveMsg}
@@ -492,7 +513,7 @@ function ProviderDetailPane({
         <span className="text-[10px] font-bold uppercase tracking-widest" style={{ color: styles.textTertiary }}>
           Connection
         </span>
-        {/* Base URL */}
+        {/* Base URL (editable for ALL — owner R37) */}
         <div>
           <label className="mb-1.5 block text-[11px] font-bold" style={{ color: styles.textSecondary }}>
             Base URL
@@ -501,12 +522,11 @@ function ProviderDetailPane({
             <input
               value={baseUrlDraft}
               onChange={(e) => setBaseUrlDraft(e.target.value)}
-              disabled={isBuiltin}
               aria-label="Base URL"
-              className="h-10 flex-1 min-w-0 rounded-[10px] border-[1.5px] px-3 font-mono text-[12px] outline-none disabled:opacity-70"
+              className="h-10 flex-1 min-w-0 rounded-[10px] border-[1.5px] px-3 font-mono text-[12px] outline-none"
               style={inputStyle}
             />
-            {!isBuiltin && baseUrlDraft !== (provider.baseUrl ?? "") && (
+            {baseUrlDraft.trim() !== (provider.baseUrl ?? "") && (
               <button
                 onClick={() => saveDetails.mutate({ baseUrl: baseUrlDraft.trim() })}
                 className="h-10 px-4 rounded-[10px] text-[12px] font-bold"
@@ -517,22 +537,34 @@ function ProviderDetailPane({
             )}
           </div>
         </div>
-        {/* API format (info-only today: the adapter speaks chat-completions) */}
+        {/* API format — ROUND-37: the REAL selector (3 formats) */}
         <div>
           <label className="mb-1.5 block text-[11px] font-bold" style={{ color: styles.textSecondary }}>
             API format
           </label>
-          <select
-            value="chat-completions"
-            disabled
-            aria-label="API format"
-            className="h-10 w-full rounded-[10px] border-[1.5px] px-3 text-[12px] outline-none opacity-70"
-            style={inputStyle}
-          >
-            <option value="chat-completions">OpenAI-compatible (chat completions)</option>
-          </select>
-          <p className="mt-1 text-[10.5px]" style={{ color: styles.textTertiary }}>
-            More formats arrive with the provider adapter work.
+          <div className="grid grid-cols-3 gap-2">
+            {API_FORMATS.map((f) => {
+              const active = (provider.apiFormat ?? "chat-completions") === f.id;
+              return (
+                <button
+                  key={f.id}
+                  onClick={() => !active && saveDetails.mutate({ apiFormat: f.id })}
+                  aria-pressed={active}
+                  title={f.hint}
+                  className="h-10 rounded-[10px] border-[1.5px] text-[12px] font-bold transition-colors"
+                  style={{
+                    borderColor: active ? withAlpha(styles.accent, 0.55) : styles.border,
+                    background: active ? withAlpha(styles.accent, 0.09) : styles.bg,
+                    color: active ? styles.accent : styles.textSecondary,
+                  }}
+                >
+                  {f.label}
+                </button>
+              );
+            })}
+          </div>
+          <p className="mt-1.5 text-[10.5px]" style={{ color: styles.textTertiary }}>
+            {API_FORMATS.find((f) => f.id === (provider.apiFormat ?? "chat-completions"))?.hint}
           </p>
         </div>
         {/* API key */}
@@ -608,6 +640,11 @@ function ProviderDetailPane({
               Save a key first to test.
             </span>
           )}
+          {provider.apiFormat === "anthropic-messages" && (
+            <span className="text-[10.5px]" style={{ color: styles.textTertiary }}>
+              Connection test probes the OpenAI-compatible surface — full adapter testing is pending.
+            </span>
+          )}
         </div>
       </div>
 
@@ -617,7 +654,286 @@ function ProviderDetailPane({
   );
 }
 
-/* ── Model list section ───────────────────────────────────────────────────── */
+/* ── Add Provider DIALOG (ROUND-37: preset choice → fields) ───────────────── */
+
+function AddProviderDialog({
+  existingIds,
+  onClose,
+  onCreated,
+}: {
+  existingIds: Set<string>;
+  onClose: () => void;
+  onCreated: (id: string) => void;
+}) {
+  const styles = useThemeStyles();
+  const api = useApi();
+  const [presetId, setPresetId] = useState<string | null>(null);
+  const preset = PRESETS.find((p) => p.id === presetId) ?? null;
+  const [name, setName] = useState("");
+  const [baseUrl, setBaseUrl] = useState("");
+  const [apiFormat, setApiFormat] = useState("chat-completions");
+  const [key, setKey] = useState("");
+  const [showKey, setShowKey] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const choosePreset = (id: string) => {
+    const p = PRESETS.find((x) => x.id === id);
+    if (!p) return;
+    setPresetId(id);
+    setName(p.id === "custom" ? "" : p.name);
+    setBaseUrl(p.baseUrl);
+    setApiFormat(p.apiFormat);
+    setError(null);
+  };
+
+  const create = useMutation({
+    mutationFn: async () => {
+      const isPreset = presetId !== null && presetId !== "custom";
+      const created = await api<{ id: string }>("/providers", {
+        method: "POST",
+        json: {
+          name: name.trim(),
+          baseUrl: baseUrl.trim(),
+          apiFormat,
+          // Presets re-claim their reserved id (resurrects a deleted built-in).
+          ...(isPreset ? { id: presetId } : {}),
+        },
+      });
+      if (key.trim()) {
+        // Under Tauri, keys MUST route through the shell into the OS secure
+        // store (ADR-0012) — same branch as the detail pane.
+        if (isTauri()) {
+          const { storeProviderKey } = await import("../onboarding/providers-api");
+          const ok = await storeProviderKey(created.id, key.trim());
+          if (!ok) throw new Error("the shell refused the key store request");
+        } else {
+          await api(`/providers/${created.id}/key`, { method: "PUT", json: { value: key.trim() } });
+        }
+      }
+      return created;
+    },
+    onSuccess: (created) => onCreated(created.id),
+    onError: (err: Error) => setError(err.message),
+  });
+
+  const inputStyle = {
+    background: styles.bg,
+    borderColor: styles.border,
+    color: styles.text,
+  } as const;
+  const valid = name.trim().length > 0 && /^https?:\/\/.+/.test(baseUrl.trim());
+
+  return (
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center p-6"
+      style={{ background: "rgba(0,0,0,0.35)", backdropFilter: "blur(4px)" }}
+      role="dialog"
+      aria-modal="true"
+      aria-label="Add provider"
+      onClick={(e) => {
+        if (e.target === e.currentTarget) onClose();
+      }}
+    >
+      <div
+        className="w-full max-w-[520px] max-h-[86vh] overflow-y-auto auto-scroll rounded-[20px] border-[1.5px] p-5 flex flex-col gap-4"
+        style={{ background: styles.card, borderColor: styles.border, boxShadow: styles.bentoShadow }}
+      >
+        {preset === null ? (
+          <>
+            {/* STEP 1: what kind of provider? (owner: "is he going to add a
+                custom provider or is he going to add others from the list") */}
+            <div className="flex items-center gap-2">
+              <span className="text-[16px] font-black" style={{ color: styles.text }}>
+                Add provider
+              </span>
+              <span className="flex-1" />
+              <button
+                onClick={onClose}
+                aria-label="Close"
+                className="w-7 h-7 grid place-items-center rounded-[8px]"
+                style={{ color: styles.textTertiary }}
+              >
+                <X size={14} />
+              </button>
+            </div>
+            <p className="text-[12px] -mt-2" style={{ color: styles.textSecondary }}>
+              Pick a preset to prefill, or start from scratch with a custom endpoint.
+            </p>
+            <div className="flex flex-col gap-2">
+              {PRESETS.map((p) => {
+                const alreadyAdded = p.id !== "custom" && existingIds.has(p.id);
+                return (
+                  <button
+                    key={p.id}
+                    onClick={() => !alreadyAdded && choosePreset(p.id)}
+                    disabled={alreadyAdded}
+                    className="h-12 px-4 rounded-[12px] border-[1.5px] flex items-center gap-3 text-left transition-colors disabled:opacity-55"
+                    style={{ borderColor: styles.border, background: styles.bg, color: styles.text }}
+                    onMouseEnter={(e) => {
+                      if (!alreadyAdded) e.currentTarget.style.borderColor = withAlpha(styles.accent, 0.5);
+                    }}
+                    onMouseLeave={(e) => (e.currentTarget.style.borderColor = styles.border)}
+                  >
+                    <span
+                      className="w-8 h-8 shrink-0 rounded-[10px] grid place-items-center"
+                      style={{ background: withAlpha(styles.accent, 0.1), color: styles.accent }}
+                      aria-hidden
+                    >
+                      <Globe size={14} />
+                    </span>
+                    <span className="min-w-0 flex-1">
+                      <span className="block text-[13px] font-bold truncate">{p.name}</span>
+                      <span className="block text-[11px] truncate" style={{ color: styles.textTertiary }}>
+                        {p.blurb}
+                      </span>
+                    </span>
+                    {alreadyAdded ? (
+                      <span
+                        className="shrink-0 text-[10px] font-bold px-2 py-0.5 rounded-full"
+                        style={{ background: withAlpha("#22c55e", 0.12), color: "#22c55e" }}
+                      >
+                        added
+                      </span>
+                    ) : (
+                      <span className="shrink-0 text-[11px] font-bold" style={{ color: styles.accent }}>
+                        Add →
+                      </span>
+                    )}
+                  </button>
+                );
+              })}
+            </div>
+          </>
+        ) : (
+          <>
+            {/* STEP 2: the fields (name / base URL / format / key) */}
+            <div className="flex items-center gap-2">
+              <button
+                onClick={() => {
+                  setPresetId(null);
+                  setError(null);
+                }}
+                aria-label="Back to presets"
+                className="w-7 h-7 grid place-items-center rounded-[8px]"
+                style={{ color: styles.textTertiary }}
+              >
+                <ArrowLeft size={14} />
+              </button>
+              <span className="text-[16px] font-black" style={{ color: styles.text }}>
+                {preset.id === "custom" ? "Custom provider" : preset.name}
+              </span>
+              <span className="flex-1" />
+              <button
+                onClick={onClose}
+                aria-label="Close"
+                className="w-7 h-7 grid place-items-center rounded-[8px]"
+                style={{ color: styles.textTertiary }}
+              >
+                <X size={14} />
+              </button>
+            </div>
+
+            <div>
+              <label className="mb-1.5 block text-[11px] font-bold" style={{ color: styles.textSecondary }}>
+                Provider name
+              </label>
+              <input
+                autoFocus
+                value={name}
+                onChange={(e) => setName(e.target.value)}
+                placeholder="My Gateway"
+                aria-label="Provider name"
+                className="h-10 w-full rounded-[10px] border-[1.5px] px-3 text-[13px] outline-none"
+                style={inputStyle}
+              />
+            </div>
+            <div>
+              <label className="mb-1.5 block text-[11px] font-bold" style={{ color: styles.textSecondary }}>
+                Base URL
+              </label>
+              <input
+                value={baseUrl}
+                onChange={(e) => setBaseUrl(e.target.value)}
+                placeholder="https://api.example.com/v1"
+                aria-label="Base URL"
+                className="h-10 w-full rounded-[10px] border-[1.5px] px-3 font-mono text-[12px] outline-none"
+                style={inputStyle}
+              />
+            </div>
+            <div>
+              <label className="mb-1.5 block text-[11px] font-bold" style={{ color: styles.textSecondary }}>
+                API format
+              </label>
+              <div className="grid grid-cols-3 gap-2">
+                {API_FORMATS.map((f) => {
+                  const active = apiFormat === f.id;
+                  return (
+                    <button
+                      key={f.id}
+                      onClick={() => setApiFormat(f.id)}
+                      aria-pressed={active}
+                      title={f.hint}
+                      className="h-9 rounded-[10px] border-[1.5px] text-[11.5px] font-bold transition-colors"
+                      style={{
+                        borderColor: active ? withAlpha(styles.accent, 0.55) : styles.border,
+                        background: active ? withAlpha(styles.accent, 0.09) : styles.bg,
+                        color: active ? styles.accent : styles.textSecondary,
+                      }}
+                    >
+                      {f.label}
+                    </button>
+                  );
+                })}
+              </div>
+              <p className="mt-1.5 text-[10.5px]" style={{ color: styles.textTertiary }}>
+                {API_FORMATS.find((f) => f.id === apiFormat)?.hint}
+              </p>
+            </div>
+            <div>
+              <label className="mb-1.5 block text-[11px] font-bold" style={{ color: styles.textSecondary }}>
+                API key <span style={{ color: styles.textTertiary }}>(optional — can be added later)</span>
+              </label>
+              <div className="relative">
+                <input
+                  type={showKey ? "text" : "password"}
+                  value={key}
+                  onChange={(e) => setKey(e.target.value)}
+                  placeholder="sk-…"
+                  aria-label="API key"
+                  className="h-10 w-full rounded-[10px] border-[1.5px] px-3 pr-10 font-mono text-[12px] outline-none"
+                  style={inputStyle}
+                />
+                <button
+                  onClick={() => setShowKey((v) => !v)}
+                  aria-label={showKey ? "Hide key" : "Show key"}
+                  className="absolute right-2 top-1/2 -translate-y-1/2 w-6 h-6 grid place-items-center rounded-md"
+                  style={{ color: styles.textTertiary }}
+                >
+                  {showKey ? <EyeOff size={13} /> : <Eye size={13} />}
+                </button>
+              </div>
+            </div>
+
+            {error && (
+              <p role="alert" className="text-[12px]" style={{ color: "#ef4444" }}>
+                {error}
+              </p>
+            )}
+
+            <button
+              onClick={() => create.mutate()}
+              disabled={!valid || create.isPending}
+              className="h-11 rounded-full text-[13px] font-bold disabled:opacity-50 transition-transform hover:scale-[1.01] active:scale-[0.99]"
+              style={{ background: styles.accent, color: styles.accentText }}
+            >
+              {create.isPending ? "Adding…" : "Add provider"}
+            </button>
+          </>
+        )}
+      </div>
+    </div>
+  );
+}
 
 function ModelListSection({ providerId, models }: { providerId: string; models: ModelConfig[] }) {
   const styles = useThemeStyles();
@@ -836,144 +1152,6 @@ function ModelListSection({ providerId, models }: { providerId: string; models: 
 }
 
 /* ── New provider pane (the "+ Add provider" draft) ───────────────────────── */
-
-function NewProviderPane({
-  onCreated,
-  onCancel,
-}: {
-  onCreated: (id: string) => void;
-  onCancel: () => void;
-}) {
-  const styles = useThemeStyles();
-  const api = useApi();
-  const [name, setName] = useState("");
-  const [baseUrl, setBaseUrl] = useState("");
-  const [key, setKey] = useState("");
-  const [showKey, setShowKey] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-
-  const create = useMutation({
-    mutationFn: async () => {
-      const created = await api<{ id: string }>("/providers", {
-        method: "POST",
-        json: { name: name.trim(), baseUrl: baseUrl.trim() },
-      });
-      if (key.trim()) {
-        // Review fix #4: under Tauri, keys MUST route through the shell into
-        // the OS secure store (ADR-0012) — same branch as the detail pane.
-        if (isTauri()) {
-          const { storeProviderKey } = await import("../onboarding/providers-api");
-          const ok = await storeProviderKey(created.id, key.trim());
-          if (!ok) throw new Error("the shell refused the key store request");
-        } else {
-          await api(`/providers/${created.id}/key`, { method: "PUT", json: { value: key.trim() } });
-        }
-      }
-      return created;
-    },
-    onSuccess: (created) => onCreated(created.id),
-    onError: (err: Error) => setError(err.message),
-  });
-
-  const inputStyle = {
-    background: styles.bg,
-    borderColor: styles.border,
-    color: styles.text,
-  } as const;
-  const valid = name.trim().length > 0 && /^https?:\/\/.+/.test(baseUrl.trim());
-
-  return (
-    <div
-      className="rounded-[16px] border-[1.5px] p-5 flex flex-col gap-4 max-w-[560px]"
-      style={{ background: styles.card, borderColor: styles.border }}
-    >
-      <div className="flex items-center gap-2">
-        <span className="text-[16px] font-black" style={{ color: styles.text }}>
-          Add custom provider
-        </span>
-        <span className="flex-1" />
-        <button
-          onClick={onCancel}
-          aria-label="Cancel"
-          className="w-7 h-7 grid place-items-center rounded-[8px]"
-          style={{ color: styles.textTertiary }}
-        >
-          <X size={14} />
-        </button>
-      </div>
-      <p className="text-[12px] -mt-2" style={{ color: styles.textSecondary }}>
-        Any OpenAI-compatible endpoint works (vLLM, Ollama, gateways, aggregators).
-      </p>
-
-      <div>
-        <label className="mb-1.5 block text-[11px] font-bold" style={{ color: styles.textSecondary }}>
-          Provider name
-        </label>
-        <input
-          autoFocus
-          value={name}
-          onChange={(e) => setName(e.target.value)}
-          placeholder="My Gateway"
-          aria-label="Provider name"
-          className="h-10 w-full rounded-[10px] border-[1.5px] px-3 text-[13px] outline-none"
-          style={inputStyle}
-        />
-      </div>
-      <div>
-        <label className="mb-1.5 block text-[11px] font-bold" style={{ color: styles.textSecondary }}>
-          Base URL
-        </label>
-        <input
-          value={baseUrl}
-          onChange={(e) => setBaseUrl(e.target.value)}
-          placeholder="https://api.example.com/v1"
-          aria-label="Base URL"
-          className="h-10 w-full rounded-[10px] border-[1.5px] px-3 font-mono text-[12px] outline-none"
-          style={inputStyle}
-        />
-      </div>
-      <div>
-        <label className="mb-1.5 block text-[11px] font-bold" style={{ color: styles.textSecondary }}>
-          API key <span style={{ color: styles.textTertiary }}>(optional — can be added later)</span>
-        </label>
-        <div className="relative">
-          <input
-            type={showKey ? "text" : "password"}
-            value={key}
-            onChange={(e) => setKey(e.target.value)}
-            placeholder="sk-…"
-            aria-label="API key"
-            className="h-10 w-full rounded-[10px] border-[1.5px] px-3 pr-10 font-mono text-[12px] outline-none"
-            style={inputStyle}
-          />
-          <button
-            onClick={() => setShowKey((v) => !v)}
-            aria-label={showKey ? "Hide key" : "Show key"}
-            className="absolute right-2 top-1/2 -translate-y-1/2 w-6 h-6 grid place-items-center rounded-md"
-            style={{ color: styles.textTertiary }}
-          >
-            {showKey ? <EyeOff size={13} /> : <Eye size={13} />}
-          </button>
-        </div>
-      </div>
-
-      {error && (
-        <p role="alert" className="text-[12px]" style={{ color: "#ef4444" }}>
-          {error}
-        </p>
-      )}
-
-      <button
-        onClick={() => create.mutate()}
-        disabled={!valid || create.isPending}
-        className="h-11 rounded-full text-[13px] font-bold disabled:opacity-50 transition-transform hover:scale-[1.01] active:scale-[0.99]"
-        style={{ background: styles.accent, color: styles.accentText }}
-      >
-        {create.isPending ? "Adding…" : "Add provider"}
-      </button>
-    </div>
-  );
-}
 
 /* ── ROUND-36 (ADR-0022): the per-provider API key pool ───────────────────── */
 

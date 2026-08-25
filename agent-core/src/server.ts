@@ -23,6 +23,7 @@ import {
 } from "./providers/registry.js";
 import {
   RESERVED_PROVIDER_IDS,
+  clearProviderTombstone,
   createProviderRecord,
   deleteProviderRecord,
   providerExists,
@@ -529,11 +530,16 @@ export function buildServer(options: ServerOptions): FastifyInstance {
           }
           id = raw.id.trim();
         }
-        if (id === "" || RESERVED_PROVIDER_IDS.includes(id)) {
+        if (id === "") {
           return reply.code(400).send(
             errorBody("VALIDATION", `id is reserved or unusable: ${id}`, { field: "body.id" }),
           );
         }
+        // ROUND-37 (owner: "Add Provider" offers the built-in presets): a
+        // RESERVED id is now claimable when its row is ABSENT — that's a
+        // deleted built-in being re-added (re-adding clears the tombstone
+        // below so the boot seed leaves it alone). An existing row —
+        // reserved or not — is still a 409.
         if (providerRecordIdExists(db, id)) {
           return reply
             .code(409)
@@ -544,6 +550,9 @@ export function buildServer(options: ServerOptions): FastifyInstance {
           raw.apiFormat === "anthropic-messages" || raw.apiFormat === "responses"
             ? (raw.apiFormat as string)
             : "chat-completions";
+        if (RESERVED_PROVIDER_IDS.includes(id)) {
+          clearProviderTombstone(db, id);
+        }
         const record = createProviderRecord(db, {
           id,
           name: raw.name.trim(),
@@ -553,18 +562,16 @@ export function buildServer(options: ServerOptions): FastifyInstance {
         return reply.code(201).send({ ...record, hasKey: keyring.has(record.id) });
       });
 
-      // ROUND-34 (owner's provider settings): update a CUSTOM provider's
-      // name/baseUrl/apiFormat/enabled. Built-ins refuse edits (409).
+      // ROUND-37 (owner: "he will be given these options to delete it, to
+      // change the base URL, to change the name… and the API key"): EVERY
+      // provider is editable — built-ins included. The old 409 for built-ins
+      // is gone; only the reserved-id IMMUTABILITY of seeding is protected
+      // (via tombstones on delete).
       scope.patch("/providers/:id", async (request, reply) => {
         const { id } = request.params as Record<string, string>;
         const record = resolveProvider(db, id);
         if (record === undefined) {
           return reply.code(404).send(errorBody("NOT_FOUND", `no provider with id ${id}`));
-        }
-        if (RESERVED_PROVIDER_IDS.includes(id)) {
-          return reply.code(409).send(
-            errorBody("CONFLICT", `built-in provider '${id}' cannot be edited`, { field: "params.id" }),
-          );
         }
         const body: unknown = request.body;
         if (typeof body !== "object" || body === null || Array.isArray(body)) {
@@ -601,19 +608,15 @@ export function buildServer(options: ServerOptions): FastifyInstance {
         return reply.code(200).send({ ...updated, hasKey: keyring.has(updated.id) });
       });
 
-      // ROUND-34: delete a CUSTOM provider (built-ins refuse; 409). Agents
-      // referencing the provider block deletion (review fix #5) — their next
-      // turn would 409 on a dead provider otherwise.
+      // ROUND-37: delete ANY provider (built-ins write a tombstone so the
+      // boot seed doesn't resurrect them; re-adding via Add Provider clears
+      // it). Agents referencing the provider still block deletion — their
+      // next turn would 409 on a dead provider otherwise.
       scope.delete("/providers/:id", async (request, reply) => {
         const { id } = request.params as Record<string, string>;
         const record = resolveProvider(db, id);
         if (record === undefined) {
           return reply.code(404).send(errorBody("NOT_FOUND", `no provider with id ${id}`));
-        }
-        if (RESERVED_PROVIDER_IDS.includes(id)) {
-          return reply.code(409).send(
-            errorBody("CONFLICT", `built-in provider '${id}' cannot be deleted`, { field: "params.id" }),
-          );
         }
         const referencing = listAgents(db, true).filter((a) => a.providerId === id);
         if (referencing.length > 0) {

@@ -45,6 +45,8 @@ const BUILTIN_PROVIDER_SEEDS: readonly BuiltinProviderSeed[] = [
 /**
  * Inserts any built-in provider whose row is missing; a no-op for ids already
  * present, so repeated opens never duplicate rows (providers.id is the PK).
+ * ROUND-37: ids with a TOMBSTONE (the owner deleted the built-in) stay
+ * deleted — the seed must not resurrect them on every boot.
  */
 export function seedBuiltinProviders(db: SqliteDatabase): void {
   const insert = db.prepare(
@@ -58,6 +60,7 @@ export function seedBuiltinProviders(db: SqliteDatabase): void {
   db.transaction(() => {
     for (const seed of BUILTIN_PROVIDER_SEEDS) {
       if (providerRecordIdExists(db, seed.id)) continue;
+      if (isProviderTombstoned(db, seed.id)) continue;
       insert.run({
         id: seed.id,
         name: seed.name,
@@ -68,6 +71,23 @@ export function seedBuiltinProviders(db: SqliteDatabase): void {
       });
     }
   })();
+}
+
+/** ROUND-37: the owner deliberately deleted this built-in — don't re-seed. */
+export function isProviderTombstoned(db: SqliteDatabase, id: string): boolean {
+  return db.prepare("SELECT 1 FROM provider_tombstones WHERE id = ?").get(id) !== undefined;
+}
+
+/** ROUND-37: record a built-in deletion (idempotent). */
+export function addProviderTombstone(db: SqliteDatabase, id: string): void {
+  db.prepare(
+    "INSERT OR IGNORE INTO provider_tombstones (id, deleted_at) VALUES (?, ?)",
+  ).run(id, new Date().toISOString());
+}
+
+/** ROUND-37: re-adding a deleted built-in clears its tombstone. */
+export function clearProviderTombstone(db: SqliteDatabase, id: string): void {
+  db.prepare("DELETE FROM provider_tombstones WHERE id = ?").run(id);
 }
 
 export interface ProviderRecord {
@@ -167,10 +187,14 @@ export function updateProviderRecord(
   return getProviderRecord(db, record.id) as ProviderRecord;
 }
 
-/** ROUND-34: delete a custom provider row (idempotent). */
+/** ROUND-34 → ROUND-37: delete a provider row (idempotent). Built-in ids
+ * additionally write a tombstone so the boot seed doesn't resurrect them. */
 export function deleteProviderRecord(db: SqliteDatabase, id: string): void {
   db.prepare("DELETE FROM providers WHERE id = ?").run(id);
   db.prepare("DELETE FROM models WHERE provider_id = ?").run(id);
+  if (RESERVED_PROVIDER_IDS.includes(id)) {
+    addProviderTombstone(db, id);
+  }
 }
 
 /** Deterministic id for a custom provider when the request omits one. */
