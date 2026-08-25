@@ -24,6 +24,8 @@ interface BuiltinProviderSeed {
   id: string;
   name: string;
   baseUrl: string;
+  /** R37 review #9: the wire format the endpoint actually speaks. */
+  apiFormat?: string;
 }
 
 /**
@@ -37,7 +39,7 @@ const BUILTIN_PROVIDER_SEEDS: readonly BuiltinProviderSeed[] = [
   // ROUND-34: the remaining built-in adapter rows — they render in the
   // provider list as "add a key" entries; the chat adapter only speaks
   // OpenAI-compatible endpoints today (apiFormat stays chat-completions).
-  { id: "anthropic", name: "Anthropic", baseUrl: "https://api.anthropic.com/v1" },
+  { id: "anthropic", name: "Anthropic", baseUrl: "https://api.anthropic.com/v1", apiFormat: "anthropic-messages" },
   { id: "openai", name: "OpenAI", baseUrl: "https://api.openai.com/v1" },
   { id: "google", name: "Google", baseUrl: "https://generativelanguage.googleapis.com/v1beta/openai" },
 ];
@@ -64,7 +66,7 @@ export function seedBuiltinProviders(db: SqliteDatabase): void {
       insert.run({
         id: seed.id,
         name: seed.name,
-        apiFormat: "chat-completions",
+        apiFormat: seed.apiFormat ?? "chat-completions",
         kind: CUSTOM_PROVIDER_KIND,
         baseUrl: seed.baseUrl,
         createdAt,

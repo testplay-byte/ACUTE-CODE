@@ -1561,7 +1561,10 @@ export async function startServer(options: StartServerOptions): Promise<RunningS
     await app.close();
     throw new Error("sidecar failed to bind a TCP port");
   }
-  // The shell parses this exact line (ARCHITECTURE §2); nothing else may print to stdout.
+  // The shell parses this exact line (ARCHITECTURE §2). R37 note: structured
+  // log lines (JSON) may precede it on stdout — the shell prefix-scans for
+  // ACUTE_READY, so they're harmless; only malformed non-JSON output would
+  // risk confusing a stricter parser.
   console.log(`ACUTE_READY ${JSON.stringify({ port: address.port })}`);
   return { server: app, port: address.port };
 }

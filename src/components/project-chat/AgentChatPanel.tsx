@@ -330,9 +330,13 @@ function RichText({ content }: { content: string }) {
 function AssistantTurn({
   item,
   sessionId,
+  collapseHint,
 }: {
   item: AssistantTurnItem;
   sessionId: string | null;
+  /** R37 review #4: true when this turn JUST finished while the user
+   * watched — it mounts collapsed ("Worked for Ns" + answer). */
+  collapseHint?: boolean;
 }) {
   const styles = useThemeStyles();
   const hasToolWork = item.working.some((e) => e.type === "tool");
@@ -344,6 +348,7 @@ function AssistantTurn({
           sessionId={sessionId}
           ts={item.ts}
           endTs={item.endTs}
+          defaultOpen={collapseHint === true ? false : undefined}
         />
       ) : (
         <BareWorkingEntries entries={item.working} />
@@ -368,8 +373,8 @@ function AssistantTurn({
  * could skip it on React 19). The wrapper div is the presence child. */
 const MessageRenderer = forwardRef<
   HTMLDivElement,
-  { item: ProjectChatItem; sessionId: string | null }
->(function MessageRenderer({ item, sessionId }, ref) {
+  { item: ProjectChatItem; sessionId: string | null; collapseHint?: boolean }
+>(function MessageRenderer({ item, sessionId, collapseHint }, ref) {
   switch (item.kind) {
     case "user":
       return (
@@ -380,7 +385,7 @@ const MessageRenderer = forwardRef<
     case "turn":
       return (
         <div ref={ref}>
-          <AssistantTurn item={item} sessionId={sessionId} />
+          <AssistantTurn item={item} sessionId={sessionId} collapseHint={collapseHint} />
         </div>
       );
   }
@@ -613,6 +618,13 @@ export function AgentChatPanel({
   //    working area).
   const [liveTurn, setLiveTurn] = useState<LiveTurn | null>(null);
   const [streamBusy, setStreamBusy] = useState(false);
+  // R37 review #3: monotonic live entry keys (two tool-calls in the same
+  // millisecond collided with -Date.now()).
+  const liveSeqRef = useRef(0);
+  // R37 review #4: turns that JUST finished while the user watched start
+  // collapsed ("Worked for Ns" + answer); cold-loaded sessions use the
+  // Detailed preference.
+  const lastLiveEndRef = useRef(0);
   const queryClient = useQueryClient();
   const liveMode = useConfigStore((s) => !s.demoData);
   // Per-send model override (composer picker); null = the agent's own model.
@@ -717,7 +729,7 @@ export function AgentChatPanel({
               // R35 review fix #2 preserved: build NEW arrays/entries, never
               // mutate (StrictMode double-invoke safe).
               const entry: ToolUseEntry = {
-                seq: -Date.now(),
+                seq: --liveSeqRef.current,
                 toolName: event.toolName,
                 argsSummary: event.argsSummary,
                 ok: null,
@@ -746,7 +758,7 @@ export function AgentChatPanel({
               const idx = [...flat].reverse().findIndex((x) => x.toolName === event.toolName && x.ok === null);
               if (idx === -1) {
                 const entry: ToolUseEntry = {
-                  seq: -Date.now(),
+                  seq: --liveSeqRef.current,
                   toolName: event.toolName,
                   argsSummary: event.argsSummary,
                   ok: event.ok,
@@ -808,7 +820,12 @@ export function AgentChatPanel({
                 if (entry.type !== "approval" || entry.approvalId !== event.approvalId) return entry;
                 return {
                   ...entry,
-                  status: event.decision === "approved" ? ("approved" as const) : ("denied" as const),
+                  status:
+                    event.decision === "approved"
+                      ? ("approved" as const)
+                      : event.decision === "denied"
+                        ? ("denied" as const)
+                        : ("expired" as const),
                   ...(event.remember ? { remember: event.remember } : {}),
                 };
               });
@@ -829,6 +846,7 @@ export function AgentChatPanel({
         void queryClient.invalidateQueries({ queryKey: ["project-tree"] });
         // The canonical folded turn now renders from the event log (and the
         // live section auto-collapses to "Worked for Ns").
+        lastLiveEndRef.current = Date.now();
         setLiveTurn(null);
       } else {
         // Fixture/demo mode: no sidecar → sync hook (canned reply).
@@ -841,7 +859,13 @@ export function AgentChatPanel({
       await queryClient.invalidateQueries({ queryKey: ["session"] });
       await queryClient.invalidateQueries({ queryKey: ["sessions"] });
       void queryClient.invalidateQueries({ queryKey: ["project-tree"] });
-      const hasResponse = queryClient.getQueryData(["session", session?.id ?? sid]);
+      // R37 review #1: the session query key is ["session", source, id] —
+      // an exact-hash lookup without the source segment never matched.
+      const hasResponse = queryClient.getQueryData([
+        "session",
+        liveMode ? "live" : "demo",
+        session?.id ?? sid,
+      ]);
       if (!hasResponse) {
         setSendError(err instanceof Error ? err.message : String(err));
         // Freeze the live section in its terminal "Stopped" state (R37
@@ -850,6 +874,7 @@ export function AgentChatPanel({
       } else {
         // The response landed despite the stream error — clear the error.
         setSendError(null);
+        lastLiveEndRef.current = Date.now();
         setLiveTurn(null);
       }
     } finally {
@@ -897,6 +922,7 @@ export function AgentChatPanel({
           live
           startedAtMs={liveTurn.startedAtMs}
           stopped={liveTurn.stopped}
+          liveEntryIndex={liveTurn.streamThinking.trim() !== "" ? entries.length - 1 : undefined}
           onApprovalDecision={(id, decision, remember) => void onApprovalDecision(id, decision, remember)}
         />
       );
@@ -997,9 +1023,15 @@ export function AgentChatPanel({
                   key={itemKey(item)}
                   item={item}
                   sessionId={session?.id ?? null}
+                  collapseHint={Date.now() - lastLiveEndRef.current < 5000}
                 />
               ))}
-              {pendingEcho !== null ? <UserMessage content={pendingEcho} /> : null}
+              {pendingEcho !== null ? (
+                <MessageRenderer
+                  item={{ kind: "user", seq: -1, content: pendingEcho, ts: new Date().toISOString() }}
+                  sessionId={null}
+                />
+              ) : null}
             </AnimatePresence>
 
             {/* ── ROUND-37 LIVE TURN: the Working section grows above the

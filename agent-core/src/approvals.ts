@@ -22,6 +22,7 @@ import { randomUUID } from "node:crypto";
 import type { ToolPermission } from "shared";
 import type { SqliteDatabase } from "./storage/db.js";
 import { logApproval } from "./lib/log.js";
+import { appendSessionEvent } from "./storage/sessions.js";
 
 /** Risk tier for a prospective tool action. */
 export type ActionCategory = ToolPermission | "destructive";
@@ -84,9 +85,37 @@ function hasRecursiveOrForceRm(command: string): boolean {
   );
 }
 
+/**
+ * Split a command on shell separators (&&, ||, ;, |, newline, backtick,
+ * $(…)). Used by the compound-command guard: prefix matching on the WHOLE
+ * string is bypassable ("pnpm test && curl …"), so compounds are analyzed
+ * segment-wise and NEVER auto-run.
+ */
+function splitCompound(command: string): string[] {
+  return command
+    .split(/&&|\|\||[;|\n\r`]|\$\(/g)
+    .map((segment) => segment.trim())
+    .filter((segment) => segment !== "");
+}
+
 /** The policy tier for a command (pure — no DB, no environment). */
 export function categorize(action: string): ActionCategory {
   const normalized = action.trim();
+  const segments = splitCompound(normalized);
+  if (segments.length > 1) {
+    // REVIEW B1 (compound bypass): a compound command can hide a blocked
+    // tail behind an auto head ("cat x; sudo …"). Segment-wise: any blocked
+    // segment blocks the whole; destructive escalates; NEVER auto (the
+    // owner sees the full command and decides — fail-closed).
+    let worst: ActionCategory = "auto";
+    for (const segment of segments) {
+      const tier = categorize(segment); // segments are simple — no recursion depth
+      if (tier === "blocked") return "blocked";
+      if (tier === "destructive") worst = "destructive";
+      else if (tier === "confirm" && worst === "auto") worst = "confirm";
+    }
+    return worst === "auto" ? "confirm" : worst;
+  }
   const lowered = normalized.toLowerCase();
   if (hasRecursiveOrForceRm(normalized)) return "blocked";
   for (const pattern of BLOCKED_PATTERNS) {
@@ -241,11 +270,21 @@ export function sweepStaleApprovals(db: SqliteDatabase): number {
   const now = new Date().toISOString();
   const stale = db
     .prepare(
-      `SELECT id FROM approvals WHERE status = 'pending' AND expires_at != '' AND expires_at < ?`,
+      `SELECT id, session_id AS sessionId, agent_id AS agentId FROM approvals
+       WHERE status = 'pending' AND expires_at != '' AND expires_at < ?`,
     )
-    .all(now) as Array<{ id: string }>;
-  for (const { id } of stale) {
-    resolvePendingApproval(id, "denied");
+    .all(now) as Array<{ id: string; sessionId: string | null; agentId: string | null }>;
+  for (const row of stale) {
+    resolvePendingApproval(row.id, "denied");
+    // R37 review #6: persist the resolution so the folded log doesn't render
+    // a "waiting…" card forever after a crash.
+    if (row.sessionId !== null && row.agentId !== null) {
+      appendSessionEvent(db, row.sessionId, {
+        type: "approval.resolved",
+        agentId: row.agentId,
+        payload: { approvalId: row.id, decision: "expired" },
+      });
+    }
   }
   const info = db
     .prepare(

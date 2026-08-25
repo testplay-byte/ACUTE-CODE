@@ -112,7 +112,9 @@ describe("GET /api/v1/providers", () => {
             name: "Anthropic",
             kind: "openai-compatible",
             baseUrl: "https://api.anthropic.com/v1",
-            apiFormat: "chat-completions",
+            // R37 review #9: the Anthropic endpoint speaks the Messages API —
+            // seeding chat-completions shipped a 404-by-default provider.
+            apiFormat: "anthropic-messages",
             enabled: true,
             createdAt: expect.any(String),
             hasKey: false,

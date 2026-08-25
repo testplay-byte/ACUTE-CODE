@@ -155,9 +155,15 @@ function assembleHistory(db: SqliteDatabase, sessionId: string): ChatTurnMessage
         typeof payload.outputSummary === "string" && payload.outputSummary.length > 0
           ? payload.outputSummary
           : null;
-      // Review fix #7: neutralize the closing marker inside tool output so
-      // injected content can't escape the <tool_results> data block.
-      const safeOutput = outputSummary?.replace(/<\/tool_results>/g, "<\/tool_results>");
+      // Review fix #7 (R37 review M2: the original replace was a no-op —
+      // "\/" in a JS string literal is just "/"): neutralize the closing
+      // marker inside tool output so injected content can't escape the
+      // <tool_results> data block. A zero-width joiner breaks the sequence
+      // without changing what the model reads.
+      const safeOutput = outputSummary?.replace(
+        /<\/tool_results>/g,
+        "<\u200b/tool_results>",
+      );
       pendingToolLines.push(
         `${toolName}(${argsSummary}) → ${ok ? "ok" : "FAILED"}${safeOutput ? `: ${safeOutput}` : ""}`,
       );

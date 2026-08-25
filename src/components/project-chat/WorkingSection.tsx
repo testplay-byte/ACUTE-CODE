@@ -720,6 +720,8 @@ export function WorkingSection({
   live = false,
   startedAtMs,
   stopped = false,
+  liveEntryIndex,
+  defaultOpen,
   onApprovalDecision,
 }: {
   entries: WorkingEntry[];
@@ -734,17 +736,25 @@ export function WorkingSection({
   startedAtMs?: number;
   /** Terminal state after a stream error — "Stopped", timer frozen. */
   stopped?: boolean;
+  /** ROUND-37 review M1: index of the entry that is STILL STREAMING (the
+   * in-flight thought) — only that row renders as "Thinking"; completed
+   * thoughts collapse the moment their text starts. */
+  liveEntryIndex?: number;
+  /** ROUND-37 review #4: initial open state. Live sections ALWAYS open (the
+   * owner watches progress); folded sections open per the Detailed
+   * preference — unless collapseHint says the turn was just watched live. */
+  defaultOpen?: boolean;
   onApprovalDecision?: (approvalId: string, decision: ApprovalDecisionChoice, remember: ApprovalRemember) => void;
 }) {
   const styles = useThemeStyles();
   const mode = useThemeStore((s) => s.activityMode);
-  const [expanded, setExpanded] = useState(mode === "detailed");
+  const [expanded, setExpanded] = useState(defaultOpen ?? (live || mode === "detailed"));
   const userTouched = useRef(false);
-  const prevLive = useRef(live);
+  const prevLive = useRef(false);
 
-  // Folded turns render per the persisted preference; LIVE turns expand to
-  // show progress, then AUTO-COLLAPSE on completion (owner: the finished
-  // chat reads as answer + "Worked for Ns"). A manual tap always wins.
+  // LIVE turns expand to show progress, then AUTO-COLLAPSE on completion
+  // (owner: the finished chat reads as answer + "Worked for Ns"). A manual
+  // tap always wins.
   useEffect(() => {
     if (live && !prevLive.current) {
       if (!userTouched.current) setExpanded(true);
@@ -755,7 +765,7 @@ export function WorkingSection({
     prevLive.current = live;
   }, [live]);
 
-  const liveSeconds = useLiveSeconds(startedAtMs, live);
+  const liveSeconds = useLiveSeconds(startedAtMs, live && !stopped);
   const foldedSeconds = ts !== undefined && endTs !== undefined ? elapsedSeconds(ts, endTs) : 0;
   const seconds = live ? liveSeconds : foldedSeconds;
 
@@ -832,7 +842,14 @@ export function WorkingSection({
         <div className="relative ml-[7px] pl-3.5 border-l-2 py-1 flex flex-col gap-0.5" style={{ borderColor: withAlpha(styles.accent, 0.22) }}>
           {entries.map((entry, i) => {
             if (entry.type === "thinking") {
-              return <ThoughtRow key={`t-${i}`} text={entry.text} thinkingMs={entry.thinkingMs} live={live && i === entries.length - 1} />;
+              return (
+                <ThoughtRow
+                  key={`t-${i}`}
+                  text={entry.text}
+                  thinkingMs={entry.thinkingMs}
+                  live={live && i === liveEntryIndex}
+                />
+              );
             }
             if (entry.type === "text") {
               return <NarrationRow key={`t-${i}`} content={entry.content} />;

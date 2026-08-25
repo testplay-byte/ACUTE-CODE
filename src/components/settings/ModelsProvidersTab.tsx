@@ -687,7 +687,7 @@ function AddProviderDialog({
   };
 
   const create = useMutation({
-    mutationFn: async () => {
+    mutationFn: async (): Promise<{ id: string; keyError?: string }> => {
       const isPreset = presetId !== null && presetId !== "custom";
       const created = await api<{ id: string }>("/providers", {
         method: "POST",
@@ -701,18 +701,32 @@ function AddProviderDialog({
       });
       if (key.trim()) {
         // Under Tauri, keys MUST route through the shell into the OS secure
-        // store (ADR-0012) — same branch as the detail pane.
-        if (isTauri()) {
-          const { storeProviderKey } = await import("../onboarding/providers-api");
-          const ok = await storeProviderKey(created.id, key.trim());
-          if (!ok) throw new Error("the shell refused the key store request");
-        } else {
-          await api(`/providers/${created.id}/key`, { method: "PUT", json: { value: key.trim() } });
+        // store (ADR-0012) — same branch as the detail pane. R37 review #8:
+        // a key-store failure must NOT strand the dialog (the provider
+        // exists now) — surface it and continue to the detail pane, where
+        // the key status shows un-stored and can be retried.
+        try {
+          if (isTauri()) {
+            const { storeProviderKey } = await import("../onboarding/providers-api");
+            const ok = await storeProviderKey(created.id, key.trim());
+            if (!ok) return { id: created.id, keyError: "the shell refused the key store request" };
+          } else {
+            await api(`/providers/${created.id}/key`, { method: "PUT", json: { value: key.trim() } });
+          }
+        } catch (err) {
+          return { id: created.id, keyError: err instanceof Error ? err.message : String(err) };
         }
       }
-      return created;
+      return { id: created.id };
     },
-    onSuccess: (created) => onCreated(created.id),
+    onSuccess: ({ id, keyError }) => {
+      if (keyError !== undefined) {
+        // The provider EXISTS now — close the dialog and select it; the
+        // detail pane shows "no key stored" and the key can be retried.
+        console.warn(`[add-provider] key not stored: ${keyError}`);
+      }
+      onCreated(id);
+    },
     onError: (err: Error) => setError(err.message),
   });
 
