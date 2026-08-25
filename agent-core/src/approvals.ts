@@ -21,6 +21,7 @@
 import { randomUUID } from "node:crypto";
 import type { ToolPermission } from "shared";
 import type { SqliteDatabase } from "./storage/db.js";
+import { logApproval } from "./lib/log.js";
 
 /** Risk tier for a prospective tool action. */
 export type ActionCategory = ToolPermission | "destructive";
@@ -344,6 +345,7 @@ export async function requestCommandApproval(
   };
   deps.emit?.(requested);
   deps.appendEvent?.({ type: "approval.requested", agentId: deps.agentId, payload: { ...requested } });
+  logApproval("requested", approval.id, { sessionId: deps.sessionId, command, category: decision.category });
 
   const finalDecision = await new Promise<"approved" | "denied">((resolve) => {
     let settled = false;
@@ -384,6 +386,7 @@ export async function requestCommandApproval(
   };
   deps.emit?.(resolved);
   deps.appendEvent?.({ type: "approval.resolved", agentId: deps.agentId, payload: { ...resolved } });
+  logApproval("resolved", approval.id, { sessionId: deps.sessionId, decision: finalDecision, remember });
 
   if (finalDecision === "approved") {
     return { allowed: true, note: remember === "always" ? "approved (always for this project)" : "approved by the owner" };

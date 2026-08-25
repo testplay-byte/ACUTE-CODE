@@ -1,4 +1,4 @@
-<!-- last-reviewed: 2026-08-25 round-36 -->
+<!-- last-reviewed: 2026-08-25 round-37 -->
 # IMPLEMENTED API — the shipped surface
 
 **Truth = this file.** Verified against `agent-core/src/server.ts` at
@@ -81,9 +81,34 @@ message.assistant {role:"assistant", content, agentId, ts,
 requests,costUsd}], totals, generatedAt}` (zero-filled, UTC; `costUsd`=0
 until estimation lands).
 
+## ROUND-37 additions (implemented)
+
+- `GET /api/v1/approvals?status=pending&projectId=` → `{approvals: [...]}`
+  (ADR-0024; pending/approved/denied/expired rows with toolCall, category,
+  remember, timestamps).
+- `POST /api/v1/approvals/:id/decision` `{decision: approved|denied,
+  remember?: once|always}` → resolves the waiting tool call; `always` writes
+  a project-scoped EXACT-match rule; `always` on a destructive approval
+  silently downgrades to `once` (hard rule).
+- SSE turn stream now carries `approval.requested` /
+  `approval.resolved` events; both also persist as session events (they fold
+  into the turn's working section in the UI).
+- `PATCH /api/v1/providers/:id` + `DELETE /api/v1/providers/:id` now apply
+  to ALL providers — built-ins included (deleting one tombstones it so the
+  boot seed doesn't resurrect it; re-adding via `POST /providers` with the
+  reserved id clears the tombstone). `apiFormat` selects the wire protocol:
+  `chat-completions` (default) | `anthropic-messages` | `responses` — all
+  three are wired in chat.ts; anthropic/responses are unit-tested only (no
+  live keys — honest limitation).
+- Structured logging: JSON lines to stdout + `.dev/acute.log`
+  (`ACUTE_LOG_PATH`/`ACUTE_LOG_LEVEL` env overrides) — turn lifecycle, tool
+  calls (names + argsSummary only), approval lifecycle, boot sweeps.
+
 ## NOT implemented (despite API.md)
 
 `/ws` (no WS gateway — SSE per-turn instead) · `/internal/shutdown` ·
 project file writes over REST · git/memory/skills/mcp/settings routes ·
-approvals/audit routes (engine is Phase 3) · session stop/events-backfill ·
+audit_log routes (approvals ARE implemented — see above) ·
+session stop/events-backfill · connection-test/model-listing for
+non-chat-completions providers (manual model rows work) ·
 dev port is **5178**, not 8765.

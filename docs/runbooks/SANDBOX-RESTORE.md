@@ -1,4 +1,4 @@
-<!-- last-reviewed: 2026-08-25 round-36 -->
+<!-- last-reviewed: 2026-08-25 round-37 -->
 # SANDBOX RESTORE — resuming after the agent sandbox is wiped
 
 **Owner directive (2026-08-24, round 28 revision):** the agent's sandbox is
@@ -160,8 +160,10 @@ Lesson #37 in `AGENT-MEMORY.md` codifies this.
 - **No Rust toolchain** in sandbox: `cargo check` happens on CI only (ADR-0012).
 - **`api.openrouter.ai` DNS-blocked** in sandbox; use apex
   `https://openrouter.ai/api/v1` (already seeded in DB — don't "fix" DNS).
-- **pnpm at** `/home/z/.cache/node/corepack/shims/pnpm` after `corepack enable`
-  (NOT at `/home/z/.local/bin/pnpm` — that path doesn't exist post-wipe).
+- **pnpm**: `corepack enable` fails with EACCES on `/usr/bin` — instead
+  write a shim: `printf '#!/bin/sh\nexec node /usr/lib/node_modules/corepack/dist/pnpm.js "$@"\n' > /home/z/.local/bin/pnpm && chmod 755 /home/z/.local/bin/pnpm`
+  (verify `pnpm --version` → 11.22.0). Also mind `umask 077` from the secrets
+  step — chmod the shim explicitly.
 - **CI takes ~4–6 minutes** (windows-latest + cargo) — a Bash timeout that
   kills a polling loop is NOT a CI failure; re-query run status.
 

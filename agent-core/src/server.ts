@@ -58,6 +58,7 @@ import {
   sweepStaleApprovals,
 } from "./approvals.js";
 import { getUsageSummary } from "./storage/usage.js";
+import { log } from "./lib/log.js";
 import {
   deleteModel,
   listModels,
@@ -245,10 +246,8 @@ export function buildServer(options: ServerOptions): FastifyInstance {
   Orchestrator.sweepStaleRunning(db);
 
   // ROUND-37 (ADR-0024): crash-orphaned pending approvals fail closed.
-  sweepStaleApprovals(db);
-
-  // ROUND-37 (ADR-0024): crash-orphaned pending approvals fail closed.
-  sweepStaleApprovals(db);
+  const swept = sweepStaleApprovals(db);
+  if (swept > 0) log("info", "boot.approvals_swept", { swept });
 
   // CORS: loopback-only product, but the webview (tauri.localhost) and the
   // dev vite server (localhost:5173) are cross-origin callers — without

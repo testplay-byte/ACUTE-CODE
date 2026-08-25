@@ -516,3 +516,21 @@ Format per entry: `N. TITLE (date, source)` → mistake → root cause → rule.
     argsSummary only ever carries the INPUT (task/role). RULE: for
     tool-generated resources the UI needs, embed the handle in the tool's
     output string in a machine-readable prefix.
+
+60. **Persisted-view grouping must match the live-view shape or the seams
+    show.** The R35 live renderer deduplicated headers but the folded log
+    re-rendered them per event — the owner SAW the seam ("a new chat
+    started"). RULE: when a live view special-cases rendering, the canonical
+    fold must produce the same structure; otherwise the post-stream swap
+    visibly changes the screen.
+
+61. **Ask for credentials the moment a wipe is detected — don't search the
+    filesystem for them.** R37 started with ~30 min of PAT hunting that
+    found nothing (by design: secrets live outside every repo and temp
+    dir). The round-28 rule (notify + stop) exists for exactly this. RULE:
+    on wipe → ntfy → ASK THE OWNER → restore. Zero exceptions.
+
+62. **Prefix allow/blocklists collide (vite blocked vitest).** Short
+    command prefixes like "vite" silently matched "vitest" in the R37
+    approval engine. RULE: exact-word commands get word-boundary regexes,
+    not raw prefixes; add the collision case to the tests immediately.

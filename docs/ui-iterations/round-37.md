@@ -1,0 +1,91 @@
+<!-- last-reviewed: 2026-08-25 round-37 -->
+# Round 37 — Chat continuity (Working section) · Provider rebuild · Approvals
+
+**Date:** 2026-08-25 · **Branch:** `work/round-37` · **Owner directives:**
+the Capttture.PNG break report + proposed.PNG/proposed2.PNG target UX + the
+settings/approvals directives (full text in `docs/agent/R37-PLAN.md`).
+
+## What shipped
+
+### A. Chat continuity (ADR-0023)
+
+- **One turn per user message**: `toProjectChatItems` folds the event log into
+  `AssistantTurnItem` — `working` entries (thoughts w/ measured `thinkingMs`,
+  interim narration, tool calls, approval exchanges) + `finalText` (text after
+  the last tool call) + turn-level stats. The R35 stats-carrier merges into
+  the turn; failed turns keep their user bubble; ends-on-tool turns render
+  working-only.
+- **WorkingSection** (new `src/components/project-chat/WorkingSection.tsx`):
+  borderless, minimal — live header `Working · mm:ss` (counting up, pulsing
+  dot) → `Worked for Ns · N actions` on completion, auto-expand while live,
+  auto-collapse when done (manual taps always win). One-line ThoughtRow
+  (auto-expand while thinking, auto-collapse when the thought completes),
+  one-line ToolLine (verb labels: Listed/Read/Wrote/Ran/…; expands to
+  diff/terminal/output/SubAgentCard detail), ApprovalRow.
+- **The answer renders OUTSIDE the section** — collapsing work never hides it.
+- **Live view builds the same shape**: streamed text below the section as the
+  presumptive final; a tool-call flushes it in as narration. R35 fixes #2/#6
+  preserved verbatim.
+- **Sparkles removed at all 9 sites** (chat + sessions + agents screens); the
+  empty state uses the approved AcuteLogo. No avatars/name headers on
+  assistant messages.
+- **Width fixes**: focus-mode column max-w 1500px (was 900); 3-panel mode
+  fills the freed Code space with chat.
+
+### B. Settings & providers
+
+- **Models & Providers rebuilt** (owner spec): ONE flat list (no groups, no
+  nested vendor-picking); **Add Provider dialog** (preset choice →
+  name/baseURL/apiFormat/key fields; presets prefill; already-added presets
+  badge); EVERY provider editable (rename, base URL, API key, enable/disable)
+  and deletable — built-ins tombstone on delete (migration 0010) so the boot
+  seed doesn't resurrect them; re-adding clears the tombstone.
+- **apiFormat is real** (owner: "he can select the API format… so that he can
+  add any kind of custom API provider"): `chat-completions` |
+  `anthropic-messages` | `responses` — threaded through prepareTurn → chat.ts
+  (`@ai-sdk/anthropic`, `@ai-sdk/openai` `.responses()`); unit-tested per
+  branch; live-tested on chat-completions only (the honest limitation — no
+  anthropic/responses keys).
+
+### C. Approvals (ADR-0024)
+
+- **Policy engine** (single source of truth): blocked → deny forever ·
+  destructive → ask ALWAYS (never rule-able; `remember=always` silently
+  downgrades) · auto (read-only/build/test) → run · project exact-match rule
+  → run · else ask. `npm install`/`git commit` class commands moved from the
+  old auto list to **ask**; `env`/`echo` dropped.
+- **Interactive wait**: in-process resolver map (no DB polling) resolved by
+  `POST /api/v1/approvals/:id/decision`; 120s timeout + abort-race deny;
+  boot sweep expires crash-orphaned rows and wakes zombie waiters.
+- **Fail-fast non-interactive**: sync turns + sub-agent children deny
+  non-auto commands immediately.
+- **Events**: `approval.requested`/`approval.resolved` ride SSE AND persist
+  (they fold into the turn's working section — the exchange renders after
+  reload). Frontend ApprovalCard: Allow once / Always allow / Deny.
+- Migration 0009 (approvals gains project_id/remember/expires_at;
+  approval_rules table).
+
+### D. Logging
+
+- `agent-core/src/lib/log.ts`: zero-dep JSON-lines logger (stdout +
+  `.dev/acute.log`; `ACUTE_LOG_PATH`/`ACUTE_LOG_LEVEL`) — turn lifecycle,
+  tool calls (name + argsSummary ONLY), approval lifecycle, boot sweeps.
+  Security rule: never outputs, never key values.
+
+## Evidence
+
+- 250 tests green (was 227): +13 fold tests (turn shape), +3 chat-format,
+  +9 approval-flow, +2 provider tombstone/patch, engine tests updated.
+- lint / typecheck / build / e2e / license audit green (109 prod deps).
+- Live browser verification + screenshots: see the DASHBOARD round-37 zip
+  (referenced from the round close-out message).
+
+## Known limitations (honest)
+
+- anthropic-messages / responses formats: wired + unit-tested, not
+  live-tested (no keys). Connection-test/model-listing buttons remain
+  chat-completions-only; manual model rows work for any provider.
+- Sub-agent approval propagation (a child asking through the parent's UI) is
+  future work — children never get interactive approvals in v1.
+- The sessions screen (`ChatView`) still uses its own fold (per-turn grouping
+  there is a later round).

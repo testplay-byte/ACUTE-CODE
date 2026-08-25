@@ -15,6 +15,7 @@ import {
   resolveProvider,
 } from "../providers/registry.js";
 import { buildProjectTools } from "../tools/index.js";
+import { logTool, logTurnEnd, logTurnStart } from "../lib/log.js";
 import {
   appendSessionEvent,
   getSession,
@@ -368,6 +369,8 @@ export async function runSingleAgentTurn(
   const prepared = await prepareTurn(db, keyring, sessionId, modelOverride, chat);
   if ("error" in prepared) return prepared.error;
   const { session, agent, provider, apiKey, model, tools, system } = prepared;
+  const syncStartedAt = Date.now();
+  logTurnStart(session.id, agent.id, model, false);
 
   // First message flips a queued session to running (API.md §5 semantics).
   if (session.status === "queued") setSessionStatus(db, session.id, "running");
@@ -457,6 +460,7 @@ export async function runSingleAgentTurn(
   };
   recordUsage(db, usage);
   touchSession(db, session.id);
+  logTurnEnd(session.id, true, Date.now() - syncStartedAt, result.usage.inputTokens, result.usage.outputTokens);
 
   return {
     ok: true,
@@ -505,6 +509,8 @@ export async function runStreamedAgentTurn(
   const { session, agent, provider, apiKey, model, tools, system } = prepared;
 
   if (session.status === "queued") setSessionStatus(db, session.id, "running");
+
+  logTurnStart(session.id, agent.id, model, true);
 
   appendSessionEvent(db, session.id, {
     type: "message.user",
@@ -686,6 +692,7 @@ export async function runStreamedAgentTurn(
               ...(outputSummary !== null ? { outputSummary } : {}),
             },
           });
+          logTool(session.id, event.toolName, event.argsSummary, event.ok);
         } else if (event.type === "finish") {
           iterInputTokens = event.usage.inputTokens;
           iterOutputTokens = event.usage.outputTokens;
@@ -693,6 +700,7 @@ export async function runStreamedAgentTurn(
       }
     } catch (error) {
       const normalized = error instanceof Error ? error : new Error(String(error));
+      logTurnEnd(session.id, false, Date.now() - startedAt, totalInputTokens, totalOutputTokens);
       return {
         ok: false,
         status: 502,
@@ -785,6 +793,7 @@ export async function runStreamedAgentTurn(
   };
   recordUsage(db, usage);
   touchSession(db, session.id);
+  logTurnEnd(session.id, true, ms, totalInputTokens, totalOutputTokens);
 
   return {
     ok: true,

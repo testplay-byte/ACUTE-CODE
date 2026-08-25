@@ -6,13 +6,17 @@ Policy (SPEC section 6): allowed - MIT, Apache-2.0, BSD-2-Clause, BSD-3-Clause, 
 Forbidden - GPL, AGPL, LGPL and any license that cannot be classified (closed-source distribution).
 Every license exception must be recorded as an ADR under `docs/decisions/`.
 
-Audited production dependencies: 107. Verdict: CLEAN.
+Audited production dependencies: 112. Verdict: CLEAN.
 
 | Package | Version | License | Verdict |
 |---|---|---|---|
+| @ai-sdk/anthropic | 3.0.111 | Apache-2.0 | OK |
 | @ai-sdk/gateway | 4.0.59 | Apache-2.0 | OK |
+| @ai-sdk/openai | 3.0.99 | Apache-2.0 | OK |
 | @ai-sdk/openai-compatible | 3.0.34 | Apache-2.0 | OK |
+| @ai-sdk/provider | 3.0.15 | Apache-2.0 | OK |
 | @ai-sdk/provider | 4.0.7 | Apache-2.0 | OK |
+| @ai-sdk/provider-utils | 4.0.46 | Apache-2.0 | OK |
 | @ai-sdk/provider-utils | 5.0.28 | Apache-2.0 | OK |
 | @fastify/ajv-compiler | 4.0.6 | MIT | OK |
 | @fastify/error | 4.2.0 | MIT | OK |
@@ -112,6 +116,7 @@ Audited production dependencies: 107. Verdict: CLEAN.
 | thread-stream | 4.2.0 | MIT | OK |
 | toad-cache | 3.7.4 | MIT | OK |
 | tslib | 2.8.1 | 0BSD | OK |
+| undici | 6.28.0 | MIT | OK |
 | undici | 7.29.0 | MIT | OK |
 | use-callback-ref | 1.3.3 | MIT | OK |
 | use-sidecar | 1.1.3 | MIT | OK |

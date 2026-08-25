@@ -1,4 +1,4 @@
-<!-- last-reviewed: 2026-08-25 round-36 -->
+<!-- last-reviewed: 2026-08-25 round-37 -->
 # ACUTE-CODE Design System
 
 **Why this document exists (owner direction, round-16/2026-08-23):** "the UI
@@ -57,14 +57,22 @@ a slot here.
 
 ## 5. Component anatomy (inventory)
 
-- **Chat message**: user = accent bubble, right, rounded-2xl rounded-br-md,
-  max-w-[85%], hover copy; assistant = card surface + RichText + hover copy
-  + **stat chips** (`s · ↑in · ↓out · tok/s · model`); tools = h-7 mono pills
-  (icon + 48-char label + ✓/✗ or spinner dots); diff cards = path + size +
-  applied/failed dot, click opens the file.
-- **Streaming states**: in-flight pill = 3 bounceDot dots; live bubble =
-  card + RichText + accent cursor block; "thinking…" mono line before first
-  delta.
+- **Chat message (ROUND-37 turn model)**: user = accent bubble, right,
+  rounded-2xl rounded-br-md, max-w-[85%], hover copy. Assistant = ONE
+  header-less turn per user message: a borderless **Working section**
+  (muted header `Working · mm:ss` live / `Worked for Ns · N actions` done;
+  one-line rows — ThoughtRow `Thought for Ns` + preview (auto-expand while
+  streaming, auto-collapse when done), ToolLine verb-label + mono args +
+  status glyph (expands to diff/terminal/output detail), ApprovalRow) then
+  the **final answer** (RichText + hover copy + turn-level stat chips
+  `s · ↑in · ↓out · tok/s · model`) BELOW the section — collapsing the work
+  never hides the answer. NO avatars, NO name headers, NO Sparkles (owner
+  R37: "AI slop"). The activityMode preference (Detailed/Compact/Hidden)
+  sets the section's default; its popover lives on the section header.
+- **Streaming states**: live Working section counts up (mm:ss) + pulses;
+  streamed text renders below it as the presumptive final (a tool-call
+  flushes it into the section as narration); "Thinking…" mono line before
+  first delta; stream error freezes the section at "Stopped".
 - **Composer**: pill container (bg token) + attach + input + send (accent
   when non-empty) + footer (`ctx meter · ⌘K hint · model picker`).
 - **Panels**: Explorer (34px rows, depth×14+8 indent, chevron rotate,
