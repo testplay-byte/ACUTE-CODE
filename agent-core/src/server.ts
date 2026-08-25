@@ -50,6 +50,13 @@ import {
 } from "./storage/sessions.js";
 import { getOrchestrationSettings, setOrchestrationSettings } from "./storage/settings.js";
 import { Orchestrator } from "./agents/orchestrator.js";
+import {
+  getApproval,
+  listApprovals,
+  resolvePendingApproval,
+  setApprovalStatus,
+  sweepStaleApprovals,
+} from "./approvals.js";
 import { getUsageSummary } from "./storage/usage.js";
 import {
   deleteModel,
@@ -236,6 +243,12 @@ export function buildServer(options: ServerOptions): FastifyInstance {
   // ROUND-36 (ADR-0022 §3): a dead sidecar leaves `running` sessions — flip
   // them to failed so they're retryable. Idempotent at every boot.
   Orchestrator.sweepStaleRunning(db);
+
+  // ROUND-37 (ADR-0024): crash-orphaned pending approvals fail closed.
+  sweepStaleApprovals(db);
+
+  // ROUND-37 (ADR-0024): crash-orphaned pending approvals fail closed.
+  sweepStaleApprovals(db);
 
   // CORS: loopback-only product, but the webview (tauri.localhost) and the
   // dev vite server (localhost:5173) are cross-origin callers — without
@@ -1250,6 +1263,67 @@ export function buildServer(options: ServerOptions): FastifyInstance {
           return reply.code(502).send(errorBody("PROVIDER_ERROR", result.message));
         }
         return reply.code(200).send({ ok: true, message: result.message });
+      });
+
+      // ── ROUND-37: approvals (ADR-0024 — the human permission flow) ───────
+
+      scope.get("/approvals", async (request) => {
+        const query = request.query as Record<string, string | undefined>;
+        const status = query.status;
+        const projectId = query.projectId;
+        return {
+          approvals: listApprovals(db, {
+            ...(status !== undefined ? { status } : {}),
+            ...(projectId !== undefined ? { projectId } : {}),
+          }),
+        };
+      });
+
+      scope.post("/approvals/:id/decision", async (request, reply) => {
+        const { id } = request.params as Record<string, string>;
+        const approval = getApproval(db, id);
+        if (approval === undefined) {
+          return reply.code(404).send(errorBody("NOT_FOUND", `no approval with id ${id}`));
+        }
+        if (approval.status !== "pending") {
+          return reply.code(409).send(
+            errorBody("CONFLICT", `approval ${id} is already ${approval.status}`, {
+              field: "params.id",
+            }),
+          );
+        }
+        const body: unknown = request.body;
+        if (typeof body !== "object" || body === null || Array.isArray(body)) {
+          return reply
+            .code(400)
+            .send(errorBody("VALIDATION", "body must be a JSON object", { field: "body" }));
+        }
+        const raw = body as Record<string, unknown>;
+        const decision = raw.decision;
+        if (decision !== "approved" && decision !== "denied") {
+          return reply.code(400).send(
+            errorBody("VALIDATION", "decision must be 'approved' or 'denied'", {
+              field: "body.decision",
+            }),
+          );
+        }
+        // HARD RULE: destructive operations are NEVER "always allow" — a
+        // remember=always on a destructive approval silently downgrades to
+        // once (the engine double-checks before writing any rule).
+        const requestedRemember = raw.remember;
+        const remember: "once" | "always" | undefined =
+          requestedRemember === "always" && approval.category !== "destructive"
+            ? "always"
+            : requestedRemember === "once" || requestedRemember === "always"
+              ? "once"
+              : undefined;
+
+        // 1) Persist the decision (BEFORE resolving the waiter — the engine
+        //    reads remember back to decide whether to write the rule).
+        setApprovalStatus(db, id, decision, remember, "owner");
+        // 2) Wake the waiting tool call (no-op when the turn died).
+        resolvePendingApproval(id, decision);
+        return reply.code(200).send({ ok: true, decision, remember: remember ?? "once" });
       });
 
       // ── ROUND-36: orchestration settings ──────────────────────────────

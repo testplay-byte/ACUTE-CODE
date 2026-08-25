@@ -196,6 +196,9 @@ async function prepareTurn(
   chatForTools?: ChatFn,
   /** ROUND-36 (streamed turns): forward live subagent-status events to SSE. */
   emitForTools?: (event: unknown) => void,
+  /** ROUND-37 (approvals): the live turn's abort signal — pending approvals
+   * deny on abort. Absent on the sync path (no interactive approvals there). */
+  signalForTools?: AbortSignal,
 ): Promise<PreparedTurn | { error: Extract<TurnOutcome, { ok: false }> }> {
   const session = getSession(db, sessionId);
   if (session === undefined) {
@@ -295,6 +298,19 @@ async function prepareTurn(
     keyring,
     ...(chatForTools !== undefined ? { chat: chatForTools } : {}),
     ...(emitForTools !== undefined ? { emit: emitForTools } : {}),
+    // ROUND-37 (approvals): interactive = a streamed PARENT turn (emit
+    // channel exists, not a sub-agent child). Sync turns + children fail
+    // fast on non-auto commands instead of waiting.
+    interactiveApprovals:
+      emitForTools !== undefined && session.parentSessionId === null,
+    ...(signalForTools !== undefined ? { signal: signalForTools } : {}),
+    appendEvent: (event: {
+      type: "approval.requested" | "approval.resolved";
+      agentId: string;
+      payload: Record<string, unknown>;
+    }) => {
+      appendSessionEvent(db, session.id, event);
+    },
   };
   // ROUND-36 (ADR-0022): children never get delegate_task — one-level
   // fan-out is the recursion guard.
@@ -484,7 +500,7 @@ export async function runStreamedAgentTurn(
       message: "streaming is not available in this build",
     };
   }
-  const prepared = await prepareTurn(db, keyring, sessionId, modelOverride, chat, emit);
+  const prepared = await prepareTurn(db, keyring, sessionId, modelOverride, chat, emit, signal);
   if ("error" in prepared) return prepared.error;
   const { session, agent, provider, apiKey, model, tools, system } = prepared;
 

@@ -1,46 +1,41 @@
 /**
- * Terminal command execution (round-24, v1: safe commands only — the
- * interactive approval round-trip arrives with the full engine).
- * Runs commands inside the project root with a timeout and output cap.
+ * Terminal command execution — ROUND-37 rewrite: the static safe-prefix gate
+ * is RETIRED. Every command passes through the approvals engine
+ * (agent-core/src/approvals.ts), the single source of truth:
+ *   blocked → never runs · auto (read-only/build/test) → runs ·
+ *   project "always allow" rule → runs · everything else → ASKS the owner
+ *   (highlighted ApprovalCard; Allow once / Always allow / Deny) and WAITS.
+ * Sync turns + sub-agent children are non-interactive: a non-safe command
+ * fails fast with a clear note instead of burning the 120s timeout.
  */
 import { spawn } from "node:child_process";
 import type { ToolResult } from "./index.js";
+import { decideCommand, requestCommandApproval, type ApprovalRequestDeps } from "../approvals.js";
 
 const COMMAND_TIMEOUT = 60_000;
 const MAX_OUTPUT = 64 * 1024;
 
-/** Commands that are safe to auto-execute (read-only / build / test). */
-const SAFE_PREFIXES = [
-  "ls", "cat", "head", "tail", "wc", "find", "grep", "rg ", "which", "where",
-  "node --version", "npm --version", "pnpm --version", "python --version", "python3 --version",
-  "git status", "git diff", "git log", "git branch", "git show", "git tag", "git commit", "git add",
-  "npm test", "npm install", "npm run", "pnpm add", "pnpm install", "yarn ", "pnpm test", "pnpm run", "pnpm lint", "pnpm typecheck", "pnpm verify",
-  "npx tsc", "jest", "vitest ", "cargo check", "cargo test", "cargo build",
-  "echo", "help", "pip ", "pip3 ", "go ", "go test", "go build", "pwd", "date", "env",
-];
-
-/** Commands that are always blocked (destructive, system-level, or network). */
-const BLOCKED = [
-  "rm -rf /", "sed -i", "mv ", "cp ", "chmod ", "pnpm dev", "npm start", "vite", "next dev", "npx playwright", "npx puppeteer", "sudo ", "su ", "shutdown", "reboot", "mkfs", "dd if=",
-  "curl ", "wget ", "ssh ", "scp ", "nc ", "telnet ",
-];
-
 export function isSafeCommand(command: string): boolean {
-  const trimmed = command.trim().toLowerCase();
-  if (BLOCKED.some((b) => trimmed.startsWith(b))) return false;
-  return SAFE_PREFIXES.some((p) => trimmed.startsWith(p));
+  // Kept for back-compat with older tests: mirrors the engine's AUTO tier
+  // (rule hits aren't knowable without a db).
+  return decideCommand(undefined, undefined, command).action === "run";
 }
 
-export function runCommand(root: string, command: string): Promise<ToolResult> {
+export async function runCommand(
+  root: string,
+  command: string,
+  approvalDeps?: ApprovalRequestDeps,
+): Promise<ToolResult> {
   const trimmed = command.trim();
   if (trimmed === "") {
-    return Promise.resolve({ ok: false, output: "run_command needs a non-empty 'command'" });
+    return { ok: false, output: "run_command needs a non-empty 'command'" };
   }
-  if (!isSafeCommand(trimmed)) {
-    return Promise.resolve({
-      ok: false,
-      output: `command not in the auto-approved list (interactive approvals arrive in a future update). Safe prefixes: ${SAFE_PREFIXES.slice(0, 8).join(", ")}…`,
-    });
+
+  if (approvalDeps !== undefined) {
+    const gate = await requestCommandApproval(approvalDeps, trimmed);
+    if (!gate.allowed) {
+      return { ok: false, output: `command not approved: ${gate.note}` };
+    }
   }
 
   return new Promise((resolve) => {
