@@ -1,4 +1,4 @@
-<!-- last-reviewed: 2026-08-24 round-34 -->
+<!-- last-reviewed: 2026-08-25 round-35 -->
 # Round 13 — Governance: planning, documentation, ADRs, workflow, blueprints, public dashboard (2026-08-23)
 
 **Owner direction:** "we have not set up our proper planning… proper

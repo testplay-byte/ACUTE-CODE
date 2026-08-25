@@ -1,4 +1,4 @@
-<!-- last-reviewed: 2026-08-24 round-34 -->
+<!-- last-reviewed: 2026-08-25 round-35 -->
 # ADR-0012: GitHub remote for CI and heavy builds
 
 - **Status:** ACCEPTED (owner provided repo + token, 2026-08-22)

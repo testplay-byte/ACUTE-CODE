@@ -43,8 +43,12 @@ export function ChatFocusLayout({ project }: { project: Project }) {
           boxShadow: styles.softShadow,
         }}
       >
-        <div className="flex-1 min-h-0 flex justify-center lg:justify-start">
-          <div className="w-full max-w-4xl lg:mr-auto min-h-0 flex">
+        {/* ROUND-35 (owner: "too tall… does not go wide enough… should be
+            centered on the screen"): the conversation column is CENTERED at a
+            comfortable reading width (900px) — symmetric side breathing, no
+            left-hugging. */}
+        <div className="flex-1 min-h-0 flex justify-center">
+          <div className="w-full max-w-[900px] min-h-0 flex">
             <AgentChatPanel projectId={project.id} project={project} />
           </div>
         </div>

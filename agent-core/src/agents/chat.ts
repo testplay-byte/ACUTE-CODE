@@ -159,6 +159,10 @@ function summarizeArgs(input: unknown): string {
 /** Normalized streaming event — the runtime/SSE layer never sees SDK types. */
 export type StreamChatEvent =
   | { type: "text-delta"; delta: string }
+  /** ROUND-35 (owner: "implement thinking functionality… shown separately in
+   * a dialed-out tone"): reasoning/thinking tokens from reasoning models,
+   * streamed separately from the visible answer. */
+  | { type: "thinking-delta"; delta: string }
   | { type: "tool-call"; toolName: string; argsSummary: string }
   | { type: "tool-result"; toolName: string; argsSummary: string; ok: boolean; outputSummary?: string }
   | { type: "finish"; usage: { inputTokens: number; outputTokens: number; totalTokens: number } };
@@ -199,6 +203,10 @@ export const streamAiSdkChat: StreamChatFn = async function* (input) {
   for await (const part of result.fullStream) {
     if (part.type === "text-delta") {
       yield { type: "text-delta", delta: part.text };
+    } else if (part.type === "reasoning-delta") {
+      // ROUND-35: thinking tokens stream as a separate channel so the UI can
+      // render them in a muted, collapsible block apart from the answer.
+      yield { type: "thinking-delta", delta: part.text };
     } else if (part.type === "tool-call") {
       const argsSummary = summarizeArgs(part.input);
       yield { type: "tool-call", toolName: part.toolName, argsSummary };

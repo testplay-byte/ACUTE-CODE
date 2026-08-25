@@ -1,4 +1,4 @@
-<!-- last-reviewed: 2026-08-24 round-34 -->
+<!-- last-reviewed: 2026-08-25 round-35 -->
 # Round 06 — Persistent dev backend (models list & test connection in the browser) (2026-08-22)
 
 ## Owner report

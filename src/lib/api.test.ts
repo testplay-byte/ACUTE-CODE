@@ -299,6 +299,28 @@ describe("toProjectChatItems", () => {
     expect(second.seqStart).toBe(4);
   });
 
+  it("ROUND-35: parses thinking into ai items and merges stats carriers into the previous message", () => {
+    const items = toProjectChatItems([
+      ev(1, "message.user", { role: "user", content: "go" }, "agt_scribe"),
+      ev(2, "message.assistant", { role: "assistant", content: "Creating now.", thinking: "plan first" }, "agt_scribe"),
+      toolUse(3, "write_file", "path: a.ts, content: 5 chars"),
+      // stats carrier: empty content + usage → merges into item at seq 2
+      ev(4, "message.assistant", { role: "assistant", content: "", usage: { inputTokens: 7, outputTokens: 3 }, ms: 120, model: "m" }, "agt_scribe"),
+    ]);
+
+    // Chronological: user → ai(segment) → activity; the carrier (seq 4)
+    // merged into the ai item and vanished.
+    expect(items.map((i) => i.kind)).toEqual(["user", "ai", "activity"]);
+    const ai = items[1];
+    if (ai.kind !== "ai") throw new Error("expected ai");
+    // The carrier vanished; its stats landed on the real message; thinking parsed.
+    expect(ai.content).toBe("Creating now.");
+    expect(ai.thinking).toBe("plan first");
+    expect(ai.usage).toEqual({ inputTokens: 7, outputTokens: 3 });
+    expect(ai.ms).toBe(120);
+    expect(ai.model).toBe("m");
+  });
+
   it("splits tool runs of DIFFERENT turns into separate activity blocks", () => {
     const items = toProjectChatItems([
       toolUse(1, "list_dir", "path: ."),

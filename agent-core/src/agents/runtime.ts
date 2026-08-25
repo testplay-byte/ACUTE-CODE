@@ -94,6 +94,10 @@ function asChatMessage(event: { type: string; payload: unknown }): ChatTurnMessa
   if (typeof event.payload !== "object" || event.payload === null) return undefined;
   const payload = event.payload as Record<string, unknown>;
   if (typeof payload.content !== "string") return undefined;
+  // ROUND-35 (review fix #3): thinking-only / stats-carrier segments have
+  // empty content — sending {role:"assistant", content:""} makes
+  // Anthropic-protocol endpoints 400. Skip them for history.
+  if (event.type === "message.assistant" && payload.content === "") return undefined;
   return { role: event.type === "message.user" ? "user" : "assistant", content: payload.content };
 }
 
@@ -509,10 +513,54 @@ export async function runStreamedAgentTurn(
     }
 
     let iterText = "";
+    let iterThinking = "";
+    let iterAllText = ""; // never reset — completion-signal detection across segments
     let iterInputTokens = 0;
     let iterOutputTokens = 0;
     let iterToolCalls = 0;
     totalRequests++;
+
+    /** ROUND-35 (review fix #5): reasoning can run 10s of KB — cap the
+     * persisted thinking at 4000 chars, head+tail like tool outputs. */
+    const capThinking = (text: string): string => {
+      if (text.length <= 4000) return text;
+      const omitted = text.length - 4000;
+      return `${text.slice(0, 2000)}\n…[thinking truncated ${omitted} chars]…\n${text.slice(-2000)}`;
+    };
+
+    let statsCarrierNeeded = false;
+
+    /** ROUND-35 (owner: tool calls "should show within the chat at the point
+     * of the tools being called… afterwards it should continue with the
+     * message"): when a tool call arrives mid-message, flush the text-so-far
+     * as an interim assistant SEGMENT so the event log (and the UI) renders
+     * text → tool work → more text. */
+    const flushSegment = (withStats: boolean): boolean => {
+      if (iterText.trim() === "" && iterThinking.trim() === "") return false;
+      const iterMs = Date.now() - startedAt;
+      const ev = appendSessionEvent(db, session.id, {
+        type: "message.assistant",
+        agentId: agent.id,
+        payload: {
+          role: "assistant",
+          content: iterText,
+          ...(iterThinking.trim() !== "" ? { thinking: capThinking(iterThinking) } : {}),
+          ...(withStats
+            ? {
+                usage: { inputTokens: iterInputTokens, outputTokens: iterOutputTokens },
+                ms: iterMs,
+                model,
+              }
+            : {}),
+        },
+      });
+      if (iterText.trim() !== "") {
+        lastAssistantEvent = { seq: ev.seq, ts: ev.ts, content: iterText };
+      }
+      iterText = "";
+      iterThinking = "";
+      return true;
+    };
 
     try {
       for await (const event of chatStream({
@@ -533,8 +581,17 @@ export async function runStreamedAgentTurn(
         }
         if (event.type === "text-delta") {
           iterText += event.delta;
+          iterAllText += event.delta;
+        } else if (event.type === "thinking-delta") {
+          iterThinking += event.delta;
         } else if (event.type === "tool-call") {
           iterToolCalls += 1;
+          // ROUND-35: flush the message-so-far BEFORE the tool runs, so the
+          // tool work lands between message segments (owner directive).
+          if (iterText.trim() !== "" || iterThinking.trim() !== "") {
+            flushSegment(false);
+            statsCarrierNeeded = true; // stats attach at iteration end instead
+          }
         } else if (event.type === "tool-result") {
           // Persist each tool call the moment it completes (live ordering).
           // ROUND-34 (review fix #3): scrub the output summary BEFORE it is
@@ -575,24 +632,31 @@ export async function runStreamedAgentTurn(
 
     totalInputTokens += iterInputTokens;
     totalOutputTokens += iterOutputTokens;
-    lastText = iterText;
+    lastText = iterAllText;
 
-    // Append this iteration's assistant message (if it produced text).
-    if (iterText.trim() !== "") {
+    // ROUND-35: flush the iteration's FINAL segment (with stats). Interim
+    // segments were already flushed at each tool call. REVIEW FIX #1: when
+    // the iteration's text all preceded the tool calls (no trailing text),
+    // the final flush is a NO-OP — append a stats-carrier event (empty
+    // content + usage) so the reply badges + ctx meter survive. History
+    // skips it (asChatMessage) and the UI merges its stats into the last
+    // message (toProjectChatItems).
+    const finalFlushed = flushSegment(true);
+    if (statsCarrierNeeded && !finalFlushed) {
       const iterMs = Date.now() - startedAt;
-      const ev = appendSessionEvent(db, session.id, {
+      appendSessionEvent(db, session.id, {
         type: "message.assistant",
         agentId: agent.id,
         payload: {
           role: "assistant",
-          content: iterText,
+          content: "",
           usage: { inputTokens: iterInputTokens, outputTokens: iterOutputTokens },
           ms: iterMs,
           model,
         },
       });
-      lastAssistantEvent = { seq: ev.seq, ts: ev.ts, content: iterText };
     }
+    statsCarrierNeeded = false;
 
     // ROUND-33 FIX (owner report: "hello, how are you" kept planning +
     // running tools in an infinite loop): an iteration that produced a text
@@ -606,7 +670,7 @@ export async function runStreamedAgentTurn(
     // Inverted continueIfUnfinished (6-e fix — phrase matching was brittle):
     // for tool-using iterations, continue UNLESS BOTH (a) explicit completion
     // signal AND (b) all todos completed.
-    const hasCompletionSignal = COMPLETION_SIGNAL.test(iterText);
+    const hasCompletionSignal = COMPLETION_SIGNAL.test(iterAllText);
     const todosDone = latestTodosAllDone(db, session.id);
     if (hasCompletionSignal && todosDone) {
       break;

@@ -1,4 +1,4 @@
-<!-- last-reviewed: 2026-08-24 round-34 -->
+<!-- last-reviewed: 2026-08-25 round-35 -->
 # AGENT MEMORY — lessons learned, rules going forward
 
 **Owner directive (2026-08-23):** "learn from the mistakes you made, document
@@ -487,3 +487,16 @@ Format per entry: `N. TITLE (date, source)` → mistake → root cause → rule.
     values + sk-/pat- patterns) before BOTH the SQLite write and the SSE
     emission — the R34 review caught the sync path skipping it entirely.
     RULE: when adding any output-persisting feature, grep for both sinks.
+
+56. **Interim assistant SEGMENTS are the unit of interleaving.** When tool
+    calls land mid-message, flush the text-so-far as an assistant event so
+    the log reads text → tool → text (owner R35). Stats attach ONLY to the
+    final segment; a tool-terminated turn appends an empty-content stats
+    CARRIER that history-skips (asChatMessage) and the item-folding merges
+    into the last real message — otherwise reply badges silently vanish.
+
+57. **Sandbox wipes can happen MID-round.** R35 started with /home/z/PROJECT
+    gone (ntfy fired per the standing rule). The GitHub backup restored both
+    repos at the exact round-34 tips in ~3 minutes (credentials from the
+    conversation history, pnpm shim, .env.development, pnpm install, tests
+    green). RULE: push after EVERY round, never leave work unpushed.

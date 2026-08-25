@@ -108,6 +108,10 @@
     {
       "date": "2026-08-24",
       "label": "Round 34 — multi-step tool feedback + settings redesign"
+    },
+    {
+      "date": "2026-08-25",
+      "label": "Round 35 — thinking + interleaved tool calls"
     }
   ],
   "quality": {
@@ -115,7 +119,7 @@
     "suites": [
       {
         "name": "agent-core",
-        "tests": 140
+        "tests": 141
       },
       {
         "name": "shared",
@@ -144,8 +148,8 @@
   ],
   "plan": {
     "current": {
-      "title": "Round 34 DELIVERED — multi-step reliability (Cline parity) + settings redesign",
-      "detail": "Tool results now feed back into the conversation (assembleHistory + persisted outputSummary) — live-proven with a real 4-step project build (math.js → test.js → verify → BUILD COMPLETE). Settings: sidebar transforms into the settings nav; Appearance page (mode + themes + density + sidebar tint with live preview); Models & Providers master-detail per the owner's screenshot (provider list + detail pane + model CRUD + test connection + PATCH/DELETE backend + 4 built-in seeds). Sub-agent plan review (17 findings) + code review (8 findings) — all fixed. 217 tests."
+      "title": "Round 35 DELIVERED — thinking + interleaved tool calls + chat centering + settings polish",
+      "detail": "Thinking streams + persists per segment (muted collapsible Thought-process blocks, 4k cap); tool calls interleave MID-MESSAGE (segments flush around tool boundaries; stats-carrier keeps badges alive; StrictMode-safe live segment UI); chat column centered at 900px; settings back button below the heading; Tool Calls preferences (Detailed/Compact/Hidden) in Appearance. Design Prompt 4 delivered. Sub-agent reviewed (8 findings fixed). 219 tests + live interleaved-build proof."
     },
     "upcoming": [
       {
@@ -180,5 +184,5 @@
       "Quality over speed — every round verified before push"
     ]
   },
-  "round": 34
+  "round": 35
 }

@@ -44,17 +44,7 @@ import { withAlpha } from "../dashboard/helpers";
  * and a "Working…" header with a pulsing avatar.
  */
 
-export type ActivityMode = "detailed" | "compact" | "hidden";
-const MODE_KEY = "acute-code.activityMode";
-
-function readMode(): ActivityMode {
-  try {
-    const v = localStorage.getItem(MODE_KEY);
-    return v === "compact" || v === "hidden" ? v : "detailed";
-  } catch {
-    return "detailed";
-  }
-}
+import { useThemeStore, type ActivityMode } from "../../lib/theme-store";
 
 const TOOL_ICONS: Record<string, LucideIcon> = {
   list_dir: Search,
@@ -500,16 +490,10 @@ export function ActivityBlock({
   live?: boolean;
 }) {
   const styles = useThemeStyles();
-  const [mode, setMode] = useState<ActivityMode>(readMode);
+  // ROUND-35: the display mode lives in the theme store — configurable from
+  // Settings → Appearance → Tool Calls (replaces the localStorage-only knob).
+  const mode = useThemeStore((s) => s.activityMode);
   const [expanded, setExpanded] = useState(true);
-
-  useEffect(() => {
-    try {
-      localStorage.setItem(MODE_KEY, mode);
-    } catch {
-      /* private mode */
-    }
-  }, [mode]);
 
   const totalActions = tools.length;
   const elapsed = ts && endTs ? elapsedSeconds(ts, endTs) : 0;
@@ -554,7 +538,14 @@ export function ActivityBlock({
         </span>
       )}
       <span className="flex-1" />
-      {!live && <ModePopover mode={mode} onMode={setMode} />}
+      {!live && (
+        <ModePopover
+          mode={mode}
+          onMode={(m) => {
+            useThemeStore.getState().setActivityMode(m);
+          }}
+        />
+      )}
       <motion.span animate={{ rotate: expanded ? 0 : -90 }} transition={{ duration: 0.15 }} className="shrink-0">
         <ChevronDown size={13} style={{ color: styles.textTertiary }} />
       </motion.span>

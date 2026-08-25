@@ -1,7 +1,7 @@
-<!-- last-reviewed: 2026-08-24 round-34 -->
+<!-- last-reviewed: 2026-08-25 round-35 -->
 # ACUTE-CODE — Agent Handoff Document
 
-**Last updated:** 2026-08-24 (round-34 DELIVERED — Cline-parity tool feedback: tool results persisted + folded into conversation history, live-proven with a real 4-step project build; Settings redesigned per the owner's demos: sidebar transformation + Appearance page with density/tint + Models & Providers master-detail with PATCH/DELETE backend. Sub-agent reviewed (plan: 17 findings, code: 8 — all fixed). **217 tests green**.) · **Maintained by:** the orchestrator agent · **Audience:** any AI agent (or human) taking over development
+**Last updated:** 2026-08-25 (round-35 DELIVERED — thinking functionality (muted collapsible Thought-process blocks, persisted per segment); tool calls interleave MID-MESSAGE via segment flushing (stats-carrier keeps badges alive); chat column centered 900px; settings back button below the heading + Tool Calls preferences; Design Prompt 4 delivered. Sub-agent reviewed (8 findings fixed). **219 tests green** + live interleaved-build proof. NOTE: sandbox wiped mid-round — restored from GitHub, see AGENT-MEMORY #57) · **Maintained by:** the orchestrator agent · **Audience:** any AI agent (or human) taking over development
 
 You are picking up **ACUTE-CODE**, a local-first, closed-source multi-agent engineering workbench for Windows. This file gives you everything needed to continue: state, rules, environment, gotchas, and next steps. It contains **no secrets** — secrets live only in Windows Credential Manager (§7).
 

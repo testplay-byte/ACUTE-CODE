@@ -1,4 +1,4 @@
-<!-- last-reviewed: 2026-08-24 round-34 -->
+<!-- last-reviewed: 2026-08-25 round-35 -->
 # Round 15 — Model Management system + dashboard v2 + folder dialog fix (2026-08-23)
 
 **Owner direction:** Full provider/model management (add custom providers

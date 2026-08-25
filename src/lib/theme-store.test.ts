@@ -9,6 +9,7 @@ function reset() {
     mode: "dark",
     density: "comfortable",
     sidebarTint: "subtle",
+    activityMode: "detailed",
   });
 }
 
@@ -43,6 +44,7 @@ describe("theme store", () => {
       mode: "light",
       density: "comfortable",
       sidebarTint: "subtle",
+      activityMode: "detailed",
     });
   });
 

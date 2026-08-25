@@ -796,7 +796,7 @@ token-in-URL auth-doc URL noise). The CI step is `continue-on-error: true`
 **J2 work delivered (commit 65246ca):**
 - Created `scripts/docs/stamp-all.mjs` — the bulk idempotent stamper that
   DOC-STANDARDS §8 references but never existed. Reads round from status.json.
-- Backfilled the `<!-- last-reviewed: 2026-08-24 round-34 -->` stamp on 103
+- Backfilled the `<!-- last-reviewed: 2026-08-25 round-35 -->` stamp on 103
   docs (105 failures → 0).
 - Hardened `scripts/docs/check-stale.mjs`:
   1. **indented-fence support** (`/^ {0,3}```/m`) — the actual root bug;
@@ -1012,3 +1012,23 @@ Stage Summary:
 - The owner's core complaint (multi-step reliability) is fixed at the root and live-proven twice with a real project build.
 - The settings experience now matches the owner's chosen designs (transformation sidebar + appearance + master-detail providers).
 - The sub-agent review process the owner mandated caught 25 real issues across plan + code — documented in AGENT-MEMORY #54/#55.
+
+---
+Task ID: R35
+Agent: orchestrator (Z.ai Code + 1 opus review sub-agent)
+Task: Owner: the settings design prompt was missing; back button below the heading; chat too tall/not wide/center it; thinking functionality (dialed-out, collapsible); tool-calls preferences in settings; tool calls must interleave mid-message. Sandbox was WIPED at round start — restored from GitHub (AGENT-MEMORY #57; ntfy wipe alert sent per the standing rule).
+
+Work Log:
+- Restored both repos from GitHub at the round-34 tips; pnpm shim + deps + env; 217 tests green before starting.
+- Delivered docs/design/AI-DESIGN-PROMPT-4.md (every settings page in depth, incl. the new Tool Calls card + the owner-specified back-button placement).
+- THINKING: reasoning-delta → thinking-delta events; persisted per assistant segment (4000-char head+tail cap); ThinkingBlock (muted italic, brain icon, collapsed by default, preview line); not fed back to the model.
+- INTERLEAVING: flushSegment emits interim assistant segments at tool-call boundaries (event log: text → tool → text); stats on the final segment only; stats-CARRIER (empty content + usage) for tool-terminated turns, merged into the last real message by toProjectChatItems; liveSegments UI renders the stream interleaved (StrictMode-safe; orphan rows restored; growing-text auto-scroll).
+- Chat column centered at 900px.
+- Settings: back-to-dashboard pill below the header/above content on every page; Tool Calls preferences (Detailed/Compact/Hidden cards with mocks) wired to theme-store activityMode (the ActivityBlock popover writes the same store).
+- Sub-agent code review: 8 findings — HIGH stats regression (carrier), HIGH live state mutation (StrictMode double-append), MEDIUM empty-content history 400s / auto-scroll / thinking cap, LOW orphans — ALL fixed with tests.
+- Live battery (after an upstream 429 + a sandbox process reap): the interleaved task ran with thinking on every segment, files on disk, "BUILD COMPLETE" exact, 0 console errors; VLM confirms thinking blocks + interleaved activity + centered column + settings pages.
+- 219 tests, lint/typecheck/build green; pushed; round-35.zip (7 screenshots) to DASHBOARD; ntfy completion sent.
+
+Stage Summary:
+- The owner's R35 directive is fully delivered; the sub-agent review process caught 8 real issues (incl. a StrictMode double-append and a stats regression) before push.
+- Mid-round sandbox wipe handled per the documented procedure with zero work lost (everything was pushed).

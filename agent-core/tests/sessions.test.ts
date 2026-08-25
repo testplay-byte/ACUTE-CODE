@@ -357,6 +357,47 @@ describe("ROUND-34: tool results feed back into the conversation (multi-step fix
   });
 });
 
+describe("ROUND-35: thinking + interleaved segments", () => {
+  it("persists thinking with the assistant segment and flushes text AROUND tool calls", async () => {
+    const agent = await createAgent();
+    const session = await createSession(agent.id);
+    const streamKeyring = new ProviderKeyring({ ACUTE_PROVIDER_OPENROUTER: KEY });
+
+    const chatStream = async function* (): AsyncGenerator<import("../src/agents/chat").StreamChatEvent> {
+      yield { type: "thinking-delta", delta: "I should create the file first." };
+      yield { type: "text-delta", delta: "Creating the file now." };
+      yield { type: "tool-call", toolName: "write_file", argsSummary: "path: a.ts" };
+      yield { type: "tool-result", toolName: "write_file", argsSummary: "path: a.ts", ok: true, outputSummary: "wrote 10 chars" };
+      yield { type: "text-delta", delta: " Done." };
+      yield { type: "finish", usage: { inputTokens: 5, outputTokens: 5, totalTokens: 10 } };
+    };
+
+    const outcome = await runStreamedAgentTurn(
+      { db, keyring: streamKeyring, chat: aiSdkChat, chatStream },
+      session.id,
+      "create a.ts then say done",
+      () => undefined,
+    );
+    expect(outcome.ok).toBe(true);
+
+    const events = listSessionEvents(db, session.id);
+    expect(events.map((e) => e.type)).toEqual([
+      "message.user",
+      "message.assistant", // interim segment: "Creating the file now." + thinking
+      "tool.use",
+      "message.assistant", // final segment: " Done." with stats
+    ]);
+    const interim = events[1].payload as Record<string, unknown>;
+    expect(interim.content).toBe("Creating the file now.");
+    expect(interim.thinking).toBe("I should create the file first.");
+    expect(interim.usage).toBeUndefined();
+    const final = events[3].payload as Record<string, unknown>;
+    expect(final.content).toBe(" Done.");
+    expect(final.usage).toEqual({ inputTokens: 5, outputTokens: 5 });
+    expect(final.model).toBe("test/model-1");
+  });
+});
+
 describe("ROUND-34: PATCH/DELETE /api/v1/providers/:id", () => {
   it("custom providers can be renamed, re-pointed, disabled, and deleted; built-ins refuse", async () => {
     const created = await authInject({
@@ -700,8 +741,13 @@ describe("streamed turn runtime (round-16)", () => {
     ]);
 
     const events = listSessionEvents(db, session.id);
+    // ROUND-35: text segments flush AROUND tool calls — the mock emits
+    // text → tool-call/tool-result → finish (no trailing text), so the order
+    // is user → assistant(segment) → tool.use ×2 → assistant(STATS CARRIER:
+    // empty content + usage/ms/model — review fix #1 keeps the badges alive).
     expect(events.map((e) => e.type)).toEqual([
       "message.user",
+      "message.assistant",
       "tool.use",
       "tool.use",
       "message.assistant",
@@ -712,12 +758,17 @@ describe("streamed turn runtime (round-16)", () => {
     expect(tools.map((x) => x.toolName)).toEqual(["list_dir", "write_file"]);
     expect(tools.every((x) => x.ok === true)).toBe(true);
 
-    const assistant = events.find((e) => e.type === "message.assistant")
-      ?.payload as Record<string, unknown>;
-    expect(assistant.content).toBe("Let me look. Done.");
-    expect(assistant.usage).toEqual({ inputTokens: 100, outputTokens: 20 });
-    expect(typeof assistant.ms).toBe("number");
-    expect(assistant.model).toBe("test/model-1");
+    // The FIRST assistant event is the interim text segment (no stats);
+    // the LAST is the stats carrier (empty content + usage/ms/model).
+    const assistants = events.filter((e) => e.type === "message.assistant");
+    const interim = assistants[0].payload as Record<string, unknown>;
+    expect(interim.content).toBe("Let me look. Done.");
+    expect(interim.usage).toBeUndefined();
+    const carrier = assistants[assistants.length - 1].payload as Record<string, unknown>;
+    expect(carrier.content).toBe("");
+    expect(carrier.usage).toEqual({ inputTokens: 100, outputTokens: 20 });
+    expect(typeof carrier.ms).toBe("number");
+    expect(carrier.model).toBe("test/model-1");
 
     const usage = getUsageSummary(db, { days: 1 });
     expect(usage.totals.inputTokens).toBe(100);

@@ -598,6 +598,9 @@ export type ProjectChatItem =
       content: string;
       agentId: string | null;
       ts: string;
+      /** ROUND-35: the model's thinking/reasoning for this segment (shown
+       * separately in a muted, collapsible block). */
+      thinking?: string;
       /** Round-16 per-reply stats (from the assistant event payload). */
       usage?: { inputTokens: number; outputTokens: number };
       ms?: number;
@@ -703,12 +706,16 @@ export function toProjectChatItems(events: SessionEvent[]): ProjectChatItem[] {
               : undefined;
           const msRaw = payload.ms;
           const modelRaw = payload.model;
+          const thinkingRaw = payload.thinking;
           items.push({
             kind: "ai",
             seq: event.seq,
             content: payload.content,
             agentId: event.agentId,
             ts: event.ts,
+            ...(typeof thinkingRaw === "string" && thinkingRaw.length > 0
+              ? { thinking: thinkingRaw }
+              : {}),
             ...(usage ? { usage } : {}),
             ...(typeof msRaw === "number" ? { ms: msRaw } : {}),
             ...(typeof modelRaw === "string" ? { model: modelRaw } : {}),
@@ -720,7 +727,32 @@ export function toProjectChatItems(events: SessionEvent[]): ProjectChatItem[] {
     index += 1;
   }
 
-  return items;
+  // ROUND-35 (review fix #1): stats-carrier events (empty content + usage —
+  // appended when a turn's text all preceded its tool calls) merge their
+  // stats into the last real ai item (skipping activity blocks) and vanish:
+  // badges render on the message, no empty bubble.
+  const merged: ProjectChatItem[] = [];
+  for (const item of items) {
+    if (
+      item.kind === "ai" &&
+      item.content === "" &&
+      (item.usage !== undefined || item.ms !== undefined || item.model !== undefined)
+    ) {
+      for (let i = merged.length - 1; i >= 0; i--) {
+        const back = merged[i];
+        if (back.kind === "ai") {
+          merged[i] = { ...back, usage: item.usage, ms: item.ms, model: item.model };
+          break;
+        }
+      }
+      continue;
+    }
+    if (item.kind === "ai" && item.content === "" && item.thinking === undefined) {
+      continue; // fully-empty carrier with nothing to merge — drop
+    }
+    merged.push(item);
+  }
+  return merged;
 }
 
 // ---------------------------------------------------------------------------
@@ -762,6 +794,8 @@ export async function pickFolderViaBackend(): Promise<{
 /** Events arriving over POST /sessions/:id/messages/stream (SSE). */
 export type StreamTurnEvent =
   | { type: "text-delta"; delta: string }
+  /** ROUND-35: thinking/reasoning tokens — rendered separately, muted + collapsible. */
+  | { type: "thinking-delta"; delta: string }
   | { type: "tool-call"; toolName: string; argsSummary: string }
   | { type: "tool-result"; toolName: string; argsSummary: string; ok: boolean; outputSummary?: string }
   /** Round-32: the outer loop starts a new iteration — the live activity

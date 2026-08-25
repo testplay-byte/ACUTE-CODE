@@ -1,7 +1,7 @@
 import { useMemo, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { useSearchParams } from "react-router";
-import { Bot, Moon, Palette, Server, SlidersHorizontal, Sun } from "lucide-react";
+import { Link, useSearchParams } from "react-router";
+import { ArrowLeft, Bot, Moon, Palette, Server, SlidersHorizontal, Sun } from "lucide-react";
 import { useConfigStore } from "../lib/config-store";
 import { useThemeStore } from "../lib/theme-store";
 import { THEMES, getContrastText } from "../lib/themes";
@@ -61,6 +61,19 @@ export function SettingsPage() {
       {/* ROUND-34: wider content (the master-detail provider screen needs the
           room); the appearance page constrains itself internally. */}
       <div className="min-h-0 flex-1 overflow-y-auto px-5 md:px-8 py-5 mx-auto w-full max-w-5xl">
+        {/* ROUND-35 (owner: "above the appearance but below the top heading"):
+          the back-to-dashboard affordance lives HERE in the content area. */}
+        <div className="mb-5">
+          <Link
+            to="/"
+            className="inline-flex items-center gap-1.5 h-9 px-3.5 rounded-full border-[1.5px] text-[12px] font-bold transition-colors"
+            style={{ borderColor: styles.border, color: styles.textSecondary, background: styles.card }}
+            onMouseEnter={(e) => (e.currentTarget.style.background = styles.subtleHover)}
+            onMouseLeave={(e) => (e.currentTarget.style.background = styles.card)}
+          >
+            <ArrowLeft size={13} /> Back to dashboard
+          </Link>
+        </div>
         {tab === "appearance" && <AppearanceTab />}
         {tab === "agents" && <AgentsScreen embedded />}
         {tab === "api" && <ModelsProvidersTab />}
@@ -83,6 +96,9 @@ function AppearanceTab() {
   const setDensity = useThemeStore((s) => s.setDensity);
   const sidebarTint = useThemeStore((s) => s.sidebarTint);
   const setSidebarTint = useThemeStore((s) => s.setSidebarTint);
+  // ROUND-35 (owner: tool calls preferences in settings).
+  const activityMode = useThemeStore((s) => s.activityMode);
+  const setActivityMode = useThemeStore((s) => s.setActivityMode);
 
   return (
     <div className="mx-auto flex max-w-3xl flex-col gap-5">
@@ -217,6 +233,75 @@ function AppearanceTab() {
         <p className="mt-2 text-[11px]" style={{ color: styles.textTertiary }}>
           Comfortable adds breathing room to the chat; compact fits more on screen.
         </p>
+      </section>
+
+      {/* ── Tool Calls (ROUND-35: the owner's tool-calls preferences) ──── */}
+      <section>
+        <SectionTitle>Tool Calls</SectionTitle>
+        <p className="mt-0 mb-3 text-[12px]" style={{ color: styles.textSecondary }}>
+          How the agent's tool activity appears in the chat.
+        </p>
+        <div className="grid grid-cols-1 gap-2 sm:grid-cols-3">
+          {(
+            [
+              { id: "detailed", label: "Detailed", desc: "Full timeline with diffs and command output" },
+              { id: "compact", label: "Compact", desc: "One-line summary per turn" },
+              { id: "hidden", label: "Hidden", desc: "Never show tool activity" },
+            ] as const
+          ).map(({ id, label, desc }) => {
+            const active = activityMode === id;
+            return (
+              <button
+                key={id}
+                onClick={() => setActivityMode(id)}
+                aria-pressed={active}
+                className="relative rounded-[14px] border-[1.5px] p-3 text-left transition-all hover:-translate-y-px"
+                style={{
+                  background: active ? withAlpha(styles.accent, 0.06) : styles.card,
+                  borderColor: active ? styles.accent : styles.border,
+                  boxShadow: active ? `0 0 0 3px ${withAlpha(styles.accent, 0.15)}` : "none",
+                }}
+              >
+                <div className="flex items-center gap-2">
+                  <span
+                    className="w-4 h-4 rounded-full border-[1.5px] grid place-items-center shrink-0"
+                    style={{
+                      borderColor: active ? styles.accent : styles.border,
+                      background: active ? styles.accent : "transparent",
+                    }}
+                    aria-hidden
+                  >
+                    {active && <span className="w-1.5 h-1.5 rounded-full" style={{ background: styles.accentText }} />}
+                  </span>
+                  <span className="text-[13px] font-bold" style={{ color: styles.text }}>
+                    {label}
+                  </span>
+                </div>
+                <p className="mt-1.5 text-[11px] leading-snug" style={{ color: styles.textSecondary }}>
+                  {desc}
+                </p>
+                {/* Tiny inline mock of the mode */}
+                <div className="mt-2.5 rounded-[8px] border p-1.5 flex flex-col gap-1" style={{ borderColor: styles.borderSubtle }}>
+                  {id === "detailed" && (
+                    <>
+                      <div className="h-[5px] w-3/4 rounded-full" style={{ background: withAlpha(styles.accent, 0.5) }} />
+                      <div className="h-[5px] w-full rounded-full" style={{ background: withAlpha("#22c55e", 0.5) }} />
+                      <div className="h-[5px] w-2/3 rounded-full" style={{ background: withAlpha(styles.text, 0.2) }} />
+                    </>
+                  )}
+                  {id === "compact" && (
+                    <div className="h-[5px] w-full rounded-full" style={{ background: withAlpha(styles.accent, 0.5) }} />
+                  )}
+                  {id === "hidden" && (
+                    <div className="text-[9px] font-mono text-center py-0.5" style={{ color: styles.textTertiary }}>
+                      — none —
+                    </div>
+                  )}
+                </div>
+              </button>
+            );
+          })}
+        </div>
       </section>
 
       {/* ── Sidebar tint (owner design frame 2) + live mini rail preview ── */}

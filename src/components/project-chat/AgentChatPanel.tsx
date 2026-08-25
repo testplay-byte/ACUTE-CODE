@@ -10,6 +10,7 @@ import {
 import { AnimatePresence, motion, type Variants } from "framer-motion";
 import {
   ArrowUp,
+  Brain,
   Check,
   ChevronDown,
   Copy,
@@ -363,18 +364,70 @@ function RichTextInline({ content }: { content: string }) {
   return <>{elements}</>;
 }
 
+/**
+ * ThinkingBlock (ROUND-35 — owner: "implement thinking functionality… shown
+ * separately in a dialed-out tone and I would be able to collapse the
+ * thinking area"): the model's reasoning in a muted, collapsible block above
+ * the answer. Collapsed by default; live variant streams in.
+ */
+function ThinkingBlock({ thinking, live = false }: { thinking: string; live?: boolean }) {
+  const styles = useThemeStyles();
+  const [open, setOpen] = useState(false);
+  const trimmed = thinking.trim();
+  if (trimmed === "") return null;
+  const preview = trimmed.length > 60 ? `${trimmed.slice(0, 60)}…` : trimmed;
+  return (
+    <div className="mb-1.5">
+      <button
+        onClick={() => setOpen((v) => !v)}
+        aria-expanded={open}
+        aria-label={`${open ? "Collapse" : "Expand"} thinking`}
+        className="flex items-center gap-1.5 h-6 px-1 rounded-md transition-colors"
+        style={{ color: styles.textTertiary }}
+        onMouseEnter={(e) => (e.currentTarget.style.background = styles.subtleHover)}
+        onMouseLeave={(e) => (e.currentTarget.style.background = "transparent")}
+      >
+        <Brain size={11} />
+        <span className="text-[10.5px] font-bold italic">
+          {live ? "Thinking" : "Thought process"}
+        </span>
+        {live && <span className="ac-ellipsis" aria-hidden />}
+        <ChevronDown
+          size={10}
+          style={{ transform: open ? "rotate(0deg)" : "rotate(-90deg)", transition: "transform 0.15s" }}
+        />
+        {!open && !live && (
+          <span className="text-[10px] font-mono italic truncate max-w-[280px]" style={{ color: styles.textTertiary }}>
+            {preview}
+          </span>
+        )}
+      </button>
+      {open && (
+        <div
+          className="mt-1 rounded-[10px] border-l-2 pl-3 py-1.5 font-mono text-[11px] leading-[1.6] whitespace-pre-wrap break-words max-h-64 overflow-y-auto auto-scroll"
+          style={{ borderColor: withAlpha(styles.accent, 0.25), color: styles.textTertiary }}
+        >
+          {trimmed}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function AiMessage({
   content,
   usage,
   ms,
   model,
   agentName,
+  thinking,
 }: {
   content: string;
   usage?: { inputTokens: number; outputTokens: number };
   ms?: number;
   model?: string;
   agentName?: string;
+  thinking?: string;
 }) {
   const styles = useThemeStyles();
   return (
@@ -397,9 +450,12 @@ function AiMessage({
             {agentName ?? "Acute"}
           </span>
         </div>
-        <div className="text-[13px] leading-[1.65]" style={{ color: styles.text }}>
-          <RichText content={content} />
-        </div>
+        {thinking ? <ThinkingBlock thinking={thinking} /> : null}
+        {content.trim() !== "" ? (
+          <div className="text-[13px] leading-[1.65]" style={{ color: styles.text }}>
+            <RichText content={content} />
+          </div>
+        ) : null}
         <div className="flex items-center gap-1">
           <div className="opacity-0 group-hover:opacity-100 transition-opacity pt-0.5">
             <CopyButton text={content} />
@@ -434,6 +490,7 @@ const MessageRenderer = forwardRef<
               ms={item.ms}
               model={item.model}
               agentName={agentName}
+              thinking={item.thinking}
             />
           </div>
         );
@@ -684,10 +741,14 @@ export function AgentChatPanel({
   const [lastSent, setLastSent] = useState<string | null>(null);
   const [sendError, setSendError] = useState<string | null>(null);
 
-  // ── Round-16 live streaming state (round-32: tools now grouped into ROUNDS
-  //     for the live ActivityBlock — a meta.continuation event opens a new one) ─
-  const [liveText, setLiveText] = useState("");
-  const [liveRounds, setLiveRounds] = useState<ToolUseEntry[][]>([]);
+  // ── ROUND-35 live streaming state: INTERLEAVED SEGMENTS — text segments
+  //     and tool groups alternate exactly where they happen, so tool calls
+  //     show INSIDE the message flow (owner: "in between the message it
+  //     should show me the tool calls… afterwards it should continue").
+  type LiveSegment =
+    | { kind: "text"; content: string; thinking: string }
+    | { kind: "tools"; tools: ToolUseEntry[] };
+  const [liveSegments, setLiveSegments] = useState<LiveSegment[]>([]);
   const [streamBusy, setStreamBusy] = useState(false);
   const queryClient = useQueryClient();
   const liveMode = useConfigStore((s) => !s.demoData);
@@ -716,10 +777,16 @@ export function AgentChatPanel({
 
   useScrollFade(scrollRef);
 
+  // REVIEW FIX #4: scroll must follow the GROWING text too, not just new
+  // segments — a long streaming message would otherwise scroll out of view.
+  const liveTailText = (() => {
+    const last = liveSegments[liveSegments.length - 1];
+    return last !== undefined && last.kind === "text" ? last.content : "";
+  })();
   useEffect(() => {
     const el = scrollRef.current;
     if (el) el.scrollTo({ top: el.scrollHeight, behavior: "smooth" });
-  }, [items.length, busy, pendingUser, liveText, liveRounds.length]);
+  }, [items.length, busy, pendingUser, liveSegments.length, liveTailText.length]);
 
 
   const runTurn = async (content: string) => {
@@ -729,8 +796,7 @@ export function AgentChatPanel({
     setLastSent(text);
     setPendingUser(text);
     setSendError(null);
-    setLiveText("");
-    setLiveRounds([]);
+    setLiveSegments([]);
     let sid = session?.id;
     try {
       if (!sid) {
@@ -759,54 +825,96 @@ export function AgentChatPanel({
         setStreamBusy(true);
         abortRef.current = new AbortController();
         await streamSessionMessage(sid, text, (event: StreamTurnEvent) => {
+          // ROUND-35: segments interleave live — text grows in a text segment;
+          // a tool-call CLOSES the text segment and opens a tools segment, so
+          // the activity block renders exactly where the work happens.
           if (event.type === "text-delta") {
-            setLiveText((prev) => prev + event.delta);
+            setLiveSegments((prev) => {
+              const next = [...prev];
+              const last = next[next.length - 1];
+              if (last !== undefined && last.kind === "text") {
+                next[next.length - 1] = { ...last, content: last.content + event.delta };
+              } else {
+                next.push({ kind: "text", content: event.delta, thinking: "" });
+              }
+              return next;
+            });
+          } else if (event.type === "thinking-delta") {
+            setLiveSegments((prev) => {
+              const next = [...prev];
+              const last = next[next.length - 1];
+              if (last !== undefined && last.kind === "text") {
+                next[next.length - 1] = { ...last, thinking: last.thinking + event.delta };
+              } else {
+                next.push({ kind: "text", content: "", thinking: event.delta });
+              }
+              return next;
+            });
           } else if (event.type === "tool-call") {
-            setLiveRounds((prev) => {
-              const next = prev.length ? prev.map((r) => [...r]) : [[]];
-              if (next.length === 0) next.push([]);
-              next[next.length - 1].push({
+            setLiveSegments((prev) => {
+              const next = [...prev];
+              const last = next[next.length - 1];
+              // REVIEW FIX #2: build a NEW tools segment — assigning into a
+              // shallow-copied segment object mutates prev (double-append
+              // under StrictMode; updater-impurity corruption in prod).
+              const entry: ToolUseEntry = {
                 seq: -Date.now(),
                 toolName: event.toolName,
                 argsSummary: event.argsSummary,
                 ok: null,
                 ts: new Date().toISOString(),
-              });
+              };
+              if (last !== undefined && last.kind === "tools") {
+                next[next.length - 1] = { kind: "tools", tools: [...last.tools, entry] };
+              } else {
+                next.push({ kind: "tools", tools: [entry] });
+              }
               return next;
             });
           } else if (event.type === "tool-result") {
-            setLiveRounds((prev) => {
-              // Attach the result to the matching in-flight row (last null-ok).
-              const flat = prev.flat();
+            setLiveSegments((prev) => {
+              // Attach the result to the matching in-flight row (last null-ok
+              // across ALL tools segments). REVIEW FIX #6: results with no
+              // matching in-flight row append a completed row instead of
+              // being silently dropped.
+              const flat = prev.flatMap((seg) => (seg.kind === "tools" ? seg.tools : []));
               const idx = [...flat].reverse().findIndex((x) => x.toolName === event.toolName && x.ok === null);
               if (idx === -1) {
-                const next = prev.map((r) => [...r]);
-                if (next.length === 0) next.push([]);
-                next[next.length - 1].push({
+                const entry: ToolUseEntry = {
                   seq: -Date.now(),
                   toolName: event.toolName,
                   argsSummary: event.argsSummary,
                   ok: event.ok,
                   ts: new Date().toISOString(),
                   ...(event.outputSummary ? { outputSummary: event.outputSummary } : {}),
-                });
+                };
+                const next = [...prev];
+                const last = next[next.length - 1];
+                if (last !== undefined && last.kind === "tools") {
+                  next[next.length - 1] = { kind: "tools", tools: [...last.tools, entry] };
+                } else {
+                  next.push({ kind: "tools", tools: [entry] });
+                }
                 return next;
               }
-              const realIdx = flat.length - 1 - idx;
+              const matched = flat.length - 1 - idx;
               let consumed = 0;
-              return prev.map((round) =>
-                round.map((tool) => {
+              return prev.map((seg) => {
+                if (seg.kind !== "tools") return seg;
+                const tools = seg.tools.map((tool) => {
                   const index = consumed;
                   consumed += 1;
-                  return index === realIdx
-                    ? {
-                        ...tool,
-                        ok: event.ok,
-                        ...(event.outputSummary ? { outputSummary: event.outputSummary } : {}),
-                      }
-                    : tool;
-                }),
-              );
+                  if (index === matched) {
+                    return {
+                      ...tool,
+                      ok: event.ok,
+                      ...(event.outputSummary ? { outputSummary: event.outputSummary } : {}),
+                    };
+                  }
+                  return tool;
+                });
+                return { kind: "tools" as const, tools };
+              });
             });
             // LIVE VIEW (owner request): file mutations refresh the explorer
             // + open file immediately, not after the turn ends.
@@ -814,11 +922,8 @@ export function AgentChatPanel({
               void queryClient.invalidateQueries({ queryKey: ["project-tree"] });
               void queryClient.invalidateQueries({ queryKey: ["project-file"] });
             }
-          } else if (event.type === "meta.continuation") {
-            // The outer loop starts a new iteration → new ROUND group.
-            setLiveRounds((prev) => [...prev.map((r) => [...r]), []]);
           } else if (event.type === "error") {
-            // SSE error event — show it but DON'T clear live text; the
+            // SSE error event — show it but DON'T clear live state; the
             // backend may still complete the turn (invalidation on catch
             // will resolve it).
             setSendError(event.message);
@@ -831,8 +936,7 @@ export function AgentChatPanel({
         await queryClient.invalidateQueries({ queryKey: ["usage"] });
         void queryClient.invalidateQueries({ queryKey: ["project-tree"] });
         // Canonical assistant item now renders from the event log.
-        setLiveText("");
-        setLiveRounds([]);
+        setLiveSegments([]);
       } else {
         // Fixture/demo mode: no sidecar → sync hook (canned reply).
         await sendMessage.mutateAsync({ sessionId: sid, content: text });
@@ -850,8 +954,7 @@ export function AgentChatPanel({
       } else {
         // The response landed despite the stream error — clear the error.
         setSendError(null);
-        setLiveText("");
-        setLiveRounds([]);
+        setLiveSegments([]);
       }
     } finally {
       setStreamBusy(false);
@@ -970,22 +1073,80 @@ export function AgentChatPanel({
               {pendingEcho !== null ? <UserMessage content={pendingEcho} /> : null}
             </AnimatePresence>
 
-            {/* ── LIVE ACTIVITY BLOCK (round-32): the streaming turn's tool
-                work renders in the SAME activity card as completed turns —
-                rounds, diff cards with "writing…" states, terminal cards. ── */}
-            {liveRounds.length > 0 ? (
-              <ActivityBlock
-                tools={liveRounds.flat()}
-                sessionId={session?.id ?? null}
-                live
-              />
-            ) : null}
+            {/* ── ROUND-35 LIVE INTERLEAVED VIEW: segments render exactly
+                where they happen — text streams, then the activity block
+                appears mid-message when tools run, then more text. ── */}
+            {liveSegments.map((seg, i) => {
+              const isLast = i === liveSegments.length - 1;
+              if (seg.kind === "tools") {
+                return (
+                  <ActivityBlock
+                    key={`seg-${i}`}
+                    tools={seg.tools}
+                    sessionId={session?.id ?? null}
+                    live={isLast}
+                  />
+                );
+              }
+              // Text segment: the avatar+name row only on the FIRST text
+              // segment (one continuous assistant turn visually).
+              const firstText = liveSegments.findIndex((x) => x.kind === "text") === i;
+              const isActive = isLast; // still growing (caret attached)
+              return (
+                <div key={`seg-${i}`} className="flex gap-3" aria-live="polite" aria-atomic="false">
+                  {firstText ? (
+                    <div
+                      className="w-7 h-7 rounded-[10px] grid place-items-center shrink-0 mt-0.5 ac-pulse"
+                      style={{
+                        background: withAlpha(styles.accent, styles.isDark ? 0.16 : 0.1),
+                        color: styles.accent,
+                      }}
+                      aria-hidden
+                    >
+                      <Sparkles size={13} />
+                    </div>
+                  ) : (
+                    <span className="w-7 shrink-0" aria-hidden />
+                  )}
+                  <div className="min-w-0 flex-1">
+                    {firstText ? (
+                      <div className="flex items-baseline gap-2 mb-1">
+                        <span className="text-[12px] font-bold" style={{ color: styles.text }}>
+                          {agent?.name ?? "Acute"}
+                        </span>
+                        {streamBusy && isActive ? (
+                          <span className="text-[10px] font-mono" style={{ color: styles.accent }}>
+                            streaming…
+                          </span>
+                        ) : null}
+                      </div>
+                    ) : null}
+                    {seg.thinking.trim() !== "" ? <ThinkingBlock thinking={seg.thinking} live={isActive} /> : null}
+                    <div className="text-[13px] leading-[1.65]" style={{ color: styles.text }}>
+                      {seg.content === "" && seg.thinking.trim() === "" ? (
+                        <span className="text-[12px] font-mono" style={{ color: styles.textSecondary }}>
+                          Thinking<span className="ac-ellipsis" aria-hidden />
+                        </span>
+                      ) : (
+                        <>
+                          <RichText content={seg.content} />
+                          {isActive && streamBusy ? (
+                            <span
+                              className="inline-block w-[7px] h-[14px] ml-0.5 align-middle rounded-sm ac-caret-blink"
+                              style={{ background: styles.accent }}
+                              aria-hidden
+                            />
+                          ) : null}
+                        </>
+                      )}
+                    </div>
+                  </div>
+                </div>
+              );
+            })}
 
-            {(streamBusy || liveText !== "" || (busy && !streamBusy)) ? (
-              /* ROUND-30 OVERHAUL: the live streaming row mirrors the final
-                 AiMessage layout (avatar + name) so the transition from
-                 streaming to canonical message is seamless — the bubble grows
-                 in place with the blinking caret. */
+            {/* Pre-first-delta thinking state: nothing has landed yet. */}
+            {liveSegments.length === 0 && (streamBusy || (busy && !streamBusy)) ? (
               <div className="flex gap-3" aria-live="polite" aria-atomic="false">
                 <div
                   className="w-7 h-7 rounded-[10px] grid place-items-center shrink-0 mt-0.5 ac-pulse"
@@ -997,44 +1158,16 @@ export function AgentChatPanel({
                 >
                   <Sparkles size={13} />
                 </div>
-                <div className="min-w-0 flex-1">
-                  <div className="flex items-baseline gap-2 mb-1">
-                    <span className="text-[12px] font-bold" style={{ color: styles.text }}>
-                      {agent?.name ?? "Acute"}
-                    </span>
-                    {streamBusy ? (
-                      <span className="text-[10px] font-mono" style={{ color: styles.accent }}>
-                        streaming…
-                      </span>
-                    ) : null}
-                  </div>
-                  <div className="text-[13px] leading-[1.65]" style={{ color: styles.text }}>
-                    {liveText === "" ? (
-                      // Thinking state (merged AgentThinking — owner R28: the
-                      // streaming bubble grows with a "Thinking…" ellipsis before
-                      // the first text-delta; the separate AgentThinking row is
-                      // gone). The ellipsis animates via the CSS `ac-ellipsis`
-                      // keyframe (prefers-reduced-motion: static "…").
-                      <span className="text-[12px] font-mono" style={{ color: styles.textSecondary }}>
-                        Thinking<span className="ac-ellipsis" aria-hidden />
-                      </span>
-                    ) : (
-                      <>
-                        <RichText content={liveText} />
-                        <span
-                          className="inline-block w-[7px] h-[14px] ml-0.5 align-middle rounded-sm ac-caret-blink"
-                          style={{ background: styles.accent }}
-                          aria-hidden
-                        />
-                      </>
-                    )}
-                  </div>
+                <div className="min-w-0 flex-1 flex flex-col justify-center">
+                  <span className="text-[12px] font-bold mb-1" style={{ color: styles.text }}>
+                    {agent?.name ?? "Acute"}
+                  </span>
+                  <span className="text-[12px] font-mono" style={{ color: styles.textSecondary }}>
+                    Thinking<span className="ac-ellipsis" aria-hidden />
+                  </span>
                 </div>
               </div>
             ) : null}
-
-            {/* AgentThinking merged into the streaming bubble above (the
-                "Thinking…" state covers both stream + sync busy states). */}
           </div>
         </div>
       </div>

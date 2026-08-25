@@ -21,17 +21,22 @@ export type ThemeMode = "light" | "dark";
 /** ROUND-34 (settings appearance page): layout density + sidebar tint strength. */
 export type Density = "comfortable" | "compact";
 export type SidebarTint = "subtle" | "warm" | "bold";
+/** ROUND-35 (owner: "in the settings I would like to see the ability of the
+ * tool calls preferences"): how agent tool activity renders in the chat. */
+export type ActivityMode = "detailed" | "compact" | "hidden";
 
 interface ThemeState {
   themeId: ThemeId;
   mode: ThemeMode;
   density: Density;
   sidebarTint: SidebarTint;
+  activityMode: ActivityMode;
   setTheme: (id: ThemeId) => void;
   setMode: (mode: ThemeMode) => void;
   toggleMode: () => void;
   setDensity: (density: Density) => void;
   setSidebarTint: (tint: SidebarTint) => void;
+  setActivityMode: (mode: ActivityMode) => void;
 }
 
 export const useThemeStore = create<ThemeState>()(
@@ -41,11 +46,13 @@ export const useThemeStore = create<ThemeState>()(
       mode: "dark",
       density: "comfortable",
       sidebarTint: "subtle",
+      activityMode: "detailed",
       setTheme: (themeId) => set({ themeId }),
       setMode: (mode) => set({ mode }),
       toggleMode: () => set((s) => ({ mode: s.mode === "dark" ? "light" : "dark" })),
       setDensity: (density) => set({ density }),
       setSidebarTint: (sidebarTint) => set({ sidebarTint }),
+      setActivityMode: (activityMode) => set({ activityMode }),
     }),
     // version stays 1: zustand shallow-merges persisted state over the new
     // defaults, so existing users keep their theme/mode and gain the defaults.
