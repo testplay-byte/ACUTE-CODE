@@ -1,4 +1,4 @@
-<!-- last-reviewed: 2026-08-25 round-35 -->
+<!-- last-reviewed: 2026-08-25 round-36 -->
 # AGENT MEMORY — lessons learned, rules going forward
 
 **Owner directive (2026-08-23):** "learn from the mistakes you made, document
@@ -500,3 +500,19 @@ Format per entry: `N. TITLE (date, source)` → mistake → root cause → rule.
     repos at the exact round-34 tips in ~3 minutes (credentials from the
     conversation history, pnpm shim, .env.development, pnpm install, tests
     green). RULE: push after EVERY round, never leave work unpushed.
+
+58. **Semaphore reservation must be ATOMIC (check + increment in one
+    synchronous step).** The R36 orchestrator initially checked capacity,
+    returned the slot, and incremented AFTER — two concurrent delegate calls
+    both passed the check and overran the limit (the test caught it:
+    "expected queued, received completed"). RULE: any concurrency gate
+    shared across async boundaries needs check-and-reserve as ONE
+    synchronous operation, or it's not a gate.
+
+59. **Sub-agent session ids flow through the tool OUTPUT, not argsSummary.**
+    The child id only exists AFTER the tool executes — so the delegate tool
+    prefixes its report with "[subagent session: … | role: …]" which
+    survives into the persisted outputSummary; the UI parses it from there.
+    argsSummary only ever carries the INPUT (task/role). RULE: for
+    tool-generated resources the UI needs, embed the handle in the tool's
+    output string in a machine-readable prefix.

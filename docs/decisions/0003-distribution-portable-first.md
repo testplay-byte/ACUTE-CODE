@@ -1,4 +1,4 @@
-<!-- last-reviewed: 2026-08-25 round-35 -->
+<!-- last-reviewed: 2026-08-25 round-36 -->
 # ADR-0003: Distribution — portable "run from a folder" first, installer optional
 
 - **Status:** ACCEPTED (owner requirement, 2026-08-21)

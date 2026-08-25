@@ -796,7 +796,7 @@ token-in-URL auth-doc URL noise). The CI step is `continue-on-error: true`
 **J2 work delivered (commit 65246ca):**
 - Created `scripts/docs/stamp-all.mjs` — the bulk idempotent stamper that
   DOC-STANDARDS §8 references but never existed. Reads round from status.json.
-- Backfilled the `<!-- last-reviewed: 2026-08-25 round-35 -->` stamp on 103
+- Backfilled the `<!-- last-reviewed: 2026-08-25 round-36 -->` stamp on 103
   docs (105 failures → 0).
 - Hardened `scripts/docs/check-stale.mjs`:
   1. **indented-fence support** (`/^ {0,3}```/m`) — the actual root bug;
@@ -1032,3 +1032,21 @@ Work Log:
 Stage Summary:
 - The owner's R35 directive is fully delivered; the sub-agent review process caught 8 real issues (incl. a StrictMode double-append and a stats regression) before push.
 - Mid-round sandbox wipe handled per the documented procedure with zero work lost (everything was pushed).
+
+---
+Task ID: R36
+Agent: orchestrator (Z.ai Code)
+Task: The owner's Phase-3 directive: full sub-agent capability (4–50 concurrent sessions, status monitoring with tap-to-inspect, smart crash recovery, API-key management with per-key limits + designated pool keys).
+
+Work Log:
+- Wrote ADR-0022 (the design: delegation-as-tool, atomic semaphores, key pools, event-log-based recovery, live status events, one-level fan-out guard).
+- Backend: migration 0008 (parent_session_id + sub_role); sessions storage children helpers (listSubAgents with computed progress/tokens/report) + children excluded from GET /sessions by default; keyring pool (getPool/poolInfo/setSlot with SLOT<N> env pattern); settings storage (orchestration.maxParallel/perKeyLimit with clamping); the ORCHESTRATOR (atomic tryReserveSlot — a check-then-increment race was caught by the concurrency test and fixed; delegateTask; retryChild resuming from the event log; boot sweep); delegate_task tool (parallel fan-out via SDK tool execution; child sessions run the existing runtime; recursion guard strips delegate_task from child allowlists); SUB-AGENTS prompt section; server routes (subagents list/retry, orchestration settings, key-pool CRUD with masked values + primary protection).
+- Frontend: SubAgentCard (role/status/todos/tokens/report; tap → full child log with live polling; failed → Retry resumes); ActivityBlock renders cards for delegate_task rows (parses the session line from outputSummary); Settings Advanced orchestration steppers; provider detail API-key-pool section; live subagent-status SSE event type.
+- Tests: +8 orchestrator suite; 227 total green; fixed the async buildProjectTools call sites in existing tests.
+- LIVE-PROVEN: "spawn TWO sub-agents in PARALLEL (researcher lists the root; coder creates agents-note.txt)" → both children completed (report + file on disk), parent verified and replied ORCHESTRATION COMPLETE; sidebar shows only the parent; cards DOM-verified ("coder · completed · ↑2.0k ↓57") and VLM-verified on scroll; settings + key-pool screens captured; 0 console errors.
+- 227 tests / lint 0 / typecheck 0 / build GREEN; pushed; round-36.zip to DASHBOARD; ntfy sent.
+
+Stage Summary:
+- Phase 3's core is LIVE: real sub-agents, real concurrency limits, real key pools, real recovery — built additively on the existing runtime exactly as PILLARS §1 prescribed.
+- The owner's monitoring ask (tap running sessions → status) is the SubAgentCard + child-log dialog.
+- Future (owner's note): smarter key management per sub-agent — the pool infra is the foundation.

@@ -180,19 +180,23 @@ interface PreparedTurn {
   provider: { id: string; baseUrl: string };
   apiKey: string;
   model: string;
-  tools: ReturnType<typeof buildProjectTools> | undefined;
+  tools: Awaited<ReturnType<typeof buildProjectTools>> | undefined;
   system: string;
 }
 
 /** Shared pre-flight: validation, provider/key resolution, tools, system,
  * history. modelOverride lets one call use a different model than the
  * agent's default (the chat UI's per-send model picker). */
-function prepareTurn(
+async function prepareTurn(
   db: SqliteDatabase,
   keyring: ProviderKeyring,
   sessionId: string,
   modelOverride?: string,
-): PreparedTurn | { error: Extract<TurnOutcome, { ok: false }> } {
+  /** ROUND-36: the chat fn (delegate_task spawns child turns through it). */
+  chatForTools?: ChatFn,
+  /** ROUND-36 (streamed turns): forward live subagent-status events to SSE. */
+  emitForTools?: (event: unknown) => void,
+): Promise<PreparedTurn | { error: Extract<TurnOutcome, { ok: false }> }> {
   const session = getSession(db, sessionId);
   if (session === undefined) {
     return { error: { ok: false, status: 404, code: "NOT_FOUND", message: `no session with id ${sessionId}` } };
@@ -279,16 +283,42 @@ function prepareTurn(
   // silently dead in real turns while the tools existed on paper. Now wired
   // so todos persist + every mutating tool records a revertible snapshot.
   const turnSeq = lastSessionSeq(db, session.id) + 1;
-  const toolDeps = { db, sessionId: session.id, agentId: agent.id, seq: turnSeq, projectId: session.projectId ?? undefined };
+  // ROUND-36 (ADR-0022): keyring + chat let the delegate_task tool spawn
+  // child turns; `emit` is added per-path (the streamed turn forwards live
+  // subagent-status events onto its SSE).
+  const toolDeps = {
+    db,
+    sessionId: session.id,
+    agentId: agent.id,
+    seq: turnSeq,
+    projectId: session.projectId ?? undefined,
+    keyring,
+    ...(chatForTools !== undefined ? { chat: chatForTools } : {}),
+    ...(emitForTools !== undefined ? { emit: emitForTools } : {}),
+  };
+  // ROUND-36 (ADR-0022): children never get delegate_task — one-level
+  // fan-out is the recursion guard.
+  const childAllowList =
+    session.parentSessionId !== null && agent.allowedTools !== undefined
+      ? agent.allowedTools.filter((t) => t !== "delegate_task")
+      : agent.allowedTools;
   const tools =
     project !== undefined
-      ? buildProjectTools(project.rootPath, agent.allowedTools, toolDeps)
+      ? await buildProjectTools(
+          project.rootPath,
+          session.parentSessionId !== null
+            ? childAllowList !== undefined && childAllowList.length === 0
+              ? ["__none__"]
+              : childAllowList
+            : agent.allowedTools,
+          toolDeps,
+        )
       : undefined;
   const system = project
     ? buildProjectSystemPrompt({
         projectName: project.name,
         rootPath: project.rootPath,
-        toolNames: Object.keys(buildProjectTools(project.rootPath, agent.allowedTools, toolDeps)),
+        toolNames: Object.keys(await buildProjectTools(project.rootPath, agent.allowedTools, toolDeps)),
         customRules: readCustomRules(project.rootPath),
         // Round-28 WS-F: inject the agent's maxTurns budget into the AGENTIC
         // LOOP section so the model knows how many tool round-trips it has.
@@ -317,7 +347,7 @@ export async function runSingleAgentTurn(
   modelOverride?: string,
 ): Promise<TurnOutcome> {
   const { db, keyring, chat } = deps;
-  const prepared = prepareTurn(db, keyring, sessionId, modelOverride);
+  const prepared = await prepareTurn(db, keyring, sessionId, modelOverride, chat);
   if ("error" in prepared) return prepared.error;
   const { session, agent, provider, apiKey, model, tools, system } = prepared;
 
@@ -440,7 +470,7 @@ export async function runStreamedAgentTurn(
   modelOverride?: string,
   signal?: AbortSignal,
 ): Promise<StreamedTurnOutcome> {
-  const { db, keyring, chatStream } = deps;
+  const { db, keyring, chat, chatStream } = deps;
   // ROUND-34: values the keyring holds — scrubbed from persisted tool output
   // summaries (run_command inherits process.env which carries ACUTE_* keys).
   const keySecrets = keyring.list().filter((v) => v.length >= 8);
@@ -452,7 +482,7 @@ export async function runStreamedAgentTurn(
       message: "streaming is not available in this build",
     };
   }
-  const prepared = prepareTurn(db, keyring, sessionId, modelOverride);
+  const prepared = await prepareTurn(db, keyring, sessionId, modelOverride, chat, emit);
   if ("error" in prepared) return prepared.error;
   const { session, agent, provider, apiKey, model, tools, system } = prepared;
 

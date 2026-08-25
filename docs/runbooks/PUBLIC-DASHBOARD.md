@@ -1,4 +1,4 @@
-<!-- last-reviewed: 2026-08-25 round-35 -->
+<!-- last-reviewed: 2026-08-25 round-36 -->
 # PUBLIC DASHBOARD — ACUTE-DASH
 
 The owner's public, visual status page (round-17, ADR-0021):

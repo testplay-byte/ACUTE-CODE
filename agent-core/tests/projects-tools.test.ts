@@ -247,9 +247,11 @@ describe("round-17: tool-name truth + allowedTools enforcement (ADR-0019)", () =
     ]);
   });
 
-  it("buildProjectTools filters by allowlist; empty allowlist = all tools (16)", async () => {
+  it("buildProjectTools filters by allowlist; empty allowlist = all tools (17 incl. delegate_task)", async () => {
     const { buildProjectTools } = await import("../src/tools/index");
-    const all = buildProjectTools(tempDir) as unknown as Record<string, unknown>;
+    // ROUND-36: delegate_task requires deps.keyring + deps.chat — without
+    // them the base 16 tools return (back-compat), with them 17.
+    const all = (await buildProjectTools(tempDir)) as unknown as Record<string, unknown>;
     expect(Object.keys(all).sort()).toEqual([
       "create_dir",
       "delete_file",
@@ -268,9 +270,9 @@ describe("round-17: tool-name truth + allowedTools enforcement (ADR-0019)", () =
       "web_search",
       "write_file",
     ]);
-    const two = buildProjectTools(tempDir, ["read_file", "search_files"]) as unknown as Record<string, unknown>;
+    const two = (await buildProjectTools(tempDir, ["read_file", "search_files"])) as unknown as Record<string, unknown>;
     expect(Object.keys(two).sort()).toEqual(["read_file", "search_files"]);
-    const empty = buildProjectTools(tempDir, []) as unknown as Record<string, unknown>;
+    const empty = (await buildProjectTools(tempDir, [])) as unknown as Record<string, unknown>;
     expect(Object.keys(empty)).toHaveLength(16);
   });
 

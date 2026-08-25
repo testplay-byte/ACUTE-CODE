@@ -1,4 +1,4 @@
-<!-- last-reviewed: 2026-08-25 round-35 -->
+<!-- last-reviewed: 2026-08-25 round-36 -->
 # OpenCode — Architecture
 
 Verified against `github.com/anomalyco/opencode` (branch `dev`) and `opencode.ai/docs/` on 2026-08-21. Anything not directly observed is marked [UNVERIFIED].

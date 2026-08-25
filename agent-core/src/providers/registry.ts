@@ -64,6 +64,62 @@ export class ProviderKeyring {
       .filter((value): value is string => typeof value === "string" && value !== "");
   }
 
+  // ── ROUND-36 (ADR-0022): the API key POOL ──────────────────────────────
+  // Primary = ACUTE_PROVIDER_<ID>; pool slots = ACUTE_PROVIDER_<ID>_SLOT<N>
+  // (N ≥ 2). Sub-agents prefer pool slots so the primary key isn't burdened.
+
+  static slotEnvVarName(providerId: string, slot: number): string {
+    return slot === 0
+      ? ProviderKeyring.envVarName(providerId)
+      : `${ProviderKeyring.envVarName(providerId)}_SLOT${slot}`;
+  }
+
+  /** One pool entry per held key (slot 0 = primary). Never logged. */
+  getPool(providerId: string): Array<{ slot: number; key: string }> {
+    const pool: Array<{ slot: number; key: string }> = [];
+    for (let slot = 0; slot < 32; slot++) {
+      const value = this.#env[ProviderKeyring.slotEnvVarName(providerId, slot)];
+      if (typeof value === "string" && value !== "") pool.push({ slot, key: value });
+    }
+    return pool;
+  }
+
+  /** Pool metadata for the UI (masked — the key value NEVER leaves). */
+  poolInfo(providerId: string): Array<{ slot: number; hasKey: boolean; masked: string | null }> {
+    const info: Array<{ slot: number; hasKey: boolean; masked: string | null }> = [];
+    const maxSlot = Math.max(
+      0,
+      ...Object.keys(this.#env)
+        .filter((name) => name.startsWith(`${ProviderKeyring.envVarName(providerId)}_SLOT`))
+        .map((name) => Number(name.split("_SLOT")[1] ?? 0))
+        .filter((n) => Number.isInteger(n) && n >= 2),
+    );
+    for (let slot = 0; slot <= Math.max(maxSlot, 0); slot++) {
+      const value = this.#env[ProviderKeyring.slotEnvVarName(providerId, slot)];
+      info.push({
+        slot,
+        hasKey: typeof value === "string" && value !== "",
+        masked:
+          typeof value === "string" && value !== ""
+            ? `${value.slice(0, 4)}…${value.slice(-4)}`
+            : null,
+      });
+    }
+    return info;
+  }
+
+  /** Write a pool slot (0 = primary; the existing set() alias). */
+  setSlot(providerId: string, slot: number, key: string): void {
+    if (slot === 0) {
+      this.set(providerId, key);
+      return;
+    }
+    const name = ProviderKeyring.slotEnvVarName(providerId, slot);
+    if (key === "") delete this.#env[name];
+    else this.#env[name] = key;
+    modelCache.delete(providerId);
+  }
+
   /**
    * Shell handoff (POST /internal/providers/keys): rotate a key in-memory so
    * a connection test right after Save uses the new key without a respawn.

@@ -37,7 +37,18 @@ import {
   listProjects,
   projectRootPathExists,
 } from "./storage/projects.js";
-import { createSession, deleteSession, getSession, lastSessionSeq, listSessionEvents, listSessions, updateSessionTitle } from "./storage/sessions.js";
+import {
+  createSession,
+  deleteSession,
+  getSession,
+  lastSessionSeq,
+  listSessionEvents,
+  listSessions,
+  listSubAgents,
+  updateSessionTitle,
+} from "./storage/sessions.js";
+import { getOrchestrationSettings, setOrchestrationSettings } from "./storage/settings.js";
+import { Orchestrator } from "./agents/orchestrator.js";
 import { getUsageSummary } from "./storage/usage.js";
 import {
   deleteModel,
@@ -220,6 +231,10 @@ export function buildServer(options: ServerOptions): FastifyInstance {
   const keyring = options.keyring ?? new ProviderKeyring();
   const chat = options.chat ?? aiSdkChat;
   const app = Fastify();
+
+  // ROUND-36 (ADR-0022 §3): a dead sidecar leaves `running` sessions — flip
+  // them to failed so they're retryable. Idempotent at every boot.
+  Orchestrator.sweepStaleRunning(db);
 
   // CORS: loopback-only product, but the webview (tauri.localhost) and the
   // dev vite server (localhost:5173) are cross-origin callers — without
@@ -1127,7 +1142,10 @@ export function buildServer(options: ServerOptions): FastifyInstance {
         const offsetRaw = Number(query.offset ?? 0);
         const limit = Number.isInteger(limitRaw) ? Math.min(Math.max(limitRaw, 1), 200) : 50;
         const offset = Number.isInteger(offsetRaw) && offsetRaw > 0 ? offsetRaw : 0;
-        return listSessions(db, { limit, offset });
+        // ROUND-36: children are excluded unless includeChildren=1 (the
+        // sidebar stays clean; the sub-agents view lists them explicitly).
+        const includeChildren = query.includeChildren === "1" || query.includeChildren === "true";
+        return listSessions(db, { limit, offset, includeChildren });
       });
 
       scope.get("/sessions/:id", async (request, reply) => {
@@ -1187,6 +1205,134 @@ export function buildServer(options: ServerOptions): FastifyInstance {
         }
         deleteSession(db, id);
         return reply.code(204).send();
+      });
+
+      // ── ROUND-36 (ADR-0022): sub-agent monitoring + recovery ──────────
+
+      // Children with computed status/progress/tokens/report — the chat UI's
+      // tap-to-inspect surface (owner: "when the user taps on the running
+      // sessions, he can look at their status").
+      scope.get("/sessions/:id/subagents", async (request, reply) => {
+        const { id } = request.params as Record<string, string>;
+        if (getSession(db, id) === undefined) {
+          return reply.code(404).send(errorBody("NOT_FOUND", `no session with id ${id}`));
+        }
+        return { subagents: listSubAgents(db, id) };
+      });
+
+      // Retry a failed/interrupted child — resumes from the event log (the
+      // R34 history assembly feeds its prior work back) or re-runs the task.
+      scope.post("/sessions/:id/subagents/:childId/retry", async (request, reply) => {
+        const { id, childId } = request.params as Record<string, string>;
+        if (getSession(db, id) === undefined) {
+          return reply.code(404).send(errorBody("NOT_FOUND", `no session with id ${id}`));
+        }
+        const child = getSession(db, childId);
+        if (child === undefined || child.parentSessionId !== id) {
+          return reply.code(404).send(errorBody("NOT_FOUND", `no child session ${childId} under ${id}`));
+        }
+        if (child.status === "running") {
+          return reply.code(409).send(
+            errorBody("CONFLICT", `sub-agent ${childId} is already running`, { field: "params.childId" }),
+          );
+        }
+        const { getOrchestrator } = await import("./agents/orchestrator.js");
+        const orchestrator = getOrchestrator();
+        const result = await orchestrator.retryChild(
+          { db, keyring, chat },
+          id,
+          childId,
+        );
+        if (!result.ok) {
+          return reply.code(502).send(errorBody("PROVIDER_ERROR", result.message));
+        }
+        return reply.code(200).send({ ok: true, message: result.message });
+      });
+
+      // ── ROUND-36: orchestration settings ──────────────────────────────
+
+      scope.get("/settings/orchestration", async () => {
+        return getOrchestrationSettings(db);
+      });
+
+      scope.put("/settings/orchestration", async (request, reply) => {
+        const body: unknown = request.body;
+        if (typeof body !== "object" || body === null || Array.isArray(body)) {
+          return reply
+            .code(400)
+            .send(errorBody("VALIDATION", "body must be a JSON object", { field: "body" }));
+        }
+        const raw = body as Record<string, unknown>;
+        try {
+          return setOrchestrationSettings(db, {
+            ...(typeof raw.maxParallel === "number" ? { maxParallel: raw.maxParallel } : {}),
+            ...(typeof raw.perKeyLimit === "number" ? { perKeyLimit: raw.perKeyLimit } : {}),
+          });
+        } catch (error) {
+          return reply.code(400).send(
+            errorBody("VALIDATION", error instanceof Error ? error.message : "invalid settings", {
+              field: "body",
+            }),
+          );
+        }
+      });
+
+      // ── ROUND-36: API key pool (per provider) ──────────────────────────
+
+      scope.get("/providers/:id/keys", async (request, reply) => {
+        const { id } = request.params as Record<string, string>;
+        if (resolveProvider(db, id) === undefined) {
+          return reply.code(404).send(errorBody("NOT_FOUND", `no provider with id ${id}`));
+        }
+        return { keys: keyring.poolInfo(id) };
+      });
+
+      scope.put("/providers/:id/keys/:slot", async (request, reply) => {
+        const { id, slot } = request.params as Record<string, string>;
+        if (resolveProvider(db, id) === undefined) {
+          return reply.code(404).send(errorBody("NOT_FOUND", `no provider with id ${id}`));
+        }
+        const slotNum = Number(slot);
+        if (!Number.isInteger(slotNum) || slotNum < 0 || slotNum > 31) {
+          return reply.code(400).send(errorBody("VALIDATION", `invalid slot ${slot}`, { field: "params.slot" }));
+        }
+        const body: unknown = request.body;
+        if (typeof body !== "object" || body === null) {
+          return reply.code(400).send(errorBody("VALIDATION", "body must be a JSON object", { field: "body" }));
+        }
+        const value = (body as Record<string, unknown>).value;
+        if (typeof value !== "string" || value.trim() === "") {
+          return reply.code(400).send(
+            errorBody("VALIDATION", "value must be a non-empty string", { field: "body.value" }),
+          );
+        }
+        keyring.setSlot(id, slotNum, value.trim());
+        return reply.code(200).send({ keys: keyring.poolInfo(id) });
+      });
+
+      scope.delete("/providers/:id/keys/:slot", async (request, reply) => {
+        const { id, slot } = request.params as Record<string, string>;
+        if (resolveProvider(db, id) === undefined) {
+          return reply.code(404).send(errorBody("NOT_FOUND", `no provider with id ${id}`));
+        }
+        const slotNum = Number(slot);
+        if (!Number.isInteger(slotNum) || slotNum < 0 || slotNum > 31) {
+          return reply.code(400).send(errorBody("VALIDATION", `invalid slot ${slot}`, { field: "params.slot" }));
+        }
+        if (slotNum === 0) {
+          return reply.code(409).send(
+            errorBody("CONFLICT", "the primary key is removed via the main key endpoint", {
+              field: "params.slot",
+            }),
+          );
+        }
+        keyring.setSlot(id, slotNum, "");
+        // The removed slot itself may drop out of poolInfo (env state has no
+        // high-water mark) — re-include it as empty so the UI keeps the row.
+        const keys = keyring.poolInfo(id).filter((k) => k.slot !== slotNum);
+        keys.push({ slot: slotNum, hasKey: false, masked: null });
+        keys.sort((a, b) => a.slot - b.slot);
+        return reply.code(200).send({ keys });
       });
 
       scope.post("/sessions/:id/messages", async (request, reply) => {

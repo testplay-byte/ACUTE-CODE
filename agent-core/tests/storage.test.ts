@@ -114,6 +114,7 @@ describe("openDatabase", () => {
       { version: 5, name: "0005_snapshots.sql" },
       { version: 6, name: "0006_agents_max_outer_loops.sql" },
       { version: 7, name: "0007_codebase_index.sql" },
+      { version: 8, name: "0008_subagents.sql" },
     ]);
     expect(appliedSecond).toEqual(appliedFirst);
   });

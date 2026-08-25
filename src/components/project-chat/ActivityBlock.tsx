@@ -24,6 +24,7 @@ import {
   fetchSnapshot,
 } from "../../lib/api";
 import { useProjectChatStore } from "../../lib/project-chat-store";
+import { SubAgentCard } from "./SubAgentCard";
 import { SEMANTIC_COLORS } from "../../lib/semantics";
 import { useThemeStyles } from "../../lib/use-theme-styles";
 import { withAlpha } from "../dashboard/helpers";
@@ -577,6 +578,29 @@ export function ActivityBlock({
               The guide line connects the work top-to-bottom. */}
           <div className="relative ml-[11px] pl-4 border-l-2" style={{ borderColor: withAlpha(styles.accent, 0.25) }}>
             {tools.map((tool) => {
+              if (tool.toolName === "delegate_task") {
+                // ROUND-36: the tool's OUTPUT begins with a machine-readable
+                // session line — "[subagent session: sess_x | role: y]" — which
+                // survives into outputSummary; argsSummary carries the task.
+                const hay = `${tool.argsSummary} ${tool.outputSummary ?? ""}`;
+                const sessionMatch = /session: (sess_[A-Za-z0-9-]+)/.exec(hay);
+                const roleMatch = /role: ([a-z]+)/.exec(hay);
+                const taskMatch = /task: (.+?)(?:, role:|, session:|$)/.exec(tool.argsSummary);
+                if (sessionMatch !== null) {
+                  return (
+                    <div key={tool.seq} className="py-1">
+                      <SubAgentCard
+                        sessionId={sessionMatch[1]}
+                        parentSessionId={sessionId}
+                        role={roleMatch?.[1]}
+                        task={taskMatch?.[1]}
+                        live={live}
+                      />
+                    </div>
+                  );
+                }
+                return <ToolRow key={tool.seq} tool={tool} />;
+              }
               if (DIFF_TOOLS.has(tool.toolName)) {
                 return (
                   <div key={tool.seq} className="py-1">

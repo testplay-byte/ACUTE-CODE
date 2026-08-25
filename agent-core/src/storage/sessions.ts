@@ -20,6 +20,10 @@ export interface Session {
   title: string | null;
   createdAt: string;
   updatedAt: string;
+  /** ROUND-36 (ADR-0022): set on sub-agent sessions — the delegating parent. */
+  parentSessionId: string | null;
+  /** ROUND-36: the delegated role (planner/researcher/coder/reviewer/tester). */
+  subRole: string | null;
 }
 
 export interface SessionInput {
@@ -27,6 +31,9 @@ export interface SessionInput {
   mode: RunMode;
   projectId?: string | null;
   title?: string | null;
+  /** ROUND-36: creates a CHILD session when set. */
+  parentSessionId?: string | null;
+  subRole?: string | null;
 }
 
 /** Event JSON as served by the API (API.md §5.6). `agentId` comes from the payload. */
@@ -54,6 +61,8 @@ interface SessionRow {
   title: string | null;
   created_at: string;
   updated_at: string;
+  parent_session_id?: string | null;
+  sub_role?: string | null;
 }
 
 interface EventRow {
@@ -73,6 +82,8 @@ function toSession(row: SessionRow): Session {
     title: row.title,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
+    parentSessionId: row.parent_session_id ?? null,
+    subRole: row.sub_role ?? null,
   };
 }
 
@@ -101,11 +112,17 @@ export function createSession(db: SqliteDatabase, input: SessionInput): Session 
     title: input.title ?? null,
     createdAt: now,
     updatedAt: now,
+    parentSessionId: input.parentSessionId ?? null,
+    subRole: input.subRole ?? null,
   };
   db.prepare(
-    `INSERT INTO sessions (id, project_id, agent_id, mode, status, title, created_at, updated_at)
-     VALUES (@id, @projectId, @agentId, @mode, @status, @title, @createdAt, @updatedAt)`,
-  ).run(session);
+    `INSERT INTO sessions (id, project_id, agent_id, mode, status, title, created_at, updated_at, parent_session_id, sub_role)
+     VALUES (@id, @projectId, @agentId, @mode, @status, @title, @createdAt, @updatedAt, @parentSessionId, @subRole)`,
+  ).run({
+    ...session,
+    parentSessionId: input.parentSessionId ?? null,
+    subRole: input.subRole ?? null,
+  });
   return session;
 }
 
@@ -114,18 +131,93 @@ export function getSession(db: SqliteDatabase, id: string): Session | undefined 
   return row === undefined ? undefined : toSession(row);
 }
 
-/** Newest-first (API.md §5.2) with the matching total for pagination. */
+/** Newest-first (API.md §5.2) with the matching total for pagination.
+ * ROUND-36: sub-agent children are EXCLUDED by default (the sidebar stays
+ * clean); `includeChildren: true` opts in. */
 export function listSessions(
   db: SqliteDatabase,
-  options: { limit: number; offset: number },
+  options: { limit: number; offset: number; includeChildren?: boolean },
 ): { sessions: Session[]; total: number } {
+  const filter = options.includeChildren ? "" : " WHERE parent_session_id IS NULL";
   const rows = db
     .prepare(
-      "SELECT * FROM sessions ORDER BY created_at DESC, id DESC LIMIT ? OFFSET ?",
+      `SELECT * FROM sessions${filter} ORDER BY created_at DESC, id DESC LIMIT ? OFFSET ?`,
     )
     .all(options.limit, options.offset) as SessionRow[];
-  const { total } = db.prepare("SELECT COUNT(*) AS total FROM sessions").get() as { total: number };
+  const { total } = db
+    .prepare(`SELECT COUNT(*) AS total FROM sessions${filter}`)
+    .get() as { total: number };
   return { sessions: rows.map(toSession), total };
+}
+
+/** ROUND-36 (ADR-0022): a child session's computed status for the
+ * sub-agents view — progress from todo.update events, tokens from the usage
+ * ledger, report from the last non-empty assistant message. */
+export interface SubAgentStatus {
+  id: string;
+  title: string | null;
+  subRole: string | null;
+  status: SessionStatus;
+  createdAt: string;
+  updatedAt: string;
+  todosDone: number;
+  todosTotal: number;
+  inputTokens: number;
+  outputTokens: number;
+  report: string | null;
+  error: string | null;
+}
+
+export function listSubAgents(db: SqliteDatabase, parentSessionId: string): SubAgentStatus[] {
+  const children = db
+    .prepare(
+      "SELECT * FROM sessions WHERE parent_session_id = ? ORDER BY created_at ASC, id ASC",
+    )
+    .all(parentSessionId) as SessionRow[];
+  return children.map((child) => {
+    // Latest todo.update → progress.
+    let todosDone = 0;
+    let todosTotal = 0;
+    for (const ev of listSessionEvents(db, child.id)) {
+      if (ev.type !== "todo.update") continue;
+      const todos = (ev.payload as { todos?: Array<{ status?: string }> }).todos;
+      if (Array.isArray(todos) && todos.length > 0) {
+        todosTotal = todos.length;
+        todosDone = todos.filter((t) => t.status === "completed").length;
+      }
+    }
+    const usage = db
+      .prepare(
+        "SELECT COALESCE(SUM(input_tokens), 0) AS i, COALESCE(SUM(output_tokens), 0) AS o FROM usage_events WHERE session_id = ?",
+      )
+      .get(child.id) as { i: number; o: number };
+    let report: string | null = null;
+    let error: string | null = null;
+    for (const ev of listSessionEvents(db, child.id)) {
+      if (ev.type === "message.assistant") {
+        const content = (ev.payload as { content?: unknown }).content;
+        if (typeof content === "string" && content.trim() !== "") report = content;
+      }
+      if (ev.type === "turn.error") {
+        const message = (ev.payload as { message?: unknown }).message;
+        if (typeof message === "string") error = message;
+      }
+    }
+    return {
+      id: child.id,
+      title: child.title,
+      subRole: child.sub_role ?? null,
+      status: child.status,
+      createdAt: child.created_at,
+      updatedAt: child.updated_at,
+      todosDone,
+      todosTotal,
+      inputTokens: usage.i,
+      outputTokens: usage.o,
+      report,
+      error,
+    };
+  });
 }
 
 export function setSessionStatus(db: SqliteDatabase, id: string, status: SessionStatus): void {

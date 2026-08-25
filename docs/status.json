@@ -112,6 +112,10 @@
     {
       "date": "2026-08-25",
       "label": "Round 35 — thinking + interleaved tool calls"
+    },
+    {
+      "date": "2026-08-25",
+      "label": "Round 36 — sub-agent orchestration (Phase 3 core)"
     }
   ],
   "quality": {
@@ -119,7 +123,7 @@
     "suites": [
       {
         "name": "agent-core",
-        "tests": 141
+        "tests": 149
       },
       {
         "name": "shared",
@@ -148,8 +152,8 @@
   ],
   "plan": {
     "current": {
-      "title": "Round 35 DELIVERED — thinking + interleaved tool calls + chat centering + settings polish",
-      "detail": "Thinking streams + persists per segment (muted collapsible Thought-process blocks, 4k cap); tool calls interleave MID-MESSAGE (segments flush around tool boundaries; stats-carrier keeps badges alive; StrictMode-safe live segment UI); chat column centered at 900px; settings back button below the heading; Tool Calls preferences (Detailed/Compact/Hidden) in Appearance. Design Prompt 4 delivered. Sub-agent reviewed (8 findings fixed). 219 tests + live interleaved-build proof."
+      "title": "Round 36 DELIVERED — sub-agent orchestration (Phase 3 core)",
+      "detail": "delegate_task tool + orchestrator (atomic total/per-key semaphores, key-pool assignment preferring sub-agent slots, crash recovery resuming from the event log, boot sweep), sub-agent monitoring (live SubAgentCards with tap-to-inspect logs + retry), settings (maxParallel/perKeyLimit steppers + API key pool CRUD), children excluded from the sidebar. ADR-0022. Live-proven with a real 2-sub-agent parallel delegation. 227 tests."
     },
     "upcoming": [
       {
@@ -184,5 +188,5 @@
       "Quality over speed — every round verified before push"
     ]
   },
-  "round": 35
+  "round": 36
 }

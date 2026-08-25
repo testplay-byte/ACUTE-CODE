@@ -1,4 +1,4 @@
-<!-- last-reviewed: 2026-08-25 round-35 -->
+<!-- last-reviewed: 2026-08-25 round-36 -->
 # Phase 1 Review — Architecture, API Contracts, ADRs, Repo Skeleton
 
 | | |

@@ -16,6 +16,7 @@ import { useThemeStyles } from "../../lib/use-theme-styles";
 import { withAlpha } from "../dashboard/helpers";
 import { useConfigStore } from "../../lib/config-store";
 import { isTauri } from "../../lib/sidecar";
+import { fetchKeyPool } from "../../lib/api";
 import type { ProviderView } from "../onboarding/providers-api";
 
 /**
@@ -578,6 +579,9 @@ function ProviderDetailPane({
             Stored in the OS secure store — never in the database or logs.
           </p>
         </div>
+        {/* ── ROUND-36: the API key POOL (sub-agent keys) ─────────────── */}
+        <KeyPoolSection providerId={provider.id} />
+
         {/* Test connection */}
         <div className="flex items-center gap-3 flex-wrap">
           <button
@@ -967,6 +971,126 @@ function NewProviderPane({
       >
         {create.isPending ? "Adding…" : "Add provider"}
       </button>
+    </div>
+  );
+}
+
+/* ── ROUND-36 (ADR-0022): the per-provider API key pool ───────────────────── */
+
+function KeyPoolSection({ providerId }: { providerId: string }) {
+  const styles = useThemeStyles();
+  const api = useApi();
+  const queryClient = useQueryClient();
+  const [newKey, setNewKey] = useState("");
+  const [showNew, setShowNew] = useState(false);
+  const [msg, setMsg] = useState<string | null>(null);
+
+  const poolQuery = useQuery({
+    queryKey: ["key-pool", providerId],
+    queryFn: () => fetchKeyPool(providerId),
+  });
+  const pool = poolQuery.data ?? [];
+  const slots = pool.filter((k) => k.slot > 0);
+
+  const invalidate = () => {
+    void queryClient.invalidateQueries({ queryKey: ["key-pool", providerId] });
+    void queryClient.invalidateQueries({ queryKey: ["settings-providers"] });
+  };
+
+  const addSlot = useMutation({
+    mutationFn: async (value: string) => {
+      if (isTauri()) {
+        const { storeProviderKey } = await import("../onboarding/providers-api");
+        const ok = await storeProviderKey(providerId, value);
+        if (!ok) throw new Error("the shell refused the key store request");
+        return;
+      }
+      await api(`/providers/${providerId}/keys/${slots.length + 2}`, { method: "PUT", json: { value } });
+    },
+    onSuccess: () => {
+      setNewKey("");
+      setMsg("Slot added.");
+      setTimeout(() => setMsg(null), 1500);
+      invalidate();
+    },
+    onError: (err: Error) => setMsg(err.message),
+  });
+
+  const removeSlot = useMutation({
+    mutationFn: (slot: number) => api(`/providers/${providerId}/keys/${slot}`, { method: "DELETE" }),
+    onSuccess: invalidate,
+    onError: (err: Error) => setMsg(err.message),
+  });
+
+  return (
+    <div>
+      <label className="mb-1.5 block text-[11px] font-bold" style={{ color: styles.textSecondary }}>
+        API key pool <span style={{ color: styles.textTertiary }}>— dedicated keys for sub-agents (primary stays free)</span>
+      </label>
+      <div className="rounded-[10px] border-[1.5px] overflow-hidden" style={{ borderColor: styles.border }}>
+        {slots.length === 0 && (
+          <div className="px-3 py-2.5 text-[11px]" style={{ color: styles.textTertiary }}>
+            No pool slots — sub-agents share the primary key (rate-limited by the per-key setting).
+          </div>
+        )}
+        {slots.map((k) => (
+          <div key={k.slot} className="flex items-center gap-2 px-3 py-2 border-b last:border-b-0" style={{ borderColor: styles.borderSubtle }}>
+            <span className="text-[11px] font-mono font-bold shrink-0" style={{ color: styles.textSecondary }}>
+              SLOT {k.slot}
+            </span>
+            <span className="font-mono text-[11px] flex-1 min-w-0 truncate" style={{ color: styles.textTertiary }}>
+              {k.masked ?? "—"}
+            </span>
+            <button
+              onClick={() => {
+                if (window.confirm(`Remove pool slot ${k.slot}?`)) removeSlot.mutate(k.slot);
+              }}
+              aria-label={`Remove slot ${k.slot}`}
+              title="Remove slot"
+              className="w-6 h-6 grid place-items-center rounded-md shrink-0"
+              style={{ color: styles.textTertiary }}
+              onMouseEnter={(e) => (e.currentTarget.style.background = withAlpha("#ef4444", 0.12))}
+              onMouseLeave={(e) => (e.currentTarget.style.background = "transparent")}
+            >
+              <Trash2 size={11} />
+            </button>
+          </div>
+        ))}
+        {/* Add slot row */}
+        <div className="flex items-center gap-2 px-3 py-2 border-t" style={{ borderColor: styles.borderSubtle, background: withAlpha(styles.accent, 0.03) }}>
+          <div className="relative flex-1 min-w-0">
+            <input
+              type={showNew ? "text" : "password"}
+              value={newKey}
+              onChange={(e) => setNewKey(e.target.value)}
+              placeholder="new pool key (sk-…)"
+              aria-label="New pool key"
+              className="h-8 w-full rounded-[8px] border-[1.5px] px-2.5 pr-8 font-mono text-[11px] outline-none"
+              style={{ background: styles.bg, borderColor: styles.border, color: styles.text }}
+            />
+            <button
+              onClick={() => setShowNew((v) => !v)}
+              aria-label={showNew ? "Hide key" : "Show key"}
+              className="absolute right-1.5 top-1/2 -translate-y-1/2 w-5 h-5 grid place-items-center rounded-md"
+              style={{ color: styles.textTertiary }}
+            >
+              {showNew ? <EyeOff size={11} /> : <Eye size={11} />}
+            </button>
+          </div>
+          <button
+            onClick={() => newKey.trim() && addSlot.mutate(newKey.trim())}
+            disabled={!newKey.trim() || addSlot.isPending}
+            className="h-8 px-3 rounded-[8px] text-[11px] font-bold flex items-center gap-1 disabled:opacity-50"
+            style={{ background: withAlpha(styles.accent, 0.12), color: styles.accent }}
+          >
+            <Plus size={11} strokeWidth={2.5} /> {addSlot.isPending ? "Adding…" : "Add slot"}
+          </button>
+        </div>
+      </div>
+      {msg && <p className="mt-1.5 text-[11px]" style={{ color: addSlot.isError || removeSlot.isError ? "#ef4444" : "#22c55e" }}>{msg}</p>}
+      <p className="mt-1 text-[10.5px]" style={{ color: styles.textTertiary }}>
+        Sub-agents prefer pool slots (least-loaded first) so the primary key serves your main chats.
+      </p>
     </div>
   );
 }

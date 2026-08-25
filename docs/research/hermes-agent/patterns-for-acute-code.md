@@ -1,4 +1,4 @@
-<!-- last-reviewed: 2026-08-25 round-35 -->
+<!-- last-reviewed: 2026-08-25 round-36 -->
 # Hermes Agent — Patterns for ACUTE-CODE
 
 **License note:** Hermes Agent is MIT (verified) — pattern study is unambiguously fine; we still copy zero code (different language anyway: Python vs our Tauri/TS/Node stack).

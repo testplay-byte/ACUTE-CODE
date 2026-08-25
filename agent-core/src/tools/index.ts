@@ -16,6 +16,7 @@ import { writeTodo, type TodoItem } from "./todo.js";
 import { webFetch, webSearch } from "./web.js";
 import { recordSnapshot } from "../storage/snapshots.js";
 import { reindexProject } from "../storage/index.js";
+import { SUB_ROLES, type SubRole } from "../agents/orchestrator.js";
 
 export interface ToolResult {
   ok: boolean;
@@ -362,9 +363,16 @@ export interface ToolDeps {
   /** Round-28 WS-G: the project id (for codebase_index + searchIndexSymbols).
    * Optional for back-compat (older call sites that don't pass it). */
   projectId?: string;
+  /** ROUND-36 (ADR-0022): forward live sub-agent status events onto the
+   * parent's stream (streamed turns pass their SSE emitter). Optional. */
+  emit?: (event: unknown) => void;
+  /** ROUND-36: the keyring — the delegate tool builds child runs with it. */
+  keyring?: import("../providers/registry.js").ProviderKeyring;
+  /** ROUND-36: the chat fn for child turns (injected to avoid cycles). */
+  chat?: import("../agents/chat.js").ChatFn;
 }
 
-export function buildProjectTools(root: string, allowedTools?: readonly string[], deps?: ToolDeps): ToolSet {
+export async function buildProjectTools(root: string, allowedTools?: readonly string[], deps?: ToolDeps): Promise<ToolSet> {
   const allow = allowedTools && allowedTools.length > 0 ? new Set(allowedTools) : null;
   const toolDeps = deps;
   const tools: Record<string, JsonSchemaFreeTool> = {
@@ -679,5 +687,51 @@ export function buildProjectTools(root: string, allowedTools?: readonly string[]
       if (!allow.has(name)) delete tools[name as keyof typeof tools];
     }
   }
+  // ── ROUND-36 (ADR-0022): SUB-AGENT DELEGATION ───────────────────────────
+  // The parent delegates self-contained subtasks; children run their own
+  // sessions concurrently (per-key + total limits) and report back. Children
+  // NEVER get this tool (one-level fan-out — recursion guard): the runtime
+  // builds child tool sets without delegate_task.
+  const delegateAllowed = allow === null || allow.has("delegate_task");
+  if (delegateAllowed && toolDeps && toolDeps.keyring !== undefined && toolDeps.chat !== undefined) {
+    const { getOrchestrator } = await import("../agents/orchestrator.js");
+    tools.delegate_task = {
+      description:
+        "Delegate a self-contained subtask to an independent sub-agent that runs with the same project tools and reports back. Make MULTIPLE delegate_task calls in ONE message to run sub-agents in PARALLEL. Each call waits for its sub-agent to finish and returns its final report. Use for parallelizable work: researching several areas at once, reviewing multiple modules, independent implementation tasks. role: planner|researcher|coder|reviewer|tester (default researcher).",
+      inputSchema: jsonSchema({
+        type: "object",
+        properties: {
+          task: {
+            type: "string",
+            description: "The complete, self-contained task for the sub-agent (include ALL context it needs — it cannot see this conversation).",
+          },
+          role: {
+            type: "string",
+            description: "planner | researcher | coder | reviewer | tester (default researcher)",
+            enum: ["planner", "researcher", "coder", "reviewer", "tester"],
+          },
+        },
+        required: ["task"],
+      }),
+      execute: async (input) => {
+        const task = typeof input.task === "string" ? input.task.trim() : "";
+        if (task === "") return { ok: false, output: "task must be a non-empty string" };
+        const role: SubRole =
+          typeof input.role === "string" && (SUB_ROLES as readonly string[]).includes(input.role)
+            ? (input.role as SubRole)
+            : "researcher";
+        const orchestrator = getOrchestrator();
+        const result = await orchestrator.delegateTask(
+          { db: toolDeps.db, keyring: toolDeps.keyring!, chat: toolDeps.chat! },
+          toolDeps.sessionId,
+          task,
+          role,
+          toolDeps.emit,
+        );
+        return { ok: result.ok, output: result.output };
+      },
+    };
+  }
+
   return tools as unknown as ToolSet;
 }

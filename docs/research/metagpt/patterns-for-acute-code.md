@@ -1,4 +1,4 @@
-<!-- last-reviewed: 2026-08-25 round-35 -->
+<!-- last-reviewed: 2026-08-25 round-36 -->
 # MetaGPT — Patterns for ACUTE-CODE
 
 > Concepts only. MetaGPT is Python (MIT) — we build TypeScript on Tauri 2 + Node/TS sidecar (SQLite via localhost REST+WS) + React 18. Nothing below proposes copying code; each entry names the *idea* in MetaGPT and translates it to our stack. MIT is inside our allowed dependency set (MIT, Apache-2.0, BSD, ISC, MPL-2.0), so studying it carries no license exposure; copying would be pointless anyway (different language/runtime, and we are closed-source).

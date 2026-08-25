@@ -185,6 +185,9 @@ export interface Session {
   title: string | null;
   createdAt: string;
   updatedAt: string;
+  /** ROUND-36: set on sub-agent children. */
+  parentSessionId?: string | null;
+  subRole?: string | null;
 }
 
 /**
@@ -788,6 +791,87 @@ export async function pickFolderViaBackend(): Promise<{
 }
 
 // ---------------------------------------------------------------------------
+// ROUND-36 (ADR-0022): sub-agent monitoring + orchestration settings
+// ---------------------------------------------------------------------------
+
+/** GET /sessions/:id/subagents row — computed status per child. */
+export interface SubAgentStatus {
+  id: string;
+  title: string | null;
+  subRole: string | null;
+  status: SessionStatus;
+  createdAt: string;
+  updatedAt: string;
+  todosDone: number;
+  todosTotal: number;
+  inputTokens: number;
+  outputTokens: number;
+  report: string | null;
+  error: string | null;
+}
+
+/** GET /sessions/:id — full detail incl. the event log (child logs). */
+export async function fetchSessionDetail(sessionId: string): Promise<SessionDetail> {
+  return request<SessionDetail>(`/sessions/${sessionId}`);
+}
+
+export async function fetchSubAgents(sessionId: string): Promise<SubAgentStatus[]> {
+  const body = await request<{ subagents: SubAgentStatus[] }>(`/sessions/${sessionId}/subagents`);
+  return body.subagents;
+}
+
+export async function retrySubAgent(sessionId: string, childId: string): Promise<void> {
+  await request<{ ok: boolean }>(`/sessions/${sessionId}/subagents/${childId}/retry`, {
+    method: "POST",
+  });
+}
+
+export interface OrchestrationSettings {
+  maxParallel: number;
+  perKeyLimit: number;
+}
+
+export async function fetchOrchestrationSettings(): Promise<OrchestrationSettings> {
+  return request<OrchestrationSettings>("/settings/orchestration");
+}
+
+export async function updateOrchestrationSettings(
+  patch: Partial<OrchestrationSettings>,
+): Promise<OrchestrationSettings> {
+  return request<OrchestrationSettings>("/settings/orchestration", {
+    method: "PUT",
+    json: patch,
+  });
+}
+
+/** Key-pool slot info (masked — values never leave the sidecar). */
+export interface KeyPoolSlot {
+  slot: number;
+  hasKey: boolean;
+  masked: string | null;
+}
+
+export async function fetchKeyPool(providerId: string): Promise<KeyPoolSlot[]> {
+  const body = await request<{ keys: KeyPoolSlot[] }>(`/providers/${providerId}/keys`);
+  return body.keys;
+}
+
+export async function setKeyPoolSlot(providerId: string, slot: number, value: string): Promise<KeyPoolSlot[]> {
+  const body = await request<{ keys: KeyPoolSlot[] }>(`/providers/${providerId}/keys/${slot}`, {
+    method: "PUT",
+    json: { value },
+  });
+  return body.keys;
+}
+
+export async function removeKeyPoolSlot(providerId: string, slot: number): Promise<KeyPoolSlot[]> {
+  const body = await request<{ keys: KeyPoolSlot[] }>(`/providers/${providerId}/keys/${slot}`, {
+    method: "DELETE",
+  });
+  return body.keys;
+}
+
+// ---------------------------------------------------------------------------
 // Streaming messages (round-16: live responses in the chat UI)
 // ---------------------------------------------------------------------------
 
@@ -801,6 +885,18 @@ export type StreamTurnEvent =
   /** Round-32: the outer loop starts a new iteration — the live activity
    * block opens a new ROUND group on this event. */
   | { type: "meta.continuation"; iteration: number; reason?: string }
+  /** ROUND-36 (ADR-0022): a delegated sub-agent changed state — the live
+   * SubAgentCards update from these. */
+  | {
+      type: "subagent-status";
+      sessionId: string;
+      parentSessionId: string;
+      status: "queued" | "running" | "completed" | "failed";
+      task: string;
+      role: string;
+      todosDone?: number;
+      todosTotal?: number;
+    }
   | {
       type: "finish";
       usage: { inputTokens: number; outputTokens: number; totalTokens: number };
