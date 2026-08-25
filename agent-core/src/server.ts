@@ -1001,6 +1001,52 @@ export function buildServer(options: ServerOptions): FastifyInstance {
         return { index: summary };
       });
 
+      // ROUND-38 (owner: "I can see the terminal on the right sidebar"): a
+      // USER-driven command runner for the right-sidebar Terminal tab. The
+      // user types the command themselves, so this bypasses the agent
+      // approvals engine (the human IS the approver here). Same spawn +
+      // timeout + max-output guards as the agent run_command tool; runs in
+      // the project root; returns combined stdout/stderr + exit code.
+      scope.post("/projects/:id/terminal", async (request, reply) => {
+        const { id } = request.params as Record<string, string>;
+        const project = getProject(db, id);
+        if (project === undefined) {
+          return reply.code(404).send(errorBody("NOT_FOUND", `no project with id ${id}`));
+        }
+        const body = request.body as { command?: unknown } | null;
+        const command = typeof body?.command === "string" ? body.command.trim() : "";
+        if (command === "") {
+          return reply
+            .code(400)
+            .send(errorBody("VALIDATION", "command is required", { field: "body.command" }));
+        }
+        const { spawn } = await import("node:child_process");
+        const TIMEOUT = 60_000;
+        const MAX_OUT = 64 * 1024;
+        const result = await new Promise<{ ok: boolean; output: string; exitCode: number | null }>(
+          (resolve) => {
+            const child = spawn(command, {
+              cwd: project.rootPath,
+              shell: true,
+              timeout: TIMEOUT,
+              env: { ...process.env, FORCE_COLOR: "0", CI: "1" },
+            });
+            let combined = "";
+            child.stdout?.on("data", (d: Buffer) => { combined += d.toString("utf8"); });
+            child.stderr?.on("data", (d: Buffer) => { combined += d.toString("utf8"); });
+            child.on("error", (err) =>
+              resolve({ ok: false, output: `failed to start: ${err.message}`, exitCode: null }),
+            );
+            child.on("close", (code) => {
+              const output =
+                combined.length > MAX_OUT ? combined.slice(0, MAX_OUT) + "\n…[truncated]" : combined;
+              resolve({ ok: code === 0, output, exitCode: code });
+            });
+          },
+        );
+        return result;
+      });
+
       // Round-28 WS-H: unified search (files + symbols + content) for the
       // CommandPalette. Reuses search_files + search_code + the codebase index.
       scope.post("/projects/:id/search", async (request, reply) => {

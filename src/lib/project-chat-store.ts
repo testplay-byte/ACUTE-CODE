@@ -73,6 +73,18 @@ export interface ProjectChatState {
    * panels). Default true on chat routes. The ChatTopBar's "Show panels"
    * toggle flips it false → 3-panel layout. Persisted (survives reloads). */
   chatFocusMode: boolean;
+  /** ROUND-38 (owner: sessions/files/agent mixing across projects): the
+   * active project's scoped UI state (selectedFileId, selectedAgentId,
+   * expandedFolders) is snapshotted into byProject on switch and restored
+   * when you come back, so opening file X in project A never re-opens it
+   * in project B. The flat fields stay as the "current" values consumers
+   * read; this map is the per-project cache. */
+  activeProjectId: string | null;
+  byProject: Record<string, {
+    selectedFileId: string | null;
+    selectedAgentId: string | null;
+    expandedFolders: string[];
+  }>;
   setSidebarOpen: (open: boolean) => void;
   setCodeVisible: (visible: boolean) => void;
   /** Clamps to [MIN_SIDEBAR_WIDTH, MAX_SIDEBAR_WIDTH]. */
@@ -92,6 +104,10 @@ export interface ProjectChatState {
   toggleTodo: (projectId: string, todoId: string) => void;
   setAppSidebarVisible: (visible: boolean) => void;
   setChatFocusMode: (on: boolean) => void;
+  /** ROUND-38: snapshot the current project's scoped state + restore the
+   * incoming project's (or defaults). Called from AgentChatPanel on
+   * projectId change. No-op when the id is unchanged. */
+  setActiveProject: (id: string) => void;
 }
 
 const toggleMember = (list: string[], value: string): string[] =>
@@ -118,6 +134,10 @@ export const useProjectChatStore = create<ProjectChatState>()(
       // by default on chat routes was the old top-bar era behavior.
       appSidebarVisible: true,
       chatFocusMode: true,
+      // ROUND-38: per-project scoped-state cache (activeProjectId + the
+      // snapshot map). Empty until AgentChatPanel calls setActiveProject.
+      activeProjectId: null,
+      byProject: {},
       setSidebarOpen: (sidebarOpen) => set({ sidebarOpen }),
       setCodeVisible: (codeVisible) => set({ codeVisible }),
       setSidebarWidth: (sidebarWidth) =>
@@ -165,10 +185,37 @@ export const useProjectChatStore = create<ProjectChatState>()(
         })),
       setAppSidebarVisible: (appSidebarVisible) => set({ appSidebarVisible }),
       setChatFocusMode: (chatFocusMode) => set({ chatFocusMode }),
+      setActiveProject: (id) => set((s) => {
+        // ROUND-38: no-op when the active project is unchanged (avoids
+        // wiping state on every AgentChatPanel render).
+        if (s.activeProjectId === id) return s;
+        // Snapshot the outgoing project's scoped state.
+        const prev = s.activeProjectId;
+        const snapshot = {
+          selectedFileId: s.selectedFileId,
+          selectedAgentId: s.selectedAgentId,
+          expandedFolders: s.expandedFolders,
+        };
+        const byProject = { ...s.byProject };
+        if (prev !== null) byProject[prev] = snapshot;
+        // Restore the incoming project's cached state (or defaults).
+        const restored = byProject[id] ?? {
+          selectedFileId: null as string | null,
+          selectedAgentId: null as string | null,
+          expandedFolders: [] as string[],
+        };
+        return {
+          activeProjectId: id,
+          byProject,
+          selectedFileId: restored.selectedFileId,
+          selectedAgentId: restored.selectedAgentId,
+          expandedFolders: restored.expandedFolders,
+        };
+      }),
     }),
     {
       name: "acute-code.projectChat",
-      version: 1,
+      version: 2,
       // Transient UI state must not survive reloads.
       partialize: (s) => {
         const { appSidebarVisible: _appSidebarVisible, ...rest } = s;

@@ -252,7 +252,8 @@ export default function ProjectChatScreen() {
             className={codeVisible ? "shrink-0 overflow-hidden rounded-2xl" : "flex-1 min-w-0 overflow-hidden rounded-2xl"}
             style={codeVisible ? { width: chatWidth } : undefined}
           >
-            <AgentChatPanel projectId={project.id} project={project} />
+            {/* ROUND-38: key by project id so project switches fully remount. */}
+            <AgentChatPanel key={project.id} projectId={project.id} project={project} />
           </div>
         </div>
       )}

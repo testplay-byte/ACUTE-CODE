@@ -211,10 +211,15 @@ class Orchestrator {
 
     try {
       const framing = ROLE_FRAMING[role];
+      // ROUND-38 fix: the prompt previously used `\\n` (literal backslash-n)
+      // in the template literal, so the framing + task arrived as ONE run-on
+      // line — the sub-agent never parsed its role/instructions properly and
+      // routinely failed to act (owner: "sub-agents were not able to create
+      // files"). Real newlines now.
       const outcome = await runSingleAgentTurn(
         { db, keyring: childKeyring, chat },
         child.id,
-        `${framing}\\n\\nTASK: ${task}\\n\\nComplete this task now using your tools. When finished, reply with a concise report of what you did and found.`,
+        `${framing}\n\nTASK: ${task}\n\nComplete this task now using your tools. When finished, reply with a concise report of what you did and found.`,
       );
       if (outcome.ok) {
         setSessionStatus(db, child.id, "completed");
@@ -276,9 +281,11 @@ class Orchestrator {
     const hasProgress = listSessionEvents(db, childId).some(
       (e) => e.type === "tool.use" || e.type === "message.assistant",
     );
+    // ROUND-38 fix: same `\\n` → `\n` newline bug as delegateTask (the retry
+    // prompt was a single run-on line).
     const content = hasProgress
-      ? `${ROLE_FRAMING[role]}\\n\\nYou were interrupted while working on this task. Your completed work so far is in your history (including tool results). Continue from where you stopped and finish the task, then reply with a concise final report.`
-      : `${ROLE_FRAMING[role]}\\n\\nTASK: ${child.title ?? "the assigned task"}\\n\\nComplete this task now using your tools. When finished, reply with a concise report.`;
+      ? `${ROLE_FRAMING[role]}\n\nYou were interrupted while working on this task. Your completed work so far is in your history (including tool results). Continue from where you stopped and finish the task, then reply with a concise final report.`
+      : `${ROLE_FRAMING[role]}\n\nTASK: ${child.title ?? "the assigned task"}\n\nComplete this task now using your tools. When finished, reply with a concise report.`;
 
     const slot = await this.acquireSlot(db, keyring, providerId, childId);
     this.runs = this.runs.map((r) =>

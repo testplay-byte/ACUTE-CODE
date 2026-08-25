@@ -264,6 +264,42 @@ export function touchSession(db: SqliteDatabase, id: string): void {
   );
 }
 
+/**
+ * ROUND-38 (owner: "the name of the session should change after the first
+ * interaction with the user" — like the reference repos). Called after a
+ * turn completes. If the session still carries the DEFAULT title (null or the
+ * parent project's name — the value AgentChatPanel seeds at create time) AND
+ * has at least one user message, rename it to a single-line snippet of the
+ * FIRST user message (capped at 60 chars). No-op once the user has manually
+ * renamed or the first auto-title has landed. Sub-agent children keep their
+ * task-derived titles.
+ *
+ * The project name is read via a direct SQL lookup (not getProject) to keep
+ * sessions.ts free of a projects.ts import edge.
+ */
+export function maybeAutoTitleSession(db: SqliteDatabase, sessionId: string): void {
+  const session = getSession(db, sessionId);
+  if (session === undefined) return;
+  if (session.parentSessionId !== null) return; // sub-agent child
+  let defaultTitle: string | null = null;
+  if (session.projectId !== null) {
+    const row = db
+      .prepare("SELECT name FROM projects WHERE id = ?")
+      .get(session.projectId) as { name?: string } | undefined;
+    defaultTitle = row?.name ?? null;
+  }
+  const isDefault = session.title === null || session.title === defaultTitle;
+  if (!isDefault) return;
+  const events = listSessionEvents(db, sessionId);
+  const firstUser = events.find((e) => e.type === "message.user");
+  if (firstUser === undefined) return;
+  const content = (firstUser.payload as { content?: unknown } | null)?.content;
+  if (typeof content !== "string") return;
+  const snippet = content.replace(/\s+/g, " ").trim().slice(0, 60);
+  if (snippet === "") return;
+  updateSessionTitle(db, sessionId, snippet);
+}
+
 /** Allocates the next seq and inserts atomically; callers never compute seq themselves. */
 export function appendSessionEvent(db: SqliteDatabase, sessionId: string, input: AppendEventInput): SessionEvent {
   const ts = new Date().toISOString();

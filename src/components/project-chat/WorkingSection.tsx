@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { motion } from "framer-motion";
+import { AnimatePresence, motion } from "framer-motion";
 import {
   ChevronDown,
   FileCode2,
@@ -20,12 +20,15 @@ import {
   fetchSessionCheckpoints,
   fetchSnapshot,
 } from "../../lib/api";
-import { useProjectChatStore } from "../../lib/project-chat-store";
+import { useRightSidebarStore } from "../../lib/right-sidebar-store";
 import { SubAgentCard } from "./SubAgentCard";
 import { SEMANTIC_COLORS } from "../../lib/semantics";
 import { useThemeStyles } from "../../lib/use-theme-styles";
 import { withAlpha } from "../dashboard/helpers";
-import { useThemeStore, type ActivityMode } from "../../lib/theme-store";
+// ROUND-38 (owner: "outright remove that option completely"): the
+// Detailed/Compact/Hidden ActivityMode toggle is GONE from the chat. The
+// store field remains for the Settings appearance page, but the Working
+// section always renders detailed + collapses per the live/auto rules.
 
 /**
  * WorkingSection (ROUND-37 — the owner's "two states" directive):
@@ -120,85 +123,6 @@ function useLiveSeconds(startedAtMs: number | undefined, running: boolean): numb
   return Math.max(0, Math.round((now - startedAtMs) / 1000));
 }
 
-// ─── Display-mode popover (Detailed · Compact · Hidden) ──────────────────────
-
-function ModePopover({
-  mode,
-  onMode,
-}: {
-  mode: ActivityMode;
-  onMode: (m: ActivityMode) => void;
-}) {
-  const styles = useThemeStyles();
-  const [open, setOpen] = useState(false);
-  const ref = useRef<HTMLDivElement>(null);
-
-  useEffect(() => {
-    if (!open) return;
-    const handler = (e: MouseEvent) => {
-      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false);
-    };
-    document.addEventListener("mousedown", handler);
-    return () => document.removeEventListener("mousedown", handler);
-  }, [open]);
-
-  const options: Array<{ id: ActivityMode; label: string }> = [
-    { id: "detailed", label: "Detailed" },
-    { id: "compact", label: "Compact" },
-    { id: "hidden", label: "Hidden" },
-  ];
-
-  return (
-    <div className="relative" ref={ref}>
-      <button
-        onClick={(e) => {
-          e.stopPropagation();
-          setOpen((v) => !v);
-        }}
-        aria-label="Tool display options"
-        aria-haspopup="listbox"
-        aria-expanded={open}
-        title="How to show agent work"
-        className="w-5 h-5 rounded-md grid place-items-center transition-colors"
-        style={{ color: styles.textTertiary }}
-        onMouseEnter={(e) => (e.currentTarget.style.background = styles.subtleHover)}
-        onMouseLeave={(e) => (e.currentTarget.style.background = "transparent")}
-      >
-        <Settings2 size={10} />
-      </button>
-      {open && (
-        <div
-          role="listbox"
-          aria-label="Tool display mode"
-          className="absolute right-0 top-6 z-50 rounded-[12px] border-[1.5px] p-1 flex gap-1"
-          style={{ background: styles.card, borderColor: styles.border, boxShadow: styles.softShadow }}
-          onClick={(e) => e.stopPropagation()}
-        >
-          {options.map((o) => (
-            <button
-              key={o.id}
-              role="option"
-              aria-selected={mode === o.id}
-              onClick={() => {
-                onMode(o.id);
-                setOpen(false);
-              }}
-              className="h-6 px-2.5 rounded-full text-[10px] font-bold transition-colors"
-              style={
-                mode === o.id
-                  ? { background: styles.accent, color: styles.accentText }
-                  : { background: styles.card, color: styles.text, border: `1px solid ${styles.border}` }
-              }
-            >
-              {o.label}
-            </button>
-          ))}
-        </div>
-      )}
-    </div>
-  );
-}
-
 // ─── ThoughtRow: one-line thought, click to expand ───────────────────────────
 
 /**
@@ -267,14 +191,25 @@ export function ThoughtRow({
           </span>
         )}
       </button>
-      {open && (
-        <div
-          className="mt-0.5 mb-1 rounded-[10px] pl-3 py-1.5 font-mono text-[11px] leading-[1.6] whitespace-pre-wrap break-words max-h-64 overflow-y-auto auto-scroll border-l-2"
-          style={{ borderColor: withAlpha(styles.accent, 0.25), color: styles.textTertiary }}
-        >
-          {trimmed}
-        </div>
-      )}
+      <AnimatePresence initial={false}>
+        {open && (
+          <motion.div
+            key="body"
+            initial={{ height: 0, opacity: 0 }}
+            animate={{ height: "auto", opacity: 1 }}
+            exit={{ height: 0, opacity: 0 }}
+            transition={{ duration: 0.22, ease: [0.25, 0.1, 0.25, 1] }}
+            className="overflow-hidden"
+          >
+            <div
+              className="mt-0.5 mb-1 rounded-[10px] pl-3 py-1.5 font-mono text-[11px] leading-[1.6] whitespace-pre-wrap break-words max-h-64 overflow-y-auto auto-scroll border-l-2"
+              style={{ borderColor: withAlpha(styles.accent, 0.25), color: styles.textSecondary }}
+            >
+              {trimmed}
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
     </div>
   );
 }
@@ -283,8 +218,12 @@ export function ThoughtRow({
 
 function NarrationRow({ content }: { content: string }) {
   const styles = useThemeStyles();
+  // ROUND-38 (owner: the interim narration like "I'll research on this
+  // topic for you" was faded/dulled — textTertiary — and should read as
+  // normal body text). Slight weight to distinguish it from the final
+  // answer, but full-opacity primary color.
   return (
-    <div className="py-0.5 text-[12px] leading-[1.6]" style={{ color: styles.textTertiary }}>
+    <div className="py-0.5 text-[12.5px] leading-[1.6]" style={{ color: styles.text }}>
       {content}
     </div>
   );
@@ -294,8 +233,10 @@ function NarrationRow({ content }: { content: string }) {
 
 function DiffDetail({ tool, sessionId }: { tool: ToolUseEntry; sessionId: string | null }) {
   const styles = useThemeStyles();
-  const selectFile = useProjectChatStore((s) => s.selectFile);
-  const setCodeVisible = useProjectChatStore((s) => s.setCodeVisible);
+  // ROUND-38: open files in the right sidebar's Files tab (not the old center
+  // Code panel). The active project is set by ChatFocusLayout.
+  const openFileInSidebar = useRightSidebarStore((s) => s.openFile);
+  const activeProjectId = useRightSidebarStore((s) => s.activeProjectId);
   const [diffLines, setDiffLines] = useState<DiffLine[] | null>(null);
   const [loading, setLoading] = useState(false);
 
@@ -353,8 +294,7 @@ function DiffDetail({ tool, sessionId }: { tool: ToolUseEntry; sessionId: string
         {path && (
           <button
             onClick={() => {
-              selectFile(path);
-              setCodeVisible(true);
+              if (activeProjectId !== null) openFileInSidebar(activeProjectId, path);
             }}
             className="shrink-0 h-5 px-2 rounded-full text-[10px] font-bold transition-colors"
             style={{ background: styles.subtle, color: styles.textSecondary }}
@@ -742,19 +682,24 @@ export function WorkingSection({
   liveEntryIndex?: number;
   /** ROUND-37 review #4: initial open state. Live sections ALWAYS open (the
    * owner watches progress); folded sections open per the Detailed
-   * preference — unless collapseHint says the turn was just watched live. */
+   * preference — unless collapseHint says the turn was just watched live.
+   * ROUND-38: the Detailed/Compact/Hidden toggle is gone; folded turns
+   * now start COLLAPSED (the owner's "Worked for Ns → click to expand"
+   * design), live turns start expanded. */
   defaultOpen?: boolean;
   onApprovalDecision?: (approvalId: string, decision: ApprovalDecisionChoice, remember: ApprovalRemember) => void;
 }) {
   const styles = useThemeStyles();
-  const mode = useThemeStore((s) => s.activityMode);
-  const [expanded, setExpanded] = useState(defaultOpen ?? (live || mode === "detailed"));
+  // ROUND-38: no more activityMode toggle — folded turns collapse by default,
+  // live turns expand; a manual tap always wins; live→false auto-collapses.
+  const [expanded, setExpanded] = useState(defaultOpen ?? live);
   const userTouched = useRef(false);
   const prevLive = useRef(false);
 
   // LIVE turns expand to show progress, then AUTO-COLLAPSE on completion
   // (owner: the finished chat reads as answer + "Worked for Ns"). A manual
-  // tap always wins.
+  // tap always wins. ROUND-38: the collapse is now a SMOOTH animated
+  // transition (AnimatePresence + height/opacity) rather than a hard cut.
   useEffect(() => {
     if (live && !prevLive.current) {
       if (!userTouched.current) setExpanded(true);
@@ -771,8 +716,6 @@ export function WorkingSection({
 
   const toolCount = entries.filter((e) => e.type === "tool").length;
   const pendingApproval = entries.some((e) => e.type === "approval" && e.status === "pending");
-
-  if (mode === "hidden" && !live) return null;
 
   const headerLabel = live
     ? stopped
@@ -824,50 +767,51 @@ export function WorkingSection({
           </span>
         )}
         <span className="flex-1" />
-        {!live && (
-          <ModePopover
-            mode={mode}
-            onMode={(m) => {
-              useThemeStore.getState().setActivityMode(m);
-              userTouched.current = true;
-              setExpanded(m === "detailed");
-            }}
-          />
-        )}
-        <motion.span animate={{ rotate: expanded ? 0 : -90 }} transition={{ duration: 0.15 }} className="shrink-0">
+        <motion.span animate={{ rotate: expanded ? 0 : -90 }} transition={{ duration: 0.18, ease: [0.25, 0.1, 0.25, 1] }} className="shrink-0">
           <ChevronDown size={12} style={{ color: styles.textTertiary }} />
         </motion.span>
       </div>
-      {expanded && (
-        <div className="relative ml-[7px] pl-3.5 border-l-2 py-1 flex flex-col gap-0.5" style={{ borderColor: withAlpha(styles.accent, 0.22) }}>
-          {entries.map((entry, i) => {
-            if (entry.type === "thinking") {
-              return (
-                <ThoughtRow
-                  key={`t-${i}`}
-                  text={entry.text}
-                  thinkingMs={entry.thinkingMs}
-                  live={live && i === liveEntryIndex}
-                />
-              );
-            }
-            if (entry.type === "text") {
-              return <NarrationRow key={`t-${i}`} content={entry.content} />;
-            }
-            if (entry.type === "tool") {
-              return <ToolLine key={`t-${entry.tool.seq}`} tool={entry.tool} sessionId={sessionId} live={live} />;
-            }
-            return <ApprovalRow key={`t-${i}`} entry={entry} onDecision={onApprovalDecision} />;
-          })}
-          {live && entries.length === 0 ? (
-            <div className="flex items-center gap-2 h-7">
-              <span className="text-[11px] font-mono" style={{ color: styles.textTertiary }}>
-                starting<span className="ac-ellipsis" aria-hidden />
-              </span>
+      <AnimatePresence initial={false}>
+        {expanded && (
+          <motion.div
+            key="work-body"
+            initial={{ height: 0, opacity: 0 }}
+            animate={{ height: "auto", opacity: 1 }}
+            exit={{ height: 0, opacity: 0 }}
+            transition={{ duration: 0.26, ease: [0.25, 0.1, 0.25, 1] }}
+            className="overflow-hidden"
+          >
+            <div className="relative ml-[7px] pl-3.5 border-l-2 py-1 flex flex-col gap-0.5" style={{ borderColor: withAlpha(styles.accent, 0.22) }}>
+              {entries.map((entry, i) => {
+                if (entry.type === "thinking") {
+                  return (
+                    <ThoughtRow
+                      key={`t-${i}`}
+                      text={entry.text}
+                      thinkingMs={entry.thinkingMs}
+                      live={live && i === liveEntryIndex}
+                    />
+                  );
+                }
+                if (entry.type === "text") {
+                  return <NarrationRow key={`t-${i}`} content={entry.content} />;
+                }
+                if (entry.type === "tool") {
+                  return <ToolLine key={`t-${entry.tool.seq}`} tool={entry.tool} sessionId={sessionId} live={live} />;
+                }
+                return <ApprovalRow key={`t-${i}`} entry={entry} onDecision={onApprovalDecision} />;
+              })}
+              {live && entries.length === 0 ? (
+                <div className="flex items-center gap-2 h-7">
+                  <span className="text-[11px] font-mono" style={{ color: styles.textTertiary }}>
+                    starting<span className="ac-ellipsis" aria-hidden />
+                  </span>
+                </div>
+              ) : null}
             </div>
-          ) : null}
-        </div>
-      )}
+          </motion.div>
+        )}
+      </AnimatePresence>
     </div>
   );
 }

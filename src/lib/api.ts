@@ -1004,6 +1004,30 @@ export async function retrySubAgent(sessionId: string, childId: string): Promise
   });
 }
 
+/** ROUND-38: a sub-agent's full event log (for the right-sidebar Sub-agents
+ * tab — the prompt at the top + the actions below). Reuses the session
+ * detail endpoint (a child session is a session). */
+export async function fetchSubAgentDetail(childSessionId: string): Promise<SessionDetail> {
+  return request<SessionDetail>(`/sessions/${childSessionId}`);
+}
+
+/** ROUND-38: POST /projects/:id/terminal — user-driven command runner for the
+ * right-sidebar Terminal tab. Returns combined stdout/stderr + exit code. */
+export interface TerminalRunResult {
+  ok: boolean;
+  output: string;
+  exitCode: number | null;
+}
+export async function runProjectTerminal(
+  projectId: string,
+  command: string,
+): Promise<TerminalRunResult> {
+  return request<TerminalRunResult>(`/projects/${projectId}/terminal`, {
+    method: "POST",
+    json: { command },
+  });
+}
+
 export interface OrchestrationSettings {
   maxParallel: number;
   perKeyLimit: number;

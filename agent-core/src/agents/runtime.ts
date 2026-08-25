@@ -21,6 +21,7 @@ import {
   getSession,
   lastSessionSeq,
   listSessionEvents,
+  maybeAutoTitleSession,
   recordUsage,
   setSessionStatus,
   touchSession,
@@ -466,6 +467,10 @@ export async function runSingleAgentTurn(
   };
   recordUsage(db, usage);
   touchSession(db, session.id);
+  // ROUND-38: auto-rename the session after the first assistant reply lands
+  // (owner: sessions should rename after the first interaction, like the
+  // reference repos). No-op once the title is no longer the default.
+  maybeAutoTitleSession(db, session.id);
   logTurnEnd(session.id, true, Date.now() - syncStartedAt, result.usage.inputTokens, result.usage.outputTokens);
 
   return {
@@ -799,6 +804,10 @@ export async function runStreamedAgentTurn(
   };
   recordUsage(db, usage);
   touchSession(db, session.id);
+  // ROUND-38: auto-rename after the first streamed assistant reply (same
+  // rule as the sync path — owner directive: sessions rename after the
+  // first interaction).
+  maybeAutoTitleSession(db, session.id);
   logTurnEnd(session.id, true, ms, totalInputTokens, totalOutputTokens);
 
   return {

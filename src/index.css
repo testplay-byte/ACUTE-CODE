@@ -450,6 +450,40 @@
   .ac-pulse { animation: none !important; opacity: 1 !important; }
 }
 
+/* ROUND-38 (owner: "the currently running session will have some animation to
+   it, like a pixelated kind of animation playing along on the right side… to
+   represent that something is happening in this session"). Four bars step
+   through discrete heights via steps(1) — a pixelated equalizer, not a
+   smooth sine — with staggered delays so it reads as live activity. */
+@keyframes ac-pixel-bar {
+  0%   { height: 25%; }
+  20%  { height: 95%; }
+  40%  { height: 45%; }
+  60%  { height: 100%; }
+  80%  { height: 35%; }
+  100% { height: 25%; }
+}
+.ac-pixel-stream {
+  display: inline-flex;
+  align-items: flex-end;
+  gap: 2px;
+  height: 13px;
+  width: 14px;
+}
+.ac-pixel-stream > span {
+  width: 2px;
+  height: 30%;
+  border-radius: 1px;
+  background: currentColor;
+  animation: ac-pixel-bar 0.9s steps(1, end) infinite;
+}
+.ac-pixel-stream > span:nth-child(2) { animation-delay: 0.15s; }
+.ac-pixel-stream > span:nth-child(3) { animation-delay: 0.3s; }
+.ac-pixel-stream > span:nth-child(4) { animation-delay: 0.45s; }
+@media (prefers-reduced-motion: reduce) {
+  .ac-pixel-stream > span { animation: none !important; height: 60% !important; }
+}
+
 /* Global reduced-motion retrofits ALL existing animations (6-e accessibility
  * fix). Users who prefer reduced motion get static states, no bouncing/
  * sliding/fading/pulsing. Existing keyframes are left intact; this block

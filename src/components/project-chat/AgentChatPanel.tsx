@@ -54,6 +54,8 @@ import { useThemeStore } from "../../lib/theme-store";
 import { withAlpha } from "../dashboard/helpers";
 import { ease } from "../../lib/motion";
 import { useProjectChatStore } from "../../lib/project-chat-store";
+import { useActiveStreams } from "../../lib/active-streams";
+import { useRightSidebarStore } from "../../lib/right-sidebar-store";
 import { SEMANTIC_COLORS } from "../../lib/semantics";
 import { useThemeStyles } from "../../lib/use-theme-styles";
 import { useScrollFade } from "../../lib/useScrollFade";
@@ -189,6 +191,13 @@ const itemKey = (item: ProjectChatItem): string => {
 
 function UserMessage({ content }: { content: string }) {
   const styles = useThemeStyles();
+  // ROUND-38 (owner: "the messages which I sent… look bad and ugly. Their
+  // interface and the colors kind of do not look good"): the old solid-orange
+  // bubble + white text was loud and harsh. Redesigned as a calm, refined
+  // accent-tinted bubble with primary text + a soft border + a small tail,
+  // medium weight for presence without shouting.
+  const bubbleBg = withAlpha(styles.accent, styles.isDark ? 0.18 : 0.1);
+  const bubbleBorder = withAlpha(styles.accent, styles.isDark ? 0.32 : 0.22);
   return (
     <motion.div
       className="flex justify-end group"
@@ -196,13 +205,17 @@ function UserMessage({ content }: { content: string }) {
       initial="initial"
       animate="animate"
     >
-      <div className="flex items-end gap-1 max-w-[85%]">
-        <div className="opacity-0 group-hover:opacity-100 transition-opacity">
+      <div className="flex items-end gap-1 max-w-[82%]">
+        <div className="opacity-0 group-hover:opacity-100 transition-opacity pb-0.5">
           <CopyButton text={content} />
         </div>
         <div
-          className="rounded-[16px] rounded-br-md px-3.5 py-2.5 text-[13px] leading-[1.5]"
-          style={{ background: styles.accent, color: styles.accentText }}
+          className="rounded-[16px] rounded-br-[5px] px-3.5 py-2.5 text-[13px] leading-[1.55] font-medium border"
+          style={{
+            background: bubbleBg,
+            borderColor: bubbleBorder,
+            color: styles.text,
+          }}
         >
           {content}
         </div>
@@ -643,13 +656,60 @@ export function AgentChatPanel({
 
   const scrollRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
-  const selectProjectFile = useProjectChatStore((s) => s.selectFile);
-  const setCodeVisibleForPick = useProjectChatStore((s) => s.setCodeVisible);
+  // ROUND-38: file picking now opens in the right sidebar's Files tab via
+  // useRightSidebarStore.getState().openFile (see onPickFile + DiffDetail).
   // Round-28 WS-D3: AbortController for the streaming fetch — the Stop button
   // calls abortRef.current?.abort() to cancel mid-stream.
   const abortRef = useRef<AbortController | null>(null);
 
   useScrollFade(scrollRef);
+
+  // ROUND-38 (owner: sessions mixing across projects): declare this project
+  // active so the per-project scoped state (selectedFileId/Agent/folders)
+  // swaps in — opening a file in project A never re-opens it in B.
+  const setActiveProject = useProjectChatStore((s) => s.setActiveProject);
+  useEffect(() => {
+    setActiveProject(projectId);
+  }, [projectId, setActiveProject]);
+
+  // ROUND-38 (owner: switching sessions mid-stream bled the previous
+  // session's live text into the new one): when the authoritative session id
+  // changes, abort any in-flight stream and clear the live/pending/echo
+  // state so the new session renders from its own log.
+  const prevSessionIdRef = useRef<string | null>(session?.id ?? null);
+  useEffect(() => {
+    const cur = session?.id ?? null;
+    if (prevSessionIdRef.current === cur) return;
+    abortRef.current?.abort();
+    abortRef.current = null;
+    setLiveTurn(null);
+    setStreamBusy(false);
+    setPendingUser(null);
+    setSendError(null);
+    setLastSent(null);
+    setInput("");
+    lastLiveEndRef.current = 0;
+    prevSessionIdRef.current = cur;
+  }, [session?.id]);
+
+  // ROUND-38 (owner: running session shows a pixelated animation in the
+  // sidebar). Mark this session active in the global registry while a turn
+  // is in flight (streaming OR sync send). The sidebar SessionRow reads it.
+  const startStream = useActiveStreams((s) => s.start);
+  const stopStream = useActiveStreams((s) => s.stop);
+  const activeSessionId = session?.id ?? null;
+  const isRunning = streamBusy || sendMessage.isPending;
+  useEffect(() => {
+    if (activeSessionId === null) return;
+    if (isRunning) startStream(activeSessionId);
+    else stopStream(activeSessionId);
+  }, [isRunning, activeSessionId, startStream, stopStream]);
+  // Clear the indicator if the panel unmounts mid-turn (project switch).
+  useEffect(() => {
+    return () => {
+      if (activeSessionId !== null) stopStream(activeSessionId);
+    };
+  }, [activeSessionId, stopStream]);
 
   // Auto-scroll: new items, busy transitions, the live section's entry count,
   // and the growing streaming text (review fix #4 + R37 amendment #11).
@@ -947,8 +1007,8 @@ export function AgentChatPanel({
         open={paletteOpen}
         onClose={() => setPaletteOpen(false)}
         onPickFile={(path) => {
-          selectProjectFile(path);
-          setCodeVisibleForPick(true);
+          // ROUND-38: open picked files in the right sidebar's Files tab.
+          useRightSidebarStore.getState().openFile(projectId, path);
           setPaletteOpen(false);
         }}
       />

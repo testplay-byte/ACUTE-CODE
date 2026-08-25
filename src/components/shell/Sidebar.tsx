@@ -29,6 +29,7 @@ import { useProjects, useCreateProject, useDeleteProject } from "../../hooks/use
 import { useCreateSession, useDeleteSession, useRenameSession, useSessions } from "../../hooks/use-sessions";
 import { useAgents } from "../../hooks/use-agents";
 import { useProjectChatStore } from "../../lib/project-chat-store";
+import { useActiveStreams } from "../../lib/active-streams";
 import { withAlpha } from "../dashboard/helpers";
 
 type TauriGlobal = {
@@ -710,6 +711,9 @@ function SessionRow({
   const [hovered, setHovered] = useState(false);
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState(session.title ?? "");
+  // ROUND-38: pixelated activity indicator on the right when this session
+  // has a turn in flight (owner directive).
+  const running = useActiveStreams((s) => s.active.has(session.id));
 
   const remove = () => {
     deleteSession.mutate(session.id, {
@@ -814,6 +818,20 @@ function SessionRow({
       >
         <Trash2 size={10} />
       </button>
+      {/* ROUND-38 (owner: "the currently running session will have some
+          animation to it, like a pixelated kind of animation playing along
+          on the right side"). Shown only while a turn is in flight. */}
+      {running ? (
+        <span
+          className="shrink-0 mr-1 ac-pixel-stream"
+          style={{ color: styles.accent }}
+          aria-label="Session is working"
+          role="status"
+          title="Working…"
+        >
+          <span /><span /><span /><span />
+        </span>
+      ) : null}
     </div>
   );
 }
