@@ -63,7 +63,7 @@ afterAll(() => {
 });
 
 async function authInject(options: {
-  method: "GET" | "POST" | "PUT";
+  method: "GET" | "POST" | "PUT" | "PATCH" | "DELETE";
   url: string;
   payload?: Record<string, unknown>;
 }): Promise<LightMyRequestResponse> {

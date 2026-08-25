@@ -23,6 +23,7 @@ import {
 } from "./providers/registry.js";
 import {
   RESERVED_PROVIDER_IDS,
+  clearProviderTombstone,
   createProviderRecord,
   deleteProviderRecord,
   providerExists,
@@ -49,7 +50,15 @@ import {
 } from "./storage/sessions.js";
 import { getOrchestrationSettings, setOrchestrationSettings } from "./storage/settings.js";
 import { Orchestrator } from "./agents/orchestrator.js";
+import {
+  getApproval,
+  listApprovals,
+  resolvePendingApproval,
+  setApprovalStatus,
+  sweepStaleApprovals,
+} from "./approvals.js";
 import { getUsageSummary } from "./storage/usage.js";
+import { log } from "./lib/log.js";
 import {
   deleteModel,
   listModels,
@@ -235,6 +244,10 @@ export function buildServer(options: ServerOptions): FastifyInstance {
   // ROUND-36 (ADR-0022 §3): a dead sidecar leaves `running` sessions — flip
   // them to failed so they're retryable. Idempotent at every boot.
   Orchestrator.sweepStaleRunning(db);
+
+  // ROUND-37 (ADR-0024): crash-orphaned pending approvals fail closed.
+  const swept = sweepStaleApprovals(db);
+  if (swept > 0) log("info", "boot.approvals_swept", { swept });
 
   // CORS: loopback-only product, but the webview (tauri.localhost) and the
   // dev vite server (localhost:5173) are cross-origin callers — without
@@ -529,11 +542,16 @@ export function buildServer(options: ServerOptions): FastifyInstance {
           }
           id = raw.id.trim();
         }
-        if (id === "" || RESERVED_PROVIDER_IDS.includes(id)) {
+        if (id === "") {
           return reply.code(400).send(
             errorBody("VALIDATION", `id is reserved or unusable: ${id}`, { field: "body.id" }),
           );
         }
+        // ROUND-37 (owner: "Add Provider" offers the built-in presets): a
+        // RESERVED id is now claimable when its row is ABSENT — that's a
+        // deleted built-in being re-added (re-adding clears the tombstone
+        // below so the boot seed leaves it alone). An existing row —
+        // reserved or not — is still a 409.
         if (providerRecordIdExists(db, id)) {
           return reply
             .code(409)
@@ -544,6 +562,9 @@ export function buildServer(options: ServerOptions): FastifyInstance {
           raw.apiFormat === "anthropic-messages" || raw.apiFormat === "responses"
             ? (raw.apiFormat as string)
             : "chat-completions";
+        if (RESERVED_PROVIDER_IDS.includes(id)) {
+          clearProviderTombstone(db, id);
+        }
         const record = createProviderRecord(db, {
           id,
           name: raw.name.trim(),
@@ -553,18 +574,16 @@ export function buildServer(options: ServerOptions): FastifyInstance {
         return reply.code(201).send({ ...record, hasKey: keyring.has(record.id) });
       });
 
-      // ROUND-34 (owner's provider settings): update a CUSTOM provider's
-      // name/baseUrl/apiFormat/enabled. Built-ins refuse edits (409).
+      // ROUND-37 (owner: "he will be given these options to delete it, to
+      // change the base URL, to change the name… and the API key"): EVERY
+      // provider is editable — built-ins included. The old 409 for built-ins
+      // is gone; only the reserved-id IMMUTABILITY of seeding is protected
+      // (via tombstones on delete).
       scope.patch("/providers/:id", async (request, reply) => {
         const { id } = request.params as Record<string, string>;
         const record = resolveProvider(db, id);
         if (record === undefined) {
           return reply.code(404).send(errorBody("NOT_FOUND", `no provider with id ${id}`));
-        }
-        if (RESERVED_PROVIDER_IDS.includes(id)) {
-          return reply.code(409).send(
-            errorBody("CONFLICT", `built-in provider '${id}' cannot be edited`, { field: "params.id" }),
-          );
         }
         const body: unknown = request.body;
         if (typeof body !== "object" || body === null || Array.isArray(body)) {
@@ -601,19 +620,15 @@ export function buildServer(options: ServerOptions): FastifyInstance {
         return reply.code(200).send({ ...updated, hasKey: keyring.has(updated.id) });
       });
 
-      // ROUND-34: delete a CUSTOM provider (built-ins refuse; 409). Agents
-      // referencing the provider block deletion (review fix #5) — their next
-      // turn would 409 on a dead provider otherwise.
+      // ROUND-37: delete ANY provider (built-ins write a tombstone so the
+      // boot seed doesn't resurrect them; re-adding via Add Provider clears
+      // it). Agents referencing the provider still block deletion — their
+      // next turn would 409 on a dead provider otherwise.
       scope.delete("/providers/:id", async (request, reply) => {
         const { id } = request.params as Record<string, string>;
         const record = resolveProvider(db, id);
         if (record === undefined) {
           return reply.code(404).send(errorBody("NOT_FOUND", `no provider with id ${id}`));
-        }
-        if (RESERVED_PROVIDER_IDS.includes(id)) {
-          return reply.code(409).send(
-            errorBody("CONFLICT", `built-in provider '${id}' cannot be deleted`, { field: "params.id" }),
-          );
         }
         const referencing = listAgents(db, true).filter((a) => a.providerId === id);
         if (referencing.length > 0) {
@@ -1249,6 +1264,67 @@ export function buildServer(options: ServerOptions): FastifyInstance {
         return reply.code(200).send({ ok: true, message: result.message });
       });
 
+      // ── ROUND-37: approvals (ADR-0024 — the human permission flow) ───────
+
+      scope.get("/approvals", async (request) => {
+        const query = request.query as Record<string, string | undefined>;
+        const status = query.status;
+        const projectId = query.projectId;
+        return {
+          approvals: listApprovals(db, {
+            ...(status !== undefined ? { status } : {}),
+            ...(projectId !== undefined ? { projectId } : {}),
+          }),
+        };
+      });
+
+      scope.post("/approvals/:id/decision", async (request, reply) => {
+        const { id } = request.params as Record<string, string>;
+        const approval = getApproval(db, id);
+        if (approval === undefined) {
+          return reply.code(404).send(errorBody("NOT_FOUND", `no approval with id ${id}`));
+        }
+        if (approval.status !== "pending") {
+          return reply.code(409).send(
+            errorBody("CONFLICT", `approval ${id} is already ${approval.status}`, {
+              field: "params.id",
+            }),
+          );
+        }
+        const body: unknown = request.body;
+        if (typeof body !== "object" || body === null || Array.isArray(body)) {
+          return reply
+            .code(400)
+            .send(errorBody("VALIDATION", "body must be a JSON object", { field: "body" }));
+        }
+        const raw = body as Record<string, unknown>;
+        const decision = raw.decision;
+        if (decision !== "approved" && decision !== "denied") {
+          return reply.code(400).send(
+            errorBody("VALIDATION", "decision must be 'approved' or 'denied'", {
+              field: "body.decision",
+            }),
+          );
+        }
+        // HARD RULE: destructive operations are NEVER "always allow" — a
+        // remember=always on a destructive approval silently downgrades to
+        // once (the engine double-checks before writing any rule).
+        const requestedRemember = raw.remember;
+        const remember: "once" | "always" | undefined =
+          requestedRemember === "always" && approval.category !== "destructive"
+            ? "always"
+            : requestedRemember === "once" || requestedRemember === "always"
+              ? "once"
+              : undefined;
+
+        // 1) Persist the decision (BEFORE resolving the waiter — the engine
+        //    reads remember back to decide whether to write the rule).
+        setApprovalStatus(db, id, decision, remember, "owner");
+        // 2) Wake the waiting tool call (no-op when the turn died).
+        resolvePendingApproval(id, decision);
+        return reply.code(200).send({ ok: true, decision, remember: remember ?? "once" });
+      });
+
       // ── ROUND-36: orchestration settings ──────────────────────────────
 
       scope.get("/settings/orchestration", async () => {
@@ -1485,7 +1561,10 @@ export async function startServer(options: StartServerOptions): Promise<RunningS
     await app.close();
     throw new Error("sidecar failed to bind a TCP port");
   }
-  // The shell parses this exact line (ARCHITECTURE §2); nothing else may print to stdout.
+  // The shell parses this exact line (ARCHITECTURE §2). R37 note: structured
+  // log lines (JSON) may precede it on stdout — the shell prefix-scans for
+  // ACUTE_READY, so they're harmless; only malformed non-JSON output would
+  // risk confusing a stricter parser.
   console.log(`ACUTE_READY ${JSON.stringify({ port: address.port })}`);
   return { server: app, port: address.port };
 }

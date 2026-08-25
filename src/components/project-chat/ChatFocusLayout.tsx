@@ -43,12 +43,13 @@ export function ChatFocusLayout({ project }: { project: Project }) {
           boxShadow: styles.softShadow,
         }}
       >
-        {/* ROUND-35 (owner: "too tall… does not go wide enough… should be
-            centered on the screen"): the conversation column is CENTERED at a
-            comfortable reading width (900px) — symmetric side breathing, no
-            left-hugging. */}
+        {/* ROUND-37 (owner: "its width was not proper. A lot of the right
+            side area was completely empty"): the 900px R35 cap is GONE — the
+            conversation column now fills the panel with comfortable padding;
+            a soft 1500px readability cap keeps 13px text sane on ultrawide
+            displays (plan amendment #7). */}
         <div className="flex-1 min-h-0 flex justify-center">
-          <div className="w-full max-w-[900px] min-h-0 flex">
+          <div className="w-full max-w-[1500px] min-h-0 flex">
             <AgentChatPanel projectId={project.id} project={project} />
           </div>
         </div>

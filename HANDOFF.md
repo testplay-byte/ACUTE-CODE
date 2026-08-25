@@ -1,7 +1,7 @@
-<!-- last-reviewed: 2026-08-25 round-36 -->
+<!-- last-reviewed: 2026-08-25 round-37 -->
 # ACUTE-CODE — Agent Handoff Document
 
-**Last updated:** 2026-08-25 (round-36 DELIVERED — PHASE 3 CORE: sub-agent orchestration per ADR-0022. delegate_task tool (parallel fan-out), the orchestrator (atomic total/per-key semaphores, key-pool assignment, crash recovery resuming from the event log, boot sweep), live SubAgentCards with tap-to-inspect logs + retry, orchestration settings + API key-pool CRUD. Live-proven with a real 2-sub-agent delegation. **227 tests green**) · **Maintained by:** the orchestrator agent · **Audience:** any AI agent (or human) taking over development
+**Last updated:** 2026-08-25 (round-37 DELIVERED — chat continuity per ADR-0023: ONE header-less assistant turn per user message with the collapsible Working section (live mm:ss timer, one-line expandable thoughts/tools, final answer OUTSIDE the section), Sparkles iconography removed at all sites, chat width fixes; providers rebuilt per owner spec (flat list, Add Provider dialog with presets, every provider editable/deletable via tombstones, apiFormat wired: chat-completions | anthropic-messages | responses); approvals v1 per ADR-0024 (layered policy engine, interactive Allow once/Always allow/Deny, in-process resolver map, fail-closed timeouts/sweep, non-interactive fail-fast); structured JSON-lines logging (`.dev/acute.log`). **250 tests green**) · **Maintained by:** the orchestrator agent · **Audience:** any AI agent (or human) taking over development
 
 You are picking up **ACUTE-CODE**, a local-first, closed-source multi-agent engineering workbench for Windows. This file gives you everything needed to continue: state, rules, environment, gotchas, and next steps. It contains **no secrets** — secrets live only in Windows Credential Manager (§7).
 

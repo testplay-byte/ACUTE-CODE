@@ -10,6 +10,8 @@
     "typecheck": "tsc --noEmit -p tsconfig.json"
   },
   "dependencies": {
+    "@ai-sdk/anthropic": "^3.0.111",
+    "@ai-sdk/openai": "^3.0.99",
     "@ai-sdk/openai-compatible": "^3.0.34",
     "ai": "^7.0.73",
     "better-sqlite3": "^13.0.3",

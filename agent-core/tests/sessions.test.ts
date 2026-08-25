@@ -399,7 +399,7 @@ describe("ROUND-35: thinking + interleaved segments", () => {
 });
 
 describe("ROUND-34: PATCH/DELETE /api/v1/providers/:id", () => {
-  it("custom providers can be renamed, re-pointed, disabled, and deleted; built-ins refuse", async () => {
+  it("custom providers can be renamed, re-pointed, disabled, and deleted", async () => {
     const created = await authInject({
       method: "POST",
       url: "/api/v1/providers",
@@ -420,16 +420,71 @@ describe("ROUND-34: PATCH/DELETE /api/v1/providers/:id", () => {
     expect(gone.statusCode).toBe(204);
     const missing = await authInject({ method: "GET", url: `/api/v1/providers/${id}/models` });
     expect(missing.statusCode).toBe(404);
+  });
 
-    // Built-ins refuse edits and deletion.
-    const editBuiltin = await authInject({
+  it("ROUND-37: built-ins are now editable (owner: every provider gets delete/rename/baseUrl/format)", async () => {
+    const patched = await authInject({
       method: "PATCH",
-      url: "/api/v1/providers/openrouter",
-      payload: { name: "Nope" },
+      url: "/api/v1/providers/anthropic",
+      payload: { name: "Anthropic (proxy)", baseUrl: "https://proxy.example.com/v1", apiFormat: "anthropic-messages" },
     });
-    expect(editBuiltin.statusCode).toBe(409);
-    const delBuiltin = await authInject({ method: "DELETE", url: "/api/v1/providers/openrouter" });
-    expect(delBuiltin.statusCode).toBe(409);
+    expect(patched.statusCode).toBe(200);
+    expect(patched.json()).toMatchObject({
+      id: "anthropic",
+      name: "Anthropic (proxy)",
+      baseUrl: "https://proxy.example.com/v1",
+      apiFormat: "anthropic-messages",
+    });
+
+    // restore for other tests
+    const restored = await authInject({
+      method: "PATCH",
+      url: "/api/v1/providers/anthropic",
+      payload: { name: "Anthropic", baseUrl: "https://api.anthropic.com/v1", apiFormat: "chat-completions" },
+    });
+    expect(restored.statusCode).toBe(200);
+  });
+
+  it("ROUND-37: deleting a built-in tombstones it — the boot seed does NOT resurrect it; re-adding clears the tombstone", async () => {
+    const dbPath = join(tempDir, `${randomUUID()}.db`);
+    const inject = (a: FastifyInstance, url: string, method: "GET" | "POST" | "DELETE" = "GET", payload?: Record<string, unknown>) =>
+      a.inject({ url, method, ...(payload ? { payload } : {}), headers: { authorization: `Bearer ${TOKEN}` } });
+
+    // Fresh database + server.
+    let localDb = openDatabase(dbPath);
+    let localApp = buildServer({ token: TOKEN, db: localDb, keyring: new ProviderKeyring({}) });
+
+    // Delete the openai built-in.
+    const del = await inject(localApp, "/api/v1/providers/openai", "DELETE");
+    expect(del.statusCode).toBe(204);
+    await localApp.close();
+    localDb.close();
+
+    // Re-open the database (the boot seed runs) — openai must STAY deleted.
+    localDb = openDatabase(dbPath);
+    localApp = buildServer({ token: TOKEN, db: localDb, keyring: new ProviderKeyring({}) });
+    const list = await inject(localApp, "/api/v1/providers");
+    expect(list.statusCode).toBe(200);
+    expect(list.json().providers.find((p: { id: string }) => p.id === "openai")).toBeUndefined();
+
+    // Re-adding via the Add Provider preset (POST with the reserved id) works
+    // and clears the tombstone.
+    const readd = await inject(localApp, "/api/v1/providers", "POST", {
+      id: "openai",
+      name: "OpenAI",
+      baseUrl: "https://api.openai.com/v1",
+    });
+    expect(readd.statusCode).toBe(201);
+    await localApp.close();
+    localDb.close();
+
+    // …and the seed still leaves the re-added row alone on the next open.
+    localDb = openDatabase(dbPath);
+    localApp = buildServer({ token: TOKEN, db: localDb, keyring: new ProviderKeyring({}) });
+    const list2 = await inject(localApp, "/api/v1/providers");
+    expect(list2.json().providers.find((p: { id: string }) => p.id === "openai")).toMatchObject({ id: "openai" });
+    await localApp.close();
+    localDb.close();
   });
 });
 

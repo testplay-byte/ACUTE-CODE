@@ -582,32 +582,57 @@ export interface DiffEntry {
 /** Renderable timeline item for the project-chat screen (see toProjectChatItems). */
 export type ProjectChatItem =
   | { kind: "user"; seq: number; content: string; ts: string }
+  | AssistantTurnItem;
+
+/**
+ * ROUND-37 (owner "two states" directive): ONE assistant TURN per user
+ * message. Everything the agent did between the user's message and its
+ * final answer — thoughts, interim narration, tool calls, approval
+ * exchanges — folds into `working` and renders inside the collapsible
+ * Working section. The text AFTER the last tool call is `finalText`,
+ * rendered BELOW the section, so collapsing the section never hides the
+ * answer (owner: "the very last line… is the actual response… when I
+ * collapse the work for then it will not collapse everything above it").
+ */
+export interface AssistantTurnItem {
+  kind: "turn";
+  /** seq of the turn's first event (assistant/tool/approval). */
+  seq: number;
+  agentId: string | null;
+  /** Turn start (first event ts). */
+  ts: string;
+  /** Last event ts — elapsed = endTs − ts. */
+  endTs: string;
+  working: WorkingEntry[];
+  finalText: string;
+  /** Turn-level stats (from the LAST assistant event carrying them — the
+   * R35 stats-carrier merges here too). */
+  usage?: { inputTokens: number; outputTokens: number };
+  ms?: number;
+  model?: string;
+}
+
+/** One entry inside a turn's Working section. */
+export type WorkingEntry =
   | {
-      /** Round-33: one ACTIVITY BLOCK per maximal run of consecutive tool.use
-       * events — rendered EXACTLY where the work happened in the conversation
-       * (owner: "it should show within the chat at the point of the tools
-       * being called"). One continuous timeline, no round labels. */
-      kind: "activity";
-      seqStart: number;
-      seqEnd: number;
-      tools: ToolUseEntry[];
+      type: "thinking";
+      text: string;
       ts: string;
-      /** Last event ts of the block — elapsed = endTs − ts. */
-      endTs: string;
+      /** Round-37: measured thinking duration ("Thought for Ns"); absent on
+       * sessions persisted before R37 — renderers fall back to "Thought". */
+      thinkingMs?: number;
     }
+  | { type: "text"; content: string; ts: string }
+  | { type: "tool"; tool: ToolUseEntry }
   | {
-      kind: "ai";
-      seq: number;
-      content: string;
-      agentId: string | null;
+      type: "approval";
+      approvalId: string;
+      toolName: string;
+      argsSummary: string;
+      category: string;
+      status: "pending" | "approved" | "denied" | "expired";
+      remember?: "once" | "always";
       ts: string;
-      /** ROUND-35: the model's thinking/reasoning for this segment (shown
-       * separately in a muted, collapsible block). */
-      thinking?: string;
-      /** Round-16 per-reply stats (from the assistant event payload). */
-      usage?: { inputTokens: number; outputTokens: number };
-      ms?: number;
-      model?: string;
     };
 
 /** tool.use payload fields as agent-core's runtime writes them. */
@@ -661,101 +686,254 @@ export function parseDiffArgs(argsSummary: string): { path: string | null; chars
 
 /**
  * Fold the append-only event log (ADR-0010) into the project-chat timeline
- * (round-33): user bubbles, ONE activity block per MAXIMAL RUN of consecutive
- * tool.use events (positioned exactly where the work happened — the owner's
- * "show tools at the point they're called"), and assistant messages in
- * chronological order. A turn's interim assistant replies interleave between
- * activity blocks naturally. No round grouping — one continuous session.
+ * (ROUND-37 turn model): user bubbles + ONE assistant turn per user message.
+ *
+ * Turn semantics (plan §1.1 + review amendments #3a–3e):
+ * - A turn = every event between two `message.user` events (plus a synthetic
+ *   leading turn for logs that start with assistant events).
+ * - `finalText` = the content of the last non-empty assistant event, but ONLY
+ *   when no tool.use follows it ("text after the last tool call"). A turn that
+ *   ends on a tool call has `finalText: ""` and renders working-only.
+ * - All other assistant texts (before a later tool) fold into `working` as
+ *   narration entries; ALL thinking folds into `working`.
+ * - Stats (usage/ms/model) come from the LAST assistant event carrying them
+ *   (the R35 stats-carrier merges here — no empty bubbles, ever).
+ * - User items ALWAYS render, even when their turn produced nothing (failed
+ *   provider call). A turn with no working AND no finalText is dropped.
+ * - approval.requested/resolved events fold into working entries; a resolved
+ *   event updates its matching pending entry in place.
  */
+interface TurnAccumulator {
+  seq: number;
+  agentId: string | null;
+  ts: string;
+  endTs: string;
+  /** Raw turn events (assistant/tool/approval) in seq order. */
+  events: SessionEvent[];
+}
+
+interface AssistantPayload {
+  content?: unknown;
+  thinking?: unknown;
+  thinkingMs?: unknown;
+  usage?: unknown;
+  ms?: unknown;
+  model?: unknown;
+}
+
+interface ApprovalPayload {
+  approvalId?: unknown;
+  toolName?: unknown;
+  argsSummary?: unknown;
+  category?: unknown;
+  decision?: unknown;
+  remember?: unknown;
+}
+
 export function toProjectChatItems(events: SessionEvent[]): ProjectChatItem[] {
   const ordered = [...events].sort((a, b) => a.seq - b.seq);
   const items: ProjectChatItem[] = [];
+  let turn: TurnAccumulator | null = null;
 
-  let index = 0;
-  while (index < ordered.length) {
-    const event = ordered[index];
+  const openTurn = (event: SessionEvent): TurnAccumulator => {
+    turn = {
+      seq: event.seq,
+      agentId: event.agentId ?? null,
+      ts: event.ts,
+      endTs: event.ts,
+      events: [event],
+    };
+    return turn;
+  };
 
-    if (event.type === "tool.use") {
-      // Maximal run of consecutive tool.use events → ONE activity block.
-      const tools: ToolUseEntry[] = [];
-      while (index < ordered.length && ordered[index].type === "tool.use") {
-        tools.push(toToolUseEntry(ordered[index]));
-        index += 1;
+  const extendTurn = (event: SessionEvent): TurnAccumulator => {
+    if (turn === null) return openTurn(event); // openTurn seeds events with [event]
+    turn.endTs = event.ts;
+    if (turn.agentId === null && event.agentId !== null) turn.agentId = event.agentId;
+    turn.events.push(event);
+    return turn;
+  };
+
+  /** Build the AssistantTurnItem from the accumulated raw events. */
+  const flushTurn = (): void => {
+    if (turn === null) return;
+    const acc = turn;
+    turn = null;
+
+    // Classification needs full-turn knowledge: the last tool seq and the
+    // last non-empty assistant text seq decide final-vs-narration.
+    let lastToolSeq = -1;
+    let lastTextSeq = -1;
+    let lastTextContent = "";
+    for (const event of acc.events) {
+      if (event.type === "tool.use") {
+        if (event.seq > lastToolSeq) lastToolSeq = event.seq;
+        continue;
       }
-      items.push({
-        kind: "activity",
-        seqStart: tools[0].seq,
-        seqEnd: tools[tools.length - 1].seq,
-        tools,
-        ts: tools[0].ts,
-        endTs: tools[tools.length - 1].ts,
-      });
-      continue;
+      if (event.type === "message.assistant") {
+        const payload =
+          event.payload && typeof event.payload === "object"
+            ? (event.payload as AssistantPayload)
+            : {};
+        if (typeof payload.content === "string" && payload.content.trim() !== "") {
+          if (event.seq > lastTextSeq) {
+            lastTextSeq = event.seq;
+            lastTextContent = payload.content;
+          }
+        }
+      }
     }
 
-    if (event.type === "message.user" || event.type === "message.assistant") {
-      const payload =
-        event.payload && typeof event.payload === "object"
-          ? (event.payload as Record<string, unknown>)
-          : null;
-      if (payload && typeof payload.content === "string") {
-        if (event.type === "message.user") {
-          items.push({ kind: "user", seq: event.seq, content: payload.content, ts: event.ts });
-        } else {
-          const usageRaw = payload.usage;
-          const usage =
-            typeof usageRaw === "object" && usageRaw !== null
-              ? (usageRaw as { inputTokens: number; outputTokens: number })
-              : undefined;
-          const msRaw = payload.ms;
-          const modelRaw = payload.model;
-          const thinkingRaw = payload.thinking;
-          items.push({
-            kind: "ai",
-            seq: event.seq,
-            content: payload.content,
-            agentId: event.agentId,
+    const working: WorkingEntry[] = [];
+    const approvalIndex = new Map<string, number>();
+    let usage: { inputTokens: number; outputTokens: number } | undefined;
+    let ms: number | undefined;
+    let model: string | undefined;
+
+    for (const event of acc.events) {
+      if (event.type === "tool.use") {
+        working.push({ type: "tool", tool: toToolUseEntry(event) });
+        continue;
+      }
+
+      if (event.type === "message.assistant") {
+        const payload =
+          event.payload && typeof event.payload === "object"
+            ? (event.payload as AssistantPayload)
+            : {};
+        const usageRaw = payload.usage;
+        if (typeof usageRaw === "object" && usageRaw !== null) {
+          const u = usageRaw as { inputTokens?: unknown; outputTokens?: unknown };
+          if (typeof u.inputTokens === "number" && typeof u.outputTokens === "number") {
+            usage = { inputTokens: u.inputTokens, outputTokens: u.outputTokens };
+          }
+        }
+        if (typeof payload.ms === "number") ms = payload.ms;
+        if (typeof payload.model === "string") model = payload.model;
+
+        if (typeof payload.thinking === "string" && payload.thinking.length > 0) {
+          working.push({
+            type: "thinking",
+            text: payload.thinking,
             ts: event.ts,
-            ...(typeof thinkingRaw === "string" && thinkingRaw.length > 0
-              ? { thinking: thinkingRaw }
+            ...(typeof payload.thinkingMs === "number"
+              ? { thinkingMs: payload.thinkingMs }
               : {}),
-            ...(usage ? { usage } : {}),
-            ...(typeof msRaw === "number" ? { ms: msRaw } : {}),
-            ...(typeof modelRaw === "string" ? { model: modelRaw } : {}),
           });
         }
+
+        if (typeof payload.content === "string" && payload.content.trim() !== "") {
+          // Final answer iff this is the last text AND no tool follows it;
+          // everything else is Working-section narration.
+          const isFinal = event.seq === lastTextSeq && lastTextSeq > lastToolSeq;
+          if (!isFinal) {
+            working.push({ type: "text", content: payload.content, ts: event.ts });
+          }
+        }
+        continue;
       }
+
+      if (event.type === "approval.requested" || event.type === "approval.resolved") {
+        const payload =
+          event.payload && typeof event.payload === "object"
+            ? (event.payload as ApprovalPayload)
+            : {};
+        const approvalId =
+          typeof payload.approvalId === "string" ? payload.approvalId : "";
+        const toolName = typeof payload.toolName === "string" ? payload.toolName : "run_command";
+        const argsSummary =
+          typeof payload.argsSummary === "string" ? payload.argsSummary : "";
+        const category = typeof payload.category === "string" ? payload.category : "confirm";
+        if (event.type === "approval.requested") {
+          approvalIndex.set(approvalId, working.length);
+          working.push({
+            type: "approval",
+            approvalId,
+            toolName,
+            argsSummary,
+            category,
+            status: "pending",
+            ts: event.ts,
+          });
+        } else {
+          const status =
+            payload.decision === "approved" || payload.decision === "denied"
+              ? payload.decision
+              : "expired";
+          const remember =
+            payload.remember === "once" || payload.remember === "always"
+              ? payload.remember
+              : undefined;
+          const idx = approvalIndex.get(approvalId);
+          if (idx !== undefined && working[idx]?.type === "approval") {
+            working[idx] = {
+              ...(working[idx] as Extract<WorkingEntry, { type: "approval" }>),
+              status,
+              ...(remember !== undefined ? { remember } : {}),
+            };
+          } else {
+            working.push({
+              type: "approval",
+              approvalId,
+              toolName,
+              argsSummary,
+              category,
+              status,
+              ...(remember !== undefined ? { remember } : {}),
+              ts: event.ts,
+            });
+          }
+        }
+        continue;
+      }
+
+      // Unknown event types are tolerated inside a turn (they keep the turn
+      // alive for ts/endTs purposes but add no renderable entries).
     }
 
-    index += 1;
-  }
+    if (working.length === 0 && lastTextSeq === -1) return; // amendment 3e
+    items.push({
+      kind: "turn",
+      seq: acc.seq,
+      agentId: acc.agentId,
+      ts: acc.ts,
+      endTs: acc.endTs,
+      working,
+      finalText: lastTextSeq > lastToolSeq ? lastTextContent : "",
+      ...(usage !== undefined ? { usage } : {}),
+      ...(ms !== undefined ? { ms } : {}),
+      ...(model !== undefined ? { model } : {}),
+    });
+  };
 
-  // ROUND-35 (review fix #1): stats-carrier events (empty content + usage —
-  // appended when a turn's text all preceded its tool calls) merge their
-  // stats into the last real ai item (skipping activity blocks) and vanish:
-  // badges render on the message, no empty bubble.
-  const merged: ProjectChatItem[] = [];
-  for (const item of items) {
-    if (
-      item.kind === "ai" &&
-      item.content === "" &&
-      (item.usage !== undefined || item.ms !== undefined || item.model !== undefined)
-    ) {
-      for (let i = merged.length - 1; i >= 0; i--) {
-        const back = merged[i];
-        if (back.kind === "ai") {
-          merged[i] = { ...back, usage: item.usage, ms: item.ms, model: item.model };
-          break;
-        }
+  for (const event of ordered) {
+    if (event.type === "message.user") {
+      flushTurn();
+      const payload =
+        event.payload && typeof event.payload === "object"
+          ? (event.payload as { content?: unknown })
+          : null;
+      if (payload !== null && typeof payload.content === "string") {
+        items.push({ kind: "user", seq: event.seq, content: payload.content, ts: event.ts });
       }
       continue;
     }
-    if (item.kind === "ai" && item.content === "" && item.thinking === undefined) {
-      continue; // fully-empty carrier with nothing to merge — drop
+
+    if (
+      event.type === "tool.use" ||
+      event.type === "message.assistant" ||
+      event.type === "approval.requested" ||
+      event.type === "approval.resolved"
+    ) {
+      extendTurn(event);
+      continue;
     }
-    merged.push(item);
+
+    // Other event types (todo.update etc.) don't render in the timeline.
   }
-  return merged;
+
+  flushTurn(); // amendment 3c — flush the trailing turn at end-of-log
+  return items;
 }
 
 // ---------------------------------------------------------------------------
@@ -902,6 +1080,21 @@ export type StreamTurnEvent =
       usage: { inputTokens: number; outputTokens: number; totalTokens: number };
     }
   | { type: "done"; assistantMessage: AssistantMessage; usage: UsageRecord }
+  /** ROUND-37 approvals: a tool call needs the owner's permission — the
+   * stream stays open while the ApprovalCard waits for a decision. */
+  | {
+      type: "approval.requested";
+      approvalId: string;
+      toolName: string;
+      argsSummary: string;
+      category: string;
+    }
+  | {
+      type: "approval.resolved";
+      approvalId: string;
+      decision: "approved" | "denied" | "expired";
+      remember?: "once" | "always";
+    }
   | {
       type: "error";
       status: number;
@@ -970,6 +1163,21 @@ export async function streamSessionMessage(
       sep = buffer.indexOf("\n\n");
     }
   }
+}
+
+/**
+ * ROUND-37 approvals: answer a pending permission request from the live
+ * ApprovalCard ("Allow once" / "Always allow" / "Deny"). The waiting tool
+ * call resumes (or fails cleanly) the moment the decision lands.
+ */
+export async function decideApproval(
+  approvalId: string,
+  body: { decision: "approved" | "denied"; remember?: "once" | "always" },
+): Promise<void> {
+  await request<unknown>(`/approvals/${approvalId}/decision`, {
+    method: "POST",
+    json: body,
+  });
 }
 
 /** Provider model catalog for the composer's model picker (round-16). */

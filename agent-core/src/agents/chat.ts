@@ -3,16 +3,23 @@
  * shape, so tests drive turns with a stub (or a module mock of "ai") instead
  * of the network, and this module is the single place that knows SDK types.
  */
+import { createAnthropic } from "@ai-sdk/anthropic";
+import { createOpenAI } from "@ai-sdk/openai";
 import { createOpenAICompatible } from "@ai-sdk/openai-compatible";
-import { generateText, streamText, stepCountIs, type ToolSet } from "ai";
+import { generateText, streamText, stepCountIs, type LanguageModel, type ToolSet } from "ai";
 
 export interface ChatTurnMessage {
   role: "user" | "assistant";
   content: string;
 }
 
+/** ROUND-37 (owner: "he can select the API format… so that he can add any
+ * kind of custom API provider as he wishes"): the wire protocol a provider
+ * speaks, stored on the provider row and selectable in Settings. */
+export type ApiFormat = "chat-completions" | "anthropic-messages" | "responses";
+
 export interface ChatTurnInput {
-  provider: { id: string; baseUrl: string | null };
+  provider: { id: string; baseUrl: string | null; apiFormat?: string };
   apiKey: string;
   model: string;
   system: string;
@@ -21,6 +28,43 @@ export interface ChatTurnInput {
   maxTurns: number;
   /** Agentic Coding MVP: project file tools (list/read/write/edit) when the session has a project. */
   tools?: ToolSet;
+}
+
+/** Resolve the provider's wire format (unknown/absent → chat-completions). */
+export function resolveApiFormat(raw: string | undefined): ApiFormat {
+  return raw === "anthropic-messages" || raw === "responses" ? raw : "chat-completions";
+}
+
+/**
+ * ROUND-37: build the LanguageModel for the provider's selected API format.
+ * All three formats support tools + multi-step via the AI SDK's shared core;
+ * the branch exists only at client construction. Anthropic-messages and
+ * responses are wired + unit-tested but live-untested (no keys) — honest
+ * limitation, documented in IMPLEMENTED-API.md.
+ */
+function buildModel(input: ChatTurnInput): LanguageModel {
+  const format = resolveApiFormat(input.provider.apiFormat);
+  if (format === "anthropic-messages") {
+    const anthropic = createAnthropic({
+      baseURL: input.provider.baseUrl ?? undefined,
+      apiKey: input.apiKey,
+    });
+    return anthropic(input.model);
+  }
+  if (format === "responses") {
+    const openai = createOpenAI({
+      baseURL: input.provider.baseUrl ?? undefined,
+      apiKey: input.apiKey,
+    });
+    return openai.responses(input.model);
+  }
+  const provider = createOpenAICompatible({
+    name: input.provider.id,
+    baseURL: input.provider.baseUrl ?? "",
+    apiKey: input.apiKey,
+    includeUsage: true,
+  });
+  return provider.chatModel(input.model);
 }
 
 export interface ChatToolCall {
@@ -40,16 +84,10 @@ export interface ChatTurnOutput {
 
 export type ChatFn = (input: ChatTurnInput) => Promise<ChatTurnOutput>;
 
-/** The production ChatFn: OpenAI-compatible endpoint via the AI SDK, agentic tools when given. */
+/** The production ChatFn: format-branched via the AI SDK, agentic tools when given. */
 export const aiSdkChat: ChatFn = async (input) => {
-  const provider = createOpenAICompatible({
-    name: input.provider.id,
-    baseURL: input.provider.baseUrl ?? "",
-    apiKey: input.apiKey,
-    includeUsage: true,
-  });
   const result = await generateText({
-    model: provider.chatModel(input.model),
+    model: buildModel(input),
     system: input.system === "" ? undefined : input.system,
     messages: input.messages,
     temperature: input.temperature,
@@ -181,14 +219,8 @@ export type StreamChatFn = (input: StreamChatInput) => AsyncGenerator<StreamChat
  * totalUsage can resolve empty — take the larger of the two sources).
  */
 export const streamAiSdkChat: StreamChatFn = async function* (input) {
-  const provider = createOpenAICompatible({
-    name: input.provider.id,
-    baseURL: input.provider.baseUrl ?? "",
-    apiKey: input.apiKey,
-    includeUsage: true,
-  });
   const result = streamText({
-    model: provider.chatModel(input.model),
+    model: buildModel(input),
     system: input.system === "" ? undefined : input.system,
     messages: input.messages,
     temperature: input.temperature,

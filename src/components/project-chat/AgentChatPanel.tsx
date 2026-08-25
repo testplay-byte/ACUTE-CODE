@@ -10,7 +10,6 @@ import {
 import { AnimatePresence, motion, type Variants } from "framer-motion";
 import {
   ArrowUp,
-  Brain,
   Check,
   ChevronDown,
   Copy,
@@ -18,7 +17,6 @@ import {
   GitBranch,
   ListChecks,
   Search,
-  Sparkles,
   type LucideIcon,
 } from "lucide-react";
 import { Link, useSearchParams } from "react-router";
@@ -31,13 +29,22 @@ import {
   useSessions,
 } from "../../hooks/use-sessions";
 import { CommandPalette } from "./CommandPalette";
-import { ActivityBlock } from "./ActivityBlock";
+import {
+  BareWorkingEntries,
+  WorkingSection,
+  type ApprovalDecisionChoice,
+  type ApprovalRemember,
+} from "./WorkingSection";
+import { AcuteLogo } from "../shell/Sidebar";
 import {
   type Agent,
+  type AssistantTurnItem,
   type Project,
   type ProjectChatItem,
   type StreamTurnEvent,
   type ToolUseEntry,
+  type WorkingEntry,
+  decideApproval,
   fetchProviderModels,
   streamSessionMessage,
   toProjectChatItems,
@@ -52,12 +59,13 @@ import { useThemeStyles } from "../../lib/use-theme-styles";
 import { useScrollFade } from "../../lib/useScrollFade";
 
 /**
- * Live-data port of the demo AgentChatPanel: the session event log folded by
- * toProjectChatItems() renders as user bubbles, grouped tool pills, diff cards
- * and RichText assistant bubbles, with optimistic send (create-session on first
- * turn) and the ChatView error/retry banner. Demo-only pieces (thought blocks,
- * suggestion banner, MODEL_OPTIONS picker) have no backend source and are not
- * ported.
+ * ROUND-37 (owner "two states" directive): the chat renders ONE assistant
+ * TURN per user message — a collapsible Working section (thoughts, interim
+ * narration, one-line tool rows) followed by the FINAL ANSWER below it.
+ * No avatar tiles, no name headers, no Sparkles iconography (owner: "I
+ * really hate the SVG icons… AI-generated"). The live streaming view builds
+ * the same shape: the Working section grows while the presumptive-final text
+ * streams beneath it, and collapses to "Worked for Ns" when the turn ends.
  */
 
 const msgVariants: Variants = {
@@ -174,10 +182,8 @@ const itemKey = (item: ProjectChatItem): string => {
   switch (item.kind) {
     case "user":
       return `u-${item.seq}`;
-    case "ai":
-      return `a-${item.seq}`;
-    case "activity":
-      return `act-${item.seqStart}-${item.seqEnd}`;
+    case "turn":
+      return `turn-${item.seq}`;
   }
 };
 
@@ -204,8 +210,6 @@ function UserMessage({ content }: { content: string }) {
     </motion.div>
   );
 }
-
-/** Demo inline-markup parser, verbatim: **bold** and `code` per line. */
 
 /** Inline code block renderer with copy button (round-24: Kilo Code parity). */
 function CodeBlock({ code }: { code: string }) {
@@ -247,75 +251,6 @@ function CodeBlock({ code }: { code: string }) {
       </pre>
     </div>
   );
-}
-
-function RichText({ content }: { content: string }) {
-  const styles = useThemeStyles();
-  const lines = content.split("\n");
-  const elements: ReactNode[] = [];
-
-  for (let i = 0; i < lines.length; i++) {
-    const line = lines[i];
-    const parts = line.split(/\*\*(.*?)\*\*/g);
-    const lineEl: ReactNode[] = [];
-
-    for (let j = 0; j < parts.length; j++) {
-      const part = parts[j];
-      if (j % 2 === 1) {
-        lineEl.push(
-          <strong key={`b-${i}-${j}`} style={{ fontWeight: 600 }}>
-            {part}
-          </strong>,
-        );
-        continue;
-      }
-      const codeParts = part.split(/`(.*?)`/g);
-      for (let k = 0; k < codeParts.length; k++) {
-        const cp = codeParts[k];
-        if (k % 2 === 1) {
-          lineEl.push(
-            <code
-              key={`c-${i}-${j}-${k}`}
-              className="px-1.5 py-0.5 rounded-md text-[11.5px] font-mono"
-              style={{
-                background: withAlpha(styles.accent, styles.isDark ? 0.13 : 0.08),
-                color: styles.text,
-              }}
-            >
-              {cp}
-            </code>,
-          );
-        } else if (cp) {
-          lineEl.push(<span key={`s-${i}-${j}-${k}`}>{cp}</span>);
-        }
-      }
-    }
-
-    if (i > 0) {
-      elements.push(<div key={`br-${i}`} className="mt-1.5" />);
-    }
-    elements.push(<span key={`l-${i}`}>{lineEl}</span>);
-  }
-
-  // Detect fenced code blocks (```...```) and render them as CodeBlock
-  const codeBlockRegex = /```[a-zA-Z]*\n([\s\S]*?)```/g;
-  const parts: ReactNode[] = [];
-  let lastIndex = 0;
-  let match;
-  let keyIdx = 0;
-  while ((match = codeBlockRegex.exec(content)) !== null) {
-    // Render text before the code block
-    if (match.index > lastIndex) {
-      parts.push(<RichTextInline key={`rt-${keyIdx++}`} content={content.slice(lastIndex, match.index)} />);
-    }
-    parts.push(<CodeBlock key={`cb-${keyIdx++}`} code={match[1].trimEnd()} />);
-    lastIndex = match.index + match[0].length;
-  }
-  // Render remaining text
-  if (lastIndex < content.length) {
-    parts.push(<RichTextInline key={`rt-${keyIdx++}`} content={content.slice(lastIndex)} />);
-  }
-  return <>{parts}</>;
 }
 
 /** Original inline parser (bold + `code`) — used for non-code-block text. */
@@ -364,104 +299,70 @@ function RichTextInline({ content }: { content: string }) {
   return <>{elements}</>;
 }
 
-/**
- * ThinkingBlock (ROUND-35 — owner: "implement thinking functionality… shown
- * separately in a dialed-out tone and I would be able to collapse the
- * thinking area"): the model's reasoning in a muted, collapsible block above
- * the answer. Collapsed by default; live variant streams in.
- */
-function ThinkingBlock({ thinking, live = false }: { thinking: string; live?: boolean }) {
-  const styles = useThemeStyles();
-  const [open, setOpen] = useState(false);
-  const trimmed = thinking.trim();
-  if (trimmed === "") return null;
-  const preview = trimmed.length > 60 ? `${trimmed.slice(0, 60)}…` : trimmed;
-  return (
-    <div className="mb-1.5">
-      <button
-        onClick={() => setOpen((v) => !v)}
-        aria-expanded={open}
-        aria-label={`${open ? "Collapse" : "Expand"} thinking`}
-        className="flex items-center gap-1.5 h-6 px-1 rounded-md transition-colors"
-        style={{ color: styles.textTertiary }}
-        onMouseEnter={(e) => (e.currentTarget.style.background = styles.subtleHover)}
-        onMouseLeave={(e) => (e.currentTarget.style.background = "transparent")}
-      >
-        <Brain size={11} />
-        <span className="text-[10.5px] font-bold italic">
-          {live ? "Thinking" : "Thought process"}
-        </span>
-        {live && <span className="ac-ellipsis" aria-hidden />}
-        <ChevronDown
-          size={10}
-          style={{ transform: open ? "rotate(0deg)" : "rotate(-90deg)", transition: "transform 0.15s" }}
-        />
-        {!open && !live && (
-          <span className="text-[10px] font-mono italic truncate max-w-[280px]" style={{ color: styles.textTertiary }}>
-            {preview}
-          </span>
-        )}
-      </button>
-      {open && (
-        <div
-          className="mt-1 rounded-[10px] border-l-2 pl-3 py-1.5 font-mono text-[11px] leading-[1.6] whitespace-pre-wrap break-words max-h-64 overflow-y-auto auto-scroll"
-          style={{ borderColor: withAlpha(styles.accent, 0.25), color: styles.textTertiary }}
-        >
-          {trimmed}
-        </div>
-      )}
-    </div>
-  );
+function RichText({ content }: { content: string }) {
+  // Detect fenced code blocks (```...```) and render them as CodeBlock
+  const codeBlockRegex = /```[a-zA-Z]*\n([\s\S]*?)```/g;
+  const parts: ReactNode[] = [];
+  let lastIndex = 0;
+  let match;
+  let keyIdx = 0;
+  while ((match = codeBlockRegex.exec(content)) !== null) {
+    // Render text before the code block
+    if (match.index > lastIndex) {
+      parts.push(<RichTextInline key={`rt-${keyIdx++}`} content={content.slice(lastIndex, match.index)} />);
+    }
+    parts.push(<CodeBlock key={`cb-${keyIdx++}`} code={match[1].trimEnd()} />);
+    lastIndex = match.index + match[0].length;
+  }
+  // Render remaining text
+  if (lastIndex < content.length) {
+    parts.push(<RichTextInline key={`rt-${keyIdx++}`} content={content.slice(lastIndex)} />);
+  }
+  return <>{parts}</>;
 }
 
-function AiMessage({
-  content,
-  usage,
-  ms,
-  model,
-  agentName,
-  thinking,
+/**
+ * ROUND-37 AssistantTurn: ONE header-less assistant block per user message.
+ * Tools (or multiple working entries) → collapsible WorkingSection; a
+ * tools-free turn renders its thoughts bare. The final answer renders below
+ * the section — collapsing the work never hides it (owner directive).
+ */
+function AssistantTurn({
+  item,
+  sessionId,
+  collapseHint,
 }: {
-  content: string;
-  usage?: { inputTokens: number; outputTokens: number };
-  ms?: number;
-  model?: string;
-  agentName?: string;
-  thinking?: string;
+  item: AssistantTurnItem;
+  sessionId: string | null;
+  /** R37 review #4: true when this turn JUST finished while the user
+   * watched — it mounts collapsed ("Worked for Ns" + answer). */
+  collapseHint?: boolean;
 }) {
   const styles = useThemeStyles();
+  const hasToolWork = item.working.some((e) => e.type === "tool");
   return (
-    <motion.div variants={msgVariants} initial="initial" animate="animate" className="group flex gap-3">
-      {/* Round-30 overhaul: assistant messages get an avatar tile + name row
-          (Claude/ChatGPT pattern) instead of an anonymous card bubble. */}
-      <div
-        className="w-7 h-7 rounded-[10px] grid place-items-center shrink-0 mt-0.5"
-        style={{
-          background: withAlpha(styles.accent, styles.isDark ? 0.16 : 0.1),
-          color: styles.accent,
-        }}
-        aria-hidden
-      >
-        <Sparkles size={13} />
-      </div>
-      <div className="min-w-0 flex-1">
-        <div className="flex items-baseline gap-2 mb-1">
-          <span className="text-[12px] font-bold" style={{ color: styles.text }}>
-            {agentName ?? "Acute"}
-          </span>
+    <motion.div variants={msgVariants} initial="initial" animate="animate" className="group min-w-0">
+      {hasToolWork ? (
+        <WorkingSection
+          entries={item.working}
+          sessionId={sessionId}
+          ts={item.ts}
+          endTs={item.endTs}
+          defaultOpen={collapseHint === true ? false : undefined}
+        />
+      ) : (
+        <BareWorkingEntries entries={item.working} />
+      )}
+      {item.finalText.trim() !== "" ? (
+        <div className={`text-[13px] leading-[1.65] ${hasToolWork ? "mt-2" : ""}`} style={{ color: styles.text }}>
+          <RichText content={item.finalText} />
         </div>
-        {thinking ? <ThinkingBlock thinking={thinking} /> : null}
-        {content.trim() !== "" ? (
-          <div className="text-[13px] leading-[1.65]" style={{ color: styles.text }}>
-            <RichText content={content} />
-          </div>
-        ) : null}
-        <div className="flex items-center gap-1">
-          <div className="opacity-0 group-hover:opacity-100 transition-opacity pt-0.5">
-            <CopyButton text={content} />
-          </div>
-          <ReplyStats usage={usage} ms={ms} model={model} />
+      ) : null}
+      <div className="flex items-center gap-1">
+        <div className="opacity-0 group-hover:opacity-100 transition-opacity pt-0.5">
+          <CopyButton text={item.finalText} />
         </div>
+        <ReplyStats usage={item.usage} ms={item.ms} model={item.model} />
       </div>
     </motion.div>
   );
@@ -472,42 +373,23 @@ function AiMessage({
  * could skip it on React 19). The wrapper div is the presence child. */
 const MessageRenderer = forwardRef<
   HTMLDivElement,
-  { item: ProjectChatItem; sessionId: string | null; agentName?: string }
->(function MessageRenderer({ item, sessionId, agentName }, ref) {
-    switch (item.kind) {
-      case "user":
-        return (
-          <div ref={ref}>
-            <UserMessage content={item.content} />
-          </div>
-        );
-      case "ai":
-        return (
-          <div ref={ref}>
-            <AiMessage
-              content={item.content}
-              usage={item.usage}
-              ms={item.ms}
-              model={item.model}
-              agentName={agentName}
-              thinking={item.thinking}
-            />
-          </div>
-        );
-      case "activity":
-        return (
-          <div ref={ref}>
-            <ActivityBlock
-              tools={item.tools}
-              ts={item.ts}
-              endTs={item.endTs}
-              sessionId={sessionId}
-            />
-          </div>
-        );
-    }
-  },
-);
+  { item: ProjectChatItem; sessionId: string | null; collapseHint?: boolean }
+>(function MessageRenderer({ item, sessionId, collapseHint }, ref) {
+  switch (item.kind) {
+    case "user":
+      return (
+        <div ref={ref}>
+          <UserMessage content={item.content} />
+        </div>
+      );
+    case "turn":
+      return (
+        <div ref={ref}>
+          <AssistantTurn item={item} sessionId={sessionId} collapseHint={collapseHint} />
+        </div>
+      );
+  }
+});
 
 /**
  * Composer footer (round-16): context-window meter (approx from the last
@@ -550,12 +432,11 @@ function ComposerFooter({
     return () => document.removeEventListener("mousedown", handler);
   }, [open]);
 
-  // Approximate current context = last reply's in+out tokens (good enough
-  // for a meter; exact per-model accounting is a later refinement).
-  const lastUsage = [...items].reverse().find((it) => it.kind === "ai" && it.usage);
+  // ROUND-37: turn-level stats (usage lives on the turn item now).
+  const lastTurn = [...items].reverse().find((it) => it.kind === "turn" && it.usage !== undefined);
   const ctxTokens =
-    lastUsage && lastUsage.kind === "ai" && lastUsage.usage
-      ? lastUsage.usage.inputTokens + lastUsage.usage.outputTokens
+    lastTurn && lastTurn.kind === "turn" && lastTurn.usage
+      ? lastTurn.usage.inputTokens + lastTurn.usage.outputTokens
       : 0;
   const limit = (effective !== null ? CONTEXT_LIMITS[effective] : undefined) ?? DEFAULT_CONTEXT_LIMIT;
   const pct = Math.min(100, (ctxTokens / limit) * 100);
@@ -636,6 +517,19 @@ function ComposerFooter({
   );
 }
 
+/** ROUND-37 live turn state: the same shape the folded log produces. */
+interface LiveTurn {
+  startedAtMs: number;
+  /** Completed working entries (thoughts done, narration flushed in, tools). */
+  working: WorkingEntry[];
+  /** The presumptive-FINAL text streaming below the section. */
+  streamText: string;
+  /** The in-flight thought (auto-expanded row in the section). */
+  streamThinking: string;
+  /** Terminal state after a stream error — frozen "Stopped" section. */
+  stopped: boolean;
+}
+
 export function AgentChatPanel({
   projectId,
   project,
@@ -687,9 +581,6 @@ export function AgentChatPanel({
     agents[0] ??
     null;
 
-  // ROUND-33: the panel header is REMOVED entirely (owner: "All of that is
-  // unnecessary. It is not needed and it is better for you to just outright
-  // not implement it"). ⌘K/Ctrl+K palette stays available via keyboard.
   const [paletteOpen, setPaletteOpen] = useState(false);
   const density = useThemeStore((s) => s.density);
 
@@ -707,32 +598,11 @@ export function AgentChatPanel({
   const createSession = useCreateSession();
   const sendMessage = useSendMessage();
 
+  // ROUND-37: the turn fold carries stats turn-level — the old R33
+  // interim-reply stat-strip pass is GONE (superseded by the fold).
   const items = useMemo(() => {
     if (!sessionDetail.data) return [];
-    const raw = toProjectChatItems(sessionDetail.data.events);
-    // ROUND-33 (owner: summaries "should be shown at the very bottom of them.
-    // It should not be shown on each and every single one of them"): only the
-    // FINAL assistant message of each turn keeps its stat chips — earlier
-    // interim replies render clean. A turn = everything after a user message
-    // until the next user message; its final ai item is the last one before
-    // the turn ends (or the log ends).
-    const finalSeqs = new Set<number>();
-    let turnAiSeqs: number[] = [];
-    for (const item of raw) {
-      if (item.kind === "user") {
-        if (turnAiSeqs.length > 0) finalSeqs.add(turnAiSeqs[turnAiSeqs.length - 1]);
-        turnAiSeqs = [];
-      } else if (item.kind === "ai") {
-        turnAiSeqs.push(item.seq);
-      }
-      // activity items don't reset the turn's ai sequence
-    }
-    if (turnAiSeqs.length > 0) finalSeqs.add(turnAiSeqs[turnAiSeqs.length - 1]);
-    return raw.map((item) =>
-      item.kind === "ai" && !finalSeqs.has(item.seq)
-        ? { ...item, usage: undefined, ms: undefined, model: undefined }
-        : item,
-    );
+    return toProjectChatItems(sessionDetail.data.events);
   }, [sessionDetail.data]);
 
   const [input, setInput] = useState("");
@@ -741,15 +611,20 @@ export function AgentChatPanel({
   const [lastSent, setLastSent] = useState<string | null>(null);
   const [sendError, setSendError] = useState<string | null>(null);
 
-  // ── ROUND-35 live streaming state: INTERLEAVED SEGMENTS — text segments
-  //     and tool groups alternate exactly where they happen, so tool calls
-  //     show INSIDE the message flow (owner: "in between the message it
-  //     should show me the tool calls… afterwards it should continue").
-  type LiveSegment =
-    | { kind: "text"; content: string; thinking: string }
-    | { kind: "tools"; tools: ToolUseEntry[] };
-  const [liveSegments, setLiveSegments] = useState<LiveSegment[]>([]);
+  // ── ROUND-37 live streaming state: ONE live turn building the same
+  //    Working-section shape the folded log renders. The presumptive-final
+  //    text streams BELOW the section; a tool-call flushes it INTO the
+  //    section as narration (owner: interim commentary lives inside the
+  //    working area).
+  const [liveTurn, setLiveTurn] = useState<LiveTurn | null>(null);
   const [streamBusy, setStreamBusy] = useState(false);
+  // R37 review #3: monotonic live entry keys (two tool-calls in the same
+  // millisecond collided with -Date.now()).
+  const liveSeqRef = useRef(0);
+  // R37 review #4: turns that JUST finished while the user watched start
+  // collapsed ("Worked for Ns" + answer); cold-loaded sessions use the
+  // Detailed preference.
+  const lastLiveEndRef = useRef(0);
   const queryClient = useQueryClient();
   const liveMode = useConfigStore((s) => !s.demoData);
   // Per-send model override (composer picker); null = the agent's own model.
@@ -771,23 +646,19 @@ export function AgentChatPanel({
   const selectProjectFile = useProjectChatStore((s) => s.selectFile);
   const setCodeVisibleForPick = useProjectChatStore((s) => s.setCodeVisible);
   // Round-28 WS-D3: AbortController for the streaming fetch — the Stop button
-  // calls abortRef.current?.abort() to cancel mid-stream. Passed as the
-  // `signal` option to streamSessionMessage (api.ts L642 already supports it).
+  // calls abortRef.current?.abort() to cancel mid-stream.
   const abortRef = useRef<AbortController | null>(null);
 
   useScrollFade(scrollRef);
 
-  // REVIEW FIX #4: scroll must follow the GROWING text too, not just new
-  // segments — a long streaming message would otherwise scroll out of view.
-  const liveTailText = (() => {
-    const last = liveSegments[liveSegments.length - 1];
-    return last !== undefined && last.kind === "text" ? last.content : "";
-  })();
+  // Auto-scroll: new items, busy transitions, the live section's entry count,
+  // and the growing streaming text (review fix #4 + R37 amendment #11).
+  const liveWorkingCount = liveTurn?.working.length ?? 0;
+  const liveTailText = liveTurn?.streamText ?? "";
   useEffect(() => {
     const el = scrollRef.current;
     if (el) el.scrollTo({ top: el.scrollHeight, behavior: "smooth" });
-  }, [items.length, busy, pendingUser, liveSegments.length, liveTailText.length]);
-
+  }, [items.length, busy, pendingUser, liveWorkingCount, liveTailText.length]);
 
   const runTurn = async (content: string) => {
     const text = content.trim();
@@ -796,7 +667,7 @@ export function AgentChatPanel({
     setLastSent(text);
     setPendingUser(text);
     setSendError(null);
-    setLiveSegments([]);
+    setLiveTurn({ startedAtMs: Date.now(), working: [], streamText: "", streamThinking: "", stopped: false });
     let sid = session?.id;
     try {
       if (!sid) {
@@ -820,101 +691,101 @@ export function AgentChatPanel({
         );
       }
       if (liveMode) {
-        // STREAMED turn: text deltas + tool calls land live (owner round-16).
-        // Round-28 WS-D3: abortRef lets the Stop button cancel mid-stream.
+        // STREAMED turn (round-16): deltas + tool calls land live; the
+        // Working section builds itself (R37).
         setStreamBusy(true);
         abortRef.current = new AbortController();
         await streamSessionMessage(sid, text, (event: StreamTurnEvent) => {
-          // ROUND-35: segments interleave live — text grows in a text segment;
-          // a tool-call CLOSES the text segment and opens a tools segment, so
-          // the activity block renders exactly where the work happens.
           if (event.type === "text-delta") {
-            setLiveSegments((prev) => {
-              const next = [...prev];
-              const last = next[next.length - 1];
-              if (last !== undefined && last.kind === "text") {
-                next[next.length - 1] = { ...last, content: last.content + event.delta };
-              } else {
-                next.push({ kind: "text", content: event.delta, thinking: "" });
-              }
-              return next;
+            setLiveTurn((prev) => {
+              if (prev === null) return prev;
+              // Text starting = the in-flight thought is COMPLETE (owner:
+              // "when the thought has been completed then it will collapse").
+              const working =
+                prev.streamThinking.trim() !== ""
+                  ? [
+                      ...prev.working,
+                      { type: "thinking" as const, text: prev.streamThinking, ts: new Date().toISOString() },
+                    ]
+                  : prev.working;
+              return {
+                ...prev,
+                working,
+                streamThinking: "",
+                streamText: prev.streamText + event.delta,
+              };
             });
           } else if (event.type === "thinking-delta") {
-            setLiveSegments((prev) => {
-              const next = [...prev];
-              const last = next[next.length - 1];
-              if (last !== undefined && last.kind === "text") {
-                next[next.length - 1] = { ...last, thinking: last.thinking + event.delta };
-              } else {
-                next.push({ kind: "text", content: "", thinking: event.delta });
-              }
-              return next;
-            });
+            setLiveTurn((prev) =>
+              prev === null
+                ? prev
+                : { ...prev, streamThinking: prev.streamThinking + event.delta },
+            );
           } else if (event.type === "tool-call") {
-            setLiveSegments((prev) => {
-              const next = [...prev];
-              const last = next[next.length - 1];
-              // REVIEW FIX #2: build a NEW tools segment — assigning into a
-              // shallow-copied segment object mutates prev (double-append
-              // under StrictMode; updater-impurity corruption in prod).
+            setLiveTurn((prev) => {
+              if (prev === null) return prev;
+              // The streamed-so-far text is narration once a tool lands —
+              // flush it (and any trailing thought) INTO the section.
+              // R35 review fix #2 preserved: build NEW arrays/entries, never
+              // mutate (StrictMode double-invoke safe).
               const entry: ToolUseEntry = {
-                seq: -Date.now(),
+                seq: --liveSeqRef.current,
                 toolName: event.toolName,
                 argsSummary: event.argsSummary,
                 ok: null,
                 ts: new Date().toISOString(),
               };
-              if (last !== undefined && last.kind === "tools") {
-                next[next.length - 1] = { kind: "tools", tools: [...last.tools, entry] };
-              } else {
-                next.push({ kind: "tools", tools: [entry] });
-              }
-              return next;
+              const working: WorkingEntry[] = [
+                ...prev.working,
+                ...(prev.streamThinking.trim() !== ""
+                  ? [{ type: "thinking" as const, text: prev.streamThinking, ts: new Date().toISOString() }]
+                  : []),
+                ...(prev.streamText.trim() !== ""
+                  ? [{ type: "text" as const, content: prev.streamText, ts: new Date().toISOString() }]
+                  : []),
+                { type: "tool" as const, tool: entry },
+              ];
+              return { ...prev, working, streamThinking: "", streamText: "" };
             });
           } else if (event.type === "tool-result") {
-            setLiveSegments((prev) => {
+            setLiveTurn((prev) => {
+              if (prev === null) return prev;
               // Attach the result to the matching in-flight row (last null-ok
-              // across ALL tools segments). REVIEW FIX #6: results with no
-              // matching in-flight row append a completed row instead of
+              // tool entry). R35 review fix #6 preserved: results with no
+              // matching in-flight row append a completed entry instead of
               // being silently dropped.
-              const flat = prev.flatMap((seg) => (seg.kind === "tools" ? seg.tools : []));
+              const flat = prev.working.flatMap((e) => (e.type === "tool" ? [e.tool] : []));
               const idx = [...flat].reverse().findIndex((x) => x.toolName === event.toolName && x.ok === null);
               if (idx === -1) {
                 const entry: ToolUseEntry = {
-                  seq: -Date.now(),
+                  seq: --liveSeqRef.current,
                   toolName: event.toolName,
                   argsSummary: event.argsSummary,
                   ok: event.ok,
                   ts: new Date().toISOString(),
                   ...(event.outputSummary ? { outputSummary: event.outputSummary } : {}),
                 };
-                const next = [...prev];
-                const last = next[next.length - 1];
-                if (last !== undefined && last.kind === "tools") {
-                  next[next.length - 1] = { kind: "tools", tools: [...last.tools, entry] };
-                } else {
-                  next.push({ kind: "tools", tools: [entry] });
-                }
-                return next;
+                return { ...prev, working: [...prev.working, { type: "tool", tool: entry }] };
               }
               const matched = flat.length - 1 - idx;
               let consumed = 0;
-              return prev.map((seg) => {
-                if (seg.kind !== "tools") return seg;
-                const tools = seg.tools.map((tool) => {
-                  const index = consumed;
-                  consumed += 1;
-                  if (index === matched) {
-                    return {
-                      ...tool,
+              const working = prev.working.map((entry) => {
+                if (entry.type !== "tool") return entry;
+                const index = consumed;
+                consumed += 1;
+                if (index === matched) {
+                  return {
+                    ...entry,
+                    tool: {
+                      ...entry.tool,
                       ok: event.ok,
                       ...(event.outputSummary ? { outputSummary: event.outputSummary } : {}),
-                    };
-                  }
-                  return tool;
-                });
-                return { kind: "tools" as const, tools };
+                    },
+                  };
+                }
+                return entry;
               });
+              return { ...prev, working };
             });
             // LIVE VIEW (owner request): file mutations refresh the explorer
             // + open file immediately, not after the turn ends.
@@ -922,6 +793,44 @@ export function AgentChatPanel({
               void queryClient.invalidateQueries({ queryKey: ["project-tree"] });
               void queryClient.invalidateQueries({ queryKey: ["project-file"] });
             }
+          } else if (event.type === "approval.requested") {
+            setLiveTurn((prev) =>
+              prev === null
+                ? prev
+                : {
+                    ...prev,
+                    working: [
+                      ...prev.working,
+                      {
+                        type: "approval" as const,
+                        approvalId: event.approvalId,
+                        toolName: event.toolName,
+                        argsSummary: event.argsSummary,
+                        category: event.category,
+                        status: "pending" as const,
+                        ts: new Date().toISOString(),
+                      },
+                    ],
+                  },
+            );
+          } else if (event.type === "approval.resolved") {
+            setLiveTurn((prev) => {
+              if (prev === null) return prev;
+              const working = prev.working.map((entry) => {
+                if (entry.type !== "approval" || entry.approvalId !== event.approvalId) return entry;
+                return {
+                  ...entry,
+                  status:
+                    event.decision === "approved"
+                      ? ("approved" as const)
+                      : event.decision === "denied"
+                        ? ("denied" as const)
+                        : ("expired" as const),
+                  ...(event.remember ? { remember: event.remember } : {}),
+                };
+              });
+              return { ...prev, working };
+            });
           } else if (event.type === "error") {
             // SSE error event — show it but DON'T clear live state; the
             // backend may still complete the turn (invalidation on catch
@@ -935,8 +844,10 @@ export function AgentChatPanel({
         await queryClient.invalidateQueries({ queryKey: ["sessions"] });
         await queryClient.invalidateQueries({ queryKey: ["usage"] });
         void queryClient.invalidateQueries({ queryKey: ["project-tree"] });
-        // Canonical assistant item now renders from the event log.
-        setLiveSegments([]);
+        // The canonical folded turn now renders from the event log (and the
+        // live section auto-collapses to "Worked for Ns").
+        lastLiveEndRef.current = Date.now();
+        setLiveTurn(null);
       } else {
         // Fixture/demo mode: no sidecar → sync hook (canned reply).
         await sendMessage.mutateAsync({ sessionId: sid, content: text });
@@ -948,18 +859,40 @@ export function AgentChatPanel({
       await queryClient.invalidateQueries({ queryKey: ["session"] });
       await queryClient.invalidateQueries({ queryKey: ["sessions"] });
       void queryClient.invalidateQueries({ queryKey: ["project-tree"] });
-      const hasResponse = queryClient.getQueryData(["session", session?.id ?? sid]);
+      // R37 review #1: the session query key is ["session", source, id] —
+      // an exact-hash lookup without the source segment never matched.
+      const hasResponse = queryClient.getQueryData([
+        "session",
+        liveMode ? "live" : "demo",
+        session?.id ?? sid,
+      ]);
       if (!hasResponse) {
         setSendError(err instanceof Error ? err.message : String(err));
+        // Freeze the live section in its terminal "Stopped" state (R37
+        // amendment: no dead timer — the header reads "Stopped · Ns").
+        setLiveTurn((prev) => (prev === null ? prev : { ...prev, stopped: true }));
       } else {
         // The response landed despite the stream error — clear the error.
         setSendError(null);
-        setLiveSegments([]);
+        lastLiveEndRef.current = Date.now();
+        setLiveTurn(null);
       }
     } finally {
       setStreamBusy(false);
       // Both hooks invalidate their queries on settle; drop the optimistic echo.
       setPendingUser(null);
+    }
+  };
+
+  const onApprovalDecision = async (
+    approvalId: string,
+    decision: ApprovalDecisionChoice,
+    remember: ApprovalRemember,
+  ) => {
+    try {
+      await decideApproval(approvalId, { decision, remember });
+    } catch (err) {
+      setSendError(err instanceof Error ? err.message : String(err));
     }
   };
 
@@ -969,6 +902,39 @@ export function AgentChatPanel({
       void runTurn(input);
     }
   };
+
+  // ── Live-turn rendering (same shape as the folded AssistantTurn) ──────────
+  const liveSection = (() => {
+    if (liveTurn === null) return null;
+    const entries: WorkingEntry[] = [
+      ...liveTurn.working,
+      ...(liveTurn.streamThinking.trim() !== ""
+        ? [{ type: "thinking" as const, text: liveTurn.streamThinking, ts: new Date().toISOString() }]
+        : []),
+    ];
+    const hasToolWork = entries.some((e) => e.type === "tool");
+    if (hasToolWork) {
+      return (
+        <WorkingSection
+          key="live-section"
+          entries={entries}
+          sessionId={session?.id ?? null}
+          live
+          startedAtMs={liveTurn.startedAtMs}
+          stopped={liveTurn.stopped}
+          liveEntryIndex={liveTurn.streamThinking.trim() !== "" ? entries.length - 1 : undefined}
+          onApprovalDecision={(id, decision, remember) => void onApprovalDecision(id, decision, remember)}
+        />
+      );
+    }
+    return (
+      <BareWorkingEntries
+        key="live-bare"
+        entries={entries}
+        onApprovalDecision={(id, decision, remember) => void onApprovalDecision(id, decision, remember)}
+      />
+    );
+  })();
 
   return (
     <div
@@ -993,24 +959,14 @@ export function AgentChatPanel({
           style={{ background: `linear-gradient(to bottom, ${styles.card}, transparent)` }}
         />
         <div ref={scrollRef} className="absolute inset-0 overflow-y-auto auto-scroll">
-          {/* ROUND-34: density (settings appearance) drives the column padding. */}
-          <div className={`${density === "compact" ? "px-4 py-4" : "px-5 md:px-7 py-5"} flex flex-col gap-4`}>
+          {/* ROUND-34: density (settings appearance) drives the column padding.
+              ROUND-37: the panel fills its width (owner: no dead right side). */}
+          <div className={`${density === "compact" ? "px-4 py-4" : "px-5 md:px-10 py-5"} flex flex-col gap-5`}>
             {items.length === 0 && !pendingEcho ? (
-              /* ROUND-30 OVERHAUL: modern empty state — centered greeting with
-                 the project name + suggestion chips that pre-fill the composer
-                 (ChatGPT/Claude pattern) instead of a one-line header row. */
+              /* ROUND-30 OVERHAUL: centered greeting + suggestion chips.
+                 ROUND-37: the approved AcuteLogo replaces the Sparkles tile. */
               <div className="flex flex-col items-center justify-center text-center py-14 gap-5">
-                <div
-                  className="w-14 h-14 rounded-[18px] grid place-items-center"
-                  style={{
-                    background: withAlpha(styles.accent, styles.isDark ? 0.16 : 0.1),
-                    color: styles.accent,
-                    boxShadow: `0 8px 24px ${withAlpha(styles.accent, 0.18)}`,
-                  }}
-                  aria-hidden
-                >
-                  <Sparkles size={24} />
-                </div>
+                <AcuteLogo size={52} ariaLabel="Acute" />
                 <div className="min-w-0 max-w-md">
                   <div className="text-[22px] font-black tracking-tight leading-tight" style={{ color: styles.text }}>
                     How can I help with {project.name}?
@@ -1067,105 +1023,39 @@ export function AgentChatPanel({
                   key={itemKey(item)}
                   item={item}
                   sessionId={session?.id ?? null}
-                  agentName={agent?.name}
+                  collapseHint={Date.now() - lastLiveEndRef.current < 5000}
                 />
               ))}
-              {pendingEcho !== null ? <UserMessage content={pendingEcho} /> : null}
+              {pendingEcho !== null ? (
+                <MessageRenderer
+                  item={{ kind: "user", seq: -1, content: pendingEcho, ts: new Date().toISOString() }}
+                  sessionId={null}
+                />
+              ) : null}
             </AnimatePresence>
 
-            {/* ── ROUND-35 LIVE INTERLEAVED VIEW: segments render exactly
-                where they happen — text streams, then the activity block
-                appears mid-message when tools run, then more text. ── */}
-            {liveSegments.map((seg, i) => {
-              const isLast = i === liveSegments.length - 1;
-              if (seg.kind === "tools") {
-                return (
-                  <ActivityBlock
-                    key={`seg-${i}`}
-                    tools={seg.tools}
-                    sessionId={session?.id ?? null}
-                    live={isLast}
-                  />
-                );
-              }
-              // Text segment: the avatar+name row only on the FIRST text
-              // segment (one continuous assistant turn visually).
-              const firstText = liveSegments.findIndex((x) => x.kind === "text") === i;
-              const isActive = isLast; // still growing (caret attached)
-              return (
-                <div key={`seg-${i}`} className="flex gap-3" aria-live="polite" aria-atomic="false">
-                  {firstText ? (
-                    <div
-                      className="w-7 h-7 rounded-[10px] grid place-items-center shrink-0 mt-0.5 ac-pulse"
-                      style={{
-                        background: withAlpha(styles.accent, styles.isDark ? 0.16 : 0.1),
-                        color: styles.accent,
-                      }}
-                      aria-hidden
-                    >
-                      <Sparkles size={13} />
-                    </div>
-                  ) : (
-                    <span className="w-7 shrink-0" aria-hidden />
-                  )}
-                  <div className="min-w-0 flex-1">
-                    {firstText ? (
-                      <div className="flex items-baseline gap-2 mb-1">
-                        <span className="text-[12px] font-bold" style={{ color: styles.text }}>
-                          {agent?.name ?? "Acute"}
-                        </span>
-                        {streamBusy && isActive ? (
-                          <span className="text-[10px] font-mono" style={{ color: styles.accent }}>
-                            streaming…
-                          </span>
-                        ) : null}
-                      </div>
+            {/* ── ROUND-37 LIVE TURN: the Working section grows above the
+                streaming presumptive-final text (which flows into the
+                section as narration the moment a tool lands). ── */}
+            {liveTurn !== null ? (
+              <div aria-live="polite" aria-atomic="false" className="min-w-0">
+                {liveSection}
+                {liveTurn.streamText !== "" ? (
+                  <div className={`text-[13px] leading-[1.65] ${liveTurn.working.length > 0 ? "mt-2" : ""}`} style={{ color: styles.text }}>
+                    <RichText content={liveTurn.streamText} />
+                    {streamBusy && !liveTurn.stopped ? (
+                      <span
+                        className="inline-block w-[7px] h-[14px] ml-0.5 align-middle rounded-sm ac-caret-blink"
+                        style={{ background: styles.accent }}
+                        aria-hidden
+                      />
                     ) : null}
-                    {seg.thinking.trim() !== "" ? <ThinkingBlock thinking={seg.thinking} live={isActive} /> : null}
-                    <div className="text-[13px] leading-[1.65]" style={{ color: styles.text }}>
-                      {seg.content === "" && seg.thinking.trim() === "" ? (
-                        <span className="text-[12px] font-mono" style={{ color: styles.textSecondary }}>
-                          Thinking<span className="ac-ellipsis" aria-hidden />
-                        </span>
-                      ) : (
-                        <>
-                          <RichText content={seg.content} />
-                          {isActive && streamBusy ? (
-                            <span
-                              className="inline-block w-[7px] h-[14px] ml-0.5 align-middle rounded-sm ac-caret-blink"
-                              style={{ background: styles.accent }}
-                              aria-hidden
-                            />
-                          ) : null}
-                        </>
-                      )}
-                    </div>
                   </div>
-                </div>
-              );
-            })}
-
-            {/* Pre-first-delta thinking state: nothing has landed yet. */}
-            {liveSegments.length === 0 && (streamBusy || (busy && !streamBusy)) ? (
-              <div className="flex gap-3" aria-live="polite" aria-atomic="false">
-                <div
-                  className="w-7 h-7 rounded-[10px] grid place-items-center shrink-0 mt-0.5 ac-pulse"
-                  style={{
-                    background: withAlpha(styles.accent, styles.isDark ? 0.16 : 0.1),
-                    color: styles.accent,
-                  }}
-                  aria-hidden
-                >
-                  <Sparkles size={13} />
-                </div>
-                <div className="min-w-0 flex-1 flex flex-col justify-center">
-                  <span className="text-[12px] font-bold mb-1" style={{ color: styles.text }}>
-                    {agent?.name ?? "Acute"}
-                  </span>
+                ) : liveTurn.streamThinking.trim() === "" && liveTurn.working.length === 0 ? (
                   <span className="text-[12px] font-mono" style={{ color: styles.textSecondary }}>
                     Thinking<span className="ac-ellipsis" aria-hidden />
                   </span>
-                </div>
+                ) : null}
               </div>
             ) : null}
           </div>

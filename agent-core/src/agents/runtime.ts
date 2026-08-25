@@ -15,6 +15,7 @@ import {
   resolveProvider,
 } from "../providers/registry.js";
 import { buildProjectTools } from "../tools/index.js";
+import { logTool, logTurnEnd, logTurnStart } from "../lib/log.js";
 import {
   appendSessionEvent,
   getSession,
@@ -154,9 +155,15 @@ function assembleHistory(db: SqliteDatabase, sessionId: string): ChatTurnMessage
         typeof payload.outputSummary === "string" && payload.outputSummary.length > 0
           ? payload.outputSummary
           : null;
-      // Review fix #7: neutralize the closing marker inside tool output so
-      // injected content can't escape the <tool_results> data block.
-      const safeOutput = outputSummary?.replace(/<\/tool_results>/g, "<\/tool_results>");
+      // Review fix #7 (R37 review M2: the original replace was a no-op —
+      // "\/" in a JS string literal is just "/"): neutralize the closing
+      // marker inside tool output so injected content can't escape the
+      // <tool_results> data block. A zero-width joiner breaks the sequence
+      // without changing what the model reads.
+      const safeOutput = outputSummary?.replace(
+        /<\/tool_results>/g,
+        "<\u200b/tool_results>",
+      );
       pendingToolLines.push(
         `${toolName}(${argsSummary}) → ${ok ? "ok" : "FAILED"}${safeOutput ? `: ${safeOutput}` : ""}`,
       );
@@ -177,7 +184,7 @@ function providerErrorDetail(error: unknown, apiKey: string): string {
 interface PreparedTurn {
   session: NonNullable<ReturnType<typeof getSession>>;
   agent: NonNullable<ReturnType<typeof getAgent>>;
-  provider: { id: string; baseUrl: string };
+  provider: { id: string; baseUrl: string; apiFormat?: string };
   apiKey: string;
   model: string;
   tools: Awaited<ReturnType<typeof buildProjectTools>> | undefined;
@@ -196,6 +203,9 @@ async function prepareTurn(
   chatForTools?: ChatFn,
   /** ROUND-36 (streamed turns): forward live subagent-status events to SSE. */
   emitForTools?: (event: unknown) => void,
+  /** ROUND-37 (approvals): the live turn's abort signal — pending approvals
+   * deny on abort. Absent on the sync path (no interactive approvals there). */
+  signalForTools?: AbortSignal,
 ): Promise<PreparedTurn | { error: Extract<TurnOutcome, { ok: false }> }> {
   const session = getSession(db, sessionId);
   if (session === undefined) {
@@ -295,6 +305,19 @@ async function prepareTurn(
     keyring,
     ...(chatForTools !== undefined ? { chat: chatForTools } : {}),
     ...(emitForTools !== undefined ? { emit: emitForTools } : {}),
+    // ROUND-37 (approvals): interactive = a streamed PARENT turn (emit
+    // channel exists, not a sub-agent child). Sync turns + children fail
+    // fast on non-auto commands instead of waiting.
+    interactiveApprovals:
+      emitForTools !== undefined && session.parentSessionId === null,
+    ...(signalForTools !== undefined ? { signal: signalForTools } : {}),
+    appendEvent: (event: {
+      type: "approval.requested" | "approval.resolved";
+      agentId: string;
+      payload: Record<string, unknown>;
+    }) => {
+      appendSessionEvent(db, session.id, event);
+    },
   };
   // ROUND-36 (ADR-0022): children never get delegate_task — one-level
   // fan-out is the recursion guard.
@@ -332,7 +355,9 @@ async function prepareTurn(
   return {
     session,
     agent,
-    provider: { id: provider.id, baseUrl: provider.baseUrl },
+    // ROUND-37: apiFormat rides along so chat.ts can branch per provider
+    // (chat-completions | anthropic-messages | responses).
+    provider: { id: provider.id, baseUrl: provider.baseUrl, apiFormat: provider.apiFormat },
     apiKey,
     model: modelOverride && modelOverride.trim() !== "" ? modelOverride.trim() : agent.model,
     tools,
@@ -350,6 +375,8 @@ export async function runSingleAgentTurn(
   const prepared = await prepareTurn(db, keyring, sessionId, modelOverride, chat);
   if ("error" in prepared) return prepared.error;
   const { session, agent, provider, apiKey, model, tools, system } = prepared;
+  const syncStartedAt = Date.now();
+  logTurnStart(session.id, agent.id, model, false);
 
   // First message flips a queued session to running (API.md §5 semantics).
   if (session.status === "queued") setSessionStatus(db, session.id, "running");
@@ -374,7 +401,7 @@ export async function runSingleAgentTurn(
   let result: ChatTurnOutput;
   try {
     result = await chat({
-      provider: { id: provider.id, baseUrl: provider.baseUrl },
+      provider: { id: provider.id, baseUrl: provider.baseUrl, apiFormat: provider.apiFormat },
       apiKey,
       model,
       system,
@@ -439,6 +466,7 @@ export async function runSingleAgentTurn(
   };
   recordUsage(db, usage);
   touchSession(db, session.id);
+  logTurnEnd(session.id, true, Date.now() - syncStartedAt, result.usage.inputTokens, result.usage.outputTokens);
 
   return {
     ok: true,
@@ -482,11 +510,13 @@ export async function runStreamedAgentTurn(
       message: "streaming is not available in this build",
     };
   }
-  const prepared = await prepareTurn(db, keyring, sessionId, modelOverride, chat, emit);
+  const prepared = await prepareTurn(db, keyring, sessionId, modelOverride, chat, emit, signal);
   if ("error" in prepared) return prepared.error;
   const { session, agent, provider, apiKey, model, tools, system } = prepared;
 
   if (session.status === "queued") setSessionStatus(db, session.id, "running");
+
+  logTurnStart(session.id, agent.id, model, true);
 
   appendSessionEvent(db, session.id, {
     type: "message.user",
@@ -544,6 +574,11 @@ export async function runStreamedAgentTurn(
 
     let iterText = "";
     let iterThinking = "";
+    // ROUND-37: measured thinking duration per segment ("Thought for Ns").
+    // Starts at the first reasoning delta; freezes when the segment's text
+    // begins (the thought is done the moment the model starts writing).
+    let iterThinkingStart: number | null = null;
+    let iterThinkingMs: number | null = null;
     let iterAllText = ""; // never reset — completion-signal detection across segments
     let iterInputTokens = 0;
     let iterOutputTokens = 0;
@@ -568,13 +603,24 @@ export async function runStreamedAgentTurn(
     const flushSegment = (withStats: boolean): boolean => {
       if (iterText.trim() === "" && iterThinking.trim() === "") return false;
       const iterMs = Date.now() - startedAt;
+      const thinkingMs =
+        iterThinkingMs !== null
+          ? iterThinkingMs
+          : iterThinkingStart !== null
+            ? Date.now() - iterThinkingStart
+            : null;
       const ev = appendSessionEvent(db, session.id, {
         type: "message.assistant",
         agentId: agent.id,
         payload: {
           role: "assistant",
           content: iterText,
-          ...(iterThinking.trim() !== "" ? { thinking: capThinking(iterThinking) } : {}),
+          ...(iterThinking.trim() !== ""
+            ? {
+                thinking: capThinking(iterThinking),
+                ...(thinkingMs !== null && thinkingMs > 0 ? { thinkingMs } : {}),
+              }
+            : {}),
           ...(withStats
             ? {
                 usage: { inputTokens: iterInputTokens, outputTokens: iterOutputTokens },
@@ -589,12 +635,14 @@ export async function runStreamedAgentTurn(
       }
       iterText = "";
       iterThinking = "";
+      iterThinkingStart = null;
+      iterThinkingMs = null;
       return true;
     };
 
     try {
       for await (const event of chatStream({
-        provider: { id: provider.id, baseUrl: provider.baseUrl },
+        provider: { id: provider.id, baseUrl: provider.baseUrl, apiFormat: provider.apiFormat },
         apiKey,
         model,
         system,
@@ -610,9 +658,15 @@ export async function runStreamedAgentTurn(
           emit(event);
         }
         if (event.type === "text-delta") {
+          // ROUND-37: the first text token completes the in-flight thought —
+          // freeze its measured duration ("Thought for Ns").
+          if (iterThinkingStart !== null && iterThinkingMs === null) {
+            iterThinkingMs = Date.now() - iterThinkingStart;
+          }
           iterText += event.delta;
           iterAllText += event.delta;
         } else if (event.type === "thinking-delta") {
+          if (iterThinkingStart === null) iterThinkingStart = Date.now();
           iterThinking += event.delta;
         } else if (event.type === "tool-call") {
           iterToolCalls += 1;
@@ -644,6 +698,7 @@ export async function runStreamedAgentTurn(
               ...(outputSummary !== null ? { outputSummary } : {}),
             },
           });
+          logTool(session.id, event.toolName, event.argsSummary, event.ok);
         } else if (event.type === "finish") {
           iterInputTokens = event.usage.inputTokens;
           iterOutputTokens = event.usage.outputTokens;
@@ -651,6 +706,7 @@ export async function runStreamedAgentTurn(
       }
     } catch (error) {
       const normalized = error instanceof Error ? error : new Error(String(error));
+      logTurnEnd(session.id, false, Date.now() - startedAt, totalInputTokens, totalOutputTokens);
       return {
         ok: false,
         status: 502,
@@ -743,6 +799,7 @@ export async function runStreamedAgentTurn(
   };
   recordUsage(db, usage);
   touchSession(db, session.id);
+  logTurnEnd(session.id, true, ms, totalInputTokens, totalOutputTokens);
 
   return {
     ok: true,

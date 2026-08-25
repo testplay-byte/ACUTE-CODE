@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState, type KeyboardEvent } from "react";
 import { motion } from "framer-motion";
-import { AlertTriangle, ArrowUp, RotateCcw, Sparkles, X } from "lucide-react";
+import { AlertTriangle, ArrowUp, Bot, RotateCcw, X } from "lucide-react";
 import type { UsageRecord } from "shared";
 import { type Agent, type ChatEntry, type Session, ApiError, toChatEntries } from "../../lib/api";
 import { formatTime } from "../../lib/format";
@@ -92,7 +92,7 @@ export function ChatView({ session, agent }: { session: Session; agent: Agent | 
           className="flex h-6 w-6 shrink-0 items-center justify-center rounded-lg"
           style={{ backgroundColor: styles.accent, color: styles.accentText }}
         >
-          <Sparkles size={12} />
+          <Bot size={13} />
         </div>
         <span className="truncate text-[13px] font-semibold" style={{ color: styles.text }}>
           {session.title ?? agentName}
@@ -145,7 +145,7 @@ export function ChatView({ session, agent }: { session: Session; agent: Agent | 
                   className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl border-[1.5px]"
                   style={{ borderColor: styles.border, backgroundColor: styles.inputBg }}
                 >
-                  <Sparkles size={16} style={{ color: styles.accent }} />
+                  <Bot size={16} style={{ color: styles.accent }} />
                 </div>
                 <div className="min-w-0">
                   <p className="text-[13px] font-semibold" style={{ color: styles.text }}>
@@ -301,7 +301,7 @@ function ThinkingRow({
         className="grid h-7 w-7 shrink-0 place-items-center rounded-xl border-[1.5px]"
         style={{ borderColor: styles.border, backgroundColor: styles.inputBg }}
       >
-        <Sparkles size={13} style={{ color: styles.accent }} />
+        <Bot size={13} style={{ color: styles.accent }} />
       </div>
       <div className="flex min-w-0 items-center gap-2">
         <span className="text-[13px] font-semibold" style={{ color: styles.text }}>

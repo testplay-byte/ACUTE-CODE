@@ -370,6 +370,20 @@ export interface ToolDeps {
   keyring?: import("../providers/registry.js").ProviderKeyring;
   /** ROUND-36: the chat fn for child turns (injected to avoid cycles). */
   chat?: import("../agents/chat.js").ChatFn;
+  /** ROUND-37 (approvals): only INTERACTIVE streamed parent turns may pause
+   * and ask the owner for permission. Sync turns + sub-agent children fail
+   * fast on non-auto commands (no 120s burn). */
+  interactiveApprovals?: boolean;
+  /** ROUND-37: the live turn's abort signal — a pending approval denies on
+   * abort (the waiter races it; the SDK alone may not cancel tool promises). */
+  signal?: AbortSignal;
+  /** ROUND-37: persisted-event writer — approval.requested/resolved fold
+   * into the session log so the exchange renders after reload. */
+  appendEvent?: (event: {
+    type: "approval.requested" | "approval.resolved";
+    agentId: string;
+    payload: Record<string, unknown>;
+  }) => void;
 }
 
 export async function buildProjectTools(root: string, allowedTools?: readonly string[], deps?: ToolDeps): Promise<ToolSet> {
@@ -599,7 +613,7 @@ export async function buildProjectTools(root: string, allowedTools?: readonly st
     },
     run_command: {
       description:
-        "Run a terminal command inside the project root. Auto-approved for safe commands (ls, cat, grep, git status/diff/log, npm/pnpm test/build/lint, cargo check/build, node --version). Blocked commands return an explanation.",
+        "Run a terminal command inside the project root. Read-only and build/test commands run automatically (ls, cat, grep, git status/diff/log, npm/pnpm test/build/lint, cargo check/build). Any other command asks the owner for permission and waits for their decision — blocked commands (sudo, rm -rf, curl, dev servers) are refused outright.",
       inputSchema: jsonSchema({
         type: "object",
         properties: {
@@ -608,7 +622,22 @@ export async function buildProjectTools(root: string, allowedTools?: readonly st
         required: ["command"],
       }),
       execute: async (input) =>
-        runCommand(root, typeof input.command === "string" ? input.command : ""),
+        runCommand(
+          root,
+          typeof input.command === "string" ? input.command : "",
+          toolDeps !== undefined
+            ? {
+                db: toolDeps.db,
+                sessionId: toolDeps.sessionId,
+                agentId: toolDeps.agentId,
+                interactive: toolDeps.interactiveApprovals === true,
+                ...(toolDeps.projectId !== undefined ? { projectId: toolDeps.projectId } : {}),
+                ...(toolDeps.emit !== undefined ? { emit: toolDeps.emit } : {}),
+                ...(toolDeps.signal !== undefined ? { signal: toolDeps.signal } : {}),
+                ...(toolDeps.appendEvent !== undefined ? { appendEvent: toolDeps.appendEvent } : {}),
+              }
+            : undefined,
+        ),
     },
     todo_write: {
       description:
