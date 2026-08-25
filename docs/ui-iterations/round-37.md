@@ -74,11 +74,33 @@ settings/approvals directives (full text in `docs/agent/R37-PLAN.md`).
 
 ## Evidence
 
-- 250 tests green (was 227): +13 fold tests (turn shape), +3 chat-format,
-  +9 approval-flow, +2 provider tombstone/patch, engine tests updated.
-- lint / typecheck / build / e2e / license audit green (109 prod deps).
-- Live browser verification + screenshots: see the DASHBOARD round-37 zip
-  (referenced from the round close-out message).
+- **251 tests green** (was 227): +13 fold tests (turn shape), +3 chat-format,
+  +9 approval-flow, +1 compound-command bypass (review B1), +2 provider
+  tombstone/patch, engine tests updated. lint / typecheck / build / e2e /
+  license audit green (112 prod deps).
+- **Live browser battery** (scripts/live-r37.sh + live-r37-settings.sh,
+  agent-browser + VLM-verified screenshots, zero console errors):
+  - The money question ("Which files are in the COW folder?") ran a REAL
+    multi-step turn (32.9s, thinking + list_dir): live "Working · 0:26"
+    section with one-line rows → completed to "Worked for 2s · 1 action" →
+    final answer ("H8.jpeg, L3.jpeg") BELOW the section — NO repeated
+    avatars/headers, chat fills the panel width.
+  - Thought rows: one-line collapsed by default, expandable to full mono
+    text, live row expanded while thinking.
+  - Approval flow LIVE-PROVEN: "printf live-proof > approval-evidence.txt"
+    → amber Permission card (command in mono, Allow once / Always allow /
+    Deny, "waiting for approval" in the Working header) → Allow once →
+    command executed → **file on disk contains "live-proof"**.
+  - Settings: flat provider list; provider detail with editable name, base
+    URL, the three API format buttons, key; Add Provider dialog with
+    presets (already-added disabled) + custom form.
+  - Structured log (.dev/acute.log) captured the full lifecycle:
+    turn.start → tool.call(list_dir) → turn.end(32.9s, tokens) →
+    turn.start → approval.requested → approval.resolved(approved, once) →
+    tool.call(run_command, ok) → turn.end.
+- Sub-agent adversarial review: 1 BLOCKER (compound-command policy bypass —
+  fixed + regression-tested), 2 MAJOR (live-thinking collapse, no-op
+  injection guard — both fixed), 9 minors (fixed 8, documented 1).
 
 ## Known limitations (honest)
 
