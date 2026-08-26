@@ -17,7 +17,10 @@ pub fn run() {
             keys::store_provider_key,
             keys::provider_key_status,
             dialogs::pick_folder,
-            browser::open_browser_window
+            browser::open_browser_window,
+            browser::navigate_browser,
+            browser::close_browser_window,
+            browser::is_browser_window_open
         ])
         .build(tauri::generate_context!())
         .expect("error while running the tauri application")

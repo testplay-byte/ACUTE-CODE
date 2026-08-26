@@ -17,7 +17,35 @@ import { persist } from "zustand/middleware";
  *
  * Per-project state (switching projects never bleeds tabs across them, same
  * lesson as project-chat-store). Persisted (open/width/tabs survive reloads).
+ *
+ * ROUND-41 (owner: "the sidebar will be different in each one of the
+ * sessions. If I switch sessions then the sidebar will close or open but
+ * the content in it will change based on the one which was previously in
+ * it. If I was in session A and the sub-agent menu was opened up in the
+ * sidebar, then in session B it will not be opened up. If I go back to
+ * session A then that sidebar will open up exactly the same."). The store
+ * is now keyed by `${projectId}::${sessionId}` (the "state key") so each
+ * SESSION within a project has its OWN independent sidebar state — tabs,
+ * open/closed, width, active tab, terminal scrollback. `setActiveSession`
+ * records the active session per project; all reads/writes go through the
+ * active session's state key. When no session is active (a brand-new
+ * project with no sessions yet), the key falls back to
+ * `${projectId}::default` so the sidebar still renders before the first
+ * session is created. The public API still takes `projectId` everywhere —
+ * callers don't need to know the session id (the store resolves it).
  */
+
+/**
+ * The internal storage key for a project's per-session sidebar state.
+ * Keyed by `${projectId}::${sessionId}` (or `::default` when no session is
+ * active yet). This is what makes per-session state isolation work without
+ * threading the session id through every caller. Exported so components
+ * that read the slice directly (RightSidebar) can resolve the active
+ * session's key the same way the store's actions do.
+ */
+export function stateKey(projectId: string, sessionId: string | null): string {
+  return `${projectId}::${sessionId ?? "default"}`;
+}
 
 export type RightSidebarTabType = "file" | "browser" | "terminal" | "subagent";
 
@@ -73,11 +101,18 @@ export function defaultProjectRightState(): ProjectRightState {
 }
 
 interface RightSidebarState {
+  /** Internal: keyed by stateKey (projectId::sessionId). Public API still
+   * takes projectId; the store resolves the active session's key. */
   byProject: Record<string, ProjectRightState>;
   /** Set by ChatFocusLayout so the GapHandle + open toggle know the project. */
   activeProjectId: string | null;
+  /** ROUND-41: the active session id per project (drives stateKey). */
+  activeSessionByProject: Record<string, string | null>;
   setActiveProject: (id: string) => void;
-  /** Returns the project's slice (creates defaults on first access). */
+  /** ROUND-41: record the active session for a project. Called by
+   * ChatFocusLayout whenever useActiveSessionId resolves a new value. */
+  setActiveSession: (projectId: string, sessionId: string | null) => void;
+  /** Returns the project's ACTIVE SESSION's slice (creates defaults). */
   ensure: (projectId: string) => ProjectRightState;
   patch: (projectId: string, patch: Partial<ProjectRightState>) => void;
   setOpen: (projectId: string, open: boolean) => void;
@@ -143,22 +178,30 @@ export const useRightSidebarStore = create<RightSidebarState>()(
     (set, get) => ({
       byProject: {},
       activeProjectId: null,
+      activeSessionByProject: {},
       setActiveProject: (id) => set({ activeProjectId: id }),
+      setActiveSession: (projectId, sessionId) =>
+        set((s) => ({
+          activeSessionByProject: { ...s.activeSessionByProject, [projectId]: sessionId },
+        })),
       ensure: (projectId) => {
-        const existing = get().byProject[projectId];
+        const key = stateKey(projectId, get().activeSessionByProject[projectId] ?? null);
+        const existing = get().byProject[key];
         if (existing !== undefined) return existing;
         const next = defaultProjectRightState();
-        set((s) => ({ byProject: { ...s.byProject, [projectId]: next } }));
+        set((s) => ({ byProject: { ...s.byProject, [key]: next } }));
         return next;
       },
       patch: (projectId, patch) =>
         set((s) => {
-          const cur = s.byProject[projectId] ?? defaultProjectRightState();
-          return { byProject: { ...s.byProject, [projectId]: { ...cur, ...patch } } };
+          const key = stateKey(projectId, s.activeSessionByProject[projectId] ?? null);
+          const cur = s.byProject[key] ?? defaultProjectRightState();
+          return { byProject: { ...s.byProject, [key]: { ...cur, ...patch } } };
         }),
       setOpen: (projectId, open) => get().patch(projectId, { open }),
       toggleOpen: (projectId) => {
-        const cur = get().byProject[projectId] ?? defaultProjectRightState();
+        const key = stateKey(projectId, get().activeSessionByProject[projectId] ?? null);
+        const cur = get().byProject[key] ?? defaultProjectRightState();
         get().patch(projectId, { open: !cur.open });
       },
       setWidth: (projectId, width) =>
@@ -169,7 +212,8 @@ export const useRightSidebarStore = create<RightSidebarState>()(
         // Compute the id up front so we can return it (set() returns void).
         const id = nextId();
         set((s) => {
-          const cur = s.byProject[projectId] ?? defaultProjectRightState();
+          const key = stateKey(projectId, s.activeSessionByProject[projectId] ?? null);
+          const cur = s.byProject[key] ?? defaultProjectRightState();
           // Dedupe: surface an existing tab of the same type+key.
           const existing = findExistingTab(cur, tabInput.type, {
             filePath: tabInput.filePath,
@@ -181,7 +225,7 @@ export const useRightSidebarStore = create<RightSidebarState>()(
             return {
               byProject: {
                 ...s.byProject,
-                [projectId]: { ...cur, open: true, activeTabId: existing.id },
+                [key]: { ...cur, open: true, activeTabId: existing.id },
               },
             };
           }
@@ -192,7 +236,7 @@ export const useRightSidebarStore = create<RightSidebarState>()(
           return {
             byProject: {
               ...s.byProject,
-              [projectId]: { ...cur, open: true, tabs, activeTabId: id },
+              [key]: { ...cur, open: true, tabs, activeTabId: id },
             },
           };
         });
@@ -200,7 +244,8 @@ export const useRightSidebarStore = create<RightSidebarState>()(
       },
       closeTab: (projectId, tabId) =>
         set((s) => {
-          const cur = s.byProject[projectId] ?? defaultProjectRightState();
+          const key = stateKey(projectId, s.activeSessionByProject[projectId] ?? null);
+          const cur = s.byProject[key] ?? defaultProjectRightState();
           const idx = cur.tabs.findIndex((t) => t.id === tabId);
           if (idx === -1) return s;
           const tabs = cur.tabs.filter((t) => t.id !== tabId);
@@ -215,14 +260,15 @@ export const useRightSidebarStore = create<RightSidebarState>()(
           return {
             byProject: {
               ...s.byProject,
-              [projectId]: { ...cur, tabs, activeTabId: nextActive, terminalLinesByTab },
+              [key]: { ...cur, tabs, activeTabId: nextActive, terminalLinesByTab },
             },
           };
         }),
       setActiveTab: (projectId, tabId) =>
         get().patch(projectId, { activeTabId: tabId, open: true }),
       openFile: (projectId, path) => {
-        const state = get().byProject[projectId] ?? defaultProjectRightState();
+        const key = stateKey(projectId, get().activeSessionByProject[projectId] ?? null);
+        const state = get().byProject[key] ?? defaultProjectRightState();
         const existing = findExistingTab(state, "file", { filePath: path });
         if (existing !== null) {
           get().setActiveTab(projectId, existing.id);
@@ -253,46 +299,56 @@ export const useRightSidebarStore = create<RightSidebarState>()(
         }),
       patchTab: (projectId, tabId, patch) =>
         set((s) => {
-          const cur = s.byProject[projectId] ?? defaultProjectRightState();
+          const key = stateKey(projectId, s.activeSessionByProject[projectId] ?? null);
+          const cur = s.byProject[key] ?? defaultProjectRightState();
           const tabs = cur.tabs.map((t) => (t.id === tabId ? { ...t, ...patch } : t));
-          return { byProject: { ...s.byProject, [projectId]: { ...cur, tabs } } };
+          return { byProject: { ...s.byProject, [key]: { ...cur, tabs } } };
         }),
       setBrowserUrl: (projectId, tabId, url) =>
         set((s) => {
-          const cur = s.byProject[projectId] ?? defaultProjectRightState();
+          const key = stateKey(projectId, s.activeSessionByProject[projectId] ?? null);
+          const cur = s.byProject[key] ?? defaultProjectRightState();
           const tabs = cur.tabs.map((t) => {
             if (t.id !== tabId) return t;
             const browserHistory = url === null ? t.browserHistory ?? [] : [url, ...(t.browserHistory ?? []).filter((u) => u !== url)].slice(0, 20);
             const title = url === null ? "New tab" : url.replace(/^https?:\/\//, "").slice(0, 24);
             return { ...t, browserUrl: url, browserHistory, title: title === "" ? "New tab" : title };
           });
-          return { byProject: { ...s.byProject, [projectId]: { ...cur, tabs } } };
+          return { byProject: { ...s.byProject, [key]: { ...cur, tabs } } };
         }),
       appendTerminal: (projectId, tabId, line) =>
         set((s) => {
-          const cur = s.byProject[projectId] ?? defaultProjectRightState();
+          const key = stateKey(projectId, s.activeSessionByProject[projectId] ?? null);
+          const cur = s.byProject[key] ?? defaultProjectRightState();
           const existing = cur.terminalLinesByTab[tabId] ?? [];
           const terminalLinesByTab = {
             ...cur.terminalLinesByTab,
             [tabId]: [...existing, line].slice(-500),
           };
-          return { byProject: { ...s.byProject, [projectId]: { ...cur, terminalLinesByTab } } };
+          return { byProject: { ...s.byProject, [key]: { ...cur, terminalLinesByTab } } };
         }),
       clearTerminal: (projectId, tabId) =>
         set((s) => {
-          const cur = s.byProject[projectId] ?? defaultProjectRightState();
+          const key = stateKey(projectId, s.activeSessionByProject[projectId] ?? null);
+          const cur = s.byProject[key] ?? defaultProjectRightState();
           const terminalLinesByTab = { ...cur.terminalLinesByTab };
           delete terminalLinesByTab[tabId];
-          return { byProject: { ...s.byProject, [projectId]: { ...cur, terminalLinesByTab } } };
+          return { byProject: { ...s.byProject, [key]: { ...cur, terminalLinesByTab } } };
         }),
     }),
     {
       name: "acute-code.rightSidebar",
-      version: 2,
-      // v1 → v2: the schema is incompatible (fixed tabs → dynamic tabs). Drop
-      // old per-project slices; users re-open files (one click). The cost of
-      // a migration shim would be higher than the value (few persisted tabs).
-      migrate: () => ({ byProject: {}, activeProjectId: null }),
+      version: 3,
+      // v2 → v3 (ROUND-41): the storage key changed from `projectId` to
+      // `projectId::sessionId` for per-session sidebar state. Old slices
+      // are unreachable under the new key scheme, so drop them. Users
+      // re-open files (one click); the cost of a migration shim would
+      // exceed the value (few persisted tabs per project).
+      migrate: (_persisted: unknown) => ({
+        byProject: {},
+        activeProjectId: null,
+        activeSessionByProject: {},
+      }),
     },
   ),
 );

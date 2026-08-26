@@ -265,12 +265,14 @@ export function touchSession(db: SqliteDatabase, id: string): void {
 }
 
 /**
- * ROUND-38 (owner: "the name of the session should change after the first
- * interaction with the user" — like the reference repos). Called after a
- * turn completes. If the session still carries the DEFAULT title (null or the
- * parent project's name — the value AgentChatPanel seeds at create time) AND
- * has at least one user message, rename it to a single-line snippet of the
- * FIRST user message (capped at 60 chars). No-op once the user has manually
+ * ROUND-38/41 (owner: "by default if I create a new chat session and send
+ * in my very first message, it should be given a name based on what was
+ * happening in it"). Called after a turn completes. If the session still
+ * carries the DEFAULT title (null or the parent project's name — the value
+ * AgentChatPanel seeds at create time) AND has at least one user message,
+ * rename it to a SHORT, readable title derived from the FIRST user message
+ * (stripped of markdown, first sentence, max 60 chars on a word boundary,
+ * ellipsis if truncated, capitalized). No-op once the user has manually
  * renamed or the first auto-title has landed. Sub-agent children keep their
  * task-derived titles.
  *
@@ -295,9 +297,46 @@ export function maybeAutoTitleSession(db: SqliteDatabase, sessionId: string): vo
   if (firstUser === undefined) return;
   const content = (firstUser.payload as { content?: unknown } | null)?.content;
   if (typeof content !== "string") return;
-  const snippet = content.replace(/\s+/g, " ").trim().slice(0, 60);
-  if (snippet === "") return;
-  updateSessionTitle(db, sessionId, snippet);
+  const title = deriveSessionTitle(content);
+  if (title === "") return;
+  updateSessionTitle(db, sessionId, title);
+}
+
+/**
+ * ROUND-41: derive a short, human-readable session title from the first
+ * user message. Steps:
+ *  1. Strip fenced code blocks (```...```) — the user pasted code, not prose.
+ *  2. Strip inline code + leading markdown symbols (#, -, *, >, list markers).
+ *  3. Collapse whitespace.
+ *  4. Take the first sentence (up to . ! ? or newline) OR 60 chars,
+ *     whichever is shorter.
+ *  5. If the original was longer, truncate at the last word boundary ≤ 60
+ *     chars and append "…".
+ *  6. Capitalize the first letter.
+ * Returns "" for messages that produce no usable prose (e.g. pure code).
+ */
+function deriveSessionTitle(raw: string): string {
+  const noFences = raw.replace(/```[\s\S]*?```/g, " ");
+  const stripped = noFences
+    .replace(/`[^`]*`/g, " ")
+    .replace(/^[\s>#*-]+/, "")
+    .replace(/^\d+\.\s+/, "")
+    .replace(/\s+/g, " ")
+    .trim();
+  if (stripped === "") return "";
+  const firstSentenceMatch = stripped.match(/^([^.!?\n]{1,60})/);
+  let snippet = firstSentenceMatch ? firstSentenceMatch[1].trim() : "";
+  if (snippet === "") return "";
+  const MAX = 60;
+  if (stripped.length > snippet.length) {
+    if (snippet.length > MAX) {
+      const cut = snippet.slice(0, MAX);
+      const lastSpace = cut.lastIndexOf(" ");
+      snippet = lastSpace > 20 ? cut.slice(0, lastSpace) : cut;
+    }
+    snippet = `${snippet}…`;
+  }
+  return snippet.charAt(0).toUpperCase() + snippet.slice(1);
 }
 
 /** Allocates the next seq and inserts atomically; callers never compute seq themselves. */

@@ -24,7 +24,7 @@
  * shrinks to an icon tile with the badge; when false (expanded sidebar),
  * the bell is a wider row. Same pattern as the existing SettingsButton.
  */
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { AnimatePresence, motion } from "framer-motion";
 import { useNavigate } from "react-router";
@@ -96,12 +96,20 @@ interface PopoverPos {
   right: number;
 }
 
+/** ROUND-41: the popover's measured height — used to decide flip-up vs
+ * drop-down + to clamp the top so the popover never spills off the viewport
+ * (owner: "the notification menu was showing below it… outside of the
+ * screen, which I was unable to see at all"). */
+const POPOVER_ESTIMATED_HEIGHT = 460;
+const POPOVER_VIEWPORT_MARGIN = 8;
+
 export function NotificationBell({ collapsed }: { collapsed: boolean }) {
   const styles = useThemeStyles();
   const navigate = useNavigate();
   const [open, setOpen] = useState(false);
   const [popoverPos, setPopoverPos] = useState<PopoverPos | null>(null);
   const btnRef = useRef<HTMLButtonElement>(null);
+  const popoverRef = useRef<HTMLDivElement>(null);
   const { notifications, markRead, markAllRead } = useNotifications();
   // The unread count comes from the SSE-driven store (live updates, no
   // refetch needed). Falls back to 0 in demo mode (no stream).
@@ -112,15 +120,36 @@ export function NotificationBell({ collapsed }: { collapsed: boolean }) {
   // spilling out of the 16px circle).
   const badge = unread > 9 ? "9+" : unread > 0 ? String(unread) : null;
 
-  // Compute the popover's position from the bell button's bounding rect,
-  // recompute on resize/scroll while open.
+  // ROUND-41: compute the popover's position from the bell button's bounding
+  // rect. If the popover would extend below the viewport (bell is near the
+  // bottom of the screen), FLIP IT UP so it opens ABOVE the bell. Also
+  // re-measure the actual popover height after mount and clamp `top` so the
+  // popover never spills off either edge. Recompute on resize/scroll while
+  // open (capture-phase scroll so any inner-scroller movement updates the
+  // anchor).
+  const reposition = useCallback(() => {
+    if (!btnRef.current) return;
+    const r = btnRef.current.getBoundingClientRect();
+    const right = window.innerWidth - r.right;
+    // Measure the actual popover height if mounted; fall back to an estimate.
+    const popoverH = popoverRef.current?.offsetHeight ?? POPOVER_ESTIMATED_HEIGHT;
+    const spaceBelow = window.innerHeight - r.bottom - POPOVER_VIEWPORT_MARGIN;
+    const spaceAbove = r.top - POPOVER_VIEWPORT_MARGIN;
+    let top: number;
+    if (spaceBelow >= popoverH || spaceBelow >= spaceAbove) {
+      // Drop down — but clamp so it never spills past the viewport bottom.
+      top = r.bottom + 6;
+      const maxTop = window.innerHeight - popoverH - POPOVER_VIEWPORT_MARGIN;
+      if (top > maxTop) top = Math.max(POPOVER_VIEWPORT_MARGIN, maxTop);
+    } else {
+      // Flip up — open above the bell. Clamp so it never spills past the top.
+      top = r.top - 6 - popoverH;
+      if (top < POPOVER_VIEWPORT_MARGIN) top = POPOVER_VIEWPORT_MARGIN;
+    }
+    setPopoverPos({ top, right });
+  }, []);
   useEffect(() => {
     if (!open) return;
-    const reposition = () => {
-      if (!btnRef.current) return;
-      const r = btnRef.current.getBoundingClientRect();
-      setPopoverPos({ top: r.bottom + 6, right: window.innerWidth - r.right });
-    };
     reposition();
     window.addEventListener("resize", reposition);
     window.addEventListener("scroll", reposition, true);
@@ -128,7 +157,12 @@ export function NotificationBell({ collapsed }: { collapsed: boolean }) {
       window.removeEventListener("resize", reposition);
       window.removeEventListener("scroll", reposition, true);
     };
-  }, [open]);
+  }, [open, reposition]);
+  // Re-measure after the popover mounts (the offsetHeight is only known
+  // once the children render — list height varies with notification count).
+  useLayoutEffect(() => {
+    if (open) reposition();
+  }, [open, reposition, notifications.length]);
 
   // Esc closes the dropdown.
   useEffect(() => {
@@ -167,9 +201,26 @@ export function NotificationBell({ collapsed }: { collapsed: boolean }) {
   };
 
   const handleBellClick = () => {
-    if (!open && btnRef.current) {
-      const r = btnRef.current.getBoundingClientRect();
-      setPopoverPos({ top: r.bottom + 6, right: window.innerWidth - r.right });
+    if (!open) {
+      // Compute position synchronously before the popover mounts so the
+      // first paint is correctly placed (the layout effect re-measures
+      // + clamps once the actual height is known).
+      if (btnRef.current) {
+        const r = btnRef.current.getBoundingClientRect();
+        const popoverH = POPOVER_ESTIMATED_HEIGHT;
+        const spaceBelow = window.innerHeight - r.bottom - POPOVER_VIEWPORT_MARGIN;
+        const spaceAbove = r.top - POPOVER_VIEWPORT_MARGIN;
+        let top: number;
+        if (spaceBelow >= popoverH || spaceBelow >= spaceAbove) {
+          top = r.bottom + 6;
+          const maxTop = window.innerHeight - popoverH - POPOVER_VIEWPORT_MARGIN;
+          if (top > maxTop) top = Math.max(POPOVER_VIEWPORT_MARGIN, maxTop);
+        } else {
+          top = r.top - 6 - popoverH;
+          if (top < POPOVER_VIEWPORT_MARGIN) top = POPOVER_VIEWPORT_MARGIN;
+        }
+        setPopoverPos({ top, right: window.innerWidth - r.right });
+      }
     }
     setOpen((v) => !v);
   };
@@ -229,6 +280,7 @@ export function NotificationBell({ collapsed }: { collapsed: boolean }) {
             <AnimatePresence>
               {open ? (
                 <motion.div
+                  ref={popoverRef}
                   data-notification-popover
                   role="menu"
                   aria-label="Recent notifications"

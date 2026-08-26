@@ -701,8 +701,18 @@ export function AgentChatPanel({
   // ROUND-39: the right sidebar's quick-menu "File" option requests the file
   // picker via the events store (the palette lives here, not in the sidebar).
   // The counter pattern lets consecutive requests each fire.
+  //
+  // ROUND-41 (owner: "whenever I try to switch the session, it opens up the
+  // search symbol menu every single time" + "when I click the file, it opens
+  // up this search symbol file too… a glitch kind of thing"). ROOT CAUSE:
+  // `useRef(0)` initialized the prev-counter to 0 on every remount, but the
+  // store's counter survives remounts — so any non-zero counter from a PRIOR
+  // session/project made the effect fire `setPaletteOpen(true)` on the very
+  // first render of the new mount. FIX: initialize the ref to the CURRENT
+  // store value (`useRef(filePickerRequest)`) so the effect only fires on
+  // SUBSEQUENT increments, not on the first render after a remount.
   const filePickerRequest = useRightSidebarEvents((s) => s.filePickerRequest);
-  const prevFilePickerRef = useRef(0);
+  const prevFilePickerRef = useRef(filePickerRequest);
   useEffect(() => {
     if (filePickerRequest !== prevFilePickerRef.current && filePickerRequest > 0) {
       prevFilePickerRef.current = filePickerRequest;

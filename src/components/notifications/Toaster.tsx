@@ -116,6 +116,55 @@ export function Toaster() {
   const lastSeq = useNotificationStreamStore((s) => s.lastSeq);
   const lastNotification = useNotificationStreamStore((s) => s.lastNotification);
 
+  // ROUND-41 (owner: "whenever it finishes the response or anything like
+  // that, it will send me a notification on my PC. I was hoping for it to
+  // be like that but apparently I did not receive any notifications or
+  // anything like that at all"). Wire the desktop Notification API: when a
+  // new SSE notification arrives, fire a native OS notification (so the
+  // user sees it even if the app window is minimised/behind another window).
+  // Permission flow: if "default", request on the FIRST arrival (one-time
+  // browser prompt). If "denied", skip silently (the in-app toast still
+  // shows). If "granted", fire. The notification's `tag` is the record id
+  // so duplicate publishes (across SSE reconnects) don't stack duplicates.
+  // Clicking the desktop notification focuses the app window + navigates to
+  // the notification's session (same as clicking the in-app toast).
+  useEffect(() => {
+    if (typeof window === "undefined" || !("Notification" in window)) return;
+    if (Notification.permission === "default") {
+      // Fire-and-forget; the browser surfaces the permission prompt. If the
+      // user denies, subsequent notifications just skip — the in-app toast
+      // still renders.
+      void Notification.requestPermission();
+    }
+  }, []);
+
+  useEffect(() => {
+    if (!lastNotification) return;
+    if (typeof window === "undefined" || !("Notification" in window)) return;
+    if (Notification.permission !== "granted") return;
+    const n = lastNotification;
+    try {
+      const desktop = new Notification(n.title, {
+        body: n.body ?? "",
+        tag: n.id,
+        // The icon: a small inline SVG data URL (the Acute mark). Keeps it
+        // dependency-free + recognisable in the OS notification center.
+        icon: "data:image/svg+xml,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20viewBox%3D%220%200%2064%2064%22%3E%3Crect%20width%3D%2264%22%20height%3D%2264%22%20rx%3D%2214%22%20fill%3D%22%23FF6B2C%22%2F%3E%3Ctext%20x%3D%2232%22%20y%3D%2245%22%20font-family%3D%22Menlo%2C%20monospace%22%20font-size%3D%2234%22%20font-weight%3D%22700%22%20text-anchor%3D%22middle%22%20fill%3D%22%231f130a%22%3E%E2%97%90%3C%2Ftext%3E%3C%2Fsvg%3E",
+      });
+      desktop.onclick = () => {
+        // Focus the app window + navigate to the session (same path as the
+        // in-app toast's openSession).
+        window.focus();
+        openSession(n);
+        desktop.close();
+      };
+    } catch {
+      // Some browsers throw if the notification was created in a
+      // background tab without a user gesture. The in-app toast still
+      // shows — silently skip the desktop one.
+    }
+  }, [lastSeq, lastNotification]);
+
   useEffect(() => {
     if (!lastNotification) return;
     const n = lastNotification;

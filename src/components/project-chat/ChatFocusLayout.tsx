@@ -4,7 +4,7 @@ import { useThemeStyles } from "../../lib/use-theme-styles";
 import { ease } from "../../lib/motion";
 import { AgentChatPanel } from "./AgentChatPanel";
 import { RightSidebar } from "../right-sidebar/RightSidebar";
-import { useRightSidebarStore } from "../../lib/right-sidebar-store";
+import { useRightSidebarStore, stateKey } from "../../lib/right-sidebar-store";
 import { useActiveSessionId } from "../../hooks/use-active-session";
 import type { Project } from "../../lib/api";
 
@@ -20,17 +20,30 @@ import type { Project } from "../../lib/api";
  *   right side"): the layout is now [chat (flex-1)] [resize handle] [right
  *   sidebar]. The right sidebar hosts the Files / Terminal / Browser /
  *   Sub-agents tabs. Per-project state lives in right-sidebar-store.
+ * - ROUND-41 (owner: "the sidebar will be different in each one of the
+ *   sessions"): the right sidebar's per-session state is keyed by
+ *   `${projectId}::${sessionId}`. setActiveSession is called whenever the
+ *   active session id changes (resolved by useActiveSessionId from the URL
+ *   ?session= param or the project's most-recent session).
  */
 export function ChatFocusLayout({ project }: { project: Project }) {
   const styles = useThemeStyles();
   const setActiveProject = useRightSidebarStore((s) => s.setActiveProject);
+  const setActiveSession = useRightSidebarStore((s) => s.setActiveSession);
   const sessionId = useActiveSessionId(project.id);
 
-  // Declare this project active in the right-sidebar store (so its per-project
-  // slice is the one the sidebar renders). Idempotent.
+  // Declare this project active in the right-sidebar store (so its
+  // per-project slice is the one the sidebar renders). Idempotent.
   useEffect(() => {
     setActiveProject(project.id);
   }, [project.id, setActiveProject]);
+
+  // ROUND-41: record the active session for this project. The store uses
+  // it as the state-key suffix so switching sessions swaps the sidebar's
+  // tabs/open/width/activeTab/terminal-scrollback atomically.
+  useEffect(() => {
+    setActiveSession(project.id, sessionId);
+  }, [project.id, sessionId, setActiveSession]);
 
   // Resize handle for the right sidebar (drag left/right to grow/shrink).
   const isResizing = useRef(false);
@@ -38,7 +51,8 @@ export function ChatFocusLayout({ project }: { project: Project }) {
   const startWidth = useRef(0);
   const onResize = useCallback((delta: number) => {
     const s = useRightSidebarStore.getState();
-    const cur = s.byProject[project.id]?.width ?? 440;
+    const key = stateKey(project.id, s.activeSessionByProject[project.id] ?? null);
+    const cur = s.byProject[key]?.width ?? 440;
     // Dragging LEFT (negative delta) GROWS the sidebar (it's on the right edge
     // of the chat — moving the handle left eats into the chat).
     s.setWidth(project.id, cur - delta);
@@ -107,7 +121,9 @@ export function ChatFocusLayout({ project }: { project: Project }) {
           e.preventDefault();
           isResizing.current = true;
           startX.current = e.clientX;
-          startWidth.current = useRightSidebarStore.getState().byProject[project.id]?.width ?? 440;
+          const s = useRightSidebarStore.getState();
+          const key = stateKey(project.id, s.activeSessionByProject[project.id] ?? null);
+          startWidth.current = s.byProject[key]?.width ?? 440;
           document.body.style.cursor = "ew-resize";
           document.body.style.userSelect = "none";
         }}

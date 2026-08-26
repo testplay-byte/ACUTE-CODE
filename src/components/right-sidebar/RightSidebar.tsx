@@ -12,6 +12,7 @@ import {
 } from "lucide-react";
 import {
   useRightSidebarStore,
+  stateKey,
   type RightSidebarTabType,
 } from "../../lib/right-sidebar-store";
 import { useRightSidebarEvents } from "../../lib/right-sidebar-events";
@@ -61,7 +62,16 @@ export function RightSidebar({
   sessionId: string | null;
 }) {
   const styles = useThemeStyles();
-  const slice = useRightSidebarStore((s) => s.byProject[projectId]);
+  // ROUND-41: the slice is keyed by `${projectId}::${sessionId}` so each
+  // session has its own independent sidebar state. When sessionId is null
+  // (no sessions yet) the key falls back to `::default` so the sidebar still
+  // renders an empty state.
+  const activeSessionId = useRightSidebarStore(
+    (s) => s.activeSessionByProject[projectId] ?? null,
+  );
+  const slice = useRightSidebarStore(
+    (s) => s.byProject[stateKey(projectId, activeSessionId)],
+  );
   const ensure = useRightSidebarStore((s) => s.ensure);
   const setActiveTab = useRightSidebarStore((s) => s.setActiveTab);
   const closeTab = useRightSidebarStore((s) => s.closeTab);
@@ -70,9 +80,9 @@ export function RightSidebar({
   const openTerminal = useRightSidebarStore((s) => s.openTerminal);
   const openSubAgent = useRightSidebarStore((s) => s.openSubAgent);
   const requestFilePicker = useRightSidebarEvents((s) => s.requestFilePicker);
-  // Make sure the project has a slice (idempotent).
+  // Make sure the project has a slice (idempotent — uses the active session's key).
   if (slice === undefined) ensure(projectId);
-  const state = slice ?? useRightSidebarStore.getState().byProject[projectId];
+  const state = slice ?? useRightSidebarStore.getState().byProject[stateKey(projectId, activeSessionId)];
   if (state === undefined) return null;
   const open = state.open;
   const width = state.width;
@@ -101,12 +111,24 @@ export function RightSidebar({
   // computed from the "+" button's bounding rect on open and refreshed on
   // window resize / scroll (capture phase so any scroller anywhere updates
   // the anchor).
+  //
+  // ROUND-41 (owner: "if I tap the new tab button on the very right side…
+  // it does not respect the size of the screen. It shows the menu which
+  // opens up for the new tab outside of it"). The popover's `left` is now
+  // CLAMPED so the menu never spills past the viewport's right edge: if the
+  // anchor + the menu's width would overflow, shift the menu left by the
+  // overflow amount (with an 8px viewport margin). Same flip for the
+  // SubAgentPicker (260px wide).
   const plusBtnRef = useRef<HTMLButtonElement>(null);
   const [popoverPos, setPopoverPos] = useState<{ top: number; left: number } | null>(null);
   const updatePopoverPos = useCallback(() => {
     if (!plusBtnRef.current) return;
     const r = plusBtnRef.current.getBoundingClientRect();
-    setPopoverPos({ top: r.bottom + 4, left: r.left });
+    const POPOVER_WIDTH = 240; // QuickMenu 220 + padding; SubAgentPicker 260 — use the wider.
+    const VIEWPORT_MARGIN = 8;
+    const maxLeft = window.innerWidth - POPOVER_WIDTH - VIEWPORT_MARGIN;
+    const left = Math.min(r.left, Math.max(VIEWPORT_MARGIN, maxLeft));
+    setPopoverPos({ top: r.bottom + 4, left });
   }, []);
   useEffect(() => {
     if (!quickMenuOpen && subAgentPickerFor === null) return;
@@ -125,7 +147,11 @@ export function RightSidebar({
   const openQuickMenu = useCallback(() => {
     if (plusBtnRef.current) {
       const r = plusBtnRef.current.getBoundingClientRect();
-      setPopoverPos({ top: r.bottom + 4, left: r.left });
+      const POPOVER_WIDTH = 240;
+      const VIEWPORT_MARGIN = 8;
+      const maxLeft = window.innerWidth - POPOVER_WIDTH - VIEWPORT_MARGIN;
+      const left = Math.min(r.left, Math.max(VIEWPORT_MARGIN, maxLeft));
+      setPopoverPos({ top: r.bottom + 4, left });
     }
     setQuickMenuOpen(true);
   }, []);
@@ -161,21 +187,24 @@ export function RightSidebar({
       style={{ background: styles.card, border: `1.5px solid ${styles.border}` }}
     >
       {/* ── Browser-style tab strip header ──
-          ROUND-40 (owner: "+ dropdown must overlay below the tab bar, not
-          render inside it forcing scroll; collapse button must ALWAYS be
-          visible top-right, nothing overlaps it"). The header is now a
-          relative wrapper around (a) the overflow-x-auto tab strip (tabs +
-          "+" only) and (b) the absolutely-positioned collapse button
-          (never scrolled). The QuickMenu / SubAgentPicker popovers are
-          portaled to document.body so they escape the tab strip's
-          overflow-x-auto clipping entirely; they anchor below the "+"
-          button via its bounding rect. */}
-      <div className="relative shrink-0">
-        {/* Scrollable tab strip — tabs + "+" only. pr-9 reserves room on
-            the right so the absolutely-positioned collapse button never
-            covers a tab's close X. */}
+          ROUND-41 (owner: "the collapse button was properly there and it
+          would never disappear, which is good, but there were issues with
+          it. The issue was that it was not like a dedicated section kind of
+          vibe. The content was going under it. The content should not go
+          under it. It should be a separate kind of section. No content
+          should go under it or over it"). The header is now a FLEX ROW of
+          two dedicated columns: (a) the scrollable tab strip (tabs + "+"
+          only) on the left, and (b) a dedicated collapse-button column on
+          the right with its own left border. The collapse button is NO
+          LONGER absolutely positioned over the tabs — it has its own
+          non-overlapping slot, so no tab close-X or content can ever go
+          under or over it. The QuickMenu / SubAgentPicker popovers are
+          still portaled to document.body (they anchor below the "+"
+          button). */}
+      <div className="flex shrink-0 items-stretch">
+        {/* Column 1: scrollable tab strip — tabs + "+" only. */}
         <div
-          className="flex items-stretch gap-0.5 h-10 border-b overflow-x-auto pr-9"
+          className="flex-1 min-w-0 flex items-stretch gap-0.5 h-10 border-b overflow-x-auto"
           style={{
             borderColor: styles.border,
             background: styles.isDark ? "rgba(0,0,0,0.12)" : styles.subtle,
@@ -255,7 +284,11 @@ export function RightSidebar({
               onClick={() => {
                 if (!quickMenuOpen && plusBtnRef.current) {
                   const r = plusBtnRef.current.getBoundingClientRect();
-                  setPopoverPos({ top: r.bottom + 4, left: r.left });
+                  const POPOVER_WIDTH = 240;
+                  const VIEWPORT_MARGIN = 8;
+                  const maxLeft = window.innerWidth - POPOVER_WIDTH - VIEWPORT_MARGIN;
+                  const left = Math.min(r.left, Math.max(VIEWPORT_MARGIN, maxLeft));
+                  setPopoverPos({ top: r.bottom + 4, left });
                 }
                 setQuickMenuOpen((v) => !v);
               }}
@@ -284,17 +317,28 @@ export function RightSidebar({
           </div>
         </div>
 
-        {/* Collapse button — ALWAYS visible top-right, never inside the
-            scrollable strip, z above the portaled popovers (z-50) so nothing
-            overlaps it. */}
+        {/* Column 2: DEDICATED collapse-button column. Has its own left
+            border so it reads as a separate section, not an overlay. Nothing
+            can go under or over it — the tab strip is column 1, this is
+            column 2, they never overlap. */}
         <button
           onClick={() => toggleOpen(projectId)}
           aria-label="Collapse right sidebar"
           title="Collapse"
-          className="absolute top-1 right-1.5 z-[60] w-7 grid place-items-center rounded-lg transition-colors"
-          style={{ color: styles.textTertiary, height: "28px" }}
-          onMouseEnter={(e) => (e.currentTarget.style.background = styles.subtleHover)}
-          onMouseLeave={(e) => (e.currentTarget.style.background = "transparent")}
+          className="shrink-0 w-9 h-10 grid place-items-center border-l transition-colors"
+          style={{
+            color: styles.textTertiary,
+            borderColor: styles.border,
+            background: styles.isDark ? "rgba(0,0,0,0.18)" : styles.subtle,
+          }}
+          onMouseEnter={(e) => {
+            e.currentTarget.style.background = styles.subtleHover;
+            e.currentTarget.style.color = styles.text;
+          }}
+          onMouseLeave={(e) => {
+            e.currentTarget.style.background = styles.isDark ? "rgba(0,0,0,0.18)" : styles.subtle;
+            e.currentTarget.style.color = styles.textTertiary;
+          }}
         >
           <PanelRightClose size={13} />
         </button>
@@ -302,7 +346,8 @@ export function RightSidebar({
         {/* Popovers portaled to document.body — escape ALL overflow clipping
             (overflow-x-auto on the tab strip + overflow-hidden on the sidebar
             shell). Anchored below the "+" button via its bounding rect;
-            refreshed on window resize/scroll. */}
+            LEFT is clamped so the menu never spills past the viewport's
+            right edge (ROUND-41). */}
         {popoverPos !== null && typeof document !== "undefined"
           ? createPortal(
               <>

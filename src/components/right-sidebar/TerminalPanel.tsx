@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState, type KeyboardEvent } from "react";
 import { runProjectTerminal } from "../../lib/api";
 import { useConfigStore } from "../../lib/config-store";
-import { useRightSidebarStore, type RightSidebarTab } from "../../lib/right-sidebar-store";
+import { useRightSidebarStore, stateKey, type RightSidebarTab } from "../../lib/right-sidebar-store";
 import { SEMANTIC_COLORS } from "../../lib/semantics";
 import { useThemeStyles } from "../../lib/use-theme-styles";
 import { useScrollFade } from "../../lib/useScrollFade";
@@ -22,7 +22,14 @@ import { useScrollFade } from "../../lib/useScrollFade";
  */
 export function TerminalPanel({ projectId, tab }: { projectId: string; tab: RightSidebarTab }) {
   const styles = useThemeStyles();
-  const slice = useRightSidebarStore((s) => s.byProject[projectId]);
+  // ROUND-41: read the slice via the active session's state key so each
+  // session has its own terminal scrollback.
+  const activeSessionId = useRightSidebarStore(
+    (s) => s.activeSessionByProject[projectId] ?? null,
+  );
+  const slice = useRightSidebarStore(
+    (s) => s.byProject[stateKey(projectId, activeSessionId)],
+  );
   const appendTerminal = useRightSidebarStore((s) => s.appendTerminal);
   const clearTerminal = useRightSidebarStore((s) => s.clearTerminal);
   const tabId = tab.id;
