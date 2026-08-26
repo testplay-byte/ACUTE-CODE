@@ -258,7 +258,7 @@ describe("ROUND-36: sub-agent orchestration (ADR-0022)", () => {
   it("orchestration settings round-trip with clamping", async () => {
     const initial = await authInject({ method: "GET", url: "/api/v1/settings/orchestration" });
     expect(initial.statusCode).toBe(200);
-    expect(initial.json()).toEqual({ maxParallel: 5, perKeyLimit: 3 });
+    expect(initial.json()).toEqual({ maxParallel: 5, perKeyLimit: 3, subagentModel: null });
 
     const updated = await authInject({
       method: "PUT",
@@ -266,7 +266,7 @@ describe("ROUND-36: sub-agent orchestration (ADR-0022)", () => {
       payload: { maxParallel: 20, perKeyLimit: 10 },
     });
     expect(updated.statusCode).toBe(200);
-    expect(updated.json()).toEqual({ maxParallel: 20, perKeyLimit: 10 });
+    expect(updated.json()).toEqual({ maxParallel: 20, perKeyLimit: 10, subagentModel: null });
 
     const invalid = await authInject({
       method: "PUT",

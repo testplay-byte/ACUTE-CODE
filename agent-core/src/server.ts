@@ -99,6 +99,9 @@ import {
   vapidPublicKey,
 } from "./lib/web-push.js";
 import { dirname } from "node:path";
+// ROUND-43 (R43-10): embedded-browser proxy backend — all logic + routes live
+// in browser-proxy.ts; server.ts only mounts it on the scoped API surface.
+import { registerBrowserRoutes } from "./browser-proxy.js";
 
 export const VERSION = "0.3.0";
 
@@ -448,6 +451,8 @@ export function buildServer(options: ServerOptions): FastifyInstance {
 
   app.register(
     async (scope) => {
+      registerBrowserRoutes(scope, token); // ROUND-43 (R43-10): embedded-browser proxy (iframe ticket auth, HTML/CSS rewriting, history + viewport state)
+
       scope.get("/agents", async (request) => {
         const query = request.query as Record<string, string | undefined>;
         const includeTemplates = (query.includeTemplates ?? "true").toLowerCase() !== "false";
@@ -1435,6 +1440,10 @@ export function buildServer(options: ServerOptions): FastifyInstance {
           return setOrchestrationSettings(db, {
             ...(typeof raw.maxParallel === "number" ? { maxParallel: raw.maxParallel } : {}),
             ...(typeof raw.perKeyLimit === "number" ? { perKeyLimit: raw.perKeyLimit } : {}),
+            // ROUND-43 (R43-5): temporary sub-agent model override — string id
+            // (catalog-validated in settings.ts) or null to re-inherit.
+            ...(typeof raw.subagentModel === "string" ? { subagentModel: raw.subagentModel } : {}),
+            ...(raw.subagentModel === null ? { subagentModel: null } : {}),
           });
         } catch (error) {
           return reply.code(400).send(

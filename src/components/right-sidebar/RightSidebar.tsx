@@ -98,12 +98,16 @@ export function RightSidebar({
   const state = slice ?? defaultProjectRightState();
   const open = state.open;
   // ROUND-42: the EFFECTIVE width — the stored (dragged) width clamped by
-  // the layout's computed cap. `Math.max(240, …)` keeps a sane floor even on
-  // extremely narrow windows (better a slim sidebar than an overflowing
-  // layout). The framer-motion `animate` width below transitions SMOOTHLY
-  // whenever the cap changes (window resize) — the owner asked for the
-  // shrink to happen "automatically, smoothly".
-  const width = Math.max(240, Math.min(state.width, maxWidth ?? state.width));
+  // the layout's computed cap. ROUND-43: the floor is the 36px collapse-
+  // button column (was 240 — with the R42 cap's own 280px floor that made
+  // chat-floor(480)+sidebar(280)+chrome ≈ 771px the layout's minimum, so any
+  // narrower container overflowed: clipped sidebar, unreachable collapse
+  // button). Now the sidebar yields ALL the way down when the window can't
+  // fit it next to the chat's floor — the collapse affordance stays on-screen
+  // and the row never forces horizontal overflow. The framer-motion `animate`
+  // width below transitions SMOOTHLY whenever the cap changes (window resize)
+  // — the owner asked for the shrink to happen "automatically, smoothly".
+  const width = Math.max(36, Math.min(state.width, maxWidth ?? state.width));
 
   // Quick-menu open state.
   const [quickMenuOpen, setQuickMenuOpen] = useState(false);

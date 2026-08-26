@@ -6,13 +6,14 @@ import {
   updateOrchestrationSettings,
   type OrchestrationSettings,
 } from "../lib/api";
-import { ArrowLeft, Bot, Moon, Palette, Server, SlidersHorizontal, Sun } from "lucide-react";
+import { ArrowLeft, Bot, Moon, Palette, Server, SlidersHorizontal, Sun, Users } from "lucide-react";
 import { useConfigStore } from "../lib/config-store";
 import { useThemeStore } from "../lib/theme-store";
 import { THEMES, getContrastText } from "../lib/themes";
 import { useThemeStyles } from "../lib/use-theme-styles";
 import { AgentsScreen } from "../components/agents/AgentsScreen";
 import { ModelsProvidersTab } from "../components/settings/ModelsProvidersTab";
+import { SubAgentsSection, SubAgentsTab } from "../components/settings/SubAgentsTab";
 import { Button, Field, inputClass } from "../components/ui/controls";
 import {
   fetchProviders,
@@ -28,6 +29,9 @@ const TABS = [
   { id: "appearance", label: "Appearance", icon: Palette },
   { id: "agents", label: "Agents", icon: Bot },
   { id: "api", label: "Models & Providers", icon: Server },
+  // ROUND-43 (R43-5, owner directive): the temporary sub-agent section —
+  // dedicated API-key paste slots + model override. Deep-link ?tab=subagents.
+  { id: "subagents", label: "Sub-agents", icon: Users },
   { id: "advanced", label: "Advanced", icon: SlidersHorizontal },
 ] as const;
 
@@ -82,6 +86,7 @@ export function SettingsPage() {
         {tab === "appearance" && <AppearanceTab />}
         {tab === "agents" && <AgentsScreen embedded />}
         {tab === "api" && <ModelsProvidersTab />}
+        {tab === "subagents" && <SubAgentsTab />}
         {tab === "advanced" && <AdvancedTab />}
       </div>
     </div>
@@ -597,6 +602,11 @@ function AdvancedTab() {
 
   return (
     <div className="mx-auto flex max-w-2xl flex-col gap-4">
+      {/* ROUND-43 (R43-5): the temporary sub-agent keys + model cards also
+          render here until the sidebar gains a dedicated "Sub-agents" entry
+          (Sidebar.tsx SETTINGS_SECTIONS is owned by the sidebar agent this
+          wave) — keeps them discoverable via Advanced meanwhile. */}
+      <SubAgentsSection />
       <OrchestrationCard />
       <section
         className="rounded-lg p-4"

@@ -10,6 +10,11 @@
  * - Key assignment: the LEAST-LOADED pool slot, preferring non-primary slots
  *   (the owner: pool keys serve sub-agents; the primary serves the main
  *   agent). No pool → the primary under the per-key limit.
+ * - ROUND-43 (R43-5, owner directive): orchestration.subagentModel — when
+ *   set, EVERY child turn runs on that model id (passed as runSingleAgentTurn's
+ *   modelOverride); when null (default) children inherit the seeded agent's
+ *   model exactly as before. The override changes what CHILDREN run on — the
+ *   parent's model is never touched.
  * - Crash recovery: failed children are retryable — the event log IS the
  *   resume point (R34 assembleHistory feeds tool results back), so a retry
  *   continuation genuinely resumes. A boot sweep flips stale `running`
@@ -286,7 +291,9 @@ class Orchestrator {
         { db, keyring: childKeyring, chat },
         child.id,
         `${framing}\n${renderTaskPrompt(task)}`,
-        undefined,
+        // R43-5: the temporary sub-agent model override (null = inherit the
+        // agent's model — prepareTurn falls back to agent.model).
+        getOrchestrationSettings(db).subagentModel ?? undefined,
         wrappedEmit,
       );
       if (outcome.ok) {
@@ -401,7 +408,15 @@ class Orchestrator {
               inner: event,
             })
         : undefined;
-      const outcome = await runSingleAgentTurn({ db, keyring: childKeyring, chat }, childId, content, undefined, wrappedEmit);
+      const outcome = await runSingleAgentTurn(
+        { db, keyring: childKeyring, chat },
+        childId,
+        content,
+        // R43-5: retries honor the same sub-agent model override as fresh
+        // delegations (null = inherit the agent's model).
+        getOrchestrationSettings(db).subagentModel ?? undefined,
+        wrappedEmit,
+      );
       if (outcome.ok) {
         setSessionStatus(db, childId, "completed");
         status("completed");

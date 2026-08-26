@@ -53,6 +53,7 @@ import {
 } from "../../lib/api";
 import { useConfigStore } from "../../lib/config-store";
 import { useThemeStore } from "../../lib/theme-store";
+import { filterModelsForPicker, useSettingsStore } from "../../lib/settings-store";
 import { withAlpha } from "../dashboard/helpers";
 import { ease } from "../../lib/motion";
 import { useProjectChatStore } from "../../lib/project-chat-store";
@@ -74,6 +75,13 @@ import { useScrollFade } from "../../lib/useScrollFade";
  * the same shape: the Working section grows while the presumptive-final text
  * streams beneath it, and collapses to "Worked for Ns" when the turn ends.
  */
+
+/** ROUND-43 layout contract: the readable width of the chat's content column
+ * (messages AND composer share it, centered). The PANEL itself always fills
+ * its column edge-to-edge (owner R40 + R43: no dead right side at any window
+ * size); beyond this width the reading column just centers — same rule at
+ * 1200px and 2560px, so wide windows never stretch lines nor hug content. */
+const CONTENT_COL_CLASS = "mx-auto w-full max-w-[1080px]";
 
 const msgVariants: Variants = {
   initial: { opacity: 0, y: 12 },
@@ -320,7 +328,7 @@ function PathPill({ path, projectId }: { path: string; projectId: string }) {
       type="button"
       onClick={() => useRightSidebarStore.getState().openFile(projectId, path)}
       title={`Open ${path} in sidebar`}
-      className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-md font-mono text-[11.5px] transition-colors align-middle cursor-pointer"
+      className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-md font-mono text-[11.5px] transition-colors align-middle cursor-pointer max-w-full overflow-hidden"
       style={{
         background: withAlpha(styles.accent, styles.isDark ? 0.13 : 0.08),
         color: styles.text,
@@ -333,7 +341,9 @@ function PathPill({ path, projectId }: { path: string; projectId: string }) {
       }}
     >
       <Icon size={10} className="shrink-0" style={{ color: styles.accent }} />
-      {path}
+      {/* ROUND-43: a very long path can never widen the chat — the label
+          ellipsizes inside the pill instead (the full path is on the title). */}
+      <span className="min-w-0 flex-1 truncate">{path}</span>
     </button>
   );
 }
@@ -481,7 +491,7 @@ function AssistantTurn({
         <BareWorkingEntries entries={item.working} />
       )}
       {item.finalText.trim() !== "" ? (
-        <div className={`text-[13px] leading-[1.65] ${hasToolWork ? "mt-2" : ""}`} style={{ color: styles.text }}>
+        <div className={`min-w-0 break-words text-[13px] leading-[1.65] ${hasToolWork ? "mt-2" : ""}`} style={{ color: styles.text }}>
           <RichText content={item.finalText} projectId={projectId} />
         </div>
       ) : null}
@@ -665,6 +675,13 @@ function ComposerFooter({
   const menuRef = useRef<HTMLDivElement>(null);
   const effective = modelOverride ?? agent?.model ?? null;
 
+  // ROUND-43 (owner: free-model default): the per-send picker honors the
+  // shared, persisted `modelsFreeOnly` preference (same store the Settings →
+  // Providers list uses) — with an inline escape hatch right in the picker so
+  // the user can flip it where they pick.
+  const modelsFreeOnly = useSettingsStore((s) => s.modelsFreeOnly);
+  const setModelsFreeOnly = useSettingsStore((s) => s.setModelsFreeOnly);
+
   const providerId = agent?.providerId ?? null;
   const modelsQuery = useQuery({
     queryKey: ["provider-models", providerId],
@@ -672,7 +689,12 @@ function ComposerFooter({
     enabled: providerId !== null && !disabled,
     staleTime: 5 * 60 * 1000,
   });
-  const models = (modelsQuery.data ?? []).slice(0, 60);
+  const allModels = (modelsQuery.data ?? []).slice(0, 60);
+  const models = filterModelsForPicker(
+    allModels.map((m) => ({ modelId: m })),
+    modelsFreeOnly,
+  ).map((e) => e.modelId);
+  const hiddenCount = allModels.length - models.length;
 
   useEffect(() => {
     if (!open) return;
@@ -726,9 +748,45 @@ function ComposerFooter({
           {open ? (
             <div
               role="listbox"
-              className="absolute bottom-7 right-0 w-64 max-h-64 overflow-y-auto auto-scroll rounded-2xl border p-1.5 z-50"
+              aria-label="Model for the next message"
+              className="absolute bottom-7 right-0 w-72 max-h-72 overflow-y-auto auto-scroll rounded-2xl border p-1.5 z-50"
               style={{ background: styles.card, borderColor: styles.border, boxShadow: styles.bentoShadow }}
             >
+              {/* ROUND-43: Free-only filter — segmented control mirroring the
+                  Settings → Providers list; flips the SAME persisted pref so
+                  both pickers stay in sync. */}
+              <div
+                role="group"
+                aria-label="Model filter"
+                className="flex items-center justify-between gap-2 px-1 pb-1.5 mb-1 border-b"
+                style={{ borderColor: styles.borderSubtle }}
+              >
+                <span className="text-[10px] font-bold uppercase tracking-wide" style={{ color: styles.textTertiary }}>
+                  Model
+                </span>
+                <div
+                  className="flex items-center rounded-[10px] border-[1.5px] overflow-hidden"
+                  style={{ borderColor: styles.border }}
+                >
+                  {([
+                    { id: "free", label: "Free only", active: modelsFreeOnly, pick: () => setModelsFreeOnly(true) },
+                    { id: "all", label: "All", active: !modelsFreeOnly, pick: () => setModelsFreeOnly(false) },
+                  ] as const).map((seg) => (
+                    <button
+                      key={seg.id}
+                      onClick={seg.pick}
+                      aria-pressed={seg.active}
+                      className="h-6 px-2 text-[10.5px] font-bold transition-colors"
+                      style={{
+                        background: seg.active ? withAlpha(styles.accent, 0.12) : "transparent",
+                        color: seg.active ? styles.accent : styles.textTertiary,
+                      }}
+                    >
+                      {seg.label}
+                    </button>
+                  ))}
+                </div>
+              </div>
               {models.length === 0 ? (
                 <div className="text-[11px] px-2 py-1.5" style={{ color: styles.textTertiary }}>
                   {modelsQuery.isLoading ? "loading models…" : "no models listed"}
@@ -760,6 +818,17 @@ function ComposerFooter({
                   </button>
                 ))
               )}
+              {/* Escape hatch: when free-only hides entries, say so + flip
+                  right here (syncs the persisted pref). */}
+              {hiddenCount > 0 && modelsFreeOnly ? (
+                <button
+                  onClick={() => setModelsFreeOnly(false)}
+                  className="w-full text-left px-2.5 py-1.5 mt-1 rounded-lg text-[10.5px] font-semibold border-t"
+                  style={{ color: styles.accent, borderColor: styles.borderSubtle }}
+                >
+                  {hiddenCount} paid model{hiddenCount === 1 ? "" : "s"} hidden — show all
+                </button>
+              ) : null}
             </div>
           ) : null}
         </div>
@@ -1148,7 +1217,7 @@ export function AgentChatPanel({
 
   return (
     <div
-      className="flex flex-col h-full min-w-0 rounded-[16px] overflow-hidden"
+      className="flex flex-col h-full w-full min-w-0 rounded-[16px] overflow-hidden"
       style={{ backgroundColor: styles.card }}
     >
       {/* ⌘K / Ctrl+K CommandPalette (files/symbols/content search — WS-H) */}
@@ -1168,15 +1237,26 @@ export function AgentChatPanel({
           className="absolute top-0 left-0 right-0 h-8 z-10 pointer-events-none"
           style={{ background: `linear-gradient(to bottom, ${styles.card}, transparent)` }}
         />
-        <div ref={scrollRef} className="absolute inset-0 overflow-y-auto auto-scroll">
+        {/* ROUND-43 (owner: bottom horizontal scrollbar + right-side dead
+            space): overflow-x is now EXPLICITLY hidden — `overflow-y-auto`
+            alone COMPUTES to overflow-x:auto, so any wide token used to mint a
+            horizontal scrollbar at the bottom of the chat. Long tokens now
+            wrap at the text level (break-words below); code blocks keep their
+            OWN internal pre scroll. */}
+        <div ref={scrollRef} className="absolute inset-0 overflow-y-auto overflow-x-hidden auto-scroll">
           {/* ROUND-34: density (settings appearance) drives the column padding.
               ROUND-37: the panel fills its width (owner: no dead right side).
               ROUND-39: wrapper is min-h-full + flex-col so SHORT content
               sticks to the bottom (just above the composer) — no dead
               vertical gap below the last message (owner screenshot showed
               big empty space). When content overflows, the spacer collapses
-              to 0 and natural scroll takes over. */}
-          <div className={`${density === "compact" ? "px-4 py-4" : "px-5 md:px-10 py-5"} min-h-full flex flex-col gap-5`}>
+              to 0 and natural scroll takes over.
+              ROUND-43 (owner: dead space on the right at LARGE windows): the
+              panel root now fills its column (w-full above) AND the reading
+              column caps at CONTENT_MAX_WIDTH centered — wide windows get a
+              symmetric readable column instead of either stretched lines or
+              content-hugging with a void on the right. */}
+          <div className={`${density === "compact" ? "px-4 py-4" : "px-5 md:px-10 py-5"} ${CONTENT_COL_CLASS} min-h-full flex flex-col gap-5`}>
             {/* Empty-state greeting fills the available space and centers. */}
             {items.length === 0 && !pendingEcho ? (
               /* ROUND-30 OVERHAUL: centered greeting + suggestion chips.
@@ -1272,7 +1352,7 @@ export function AgentChatPanel({
               <div aria-live="polite" aria-atomic="false" className="min-w-0">
                 {liveSection}
                 {liveTurn.streamText !== "" ? (
-                  <div className={`text-[13px] leading-[1.65] ${liveTurn.working.length > 0 ? "mt-2" : ""}`} style={{ color: styles.text }}>
+                  <div className={`min-w-0 break-words text-[13px] leading-[1.65] ${liveTurn.working.length > 0 ? "mt-2" : ""}`} style={{ color: styles.text }}>
                     <RichText content={liveTurn.streamText} projectId={projectId} />
                     {streamBusy && !liveTurn.stopped ? (
                       <span
@@ -1312,31 +1392,37 @@ export function AgentChatPanel({
           timeline error card instead (they used to die silently with the
           banner's lastSent dependency lost on remount). */}
       {sendError && lastSent ? (
-        <div
-          role="alert"
-          className="mx-3 mb-1.5 flex shrink-0 items-start gap-2 rounded-[12px] border px-3 py-2 text-[12px]"
-          style={{
-            borderColor: withAlpha(SEMANTIC_COLORS.danger, 0.4),
-            color: SEMANTIC_COLORS.danger,
-          }}
-        >
-          <span className="min-w-0 flex-1 break-words">{sendError}</span>
-          <button
-            onClick={() => void runTurn(lastSent)}
-            className="shrink-0 underline font-medium"
-            style={{ color: styles.accent }}
+        <div className="shrink-0 px-2.5">
+          <div
+            role="alert"
+            className={`${CONTENT_COL_CLASS} mb-1.5 flex items-start gap-2 rounded-[12px] border px-3 py-2 text-[12px]`}
+            style={{
+              borderColor: withAlpha(SEMANTIC_COLORS.danger, 0.4),
+              color: SEMANTIC_COLORS.danger,
+            }}
           >
-            Retry
-          </button>
+            <span className="min-w-0 flex-1 break-words">{sendError}</span>
+            <button
+              onClick={() => void runTurn(lastSent)}
+              className="shrink-0 underline font-medium"
+              style={{ color: styles.accent }}
+            >
+              Retry
+            </button>
+          </div>
         </div>
       ) : null}
 
       {/* Composer — ROUND-32 (design Frame 5): radius 18, warm bg, accent
           border + soft glow ring on focus. Auto-growing textarea (Enter sends,
-          Shift+Enter newlines). */}
+          Shift+Enter newlines). ROUND-43: the input + footer share the SAME
+          capped, centered column as the messages (CONTENT_COL_CLASS) so the
+          chat reads as one coherent column at every window size; the border-t
+          still spans the full panel. */}
       <div className="shrink-0 p-2.5 border-t" style={{ borderColor: styles.borderSubtle }}>
-        <div
-          className="flex items-end gap-2 p-2 rounded-[18px] border transition-all"
+        <div className={CONTENT_COL_CLASS}>
+          <div
+            className="flex items-end gap-2 p-2 rounded-[18px] border transition-all"
           style={{
             background: styles.isDark ? "rgba(255,255,255,0.04)" : styles.bg,
             borderColor: composerFocused ? withAlpha(styles.accent, 0.4) : styles.border,
@@ -1410,6 +1496,7 @@ export function AgentChatPanel({
             disabled={!liveMode}
           />
         ) : null}
+        </div>
       </div>
     </div>
   );

@@ -222,8 +222,11 @@ function NarrationRow({ content }: { content: string }) {
   // topic for you" was faded/dulled — textTertiary — and should read as
   // normal body text). Slight weight to distinguish it from the final
   // answer, but full-opacity primary color.
+  // ROUND-43: min-w-0 + break-words — a long unbreakable token in a
+  // narration can never widen the chat column (the owner's bottom-scrollbar
+  // bug); it wraps like every other text row.
   return (
-    <div className="py-0.5 text-[12.5px] leading-[1.6]" style={{ color: styles.text }}>
+    <div className="min-w-0 break-words py-0.5 text-[12.5px] leading-[1.6]" style={{ color: styles.text }}>
       {content}
     </div>
   );
