@@ -346,6 +346,22 @@ class SessionStore {
     session.ticketExpiresAt = Date.now() + TICKET_TTL_MS;
   }
 
+  /**
+   * Most recently touched session id (the Map's LRU tail — create/touch
+   * re-insert, so insertion order IS recency order). "agent" (the tool's
+   * fallback id) is skipped when any real tab session exists; returns
+   * "agent" itself if it is the only one, else null when empty.
+   */
+  lastUsedSessionId(): string | null {
+    let lastNonAgent: string | null = null;
+    let hasAgent = false;
+    for (const id of this.sessions.keys()) {
+      if (id === "agent") hasAgent = true;
+      else lastNonAgent = id;
+    }
+    return lastNonAgent ?? (hasAgent ? "agent" : null);
+  }
+
   private evictIfNeeded(): void {
     while (this.sessions.size > MAX_SESSIONS) {
       const oldestId = this.sessions.keys().next().value;
@@ -820,6 +836,258 @@ function viewportView(sessionId: string, viewport: BrowserViewport): unknown {
   return { sessionId, viewport };
 }
 
+// ─────────────── shared cores + the agent-tool state API (R43-10) ──────────
+//
+// The `browser_control` agent tool (tools/index.ts) must read/write the SAME
+// per-tab state the /browser/* routes serve — the BrowserPanel PUTs viewport
+// over HTTP while the tool calls these functions directly (no self-fetch).
+// Routes keep their per-buildServer store (each browser-proxy test server
+// starts empty); the most recently REGISTERED store is the tool's target.
+// In production exactly one server exists, so tool + panel + routes share one
+// store. If no server has booted yet (unit tests), a module store is created
+// lazily so the tool still round-trips.
+
+let activeBrowserStore: SessionStore | null = null;
+
+function sharedBrowserStore(): SessionStore {
+  if (activeBrowserStore === null) activeBrowserStore = new SessionStore();
+  return activeBrowserStore;
+}
+
+export interface BrowserNavigateOutcome {
+  ok: true;
+  sessionId: string;
+  action: string;
+  entry: HistoryEntry | null;
+  index: number;
+  canBack: boolean;
+  canForward: boolean;
+}
+
+export type BrowserNavigateResult = BrowserNavigateOutcome | { ok: false; error: string };
+
+/**
+ * Validation + mutation core shared by POST /browser/navigate (HTTP) and the
+ * browser_control agent tool (direct call). `body` fields arrive unvalidated
+ * (unknown) exactly like the parsed route body; error strings are the API's
+ * VALIDATION messages verbatim.
+ */
+export function browserNavigateCore(
+  store: SessionStore,
+  sessionId: string,
+  body: { url?: unknown; title?: unknown; direction?: unknown },
+): BrowserNavigateResult {
+  const direction = body.direction;
+  if (direction !== undefined && direction !== "back" && direction !== "forward" && direction !== "reload") {
+    return { ok: false, error: "body.direction must be 'back' | 'forward' | 'reload'" };
+  }
+  const url = body.url;
+  const title = body.title;
+  if (url !== undefined) {
+    let urlOk = false;
+    if (typeof url === "string") {
+      try {
+        const parsed = new URL(url);
+        urlOk = parsed.protocol === "http:" || parsed.protocol === "https:";
+      } catch {
+        urlOk = false;
+      }
+    }
+    if (!urlOk) return { ok: false, error: "body.url must be an absolute http(s) URL" };
+  }
+  if (title !== undefined && typeof title !== "string") {
+    return { ok: false, error: "body.title must be a string" };
+  }
+
+  const session = store.create(sessionId);
+
+  if (typeof url === "string") {
+    const current = session.index >= 0 ? session.history[session.index] : undefined;
+    if (current !== undefined && current.url === url) {
+      if (typeof title === "string" && title !== "") current.title = title;
+      return {
+        ok: true,
+        sessionId,
+        action: "title-update",
+        entry: current,
+        index: session.index,
+        canBack: session.index > 0,
+        canForward: session.index < session.history.length - 1,
+      };
+    }
+    const entry: HistoryEntry = { url, title: typeof title === "string" && title !== "" ? title : null, ts: Date.now() };
+    session.history = session.history.slice(0, session.index + 1);
+    session.history.push(entry);
+    if (session.history.length > MAX_HISTORY) {
+      session.history.shift();
+    }
+    session.index = session.history.length - 1;
+    return {
+      ok: true,
+      sessionId,
+      action: "push",
+      entry,
+      index: session.index,
+      canBack: session.index > 0,
+      canForward: false,
+    };
+  }
+
+  if (typeof direction === "string") {
+    let nextIndex = session.index;
+    if (direction === "back") nextIndex = Math.max(-1, session.index - 1);
+    else if (direction === "forward") nextIndex = Math.min(session.history.length - 1, session.index + 1);
+    const changed = nextIndex !== session.index;
+    session.index = nextIndex;
+    const entry = session.index >= 0 ? session.history[session.index] : undefined;
+    return {
+      ok: true,
+      sessionId,
+      // reload is an explicit command, not a pointer move — always "reload".
+      action: direction === "reload" || changed ? direction : "noop",
+      entry: entry ?? null,
+      index: session.index,
+      canBack: session.index > 0,
+      canForward: session.index < session.history.length - 1,
+    };
+  }
+
+  return { ok: false, error: "provide either body.url or body.direction" };
+}
+
+export type BrowserViewportResult =
+  | { ok: true; sessionId: string; viewport: BrowserViewport }
+  | { ok: false; error: string };
+
+/** Validation + mutation core shared by PUT /browser/viewport and the tool. */
+export function browserViewportCore(
+  store: SessionStore,
+  sessionId: string,
+  body: { preset?: unknown; width?: unknown; height?: unknown; zoom?: unknown; rotate?: unknown },
+): BrowserViewportResult {
+  const session = store.create(sessionId);
+  const next: BrowserViewport = { ...session.viewport };
+
+  const preset = body.preset;
+  if (preset !== undefined) {
+    if (typeof preset !== "string" || !(preset === "custom" || preset in VIEWPORT_PRESETS)) {
+      return {
+        ok: false,
+        error: `body.preset must be one of ${Object.keys(VIEWPORT_PRESETS).join(", ")}, custom (or omitted)`,
+      };
+    }
+    next.preset = preset;
+    if (preset !== "custom") {
+      next.width = VIEWPORT_PRESETS[preset].width;
+      next.height = VIEWPORT_PRESETS[preset].height;
+    }
+  }
+  const width = body.width;
+  if (width !== undefined) {
+    if (typeof width !== "number" || !Number.isInteger(width) || width < VIEWPORT_MIN_W || width > VIEWPORT_MAX_W) {
+      return {
+        ok: false,
+        error: `body.width must be an integer between ${VIEWPORT_MIN_W} and ${VIEWPORT_MAX_W}`,
+      };
+    }
+    next.width = width;
+  }
+  const height = body.height;
+  if (height !== undefined) {
+    if (typeof height !== "number" || !Number.isInteger(height) || height < VIEWPORT_MIN_H || height > VIEWPORT_MAX_H) {
+      return {
+        ok: false,
+        error: `body.height must be an integer between ${VIEWPORT_MIN_H} and ${VIEWPORT_MAX_H}`,
+      };
+    }
+    next.height = height;
+  }
+  const zoom = body.zoom;
+  if (zoom !== undefined) {
+    if (typeof zoom !== "number" || !Number.isFinite(zoom) || zoom < ZOOM_MIN || zoom > ZOOM_MAX) {
+      return { ok: false, error: `body.zoom must be between ${ZOOM_MIN} and ${ZOOM_MAX}` };
+    }
+    next.zoom = Math.round(zoom * 100) / 100;
+  }
+  const rotate = body.rotate;
+  if (rotate !== undefined) {
+    if (typeof rotate !== "boolean") {
+      return { ok: false, error: "body.rotate must be a boolean" };
+    }
+    next.rotate = rotate;
+  }
+  // Explicit dims without a preset label → this is a Custom size.
+  if (preset === undefined && (width !== undefined || height !== undefined)) next.preset = "custom";
+
+  session.viewport = next;
+  return { ok: true, sessionId, viewport: next };
+}
+
+/** The `browser_control` tool's get_state: what the user's panel shows now. */
+export function browserGetStateCommand(sessionId: string): {
+  sessionId: string;
+  currentUrl: string | null;
+  title: string | null;
+  index: number;
+  historyLength: number;
+  canBack: boolean;
+  canForward: boolean;
+  viewport: BrowserViewport;
+} {
+  const session = sharedBrowserStore().get(sessionId);
+  if (session === undefined) {
+    return {
+      sessionId,
+      currentUrl: null,
+      title: null,
+      index: -1,
+      historyLength: 0,
+      canBack: false,
+      canForward: false,
+      viewport: { ...DEFAULT_VIEWPORT },
+    };
+  }
+  const entry = session.index >= 0 ? session.history[session.index] : undefined;
+  return {
+    sessionId,
+    currentUrl: entry?.url ?? null,
+    title: entry?.title ?? null,
+    index: session.index,
+    historyLength: session.history.length,
+    canBack: session.index > 0,
+    canForward: session.index < session.history.length - 1,
+    viewport: { ...session.viewport },
+  };
+}
+
+/** The `browser_control` tool's navigate/back/forward/reload entry point. */
+export function browserNavigateCommand(sessionId: string, body: { url?: unknown; title?: unknown; direction?: unknown }): BrowserNavigateResult {
+  return browserNavigateCore(sharedBrowserStore(), sessionId, body);
+}
+
+/** The `browser_control` tool's set_viewport entry point. */
+export function browserViewportCommand(
+  sessionId: string,
+  body: { preset?: unknown; width?: unknown; height?: unknown; zoom?: unknown; rotate?: unknown },
+): BrowserViewportResult {
+  return browserViewportCore(sharedBrowserStore(), sessionId, body);
+}
+
+/**
+ * The browser_control tool's DEFAULT target: the browser tab the user is
+ * currently looking at (the panel polls /browser/history, which LRU-touches
+ * its session — so the visible tab is the most recently used one). Null when
+ * no browser session exists at all.
+ */
+export function browserActiveTabSessionId(): string | null {
+  return sharedBrowserStore().lastUsedSessionId();
+}
+
+/** Test-only: drop all browser-session state (fresh store for the tool tests). */
+export function resetBrowserStoreForTest(): void {
+  activeBrowserStore = new SessionStore();
+}
+
 // ────────────────────────── route registration ─────────────────────────────
 
 /**
@@ -839,6 +1107,9 @@ export function registerBrowserRoutes(scope: FastifyInstance, token: string): vo
 
 function registerBrowserRoutesInner(browser: FastifyInstance, token: string): void {
   const store = new SessionStore();
+  // R43-10 tool wave: the latest booted server's store is what the
+  // browser_control agent tool operates on (see sharedBrowserStore above).
+  activeBrowserStore = store;
 
   // iframe navigations cannot send Authorization headers — a valid `bt`
   // ticket is promoted to the real bearer header so the app-level wall
@@ -1093,81 +1364,12 @@ function registerBrowserRoutesInner(browser: FastifyInstance, token: string): vo
     if (typeof sessionId !== "string" || !SESSION_ID_RE.test(sessionId)) {
       return jsonError(reply, 400, "VALIDATION", "body.sessionId is required (alphanumeric/-/./_, ≤64 chars)");
     }
-    const direction = body.direction;
-    if (direction !== undefined && direction !== "back" && direction !== "forward" && direction !== "reload") {
-      return jsonError(reply, 400, "VALIDATION", "body.direction must be 'back' | 'forward' | 'reload'");
-    }
-    const url = body.url;
-    const title = body.title;
-    if (url !== undefined) {
-      let urlOk = false;
-      if (typeof url === "string") {
-        try {
-          const parsed = new URL(url);
-          urlOk = parsed.protocol === "http:" || parsed.protocol === "https:";
-        } catch {
-          urlOk = false;
-        }
-      }
-      if (!urlOk) {
-        return jsonError(reply, 400, "VALIDATION", "body.url must be an absolute http(s) URL");
-      }
-    }
-    if (title !== undefined && typeof title !== "string") {
-      return jsonError(reply, 400, "VALIDATION", "body.title must be a string");
-    }
-
-    const session = store.create(sessionId);
-
-    if (typeof url === "string") {
-      const current = session.index >= 0 ? session.history[session.index] : undefined;
-      if (current !== undefined && current.url === url) {
-        if (typeof title === "string" && title !== "") current.title = title;
-        return {
-          sessionId,
-          action: "title-update",
-          entry: current,
-          index: session.index,
-          canBack: session.index > 0,
-          canForward: session.index < session.history.length - 1,
-        };
-      }
-      const entry: HistoryEntry = { url, title: typeof title === "string" && title !== "" ? title : null, ts: Date.now() };
-      session.history = session.history.slice(0, session.index + 1);
-      session.history.push(entry);
-      if (session.history.length > MAX_HISTORY) {
-        session.history.shift();
-      }
-      session.index = session.history.length - 1;
-      return {
-        sessionId,
-        action: "push",
-        entry,
-        index: session.index,
-        canBack: session.index > 0,
-        canForward: false,
-      };
-    }
-
-    if (typeof direction === "string") {
-      let nextIndex = session.index;
-      if (direction === "back") nextIndex = Math.max(-1, session.index - 1);
-      else if (direction === "forward") nextIndex = Math.min(session.history.length - 1, session.index + 1);
-      const changed = nextIndex !== session.index;
-      session.index = nextIndex;
-      const entry = session.index >= 0 ? session.history[session.index] : undefined;
-      return {
-        sessionId,
-        // reload is an explicit command, not a pointer move — always "reload".
-        action: direction === "reload" || changed ? direction : "noop",
-        entry: entry ?? null,
-        index: session.index,
-        canBack: session.index > 0,
-        canForward: session.index < session.history.length - 1,
-      };
-    }
-
-    return jsonError(reply, 400, "VALIDATION", "provide either body.url or body.direction");
+    // Shared core (also drives the browser_control agent tool directly).
+    const result = browserNavigateCore(store, sessionId, body);
+    if (!result.ok) return jsonError(reply, 400, "VALIDATION", result.error);
+    // Strip the internal ok flag — the HTTP contract is exactly the R43-10 shape.
+    const { ok: _ok, ...payload } = result;
+    return payload;
   });
 
   // ── GET/PUT /browser/viewport — display-size state (panel + agent tool) ──
@@ -1190,67 +1392,9 @@ function registerBrowserRoutesInner(browser: FastifyInstance, token: string): vo
       return jsonError(reply, 400, "VALIDATION", "sessionId (body or query) is required");
     }
 
-    const session = store.create(sessionIdRaw);
-    const next: BrowserViewport = { ...session.viewport };
-
-    const preset = body.preset;
-    if (preset !== undefined) {
-      if (typeof preset !== "string" || !(preset === "custom" || preset in VIEWPORT_PRESETS)) {
-        return jsonError(
-          reply,
-          400,
-          "VALIDATION",
-          `body.preset must be one of ${Object.keys(VIEWPORT_PRESETS).join(", ")}, custom (or omitted)`,
-        );
-      }
-      next.preset = preset;
-      if (preset !== "custom") {
-        next.width = VIEWPORT_PRESETS[preset].width;
-        next.height = VIEWPORT_PRESETS[preset].height;
-      }
-    }
-    const width = body.width;
-    if (width !== undefined) {
-      if (typeof width !== "number" || !Number.isInteger(width) || width < VIEWPORT_MIN_W || width > VIEWPORT_MAX_W) {
-        return jsonError(
-          reply,
-          400,
-          "VALIDATION",
-          `body.width must be an integer between ${VIEWPORT_MIN_W} and ${VIEWPORT_MAX_W}`,
-        );
-      }
-      next.width = width;
-    }
-    const height = body.height;
-    if (height !== undefined) {
-      if (typeof height !== "number" || !Number.isInteger(height) || height < VIEWPORT_MIN_H || height > VIEWPORT_MAX_H) {
-        return jsonError(
-          reply,
-          400,
-          "VALIDATION",
-          `body.height must be an integer between ${VIEWPORT_MIN_H} and ${VIEWPORT_MAX_H}`,
-        );
-      }
-      next.height = height;
-    }
-    const zoom = body.zoom;
-    if (zoom !== undefined) {
-      if (typeof zoom !== "number" || !Number.isFinite(zoom) || zoom < ZOOM_MIN || zoom > ZOOM_MAX) {
-        return jsonError(reply, 400, "VALIDATION", `body.zoom must be between ${ZOOM_MIN} and ${ZOOM_MAX}`);
-      }
-      next.zoom = Math.round(zoom * 100) / 100;
-    }
-    const rotate = body.rotate;
-    if (rotate !== undefined) {
-      if (typeof rotate !== "boolean") {
-        return jsonError(reply, 400, "VALIDATION", "body.rotate must be a boolean");
-      }
-      next.rotate = rotate;
-    }
-    // Explicit dims without a preset label → this is a Custom size.
-    if (preset === undefined && (width !== undefined || height !== undefined)) next.preset = "custom";
-
-    session.viewport = next;
-    return viewportView(sessionIdRaw, next);
+    // Shared core (also drives the browser_control agent tool directly).
+    const result = browserViewportCore(store, sessionIdRaw, body);
+    if (!result.ok) return jsonError(reply, 400, "VALIDATION", result.error);
+    return viewportView(sessionIdRaw, result.viewport);
   });
 }

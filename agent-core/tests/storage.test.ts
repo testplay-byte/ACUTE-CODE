@@ -165,6 +165,7 @@ describe("template seeding", () => {
           "web_fetch",
           "web_search",
           "index_project",
+          "browser_control",
         ]);
         expect(row.memory_policy).toBe("on-start");
         expect(row.max_turns).toBe(40);

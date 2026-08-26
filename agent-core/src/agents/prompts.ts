@@ -153,6 +153,17 @@ export function buildProjectSystemPrompt(ctx: PromptContext): string {
     lines.push("");
   }
 
+  // ── Embedded browser panel (ROUND-43, R43-10) ──────────────────────────
+  if (ctx.toolNames.includes("browser_control")) {
+    lines.push("## EMBEDDED BROWSER PANEL (browser_control)");
+    lines.push("- The user has a real web browser embedded in the app's right sidebar. browser_control drives it: pages you navigate to APPEAR LIVE in the user's panel (no external tabs, no popups).");
+    lines.push("- Actions: navigate (absolute http(s) URL), back/forward/reload (tab history), get_state (currentUrl, title, viewport, canBack/canForward).");
+    lines.push("- TEST LAYOUTS by changing the display size with set_viewport: presets mobile-sm 375×667, mobile-md 390×844, tablet 768×1024, laptop 1280×800, desktop 1440×900, full-hd 1920×1080, or explicit width/height (+ zoom, rotate swaps w/h). It targets the tab the user is viewing unless you pass sessionId.");
+    lines.push("- ALWAYS announce viewport changes in one short line (e.g. \"Switching the browser panel to 375×667 to check the mobile layout\") — the user watches that panel; set_viewport changes what they see.");
+    lines.push("- The panel renders pages through the sidecar proxy, so heavily scripted sites may partially render; when YOU need the page's text, prefer web_fetch.");
+    lines.push("");
+  }
+
   // ── Communication ───────────────────────────────────────────────────────
   lines.push("## COMMUNICATION");
   lines.push("- Be concise. No fluff, no restating the question.");

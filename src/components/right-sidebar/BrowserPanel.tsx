@@ -1,52 +1,59 @@
-import { useCallback, useEffect, useState, type FormEvent } from "react";
+import { useCallback, useEffect, useRef, useState, type CSSProperties, type FormEvent, type KeyboardEvent } from "react";
 import {
+  AlertTriangle,
   ArrowLeft,
   ArrowRight,
   ExternalLink,
   Globe,
   Info,
+  LoaderCircle,
   PanelTopOpen,
   RotateCw,
+  Smartphone,
+  Shrink,
+  Expand,
   X,
 } from "lucide-react";
 import { useRightSidebarStore, type RightSidebarTab } from "../../lib/right-sidebar-store";
 import { useThemeStyles } from "../../lib/use-theme-styles";
+import {
+  BROWSER_VIEWPORT_PRESETS,
+  buildProxySrc,
+  probeBrowserTicket,
+  useBrowserTabStore,
+} from "../../lib/browser-store";
 
 /**
- * ROUND-38/39/41 right-sidebar Browser tab.
+ * ROUND-43 (R43-10) — the EMBEDDED BROWSER, finally inside the right sidebar.
  *
- * ROUND-41 (owner: "I want it to be a full-fledged native browser rather
- * than utilizing some other pre-installed browser on the device. If, for
- * that reason, you need to download some things or many things better
- * then do. Make sure that you focus on these things too and handle them
- * properly and make sure that there is proper error handling. It properly
- * shows the errors which it faces and properly displays the errors").
+ * History: R41 opened a native Tauri WebviewWindow (separate OS window); R42
+ * web mode window.open'd the URL into the owner's system browser — he rejected
+ * BOTH ("a real embedded browser inside the app"). This panel is the R43
+ * design: pages render in a SANDBOXED iframe through the sidecar proxy
+ * (/api/v1/browser/proxy — framing headers stripped server-side, so
+ * X-Frame-Options sites like github.com render), with server-side history +
+ * display-size (viewport) state per tab that the `browser_control` agent tool
+ * reads/writes live.
  *
- * HONEST ARCHITECTURE: the in-right-sidebar browser is a CONTROL PANEL for
- * a SEPARATE persistent native browser window (Tauri WebviewWindow with its
- * OWN user-data dir at app_local_data_dir/browser-profile). That native
- * window IS a full-fledged Chromium-based browser (WebView2 on Windows =
- * Chromium runtime, separate from the system Edge's profile; WebKit on
- * macOS). Cookies + login state persist across app launches AND are isolated
- * from the system browser — the user can be logged into a different Gmail
- * in the acute browser than in their system Chrome, exactly as asked.
+ * Ticket auth: iframes cannot send Authorization headers, so each tab mints a
+ * `bt` ticket (POST /browser/session) and every proxy URL carries it. A dead
+ * ticket renders the backend's HTML 401 page INSIDE the iframe — since the
+ * sandbox (deliberately no allow-same-origin) hides the frame's DOM from us,
+ * the panel detects that case by "loaded but the escape hatch never
+ * postMessaged" + a cheap ticket probe, re-mints once, then surfaces an error.
  *
- * Why not embed the webview inline in the right sidebar? Tauri 2's
- * WebviewWindow is a top-level OS window — it can't be parented into a
- * React DOM rect. The previous iframe approach failed for every site that
- * sends X-Frame-Options: DENY/SAMEORIGIN (Google, GitHub, most login
- * flows) — that's why the owner saw "google.com refused to connect". The
- * honest, working path is: control panel in the sidebar + native window
- * for actual browsing. The native window has its OWN nav overlay (back /
- * forward / reload / address bar) injected by browser.rs so it feels like
- * a real browser, not a bare webview.
- *
- * Error handling: in the Tauri shell, invoke failures surface a CLEAR
- * inline error. In plain web mode (launcher/dev — ROUND-42), URLs open in a
- * NEW TAB of the current browser (the owner's actual setup); we never
- * shell out to the OS default browser from the Tauri app (that was the
- * Edge leak the owner reported).
+ * window.open from inside pages is intercepted by the backend's escape hatch
+ * and postMessaged to us ({type:"acute:open"}) — the PANEL decides (navigate
+ * in-panel). The ONLY window.open left in this panel is the explicit,
+ * clearly-labeled "Open externally" ghost button.
  */
+
+/** How long after an iframe load without an escape-hatch postMessage we wait
+ * before probing whether the ticket died (an error page never postMessages). */
+const ERROR_DETECT_MS = 900;
+/** Live-follow poll: agent navigations/viewport changes land here. */
+const POLL_MS = 4000;
+
 function normalizeUrl(raw: string): string {
   const trimmed = raw.trim();
   if (trimmed === "") return "";
@@ -66,170 +73,376 @@ function tauriInvoke(): ((cmd: string, args?: Record<string, unknown>) => Promis
   return w?.invoke ?? null;
 }
 
-/** ROUND-42: are we inside the Tauri desktop shell (native browser window
- * available) or a plain browser tab (launcher/dev mode)? */
 const IS_TAURI = tauriInvoke() !== null;
+
+const QUICK_LINKS: Array<{ label: string; url: string }> = [
+  { label: "GitHub", url: "https://github.com" },
+  { label: "MDN", url: "https://developer.mozilla.org" },
+  // The backend's private-net allowlist lets the owner test HIS OWN app here.
+  { label: "This app (dev)", url: "http://localhost:5173" },
+];
+
+const ZOOM_STEPS = [0.25, 0.5, 0.75, 1, 1.25, 1.5, 2, 2.5, 3];
+
+/**
+ * Number input that lets the user TYPE freely ("3", "30", "300"…) instead
+ * of snapping back mid-edit: keeps a local draft, commits only values inside
+ * [min, max] (the backend's validation range), re-syncs when the prop moves
+ * (preset pick, agent set_viewport, poll).
+ */
+function ViewportNumberInput({
+  value,
+  min,
+  max,
+  onCommit,
+  label,
+  testId,
+  width,
+}: {
+  value: number;
+  min: number;
+  max: number;
+  onCommit: (v: number) => void;
+  label: string;
+  testId: string;
+  width: number;
+}) {
+  const styles = useThemeStyles();
+  const [draft, setDraft] = useState(String(value));
+  const [focused, setFocused] = useState(false);
+  useEffect(() => {
+    if (!focused) setDraft(String(value));
+  }, [value, focused]);
+  return (
+    <input
+      type="number"
+      min={min}
+      max={max}
+      value={draft}
+      onFocus={() => setFocused(true)}
+      onBlur={() => {
+        setFocused(false);
+        const v = Number(draft);
+        if (Number.isFinite(v) && v >= min && v <= max && Math.round(v) !== value) onCommit(Math.round(v));
+        else setDraft(String(value));
+      }}
+      onChange={(e) => {
+        setDraft(e.target.value);
+        const v = Number(e.target.value);
+        if (Number.isFinite(v) && v >= min && v <= max) onCommit(Math.round(v));
+      }}
+      aria-label={label}
+      data-testid={testId}
+      className="px-1 rounded-md border text-center outline-none"
+      style={{ width, height: 24, background: styles.card, borderColor: styles.border, color: styles.textSecondary }}
+    />
+  );
+}
 
 export function BrowserPanel({ projectId, tab }: { projectId: string; tab: RightSidebarTab }) {
   const styles = useThemeStyles();
-  const setBrowserUrl = useRightSidebarStore((s) => s.setBrowserUrl);
   const tabId = tab.id;
-  const browserUrl = tab.browserUrl ?? null;
-  const [draft, setDraft] = useState(browserUrl ?? "");
-  // ROUND-41: when the native acute-browser window can't be opened (running
-  // in plain Vite, capability missing, or invoke throws), surface an inline
-  // error in the panel. We deliberately DO NOT fall through to window.open —
-  // that path was the Edge leak the owner flagged.
-  const [browserError, setBrowserError] = useState<string | null>(null);
-  const [browserOpen, setBrowserOpen] = useState(false);
-  const invoke = tauriInvoke();
+  const patchTab = useRightSidebarStore((s) => s.patchTab);
+  const setBrowserUrl = useRightSidebarStore((s) => s.setBrowserUrl);
 
-  // On mount, check if the browser window is already open (so the panel
-  // shows the right CTA: "Open in browser" vs "Focus browser").
+  const state = useBrowserTabStore((s) => s.tabs[tabId]) ?? null;
+  const ensureTab = useBrowserTabStore((s) => s.ensureTab);
+  const mint = useBrowserTabStore((s) => s.mint);
+  const navigate = useBrowserTabStore((s) => s.navigate);
+  const go = useBrowserTabStore((s) => s.go);
+  const setViewport = useBrowserTabStore((s) => s.setViewport);
+  const setFit = useBrowserTabStore((s) => s.setFit);
+  const refresh = useBrowserTabStore((s) => s.refresh);
+  const handleLocationMessage = useBrowserTabStore((s) => s.handleLocationMessage);
+  const handleTitleMessage = useBrowserTabStore((s) => s.handleTitleMessage);
+  const handleOpenMessage = useBrowserTabStore((s) => s.handleOpenMessage);
+  const setLoading = useBrowserTabStore((s) => s.setLoading);
+  const clearError = useBrowserTabStore((s) => s.clearError);
+
+  const iframeRef = useRef<HTMLIFrameElement | null>(null);
+  const contentRef = useRef<HTMLDivElement | null>(null);
+  /** Did the loaded document postMessage us? Error pages never do. */
+  const locationSeenRef = useRef(false);
+  /** Ticket-recovery attempts for the current navSeq (max 1 re-mint). */
+  const recoveryRef = useRef({ seq: -1, attempts: 0 });
+
+  const [draft, setDraft] = useState<string>(tab.browserUrl ?? "");
+  const [availWidth, setAvailWidth] = useState(420);
+
+  const currentUrl = state?.currentUrl ?? null;
+  const navSeq = state?.navSeq ?? 0;
+
+  // ── mount: initialize the slice + mint the ticket ──────────────────────
   useEffect(() => {
-    if (!invoke) return;
-    invoke("is_browser_window_open")
-      .then((open) => setBrowserOpen(open === true))
-      .catch(() => setBrowserOpen(false));
-  }, [invoke]);
+    ensureTab(tabId);
+    void mint(tabId);
+  }, [tabId, ensureTab, mint]);
 
-  const go = useCallback(
-    async (raw: string) => {
-      const url = normalizeUrl(raw);
-      if (url === "") return;
-      setBrowserUrl(projectId, tabId, url);
-      setDraft(url);
-      setBrowserError(null);
-      if (!invoke) {
-        // ROUND-42 (owner: "I am on Windows and I need it to be working
-        // properly" — he launches via ACUTE.bat, which serves the UI in his
-        // normal browser, NOT inside the Tauri shell). In plain web mode
-        // there is no native window to open — open the URL in a NEW TAB of
-        // the browser the user is already in. This is NOT the old "Edge
-        // leak" (that was the TAURI app shelling out to the OS default
-        // browser); here the user is ALREADY in their browser and a new tab
-        // is the natural, expected behavior.
-        const opened = window.open(url, "_blank", "noopener,noreferrer");
-        if (opened === null) {
-          // Popup blocked (no user gesture). Show the URL as a clickable
-          // fallback link instead of failing silently.
-          setBrowserError(
-            "Your browser blocked opening the tab. Click the link in the status row above, or allow pop-ups for localhost.",
-          );
+  // A tab opened WITH a url (openBrowser(projectId, url)) navigates once the
+  // ticket exists.
+  useEffect(() => {
+    if (state?.status === "ready" && state.ticket !== null && state.currentUrl === null && tab.browserUrl != null) {
+      void navigate(tabId, normalizeUrl(tab.browserUrl));
+    }
+  }, [state?.status, state?.ticket, state?.currentUrl, tab.browserUrl, tabId, navigate]);
+
+  // Address bar follows the live URL (agent navigations included).
+  useEffect(() => {
+    if (currentUrl !== null) setDraft(currentUrl);
+  }, [currentUrl]);
+
+  // Tab strip + persisted tab state track host/title.
+  useEffect(() => {
+    if (currentUrl === null) return;
+    setBrowserUrl(projectId, tabId, currentUrl);
+    const host = currentUrl.replace(/^https?:\/\//, "").split("/")[0];
+    patchTab(projectId, tabId, { title: state?.currentTitle ?? host ?? "Browser" });
+  }, [currentUrl, state?.currentTitle, projectId, tabId, setBrowserUrl, patchTab]);
+
+  // ── the live-follow poll (agent-driven changes land here) ──────────────
+  useEffect(() => {
+    if (state?.ticket === null || state?.ticket === undefined) return;
+    const tick = () => {
+      if (document.visibilityState !== "visible") return;
+      void refresh(tabId);
+    };
+    const interval = window.setInterval(tick, POLL_MS);
+    return () => window.clearInterval(interval);
+  }, [tabId, refresh, state?.ticket]);
+
+  // ── escape-hatch postMessages from the proxied page ────────────────────
+  useEffect(() => {
+    const onMessage = (event: MessageEvent) => {
+      // The iframe is sandboxed WITHOUT allow-same-origin → opaque origin,
+      // reported as the literal string "null". Anything else is not ours.
+      if (event.origin !== "null") return;
+      if (event.source !== null && iframeRef.current !== null && event.source !== iframeRef.current.contentWindow) {
+        return;
+      }
+      const data = event.data as { type?: unknown; url?: unknown; title?: unknown } | null;
+      if (data === null || typeof data !== "object" || typeof data.type !== "string") return;
+      if (data.type === "acute:location") {
+        locationSeenRef.current = true;
+        if (typeof data.url === "string" && /^https?:\/\//i.test(data.url)) {
+          void handleLocationMessage(tabId, data.url);
         }
         return;
       }
-      try {
-        // If the browser window is already open, navigate it; otherwise open it.
-        if (browserOpen) {
-          await invoke("navigate_browser", { url });
-        } else {
-          await invoke("open_browser_window", { url });
-          setBrowserOpen(true);
+      if (data.type === "acute:title") {
+        if (typeof data.title === "string" && data.title !== "" && data.title.length <= 300) {
+          locationSeenRef.current = true;
+          void handleTitleMessage(tabId, data.title);
         }
-      } catch (err) {
-        const msg = err instanceof Error ? err.message : String(err);
-        setBrowserError(`Failed to open the browser window: ${msg}`);
+        return;
       }
-    },
-    [browserOpen, invoke, projectId, setBrowserUrl, tabId],
-  );
-
-  const onBack = () => {
-    // ROUND-41: the native browser window has its own back/forward/reload
-    // (injected by browser.rs's nav overlay). The panel's buttons invoke
-    // navigate_browser to drive the open window's history via eval.
-    // We can't directly call history.back on the native window from here,
-    // so we re-eval the URL change through navigate_browser (the user
-    // typed a new URL). For true back/forward, the user clicks the native
-    // window's own nav overlay buttons.
-    // Kept here for visual parity with a real browser chrome.
-    void 0;
-  };
-  const onForward = () => { void 0; };
-  const onReload = async () => {
-    if (!invoke || !browserOpen) return;
-    // Re-navigate to the current URL (a reload shortcut).
-    if (browserUrl !== null) {
-      try {
-        await invoke("navigate_browser", { url: browserUrl });
-      } catch (err) {
-        const msg = err instanceof Error ? err.message : String(err);
-        setBrowserError(`Reload failed: ${msg}`);
+      if (data.type === "acute:open") {
+        // window.open from inside the page — the PANEL decides. Default: stay
+        // in-panel (the R42 external-tab behavior is what the owner rejected).
+        if (typeof data.url === "string" && /^https?:\/\//i.test(data.url)) {
+          void handleOpenMessage(tabId, data.url);
+        }
       }
-    }
-  };
+    };
+    window.addEventListener("message", onMessage);
+    return () => window.removeEventListener("message", onMessage);
+  }, [tabId, handleLocationMessage, handleTitleMessage, handleOpenMessage]);
 
-  const onOpenAppBrowser = () => void go(draft !== "" ? draft : (browserUrl ?? ""));
-  const onCloseBrowser = async () => {
-    if (!invoke) return;
-    try {
-      await invoke("close_browser_window");
-      setBrowserOpen(false);
-      setBrowserError(null);
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
-      setBrowserError(`Close failed: ${msg}`);
-    }
-  };
+  // ── error-page / dead-ticket detection after each iframe load ──────────
+  const onIframeLoad = useCallback(() => {
+    setLoading(tabId, false);
+    window.setTimeout(async () => {
+      if (locationSeenRef.current) return;
+      const live = useBrowserTabStore.getState().tabs[tabId];
+      if (live === null || live === undefined || live.ticket === null || live.currentUrl === null) return;
+      // Nothing postMessaged — either the backend rendered an error page
+      // (fine, it is informative) or the ticket died (401 page). Probe.
+      const alive = await probeBrowserTicket("x", live.sessionId, live.ticket);
+      if (alive) return;
+      if (recoveryRef.current.seq !== live.navSeq) {
+        recoveryRef.current = { seq: live.navSeq, attempts: 0 };
+      }
+      recoveryRef.current.attempts += 1;
+      if (recoveryRef.current.attempts > 1) {
+        useBrowserTabStore
+          .getState()
+          .setError(tabId, "The browser session keeps expiring. Retry re-mints a fresh ticket.");
+        return;
+      }
+      // Re-mint once (rotates the ticket) and reload the current page.
+      await mint(tabId);
+      await go(tabId, "reload");
+    }, ERROR_DETECT_MS);
+  }, [tabId, setLoading, mint, go]);
 
+  // Reset per-navigation tracking so a fresh load re-arms detection.
+  useEffect(() => {
+    locationSeenRef.current = false;
+    recoveryRef.current = { seq: navSeq, attempts: 0 };
+  }, [navSeq]);
+
+  // Measure the content area for the Fit scale.
+  useEffect(() => {
+    const el = contentRef.current;
+    if (el === null) return;
+    const observer = new ResizeObserver((entries) => {
+      const width = entries[0]?.contentRect.width ?? 420;
+      setAvailWidth(Math.max(120, width - 24));
+    });
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, []);
+
+  // ── actions ─────────────────────────────────────────────────────────────
   const onSubmit = (e: FormEvent) => {
     e.preventDefault();
-    void go(draft);
+    const url = normalizeUrl(draft);
+    if (url === "") return;
+    setDraft(url);
+    clearError(tabId);
+    void navigate(tabId, url);
   };
 
+  const onKeyDown = (e: KeyboardEvent<HTMLInputElement>) => {
+    if (e.key === "Escape") {
+      setDraft(currentUrl ?? "");
+      e.currentTarget.blur();
+    }
+  };
+
+  const onQuickLink = (url: string) => {
+    setDraft(url);
+    clearError(tabId);
+    void navigate(tabId, url);
+  };
+
+  const onOpenExternally = () => {
+    const url = currentUrl ?? normalizeUrl(draft);
+    if (url === "") return;
+    // The ONLY window.open in the panel — an explicit, labeled action.
+    window.open(url, "_blank", "noopener,noreferrer");
+  };
+
+  const onPopOut = async () => {
+    const invoke = tauriInvoke();
+    const url = currentUrl;
+    if (invoke === null || url === null) return;
+    try {
+      await invoke("open_browser_window", { url });
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      useBrowserTabStore.getState().setError(tabId, `Pop-out window failed: ${msg}`);
+    }
+  };
+
+  const onRetry = () => {
+    clearError(tabId);
+    void mint(tabId).then(() => {
+      const live = useBrowserTabStore.getState().tabs[tabId];
+      if (live?.ticket !== null && live?.ticket !== undefined && live.currentUrl !== null) {
+        void go(tabId, "reload");
+      }
+    });
+  };
+
+  // ── derived viewport geometry ───────────────────────────────────────────
+  const vp = state?.viewport;
+  const rotate = vp?.rotate ?? false;
+  const rawW = vp?.width ?? 1280;
+  const rawH = vp?.height ?? 800;
+  const viewW = rotate ? rawH : rawW;
+  const viewH = rotate ? rawW : rawH;
+  const zoom = vp?.zoom ?? 1;
+  const fit = state?.fit ?? true;
+  const fitScale = fit ? Math.min(1, availWidth / Math.max(1, viewW * zoom)) : 1;
+  const scale = zoom * fitScale;
+  const readout =
+    `${viewW}×${viewH} @ ${Math.round(zoom * 100)}%` +
+    (fit && fitScale < 1 ? ` (fit ${Math.round(scale * 100)}%)` : "");
+
+  const ghostBtn = (extraStyle?: CSSProperties): CSSProperties => ({
+    color: styles.textSecondary,
+    background: "transparent",
+    border: `1px solid ${styles.border}`,
+    ...extraStyle,
+  });
+
+  const hasPage = state !== null && state.currentUrl !== null && state.ticket !== null;
+
   return (
-    <div className="h-full flex flex-col min-h-0">
-      {/* Address bar */}
+    <div className="h-full flex flex-col min-h-0" data-testid="browser-panel">
+      {/* ── Chrome bar: navigation + address + explicit external actions ── */}
       <div
         className="shrink-0 flex items-center gap-1 px-2 h-9 border-b"
         style={{ borderColor: styles.border, background: styles.isDark ? "rgba(0,0,0,0.15)" : styles.subtle }}
       >
         <button
-          onClick={onBack}
+          onClick={() => void go(tabId, "back")}
+          disabled={!state?.canBack}
+          data-testid="browser-back"
           aria-label="Back"
-          title="Back (in the browser window)"
+          title="Back"
           className="w-6 h-6 grid place-items-center rounded-md transition-colors disabled:opacity-30"
           style={{ color: styles.textSecondary }}
-          onMouseEnter={(e) => { e.currentTarget.style.background = styles.subtleHover; }}
+          onMouseEnter={(e) => { if (state?.canBack) e.currentTarget.style.background = styles.subtleHover; }}
           onMouseLeave={(e) => (e.currentTarget.style.background = "transparent")}
         >
           <ArrowLeft size={13} />
         </button>
         <button
-          onClick={onForward}
+          onClick={() => void go(tabId, "forward")}
+          disabled={!state?.canForward}
+          data-testid="browser-forward"
           aria-label="Forward"
-          title="Forward (in the browser window)"
+          title="Forward"
           className="w-6 h-6 grid place-items-center rounded-md transition-colors disabled:opacity-30"
           style={{ color: styles.textSecondary }}
-          onMouseEnter={(e) => { e.currentTarget.style.background = styles.subtleHover; }}
+          onMouseEnter={(e) => { if (state?.canForward) e.currentTarget.style.background = styles.subtleHover; }}
           onMouseLeave={(e) => (e.currentTarget.style.background = "transparent")}
         >
           <ArrowRight size={13} />
         </button>
         <button
-          onClick={onReload}
-          disabled={!browserOpen}
-          aria-label="Reload"
-          title="Reload (re-navigate the browser window)"
+          onClick={() => {
+            if (state?.currentUrl != null) void go(tabId, "reload");
+          }}
+          disabled={!hasPage}
+          data-testid="browser-reload"
+          aria-label={state?.loading ? "Stop and reload" : "Reload"}
+          title={state?.loading ? "Stop (reloads)" : "Reload"}
           className="w-6 h-6 grid place-items-center rounded-md transition-colors disabled:opacity-30"
           style={{ color: styles.textSecondary }}
-          onMouseEnter={(e) => { if (browserOpen) e.currentTarget.style.background = styles.subtleHover; }}
+          onMouseEnter={(e) => { if (hasPage) e.currentTarget.style.background = styles.subtleHover; }}
           onMouseLeave={(e) => (e.currentTarget.style.background = "transparent")}
         >
-          <RotateCw size={12} />
+          {state?.loading ? <X size={13} /> : <RotateCw size={12} />}
         </button>
+
         <form onSubmit={onSubmit} className="flex-1 min-w-0 flex items-center">
           <div
             className="flex-1 flex items-center gap-1.5 h-7 px-2.5 rounded-full border"
             style={{ background: styles.card, borderColor: styles.border }}
           >
-            <Globe size={11} className="shrink-0" style={{ color: styles.textTertiary }} />
+            {state?.loading ? (
+              <LoaderCircle size={11} className="shrink-0 animate-spin" style={{ color: styles.accent }} data-testid="browser-spinner" />
+            ) : (
+              <Globe size={11} className="shrink-0" style={{ color: styles.textTertiary }} />
+            )}
             <input
               value={draft}
               onChange={(e) => setDraft(e.target.value)}
+              onFocus={(e) => e.target.select()}
+              onKeyDown={onKeyDown}
+              onPaste={(e) => {
+                // Paste-and-go: pasting a bare address navigates immediately.
+                const text = e.clipboardData.getData("text").trim();
+                if (/^[\w-]+(\.[\w-]+)+([/?#].*)?$/.test(text)) {
+                  e.preventDefault();
+                  onQuickLink(normalizeUrl(text));
+                }
+              }}
               placeholder="Search or enter address"
               aria-label="Browser address"
+              data-testid="browser-address-input"
               spellCheck={false}
               autoComplete="off"
               className="flex-1 min-w-0 bg-transparent outline-none text-[11.5px]"
@@ -237,94 +450,130 @@ export function BrowserPanel({ projectId, tab }: { projectId: string; tab: Right
             />
           </div>
         </form>
-        {/* PRIMARY action — desktop app: open/focus the persistent native
-            `acute-browser` window (isolated Chromium profile, persistent
-            logins). Web mode: opens the URL in a new tab of the current
-            browser (ROUND-42). */}
+
+        {IS_TAURI ? (
+          <button
+            onClick={() => void onPopOut()}
+            aria-label="Pop out window"
+            title="Pop out to the native Acute browser window (isolated profile)"
+            className="shrink-0 w-6 h-6 grid place-items-center rounded-md transition-colors"
+            style={{ color: styles.textTertiary }}
+            onMouseEnter={(e) => { e.currentTarget.style.background = styles.subtleHover; }}
+            onMouseLeave={(e) => (e.currentTarget.style.background = "transparent")}
+          >
+            <PanelTopOpen size={13} />
+          </button>
+        ) : null}
         <button
-          onClick={onOpenAppBrowser}
-          aria-label={IS_TAURI ? "Open in browser" : "Open in a new browser tab"}
-          title={
-            IS_TAURI
-              ? "Open in the persistent Acute browser (isolated profile, logins persist)"
-              : "Opens in a new tab of this browser"
-          }
-          className="shrink-0 flex items-center gap-1 h-7 px-2.5 rounded-full text-[11px] font-medium transition-colors"
-          style={{
-            color: styles.isDark ? "#fff" : styles.card,
-            background: styles.isDark ? styles.text : styles.textSecondary,
-          }}
+          onClick={onOpenExternally}
+          aria-label="Open externally"
+          title="Open the current page in your system browser (explicit action)"
+          data-testid="browser-open-external"
+          className="shrink-0 w-6 h-6 grid place-items-center rounded-md transition-colors"
+          style={{ color: styles.textTertiary }}
+          onMouseEnter={(e) => { e.currentTarget.style.background = styles.subtleHover; }}
+          onMouseLeave={(e) => (e.currentTarget.style.background = "transparent")}
         >
-          <PanelTopOpen size={12} />
-          <span>{IS_TAURI ? (browserOpen ? "Focus" : "Open") : "Open"}</span>
+          <ExternalLink size={13} />
         </button>
       </div>
 
-      {/* Browser-open status row — mode-aware: in the desktop app it shows
-          whether the native `acute-browser` window is mounted (+ a close
-          button); in a plain browser tab (launcher/dev mode) it shows the
-          last-opened URL as a clickable link. */}
+      {/* ── Viewport bar: the display-size controls (R43-10 core feature) ── */}
       <div
-        className="shrink-0 flex items-center gap-2 px-3 h-7 border-b text-[10.5px]"
+        className="shrink-0 flex items-center gap-1.5 px-2 h-8 border-b text-[10.5px]"
         style={{ borderColor: styles.border, color: styles.textTertiary, background: styles.isDark ? "rgba(0,0,0,0.08)" : "transparent" }}
       >
-        {IS_TAURI ? (
-          <>
-            <span
-              className="inline-flex items-center gap-1"
-              style={{ color: browserOpen ? styles.accent : styles.textTertiary }}
-            >
-              <span
-                className="inline-block w-1.5 h-1.5 rounded-full"
-                style={{ background: browserOpen ? styles.accent : styles.textTertiary }}
-              />
-              {browserOpen ? "Browser window open" : "Browser window closed"}
-            </span>
-            <span className="flex-1 truncate" title={browserUrl ?? ""}>
-              {browserUrl ? `URL: ${browserUrl}` : "No URL yet"}
-            </span>
-            {browserOpen ? (
-              <button
-                onClick={onCloseBrowser}
-                className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-md transition-colors"
-                style={{ color: styles.textTertiary }}
-                onMouseEnter={(e) => { e.currentTarget.style.background = styles.subtleHover; }}
-                onMouseLeave={(e) => (e.currentTarget.style.background = "transparent")}
-                title="Close the browser window (profile survives on disk)"
-              >
-                <X size={10} />
-                Close
-              </button>
-            ) : null}
-          </>
-        ) : (
-          <>
-            <span className="inline-flex items-center gap-1 shrink-0">
-              <ExternalLink size={10} style={{ color: styles.accent }} />
-              Opens in a new browser tab
-            </span>
-            {browserUrl ? (
-              <a
-                href={browserUrl}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="flex-1 min-w-0 truncate underline decoration-dotted underline-offset-2 hover:opacity-80"
-                style={{ color: styles.textSecondary }}
-                title={browserUrl}
-              >
-                {browserUrl}
-              </a>
-            ) : (
-              <span className="flex-1 truncate">No URL opened yet</span>
-            )}
-          </>
-        )}
+        <select
+          value={vp?.preset ?? "laptop"}
+          onChange={(e) => {
+            const value = e.target.value;
+            void setViewport(tabId, value === "custom" ? { preset: "custom" } : { preset: value });
+          }}
+          aria-label="Display size preset"
+          data-testid="browser-preset-select"
+          className="h-6 px-1 rounded-md border outline-none cursor-pointer max-w-[118px]"
+          style={{ background: styles.card, borderColor: styles.border, color: styles.textSecondary }}
+        >
+          {BROWSER_VIEWPORT_PRESETS.map((p) => (
+            <option key={p.id} value={p.id}>
+              {p.label}
+            </option>
+          ))}
+          <option value="custom">Custom…</option>
+        </select>
+        <span className="flex items-center gap-0.5">
+          <ViewportNumberInput
+            value={rawW}
+            min={200}
+            max={3840}
+            onCommit={(w) => void setViewport(tabId, { width: w })}
+            label="Viewport width"
+            testId="browser-width-input"
+            width={52}
+          />
+          <span>×</span>
+          <ViewportNumberInput
+            value={rawH}
+            min={200}
+            max={4320}
+            onCommit={(h) => void setViewport(tabId, { height: h })}
+            label="Viewport height"
+            testId="browser-height-input"
+            width={52}
+          />
+        </span>
+        <select
+          value={String(Math.round(zoom * 100))}
+          onChange={(e) => void setViewport(tabId, { zoom: Number(e.target.value) / 100 })}
+          aria-label="Zoom"
+          data-testid="browser-zoom-select"
+          className="h-6 px-1 rounded-md border outline-none cursor-pointer"
+          style={{ background: styles.card, borderColor: styles.border, color: styles.textSecondary }}
+        >
+          {ZOOM_STEPS.map((z) => (
+            <option key={z} value={String(Math.round(z * 100))}>
+              {Math.round(z * 100)}%
+            </option>
+          ))}
+        </select>
+        <button
+          onClick={() => void setViewport(tabId, { rotate: !rotate })}
+          aria-pressed={rotate}
+          aria-label="Rotate viewport"
+          title={rotate ? "Rotate back to portrait" : "Rotate (swap width/height)"}
+          data-testid="browser-rotate"
+          className="w-6 h-6 grid place-items-center rounded-md transition-colors"
+          style={{ color: rotate ? styles.accent : styles.textTertiary }}
+          onMouseEnter={(e) => { e.currentTarget.style.background = styles.subtleHover; }}
+          onMouseLeave={(e) => (e.currentTarget.style.background = "transparent")}
+        >
+          <Smartphone size={12} style={rotate ? { transform: "rotate(90deg)" } : undefined} />
+        </button>
+        <button
+          onClick={() => setFit(tabId, !fit)}
+          aria-pressed={fit}
+          aria-label="Fit to panel"
+          title={fit ? "Fit: scaled down to the panel width (true px preserved)" : "1:1 — scroll the panel instead"}
+          data-testid="browser-fit"
+          className="w-6 h-6 grid place-items-center rounded-md transition-colors"
+          style={{ color: fit ? styles.accent : styles.textTertiary }}
+          onMouseEnter={(e) => { e.currentTarget.style.background = styles.subtleHover; }}
+          onMouseLeave={(e) => (e.currentTarget.style.background = "transparent")}
+        >
+          {fit ? <Shrink size={12} /> : <Expand size={12} />}
+        </button>
+        <span
+          className="ml-auto shrink-0 font-mono text-[10px] px-1.5 py-0.5 rounded-md"
+          data-testid="browser-readout"
+          style={{ background: styles.subtle, color: styles.textTertiary }}
+          title={`True viewport ${viewW}×${viewH}px — the page sees these CSS pixels`}
+        >
+          {readout}
+        </span>
       </div>
 
-      {/* Inline error surface — shown when the native window can't be
-          opened (running outside the Tauri shell, capability missing, or
-          invoke threw). We deliberately do NOT fall through to window.open. */}
-      {browserError !== null ? (
+      {/* ── Panel-level error (session mint / navigation failures) ───────── */}
+      {state?.error != null ? (
         <div
           className="shrink-0 flex items-start gap-2 px-3 py-2 text-[11px] border-b"
           style={{
@@ -332,11 +581,21 @@ export function BrowserPanel({ projectId, tab }: { projectId: string; tab: Right
             color: styles.isDark ? "#fca5a5" : "#b91c1c",
             borderColor: styles.border,
           }}
+          data-testid="browser-error-card"
+          role="alert"
         >
-          <Info size={12} className="mt-0.5 shrink-0" />
-          <span className="flex-1">{browserError}</span>
+          <AlertTriangle size={12} className="mt-0.5 shrink-0" />
+          <span className="flex-1">{state.error}</span>
           <button
-            onClick={() => setBrowserError(null)}
+            onClick={onRetry}
+            data-testid="browser-retry"
+            className="shrink-0 px-2 py-0.5 rounded-md font-medium"
+            style={ghostBtn({ color: styles.isDark ? "#fca5a5" : "#b91c1c", borderColor: styles.isDark ? "rgba(252,165,165,0.4)" : "rgba(185,28,28,0.3)" })}
+          >
+            Retry
+          </button>
+          <button
+            onClick={() => clearError(tabId)}
             aria-label="Dismiss"
             className="shrink-0 opacity-60 hover:opacity-100"
             style={{ color: "inherit" }}
@@ -346,52 +605,93 @@ export function BrowserPanel({ projectId, tab }: { projectId: string; tab: Right
         </div>
       ) : null}
 
-      {/* Viewport — the control panel (not the browsing surface). The
-          actual browsing happens in the native browser window (desktop app)
-          or a new browser tab (web mode). */}
-      <div className="flex-1 min-h-0 relative overflow-y-auto" style={{ background: styles.card }}>
-        <div className="absolute inset-0 grid place-items-center px-6 text-center">
-          <div>
-            <div
-              className="w-14 h-14 mx-auto mb-3 grid place-items-center rounded-2xl"
-              style={{ background: styles.isDark ? "rgba(0,0,0,0.18)" : styles.subtle, border: `1px solid ${styles.border}` }}
-            >
-              <Globe size={26} style={{ color: styles.accent }} />
-            </div>
-            <div className="text-[12.5px] font-medium" style={{ color: styles.textSecondary }}>
-              {IS_TAURI ? (browserOpen ? "Acute Browser is open" : "Acute Browser") : "Acute Browser (web mode)"}
-            </div>
-            <div className="text-[11px] mt-1.5 max-w-xs mx-auto leading-relaxed" style={{ color: styles.textTertiary }}>
-              {IS_TAURI
-                ? browserOpen
-                  ? "The browser window is open with its own isolated profile (separate from your system Edge/Chrome). Type a new URL above + Enter to navigate it. Use the window's own nav bar for back/forward/reload."
-                  : "Type a URL above + Enter (or click Open) to launch the persistent Acute browser. It uses its own isolated Chromium profile — logins + cookies persist across app launches and are separate from your system browser."
-                : "You're running in a browser tab, so links open in a new tab of THIS browser. Run the packaged desktop app (launcher with the Tauri shell) for the embedded Acute browser window with its own isolated profile."}
-            </div>
-            <div className="mt-4 flex items-center justify-center gap-2">
-              <button
-                onClick={() => void go("https://duckduckgo.com")}
-                className="inline-flex items-center gap-1 h-7 px-3 rounded-full text-[11px] font-medium transition-colors"
-                style={{ background: styles.subtle, color: styles.textSecondary, border: `1px solid ${styles.border}` }}
-                onMouseEnter={(e) => { e.currentTarget.style.background = styles.subtleHover; }}
-                onMouseLeave={(e) => { e.currentTarget.style.background = styles.subtle; }}
+      {/* ── Content: empty state or the scaled viewport frame ────────────── */}
+      <div
+        ref={contentRef}
+        className="flex-1 min-h-0 overflow-auto"
+        style={{ background: styles.isDark ? "rgba(0,0,0,0.22)" : styles.subtle }}
+      >
+        {!hasPage ? (
+          <div className="h-full grid place-items-center px-6 text-center" data-testid="browser-empty">
+            <div>
+              <div
+                className="w-14 h-14 mx-auto mb-3 grid place-items-center rounded-2xl"
+                style={{ background: styles.isDark ? "rgba(0,0,0,0.18)" : styles.card, border: `1px solid ${styles.border}` }}
               >
-                <ExternalLink size={11} />
-                DuckDuckGo
-              </button>
-              <button
-                onClick={() => void go("https://github.com")}
-                className="inline-flex items-center gap-1 h-7 px-3 rounded-full text-[11px] font-medium transition-colors"
-                style={{ background: styles.subtle, color: styles.textSecondary, border: `1px solid ${styles.border}` }}
-                onMouseEnter={(e) => { e.currentTarget.style.background = styles.subtleHover; }}
-                onMouseLeave={(e) => { e.currentTarget.style.background = styles.subtle; }}
-              >
-                <ExternalLink size={11} />
-                GitHub
-              </button>
+                <Globe size={26} style={{ color: styles.accent }} />
+              </div>
+              <div className="text-[12.5px] font-medium" style={{ color: styles.textSecondary }}>
+                Embedded browser
+              </div>
+              <div className="text-[11px] mt-1.5 max-w-xs mx-auto leading-relaxed" style={{ color: styles.textTertiary }}>
+                Pages render inside the app through the sidecar proxy — no external tabs, no popup
+                blockers. Type an address above, pick a display size below, or ask the agent
+                (“open github.com and check the mobile layout”).
+              </div>
+              <div className="mt-4 flex items-center justify-center gap-2">
+                {QUICK_LINKS.map((link) => (
+                  <button
+                    key={link.url}
+                    onClick={() => onQuickLink(link.url)}
+                    className="inline-flex items-center gap-1 h-7 px-3 rounded-full text-[11px] font-medium transition-colors"
+                    style={ghostBtn()}
+                    onMouseEnter={(e) => { e.currentTarget.style.background = styles.subtleHover; }}
+                    onMouseLeave={(e) => { e.currentTarget.style.background = "transparent"; }}
+                  >
+                    <Globe size={10} />
+                    {link.label}
+                  </button>
+                ))}
+              </div>
             </div>
           </div>
-        </div>
+        ) : (
+          <div className="min-h-full w-full grid justify-center px-3 py-3">
+            <div
+              data-testid="browser-viewport-frame"
+              className="relative bg-white shadow-md"
+              style={{
+                width: Math.round(viewW * scale),
+                height: Math.round(viewH * scale),
+                border: `1px solid ${styles.borderStrong}`,
+                borderRadius: 4,
+                overflow: "hidden",
+              }}
+            >
+              <iframe
+                key={navSeq}
+                ref={iframeRef}
+                src={buildProxySrc(state.currentUrl as string, state.sessionId, state.ticket as string)}
+                onLoad={onIframeLoad}
+                title={state.currentTitle ?? "Embedded browser page"}
+                data-testid="browser-iframe"
+                className="absolute top-0 left-0"
+                style={{
+                  width: viewW,
+                  height: viewH,
+                  border: "none",
+                  transform: `scale(${scale})`,
+                  transformOrigin: "top left",
+                  background: "#fff",
+                }}
+                sandbox="allow-scripts allow-forms allow-popups"
+                referrerPolicy="no-referrer"
+              />
+            </div>
+          </div>
+        )}
+      </div>
+
+      {/* ── status footnote: proxy-mode honesty ──────────────────────────── */}
+      <div
+        className="shrink-0 flex items-center gap-1.5 px-3 h-6 border-t text-[10px]"
+        style={{ borderColor: styles.border, color: styles.textTertiary }}
+      >
+        <Info size={10} className="shrink-0" />
+        <span className="truncate">
+          Rendered through the sidecar proxy — logins don’t persist; heavily scripted sites may load
+          partially. “Open externally” is always available.
+        </span>
       </div>
     </div>
   );

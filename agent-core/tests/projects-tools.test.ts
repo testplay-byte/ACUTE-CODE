@@ -225,9 +225,10 @@ describe("round-14 tools: create_dir / delete_file / search_files", () => {
 });
 
 describe("round-17: tool-name truth + allowedTools enforcement (ADR-0019)", () => {
-  it("TOOL_NAMES equals the real 16-tool set (round-28: +index_project)", async () => {
+  it("TOOL_NAMES equals the real 17-tool set (round-28: +index_project; R43-10: +browser_control)", async () => {
     const { TOOL_NAMES } = await import("../src/storage/agents");
     expect([...TOOL_NAMES].sort()).toEqual([
+      "browser_control",
       "create_dir",
       "delete_file",
       "edit_file",
@@ -247,12 +248,14 @@ describe("round-17: tool-name truth + allowedTools enforcement (ADR-0019)", () =
     ]);
   });
 
-  it("buildProjectTools filters by allowlist; empty allowlist = all tools (17 incl. delegate_task)", async () => {
+  it("buildProjectTools filters by allowlist; empty allowlist = all tools (18 incl. delegate_task + browser_control)", async () => {
     const { buildProjectTools } = await import("../src/tools/index");
     // ROUND-36: delegate_task requires deps.keyring + deps.chat — without
-    // them the base 16 tools return (back-compat), with them 17.
+    // them the base 17 tools return (back-compat), with them 18 (R43-10
+    // added browser_control to the base set).
     const all = (await buildProjectTools(tempDir)) as unknown as Record<string, unknown>;
     expect(Object.keys(all).sort()).toEqual([
+      "browser_control",
       "create_dir",
       "delete_file",
       "edit_file",
@@ -273,7 +276,7 @@ describe("round-17: tool-name truth + allowedTools enforcement (ADR-0019)", () =
     const two = (await buildProjectTools(tempDir, ["read_file", "search_files"])) as unknown as Record<string, unknown>;
     expect(Object.keys(two).sort()).toEqual(["read_file", "search_files"]);
     const empty = (await buildProjectTools(tempDir, [])) as unknown as Record<string, unknown>;
-    expect(Object.keys(empty)).toHaveLength(16);
+    expect(Object.keys(empty)).toHaveLength(17);
   });
 
   it("server rejects SPEC-era tool names in allowedTools (drift guard)", async () => {

@@ -31,6 +31,9 @@ export const TOOL_NAMES = [
   "web_fetch",
   "web_search",
   "index_project",
+  // ROUND-43 (R43-10): drives the user's embedded browser panel (navigate /
+  // history / viewport presets) — tools/index.ts, state in browser-proxy.ts.
+  "browser_control",
 ] as const;
 
 /** Agent JSON as served by the API: AgentRecord plus bookkeeping columns. */
