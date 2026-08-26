@@ -6,6 +6,7 @@ import {
   ChevronDown,
   CircleDashed,
   Loader2,
+  PanelRightOpen,
   RefreshCw,
   XCircle,
 } from "lucide-react";
@@ -15,6 +16,7 @@ import {
   retrySubAgent,
   type SessionDetail,
 } from "../../lib/api";
+import { useRightSidebarStore } from "../../lib/right-sidebar-store";
 import { SEMANTIC_COLORS } from "../../lib/semantics";
 import { useThemeStyles } from "../../lib/use-theme-styles";
 import { withAlpha } from "../dashboard/helpers";
@@ -25,16 +27,27 @@ import { withAlpha } from "../dashboard/helpers";
  * on the running sessions, he can look at their status" — the card shows
  * role/task/status/progress/tokens/elapsed and opens the FULL child log in
  * a dialog. Failed children offer smart RETRY (resumes from the event log).
+ *
+ * ROUND-40 (owner: "if I click on… a sub-agent running task… then it will
+ * automatically open up on the right sidebar window"): clicking the card's
+ * main body calls `useRightSidebarStore.getState().openSubAgent(...)` so the
+ * child session opens as a tab in the right sidebar. A small chevron button
+ * on the right still toggles the inline SubAgentLog dialog (so the existing
+ * "tap to inspect the transcript inline" behavior is preserved).
  */
 export function SubAgentCard({
   sessionId,
   parentSessionId,
+  projectId,
   role,
   task,
   live,
 }: {
   sessionId: string;
   parentSessionId: string | null;
+  /** ROUND-40: the chat panel's project id — needed to open the sub-agent
+   * tab in the right sidebar via `openSubAgent(projectId, …)`. */
+  projectId: string;
   role?: string;
   task?: string;
   /** Round-35 live segment context: poll faster while the turn streams. */
@@ -64,16 +77,51 @@ export function SubAgentCard({
         ? SEMANTIC_COLORS.danger
         : styles.accent;
 
+  // ROUND-40: open this sub-agent's tab in the right sidebar (the owner's
+  // "click the sub-agent task card → opens in the right sidebar" directive).
+  // Falls back to the child's own session id if the parent is null (defensive;
+  // the store's openSubAgent signature requires a string parent). The
+  // `?? undefined` coerces SubAgentStatus.subRole's `string | null` to the
+  // `string | undefined` the store helper expects.
+  const openInSidebar = () => {
+    useRightSidebarStore.getState().openSubAgent(
+      projectId,
+      parentSessionId ?? sessionId,
+      sessionId,
+      task ?? child?.title ?? "Sub-agent",
+      role ?? child?.subRole ?? undefined,
+    );
+  };
+
   return (
     <div
       className="rounded-[12px] border overflow-hidden"
       style={{ borderColor: withAlpha(statusTone, 0.35), background: styles.card }}
     >
-      {/* Row */}
-      <button
-        onClick={() => setLogOpen((v) => !v)}
-        aria-expanded={logOpen}
-        className="w-full flex items-center gap-2.5 px-3 h-11 text-left"
+      {/* Row — clicking the body opens the sub-agent tab in the right sidebar
+          (ROUND-40 owner directive). The chevron on the right is a SEPARATE
+          small button that toggles the inline log dialog (preserves the existing
+          "tap to inspect the transcript" behavior). */}
+      <div
+        role="button"
+        tabIndex={0}
+        onClick={openInSidebar}
+        onKeyDown={(e) => {
+          if (e.key === "Enter" || e.key === " ") {
+            e.preventDefault();
+            openInSidebar();
+          }
+        }}
+        className="w-full flex items-center gap-2.5 px-3 h-11 text-left cursor-pointer transition-colors"
+        style={{ color: styles.text }}
+        onMouseEnter={(e) => {
+          e.currentTarget.style.background = withAlpha(statusTone, 0.06);
+        }}
+        onMouseLeave={(e) => {
+          e.currentTarget.style.background = "transparent";
+        }}
+        title={`Open ${role ?? child?.subRole ?? "sub-agent"} in sidebar`}
+        aria-label={`Open ${role ?? child?.subRole ?? "sub-agent"} ${task ?? ""} in sidebar`}
       >
         <span
           className="w-7 h-7 shrink-0 rounded-[9px] grid place-items-center"
@@ -115,12 +163,36 @@ export function SubAgentCard({
             {task ?? child?.title ?? "sub-agent task"}
           </span>
         </span>
-        <ChevronDown
-          size={12}
-          className="shrink-0"
-          style={{ color: styles.textTertiary, transform: logOpen ? "rotate(0deg)" : "rotate(-90deg)", transition: "transform 0.15s" }}
-        />
-      </button>
+        {/* Small inline-log toggle (keeps the ROUND-36 inspect-transcript UX).
+            stopPropagation so clicking it doesn't ALSO open the sidebar tab. */}
+        <button
+          type="button"
+          onClick={(e) => {
+            e.stopPropagation();
+            setLogOpen((v) => !v);
+          }}
+          aria-expanded={logOpen}
+          aria-label="Toggle inline sub-agent log"
+          title="Toggle inline log"
+          className="shrink-0 w-6 h-6 grid place-items-center rounded-md transition-colors"
+          style={{ color: styles.textTertiary }}
+          onMouseEnter={(e) => {
+            e.currentTarget.style.background = styles.subtleHover;
+          }}
+          onMouseLeave={(e) => {
+            e.currentTarget.style.background = "transparent";
+          }}
+        >
+          {logOpen ? (
+            <PanelRightOpen size={12} />
+          ) : (
+            <ChevronDown
+              size={12}
+              style={{ transform: logOpen ? "rotate(0deg)" : "rotate(-90deg)", transition: "transform 0.15s" }}
+            />
+          )}
+        </button>
+      </div>
 
       {/* Failed → smart retry (ADR-0022: resumes from the event log) */}
       {child?.status === "failed" && (

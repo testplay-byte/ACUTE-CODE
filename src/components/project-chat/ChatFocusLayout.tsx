@@ -79,8 +79,14 @@ export function ChatFocusLayout({ project }: { project: Project }) {
           boxShadow: styles.softShadow,
         }}
       >
+        {/* ROUND-40 (owner: "chat window is capped and does not expand to
+            the full available width"). max-w-[1500px] → max-w-none so the
+            chat fills its column edge-to-edge. justify-center is kept — it
+            is a no-op once the child is full-width, but removing it would
+            change nothing and the parent contract (center an inner block)
+            is preserved. */}
         <div className="flex-1 min-h-0 flex justify-center">
-          <div className="w-full max-w-[1500px] min-h-0 flex">
+          <div className="w-full max-w-none min-h-0 flex">
             {/* ROUND-38: key by project id so a project switch FULLY remounts
                 the panel — no live-stream/pending/echo state can bleed from
                 project A into project B (owner: sessions were mixing). */}

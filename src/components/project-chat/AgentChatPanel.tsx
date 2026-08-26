@@ -13,6 +13,8 @@ import {
   Check,
   ChevronDown,
   Copy,
+  File,
+  FileCode,
   FolderOpen,
   GitBranch,
   ListChecks,
@@ -265,8 +267,89 @@ function CodeBlock({ code }: { code: string }) {
   );
 }
 
-/** Original inline parser (bold + `code`) — used for non-code-block text. */
-function RichTextInline({ content }: { content: string }) {
+/** ROUND-40 (owner: "when the user clicks a file path… it should
+ * automatically open in the right sidebar"): detect file-path-like tokens in
+ * assistant final-answer text and render them as clickable pills that call
+ * `useRightSidebarStore.getState().openFile(projectId, path)`. Conservative —
+ * avoids false positives like `Done.`, `i.e.`, version numbers, URLs. */
+const URL_SCHEME = /^(https?|ftp):\/\//i;
+const LEADING_DOT_SLASH = /^\.{1,2}[/\\]/;
+const LEADING_SLASH = /^[/\\]/;
+/** Path shape: word/slash chars + one-or-more dotted segments, where the
+ * FINAL segment is 2–4 lowercase letters (a real file extension). Intermediate
+ * segments may include digits (e.g. `index.test.ts`, `app.component.tsx`). */
+const PATH_REGEX = /^[a-zA-Z0-9_\-/]+(?:\.[a-z0-9]{1,10})*\.[a-z]{2,4}$/;
+
+/** Strip surrounding quotes/backticks + trailing punctuation, then test if
+ * the cleaned token looks like a file path. Returns the cleaned path or null. */
+function matchPath(token: string): string | null {
+  if (token.length === 0) return null;
+  let t = token.replace(/^["'`]+|["'`]+$/g, "");
+  t = t.replace(/[.,;:!?)\]]+$/g, "");
+  if (t.length === 0) return null;
+  if (URL_SCHEME.test(t)) return null;
+  if (LEADING_DOT_SLASH.test(t)) return t;
+  if (LEADING_SLASH.test(t)) return t;
+  if (PATH_REGEX.test(t)) return t;
+  return null;
+}
+
+/** Inline clickable pill for a file path — opens it in the right sidebar. */
+function PathPill({ path, projectId }: { path: string; projectId: string }) {
+  const styles = useThemeStyles();
+  const isCodeLike = /\.(t|j)sx?$|\.py$|\.rs$|\.go$|\.sh$|\.json$|\.toml$|\.ya?ml$|\.xml$|\.html?$|\.css$|\.scss$|\.md$|\.txt$|\.vue$|\.svelte$/i.test(path);
+  const Icon = isCodeLike ? FileCode : File;
+  return (
+    <button
+      type="button"
+      onClick={() => useRightSidebarStore.getState().openFile(projectId, path)}
+      title={`Open ${path} in sidebar`}
+      className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-md font-mono text-[11.5px] transition-colors align-middle cursor-pointer"
+      style={{
+        background: withAlpha(styles.accent, styles.isDark ? 0.13 : 0.08),
+        color: styles.text,
+      }}
+      onMouseEnter={(e) => {
+        e.currentTarget.style.background = withAlpha(styles.accent, styles.isDark ? 0.22 : 0.16);
+      }}
+      onMouseLeave={(e) => {
+        e.currentTarget.style.background = withAlpha(styles.accent, styles.isDark ? 0.13 : 0.08);
+      }}
+    >
+      <Icon size={10} className="shrink-0" style={{ color: styles.accent }} />
+      {path}
+    </button>
+  );
+}
+
+/** Tokenize a plain-text segment by whitespace, render path-like tokens as
+ * clickable PathPills, the rest as plain spans. Preserves whitespace. */
+function renderPathAwareSegment(segment: string, projectId: string, keyPrefix: string): ReactNode[] {
+  if (segment.length === 0) return [];
+  const tokens = segment.split(/(\s+)/);
+  const out: ReactNode[] = [];
+  for (let i = 0; i < tokens.length; i++) {
+    const tok = tokens[i];
+    if (tok === "") continue;
+    if (/^\s+$/.test(tok)) {
+      out.push(<span key={`${keyPrefix}-ws-${i}`}>{tok}</span>);
+      continue;
+    }
+    const path = matchPath(tok);
+    if (path !== null) {
+      out.push(<PathPill key={`${keyPrefix}-p-${i}`} path={path} projectId={projectId} />);
+    } else {
+      out.push(<span key={`${keyPrefix}-t-${i}`}>{tok}</span>);
+    }
+  }
+  return out;
+}
+
+/** Original inline parser (bold + `code`) — used for non-code-block text.
+ * ROUND-40: also detects file-path-like tokens (bare OR inside `inline code`)
+ * and renders them as clickable PathPills. Fenced ``` blocks are NOT parsed
+ * (handled by CodeBlock upstream) — paths inside them stay as code text. */
+function RichTextInline({ content, projectId }: { content: string; projectId: string }) {
   const styles = useThemeStyles();
   const elements: ReactNode[] = [];
   const lines = content.split("\n");
@@ -285,20 +368,31 @@ function RichTextInline({ content }: { content: string }) {
         const codeParts = parts[j].split(/`(.*?)`/g);
         for (let k = 0; k < codeParts.length; k++) {
           if (k % 2 === 1) {
-            lineEl.push(
-              <code
-                key={`c-${i}-${j}-${k}`}
-                className="px-1.5 py-0.5 rounded-md text-[11.5px] font-mono"
-                style={{
-                  background: withAlpha(styles.accent, styles.isDark ? 0.13 : 0.08),
-                  color: styles.text,
-                }}
-              >
-                {codeParts[k]}
-              </code>,
-            );
+            // Inline code; if its content is a path, render as a PathPill
+            // (owner: "a path inside backticks should become a clickable path
+            // pill, which is fine").
+            const codeText = codeParts[k];
+            const codePath = matchPath(codeText);
+            if (codePath !== null) {
+              lineEl.push(<PathPill key={`pc-${i}-${j}-${k}`} path={codePath} projectId={projectId} />);
+            } else {
+              lineEl.push(
+                <code
+                  key={`c-${i}-${j}-${k}`}
+                  className="px-1.5 py-0.5 rounded-md text-[11.5px] font-mono"
+                  style={{
+                    background: withAlpha(styles.accent, styles.isDark ? 0.13 : 0.08),
+                    color: styles.text,
+                  }}
+                >
+                  {codeText}
+                </code>,
+              );
+            }
           } else if (codeParts[k]) {
-            lineEl.push(<span key={`s-${i}-${j}-${k}`}>{codeParts[k]}</span>);
+            for (const seg of renderPathAwareSegment(codeParts[k], projectId, `s-${i}-${j}-${k}`)) {
+              lineEl.push(seg);
+            }
           }
         }
       }
@@ -311,7 +405,7 @@ function RichTextInline({ content }: { content: string }) {
   return <>{elements}</>;
 }
 
-function RichText({ content }: { content: string }) {
+function RichText({ content, projectId }: { content: string; projectId: string }) {
   // Detect fenced code blocks (```...```) and render them as CodeBlock
   const codeBlockRegex = /```[a-zA-Z]*\n([\s\S]*?)```/g;
   const parts: ReactNode[] = [];
@@ -321,14 +415,14 @@ function RichText({ content }: { content: string }) {
   while ((match = codeBlockRegex.exec(content)) !== null) {
     // Render text before the code block
     if (match.index > lastIndex) {
-      parts.push(<RichTextInline key={`rt-${keyIdx++}`} content={content.slice(lastIndex, match.index)} />);
+      parts.push(<RichTextInline key={`rt-${keyIdx++}`} content={content.slice(lastIndex, match.index)} projectId={projectId} />);
     }
     parts.push(<CodeBlock key={`cb-${keyIdx++}`} code={match[1].trimEnd()} />);
     lastIndex = match.index + match[0].length;
   }
   // Render remaining text
   if (lastIndex < content.length) {
-    parts.push(<RichTextInline key={`rt-${keyIdx++}`} content={content.slice(lastIndex)} />);
+    parts.push(<RichTextInline key={`rt-${keyIdx++}`} content={content.slice(lastIndex)} projectId={projectId} />);
   }
   return <>{parts}</>;
 }
@@ -342,10 +436,14 @@ function RichText({ content }: { content: string }) {
 function AssistantTurn({
   item,
   sessionId,
+  projectId,
   collapseHint,
 }: {
   item: AssistantTurnItem;
   sessionId: string | null;
+  /** ROUND-40: threaded from AgentChatPanel so RichText + WorkingSection can
+   * open files / sub-agents in the right sidebar. */
+  projectId: string;
   /** R37 review #4: true when this turn JUST finished while the user
    * watched — it mounts collapsed ("Worked for Ns" + answer). */
   collapseHint?: boolean;
@@ -358,6 +456,7 @@ function AssistantTurn({
         <WorkingSection
           entries={item.working}
           sessionId={sessionId}
+          projectId={projectId}
           ts={item.ts}
           endTs={item.endTs}
           defaultOpen={collapseHint === true ? false : undefined}
@@ -367,7 +466,7 @@ function AssistantTurn({
       )}
       {item.finalText.trim() !== "" ? (
         <div className={`text-[13px] leading-[1.65] ${hasToolWork ? "mt-2" : ""}`} style={{ color: styles.text }}>
-          <RichText content={item.finalText} />
+          <RichText content={item.finalText} projectId={projectId} />
         </div>
       ) : null}
       <div className="flex items-center gap-1">
@@ -385,8 +484,8 @@ function AssistantTurn({
  * could skip it on React 19). The wrapper div is the presence child. */
 const MessageRenderer = forwardRef<
   HTMLDivElement,
-  { item: ProjectChatItem; sessionId: string | null; collapseHint?: boolean }
->(function MessageRenderer({ item, sessionId, collapseHint }, ref) {
+  { item: ProjectChatItem; sessionId: string | null; projectId: string; collapseHint?: boolean }
+>(function MessageRenderer({ item, sessionId, projectId, collapseHint }, ref) {
   switch (item.kind) {
     case "user":
       return (
@@ -397,7 +496,7 @@ const MessageRenderer = forwardRef<
     case "turn":
       return (
         <div ref={ref}>
-          <AssistantTurn item={item} sessionId={sessionId} collapseHint={collapseHint} />
+          <AssistantTurn item={item} sessionId={sessionId} projectId={projectId} collapseHint={collapseHint} />
         </div>
       );
   }
@@ -851,6 +950,7 @@ export function AgentChatPanel({
           key="live-section"
           entries={entries}
           sessionId={session?.id ?? null}
+          projectId={projectId}
           live
           startedAtMs={liveTurn.startedAtMs}
           stopped={liveTurn.stopped}
@@ -968,6 +1068,7 @@ export function AgentChatPanel({
                   key={itemKey(item)}
                   item={item}
                   sessionId={session?.id ?? null}
+                  projectId={projectId}
                   collapseHint={Date.now() - lastLiveEndRef.current < 5000}
                 />
               ))}
@@ -975,6 +1076,7 @@ export function AgentChatPanel({
                 <MessageRenderer
                   item={{ kind: "user", seq: -1, content: pendingEcho, ts: new Date().toISOString() }}
                   sessionId={null}
+                  projectId={projectId}
                 />
               ) : null}
             </AnimatePresence>
@@ -987,7 +1089,7 @@ export function AgentChatPanel({
                 {liveSection}
                 {liveTurn.streamText !== "" ? (
                   <div className={`text-[13px] leading-[1.65] ${liveTurn.working.length > 0 ? "mt-2" : ""}`} style={{ color: styles.text }}>
-                    <RichText content={liveTurn.streamText} />
+                    <RichText content={liveTurn.streamText} projectId={projectId} />
                     {streamBusy && !liveTurn.stopped ? (
                       <span
                         className="inline-block w-[7px] h-[14px] ml-0.5 align-middle rounded-sm ac-caret-blink"

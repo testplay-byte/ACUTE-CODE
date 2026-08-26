@@ -6,8 +6,9 @@ import tseslint from "typescript-eslint";
 export default tseslint.config(
   {
     // design/demos are the owner's reference mockups, not product code —
-    // they don't meet (and don't need to meet) our lint rules.
-    ignores: ["**/dist/**", "coverage/**", "src-tauri/target/**", "design/demos/**"],
+    // they don't meet (and don't need to meet) our lint rules. .dev/ holds
+    // local dev-session artifacts (gitignored) — don't let them break lint.
+    ignores: ["**/dist/**", "coverage/**", "src-tauri/target/**", "design/demos/**", ".dev/**"],
   },
   ...tseslint.configs.recommended,
   {

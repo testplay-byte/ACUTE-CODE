@@ -79,6 +79,16 @@ import {
   type Agent,
   type AgentInput,
 } from "./storage/agents.js";
+// ROUND-40: notifications (task complete/failed, permission requests,
+// sub-agent transitions). The bus is the in-process pub/sub; the storage
+// module is the durable SQLite record + REST read/mark-read surface.
+import { getNotificationBus } from "./lib/notification-bus.js";
+import {
+  countUnreadNotifications,
+  listNotifications,
+  markAllNotificationsRead,
+  markNotificationRead,
+} from "./storage/notifications.js";
 
 export const VERSION = "0.3.0";
 
@@ -1529,7 +1539,14 @@ export function buildServer(options: ServerOptions): FastifyInstance {
           "x-accel-buffering": "no",
           ...corsHeadersFor(request.headers.origin),
         });
+        // ROUND-40: track whether the turn did real work (tool calls). Pure
+        // conversational replies ("hello" → "hi there") should NOT fire a
+        // task_complete toast — only turns that used tools or ran sub-agents
+        // (subagent-event envelopes also count as work) count as a "task".
+        let didWork = false;
         const send = (event: unknown) => {
+          const e = event as { type?: string };
+          if (e.type === "tool-call" || e.type === "subagent-event") didWork = true;
           if (!res.writableEnded) res.write(`data: ${JSON.stringify(event)}\n\n`);
         };
         const abort = new AbortController();
@@ -1544,8 +1561,32 @@ export function buildServer(options: ServerOptions): FastifyInstance {
           abort.signal,
         );
         if (outcome.ok) {
+          // ROUND-40: fire a task_complete notification when the turn did
+          // real work (tool calls / sub-agent delegation). The owner: "send
+          // notifications to the user on various occasions, like after
+          // completing the task". Pure conversational replies stay quiet.
+          if (didWork) {
+            const session = getSession(db, id);
+            getNotificationBus().publish(db, {
+              kind: "task_complete",
+              title: session?.title ?? "Task complete",
+              body: outcome.assistantMessage.content.slice(0, 160),
+              sessionId: id,
+              projectId: session?.projectId ?? undefined,
+            });
+          }
           send({ type: "done", assistantMessage: outcome.assistantMessage, usage: outcome.usage });
         } else {
+          // ROUND-40: failures always notify (the owner wants to know when a
+          // task fails, regardless of whether it did work first).
+          const session = getSession(db, id);
+          getNotificationBus().publish(db, {
+            kind: "task_failed",
+            title: session?.title ?? "Task failed",
+            body: outcome.message,
+            sessionId: id,
+            projectId: session?.projectId ?? undefined,
+          });
           send({
             type: "error",
             status: outcome.status,
@@ -1574,6 +1615,74 @@ export function buildServer(options: ServerOptions): FastifyInstance {
           days = parsed;
         }
         return getUsageSummary(db, { days });
+      });
+
+      // ---- ROUND-40: notifications (task complete/failed, permission
+      // requests, sub-agent transitions). The owner: "add notification
+      // functionality. Our project will send notifications to the user on
+      // various occasions, like after completing the task, after it fails the
+      // task, after requesting a permission, and various other things." ----
+
+      // List notifications (newest first). ?unread=1 filters to unread;
+      // ?limit=N (default 50, capped 200) bounds the page.
+      scope.get("/notifications", async (request) => {
+        const query = request.query as Record<string, string | undefined>;
+        const unreadOnly = query.unread === "1" || query.unread === "true";
+        let limit = 50;
+        if (query.limit !== undefined) {
+          const parsed = Number(query.limit);
+          if (!Number.isInteger(parsed) || parsed < 1) {
+            return { notifications: listNotifications(db, { unreadOnly, limit: 50 }), unread: countUnreadNotifications(db) };
+          }
+          limit = parsed;
+        }
+        return {
+          notifications: listNotifications(db, { unreadOnly, limit }),
+          unread: countUnreadNotifications(db),
+        };
+      });
+
+      // Mark one notification read (POST per the uniform-verb convention; the
+      // body is empty — the id is the path param).
+      scope.post("/notifications/:id/read", async (request, reply) => {
+        const { id } = request.params as Record<string, string>;
+        const updated = markNotificationRead(db, id);
+        if (!updated) {
+          return reply.code(404).send(errorBody("NOT_FOUND", `no unread notification with id ${id}`));
+        }
+        return { ok: true, unread: countUnreadNotifications(db) };
+      });
+
+      // Mark every unread notification read (the bell's "clear all" action).
+      scope.post("/notifications/read-all", async () => {
+        const cleared = markAllNotificationsRead(db);
+        return { ok: true, cleared, unread: 0 };
+      });
+
+      // Live SSE stream: one global channel. The browser opens it once on app
+      // boot (fetch + ReadableStream — EventSource can't set the Authorization
+      // header, so we use the same fetch-stream pattern as the message
+      // stream). Each published notification is pushed as a `data:` frame.
+      scope.get("/notifications/stream", async (request, reply) => {
+        reply.hijack();
+        const res = reply.raw;
+        res.writeHead(200, {
+          "content-type": "text/event-stream; charset=utf-8",
+          "cache-control": "no-cache, no-transform",
+          connection: "keep-alive",
+          "x-accel-buffering": "no",
+          ...corsHeadersFor(request.headers.origin),
+        });
+        // Send an initial hello so the client knows the stream is live (and
+        // can render the bell badge from the first unread count).
+        const hello = { type: "hello", unread: countUnreadNotifications(db) };
+        res.write(`data: ${JSON.stringify(hello)}\n\n`);
+        const unsubscribe = getNotificationBus().subscribe((n) => {
+          if (!res.writableEnded) res.write(`data: ${JSON.stringify(n)}\n\n`);
+        });
+        res.on("close", () => unsubscribe());
+        // Hold the reply open until the client disconnects. Fastify's hijack
+        // means we never call reply.send; the SSE stream lives until close.
       });
     },
     { prefix: "/api/v1" },

@@ -1,5 +1,5 @@
 import { useState, type FormEvent } from "react";
-import { ArrowLeft, ArrowRight, Globe, RotateCw, ExternalLink } from "lucide-react";
+import { ArrowLeft, ArrowRight, Globe, RotateCw, PanelTopOpen } from "lucide-react";
 import { useRightSidebarStore, type RightSidebarTab } from "../../lib/right-sidebar-store";
 import { useThemeStyles } from "../../lib/use-theme-styles";
 
@@ -19,9 +19,12 @@ import { useThemeStyles } from "../../lib/use-theme-styles";
  * iframe storage + many sites block framing via X-Frame-Options). The native
  * shell wiring (src-tauri) is the production path; this panel is the
  * functional UI + per-tab history that the native webview mounts into. The
- * "Open in app browser" button (Phase H) launches a separate persistent
- * Tauri WebviewWindow when available — falls back to the system browser
- * when not.
+ * "Open in browser" button (ROUND-40) launches a separate persistent
+ * Tauri WebviewWindow — the native window is the ONLY browser path; if the
+ * invoke is unavailable (plain Vite preview / capability missing), an inline
+ * error is surfaced and the panel deliberately does NOT fall through to the
+ * system browser (that path leaked to Microsoft Edge via Tauri's window.open
+ * interception).
  */
 function normalizeUrl(raw: string): string {
   const trimmed = raw.trim();
@@ -44,6 +47,11 @@ export function BrowserPanel({ projectId, tab }: { projectId: string; tab: Right
   const [histIdx, setHistIdx] = useState(0);
   const [draft, setDraft] = useState(browserUrl ?? "");
   const [iframeKey, setIframeKey] = useState(0);
+  // ROUND-40: when the native acute-browser window can't be opened (running in
+  // plain Vite, capability missing, or invoke throws), surface an inline
+  // error in the panel. We deliberately DO NOT fall through to window.open —
+  // that path was the Edge leak the owner flagged.
+  const [browserError, setBrowserError] = useState<string | null>(null);
 
   const go = (raw: string) => {
     const url = normalizeUrl(raw);
@@ -51,6 +59,7 @@ export function BrowserPanel({ projectId, tab }: { projectId: string; tab: Right
     setBrowserUrl(projectId, tabId, url);
     setHistIdx(0);
     setDraft(url);
+    setBrowserError(null);
   };
 
   const onBack = () => {
@@ -71,24 +80,30 @@ export function BrowserPanel({ projectId, tab }: { projectId: string; tab: Right
   };
   const onReload = () => setIframeKey((k) => k + 1);
 
-  // ROUND-39 Phase H: launch a separate persistent Tauri WebviewWindow for
-  // this URL (cookies/login state survive across launches). The Tauri API is
-  // only available in the native shell; in the dev (vite-only) preview the
-  // button is a no-op (graceful fallback).
+  // ROUND-40: open the URL in the persistent native `acute-browser` window
+  // (separate Chromium profile → isolated cookies/logins from system Edge).
+  // This is the ONLY browser path. If the invoke is unavailable (plain Vite
+  // preview) or throws (capability missing), we surface an inline error in the
+  // panel — we DO NOT fall through to window.open, because Tauri v2
+  // intercepts window.open(_blank) → OS default browser → Microsoft Edge,
+  // which is exactly the leak the owner reported.
   const onOpenAppBrowser = async () => {
     const url = browserUrl ?? normalizeUrl(draft);
     if (url === "") return;
+    setBrowserError(null);
     const w = (window as unknown as { __TAURI__?: { core?: { invoke?: (cmd: string, args?: unknown) => Promise<unknown> } } }).__TAURI__?.core;
-    if (w?.invoke) {
-      try {
-        await w.invoke("open_browser_window", { url });
-        return;
-      } catch (err) {
-        // Fall through to window.open.
-        console.warn("open_browser_window failed:", err);
-      }
+    if (!w?.invoke) {
+      console.warn("open_browser_window: not in Tauri shell (window.__TAURI__.core.invoke missing)");
+      setBrowserError("Embedded browser is only available in the Tauri desktop app.");
+      return;
     }
-    window.open(url, "_blank", "noopener,noreferrer");
+    try {
+      await w.invoke("open_browser_window", { url });
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      console.warn("open_browser_window failed:", err);
+      setBrowserError(`Embedded browser is only available in the Tauri desktop app. (${msg})`);
+    }
   };
 
   const onSubmit = (e: FormEvent) => {
@@ -159,21 +174,47 @@ export function BrowserPanel({ projectId, tab }: { projectId: string; tab: Right
             />
           </div>
         </form>
-        {/* ROUND-39 Phase H: launch the persistent in-app browser (separate
-            Tauri WebviewWindow with its own cookies/login state). Falls back
-            to the system browser in the dev (vite-only) preview. */}
+        {/* ROUND-40: PRIMARY action — open the persistent native
+            `acute-browser` window (isolated Chromium profile, persistent
+            logins). The inline iframe below is a secondary preview only. */}
         <button
           onClick={onOpenAppBrowser}
-          aria-label="Open in app browser"
-          title="Open in app browser (persistent logins)"
-          className="w-6 h-6 grid place-items-center rounded-md transition-colors shrink-0"
-          style={{ color: styles.textSecondary }}
-          onMouseEnter={(e) => (e.currentTarget.style.background = styles.subtleHover)}
-          onMouseLeave={(e) => (e.currentTarget.style.background = "transparent")}
+          aria-label="Open in browser"
+          title="Open in browser (persistent logins, isolated profile)"
+          className="shrink-0 flex items-center gap-1 h-7 px-2.5 rounded-full text-[11px] font-medium transition-colors"
+          style={{
+            color: styles.isDark ? "#fff" : styles.card,
+            background: styles.isDark ? styles.text : styles.textSecondary,
+          }}
         >
-          <ExternalLink size={12} />
+          <PanelTopOpen size={12} />
+          <span>Open in browser</span>
         </button>
       </div>
+
+      {/* ROUND-40: inline error surface — shown when the native window can't
+          be opened (running outside the Tauri shell, capability missing, or
+          invoke threw). We deliberately do NOT fall through to window.open. */}
+      {browserError !== null && (
+        <div
+          className="shrink-0 flex items-start gap-2 px-3 py-2 text-[11px] border-b"
+          style={{
+            background: styles.isDark ? "rgba(220,38,38,0.12)" : "rgba(254,226,226,1)",
+            color: styles.isDark ? "#fca5a5" : "#b91c1c",
+            borderColor: styles.border,
+          }}
+        >
+          <span className="flex-1">{browserError}</span>
+          <button
+            onClick={() => setBrowserError(null)}
+            aria-label="Dismiss"
+            className="shrink-0 opacity-60 hover:opacity-100"
+            style={{ color: "inherit" }}
+          >
+            ×
+          </button>
+        </div>
+      )}
 
       {/* Viewport */}
       <div className="flex-1 min-h-0 relative" style={{ background: "#fff" }}>

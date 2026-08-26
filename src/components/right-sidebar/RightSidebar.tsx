@@ -1,4 +1,5 @@
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import { motion, AnimatePresence } from "framer-motion";
 import {
   Bot,
@@ -92,6 +93,43 @@ export function RightSidebar({
   const subs: SubAgentStatus[] = subAgentsQuery.data ?? [];
   const hasSubs = subs.length > 0;
 
+  // ROUND-40 (owner: "+ dropdown must overlay below the tab bar, not render
+  // inside it forcing scroll"). The QuickMenu / SubAgentPicker popovers are
+  // now portaled to document.body and positioned fixed below the "+"
+  // button. This escapes ALL overflow clipping (the tab strip's
+  // overflow-x-auto AND the sidebar shell's overflow-hidden). Position is
+  // computed from the "+" button's bounding rect on open and refreshed on
+  // window resize / scroll (capture phase so any scroller anywhere updates
+  // the anchor).
+  const plusBtnRef = useRef<HTMLButtonElement>(null);
+  const [popoverPos, setPopoverPos] = useState<{ top: number; left: number } | null>(null);
+  const updatePopoverPos = useCallback(() => {
+    if (!plusBtnRef.current) return;
+    const r = plusBtnRef.current.getBoundingClientRect();
+    setPopoverPos({ top: r.bottom + 4, left: r.left });
+  }, []);
+  useEffect(() => {
+    if (!quickMenuOpen && subAgentPickerFor === null) return;
+    updatePopoverPos();
+    const onWin = () => updatePopoverPos();
+    window.addEventListener("resize", onWin);
+    window.addEventListener("scroll", onWin, true);
+    return () => {
+      window.removeEventListener("resize", onWin);
+      window.removeEventListener("scroll", onWin, true);
+    };
+  }, [quickMenuOpen, subAgentPickerFor, updatePopoverPos]);
+  // Shared opener used by both the tab-strip "+" button and the EmptyState's
+  // big "+" button. Computes the anchor synchronously so the first paint
+  // of the popover is already correctly positioned (no flash at 0,0).
+  const openQuickMenu = useCallback(() => {
+    if (plusBtnRef.current) {
+      const r = plusBtnRef.current.getBoundingClientRect();
+      setPopoverPos({ top: r.bottom + 4, left: r.left });
+    }
+    setQuickMenuOpen(true);
+  }, []);
+
   if (!open) {
     // Collapsed rail — a reopen button.
     return (
@@ -122,167 +160,206 @@ export function RightSidebar({
       className="shrink-0 flex flex-col overflow-hidden rounded-2xl"
       style={{ background: styles.card, border: `1.5px solid ${styles.border}` }}
     >
-      {/* ── Browser-style tab strip ── */}
-      <div
-        className="shrink-0 flex items-stretch gap-0.5 h-10 border-b overflow-x-auto"
-        style={{
-          borderColor: styles.border,
-          background: styles.isDark ? "rgba(0,0,0,0.12)" : styles.subtle,
-          scrollbarWidth: "thin",
-        }}
-      >
-        {state.tabs.map((tab) => {
-          const active = tab.id === state.activeTabId;
-          const Icon = TAB_ICON[tab.type];
-          const iconColor =
-            tab.type === "subagent" && tab.subRole
-              ? ROLE_COLORS[tab.subRole] ?? styles.accent
-              : active
-                ? styles.accent
-                : styles.textTertiary;
-          return (
-            <div
-              key={tab.id}
-              role="tab"
-              tabIndex={0}
-              aria-selected={active}
-              onClick={() => setActiveTab(projectId, tab.id)}
-              onKeyDown={(e) => {
-                if (e.key === "Enter" || e.key === " ") {
-                  e.preventDefault();
-                  setActiveTab(projectId, tab.id);
-                }
-              }}
-              className="group relative flex items-center gap-1.5 pl-2.5 pr-1.5 h-full min-w-[120px] max-w-[180px] cursor-pointer transition-colors shrink-0"
-              style={{
-                background: active ? styles.card : "transparent",
-                color: active ? styles.text : styles.textSecondary,
-                borderBottom: active ? `2px solid ${styles.accent}` : `2px solid transparent`,
-              }}
-              onMouseEnter={(e) => {
-                if (!active) e.currentTarget.style.background = styles.subtleHover;
-              }}
-              onMouseLeave={(e) => {
-                if (!active) e.currentTarget.style.background = "transparent";
-              }}
-              title={tab.title}
-            >
-              <Icon size={13} style={{ color: iconColor }} className="shrink-0" />
-              <span className="flex-1 min-w-0 truncate text-[11px] font-medium">
-                {tab.title}
-              </span>
-              <button
-                onClick={(e) => {
-                  e.stopPropagation();
-                  closeTab(projectId, tab.id);
+      {/* ── Browser-style tab strip header ──
+          ROUND-40 (owner: "+ dropdown must overlay below the tab bar, not
+          render inside it forcing scroll; collapse button must ALWAYS be
+          visible top-right, nothing overlaps it"). The header is now a
+          relative wrapper around (a) the overflow-x-auto tab strip (tabs +
+          "+" only) and (b) the absolutely-positioned collapse button
+          (never scrolled). The QuickMenu / SubAgentPicker popovers are
+          portaled to document.body so they escape the tab strip's
+          overflow-x-auto clipping entirely; they anchor below the "+"
+          button via its bounding rect. */}
+      <div className="relative shrink-0">
+        {/* Scrollable tab strip — tabs + "+" only. pr-9 reserves room on
+            the right so the absolutely-positioned collapse button never
+            covers a tab's close X. */}
+        <div
+          className="flex items-stretch gap-0.5 h-10 border-b overflow-x-auto pr-9"
+          style={{
+            borderColor: styles.border,
+            background: styles.isDark ? "rgba(0,0,0,0.12)" : styles.subtle,
+            scrollbarWidth: "thin",
+          }}
+        >
+          {state.tabs.map((tab) => {
+            const active = tab.id === state.activeTabId;
+            const Icon = TAB_ICON[tab.type];
+            const iconColor =
+              tab.type === "subagent" && tab.subRole
+                ? ROLE_COLORS[tab.subRole] ?? styles.accent
+                : active
+                  ? styles.accent
+                  : styles.textTertiary;
+            return (
+              <div
+                key={tab.id}
+                role="tab"
+                tabIndex={0}
+                aria-selected={active}
+                onClick={() => setActiveTab(projectId, tab.id)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter" || e.key === " ") {
+                    e.preventDefault();
+                    setActiveTab(projectId, tab.id);
+                  }
                 }}
-                aria-label={`Close ${tab.title}`}
-                title="Close tab"
-                className="w-5 h-5 grid place-items-center rounded shrink-0 transition-colors"
-                style={{ color: styles.textTertiary }}
+                className="group relative flex items-center gap-1.5 pl-2.5 pr-1.5 h-full min-w-[120px] max-w-[180px] cursor-pointer transition-colors shrink-0"
+                style={{
+                  background: active ? styles.card : "transparent",
+                  color: active ? styles.text : styles.textSecondary,
+                  borderBottom: active ? `2px solid ${styles.accent}` : `2px solid transparent`,
+                }}
                 onMouseEnter={(e) => {
-                  e.currentTarget.style.background = withAlpha(styles.accent, 0.12);
-                  e.currentTarget.style.color = styles.text;
+                  if (!active) e.currentTarget.style.background = styles.subtleHover;
                 }}
                 onMouseLeave={(e) => {
+                  if (!active) e.currentTarget.style.background = "transparent";
+                }}
+                title={tab.title}
+              >
+                <Icon size={13} style={{ color: iconColor }} className="shrink-0" />
+                <span className="flex-1 min-w-0 truncate text-[11px] font-medium">
+                  {tab.title}
+                </span>
+                <button
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    closeTab(projectId, tab.id);
+                  }}
+                  aria-label={`Close ${tab.title}`}
+                  title="Close tab"
+                  className="w-5 h-5 grid place-items-center rounded shrink-0 transition-colors"
+                  style={{ color: styles.textTertiary }}
+                  onMouseEnter={(e) => {
+                    e.currentTarget.style.background = withAlpha(styles.accent, 0.12);
+                    e.currentTarget.style.color = styles.text;
+                  }}
+                  onMouseLeave={(e) => {
+                    e.currentTarget.style.background = "transparent";
+                    e.currentTarget.style.color = styles.textTertiary;
+                  }}
+                >
+                  <X size={11} />
+                </button>
+              </div>
+            );
+          })}
+
+          {/* + button (opens the quick menu). Stays inside the scroll strip
+              so it scrolls with the tabs (browser-style). The popovers it
+              opens are portaled out (below). */}
+          <div className="relative shrink-0">
+            <button
+              ref={plusBtnRef}
+              onClick={() => {
+                if (!quickMenuOpen && plusBtnRef.current) {
+                  const r = plusBtnRef.current.getBoundingClientRect();
+                  setPopoverPos({ top: r.bottom + 4, left: r.left });
+                }
+                setQuickMenuOpen((v) => !v);
+              }}
+              aria-label="New tab"
+              title="New tab"
+              className="w-8 h-full grid place-items-center transition-colors"
+              style={{
+                color: quickMenuOpen ? styles.accent : styles.textTertiary,
+                background: quickMenuOpen ? withAlpha(styles.accent, 0.12) : "transparent",
+              }}
+              onMouseEnter={(e) => {
+                if (!quickMenuOpen) {
+                  e.currentTarget.style.background = styles.subtleHover;
+                  e.currentTarget.style.color = styles.text;
+                }
+              }}
+              onMouseLeave={(e) => {
+                if (!quickMenuOpen) {
                   e.currentTarget.style.background = "transparent";
                   e.currentTarget.style.color = styles.textTertiary;
-                }}
-              >
-                <X size={11} />
-              </button>
-            </div>
-          );
-        })}
-
-        {/* + button (opens the quick menu). */}
-        <div className="relative shrink-0">
-          <button
-            onClick={() => setQuickMenuOpen((v) => !v)}
-            aria-label="New tab"
-            title="New tab"
-            className="w-8 h-full grid place-items-center transition-colors"
-            style={{
-              color: quickMenuOpen ? styles.accent : styles.textTertiary,
-              background: quickMenuOpen ? withAlpha(styles.accent, 0.12) : "transparent",
-            }}
-            onMouseEnter={(e) => {
-              if (!quickMenuOpen) {
-                e.currentTarget.style.background = styles.subtleHover;
-                e.currentTarget.style.color = styles.text;
-              }
-            }}
-            onMouseLeave={(e) => {
-              if (!quickMenuOpen) {
-                e.currentTarget.style.background = "transparent";
-                e.currentTarget.style.color = styles.textTertiary;
-              }
-            }}
-          >
-            <Plus size={14} />
-          </button>
-          <AnimatePresence>
-            {quickMenuOpen ? (
-              <QuickMenu
-                styles={styles}
-                hasSubs={hasSubs}
-                onPick={(type) => {
-                  setQuickMenuOpen(false);
-                  if (type === "file") {
-                    requestFilePicker();
-                  } else if (type === "browser") {
-                    openBrowser(projectId, null);
-                  } else if (type === "terminal") {
-                    openTerminal(projectId);
-                  } else if (type === "subagent") {
-                    setSubAgentPickerFor("subagent");
-                  }
-                }}
-                onClose={() => setQuickMenuOpen(false)}
-              />
-            ) : null}
-          </AnimatePresence>
-          <AnimatePresence>
-            {subAgentPickerFor !== null ? (
-              <SubAgentPicker
-                styles={styles}
-                subs={subs}
-                onPick={(sub) => {
-                  setSubAgentPickerFor(null);
-                  if (sessionId !== null) {
-                    openSubAgent(
-                      projectId,
-                      sessionId,
-                      sub.id,
-                      sub.title ?? "Sub-agent",
-                      sub.subRole ?? undefined,
-                    );
-                  }
-                }}
-                onClose={() => setSubAgentPickerFor(null)}
-              />
-            ) : null}
-          </AnimatePresence>
+                }
+              }}
+            >
+              <Plus size={14} />
+            </button>
+          </div>
         </div>
 
-        <span className="flex-1 min-w-[8px]" />
+        {/* Collapse button — ALWAYS visible top-right, never inside the
+            scrollable strip, z above the portaled popovers (z-50) so nothing
+            overlaps it. */}
         <button
           onClick={() => toggleOpen(projectId)}
           aria-label="Collapse right sidebar"
           title="Collapse"
-          className="w-7 self-center grid place-items-center rounded-lg transition-colors shrink-0"
+          className="absolute top-1 right-1.5 z-[60] w-7 grid place-items-center rounded-lg transition-colors"
           style={{ color: styles.textTertiary, height: "28px" }}
           onMouseEnter={(e) => (e.currentTarget.style.background = styles.subtleHover)}
           onMouseLeave={(e) => (e.currentTarget.style.background = "transparent")}
         >
           <PanelRightClose size={13} />
         </button>
+
+        {/* Popovers portaled to document.body — escape ALL overflow clipping
+            (overflow-x-auto on the tab strip + overflow-hidden on the sidebar
+            shell). Anchored below the "+" button via its bounding rect;
+            refreshed on window resize/scroll. */}
+        {popoverPos !== null && typeof document !== "undefined"
+          ? createPortal(
+              <>
+                <AnimatePresence>
+                  {quickMenuOpen ? (
+                    <QuickMenu
+                      styles={styles}
+                      hasSubs={hasSubs}
+                      anchor={popoverPos}
+                      onPick={(type) => {
+                        setQuickMenuOpen(false);
+                        if (type === "file") {
+                          requestFilePicker();
+                        } else if (type === "browser") {
+                          openBrowser(projectId, null);
+                        } else if (type === "terminal") {
+                          openTerminal(projectId);
+                        } else if (type === "subagent") {
+                          setSubAgentPickerFor("subagent");
+                        }
+                      }}
+                      onClose={() => setQuickMenuOpen(false)}
+                    />
+                  ) : null}
+                </AnimatePresence>
+                <AnimatePresence>
+                  {subAgentPickerFor !== null ? (
+                    <SubAgentPicker
+                      styles={styles}
+                      subs={subs}
+                      anchor={popoverPos}
+                      onPick={(sub) => {
+                        setSubAgentPickerFor(null);
+                        if (sessionId !== null) {
+                          openSubAgent(
+                            projectId,
+                            sessionId,
+                            sub.id,
+                            sub.title ?? "Sub-agent",
+                            sub.subRole ?? undefined,
+                          );
+                        }
+                      }}
+                      onClose={() => setSubAgentPickerFor(null)}
+                    />
+                  ) : null}
+                </AnimatePresence>
+              </>,
+              document.body,
+            )
+          : null}
       </div>
 
       {/* ── Active panel ── */}
       <div className="flex-1 min-h-0 overflow-hidden">
         {activeTab === null ? (
-          <EmptyState styles={styles} onNewTab={() => setQuickMenuOpen(true)} />
+          <EmptyState styles={styles} onNewTab={openQuickMenu} />
         ) : activeTab.type === "file" ? (
           <FileViewerPanel projectId={projectId} tab={activeTab} />
         ) : activeTab.type === "terminal" ? (
@@ -303,11 +380,17 @@ export function RightSidebar({
 function QuickMenu({
   styles,
   hasSubs,
+  anchor,
   onPick,
   onClose,
 }: {
   styles: ReturnType<typeof useThemeStyles>;
   hasSubs: boolean;
+  /** Viewport-relative anchor (top-left of the popover), computed from
+   * the "+" button's bounding rect by the parent and refreshed on
+   * window resize/scroll. The popover is portaled to document.body so
+   * this is a fixed position. */
+  anchor: { top: number; left: number };
   onPick: (type: RightSidebarTabType) => void;
   onClose: () => void;
 }) {
@@ -346,8 +429,10 @@ function QuickMenu({
       animate={{ opacity: 1, y: 0, scale: 1 }}
       exit={{ opacity: 0, y: -4, scale: 0.97 }}
       transition={{ duration: 0.14, ease }}
-      className="absolute top-full left-0 mt-1 z-50 w-[220px] rounded-xl border p-1.5"
+      className="fixed z-50 w-[220px] rounded-xl border p-1.5"
       style={{
+        top: anchor.top,
+        left: anchor.left,
         background: styles.card,
         borderColor: styles.border,
         boxShadow: styles.softShadow,
@@ -388,11 +473,15 @@ function QuickMenu({
 function SubAgentPicker({
   styles,
   subs,
+  anchor,
   onPick,
   onClose,
 }: {
   styles: ReturnType<typeof useThemeStyles>;
   subs: SubAgentStatus[];
+  /** Viewport-relative anchor (top-left of the popover), computed from
+   * the "+" button's bounding rect by the parent. */
+  anchor: { top: number; left: number };
   onPick: (sub: SubAgentStatus) => void;
   onClose: () => void;
 }) {
@@ -418,8 +507,10 @@ function SubAgentPicker({
       animate={{ opacity: 1, y: 0, scale: 1 }}
       exit={{ opacity: 0, y: -4, scale: 0.97 }}
       transition={{ duration: 0.14, ease }}
-      className="absolute top-full left-0 mt-1 z-50 w-[260px] max-h-[300px] overflow-y-auto rounded-xl border p-1.5"
+      className="fixed z-50 w-[260px] max-h-[300px] overflow-y-auto rounded-xl border p-1.5"
       style={{
+        top: anchor.top,
+        left: anchor.left,
         background: styles.card,
         borderColor: styles.border,
         boxShadow: styles.softShadow,

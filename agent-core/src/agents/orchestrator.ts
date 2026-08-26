@@ -24,6 +24,9 @@ import { getOrchestrationSettings } from "../storage/settings.js";
 import { ProviderKeyring } from "../providers/registry.js";
 import { runSingleAgentTurn } from "./runtime.js";
 import type { TurnDeps } from "./runtime.js";
+// ROUND-40: sub-agent transitions publish app-level notifications so the user
+// sees when a delegated task completes or fails (even if they navigated away).
+import { getNotificationBus } from "../lib/notification-bus.js";
 
 export type SqliteDatabase = Database.Database;
 
@@ -195,7 +198,13 @@ class Orchestrator {
     parentSessionId: string,
     task: string,
     role: SubRole,
-    emit?: (event: SubAgentEventPayload) => void,
+    /** ROUND-40: widened from (SubAgentEventPayload) => void to
+     * (unknown) => void so the SAME channel can carry both subagent-status
+     * envelopes (queued/running/completed/failed) AND subagent-event
+     * envelopes wrapping the child's live tool/text events. The parent's
+     * SSE emit already accepts unknown; this just stops artificially
+     * narrowing it. */
+    emit?: (event: unknown) => void,
   ): Promise<{ ok: boolean; output: string; sessionId?: string }> {
     const { db, keyring, chat } = deps;
     const parent = getSession(db, parentSessionId);
@@ -250,21 +259,48 @@ class Orchestrator {
 
     try {
       const framing = ROLE_FRAMING[role];
-      // ROUND-39 (owner: "sub-agents were only able to respond one time"):
-      // the prompt now mandates tool iteration + todo tracking + only
-      // producing a final report when work is genuinely complete. The old
-      // "Complete this task now using your tools. When finished, reply with a
-      // concise report" framing let the model write a one-shot text reply
-      // describing the first step — never actually calling tools.
+      // ROUND-40 (owner: "sub-agents should be highly capable and reliable,
+      // just like the original agent"). Three fixes shipped together:
+      //  1. The child now receives a FULL tool set (ALL tools minus
+      //     delegate_task) — see runtime.ts ROUND-40. Previously the default
+      //     agent's [] allowlist tripped a ["__none__"] sentinel that stripped
+      //     every tool, so the child could only write a one-shot text reply.
+      //  2. The child's system-prompt toolNames now matches its real tool set.
+      //  3. LIVE FORWARDING: we wrap the parent's emit so every child
+      //     tool-call / tool-result / text-delta / continuation event rides
+      //     the parent's SSE channel as a `subagent-event` envelope. The
+      //     parent UI can now watch the child work in real time (tool calls
+      //     appearing as they happen, intermediate + final text), not just
+      //     the final status poll. This is the "manage them properly / make
+      //     them function properly" the owner asked for.
+      const wrappedEmit = emit
+        ? (event: unknown) =>
+            emit({
+              type: "subagent-event",
+              sessionId: child.id,
+              parentSessionId,
+              inner: event,
+            })
+        : undefined;
       const outcome = await runSingleAgentTurn(
         { db, keyring: childKeyring, chat },
         child.id,
         `${framing}\n${renderTaskPrompt(task)}`,
+        undefined,
+        wrappedEmit,
       );
       if (outcome.ok) {
         setSessionStatus(db, child.id, "completed");
         const progress = this.progressOf(db, child.id);
         status("completed", progress);
+        // ROUND-40: notify the user the delegated task finished.
+        getNotificationBus().publish(db, {
+          kind: "subagent_complete",
+          title: `Sub-agent (${role}) completed`,
+          body: task.slice(0, 120),
+          sessionId: child.id,
+          projectId: parent.projectId ?? undefined,
+        });
         // ROUND-39: real newlines (the old `\\n` produced literal "\n" text
         // in the parent's view of the sub-agent's report).
         return {
@@ -275,6 +311,14 @@ class Orchestrator {
       }
       setSessionStatus(db, child.id, "failed");
       status("failed");
+      // ROUND-40: notify the user the delegated task failed.
+      getNotificationBus().publish(db, {
+        kind: "subagent_failed",
+        title: `Sub-agent (${role}) failed`,
+        body: outcome.message.slice(0, 160),
+        sessionId: child.id,
+        projectId: parent.projectId ?? undefined,
+      });
       return {
         ok: false,
         output: `[subagent session: ${child.id} | role: ${role}]\nSub-agent failed: ${outcome.message}`,
@@ -295,7 +339,8 @@ class Orchestrator {
     deps: TurnDeps,
     parentSessionId: string,
     childId: string,
-    emit?: (event: SubAgentEventPayload) => void,
+    /** ROUND-40: widened to (unknown) => void (see delegateTask). */
+    emit?: (event: unknown) => void,
   ): Promise<{ ok: boolean; message: string }> {
     const { db, keyring, chat } = deps;
     const child = getSession(db, childId);
@@ -345,14 +390,40 @@ class Orchestrator {
     status("running");
     setSessionStatus(db, childId, "running");
     try {
-      const outcome = await runSingleAgentTurn({ db, keyring: childKeyring, chat }, childId, content);
+      // ROUND-40: same live-forwarding as delegateTask — wrap the parent's
+      // emit so the retried child's tool/text events ride the SSE channel.
+      const wrappedEmit = emit
+        ? (event: unknown) =>
+            emit({
+              type: "subagent-event",
+              sessionId: childId,
+              parentSessionId,
+              inner: event,
+            })
+        : undefined;
+      const outcome = await runSingleAgentTurn({ db, keyring: childKeyring, chat }, childId, content, undefined, wrappedEmit);
       if (outcome.ok) {
         setSessionStatus(db, childId, "completed");
         status("completed");
+        // ROUND-40: retry-completion also notifies.
+        getNotificationBus().publish(db, {
+          kind: "subagent_complete",
+          title: `Sub-agent (${role}) completed`,
+          body: (child.title ?? "the assigned task").slice(0, 120),
+          sessionId: childId,
+          projectId: child.projectId ?? undefined,
+        });
         return { ok: true, message: "sub-agent completed" };
       }
       setSessionStatus(db, childId, "failed");
       status("failed");
+      getNotificationBus().publish(db, {
+        kind: "subagent_failed",
+        title: `Sub-agent (${role}) failed`,
+        body: outcome.message.slice(0, 160),
+        sessionId: childId,
+        projectId: child.projectId ?? undefined,
+      });
       return { ok: false, message: outcome.message };
     } finally {
       this.releaseSlot(providerId, slot, childId);

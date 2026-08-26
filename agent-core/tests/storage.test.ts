@@ -117,6 +117,9 @@ describe("openDatabase", () => {
       { version: 8, name: "0008_subagents.sql" },
       { version: 9, name: "0009_approvals.sql" },
       { version: 10, name: "0010_provider_tombstones.sql" },
+      // ROUND-40: app-level notifications (task complete/failed, permission
+      // requests, sub-agent transitions).
+      { version: 11, name: "0011_notifications.sql" },
     ]);
     expect(appliedSecond).toEqual(appliedFirst);
   });

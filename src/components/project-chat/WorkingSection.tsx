@@ -523,10 +523,14 @@ function ApprovalRow({
 function ToolLine({
   tool,
   sessionId,
+  projectId,
   live = false,
 }: {
   tool: ToolUseEntry;
   sessionId: string | null;
+  /** ROUND-40: threaded from WorkingSection so DelegateDetail → SubAgentCard
+   * can open the sub-agent's tab in the right sidebar. */
+  projectId: string;
   live?: boolean;
 }) {
   const styles = useThemeStyles();
@@ -608,7 +612,7 @@ function ToolLine({
       {open && (
         <div className="mt-0.5 mb-1 pl-4 min-w-0">
           {tool.toolName === "delegate_task" ? (
-            <DelegateDetail tool={tool} sessionId={sessionId} live={live} />
+            <DelegateDetail tool={tool} sessionId={sessionId} live={live} projectId={projectId} />
           ) : DIFF_TOOLS.has(tool.toolName) ? (
             <DiffDetail tool={tool} sessionId={sessionId} />
           ) : tool.toolName === "run_command" ? (
@@ -622,14 +626,18 @@ function ToolLine({
   );
 }
 
-/** delegate_task → SubAgentCard (ROUND-36 integration preserved). */
+/** delegate_task → SubAgentCard (ROUND-36 integration preserved).
+ * ROUND-40: threads `projectId` down to SubAgentCard so its onClick can
+ * open the child's tab in the right sidebar. */
 function DelegateDetail({
   tool,
   sessionId,
+  projectId,
   live,
 }: {
   tool: ToolUseEntry;
   sessionId: string | null;
+  projectId: string;
   live: boolean;
 }) {
   const hay = `${tool.argsSummary} ${tool.outputSummary ?? ""}`;
@@ -646,6 +654,7 @@ function DelegateDetail({
       role={roleMatch?.[1]}
       task={taskMatch?.[1]}
       live={live}
+      projectId={projectId}
     />
   );
 }
@@ -655,6 +664,7 @@ function DelegateDetail({
 export function WorkingSection({
   entries,
   sessionId,
+  projectId,
   ts,
   endTs,
   live = false,
@@ -666,6 +676,9 @@ export function WorkingSection({
 }: {
   entries: WorkingEntry[];
   sessionId: string | null;
+  /** ROUND-40: the chat panel's project id — threaded down to SubAgentCard
+   * so clicking a sub-agent task opens its tab in the right sidebar. */
+  projectId: string;
   /** Turn start (folded turns). */
   ts?: string;
   /** Turn end (folded turns). */
@@ -797,7 +810,7 @@ export function WorkingSection({
                   return <NarrationRow key={`t-${i}`} content={entry.content} />;
                 }
                 if (entry.type === "tool") {
-                  return <ToolLine key={`t-${entry.tool.seq}`} tool={entry.tool} sessionId={sessionId} live={live} />;
+                  return <ToolLine key={`t-${entry.tool.seq}`} tool={entry.tool} sessionId={sessionId} live={live} projectId={projectId} />;
                 }
                 return <ApprovalRow key={`t-${i}`} entry={entry} onDecision={onApprovalDecision} />;
               })}

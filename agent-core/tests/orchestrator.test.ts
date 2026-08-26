@@ -185,7 +185,12 @@ describe("ROUND-36: sub-agent orchestration (ADR-0022)", () => {
     });
 
     const statuses: string[] = [];
-    const emit = (e: { status: string }) => statuses.push(e.status);
+    // ROUND-40: emit widened to (unknown) => void so it can carry both
+    // subagent-status + subagent-event envelopes. Narrow to status here.
+    const emit = (e: unknown) => {
+      const ev = e as { type?: string; status?: unknown };
+      if (ev.type === "subagent-status" && typeof ev.status === "string") statuses.push(ev.status);
+    };
     const firstPromise = orchestrator.delegateTask(deps, parent.id, "slow task", "researcher", emit);
     const secondPromise = orchestrator.delegateTask(deps, parent.id, "queued task", "coder", emit);
     await new Promise((r) => setTimeout(r, 50));

@@ -31,6 +31,7 @@ import { useAgents } from "../../hooks/use-agents";
 import { useProjectChatStore } from "../../lib/project-chat-store";
 import { useActiveStreams } from "../../lib/active-streams";
 import { withAlpha } from "../dashboard/helpers";
+import { NotificationBell } from "../notifications/NotificationBell";
 
 type TauriGlobal = {
   core: { invoke: (cmd: string, args?: Record<string, unknown>) => Promise<unknown> };
@@ -339,11 +340,21 @@ export function Sidebar() {
             <ProjectSection collapsed={collapsed} />
           </div>
 
-          {/* FOOTER — a PROMINENT Settings button (owner round-33). */}
+          {/* FOOTER — a PROMINENT Settings button (owner round-33) + the
+              ROUND-40 NotificationBell (bell icon + unread badge + dropdown).
+              The bell mounts beside Settings as the closest analog to
+              "header actions" in this app's chrome. */}
           <div
             className={cn("shrink-0 border-t px-2.5 pb-3 pt-2.5", collapsed && "px-1.5")}
             style={{ borderColor: styles.sidebarBorder }}
           >
+            {/* ROUND-40: small icon row above the prominent Settings
+                button — collapsed = centered bell icon tile; expanded =
+                bell icon aligned to the right (matches the existing
+                footer's right-aligned language). */}
+            <div className={cn("flex items-center mb-1.5", collapsed ? "justify-center" : "justify-end")}>
+              <NotificationBell collapsed={collapsed} />
+            </div>
             <SettingsButton collapsed={collapsed} />
           </div>
         </>

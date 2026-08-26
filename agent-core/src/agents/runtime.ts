@@ -7,7 +7,7 @@
  * message.assistant (with per-reply usage+ms stats) → usage_events row.
  */
 import type { SessionStatus, UsageRecord } from "shared";
-import { getAgent } from "../storage/agents.js";
+import { getAgent, TOOL_NAMES } from "../storage/agents.js";
 import { getProject } from "../storage/projects.js";
 import type Database from "better-sqlite3";
 import {
@@ -320,29 +320,46 @@ async function prepareTurn(
       appendSessionEvent(db, session.id, event);
     },
   };
-  // ROUND-36 (ADR-0022): children never get delegate_task — one-level
-  // fan-out is the recursion guard.
-  const childAllowList =
-    session.parentSessionId !== null && agent.allowedTools !== undefined
-      ? agent.allowedTools.filter((t) => t !== "delegate_task")
-      : agent.allowedTools;
+  // ROUND-40 (owner: "sub-agents are apparently not able to do multi rounds of
+  // tasks / they don't even do the actual researching"). ROOT CAUSE of the
+  // owner's complaint: the default "Acute" agent ships with allowedTools=[]
+  // (which per ADR-0019 means "ALL tools"), but the prior child-allowlist code
+  // filtered that empty array to [] then tripped a `length === 0` sentinel that
+  // substituted ["__none__"], stripping EVERY tool from the child. The model
+  // had nothing to call, so it wrote a one-shot "I'll research X… Done." text
+  // reply and the outer loop's `toolCalls.length === 0` break fired on iter 0.
+  // FIX: honor the "[] = ALL tools" contract for children too — a child gets
+  // ALL tools MINUS delegate_task (the one-level recursion guard, ADR-0022).
+  // An agent with an EXPLICIT non-empty allowlist keeps that allowlist minus
+  // delegate_task. The `["__none__"]` sentinel is gone entirely.
+  const isChild = session.parentSessionId !== null;
+  // `delegate_task` is a DYNAMIC tool (added at runtime by buildProjectTools
+  // when deps.keyring + deps.chat are present AND the allowlist permits it).
+  // It is NOT in the canonical TOOL_NAMES tuple — hence the `as readonly
+  // string[]` cast (without it TS narrows the tuple's literal union and
+  // flags the `!== "delegate_task"` comparison as always-true). The filter
+  // is defensive: if delegate_task ever joins TOOL_NAMES, children stay
+  // excluded (the one-level recursion guard).
+  const childAllowList: readonly string[] | undefined = isChild
+    ? agent.allowedTools === undefined || agent.allowedTools.length === 0
+      ? (TOOL_NAMES as readonly string[]).filter((t) => t !== "delegate_task")
+      : agent.allowedTools.filter((t) => t !== "delegate_task")
+    : agent.allowedTools;
   const tools =
     project !== undefined
-      ? await buildProjectTools(
-          project.rootPath,
-          session.parentSessionId !== null
-            ? childAllowList !== undefined && childAllowList.length === 0
-              ? ["__none__"]
-              : childAllowList
-            : agent.allowedTools,
-          toolDeps,
-        )
+      ? await buildProjectTools(project.rootPath, childAllowList, toolDeps)
       : undefined;
+  // ROUND-40: the system prompt's toolNames must reflect the EXACT tool set the
+  // model will actually receive. The old code rebuilt tools from
+  // `agent.allowedTools` here — for a child that lied in two ways: (a) it
+  // included delegate_task (children don't get it), and (b) for the default
+  // agent ([] = ALL) it would have listed delegate_task too. Reuse the already-
+  // built `tools` object so the prompt and the live toolset are always in sync.
   const system = project
     ? buildProjectSystemPrompt({
         projectName: project.name,
         rootPath: project.rootPath,
-        toolNames: Object.keys(await buildProjectTools(project.rootPath, agent.allowedTools, toolDeps)),
+        toolNames: tools ? Object.keys(tools) : [],
         customRules: readCustomRules(project.rootPath),
         // Round-28 WS-F: inject the agent's maxTurns budget into the AGENTIC
         // LOOP section so the model knows how many tool round-trips it has.
@@ -371,6 +388,12 @@ export async function runSingleAgentTurn(
   sessionId: string,
   content: string,
   modelOverride?: string,
+  /** ROUND-40: optional live-event forwarder. When set (the orchestrator
+   * passes a wrapped emit for sub-agent children), the sync loop forwards
+   * each tool-call / tool-result / text / continuation event to it so the
+   * parent's UI can watch the child work in real time — parity with the
+   * streamed main-agent path. Absent on the plain sync route. */
+  emit?: (event: unknown) => void,
 ): Promise<TurnOutcome> {
   const { db, keyring, chat } = deps;
   const prepared = await prepareTurn(db, keyring, sessionId, modelOverride, chat);
@@ -463,6 +486,24 @@ export async function runSingleAgentTurn(
       });
     }
 
+    // ROUND-40: forward live tool events to the parent's UI when an emit is
+    // attached (sub-agent children). The streamed main-agent path emits
+    // these from inside chatStream; the sync path emits them here, after
+    // each chat() completion, so the parent sees the child's tool calls +
+    // results + assistant text as they happen (not just the final report).
+    if (emit !== undefined) {
+      for (const call of result.toolCalls) {
+        emit({ type: "tool-call", sessionId: session.id, toolName: call.name, argsSummary: call.argsSummary });
+        emit({
+          type: "tool-result",
+          sessionId: session.id,
+          toolName: call.name,
+          ok: call.ok,
+          ...(call.outputSummary !== undefined ? { outputSummary: scrubSecrets(call.outputSummary, keySecrets) } : {}),
+        });
+      }
+    }
+
     const assistantEvent = appendSessionEvent(db, session.id, {
       type: "message.assistant",
       agentId: agent.id,
@@ -475,6 +516,14 @@ export async function runSingleAgentTurn(
       },
     });
     lastAssistantEvent = { seq: assistantEvent.seq, ts: assistantEvent.ts, content: result.text };
+
+    // ROUND-40: forward the assistant text + a finish marker (one shot — the
+    // sync path has no token deltas, but this is still a big UX win: the
+    // parent sees the child's intermediate + final replies as they land).
+    if (emit !== undefined) {
+      emit({ type: "text-delta", sessionId: session.id, text: result.text });
+      emit({ type: "finish", sessionId: session.id });
+    }
 
     // ROUND-33 (owner report: "hello, how are you" kept planning + running
     // tools in an infinite loop): an iteration that produced a text reply
@@ -490,6 +539,11 @@ export async function runSingleAgentTurn(
     const todosDone = latestTodosAllDone(db, session.id);
     if (hasCompletionSignal && todosDone) {
       break;
+    }
+    // ROUND-40: announce the continuation so the parent UI can show the
+    // child is still working (another tool round-trip incoming).
+    if (emit !== undefined) {
+      emit({ type: "meta.continuation", sessionId: session.id, iteration: outerIter + 1, maxOuterLoops });
     }
   }
 

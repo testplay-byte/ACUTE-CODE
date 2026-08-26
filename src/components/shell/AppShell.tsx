@@ -2,6 +2,8 @@ import { Outlet, useLocation } from "react-router";
 import { useSidecarHealth } from "../../hooks/use-sidecar-health";
 import { useProjectChatStore } from "../../lib/project-chat-store";
 import { AcuteLogo, Sidebar } from "./Sidebar";
+import { NotificationStreamStarter } from "../notifications/NotificationStreamStarter";
+import { Toaster } from "../notifications/Toaster";
 
 /**
  * App shell (round-32 redesign per the owner-approved design
@@ -33,6 +35,16 @@ export function AppShell() {
 
   return (
     <div className="relative h-screen w-full overflow-hidden" style={{ backgroundColor: "var(--ac-bg)" }}>
+      {/* ROUND-40: the notification SSE stream lives for the app's lifetime
+          — boots once on mount, auto-reconnects on close, no-op in demo
+          mode. Mounted HERE so it survives every route change. */}
+      <NotificationStreamStarter />
+      {/* ROUND-40: the Toaster (bottom-right toast stack) — mounted ONCE at
+          the app root so toasts surface regardless of which route is
+          active, even when the sidebar (and thus the bell) is hidden on
+          chat routes. */}
+      <Toaster />
+
       {/* Dot grid — wizard pattern (28px, subtle) */}
       <div
         aria-hidden

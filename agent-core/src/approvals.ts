@@ -23,6 +23,11 @@ import type { ToolPermission } from "shared";
 import type { SqliteDatabase } from "./storage/db.js";
 import { logApproval } from "./lib/log.js";
 import { appendSessionEvent } from "./storage/sessions.js";
+// ROUND-40: permission requests publish an app-level notification so the user
+// sees the prompt even if they're not watching the chat (the owner: "after
+// requesting a permission, and various other things, make sure to add this
+// notification functionality").
+import { getNotificationBus } from "./lib/notification-bus.js";
 
 /** Risk tier for a prospective tool action. */
 export type ActionCategory = ToolPermission | "destructive";
@@ -385,6 +390,17 @@ export async function requestCommandApproval(
   deps.emit?.(requested);
   deps.appendEvent?.({ type: "approval.requested", agentId: deps.agentId, payload: { ...requested } });
   logApproval("requested", approval.id, { sessionId: deps.sessionId, command, category: decision.category });
+  // ROUND-40: push a permission_request notification so the user is alerted
+  // even when the chat window isn't focused. The body carries the command +
+  // category so the toast is actionable; the approval modal still does the
+  // actual Allow/Deny round-trip in the chat.
+  getNotificationBus().publish(deps.db, {
+    kind: "permission_request",
+    title: `Permission requested: ${decision.category}`,
+    body: command.slice(0, 160),
+    sessionId: deps.sessionId,
+    projectId: deps.projectId,
+  });
 
   const finalDecision = await new Promise<"approved" | "denied">((resolve) => {
     let settled = false;
