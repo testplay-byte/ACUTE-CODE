@@ -89,8 +89,25 @@ import {
   markAllNotificationsRead,
   markNotificationRead,
 } from "./storage/notifications.js";
+// ROUND-42: Web Push delivery (desktop notifications with the app window
+// CLOSED — the service worker wakes on push and shows the OS notification).
+import {
+  deletePushSubscription,
+  ensureVapidKeys,
+  savePushSubscription,
+  sendPushToAll,
+  vapidPublicKey,
+} from "./lib/web-push.js";
+import { dirname } from "node:path";
 
 export const VERSION = "0.3.0";
+
+/**
+ * ROUND-42: registry of live streamed turns, keyed by session id — powers
+ * POST /sessions/:id/stop (the UI Stop button). Entries are added when a
+ * stream starts and removed when the turn settles (finally block).
+ */
+const activeTurns = new Map<string, AbortController>();
 
 /** API.md §1.3: every non-2xx response carries this single shape. */
 function errorBody(code: string, message: string, details?: Record<string, unknown>): unknown {
@@ -238,6 +255,10 @@ function validateAgentInput(
 export interface ServerOptions {
   token: string;
   db: SqliteDatabase;
+  /** ROUND-42: directory for machine-scoped files (VAPID keypair). Defaults
+   * to undefined — push endpoints then respond 503 (tests use this to stay
+   * hermetic). The real sidecar passes the SQLite file's directory. */
+  dataDir?: string;
   /** Snapshots `ACUTE_PROVIDER_*` env vars; defaults to the spawn environment. */
   keyring?: ProviderKeyring;
   /** Chat function used by session turns; defaults to the AI SDK adapter. */
@@ -250,6 +271,21 @@ export function buildServer(options: ServerOptions): FastifyInstance {
   const keyring = options.keyring ?? new ProviderKeyring();
   const chat = options.chat ?? aiSdkChat;
   const app = Fastify();
+
+  // ROUND-42: Web Push init. The VAPID keypair is generated ONCE and
+  // persisted at <dataDir>/vapid.json. Every published notification is
+  // fanned out to every subscribed browser (fire-and-forget — a push
+  // failure can never break a turn).
+  if (options.dataDir !== undefined) {
+    ensureVapidKeys(options.dataDir);
+    getNotificationBus().subscribe((n) => {
+      try {
+        sendPushToAll(db, n);
+      } catch (err) {
+        console.error("[web-push] fanout threw:", err);
+      }
+    });
+  }
 
   // ROUND-36 (ADR-0022 §3): a dead sidecar leaves `running` sessions — flip
   // them to failed so they're retryable. Idempotent at every boot.
@@ -1504,6 +1540,16 @@ export function buildServer(options: ServerOptions): FastifyInstance {
       // {type:'tool-call'}, {type:'tool-result'}, {type:'finish'} and a
       // terminal {type:'done'|'error'} envelope. Client disconnects (closed
       // tab / stop) abort the provider call via AbortSignal.
+      //
+      // ROUND-42 (owner: "I sent another message and this time I closed the
+      // window so it should send me a notification after it has completed the
+      // task"): a client disconnect NO LONGER aborts the turn. The turn runs
+      // to completion in the background (events keep persisting to SQLite,
+      // the completion notification fires, and Web Push delivers it to the
+      // closed window's service worker). Only an explicit POST
+      // /sessions/:id/stop (the UI's Stop button) aborts. Live SSE frames
+      // are skipped once the client is gone — writing to a destroyed socket
+      // would throw.
       scope.post("/sessions/:id/messages/stream", async (request, reply) => {
         const { id } = request.params as Record<string, string>;
         const body: unknown = request.body;
@@ -1539,33 +1585,46 @@ export function buildServer(options: ServerOptions): FastifyInstance {
           "x-accel-buffering": "no",
           ...corsHeadersFor(request.headers.origin),
         });
-        // ROUND-40: track whether the turn did real work (tool calls). Pure
-        // conversational replies ("hello" → "hi there") should NOT fire a
-        // task_complete toast — only turns that used tools or ran sub-agents
-        // (subagent-event envelopes also count as work) count as a "task".
-        let didWork = false;
+        let clientGone = false;
+        res.on("close", () => {
+          // ROUND-42: do NOT abort the turn — it completes in the background
+          // (the owner closes the window and still expects the task to finish
+          // + a desktop notification). Only mark the socket dead so send()
+          // stops writing to it.
+          clientGone = true;
+        });
         const send = (event: unknown) => {
-          const e = event as { type?: string };
-          if (e.type === "tool-call" || e.type === "subagent-event") didWork = true;
-          if (!res.writableEnded) res.write(`data: ${JSON.stringify(event)}\n\n`);
+          if (clientGone) return;
+          try {
+            if (!res.writableEnded) res.write(`data: ${JSON.stringify(event)}\n\n`);
+          } catch {
+            // The socket died mid-write — treat the client as gone.
+            clientGone = true;
+          }
         };
         const abort = new AbortController();
-        res.on("close", () => abort.abort());
+        // ROUND-42: registry for POST /sessions/:id/stop. One live turn per
+        // session — a second turn on the same session replaces the entry
+        // (the runtime refuses concurrent turns anyway).
+        activeTurns.set(id, abort);
 
-        const outcome = await runStreamedAgentTurn(
-          { db, keyring, chat, chatStream: streamAiSdkChat },
-          id,
-          content,
-          send,
-          modelOverride,
-          abort.signal,
-        );
-        if (outcome.ok) {
-          // ROUND-40: fire a task_complete notification when the turn did
-          // real work (tool calls / sub-agent delegation). The owner: "send
-          // notifications to the user on various occasions, like after
-          // completing the task". Pure conversational replies stay quiet.
-          if (didWork) {
+        try {
+          const outcome = await runStreamedAgentTurn(
+            { db, keyring, chat, chatStream: streamAiSdkChat },
+            id,
+            content,
+            send,
+            modelOverride,
+            abort.signal,
+          );
+          if (outcome.ok) {
+            // ROUND-42: ALWAYS publish task_complete. The R40 didWork gate
+            // (only tool-using turns) left the owner's conversational test
+            // ("say hello, close the window") silent — a completed reply IS
+            // a completed task from the owner's perspective. The in-page
+            // Toaster only fires desktop notifications when the page is
+            // hidden; the service worker push only fires when no visible
+            // window exists — so an on-screen user still isn't spammed.
             const session = getSession(db, id);
             getNotificationBus().publish(db, {
               kind: "task_complete",
@@ -1574,28 +1633,56 @@ export function buildServer(options: ServerOptions): FastifyInstance {
               sessionId: id,
               projectId: session?.projectId ?? undefined,
             });
+            send({ type: "done", assistantMessage: outcome.assistantMessage, usage: outcome.usage });
+          } else if (outcome.code === "ABORTED") {
+            // ROUND-42: the user explicitly stopped the turn — a deliberate
+            // stop is not a failure; no task_failed notification.
+            send({ type: "stopped" });
+          } else {
+            // ROUND-40/42: real failures (provider errors, crashes) always
+            // notify. Validation conflicts (404 unknown session / 409 wrong
+            // state) are request errors, not task failures — no notification.
+            const session = getSession(db, id);
+            if (outcome.status >= 500) {
+              getNotificationBus().publish(db, {
+                kind: "task_failed",
+                title: session?.title ?? "Task failed",
+                body: outcome.message,
+                sessionId: id,
+                projectId: session?.projectId ?? undefined,
+              });
+            }
+            send({
+              type: "error",
+              status: outcome.status,
+              code: outcome.code,
+              message: outcome.message,
+              ...(outcome.details ? { details: outcome.details } : {}),
+            });
           }
-          send({ type: "done", assistantMessage: outcome.assistantMessage, usage: outcome.usage });
-        } else {
-          // ROUND-40: failures always notify (the owner wants to know when a
-          // task fails, regardless of whether it did work first).
-          const session = getSession(db, id);
-          getNotificationBus().publish(db, {
-            kind: "task_failed",
-            title: session?.title ?? "Task failed",
-            body: outcome.message,
-            sessionId: id,
-            projectId: session?.projectId ?? undefined,
-          });
-          send({
-            type: "error",
-            status: outcome.status,
-            code: outcome.code,
-            message: outcome.message,
-            ...(outcome.details ? { details: outcome.details } : {}),
-          });
+        } finally {
+          if (activeTurns.get(id) === abort) activeTurns.delete(id);
+          if (!clientGone) {
+            try {
+              res.end();
+            } catch {
+              /* socket already dead */
+            }
+          }
         }
-        res.end();
+      });
+
+      // ROUND-42: explicit stop. The UI's Stop button aborts its local fetch
+      // AND calls this — the server-side turn aborts, pending approvals deny
+      // on abort, and the stream route resolves with {type:'stopped'}.
+      scope.post("/sessions/:id/stop", async (request) => {
+        const { id } = request.params as Record<string, string>;
+        const controller = activeTurns.get(id);
+        if (controller === undefined) {
+          return { ok: true, stopped: false };
+        }
+        controller.abort();
+        return { ok: true, stopped: true };
       });
 
       // ---- Usage summary (SPEC §F7 dashboard chart) ----
@@ -1684,6 +1771,81 @@ export function buildServer(options: ServerOptions): FastifyInstance {
         // Hold the reply open until the client disconnects. Fastify's hijack
         // means we never call reply.send; the SSE stream lives until close.
       });
+
+      // ---- ROUND-42: Web Push subscription surface (desktop notifications
+      // with the app window closed). The browser registers /sw.js, asks the
+      // Notification permission, subscribes with the VAPID public key, and
+      // POSTs the subscription here. Every published notification is then
+      // delivered by the push service to the service worker. ----
+
+      // The VAPID public key (the client needs it to subscribe).
+      scope.get("/notifications/push/key", async (_request, reply) => {
+        const publicKey = vapidPublicKey();
+        if (publicKey === null) {
+          return reply
+            .code(503)
+            .send(errorBody("UNAVAILABLE", "web push is not configured on this sidecar"));
+        }
+        return { publicKey };
+      });
+
+      // Save/refresh a PushSubscription (upsert by endpoint).
+      scope.post("/notifications/push/subscribe", async (request, reply) => {
+        if (vapidPublicKey() === null) {
+          return reply
+            .code(503)
+            .send(errorBody("UNAVAILABLE", "web push is not configured on this sidecar"));
+        }
+        const body: unknown = request.body;
+        if (typeof body !== "object" || body === null) {
+          return reply.code(400).send(errorBody("VALIDATION", "body must be a JSON object"));
+        }
+        const raw = body as Record<string, unknown>;
+        const endpoint = raw.endpoint;
+        const keys = raw.keys;
+        if (
+          typeof endpoint !== "string" ||
+          endpoint === "" ||
+          typeof keys !== "object" ||
+          keys === null
+        ) {
+          return reply.code(400).send(
+            errorBody("VALIDATION", "expected { endpoint: string, keys: { p256dh, auth } }", {
+              field: "body",
+            }),
+          );
+        }
+        const k = keys as Record<string, unknown>;
+        if (typeof k.p256dh !== "string" || typeof k.auth !== "string") {
+          return reply.code(400).send(
+            errorBody("VALIDATION", "keys must carry string p256dh + auth", {
+              field: "body.keys",
+            }),
+          );
+        }
+        savePushSubscription(db, {
+          endpoint,
+          keys: { p256dh: k.p256dh, auth: k.auth },
+        });
+        return { ok: true };
+      });
+
+      // Drop a subscription (browser revoked it / user turned notifications
+      // off in-app).
+      scope.post("/notifications/push/unsubscribe", async (request, reply) => {
+        const body: unknown = request.body;
+        const endpoint =
+          typeof body === "object" && body !== null
+            ? (body as Record<string, unknown>).endpoint
+            : undefined;
+        if (typeof endpoint !== "string" || endpoint === "") {
+          return reply
+            .code(400)
+            .send(errorBody("VALIDATION", "expected { endpoint: string }", { field: "body" }));
+        }
+        deletePushSubscription(db, endpoint);
+        return { ok: true };
+      });
     },
     { prefix: "/api/v1" },
   );
@@ -1706,7 +1868,12 @@ export interface RunningSidecar {
 /** Opens the database, binds 127.0.0.1 (loopback only), prints the ready line. */
 export async function startServer(options: StartServerOptions): Promise<RunningSidecar> {
   const db = openDatabase(options.dbPath);
-  const app = buildServer({ token: options.token, db });
+  const app = buildServer({
+    token: options.token,
+    db,
+    // ROUND-42: Web Push VAPID keys live next to the SQLite file (.dev dir).
+    dataDir: dirname(options.dbPath),
+  });
   app.addHook("onClose", async () => {
     db.close();
   });

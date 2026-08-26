@@ -43,8 +43,11 @@ import re
 import shutil
 import subprocess
 import sys
+import threading
 import time
+import webbrowser
 from pathlib import Path
+from urllib.request import urlopen
 
 IS_WIN = os.name == "nt"
 LAUNCHER_DIR = Path(__file__).resolve().parent
@@ -906,7 +909,8 @@ def launch(env, key):
             env["ACUTE_PROVIDER_OPENROUTER"] = key
     panel(
         "Everything is ready. The servers are starting.\n\n"
-        "  ➜  Open  http://localhost:5173  in your browser\n"
+        "  ➜  Your browser will OPEN http://localhost:5173 AUTOMATICALLY\n"
+        "     as soon as the UI is up (no need to type it)\n"
         "  ➜  Keep this window open while using the app\n"
         "  ➜  Press Ctrl+C here to stop both servers cleanly\n\n"
         "Server output follows (live):",
@@ -914,6 +918,13 @@ def launch(env, key):
         title="▲ ACUTE-CODE is starting",
     )
     log(f"=== launch {time.strftime('%Y-%m-%d %H:%M:%S')} ===")
+    # ROUND-42 (owner: "add an auto-launch browser functionality. After
+    # starting it will automatically launch the browser with that specific
+    # URL so that I don't have to manually open up the browser"): a daemon
+    # thread polls the UI port in the background while `pnpm dev:full`
+    # blocks the main thread; once Vite answers it opens the user's default
+    # browser at the app URL exactly once per launcher run.
+    _spawn_browser_autolaunch()
     try:
         code = subprocess.call(wrap(["pnpm", "dev:full"]), cwd=str(APP_DIR), env=env)
     except KeyboardInterrupt:
@@ -931,6 +942,52 @@ def launch(env, key):
             "  • the OpenRouter key is missing/invalid (catalog and chats fail)\n"
             "  • a build step failed — see the log tail below",
         )
+
+
+# ── ROUND-42: auto-open the browser once the dev servers are ready ──────────
+
+_AUTO_LAUNCH_URL = f"http://localhost:{UI_PORT}"
+_AUTO_LAUNCH_TIMEOUT_S = 240  # cold start: pnpm install + vite boot can be slow
+
+
+def _http_ok(url, timeout=1.5):
+    """True when the URL answers with any HTTP status (connection refused → False)."""
+    try:
+        urlopen(url, timeout=timeout)
+        return True
+    except Exception:  # noqa: BLE001 — any HTTP answer means the server is up
+        # urlopen raises on 4xx/5xx too; a refused connection raises URLError.
+        # Distinguish: an HTTP error still means SOMETHING is listening.
+        import sys as _sys
+
+        return "HTTPError" in type(_sys.exc_info()[1]).__name__
+
+
+def _spawn_browser_autolaunch():
+    """Daemon thread: poll the UI port → open the browser ONCE when ready."""
+
+    def runner():
+        deadline = time.time() + _AUTO_LAUNCH_TIMEOUT_S
+        opened = False
+        while not opened and time.time() < deadline:
+            if _http_ok(_AUTO_LAUNCH_URL):
+                opened = True
+                try:
+                    webbrowser.open(_AUTO_LAUNCH_URL)
+                    log(f"auto-launch: opened {_AUTO_LAUNCH_URL} in the default browser")
+                    print()
+                    ok(f"browser opened automatically → {_AUTO_LAUNCH_URL}")
+                except Exception as exc:  # noqa: BLE001 — never crash the launcher
+                    warn(f"could not open the browser automatically ({exc}) — open {_AUTO_LAUNCH_URL} manually")
+            else:
+                time.sleep(1.0)
+        if not opened:
+            warn(
+                f"servers did not answer on {_AUTO_LAUNCH_URL} within "
+                f"{_AUTO_LAUNCH_TIMEOUT_S}s — open the URL manually once the UI is up"
+            )
+
+    threading.Thread(target=runner, name="acute-autolaunch", daemon=True).start()
 
 
 # ─────────────────────────────────────────────────────────────────────────────

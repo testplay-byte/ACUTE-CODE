@@ -53,6 +53,55 @@ function readExpanded(): string[] {
   try { return JSON.parse(localStorage.getItem(EXPANDED_KEY) ?? "[]") as string[]; } catch { return []; }
 }
 
+/** ROUND-42: shade a hex color ±percent — feeds the project tile gradient
+ * (owner: "the project's actual images need to be a bit better"). */
+function shadeHex(hex: string, percent: number): string {
+  const m = /^#?([a-f\d]{2})([a-f\d]{2})([a-f\d]{2})$/i.exec(hex.trim());
+  if (m === null) return hex;
+  const clamp = (v: number) => Math.max(0, Math.min(255, Math.round(v)));
+  const r = clamp(parseInt(m[1], 16) + 255 * percent);
+  const g = clamp(parseInt(m[2], 16) + 255 * percent);
+  const b = clamp(parseInt(m[3], 16) + 255 * percent);
+  return `#${[r, g, b].map((v) => v.toString(16).padStart(2, "0")).join("")}`;
+}
+
+/** ROUND-42: the project's tile — a soft vertical gradient derived from the
+ * project's own color, with an inner top highlight + soft shadow. Replaces
+ * the flat colored square (owner: modern, beautiful, cleaner, smoother). */
+function ProjectTile({
+  color,
+  name,
+  size = 32,
+  radius = 10,
+  fontSize = 13,
+}: {
+  color: string;
+  name: string;
+  size?: number;
+  radius?: number;
+  fontSize?: number;
+}) {
+  return (
+    <span
+      className="shrink-0 grid place-items-center font-black select-none"
+      style={{
+        width: size,
+        height: size,
+        borderRadius: radius,
+        fontSize,
+        color: "#fff",
+        background: `linear-gradient(150deg, ${shadeHex(color, 0.22)} 0%, ${color} 45%, ${shadeHex(color, -0.24)} 100%)`,
+        boxShadow:
+          "inset 0 1px 0 rgba(255,255,255,0.28), inset 0 -1px 2px rgba(0,0,0,0.18), 0 1px 3px rgba(0,0,0,0.14)",
+        textShadow: "0 1px 1px rgba(0,0,0,0.22)",
+      }}
+      aria-hidden
+    >
+      {name.charAt(0).toUpperCase()}
+    </span>
+  );
+}
+
 /**
  * AcuteLogo (round-33): the custom app mark — a rounded-square accent tile
  * with a geometric white "A" (two strokes: the peak + the crossbar). Doubles
@@ -319,10 +368,15 @@ export function Sidebar() {
         </nav>
       ) : (
         <>
-          {/* NAVIGATION SECTION — dedicated section for Dashboard + Usage. */}
+          {/* NAVIGATION SECTION — dedicated section for Dashboard + Usage.
+              ROUND-42: same heading language as the refreshed Projects
+              header (heavier weight, wider tracking). */}
           {!collapsed && (
             <div className="shrink-0 flex items-center px-4 pt-5 pb-1.5">
-              <span className="text-[11px] font-bold uppercase tracking-widest" style={{ color: styles.textTertiary }}>
+              <span
+                className="text-[10.5px] font-black uppercase tracking-[0.14em]"
+                style={{ color: styles.textTertiary }}
+              >
                 Navigation
               </span>
             </div>
@@ -460,7 +514,13 @@ function SettingsButton({ collapsed }: { collapsed: boolean }) {
   );
 }
 
-/** Projects section — expandable tree with sessions under each project. */
+/** Projects section — expandable tree with sessions under each project.
+ * ROUND-42 (owner): refreshed visuals — section header with a count chip +
+ * ghost Add button, gradient project tiles, a smoother expand animation, and
+ * the pixel-stream activity animation on a project row whenever ANY of its
+ * sessions is running (even when the project is collapsed — the owner: "the
+ * animation should move on to the project itself so I can clearly know which
+ * project is active"). */
 function ProjectSection({ collapsed }: { collapsed: boolean }) {
   const styles = useThemeStyles();
   const navigate = useNavigate();
@@ -471,6 +531,14 @@ function ProjectSection({ collapsed }: { collapsed: boolean }) {
   const sessions = sessionsQuery.data ?? [];
   const [expandedProjects, setExpandedProjects] = useState<string[]>(readExpanded);
   const [showAddDialog, setShowAddDialog] = useState(false);
+
+  // ROUND-42: the set of running session ids (SSE/stream-driven store) →
+  // which PROJECTS currently have live work. Drives the animation on the
+  // project row (collapsed or expanded) + the collapsed-rail tiles.
+  const runningSessions = useActiveStreams((s) => s.active);
+  const runningProjects = new Set(
+    sessions.filter((s) => runningSessions.has(s.id)).map((s) => s.projectId),
+  );
 
   const activeProjectMatch = pathname.match(/^\/project\/([^/]+)/);
   const activeProjectId = activeProjectMatch?.[1] ?? null;
@@ -524,23 +592,42 @@ function ProjectSection({ collapsed }: { collapsed: boolean }) {
   if (collapsed) {
     return (
       <div className="flex flex-col items-center gap-1.5 px-1.5 pb-2">
-        {projects.map((project) => (
-          <button
-            key={project.id}
-            onClick={() => navigate(`/project/${project.id}/chat`)}
-            title={project.name}
-            aria-label={`Open ${project.name}`}
-            className="w-9 h-9 rounded-[10px] grid place-items-center font-black text-[12px] transition-transform hover:scale-105"
-            style={{
-              background: project.color,
-              color: "#fff",
-              outline: activeProjectId === project.id ? `2px solid ${styles.accent}` : "none",
-              outlineOffset: 2,
-            }}
-          >
-            {project.name.charAt(0).toUpperCase()}
-          </button>
-        ))}
+        {projects.map((project) => {
+          const isActive = activeProjectId === project.id;
+          const isRunning = runningProjects.has(project.id);
+          return (
+            <button
+              key={project.id}
+              onClick={() => navigate(`/project/${project.id}/chat`)}
+              title={isRunning ? `${project.name} — working…` : project.name}
+              aria-label={isRunning ? `Open ${project.name} (working)` : `Open ${project.name}`}
+              className="relative w-9 h-9 grid place-items-center transition-transform hover:scale-105 active:scale-95"
+              style={{
+                borderRadius: 12,
+                outline: isActive ? `2px solid ${styles.accent}` : "none",
+                outlineOffset: 2,
+              }}
+            >
+              <ProjectTile color={project.color} name={project.name} size={36} radius={12} fontSize={14} />
+              {/* ROUND-42: live-work badge on the collapsed tile (owner:
+                  "if the session of a project is going on and I collapse the
+                  project, the animation should move on to the project
+                  itself") — a pulsing accent dot pinned to the tile's
+                  bottom-right. */}
+              {isRunning ? (
+                <span
+                  className="absolute -bottom-0.5 -right-0.5 w-[11px] h-[11px] rounded-full animate-pulse"
+                  style={{
+                    background: styles.accent,
+                    boxShadow: `0 0 0 2px ${styles.sidebarBg}, 0 0 6px ${withAlpha(styles.accent, 0.8)}`,
+                  }}
+                  role="status"
+                  aria-label="Project has a session working"
+                />
+              ) : null}
+            </button>
+          );
+        })}
         <button
           onClick={() => setShowAddDialog(true)}
           aria-label="Add project"
@@ -558,17 +645,34 @@ function ProjectSection({ collapsed }: { collapsed: boolean }) {
 
   return (
     <>
+      {/* ROUND-42: refreshed section header — bold uppercase label + a mono
+          count chip + a ghost icon Add button (owner: "the project headings
+          do not look proper… make them modern, cleaner, smoother"). */}
       <div className="flex items-center justify-between px-4 pb-2">
-        <span className="text-[11px] font-bold uppercase tracking-widest" style={{ color: styles.textTertiary }}>
-          Projects
-        </span>
+        <div className="flex items-center gap-1.5 min-w-0">
+          <span
+            className="text-[10.5px] font-black uppercase tracking-[0.14em]"
+            style={{ color: styles.textTertiary }}
+          >
+            Projects
+          </span>
+          {projects.length > 0 ? (
+            <span
+              className="text-[9px] font-mono font-bold px-1.5 py-0.5 rounded-full tabular-nums"
+              style={{ color: styles.textTertiary, background: styles.subtle }}
+            >
+              {projects.length}
+            </span>
+          ) : null}
+        </div>
         <button
           onClick={() => setShowAddDialog(true)}
           title="Add project"
-          className="flex items-center gap-1 rounded-full px-2 py-0.5 text-[10px] font-bold transition-transform hover:scale-[1.03] active:scale-95"
-          style={{ background: styles.accent, color: styles.accentText }}
+          aria-label="Add project"
+          className="w-6 h-6 grid place-items-center rounded-[8px] transition-all hover:scale-110 active:scale-95"
+          style={{ color: styles.accent, background: withAlpha(styles.accent, 0.1) }}
         >
-          <Plus size={10} strokeWidth={3} /> Add
+          <Plus size={13} strokeWidth={2.5} />
         </button>
       </div>
 
@@ -581,11 +685,13 @@ function ProjectSection({ collapsed }: { collapsed: boolean }) {
           return (
             <div key={project.id}>
               {/* Project row — click toggles sessions; the + button starts a
-                  new session directly (owner round-33). */}
+                  new session directly (owner round-33). ROUND-42: gradient
+                  tile + the running animation lives HERE when collapsed. */}
               <ProjectRow
                 project={project}
                 active={isActive}
                 expanded={isExpanded}
+                running={runningProjects.has(project.id)}
                 onToggle={() => toggleProject(project.id)}
                 onNewSession={() => void createSessionFor(project.id, project.name)}
               />
@@ -596,10 +702,10 @@ function ProjectSection({ collapsed }: { collapsed: boolean }) {
                     initial={{ height: 0, opacity: 0 }}
                     animate={{ height: "auto", opacity: 1 }}
                     exit={{ height: 0, opacity: 0 }}
-                    transition={{ duration: 0.2, ease: [0.25, 0.1, 0.25, 1] }}
+                    transition={{ duration: 0.22, ease: [0.25, 0.1, 0.25, 1] }}
                     className="overflow-hidden"
                   >
-                    <div className="ml-5 pl-3 border-l-[1.5px] space-y-0.5 py-1" style={{ borderColor: styles.sidebarBorder }}>
+                    <div className="ml-[19px] pl-3 border-l-[1.5px] space-y-0.5 py-1" style={{ borderColor: withAlpha(styles.textTertiary, 0.18) }}>
                       {projSessions.slice(0, 8).map((session) => (
                         <SessionRow
                           key={session.id}
@@ -641,9 +747,18 @@ function ProjectSection({ collapsed }: { collapsed: boolean }) {
 }
 
 function ProjectRow({
-  project, active, expanded, onToggle, onNewSession,
+  project, active, expanded, running, onToggle, onNewSession,
 }: {
-  project: Project; active: boolean; expanded: boolean; onToggle: () => void; onNewSession: () => void;
+  project: Project;
+  active: boolean;
+  expanded: boolean;
+  /** ROUND-42: any session of this project has a turn in flight — the
+   * activity animation moves onto the project row itself (owner: "if the
+   * session is going on and I collapse the project, the animation should
+   * move on to the project itself"). */
+  running: boolean;
+  onToggle: () => void;
+  onNewSession: () => void;
 }) {
   const styles = useThemeStyles();
   const [hovered, setHovered] = useState(false);
@@ -662,14 +777,11 @@ function ProjectRow({
       tabIndex={0}
       onKeyDown={(e) => { if (e.key === "Enter") onToggle(); }}
       aria-expanded={expanded}
-      aria-label={`Project ${project.name} — click to ${expanded ? "collapse" : "expand"} sessions`}
+      aria-label={`Project ${project.name} — click to ${expanded ? "collapse" : "expand"} sessions${running ? " (working)" : ""}`}
     >
-      <span
-        className="w-8 h-8 shrink-0 rounded-[10px] grid place-items-center font-black text-[13px]"
-        style={{ background: project.color, color: "#fff" }}
-      >
-        {project.name.charAt(0).toUpperCase()}
-      </span>
+      {/* ROUND-42: gradient tile (owner: "the project's actual images need
+          to be a bit better"). */}
+      <ProjectTile color={project.color} name={project.name} size={32} radius={10} fontSize={13} />
       <div className="flex min-w-0 flex-1 flex-col">
         <span
           className="text-[12px] font-bold truncate"
@@ -678,6 +790,20 @@ function ProjectRow({
           {project.name}
         </span>
       </div>
+      {/* ROUND-42: live-work animation on the project row — the clear "this
+          project is making changes right now" signal when the sessions are
+          collapsed (or while scanning the list). */}
+      {running ? (
+        <span
+          className="shrink-0 mr-0.5 ac-pixel-stream"
+          style={{ color: styles.accent }}
+          role="status"
+          title="A session in this project is working…"
+          aria-label="A session in this project is working"
+        >
+          <span /><span /><span /><span />
+        </span>
+      ) : null}
       {/* ROUND-33 (owner): the "+ new session" button lives ON the project row
           itself; no chevron, no session count. */}
       <button
@@ -809,12 +935,12 @@ function SessionRow({
         />
         <span className="truncate">{session.title ?? "Untitled"}</span>
       </button>
-      {/* Rename (round-33) */}
+      {/* Rename (round-33) — ROUND-42: smooth opacity transition. */}
       <button
         onClick={(e) => { e.stopPropagation(); setDraft(session.title ?? ""); setEditing(true); }}
         aria-label={`Rename session ${session.title ?? "Untitled"}`}
         title="Rename session"
-        className="relative z-10 w-5 h-5 grid place-items-center rounded-md transition-opacity"
+        className="relative z-10 w-5 h-5 grid place-items-center rounded-md transition-opacity duration-150 hover:bg-black/10"
         style={{ color: styles.textTertiary, opacity: hovered ? 1 : 0 }}
       >
         <Pencil size={10} />
@@ -824,7 +950,7 @@ function SessionRow({
         disabled={deleteSession.isPending}
         aria-label={`Delete session ${session.title ?? "Untitled"}`}
         title="Delete session"
-        className="relative z-10 w-5 h-5 mr-1 grid place-items-center rounded-md transition-opacity"
+        className="relative z-10 w-5 h-5 mr-1 grid place-items-center rounded-md transition-opacity duration-150 hover:bg-black/10"
         style={{ color: styles.textTertiary, opacity: hovered ? 1 : 0 }}
       >
         <Trash2 size={10} />

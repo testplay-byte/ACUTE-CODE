@@ -1125,7 +1125,10 @@ export type StreamTurnEvent =
       code: string;
       message: string;
       details?: Record<string, unknown>;
-    };
+    }
+  /** ROUND-42: the user explicitly stopped the turn (POST /sessions/:id/stop)
+   * — the server resolved it as a deliberate stop, not an error. */
+  | { type: "stopped" };
 
 /**
  * Run one streamed turn; `onEvent` fires for every SSE event as it lands
@@ -1186,6 +1189,28 @@ export async function streamSessionMessage(
       }
       sep = buffer.indexOf("\n\n");
     }
+  }
+}
+
+/**
+ * ROUND-42: explicitly stop a live streamed turn on the server. Since turns
+ * now survive client disconnects (they complete in the background so a
+ * closed window still gets its completion notification), the UI's Stop
+ * button must tell the SIDECAR to abort — aborting only the local fetch no
+ * longer stops the turn. keepalive lets the request complete even if the
+ * user closes the tab right after clicking Stop.
+ */
+export async function stopSessionTurn(sessionId: string): Promise<void> {
+  const { baseUrl, token } = useConfigStore.getState();
+  try {
+    await fetch(`${baseUrl}/api/v1/sessions/${sessionId}/stop`, {
+      method: "POST",
+      headers: token ? { Authorization: `Bearer ${token}` } : {},
+      keepalive: true,
+    });
+  } catch {
+    // Best-effort — if the sidecar is unreachable the turn will settle on
+    // its own; the UI already shows "Stopped".
   }
 }
 

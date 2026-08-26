@@ -3,8 +3,9 @@ import { fetchSubAgentDetail, type SessionEvent, type SessionDetail } from "../.
 import { SEMANTIC_COLORS } from "../../lib/semantics";
 import { useThemeStyles } from "../../lib/use-theme-styles";
 import { useScrollFade } from "../../lib/useScrollFade";
-import { useRef } from "react";
+import { useRef, useState } from "react";
 import { withAlpha } from "../dashboard/helpers";
+import { ClampedText } from "../shared/ClampedText";
 import type { RightSidebarTab } from "../../lib/right-sidebar-store";
 import {
   Bot,
@@ -12,36 +13,34 @@ import {
   CircleCheck,
   CircleX,
   FileCode2,
+  FilePenLine,
+  FilePlus2,
   FolderPlus,
+  Globe,
   LoaderCircle,
-  Pencil,
-  Plus,
+  MessageSquareText,
+  Search,
+  Sparkles,
   Terminal as TerminalIcon,
-  X,
+  Trash2,
 } from "lucide-react";
 
 /**
- * ROUND-38/39/41 right-sidebar Sub-agent tab.
+ * ROUND-38/39/41/42 right-sidebar Sub-agent tab.
  *
- * ROUND-41 (owner: "the sub-agents were not looking like I wanted. They
- * were not looking good. They were not proper. The user interface was not
- * like the chat window I hoped for it to be. It was not showing the live
- * progress of the sub-agents or anything like that… if the sub-agents write
- * any file or anything like that, then they should be shown in the
- * sub-agents menu side too"). Rebuilt to look like a chat window:
- *   - The PROMPT renders as a user message at the top (right-aligned bubble).
- *   - Each tool.use event renders as a "tool card" (icon + tool name +
- *     args + ok/failed status chip + output summary). File-mutating tools
- *     (write_file / edit_file / create_dir / delete_file) ALSO feed the
- *     "Files written" section above the actions.
- *   - Each message.assistant event renders as a left-aligned assistant
- *     bubble (so partial / intermediate text shows live, not just the
- *     final report).
- *   - The FINAL REPORT (last message.assistant) renders as the closing
- *     assistant bubble with a "Final report" eyebrow.
- *   - Live "running" badge (animated spinner) when the sub-agent is in
- *     the running state — polling at 600ms gives a near-live feel.
- *   - Empty state when no sub-agent is bound.
+ * ROUND-42 (owner: "The prompt which was given to it was showing fully… It
+ * should be minimized to about 10 lines or so… the user has to manually click
+ * the expand button to see the full one" + "the UI could be improved. It could
+ * be made better and much more proper and much better looking"). Redesign:
+ *   - The TASK bubble clamps at 10 lines with a Show more/less toggle (the
+ *     final report clamps too — same rule, same component).
+ *   - A unified vertical TIMELINE for live progress: each tool call is a
+ *     compact row on a status-colored rail (running = pulsing, ok = green,
+ *     failed = red); assistant text renders as soft interleaved bubbles.
+ *   - The FILES section under the task is a tight manifest (tool-specific
+ *     icons, count badge, clamped to 5 rows with "show all").
+ *   - The FINAL REPORT closes the panel with an accent-rail card + eyebrow.
+ *   - Live status badge + near-live 600ms polling preserved from R41.
  */
 const ROLE_COLORS: Record<string, string> = {
   planner: "#c792ea",
@@ -59,20 +58,31 @@ const FILE_TOOLS = new Set([
   "delete_file",
 ]);
 
-/** Icon for a file-mutating tool (used in the Files written section). */
-function FileToolIcon({ toolName }: { toolName: string }): JSX.Element {
+/** Icon + tint for a file-mutating tool (used in the Files manifest). */
+function FileToolIcon({ toolName, size = 12 }: { toolName: string; size?: number }): JSX.Element {
   switch (toolName) {
     case "write_file":
-      return <Plus size={12} />;
+      return <FilePlus2 size={size} />;
     case "edit_file":
-      return <Pencil size={12} />;
+      return <FilePenLine size={size} />;
     case "create_dir":
-      return <FolderPlus size={12} />;
+      return <FolderPlus size={size} />;
     case "delete_file":
-      return <X size={12} />;
+      return <Trash2 size={size} />;
     default:
-      return <FileCode2 size={12} />;
+      return <FileCode2 size={size} />;
   }
+}
+
+/** The icon for a NON-file tool in the timeline. */
+function ToolIcon({ toolName, size = 13 }: { toolName: string; size?: number }) {
+  if (toolName === "run_command" || toolName === "search_files" || toolName === "list_dir") {
+    return <TerminalIcon size={size} />;
+  }
+  if (toolName === "web_fetch" || toolName === "web_search") return <Globe size={size} />;
+  if (toolName.startsWith("search")) return <Search size={size} />;
+  if (toolName === "delegate_task") return <Bot size={size} />;
+  return <Sparkles size={size} />;
 }
 
 /** Extract a file path from a tool.use event's argsSummary. The runtime
@@ -84,6 +94,13 @@ function filePathFromArgs(toolName: string, argsSummary: string): string | null 
   // quotes if present.
   const trimmed = argsSummary.trim().replace(/^["']|["']$/g, "");
   return trimmed === "" ? null : trimmed;
+}
+
+/** Split a path into dir + basename for a nicer mono rendering. */
+function splitPath(path: string): { dir: string; base: string } {
+  const idx = Math.max(path.lastIndexOf("/"), path.lastIndexOf("\\"));
+  if (idx === -1) return { dir: "", base: path };
+  return { dir: path.slice(0, idx + 1), base: path.slice(idx + 1) };
 }
 
 interface ToolCard {
@@ -147,7 +164,8 @@ function parseSubAgentEvents(events: SessionEvent[]): {
   return { promptText, actions, filesWritten, report, hasRunningTool };
 }
 
-/** Derive a live status from the session detail (status field + hasRunningTool). */
+/**
+ * Derive a live status from the session detail (status field + hasRunningTool). */
 function deriveStatus(detail: SessionDetail | undefined, hasRunningTool: boolean): "idle" | "running" | "completed" | "failed" {
   if (!detail) return "idle";
   const s = (detail as unknown as { status?: string }).status;
@@ -180,6 +198,8 @@ export function SubAgentPanel({ tab }: { tab: RightSidebarTab }) {
   const liveStatus = deriveStatus(detailQuery.data, hasRunningTool);
   const role = tab.subRole ?? "agent";
   const roleColor = ROLE_COLORS[role] ?? styles.textTertiary;
+  const [filesExpanded, setFilesExpanded] = useState(false);
+  const filesToShow = filesExpanded ? filesWritten : filesWritten.slice(0, 5);
 
   if (subAgentId === null) {
     return (
@@ -193,7 +213,7 @@ export function SubAgentPanel({ tab }: { tab: RightSidebarTab }) {
 
   return (
     <div ref={scrollRef} className="h-full flex flex-col min-h-0 overflow-y-auto auto-scroll">
-      {/* ── Header strip: role + live status ── */}
+      {/* ── Header strip: role + title + live status ── */}
       <div
         className="shrink-0 flex items-center gap-2 px-3 py-2 border-b"
         style={{ borderColor: styles.border, background: styles.isDark ? "rgba(0,0,0,0.18)" : styles.subtle }}
@@ -210,9 +230,10 @@ export function SubAgentPanel({ tab }: { tab: RightSidebarTab }) {
         <LiveStatusBadge status={liveStatus} styles={styles} />
       </div>
 
-      {/* ── The PROMPT at the top (user-message bubble, right-aligned) ── */}
+      {/* ── The TASK (the prompt this sub-agent was given) — right-aligned
+          role-tinted bubble, clamped to 10 lines (ROUND-42). ── */}
       {promptText !== null ? (
-        <div className="shrink-0 px-3 pt-3 pb-1 flex justify-end">
+        <div className="shrink-0 px-3 pt-3 pb-1 flex flex-col items-end">
           <div
             className="max-w-[88%] rounded-2xl rounded-br-sm px-3 py-2 text-[11.5px] leading-[1.55] whitespace-pre-wrap break-words"
             style={{
@@ -224,60 +245,127 @@ export function SubAgentPanel({ tab }: { tab: RightSidebarTab }) {
             <div className="text-[9px] font-bold uppercase tracking-wider mb-1" style={{ color: roleColor }}>
               Task
             </div>
-            {promptText}
+            <ClampedText
+              text={promptText}
+              lines={10}
+              expandLabel="Show full task"
+              collapseLabel="Collapse task"
+            />
           </div>
         </div>
       ) : null}
 
-      {/* ── Files written section (if any) ── */}
+      {/* ── Files manifest — what this sub-agent wrote/changed (ROUND-42:
+          compact rows, tool icons, count badge, clamped to 5 + toggle). ── */}
       {filesWritten.length > 0 ? (
-        <div className="shrink-0 px-3 py-2 mx-3 mt-2 rounded-xl border" style={{ borderColor: styles.border, background: styles.isDark ? "rgba(0,0,0,0.12)" : styles.subtle }}>
-          <div className="flex items-center gap-1.5 mb-1.5">
-            <FileCode2 size={12} style={{ color: styles.accent }} />
-            <span className="text-[9.5px] font-bold uppercase tracking-wider" style={{ color: styles.textTertiary }}>
-              Files written ({filesWritten.length})
-            </span>
-          </div>
-          <div className="flex flex-col gap-1">
-            {filesWritten.map((f, i) => (
-              <div key={`${f.path}-${i}`} className="flex items-center gap-1.5 text-[11px]">
-                <span style={{ color: styles.textTertiary }}>
-                  <FileToolIcon toolName={f.toolName} />
-                </span>
-                <span className="font-mono truncate" style={{ color: styles.textSecondary }} title={f.path}>
-                  {f.path}
-                </span>
-              </div>
-            ))}
+        <div className="shrink-0 px-3 py-2">
+          <div
+            className="rounded-xl border overflow-hidden"
+            style={{ borderColor: styles.border, background: styles.isDark ? "rgba(0,0,0,0.12)" : styles.subtle }}
+          >
+            <div
+              className="flex items-center gap-1.5 px-2.5 py-1.5 border-b"
+              style={{ borderColor: styles.borderSubtle }}
+            >
+              <FileCode2 size={12} style={{ color: styles.accent }} />
+              <span className="text-[9.5px] font-bold uppercase tracking-wider" style={{ color: styles.textTertiary }}>
+                Files
+              </span>
+              <span
+                className="ml-auto text-[9px] font-mono font-bold px-1.5 py-0.5 rounded-full"
+                style={{
+                  color: styles.accent,
+                  background: withAlpha(styles.accent, 0.12),
+                }}
+              >
+                {filesWritten.length}
+              </span>
+            </div>
+            <div className="flex flex-col">
+              {filesToShow.map((f, i) => {
+                const { dir, base } = splitPath(f.path);
+                return (
+                  <div
+                    key={`${f.path}-${i}`}
+                    className="flex items-center gap-1.5 px-2.5 py-1 text-[10.5px]"
+                    style={{ borderTop: i === 0 ? "none" : `1px solid ${styles.borderSubtle}` }}
+                  >
+                    <span className="shrink-0" style={{ color: styles.accent }}>
+                      <FileToolIcon toolName={f.toolName} />
+                    </span>
+                    <span className="font-mono truncate" style={{ color: styles.textSecondary }} title={f.path}>
+                      {dir ? (
+                        <span style={{ color: styles.textTertiary }}>{dir}</span>
+                      ) : null}
+                      <span style={{ color: styles.text }}>{base}</span>
+                    </span>
+                  </div>
+                );
+              })}
+              {filesWritten.length > 5 ? (
+                <button
+                  onClick={() => setFilesExpanded((v) => !v)}
+                  className="px-2.5 py-1 text-[10px] font-bold uppercase tracking-wider text-left transition-colors"
+                  style={{ color: styles.accent, borderTop: `1px solid ${styles.borderSubtle}` }}
+                >
+                  {filesExpanded
+                    ? "Show less"
+                    : `Show all ${filesWritten.length} files`}
+                </button>
+              ) : null}
+            </div>
           </div>
         </div>
       ) : null}
 
-      {/* ── Actions: tool cards + assistant bubbles, in order ── */}
-      <div className="px-3 py-2 flex flex-col gap-2">
-        <div className="text-[9.5px] font-bold uppercase tracking-wider mb-0.5" style={{ color: styles.textTertiary }}>
-          {actions.length === 0 ? "Working…" : "Live progress"}
+      {/* ── Activity timeline — tool rows + assistant bubbles, in order,
+          on a status-colored rail (ROUND-42 redesign). ── */}
+      <div className="px-3 py-2">
+        <div className="flex items-center gap-1.5 mb-2">
+          {liveStatus === "running" ? (
+            <LoaderCircle size={11} className="animate-spin" style={{ color: styles.accent }} />
+          ) : (
+            <MessageSquareText size={11} style={{ color: styles.textTertiary }} />
+          )}
+          <span className="text-[9.5px] font-bold uppercase tracking-wider" style={{ color: styles.textTertiary }}>
+            {actions.length === 0 ? "Working…" : "Live progress"}
+          </span>
         </div>
         {actions.length === 0 ? (
           <div className="text-[11px] py-2" style={{ color: styles.textTertiary }}>
             {liveStatus === "running" ? "Sub-agent is starting work…" : "No actions yet."}
           </div>
         ) : (
-          actions.map((a, i) =>
-            a.kind === "tool" && a.tool ? (
-              <ToolCardView key={`t-${i}`} tool={a.tool} styles={styles} />
-            ) : (
-              <AssistantBubble key={`a-${i}`} text={a.text ?? ""} styles={styles} isReport={false} />
-            ),
-          )
+          <div className="flex flex-col gap-1.5">
+            {actions.map((a, i) =>
+              a.kind === "tool" && a.tool ? (
+                <TimelineToolRow
+                  key={`t-${i}`}
+                  tool={a.tool}
+                  styles={styles}
+                  isLast={i === actions.length - 1 && liveStatus === "running" && a.tool.ok === null}
+                />
+              ) : (
+                <AssistantBubble
+                  key={`a-${i}`}
+                  text={a.text ?? ""}
+                  styles={styles}
+                  isReport={false}
+                />
+              ),
+            )}
+          </div>
         )}
       </div>
 
-      {/* ── Final report ── */}
+      {/* ── Final report — accent-rail card + eyebrow (clamped like the task). ── */}
       {report ? (
         <div className="px-3 pb-4 mt-1">
-          <div className="text-[9.5px] font-bold uppercase tracking-wider mb-1.5" style={{ color: styles.textTertiary }}>
-            Final report
+          <div className="flex items-center gap-1.5 mb-1.5">
+            <Sparkles size={11} style={{ color: styles.accent }} />
+            <span className="text-[9.5px] font-bold uppercase tracking-wider" style={{ color: styles.textTertiary }}>
+              Final report
+            </span>
           </div>
           <AssistantBubble text={report} styles={styles} isReport />
         </div>
@@ -322,57 +410,77 @@ function LiveStatusBadge({
   );
 }
 
-/** A tool card — icon + tool name + args + ok/failed status chip + output. */
-function ToolCardView({
+/**
+ * ROUND-42: a compact timeline tool row — status-colored left rail, icon,
+ * tool name, mono arg summary, status chip. The last RUNNING tool gets a
+ * pulsing rail (the live-progress signal).
+ */
+function TimelineToolRow({
   tool,
   styles,
+  isLast,
 }: {
   tool: ToolCard;
   styles: ReturnType<typeof useThemeStyles>;
+  isLast: boolean;
 }) {
   const isFileTool = FILE_TOOLS.has(tool.toolName);
-  const isTerminalTool = tool.toolName === "run_command" || tool.toolName === "search_files" || tool.toolName === "list_dir";
-  const Icon = isFileTool ? FileCode2 : isTerminalTool ? TerminalIcon : Bot;
-  const iconColor = isFileTool ? styles.accent : isTerminalTool ? styles.textTertiary : styles.textSecondary;
+  const statusColor =
+    tool.ok === null ? "#3B82F6" : tool.ok ? SEMANTIC_COLORS.success : SEMANTIC_COLORS.danger;
+  const { dir, base } = splitPath(tool.argsSummary);
   return (
     <div
-      className="rounded-lg border px-2.5 py-1.5 flex items-start gap-2"
-      style={{ borderColor: styles.border, background: styles.isDark ? "rgba(0,0,0,0.12)" : styles.subtle }}
+      className="flex items-start gap-2 rounded-lg border px-2 py-1.5"
+      style={{
+        borderColor: tool.ok === false ? withAlpha(SEMANTIC_COLORS.danger, 0.35) : styles.border,
+        background: styles.isDark ? "rgba(0,0,0,0.12)" : styles.subtle,
+      }}
     >
-      <div className="mt-0.5 shrink-0" style={{ color: iconColor }}>
-        <Icon size={13} />
+      {/* Status rail */}
+      <span
+        className={`shrink-0 w-[3px] self-stretch rounded-full ${tool.ok === null ? "animate-pulse" : ""}`}
+        style={{ background: statusColor, opacity: isLast ? 1 : 0.65 }}
+        aria-hidden
+      />
+      <div className="mt-0.5 shrink-0" style={{ color: isFileTool ? styles.accent : styles.textTertiary }}>
+        {isFileTool ? <FileCode2 size={12} /> : <ToolIcon toolName={tool.toolName} />}
       </div>
       <div className="flex-1 min-w-0">
         <div className="flex items-center gap-1.5">
-          <span className="font-mono text-[11px] font-semibold" style={{ color: styles.text }}>
+          <span className="font-mono text-[10.5px] font-semibold shrink-0" style={{ color: styles.text }}>
             {tool.toolName}
           </span>
           {tool.argsSummary ? (
-            <span className="font-mono text-[10.5px] truncate" style={{ color: styles.textTertiary }} title={tool.argsSummary}>
-              {tool.argsSummary}
+            <span className="font-mono text-[10px] truncate" style={{ color: styles.textTertiary }} title={tool.argsSummary}>
+              {dir ? <span style={{ color: styles.textTertiary, opacity: 0.7 }}>{dir}</span> : null}
+              {base}
             </span>
           ) : null}
           <div className="ml-auto shrink-0">
             {tool.ok === null ? (
-              <span className="inline-flex items-center gap-0.5 text-[9.5px] font-bold uppercase tracking-wider" style={{ color: styles.textTertiary }}>
+              <span className="inline-flex items-center gap-0.5 text-[9px] font-bold uppercase tracking-wider" style={{ color: "#3B82F6" }}>
                 <LoaderCircle size={9} className="animate-spin" />
                 running
               </span>
             ) : tool.ok ? (
-              <span className="inline-flex items-center gap-0.5 text-[9.5px] font-bold uppercase tracking-wider" style={{ color: SEMANTIC_COLORS.success }}>
+              <span className="inline-flex items-center gap-0.5 text-[9px] font-bold uppercase tracking-wider" style={{ color: SEMANTIC_COLORS.success }}>
                 <CircleCheck size={9} />
                 ok
               </span>
             ) : (
-              <span className="inline-flex items-center gap-0.5 text-[9.5px] font-bold uppercase tracking-wider" style={{ color: SEMANTIC_COLORS.danger }}>
+              <span className="inline-flex items-center gap-0.5 text-[9px] font-bold uppercase tracking-wider" style={{ color: SEMANTIC_COLORS.danger }}>
                 <CircleX size={9} />
                 failed
               </span>
             )}
           </div>
         </div>
-        {tool.outputSummary ? (
-          <div className="font-mono text-[10px] mt-0.5 truncate" style={{ color: styles.textTertiary }} title={tool.outputSummary}>
+        {tool.ok === false && tool.outputSummary ? (
+          <div className="font-mono text-[9.5px] mt-0.5 truncate" style={{ color: SEMANTIC_COLORS.danger }} title={tool.outputSummary}>
+            {tool.outputSummary}
+          </div>
+        ) : tool.ok === true && tool.outputSummary ? (
+          <div className="font-mono text-[9.5px] mt-0.5 truncate" style={{ color: styles.textTertiary }} title={tool.outputSummary}>
             {tool.outputSummary}
           </div>
         ) : null}
@@ -402,7 +510,11 @@ function AssistantBubble({
         border: isReport ? undefined : `1px solid ${styles.border}`,
       }}
     >
-      {text}
+      {isReport ? (
+        <ClampedText text={text} lines={10} expandLabel="Show full report" collapseLabel="Collapse report" />
+      ) : (
+        text
+      )}
     </div>
   );
 }

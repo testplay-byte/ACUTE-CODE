@@ -1,6 +1,7 @@
 import { Outlet, useLocation } from "react-router";
 import { useSidecarHealth } from "../../hooks/use-sidecar-health";
 import { useProjectChatStore } from "../../lib/project-chat-store";
+import { PushSetup } from "../../lib/push-setup";
 import { AcuteLogo, Sidebar } from "./Sidebar";
 import { NotificationStreamStarter } from "../notifications/NotificationStreamStarter";
 import { Toaster } from "../notifications/Toaster";
@@ -39,6 +40,10 @@ export function AppShell() {
           — boots once on mount, auto-reconnects on close, no-op in demo
           mode. Mounted HERE so it survives every route change. */}
       <NotificationStreamStarter />
+      {/* ROUND-42: Web Push setup — registers /sw.js + subscribes the browser
+          so desktop notifications fire even when the app window is CLOSED
+          (the service worker receives the push; click opens the session). */}
+      <PushSetup />
       {/* ROUND-40: the Toaster (bottom-right toast stack) — mounted ONCE at
           the app root so toasts surface regardless of which route is
           active, even when the sidebar (and thus the bell) is hidden on

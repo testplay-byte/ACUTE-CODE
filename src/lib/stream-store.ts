@@ -1,6 +1,7 @@
 import { create } from "zustand";
 import {
   streamSessionMessage,
+  stopSessionTurn,
   type StreamTurnEvent,
   type ToolUseEntry,
   type WorkingEntry,
@@ -184,6 +185,20 @@ export const useStreamStore = create<StreamStore>((set, get) => ({
               : cur.liveTurn,
         });
       }
+      // ROUND-42: invalidate from the STORE (not just the panel). A session
+      // that completes while its panel is UNMOUNTED (background session —
+      // the user switched projects/settings) previously left the sidebar
+      // showing the STALE session list, so the auto-renamed title (and the
+      // folded turn's arrival) never appeared until a manual refetch. The
+      // panel-mounted path also invalidates (AgentChatPanel.runTurn) —
+      // duplicate invalidation is a cheap no-op for react-query.
+      const qc = getQueryClient();
+      if (qc) {
+        void qc.invalidateQueries({ queryKey: ["sessions"] });
+        void qc.invalidateQueries({ queryKey: ["session"] });
+        void qc.invalidateQueries({ queryKey: ["usage"] });
+        void qc.invalidateQueries({ queryKey: ["subagents"] });
+      }
       // Stop the sidebar animation now that the stream has ended — this
       // fires regardless of whether any panel is mounted (so a background
       // session that completes while the user is on Settings also clears
@@ -194,6 +209,10 @@ export const useStreamStore = create<StreamStore>((set, get) => ({
   },
 
   abortStream: (sessionId) => {
+    // ROUND-42: turns now survive client disconnects (they complete in the
+    // background + notify via Web Push) — so Stop must EXPLICITLY abort the
+    // server-side turn, not just kill the local fetch.
+    void stopSessionTurn(sessionId);
     const c = controllers.get(sessionId);
     if (c) {
       c.abort();

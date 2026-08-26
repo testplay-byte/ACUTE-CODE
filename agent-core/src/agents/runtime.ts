@@ -76,8 +76,9 @@ export type TurnOutcome =
   | { ok: true; assistantMessage: AssistantMessage; usage: UsageRecord }
   | {
       ok: false;
-      status: 404 | 409 | 502;
-      code: "NOT_FOUND" | "CONFLICT" | "PROVIDER_ERROR";
+      status: 404 | 409 | 499 | 502;
+      /** ROUND-42: ABORTED = the user explicitly stopped the stream. */
+      code: "NOT_FOUND" | "CONFLICT" | "ABORTED" | "PROVIDER_ERROR";
       message: string;
       details?: Record<string, unknown>;
     };
@@ -813,6 +814,18 @@ export async function runStreamedAgentTurn(
         }
       }
     } catch (error) {
+      // ROUND-42: a deliberate user stop (POST /sessions/:id/stop) is not a
+      // provider failure — return a distinct ABORTED outcome so the route can
+      // skip the task_failed notification and the UI can render "Stopped".
+      if (signal?.aborted === true) {
+        logTurnEnd(session.id, false, Date.now() - startedAt, totalInputTokens, totalOutputTokens);
+        return {
+          ok: false,
+          status: 499,
+          code: "ABORTED",
+          message: `turn aborted for session ${session.id}`,
+        };
+      }
       const normalized = error instanceof Error ? error : new Error(String(error));
       logTurnEnd(session.id, false, Date.now() - startedAt, totalInputTokens, totalOutputTokens);
       return {

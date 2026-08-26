@@ -93,15 +93,57 @@ function timeAgo(iso: string): string {
 
 interface PopoverPos {
   top: number;
-  right: number;
+  left: number;
 }
 
-/** ROUND-41: the popover's measured height — used to decide flip-up vs
- * drop-down + to clamp the top so the popover never spills off the viewport
- * (owner: "the notification menu was showing below it… outside of the
- * screen, which I was unable to see at all"). */
+/** ROUND-42: the popover's measured width — used for viewport clamping on
+ * BOTH axes. The owner reported the bell's popover opening with its "left
+ * half completely cut out": the R41 fix only clamped the VERTICAL axis (top),
+ * but the popover was RIGHT-anchored at the bell — and the bell lives in the
+ * LEFT sidebar, so a 340px popover anchored at a bell ~60px from the screen's
+ * left edge extended ~280px off-screen. Positioning is now left-anchored
+ * with both axes clamped to the viewport. */
+const POPOVER_WIDTH = 340;
 const POPOVER_ESTIMATED_HEIGHT = 460;
 const POPOVER_VIEWPORT_MARGIN = 8;
+
+/** Compute a fully viewport-clamped position for the popover, given the
+ * bell button's rect + the popover's (estimated or measured) height.
+ *
+ * Horizontal: prefer aligning the popover's RIGHT edge with the bell's right
+ * edge (natural anchoring in the right sidebar); if that pushes the popover
+ * past the LEFT edge (bell near the screen's left — the left-sidebar case),
+ * align the popover's LEFT edge with the bell's left edge instead; if even
+ * that overflows (tiny viewport), clamp to the margin.
+ * Vertical: drop below the bell; flip up when there's more room above; then
+ * clamp so neither edge can spill off-screen. */
+function computePopoverPos(
+  bell: DOMRect,
+  popoverH: number,
+): { top: number; left: number } {
+  const maxLeft = window.innerWidth - POPOVER_WIDTH - POPOVER_VIEWPORT_MARGIN;
+  let left: number;
+  const rightAligned = bell.right - POPOVER_WIDTH;
+  if (rightAligned >= POPOVER_VIEWPORT_MARGIN) {
+    left = rightAligned;
+  } else if (bell.left + POPOVER_WIDTH <= window.innerWidth - POPOVER_VIEWPORT_MARGIN) {
+    left = bell.left;
+  } else {
+    left = Math.max(POPOVER_VIEWPORT_MARGIN, Math.min(bell.left, maxLeft));
+  }
+  const spaceBelow = window.innerHeight - bell.bottom - POPOVER_VIEWPORT_MARGIN;
+  const spaceAbove = bell.top - POPOVER_VIEWPORT_MARGIN;
+  let top: number;
+  if (spaceBelow >= popoverH || spaceBelow >= spaceAbove) {
+    top = bell.bottom + 6;
+    const maxTop = window.innerHeight - popoverH - POPOVER_VIEWPORT_MARGIN;
+    if (top > maxTop) top = Math.max(POPOVER_VIEWPORT_MARGIN, maxTop);
+  } else {
+    top = bell.top - 6 - popoverH;
+    if (top < POPOVER_VIEWPORT_MARGIN) top = POPOVER_VIEWPORT_MARGIN;
+  }
+  return { top, left };
+}
 
 export function NotificationBell({ collapsed }: { collapsed: boolean }) {
   const styles = useThemeStyles();
@@ -130,23 +172,9 @@ export function NotificationBell({ collapsed }: { collapsed: boolean }) {
   const reposition = useCallback(() => {
     if (!btnRef.current) return;
     const r = btnRef.current.getBoundingClientRect();
-    const right = window.innerWidth - r.right;
     // Measure the actual popover height if mounted; fall back to an estimate.
     const popoverH = popoverRef.current?.offsetHeight ?? POPOVER_ESTIMATED_HEIGHT;
-    const spaceBelow = window.innerHeight - r.bottom - POPOVER_VIEWPORT_MARGIN;
-    const spaceAbove = r.top - POPOVER_VIEWPORT_MARGIN;
-    let top: number;
-    if (spaceBelow >= popoverH || spaceBelow >= spaceAbove) {
-      // Drop down — but clamp so it never spills past the viewport bottom.
-      top = r.bottom + 6;
-      const maxTop = window.innerHeight - popoverH - POPOVER_VIEWPORT_MARGIN;
-      if (top > maxTop) top = Math.max(POPOVER_VIEWPORT_MARGIN, maxTop);
-    } else {
-      // Flip up — open above the bell. Clamp so it never spills past the top.
-      top = r.top - 6 - popoverH;
-      if (top < POPOVER_VIEWPORT_MARGIN) top = POPOVER_VIEWPORT_MARGIN;
-    }
-    setPopoverPos({ top, right });
+    setPopoverPos(computePopoverPos(r, popoverH));
   }, []);
   useEffect(() => {
     if (!open) return;
@@ -207,19 +235,7 @@ export function NotificationBell({ collapsed }: { collapsed: boolean }) {
       // + clamps once the actual height is known).
       if (btnRef.current) {
         const r = btnRef.current.getBoundingClientRect();
-        const popoverH = POPOVER_ESTIMATED_HEIGHT;
-        const spaceBelow = window.innerHeight - r.bottom - POPOVER_VIEWPORT_MARGIN;
-        const spaceAbove = r.top - POPOVER_VIEWPORT_MARGIN;
-        let top: number;
-        if (spaceBelow >= popoverH || spaceBelow >= spaceAbove) {
-          top = r.bottom + 6;
-          const maxTop = window.innerHeight - popoverH - POPOVER_VIEWPORT_MARGIN;
-          if (top > maxTop) top = Math.max(POPOVER_VIEWPORT_MARGIN, maxTop);
-        } else {
-          top = r.top - 6 - popoverH;
-          if (top < POPOVER_VIEWPORT_MARGIN) top = POPOVER_VIEWPORT_MARGIN;
-        }
-        setPopoverPos({ top, right: window.innerWidth - r.right });
+        setPopoverPos(computePopoverPos(r, POPOVER_ESTIMATED_HEIGHT));
       }
     }
     setOpen((v) => !v);
@@ -291,7 +307,7 @@ export function NotificationBell({ collapsed }: { collapsed: boolean }) {
                   className="fixed z-[80] w-[340px] max-w-[calc(100vw-1rem)] rounded-[14px] border-[1.5px] overflow-hidden"
                   style={{
                     top: popoverPos.top,
-                    right: popoverPos.right,
+                    left: popoverPos.left,
                     backgroundColor: styles.card,
                     borderColor: styles.border,
                     boxShadow: styles.softShadow,

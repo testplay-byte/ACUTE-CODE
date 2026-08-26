@@ -120,6 +120,9 @@ describe("openDatabase", () => {
       // ROUND-40: app-level notifications (task complete/failed, permission
       // requests, sub-agent transitions).
       { version: 11, name: "0011_notifications.sql" },
+      // ROUND-42: Web Push subscriptions (desktop notifications with the
+      // app window closed).
+      { version: 12, name: "0012_push_subscriptions.sql" },
     ]);
     expect(appliedSecond).toEqual(appliedFirst);
   });

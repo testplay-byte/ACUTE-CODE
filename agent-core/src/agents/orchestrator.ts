@@ -431,15 +431,33 @@ class Orchestrator {
   }
 
   /** Boot sweep (ADR-0022 §3): a dead sidecar leaves `running` sessions —
-   * flip them to `failed` so they're retryable. Call at server start. */
+   * flip them to `failed` so they're retryable. Call at server start.
+   *
+   * ROUND-42 FIX: a session whose last event is an assistant reply merely
+   * FINISHED a turn earlier (parent sessions intentionally stay `running`
+   * so they accept the next message — `completed` is a TERMINAL status).
+   * Flipping those to `failed` killed every idle conversation on every
+   * sidecar restart ("session … is failed and no longer accepts messages").
+   * Now: last event = message.assistant → back to `queued` (idle, alive);
+   * anything else (user message / tool.use with no closing reply — a genuine
+   * mid-turn crash) → `failed` as ADR-0022 intended. */
   static sweepStaleRunning(db: SqliteDatabase): number {
     const stale = db
       .prepare("SELECT id FROM sessions WHERE status = 'running'")
       .all() as Array<{ id: string }>;
+    let swept = 0;
     for (const row of stale) {
-      setSessionStatus(db, row.id, "failed");
+      const events = listSessionEvents(db, row.id);
+      const last = events[events.length - 1];
+      if (last !== undefined && last.type === "message.assistant") {
+        // Idle after a completed turn — the conversation is alive.
+        setSessionStatus(db, row.id, "queued");
+      } else {
+        setSessionStatus(db, row.id, "failed");
+        swept += 1;
+      }
     }
-    return stale.length;
+    return swept;
   }
 }
 

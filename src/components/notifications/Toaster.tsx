@@ -142,6 +142,15 @@ export function Toaster() {
     if (!lastNotification) return;
     if (typeof window === "undefined" || !("Notification" in window)) return;
     if (Notification.permission !== "granted") return;
+    // ROUND-42: only fire the in-page desktop notification when the page is
+    // NOT visible. Three delivery paths, exactly one surface at a time:
+    //   - page VISIBLE      → in-app toast only (the owner is watching).
+    //   - page hidden/alive → this Notification + the sw.js push (same tag
+    //                         → the browser replaces, never stacks).
+    //   - page CLOSED       → sw.js push only (page JS is dead — that's why
+    //                         R41 alone could never satisfy "closed window
+    //                         ⇒ desktop notification").
+    if (document.visibilityState === "visible") return;
     const n = lastNotification;
     try {
       const desktop = new Notification(n.title, {

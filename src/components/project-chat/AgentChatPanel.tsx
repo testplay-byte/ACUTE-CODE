@@ -38,6 +38,7 @@ import {
   type ApprovalRemember,
 } from "./WorkingSection";
 import { AcuteLogo } from "../shell/Sidebar";
+import { ClampedText } from "../shared/ClampedText";
 import {
   type Agent,
   type AssistantTurnItem,
@@ -197,6 +198,10 @@ function UserMessage({ content }: { content: string }) {
   // bubble + white text was loud and harsh. Redesigned as a calm, refined
   // accent-tinted bubble with primary text + a soft border + a small tail,
   // medium weight for presence without shouting.
+  // ROUND-42 (owner: long prompts "should be minimized to about 10 lines or
+  // so… the user has to manually click the expand button to see the full
+  // one"): the bubble clamps at 10 lines with a Show more/less toggle —
+  // short messages render exactly as before.
   const bubbleBg = withAlpha(styles.accent, styles.isDark ? 0.18 : 0.1);
   const bubbleBorder = withAlpha(styles.accent, styles.isDark ? 0.32 : 0.22);
   return (
@@ -218,7 +223,13 @@ function UserMessage({ content }: { content: string }) {
             color: styles.text,
           }}
         >
-          {content}
+          <ClampedText
+            text={content}
+            lines={10}
+            expandLabel="Show full message"
+            collapseLabel="Show less"
+            className="whitespace-pre-wrap break-words"
+          />
         </div>
       </div>
     </motion.div>

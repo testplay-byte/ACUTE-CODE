@@ -28,7 +28,7 @@ describe("Sidebar projects section (fixture ProjectsBackend)", () => {
       </>,
     );
     // Sidebar is hidden below md but present in DOM; the dialog is portal-free.
-    fireEvent.click(screen.getAllByRole("button", { name: /^Add$/i, hidden: true })[0]);
+    fireEvent.click(screen.getAllByRole("button", { name: /^Add project$/i, hidden: true })[0]);
     expect(await screen.findByText("Add New Project")).toBeTruthy();
     // ROUND-33: no name field — the project takes the FOLDER's name.
     fireEvent.change(await screen.findByPlaceholderText(/path|folder|project/i), {
@@ -77,7 +77,7 @@ describe("Sidebar projects section (fixture ProjectsBackend)", () => {
         </Routes>
       </>,
     );
-    fireEvent.click(screen.getAllByRole("button", { name: /^Add$/i, hidden: true })[0]);
+    fireEvent.click(screen.getAllByRole("button", { name: /^Add project$/i, hidden: true })[0]);
     expect(await screen.findByText("Add New Project")).toBeTruthy();
     // The seeded fixture already uses this rootPath (409 CONFLICT).
     fireEvent.change(await screen.findByPlaceholderText(/path|folder|project/i), {

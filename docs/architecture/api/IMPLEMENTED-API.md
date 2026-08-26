@@ -1,4 +1,4 @@
-<!-- last-reviewed: 2026-08-25 round-37 -->
+<!-- last-reviewed: 2026-08-26 round-42 -->
 # IMPLEMENTED API — the shipped surface
 
 **Truth = this file.** Verified against `agent-core/src/server.ts` at
@@ -57,7 +57,8 @@ containment-enforced).
 | `GET /sessions?limit=&offset=` | newest-first + total (NO projectId filter — client-side) |
 | `GET /sessions/:id` | session + `events[]` + `lastSeq` (events embedded; no backfill route) |
 | `POST /sessions/:id/messages` | `{content, model?}` — **synchronous whole turn** → `200 {assistantMessage:{seq,role,agentId,content,ts}, usage}`; 404/409 (terminal/unconfigured/no key)/502 provider |
-| `POST /sessions/:id/messages/stream` | **SSE (the UI's primary path)** — same validation; `text/event-stream` frames: `{type:"text-delta",delta}` · `{type:"tool-call",toolName,argsSummary}` · `{type:"tool-result",toolName,argsSummary,ok}` · `{type:"finish",usage}` · terminal `{type:"done",assistantMessage,usage}` or `{type:"error",status,code,message}`. Client disconnect aborts the provider call (AbortSignal). |
+| `POST /sessions/:id/messages/stream` | **SSE (the UI's primary path)** — same validation; `text/event-stream` frames: `{type:"text-delta",delta}` · `{type:"tool-call",toolName,argsSummary}` · `{type:"tool-result",toolName,argsSummary,ok}` · `{type:"finish",usage}` · terminal `{type:"done",assistantMessage,usage}` or `{type:"error",status,code,message}`. **R42: a client disconnect does NOT abort the turn** — it completes in the background (events persist; the completion notification fires + Web Push delivers it to the closed window's service worker). A deliberate stop is `POST /sessions/:id/stop`. |
+| `POST /sessions/:id/stop` | **R42** — explicitly aborts the live streamed turn for the session → `{ok:true, stopped:boolean}`; the stream resolves with `{type:"stopped"}` (NOT an error; no task_failed notification). |
 
 `model` on either turn route overrides the agent's model for that call
 (ADR-0015). Usage on streamed turns = awaited totals cross-checked against
@@ -104,11 +105,28 @@ until estimation lands).
   (`ACUTE_LOG_PATH`/`ACUTE_LOG_LEVEL` env overrides) — turn lifecycle, tool
   calls (names + argsSummary only), approval lifecycle, boot sweeps.
 
+## ROUND-42 additions (implemented)
+
+- `GET /api/v1/notifications/push/key` → `{publicKey}` (the machine's VAPID
+  public key; `503 UNAVAILABLE` when the sidecar has no dataDir — tests).
+- `POST /api/v1/notifications/push/subscribe` `{endpoint, keys:{p256dh,auth}}`
+  → `{ok:true}` (upsert by endpoint; 400 on malformed bodies).
+- `POST /api/v1/notifications/push/unsubscribe` `{endpoint}` → `{ok:true}`.
+- Every published notification (task complete/failed, permission requests,
+  sub-agent transitions) is fanned out via Web Push to every stored
+  subscription (fire-and-forget; 404/410 endpoints pruned).
+- `task_complete` now fires for EVERY successful streamed turn (the R40
+  didWork gate is gone); `task_failed` only for outcomes with status ≥ 500
+  (404/409 request errors stay quiet).
+- Boot sweep (ADR-0022): a `running` session whose LAST event is
+  `message.assistant` returns to `queued` (idle conversation — alive);
+  only genuine mid-turn crashes go to `failed`.
+
 ## NOT implemented (despite API.md)
 
 `/ws` (no WS gateway — SSE per-turn instead) · `/internal/shutdown` ·
 project file writes over REST · git/memory/skills/mcp/settings routes ·
 audit_log routes (approvals ARE implemented — see above) ·
-session stop/events-backfill · connection-test/model-listing for
+session events-backfill · connection-test/model-listing for
 non-chat-completions providers (manual model rows work) ·
 dev port is **5178**, not 8765.

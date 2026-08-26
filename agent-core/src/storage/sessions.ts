@@ -265,16 +265,20 @@ export function touchSession(db: SqliteDatabase, id: string): void {
 }
 
 /**
- * ROUND-38/41 (owner: "by default if I create a new chat session and send
+ * ROUND-38/41/42 (owner: "by default if I create a new chat session and send
  * in my very first message, it should be given a name based on what was
  * happening in it"). Called after a turn completes. If the session still
- * carries the DEFAULT title (null or the parent project's name — the value
- * AgentChatPanel seeds at create time) AND has at least one user message,
- * rename it to a SHORT, readable title derived from the FIRST user message
- * (stripped of markdown, first sentence, max 60 chars on a word boundary,
- * ellipsis if truncated, capitalized). No-op once the user has manually
- * renamed or the first auto-title has landed. Sub-agent children keep their
- * task-derived titles.
+ * carries a DEFAULT title AND has at least one user message, rename it to a
+ * SHORT, readable title derived from the FIRST user message (stripped of
+ * markdown, first sentence, max 60 chars on a word boundary, ellipsis if
+ * truncated, capitalized). No-op once the user has manually renamed or the
+ * first auto-title has landed. Sub-agent children keep their task-derived
+ * titles.
+ *
+ * ROUND-42 FIX (owner: "it was still not renamed like it should be"): the
+ * sidebar's + button creates sessions titled `New chat · <ProjectName>` — the
+ * R41 check only matched `null` or the bare project name, so those sessions
+ * were NEVER auto-renamed. Both seed formats are now recognized as defaults.
  *
  * The project name is read via a direct SQL lookup (not getProject) to keep
  * sessions.ts free of a projects.ts import edge.
@@ -290,7 +294,12 @@ export function maybeAutoTitleSession(db: SqliteDatabase, sessionId: string): vo
       .get(session.projectId) as { name?: string } | undefined;
     defaultTitle = row?.name ?? null;
   }
-  const isDefault = session.title === null || session.title === defaultTitle;
+  // Default titles: null (AgentChatPanel's auto-create path seeds the project
+  // name below), the bare project name, or the sidebar's `New chat · <name>`.
+  const isDefault =
+    session.title === null ||
+    session.title === defaultTitle ||
+    (defaultTitle !== null && session.title === `New chat · ${defaultTitle}`);
   if (!isDefault) return;
   const events = listSessionEvents(db, sessionId);
   const firstUser = events.find((e) => e.type === "message.user");

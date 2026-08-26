@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { motion } from "framer-motion";
 import { useThemeStyles } from "../../lib/use-theme-styles";
 import { ease } from "../../lib/motion";
@@ -25,12 +25,46 @@ import type { Project } from "../../lib/api";
  *   `${projectId}::${sessionId}`. setActiveSession is called whenever the
  *   active session id changes (resolved by useActiveSessionId from the URL
  *   ?session= param or the project's most-recent session).
+ * - ROUND-42 (owner: "There should be a minimum width for the chat window.
+ *   The chat window cannot be minimized or shrunk more than that. If it
+ *   requires the screen display size then the other elements will be made
+ *   smaller more than that. The right sidebar window will be made smaller
+ *   automatically, smoothly"). The chat column now carries a hard MIN-WIDTH;
+ *   the right sidebar's EFFECTIVE width is clamped against the measured
+ *   container width (ResizeObserver) so on narrow screens the sidebar — never
+ *   the chat — shrinks, smoothly (the width is a motion-animated value).
  */
+
+/** The chat window's floor. Below this the RIGHT SIDEBAR gives way instead. */
+const CHAT_MIN_WIDTH = 480;
+/** The resize handle's footprint. */
+const HANDLE_WIDTH = 5;
+/** The gap between the chat card and the sidebar card. */
+const SEAM_GAP = 3;
+
 export function ChatFocusLayout({ project }: { project: Project }) {
   const styles = useThemeStyles();
   const setActiveProject = useRightSidebarStore((s) => s.setActiveProject);
   const setActiveSession = useRightSidebarStore((s) => s.setActiveSession);
   const sessionId = useActiveSessionId(project.id);
+  const containerRef = useRef<HTMLDivElement>(null);
+  const [containerWidth, setContainerWidth] = useState<number | null>(null);
+
+  // ROUND-42: measure the layout's own width so the right sidebar can be
+  // clamped against the CHAT's minimum — on narrow windows the sidebar
+  // smoothly yields space instead of squeezing the chat below its floor.
+  useEffect(() => {
+    const el = containerRef.current;
+    if (el === null) return;
+    const observer = new ResizeObserver((entries) => {
+      for (const entry of entries) {
+        setContainerWidth(entry.contentRect.width);
+      }
+    });
+    observer.observe(el);
+    setContainerWidth(el.getBoundingClientRect().width);
+    return () => observer.disconnect();
+  }, []);
 
   // Declare this project active in the right-sidebar store (so its
   // per-project slice is the one the sidebar renders). Idempotent.
@@ -48,7 +82,6 @@ export function ChatFocusLayout({ project }: { project: Project }) {
   // Resize handle for the right sidebar (drag left/right to grow/shrink).
   const isResizing = useRef(false);
   const startX = useRef(0);
-  const startWidth = useRef(0);
   const onResize = useCallback((delta: number) => {
     const s = useRightSidebarStore.getState();
     const key = stateKey(project.id, s.activeSessionByProject[project.id] ?? null);
@@ -79,15 +112,20 @@ export function ChatFocusLayout({ project }: { project: Project }) {
 
   return (
     <motion.div
-      className="h-full min-h-0 flex gap-[3px]"
+      ref={containerRef}
+      className="h-full min-h-0 flex"
+      style={{ gap: SEAM_GAP }}
       initial={{ opacity: 0 }}
       animate={{ opacity: 1 }}
       transition={{ duration: 0.3, ease }}
     >
-      {/* The floating chat window — its own surface. */}
+      {/* The floating chat window — its own surface. ROUND-42: hard minimum
+          width; when space runs out the RIGHT SIDEBAR shrinks (its effective
+          width is clamped below), never the chat. */}
       <div
         className="flex-1 min-h-0 flex rounded-[24px] border-[1.5px] overflow-hidden"
         style={{
+          minWidth: CHAT_MIN_WIDTH,
           backgroundColor: styles.card,
           borderColor: styles.border,
           boxShadow: styles.softShadow,
@@ -109,7 +147,8 @@ export function ChatFocusLayout({ project }: { project: Project }) {
         </div>
       </div>
 
-      {/* Resize handle between chat and the right sidebar. */}
+      {/* Resize handle between chat and the right sidebar. ROUND-42: also
+          keyboard-resizable (Arrow keys ±16px) for accessibility. */}
       <div
         role="separator"
         aria-orientation="vertical"
@@ -121,11 +160,17 @@ export function ChatFocusLayout({ project }: { project: Project }) {
           e.preventDefault();
           isResizing.current = true;
           startX.current = e.clientX;
-          const s = useRightSidebarStore.getState();
-          const key = stateKey(project.id, s.activeSessionByProject[project.id] ?? null);
-          startWidth.current = s.byProject[key]?.width ?? 440;
           document.body.style.cursor = "ew-resize";
           document.body.style.userSelect = "none";
+        }}
+        onKeyDown={(e) => {
+          if (e.key === "ArrowLeft") {
+            e.preventDefault();
+            onResize(16);
+          } else if (e.key === "ArrowRight") {
+            e.preventDefault();
+            onResize(-16);
+          }
         }}
         onFocus={(e) => {
           e.currentTarget.style.background = styles.border;
@@ -146,8 +191,19 @@ export function ChatFocusLayout({ project }: { project: Project }) {
         />
       </div>
 
-      {/* The right sidebar (Files / Terminal / Browser / Sub-agents). */}
-      <RightSidebar projectId={project.id} sessionId={sessionId} />
+      {/* The right sidebar (Files / Terminal / Browser / Sub-agents).
+          ROUND-42: `maxWidth` caps the sidebar's stored width against the
+          measured container so the chat never drops below CHAT_MIN_WIDTH —
+          on narrow windows the sidebar smoothly auto-shrinks instead. */}
+      <RightSidebar
+        projectId={project.id}
+        sessionId={sessionId}
+        maxWidth={
+          containerWidth === null
+            ? undefined
+            : Math.max(280, containerWidth - CHAT_MIN_WIDTH - HANDLE_WIDTH - SEAM_GAP * 2)
+        }
+      />
     </motion.div>
   );
 }

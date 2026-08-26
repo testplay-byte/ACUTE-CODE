@@ -13,6 +13,7 @@ import {
 import {
   useRightSidebarStore,
   stateKey,
+  defaultProjectRightState,
   type RightSidebarTabType,
 } from "../../lib/right-sidebar-store";
 import { useRightSidebarEvents } from "../../lib/right-sidebar-events";
@@ -56,10 +57,16 @@ const ROLE_COLORS: Record<string, string> = {
 export function RightSidebar({
   projectId,
   sessionId,
+  maxWidth,
 }: {
   projectId: string;
   /** The current PARENT session id (for the sub-agents quick-menu list). */
   sessionId: string | null;
+  /** ROUND-42: render-time cap on the sidebar's width — computed by
+   * ChatFocusLayout from the container's measured width so the CHAT never
+   * drops below its minimum. On narrow windows the sidebar smoothly
+   * auto-shrinks instead of squeezing the chat. */
+  maxWidth?: number;
 }) {
   const styles = useThemeStyles();
   // ROUND-41: the slice is keyed by `${projectId}::${sessionId}` so each
@@ -80,12 +87,23 @@ export function RightSidebar({
   const openTerminal = useRightSidebarStore((s) => s.openTerminal);
   const openSubAgent = useRightSidebarStore((s) => s.openSubAgent);
   const requestFilePicker = useRightSidebarEvents((s) => s.requestFilePicker);
-  // Make sure the project has a slice (idempotent — uses the active session's key).
-  if (slice === undefined) ensure(projectId);
-  const state = slice ?? useRightSidebarStore.getState().byProject[stateKey(projectId, activeSessionId)];
-  if (state === undefined) return null;
+  // ROUND-42: ensure the project has a slice (idempotent — uses the active
+  // session's key). Moved OUT of the render body — calling the zustand setter
+  // during render triggered React's "Cannot update a component while
+  // rendering" warning. The effect runs post-render; until then a default
+  // slice renders (visually identical — no tabs, default width).
+  useEffect(() => {
+    if (slice === undefined) ensure(projectId);
+  }, [slice, projectId, ensure]);
+  const state = slice ?? defaultProjectRightState();
   const open = state.open;
-  const width = state.width;
+  // ROUND-42: the EFFECTIVE width — the stored (dragged) width clamped by
+  // the layout's computed cap. `Math.max(240, …)` keeps a sane floor even on
+  // extremely narrow windows (better a slim sidebar than an overflowing
+  // layout). The framer-motion `animate` width below transitions SMOOTHLY
+  // whenever the cap changes (window resize) — the owner asked for the
+  // shrink to happen "automatically, smoothly".
+  const width = Math.max(240, Math.min(state.width, maxWidth ?? state.width));
 
   // Quick-menu open state.
   const [quickMenuOpen, setQuickMenuOpen] = useState(false);
@@ -404,7 +422,13 @@ export function RightSidebar({
       {/* ── Active panel ── */}
       <div className="flex-1 min-h-0 overflow-hidden">
         {activeTab === null ? (
-          <EmptyState styles={styles} onNewTab={openQuickMenu} />
+          <EmptyState
+            styles={styles}
+            onNewTab={openQuickMenu}
+            onOpenFile={() => requestFilePicker()}
+            onOpenBrowser={() => openBrowser(projectId, null)}
+            onOpenTerminal={() => openTerminal(projectId)}
+          />
         ) : activeTab.type === "file" ? (
           <FileViewerPanel projectId={projectId} tab={activeTab} />
         ) : activeTab.type === "terminal" ? (
@@ -606,10 +630,25 @@ function SubAgentPicker({
 function EmptyState({
   styles,
   onNewTab,
+  onOpenFile,
+  onOpenBrowser,
+  onOpenTerminal,
 }: {
   styles: ReturnType<typeof useThemeStyles>;
   onNewTab: () => void;
+  onOpenFile: () => void;
+  onOpenBrowser: () => void;
+  onOpenTerminal: () => void;
 }) {
+  // ROUND-42: the empty sidebar is no longer a bare dashed + — direct
+  // quick-actions open the common tabs in ONE click (the + quick-menu stays
+  // for the sub-agent picker). Looks intentional instead of empty (owner:
+  // "the right side empty area… both of them were not good").
+  const actions = [
+    { label: "Open a file", icon: Files, onClick: onOpenFile },
+    { label: "Browse the web", icon: Globe, onClick: onOpenBrowser },
+    { label: "Open a terminal", icon: TerminalIcon, onClick: onOpenTerminal },
+  ];
   return (
     <div className="h-full grid place-items-center px-6 text-center">
       <div>
@@ -636,8 +675,33 @@ function EmptyState({
         <div className="text-[12.5px] font-medium" style={{ color: styles.textSecondary }}>
           No tabs open
         </div>
-        <div className="text-[11px] mt-1.5" style={{ color: styles.textTertiary }}>
-          Click + to open a file, browser, terminal, or sub-agent tab.
+        <div className="text-[11px] mt-1.5 mb-3" style={{ color: styles.textTertiary }}>
+          Pick one to get started:
+        </div>
+        <div className="flex flex-col gap-1.5 max-w-[220px] mx-auto">
+          {actions.map(({ label, icon: Icon, onClick }) => (
+            <button
+              key={label}
+              onClick={onClick}
+              className="w-full flex items-center gap-2 h-9 px-3 rounded-xl border text-[12px] font-medium transition-all hover:-translate-y-px"
+              style={{
+                borderColor: styles.border,
+                background: styles.isDark ? "rgba(0,0,0,0.12)" : styles.subtle,
+                color: styles.textSecondary,
+              }}
+              onMouseEnter={(e) => {
+                e.currentTarget.style.borderColor = withAlpha(styles.accent, 0.5);
+                e.currentTarget.style.color = styles.text;
+              }}
+              onMouseLeave={(e) => {
+                e.currentTarget.style.borderColor = styles.border;
+                e.currentTarget.style.color = styles.textSecondary;
+              }}
+            >
+              <Icon size={14} style={{ color: styles.accent }} className="shrink-0" />
+              {label}
+            </button>
+          ))}
         </div>
       </div>
     </div>

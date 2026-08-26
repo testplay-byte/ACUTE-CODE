@@ -25,7 +25,7 @@ describe("App shell (owner round-8 structure)", () => {
     expect(screen.getAllByText("Projects").length).toBeGreaterThanOrEqual(2);
     expect(screen.getByRole("button", { name: /^usage$/i })).toBeTruthy();
     expect(screen.getByRole("button", { name: /^settings$/i })).toBeTruthy();
-    expect(screen.getByRole("button", { name: /^Add$/i })).toBeTruthy();
+    expect(screen.getByRole("button", { name: /^Add project$/i })).toBeTruthy();
 
     // Sessions and Agents are deliberately NOT sidebar entries anymore.
     expect(screen.queryByRole("link", { name: "Sessions" })).toBeNull();

@@ -41,12 +41,11 @@ import { useThemeStyles } from "../../lib/use-theme-styles";
  * forward / reload / address bar) injected by browser.rs so it feels like
  * a real browser, not a bare webview.
  *
- * Error handling: if the Tauri invoke is unavailable (plain Vite preview,
- * no desktop shell), the panel surfaces a CLEAR inline error explaining
- * the embedded browser requires the Tauri desktop app. We deliberately DO
- * NOT fall through to window.open — Tauri v2 intercepts window.open(_blank)
- * → OS default browser → system Edge, which was the exact leak the owner
- * reported ("it was utilizing Microsoft Edge").
+ * Error handling: in the Tauri shell, invoke failures surface a CLEAR
+ * inline error. In plain web mode (launcher/dev — ROUND-42), URLs open in a
+ * NEW TAB of the current browser (the owner's actual setup); we never
+ * shell out to the OS default browser from the Tauri app (that was the
+ * Edge leak the owner reported).
  */
 function normalizeUrl(raw: string): string {
   const trimmed = raw.trim();
@@ -66,6 +65,10 @@ function tauriInvoke(): ((cmd: string, args?: Record<string, unknown>) => Promis
   }).__TAURI__?.core;
   return w?.invoke ?? null;
 }
+
+/** ROUND-42: are we inside the Tauri desktop shell (native browser window
+ * available) or a plain browser tab (launcher/dev mode)? */
+const IS_TAURI = tauriInvoke() !== null;
 
 export function BrowserPanel({ projectId, tab }: { projectId: string; tab: RightSidebarTab }) {
   const styles = useThemeStyles();
@@ -98,9 +101,22 @@ export function BrowserPanel({ projectId, tab }: { projectId: string; tab: Right
       setDraft(url);
       setBrowserError(null);
       if (!invoke) {
-        setBrowserError(
-          "The embedded browser is only available in the Tauri desktop app. Run the packaged app (launcher/ACUTE.bat) or `pnpm tauri dev` to browse. In plain dev mode the right sidebar can't open a native browser window.",
-        );
+        // ROUND-42 (owner: "I am on Windows and I need it to be working
+        // properly" — he launches via ACUTE.bat, which serves the UI in his
+        // normal browser, NOT inside the Tauri shell). In plain web mode
+        // there is no native window to open — open the URL in a NEW TAB of
+        // the browser the user is already in. This is NOT the old "Edge
+        // leak" (that was the TAURI app shelling out to the OS default
+        // browser); here the user is ALREADY in their browser and a new tab
+        // is the natural, expected behavior.
+        const opened = window.open(url, "_blank", "noopener,noreferrer");
+        if (opened === null) {
+          // Popup blocked (no user gesture). Show the URL as a clickable
+          // fallback link instead of failing silently.
+          setBrowserError(
+            "Your browser blocked opening the tab. Click the link in the status row above, or allow pop-ups for localhost.",
+          );
+        }
         return;
       }
       try {
@@ -221,13 +237,18 @@ export function BrowserPanel({ projectId, tab }: { projectId: string; tab: Right
             />
           </div>
         </form>
-        {/* PRIMARY action — open / focus the persistent native
+        {/* PRIMARY action — desktop app: open/focus the persistent native
             `acute-browser` window (isolated Chromium profile, persistent
-            logins). */}
+            logins). Web mode: opens the URL in a new tab of the current
+            browser (ROUND-42). */}
         <button
           onClick={onOpenAppBrowser}
-          aria-label="Open in browser"
-          title="Open in the persistent Acute browser (isolated profile, logins persist)"
+          aria-label={IS_TAURI ? "Open in browser" : "Open in a new browser tab"}
+          title={
+            IS_TAURI
+              ? "Open in the persistent Acute browser (isolated profile, logins persist)"
+              : "Opens in a new tab of this browser"
+          }
           className="shrink-0 flex items-center gap-1 h-7 px-2.5 rounded-full text-[11px] font-medium transition-colors"
           style={{
             color: styles.isDark ? "#fff" : styles.card,
@@ -235,42 +256,69 @@ export function BrowserPanel({ projectId, tab }: { projectId: string; tab: Right
           }}
         >
           <PanelTopOpen size={12} />
-          <span>{browserOpen ? "Focus" : "Open"}</span>
+          <span>{IS_TAURI ? (browserOpen ? "Focus" : "Open") : "Open"}</span>
         </button>
       </div>
 
-      {/* Browser-open status row — shows whether the native window is
-          mounted + a close button when it is. */}
+      {/* Browser-open status row — mode-aware: in the desktop app it shows
+          whether the native `acute-browser` window is mounted (+ a close
+          button); in a plain browser tab (launcher/dev mode) it shows the
+          last-opened URL as a clickable link. */}
       <div
         className="shrink-0 flex items-center gap-2 px-3 h-7 border-b text-[10.5px]"
         style={{ borderColor: styles.border, color: styles.textTertiary, background: styles.isDark ? "rgba(0,0,0,0.08)" : "transparent" }}
       >
-        <span
-          className="inline-flex items-center gap-1"
-          style={{ color: browserOpen ? styles.accent : styles.textTertiary }}
-        >
-          <span
-            className="inline-block w-1.5 h-1.5 rounded-full"
-            style={{ background: browserOpen ? styles.accent : styles.textTertiary }}
-          />
-          {browserOpen ? "Browser window open" : "Browser window closed"}
-        </span>
-        <span className="flex-1 truncate" title={browserUrl ?? ""}>
-          {browserUrl ? `URL: ${browserUrl}` : "No URL yet"}
-        </span>
-        {browserOpen ? (
-          <button
-            onClick={onCloseBrowser}
-            className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-md transition-colors"
-            style={{ color: styles.textTertiary }}
-            onMouseEnter={(e) => { e.currentTarget.style.background = styles.subtleHover; }}
-            onMouseLeave={(e) => (e.currentTarget.style.background = "transparent")}
-            title="Close the browser window (profile survives on disk)"
-          >
-            <X size={10} />
-            Close
-          </button>
-        ) : null}
+        {IS_TAURI ? (
+          <>
+            <span
+              className="inline-flex items-center gap-1"
+              style={{ color: browserOpen ? styles.accent : styles.textTertiary }}
+            >
+              <span
+                className="inline-block w-1.5 h-1.5 rounded-full"
+                style={{ background: browserOpen ? styles.accent : styles.textTertiary }}
+              />
+              {browserOpen ? "Browser window open" : "Browser window closed"}
+            </span>
+            <span className="flex-1 truncate" title={browserUrl ?? ""}>
+              {browserUrl ? `URL: ${browserUrl}` : "No URL yet"}
+            </span>
+            {browserOpen ? (
+              <button
+                onClick={onCloseBrowser}
+                className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-md transition-colors"
+                style={{ color: styles.textTertiary }}
+                onMouseEnter={(e) => { e.currentTarget.style.background = styles.subtleHover; }}
+                onMouseLeave={(e) => (e.currentTarget.style.background = "transparent")}
+                title="Close the browser window (profile survives on disk)"
+              >
+                <X size={10} />
+                Close
+              </button>
+            ) : null}
+          </>
+        ) : (
+          <>
+            <span className="inline-flex items-center gap-1 shrink-0">
+              <ExternalLink size={10} style={{ color: styles.accent }} />
+              Opens in a new browser tab
+            </span>
+            {browserUrl ? (
+              <a
+                href={browserUrl}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="flex-1 min-w-0 truncate underline decoration-dotted underline-offset-2 hover:opacity-80"
+                style={{ color: styles.textSecondary }}
+                title={browserUrl}
+              >
+                {browserUrl}
+              </a>
+            ) : (
+              <span className="flex-1 truncate">No URL opened yet</span>
+            )}
+          </>
+        )}
       </div>
 
       {/* Inline error surface — shown when the native window can't be
@@ -299,7 +347,8 @@ export function BrowserPanel({ projectId, tab }: { projectId: string; tab: Right
       ) : null}
 
       {/* Viewport — the control panel (not the browsing surface). The
-          actual browsing happens in the separate native browser window. */}
+          actual browsing happens in the native browser window (desktop app)
+          or a new browser tab (web mode). */}
       <div className="flex-1 min-h-0 relative overflow-y-auto" style={{ background: styles.card }}>
         <div className="absolute inset-0 grid place-items-center px-6 text-center">
           <div>
@@ -310,12 +359,14 @@ export function BrowserPanel({ projectId, tab }: { projectId: string; tab: Right
               <Globe size={26} style={{ color: styles.accent }} />
             </div>
             <div className="text-[12.5px] font-medium" style={{ color: styles.textSecondary }}>
-              {browserOpen ? "Acute Browser is open" : "Acute Browser"}
+              {IS_TAURI ? (browserOpen ? "Acute Browser is open" : "Acute Browser") : "Acute Browser (web mode)"}
             </div>
             <div className="text-[11px] mt-1.5 max-w-xs mx-auto leading-relaxed" style={{ color: styles.textTertiary }}>
-              {browserOpen
-                ? "The browser window is open with its own isolated profile (separate from your system Edge/Chrome). Type a new URL above + Enter to navigate it. Use the window's own nav bar for back/forward/reload."
-                : "Type a URL above + Enter (or click Open) to launch the persistent Acute browser. It uses its own isolated Chromium profile — logins + cookies persist across app launches and are separate from your system browser."}
+              {IS_TAURI
+                ? browserOpen
+                  ? "The browser window is open with its own isolated profile (separate from your system Edge/Chrome). Type a new URL above + Enter to navigate it. Use the window's own nav bar for back/forward/reload."
+                  : "Type a URL above + Enter (or click Open) to launch the persistent Acute browser. It uses its own isolated Chromium profile — logins + cookies persist across app launches and are separate from your system browser."
+                : "You're running in a browser tab, so links open in a new tab of THIS browser. Run the packaged desktop app (launcher with the Tauri shell) for the embedded Acute browser window with its own isolated profile."}
             </div>
             <div className="mt-4 flex items-center justify-center gap-2">
               <button
