@@ -164,20 +164,23 @@ pub fn open_browser_window(app: AppHandle, url: String) -> Result<(), String> {
     // data_directory — this is the 2.x name, verified against tauri 2.11.5.)
     .data_directory(profile);
 
-    let window = builder
-        .build()
-        .map_err(|e| format!("WebviewWindowBuilder.build failed: {e}"))?;
-
-    // Inject the nav overlay after the window mounts (initial load + every
-    // subsequent same-page navigation). The Tauri on_navigation hook fires
-    // for every URL change; we eval the overlay script there.
+    // Inject the nav overlay on every navigation (initial load + every
+    // subsequent same-page navigation). In Tauri 2 the on_navigation hook
+    // lives on the BUILDER (WebviewWindowBuilder::on_navigation, taking
+    // &Url and returning bool — false cancels the navigation), NOT on the
+    // built WebviewWindow. Verified against tauri 2.11.5 docs.
     let app_for_hook = app.clone();
-    window.on_navigation(move |_url: Url| {
+    let builder = builder.on_navigation(move |_url: &Url| {
         let _ = app_for_hook
             .get_webview_window(BROWSER_WINDOW_LABEL)
             .and_then(|w| w.eval(NAV_OVERLAY_INIT).ok());
         true
     });
+
+    let window = builder
+        .build()
+        .map_err(|e| format!("WebviewWindowBuilder.build failed: {e}"))?;
+
     // Also inject immediately (the first navigation may already be complete).
     let _ = window.eval(NAV_OVERLAY_INIT);
 
