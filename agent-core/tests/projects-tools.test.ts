@@ -225,11 +225,12 @@ describe("round-14 tools: create_dir / delete_file / search_files", () => {
 });
 
 describe("round-17: tool-name truth + allowedTools enforcement (ADR-0019)", () => {
-  it("TOOL_NAMES equals the real 17-tool set (round-28: +index_project; R43-10: +browser_control)", async () => {
+  it("TOOL_NAMES equals the real seed set (round-28: +index_project; R43-10: +browser_control; R43: +delegate_task)", async () => {
     const { TOOL_NAMES } = await import("../src/storage/agents");
     expect([...TOOL_NAMES].sort()).toEqual([
       "browser_control",
       "create_dir",
+      "delegate_task",
       "delete_file",
       "edit_file",
       "git_diff",

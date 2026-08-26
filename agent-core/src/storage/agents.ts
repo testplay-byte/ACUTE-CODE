@@ -31,6 +31,11 @@ export const TOOL_NAMES = [
   "web_fetch",
   "web_search",
   "index_project",
+  // ROUND-43: delegation was missing from the seed allowlist — templates
+  // could never reach the sub-agent orchestration (children strip this tool
+  // in tools/index.ts as the one-level recursion guard). Migration 0014
+  // repairs existing databases.
+  "delegate_task",
   // ROUND-43 (R43-10): drives the user's embedded browser panel (navigate /
   // history / viewport presets) — tools/index.ts, state in browser-proxy.ts.
   "browser_control",

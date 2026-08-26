@@ -94,3 +94,33 @@ describe("aiSdkChat apiFormat branch (ROUND-37)", () => {
     expect(generateTextMock.mock.calls[0][0].model).toEqual({ kind: "responses", model: "test/model-1" });
   });
 });
+
+describe("openrouter free-model fallback chain (ROUND-43)", () => {
+  it("rewrites :free model requests to a models fallback array [model, openrouter/free]", async () => {
+    const captured: string[] = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (_url: unknown, init?: RequestInit) => {
+        captured.push(String(init?.body));
+        return new Response(JSON.stringify({ ok: true }), { status: 200 });
+      }),
+    );
+    try {
+      const { buildModelFallbackFetch } = await import("../src/agents/chat");
+      const wrapped = buildModelFallbackFetch();
+      await wrapped("https://openrouter.ai/api/v1/chat/completions", {
+        method: "POST",
+        body: JSON.stringify({ model: "z-ai/glm-5.2:free", messages: [{ role: "user", content: "hi" }] }),
+      });
+      expect(captured).toHaveLength(1);
+      const first = JSON.parse(captured[0]) as Record<string, unknown>;
+      expect(first.model).toBeUndefined();
+      expect(first.models).toEqual(["z-ai/glm-5.2:free", "openrouter/free"]);
+      // non-JSON body passes through untouched
+      await wrapped("https://openrouter.ai/api/v1/chat/completions", { method: "POST", body: "not-json{{" });
+      expect(captured[1]).toBe("not-json{{");
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+});

@@ -126,6 +126,9 @@ describe("openDatabase", () => {
       // ROUND-43: default-model refresh — the OpenRouter default was deleted
       // upstream; dead ids are rewritten to the free catalog default.
       { version: 13, name: "0013_default_model_refresh.sql" },
+      // ROUND-43: delegate_task + browser_control appended to template/
+      // default-agent allowlists (delegation was unreachable from seeds).
+      { version: 14, name: "0014_delegate_browser_tools.sql" },
     ]);
     expect(appliedSecond).toEqual(appliedFirst);
   });
@@ -165,6 +168,7 @@ describe("template seeding", () => {
           "web_fetch",
           "web_search",
           "index_project",
+          "delegate_task",
           "browser_control",
         ]);
         expect(row.memory_policy).toBe("on-start");

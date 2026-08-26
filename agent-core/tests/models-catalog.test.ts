@@ -269,8 +269,10 @@ describe("migration 0013 (default model refresh)", () => {
       expect(modelIds).not.toContain("stealth/ox-alpha"); // known-dead override removed
       expect(modelIds).toContain("openai/gpt-4o"); // unrelated override preserved
 
+      // ROUND-43 note: migration 0014 also writes an audit row on reopen —
+      // assert 0013's OWN row exists rather than "the latest row".
       const audit = db
-        .prepare("SELECT actor, action FROM audit_log ORDER BY id DESC LIMIT 1")
+        .prepare("SELECT actor, action FROM audit_log WHERE actor = 'migration-0013' LIMIT 1")
         .get() as { actor: string; action: string };
       expect(audit).toEqual({ actor: "migration-0013", action: "model.default.refresh" });
 
@@ -297,5 +299,64 @@ describe("migration 0013 (default model refresh)", () => {
     } finally {
       db.close();
     }
+  });
+});
+
+describe("migration 0014 (delegate_task + browser_control allowlist repair)", () => {
+  it("appends the orchestration tools to template/default rows, skips users' custom agents, idempotent", () => {
+    const path = join(dir, "m0014-tools.db");
+    const old = openPreR43Database(path);
+    const now = new Date().toISOString();
+    old
+      .prepare(
+        `INSERT INTO providers (id, name, kind, base_url, api_format, enabled, created_at)
+         VALUES ('openrouter', 'OpenRouter', 'openai-compatible', 'https://openrouter.ai/api/v1',
+           'chat-completions', 1, ?)`,
+      )
+      .run(now);
+    const ins = old.prepare(
+      `INSERT INTO agents (id, name, role, system_prompt, provider_id, model, vision_model,
+        allowed_tools, memory_policy, skills, max_turns, max_outer_loops, temperature,
+        version, is_template, created_at, updated_at)
+       VALUES (?, 'X', 'coder', '', 'openrouter', 'z-ai/glm-5.2:free', NULL, ?, 'none', '[]', 40, 5, 0.2, 1, ?, ?, ?)`,
+    );
+    const seedTools = JSON.stringify([
+      "list_dir", "read_file", "write_file", "edit_file", "create_dir", "delete_file",
+      "search_files", "search_code", "git_status", "git_diff", "git_log", "run_command",
+      "todo_write", "web_fetch", "web_search", "index_project",
+    ]);
+    ins.run("agt_tpl_coder", seedTools, 1, now, now);               // template, old shape
+    ins.run("agt_default_nova", seedTools, 0, now, now);            // default agent, old shape
+    ins.run("agt_mine", seedTools, 0, now, now);                    // user-created: untouched
+    ins.run(
+      "agt_tpl_already",
+      JSON.stringify(["list_dir", "delegate_task", "browser_control"]),
+      1,
+      now,
+      now,
+    );                                                               // already has them
+    old.close();
+
+    const db = openDatabase(path); // 0013 + 0014 apply
+    const row = (id: string) =>
+      JSON.parse(
+        (db.prepare("SELECT allowed_tools FROM agents WHERE id = ?").get(id) as { allowed_tools: string }).allowed_tools,
+      ) as string[];
+    expect(row("agt_tpl_coder")).toContain("delegate_task");
+    expect(row("agt_tpl_coder")).toContain("browser_control");
+    expect(row("agt_tpl_coder")).toHaveLength(18);
+    expect(row("agt_default_nova")).toContain("delegate_task");
+    expect(row("agt_default_nova")).toContain("browser_control");
+    expect(row("agt_mine")).toEqual(JSON.parse(seedTools)); // untouched
+    expect(row("agt_tpl_already")).toEqual(["list_dir", "delegate_task", "browser_control"]);
+    // idempotent on reopen
+    db.close();
+    const again = openDatabase(path);
+    expect(
+      JSON.parse(
+        (again.prepare("SELECT allowed_tools FROM agents WHERE id = 'agt_tpl_coder'").get() as { allowed_tools: string }).allowed_tools,
+      ),
+    ).toHaveLength(18);
+    again.close();
   });
 });

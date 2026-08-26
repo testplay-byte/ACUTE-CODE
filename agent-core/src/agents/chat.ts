@@ -42,6 +42,29 @@ export function resolveApiFormat(raw: string | undefined): ApiFormat {
  * responses are wired + unit-tested but live-untested (no keys) — honest
  * limitation, documented in IMPLEMENTED-API.md.
  */
+/** ROUND-43: builds the fetch wrapper that rewrites single-model OpenRouter
+ * requests into a `models` fallback array (see buildModel). Exported for tests. */
+export function buildModelFallbackFetch(): (
+  url: string | URL | Request,
+  init?: RequestInit,
+) => Promise<Response> {
+  return async (url: string | URL | Request, init?: RequestInit) => {
+    if (typeof init?.body === "string" && init.body.length > 0) {
+      try {
+        const body = JSON.parse(init.body) as Record<string, unknown>;
+        if (typeof body.model === "string" && Array.isArray(body.models) === false) {
+          body.models = [body.model, "openrouter/free"];
+          delete body.model;
+          init = { ...init, body: JSON.stringify(body) };
+        }
+      } catch {
+        // not JSON — pass through untouched
+      }
+    }
+    return fetch(url, init);
+  };
+}
+
 function buildModel(input: ChatTurnInput): LanguageModel {
   const format = resolveApiFormat(input.provider.apiFormat);
   if (format === "anthropic-messages") {
@@ -63,6 +86,16 @@ function buildModel(input: ChatTurnInput): LanguageModel {
     baseURL: input.provider.baseUrl ?? "",
     apiKey: input.apiKey,
     includeUsage: true,
+    // ROUND-43: free OpenRouter models rate-limit hard at peak (owner's live
+    // battery hit 429s across keys within seconds). OpenRouter natively
+    // supports a `models` fallback array — when the turn targets a :free
+    // model we rewrite the request body to [model, openrouter/free] so the
+    // provider-side router transparently retries other free models before
+    // the call fails. The meta-router itself rotates across all free models,
+    // so a two-entry chain is enough. Non-JSON bodies pass through untouched.
+    ...(input.provider.id === "openrouter" && input.model.endsWith(":free") && input.model !== "openrouter/free"
+      ? { fetch: buildModelFallbackFetch() }
+      : {}),
   });
   return provider.chatModel(input.model);
 }
