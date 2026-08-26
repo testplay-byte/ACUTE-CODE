@@ -160,7 +160,9 @@ pub fn open_browser_window(app: AppHandle, url: String) -> Result<(), String> {
     .decorations(true)
     // WebView2 (Windows): the persistent user-data dir is where cookies +
     // login state live. WebKit (macOS): same dir for website data.
-    .user_data_dir(profile);
+    // (Tauri 2 renamed the builder method from user_data_dir to
+    // data_directory — this is the 2.x name, verified against tauri 2.11.5.)
+    .data_directory(profile);
 
     let window = builder
         .build()
