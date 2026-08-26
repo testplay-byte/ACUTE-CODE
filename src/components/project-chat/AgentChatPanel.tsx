@@ -9,6 +9,7 @@ import {
 } from "react";
 import { AnimatePresence, motion, type Variants } from "framer-motion";
 import {
+  AlertTriangle,
   ArrowUp,
   Check,
   ChevronDown,
@@ -42,6 +43,7 @@ import { ClampedText } from "../shared/ClampedText";
 import {
   type Agent,
   type AssistantTurnItem,
+  type ErrorTurnItem,
   type Project,
   type ProjectChatItem,
   type WorkingEntry,
@@ -56,6 +58,7 @@ import { ease } from "../../lib/motion";
 import { useProjectChatStore } from "../../lib/project-chat-store";
 import { useActiveStreams } from "../../lib/active-streams";
 import { useStreamStore } from "../../lib/stream-store";
+import { formatTime } from "../../lib/format";
 import { useRightSidebarStore } from "../../lib/right-sidebar-store";
 import { useRightSidebarEvents } from "../../lib/right-sidebar-events";
 import { SEMANTIC_COLORS } from "../../lib/semantics";
@@ -188,6 +191,8 @@ const itemKey = (item: ProjectChatItem): string => {
       return `u-${item.seq}`;
     case "turn":
       return `turn-${item.seq}`;
+    case "error":
+      return `err-${item.seq}`;
   }
 };
 
@@ -225,7 +230,7 @@ function UserMessage({ content }: { content: string }) {
         >
           <ClampedText
             text={content}
-            lines={10}
+            lines={6}
             expandLabel="Show full message"
             collapseLabel="Show less"
             className="whitespace-pre-wrap break-words"
@@ -490,13 +495,126 @@ function AssistantTurn({
   );
 }
 
+/**
+ * ROUND-43 (owner: failed turns "outright silently die… no error message, no
+ * retry option"): the DISTINCT error card rendered directly below the failed
+ * user message — live while the stream errors (from the stream store) AND
+ * after any reload (from the persisted `turn.error` event). Carries the
+ * model + reason, timestamp, and two actions: Retry (re-sends the same user
+ * message as a NEW turn through the normal send path; disabled while the
+ * session is mid-stream) and Copy details (model/error/timestamp/session id
+ * to the clipboard).
+ */
+export function TurnErrorCard({
+  error,
+  sessionId,
+  onRetry,
+  disabled = false,
+}: {
+  /** The persisted fold item OR a live shape (code/message/model/ts). */
+  error: Pick<ErrorTurnItem, "code" | "message" | "ts"> &
+    Partial<Pick<ErrorTurnItem, "model" | "providerId" | "providerError">>;
+  sessionId: string | null;
+  /** Zero-arg — the PANEL binds the failed turn's user text before calling. */
+  onRetry?: () => void;
+  disabled?: boolean;
+}) {
+  const styles = useThemeStyles();
+  const [copied, setCopied] = useState(false);
+  const reason = error.providerError ?? error.message;
+  const shortReason = reason.length > 220 ? `${reason.slice(0, 220)}…` : reason;
+  const detailsText = [
+    "Generation failed",
+    `Session: ${sessionId ?? "unknown"}`,
+    `Model: ${error.model ?? "unknown"}`,
+    ...(error.providerId ? [`Provider: ${error.providerId}`] : []),
+    `Code: ${error.code}`,
+    `Error: ${reason}`,
+    `Time: ${error.ts}`,
+  ].join("\n");
+  return (
+    <motion.div variants={msgVariants} initial="initial" animate="animate" className="min-w-0">
+      <div
+        role="alert"
+        className="rounded-[14px] border px-3.5 py-2.5 flex items-start gap-2.5"
+        style={{
+          borderColor: withAlpha(SEMANTIC_COLORS.danger, 0.4),
+          background: withAlpha(SEMANTIC_COLORS.danger, styles.isDark ? 0.09 : 0.05),
+        }}
+      >
+        <AlertTriangle size={14} className="mt-0.5 shrink-0 text-red-500" aria-hidden />
+        <div className="min-w-0 flex-1">
+          <div className="text-[12px] font-bold" style={{ color: SEMANTIC_COLORS.danger }}>
+            Generation failed
+          </div>
+          <div className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1 min-w-0">
+            {error.model ? (
+              <span
+                className="font-mono text-[10.5px] px-1.5 py-0.5 rounded-md shrink-0 max-w-[240px] truncate"
+                style={{ background: styles.subtle, color: styles.textTertiary }}
+                title={error.model}
+              >
+                {error.model}
+              </span>
+            ) : null}
+            <span className="text-[11.5px] leading-[1.5] min-w-0 break-words" style={{ color: styles.textSecondary }}>
+              {shortReason}
+            </span>
+          </div>
+          <div className="mt-1.5 flex flex-wrap items-center gap-2">
+            <span className="text-[10px] font-mono shrink-0" style={{ color: styles.textTertiary }}>
+              {formatTime(error.ts)}
+            </span>
+            {onRetry ? (
+              <button
+                type="button"
+                onClick={onRetry}
+                disabled={disabled}
+                aria-label="Retry the failed message"
+                title={disabled ? "Wait for the current turn to finish" : "Send the same message again"}
+                className="h-7 px-2.5 rounded-lg text-[11.5px] font-semibold border transition-opacity disabled:opacity-50 disabled:cursor-not-allowed"
+                style={{ borderColor: withAlpha(SEMANTIC_COLORS.danger, 0.45), color: SEMANTIC_COLORS.danger }}
+              >
+                Retry
+              </button>
+            ) : null}
+            <button
+              type="button"
+              onClick={() => {
+                void navigator.clipboard?.writeText(detailsText).then(() => {
+                  setCopied(true);
+                  setTimeout(() => setCopied(false), 1200);
+                });
+              }}
+              aria-label="Copy error details"
+              className="h-7 px-2.5 rounded-lg text-[11.5px] font-semibold border transition-colors"
+              style={{ borderColor: styles.border, color: styles.textSecondary }}
+            >
+              {copied ? "Copied" : "Copy details"}
+            </button>
+          </div>
+        </div>
+      </div>
+    </motion.div>
+  );
+}
+
 /** Direct child of AnimatePresence mode="popLayout": framer-motion attaches a
  * measurement ref to this element (React 18 requires forwardRef — the demo
  * could skip it on React 19). The wrapper div is the presence child. */
 const MessageRenderer = forwardRef<
   HTMLDivElement,
-  { item: ProjectChatItem; sessionId: string | null; projectId: string; collapseHint?: boolean }
->(function MessageRenderer({ item, sessionId, projectId, collapseHint }, ref) {
+  {
+    item: ProjectChatItem;
+    sessionId: string | null;
+    projectId: string;
+    collapseHint?: boolean;
+    /** ROUND-43: error-card actions. Zero-arg retry — the text is bound by
+     * the panel (the failed turn's user message). */
+    onRetry?: () => void;
+    retryDisabled?: boolean;
+  }
+>(function MessageRenderer({ item, sessionId, projectId, collapseHint, onRetry, retryDisabled }, ref) {
   switch (item.kind) {
     case "user":
       return (
@@ -508,6 +626,17 @@ const MessageRenderer = forwardRef<
       return (
         <div ref={ref}>
           <AssistantTurn item={item} sessionId={sessionId} projectId={projectId} collapseHint={collapseHint} />
+        </div>
+      );
+    case "error":
+      return (
+        <div ref={ref}>
+          <TurnErrorCard
+            error={item}
+            sessionId={sessionId}
+            onRetry={onRetry}
+            disabled={retryDisabled}
+          />
         </div>
       );
   }
@@ -757,7 +886,10 @@ export function AgentChatPanel({
   );
   const liveTurn = streamSlice?.liveTurn ?? null;
   const streamBusy = streamSlice?.streamBusy ?? false;
-  const streamSendError = streamSlice?.sendError ?? null;
+  // ROUND-43: the LIVE turn error — renders the error card immediately when a
+  // stream fails; the persisted `turn.error` event takes over after the
+  // refetch (matched by errorTs) so the card survives reloads.
+  const liveError = streamSlice?.liveError ?? null;
   const streamPendingEcho = streamSlice?.pendingEcho ?? null;
   const lastLiveEndMs = streamSlice?.lastLiveEndMs ?? 0;
   // R37 review #4: turns that JUST finished while the user watched start
@@ -948,6 +1080,31 @@ export function AgentChatPanel({
     }
   };
 
+  // ── ROUND-43: error-card retry plumbing ─────────────────────────────────
+  // Retry re-sends the FAILED turn's user message as a new turn through the
+  // normal send path (runTurn). The text resolves from the folded log via
+  // the error item's userSeq; the last user bubble is the fallback.
+  const lastUserContent = (() => {
+    for (let i = items.length - 1; i >= 0; i--) {
+      const it = items[i];
+      if (it.kind === "user") return it.content;
+    }
+    return pendingEcho ?? lastSent ?? "";
+  })();
+  const retryTextForError = (item: ErrorTurnItem): string => {
+    if (item.userSeq !== undefined) {
+      const bySeq = items.find((it) => it.kind === "user" && it.seq === item.userSeq);
+      if (bySeq !== undefined && bySeq.kind === "user") return bySeq.content;
+    }
+    return lastUserContent;
+  };
+  // The LIVE error card hides the moment the folded log carries the SAME
+  // persisted turn.error (matched by the backend-minted errorTs) — no flash,
+  // no duplicate, and the card survives reloads via the event log.
+  const liveErrorSuperseded =
+    liveError?.errorTs !== undefined &&
+    items.some((it) => it.kind === "error" && it.ts === liveError.errorTs);
+
   const onInputKeyDown = (e: ReactKeyboardEvent<HTMLTextAreaElement>) => {
     if (e.key === "Enter" && !e.shiftKey) {
       e.preventDefault();
@@ -1091,6 +1248,12 @@ export function AgentChatPanel({
                   sessionId={session?.id ?? null}
                   projectId={projectId}
                   collapseHint={Date.now() - lastLiveEndRef.current < 5000}
+                  {...(item.kind === "error"
+                    ? {
+                        onRetry: () => void runTurn(retryTextForError(item)),
+                        retryDisabled: busy,
+                      }
+                    : {})}
                 />
               ))}
               {pendingEcho !== null ? (
@@ -1126,14 +1289,29 @@ export function AgentChatPanel({
                 ) : null}
               </div>
             ) : null}
+
+            {/* ── ROUND-43: LIVE error card — the stream failed. Rendered
+                immediately (before the refetch lands); the persisted
+                turn.error item takes over once the folded log carries it
+                (errorTs match above). User stops never set liveError. ── */}
+            {liveError !== null && !liveErrorSuperseded ? (
+              <TurnErrorCard
+                error={liveError}
+                sessionId={activeSessionId}
+                onRetry={() => void runTurn(lastUserContent)}
+                disabled={busy}
+              />
+            ) : null}
           </div>
         </div>
       </div>
 
       {/* Error banner (ChatView pattern): keeps the failed text for Retry.
-          ROUND-39: prefer the stream store's sendError (survives remounts);
-          fall back to the local one for demo-mode sync errors. */}
-      {(streamSendError ?? sendError) && lastSent ? (
+          ROUND-43: LOCAL send errors only (create/send rejection, approval
+          failure, demo mode) — turn-level stream failures now render the
+          timeline error card instead (they used to die silently with the
+          banner's lastSent dependency lost on remount). */}
+      {sendError && lastSent ? (
         <div
           role="alert"
           className="mx-3 mb-1.5 flex shrink-0 items-start gap-2 rounded-[12px] border px-3 py-2 text-[12px]"
@@ -1142,7 +1320,7 @@ export function AgentChatPanel({
             color: SEMANTIC_COLORS.danger,
           }}
         >
-          <span className="min-w-0 flex-1 break-words">{streamSendError ?? sendError}</span>
+          <span className="min-w-0 flex-1 break-words">{sendError}</span>
           <button
             onClick={() => void runTurn(lastSent)}
             className="shrink-0 underline font-medium"

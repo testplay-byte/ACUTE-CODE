@@ -12,14 +12,20 @@ import { useThemeStyles } from "../../lib/use-theme-styles";
  * automatically and the user has to manually click the expand button to see
  * the full one."
  *
+ * ROUND-43 (owner): the minimized height is now 6 lines, not 10 — "Currently
+ * it shows ten lines but what I think is that six lines would be a better
+ * option to keep it in minimized mode." The default covers every call site
+ * that doesn't pass an explicit clamp (the main-chat user prompt should rely
+ * on this default — call sites must NOT hard-code 10 anymore).
+ *
  * Used by the chat user bubbles (AgentChatPanel), the sub-agent panel's task
- * bubble + final report (SubAgentPanel). The toggle only renders when the
+ * + final report cards (SubAgentPanel). The toggle only renders when the
  * content actually overflows (measured post-mount) — short messages render
  * exactly as before.
  */
 export function ClampedText({
   text,
-  lines = 10,
+  lines = 6,
   expandLabel = "Show more",
   collapseLabel = "Show less",
   style,

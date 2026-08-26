@@ -182,6 +182,53 @@ function providerErrorDetail(error: unknown, apiKey: string): string {
   return scrubbed.length > 500 ? `${scrubbed.slice(0, 500)}…` : scrubbed;
 }
 
+/**
+ * ROUND-43 (owner: "if for some reason our model failed to get a response…
+ * it just outright silently dies… I only see the message which I sent and
+ * below it I don't see anything else at all"). ROOT CAUSE: a failed turn
+ * persisted ONLY the user message — the provider error lived in the 502
+ * envelope + a task_failed notification row, never in the session's event
+ * timeline, so a reload showed a conversation that ends at the user bubble
+ * forever. This helper appends a `turn.error` event (the type
+ * listSubAgents already reads) carrying the reason, model, provider, and the
+ * failed turn's user-message seq, and returns the session to `queued` so the
+ * turn stays retryable (and the boot sweep doesn't flip it to `failed`).
+ * Deliberate user stops (ABORTED) never call this — a stop is not an error.
+ */
+function persistTurnError(
+  db: SqliteDatabase,
+  args: {
+    sessionId: string;
+    agentId: string;
+    userSeq: number;
+    code: string;
+    message: string;
+    model: string;
+    providerId: string;
+    providerError: string;
+    keySecrets: readonly string[];
+  },
+): string {
+  const event = appendSessionEvent(db, args.sessionId, {
+    type: "turn.error",
+    agentId: args.agentId,
+    payload: {
+      code: args.code,
+      message: args.message,
+      model: args.model,
+      providerId: args.providerId,
+      providerError: scrubSecrets(args.providerError, args.keySecrets),
+      userSeq: args.userSeq,
+    },
+  });
+  // The turn is over (not mid-flight) — `queued` keeps the session open for
+  // a retry and out of sweepStaleRunning's crash path at the next boot.
+  if (getSession(db, args.sessionId)?.status === "running") {
+    setSessionStatus(db, args.sessionId, "queued");
+  }
+  return event.ts;
+}
+
 /** Everything a turn needs after validation (shared by sync + streamed). */
 interface PreparedTurn {
   session: NonNullable<ReturnType<typeof getSession>>;
@@ -406,7 +453,7 @@ export async function runSingleAgentTurn(
   // First message flips a queued session to running (API.md §5 semantics).
   if (session.status === "queued") setSessionStatus(db, session.id, "running");
 
-  appendSessionEvent(db, session.id, {
+  const userEvent = appendSessionEvent(db, session.id, {
     type: "message.user",
     agentId: agent.id,
     payload: { role: "user", content },
@@ -550,13 +597,48 @@ export async function runSingleAgentTurn(
 
   if (lastAssistantEvent === null) {
     // No iteration produced an assistant event — provider errored on iter 0.
-    return lastError ?? {
-      ok: false,
-      status: 502,
-      code: "PROVIDER_ERROR",
+    // ROUND-43: persist the failure into the session timeline (the owner's
+    // silent-death bug — nothing used to land in the event log) before
+    // returning the 502 envelope.
+    const fallback = lastError ?? {
+      ok: false as const,
+      status: 502 as const,
+      code: "PROVIDER_ERROR" as const,
       message: `provider '${provider.id}' call failed for session ${session.id}`,
       details: { providerError: "no response produced" },
     };
+    persistTurnError(db, {
+      sessionId: session.id,
+      agentId: agent.id,
+      userSeq: userEvent.seq,
+      code: "PROVIDER_ERROR",
+      message: fallback.message,
+      model,
+      providerId: provider.id,
+      providerError:
+        typeof fallback.details?.providerError === "string"
+          ? fallback.details.providerError
+          : "no response produced",
+      keySecrets,
+    });
+    return fallback;
+  }
+
+  // ROUND-43: a provider failure on a LATER iteration (after partial replies)
+  // still ends the turn abnormally — persist the error event so the timeline
+  // shows the failure after the partial work instead of ending silently.
+  if (lastError !== null) {
+    persistTurnError(db, {
+      sessionId: session.id,
+      agentId: agent.id,
+      userSeq: userEvent.seq,
+      code: "PROVIDER_ERROR",
+      message: lastError.message,
+      model,
+      providerId: provider.id,
+      providerError: String(lastError.details.providerError),
+      keySecrets,
+    });
   }
 
   const usage: UsageRecord = {
@@ -627,7 +709,7 @@ export async function runStreamedAgentTurn(
 
   logTurnStart(session.id, agent.id, model, true);
 
-  appendSessionEvent(db, session.id, {
+  const userEvent = appendSessionEvent(db, session.id, {
     type: "message.user",
     agentId: agent.id,
     payload: { role: "user", content },
@@ -817,6 +899,7 @@ export async function runStreamedAgentTurn(
       // ROUND-42: a deliberate user stop (POST /sessions/:id/stop) is not a
       // provider failure — return a distinct ABORTED outcome so the route can
       // skip the task_failed notification and the UI can render "Stopped".
+      // ROUND-43: also do NOT persist a turn.error — a stop is not an error.
       if (signal?.aborted === true) {
         logTurnEnd(session.id, false, Date.now() - startedAt, totalInputTokens, totalOutputTokens);
         return {
@@ -828,12 +911,37 @@ export async function runStreamedAgentTurn(
       }
       const normalized = error instanceof Error ? error : new Error(String(error));
       logTurnEnd(session.id, false, Date.now() - startedAt, totalInputTokens, totalOutputTokens);
+      // ROUND-43: persist the failure into the session timeline BEFORE
+      // returning — otherwise the owner's reload shows a conversation that
+      // ends at his message with no error and no retry (the silent-death
+      // bug). The error event lands right after the user message, so the UI
+      // renders the error card directly below it.
+      const providerErrorText = providerErrorDetail(normalized, apiKey);
+      const message = `provider '${provider.id}' call failed for session ${session.id}`;
+      const errorTs = persistTurnError(db, {
+        sessionId: session.id,
+        agentId: agent.id,
+        userSeq: userEvent.seq,
+        code: "PROVIDER_ERROR",
+        message,
+        model,
+        providerId: provider.id,
+        providerError: providerErrorText,
+        keySecrets,
+      });
       return {
         ok: false,
         status: 502,
         code: "PROVIDER_ERROR",
-        message: `provider '${provider.id}' call failed for session ${session.id}`,
-        details: { providerError: providerErrorDetail(normalized, apiKey) },
+        message,
+        details: {
+          providerError: providerErrorText,
+          model,
+          userSeq: userEvent.seq,
+          // ROUND-43: the persisted event's ts — the live UI matches on it to
+          // swap the streamed error card for the folded one (no duplicates).
+          errorTs,
+        },
       };
     }
 

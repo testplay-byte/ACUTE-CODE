@@ -16,6 +16,7 @@ import {
 import { useThemeStyles } from "../../lib/use-theme-styles";
 import { withAlpha } from "../dashboard/helpers";
 import { useConfigStore } from "../../lib/config-store";
+import { filterModelsForPicker, isFreeModelEntry, useSettingsStore } from "../../lib/settings-store";
 import { isTauri } from "../../lib/sidecar";
 import { fetchKeyPool } from "../../lib/api";
 import type { ProviderView } from "../onboarding/providers-api";
@@ -949,6 +950,53 @@ function AddProviderDialog({
   );
 }
 
+/* ── Model list ─────────────────────────────────────────────────────────── */
+
+/** One row in the Settings model list: a DB override row (configured) and/or
+ * a live-fetched catalog entry. Configured rows carry the server row id and
+ * are editable; catalog-only entries render read-only until configured. */
+interface MergedModel {
+  /** Server models-table row id — null for catalog-only entries. */
+  rowId: string | null;
+  modelId: string;
+  displayName: string;
+  contextWindow: number | null;
+  inputPricePerMtok: number | null;
+  outputPricePerMtok: number | null;
+  configured: boolean;
+}
+
+/** DB override rows enriched with live catalog ids (round-43: the list shows
+ * the provider's real models so the free-only filter is meaningful). */
+function mergeCatalogIntoModels(
+  configured: ModelConfig[],
+  catalogIds: string[],
+): MergedModel[] {
+  const merged: MergedModel[] = configured.map((m) => ({
+    rowId: m.id,
+    modelId: m.modelId,
+    displayName: m.displayName || m.modelId,
+    contextWindow: m.contextWindow,
+    inputPricePerMtok: m.inputPricePerMtok,
+    outputPricePerMtok: m.outputPricePerMtok,
+    configured: true,
+  }));
+  const seen = new Set(configured.map((m) => m.modelId));
+  for (const id of catalogIds) {
+    if (seen.has(id)) continue;
+    merged.push({
+      rowId: null,
+      modelId: id,
+      displayName: id,
+      contextWindow: null,
+      inputPricePerMtok: null,
+      outputPricePerMtok: null,
+      configured: false,
+    });
+  }
+  return merged;
+}
+
 function ModelListSection({ providerId, models }: { providerId: string; models: ModelConfig[] }) {
   const styles = useThemeStyles();
   const api = useApi();
@@ -959,6 +1007,27 @@ function ModelListSection({ providerId, models }: { providerId: string; models: 
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editDraft, setEditDraft] = useState({ displayName: "", contextWindow: "" });
   const [error, setError] = useState<string | null>(null);
+
+  // ROUND-43 (owner: "free-only model filter"): shared persisted pref — the
+  // chat composer picker honors the same store in a later wave.
+  const modelsFreeOnly = useSettingsStore((s) => s.modelsFreeOnly);
+  const setModelsFreeOnly = useSettingsStore((s) => s.setModelsFreeOnly);
+
+  // The provider's live catalog (same route the chat picker uses). Fails
+  // soft — offline/custom providers fall back to the configured rows only.
+  const catalogQuery = useQuery({
+    queryKey: ["settings-provider-models-catalog", providerId],
+    queryFn: () =>
+      api<{ models: Array<{ id: string; name?: string }> }>(
+        `/providers/${providerId}/models`,
+      ),
+    retry: false,
+  });
+  const catalogIds = (catalogQuery.data?.models ?? []).map((m) => m.id);
+
+  const merged = mergeCatalogIntoModels(models, catalogIds);
+  const visible = filterModelsForPicker(merged, modelsFreeOnly);
+  const freeCount = filterModelsForPicker(merged, true).length;
 
   const invalidate = () =>
     void queryClient.invalidateQueries({ queryKey: ["settings-provider-models", providerId] });
@@ -1000,11 +1069,38 @@ function ModelListSection({ providerId, models }: { providerId: string; models: 
 
   return (
     <div className="rounded-[16px] border-[1.5px] overflow-hidden" style={{ background: styles.card, borderColor: styles.border }}>
-      <div className="flex items-center gap-2 px-4 py-3 border-b" style={{ borderColor: styles.border }}>
+      <div className="flex items-center gap-2 px-4 py-3 border-b flex-wrap" style={{ borderColor: styles.border }}>
         <span className="text-[10px] font-bold uppercase tracking-widest" style={{ color: styles.textTertiary }}>
-          Models ({models.length})
+          Models ({modelsFreeOnly ? `${freeCount} free of ${merged.length}` : `${merged.length}`})
         </span>
         <span className="flex-1" />
+        {/* ROUND-43 (owner directive): "Free only | All models" — free is the
+            default; persisted in the shared settings store so the chat model
+            picker honors the same choice. */}
+        <div
+          role="group"
+          aria-label="Model filter"
+          className="flex items-center rounded-[10px] border-[1.5px] overflow-hidden"
+          style={{ borderColor: styles.border }}
+        >
+          {([
+            { id: "free", label: "Free only", active: modelsFreeOnly, pick: () => setModelsFreeOnly(true) },
+            { id: "all", label: "All models", active: !modelsFreeOnly, pick: () => setModelsFreeOnly(false) },
+          ] as const).map((seg) => (
+            <button
+              key={seg.id}
+              onClick={seg.pick}
+              aria-pressed={seg.active}
+              className="h-7 px-2.5 text-[11px] font-bold transition-colors"
+              style={{
+                background: seg.active ? withAlpha(styles.accent, 0.12) : "transparent",
+                color: seg.active ? styles.accent : styles.textTertiary,
+              }}
+            >
+              {seg.label}
+            </button>
+          ))}
+        </div>
         <button
           onClick={() => setAdding((v) => !v)}
           className="h-7 px-2.5 rounded-full text-[11px] font-bold flex items-center gap-1"
@@ -1055,20 +1151,27 @@ function ModelListSection({ providerId, models }: { providerId: string; models: 
         </div>
       )}
 
-      {models.length === 0 && !adding ? (
+      {merged.length === 0 && !adding ? (
         <div className="px-4 py-6 text-center text-[12px]" style={{ color: styles.textTertiary }}>
-          No models configured — fetched catalog models appear in pickers automatically;
-          add entries here to override pricing or context size.
+          {catalogQuery.isFetching
+            ? "Fetching the provider catalog…"
+            : catalogQuery.isError
+              ? "No models configured and the live catalog is unreachable — add entries by hand."
+              : "No models configured — fetched catalog models appear in pickers automatically; add entries here to override pricing or context size."}
+        </div>
+      ) : visible.length === 0 && !adding ? (
+        <div className="px-4 py-6 text-center text-[12px]" style={{ color: styles.textTertiary }}>
+          No free models on this provider — switch to “All models” to see the full list.
         </div>
       ) : (
         <div className="max-h-72 overflow-y-auto auto-scroll">
-          {models.map((m) => (
+          {visible.map((m) => (
             <div
-              key={m.id}
+              key={m.rowId ?? `cat:${m.modelId}`}
               className="flex items-center gap-3 px-4 py-2.5 border-b last:border-b-0"
               style={{ borderColor: styles.borderSubtle }}
             >
-              {editingId === m.id ? (
+              {editingId === m.rowId ? (
                 <>
                   <input
                     autoFocus
@@ -1111,9 +1214,21 @@ function ModelListSection({ providerId, models }: { providerId: string; models: 
                 </>
               ) : (
                 <>
-                  <span className="min-w-0 flex-1 truncate font-mono text-[12px]" style={{ color: styles.text }}>
+                  <span
+                    className="min-w-0 flex-1 truncate font-mono text-[12px]"
+                    style={{ color: m.configured ? styles.text : styles.textSecondary }}
+                    title={m.modelId}
+                  >
                     {m.displayName || m.modelId}
                   </span>
+                  {isFreeModelEntry(m) && (
+                    <span
+                      className="shrink-0 px-1.5 py-0.5 rounded-full text-[10px] font-bold"
+                      style={{ background: withAlpha("#22c55e", 0.12), color: "#22c55e" }}
+                    >
+                      FREE
+                    </span>
+                  )}
                   {m.contextWindow !== null && (
                     <span
                       className="shrink-0 px-1.5 py-0.5 rounded-full font-mono text-[10px]"
@@ -1127,34 +1242,47 @@ function ModelListSection({ providerId, models }: { providerId: string; models: 
                       ${m.inputPricePerMtok}/${m.outputPricePerMtok ?? 0} per 1M
                     </span>
                   )}
-                  <button
-                    onClick={() => {
-                      setEditingId(m.id);
-                      setEditDraft({
-                        displayName: m.displayName,
-                        contextWindow: m.contextWindow !== null ? String(m.contextWindow) : "",
-                      });
-                    }}
-                    aria-label={`Edit model ${m.displayName || m.modelId}`}
-                    title="Edit"
-                    className="w-7 h-7 grid place-items-center rounded-[8px] shrink-0"
-                    style={{ color: styles.textTertiary }}
-                  >
-                    <Pencil size={12} />
-                  </button>
-                  <button
-                    onClick={() => {
-                      if (window.confirm(`Delete model "${m.displayName || m.modelId}"?`)) deleteModel.mutate(m.id);
-                    }}
-                    aria-label={`Delete model ${m.displayName || m.modelId}`}
-                    title="Delete"
-                    className="w-7 h-7 grid place-items-center rounded-[8px] shrink-0"
-                    style={{ color: styles.textTertiary }}
-                    onMouseEnter={(e) => (e.currentTarget.style.background = withAlpha("#ef4444", 0.12))}
-                    onMouseLeave={(e) => (e.currentTarget.style.background = "transparent")}
-                  >
-                    <Trash2 size={12} />
-                  </button>
+                  {!m.configured && (
+                    <span
+                      className="shrink-0 px-1.5 py-0.5 rounded-full font-mono text-[10px]"
+                      style={{ background: styles.subtle, color: styles.textTertiary }}
+                      title="Live catalog entry — use “Add model” to create a pricing/context override"
+                    >
+                      catalog
+                    </span>
+                  )}
+                  {m.configured && m.rowId !== null && (
+                    <>
+                      <button
+                        onClick={() => {
+                          setEditingId(m.rowId);
+                          setEditDraft({
+                            displayName: m.displayName,
+                            contextWindow: m.contextWindow !== null ? String(m.contextWindow) : "",
+                          });
+                        }}
+                        aria-label={`Edit model ${m.displayName || m.modelId}`}
+                        title="Edit"
+                        className="w-7 h-7 grid place-items-center rounded-[8px] shrink-0"
+                        style={{ color: styles.textTertiary }}
+                      >
+                        <Pencil size={12} />
+                      </button>
+                      <button
+                        onClick={() => {
+                          if (window.confirm(`Delete model "${m.displayName || m.modelId}"?`)) deleteModel.mutate(m.rowId!);
+                        }}
+                        aria-label={`Delete model ${m.displayName || m.modelId}`}
+                        title="Delete"
+                        className="w-7 h-7 grid place-items-center rounded-[8px] shrink-0"
+                        style={{ color: styles.textTertiary }}
+                        onMouseEnter={(e) => (e.currentTarget.style.background = withAlpha("#ef4444", 0.12))}
+                        onMouseLeave={(e) => (e.currentTarget.style.background = "transparent")}
+                      >
+                        <Trash2 size={12} />
+                      </button>
+                    </>
+                  )}
                 </>
               )}
             </div>

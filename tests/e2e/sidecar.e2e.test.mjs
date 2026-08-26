@@ -109,7 +109,9 @@ describe("sidecar e2e (skipped without a prior build)", { skip: !existsSync(MAIN
     const nova = json.agents.find((a) => a.name === "Acute");
     assert.ok(nova && nova.isTemplate === false);
     assert.equal(nova.providerId, "openrouter");
-    assert.equal(nova.model, "stealth/ox-alpha");
+    // ROUND-43: the seed default moved off the deleted stealth/ox-alpha to
+    // the free catalog default (z-ai/glm-5.2:free).
+    assert.equal(nova.model, "z-ai/glm-5.2:free");
   });
 
   it("creates, duplicates, patches, and deletes an agent", async () => {

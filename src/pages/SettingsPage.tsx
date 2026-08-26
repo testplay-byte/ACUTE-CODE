@@ -441,7 +441,7 @@ function ProviderKeyCard({
 }) {
   const styles = useThemeStyles();
   const [key, setKey] = useState("");
-  const [model, setModel] = useState(providerId === "openrouter" ? "stealth/ox-alpha" : "");
+  const [model, setModel] = useState(providerId === "openrouter" ? "z-ai/glm-5.2:free" : "");
   const [saving, setSaving] = useState(false);
   const [testing, setTesting] = useState(false);
   const [result, setResult] = useState<ConnectionTestResult | null>(null);

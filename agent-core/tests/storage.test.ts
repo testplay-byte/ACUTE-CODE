@@ -123,6 +123,9 @@ describe("openDatabase", () => {
       // ROUND-42: Web Push subscriptions (desktop notifications with the
       // app window closed).
       { version: 12, name: "0012_push_subscriptions.sql" },
+      // ROUND-43: default-model refresh — the OpenRouter default was deleted
+      // upstream; dead ids are rewritten to the free catalog default.
+      { version: 13, name: "0013_default_model_refresh.sql" },
     ]);
     expect(appliedSecond).toEqual(appliedFirst);
   });

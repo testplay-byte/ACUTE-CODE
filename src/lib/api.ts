@@ -582,7 +582,33 @@ export interface DiffEntry {
 /** Renderable timeline item for the project-chat screen (see toProjectChatItems). */
 export type ProjectChatItem =
   | { kind: "user"; seq: number; content: string; ts: string }
-  | AssistantTurnItem;
+  | AssistantTurnItem
+  | ErrorTurnItem;
+
+/**
+ * ROUND-43 (owner: failed turns "silently die — I only see the message which
+ * I sent"): the backend now persists a `turn.error` event when a streamed
+ * turn fails. It folds into this item and renders as an error card directly
+ * below the failed user message — with Retry + Copy details — instead of a
+ * conversation that ends at the user bubble forever.
+ */
+export interface ErrorTurnItem {
+  kind: "error";
+  seq: number;
+  /** Machine code, e.g. PROVIDER_ERROR / INTERNAL_ERROR. */
+  code: string;
+  /** Short human summary ("provider 'openrouter' call failed for session …"). */
+  message: string;
+  /** The model the failed turn used (may differ from the agent default). */
+  model?: string;
+  /** Provider id, when the backend recorded one. */
+  providerId?: string;
+  /** Longer upstream reason (status text / SDK error), already secret-scrubbed. */
+  providerError?: string;
+  /** seq of the user message this failed turn answered (Retry target). */
+  userSeq?: number;
+  ts: string;
+}
 
 /**
  * ROUND-37 (owner "two states" directive): ONE assistant TURN per user
@@ -929,6 +955,39 @@ export function toProjectChatItems(events: SessionEvent[]): ProjectChatItem[] {
       continue;
     }
 
+    // ROUND-43: a persisted turn failure terminates whatever partial turn
+    // accumulated since the user message (the flush renders thoughts/tools
+    // done before the crash), then becomes its own error item right below
+    // the user bubble.
+    if (event.type === "turn.error") {
+      flushTurn();
+      const payload =
+        event.payload && typeof event.payload === "object"
+          ? (event.payload as Record<string, unknown>)
+          : {};
+      const asString = (v: unknown): string | undefined =>
+        typeof v === "string" && v.length > 0 ? v : undefined;
+      const model = asString(payload.model);
+      const providerId = asString(payload.providerId);
+      const providerError = asString(payload.providerError);
+      const userSeq =
+        typeof payload.userSeq === "number" && Number.isFinite(payload.userSeq)
+          ? payload.userSeq
+          : undefined;
+      items.push({
+        kind: "error",
+        seq: event.seq,
+        code: asString(payload.code) ?? "PROVIDER_ERROR",
+        message: asString(payload.message) ?? "The generation failed.",
+        ...(model !== undefined ? { model } : {}),
+        ...(providerId !== undefined ? { providerId } : {}),
+        ...(providerError !== undefined ? { providerError } : {}),
+        ...(userSeq !== undefined ? { userSeq } : {}),
+        ts: event.ts,
+      });
+      continue;
+    }
+
     // Other event types (todo.update etc.) don't render in the timeline.
   }
 
@@ -1170,6 +1229,13 @@ export async function streamSessionMessage(
   const reader = res.body.getReader();
   const decoder = new TextDecoder();
   let buffer = "";
+  // ROUND-43: a well-formed stream always ends with a terminal frame
+  // (done | error | stopped) before the socket closes. If the HTTP stream
+  // dies mid-flight (sidecar crash, proxy drop) the read loop below just
+  // ends — previously that resolved SILENTLY and the chat showed nothing
+  // (the owner's bug). Synthesize a terminal error so the store can surface
+  // the failure card + refetch the persisted turn state instead.
+  let sawTerminalFrame = false;
   for (;;) {
     const { done, value } = await reader.read();
     if (done) break;
@@ -1181,7 +1247,11 @@ export async function streamSessionMessage(
       for (const line of chunk.split("\n")) {
         if (line.startsWith("data: ")) {
           try {
-            onEvent(JSON.parse(line.slice(6)) as StreamTurnEvent);
+            const parsed = JSON.parse(line.slice(6)) as StreamTurnEvent;
+            if (parsed.type === "done" || parsed.type === "error" || parsed.type === "stopped") {
+              sawTerminalFrame = true;
+            }
+            onEvent(parsed);
           } catch {
             /* skip malformed frame */
           }
@@ -1189,6 +1259,15 @@ export async function streamSessionMessage(
       }
       sep = buffer.indexOf("\n\n");
     }
+  }
+  if (!sawTerminalFrame) {
+    onEvent({
+      type: "error",
+      status: 0,
+      code: "STREAM_DISCONNECTED",
+      message:
+        "The stream from the agent ended unexpectedly (connection interrupted). Reconnecting may recover the turn.",
+    });
   }
 }
 

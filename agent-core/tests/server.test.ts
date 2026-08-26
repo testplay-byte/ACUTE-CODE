@@ -114,7 +114,9 @@ describe("agents CRUD", () => {
       id: "agt_default_nova",
       name: "Acute",
       providerId: "openrouter",
-      model: "stealth/ox-alpha",
+      // ROUND-43: the seed default moved off the deleted stealth/ox-alpha to
+      // the free catalog default.
+      model: "z-ai/glm-5.2:free",
       isTemplate: false,
     });
   });

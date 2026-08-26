@@ -1660,6 +1660,14 @@ export function buildServer(options: ServerOptions): FastifyInstance {
               ...(outcome.details ? { details: outcome.details } : {}),
             });
           }
+        } catch (routeError) {
+          // ROUND-43: an unexpected crash in the route itself (not a provider
+          // failure) must still terminate the SSE stream with an error frame —
+          // otherwise the client sees the socket end with no terminal event
+          // and the turn dies silently (the owner's bug).
+          const message =
+            routeError instanceof Error ? routeError.message : String(routeError);
+          send({ type: "error", status: 500, code: "INTERNAL_ERROR", message });
         } finally {
           if (activeTurns.get(id) === abort) activeTurns.delete(id);
           if (!clientGone) {

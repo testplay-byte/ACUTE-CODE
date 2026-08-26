@@ -40,10 +40,32 @@ export interface LiveTurn {
   stopped: boolean;
 }
 
+/**
+ * ROUND-43: a turn-level failure (provider error, internal crash, or the
+ * stream dying mid-flight). Rendered as the timeline error card while the
+ * refetched event log catches up — the persisted `turn.error` event then
+ * takes over the render, so the card survives reloads.
+ */
+export interface TurnErrorInfo {
+  code: string;
+  message: string;
+  status?: number;
+  model?: string;
+  providerError?: string;
+  /** The ts of the PERSISTED turn.error event, when the backend recorded
+   * one — used to swap the live card for the folded one without a flash or
+   * a duplicate. */
+  errorTs?: string;
+  ts: string;
+}
+
 export interface StreamSessionState {
   liveTurn: LiveTurn | null;
   streamBusy: boolean;
   sendError: string | null;
+  /** ROUND-43: the LIVE turn error (renders the error card immediately —
+   * cleared once the folded event log carries the persisted turn.error). */
+  liveError: TurnErrorInfo | null;
   pendingEcho: string | null;
   /** When the last live turn ended (for collapseHints). */
   lastLiveEndMs: number;
@@ -73,6 +95,9 @@ interface StreamStore {
   setPendingEcho: (sessionId: string, text: string | null) => void;
   /** Set/clear a send error (shown in the error banner). */
   setSendError: (sessionId: string, msg: string | null) => void;
+  /** ROUND-43: clear the live turn-error card (the persisted turn.error
+   * event now renders from the folded log — no duplicates). */
+  clearLiveError: (sessionId: string) => void;
 }
 
 /** Module-level controllers + seq counters (NOT React state — they don't
@@ -92,6 +117,7 @@ function emptyState(): StreamSessionState {
     liveTurn: null,
     streamBusy: false,
     sendError: null,
+    liveError: null,
     pendingEcho: null,
     lastLiveEndMs: 0,
   };
@@ -141,6 +167,8 @@ export const useStreamStore = create<StreamStore>((set, get) => ({
       },
       streamBusy: true,
       sendError: null,
+      // ROUND-43: a fresh turn clears any stale live error card.
+      liveError: null,
     });
 
     const controller = new AbortController();
@@ -166,7 +194,16 @@ export const useStreamStore = create<StreamStore>((set, get) => ({
       // Network/CORS/abort — surface as a send error.
       const msg = err instanceof Error ? err.message : String(err);
       if (msg !== "The user aborted a request.") {
-        patchSession(sessionId, { sendError: msg });
+        // ROUND-43: the fetch itself failed (never reached SSE) — show the
+        // live error card too. A user stop is excluded: stops aren't errors.
+        patchSession(sessionId, {
+          sendError: msg,
+          liveError: {
+            code: "NETWORK_ERROR",
+            message: msg,
+            ts: new Date().toISOString(),
+          },
+        });
       }
     } finally {
       controllers.delete(sessionId);
@@ -265,6 +302,13 @@ export const useStreamStore = create<StreamStore>((set, get) => ({
 
   setSendError: (sessionId, msg) => {
     patchSession(sessionId, { sendError: msg });
+  },
+
+  clearLiveError: (sessionId) => {
+    const cur = get().bySession[sessionId];
+    if (cur !== undefined && cur.liveError !== null) {
+      patchSession(sessionId, { liveError: null });
+    }
   },
 }));
 
@@ -445,7 +489,31 @@ function handleStreamEvent(
   }
 
   if (event.type === "error") {
-    patchSession(sessionId, { sendError: event.message });
+    // ROUND-43: a turn-level failure. The timeline error card (rendered from
+    // this live state, then from the persisted turn.error event after the
+    // refetch) is THE surface — the old sendError banner only showed while
+    // the panel stayed mounted with lastSent set, so reloads lost it (the
+    // owner saw nothing). {type:"stopped"} never reaches here — a stop is
+    // not an error and renders no card.
+    const details =
+      event.details && typeof event.details === "object"
+        ? (event.details as Record<string, unknown>)
+        : undefined;
+    const model = details && typeof details.model === "string" ? details.model : undefined;
+    const providerError =
+      details && typeof details.providerError === "string" ? details.providerError : undefined;
+    const errorTs = details && typeof details.errorTs === "string" ? details.errorTs : undefined;
+    patchSession(sessionId, {
+      liveError: {
+        code: event.code,
+        message: event.message,
+        ...(event.status !== 0 ? { status: event.status } : {}),
+        ...(model !== undefined ? { model } : {}),
+        ...(providerError !== undefined ? { providerError } : {}),
+        ...(errorTs !== undefined ? { errorTs } : {}),
+        ts: new Date().toISOString(),
+      },
+    });
     return;
   }
 

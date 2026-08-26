@@ -6,8 +6,10 @@ import {
   Bot,
   ChevronsLeft,
   ChevronsRight,
+  CircleAlert,
   FolderOpen,
   LayoutDashboard,
+  LoaderCircle,
   MessageSquare,
   Palette,
   Pencil,
@@ -705,7 +707,9 @@ function ProjectSection({ collapsed }: { collapsed: boolean }) {
                     transition={{ duration: 0.22, ease: [0.25, 0.1, 0.25, 1] }}
                     className="overflow-hidden"
                   >
-                    <div className="ml-[19px] pl-3 border-l-[1.5px] space-y-0.5 py-1" style={{ borderColor: withAlpha(styles.textTertiary, 0.18) }}>
+                    {/* ROUND-43: the tree rail is softened to a hairline so the
+                        bordered session rows (below) carry the depth. */}
+                    <div className="ml-[19px] pl-2.5 border-l space-y-1 py-1" style={{ borderColor: withAlpha(styles.textTertiary, 0.14) }}>
                       {projSessions.slice(0, 8).map((session) => (
                         <SessionRow
                           key={session.id}
@@ -824,12 +828,29 @@ function ProjectRow({
   );
 }
 
+/** The visual state of a session row — drives the border tint, the leading
+ * icon and the test attributes (ROUND-43). */
+export type SessionRowState = "running" | "failed" | "idle";
+
+export function deriveSessionRowState(session: Session, running: boolean): SessionRowState {
+  if (running || session.status === "running") return "running";
+  if (session.status === "failed" || session.status === "cancelled") return "failed";
+  return "idle";
+}
+
 /**
- * ROUND-33 SessionRow: one session under a project. ACTIVE session (matching
- * the ?session= URL param — same source of truth as the chat panel) gets the
- * accent-tinted fill + bold text + 2.5px indicator bar. Hover reveals the
- * RENAME (pencil, round-33) and DELETE (round-30) buttons. Rename switches
- * the row to an inline input (Enter saves · Escape cancels).
+ * ROUND-33 SessionRow · ROUND-43 depth pass (owner: “each individual session
+ * could be given a dedicated border around it… the icons could be improved
+ * and handled better”). Every row is now its own bordered card — hairline
+ * neutral border at rest, stronger on hover, accent-tinted when ACTIVE —
+ * with a 1-level shadow + inset highlight matching the R42 ProjectTile
+ * gradient language. The leading icon is STATE-AWARE: spinner while a turn
+ * is in flight, chat bubble at rest, alert glyph on failed/cancelled
+ * sessions. The R38 pixel-stream on the right is preserved and composes
+ * with the running icon (rail-side flourish + at-a-glance state).
+ * ACTIVE session (matching the ?session= URL param) keeps the accent fill,
+ * bold text + 2.5px indicator bar. Hover reveals RENAME (round-33) and
+ * DELETE (round-30). Rename switches to an inline input (Enter · Escape).
  */
 function SessionRow({
   session,
@@ -850,7 +871,10 @@ function SessionRow({
   const [draft, setDraft] = useState(session.title ?? "");
   // ROUND-38: pixelated activity indicator on the right when this session
   // has a turn in flight (owner directive).
-  const running = useActiveStreams((s) => s.active.has(session.id));
+  const streaming = useActiveStreams((s) => s.active.has(session.id));
+  // ROUND-43: coherent row state (icon + tint + test attributes).
+  const state = deriveSessionRowState(session, streaming);
+  const running = state === "running";
 
   const remove = () => {
     deleteSession.mutate(session.id, {
@@ -903,36 +927,88 @@ function SessionRow({
     );
   }
 
+  // ROUND-43: the dedicated border — neutral hairline at rest, stronger on
+  // hover, accent-tinted on the active row; a failed session leans red so
+  // the problem row is findable at a glance.
+  const borderColor = active
+    ? withAlpha(styles.accent, 0.45)
+    : state === "failed"
+      ? withAlpha(SEMANTIC_COLORS.danger, hovered ? 0.5 : 0.35)
+      : hovered
+        ? styles.border
+        : styles.borderSubtle;
+  // Depth consistent with the R42 ProjectTile treatment: a 1-level shadow +
+  // a soft inset top highlight (instead of heavier borders).
+  const rowShadow = active
+    ? styles.isDark
+      ? `inset 0 1px 0 rgba(255,255,255,0.06), 0 1px 4px ${withAlpha(styles.accent, 0.25)}`
+      : `inset 0 1px 0 rgba(255,255,255,0.8), 0 1px 4px ${withAlpha(styles.accent, 0.18)}`
+    : styles.isDark
+      ? "inset 0 1px 0 rgba(255,255,255,0.04), 0 1px 2px rgba(0,0,0,0.22)"
+      : "inset 0 1px 0 rgba(255,255,255,0.65), 0 1px 2px rgba(0,0,0,0.05)";
+
   return (
     <div
-      className="group relative flex items-center rounded-[8px] transition-colors"
+      data-session-row
+      data-state={state}
+      data-active={active ? "true" : "false"}
+      className="group relative flex items-center gap-0.5 rounded-[9px] pl-0.5 pr-1 py-[3px] transition-all duration-150"
       style={{
-        background: active ? withAlpha(styles.accent, 0.12) : hovered ? styles.sidebarHover : "transparent",
+        border: `1px solid ${borderColor}`,
+        background: active
+          ? withAlpha(styles.accent, 0.1)
+          : state === "failed"
+            ? hovered
+              ? withAlpha(SEMANTIC_COLORS.danger, 0.08)
+              : withAlpha(SEMANTIC_COLORS.danger, 0.05)
+            : hovered
+              ? styles.sidebarHover
+              : styles.subtle,
+        boxShadow: rowShadow,
       }}
       onMouseEnter={() => setHovered(true)}
       onMouseLeave={() => setHovered(false)}
     >
-      {/* Active indicator bar — the clear "currently selected" signal. */}
+      {/* Active indicator bar — the clear "currently selected" signal,
+          sitting just inside the row's border. */}
       <span
-        className="absolute left-0 top-1 bottom-1 w-[2.5px] rounded-full transition-opacity"
+        className="absolute left-[3px] top-1 bottom-1 w-[2.5px] rounded-full transition-opacity"
         style={{ background: styles.accent, opacity: active ? 1 : 0 }}
         aria-hidden
       />
       <button
         onClick={() => navigate(`/project/${projectId}/chat?session=${session.id}`)}
         aria-current={active ? "true" : undefined}
-        className="flex-1 min-w-0 h-7 flex items-center gap-2 px-2.5 text-[11px] truncate"
+        className="flex-1 min-w-0 h-[26px] flex items-center gap-2 px-2 text-[11px] truncate"
         style={{
           color: active ? styles.text : hovered ? styles.textSecondary : styles.textTertiary,
           fontWeight: active ? 700 : 500,
         }}
         title={session.title ?? "Untitled"}
       >
-        <MessageSquare
-          size={10}
-          className="shrink-0"
-          style={{ color: active ? styles.accent : undefined }}
-        />
+        {/* ROUND-43 state-aware icon: running → spinner, failed → alert,
+            idle → chat bubble. */}
+        {state === "running" ? (
+          <LoaderCircle
+            size={11}
+            className="shrink-0 animate-spin"
+            style={{ color: styles.accent }}
+            aria-label="Session is working"
+          />
+        ) : state === "failed" ? (
+          <CircleAlert
+            size={11}
+            className="shrink-0"
+            style={{ color: SEMANTIC_COLORS.danger }}
+            aria-label="Session failed"
+          />
+        ) : (
+          <MessageSquare
+            size={10}
+            className="shrink-0"
+            style={{ color: active ? styles.accent : styles.textTertiary }}
+          />
+        )}
         <span className="truncate">{session.title ?? "Untitled"}</span>
       </button>
       {/* Rename (round-33) — ROUND-42: smooth opacity transition. */}
@@ -950,17 +1026,18 @@ function SessionRow({
         disabled={deleteSession.isPending}
         aria-label={`Delete session ${session.title ?? "Untitled"}`}
         title="Delete session"
-        className="relative z-10 w-5 h-5 mr-1 grid place-items-center rounded-md transition-opacity duration-150 hover:bg-black/10"
+        className="relative z-10 w-5 h-5 grid place-items-center rounded-md transition-opacity duration-150 hover:bg-black/10"
         style={{ color: styles.textTertiary, opacity: hovered ? 1 : 0 }}
       >
         <Trash2 size={10} />
       </button>
       {/* ROUND-38 (owner: "the currently running session will have some
           animation to it, like a pixelated kind of animation playing along
-          on the right side"). Shown only while a turn is in flight. */}
+          on the right side"). Shown only while a turn is in flight —
+          composes with the ROUND-43 running icon on the left. */}
       {running ? (
         <span
-          className="shrink-0 mr-1 ac-pixel-stream"
+          className="shrink-0 ac-pixel-stream"
           style={{ color: styles.accent }}
           aria-label="Session is working"
           role="status"

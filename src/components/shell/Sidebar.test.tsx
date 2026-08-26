@@ -2,9 +2,12 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { cleanup, fireEvent, screen, waitFor } from "@testing-library/react";
 import { Route, Routes } from "react-router";
-import { Sidebar } from "./Sidebar";
+import { deriveSessionRowState, Sidebar } from "./Sidebar";
 import { ProjectView } from "../projects/ProjectView";
 import { getFixtureProjects } from "../../lib/project-fixtures";
+import { getFixtureSessions } from "../../lib/session-fixtures";
+import { useActiveStreams } from "../../lib/active-streams";
+import type { Session } from "../../lib/api";
 import { renderWithProviders, resetTestState } from "../../test-utils";
 
 // Vitest globals are off, so RTL's auto-cleanup does not hook in — do it by hand.
@@ -118,5 +121,86 @@ describe("Sidebar projects section (fixture ProjectsBackend)", () => {
     );
     expect(await screen.findByText("Project not found")).toBeTruthy();
     await waitFor(() => expect(screen.getByText("Back to dashboard")).toBeTruthy());
+  });
+});
+
+describe("Sidebar session rows (R43 depth pass: border + state-aware icons)", () => {
+  it("gives every session row a dedicated border — accent on the active row, hairline at rest", async () => {
+    const [project] = await getFixtureProjects().list();
+    const backend = getFixtureSessions();
+    await backend.create({ mode: "single", agentId: "agt_scribe", projectId: project.id, title: "Fix login flow" });
+    await backend.create({ mode: "single", agentId: "agt_scribe", projectId: project.id, title: "Audit deps" });
+    const sessions = (await backend.list()).filter((s) => s.projectId === project.id);
+    const activeId = sessions.find((s) => s.title === "Fix login flow")?.id;
+    expect(activeId).toBeTruthy();
+
+    // The ?session= route auto-expands the project + marks the matching row.
+    const { container } = renderWithProviders(
+      <>
+        <Sidebar />
+        <Routes>
+          <Route path="/" element={<div>dashboard stub</div>} />
+          <Route path="/project/:id/chat" element={<div>chat stub</div>} />
+        </Routes>
+      </>,
+      { route: `/project/${project.id}/chat?session=${activeId}` },
+    );
+
+    await waitFor(() => {
+      expect(container.querySelectorAll("[data-session-row]").length).toBe(2);
+    });
+    const rows = Array.from(container.querySelectorAll<HTMLElement>("[data-session-row]"));
+    // Every row carries a border + depth (the owner's dedicated-border ask).
+    for (const row of rows) {
+      expect(row.style.border).not.toBe("");
+      expect(row.style.boxShadow).not.toBe("");
+    }
+    // Active row is clearly identifiable: data-active + the accent indicator bar.
+    const activeRow = rows.find((r) => r.dataset.active === "true");
+    expect(activeRow).toBeTruthy();
+    expect(activeRow?.dataset.state).toBe("idle");
+    // Rest rows: idle chat-bubble state.
+    expect(rows.some((r) => r.dataset.state === "idle" && r.dataset.active === "false")).toBe(true);
+  });
+
+  it("a streaming session flips its row to the running state with the live icon + pixel-stream", async () => {
+    const [project] = await getFixtureProjects().list();
+    const backend = getFixtureSessions();
+    await backend.create({ mode: "single", agentId: "agt_scribe", projectId: project.id, title: "Live run" });
+    const [session] = (await backend.list()).filter((s) => s.projectId === project.id);
+
+    const { container } = renderWithProviders(
+      <>
+        <Sidebar />
+        <Routes>
+          <Route path="/" element={<div>dashboard stub</div>} />
+          <Route path="/project/:id/chat" element={<div>chat stub</div>} />
+        </Routes>
+      </>,
+      { route: `/project/${project.id}/chat?session=${session.id}` },
+    );
+
+    // The AgentChatPanel marks streams through this store — simulate it.
+    useActiveStreams.setState({ active: new Set([session.id]) });
+    await waitFor(() => {
+      const row = container.querySelector<HTMLElement>(`[data-session-row][data-state="running"]`);
+      expect(row).toBeTruthy();
+      // R38 pixel-stream preserved + composing with the R43 running icon.
+      expect(row?.querySelector(".ac-pixel-stream")).toBeTruthy();
+      expect(row?.querySelector('[aria-label="Session is working"]')).toBeTruthy();
+    });
+    useActiveStreams.setState({ active: new Set() });
+  });
+
+  it("deriveSessionRowState maps session status to the row's icon state", () => {
+    const base = { id: "s", projectId: null, agentId: null, mode: "single" as const, title: null, createdAt: "", updatedAt: "" };
+    const session = (status: Session["status"]): Session => ({ ...base, status });
+    expect(deriveSessionRowState(session("failed"), false)).toBe("failed");
+    expect(deriveSessionRowState(session("cancelled"), false)).toBe("failed");
+    expect(deriveSessionRowState(session("running"), false)).toBe("running");
+    // A stream marked active wins even if the status field lags behind.
+    expect(deriveSessionRowState(session("queued"), true)).toBe("running");
+    expect(deriveSessionRowState(session("completed"), false)).toBe("idle");
+    expect(deriveSessionRowState(session("queued"), false)).toBe("idle");
   });
 });

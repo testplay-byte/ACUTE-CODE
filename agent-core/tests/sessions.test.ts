@@ -665,25 +665,32 @@ describe("POST /api/v1/sessions/:id/messages", () => {
     expect(failed.body).not.toContain(KEY);
     expect(failed.json().error.details.providerError).toContain("***");
 
-    // The log stays append-only: the failed turn's user event consumed seq 1.
+    // ROUND-43: the failure is now PERSISTED as a turn.error event (the
+    // owner's silent-death bug — the log previously ended at the user event,
+    // so a reload showed nothing below the user's message). Append-only: the
+    // user event consumed seq 1, the error event seq 2.
     const afterFailure = (await authInject({ method: "GET", url: `/api/v1/sessions/${session.id}` })).json();
-    expect(afterFailure.lastSeq).toBe(1);
-    expect(afterFailure.events).toHaveLength(1);
+    expect(afterFailure.lastSeq).toBe(2);
+    expect(afterFailure.events).toHaveLength(2);
+    expect(afterFailure.events[1].type).toBe("turn.error");
+    expect(afterFailure.events[1].payload.model).toBe("test/model-1");
+    expect(afterFailure.events[1].payload.userSeq).toBe(1);
+    expect(JSON.stringify(afterFailure.events[1])).not.toContain(KEY);
 
-    // Retrying the same session works and continues the sequence at seq 2.
+    // Retrying the same session works and continues the sequence at seq 3.
     const retried = await authInject({
       method: "POST",
       url: `/api/v1/sessions/${session.id}/messages`,
       payload: { content: "try again" },
     });
     expect(retried.statusCode).toBe(200);
-    expect(retried.json().assistantMessage.seq).toBe(3);
+    expect(retried.json().assistantMessage.seq).toBe(4);
     const seqs = (
       db
         .prepare("SELECT seq FROM session_events WHERE session_id = ? ORDER BY seq")
         .all(session.id) as { seq: number }[]
     ).map((row) => row.seq);
-    expect(seqs).toEqual([1, 2, 3]);
+    expect(seqs).toEqual([1, 2, 3, 4]);
   });
 
   it("409 CONFLICT when the session is in a terminal status", async () => {

@@ -5,6 +5,7 @@
 import { randomUUID } from "node:crypto";
 import type Database from "better-sqlite3";
 import type { MemoryPolicy } from "shared";
+import { DEFAULT_MODEL_ID } from "./models.js";
 
 export type SqliteDatabase = Database.Database;
 
@@ -285,9 +286,12 @@ const DEFAULT_AGENT_ID = "agt_default_nova";
 /**
  * Seed the default working agent once, when NO non-template agent exists and
  * the openrouter provider row is present (it always is — provider seed).
- * Model hardcoded to the owner's single allowed key model ("stealth/ox-alpha");
- * owners with other providers simply edit or duplicate the agent in Settings.
- * Idempotent by fixed id + existence check.
+ * ROUND-43: the previous hardcoded model (stealth/ox-alpha) was deleted
+ * upstream by OpenRouter and killed every default chat — the seed now uses
+ * DEFAULT_MODEL_ID from the built-in catalog (z-ai/glm-5.2:free: $0, 256K
+ * ctx, tools + structured outputs). Existing installs are rewritten by
+ * migration 0013; owners with other providers simply edit or duplicate the
+ * agent in Settings. Idempotent by fixed id + existence check.
  */
 export function ensureDefaultAgent(db: SqliteDatabase): void {
   // Round-16 rename (owner): the default agent is "Acute", not "Nova". The
@@ -320,7 +324,7 @@ export function ensureDefaultAgent(db: SqliteDatabase): void {
           "When asked to build something, actually create the files with your tools, then summarize what you made.",
         ].join("\n"),
         providerId: "openrouter",
-        model: "stealth/ox-alpha",
+        model: DEFAULT_MODEL_ID,
         visionModel: null,
         allowedTools: [],
         memoryPolicy: "every-turn",
