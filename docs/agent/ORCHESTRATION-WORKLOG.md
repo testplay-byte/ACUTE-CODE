@@ -1073,3 +1073,34 @@ Stage Summary:
 - All five owner directives delivered and browser-proven: continuous turns with the collapsible Working section, minimal tool presentation, sparkle-free, full-width chat, rebuilt providers with real API-format selection, and the interactive approval flow (file-on-disk proof).
 - 251 tests green (+24), verify fully green, 112 prod deps license-clean.
 - SECURITY: the review's compound-command bypass is fixed with regression tests; denylist-supreme verified (vite/vitest collision caught + tested).
+
+---
+Task ID: R43
+Agent: orchestrator (Z.ai Code + 8 dispatched sub-agents)
+Task: The owner's 9-item R42 verdict round — embedded in-app proxy browser, dead-model replacement + free-only filter, chat error cards + retry, chat geometry, sub-agent panel redesign + provider section, sidebar polish, Rust CI fix, live battery, docs+dashboard truth.
+
+Work Log:
+- (Gap note: this canonical copy had not been refreshed since R37 — the sandbox-live worklog at /home/z/my-project/worklog.md holds the R38–R42 session records; round docs live in docs/ui-iterations/round-38..42.md. R43 resumed the refresh cadence.)
+- Sandbox was re-provisioned at round start (Task 5): DASHBOARD re-cloned (public), free-model research done from the live OpenRouter catalog (417 models → 18 usable free), full R43 dispatch plan written to agent-ctx/R43-plan.md; ACUTE-CODE restore blocked on the owner's PAT until he re-shared it.
+- Sub-agent 6-a (R43-2): TWO Rust E0599s fixed in src-tauri/src/browser.rs (user_data_dir → data_directory; on_navigation is a WebviewWindowBuilder method in tauri 2.11.5) + ci.yml workflow_dispatch; CI watched to actual GREEN (dispatch run 32991398513 @ 2523ecd6) — first since R38. The audit's "branches: ain] YAML rot" proved to be a Bash display artifact ([m-sequence stripping) — NO yaml edits; byte-verified.
+- Sub-agents 6-b..6-g (waves 1–2, commits 66413d9 + f4272f6): free-model catalog (46 entries, default z-ai/glm-5.2:free, migration 0013, dead stealth/ox-alpha retired) + shared Free-only/All filter (settings-store modelsFreeOnly, default true) wired into Settings, the chat picker, and the sub-agent picker; failed turns persist turn.error + enriched SSE terminal frame + TurnErrorCard with Retry/Copy (silent death eliminated, session returns to queued); chat geometry measured+fixed (w-full panel, 1080px centered column, overflow-x hidden, no-floor sidebarWidthCap — zero overflow verified 700–2560px, the R42 280px cap-floor regression removed); Sub-agents settings tab (temporary OpenRouter pool-key slots 2/3/4 via existing key routes + orchestration.subagentModel validated tool-capable, applied by delegateTask/retryChild); embedded-browser proxy backend (per-tab 192-bit bt ticket auth so iframes pass the bearer wall, HTML/CSS rewriting with script-body protection, framing headers never forwarded, redirect-hop-re-guarded private-net guard, history LRU + viewport presets, encapsulated child scope after a parser-leak regression was caught, 26 tests, github.com verified through the proxy).
+- Orchestrator integration (wave 3, commit e2ef2fd): BrowserPanel full rewrite (in-sidebar iframe via proxy+ticket, chrome bar, viewport presets 375..1920 + custom + zoom + rotate + fit-scaling, postMessage title/open, open-external secondary) + browser_control agent tool (navigate/back/forward/reload/set_viewport/get_state + prompt guide).
+- Live-battery hardening (commit b826f4a): OpenRouter free-model FALLBACK CHAIN (fetch wrapper rewrites body to models:[model, openrouter/free] — provider-side retry across free models; live-verified through a 429 storm: a glm-5.2:free turn completed via fallback); migration 0014 + TOOL_NAMES += delegate_task — delegation was UNREACHABLE from seeded templates since R36 (the seed allowlist never listed it); after 0014, sub-agent fan-out ran end-to-end LIVE for the first time from a seeded agent (researcher child completed + reported, on a nemotron-3.5-lightning override); browser_control added to existing DBs.
+- Verification: 389 unit + 8 e2e = 397 tests green (baseline 262); lint/typecheck/build/license clean (131 deps); CI green on 2523ecd/66413d9/f4272f6/e2ef2fd push runs; dev-stack live battery OK (main chat on glm-5.2:free via fallback, sub-agent fan-out, browser proxy github 200, turn.error persisted on real failures). Launcher files untouched.
+
+Stage Summary:
+- All 9 owner verdict items delivered; the flagship embedded browser renders XFO sites (github.com) inside the right sidebar in BOTH web and Tauri modes, and the agent can drive it at display sizes.
+- CI green again (R39–R42 red streak broken at the root: two real API-misuse bugs, not YAML).
+- The sub-agent system became actually reachable from the templates the owner uses (0014) and resilient on free models (fallback chain).
+- Honest v1 limits: proxy has no cookie persistence (logins), runtime-JS URLs bypass the rewrite, multipart POST opaque, hostname-only private-net guard; inkling-small:free 403s on the owner's account (TOS acceptance needed); security holes P0-3..P0-5 deferred by the owner.
+
+---
+Task ID: R43-12
+Agent: docs-dashboard-truth (sub-agent 6-i)
+Task: R43 docs + public DASHBOARD truth-sync — round-43.md, HANDOFF R43 header, IMPLEMENTED-API R43 additions, this worklog refresh, docs:check green; DASHBOARD rebuilt from API-queried CI truth (never hand-claimed).
+
+Work Log:
+- (filled by the 6-i agent in the live sandbox worklog; artifacts: docs/ui-iterations/round-43.md, HANDOFF.md header, docs/architecture/api/IMPLEMENTED-API.md ROUND-43 additions, DASHBOARD data.json quality/plan/features/milestones truth-sync + rebuilt index.html, both repos pushed.)
+
+Stage Summary:
+- Docs current; dashboard claims match the GitHub Actions API at build time.

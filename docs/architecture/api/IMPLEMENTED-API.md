@@ -1,4 +1,4 @@
-<!-- last-reviewed: 2026-08-26 round-42 -->
+<!-- last-reviewed: 2026-08-26 round-43 -->
 # IMPLEMENTED API — the shipped surface
 
 **Truth = this file.** Verified against `agent-core/src/server.ts` at
@@ -26,8 +26,8 @@ vite dev origins.
 
 | Route | Notes |
 |---|---|
-| `GET /agents?includeTemplates=` | list; `false` excludes the 5 templates (default agent "Acute" remains — seeded at DB open, fixed id `agt_default_nova`, provider openrouter / model `stealth/ox-alpha`) |
-| `POST /agents` | `AgentDraft` → `201`. `allowedTools` validated against the REAL 7-tool list (`list_dir, read_file, write_file, edit_file, create_dir, delete_file, search_files`) — SPEC-era names 400 (ADR-0019). Empty list = ALL tools. |
+| `GET /agents?includeTemplates=` | list; `false` excludes the 5 templates (default agent "Acute" remains — seeded at DB open, fixed id `agt_default_nova`, provider openrouter / model `z-ai/glm-5.2:free` since R43/migration-0013; was the dead `stealth/ox-alpha`) |
+| `POST /agents` | `AgentDraft` → `201`. `allowedTools` validated against the REAL tool list (`TOOL_NAMES`, 19 tools incl. `delegate_task` + `browser_control` since R43) — SPEC-era names 400 (ADR-0019). Empty list = ALL tools. |
 | `GET/PATCH/DELETE /agents/:id` | PATCH bumps version; DELETE 409 `{reason:"template"}` for templates |
 | `POST /agents/:id/duplicate` | `{name?}` → `201` |
 
@@ -121,6 +121,54 @@ until estimation lands).
 - Boot sweep (ADR-0022): a `running` session whose LAST event is
   `message.assistant` returns to `queued` (idle conversation — alive);
   only genuine mid-turn crashes go to `failed`.
+
+## ROUND-43 additions (implemented)
+
+### Embedded browser (proxy + per-tab tickets) — `agent-core/src/browser-proxy.ts`
+
+All under `/api/v1`, bearer-gated EXCEPT the proxy itself which authenticates
+per-request with a short-lived `bt` ticket (iframes cannot send Authorization
+headers):
+
+| Route | Contract |
+|---|---|
+| `POST /browser/session` | `{sessionId}` → `{ticket}` — mints a random 192-bit ticket bound to the tab's session (rotates on re-mint; 12h TTL refreshed on use; dies with session eviction/deletion). |
+| `DELETE /browser/session` | `{sessionId}` → drops tab state. |
+| `GET /browser/proxy?url=…&sessionId=…&bt=…` | Server-side fetch of the page: manual redirect walk (≤10 hops, every hop re-guarded), 20s deadline, 25 MiB cap, Range pass-through (206). HTML is rewritten (`<base href=FINAL-URL>` injected, links/assets/forms/styles re-proxied with `bt` echoed, script bodies placeholder-protected, CSP/XFO meta stripped, escape hatch injected before `</body>`); CSS `url()`/`@import` rewritten; everything else byte passthrough. Framing headers (XFO/CSP/COOP/COEP/HSTS) are never forwarded. Invalid/absent ticket → HTML 401 page (renders in-iframe). Scheme allowlist http/https; private-net guard (hostname-only, v1). |
+| `POST /browser/proxy?url=…&bt=…` | Form passthrough (method + content-type + urlencoded/multipart body forwarded). |
+| `GET /browser/history?sessionId=` | `{entries:[{url,title,ts}], index, canBack, canForward}` (LRU ≤32 sessions / ≤50 entries, forward-tail truncation on branch). |
+| `POST /browser/navigate` | `{sessionId, url?, title?}` records/updates an entry, or `{sessionId, direction:"back"\|"forward"\|"reload"}` moves the pointer. |
+| `GET /browser/viewport?sessionId=` / `PUT` | `{width,height,preset,zoom,rotate}` — presets `mobile-sm` 375×667 · `mobile-md` 390×844 · `tablet` 768×1024 · `laptop` 1280×800 (default) · `desktop` 1440×900 · `full-hd` 1920×1080 · `custom`; validation 200..3840 × 200..4320, zoom 0.25..3. This is the SAME state the BrowserPanel renders and the `browser_control` tool reads/writes. |
+
+The rewritten page's escape hatch posts `{type:"acute:open"\|"acute:title"\|"acute:location", …}` messages to the panel (no cookies/Authorization are forwarded either direction — logins do not persist through the proxy in v1).
+
+### Agent tool `browser_control` (19th tool)
+
+`{action: "navigate"\|"back"\|"forward"\|"reload"\|"set_viewport"\|"get_state", sessionId, url?, width?, height?, preset?}` — drives the same viewport/history state as the panel; `get_state` returns `{url, title, viewport}`. Prompt guide tells the agent it can test layouts at display sizes.
+
+### Orchestration + turn-error additions
+
+- `GET/PUT /settings/orchestration` now carries `subagentModel: string | null`
+  (default `null` = children inherit the parent agent's model). Writes are
+  validated: must be a known catalog id AND tool-capable (`supportsTools`),
+  else `400`. Applied by `delegateTask`/`retryChild` to every child turn;
+  agent records are never rewritten. Migration 0013 retired the dead
+  default model (`stealth/ox-alpha` → `z-ai/glm-5.2:free`, conservative
+  openrouter-scoped rewrite + audit row); migration 0014 appended
+  `delegate_task` + `browser_control` to seeded template allowlists
+  (delegation was unreachable from seeded agents before it).
+- **`turn.error` session event** (persisted): failed turns append
+  `{code, message, model, providerId, providerError (secret-scrubbed),
+  userSeq}` and flip the session back to `queued` (retryable). The SSE
+  terminal error frame is `{type:"error", status, code, message,
+  details:{providerError, model, userSeq, errorTs}}`; a user STOP still
+  persists nothing (`{type:"stopped"}` — stop ≠ error).
+- OpenRouter free-model **fallback chain**: requests on a `:free` model
+  are rewritten server-side to `models: [model, "openrouter/free"]` so the
+  provider retries across free models on 429/deprecation.
+- Static model catalog (46 entries: 18 free + 28 paid) with capability
+  flags in `agent-core/src/storage/models.ts`; the DB `models` table
+  remains the override store.
 
 ## NOT implemented (despite API.md)
 
