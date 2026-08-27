@@ -18,6 +18,7 @@ import {
   FileCode,
   FolderOpen,
   GitBranch,
+  History,
   ListChecks,
   Search,
   type LucideIcon,
@@ -25,13 +26,16 @@ import {
 import { Link, useSearchParams } from "react-router";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useAgents } from "../../hooks/use-agents";
+import { pushLocalToast } from "../../hooks/use-notifications";
 import {
   useCreateSession,
+  useRevertSession,
   useSendMessage,
   useSession,
   useSessions,
 } from "../../hooks/use-sessions";
 import { CommandPalette } from "./CommandPalette";
+import { ConfirmDialog } from "../agents/ConfirmDialog";
 import {
   BareWorkingEntries,
   WorkingSection,
@@ -204,7 +208,23 @@ const itemKey = (item: ProjectChatItem): string => {
   }
 };
 
-function UserMessage({ content }: { content: string }) {
+/**
+ * ROUND-44 (R44-c, owner directive: "complete the whole agentic coding
+ * environment"): a user bubble's hover actions — Copy (round-16) plus Revert,
+ * which rewinds the session's event log to THIS message (the reply and every
+ * later turn are deleted server-side). The seq binding happens in the panel
+ * (MessageRenderer threads this callback only for persisted items); the
+ * optimistic pending echo (seq -1, no session yet) never shows it.
+ */
+function UserMessage({
+  content,
+  onRevert,
+  revertDisabled,
+}: {
+  content: string;
+  onRevert?: () => void;
+  revertDisabled?: boolean;
+}) {
   const styles = useThemeStyles();
   // ROUND-38 (owner: "the messages which I sent… look bad and ugly. Their
   // interface and the colors kind of do not look good"): the old solid-orange
@@ -227,6 +247,25 @@ function UserMessage({ content }: { content: string }) {
       <div className="flex items-end gap-1 max-w-[82%]">
         <div className="opacity-0 group-hover:opacity-100 transition-opacity pb-0.5">
           <CopyButton text={content} />
+          {onRevert !== undefined ? (
+            <button
+              type="button"
+              onClick={onRevert}
+              disabled={revertDisabled}
+              aria-label="Revert to this message"
+              title="Revert to this message"
+              className="w-6 h-6 rounded-md grid place-items-center transition-colors disabled:cursor-not-allowed disabled:opacity-40"
+              style={{ color: styles.textTertiary }}
+              onMouseEnter={(e) => {
+                if (!revertDisabled) e.currentTarget.style.background = styles.subtleHover;
+              }}
+              onMouseLeave={(e) => {
+                e.currentTarget.style.background = "transparent";
+              }}
+            >
+              <History size={11} />
+            </button>
+          ) : null}
         </div>
         <div
           className="rounded-[16px] rounded-br-[5px] px-3.5 py-2.5 text-[13px] leading-[1.55] font-medium border"
@@ -623,13 +662,21 @@ const MessageRenderer = forwardRef<
      * the panel (the failed turn's user message). */
     onRetry?: () => void;
     retryDisabled?: boolean;
+    /** ROUND-44 (R44-c): user-bubble revert — rewinds the session to THIS
+     * message's event seq (bound by the panel; absent on items that cannot
+     * revert, e.g. the optimistic pending echo). */
+    onRevert?: () => void;
+    revertDisabled?: boolean;
   }
->(function MessageRenderer({ item, sessionId, projectId, collapseHint, onRetry, retryDisabled }, ref) {
+>(function MessageRenderer(
+  { item, sessionId, projectId, collapseHint, onRetry, retryDisabled, onRevert, revertDisabled },
+  ref,
+) {
   switch (item.kind) {
     case "user":
       return (
         <div ref={ref}>
-          <UserMessage content={item.content} />
+          <UserMessage content={item.content} onRevert={onRevert} revertDisabled={revertDisabled} />
         </div>
       );
     case "turn":
@@ -931,6 +978,14 @@ export function AgentChatPanel({
 
   const createSession = useCreateSession();
   const sendMessage = useSendMessage();
+  // ── ROUND-44 (R44-c): revert-to-message. The hovered user bubble records
+  // its event seq (toProjectChatItems already carries it on {kind:"user"}
+  // items — no mapping change needed); the ConfirmDialog guards the
+  // destructive truncation.
+  const revertSessionMutation = useRevertSession();
+  const [revertTarget, setRevertTarget] = useState<Extract<ProjectChatItem, { kind: "user" }> | null>(
+    null,
+  );
 
   // ROUND-37: the turn fold carries stats turn-level — the old R33
   // interim-reply stat-strip pass is GONE (superseded by the fold).
@@ -1174,6 +1229,46 @@ export function AgentChatPanel({
     liveError?.errorTs !== undefined &&
     items.some((it) => it.kind === "error" && it.ts === liveError.errorTs);
 
+  // ── ROUND-44 (R44-c): revert-to-message confirm flow ───────────────────
+  // The ConfirmDialog body quotes the first ~60 chars of the targeted user
+  // message so the owner can see EXACTLY which message the rewind keeps.
+  const revertSnippet = (() => {
+    if (revertTarget === null) return "";
+    const content = revertTarget.content;
+    return content.length > 60 ? `${content.slice(0, 60)}…` : content;
+  })();
+  const onRevertConfirm = async (): Promise<void> => {
+    if (revertTarget === null || activeSessionId === null) return;
+    if (revertSessionMutation.isPending) return; // double-click guard
+    const target = revertTarget;
+    try {
+      const result = await revertSessionMutation.mutateAsync({
+        sessionId: activeSessionId,
+        keepThroughSeq: target.seq,
+      });
+      // The hook's onSettled invalidates the exact session keys; these
+      // prefix-wide invalidations mirror the send path so the folded log +
+      // sidebar refresh before the toast lands.
+      await queryClient.invalidateQueries({ queryKey: ["session"] });
+      await queryClient.invalidateQueries({ queryKey: ["sessions"] });
+      pushLocalToast(
+        "Reverted",
+        `Removed ${result.removedCount} event${result.removedCount === 1 ? "" : "s"} after message #${target.seq}.`,
+      );
+    } catch (err) {
+      // 409 CONFLICT (running session) / 404 (deleted elsewhere) — surface as
+      // a persistent toast; the sendError banner requires a lastSent draft
+      // and may not be visible here.
+      pushLocalToast(
+        "Revert failed",
+        err instanceof Error ? err.message : String(err),
+        "task_failed",
+      );
+    } finally {
+      setRevertTarget(null);
+    }
+  };
+
   const onInputKeyDown = (e: ReactKeyboardEvent<HTMLTextAreaElement>) => {
     if (e.key === "Enter" && !e.shiftKey) {
       e.preventDefault();
@@ -1230,6 +1325,17 @@ export function AgentChatPanel({
           useRightSidebarStore.getState().openFile(projectId, path);
           setPaletteOpen(false);
         }}
+      />
+      {/* ROUND-44 (R44-c): revert confirmation — destructive log truncation. */}
+      <ConfirmDialog
+        open={revertTarget !== null}
+        onOpenChange={(open) => {
+          if (!open) setRevertTarget(null);
+        }}
+        title="Revert session?"
+        body={`Removes the reply and everything after “${revertSnippet}”. This cannot be undone.`}
+        confirmLabel="Revert"
+        onConfirm={() => void onRevertConfirm()}
       />
       {/* Scroll body with top fade (demo structure) */}
       <div className="relative flex-1 min-h-0 overflow-hidden">
@@ -1332,6 +1438,15 @@ export function AgentChatPanel({
                     ? {
                         onRetry: () => void runTurn(retryTextForError(item)),
                         retryDisabled: busy,
+                      }
+                    : {})}
+                  // ROUND-44 (R44-c): persisted user bubbles (seq >= 0, session
+                  // bound) can rewind the log; the button is disabled while a
+                  // turn streams (busy = streamBusy | send | create | echo).
+                  {...(item.kind === "user" && item.seq >= 0 && activeSessionId !== null
+                    ? {
+                        onRevert: () => setRevertTarget(item),
+                        revertDisabled: busy,
                       }
                     : {})}
                 />

@@ -1,8 +1,10 @@
 // @vitest-environment happy-dom
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { cleanup, fireEvent, screen, waitFor } from "@testing-library/react";
 import { SessionsScreen } from "./SessionsScreen";
 import { renderWithProviders, resetTestState } from "../../test-utils";
+import { getFixtureSessions } from "../../lib/session-fixtures";
+import { useNotificationStreamStore } from "../../hooks/use-notifications";
 
 // Vitest globals are off, so RTL's auto-cleanup does not hook in — do it by hand.
 afterEach(cleanup);
@@ -106,5 +108,98 @@ describe("SessionsScreen (fixture backend)", () => {
     expect(await screen.findByText(/queued/i, {}, { timeout: 5000 })).toBeTruthy();
     expect(screen.getByLabelText("Message")).toBeTruthy();
     expect(screen.queryByText(/is thinking/i)).toBeNull(); // nothing in flight
+  });
+});
+
+// ── ROUND-44 (R44-c): search + fork ─────────────────────────────────────────
+describe("SessionsScreen search + fork (ROUND-44 R44-c, fixture backend)", () => {
+  /** The input's 300 ms debounce + the fixture's ~10 ms reply need room. */
+  const SEARCH = { timeout: 4000 };
+
+  it("debounced search filters by TITLE, shows the result count, and clears back to the full list", async () => {
+    renderWithProviders(<SessionsScreen />);
+    await screen.findAllByText("Phase 2 report draft");
+
+    fireEvent.change(screen.getByLabelText("Search sessions"), {
+      target: { value: "audit" },
+    });
+
+    // One match: the audit session (case-insensitive title hit); the report
+    // row is filtered OUT while the chat pane keeps the selected conversation.
+    expect(await screen.findByText(/1 result for “audit”/i, {}, SEARCH)).toBeTruthy();
+    await waitFor(
+      () =>
+        expect(
+          screen.queryByRole("button", { name: /open session phase 2 report draft/i }),
+        ).toBeNull(),
+      SEARCH,
+    );
+    expect(
+      screen.getByRole("button", { name: /open session audit agents screen visuals/i }),
+    ).toBeTruthy();
+
+    // The clear (X) button restores the unfiltered list.
+    fireEvent.click(screen.getAllByRole("button", { name: "Clear search" })[0]);
+    expect(
+      await screen.findByRole(
+        "button",
+        { name: /open session phase 2 report draft/i },
+        SEARCH,
+      ),
+    ).toBeTruthy();
+  });
+
+  it("search also matches EVENT TEXT (message bodies), not just titles", async () => {
+    renderWithProviders(<SessionsScreen />);
+    await screen.findAllByText("Phase 2 report draft");
+
+    // "visual regressions" appears only inside the audit session's EVENT LOG.
+    fireEvent.change(screen.getByLabelText("Search sessions"), {
+      target: { value: "visual regressions" },
+    });
+
+    expect(await screen.findByText(/1 result for “visual regressions”/i, {}, SEARCH)).toBeTruthy();
+    expect(
+      screen.getByRole("button", { name: /open session audit agents screen visuals/i }),
+    ).toBeTruthy();
+    expect(
+      screen.queryByRole("button", { name: /open session phase 2 report draft/i }),
+    ).toBeNull();
+  });
+
+  it("empty-search state: no matches renders the explicit miss message", async () => {
+    renderWithProviders(<SessionsScreen />);
+    await screen.findAllByText("Phase 2 report draft");
+
+    fireEvent.change(screen.getByLabelText("Search sessions"), {
+      target: { value: "xyzzynomatch" },
+    });
+
+    expect(await screen.findByText(/no sessions match “xyzzynomatch”/i, {}, SEARCH)).toBeTruthy();
+  });
+
+  it("row Fork action calls the backend, invalidates the list, and toasts", async () => {
+    useNotificationStreamStore.getState().reset();
+    const backend = getFixtureSessions();
+    const forkSpy = vi.spyOn(backend, "fork");
+    renderWithProviders(<SessionsScreen />);
+    await screen.findAllByText("Phase 2 report draft");
+
+    // Newest row first — the first Fork button forks the report session.
+    fireEvent.click(screen.getAllByRole("button", { name: /fork session/i })[0]);
+
+    // The API was called with the row's session id…
+    await waitFor(() => expect(forkSpy).toHaveBeenCalledWith("sess_seed_report"), SEARCH);
+    // …the invalidated list now shows the fork (fixture creates it)…
+    expect(await screen.findByText("Fork · Phase 2 report draft", {}, SEARCH)).toBeTruthy();
+    // …and the success toast landed in the notification stream store (the
+    // Toaster itself is mounted in AppShell, not in this test tree).
+    await waitFor(
+      () =>
+        expect(useNotificationStreamStore.getState().lastNotification?.title).toBe(
+          "Forked: Phase 2 report draft",
+        ),
+      SEARCH,
+    );
   });
 });

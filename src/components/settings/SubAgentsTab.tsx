@@ -289,7 +289,10 @@ function SubAgentKeysCard() {
       <p className="text-[11px] leading-relaxed" style={{ color: styles.textSecondary }}>
         Sub-agent traffic prefers these keys so parallel agents don't compete with your main chats.
         Paste up to three OpenRouter keys — they go to the provider's dedicated pool slots (never
-        your primary key, slot&nbsp;0).
+        your primary key, slot&nbsp;0). ROUND-44: keys placed in{" "}
+        <span className="font-mono" style={{ color: styles.text }}>credentials.txt</span> as{" "}
+        <span className="font-mono" style={{ color: styles.text }}>OPENROUTER_SUB1..3_KEY</span>{" "}
+        (or added by the launcher) land here automatically — nothing to paste by hand.
       </p>
       {poolQuery.isError ? (
         <p className="text-[11px]" style={{ color: "#ef4444" }} role="alert">

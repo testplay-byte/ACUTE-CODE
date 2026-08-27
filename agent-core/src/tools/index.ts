@@ -14,6 +14,9 @@ import { gitDiff, gitLog, gitStatus } from "./git.js";
 import { runCommand } from "./exec.js";
 import { writeTodo, type TodoItem } from "./todo.js";
 import { webFetch, webSearch } from "./web.js";
+// ROUND-44 (R44-a): the agent memory tools — persistence lives in
+// storage/memory.ts, the tool wrappers here.
+import { memoryListTool, memoryRecallTool, memorySaveTool } from "./memory.js";
 import {
   VIEWPORT_PRESETS,
   browserActiveTabSessionId,
@@ -688,7 +691,7 @@ export async function buildProjectTools(root: string, allowedTools?: readonly st
     },
     web_search: {
       description:
-        "Search the web for a query and return ranked results (title, url, snippet). Use to find documentation, API references, library usage examples, or explanations of technical concepts. Returns up to 6 results from encyclopedic knowledge sources. This is a knowledge search, not a generic web crawler — for reading a specific known URL, use web_fetch instead.",
+        "Search the REAL web for a query and return ranked results (title, url, snippet) via DuckDuckGo — no API key needed. Use to find documentation, API references, library usage examples, GitHub issues, changelogs, or explanations of technical concepts. Returns up to 8 results. If both DuckDuckGo endpoints are unavailable it falls back to encyclopedia (Wikipedia) results and says so in the output — for reading a specific known URL, use web_fetch instead.",
       inputSchema: jsonSchema({
         type: "object",
         properties: {
@@ -814,6 +817,62 @@ export async function buildProjectTools(root: string, allowedTools?: readonly st
           output: `indexed ${result.indexedFiles} files, ${result.indexedSymbols} symbols in ${result.durationMs}ms. The index summary is now injected into your context for codebase awareness.`,
         };
       },
+    },
+    // ── ROUND-44 (R44-a): PROJECT MEMORY ──────────────────────────────────
+    // Per-project persistent knowledge (facts/decisions/preferences). The
+    // newest memories are auto-injected into the system prompt; these tools
+    // save new ones and recall beyond the digest cap. All three live in the
+    // base Record so the allow filter above applies to them like every
+    // other tool.
+    memory_save: {
+      description:
+        "Persist a durable fact/decision/preference about this project to recall in future sessions. Use for architecture decisions, owner preferences, gotchas — NOT transient state.",
+      inputSchema: jsonSchema({
+        type: "object",
+        properties: {
+          content: {
+            type: "string",
+            description: "The knowledge to remember (one item per call, max 4000 chars)",
+          },
+          kind: {
+            type: "string",
+            description: "fact | decision | preference | note (default note)",
+            enum: ["fact", "decision", "preference", "note"],
+          },
+        },
+        required: ["content"],
+      }),
+      execute: async (input) => memorySaveTool(toolDeps, input.content, input.kind),
+    },
+    memory_recall: {
+      description:
+        "Search this project's saved memories (durable facts, decisions, preferences) by keyword, or list the newest 12 when no query is given. Content matches rank first.",
+      inputSchema: jsonSchema({
+        type: "object",
+        properties: {
+          query: {
+            type: "string",
+            description: "Substring to look for in saved memories (omit = newest 12)",
+          },
+        },
+        required: [],
+      }),
+      execute: async (input) => memoryRecallTool(toolDeps, input.query),
+    },
+    memory_list: {
+      description:
+        "List this project's saved memories newest-first (default 20, max 50). Use to browse everything the project remembers.",
+      inputSchema: jsonSchema({
+        type: "object",
+        properties: {
+          limit: {
+            type: "number",
+            description: "Max memories to return (default 20, cap 50)",
+          },
+        },
+        required: [],
+      }),
+      execute: async (input) => memoryListTool(toolDeps, input.limit),
     },
   };
   if (allow !== null) {

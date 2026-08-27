@@ -16,6 +16,10 @@ export interface PromptContext {
    * indexed). Injected into the CODEBASE AWARENESS section so the agent
    * knows the project's file/symbol structure without list_dir/read_file. */
   indexSummary?: import("../storage/index.js").IndexSummary;
+  /** ROUND-44 (R44-a): the project memory digest — newest saved
+   * facts/decisions/preferences, pre-formatted by memoryDigest(). Injected
+   * only when non-empty (a project with no memories gets no section). */
+  memoryDigest?: string;
 }
 
 export function buildProjectSystemPrompt(ctx: PromptContext): string {
@@ -195,6 +199,21 @@ export function buildProjectSystemPrompt(ctx: PromptContext): string {
       }
       lines.push("");
     }
+  }
+
+  // ── Project memory (ROUND-44, R44-a) ──────────────────────────────────
+  // The single biggest "agentic environment" gap: agents forgot everything
+  // between sessions. The digest below is the newest slice of the project's
+  // persistent memory (memoryDigest is small + whole-line capped — cheap to
+  // inject every turn); memory_recall digs beyond the cap.
+  if (ctx.memoryDigest !== undefined && ctx.memoryDigest !== "") {
+    lines.push("## Project memory (persisted across sessions)");
+    lines.push("Durable facts, decisions, and preferences saved for THIS project (newest first):");
+    lines.push(ctx.memoryDigest);
+    if (ctx.toolNames.includes("memory_save")) {
+      lines.push("Treat these as standing knowledge: they survive across sessions. Record NEW durable knowledge with memory_save (facts, decisions, owner preferences, gotchas) — never transient state. Use memory_recall to search beyond this summary.");
+    }
+    lines.push("");
   }
 
   // ── Environment ─────────────────────────────────────────────────────────

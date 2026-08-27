@@ -129,6 +129,9 @@ describe("openDatabase", () => {
       // ROUND-43: delegate_task + browser_control appended to template/
       // default-agent allowlists (delegation was unreachable from seeds).
       { version: 14, name: "0014_delegate_browser_tools.sql" },
+      // ROUND-44 (R44-a): the agent memory system — the project memory
+      // table + memory_save/recall/list appended to seed allowlists.
+      { version: 15, name: "0015_memory.sql" },
     ]);
     expect(appliedSecond).toEqual(appliedFirst);
   });
@@ -170,6 +173,10 @@ describe("template seeding", () => {
           "index_project",
           "delegate_task",
           "browser_control",
+          // ROUND-44 (R44-a): the memory tools (seeded via TOOL_NAMES).
+          "memory_save",
+          "memory_recall",
+          "memory_list",
         ]);
         expect(row.memory_policy).toBe("on-start");
         expect(row.max_turns).toBe(40);

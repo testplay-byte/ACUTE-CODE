@@ -2,6 +2,7 @@ import type { UsageRecord } from "shared";
 import {
   ApiError,
   type CreateSessionInput,
+  type RevertSessionResult,
   type SendMessageResult,
   type Session,
   type SessionDetail,
@@ -181,6 +182,28 @@ export function createFixtureSessions(seed: SessionSeed[] = SEED): SessionsBacke
           .map(({ session }) => ({ ...session }))
           .sort((a, b) => b.createdAt.localeCompare(a.createdAt)),
       ),
+    // ROUND-44 (R44-c): client-side mirror of GET /sessions?q= — case-
+    // insensitive substring match over the title and every event's visible
+    // text (payload JSON stringify, same column decision as the sidecar's
+    // searchSessions). Newest-updated first; a session matches at most once.
+    search: (q) => {
+      const needle = q.trim().toLowerCase();
+      if (needle === "") return ok([]);
+      return ok(
+        [...rows.values()]
+          .filter(({ session, events }) => {
+            if (session.parentSessionId != null) return false; // top-level only
+            if (session.title !== null && session.title.toLowerCase().includes(needle)) {
+              return true;
+            }
+            return events.some((event) =>
+              JSON.stringify(event.payload ?? {}).toLowerCase().includes(needle),
+            );
+          })
+          .map(({ session }) => ({ ...session }))
+          .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt)),
+      );
+    },
     create: (input: CreateSessionInput) => {
       // Fixture sessions keep the live shape: created "queued", no events yet.
       const session: Session = {
@@ -211,6 +234,71 @@ export function createFixtureSessions(seed: SessionSeed[] = SEED): SessionsBacke
       target.session.title = trimmed === "" ? null : trimmed;
       target.session.updatedAt = now();
       return ok({ ...target.session });
+    },
+    // ROUND-44 (R44-c): mirrors POST /sessions/:id/fork — new top-level row
+    // ("Fork · <title>", queued, zero usage by construction) + a deep copy of
+    // the event log with seq/type/payload/ts preserved.
+    fork: (id) => {
+      const source = row(id);
+      const stamp = now();
+      const fork: Session = {
+        id: uid("sess"),
+        projectId: source.session.projectId,
+        agentId: source.session.agentId,
+        mode: source.session.mode,
+        status: "queued",
+        title: `Fork · ${source.session.title ?? "Untitled session"}`,
+        createdAt: stamp,
+        updatedAt: stamp,
+        parentSessionId: null,
+        subRole: null,
+      };
+      rows.set(fork.id, {
+        session: fork,
+        events: source.events.map((event) => ({
+          ...event,
+          payload:
+            event.payload && typeof event.payload === "object"
+              ? { ...(event.payload as Record<string, unknown>) }
+              : event.payload,
+        })),
+        assistantTurns: source.assistantTurns,
+      });
+      return ok({ ...fork });
+    },
+    // ROUND-44 (R44-c): mirrors POST /sessions/:id/revert — drop events with
+    // seq > keepThroughSeq, append a session.reverted marker, flip the status
+    // back to queued. Running sessions refuse with 409 CONFLICT.
+    revert: (id, keepThroughSeq) => {
+      const target = row(id);
+      if (target.session.status === "running") {
+        return Promise.reject(
+          new ApiError(409, "CONFLICT", "cannot revert a running session"),
+        );
+      }
+      const before = target.events.length;
+      target.events = target.events.filter((event) => event.seq <= keepThroughSeq);
+      const removedCount = before - target.events.length;
+      // Next seq mirrors appendSessionEvent: MAX(existing seq) + 1 — when
+      // keepThroughSeq is beyond the log's end (no-op removal), the marker
+      // still lands directly after the real last event (no seq gap).
+      const maxSeq = target.events.reduce((acc, event) => Math.max(acc, event.seq), 0);
+      target.events.push({
+        seq: maxSeq + 1,
+        type: "session.reverted",
+        agentId: null,
+        payload: {
+          throughSeq: keepThroughSeq,
+          at: now(),
+          revertedEventCount: removedCount,
+          agentId: null,
+        },
+        ts: now(),
+      });
+      target.session.status = "queued";
+      target.session.updatedAt = now();
+      const result: RevertSessionResult = { ok: true, removedCount };
+      return ok(result);
     },
     sendMessage: (id, content) => {
       const target = row(id);

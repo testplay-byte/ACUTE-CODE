@@ -233,16 +233,32 @@ export interface CreateSessionInput {
   projectId?: string;
 }
 
+/** POST /sessions/:id/revert response — how many events were removed. */
+export interface RevertSessionResult {
+  ok: boolean;
+  removedCount: number;
+}
+
 /** The session/chat operations the UI needs. */
 export interface SessionsBackend {
   /** Newest-first (API.md §5.2). */
   list(): Promise<Session[]>;
+  /** ROUND-44 (R44-c): GET /sessions?q= — title + event-text search,
+   * case-insensitive; newest-updated first. */
+  search(q: string): Promise<Session[]>;
   create(input: CreateSessionInput): Promise<Session>;
   get(id: string): Promise<SessionDetail>;
   /** DELETE /sessions/:id — removes the session + its events/usage/snapshots. */
   remove(id: string): Promise<void>;
   /** PATCH /sessions/:id — rename a session (owner round-33). */
   rename(id: string, title: string): Promise<Session>;
+  /** ROUND-44 (R44-c): POST /sessions/:id/fork — full event-log copy under a
+   * new top-level session ("Fork · <title>", zeroed usage). */
+  fork(id: string): Promise<Session>;
+  /** ROUND-44 (R44-c): POST /sessions/:id/revert — delete events with
+   * seq > keepThroughSeq (the message AT that seq survives) + append a
+   * `session.reverted` marker. 409 when the session is running. */
+  revert(id: string, keepThroughSeq: number): Promise<RevertSessionResult>;
   /**
    * One synchronous turn; may take several seconds. 409 CONFLICT when the
    * bound agent is unconfigured, 502 PROVIDER_ERROR on upstream failure.
@@ -257,11 +273,24 @@ export function httpSessions(): SessionsBackend {
       request<{ sessions: Session[]; total: number }>("/sessions?limit=50").then(
         (b) => b.sessions,
       ),
+    search: (q) =>
+      request<{ sessions: Session[]; total: number }>(
+        `/sessions?limit=50&q=${encodeURIComponent(q)}`,
+      ).then((b) => b.sessions),
     create: (input) => request<Session>("/sessions", { method: "POST", json: input }),
     get: (id) => request<SessionDetail>(`/sessions/${id}`),
     remove: (id) => request<void>(`/sessions/${id}`, { method: "DELETE" }),
     rename: (id, title) =>
       request<Session>(`/sessions/${id}`, { method: "PATCH", json: { title } }),
+    fork: (id) =>
+      request<{ session: Session }>(`/sessions/${id}/fork`, { method: "POST" }).then(
+        (b) => b.session,
+      ),
+    revert: (id, keepThroughSeq) =>
+      request<RevertSessionResult>(`/sessions/${id}/revert`, {
+        method: "POST",
+        json: { keepThroughSeq },
+      }),
     sendMessage: (id, content) =>
       request<SendMessageResult>(`/sessions/${id}/messages`, {
         method: "POST",
@@ -276,6 +305,31 @@ export function getSessionsBackend(): SessionsBackend {
     return getFixtureSessions();
   }
   return httpSessions();
+}
+
+// ── ROUND-44 (R44-c, owner directive: "complete the whole agentic coding
+//    environment"): session search / fork / revert client functions. They
+//    route through the backend selector so demo (fixture) mode keeps working —
+//    the same pattern every other session operation uses. ──────────────────
+
+/** GET /sessions?q= — sessions whose title or event text matches `q`. */
+export function searchSessions(q: string): Promise<Session[]> {
+  return getSessionsBackend().search(q);
+}
+
+/** POST /sessions/:id/fork — full event-log copy under a new session row. */
+export function forkSession(id: string): Promise<Session> {
+  return getSessionsBackend().fork(id);
+}
+
+/** POST /sessions/:id/revert — rewind to the event at `keepThroughSeq`
+ * (inclusive); everything after it is removed + a `session.reverted` marker
+ * event is appended. Throws ApiError 409 when the session is running. */
+export function revertSession(
+  id: string,
+  keepThroughSeq: number,
+): Promise<RevertSessionResult> {
+  return getSessionsBackend().revert(id, keepThroughSeq);
 }
 
 // ---------------------------------------------------------------------------
@@ -1084,6 +1138,36 @@ export async function runProjectTerminal(
   return request<TerminalRunResult>(`/projects/${projectId}/terminal`, {
     method: "POST",
     json: { command },
+  });
+}
+
+/** ROUND-44 (R44-a): one saved project memory — durable knowledge the agent
+ * persisted via its memory_save tool (kinded so the UI groups + colors). */
+export interface ProjectMemory {
+  id: string;
+  projectId: string;
+  kind: "fact" | "decision" | "preference" | "note";
+  content: string;
+  source: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+/** ROUND-44 (R44-a): GET /projects/:id/memory — the right-sidebar Memory
+ * tab's listing (newest first). */
+export async function listProjectMemory(projectId: string): Promise<ProjectMemory[]> {
+  const body = await request<{ memories: ProjectMemory[] }>(`/projects/${projectId}/memory`);
+  return body.memories;
+}
+
+/** ROUND-44 (R44-a): DELETE /projects/:id/memory/:memoryId — the owner
+ * pruning a stale memory from the Memory tab. */
+export async function deleteProjectMemory(
+  projectId: string,
+  memoryId: string,
+): Promise<void> {
+  await request<{ ok: boolean }>(`/projects/${projectId}/memory/${memoryId}`, {
+    method: "DELETE",
   });
 }
 

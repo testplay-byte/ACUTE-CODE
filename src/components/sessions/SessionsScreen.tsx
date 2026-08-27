@@ -1,11 +1,17 @@
 import { useEffect, useState } from "react";
 import { motion } from "framer-motion";
-import { AlertTriangle, Database, MessagesSquare, Plus } from "lucide-react";
+import { AlertTriangle, Database, GitFork, MessagesSquare, Plus, Search, X } from "lucide-react";
 import type { SessionStatus } from "shared";
 import { ApiError } from "../../lib/api";
 import { useConfigStore } from "../../lib/config-store";
 import { useAgents } from "../../hooks/use-agents";
-import { useCreateSession, useSessions } from "../../hooks/use-sessions";
+import { pushLocalToast } from "../../hooks/use-notifications";
+import {
+  useCreateSession,
+  useForkSession,
+  useSessionSearch,
+  useSessions,
+} from "../../hooks/use-sessions";
 import { formatWhen } from "../../lib/format";
 import { fadeInUp, staggerContainer, staggerItem } from "../../lib/motion";
 import { cn } from "../../lib/utils";
@@ -25,6 +31,13 @@ const STATUS_DOT: Record<SessionStatus, string> = {
  * Sessions screen (SPEC F3, single-agent Phase 2): session list on the left,
  * chat on the right. Below `md` the list degrades to a horizontal strip above
  * the chat so narrow windows stay usable.
+ *
+ * ROUND-44 (R44-c, owner directive: "complete the whole agentic coding
+ * environment" — search/fork/revert were audited as missing): the header
+ * carries a debounced (300 ms) search box over session titles + event text
+ * (GET /sessions?q=), and every row grows a hover "Fork" action that copies
+ * the whole conversation under a new top-level session. (Revert lives in the
+ * chat panel — AgentChatPanel — next to the message it rewinds to.)
  */
 export function SessionsScreen() {
   const [selectedId, setSelectedId] = useState<string | null>(null);
@@ -36,8 +49,25 @@ export function SessionsScreen() {
   const sessionsQuery = useSessions();
   const agentsQuery = useAgents(false); // sessions bind real agents, not templates
   const createSession = useCreateSession();
+  const forkSession = useForkSession();
+
+  // ── ROUND-44 (R44-c): debounced search. The input updates instantly; the
+  // query term lands 300 ms later so typing "acceptance" fires ONE request,
+  // not one per keystroke. An empty term returns the normal list.
+  const [searchInput, setSearchInput] = useState("");
+  const [searchTerm, setSearchTerm] = useState("");
+  useEffect(() => {
+    const timer = setTimeout(() => setSearchTerm(searchInput), 300);
+    return () => clearTimeout(timer);
+  }, [searchInput]);
+  const searching = searchTerm.trim().length > 0;
+  const searchQuery = useSessionSearch(searchTerm);
 
   const sessions = sessionsQuery.data ?? [];
+  // The sidebar renders search RESULTS while searching; selection + the chat
+  // pane keep working off the unfiltered list (search never switches the
+  // open conversation).
+  const visibleSessions = searching ? (searchQuery.data ?? []) : sessions;
   const agentById = new Map((agentsQuery.data ?? []).map((a) => [a.id, a]));
 
   // Follow the newest session until the user picks one.
@@ -65,6 +95,33 @@ export function SessionsScreen() {
           </p>
         </div>
         <div className="ml-auto flex items-center gap-2">
+          {/* ROUND-44 (R44-c): search box — titles + event text (GET /sessions?q=). */}
+          <div className="relative">
+            <Search
+              size={12}
+              aria-hidden
+              className="pointer-events-none absolute left-2.5 top-1/2 -translate-y-1/2 text-muted"
+            />
+            <input
+              type="text"
+              value={searchInput}
+              onChange={(e) => setSearchInput(e.target.value)}
+              placeholder="Search sessions"
+              aria-label="Search sessions"
+              className="h-8 w-[170px] rounded-lg border-[1.5px] border-line bg-card pl-7 pr-7 text-[12px] font-medium text-ink outline-none transition-colors placeholder:text-muted focus:border-accent-faded md:w-[200px]"
+            />
+            {searchInput !== "" ? (
+              <button
+                type="button"
+                onClick={() => setSearchInput("")}
+                aria-label="Clear search"
+                title="Clear search"
+                className="absolute right-1.5 top-1/2 grid h-5 w-5 -translate-y-1/2 place-items-center rounded-md text-muted transition-colors hover:bg-hover hover:text-ink"
+              >
+                <X size={11} />
+              </button>
+            ) : null}
+          </div>
           <Button variant="primary" onClick={() => setPickerOpen(true)}>
             <Plus size={13} strokeWidth={2.5} />
             New session
@@ -77,11 +134,46 @@ export function SessionsScreen() {
           aria-label="Session list"
           className="flex shrink-0 gap-1.5 overflow-x-auto border-b-[1.5px] border-line p-2 md:w-[250px] md:flex-col md:overflow-x-visible md:overflow-y-auto md:border-b-0 md:border-r-[1.5px]"
         >
-          {sessionsQuery.isPending ? (
+          {/* ROUND-44 (R44-c): subtle search-meta line — result count for the
+              active term + a one-click clear back to the normal list. */}
+          {searching ? (
+            <div className="flex w-full shrink-0 items-center gap-1.5 px-1 pb-1 text-[10.5px] font-semibold text-muted md:w-auto">
+              <span className="min-w-0 truncate">
+                {searchQuery.isPending
+                  ? `Searching for “${searchTerm.trim()}”…`
+                  : `${visibleSessions.length} result${visibleSessions.length === 1 ? "" : "s"} for “${searchTerm.trim()}”`}
+              </span>
+              <button
+                type="button"
+                onClick={() => setSearchInput("")}
+                aria-label="Clear search"
+                title="Clear search"
+                className="grid h-5 w-5 shrink-0 place-items-center rounded-md text-muted transition-colors hover:bg-hover hover:text-ink"
+              >
+                <X size={11} />
+              </button>
+            </div>
+          ) : null}
+          {sessionsQuery.isPending || (searching && searchQuery.isPending) ? (
             <div className="flex w-full flex-col gap-1.5" aria-label="Loading sessions">
               {[0, 1, 2].map((i) => (
                 <div key={i} className="h-[54px] w-full shrink-0 animate-pulse rounded-lg bg-hover/50 md:h-[58px]" />
               ))}
+            </div>
+          ) : searching && searchQuery.isError ? (
+            <div className="flex w-full flex-col items-center gap-3 px-3 py-10 text-center">
+              <AlertTriangle size={20} className="text-red-500" />
+              <div>
+                <p className="text-[13px] font-semibold">Search failed</p>
+                <p className="mt-1 text-[11px] text-muted">
+                  {searchQuery.error instanceof ApiError
+                    ? searchQuery.error.message
+                    : (searchQuery.error as Error)?.message ?? "Unknown error"}
+                </p>
+              </div>
+              <Button variant="outline" onClick={() => searchQuery.refetch()}>
+                Retry
+              </Button>
             </div>
           ) : sessionsQuery.isError ? (
             <div className="flex w-full flex-col items-center gap-3 px-3 py-10 text-center">
@@ -105,7 +197,13 @@ export function SessionsScreen() {
                 </Button>
               )}
             </div>
-          ) : sessions.length === 0 ? (
+          ) : searching && visibleSessions.length === 0 ? (
+            <div className="flex w-full flex-col items-center gap-2 px-3 py-10 text-center">
+              <Search size={18} className="text-muted" aria-hidden />
+              <p className="text-[13px] font-semibold">No sessions match “{searchTerm.trim()}”</p>
+              <p className="text-[11px] text-muted">Titles and message text are both searched.</p>
+            </div>
+          ) : visibleSessions.length === 0 ? (
             <div className="flex w-full flex-col items-center gap-2 px-3 py-10 text-center">
               <p className="text-[13px] font-semibold">No sessions yet</p>
               <p className="text-[11px] text-muted">
@@ -119,43 +217,77 @@ export function SessionsScreen() {
               animate="animate"
               className="flex gap-1.5 md:flex md:flex-col"
             >
-              {sessions.map((session) => {
+              {visibleSessions.map((session) => {
                 const agent = agentById.get(session.agentId ?? "");
                 const label = session.title ?? agent?.name ?? "Untitled session";
                 const active = session.id === selectedId;
                 return (
-                  <motion.button
+                  // ROUND-44 (R44-c): the row is now a relative WRAPPER so the
+                  // Fork action can sit as a hover-revealed SIBLING of the
+                  // selectable button (a <button> cannot nest another button).
+                  <motion.div
                     key={session.id}
                     variants={staggerItem}
-                    onClick={() => setSelectedId(session.id)}
-                    aria-pressed={active}
-                    aria-label={`Open session ${label}`}
-                    className={cn(
-                      "flex min-w-[200px] shrink-0 cursor-pointer flex-col items-start gap-1 rounded-lg border-[1.5px] px-3 py-2.5 text-left transition-colors duration-200 md:min-w-0 md:w-full",
-                      active
-                        ? "border-accent-faded bg-accent-soft"
-                        : "border-transparent hover:bg-hover",
-                    )}
+                    className="group/row relative flex min-w-[200px] shrink-0 md:min-w-0 md:w-full"
                   >
-                    <span
+                    <motion.button
+                      onClick={() => setSelectedId(session.id)}
+                      aria-pressed={active}
+                      aria-label={`Open session ${label}`}
                       className={cn(
-                        "max-w-full truncate text-[12px] font-bold tracking-tight",
-                        active ? "text-accent" : "text-ink",
+                        "flex w-full cursor-pointer flex-col items-start gap-1 rounded-lg border-[1.5px] py-2.5 pl-3 pr-12 text-left transition-colors duration-200",
+                        active
+                          ? "border-accent-faded bg-accent-soft"
+                          : "border-transparent hover:bg-hover",
                       )}
                     >
-                      {label}
-                    </span>
-                    <span className="flex w-full items-center gap-1.5 text-[10px] text-muted">
                       <span
-                        aria-hidden
-                        className={cn("h-1.5 w-1.5 shrink-0 rounded-full", STATUS_DOT[session.status])}
-                        title={session.status}
-                      />
-                      <span className="truncate">{agent?.name ?? session.agentId ?? "no agent"}</span>
-                      <span aria-hidden>·</span>
-                      <span className="shrink-0 whitespace-nowrap">{formatWhen(session.updatedAt)}</span>
-                    </span>
-                  </motion.button>
+                        className={cn(
+                          "max-w-full truncate text-[12px] font-bold tracking-tight",
+                          active ? "text-accent" : "text-ink",
+                        )}
+                      >
+                        {label}
+                      </span>
+                      <span className="flex w-full items-center gap-1.5 text-[10px] text-muted">
+                        <span
+                          aria-hidden
+                          className={cn("h-1.5 w-1.5 shrink-0 rounded-full", STATUS_DOT[session.status])}
+                          title={session.status}
+                        />
+                        <span className="truncate">{agent?.name ?? session.agentId ?? "no agent"}</span>
+                        <span aria-hidden>·</span>
+                        <span className="shrink-0 whitespace-nowrap">{formatWhen(session.updatedAt)}</span>
+                      </span>
+                    </motion.button>
+                    {/* ROUND-44 (R44-c): Fork — copies the session + its full
+                        event log under a new top-level session. Visible on row
+                        hover (always on touch, where hover doesn't exist). */}
+                    <button
+                      type="button"
+                      onClick={() => {
+                        forkSession.mutate(session.id, {
+                          onSuccess: (fork) => {
+                            pushLocalToast(`Forked: ${label}`, fork.title ?? undefined);
+                          },
+                          onError: (err) => {
+                            pushLocalToast(
+                              "Fork failed",
+                              err instanceof Error ? err.message : String(err),
+                              "task_failed",
+                            );
+                          },
+                        });
+                      }}
+                      disabled={forkSession.isPending}
+                      aria-label={`Fork session ${label}`}
+                      title="Fork this session (copy the full conversation)"
+                      className="absolute right-1.5 top-1.5 z-10 flex h-6 items-center gap-1 rounded-md border-[1.5px] border-line bg-card px-1.5 text-[10px] font-bold text-muted shadow-sm transition-all duration-150 hover:border-accent-faded hover:bg-accent-soft hover:text-accent focus-visible:opacity-100 group-hover/row:opacity-100 max-md:opacity-100 md:opacity-0"
+                    >
+                      <GitFork size={11} aria-hidden />
+                      Fork
+                    </button>
+                  </motion.div>
                 );
               })}
             </motion.div>

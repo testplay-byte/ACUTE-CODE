@@ -25,6 +25,7 @@ import {
   listNotifications,
   markAllNotificationsRead,
   markNotificationRead,
+  type NotificationKind,
   type NotificationRecord,
 } from "../lib/notifications-api";
 
@@ -52,6 +53,10 @@ interface NotificationStreamState {
   setUnread: (n: number) => void;
   /** Push a new live notification: bumps unread + the ticker. */
   pushNotification: (n: NotificationRecord) => void;
+  /** ROUND-44 (R44-c): push a LOCAL (client-side) toast — bumps the ticker
+   * + last record WITHOUT touching the unread badge (the message is
+   * informational, not an unread notification row). */
+  pushLocal: (n: NotificationRecord) => void;
   /** Decrement unread by 1 (used after mark-one-read optimistic update). */
   decrementUnread: () => void;
   /** Update the connection status (live indicator). */
@@ -73,6 +78,11 @@ export const useNotificationStreamStore = create<NotificationStreamState>(
         lastSeq: s.lastSeq + 1,
         lastNotification: n,
       })),
+    pushLocal: (n) =>
+      set((s) => ({
+        lastSeq: s.lastSeq + 1,
+        lastNotification: n,
+      })),
     decrementUnread: () =>
       set((s) => ({ unread: Math.max(0, s.unread - 1) })),
     setStatus: (status) => set({ status }),
@@ -80,6 +90,33 @@ export const useNotificationStreamStore = create<NotificationStreamState>(
       set({ unread: 0, lastSeq: 0, lastNotification: null, status: "idle" }),
   }),
 );
+
+/**
+ * ROUND-44 (R44-c, owner directive: complete the agentic coding environment):
+ * the app's toast surface. No standalone toast utility existed — the Toaster
+ * (components/notifications/Toaster.tsx) renders whatever lands in the stream
+ * store — so local (client-side) confirmations reuse EXACTLY that machinery:
+ * a synthetic NotificationRecord pushed via `pushLocal` renders as a normal
+ * bottom-right toast card (auto-dismiss 6s for the default `task_complete`
+ * kind; persistent kinds like `task_failed` stay until dismissed) without
+ * inflating the Bell's unread badge.
+ */
+export function pushLocalToast(
+  title: string,
+  body?: string,
+  kind: NotificationKind = "task_complete",
+): void {
+  useNotificationStreamStore.getState().pushLocal({
+    id: `local_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
+    ts: new Date().toISOString(),
+    kind,
+    title,
+    body: body ?? null,
+    sessionId: null,
+    projectId: null,
+    read: 1,
+  });
+}
 
 /**
  * useNotifications — the consumer hook for the bell's dropdown.

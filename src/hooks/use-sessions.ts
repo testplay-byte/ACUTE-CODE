@@ -22,6 +22,24 @@ export function useSessions() {
   });
 }
 
+/**
+ * ROUND-44 (R44-c, owner directive: complete the agentic coding environment):
+ * GET /sessions?q= — title + event-text search. Enabled only for a non-empty
+ * trimmed query; the key embeds q (plus the data source) so typing refetches
+ * per distinct term. An empty string returns an idle query — callers render
+ * the normal list.
+ */
+export function useSessionSearch(q: string) {
+  const source = useDataSource();
+  const trimmed = q.trim();
+  return useQuery({
+    queryKey: ["sessions", source, "search", trimmed],
+    queryFn: () => getSessionsBackend().search(trimmed),
+    enabled: trimmed.length > 0,
+    staleTime: 30_000,
+  });
+}
+
 export function useSession(id: string | null) {
   const source = useDataSource();
   return useQuery({
@@ -69,6 +87,40 @@ export function useDeleteSession() {
     mutationFn: (id: string) => getSessionsBackend().remove(id),
     onSuccess: (_result, id) => {
       void qc.removeQueries({ queryKey: ["session", source, id] });
+      void qc.invalidateQueries({ queryKey: ["sessions", source] });
+    },
+  });
+}
+
+/**
+ * ROUND-44 (R44-c): POST /sessions/:id/fork — copies the session + its full
+ * event log under a new top-level row ("Fork · <title>", zeroed usage).
+ * Invalidates the session LIST on success (the fork is new + newest).
+ */
+export function useForkSession() {
+  const qc = useQueryClient();
+  const source = useDataSource();
+  return useMutation({
+    mutationFn: (id: string) => getSessionsBackend().fork(id),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["sessions", source] }),
+  });
+}
+
+/**
+ * ROUND-44 (R44-c): POST /sessions/:id/revert — rewinds the event log to the
+ * message at keepThroughSeq (inclusive) and appends a `session.reverted`
+ * marker. Invalidates the session DETAIL (event log) and the LIST (status /
+ * updatedAt changed) on success AND failure — a 409 still leaves the panel's
+ * error surface consistent with the send path.
+ */
+export function useRevertSession() {
+  const qc = useQueryClient();
+  const source = useDataSource();
+  return useMutation({
+    mutationFn: ({ sessionId, keepThroughSeq }: { sessionId: string; keepThroughSeq: number }) =>
+      getSessionsBackend().revert(sessionId, keepThroughSeq),
+    onSettled: (_result, _error, { sessionId }) => {
+      void qc.invalidateQueries({ queryKey: ["session", source, sessionId] });
       void qc.invalidateQueries({ queryKey: ["sessions", source] });
     },
   });

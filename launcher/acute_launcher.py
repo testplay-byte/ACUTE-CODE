@@ -12,7 +12,8 @@
 # double-clickable coordinator; THIS Python program does the real work with a
 # rich, beautiful terminal UI (panels, spinners, progress, tables). It:
 #
-#   • reads credentials.txt next to itself (GITHUB_PAT + OPENROUTER_KEY —
+#   • reads credentials.txt next to itself (GITHUB_PAT + OPENROUTER_KEY, plus
+#     the optional OPENROUTER_SUB1..3_KEY sub-agent pool keys — ROUND-44;
 #     you fill it once; rotate/clear it whenever you like)
 #   • checks the toolchain and AUTO-INSTALLS what is missing
 #     (git / Node.js via winget on Windows, with your confirmation;
@@ -378,8 +379,36 @@ restarts the servers, and keeps all your data (agents/sessions/projects).
 """
 
 
+# ─────────────────────────────────────────────────────────────────────────────
+# credentials.txt
+# ─────────────────────────────────────────────────────────────────────────────
+
+# ROUND-44 (R44-d, owner directive 2026-08-27: "for the 3 sub-agent API keys
+# I want to save them inside the credentials.txt so I don't have to manually
+# enter them for the current time being"): besides GITHUB_PAT + OPENROUTER_KEY
+# the file may carry three OPTIONAL sub-agent pool keys,
+# OPENROUTER_SUB1_KEY / OPENROUTER_SUB2_KEY / OPENROUTER_SUB3_KEY. They map to
+# keyring pool slots 2/3/4 (ACUTE_PROVIDER_OPENROUTER_SLOT{2,3,4}) — the exact
+# slots Settings → Sub-agents shows and the orchestrator prefers for child
+# runs, so the owner never pastes them into the UI by hand. Missing lines are
+# AUTO-APPENDED with the baked-in defaults below on the next run (never
+# overwriting values the owner already placed there).
+DEFAULT_SUB_KEYS = [
+    "REDACTED-OPENROUTER-KEY-PURGED-BEFORE-PUBLIC-MIGRATION",  # KEY_2 (sub-1)
+    "REDACTED-OPENROUTER-KEY-PURGED-BEFORE-PUBLIC-MIGRATION",  # KEY_3 (sub-2)
+    "REDACTED-OPENROUTER-KEY-PURGED-BEFORE-PUBLIC-MIGRATION",  # KEY_4 (sub-3)
+]
+SUB_KEY_NAMES = ["OPENROUTER_SUB1_KEY", "OPENROUTER_SUB2_KEY", "OPENROUTER_SUB3_KEY"]
+
+
 def read_credentials():
-    """Parse credentials.txt → (github_pat, openrouter_key)."""
+    """Parse credentials.txt → (github_pat, openrouter_key, sub_keys[3]).
+
+    The three OPENROUTER_SUBn_KEY lines are OPTIONAL (pre-ROUND-44 files simply
+    don't have them): a missing or placeholder-looking value becomes "" and is
+    filled in later by ensure_subagent_keys(). A malformed main PAT/key still
+    fails the launch exactly as before — sub keys never block startup.
+    """
     if not CRED_PATH.exists():
         panel(SETUP_INSTRUCTIONS, style="yellow", title="credentials.txt not found yet")
         log("no credentials.txt")
@@ -400,6 +429,14 @@ def read_credentials():
 
     pat = values.get("GITHUB_PAT") or values.get("GITHUB_TOKEN") or ""
     key = values.get("OPENROUTER_KEY") or values.get("OPENROUTER_API_KEY") or ""
+
+    def sub_value(name):
+        v = (values.get(name) or "").strip()
+        if not v or "PASTE_YOURS" in v.upper() or "YOUR_" in v.upper() or not v.startswith("sk-or-"):
+            return ""
+        return v
+
+    sub_keys = [sub_value(name) for name in SUB_KEY_NAMES]
 
     def is_placeholder(v, kind):
         v = v.strip()
@@ -423,7 +460,64 @@ def read_credentials():
         )
 
     log("credentials loaded (values never logged)")
-    return pat, key
+    return pat, key, sub_keys
+
+
+def ensure_subagent_keys(sub_keys):
+    """ROUND-44 (R44-d): make credentials.txt carry the three sub-agent keys.
+
+    The owner asked for the keys to live INSIDE credentials.txt so they never
+    paste them into the app. Lines already holding a valid key are NEVER
+    touched (the owner may rotate them at will); missing lines are appended,
+    placeholder lines are repaired in place, using the baked-in defaults.
+    Returns the effective three keys (file values win over defaults). Skipped
+    entirely for read-only modes (status) — the caller decides.
+    """
+    try:
+        current = CRED_PATH.read_text(encoding="utf-8", errors="replace")
+    except Exception as exc:
+        warn(f"could not read credentials.txt for sub-key check ({exc}) — skipping")
+        return sub_keys
+
+    effective = list(sub_keys)
+    additions = []
+    repairs = []
+
+    for i, name in enumerate(SUB_KEY_NAMES):
+        if sub_keys[i]:
+            continue  # valid value already in the file — never touch it
+        default = DEFAULT_SUB_KEYS[i]
+        pattern = rf"^{name}\s*=.*$"
+        if re.search(pattern, current, re.MULTILINE):
+            current = re.sub(pattern, f"{name}={default}", current, flags=re.MULTILINE)
+            repairs.append(name)
+        else:
+            additions.append(f"{name}={default}\n")
+        effective[i] = default
+
+    if not additions and not repairs:
+        ok(f"sub-agent keys already present in credentials.txt ({sum(1 for k in effective if k)}/3)")
+        return effective
+
+    if additions:
+        if current and not current.endswith("\n"):
+            current += "\n"
+        current += (
+            "\n"
+            "# ─── sub-agent pool keys (ROUND-44 — auto-added, safe to edit/remove) ───\n"
+            "# Optional: sub-agents use these first so your main key is not burdened.\n"
+            "# Shown as pool slots 2/3/4 in Settings → Sub-agents. Delete to opt out.\n"
+        ) + "".join(additions)
+
+    try:
+        CRED_PATH.write_text(current, encoding="utf-8")
+        touched = ", ".join(repairs + [name for name in SUB_KEY_NAMES
+                                       if f"{name}=" in "".join(additions)])
+        ok(f"sub-agent keys saved into credentials.txt ({touched})")
+        note("remove those lines any time — the app simply falls back to the main key")
+    except Exception as exc:
+        warn(f"could not write sub-agent keys into credentials.txt ({exc})")
+    return effective
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -809,7 +903,7 @@ def write_env_file():
         ok("written (gitignored, survives updates)")
 
 
-def distribute_key(key):
+def distribute_key(key, sub_keys=("", "", "")):
     with step("OpenRouter key → secure store"):
         shown = f"length {len(key)}"
         if IS_WIN:
@@ -830,6 +924,35 @@ def distribute_key(key):
                 pass
             ok(f"stored at {kf} ({shown}, chmod 600)")
         note("the key is also injected directly into the servers at launch")
+
+    # ROUND-44 (R44-d): the three sub-agent pool keys ride along — same secure
+    # stores, slot-suffixed names. Absent keys are skipped silently (the pool
+    # simply stays smaller and children fall back to the main key).
+    if not any(sub_keys):
+        return
+    with step("Sub-agent keys → secure store (pool slots 2/3/4)"):
+        for i, sub in enumerate(sub_keys):
+            if not sub:
+                continue
+            slot = i + 2  # sub1 → slot 2, sub2 → slot 3, sub3 → slot 4
+            shown = f"length {len(sub)}"
+            if IS_WIN:
+                script = APP_DIR / "scripts" / "credential.ps1"
+                run(
+                    ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File",
+                     str(script), "Write", f"ACUTE-CODE/provider/openrouter-slot{slot}", "api-key", sub],
+                    check=False, timeout=60,
+                )
+                ok(f"slot {slot} → Windows Credential Manager ({shown})")
+            else:
+                kf = Path.home() / ".acute" / f"openrouter-slot{slot}.key"
+                kf.parent.mkdir(parents=True, exist_ok=True)
+                kf.write_text(sub + "\n", encoding="utf-8")
+                try:
+                    os.chmod(kf, 0o600)
+                except OSError:
+                    pass
+                ok(f"slot {slot} → {kf} ({shown}, chmod 600)")
 
 
 def self_update_check():
@@ -861,7 +984,7 @@ def self_update_check():
 # modes
 # ─────────────────────────────────────────────────────────────────────────────
 
-def mode_status(pat, key, env):
+def mode_status(pat, key, env, sub_keys=("", "", "")):
     rule("status (read-only)")
     lines = []
     for name, cmd in (("git", ["git", "--version"]), ("Node.js", ["node", "--version"]),
@@ -886,6 +1009,11 @@ def mode_status(pat, key, env):
         lines.append("app          not downloaded yet (first run will fetch it)")
     lines.append(f"GitHub PAT   length {len(pat)}")
     lines.append(f"Router key   length {len(key)}")
+    # ROUND-44 (R44-d): sub-agent pool presence (length only, never the value)
+    sub_desc = ", ".join(
+        f"slot {i + 2} {'set' if sub else '—'}" for i, sub in enumerate(sub_keys)
+    )
+    lines.append(f"Sub keys     {sub_desc}")
 
     busy = []
     for port in (UI_PORT, SIDECAR_PORT):
@@ -902,11 +1030,16 @@ def mode_status(pat, key, env):
     panel("\n".join(lines), title="ACUTE-CODE status")
 
 
-def launch(env, key):
+def launch(env, key, sub_keys=("", "", "")):
     with step("Launching ACUTE-CODE (sidecar :5178 + UI :5173)"):
         stop_live_servers("clean restart")
         if key:
             env["ACUTE_PROVIDER_OPENROUTER"] = key
+        # ROUND-44 (R44-d): pool slots for sub-agents — the in-memory keyring
+        # picks these up and the orchestrator prefers them for child runs.
+        for i, sub in enumerate(sub_keys):
+            if sub:
+                env[f"ACUTE_PROVIDER_OPENROUTER_SLOT{i + 2}"] = sub
     panel(
         "Everything is ready. The servers are starting.\n\n"
         "  ➜  Your browser will OPEN http://localhost:5173 AUTOMATICALLY\n"
@@ -1001,13 +1134,18 @@ def main():
     banner()
     log(f"===== launcher start {time.strftime('%Y-%m-%d %H:%M:%S')} args={sys.argv[1:]} =====")
 
-    pat, key = read_credentials()
-    register_secrets(pat, key, authed_url(pat))
+    pat, key, sub_keys = read_credentials()
+    register_secrets(pat, key, authed_url(pat), *[s for s in sub_keys if s])
     env = dict(os.environ)
 
     if cmd == "status":
-        mode_status(pat, key, env)
+        mode_status(pat, key, env, sub_keys)
         return
+
+    # ROUND-44 (R44-d): persist the sub-agent keys into credentials.txt
+    # (auto-append missing lines; existing owner values are never touched).
+    sub_keys = ensure_subagent_keys(sub_keys)
+    register_secrets(*[s for s in sub_keys if s])
 
     with step("Verifying GitHub access (token + private repository)"):
         validate_github_access(pat)
@@ -1038,7 +1176,7 @@ def main():
 
     install_and_build(env, updated)
     write_env_file()
-    distribute_key(key)
+    distribute_key(key, sub_keys)
     self_update_check()
 
     if cmd == "update":
@@ -1048,7 +1186,7 @@ def main():
         wait_close()
         return
 
-    launch(env, key)
+    launch(env, key, sub_keys)
 
 
 if __name__ == "__main__":

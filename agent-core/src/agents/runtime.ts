@@ -29,6 +29,8 @@ import {
 import type { ChatFn, ChatTurnMessage, ChatTurnOutput, StreamChatFn } from "./chat.js";
 import { buildProjectSystemPrompt, readCustomRules } from "./prompts.js";
 import { getIndexSummary } from "../storage/index.js";
+// ROUND-44 (R44-a): the project memory digest for prompt injection.
+import { memoryDigest } from "../storage/memory.js";
 import { lookupPricing } from "../storage/models.js";
 import { assembleWithinBudget, type ContextBudget } from "../context.js";
 
@@ -416,6 +418,11 @@ async function prepareTurn(
         // has been indexed) so the agent has codebase awareness without
         // needing list_dir + read_file every turn.
         indexSummary: session.projectId !== null ? getIndexSummary(db, session.projectId) ?? undefined : undefined,
+        // ROUND-44 (R44-a): inject the newest project memories so the agent
+        // starts every turn knowing the project's durable knowledge. Empty
+        // digest (no memories yet) → undefined → no prompt section.
+        memoryDigest:
+          session.projectId !== null ? memoryDigest(db, session.projectId) || undefined : undefined,
       })
     : agent.systemPrompt;
   return {

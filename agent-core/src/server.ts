@@ -41,11 +41,14 @@ import {
 import {
   createSession,
   deleteSession,
+  forkSession,
   getSession,
   lastSessionSeq,
   listSessionEvents,
   listSessions,
   listSubAgents,
+  revertSession,
+  searchSessions,
   updateSessionTitle,
 } from "./storage/sessions.js";
 import { getOrchestrationSettings, setOrchestrationSettings } from "./storage/settings.js";
@@ -66,6 +69,10 @@ import {
   upsertModel,
 } from "./storage/models.js";
 import { listSnapshots, restoreSnapshot, getSnapshotBySeq } from "./storage/snapshots.js";
+// ROUND-44 (R44-a): the agent memory system — per-project persistent
+// knowledge (facts/decisions/preferences) with REST read/delete for the
+// right-sidebar Memory tab. Saves happen via the memory_save tool.
+import { deleteMemory, listMemories } from "./storage/memory.js";
 import { getIndexSummary, searchIndexSymbols } from "./storage/index.js";
 import { openDatabase, type SqliteDatabase } from "./storage/db.js";
 import {
@@ -1098,6 +1105,33 @@ export function buildServer(options: ServerOptions): FastifyInstance {
         return result;
       });
 
+      // ROUND-44 (R44-a): project memory — the right-sidebar Memory tab reads
+      // everything the agent saved via memory_save (newest first); DELETE
+      // removes one item (the owner pruning stale knowledge). Saves go
+      // through the agent's memory_save tool, not a REST POST — memory is
+      // the AGENT's channel by design.
+      scope.get("/projects/:id/memory", async (request, reply) => {
+        const { id } = request.params as Record<string, string>;
+        const project = getProject(db, id);
+        if (project === undefined) {
+          return reply.code(404).send(errorBody("NOT_FOUND", `no project with id ${id}`));
+        }
+        return { memories: listMemories(db, id, 100) };
+      });
+
+      scope.delete("/projects/:id/memory/:memoryId", async (request, reply) => {
+        const { id, memoryId } = request.params as Record<string, string>;
+        const project = getProject(db, id);
+        if (project === undefined) {
+          return reply.code(404).send(errorBody("NOT_FOUND", `no project with id ${id}`));
+        }
+        const result = deleteMemory(db, memoryId);
+        if (!result.ok) {
+          return reply.code(404).send(errorBody("NOT_FOUND", result.error));
+        }
+        return { ok: true };
+      });
+
       // Round-28 WS-H: unified search (files + symbols + content) for the
       // CommandPalette. Reuses search_files + search_code + the codebase index.
       scope.post("/projects/:id/search", async (request, reply) => {
@@ -1254,6 +1288,15 @@ export function buildServer(options: ServerOptions): FastifyInstance {
         const offsetRaw = Number(query.offset ?? 0);
         const limit = Number.isInteger(limitRaw) ? Math.min(Math.max(limitRaw, 1), 200) : 50;
         const offset = Number.isInteger(offsetRaw) && offsetRaw > 0 ? offsetRaw : 0;
+        // ROUND-44 (R44-c): `?q=` searches titles + event text (storage/
+        // sessions.ts searchSessions — LIKE over sessions.title and the event
+        // payload JSON). Same response shape as the plain list; `total` is the
+        // result count (search is not paginated).
+        const q = (query.q ?? "").trim();
+        if (q !== "") {
+          const sessions = searchSessions(db, q, limit);
+          return { sessions, total: sessions.length };
+        }
         // ROUND-36: children are excluded unless includeChildren=1 (the
         // sidebar stays clean; the sub-agents view lists them explicitly).
         const includeChildren = query.includeChildren === "1" || query.includeChildren === "true";
@@ -1317,6 +1360,60 @@ export function buildServer(options: ServerOptions): FastifyInstance {
         }
         deleteSession(db, id);
         return reply.code(204).send();
+      });
+
+      // ── ROUND-44 (R44-c, owner directive: "complete the whole agentic coding
+      //    environment"): fork + revert. Both are owner-facing session
+      //    management operations on the append-only log (ADR-0010's documented
+      //    exceptions, executed transactionally — same standing as round-30's
+      //    DELETE /sessions/:id). ─────────────────────────────────────────────
+
+      // POST /sessions/:id/fork — copy the session + its full event log under a
+      // NEW top-level session row ("Fork · <title>"). Usage is NOT carried
+      // over. Response: 201 { session } (creation convention: /agents/:id/
+      // duplicate). 404 when the source id is unknown.
+      scope.post("/sessions/:id/fork", async (request, reply) => {
+        const { id } = request.params as Record<string, string>;
+        const fork = forkSession(db, id);
+        if (fork === undefined) {
+          return reply.code(404).send(errorBody("NOT_FOUND", `no session with id ${id}`));
+        }
+        return reply.code(201).send({ session: fork });
+      });
+
+      // POST /sessions/:id/revert — rewind the event log to an earlier message.
+      // Body: { keepThroughSeq: integer >= 0 } — everything AFTER that seq is
+      // deleted (the user message at keepThroughSeq SURVIVES; its reply + later
+      // turns are removed) and one `session.reverted` marker event is appended.
+      // Response: 200 { ok: true, removedCount }. 404 unknown session, 409 when
+      // a turn is running (deleting under a live stream would race it), 400 on
+      // a bad body.
+      scope.post("/sessions/:id/revert", async (request, reply) => {
+        const { id } = request.params as Record<string, string>;
+        const body: unknown = request.body;
+        if (typeof body !== "object" || body === null || Array.isArray(body)) {
+          return reply
+            .code(400)
+            .send(errorBody("VALIDATION", "body must be a JSON object", { field: "body" }));
+        }
+        const raw = body as Record<string, unknown>;
+        if (
+          typeof raw.keepThroughSeq !== "number" ||
+          !Number.isInteger(raw.keepThroughSeq) ||
+          raw.keepThroughSeq < 0
+        ) {
+          return reply.code(400).send(
+            errorBody("VALIDATION", "keepThroughSeq must be an integer >= 0", {
+              field: "body.keepThroughSeq",
+            }),
+          );
+        }
+        const result = revertSession(db, id, raw.keepThroughSeq);
+        if (!result.ok) {
+          const status = result.code === "NOT_FOUND" ? 404 : result.code === "CONFLICT" ? 409 : 400;
+          return reply.code(status).send(errorBody(result.code, result.message));
+        }
+        return reply.code(200).send({ ok: true, removedCount: result.removedCount });
       });
 
       // ── ROUND-36 (ADR-0022): sub-agent monitoring + recovery ──────────

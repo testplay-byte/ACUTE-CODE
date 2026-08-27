@@ -387,3 +387,168 @@ export function recordUsage(db: SqliteDatabase, usage: UsageRecord): void {
      VALUES (@agentId, @sessionId, @provider, @model, @inputTokens, @outputTokens, @costUsd, @ts)`,
   ).run(usage);
 }
+
+// ── ROUND-44 (R44-c, owner directive: "complete the whole agentic coding
+//    environment") — session SEARCH / FORK / REVERT. Audited as missing in the
+//    R43 round report; these three operations close the gap. ─────────────────
+
+/**
+ * ROUND-44 (R44-c): case-insensitive substring search across sessions — the
+ * session TITLE plus the VISIBLE TEXT of the event log.
+ *
+ * Payload-column decision: `session_events.payload` is a TEXT column holding
+ * the event payload as a JSON-encoded STRING (schema 0001; toEvent() parses
+ * it). Every text-bearing event embeds its user-visible text as a JSON string
+ * VALUE inside that blob — message.user/message.assistant carry `content`,
+ * tool.use carries `argsSummary`/`outputSummary`, turn.error carries
+ * `message`. A LIKE over the raw payload column therefore matches exactly the
+ * text the user saw in the chat, without a JSON-extraction pass per row (and
+ * without maintaining a parallel search index). Trade-offs, accepted + noted:
+ *  - JSON-escaped text: a query containing a quote/newline will not match its
+ *    escaped form (queries are typed in a one-line search box — acceptable).
+ *  - LIKE is case-insensitive for ASCII only (SQLite default) — matches the
+ *    title column's behavior; fine for a desktop search box.
+ *  - Key names are part of the blob, so a query like "content" matches any
+ *    session with a chat event — harmless for a >=1-char search box.
+ *
+ * Sub-agent children (ADR-0022) are excluded — parity with listSessions's
+ * default (the sidebar/search surface stays top-level sessions only). Rows
+ * come back in the same shape as listSessions, newest-updated first, deduped
+ * (a session with N matching events still appears once).
+ */
+export function searchSessions(db: SqliteDatabase, q: string, limit = 50): Session[] {
+  const needle = q.trim();
+  if (needle === "") return [];
+  // Escape LIKE wildcards so a literal "%"/"_" in the query means itself.
+  const escaped = needle.replace(/[\\%_]/g, (c) => `\\${c}`);
+  const pattern = `%${escaped}%`;
+  const rows = db
+    .prepare(
+      `SELECT DISTINCT s.*
+         FROM sessions s
+         LEFT JOIN session_events e ON e.session_id = s.id
+        WHERE s.parent_session_id IS NULL
+          AND (s.title LIKE ? ESCAPE '\\' OR e.payload LIKE ? ESCAPE '\\')
+        ORDER BY s.updated_at DESC, s.id DESC
+        LIMIT ?`,
+    )
+    .all(pattern, pattern, limit) as SessionRow[];
+  return rows.map(toSession);
+}
+
+/**
+ * ROUND-44 (R44-c): fork a session — a NEW top-level session carrying a full
+ * copy of the original's event log. The fork is an ordinary session (no
+ * parent-session linkage, per the R44-c contract — a fork is not a sub-agent
+ * child): new `sess_…` id, title `Fork · {original title}`, same agent +
+ * project binding, fresh `queued` status, created_at/updated_at = now.
+ *
+ * Events are copied with PRESERVED seq / type / payload / ts (turn structure
+ * + original timestamps survive verbatim); only the AUTOINCREMENT row `id`
+ * and the owning `session_id` are new. usage_events are deliberately NOT
+ * copied — the fork's token counters start at zero (usage is a separate
+ * per-session ledger, so leaving it behind is exactly "zeroed").
+ *
+ * Returns the new session row, or undefined when the source id is unknown.
+ */
+export function forkSession(db: SqliteDatabase, sessionId: string): Session | undefined {
+  const original = getSession(db, sessionId);
+  if (original === undefined) return undefined;
+  const now = new Date().toISOString();
+  const fork: Session = {
+    id: `sess_${randomUUID()}`,
+    projectId: original.projectId,
+    agentId: original.agentId,
+    mode: original.mode,
+    status: "queued",
+    title: `Fork · ${original.title ?? "Untitled session"}`,
+    createdAt: now,
+    updatedAt: now,
+    // Top-level by design — even when forking a sub-agent child, the fork
+    // escapes the parent linkage (it is a user-owned copy, not a delegation).
+    parentSessionId: null,
+    subRole: null,
+  };
+  const copy = db.transaction((srcId: string) => {
+    db.prepare(
+      `INSERT INTO sessions (id, project_id, agent_id, mode, status, title, created_at, updated_at, parent_session_id, sub_role)
+       VALUES (@id, @projectId, @agentId, @mode, @status, @title, @createdAt, @updatedAt, @parentSessionId, @subRole)`,
+    ).run(fork);
+    // INSERT…SELECT keeps seq/type/payload/ts byte-identical; the autoincrement
+    // `id` column is omitted so every copied row gets a fresh row id.
+    db.prepare(
+      `INSERT INTO session_events (session_id, seq, type, payload, ts)
+       SELECT ?, seq, type, payload, ts FROM session_events WHERE session_id = ? ORDER BY seq ASC`,
+    ).run(fork.id, srcId);
+  });
+  copy(sessionId);
+  return fork;
+}
+
+/** ROUND-44 (R44-c): revertSession outcome — success carries the number of
+ * removed events; failure carries an HTTP-mappable code (404 / 409). */
+export type RevertSessionResult =
+  | { ok: true; removedCount: number }
+  | { ok: false; code: "NOT_FOUND" | "CONFLICT" | "VALIDATION"; message: string };
+
+/**
+ * ROUND-44 (R44-c): rewind a session to an earlier message. Events with
+ * seq > keepThroughSeq are deleted (everything up to AND INCLUDING
+ * keepThroughSeq survives — the UI passes the USER message's seq, so the user
+ * message stays while the assistant reply + later turns are removed), then ONE
+ * `session.reverted` marker event is appended with the next seq. Event types
+ * are not validated anywhere (appendSessionEvent accepts any string; readers
+ * tolerate unknown types — see toProjectChatItems), so no type registration
+ * is needed; the marker's payload is
+ * { throughSeq, at, revertedEventCount, agentId: null, ts } (appendSessionEvent
+ * mirrors agentId + ts into the payload like every other event).
+ *
+ * The append-only contract (ADR-0010) governs in-flight operation; an
+ * owner-driven rewind is the documented exception (same standing as
+ * deleteSession, round-30) and runs as ONE transaction.
+ *
+ * Edge cases:
+ *  - unknown session id → { ok: false, code: "NOT_FOUND" }
+ *  - session status "running" (a live turn is streaming) → CONFLICT
+ *    "cannot revert a running session" — the deletion would race the turn.
+ *  - keepThroughSeq >= max seq → nothing is removed but the marker is STILL
+ *    appended (an explicit, auditable no-op rewind).
+ */
+export function revertSession(
+  db: SqliteDatabase,
+  sessionId: string,
+  keepThroughSeq: number,
+): RevertSessionResult {
+  const session = getSession(db, sessionId);
+  if (session === undefined) {
+    return { ok: false, code: "NOT_FOUND", message: `no session with id ${sessionId}` };
+  }
+  if (session.status === "running") {
+    return { ok: false, code: "CONFLICT", message: "cannot revert a running session" };
+  }
+  if (!Number.isInteger(keepThroughSeq) || keepThroughSeq < 0) {
+    return {
+      ok: false,
+      code: "VALIDATION",
+      message: "keepThroughSeq must be an integer >= 0",
+    };
+  }
+  const rewind = db.transaction((): number => {
+    const removed = db
+      .prepare("DELETE FROM session_events WHERE session_id = ? AND seq > ?")
+      .run(sessionId, keepThroughSeq);
+    appendSessionEvent(db, sessionId, {
+      type: "session.reverted",
+      payload: {
+        throughSeq: keepThroughSeq,
+        at: new Date().toISOString(),
+        revertedEventCount: removed.changes,
+      },
+    });
+    // Fresh/idle status — the conversation is rewound and ready for a new turn.
+    setSessionStatus(db, sessionId, "queued");
+    return removed.changes;
+  });
+  const removedCount = rewind();
+  return { ok: true, removedCount };
+}

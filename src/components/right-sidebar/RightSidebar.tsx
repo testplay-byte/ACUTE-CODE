@@ -3,6 +3,7 @@ import { createPortal } from "react-dom";
 import { motion, AnimatePresence } from "framer-motion";
 import {
   Bot,
+  Brain,
   Files,
   Globe,
   Plus,
@@ -24,6 +25,8 @@ import { FileViewerPanel } from "./FileViewerPanel";
 import { TerminalPanel } from "./TerminalPanel";
 import { BrowserPanel } from "./BrowserPanel";
 import { SubAgentPanel } from "./SubAgentPanel";
+// ROUND-44 (R44-a): the project-memory tab panel.
+import { MemoryPanel } from "./MemoryPanel";
 import { fetchSubAgents, type SubAgentStatus } from "../../lib/api";
 import { useQuery } from "@tanstack/react-query";
 
@@ -44,6 +47,7 @@ const TAB_ICON: Record<RightSidebarTabType, typeof Files> = {
   browser: Globe,
   terminal: TerminalIcon,
   subagent: Bot,
+  memory: Brain,
 };
 
 const ROLE_COLORS: Record<string, string> = {
@@ -85,6 +89,7 @@ export function RightSidebar({
   const toggleOpen = useRightSidebarStore((s) => s.toggleOpen);
   const openBrowser = useRightSidebarStore((s) => s.openBrowser);
   const openTerminal = useRightSidebarStore((s) => s.openTerminal);
+  const openMemory = useRightSidebarStore((s) => s.openMemory);
   const openSubAgent = useRightSidebarStore((s) => s.openSubAgent);
   const requestFilePicker = useRightSidebarEvents((s) => s.requestFilePicker);
   // ROUND-42: ensure the project has a slice (idempotent — uses the active
@@ -387,6 +392,8 @@ export function RightSidebar({
                           openBrowser(projectId, null);
                         } else if (type === "terminal") {
                           openTerminal(projectId);
+                        } else if (type === "memory") {
+                          openMemory(projectId);
                         } else if (type === "subagent") {
                           setSubAgentPickerFor("subagent");
                         }
@@ -439,6 +446,8 @@ export function RightSidebar({
           <TerminalPanel projectId={projectId} tab={activeTab} />
         ) : activeTab.type === "browser" ? (
           <BrowserPanel projectId={projectId} tab={activeTab} />
+        ) : activeTab.type === "memory" ? (
+          <MemoryPanel projectId={projectId} tab={activeTab} />
         ) : (
           <SubAgentPanel tab={activeTab} />
         )}
@@ -486,6 +495,8 @@ function QuickMenu({
     { type: "file", label: "File", icon: Files, desc: "Open a code/markdown file" },
     { type: "browser", label: "Browser", icon: Globe, desc: "Browse the web in-app" },
     { type: "terminal", label: "Terminal", icon: TerminalIcon, desc: "Run a shell command" },
+    // ROUND-44 (R44-a): the agent's persistent project knowledge.
+    { type: "memory", label: "Memory", icon: Brain, desc: "Saved project knowledge" },
   ];
   if (hasSubs) {
     items.push({

@@ -39,6 +39,12 @@ export const TOOL_NAMES = [
   // ROUND-43 (R43-10): drives the user's embedded browser panel (navigate /
   // history / viewport presets) — tools/index.ts, state in browser-proxy.ts.
   "browser_control",
+  // ROUND-44 (R44-a): the agent memory system — persistent per-project
+  // knowledge (facts/decisions/preferences) via memory_save/recall/list.
+  // Migration 0015 repairs existing databases.
+  "memory_save",
+  "memory_recall",
+  "memory_list",
 ] as const;
 
 /** Agent JSON as served by the API: AgentRecord plus bookkeeping columns. */

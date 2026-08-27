@@ -337,18 +337,28 @@ describe("migration 0014 (delegate_task + browser_control allowlist repair)", ()
     );                                                               // already has them
     old.close();
 
-    const db = openDatabase(path); // 0013 + 0014 apply
+    const db = openDatabase(path); // 0013 + 0014 + 0015 (R44-a) apply
     const row = (id: string) =>
       JSON.parse(
         (db.prepare("SELECT allowed_tools FROM agents WHERE id = ?").get(id) as { allowed_tools: string }).allowed_tools,
       ) as string[];
     expect(row("agt_tpl_coder")).toContain("delegate_task");
     expect(row("agt_tpl_coder")).toContain("browser_control");
-    expect(row("agt_tpl_coder")).toHaveLength(18);
+    // ROUND-44 (R44-a): 0015 appends the memory tools on top of 0014's 18.
+    expect(row("agt_tpl_coder")).toHaveLength(21);
     expect(row("agt_default_nova")).toContain("delegate_task");
     expect(row("agt_default_nova")).toContain("browser_control");
     expect(row("agt_mine")).toEqual(JSON.parse(seedTools)); // untouched
-    expect(row("agt_tpl_already")).toEqual(["list_dir", "delegate_task", "browser_control"]);
+    // ROUND-44 (R44-a): the "already has them" template ALSO gets the
+    // memory tools appended by 0015 (it is a template row).
+    expect(row("agt_tpl_already")).toEqual([
+      "list_dir",
+      "delegate_task",
+      "browser_control",
+      "memory_save",
+      "memory_recall",
+      "memory_list",
+    ]);
     // idempotent on reopen
     db.close();
     const again = openDatabase(path);
@@ -356,7 +366,7 @@ describe("migration 0014 (delegate_task + browser_control allowlist repair)", ()
       JSON.parse(
         (again.prepare("SELECT allowed_tools FROM agents WHERE id = 'agt_tpl_coder'").get() as { allowed_tools: string }).allowed_tools,
       ),
-    ).toHaveLength(18);
+    ).toHaveLength(21);
     again.close();
   });
 });

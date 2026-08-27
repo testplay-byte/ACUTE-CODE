@@ -62,6 +62,52 @@ function readProviderKey() {
   return key;
 }
 
+/**
+ * ROUND-44 (R44-d, owner directive: "for the 3 sub-agent API keys I want to
+ * save them inside the credentials.txt so I don't have to manually enter
+ * them"): the sub-agent POOL keys. The launcher (and the credentials.txt it
+ * maintains) now carries OPENROUTER_SUB1..3_KEY; they are distributed to the
+ * same three stores the primary key uses, under the slot names the keyring's
+ * pool expects (registry.ts: ACUTE_PROVIDER_OPENROUTER_SLOT{N}, N ≥ 2 —
+ * slots 2/3/4 are exactly the three the Settings → Sub-agents tab shows and
+ * the orchestrator prefers for child runs). Same resolution order as the
+ * primary key: env → key file → Windows Credential Manager. Never printed.
+ */
+function readSlotKey(slot) {
+  const envName = `ACUTE_PROVIDER_OPENROUTER_SLOT${slot}`;
+  if (process.env[envName]) {
+    const fromEnv = process.env[envName];
+    console.error(`[dev] pool slot ${slot} key from ${envName} env (length ${fromEnv.length}).`);
+    return fromEnv;
+  }
+  const keyFile = resolve(process.env.HOME ?? ".", ".acute", `openrouter-slot${slot}.key`);
+  if (process.platform !== "win32" && existsSync(keyFile)) {
+    const fromFile = readFileSync(keyFile, "utf8").trim();
+    if (fromFile) {
+      console.error(`[dev] pool slot ${slot} key from ${keyFile} (length ${fromFile.length}).`);
+      return fromFile;
+    }
+  }
+  const res = spawnSync(
+    "powershell",
+    [
+      "-NoProfile",
+      "-File",
+      resolve(repoRoot, "scripts", "credential.ps1"),
+      "Read",
+      `ACUTE-CODE/provider/openrouter-slot${slot}`,
+    ],
+    { encoding: "utf8" },
+  );
+  const key = res.stdout ? res.stdout.trim() : "";
+  if (key) console.error(`[dev] pool slot ${slot} key loaded from Credential Manager (length ${key.length}).`);
+  return key;
+}
+
+const poolSlots = [2, 3, 4]
+  .map((slot) => [slot, readSlotKey(slot)])
+  .filter(([, key]) => key !== "");
+
 const distMain = resolve(repoRoot, "agent-core", "dist", "main.js");
 if (!existsSync(distMain)) {
   console.error("[dev] agent-core/dist/main.js missing — run `pnpm --filter agent-core build` first.");
@@ -69,6 +115,13 @@ if (!existsSync(distMain)) {
 }
 
 const key = readProviderKey();
+// ROUND-44 (R44-d): pool slots ride along in the spawn env — the keyring
+// snapshots them into the in-memory pool; nothing is persisted to disk.
+const slotEnv = {};
+for (const [slot, slotKey] of poolSlots) slotEnv[`ACUTE_PROVIDER_OPENROUTER_SLOT${slot}`] = slotKey;
+if (poolSlots.length > 0) {
+  console.error(`[dev] sub-agent key pool: ${poolSlots.length} slot key(s) active (${poolSlots.map(([s]) => `slot ${s}`).join(", ")}).`);
+}
 const sidecar = spawn(process.execPath, [distMain], {
   cwd: repoRoot,
   env: {
@@ -77,6 +130,7 @@ const sidecar = spawn(process.execPath, [distMain], {
     ACUTE_PORT: String(DEV_PORT),
     ACUTE_DB_PATH: resolve(devDir, "acute.db"),
     ...(key ? { ACUTE_PROVIDER_OPENROUTER: key } : {}),
+    ...slotEnv,
   },
   stdio: ["ignore", "pipe", "pipe"],
 });

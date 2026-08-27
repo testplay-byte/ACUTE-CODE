@@ -47,7 +47,10 @@ export function stateKey(projectId: string, sessionId: string | null): string {
   return `${projectId}::${sessionId ?? "default"}`;
 }
 
-export type RightSidebarTabType = "file" | "browser" | "terminal" | "subagent";
+/** ROUND-44 (R44-a): "memory" joins the tab set — the project's persistent
+ * agent knowledge (facts/decisions/preferences saved via memory_save),
+ * rendered by MemoryPanel and auto-injected into every agent turn. */
+export type RightSidebarTabType = "file" | "browser" | "terminal" | "subagent" | "memory";
 
 export interface TerminalLine {
   kind: "in" | "out" | "err";
@@ -132,6 +135,8 @@ interface RightSidebarState {
   openBrowser: (projectId: string, url?: string | null) => string;
   /** Open (or surface) a terminal tab. */
   openTerminal: (projectId: string) => string;
+  /** ROUND-44 (R44-a): open (or surface) the project-memory tab. */
+  openMemory: (projectId: string) => string;
   /** Open (or surface) a sub-agent tab. */
   openSubAgent: (
     projectId: string,
@@ -161,7 +166,7 @@ function nextId(): string {
 function findExistingTab(
   state: ProjectRightState,
   type: RightSidebarTabType,
-  key: { filePath?: string; browserUrl?: string | null; subAgentId?: string; terminal?: boolean },
+  key: { filePath?: string; browserUrl?: string | null; subAgentId?: string; terminal?: boolean; memory?: boolean },
 ): RightSidebarTab | null {
   for (const t of state.tabs) {
     if (t.type !== type) continue;
@@ -169,6 +174,9 @@ function findExistingTab(
     if (type === "browser" && key.browserUrl !== undefined && (t.browserUrl ?? null) === (key.browserUrl ?? null)) return t;
     if (type === "subagent" && key.subAgentId !== undefined && t.subAgentId === key.subAgentId) return t;
     if (type === "terminal" && key.terminal) return t;
+    // ROUND-44 (R44-a): memory is a singleton tab like the terminal — one
+    // per session's sidebar.
+    if (type === "memory" && key.memory) return t;
   }
   return null;
 }
@@ -220,6 +228,7 @@ export const useRightSidebarStore = create<RightSidebarState>()(
             browserUrl: tabInput.browserUrl,
             subAgentId: tabInput.subAgentId,
             terminal: tabInput.type === "terminal",
+            memory: tabInput.type === "memory",
           });
           if (existing !== null) {
             return {
@@ -289,6 +298,8 @@ export const useRightSidebarStore = create<RightSidebarState>()(
       },
       openTerminal: (projectId) =>
         get().addTab(projectId, { type: "terminal", title: "Terminal" }),
+      openMemory: (projectId) =>
+        get().addTab(projectId, { type: "memory", title: "Memory" }),
       openSubAgent: (projectId, parentSessionId, subAgentId, title, subRole) =>
         get().addTab(projectId, {
           type: "subagent",

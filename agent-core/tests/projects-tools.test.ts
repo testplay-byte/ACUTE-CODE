@@ -225,7 +225,7 @@ describe("round-14 tools: create_dir / delete_file / search_files", () => {
 });
 
 describe("round-17: tool-name truth + allowedTools enforcement (ADR-0019)", () => {
-  it("TOOL_NAMES equals the real seed set (round-28: +index_project; R43-10: +browser_control; R43: +delegate_task)", async () => {
+  it("TOOL_NAMES equals the real seed set (round-28: +index_project; R43-10: +browser_control; R43: +delegate_task; R44-a: +memory tools)", async () => {
     const { TOOL_NAMES } = await import("../src/storage/agents");
     expect([...TOOL_NAMES].sort()).toEqual([
       "browser_control",
@@ -238,6 +238,9 @@ describe("round-17: tool-name truth + allowedTools enforcement (ADR-0019)", () =
       "git_status",
       "index_project",
       "list_dir",
+      "memory_list",
+      "memory_recall",
+      "memory_save",
       "read_file",
       "run_command",
       "search_code",
@@ -249,11 +252,12 @@ describe("round-17: tool-name truth + allowedTools enforcement (ADR-0019)", () =
     ]);
   });
 
-  it("buildProjectTools filters by allowlist; empty allowlist = all tools (18 incl. delegate_task + browser_control)", async () => {
+  it("buildProjectTools filters by allowlist; empty allowlist = all tools (20 base incl. browser_control + memory tools)", async () => {
     const { buildProjectTools } = await import("../src/tools/index");
     // ROUND-36: delegate_task requires deps.keyring + deps.chat — without
-    // them the base 17 tools return (back-compat), with them 18 (R43-10
-    // added browser_control to the base set).
+    // them the base tools return (back-compat), with them 21 (R43-10
+    // added browser_control; R44-a added the three memory tools to the
+    // base set — they fail gracefully without deps, like todo_write).
     const all = (await buildProjectTools(tempDir)) as unknown as Record<string, unknown>;
     expect(Object.keys(all).sort()).toEqual([
       "browser_control",
@@ -265,6 +269,9 @@ describe("round-17: tool-name truth + allowedTools enforcement (ADR-0019)", () =
       "git_status",
       "index_project",
       "list_dir",
+      "memory_list",
+      "memory_recall",
+      "memory_save",
       "read_file",
       "run_command",
       "search_code",
@@ -277,7 +284,7 @@ describe("round-17: tool-name truth + allowedTools enforcement (ADR-0019)", () =
     const two = (await buildProjectTools(tempDir, ["read_file", "search_files"])) as unknown as Record<string, unknown>;
     expect(Object.keys(two).sort()).toEqual(["read_file", "search_files"]);
     const empty = (await buildProjectTools(tempDir, [])) as unknown as Record<string, unknown>;
-    expect(Object.keys(empty)).toHaveLength(17);
+    expect(Object.keys(empty)).toHaveLength(20);
   });
 
   it("server rejects SPEC-era tool names in allowedTools (drift guard)", async () => {
