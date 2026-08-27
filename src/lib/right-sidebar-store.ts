@@ -53,8 +53,14 @@ export function stateKey(projectId: string, sessionId: string | null): string {
 export type RightSidebarTabType = "file" | "browser" | "terminal" | "subagent" | "memory";
 
 export interface TerminalLine {
-  kind: "in" | "out" | "err";
+  /** ROUND-44 (R44-e): "exit" lines carry the streaming exit-code footer
+   * (`↳ exit 0` / `↳ stopped`) and color themselves via `ok` instead of the
+   * fixed kind palette. Additive — pre-R44 persisted scrollbacks only carry
+   * in/out/err and keep rendering unchanged. */
+  kind: "in" | "out" | "err" | "exit";
   text: string;
+  /** Exit lines only: true = success green, false/undefined = danger red. */
+  ok?: boolean;
 }
 
 export interface RightSidebarTab {

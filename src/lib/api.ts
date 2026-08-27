@@ -1141,6 +1141,124 @@ export async function runProjectTerminal(
   });
 }
 
+/** ROUND-44 (R44-e): one frame from POST /projects/:id/terminal/stream (SSE).
+ * stdout/stderr chunks arrive as the child emits them; `exit` carries the
+ * real exit code (null = killed by a signal) + elapsed ms; `error` is a
+ * spawn failure / timeout / output-cap kill and always ends the stream. */
+export type TerminalStreamFrame =
+  | { type: "stdout"; text: string }
+  | { type: "stderr"; text: string }
+  | { type: "exit"; code: number | null; ms: number }
+  | { type: "error"; message: string };
+
+/**
+ * ROUND-44 (R44-e): parse ONE SSE frame block (the text between two `\n\n`
+ * separators) and return its data payload, or null when the block carries no
+ * data (a `: ping` heartbeat comment — ignored per the SSE spec). Exported
+ * for unit tests; the terminal stream read loop below is the only caller.
+ *
+ * There is no shared SSE parser module in src/lib — each stream client
+ * (streamSessionMessage here, streamNotifications in notifications-api.ts)
+ * embeds the same verbatim-mirror loop. The terminal stream additionally has
+ * to skip comment frames, so this small parser keeps that logic in one
+ * testable place instead of a third copy of the loop.
+ */
+export function parseSseDataBlock(block: string): string | null {
+  const dataLines: string[] = [];
+  for (const line of block.split("\n")) {
+    // Comment frame (": ping" heartbeat) — ignore, per the SSE spec.
+    if (line.startsWith(":")) continue;
+    if (line.startsWith("data:")) {
+      const rest = line.slice(5);
+      dataLines.push(rest.startsWith(" ") ? rest.slice(1) : rest);
+    }
+  }
+  return dataLines.length === 0 ? null : dataLines.join("\n");
+}
+
+/**
+ * ROUND-44 (R44-e): run a terminal command on the STREAMING endpoint —
+ * POST /projects/:id/terminal/stream with Accept: text/event-stream, reading
+ * response.body as a ReadableStream and parsing SSE frames incrementally
+ * (same getReader + TextDecoder + `\n\n` split pattern as
+ * streamSessionMessage above; comment/heartbeat frames are ignored). Each
+ * stdout/stderr/exit/error frame fires `onFrame` as it lands; the promise
+ * resolves when the stream ends.
+ *
+ * Throws (ApiError / network TypeError / AbortError) when the endpoint is
+ * unreachable or answers non-200 BEFORE any frame — the TerminalPanel falls
+ * back to the sync runProjectTerminal in that case so the panel never
+ * regresses. If the HTTP body dies mid-command without a terminal frame
+ * (exit/error), a synthetic error frame is emitted instead — the ROUND-43
+ * silent-death lesson applied to the terminal.
+ */
+export async function runProjectTerminalStream(
+  projectId: string,
+  command: string,
+  onFrame: (frame: TerminalStreamFrame) => void,
+  signal?: AbortSignal,
+): Promise<void> {
+  const { baseUrl, token } = useConfigStore.getState();
+  const res = await fetch(`${baseUrl}/api/v1/projects/${projectId}/terminal/stream`, {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+      Accept: "text/event-stream",
+      ...(token ? { Authorization: `Bearer ${token}` } : {}),
+    },
+    body: JSON.stringify({ command }),
+    signal,
+  });
+  if (!res.ok || !res.body) {
+    // Non-2xx: the error envelope is JSON, not SSE — throw so the caller can
+    // fall back to the sync terminal route.
+    let message = `sidecar answered HTTP ${res.status}`;
+    let code = "UNKNOWN";
+    try {
+      const body = (await res.json()) as { error?: { code?: string; message?: string } };
+      if (body.error?.message) message = body.error.message;
+      if (body.error?.code) code = body.error.code;
+    } catch {
+      /* keep the status text */
+    }
+    throw new ApiError(res.status, code, message);
+  }
+  const reader = res.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+  let sawTerminalFrame = false;
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    buffer += decoder.decode(value, { stream: true });
+    let sep = buffer.indexOf("\n\n");
+    while (sep >= 0) {
+      const block = buffer.slice(0, sep);
+      buffer = buffer.slice(sep + 2);
+      const data = parseSseDataBlock(block);
+      if (data !== null) {
+        try {
+          const parsed = JSON.parse(data) as TerminalStreamFrame;
+          if (parsed.type === "exit" || parsed.type === "error") {
+            sawTerminalFrame = true;
+          }
+          onFrame(parsed);
+        } catch {
+          /* skip malformed frame */
+        }
+      }
+      sep = buffer.indexOf("\n\n");
+    }
+  }
+  if (!sawTerminalFrame) {
+    onFrame({
+      type: "error",
+      message:
+        "The terminal stream ended unexpectedly (connection interrupted before the command finished).",
+    });
+  }
+}
+
 /** ROUND-44 (R44-a): one saved project memory — durable knowledge the agent
  * persisted via its memory_save tool (kinded so the UI groups + colors). */
 export interface ProjectMemory {

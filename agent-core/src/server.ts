@@ -1105,6 +1105,234 @@ export function buildServer(options: ServerOptions): FastifyInstance {
         return result;
       });
 
+      // ROUND-44 (R44-e, owner directive "complete the agentic coding
+      // environment"): STREAMING variant of the terminal runner above. Same
+      // containment — project must exist, command required, spawn with
+      // shell:true in the PROJECT ROOT, FORCE_COLOR=0/CI=1 env, 60s timeout,
+      // 64 KB combined output cap — but stdout/stderr are pushed to the client
+      // as SSE `data:` frames the MOMENT the child emits them, followed by an
+      // exit frame carrying the real exit code. The fire-and-forget route made
+      // long commands look frozen (nothing arrived until the process exited)
+      // and exit codes were invisible; this mirrors the fetch+SSE pattern of
+      // POST /sessions/:id/messages/stream (reply.hijack + raw writeHead so
+      // the CORS headers survive hijacking — the ROUND-30 lesson).
+      //
+      // Frame protocol (one JSON object per `data:` line, frames separated by
+      // a blank line; a `: ping` comment frame every 10s keeps proxies from
+      // closing the idle stream — agent turns are chatty, a quiet `sleep 60`
+      // is not):
+      //   {"type":"stdout","text":"…"}   — a stdout chunk, as-is
+      //   {"type":"stderr","text":"…"}   — a stderr chunk, as-is
+      //   {"type":"exit","code":N,"ms":T}— child exited with code N (null when
+      //                                   killed by a signal) after T ms
+      //   {"type":"error","message":"…"} — spawn failure / timeout / output
+      //                                   cap; the stream ends right after
+      //
+      // Optional body {timeoutMs, maxBytes} can only SHRINK the budgets — the
+      // server-side maximums are the sync route's defaults (60s / 64 KB), so
+      // tests can exercise the kill paths quickly and power users can tighten
+      // a slow command, but nobody can enlarge the blast radius.
+      scope.post("/projects/:id/terminal/stream", async (request, reply) => {
+        const { id } = request.params as Record<string, string>;
+        const project = getProject(db, id);
+        if (project === undefined) {
+          return reply.code(404).send(errorBody("NOT_FOUND", `no project with id ${id}`));
+        }
+        const body = request.body as
+          | { command?: unknown; timeoutMs?: unknown; maxBytes?: unknown }
+          | null;
+        const command = typeof body?.command === "string" ? body.command.trim() : "";
+        if (command === "") {
+          return reply
+            .code(400)
+            .send(errorBody("VALIDATION", "command is required", { field: "body.command" }));
+        }
+        // Budget overrides: integers within [min, server default]; anything
+        // else is a 400, and the defaults apply when omitted.
+        const DEFAULT_TIMEOUT_MS = 60_000;
+        const DEFAULT_MAX_BYTES = 64 * 1024;
+        const overrideOr400 = (value: unknown, min: number, max: number): number | null | undefined => {
+          if (value === undefined || value === null) return null;
+          if (typeof value !== "number" || !Number.isInteger(value) || value < min || value > max) {
+            return undefined; // invalid → caller 400s
+          }
+          return value;
+        };
+        const timeoutOverride = overrideOr400(body?.timeoutMs, 250, DEFAULT_TIMEOUT_MS);
+        if (timeoutOverride === undefined) {
+          return reply.code(400).send(
+            errorBody("VALIDATION", `timeoutMs must be an integer between 250 and ${DEFAULT_TIMEOUT_MS}`, {
+              field: "body.timeoutMs",
+            }),
+          );
+        }
+        const maxBytesOverride = overrideOr400(body?.maxBytes, 256, DEFAULT_MAX_BYTES);
+        if (maxBytesOverride === undefined) {
+          return reply.code(400).send(
+            errorBody("VALIDATION", `maxBytes must be an integer between 256 and ${DEFAULT_MAX_BYTES}`, {
+              field: "body.maxBytes",
+            }),
+          );
+        }
+        const timeoutMs = timeoutOverride ?? DEFAULT_TIMEOUT_MS;
+        const maxBytes = maxBytesOverride ?? DEFAULT_MAX_BYTES;
+
+        const { spawn } = await import("node:child_process");
+
+        let clientGone = false;
+        let ended = false; // terminal frame sent + response ended
+        let errorFrameSent = false; // an error frame already terminated the story
+        let capFired = false;
+        let emittedBytes = 0;
+        const startedAt = Date.now();
+
+        reply.hijack();
+        const res = reply.raw;
+        // Same header block as the chat stream (ROUND-30: headers set via
+        // reply.header() are dropped after hijack — CORS must ride writeHead).
+        res.writeHead(200, {
+          "content-type": "text/event-stream; charset=utf-8",
+          "cache-control": "no-cache, no-transform",
+          connection: "keep-alive",
+          "x-accel-buffering": "no",
+          ...corsHeadersFor(request.headers.origin),
+        });
+        // LIVE-BATTERY FIX: writeHead() only ASSIGNS headers on the raw
+        // ServerResponse — nothing reaches the socket until the first write.
+        // A quiet command (`sleep 60`) would leave the client without even
+        // response HEADERS until the 10s heartbeat. Flush a leading comment
+        // frame so the stream is live the instant the route runs (same trick
+        // as the notifications stream's initial hello frame).
+        try {
+          res.write(": ping\n\n");
+        } catch {
+          clientGone = true;
+        }
+
+        // Comment-only heartbeat frame every 10s (idle proxies stay open).
+        const heartbeat = setInterval(() => {
+          if (clientGone || ended || res.writableEnded) return;
+          try {
+            res.write(": ping\n\n");
+          } catch {
+            clientGone = true;
+          }
+        }, 10_000);
+
+        const send = (event: unknown) => {
+          if (clientGone || res.writableEnded) return;
+          try {
+            res.write(`data: ${JSON.stringify(event)}\n\n`);
+          } catch {
+            // The socket died mid-write — treat the client as gone.
+            clientGone = true;
+          }
+        };
+        const finish = (resolve: () => void) => {
+          clearInterval(heartbeat);
+          if (ended) {
+            resolve();
+            return;
+          }
+          ended = true;
+          if (!clientGone) {
+            try {
+              res.end();
+            } catch {
+              /* socket already dead */
+            }
+          }
+          resolve();
+        };
+
+        await new Promise<void>((resolve) => {
+          const child = spawn(command, {
+            cwd: project.rootPath,
+            shell: true,
+            env: { ...process.env, FORCE_COLOR: "0", CI: "1" },
+          });
+          const killChild = () => {
+            try {
+              child.kill();
+            } catch {
+              /* already dead */
+            }
+          };
+          // A client disconnect (Stop button / closed tab) kills the child —
+          // unlike agent turns (ROUND-42: they complete in the background),
+          // an interactive terminal command has no value once its reader is
+          // gone, and letting it run would burn the CPU for the full timeout.
+          request.raw.on("close", () => {
+            clientGone = true;
+            killChild();
+          });
+          res.on("close", () => {
+            // Real sockets: 'close' on a premature termination. (In tests
+            // light-my-request also emits 'close' right after end() — the
+            // `ended` guard makes that a no-op.)
+            if (!ended) {
+              clientGone = true;
+              killChild();
+            }
+          });
+
+          // Kill-on-timeout: we manage the timer ourselves (not spawn's
+          // `timeout` option) so we can emit the honest error frame the
+          // moment the budget is spent. The timer ALWAYS finishes the stream
+          // (clearing the heartbeat) — a client that left mid-command must
+          // not leak the interval if the dying child lingers.
+          const timer = setTimeout(() => {
+            if (!ended && !clientGone) {
+              const label = timeoutMs >= 1000 ? `${Math.round(timeoutMs / 1000)}s` : `${timeoutMs}ms`;
+              errorFrameSent = true;
+              send({ type: "error", message: `timed out after ${label}` });
+            }
+            killChild();
+            finish(resolve);
+          }, timeoutMs);
+
+          const emitChunk = (chunk: Buffer, type: "stdout" | "stderr") => {
+            if (ended || clientGone || chunk.length === 0) return;
+            emittedBytes += chunk.length;
+            const remaining = maxBytes - (emittedBytes - chunk.length);
+            const text = remaining >= chunk.length ? chunk.toString("utf8") : chunk.subarray(0, Math.max(0, remaining)).toString("utf8");
+            if (text !== "") send({ type, text });
+            if (emittedBytes > maxBytes && !capFired) {
+              capFired = true;
+              errorFrameSent = true;
+              send({
+                type: "error",
+                message: `output exceeded ${maxBytes} bytes — command killed (output truncated)`,
+              });
+              killChild();
+              // No finish() here: the child's close event follows and ends the
+              // stream — but with errorFrameSent set, the exit frame is
+              // suppressed (we killed it; there is no honest exit code).
+            }
+          };
+          child.stdout?.on("data", (d: Buffer) => emitChunk(d, "stdout"));
+          child.stderr?.on("data", (d: Buffer) => emitChunk(d, "stderr"));
+
+          child.on("error", (err) => {
+            clearTimeout(timer);
+            if (ended || clientGone) {
+              finish(resolve);
+              return;
+            }
+            errorFrameSent = true;
+            send({ type: "error", message: `failed to start: ${err.message}` });
+            finish(resolve);
+          });
+          child.on("close", (code) => {
+            clearTimeout(timer);
+            if (!ended && !clientGone && !errorFrameSent) {
+              send({ type: "exit", code, ms: Date.now() - startedAt });
+            }
+            finish(resolve);
+          });
+        });
+      });
+
       // ROUND-44 (R44-a): project memory — the right-sidebar Memory tab reads
       // everything the agent saved via memory_save (newest first); DELETE
       // removes one item (the owner pruning stale knowledge). Saves go
