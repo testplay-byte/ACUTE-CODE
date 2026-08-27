@@ -156,7 +156,21 @@ export function DashboardScreen() {
           <RecentActivity
             sessions={sessions}
             agentById={agentById}
-            onOpenSession={() => void navigate("/sessions")}
+            onOpenSession={(sessionId) => {
+              // ROUND-44 (VLM pass): this used to navigate("/sessions") — a
+              // route that does not exist (every recent-activity card dumped
+              // the owner on the "Not found" placeholder). Open the session's
+              // project chat at the exact session instead — the same URL shape
+              // the shell sidebar uses (?session= is read by use-active-session).
+              const session = sessions.find((s) => s.id === sessionId);
+              if (session?.projectId) {
+                void navigate(`/project/${session.projectId}/chat?session=${session.id}`);
+              } else {
+                // Legacy sessions with no project binding have no chat screen
+                // to land on — stay put (the card already shows the title).
+                void navigate("/");
+              }
+            }}
             styles={styles}
           />
         )}

@@ -18,6 +18,7 @@ import {
   Settings,
   SlidersHorizontal,
   Trash2,
+  Users,
   X,
 } from "lucide-react";
 import { motion, AnimatePresence } from "framer-motion";
@@ -216,6 +217,11 @@ const SETTINGS_SECTIONS = [
   { id: "appearance", label: "Appearance", icon: Palette },
   { id: "agents", label: "Agents", icon: Bot },
   { id: "api", label: "Models & Providers", icon: Server },
+  // ROUND-44 (VLM pass): this entry was MISSING — the R43 Sub-agents tab
+  // existed in SettingsPage TABS but the sidebar (the actual settings nav,
+  // R34 design) never listed it, making the whole tab unreachable except by
+  // hand-typing ?tab=subagents. Owners could not find the key pool at all.
+  { id: "subagents", label: "Sub-agents", icon: Users },
   { id: "advanced", label: "Advanced", icon: SlidersHorizontal },
 ] as const;
 

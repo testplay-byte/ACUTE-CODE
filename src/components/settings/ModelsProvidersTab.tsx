@@ -292,7 +292,13 @@ function ProviderListRow({
         >
           {provider.name}
         </span>
-        <span className="w-full truncate font-mono text-[9.5px]" style={{ color: styles.textTertiary }}>
+        <span
+          className="w-full truncate font-mono text-[9.5px]"
+          style={{ color: styles.textTertiary }}
+          // ROUND-44 (VLM pass): the row clips the endpoint + wire format to one
+          // line — surface the full text on hover so it stays verifiable.
+          title={`${provider.baseUrl ?? "no url"} · ${formatLabel(provider.apiFormat)}`}
+        >
           {provider.baseUrl ? new URL(provider.baseUrl).host : "no url"} · {formatLabel(provider.apiFormat)}
         </span>
       </span>

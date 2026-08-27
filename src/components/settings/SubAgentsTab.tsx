@@ -153,7 +153,10 @@ function SubAgentKeysCard() {
   // Models & Providers) still show here — same underlying pool.
   const extraSlots = pool
     .map((k) => k.slot)
-    .filter((s) => s > 0 && !(SUBAGENT_KEY_SLOTS as readonly number[]).includes(s))
+    // ROUND-44 (VLM pass): start at 2 — slot 1 is the keyring's legacy
+    // env-var slot and shows up in the pool listing as a keyless row; rendering
+    // it as an add-row here produced the confusing 2,3,4,1,5 ordering.
+    .filter((s) => s >= 2 && !(SUBAGENT_KEY_SLOTS as readonly number[]).includes(s))
     .sort((a, b) => a - b);
   const nextSlot = (() => {
     for (let s = 2; s <= MAX_POOL_SLOT; s++) {

@@ -188,6 +188,9 @@ export function TerminalPanel({ projectId, tab }: { projectId: string; tab: Righ
             <div
               key={i}
               data-terminal-line={line.kind}
+              // ROUND-44 (VLM pass): commands wrap on narrow panels — give the
+              // "$ " prompt lines a hanging indent so wrapped continuation
+              // text aligns under the command instead of under the prompt.
               className="whitespace-pre-wrap break-words"
               style={{
                 color:
@@ -200,6 +203,7 @@ export function TerminalPanel({ projectId, tab }: { projectId: string; tab: Righ
                           ? SEMANTIC_COLORS.success
                           : SEMANTIC_COLORS.danger
                         : styles.text,
+                ...(line.kind === "in" ? { paddingLeft: "0.9em", textIndent: "-0.9em" } : {}),
               }}
             >
               {line.kind === "in" ? `$ ${line.text}` : line.text}
