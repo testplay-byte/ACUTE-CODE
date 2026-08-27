@@ -660,6 +660,14 @@ export async function runSingleAgentTurn(
   };
   recordUsage(db, usage);
   touchSession(db, session.id);
+  // ROUND-44 (live-battery find): a SUCCESSFUL turn used to leave the session
+  // in "running" forever (only the error path reset it) — sessions then read
+  // as live in the UI forever and revert() 409s on a "running" session that
+  // finished minutes ago. Mirror the error path: back to `queued` (the
+  // resting state — sessions stay open for the next message).
+  if (getSession(db, session.id)?.status === "running") {
+    setSessionStatus(db, session.id, "queued");
+  }
   // ROUND-38: auto-rename the session after the first assistant reply lands
   // (owner: sessions should rename after the first interaction, like the
   // reference repos). No-op once the title is no longer the default.
@@ -1035,6 +1043,11 @@ export async function runStreamedAgentTurn(
   };
   recordUsage(db, usage);
   touchSession(db, session.id);
+  // ROUND-44 (live-battery find): same reset as the sync path — a finished
+  // streamed turn must not leave the session stuck in "running".
+  if (getSession(db, session.id)?.status === "running") {
+    setSessionStatus(db, session.id, "queued");
+  }
   // ROUND-38: auto-rename after the first streamed assistant reply (same
   // rule as the sync path — owner directive: sessions rename after the
   // first interaction).

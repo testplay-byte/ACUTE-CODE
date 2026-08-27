@@ -529,10 +529,12 @@ describe("POST /api/v1/sessions/:id/messages", () => {
     expect(call.messages).toEqual([{ role: "user", content: "hello there" }]);
     expect(call.model).toBeDefined();
 
-    // Session flipped to running; both events landed with monotonic seqs.
+    // Session returned to the resting state after the successful turn
+    // (ROUND-44 fix: success used to leave it stuck at "running" forever —
+    // only the error path reset it); both events landed with monotonic seqs.
     const fetched = await authInject({ method: "GET", url: `/api/v1/sessions/${session.id}` });
     const detailed = fetched.json();
-    expect(detailed.status).toBe("running");
+    expect(detailed.status).toBe("queued");
     expect(detailed.lastSeq).toBe(2);
     expect(detailed.events).toEqual([
       {
