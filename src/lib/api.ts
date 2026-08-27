@@ -47,6 +47,15 @@ export const TOOL_CATALOG = [
   "todo_write",
   "web_fetch",
   "web_search",
+  "index_project",
+  // ROUND-44: kept in lockstep with agent-core storage/agents.ts TOOL_NAMES
+  // (the agent-form checkboxes render from THIS list — it lagged 15 vs 21
+  // after R43/R44 added delegation, browser control and memory).
+  "delegate_task",
+  "browser_control",
+  "memory_save",
+  "memory_recall",
+  "memory_list",
 ] as const;
 
 export const PROVIDER_IDS = ["openrouter", "openai", "anthropic", "google"] as const;

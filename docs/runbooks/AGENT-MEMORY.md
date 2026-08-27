@@ -1,4 +1,4 @@
-<!-- last-reviewed: 2026-08-25 round-36 -->
+<!-- last-reviewed: 2026-08-27 round-44 -->
 # AGENT MEMORY — lessons learned, rules going forward
 
 **Owner directive (2026-08-23):** "learn from the mistakes you made, document
@@ -534,3 +534,16 @@ Format per entry: `N. TITLE (date, source)` → mistake → root cause → rule.
     command prefixes like "vite" silently matched "vitest" in the R37
     approval engine. RULE: exact-word commands get word-boundary regexes,
     not raw prefixes; add the collision case to the tests immediately.
+
+63. **A settings tab lives in TWO registries — add it to both or it is
+    unreachable.** R43 added the Sub-agents tab to `TABS` in
+    `src/pages/SettingsPage.tsx` but not to `SETTINGS_SECTIONS` in
+    `src/components/shell/Sidebar.tsx` — and since R34 the sidebar IS the
+    settings nav, so the whole tab (the sub-agent key pool the owner was
+    promised) was invisible except by hand-typing `?tab=subagents`. The R44
+    VLM pass (agent-browser screenshots of every settings screen + vision
+    analysis) caught it; the same pass caught dashboard cards linking to the
+    dead `/sessions` route. RULE: any new settings section must update BOTH
+    registries in the same commit (see MAINTENANCE.md recipe c), and a round
+    that adds a screen must VLM-verify the NAV path to it, not just the
+    deep link.

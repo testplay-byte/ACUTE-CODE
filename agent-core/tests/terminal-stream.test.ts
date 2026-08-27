@@ -121,7 +121,10 @@ describe("POST /projects/:id/terminal/stream (ROUND-44 R44-e)", () => {
 
     const stdout = frames.filter((f) => f.type === "stdout");
     expect(stdout).toHaveLength(1);
-    expect((stdout[0] as { text: string }).text).toBe("hello\n");
+    // ROUND-44 CI fix: cmd.exe's `echo hello` emits CRLF on windows-latest —
+    // normalize line endings before asserting (the assertion is about the
+    // frame PLUMBING, not platform newline conventions).
+    expect((stdout[0] as { text: string }).text.replace(/\r\n/g, "\n")).toBe("hello\n");
 
     const exits = frames.filter((f) => f.type === "exit");
     expect(exits).toHaveLength(1);

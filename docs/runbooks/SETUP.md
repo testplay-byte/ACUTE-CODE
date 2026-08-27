@@ -1,4 +1,4 @@
-<!-- last-reviewed: 2026-08-25 round-36 -->
+<!-- last-reviewed: 2026-08-27 round-44 -->
 # Development Environment Setup (ACUTE-CODE)
 
 Status: Phase 0 snapshot — updated each phase by the Scribe.
@@ -42,3 +42,37 @@ cargo check --manifest-path src-tauri/Cargo.toml   # Rust-only check (heavy Rust
 There is no `pnpm tauri` CLI script yet; the app is launched with `cargo run` from `src-tauri/`.
 
 API keys: never in files or env scripts committed to the repo. At Phase 2 the owner's OpenAI-compatible keys are entered into Windows Credential Manager directly by the owner.
+
+## credentials.txt v2 (ROUND-44 — sub-agent pool keys)
+
+The owner's local `launcher/credentials.txt` (never uploaded; see
+`launcher/credentials.example.txt` for the template) grew three OPTIONAL
+lines in R44:
+
+```
+OPENROUTER_SUB1_KEY=…   # → keyring pool slot 2
+OPENROUTER_SUB2_KEY=…   # → keyring pool slot 3
+OPENROUTER_SUB3_KEY=…   # → keyring pool slot 4
+```
+
+Behavior (owner directive: "save them inside credentials.txt so I don't have
+to manually enter them"):
+
+- The launcher parses the three lines and distributes them to the keyring
+  pool as slots **2/3/4** — Windows Credential Manager
+  (`ACUTE-CODE/provider/openrouter-slotN`) on the owner's PC, with a
+  `~/.acute/openrouter-slotN.key` file fallback — and exports
+  `ACUTE_PROVIDER_OPENROUTER_SLOT{2,3,4}` env into the sidecar at spawn, so
+  sub-agent traffic prefers these keys and never competes with the main key
+  (slot 0/1).
+- **If the lines are missing, the launcher AUTO-APPENDS them** with the
+  baked-in defaults from the example file — a pre-R44 credentials.txt
+  upgrades itself on the next launch; a malformed MAIN key still fails loudly.
+- The launcher self-updates from the repo, so the new
+  `acute_launcher.py` reaches the owner automatically; `ACUTE.bat` /
+  `acute.sh` are unchanged. Editing or removing the sub lines later is safe —
+  children then fall back to the main key.
+- Dev parity: `scripts/dev.mjs` reads each slot via the same
+  env → key-file → Credential-Manager chain (`readSlotKey`) before starting
+  `pnpm dev:full`, so Settings → Sub-agents shows slots 2/3/4 with zero
+  manual entry in dev too.

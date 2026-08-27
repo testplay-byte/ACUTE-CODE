@@ -1,4 +1,4 @@
-<!-- last-reviewed: 2026-08-25 round-36 -->
+<!-- last-reviewed: 2026-08-27 round-44 -->
 # TESTING — the verification ladder
 
 Five layers; each has a defined "when mandatory". Rules here are binding
@@ -12,6 +12,17 @@ Five layers; each has a defined "when mandatory". Rules here are binding
 | L3 sidecar E2E | black-box vs built `agent-core/dist` (boots, auth, seeds, CRUD) | `pnpm test:e2e` (in verify) | automatic (rebuild dist first!) |
 | L4 live battery | real provider turn(s), real disk, fresh DB | sandbox, single invocation | anything touching agents, projects, tools, streaming |
 | L5 browser verification | real UI against the live stack; screenshots machine-verified | sandbox, single invocation | any UI-affecting round |
+
+**Current counts (R44, verified 2026-08-27):** `pnpm test` = **471 tests in
+44 files** (20 agent-core files / 297 tests — incl. memory-tools,
+sessions-manage, terminal-stream, web-tools; 22 frontend files / 162 — incl.
+MemoryPanel, TerminalPanel, the terminal-stream client, SessionsScreen,
+AgentChatPanel; shared 1 file / 4; + the 8 sidecar-e2e tests, which the root
+run also picks up when dist is built — 297 + 162 + 4 + 8 = 471).
+Trajectory: 262 (R42) → 397 (R43) → 471 (R44), same counting basis. New R44
+suites: memory-tools, sessions-manage, terminal-stream (backend + client),
+MemoryPanel, TerminalPanel streaming; extended: web-tools (14→23),
+SessionsScreen, AgentChatPanel, projects-tools, storage, models-catalog.
 
 ## Hard rules
 
@@ -32,7 +43,11 @@ Five layers; each has a defined "when mandatory". Rules here are binding
    in batteries; a template has no provider/model and 409s confusingly.
 7. Rebuild `agent-core/dist` before L3/e2e after backend changes (e2e runs
    against the built dist).
-8. Only model allowed on the owner's key: `openrouter` · `stealth/ox-alpha`.
+8. Model on the owner's keys (R43+): free-first — default
+   `z-ai/glm-5.2:free` with the OpenRouter fallback chain
+   (`models:[model, openrouter/free]`); the dead `stealth/ox-alpha` is
+   retired (R43). Free-tier 429 storms are REAL — expect the fallback to
+   engage mid-battery and say so in the round report.
 
 ## L4 live-battery recipe
 

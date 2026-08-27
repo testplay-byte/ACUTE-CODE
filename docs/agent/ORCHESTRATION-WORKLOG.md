@@ -1104,3 +1104,19 @@ Work Log:
 
 Stage Summary:
 - Docs current; dashboard claims match the GitHub Actions API at build time.
+
+---
+Task ID: R44
+Agent: orchestrator (Z.ai Code + dispatched sub-agents R44-a..R44-f)
+Task: The owner's "complete the whole agentic coding environment" round — agent memory, real web search, session search/fork/revert, sub-agent keys from credentials.txt, streaming terminal, VLM-verified UI, docs + maintainability.
+
+Work Log:
+- Wave 1 (commit 8156bde, sub-agents R44-a/b/c/d in the live sandbox worklog): agent memory system (migration 0015 + memory_save/recall/list tools 20-22 + ~1500-char digest injected into every project-turn prompt + right-sidebar Memory tab + GET/DELETE /projects/:id/memory); REAL web search (DuckDuckGo html→lite→MediaWiki chain, 8 results, parsers unit-tested, live-verified); session intelligence (GET /sessions?q= LIKE over title+events, POST /sessions/:id/fork event-log copy, POST /sessions/:id/revert keepThroughSeq truncation + marker; SessionsScreen debounced search + Fork, chat revert-to-message with confirm); sub-agent keys from credentials.txt (launcher parses OPENROUTER_SUB1..3_KEY, auto-appends baked-in defaults, distributes to pool slots 2/3/4 via ACUTE_PROVIDER_OPENROUTER_SLOT{2,3,4}; dev.mjs readSlotKey parity).
+- Wave 2 (commit 4d5f920, sub-agent R44-e): streaming terminal — POST /projects/:id/terminal/stream SSE (stdout/stderr/exit/error frames, : ping heartbeats + leading ping, body {timeoutMs,maxBytes} can only SHRINK 60s/64KB budgets, client-disconnect kills child) + TerminalPanel live chunks, Stop, exit-code footer, pre-first-frame sync fallback.
+- VLM pass (commit 29eec05): agent-browser screenshots of every key screen + vision analysis — 2 real bugs found + fixed (dashboard recent-activity cards dead-linking /sessions → ?session= deep links; the R43 Sub-agents settings tab unreachable because Sidebar SETTINGS_SECTIONS lacked it), plus phantom slot-1 row dropped, terminal hanging indent, provider hover endpoints. Live battery: memory save → auto-injected recall proven in a NO-TOOLS turn; web_search returned 8 real DDG results in-turn; streaming terminal chunked output + exit codes 0/3.
+- Wave 3 docs (sub-agent R44-f): MAINTENANCE.md (architecture map + how-to-add recipes + golden rules), PROJECT-MEMORY.md, IMPLEMENTED-API ROUND-44 section, TESTING/SETUP/WORKFLOW/AGENT-MEMORY (lesson #63) refreshed, round-44.md, HANDOFF R44 header, this block; docs:check 0 failures.
+- Verification: 471 tests (pnpm test, 44 files incl. 8 e2e; was 397 at R43). CI green on 8156bde (run 33038236165); the 4d5f920 + 29eec05 runs are RED on a Windows-only CRLF assertion in terminal-stream.test.ts ("hello\r\n" vs "hello\n") — recorded as the next session's first fix in round-44.md + HANDOFF.
+
+Stage Summary:
+- The agentic environment is functionally complete for this round: agents remember per-project knowledge across sessions, search the real web, the owner manages sessions (search/fork/revert), sub-agent keys arrive with zero manual entry, and the terminal streams. Full detail: docs/ui-iterations/round-44.md.
+- Open for the next session: the terminal-stream CRLF test fix (CI red on tip), TOOL_CATALOG staleness in src/lib/api.ts (15 of 21 tools in the agent dialog), DASHBOARD truth-sync to R44, security holes P0-3..P0-5 (owner-deferred).

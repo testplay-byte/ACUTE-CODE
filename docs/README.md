@@ -1,4 +1,4 @@
-<!-- last-reviewed: 2026-08-25 round-36 -->
+<!-- last-reviewed: 2026-08-27 round-44 -->
 # ACUTE-CODE — Documentation Index
 
 One line per document. **Reading order for a new session:** `HANDOFF.md` →
@@ -9,10 +9,12 @@ file the discrepancy and fix the doc in the same round.
 
 ## Process & memory
 - [`runbooks/WORKFLOW.md`](runbooks/WORKFLOW.md) — **the session spine**: start ritual, branch policy, verification gates, per-round documentation duties, push/CI/ntfy checklist
+- [`runbooks/MAINTENANCE.md`](runbooks/MAINTENANCE.md) — **how to find things and change things safely**: architecture map + how-to-add-tool/migration/settings-tab/sidebar-tab/route/screen recipes + the golden rules (R44)
 - [`runbooks/ROADMAP.md`](runbooks/ROADMAP.md) — milestones per pillar with status (`done / in-flight / queued / owner-gated`); the single place HANDOFF §9 points to
 - [`runbooks/TESTING.md`](runbooks/TESTING.md) — the five verification layers, the fresh-DB rule, live-battery and browser-verification recipes
 - [`runbooks/SECURITY.md`](runbooks/SECURITY.md) — security posture: bearer/loopback, tool path containment, secrets custody per surface, launcher redaction
 - [`runbooks/AGENT-MEMORY.md`](runbooks/AGENT-MEMORY.md) — numbered lessons (mistake → root cause → rule); read before any session; append-only
+- [`runbooks/PROJECT-MEMORY.md`](runbooks/PROJECT-MEMORY.md) — the R44 agent memory SYSTEM reference (table, tools, digest injection, Memory tab, verification pattern) — distinct from the lessons file above
 - [`agent/ORCHESTRATION-WORKLOG.md`](agent/ORCHESTRATION-WORKLOG.md) — session-by-session history (snapshot of the live worklog, refreshed each session)
 - [`runbooks/SANDBOX-RESTORE.md`](runbooks/SANDBOX-RESTORE.md) — zero-to-resumed procedure after a sandbox wipe + the session-end backup rule
 - [`runbooks/AGENT-BOOTSTRAP-PROMPT.md`](runbooks/AGENT-BOOTSTRAP-PROMPT.md) — the paste-once prompt to bootstrap a fresh agent

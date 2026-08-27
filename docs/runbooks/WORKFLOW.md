@@ -1,4 +1,4 @@
-<!-- last-reviewed: 2026-08-25 round-36 -->
+<!-- last-reviewed: 2026-08-27 round-44 -->
 # WORKFLOW — the session spine
 
 **Normative.** `AGENTS.md` = the rules, `HANDOFF.md` = the state; this file
@@ -55,11 +55,19 @@ workflow … not blindly"), codifying what rounds 9–16 actually proved.
 4. **Live battery** for anything touching agents/projects/tools/streaming —
    per `TESTING.md` (fresh DB, single-invocation boot, disk assertions as
    ground truth, outcome-based polls).
-5. **Browser verification** for anything UI — per `TESTING.md` (live stack,
-   screenshots at 1920×1080 + tall viewport, machine-verified, zero console
-   errors).
+5. **Browser verification + VLM pass** for anything UI — per `TESTING.md`
+   (live stack, screenshots at 1920×1080 + tall viewport, machine-verified,
+   zero console errors). Since R44 the machine verification is a **VLM UI
+   pass**: agent-browser screenshots of every key screen (all settings tabs,
+   all right-sidebar tabs, light/dark, a viewport sweep) analyzed with the
+   vision model against a checklist — it caught two real bugs a human pass
+   missed (an unreachable settings tab, dashboard cards linking to a dead
+   route). Run it before declaring a UI round done; also VLM-verify the NAV
+   path to any new screen, not just its deep link (lesson #63).
 6. Live smoke turn against the real provider after any tool/SDK wiring
-   (lesson #9). Only allowed model: `openrouter` · `stealth/ox-alpha`.
+   (lesson #9). Model: the current free default `z-ai/glm-5.2:free`
+   (R43+; `stealth/ox-alpha` is dead) — expect free-tier 429s; the
+   OpenRouter fallback chain rides through them.
 
 ## 5. Documentation duties per round (definition of done)
 

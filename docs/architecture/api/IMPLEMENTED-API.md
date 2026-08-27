@@ -1,9 +1,10 @@
-<!-- last-reviewed: 2026-08-26 round-43 -->
+<!-- last-reviewed: 2026-08-27 round-44 -->
 # IMPLEMENTED API — the shipped surface
 
 **Truth = this file.** Verified against `agent-core/src/server.ts` at
-round-17 (2026-08-23). The aspirational full contract (52 operations, WS
-gateway, planned routes) lives in [`API.md`](API.md) — anything there and
+round-17 (2026-08-23), refreshed R37→R44. The aspirational full contract (52
+operations, WS gateway, planned routes) lives in
+[`API.md`](API.md) — anything there and
 not here **does not exist yet**. Base: `http://127.0.0.1:<port>`; dev port
 **5178** (`ACUTE_PORT`), dev token `acute-dev-local`.
 
@@ -27,7 +28,7 @@ vite dev origins.
 | Route | Notes |
 |---|---|
 | `GET /agents?includeTemplates=` | list; `false` excludes the 5 templates (default agent "Acute" remains — seeded at DB open, fixed id `agt_default_nova`, provider openrouter / model `z-ai/glm-5.2:free` since R43/migration-0013; was the dead `stealth/ox-alpha`) |
-| `POST /agents` | `AgentDraft` → `201`. `allowedTools` validated against the REAL tool list (`TOOL_NAMES`, 19 tools incl. `delegate_task` + `browser_control` since R43) — SPEC-era names 400 (ADR-0019). Empty list = ALL tools. |
+| `POST /agents` | `AgentDraft` → `201`. `allowedTools` validated against the REAL tool list (`TOOL_NAMES`, **21 tools** incl. `delegate_task` + `browser_control` since R43 and `memory_save`/`memory_recall`/`memory_list` since R44) — SPEC-era names 400 (ADR-0019). Empty list = ALL tools. |
 | `GET/PATCH/DELETE /agents/:id` | PATCH bumps version; DELETE 409 `{reason:"template"}` for templates |
 | `POST /agents/:id/duplicate` | `{name?}` → `201` |
 
@@ -47,7 +48,10 @@ must EXIST, unique), color?}` → `201` (400 folder-missing, 409 duplicate) ·
 `GET /projects/:id/tree` → `{tree:[TreeNode], rootPath}` (depth 8 / 500 per
 dir; ignores node_modules/.git/dist/… ) ·
 `GET /projects/:id/file?path=<rel>` → `{path, content}` (256 KB cap,
-containment-enforced).
+containment-enforced) ·
+`POST /projects/:id/terminal` `{command}` → `{stdout, stderr, exitCode, ms}`
+(synchronous run, 60s timeout / 64 KB combined cap; R44 adds a streaming
+variant — see ROUND-44 additions).
 
 ## /api/v1/sessions & turns
 
@@ -170,10 +174,84 @@ The rewritten page's escape hatch posts `{type:"acute:open"\|"acute:title"\|"acu
   flags in `agent-core/src/storage/models.ts`; the DB `models` table
   remains the override store.
 
+## ROUND-44 additions (implemented)
+
+### Session intelligence — search / fork / revert
+
+| Route | Contract |
+|---|---|
+| `GET /sessions?q=<text>&limit=&offset=` | **R44 search** — when `q` is a non-empty trimmed string, `searchSessions` LIKE-matches against the session title AND the event payload JSON (so tool calls and messages are searchable); response is the same shape as the plain list (`{sessions, total}`) but `total` = result count (search is not paginated). Newest-first. |
+| `POST /sessions/:id/fork` | Copies the session row + its FULL event log under a NEW top-level session id, title prefixed `"Fork · <original>"`; usage rows are NOT carried over → `201 {session}`. `404` unknown source. |
+| `POST /sessions/:id/revert` | `{keepThroughSeq: integer >= 0}` — deletes every event AFTER that seq (the user message AT `keepThroughSeq` survives; its reply + later turns are removed) and appends one `session.reverted` marker event → `200 {ok:true, removedCount}`. `404` unknown session · `409 CONFLICT` while a turn is running (deleting under a live stream would race it) · `400` bad body. |
+
+The UI surfaces these as the Sessions screen's debounced search + hover Fork
+action, and the chat's user-message hover "Revert to this message" (with a
+confirm dialog).
+
+### Project memory (per-project persistent knowledge)
+
+| Route | Contract |
+|---|---|
+| `GET /projects/:id/memory` | `{memories: [...]}` — newest-first, capped at 100; each `{id, projectId, kind, content, source, createdAt, updatedAt}` with `kind` ∈ fact\|decision\|preference\|note. `404` unknown project. |
+| `DELETE /projects/:id/memory/:memoryId` | `{ok:true}` · `404` unknown project or memoryId. |
+
+There is deliberately **no REST create** — memory is the agent's channel
+(the `memory_save` tool); the routes exist to READ and prune.
+
+**Agent tools 20–22:** `memory_save {content, kind?}` (content trimmed,
+capped at 4000 chars; kind validated case-insensitively) · `memory_recall
+{query?, limit?}` (LIKE search, content-substring matches ranked before
+kind-only, default limit 12) · `memory_list {limit?}` — all fail gracefully
+with `ok:false` outside a project session. For project sessions the newest
+memory slice (pre-formatted digest, ~1500 chars, whole-line granularity) is
+auto-injected into every turn's system prompt as a
+`## Project memory (persisted across sessions)` section by
+`prepareTurn`. Migration `0015_memory.sql` creates the table + appends the
+three tools to seeded template allowlists (0014 pattern, audit-logged).
+
+### Streaming terminal
+
+`POST /projects/:id/terminal/stream` `{command, timeoutMs?, maxBytes?}` —
+SSE like the chat stream: `text/event-stream` frames
+`data: {"type":"stdout","text":…}` · `{"type":"stderr","text":…}` ·
+`{"type":"exit","code":N|null,"ms":N}` (code null = killed by signal) ·
+`{"type":"error","message":…}` (timeout / output cap / spawn failure; no
+exit frame follows an error — no honest exit code exists for a command the
+server killed) + `: ping` comment heartbeats (a leading ping immediately on
+connect, then every 10s). Same containment as the sync route (cwd = project
+root, `shell:true`, FORCE_COLOR=0). **Client disconnect KILLS the child**
+(an interactive command has no reader to return to — deliberate divergence
+from chat turns, which complete in the background). Body overrides can only
+SHRINK the server budgets: `timeoutMs` 250..60000 (default 60000) and
+`maxBytes` 256..65536 (default 65536); anything else `400` with the field
+name in details. `404` unknown project; empty command `400`.
+
+### Web search is a real general search now
+
+`web_search` (tool) runs a 3-tier chain, zero new deps: (1)
+`html.duckduckgo.com/html/?q=` (parsed from `result__a`/`result__snippet`
+anchors, `uddg=` redirect unwrap, ads/self-links stripped), (2)
+`lite.duckduckgo.com/lite/?q=` on failure/empty, (3) the old MediaWiki
+encyclopedia search as honestly-labeled last resort ("general web search
+unavailable — showing encyclopedia results"). Up to 8 results
+(was 6). Parsers are exported (`parseDdgHtml`/`parseDdgLite`) and unit-tested
+against fixtures; live-verified from the sandbox (8 real results).
+
+### Sub-agent keys via credentials.txt (launcher)
+
+`launcher/acute_launcher.py` now parses optional
+`OPENROUTER_SUB1..3_KEY` lines from `credentials.txt` (auto-APPENDING the
+lines with the baked-in defaults when missing, per the owner's "no manual
+entry" directive) and distributes them to keyring pool slots 2/3/4 as
+`ACUTE_PROVIDER_OPENROUTER_SLOT{2,3,4}` env at sidecar spawn (Windows
+Credential Manager on the owner's PC; `~/.acute/openrouter-slotN.key` fallback).
+`scripts/dev.mjs` mirrors the env→file→Credential-Manager lookup per slot.
+Settings → Sub-agents then shows slots 2/3/4 with zero manual pasting.
+
 ## NOT implemented (despite API.md)
 
 `/ws` (no WS gateway — SSE per-turn instead) · `/internal/shutdown` ·
-project file writes over REST · git/memory/skills/mcp/settings routes ·
+project file writes over REST · git/skills/mcp/settings routes ·
 audit_log routes (approvals ARE implemented — see above) ·
 session events-backfill · connection-test/model-listing for
 non-chat-completions providers (manual model rows work) ·

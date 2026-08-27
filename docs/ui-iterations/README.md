@@ -1,4 +1,4 @@
-<!-- last-reviewed: 2026-08-25 round-36 -->
+<!-- last-reviewed: 2026-08-27 round-44 -->
 # UI Iterations — Owner Review Rounds
 
 This folder is the **dedicated tracking system for UI-fidelity work** (owner
@@ -80,6 +80,9 @@ UI stands and what is still open.
 - [`round-27.md`](round-27.md) — web tools (web_fetch + web_search) + critical deps-wiring fix + demo project built by the agent
 - [`round-28.md`](round-28.md) — UX + agentic-quality overhaul (13 workstreams A-M, 5 milestones; MS-1: governance + sidebar + settings + screenshot infra)
 - **round-28** (in progress) — UX + agentic-quality overhaul; see [`ROUND-28-MASTER-PLAN.md`](../ROUND-28-MASTER-PLAN.md)
+- **round-29..42** — no round files (sessions/UI/security rounds; see ORCHESTRATION-WORKLOG + the gap note below — the round-file convention lapsed between 28 and 43)
+- [`round-43.md`](round-43.md) — the owner's 9-item R42 verdict round (CI green again, free-model catalog + fallback chain, turn-error cards + retry, chat geometry, sub-agents settings, embedded proxy browser + browser_control, delegation made reachable via 0014)
+- [`round-44.md`](round-44.md) — completing the agentic environment: agent memory (0015 + 3 tools + prompt injection + Memory tab), REAL DuckDuckGo web search, session search/fork/revert, sub-agent keys from credentials.txt, streaming terminal, VLM UI pass (2 real bugs fixed), MAINTENANCE.md — 471 tests
 
 ## Running the UI with a live backend (dev)
 

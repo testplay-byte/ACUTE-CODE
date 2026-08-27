@@ -20,7 +20,7 @@
 // easily manageable."
 
 import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
-import { join, dirname, relative, resolve } from "node:path";
+import { join, dirname, relative, resolve, sep } from "node:path";
 
 const ROOT = resolve(dirname(new URL(import.meta.url).pathname.replace(/^\/([A-Za-z]:)/, "$1")).replace(/scripts\/docs$/, ""), "");
 const DOCS_DIR = join(ROOT, "docs");
@@ -58,8 +58,12 @@ for (const doc of docs) {
   const content = readFileSync(doc, "utf8");
   const rel = relative(ROOT, doc);
 
-  // Skip generated docs (compliance + ORCHESTRATION-WORKLOG snapshot)
-  if (rel.includes("compliance/") || rel.endsWith("ORCHESTRATION-WORKLOG.md")) continue;
+  // Skip generated docs (compliance + ORCHESTRATION-WORKLOG snapshot).
+  // ROUND-44: normalize separators — on Windows `rel` carries backslashes, so
+  // a forward-slash includes() never matched and CI logged phantom stamp
+  // failures for compliance docs that Linux runs silently skipped.
+  const relNorm = rel.split(sep).join("/");
+  if (relNorm.includes("compliance/") || relNorm.endsWith("ORCHESTRATION-WORKLOG.md")) continue;
 
   // 1. last-reviewed stamp
   const stampMatch = content.match(/<!--\s*last-reviewed:\s*(\d{4}-\d{2}-\d{2})\s*(?:round-(\d+))?\s*-->/);
