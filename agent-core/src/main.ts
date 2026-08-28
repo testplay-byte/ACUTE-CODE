@@ -9,6 +9,11 @@
  * expect a deterministic address; the shell always uses the ready-line port.
  */
 import { startServer } from "./server.js";
+// ROUND-45 (R45-b): SIGTERM/SIGINT must kill live terminal-session shells.
+// The dev workflow (scripts/dev.mjs) stops the sidecar with sidecar.kill()
+// = SIGTERM — Fastify's onClose hooks never run on a bare signal, so without
+// this handler every persistent shell (bash/pty children) would be orphaned.
+import { terminalSessionsDisposeAll } from "./terminal-sessions.js";
 
 const token = process.env.ACUTE_TOKEN;
 const dbPath = process.env.ACUTE_DB_PATH;
@@ -22,3 +27,17 @@ startServer({ port: Number.isInteger(fixedPort) && fixedPort > 0 ? fixedPort : 0
   console.error("sidecar failed to start:", error);
   process.exit(1);
 });
+
+// Kill signal handling: dispose terminal sessions FIRST (the kill signals
+// are sent synchronously), then exit. Replaces node's default immediate
+// exit so no shell children survive the sidecar.
+for (const signal of ["SIGTERM", "SIGINT"] as const) {
+  process.on(signal, () => {
+    try {
+      terminalSessionsDisposeAll();
+    } catch {
+      /* best-effort — we are exiting anyway */
+    }
+    process.exit(0);
+  });
+}

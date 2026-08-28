@@ -1,6 +1,6 @@
 {
   "name": "agent-core",
-  "version": "0.1.0",
+  "version": "0.45.0",
   "private": true,
   "license": "UNLICENSED",
   "type": "module",
@@ -23,5 +23,8 @@
     "@types/better-sqlite3": "^9.6.0",
     "@types/web-push": "^3.6.4"
   },
-  "main": "dist/main.js"
+  "main": "dist/main.js",
+  "optionalDependencies": {
+    "node-pty": "^1.1.0"
+  }
 }

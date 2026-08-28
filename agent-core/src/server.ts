@@ -62,6 +62,16 @@ import {
 } from "./approvals.js";
 import { getUsageSummary } from "./storage/usage.js";
 import { log } from "./lib/log.js";
+// ROUND-45 (audit P0-3): every spawned child gets a scrubbed environment.
+import { buildChildEnv } from "./lib/child-env.js";
+// ROUND-45 (R45-b): persistent interactive terminal sessions (PTY primary,
+// persistent-pipe fallback) — the registry the terminal-sessions routes below
+// drive; terminalSessionsDisposeAll is wired into app shutdown.
+import {
+  getTerminalSessions,
+  terminalSessionsDisposeAll,
+  type TerminalSessionDescriptor,
+} from "./terminal-sessions.js";
 import {
   deleteModel,
   listModels,
@@ -1087,7 +1097,7 @@ export function buildServer(options: ServerOptions): FastifyInstance {
               cwd: project.rootPath,
               shell: true,
               timeout: TIMEOUT,
-              env: { ...process.env, FORCE_COLOR: "0", CI: "1" },
+              env: buildChildEnv(),
             });
             let combined = "";
             child.stdout?.on("data", (d: Buffer) => { combined += d.toString("utf8"); });
@@ -1249,7 +1259,7 @@ export function buildServer(options: ServerOptions): FastifyInstance {
           const child = spawn(command, {
             cwd: project.rootPath,
             shell: true,
-            env: { ...process.env, FORCE_COLOR: "0", CI: "1" },
+            env: buildChildEnv(),
           });
           const killChild = () => {
             try {
@@ -1331,6 +1341,307 @@ export function buildServer(options: ServerOptions): FastifyInstance {
             finish(resolve);
           });
         });
+      });
+
+      // ── ROUND-45 (R45-b): persistent terminal sessions ─────────────────────
+      //
+      // The ROUND-38/44 terminal routes run ONE command per request; these
+      // routes manage LONG-LIVED interactive shells (agent-core/src/
+      // terminal-sessions.ts) — the round-44 "no PTY" deferral. A session is
+      // one shell process in the project root: node-pty when the optional
+      // native module loads (a REAL pty: echo, line editing, TUIs, colors),
+      // otherwise ONE persistent bash/cmd.exe pipe pair (cwd/env/venv state
+      // still persists across commands; no TUI echo — the UI compensates).
+      // Sessions SURVIVE stream disconnects; DELETE (or idle reaping —
+      // 10 min without input or output) kills them. Env is the P0-3
+      // allowlist (buildChildEnv) — never sidecar secrets.
+      //
+      // Cap policy (documented choice): max 3 sessions per project, 8
+      // globally — creating over a cap kills the OLDEST session of that
+      // project (the globally-oldest for the global cap) instead of
+      // rejecting: new tabs always work and zombies from closed tabs die.
+
+      /** cols/rows validation shared by create + resize (integers, optional
+       * at create / required at resize — callers pass min/max and the field
+       * name for the 400 details). */
+      const terminalDimension = (
+        value: unknown,
+        min: number,
+        max: number,
+      ): number | null | undefined => {
+        if (value === undefined || value === null) return null;
+        if (typeof value !== "number" || !Number.isInteger(value) || value < min || value > max) {
+          return undefined; // invalid → caller 400s
+        }
+        return value;
+      };
+
+      // Create a session: {cols?, rows?} (defaults 120x30) → 201 {id, engine,
+      // createdAt}. The engine is chosen server-side and reported back — the
+      // UI needs it to know whether to echo commands locally (pipe has no
+      // echo of its own).
+      scope.post("/projects/:id/terminal-sessions", async (request, reply) => {
+        const { id } = request.params as Record<string, string>;
+        const project = getProject(db, id);
+        if (project === undefined) {
+          return reply.code(404).send(errorBody("NOT_FOUND", `no project with id ${id}`));
+        }
+        const body = request.body as { cols?: unknown; rows?: unknown } | null;
+        const cols = terminalDimension(body?.cols, 20, 500);
+        if (cols === undefined) {
+          return reply.code(400).send(
+            errorBody("VALIDATION", "cols must be an integer between 20 and 500", {
+              field: "body.cols",
+            }),
+          );
+        }
+        const rows = terminalDimension(body?.rows, 10, 200);
+        if (rows === undefined) {
+          return reply.code(400).send(
+            errorBody("VALIDATION", "rows must be an integer between 10 and 200", {
+              field: "body.rows",
+            }),
+          );
+        }
+        try {
+          const session = await getTerminalSessions().create({
+            projectId: id,
+            rootPath: project.rootPath,
+            cols: cols ?? 120,
+            rows: rows ?? 30,
+          });
+          return reply
+            .code(201)
+            .send({ id: session.id, engine: session.engine, createdAt: session.createdAt });
+        } catch (err) {
+          return reply.code(503).send(
+            errorBody(
+              "UNAVAILABLE",
+              `failed to start shell: ${err instanceof Error ? err.message : String(err)}`,
+            ),
+          );
+        }
+      });
+
+      // List a project's LIVE sessions (oldest first).
+      scope.get("/projects/:id/terminal-sessions", async (request, reply) => {
+        const { id } = request.params as Record<string, string>;
+        const project = getProject(db, id);
+        if (project === undefined) {
+          return reply.code(404).send(errorBody("NOT_FOUND", `no project with id ${id}`));
+        }
+        const sessions: TerminalSessionDescriptor[] = getTerminalSessions().list(id);
+        return { sessions };
+      });
+
+      /** The session named by :tsid, verified to belong to :id's project —
+       * 404 envelope otherwise (never leak cross-project session ids). */
+      const ownedTerminalSession = (
+        projectId: string,
+        tsid: string,
+      ): TerminalSessionDescriptor | null => {
+        const descriptor = getTerminalSessions().get(tsid);
+        if (descriptor === null || descriptor.projectId !== projectId) return null;
+        return descriptor;
+      };
+
+      // Write to the shell's stdin. {data} max 8 KB per request.
+      scope.post("/projects/:id/terminal-sessions/:tsid/input", async (request, reply) => {
+        const { id, tsid } = request.params as Record<string, string>;
+        const project = getProject(db, id);
+        if (project === undefined) {
+          return reply.code(404).send(errorBody("NOT_FOUND", `no project with id ${id}`));
+        }
+        const body = request.body as { data?: unknown } | null;
+        if (typeof body?.data !== "string") {
+          return reply.code(400).send(
+            errorBody("VALIDATION", "data must be a string", { field: "body.data" }),
+          );
+        }
+        if (Buffer.byteLength(body.data, "utf8") > 8192) {
+          return reply.code(400).send(
+            errorBody("VALIDATION", "data exceeds the 8 KB limit", { field: "body.data" }),
+          );
+        }
+        if (ownedTerminalSession(id, tsid) === null) {
+          return reply
+            .code(404)
+            .send(errorBody("NOT_FOUND", `no terminal session with id ${tsid}`));
+        }
+        getTerminalSessions().input(tsid, body.data);
+        return reply.code(204).send();
+      });
+
+      // Resize the pty (no-op on the pipe engine). Both dims required.
+      scope.post("/projects/:id/terminal-sessions/:tsid/resize", async (request, reply) => {
+        const { id, tsid } = request.params as Record<string, string>;
+        const project = getProject(db, id);
+        if (project === undefined) {
+          return reply.code(404).send(errorBody("NOT_FOUND", `no project with id ${id}`));
+        }
+        const body = request.body as { cols?: unknown; rows?: unknown } | null;
+        const cols = terminalDimension(body?.cols, 20, 500);
+        if (cols === null || cols === undefined) {
+          return reply.code(400).send(
+            errorBody("VALIDATION", "cols must be an integer between 20 and 500", {
+              field: "body.cols",
+            }),
+          );
+        }
+        const rows = terminalDimension(body?.rows, 10, 200);
+        if (rows === null || rows === undefined) {
+          return reply.code(400).send(
+            errorBody("VALIDATION", "rows must be an integer between 10 and 200", {
+              field: "body.rows",
+            }),
+          );
+        }
+        if (ownedTerminalSession(id, tsid) === null) {
+          return reply
+            .code(404)
+            .send(errorBody("NOT_FOUND", `no terminal session with id ${tsid}`));
+        }
+        getTerminalSessions().resize(tsid, cols, rows);
+        return reply.code(204).send();
+      });
+
+      // SSE viewer for a session. Same mechanics as the R44-e terminal
+      // stream route (hijack + writeHead CORS + leading `: ping` + 10s
+      // heartbeats), ONE crucial divergence: on client disconnect the
+      // SESSION SURVIVES — only the viewer left. Frames:
+      //   {"type":"output","text":"…"}  — a chunk (the FIRST one carries the
+      //                                   ring-buffer backlog for late
+      //                                   subscribers)
+      //   {"type":"exit","code":N|null} — the shell died (N null = killed)
+      //   {"type":"error","message":"…"}
+      // The response ends after the exit frame.
+      scope.get("/projects/:id/terminal-sessions/:tsid/stream", async (request, reply) => {
+        const { id, tsid } = request.params as Record<string, string>;
+        const project = getProject(db, id);
+        if (project === undefined) {
+          return reply.code(404).send(errorBody("NOT_FOUND", `no project with id ${id}`));
+        }
+        if (ownedTerminalSession(id, tsid) === null) {
+          return reply
+            .code(404)
+            .send(errorBody("NOT_FOUND", `no terminal session with id ${tsid}`));
+        }
+        const sessions = getTerminalSessions();
+
+        reply.hijack();
+        const res = reply.raw;
+        // ROUND-30: headers must ride writeHead — hijack drops reply.header().
+        res.writeHead(200, {
+          "content-type": "text/event-stream; charset=utf-8",
+          "cache-control": "no-cache, no-transform",
+          connection: "keep-alive",
+          "x-accel-buffering": "no",
+          ...corsHeadersFor(request.headers.origin),
+        });
+        // Flush the headers immediately (writeHead only assigns them).
+        try {
+          res.write(": ping\n\n");
+        } catch {
+          /* client already gone — the close handlers below finish us */
+        }
+
+        let clientGone = false;
+        let ended = false;
+        const heartbeat = setInterval(() => {
+          if (clientGone || ended || res.writableEnded) return;
+          try {
+            res.write(": ping\n\n");
+          } catch {
+            clientGone = true;
+          }
+        }, 10_000);
+
+        const send = (event: unknown) => {
+          if (clientGone || res.writableEnded || ended) return;
+          try {
+            res.write(`data: ${JSON.stringify(event)}\n\n`);
+          } catch {
+            clientGone = true;
+          }
+        };
+        const finish = (resolve: () => void) => {
+          clearInterval(heartbeat);
+          unsubscribe?.();
+          if (ended) {
+            resolve();
+            return;
+          }
+          ended = true;
+          if (!clientGone) {
+            try {
+              res.end();
+            } catch {
+              /* socket already dead */
+            }
+          }
+          resolve();
+        };
+
+        // Subscribe BEFORE reading the backlog: both steps are synchronous,
+        // so nothing can be emitted between them — the backlog carries
+        // everything up to NOW, the listener everything after (no gap, no
+        // duplication).
+        let unsubscribe: (() => void) | null = null;
+        await new Promise<void>((resolve) => {
+          try {
+            unsubscribe =
+              sessions.subscribe(tsid, (event) => {
+                if (event.type === "output") {
+                  send({ type: "output", text: event.text });
+                } else {
+                  send({ type: "exit", code: event.code });
+                  finish(resolve); // the shell died — end the viewer
+                }
+              }) ?? null;
+            const backlog = sessions.backlog(tsid);
+            if (backlog !== "") send({ type: "output", text: backlog });
+          } catch (err) {
+            // Defensive: nothing above should throw, but a viewer must never
+            // hang silently on an unexpected failure (ROUND-43 lesson).
+            send({
+              type: "error",
+              message: `terminal stream failed: ${
+                err instanceof Error ? err.message : String(err)
+              }`,
+            });
+            finish(resolve);
+            return;
+          }
+
+          // Viewer disconnect: unsubscribe ONLY — the session is persistent
+          // and outlives its readers (unlike the one-shot R44-e stream).
+          request.raw.on("close", () => {
+            clientGone = true;
+            finish(resolve);
+          });
+          res.on("close", () => {
+            if (!ended) {
+              clientGone = true;
+              finish(resolve);
+            }
+          });
+        });
+      });
+
+      // Kill a session (emits the exit frame to viewers).
+      scope.delete("/projects/:id/terminal-sessions/:tsid", async (request, reply) => {
+        const { id, tsid } = request.params as Record<string, string>;
+        const project = getProject(db, id);
+        if (project === undefined) {
+          return reply.code(404).send(errorBody("NOT_FOUND", `no project with id ${id}`));
+        }
+        if (ownedTerminalSession(id, tsid) === null) {
+          return reply
+            .code(404)
+            .send(errorBody("NOT_FOUND", `no terminal session with id ${tsid}`));
+        }
+        getTerminalSessions().kill(tsid);
+        return reply.code(204).send();
       });
 
       // ROUND-44 (R44-a): project memory — the right-sidebar Memory tab reads
@@ -2191,6 +2502,14 @@ export function buildServer(options: ServerOptions): FastifyInstance {
     },
     { prefix: "/api/v1" },
   );
+
+  // ROUND-45 (R45-b): app shutdown kills every live terminal-session shell —
+  // app.close() (tests, startServer's failure path, the shell's graceful
+  // teardown) must never leave orphan bash/pty processes behind. main.ts
+  // additionally covers SIGTERM/SIGINT, which bypass Fastify's close hooks.
+  app.addHook("onClose", async () => {
+    terminalSessionsDisposeAll();
+  });
 
   return app;
 }

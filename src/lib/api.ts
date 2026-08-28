@@ -1268,6 +1268,195 @@ export async function runProjectTerminalStream(
   }
 }
 
+/** ROUND-45 (R45-b): a PERSISTENT interactive terminal session — one
+ * long-lived shell in the project root. `engine` reports how it runs:
+ * "pty" (node-pty loaded — real echo/TUI support) or "pipe" (persistent
+ * bash pipe pair — state persists, no TUI echo; the UI echoes commands
+ * itself). */
+export interface TerminalSessionDescriptor {
+  id: string;
+  projectId: string;
+  engine: "pty" | "pipe";
+  createdAt: number;
+}
+
+/** ROUND-45 (R45-b): POST /projects/:id/terminal-sessions — spawn a shell
+ * in the project root. cols/rows default server-side (120x30). */
+export async function createTerminalSession(
+  projectId: string,
+  opts?: { cols?: number; rows?: number },
+): Promise<TerminalSessionDescriptor> {
+  return request<TerminalSessionDescriptor>(`/projects/${projectId}/terminal-sessions`, {
+    method: "POST",
+    json: {
+      ...(opts?.cols !== undefined ? { cols: opts.cols } : {}),
+      ...(opts?.rows !== undefined ? { rows: opts.rows } : {}),
+    },
+  });
+}
+
+/** ROUND-45 (R45-b): GET /projects/:id/terminal-sessions — the project's
+ * LIVE sessions, oldest first. */
+export async function listTerminalSessions(
+  projectId: string,
+): Promise<TerminalSessionDescriptor[]> {
+  const body = await request<{ sessions: TerminalSessionDescriptor[] }>(
+    `/projects/${projectId}/terminal-sessions`,
+  );
+  return body.sessions;
+}
+
+/** ROUND-45 (R45-b): POST …/terminal-sessions/:tsid/input — write raw data
+ * to the shell's stdin (append "\n" yourself to submit a command; control
+ * sequences like "\u0003" pass through on the pty engine). */
+export async function sendTerminalSessionInput(
+  projectId: string,
+  sessionId: string,
+  data: string,
+): Promise<void> {
+  await request<void>(`/projects/${projectId}/terminal-sessions/${sessionId}/input`, {
+    method: "POST",
+    json: { data },
+  });
+}
+
+/** ROUND-45 (R45-b): POST …/terminal-sessions/:tsid/resize — resize the
+ * pty (no-op on the pipe engine). */
+export async function resizeTerminalSession(
+  projectId: string,
+  sessionId: string,
+  cols: number,
+  rows: number,
+): Promise<void> {
+  await request<void>(`/projects/${projectId}/terminal-sessions/${sessionId}/resize`, {
+    method: "POST",
+    json: { cols, rows },
+  });
+}
+
+/** ROUND-45 (R45-b): DELETE …/terminal-sessions/:tsid — kill the shell. */
+export async function killTerminalSession(
+  projectId: string,
+  sessionId: string,
+): Promise<void> {
+  await request<void>(`/projects/${projectId}/terminal-sessions/${sessionId}`, {
+    method: "DELETE",
+  });
+}
+
+/** ROUND-45 (R45-b): one frame from GET …/terminal-sessions/:tsid/stream
+ * (SSE). `output` chunks are raw shell stdout/stderr (the FIRST one after
+ * connecting carries the ring-buffer backlog); `exit` fires when the shell
+ * dies (null = killed); `error` is a stream-level failure. */
+export type TerminalSessionFrame =
+  | { type: "output"; text: string }
+  | { type: "exit"; code: number | null }
+  | { type: "error"; message: string };
+
+/** ROUND-45 (R45-b): parse one SSE data payload into a terminal-session
+ * frame, or null when it is not a valid frame (malformed JSON / unknown
+ * shape). Exported for unit tests; mirrors the R44-e stream client's
+ * inline JSON.parse with shape validation on top. */
+export function parseTerminalSessionFrame(data: string): TerminalSessionFrame | null {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(data);
+  } catch {
+    return null;
+  }
+  if (parsed === null || typeof parsed !== "object") return null;
+  const frame = parsed as { type?: unknown; text?: unknown; code?: unknown; message?: unknown };
+  if (frame.type === "output" && typeof frame.text === "string") {
+    return { type: "output", text: frame.text };
+  }
+  if (frame.type === "exit") {
+    return { type: "exit", code: typeof frame.code === "number" ? frame.code : null };
+  }
+  if (frame.type === "error" && typeof frame.message === "string") {
+    return { type: "error", message: frame.message };
+  }
+  return null;
+}
+
+/**
+ * ROUND-45 (R45-b): open the SSE viewer for a persistent terminal session —
+ * GET …/terminal-sessions/:tsid/stream with Accept: text/event-stream, same
+ * fetch + getReader + `\n\n` split + parseSseDataBlock loop as
+ * runProjectTerminalStream above. The FIRST output frame carries the
+ * session backlog, so connecting (or reconnecting) always shows the full
+ * transcript. Resolves when the server ends the stream (the shell exited);
+ * aborting `signal` just detaches the VIEWER — the session survives.
+ *
+ * Throws (ApiError / network TypeError / AbortError) when the endpoint is
+ * unreachable or answers non-200 — the caller surfaces a visible error
+ * state (ROUND-43 silent-death lesson). If the body dies WITHOUT a
+ * terminal frame (exit/error), a synthetic error frame is emitted instead.
+ */
+export async function streamTerminalSession(
+  projectId: string,
+  sessionId: string,
+  onFrame: (frame: TerminalSessionFrame) => void,
+  signal?: AbortSignal,
+): Promise<void> {
+  const { baseUrl, token } = useConfigStore.getState();
+  const res = await fetch(
+    `${baseUrl}/api/v1/projects/${projectId}/terminal-sessions/${sessionId}/stream`,
+    {
+      method: "GET",
+      headers: {
+        Accept: "text/event-stream",
+        ...(token ? { Authorization: `Bearer ${token}` } : {}),
+      },
+      signal,
+    },
+  );
+  if (!res.ok || !res.body) {
+    // Non-2xx: the error envelope is JSON, not SSE.
+    let message = `sidecar answered HTTP ${res.status}`;
+    let code = "UNKNOWN";
+    try {
+      const body = (await res.json()) as { error?: { code?: string; message?: string } };
+      if (body.error?.message) message = body.error.message;
+      if (body.error?.code) code = body.error.code;
+    } catch {
+      /* keep the status text */
+    }
+    throw new ApiError(res.status, code, message);
+  }
+  const reader = res.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+  let sawTerminalFrame = false;
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    buffer += decoder.decode(value, { stream: true });
+    let sep = buffer.indexOf("\n\n");
+    while (sep >= 0) {
+      const block = buffer.slice(0, sep);
+      buffer = buffer.slice(sep + 2);
+      const data = parseSseDataBlock(block);
+      if (data !== null) {
+        const frame = parseTerminalSessionFrame(data);
+        if (frame !== null) {
+          if (frame.type === "exit" || frame.type === "error") {
+            sawTerminalFrame = true;
+          }
+          onFrame(frame);
+        }
+      }
+      sep = buffer.indexOf("\n\n");
+    }
+  }
+  if (!sawTerminalFrame) {
+    onFrame({
+      type: "error",
+      message:
+        "The shell stream ended unexpectedly (connection interrupted while the session was live).",
+    });
+  }
+}
+
 /** ROUND-44 (R44-a): one saved project memory — durable knowledge the agent
  * persisted via its memory_save tool (kinded so the UI groups + colors). */
 export interface ProjectMemory {
