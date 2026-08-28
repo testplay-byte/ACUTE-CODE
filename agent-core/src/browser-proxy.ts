@@ -82,10 +82,14 @@
  *     The owner tests HIS OWN app in the embedded browser, so the app's own
  *     vite dev server is allowlisted: PRIVATE_NET_ALLOWLIST below (editable
  *     constant).
- *   - NO cookie/authorization forwarding to upstreams — logins do NOT
- *     persist through the proxy in v1 (the Tauri native browser window
- *     remains the login-capable path). Our own bearer/ticket never leaks to
- *     an upstream.
+ *   - Cookie jar (ROUND-46, R46-d): upstream Set-Cookie headers are parsed
+ *     (RFC 6265-lite) into a per-PROJECT jar (storage/browser-cookies.ts,
+ *     migration 0017) and replayed as a Cookie header on every hop — so
+ *     logins now SURVIVE both navigation and a sidecar restart. Client-
+ *     supplied Cookie headers are still never forwarded (the jar is the
+ *     single source of truth — a page cannot smuggle cookies), our own
+ *     bearer/ticket still never leaks to an upstream, and no Set-Cookie is
+ *     ever forwarded downstream to the iframe.
  *   - Response header hygiene: framing blockers (x-frame-options, CSP,
  *     COOP/COEP, permissions-policy, HSTS) are simply never forwarded, and
  *     in-document <meta http-equiv="content-security-policy"> tags are
@@ -102,8 +106,9 @@
  *     included) render partially. The window.open escape hatch catches the
  *     main navigation case; a future wave can add a service-worker shim.
  *   - POST forms pass method+content-type+body through, but multipart file
- *     uploads are forwarded as an opaque buffer (untested) and flows
- *     dependent on hidden-input cookies/CORS will not work.
+ *     uploads are forwarded as an opaque buffer (untested). Cookie-backed
+ *     login flows now work through the jar (ROUND-46); CORS-dependent
+ *     script flows still do not.
  *   - srcset candidates containing commas inside data: URLs are re-merged
  *     heuristically (split-on-comma is what the HTML spec itself does);
  *     pathological base64 payloads may still split wrong.
@@ -114,6 +119,8 @@
  */
 import { randomBytes } from "node:crypto";
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
+import { CookieJar, CookieJarStore } from "./storage/browser-cookies.js";
+import type { SqliteDatabase } from "./storage/db.js";
 
 // ─────────────────────────── constants ─────────────────────────────────────
 
@@ -214,6 +221,14 @@ interface BrowserSession {
   /** Current pointer into history; -1 = empty. */
   index: number;
   viewport: BrowserViewport;
+  /**
+   * ROUND-46 (R46-d): the cookie-jar PROFILE this session cooks under — a
+   * project id when POST /browser/session carried body.projectId, else
+   * "_default". Sticky for the session's lifetime; re-binding only happens
+   * when a later mint explicitly sends a projectId. Cookies never cross
+   * profiles.
+   */
+  projectId: string;
 }
 
 /** Control-flow error carrying the HTTP status + short reason for the page. */
@@ -292,13 +307,18 @@ class SessionStore {
     this.sessions.set(sessionId, session);
   }
 
-  /** Creates or adopts a session, (re)minting its proxy ticket. */
-  create(sessionId: string): BrowserSession {
+  /**
+   * Creates or adopts a session, (re)minting its proxy ticket. The cookie
+   * profile (projectId) binds on creation and is sticky; an explicit
+   * projectId on a re-mint re-binds (the panel knows what it wants).
+   */
+  create(sessionId: string, projectId?: string): BrowserSession {
     const existing = this.sessions.get(sessionId);
     if (existing !== undefined) {
       this.ticketIndex.delete(existing.ticket);
       existing.ticket = mintTicket();
       existing.ticketExpiresAt = Date.now() + TICKET_TTL_MS;
+      if (projectId !== undefined) existing.projectId = projectId;
       this.ticketIndex.set(existing.ticket, sessionId);
       this.touch(sessionId);
       return existing;
@@ -310,6 +330,7 @@ class SessionStore {
       history: [],
       index: -1,
       viewport: { ...DEFAULT_VIEWPORT },
+      projectId: projectId ?? "_default",
     };
     this.sessions.set(sessionId, session);
     this.ticketIndex.set(session.ticket, sessionId);
@@ -674,20 +695,35 @@ interface UpstreamInit {
  * Manual redirect walk so EVERY hop re-passes the scheme + private-net guard
  * (an upstream redirecting into the LAN must not become our SSRF). Browsers
  * demote POST to GET on 301/302/303; 307/308 preserve method+body.
+ *
+ * ROUND-46 (R46-d): when a cookie jar is supplied, EVERY hop sends the
+ * profile's matching Cookie header (computed per-hop — redirect chains can
+ * cross hosts/paths) and EVERY response's Set-Cookie headers are ingested
+ * (cookies set on intermediate hops are real). Jar failures are swallowed
+ * inside the jar — they can never fail the fetch.
  */
-async function fetchUpstreamGuarded(startUrl: URL, init: UpstreamInit): Promise<Response> {
+async function fetchUpstreamGuarded(
+  startUrl: URL,
+  init: UpstreamInit,
+  jar?: CookieJar,
+): Promise<Response> {
   const deadline = Date.now() + FETCH_DEADLINE_MS;
   let current = startUrl;
   let method = init.method;
   let body = init.body;
   for (let hop = 0; hop <= MAX_REDIRECT_HOPS; hop += 1) {
     guardTarget(current);
+    const hopHeaders: Record<string, string> = { ...init.headers };
+    if (jar !== undefined) {
+      const cookieHeader = jar.headerFor(current);
+      if (cookieHeader !== null) hopHeaders.cookie = cookieHeader;
+    }
     const remaining = Math.max(250, deadline - Date.now());
     let response: Response;
     try {
       response = await fetch(current, {
         method,
-        headers: init.headers,
+        headers: hopHeaders,
         // DOM BodyInit has no Buffer — hand fetch a Uint8Array view/copy.
         body:
           method === "GET" || body === undefined
@@ -709,6 +745,7 @@ async function fetchUpstreamGuarded(startUrl: URL, init: UpstreamInit): Promise<
           : `upstream request failed: ${error instanceof Error ? error.message : String(error)}`,
       );
     }
+    if (jar !== undefined) jar.ingestResponse(current, response);
     const location = response.headers.get("location");
     const isRedirect = response.status >= 301 && response.status <= 308 && location !== null;
     if (!isRedirect) return response;
@@ -1094,22 +1131,30 @@ export function resetBrowserStoreForTest(): void {
  * Registers the embedded-browser proxy routes on the given (bearer-scoped)
  * Fastify instance. All mutable state is per-call, so every buildServer()
  * gets a fresh, isolated browser-session store.
+ *
+ * ROUND-46 (R46-d): `db` (optional — every production caller passes it) is
+ * the handle the per-profile cookie jars lazily restore from / persist to
+ * (storage/browser-cookies.ts, migration 0017). Without it the jars run
+ * in-memory only (the pre-R46 behavior).
  */
-export function registerBrowserRoutes(scope: FastifyInstance, token: string): void {
+export function registerBrowserRoutes(scope: FastifyInstance, token: string, db?: SqliteDatabase): void {
   // Encapsulated CHILD scope — the hook and raw-body content-type parsers
   // below must not leak onto the sibling /api/v1 routes (a scope-wide raw
   // JSON parser would hand every existing POST route a string instead of a
   // parsed object; this broke 10 server tests until encapsulated).
   scope.register((browser) => {
-    registerBrowserRoutesInner(browser, token);
+    registerBrowserRoutesInner(browser, token, db);
   });
 }
 
-function registerBrowserRoutesInner(browser: FastifyInstance, token: string): void {
+function registerBrowserRoutesInner(browser: FastifyInstance, token: string, db: SqliteDatabase | undefined): void {
   const store = new SessionStore();
   // R43-10 tool wave: the latest booted server's store is what the
   // browser_control agent tool operates on (see sharedBrowserStore above).
   activeBrowserStore = store;
+  // ROUND-46 (R46-d): per-registration cookie-jar store — profileId → jar,
+  // backed by this server's db when one was passed.
+  const jars = new CookieJarStore(db);
 
   // iframe navigations cannot send Authorization headers — a valid `bt`
   // ticket is promoted to the real bearer header so the app-level wall
@@ -1190,7 +1235,23 @@ function registerBrowserRoutesInner(browser: FastifyInstance, token: string): vo
     } else {
       sessionId = requested;
     }
-    const session = store.create(sessionId);
+    // ROUND-46 (R46-d): optional cookie-profile binding. The frontend does
+    // not send this yet (a later 1-line wire-up) — until then every session
+    // shares the "_default" profile: restart-safe, not yet project-isolated.
+    const requestedProject = body.projectId;
+    let projectId: string | undefined;
+    if (requestedProject !== undefined && requestedProject !== null && requestedProject !== "") {
+      if (typeof requestedProject !== "string" || !SESSION_ID_RE.test(requestedProject)) {
+        return jsonError(
+          reply,
+          400,
+          "VALIDATION",
+          "body.projectId must be alphanumeric/-/./_ and at most 64 chars",
+        );
+      }
+      projectId = requestedProject;
+    }
+    const session = store.create(sessionId, projectId);
     return {
       sessionId: session.sessionId,
       ticket: session.ticket,
@@ -1201,6 +1262,9 @@ function registerBrowserRoutesInner(browser: FastifyInstance, token: string): vo
   });
 
   // ── DELETE /browser/session — drop tab state ─────────────────────────────
+  // ROUND-46 (R46-d): the session's COOKIE JAR deliberately survives this —
+  // closing a browser tab is not logging out (a re-minted session of the
+  // same profile continues its logins; restart-safe by design).
   browser.delete("/browser/session", async (request: FastifyRequest, reply: FastifyReply) => {
     const query = request.query as Record<string, string | undefined>;
     const sessionId = query.sessionId ?? "";
@@ -1242,6 +1306,9 @@ function registerBrowserRoutesInner(browser: FastifyInstance, token: string): vo
       );
     }
     store.refreshTicket(session);
+    // ROUND-46 (R46-d): the session's cookie profile decides which jar this
+    // request cooks under (projectId-bound or the shared "_default").
+    const jar = jars.for(session.projectId);
 
     if (requestedUrl === "") {
       return sendErrorPage(reply, new ProxyFailure(400, "BAD_REQUEST", "missing ?url= parameter"), "(no url requested)");
@@ -1285,7 +1352,16 @@ function registerBrowserRoutesInner(browser: FastifyInstance, token: string): vo
         else if (raw !== undefined && raw !== null) init.body = JSON.stringify(raw);
       }
 
-      const response = await fetchUpstreamGuarded(target, init);
+      // ROUND-46 (R46-d): the jar rides the whole hop chain — Cookie header
+      // replayed per hop, Set-Cookie ingested per hop. Persisted afterwards
+      // (in a finally — cookies from a chain that ultimately failed are
+      // still real) with every failure swallowed inside the jar.
+      let response: Response;
+      try {
+        response = await fetchUpstreamGuarded(target, init, jar);
+      } finally {
+        jar.persist();
+      }
 
       if (response.status >= 400) {
         return sendErrorPage(

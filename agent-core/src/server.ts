@@ -468,7 +468,7 @@ export function buildServer(options: ServerOptions): FastifyInstance {
 
   app.register(
     async (scope) => {
-      registerBrowserRoutes(scope, token); // ROUND-43 (R43-10): embedded-browser proxy (iframe ticket auth, HTML/CSS rewriting, history + viewport state)
+      registerBrowserRoutes(scope, token, db); // ROUND-43 (R43-10): embedded-browser proxy (iframe ticket auth, HTML/CSS rewriting, history + viewport state). ROUND-46 (R46-d): db handle → the per-project cookie jars (migration 0017) restore/persist through it.
 
       scope.get("/agents", async (request) => {
         const query = request.query as Record<string, string | undefined>;

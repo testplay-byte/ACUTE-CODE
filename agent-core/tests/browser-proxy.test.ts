@@ -119,6 +119,24 @@ const upstreamHandler = (req: http.IncomingMessage, res: http.ServerResponse): v
     case "/redirect":
       send(302, { location: "/page.html", "content-type": "text/plain" }, "");
       return;
+    // ROUND-46 (R46-d) cookie-jar fixtures.
+    case "/set-cookie":
+      send(200, { "content-type": "text/plain", "set-cookie": "victim=sess123; Path=/" }, "ok");
+      return;
+    case "/set-cookie-many": {
+      const many: string[] = [];
+      for (let i = 1; i <= 205; i += 1) {
+        many.push(`c${String(i).padStart(3, "0")}=${i}; Path=/`);
+      }
+      res.writeHead(200, { "content-type": "text/plain", "set-cookie": many });
+      res.end("ok");
+      return;
+    }
+    case "/login-redirect":
+      // A login-style hop: the cookie rides the 302, the NEXT hop must
+      // already carry it.
+      send(302, { location: "/echo", "content-type": "text/plain", "set-cookie": "hop=1; Path=/" }, "");
+      return;
     case "/redirect-lan":
       // Redirects into the LAN must be refused per hop — never connected.
       send(302, { location: "http://127.0.0.1:9/private", "content-type": "text/plain" }, "");
@@ -506,6 +524,152 @@ describe("browser session tickets", () => {
     expect(after.statusCode).toBe(401);
     const missing = await inject({ method: "DELETE", url: `/api/v1/browser/session?sessionId=${SESSION}` });
     expect(missing.statusCode).toBe(404);
+  });
+});
+
+// ── ROUND-46 (R46-d): the cookie jar ─────────────────────────────────────
+
+describe("browser proxy cookie jar (ROUND-46)", () => {
+  it("stores upstream Set-Cookie values and replays them on the next request", async () => {
+    const ticket = await mintTicket();
+    const first = await iframeGet(proxyUrl(`${upstreamBase}/set-cookie`, ticket));
+    expect(first.statusCode).toBe(200);
+
+    const res = await iframeGet(proxyUrl(`${upstreamBase}/echo`, ticket));
+    expect(res.statusCode).toBe(200);
+    const echoed = res.json() as { cookie: string | null };
+    expect(echoed.cookie).toBe("victim=sess123");
+  });
+
+  it("never lets a CLIENT Cookie header smuggle or override — the jar is the only source", async () => {
+    const ticket = await mintTicket();
+    await iframeGet(proxyUrl(`${upstreamBase}/set-cookie`, ticket));
+    // The client (a page inside the sandboxed iframe) tries to smuggle a
+    // foreign cookie AND override the jar's value — upstream must see ONLY
+    // the jar's cookie.
+    const res = await app.inject({
+      method: "GET",
+      url: proxyUrl(`${upstreamBase}/echo`, ticket),
+      headers: { authorization: `Bearer ${TOKEN}`, cookie: "evil=smuggled; victim=hacked" },
+    });
+    expect(res.statusCode).toBe(200);
+    expect((res.json() as { cookie: string | null }).cookie).toBe("victim=sess123");
+  });
+
+  it("cookies survive a simulated sidecar restart (fresh server, SAME database)", async () => {
+    const ticket = await mintTicket();
+    await iframeGet(proxyUrl(`${upstreamBase}/set-cookie`, ticket));
+
+    // A brand-new server on the same DB = a sidecar restart: the session
+    // store is empty (new mint needed) but the cookie jar lazily restores.
+    const app2 = buildServer({
+      token: TOKEN,
+      db,
+      keyring: new ProviderKeyring({ ACUTE_PROVIDER_OPENROUTER: "sk-or-vtest" }),
+    });
+    try {
+      const mint = await app2.inject({
+        method: "POST",
+        url: "/api/v1/browser/session",
+        headers: { authorization: `Bearer ${TOKEN}` },
+        payload: { sessionId: SESSION },
+      });
+      expect(mint.statusCode).toBe(200);
+      const res = await app2.inject({
+        method: "GET",
+        url: proxyUrl(
+          `${upstreamBase}/echo`,
+          (mint.json() as { ticket: string }).ticket,
+        ),
+      });
+      expect(res.statusCode).toBe(200);
+      expect((res.json() as { cookie: string | null }).cookie).toBe("victim=sess123");
+    } finally {
+      await app2.close();
+    }
+  });
+
+  it("DELETE /browser/session keeps the jar (closing a tab is not logging out)", async () => {
+    const ticket = await mintTicket();
+    await iframeGet(proxyUrl(`${upstreamBase}/set-cookie`, ticket));
+    const gone = await inject({ method: "DELETE", url: `/api/v1/browser/session?sessionId=${SESSION}` });
+    expect(gone.statusCode).toBe(200);
+
+    const reMint = await inject({ method: "POST", url: "/api/v1/browser/session", payload: { sessionId: SESSION } });
+    const res = await iframeGet(
+      proxyUrl(`${upstreamBase}/echo`, (reMint.json() as { ticket: string }).ticket),
+    );
+    expect(res.statusCode).toBe(200);
+    expect((res.json() as { cookie: string | null }).cookie).toBe("victim=sess123");
+  });
+
+  it("ingests Set-Cookie on EVERY redirect hop and replays it on the final hop", async () => {
+    const ticket = await mintTicket();
+    // /login-redirect 302s to /echo WITH a Set-Cookie — the cookie set by
+    // the FIRST hop must already ride the SECOND hop's request.
+    const res = await iframeGet(proxyUrl(`${upstreamBase}/login-redirect`, ticket));
+    expect(res.statusCode).toBe(200);
+    expect((res.json() as { cookie: string | null }).cookie).toBe("hop=1");
+  });
+
+  it("scopes jars per cookie profile (body.projectId at mint; _default apart)", async () => {
+    const mintP1 = await inject({
+      method: "POST",
+      url: "/api/v1/browser/session",
+      payload: { sessionId: "tab-p1", projectId: "prj_one" },
+    });
+    expect(mintP1.statusCode).toBe(200);
+    const t1 = (mintP1.json() as { ticket: string }).ticket;
+    await iframeGet(proxyUrl(`${upstreamBase}/set-cookie`, t1, "tab-p1"));
+
+    // A different profile sees nothing.
+    const mintP2 = await inject({
+      method: "POST",
+      url: "/api/v1/browser/session",
+      payload: { sessionId: "tab-p2", projectId: "prj_two" },
+    });
+    const t2 = (mintP2.json() as { ticket: string }).ticket;
+    const other = await iframeGet(proxyUrl(`${upstreamBase}/echo`, t2, "tab-p2"));
+    expect((other.json() as { cookie: string | null }).cookie).toBeNull();
+
+    // The shared _default profile is its own jar too.
+    const mintDefault = await inject({ method: "POST", url: "/api/v1/browser/session", payload: { sessionId: "tab-d" } });
+    const tDefault = (mintDefault.json() as { ticket: string }).ticket;
+    const def = await iframeGet(proxyUrl(`${upstreamBase}/echo`, tDefault, "tab-d"));
+    expect((def.json() as { cookie: string | null }).cookie).toBeNull();
+
+    // The bound profile still replays its cookie.
+    const again = await iframeGet(proxyUrl(`${upstreamBase}/echo`, t1, "tab-p1"));
+    expect((again.json() as { cookie: string | null }).cookie).toBe("victim=sess123");
+
+    // Malformed profile ids are rejected like malformed session ids.
+    const bad = await inject({
+      method: "POST",
+      url: "/api/v1/browser/session",
+      payload: { sessionId: "tab-x", projectId: "../evil" },
+    });
+    expect(bad.statusCode).toBe(400);
+  });
+
+  it("caps the jar at 200 cookies per profile (oldest evicted, persisted capped)", async () => {
+    const ticket = await mintTicket();
+    const many = await iframeGet(proxyUrl(`${upstreamBase}/set-cookie-many`, ticket));
+    expect(many.statusCode).toBe(200);
+
+    const res = await iframeGet(proxyUrl(`${upstreamBase}/echo`, ticket));
+    const header = (res.json() as { cookie: string | null }).cookie ?? "";
+    const names = header.split("; ").map((pair) => pair.split("=")[0]);
+    expect(names).toHaveLength(200);
+    expect(names).not.toContain("c001"); // the five OLDEST were evicted
+    expect(names).not.toContain("c005");
+    expect(names).toContain("c006");
+    expect(names).toContain("c205");
+
+    // The durable rows are capped the same way after the full-replace save.
+    const { n } = db
+      .prepare("SELECT COUNT(*) AS n FROM browser_cookies WHERE project_id = '_default'")
+      .get() as { n: number };
+    expect(n).toBe(200);
   });
 });
 

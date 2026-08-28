@@ -133,6 +133,9 @@ describe("openDatabase", () => {
       // table + memory_save/recall/list appended to seed allowlists.
       { version: 15, name: "0015_memory.sql" },
       { version: 16, name: "0016_web_host_rules.sql" },
+      // ROUND-46 (R46-d): durable per-project browser-proxy cookie jar
+      // (restart-surviving logins for the embedded browser).
+      { version: 17, name: "0017_browser_cookies.sql" },
     ]);
     expect(appliedSecond).toEqual(appliedFirst);
   });
