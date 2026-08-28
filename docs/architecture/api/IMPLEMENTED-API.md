@@ -1,8 +1,8 @@
-<!-- last-reviewed: 2026-08-27 round-44 -->
+<!-- last-reviewed: 2026-08-28 round-45 -->
 # IMPLEMENTED API — the shipped surface
 
 **Truth = this file.** Verified against `agent-core/src/server.ts` at
-round-17 (2026-08-23), refreshed R37→R44. The aspirational full contract (52
+round-17 (2026-08-23), refreshed R37→R45. The aspirational full contract (52
 operations, WS gateway, planned routes) lives in
 [`API.md`](API.md) — anything there and
 not here **does not exist yet**. Base: `http://127.0.0.1:<port>`; dev port
@@ -247,6 +247,68 @@ entry" directive) and distributes them to keyring pool slots 2/3/4 as
 Credential Manager on the owner's PC; `~/.acute/openrouter-slotN.key` fallback).
 `scripts/dev.mjs` mirrors the env→file→Credential-Manager lookup per slot.
 Settings → Sub-agents then shows slots 2/3/4 with zero manual pasting.
+
+## ROUND-45 additions (implemented)
+
+### Security round (audit P0-3/P0-4/P0-5)
+
+- **Child env scrubbing (P0-3)** — not a route, a spawn-site invariant: every
+  child the sidecar spawns (`run_command`, git tools, OS folder dialogs, both
+  terminal routes, terminal sessions) gets an ALLOWLIST environment via
+  `buildChildEnv()` (`agent-core/src/lib/child-env.ts`) — OS/toolchain vars
+  + `FORCE_COLOR=0`/`CI=1`, never `ACUTE_TOKEN` or `ACUTE_PROVIDER_*`
+  (secret-shaped names are dropped even if allowlisted).
+- **`run_command` AUTO tier is path-contained (P0-4)** — tool behavior note:
+  `decideCommand` now takes the project `root`; an auto-tier candidate whose
+  tokens touch an absolute path outside the root, a `~` path, a `..`-escape,
+  or a Windows other-drive path is demoted to the ASK tier (`cat /etc/passwd`
+  asks now). Explicit always-allow rules still win. Token-based (quoted-token
+  aware, compound-safe), not a sandbox — approved commands run with full
+  user privileges.
+- **Web host gate (P0-5)** — `web_fetch` and `browser_control:navigate`
+  calls pass `decideWebFetch(db, projectId, url)`: http/https only; host on
+  `DEFAULT_WEB_HOST_ALLOWLIST` (37 exact doc/package/source hosts) or a
+  per-project `web_host_rules` row (migration 0016) → run; otherwise the
+  SAME interactive approval round-trip commands use — approval rows carry
+  **category `"web"`** with the URL as the payload, and "always allow"
+  remembers the **HOST** (`web_host_rules`, not the URL; rule rows are
+  project-scoped). Non-interactive contexts fail closed (blocked, never
+  silently fetched). Other `browser_control` actions stay auto.
+  `web_search` stays friction-free but its query is secret-scrubbed
+  (`scrubSearchQuery` — keyring values + key-shaped patterns) before leaving
+  the machine.
+
+### Terminal sessions (persistent interactive shells — REST + SSE)
+
+All under `/api/v1/projects/:id/…`; every route 404s an unknown project, and
+session ids are verified to belong to that project (cross-project ids 404 —
+never leak).
+
+| Route | Contract |
+|---|---|
+| `POST /projects/:id/terminal-sessions` | `{cols? 20..500, rows? 10..200}` (defaults 120×30) → `201 {id, engine:"pty"\|"pipe", createdAt}`. The engine is chosen server-side at try-load (node-pty optionalDependency; persistent-pipe fallback) and reported back — the UI echoes locally on `pipe` (no TTY echo). `503 UNAVAILABLE` on spawn failure. Caps: 3 sessions/project, 8 global — creating over a cap kills the OLDEST session of that scope (new tabs always work). |
+| `GET /projects/:id/terminal-sessions` | `{sessions: [{id, engine, createdAt}…]}` — the project's LIVE sessions, oldest first. |
+| `POST /projects/:id/terminal-sessions/:tsid/input` | `{data}` (string ≤ 8 KB) → `204` — written to the shell's stdin (append your own `\n`). `400` non-string/oversize; `404` unknown/cross-project. |
+| `POST /projects/:id/terminal-sessions/:tsid/resize` | `{cols 20..500, rows 10..200}` (BOTH required) → `204`; resizes the pty, a documented no-op on the pipe engine. |
+| `GET /projects/:id/terminal-sessions/:tsid/stream` | **SSE** (R44-e mechanics: hijack + leading `: ping` + 10s heartbeats). Frames: `{"type":"output","text":…}` (the FIRST output frame carries the full ring-buffer backlog — 256 KB, oldest-dropped — for late subscribers; subscribe happens synchronously before backlog, so no gap/dupe) · `{"type":"exit","code":N\|null}` (null = killed; the response ENDS after this frame) · `{"type":"error","message":…}`. **Client disconnect only unsubscribes — the SESSION SURVIVES its viewers** (the deliberate divergence from the one-shot R44-e stream). |
+| `DELETE /projects/:id/terminal-sessions/:tsid` | Kills the shell → `204` (viewers get the exit frame). `404` unknown. |
+
+Lifecycle: cwd = project root, env = `buildChildEnv()` (P0-3 applies to PTY
+children). Idle reaping kills a session after **10 min with NEITHER input NOR
+output** (a streaming build is never reaped). Natural shell exit removes the
+record. All sessions are disposed on app close + SIGTERM/SIGINT (no orphan
+shells). The TerminalPanel exposes this as the **Run \| Shell** mode toggle
+(Run mode = the R44-e one-shot stream, unchanged).
+
+### Versioning & release (packaging v1)
+
+No new HTTP endpoints — the app version is single-sourced at **0.45.0**
+across root `package.json`, `agent-core`, `shared`, `src-tauri/tauri.conf.json`
+(`scripts/release/version.mjs` `get`/`set`/`check`), `pnpm version:check`
+**gates CI** right after install (drift = red build), and
+`.github/workflows/release.yml` assembles the launcher-kit zip + tag-gated
+draft release (verified: run 33182499163, artifact
+`acute-launcher-kit-v0.45.0`). `GET /health` reports the same version.
 
 ## NOT implemented (despite API.md)
 

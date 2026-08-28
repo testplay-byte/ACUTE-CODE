@@ -1,4 +1,4 @@
-<!-- last-reviewed: 2026-08-27 round-44 -->
+<!-- last-reviewed: 2026-08-28 round-45 -->
 # TESTING — the verification ladder
 
 Five layers; each has a defined "when mandatory". Rules here are binding
@@ -13,16 +13,16 @@ Five layers; each has a defined "when mandatory". Rules here are binding
 | L4 live battery | real provider turn(s), real disk, fresh DB | sandbox, single invocation | anything touching agents, projects, tools, streaming |
 | L5 browser verification | real UI against the live stack; screenshots machine-verified | sandbox, single invocation | any UI-affecting round |
 
-**Current counts (R44, verified 2026-08-27):** `pnpm test` = **471 tests in
-44 files** (20 agent-core files / 297 tests — incl. memory-tools,
-sessions-manage, terminal-stream, web-tools; 22 frontend files / 162 — incl.
-MemoryPanel, TerminalPanel, the terminal-stream client, SessionsScreen,
-AgentChatPanel; shared 1 file / 4; + the 8 sidecar-e2e tests, which the root
-run also picks up when dist is built — 297 + 162 + 4 + 8 = 471).
-Trajectory: 262 (R42) → 397 (R43) → 471 (R44), same counting basis. New R44
-suites: memory-tools, sessions-manage, terminal-stream (backend + client),
-MemoryPanel, TerminalPanel streaming; extended: web-tools (14→23),
-SessionsScreen, AgentChatPanel, projects-tools, storage, models-catalog.
+**Current counts (R45, verified 2026-08-28):** `pnpm test` = **565 tests in
+49 files**. Trajectory: 262 (R42) → 397 (R43) → 471 (R44) → 565 (R45), same
+counting basis (the 8 sidecar e2e tests ride along when dist is built). New
+R45 suites: `r45-security` (46 — P0-4 path-containment demotion, P0-5 host
+gate decisions/rules, query scrubbing), `terminal-sessions` (23 — pipe/pty
+engines, caps, idle reaping, ring buffer, the 6 routes end-to-end incl. the
+SSE stream contract), `child-env` (7 — allowlist shape + secret-name
+rejection + real spawn probe), `tool-catalog-drift` (2 — TOOL_NAMES vs
+TOOL_CATALOG guard), SessionsScreen mobile search (+3); TerminalPanel grew
+6→17 (Shell mode toggle, history, kill/new, error states).
 
 ## Hard rules
 

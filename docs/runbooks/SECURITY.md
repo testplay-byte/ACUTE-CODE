@@ -1,4 +1,4 @@
-<!-- last-reviewed: 2026-08-25 round-36 -->
+<!-- last-reviewed: 2026-08-28 round-45 -->
 # SECURITY — posture & rules
 
 Round-17 (owner direction: proper documentation of all logic). Describes
@@ -52,11 +52,39 @@ tool outputs sent to it; (3) the local filesystem outside a project root;
 
 ## Known gaps (deliberate, tracked)
 
-- No interactive approval engine yet (Phase 3): the containment above is the
-  boundary; destructive ops are refused rather than approved.
-- Sessions are open-ended (`running`); no terminal-state enforcement.
-- `costUsd` is hardcoded 0 — unattended spend is invisible until estimation
-  lands (pillar-2 prerequisite).
+The R42 audit's security P0s are **ALL CLOSED** — P0-1/P0-2 (Rust compile,
+false-green status) in R43; the three deferred holes in R45:
+
+- **P0-3 CLOSED (R45) — child-process env scrubbing:** every spawned child
+  (exec/git tools, dialogs, terminal routes, PTY sessions) gets an
+  ALLOWLIST environment via `buildChildEnv()`
+  (`agent-core/src/lib/child-env.ts`) — children never inherit
+  `ACUTE_TOKEN`/`ACUTE_PROVIDER_*` keys (live-verified: a child probe prints
+  nulls; 7 tests).
+- **P0-4 CLOSED (R45) — contained AUTO tier:** `decideCommand` takes the
+  project root and `commandTouchesOutsideRoot()` demotes any auto-tier
+  candidate touching an absolute path outside the root, `~`, `..`, or
+  another drive to the ASK tier (`cat /etc/passwd` asks now); explicit
+  always-allow rules still win.
+- **P0-5 CLOSED (R45) — gated web tools:** `web_fetch` +
+  `browser_control:navigate` pass the `decideWebFetch` host gate (37-host
+  default doc/source allowlist + per-project `web_host_rules`, migration
+  0016; interactive approval where "always allow" remembers the HOST);
+  `web_search` queries are secret-scrubbed before leaving the machine.
+
+Remaining honest gaps:
+
+- **No real sandbox for APPROVED commands.** Once a command is approved it
+  runs with the owner's full privileges — the human-approval engine IS the
+  boundary (as designed since v1). The P0-4 containment is token-based, not
+  a sandbox: shell escapes like `bash -c "…"` inside a command string still
+  exist, but such commands were never auto-tier — they always asked.
+- **Browser-proxy v1 limits (R43, still true):** no cookie persistence
+  (logins don't survive), runtime-JS URLs bypass the rewrite, multipart
+  POST is opaque, and the private-net guard is hostname-only.
+- **User-typed browser-panel navigation is ungated BY DESIGN** — the P0-5
+  gate covers AGENT tool calls; a URL the human types into the BrowserPanel
+  is a user action, like typing it into their own browser.
 - Dev token is a constant (`acute-dev-local`) — loopback-only by design;
   acceptable while the threat model is "local user is the owner".
 

@@ -1,4 +1,4 @@
-<!-- last-reviewed: 2026-08-27 round-44 -->
+<!-- last-reviewed: 2026-08-28 round-45 -->
 # AGENT MEMORY — lessons learned, rules going forward
 
 **Owner directive (2026-08-23):** "learn from the mistakes you made, document
@@ -547,3 +547,17 @@ Format per entry: `N. TITLE (date, source)` → mistake → root cause → rule.
     registries in the same commit (see MAINTENANCE.md recipe c), and a round
     that adds a screen must VLM-verify the NAV path to it, not just the
     deep link.
+
+64. **A feature that ships to an unrouted component does not exist.** R44-c
+    built the SessionsScreen (session search + fork, two-pane, 23 passing
+    unit tests) and the round report called it delivered — but NO route
+    imported the component, so the feature was unreachable at any screen
+    size and no user could ever see it. Worse, an old App-level test
+    asserted "no Sessions nav entry exists" — a test that had PINNED the
+    bug as correct behavior. The R45 VLM/browser pass caught it (clicking
+    through the real UI, not reading test output); now routed at `/sessions`
+    + a sidebar entry. RULE: a NEW screen is verified reachable by CLICKING
+    to it from the app shell in a real browser (or VLM pass), never by its
+    own colocated tests alone — those prove the component works, not that
+    anyone can open it. When wiring it, also grep for existing tests that
+    assert the OLD nav shape: they may have pinned the absence.

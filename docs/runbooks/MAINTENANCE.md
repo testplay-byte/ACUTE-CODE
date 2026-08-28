@@ -1,4 +1,4 @@
-<!-- last-reviewed: 2026-08-27 round-44 -->
+<!-- last-reviewed: 2026-08-28 round-45 -->
 # MAINTENANCE — how to find things and change things safely
 
 **Status:** normative · **Established:** round-44 (owner directive: "complete the
@@ -22,9 +22,12 @@ launcher/            owner's one-click entry (ACUTE.bat → acute_launcher.py:
   └─ src/            React 18 + Vite UI (dev :5173) — all screens, panels,
      |               stores; talks to the sidecar over HTTP + SSE, never SQL
   └─ agent-core/     Node/TS Fastify sidecar (dev 127.0.0.1:5178) — the ONLY
-     |               process that touches SQLite; routes in src/server.ts,
-     |               tools in src/tools/, SQL in src/storage/, turn runtime +
-     |               prompts in src/agents/, browser proxy in src/browser-proxy.ts
+     |               process that touches SQLite; routes in src/server.ts
+     |               (incl. the terminal routes: one-shot stream + the
+     |               persistent terminal-session family backed by
+     |               src/terminal-sessions.ts), tools in src/tools/, SQL in
+     |               src/storage/, turn runtime + prompts in src/agents/,
+     |               browser proxy in src/browser-proxy.ts
   └─ src-tauri/      Rust Tauri 2 shell — sidecar lifecycle (token mint, spawn,
      |               health poll, shutdown), Credential-Manager key injection.
      |               No cargo in the sandbox; CI is the only Rust oracle (ADR-0012)
@@ -57,7 +60,12 @@ Freshest full example: the R44 memory tools.
 2. Register inside `buildProjectTools` (`agent-core/src/tools/index.ts`) in the
    base tools record — the per-agent allowlist filter applies automatically.
 3. **Append the tool name to `TOOL_NAMES`** in `agent-core/src/storage/agents.ts`
-   (fresh seeds + server-side allowlist validation both read it).
+   (fresh seeds + server-side allowlist validation both read it) — and to
+   `TOOL_CATALOG` in `src/lib/api.ts` (the agent-dialog checkboxes). This
+   backend↔frontend lockstep was manual (and lapsed 15-vs-21 at R44) until
+   R45: `src/lib/tool-catalog-drift.test.ts` now reads `TOOL_NAMES` as text
+   and FAILS the build with both lists + the files to edit on any drift —
+   the manual note is now an automated guard.
 4. **NNNN migration appending the tool to EXISTING databases' template-agent
    `allowed_tools`** — copy the `json_insert … WHERE (is_template = 1 OR
    id = 'agt_default_nova')` + `NOT EXISTS json_each` idempotence shape from

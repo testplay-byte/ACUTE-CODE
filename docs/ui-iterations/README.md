@@ -1,4 +1,4 @@
-<!-- last-reviewed: 2026-08-27 round-44 -->
+<!-- last-reviewed: 2026-08-28 round-45 -->
 # UI Iterations — Owner Review Rounds
 
 This folder is the **dedicated tracking system for UI-fidelity work** (owner
@@ -83,6 +83,7 @@ UI stands and what is still open.
 - **round-29..42** — no round files (sessions/UI/security rounds; see ORCHESTRATION-WORKLOG + the gap note below — the round-file convention lapsed between 28 and 43)
 - [`round-43.md`](round-43.md) — the owner's 9-item R42 verdict round (CI green again, free-model catalog + fallback chain, turn-error cards + retry, chat geometry, sub-agents settings, embedded proxy browser + browser_control, delegation made reachable via 0014)
 - [`round-44.md`](round-44.md) — completing the agentic environment: agent memory (0015 + 3 tools + prompt injection + Memory tab), REAL DuckDuckGo web search, session search/fork/revert, sub-agent keys from credentials.txt, streaming terminal, VLM UI pass (2 real bugs fixed), MAINTENANCE.md — 471 tests
+- [`round-45.md`](round-45.md) — finishing the agentic environment: security round CLOSED audit P0-3/P0-4/P0-5 (child-env allowlist, path-contained auto tier, web host gate + migration 0016), PTY terminal sessions (Run \| Shell toggle), packaging v1 (version 0.45.0 single-sourced + CHANGELOG + release workflow, launcher-kit artifact verified), TOOL_CATALOG drift guard, VLM pass (orphaned SessionsScreen routed at /sessions, mobile overlay drawer, wizard badge v0.45.0) — 565 tests
 
 ## Running the UI with a live backend (dev)
 
