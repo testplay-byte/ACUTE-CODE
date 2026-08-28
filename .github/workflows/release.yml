@@ -1,0 +1,138 @@
+name: Release
+
+# ROUND-45 (packaging v1): assembles the launcher kit — the owner-facing
+# distribution artifact — and opens a DRAFT GitHub release for it. The kit is
+# pure scripts (no build): ACUTE.bat + acute.sh + acute_launcher.py +
+# credentials.example.txt + launcher README + CHANGELOG + VERSION.
+#
+# Triggers:
+#   - workflow_dispatch (optionally with a `version` input — when set, it must
+#     match the repo's version, guarding "tagged but forgot to bump" mistakes)
+#   - push of a v* tag (the release path: kit + draft release on that tag)
+#
+# The bundled installer (single .exe with the packaged sidecar) is NOT here —
+# that is the next packaging milestone (ADR-0003); this is the honest v1 for
+# the launcher-based distribution model (docs/runbooks/LOCAL-PC-RUNNER.md).
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Expected version (optional; must match the repo when set, e.g. 0.45.0)"
+        required: false
+        type: string
+  push:
+    tags:
+      - "v*"
+
+jobs:
+  launcher-kit:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+
+      # Version comes from package.json "packageManager" (pnpm@11.22.0) — same
+      # setup as ci.yml, minus the Rust toolchain (the kit builds nothing).
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      # Quality gate (same bar as CI, minus build + e2e: those need a built
+      # stack and the kit ships no binaries — `pnpm test` runs the full unit
+      # suite across all workspaces; the e2e file skips itself without a
+      # built dist).
+      - name: Quality gate (lint, typecheck, test)
+        run: pnpm lint && pnpm typecheck && pnpm test
+
+      - name: Version consistency
+        run: node scripts/release/version.mjs check
+
+      - name: Resolve version
+        id: version
+        run: |
+          repo_version="$(node scripts/release/version.mjs get)"
+          if [ -n "${{ inputs.version }}" ] && [ "${{ inputs.version }}" != "$repo_version" ]; then
+            echo "::error::dispatch version '${{ inputs.version }}' does not match the repo version '$repo_version' — run 'pnpm version:set ${{ inputs.version }}' and commit first"
+            exit 1
+          fi
+          echo "version=$repo_version" >> "$GITHUB_OUTPUT"
+
+      - name: Assemble launcher kit
+        run: |
+          version="${{ steps.version.outputs.version }}"
+          kit="release/acute-launcher-kit-v${version}"
+          mkdir -p "$kit"
+          cp launcher/ACUTE.bat "$kit/"
+          cp launcher/acute.sh "$kit/"
+          cp launcher/acute_launcher.py "$kit/"
+          cp launcher/credentials.example.txt "$kit/"
+          cp launcher/README.md "$kit/README.md"
+          cp CHANGELOG.md "$kit/"
+          printf '%s\n' "$version" > "$kit/VERSION"
+          (cd "$kit" && zip -qr "../acute-launcher-kit-v${version}.zip" .)
+          unzip -l "release/acute-launcher-kit-v${version}.zip"
+
+      # Round-11 lesson (docs/runbooks/LOCAL-PC-RUNNER.md): a .bat with LF
+      # endings disintegrates in cmd.exe. ACUTE.bat is committed with CRLF and
+      # must survive checkout + copy + zip byte-for-byte — the check runs on
+      # BOTH the kit folder copy and the bytes actually inside the zip.
+      - name: Verify ACUTE.bat kept CRLF line endings
+        run: |
+          version="${{ steps.version.outputs.version }}"
+          bat="release/acute-launcher-kit-v${version}/ACUTE.bat"
+          zip="release/acute-launcher-kit-v${version}.zip"
+          file "$bat"
+          file "$bat" | grep -q "CRLF" || {
+            echo "::error::$bat lost its CRLF line endings — cmd.exe cannot run an LF .bat (round-11 lesson). Fix the file in launcher/ and re-run."
+            exit 1
+          }
+          unzip -p "$zip" ACUTE.bat | file -
+          unzip -p "$zip" ACUTE.bat | file - | grep -q "CRLF" || {
+            echo "::error::ACUTE.bat inside $zip lost its CRLF line endings."
+            exit 1
+          }
+
+      - name: Upload launcher kit artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: acute-launcher-kit-v${{ steps.version.outputs.version }}
+          path: release/acute-launcher-kit-v${{ steps.version.outputs.version }}.zip
+          if-no-files-found: error
+
+  # Draft release ONLY on tag pushes — the owner reviews + publishes manually.
+  github-release:
+    needs: launcher-kit
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: acute-launcher-kit-v${{ needs.launcher-kit.outputs.version }}
+
+      - name: Verify the tag matches the released version
+        run: |
+          if [ "${{ github.ref_name }}" != "v${{ needs.launcher-kit.outputs.version }}" ]; then
+            echo "::error::tag '${{ github.ref_name }}' does not match the repo version '${{ needs.launcher-kit.outputs.version }}' — run 'pnpm version:set <version>' and re-tag"
+            exit 1
+          fi
+
+      - name: Create draft GitHub release
+        uses: softprops/action-gh-release@v2
+        with:
+          draft: true
+          body_path: CHANGELOG.md
+          files: acute-launcher-kit-v*.zip
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

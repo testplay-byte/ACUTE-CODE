@@ -1,6 +1,6 @@
 // @vitest-environment happy-dom
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { cleanup, fireEvent, screen, waitFor } from "@testing-library/react";
+import { cleanup, fireEvent, screen, waitFor, within } from "@testing-library/react";
 import { SessionsScreen } from "./SessionsScreen";
 import { renderWithProviders, resetTestState } from "../../test-utils";
 import { getFixtureSessions } from "../../lib/session-fixtures";
@@ -15,6 +15,13 @@ beforeEach(() => {
 
 /** The fixture's reply turn takes ~700 ms; give waitFor room beyond the 1 s default. */
 const SLOW = { timeout: 5000 };
+
+/**
+ * ROUND-45 (R45-c): the search renders TWO inputs bound to one state — the
+ * top-bar input (desktop, index 0) and the full-width mobile row under the
+ * header (index 1). happy-dom applies no CSS, so both are always in the DOM.
+ */
+const searchInputs = () => screen.getAllByLabelText("Search sessions");
 
 describe("SessionsScreen (fixture backend)", () => {
   it("renders the seeded fixture session list", async () => {
@@ -120,7 +127,7 @@ describe("SessionsScreen search + fork (ROUND-44 R44-c, fixture backend)", () =>
     renderWithProviders(<SessionsScreen />);
     await screen.findAllByText("Phase 2 report draft");
 
-    fireEvent.change(screen.getByLabelText("Search sessions"), {
+    fireEvent.change(searchInputs()[0], {
       target: { value: "audit" },
     });
 
@@ -154,7 +161,7 @@ describe("SessionsScreen search + fork (ROUND-44 R44-c, fixture backend)", () =>
     await screen.findAllByText("Phase 2 report draft");
 
     // "visual regressions" appears only inside the audit session's EVENT LOG.
-    fireEvent.change(screen.getByLabelText("Search sessions"), {
+    fireEvent.change(searchInputs()[0], {
       target: { value: "visual regressions" },
     });
 
@@ -171,7 +178,7 @@ describe("SessionsScreen search + fork (ROUND-44 R44-c, fixture backend)", () =>
     renderWithProviders(<SessionsScreen />);
     await screen.findAllByText("Phase 2 report draft");
 
-    fireEvent.change(screen.getByLabelText("Search sessions"), {
+    fireEvent.change(searchInputs()[0], {
       target: { value: "xyzzynomatch" },
     });
 
@@ -201,5 +208,72 @@ describe("SessionsScreen search + fork (ROUND-44 R44-c, fixture backend)", () =>
         ),
       SEARCH,
     );
+  });
+});
+
+// ── ROUND-45 (R45-c): mobile search polish — the R44-c deferral ────────────
+describe("SessionsScreen mobile search row (ROUND-45 R45-c, fixture backend)", () => {
+  /** The input's 300 ms debounce + the fixture's ~10 ms reply need room. */
+  const SEARCH = { timeout: 4000 };
+
+  it("renders a second, full-width search input (mobile row) sharing state with the top-bar input", async () => {
+    renderWithProviders(<SessionsScreen />);
+    await screen.findAllByText("Phase 2 report draft");
+
+    // Top bar (desktop) input + the mobile row under the header.
+    expect(searchInputs().length).toBe(2);
+    expect(screen.getByRole("search", { name: "Session search" })).toBeTruthy();
+
+    // Typing in the MOBILE row drives the shared value — both inputs mirror it.
+    fireEvent.change(searchInputs()[1], { target: { value: "audit" } });
+    await waitFor(
+      () => expect((searchInputs()[0] as HTMLInputElement).value).toBe("audit"),
+      SEARCH,
+    );
+    expect((searchInputs()[1] as HTMLInputElement).value).toBe("audit");
+  });
+
+  it("typing in the mobile row filters the list and shows the result count", async () => {
+    renderWithProviders(<SessionsScreen />);
+    await screen.findAllByText("Phase 2 report draft");
+
+    fireEvent.change(searchInputs()[1], { target: { value: "audit" } });
+
+    // Same debounced query as the desktop input: one result, the other row filtered out.
+    expect(await screen.findByText(/1 result for “audit”/i, {}, SEARCH)).toBeTruthy();
+    expect(
+      screen.getByRole("button", { name: /open session audit agents screen visuals/i }),
+    ).toBeTruthy();
+    expect(
+      screen.queryByRole("button", { name: /open session phase 2 report draft/i }),
+    ).toBeNull();
+  });
+
+  it("active search switches the horizontal rail to a vertical results list; clearing restores the rail", async () => {
+    renderWithProviders(<SessionsScreen />);
+    await screen.findAllByText("Phase 2 report draft");
+
+    const list = screen.getByLabelText("Session list");
+    expect(list.getAttribute("data-searching")).toBe("false"); // rail (horizontal)
+
+    fireEvent.change(searchInputs()[1], { target: { value: "audit" } });
+    expect(await screen.findByText(/1 result for “audit”/i, {}, SEARCH)).toBeTruthy();
+    expect(list.getAttribute("data-searching")).toBe("true"); // vertical results
+
+    // Clearing from the MOBILE row's X button restores the rail + full list.
+    const mobileRow = screen.getByRole("search", { name: "Session search" });
+    fireEvent.click(within(mobileRow).getByRole("button", { name: "Clear search" }));
+
+    await waitFor(
+      () => expect(list.getAttribute("data-searching")).toBe("false"),
+      SEARCH,
+    );
+    expect(
+      await screen.findByRole(
+        "button",
+        { name: /open session phase 2 report draft/i },
+        SEARCH,
+      ),
+    ).toBeTruthy();
   });
 });

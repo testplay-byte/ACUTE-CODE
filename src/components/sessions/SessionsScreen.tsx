@@ -28,6 +28,51 @@ const STATUS_DOT: Record<SessionStatus, string> = {
 };
 
 /**
+ * ROUND-45 (R45-c): the search input, extracted so the top bar (desktop) and
+ * the full-width mobile row below it share the exact same component logic.
+ * Both instances bind the SAME state — typing in either drives the one
+ * debounced query (useSessionSearch in SessionsScreen).
+ */
+function SessionSearchInput({
+  value,
+  onChange,
+  className,
+}: {
+  value: string;
+  onChange: (next: string) => void;
+  className?: string;
+}) {
+  return (
+    <div className={cn("relative w-full", className)}>
+      <Search
+        size={12}
+        aria-hidden
+        className="pointer-events-none absolute left-2.5 top-1/2 -translate-y-1/2 text-muted"
+      />
+      <input
+        type="text"
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        placeholder="Search sessions"
+        aria-label="Search sessions"
+        className="h-8 w-full rounded-lg border-[1.5px] border-line bg-card pl-7 pr-7 text-[12px] font-medium text-ink outline-none transition-colors placeholder:text-muted focus:border-accent-faded"
+      />
+      {value !== "" ? (
+        <button
+          type="button"
+          onClick={() => onChange("")}
+          aria-label="Clear search"
+          title="Clear search"
+          className="absolute right-1.5 top-1/2 grid h-5 w-5 -translate-y-1/2 place-items-center rounded-md text-muted transition-colors hover:bg-hover hover:text-ink"
+        >
+          <X size={11} />
+        </button>
+      ) : null}
+    </div>
+  );
+}
+
+/**
  * Sessions screen (SPEC F3, single-agent Phase 2): session list on the left,
  * chat on the right. Below `md` the list degrades to a horizontal strip above
  * the chat so narrow windows stay usable.
@@ -38,6 +83,13 @@ const STATUS_DOT: Record<SessionStatus, string> = {
  * (GET /sessions?q=), and every row grows a hover "Fork" action that copies
  * the whole conversation under a new top-level session. (Revert lives in the
  * chat panel — AgentChatPanel — next to the message it rewinds to.)
+ *
+ * ROUND-45 (R45-c, the R44-c mobile deferral): on phones the 170px top-bar
+ * input truncated typed queries, so the search now ALSO has a full-width row
+ * directly under the top bar (the top-bar input stays for md+), and while a
+ * search is active the horizontal session rail is replaced by a vertical
+ * results list (desktop semantics — horizontal scrolling through filtered
+ * results was confusing). Clearing the search restores the rail.
  */
 export function SessionsScreen() {
   const [selectedId, setSelectedId] = useState<string | null>(null);
@@ -95,32 +147,12 @@ export function SessionsScreen() {
           </p>
         </div>
         <div className="ml-auto flex items-center gap-2">
-          {/* ROUND-44 (R44-c): search box — titles + event text (GET /sessions?q=). */}
-          <div className="relative">
-            <Search
-              size={12}
-              aria-hidden
-              className="pointer-events-none absolute left-2.5 top-1/2 -translate-y-1/2 text-muted"
-            />
-            <input
-              type="text"
-              value={searchInput}
-              onChange={(e) => setSearchInput(e.target.value)}
-              placeholder="Search sessions"
-              aria-label="Search sessions"
-              className="h-8 w-[170px] rounded-lg border-[1.5px] border-line bg-card pl-7 pr-7 text-[12px] font-medium text-ink outline-none transition-colors placeholder:text-muted focus:border-accent-faded md:w-[200px]"
-            />
-            {searchInput !== "" ? (
-              <button
-                type="button"
-                onClick={() => setSearchInput("")}
-                aria-label="Clear search"
-                title="Clear search"
-                className="absolute right-1.5 top-1/2 grid h-5 w-5 -translate-y-1/2 place-items-center rounded-md text-muted transition-colors hover:bg-hover hover:text-ink"
-              >
-                <X size={11} />
-              </button>
-            ) : null}
+          {/* ROUND-44 (R44-c): search box — titles + event text (GET /sessions?q=).
+              ROUND-45 (R45-c): md+ only — on phones the search moved to a
+              full-width row under this bar (the 170px input truncated typed
+              queries). */}
+          <div className="hidden md:block">
+            <SessionSearchInput value={searchInput} onChange={setSearchInput} className="w-[200px]" />
           </div>
           <Button variant="primary" onClick={() => setPickerOpen(true)}>
             <Plus size={13} strokeWidth={2.5} />
@@ -129,10 +161,25 @@ export function SessionsScreen() {
         </div>
       </motion.div>
 
+      {/* ROUND-45 (R45-c): full-width mobile search row — same input logic as
+          the top bar, responsive placement. */}
+      <div role="search" aria-label="Session search" className="border-b-[1.5px] border-line px-4 py-2 md:hidden">
+        <SessionSearchInput value={searchInput} onChange={setSearchInput} />
+      </div>
+
       <div className="flex min-h-0 flex-1 flex-col md:flex-row">
         <aside
           aria-label="Session list"
-          className="flex shrink-0 gap-1.5 overflow-x-auto border-b-[1.5px] border-line p-2 md:w-[250px] md:flex-col md:overflow-x-visible md:overflow-y-auto md:border-b-0 md:border-r-[1.5px]"
+          data-searching={searching ? "true" : "false"}
+          className={cn(
+            "flex shrink-0 gap-1.5 border-b-[1.5px] border-line p-2 md:w-[250px] md:flex-col md:overflow-x-visible md:overflow-y-auto md:border-b-0 md:border-r-[1.5px]",
+            // ROUND-45 (R45-c): while a search is active the mobile rail
+            // becomes a vertical results list (capped so a long hit list
+            // can't squeeze the chat pane off-screen).
+            searching
+              ? "flex-col overflow-x-visible overflow-y-auto max-md:max-h-[60vh]"
+              : "overflow-x-auto",
+          )}
         >
           {/* ROUND-44 (R44-c): subtle search-meta line — result count for the
               active term + a one-click clear back to the normal list. */}
@@ -215,7 +262,7 @@ export function SessionsScreen() {
               variants={staggerContainer}
               initial="initial"
               animate="animate"
-              className="flex gap-1.5 md:flex md:flex-col"
+              className={cn("flex gap-1.5 md:flex md:flex-col", searching && "w-full flex-col")}
             >
               {visibleSessions.map((session) => {
                 const agent = agentById.get(session.agentId ?? "");
@@ -228,7 +275,12 @@ export function SessionsScreen() {
                   <motion.div
                     key={session.id}
                     variants={staggerItem}
-                    className="group/row relative flex min-w-[200px] shrink-0 md:min-w-0 md:w-full"
+                    className={cn(
+                      "group/row relative flex shrink-0 md:min-w-0 md:w-full",
+                      // ROUND-45 (R45-c): full-width rows while the mobile
+                      // search results render as a vertical list.
+                      searching ? "w-full min-w-0" : "min-w-[200px]",
+                    )}
                   >
                     <motion.button
                       onClick={() => setSelectedId(session.id)}

@@ -18,6 +18,9 @@ build/
 .DS_Store
 Thumbs.db
 
+# release workflow scratch (assembled launcher kits — CI artifacts, never committed)
+/release/
+
 # tooling caches
 .vite/
 .turbo/
