@@ -11,6 +11,7 @@ import {
   LayoutDashboard,
   LoaderCircle,
   MessageSquare,
+  MessagesSquare,
   Palette,
   Pencil,
   Plus,
@@ -228,6 +229,11 @@ const SETTINGS_SECTIONS = [
 export function Sidebar() {
   const styles = useThemeStyles();
   const [collapsed, setCollapsed] = useState(readCollapsed);
+  // ROUND-45 (VLM-pass find): MOBILE DRAWER. Below md the sidebar is a
+  // fixed overlay (the old static 270px column left only 69px of content at
+  // 375px) — closed by default, opened by the floating logo trigger,
+  // closed by the backdrop, and auto-closed on navigation.
+  const [mobileOpen, setMobileOpen] = useState(false);
   const setAppSidebarVisible = useProjectChatStore((s) => s.setAppSidebarVisible);
   const appSidebarVisible = useProjectChatStore((s) => s.appSidebarVisible);
   const { pathname, search } = useLocation();
@@ -243,6 +249,11 @@ export function Sidebar() {
   useEffect(() => {
     try { localStorage.setItem(COLLAPSE_KEY, collapsed ? "1" : "0"); } catch { /* */ }
   }, [collapsed]);
+
+  // ROUND-45: any navigation closes the mobile drawer (standard drawer UX).
+  useEffect(() => {
+    setMobileOpen(false);
+  }, [pathname, search]);
 
   if (!showSidebar) return null;
 
@@ -260,11 +271,40 @@ export function Sidebar() {
   };
 
   return (
+    <>
+      {/* ROUND-45: mobile backdrop — click to close; md+ unaffected. */}
+      {mobileOpen && (
+        <button
+          type="button"
+          aria-label="Close menu"
+          onClick={() => setMobileOpen(false)}
+          className="fixed inset-0 z-40 cursor-default bg-black/40 md:hidden"
+        />
+      )}
+      {/* ROUND-45: mobile trigger — the app logo, matching the chat-route
+          floating toggle; visible below md whenever the drawer is closed. */}
+      {!mobileOpen && (
+        <div className="fixed top-[10px] left-[10px] z-50 md:hidden">
+          <AcuteLogo
+            size={34}
+            hoverToggle
+            onClick={() => setMobileOpen(true)}
+            ariaLabel="Acute — open menu"
+            title="Open menu"
+          />
+        </div>
+      )}
     <motion.aside
       initial={false}
       animate={{ width: collapsed ? 64 : 270 }}
       transition={{ duration: 0.25, ease: [0.25, 0.1, 0.25, 1] }}
-      className="shrink-0 flex flex-col overflow-hidden rounded-[20px] border-[1.5px]"
+      className={cn(
+        "shrink-0 flex flex-col overflow-hidden rounded-[20px] border-[1.5px]",
+        // ROUND-45: below md this is an overlay drawer, not a flex column.
+        "max-md:fixed max-md:inset-y-3 max-md:left-3 max-md:z-50 max-md:shadow-2xl",
+        mobileOpen ? "max-md:translate-x-0" : "max-md:-translate-x-[120%] max-md:pointer-events-none",
+        "max-md:transition-transform max-md:duration-200",
+      )}
       aria-label="Main sidebar"
       style={{
         backgroundColor: styles.sidebarBg,
@@ -389,8 +429,15 @@ export function Sidebar() {
               </span>
             </div>
           )}
-          <nav className={cn("flex flex-col gap-1 px-2.5 pb-3", collapsed ? "px-1.5 pt-4" : "pt-1")} aria-label="Main navigation">
+          <nav
+            className={cn("flex flex-col gap-1 px-2.5 pb-3", collapsed ? "px-1.5 pt-4" : "pt-1")}
+            aria-label="Main navigation"
+            // ROUND-45: any nav interaction closes the mobile drawer — even a
+            // same-route click (the useLocation effect only fires on change).
+            onClickCapture={() => setMobileOpen(false)}
+          >
             <DashboardButton collapsed={collapsed} />
+            <SessionsButton collapsed={collapsed} />
             <UsageButton collapsed={collapsed} />
           </nav>
 
@@ -422,6 +469,7 @@ export function Sidebar() {
         </>
       )}
     </motion.aside>
+    </>
   );
 }
 
@@ -468,6 +516,14 @@ function UsageButton({ collapsed }: { collapsed: boolean }) {
   const navigate = useNavigate();
   const active = useLocation().pathname.startsWith("/usage");
   return <NavButton icon={BarChart3} label="Usage" active={active} collapsed={collapsed} onClick={() => navigate("/usage")} />;
+}
+
+/** ROUND-45: the session manager (search/fork two-pane screen) — reachable
+ *  at last; the R44-c search UI was stranded on an unrouted component. */
+function SessionsButton({ collapsed }: { collapsed: boolean }) {
+  const navigate = useNavigate();
+  const active = useLocation().pathname.startsWith("/sessions");
+  return <NavButton icon={MessagesSquare} label="Sessions" active={active} collapsed={collapsed} onClick={() => navigate("/sessions")} />;
 }
 
 /** Prominent Settings button (owner round-33): a card-style row — icon tile

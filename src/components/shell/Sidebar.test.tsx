@@ -108,7 +108,9 @@ describe("Sidebar projects section (fixture ProjectsBackend)", () => {
     expect(screen.getByRole("button", { name: /^dashboard$/i, hidden: true })).toBeTruthy();
     expect(screen.getByRole("button", { name: /^usage$/i, hidden: true })).toBeTruthy();
     expect(screen.getByRole("button", { name: /^settings$/i, hidden: true })).toBeTruthy();
-    expect(screen.queryByText("Sessions")).toBeNull();
+    // ROUND-45: Sessions nav EXISTS now — the R44-c session-manager screen
+    // (search/fork) was stranded on an unrouted component until this round.
+    expect(screen.getByRole("button", { name: /^sessions$/i, hidden: true })).toBeTruthy();
     expect(screen.queryByText("Agents")).toBeNull();
   });
 

@@ -1,7 +1,7 @@
 import { useOnboardingStore } from "./onboarding-store";
 import { WIZARD_EDGE } from "./onboarding-types";
 import { useThemeStyles } from "../../lib/use-theme-styles";
-import { APP_NAME } from "../../lib/version";
+import { APP_NAME, APP_VERSION } from "../../lib/version";
 
 /**
  * Wizard chrome — ported from the demo's components/onboarding/Header.tsx.
@@ -48,7 +48,7 @@ export function Header() {
                 borderColor: s.accent,
               }}
             >
-              v0.1.0 BETA
+              {`v${APP_VERSION}`} BETA
             </span>
           </div>
 

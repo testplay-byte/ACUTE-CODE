@@ -10,3 +10,7 @@ interface ImportMetaEnv {
 interface ImportMeta {
   readonly env: ImportMetaEnv;
 }
+
+/** ROUND-45: injected by vite.config.ts `define` from package.json "version"
+ *  (single source — scripts/release/version.mjs syncs the other files). */
+declare const __APP_VERSION__: string;

@@ -2,6 +2,7 @@ import { useEffect } from "react";
 import { Route, Routes, useNavigate } from "react-router";
 import { AppShell } from "./components/shell/AppShell";
 import { ProjectView } from "./components/projects/ProjectView";
+import { SessionsScreen } from "./components/sessions/SessionsScreen";
 import { DemoViewerScreen } from "./components/demos/DemoViewerScreen";
 import { ProjectChatScreen } from "./components/project-chat";
 import { DashboardScreen } from "./components/dashboard";
@@ -55,6 +56,11 @@ function FirstRunCheck() {
  * /usage · /settings (agents management + API keys + appearance live there) ·
  * /sessions stays routed for the upcoming chat-window flow but is NOT in the
  * sidebar. /setup is the full-bye first-run wizard, outside the app shell.
+ *
+ * ROUND-45 FIX (VLM-pass find): SessionsScreen — the two-pane session
+ * manager with the R44-c search/fork UI — was ORPHANED: imported by no
+ * route, so session search was unreachable on every screen size. It now
+ * mounts at /sessions with a sidebar entry (Sidebar.tsx).
  */
 export function App() {
   return (
@@ -79,6 +85,7 @@ export function App() {
           />
           <Route path="settings" element={<SettingsPage />} />
           <Route path="demos" element={<DemoViewerScreen />} />
+          <Route path="sessions" element={<SessionsScreen />} />
           <Route
             path="*"
             element={
