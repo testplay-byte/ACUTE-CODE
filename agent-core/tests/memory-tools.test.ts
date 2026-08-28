@@ -9,6 +9,10 @@
  *   - storage CRUD: save validation (kinds, trim, 4000-char cap), newest-
  *     first listing, content-ranked search, delete, and the whole-line
  *     capped digest that feeds the system prompt,
+ *   - ROUND-46 (memory v2): relevance-ranked search (multi-token overlap
+ *     beats single-token, kind-only still findable, stopwords dropped),
+ *     ranked digest (decision > fact × recency decay), dedup-on-save
+ *     (duplicate content bumps updated_at instead of inserting a twin),
  *   - the TOOL layer through the REAL buildProjectTools → execute path
  *     (including graceful failure for sessions without a project and the
  *     sessionId → project fallback),
@@ -35,8 +39,11 @@ import {
   deleteMemory,
   listMemories,
   memoryDigest,
+  recencyMultiplier,
   saveMemory,
+  saveMemoryWithDedup,
   searchMemories,
+  tokenizeText,
 } from "../src/storage/memory";
 import { buildProjectSystemPrompt } from "../src/agents/prompts";
 
@@ -160,24 +167,92 @@ describe("memory storage", () => {
     expect(deleteMemory(db, saved.id).ok).toBe(false);
   });
 
-  it("digest: newest-first bullet lines, whole-line cap, empty project → empty string", () => {
+  it("digest: ranked by importance × recency, whole-line cap, empty project → empty string", () => {
     expect(memoryDigest(db, "prj_none")).toBe("");
 
     saveMemory(db, { projectId: "prj_g", kind: "decision", content: "use pnpm" });
     saveMemory(db, { projectId: "prj_g", kind: "fact", content: "sidecar port 5178" });
     const digest = memoryDigest(db, "prj_g");
-    expect(digest.split("\n")).toEqual(["• [fact] sidecar port 5178", "• [decision] use pnpm"]);
+    // ROUND-46 v2: both fresh, but a DECISION (weight 1.0) outranks a FACT
+    // (0.8) — v1's pure newest-first put the fact first; the ranked digest
+    // deliberately changed that order.
+    expect(digest.split("\n")).toEqual(["• [decision] use pnpm", "• [fact] sidecar port 5178"]);
 
-    // Cap on whole lines: two ~30-char lines, budget 40 → only the first fits.
+    // Cap on whole lines: the decision line (22 chars) fits the 40-char
+    // budget; the fact line would overflow → only the first survives.
     const capped = memoryDigest(db, "prj_g", 40);
     expect(capped.split("\n")).toHaveLength(1);
-    expect(capped.startsWith("• [fact]")).toBe(true);
+    expect(capped.startsWith("• [decision]")).toBe(true);
 
     // A single line longer than the whole budget is hard-sliced + ellipsized.
     saveMemory(db, { projectId: "prj_big", content: "y".repeat(200) });
     const sliced = memoryDigest(db, "prj_big", 50);
     expect(sliced.length).toBe(50);
     expect(sliced.endsWith("…")).toBe(true);
+  });
+
+  it("ROUND-46 v2: recency decay — a stale decision sinks below a fresh fact in the digest", () => {
+    saveMemory(db, { projectId: "prj_r", kind: "decision", content: "old decision from long ago" });
+    saveMemory(db, { projectId: "prj_r", kind: "fact", content: "fresh fact observed today" });
+    // Age the decision row past the 30-day bucket (0.85 → 0.7 decay).
+    db.prepare("UPDATE memory SET updated_at = ? WHERE project_id = ? AND kind = 'decision'")
+      .run("2020-01-01T00:00:00.000Z", "prj_r");
+    const digest = memoryDigest(db, "prj_r");
+    // decision: 1.0 × 0.55 = 0.55 < fact: 0.8 × 1.0 = 0.8 → fact first.
+    expect(digest.split("\n")[0]).toContain("fresh fact");
+  });
+
+  it("ROUND-46 v2: multi-token queries rank by relevance, not insertion order", () => {
+    saveMemory(db, { projectId: "prj_mt", kind: "note", content: "pnpm install is sometimes slow" });
+    saveMemory(db, { projectId: "prj_mt", kind: "fact", content: "pnpm workspaces power the monorepo" });
+    const hits = searchMemories(db, "prj_mt", "pnpm workspaces");
+    expect(hits).toHaveLength(2);
+    // Both match "pnpm" (overlap 0.5); only the workspaces row matches both
+    // (overlap 1.0 + substring bonus) → it wins despite being OLDER.
+    expect(hits[0].content).toContain("workspaces");
+  });
+
+  it("ROUND-46 v2: stopwords drop out of queries without losing matches", () => {
+    saveMemory(db, { projectId: "prj_sw", kind: "fact", content: "sidecar runs on port 5178" });
+    expect(searchMemories(db, "prj_sw", "the sidecar")).toHaveLength(1);
+    expect(tokenizeText("The SIDECAR runs", true)).toEqual(["sidecar", "runs"]);
+    expect(tokenizeText("the a of", true)).toEqual([]);
+  });
+
+  it("ROUND-46 v2: dedup on save — duplicate content bumps instead of inserting a twin", () => {
+    const first = saveMemoryWithDedup(db, {
+      projectId: "prj_dd",
+      kind: "note",
+      content: "always run tests before pushing",
+    });
+    expect(first.deduplicated).toBe(false);
+
+    // Same content, different case/kind → refresh, not insert.
+    const second = saveMemoryWithDedup(db, {
+      projectId: "prj_dd",
+      kind: "decision",
+      content: "Always run tests before pushing",
+    });
+    expect(second.deduplicated).toBe(true);
+    expect(second.item.id).toBe(first.item.id);
+    expect(second.item.kind).toBe("decision");
+    expect(listMemories(db, "prj_dd")).toHaveLength(1);
+
+    // The bump shows in recall (newest-first listing reflects the refresh).
+    expect(listMemories(db, "prj_dd")[0].updatedAt).toBe(second.item.updatedAt);
+
+    // Different project with identical content stays a separate row.
+    saveMemoryWithDedup(db, { projectId: "prj_dd2", kind: "note", content: "always run tests before pushing" });
+    expect(listMemories(db, "prj_dd2")).toHaveLength(1);
+  });
+
+  it("ROUND-46 v2: recencyMultiplier buckets + unparseable stamps", () => {
+    const now = new Date("2026-08-28T12:00:00.000Z");
+    expect(recencyMultiplier("2026-08-27T12:00:00.000Z", now)).toBe(1.0); // 1 day
+    expect(recencyMultiplier("2026-08-01T12:00:00.000Z", now)).toBe(0.85); // 27 days
+    expect(recencyMultiplier("2026-06-29T12:00:00.000Z", now)).toBe(0.7); // 60 days
+    expect(recencyMultiplier("2020-01-01T12:00:00.000Z", now)).toBe(0.55); // ancient
+    expect(recencyMultiplier("not-a-date", now)).toBe(0.7); // unparseable → mid bucket
   });
 });
 

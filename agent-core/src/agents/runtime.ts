@@ -32,7 +32,10 @@ import { getIndexSummary } from "../storage/index.js";
 // ROUND-44 (R44-a): the project memory digest for prompt injection.
 import { memoryDigest } from "../storage/memory.js";
 import { lookupPricing } from "../storage/models.js";
-import { assembleWithinBudget, type ContextBudget } from "../context.js";
+import { estimateMessageTokens, type ContextBudget } from "../context.js";
+// ROUND-46 (R46-b): context compaction — summarize the over-budget head
+// instead of silently dropping it.
+import { assembleWithCompaction, type SeqMessage } from "./compaction.js";
 
 export type SqliteDatabase = Database.Database;
 
@@ -127,26 +130,35 @@ function scrubSecrets(text: string, secrets: readonly string[]): string {
  * history carries a <tool_results> block after each assistant turn. The
  * markers keep tool output as DATA, never instructions (injection guard);
  * old events without an outputSummary still fold (ok flag only).
+ *
+ * ROUND-46 (R46-b): every message is annotated with the seq of the LAST
+ * event that contributed to it (message events carry their own seq; a
+ * tool_results block carries the seq of the final tool.use folded into
+ * it) — the compaction filter needs seq anchors, and revert/fork inherit
+ * compaction events for free because assembly stays pure.
  */
-function assembleHistory(db: SqliteDatabase, sessionId: string): ChatTurnMessage[] {
+export function assembleHistory(db: SqliteDatabase, sessionId: string): SeqMessage[] {
   const events = listSessionEvents(db, sessionId);
-  const messages: ChatTurnMessage[] = [];
+  const messages: SeqMessage[] = [];
   let pendingToolLines: string[] = [];
+  let pendingToolSeq = 0;
 
   const flushTools = () => {
     if (pendingToolLines.length === 0) return;
     messages.push({
       role: "user",
       content: `<tool_results>\n${pendingToolLines.join("\n")}\n</tool_results>`,
+      throughSeq: pendingToolSeq,
     });
     pendingToolLines = [];
+    pendingToolSeq = 0;
   };
 
   for (const event of events) {
     if (event.type === "message.user" || event.type === "message.assistant") {
       flushTools();
       const msg = asChatMessage(event);
-      if (msg) messages.push(msg);
+      if (msg) messages.push({ ...msg, throughSeq: event.seq });
     } else if (event.type === "tool.use") {
       const payload =
         event.payload && typeof event.payload === "object"
@@ -171,6 +183,7 @@ function assembleHistory(db: SqliteDatabase, sessionId: string): ChatTurnMessage
       pendingToolLines.push(
         `${toolName}(${argsSummary}) → ${ok ? "ok" : "FAILED"}${safeOutput ? `: ${safeOutput}` : ""}`,
       );
+      pendingToolSeq = event.seq;
     }
   }
   flushTools();
@@ -494,7 +507,17 @@ export async function runSingleAgentTurn(
       maxOutputTokens: 32_768,
       margin: 8_000,
     };
-    const { messages } = assembleWithinBudget(rawMessages, budget);
+    // ROUND-46 (R46-b): compaction instead of a silent hard trim. The sync
+    // path (sub-agents) has no SSE emit — the compacted event lands in the
+    // session log either way and later iterations reuse it.
+    const { messages } = await assembleWithCompaction(rawMessages, budget, {
+      db,
+      sessionId: session.id,
+      chat,
+      provider: { id: provider.id, baseUrl: provider.baseUrl, apiFormat: provider.apiFormat },
+      apiKey,
+      model,
+    });
 
     const startedAt = Date.now();
     let result: ChatTurnOutput;
@@ -756,7 +779,28 @@ export async function runStreamedAgentTurn(
     // results, so iteration 2+ sees exactly what its tools did instead of
     // re-planning blind (the multi-step fix).
     const rawMessages = assembleHistory(db, session.id);
-    const { messages, usedTokens } = assembleWithinBudget(rawMessages, budget);
+    // ROUND-46 (R46-b): compaction instead of a silent hard trim — the
+    // streamed path surfaces a meta.compaction event so the UI can show
+    // that earlier context was summarized. usedTokens derives from the
+    // final message list (the 800K context guard keeps its gate).
+    const compaction = await assembleWithCompaction(rawMessages, budget, {
+      db,
+      sessionId: session.id,
+      chat,
+      provider: { id: provider.id, baseUrl: provider.baseUrl, apiFormat: provider.apiFormat },
+      apiKey,
+      model,
+    });
+    const messages = compaction.messages;
+    const usedTokens = estimateMessageTokens(messages);
+    if (compaction.compacted && compaction.detail !== undefined) {
+      emit({
+        type: "meta.compaction",
+        tokensSaved: compaction.detail.tokensSaved,
+        droppedMessages: compaction.detail.droppedMessages,
+        throughSeq: compaction.detail.throughSeq,
+      });
+    }
 
     // Context guard (6-f R-F5): abort if assembled context > 800K tokens
     // (the 1M window is a LIMIT, not headroom; 200+ tool round-trips approach

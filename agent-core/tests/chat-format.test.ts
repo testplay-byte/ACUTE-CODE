@@ -124,3 +124,20 @@ describe("openrouter free-model fallback chain (ROUND-43)", () => {
     }
   });
 });
+
+describe("provider call timeout (ROUND-46)", () => {
+  it("aiSdkChat wires a bounded abortSignal (default 10 min; timeoutMs override respected)", async () => {
+    await aiSdkChat({ ...baseInput, provider: { id: "p", baseUrl: null } });
+    const call = generateTextMock.mock.calls[0][0] as { abortSignal?: AbortSignal };
+    expect(call.abortSignal).toBeInstanceOf(AbortSignal);
+    expect(call.abortSignal?.aborted).toBe(false);
+
+    // The default signal stays un-aborted far past the test's lifetime; a
+    // 1ms override aborts almost immediately (AbortSignal.timeout semantics).
+    await aiSdkChat({ ...baseInput, provider: { id: "p", baseUrl: null }, timeoutMs: 1 });
+    const timed = generateTextMock.mock.calls[1][0] as { abortSignal?: AbortSignal };
+    expect(timed.abortSignal).toBeInstanceOf(AbortSignal);
+    await new Promise((r) => setTimeout(r, 15));
+    expect(timed.abortSignal?.aborted).toBe(true);
+  });
+});

@@ -1,4 +1,4 @@
-<!-- last-reviewed: 2026-08-28 round-45 -->
+<!-- last-reviewed: 2026-08-28 round-46 -->
 # Changelog
 
 All notable changes to ACUTE-CODE are documented here. Entries are written for
@@ -11,9 +11,44 @@ version number is single-sourced from the root `package.json`
 
 ## [Unreleased]
 
-Nothing unreleased yet. Planned next: the bundled installer (a single
-executable with the packaged sidecar — ADR-0003); today the launcher kit
-remains the distribution path.
+Planned next: the bundled installer (a single executable with the packaged
+sidecar — ADR-0003); today the launcher kit remains the distribution path.
+
+## [0.46.0] - 2026-08-28
+
+### Added
+
+- Context compaction: when a long session would overflow the model's context
+  window, the over-budget history is now summarized by the model itself into a
+  dense briefing (task, decisions, files touched, errors fixed, open steps)
+  instead of being silently dropped. The summary persists as part of the
+  session (fork and revert keep working), it is reused until the window
+  overflows again, and a summarizer failure safely falls back to the old
+  trim behavior.
+- Relevance-ranked agent memory: `memory_recall` now scores results by
+  multi-token relevance (content match strength, kind, importance and
+  recency) instead of plain substring matching, the auto-injected memory
+  digest ranks durable decisions above casual notes, and saving the same
+  fact twice refreshes the existing memory instead of duplicating it.
+- File restore from checkpoints: the diff view for agent file edits gained a
+  "Restore" action (with confirmation) that reverts the file on disk to its
+  pre-edit content — the round-25 checkpoint backend is finally reachable
+  from the UI. The diff view also no longer misses the recorded snapshot
+  while session events are still loading.
+- Browser cookie persistence: the embedded in-app browser now keeps cookies
+  in the project database, so logged-in sessions survive a restart. Cookies
+  never appear in logs or agent-visible output.
+
+### Fixed
+
+- The first file-diff card in a session could permanently show "no snapshot
+  recorded" because it rendered before the checkpoint list finished loading.
+
+### Changed
+
+- Terminal session behavior is now covered by black-box end-to-end tests
+  (create → input → streamed output → exit → cleanup), in addition to the
+  existing unit suite.
 
 ## [0.45.0] - 2026-08-28
 

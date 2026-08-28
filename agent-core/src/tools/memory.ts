@@ -23,7 +23,7 @@ import { getSession } from "../storage/sessions.js";
 import {
   MAX_MEMORY_CONTENT_CHARS,
   listMemories,
-  saveMemory,
+  saveMemoryWithDedup,
   searchMemories,
   type MemoryItem,
 } from "../storage/memory.js";
@@ -87,7 +87,9 @@ export function memorySaveTool(
     };
   }
   try {
-    const saved = saveMemory(deps.db, {
+    // ROUND-46 v2: duplicate content refreshes the existing row instead of
+    // inserting a twin — the tool says so honestly.
+    const { item: saved, deduplicated } = saveMemoryWithDedup(deps.db, {
       projectId,
       kind: typeof kind === "string" ? kind : undefined,
       content: text,
@@ -95,7 +97,9 @@ export function memorySaveTool(
     });
     return {
       ok: true,
-      output: `saved ${saved.kind} memory (id ${saved.id}); it persists across sessions and is auto-loaded into future turns`,
+      output: deduplicated
+        ? `memory already existed — refreshed it (${saved.kind}, id ${saved.id}); it persists across sessions and is auto-loaded into future turns`
+        : `saved ${saved.kind} memory (id ${saved.id}); it persists across sessions and is auto-loaded into future turns`,
     };
   } catch (error) {
     return {
@@ -106,9 +110,10 @@ export function memorySaveTool(
 }
 
 /**
- * memory_recall — search the project's memories by substring (content +
- * kind, content matches ranked first). Without a query, returns the newest
- * 12 (the same window the system-prompt digest covers, in full detail).
+ * memory_recall — ROUND-46 v2: relevance-ranked search (token overlap +
+ * kind boost + recency; the storage layer scores). Without a query, returns
+ * the newest 12 (the same window the system-prompt digest covers, in full
+ * detail).
  */
 export function memoryRecallTool(
   deps: MemoryToolDeps | undefined,

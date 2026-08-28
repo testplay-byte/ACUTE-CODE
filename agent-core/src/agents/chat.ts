@@ -28,7 +28,18 @@ export interface ChatTurnInput {
   maxTurns: number;
   /** Agentic Coding MVP: project file tools (list/read/write/edit) when the session has a project. */
   tools?: ToolSet;
+  /** ROUND-46 (R46 live-battery find): hard ceiling for ONE provider call.
+   * A stalled provider connection used to hang the turn forever — the
+   * session stayed "running" indefinitely and the outer loop never
+   * returned. Defaults to PROVIDER_CALL_TIMEOUT_MS. */
+  timeoutMs?: number;
 }
+
+/** Round-46: 10 minutes per provider call — generous enough for slow
+ * free-tier generations with many tool round-trips, bounded enough that a
+ * dead connection aborts into the normal error path (turn.error + status
+ * reset + retryable 502) instead of hanging the session forever. */
+export const PROVIDER_CALL_TIMEOUT_MS = 600_000;
 
 /** Resolve the provider's wire format (unknown/absent → chat-completions). */
 export function resolveApiFormat(raw: string | undefined): ApiFormat {
@@ -126,6 +137,9 @@ export const aiSdkChat: ChatFn = async (input) => {
     temperature: input.temperature,
     // Multi-step agentic loop: each tool round-trip is one step.
     stopWhen: stepCountIs(Math.max(1, input.maxTurns)),
+    // ROUND-46: bounded — a stalled connection aborts into the turn-error
+    // path instead of hanging the session at "running" forever.
+    abortSignal: AbortSignal.timeout(input.timeoutMs ?? PROVIDER_CALL_TIMEOUT_MS),
     ...(input.tools !== undefined ? { tools: input.tools } : {}),
   });
   const inputTokens = result.usage.inputTokens ?? 0;
@@ -252,13 +266,18 @@ export type StreamChatFn = (input: StreamChatInput) => AsyncGenerator<StreamChat
  * totalUsage can resolve empty — take the larger of the two sources).
  */
 export const streamAiSdkChat: StreamChatFn = async function* (input) {
+  // ROUND-46: the same per-call ceiling as the sync path, combined with the
+  // caller's abort (client Stop / session signal) — whichever fires first.
+  const timeoutSignal = AbortSignal.timeout(input.timeoutMs ?? PROVIDER_CALL_TIMEOUT_MS);
+  const callSignal =
+    input.signal !== undefined ? AbortSignal.any([input.signal, timeoutSignal]) : timeoutSignal;
   const result = streamText({
     model: buildModel(input),
     system: input.system === "" ? undefined : input.system,
     messages: input.messages,
     temperature: input.temperature,
     stopWhen: stepCountIs(Math.max(1, input.maxTurns)),
-    abortSignal: input.signal,
+    abortSignal: callSignal,
     ...(input.tools !== undefined ? { tools: input.tools } : {}),
   });
 
