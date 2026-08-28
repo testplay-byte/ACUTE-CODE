@@ -512,6 +512,28 @@ export function resolveSnapshotForTool(
   return best;
 }
 
+/** ROUND-46 (R46-c): POST /checkpoints/:id/restore response body. */
+export interface RestoreCheckpointResult {
+  restored: true;
+  message: string;
+}
+
+/**
+ * ROUND-46 (R46-c): restore a file snapshot's BEFORE content to disk
+ * (POST /checkpoints/:id/restore). The backend route has existed since
+ * round-25 but had no UI caller (the "unrouted feature" lesson) — the
+ * DiffDetail restore action is that caller. Overwrites the file at the
+ * snapshot's path. NOTE: restoring a create (before content null) DELETES
+ * the file via the backend's unlink branch — the UI deliberately hides the
+ * action for creates. Throws ApiError (404 unknown checkpoint, 409 session
+ * without a project, 500 restore failed) carrying the server's message.
+ */
+export function restoreCheckpoint(checkpointId: string): Promise<RestoreCheckpointResult> {
+  return request<RestoreCheckpointResult>(`/checkpoints/${checkpointId}/restore`, {
+    method: "POST",
+  });
+}
+
 /**
  * Round-28 WS-D3: compute a minimal unified diff (line-level LCS) between
  * before/after content. Returns lines tagged +/- / context for the DiffCard

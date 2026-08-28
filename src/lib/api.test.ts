@@ -5,6 +5,7 @@ import {
   getAgentsBackend,
   httpAgents,
   parseDiffArgs,
+  restoreCheckpoint,
   toProjectChatItems,
   type Agent,
   type SessionEvent,
@@ -505,5 +506,43 @@ describe("computeUnifiedDiff", () => {
     const big = Array.from({ length: 300 }, (_, i) => `line${i}`).join("\n");
     const lines = computeUnifiedDiff(null, big);
     expect(lines).toHaveLength(200);
+  });
+});
+
+// ROUND-46 (R46-c): the checkpoint-restore client fn (POST /checkpoints/:id/restore).
+describe("restoreCheckpoint (ROUND-46 R46-c)", () => {
+  it("POSTs /checkpoints/:id/restore and returns the route's response body", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      jsonResponse(200, { restored: true, message: "restored src/app.ts to previous content" }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const result = await restoreCheckpoint("snap_abc123");
+
+    expect(result).toEqual({ restored: true, message: "restored src/app.ts to previous content" });
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    expect(url).toBe("http://sidecar.test/api/v1/checkpoints/snap_abc123/restore");
+    expect(init.method).toBe("POST");
+    // Bodyless POST — the restore route reads nothing from the request.
+    expect(init.body).toBeUndefined();
+  });
+
+  it("maps the restore error envelope onto ApiError (404 unknown checkpoint)", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        jsonResponse(404, {
+          error: { code: "NOT_FOUND", message: "no checkpoint with id snap_missing" },
+        }),
+      ),
+    );
+
+    const err = await restoreCheckpoint("snap_missing").catch((e) => e);
+    expect(err).toBeInstanceOf(ApiError);
+    expect(err.status).toBe(404);
+    expect(err.code).toBe("NOT_FOUND");
+    expect(err.message).toBe("no checkpoint with id snap_missing");
+    expect(err.isNetwork).toBe(false);
   });
 });

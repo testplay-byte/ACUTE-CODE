@@ -1,10 +1,12 @@
 import { useEffect, useRef, useState } from "react";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { AnimatePresence, motion } from "framer-motion";
 import {
   ChevronDown,
   FileCode2,
   Globe,
+  Loader2,
+  RotateCcw,
   Settings2,
   Terminal,
   type LucideIcon,
@@ -13,6 +15,7 @@ import {
   DIFF_TOOLS,
   parseDiffArgs,
   resolveSnapshotForTool,
+  restoreCheckpoint,
   type DiffLine,
   type ToolUseEntry,
   type WorkingEntry,
@@ -20,6 +23,7 @@ import {
   fetchSessionCheckpoints,
   fetchSnapshot,
 } from "../../lib/api";
+import { pushLocalToast } from "../../hooks/use-notifications";
 import { useRightSidebarStore } from "../../lib/right-sidebar-store";
 import { SubAgentCard } from "./SubAgentCard";
 import { SEMANTIC_COLORS } from "../../lib/semantics";
@@ -236,12 +240,22 @@ function NarrationRow({ content }: { content: string }) {
 
 function DiffDetail({ tool, sessionId }: { tool: ToolUseEntry; sessionId: string | null }) {
   const styles = useThemeStyles();
+  // ROUND-46 (R46-c): restore invalidates the explorer tree + open file
+  // views (the file on disk changes under them).
+  const queryClient = useQueryClient();
   // ROUND-38: open files in the right sidebar's Files tab (not the old center
   // Code panel). The active project is set by ChatFocusLayout.
   const openFileInSidebar = useRightSidebarStore((s) => s.openFile);
   const activeProjectId = useRightSidebarStore((s) => s.activeProjectId);
   const [diffLines, setDiffLines] = useState<DiffLine[] | null>(null);
   const [loading, setLoading] = useState(false);
+  // ROUND-46 (R46-c): the restore target — the resolved snapshot's id, armed
+  // only when a full snapshot was fetched AND it carries before content.
+  const [restoreTarget, setRestoreTarget] = useState<{ id: string } | null>(null);
+  // ROUND-46 (R46-c): two-step destructive-confirm state for restore.
+  const [restoreState, setRestoreState] = useState<"idle" | "confirm" | "restoring" | "restored">(
+    "idle",
+  );
 
   const { path } = parseDiffArgs(tool.argsSummary);
 
@@ -253,14 +267,32 @@ function DiffDetail({ tool, sessionId }: { tool: ToolUseEntry; sessionId: string
   });
 
   const loadDiff = async () => {
+    // ROUND-46 (R46-c) RACE FIX: while the checkpoints list is still in
+    // flight, resolving against `?? []` finds nothing and bakes "no snapshot
+    // recorded" forever — the `diffLines !== null` guard below then blocks
+    // the re-run once the data actually arrives (the first diff card to
+    // mount hit exactly this). Wait for the query; the effect re-fires on
+    // the pending → settled transition (data arrival, and errors where
+    // data stays undefined).
+    if (checkpointsQuery.isLoading) return;
     if (diffLines !== null || !sessionId) return;
     setLoading(true);
     try {
-      const snapMeta = resolveSnapshotForTool(checkpointsQuery.data ?? [], path, tool.seq);
-      const snap = snapMeta ? await fetchSnapshot(sessionId, snapMeta.seq) : null;
+      const resolved = resolveSnapshotForTool(checkpointsQuery.data ?? [], path, tool.seq);
+      const snap = resolved ? await fetchSnapshot(sessionId, resolved.seq) : null;
       setDiffLines(snap ? computeUnifiedDiff(snap.beforeContent, snap.afterContent) : []);
+      // ROUND-46 (R46-c): Restore targets the snapshot's BEFORE content. A
+      // create (beforeContent === null) has nothing to go back to — and the
+      // backend's restore of a create DELETES the file (unlink branch) — so
+      // the action is deliberately NOT armed for creates.
+      setRestoreTarget(
+        snap !== null && snap.beforeContent !== null && resolved !== null
+          ? { id: resolved.id }
+          : null,
+      );
     } catch {
       setDiffLines([]);
+      setRestoreTarget(null);
     } finally {
       setLoading(false);
     }
@@ -268,8 +300,104 @@ function DiffDetail({ tool, sessionId }: { tool: ToolUseEntry; sessionId: string
 
   useEffect(() => {
     void loadDiff();
-    // loadDiff depends on query state; mount is the trigger we care about.
-  }, [checkpointsQuery.data]);
+    // loadDiff depends on query state; mount + data arrival are the triggers
+    // we care about.
+  }, [checkpointsQuery.data, checkpointsQuery.isLoading]);
+
+  // ROUND-46 (R46-c): restore the recorded BEFORE content over the file on
+  // disk. Never a single-click destructive action (two-step confirm below).
+  // The stored snapshot row itself is untouched — the diff above keeps
+  // showing the recorded history (honest note rendered once restored).
+  const onRestore = async () => {
+    if (restoreTarget === null || restoreState === "restoring") return;
+    setRestoreState("restoring");
+    try {
+      const result = await restoreCheckpoint(restoreTarget.id);
+      setRestoreState("restored");
+      // The file on disk changed under the explorer tree + any open file
+      // view — the same invalidation keys the live-turn send path uses.
+      void queryClient.invalidateQueries({ queryKey: ["project-tree"] });
+      void queryClient.invalidateQueries({ queryKey: ["project-file"] });
+      pushLocalToast("File restored", result.message);
+    } catch (err) {
+      // 404/409/500 with the server's message — persistent toast so it
+      // isn't missed, back to idle so the owner can retry.
+      setRestoreState("idle");
+      pushLocalToast(
+        "Restore failed",
+        err instanceof Error ? err.message : String(err),
+        "task_failed",
+      );
+    }
+  };
+
+  // ROUND-46 (R46-c): the Restore affordance, styled like the Open pill
+  // (h-5 px-2 rounded-full text-[10px] font-bold) so it reads as one family.
+  const restoreUi = (() => {
+    if (restoreState === "restoring") {
+      return (
+        <button
+          disabled
+          aria-live="polite"
+          title="Restoring the file to its content before this change…"
+          className="shrink-0 h-5 px-2 rounded-full text-[10px] font-bold flex items-center gap-1 cursor-default"
+          style={{ background: styles.subtle, color: styles.textSecondary }}
+        >
+          <Loader2 size={10} className="animate-spin" /> Restoring…
+        </button>
+      );
+    }
+    if (restoreState === "restored") {
+      return (
+        <span
+          className="shrink-0 h-5 px-2 rounded-full text-[10px] font-bold flex items-center gap-1"
+          style={{
+            background: withAlpha(SEMANTIC_COLORS.success, 0.12),
+            color: SEMANTIC_COLORS.success,
+          }}
+        >
+          <RotateCcw size={10} /> Restored
+        </span>
+      );
+    }
+    if (restoreTarget === null || diffLines === null) return null;
+    if (restoreState === "confirm") {
+      return (
+        <>
+          <button
+            onClick={() => void onRestore()}
+            title="Overwrite the file on disk with its recorded content from before this change"
+            className="shrink-0 h-5 px-2 rounded-full text-[10px] font-bold border-[1.5px] transition-colors flex items-center gap-1"
+            style={{
+              borderColor: withAlpha(SEMANTIC_COLORS.danger, 0.45),
+              color: SEMANTIC_COLORS.danger,
+            }}
+          >
+            <RotateCcw size={10} /> Confirm restore?
+          </button>
+          <button
+            onClick={() => setRestoreState("idle")}
+            className="shrink-0 h-5 px-2 rounded-full text-[10px] font-bold transition-colors"
+            style={{ background: styles.subtle, color: styles.textSecondary }}
+          >
+            Cancel
+          </button>
+        </>
+      );
+    }
+    return (
+      <button
+        onClick={() => setRestoreState("confirm")}
+        title="Restore the file on disk to its content from before this change"
+        className="shrink-0 h-5 px-2 rounded-full text-[10px] font-bold transition-colors flex items-center gap-1"
+        style={{ background: styles.subtle, color: styles.textSecondary }}
+        onMouseEnter={(e) => (e.currentTarget.style.background = styles.subtleHover)}
+        onMouseLeave={(e) => (e.currentTarget.style.background = styles.subtle)}
+      >
+        <RotateCcw size={10} /> Restore
+      </button>
+    );
+  })();
 
   const added = diffLines?.filter((l) => l.type === "add").length;
   const removed = diffLines?.filter((l) => l.type === "del").length;
@@ -294,6 +422,7 @@ function DiffDetail({ tool, sessionId }: { tool: ToolUseEntry; sessionId: string
             </span>
           </span>
         ) : null}
+        {restoreUi}
         {path && (
           <button
             onClick={() => {
@@ -353,6 +482,12 @@ function DiffDetail({ tool, sessionId }: { tool: ToolUseEntry; sessionId: string
               </span>
             </div>
           ))}
+        </div>
+      )}
+      {restoreState === "restored" && (
+        <div className="mt-1 text-[10px] font-mono" style={{ color: styles.textTertiary }}>
+          File restored on disk — the diff above is the recorded history; the
+          stored snapshot is unchanged.
         </div>
       )}
     </div>
