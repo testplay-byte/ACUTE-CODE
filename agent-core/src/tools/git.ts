@@ -7,6 +7,8 @@ import { execFile } from "node:child_process";
 import { existsSync } from "node:fs";
 import { join } from "node:path";
 import type { ToolResult } from "./index.js";
+// ROUND-45 (audit P0-3): even fixed binaries get a scrubbed env.
+import { buildChildEnv } from "../lib/child-env.js";
 
 const MAX_OUTPUT = 32 * 1024;
 const GIT_TIMEOUT = 15_000;
@@ -22,6 +24,7 @@ function git(root: string, args: string[]): Promise<ToolResult> {
       timeout: GIT_TIMEOUT,
       maxBuffer: MAX_OUTPUT,
       encoding: "utf8",
+      env: buildChildEnv(),
     }, (error, stdout, stderr) => {
       if (error && !stdout) {
         resolve({ ok: false, output: `git ${args[0]} failed: ${stderr || error.message}`.slice(0, MAX_OUTPUT) });

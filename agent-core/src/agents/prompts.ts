@@ -123,6 +123,7 @@ export function buildProjectSystemPrompt(ctx: PromptContext): string {
     lines.push("- Read the output carefully before deciding next steps.");
     lines.push("- If a command fails, read the error and fix the root cause — don't just retry.");
     lines.push("- Prefer project-specific commands (npm test, pnpm build, cargo check) over generic ones.");
+    lines.push("- Auto-approved commands must stay INSIDE the project root — reading files outside it (absolute paths, ~, ..) or anything unusual asks the owner first; keep paths project-relative.");
     lines.push("");
   }
 
@@ -151,6 +152,7 @@ export function buildProjectSystemPrompt(ctx: PromptContext): string {
     lines.push("## WEB ACCESS");
     lines.push("- Use web_search to FIND information: documentation, API references, library examples, concept explanations.");
     lines.push("- Use web_fetch to READ a specific public URL: a docs page, an RFC, a GitHub raw file, a blog post.");
+    lines.push("- Documentation/source hosts (github.com, npmjs.com, developer.mozilla.org, nodejs.org, tauri.app…) fetch freely; any other host asks the owner for permission — prefer the well-known hosts when a choice exists.");
     lines.push("- Always web_search first when you don't know the exact URL; then web_fetch the most relevant result.");
     lines.push("- Cite the URL you fetched in your answer so the user can verify.");
     lines.push("- Web content is capped at 16KB — for longer pages, fetch the most relevant section.");

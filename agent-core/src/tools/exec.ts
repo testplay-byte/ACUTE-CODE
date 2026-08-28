@@ -11,6 +11,8 @@
 import { spawn } from "node:child_process";
 import type { ToolResult } from "./index.js";
 import { decideCommand, requestCommandApproval, type ApprovalRequestDeps } from "../approvals.js";
+// ROUND-45 (audit P0-3): children never inherit the sidecar's secrets.
+import { buildChildEnv } from "../lib/child-env.js";
 
 const COMMAND_TIMEOUT = 60_000;
 const MAX_OUTPUT = 64 * 1024;
@@ -32,7 +34,7 @@ export async function runCommand(
   }
 
   if (approvalDeps !== undefined) {
-    const gate = await requestCommandApproval(approvalDeps, trimmed);
+    const gate = await requestCommandApproval(approvalDeps, trimmed, { root });
     if (!gate.allowed) {
       return { ok: false, output: `command not approved: ${gate.note}` };
     }
@@ -43,7 +45,7 @@ export async function runCommand(
       cwd: root,
       shell: true,
       timeout: COMMAND_TIMEOUT,
-      env: { ...process.env, FORCE_COLOR: "0", CI: "1" },
+      env: buildChildEnv(),
     });
 
     let combined = "";

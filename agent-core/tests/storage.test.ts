@@ -132,6 +132,7 @@ describe("openDatabase", () => {
       // ROUND-44 (R44-a): the agent memory system — the project memory
       // table + memory_save/recall/list appended to seed allowlists.
       { version: 15, name: "0015_memory.sql" },
+      { version: 16, name: "0016_web_host_rules.sql" },
     ]);
     expect(appliedSecond).toEqual(appliedFirst);
   });

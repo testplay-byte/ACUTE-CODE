@@ -27,6 +27,22 @@ function tool(set: ToolSet, name: string): Tool {
 }
 
 let tempDir = "";
+
+/**
+ * ROUND-45 (P0-5): browser_control navigate (and web_fetch) are host-gated —
+ * the tool needs a ToolDeps with an approval channel. This helper builds one
+ * against a fresh per-test DB (migrations run → web_host_rules exists).
+ */
+async function buildTools(root: string) {
+  db = openDatabase(join(tempDir, `${randomUUID()}.db`));
+  return buildProjectTools(root, undefined, {
+    db,
+    sessionId: "sess_browser_tool",
+    agentId: "agt_browser_tool",
+    projectId: "proj_browser_tool",
+  });
+}
+
 let db: SqliteDatabase;
 let app: Awaited<ReturnType<typeof buildServer>> | null = null;
 const TOKEN = "test-token-browse";
@@ -55,33 +71,33 @@ afterAll(() => {
 
 describe("browser_control — navigate / history round-trip", () => {
   it("navigate pushes history, get_state reads it back, back/forward walk it", async () => {
-    const tools = await buildProjectTools(tempDir);
+    const tools = await buildTools(tempDir);
     const bc = tool(tools, "browser_control");
 
-    const first = await bc.execute({ action: "navigate", url: "https://example.com/one", sessionId: "tool-tab-1" });
+    const first = await bc.execute({ action: "navigate", url: "https://en.wikipedia.org/one", sessionId: "tool-tab-1" });
     expect(first.ok).toBe(true);
-    expect(first.output).toContain("https://example.com/one");
+    expect(first.output).toContain("https://en.wikipedia.org/one");
 
-    await bc.execute({ action: "navigate", url: "https://example.com/two", sessionId: "tool-tab-1" });
+    await bc.execute({ action: "navigate", url: "https://en.wikipedia.org/two", sessionId: "tool-tab-1" });
 
     const state = await bc.execute({ action: "get_state", sessionId: "tool-tab-1" });
     expect(state.ok).toBe(true);
     const parsed = JSON.parse(state.output) as { currentUrl: string; index: number; canBack: boolean; canForward: boolean };
-    expect(parsed.currentUrl).toBe("https://example.com/two");
+    expect(parsed.currentUrl).toBe("https://en.wikipedia.org/two");
     expect(parsed.index).toBe(1);
     expect(parsed.canBack).toBe(true);
     expect(parsed.canForward).toBe(false);
 
     const back = await bc.execute({ action: "back", sessionId: "tool-tab-1" });
     expect(back.ok).toBe(true);
-    expect(back.output).toContain("https://example.com/one");
+    expect(back.output).toContain("https://en.wikipedia.org/one");
 
     const mid = await bc.execute({ action: "get_state", sessionId: "tool-tab-1" });
-    expect((JSON.parse(mid.output) as { currentUrl: string; canForward: boolean }).currentUrl).toBe("https://example.com/one");
+    expect((JSON.parse(mid.output) as { currentUrl: string; canForward: boolean }).currentUrl).toBe("https://en.wikipedia.org/one");
 
     const forward = await bc.execute({ action: "forward", sessionId: "tool-tab-1" });
     expect(forward.ok).toBe(true);
-    expect(forward.output).toContain("https://example.com/two");
+    expect(forward.output).toContain("https://en.wikipedia.org/two");
 
     // Boundary: back beyond the first entry is an honest noop.
     await bc.execute({ action: "back", sessionId: "tool-tab-1" });
@@ -96,12 +112,12 @@ describe("browser_control — navigate / history round-trip", () => {
   });
 
   it("records titles via navigate (same URL = title-update, not a new entry)", async () => {
-    const tools = await buildProjectTools(tempDir);
+    const tools = await buildTools(tempDir);
     const bc = tool(tools, "browser_control");
-    await bc.execute({ action: "navigate", url: "https://example.com/doc", sessionId: "tool-tab-2" });
+    await bc.execute({ action: "navigate", url: "https://en.wikipedia.org/doc", sessionId: "tool-tab-2" });
     const titled = await bc.execute({
       action: "navigate",
-      url: "https://example.com/doc",
+      url: "https://en.wikipedia.org/doc",
       sessionId: "tool-tab-2",
     });
     // No title provided → same-URL navigate is still not a second entry.
@@ -115,7 +131,7 @@ describe("browser_control — navigate / history round-trip", () => {
 
 describe("browser_control — set_viewport", () => {
   it("applies presets, custom sizes, zoom and rotate; get_state returns them", async () => {
-    const tools = await buildProjectTools(tempDir);
+    const tools = await buildTools(tempDir);
     const bc = tool(tools, "browser_control");
 
     const preset = await bc.execute({ action: "set_viewport", preset: "mobile-sm", sessionId: "tool-tab-vp" });
@@ -140,7 +156,7 @@ describe("browser_control — set_viewport", () => {
   });
 
   it("rejects out-of-bounds sizes, unknown presets, and empty patches", async () => {
-    const tools = await buildProjectTools(tempDir);
+    const tools = await buildTools(tempDir);
     const bc = tool(tools, "browser_control");
 
     const narrow = await bc.execute({ action: "set_viewport", width: 100, sessionId: "tool-tab-vp2" });
@@ -165,34 +181,34 @@ describe("browser_control — set_viewport", () => {
 
 describe("browser_control — input validation + default sessionId", () => {
   it("defaults to the shared 'agent' session when no browser tab exists (with hint)", async () => {
-    const tools = await buildProjectTools(tempDir);
+    const tools = await buildTools(tempDir);
     const bc = tool(tools, "browser_control");
 
-    const nav = await bc.execute({ action: "navigate", url: "https://example.com/agent-default" });
+    const nav = await bc.execute({ action: "navigate", url: "https://en.wikipedia.org/agent-default" });
     expect(nav.ok).toBe(true);
     expect(nav.output).toContain("no embedded browser tab is open");
 
     const state = JSON.parse((await bc.execute({ action: "get_state" })).output) as { sessionId: string; currentUrl: string };
     expect(state.sessionId).toBe("agent");
-    expect(state.currentUrl).toBe("https://example.com/agent-default");
+    expect(state.currentUrl).toBe("https://en.wikipedia.org/agent-default");
   });
 
   it("explicit sessionIds are validated and isolated from each other", async () => {
-    const tools = await buildProjectTools(tempDir);
+    const tools = await buildTools(tempDir);
     const bc = tool(tools, "browser_control");
 
     const badId = await bc.execute({ action: "get_state", sessionId: "../evil id" });
     expect(badId.ok).toBe(false);
     expect(badId.output).toContain("sessionId");
 
-    await bc.execute({ action: "navigate", url: "https://example.com/a", sessionId: "sess-a" });
-    await bc.execute({ action: "navigate", url: "https://example.com/b", sessionId: "sess-b" });
+    await bc.execute({ action: "navigate", url: "https://en.wikipedia.org/a", sessionId: "sess-a" });
+    await bc.execute({ action: "navigate", url: "https://en.wikipedia.org/b", sessionId: "sess-b" });
     const a = JSON.parse((await bc.execute({ action: "get_state", sessionId: "sess-a" })).output) as { currentUrl: string };
-    expect(a.currentUrl).toBe("https://example.com/a");
+    expect(a.currentUrl).toBe("https://en.wikipedia.org/a");
   });
 
   it("navigate demands an absolute http(s) url; unknown actions are refused", async () => {
-    const tools = await buildProjectTools(tempDir);
+    const tools = await buildTools(tempDir);
     const bc = tool(tools, "browser_control");
 
     expect((await bc.execute({ action: "navigate", sessionId: "sess-v" })).ok).toBe(false);
@@ -206,7 +222,9 @@ describe("browser_control — input validation + default sessionId", () => {
 
 describe("browser_control ↔ route state sharing (one server, no self-fetch)", () => {
   it("the tool's DEFAULT target is the tab session the server minted; tool pushes are visible over HTTP", async () => {
-    db = openDatabase(join(tempDir, `${randomUUID()}.db`));
+    // ROUND-45: buildTools opens a fresh db AND assigns it to the module-level
+    // `db` — do it FIRST so the server and the afterEach cleanup share it.
+    await buildTools(tempDir);
     app = buildServer({
       token: TOKEN,
       db,
@@ -223,11 +241,16 @@ describe("browser_control ↔ route state sharing (one server, no self-fetch)", 
     });
     expect(mint.statusCode).toBe(200);
 
-    const tools = await buildProjectTools(tempDir);
+    const tools = await buildProjectTools(tempDir, undefined, {
+      db,
+      sessionId: "sess_browser_tool",
+      agentId: "agt_browser_tool",
+      projectId: "proj_browser_tool",
+    });
     const bc = tool(tools, "browser_control");
 
     // No explicit sessionId → targets tab-live-1 (the tab the user views).
-    const nav = await bc.execute({ action: "navigate", url: "https://example.com/shared" });
+    const nav = await bc.execute({ action: "navigate", url: "https://en.wikipedia.org/shared" });
     expect(nav.ok).toBe(true);
     expect(nav.output).not.toContain("no embedded browser tab is open");
 
@@ -239,7 +262,7 @@ describe("browser_control ↔ route state sharing (one server, no self-fetch)", 
     });
     expect(history.statusCode).toBe(200);
     const body = history.json() as { entries: Array<{ url: string }>; index: number; canBack: boolean };
-    expect(body.entries.map((e) => e.url)).toEqual(["https://example.com/shared"]);
+    expect(body.entries.map((e) => e.url)).toEqual(["https://en.wikipedia.org/shared"]);
     expect(body.index).toBe(0);
 
     // And the agent's viewport write is what the panel would GET.

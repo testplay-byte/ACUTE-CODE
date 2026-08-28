@@ -140,6 +140,35 @@ export interface SearchResult {
 }
 
 /**
+ * ROUND-45 (audit P0-5): secret-scrub a search query BEFORE it leaves the
+ * machine. web_search talks only to fixed endpoints (DDG/Wikipedia), so the
+ * query string is the only model-controlled part — a prompt-injected agent
+ * could otherwise exfiltrate secrets by "searching" for them. Two layers:
+ * exact keyring values (passed by the caller), then key-SHAPED patterns
+ * (OpenRouter/OpenAI/GitHub/AWS/Slack) so even an unknown secret is caught.
+ */
+const KEY_SHAPED_PATTERNS: readonly RegExp[] = [
+  /sk-or-v1-[A-Za-z0-9]{16,}/g,
+  /sk-[A-Za-z0-9_-]{20,}/g,
+  /ghp_[A-Za-z0-9]{30,}/g,
+  /github_pat_[A-Za-z0-9_]{20,}/g,
+  /AKIA[0-9A-Z]{16}/g,
+  /xox[baprs]-[A-Za-z0-9-]{10,}/g,
+  /AIza[A-Za-z0-9_-]{30,}/g,
+];
+
+export function scrubSearchQuery(query: string, knownSecrets: readonly string[] = []): string {
+  let out = query;
+  for (const secret of knownSecrets) {
+    if (secret.length >= 8) out = out.split(secret).join("[redacted]");
+  }
+  for (const pattern of KEY_SHAPED_PATTERNS) {
+    out = out.replace(pattern, "[redacted]");
+  }
+  return out;
+}
+
+/**
  * web_search (round-44) — search the REAL web for a query; returns ranked
  * results (title, url, snippet). Chain: DuckDuckGo HTML → DuckDuckGo lite →
  * MediaWiki encyclopedia fallback (honestly labeled when it comes to that).

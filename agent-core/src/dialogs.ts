@@ -16,6 +16,8 @@ import { spawn } from "node:child_process";
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+// ROUND-45 (audit P0-3): dialogs spawn with a scrubbed env too.
+import { buildChildEnv } from "./lib/child-env.js";
 
 export interface PickFolderResult {
   /** Chosen absolute path; null = user cancelled or no backend. */
@@ -63,7 +65,7 @@ async function pickWindows(): Promise<PickFolderResult> {
       const child = spawn(
         "powershell",
         ["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-STA", "-File", scriptPath, "-ResultFile", resultPath],
-        { stdio: ["ignore", "ignore", "ignore"], windowsHide: true, timeout: DIALOG_TIMEOUT_MS },
+        { stdio: ["ignore", "ignore", "ignore"], windowsHide: true, timeout: DIALOG_TIMEOUT_MS, env: buildChildEnv() },
       );
       child.on("error", () => resolve(-1));
       child.on("close", (code) => resolve(code));
@@ -110,7 +112,7 @@ async function pickUnix(): Promise<PickFolderResult> {
   const failures: string[] = [];
   for (const [cmd, args] of candidates) {
     const result = await new Promise<{ code: number | null; out: string; err: string }>((resolve) => {
-      const child = spawn(cmd, [...args], { stdio: ["ignore", "pipe", "pipe"] });
+      const child = spawn(cmd, [...args], { stdio: ["ignore", "pipe", "pipe"], env: buildChildEnv() });
       let out = "";
       let err = "";
       child.stdout?.on("data", (d: Buffer) => (out += d.toString("utf8")));

@@ -13,7 +13,10 @@ import { jsonSchema, type ToolSet } from "ai";
 import { gitDiff, gitLog, gitStatus } from "./git.js";
 import { runCommand } from "./exec.js";
 import { writeTodo, type TodoItem } from "./todo.js";
-import { webFetch, webSearch } from "./web.js";
+import { webFetch, webSearch, scrubSearchQuery } from "./web.js";
+// ROUND-45 (audit P0-5): web_fetch + browser_control navigate pass through
+// the approval engine's host gate.
+import { requestWebFetchApproval, type ApprovalRequestDeps } from "../approvals.js";
 // ROUND-44 (R44-a): the agent memory tools — persistence lives in
 // storage/memory.ts, the tool wrappers here.
 import { memoryListTool, memoryRecallTool, memorySaveTool } from "./memory.js";
@@ -623,7 +626,7 @@ export async function buildProjectTools(root: string, allowedTools?: readonly st
     },
     run_command: {
       description:
-        "Run a terminal command inside the project root. Read-only and build/test commands run automatically (ls, cat, grep, git status/diff/log, npm/pnpm test/build/lint, cargo check/build). Any other command asks the owner for permission and waits for their decision — blocked commands (sudo, rm -rf, curl, dev servers) are refused outright.",
+        "Run a terminal command inside the project root. Read-only and build/test commands run automatically (ls, cat, grep, git status/diff/log, npm/pnpm test/build/lint, cargo check/build) — but ONLY while every path they touch stays INSIDE the project root (anything under /, ~, .. or another drive asks first). Any other command also asks the owner for permission and waits for their decision — blocked commands (sudo, rm -rf, curl, dev servers) are refused outright.",
       inputSchema: jsonSchema({
         type: "object",
         properties: {
@@ -679,7 +682,7 @@ export async function buildProjectTools(root: string, allowedTools?: readonly st
     },
     web_fetch: {
       description:
-        "Fetch a public http(s) URL and return its content as readable text. Use this to read documentation pages (MDN, react.dev, vitejs.dev), RFCs, GitHub raw files, blog posts, and any public web page. HTML is stripped to readable text (scripts/styles removed); non-HTML content is returned raw. Response is capped at 16KB. This is the agent's 'open a URL in a browser and read it' capability.",
+        "Fetch a public http(s) URL and return its content as readable text. Documentation and source hosts (github.com, raw.githubusercontent.com, npmjs.com, developer.mozilla.org, react.dev, vitejs.dev, typescriptlang.org, nodejs.org, tauri.app, docs.rs, crates.io, pypi.org, docs.python.org, stackoverflow.com and more) fetch without friction; any OTHER host asks the owner for permission first (they can always-allow the host for the project). Use this to read documentation pages, RFCs, GitHub raw files, blog posts, and any public web page. HTML is stripped to readable text (scripts/styles removed); non-HTML content is returned raw. Response is capped at 16KB.",
       inputSchema: jsonSchema({
         type: "object",
         properties: {
@@ -687,11 +690,33 @@ export async function buildProjectTools(root: string, allowedTools?: readonly st
         },
         required: ["url"],
       }),
-      execute: async (input) => webFetch(typeof input.url === "string" ? input.url : ""),
+      execute: async (input) => {
+        const url = typeof input.url === "string" ? input.url : "";
+        // ROUND-45 (P0-5): every outbound fetch is host-gated. No approval
+        // channel at all (bare/test builds) = fail-closed.
+        if (toolDeps === undefined) {
+          return { ok: false, output: "web_fetch unavailable: no approval channel in this context" };
+        }
+        const approvalDeps: ApprovalRequestDeps = {
+          db: toolDeps.db,
+          sessionId: toolDeps.sessionId,
+          agentId: toolDeps.agentId,
+          interactive: toolDeps.interactiveApprovals === true,
+          ...(toolDeps.projectId !== undefined ? { projectId: toolDeps.projectId } : {}),
+          ...(toolDeps.emit !== undefined ? { emit: toolDeps.emit } : {}),
+          ...(toolDeps.signal !== undefined ? { signal: toolDeps.signal } : {}),
+          ...(toolDeps.appendEvent !== undefined ? { appendEvent: toolDeps.appendEvent } : {}),
+        };
+        const gate = await requestWebFetchApproval(approvalDeps, url);
+        if (!gate.allowed) {
+          return { ok: false, output: `web_fetch blocked: ${gate.note}` };
+        }
+        return webFetch(url);
+      },
     },
     web_search: {
       description:
-        "Search the REAL web for a query and return ranked results (title, url, snippet) via DuckDuckGo — no API key needed. Use to find documentation, API references, library usage examples, GitHub issues, changelogs, or explanations of technical concepts. Returns up to 8 results. If both DuckDuckGo endpoints are unavailable it falls back to encyclopedia (Wikipedia) results and says so in the output — for reading a specific known URL, use web_fetch instead.",
+        "Search the REAL web for a query and return ranked results (title, url, snippet) via DuckDuckGo — no API key needed, no approval friction (it only talks to DuckDuckGo/Wikipedia, and the query is secret-scrubbed before it leaves). Use to find documentation, API references, library usage examples, GitHub issues, changelogs, or explanations of technical concepts. Returns up to 8 results. If both DuckDuckGo endpoints are unavailable it falls back to encyclopedia (Wikipedia) results and says so in the output — for reading a specific known URL, use web_fetch instead.",
       inputSchema: jsonSchema({
         type: "object",
         properties: {
@@ -699,11 +724,17 @@ export async function buildProjectTools(root: string, allowedTools?: readonly st
         },
         required: ["query"],
       }),
-      execute: async (input) => webSearch(typeof input.query === "string" ? input.query : ""),
+      execute: async (input) => {
+        const query = typeof input.query === "string" ? input.query : "";
+        // ROUND-45 (P0-5): the query is the only model-controlled part that
+        // leaves the machine — scrub keyring values + key-shaped strings.
+        const secrets = toolDeps?.keyring !== undefined ? toolDeps.keyring.list() : [];
+        return webSearch(scrubSearchQuery(query, secrets));
+      },
     },
     browser_control: {
       description:
-        "Control the user's EMBEDDED BROWSER PANEL — a real in-app web browser the user watches live. Actions: navigate (open/change the page; absolute http(s) URL), back | forward | reload (walk that tab's history), set_viewport (change the display size the user sees — test responsive layouts at phone/tablet/desktop sizes), get_state (read currentUrl, title, viewport, canBack, canForward). Presets: mobile-sm 375×667, mobile-md 390×844, tablet 768×1024, laptop 1280×800, desktop 1440×900, full-hd 1920×1080; or custom width 200-3840 × height 200-4320, zoom 0.25-3, rotate swaps width/height. sessionId optional — defaults to the browser tab the user is currently viewing. Viewport/page changes appear LIVE in the user's panel; announce them in one line. To read page text into your own context, web_fetch is usually more reliable than the panel (it renders through a proxy).",
+        "Control the user's EMBEDDED BROWSER PANEL — a real in-app web browser the user watches live. Actions: navigate (open/change the page; absolute http(s) URL — documentation/source hosts like github.com navigate freely, other hosts ask the owner for permission first), back | forward | reload (walk that tab's history), set_viewport (change the display size the user sees — test responsive layouts at phone/tablet/desktop sizes), get_state (read currentUrl, title, viewport, canBack, canForward). Presets: mobile-sm 375×667, mobile-md 390×844, tablet 768×1024, laptop 1280×800, desktop 1440×900, full-hd 1920×1080; or custom width 200-3840 × height 200-4320, zoom 0.25-3, rotate swaps width/height. sessionId optional — defaults to the browser tab the user is currently viewing. Viewport/page changes appear LIVE in the user's panel; announce them in one line. To read page text into your own context, web_fetch is usually more reliable than the panel (it renders through a proxy).",
       inputSchema: jsonSchema({
         type: "object",
         properties: {
@@ -751,6 +782,30 @@ export async function buildProjectTools(root: string, allowedTools?: readonly st
         if (action === "navigate") {
           const url = typeof input.url === "string" ? input.url.trim() : "";
           if (url === "") return { ok: false, output: "browser_control: action navigate requires url" };
+          // ROUND-45 (audit P0-5): agent-driven navigation is host-gated
+          // exactly like web_fetch (the panel then renders through the
+          // server-side proxy). Malformed/non-http URLs fall through to the
+          // shape validation below (its error is the better one); no approval
+          // channel at all = fail-closed for http(s) too.
+          if (/^https?:\/\//i.test(url)) {
+            if (toolDeps === undefined) {
+              return { ok: false, output: "browser_control: navigate unavailable — no approval channel in this context" };
+            }
+            const approvalDeps: ApprovalRequestDeps = {
+              db: toolDeps.db,
+              sessionId: toolDeps.sessionId,
+              agentId: toolDeps.agentId,
+              interactive: toolDeps.interactiveApprovals === true,
+              ...(toolDeps.projectId !== undefined ? { projectId: toolDeps.projectId } : {}),
+              ...(toolDeps.emit !== undefined ? { emit: toolDeps.emit } : {}),
+              ...(toolDeps.signal !== undefined ? { signal: toolDeps.signal } : {}),
+              ...(toolDeps.appendEvent !== undefined ? { appendEvent: toolDeps.appendEvent } : {}),
+            };
+            const gate = await requestWebFetchApproval(approvalDeps, url, "browser_control");
+            if (!gate.allowed) {
+              return { ok: false, output: `browser_control: navigate blocked — ${gate.note}` };
+            }
+          }
           const result = browserNavigateCommand(sessionId, { url });
           if (!result.ok) return { ok: false, output: `browser_control: ${result.error}` };
           return {
