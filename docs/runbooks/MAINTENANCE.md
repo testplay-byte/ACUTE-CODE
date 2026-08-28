@@ -1,4 +1,4 @@
-<!-- last-reviewed: 2026-08-28 round-45 -->
+<!-- last-reviewed: 2026-08-28 round-46 -->
 # MAINTENANCE — how to find things and change things safely
 
 **Status:** normative · **Established:** round-44 (owner directive: "complete the
@@ -26,8 +26,12 @@ launcher/            owner's one-click entry (ACUTE.bat → acute_launcher.py:
      |               (incl. the terminal routes: one-shot stream + the
      |               persistent terminal-session family backed by
      |               src/terminal-sessions.ts), tools in src/tools/, SQL in
-     |               src/storage/, turn runtime + prompts in src/agents/,
-     |               browser proxy in src/browser-proxy.ts
+     |               src/storage/ (incl. the browser cookie jar,
+     |               storage/browser-cookies.ts, since R46), turn runtime +
+     |               prompts + CONTEXT COMPACTION (agents/compaction.ts,
+     |               R46 — over-budget history is model-summarized into a
+     |               `context.compact` session event instead of hard-dropped)
+     |               in src/agents/, browser proxy in src/browser-proxy.ts
   └─ src-tauri/      Rust Tauri 2 shell — sidecar lifecycle (token mint, spawn,
      |               health poll, shutdown), Credential-Manager key injection.
      |               No cargo in the sandbox; CI is the only Rust oracle (ADR-0012)

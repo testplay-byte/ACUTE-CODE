@@ -1,4 +1,4 @@
-<!-- last-reviewed: 2026-08-28 round-45 -->
+<!-- last-reviewed: 2026-08-28 round-46 -->
 # TESTING — the verification ladder
 
 Five layers; each has a defined "when mandatory". Rules here are binding
@@ -13,16 +13,22 @@ Five layers; each has a defined "when mandatory". Rules here are binding
 | L4 live battery | real provider turn(s), real disk, fresh DB | sandbox, single invocation | anything touching agents, projects, tools, streaming |
 | L5 browser verification | real UI against the live stack; screenshots machine-verified | sandbox, single invocation | any UI-affecting round |
 
-**Current counts (R45, verified 2026-08-28):** `pnpm test` = **565 tests in
-49 files**. Trajectory: 262 (R42) → 397 (R43) → 471 (R44) → 565 (R45), same
-counting basis (the 8 sidecar e2e tests ride along when dist is built). New
-R45 suites: `r45-security` (46 — P0-4 path-containment demotion, P0-5 host
-gate decisions/rules, query scrubbing), `terminal-sessions` (23 — pipe/pty
-engines, caps, idle reaping, ring buffer, the 6 routes end-to-end incl. the
-SSE stream contract), `child-env` (7 — allowlist shape + secret-name
-rejection + real spawn probe), `tool-catalog-drift` (2 — TOOL_NAMES vs
-TOOL_CATALOG guard), SessionsScreen mobile search (+3); TerminalPanel grew
-6→17 (Shell mode toggle, history, kill/new, error states).
+**Current counts (R46, verified 2026-08-28):** `pnpm test` = **622 tests in
+53 files** (610 unit + 12 e2e — the e2e split is 8 sidecar + 4 terminal-
+session, both statically countable in `tests/e2e/`). Trajectory: 262 (R42)
+→ 397 (R43) → 471 (R44) → 565 (R45) → 622 (R46), same counting basis (the
+e2e tests ride along when dist is built). New R46 suites: `context-compaction`
+(14 — seq annotations, compaction planning/apply, end-to-end fake-ChatFn
+incl. reuse + round-2 + fallbacks), `browser-cookies` (16 — RFC 6265-lite
+parse, jar matching/ingest, persistence incl. restart-survival), terminal-
+session e2e (+4, NEW file — create/list/resize, the SSE marker/exit-frame
+contract, DELETE-kill, 404s), `WorkingSection` (9 — the loadDiff race fix,
+restore hidden for creates, the two-step confirm + toast + invalidation
+flow), `api` (+2 → 30 — restoreCheckpoint shape + envelope error),
+`chat-format` (+1 → 6 — the provider-call abortSignal bound), and
+`memory-tools` 16→21 (ranked recall/digest/dedup; the old newest-first
+digest test was replaced); `browser-proxy` 26→33 (cookie replay, smuggle-
+proof, restart-survival, profile isolation, 200-cap).
 
 ## Hard rules
 

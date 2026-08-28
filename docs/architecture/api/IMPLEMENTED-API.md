@@ -1,8 +1,8 @@
-<!-- last-reviewed: 2026-08-28 round-45 -->
+<!-- last-reviewed: 2026-08-28 round-46 -->
 # IMPLEMENTED API — the shipped surface
 
 **Truth = this file.** Verified against `agent-core/src/server.ts` at
-round-17 (2026-08-23), refreshed R37→R45. The aspirational full contract (52
+round-17 (2026-08-23), refreshed R37→R46. The aspirational full contract (52
 operations, WS gateway, planned routes) lives in
 [`API.md`](API.md) — anything there and
 not here **does not exist yet**. Base: `http://127.0.0.1:<port>`; dev port
@@ -76,6 +76,9 @@ tool.use          {role:"tool", toolName, argsSummary, ok, agentId, ts}
                   (one per executed call, appended as each completes)
 message.assistant {role:"assistant", content, agentId, ts,
                    usage:{inputTokens,outputTokens}, ms, model}   ← R16 stats
+context.compact   {summary, throughSeq, droppedMessages,          ← R46
+                   tokensSaved} (one per compaction; the newest
+                   filters assembly — see ROUND-46 additions)
 ```
 
 `message.assistant` payload stats power the per-reply chips in the UI.
@@ -309,6 +312,62 @@ across root `package.json`, `agent-core`, `shared`, `src-tauri/tauri.conf.json`
 `.github/workflows/release.yml` assembles the launcher-kit zip + tag-gated
 draft release (verified: run 33182499163, artifact
 `acute-launcher-kit-v0.45.0`). `GET /health` reports the same version.
+
+## ROUND-46 additions (implemented)
+
+No new REST routes this round — the round shipped agent-runtime intelligence
+(compaction, ranked memory), one frontend caller for an EXISTING route, and
+cookie persistence inside the browser proxy.
+
+- **`context.compact` session event** (persisted, append-only like every
+  event): `{summary, throughSeq, droppedMessages, tokensSaved}` — appended
+  when context compaction runs (`agent-core/src/agents/compaction.ts`).
+  Assembly filters messages covered by the newest compaction's `throughSeq`
+  and prepends the summary message; fork/revert inherit compactions for free
+  (reverting past one resurrects the original messages). Readers that don't
+  know the type skip it — the UI renders only known event types, so no
+  frontend change was required.
+- **`meta.compaction` SSE event** on the streamed turn path
+  (`POST /sessions/:id/messages/stream`): emitted as
+  `{type:"meta.compaction", summary, throughSeq, droppedMessages,
+  tokensSaved}` when a NEW compaction is performed during that turn's outer
+  loop, so a client can surface "context compacted". Informational only —
+  not persisted as an SSE-visible session event itself (the persistent
+  record is the `context.compact` event above).
+- **`restoreCheckpoint` frontend fn + the (pre-existing) restore route** —
+  `POST /checkpoints/:id/restore` has existed since round 25 but had NO
+  caller (api fn or UI) until now; round 46 documented it here and added the
+  missing CALLER: `restoreCheckpoint(checkpointId)` in `src/lib/api.ts` →
+  `{restored: true, message: string}`. Route contract (server.ts): `404`
+  unknown checkpoint id · `409 CONFLICT` when the checkpoint's session has
+  no project (or the project row is gone) · `500 INTERNAL` on a restore
+  failure · restores the file on disk from the snapshot's `before` content —
+  a CREATE checkpoint (`before === null`) takes the unlink branch and
+  DELETES the file, which is why the UI surface (the WorkingSection
+  DiffDetail **Restore pill**: two-step confirm → toast +
+  `project-tree`/`project-file` invalidation) HIDES the button for creates.
+- **Browser-proxy cookie persistence** — behavior notes live inline with the
+  ROUND-43 browser route table above (R46-d same-round update): per-profile
+  SQLite cookie jars (`browser_cookies`, migration 0017), RFC 6265-lite
+  parsing, Cookie replayed + Set-Cookie ingested on EVERY redirect hop,
+  durable across sidecar restarts (session cookies BY DESIGN), ≤200/profile,
+  values never logged/routed/returned, client Cookie headers never
+  forwarded (test-proven). The optional `body.projectId` at ticket mint
+  binds the cookie profile (sticky per session; the frontend does not send
+  it yet — all tabs share `_default`).
+- **Provider-call timeout** (not a route — a transport invariant): both chat
+  adapters (`aiSdkChat`, `streamAiSdkChat` in `agent-core/src/agents/chat.ts`)
+  now wire `AbortSignal.timeout(PROVIDER_CALL_TIMEOUT_MS = 10 min)` — a
+  stalled provider connection aborts into the normal turn-error path
+  (`turn.error` + status reset + retryable 502) instead of hanging the turn
+  forever; the streamed path combines it with the caller's abort signal via
+  `AbortSignal.any`. Per-call `timeoutMs` still overrides.
+- **Memory recall ranking** (tool behavior note): `memory_recall` now scores
+  results by relevance (token-overlap ×2 + substring bonus + kind boost +
+  importance×recency tie-break; zero-match rows dropped) instead of SQL
+  LIKE substring order; `memory_save` dedups (same trimmed content
+  case-insensitive → bumps `updated_at`, refreshes kind/source, reports
+  "refreshed"). Wire shapes unchanged.
 
 ## NOT implemented (despite API.md)
 

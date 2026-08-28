@@ -1,4 +1,4 @@
-<!-- last-reviewed: 2026-08-28 round-45 -->
+<!-- last-reviewed: 2026-08-28 round-46 -->
 # AGENT MEMORY — lessons learned, rules going forward
 
 **Owner directive (2026-08-23):** "learn from the mistakes you made, document
@@ -561,3 +561,22 @@ Format per entry: `N. TITLE (date, source)` → mistake → root cause → rule.
     own colocated tests alone — those prove the component works, not that
     anyone can open it. When wiring it, also grep for existing tests that
     assert the OLD nav shape: they may have pinned the absence.
+
+65. **A backend route without a frontend caller is a feature that does not
+    exist — and nothing guards routes the way the drift guard guards
+    tools.** The `POST /checkpoints/:id/restore` route + `restoreSnapshot()`
+    shipped in round 25 and stayed GREEN in every test run for 21 rounds —
+    yet no api.ts function and no button ever called it, so users could not
+    restore agent-mutated files from the UI at all (the same lesson-#64
+    shape, one layer deeper: not an unrouted COMPONENT but an uncalled
+    ROUTE). Nothing flagged it: the R45 TOOL_CATALOG drift guard covers
+    agent TOOLS only, and a route with zero callers fails no test — the
+    server suite tests routes it exercises itself. Caught in R46 only
+    because the round's recon explicitly hunted "what a highly capable
+    agent is missing". RULE: when a round ships a REST route, the SAME
+    ROUND (or its docs wave) must ship or verify the caller — and periodic
+    recon should diff `scope.<method>(...)` registrations in server.ts
+    against `src/lib/api.ts` client functions, the same way the drift test
+    diffs TOOL_NAMES against TOOL_CATALOG. IMPLEMENTED-API.md is the place
+    the gap shows: a route documented there with no consumer named is a
+    smell.

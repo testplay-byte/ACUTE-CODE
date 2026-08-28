@@ -1,4 +1,4 @@
-<!-- last-reviewed: 2026-08-28 round-45 -->
+<!-- last-reviewed: 2026-08-28 round-46 -->
 # ACUTE-CODE — Documentation Index
 
 One line per document. **Reading order for a new session:** `HANDOFF.md` →
@@ -14,7 +14,7 @@ file the discrepancy and fix the doc in the same round.
 - [`runbooks/TESTING.md`](runbooks/TESTING.md) — the five verification layers, the fresh-DB rule, live-battery and browser-verification recipes
 - [`runbooks/SECURITY.md`](runbooks/SECURITY.md) — security posture: bearer/loopback, tool path containment, secrets custody per surface, launcher redaction, the R45 child-env/auto-tier/web-gate controls, known gaps
 - [`runbooks/AGENT-MEMORY.md`](runbooks/AGENT-MEMORY.md) — numbered lessons (mistake → root cause → rule); read before any session; append-only
-- [`runbooks/PROJECT-MEMORY.md`](runbooks/PROJECT-MEMORY.md) — the R44 agent memory SYSTEM reference (table, tools, digest injection, Memory tab, verification pattern) — distinct from the lessons file above
+- [`runbooks/PROJECT-MEMORY.md`](runbooks/PROJECT-MEMORY.md) — the R44 agent memory SYSTEM reference (table, tools, digest injection, Memory tab, verification pattern; relevance-ranked recall/digest + dedup-on-save since R46) — distinct from the lessons file above
 - [`agent/ORCHESTRATION-WORKLOG.md`](agent/ORCHESTRATION-WORKLOG.md) — session-by-session history (snapshot of the live worklog, refreshed each session)
 - [`runbooks/SANDBOX-RESTORE.md`](runbooks/SANDBOX-RESTORE.md) — zero-to-resumed procedure after a sandbox wipe + the session-end backup rule
 - [`runbooks/AGENT-BOOTSTRAP-PROMPT.md`](runbooks/AGENT-BOOTSTRAP-PROMPT.md) — the paste-once prompt to bootstrap a fresh agent
