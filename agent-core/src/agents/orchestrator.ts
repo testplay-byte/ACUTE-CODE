@@ -23,7 +23,13 @@
  *   stream on every state transition.
  */
 import type Database from "better-sqlite3";
-import { createSession, getSession, listSessionEvents, setSessionStatus } from "../storage/sessions.js";
+import {
+  createSession,
+  getSession,
+  listSessionEvents,
+  setSessionStatus,
+  subAgentCode,
+} from "../storage/sessions.js";
 import { getAgent } from "../storage/agents.js";
 import { getOrchestrationSettings } from "../storage/settings.js";
 import { ProviderKeyring } from "../providers/registry.js";
@@ -99,6 +105,11 @@ export interface SubAgentEventPayload {
   status: "queued" | "running" | "completed" | "failed";
   task: string;
   role: string;
+  /** ROUND-48 (R48-e1): deterministic 4-char [A-Z0-9] code of the child
+   * session (subAgentCode(child.id)) — same value as the `code` field on
+   * GET /sessions/:id/subagents rows, so the UI can join the live status
+   * stream to the polled list + approval attribution by either id or code. */
+  code: string;
   todosDone?: number;
   todosTotal?: number;
 }
@@ -210,6 +221,13 @@ class Orchestrator {
      * SSE emit already accepts unknown; this just stops artificially
      * narrowing it. */
     emit?: (event: unknown) => void,
+    /** ROUND-48 (R48-e1): the parent turn's abort signal. Forwarded into the
+     * child's runSingleAgentTurn so (a) pending child approvals deny on
+     * abort (fail-closed) and (b) the child's outer loop stops BETWEEN
+     * iterations with an honest ABORTED outcome when the owner stops the
+     * parent. The delegate_task tool passes its toolDeps.signal (the live
+     * parent turn's signal). */
+    signal?: AbortSignal,
   ): Promise<{ ok: boolean; output: string; sessionId?: string }> {
     const { db, keyring, chat } = deps;
     const parent = getSession(db, parentSessionId);
@@ -240,6 +258,7 @@ class Orchestrator {
         status: s,
         task,
         role,
+        code: subAgentCode(child.id),
         ...extra,
       });
     };
@@ -295,6 +314,9 @@ class Orchestrator {
         // agent's model — prepareTurn falls back to agent.model).
         getOrchestrationSettings(db).subagentModel ?? undefined,
         wrappedEmit,
+        // ROUND-48 (R48-e1): the parent's abort signal — the child stops
+        // between iterations + its pending approvals deny on abort.
+        signal,
       );
       if (outcome.ok) {
         setSessionStatus(db, child.id, "completed");
@@ -368,6 +390,7 @@ class Orchestrator {
         status: s,
         task: child.title ?? "",
         role,
+        code: subAgentCode(childId),
       });
     };
 

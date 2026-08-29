@@ -8,18 +8,23 @@ import type { FastifyInstance, LightMyRequestResponse } from "fastify";
 
 // The suite runs against the real aiSdkChat adapter with ONLY the AI SDK
 // mocked at the module boundary — no network, no keys, full stack otherwise.
+// ROUND-48 (R48-e1): jsonSchema is also mocked — the delegate_task tool-wiring
+// + prompt-honesty tests build the REAL project toolset (buildProjectTools),
+// whose input schemas wrap through it.
 const generateTextMock = vi.hoisted(() => vi.fn());
 vi.mock("ai", () => ({
   generateText: generateTextMock,
   stepCountIs: (count: number) => ({ type: "stepCount", count }),
+  jsonSchema: <T>(schema: T) => schema,
 }));
 
 import { aiSdkChat } from "../src/agents/chat";
+import type { ChatFn } from "../src/agents/chat";
 import { getOrchestrator, Orchestrator } from "../src/agents/orchestrator";
 import { ProviderKeyring } from "../src/providers/registry";
 import { openDatabase, type SqliteDatabase } from "../src/storage/db";
 import { buildServer } from "../src/server";
-import { createSession, getSession, listSubAgents } from "../src/storage/sessions";
+import { createSession, getSession, listSessionEvents, listSubAgents, subAgentCode } from "../src/storage/sessions";
 import { setOrchestrationSettings } from "../src/storage/settings";
 import { createAgent } from "../src/storage/agents";
 
@@ -300,5 +305,304 @@ describe("ROUND-36: sub-agent orchestration (ADR-0022)", () => {
 
     const primaryRefused = await authInject({ method: "DELETE", url: "/api/v1/providers/openrouter/keys/0" });
     expect(primaryRefused.statusCode).toBe(409);
+  });
+});
+
+describe("ROUND-48 (R48-e1): sub-agent codes, signal forwarding, honest aborts", () => {
+  function makeParent(): { agentId: string; parentSessionId: string } {
+    const agent = createAgent(db, {
+      name: "R48 Orchestrator",
+      providerId: "openrouter",
+      model: "test/orch-1",
+    });
+    const parent = createSession(db, { agentId: agent.id, mode: "single" });
+    return { agentId: agent.id, parentSessionId: parent.id };
+  }
+
+  it("subAgentCode is deterministic, exactly 4 chars [A-Z0-9], and distinguishes ids", () => {
+    const id = "sess_0b8af6e6-6e88-4c96-b7d3-8c9dbb1a5db1";
+    const code = subAgentCode(id);
+    expect(code).toMatch(/^[A-Z0-9]{4}$/);
+    expect(subAgentCode(id)).toBe(code); // pure — same id, same code, forever
+    const other = subAgentCode("sess_1c8af6e6-6e88-4c96-b7d3-8c9dbb1a5db2");
+    expect(other).toMatch(/^[A-Z0-9]{4}$/);
+    expect(other).not.toBe(code); // different ids → different codes
+  });
+
+  it("every subagent-status envelope carries the child's code — same value as the /subagents row", async () => {
+    const { parentSessionId } = makeParent();
+    const envelopes: Array<Record<string, unknown>> = [];
+    const emit = (event: unknown) => envelopes.push(event as Record<string, unknown>);
+
+    const result = await new Orchestrator().delegateTask(
+      { db, keyring: new ProviderKeyring({ ACUTE_PROVIDER_OPENROUTER: KEY }), chat: aiSdkChat },
+      parentSessionId,
+      "code check",
+      "researcher",
+      emit,
+    );
+    expect(result.ok).toBe(true);
+    const childId = result.sessionId!;
+
+    const statuses = envelopes.filter((e) => e.type === "subagent-status");
+    // queued → running → completed (at least).
+    expect(statuses.length).toBeGreaterThanOrEqual(3);
+    for (const s of statuses) {
+      expect(s).toMatchObject({
+        type: "subagent-status",
+        sessionId: childId,
+        parentSessionId,
+        role: "researcher",
+        task: "code check",
+        code: subAgentCode(childId),
+      });
+      expect(s.code).toMatch(/^[A-Z0-9]{4}$/);
+    }
+
+    // The polled list row carries the SAME code (the UI join key).
+    const response = await authInject({
+      method: "GET",
+      url: `/api/v1/sessions/${parentSessionId}/subagents`,
+    });
+    expect(response.statusCode).toBe(200);
+    const subagents = response.json().subagents;
+    expect(subagents).toHaveLength(1);
+    expect(subagents[0].code).toBe(subAgentCode(childId));
+    expect(subagents[0].code).toMatch(/^[A-Z0-9]{4}$/);
+  });
+
+  it("delegateTask forwards an ALREADY-aborted signal — the child never calls the provider (ABORTED outcome)", async () => {
+    const { parentSessionId } = makeParent();
+    const models: string[] = [];
+    const chat: ChatFn = async (input) => {
+      models.push(input.model);
+      return { text: "should never run", usage: { inputTokens: 1, outputTokens: 1, totalTokens: 2 }, toolCalls: [] };
+    };
+    const controller = new AbortController();
+    controller.abort();
+
+    const result = await new Orchestrator().delegateTask(
+      { db, keyring: new ProviderKeyring({ ACUTE_PROVIDER_OPENROUTER: KEY }), chat },
+      parentSessionId,
+      "never runs",
+      "researcher",
+      undefined,
+      controller.signal,
+    );
+
+    // The child stopped BETWEEN iterations (i.e., before iteration 0's call).
+    expect(result.ok).toBe(false);
+    expect(result.output).toContain("aborted");
+    expect(models).toEqual([]); // no provider call at all
+    expect(getSession(db, result.sessionId!)?.status).toBe("failed");
+    // Honest log: the task message landed, and a STOP is not an error —
+    // no turn.error event (mirrors the streamed path's R42/R43 rule).
+    expect(listSessionEvents(db, result.sessionId!).map((e) => e.type)).toEqual(["message.user"]);
+  });
+
+  it("aborting BETWEEN iterations stops the child honestly — partial work persists, no turn.error", async () => {
+    const { parentSessionId } = makeParent();
+    const controller = new AbortController();
+    let calls = 0;
+    const chat: ChatFn = async () => {
+      calls += 1;
+      if (calls === 1) {
+        // The owner stops the parent DURING the first iteration's provider
+        // call — the iteration completes (its work is real), then the loop's
+        // between-iterations check must stop the child.
+        controller.abort();
+        return {
+          text: "working on it",
+          usage: { inputTokens: 1, outputTokens: 1, totalTokens: 2 },
+          toolCalls: [{ name: "read_file", argsSummary: "path: notes.md", ok: true, outputSummary: "42 chars" }],
+        };
+      }
+      return { text: "unreachable", usage: { inputTokens: 1, outputTokens: 1, totalTokens: 2 }, toolCalls: [] };
+    };
+
+    const result = await new Orchestrator().delegateTask(
+      { db, keyring: new ProviderKeyring({ ACUTE_PROVIDER_OPENROUTER: KEY }), chat },
+      parentSessionId,
+      "multi-step task",
+      "researcher",
+      undefined,
+      controller.signal,
+    );
+
+    expect(result.ok).toBe(false);
+    expect(result.output).toContain("aborted");
+    expect(calls).toBe(1); // the SECOND iteration never started
+    const types = listSessionEvents(db, result.sessionId!).map((e) => e.type);
+    expect(types).toContain("tool.use"); // iteration 1's work persisted
+    expect(types).toContain("message.assistant");
+    expect(types).not.toContain("turn.error"); // a stop is not an error
+    expect(getSession(db, result.sessionId!)?.status).toBe("failed");
+  });
+
+  it("the delegate_task TOOL forwards toolDeps.signal into the child turn (call-site wiring)", async () => {
+    const { agentId, parentSessionId } = makeParent();
+    const controller = new AbortController();
+    controller.abort();
+    const models: string[] = [];
+    const chat: ChatFn = async (input) => {
+      models.push(input.model);
+      return { text: "never", usage: { inputTokens: 1, outputTokens: 1, totalTokens: 2 }, toolCalls: [] };
+    };
+
+    const { buildProjectTools } = await import("../src/tools/index");
+    const tools = (await buildProjectTools(tempDir, undefined, {
+      db,
+      sessionId: parentSessionId,
+      agentId,
+      seq: 1,
+      keyring: new ProviderKeyring({ ACUTE_PROVIDER_OPENROUTER: KEY }),
+      chat,
+      signal: controller.signal,
+    })) as unknown as Record<
+      string,
+      { execute: (input: Record<string, unknown>) => Promise<{ ok: boolean; output: string }> }
+    >;
+    expect(tools.delegate_task).toBeDefined();
+
+    // With the signal already aborted, the spawned child must stop before its
+    // first provider call — proof the tool passed toolDeps.signal through.
+    const res = await tools.delegate_task.execute({ task: "signal forwarding check" });
+    expect(res.ok).toBe(false);
+    expect(res.output).toContain("aborted");
+    expect(models).toEqual([]);
+  });
+
+  it("LIVE per-step events (stretch): a chat adapter reporting onStepFinish streams tool/text frames DURING the call — no duplicate post-call batch", async () => {
+    const { parentSessionId } = makeParent();
+    const envelopes: Array<Record<string, unknown>> = [];
+    const emit = (event: unknown) => envelopes.push(event as Record<string, unknown>);
+
+    // Simulates ONE generateText call with TWO internal steps (the AI SDK's
+    // multi-step tool loop): step 1 runs a tool + writes text, step 2 writes
+    // the final text. The adapter reports each step through onStepFinish
+    // exactly like the real generateText hook.
+    const chat: ChatFn = async (input) => {
+      input.onStepFinish?.({
+        text: "reading the file ",
+        toolCalls: [{ name: "read_file", argsSummary: "path: a.md", ok: true, outputSummary: "10 chars" }],
+      });
+      input.onStepFinish?.({ text: "Done. Final report.", toolCalls: [] });
+      return {
+        text: "reading the file Done. Final report.", // SDK semantics: steps concatenate
+        usage: { inputTokens: 1, outputTokens: 1, totalTokens: 2 },
+        toolCalls: [{ name: "read_file", argsSummary: "path: a.md", ok: true, outputSummary: "10 chars" }],
+      };
+    };
+
+    const result = await new Orchestrator().delegateTask(
+      { db, keyring: new ProviderKeyring({ ACUTE_PROVIDER_OPENROUTER: KEY }), chat },
+      parentSessionId,
+      "live steps check",
+      "researcher",
+      emit,
+    );
+    expect(result.ok).toBe(true);
+
+    // The child's inner frames, in order: the tool call + result + the step's
+    // text arrive LIVE (per step), then the final step's text, then ONE
+    // finish marker. The post-call batch (ROUND-40) must NOT re-emit them.
+    const innerEvents = envelopes
+      .filter((e) => e.type === "subagent-event")
+      .map((e) => e.inner as Record<string, unknown>);
+    expect(innerEvents.map((e) => e.type)).toEqual([
+      "tool-call",
+      "tool-result",
+      "text-delta",
+      "text-delta",
+      "finish",
+    ]);
+    expect(innerEvents[0]).toMatchObject({ toolName: "read_file", argsSummary: "path: a.md" });
+    expect(innerEvents[1]).toMatchObject({ toolName: "read_file", ok: true, outputSummary: "10 chars" });
+    expect(innerEvents[2]).toMatchObject({ text: "reading the file " });
+    expect(innerEvents[3]).toMatchObject({ text: "Done. Final report." });
+
+    // Persistence stays POST-CALL and unchanged (ADR-0010 ordering): the
+    // audit trail is the same as the batch path.
+    expect(listSessionEvents(db, result.sessionId!).map((e) => e.type)).toEqual([
+      "message.user",
+      "tool.use",
+      "message.assistant",
+    ]);
+  });
+
+  it("aiSdkChat passes onStepFinish through to generateText and normalizes the SDK step (adapter half of the stretch)", async () => {
+    const snapshots: Array<{ text: string; toolCalls: unknown[] }> = [];
+    const promise = aiSdkChat({
+      provider: { id: "openrouter", baseUrl: "https://example.test" },
+      apiKey: "sk-test",
+      model: "test/model-1",
+      system: "s",
+      messages: [{ role: "user", content: "hi" }],
+      temperature: 0.1,
+      maxTurns: 4,
+      onStepFinish: (step) => snapshots.push(step),
+    });
+    // The mocked generateText received the passthrough — invoke it exactly
+    // like the real SDK would (once per finished step).
+    const options = generateTextMock.mock.calls[0][0] as {
+      onStepFinish?: (step: unknown) => void;
+    };
+    expect(typeof options.onStepFinish).toBe("function");
+    options.onStepFinish?.({
+      text: "step text",
+      toolResults: [
+        { toolName: "read_file", input: { path: "a.md" }, output: { ok: true, output: "10 chars" } },
+      ],
+    });
+    await promise;
+    // Normalized through the SAME extractToolCalls conversion the post-call
+    // audit list uses — live frames and persisted frames agree.
+    expect(snapshots).toEqual([
+      {
+        text: "step text",
+        toolCalls: [{ name: "read_file", argsSummary: "path: a.md", ok: true, outputSummary: "10 chars" }],
+      },
+    ]);
+  });
+
+  it("children's system prompt omits the SUB-AGENTS section (no delegate_task for children); parents keep it", async () => {
+    const { buildProjectSystemPrompt } = await import("../src/agents/prompts");
+    const base = { projectName: "P", rootPath: "/tmp/p", toolNames: ["read_file", "write_file", "run_command"] };
+    expect(buildProjectSystemPrompt(base)).not.toContain("SUB-AGENTS (delegate_task)");
+    expect(
+      buildProjectSystemPrompt({ ...base, toolNames: [...base.toolNames, "delegate_task"] }),
+    ).toContain("SUB-AGENTS (delegate_task)");
+
+    // Integration: the ACTUAL child turn prompt (prepareTurn builds it from
+    // the child's real toolset — all tools MINUS delegate_task).
+    const project = await authInject({
+      method: "POST",
+      url: "/api/v1/projects",
+      payload: { name: "R48 Prompt", rootPath: tempDir },
+    });
+    const projectId = project.json().id as string;
+    const agent = createAgent(db, {
+      name: "R48 Prompt Agent",
+      providerId: "openrouter",
+      model: "test/orch-1",
+    });
+    const parent = createSession(db, { agentId: agent.id, mode: "single", projectId });
+    const systems: string[] = [];
+    const chat: ChatFn = async (input) => {
+      systems.push(input.system);
+      return { text: "done", usage: { inputTokens: 1, outputTokens: 1, totalTokens: 2 }, toolCalls: [] };
+    };
+
+    const result = await new Orchestrator().delegateTask(
+      { db, keyring: new ProviderKeyring({ ACUTE_PROVIDER_OPENROUTER: KEY }), chat },
+      parent.id,
+      "prompt honesty check",
+      "researcher",
+    );
+    expect(result.ok).toBe(true);
+    expect(systems).toHaveLength(1);
+    expect(systems[0]).not.toContain("SUB-AGENTS (delegate_task)");
+    expect(systems[0]).not.toContain("delegate_task"); // not in the tool list either
+    expect(systems[0]).toContain("You have access to these tools");
   });
 });

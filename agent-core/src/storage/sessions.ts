@@ -152,9 +152,15 @@ export function listSessions(
 
 /** ROUND-36 (ADR-0022): a child session's computed status for the
  * sub-agents view — progress from todo.update events, tokens from the usage
- * ledger, report from the last non-empty assistant message. */
+ * ledger, report from the last non-empty assistant message.
+ * ROUND-48 (R48-e1): `code` — a deterministic 4-char [A-Z0-9] short code
+ * (see subAgentCode) so the owner can identify WHICH sub-agent is asking/
+ * working without reading a sess_<uuid>. */
 export interface SubAgentStatus {
   id: string;
+  /** ROUND-48 (R48-e1): deterministic 4-char [A-Z0-9] identifier of the child
+   * (same value on every read + on every subagent-status SSE envelope). */
+  code: string;
   title: string | null;
   subRole: string | null;
   status: SessionStatus;
@@ -166,6 +172,27 @@ export interface SubAgentStatus {
   outputTokens: number;
   report: string | null;
   error: string | null;
+}
+
+/** ROUND-48 (R48-e1, owner directive: sub-agents should be identifiable at a
+ * glance): deterministic short code for a session id — FNV-1a 32-bit hash of
+ * the id, base36-encoded, last 4 characters uppercased (left-padded with
+ * "X" in the astronomically unlikely case the hash encodes shorter than 4
+ * chars, i.e. hash < 36^3). Pure: the same id always maps to the same code,
+ * so the SSE `subagent-status` envelope, the GET /sessions/:id/subagents
+ * rows, approval attribution, and the picker all agree without any stored
+ * state. 4 base36 chars = 1.68M codes — collisions across a realistic
+ * handful of concurrent children are negligible, and the raw id always
+ * travels alongside for exact matching. */
+export function subAgentCode(sessionId: string): string {
+  let hash = 0x811c9dc5; // FNV-1a 32-bit offset basis
+  for (let i = 0; i < sessionId.length; i++) {
+    hash ^= sessionId.charCodeAt(i);
+    hash = Math.imul(hash, 0x01000193); // FNV-1a 32-bit prime
+  }
+  const base36 = (hash >>> 0).toString(36).toUpperCase();
+  const tail = base36.slice(-4);
+  return tail.length >= 4 ? tail : tail.padStart(4, "X");
 }
 
 export function listSubAgents(db: SqliteDatabase, parentSessionId: string): SubAgentStatus[] {
@@ -205,6 +232,7 @@ export function listSubAgents(db: SqliteDatabase, parentSessionId: string): SubA
     }
     return {
       id: child.id,
+      code: subAgentCode(child.id),
       title: child.title,
       subRole: child.sub_role ?? null,
       status: child.status,

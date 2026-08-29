@@ -28,6 +28,14 @@ export interface ChatTurnInput {
   maxTurns: number;
   /** Agentic Coding MVP: project file tools (list/read/write/edit) when the session has a project. */
   tools?: ToolSet;
+  /** ROUND-48 (R48-e1, stretch): LIVE per-step notification. generateText can
+   * run maxTurns internal tool round-trips in ONE call; without this hook the
+   * caller (runSingleAgentTurn forwarding sub-agent events to the parent's
+   * SSE) sees nothing until the whole call completes. The adapter invokes the
+   * callback once per finished step with a normalized snapshot — the same
+   * tool-call summary conversion the post-call extractToolCalls() uses.
+   * Purely informational; the caller's persistence ordering is unchanged. */
+  onStepFinish?: (step: ChatStepSnapshot) => void;
   /** ROUND-46 (R46 live-battery find): hard ceiling for ONE provider call.
    * A stalled provider connection used to hang the turn forever — the
    * session stayed "running" indefinitely and the outer loop never
@@ -119,6 +127,16 @@ export interface ChatToolCall {
   outputSummary?: string;
 }
 
+/** ROUND-48 (R48-e1, stretch): one finished generateText step, normalized —
+ * `text` is the step's own text ("" when the step only called tools) and
+ * `toolCalls` are the step's executed tool calls summarized exactly like the
+ * post-call list (extractToolCalls). The runtime forwards these as live
+ * tool-call/tool-result/text-delta events while the call is still running. */
+export interface ChatStepSnapshot {
+  text: string;
+  toolCalls: ChatToolCall[];
+}
+
 export interface ChatTurnOutput {
   text: string;
   usage: { inputTokens: number; outputTokens: number; totalTokens: number };
@@ -141,6 +159,21 @@ export const aiSdkChat: ChatFn = async (input) => {
     // path instead of hanging the session at "running" forever.
     abortSignal: AbortSignal.timeout(input.timeoutMs ?? PROVIDER_CALL_TIMEOUT_MS),
     ...(input.tools !== undefined ? { tools: input.tools } : {}),
+    // ROUND-48 (R48-e1, stretch): per-step live notification passthrough —
+    // generateText calls it once per finished step (tool round-trip). The
+    // step is normalized through the same extractToolCalls conversion the
+    // post-call audit list uses, so live events and persisted events carry
+    // identical summaries.
+    ...(input.onStepFinish !== undefined
+      ? {
+          onStepFinish: (step: { text?: unknown; toolResults?: unknown }) => {
+            input.onStepFinish!({
+              text: typeof step.text === "string" ? step.text : "",
+              toolCalls: extractToolCalls([step]),
+            });
+          },
+        }
+      : {}),
   });
   const inputTokens = result.usage.inputTokens ?? 0;
   const outputTokens = result.usage.outputTokens ?? 0;

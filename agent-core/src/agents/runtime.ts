@@ -26,7 +26,7 @@ import {
   setSessionStatus,
   touchSession,
 } from "../storage/sessions.js";
-import type { ChatFn, ChatTurnMessage, ChatTurnOutput, StreamChatFn } from "./chat.js";
+import type { ChatFn, ChatStepSnapshot, ChatTurnMessage, ChatTurnOutput, StreamChatFn } from "./chat.js";
 import { buildProjectSystemPrompt, readCustomRules } from "./prompts.js";
 import { getIndexSummary } from "../storage/index.js";
 // ROUND-44 (R44-a): the project memory digest for prompt injection.
@@ -266,10 +266,13 @@ async function prepareTurn(
   modelOverride?: string,
   /** ROUND-36: the chat fn (delegate_task spawns child turns through it). */
   chatForTools?: ChatFn,
-  /** ROUND-36 (streamed turns): forward live subagent-status events to SSE. */
+  /** ROUND-36 (streamed turns): forward live subagent-status events to SSE.
+   * ROUND-48 (R48-e1): also passed by the SYNC path for emitted sub-agent
+   * children (the orchestrator's wrappedEmit) — see interactiveApprovals. */
   emitForTools?: (event: unknown) => void,
   /** ROUND-37 (approvals): the live turn's abort signal — pending approvals
-   * deny on abort. Absent on the sync path (no interactive approvals there). */
+   * deny on abort. ROUND-48 (R48-e1): now also forwarded by the sync path
+   * for sub-agent children (the parent's stop propagates to the child). */
   signalForTools?: AbortSignal,
 ): Promise<PreparedTurn | { error: Extract<TurnOutcome, { ok: false }> }> {
   const session = getSession(db, sessionId);
@@ -388,11 +391,26 @@ async function prepareTurn(
     keyring,
     ...(chatForTools !== undefined ? { chat: chatForTools } : {}),
     ...(emitForTools !== undefined ? { emit: emitForTools } : {}),
-    // ROUND-37 (approvals): interactive = a streamed PARENT turn (emit
-    // channel exists, not a sub-agent child). Sync turns + children fail
-    // fast on non-auto commands instead of waiting.
-    interactiveApprovals:
-      emitForTools !== undefined && session.parentSessionId === null,
+    // ROUND-48 (R48-e1, owner: "sub-agents … they should be an almost exact
+    // copy of the main agent — same functioning, same workings, only
+    // different context… they will have tool access and can ask for
+    // permission"): interactive = an emit channel EXISTS. Previously
+    // `emitForTools !== undefined && session.parentSessionId === null` —
+    // sub-agent children were ALWAYS non-interactive because the
+    // orchestrator never forwarded its wrappedEmit into prepareTurn, so
+    // every ask-tier approval (non-auto commands, web_fetch/
+    // browser_control to non-allowlisted hosts) failed FAST with a deny
+    // note instead of asking the owner. A child WITH an emit channel
+    // (delegateTask from a live streamed parent turn) is now interactive:
+    // its approval.requested/resolved events ride the parent's SSE as
+    // `subagent-event` envelopes (the orchestrator's wrappedEmit wraps
+    // them) and the existing decision route resolves the child's waiter.
+    // Channel-less runs (the plain sync route POST /sessions/:id/messages,
+    // retryChild without emit) STILL fail fast — no UI channel to ask on,
+    // same security posture as ROUND-37. The ask-tier RULES themselves are
+    // unchanged: nobody bypasses allowlists; children can now ASK, the
+    // owner decides.
+    interactiveApprovals: emitForTools !== undefined,
     ...(signalForTools !== undefined ? { signal: signalForTools } : {}),
     appendEvent: (event: {
       type: "approval.requested" | "approval.resolved";
@@ -481,9 +499,20 @@ export async function runSingleAgentTurn(
    * parent's UI can watch the child work in real time — parity with the
    * streamed main-agent path. Absent on the plain sync route. */
   emit?: (event: unknown) => void,
+  /** ROUND-48 (R48-e1): the parent turn's abort signal — the child's pending
+   * approvals deny on abort (fail-closed) and the outer loop stops BETWEEN
+   * iterations with an honest ABORTED outcome (mirroring the streamed
+   * path's stop semantics; a stop is not an error, so no turn.error is
+   * persisted). Absent on the plain sync route. */
+  signal?: AbortSignal,
 ): Promise<TurnOutcome> {
   const { db, keyring, chat } = deps;
-  const prepared = await prepareTurn(db, keyring, sessionId, modelOverride, chat);
+  // ROUND-48 (R48-e1): forward emit AND signal into the turn prep so the
+  // child's toolDeps carries both — interactiveApprovals becomes true for
+  // emitted children (the owner's "sub-agents can ask for permission") and
+  // run_command/web_fetch/browser_control ask-tiers wait on the owner's
+  // decision instead of failing fast.
+  const prepared = await prepareTurn(db, keyring, sessionId, modelOverride, chat, emit, signal);
   if ("error" in prepared) return prepared.error;
   const { session, agent, provider, apiKey, model, tools, system } = prepared;
   const syncStartedAt = Date.now();
@@ -515,8 +544,28 @@ export async function runSingleAgentTurn(
   let totalOutputTokens = 0;
   let lastAssistantEvent: { seq: number; ts: string; content: string } | null = null;
   let lastError: { ok: false; status: 502; code: "PROVIDER_ERROR"; message: string; details: { providerError: string } } | null = null;
+  // ROUND-48 (R48-e1): set when the loop exits via the between-iterations
+  // abort check (a deliberate parent stop) — distinct from a provider error.
+  let stoppedBySignal = false;
+  // ROUND-48 (R48-e1, stretch): count of steps the adapter reported LIVE via
+  // onStepFinish. When > 0 the tool/text events for THIS chat() call were
+  // already emitted as they happened — the post-call batch emission is
+  // skipped (no duplicates). Adapters/stubs without the callback keep the
+  // ROUND-40 post-call behavior.
+  let liveStepsEmitted = 0;
 
   for (let outerIter = 0; outerIter < maxOuterLoops; outerIter++) {
+    // ROUND-48 (R48-e1): a child whose parent was stopped finishes the
+    // in-flight chat() iteration (its events persist — the work done is
+    // real) and then STOPS here instead of starting the next one. Pending
+    // child approvals already denied on abort (fail-closed, approvals.ts).
+    if (signal?.aborted === true) {
+      stoppedBySignal = true;
+      break;
+    }
+    // ROUND-48 (R48-e1, stretch): reset the per-call live-step counter — the
+    // flag must reflect THIS chat() call, not earlier iterations.
+    liveStepsEmitted = 0;
     // ROUND-34: history INCLUDES tool results (multi-step fix — Cline parity).
     // Re-assembled each iteration so the model sees the prior iteration's
     // tool results + assistant text.
@@ -550,6 +599,34 @@ export async function runSingleAgentTurn(
         temperature: agent.temperature,
         maxTurns: agent.maxTurns,
         ...(tools !== undefined ? { tools } : {}),
+        // ROUND-48 (R48-e1, stretch): LIVE per-step events. A single chat()
+        // call can run maxTurns tool round-trips internally; without this
+        // hook the parent UI sees nothing until the WHOLE call completes.
+        // The adapter (generateText's onStepFinish) reports each finished
+        // step and we forward tool-call/tool-result/text events as they
+        // land — the same event shapes as the post-call batch below.
+        ...(emit !== undefined
+          ? {
+              onStepFinish: (step: ChatStepSnapshot) => {
+                liveStepsEmitted += 1;
+                for (const call of step.toolCalls) {
+                  emit({ type: "tool-call", sessionId: session.id, toolName: call.name, argsSummary: call.argsSummary });
+                  emit({
+                    type: "tool-result",
+                    sessionId: session.id,
+                    toolName: call.name,
+                    ok: call.ok,
+                    ...(call.outputSummary !== undefined
+                      ? { outputSummary: scrubSecrets(call.outputSummary, keySecrets) }
+                      : {}),
+                  });
+                }
+                if (step.text !== "") {
+                  emit({ type: "text-delta", sessionId: session.id, text: step.text });
+                }
+              },
+            }
+          : {}),
       });
     } catch (error) {
       const normalized = error instanceof Error ? error : new Error(String(error));
@@ -588,7 +665,10 @@ export async function runSingleAgentTurn(
     // these from inside chatStream; the sync path emits them here, after
     // each chat() completion, so the parent sees the child's tool calls +
     // results + assistant text as they happen (not just the final report).
-    if (emit !== undefined) {
+    // ROUND-48 (R48-e1, stretch): when the adapter reported steps LIVE
+    // (onStepFinish above), these were already emitted per step — skip the
+    // batch to avoid duplicates.
+    if (emit !== undefined && liveStepsEmitted === 0) {
       for (const call of result.toolCalls) {
         emit({ type: "tool-call", sessionId: session.id, toolName: call.name, argsSummary: call.argsSummary });
         emit({
@@ -617,8 +697,13 @@ export async function runSingleAgentTurn(
     // ROUND-40: forward the assistant text + a finish marker (one shot — the
     // sync path has no token deltas, but this is still a big UX win: the
     // parent sees the child's intermediate + final replies as they land).
-    if (emit !== undefined) {
+    // ROUND-48 (R48-e1, stretch): live steps already emitted each step's text
+    // (step texts concatenate to result.text) — only the finish marker is
+    // still needed here.
+    if (emit !== undefined && liveStepsEmitted === 0) {
       emit({ type: "text-delta", sessionId: session.id, text: result.text });
+    }
+    if (emit !== undefined) {
       emit({ type: "finish", sessionId: session.id });
     }
 
@@ -642,6 +727,22 @@ export async function runSingleAgentTurn(
     if (emit !== undefined) {
       emit({ type: "meta.continuation", sessionId: session.id, iteration: outerIter + 1, maxOuterLoops });
     }
+  }
+
+  // ROUND-48 (R48-e1): a deliberate stop between iterations is NOT a
+  // provider failure — mirror runStreamedAgentTurn's abort semantics
+  // exactly: logTurnEnd(ok=false), return the 499 ABORTED envelope, and
+  // persist NO turn.error (R42/R43 rule: a stop is not an error). Work
+  // completed by earlier iterations is already persisted in the event log;
+  // the orchestrator marks the child failed and reports the stop honestly.
+  if (stoppedBySignal) {
+    logTurnEnd(session.id, false, Date.now() - syncStartedAt, totalInputTokens, totalOutputTokens);
+    return {
+      ok: false,
+      status: 499,
+      code: "ABORTED",
+      message: `turn aborted for session ${session.id}`,
+    };
   }
 
   if (lastAssistantEvent === null) {

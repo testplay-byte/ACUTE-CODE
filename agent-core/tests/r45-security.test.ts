@@ -187,7 +187,11 @@ describe("P0-5: requestWebFetchApproval (interactive round-trip)", () => {
     };
   }
 
-  it("non-interactive turns fail fast on non-allowlisted hosts (sub-agents can't wait)", async () => {
+  it("non-interactive (channel-less: no-emit sync runs / sub-agents without an emit channel) fail fast on non-allowlisted hosts", async () => {
+    // ROUND-48 (R48-e1) qualification: sub-agent children WITH an emit
+    // channel now ASK (their approvals ride the parent's SSE); this test pins
+    // the CHANNEL-LESS contract — interactive=false still fails fast, so
+    // nothing can bypass the host gate by waiting in the dark.
     const gate = await requestWebFetchApproval(deps(), "https://evil.example.org/x");
     expect(gate.allowed).toBe(false);
     expect(gate.note).toContain("interactive approval");

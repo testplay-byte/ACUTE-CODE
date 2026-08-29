@@ -383,9 +383,12 @@ export interface ToolDeps {
   keyring?: import("../providers/registry.js").ProviderKeyring;
   /** ROUND-36: the chat fn for child turns (injected to avoid cycles). */
   chat?: import("../agents/chat.js").ChatFn;
-  /** ROUND-37 (approvals): only INTERACTIVE streamed parent turns may pause
-   * and ask the owner for permission. Sync turns + sub-agent children fail
-   * fast on non-auto commands (no 120s burn). */
+  /** ROUND-37/R48 (approvals): any turn with a live emit channel — the
+   * streamed parent turn AND sub-agent children delegated from it — may
+   * pause and ask the owner for permission (a child's approvals ride the
+   * parent's SSE as subagent-event envelopes; the decision route wakes the
+   * child's waiter). Channel-less runs (the plain sync route, retryChild)
+   * still fail fast on non-auto commands (no 120s burn). */
   interactiveApprovals?: boolean;
   /** ROUND-37: the live turn's abort signal — a pending approval denies on
    * abort (the waiter races it; the SDK alone may not cancel tool promises). */
@@ -975,6 +978,9 @@ export async function buildProjectTools(root: string, allowedTools?: readonly st
           task,
           role,
           toolDeps.emit,
+          // ROUND-48 (R48-e1): forward the live parent turn's abort signal so
+          // the child stops between iterations + its approvals deny on abort.
+          toolDeps.signal,
         );
         return { ok: result.ok, output: result.output };
       },

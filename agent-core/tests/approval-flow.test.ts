@@ -18,6 +18,12 @@ import { appendSessionEvent, listSessionEvents } from "../src/storage/sessions";
 import { ProviderKeyring } from "../src/providers/registry";
 import { openDatabase, type SqliteDatabase } from "../src/storage/db";
 import { buildServer } from "../src/server";
+// ROUND-48 (R48-e1): the sub-agent parity cases — a child WITH an emit
+// channel (delegateTask from a live parent turn) is INTERACTIVE: its
+// approvals ride the parent's channel as subagent-event envelopes and the
+// decision route resolves the child's waiter.
+import { getOrchestrator } from "../src/agents/orchestrator";
+import type { ChatFn, ChatToolCall } from "../src/agents/chat";
 
 const TOKEN = "test-token-appr";
 
@@ -253,7 +259,10 @@ describe("ROUND-37: approval flow (ADR-0024)", () => {
     expect(list.json().approvals[0].status).toBe("expired");
   });
 
-  it("non-interactive turns (sync path / sub-agent children) fail FAST without asking", async () => {
+  it("non-interactive turns (NO-EMIT path: plain sync route / retry children without a channel) fail FAST without asking", async () => {
+    // ROUND-48 (R48-e1): this is the CHANNEL-LESS contract — interactive is
+    // false because no emit channel exists, not because the caller is a
+    // child (emitted children now ASK; see the ROUND-48 describe below).
     const { projectId, sessionId, agentId } = await setupProject();
     const emitted: Array<Record<string, unknown>> = [];
     const result = await runCommand(projectRoot, 'printf "x" > appr-sync.txt', {
@@ -304,5 +313,181 @@ describe("ROUND-37: approval flow (ADR-0024)", () => {
     // The waiter denies (fail-closed) and the file never appears.
     const result = await pending;
     expect(result.ok).toBe(false);
+  });
+});
+
+describe("ROUND-48 (R48-e1): sub-agent children WITH an emit channel ask the owner", () => {
+  /** A ChatFn that behaves like the real model: the FIRST provider call
+   * executes ONE run_command call through the REAL tool set the runtime built
+   * for the child (approval gate + all) — blocking inside execute() while
+   * the approval waits, exactly like production — and the follow-up call
+   * (after the tool result folds into history) writes the final report with
+   * no further tool calls, ending the outer loop. */
+  function commandRunningChat(command: string): ChatFn {
+    let calls = 0;
+    let ok = true;
+    let output = "no run_command tool in the child toolset";
+    return async (input) => {
+      calls += 1;
+      const toolCalls: ChatToolCall[] = [];
+      const tools = input.tools as unknown as
+        | Record<string, { execute: (args: Record<string, unknown>) => Promise<{ ok: boolean; output: string }> }>
+        | undefined;
+      if (calls === 1 && tools?.run_command !== undefined) {
+        const res = await tools.run_command.execute({ command });
+        ok = res.ok;
+        output = res.output;
+        toolCalls.push({ name: "run_command", argsSummary: `command: ${command}`, ok, outputSummary: res.output });
+        return {
+          text: ok ? "command ran" : "command was not allowed",
+          usage: { inputTokens: 3, outputTokens: 2, totalTokens: 5 },
+          toolCalls,
+        };
+      }
+      return {
+        text: ok ? `Done. Command outcome: ${output}` : `Done. The command was not allowed: ${output}`,
+        usage: { inputTokens: 3, outputTokens: 2, totalTokens: 5 },
+        toolCalls: [],
+      };
+    };
+  }
+
+  /** Poll the parent's emit collector for a subagent-event envelope whose
+   * inner event matches `innerType` (the frame the parent's SSE carries). */
+  async function waitForSubagentInner(
+    emitted: Array<Record<string, unknown>>,
+    innerType: string,
+  ): Promise<Record<string, unknown> | undefined> {
+    for (let i = 0; i < 200; i++) {
+      const found = emitted.find(
+        (e) => e.type === "subagent-event" && (e.inner as Record<string, unknown> | undefined)?.type === innerType,
+      );
+      if (found !== undefined) return found;
+      await new Promise((r) => setTimeout(r, 10));
+    }
+    return undefined;
+  }
+
+  it("approval.requested rides the parent's emit as a subagent-event envelope; approve → the command runs", async () => {
+    const { sessionId: parentSessionId } = await setupProject();
+    const emitted: Array<Record<string, unknown>> = [];
+    const emit = (event: unknown) => emitted.push(event as Record<string, unknown>);
+    const orchestrator = getOrchestrator();
+    const command = 'printf "child-approved" > child-approved.txt';
+
+    const pending = orchestrator.delegateTask(
+      {
+        db,
+        keyring: new ProviderKeyring({ ACUTE_PROVIDER_OPENROUTER: "sk-or-vtest-appr-child" }),
+        chat: commandRunningChat(command),
+      },
+      parentSessionId,
+      "write the approved file",
+      "coder",
+      emit,
+    );
+
+    // The request arrives on the WRAPPED channel — the EXACT envelope shape
+    // the parent's SSE carries (R48-e2 builds its approval attribution on
+    // this contract).
+    const envelope = await waitForSubagentInner(emitted, "approval.requested");
+    expect(envelope).toBeDefined();
+    const childId = envelope!.sessionId as string;
+    const inner = envelope!.inner as Record<string, unknown>;
+    expect(envelope).toEqual({
+      type: "subagent-event",
+      sessionId: childId,
+      parentSessionId,
+      inner: {
+        type: "approval.requested",
+        approvalId: expect.any(String),
+        toolName: "run_command",
+        argsSummary: command,
+        category: "confirm",
+      },
+    });
+    void inner;
+
+    // The approval ROW is against the CHILD session — the existing decision
+    // route resolves the child's in-process waiter.
+    const approvalId = inner.approvalId as string;
+    const decision = await authInject({
+      method: "POST",
+      url: `/api/v1/approvals/${approvalId}/decision`,
+      payload: { decision: "approved", remember: "once" },
+    });
+    expect(decision.statusCode).toBe(200);
+
+    const result = await pending;
+    expect(result.ok).toBe(true);
+    expect(existsSync(join(projectRoot, "child-approved.txt"))).toBe(true);
+
+    // The resolution rides the SAME envelope channel (verbatim shape).
+    const resolved = await waitForSubagentInner(emitted, "approval.resolved");
+    expect(resolved).toMatchObject({
+      type: "subagent-event",
+      sessionId: childId,
+      parentSessionId,
+      inner: { type: "approval.resolved", approvalId, decision: "approved", remember: "once" },
+    });
+
+    // The child's folded event log carries the full exchange + the tool call.
+    const types = listSessionEvents(db, childId).map((e) => e.type);
+    expect(types).toContain("approval.requested");
+    expect(types).toContain("approval.resolved");
+    expect(types).toContain("tool.use");
+
+    // The permission_request notification names the CHILD session, so the
+    // owner's toast/queue can attribute WHO is asking.
+    const notifications = await authInject({ method: "GET", url: "/api/v1/notifications" });
+    const permission = (notifications.json().notifications as Array<{ kind: string; sessionId: string | null }>).find(
+      (n) => n.kind === "permission_request" && n.sessionId === childId,
+    );
+    expect(permission).toBeDefined();
+
+    expect(pendingApprovalCount()).toBe(0);
+  });
+
+  it("a DENIED child approval returns the denied note to the child (no file, fail-closed)", async () => {
+    const { sessionId: parentSessionId } = await setupProject();
+    const emitted: Array<Record<string, unknown>> = [];
+    const emit = (event: unknown) => emitted.push(event as Record<string, unknown>);
+    const orchestrator = getOrchestrator();
+    const command = 'printf "child-denied" > child-denied.txt';
+
+    const pending = orchestrator.delegateTask(
+      {
+        db,
+        keyring: new ProviderKeyring({ ACUTE_PROVIDER_OPENROUTER: "sk-or-vtest-appr-child" }),
+        chat: commandRunningChat(command),
+      },
+      parentSessionId,
+      "write the denied file",
+      "coder",
+      emit,
+    );
+
+    const envelope = await waitForSubagentInner(emitted, "approval.requested");
+    expect(envelope).toBeDefined();
+    const childId = envelope!.sessionId as string;
+    const approvalId = (envelope!.inner as Record<string, unknown>).approvalId as string;
+
+    await authInject({
+      method: "POST",
+      url: `/api/v1/approvals/${approvalId}/decision`,
+      payload: { decision: "denied" },
+    });
+
+    const result = await pending;
+    // The TURN completes (the child reports the denial) but the command never
+    // ran and the tool result records the denied note.
+    expect(result.ok).toBe(true);
+    expect(existsSync(join(projectRoot, "child-denied.txt"))).toBe(false);
+    const toolUse = listSessionEvents(db, childId).find((e) => e.type === "tool.use");
+    expect(toolUse).toBeDefined();
+    const payload = toolUse!.payload as Record<string, unknown>;
+    expect(payload.ok).toBe(false);
+    expect(String(payload.outputSummary)).toContain("denied");
+    expect(pendingApprovalCount()).toBe(0);
   });
 });
