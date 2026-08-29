@@ -1,4 +1,4 @@
-<!-- last-reviewed: 2026-08-30 round-48 -->
+<!-- last-reviewed: 2026-08-29 round-48 -->
 # Changelog
 
 All notable changes to ACUTE-CODE are documented here. Entries are written for
@@ -14,7 +14,7 @@ version number is single-sourced from the root `package.json`
 Planned next: the bundled installer (a single executable with the packaged
 sidecar — ADR-0003); today the launcher kit remains the distribution path.
 
-## [0.48.0] - 2026-08-30
+## [0.48.0] - 2026-08-29
 
 Round 48 — the owner-test round: every entry below fixes something found while
 actually using the app on Windows.

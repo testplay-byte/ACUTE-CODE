@@ -1,4 +1,4 @@
-<!-- last-reviewed: 2026-08-29 round-47 -->
+<!-- last-reviewed: 2026-08-29 round-48 -->
 # AGENT MEMORY — lessons learned, rules going forward
 
 **Owner directive (2026-08-23):** "learn from the mistakes you made, document
@@ -595,3 +595,28 @@ Format per entry: `N. TITLE (date, source)` → mistake → root cause → rule.
     (run once with the defaults removed) BEFORE shipping; and when you
     remove a fallback, first prove the primary path it was masking actually
     works — the fallback is where input bugs hide.
+
+67. **A green suite that mocks a backend's CONTRACT instead of its BEHAVIOR
+    hides the production bug.** The R48 browser flash-loop (owner-reported:
+    the embedded browser "flashes every one or two seconds… eventually
+    'ticket missing, expired or invalid'") was invisible to the 9 passing
+    BrowserPanel tests for five rounds (the rotation bug was original R43
+    code) because the panel's fetch mock
+    returned the SAME ticket from every `POST /browser/session` and never
+    simulated rotation — the mock copied the routes' shapes (contract) but
+    not the semantics that mattered (behavior): `SessionStore.create()`
+    ROTATES on every call, and navigate/viewport were silently invalidating
+    the ticket the panel was still using. The panel "adopted a new ticket"
+    in tests that was secretly still the old one, so every recovery path
+    looked healthy while the real backend re-killed the credential under
+    it. The R48-d fix mock mirrors the real semantics (mint rotates and
+    kills the previous ticket; navigate/viewport never change ticket
+    validity; the probe 401s iff `bt` ≠ the session's current ticket) — and
+    the new regression tests were stash-verified to FAIL against the
+    pre-fix backend before being accepted. RULE: when a component test
+    mocks a stateful backend, the mock must reproduce the backend's
+    STATE-CHANGING behavior (what rotates/expires/invalidates what), not
+    just its response shapes — and when you fix a bug found only in
+    production, prove the new tests fail on the old code (stash the fix,
+    run them, restore) so you know the mock finally sees the class of bug
+    it missed.

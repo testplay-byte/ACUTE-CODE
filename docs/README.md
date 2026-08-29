@@ -1,4 +1,4 @@
-<!-- last-reviewed: 2026-08-29 round-47 -->
+<!-- last-reviewed: 2026-08-29 round-48 -->
 # ACUTE-CODE — Documentation Index
 
 One line per document. **Reading order for a new session:** `HANDOFF.md` →
@@ -24,7 +24,7 @@ file the discrepancy and fix the doc in the same round.
 ## Requirements & architecture
 - [`specs/SPEC.md`](specs/SPEC.md) — master requirements (F1–F11), owner-approved
 - [`architecture/ARCHITECTURE.md`](architecture/ARCHITECTURE.md) — system design truth (topology, lifecycles, key hand-off) — *partially historical; see IMPLEMENTED-API for the shipped surface*
-- [`architecture/api/IMPLEMENTED-API.md`](architecture/api/IMPLEMENTED-API.md) — **the REST + SSE surface as actually shipped** (verified against code; since R47: the served model catalog, slot-scoped provider tests, and the removed raw-key route are in the ROUND-47 section)
+- [`architecture/api/IMPLEMENTED-API.md`](architecture/api/IMPLEMENTED-API.md) — **the REST + SSE surface as actually shipped** (verified against code; since R48: sub-agent SSE frames with codes + child approvals through the parent stream, browser tickets rotating only at POST /browser/session, and the modern Windows folder picker are in the ROUND-48 section)
 - [`architecture/api/API.md`](architecture/api/API.md) — the full 52-operation *planned* contract (aspirational since Phase 1; WS/planned routes live here, NOT in IMPLEMENTED-API)
 - [`architecture/PROJECT-MAP.md`](architecture/PROJECT-MAP.md) — the product map & naming rules
 - [`architecture/PILLARS.md`](architecture/PILLARS.md) — the three-pillar blueprint (coding / agentic system / automation) and how they interconnect additively

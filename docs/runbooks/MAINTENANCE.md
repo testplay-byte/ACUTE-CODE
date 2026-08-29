@@ -1,4 +1,4 @@
-<!-- last-reviewed: 2026-08-29 round-47 -->
+<!-- last-reviewed: 2026-08-29 round-48 -->
 # MAINTENANCE — how to find things and change things safely
 
 **Status:** normative · **Established:** round-44 (owner directive: "complete the
@@ -27,7 +27,12 @@ launcher/            owner's one-click entry (ACUTE.bat → acute_launcher.py:
      |               Catalog + models-config CRUD); no component keeps its
      |               own fetch plumbing. src/lib/key-pool.ts (R47): pure
      |               nextFreeSlot(heldSlots, 2, 31) for the key-pool UI
-     |               (the slots.length+2 collision fix).
+     |               (the slots.length+2 collision fix). src/lib/stream-
+     |               store.ts (R48): the live-turn SSE consumer — incl. the
+     |               sub-agent live map (childId → code/role/task/status/
+     |               lastActivity from subagent-status frames) + routing of
+     |               subagent-event inner approval.* frames into the
+     |               parent's approvals queue (with subAgentId).
   └─ agent-core/     Node/TS Fastify sidecar (dev 127.0.0.1:5178) — the ONLY
      |               process that touches SQLite; routes in src/server.ts
      |               (incl. the terminal routes: one-shot stream + the
@@ -39,9 +44,24 @@ launcher/            owner's one-click entry (ACUTE.bat → acute_launcher.py:
      |               R46 — over-budget history is model-summarized into a
      |               `context.compact` session event instead of hard-dropped)
      |               in src/agents/, browser proxy in src/browser-proxy.ts
+     |               (R48: SessionStore.getOrCreate — tickets rotate ONLY at
+     |               POST /browser/session; navigate/viewport/adopt are
+     |               non-rotating), sub-agent orchestration in src/agents/
+     |               orchestrator.ts (R48: children with an emit channel are
+     |               interactive — approvals ride the parent's SSE as
+     |               subagent-event envelopes; subAgentCode() in src/storage/
+     |               sessions.ts = deterministic 4-char [A-Z0-9] child code,
+     |               same value on SSE frames + /subagents rows), native
+     |               dialogs in src/dialogs.ts (R48: modern IFileOpenDialog
+     |               COM primary via C# interop → classic FolderBrowserDialog
+     |               fallback → legacy; EVERY dialog owned by a topmost form;
+     |               `ERROR:` result line when all pickers fail)
   └─ src-tauri/      Rust Tauri 2 shell — sidecar lifecycle (token mint, spawn,
      |               health poll, shutdown), Credential-Manager key injection.
-     |               No cargo in the sandbox; CI is the only Rust oracle (ADR-0012)
+     |               No cargo in the sandbox; CI is the only Rust oracle (ADR-0012).
+     |               R48: pick_folder parents rfd to the main webview window
+     |               (compile-verified by CI's cargo check; runtime = owner's
+     |               re-test)
   └─ shared/         canonical domain types both TS packages import
 ```
 
@@ -91,7 +111,9 @@ the owner's DB never learns it, silently. Steps 3 and 4 are not optional.
 
 ### b) A new SQLite migration
 
-Example: `agent-core/src/storage/migrations/0015_memory.sql`.
+Example: `agent-core/src/storage/migrations/0015_memory.sql`; R48's
+`0018_project_colors.sql` is the newest (data-only backfill + audit row —
+no schema change).
 
 1. Next 4-digit number, `NNNN_kebab.sql`; `agent-core/src/storage/db.ts`
    discovers files matching `^(\d{4})_.+\.sql$` on boot and applies unseen ones
@@ -117,17 +139,28 @@ Example: Sub-agents (`src/pages/SettingsPage.tsx` + SubAgentsTab).
 
 ### d) A new right-sidebar tab
 
-Freshest example: Memory (R44).
+Freshest examples: Files explorer (R48, `src/components/right-sidebar/
+FilesExplorerPanel.tsx` — the singleton-tab + quick-menu + panel-switch
+wiring end-to-end) and Memory (R44).
 
 1. Add the type to `RightSidebarTabType` + an `openX(projectId)` action in
-   `src/lib/right-sidebar-store.ts` (singleton-tab dedupe like `openMemory`).
+   `src/lib/right-sidebar-store.ts` (singleton-tab dedupe like `openMemory`/
+   `openFiles`; note R48: addTab returns the ACTIVATED tab's id on the dedupe
+   path — rely on it).
 2. QuickMenu entry + icon in `src/components/right-sidebar/RightSidebar.tsx`
    (the `items` array in the QuickMenu component) + the
    `<Panel projectId…/>` render branch.
 3. Panel component in `src/components/right-sidebar/MemoryPanel.tsx` style
    (TanStack Query polling, grouped cards, hover-revealed actions, sibling
-   visual language: radius 12, hairline borders, small-caps chips).
-4. Component test next to it (`MemoryPanel.test.tsx`).
+   visual language: radius 12, hairline borders, small-caps chips). The R48
+   FilesExplorerPanel is the two-pane-with-own-scroll reference.
+4. Component test next to it (`MemoryPanel.test.tsx`, or the R48 trio
+   `RightSidebar.test.tsx` + `FilesExplorerPanel.test.tsx` +
+   `right-sidebar-store.test.ts` — the full stack: menu → tab → panel).
+
+**Sub-agent tabs are NOT this pattern** — they are multi-instance (one tab
+   per child, id-addressed, code-prefixed title); see SubAgentPanel +
+   `openSubAgent` in RightSidebar (R48) for that variant.
 
 ### e) A new API route
 

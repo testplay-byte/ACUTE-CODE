@@ -1,4 +1,4 @@
-<!-- last-reviewed: 2026-08-29 round-47 -->
+<!-- last-reviewed: 2026-08-29 round-48 -->
 # UI Iterations — Owner Review Rounds
 
 This folder is the **dedicated tracking system for UI-fidelity work** (owner
@@ -86,6 +86,7 @@ UI stands and what is still open.
 - [`round-45.md`](round-45.md) — finishing the agentic environment: security round CLOSED audit P0-3/P0-4/P0-5 (child-env allowlist, path-contained auto tier, web host gate + migration 0016), PTY terminal sessions (Run \| Shell toggle), packaging v1 (version 0.45.0 single-sourced + CHANGELOG + release workflow, launcher-kit artifact verified), TOOL_CATALOG drift guard, VLM pass (orphaned SessionsScreen routed at /sessions, mobile overlay drawer, wizard badge v0.45.0) — 565 tests
 - [`round-46.md`](round-46.md) — agent intelligence depth: context compaction (model-summarized `context.compact` events replace the silent hard drop; fork/revert inherit), relevance-ranked memory (scored recall + ranked digest + dedup-on-save), provider-call 10-min timeout (live-battery find), checkpoint restore UI (the round-25 orphan closed + the loadDiff race fix), browser cookie persistence (migration 0017, per-profile jars, durable session cookies), terminal-session e2e (suite 8→12) — 622 tests
 - [`round-47.md`](round-47.md) — provider management, clean + reliable: one provider API layer (the third HTTP plumbing layer deleted), slot + model-scoped connection tests with honest results, the served model catalog replacing every hand-copied duplicate (SubAgentsTab's 47-entry copy + AgentFormDialog's hardcoded list), enabled enforced at turn time (PROVIDER_DISABLED), raw-key route removed, key-pool slot-collision fix; launcher key scrub (the R44 real-keys leak) + the credentials-parser bug it exposed; version 0.47.0 — 683 tests
+- [`round-48.md`](round-48.md) — the owner-test round (every fix from the owner's own Windows session): sub-agents at near-main-agent parity (ask-tier approvals through the parent's SSE with CODE attribution, abort propagation, deterministic 4-char codes, live per-step events, chat-style SubAgentPanel with a 1s clock, clickable live Delegated card), the browser flash-loop/ticket-401 fix (tickets rotate only at POST /browser/session), a real files explorer tab, sidebar polish (per-project colors + migration 0018, A_ logo + favicon, collapsed-rail fix, Sessions nav removed), the modern always-on-top Windows folder picker; version 0.48.0 — 752 tests
 
 ## Running the UI with a live backend (dev)
 

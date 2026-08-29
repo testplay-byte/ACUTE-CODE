@@ -1,4 +1,4 @@
-<!-- last-reviewed: 2026-08-29 round-47 -->
+<!-- last-reviewed: 2026-08-29 round-48 -->
 # TESTING — the verification ladder
 
 Five layers; each has a defined "when mandatory". Rules here are binding
@@ -13,30 +13,53 @@ Five layers; each has a defined "when mandatory". Rules here are binding
 | L4 live battery | real provider turn(s), real disk, fresh DB | sandbox, single invocation | anything touching agents, projects, tools, streaming |
 | L5 browser verification | real UI against the live stack; screenshots machine-verified | sandbox, single invocation | any UI-affecting round |
 
-**Current counts (R47, verified 2026-08-29):** `pnpm test` = **683 tests in
-56 files** (671 unit + 12 e2e — the e2e split is 8 sidecar + 4 terminal-
-session, both statically countable in `tests/e2e/`). Trajectory: 262 (R42)
-→ 397 (R43) → 471 (R44) → 565 (R45) → 622 (R46) → 683 (R47), same counting
-basis. New/changed R47 suites: `key-pool` (6, NEW — nextFreeSlot gaps/full/
-bounds/dupes — the KeyPoolSection slot-collision regression),
-`ModelsProvidersTab` (8, NEW — the collision through the real KeyPoolSection,
-full-pool guard, key+model selector wiring + the `{slot, model}` POST body,
-the reachability note, ok:false red render), `AgentFormDialog` (5, NEW —
-live provider options, registry-unreachable fallback, vanished-provider,
-catalog datalists, placeholder), `api` 30→56 (every new provider fn: URL/
-method/body/auth + happy + error paths incl. the empty-slot 409 wording and
-ok:false-at-200 semantics), `providers` 32→44 (slot probes provably carry
-THAT key via Bearer capture with neither key leaking into any body; catalog
-shape + 401; GET key → 404 while PUT survives), `sessions` 35→36 (disable →
-PROVIDER_DISABLED, zero events appended → re-enable → the normal no-key
-409), `SubAgentsTab` 9→11 (catalog failure → verbatim error + Retry, zero
-rows — no silent fallback; fail-then-recover). Counting honesty note: the
-per-suite deltas sum to +60; the +61 net against R46's recorded 622 includes
-the R46 baseline being one short of its own CI log (run 33219573774 shows
-623 root-run entries — R46's delta list summed to 58 against its recorded
-+57 net). R47's 683 is exact: CI run 33243501373's log shows the same 683
-root-run entries (648 passed + 35 windows-only skips on CI; the sandbox runs
-them green).
+**Current counts (R48, verified 2026-08-29):** `pnpm test` = **752 tests in
+61 files** (740 unit + 12 e2e — the e2e split is 8 sidecar + 4 terminal-
+session, statically countable in `tests/e2e/` and confirmed in the CI run
+log, where the root run skips them pre-build and the dedicated e2e step
+runs them green). Trajectory: 262 (R42) → 397 (R43) → 471 (R44) → 565
+(R45) → 622 (R46) → 683 (R47) → 752 (R48), same counting basis. New/
+changed R48 suites (every final number re-verified via `vitest list` at
+the tip): `browser-proxy` 33→38 (NEW describe: navigate/viewport/adopt
+never rotate the ticket — mint → navigate → proxy with the ORIGINAL bt
+→ 200, the exact 401-loop sequence; direction/title non-rotation; TTL
+refresh on use unchanged; 4 of 5 stash-verified to FAIL on the pre-fix
+backend) · `BrowserPanel` 9→10 (the fetch mock now mirrors REAL rotation
+semantics — /browser/session rotates, navigate/viewport don't; recovery
+ONCE + loop-PARKS-at-3-per-60s tests) · `approval-flow` 9→11 (no-emit
+child still fails fast, retitled; child WITH emit → approval.requested
+subagent-event envelope → decision route → command runs + resolved
+envelope; denied case) · `orchestrator` 8→16 (code determinism/shape,
+status-envelope ⇄ row agreement, abort between iterations + zero provider
+calls on pre-aborted signal, delegate_task forwards signal, live per-step
+events with no duplicate batch, onStepFinish normalization, children's
+prompt omits the SUB-AGENTS section) · `projects-tools` 21→27 (palette
+shape/default sequence/explicit-color-wins/POST default + migration 0018
+round-robin backfill incl. >8 wrap + custom colors untouched + audit row)
+· `Sidebar` 8→9 (collapsed-rail inset ring, same-36px, scrollable) · `App`
+2→3 (new primary quick action + explicit no-Sessions-nav assertion) ·
+`DashboardScreen` 5→5 (quick-action test rewritten to "Continue in
+<project>") · `WorkingSection` 9→17 (live delegate rows render + click
+opens, attribution incl. the polled-row fallback, "delegating…" beat) ·
+`SubAgentPanel` 6→9 (full transcript render, 1s fake-timer clock, code
+chip, turn.error banner, resolved folding, tab-title prefix strip) ·
+NEW `stream-store` 9 (SSE-driven status→live map + invalidate, approval
+routing with subAgentId, main-agent frame parity, lastActivity summaries)
+· NEW `RightSidebar` 4 (Files quick-menu opens the explorer TAB, picker
+code badge + code-prefixed tab title) · NEW `FilesExplorerPanel` 8
+(tree render, expand/collapse, .md + .ts content, Search fires the
+palette, collapse toggle, honest error+Retry on both panes) · NEW
+`right-sidebar-store` 5 (openFiles singleton dedupe/activate/re-create,
+no collision with single-path file tabs, per-session isolation) · NEW
+`dialogs-script` 8 (script structure + fully-mocked win32 routing for the
+modern-picker chain). Per-suite deltas sum to exactly **+69 = 752 − 683**
+(no baseline drift this round). agent-core total: **460 tests across 27
+files**. Counting honesty note carried from R47: CI's root run on
+windows-latest shows `717 passed | 35 skipped (752)` — the 35 skips are
+the 23 windows-PTY `terminal-sessions` tests + the 12 e2e (skipped
+pre-build in the root pass, then run green by the dedicated e2e step:
+`11 passed | 1 skipped (12)`); the sandbox runs all 752 green in one
+`pnpm test` (dist present).
 
 ## Hard rules
 

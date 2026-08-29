@@ -1,8 +1,8 @@
-<!-- last-reviewed: 2026-08-29 round-47 -->
+<!-- last-reviewed: 2026-08-29 round-48 -->
 # IMPLEMENTED API — the shipped surface
 
 **Truth = this file.** Verified against `agent-core/src/server.ts` at
-round-17 (2026-08-23), refreshed R37→R47. The aspirational full contract (52
+round-17 (2026-08-23), refreshed R37→R48. The aspirational full contract (52
 operations, WS gateway, planned routes) lives in
 [`API.md`](API.md) — anything there and
 not here **does not exist yet**. Base: `http://127.0.0.1:<port>`; dev port
@@ -21,7 +21,7 @@ vite dev origins.
 |---|---|
 | `GET /health` | no auth → `{status:"ok", app:"acute-code", version}` |
 | `POST /internal/providers/keys` | shell-only key rotation: `{providerId, value, action?: "set"\|"delete"}` → `204` |
-| `POST /internal/dialog/folder` | opens the REAL OS folder dialog (PowerShell ×3 methods / zenity / kdialog; always async). → `{path: string\|null, error?}`; `501 DIALOG_UNAVAILABLE` when no backend. Never called by tests (blocks on a human). |
+| `POST /internal/dialog/folder` | opens the REAL OS folder dialog. ROUND-48 (R48-b) rebuilt the Windows path: PRIMARY is the modern `IFileOpenDialog` COM picker (`FOS_PICKFOLDERS` etc. via inline C# interop), classic `FolderBrowserDialog` only as catch-fallback — EVERY dialog owned by a topmost invisible form so it lands ON TOP; PowerShell -STA / zenity / kdialog plumbing unchanged; always async. → `{path: string\|null, error?}` — plus an explicit `ERROR:<msg>` stdout line when both pickers fail (round-48 addition); `501 DIALOG_UNAVAILABLE` when no backend. Never called by tests (blocks on a human). |
 
 ## /api/v1/agents
 
@@ -140,13 +140,13 @@ headers):
 
 | Route | Contract |
 |---|---|
-| `POST /browser/session` | `{sessionId, projectId?}` → `{ticket}` — mints a random 192-bit ticket bound to the tab's session (rotates on re-mint; 12h TTL refreshed on use; dies with session eviction/deletion). ROUND-46 (R46-d): the optional `projectId` binds the session's COOKIE PROFILE (sticky for the session; absent → the shared `_default` profile — the frontend does not send it yet). |
+| `POST /browser/session` | `{sessionId, projectId?}` → `{ticket}` — mints a random 192-bit ticket bound to the tab's session (rotates on re-mint; 12h TTL refreshed on use; dies with session eviction/deletion). **ROUND-48 (R48-d): this is now the ONLY route that rotates a ticket** — see the ROUND-48 section. ROUND-46 (R46-d): the optional `projectId` binds the session's COOKIE PROFILE (sticky for the session; absent → the shared `_default` profile — the frontend does not send it yet). |
 | `DELETE /browser/session` | `{sessionId}` → drops tab state. The profile's cookie jar deliberately SURVIVES (closing a tab is not logging out). |
 | `GET /browser/proxy?url=…&sessionId=…&bt=…` | Server-side fetch of the page: manual redirect walk (≤10 hops, every hop re-guarded), 20s deadline, 25 MiB cap, Range pass-through (206). HTML is rewritten (`<base href=FINAL-URL>` injected, links/assets/forms/styles re-proxied with `bt` echoed, script bodies placeholder-protected, CSP/XFO meta stripped, escape hatch injected before `</body>`); CSS `url()`/`@import` rewritten; everything else byte passthrough. Framing headers (XFO/CSP/COOP/COEP/HSTS) are never forwarded. Invalid/absent ticket → HTML 401 page (renders in-iframe). Scheme allowlist http/https; private-net guard (hostname-only, v1). ROUND-46 (R46-d): every hop runs through the per-profile COOKIE JAR (`browser_cookies`, migration 0017 — RFC 6265-lite parse, Cookie replayed per hop, Set-Cookie ingested per hop, durable across sidecar restarts, ≤200/profile; cookie values never logged/routed/returned; client Cookie headers never forwarded). |
 | `POST /browser/proxy?url=…&bt=…` | Form passthrough (method + content-type + urlencoded/multipart body forwarded). |
 | `GET /browser/history?sessionId=` | `{entries:[{url,title,ts}], index, canBack, canForward}` (LRU ≤32 sessions / ≤50 entries, forward-tail truncation on branch). |
-| `POST /browser/navigate` | `{sessionId, url?, title?}` records/updates an entry, or `{sessionId, direction:"back"\|"forward"\|"reload"}` moves the pointer. |
-| `GET /browser/viewport?sessionId=` / `PUT` | `{width,height,preset,zoom,rotate}` — presets `mobile-sm` 375×667 · `mobile-md` 390×844 · `tablet` 768×1024 · `laptop` 1280×800 (default) · `desktop` 1440×900 · `full-hd` 1920×1080 · `custom`; validation 200..3840 × 200..4320, zoom 0.25..3. This is the SAME state the BrowserPanel renders and the `browser_control` tool reads/writes. |
+| `POST /browser/navigate` | `{sessionId, url?, title?}` records/updates an entry, or `{sessionId, direction:"back"\|"forward"\|"reload"}` moves the pointer. **ROUND-48 (R48-d): no longer rotates the ticket** (uses non-rotating getOrCreate). |
+| `GET /browser/viewport?sessionId=` / `PUT` | `{width,height,preset,zoom,rotate}` — presets `mobile-sm` 375×667 · `mobile-md` 390×844 · `tablet` 768×1024 · `laptop` 1280×800 (default) · `desktop` 1440×900 · `full-hd` 1920×1080 · `custom`; validation 200..3840 × 200..4320, zoom 0.25..3. This is the SAME state the BrowserPanel renders and the `browser_control` tool reads/writes. **ROUND-48 (R48-d): PUT no longer rotates the ticket** (uses non-rotating getOrCreate). |
 
 The rewritten page's escape hatch posts `{type:"acute:open"\|"acute:title"\|"acute:location", …}` messages to the panel (no client cookies/Authorization are forwarded upstream — the ROUND-46 jar is the proxy's own state; no Set-Cookie is forwarded downstream either).
 
@@ -465,6 +465,86 @@ parallel HTTP layer — was deleted; SubAgentsTab and AgentFormDialog consume
 keys (`["models-catalog"]`, `["settings-providers"]`). `POST /providers`
 still takes NO key in the body (never did) — keys travel via the PUT or the
 Tauri shell.
+
+## ROUND-48 additions (implemented)
+
+The owner-test round. **No REST routes added or removed** — the round
+changed SSE frame payloads, one response row shape, browser-proxy ticket
+semantics, and the internal Windows folder-picker script behind an existing
+route.
+
+### SSE: `subagent-status` now carries `code`; sub-agent approvals ride the parent stream
+
+The sub-agent SSE frames (on the PARENT's turn stream,
+`POST /sessions/:id/messages/stream`; frame types existed since R43 but are
+documented here for the first time):
+
+```
+{"type":"subagent-status", "sessionId":"<child>", "parentSessionId":…,
+ "status":"queued"|"running"|"completed"|"failed", "task":…, "role":…,
+ "code":"AB12",            // ROUND-48 (R48-e1): deterministic 4-char
+                              // [A-Z0-9] code (FNV-1a of the child id,
+                              // base36, last 4 uppercased) — same value as
+                              // the code field on /sessions/:id/subagents
+ "todosDone"?:number, "todosTotal"?:number}
+                              // inputTokens/outputTokens/error are
+                              // deliberately NOT here — poll-only via
+                              // GET /sessions/:id/subagents
+
+{"type":"subagent-event", "sessionId":"<child>", "parentSessionId":…,
+ "inner":{"type":"tool-call"|"tool-result"|"text-delta"|"finish"|
+          "approval.requested"|"approval.resolved", …}}
+```
+
+**ROUND-48 (R48-e1): a child delegated from a live parent turn is now
+INTERACTIVE.** Its ask-tier approvals (`run_command` non-auto,
+`web_fetch`/`browser_control` to non-allowlisted hosts) no longer fail
+fast: `approval.requested`/`approval.resolved` inner frames flow through
+the child's emit channel (= the orchestrator's wrappedEmit → these
+`subagent-event` envelopes on the parent's SSE). The approval ROW is
+created against the CHILD session; **the decision travels the existing
+`POST /api/v1/approvals/:id/decision` route** (unchanged) and wakes the
+child's waiter; the `permission_request` notification still publishes,
+naming the child. Inner approval payloads: `approval.requested`
+`{approvalId, toolName, argsSummary, category}` · `approval.resolved`
+`{approvalId, decision, remember?}`. Channel-less runs (the plain sync
+route, `retryChild`) KEEP the fail-fast — ask-tier rules themselves are
+unchanged (children can now ASK; nobody bypasses allowlists). The parent
+turn's AbortSignal also propagates into the child
+(`delegateTask(…, emit?, signal?)`); an aborted child returns a 499
+ABORTED outcome (no `turn.error`) and currently ends status `"failed"`.
+
+### `GET /api/v1/sessions/:id/subagents` rows gain `code`
+
+The R43 route is unchanged in shape EXCEPT every row now carries
+`code: string` — the same deterministic 4-char `[A-Z0-9]` code as the
+SSE envelope (`subAgentCode(sessionId)`, `storage/sessions.ts`), so the
+UI can join the live status stream to the polled list and approval
+attribution by either id or code. Rows otherwise unchanged (title,
+subRole, status, todos, tokens, report, error).
+
+### Browser proxy: tickets rotate ONLY at `POST /browser/session`
+
+**ROUND-48 (R48-d):** `POST /browser/navigate`, `PUT /browser/viewport`,
+and the proxy handler's header-authed adopt path now use the NEW
+non-rotating `SessionStore.getOrCreate(sessionId)` (existing valid ticket
+returned, TTL + LRU refreshed; mints only when the session is unknown or
+the ticket expired). Ticket rotation happens ONLY in `POST
+/browser/session` — the explicit re-mint whose response carries the fresh
+ticket (the panel adopts it). This killed the owner-reported flash loop:
+navigate/viewport used to rotate the ticket the iframe was still using,
+whose dead `bt` then 401'd forever. No URL shapes, param names, response
+bodies, or error pages changed.
+
+### `POST /internal/dialog/folder` → the modern Windows picker
+
+See the internal-routes table above — R48-b rebuilt `dialogs.ts`'
+Windows path (modern `IFileOpenDialog` COM primary, topmost owner form for
+EVERY dialog, classic fallback, `ERROR:` result line). The Tauri-side
+`pick_folder` is now parented to the main webview window
+(`src-tauri/src/dialogs.rs`) — compile-verified by CI's `cargo check`
+only (no cargo in the sandbox); runtime verification is the owner's
+re-test.
 
 ## NOT implemented (despite API.md)
 
