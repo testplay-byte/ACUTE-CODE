@@ -1,4 +1,4 @@
-<!-- last-reviewed: 2026-08-29 round-47 -->
+<!-- last-reviewed: 2026-08-30 round-48 -->
 # Changelog
 
 All notable changes to ACUTE-CODE are documented here. Entries are written for
@@ -13,6 +13,69 @@ version number is single-sourced from the root `package.json`
 
 Planned next: the bundled installer (a single executable with the packaged
 sidecar — ADR-0003); today the launcher kit remains the distribution path.
+
+## [0.48.0] - 2026-08-30
+
+Round 48 — the owner-test round: every entry below fixes something found while
+actually using the app on Windows.
+
+### Added
+
+- Sub-agents can now ask for permission. A sub-agent that hits a
+  needs-approval action (a non-read-only command, a web fetch or browser
+  navigation outside the trusted-host list) pauses and asks you, exactly like
+  the main agent: the approval card appears in the parent chat labelled with
+  the sub-agent's code and role, and Allow / Always allow / Deny releases it.
+  Channel-less runs (background retries) still fail fast instead of hanging.
+- Sub-agents now work live in the UI. The Delegated card in the chat shows
+  each running sub-agent with its code, role, progress and latest activity,
+  and clicking it opens that sub-agent in the right sidebar — no more
+  "Running… Running…" with nothing to click.
+- The right-sidebar sub-agent view is now a real chat transcript — the task,
+  the assistant's replies, every tool call with its result, todo progress and
+  approval events, styled like the main chat — with a per-second clock.
+- Every sub-agent now carries a short code (like `K7F2`), shown in the chat
+  cards, the tab picker and the sub-agent tab title, so you can tell two
+  running agents apart at a glance.
+- Stopping the parent turn now also stops its sub-agents (pending approvals
+  deny fail-closed; children stop cleanly between tool iterations).
+- The Files action in the right sidebar now opens a real file explorer:
+  the project tree on the left (folders expand, files open on click) and the
+  file's contents on the right, with a Search button that still opens the
+  file/command search palette.
+- Projects now get distinct colors. New projects draw from an 8-color palette
+  (least-used first) and existing projects are re-colored on first launch
+  after this update, so the sidebar no longer shows a wall of identical
+  orange. The active project highlights in its own color.
+- A favicon (the new logo mark) for the browser dev setup.
+
+### Changed
+
+- The Sessions entry is gone from the left sidebar. Sessions live where they
+  are used — under their projects — and the sessions screen remains reachable
+  by its direct link only.
+- New, sharper app logo: a solid "A_" prompt mark replacing the two-stroke A.
+- Collapsed sidebar rail: the selected project now shows a clean inset ring
+  instead of an oversized clipped outline, and the rail scrolls.
+
+### Fixed
+
+- The embedded browser no longer flashes and reload-loop every second, and
+  no longer dies with "Browser proxy ticket missing, expired or invalid"
+  after navigating or changing the viewport. Root cause: every navigate and
+  viewport change silently rotated the browser-proxy ticket the panel was
+  still using; tickets now stay valid (a fresh one is only minted by the
+  explicit session re-mint), plus a bounded recovery loop as a safety net.
+- The Browse button in the new-project dialog now opens the modern Windows
+  folder picker (the File-Explorer-style one), and it appears ON TOP of your
+  windows instead of hiding behind them — both in the browser/launcher setup
+  and in the desktop app. The old-style tree dialog remains only as a
+  fallback if the modern one cannot load.
+- Sub-agents actually run their tools now: the approval gate previously
+  failed every ask-tier action silently, which made browser control and most
+  commands impossible for them and made delegation look stuck.
+- Memory entries in the right sidebar dropped the colored left-bar accent in
+  favor of clean uniform cards.
 
 ## [0.47.0] - 2026-08-29
 
