@@ -22,16 +22,22 @@ click into `launcher/` → click each file → **Raw** button → right-click �
 ## Set up your credentials (once)
 
 1. Rename `credentials.example.txt` → **`credentials.txt`**
-2. Open it in Notepad and paste your values on the two marked lines:
+2. Open it in any text editor and paste your values on the marked lines in
+   the **PASTE ZONE**:
    - `GITHUB_PAT=` your GitHub token (starts with `github_pat_`) — needed to
-     download the private repository
-   - `OPENROUTER_KEY=` your OpenRouter key (starts with `sk-or-`) — needed for
-     live model chats
+     download the private repository. **Required.**
+   - `OPENROUTER_KEY=` your OpenRouter key (starts with `sk-or-v1-`) — needed
+     for live model chats. **Required.**
+   - `OPENROUTER_SUB1..3_KEY=` optional extra OpenRouter keys for the
+     sub-agent pool — sub-agents use these first so your main key is not
+     burdened. Leave the placeholders to opt out.
 3. Save and close.
 
 That file stays on your PC only — it is never uploaded, committed, or sent
 anywhere except directly to GitHub (clone/pull auth) and, locally, into the
-app's secure key store. Rotate or clear the values whenever you like.
+app's secure key store. **No keys ship inside the launcher or the template**
+— every value comes from you, and only you. Rotate or clear the values
+whenever you like.
 
 ## Double-click `ACUTE.bat`
 
@@ -53,8 +59,9 @@ What you'll see, in order:
 3. Dependencies install (a few minutes, first time only), the backend builds,
    your OpenRouter key is stored in **Windows Credential Manager**, and the
    servers start.
-4. Open **http://localhost:5173** in your browser. Keep the window open
-   while using the app; **Ctrl+C** in the window stops the servers cleanly.
+4. Open **http://localhost:5173** in your browser (it opens by itself).
+   Keep the window open while using the app; **Ctrl+C** in the window stops
+   the servers cleanly.
 
 ## Every later run
 
@@ -88,14 +95,15 @@ while it runs), so if the launcher prints
 1. Open the repo → `launcher/` → `ACUTE.bat` → Raw → save over your old one.
 2. Double-click again.
 
-> **Changed in round-13 (2026-08-23):** re-download **only
-> `acute_launcher.py`** — git authentication no longer uses credential
-> helpers at all (they failed on Git-for-Windows); the token now goes into
-> the one-off clone/fetch URL and is never stored anywhere. `ACUTE.bat` and
-> `credentials.txt` stay as they are.
->
-> Round-12 (superseded): re-download both `ACUTE.bat` (UTF-8 console) and
-> `acute_launcher.py`.
+> **History note:** round-13 (2026-08-23) switched git authentication away
+> from credential helpers (they failed on Git-for-Windows) — the token now
+> goes into the one-off clone/fetch URL and is never stored anywhere.
+> Round-47 (2026-08-29) removed the sub-agent key defaults that used to be
+> baked into the launcher: all five credential lines are now yours to fill,
+> the launcher never writes key values, and the template ships placeholders
+> only. If your `credentials.txt` predates round-47, missing sub-key lines
+> are appended as placeholders automatically on the next run — fill them or
+> ignore them.
 
 ## Notes
 

@@ -1,6 +1,24 @@
 @echo off
+rem ============================================================================
+rem  ACUTE-CODE — one-click launcher for Windows (coordinator)
+rem ============================================================================
+rem  This tiny file is the ONLY thing you double-click. It sets up a clean
+rem  UTF-8 console, then hands off to acute_launcher.py (the workhorse with
+rem  the full terminal UI — panels, spinners, auto-install, self-update).
+rem
+rem  Files that belong in THIS folder:
+rem      ACUTE.bat              <- you are here (double-click me)
+rem      acute_launcher.py      <- the workhorse (never needs editing)
+rem      credentials.txt        <- your secrets (rename from
+rem                                 credentials.example.txt and fill it in)
+rem
+rem  Useful commands:   ACUTE.bat status   read-only health report
+rem                     ACUTE.bat update   update everything, don't start
+rem                     ACUTE.bat start    start without the update check
+rem ============================================================================
+
+rem --- UTF-8 console so the rich-UI panels render correctly (fixes borders) --
 setlocal
-rem UTF-8 console so the rich-UI panels render correctly (fixes broken borders)
 chcp 65001 >nul
 set PYTHONUTF8=1
 set PYTHONIOENCODING=utf-8
@@ -8,13 +26,9 @@ set PYTHONDONTWRITEBYTECODE=1
 cd /d "%~dp0"
 title ACUTE-CODE
 
-rem ---------------------------------------------------------------
-rem  ACUTE-CODE one-click launcher (coordinator).
-rem  The real work happens in acute_launcher.py (rich terminal UI).
-rem  Keep ACUTE.bat, acute_launcher.py and credentials.txt together
-rem  in this folder. Double-click this file to run everything.
-rem ---------------------------------------------------------------
-
+rem --- run the workhorse via the py launcher, falling back to plain python ---
+rem     errorlevel 9009 = "command not found": try the next interpreter, and
+rem     if none exists, offer to install Python automatically via winget.
 py -3 acute_launcher.py %*
 if not errorlevel 9009 goto done
 

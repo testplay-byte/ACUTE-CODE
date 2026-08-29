@@ -13,8 +13,9 @@
 # rich, beautiful terminal UI (panels, spinners, progress, tables). It:
 #
 #   • reads credentials.txt next to itself (GITHUB_PAT + OPENROUTER_KEY, plus
-#     the optional OPENROUTER_SUB1..3_KEY sub-agent pool keys — ROUND-44;
-#     you fill it once; rotate/clear it whenever you like)
+#     the optional OPENROUTER_SUB1..3_KEY sub-agent pool keys; you fill it
+#     once — the launcher never injects keys of its own — rotate/clear
+#     values whenever you like)
 #   • checks the toolchain and AUTO-INSTALLS what is missing
 #     (git / Node.js via winget on Windows, with your confirmation;
 #      pnpm is activated through corepack — no global installs)
@@ -383,31 +384,29 @@ restarts the servers, and keeps all your data (agents/sessions/projects).
 # credentials.txt
 # ─────────────────────────────────────────────────────────────────────────────
 
-# ROUND-44 (R44-d, owner directive 2026-08-27: "for the 3 sub-agent API keys
-# I want to save them inside the credentials.txt so I don't have to manually
-# enter them for the current time being"): besides GITHUB_PAT + OPENROUTER_KEY
-# the file may carry three OPTIONAL sub-agent pool keys,
+# ROUND-44 introduced the three OPTIONAL sub-agent pool keys,
 # OPENROUTER_SUB1_KEY / OPENROUTER_SUB2_KEY / OPENROUTER_SUB3_KEY. They map to
 # keyring pool slots 2/3/4 (ACUTE_PROVIDER_OPENROUTER_SLOT{2,3,4}) — the exact
 # slots Settings → Sub-agents shows and the orchestrator prefers for child
-# runs, so the owner never pastes them into the UI by hand. Missing lines are
-# AUTO-APPENDED with the baked-in defaults below on the next run (never
-# overwriting values the owner already placed there).
-DEFAULT_SUB_KEYS = [
-    "REDACTED-OPENROUTER-KEY-PURGED-BEFORE-PUBLIC-MIGRATION",  # KEY_2 (sub-1)
-    "REDACTED-OPENROUTER-KEY-PURGED-BEFORE-PUBLIC-MIGRATION",  # KEY_3 (sub-2)
-    "REDACTED-OPENROUTER-KEY-PURGED-BEFORE-PUBLIC-MIGRATION",  # KEY_4 (sub-3)
-]
+# runs, so the owner never pastes them into the UI by hand.
+#
+# ROUND-47 (owner directive 2026-08-29: "It should not be for you to paste in
+# the Open Router API keys by default in it"): the R44 baked-in key defaults
+# were REMOVED — the launcher must never ship or write real key material.
+# ensure_subagent_keys() below now only keeps the three placeholder LINES
+# present in credentials.txt so there is always an obvious place to paste
+# pool keys; it never writes or rewrites values.
 SUB_KEY_NAMES = ["OPENROUTER_SUB1_KEY", "OPENROUTER_SUB2_KEY", "OPENROUTER_SUB3_KEY"]
+SUB_KEY_PLACEHOLDER = "sk-or-v1-PASTE_YOURS_HERE"
 
 
 def read_credentials():
     """Parse credentials.txt → (github_pat, openrouter_key, sub_keys[3]).
 
-    The three OPENROUTER_SUBn_KEY lines are OPTIONAL (pre-ROUND-44 files simply
-    don't have them): a missing or placeholder-looking value becomes "" and is
-    filled in later by ensure_subagent_keys(). A malformed main PAT/key still
-    fails the launch exactly as before — sub keys never block startup.
+    The three OPENROUTER_SUBn_KEY lines are OPTIONAL: a missing or
+    placeholder-looking value becomes "" and the slot simply stays empty —
+    sub keys never block startup. A malformed main PAT/key still fails the
+    launch with precise instructions.
     """
     if not CRED_PATH.exists():
         panel(SETUP_INSTRUCTIONS, style="yellow", title="credentials.txt not found yet")
@@ -421,7 +420,12 @@ def read_credentials():
             line = raw.strip()
             if not line or line.startswith("#"):
                 continue
-            m = re.match(r"^([A-Za-z_]+)\s*=\s*(.+)$", line)
+            # ROUND-47 BUG FIX: the old pattern ^([A-Za-z_]+) could not match
+            # names containing digits — OPENROUTER_SUB1/2/3_KEY lines were
+            # silently NEVER parsed (the R44 pool keys only ever reached the
+            # app through the baked-in defaults, and the owner's own file
+            # values were ignored). Names: letter/underscore, then word chars.
+            m = re.match(r"^([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.+)$", line)
             if m:
                 values[m.group(1).upper()] = m.group(2).strip().strip('"').strip("'")
     except Exception as exc:
@@ -464,14 +468,16 @@ def read_credentials():
 
 
 def ensure_subagent_keys(sub_keys):
-    """ROUND-44 (R44-d): make credentials.txt carry the three sub-agent keys.
+    """ROUND-47: keep the three OPTIONAL sub-key lines present in the file.
 
-    The owner asked for the keys to live INSIDE credentials.txt so they never
-    paste them into the app. Lines already holding a valid key are NEVER
-    touched (the owner may rotate them at will); missing lines are appended,
-    placeholder lines are repaired in place, using the baked-in defaults.
-    Returns the effective three keys (file values win over defaults). Skipped
-    entirely for read-only modes (status) — the caller decides.
+    The owner asked for the pool keys to live INSIDE credentials.txt so they
+    never paste them into the app — and (R47) for the launcher to never ship
+    or inject key values of its own. So this now only appends clearly-marked
+    placeholder lines when the file predates the sub-agent pool, giving the
+    owner an obvious place to paste pool keys. Existing lines are NEVER
+    touched — fill, rotate, or delete them at will. Returns sub_keys exactly
+    as parsed. Skipped entirely for read-only modes (status) — the caller
+    decides.
     """
     try:
         current = CRED_PATH.read_text(encoding="utf-8", errors="replace")
@@ -479,45 +485,36 @@ def ensure_subagent_keys(sub_keys):
         warn(f"could not read credentials.txt for sub-key check ({exc}) — skipping")
         return sub_keys
 
-    effective = list(sub_keys)
-    additions = []
-    repairs = []
+    missing = [
+        name for name in SUB_KEY_NAMES
+        if not re.search(rf"^{name}\s*=", current, re.MULTILINE)
+    ]
+    if not missing:
+        set_count = sum(1 for k in sub_keys if k)
+        ok(f"sub-agent key slots present in credentials.txt ({set_count}/3 set)")
+        return sub_keys
 
-    for i, name in enumerate(SUB_KEY_NAMES):
-        if sub_keys[i]:
-            continue  # valid value already in the file — never touch it
-        default = DEFAULT_SUB_KEYS[i]
-        pattern = rf"^{name}\s*=.*$"
-        if re.search(pattern, current, re.MULTILINE):
-            current = re.sub(pattern, f"{name}={default}", current, flags=re.MULTILINE)
-            repairs.append(name)
-        else:
-            additions.append(f"{name}={default}\n")
-        effective[i] = default
-
-    if not additions and not repairs:
-        ok(f"sub-agent keys already present in credentials.txt ({sum(1 for k in effective if k)}/3)")
-        return effective
-
-    if additions:
-        if current and not current.endswith("\n"):
-            current += "\n"
-        current += (
-            "\n"
-            "# ─── sub-agent pool keys (ROUND-44 — auto-added, safe to edit/remove) ───\n"
-            "# Optional: sub-agents use these first so your main key is not burdened.\n"
-            "# Shown as pool slots 2/3/4 in Settings → Sub-agents. Delete to opt out.\n"
-        ) + "".join(additions)
+    block = (
+        "\n"
+        "# ─── sub-agent pool keys (OPTIONAL — ROUND-47, safe to edit/remove) ───\n"
+        "# Sub-agents use these first so your main key is not burdened.\n"
+        "# Shown as pool slots 2/3/4 in Settings → Sub-agents.\n"
+        "# Leave the placeholders to opt out (children fall back to the main key).\n"
+    )
+    block += "".join(f"{name}={SUB_KEY_PLACEHOLDER}\n" for name in missing)
 
     try:
-        CRED_PATH.write_text(current, encoding="utf-8")
-        touched = ", ".join(repairs + [name for name in SUB_KEY_NAMES
-                                       if f"{name}=" in "".join(additions)])
-        ok(f"sub-agent keys saved into credentials.txt ({touched})")
-        note("remove those lines any time — the app simply falls back to the main key")
+        if current and not current.endswith("\n"):
+            current += "\n"
+        CRED_PATH.write_text(current + block, encoding="utf-8")
+        ok(
+            "sub-agent key slots added to credentials.txt "
+            f"({', '.join(missing)}) — fill them or leave the placeholders"
+        )
+        note("placeholders are ignored — remove those lines any time")
     except Exception as exc:
-        warn(f"could not write sub-agent keys into credentials.txt ({exc})")
-    return effective
+        warn(f"could not add sub-key slots to credentials.txt ({exc})")
+    return sub_keys
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -1009,7 +1006,7 @@ def mode_status(pat, key, env, sub_keys=("", "", "")):
         lines.append("app          not downloaded yet (first run will fetch it)")
     lines.append(f"GitHub PAT   length {len(pat)}")
     lines.append(f"Router key   length {len(key)}")
-    # ROUND-44 (R44-d): sub-agent pool presence (length only, never the value)
+    # sub-agent pool presence (length only, never the value)
     sub_desc = ", ".join(
         f"slot {i + 2} {'set' if sub else '—'}" for i, sub in enumerate(sub_keys)
     )
@@ -1142,8 +1139,8 @@ def main():
         mode_status(pat, key, env, sub_keys)
         return
 
-    # ROUND-44 (R44-d): persist the sub-agent keys into credentials.txt
-    # (auto-append missing lines; existing owner values are never touched).
+    # ROUND-47: keep the optional sub-agent key LINES present in
+    # credentials.txt (placeholder appends only — values are never written).
     sub_keys = ensure_subagent_keys(sub_keys)
     register_secrets(*[s for s in sub_keys if s])
 
