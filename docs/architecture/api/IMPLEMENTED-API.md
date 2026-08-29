@@ -1,8 +1,8 @@
-<!-- last-reviewed: 2026-08-28 round-46 -->
+<!-- last-reviewed: 2026-08-29 round-47 -->
 # IMPLEMENTED API — the shipped surface
 
 **Truth = this file.** Verified against `agent-core/src/server.ts` at
-round-17 (2026-08-23), refreshed R37→R46. The aspirational full contract (52
+round-17 (2026-08-23), refreshed R37→R47. The aspirational full contract (52
 operations, WS gateway, planned routes) lives in
 [`API.md`](API.md) — anything there and
 not here **does not exist yet**. Base: `http://127.0.0.1:<port>`; dev port
@@ -37,8 +37,9 @@ vite dev origins.
 `GET /providers` → `{providers:[{id,name,kind,baseUrl,enabled,hasKey}]}` ·
 `POST /providers` (custom openai-compatible) ·
 `GET /providers/:id/models` (5-min cache) ·
-`POST /providers/:id/test` `{model?}` → `{ok, latencyMs}` or
-`{ok:false,message}` (HTTP 200) / `502` on transport failure.
+`POST /providers/:id/test` `{model?, slot?}` (slot-scoped since ROUND-47)
+→ `{ok, latencyMs}` or `{ok:false,message}` (HTTP 200) / `502` on transport
+failure.
 
 ## /api/v1/projects
 
@@ -368,6 +369,102 @@ cookie persistence inside the browser proxy.
   LIKE substring order; `memory_save` dedups (same trimmed content
   case-insensitive → bumps `updated_at`, refreshes kind/source, reports
   "refreshed"). Wire shapes unchanged.
+
+## ROUND-47 additions (implemented)
+
+The provider-management reliability round. One route added, one removed, one
+extended, one turn-time invariant — plus the frontend consolidation onto a
+single API layer.
+
+### NEW `GET /api/v1/models/catalog`
+
+```
+200 { "models": CatalogModel[],        // === MODEL_CATALOG (46 entries,
+                                    // 18 free) — recommended-order free
+                                    // block first, from storage/models.ts
+      "defaultModelId": "z-ai/glm-5.2:free",
+      "subagentDefaultModelId": "nvidia/nemotron-3.5-lightning:free",
+      "recommendedModelIds": string[] }  // [0] === defaultModelId
+```
+
+Behind the same bearer wall (401 without). Constants-only — no cache, no DB
+rows. This is the single source of truth every model picker consumes
+(SubAgentsTab's 47-entry hand-copied catalog and AgentFormDialog's hardcoded
+provider list were both deleted in R47 in its favor — the ROUTE-side drift
+guard gap lesson #65 flagged).
+
+### REMOVED `GET /api/v1/providers/:id/key`
+
+**Removed-in-R47 — do not call it.** It returned the RAW key value,
+contradicting the route group's keys-never-appear-in-any-response invariant;
+ripgrep-verified zero callers existed (src/, src-tauri/, scripts/, onboarding/
+only ever PUT). The path now 404s. `PUT /api/v1/providers/:id/key` at the
+same path is UNCHANGED (204 — the settings UI saves keys through it), as are
+the key-POOL routes (`GET /providers/:id/keys`, `PUT|DELETE
+/providers/:id/keys/:slot` — masked listings only).
+
+### EXTENDED `POST /api/v1/providers/:id/test` — body `{model?, slot?}`
+
+```
+slot omitted  → primary key (exact pre-R47 behavior, same 409 wording:
+                "no API key stored for provider '<id>' — save one in Windows
+                Credential Manager before testing")
+slot given    → integer 0..31, else 400 VALIDATION { field: "body.slot",
+                message: "slot must be an integer between 0 and 31" }
+key probed    → the keyring POOL key for that slot: slot 0 == primary
+                (ACUTE_PROVIDER_<ID>), slot N → ACUTE_PROVIDER_<ID>_SLOT<N>
+empty slot    → 409 CONFLICT "no API key stored for provider '<id>' slot
+                <n> — save one in Settings → Models & Providers",
+                details { providerId, slot } — fetch never fires
+result        → unchanged: 200 {ok:true, latencyMs, model?} |
+                200 {ok:false, message} (ProviderTestError) |
+                400 | 409 | 502 PROVIDER_ERROR (key-scrubbed)
+```
+
+`model` + `slot` combine: the one-token completion probe runs WITH THE SLOT
+KEY. **Reorder note:** body validation (the model/slot 400s) now runs
+BEFORE the primary-key 409 — an invalid body against a keyless provider
+was 409 pre-R47 and is 400 now; no client relied on the old order (the
+existing no-key test sends `{}`).
+
+### Turn-time `PROVIDER_DISABLED`
+
+`provider.enabled === false` is now enforced where it matters — at turn
+start. `prepareTurn` (shared by the sync route, the streamed route, AND
+orchestrator child turns) returns, before the key check (disablement — the
+owner's explicit choice — wins over a missing key):
+
+```
+409 { code: "PROVIDER_DISABLED",
+      message: "Provider '<name>' is disabled — enable it in Settings →
+               Models & Providers",
+      details: { providerId: "<id>" } }
+```
+
+Same propagation as the no-key 409: no user event appended (the session
+stays clean/retryable); sync route → 409 envelope; streamed route → SSE
+`{type:"error", status:409, code:"PROVIDER_DISABLED", message, details}`;
+status < 500 → no task_failed notification (consistent with all 409s).
+`PROVIDER_DISABLED` was added to the `TurnOutcome` error code union. The
+Enabled toggle had been cosmetic since R37 (PATCH wrote the flag; turns
+never read it).
+
+### Frontend consolidation (not routes — the caller side)
+
+All provider management now lives in ONE layer, `src/lib/api.ts`
+("ROUND-47 (R47-c1)" section): `fetchProviders()` · `createProvider(input)`
+· `updateProvider(id, patch)` · `deleteProvider(id)` ·
+`storeProviderKey(id, value)` · `testProviderConnection(id, {model?,
+slot?})` (an `ok:false` result at HTTP 200 RESOLVES — only transport/
+agent-core failures throw `ApiError`) · `fetchModelsCatalog()` · the
+models-config CRUD quartet (`fetchProviderModelConfig` /
+`upsertProviderModelConfig` / `updateProviderModelConfig` /
+`deleteProviderModelConfig`). ModelsProvidersTab's local `useApi()` — a third
+parallel HTTP layer — was deleted; SubAgentsTab and AgentFormDialog consume
+`fetchModelsCatalog` / `fetchProviders` through shared react-query cache
+keys (`["models-catalog"]`, `["settings-providers"]`). `POST /providers`
+still takes NO key in the body (never did) — keys travel via the PUT or the
+Tauri shell.
 
 ## NOT implemented (despite API.md)
 

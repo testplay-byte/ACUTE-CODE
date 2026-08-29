@@ -1,4 +1,4 @@
-<!-- last-reviewed: 2026-08-28 round-46 -->
+<!-- last-reviewed: 2026-08-29 round-47 -->
 # AGENT MEMORY — lessons learned, rules going forward
 
 **Owner directive (2026-08-23):** "learn from the mistakes you made, document
@@ -580,3 +580,18 @@ Format per entry: `N. TITLE (date, source)` → mistake → root cause → rule.
     diffs TOOL_NAMES against TOOL_CATALOG. IMPLEMENTED-API.md is the place
     the gap shows: a route documented there with no consumer named is a
     smell.
+
+66. **A feature that silently depends on baked-in defaults hides its own
+    broken input path.** The R44 launcher sub-key flow "worked" for three
+    rounds (44–46) purely because `DEFAULT_SUB_KEYS` injected the same three
+    keys the owner was expected to paste — while the credentials parser's
+    regex `^([A-Za-z_]+)` could not match names containing DIGITS, so the
+    owner's own `OPENROUTER_SUB1/2/3_KEY` lines were silently NEVER parsed
+    and his values were always ignored (`ACUTE.bat status` always showed
+    slots unset). Every test and the live battery passed against the
+    DEFAULTS, not the input path. Only deleting the defaults (R47's key
+    scrub) surfaced the bug — via simulation, in the same round. RULE: when
+    a feature has a baked-in fallback, test the no-fallback path explicitly
+    (run once with the defaults removed) BEFORE shipping; and when you
+    remove a fallback, first prove the primary path it was masking actually
+    works — the fallback is where input bugs hide.

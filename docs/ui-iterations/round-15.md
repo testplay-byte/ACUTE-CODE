@@ -52,7 +52,7 @@ Rebuilt as a proper multi-file project in `/home/z/acute-workspace/DASHBOARD/`:
   - `POST /providers/:id/models` — add/update a model (upsert by model_id)
   - `PATCH /models/:id` — update any subset (pricing, context, hidden, etc.)
   - `DELETE /models/:id` — remove
-  - `GET /providers/:id/key` — read the API key (settings UI view/copy)
+  - `GET /providers/:id/key` — read the API key (settings UI view/copy) — **REMOVED in round 47** (raw-key leak, zero callers; the PUT below survives — see IMPLEMENTED-API ROUND-47)
   - `PUT /providers/:id/key` — update the API key
 - Provider creation now accepts `apiFormat`.
 

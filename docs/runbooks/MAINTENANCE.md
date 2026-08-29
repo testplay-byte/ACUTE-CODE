@@ -1,4 +1,4 @@
-<!-- last-reviewed: 2026-08-28 round-46 -->
+<!-- last-reviewed: 2026-08-29 round-47 -->
 # MAINTENANCE — how to find things and change things safely
 
 **Status:** normative · **Established:** round-44 (owner directive: "complete the
@@ -20,7 +20,14 @@ launcher/            owner's one-click entry (ACUTE.bat → acute_launcher.py:
                      injects provider keys as env, runs `pnpm dev:full`,
                      auto-opens the browser; self-updates itself from the repo)
   └─ src/            React 18 + Vite UI (dev :5173) — all screens, panels,
-     |               stores; talks to the sidecar over HTTP + SSE, never SQL
+     |               stores; talks to the sidecar over HTTP + SSE, never SQL.
+     |               src/lib/api.ts is THE canonical HTTP layer — since R47
+     |               it owns the whole provider surface (CRUD + key + slot/
+     |               model-scoped testProviderConnection + fetchModels
+     |               Catalog + models-config CRUD); no component keeps its
+     |               own fetch plumbing. src/lib/key-pool.ts (R47): pure
+     |               nextFreeSlot(heldSlots, 2, 31) for the key-pool UI
+     |               (the slots.length+2 collision fix).
   └─ agent-core/     Node/TS Fastify sidecar (dev 127.0.0.1:5178) — the ONLY
      |               process that touches SQLite; routes in src/server.ts
      |               (incl. the terminal routes: one-shot stream + the

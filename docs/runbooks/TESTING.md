@@ -1,4 +1,4 @@
-<!-- last-reviewed: 2026-08-28 round-46 -->
+<!-- last-reviewed: 2026-08-29 round-47 -->
 # TESTING — the verification ladder
 
 Five layers; each has a defined "when mandatory". Rules here are binding
@@ -13,22 +13,30 @@ Five layers; each has a defined "when mandatory". Rules here are binding
 | L4 live battery | real provider turn(s), real disk, fresh DB | sandbox, single invocation | anything touching agents, projects, tools, streaming |
 | L5 browser verification | real UI against the live stack; screenshots machine-verified | sandbox, single invocation | any UI-affecting round |
 
-**Current counts (R46, verified 2026-08-28):** `pnpm test` = **622 tests in
-53 files** (610 unit + 12 e2e — the e2e split is 8 sidecar + 4 terminal-
+**Current counts (R47, verified 2026-08-29):** `pnpm test` = **683 tests in
+56 files** (671 unit + 12 e2e — the e2e split is 8 sidecar + 4 terminal-
 session, both statically countable in `tests/e2e/`). Trajectory: 262 (R42)
-→ 397 (R43) → 471 (R44) → 565 (R45) → 622 (R46), same counting basis (the
-e2e tests ride along when dist is built). New R46 suites: `context-compaction`
-(14 — seq annotations, compaction planning/apply, end-to-end fake-ChatFn
-incl. reuse + round-2 + fallbacks), `browser-cookies` (16 — RFC 6265-lite
-parse, jar matching/ingest, persistence incl. restart-survival), terminal-
-session e2e (+4, NEW file — create/list/resize, the SSE marker/exit-frame
-contract, DELETE-kill, 404s), `WorkingSection` (9 — the loadDiff race fix,
-restore hidden for creates, the two-step confirm + toast + invalidation
-flow), `api` (+2 → 30 — restoreCheckpoint shape + envelope error),
-`chat-format` (+1 → 6 — the provider-call abortSignal bound), and
-`memory-tools` 16→21 (ranked recall/digest/dedup; the old newest-first
-digest test was replaced); `browser-proxy` 26→33 (cookie replay, smuggle-
-proof, restart-survival, profile isolation, 200-cap).
+→ 397 (R43) → 471 (R44) → 565 (R45) → 622 (R46) → 683 (R47), same counting
+basis. New/changed R47 suites: `key-pool` (6, NEW — nextFreeSlot gaps/full/
+bounds/dupes — the KeyPoolSection slot-collision regression),
+`ModelsProvidersTab` (8, NEW — the collision through the real KeyPoolSection,
+full-pool guard, key+model selector wiring + the `{slot, model}` POST body,
+the reachability note, ok:false red render), `AgentFormDialog` (5, NEW —
+live provider options, registry-unreachable fallback, vanished-provider,
+catalog datalists, placeholder), `api` 30→56 (every new provider fn: URL/
+method/body/auth + happy + error paths incl. the empty-slot 409 wording and
+ok:false-at-200 semantics), `providers` 32→44 (slot probes provably carry
+THAT key via Bearer capture with neither key leaking into any body; catalog
+shape + 401; GET key → 404 while PUT survives), `sessions` 35→36 (disable →
+PROVIDER_DISABLED, zero events appended → re-enable → the normal no-key
+409), `SubAgentsTab` 9→11 (catalog failure → verbatim error + Retry, zero
+rows — no silent fallback; fail-then-recover). Counting honesty note: the
+per-suite deltas sum to +60; the +61 net against R46's recorded 622 includes
+the R46 baseline being one short of its own CI log (run 33219573774 shows
+623 root-run entries — R46's delta list summed to 58 against its recorded
++57 net). R47's 683 is exact: CI run 33243501373's log shows the same 683
+root-run entries (648 passed + 35 windows-only skips on CI; the sandbox runs
+them green).
 
 ## Hard rules
 

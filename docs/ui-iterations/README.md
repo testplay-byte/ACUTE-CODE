@@ -1,4 +1,4 @@
-<!-- last-reviewed: 2026-08-28 round-46 -->
+<!-- last-reviewed: 2026-08-29 round-47 -->
 # UI Iterations — Owner Review Rounds
 
 This folder is the **dedicated tracking system for UI-fidelity work** (owner
@@ -85,6 +85,7 @@ UI stands and what is still open.
 - [`round-44.md`](round-44.md) — completing the agentic environment: agent memory (0015 + 3 tools + prompt injection + Memory tab), REAL DuckDuckGo web search, session search/fork/revert, sub-agent keys from credentials.txt, streaming terminal, VLM UI pass (2 real bugs fixed), MAINTENANCE.md — 471 tests
 - [`round-45.md`](round-45.md) — finishing the agentic environment: security round CLOSED audit P0-3/P0-4/P0-5 (child-env allowlist, path-contained auto tier, web host gate + migration 0016), PTY terminal sessions (Run \| Shell toggle), packaging v1 (version 0.45.0 single-sourced + CHANGELOG + release workflow, launcher-kit artifact verified), TOOL_CATALOG drift guard, VLM pass (orphaned SessionsScreen routed at /sessions, mobile overlay drawer, wizard badge v0.45.0) — 565 tests
 - [`round-46.md`](round-46.md) — agent intelligence depth: context compaction (model-summarized `context.compact` events replace the silent hard drop; fork/revert inherit), relevance-ranked memory (scored recall + ranked digest + dedup-on-save), provider-call 10-min timeout (live-battery find), checkpoint restore UI (the round-25 orphan closed + the loadDiff race fix), browser cookie persistence (migration 0017, per-profile jars, durable session cookies), terminal-session e2e (suite 8→12) — 622 tests
+- [`round-47.md`](round-47.md) — provider management, clean + reliable: one provider API layer (the third HTTP plumbing layer deleted), slot + model-scoped connection tests with honest results, the served model catalog replacing every hand-copied duplicate (SubAgentsTab's 47-entry copy + AgentFormDialog's hardcoded list), enabled enforced at turn time (PROVIDER_DISABLED), raw-key route removed, key-pool slot-collision fix; launcher key scrub (the R44 real-keys leak) + the credentials-parser bug it exposed; version 0.47.0 — 683 tests
 
 ## Running the UI with a live backend (dev)
 

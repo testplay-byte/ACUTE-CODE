@@ -1,4 +1,4 @@
-<!-- last-reviewed: 2026-08-28 round-46 -->
+<!-- last-reviewed: 2026-08-29 round-47 -->
 # ACUTE-CODE — Documentation Index
 
 One line per document. **Reading order for a new session:** `HANDOFF.md` →
@@ -18,13 +18,13 @@ file the discrepancy and fix the doc in the same round.
 - [`agent/ORCHESTRATION-WORKLOG.md`](agent/ORCHESTRATION-WORKLOG.md) — session-by-session history (snapshot of the live worklog, refreshed each session)
 - [`runbooks/SANDBOX-RESTORE.md`](runbooks/SANDBOX-RESTORE.md) — zero-to-resumed procedure after a sandbox wipe + the session-end backup rule
 - [`runbooks/AGENT-BOOTSTRAP-PROMPT.md`](runbooks/AGENT-BOOTSTRAP-PROMPT.md) — the paste-once prompt to bootstrap a fresh agent
-- [`runbooks/LOCAL-PC-RUNNER.md`](runbooks/LOCAL-PC-RUNNER.md) — the owner's one-double-click launcher
+- [`runbooks/LOCAL-PC-RUNNER.md`](runbooks/LOCAL-PC-RUNNER.md) — the owner's one-double-click launcher (credentials template is a clean paste zone since R47 — no key material ships with it)
 - [`runbooks/PUBLIC-DASHBOARD.md`](runbooks/PUBLIC-DASHBOARD.md) — the public status dashboard (separate repo), its allow/deny lists and publish flow
 
 ## Requirements & architecture
 - [`specs/SPEC.md`](specs/SPEC.md) — master requirements (F1–F11), owner-approved
 - [`architecture/ARCHITECTURE.md`](architecture/ARCHITECTURE.md) — system design truth (topology, lifecycles, key hand-off) — *partially historical; see IMPLEMENTED-API for the shipped surface*
-- [`architecture/api/IMPLEMENTED-API.md`](architecture/api/IMPLEMENTED-API.md) — **the REST + SSE surface as actually shipped** (verified against code)
+- [`architecture/api/IMPLEMENTED-API.md`](architecture/api/IMPLEMENTED-API.md) — **the REST + SSE surface as actually shipped** (verified against code; since R47: the served model catalog, slot-scoped provider tests, and the removed raw-key route are in the ROUND-47 section)
 - [`architecture/api/API.md`](architecture/api/API.md) — the full 52-operation *planned* contract (aspirational since Phase 1; WS/planned routes live here, NOT in IMPLEMENTED-API)
 - [`architecture/PROJECT-MAP.md`](architecture/PROJECT-MAP.md) — the product map & naming rules
 - [`architecture/PILLARS.md`](architecture/PILLARS.md) — the three-pillar blueprint (coding / agentic system / automation) and how they interconnect additively
