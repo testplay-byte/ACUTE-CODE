@@ -311,6 +311,12 @@ class SessionStore {
    * Creates or adopts a session, (re)minting its proxy ticket. The cookie
    * profile (projectId) binds on creation and is sticky; an explicit
    * projectId on a re-mint re-binds (the panel knows what it wants).
+   *
+   * ROTATION: this re-mints the ticket of an existing session, stranding any
+   * credential a live iframe still holds — so it is now called ONLY by the
+   * POST /browser/session route (the explicit re-mint whose response carries
+   * the new ticket, which the panel adopts). Implicit session touches must
+   * use getOrCreate() instead (ROUND-48, R48-d).
    */
   create(sessionId: string, projectId?: string): BrowserSession {
     const existing = this.sessions.get(sessionId);
@@ -336,6 +342,33 @@ class SessionStore {
     this.ticketIndex.set(session.ticket, sessionId);
     this.evictIfNeeded();
     return session;
+  }
+
+  /**
+   * ROUND-48 (R48-d): the NON-rotating variant every implicit session touch
+   * uses (navigate, viewport, header-authed proxy adoption). Returns the
+   * session's EXISTING still-valid ticket — refreshing its TTL — or mints
+   * one when the session is unknown or its ticket already expired.
+   *
+   * Why: rotate-on-touch made every POST /browser/navigate / PUT
+   * /browser/viewport mint a ticket the panel never learned (those responses
+   * carry no ticket), so the iframe kept building srcs with the now-dead `bt`
+   * → the HTML 401 page → the panel's dead-ticket recovery re-minted → its
+   * go("reload") POSTed navigate → which rotated the just-minted ticket
+   * again → an endless ~0.9-2s flash loop ending in the parked 401 page.
+   * Minting here is safe ONLY when no live credential exists (unknown
+   * session, or a ticket that already expired past rescue).
+   */
+  getOrCreate(sessionId: string): BrowserSession {
+    const existing = this.sessions.get(sessionId);
+    if (existing !== undefined && existing.ticketExpiresAt > Date.now()) {
+      this.refreshTicket(existing);
+      this.touch(sessionId);
+      return existing;
+    }
+    // Unknown session (create() mints fresh) or an expired ticket — nobody
+    // holds a usable credential, so minting cannot strand a live iframe.
+    return this.create(sessionId);
   }
 
   drop(sessionId: string): boolean {
@@ -936,7 +969,10 @@ export function browserNavigateCore(
     return { ok: false, error: "body.title must be a string" };
   }
 
-  const session = store.create(sessionId);
+  // R48-d: getOrCreate — adopting the session for a navigation must NEVER
+  // rotate the ticket (the navigate response carries no ticket; a rotation
+  // here strands the iframe's credential → 401 flash loop).
+  const session = store.getOrCreate(sessionId);
 
   if (typeof url === "string") {
     const current = session.index >= 0 ? session.history[session.index] : undefined;
@@ -1002,7 +1038,9 @@ export function browserViewportCore(
   sessionId: string,
   body: { preset?: unknown; width?: unknown; height?: unknown; zoom?: unknown; rotate?: unknown },
 ): BrowserViewportResult {
-  const session = store.create(sessionId);
+  // R48-d: getOrCreate — resizing mid-load must not invalidate the ticket
+  // the iframe (and its in-flight subresources) are already using.
+  const session = store.getOrCreate(sessionId);
   const next: BrowserViewport = { ...session.viewport };
 
   const preset = body.preset;
@@ -1296,8 +1334,9 @@ function registerBrowserRoutesInner(browser: FastifyInstance, token: string, db:
         );
       }
       // Header-authed without a ticket: adopt/create the session so the
-      // rewritten subresources carry a usable ticket anyway.
-      session = store.create(requestedSession);
+      // rewritten subresources carry a usable ticket anyway. R48-d:
+      // getOrCreate — adopting must not rotate the session's live ticket.
+      session = store.getOrCreate(requestedSession);
     } else if (requestedSession !== undefined && requestedSession !== session.sessionId) {
       return sendErrorPage(
         reply,

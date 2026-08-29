@@ -40,7 +40,9 @@ import {
  * ticket renders the backend's HTML 401 page INSIDE the iframe — since the
  * sandbox (deliberately no allow-same-origin) hides the frame's DOM from us,
  * the panel detects that case by "loaded but the escape hatch never
- * postMessaged" + a cheap ticket probe, re-mints once, then surfaces an error.
+ * postMessaged" + a cheap ticket probe, re-mints and reloads — capped at
+ * RECOVERY_MAX recoveries per rolling RECOVERY_WINDOW_MS (R48-d), after
+ * which it parks on the error card with a manual Retry instead of looping.
  *
  * window.open from inside pages is intercepted by the backend's escape hatch
  * and postMessaged to us ({type:"acute:open"}) — the PANEL decides (navigate
@@ -53,6 +55,17 @@ import {
 const ERROR_DETECT_MS = 900;
 /** Live-follow poll: agent navigations/viewport changes land here. */
 const POLL_MS = 4000;
+/**
+ * ROUND-48 (R48-d): dead-ticket recovery is capped by a ROLLING TIME window
+ * — max RECOVERY_MAX re-mints per RECOVERY_WINDOW_MS — never by navSeq. The
+ * pre-R48 per-navSeq counter reset on every recovery (each recovery reloads
+ * the iframe, bumping navSeq), so a persistently dead ticket flashed forever;
+ * past the cap the panel parks on the error card with the manual Retry
+ * affordance instead of reloading. Manual Retry/Reload stay user-paced and
+ * always work; the window empties itself as entries age out.
+ */
+const RECOVERY_MAX = 3;
+const RECOVERY_WINDOW_MS = 60_000;
 
 function normalizeUrl(raw: string): string {
   const trimmed = raw.trim();
@@ -163,8 +176,8 @@ export function BrowserPanel({ projectId, tab }: { projectId: string; tab: Right
   const contentRef = useRef<HTMLDivElement | null>(null);
   /** Did the loaded document postMessage us? Error pages never do. */
   const locationSeenRef = useRef(false);
-  /** Ticket-recovery attempts for the current navSeq (max 1 re-mint). */
-  const recoveryRef = useRef({ seq: -1, attempts: 0 });
+  /** Timestamps of recent dead-ticket recoveries (rolling cap, R48-d). */
+  const recoveryLogRef = useRef<number[]>([]);
 
   const [draft, setDraft] = useState<string>(tab.browserUrl ?? "");
   const [availWidth, setAvailWidth] = useState(420);
@@ -250,34 +263,43 @@ export function BrowserPanel({ projectId, tab }: { projectId: string; tab: Right
   // ── error-page / dead-ticket detection after each iframe load ──────────
   const onIframeLoad = useCallback(() => {
     setLoading(tabId, false);
+    // Capture the seq this load belongs to: a newer navigation supersedes
+    // it and will run its own detection (probing a stale ticket mid-flight
+    // would fire bogus recoveries).
+    const seq = navSeq;
     window.setTimeout(async () => {
       if (locationSeenRef.current) return;
       const live = useBrowserTabStore.getState().tabs[tabId];
-      if (live === null || live === undefined || live.ticket === null || live.currentUrl === null) return;
+      if (live === undefined || live.ticket === null || live.currentUrl === null) return;
+      if (live.navSeq !== seq) return;
       // Nothing postMessaged — either the backend rendered an error page
       // (fine, it is informative) or the ticket died (401 page). Probe.
       const alive = await probeBrowserTicket("x", live.sessionId, live.ticket);
       if (alive) return;
-      if (recoveryRef.current.seq !== live.navSeq) {
-        recoveryRef.current = { seq: live.navSeq, attempts: 0 };
-      }
-      recoveryRef.current.attempts += 1;
-      if (recoveryRef.current.attempts > 1) {
+      // R48-d rolling cap: count recoveries by TIME so the navSeq bump every
+      // recovery causes cannot reset the guard (that reset was the flash
+      // loop's engine). Park once the window is exhausted.
+      const now = Date.now();
+      recoveryLogRef.current = recoveryLogRef.current.filter((ts) => now - ts < RECOVERY_WINDOW_MS);
+      if (recoveryLogRef.current.length >= RECOVERY_MAX) {
         useBrowserTabStore
           .getState()
-          .setError(tabId, "The browser session keeps expiring. Retry re-mints a fresh ticket.");
+          .setError(tabId, "The browser session keeps failing — automatic recovery paused. Click Retry to mint a fresh ticket.");
         return;
       }
-      // Re-mint once (rotates the ticket) and reload the current page.
+      recoveryLogRef.current.push(now);
+      // Re-mint once (POST /browser/session rotates the ticket; the panel
+      // adopts the new one) and reload the current page.
       await mint(tabId);
       await go(tabId, "reload");
     }, ERROR_DETECT_MS);
-  }, [tabId, setLoading, mint, go]);
+  }, [tabId, setLoading, mint, go, navSeq]);
 
-  // Reset per-navigation tracking so a fresh load re-arms detection.
+  // Reset per-navigation tracking so a fresh load re-arms detection. The
+  // recovery LOG deliberately survives navSeq bumps (R48-d) — resetting it
+  // here is what used to un-cap the loop.
   useEffect(() => {
     locationSeenRef.current = false;
-    recoveryRef.current = { seq: navSeq, attempts: 0 };
   }, [navSeq]);
 
   // Measure the content area for the Fit scale.

@@ -14,6 +14,19 @@ import { renderWithProviders, resetTestState } from "../../test-utils";
  * /api/v1/browser/* route contracts (mint / navigate / history / viewport /
  * the ticket probe) so the REAL store logic runs: optimistic viewport edits,
  * history flags, postMessage folding, ticket recovery.
+ *
+ * ROUND-48 (R48-d) mock honesty: the old mock returned the SAME ticket from
+ * every POST /browser/session and never simulated rotation — which is why
+ * this suite could never catch the real backend's rotate-on-navigate bug
+ * (the panel adopted a "new" ticket that was still the old one, so recovery
+ * always looked successful). The mock now mirrors the REAL backend exactly:
+ *   - POST /browser/session ROTATES — a fresh ticket per call, the previous
+ *     one dead;
+ *   - POST /browser/navigate / PUT /browser/viewport NEVER change ticket
+ *     validity (post-R48-d backend semantics);
+ *   - the /browser/proxy probe 401s iff the bt is not the session's CURRENT
+ *     server-side ticket (a dead/rotated/unknown ticket), else answers the
+ *     probe's harmless 400.
  */
 
 const BASE = "http://127.0.0.1:5178";
@@ -28,10 +41,14 @@ let calls: Recorded[];
 /** sessionId → history urls; per-test scenario knobs. */
 let histories: Record<string, Array<{ url: string; title: string | null }>>;
 let viewports: Record<string, Record<string, unknown>>;
+/** sessionId → the CURRENT server-side ticket (what the auth hook accepts). */
+let serverTickets: Record<string, string>;
+/** The latest minted ticket (== serverTickets for the session under test). */
 let ticket: string;
 let mintCount: number;
 let mintFails: boolean;
-let probeStatus: number;
+/** Scenario knob: even freshly minted tickets probe dead (persistent failure). */
+let probeAlwaysDead: boolean;
 
 function ok(body: unknown, status = 200): Response {
   return {
@@ -54,6 +71,10 @@ function route(input: RequestInfo | URL, init?: RequestInit): Promise<Response> 
     if (mintFails) return Promise.resolve(ok({ error: { code: "BOOM", message: "sidecar exploded" } }, 500));
     mintCount += 1;
     const sessionId = typeof body?.sessionId === "string" ? body.sessionId : "anon";
+    // R48-d honesty: minting ROTATES — fresh ticket per call, the previous
+    // one is dead from this moment (real backend: SessionStore.create()).
+    ticket = mintCount.toString(16).padStart(48, "0");
+    serverTickets[sessionId] = ticket;
     const history = histories[sessionId] ?? [];
     return Promise.resolve(
       ok({
@@ -66,6 +87,8 @@ function route(input: RequestInfo | URL, init?: RequestInit): Promise<Response> 
     );
   }
   if (url.pathname === "/api/v1/browser/navigate") {
+    // R48-d honesty: navigate NEVER changes ticket validity (the pre-R48
+    // backend rotated here — the flash-loop bug this suite must now guard).
     const sessionId = typeof body?.sessionId === "string" ? body.sessionId : "anon";
     const history = (histories[sessionId] ??= []);
     if (typeof body?.direction === "string") {
@@ -138,10 +161,15 @@ function route(input: RequestInfo | URL, init?: RequestInit): Promise<Response> 
     return Promise.resolve(ok({ sessionId, viewport: current }));
   }
   if (url.pathname === "/api/v1/browser/proxy") {
-    // The ticket probe: 401 = dead ticket, anything else = alive. A ticket
-    // minted by the CURRENT mock instance counts as alive (mintCount ≥ 2
-    // means the panel re-minted after a simulated death).
-    const status = mintCount >= 2 ? 400 : probeStatus;
+    // The ticket probe, with the REAL auth-hook semantics: the session's
+    // CURRENT ticket passes (then the probe's bogus ?url= gets the handler's
+    // harmless 400 "not a valid absolute URL" page); a dead, rotated or
+    // unknown ticket gets the hook's HTML 401. `probeAlwaysDead` simulates
+    // an environment that keeps killing even freshly minted tickets.
+    const sid = url.searchParams.get("sessionId") ?? "";
+    const bt = url.searchParams.get("bt") ?? "";
+    const dead = probeAlwaysDead || serverTickets[sid] !== bt;
+    const status = dead ? 401 : 400;
     return Promise.resolve({ ok: status < 400, status, json: async () => ({}), text: async () => "" } as unknown as Response);
   }
   return Promise.resolve(ok({ error: { code: "NOT_FOUND", message: `no mock for ${path}` } }, 404));
@@ -172,10 +200,11 @@ beforeEach(() => {
   calls = [];
   histories = {};
   viewports = {};
-  ticket = "a".repeat(48);
+  serverTickets = {};
+  ticket = "0".repeat(48);
   mintCount = 0;
   mintFails = false;
-  probeStatus = 400;
+  probeAlwaysDead = false;
   vi.stubGlobal("fetch", vi.fn(route));
 });
 
@@ -186,6 +215,12 @@ afterEach(() => {
 
 function postCalls(path: string): Recorded[] {
   return calls.filter((c) => c.path === path);
+}
+
+/** Scenario helper: the session's ticket dies server-side (sidecar restart /
+ * TTL expiry) — every probe 401s until the next mint rotates in a fresh one. */
+function invalidateTicket(sessionId = "tab-test-1"): void {
+  delete serverTickets[sessionId];
 }
 
 describe("BrowserPanel (R43-10 embedded browser)", () => {
@@ -356,7 +391,53 @@ describe("BrowserPanel (R43-10 embedded browser)", () => {
     await waitFor(() => expect(screen.getByTestId("browser-iframe").getAttribute("src")).toContain(encodeURIComponent("https://example.com/popup")));
   });
 
-  it("a dead ticket after an iframe load re-mints once and reloads the page", async () => {
+  it("a dead ticket after an iframe load recovers ONCE, adopts the fresh ticket, and does not loop", async () => {
+    const tab = makeTab();
+    seedRightSidebar(tab);
+    renderWithProviders(<BrowserPanel projectId="prj_test" tab={tab} />);
+    await waitFor(() => expect(postCalls("/api/v1/browser/session")).toHaveLength(1));
+    const firstTicket = ticket;
+
+    const input = screen.getByTestId("browser-address-input") as HTMLInputElement;
+    fireEvent.change(input, { target: { value: "https://example.com" } });
+    fireEvent.submit(input.closest("form") as HTMLFormElement);
+    await waitFor(() => expect(screen.getByTestId("browser-iframe")).toBeTruthy());
+    expect(screen.getByTestId("browser-iframe").getAttribute("src")).toContain(`bt=${firstTicket}`);
+
+    // Fake timers ONLY for the detection window (waitFor + fake timers hang).
+    vi.useFakeTimers();
+    try {
+      // The ticket dies (e.g. sidecar restart). The load completes but the
+      // escape hatch never postMessages (a 401 error page doesn't carry it)
+      // and the probe says the ticket is dead.
+      invalidateTicket();
+      await act(async () => {
+        fireEvent.load(screen.getByTestId("browser-iframe"));
+        await vi.advanceTimersByTimeAsync(1500);
+      });
+
+      // ONE clean recovery: re-mint (2nd session POST — a genuinely FRESH
+      // ticket under the honest rotating mock) + a reload navigation.
+      expect(postCalls("/api/v1/browser/session")).toHaveLength(2);
+      expect(ticket).not.toBe(firstTicket);
+      expect(postCalls("/api/v1/browser/navigate").some((c) => c.body?.direction === "reload")).toBe(true);
+      // The rebuilt iframe carries the FRESH ticket — the panel adopted it.
+      expect(screen.getByTestId("browser-iframe").getAttribute("src")).toContain(`bt=${ticket}`);
+
+      // The recovered load is healthy — firing it must NOT re-mint again
+      // (this is exactly where the pre-R48 backend re-killed the ticket).
+      await act(async () => {
+        fireEvent.load(screen.getByTestId("browser-iframe"));
+        await vi.advanceTimersByTimeAsync(1500);
+      });
+      expect(postCalls("/api/v1/browser/session")).toHaveLength(2);
+      expect(screen.queryByTestId("browser-error-card")).toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("a persistently dead ticket parks after 3 recoveries (bounded mints/reloads, manual Retry stays available)", async () => {
     const tab = makeTab();
     seedRightSidebar(tab);
     renderWithProviders(<BrowserPanel projectId="prj_test" tab={tab} />);
@@ -367,22 +448,39 @@ describe("BrowserPanel (R43-10 embedded browser)", () => {
     fireEvent.submit(input.closest("form") as HTMLFormElement);
     await waitFor(() => expect(screen.getByTestId("browser-iframe")).toBeTruthy());
 
-    // Fake timers ONLY for the detection window (waitFor + fake timers hang).
     vi.useFakeTimers();
     try {
-      // The load completes but the escape hatch never postMessages (a 401
-      // error page doesn't carry it) and the probe says the ticket is dead.
-      probeStatus = 401;
-      await act(async () => {
-        fireEvent.load(screen.getByTestId("browser-iframe"));
-        await vi.advanceTimersByTimeAsync(1500);
-        await Promise.resolve();
-      });
+      // The environment keeps killing EVERY ticket, even freshly minted
+      // ones — the pre-R48 panel flashed forever here; the R48-d cap must
+      // park it instead.
+      probeAlwaysDead = true;
+      for (let i = 0; i < 5; i += 1) {
+        await act(async () => {
+          fireEvent.load(screen.getByTestId("browser-iframe"));
+          await vi.advanceTimersByTimeAsync(1200);
+        });
+      }
 
-      // Re-mint (2nd session POST) + a reload navigation — asserted sync
-      // (the act above flushed the probe → mint → go microtask chain).
-      expect(postCalls("/api/v1/browser/session")).toHaveLength(2);
-      expect(postCalls("/api/v1/browser/navigate").some((c) => c.body?.direction === "reload")).toBe(true);
+      // Mount mint + EXACTLY 3 recovery mints — cycles 4 and 5 parked.
+      expect(postCalls("/api/v1/browser/session")).toHaveLength(4);
+      expect(postCalls("/api/v1/browser/navigate").filter((c) => c.body?.direction === "reload")).toHaveLength(3);
+      // Parked: the error card with the manual Retry affordance (no flash).
+      const card = screen.getByTestId("browser-error-card");
+      expect(card.textContent).toContain("automatic recovery paused");
+      expect(screen.getByTestId("browser-retry")).toBeTruthy();
+      // navSeq stopped advancing: 1 navigation + 3 recovery reloads = 4.
+      expect(useBrowserTabStore.getState().tabs[tab.id]?.navSeq).toBe(4);
+
+      // The manual affordance still works (user-paced, never auto-looped):
+      // Retry mints once more and reloads with the fresh ticket.
+      probeAlwaysDead = false;
+      await act(async () => {
+        fireEvent.click(screen.getByTestId("browser-retry"));
+        await vi.advanceTimersByTimeAsync(1200);
+      });
+      expect(postCalls("/api/v1/browser/session")).toHaveLength(5);
+      expect(screen.getByTestId("browser-iframe").getAttribute("src")).toContain(`bt=${ticket}`);
+      expect(screen.queryByTestId("browser-error-card")).toBeNull();
     } finally {
       vi.useRealTimers();
     }

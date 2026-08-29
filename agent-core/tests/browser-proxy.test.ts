@@ -17,7 +17,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import http from "node:http";
 import type { AddressInfo } from "node:net";
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { FastifyInstance, LightMyRequestResponse } from "fastify";
 import { ProviderKeyring } from "../src/providers/registry";
 import { openDatabase, type SqliteDatabase } from "../src/storage/db";
@@ -524,6 +524,107 @@ describe("browser session tickets", () => {
     expect(after.statusCode).toBe(401);
     const missing = await inject({ method: "DELETE", url: `/api/v1/browser/session?sessionId=${SESSION}` });
     expect(missing.statusCode).toBe(404);
+  });
+});
+
+// ── ROUND-48 (R48-d): implicit session touches must NOT rotate the ticket ─
+
+// The owner's flash-loop bug: POST /browser/navigate and PUT /browser/viewport
+// used to re-mint the session ticket on every call while their responses
+// carry NO ticket — so the panel's iframe kept a dead `bt` → HTML 401 page →
+// panel recovery re-mint → go("reload") → rotate again → 0.9-2s flash loop.
+// Ticket rotation now happens ONLY in POST /browser/session (whose response
+// carries the new ticket and the panel adopts it).
+describe("ROUND-48 (R48-d): navigate/viewport never rotate the ticket", () => {
+  it("POST /browser/navigate keeps the pre-navigate ticket alive (mint → navigate → proxy with the ORIGINAL bt → 200)", async () => {
+    const ticket = await mintTicket();
+    const nav = await inject({
+      method: "POST",
+      url: "/api/v1/browser/navigate",
+      payload: { sessionId: SESSION, url: `${upstreamBase}/page.html` },
+    });
+    expect(nav.statusCode).toBe(200);
+    expect((nav.json() as { action: string }).action).toBe("push");
+
+    // The iframe holding the pre-navigate ticket still loads the page —
+    // this exact request was the 401 that started every flash cycle.
+    const page = await iframeGet(proxyUrl(`${upstreamBase}/page.html`, ticket));
+    expect(page.statusCode).toBe(200);
+    // The rewrites inside that page echo the SAME, still-valid ticket.
+    expect(page.body).toContain(`bt=${ticket}`);
+  });
+
+  it("navigate back/forward/reload and title-update are equally non-rotating", async () => {
+    const ticket = await mintTicket();
+    await inject({ method: "POST", url: "/api/v1/browser/navigate", payload: { sessionId: SESSION, url: "https://a.example/" } });
+    await inject({ method: "POST", url: "/api/v1/browser/navigate", payload: { sessionId: SESSION, url: `${upstreamBase}/page.html` } });
+    await inject({ method: "POST", url: "/api/v1/browser/navigate", payload: { sessionId: SESSION, direction: "back" } });
+    const titled = await inject({
+      method: "POST",
+      url: "/api/v1/browser/navigate",
+      payload: { sessionId: SESSION, url: "https://a.example/", title: "A" },
+    });
+    expect((titled.json() as { action: string }).action).toBe("title-update");
+    await inject({ method: "POST", url: "/api/v1/browser/navigate", payload: { sessionId: SESSION, direction: "forward" } });
+    // "reload" is the panel recovery's own call — rotating HERE re-killed
+    // every freshly minted ticket (the loop's engine).
+    await inject({ method: "POST", url: "/api/v1/browser/navigate", payload: { sessionId: SESSION, direction: "reload" } });
+
+    const page = await iframeGet(proxyUrl(`${upstreamBase}/page.html`, ticket));
+    expect(page.statusCode).toBe(200);
+  });
+
+  it("PUT /browser/viewport keeps the current ticket alive (mint → viewport → proxy with the ORIGINAL bt → 200)", async () => {
+    const ticket = await mintTicket();
+    const vp = await inject({
+      method: "PUT",
+      url: "/api/v1/browser/viewport",
+      payload: { sessionId: SESSION, preset: "mobile-sm" },
+    });
+    expect(vp.statusCode).toBe(200);
+    expect((vp.json() as { viewport: { width: number } }).viewport.width).toBe(375);
+
+    // Resolution/size changes land mid-load — in-flight subresources (and
+    // the next iframe src) must keep authorizing with the same ticket.
+    const page = await iframeGet(proxyUrl(`${upstreamBase}/page.html`, ticket));
+    expect(page.statusCode).toBe(200);
+  });
+
+  it("header-authed proxy adoption keeps the session's existing ticket (no rotation, rewrites reuse it)", async () => {
+    const ticket = await mintTicket();
+    const res = await inject({
+      method: "GET",
+      url: `/api/v1/browser/proxy?url=${encodeURIComponent(`${upstreamBase}/page.html`)}&sessionId=${SESSION}`,
+    });
+    expect(res.statusCode).toBe(200);
+    // The adopted page carries the ticket the session ALREADY had (create()
+    // here used to mint a new one nobody told the panel about)…
+    expect(res.body).toContain(`bt=${ticket}`);
+    // …and that original ticket still authorizes a header-less iframe load.
+    const reload = await iframeGet(proxyUrl(`${upstreamBase}/page.html`, ticket));
+    expect(reload.statusCode).toBe(200);
+  });
+
+  it("ticket TTL still refreshes on use and an idle ticket still expires after 12h", async () => {
+    // Only Date is faked — the upstream fetch keeps its real sockets.
+    vi.useFakeTimers({ toFake: ["Date"] });
+    try {
+      const ticket = await mintTicket();
+      // Used tickets keep living: 11h idle → use → 11h idle → use → 200 each
+      // time (every touch re-arms the full 12h TTL).
+      vi.advanceTimersByTime(11 * 60 * 60 * 1000);
+      expect((await iframeGet(proxyUrl(`${upstreamBase}/page.html`, ticket))).statusCode).toBe(200);
+      vi.advanceTimersByTime(11 * 60 * 60 * 1000);
+      expect((await iframeGet(proxyUrl(`${upstreamBase}/page.html`, ticket))).statusCode).toBe(200);
+      // An UNUSED ticket dies after 12h — the honest 401 page the panel's
+      // (now capped) recovery path exists for.
+      vi.advanceTimersByTime(12 * 60 * 60 * 1000 + 60_000);
+      const dead = await iframeGet(proxyUrl(`${upstreamBase}/page.html`, ticket));
+      expect(dead.statusCode).toBe(401);
+      expect(dead.body).toContain("ticket");
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
 
