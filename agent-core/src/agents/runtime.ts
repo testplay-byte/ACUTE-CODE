@@ -82,8 +82,9 @@ export type TurnOutcome =
   | {
       ok: false;
       status: 404 | 409 | 499 | 502;
-      /** ROUND-42: ABORTED = the user explicitly stopped the stream. */
-      code: "NOT_FOUND" | "CONFLICT" | "ABORTED" | "PROVIDER_ERROR";
+      /** ROUND-42: ABORTED = the user explicitly stopped the stream.
+       * ROUND-47: PROVIDER_DISABLED = the provider row is enabled=false. */
+      code: "NOT_FOUND" | "CONFLICT" | "ABORTED" | "PROVIDER_ERROR" | "PROVIDER_DISABLED";
       message: string;
       details?: Record<string, unknown>;
     };
@@ -319,6 +320,24 @@ async function prepareTurn(
         code: "CONFLICT",
         message: `agent '${agent.name}' references provider '${agent.providerId}' without a usable baseUrl`,
         details: { agentId: agent.id, providerId: agent.providerId },
+      },
+    };
+  }
+  // ROUND-47 (R47-b): honor provider.enabled at turn time. Disabling a
+  // provider in Settings is an explicit owner choice (pull a misbehaving
+  // key/endpoint out of rotation); a turn must NOT silently run against it
+  // anyway. Same prepareTurn error path as the missing-key 409 below — no
+  // user event is appended, so the session stays clean and the retry after
+  // re-enabling starts from scratch. The UI renders the honest error card
+  // from the 409 envelope (the streamed path emits it as {type:'error'}).
+  if (provider.enabled === false) {
+    return {
+      error: {
+        ok: false,
+        status: 409,
+        code: "PROVIDER_DISABLED",
+        message: `Provider '${provider.name}' is disabled — enable it in Settings → Models & Providers`,
+        details: { providerId: provider.id },
       },
     };
   }

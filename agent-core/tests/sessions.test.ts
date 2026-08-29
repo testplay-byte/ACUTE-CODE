@@ -652,6 +652,80 @@ describe("POST /api/v1/sessions/:id/messages", () => {
     }
   });
 
+  // ROUND-47 (R47-b): provider.enabled === false blocks the turn at
+  // prepareTurn — the same error path as the no-key 409 above (no user event
+  // appended, session stays clean and retryable, the 409 envelope drives the
+  // UI's honest error card).
+  it("ROUND-47: 409 PROVIDER_DISABLED when the provider is disabled; re-enabling unblocks the turn", async () => {
+    const agent = await createAgent();
+    const session = await createSession(agent.id);
+    // Same database, keyring WITHOUT the openrouter key — after re-enabling,
+    // the turn must fall through to the NORMAL next failure (the no-key 409),
+    // proving the block was the disablement and nothing else.
+    const keyless = buildServer({ token: TOKEN, db, keyring: new ProviderKeyring({}) });
+    try {
+      const auth = { authorization: `Bearer ${TOKEN}` };
+      const disabled = await keyless.inject({
+        method: "PATCH",
+        url: "/api/v1/providers/openrouter",
+        headers: auth,
+        payload: { enabled: false },
+      });
+      expect(disabled.statusCode).toBe(200);
+      expect(disabled.json().enabled).toBe(false);
+
+      // PROVIDER_DISABLED wins even though the key is ALSO missing — the
+      // disablement is the owner's explicit choice, the more fundamental state.
+      const blocked = await keyless.inject({
+        method: "POST",
+        url: `/api/v1/sessions/${session.id}/messages`,
+        headers: auth,
+        payload: { content: "hello" },
+      });
+      expect(blocked.statusCode).toBe(409);
+      expect(blocked.json().error.code).toBe("PROVIDER_DISABLED");
+      expect(blocked.json().error.message).toContain(
+        "Provider 'OpenRouter' is disabled — enable it in Settings → Models & Providers",
+      );
+      expect(blocked.json().error.details.providerId).toBe("openrouter");
+      expect(generateTextMock).not.toHaveBeenCalled();
+      // Clean state: nothing was appended — the retry after re-enabling
+      // starts from scratch (no orphaned user event).
+      const eventCount = db
+        .prepare("SELECT COUNT(*) AS n FROM session_events WHERE session_id = ?")
+        .get(session.id) as { n: number };
+      expect(eventCount.n).toBe(0);
+
+      // Re-enable → the very same turn proceeds to the normal next failure.
+      const enabled = await keyless.inject({
+        method: "PATCH",
+        url: "/api/v1/providers/openrouter",
+        headers: auth,
+        payload: { enabled: true },
+      });
+      expect(enabled.statusCode).toBe(200);
+      const retried = await keyless.inject({
+        method: "POST",
+        url: `/api/v1/sessions/${session.id}/messages`,
+        headers: auth,
+        payload: { content: "hello" },
+      });
+      expect(retried.statusCode).toBe(409);
+      expect(retried.json().error.code).toBe("CONFLICT");
+      expect(retried.json().error.message).toContain("ACUTE_PROVIDER_OPENROUTER");
+      expect(generateTextMock).not.toHaveBeenCalled();
+    } finally {
+      // Leave the shared db in the seeded state for any later test.
+      await keyless.inject({
+        method: "PATCH",
+        url: "/api/v1/providers/openrouter",
+        headers: { authorization: `Bearer ${TOKEN}` },
+        payload: { enabled: true },
+      });
+      await keyless.close();
+    }
+  });
+
   it("502 PROVIDER_ERROR on provider failure; the user event stays and seq is never reused", async () => {
     const agent = await createAgent();
     const session = await createSession(agent.id);

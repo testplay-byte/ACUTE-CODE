@@ -73,6 +73,10 @@ import {
   type TerminalSessionDescriptor,
 } from "./terminal-sessions.js";
 import {
+  DEFAULT_MODEL_ID,
+  MODEL_CATALOG,
+  RECOMMENDED_MODEL_IDS,
+  SUBAGENT_DEFAULT_MODEL_ID,
   deleteModel,
   listModels,
   updateModel,
@@ -738,22 +742,17 @@ export function buildServer(options: ServerOptions): FastifyInstance {
       // Wizard connection-test pill (API.md §8.6, cheap variant): proves the
       // provider exists, the keyring holds a key, and the key is accepted
       // upstream — without spending tokens on a completion.
+      // ROUND-47 (R47-b): {model?, slot?} — slot scopes the probe to one
+      // key-pool entry (slot 0 = primary; omitted = primary, exactly the
+      // pre-R47 behavior) so each pool key is testable in place.
       scope.post("/providers/:id/test", async (request, reply) => {
         const { id } = request.params as Record<string, string>;
         const provider = resolveProvider(db, id);
         if (provider === undefined) {
           return reply.code(404).send(errorBody("NOT_FOUND", `no provider with id ${id}`));
         }
-        if (!keyring.has(id)) {
-          return reply.code(409).send(
-            errorBody(
-              "CONFLICT",
-              `no API key stored for provider '${id}' — save one in Windows Credential Manager before testing`,
-              { providerId: id },
-            ),
-          );
-        }
         let model: string | undefined;
+        let slot: number | undefined;
         const body: unknown = request.body;
         if (body !== undefined && body !== null) {
           if (typeof body !== "object" || Array.isArray(body)) {
@@ -761,7 +760,8 @@ export function buildServer(options: ServerOptions): FastifyInstance {
               .code(400)
               .send(errorBody("VALIDATION", "body must be a JSON object", { field: "body" }));
           }
-          const rawModel = (body as Record<string, unknown>).model;
+          const raw = body as Record<string, unknown>;
+          const rawModel = raw.model;
           if (rawModel !== undefined) {
             if (typeof rawModel !== "string" || rawModel.trim() === "") {
               return reply.code(400).send(
@@ -772,9 +772,55 @@ export function buildServer(options: ServerOptions): FastifyInstance {
             }
             model = rawModel;
           }
+          // ROUND-47 (R47-b): {slot} scopes the probe to ONE key-pool entry
+          // (slot 0 = the primary) so the Key Pool UI can test each key in
+          // place. The plan contract: integer 0..31, 409 when that slot
+          // holds no key.
+          const rawSlot = raw.slot;
+          if (rawSlot !== undefined) {
+            if (
+              typeof rawSlot !== "number" ||
+              !Number.isInteger(rawSlot) ||
+              rawSlot < 0 ||
+              rawSlot > 31
+            ) {
+              return reply.code(400).send(
+                errorBody("VALIDATION", "slot must be an integer between 0 and 31", {
+                  field: "body.slot",
+                }),
+              );
+            }
+            slot = rawSlot;
+          }
+        }
+        // Key resolution: slot omitted → the primary (exactly the pre-R47
+        // behavior, same 409 wording). Slot given → that POOL slot's key
+        // (slot 0 IS the primary slot), 409 naming provider + slot when empty.
+        let keyOverride: string | undefined;
+        if (slot === undefined) {
+          if (!keyring.has(id)) {
+            return reply.code(409).send(
+              errorBody(
+                "CONFLICT",
+                `no API key stored for provider '${id}' — save one in Windows Credential Manager before testing`,
+                { providerId: id },
+              ),
+            );
+          }
+        } else {
+          keyOverride = keyring.getSlot(id, slot);
+          if (keyOverride === undefined) {
+            return reply.code(409).send(
+              errorBody(
+                "CONFLICT",
+                `no API key stored for provider '${id}' slot ${slot} — save one in Settings → Models & Providers`,
+                { providerId: id, slot },
+              ),
+            );
+          }
         }
         try {
-          return await testProviderConnection(keyring, provider, model);
+          return await testProviderConnection(keyring, provider, model, keyOverride);
         } catch (error) {
           // The probe executed and the provider answered NO (bad key, unknown
           // model): HTTP 200 with ok:false — the test call itself succeeded.
@@ -863,17 +909,25 @@ export function buildServer(options: ServerOptions): FastifyInstance {
         return reply.code(204).send();
       });
 
-      // Read the provider's API key (settings UI: view/copy — round-19 owner request).
-      scope.get("/providers/:id/key", async (request, reply) => {
-        const { id } = request.params as Record<string, string>;
-        if (resolveProvider(db, id) === undefined) {
-          return reply.code(404).send(errorBody("NOT_FOUND", `no provider with id ${id}`));
-        }
-        const key = keyring.get(id);
-        return { hasKey: key !== undefined, key: key ?? null };
+      // ROUND-47 (R47-b): the STATIC model catalog for every picker. The
+      // frontend hand-copied this 47-entry list into two components — a
+      // guaranteed drift trap (SubAgentsTab already diverged). One route,
+      // sourced from the constants themselves: no cache, no DB rows, nothing
+      // stale. Same authenticated scope as the provider routes above.
+      scope.get("/models/catalog", async () => {
+        return {
+          models: MODEL_CATALOG,
+          defaultModelId: DEFAULT_MODEL_ID,
+          subagentDefaultModelId: SUBAGENT_DEFAULT_MODEL_ID,
+          recommendedModelIds: RECOMMENDED_MODEL_IDS,
+        };
       });
 
-      // Update the provider's API key (settings UI: edit — round-19 owner request).
+      // ROUND-47 (R47-b): the old GET /providers/:id/key (round-19 "view/copy")
+      // was REMOVED — it returned the RAW key value, contradicting the
+      // "keys never appear in any response" invariant at the top of this
+      // route group, and nothing ever called it (src/, src-tauri/, onboarding/
+      // only PUT). Only the update route below survives.
       scope.put("/providers/:id/key", async (request, reply) => {
         const { id } = request.params as Record<string, string>;
         if (resolveProvider(db, id) === undefined) {

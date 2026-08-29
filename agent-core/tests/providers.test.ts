@@ -5,12 +5,15 @@ import { join } from "node:path";
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { FastifyInstance, LightMyRequestResponse } from "fastify";
 import { ProviderKeyring, clearModelCache } from "../src/providers/registry";
+import { MODEL_CATALOG } from "../src/storage/models";
 import { openDatabase, type SqliteDatabase } from "../src/storage/db";
 import { createProviderRecord } from "../src/storage/providers";
 import { buildServer } from "../src/server";
 
 const TOKEN = "test-token-7c2d";
 const KEY = "sk-or-test-4f8a";
+// ROUND-47: a second, distinguishable key for slot-scoped probe tests.
+const SLOT2_KEY = "sk-or-slot2-9d31";
 
 let tempDir = "";
 let db: SqliteDatabase;
@@ -42,7 +45,7 @@ afterAll(() => {
 });
 
 async function authInject(options: {
-  method: "GET" | "POST" | "PATCH" | "DELETE";
+  method: "GET" | "POST" | "PUT" | "PATCH" | "DELETE";
   url: string;
   payload?: Record<string, unknown>;
 }): Promise<LightMyRequestResponse> {
@@ -550,6 +553,111 @@ describe("POST /api/v1/providers/:id/test", () => {
     expect(badModel.statusCode).toBe(400);
     expect(badModel.json().error.details.field).toBe("body.model");
   });
+
+  // ── ROUND-47 (R47-b): {slot} — slot-scoped key probes ───────────────────
+
+  it("ROUND-47: with {slot: 2} the probe carries THAT pool slot's key, not the primary", async () => {
+    // The keyring maps slot 2 to ACUTE_PROVIDER_OPENROUTER_SLOT2 (slot 0 is
+    // the primary ACUTE_PROVIDER_OPENROUTER — see slotEnvVarName).
+    const pooled = buildServer({
+      token: TOKEN,
+      db,
+      keyring: new ProviderKeyring({
+        ACUTE_PROVIDER_OPENROUTER: KEY,
+        ACUTE_PROVIDER_OPENROUTER_SLOT2: SLOT2_KEY,
+      }),
+    });
+    try {
+      let seenAuth = "";
+      const fetchMock = vi.fn(
+        async (_url: string, init: RequestInit | undefined) => {
+          seenAuth = (init?.headers as Record<string, string>).authorization ?? "";
+          return new Response(JSON.stringify({ choices: [] }), { status: 200 });
+        },
+      );
+      vi.stubGlobal("fetch", fetchMock);
+
+      // Model + slot combine: the full key+model probe runs against the
+      // SLOT key (the Key Pool UI's per-slot Test button).
+      const response = await pooled.inject({
+        method: "POST",
+        url: "/api/v1/providers/openrouter/test",
+        headers: { authorization: `Bearer ${TOKEN}` },
+        payload: { model: "test/model-a", slot: 2 },
+      });
+      expect(response.statusCode).toBe(200);
+      expect(response.json()).toEqual({
+        ok: true,
+        latencyMs: expect.any(Number),
+        model: "test/model-a",
+      });
+      expect(seenAuth).toBe(`Bearer ${SLOT2_KEY}`);
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+      // Neither key value ever reaches the response body.
+      expect(response.body).not.toContain(SLOT2_KEY);
+      expect(response.body).not.toContain(KEY);
+    } finally {
+      await pooled.close();
+    }
+  });
+
+  it("ROUND-47: {slot: 0} explicitly given probes the PRIMARY key (slot 0 == the primary pool slot)", async () => {
+    let seenAuth = "";
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (_url: string, init: RequestInit | undefined) => {
+        seenAuth = (init?.headers as Record<string, string>).authorization ?? "";
+        return new Response(JSON.stringify({ choices: [] }), { status: 200 });
+      }),
+    );
+    const response = await authInject({
+      method: "POST",
+      url: "/api/v1/providers/openrouter/test",
+      payload: { slot: 0 },
+    });
+    expect(response.statusCode).toBe(200);
+    expect(response.json().ok).toBe(true);
+    expect(seenAuth).toBe(`Bearer ${KEY}`);
+  });
+
+  it("ROUND-47: a slot that holds no key is 409 CONFLICT naming provider AND slot", async () => {
+    // The default app holds only the primary key — slot 2 is empty.
+    const fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+    const response = await authInject({
+      method: "POST",
+      url: "/api/v1/providers/openrouter/test",
+      payload: { slot: 2 },
+    });
+    expect(response.statusCode).toBe(409);
+    expect(response.json().error.code).toBe("CONFLICT");
+    expect(response.json().error.message).toContain("no API key stored");
+    expect(response.json().error.message).toContain("slot 2");
+    expect(response.json().error.message).toContain("Settings → Models & Providers");
+    expect(response.json().error.details).toEqual({ providerId: "openrouter", slot: 2 });
+    // Empty slot → the probe never fires.
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  const badSlots: Array<{ name: string; slot: unknown }> = [
+    { name: "non-numeric string", slot: "abc" },
+    { name: "negative", slot: -1 },
+    { name: "too large", slot: 99 },
+    { name: "fractional", slot: 1.5 },
+    { name: "null", slot: null },
+  ];
+  for (const testCase of badSlots) {
+    it(`ROUND-47: rejects slot=${String(testCase.slot)} (${testCase.name}) with 400 VALIDATION`, async () => {
+      const response = await authInject({
+        method: "POST",
+        url: "/api/v1/providers/openrouter/test",
+        payload: { slot: testCase.slot },
+      });
+      expect(response.statusCode).toBe(400);
+      expect(response.json().error.code).toBe("VALIDATION");
+      expect(response.json().error.details.field).toBe("body.slot");
+    });
+  }
 });
 
 describe("POST /internal/providers/keys (shell key handoff)", () => {
@@ -614,5 +722,67 @@ describe("POST /internal/providers/keys (shell key handoff)", () => {
     });
     expect(response.statusCode).toBe(400);
     expect(response.body).not.toContain("x");
+  });
+});
+
+describe("GET /api/v1/providers/:id/key (ROUND-47: route REMOVED)", () => {
+  it("404s — the raw key value is never served; the PUT at the same path STAYS", async () => {
+    // The round-19 "view/copy" route returned the RAW key — the only route
+    // that ever violated the "keys never appear in any response" invariant
+    // of this group. Nothing called it (verified: src/, src-tauri/,
+    // onboarding/ only PUT); R47-b removed it.
+    const response = await authInject({ method: "GET", url: "/api/v1/providers/openrouter/key" });
+    expect(response.statusCode).toBe(404);
+    expect(response.json().error.code).toBe("NOT_FOUND");
+    expect(response.body).not.toContain(KEY);
+
+    // The update route at the same path survives untouched (the settings UI
+    // saves keys through it).
+    const put = await authInject({
+      method: "PUT",
+      url: "/api/v1/providers/openrouter/key",
+      payload: { value: "sk-or-rotated-b0ba" },
+    });
+    expect(put.statusCode).toBe(204);
+    const listed = await authInject({ method: "GET", url: "/api/v1/providers" });
+    const row = (listed.json().providers as Array<{ id: string; hasKey: boolean }>).find(
+      (p) => p.id === "openrouter",
+    );
+    expect(row?.hasKey).toBe(true);
+    expect(listed.body).not.toContain("sk-or-rotated-b0ba");
+  });
+});
+
+describe("GET /api/v1/models/catalog (ROUND-47)", () => {
+  it("serves the full catalog + both defaults + the recommended pins, straight from the constants", async () => {
+    const response = await authInject({ method: "GET", url: "/api/v1/models/catalog" });
+    expect(response.statusCode).toBe(200);
+    const body = response.json();
+    expect(Array.isArray(body.models)).toBe(true);
+    expect(body.models.length).toBeGreaterThan(0);
+    // The array IS MODEL_CATALOG, entry for entry — never a drift-prone copy.
+    expect(body.models).toEqual(MODEL_CATALOG);
+    expect(body.models).toHaveLength(MODEL_CATALOG.length);
+    expect(body.defaultModelId).toBe("z-ai/glm-5.2:free");
+    expect(body.subagentDefaultModelId).toBe("nvidia/nemotron-3.5-lightning:free");
+    expect(body.recommendedModelIds[0]).toBe(body.defaultModelId);
+  });
+
+  it("spot-checks a known free model: free, tool-capable, real context window", async () => {
+    const response = await authInject({ method: "GET", url: "/api/v1/models/catalog" });
+    const glm = response
+      .json()
+      .models.find((m: { modelId: string }) => m.modelId === "z-ai/glm-5.2:free");
+    expect(glm).toMatchObject({
+      free: true,
+      supportsTools: true,
+      contextWindow: 256_000,
+    });
+  });
+
+  it("requires the bearer token like every other route in the scope", async () => {
+    const response = await app.inject({ method: "GET", url: "/api/v1/models/catalog" });
+    expect(response.statusCode).toBe(401);
+    expect(response.json().error.code).toBe("UNAUTHORIZED");
   });
 });

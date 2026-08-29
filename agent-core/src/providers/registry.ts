@@ -111,6 +111,17 @@ export class ProviderKeyring {
     return info;
   }
 
+  /**
+   * ROUND-47 (R47-b): read ONE pool slot (0 = primary). Undefined when that
+   * slot holds no key — the route turns that into a 409 naming the slot.
+   * Symmetric with setSlot; the value never leaves the process except as a
+   * Bearer header inside testProviderConnection.
+   */
+  getSlot(providerId: string, slot: number): string | undefined {
+    const value = this.#env[ProviderKeyring.slotEnvVarName(providerId, slot)];
+    return typeof value === "string" && value !== "" ? value : undefined;
+  }
+
   /** Write a pool slot (0 = primary; the existing set() alias). */
   setSlot(providerId: string, slot: number, key: string): void {
     if (slot === 0) {
@@ -263,16 +274,22 @@ export interface ProviderTestResult {
  * ProviderFetchError with key-scrubbed messages (route maps to 502).
  * The caller has already checked provider existence (404) and key presence
  * (409); the empty-header fallback keeps this function safe standalone.
+ *
+ * ROUND-47 (R47-b): `keyOverride` probes a specific KEY-POOL slot instead of
+ * the primary (the route resolves the slot's key and 409s when it is empty).
+ * Omitted → the primary key, exactly the pre-R47 behavior. Every downstream
+ * use (Bearer header + scrub) carries whichever key was resolved.
  */
 export async function testProviderConnection(
   keyring: ProviderKeyring,
   provider: ProviderRecord,
   model?: string,
+  keyOverride?: string,
 ): Promise<ProviderTestResult> {
   if (provider.baseUrl === null) {
     throw new ProviderFetchError(`provider '${provider.id}' has no baseUrl to test`);
   }
-  const apiKey = keyring.get(provider.id);
+  const apiKey = keyOverride ?? keyring.get(provider.id);
   if (apiKey === undefined) {
     throw new ProviderTestError(`no API key held for provider '${provider.id}'`);
   }
