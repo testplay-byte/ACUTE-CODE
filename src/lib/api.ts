@@ -743,6 +743,12 @@ export type WorkingEntry =
       category: string;
       status: "pending" | "approved" | "denied" | "expired";
       remember?: "once" | "always";
+      /** ROUND-48 (R48-e2): set when the ask comes from a delegated CHILD
+       * agent (its approvals ride the parent's SSE as subagent-event
+       * envelopes — stream-store routes them here). Rendered as a
+       * "Sub-agent {code} · {role}" attribution prefix on the approval
+       * card; absent on main-agent approvals (behavior unchanged). */
+      subAgentId?: string;
       ts: string;
     };
 
@@ -1119,6 +1125,10 @@ export async function pickFolderViaBackend(): Promise<{
 /** GET /sessions/:id/subagents row — computed status per child. */
 export interface SubAgentStatus {
   id: string;
+  /** ROUND-48 (R48-e1): deterministic 4-char [A-Z0-9] short code of the
+   * child (same value as on every subagent-status SSE envelope) — the
+   * quick-identify badge in the picker, Delegated rows and panel header. */
+  code: string;
   title: string | null;
   subRole: string | null;
   status: SessionStatus;
@@ -1768,6 +1778,48 @@ export async function fetchModelsCatalog(): Promise<ModelsCatalog> {
 // Streaming messages (round-16: live responses in the chat UI)
 // ---------------------------------------------------------------------------
 
+/** ROUND-48 (R48-e1, binding wire contract): a delegated child's live event
+ * wrapped by the orchestrator's emit — rides the PARENT's SSE stream as the
+ * `inner` payload of a `subagent-event` envelope. `approval.*` frames are the
+ * child's interactive permission asks (decided via the parent chat's
+ * ApprovalCard → POST /approvals/:id/decision); tool/text frames stream per
+ * generateText step. `sessionId` fields are the CHILD's id (the envelope
+ * carries it too).
+ *
+ * The union lists the frames the UI ACTS on; the child's runtime can also
+ * forward bookkeeping frames through the same envelope (`meta.compaction`,
+ * `meta.context_limit`, `meta.request_limit`, `meta.continuation_complete`,
+ * second-shape `meta.continuation {iteration, reason}`) — they arrive
+ * verbatim and stream-store ignores them (no branch matches), same as the
+ * top-level stream's unlisted meta frames. Extend this union ONLY when a
+ * consumer starts rendering one of them. */
+export type SubAgentInnerEvent =
+  | {
+      type: "approval.requested";
+      approvalId: string;
+      toolName: string;
+      argsSummary: string;
+      category: string;
+    }
+  | {
+      type: "approval.resolved";
+      approvalId: string;
+      decision: "approved" | "denied" | "expired";
+      remember?: "once" | "always";
+    }
+  | { type: "tool-call"; sessionId?: string; toolName: string; argsSummary: string }
+  | {
+      type: "tool-result";
+      sessionId?: string;
+      toolName: string;
+      argsSummary?: string;
+      ok: boolean;
+      outputSummary?: string;
+    }
+  | { type: "text-delta"; sessionId?: string; text: string }
+  | { type: "finish"; sessionId?: string }
+  | { type: "meta.continuation"; sessionId?: string; iteration: number; maxOuterLoops?: number };
+
 /** Events arriving over POST /sessions/:id/messages/stream (SSE). */
 export type StreamTurnEvent =
   | { type: "text-delta"; delta: string }
@@ -1787,8 +1839,22 @@ export type StreamTurnEvent =
       status: "queued" | "running" | "completed" | "failed";
       task: string;
       role: string;
+      /** ROUND-48 (R48-e1): deterministic 4-char [A-Z0-9] code of the child
+       * session — identical to the `code` field on GET /sessions/:id/subagents
+       * rows, so the live stream and the polled list join on either id or
+       * code. Tokens/error are NOT on this frame — poll the list for them. */
+      code: string;
       todosDone?: number;
       todosTotal?: number;
+    }
+  | {
+      /** ROUND-48 (R48-e1): a delegated child's live event, wrapped — rides
+       * the parent's SSE so the main chat can attribute approvals and show
+       * live progress without polling. See SubAgentInnerEvent for shapes. */
+      type: "subagent-event";
+      sessionId: string;
+      parentSessionId: string;
+      inner: SubAgentInnerEvent;
     }
   | {
       type: "finish";

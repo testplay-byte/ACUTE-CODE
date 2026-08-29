@@ -6,6 +6,7 @@ import {
   FileCode2,
   Globe,
   Loader2,
+  PanelRightOpen,
   RotateCcw,
   Settings2,
   Terminal,
@@ -13,10 +14,12 @@ import {
 } from "lucide-react";
 import {
   DIFF_TOOLS,
+  fetchSubAgents,
   parseDiffArgs,
   resolveSnapshotForTool,
   restoreCheckpoint,
   type DiffLine,
+  type SubAgentStatus,
   type ToolUseEntry,
   type WorkingEntry,
   computeUnifiedDiff,
@@ -24,6 +27,7 @@ import {
   fetchSnapshot,
 } from "../../lib/api";
 import { pushLocalToast } from "../../hooks/use-notifications";
+import { selectSubAgentsLive, useStreamStore } from "../../lib/stream-store";
 import { useRightSidebarStore } from "../../lib/right-sidebar-store";
 import { SubAgentCard } from "./SubAgentCard";
 import { SEMANTIC_COLORS } from "../../lib/semantics";
@@ -105,6 +109,197 @@ function elapsedSeconds(start: string, end: string): number {
   const b = Date.parse(end);
   if (Number.isNaN(a) || Number.isNaN(b)) return 0;
   return Math.max(0, Math.round((b - a) / 1000));
+}
+
+/** Compact token count (same formatting as the SubAgentCard rows). */
+function fmtTokens(n: number): string {
+  return n >= 1000 ? `${(n / 1000).toFixed(n >= 10_000 ? 0 : 1)}k` : String(n);
+}
+
+// ─── ROUND-48 (R48-e2): live Delegated rows ──────────────────────────────────
+
+/**
+ * ROUND-48 (R48-e2, owner: "no option in the main chat to click the Delegated
+ * card… it was just saying Running Running Running"): the shared poll of the
+ * parent's children (GET /sessions/:id/subagents). While ANY row is queued/
+ * running it refetches every ~1.2s — the Delegated card's live rows + the
+ * single-live-child affordance read from it, joined with the stream-store's
+ * live map (fresher status + lastActivity straight off the SSE frames). The
+ * same ["subagents", id] query key the picker + SubAgentCard use — one cache.
+ */
+function useDelegateChildren(parentSessionId: string | null, enabled: boolean) {
+  return useQuery({
+    queryKey: ["subagents", parentSessionId],
+    queryFn: () => fetchSubAgents(parentSessionId as string),
+    enabled: enabled && parentSessionId !== null,
+    refetchInterval: (query) => {
+      const data = query.state.data;
+      const anyLive = (data ?? []).some(
+        (s) => s.status === "running" || s.status === "queued",
+      );
+      return anyLive ? 1200 : false;
+    },
+  });
+}
+
+/** The monospace 4-char code badge — the owner's quick-identify mark for a
+ * sub-agent (picker rows, Delegated rows, panel header, approval cards). */
+export function SubAgentCodeChip({
+  code,
+  title,
+}: {
+  code: string;
+  title?: string;
+}) {
+  const styles = useThemeStyles();
+  return (
+    <span
+      className="shrink-0 font-mono text-[10px] font-bold px-1.5 py-0.5 rounded-md tracking-[0.08em]"
+      style={{ background: withAlpha(styles.accent, 0.12), color: styles.accent }}
+      title={title ?? `Sub-agent code ${code}`}
+      data-testid="subagent-code-chip"
+    >
+      {code}
+    </span>
+  );
+}
+
+/** One LIVE child row inside the expanded Delegated card: code chip + role +
+ * title + status + todo progress + tokens + the child's current activity
+ * (from the stream-store live map — the freshest tool summary, no poll lag).
+ * Clicking opens the child's chat tab in the right sidebar. */
+function LiveDelegateRow({
+  child,
+  live,
+  parentSessionId,
+  projectId,
+}: {
+  child: SubAgentStatus;
+  live: ReturnType<typeof selectSubAgentsLive>[string] | undefined;
+  parentSessionId: string;
+  projectId: string;
+}) {
+  const styles = useThemeStyles();
+  const code = live?.code ?? child.code;
+  const role = live?.role ?? child.subRole ?? "agent";
+  const status = live?.status ?? child.status;
+  const todosDone = live?.todosDone ?? child.todosDone;
+  const todosTotal = live?.todosTotal ?? child.todosTotal;
+  const title = child.title ?? live?.task ?? "sub-agent task";
+  const tone =
+    status === "completed"
+      ? SEMANTIC_COLORS.success
+      : status === "failed"
+        ? SEMANTIC_COLORS.danger
+        : styles.accent;
+
+  const open = () => {
+    useRightSidebarStore
+      .getState()
+      .openSubAgent(projectId, parentSessionId, child.id, `${code} · ${title}`, child.subRole ?? undefined);
+  };
+
+  return (
+    <div
+      role="button"
+      tabIndex={0}
+      onClick={open}
+      onKeyDown={(e) => {
+        if (e.key === "Enter" || e.key === " ") {
+          e.preventDefault();
+          open();
+        }
+      }}
+      className="w-full rounded-[10px] border px-2 py-1.5 text-left cursor-pointer transition-colors"
+      style={{ borderColor: withAlpha(tone, 0.35), background: styles.card }}
+      aria-label={`Open sub-agent ${code} · ${title} in sidebar`}
+      onMouseEnter={(e) => {
+        e.currentTarget.style.background = withAlpha(tone, 0.06);
+      }}
+      onMouseLeave={(e) => {
+        e.currentTarget.style.background = styles.card;
+      }}
+      data-testid="live-delegate-row"
+    >
+      <div className="flex items-center gap-1.5 min-w-0">
+        <SubAgentCodeChip code={code} />
+        <span
+          className="shrink-0 text-[9px] font-black uppercase tracking-widest"
+          style={{ color: tone }}
+        >
+          {role}
+        </span>
+        <span className="min-w-0 flex-1 truncate text-[11px] font-medium" style={{ color: styles.textSecondary }} title={title}>
+          {title}
+        </span>
+        <span
+          className="shrink-0 text-[9px] font-bold px-1.5 py-0.5 rounded-full"
+          style={{ background: withAlpha(tone, 0.12), color: tone }}
+        >
+          {status}
+        </span>
+        {todosTotal > 0 ? (
+          <span className="shrink-0 text-[9px] font-mono" style={{ color: styles.textTertiary }}>
+            {todosDone}/{todosTotal} todos
+          </span>
+        ) : null}
+        {child.inputTokens > 0 || child.outputTokens > 0 ? (
+          <span className="shrink-0 text-[9px] font-mono" style={{ color: styles.textTertiary }}>
+            ↑{fmtTokens(child.inputTokens)} ↓{fmtTokens(child.outputTokens)}
+          </span>
+        ) : null}
+      </div>
+      {live?.lastActivity !== undefined ? (
+        <div className="mt-0.5 flex items-center gap-1.5 min-w-0">
+          {status === "running" ? (
+            <span className="w-1.5 h-1.5 rounded-full ac-pulse shrink-0" style={{ background: tone }} aria-hidden />
+          ) : null}
+          <span className="min-w-0 flex-1 truncate font-mono text-[10px]" style={{ color: styles.textTertiary }} title={live.lastActivity}>
+            {live.lastActivity}
+          </span>
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+/** The pending delegate_task body: every LIVE child of this parent as a
+ * clickable row (plus a quiet "delegating…" beat before the first child
+ * appears). Replaced by SubAgentCard the moment the tool result lands.
+ * Pure render — the data hooks live in DelegateDetail (unconditional hook
+ * order; the pending → completed transition swaps branches safely). */
+function LiveDelegateRows({
+  rows,
+  liveMap,
+  parentSessionId,
+  projectId,
+}: {
+  rows: SubAgentStatus[];
+  liveMap: ReturnType<typeof selectSubAgentsLive>;
+  parentSessionId: string;
+  projectId: string;
+}) {
+  const styles = useThemeStyles();
+  if (rows.length === 0) {
+    return (
+      <div className="px-1 py-1 text-[10.5px] font-mono" style={{ color: styles.textTertiary }}>
+        delegating<span className="ac-ellipsis" aria-hidden />
+      </div>
+    );
+  }
+  return (
+    <div className="flex flex-col gap-1 min-w-0">
+      {rows.map((child) => (
+        <LiveDelegateRow
+          key={child.id}
+          child={child}
+          live={liveMap[child.id]}
+          parentSessionId={parentSessionId}
+          projectId={projectId}
+        />
+      ))}
+    </div>
+  );
 }
 
 /** mm:ss for live timers; plain seconds for the folded label. */
@@ -564,13 +759,40 @@ export type ApprovalRemember = "once" | "always";
 
 function ApprovalRow({
   entry,
+  sessionId,
   onDecision,
 }: {
   entry: Extract<WorkingEntry, { type: "approval" }>;
+  /** ROUND-48 (R48-e2): the PARENT session id — resolves a sub-agent ask's
+   * code/role attribution via the live map / the polled subagents rows. */
+  sessionId?: string | null;
   onDecision?: (approvalId: string, decision: ApprovalDecisionChoice, remember: ApprovalRemember) => void;
 }) {
   const styles = useThemeStyles();
   const pending = entry.status === "pending";
+
+  // ROUND-48 (R48-e2): sub-agent attribution. A delegated child's approvals
+  // ride the parent's SSE as subagent-event envelopes; stream-store routes
+  // them into this same approvals queue WITH subAgentId. The live map is the
+  // freshest lookup (the status frames precede any approval); the polled
+  // /subagents rows are the fallback — together they always answer WHO is
+  // asking. Main-agent approvals carry no subAgentId → no prefix (unchanged).
+  const liveMap = useStreamStore(selectSubAgentsLive);
+  const needsLookup = entry.subAgentId !== undefined;
+  const subsQuery = useQuery({
+    queryKey: ["subagents", sessionId ?? null],
+    queryFn: () => fetchSubAgents(sessionId as string),
+    enabled: needsLookup && sessionId != null && liveMap[entry.subAgentId as string] === undefined,
+    staleTime: 10_000,
+  });
+  // Normalize the two lookup sources (live map carries `role`; the polled
+  // /subagents row carries `subRole`) into the chip + role for the prefix.
+  const liveEntry = needsLookup ? liveMap[entry.subAgentId as string] : undefined;
+  const rowEntry = needsLookup
+    ? (subsQuery.data ?? []).find((s) => s.id === (entry.subAgentId as string))
+    : undefined;
+  const attributedCode = liveEntry?.code ?? rowEntry?.code;
+  const attributedRole = liveEntry?.role ?? rowEntry?.subRole ?? undefined;
 
   if (!pending) {
     const decisionText =
@@ -588,6 +810,11 @@ function ApprovalRow({
         <span className="shrink-0 font-semibold" style={{ color: tone }}>
           {decisionText}
         </span>
+        {attributedCode !== undefined ? (
+          <span className="shrink-0 font-mono text-[10px] font-bold px-1.5 py-0.5 rounded-md" style={{ background: withAlpha(styles.accent, 0.12), color: styles.accent }}>
+            {attributedCode}
+          </span>
+        ) : null}
         <span className="min-w-0 flex-1 truncate" style={{ color: styles.textTertiary }}>
           {entry.argsSummary || entry.toolName}
         </span>
@@ -606,7 +833,29 @@ function ApprovalRow({
     >
       <div className="flex items-center gap-2 mb-1.5">
         <span className="w-1.5 h-1.5 rounded-full ac-pulse shrink-0" style={{ background: "#f59e0b" }} aria-hidden />
-        <span className="text-[11.5px] font-bold" style={{ color: styles.text }}>
+        {needsLookup ? (
+          <span
+            className="flex items-center gap-1 text-[11.5px] font-bold min-w-0"
+            style={{ color: styles.text }}
+            data-testid="subagent-approval-attribution"
+          >
+            <span className="truncate">Sub-agent</span>
+            {attributedCode !== undefined && attributedRole !== undefined ? (
+              <>
+                <span
+                  className="shrink-0 font-mono text-[10px] font-bold px-1.5 py-0.5 rounded-md tracking-[0.08em]"
+                  style={{ background: withAlpha(styles.accent, 0.12), color: styles.accent }}
+                >
+                  {attributedCode}
+                </span>
+                <span className="truncate">· {attributedRole} —</span>
+              </>
+            ) : (
+              <span>—</span>
+            )}
+          </span>
+        ) : null}
+        <span className="text-[11.5px] font-bold shrink-0" style={{ color: styles.text }}>
           Permission needed
         </span>
         <span className="text-[10px] font-mono px-1.5 py-0.5 rounded-full shrink-0" style={{ background: styles.subtle, color: styles.textTertiary }}>
@@ -676,6 +925,19 @@ function ToolLine({
   const userTouched = useRef(false);
   const prevOk = useRef<boolean | null>(tool.ok);
 
+  // ROUND-48 (R48-e2, owner: "There was no option in the main chat to click
+  // the Delegated card and see that agent on the right sidebar"): while this
+  // delegate_task call is pending, watch the parent's children. When EXACTLY
+  // ONE child is live the row itself becomes an open-in-sidebar affordance
+  // (chevron swaps for the panel icon); otherwise the row keeps its
+  // expand/collapse behavior (the expanded body lists every live child).
+  const delegatePending = tool.toolName === "delegate_task" && tool.ok === null;
+  const subsQuery = useDelegateChildren(sessionId, delegatePending);
+  const liveChildren = delegatePending
+    ? (subsQuery.data ?? []).filter((s) => s.status === "running" || s.status === "queued")
+    : [];
+  const singleLiveChild = liveChildren.length === 1 ? liveChildren[0] : null;
+
   // ROUND-33 live behavior preserved: an in-flight write auto-expands the
   // moment it completes (the owner's "live file creation" moment).
   useEffect(() => {
@@ -702,17 +964,55 @@ function ToolLine({
     return false;
   })();
 
+  // Single live child → the row click opens that child's chat tab in the
+  // right sidebar (the owner's ask — see the child live instead of "Running
+  // Running Running"). Zero or multiple live children keep the toggle.
+  const openSingleLive = () => {
+    if (singleLiveChild === null || sessionId === null) return;
+    useRightSidebarStore.getState().openSubAgent(
+      projectId,
+      sessionId,
+      singleLiveChild.id,
+      `${singleLiveChild.code} · ${singleLiveChild.title ?? "Sub-agent"}`,
+      singleLiveChild.subRole ?? undefined,
+    );
+  };
+
+  const rowAction: "open-subagent" | "toggle" | null =
+    singleLiveChild !== null && sessionId !== null
+      ? "open-subagent"
+      : expandable
+        ? "toggle"
+        : null;
+
   return (
     <div className="min-w-0">
       <button
-        onClick={expandable ? toggle : undefined}
-        aria-expanded={expandable ? open : undefined}
-        aria-label={`${label} ${tool.argsSummary}`}
-        title={`${tool.toolName} ${tool.argsSummary}`}
+        onClick={
+          rowAction === "open-subagent"
+            ? openSingleLive
+            : rowAction === "toggle"
+              ? toggle
+              : undefined
+        }
+        aria-expanded={rowAction === "toggle" ? open : undefined}
+        aria-label={
+          rowAction === "open-subagent" && singleLiveChild !== null
+            ? `Open sub-agent ${singleLiveChild.code} · ${singleLiveChild.title ?? "Sub-agent"} in sidebar`
+            : `${label} ${tool.argsSummary}`
+        }
+        title={
+          rowAction === "open-subagent" && singleLiveChild !== null
+            ? `Open sub-agent ${singleLiveChild.code} in the right sidebar`
+            : `${tool.toolName} ${tool.argsSummary}`
+        }
         className="flex items-center gap-2 h-7 w-full max-w-full px-1 -ml-1 rounded-md transition-colors text-left"
-        style={{ color: styles.textTertiary, cursor: expandable ? "pointer" : "default" }}
+        style={{
+          color: styles.textTertiary,
+          cursor: rowAction !== null ? "pointer" : "default",
+        }}
         onMouseEnter={(e) => {
-          if (expandable) e.currentTarget.style.background = styles.subtleHover;
+          if (rowAction !== null) e.currentTarget.style.background = styles.subtleHover;
         }}
         onMouseLeave={(e) => (e.currentTarget.style.background = "transparent")}
       >
@@ -723,21 +1023,32 @@ function ToolLine({
         <span className="min-w-0 flex-1 truncate font-mono text-[11px]" style={{ color: styles.textTertiary }}>
           {tool.argsSummary}
         </span>
-        <span
-          className="shrink-0 w-4 text-center text-[11px]"
-          style={{
-            color: waitingApproval
-              ? "#f59e0b"
-              : tool.ok === false
-                ? SEMANTIC_COLORS.danger
-                : tool.ok === null
-                  ? styles.textTertiary
-                  : SEMANTIC_COLORS.success,
-          }}
-        >
-          {waitingApproval ? "…" : tool.ok === null ? "…" : tool.ok ? "✓" : "✗"}
-        </span>
-        {expandable ? (
+        {rowAction === "open-subagent" ? (
+          <span
+            className="shrink-0 flex items-center gap-1 text-[10px] font-bold"
+            style={{ color: styles.accent }}
+          >
+            live
+            <PanelRightOpen size={11} />
+          </span>
+        ) : (
+          <span
+            className="shrink-0 w-4 text-center text-[11px]"
+            style={{
+              color:
+                waitingApproval
+                  ? "#f59e0b"
+                  : tool.ok === false
+                    ? SEMANTIC_COLORS.danger
+                    : tool.ok === null
+                      ? styles.textTertiary
+                      : SEMANTIC_COLORS.success,
+            }}
+          >
+            {waitingApproval ? "…" : tool.ok === null ? "…" : tool.ok ? "✓" : "✗"}
+          </span>
+        )}
+        {rowAction === "toggle" ? (
           <ChevronDown
             size={10}
             className="shrink-0"
@@ -778,22 +1089,65 @@ function DelegateDetail({
   projectId: string;
   live: boolean;
 }) {
+  // All hooks run unconditionally — the pending → completed transition swaps
+  // branches, so the hook order must be identical in every branch.
+  const styles = useThemeStyles();
+  const liveMap = useStreamStore(selectSubAgentsLive);
+  const subsQuery = useDelegateChildren(sessionId, sessionId !== null);
+
   const hay = `${tool.argsSummary} ${tool.outputSummary ?? ""}`;
   const sessionMatch = /session: (sess_[A-Za-z0-9-]+)/.exec(hay);
   const roleMatch = /role: ([a-z]+)/.exec(hay);
   const taskMatch = /task: (.+?)(?:, role:|, session:|$)/.exec(tool.argsSummary);
+
+  // ROUND-48 (R48-e2): while the delegate_task RESULT is pending there is no
+  // `session:` id in the output yet — render the parent's LIVE children as
+  // clickable rows (status/todo/token progress + the current activity from
+  // the SSE live map) instead of a bare "running…" OutputDetail.
+  const pending = tool.ok === null;
+  const liveRows = pending
+    ? (subsQuery.data ?? []).filter((s) => s.status === "running" || s.status === "queued")
+    : [];
+  if (pending && sessionId !== null) {
+    return (
+      <LiveDelegateRows
+        rows={liveRows}
+        liveMap={liveMap}
+        parentSessionId={sessionId}
+        projectId={projectId}
+      />
+    );
+  }
   if (sessionMatch === null) {
     return <OutputDetail tool={tool} />;
   }
+
+  // Completed: the code chip (matched by the child session id parsed from the
+  // output — the polled /subagents rows carry it, the live map is the fallback)
+  // + the existing SubAgentCard.
+  const childCode =
+    (subsQuery.data ?? []).find((s) => s.id === sessionMatch[1])?.code ??
+    liveMap[sessionMatch[1]]?.code ??
+    null;
   return (
-    <SubAgentCard
-      sessionId={sessionMatch[1]}
-      parentSessionId={sessionId}
-      role={roleMatch?.[1]}
-      task={taskMatch?.[1]}
-      live={live}
-      projectId={projectId}
-    />
+    <div className="min-w-0">
+      {childCode !== null ? (
+        <div className="flex items-center gap-1.5 mb-1 px-1">
+          <SubAgentCodeChip code={childCode} />
+          <span className="text-[10px] font-mono" style={{ color: styles.textTertiary }}>
+            sub-agent
+          </span>
+        </div>
+      ) : null}
+      <SubAgentCard
+        sessionId={sessionMatch[1]}
+        parentSessionId={sessionId}
+        role={roleMatch?.[1]}
+        task={taskMatch?.[1]}
+        live={live}
+        projectId={projectId}
+      />
+    </div>
   );
 }
 
@@ -948,9 +1302,12 @@ export function WorkingSection({
                   return <NarrationRow key={`t-${i}`} content={entry.content} />;
                 }
                 if (entry.type === "tool") {
-                  return <ToolLine key={`t-${entry.tool.seq}`} tool={entry.tool} sessionId={sessionId} live={live} projectId={projectId} />;
+                  // R48: distinct prefix from the index-keyed rows above — a
+                  // tool's seq could equal a sibling row's list index and the
+                  // shared `t-` prefix produced duplicate React keys.
+                  return <ToolLine key={`tool-${entry.tool.seq}`} tool={entry.tool} sessionId={sessionId} live={live} projectId={projectId} />;
                 }
-                return <ApprovalRow key={`t-${i}`} entry={entry} onDecision={onApprovalDecision} />;
+                return <ApprovalRow key={`t-${i}`} entry={entry} sessionId={sessionId} onDecision={onApprovalDecision} />;
               })}
               {live && entries.length === 0 ? (
                 <div className="flex items-center gap-2 h-7">

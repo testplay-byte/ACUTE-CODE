@@ -49,8 +49,16 @@ export function stateKey(projectId: string, sessionId: string | null): string {
 
 /** ROUND-44 (R44-a): "memory" joins the tab set — the project's persistent
  * agent knowledge (facts/decisions/preferences saved via memory_save),
- * rendered by MemoryPanel and auto-injected into every agent turn. */
-export type RightSidebarTabType = "file" | "browser" | "terminal" | "subagent" | "memory";
+ * rendered by MemoryPanel and auto-injected into every agent turn.
+ *
+ * ROUND-48 (R48-c): "files" — the project file EXPLORER tab (owner: "the
+ * right sidebar will be divided into two sections: on the left half, the
+ * actual file system with navigation/open folders/click files; on the right
+ * side, the actual content of the files"). A singleton tab like the terminal
+ * and memory tabs, rendered by FilesExplorerPanel. The single-path "file"
+ * tab type (FileViewerPanel) is unchanged — the chat's DiffDetail "Open" and
+ * openFile() keep opening one bound file per tab. */
+export type RightSidebarTabType = "file" | "files" | "browser" | "terminal" | "subagent" | "memory";
 
 export interface TerminalLine {
   /** ROUND-44 (R44-e): "exit" lines carry the streaming exit-code footer
@@ -137,6 +145,8 @@ interface RightSidebarState {
   setActiveTab: (projectId: string, tabId: string) => void;
   /** Open (or surface) a file tab. */
   openFile: (projectId: string, path: string) => string;
+  /** ROUND-48 (R48-c): open (or surface) the file-explorer tab (singleton). */
+  openFiles: (projectId: string) => string;
   /** Open (or surface) a browser tab. */
   openBrowser: (projectId: string, url?: string | null) => string;
   /** Open (or surface) a terminal tab. */
@@ -172,7 +182,7 @@ function nextId(): string {
 function findExistingTab(
   state: ProjectRightState,
   type: RightSidebarTabType,
-  key: { filePath?: string; browserUrl?: string | null; subAgentId?: string; terminal?: boolean; memory?: boolean },
+  key: { filePath?: string; browserUrl?: string | null; subAgentId?: string; terminal?: boolean; memory?: boolean; files?: boolean },
 ): RightSidebarTab | null {
   for (const t of state.tabs) {
     if (t.type !== type) continue;
@@ -183,6 +193,9 @@ function findExistingTab(
     // ROUND-44 (R44-a): memory is a singleton tab like the terminal — one
     // per session's sidebar.
     if (type === "memory" && key.memory) return t;
+    // ROUND-48 (R48-c): files explorer is a singleton tab like the terminal
+    // and memory — one per session's sidebar.
+    if (type === "files" && key.files) return t;
   }
   return null;
 }
@@ -225,6 +238,13 @@ export const useRightSidebarStore = create<RightSidebarState>()(
       addTab: (projectId, tabInput) => {
         // Compute the id up front so we can return it (set() returns void).
         const id = nextId();
+        // ROUND-48 (R48-c): when the dedupe branch ACTIVATES an existing tab,
+        // return THAT tab's id — the action's contract is "the id of the tab
+        // that ended up open/active". (Previously the pre-computed fresh id
+        // leaked out here even though no new tab was created; harmless for
+        // the fire-and-forget callers, but openFiles' dedupe contract needs
+        // the honest id. No caller relied on the old value.)
+        let resolvedId = id;
         set((s) => {
           const key = stateKey(projectId, s.activeSessionByProject[projectId] ?? null);
           const cur = s.byProject[key] ?? defaultProjectRightState();
@@ -235,8 +255,10 @@ export const useRightSidebarStore = create<RightSidebarState>()(
             subAgentId: tabInput.subAgentId,
             terminal: tabInput.type === "terminal",
             memory: tabInput.type === "memory",
+            files: tabInput.type === "files",
           });
           if (existing !== null) {
+            resolvedId = existing.id;
             return {
               byProject: {
                 ...s.byProject,
@@ -255,7 +277,7 @@ export const useRightSidebarStore = create<RightSidebarState>()(
             },
           };
         });
-        return id;
+        return resolvedId;
       },
       closeTab: (projectId, tabId) =>
         set((s) => {
@@ -306,6 +328,11 @@ export const useRightSidebarStore = create<RightSidebarState>()(
         get().addTab(projectId, { type: "terminal", title: "Terminal" }),
       openMemory: (projectId) =>
         get().addTab(projectId, { type: "memory", title: "Memory" }),
+      // ROUND-48 (R48-c): the file explorer — a singleton tab (deduped by
+      // type, like the terminal/memory tabs), so the quick-menu "Files"
+      // action always surfaces the ONE explorer instead of stacking tabs.
+      openFiles: (projectId) =>
+        get().addTab(projectId, { type: "files", title: "Files" }),
       openSubAgent: (projectId, parentSessionId, subAgentId, title, subRole) =>
         get().addTab(projectId, {
           type: "subagent",

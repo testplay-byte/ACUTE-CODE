@@ -1,137 +1,132 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { AnimatePresence, motion } from "framer-motion";
+import { useEffect, useRef, useState } from "react";
 import {
-  fetchSubAgents,
+  AlertTriangle,
+  Bot,
+  Check,
+  ChevronDown,
+  CircleAlert,
+  Clock,
+  FileCode2,
+  Globe,
+  ListChecks,
+  LoaderCircle,
+  RefreshCw,
+  Search,
+  ShieldAlert,
+  Terminal as TerminalIcon,
+  type LucideIcon,
+} from "lucide-react";
+import {
   fetchSubAgentDetail,
+  fetchSubAgents,
   retrySubAgent,
   type SessionDetail,
   type SessionEvent,
   type SubAgentStatus,
 } from "../../lib/api";
+import { selectSubAgentsLive, useStreamStore } from "../../lib/stream-store";
 import { SEMANTIC_COLORS } from "../../lib/semantics";
 import { useThemeStyles } from "../../lib/use-theme-styles";
 import { useScrollFade } from "../../lib/useScrollFade";
 import { ease } from "../../lib/motion";
-import { useEffect, useRef, useState } from "react";
 import { withAlpha } from "../dashboard/helpers";
 import { ClampedText } from "../shared/ClampedText";
+import { Markdown } from "./FileViewerPanel";
 import type { RightSidebarTab } from "../../lib/right-sidebar-store";
-import {
-  Activity as ActivityIcon,
-  AlertTriangle,
-  Bot,
-  Check,
-  CircleAlert,
-  ClipboardList,
-  Clock,
-  FileCode2,
-  FilePenLine,
-  FilePlus2,
-  FolderPlus,
-  Globe,
-  LoaderCircle,
-  MessageSquareText,
-  RefreshCw,
-  Search,
-  Sparkles,
-  Terminal as TerminalIcon,
-  Trash2,
-} from "lucide-react";
 
 /**
- * ROUND-43 right-sidebar Sub-agent tab — the phase-card redesign (owner: "it
- * was not looking good, it was not proper, and it was not beautiful… make it
- * much better, much more proper, and well-handled").
+ * ROUND-48 (R48-e2) right-sidebar Sub-agent tab — the CHAT redesign (owner:
+ * "it should look like the main chat, show the tools it runs live; the timer
+ * updates every 5s instead of every second"). The R43 phase-card stack
+ * (Task/Activity/Files/Report) is replaced by a chat TRANSCRIPT of the
+ * child's event log, in the main chat's visual language:
  *
- * Structure: ONE CARD PER PHASE, in execution order —
- *   1. TASK        the delegation prompt (ClampedText @ 6 lines)
- *   2. ACTIVITY    the live tool timeline (rows: icon + mono basename +
- *                 relative time + terminal-state rail; new rows animate in)
- *   3. FILES       the manifest of files touched (count chip, show-all)
- *   4. REPORT      the final answer (ClampedText @ 6 lines, accent rail)
+ *   message.user      → the delegation prompt as a right-aligned
+ *                       accent-tinted task bubble (AgentChatPanel's
+ *                       UserMessage language, scaled for the sidebar)
+ *   message.assistant → a markdown bubble (FileViewerPanel's shared Markdown
+ *                       renderer); the LAST one on a terminal run wears the
+ *                       accent rail + "Final report" label (the old Report
+ *                       card's affordance, now inline)
+ *   tool.use          → one-line rows in the SAME visual style as the main
+ *                       chat's tool lines (icon + past-tense label + mono
+ *                       argsSummary + ✓/✗/… state + expandable output)
+ *   todo.update       → a compact progress line (bar + n/m + current item)
+ *   approval.*        → compact INFORMATIONAL cards — decisions happen in the
+ *                       PARENT chat, where the ask lands with this child's
+ *                       code attribution (R48-e1 wire contract)
+ *   turn.error        → an error banner (TurnErrorCard language, compact)
  *
- * Status system: a single coherent chip in the panel header (queued /
- * running / retrying / done / failed / cancelled) — pulsing dot while work
- * is in flight, check/x glyphs for terminal states, a spinner ONLY for the
- * initial detail load. A failed child gets an explicit danger banner with
- * the error reason + the RETRY primary action (resumes from the event log,
- * same endpoint the chat's SubAgentCard uses).
+ * Kept from the R43 panel: the coherent header status chip, the explicit
+ * failed banner with the Retry primary action (resumes from the event log via
+ * POST /sessions/:parent/subagents/:child/retry), the 600ms live poll while
+ * running (now slower — 5s — once settled), the stick-to-bottom scrolling
+ * with the custom auto-scroll scrollbar, and the single initial-load spinner.
  *
- * Everything data-side is unchanged from R41/42: 600ms polling of the
- * child's event log; the error reason comes from the existing
- * /sessions/:id/subagents listing; retry is the existing
- * POST /sessions/:id/subagents/:child/retry.
+ * Header: monospace code chip (R48-e1's deterministic 4-char [A-Z0-9] code —
+ * resolved from the live SSE map, falling back to the polled /subagents row)
+ * + role chip + title + StatusChip + an elapsed clock that now ticks EVERY
+ * SECOND (was 5s — the owner's complaint).
  */
 const ROLE_COLORS: Record<string, string> = {
   planner: "#c792ea",
   researcher: "#82aaff",
   coder: "#a5d6a7",
-  reviewer: "#f9a825",
+  reviewer: "#f9a925",
   tester: "#f59e0b",
 };
 
-/** Tool names that mutate files — collected into the Files card. */
-const FILE_TOOLS = new Set([
-  "write_file",
-  "edit_file",
-  "create_dir",
-  "delete_file",
-]);
-
 const RUNNING_BLUE = "#3B82F6";
 
-/** Icon + tint for a file-mutating tool (used in the Files manifest). */
-function FileToolIcon({ toolName, size = 12 }: { toolName: string; size?: number }): JSX.Element {
-  switch (toolName) {
-    case "write_file":
-      return <FilePlus2 size={size} />;
-    case "edit_file":
-      return <FilePenLine size={size} />;
-    case "create_dir":
-      return <FolderPlus size={size} />;
-    case "delete_file":
-      return <Trash2 size={size} />;
-    default:
-      return <FileCode2 size={size} />;
-  }
-}
+/** Tool icon + past-tense label maps — mirrors WorkingSection's maps so the
+ * child's tool rows read EXACTLY like the main chat's tool lines. */
+const TOOL_ICONS: Record<string, LucideIcon> = {
+  list_dir: FileCode2,
+  read_file: FileCode2,
+  write_file: FileCode2,
+  edit_file: FileCode2,
+  create_dir: FileCode2,
+  delete_file: FileCode2,
+  web_search: Globe,
+  web_fetch: Globe,
+  search_code: Search,
+  search_files: Search,
+  git_status: FileCode2,
+  git_diff: FileCode2,
+  git_log: FileCode2,
+  run_command: TerminalIcon,
+  todo_write: ListChecks,
+  index_project: TerminalIcon,
+  delegate_task: TerminalIcon,
+};
 
-/** The icon for a NON-file tool in the activity timeline. */
-function ToolIcon({ toolName, size = 13 }: { toolName: string; size?: number }) {
-  if (toolName === "run_command" || toolName === "search_files" || toolName === "list_dir") {
-    return <TerminalIcon size={size} />;
-  }
-  if (toolName === "web_fetch" || toolName === "web_search") return <Globe size={size} />;
-  if (toolName.startsWith("search")) return <Search size={size} />;
-  if (toolName === "delegate_task") return <Bot size={size} />;
-  return <Sparkles size={size} />;
-}
+const TOOL_LABELS: Record<string, string> = {
+  list_dir: "Listed",
+  read_file: "Read",
+  write_file: "Wrote",
+  edit_file: "Edited",
+  create_dir: "Created",
+  delete_file: "Deleted",
+  search_files: "Searched",
+  search_code: "Searched",
+  git_status: "Checked",
+  git_diff: "Diffed",
+  git_log: "Logged",
+  run_command: "Ran",
+  todo_write: "Planned",
+  web_search: "Searched",
+  web_fetch: "Fetched",
+  index_project: "Indexed",
+  delegate_task: "Delegated",
+};
 
-/** Extract a file path from a tool.use event's argsSummary. The runtime
- * formats argsSummary as the first argument (the path) for file tools. */
-function filePathFromArgs(toolName: string, argsSummary: string): string | null {
-  if (!FILE_TOOLS.has(toolName)) return null;
-  const trimmed = argsSummary.trim().replace(/^["']|["']$/g, "");
-  return trimmed === "" ? null : trimmed;
-}
-
-/** Split a path into dir + basename for a nicer mono rendering. */
-function splitPath(path: string): { dir: string; base: string } {
-  const idx = Math.max(path.lastIndexOf("/"), path.lastIndexOf("\\"));
-  if (idx === -1) return { dir: "", base: path };
-  return { dir: path.slice(0, idx + 1), base: path.slice(idx + 1) };
-}
-
-/** Compact relative time ("now", "12s", "3m", "2h") for tool/file rows. */
-function relTime(ts: string, nowMs: number): string {
-  const t = Date.parse(ts);
-  if (Number.isNaN(t)) return "";
-  const s = Math.max(0, Math.round((nowMs - t) / 1000));
-  if (s < 10) return "now";
-  if (s < 60) return `${s}s`;
-  if (s < 3600) return `${Math.floor(s / 60)}m`;
-  if (s < 86400) return `${Math.floor(s / 3600)}h`;
-  return `${Math.floor(s / 86400)}d`;
+/** Strip a leading "K7Q2 · " code prefix from a tab title (the R48-e2
+ * openSubAgent call sites prefix titles with the child's code; the header
+ * shows the code as its OWN chip, so the text must not repeat it). */
+function stripCodePrefix(title: string): string {
+  return title.replace(/^[A-Z0-9]{4} · /, "");
 }
 
 /** m:ss (or h:mm:ss) elapsed since the first event — the header's live clock. */
@@ -147,6 +142,8 @@ function elapsedLabel(startTs: string | undefined, nowMs: number): string | null
   return `${mm}:${String(ss).padStart(2, "0")}`;
 }
 
+// ─── Transcript model ────────────────────────────────────────────────────────
+
 interface ToolCard {
   toolName: string;
   argsSummary: string;
@@ -155,80 +152,171 @@ interface ToolCard {
   ts: string;
 }
 
-interface ActionItem {
-  kind: "tool" | "text";
-  seq: number;
+interface ApprovalCardData {
+  approvalId: string;
+  toolName: string;
+  argsSummary: string;
+  category: string;
+  status: "pending" | "approved" | "denied" | "expired";
+  remember?: "once" | "always";
   ts: string;
-  tool?: ToolCard;
-  text?: string;
 }
 
-/** Parse the event log into renderable pieces (prompt / interleaved actions
- * / files-written list / final report + the last failure for the banner). */
-function parseSubAgentEvents(events: SessionEvent[]): {
-  promptText: string | null;
-  firstTs: string | undefined;
-  actions: ActionItem[];
-  filesWritten: Array<{ toolName: string; path: string; ts: string }>;
-  report: string | null;
-  reportSeq: number | null;
-  hasRunningTool: boolean;
-  lastFailure: { toolName: string; outputSummary: string } | null;
-} {
-  const promptEvent = events.find((e) => e.type === "message.user");
-  const promptText =
-    promptEvent && typeof (promptEvent.payload as { content?: unknown } | null)?.content === "string"
-      ? ((promptEvent.payload as { content: string }).content)
-      : null;
+interface TodoCardData {
+  done: number;
+  total: number;
+  current: string | null;
+}
 
-  const filesWritten: Array<{ toolName: string; path: string; ts: string }> = [];
-  const actions: ActionItem[] = [];
+interface ErrorCardData {
+  code: string;
+  message: string;
+  providerError?: string;
+  model?: string;
+  ts: string;
+}
+
+type TranscriptItem =
+  | { kind: "user"; seq: number; ts: string; content: string }
+  | { kind: "assistant"; seq: number; ts: string; content: string }
+  | { kind: "tool"; seq: number; ts: string; tool: ToolCard }
+  | { kind: "todo"; seq: number; ts: string; todos: TodoCardData }
+  | { kind: "approval"; seq: number; ts: string; approval: ApprovalCardData }
+  | { kind: "error"; seq: number; ts: string; error: ErrorCardData };
+
+/** Fold the child's append-only event log into renderable transcript items
+ * (seq order). Approval resolved events update their requested card in place
+ * (the same fold toProjectChatItems applies on the main timeline). */
+function parseSubAgentTranscript(events: SessionEvent[]): {
+  items: TranscriptItem[];
+  firstTs: string | undefined;
+  hasRunningTool: boolean;
+  lastAssistantSeq: number | null;
+} {
+  const items: TranscriptItem[] = [];
+  const approvalIndex = new Map<string, number>();
   let hasRunningTool = false;
-  let lastFailure: { toolName: string; outputSummary: string } | null = null;
+  let lastAssistantSeq: number | null = null;
 
   for (const e of events) {
-    if (e.type === "tool.use") {
-      const p = (e.payload ?? {}) as Record<string, unknown>;
-      const toolName = typeof p.toolName === "string" ? p.toolName : "tool";
-      const argsSummary = typeof p.argsSummary === "string" ? p.argsSummary : "";
-      const ok = typeof p.ok === "boolean" ? p.ok : null;
-      const outputSummary = typeof p.outputSummary === "string" ? p.outputSummary : null;
-      const tool: ToolCard = { toolName, argsSummary, ok, outputSummary, ts: e.ts };
-      actions.push({ kind: "tool", seq: e.seq, ts: e.ts, tool });
-      if (ok === null) hasRunningTool = true;
-      if (ok === false) lastFailure = { toolName, outputSummary: outputSummary ?? "" };
-      const path = filePathFromArgs(toolName, argsSummary);
-      if (path !== null) filesWritten.push({ toolName, path, ts: e.ts });
-    } else if (e.type === "message.assistant") {
-      const content =
-        typeof (e.payload as { content?: unknown } | null)?.content === "string"
-          ? ((e.payload as { content: string }).content)
-          : "";
-      if (content !== "") actions.push({ kind: "text", seq: e.seq, ts: e.ts, text: content });
+    const payload =
+      e.payload && typeof e.payload === "object" ? (e.payload as Record<string, unknown>) : null;
+
+    if (e.type === "message.user") {
+      if (payload !== null && typeof payload.content === "string" && payload.content !== "") {
+        items.push({ kind: "user", seq: e.seq, ts: e.ts, content: payload.content });
+      }
+      continue;
     }
+
+    if (e.type === "message.assistant") {
+      if (payload !== null && typeof payload.content === "string" && payload.content.trim() !== "") {
+        lastAssistantSeq = e.seq;
+        items.push({ kind: "assistant", seq: e.seq, ts: e.ts, content: payload.content });
+      }
+      continue;
+    }
+
+    if (e.type === "tool.use") {
+      const toolName = typeof payload?.toolName === "string" ? payload.toolName : "tool";
+      const argsSummary = typeof payload?.argsSummary === "string" ? payload.argsSummary : "";
+      const ok = typeof payload?.ok === "boolean" ? payload.ok : null;
+      const outputSummary = typeof payload?.outputSummary === "string" ? payload.outputSummary : null;
+      if (ok === null) hasRunningTool = true;
+      items.push({
+        kind: "tool",
+        seq: e.seq,
+        ts: e.ts,
+        tool: { toolName, argsSummary, ok, outputSummary, ts: e.ts },
+      });
+      continue;
+    }
+
+    if (e.type === "todo.update") {
+      const raw = Array.isArray(payload?.todos)
+        ? (payload.todos as Array<{ content?: unknown; status?: unknown }>)
+        : [];
+      if (raw.length > 0) {
+        const todos = raw.map((t) => ({
+          content: typeof t.content === "string" ? t.content : "",
+          status: t.status === "completed" || t.status === "in_progress" ? t.status : ("pending" as const),
+        }));
+        items.push({
+          kind: "todo",
+          seq: e.seq,
+          ts: e.ts,
+          todos: {
+            done: todos.filter((t) => t.status === "completed").length,
+            total: todos.length,
+            current: todos.find((t) => t.status === "in_progress")?.content ?? null,
+          },
+        });
+      }
+      continue;
+    }
+
+    if (e.type === "approval.requested" || e.type === "approval.resolved") {
+      const approvalId = typeof payload?.approvalId === "string" ? payload.approvalId : "";
+      const toolName = typeof payload?.toolName === "string" ? payload.toolName : "run_command";
+      const argsSummary = typeof payload?.argsSummary === "string" ? payload.argsSummary : "";
+      const category = typeof payload?.category === "string" ? payload.category : "confirm";
+      if (e.type === "approval.requested") {
+        approvalIndex.set(approvalId, items.length);
+        items.push({
+          kind: "approval",
+          seq: e.seq,
+          ts: e.ts,
+          approval: { approvalId, toolName, argsSummary, category, status: "pending", ts: e.ts },
+        });
+      } else {
+        const status =
+          payload?.decision === "approved" || payload?.decision === "denied"
+            ? (payload.decision as "approved" | "denied")
+            : ("expired" as const);
+        const remember =
+          payload?.remember === "once" || payload?.remember === "always" ? payload.remember : undefined;
+        const idx = approvalIndex.get(approvalId);
+        if (idx !== undefined && items[idx]?.kind === "approval") {
+          items[idx] = {
+            ...items[idx],
+            approval: { ...items[idx].approval, status, ...(remember !== undefined ? { remember } : {}) },
+          };
+        } else {
+          items.push({
+            kind: "approval",
+            seq: e.seq,
+            ts: e.ts,
+            approval: { approvalId, toolName, argsSummary, category, status, ts: e.ts },
+          });
+        }
+      }
+      continue;
+    }
+
+    if (e.type === "turn.error") {
+      const asString = (v: unknown): string | undefined =>
+        typeof v === "string" && v.length > 0 ? v : undefined;
+      items.push({
+        kind: "error",
+        seq: e.seq,
+        ts: e.ts,
+        error: {
+          code: asString(payload?.code) ?? "PROVIDER_ERROR",
+          message: asString(payload?.message) ?? "The generation failed.",
+          providerError: asString(payload?.providerError),
+          model: asString(payload?.model),
+          ts: e.ts,
+        },
+      });
+      continue;
+    }
+    // Other event types (session markers etc.) don't render in the transcript.
   }
 
-  // The final report = last message.assistant content (the child's reply
-  // after completing its task — same as the parent sees from delegate_task).
-  const lastAssistant = [...events].reverse().find((e) => e.type === "message.assistant");
-  const report =
-    lastAssistant && typeof (lastAssistant.payload as { content?: unknown } | null)?.content === "string"
-      ? ((lastAssistant.payload as { content: string }).content)
-      : null;
-
-  return {
-    promptText,
-    firstTs: events[0]?.ts,
-    actions,
-    filesWritten,
-    report,
-    reportSeq: report !== null ? (lastAssistant?.seq ?? null) : null,
-    hasRunningTool,
-    lastFailure,
-  };
+  return { items, firstTs: events[0]?.ts, hasRunningTool, lastAssistantSeq };
 }
 
-/** The panel's coherent status vocabulary. */
+/** The panel's coherent status vocabulary (unchanged from the R43 panel). */
 type PanelStatus = "queued" | "running" | "retrying" | "done" | "failed" | "cancelled";
 
 function derivePanelStatus(
@@ -252,56 +340,94 @@ export function SubAgentPanel({ tab }: { tab: RightSidebarTab }) {
   const subAgentId = tab.subAgentId ?? null;
   const parentSessionId = tab.parentSessionId ?? null;
 
-  // ROUND-41: poll at 600ms for near-live progress. The child's event log
-  // records tool.use + message.assistant as they happen, so each poll
-  // reveals the latest actions without lag. (Unchanged by the R43 redesign.)
+  // ROUND-41/R48-e2: poll the child's event log at 600ms for near-live
+  // progress while queued/running; once settled drop to a slow 5s heartbeat
+  // (a retry from the chat's SubAgentCard flips the status back and the fast
+  // poll resumes on the next refetch).
   const detailQuery = useQuery({
     queryKey: ["subagent-detail", subAgentId],
     queryFn: () => fetchSubAgentDetail(subAgentId as string),
     enabled: subAgentId !== null,
     staleTime: 600,
-    refetchInterval: subAgentId !== null ? 600 : false,
+    refetchInterval:
+      subAgentId === null
+        ? false
+        : (query) => {
+            const s = (query.state.data as unknown as { status?: string } | undefined)?.status;
+            return s === "running" || s === "queued" ? 600 : 5000;
+          },
   });
 
+  // The parent's children rows (the SAME ["subagents", parent] cache key the
+  // picker/Delegated card/SubAgentCard use): this child's code (the header
+  // chip — R48-e1's deterministic 4-char id), its recorded error (the failed
+  // banner's reason) and its title. Polled live while any child runs.
+  const subsQuery = useQuery({
+    queryKey: ["subagents", parentSessionId],
+    queryFn: () => fetchSubAgents(parentSessionId as string),
+    enabled: parentSessionId !== null,
+    staleTime: 600,
+    refetchInterval:
+      parentSessionId === null
+        ? false
+        : (query) => {
+            const anyLive = (query.state.data ?? []).some(
+              (s: SubAgentStatus) => s.status === "running" || s.status === "queued",
+            );
+            return anyLive ? 600 : 5000;
+          },
+  });
+
+  // The stream-store live map is the FRESHEST source (straight off the SSE
+  // frames, no poll lag) — the polled row is the durable fallback.
+  const liveMap = useStreamStore(selectSubAgentsLive);
+  const liveEntry = subAgentId !== null ? liveMap[subAgentId] : undefined;
+  const childRow = subAgentId !== null ? (subsQuery.data ?? []).find((s) => s.id === subAgentId) : undefined;
+  const code = liveEntry?.code ?? childRow?.code ?? null;
+
   const events = detailQuery.data?.events ?? [];
-  const { promptText, firstTs, actions, filesWritten, report, reportSeq, hasRunningTool, lastFailure } =
-    parseSubAgentEvents(events);
+  const { items, firstTs, hasRunningTool, lastAssistantSeq } = parseSubAgentTranscript(events);
 
   // Local retry state: true from the Retry click until the endpoint answers
   // (the chip shows "retrying", then polling takes over with running/…).
   const [retrying, setRetrying] = useState(false);
   const [retryError, setRetryError] = useState<string | null>(null);
   const liveStatus = derivePanelStatus(detailQuery.data, hasRunningTool, retrying);
+  const isWorking = liveStatus === "running" || liveStatus === "retrying";
 
-  // The error REASON for the failed banner — the subagents listing (same
-  // data source the chat's SubAgentCard uses) carries `error` per child.
-  const subsQuery = useQuery({
-    queryKey: ["subagents", parentSessionId],
-    queryFn: () => fetchSubAgents(parentSessionId as string),
-    enabled: parentSessionId !== null && liveStatus === "failed",
-    staleTime: 600,
-    refetchInterval: liveStatus === "failed" ? 600 : false,
-  });
-  const childError = parentSessionId !== null
-    ? (subsQuery.data ?? []).find((s: SubAgentStatus) => s.id === subAgentId)?.error ?? null
-    : null;
+  // The error REASON for the failed banner: the child's recorded error (the
+  // subagents listing) → the last failed tool's output → a quiet fallback.
+  const lastFailure = (() => {
+    for (let i = items.length - 1; i >= 0; i -= 1) {
+      const it = items[i];
+      if (it.kind === "tool" && it.tool.ok === false) return it.tool;
+    }
+    return null;
+  })();
+  const failureReason =
+    childRow?.error ??
+    (lastFailure !== null
+      ? `${lastFailure.toolName}${lastFailure.outputSummary !== null && lastFailure.outputSummary !== "" ? `: ${lastFailure.outputSummary}` : ""}`
+      : null) ??
+    (detailQuery.data !== undefined ? "The run ended in a failed state." : null);
 
-  const role = tab.subRole ?? "agent";
+  const role = tab.subRole ?? liveEntry?.role ?? childRow?.subRole ?? "agent";
   const roleColor = ROLE_COLORS[role] ?? styles.accent;
-  const [filesExpanded, setFilesExpanded] = useState(false);
-  const filesToShow = filesExpanded ? filesWritten : filesWritten.slice(0, 5);
 
-  // A ticking "now" while work is in flight, so relative row times + the
-  // header clock stay fresh between polls.
+  // ROUND-48 (R48-e2, owner: "the timer updates every 5s instead of every
+  // second"): the header clock now ticks at 1000ms (was 5000ms) while work
+  // is in flight.
   const [nowMs, setNowMs] = useState(() => Date.now());
   useEffect(() => {
-    if (liveStatus !== "running" && liveStatus !== "retrying") return;
-    const t = setInterval(() => setNowMs(Date.now()), 5000);
+    if (!isWorking) return;
+    const t = setInterval(() => setNowMs(Date.now()), 1000);
     return () => clearInterval(t);
-  }, [liveStatus]);
+  }, [isWorking]);
 
-  // Live feel: auto-scroll pinned to the bottom while running — but only
-  // when the user is already near the bottom (never yank their scroll).
+  // Live feel: auto-scroll pinned to the bottom while new events arrive —
+  // but only when the user is already near the bottom (never yank their
+  // scroll). Long transcripts live in the same max-height flex scroll with
+  // the right sidebar's custom auto-scroll scrollbar.
   const scrollRef = useRef<HTMLDivElement>(null);
   useScrollFade(scrollRef);
   const stickRef = useRef(true);
@@ -317,14 +443,7 @@ export function SubAgentPanel({ tab }: { tab: RightSidebarTab }) {
   useEffect(() => {
     const el = scrollRef.current;
     if (el !== null && stickRef.current) el.scrollTop = el.scrollHeight;
-  }, [events.length, report, liveStatus]);
-
-  // On a terminal run the final assistant message is the REPORT — don't
-  // duplicate it as the last activity row (the Report card owns it).
-  const visibleActions =
-    liveStatus === "done" || liveStatus === "failed"
-      ? actions.filter((a) => !(a.kind === "text" && a.seq === reportSeq))
-      : actions;
+  }, [items.length, liveStatus]);
 
   const doRetry = async () => {
     if (parentSessionId === null || subAgentId === null || retrying) return;
@@ -350,48 +469,58 @@ export function SubAgentPanel({ tab }: { tab: RightSidebarTab }) {
     );
   }
 
-  const isWorking = liveStatus === "running" || liveStatus === "retrying";
   const initialLoading = detailQuery.isPending;
   const loadError = detailQuery.isError;
 
-  // The banner's error reason: the child's recorded error (from the
-  // subagents listing) → the last failed tool's output → a quiet fallback.
-  const failureReason =
-    childError ??
-    (lastFailure !== null
-      ? `${lastFailure.toolName}${lastFailure.outputSummary !== "" ? `: ${lastFailure.outputSummary}` : ""}`
-      : null) ??
-    (detailQuery.data !== undefined ? "The run ended in a failed state." : null);
+  // The honest session title (the polled row) wins; the tab title (which the
+  // R48-e2 call sites prefix with the code) is the fallback, minus its code
+  // prefix — the header already shows the code as its own chip.
+  const headerTitle =
+    childRow?.title ?? (tab.title !== "" ? stripCodePrefix(tab.title) : "Sub-agent");
 
   return (
-    <div className="h-full flex flex-col min-h-0">
-      {/* ── Panel header: role chip + title + live elapsed + status chip ── */}
+    <div className="h-full flex flex-col min-h-0" data-testid="subagent-panel">
+      {/* ── Panel header: code chip + role chip + title + clock + status ── */}
       <div
-        className="shrink-0 flex items-center gap-2 px-3 h-9 border-b"
+        className="shrink-0 flex items-center gap-1.5 px-2.5 h-9 border-b"
         style={{ borderColor: styles.border, background: styles.isDark ? "rgba(0,0,0,0.18)" : styles.subtle }}
       >
+        {code !== null ? (
+          <span
+            className="shrink-0 font-mono text-[10px] font-bold px-1.5 py-0.5 rounded-md tracking-[0.08em]"
+            style={{ background: withAlpha(styles.accent, 0.12), color: styles.accent }}
+            title={`Sub-agent code ${code}`}
+            data-testid="subagent-code-chip"
+          >
+            {code}
+          </span>
+        ) : null}
         <span
           className="text-[9px] font-mono font-bold uppercase shrink-0 px-1.5 py-0.5 rounded-md"
           style={{ color: roleColor, background: withAlpha(roleColor, 0.14) }}
         >
           {role}
         </span>
-        <div className="flex-1 min-w-0 truncate text-[11.5px] font-semibold" style={{ color: styles.text }}>
-          {tab.title ?? "Sub-agent"}
+        <div className="flex-1 min-w-0 truncate text-[11.5px] font-semibold" style={{ color: styles.text }} title={headerTitle}>
+          {headerTitle}
         </div>
         {isWorking ? (
-          <span className="shrink-0 text-[9.5px] font-mono tabular-nums" style={{ color: styles.textTertiary }}>
+          <span
+            className="shrink-0 text-[9.5px] font-mono tabular-nums"
+            style={{ color: styles.textTertiary }}
+            data-testid="subagent-elapsed"
+          >
             {elapsedLabel(firstTs, nowMs) ?? "0:00"}
           </span>
         ) : null}
         <StatusChip status={liveStatus} styles={styles} />
       </div>
 
-      {/* ── Scrollable phase-card stack ── */}
-      <div ref={scrollRef} className="flex-1 min-h-0 overflow-y-auto auto-scroll">
-        <div className="px-2.5 py-2.5 flex flex-col gap-2.5">
-          {/* Initial load — the panel's ONLY spinner. */}
+      {/* ── Scrollable chat transcript ── */}
+      <div ref={scrollRef} className="flex-1 min-h-0 overflow-y-auto auto-scroll" style={{ scrollbarWidth: "thin" }}>
+        <div className="px-2.5 py-2.5 flex flex-col gap-2 min-w-0">
           {initialLoading ? (
+            // The panel's ONLY spinner: the initial detail load.
             <div className="py-10 flex flex-col items-center gap-2" style={{ color: styles.textTertiary }}>
               <LoaderCircle size={16} className="animate-spin" style={{ color: styles.accent }} />
               <span className="text-[11px]">Loading sub-agent…</span>
@@ -417,7 +546,8 @@ export function SubAgentPanel({ tab }: { tab: RightSidebarTab }) {
             </div>
           ) : (
             <>
-              {/* FAILED banner — explicit reason + the Retry primary action. */}
+              {/* FAILED banner — explicit reason + the Retry primary action
+                  (kept from the R43 panel; a chat transcript can fail too). */}
               <AnimatePresence initial={false}>
                 {liveStatus === "failed" ? (
                   <motion.div
@@ -432,6 +562,7 @@ export function SubAgentPanel({ tab }: { tab: RightSidebarTab }) {
                       border: `1px solid ${withAlpha(SEMANTIC_COLORS.danger, 0.35)}`,
                     }}
                     role="alert"
+                    data-testid="subagent-failed-banner"
                   >
                     <div className="flex items-center gap-1.5 text-[11px] font-bold" style={{ color: SEMANTIC_COLORS.danger }}>
                       <AlertTriangle size={12} /> Sub-agent failed
@@ -467,163 +598,308 @@ export function SubAgentPanel({ tab }: { tab: RightSidebarTab }) {
                 ) : null}
               </AnimatePresence>
 
-              {/* 1 · TASK — the delegation prompt, clamped at 6 lines. */}
-              {promptText !== null ? (
-                <PhaseCard
-                  icon={<ClipboardList size={11} style={{ color: roleColor }} />}
-                  label="Task"
-                  styles={styles}
-                >
-                  <ClampedText
-                    text={promptText}
-                    lines={6}
-                    expandLabel="Show full task"
-                    collapseLabel="Collapse task"
-                    className="text-[11.5px] leading-[1.6] whitespace-pre-wrap break-words"
-                  />
-                </PhaseCard>
-              ) : null}
-
-              {/* 2 · ACTIVITY — the live timeline. */}
-              <PhaseCard
-                icon={<ActivityIcon size={11} style={{ color: isWorking ? RUNNING_BLUE : styles.textTertiary }} />}
-                label="Activity"
-                badge={
-                  <>
-                    {visibleActions.length > 0 ? (
-                      <span
-                        className="text-[9px] font-mono font-bold px-1.5 py-0.5 rounded-full tabular-nums"
-                        style={{ color: styles.textTertiary, background: withAlpha(styles.textTertiary, 0.1) }}
-                      >
-                        {visibleActions.length}
-                      </span>
-                    ) : null}
-                    {isWorking ? (
-                      <span className="inline-flex items-center gap-1 text-[9px] font-bold uppercase tracking-wider" style={{ color: RUNNING_BLUE }}>
-                        <PulsingDot color={RUNNING_BLUE} size={6} /> live
-                      </span>
-                    ) : null}
-                  </>
+              {items.map((item) => {
+                switch (item.kind) {
+                  case "user":
+                    return <TaskBubble key={`u-${item.seq}`} content={item.content} />;
+                  case "assistant":
+                    return (
+                      <AssistantBubble
+                        key={`a-${item.seq}`}
+                        content={item.content}
+                        isReport={!isWorking && item.seq === lastAssistantSeq}
+                      />
+                    );
+                  case "tool":
+                    return <TranscriptToolRow key={`t-${item.seq}`} tool={item.tool} />;
+                  case "todo":
+                    return <TodoLine key={`d-${item.seq}`} todos={item.todos} />;
+                  case "approval":
+                    return <ApprovalLine key={`v-${item.seq}`} approval={item.approval} />;
+                  case "error":
+                    return <ErrorLine key={`e-${item.seq}`} error={item.error} />;
                 }
-                styles={styles}
-              >
-                {visibleActions.length === 0 ? (
-                  <div className="text-[11px] py-1.5 flex items-center gap-2" style={{ color: styles.textTertiary }}>
-                    {isWorking ? (
-                      <>
-                        <PulsingDot color={RUNNING_BLUE} size={6} />
-                        Sub-agent is starting work…
-                      </>
-                    ) : (
-                      <>
-                        <MessageSquareText size={11} />
-                        No actions yet.
-                      </>
-                    )}
-                  </div>
-                ) : (
-                  <div className="flex flex-col gap-1">
-                    {visibleActions.map((a, i) =>
-                      a.kind === "tool" && a.tool ? (
-                        <ToolRow
-                          key={`t-${a.seq}`}
-                          tool={a.tool}
-                          styles={styles}
-                          nowMs={nowMs}
-                          isLastRunning={isWorking && a.tool.ok === null && i === visibleActions.length - 1}
-                        />
-                      ) : (
-                        <TextRow key={`a-${a.seq}`} text={a.text ?? ""} styles={styles} />
-                      ),
-                    )}
-                  </div>
-                )}
-              </PhaseCard>
+                return null;
+              })}
 
-              {/* 3 · FILES — the manifest of what this child touched. */}
-              {filesWritten.length > 0 ? (
-                <PhaseCard
-                  icon={<FileCode2 size={11} style={{ color: styles.accent }} />}
-                  label="Files"
-                  badge={
-                    <span
-                      className="text-[9px] font-mono font-bold px-1.5 py-0.5 rounded-full tabular-nums"
-                      style={{ color: styles.accent, background: withAlpha(styles.accent, 0.12) }}
-                    >
-                      {filesWritten.length}
-                    </span>
-                  }
-                  styles={styles}
-                >
-                  <div className="flex flex-col gap-1">
-                    {filesToShow.map((f, i) => {
-                      const { dir, base } = splitPath(f.path);
-                      return (
-                        <div
-                          key={`${f.path}-${i}`}
-                          className="flex items-center gap-1.5 rounded-[8px] px-1.5 py-1 text-[10.5px]"
-                          style={{ background: styles.isDark ? "rgba(0,0,0,0.12)" : styles.subtle }}
-                        >
-                          <span
-                            className="shrink-0 w-4 h-4 grid place-items-center rounded-[5px]"
-                            style={{ color: styles.accent, background: withAlpha(styles.accent, 0.1) }}
-                          >
-                            <FileToolIcon toolName={f.toolName} size={10} />
-                          </span>
-                          <span className="font-mono truncate" style={{ color: styles.textSecondary }} title={f.path}>
-                            {dir ? <span style={{ color: styles.textTertiary }}>{dir}</span> : null}
-                            <span style={{ color: styles.text }}>{base}</span>
-                          </span>
-                          <span
-                            className="ml-auto shrink-0 text-[9px] font-mono tabular-nums"
-                            style={{ color: styles.textTertiary }}
-                          >
-                            {relTime(f.ts, nowMs)}
-                          </span>
-                        </div>
-                      );
-                    })}
-                    {filesWritten.length > 5 ? (
-                      <button
-                        onClick={() => setFilesExpanded((v) => !v)}
-                        className="self-start px-1.5 py-0.5 text-[10px] font-bold uppercase tracking-wider transition-colors"
-                        style={{ color: styles.accent }}
-                      >
-                        {filesExpanded ? "Show less" : `Show all ${filesWritten.length} files`}
-                      </button>
-                    ) : null}
-                  </div>
-                </PhaseCard>
-              ) : null}
-
-              {/* 4 · REPORT — the final answer, clamped at 6 lines. Only once
-                  the run is terminal: while working, the latest assistant
-                  text is progress narration (it lives in Activity above). */}
-              {report !== null && !isWorking ? (
-                <PhaseCard
-                  icon={<Sparkles size={11} style={{ color: styles.accent }} />}
-                  label="Final report"
-                  styles={styles}
-                >
-                  <div
-                    className="rounded-[8px] border-l-[3px] pl-2.5 py-0.5"
-                    style={{ borderColor: styles.accent }}
-                  >
-                    <ClampedText
-                      text={report}
-                      lines={6}
-                      expandLabel="Show full report"
-                      collapseLabel="Collapse report"
-                      className="text-[11.5px] leading-[1.6] whitespace-pre-wrap break-words"
-                    />
-                  </div>
-                </PhaseCard>
+              {/* The live tail while work is in flight. */}
+              {isWorking ? (
+                <div className="flex items-center gap-2 px-1.5 h-6 text-[10.5px]" style={{ color: styles.textTertiary }}>
+                  <PulsingDot color={RUNNING_BLUE} size={6} />
+                  {items.some((it) => it.kind === "tool" || it.kind === "assistant")
+                    ? "working…"
+                    : "Sub-agent is starting work…"}
+                </div>
               ) : null}
             </>
           )}
         </div>
       </div>
     </div>
+  );
+}
+
+/** The delegation prompt — the main chat's user-bubble language (R38's calm
+ * accent-tinted bubble), scaled for the sidebar. */
+function TaskBubble({ content }: { content: string }) {
+  const styles = useThemeStyles();
+  const bubbleBg = withAlpha(styles.accent, styles.isDark ? 0.18 : 0.1);
+  const bubbleBorder = withAlpha(styles.accent, styles.isDark ? 0.32 : 0.22);
+  return (
+    <div className="flex justify-end min-w-0">
+      <div
+        className="max-w-[88%] rounded-[14px] rounded-br-[4px] px-3 py-2 border text-[12px] leading-[1.55] font-medium"
+        style={{ background: bubbleBg, borderColor: bubbleBorder, color: styles.text }}
+        data-testid="subagent-task-bubble"
+      >
+        <ClampedText
+          text={content}
+          lines={6}
+          expandLabel="Show full task"
+          collapseLabel="Show less"
+          className="whitespace-pre-wrap break-words"
+        />
+      </div>
+    </div>
+  );
+}
+
+/** An assistant message — a markdown bubble in the main chat's visual
+ * language (shared Markdown renderer). The LAST one on a terminal run is the
+ * child's final report: accent left rail + a "Final report" mini-label. */
+function AssistantBubble({ content, isReport }: { content: string; isReport: boolean }) {
+  const styles = useThemeStyles();
+  return (
+    <div className="flex items-start gap-1.5 min-w-0">
+      <span className="mt-1.5 shrink-0" style={{ color: styles.textTertiary }} aria-hidden>
+        <Bot size={11} />
+      </span>
+      <div
+        className="min-w-0 flex-1 rounded-[12px] px-2.5 py-1.5 border"
+        style={{
+          background: styles.isDark ? "rgba(0,0,0,0.14)" : styles.subtle,
+          borderColor: isReport ? styles.accent : styles.borderSubtle,
+          borderLeft: isReport ? `3px solid ${styles.accent}` : undefined,
+        }}
+        data-testid="subagent-assistant-bubble"
+      >
+        {isReport ? (
+          <div className="text-[9px] font-bold uppercase tracking-[0.14em] mb-1" style={{ color: styles.accent }}>
+            Final report
+          </div>
+        ) : null}
+        <Markdown content={content} />
+      </div>
+    </div>
+  );
+}
+
+/** One tool row — the SAME visual style as the main chat's tool lines
+ * (WorkingSection's ToolLine): icon + past-tense label + mono argsSummary +
+ * ✓/✗/… state glyph + an expandable output block (chevron). */
+function TranscriptToolRow({ tool }: { tool: ToolCard }) {
+  const styles = useThemeStyles();
+  const [open, setOpen] = useState(false);
+  const Icon = TOOL_ICONS[tool.toolName] ?? TerminalIcon;
+  const label = TOOL_LABELS[tool.toolName] ?? tool.toolName;
+  const expandable =
+    (tool.outputSummary !== null && tool.outputSummary !== "") || tool.ok === null;
+  return (
+    <motion.div
+      initial={{ opacity: 0, y: -4 }}
+      animate={{ opacity: 1, y: 0 }}
+      transition={{ duration: 0.2, ease }}
+      className="min-w-0"
+    >
+      <button
+        onClick={expandable ? () => setOpen((v) => !v) : undefined}
+        aria-expanded={expandable ? open : undefined}
+        aria-label={`${label} ${tool.argsSummary}`}
+        data-testid="subagent-tool-row"
+        className="flex items-center gap-2 h-7 w-full max-w-full px-1.5 -ml-1.5 rounded-md transition-colors text-left"
+        style={{
+          color: styles.textTertiary,
+          cursor: expandable ? "pointer" : "default",
+        }}
+        onMouseEnter={(e) => {
+          if (expandable) e.currentTarget.style.background = styles.subtleHover;
+        }}
+        onMouseLeave={(e) => (e.currentTarget.style.background = "transparent")}
+      >
+        <Icon size={11} className="shrink-0" style={{ color: styles.textTertiary }} />
+        <span className="shrink-0 text-[11px] font-semibold" style={{ color: styles.textSecondary }}>
+          {label}
+        </span>
+        <span className="min-w-0 flex-1 truncate font-mono text-[11px]" style={{ color: styles.textTertiary }}>
+          {tool.argsSummary}
+        </span>
+        <span
+          className="shrink-0 w-4 text-center text-[11px]"
+          style={{
+            color:
+              tool.ok === false
+                ? SEMANTIC_COLORS.danger
+                : tool.ok === null
+                  ? RUNNING_BLUE
+                  : SEMANTIC_COLORS.success,
+          }}
+        >
+          {tool.ok === null ? "…" : tool.ok ? "✓" : "✗"}
+        </span>
+        {expandable ? (
+          <ChevronDown
+            size={10}
+            className="shrink-0"
+            style={{ color: styles.textTertiary, transform: open ? "rotate(0deg)" : "rotate(-90deg)", transition: "transform 0.15s" }}
+          />
+        ) : (
+          <span className="w-2.5 shrink-0" />
+        )}
+      </button>
+      {open ? (
+        <div className="mt-0.5 mb-1 pl-4 min-w-0">
+          <div
+            className="rounded-[10px] px-2.5 py-1.5 border font-mono text-[10px] leading-[1.5] break-words"
+            style={{
+              background: styles.isDark ? "rgba(0,0,0,0.18)" : styles.subtle,
+              borderColor: styles.borderSubtle,
+              color: tool.ok === false ? SEMANTIC_COLORS.danger : styles.textSecondary,
+            }}
+            data-testid="subagent-tool-output"
+          >
+            {tool.ok === null
+              ? "running…"
+              : tool.outputSummary !== null && tool.outputSummary !== ""
+                ? tool.outputSummary
+                : "(no output)"}
+          </div>
+        </div>
+      ) : null}
+    </motion.div>
+  );
+}
+
+/** todo.update — a compact progress line: bar + done/total + the current
+ * in-progress item (truncated, full text on the title). */
+function TodoLine({ todos }: { todos: TodoCardData }) {
+  const styles = useThemeStyles();
+  const pct = todos.total > 0 ? (todos.done / todos.total) * 100 : 0;
+  return (
+    <motion.div
+      initial={{ opacity: 0, y: -4 }}
+      animate={{ opacity: 1, y: 0 }}
+      transition={{ duration: 0.2, ease }}
+      className="flex items-center gap-2 h-7 w-full max-w-full px-1.5 -ml-1.5 rounded-md min-w-0"
+      data-testid="subagent-todo-line"
+    >
+      <ListChecks size={11} className="shrink-0" style={{ color: styles.accent }} />
+      <div className="w-16 h-1.5 rounded-full overflow-hidden shrink-0" style={{ background: styles.subtle }}>
+        <div
+          className="h-full rounded-full transition-all"
+          style={{ width: `${Math.max(todos.done > 0 ? 10 : 3, pct)}%`, background: styles.accent }}
+        />
+      </div>
+      <span className="shrink-0 font-mono text-[10px] font-bold tabular-nums" style={{ color: styles.textSecondary }}>
+        {todos.done}/{todos.total}
+      </span>
+      {todos.current !== null ? (
+        <span
+          className="min-w-0 flex-1 truncate text-[10.5px]"
+          style={{ color: styles.textTertiary }}
+          title={todos.current}
+        >
+          {todos.current}
+        </span>
+      ) : null}
+    </motion.div>
+  );
+}
+
+/** approval.requested/resolved — a compact INFORMATIONAL card (R48-e1: the
+ * child's asks ride the parent's SSE and are DECIDED in the parent chat's
+ * ApprovalCard with the "Sub-agent {code} · {role}" attribution; this panel
+ * only shows what was asked and how it landed). */
+function ApprovalLine({ approval }: { approval: ApprovalCardData }) {
+  const styles = useThemeStyles();
+  const pending = approval.status === "pending";
+  const tone = pending
+    ? "#f59e0b"
+    : approval.status === "approved"
+      ? SEMANTIC_COLORS.success
+      : SEMANTIC_COLORS.danger;
+  const title = pending
+    ? "Permission asked"
+    : approval.status === "approved"
+      ? "Permission approved"
+      : approval.status === "denied"
+        ? "Permission denied"
+        : "Permission expired";
+  return (
+    <motion.div
+      initial={{ opacity: 0, y: -4 }}
+      animate={{ opacity: 1, y: 0 }}
+      transition={{ duration: 0.2, ease }}
+      className="rounded-[10px] border px-2 py-1.5 min-w-0"
+      style={{ borderColor: withAlpha(tone, 0.35), background: withAlpha(tone, 0.06) }}
+      data-testid="subagent-approval-card"
+    >
+      <div className="flex items-center gap-1.5 min-w-0">
+        {pending ? (
+          <ShieldAlert size={11} className="shrink-0" style={{ color: tone }} />
+        ) : (
+          <Check size={11} className="shrink-0" style={{ color: tone }} />
+        )}
+        <span className="text-[10.5px] font-bold shrink-0" style={{ color: tone }}>
+          {title}
+        </span>
+        <span
+          className="min-w-0 flex-1 truncate font-mono text-[10px]"
+          style={{ color: styles.textTertiary }}
+          title={`${approval.toolName} ${approval.argsSummary}`}
+        >
+          {approval.toolName} {approval.argsSummary}
+        </span>
+      </div>
+      {pending ? (
+        <div className="mt-1 text-[9.5px]" style={{ color: styles.textTertiary }}>
+          Decide in the main chat — the ask appears there with this sub-agent&apos;s code.
+        </div>
+      ) : null}
+    </motion.div>
+  );
+}
+
+/** turn.error — an error banner in the main chat's TurnErrorCard language
+ * (compact: reason + code, no retry — the Retry lives on the failed banner). */
+function ErrorLine({ error }: { error: ErrorCardData }) {
+  const styles = useThemeStyles();
+  const reason = error.providerError ?? error.message;
+  return (
+    <motion.div
+      initial={{ opacity: 0, y: -4 }}
+      animate={{ opacity: 1, y: 0 }}
+      transition={{ duration: 0.2, ease }}
+      role="alert"
+      className="rounded-[12px] border px-2.5 py-2 flex items-start gap-2 min-w-0"
+      style={{
+        borderColor: withAlpha(SEMANTIC_COLORS.danger, 0.4),
+        background: withAlpha(SEMANTIC_COLORS.danger, 0.07),
+      }}
+      data-testid="subagent-error-banner"
+    >
+      <AlertTriangle size={12} className="mt-0.5 shrink-0" style={{ color: SEMANTIC_COLORS.danger }} />
+      <div className="min-w-0">
+        <div className="text-[11px] font-bold" style={{ color: SEMANTIC_COLORS.danger }}>
+          Turn failed
+        </div>
+        <div className="mt-0.5 font-mono text-[10px] leading-[1.5] break-words" style={{ color: styles.textSecondary }}>
+          {reason}
+        </div>
+        <div className="mt-0.5 text-[9.5px] font-mono" style={{ color: styles.textTertiary }}>
+          {error.code}
+        </div>
+      </div>
+    </motion.div>
   );
 }
 
@@ -678,151 +954,5 @@ function StatusChip({
       )}
       {status}
     </div>
-  );
-}
-
-/** One phase card — small-caps header (icon + label + optional badge) over
- * the body. The app's card language: 12px radius, hairline border, layered
- * backgrounds instead of heavy chrome. */
-function PhaseCard({
-  icon,
-  label,
-  badge,
-  styles,
-  children,
-}: {
-  icon: React.ReactNode;
-  label: string;
-  badge?: React.ReactNode;
-  styles: ReturnType<typeof useThemeStyles>;
-  children: React.ReactNode;
-}) {
-  return (
-    <section
-      className="rounded-[12px] overflow-hidden"
-      style={{
-        background: styles.isDark ? "rgba(0,0,0,0.14)" : styles.card,
-        border: `1px solid ${styles.borderSubtle}`,
-      }}
-      data-phase={label.toLowerCase()}
-    >
-      <header
-        className="flex items-center gap-1.5 px-2.5 h-[26px] border-b"
-        style={{ borderColor: styles.borderSubtle, background: styles.isDark ? "rgba(0,0,0,0.12)" : styles.subtle }}
-      >
-        <span className="shrink-0">{icon}</span>
-        <span className="text-[9px] font-bold uppercase tracking-[0.14em]" style={{ color: styles.textTertiary }}>
-          {label}
-        </span>
-        <span className="ml-auto flex items-center gap-1.5">{badge}</span>
-      </header>
-      <div className="px-2.5 py-2">{children}</div>
-    </section>
-  );
-}
-
-/** One activity row for a tool call: terminal-state rail on the left, icon,
- * mono name + basename arg, relative time, status glyph. New rows animate
- * in (framer-motion, the app's shared easing). */
-function ToolRow({
-  tool,
-  styles,
-  nowMs,
-  isLastRunning,
-}: {
-  tool: ToolCard;
-  styles: ReturnType<typeof useThemeStyles>;
-  nowMs: number;
-  isLastRunning: boolean;
-}) {
-  const isFileTool = FILE_TOOLS.has(tool.toolName);
-  const stateColor =
-    tool.ok === null ? RUNNING_BLUE : tool.ok ? SEMANTIC_COLORS.success : SEMANTIC_COLORS.danger;
-  const { dir, base } = splitPath(tool.argsSummary);
-  return (
-    <motion.div
-      initial={{ opacity: 0, y: -6 }}
-      animate={{ opacity: 1, y: 0 }}
-      transition={{ duration: 0.25, ease }}
-      className="flex items-start gap-2 rounded-[8px] px-2 py-1.5"
-      style={{
-        background:
-          tool.ok === false ? withAlpha(SEMANTIC_COLORS.danger, 0.07) : styles.isDark ? "rgba(0,0,0,0.12)" : styles.subtle,
-      }}
-    >
-      {/* Terminal-state rail */}
-      <span
-        className="shrink-0 w-[3px] self-stretch rounded-full"
-        style={{ background: stateColor, opacity: isLastRunning || tool.ok === false ? 1 : 0.65 }}
-        aria-hidden
-      />
-      <div className="mt-0.5 shrink-0" style={{ color: isFileTool ? styles.accent : styles.textTertiary }}>
-        {isFileTool ? <FileCode2 size={12} /> : <ToolIcon toolName={tool.toolName} />}
-      </div>
-      <div className="flex-1 min-w-0">
-        <div className="flex items-center gap-1.5">
-          <span className="font-mono text-[10.5px] font-semibold shrink-0" style={{ color: styles.text }}>
-            {tool.toolName}
-          </span>
-          {tool.argsSummary ? (
-            <span className="font-mono text-[10px] truncate" style={{ color: styles.textTertiary }} title={tool.argsSummary}>
-              {dir ? <span style={{ opacity: 0.7 }}>{dir}</span> : null}
-              {base}
-            </span>
-          ) : null}
-          <span className="ml-auto shrink-0 flex items-center gap-1.5">
-            <span className="text-[9px] font-mono tabular-nums" style={{ color: styles.textTertiary }}>
-              {relTime(tool.ts, nowMs)}
-            </span>
-            {tool.ok === null ? (
-              <PulsingDot color={RUNNING_BLUE} size={5} />
-            ) : tool.ok ? (
-              <Check size={10} style={{ color: SEMANTIC_COLORS.success }} />
-            ) : (
-              <CircleAlert size={10} style={{ color: SEMANTIC_COLORS.danger }} />
-            )}
-          </span>
-        </div>
-        {tool.outputSummary !== null && tool.outputSummary !== "" ? (
-          <div
-            className="font-mono text-[9.5px] mt-0.5 truncate"
-            style={{ color: tool.ok === false ? SEMANTIC_COLORS.danger : styles.textTertiary }}
-            title={tool.outputSummary}
-          >
-            {tool.outputSummary}
-          </div>
-        ) : null}
-      </div>
-    </motion.div>
-  );
-}
-
-/** Interleaved assistant narration — quiet prose (no bubble chrome), clamped
- * to 3 lines; the final answer lives in its own Report card. */
-function TextRow({ text, styles }: { text: string; styles: ReturnType<typeof useThemeStyles> }) {
-  return (
-    <motion.div
-      initial={{ opacity: 0, y: -4 }}
-      animate={{ opacity: 1, y: 0 }}
-      transition={{ duration: 0.25, ease }}
-      className="flex items-start gap-1.5 px-1 py-0.5"
-      title={text}
-    >
-      <span className="mt-[3px] shrink-0" style={{ color: styles.textTertiary }}>
-        <Bot size={10} />
-      </span>
-      <span
-        className="text-[10.5px] leading-[1.5] break-words"
-        style={{
-          color: styles.textSecondary,
-          display: "-webkit-box",
-          WebkitLineClamp: 3,
-          WebkitBoxOrient: "vertical",
-          overflow: "hidden",
-        }}
-      >
-        {text}
-      </span>
-    </motion.div>
   );
 }

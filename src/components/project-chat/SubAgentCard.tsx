@@ -83,12 +83,17 @@ export function SubAgentCard({
   // the store's openSubAgent signature requires a string parent). The
   // `?? undefined` coerces SubAgentStatus.subRole's `string | null` to the
   // `string | undefined` the store helper expects.
+  // R48: the tab title is code-prefixed (`K7F2 · <title>`) so open tabs are
+  // identifiable at a glance — same convention as the live Delegated rows in
+  // WorkingSection and the SubAgentPicker (the owner's "quickly know which
+  // sub-agent is which" directive).
+  const displayTitle = task ?? child?.title ?? "Sub-agent";
   const openInSidebar = () => {
     useRightSidebarStore.getState().openSubAgent(
       projectId,
       parentSessionId ?? sessionId,
       sessionId,
-      task ?? child?.title ?? "Sub-agent",
+      child?.code ? `${child.code} · ${displayTitle}` : displayTitle,
       role ?? child?.subRole ?? undefined,
     );
   };

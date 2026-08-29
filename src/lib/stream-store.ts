@@ -3,6 +3,7 @@ import {
   streamSessionMessage,
   stopSessionTurn,
   type StreamTurnEvent,
+  type SubAgentInnerEvent,
   type ToolUseEntry,
   type WorkingEntry,
 } from "./api";
@@ -59,6 +60,34 @@ export interface TurnErrorInfo {
   ts: string;
 }
 
+/**
+ * ROUND-48 (R48-e2, owner: the Delegated card "was just saying Running
+ * Running Running with no progress and nothing clickable"): the LIVE
+ * sub-agent map. Every `subagent-status` SSE frame on the parent's stream
+ * upserts one entry per child (keyed by the child session id); wrapped
+ * tool-call/tool-result events refresh `lastActivity` so the Delegated
+ * card's rows show what the child is doing RIGHT NOW without waiting for
+ * the next poll. The polled GET /sessions/:id/subagents query remains the
+ * source of truth for tokens/report/error — the map is the freshest
+ * status/activity snapshot + the code/role used for approval attribution.
+ */
+export interface SubAgentLiveEntry {
+  childSessionId: string;
+  parentSessionId: string;
+  /** Deterministic 4-char [A-Z0-9] code (same as the /subagents row). */
+  code: string;
+  role: string;
+  task: string;
+  status: "queued" | "running" | "completed" | "failed";
+  todosDone?: number;
+  todosTotal?: number;
+  /** Human summary of the child's latest tool step (tool name + arg/output
+   * snippet) — the Delegated row's activity line. */
+  lastActivity?: string;
+  /** Wall-clock ms of the last live update (frame ordering/debug aid). */
+  updatedAtMs: number;
+}
+
 export interface StreamSessionState {
   liveTurn: LiveTurn | null;
   streamBusy: boolean;
@@ -73,6 +102,11 @@ export interface StreamSessionState {
 
 interface StreamStore {
   bySession: Record<string, StreamSessionState>;
+  /** ROUND-48 (R48-e2): live sub-agent map, keyed by CHILD session id —
+   * upserted from subagent-status frames + tool-call/tool-result inner
+   * events (see SubAgentLiveEntry). Independent of bySession so it keeps
+   * working across panel remounts, exactly like the rest of the store. */
+  subagentsLive: Record<string, SubAgentLiveEntry>;
   /** Start a streamed turn — runs in the background; resolves on end/abort. */
   startStream: (
     sessionId: string,
@@ -134,6 +168,169 @@ function patchSession(sessionId: string, patch: Partial<StreamSessionState>): vo
   });
 }
 
+/** ROUND-48 (R48-e2): append a pending approval entry to the session's live
+ * turn (the approvals queue the ApprovalCards render from). Used by BOTH the
+ * main agent's top-level approval.requested frames (no subAgentId — behavior
+ * unchanged) and the child-approval routing below (subAgentId set → the card
+ * renders the "Sub-agent {code} · {role}" attribution prefix). */
+function appendLiveApproval(
+  sessionId: string,
+  fields: {
+    approvalId: string;
+    toolName: string;
+    argsSummary: string;
+    category: string;
+    subAgentId?: string;
+  },
+): void {
+  const cur = useStreamStore.getState().bySession[sessionId];
+  if (!cur || cur.liveTurn === null) return;
+  patchSession(sessionId, {
+    liveTurn: {
+      ...cur.liveTurn,
+      working: [
+        ...cur.liveTurn.working,
+        {
+          type: "approval" as const,
+          approvalId: fields.approvalId,
+          toolName: fields.toolName,
+          argsSummary: fields.argsSummary,
+          category: fields.category,
+          status: "pending" as const,
+          ...(fields.subAgentId !== undefined ? { subAgentId: fields.subAgentId } : {}),
+          ts: new Date().toISOString(),
+        },
+      ],
+    },
+  });
+}
+
+/** ROUND-48 (R48-e2): resolve an approval row in the live turn (decision
+ * landed) — shared by the top-level approval.resolved frame and the child
+ * approval.resolved inner event. */
+function patchLiveApproval(
+  sessionId: string,
+  approvalId: string,
+  decision: "approved" | "denied" | "expired",
+  remember?: "once" | "always",
+): void {
+  const cur = useStreamStore.getState().bySession[sessionId];
+  if (!cur || cur.liveTurn === null) return;
+  const working = cur.liveTurn.working.map((entry) => {
+    if (entry.type !== "approval" || entry.approvalId !== approvalId) return entry;
+    return {
+      ...entry,
+      status:
+        decision === "approved"
+          ? ("approved" as const)
+          : decision === "denied"
+            ? ("denied" as const)
+            : ("expired" as const),
+      ...(remember ? { remember } : {}),
+    };
+  });
+  patchSession(sessionId, { liveTurn: { ...cur.liveTurn, working } });
+}
+
+// ─── ROUND-48 (R48-e2): sub-agent frames on the PARENT's stream ────────────
+
+/** `subagent-status` → upsert the live map entry + invalidate the polled
+ * ["subagents", parentSessionId] query so the Delegated card's rows and the
+ * New-Tab picker converge on the fresh status immediately. */
+function handleSubAgentStatus(
+  event: Extract<StreamTurnEvent, { type: "subagent-status" }>,
+): void {
+  useStreamStore.setState((s) => {
+    const prev = s.subagentsLive[event.sessionId];
+    const next: SubAgentLiveEntry = {
+      childSessionId: event.sessionId,
+      parentSessionId: event.parentSessionId,
+      code: event.code,
+      role: event.role,
+      task: event.task,
+      status: event.status,
+      ...(event.todosDone !== undefined
+        ? { todosDone: event.todosDone }
+        : prev?.todosDone !== undefined
+          ? { todosDone: prev.todosDone }
+          : {}),
+      ...(event.todosTotal !== undefined
+        ? { todosTotal: event.todosTotal }
+        : prev?.todosTotal !== undefined
+          ? { todosTotal: prev.todosTotal }
+          : {}),
+      ...(prev?.lastActivity !== undefined ? { lastActivity: prev.lastActivity } : {}),
+      updatedAtMs: Date.now(),
+    };
+    return { subagentsLive: { ...s.subagentsLive, [event.sessionId]: next } };
+  });
+  const qc = getQueryClient();
+  if (qc) {
+    void qc.invalidateQueries({ queryKey: ["subagents", event.parentSessionId] });
+  }
+}
+
+/** Human one-line summary of the child's latest tool step (the Delegated
+ * row's activity line — tool name + args/output snippet, bounded length). */
+function summarizeToolActivity(
+  inner: Extract<SubAgentInnerEvent, { type: "tool-call" | "tool-result" }>,
+): string {
+  if (inner.type === "tool-call") {
+    const args = inner.argsSummary.trim();
+    return `${inner.toolName}${args !== "" ? ` ${args}` : ""}`.slice(0, 72);
+  }
+  const out = (inner.outputSummary ?? "").trim();
+  const mark = inner.ok ? "✓" : "✗";
+  return out !== "" ? `${inner.toolName} ${mark} ${out}`.slice(0, 72) : `${inner.toolName} ${mark}`;
+}
+
+/** `subagent-event` → unwrap the inner frame:
+ *  - approval.requested/resolved route into the EXISTING approvals queue
+ *    (the live turn's working entries) WITH subAgentId so the ApprovalCard
+ *    renders its "Sub-agent {code} · {role}" attribution;
+ *  - tool-call/tool-result refresh the live map's lastActivity;
+ *  - everything else is ignored — text-delta/finish (the right-sidebar panel
+ *    polls the child's own event log for its transcript) and the child's
+ *    forwarded meta.* bookkeeping frames (compaction/context/request limits —
+ *    see SubAgentInnerEvent's doc; no branch matches, so they fall through). */
+function handleSubAgentEvent(
+  parentTurnSessionId: string,
+  event: Extract<StreamTurnEvent, { type: "subagent-event" }>,
+): void {
+  const inner = event.inner;
+  if (inner.type === "approval.requested") {
+    appendLiveApproval(parentTurnSessionId, {
+      approvalId: inner.approvalId,
+      toolName: inner.toolName,
+      argsSummary: inner.argsSummary,
+      category: inner.category,
+      subAgentId: event.sessionId,
+    });
+    return;
+  }
+  if (inner.type === "approval.resolved") {
+    patchLiveApproval(parentTurnSessionId, inner.approvalId, inner.decision, inner.remember);
+    return;
+  }
+  if (inner.type === "tool-call" || inner.type === "tool-result") {
+    useStreamStore.setState((s) => {
+      const prev = s.subagentsLive[event.sessionId];
+      if (prev === undefined) return s;
+      return {
+        subagentsLive: {
+          ...s.subagentsLive,
+          [event.sessionId]: {
+            ...prev,
+            lastActivity: summarizeToolActivity(inner),
+            updatedAtMs: Date.now(),
+          },
+        },
+      };
+    });
+  }
+  // text-delta / finish / meta.* — nothing to mutate here (see the doc above).
+}
+
 /** Tools that mutate the project's file tree — when they complete, refresh
  * the explorer + open-file queries so a background session's writes show up
  * even when no panel is mounted. */
@@ -146,6 +343,7 @@ const FILE_MUTATING_TOOLS = new Set([
 
 export const useStreamStore = create<StreamStore>((set, get) => ({
   bySession: {},
+  subagentsLive: {},
 
   startStream: async (sessionId, text, opts) => {
     // Already streaming? Refuse (the panel should guard too).
@@ -319,6 +517,19 @@ function handleStreamEvent(
   sessionId: string,
   event: StreamTurnEvent,
 ): void {
+  // ROUND-48 (R48-e2): sub-agent frames are handled BEFORE the liveTurn
+  // guard — the live map is turn-independent (it feeds the Delegated card,
+  // the picker attribution and post-turn lookups). The approval routing
+  // inside handleSubAgentEvent still no-ops safely when no live turn exists.
+  if (event.type === "subagent-status") {
+    handleSubAgentStatus(event);
+    return;
+  }
+  if (event.type === "subagent-event") {
+    handleSubAgentEvent(sessionId, event);
+    return;
+  }
+
   const cur = useStreamStore.getState().bySession[sessionId];
   if (!cur || cur.liveTurn === null) return;
   const liveTurn = cur.liveTurn;
@@ -450,41 +661,17 @@ function handleStreamEvent(
   }
 
   if (event.type === "approval.requested") {
-    patchSession(sessionId, {
-      liveTurn: {
-        ...liveTurn,
-        working: [
-          ...liveTurn.working,
-          {
-            type: "approval" as const,
-            approvalId: event.approvalId,
-            toolName: event.toolName,
-            argsSummary: event.argsSummary,
-            category: event.category,
-            status: "pending" as const,
-            ts: new Date().toISOString(),
-          },
-        ],
-      },
+    appendLiveApproval(sessionId, {
+      approvalId: event.approvalId,
+      toolName: event.toolName,
+      argsSummary: event.argsSummary,
+      category: event.category,
     });
     return;
   }
 
   if (event.type === "approval.resolved") {
-    const working = liveTurn.working.map((entry) => {
-      if (entry.type !== "approval" || entry.approvalId !== event.approvalId) return entry;
-      return {
-        ...entry,
-        status:
-          event.decision === "approved"
-            ? ("approved" as const)
-            : event.decision === "denied"
-              ? ("denied" as const)
-              : ("expired" as const),
-        ...(event.remember ? { remember: event.remember } : {}),
-      };
-    });
-    patchSession(sessionId, { liveTurn: { ...liveTurn, working } });
+    patchLiveApproval(sessionId, event.approvalId, event.decision, event.remember);
     return;
   }
 
@@ -518,7 +705,30 @@ function handleStreamEvent(
   }
 
   // text-delta / thinking-delta / tool-call / tool-result / approval.* / error
-  // handled above. finish / done / meta.continuation / subagent-status don't
-  // need to mutate the live turn state (the panel invalidates the session
-  // query on done and the folded turn renders from the event log).
+  // handled above. subagent-status / subagent-event are handled at the top of
+  // this function (R48-e2 live map + approval routing). finish / done /
+  // meta.continuation don't need to mutate the live turn state (the panel
+  // invalidates the session query on done and the folded turn renders from
+  // the event log).
+}
+
+// ─── ROUND-48 (R48-e2): live sub-agent map selectors ────────────────────────
+
+/** Reactive selector for the live sub-agent map — the zustand selector
+ * pattern the panels already use (`useStreamStore(selectSubAgentsLive)`).
+ * Keyed by CHILD session id; entries appear on the first subagent-status
+ * frame and persist for the session's lifetime (statuses go terminal, so
+ * post-turn lookups stay accurate). */
+export function selectSubAgentsLive(
+  s: { subagentsLive: Record<string, SubAgentLiveEntry> },
+): Record<string, SubAgentLiveEntry> {
+  return s.subagentsLive;
+}
+
+/** Non-reactive single-child lookup (event handlers / imperative code —
+ * components should use the selector above). */
+export function getSubAgentLiveEntry(
+  childSessionId: string,
+): SubAgentLiveEntry | undefined {
+  return useStreamStore.getState().subagentsLive[childSessionId];
 }

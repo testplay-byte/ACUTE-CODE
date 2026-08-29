@@ -16,14 +16,20 @@ import { withAlpha } from "../dashboard/helpers";
  *
  * The active file's path comes from the tab. The chat's tool rows (DiffDetail
  * "Open") and the Explorer call openFile(projectId, path) which adds a tab.
+ *
+ * ROUND-48 (R48-c): isMarkdown + Markdown are EXPORTED so the right-sidebar
+ * file explorer (FilesExplorerPanel) renders file content through the exact
+ * same renderer as the single-file tab — one markdown/code presentation, not
+ * two. No behavior change for this panel's own tab rendering.
  */
-function isMarkdown(path: string): boolean {
+export function isMarkdown(path: string): boolean {
   return /\.(md|mdx|markdown)$/i.test(path);
 }
 
 /** Lightweight markdown renderer (headings, bold, inline code, lists, code
- * fences, links). Enough for project README/rules files without a dep. */
-function Markdown({ content }: { content: string }): ReactNode {
+ * fences, links). Enough for project README/rules files without a dep.
+ * ROUND-48 (R48-c): exported for reuse by FilesExplorerPanel. */
+export function Markdown({ content }: { content: string }): ReactNode {
   const lines = content.split("\n");
   const out: ReactNode[] = [];
   let i = 0;

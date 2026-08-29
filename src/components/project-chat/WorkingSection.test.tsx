@@ -19,13 +19,17 @@ import {
   ApiError,
   fetchSessionCheckpoints,
   fetchSnapshot,
+  fetchSubAgents,
   restoreCheckpoint,
   type CheckpointMeta,
   type FileSnapshotContent,
+  type SubAgentStatus,
   type ToolUseEntry,
   type WorkingEntry,
 } from "../../lib/api";
 import { useNotificationStreamStore } from "../../hooks/use-notifications";
+import { useStreamStore } from "../../lib/stream-store";
+import { useRightSidebarStore } from "../../lib/right-sidebar-store";
 import { renderWithProviders, resetTestState } from "../../test-utils";
 
 vi.mock("../../lib/api", async () => {
@@ -35,6 +39,7 @@ vi.mock("../../lib/api", async () => {
     fetchSessionCheckpoints: vi.fn(),
     fetchSnapshot: vi.fn(),
     restoreCheckpoint: vi.fn(),
+    fetchSubAgents: vi.fn(),
   };
 });
 
@@ -52,6 +57,11 @@ beforeEach(() => {
   vi.mocked(restoreCheckpoint)
     .mockReset()
     .mockResolvedValue({ restored: true, message: "restored src/app.ts to previous content" });
+  vi.mocked(fetchSubAgents).mockReset().mockResolvedValue([]);
+  // ROUND-48 (R48-e2): isolate the stream-store live map + the sidebar store
+  // (openSubAgent lands tabs in byProject).
+  useStreamStore.setState({ bySession: {}, subagentsLive: {} });
+  useRightSidebarStore.setState({ byProject: {}, activeProjectId: null, activeSessionByProject: {} });
 });
 
 const SESSION_ID = "sess_ws_probe";
@@ -272,5 +282,245 @@ describe("DiffDetail restore action (ROUND-46 R46-c)", () => {
 
     release({ restored: true, message: "restored src/app.ts to previous content" });
     await waitFor(() => expect(screen.getByText("Restored")).toBeTruthy());
+  });
+});
+
+// ─── ROUND-48 (R48-e2): the live Delegated card + sub-agent approval attribution ──
+
+function subAgentRow(over: Partial<SubAgentStatus> = {}): SubAgentStatus {
+  return {
+    id: "sess_child-a",
+    code: "K7Q2",
+    title: "Refactor auth module",
+    subRole: "coder",
+    status: "running",
+    createdAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString(),
+    todosDone: 2,
+    todosTotal: 5,
+    inputTokens: 1200,
+    outputTokens: 340,
+    report: null,
+    error: null,
+    ...over,
+  };
+}
+
+const DELEGATE_TOOL: ToolUseEntry = {
+  seq: 7,
+  toolName: "delegate_task",
+  argsSummary: "task: Refactor auth module, role: coder",
+  ok: null,
+  ts: "2026-08-28T10:00:07Z",
+};
+
+function renderDelegateSection(tool: ToolUseEntry = DELEGATE_TOOL) {
+  const entries: WorkingEntry[] = [{ type: "tool", tool }];
+  renderWithProviders(
+    <WorkingSection
+      entries={entries}
+      sessionId={SESSION_ID}
+      projectId="proj_probe"
+      live
+      defaultOpen
+    />,
+  );
+}
+
+describe("Delegated card live rows (ROUND-48 R48-e2)", () => {
+  it("renders live child rows (code/role/status/todos/tokens + lastActivity) and opens the child on click", async () => {
+    vi.mocked(fetchSubAgents).mockResolvedValue([
+      subAgentRow(),
+      subAgentRow({ id: "sess_child-b", code: "M3XN", title: "Write tests", subRole: "tester", status: "queued", todosDone: 0, todosTotal: 0, inputTokens: 0, outputTokens: 0 }),
+    ]);
+    // Two live children → the row stays a toggle; expanding shows the rows.
+    renderDelegateSection();
+    fireEvent.click(screen.getByRole("button", { name: /^Delegated / }));
+
+    // Both live rows render with their code chips + progress.
+    expect(await screen.findByText("K7Q2")).toBeTruthy();
+    expect(screen.getByText("M3XN")).toBeTruthy();
+    expect(screen.getByText("2/5 todos")).toBeTruthy();
+    expect(screen.getByText("↑1.2k ↓340")).toBeTruthy();
+
+    // Clicking a live row opens THAT child's tab with a code-prefixed title.
+    fireEvent.click(screen.getByRole("button", { name: "Open sub-agent K7Q2 · Refactor auth module in sidebar" }));
+    const slices = Object.values(useRightSidebarStore.getState().byProject);
+    expect(slices).toHaveLength(1);
+    const tab = slices[0].tabs.find((t) => t.type === "subagent");
+    expect(tab).toMatchObject({
+      type: "subagent",
+      subAgentId: "sess_child-a",
+      parentSessionId: SESSION_ID,
+      subRole: "coder",
+      title: "K7Q2 · Refactor auth module",
+    });
+  });
+
+  it("renders the live map's lastActivity under the matching row (fresher than the poll)", async () => {
+    vi.mocked(fetchSubAgents).mockResolvedValue([subAgentRow()]);
+    useStreamStore.setState({
+      subagentsLive: {
+        "sess_child-a": {
+          childSessionId: "sess_child-a",
+          parentSessionId: SESSION_ID,
+          code: "K7Q2",
+          role: "coder",
+          task: "Refactor auth module",
+          status: "running",
+          lastActivity: "run_command ✓ exit 0",
+          updatedAtMs: Date.now(),
+        },
+      },
+    });
+    renderDelegateSection();
+    fireEvent.click(screen.getByRole("button", { name: /^Delegated / }));
+
+    expect(await screen.findByText("run_command ✓ exit 0")).toBeTruthy();
+  });
+
+  it("with exactly ONE live child the Delegated row itself opens that child (no expand toggle)", async () => {
+    vi.mocked(fetchSubAgents).mockResolvedValue([subAgentRow()]);
+    renderDelegateSection();
+
+    const row = await screen.findByRole("button", {
+      name: "Open sub-agent K7Q2 · Refactor auth module in sidebar",
+    });
+    // The trailing affordance reads as open-in-sidebar, and clicking the row
+    // opens the child directly.
+    expect(row.textContent).toContain("live");
+    fireEvent.click(row);
+
+    const slices = Object.values(useRightSidebarStore.getState().byProject);
+    const tab = slices[0]?.tabs.find((t) => t.type === "subagent");
+    expect(tab).toMatchObject({ subAgentId: "sess_child-a", title: "K7Q2 · Refactor auth module" });
+    // The row did NOT expand (its action is open, not toggle).
+    expect(screen.queryByTestId("live-delegate-row")).toBeNull();
+  });
+
+  it("a completed delegate_task shows the code chip above the SubAgentCard (match by child session id)", async () => {
+    vi.mocked(fetchSubAgents).mockResolvedValue([
+      subAgentRow({ status: "completed" }),
+    ]);
+    renderDelegateSection({
+      ...DELEGATE_TOOL,
+      ok: true,
+      outputSummary: "[subagent session: sess_child-a | role: coder]\nSub-agent completed.\n\nDone.",
+    });
+    fireEvent.click(screen.getByRole("button", { name: /^Delegated / }));
+
+    const chip = await screen.findByTestId("subagent-code-chip");
+    expect(chip.textContent).toBe("K7Q2");
+  });
+
+  it("a pending delegate with NO child session yet shows the quiet 'delegating…' beat", async () => {
+    // The moment between the delegate_task call and the child session
+    // appearing in the listing (acquireSlot can queue) — the expanded body
+    // is honest about it instead of a bare spinner.
+    vi.mocked(fetchSubAgents).mockResolvedValue([]);
+    renderDelegateSection();
+    fireEvent.click(screen.getByRole("button", { name: /^Delegated / }));
+
+    expect(await screen.findByText("delegating")).toBeTruthy();
+    expect(screen.queryByTestId("live-delegate-row")).toBeNull();
+  });
+});
+
+describe("sub-agent approval attribution (ROUND-48 R48-e2)", () => {
+  const childApproval: WorkingEntry = {
+    type: "approval",
+    approvalId: "appr_child_9",
+    toolName: "run_command",
+    argsSummary: "pnpm test",
+    category: "confirm",
+    status: "pending",
+    subAgentId: "sess_child-a",
+    ts: "2026-08-28T10:00:09Z",
+  };
+
+  it("a sub-agent ask renders the 'Sub-agent {code} · {role} —' attribution prefix with decision buttons unchanged", () => {
+    useStreamStore.setState({
+      subagentsLive: {
+        "sess_child-a": {
+          childSessionId: "sess_child-a",
+          parentSessionId: SESSION_ID,
+          code: "K7Q2",
+          role: "coder",
+          task: "Refactor auth module",
+          status: "running",
+          updatedAtMs: Date.now(),
+        },
+      },
+    });
+    renderWithProviders(
+      <WorkingSection
+        entries={[childApproval]}
+        sessionId={SESSION_ID}
+        projectId="proj_probe"
+        live
+        defaultOpen
+        onApprovalDecision={() => {}}
+      />,
+    );
+
+    const attribution = screen.getByTestId("subagent-approval-attribution");
+    expect(attribution.textContent).toContain("Sub-agent");
+    expect(attribution.textContent).toContain("K7Q2");
+    expect(attribution.textContent).toContain("coder");
+    // The card itself (title + ask + decision buttons) is unchanged.
+    expect(screen.getByText("Permission needed")).toBeTruthy();
+    expect(screen.getByText("pnpm test")).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Allow once" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Always allow" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Deny" })).toBeTruthy();
+  });
+
+  it("a main-agent approval renders NO attribution prefix (unchanged behavior)", () => {
+    renderWithProviders(
+      <WorkingSection
+        entries={[
+          {
+            type: "approval",
+            approvalId: "appr_main_9",
+            toolName: "run_command",
+            argsSummary: "pnpm build",
+            category: "confirm",
+            status: "pending",
+            ts: "2026-08-28T10:00:09Z",
+          },
+        ]}
+        sessionId={SESSION_ID}
+        projectId="proj_probe"
+        live
+        defaultOpen
+      />,
+    );
+
+    expect(screen.queryByTestId("subagent-approval-attribution")).toBeNull();
+    expect(screen.getByText("Permission needed")).toBeTruthy();
+  });
+
+  it("attribution ALSO resolves from the polled /subagents row when the SSE live map is empty (reload mid-ask)", async () => {
+    // After a page reload the stream-store live map starts empty — the
+    // approval entry still carries subAgentId, and the polled listing
+    // answers the code/role lookup.
+    vi.mocked(fetchSubAgents).mockResolvedValue([subAgentRow()]);
+    renderWithProviders(
+      <WorkingSection
+        entries={[childApproval]}
+        sessionId={SESSION_ID}
+        projectId="proj_probe"
+        live
+        defaultOpen
+        onApprovalDecision={() => {}}
+      />,
+    );
+
+    const attribution = screen.getByTestId("subagent-approval-attribution");
+    // The span renders immediately with the bare prefix; the polled row's
+    // code/role land a beat later (the query resolves async).
+    await waitFor(() => expect(attribution.textContent).toContain("K7Q2"));
+    expect(attribution.textContent).toContain("coder");
+    expect(fetchSubAgents).toHaveBeenCalledWith(SESSION_ID);
   });
 });

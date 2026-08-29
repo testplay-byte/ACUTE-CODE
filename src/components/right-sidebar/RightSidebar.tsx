@@ -5,6 +5,7 @@ import {
   Bot,
   Brain,
   Files,
+  FolderTree,
   Globe,
   Plus,
   Terminal as TerminalIcon,
@@ -22,6 +23,8 @@ import { useThemeStyles } from "../../lib/use-theme-styles";
 import { withAlpha } from "../dashboard/helpers";
 import { ease } from "../../lib/motion";
 import { FileViewerPanel } from "./FileViewerPanel";
+// ROUND-48 (R48-c): the project file-explorer tab (tree left / content right).
+import { FilesExplorerPanel } from "./FilesExplorerPanel";
 import { TerminalPanel } from "./TerminalPanel";
 import { BrowserPanel } from "./BrowserPanel";
 import { SubAgentPanel } from "./SubAgentPanel";
@@ -44,6 +47,8 @@ import { useQuery } from "@tanstack/react-query";
 
 const TAB_ICON: Record<RightSidebarTabType, typeof Files> = {
   file: Files,
+  // ROUND-48 (R48-c): the file-explorer tab.
+  files: FolderTree,
   browser: Globe,
   terminal: TerminalIcon,
   subagent: Bot,
@@ -90,6 +95,8 @@ export function RightSidebar({
   const openBrowser = useRightSidebarStore((s) => s.openBrowser);
   const openTerminal = useRightSidebarStore((s) => s.openTerminal);
   const openMemory = useRightSidebarStore((s) => s.openMemory);
+  // ROUND-48 (R48-c): the file-explorer quick-menu action.
+  const openFiles = useRightSidebarStore((s) => s.openFiles);
   const openSubAgent = useRightSidebarStore((s) => s.openSubAgent);
   const requestFilePicker = useRightSidebarEvents((s) => s.requestFilePicker);
   // ROUND-42: ensure the project has a slice (idempotent — uses the active
@@ -386,8 +393,12 @@ export function RightSidebar({
                       anchor={popoverPos}
                       onPick={(type) => {
                         setQuickMenuOpen(false);
-                        if (type === "file") {
-                          requestFilePicker();
+                        // ROUND-48 (R48-c): "Files" opens the real file
+                        // explorer tab (tree left / content right). The OLD
+                        // behavior (open the CommandPalette search) stays
+                        // reachable via the explorer's header Search button.
+                        if (type === "files") {
+                          openFiles(projectId);
                         } else if (type === "browser") {
                           openBrowser(projectId, null);
                         } else if (type === "terminal") {
@@ -411,11 +422,15 @@ export function RightSidebar({
                       onPick={(sub) => {
                         setSubAgentPickerFor(null);
                         if (sessionId !== null) {
+                          // ROUND-48 (R48-e2): the tab title carries the
+                          // child's code — the same `${code} · ${title}`
+                          // convention the Delegated card's live rows use, so
+                          // every sub-agent tab is identifiable at a glance.
                           openSubAgent(
                             projectId,
                             sessionId,
                             sub.id,
-                            sub.title ?? "Sub-agent",
+                            `${sub.code} · ${sub.title ?? "Sub-agent"}`,
                             sub.subRole ?? undefined,
                           );
                         }
@@ -442,6 +457,9 @@ export function RightSidebar({
           />
         ) : activeTab.type === "file" ? (
           <FileViewerPanel projectId={projectId} tab={activeTab} />
+        ) : activeTab.type === "files" ? (
+          // ROUND-48 (R48-c): the file explorer (tree left / content right).
+          <FilesExplorerPanel projectId={projectId} tab={activeTab} />
         ) : activeTab.type === "terminal" ? (
           <TerminalPanel projectId={projectId} tab={activeTab} />
         ) : activeTab.type === "browser" ? (
@@ -492,7 +510,9 @@ function QuickMenu({
     };
   }, [onClose]);
   const items: Array<{ type: RightSidebarTabType; label: string; icon: typeof Files; desc: string }> = [
-    { type: "file", label: "File", icon: Files, desc: "Open a code/markdown file" },
+    // ROUND-48 (R48-c): "Files" = the real file explorer tab (the palette
+    // search this item used to open lives on the explorer's Search button).
+    { type: "files", label: "Files", icon: FolderTree, desc: "Browse the project's files" },
     { type: "browser", label: "Browser", icon: Globe, desc: "Browse the web in-app" },
     { type: "terminal", label: "Terminal", icon: TerminalIcon, desc: "Run a shell command" },
     // ROUND-44 (R44-a): the agent's persistent project knowledge.
@@ -622,6 +642,18 @@ function SubAgentPicker({
               onMouseEnter={(e) => (e.currentTarget.style.background = styles.subtleHover)}
               onMouseLeave={(e) => (e.currentTarget.style.background = "transparent")}
             >
+              {/* ROUND-48 (R48-e2, owner: "so I can easily identify which
+                  sub-agent is which"): the leading monospace code badge —
+                  R48-e1's deterministic 4-char [A-Z0-9] short id, the same
+                  mark the Delegated rows / panel header / approval
+                  attribution use. */}
+              <span
+                className="shrink-0 font-mono text-[10px] font-bold px-1.5 py-0.5 rounded-md tracking-[0.08em]"
+                style={{ background: withAlpha(styles.accent, 0.12), color: styles.accent }}
+                data-testid="subagent-picker-code"
+              >
+                {sub.code}
+              </span>
               <span
                 className="text-[9px] font-mono font-bold uppercase shrink-0 px-1.5 py-0.5 rounded-md"
                 style={{ color, background: withAlpha(color, 0.14) }}
