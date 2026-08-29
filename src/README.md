@@ -54,7 +54,9 @@ src/
 │   │                         list + states), AgentCard (registry row),
 │   │                         AgentFormDialog (create/edit, all AgentRecord
 │   │                         fields), ConfirmDialog (delete confirm)
-│   ├── sessions/             Sessions screen (SPEC F3, single-agent Phase 2):
+│   ├── sessions/             Sessions screen (deep-link only since R48 — the
+│   │                         /sessions route has no sidebar nav; everyday
+│   │                         chat lives in /project/:id/chat):
 │   │                         SessionsScreen (two-pane list+chat, stacks below
 │   │                         md), ChatView (event-log bubbles, autoscroll,
 │   │                         composer with Enter/Shift+Enter, thinking dots,
@@ -76,7 +78,7 @@ src/
 | `/` | Dashboard (F7) | placeholder |
 | `/project` | Project (F1) | placeholder |
 | `/agents` | **Agent Registry (F2)** | **real** — list/create/edit/duplicate/delete, template filter |
-| `/sessions` | **Sessions (F3)** | **real** — session list + single-agent chat (Phase 2 scope: no WS, no task board yet) |
+| `/sessions` | **Sessions (F3)** | **real** — session list + single-agent chat; deep-link only since R48 (no sidebar nav — everyday chat is `/project/:id/chat`) |
 | `/usage` | Usage (F7) | placeholder |
 | `/settings` | Settings (F9) | data-source panel only |
 

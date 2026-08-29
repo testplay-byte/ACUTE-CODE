@@ -11,7 +11,6 @@ import {
   LayoutDashboard,
   LoaderCircle,
   MessageSquare,
-  MessagesSquare,
   Palette,
   Pencil,
   Plus,
@@ -71,19 +70,27 @@ function shadeHex(hex: string, percent: number): string {
 
 /** ROUND-42: the project's tile — a soft vertical gradient derived from the
  * project's own color, with an inner top highlight + soft shadow. Replaces
- * the flat colored square (owner: modern, beautiful, cleaner, smoother). */
+ * the flat colored square (owner: modern, beautiful, cleaner, smoother).
+ * ROUND-48 (R48-a): `selected` paints a 2px INSET ring on the tile itself so
+ * the collapsed rail's active tile stays the exact same size as its
+ * siblings (the old outside outline made it look bigger + clipped it). The
+ * ring is WHITE — the tile is already a gradient of project.color, so a
+ * project.color ring would vanish against it — and the soft outer glow
+ * carries the project's hue. */
 function ProjectTile({
   color,
   name,
   size = 32,
   radius = 10,
   fontSize = 13,
+  selected = false,
 }: {
   color: string;
   name: string;
   size?: number;
   radius?: number;
   fontSize?: number;
+  selected?: boolean;
 }) {
   return (
     <span
@@ -95,8 +102,9 @@ function ProjectTile({
         fontSize,
         color: "#fff",
         background: `linear-gradient(150deg, ${shadeHex(color, 0.22)} 0%, ${color} 45%, ${shadeHex(color, -0.24)} 100%)`,
-        boxShadow:
-          "inset 0 1px 0 rgba(255,255,255,0.28), inset 0 -1px 2px rgba(0,0,0,0.18), 0 1px 3px rgba(0,0,0,0.14)",
+        boxShadow: selected
+          ? `inset 0 0 0 2px rgba(255,255,255,0.95), inset 0 1px 0 rgba(255,255,255,0.28), inset 0 -1px 2px rgba(0,0,0,0.18), 0 2px 8px ${withAlpha(color, 0.55)}`
+          : "inset 0 1px 0 rgba(255,255,255,0.28), inset 0 -1px 2px rgba(0,0,0,0.18), 0 1px 3px rgba(0,0,0,0.14)",
         textShadow: "0 1px 1px rgba(0,0,0,0.22)",
       }}
       aria-hidden
@@ -107,11 +115,17 @@ function ProjectTile({
 }
 
 /**
- * AcuteLogo (round-33): the custom app mark — a rounded-square accent tile
- * with a geometric white "A" (two strokes: the peak + the crossbar). Doubles
- * as the sidebar toggle: hover morphs the "A" into a panel-left icon
- * (cross-fade), click toggles. Used in the sidebar header AND as the
- * floating show-sidebar button when the rail is hidden.
+ * AcuteLogo (round-33; ROUND-48 redesign): the custom app mark — a rounded
+ * orange tile with a SOLID angular white "A" plus a terminal-cursor
+ * underscore ("A_" — the prompt heritage of a coding agent; owner round-48:
+ * "the logo could be improved... currently it is just an A"). The old
+ * 2-stroke A became a filled chevron silhouette with a punched counter, so
+ * the mark stays crisp from 16px (favicon) to 52px (chat empty state).
+ * Doubles as the sidebar toggle: hover morphs the mark into a panel-left
+ * icon (cross-fade), click toggles. Used in the sidebar header, the mobile
+ * drawer trigger, the floating show-sidebar button, and the chat empty
+ * state — all through the same `size` prop. The mark mirrors
+ * public/favicon.svg 1:1.
  */
 export function AcuteLogo({
   size = 32,
@@ -127,7 +141,6 @@ export function AcuteLogo({
   title?: string;
 }) {
   const [hovered, setHovered] = useState(false);
-  const stroke = Math.max(2, Math.round(size / 13));
   return (
     <button
       onClick={onClick}
@@ -140,11 +153,13 @@ export function AcuteLogo({
         width: size,
         height: size,
         borderRadius: Math.round(size * 0.28),
-        background: "#FF6B2C",
-        boxShadow: "0 2px 10px rgba(255,107,44,0.35)",
+        background: "linear-gradient(155deg, #FF8147 0%, #FF6B2C 52%, #ED5A17 100%)",
+        boxShadow:
+          "inset 0 1px 0 rgba(255,255,255,0.32), 0 2px 10px rgba(255,107,44,0.35)",
       }}
     >
-      {/* The geometric "A" — fades out on hover when hoverToggle */}
+      {/* The "A_" mark — a solid angular A (flat apex, punched counter) +
+          the terminal underscore. Fades out on hover when hoverToggle. */}
       <svg
         width={size}
         height={size}
@@ -159,18 +174,11 @@ export function AcuteLogo({
         }}
       >
         <path
-          d="M10 22.5 L16 9.5 L22 22.5"
-          stroke="#FFFFFF"
-          strokeWidth={stroke}
-          strokeLinecap="round"
-          strokeLinejoin="round"
+          d="M11.8 7.5 H13.4 L20 25 H16.4 L15 21.3 H10.2 L8.8 25 H5.2 Z M12.6 13.3 L14.5 18.4 H10.7 Z"
+          fill="#FFFFFF"
+          fillRule="evenodd"
         />
-        <path
-          d="M12.7 18 H19.3"
-          stroke="#FFFFFF"
-          strokeWidth={stroke}
-          strokeLinecap="round"
-        />
+        <rect x="22.1" y="22.3" width="4.9" height="2.7" rx="0.6" fill="#FFFFFF" />
       </svg>
       {/* The panel-left toggle icon — fades in on hover when hoverToggle */}
       {hoverToggle && (
@@ -437,7 +445,6 @@ export function Sidebar() {
             onClickCapture={() => setMobileOpen(false)}
           >
             <DashboardButton collapsed={collapsed} />
-            <SessionsButton collapsed={collapsed} />
             <UsageButton collapsed={collapsed} />
           </nav>
 
@@ -518,13 +525,10 @@ function UsageButton({ collapsed }: { collapsed: boolean }) {
   return <NavButton icon={BarChart3} label="Usage" active={active} collapsed={collapsed} onClick={() => navigate("/usage")} />;
 }
 
-/** ROUND-45: the session manager (search/fork two-pane screen) — reachable
- *  at last; the R44-c search UI was stranded on an unrouted component. */
-function SessionsButton({ collapsed }: { collapsed: boolean }) {
-  const navigate = useNavigate();
-  const active = useLocation().pathname.startsWith("/sessions");
-  return <NavButton icon={MessagesSquare} label="Sessions" active={active} collapsed={collapsed} onClick={() => navigate("/sessions")} />;
-}
+/** ROUND-45: the session manager (search/fork two-pane screen) nav entry was
+ * REMOVED in ROUND-48 (owner: "remove the sessions section completely as it
+ * is not needed") — the /sessions route + SessionsScreen stay for deep
+ * links, but the sidebar no longer lists them. */
 
 /** Prominent Settings button (owner round-33): a card-style row — icon tile
  * in an accent-tinted square + bold label — visually distinct from the plain
@@ -655,7 +659,18 @@ function ProjectSection({ collapsed }: { collapsed: boolean }) {
 
   if (collapsed) {
     return (
-      <div className="flex flex-col items-center gap-1.5 px-1.5 pb-2">
+      // ROUND-48 (R48-a): the collapsed rail now SCROLLS (overflow-y-auto +
+      // min-h-0 inside the min-h-0 wrapper) and has top padding — the old
+      // container clipped the first tile and cut long project lists off at
+      // the bottom. Selection is an INSET ring on the tile itself (see
+      // ProjectTile) so the active tile stays exactly 36px like its siblings
+      // (the old outside outline + 2px offset made it look bigger and got
+      // clipped by the overflow-hidden wrapper).
+      <div
+        className="flex flex-col items-center gap-1.5 px-1.5 pt-2 pb-2 min-h-0 overflow-y-auto"
+        style={{ scrollbarWidth: "thin" }}
+        data-testid="collapsed-project-rail"
+      >
         {projects.map((project) => {
           const isActive = activeProjectId === project.id;
           const isRunning = runningProjects.has(project.id);
@@ -665,19 +680,26 @@ function ProjectSection({ collapsed }: { collapsed: boolean }) {
               onClick={() => navigate(`/project/${project.id}/chat`)}
               title={isRunning ? `${project.name} — working…` : project.name}
               aria-label={isRunning ? `Open ${project.name} (working)` : `Open ${project.name}`}
+              aria-current={isActive ? "true" : undefined}
+              data-active={isActive ? "true" : "false"}
               className="relative w-9 h-9 grid place-items-center transition-transform hover:scale-105 active:scale-95"
-              style={{
-                borderRadius: 12,
-                outline: isActive ? `2px solid ${styles.accent}` : "none",
-                outlineOffset: 2,
-              }}
+              style={{ borderRadius: 12 }}
             >
-              <ProjectTile color={project.color} name={project.name} size={36} radius={12} fontSize={14} />
+              <ProjectTile
+                color={project.color}
+                name={project.name}
+                size={36}
+                radius={12}
+                fontSize={14}
+                selected={isActive}
+              />
               {/* ROUND-42: live-work badge on the collapsed tile (owner:
                   "if the session of a project is going on and I collapse the
                   project, the animation should move on to the project
                   itself") — a pulsing accent dot pinned to the tile's
-                  bottom-right. */}
+                  bottom-right. R48-a: the rail's px-1.5/pt-2/pb-2 padding
+                  keeps the half-outset dot inside the scroll box, so it never
+                  clips. */}
               {isRunning ? (
                 <span
                   className="absolute -bottom-0.5 -right-0.5 w-[11px] h-[11px] rounded-full animate-pulse"
@@ -833,8 +855,16 @@ function ProjectRow({
     <div
       className="group relative h-11 flex items-center gap-2.5 rounded-[12px] px-2 cursor-pointer transition-all duration-200"
       style={{
-        border: active ? `1.5px solid ${withAlpha(styles.accent, 0.4)}` : "1.5px solid transparent",
-        background: active ? withAlpha(styles.accent, 0.1) : hovered ? styles.sidebarHover : "transparent",
+        // ROUND-48 (R48-a): the active highlight follows the PROJECT'S OWN
+        // color (withAlpha tint), not the theme accent — with per-project
+        // palette colors the whole row now reads as belonging to that
+        // project (owner: "projects should be given different colors").
+        border: active ? `1.5px solid ${withAlpha(project.color, 0.4)}` : "1.5px solid transparent",
+        background: active
+          ? withAlpha(project.color, 0.1)
+          : hovered
+            ? styles.sidebarHover
+            : "transparent",
       }}
       onMouseEnter={() => setHovered(true)}
       onMouseLeave={() => setHovered(false)}

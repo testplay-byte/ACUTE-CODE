@@ -167,7 +167,6 @@ export function MemoryPanel({ projectId, tab }: { projectId: string; tab: RightS
                         <MemoryRow
                           key={m.id}
                           memory={m}
-                          color={color}
                           deleting={deletingId === m.id}
                           onDelete={() => void doDelete(m.id)}
                         />
@@ -193,15 +192,17 @@ export function MemoryPanel({ projectId, tab }: { projectId: string; tab: RightS
   );
 }
 
-/** One memory card: content (clamped) + meta row (when · source) + delete. */
+/** One memory card: content (clamped) + meta row (when · source) + delete.
+ * ROUND-48 (R48-a): the per-kind left accent bar (borderLeft 2.5px) is GONE
+ * (owner: the colored left border "looks way too bad") — every card now
+ * carries the same clean uniform 1px border; kind identity stays in the
+ * group-header chips above. */
 function MemoryRow({
   memory,
-  color,
   deleting,
   onDelete,
 }: {
   memory: ProjectMemory;
-  color: string;
   deleting: boolean;
   onDelete: () => void;
 }) {
@@ -217,7 +218,6 @@ function MemoryRow({
       style={{
         background: styles.isDark ? "rgba(0,0,0,0.14)" : styles.card,
         border: `1px solid ${styles.border}`,
-        borderLeft: `2.5px solid ${color}`,
       }}
     >
       <ClampedText

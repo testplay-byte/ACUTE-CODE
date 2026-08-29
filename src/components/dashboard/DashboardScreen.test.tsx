@@ -17,7 +17,7 @@ function renderDashboard() {
   return renderWithProviders(
     <Routes>
       <Route path="/" element={<DashboardScreen />} />
-      <Route path="/sessions" element={<div>sessions screen stub</div>} />
+      <Route path="/project/:id/chat" element={<div>project chat stub</div>} />
       <Route path="/settings" element={<div>settings screen stub</div>} />
       <Route path="*" element={<div>not found</div>} />
     </Routes>,
@@ -71,10 +71,15 @@ describe("DashboardScreen (fixture backend)", () => {
     expect(screen.getByText("Audit Agents screen visuals")).toBeTruthy();
   });
 
-  it("quick action navigates to the sessions screen", async () => {
+  it("quick action continues in the newest project's chat — no /sessions link (R48-a)", async () => {
     renderDashboard();
 
-    fireEvent.click(await screen.findByRole("button", { name: "Start a session" }));
-    expect(await screen.findByText("sessions screen stub")).toBeTruthy();
+    // ROUND-48: the primary quick action no longer targets /sessions (the
+    // Sessions screen left the sidebar nav); it opens the newest project's
+    // chat, where the composer starts the next session.
+    const primary = await screen.findByRole("button", { name: /continue in /i });
+    expect(primary.textContent).toContain("ACUTE-CODE"); // newest fixture project
+    fireEvent.click(primary);
+    expect(await screen.findByText("project chat stub")).toBeTruthy();
   });
 });

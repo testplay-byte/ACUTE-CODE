@@ -108,10 +108,60 @@ describe("Sidebar projects section (fixture ProjectsBackend)", () => {
     expect(screen.getByRole("button", { name: /^dashboard$/i, hidden: true })).toBeTruthy();
     expect(screen.getByRole("button", { name: /^usage$/i, hidden: true })).toBeTruthy();
     expect(screen.getByRole("button", { name: /^settings$/i, hidden: true })).toBeTruthy();
-    // ROUND-45: Sessions nav EXISTS now — the R44-c session-manager screen
-    // (search/fork) was stranded on an unrouted component until this round.
-    expect(screen.getByRole("button", { name: /^sessions$/i, hidden: true })).toBeTruthy();
+    // ROUND-48 (owner: "remove the sessions section completely as it is not
+    // needed"): the Sessions nav entry is GONE from the sidebar. The
+    // /sessions route + SessionsScreen stay for deep links — only the nav
+    // row was removed.
+    expect(screen.queryByRole("button", { name: /^sessions$/i, hidden: true })).toBeNull();
+    expect(screen.queryByText("Sessions")).toBeNull();
     expect(screen.queryByText("Agents")).toBeNull();
+  });
+
+  it("collapsed rail marks the selected project with an INSET ring at the same 36px size (R48-a)", async () => {
+    const [project] = await getFixtureProjects().list();
+    // Force the collapsed rail (the flag is read on mount).
+    localStorage.setItem("acute-code.sidebar.collapsed", "1");
+    const { container } = renderWithProviders(
+      <>
+        <Sidebar />
+        <Routes>
+          <Route path="/project/:id/chat" element={<div>chat stub</div>} />
+        </Routes>
+      </>,
+      { route: `/project/${project.id}/chat` },
+    );
+
+    // The rail exists, scrolls, and pads top/bottom — long project lists are
+    // no longer cut off and the first tile is not clipped.
+    const rail = await waitFor(() => {
+      const el = container.querySelector<HTMLElement>('[data-testid="collapsed-project-rail"]');
+      expect(el).toBeTruthy();
+      return el as HTMLElement;
+    });
+    expect(rail.className).toContain("overflow-y-auto");
+    expect(rail.className).toContain("pt-2");
+
+    // Wait for the fixture projects to land before reading the tiles.
+    const activeButton = await waitFor(() => {
+      const el = container.querySelector<HTMLElement>('[data-active="true"]');
+      expect(el).toBeTruthy();
+      return el as HTMLElement;
+    });
+    const idleButton = container.querySelector<HTMLElement>('[data-active="false"]');
+    expect(idleButton).toBeTruthy();
+    // NO outside outline — it made the selected tile look bigger and clipped
+    // against the overflow-hidden wrapper (the owner's bug report).
+    expect(activeButton?.style.outline).toBe("");
+    // Both tiles are exactly 36px: selection lives in an INSET ring painted
+    // INSIDE the tile, never outside it.
+    const activeTile = activeButton?.querySelector<HTMLElement>('span[aria-hidden="true"]');
+    const idleTile = idleButton?.querySelector<HTMLElement>('span[aria-hidden="true"]');
+    expect(activeTile?.style.width).toBe("36px");
+    expect(activeTile?.style.height).toBe("36px");
+    expect(idleTile?.style.width).toBe("36px");
+    expect(idleTile?.style.height).toBe("36px");
+    expect(activeTile?.style.boxShadow).toContain("inset 0 0 0 2px");
+    expect(idleTile?.style.boxShadow).not.toContain("inset 0 0 0 2px");
   });
 
   it("ProjectView shows a not-found state for an unknown id", async () => {

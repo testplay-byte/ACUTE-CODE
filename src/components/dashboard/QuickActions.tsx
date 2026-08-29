@@ -1,19 +1,28 @@
 import { motion } from "framer-motion";
 import { useState } from "react";
-import { Plus, Bot, Settings, Terminal } from "lucide-react";
+import { Bot, MessageSquare, Settings, Terminal } from "lucide-react";
 import type { ThemeStyles } from "../../lib/themes";
 import { scaleIn } from "../../lib/motion";
+import { useProjects } from "../../hooks/use-projects";
 
 /**
  * Quick actions (round-21 wizard DNA): 24px-radius card with softShadow,
  * uppercase tracked label header, action buttons with solid accent icons
  * and wizard hover physics (subtleHover bg + translate-x). The primary
- * action ("Start a session") is an accent-filled pill.
+ * action is an accent-filled pill.
+ *
+ * ROUND-48 (R48-a): the primary no longer targets /sessions — the Sessions
+ * screen left the sidebar nav (owner: "remove the sessions section
+ * completely"), so the flagship quick action is now the workspace
+ * continuation: "Continue in <newest project>" opens that project's chat,
+ * where the composer starts the next session (the chat panel auto-creates
+ * one on the first message — the /sessions manager was never on that path).
+ * With no projects yet the primary row is hidden: the add-project flow lives
+ * in the sidebar's Projects section, not on a route.
  */
-const ACTIONS = [
-  { label: "Start a session", to: "/sessions", icon: Plus, primary: true },
-  { label: "Manage agents", to: "/settings?tab=agents", icon: Bot, primary: false },
-  { label: "Open settings", to: "/settings", icon: Settings, primary: false },
+const SECONDARY_ACTIONS = [
+  { label: "Manage agents", to: "/settings?tab=agents", icon: Bot },
+  { label: "Open settings", to: "/settings", icon: Settings },
 ] as const;
 
 export function QuickActions({
@@ -25,6 +34,23 @@ export function QuickActions({
 }) {
   const { card, border, text, textSecondary, accent, accentText, subtle, subtleHover, softShadow, bentoShadowSm } = styles;
   const [hoveredIndex, setHoveredIndex] = useState<number | null>(null);
+
+  // Newest project first (the live backend lists created_at DESC; the demo
+  // fixture returns seed order). Shared query key — no extra fetch.
+  const latestProject = (useProjects().data ?? [])[0];
+  const actions = [
+    ...(latestProject
+      ? [
+          {
+            label: `Continue in ${latestProject.name}`,
+            to: `/project/${latestProject.id}/chat`,
+            icon: MessageSquare,
+            primary: true,
+          },
+        ]
+      : []),
+    ...SECONDARY_ACTIONS.map((action) => ({ ...action, primary: false })),
+  ];
 
   return (
     <motion.div
@@ -39,7 +65,7 @@ export function QuickActions({
         </span>
       </div>
       <div className="flex flex-col gap-2">
-        {ACTIONS.map(({ label, to, icon: Icon, primary }, i) => (
+        {actions.map(({ label, to, icon: Icon, primary }, i) => (
           <button
             key={to}
             onClick={() => onNavigate(to)}

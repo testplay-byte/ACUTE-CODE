@@ -36,7 +36,20 @@ describe("App shell (owner round-8 structure)", () => {
       .getAllByRole("heading", { level: 1 })
       .find((h) => /Good (morning|afternoon|evening|night)/.test(h.textContent ?? ""));
     expect(greeting).toBeTruthy();
-    expect(screen.getByRole("button", { name: /start a session/i })).toBeTruthy();
+  });
+
+  it("the dashboard's primary quick action opens the newest project's chat (R48-a: no /sessions link)", async () => {
+    resetTestState();
+    renderWithProviders(<App />);
+
+    // ROUND-48: the old "Start a session" quick action pointed at /sessions —
+    // the screen that left the sidebar nav this round. The primary action is
+    // now the workspace continuation (the projects query resolves async, so
+    // the primary pill appears after the fixture loads).
+    const primary = await screen.findByRole("button", { name: /continue in /i });
+    expect(primary.textContent).toContain("ACUTE-CODE");
+    // And the sessions link is nowhere in the sidebar chrome.
+    expect(screen.queryByRole("button", { name: /^sessions$/i })).toBeNull();
   });
 
   it("routes /settings?tab=agents to the embedded Agent Registry", async () => {

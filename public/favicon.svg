@@ -1,0 +1,15 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32">
+  <!-- ACUTE-CODE favicon (ROUND-48 R48-a): the app mark — the orange tile +
+       solid angular white "A_" (terminal-cursor underscore) — mirroring the
+       AcuteLogo component in src/components/shell/Sidebar.tsx 1:1. -->
+  <defs>
+    <linearGradient id="tile" x1="0.2" y1="0" x2="0.8" y2="1">
+      <stop offset="0" stop-color="#FF8147"/>
+      <stop offset="0.52" stop-color="#FF6B2C"/>
+      <stop offset="1" stop-color="#ED5A17"/>
+    </linearGradient>
+  </defs>
+  <rect width="32" height="32" rx="9" fill="url(#tile)"/>
+  <path d="M11.8 7.5 H13.4 L20 25 H16.4 L15 21.3 H10.2 L8.8 25 H5.2 Z M12.6 13.3 L14.5 18.4 H10.7 Z" fill="#FFFFFF" fill-rule="evenodd"/>
+  <rect x="22.1" y="22.3" width="4.9" height="2.7" rx="0.6" fill="#FFFFFF"/>
+</svg>

@@ -136,6 +136,9 @@ describe("openDatabase", () => {
       // ROUND-46 (R46-d): durable per-project browser-proxy cookie jar
       // (restart-surviving logins for the embedded browser).
       { version: 17, name: "0017_browser_cookies.sql" },
+      // ROUND-48 (R48-a): per-project colors — legacy default-color rows
+      // backfilled round-robin from the 8-color PROJECT_PALETTE.
+      { version: 18, name: "0018_project_colors.sql" },
     ]);
     expect(appliedSecond).toEqual(appliedFirst);
   });
