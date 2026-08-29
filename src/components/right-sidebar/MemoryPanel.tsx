@@ -2,7 +2,12 @@ import { useRef, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { AnimatePresence, motion } from "framer-motion";
 import { Brain, LoaderCircle, RefreshCw, Trash2, Zap } from "lucide-react";
-import { deleteProjectMemory, listProjectMemory, type ProjectMemory } from "../../lib/api";
+import {
+  deleteProjectMemory,
+  fetchMemorySettings,
+  listProjectMemory,
+  type ProjectMemory,
+} from "../../lib/api";
 import { formatWhen } from "../../lib/format";
 import type { RightSidebarTab } from "../../lib/right-sidebar-store";
 import { SEMANTIC_COLORS } from "../../lib/semantics";
@@ -51,6 +56,17 @@ export function MemoryPanel({ projectId, tab }: { projectId: string; tab: RightS
   });
   const memories = memoryQuery.data ?? [];
 
+  // ROUND-49: the memory master switch (Settings → Advanced). While OFF the
+  // panel stays browsable/deletable (pruning old memories is exactly what
+  // you want while debugging the system) but carries a clear OFF notice —
+  // nothing is injected into agent turns and the memory tools are gone.
+  const settingsQuery = useQuery({
+    queryKey: ["memory-settings"],
+    queryFn: fetchMemorySettings,
+    staleTime: 30_000,
+  });
+  const memoryOff = settingsQuery.data?.enabled === false;
+
   const scrollRef = useRef<HTMLDivElement>(null);
   useScrollFade(scrollRef);
 
@@ -86,6 +102,21 @@ export function MemoryPanel({ projectId, tab }: { projectId: string; tab: RightS
           {memories.length} saved
         </span>
       </div>
+
+      {memoryOff ? (
+        <div
+          className="shrink-0 px-3 py-2 border-b flex items-center gap-2"
+          style={{ borderColor: styles.border, background: withAlpha("#f9a825", 0.08) }}
+          data-testid="memory-off-notice"
+        >
+          <Zap size={12} style={{ color: "#f9a825" }} className="shrink-0" />
+          <span className="text-[10.5px]" style={{ color: styles.textSecondary }}>
+            Memory is <strong>turned off</strong> — agents run on session context alone and the
+            memory tools are unavailable. Saved memories are kept (you can still prune them
+            below). Re-enable in Settings → Advanced.
+          </span>
+        </div>
+      ) : null}
 
       {/* ── Scrollable grouped list ── */}
       <div ref={scrollRef} className="flex-1 min-h-0 overflow-y-auto auto-scroll">

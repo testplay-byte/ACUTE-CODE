@@ -400,6 +400,11 @@ export interface ToolDeps {
     agentId: string;
     payload: Record<string, unknown>;
   }) => void;
+  /** ROUND-49: the memory master switch (settings/memory). When explicitly
+   * false, the memory_save/recall/list tools are NOT registered and the
+   * system prompt carries no memory digest. Undefined = enabled (default),
+   * so existing call sites (tests, older paths) keep the tools. */
+  memoryEnabled?: boolean;
 }
 
 export async function buildProjectTools(root: string, allowedTools?: readonly string[], deps?: ToolDeps): Promise<ToolSet> {
@@ -938,11 +943,25 @@ export async function buildProjectTools(root: string, allowedTools?: readonly st
       if (!allow.has(name)) delete tools[name as keyof typeof tools];
     }
   }
+  // ROUND-49 (owner directive: "a setting to turn off this memory
+  // functionality"): the memory master switch — when explicitly disabled the
+  // memory tools are simply not registered (the model never sees them, so it
+  // can neither save new memories nor be fed stale ones through recall; the
+  // digest injection lives in runtime.ts prepareTurn under the same switch).
+  if (toolDeps?.memoryEnabled === false) {
+    delete tools.memory_save;
+    delete tools.memory_recall;
+    delete tools.memory_list;
+  }
   // ── ROUND-36 (ADR-0022): SUB-AGENT DELEGATION ───────────────────────────
   // The parent delegates self-contained subtasks; children run their own
-  // sessions concurrently (per-key + total limits) and report back. Children
-  // NEVER get this tool (one-level fan-out — recursion guard): the runtime
-  // builds child tool sets without delegate_task.
+  // sessions concurrently (per-key + total limits) and report back.
+  // ROUND-49 (owner directive: sub-agents are "exactly like how the main
+  // agent works — the only difference is the separate context and API
+  // keys"): children MAY delegate too (nested sub-agents) — the runtime
+  // strips delegate_task only at/beyond MAX_DELEGATION_DEPTH so the fan-out
+  // can never recurse forever. prepareTurn owns that decision; it passes an
+  // allowlist that either permits or forbids delegate_task for this turn.
   const delegateAllowed = allow === null || allow.has("delegate_task");
   if (delegateAllowed && toolDeps && toolDeps.keyring !== undefined && toolDeps.chat !== undefined) {
     const { getOrchestrator } = await import("../agents/orchestrator.js");

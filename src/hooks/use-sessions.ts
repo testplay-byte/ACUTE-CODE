@@ -23,22 +23,11 @@ export function useSessions() {
 }
 
 /**
- * ROUND-44 (R44-c, owner directive: complete the agentic coding environment):
- * GET /sessions?q= — title + event-text search. Enabled only for a non-empty
- * trimmed query; the key embeds q (plus the data source) so typing refetches
- * per distinct term. An empty string returns an idle query — callers render
- * the normal list.
+ * ROUND-49: useSessionSearch was the global SessionsScreen's search hook —
+ * removed together with the screen (owner: "completely remove the sessions
+ * navigation"). The backend GET /sessions?q= route + the api.ts client stay
+ * (project-scoped session lists + the demo fixture mirror use them).
  */
-export function useSessionSearch(q: string) {
-  const source = useDataSource();
-  const trimmed = q.trim();
-  return useQuery({
-    queryKey: ["sessions", source, "search", trimmed],
-    queryFn: () => getSessionsBackend().search(trimmed),
-    enabled: trimmed.length > 0,
-    staleTime: 30_000,
-  });
-}
 
 export function useSession(id: string | null) {
   const source = useDataSource();

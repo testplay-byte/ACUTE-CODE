@@ -46,6 +46,11 @@ import {
   tokenizeText,
 } from "../src/storage/memory";
 import { buildProjectSystemPrompt } from "../src/agents/prompts";
+import { runSingleAgentTurn } from "../src/agents/runtime";
+import type { ChatFn } from "../src/agents/chat";
+import { ProviderKeyring } from "../src/providers/registry";
+import { createAgent } from "../src/storage/agents";
+import { getMemorySettings, setMemorySettings } from "../src/storage/settings";
 
 // The AI SDK tool contract — narrow to what the tests call.
 type Tool = { execute: (input: Record<string, unknown>) => Promise<{ ok: boolean; output: string }> };
@@ -556,5 +561,82 @@ describe("migration 0015 (memory table + tool allowlist append)", () => {
     } finally {
       fresh.close();
     }
+  });
+});
+
+/* ── ROUND-49: the memory master switch ──────────────────────────────────── */
+
+describe("ROUND-49: memory master switch (Settings → Advanced)", () => {
+  it("settings round-trip: default ON; OFF persists; invalid type rejected", () => {
+    expect(getMemorySettings(db)).toEqual({ enabled: true });
+    const off = setMemorySettings(db, { enabled: false });
+    expect(off).toEqual({ enabled: false });
+    // Survives a reopen (persisted in the settings table).
+    expect(getMemorySettings(db)).toEqual({ enabled: false });
+    expect(() => setMemorySettings(db, { enabled: "yes" as unknown as boolean })).toThrow();
+    setMemorySettings(db, { enabled: true });
+    expect(getMemorySettings(db)).toEqual({ enabled: true });
+  });
+
+  it("memory tools are NOT registered when memoryEnabled: false — even when explicitly allowlisted; the rest of the toolset is untouched", async () => {
+    const session = createSession(db, { agentId: "agt_default_nova", mode: "single" });
+    const off = await buildProjectTools(join(dir, "root"), ["memory_save", "memory_recall", "memory_list", "write_file", "read_file"], {
+      db,
+      sessionId: session.id,
+      agentId: "agt_default_nova",
+      memoryEnabled: false,
+    });
+    expect(Object.keys(off).sort()).toEqual(["read_file", "write_file"]);
+    // The switch only HIDES the tools (data + the on-switch path are intact).
+    const on = await buildProjectTools(join(dir, "root"), ["memory_save", "memory_recall", "memory_list", "write_file"], {
+      db,
+      sessionId: session.id,
+      agentId: "agt_default_nova",
+      memoryEnabled: true,
+    });
+    expect(Object.keys(on).sort()).toEqual(["memory_list", "memory_recall", "memory_save", "write_file"]);
+  });
+
+  it("prepareTurn digest gating: main sessions get the digest while ON, nothing while OFF, and sub-agent children NEVER get it (independent context)", async () => {
+    const project = createProject(db, { name: "MemGate", rootPath: join(dir, "root") });
+    saveMemory(db, { projectId: project.id, kind: "fact", content: "the sidecar port is 5178" });
+    const agent = createAgent(db, { name: "Gate", providerId: "openrouter", model: "test/mem-1" });
+    const keyring = new ProviderKeyring({ ACUTE_PROVIDER_OPENROUTER: "sk-test-mem" });
+    const systems: string[] = [];
+    const chat: ChatFn = async (input) => {
+      systems.push(input.system);
+      return { text: "ok", usage: { inputTokens: 1, outputTokens: 1, totalTokens: 2 }, toolCalls: [] };
+    };
+
+    // Main session, memory ON → digest present.
+    const main = createSession(db, { agentId: agent.id, mode: "single", projectId: project.id });
+    let outcome = await runSingleAgentTurn({ db, keyring, chat }, main.id, "hello");
+    expect(outcome.ok).toBe(true);
+    expect(systems[0]).toContain("## Project memory");
+
+    // Main session, memory OFF → NO digest section anywhere.
+    setMemorySettings(db, { enabled: false });
+    systems.length = 0;
+    const main2 = createSession(db, { agentId: agent.id, mode: "single", projectId: project.id });
+    outcome = await runSingleAgentTurn({ db, keyring, chat }, main2.id, "hello again");
+    expect(outcome.ok).toBe(true);
+    expect(systems[0]).not.toContain("## Project memory");
+    expect(systems[0]).not.toContain("the sidecar port is 5178");
+
+    // Sub-agent child, memory back ON → STILL no digest (context isolation:
+    // the owner directed sub-agents to run on their own context alone).
+    setMemorySettings(db, { enabled: true });
+    systems.length = 0;
+    const child = createSession(db, {
+      agentId: agent.id,
+      mode: "single",
+      projectId: project.id,
+      parentSessionId: main.id,
+      subRole: "researcher",
+    });
+    outcome = await runSingleAgentTurn({ db, keyring, chat }, child.id, "delegated subtask");
+    expect(outcome.ok).toBe(true);
+    expect(systems[0]).not.toContain("## Project memory");
+    expect(systems[0]).not.toContain("the sidecar port is 5178");
   });
 });

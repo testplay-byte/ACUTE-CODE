@@ -247,6 +247,18 @@ interface RewriteCtx {
   pageUrl: string;
   sessionId: string;
   ticket: string;
+  /** ROUND-49: the ORIGIN (scheme://host:port, no trailing slash) rewritten
+   * sub-resource URLs are stamped with — the sidecar's own address as the
+   * requesting client sees it (derived from the live request's Host header).
+   *
+   * WHY: rewriteHtml injects <base href="UPSTREAM"> so runtime-relative
+   * fetches land on the upstream origin. A path-relative rewrite
+   * (`/api/v1/browser/proxy?…`) resolves against that BASE — every CSS/JS/
+   * img sub-resource was being requested from the UPSTREAM site (which 404s
+   * them), so pages rendered as unstyled HTML with no scripts (the owner's
+   * round-48 report). Absolute URLs survive the base untouched. Undefined =
+   * legacy relative behavior (unit tests / non-HTTP callers). */
+  proxyOrigin?: string;
 }
 
 // ─────────────────────── private-network guard ─────────────────────────────
@@ -433,7 +445,11 @@ function buildProxyUrl(absoluteUrl: string, ctx: RewriteCtx): string {
     sessionId: ctx.sessionId,
     bt: ctx.ticket,
   });
-  return `${PROXY_PATH}?${query.toString()}`;
+  // ROUND-49: absolute when the request origin is known — see RewriteCtx.
+  // proxyOrigin (survives the injected <base href=upstream>); relative only
+  // for legacy callers that never set an origin.
+  const origin = ctx.proxyOrigin === undefined ? "" : ctx.proxyOrigin.replace(/\/+$/, "");
+  return `${origin}${PROXY_PATH}?${query.toString()}`;
 }
 
 type UrlKind = "link" | "asset" | "media" | "frame" | "form" | "srcset";
@@ -1316,6 +1332,23 @@ function registerBrowserRoutesInner(browser: FastifyInstance, token: string, db:
   });
 
   // ── GET/POST /browser/proxy — the workhorse ──────────────────────────────
+  /**
+   * ROUND-49: is this request a NAVIGATION (the iframe itself: an HTML
+   * document the user sees — errors render as the friendly HTML error page)
+   * or a SUB-RESOURCE (css/js/img/font the rewritten page pulled in — errors
+   * must be an EMPTY body of the upstream's content-type, or the browser
+   * parses our HTML error markup as CSS/JS and spews console noise)?
+   * sec-fetch-dest is the modern signal ("document"/"iframe" = navigation);
+   * the Accept header is the fallback (navigations always offer text/html).
+   */
+  const wantsHtmlErrorPage = (request: FastifyRequest): boolean => {
+    const dest = request.headers["sec-fetch-dest"];
+    if (typeof dest === "string") return dest === "document" || dest === "iframe";
+    const accept = request.headers.accept;
+    if (typeof accept === "string" && accept !== "") return /text\/html/i.test(accept);
+    return true; // no signals at all — assume navigation (safe default)
+  };
+
   const proxyHandler = async (request: FastifyRequest, reply: FastifyReply): Promise<FastifyReply> => {
     const query = request.query as Record<string, string | undefined>;
     const requestedUrl = query.url ?? "";
@@ -1348,6 +1381,19 @@ function registerBrowserRoutesInner(browser: FastifyInstance, token: string, db:
     // ROUND-46 (R46-d): the session's cookie profile decides which jar this
     // request cooks under (projectId-bound or the shared "_default").
     const jar = jars.for(session.projectId);
+
+    // ROUND-49: the sidecar's origin AS THIS CLIENT SEES IT (Host header —
+    // the same address the iframe navigation used). Every rewritten
+    // sub-resource URL is stamped with it so the injected
+    // <base href="upstream"> cannot hijack them onto the upstream origin.
+    // No Host header (HTTP/1.0 oddity) → leave undefined → relative rewrites
+    // (legacy behavior, still correct for the iframe's own document).
+    const hostHeader = request.headers.host;
+    const proxyOrigin =
+      typeof hostHeader === "string" && hostHeader !== ""
+        ? `${request.protocol}://${hostHeader}`
+        : undefined;
+    const htmlErrors = wantsHtmlErrorPage(request);
 
     if (requestedUrl === "") {
       return sendErrorPage(reply, new ProxyFailure(400, "BAD_REQUEST", "missing ?url= parameter"), "(no url requested)");
@@ -1403,6 +1449,18 @@ function registerBrowserRoutesInner(browser: FastifyInstance, token: string, db:
       }
 
       if (response.status >= 400) {
+        // ROUND-49: sub-resources get an EMPTY body with the upstream status
+        // (an HTML error page in place of a stylesheet/script is parse noise
+        // in the console and can masquerade as content); navigations keep the
+        // friendly error card.
+        if (!htmlErrors) {
+          const upstreamType = response.headers.get("content-type");
+          return reply
+            .code(response.status)
+            .header("cache-control", "no-store")
+            .type(upstreamType ?? "application/octet-stream")
+            .send(Buffer.alloc(0));
+        }
         return sendErrorPage(
           reply,
           new ProxyFailure(response.status, "UPSTREAM_STATUS", `upstream returned HTTP ${response.status}`),
@@ -1413,7 +1471,12 @@ function registerBrowserRoutesInner(browser: FastifyInstance, token: string, db:
       const buffer = await readCapped(response, MAX_BODY_BYTES);
       const contentType = response.headers.get("content-type") ?? "application/octet-stream";
       const finalUrl = response.url === "" ? target.toString() : response.url;
-      const ctx: RewriteCtx = { pageUrl: finalUrl, sessionId: session.sessionId, ticket: session.ticket };
+      const ctx: RewriteCtx = {
+        pageUrl: finalUrl,
+        sessionId: session.sessionId,
+        ticket: session.ticket,
+        ...(proxyOrigin !== undefined ? { proxyOrigin } : {}),
+      };
 
       const isHtml = /html/i.test(contentType) || /<!doctype html|<html\b/i.test(buffer.subarray(0, 512).toString("utf8"));
       const isCss = !isHtml && /css/i.test(contentType);
@@ -1445,7 +1508,18 @@ function registerBrowserRoutesInner(browser: FastifyInstance, token: string, db:
       }
       return reply.send(buffer);
     } catch (error) {
-      if (error instanceof ProxyFailure) return sendErrorPage(reply, error, requestedUrl);
+      if (error instanceof ProxyFailure) {
+        // ROUND-49: sub-resource fetch failures (502/timeout/size) also get
+        // the empty-body treatment — see wantsHtmlErrorPage.
+        if (!htmlErrors && (error.status === 502 || error.status === 504)) {
+          return reply
+            .code(error.status)
+            .header("cache-control", "no-store")
+            .type("application/octet-stream")
+            .send(Buffer.alloc(0));
+        }
+        return sendErrorPage(reply, error, requestedUrl);
+      }
       return sendErrorPage(
         reply,
         new ProxyFailure(502, "PROXY_ERROR", `proxy failure: ${error instanceof Error ? error.message : String(error)}`),

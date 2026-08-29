@@ -139,6 +139,10 @@ describe("openDatabase", () => {
       // ROUND-48 (R48-a): per-project colors — legacy default-color rows
       // backfilled round-robin from the 8-color PROJECT_PALETTE.
       { version: 18, name: "0018_project_colors.sql" },
+      // ROUND-49: repairs the default agent allowlist that 0014+0015
+      // accidentally narrowed from [] (= ALL tools) to just the appended
+      // orchestration/browser/memory tools.
+      { version: 19, name: "0019_repair_default_agent_tools.sql" },
     ]);
     expect(appliedSecond).toEqual(appliedFirst);
   });

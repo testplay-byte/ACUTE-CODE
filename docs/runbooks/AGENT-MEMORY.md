@@ -620,3 +620,29 @@ Format per entry: `N. TITLE (date, source)` → mistake → root cause → rule.
     production, prove the new tests fail on the old code (stash the fix,
     run them, restore) so you know the mock finally sees the class of bug
     it missed.
+
+68. **A migration that APPENDS to a "means-everything" sentinel destroys
+    the sentinel — and fresh-install tests can never see it.** The R49
+    root cause of "the main agent has no file tools": the default agent is
+    seeded with `allowed_tools = []`, which per ADR-0019 means ALL tools;
+    migrations 0014+0015 then `json_insert`-appended the new tools to that
+    empty array "when missing" — converting "all tools" into an explicit
+    allowlist of exactly the five appended tools on every database seeded
+    BEFORE those migrations ran. No test or battery ever caught it because
+    `openDatabase` runs migrations BEFORE the agent seed on a FRESH
+    database — the append finds no row and the agent later seeds as `[]`,
+    so every clean install (every sandbox round) was healthy while the
+    owner's long-lived Windows database was crippled. Compounding: the
+    crippled agent honestly REPORTED its five tools, and a sub-agent
+    (children run the parent's agent row) SAVED that observation to
+    project memory — the memory system then auto-injected "sub-agents have
+    no write_file" into every subsequent turn, teaching even repaired
+    agents to refuse work (the digest is now excluded from child turns,
+    and the memory master switch lets the owner kill the whole system).
+    RULE: before a migration mutates a column whose EMPTY/NULL value is a
+    meaningful sentinel ("all"/"none"/"inherit"), check what the seed
+    writes AND what order openDatabase runs seeds vs migrations; and test
+    damaged-database repair against a database built the OLD way
+    (hand-applied migrations + hand-seeded rows), never only against fresh
+    installs. When a stored "capability" claim contradicts a live report,
+    suspect a stale MEMORY before suspecting the code.

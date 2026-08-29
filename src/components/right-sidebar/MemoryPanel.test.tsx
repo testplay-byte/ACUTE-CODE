@@ -1,7 +1,7 @@
 // @vitest-environment happy-dom
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { cleanup, fireEvent, screen, waitFor } from "@testing-library/react";
-import { deleteProjectMemory, listProjectMemory } from "../../lib/api";
+import { deleteProjectMemory, fetchMemorySettings, listProjectMemory } from "../../lib/api";
 import { MemoryPanel } from "./MemoryPanel";
 import type { RightSidebarTab } from "../../lib/right-sidebar-store";
 import { renderWithProviders, resetTestState } from "../../test-utils";
@@ -11,6 +11,8 @@ import { renderWithProviders, resetTestState } from "../../test-utils";
 vi.mock("../../lib/api", () => ({
   listProjectMemory: vi.fn(),
   deleteProjectMemory: vi.fn().mockResolvedValue(undefined),
+  // ROUND-49: the memory master switch — default ON (no OFF notice).
+  fetchMemorySettings: vi.fn().mockResolvedValue({ enabled: true }),
 }));
 
 afterEach(cleanup);
@@ -19,6 +21,7 @@ beforeEach(() => {
   resetTestState();
   vi.mocked(listProjectMemory).mockReset().mockResolvedValue([]);
   vi.mocked(deleteProjectMemory).mockReset().mockResolvedValue(undefined);
+  vi.mocked(fetchMemorySettings).mockReset().mockResolvedValue({ enabled: true });
 });
 
 const now = () => new Date().toISOString();
@@ -58,6 +61,26 @@ describe("MemoryPanel (ROUND-44 R44-a)", () => {
     // Footer hint row.
     expect(screen.getByText("Auto-loaded into every agent turn")).toBeTruthy();
     expect(screen.queryByText("fact")).toBeNull();
+  });
+
+  it("ROUND-49: shows the OFF notice (memory disabled) while keeping the list browsable; no notice while ON", async () => {
+    vi.mocked(listProjectMemory).mockResolvedValue([
+      memFactory({ id: "mem_1", kind: "fact", content: "The sidecar runs on port 5178." }),
+    ]);
+    vi.mocked(fetchMemorySettings).mockResolvedValue({ enabled: false });
+    renderWithProviders(<MemoryPanel projectId="prj_1" tab={tab} />);
+
+    const notice = await screen.findByTestId("memory-off-notice");
+    expect(notice.textContent).toContain("turned off");
+    // The list is still rendered (pruning while off is a feature).
+    expect(await screen.findByText("The sidecar runs on port 5178.")).toBeTruthy();
+
+    // ON → no notice.
+    cleanup();
+    vi.mocked(fetchMemorySettings).mockResolvedValue({ enabled: true });
+    renderWithProviders(<MemoryPanel projectId="prj_1" tab={tab} />);
+    expect(await screen.findByText("The sidecar runs on port 5178.")).toBeTruthy();
+    expect(screen.queryByTestId("memory-off-notice")).toBeNull();
   });
 
   it("renders memories grouped by kind with colored chips", async () => {

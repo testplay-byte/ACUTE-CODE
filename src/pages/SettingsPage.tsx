@@ -2,11 +2,13 @@ import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link, useSearchParams } from "react-router";
 import {
+  fetchMemorySettings,
   fetchOrchestrationSettings,
+  updateMemorySettings,
   updateOrchestrationSettings,
   type OrchestrationSettings,
 } from "../lib/api";
-import { ArrowLeft, Bot, Moon, Palette, Server, SlidersHorizontal, Sun, Users } from "lucide-react";
+import { ArrowLeft, Bot, Brain, Moon, Palette, Server, SlidersHorizontal, Sun, Users } from "lucide-react";
 import { useConfigStore } from "../lib/config-store";
 import { useThemeStore } from "../lib/theme-store";
 import { THEMES, getContrastText } from "../lib/themes";
@@ -407,6 +409,7 @@ function AdvancedTab() {
           wave) — keeps them discoverable via Advanced meanwhile. */}
       <SubAgentsSection />
       <OrchestrationCard />
+      <MemoryCard />
       <section
         className="rounded-lg p-4"
         style={{ background: styles.card, border: bdr("1.5px", styles.border) }}
@@ -547,6 +550,95 @@ function OrchestrationCard() {
           style={{ background: styles.accent, color: styles.accentText }}
         >
           {update.isPending ? "Saving…" : "Save"}
+        </button>
+      </div>
+    </section>
+  );
+}
+
+/* ── ROUND-49: the memory master switch (owner: "maybe try giving me a
+ * setting in the settings to turn off this memory functionality") ───────── */
+
+function MemoryCard() {
+  const styles = useThemeStyles();
+  const queryClient = useQueryClient();
+  const settingsQuery = useQuery({
+    queryKey: ["memory-settings"],
+    queryFn: fetchMemorySettings,
+  });
+  const [error, setError] = useState<string | null>(null);
+
+  const toggle = useMutation({
+    mutationFn: (enabled: boolean) => updateMemorySettings({ enabled }),
+    onSuccess: () => {
+      setError(null);
+      // The very next agent turn reads this setting server-side; the panel
+      // list query stays as-is (rows are still browsable/deletable while
+      // off — deleting works regardless of the switch).
+      void queryClient.invalidateQueries({ queryKey: ["memory-settings"] });
+    },
+    onError: (err: Error) => setError(err.message),
+  });
+
+  const current = settingsQuery.data;
+  if (settingsQuery.isLoading || current === undefined) {
+    return (
+      <section className="rounded-lg p-4" style={{ background: styles.card, border: bdr("1.5px", styles.border) }}>
+        <span className="text-[12px] font-mono" style={{ color: styles.textTertiary }}>
+          loading memory settings…
+        </span>
+      </section>
+    );
+  }
+
+  const busy = toggle.isPending;
+
+  return (
+    <section
+      className="rounded-lg p-4"
+      style={{ background: styles.card, border: bdr("1.5px", styles.border) }}
+      aria-label="Agent memory"
+    >
+      <div className="mb-3 flex items-center gap-2">
+        <Brain size={13} style={{ color: styles.accent, opacity: 0.7 }} />
+        <span className="text-[12px] font-semibold" style={{ color: styles.text }}>
+          Agent memory
+        </span>
+      </div>
+      <div className="flex items-start gap-3">
+        <div className="min-w-[200px] flex-1">
+          <div className="text-[12.5px] font-bold" style={{ color: styles.text }}>
+            Project memory system
+          </div>
+          <div className="text-[11px]" style={{ color: styles.textTertiary }}>
+            While ON, agents auto-load each project's saved facts, decisions and preferences at
+            every turn and can save new ones (memory_save / memory_recall / memory_list). Turn it
+            OFF to run every session on its own context alone — no memory is injected and the
+            memory tools are not offered. Saved memories are kept and restored when re-enabled.
+          </div>
+          {error ? (
+            <div className="mt-1.5 text-[11px]" style={{ color: "#e5484d" }} role="alert">
+              {error}
+            </div>
+          ) : null}
+        </div>
+        <button
+          type="button"
+          role="switch"
+          aria-checked={current.enabled}
+          aria-label="Toggle agent memory"
+          disabled={busy}
+          onClick={() => toggle.mutate(!current.enabled)}
+          className="relative h-6 w-11 shrink-0 cursor-pointer rounded-full transition-colors disabled:cursor-wait disabled:opacity-60"
+          style={{
+            background: current.enabled ? styles.accent : withAlpha(styles.text, 0.18),
+            border: bdr("1.5px", current.enabled ? styles.accent : styles.border),
+          }}
+        >
+          <span
+            className="absolute top-1/2 block h-4.5 w-4.5 -translate-y-1/2 rounded-full bg-white shadow transition-all"
+            style={{ left: current.enabled ? "calc(100% - 21px)" : "3px", height: 18, width: 18 }}
+          />
         </button>
       </div>
     </section>

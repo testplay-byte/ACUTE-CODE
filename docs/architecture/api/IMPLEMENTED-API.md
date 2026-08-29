@@ -1,4 +1,4 @@
-<!-- last-reviewed: 2026-08-29 round-48 -->
+<!-- last-reviewed: 2026-08-29 round-49 -->
 # IMPLEMENTED API — the shipped surface
 
 **Truth = this file.** Verified against `agent-core/src/server.ts` at
@@ -142,7 +142,7 @@ headers):
 |---|---|
 | `POST /browser/session` | `{sessionId, projectId?}` → `{ticket}` — mints a random 192-bit ticket bound to the tab's session (rotates on re-mint; 12h TTL refreshed on use; dies with session eviction/deletion). **ROUND-48 (R48-d): this is now the ONLY route that rotates a ticket** — see the ROUND-48 section. ROUND-46 (R46-d): the optional `projectId` binds the session's COOKIE PROFILE (sticky for the session; absent → the shared `_default` profile — the frontend does not send it yet). |
 | `DELETE /browser/session` | `{sessionId}` → drops tab state. The profile's cookie jar deliberately SURVIVES (closing a tab is not logging out). |
-| `GET /browser/proxy?url=…&sessionId=…&bt=…` | Server-side fetch of the page: manual redirect walk (≤10 hops, every hop re-guarded), 20s deadline, 25 MiB cap, Range pass-through (206). HTML is rewritten (`<base href=FINAL-URL>` injected, links/assets/forms/styles re-proxied with `bt` echoed, script bodies placeholder-protected, CSP/XFO meta stripped, escape hatch injected before `</body>`); CSS `url()`/`@import` rewritten; everything else byte passthrough. Framing headers (XFO/CSP/COOP/COEP/HSTS) are never forwarded. Invalid/absent ticket → HTML 401 page (renders in-iframe). Scheme allowlist http/https; private-net guard (hostname-only, v1). ROUND-46 (R46-d): every hop runs through the per-profile COOKIE JAR (`browser_cookies`, migration 0017 — RFC 6265-lite parse, Cookie replayed per hop, Set-Cookie ingested per hop, durable across sidecar restarts, ≤200/profile; cookie values never logged/routed/returned; client Cookie headers never forwarded). |
+| `GET /browser/proxy?url=…&sessionId=…&bt=…` | Server-side fetch of the page: manual redirect walk (≤10 hops, every hop re-guarded), 20s deadline, 25 MiB cap, Range pass-through (206). HTML is rewritten (`<base href=FINAL-URL>` injected, links/assets/forms/styles re-proxied with `bt` echoed, script bodies placeholder-protected, CSP/XFO meta stripped, escape hatch injected before `</body>`); CSS `url()`/`@import` rewritten; everything else byte passthrough. Framing headers (XFO/CSP/COOP/COEP/HSTS) are never forwarded. Invalid/absent ticket → HTML 401 page (renders in-iframe). Scheme allowlist http/https; private-net guard (hostname-only, v1). ROUND-46 (R46-d): every hop runs through the per-profile COOKIE JAR (`browser_cookies`, migration 0017 — RFC 6265-lite parse, Cookie replayed per hop, Set-Cookie ingested per hop, durable across sidecar restarts, ≤200/profile; cookie values never logged/routed/returned; client Cookie headers never forwarded). **ROUND-49: every rewritten sub-resource URL is now ABSOLUTE against the sidecar's own origin** (derived from the request's Host header) — the injected `<base href=upstream>` used to hijack path-relative rewrites onto the upstream origin (every CSS/JS/img 404'd there → blank unstyled pages). **ROUND-49: sub-resource errors (a CSS/JS/img fetch whose upstream answers ≥400 or fails 502/504) return an EMPTY body with the upstream status + content-type** (signal: `sec-fetch-dest`; fallback: Accept) — navigations (document/iframe) keep the friendly HTML error card. |
 | `POST /browser/proxy?url=…&bt=…` | Form passthrough (method + content-type + urlencoded/multipart body forwarded). |
 | `GET /browser/history?sessionId=` | `{entries:[{url,title,ts}], index, canBack, canForward}` (LRU ≤32 sessions / ≤50 entries, forward-tail truncation on branch). |
 | `POST /browser/navigate` | `{sessionId, url?, title?}` records/updates an entry, or `{sessionId, direction:"back"\|"forward"\|"reload"}` moves the pointer. **ROUND-48 (R48-d): no longer rotates the ticket** (uses non-rotating getOrCreate). |
@@ -165,6 +165,27 @@ The rewritten page's escape hatch posts `{type:"acute:open"\|"acute:title"\|"acu
   openrouter-scoped rewrite + audit row); migration 0014 appended
   `delegate_task` + `browser_control` to seeded template allowlists
   (delegation was unreachable from seeded agents before it).
+- **ROUND-49: `GET/PUT /settings/memory` → `{enabled: boolean}`** (default
+  `true`; `PUT` validates the type, else `400` with `body.enabled` named).
+  While `false`: no memory digest is injected into any system prompt, the
+  `memory_save/recall/list` tools are not registered, and the Memory panel
+  renders an OFF notice (data is preserved). Sub-agent children NEVER
+  receive the digest (independent context) regardless of the switch.
+- **ROUND-49: nested delegation.** Children below `MAX_DELEGATION_DEPTH = 3`
+  keep `delegate_task` (a sub-agent can spawn sub-agents — same tools, own
+  context + key slot); at/beyond the cap the runtime strips it (recursion
+  guard; `delegationDepth()` walks the `parent_session_id` chain,
+  cycle-safe). Migration **0019** repairs the default agent allowlist that
+  0014+0015 narrowed from `[]` (= ALL tools) to exactly the five appended
+  tools on pre-R43 databases (fingerprint-scoped: deliberate restrictions
+  and user-created agents are never touched).
+- **ROUND-49: the tool-intent nudge** (both turn paths). A zero-tool
+  iteration whose text EVIDENCES tool intent (names a real tool or
+  announces delegation) spends the turn's ONE in-memory correction
+  ("ACTUALLY CALLING the tool(s)…") and runs another iteration;
+  conversational zero-tool replies still end immediately (ROUND-33), a
+  second stall ends the turn, and the nudge is never persisted to the
+  event log.
 - **`turn.error` session event** (persisted): failed turns append
   `{code, message, model, providerId, providerError (secret-scrubbed),
   userSeq}` and flip the session back to `queued` (retryable). The SSE

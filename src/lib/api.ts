@@ -1542,6 +1542,28 @@ export async function updateOrchestrationSettings(
   });
 }
 
+/** ROUND-49 (owner directive: "a setting in the settings to turn off this
+ * memory functionality"): the memory master switch. When disabled, no
+ * memory digest is injected into any system prompt, the memory_save/recall/
+ * list tools are not registered, and the Memory panel shows an off notice.
+ * Saved memories are never deleted — a re-enable restores them. */
+export interface MemorySettings {
+  enabled: boolean;
+}
+
+export async function fetchMemorySettings(): Promise<MemorySettings> {
+  return request<MemorySettings>("/settings/memory");
+}
+
+export async function updateMemorySettings(
+  patch: Partial<MemorySettings>,
+): Promise<MemorySettings> {
+  return request<MemorySettings>("/settings/memory", {
+    method: "PUT",
+    json: patch,
+  });
+}
+
 /** Key-pool slot info (masked — values never leave the sidecar). */
 export interface KeyPoolSlot {
   slot: number;

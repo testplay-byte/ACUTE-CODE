@@ -51,7 +51,12 @@ import {
   searchSessions,
   updateSessionTitle,
 } from "./storage/sessions.js";
-import { getOrchestrationSettings, setOrchestrationSettings } from "./storage/settings.js";
+import {
+  getMemorySettings,
+  getOrchestrationSettings,
+  setMemorySettings,
+  setOrchestrationSettings,
+} from "./storage/settings.js";
 import { Orchestrator } from "./agents/orchestrator.js";
 import {
   getApproval,
@@ -2134,6 +2139,38 @@ export function buildServer(options: ServerOptions): FastifyInstance {
             // (catalog-validated in settings.ts) or null to re-inherit.
             ...(typeof raw.subagentModel === "string" ? { subagentModel: raw.subagentModel } : {}),
             ...(raw.subagentModel === null ? { subagentModel: null } : {}),
+          });
+        } catch (error) {
+          return reply.code(400).send(
+            errorBody("VALIDATION", error instanceof Error ? error.message : "invalid settings", {
+              field: "body",
+            }),
+          );
+        }
+      });
+
+      // ── ROUND-49: memory settings (the master switch) ───────────────────
+
+      scope.get("/settings/memory", async () => {
+        return getMemorySettings(db);
+      });
+
+      scope.put("/settings/memory", async (request, reply) => {
+        const body: unknown = request.body;
+        if (typeof body !== "object" || body === null || Array.isArray(body)) {
+          return reply
+            .code(400)
+            .send(errorBody("VALIDATION", "body must be a JSON object", { field: "body" }));
+        }
+        const raw = body as Record<string, unknown>;
+        if (raw.enabled !== undefined && typeof raw.enabled !== "boolean") {
+          return reply
+            .code(400)
+            .send(errorBody("VALIDATION", "body.enabled must be a boolean", { field: "body.enabled" }));
+        }
+        try {
+          return setMemorySettings(db, {
+            ...(typeof raw.enabled === "boolean" ? { enabled: raw.enabled } : {}),
           });
         } catch (error) {
           return reply.code(400).send(

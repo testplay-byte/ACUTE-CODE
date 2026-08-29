@@ -14,6 +14,64 @@ version number is single-sourced from the root `package.json`
 Planned next: the bundled installer (a single executable with the packaged
 sidecar — ADR-0003); today the launcher kit remains the distribution path.
 
+## [0.49.0] - 2026-08-29
+
+Round 49 — the file-tools repair round: every entry below fixes something
+found while actually using the app on Windows (the owner's second test
+session).
+
+### Fixed
+
+- **Agents have their file tools back.** On every install created before
+  the orchestration rounds, the default "Acute" agent silently lost its
+  entire project tool set (list_dir, read_file, write_file, edit_file,
+  create_dir, delete_file, search, git, run_command, …) — two older
+  migrations appended new tools to the agent's "all tools" allowlist and,
+  in doing so, turned it into an explicit allowlist of exactly those five
+  appended tools. Both the main agent and every sub-agent (children run
+  the same agent row) then honestly reported "I have no write_file or
+  list_dir". Migration 0019 repairs the damaged allowlist back to "all
+  tools" — fingerprint-scoped so deliberate restrictions are never
+  touched.
+- **The embedded browser renders full pages.** Pages loaded but appeared
+  as blank, unstyled HTML — every rewritten stylesheet/script/image URL
+  was path-relative, and the document's injected `<base href>` (pointing
+  at the upstream site) made the browser request them FROM THE UPSTREAM
+  SITE, which 404'd them. Rewrites are now absolute URLs pointing at the
+  sidecar proxy. Failed sub-resource fetches (404/500 CSS or JS) return an
+  empty body instead of an HTML error page, so the console stays clean.
+- **A model that "announces" a tool call without making one gets one
+  correction.** Free models sometimes answer a work request by writing the
+  tool call as a code block in plain text; the turn used to end right
+  there with nothing done. The agent now receives one in-turn nudge
+  ("actually call the tool") when — and only when — the reply evidences
+  tool intent; conversational replies still end immediately, and the
+  nudge never appears in the chat log.
+
+### Added
+
+- **Nested sub-agents.** A sub-agent can itself delegate to further
+  sub-agents (same tools, same workings, its own context and API key —
+  the only differences), up to a fixed depth of 3 levels; beyond the cap
+  the delegation tool is withheld so the fan-out stays bounded.
+- **The memory master switch** (Settings → Advanced). Turn the whole
+  agent-memory system off: no memory digest is injected into any system
+  prompt, the memory tools are not offered, and the Memory panel says so.
+  Saved memories are kept and restored when re-enabled.
+- **Sub-agents run on their own context alone.** The project memory digest
+  is no longer injected into sub-agent turns at all (main sessions keep it
+  while the switch is on) — stale memories can no longer teach a
+  sub-agent wrong facts about its own tool set.
+
+### Changed
+
+- **The app mark is now a cat.** The logo, favicon and Windows icon are a
+  white cat-face silhouette (pointed ears, almond eyes, tiny nose) on the
+  orange gradient tile.
+- **The standalone Sessions screen is gone** — route, component and all.
+  Sessions live on inside each project's chat, where they always actually
+  belonged.
+
 ## [0.48.0] - 2026-08-29
 
 Round 48 — the owner-test round: every entry below fixes something found while

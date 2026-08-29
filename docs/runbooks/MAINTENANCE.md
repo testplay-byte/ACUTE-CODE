@@ -1,4 +1,4 @@
-<!-- last-reviewed: 2026-08-29 round-48 -->
+<!-- last-reviewed: 2026-08-29 round-49 -->
 # MAINTENANCE — how to find things and change things safely
 
 **Status:** normative · **Established:** round-44 (owner directive: "complete the
@@ -111,9 +111,13 @@ the owner's DB never learns it, silently. Steps 3 and 4 are not optional.
 
 ### b) A new SQLite migration
 
-Example: `agent-core/src/storage/migrations/0015_memory.sql`; R48's
-`0018_project_colors.sql` is the newest (data-only backfill + audit row —
-no schema change).
+Example: `agent-core/src/storage/migrations/0015_memory.sql`; R49's
+`0019_repair_default_agent_tools.sql` is the newest (data-only REPAIR +
+audit row — no schema change; it resets the default agent's allowlist to
+`[]` when it exactly matches the fingerprint migrations 0014+0015 could
+produce from an empty array — see AGENT-MEMORY lesson #68 for why
+append-onto-a-sentinel migrations need exactly this repair pattern and a
+test that builds the database the OLD way).
 
 1. Next 4-digit number, `NNNN_kebab.sql`; `agent-core/src/storage/db.ts`
    discovers files matching `^(\d{4})_.+\.sql$` on boot and applies unseen ones
@@ -128,7 +132,14 @@ no schema change).
 
 ### c) A new settings section
 
-Example: Sub-agents (`src/pages/SettingsPage.tsx` + SubAgentsTab).
+Example: Sub-agents (`src/pages/SettingsPage.tsx` + SubAgentsTab). A
+settings CARD (no new tab) has a fresher example: R49's MemoryCard in the
+Advanced tab — `getMemorySettings`/`setMemorySettings` in
+`agent-core/src/storage/settings.ts`, `GET`/`PUT /api/v1/settings/memory`
+in `server.ts`, `fetch/updateMemorySettings` in `src/lib/api.ts`, the
+`role="switch"` toggle + query invalidation in SettingsPage.tsx, and the
+consumer-side notice in MemoryPanel.tsx — the full vertical slice in one
+commit.
 
 1. Add the tab to `TABS` in `src/pages/SettingsPage.tsx` (id → `?tab=` deep link).
 2. **Also add it to `SETTINGS_SECTIONS` in `src/components/shell/Sidebar.tsx`**

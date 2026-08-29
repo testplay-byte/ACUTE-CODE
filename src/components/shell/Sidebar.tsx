@@ -115,12 +115,14 @@ function ProjectTile({
 }
 
 /**
- * AcuteLogo (round-33; ROUND-48 redesign): the custom app mark — a rounded
- * orange tile with a SOLID angular white "A" plus a terminal-cursor
- * underscore ("A_" — the prompt heritage of a coding agent; owner round-48:
- * "the logo could be improved... currently it is just an A"). The old
- * 2-stroke A became a filled chevron silhouette with a punched counter, so
- * the mark stays crisp from 16px (favicon) to 52px (chat empty state).
+ * AcuteLogo (round-33; ROUND-49 redesign): the custom app mark — a rounded
+ * orange tile with a WHITE CAT-FACE SILHOUETTE (owner round-49: "the logo of
+ * our application should be a silhouette of the face of a cat… a proper SVG
+ * icon… detailed enough"). The mark: two pointed ears, a gently dipping
+ * crown, rounded cheeks tapering to a soft chin, two slanted almond eyes and
+ * a small triangular nose punched out of the silhouette (evenodd holes, the
+ * tile's gradient shows through) — detailed enough to read as a cat face
+ * from 16px (favicon) to 52px (chat empty state) without turning to mud.
  * Doubles as the sidebar toggle: hover morphs the mark into a panel-left
  * icon (cross-fade), click toggles. Used in the sidebar header, the mobile
  * drawer trigger, the floating show-sidebar button, and the chat empty
@@ -158,8 +160,9 @@ export function AcuteLogo({
           "inset 0 1px 0 rgba(255,255,255,0.32), 0 2px 10px rgba(255,107,44,0.35)",
       }}
     >
-      {/* The "A_" mark — a solid angular A (flat apex, punched counter) +
-          the terminal underscore. Fades out on hover when hoverToggle. */}
+      {/* The cat-face silhouette — solid white head with pointed ears; the
+          slanted almond eyes + triangular nose are evenodd punch-outs (the
+          tile gradient shows through). Fades out on hover when hoverToggle. */}
       <svg
         width={size}
         height={size}
@@ -174,11 +177,13 @@ export function AcuteLogo({
         }}
       >
         <path
-          d="M11.8 7.5 H13.4 L20 25 H16.4 L15 21.3 H10.2 L8.8 25 H5.2 Z M12.6 13.3 L14.5 18.4 H10.7 Z"
+          d="M7 13.4 L8 4.8 L12.6 8.8 Q14.2 7.9 16 7.9 Q17.8 7.9 19.4 8.8 L24 4.8 L25 13.4 Q25.5 18 21.2 22 Q18.6 24.8 16 25 Q13.4 24.8 10.8 22 Q6.5 18 7 13.4 Z
+             M10.4 15.4 Q11.9 13.2 13.8 14.2 Q12.4 16.3 10.4 15.4 Z
+             M21.6 15.4 Q20.1 13.2 18.2 14.2 Q19.6 16.3 21.6 15.4 Z
+             M14.9 17.9 H17.1 L16 19.5 Z"
           fill="#FFFFFF"
           fillRule="evenodd"
         />
-        <rect x="22.1" y="22.3" width="4.9" height="2.7" rx="0.6" fill="#FFFFFF" />
       </svg>
       {/* The panel-left toggle icon — fades in on hover when hoverToggle */}
       {hoverToggle && (
@@ -525,10 +530,10 @@ function UsageButton({ collapsed }: { collapsed: boolean }) {
   return <NavButton icon={BarChart3} label="Usage" active={active} collapsed={collapsed} onClick={() => navigate("/usage")} />;
 }
 
-/** ROUND-45: the session manager (search/fork two-pane screen) nav entry was
- * REMOVED in ROUND-48 (owner: "remove the sessions section completely as it
- * is not needed") — the /sessions route + SessionsScreen stay for deep
- * links, but the sidebar no longer lists them. */
+/** ROUND-48 removed the Sessions nav entry; ROUND-49 removed the /sessions
+ * route + SessionsScreen entirely (owner: "completely remove the sessions
+ * navigation. It should not be available anywhere in our project at all").
+ * Sessions live on INSIDE each project (its chat conversations). */
 
 /** Prominent Settings button (owner round-33): a card-style row — icon tile
  * in an accent-tinted square + bold label — visually distinct from the plain

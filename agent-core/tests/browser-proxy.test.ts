@@ -223,13 +223,17 @@ async function inject(options: {
     method: options.method,
     url: options.url,
     ...(options.payload === undefined ? {} : { payload: options.payload as object }),
-    headers: { authorization: `Bearer ${TOKEN}`, ...(options.headers ?? {}) },
+    // ROUND-49: a deterministic Host pins the sidecar origin the rewriter
+    // stamps into sub-resource URLs (see rewrittenProxyUrl below).
+    headers: { authorization: `Bearer ${TOKEN}`, host: SIDECAR_HOST, ...(options.headers ?? {}) },
   })) as LightMyRequestResponse;
 }
 
-/** Header-less request — what an iframe navigation actually looks like. */
+/** Header-less request — what an iframe navigation actually looks like.
+ * The Host header is NOT auth: real iframe navigations always carry it, and
+ * the rewriter needs it to stamp absolute sub-resource URLs. */
 async function iframeGet(url: string): Promise<LightMyRequestResponse> {
-  return (await app.inject({ method: "GET", url })) as LightMyRequestResponse;
+  return (await app.inject({ method: "GET", url, headers: { host: SIDECAR_HOST } })) as LightMyRequestResponse;
 }
 
 async function mintTicket(sessionId = SESSION): Promise<string> {
@@ -240,6 +244,20 @@ async function mintTicket(sessionId = SESSION): Promise<string> {
 
 function proxyUrl(target: string, ticket: string, sessionId = SESSION): string {
   return `/api/v1/browser/proxy?${new URLSearchParams({ url: target, sessionId, bt: ticket }).toString()}`;
+}
+
+/**
+ * ROUND-49: the origin rewritten sub-resource URLs must carry. rewriteHtml
+ * injects <base href="UPSTREAM"> into the document, so a path-relative
+ * rewrite (`/api/v1/browser/proxy?…`) resolves against the UPSTREAM origin —
+ * every CSS/JS/img request 404'd on the upstream site and pages rendered as
+ * unstyled HTML (the owner's round-48 report). Rewrites are now ABSOLUTE
+ * against the sidecar origin derived from the request's Host header.
+ */
+const SIDECAR_HOST = "sidecar.local:5178";
+const SIDECAR_ORIGIN = `http://${SIDECAR_HOST}`;
+function rewrittenProxyUrl(target: string, ticket: string, sessionId = SESSION): string {
+  return `${SIDECAR_ORIGIN}/api/v1/browser/proxy?${new URLSearchParams({ url: target, sessionId, bt: ticket }).toString()}`;
 }
 
 // ── HTML rewriting (the heart) ─────────────────────────────────────────────
@@ -264,18 +282,19 @@ describe("GET /browser/proxy — HTML rewrite", () => {
     expect(body).not.toContain("old.example");
     // In-document CSP meta is stripped.
     expect(body).not.toContain("Content-Security-Policy");
-    // Links/assets are re-proxied with the ticket echoed in.
-    expect(body).toContain(proxyUrl(`${upstreamBase}/about.html`, ticket));
-    expect(body).toContain(proxyUrl("https://external.example/x?y=1", ticket));
-    expect(body).toContain(proxyUrl(`${upstreamBase}/style.css`, ticket));
-    expect(body).toContain(proxyUrl(`${upstreamBase}/favicon.ico`, ticket));
-    expect(body).toContain(proxyUrl(`${upstreamBase}/app.js`, ticket));
-    expect(body).toContain(proxyUrl(`${upstreamBase}/pic.png`, ticket));
-    expect(body).toContain(proxyUrl("https://nested.example/embed", ticket));
-    expect(body).toContain(`action="${proxyUrl(`${upstreamBase}/search`, ticket)}`);
+    // Links/assets are re-proxied with the ticket echoed in — ABSOLUTE
+    // URLs (ROUND-49: rewrites must survive the injected <base href=upstream>).
+    expect(body).toContain(rewrittenProxyUrl(`${upstreamBase}/about.html`, ticket));
+    expect(body).toContain(rewrittenProxyUrl("https://external.example/x?y=1", ticket));
+    expect(body).toContain(rewrittenProxyUrl(`${upstreamBase}/style.css`, ticket));
+    expect(body).toContain(rewrittenProxyUrl(`${upstreamBase}/favicon.ico`, ticket));
+    expect(body).toContain(rewrittenProxyUrl(`${upstreamBase}/app.js`, ticket));
+    expect(body).toContain(rewrittenProxyUrl(`${upstreamBase}/pic.png`, ticket));
+    expect(body).toContain(rewrittenProxyUrl("https://nested.example/embed", ticket));
+    expect(body).toContain(`action="${rewrittenProxyUrl(`${upstreamBase}/search`, ticket)}`);
     // Inline style url() + action-less forms (action injected = current page).
-    expect(body).toContain(`url('${proxyUrl(`${upstreamBase}/bg.png`, ticket)}')`);
-    expect(body).toContain(`<form method="get" action="${proxyUrl(`${upstreamBase}/page.html`, ticket)}">`);
+    expect(body).toContain(`url('${rewrittenProxyUrl(`${upstreamBase}/bg.png`, ticket)}')`);
+    expect(body).toContain(`<form method="get" action="${rewrittenProxyUrl(`${upstreamBase}/page.html`, ticket)}">`);
     // javascript: href neutralized; already-proxied URL untouched.
     expect(body).toContain(`<a href="#">JS</a>`);
     expect(body).toContain(
@@ -291,23 +310,70 @@ describe("GET /browser/proxy — HTML rewrite", () => {
     // injected before </body>.
     expect(body.indexOf("window.__ACUTE_BROWSER__")).toBeGreaterThan(-1);
     expect(body.indexOf("__ACUTE_BROWSER__")).toBeLessThan(body.toLowerCase().lastIndexOf("</body>"));
+    // ROUND-49 (THE bug this round): no path-relative REWRITES remain. A
+    // relative /api/v1/browser/proxy?... inside a document whose
+    // <base href> points at the UPSTREAM origin resolves against that origin
+    // — every CSS/JS/img sub-resource 404'd upstream and pages rendered as
+    // unstyled HTML (owner round-48 report). All rewrites must be ABSOLUTE
+    // against the sidecar origin (SIDECAR_ORIGIN assertions above). The ONLY
+    // relative proxy URL left is a value that was ALREADY a proxy path in
+    // the source (the Keep link — a pass-through, not a rewrite).
+    const relativeProxyUrls = [...body.matchAll(/(?:href|src|action)="(\/api\/v1\/browser\/proxy\?[^"]*)"/g)].map(
+      (m) => m[1],
+    );
+    expect(relativeProxyUrls).toEqual([
+      `/api/v1/browser/proxy?url=${encodeURIComponent("https://keep.example/x")}&sessionId=tab-one&bt=deadbeef`,
+    ]);
+    expect(body).not.toContain(`url('/api/v1/browser/proxy?`);
+    expect(body).not.toContain(`url(/api/v1/browser/proxy?`);
+    expect(body).not.toContain(`url(/api/v1/browser/proxy?`);
+  });
+
+  it("ROUND-49: sub-resource errors return an EMPTY body with the upstream status (no HTML error page parsed as CSS/JS)", async () => {
+    const ticket = await mintTicket();
+    // A stylesheet fetch (sec-fetch-dest: style) for a MISSING upstream file
+    // (the mock's default 404).
+    const css = await app.inject({
+      method: "GET",
+      url: proxyUrl(`${upstreamBase}/missing.css`, ticket),
+      headers: { host: SIDECAR_HOST, "sec-fetch-dest": "style" },
+    });
+    expect(css.statusCode).toBe(404);
+    expect(css.body).toBe("");
+    // A script fetch (sec-fetch-dest: script) for a 500 upstream.
+    const js = await app.inject({
+      method: "GET",
+      url: proxyUrl(`${upstreamBase}/boom`, ticket),
+      headers: { host: SIDECAR_HOST, "sec-fetch-dest": "script" },
+    });
+    expect(js.statusCode).toBe(500);
+    expect(js.body).toBe("");
+    // A NAVIGATION (sec-fetch-dest: iframe — what the panel's own iframe
+    // sends) still gets the friendly HTML error card.
+    const nav = await app.inject({
+      method: "GET",
+      url: proxyUrl(`${upstreamBase}/missing`, ticket),
+      headers: { host: SIDECAR_HOST, "sec-fetch-dest": "iframe", accept: "text/html,application/xhtml+xml" },
+    });
+    expect(nav.statusCode).toBe(404);
+    expect(nav.body).toContain("Unable to load page");
   });
 
   it("absolute-izes relative URLs against nested page paths (page dir, ../, root)", async () => {
     const ticket = await mintTicket();
     const res = await iframeGet(proxyUrl(`${upstreamBase}/deep/guide/index.html`, ticket));
     expect(res.statusCode).toBe(200);
-    expect(res.body).toContain(proxyUrl(`${upstreamBase}/deep/guide/styles.css`, ticket));
-    expect(res.body).toContain(proxyUrl(`${upstreamBase}/deep/img/logo.png`, ticket));
-    expect(res.body).toContain(proxyUrl(`${upstreamBase}/root.js`, ticket));
+    expect(res.body).toContain(rewrittenProxyUrl(`${upstreamBase}/deep/guide/styles.css`, ticket));
+    expect(res.body).toContain(rewrittenProxyUrl(`${upstreamBase}/deep/img/logo.png`, ticket));
+    expect(res.body).toContain(rewrittenProxyUrl(`${upstreamBase}/root.js`, ticket));
   });
 
   it("rewrites every srcset candidate but leaves data: candidates inline", async () => {
     const ticket = await mintTicket();
     const res = await iframeGet(proxyUrl(`${upstreamBase}/page.html`, ticket));
-    expect(res.body).toContain(`srcset="${proxyUrl(`${upstreamBase}/a.png`, ticket)} 1x`);
-    expect(res.body).toContain(`${proxyUrl(`${upstreamBase}/b.png`, ticket)} 2x`);
-    expect(res.body).toContain(`${proxyUrl("https://cdn.example.com/c.png", ticket)} 3x`);
+    expect(res.body).toContain(`srcset="${rewrittenProxyUrl(`${upstreamBase}/a.png`, ticket)} 1x`);
+    expect(res.body).toContain(`${rewrittenProxyUrl(`${upstreamBase}/b.png`, ticket)} 2x`);
+    expect(res.body).toContain(`${rewrittenProxyUrl("https://cdn.example.com/c.png", ticket)} 3x`);
     // data: URL survives (comma re-merge keeps the base64 payload attached).
     expect(res.body).toContain("data:image/gif;base64,R0lGODlh");
   });
@@ -329,9 +395,9 @@ describe("GET /browser/proxy — CSS and binary", () => {
     const res = await iframeGet(proxyUrl(`${upstreamBase}/style.css`, ticket));
     expect(res.statusCode).toBe(200);
     expect(res.headers["content-type"]).toContain("text/css");
-    expect(res.body).toContain(`url(${proxyUrl(`${upstreamBase}/bg.png`, ticket)})`);
-    expect(res.body).toContain(`url('${proxyUrl(`${upstreamBase}/font.woff2`, ticket)}')`);
-    expect(res.body).toContain(`@import "${proxyUrl(`${upstreamBase}/more.css`, ticket)}"`);
+    expect(res.body).toContain(`url(${rewrittenProxyUrl(`${upstreamBase}/bg.png`, ticket)})`);
+    expect(res.body).toContain(`url('${rewrittenProxyUrl(`${upstreamBase}/font.woff2`, ticket)}')`);
+    expect(res.body).toContain(`@import "${rewrittenProxyUrl(`${upstreamBase}/more.css`, ticket)}"`);
     expect(res.body).toContain("url(data:image/gif;base64,R0lGODlh)");
   });
 

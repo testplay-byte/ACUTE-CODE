@@ -31,6 +31,8 @@ import { buildProjectSystemPrompt, readCustomRules } from "./prompts.js";
 import { getIndexSummary } from "../storage/index.js";
 // ROUND-44 (R44-a): the project memory digest for prompt injection.
 import { memoryDigest } from "../storage/memory.js";
+// ROUND-49: the memory master switch (Settings → Advanced).
+import { getMemorySettings } from "../storage/settings.js";
 import { lookupPricing } from "../storage/models.js";
 import { estimateMessageTokens, type ContextBudget } from "../context.js";
 // ROUND-46 (R46-b): context compaction — summarize the over-budget head
@@ -68,6 +70,66 @@ const COMPLETION_SIGNAL = /\b(Done\.|Task complete\.|Finished\.|All set\.|All do
 
 /** API.md §5.4: these session statuses refuse follow-up turns. */
 const TERMINAL_STATUSES: readonly SessionStatus[] = ["completed", "failed", "cancelled"];
+
+// ── ROUND-49: nested delegation (sub-agents may delegate too) ───────────────
+
+/**
+ * The maximum session DEPTH at which delegate_task is still offered. A main
+ * session is depth 0; its children 1; grandchildren 2; great-grandchildren 3.
+ * A session at depth < MAX may spawn children (so chains up to
+ * MAX_DELEGATION_DEPTH levels of sub-agents exist); at/beyond the cap the
+ * runtime strips delegate_task from the tool set — the recursion guard that
+ * keeps the fan-out finite by construction.
+ */
+export const MAX_DELEGATION_DEPTH = 3;
+
+/**
+ * Walks the parent_session_id chain to count how deep a session sits
+ * (main = 0). Cycle-safe (a visited set + a hard hop cap): the chain is
+ * written by the orchestrator's createSession so cycles cannot occur, but a
+ * corrupted/hand-edited database must never hang a turn.
+ */
+/**
+ * ROUND-49 (the live battery find): free/cheap models intermittently answer
+ * a WORK request by DESCRIBING the tool call in text ("I'll delegate this to
+ * a coder agent.\n\n```python\ndelegate_task(...)```") instead of emitting a
+ * real tool call — the outer loop's zero-tool-break then ends the turn with
+ * nothing done (exactly the owner's "the sub-agent did not actually do the
+ * work" complaint). The nudge: ONE bounded extra iteration that appends a
+ * correction message ("call the tool for real") — only when the reply's text
+ * EVIDENCES tool intent (mentions an actual tool name or delegation words),
+ * so conversational replies (ROUND-33's "hello, how are you" lesson) still
+ * break immediately.
+ */
+const TOOL_INTENT_NUDGE =
+  "You described an action but did not call any tool. Continue now by ACTUALLY CALLING the tool(s) — a real tool call, never text, pseudo-code, or a fenced block. If you believe the task is already complete, reply with a short final summary instead.";
+
+/** True when a zero-tool reply text mentions a real tool name or delegation
+ * words — the evidence threshold for spending the one nudge. */
+function toolIntentMentioned(text: string, toolNames: readonly string[]): boolean {
+  const lower = text.toLowerCase();
+  if (/\bsub-?agents?\b|\bdelegat/.test(lower)) return true;
+  for (const name of toolNames) {
+    if (name.includes("_") && lower.includes(name)) return true;
+  }
+  return false;
+}
+
+export function delegationDepth(db: SqliteDatabase, sessionId: string): number {
+  let depth = 0;
+  let cursor: string | null = sessionId;
+  const seen = new Set<string>([sessionId]);
+  const MAX_HOPS = 32;
+  while (cursor !== null && depth <= MAX_HOPS) {
+    const row = getSession(db, cursor);
+    if (row === undefined || row.parentSessionId === null) break;
+    if (seen.has(row.parentSessionId)) break;
+    seen.add(row.parentSessionId);
+    depth += 1;
+    cursor = row.parentSessionId;
+  }
+  return depth;
+}
 
 export interface AssistantMessage {
   seq: number;
@@ -378,6 +440,27 @@ async function prepareTurn(
   // write_file/edit_file/delete_file snapshot recording (checkpoints) were
   // silently dead in real turns while the tools existed on paper. Now wired
   // so todos persist + every mutating tool records a revertible snapshot.
+  // ROUND-49 (owner directives: sub-agents are "exactly like how the main
+  // agent works — the ONLY difference is the separate context and API keys",
+  // and "that same session should not be used for the sub-agents either"):
+  //
+  //  NESTED DELEGATION. A session at depth d (main = 0, child of main = 1,
+  //  grandchild = 2, …) may keep spawning sub-agents while d <
+  //  MAX_DELEGATION_DEPTH — a sub-agent can itself delegate, exactly like the
+  //  main agent. At/beyond the cap delegate_task is stripped from the tool
+  // set (the recursion guard — depth is bounded by construction, so the
+  // fan-out can never cycle or run away).
+  //
+  //  CONTEXT ISOLATION. Sub-agent children NEVER receive the project memory
+  // digest in their system prompt — their context is the delegated task text
+  // alone (plus project facts like the codebase index). Stale memories were
+  // actively poisoning sub-agent turns with wrong "you have no file tools"
+  // beliefs; the digest now flows ONLY into main-session turns, and only
+  // when the memory master switch (Settings → Advanced) is on.
+  const isChild = session.parentSessionId !== null;
+  const memoryEnabled = getMemorySettings(db).enabled;
+  const depth = delegationDepth(db, session.id);
+  const canDelegate = depth < MAX_DELEGATION_DEPTH;
   const turnSeq = lastSessionSeq(db, session.id) + 1;
   // ROUND-36 (ADR-0022): keyring + chat let the delegate_task tool spawn
   // child turns; `emit` is added per-path (the streamed turn forwards live
@@ -419,31 +502,28 @@ async function prepareTurn(
     }) => {
       appendSessionEvent(db, session.id, event);
     },
+    // ROUND-49: the memory master switch rides the deps so buildProjectTools
+    // can drop the memory_* tools entirely when the system is off.
+    memoryEnabled,
   };
-  // ROUND-40 (owner: "sub-agents are apparently not able to do multi rounds of
-  // tasks / they don't even do the actual researching"). ROOT CAUSE of the
-  // owner's complaint: the default "Acute" agent ships with allowedTools=[]
-  // (which per ADR-0019 means "ALL tools"), but the prior child-allowlist code
-  // filtered that empty array to [] then tripped a `length === 0` sentinel that
-  // substituted ["__none__"], stripping EVERY tool from the child. The model
-  // had nothing to call, so it wrote a one-shot "I'll research X… Done." text
-  // reply and the outer loop's `toolCalls.length === 0` break fired on iter 0.
-  // FIX: honor the "[] = ALL tools" contract for children too — a child gets
-  // ALL tools MINUS delegate_task (the one-level recursion guard, ADR-0022).
-  // An agent with an EXPLICIT non-empty allowlist keeps that allowlist minus
-  // delegate_task. The `["__none__"]` sentinel is gone entirely.
-  const isChild = session.parentSessionId !== null;
-  // `delegate_task` is a DYNAMIC tool (added at runtime by buildProjectTools
-  // when deps.keyring + deps.chat are present AND the allowlist permits it).
-  // It is NOT in the canonical TOOL_NAMES tuple — hence the `as readonly
-  // string[]` cast (without it TS narrows the tuple's literal union and
-  // flags the `!== "delegate_task"` comparison as always-true). The filter
-  // is defensive: if delegate_task ever joins TOOL_NAMES, children stay
-  // excluded (the one-level recursion guard).
+  // ROUND-40 → ROUND-49 (owner: "sub-agents … exactly like how the main agent
+  // works. Everything about it should be the same — the only difference is
+  // the separate context and API keys"). History: ROUND-40 fixed the
+  // ["__none__"] sentinel that stripped EVERY tool from children (the
+  // default "Acute" agent ships with allowedTools=[] which per ADR-0019
+  // means "ALL tools"). ROUND-49 goes further: children BELOW the delegation
+  // depth cap now keep delegate_task too (nested sub-agents); only sessions
+  // at/beyond MAX_DELEGATION_DEPTH have it stripped (the recursion guard).
+  // The `[]`-allowlist path passes the agent list through UNCHANGED so an
+  // empty list keeps meaning "ALL tools, including delegation".
+  const withoutDelegate = (list: readonly string[]): readonly string[] =>
+    (list.length === 0 ? (TOOL_NAMES as readonly string[]) : list).filter(
+      (t) => t !== "delegate_task",
+    );
   const childAllowList: readonly string[] | undefined = isChild
-    ? agent.allowedTools === undefined || agent.allowedTools.length === 0
-      ? (TOOL_NAMES as readonly string[]).filter((t) => t !== "delegate_task")
-      : agent.allowedTools.filter((t) => t !== "delegate_task")
+    ? canDelegate
+      ? agent.allowedTools
+      : withoutDelegate(agent.allowedTools)
     : agent.allowedTools;
   const tools =
     project !== undefined
@@ -468,11 +548,16 @@ async function prepareTurn(
         // has been indexed) so the agent has codebase awareness without
         // needing list_dir + read_file every turn.
         indexSummary: session.projectId !== null ? getIndexSummary(db, session.projectId) ?? undefined : undefined,
-        // ROUND-44 (R44-a): inject the newest project memories so the agent
-        // starts every turn knowing the project's durable knowledge. Empty
-        // digest (no memories yet) → undefined → no prompt section.
+        // ROUND-44 (R44-a) → ROUND-49: inject the newest project memories so
+        // the agent starts every turn knowing the project's durable
+        // knowledge — but ONLY in MAIN sessions while the memory master
+        // switch is on. Sub-agent children run with independent context (no
+        // digest), and a disabled memory system injects nothing anywhere.
+        // Empty digest (no memories yet) → undefined → no prompt section.
         memoryDigest:
-          session.projectId !== null ? memoryDigest(db, session.projectId) || undefined : undefined,
+          memoryEnabled && !isChild && session.projectId !== null
+            ? memoryDigest(db, session.projectId) || undefined
+            : undefined,
       })
     : agent.systemPrompt;
   return {
@@ -553,6 +638,11 @@ export async function runSingleAgentTurn(
   // skipped (no duplicates). Adapters/stubs without the callback keep the
   // ROUND-40 post-call behavior.
   let liveStepsEmitted = 0;
+  // ROUND-49: the intent-nudge state (see TOOL_INTENT_NUDGE). One nudge per
+  // turn max; the nudge message rides the NEXT iteration's in-memory message
+  // list only (never persisted — it is a machine correction, not a chat turn).
+  let nudgeUsed = false;
+  let pendingNudge: ChatTurnMessage | null = null;
 
   for (let outerIter = 0; outerIter < maxOuterLoops; outerIter++) {
     // ROUND-48 (R48-e1): a child whose parent was stopped finishes the
@@ -586,6 +676,10 @@ export async function runSingleAgentTurn(
       apiKey,
       model,
     });
+    if (pendingNudge !== null) {
+      messages.push(pendingNudge);
+      pendingNudge = null;
+    }
 
     const startedAt = Date.now();
     let result: ChatTurnOutput;
@@ -709,8 +803,20 @@ export async function runSingleAgentTurn(
 
     // ROUND-33 (owner report: "hello, how are you" kept planning + running
     // tools in an infinite loop): an iteration that produced a text reply
-    // with ZERO tool calls is a CONVERSATIONAL response — break.
+    // with ZERO tool calls is a CONVERSATIONAL response — break. ROUND-49
+    // exception: when the text EVIDENCES tool intent (it names a tool /
+    // announces delegation) the model stalled on the announce — spend the
+    // turn's ONE intent-nudge and let it try again for real.
     if (result.toolCalls.length === 0) {
+      if (
+        !nudgeUsed &&
+        tools !== undefined &&
+        toolIntentMentioned(result.text, Object.keys(tools))
+      ) {
+        nudgeUsed = true;
+        pendingNudge = { role: "user", content: TOOL_INTENT_NUDGE };
+        continue;
+      }
       break;
     }
 
@@ -893,6 +999,10 @@ export async function runStreamedAgentTurn(
   let totalRequests = 0;
   let lastAssistantEvent: { seq: number; ts: string; content: string } | null = null;
   let lastText = "";
+  // ROUND-49: the intent-nudge state (see TOOL_INTENT_NUDGE) — same contract
+  // as the sync path: one nudge per turn, in-memory only, never persisted.
+  let nudgeUsed = false;
+  let pendingNudge: ChatTurnMessage | null = null;
 
   for (let outerIter = 0; outerIter < maxOuterLoops; outerIter++) {
     // Re-assemble messages from the event log — ROUND-34: now WITH tool
@@ -912,6 +1022,10 @@ export async function runStreamedAgentTurn(
       model,
     });
     const messages = compaction.messages;
+    if (pendingNudge !== null) {
+      messages.push(pendingNudge);
+      pendingNudge = null;
+    }
     const usedTokens = estimateMessageTokens(messages);
     if (compaction.compacted && compaction.detail !== undefined) {
       emit({
@@ -1156,8 +1270,20 @@ export async function runStreamedAgentTurn(
     // running tools in an infinite loop): an iteration that produced a text
     // reply with ZERO tool calls is a CONVERSATIONAL response — the model
     // considered the request answered. Continuing would force the model to
-    // invent work nobody asked for. Break immediately.
+    // invent work nobody asked for. Break immediately. ROUND-49 exception:
+    // when the text EVIDENCES tool intent (it names a tool / announces
+    // delegation) the model stalled on the announce — spend the turn's ONE
+    // intent-nudge and let it try again for real.
     if (iterToolCalls === 0) {
+      if (
+        !nudgeUsed &&
+        tools !== undefined &&
+        toolIntentMentioned(iterAllText, Object.keys(tools))
+      ) {
+        nudgeUsed = true;
+        pendingNudge = { role: "user", content: TOOL_INTENT_NUDGE };
+        continue;
+      }
       break;
     }
 

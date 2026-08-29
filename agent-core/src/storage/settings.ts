@@ -15,6 +15,15 @@
  *                                 the models.ts catalog on write and must be
  *                                 tool-capable (children are mandated tool
  *                                 users — ROUND-39).
+ *
+ * ROUND-49 (owner directive: "maybe try giving me a setting in the settings
+ * to turn off this memory functionality"):
+ *   memory.enabled — the master switch for the agent MEMORY system (default
+ *                    true). When false: no memory digest is injected into
+ *                    any system prompt, the memory_save/recall/list tools
+ *                    are not registered, and the Memory panel says so. The
+ *                    memory TABLE is never dropped — data survives a
+ *                    re-enable untouched.
  */
 import type { SqliteDatabase } from "./db.js";
 import { getCatalogModel, isKnownCatalogModelId } from "./models.js";
@@ -101,4 +110,43 @@ export function setOrchestrationSettings(
     }
   }
   return getOrchestrationSettings(db);
+}
+
+// ── ROUND-49: memory settings (the master switch) ──────────────────────────
+
+export interface MemorySettings {
+  enabled: boolean;
+}
+
+export const MEMORY_DEFAULTS: MemorySettings = {
+  enabled: true,
+};
+
+const MEMORY_ENABLED_KEY = "memory.enabled";
+
+/** Reads a boolean setting ('true'/'false'; anything else = fallback). */
+function readBoolean(db: SqliteDatabase, key: string, fallback: boolean): boolean {
+  const row = db.prepare("SELECT value FROM settings WHERE key = ?").get(key) as
+    | { value: string }
+    | undefined;
+  if (row === undefined) return fallback;
+  if (row.value === "true") return true;
+  if (row.value === "false") return false;
+  return fallback;
+}
+
+export function getMemorySettings(db: SqliteDatabase): MemorySettings {
+  return { enabled: readBoolean(db, MEMORY_ENABLED_KEY, MEMORY_DEFAULTS.enabled) };
+}
+
+export function setMemorySettings(db: SqliteDatabase, patch: Partial<MemorySettings>): MemorySettings {
+  if (patch.enabled !== undefined) {
+    if (typeof patch.enabled !== "boolean") {
+      throw new Error("enabled must be a boolean");
+    }
+    db.prepare(
+      "INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+    ).run(MEMORY_ENABLED_KEY, String(patch.enabled));
+  }
+  return getMemorySettings(db);
 }

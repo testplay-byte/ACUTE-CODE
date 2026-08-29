@@ -281,6 +281,41 @@ describe("ROUND-36: sub-agent orchestration (ADR-0022)", () => {
     expect(invalid.statusCode).toBe(400);
   });
 
+  it("ROUND-49: memory settings round-trip via /settings/memory (the master switch)", async () => {
+    const initial = await authInject({ method: "GET", url: "/api/v1/settings/memory" });
+    expect(initial.statusCode).toBe(200);
+    expect(initial.json()).toEqual({ enabled: true });
+
+    const off = await authInject({
+      method: "PUT",
+      url: "/api/v1/settings/memory",
+      payload: { enabled: false },
+    });
+    expect(off.statusCode).toBe(200);
+    expect(off.json()).toEqual({ enabled: false });
+
+    // Persists across a GET.
+    const reread = await authInject({ method: "GET", url: "/api/v1/settings/memory" });
+    expect(reread.json()).toEqual({ enabled: false });
+
+    // Invalid payload → 400 with the field named.
+    const invalid = await authInject({
+      method: "PUT",
+      url: "/api/v1/settings/memory",
+      payload: { enabled: "yes" },
+    });
+    expect(invalid.statusCode).toBe(400);
+    expect(JSON.stringify(invalid.json())).toContain("body.enabled");
+
+    // Restore ON (other tests in this file rely on defaults).
+    const on = await authInject({
+      method: "PUT",
+      url: "/api/v1/settings/memory",
+      payload: { enabled: true },
+    });
+    expect(on.json()).toEqual({ enabled: true });
+  });
+
   it("key pool: slots are listed masked, written, and removed", async () => {
     const list = await authInject({ method: "GET", url: "/api/v1/providers/openrouter/keys" });
     expect(list.statusCode).toBe(200);
@@ -565,7 +600,7 @@ describe("ROUND-48 (R48-e1): sub-agent codes, signal forwarding, honest aborts",
     ]);
   });
 
-  it("children's system prompt omits the SUB-AGENTS section (no delegate_task for children); parents keep it", async () => {
+  it("ROUND-49: children KEEP the SUB-AGENTS section below the depth cap (nested delegation); at the cap it is omitted", async () => {
     const { buildProjectSystemPrompt } = await import("../src/agents/prompts");
     const base = { projectName: "P", rootPath: "/tmp/p", toolNames: ["read_file", "write_file", "run_command"] };
     expect(buildProjectSystemPrompt(base)).not.toContain("SUB-AGENTS (delegate_task)");
@@ -574,15 +609,18 @@ describe("ROUND-48 (R48-e1): sub-agent codes, signal forwarding, honest aborts",
     ).toContain("SUB-AGENTS (delegate_task)");
 
     // Integration: the ACTUAL child turn prompt (prepareTurn builds it from
-    // the child's real toolset — all tools MINUS delegate_task).
+    // the child's real toolset). ROUND-49: a depth-1 child of a main session
+    // runs with the FULL tool set INCLUDING delegate_task (the owner's
+    // "exactly like the main agent — only the context and keys differ");
+    // only sessions at/beyond MAX_DELEGATION_DEPTH lose it (recursion guard).
     const project = await authInject({
       method: "POST",
       url: "/api/v1/projects",
-      payload: { name: "R48 Prompt", rootPath: tempDir },
+      payload: { name: "R49 Prompt", rootPath: tempDir },
     });
     const projectId = project.json().id as string;
     const agent = createAgent(db, {
-      name: "R48 Prompt Agent",
+      name: "R49 Prompt Agent",
       providerId: "openrouter",
       model: "test/orch-1",
     });
@@ -592,17 +630,49 @@ describe("ROUND-48 (R48-e1): sub-agent codes, signal forwarding, honest aborts",
       systems.push(input.system);
       return { text: "done", usage: { inputTokens: 1, outputTokens: 1, totalTokens: 2 }, toolCalls: [] };
     };
+    const keyring = new ProviderKeyring({ ACUTE_PROVIDER_OPENROUTER: KEY });
 
+    // Depth-1 child: delegate_task PRESENT (nested delegation).
     const result = await new Orchestrator().delegateTask(
-      { db, keyring: new ProviderKeyring({ ACUTE_PROVIDER_OPENROUTER: KEY }), chat },
+      { db, keyring, chat },
       parent.id,
-      "prompt honesty check",
+      "prompt honesty check (depth 1)",
       "researcher",
     );
     expect(result.ok).toBe(true);
     expect(systems).toHaveLength(1);
+    expect(systems[0]).toContain("SUB-AGENTS (delegate_task)");
+    expect(systems[0]).toContain("write_file"); // full project toolset
+    const childId = result.sessionId as string;
+
+    // Depth-2 grandchild: still below MAX_DELEGATION_DEPTH (3) → keeps it too.
+    systems.length = 0;
+    const deep = await new Orchestrator().delegateTask(
+      { db, keyring, chat },
+      childId,
+      "prompt honesty check (depth 2)",
+      "coder",
+    );
+    expect(deep.ok).toBe(true);
+    expect(systems).toHaveLength(1);
+    expect(systems[0]).toContain("SUB-AGENTS (delegate_task)");
+    const grandchildId = deep.sessionId as string;
+
+    // Depth-3 great-grandchild: AT the cap (MAX_DELEGATION_DEPTH = 3 → a
+    // session at depth 3 can no longer delegate) → delegate_task STRIPPED
+    // (the recursion guard) while the project tools remain fully intact.
+    systems.length = 0;
+    const capped = await new Orchestrator().delegateTask(
+      { db, keyring, chat },
+      grandchildId,
+      "prompt honesty check (depth 3 — capped)",
+      "coder",
+    );
+    expect(capped.ok).toBe(true);
+    expect(systems).toHaveLength(1);
     expect(systems[0]).not.toContain("SUB-AGENTS (delegate_task)");
     expect(systems[0]).not.toContain("delegate_task"); // not in the tool list either
+    expect(systems[0]).toContain("write_file"); // project tools intact
     expect(systems[0]).toContain("You have access to these tools");
   });
 });
