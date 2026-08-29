@@ -11,6 +11,11 @@
  *     model persists orchestration.subagentModel (null clears it).
  *  4. The dedicated ?tab=subagents page renders, and Advanced hosts the same
  *     section meanwhile (sidebar entry is a separate owner's file).
+ *
+ * ROUND-47 (R47-c2) — the picker rows come from GET /models/catalog (the
+ * backend's MODEL_CATALOG) instead of a hand-copied local duplicate: rows
+ * render from the fixture, the recommended badge is data-driven, and a
+ * catalog failure renders an HONEST error + retry (never a hidden fallback).
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { cleanup, fireEvent, screen, waitFor } from "@testing-library/react";
@@ -18,13 +23,79 @@ import SubAgentsTab, { SubAgentsSection } from "./SubAgentsTab";
 import { SettingsPage } from "../../pages/SettingsPage";
 import { resetTestState, renderWithProviders } from "../../test-utils";
 import { useSettingsStore } from "../../lib/settings-store";
-import type { KeyPoolSlot } from "../../lib/api";
+import type { KeyPoolSlot, ModelsCatalog } from "../../lib/api";
 
 /* ── Stateful fetch mock (the sidecar API surface this tab touches) ───────── */
 
 const calls: Array<{ method: string; url: string; body?: unknown }> = [];
 let pool: KeyPoolSlot[] = [];
 let settings = { maxParallel: 5, perKeyLimit: 3, subagentModel: null as string | null };
+
+/** Small realistic GET /models/catalog fixture (R47-b contract shape):
+ * free+tools, free+tool-less (must render disabled), paid, and the
+ * recommended sub-agent default. */
+const CATALOG: ModelsCatalog = {
+  models: [
+    {
+      modelId: "z-ai/glm-5.2:free",
+      displayName: "Z.ai: GLM 5.2",
+      contextWindow: 256000,
+      maxOutputTokens: 65536,
+      inputPricePerMtok: 0,
+      inputPriceCachedPerMtok: 0,
+      outputPricePerMtok: 0,
+      free: true,
+      supportsTools: true,
+      supportsStructuredOutputs: true,
+      supportsVision: false,
+    },
+    {
+      modelId: "nvidia/nemotron-3.5-lightning:free",
+      displayName: "NVIDIA: Nemotron 3.5 Lightning",
+      contextWindow: 1000000,
+      maxOutputTokens: 32768,
+      inputPricePerMtok: 0,
+      inputPriceCachedPerMtok: 0,
+      outputPricePerMtok: 0,
+      free: true,
+      supportsTools: true,
+      supportsStructuredOutputs: true,
+      supportsVision: true,
+    },
+    {
+      modelId: "nvidia/nemotron-3.5-content-safety:free",
+      displayName: "NVIDIA: Nemotron 3.5 Content Safety",
+      contextWindow: 128000,
+      maxOutputTokens: 16384,
+      inputPricePerMtok: 0,
+      inputPriceCachedPerMtok: 0,
+      outputPricePerMtok: 0,
+      free: true,
+      supportsTools: false,
+      supportsStructuredOutputs: false,
+      supportsVision: false,
+    },
+    {
+      modelId: "openai/gpt-5.2",
+      displayName: "OpenAI: GPT-5.2",
+      contextWindow: 400000,
+      maxOutputTokens: 128000,
+      inputPricePerMtok: 1.25,
+      inputPriceCachedPerMtok: 0.125,
+      outputPricePerMtok: 10,
+      free: false,
+      supportsTools: true,
+      supportsStructuredOutputs: true,
+      supportsVision: true,
+    },
+  ],
+  defaultModelId: "z-ai/glm-5.2:free",
+  subagentDefaultModelId: "nvidia/nemotron-3.5-lightning:free",
+  recommendedModelIds: ["z-ai/glm-5.2:free", "nvidia/nemotron-3.5-lightning:free"],
+};
+
+/** What GET /models/catalog answers this test (true = fixture, false = 503). */
+let catalogOk = true;
 
 function jsonResponse(body: unknown): Response {
   return { status: 200, ok: true, text: async () => JSON.stringify(body) } as unknown as Response;
@@ -54,6 +125,17 @@ const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => 
       return jsonResponse({ keys: pool });
     }
   }
+  if (url.endsWith("/api/v1/models/catalog") && method === "GET") {
+    if (!catalogOk) {
+      return {
+        status: 503,
+        ok: false,
+        text: async () =>
+          JSON.stringify({ error: { code: "UNAVAILABLE", message: "catalog down (fixture)" } }),
+      } as unknown as Response;
+    }
+    return jsonResponse(CATALOG);
+  }
   if (url.endsWith("/api/v1/settings/orchestration")) {
     if (method === "GET") return jsonResponse(settings);
     if (method === "PUT") {
@@ -72,6 +154,7 @@ beforeEach(() => {
   calls.length = 0;
   pool = [];
   settings = { maxParallel: 5, perKeyLimit: 3, subagentModel: null };
+  catalogOk = true;
   useSettingsStore.setState({ modelsFreeOnly: true });
   vi.stubGlobal("fetch", fetchMock);
   fetchMock.mockClear();
@@ -98,6 +181,16 @@ describe("SubAgentsTab — rendering (ROUND-43 R43-5)", () => {
       screen.getByText(/Sub-agent traffic prefers these keys so parallel agents don't compete/),
     ).toBeTruthy();
     expect(screen.getByText("Sub-agent model")).toBeTruthy();
+    // ROUND-47 (R47-c2): the rows are FETCHED from GET /models/catalog —
+    // the de-drifted single source of truth, not a local copy.
+    await waitFor(() =>
+      expect(
+        calls.some((c) => c.method === "GET" && c.url.endsWith("/api/v1/models/catalog")),
+      ).toBe(true),
+    );
+    // Catalog rows render from the served fixture (display name + id + ctx).
+    await waitFor(() => expect(screen.getByText("Z.ai: GLM 5.2")).toBeTruthy());
+    expect(screen.getByText("256K")).toBeTruthy();
     // Default override state + the inherit picker row (both once the
     // orchestration query lands).
     await waitFor(() =>
@@ -182,7 +275,8 @@ describe("SubAgentsTab — model picker", () => {
     expect(screen.queryByText("openai/gpt-5.2")).toBeNull();
     // …while free entries (incl. the recommended sub-agent default) show.
     expect(screen.getByText("NVIDIA: Nemotron 3.5 Lightning")).toBeTruthy();
-    expect(screen.getByText("recommended")).toBeTruthy();
+    // The recommended badge is data-driven (catalog.subagentDefaultModelId).
+    expect(screen.getAllByText("recommended").length).toBe(1);
 
     fireEvent.click(screen.getByRole("button", { name: /all models/i }));
     await waitFor(() => expect(screen.getByText("openai/gpt-5.2")).toBeTruthy());
@@ -234,5 +328,33 @@ describe("SubAgentsTab — model picker", () => {
       expect(put?.body).toEqual({ subagentModel: null });
     });
     await waitFor(() => expect(screen.getByText("Cleared — inherits main model.")).toBeTruthy());
+  });
+
+  it("catalog fetch failure shows an honest error — never a hidden fallback copy (R47-c2)", async () => {
+    catalogOk = false;
+    renderWithProviders(<SubAgentsSection />);
+
+    // The backend's own failure message surfaces verbatim…
+    const alert = await screen.findByRole("alert");
+    expect(alert.textContent).toContain("Model catalog unavailable — catalog down (fixture)");
+    // …with a visible retry affordance…
+    expect(screen.getByRole("button", { name: "Retry loading the model catalog" })).toBeTruthy();
+    // …and ZERO model rows — no silent fallback to a baked-in catalog.
+    expect(screen.queryByRole("button", { name: /Use .* for sub-agents/ })).toBeNull();
+    expect(screen.queryByText("Z.ai: GLM 5.2")).toBeNull();
+  });
+
+  it("retry reloads the catalog and renders the picker rows (R47-c2)", async () => {
+    catalogOk = false;
+    renderWithProviders(<SubAgentsSection />);
+
+    await screen.findByRole("alert");
+    // Backend recovers → Retry refetches → the picker rows render from the catalog.
+    catalogOk = true;
+    fireEvent.click(screen.getByRole("button", { name: "Retry loading the model catalog" }));
+
+    await waitFor(() => expect(screen.getByText("Z.ai: GLM 5.2")).toBeTruthy());
+    expect(screen.getByRole("button", { name: "Use nvidia/nemotron-3.5-lightning:free for sub-agents" })).toBeTruthy();
+    expect(screen.getByText("recommended")).toBeTruthy();
   });
 });

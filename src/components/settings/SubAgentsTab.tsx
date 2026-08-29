@@ -7,6 +7,7 @@ import { withAlpha } from "../dashboard/helpers";
 import { filterModelsForPicker, useSettingsStore } from "../../lib/settings-store";
 import {
   fetchKeyPool,
+  fetchModelsCatalog,
   fetchOrchestrationSettings,
   removeKeyPoolSlot,
   setKeyPoolSlot,
@@ -28,8 +29,10 @@ import {
  *     /providers/openrouter/keys/N pool routes. Slot 0 (the owner's primary
  *     key) is NEVER touched; the orchestrator already prefers pool slots for
  *     sub-agent traffic so parallel children don't compete with main chats.
- *  2. Sub-agent model — picker over the wave-1 free catalog, honoring the
- *     shared modelsFreeOnly pref, persisted as orchestration.subagentModel
+ *  2. Sub-agent model — picker over the SERVED model catalog (GET
+ *     /models/catalog — ROUND-47 R47-c2; the hand-copied 47-entry
+ *     SUBAGENT_MODEL_CATALOG that used to live here is deleted), honoring
+ *     the shared modelsFreeOnly pref, persisted as orchestration.subagentModel
  *     (null = "Inherits main model"). Only tool-capable models are
  *     selectable — sub-agents are mandated tool users (ROUND-39).
  */
@@ -47,91 +50,23 @@ const SUBAGENT_PROVIDER_ID = "openrouter";
 const SUBAGENT_KEY_SLOTS = [2, 3, 4] as const;
 const MAX_POOL_SLOT = 31;
 
-/** Mirrors agent-core SUBAGENT_DEFAULT_MODEL_ID (the browser bundle can't
- * import the sidecar package — duplicate kept deliberately, like wave-1's
- * isFreeModelEntry). */
-const SUBAGENT_RECOMMENDED_ID = "nvidia/nemotron-3.5-lightning:free";
-
-/**
- * Frontend copy of the wave-1 model catalog (agent-core storage/models.ts —
- * 18 free + 28 paid, recommended order first). The backend validates
- * subagentModel against the same catalog, so this list is exactly the set
- * the picker can persist. `tools` = supportsTools (tool-less entries are
- * rendered but disabled).
- */
-const SUBAGENT_MODEL_CATALOG = [
-  { id: "z-ai/glm-5.2:free", name: "Z.ai: GLM 5.2", ctx: 256000, free: true, tools: true },
-  { id: "minimax/minimax-m3:free", name: "MiniMax: MiniMax M3", ctx: 1048576, free: true, tools: true },
-  { id: "thinkingmachines/inkling-small:free", name: "Thinking Machines: Inkling Small", ctx: 1048576, free: true, tools: true },
-  { id: "nvidia/nemotron-3.5-lightning:free", name: "NVIDIA: Nemotron 3.5 Lightning", ctx: 1000000, free: true, tools: true },
-  { id: "poolside/laguna-s-2.1:free", name: "Poolside: Laguna S 2.1", ctx: 262144, free: true, tools: true },
-  { id: "cohere/north-mini-code:free", name: "Cohere: North Mini Code", ctx: 256000, free: true, tools: true },
-  { id: "openrouter/free", name: "Free Models Router", ctx: 200000, free: true, tools: true },
-  { id: "dots-studio/dots-3-note-preview:free", name: "Dots Studio: Dots3-Note Preview", ctx: 512000, free: true, tools: true },
-  { id: "google/gemma-4-26b-a4b-it:free", name: "Google: Gemma 4 26B A4B", ctx: 262144, free: true, tools: true },
-  { id: "google/gemma-4-31b-it:free", name: "Google: Gemma 4 31B", ctx: 262144, free: true, tools: true },
-  { id: "liquid/lfm-2.5-2.6b:free", name: "LiquidAI: LFM2.5-2.6B", ctx: 65536, free: true, tools: true },
-  { id: "minimax/minimax-m2.7:free", name: "MiniMax: MiniMax M2.7", ctx: 196608, free: true, tools: true },
-  { id: "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free", name: "NVIDIA: Nemotron 3 Nano Omni", ctx: 256000, free: true, tools: true },
-  { id: "nvidia/nemotron-3-super-120b-a12b:free", name: "NVIDIA: Nemotron 3 Super", ctx: 262144, free: true, tools: true },
-  { id: "nvidia/nemotron-3-ultra-550b-a55b:free", name: "NVIDIA: Nemotron 3 Ultra", ctx: 1000000, free: true, tools: true },
-  { id: "nvidia/nemotron-3.5-content-safety:free", name: "NVIDIA: Nemotron 3.5 Content Safety", ctx: 128000, free: true, tools: false },
-  { id: "poolside/laguna-xs-2.1:free", name: "Poolside: Laguna XS 2.1", ctx: 262144, free: true, tools: true },
-  { id: "thinkingmachines/inkling:free", name: "Thinking Machines: Inkling", ctx: 1048576, free: true, tools: true },
-  { id: "anthropic/claude-opus-4.5", name: "Anthropic: Claude Opus 4.5", ctx: 200000, free: false, tools: true },
-  { id: "anthropic/claude-sonnet-4.5", name: "Anthropic: Claude Sonnet 4.5", ctx: 1000000, free: false, tools: true },
-  { id: "anthropic/claude-haiku-4.5", name: "Anthropic: Claude Haiku 4.5", ctx: 200000, free: false, tools: true },
-  { id: "openai/gpt-5.2", name: "OpenAI: GPT-5.2", ctx: 400000, free: false, tools: true },
-  { id: "openai/gpt-5.1", name: "OpenAI: GPT-5.1", ctx: 400000, free: false, tools: true },
-  { id: "openai/gpt-5-mini", name: "OpenAI: GPT-5 Mini", ctx: 400000, free: false, tools: true },
-  { id: "openai/gpt-5-nano", name: "OpenAI: GPT-5 Nano", ctx: 400000, free: false, tools: true },
-  { id: "openai/o4-mini", name: "OpenAI: o4 Mini", ctx: 200000, free: false, tools: true },
-  { id: "openai/o3", name: "OpenAI: o3", ctx: 200000, free: false, tools: true },
-  { id: "openai/gpt-4.1", name: "OpenAI: GPT-4.1", ctx: 1047576, free: false, tools: true },
-  { id: "openai/gpt-4o", name: "OpenAI: GPT-4o", ctx: 128000, free: false, tools: true },
-  { id: "openai/gpt-4o-mini", name: "OpenAI: GPT-4o-mini", ctx: 128000, free: false, tools: true },
-  { id: "google/gemini-3.1-pro-preview", name: "Google: Gemini 3.1 Pro Preview", ctx: 1048576, free: false, tools: true },
-  { id: "google/gemini-3.7-flash", name: "Google: Gemini 3.7 Flash", ctx: 1048576, free: false, tools: true },
-  { id: "google/gemini-2.5-pro", name: "Google: Gemini 2.5 Pro", ctx: 1048576, free: false, tools: true },
-  { id: "google/gemini-2.5-flash", name: "Google: Gemini 2.5 Flash", ctx: 1048576, free: false, tools: true },
-  { id: "x-ai/grok-4.6", name: "xAI: Grok 4.6", ctx: 500000, free: false, tools: true },
-  { id: "x-ai/grok-build-0.1", name: "xAI: Grok Build 0.1", ctx: 256000, free: false, tools: true },
-  { id: "deepseek/deepseek-v3.2", name: "DeepSeek: DeepSeek V3.2", ctx: 163840, free: false, tools: true },
-  { id: "deepseek/deepseek-r1", name: "DeepSeek: R1", ctx: 64000, free: false, tools: true },
-  { id: "qwen/qwen3-max", name: "Qwen: Qwen3 Max", ctx: 262144, free: false, tools: true },
-  { id: "qwen/qwen3-coder", name: "Qwen: Qwen3 Coder 480B A35B", ctx: 262144, free: false, tools: true },
-  { id: "moonshotai/kimi-k2-thinking", name: "MoonshotAI: Kimi K2 Thinking", ctx: 262144, free: false, tools: true },
-  { id: "moonshotai/kimi-k2", name: "MoonshotAI: Kimi K2 0711", ctx: 131072, free: false, tools: true },
-  { id: "z-ai/glm-4.6", name: "Z.ai: GLM 4.6", ctx: 204800, free: false, tools: true },
-  { id: "minimax/minimax-m2.7", name: "MiniMax: MiniMax M2.7", ctx: 204800, free: false, tools: true },
-  { id: "meta-llama/llama-4-maverick", name: "Meta: Llama 4 Maverick", ctx: 1048576, free: false, tools: true },
-  { id: "mistralai/mistral-large-2512", name: "Mistral: Mistral Large 3 2512", ctx: 262144, free: false, tools: true },
-] as const;
-
 function formatCtx(ctx: number): string {
   return ctx >= 1_000_000 ? `${Math.round(ctx / 1_048_576)}M` : `${Math.round(ctx / 1000)}K`;
 }
 
-/**
- * The orchestration payload widened with the R43-5 field. api.ts's
- * OrchestrationSettings interface is owned by another wave — the runtime
- * payload already carries subagentModel, so this local widening is honest
- * and conflict-free.
- */
-type SubagentOrchestration = OrchestrationSettings & { subagentModel: string | null };
-
-async function fetchSubagentSettings(): Promise<SubagentOrchestration> {
-  return (await fetchOrchestrationSettings()) as SubagentOrchestration;
+// ROUND-47 (R47-c2): OrchestrationSettings gained `subagentModel` in api.ts
+// (R47-c1) — the local widening that used to bridge the gap is deleted; the
+// picker talks to the typed API surface directly.
+async function fetchSubagentSettings(): Promise<OrchestrationSettings> {
+  return fetchOrchestrationSettings();
 }
 
 async function saveSubagentSettings(patch: {
   maxParallel?: number;
   perKeyLimit?: number;
   subagentModel?: string | null;
-}): Promise<SubagentOrchestration> {
-  return (await updateOrchestrationSettings(
-    patch as Partial<OrchestrationSettings>,
-  )) as SubagentOrchestration;
+}): Promise<OrchestrationSettings> {
+  return updateOrchestrationSettings(patch);
 }
 
 /* ── Card 1: sub-agent API key paste slots ────────────────────────────────── */
@@ -358,6 +293,19 @@ function SubAgentModelCard() {
     queryFn: fetchSubagentSettings,
   });
 
+  // ROUND-47 (R47-c2): the model catalog is FETCHED, not hand-copied — GET
+  // /models/catalog serves agent-core's MODEL_CATALOG (single source of
+  // truth). The 47-entry local duplicate that used to live here was exactly
+  // the drift class the tool drift guard exists for (AGENT-MEMORY #65).
+  // Constants on the wire → generous staleTime; no auto-retry — an honest
+  // error card with a retry button beats a silent retry loop.
+  const catalogQuery = useQuery({
+    queryKey: ["models-catalog"],
+    queryFn: fetchModelsCatalog,
+    staleTime: 10 * 60 * 1000,
+    retry: false,
+  });
+
   const modelsFreeOnly = useSettingsStore((s) => s.modelsFreeOnly);
   const setModelsFreeOnly = useSettingsStore((s) => s.setModelsFreeOnly);
 
@@ -371,19 +319,7 @@ function SubAgentModelCard() {
     onError: (err: Error) => setMsg(err.message),
   });
 
-  if (settingsQuery.isLoading || settingsQuery.data === undefined) {
-    return (
-      <section
-        className="rounded-[16px] border-[1.5px] p-4"
-        style={{ background: styles.card, borderColor: styles.border }}
-        aria-label="Sub-agent model (temporary)"
-      >
-        <span className="text-[12px] font-mono" style={{ color: styles.textTertiary }}>
-          loading sub-agent model settings…
-        </span>
-      </section>
-    );
-  }
+  const settingsPending = settingsQuery.isLoading || settingsQuery.data === undefined;
   if (settingsQuery.isError) {
     return (
       <section
@@ -397,19 +333,78 @@ function SubAgentModelCard() {
       </section>
     );
   }
+  // ROUND-47 (R47-c2): honest catalog failure — NO hidden fallback copy of
+  // the catalog. The backend's own message + a retry affordance; the picker
+  // simply doesn't render until the truth is available.
+  if (catalogQuery.isError) {
+    return (
+      <section
+        className="rounded-[16px] border-[1.5px] p-4 flex flex-col gap-2.5"
+        style={{ background: styles.card, borderColor: styles.border }}
+        aria-label="Sub-agent model (temporary)"
+      >
+        <div className="flex items-center gap-2">
+          <Cpu size={13} style={{ color: styles.accent, opacity: 0.8 }} />
+          <span className="text-[13px] font-bold" style={{ color: styles.text }}>
+            Sub-agent model <span style={{ color: styles.textTertiary }}>(temporary)</span>
+          </span>
+        </div>
+        <p className="text-[11px]" style={{ color: "#ef4444" }} role="alert">
+          Model catalog unavailable — {catalogQuery.error instanceof Error ? catalogQuery.error.message : String(catalogQuery.error)}
+        </p>
+        <div>
+          <button
+            onClick={() => void catalogQuery.refetch()}
+            aria-label="Retry loading the model catalog"
+            className="h-8 px-3 rounded-[8px] text-[11px] font-bold"
+            style={{ background: withAlpha(styles.accent, 0.12), color: styles.accent }}
+          >
+            Retry
+          </button>
+        </div>
+      </section>
+    );
+  }
 
-  const selected = settingsQuery.data.subagentModel;
-  const selectedEntry = SUBAGENT_MODEL_CATALOG.find((m) => m.id === selected);
+  const settings = settingsQuery.data;
+  const catalog = catalogQuery.data;
+  if (settingsPending || settings === undefined || catalog === undefined) {
+    return (
+      <section
+        className="rounded-[16px] border-[1.5px] p-4"
+        style={{ background: styles.card, borderColor: styles.border }}
+        aria-label="Sub-agent model (temporary)"
+      >
+        <span className="text-[12px] font-mono" style={{ color: styles.textTertiary }}>
+          {settingsPending || settings === undefined ? "loading sub-agent model settings…" : "loading the model catalog…"}
+        </span>
+      </section>
+    );
+  }
 
+  const selected = settings.subagentModel;
+  const selectedEntry = catalog.models.find((m) => m.modelId === selected);
+
+  // CatalogModel → the picker row shape the shared free-only filter expects.
+  // The `free` flag drives the filter (identical to the old local catalog's
+  // free column: free ⇒ $0 input price, paid ⇒ null = never "free").
   const toPickerRows = () =>
-    SUBAGENT_MODEL_CATALOG.map((m) => ({
-      ...m,
-      modelId: m.id,
+    catalog.models.map((m) => ({
+      modelId: m.modelId,
+      displayName: m.displayName,
+      contextWindow: m.contextWindow,
+      free: m.free,
+      supportsTools: m.supportsTools,
       inputPricePerMtok: m.free ? 0 : null,
     }));
 
   const rows = filterModelsForPicker(toPickerRows(), modelsFreeOnly);
   const freeCount = filterModelsForPicker(toPickerRows(), true).length;
+  // Data-driven "recommended" pin (ROUND-47 R47-c2): this is the SUB-AGENT
+  // surface, so the badge stays on the sub-agent default — the recommended
+  // id (it rides in recommendedModelIds) the orchestrator actually launches
+  // children on. Identical visible UX to the old hardcoded nemotron const.
+  const recommendedId = catalog.subagentDefaultModelId;
 
   return (
     <section
@@ -447,7 +442,7 @@ function SubAgentModelCard() {
           </span>
         ) : (
           <span className="text-[12px] font-bold min-w-0 truncate" style={{ color: styles.text }}>
-            {selectedEntry?.name ?? selected}
+            {selectedEntry?.displayName ?? selected}
             <span className="font-mono text-[11px] ml-1.5" style={{ color: styles.textTertiary }}>
               {selected}
             </span>
@@ -464,7 +459,7 @@ function SubAgentModelCard() {
         >
           {([
             { id: "free", label: `Free only (${freeCount})`, active: modelsFreeOnly, pick: () => setModelsFreeOnly(true) },
-            { id: "all", label: `All models (${SUBAGENT_MODEL_CATALOG.length})`, active: !modelsFreeOnly, pick: () => setModelsFreeOnly(false) },
+            { id: "all", label: `All models (${catalog.models.length})`, active: !modelsFreeOnly, pick: () => setModelsFreeOnly(false) },
           ] as const).map((seg) => (
             <button
               key={seg.id}
@@ -505,16 +500,16 @@ function SubAgentModelCard() {
 
         <div className="max-h-64 overflow-y-auto">
           {rows.map((m) => {
-            const disabled = !m.tools;
-            const isSelected = selected === m.id;
-            const recommended = m.id === SUBAGENT_RECOMMENDED_ID;
+            const disabled = !m.supportsTools;
+            const isSelected = selected === m.modelId;
+            const recommended = m.modelId === recommendedId;
             return (
               <button
-                key={m.id}
-                onClick={() => !disabled && saveModel.mutate(m.id)}
+                key={m.modelId}
+                onClick={() => !disabled && saveModel.mutate(m.modelId)}
                 disabled={disabled}
-                aria-label={disabled ? `${m.id} (unavailable)` : `Use ${m.id} for sub-agents`}
-                title={disabled ? "tool calling required" : m.id}
+                aria-label={disabled ? `${m.modelId} (unavailable)` : `Use ${m.modelId} for sub-agents`}
+                title={disabled ? "tool calling required" : m.modelId}
                 className="w-full flex items-center gap-2 px-3 py-2 border-b last:border-b-0 text-left disabled:cursor-not-allowed"
                 style={{
                   borderColor: styles.borderSubtle,
@@ -527,7 +522,7 @@ function SubAgentModelCard() {
                     className="text-[12px] font-bold truncate"
                     style={{ color: disabled ? styles.textTertiary : styles.text }}
                   >
-                    {m.name}
+                    {m.displayName}
                   </span>
                   {recommended && (
                     <span
@@ -547,10 +542,10 @@ function SubAgentModelCard() {
                   )}
                 </span>
                 <span className="font-mono text-[10px] shrink-0" style={{ color: styles.textTertiary }}>
-                  {m.id}
+                  {m.modelId}
                 </span>
                 <span className="text-[10px] shrink-0 tabular-nums" style={{ color: styles.textTertiary }}>
-                  {formatCtx(m.ctx)}
+                  {formatCtx(m.contextWindow)}
                 </span>
                 {disabled ? (
                   <span className="text-[9.5px] font-bold shrink-0" style={{ color: "#D64545" }}>

@@ -15,11 +15,30 @@ import {
 } from "lucide-react";
 import { useThemeStyles } from "../../lib/use-theme-styles";
 import { withAlpha } from "../dashboard/helpers";
-import { useConfigStore } from "../../lib/config-store";
 import { filterModelsForPicker, isFreeModelEntry, useSettingsStore } from "../../lib/settings-store";
 import { isTauri } from "../../lib/sidecar";
-import { fetchKeyPool } from "../../lib/api";
-import type { ProviderView } from "../onboarding/providers-api";
+import { nextFreeSlot } from "../../lib/key-pool";
+import {
+  createProvider,
+  deleteProvider,
+  deleteProviderModelConfig,
+  fetchKeyPool,
+  fetchProviderModelConfig,
+  fetchProviderModels,
+  fetchProviders,
+  removeKeyPoolSlot,
+  setKeyPoolSlot,
+  storeProviderKey,
+  testProviderConnection,
+  updateProvider,
+  updateProviderModelConfig,
+  upsertProviderModelConfig,
+  type ProviderModelConfig,
+  type ProviderModelConfigPatch,
+  type ProviderPatch,
+  type ProviderTestResult,
+  type ProviderView,
+} from "../../lib/api";
 
 /**
  * ModelsProvidersTab — ROUND-37 REBUILD (owner directive):
@@ -40,42 +59,18 @@ import type { ProviderView } from "../onboarding/providers-api";
  * resurrect it; re-adding from the dialog clears the tombstone).
  */
 
-/* ── API plumbing ─────────────────────────────────────────────────────────── */
+/* ── API plumbing ───────────────────────────────────────────────────────────
+ * ROUND-47 (R47-c1): the local useApi() wrapper is GONE — this component used
+ * to carry its own third HTTP plumbing layer beside src/lib/api.ts and
+ * onboarding/providers-api.ts. Every provider CRUD / key / connection-test /
+ * models-config call now goes through the canonical src/lib/api.ts fns
+ * (typed envelopes + ApiError — see the ROUND-47 section there). */
 
-interface ModelConfig {
-  id: string;
-  providerId: string;
-  modelId: string;
-  displayName: string;
-  contextWindow: number | null;
-  inputPricePerMtok: number | null;
-  outputPricePerMtok: number | null;
-  hidden: boolean;
-}
-
-function useApi() {
-  const { baseUrl, token } = useConfigStore.getState();
-  return async function api<T>(
-    path: string,
-    init?: { method?: string; json?: unknown },
-  ): Promise<T> {
-    const res = await fetch(`${baseUrl}/api/v1${path}`, {
-      method: init?.method ?? "GET",
-      headers: {
-        ...(init?.json !== undefined ? { "content-type": "application/json" } : {}),
-        ...(token ? { Authorization: `Bearer ${token}` } : {}),
-      },
-      body: init?.json !== undefined ? JSON.stringify(init.json) : undefined,
-    });
-    if (res.status === 204) return undefined as T;
-    const body = (await res.json()) as Record<string, unknown>;
-    if (!res.ok) {
-      const err = body.error as { message?: string } | undefined;
-      throw new Error(err?.message ?? `HTTP ${res.status}`);
-    }
-    return body as T;
-  };
-}
+/** ROUND-47 (R47-c1): browser-dev honesty — the sidecar's keyring is
+ * in-memory, so keys stored through the browser dev UI do not survive a
+ * restart (the desktop app's OS secure store is the durable path). */
+const EPHEMERAL_KEY_NOTE =
+  "Browser-dev keys live in server memory only — they reset on restart; use credentials.txt (launcher) for durable keys.";
 
 /** The three wire formats the runtime speaks (ROUND-37). */
 const API_FORMATS: Array<{ id: string; label: string; hint: string }> = [
@@ -137,17 +132,16 @@ const formatLabel = (id: string | undefined): string =>
 
 export function ModelsProvidersTab() {
   const styles = useThemeStyles();
-  const api = useApi();
   const queryClient = useQueryClient();
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [adding, setAdding] = useState(false);
 
   const providersQuery = useQuery({
     queryKey: ["settings-providers"],
-    queryFn: () => api<{ providers: ProviderView[] }>("/providers"),
+    queryFn: () => fetchProviders(),
   });
   // ROUND-37: ONE flat list — every provider together, order = created.
-  const providers = providersQuery.data?.providers ?? [];
+  const providers = providersQuery.data ?? [];
 
   const invalidate = () =>
     void queryClient.invalidateQueries({ queryKey: ["settings-providers"] });
@@ -326,7 +320,6 @@ function ProviderDetailPane({
   onDeleted: () => void;
 }) {
   const styles = useThemeStyles();
-  const api = useApi();
   const queryClient = useQueryClient();
 
   const [showKey, setShowKey] = useState(false);
@@ -337,27 +330,56 @@ function ProviderDetailPane({
   const [baseUrlDraft, setBaseUrlDraft] = useState(provider.baseUrl ?? "");
   const [saveMsg, setSaveMsg] = useState<string | null>(null);
   const [confirmDelete, setConfirmDelete] = useState(false);
+  // ROUND-47 (R47-c1): the test surface got explicit selectors — WHICH key
+  // (primary or a held pool slot) and WHICH model (or reachability-only) —
+  // instead of an invisible "primary key, no model" default.
+  const [testKeyChoice, setTestKeyChoice] = useState<"primary" | number>("primary");
+  const [testModel, setTestModel] = useState<string>(""); // "" = reachability only
   const [testState, setTestState] = useState<
-    { kind: "idle" } | { kind: "testing" } | { kind: "ok"; ms: number } | { kind: "fail"; message: string }
+    | { kind: "idle" }
+    | { kind: "testing" }
+    | { kind: "ok"; ms: number; model?: string; note?: string }
+    | { kind: "fail"; message: string }
   >({ kind: "idle" });
 
   const modelsQuery = useQuery({
     queryKey: ["settings-provider-models", provider.id],
-    queryFn: () => api<{ models: ModelConfig[] }>(`/providers/${provider.id}/models-config`),
+    queryFn: () => fetchProviderModelConfig(provider.id),
   });
-  const models = modelsQuery.data?.models ?? [];
+  const models = modelsQuery.data ?? [];
+
+  // ROUND-47 (R47-c1): the key-pool listing feeds the test key selector.
+  // SAME query key as KeyPoolSection's — one shared cache entry per provider.
+  const poolQuery = useQuery({
+    queryKey: ["key-pool", provider.id],
+    queryFn: () => fetchKeyPool(provider.id),
+  });
+  const heldPoolSlots = (poolQuery.data ?? [])
+    .filter((k) => k.slot > 0 && k.hasKey)
+    .map((k) => k.slot);
+
+  // ROUND-47 (R47-c1): the provider's LIVE catalog — feeds the test model
+  // selector AND ModelListSection (hoisted from there; same query key as
+  // before so both keep sharing one cache entry). Fails soft — offline or
+  // custom providers fall back to the configured rows only.
+  const catalogQuery = useQuery({
+    queryKey: ["settings-provider-models-catalog", provider.id],
+    queryFn: () => fetchProviderModels(provider.id),
+    retry: false,
+  });
+  const catalogIds = catalogQuery.data ?? [];
 
   const saveKey = useMutation({
     mutationFn: async (value: string) => {
       // Tauri: keys route through the shell into the OS secure store
       // (ADR-0012). Browser dev: the sidecar keyring endpoint.
       if (isTauri()) {
-        const { storeProviderKey } = await import("../onboarding/providers-api");
-        const ok = await storeProviderKey(provider.id, value);
+        const { storeProviderKey: storeViaShell } = await import("../onboarding/providers-api");
+        const ok = await storeViaShell(provider.id, value);
         if (!ok) throw new Error("the shell refused the key store request");
         return;
       }
-      await api(`/providers/${provider.id}/key`, { method: "PUT", json: { value } });
+      await storeProviderKey(provider.id, value);
     },
     onSuccess: () => {
       setKeyInput("");
@@ -368,8 +390,7 @@ function ProviderDetailPane({
   });
 
   const saveDetails = useMutation({
-    mutationFn: (patch: Record<string, unknown>) =>
-      api(`/providers/${provider.id}`, { method: "PATCH", json: patch }),
+    mutationFn: (patch: ProviderPatch) => updateProvider(provider.id, patch),
     onSuccess: () => {
       setSaveMsg("Saved.");
       setTimeout(() => setSaveMsg(null), 2000);
@@ -379,7 +400,7 @@ function ProviderDetailPane({
   });
 
   const removeProvider = useMutation({
-    mutationFn: () => api<void>(`/providers/${provider.id}`, { method: "DELETE" }),
+    mutationFn: () => deleteProvider(provider.id),
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: ["settings-provider-models"] });
       onDeleted();
@@ -389,14 +410,21 @@ function ProviderDetailPane({
 
   const runTest = async () => {
     setTestState({ kind: "testing" });
-    const started = Date.now();
     try {
-      const result = await api<{ ok: boolean; message?: string }>(`/providers/${provider.id}/test`, {
-        method: "POST",
-        json: {},
+      // ROUND-47 (R47-c1): key + model scope travel to the backend (R47-b
+      // contract); latency is the SERVER-measured probe time, and an
+      // ok:false answer arrives at HTTP 200 — shown honestly, never thrown.
+      const result: ProviderTestResult = await testProviderConnection(provider.id, {
+        ...(testKeyChoice !== "primary" ? { slot: testKeyChoice } : {}),
+        ...(testModel !== "" ? { model: testModel } : {}),
       });
       if (result.ok) {
-        setTestState({ kind: "ok", ms: Date.now() - started });
+        setTestState({
+          kind: "ok",
+          ms: result.latencyMs ?? 0,
+          model: result.model,
+          note: result.message,
+        });
       } else {
         setTestState({ kind: "fail", message: result.message ?? "provider rejected the probe" });
       }
@@ -617,15 +645,58 @@ function ProviderDetailPane({
           <p className="mt-1 text-[10.5px]" style={{ color: styles.textTertiary }}>
             Stored in the OS secure store — never in the database or logs.
           </p>
+          {/* ROUND-47 (R47-c1): browser-dev honesty — the sidecar keyring is
+              in-memory, so browser-stored keys do not survive a restart. */}
+          {!isTauri() && (
+            <p className="mt-1 text-[10.5px]" style={{ color: styles.textTertiary, opacity: 0.75 }}>
+              {EPHEMERAL_KEY_NOTE}
+            </p>
+          )}
         </div>
         {/* ── ROUND-36: the API key POOL (sub-agent keys) ─────────────── */}
         <KeyPoolSection providerId={provider.id} />
 
-        {/* Test connection */}
-        <div className="flex items-center gap-3 flex-wrap">
+        {/* Test connection — ROUND-47 (R47-c1): WHICH key + WHICH model are
+            explicit now (key selector over the primary + held pool slots,
+            model selector over the live catalog; "(reachability only)" is
+            the honest default — a cheap ping that does NOT prove the key). */}
+        <div className="flex items-center gap-2.5 flex-wrap">
+          <select
+            aria-label="Test key"
+            title="Which key the probe uses"
+            value={testKeyChoice === "primary" ? "primary" : String(testKeyChoice)}
+            onChange={(e) =>
+              setTestKeyChoice(e.target.value === "primary" ? "primary" : Number(e.target.value))
+            }
+            className="h-9 rounded-[10px] border-[1.5px] px-2 text-[11.5px] font-bold outline-none cursor-pointer"
+            style={{ background: styles.bg, borderColor: styles.border, color: styles.textSecondary }}
+          >
+            <option value="primary">Primary key</option>
+            {heldPoolSlots.map((slot) => (
+              <option key={slot} value={String(slot)}>
+                Pool slot {slot}
+              </option>
+            ))}
+          </select>
+          <select
+            aria-label="Test model"
+            title="A model upgrades the ping to a real one-token completion"
+            value={testModel}
+            onChange={(e) => setTestModel(e.target.value)}
+            disabled={catalogQuery.isFetching && catalogIds.length === 0}
+            className="h-9 max-w-[260px] rounded-[10px] border-[1.5px] px-2 text-[11.5px] font-bold outline-none cursor-pointer disabled:opacity-50"
+            style={{ background: styles.bg, borderColor: styles.border, color: styles.textSecondary }}
+          >
+            <option value="">(reachability only)</option>
+            {catalogIds.map((id) => (
+              <option key={id} value={id}>
+                {id}
+              </option>
+            ))}
+          </select>
           <button
             onClick={() => void runTest()}
-            disabled={testState.kind === "testing" || !provider.hasKey}
+            disabled={testState.kind === "testing" || (testKeyChoice === "primary" && !provider.hasKey)}
             className="h-9 px-3.5 rounded-[10px] border-[1.5px] text-[12px] font-bold flex items-center gap-1.5 disabled:opacity-50"
             style={{ background: styles.bg, borderColor: styles.border, color: styles.textSecondary }}
           >
@@ -635,6 +706,7 @@ function ProviderDetailPane({
           {testState.kind === "ok" && (
             <span className="text-[11px] font-bold" style={{ color: "#22c55e" }}>
               <Check size={11} className="inline" /> Connected · {testState.ms}ms
+              {testState.model ? ` · ${testState.model}` : ""}
             </span>
           )}
           {testState.kind === "fail" && (
@@ -642,9 +714,15 @@ function ProviderDetailPane({
               {testState.message}
             </span>
           )}
-          {!provider.hasKey && (
+          {testKeyChoice === "primary" && !provider.hasKey && (
             <span className="text-[11px]" style={{ color: styles.textTertiary }}>
               Save a key first to test.
+            </span>
+          )}
+          {/* the backend's own reachability-only message — surfaced, not hardcoded */}
+          {testState.kind === "ok" && testState.note && (
+            <span className="text-[10.5px]" style={{ color: styles.textTertiary }}>
+              {testState.note}
             </span>
           )}
           {provider.apiFormat === "anthropic-messages" && (
@@ -655,8 +733,17 @@ function ProviderDetailPane({
         </div>
       </div>
 
-      {/* Model list */}
-      <ModelListSection providerId={provider.id} models={models} />
+      {/* Model list — ROUND-47 (R47-c1): the live catalog query lives in the
+          detail pane now (the test model selector shares it); passed down. */}
+      <ModelListSection
+        providerId={provider.id}
+        models={models}
+        catalog={{
+          ids: catalogIds,
+          isFetching: catalogQuery.isFetching,
+          isError: catalogQuery.isError,
+        }}
+      />
     </div>
   );
 }
@@ -673,7 +760,6 @@ function AddProviderDialog({
   onCreated: (id: string) => void;
 }) {
   const styles = useThemeStyles();
-  const api = useApi();
   const [presetId, setPresetId] = useState<string | null>(null);
   const preset = PRESETS.find((p) => p.id === presetId) ?? null;
   const [name, setName] = useState("");
@@ -696,15 +782,16 @@ function AddProviderDialog({
   const create = useMutation({
     mutationFn: async (): Promise<{ id: string; keyError?: string }> => {
       const isPreset = presetId !== null && presetId !== "custom";
-      const created = await api<{ id: string }>("/providers", {
-        method: "POST",
-        json: {
-          name: name.trim(),
-          baseUrl: baseUrl.trim(),
-          apiFormat,
-          // Presets re-claim their reserved id (resurrects a deleted built-in).
-          ...(isPreset ? { id: presetId } : {}),
-        },
+      // ROUND-47 (R47-c1): the canonical api.ts fn — same wire shape the
+      // dialog always sent (name / baseUrl / apiFormat / preset id; the key
+      // NEVER rides in the create body — it goes to the dedicated key route
+      // or the Tauri shell so no create/list envelope can leak it).
+      const created = await createProvider({
+        name: name.trim(),
+        baseUrl: baseUrl.trim(),
+        apiFormat,
+        // Presets re-claim their reserved id (resurrects a deleted built-in).
+        ...(isPreset ? { id: presetId } : {}),
       });
       if (key.trim()) {
         // Under Tauri, keys MUST route through the shell into the OS secure
@@ -714,11 +801,11 @@ function AddProviderDialog({
         // the key status shows un-stored and can be retried.
         try {
           if (isTauri()) {
-            const { storeProviderKey } = await import("../onboarding/providers-api");
-            const ok = await storeProviderKey(created.id, key.trim());
+            const { storeProviderKey: storeViaShell } = await import("../onboarding/providers-api");
+            const ok = await storeViaShell(created.id, key.trim());
             if (!ok) return { id: created.id, keyError: "the shell refused the key store request" };
           } else {
-            await api(`/providers/${created.id}/key`, { method: "PUT", json: { value: key.trim() } });
+            await storeProviderKey(created.id, key.trim());
           }
         } catch (err) {
           return { id: created.id, keyError: err instanceof Error ? err.message : String(err) };
@@ -975,7 +1062,7 @@ interface MergedModel {
 /** DB override rows enriched with live catalog ids (round-43: the list shows
  * the provider's real models so the free-only filter is meaningful). */
 function mergeCatalogIntoModels(
-  configured: ModelConfig[],
+  configured: ProviderModelConfig[],
   catalogIds: string[],
 ): MergedModel[] {
   const merged: MergedModel[] = configured.map((m) => ({
@@ -1003,9 +1090,24 @@ function mergeCatalogIntoModels(
   return merged;
 }
 
-function ModelListSection({ providerId, models }: { providerId: string; models: ModelConfig[] }) {
+/** The provider's LIVE catalog, passed down from the detail pane (ROUND-47
+ * R47-c1: hoisted so the connection-test model selector shares the query). */
+interface ProviderCatalogState {
+  ids: string[];
+  isFetching: boolean;
+  isError: boolean;
+}
+
+function ModelListSection({
+  providerId,
+  models,
+  catalog,
+}: {
+  providerId: string;
+  models: ProviderModelConfig[];
+  catalog: ProviderCatalogState;
+}) {
   const styles = useThemeStyles();
-  const api = useApi();
   const queryClient = useQueryClient();
   const [adding, setAdding] = useState(false);
   const [newModelId, setNewModelId] = useState("");
@@ -1019,17 +1121,9 @@ function ModelListSection({ providerId, models }: { providerId: string; models: 
   const modelsFreeOnly = useSettingsStore((s) => s.modelsFreeOnly);
   const setModelsFreeOnly = useSettingsStore((s) => s.setModelsFreeOnly);
 
-  // The provider's live catalog (same route the chat picker uses). Fails
-  // soft — offline/custom providers fall back to the configured rows only.
-  const catalogQuery = useQuery({
-    queryKey: ["settings-provider-models-catalog", providerId],
-    queryFn: () =>
-      api<{ models: Array<{ id: string; name?: string }> }>(
-        `/providers/${providerId}/models`,
-      ),
-    retry: false,
-  });
-  const catalogIds = (catalogQuery.data?.models ?? []).map((m) => m.id);
+  // The live catalog arrives as a prop now (same route the chat picker uses;
+  // fails soft — offline/custom providers fall back to the configured rows).
+  const catalogIds = catalog.ids;
 
   const merged = mergeCatalogIntoModels(models, catalogIds);
   const visible = filterModelsForPicker(merged, modelsFreeOnly);
@@ -1040,12 +1134,9 @@ function ModelListSection({ providerId, models }: { providerId: string; models: 
 
   const addModel = useMutation({
     mutationFn: () =>
-      api(`/providers/${providerId}/models`, {
-        method: "POST",
-        json: {
-          modelId: newModelId.trim(),
-          ...(newDisplayName.trim() ? { displayName: newDisplayName.trim() } : {}),
-        },
+      upsertProviderModelConfig(providerId, {
+        modelId: newModelId.trim(),
+        ...(newDisplayName.trim() ? { displayName: newDisplayName.trim() } : {}),
       }),
     onSuccess: () => {
       setAdding(false);
@@ -1058,8 +1149,12 @@ function ModelListSection({ providerId, models }: { providerId: string; models: 
   });
 
   const updateModel = useMutation({
-    mutationFn: (patch: Record<string, unknown>) =>
-      api(`/models/${editingId}`, { method: "PATCH", json: patch }),
+    // Only invoked from the edit row, where editingId is the row's id — the
+    // guard keeps the promise typed without inventing a "/models/null" URL.
+    mutationFn: (patch: ProviderModelConfigPatch) =>
+      editingId === null
+        ? Promise.reject(new Error("no model row is being edited"))
+        : updateProviderModelConfig(editingId, patch),
     onSuccess: () => {
       setEditingId(null);
       invalidate();
@@ -1068,7 +1163,7 @@ function ModelListSection({ providerId, models }: { providerId: string; models: 
   });
 
   const deleteModel = useMutation({
-    mutationFn: (id: string) => api<void>(`/models/${id}`, { method: "DELETE" }),
+    mutationFn: (id: string) => deleteProviderModelConfig(id),
     onSuccess: invalidate,
     onError: (err: Error) => setError(err.message),
   });
@@ -1159,9 +1254,9 @@ function ModelListSection({ providerId, models }: { providerId: string; models: 
 
       {merged.length === 0 && !adding ? (
         <div className="px-4 py-6 text-center text-[12px]" style={{ color: styles.textTertiary }}>
-          {catalogQuery.isFetching
+          {catalog.isFetching
             ? "Fetching the provider catalog…"
-            : catalogQuery.isError
+            : catalog.isError
               ? "No models configured and the live catalog is unreachable — add entries by hand."
               : "No models configured — fetched catalog models appear in pickers automatically; add entries here to override pricing or context size."}
         </div>
@@ -1197,7 +1292,7 @@ function ModelListSection({ providerId, models }: { providerId: string; models: 
                   />
                   <button
                     onClick={() => {
-                      const patch: Record<string, unknown> = {};
+                      const patch: ProviderModelConfigPatch = {};
                       if (editDraft.displayName.trim()) patch.displayName = editDraft.displayName.trim();
                       const ctx = Number(editDraft.contextWindow);
                       if (Number.isInteger(ctx) && ctx > 0) patch.contextWindow = ctx;
@@ -1303,14 +1398,16 @@ function ModelListSection({ providerId, models }: { providerId: string; models: 
 
 /* ── ROUND-36 (ADR-0022): the per-provider API key pool ───────────────────── */
 
-function KeyPoolSection({ providerId }: { providerId: string }) {
+/** Exported for the ROUND-47 (R47-c1) regression test — the slot-collision
+ * fix lives in the add-slot mutation below. */
+export function KeyPoolSection({ providerId }: { providerId: string }) {
   const styles = useThemeStyles();
-  const api = useApi();
   const queryClient = useQueryClient();
   const [newKey, setNewKey] = useState("");
   const [showNew, setShowNew] = useState(false);
   const [msg, setMsg] = useState<string | null>(null);
 
+  // Same query key the detail pane's test-key selector uses — one cache.
   const poolQuery = useQuery({
     queryKey: ["key-pool", providerId],
     queryFn: () => fetchKeyPool(providerId),
@@ -1325,13 +1422,22 @@ function KeyPoolSection({ providerId }: { providerId: string }) {
 
   const addSlot = useMutation({
     mutationFn: async (value: string) => {
+      // ROUND-47 (R47-c1) FIX: the old `slots.length + 2` collided whenever
+      // the pool had a gap (slots 2 & 4 held → the next add OVERWROTE slot
+      // 4's key). The next FREE slot 2..31 — exactly like SubAgentsTab.
+      const slot = nextFreeSlot(slots.filter((k) => k.hasKey).map((k) => k.slot));
+      if (slot < 0) throw new Error("the key pool is full (slots 2–31)");
       if (isTauri()) {
-        const { storeProviderKey } = await import("../onboarding/providers-api");
-        const ok = await storeProviderKey(providerId, value);
+        // NOTE (pre-existing, unchanged R47-c1 behavior): the shell's
+        // store_provider_key command has no slot parameter — it stores the
+        // PRIMARY key. Slot-aware Tauri pool keys need a shell change
+        // (src-tauri is out of scope this round; flagged in the handoff).
+        const { storeProviderKey: storeViaShell } = await import("../onboarding/providers-api");
+        const ok = await storeViaShell(providerId, value);
         if (!ok) throw new Error("the shell refused the key store request");
         return;
       }
-      await api(`/providers/${providerId}/keys/${slots.length + 2}`, { method: "PUT", json: { value } });
+      await setKeyPoolSlot(providerId, slot, value);
     },
     onSuccess: () => {
       setNewKey("");
@@ -1343,7 +1449,7 @@ function KeyPoolSection({ providerId }: { providerId: string }) {
   });
 
   const removeSlot = useMutation({
-    mutationFn: (slot: number) => api(`/providers/${providerId}/keys/${slot}`, { method: "DELETE" }),
+    mutationFn: (slot: number) => removeKeyPoolSlot(providerId, slot),
     onSuccess: invalidate,
     onError: (err: Error) => setMsg(err.message),
   });
@@ -1417,6 +1523,13 @@ function KeyPoolSection({ providerId }: { providerId: string }) {
       <p className="mt-1 text-[10.5px]" style={{ color: styles.textTertiary }}>
         Sub-agents prefer pool slots (least-loaded first) so the primary key serves your main chats.
       </p>
+      {/* ROUND-47 (R47-c1): browser-dev honesty — pool keys share the
+          sidecar's in-memory keyring (same ephemerality as the primary). */}
+      {!isTauri() && (
+        <p className="mt-1 text-[10.5px]" style={{ color: styles.textTertiary, opacity: 0.75 }}>
+          {EPHEMERAL_KEY_NOTE}
+        </p>
+      )}
     </div>
   );
 }

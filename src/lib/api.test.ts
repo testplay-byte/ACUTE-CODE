@@ -2,12 +2,27 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   ApiError,
   computeUnifiedDiff,
+  createProvider,
+  deleteProvider,
+  deleteProviderModelConfig,
+  fetchModelsCatalog,
+  fetchOrchestrationSettings,
+  fetchProviderModelConfig,
+  fetchProviders,
   getAgentsBackend,
   httpAgents,
   parseDiffArgs,
   restoreCheckpoint,
+  storeProviderKey,
+  testProviderConnection,
   toProjectChatItems,
+  updateOrchestrationSettings,
+  updateProvider,
+  updateProviderModelConfig,
+  upsertProviderModelConfig,
   type Agent,
+  type ProviderModelConfig,
+  type ProviderView,
   type SessionEvent,
 } from "./api";
 import { createFixtureAgents, getFixtureAgents, resetFixtureAgents } from "./agent-fixtures";
@@ -544,5 +559,457 @@ describe("restoreCheckpoint (ROUND-46 R46-c)", () => {
     expect(err.code).toBe("NOT_FOUND");
     expect(err.message).toBe("no checkpoint with id snap_missing");
     expect(err.isNetwork).toBe(false);
+  });
+});
+
+// ROUND-47 (R47-c1): the consolidated provider-management layer — every fn
+// ModelsProvidersTab's local useApi() used to serve, now through request()
+// + ApiError (URL, method, body, envelope unwrapping, error mapping).
+describe("provider management (ROUND-47 R47-c1)", () => {
+  const PROVIDER: ProviderView = {
+    id: "openrouter",
+    name: "OpenRouter",
+    kind: "openai-compatible",
+    baseUrl: "https://openrouter.ai/api/v1",
+    apiFormat: "chat-completions",
+    enabled: true,
+    createdAt: "2026-08-21T09:00:00Z",
+    hasKey: true,
+  };
+
+  const MODEL_ROW: ProviderModelConfig = {
+    id: "mdl_1",
+    providerId: "openrouter",
+    modelId: "z-ai/glm-5.2:free",
+    displayName: "Z.ai: GLM 5.2",
+    contextWindow: 256000,
+    maxOutputTokens: 230400,
+    inputPricePerMtok: 0,
+    inputPriceCachedPerMtok: null,
+    outputPricePerMtok: 0,
+    supportsThinking: false,
+    hidden: false,
+    sortOrder: 0,
+    createdAt: "2026-08-22T09:00:00Z",
+    updatedAt: "2026-08-22T09:00:00Z",
+  };
+
+  /** Assert the single fetch call's URL/method/body in one go. */
+  function expectCall(
+    fetchMock: ReturnType<typeof vi.fn>,
+    url: string,
+    method: string,
+    body?: unknown,
+  ) {
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    const [calledUrl, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    expect(calledUrl).toBe(url);
+    expect(init.method).toBe(method);
+    expect(init.headers).toMatchObject({ Authorization: "Bearer tok_123" });
+    if (body !== undefined) {
+      expect(new Headers(init.headers).get("Content-Type")).toBe("application/json");
+      expect(JSON.parse(init.body as string)).toEqual(body);
+    }
+  }
+
+  it("fetchProviders GETs /providers and unwraps the envelope", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse(200, { providers: [PROVIDER] }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const providers = await fetchProviders();
+
+    expect(providers).toEqual([PROVIDER]);
+    expectCall(fetchMock, "http://sidecar.test/api/v1/providers", "GET");
+  });
+
+  it("fetchProviders maps the error envelope onto ApiError", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        jsonResponse(502, { error: { code: "PROVIDER_ERROR", message: "upstream down" } }),
+      ),
+    );
+
+    const err = await fetchProviders().catch((e) => e);
+    expect(err).toBeInstanceOf(ApiError);
+    expect(err.status).toBe(502);
+    expect(err.code).toBe("PROVIDER_ERROR");
+    expect(err.message).toBe("upstream down");
+  });
+
+  it("createProvider POSTs the Add-Provider payload (no key in the body)", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse(201, PROVIDER));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const created = await createProvider({
+      name: "OpenRouter",
+      baseUrl: "https://openrouter.ai/api/v1",
+      apiFormat: "chat-completions",
+      id: "openrouter",
+    });
+
+    expect(created).toEqual(PROVIDER);
+    expectCall(fetchMock, "http://sidecar.test/api/v1/providers", "POST", {
+      name: "OpenRouter",
+      baseUrl: "https://openrouter.ai/api/v1",
+      apiFormat: "chat-completions",
+      id: "openrouter",
+    });
+  });
+
+  it("createProvider surfaces a 409 CONFLICT (preset id already exists)", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        jsonResponse(409, {
+          error: { code: "CONFLICT", message: "provider 'openrouter' already exists" },
+        }),
+      ),
+    );
+
+    const err = await createProvider({ name: "OpenRouter", baseUrl: "https://x.dev/v1" }).catch((e) => e);
+    expect(err).toBeInstanceOf(ApiError);
+    expect(err.status).toBe(409);
+    expect(err.code).toBe("CONFLICT");
+  });
+
+  it("updateProvider PATCHes /providers/:id with the patch body", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      jsonResponse(200, { ...PROVIDER, enabled: false }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const updated = await updateProvider("openrouter", { enabled: false });
+
+    expect(updated.enabled).toBe(false);
+    expectCall(fetchMock, "http://sidecar.test/api/v1/providers/openrouter", "PATCH", {
+      enabled: false,
+    });
+  });
+
+  it("updateProvider maps a 404 (unknown provider) onto ApiError", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        jsonResponse(404, { error: { code: "NOT_FOUND", message: "no provider with id ghost" } }),
+      ),
+    );
+
+    const err = await updateProvider("ghost", { name: "x" }).catch((e) => e);
+    expect(err).toBeInstanceOf(ApiError);
+    expect(err.status).toBe(404);
+    expect(err.message).toBe("no provider with id ghost");
+  });
+
+  it("deleteProvider DELETEs /providers/:id and resolves on 204", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(new Response(null, { status: 204 }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(deleteProvider("openrouter")).resolves.toBeUndefined();
+    expectCall(fetchMock, "http://sidecar.test/api/v1/providers/openrouter", "DELETE");
+  });
+
+  it("deleteProvider surfaces the agents-still-reference 409 honestly", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        jsonResponse(409, {
+          error: { code: "CONFLICT", message: "1 agent still uses 'OpenRouter' (Coder)" },
+        }),
+      ),
+    );
+
+    const err = await deleteProvider("openrouter").catch((e) => e);
+    expect(err).toBeInstanceOf(ApiError);
+    expect(err.status).toBe(409);
+    expect(err.message).toContain("still uses");
+  });
+
+  it("storeProviderKey PUTs {value} to /providers/:id/key", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(new Response(null, { status: 204 }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(storeProviderKey("openrouter", "sk-or-v1-abc123")).resolves.toBeUndefined();
+    expectCall(
+      fetchMock,
+      "http://sidecar.test/api/v1/providers/openrouter/key",
+      "PUT",
+      { value: "sk-or-v1-abc123" },
+    );
+  });
+
+  it("storeProviderKey maps a 400 (empty value) onto ApiError", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        jsonResponse(400, {
+          error: { code: "VALIDATION", message: "value must be a non-empty string" },
+        }),
+      ),
+    );
+
+    const err = await storeProviderKey("openrouter", "  ").catch((e) => e);
+    expect(err).toBeInstanceOf(ApiError);
+    expect(err.status).toBe(400);
+    expect(err.code).toBe("VALIDATION");
+  });
+
+  it("testProviderConnection POSTs an empty body by default (primary key, reachability)", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      jsonResponse(200, { ok: true, latencyMs: 312, message: "Reachable — pick a model for a full key + model test." }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const result = await testProviderConnection("openrouter");
+
+    expect(result.ok).toBe(true);
+    expect(result.latencyMs).toBe(312);
+    expect(result.message).toContain("Reachable");
+    expectCall(fetchMock, "http://sidecar.test/api/v1/providers/openrouter/test", "POST", {});
+  });
+
+  it("testProviderConnection sends {slot, model} when scoped — the R47-b contract body", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      jsonResponse(200, { ok: true, latencyMs: 87, model: "z-ai/glm-5.2:free" }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const result = await testProviderConnection("openrouter", {
+      slot: 3,
+      model: "z-ai/glm-5.2:free",
+    });
+
+    expect(result).toEqual({ ok: true, latencyMs: 87, model: "z-ai/glm-5.2:free" });
+    expectCall(fetchMock, "http://sidecar.test/api/v1/providers/openrouter/test", "POST", {
+      slot: 3,
+      model: "z-ai/glm-5.2:free",
+    });
+  });
+
+  it("testProviderConnection: ok:false arrives at HTTP 200 and RESOLVES (probe ran, provider said no)", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      jsonResponse(200, { ok: false, message: "key rejected by provider (HTTP 401)" }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(testProviderConnection("openrouter")).resolves.toEqual({
+      ok: false,
+      message: "key rejected by provider (HTTP 401)",
+    });
+  });
+
+  it("testProviderConnection maps the empty-slot 409 onto ApiError (R47-b contract)", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        jsonResponse(409, {
+          error: {
+            code: "CONFLICT",
+            message: "no API key stored for provider 'openrouter' slot 7",
+          },
+        }),
+      ),
+    );
+
+    const err = await testProviderConnection("openrouter", { slot: 7 }).catch((e) => e);
+    expect(err).toBeInstanceOf(ApiError);
+    expect(err.status).toBe(409);
+    expect(err.message).toBe("no API key stored for provider 'openrouter' slot 7");
+  });
+
+  it("fetchProviderModelConfig GETs /providers/:id/models-config and unwraps models", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse(200, { models: [MODEL_ROW] }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const models = await fetchProviderModelConfig("openrouter");
+
+    expect(models).toEqual([MODEL_ROW]);
+    expectCall(
+      fetchMock,
+      "http://sidecar.test/api/v1/providers/openrouter/models-config",
+      "GET",
+    );
+  });
+
+  it("fetchProviderModelConfig maps a 404 (unknown provider) onto ApiError", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        jsonResponse(404, { error: { code: "NOT_FOUND", message: "no provider with id ghost" } }),
+      ),
+    );
+
+    const err = await fetchProviderModelConfig("ghost").catch((e) => e);
+    expect(err).toBeInstanceOf(ApiError);
+    expect(err.status).toBe(404);
+  });
+
+  it("upsertProviderModelConfig POSTs the model row payload to /providers/:id/models", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse(201, MODEL_ROW));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const created = await upsertProviderModelConfig("openrouter", {
+      modelId: "z-ai/glm-5.2:free",
+      displayName: "Z.ai: GLM 5.2",
+    });
+
+    expect(created).toEqual(MODEL_ROW);
+    expectCall(fetchMock, "http://sidecar.test/api/v1/providers/openrouter/models", "POST", {
+      modelId: "z-ai/glm-5.2:free",
+      displayName: "Z.ai: GLM 5.2",
+    });
+  });
+
+  it("upsertProviderModelConfig maps a 400 (missing modelId) onto ApiError", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        jsonResponse(400, {
+          error: { code: "VALIDATION", message: "modelId must be a non-empty string" },
+        }),
+      ),
+    );
+
+    const err = await upsertProviderModelConfig("openrouter", { modelId: "" }).catch((e) => e);
+    expect(err).toBeInstanceOf(ApiError);
+    expect(err.status).toBe(400);
+    expect(err.code).toBe("VALIDATION");
+  });
+
+  it("updateProviderModelConfig PATCHes /models/:id with the patch body", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      jsonResponse(200, { ...MODEL_ROW, displayName: "Renamed", contextWindow: 128000 }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const updated = await updateProviderModelConfig("mdl_1", {
+      displayName: "Renamed",
+      contextWindow: 128000,
+    });
+
+    expect(updated.displayName).toBe("Renamed");
+    expectCall(fetchMock, "http://sidecar.test/api/v1/models/mdl_1", "PATCH", {
+      displayName: "Renamed",
+      contextWindow: 128000,
+    });
+  });
+
+  it("updateProviderModelConfig maps a 404 (unknown model row) onto ApiError", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        jsonResponse(404, { error: { code: "NOT_FOUND", message: "no model with id mdl_x" } }),
+      ),
+    );
+
+    const err = await updateProviderModelConfig("mdl_x", { hidden: true }).catch((e) => e);
+    expect(err).toBeInstanceOf(ApiError);
+    expect(err.status).toBe(404);
+    expect(err.message).toBe("no model with id mdl_x");
+  });
+
+  it("deleteProviderModelConfig DELETEs /models/:id and resolves on 204", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(new Response(null, { status: 204 }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(deleteProviderModelConfig("mdl_1")).resolves.toBeUndefined();
+    expectCall(fetchMock, "http://sidecar.test/api/v1/models/mdl_1", "DELETE");
+  });
+
+  it("deleteProviderModelConfig maps a 404 onto ApiError", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        jsonResponse(404, { error: { code: "NOT_FOUND", message: "no model with id mdl_x" } }),
+      ),
+    );
+
+    const err = await deleteProviderModelConfig("mdl_x").catch((e) => e);
+    expect(err).toBeInstanceOf(ApiError);
+    expect(err.status).toBe(404);
+  });
+
+  it("fetchModelsCatalog GETs /models/catalog with the R47-b contract payload", async () => {
+    const catalog = {
+      models: [
+        {
+          modelId: "z-ai/glm-5.2:free",
+          displayName: "Z.ai: GLM 5.2",
+          contextWindow: 256000,
+          maxOutputTokens: 230400,
+          inputPricePerMtok: 0,
+          inputPriceCachedPerMtok: null,
+          outputPricePerMtok: 0,
+          free: true,
+          supportsTools: true,
+          supportsStructuredOutputs: true,
+          supportsVision: false,
+        },
+      ],
+      defaultModelId: "z-ai/glm-5.2:free",
+      subagentDefaultModelId: "nvidia/nemotron-3.5-lightning:free",
+      recommendedModelIds: ["z-ai/glm-5.2:free"],
+    };
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse(200, catalog));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(fetchModelsCatalog()).resolves.toEqual(catalog);
+    expectCall(fetchMock, "http://sidecar.test/api/v1/models/catalog", "GET");
+  });
+
+  it("fetchModelsCatalog maps a non-2xx onto ApiError", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        jsonResponse(500, { error: { code: "INTERNAL", message: "catalog unavailable" } }),
+      ),
+    );
+
+    const err = await fetchModelsCatalog().catch((e) => e);
+    expect(err).toBeInstanceOf(ApiError);
+    expect(err.status).toBe(500);
+  });
+});
+
+// ROUND-47 (R47-c1): OrchestrationSettings finally carries subagentModel
+// (the backend has sent it since R43-5; SubAgentsTab type-widens locally).
+describe("orchestration settings (subagentModel, ROUND-47 R47-c1)", () => {
+  it("fetchOrchestrationSettings returns subagentModel verbatim (null default)", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        jsonResponse(200, { maxParallel: 5, perKeyLimit: 3, subagentModel: null }),
+      ),
+    );
+
+    await expect(fetchOrchestrationSettings()).resolves.toEqual({
+      maxParallel: 5,
+      perKeyLimit: 3,
+      subagentModel: null,
+    });
+  });
+
+  it("updateOrchestrationSettings sends subagentModel through (string or null)", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      jsonResponse(200, {
+        maxParallel: 5,
+        perKeyLimit: 3,
+        subagentModel: "nvidia/nemotron-3.5-lightning:free",
+      }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const updated = await updateOrchestrationSettings({
+      subagentModel: "nvidia/nemotron-3.5-lightning:free",
+    });
+
+    expect(updated.subagentModel).toBe("nvidia/nemotron-3.5-lightning:free");
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    expect(url).toBe("http://sidecar.test/api/v1/settings/orchestration");
+    expect(init.method).toBe("PUT");
+    expect(JSON.parse(init.body as string)).toEqual({
+      subagentModel: "nvidia/nemotron-3.5-lightning:free",
+    });
   });
 });

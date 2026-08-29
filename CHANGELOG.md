@@ -1,4 +1,4 @@
-<!-- last-reviewed: 2026-08-28 round-46 -->
+<!-- last-reviewed: 2026-08-29 round-47 -->
 # Changelog
 
 All notable changes to ACUTE-CODE are documented here. Entries are written for
@@ -13,6 +13,42 @@ version number is single-sourced from the root `package.json`
 
 Planned next: the bundled installer (a single executable with the packaged
 sidecar — ADR-0003); today the launcher kit remains the distribution path.
+
+## [0.47.0] - 2026-08-29
+
+### Added
+
+- Provider management, cleaned up: the "Models & Providers" settings tab now
+  runs on one shared API layer, its connection test can target the primary
+  key or any key-pool slot and optionally a concrete model (a real one-token
+  probe with measured latency instead of a bare reachability ping), and
+  pasting a key in the browser-dev setup honestly warns that it lives in
+  server memory only until restart.
+- Model catalog from the server: the sub-agent model picker and the agent
+  form now read the live model catalog (pricing, context window, tool and
+  vision support) from the backend instead of each carrying their own
+  hand-maintained copy, so newly shipped models appear everywhere at once.
+  The agent form's provider dropdown also lists custom providers you added
+  in Settings, and model fields suggest known ids while still accepting
+  free text.
+- Disabling a provider now actually stops it: turns against a disabled
+  provider fail fast with a clear "enable it in Settings" message instead
+  of quietly proceeding.
+
+### Fixed
+
+- Security: the launcher template and launcher no longer ship any real API
+  keys (the round-44 baked-in sub-agent defaults were removed) — every
+  credential value now comes from you and only you, and the launcher never
+  writes key values into your credentials file.
+- Security: an API route that returned a provider key in plain text (unused
+  by the app) was removed.
+- The launcher could never actually read the optional sub-agent pool keys
+  from credentials.txt (names containing digits were skipped by the
+  credentials parser), so your own pool-key values were silently ignored.
+- Adding a key-pool slot in Settings could silently overwrite an existing
+  slot's key when earlier slots had gaps (e.g. slots 2 and 4 occupied → the
+  next add targeted 4 again); the next free slot is now computed correctly.
 
 ## [0.46.0] - 2026-08-28
 

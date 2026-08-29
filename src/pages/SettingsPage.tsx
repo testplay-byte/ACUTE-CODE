@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link, useSearchParams } from "react-router";
 import {
@@ -15,14 +15,6 @@ import { AgentsScreen } from "../components/agents/AgentsScreen";
 import { ModelsProvidersTab } from "../components/settings/ModelsProvidersTab";
 import { SubAgentsSection, SubAgentsTab } from "../components/settings/SubAgentsTab";
 import { Button, Field, inputClass } from "../components/ui/controls";
-import {
-  fetchProviders,
-  isTauri,
-  storeProviderKey,
-  testConnection,
-  withClientDefaults,
-  type ConnectionTestResult,
-} from "../components/onboarding/providers-api";
 import { bdr, withAlpha } from "../components/dashboard/helpers";
 
 const TABS = [
@@ -385,204 +377,11 @@ function SectionTitle({ children }: { children: React.ReactNode }) {
   );
 }
 
-/* ── API & Providers ────────────────────────────────────── */
-
-export function ApiTab() {
-  const styles = useThemeStyles();
-  const queryClient = useQueryClient();
-  const providersQuery = useQuery({
-    queryKey: ["settings.providers"],
-    queryFn: fetchProviders,
-    staleTime: 30_000,
-  });
-  const options = useMemo(
-    () => withClientDefaults(providersQuery.data ?? []),
-    [providersQuery.data],
-  );
-
-  return (
-    <div className="mx-auto flex max-w-2xl flex-col gap-4">
-      <p className="text-[12px] leading-relaxed" style={{ color: styles.textSecondary }}>
-        Keys are stored ONLY in Windows Credential Manager (DPAPI) and pushed to the local
-        agent core — never in the database, never in logs.
-      </p>
-      {providersQuery.isError ? (
-        <div
-          role="alert"
-          className="rounded-lg border-[1.5px] px-3 py-2 text-[11px]"
-          style={{ borderColor: withAlpha("#D64545", 0.4), color: "#D64545" }}
-        >
-          Agent core unreachable — run the app (or <code>pnpm dev:full</code>) to configure keys.
-        </div>
-      ) : null}
-      {options.map(({ provider }) => (
-        <ProviderKeyCard
-          key={provider.id}
-          providerId={provider.id}
-          name={provider.name}
-          baseUrl={provider.baseUrl}
-          hasKey={provider.hasKey}
-          onKeyStored={() =>
-            void queryClient.invalidateQueries({ queryKey: ["settings.providers"] })
-          }
-        />
-      ))}
-    </div>
-  );
-}
-
-function ProviderKeyCard({
-  providerId,
-  name,
-  baseUrl,
-  hasKey,
-  onKeyStored,
-}: {
-  providerId: string;
-  name: string;
-  baseUrl: string | null;
-  hasKey: boolean;
-  onKeyStored: () => void;
-}) {
-  const styles = useThemeStyles();
-  const [key, setKey] = useState("");
-  const [model, setModel] = useState(providerId === "openrouter" ? "z-ai/glm-5.2:free" : "");
-  const [saving, setSaving] = useState(false);
-  const [testing, setTesting] = useState(false);
-  const [result, setResult] = useState<ConnectionTestResult | null>(null);
-
-  const saveKey = async () => {
-    if (key.trim().length <= 6 || saving) return;
-    setSaving(true);
-    try {
-      if (isTauri()) {
-        await storeProviderKey(providerId, key.trim());
-        onKeyStored();
-      }
-      setKey("");
-    } finally {
-      setSaving(false);
-    }
-  };
-
-  const runTest = async () => {
-    if (testing) return;
-    setTesting(true);
-    setResult(null);
-    try {
-      if (isTauri() && key.trim().length > 6) {
-        await storeProviderKey(providerId, key.trim());
-        onKeyStored();
-      }
-      setResult(await testConnection(providerId, model.trim() || undefined));
-    } finally {
-      setTesting(false);
-    }
-  };
-
-  const inputStyle = {
-    background: styles.inputBg,
-    borderColor: styles.inputBorder,
-    color: styles.text,
-  } as const;
-
-  return (
-    <div
-      className="rounded-[16px] border-[1.5px] p-4"
-      style={{ background: styles.card, borderColor: styles.border }}
-    >
-      <div className="flex flex-wrap items-center justify-between gap-2">
-        <div className="min-w-0">
-          <div className="flex items-center gap-2">
-            <span
-              className="grid h-7 w-7 shrink-0 place-items-center rounded-full text-[11px] font-bold"
-              style={{ background: styles.accent, color: styles.accentText }}
-            >
-              {name.charAt(0).toUpperCase()}
-            </span>
-            <span className="text-[14px] font-bold" style={{ color: styles.text }}>
-              {name}
-            </span>
-          </div>
-          {baseUrl ? (
-            <div className="mt-1 truncate font-mono text-[10px]" style={{ color: styles.textTertiary }}>
-              {baseUrl}
-            </div>
-          ) : null}
-        </div>
-        <span
-          className="rounded-full border px-2 py-0.5 text-[10px] font-bold"
-          style={{
-            background: hasKey ? withAlpha("#27C93F", 0.12) : styles.subtle,
-            borderColor: hasKey ? withAlpha("#27C93F", 0.4) : styles.border,
-            color: hasKey ? "#27C93F" : styles.textTertiary,
-          }}
-        >
-          {hasKey ? "● key stored" : "no key"}
-        </span>
-      </div>
-
-      <div className="mt-3 grid gap-2 md:grid-cols-2">
-        <div>
-          <label className="mb-1 block text-[10px] font-bold uppercase tracking-widest" style={{ color: styles.textTertiary }}>
-            API key
-          </label>
-          <input
-            type="password"
-            autoComplete="off"
-            value={key}
-            onChange={(e) => setKey(e.target.value)}
-            placeholder={hasKey ? "•••• stored — type to replace" : "sk-..."}
-            className="h-10 w-full rounded-[10px] border-[1.5px] px-3 font-mono text-[12px] outline-none"
-            style={inputStyle}
-          />
-        </div>
-        <div>
-          <label className="mb-1 block text-[10px] font-bold uppercase tracking-widest" style={{ color: styles.textTertiary }}>
-            Test model
-          </label>
-          <input
-            value={model}
-            onChange={(e) => setModel(e.target.value)}
-            placeholder="provider/model"
-            className="h-10 w-full rounded-[10px] border-[1.5px] px-3 font-mono text-[12px] outline-none"
-            style={inputStyle}
-          />
-        </div>
-      </div>
-
-      <div className="mt-3 flex flex-wrap items-center gap-2">
-        <Button
-          variant="outline"
-          onClick={() => void saveKey()}
-          disabled={key.trim().length <= 6 || saving || !isTauri()}
-          title={isTauri() ? "Store in Windows Credential Manager" : "Key storage requires the desktop app"}
-        >
-          {saving ? "Storing…" : "Store key"}
-        </Button>
-        <Button variant="outline" onClick={() => void runTest()} disabled={testing || (!hasKey && key.trim().length <= 6)}>
-          {testing ? "Testing…" : "Test connection"}
-        </Button>
-        {result ? (
-          <span
-            className="min-w-0 truncate text-[11px] font-medium"
-            style={{ color: result.ok ? styles.textSecondary : "#D64545" }}
-            title={result.message}
-          >
-            {result.ok
-              ? `Connected${result.latencyMs ? ` • ${result.latencyMs}ms` : ""}${result.model ? ` • ${result.model}` : ""}${!isTauri() ? " • server key" : ""}`
-              : (result.message ?? "Test failed.")}
-          </span>
-        ) : null}
-        {!isTauri() ? (
-          <span className="text-[10px]" style={{ color: styles.textTertiary }}>
-            browser dev: tests the key held server-side
-          </span>
-        ) : null}
-      </div>
-    </div>
-  );
-}
+/* ── API & Providers ──────────────────────────────────────
+ * ROUND-47 (R47-c1): the legacy ApiTab / ProviderKeyCard pair is DELETED —
+ * dead code since the ROUND-37 ModelsProvidersTab rebuild took over the
+ * "api" tab (verified: zero imports anywhere in src/). Models & Providers
+ * is the one provider surface now. */
 
 /* ── Advanced (data source) ─────────────────────────────── */
 

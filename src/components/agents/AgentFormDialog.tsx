@@ -1,7 +1,13 @@
 import { useMemo, useState, type FormEvent, type KeyboardEvent } from "react";
+import { useQuery } from "@tanstack/react-query";
 import { X } from "lucide-react";
 import type { Agent, AgentDraft } from "../../lib/api";
-import { PROVIDER_IDS, TOOL_CATALOG } from "../../lib/api";
+import {
+  PROVIDER_IDS,
+  TOOL_CATALOG,
+  fetchModelsCatalog,
+  fetchProviders,
+} from "../../lib/api";
 import type { MemoryPolicy } from "shared";
 import { Dialog, DialogContent, DialogHeader } from "../ui/dialog";
 import { Badge, Button, Field, inputClass } from "../ui/controls";
@@ -88,6 +94,50 @@ export function AgentFormDialog({
   const [error, setError] = useState<string | null>(null);
   const [fieldErrors, setFieldErrors] = useState<Partial<Record<keyof FormState, string>>>({});
   const [submitting, setSubmitting] = useState(false);
+
+  // ROUND-47 (R47-c2): provider options come from the live registry
+  // (GET /providers — the SAME ["settings-providers"] cache as the Models &
+  // Providers tab, so CRUD there refreshes here too). The dialog must ALWAYS
+  // open: while loading, or when the registry is unreachable, it falls back
+  // to the PROVIDER_IDS defaults with an honest dim note on failure.
+  const providersQuery = useQuery({
+    queryKey: ["settings-providers"],
+    queryFn: fetchProviders,
+    enabled: open,
+    retry: false,
+  });
+  const providerOptions = useMemo(() => {
+    const loaded = providersQuery.data;
+    if (!loaded || loaded.length === 0) {
+      return PROVIDER_IDS.map((id) => ({ id, name: id }));
+    }
+    return loaded.map((p) => ({ id: p.id, name: p.name }));
+  }, [providersQuery.data]);
+  // Never strand the current selection (an agent can outlive its provider —
+  // keep its id visible instead of silently blanking the select).
+  const selectionVisible = providerOptions.some((o) => o.id === form.providerId);
+
+  // ROUND-47 (R47-c2): the model inputs stay FREE-TEXT (custom models must
+  // remain enterable) but gain <datalist> suggestions fed by the served
+  // catalog (GET /models/catalog) — free models first, then paid. The
+  // suggestion VALUE is the exact modelId, so picking one pastes the
+  // unambiguous id; the label shows the human name + tier. Fails soft:
+  // unreachable catalog ⇒ no suggestions, inputs keep working.
+  const catalogQuery = useQuery({
+    queryKey: ["models-catalog"],
+    queryFn: fetchModelsCatalog,
+    enabled: open,
+    staleTime: 10 * 60 * 1000, // constants on the wire — generous
+    retry: false,
+  });
+  const modelSuggestions = useMemo(() => {
+    const models = catalogQuery.data?.models ?? [];
+    return [...models.filter((m) => m.free), ...models.filter((m) => !m.free)];
+  }, [catalogQuery.data]);
+  const visionSuggestions = useMemo(
+    () => modelSuggestions.filter((m) => m.supportsVision),
+    [modelSuggestions],
+  );
 
   // Reset whenever a different agent (or create-mode) opens the dialog, and
   // again on close so a cancelled draft never leaks into the next open.
@@ -194,17 +244,25 @@ export function AgentFormDialog({
               />
             </Field>
 
-            <Field label="Provider">
+            <Field
+              label="Provider"
+              hint={
+                // Honest, dim (Field renders hints muted) — the dropdown is
+                // still fully usable on the PROVIDER_IDS defaults.
+                providersQuery.isError ? "provider list unavailable — showing defaults" : undefined
+              }
+            >
               <select
                 className={inputClass}
                 value={form.providerId}
                 onChange={(e) => set("providerId", e.target.value)}
               >
-                {PROVIDER_IDS.map((p) => (
-                  <option key={p} value={p}>
-                    {p}
+                {providerOptions.map((p) => (
+                  <option key={p.id} value={p.id}>
+                    {p.name === p.id ? p.id : `${p.name} (${p.id})`}
                   </option>
                 ))}
+                {!selectionVisible && <option value={form.providerId}>{form.providerId}</option>}
               </select>
             </Field>
             <Field label="Model" hint={fieldErrors.model}>
@@ -212,7 +270,11 @@ export function AgentFormDialog({
                 className={`${inputClass} font-mono text-xs`}
                 value={form.model}
                 onChange={(e) => set("model", e.target.value)}
-                placeholder="openrouter/ox-alpha"
+                list="agent-model-options"
+                // The LIVE default model id once the catalog lands; the known
+                // current id before that. The old placeholder advertised the
+                // dead openrouter/ox-alpha (deleted upstream) — never again.
+                placeholder={catalogQuery.data?.defaultModelId ?? "z-ai/glm-5.2:free"}
               />
             </Field>
 
@@ -221,9 +283,28 @@ export function AgentFormDialog({
                 className={`${inputClass} font-mono text-xs`}
                 value={form.visionModel}
                 onChange={(e) => set("visionModel", e.target.value)}
-                placeholder="null"
+                list="agent-vision-model-options"
+                placeholder="e.g. google/gemma-4-31b-it:free — empty = none"
               />
             </Field>
+
+            {/* ROUND-47 (R47-c2): catalog-fed datalists for the free-text model
+                inputs above. value = the exact modelId (what gets pasted);
+                label = displayName + tier so suggestions read at a glance. */}
+            <datalist id="agent-model-options">
+              {modelSuggestions.map((m) => (
+                <option key={m.modelId} value={m.modelId}>
+                  {`${m.displayName} (${m.free ? "free" : "paid"})`}
+                </option>
+              ))}
+            </datalist>
+            <datalist id="agent-vision-model-options">
+              {visionSuggestions.map((m) => (
+                <option key={m.modelId} value={m.modelId}>
+                  {`${m.displayName} (${m.free ? "free" : "paid"}, vision)`}
+                </option>
+              ))}
+            </datalist>
             <Field label="Memory policy">
               <select
                 className={inputClass}

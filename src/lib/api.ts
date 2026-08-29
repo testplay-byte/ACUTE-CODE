@@ -1512,6 +1512,11 @@ export async function deleteProjectMemory(
 export interface OrchestrationSettings {
   maxParallel: number;
   perKeyLimit: number;
+  /** ROUND-43 (R43-5): the temporary sub-agent model override — model id ALL
+   * sub-agent children run on, null = inherit the parent's model. The
+   * backend has sent it since R43; typed here (ROUND-47 R47-c1) so callers
+   * no longer need to widen locally. */
+  subagentModel: string | null;
 }
 
 export async function fetchOrchestrationSettings(): Promise<OrchestrationSettings> {
@@ -1552,6 +1557,211 @@ export async function removeKeyPoolSlot(providerId: string, slot: number): Promi
     method: "DELETE",
   });
   return body.keys;
+}
+
+// ── ROUND-47 (R47-c1): provider management — the canonical layer ────────────
+// ModelsProvidersTab's local useApi() wrapper is RETIRED; every provider
+// CRUD / key / connection-test / models-config call goes through request()
+// + ApiError now (one plumbing layer, same typed envelopes as the rest).
+
+/** Provider row as served by GET /providers — agent-core's ProviderView
+ * (providers/registry.ts) mirrored field-for-field; never invented. */
+export interface ProviderView {
+  id: string;
+  name: string;
+  kind: string;
+  baseUrl: string | null;
+  /** Wire format (chat-completions | anthropic-messages | responses). */
+  apiFormat?: string;
+  enabled: boolean;
+  createdAt: string;
+  hasKey: boolean;
+}
+
+export async function fetchProviders(): Promise<ProviderView[]> {
+  const body = await request<{ providers: ProviderView[] }>("/providers");
+  return body.providers;
+}
+
+/** POST /providers payload — the Add Provider dialog's exact shape. The API
+ * key is deliberately NOT part of it: keys only ever travel to the dedicated
+ * key route (or the Tauri shell) so no create/list envelope can leak one. */
+export interface CreateProviderInput {
+  name: string;
+  baseUrl: string;
+  apiFormat?: string;
+  /** Presets re-claim their reserved id (resurrects a deleted built-in). */
+  id?: string;
+}
+
+export async function createProvider(input: CreateProviderInput): Promise<ProviderView> {
+  return request<ProviderView>("/providers", { method: "POST", json: input });
+}
+
+/** PATCH /providers/:id payload — any editable subset (every provider is
+ * fully editable, built-ins included — ROUND-37). */
+export interface ProviderPatch {
+  name?: string;
+  baseUrl?: string;
+  apiFormat?: string;
+  enabled?: boolean;
+}
+
+export async function updateProvider(id: string, patch: ProviderPatch): Promise<ProviderView> {
+  return request<ProviderView>(`/providers/${encodeURIComponent(id)}`, {
+    method: "PATCH",
+    json: patch,
+  });
+}
+
+/** DELETE /providers/:id → 204 (409 while agents still reference it). */
+export async function deleteProvider(id: string): Promise<void> {
+  await request<void>(`/providers/${encodeURIComponent(id)}`, { method: "DELETE" });
+}
+
+/** PUT /providers/:id/key — the browser-dev path only; inside Tauri the key
+ * routes through the shell into the OS secure store (ADR-0012). */
+export async function storeProviderKey(id: string, value: string): Promise<void> {
+  await request<void>(`/providers/${encodeURIComponent(id)}/key`, {
+    method: "PUT",
+    json: { value },
+  });
+}
+
+/** POST /providers/:id/test response (ROUND-47 R47-b contract): a probe that
+ * RAN and got a NO from the provider arrives as HTTP 200 with ok:false —
+ * only transport/agent-core failures throw (ApiError). */
+export interface ProviderTestResult {
+  ok: boolean;
+  latencyMs?: number;
+  model?: string;
+  message?: string;
+}
+
+/** Test a provider connection. `slot` scopes the probe to that key-pool key
+ * (the backend 409s when the slot holds no key); `model` upgrades the cheap
+ * reachability ping to a real one-token completion. */
+export async function testProviderConnection(
+  id: string,
+  opts?: { model?: string; slot?: number },
+): Promise<ProviderTestResult> {
+  return request<ProviderTestResult>(`/providers/${encodeURIComponent(id)}/test`, {
+    method: "POST",
+    json: {
+      ...(opts?.model !== undefined ? { model: opts.model } : {}),
+      ...(opts?.slot !== undefined ? { slot: opts.slot } : {}),
+    },
+  });
+}
+
+/** DB model-override row from GET /providers/:id/models-config — agent-core's
+ * ModelRecord (storage/models.ts) mirrored field-for-field. */
+export interface ProviderModelConfig {
+  id: string;
+  providerId: string;
+  modelId: string;
+  displayName: string;
+  contextWindow: number | null;
+  maxOutputTokens: number | null;
+  inputPricePerMtok: number | null;
+  inputPriceCachedPerMtok: number | null;
+  outputPricePerMtok: number | null;
+  supportsThinking: boolean;
+  hidden: boolean;
+  sortOrder: number;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export async function fetchProviderModelConfig(providerId: string): Promise<ProviderModelConfig[]> {
+  const body = await request<{ models: ProviderModelConfig[] }>(
+    `/providers/${encodeURIComponent(providerId)}/models-config`,
+  );
+  return body.models;
+}
+
+/** POST /providers/:id/models payload — upsert-by-modelId per provider (the
+ * UNIQUE(provider_id, model_id) constraint makes "add model" an upsert). */
+export interface ProviderModelConfigInput {
+  modelId: string;
+  displayName?: string;
+  contextWindow?: number | null;
+  maxOutputTokens?: number | null;
+  inputPricePerMtok?: number | null;
+  inputPriceCachedPerMtok?: number | null;
+  outputPricePerMtok?: number | null;
+  supportsThinking?: boolean;
+  hidden?: boolean;
+}
+
+export async function upsertProviderModelConfig(
+  providerId: string,
+  input: ProviderModelConfigInput,
+): Promise<ProviderModelConfig> {
+  return request<ProviderModelConfig>(`/providers/${encodeURIComponent(providerId)}/models`, {
+    method: "POST",
+    json: input,
+  });
+}
+
+/** PATCH /models/:id payload — any editable subset (null clears a field). */
+export interface ProviderModelConfigPatch {
+  displayName?: string;
+  contextWindow?: number | null;
+  maxOutputTokens?: number | null;
+  inputPricePerMtok?: number | null;
+  inputPriceCachedPerMtok?: number | null;
+  outputPricePerMtok?: number | null;
+  supportsThinking?: boolean;
+  hidden?: boolean;
+}
+
+export async function updateProviderModelConfig(
+  modelRowId: string,
+  patch: ProviderModelConfigPatch,
+): Promise<ProviderModelConfig> {
+  return request<ProviderModelConfig>(`/models/${encodeURIComponent(modelRowId)}`, {
+    method: "PATCH",
+    json: patch,
+  });
+}
+
+/** DELETE /models/:id → 204. */
+export async function deleteProviderModelConfig(modelRowId: string): Promise<void> {
+  await request<void>(`/models/${encodeURIComponent(modelRowId)}`, { method: "DELETE" });
+}
+
+/** GET /models/catalog entry (ROUND-47 R47-b contract) — agent-core's
+ * CatalogModel (storage/models.ts) mirrored field-for-field. */
+export interface CatalogModel {
+  /** OpenRouter model id — the identifier sent to the API. */
+  modelId: string;
+  displayName: string;
+  /** Total context tokens (input+output). */
+  contextWindow: number;
+  maxOutputTokens: number | null;
+  inputPricePerMtok: number;
+  inputPriceCachedPerMtok: number | null;
+  outputPricePerMtok: number;
+  free: boolean;
+  /** `tools` in supported_parameters — REQUIRED for agentic turns. */
+  supportsTools: boolean;
+  supportsStructuredOutputs: boolean;
+  supportsVision: boolean;
+}
+
+/** GET /models/catalog response (ROUND-47 R47-b contract): MODEL_CATALOG +
+ * the app-wide defaults + recommended pins — the single source model
+ * pickers consume (kills the hand-copied catalog drift in SubAgentsTab). */
+export interface ModelsCatalog {
+  models: CatalogModel[];
+  defaultModelId: string;
+  subagentDefaultModelId: string;
+  recommendedModelIds: string[];
+}
+
+export async function fetchModelsCatalog(): Promise<ModelsCatalog> {
+  return request<ModelsCatalog>("/models/catalog");
 }
 
 // ---------------------------------------------------------------------------
