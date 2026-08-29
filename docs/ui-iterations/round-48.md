@@ -240,12 +240,17 @@ user-facing summary of every owner report above.
   backend before being accepted.
 - **CI (GitHub Actions API, not hand-claimed):** run `33257534609` @
   `3336283` (the tip, push event) **completed/success** — polled to
-  completion by this docs agent BEFORE any doc claim; the docs-push run is
-  recorded in HANDOFF. One honesty note: CI's `docs:check` step is
-  `continue-on-error` (warn-only) and logged 1 failure on that run — the
-  CHANGELOG `last-reviewed` stamp was dated 2026-08-30, a future date at
-  push time; the docs commit fixes the stamp to 2026-08-29 and
-  `pnpm docs:check` is 134/0 again.
+  completion by this docs agent BEFORE any doc claim; the docs-push run
+  `33258603674` @ `90e5cf0` (push event) is likewise **completed/success**
+  (API-verified by the continuation pass — a docs push's own run id can
+  only exist after the push, so it is recorded here rather than pre-baked;
+  the original text claimed HANDOFF carried it, which it never did).
+  One honesty note: CI's `docs:check` step is `continue-on-error`
+  (warn-only) and logged 1 failure on that run — the CHANGELOG
+  `last-reviewed` stamp was dated 2026-08-30, a future date at push time;
+  the docs commit fixes the stamp to 2026-08-29 and `pnpm docs:check` is
+  0-failure again — **135 docs scanned** at the docs tip (the code tip's
+  134 + this round report itself).
 - **Live battery (real keys, real disk, dev sidecar):**
   - **Browser (the bug's exact sequence):** mint → `POST /browser/navigate`
     200 → `PUT /browser/viewport` 200 → proxy GET with the ORIGINAL
