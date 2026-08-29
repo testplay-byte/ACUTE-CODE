@@ -186,7 +186,22 @@ show-sidebar button, chat empty state all inherit), `public/favicon.svg`
 PNG-in-ICO container, 16→256 px, rasterized from the same SVG via the
 headless Chromium shell).
 
-### F. Sessions navigation fully removed
+### F. The CORS allow-methods list was missing PUT (live-browser find)
+
+While verifying the new memory toggle in a real browser, every cross-origin
+PUT died at preflight with `Failed to fetch` — GET/POST/PATCH worked. The
+sidecar's CORS headers advertised
+`access-control-allow-methods: GET, POST, PATCH, DELETE, OPTIONS` — **PUT
+was never in the list**, so every browser-side PUT route (Settings →
+Advanced toggles, the key-pool slot writes, PUT /browser/viewport) has been
+dead since the CORS wall shipped; nobody had driven a PUT from the UI
+before this round's toggle. Fixed in both `corsHeadersFor()` and the
+onRequest hook; pinned by a preflight regression test (OPTIONS with
+`access-control-request-method: PUT` from `http://localhost:5173` → 204 +
+allow-methods containing PUT + the origin echoed). Verified live: the
+memory switch now flips server-side and in the UI on every click.
+
+### G. Sessions navigation fully removed
 
 R48 removed the nav entry but kept the route ("for deep links"); the
 owner overruled: *"It should not be available anywhere in our project at
@@ -225,6 +240,15 @@ dev stack booted inside the run):** all five checks PASS —
 - **S49-5** browser proxy: 3 absolute sidecar-origin rewrites on a real
   page with external CSS/JS/img, and a rewritten stylesheet fetched
   back through the proxy returns `text/css` content.
+
+**Browser self-verification (agent-browser, live stack):** the dashboard
+renders clean (no console errors, v0.49.0); `/sessions` renders the
+Not-found placeholder (route gone); Settings → Advanced shows the Agent
+memory card with a `role="switch"` toggle; the toggle flips the server
+state AND the UI on every click (after the CORS fix above — the clicks
+initially exposed the missing-PUT bug); the logo tile VLM-verifies as "a
+recognizable cat face silhouette (white, pointed ears, eyes, nose) on an
+orange tile, no glitches". Screenshots: `agent-ctx/r49-*.png` (sandbox).
 
 Battery-infrastructure honesty: three earlier battery drafts failed on
 HARNESS bugs (wrong response shapes, a reused project root 409ing project

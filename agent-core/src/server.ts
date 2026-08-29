@@ -349,7 +349,12 @@ export function buildServer(options: ServerOptions): FastifyInstance {
       return {
         "access-control-allow-origin": origin,
         "access-control-allow-headers": "authorization, content-type",
-        "access-control-allow-methods": "GET, POST, PATCH, DELETE, OPTIONS",
+        // ROUND-49: PUT was missing from the allow-methods list — every
+        // cross-origin PUT (Settings → Advanced toggles, key-pool slots,
+        // viewport PUTs) died at preflight with "Failed to fetch" while
+        // GET/POST/PATCH worked. Found live while verifying the new memory
+        // master switch in the browser.
+        "access-control-allow-methods": "GET, POST, PUT, PATCH, DELETE, OPTIONS",
       };
     }
     return {};
@@ -359,7 +364,7 @@ export function buildServer(options: ServerOptions): FastifyInstance {
     if (typeof origin === "string" && CORS_ORIGINS.has(origin)) {
       reply.header("access-control-allow-origin", origin);
       reply.header("access-control-allow-headers", "authorization, content-type");
-      reply.header("access-control-allow-methods", "GET, POST, PATCH, DELETE, OPTIONS");
+      reply.header("access-control-allow-methods", "GET, POST, PUT, PATCH, DELETE, OPTIONS");
       if (request.method === "OPTIONS") {
         return reply.code(204).send();
       }

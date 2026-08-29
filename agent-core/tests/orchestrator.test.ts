@@ -314,6 +314,24 @@ describe("ROUND-36: sub-agent orchestration (ADR-0022)", () => {
       payload: { enabled: true },
     });
     expect(on.json()).toEqual({ enabled: true });
+
+    // ROUND-49 (live-browser find): the CORS allow-methods list must include
+    // PUT — it was missing, so every cross-origin PUT (this toggle, key-pool
+    // slots, viewport) died at preflight with "Failed to fetch" while
+    // GET/POST/PATCH worked. Pin the preflight contract for the browser
+    // origins the UI actually uses.
+    const preflight = await app.inject({
+      method: "OPTIONS",
+      url: "/api/v1/settings/memory",
+      headers: {
+        origin: "http://localhost:5173",
+        "access-control-request-method": "PUT",
+        "access-control-request-headers": "authorization, content-type",
+      },
+    });
+    expect(preflight.statusCode).toBe(204);
+    expect(String(preflight.headers["access-control-allow-methods"])).toContain("PUT");
+    expect(String(preflight.headers["access-control-allow-origin"])).toBe("http://localhost:5173");
   });
 
   it("key pool: slots are listed masked, written, and removed", async () => {
