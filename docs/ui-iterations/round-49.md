@@ -24,10 +24,12 @@ their own independent context."* Chat bottom-bar/model-switcher remains
 (sandbox). Verified live end-to-end against real OpenRouter keys
 (`scripts/battery-r49.mjs`, all 5 checks green — §Verification).
 
-**Commit:** `85d303b` — the whole round ships as one commit (migration
-0019 + runtime/tool fixes + browser proxy fix + frontend + the battery
-script + docs); version **0.49.0** across all four manifests +
-CHANGELOG.
+**Commits:** `bb127e6` (the round: migration 0019 + runtime/tool fixes +
+browser proxy fix + frontend + the battery script + docs) → `7601c28`
+(the CORS allow-methods PUT fix found by the live browser pass + docs
+truth-sync); version **0.49.0** across all four manifests + CHANGELOG.
+CI: run 33267143225 @ bb127e6 success and run 33268127374 @ 7601c28
+success, both API-verified before this claim.
 
 ## What shipped
 
