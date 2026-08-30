@@ -1,0 +1,3 @@
+# Windows batch files MUST keep CRLF in every checkout — cmd.exe cannot
+# run an LF .bat (round-11 lesson; the release workflow verifies it).
+*.bat text eol=crlf
