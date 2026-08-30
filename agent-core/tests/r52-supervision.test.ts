@@ -146,23 +146,37 @@ const SLEEPER_JS = `setTimeout(() => {}, Number(process.argv[2]) * 1000);\n`;
 
 /** The direct holder (the Windows fixture): prints `late-holder-output` at
  * argv[3] ms and lives argv[2] ms — used via the owner's EXACT idiom
- * `start /B node holder.js …`, which provably relays cmd's pipe handles
- * (his 10-minute hang IS this mechanism). On Windows, node's own
- * `stdio:'inherit'` chain through cmd.exe does NOT hold the outer pipes
- * (the CI run proved it — the job never registered), but `start /B` does. */
+ * `start /B node holder.js … > holder.log 2>&1`, which provably relays cmd's
+ * pipe HANDLES (his 10-minute hang IS this mechanism). The second CI run
+ * taught the subtlety: on a console-less runner `start /B` passes the
+ * handles (the job registers + stays RUNNING) but the started process's
+ * stdout is NOT our pipe — so the late line is ALSO appended straight to
+ * holder.log and job_status's LOG TAIL carries it (cmd may or may not bind
+ * the redirect to the started process; the fs write makes it deterministic). */
 const HOLDER_JS = `${[
-  'setTimeout(() => console.log("late-holder-output"), Number(process.argv[3]));',
-  'setTimeout(() => {}, Number(process.argv[2]));',
+  'const lateMs = Number(process.argv[3]);',
+  'const ms = Number(process.argv[2]);',
+  'setTimeout(() => {',
+  '  console.log("late-holder-output");',
+  '  try {',
+  '    require("node:fs").appendFileSync(',
+  '      require("node:path").join(process.cwd(), "holder.log"),',
+  '      "late-holder-output\\n",',
+  '    );',
+  '  } catch {}',
+  '}, lateMs);',
+  'setTimeout(() => {}, ms);',
 ].join("\n")}\n`;
 
 /** The pipe-holding launcher command, per platform:
  * - POSIX: node spawns node (the launcher exits, the grandchild holds the
- *   inherited pipe write-ends);
- * - Windows: the owner's exact `start /B` idiom (the started process holds
- *   cmd's pipe handles directly). */
+ *   inherited pipe write-ends); the late line rides the PIPE tail.
+ * - Windows: the owner's exact `start /B … > log 2>&1` (the started process
+ *   holds cmd's pipe handles — his bug — and the late line rides the LOG
+ *   tail, deterministic even on console-less runners). */
 const PIPE_HOLDER = (ms: number, lateMs = 3200): string =>
   process.platform === "win32"
-    ? `start /B node holder.js ${ms} ${lateMs}`
+    ? `start /B node holder.js ${ms} ${lateMs} > holder.log 2>&1`
     : `node pipe-holder.js ${ms} ${lateMs}`;
 const SLEEPER = (seconds: number): string => `node sleeper.js ${seconds}`;
 
@@ -345,9 +359,12 @@ describe("ROUND-52 (R52-a): job_status / job_stop tools + REST routes", () => {
     expect(listRes.output).toContain("RUNNING");
 
     const idMatch = launch.output.match(/\[background job (j[0-9a-f]+)\]/);
-    // The grandchild prints `late-holder-output` at ~3.2s — AFTER the pipe
-    // grace registered the job — so the registry's live tail must capture
-    // it. Poll briefly (registration timing varies on CI runners).
+    // The grandchild emits `late-holder-output` at ~3.2s — AFTER the pipe
+    // grace registered the job — so the live tail must capture it. POSIX:
+    // the pipe tail (the grandchild's stdout IS our pipe). Windows: the log
+    // tail (holder.js appends the line itself — `start /B` on a console-less
+    // runner passes the pipe HANDLES but not stdout). Poll briefly either
+    // way (registration + print timing varies on CI runners).
     const deadline = Date.now() + 6000;
     let oneRes = await tool(tools, "job_status").execute({ job: idMatch![1] });
     while (!oneRes.output.includes("late-holder-output") && Date.now() < deadline) {
