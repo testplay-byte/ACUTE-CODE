@@ -13,6 +13,7 @@ import {
   getAgentsBackend,
   httpAgents,
   parseDiffArgs,
+  pickFolderViaBackend,
   restoreCheckpoint,
   storeProviderKey,
   testProviderConnection,
@@ -1157,6 +1158,65 @@ describe("pickFilesViaBackend (ROUND-50 R50-c1)", () => {
 
     vi.stubGlobal("fetch", vi.fn().mockRejectedValue(new TypeError("fetch failed")));
     await expect(pickFilesViaBackend()).rejects.toThrow(/could not open the file picker/);
+  });
+});
+
+describe("pickFolderViaBackend (R54: bounded dialog fetch)", () => {
+  it("posts to the sidecar /internal/dialog/folder with the bearer token and unwraps the path", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      jsonResponse(200, { path: "C:\\Users\\owner\\Projects\\my-app" }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    const picked = await pickFolderViaBackend();
+    expect(picked).toEqual({ path: "C:\\Users\\owner\\Projects\\my-app" });
+    const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    expect(url).toBe("http://sidecar.test/internal/dialog/folder");
+    expect(init.method).toBe("POST");
+    expect((init.headers as Record<string, string>).Authorization).toBe("Bearer tok_123");
+    // The fetch is bounded — a hung OS dialog must not spin Browse forever.
+    expect(init.signal).toBeInstanceOf(AbortSignal);
+  });
+
+  it("501 (no dialog backend) reports unavailable — the caller points at manual entry", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(jsonResponse(501, {})));
+    const picked = await pickFolderViaBackend();
+    expect(picked).toEqual({ path: null, unavailable: true });
+  });
+
+  it("HTTP failure and dialog errors are surfaced, never silenced as 'cancelled'", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(jsonResponse(500, {})));
+    await expect(pickFolderViaBackend()).resolves.toMatchObject({ error: /HTTP 500/ });
+
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(jsonResponse(200, { path: null, error: "PowerShell blocked" })));
+    await expect(pickFolderViaBackend()).resolves.toMatchObject({ error: /PowerShell blocked/ });
+  });
+
+  it("a network failure reports why it could not reach the sidecar", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockRejectedValue(new TypeError("fetch failed")));
+    await expect(pickFolderViaBackend()).resolves.toMatchObject({ error: /could not reach the sidecar/ });
+  });
+
+  it("the 2-minute timeout aborts the fetch and tells the owner to paste instead", async () => {
+    vi.useFakeTimers();
+    try {
+      vi.stubGlobal(
+        "fetch",
+        vi.fn((_url: string, init?: RequestInit) =>
+          new Promise((_resolve, reject) => {
+            init?.signal?.addEventListener("abort", () =>
+              reject(new DOMException("The operation was aborted.", "AbortError")),
+            );
+          }),
+        ),
+      );
+      const pending = pickFolderViaBackend();
+      await vi.advanceTimersByTimeAsync(120_000);
+      await expect(pending).resolves.toMatchObject({
+        error: /timed out — paste the folder path instead/,
+      });
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
 

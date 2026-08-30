@@ -1018,6 +1018,133 @@ def _version_tuple(text):
         return (0, 0, 0)
 
 
+# R54: the two tauri resource layouts seen across bundler versions — resources
+# land either directly in the install dir or under a resources/ subfolder.
+def _desktop_resource_candidates(base, *relative):
+    """Existing <base>/<relative> or <base>/resources/<relative>, newest-check
+    order. Returns the first that EXISTS, else the last candidate (for the
+    missing-file report)."""
+    paths = [base.joinpath(*relative), base.joinpath("resources", *relative)]
+    for path in paths:
+        if path.is_file():
+            return path
+    return paths[-1]
+
+
+def _desktop_install_files(installed):
+    r"""R54: verify the install ON DISK, not just in the registry.
+
+    The owner's post-mortem: after deleting AppData\Local\ACUTE-CODE by hand,
+    the launcher still said 'installed desktop app 0.53.0 is current' (the
+    NSIS uninstall entry survives folder deletion) and then silently fell
+    back to the dev-servers flow because the exe was gone — instead of just
+    REINSTALLING. Returns (exe_or_None, missing_labels): the exe is returned
+    only when the app binary, the pinned node.exe runtime, and the sidecar
+    entry all exist.
+    """
+    base = Path(installed["location"])
+    exe = base / DESKTOP_EXE_NAME
+    node = _desktop_resource_candidates(base, "sidecar", "node.exe")
+    entry = _desktop_resource_candidates(base, "sidecar", "app", "dist", "main.js")
+    missing = []
+    if not exe.is_file():
+        missing.append(DESKTOP_EXE_NAME)
+    if not node.is_file():
+        missing.append("sidecar/node.exe")
+    if not entry.is_file():
+        missing.append("sidecar/app/dist/main.js")
+    if missing:
+        return None, missing
+    return exe, []
+
+
+def _desktop_stop_running(installed):
+    """R54: close every process whose executable lives inside the install dir.
+
+    A running app locks the files the silent installer must replace (upgrades
+    on top of a live instance can leave a hybrid install), and launching over
+    a live instance opens a second window. Precise by design: it kills the app
+    AND its bundled sidecar node.exe (their ExecutablePath is under the
+    install dir) but never anyone else's node. Best-effort — failures warn.
+    """
+    if not IS_WIN:
+        return
+    location = str(installed["location"]).replace("'", "''")
+    # NOTE: '\\*' in this Python literal is a single backslash + wildcard —
+    # the PowerShell -like pattern '<install-dir>\*' matches every executable
+    # under the install dir (the app + its bundled node.exe, nobody else's).
+    ps = (
+        "$procs = Get-CimInstance Win32_Process -Filter \"ExecutablePath IS NOT NULL\" | "
+        f"Where-Object {{ $_.ExecutablePath -like '{location}\\*' }}; "
+        "if ($procs) { "
+        "$procs | ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }; "
+        "Write-Output 'stopped' }"
+    )
+    code, out = probe(["powershell", "-NoProfile", "-Command", ps], timeout=30)
+    if code == 0 and out and "stopped" in out:
+        ok("closed the running desktop app (relaunching it fresh)")
+        time.sleep(1.0)
+        return
+    # Fallback: at least the app itself, by image name (no sidecar knowledge).
+    code2, _ = probe(["taskkill", "/IM", DESKTOP_EXE_NAME, "/F"], timeout=15)
+    if code2 == 0:
+        ok("closed the running desktop app (relaunching it fresh)")
+        time.sleep(1.0)
+
+
+def _desktop_watch_engine(proc, timeout_s=45):
+    r"""R54: watch the freshly launched app's engine through sidecar.log.
+
+    The app's Rust shell appends every lifecycle line to
+    %APPDATA%\acute-code\sidecar.log; 'listening on 127.0.0.1:<port>' means
+    agent-core is up. This turns the launcher window into a first-run smoke
+    test — the owner SEES the engine come up (or the log tail when it does
+    not) instead of a console that went quiet while the app window shows its
+    offline screen.
+    """
+    appdata = os.environ.get("APPDATA")
+    if not IS_WIN or not appdata:
+        return
+    log_file = Path(appdata) / "acute-code" / "sidecar.log"
+    try:
+        start_size = log_file.stat().st_size if log_file.is_file() else 0
+    except OSError:
+        start_size = 0
+    deadline = time.time() + timeout_s
+    while time.time() < deadline:
+        if proc.poll() is not None:
+            warn(f"the desktop app exited on its own (code {proc.returncode})")
+            return
+        time.sleep(1.5)
+        try:
+            if not log_file.is_file():
+                continue
+            size = log_file.stat().st_size
+            if size < start_size:  # rotated/truncated → read everything
+                start_size = 0
+            with log_file.open("rb") as fh:
+                fh.seek(start_size)
+                fresh = fh.read().decode("utf-8", "replace")
+        except OSError:
+            continue
+        match = re.search(r"listening on 127\.0\.0\.1:(\d+)", fresh)
+        if match:
+            ok(f"agent-core is up — sidecar listening on port {match.group(1)}")
+            return
+        if "startup failed" in fresh:
+            warn("the app reports an engine startup failure — its log tail:")
+            tail = [line for line in fresh.splitlines() if line.strip()][-12:]
+            for line in tail:
+                note(line.strip()[:160])
+            note("the same log is shown inside the app (offline screen → Copy diagnostics)")
+            return
+    warn(
+        f"agent-core did not report ready within {timeout_s}s — the app window "
+        "shows the live status (first launch can be slow while Windows scans "
+        "the new files)"
+    )
+
+
 def _desktop_find_installed():
     """Probe the HKCU/HKLM uninstall registry for the installed desktop app.
 
@@ -1205,6 +1332,15 @@ def desktop_flow(pat, key, sub_keys):
     Any failure prints a warning and returns False — the caller falls back
     to the dev-servers flow, so a desktop hiccup can never leave the owner
     without a working app.
+
+    R54 hardening (owner post-mortem: 'installed desktop app 0.53.0 is
+    current' followed by 'ACUTE-CODE.exe not found — using the dev-servers
+    flow'): the registry is no longer trusted alone — the install is verified
+    ON DISK (exe + pinned node.exe + the sidecar entry) and a broken install
+    is REPAIRED by reinstalling instead of falling back; running instances
+    are closed before install and launch; and the launched app's engine
+    startup is watched through sidecar.log so this console shows the real
+    engine state (or its error tail) instead of going silent.
     """
     with step("Desktop app (packaged ACUTE-CODE)"):
         release = _desktop_latest_release(pat)
@@ -1214,13 +1350,30 @@ def desktop_flow(pat, key, sub_keys):
             return False
         version, asset_id = release
         installed = _desktop_find_installed()
-        if installed is not None and _version_tuple(installed["version"]) >= _version_tuple(version):
+        exe, missing = (
+            _desktop_install_files(installed) if installed is not None else (None, [])
+        )
+        if (
+            installed is not None
+            and not missing
+            and _version_tuple(installed["version"]) >= _version_tuple(version)
+        ):
             ok(f"installed desktop app {installed['version']} is current ({installed['location']})")
         else:
-            if installed is not None:
+            if installed is not None and missing:
+                warn(
+                    "registry says {} is installed, but files are missing ({})".format(
+                        installed["version"], ", ".join(missing)
+                    )
+                )
+                ok("reinstalling the desktop app to repair it")
+            elif installed is not None:
                 ok(f"upgrading the desktop app {installed['version']} → {version}")
             else:
                 ok(f"installing the desktop app {version} (first time)")
+            # R54: a running instance locks the files the installer replaces.
+            if installed is not None:
+                _desktop_stop_running(installed)
             installer = _desktop_download(pat, asset_id, version)
             if installer is None:
                 warn("could not download the installer — using the dev-servers flow")
@@ -1233,27 +1386,39 @@ def desktop_flow(pat, key, sub_keys):
             if installed is None:
                 warn("the installer finished but no installed app was found — using the dev-servers flow")
                 return False
+            exe, missing = _desktop_install_files(installed)
+            if missing:
+                warn(
+                    "the install is incomplete ({} missing) — using the dev-servers flow".format(
+                        ", ".join(missing)
+                    )
+                )
+                return False
             ok(f"installed {installed['version']} → {installed['location']}")
 
     # Credentials BEFORE launch: the app's Rust shell reads Credential
     # Manager at boot, so the keys must be in place before the exe starts.
     _desktop_seed_keys(key, sub_keys)
 
-    exe = Path(installed["location"]) / DESKTOP_EXE_NAME
-    if not exe.is_file():
-        warn(f"{exe} not found — using the dev-servers flow")
-        return False
+    # R54: never launch a second instance on top of a live one.
+    _desktop_stop_running(installed)
+
     with step("Starting the desktop app"):
         try:
             # DETACHED_PROCESS: the GUI app gets no console of ours and
             # survives this launcher window; we keep a handle to report when
             # it closes.
             creationflags = 0x00000008 if IS_WIN else 0  # DETACHED_PROCESS
-            proc = subprocess.Popen([str(exe)], cwd=str(installed["location"]), creationflags=creationflags)
+            proc = subprocess.Popen(
+                [str(exe)], cwd=str(installed["location"]), creationflags=creationflags
+            )
         except OSError as exc:
             warn(f"could not start the desktop app ({exc.__class__.__name__}) — using the dev-servers flow")
             return False
         ok(f"ACUTE-CODE.exe is running (pid {proc.pid})")
+        # R54: first-run smoke test — watch agent-core come up (or fail) so
+        # this console tells the owner what the app window is doing.
+        _desktop_watch_engine(proc)
     panel(
         "The desktop app started — the agent backend is bundled inside\n"
         "(no servers to manage, no browser tab: it is a real app window\n"
@@ -1261,7 +1426,9 @@ def desktop_flow(pat, key, sub_keys):
         "  ➜  Keep this window open while using the app (Ctrl+C just\n"
         "     closes THIS window — the app keeps running)\n"
         "  ➜  Your keys were stored in Windows Credential Manager\n"
-        "  ➜  Updates install automatically on the next double-click",
+        "  ➜  Updates install automatically on the next double-click\n"
+        "  ➜  If the app ever shows \"Can't reach agent-core\", its offline\n"
+        "     screen now shows the engine log + a Copy-diagnostics button",
         style="green",
         title="▲ ACUTE-CODE desktop app",
     )

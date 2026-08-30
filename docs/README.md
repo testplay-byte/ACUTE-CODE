@@ -1,4 +1,4 @@
-<!-- last-reviewed: 2026-08-30 round-53 -->
+<!-- last-reviewed: 2026-08-30 round-54 -->
 # ACUTE-CODE — Documentation Index
 
 One line per document. **Reading order for a new session:** `HANDOFF.md` →

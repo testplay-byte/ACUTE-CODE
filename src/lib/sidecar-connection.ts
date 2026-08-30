@@ -32,8 +32,14 @@ import {
 
 /** Poll cadence while the shell handshake is in flight. */
 const POLL_INTERVAL_MS = 400;
-/** Generous deadline: a cold first boot runs SQLite migrations inside node. */
-const CONNECT_TIMEOUT_MS = 90_000;
+/**
+ * Generous deadline. R54: raised 90s → 150s because the Rust handshake now
+ * RETRIES (3 attempts × up to 40s + pauses ≈ 125s worst case) — cold first
+ * boots (Defender scanning a fresh install, first SQLite migration) are
+ * exactly the runs that need the retries, and the UI deadline must not give
+ * up before the shell's own retry loop has had its full say.
+ */
+const CONNECT_TIMEOUT_MS = 150_000;
 /** Mid-session liveness cadence once connected. */
 const WATCHDOG_INTERVAL_MS = 20_000;
 
@@ -86,7 +92,7 @@ async function connectLoop(gen: number): Promise<void> {
       setConnection(
         "offline",
         `agent-core did not become ready within ${Math.round(CONNECT_TIMEOUT_MS / 1000)}s — ` +
-          "check sidecar.log in the app's data folder and retry",
+          "the engine log below shows what happened; Retry runs a fresh start",
       );
       return;
     }

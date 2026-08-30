@@ -19,6 +19,10 @@ pub fn run() {
             sidecar::sidecar_status,
             sidecar::restart_sidecar,
             sidecar::ping_sidecar,
+            // ROUND-54 (R54): the offline screen renders the last lines of
+            // sidecar.log in-app (with a copy-diagnostics button) — the owner
+            // no longer has to hunt for %APPDATA%\acute-code by hand.
+            sidecar::sidecar_log_tail,
             keys::store_provider_key,
             keys::provider_key_status,
             dialogs::pick_folder,

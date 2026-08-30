@@ -1,4 +1,4 @@
-<!-- last-reviewed: 2026-08-30 round-53 -->
+<!-- last-reviewed: 2026-08-30 round-54 -->
 # TESTING — the verification ladder
 
 Five layers; each has a defined "when mandatory". Rules here are binding
@@ -13,34 +13,31 @@ Five layers; each has a defined "when mandatory". Rules here are binding
 | L4 live battery | real provider turn(s), real disk, fresh DB | sandbox, single invocation | anything touching agents, projects, tools, streaming |
 | L5 browser verification | real UI against the live stack; screenshots machine-verified | sandbox, single invocation | any UI-affecting round |
 
-**Current counts (R53, verified 2026-08-30):** `pnpm test` = **1058 tests
-in 75 files** (1046 unit + 12 e2e — the e2e split is 8 sidecar + 4
+**Current counts (R54, verified 2026-08-30):** `pnpm test` = **1071 tests
+in 76 files** (1059 unit + 12 e2e — the e2e split is 8 sidecar + 4
 terminal-session). Trajectory: 262 (R42) → 397 (R43) → 471 (R44) → 565
 (R45) → 622 (R46) → 683 (R47) → 752 (R48) → 815ish (R49) → 930 (R50) →
-978 (R51) → 1035 (R52) → 1058 (R53), same counting basis. New/changed R53
-suites: `config-store` NEW 7 (THE STALE-PORT REGRESSION: a persisted v1
-blob carrying the owner's dead port 55963 is ignored on Tauri rehydrate —
-baseUrl falls back to the safe default, demoData true, connection
-"connecting"; nothing ever persists in Tauri mode (adoptEndpoint leaves no
-trace); browser mode keeps the historical persistence and rehydrates v2
-blobs; v1 blobs retire in browser mode too; setConnection carries/clears
-the offline error) · `sidecar-connection` NEW 9 (the connect loop: adopt
-after N failures + demoData off + ALL queries invalidated; reads
-sidecar_status between attempts; fail-fast on failed/stopped with the REAL
-error and STOPS polling; honest 90s timeout; browser no-op; the watchdog
-mid-session death → offline with the exit reason; a transient blip
-reconnects + re-invalidates; retryConnection restarts through the shell
-then adopts the fresh endpoint) · `sidecar` 3→10 (the shell-command
-wrappers: sidecar_info resolves/absorbs refusals, sidecar_status passes
-the phase view + failure reason, restart_sidecar/ping_sidecar round-trips
-and refusal reporting) · plus `cargo check` GREEN ON x86_64-pc-windows-gnu
-(the R53 shell changes are the first type-checked against the Windows
-target IN-SANDBOX — via a user-local mingw; CI re-verifies on
-windows-latest). The R53 live battery (L4+L5): fresh-profile browser boot
-→ wizard → project created through the owner's exact failing path → live
-chat turn (glm-5.2:free) replied exactly as asked → Usage on real ledger
-data → Sub-agents tab fully live (key slots + 18/46 model catalog) → zero
-console/page errors.
+978 (R51) → 1035 (R52) → 1058 (R53) → 1071 (R54), same counting basis.
+New/changed R54 suites: `ConnectionGate.test.tsx` NEW 5 (the R54 offline
+screen: renders the shell error + the sidecar_log_tail log box + the
+Copy-diagnostics button + the full-log path; falls back to the %APPDATA%
+pointer when no tail is available; Retry drives retryConnection) · `sidecar`
+10→13 (the sidecar_log_tail wrapper: resolves path+lines with the requested
+count, defaults to 60, null outside Tauri / on shell refusal) · `api` +5
+(pickFolderViaBackend: bearer POST to /internal/dialog/folder with a BOUND
+fetch (AbortSignal), 501 → unavailable, HTTP/dialog errors surfaced, network
+failure reason, and the 2-minute abort → "paste the folder path instead") ·
+`sidecar-connection` (the honest-timeout test repinned to the R54 150s
+deadline, still asserting connecting at 149s → offline after) · plus `cargo
+check` GREEN on x86_64-pc-windows-gnu (user-local mingw) and the LAUNCHER
+helpers logic-tested in-sandbox with IS_WIN patched (the owner's exact
+registry-only scenario → the reinstall decision; both tauri resource
+layouts; the PS `-like` single-backslash pattern; watch-engine success /
+failure-tail / rotation / timeout paths). The R54 live battery (L4+L5): dev
+stack booted, connection gate pass-through in browser mode, Add-project
+Browse on Linux (no zenity → immediate, honest error hint with the
+paste-guidance, no eternal spinner), project created by pasting a path —
+the owner's exact fallback flow.
 `r52-supervision` NEW 14 (exec helpers: background-launch grammar + log-
 redirect parsing; the hang fix: pipe-holding grandchild resolves FAST with
 a job id — the owner's exact trap, cross-platform via node-spawns-node;

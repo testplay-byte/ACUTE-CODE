@@ -3,7 +3,7 @@
   "product": {
     "name": "Acute",
     "tagline": "Local-first multi-agent engineering workbench",
-    "version": "0.53.0",
+    "version": "0.54.0",
     "availability": "Private build — not yet distributed",
     "chips": [
       "Windows desktop",
@@ -152,8 +152,8 @@
   ],
   "plan": {
     "current": {
-      "title": "Round 53 DELIVERED — the connection round (first packaged-app session)",
-      "detail": "The owner's first run of the NSIS-installed desktop app reported 'Could not reach agent-core at http://127.0.0.1:55963 (TypeError: Failed to fetch)' + 'Agent core unreachable' in Settings + keys that looked missing — one root cause, three symptoms. The sidecar binds an EPHEMERAL port per launch; the UI persisted that port to localStorage so the next boot rehydrated a dead endpoint. Fixes: the store persists NOTHING inside Tauri (v1 blobs retired on read); the Rust handshake moved to a background thread; the webview POLLS sidecar_info (fail-fast on sidecar_status errors); the whole app tree is gated by a connection splash so no query can fire at a stale endpoint; an offline screen shows the REAL error with a one-click Restart-engine (new restart_sidecar + sidecar_status shell commands); a child monitor + 20s ping watchdog recover mid-session deaths; every lifecycle line lands in %APPDATA%\\acute-code\\sidecar.log (keys logged as id+length only). 1058 tests + cargo check on the Windows target + a live browser battery (project created through the owner's exact failing path, live chat turn, Usage + Sub-agents on real data)."
+      "title": "Round 54 DELIVERED — the reliability round (second packaged-app session)",
+      "detail": "The owner's second desktop session: 'can't reach agent core' with Restart-engine not recovering it, and after deleting the app folder the launcher said '0.53.0 is current' but 'ACUTE-CODE.exe not found — using the dev-servers flow'. Three root causes fixed: (1) the launcher trusted the NSIS REGISTRY entry, which survives folder deletion — the install is now verified ON DISK (exe + pinned node.exe + sidecar entry) and a broken install is REPAIRED by reinstalling; (2) the packaged app's engine failures were half-blind — agent-core prints its real crash reason to stderr but a GUI process has no stderr handle (Stdio::inherit went nowhere); stderr is now PIPED, drained into sidecar.log, and embedded in the failure error; a failed handshake also KILLED its child now (the old code orphaned a node.exe holding the SQLite DB — the actual mechanism behind 'restart engine didn't work'); the handshake RETRIES (3 attempts, 25s ready budget) before declaring Failed; (3) the offline screen now renders the last 60 sidecar.log lines IN-APP (new sidecar_log_tail shell command) with a Copy-diagnostics button, and the launcher window itself watches sidecar.log after launching the app and prints 'agent-core is up — port N' or the failure tail. Browser-mode folder picking is bounded (2-min abort) with paste-the-path guidance on every failure. cargo check green on the Windows target; launcher helpers logic-tested against the owner's exact scenario; +12 frontend tests."
     },
     "upcoming": [
       {
@@ -188,5 +188,5 @@
       "Quality over speed — every round verified before push"
     ]
   },
-  "round": 53
+  "round": 54
 }

@@ -1,4 +1,4 @@
-<!-- last-reviewed: 2026-08-30 round-53 -->
+<!-- last-reviewed: 2026-08-30 round-54 -->
 # Round 05 — Button polish + PlugBrain full pass + live-key verification (2026-08-22)
 
 Owner go-ahead: "continue and handle all three of the things properly…

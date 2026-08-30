@@ -134,7 +134,11 @@ describe("connect loop — failure paths", () => {
     sidecarMock.getSidecarStatus.mockResolvedValue({ phase: "starting" });
 
     beginSidecarConnect();
-    await vi.advanceTimersByTimeAsync(91_000);
+    // R54: the deadline is 150s now (the Rust handshake retries 3× before
+    // declaring Failed) — 150s of "starting" must still resolve to offline.
+    await vi.advanceTimersByTimeAsync(149_000);
+    expect(useConfigStore.getState().connection).toBe("connecting");
+    await vi.advanceTimersByTimeAsync(2_000);
 
     const s = useConfigStore.getState();
     expect(s.connection).toBe("offline");

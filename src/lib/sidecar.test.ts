@@ -2,6 +2,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   getSidecarInfo,
+  getSidecarLogTail,
   getSidecarStatus,
   isTauri,
   pingSidecar,
@@ -106,5 +107,40 @@ describe("ROUND-53 shell command wrappers", () => {
       throw new Error("health check failed");
     });
     await expect(pingSidecar()).resolves.toBe(false);
+  });
+});
+
+describe("ROUND-54 sidecar_log_tail wrapper", () => {
+  it("resolves the log tail (path + lines, oldest first)", async () => {
+    stubTauri(async (command, args) => {
+      expect(command).toBe("sidecar_log_tail");
+      expect(args).toEqual({ lines: 60 });
+      return {
+        path: "C:\\Users\\khurr\\AppData\\Roaming\\acute-code\\sidecar.log",
+        lines: ["[t] sidecar: lifecycle start", "[t] sidecar: listening on 127.0.0.1:51999"],
+      };
+    });
+    await expect(getSidecarLogTail(60)).resolves.toEqual({
+      path: "C:\\Users\\khurr\\AppData\\Roaming\\acute-code\\sidecar.log",
+      lines: ["[t] sidecar: lifecycle start", "[t] sidecar: listening on 127.0.0.1:51999"],
+    });
+  });
+
+  it("defaults to 60 lines when called without arguments", async () => {
+    const seen: Array<[string, Record<string, unknown> | undefined]> = [];
+    stubTauri(async (command, args) => {
+      seen.push([command, args]);
+      return { path: "/x/sidecar.log", lines: [] };
+    });
+    await expect(getSidecarLogTail()).resolves.toEqual({ path: "/x/sidecar.log", lines: [] });
+    expect(seen).toEqual([["sidecar_log_tail", { lines: 60 }]]);
+  });
+
+  it("is null outside Tauri / on shell refusal", async () => {
+    expect(await getSidecarLogTail()).toBeNull();
+    stubTauri(async () => {
+      throw new Error("boom");
+    });
+    expect(await getSidecarLogTail()).toBeNull();
   });
 });

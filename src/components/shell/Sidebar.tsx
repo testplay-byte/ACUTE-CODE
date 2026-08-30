@@ -1200,20 +1200,35 @@ function AddProjectDialog({
   }, []);
 
   const handleBrowse = useCallback(async () => {
-    setPicking(true); setPickHint(null);
+    setPicking(true);
+    // R54: immediate feedback while the OS dialog opens — the owner's browser
+    // reports showed a silent spinner with no hint that pasting always works.
+    setPickHint("Opening the system folder dialog…");
     try {
       if (isTauri()) {
         const folder = await tauriInvoke<string | null>("pick_folder");
         if (typeof folder === "string" && folder) setRootPath(folder);
+        setPickHint(null);
         return;
       }
       const picked = await pickFolderViaBackend();
-      if (picked.path) setRootPath(picked.path);
-      else if (picked.unavailable) setPickHint("No folder dialog — paste the path.");
-      else if (picked.error) setPickHint(`Dialog failed: ${picked.error}`);
+      if (picked.path) {
+        setRootPath(picked.path);
+        setPickHint(null);
+      } else if (picked.unavailable) {
+        setPickHint("No folder dialog on this machine — paste the folder path above.");
+      } else if (picked.error) {
+        setPickHint(`Dialog failed: ${picked.error} — paste the folder path above instead.`);
+      } else {
+        setPickHint(null);
+      }
     } catch (cause) {
-      setPickHint(`Dialog failed: ${cause instanceof Error ? cause.message : String(cause)}`);
-    } finally { setPicking(false); }
+      setPickHint(
+        `Dialog failed: ${cause instanceof Error ? cause.message : String(cause)} — paste the folder path above instead.`,
+      );
+    } finally {
+      setPicking(false);
+    }
   }, []);
 
   const createProject = useCreateProject();

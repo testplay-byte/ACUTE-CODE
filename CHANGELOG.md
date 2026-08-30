@@ -1,4 +1,4 @@
-<!-- last-reviewed: 2026-08-30 round-53 -->
+<!-- last-reviewed: 2026-08-30 round-54 -->
 # Changelog
 
 All notable changes to ACUTE-CODE are documented here. Entries are written for
@@ -14,6 +14,68 @@ version number is single-sourced from the root `package.json`
 Planned next: installer code-signing (SmartScreen), the deepseek-harness
 future candidates (compaction pressure-trigger, continuable sub-agent
 children), the Files-tab polish.
+
+## [0.54.0] - 2026-08-30
+
+Round 54 — the reliability round. The owner's second desktop session reported
+"can't reach agent core" on the packaged app (with Restart-engine not
+recovering it), and after deleting the app folder the launcher printed
+"installed desktop app 0.53.0 is current" followed by "ACUTE-CODE.exe not
+found — using the dev-servers flow" instead of reinstalling. Three root
+causes, three fixes, plus a big diagnosability upgrade so the NEXT failure
+explains itself.
+
+### Fixed
+
+- **The launcher now trusts the disk, not the registry.** The NSIS uninstall
+  entry survives manual deletion of the install folder, so the launcher
+  believed "0.53.0 is current" while the exe was gone — and fell back to the
+  browser instead of reinstalling. The install is now verified on disk
+  (the app exe, the pinned `node.exe`, and the sidecar entry) before the
+  "is current" decision; a broken install is repaired by reinstalling, and
+  the console says exactly what was missing.
+- **The packaged app's engine failures are no longer half-blind.** agent-core
+  prints its real startup failure to stderr — but a GUI app has no stderr
+  handle, so the old `Stdio::inherit()` sent it nowhere: the app could only
+  ever say "stdout closed before the ready line". stderr is piped now and
+  drained into `sidecar.log` (`sidecar:stderr] …`), and the failed-startup
+  error string carries the engine's recent output.
+- **A failed handshake no longer orphans its node.exe.** The old code dropped
+  the child on a ready-line/health failure — on Windows the process kept
+  running, holding the SQLite database while every Restart-engine attempt
+  raced a zombie. Failed attempts now kill the whole child tree.
+- **Running instances are closed before install and launch.** Upgrading over
+  a live app can leave a hybrid install (locked files), and launching over
+  one opens a second window. The launcher now closes exactly the processes
+  whose executables live in the install dir (the app + its bundled node —
+  never anyone else's node).
+
+### Changed
+
+- **The engine handshake retries (3 attempts, 25s ready budget each) before
+  declaring failure.** A cold first boot — Windows Defender scanning a
+  freshly installed 200+ MB tree, the first SQLite migration — is exactly the
+  launch most likely to outrun a single deadline. The UI's connect deadline
+  follows (90s → 150s) so the webview never gives up before the shell's own
+  retry loop has had its say.
+
+### Added
+
+- **The offline screen shows the engine log in-app.** Instead of "check
+  sidecar.log in %APPDATA%", the screen now renders the last 60 log lines in
+  a scrollable box (new `sidecar_log_tail` shell command) with a **Copy
+  diagnostics** button that puts the error + log on the clipboard — a
+  failure now explains itself on screen.
+- **The launcher window watches the engine start.** After launching the
+  desktop app, ACUTE.bat polls `sidecar.log` for the "listening on
+  127.0.0.1:…" line and prints "agent-core is up — port N" — or the log tail
+  when the engine fails — so the console that launched the app tells the
+  same story the app window does.
+- **Browser-mode folder picking is bounded and honest.** The Add-project
+  dialog's Browse button now shows "Opening the system folder dialog…"
+  feedback, the dialog fetch is limited to 2 minutes (a hung PowerShell
+  dialog used to spin the button forever), and every failure message says
+  outright that pasting the folder path always works.
 
 ## [0.53.0] - 2026-08-30
 

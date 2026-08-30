@@ -32,13 +32,33 @@
 //!   4. Every lifecycle line is appended to `<state_dir>/acute-code/sidecar.log`
 //!      (best-effort) — the packaged app finally has remotely readable
 //!      diagnostics. The file rotates at 1 MB so it never grows unbounded.
+//!
+//! ROUND-54 (R54) — THE OWNER'S "RESTART ENGINE DIDN'T WORK" REPORT. Three
+//! blind spots left the packaged app failing with no visible reason:
+//!
+//!   1. STDERR WAS INHERITED — a GUI-subsystem process has no stderr handle,
+//!      so agent-core's own crash messages (`main.ts` prints the real startup
+//!      failure to stderr, then exits) went NOWHERE. stderr is PIPED now and
+//!      drained into sidecar.log (`sidecar:stderr] …`), so the actual cause
+//!      (blocked native addon, missing env, port error…) is finally captured.
+//!   2. ONE-SHOT HANDSHAKE — a cold first boot (Windows Defender scanning a
+//!      freshly installed 216 MB tree, first SQLite migration) can outrun the
+//!      ready deadline, and a single failure parked the app on the offline
+//!      screen. The handshake now RETRIES (3 attempts) before declaring
+//!      Failed, and a failed attempt KILLS its child (the old code dropped
+//!      the Child on error, orphaning a node.exe that held the DB/port).
+//!   3. THE OFFLINE SCREEN SAID "CHECK sidecar.log" — the owner had to find
+//!      and open a file by hand. `sidecar_log_tail` now serves the last lines
+//!      to the UI, and the Failed error itself carries the recent engine
+//!      output, so the app explains its own failure on screen.
 
 use std::{
+    collections::VecDeque,
     io::{BufRead, BufReader, Read, Write},
     net::TcpStream,
     path::{Path, PathBuf},
     process::{Child, Command, Stdio},
-    sync::{mpsc, Mutex, RwLock},
+    sync::{mpsc, Mutex, OnceLock, RwLock},
     thread,
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
@@ -50,13 +70,26 @@ use tauri::{AppHandle, Manager, State};
 #[cfg(windows)]
 const CREATE_NO_WINDOW: u32 = 0x0800_0000;
 
-const READY_TIMEOUT: Duration = Duration::from_secs(15);
-const HEALTH_TIMEOUT: Duration = Duration::from_secs(10);
+/// R54: cold-boot budget raised — a fresh install being scanned by Windows
+/// Defender can easily outrun the old 15s; 25s keeps the fast machines fast
+/// and gives the slow first boot room to land.
+const READY_TIMEOUT: Duration = Duration::from_secs(25);
+const HEALTH_TIMEOUT: Duration = Duration::from_secs(15);
 const POLL_INTERVAL: Duration = Duration::from_millis(100);
 const CHILD_POLL_INTERVAL: Duration = Duration::from_millis(500);
 const SHUTDOWN_GRACE: Duration = Duration::from_secs(3);
 /// `sidecar.log` rotates once past this size (checked once per process boot).
 const LOG_ROTATE_BYTES: u64 = 1024 * 1024;
+/// R54: startup auto-retries — the first attempt on a cold, freshly installed
+/// (Defender-scanned) machine is exactly the one most likely to time out.
+const START_ATTEMPTS: u32 = 3;
+/// Pause between handshake attempts (lets AV scans finish, ports settle).
+const RETRY_PAUSE: Duration = Duration::from_secs(2);
+/// Recent stdout+stderr lines kept in memory so a Failed phase can carry the
+/// engine's own last words without a file read.
+const OUTPUT_RING_CAPACITY: usize = 24;
+/// How many ring lines are embedded in the Failed error string.
+const FAILED_TAIL_LINES: usize = 6;
 
 /// The observable lifecycle of the agent-core process. The UI drives its
 /// connection splash / offline banner from `sidecar_status`.
@@ -118,28 +151,71 @@ pub fn start(app: &AppHandle) {
 
 /// The background lifecycle: handshake → Running → monitor the child until it
 /// exits (mid-session crash → `Failed` with the exit code).
+///
+/// R54: the handshake RETRIES (see START_ATTEMPTS) — a single cold-boot
+/// timeout no longer parks the owner on the offline screen — and the final
+/// failure string carries the engine's recent output (stderr included), so
+/// the offline screen explains itself.
 fn handshake_thread(app: AppHandle) {
-    match spawn_and_handshake(&app) {
-        Ok(running) => {
-            let port = running.port;
-            {
-                let state = app.state::<SidecarState>();
-                *state.child.lock().unwrap_or_else(|p| p.into_inner()) = Some(running.child);
-                *state.phase.write().unwrap_or_else(|p| p.into_inner()) = SidecarPhase::Running {
-                    port,
-                    token: running.token,
-                };
+    clear_output_ring();
+    let mut last_error = String::new();
+    for attempt in 1..=START_ATTEMPTS {
+        match spawn_and_handshake(&app) {
+            Ok(running) => {
+                let port = running.port;
+                {
+                    let state = app.state::<SidecarState>();
+                    *state.child.lock().unwrap_or_else(|p| p.into_inner()) = Some(running.child);
+                    *state.phase.write().unwrap_or_else(|p| p.into_inner()) =
+                        SidecarPhase::Running {
+                            port,
+                            token: running.token,
+                        };
+                }
+                log_line(&format!(
+                    "sidecar: listening on 127.0.0.1:{port} (attempt {attempt}/{START_ATTEMPTS})"
+                ));
+                monitor_child(&app);
+                return;
             }
-            log_line(&format!("sidecar: listening on 127.0.0.1:{port}"));
-            monitor_child(&app);
-        }
-        Err(e) => {
-            log_line(&format!("sidecar: startup failed: {e}"));
-            let state = app.state::<SidecarState>();
-            *state.phase.write().unwrap_or_else(|p| p.into_inner()) =
-                SidecarPhase::Failed { error: e };
+            Err(e) => {
+                log_line(&format!(
+                    "sidecar: startup attempt {attempt}/{START_ATTEMPTS} failed: {e}"
+                ));
+                last_error = e;
+                if attempt < START_ATTEMPTS {
+                    log_line(&format!("sidecar: retrying in {}s…", RETRY_PAUSE.as_secs()));
+                    thread::sleep(RETRY_PAUSE);
+                }
+            }
         }
     }
+    let error = enrich_failure(&last_error);
+    log_line(&format!(
+        "sidecar: startup failed (all {START_ATTEMPTS} attempts): {error}"
+    ));
+    let state = app.state::<SidecarState>();
+    *state.phase.write().unwrap_or_else(|p| p.into_inner()) = SidecarPhase::Failed { error };
+}
+
+/// Append the engine's recent output to a startup-failure string (R54) — the
+/// `main.ts` crash path prints its reason to stderr and exits, and without
+/// this the UI would only ever see "stdout closed before the ready line".
+fn enrich_failure(error: &str) -> String {
+    let recent = recent_output();
+    if recent.is_empty() {
+        return error.to_string();
+    }
+    let tail = recent
+        .into_iter()
+        .rev()
+        .take(FAILED_TAIL_LINES)
+        .collect::<Vec<_>>()
+        .into_iter()
+        .rev()
+        .collect::<Vec<_>>()
+        .join("\n  ");
+    format!("{error}\nrecent engine output:\n  {tail}")
 }
 
 /// Watches the running child; a mid-session exit flips the phase to `Failed`
@@ -301,6 +377,38 @@ pub fn restart_sidecar(app: AppHandle, state: State<SidecarState>) -> Result<Str
     Ok("restarting".into())
 }
 
+/// R54: the offline screen's in-app diagnostics — the last lines of
+/// sidecar.log, so the owner never has to hunt for %APPDATA% by hand.
+#[derive(Serialize)]
+pub struct SidecarLogTail {
+    /// Absolute path of sidecar.log (shown so the owner can find the file).
+    pub path: String,
+    /// The most recent lines, oldest first (empty when no log exists yet).
+    pub lines: Vec<String>,
+}
+
+#[tauri::command]
+pub fn sidecar_log_tail(lines: Option<u32>) -> SidecarLogTail {
+    let want = lines.unwrap_or(60).clamp(1, 200) as usize;
+    let path = log_path();
+    let mut tail = Vec::new();
+    if let Some(p) = &path {
+        if let Ok(content) = std::fs::read_to_string(p) {
+            tail = content
+                .lines()
+                .rev()
+                .take(want)
+                .map(str::to_string)
+                .collect::<Vec<_>>();
+            tail.reverse();
+        }
+    }
+    SidecarLogTail {
+        path: path.map(|p| p.display().to_string()).unwrap_or_default(),
+        lines: tail,
+    }
+}
+
 #[tauri::command]
 pub fn ping_sidecar(state: State<SidecarState>) -> Result<String, String> {
     let port = {
@@ -338,8 +446,11 @@ fn spawn_and_handshake(app: &AppHandle) -> Result<RunningSidecar, String> {
         .current_dir(&cwd)
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
-        // Stderr stays inherited so dev sees sidecar errors in their terminal.
-        .stderr(Stdio::inherit());
+        // R54: stderr is PIPED and drained into sidecar.log — the packaged
+        // app is a GUI-subsystem process with NO stderr handle, so the old
+        // `Stdio::inherit()` sent agent-core's own crash messages (the real
+        // startup failure reason!) nowhere at all.
+        .stderr(Stdio::piped());
     // ARCHITECTURE §7: provider keys flow Credential Manager (DPAPI) -> child env,
     // never through the sidecar's REST surface or any file on disk.
     let mut injected_keys = Vec::new();
@@ -371,9 +482,75 @@ fn spawn_and_handshake(app: &AppHandle) -> Result<RunningSidecar, String> {
         .spawn()
         .map_err(|e| format!("spawning `{program}` in `{}`: {e}", cwd.display()))?;
 
-    let port = read_ready_line(&mut child)?;
-    health_poll(&mut child, port)?;
-    Ok(RunningSidecar { port, token, child })
+    // R54: drain stderr for the child's whole lifetime — the crash reason
+    // (`sidecar failed to start: …`) lands in sidecar.log AND the in-memory
+    // ring that enriches the Failed phase. Without this the packaged app's
+    // only diagnostic was "stdout closed before the ready line".
+    drain_stderr(&mut child);
+
+    // R54: a failed handshake KILLS its child. The old code dropped the Child
+    // on error, which on Windows leaves the node process RUNNING (orphan) —
+    // it kept the SQLite database and made every later restart attempt race
+    // a zombie (the owner's "restart engine didn't work" report).
+    let handshake =
+        read_ready_line(&mut child).and_then(|port| health_poll(&mut child, port).map(|_| port));
+    match handshake {
+        Ok(port) => Ok(RunningSidecar { port, token, child }),
+        Err(e) => {
+            log_line(&format!(
+                "sidecar: handshake failed, killing the child: {e}"
+            ));
+            kill_tree(&mut child);
+            let _ = child.wait();
+            Err(e)
+        }
+    }
+}
+
+/// R54: reads child stderr line-by-line for its lifetime; every line goes to
+/// sidecar.log (`sidecar:stderr] …`) and the in-memory output ring.
+fn drain_stderr(child: &mut Child) {
+    let Some(stderr) = child.stderr.take() else {
+        return;
+    };
+    thread::spawn(move || {
+        for line in BufReader::new(stderr).lines() {
+            let Ok(line) = line else { break };
+            log_line(&format!("sidecar:stderr] {line}"));
+            remember_output(&line);
+        }
+    });
+}
+
+// ── R54: the recent-output ring (stdout + stderr) ────────────────────────────
+
+fn output_ring() -> &'static Mutex<VecDeque<String>> {
+    static RING: OnceLock<Mutex<VecDeque<String>>> = OnceLock::new();
+    RING.get_or_init(|| Mutex::new(VecDeque::with_capacity(OUTPUT_RING_CAPACITY)))
+}
+
+fn remember_output(line: &str) {
+    let mut ring = output_ring().lock().unwrap_or_else(|p| p.into_inner());
+    if ring.len() >= OUTPUT_RING_CAPACITY {
+        ring.pop_front();
+    }
+    ring.push_back(line.to_string());
+}
+
+fn recent_output() -> Vec<String> {
+    output_ring()
+        .lock()
+        .unwrap_or_else(|p| p.into_inner())
+        .iter()
+        .cloned()
+        .collect()
+}
+
+fn clear_output_ring() {
+    output_ring()
+        .lock()
+        .unwrap_or_else(|p| p.into_inner())
+        .clear();
 }
 
 struct RunningSidecar {
@@ -631,7 +808,9 @@ fn read_ready_line(child: &mut Child) -> Result<u16, String> {
             }
             // R53: post-ready stdout lines go to sidecar.log too — agent-core's
             // own error output is the other half of packaged-app diagnostics.
+            // R54: they also feed the in-memory ring that enriches failures.
             log_line(&format!("sidecar:stdout] {line}"));
+            remember_output(&line);
         }
         if !ready {
             let _ = tx.send(Err("stdout closed before the ready line".into()));

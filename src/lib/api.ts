@@ -1364,16 +1364,27 @@ export function toProjectChatItems(events: SessionEvent[]): ProjectChatItem[] {
  * Ask the sidecar to open the REAL OS folder-picker dialog.
  * Returns the chosen path, null when the user cancelled, or undefined when
  * this machine has no dialog backend (caller falls back to manual entry).
+ *
+ * R54: the fetch is bounded (2 min) — the sidecar's dialog can block for up
+ * to 15 minutes on a human, but a HUNG dialog (PowerShell stuck, script
+ * blocked by policy) used to leave the Browse button spinning forever with
+ * no feedback. On timeout the caller gets an error and the manual path input
+ * is right there — pasting a path always works.
  */
+const FOLDER_DIALOG_TIMEOUT_MS = 120_000;
+
 export async function pickFolderViaBackend(): Promise<{
   path: string | null;
   error?: string;
   unavailable?: boolean;
 }> {
   const { baseUrl, token } = useConfigStore.getState();
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), FOLDER_DIALOG_TIMEOUT_MS);
   try {
     const res = await fetch(`${baseUrl}/internal/dialog/folder`, {
       method: "POST",
+      signal: controller.signal,
       ...(token ? { headers: { Authorization: `Bearer ${token}` } } : {}),
     });
     if (res.status === 501) return { path: null, unavailable: true };
@@ -1383,7 +1394,15 @@ export async function pickFolderViaBackend(): Promise<{
     }
     return (await res.json()) as { path: string | null; error?: string };
   } catch (cause) {
+    if (cause instanceof DOMException && cause.name === "AbortError") {
+      return {
+        path: null,
+        error: "the folder dialog timed out — paste the folder path instead",
+      };
+    }
     return { path: null, error: `could not reach the sidecar (${String(cause)})` };
+  } finally {
+    clearTimeout(timer);
   }
 }
 

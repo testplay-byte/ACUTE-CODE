@@ -1,8 +1,8 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
-import { Loader2, RotateCcw, Unplug } from "lucide-react";
+import { Check, Copy, Loader2, RotateCcw, ScrollText, Unplug } from "lucide-react";
 import { useConfigStore } from "../../lib/config-store";
 import { beginSidecarConnect, retryConnection } from "../../lib/sidecar-connection";
-import { isTauri } from "../../lib/sidecar";
+import { getSidecarLogTail, isTauri, type SidecarLogTail } from "../../lib/sidecar";
 import { AcuteLogo } from "./Sidebar";
 
 /**
@@ -72,11 +72,30 @@ function ConnectingSplash() {
 /**
  * The offline screen: the REAL shell-reported error (spawn failure, missing
  * bundle, exit code — whatever the Rust lifecycle logged), a Retry that
- * restarts the backend through the shell, and the sidecar.log pointer so the
- * owner can paste diagnostics instead of screenshots of silent failures.
+ * restarts the backend through the shell, and — R54 — the tail of
+ * sidecar.log rendered IN-APP with a Copy-diagnostics button, so a failure
+ * explains itself on screen instead of telling the owner to go find
+ * %APPDATA% with a file explorer.
  */
 function OfflineScreen({ error }: { error: string | null }) {
   const [retrying, setRetrying] = useState(false);
+  const [logTail, setLogTail] = useState<SidecarLogTail | null>(null);
+  const [copied, setCopied] = useState(false);
+
+  // R54: fetch the engine log's last lines whenever the app lands offline (or
+  // lands offline AGAIN after a failed Retry — the effect re-runs because the
+  // error string changes between failures).
+  useEffect(() => {
+    if (!isTauri()) return;
+    let cancelled = false;
+    setLogTail(null);
+    void getSidecarLogTail(60).then((tail) => {
+      if (!cancelled) setLogTail(tail);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [error]);
 
   const onRetry = async () => {
     if (retrying) return;
@@ -85,6 +104,25 @@ function OfflineScreen({ error }: { error: string | null }) {
       await retryConnection();
     } finally {
       setRetrying(false);
+    }
+  };
+
+  const onCopyDiagnostics = async () => {
+    const diagnostics = [
+      "ACUTE-CODE — engine diagnostics",
+      `error: ${error ?? "(none reported)"}`,
+      logTail?.path ? `log: ${logTail.path}` : null,
+      "",
+      ...(logTail?.lines ?? ["(engine log unavailable)"]),
+    ]
+      .filter((line): line is string => line !== null)
+      .join("\n");
+    try {
+      await navigator.clipboard.writeText(diagnostics);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    } catch {
+      setCopied(false);
     }
   };
 
@@ -119,11 +157,57 @@ function OfflineScreen({ error }: { error: string | null }) {
         </div>
         {error && (
           <p
-            className="w-full break-words rounded-lg px-3 py-2 text-left font-mono text-xs leading-relaxed"
+            className="max-h-32 w-full overflow-y-auto break-words whitespace-pre-wrap rounded-lg px-3 py-2 text-left font-mono text-xs leading-relaxed custom-scrollbar"
             style={{ backgroundColor: "rgba(0, 0, 0, 0.04)", color: "var(--ac-text-secondary)" }}
           >
             {error}
           </p>
+        )}
+        {/* R54: the engine's own log tail, right in the app — no more "go find
+            sidecar.log in %APPDATA%". Long tails scroll inside the box. */}
+        {logTail && logTail.lines.length > 0 && (
+          <div className="w-full text-left">
+            <div
+              className="mb-1 flex items-center justify-between gap-2 text-[10px] font-bold uppercase tracking-widest"
+              style={{ color: "var(--ac-text-tertiary)" }}
+            >
+              <span className="flex items-center gap-1.5">
+                <ScrollText className="h-3 w-3" aria-hidden />
+                Engine log — last {logTail.lines.length} lines
+              </span>
+              <button
+                type="button"
+                onClick={() => void onCopyDiagnostics()}
+                className="flex items-center gap-1 rounded-md px-1.5 py-0.5 text-[10px] font-semibold transition-opacity hover:opacity-80"
+                style={{ color: "var(--ac-accent)" }}
+              >
+                {copied ? (
+                  <>
+                    <Check className="h-3 w-3" aria-hidden /> Copied
+                  </>
+                ) : (
+                  <>
+                    <Copy className="h-3 w-3" aria-hidden /> Copy diagnostics
+                  </>
+                )}
+              </button>
+            </div>
+            <pre
+              aria-label="Engine log tail"
+              className="max-h-44 overflow-y-auto whitespace-pre-wrap rounded-lg p-3 font-mono text-[11px] leading-relaxed custom-scrollbar"
+              style={{
+                backgroundColor: "rgba(0, 0, 0, 0.04)",
+                color: "var(--ac-text-secondary)",
+              }}
+            >
+              {logTail.lines.join("\n")}
+            </pre>
+            {logTail.path && (
+              <p className="mt-1 truncate text-[10px]" style={{ color: "var(--ac-text-tertiary)" }}>
+                full log: {logTail.path}
+              </p>
+            )}
+          </div>
         )}
         <button
           type="button"
@@ -139,10 +223,17 @@ function OfflineScreen({ error }: { error: string | null }) {
           )}
           {retrying ? "Restarting engine…" : "Restart engine"}
         </button>
-        <p className="text-xs" style={{ color: "var(--ac-text-tertiary)" }}>
-          If it keeps failing: check <span className="font-mono">sidecar.log</span> in the
-          app&apos;s data folder (%APPDATA%\acute-code)
-        </p>
+        {!logTail || logTail.lines.length === 0 ? (
+          <p className="text-xs" style={{ color: "var(--ac-text-tertiary)" }}>
+            If it keeps failing: check <span className="font-mono">sidecar.log</span> in the
+            app&apos;s data folder (%APPDATA%\acute-code)
+          </p>
+        ) : (
+          <p className="text-xs" style={{ color: "var(--ac-text-tertiary)" }}>
+            “Copy diagnostics” puts the error and log on your clipboard — paste
+            it if you report the problem.
+          </p>
+        )}
       </div>
     </div>
   );

@@ -1,4 +1,4 @@
-<!-- last-reviewed: 2026-08-30 round-53 -->
+<!-- last-reviewed: 2026-08-30 round-54 -->
 # IMPLEMENTED API — the shipped surface
 
 **Truth = this file.** Verified against `agent-core/src/server.ts` at
@@ -690,9 +690,39 @@ lifecycle line, provider keys logged as id+length ONLY, rotated at 1 MB).
 never reach localStorage — the "55963" stale-endpoint bug); `connection`:
 `connecting|connected|offline` + `connectionError` gate the whole app tree
 (ConnectionGate). The connect loop (`sidecar-connection.ts`): poll
-`sidecar_info` every 400ms (90s deadline) → adopt + invalidate ALL queries;
-`failed|stopped` → offline immediately; a 20s `ping_sidecar` watchdog
-re-enters the loop on mid-session death.
+`sidecar_info` every 400ms (**150s deadline** — R54: the Rust handshake
+retries 3× before declaring Failed, so the webview must not quit first) →
+adopt + invalidate ALL queries; `failed|stopped` → offline immediately; a 20s
+`ping_sidecar` watchdog re-enters the loop on mid-session death.
+
+## ROUND-54 additions (implemented)
+
+### Tauri shell command: `sidecar_log_tail`
+
+`sidecar_log_tail({lines?})` → `{path: string, lines: string[]}` — the last
+`lines` (default 60, clamped 1–200) lines of
+`%APPDATA%\acute-code\sidecar.log`, oldest first, plus the file's absolute
+path. Serves the offline screen's in-app engine-log view + Copy-diagnostics
+button (R54: the owner no longer has to find %APPDATA% by hand). Null-safe
+wrapper `getSidecarLogTail()` in `src/lib/sidecar.ts`.
+
+### Sidecar lifecycle behavior changes (src-tauri/src/sidecar.rs)
+
+- stderr is PIPED and drained (`sidecar:stderr] …` lines in sidecar.log + an
+  in-memory 24-line ring) — the packaged GUI app has no stderr handle, so
+  the old `Stdio::inherit()` swallowed agent-core's own crash reason.
+- The startup handshake RETRIES (3 attempts, 2s apart; READY_TIMEOUT 25s,
+  HEALTH_TIMEOUT 15s) before declaring `failed`; the `failed` error string
+  embeds the engine's last 6 output lines (`recent engine output:`).
+- A failed handshake attempt kills its child (kill_tree + wait) — the old
+  code dropped the Child handle and orphaned a node.exe that held the DB
+  (the "restart engine didn't work" mechanism).
+
+### Browser-mode folder dialog (REST, existing route unchanged)
+
+`POST /internal/dialog/folder` is now fetched with a 120s AbortController
+timeout client-side (a hung OS dialog used to spin the Browse button
+forever); the timeout error message tells the owner to paste the path.
 
 ## NOT implemented (despite API.md)
 

@@ -17,12 +17,19 @@ export interface SidecarInfo {
   token: string;
 }
 
-/** `sidecar_status` wire shape — `tag = "phase"` on the Rust enum. */
+/** R53: `sidecar_status` wire shape — `tag = "phase"` on the Rust enum. */
 export type SidecarStatus =
   | { phase: "starting" }
   | { phase: "running"; port: number }
   | { phase: "failed"; error: string }
   | { phase: "stopped" };
+
+/** R54: `sidecar_log_tail` wire shape — the offline screen's in-app view of
+ * sidecar.log (last lines, oldest first) + the file's absolute path. */
+export interface SidecarLogTail {
+  path: string;
+  lines: string[];
+}
 
 type TauriGlobal = {
   core: { invoke: (command: string, args?: Record<string, unknown>) => Promise<unknown> };
@@ -91,5 +98,20 @@ export async function pingSidecar(): Promise<boolean> {
     return true;
   } catch {
     return false;
+  }
+}
+
+/**
+ * R54: the last lines of sidecar.log, served by the shell — the offline
+ * screen renders them in-app so the owner never has to find %APPDATA% by
+ * hand. Null outside Tauri / on shell refusal (the caller falls back to the
+ * plain "check sidecar.log" note).
+ */
+export async function getSidecarLogTail(lines = 60): Promise<SidecarLogTail | null> {
+  if (!isTauri()) return null;
+  try {
+    return await invoke<SidecarLogTail>("sidecar_log_tail", { lines });
+  } catch {
+    return null;
   }
 }

@@ -1,4 +1,4 @@
-<!-- last-reviewed: 2026-08-30 round-53 -->
+<!-- last-reviewed: 2026-08-30 round-54 -->
 
 # DOC-STANDARDS — how ACUTE-CODE docs are written + maintained
 
