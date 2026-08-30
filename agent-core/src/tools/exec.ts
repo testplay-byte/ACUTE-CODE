@@ -153,6 +153,13 @@ export async function runCommand(
     let settled = false;
     let exitCode: number | null = null;
     let shellExited = false;
+    // ROUND-52 CI fix (windows): set when the watchdog initiates its tree-kill
+    // — the kill often SUCCEEDS on Windows (taskkill /T /F takes down the
+    // whole tree, the pipes close, and the normal-completion path wins the
+    // race), and a watchdog-killed command must NEVER be reported as a plain
+    // failed command: the close handler checks this flag and defers to the
+    // watchdog's [timeout] resolution instead.
+    let watchdogFired = false;
     // Live-output batching: buffer bytes, flush one frame per window.
     let outputBuffer = "";
     let outputTimer: ReturnType<typeof setInterval> | null = null;
@@ -213,6 +220,13 @@ export async function runCommand(
           return;
         }
         clearTimeout(graceTimer);
+        // The watchdog's tree-kill closed the pipes — this is a TIMEOUT, not
+        // a normal completion (the exit code of a force-killed shell is a
+        // lie; the agent must see that WE killed it and why).
+        if (watchdogFired) {
+          finishTimeout();
+          return;
+        }
         // ROUND-52 follow-up (live battery): the Unix `cmd > log 2>&1 &`
         // shape — the grandchild redirected EVERYTHING to the log file, so
         // the pipes close the instant the shell exits and the grace timer
@@ -267,8 +281,23 @@ export async function runCommand(
     // HARD WATCHDOG: the shell itself never exited within timeoutMs (a hung
     // interactive/long command). Kill the tree and resolve with what we have
     // — never stall the agent turn on a silent command.
+    /** The shared [timeout] resolution (the watchdog's own follow-up timer
+     * AND the close-after-kill race both land here). */
+    const finishTimeout = (): void => {
+      if (settled) return;
+      const output = clip(combined) || "(no output before the timeout)";
+      finish({
+        ok: false,
+        output:
+          `${output}\n[timeout] the command did not exit within ${timeoutMs}ms and was killed ` +
+          `(process tree, pid ${child.pid ?? "?"}). If it launches something that must keep ` +
+          `running, re-run it as a background launch (Windows: \`start /B <cmd> > <log> 2>&1\`) ` +
+          `and poll it with job_status.`,
+      });
+    };
     const watchdog = setTimeout(() => {
       if (settled || shellExited) return;
+      watchdogFired = true;
       if (child.pid !== undefined) killTree(child.pid);
       // Give the kill a moment to land, then resolve regardless of pipes.
       setTimeout(() => {
@@ -276,15 +305,7 @@ export async function runCommand(
         // After the tree-kill the shell may have exited but pipes remain
         // (grandchild) — the background-job path above handles liveness; here
         // we resolve as a TIMEOUT with the partial output so the turn moves.
-        const output = clip(combined) || "(no output before the timeout)";
-        finish({
-          ok: false,
-          output:
-            `${output}\n[timeout] the command did not exit within ${timeoutMs}ms and was killed ` +
-            `(process tree, pid ${child.pid ?? "?"}). If it launches something that must keep ` +
-            `running, re-run it as a background launch (Windows: \`start /B <cmd> > <log> 2>&1\`) ` +
-            `and poll it with job_status.`,
-        });
+        finishTimeout();
       }, 800);
     }, timeoutMs);
     // The watchdog is only meaningful pre-settle; clear it when the turn

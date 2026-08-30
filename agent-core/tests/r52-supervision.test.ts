@@ -65,6 +65,7 @@ beforeEach(() => {
   // The shell-quoting-safe exec fixtures (see the comment above the consts).
   writeFileSync(join(projectDir, "pipe-holder.js"), PIPE_HOLDER_JS);
   writeFileSync(join(projectDir, "sleeper.js"), SLEEPER_JS);
+  writeFileSync(join(projectDir, "holder.js"), HOLDER_JS);
   db = openDatabase(join(tempDir, `${randomUUID()}.db`));
   app = buildServer({
     token: TOKEN,
@@ -143,8 +144,26 @@ const PIPE_HOLDER_JS = `${[
 /** A plain foreground sleeper (the hard-watchdog fixture). */
 const SLEEPER_JS = `setTimeout(() => {}, Number(process.argv[2]) * 1000);\n`;
 
+/** The direct holder (the Windows fixture): prints `late-holder-output` at
+ * argv[3] ms and lives argv[2] ms — used via the owner's EXACT idiom
+ * `start /B node holder.js …`, which provably relays cmd's pipe handles
+ * (his 10-minute hang IS this mechanism). On Windows, node's own
+ * `stdio:'inherit'` chain through cmd.exe does NOT hold the outer pipes
+ * (the CI run proved it — the job never registered), but `start /B` does. */
+const HOLDER_JS = `${[
+  'setTimeout(() => console.log("late-holder-output"), Number(process.argv[3]));',
+  'setTimeout(() => {}, Number(process.argv[2]));',
+].join("\n")}\n`;
+
+/** The pipe-holding launcher command, per platform:
+ * - POSIX: node spawns node (the launcher exits, the grandchild holds the
+ *   inherited pipe write-ends);
+ * - Windows: the owner's exact `start /B` idiom (the started process holds
+ *   cmd's pipe handles directly). */
 const PIPE_HOLDER = (ms: number, lateMs = 3200): string =>
-  `node pipe-holder.js ${ms} ${lateMs}`;
+  process.platform === "win32"
+    ? `start /B node holder.js ${ms} ${lateMs}`
+    : `node pipe-holder.js ${ms} ${lateMs}`;
 const SLEEPER = (seconds: number): string => `node sleeper.js ${seconds}`;
 
 describe("ROUND-52 (R52-a): exec helpers", () => {
@@ -219,6 +238,10 @@ describe("ROUND-52 (R52-a): the hang fix — pipe-holding grandchildren", () => 
     "hard watchdog: a silent never-exiting command is killed and resolved as a timeout",
     async () => {
       const startedAt = Date.now();
+      // On Windows the tree-kill actually lands (taskkill /T /F) — the close
+      // event fires BEFORE the watchdog's follow-up and used to masquerade as
+      // a normal failed command ("[exit code: 1]"); the watchdogFired flag
+      // now forces the [timeout] resolution on BOTH orderings.
       const result = await runCommand(projectDir, SLEEPER(20), undefined, {
         timeoutMs: 700,
       });
