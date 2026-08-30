@@ -109,30 +109,42 @@ launcher/            owner's one-click entry (ACUTE.bat → acute_launcher.py:
 
 ## How to add… (recipes — copy the named example)
 
-### a) A new agent tool
+### a) A new agent tool (R52: the PLUGIN way)
 
-Freshest full example: the R44 memory tools.
+Freshest full example: the R52 job tools (`agent-core/src/tools/plugins/exec.ts`)
+or — for a whole new GROUP — `tools/plugins/memory.ts`.
 
-1. Implement in `agent-core/src/tools/memory.ts` style: export a tool object
-   with `description` + `jsonSchema` input schema + `execute` returning
-   `{ok, output}`; degrade gracefully (ok:false with a readable reason) when
-   deps/project are absent — see `todo_write` for the no-deps pattern.
-2. Register inside `buildProjectTools` (`agent-core/src/tools/index.ts`) in the
-   base tools record — the per-agent allowlist filter applies automatically.
+1. **Add the tool to its group plugin** (`agent-core/src/tools/plugins/*.ts`):
+   one `ToolDefinition` entry (`name` must match `^[a-z][a-z0-9_]{1,31}$`,
+   `description` >10 chars, `inputSchema` = a `jsonSchema({...})` object,
+   `execute` returning `{ok, output}`); degrade gracefully (ok:false with a
+   readable reason) when deps/project are absent — see `todo.ts` for the
+   no-deps pattern. **A new GROUP is one new file** exporting a
+   `PluginDefinition` + one entry in `BUILT_IN_PLUGINS` (`tools/registry.ts`).
+2. The per-agent allowlist filter, memory switch, and delegation gating apply
+   automatically through `buildProjectTools` — the assembly semantics are
+   registry-owned (ADR-0025).
 3. **Append the tool name to `TOOL_NAMES`** in `agent-core/src/storage/agents.ts`
-   (fresh seeds + server-side allowlist validation both read it) — and to
-   `TOOL_CATALOG` in `src/lib/api.ts` (the agent-dialog checkboxes). This
-   backend↔frontend lockstep was manual (and lapsed 15-vs-21 at R44) until
-   R45: `src/lib/tool-catalog-drift.test.ts` now reads `TOOL_NAMES` as text
-   and FAILS the build with both lists + the files to edit on any drift —
-   the manual note is now an automated guard.
+   (fresh seeds + server-side allowlist validation both read it). The UI's
+   tool catalog is COMPUTED from the real plugin declarations
+   (`builtInToolCatalog()`), so there is NO frontend list to keep in sync
+   anymore — `src/lib/tool-catalog-drift.test.ts` still guards `TOOL_NAMES`
+   against the computed catalog.
 4. **NNNN migration appending the tool to EXISTING databases' template-agent
    `allowed_tools`** — copy the `json_insert … WHERE (is_template = 1 OR
    id = 'agt_default_nova')` + `NOT EXISTS json_each` idempotence shape from
    `agent-core/src/storage/migrations/0015_memory.sql` (0014 is the two-tool
    variant).
 5. Tests in `agent-core/tests/memory-tools.test.ts` style (execute through the
-   REAL `buildProjectTools`, not a stub).
+   REAL `buildProjectTools`, not a stub); for a new plugin also copy the
+   grammar/catalog assertions from `tests/r52-plugin-registry.test.ts`.
+
+**External plugins (no repo change):** a `.mjs` file default-exporting
+`{id, name, version, description, category, tools:[{name, description,
+schema, execute}]}` dropped into `~/.acute/plugins/` (on by default) or
+`<project>/.acute/plugins/` (opt-in via the `tools.externalPlugins` setting)
+loads fail-soft with name-grammar + collision (built-ins win) + cap rules —
+see ADR-0025 §2 and `tests/r52-plugin-registry.test.ts`'s fixtures.
 
 **The delegate_task lesson (R43, golden rule 7):** a tool that exists but is
 missing from `TOOL_NAMES`/the migration is UNREACHABLE from every seeded agent —

@@ -40,6 +40,7 @@ import {
   fetchSubAgentDetail,
   fetchSubAgents,
   retrySubAgent,
+  stopSessionTurn,
   type SessionDetail,
   type SessionEvent,
   type SubAgentStatus,
@@ -56,6 +57,7 @@ vi.mock("../../lib/api", async (importOriginal) => {
     fetchSubAgentDetail: vi.fn(),
     fetchSubAgents: vi.fn(),
     retrySubAgent: vi.fn(),
+    stopSessionTurn: vi.fn(),
   };
 });
 
@@ -66,6 +68,7 @@ beforeEach(() => {
   vi.mocked(fetchSubAgentDetail).mockReset();
   vi.mocked(fetchSubAgents).mockReset().mockResolvedValue([]);
   vi.mocked(retrySubAgent).mockReset().mockResolvedValue(undefined);
+  vi.mocked(stopSessionTurn).mockReset().mockResolvedValue(undefined);
   // Isolate the stream-store live map (the header code chip's freshest source).
   useStreamStore.setState({ bySession: {}, subagentsLive: {} });
 });
@@ -572,7 +575,159 @@ describe("SubAgentPanel (R50-b live raw stream + stats footer)", () => {
   });
 });
 
-// ─── ROUND-51 (R51-b): the owner's fourth-round polish ─────────────────────
+// ─── ROUND-52 (R52-b/R52-c): Stop button + watch line + terminal detail ─────
+
+describe("SubAgentPanel (R52-c supervision: Stop + watch + detail)", () => {
+  /** A live-map entry for the running child (the R50-b shape + R52 watch). */
+  function liveEntry(over: Record<string, unknown> = {}) {
+    return {
+      childSessionId: "child-1",
+      parentSessionId: "parent-1",
+      code: "K7Q2",
+      role: "coder",
+      task: "Refactor auth module",
+      status: "running" as const,
+      updatedAtMs: Date.now(),
+      liveText: "",
+      liveThinking: "",
+      liveToolCalls: 0,
+      inputTokens: 0,
+      outputTokens: 0,
+      lastActivityTs: Date.now(),
+      liveSteps: [],
+      startedAtMs: Date.now(),
+      ...over,
+    };
+  }
+
+  it("running child → the Stop button renders; click calls stopSessionTurn and flips the chip to 'stopping'", async () => {
+    vi.mocked(fetchSubAgentDetail).mockResolvedValue(detail("running", RUNNING_EVENTS));
+    vi.mocked(fetchSubAgents).mockResolvedValue([subRow()]);
+    renderWithProviders(<SubAgentPanel tab={tab} />);
+
+    // The button carries the child's code and fires the stop endpoint with
+    // the CHILD session id (POST /sessions/:id/stop aborts only this child —
+    // the parent turn continues).
+    const stop = await screen.findByRole("button", { name: "Stop sub-agent K7Q2" });
+    expect(screen.queryByTestId("subagent-status-detail")).toBeNull();
+    fireEvent.click(stop);
+    await waitFor(() => expect(stopSessionTurn).toHaveBeenCalledWith("child-1"));
+
+    // Optimistic local flip: the chip reads "stopping" and the button is
+    // disabled while the turn settles (no double-fire).
+    expect(screen.getByTestId("subagent-status-chip").textContent).toContain("stopping");
+    expect((screen.getByTestId("subagent-stop-button") as HTMLButtonElement).disabled).toBe(true);
+  });
+
+  it("a settled child shows no Stop button (settled turns can't be stopped)", async () => {
+    vi.mocked(fetchSubAgentDetail).mockResolvedValue(
+      detail("completed", [
+        ev(1, "message.user", { role: "user", content: "do it" }),
+        ev(2, "message.assistant", { role: "assistant", content: "Done." }),
+      ]),
+    );
+    vi.mocked(fetchSubAgents).mockResolvedValue([subRow({ status: "completed" })]);
+    renderWithProviders(<SubAgentPanel tab={tab} />);
+
+    // Wait for the SETTLED state (the polled detail lands) before asserting
+    // the affordance is gone — while loading, the derived status is "queued"
+    // and the button legitimately renders.
+    await waitFor(() =>
+      expect(screen.getByTestId("subagent-status-chip").textContent).toContain("done"),
+    );
+    expect(screen.queryByTestId("subagent-stop-button")).toBeNull();
+    expect(screen.queryByRole("button", { name: /^Stop sub-agent/ })).toBeNull();
+    expect(stopSessionTurn).not.toHaveBeenCalled();
+  });
+
+  it("a running frame's watch payload renders the live activity strip (activity · age · tools · todos)", async () => {
+    useStreamStore.setState({
+      bySession: {},
+      subagentsLive: {
+        "child-1": liveEntry({
+          watch: {
+            lastEventAgeMs: 1200,
+            lastActivity: "run_command pnpm build",
+            toolCount: 3,
+            todosDone: 1,
+            todosTotal: 4,
+            elapsedMs: 47_000,
+            stalled: false,
+          },
+        }),
+      },
+    });
+    vi.mocked(fetchSubAgentDetail).mockResolvedValue(detail("running", RUNNING_EVENTS));
+    vi.mocked(fetchSubAgents).mockResolvedValue([subRow()]);
+    renderWithProviders(<SubAgentPanel tab={tab} />);
+
+    const line = await screen.findByTestId("subagent-watch-line");
+    expect(line.textContent).toContain("run_command pnpm build");
+    expect(line.textContent).toContain("· 47s");
+    expect(line.textContent).toContain("3 tools");
+    expect(line.textContent).toContain("✓ 1/4");
+    expect(line.getAttribute("data-stalled")).toBeNull();
+  });
+
+  it("a STALLED watch sample turns the line amber with the no-activity warning", async () => {
+    useStreamStore.setState({
+      bySession: {},
+      subagentsLive: {
+        "child-1": liveEntry({
+          watch: {
+            lastEventAgeMs: 340_000,
+            lastActivity: "run_command pnpm build",
+            toolCount: 3,
+            todosDone: 1,
+            todosTotal: 4,
+            elapsedMs: 47_000,
+            stalled: true,
+          },
+        }),
+      },
+    });
+    vi.mocked(fetchSubAgentDetail).mockResolvedValue(detail("running", RUNNING_EVENTS));
+    vi.mocked(fetchSubAgents).mockResolvedValue([subRow()]);
+    renderWithProviders(<SubAgentPanel tab={tab} />);
+
+    const line = await screen.findByTestId("subagent-watch-line");
+    expect(line.textContent).toContain("no activity for 340s — supervisor watching");
+    expect(line.getAttribute("data-stalled")).toBe("true");
+    // The quiet activity text is REPLACED by the warning, not shown twice.
+    expect(line.textContent).not.toContain("run_command pnpm build");
+  });
+
+  it("a failed frame's detail renders as the status line instead of a bare 'failed'", async () => {
+    useStreamStore.setState({
+      bySession: {},
+      subagentsLive: {
+        "child-1": liveEntry({
+          status: "failed" as const,
+          detail: "stopped by the owner",
+        }),
+      },
+    });
+    vi.mocked(fetchSubAgentDetail).mockResolvedValue(
+      detail("failed", [ev(1, "message.user", { role: "user", content: "do the thing" })]),
+    );
+    vi.mocked(fetchSubAgents).mockResolvedValue([
+      subRow({ status: "failed", error: "stopped by the owner" }),
+    ]);
+    renderWithProviders(<SubAgentPanel tab={tab} />);
+
+    const detailLine = await screen.findByTestId("subagent-status-detail");
+    expect(detailLine.textContent).toContain("stopped by the owner");
+    // The chip still reads the honest terminal state (once the polled detail
+    // lands — the strip renders from the live map immediately, the chip
+    // derives from the query); the watch line is gone (heartbeats are
+    // running-only) and a settled child has no Stop button.
+    await waitFor(() =>
+      expect(screen.getByTestId("subagent-status-chip").textContent).toContain("failed"),
+    );
+    expect(screen.queryByTestId("subagent-watch-line")).toBeNull();
+    expect(screen.queryByTestId("subagent-stop-button")).toBeNull();
+  });
+});
 
 describe("SubAgentPanel (R51-b full todo list + centered stats footer)", () => {
   it("todo.update renders the FULL checklist — every item row with its per-status glyph, in a max-h-40 scroll clamp", async () => {

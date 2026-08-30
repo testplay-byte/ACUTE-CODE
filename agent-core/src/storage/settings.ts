@@ -15,6 +15,15 @@
  *                                 the models.ts catalog on write and must be
  *                                 tool-capable (children are mandated tool
  *                                 users — ROUND-39).
+ *   orchestration.childWatchdogMs      — ROUND-52 (R52-b): how often the
+ *                                 supervisor samples a running child and
+ *                                 emits a heartbeat frame (default 15s,
+ *                                 clamp 5s–60s).
+ *   orchestration.childStallTimeoutMs  — ROUND-52 (R52-b): no child events
+ *                                 for this long = STALLED (hung command,
+ *                                 dead provider) → the watchdog aborts the
+ *                                 child and reports honestly to the parent
+ *                                 (default 5 min, clamp 1 min–60 min).
  *
  * ROUND-49 (owner directive: "maybe try giving me a setting in the settings
  * to turn off this memory functionality"):
@@ -32,17 +41,23 @@ export interface OrchestrationSettings {
   maxParallel: number;
   perKeyLimit: number;
   subagentModel: string | null;
+  childWatchdogMs: number;
+  childStallTimeoutMs: number;
 }
 
 export const ORCHESTRATION_DEFAULTS: OrchestrationSettings = {
   maxParallel: 5,
   perKeyLimit: 3,
   subagentModel: null,
+  childWatchdogMs: 15_000,
+  childStallTimeoutMs: 300_000,
 };
 
 const MAX_PARALLEL_KEY = "orchestration.maxParallel";
 const PER_KEY_LIMIT_KEY = "orchestration.perKeyLimit";
 const SUBAGENT_MODEL_KEY = "orchestration.subagentModel";
+const CHILD_WATCHDOG_MS_KEY = "orchestration.childWatchdogMs";
+const CHILD_STALL_TIMEOUT_MS_KEY = "orchestration.childStallTimeoutMs";
 
 function readNumber(db: SqliteDatabase, key: string, fallback: number, min: number, max: number): number {
   const row = db.prepare("SELECT value FROM settings WHERE key = ?").get(key) as
@@ -68,6 +83,20 @@ export function getOrchestrationSettings(db: SqliteDatabase): OrchestrationSetti
     maxParallel: readNumber(db, MAX_PARALLEL_KEY, ORCHESTRATION_DEFAULTS.maxParallel, 1, 50),
     perKeyLimit: readNumber(db, PER_KEY_LIMIT_KEY, ORCHESTRATION_DEFAULTS.perKeyLimit, 1, 20),
     subagentModel: readNullableString(db, SUBAGENT_MODEL_KEY),
+    childWatchdogMs: readNumber(
+      db,
+      CHILD_WATCHDOG_MS_KEY,
+      ORCHESTRATION_DEFAULTS.childWatchdogMs,
+      5_000,
+      60_000,
+    ),
+    childStallTimeoutMs: readNumber(
+      db,
+      CHILD_STALL_TIMEOUT_MS_KEY,
+      ORCHESTRATION_DEFAULTS.childStallTimeoutMs,
+      60_000,
+      3_600_000,
+    ),
   };
 }
 
@@ -108,6 +137,23 @@ export function setOrchestrationSettings(
       }
       upsert.run(SUBAGENT_MODEL_KEY, id);
     }
+  }
+  // ROUND-52 (R52-b): the supervisor cadence + stall threshold.
+  if (patch.childWatchdogMs !== undefined) {
+    if (!Number.isInteger(patch.childWatchdogMs) || patch.childWatchdogMs < 5_000 || patch.childWatchdogMs > 60_000) {
+      throw new Error("childWatchdogMs must be an integer between 5000 and 60000");
+    }
+    upsert.run(CHILD_WATCHDOG_MS_KEY, String(patch.childWatchdogMs));
+  }
+  if (patch.childStallTimeoutMs !== undefined) {
+    if (
+      !Number.isInteger(patch.childStallTimeoutMs) ||
+      patch.childStallTimeoutMs < 60_000 ||
+      patch.childStallTimeoutMs > 3_600_000
+    ) {
+      throw new Error("childStallTimeoutMs must be an integer between 60000 and 3600000");
+    }
+    upsert.run(CHILD_STALL_TIMEOUT_MS_KEY, String(patch.childStallTimeoutMs));
   }
   return getOrchestrationSettings(db);
 }

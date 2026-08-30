@@ -29,7 +29,14 @@ import type { KeyPoolSlot, ModelsCatalog } from "../../lib/api";
 
 const calls: Array<{ method: string; url: string; body?: unknown }> = [];
 let pool: KeyPoolSlot[] = [];
-let settings = { maxParallel: 5, perKeyLimit: 3, subagentModel: null as string | null };
+let settings = {
+  maxParallel: 5,
+  perKeyLimit: 3,
+  subagentModel: null as string | null,
+  // ROUND-52 (R52-b): the supervisor knobs (GET/PUT /settings/orchestration).
+  childWatchdogMs: 15_000,
+  childStallTimeoutMs: 300_000,
+};
 
 /** Small realistic GET /models/catalog fixture (R47-b contract shape):
  * free+tools, free+tool-less (must render disabled), paid, and the
@@ -143,6 +150,12 @@ const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => 
       if (typeof patch.subagentModel === "string" || patch.subagentModel === null) {
         settings = { ...settings, subagentModel: patch.subagentModel as string | null };
       }
+      if (typeof patch.childWatchdogMs === "number") {
+        settings = { ...settings, childWatchdogMs: patch.childWatchdogMs };
+      }
+      if (typeof patch.childStallTimeoutMs === "number") {
+        settings = { ...settings, childStallTimeoutMs: patch.childStallTimeoutMs };
+      }
       return jsonResponse(settings);
     }
   }
@@ -153,7 +166,13 @@ beforeEach(() => {
   resetTestState();
   calls.length = 0;
   pool = [];
-  settings = { maxParallel: 5, perKeyLimit: 3, subagentModel: null };
+  settings = {
+    maxParallel: 5,
+    perKeyLimit: 3,
+    subagentModel: null,
+    childWatchdogMs: 15_000,
+    childStallTimeoutMs: 300_000,
+  };
   catalogOk = true;
   useSettingsStore.setState({ modelsFreeOnly: true });
   vi.stubGlobal("fetch", fetchMock);
@@ -313,7 +332,7 @@ describe("SubAgentsTab — model picker", () => {
   });
 
   it("Inherits main model clears the override with subagentModel: null", async () => {
-    settings = { maxParallel: 5, perKeyLimit: 3, subagentModel: "nvidia/nemotron-3.5-lightning:free" };
+    settings = { maxParallel: 5, perKeyLimit: 3, subagentModel: "nvidia/nemotron-3.5-lightning:free", childWatchdogMs: 15_000, childStallTimeoutMs: 300_000 };
     renderWithProviders(<SubAgentsSection />);
 
     await waitFor(() =>
@@ -356,5 +375,99 @@ describe("SubAgentsTab — model picker", () => {
     await waitFor(() => expect(screen.getByText("Z.ai: GLM 5.2")).toBeTruthy());
     expect(screen.getByRole("button", { name: "Use nvidia/nemotron-3.5-lightning:free for sub-agents" })).toBeTruthy();
     expect(screen.getByText("recommended")).toBeTruthy();
+  });
+});
+
+// ─── ROUND-52 (R52-b): the supervisor knobs ──────────────────────────────────
+
+describe("SubAgentsTab — supervisor knobs (ROUND-52 R52-b)", () => {
+  it("renders the card with the current values converted ms→seconds/minutes", async () => {
+    renderWithProviders(<SubAgentsSection />);
+
+    await waitFor(() => expect(screen.getByText("Sub-agent supervision")).toBeTruthy());
+    const heartbeat = screen.getByLabelText("Supervisor heartbeat seconds") as HTMLInputElement;
+    const stall = screen.getByLabelText("Stall timeout minutes") as HTMLInputElement;
+    // 15000ms → 15s; 300000ms → 5min (conversion ONLY at the boundary).
+    expect(heartbeat.value).toBe("15");
+    expect(stall.value).toBe("5");
+    // The helper texts render verbatim.
+    expect(screen.getByText("How often running sub-agents report what they're doing")).toBeTruthy();
+    expect(
+      screen.getByText("A sub-agent with no activity for this long is stopped and reported"),
+    ).toBeTruthy();
+    // Save is disabled until something changes.
+    expect(
+      (screen.getByRole("button", { name: "Save sub-agent supervision settings" }) as HTMLButtonElement)
+        .disabled,
+    ).toBe(true);
+  });
+
+  it("editing + Save PUTs the converted ms values and the refreshed state round-trips", async () => {
+    renderWithProviders(<SubAgentsSection />);
+    await waitFor(() => expect(screen.getByText("Sub-agent supervision")).toBeTruthy());
+
+    fireEvent.change(screen.getByLabelText("Supervisor heartbeat seconds"), {
+      target: { value: "30" },
+    });
+    fireEvent.change(screen.getByLabelText("Stall timeout minutes"), {
+      target: { value: "10" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Save sub-agent supervision settings" }));
+
+    // One PUT carrying BOTH knobs converted to ms.
+    await waitFor(() => {
+      const put = calls.find(
+        (c) =>
+          c.method === "PUT" &&
+          c.url.endsWith("/settings/orchestration") &&
+          typeof (c.body as Record<string, unknown> | undefined)?.childWatchdogMs === "number",
+      );
+      expect(put?.body).toEqual({ childWatchdogMs: 30_000, childStallTimeoutMs: 600_000 });
+    });
+    // The refreshed GET lands back in the inputs (30s / 10min).
+    await waitFor(() =>
+      expect((screen.getByLabelText("Supervisor heartbeat seconds") as HTMLInputElement).value).toBe("30"),
+    );
+    expect((screen.getByLabelText("Stall timeout minutes") as HTMLInputElement).value).toBe("10");
+    await waitFor(() => expect(screen.getByText("Saved.")).toBeTruthy());
+  });
+
+  it("out-of-range values show validation errors and disable Save; fixing re-enables it", async () => {
+    renderWithProviders(<SubAgentsSection />);
+    await waitFor(() => expect(screen.getByText("Sub-agent supervision")).toBeTruthy());
+    const save = screen.getByRole("button", { name: "Save sub-agent supervision settings" }) as HTMLButtonElement;
+    const heartbeat = screen.getByLabelText("Supervisor heartbeat seconds") as HTMLInputElement;
+    const stall = screen.getByLabelText("Stall timeout minutes") as HTMLInputElement;
+
+    // Below the heartbeat floor (5s) — the error shows, Save stays disabled.
+    fireEvent.change(heartbeat, { target: { value: "3" } });
+    expect(screen.getByTestId("supervisor-heartbeat-field-error").textContent).toBe(
+      "Heartbeat must be 5–60 seconds",
+    );
+    expect(save.disabled).toBe(true);
+
+    // Fix the heartbeat, break the stall ceiling (60min) — same story.
+    fireEvent.change(heartbeat, { target: { value: "15" } });
+    expect(screen.queryByTestId("supervisor-heartbeat-field-error")).toBeNull();
+    fireEvent.change(stall, { target: { value: "90" } });
+    expect(screen.getByTestId("supervisor-stall-field-error").textContent).toBe(
+      "Stall timeout must be 1–60 minutes",
+    );
+    expect(save.disabled).toBe(true);
+    expect(calls.every((c) => !(c.method === "PUT" && c.body && typeof (c.body as Record<string, unknown>).childWatchdogMs === "number"))).toBe(true);
+
+    // Both valid + dirty → Save enables and a clean value PUTs.
+    fireEvent.change(stall, { target: { value: "2" } });
+    expect(screen.queryByTestId("supervisor-stall-field-error")).toBeNull();
+    expect(save.disabled).toBe(false);
+    fireEvent.click(save);
+    await waitFor(() => {
+      const put = calls.find(
+        (c) =>
+          c.method === "PUT" &&
+          typeof (c.body as Record<string, unknown> | undefined)?.childStallTimeoutMs === "number",
+      );
+      expect(put?.body).toEqual({ childStallTimeoutMs: 120_000 });
+    });
   });
 });

@@ -15,6 +15,7 @@ import {
   RefreshCw,
   Search,
   ShieldAlert,
+  Square,
   Terminal as TerminalIcon,
   type LucideIcon,
 } from "lucide-react";
@@ -22,16 +23,19 @@ import {
   fetchSubAgentDetail,
   fetchSubAgents,
   retrySubAgent,
+  stopSessionTurn,
   type SessionDetail,
   type SessionEvent,
   type SubAgentStatus,
 } from "../../lib/api";
 import { selectSubAgentsLive, useStreamStore } from "../../lib/stream-store";
-import type { SubAgentLiveEntry, SubAgentLiveStep } from "../../lib/stream-store";
+import type { SubAgentLiveEntry, SubAgentLiveStep, SubAgentWatchInfo } from "../../lib/stream-store";
 // ROUND-50 (R50-b): the live segment reuses the main chat's EXACT thinking
 // visual (auto-expand while live, collapse when done) so the sub-agent's raw
 // stream reads like the main agent's.
-import { ThoughtRow } from "../project-chat/WorkingSection";
+// ROUND-52 (R52-c): LiveOutputTail gives in-flight run_command rows the
+// same live terminal tail as the main chat's WorkingSection.
+import { LiveOutputTail, ThoughtRow } from "../project-chat/WorkingSection";
 import { SEMANTIC_COLORS } from "../../lib/semantics";
 import { useThemeStyles } from "../../lib/use-theme-styles";
 import { useScrollFade } from "../../lib/useScrollFade";
@@ -97,6 +101,17 @@ import type { RightSidebarTab } from "../../lib/right-sidebar-store";
  * SubAgentPanel — and a pinned SubAgentStatsBar shows time / tokens sent /
  * tokens received / tokens-per-second / model (live values while running,
  * authoritative row values after completion).
+ *
+ * ROUND-52 (R52-b/R52-c supervision): (1) a Stop button on the header while
+ * the child is queued/running (stopSessionTurn aborts ONLY that child — the
+ * parent turn continues and gets an honest report); (2) a live WatchLine
+ * under the header from the supervisor's heartbeat frames — what the child
+ * is doing RIGHT NOW (last activity · age · tools · todos; amber + a stall
+ * warning when the watchdog flags silence); (3) terminal frames' `detail`
+ * ("stopped by the owner", "stalled — …") renders as the status line
+ * instead of a bare "failed"; (4) in-flight run_command rows stream their
+ * live terminal tail (LiveOutputTail — inner tool-output chunks), the same
+ * visual as the main chat's WorkingSection.
  */
 const ROLE_COLORS: Record<string, string> = {
   planner: "#c792ea",
@@ -107,6 +122,10 @@ const ROLE_COLORS: Record<string, string> = {
 };
 
 const RUNNING_BLUE = "#3B82F6";
+
+/** ROUND-52 (R52-c): the amber warning tone (the stalled-watch + pending
+ * states share it — same value as WorkingSection's approval accent). */
+const AMBER = "#f59e0b";
 
 /** Tool icon + past-tense label maps — mirrors WorkingSection's maps so the
  * child's tool rows read EXACTLY like the main chat's tool lines. */
@@ -189,6 +208,10 @@ interface ToolCard {
   ok: boolean | null;
   outputSummary: string | null;
   ts: string;
+  /** ROUND-52 (R52-c): the LIVE terminal tail while ok === null — inner
+   * tool-output chunks the stream-store accumulated on the live step
+   * (the polled event log never carries it). */
+  liveOutput?: string;
 }
 
 interface ApprovalCardData {
@@ -381,8 +404,9 @@ function parseSubAgentTranscript(events: SessionEvent[]): {
   return { items, firstTs: events[0]?.ts, hasRunningTool, lastAssistantSeq };
 }
 
-/** The panel's coherent status vocabulary (unchanged from the R43 panel). */
-type PanelStatus = "queued" | "running" | "retrying" | "done" | "failed" | "cancelled";
+/** The panel's coherent status vocabulary (unchanged from the R43 panel;
+ * ROUND-52 (R52-c) adds the optimistic "stopping" stop-button state). */
+type PanelStatus = "queued" | "running" | "retrying" | "stopping" | "done" | "failed" | "cancelled";
 
 function derivePanelStatus(
   detail: SessionDetail | undefined,
@@ -397,6 +421,58 @@ function derivePanelStatus(
   if (s === "completed") return "done";
   // queued / undefined — but a tool in flight means work is happening.
   return hasRunningTool ? "running" : "queued";
+}
+
+/**
+ * ROUND-52 (R52-b, owner's supervision ask): the live "what is this
+ * sub-agent doing" strip — one quiet line under the header fed by the
+ * supervisor's heartbeat frames (every childWatchdogMs): the child's last
+ * activity (mono, truncated), the run's age, its tool count and todo
+ * progress. When the watchdog flags a STALL the line turns amber and says
+ * how long the silence is ("no activity for Ns — supervisor watching") —
+ * the supervisor stops the child at the stall timeout, so the warning is
+ * the owner's heads-up before that happens.
+ */
+function WatchLine({ watch }: { watch: SubAgentWatchInfo }) {
+  const styles = useThemeStyles();
+  const activity =
+    watch.lastActivity.length > 60 ? `${watch.lastActivity.slice(0, 60)}…` : watch.lastActivity;
+  const tone = watch.stalled ? AMBER : styles.textTertiary;
+  return (
+    <div
+      className="shrink-0 flex items-center gap-1.5 px-2.5 h-6 border-b overflow-hidden"
+      style={{
+        borderColor: styles.borderSubtle,
+        ...(watch.stalled ? { background: withAlpha(AMBER, 0.07) } : {}),
+      }}
+      data-testid="subagent-watch-line"
+      data-stalled={watch.stalled ? "true" : undefined}
+      title={watch.lastActivity}
+    >
+      {watch.stalled ? (
+        <AlertTriangle size={10} className="shrink-0" style={{ color: AMBER }} aria-hidden />
+      ) : (
+        <span
+          className="w-1.5 h-1.5 rounded-full ac-pulse shrink-0"
+          style={{ background: RUNNING_BLUE }}
+          aria-hidden
+        />
+      )}
+      <span className="min-w-0 flex-1 truncate font-mono text-[10px]" style={{ color: tone }}>
+        {watch.stalled
+          ? `no activity for ${Math.round(watch.lastEventAgeMs / 1000)}s — supervisor watching`
+          : activity}
+      </span>
+      <span
+        className="shrink-0 font-mono text-[10px] tabular-nums"
+        style={{ color: tone }}
+        data-testid="subagent-watch-stats"
+      >
+        · {Math.round(watch.elapsedMs / 1000)}s · {watch.toolCount} {watch.toolCount === 1 ? "tool" : "tools"} · ✓ {watch.todosDone}/
+        {watch.todosTotal}
+      </span>
+    </div>
+  );
 }
 
 export function SubAgentPanel({ tab }: { tab: RightSidebarTab }) {
@@ -459,6 +535,30 @@ export function SubAgentPanel({ tab }: { tab: RightSidebarTab }) {
   const [retryError, setRetryError] = useState<string | null>(null);
   const liveStatus = derivePanelStatus(detailQuery.data, hasRunningTool, retrying);
   const isWorking = liveStatus === "running" || liveStatus === "retrying";
+
+  // ── ROUND-52 (R52-c): manual Stop of a running child ────────────────────
+  // POST /sessions/:id/stop now ALSO stops registered sub-agent children
+  // (only that child aborts — the parent turn continues and gets an honest
+  // report). Optimistic: the chip flips to "stopping" immediately; the
+  // terminal frame (status failed + detail "stopped by the owner") lands
+  // through the live map and settles the panel.
+  const [stopping, setStopping] = useState(false);
+  useEffect(() => {
+    // The child settled (or a fresh attempt started) — clear the optimistic
+    // stop state; the chip re-derives from the real status.
+    if (liveStatus !== "running" && liveStatus !== "retrying" && liveStatus !== "queued") {
+      setStopping(false);
+    }
+  }, [liveStatus]);
+  const chipStatus: PanelStatus =
+    stopping && (liveStatus === "running" || liveStatus === "retrying" || liveStatus === "queued")
+      ? "stopping"
+      : liveStatus;
+  const doStop = () => {
+    if (subAgentId === null || stopping || !isWorking) return;
+    setStopping(true);
+    void stopSessionTurn(subAgentId);
+  };
 
   // ── ROUND-50 (R50-b): the LIVE raw-stream segment ──────────────────────
   // Visibility rule (documented, deterministic):
@@ -612,8 +712,57 @@ export function SubAgentPanel({ tab }: { tab: RightSidebarTab }) {
             {elapsedLabel(firstTs, nowMs) ?? "0:00"}
           </span>
         ) : null}
-        <StatusChip status={liveStatus} styles={styles} />
+        {/* ROUND-52 (R52-c): Stop this running sub-agent — only once the
+            polled detail confirms the child is queued/running (never during
+            the initial load, when the derived status defaults to "queued");
+            disabled while a stop is already settling the turn. */}
+        {!detailQuery.isPending && (liveStatus === "running" || liveStatus === "queued") ? (
+          <button
+            type="button"
+            onClick={doStop}
+            disabled={stopping}
+            aria-label={`Stop sub-agent ${code ?? subAgentId}`}
+            title={stopping ? "Stopping…" : "Stop this sub-agent (the parent turn continues)"}
+            className="shrink-0 w-6 h-6 grid place-items-center rounded-md transition-colors disabled:opacity-50"
+            style={{ color: stopping ? SEMANTIC_COLORS.danger : styles.textTertiary }}
+            onMouseEnter={(e) => {
+              e.currentTarget.style.background = withAlpha(SEMANTIC_COLORS.danger, 0.12);
+              e.currentTarget.style.color = SEMANTIC_COLORS.danger;
+            }}
+            onMouseLeave={(e) => {
+              e.currentTarget.style.background = "transparent";
+              e.currentTarget.style.color = String(styles.textTertiary);
+            }}
+            data-testid="subagent-stop-button"
+          >
+            <Square size={10} fill="currentColor" strokeWidth={0} aria-hidden />
+          </button>
+        ) : null}
+        <StatusChip status={chipStatus} styles={styles} />
       </div>
+
+      {/* ── ROUND-52 (R52-b/R52-c): the live watch strip (running children) /
+          the terminal detail strip (why a child failed) — thin strips under
+          the header. The watch comes from the supervisor's heartbeat frames
+          (the store keeps the LATEST sample per child; the polled-row refresh
+          never clobbers it). ── */}
+      {isWorking && liveEntry?.watch !== undefined ? <WatchLine watch={liveEntry.watch} /> : null}
+      {liveEntry?.detail !== undefined ? (
+        <div
+          className="shrink-0 flex items-center gap-1.5 px-2.5 h-6 border-b overflow-hidden"
+          style={{
+            borderColor: styles.borderSubtle,
+            background: withAlpha(SEMANTIC_COLORS.danger, 0.05),
+          }}
+          data-testid="subagent-status-detail"
+          title={liveEntry.detail}
+        >
+          <CircleAlert size={10} className="shrink-0" style={{ color: SEMANTIC_COLORS.danger }} />
+          <span className="min-w-0 flex-1 truncate font-mono text-[10px]" style={{ color: styles.textSecondary }}>
+            {liveEntry.detail}
+          </span>
+        </div>
+      ) : null}
 
       {/* ── Scrollable chat transcript ── */}
       <div ref={scrollRef} className="flex-1 min-h-0 overflow-y-auto auto-scroll" style={{ scrollbarWidth: "thin" }}>
@@ -839,6 +988,10 @@ function TranscriptToolRow({ tool }: { tool: ToolCard }) {
   const label = TOOL_LABELS[tool.toolName] ?? tool.toolName;
   const expandable =
     (tool.outputSummary !== null && tool.outputSummary !== "") || tool.ok === null;
+  // ROUND-52 (R52-c): the live terminal tail of an in-flight run_command
+  // (inner tool-output chunks) — same treatment as the main chat's ToolLine.
+  const liveOutput = tool.liveOutput ?? "";
+  const showLiveTail = tool.ok === null && liveOutput !== "";
   return (
     <motion.div
       initial={{ opacity: 0, y: -4 }}
@@ -893,22 +1046,34 @@ function TranscriptToolRow({ tool }: { tool: ToolCard }) {
       </button>
       {open ? (
         <div className="mt-0.5 mb-1 pl-4 min-w-0">
-          <div
-            className="rounded-[10px] px-2.5 py-1.5 border font-mono text-[10px] leading-[1.5] break-words"
-            style={{
-              background: styles.isDark ? "rgba(0,0,0,0.18)" : styles.subtle,
-              borderColor: styles.borderSubtle,
-              color: tool.ok === false ? SEMANTIC_COLORS.danger : styles.textSecondary,
-            }}
-            data-testid="subagent-tool-output"
-          >
-            {tool.ok === null
-              ? "running…"
-              : tool.outputSummary !== null && tool.outputSummary !== ""
-                ? tool.outputSummary
-                : "(no output)"}
-          </div>
+          {showLiveTail ? (
+            // ROUND-52 (R52-c): the expanded in-flight body IS the live
+            // stream (never a bare "running…" placeholder when output is
+            // flowing); the settled result keeps the mono output box below.
+            <LiveOutputTail output={liveOutput} />
+          ) : (
+            <div
+              className="rounded-[10px] px-2.5 py-1.5 border font-mono text-[10px] leading-[1.5] break-words"
+              style={{
+                background: styles.isDark ? "rgba(0,0,0,0.18)" : styles.subtle,
+                borderColor: styles.borderSubtle,
+                color: tool.ok === false ? SEMANTIC_COLORS.danger : styles.textSecondary,
+              }}
+              data-testid="subagent-tool-output"
+            >
+              {tool.ok === null
+                ? "running…"
+                : tool.outputSummary !== null && tool.outputSummary !== ""
+                  ? tool.outputSummary
+                  : "(no output)"}
+            </div>
+          )}
         </div>
+      ) : showLiveTail ? (
+        // ROUND-52 (R52-c): the compact live tail under the pill while the
+        // child's command streams (hidden when expanded — the body carries
+        // the same live view there, never both).
+        <LiveOutputTail output={liveOutput} />
       ) : null}
     </motion.div>
   );
@@ -1131,6 +1296,9 @@ function LiveStreamSegment({ entry, streaming }: { entry: SubAgentLiveEntry; str
                 ok: step.tool.ok,
                 outputSummary: step.tool.outputSummary ?? null,
                 ts: "",
+                // ROUND-52 (R52-c): the live terminal tail rides the live
+                // step (inner tool-output chunks the store accumulated).
+                ...(step.tool.liveOutput !== undefined ? { liveOutput: step.tool.liveOutput } : {}),
               }}
             />
           );
@@ -1362,18 +1530,20 @@ function StatusChip({
       ? RUNNING_BLUE
       : status === "retrying"
         ? styles.accent
-        : status === "done"
-          ? SEMANTIC_COLORS.success
-          : status === "failed" || status === "cancelled"
-            ? SEMANTIC_COLORS.danger
-            : styles.textTertiary;
+        : status === "stopping"
+          ? AMBER
+          : status === "done"
+            ? SEMANTIC_COLORS.success
+            : status === "failed" || status === "cancelled"
+              ? SEMANTIC_COLORS.danger
+              : styles.textTertiary;
   return (
     <div
       className="shrink-0 flex items-center gap-1.5 px-2 py-0.5 rounded-full text-[9.5px] font-bold uppercase tracking-wider"
       style={{ background: withAlpha(tone, 0.14), color: tone }}
       data-testid="subagent-status-chip"
     >
-      {status === "running" || status === "retrying" ? (
+      {status === "running" || status === "retrying" || status === "stopping" ? (
         <PulsingDot color={tone} size={5} />
       ) : status === "done" ? (
         <Check size={10} />

@@ -79,7 +79,7 @@ import {
   setApprovalStatus,
   sweepStaleApprovals,
 } from "./approvals.js";
-import { getUsageSummary } from "./storage/usage.js";
+import { getDetailedUsage, getUsageSummary } from "./storage/usage.js";
 import { log } from "./lib/log.js";
 // ROUND-45 (audit P0-3): every spawned child gets a scrubbed environment.
 import { buildChildEnv } from "./lib/child-env.js";
@@ -144,15 +144,26 @@ import { dirname } from "node:path";
 // ROUND-43 (R43-10): embedded-browser proxy backend — all logic + routes live
 // in browser-proxy.ts; server.ts only mounts it on the scoped API surface.
 import { registerBrowserRoutes } from "./browser-proxy.js";
+// ROUND-52 (R52-a): the background-job registry (GET /projects/:id/jobs,
+// POST /jobs/:id/stop).
+import { getJobStatus, listJobs, stopJob } from "./lib/background-jobs.js";
+// ROUND-52 (R52-b): the SHARED live-turn registry — replaces the local
+// activeTurns Map so sub-agent children (registered by the orchestrator)
+// are stoppable through the SAME POST /sessions/:id/stop route as main
+// turns. Reasons ("owner" | "stall") let the orchestrator report why a
+// child ended.
+import { registerTurn, unregisterTurn, abortTurn } from "./lib/turn-registry.js";
 
 export const VERSION = "0.3.0";
 
 /**
- * ROUND-42: registry of live streamed turns, keyed by session id — powers
- * POST /sessions/:id/stop (the UI Stop button). Entries are added when a
- * stream starts and removed when the turn settles (finally block).
+ * ROUND-42 → ROUND-52 (R52-b): registry of live streamed turns, keyed by
+ * session id — powers POST /sessions/:id/stop (the UI Stop button). Since
+ * R52-b the map lives in lib/turn-registry.ts and is SHARED with the
+ * orchestrator, so a sub-agent's child turn is registrable and stoppable
+ * exactly like a main turn (the owner: "I should be given options to stop
+ * the sub-agents in a similar way too").
  */
-const activeTurns = new Map<string, AbortController>();
 
 /** API.md §1.3: every non-2xx response carries this single shape. */
 function errorBody(code: string, message: string, details?: Record<string, unknown>): unknown {
@@ -535,6 +546,11 @@ export function buildServer(options: ServerOptions): FastifyInstance {
     "tauri://localhost",
     "http://localhost:5173",
     "http://127.0.0.1:5173",
+    // ROUND-52 (live-battery): the IPv6 loopback literal — vite binds ::1 on
+    // some hosts and opening the dev server by its literal origin then sends
+    // Origin: http://[::1]:5173, which previously failed every preflight
+    // (401 from the bearer wall) and silently fell the app back to demo data.
+    "http://[::1]:5173",
   ]);
   /**
    * CORS headers for a request Origin when it is allow-listed; `{}` otherwise.
@@ -2755,6 +2771,12 @@ export function buildServer(options: ServerOptions): FastifyInstance {
             // (catalog-validated in settings.ts) or null to re-inherit.
             ...(typeof raw.subagentModel === "string" ? { subagentModel: raw.subagentModel } : {}),
             ...(raw.subagentModel === null ? { subagentModel: null } : {}),
+            // ROUND-52 (R52-b): the child-supervisor knobs (heartbeat cadence
+            // + stall threshold) — validated + clamped in settings.ts.
+            ...(typeof raw.childWatchdogMs === "number" ? { childWatchdogMs: raw.childWatchdogMs } : {}),
+            ...(typeof raw.childStallTimeoutMs === "number"
+              ? { childStallTimeoutMs: raw.childStallTimeoutMs }
+              : {}),
           });
         } catch (error) {
           return reply.code(400).send(
@@ -2973,10 +2995,11 @@ export function buildServer(options: ServerOptions): FastifyInstance {
           }
         };
         const abort = new AbortController();
-        // ROUND-42: registry for POST /sessions/:id/stop. One live turn per
-        // session — a second turn on the same session replaces the entry
-        // (the runtime refuses concurrent turns anyway).
-        activeTurns.set(id, abort);
+        // ROUND-42 → R52-b: registry for POST /sessions/:id/stop (SHARED with
+        // the orchestrator's child turns). One live turn per session — a
+        // second turn on the same session replaces the entry (the runtime
+        // refuses concurrent turns anyway).
+        registerTurn(id, abort);
 
         try {
           const outcome = await runStreamedAgentTurn(
@@ -3041,7 +3064,7 @@ export function buildServer(options: ServerOptions): FastifyInstance {
             routeError instanceof Error ? routeError.message : String(routeError);
           send({ type: "error", status: 500, code: "INTERNAL_ERROR", message });
         } finally {
-          if (activeTurns.get(id) === abort) activeTurns.delete(id);
+          unregisterTurn(id, abort);
           if (!clientGone) {
             try {
               res.end();
@@ -3052,17 +3075,58 @@ export function buildServer(options: ServerOptions): FastifyInstance {
         }
       });
 
-      // ROUND-42: explicit stop. The UI's Stop button aborts its local fetch
-      // AND calls this — the server-side turn aborts, pending approvals deny
-      // on abort, and the stream route resolves with {type:'stopped'}.
+      // ROUND-42 → R52-b: explicit stop. The UI's Stop button aborts its local
+      // fetch AND calls this — the server-side turn aborts, pending approvals
+      // deny on abort, and the stream route resolves with {type:'stopped'}.
+      // ROUND-52 (R52-b): this now ALSO stops SUB-AGENT children — the
+      // orchestrator registers each running child in the same registry, so a
+      // stop aimed at a child session id aborts ONLY that child (the parent
+      // turn keeps running and receives an honest "stopped by the owner"
+      // report from the delegate_task tool result).
       scope.post("/sessions/:id/stop", async (request) => {
         const { id } = request.params as Record<string, string>;
-        const controller = activeTurns.get(id);
-        if (controller === undefined) {
-          return { ok: true, stopped: false };
+        const stopped = abortTurn(id, "owner");
+        return { ok: true, stopped };
+      });
+
+      // ---- ROUND-52 (R52-a): background jobs — the agent's run_command
+      // background launches (start /B …, `… &`, nohup …) register here so
+      // BOTH the agent (job_status/job_stop tools) and the UI (these routes:
+      // the Terminal panel's jobs view) can watch and stop them. ----
+
+      // All tracked jobs (optionally scoped to one project via ?projectId=).
+      scope.get("/jobs", async (request) => {
+        const query = request.query as Record<string, string | undefined>;
+        const projectId = query.projectId;
+        return { jobs: listJobs(projectId) };
+      });
+
+      // A project's jobs (the Terminal panel calls this shape).
+      scope.get("/projects/:id/jobs", async (request) => {
+        const { id } = request.params as Record<string, string>;
+        return { jobs: listJobs(id) };
+      });
+
+      // Full status of one job (command, age, alive, output tail, log tail).
+      scope.get("/jobs/:id", async (request, reply) => {
+        const { id } = request.params as Record<string, string>;
+        const status = getJobStatus(id);
+        if (status === null) {
+          return reply.code(404).send(errorBody("NOT_FOUND", `no background job '${id}'`));
         }
-        controller.abort();
-        return { ok: true, stopped: true };
+        return { job: status };
+      });
+
+      // Stop a tracked job (the UI's per-job Stop button — same best-effort
+      // kill path as the job_stop tool).
+      scope.post("/jobs/:id/stop", async (request, reply) => {
+        const { id } = request.params as Record<string, string>;
+        const status = getJobStatus(id);
+        if (status === null) {
+          return reply.code(404).send(errorBody("NOT_FOUND", `no background job '${id}'`));
+        }
+        const result = await stopJob(id);
+        return result;
       });
 
       // ---- Usage summary (SPEC §F7 dashboard chart) ----
@@ -3082,6 +3146,31 @@ export function buildServer(options: ServerOptions): FastifyInstance {
           days = parsed;
         }
         return getUsageSummary(db, { days });
+      });
+
+      // ---- ROUND-52 (R52-b): detailed usage analytics — the in-app /usage
+      // screen (owner: "Usage screen section 2 … you apparently did not
+      // implement the usage properly"). Same aggregation the PUBLIC
+      // usage.json export runs (scripts/export-usage.mjs) minus its
+      // redaction: this link is the private bearer-token loopback, so real
+      // ids/titles/roles are the point. `days` scopes only the zero-filled
+      // activity series; totals/tools/models/projects are whole-history. ----
+
+      scope.get("/usage/detailed", async (request, reply) => {
+        const query = request.query as Record<string, string | undefined>;
+        let days = 30;
+        if (query.days !== undefined) {
+          const parsed = Number(query.days);
+          if (!Number.isInteger(parsed) || parsed < 1 || parsed > 90) {
+            return reply.code(400).send(
+              errorBody("VALIDATION", "days must be an integer between 1 and 90", {
+                field: "query.days",
+              }),
+            );
+          }
+          days = parsed;
+        }
+        return getDetailedUsage(db, { days });
       });
 
       // ---- ROUND-40: notifications (task complete/failed, permission

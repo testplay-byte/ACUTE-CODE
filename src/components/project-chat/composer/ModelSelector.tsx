@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router";
 import { useQuery } from "@tanstack/react-query";
 import { Check, ChevronDown, ChevronRight, Settings } from "lucide-react";
@@ -18,6 +18,18 @@ import {
 const FLYOUT_WIDTH = 280;
 /** Safety cap on the flyout's model rows (same spirit as the old picker's 60). */
 const FLYOUT_MODEL_CAP = 200;
+
+/**
+ * ROUND-52 (R52-a): the flyout hover-bridge grace period — leaving the
+ * provider row (or the flyout) starts this timer; entering the other side
+ * cancels it. The fix for the owner's "When I tried to go to the models, it
+ * closed the model menu very quickly": the flyout is position:fixed at
+ * popoverRect.right + FLYOUT_MARGIN, so a dead zone (the popover's ~6px
+ * padding + the margin) sits between the row's box and the flyout's box —
+ * crossing it fired the row's mouseleave and snapped the flyout shut before
+ * the pointer could ever arrive. Same bridge ContextDonut shipped (R51-c).
+ */
+const FLYOUT_CLOSE_DELAY_MS = 220;
 
 /** Geometry used when the popover can't be measured / the touch path. */
 const INLINE_GEO = { side: "inline" as FlyoutSide, left: null, top: 0, viewportTop: 0, maxHeight: 280 };
@@ -45,13 +57,24 @@ const plainRect = (el: HTMLElement): PlainRect => {
  *    (viewport coordinates) so the popover's own max-height scroll can never
  *    clip it, but it stays a DOM CHILD of the provider row — moving the
  *    pointer from the row into the flyout keeps it open (mouseleave
- *    containment works off the DOM tree, not the visual box);
+ *    containment works off the DOM tree, not the visual box) — R52-a
+ *    CORRECTION: that only holds when the boxes are CONTIGUOUS; the fixed
+ *    flyout sits one dead zone away (see ROUND-52 below) and crossing it
+ *    fired the row's mouseleave — hence the hover bridge;
  *  - the popover itself scrolls internally (max-h + overflow-y-auto) so N
  *    providers never overflow the viewport, and scrolling it closes the
  *    flyout (a fixed flyout wouldn't track its row scrolling under it);
  *  - flyout polish: provider-name header chip, consistent rounded rows with
  *    hover states, check on the selected model, and the hidden-paid-models
  *    hint styled as a proper footer row.
+ *
+ * ROUND-52 (R52-a): the hover-bridge grace period — the provider row's
+ * mouseleave no longer closes the flyout INSTANTLY. Leaving the row (or the
+ * flyout) schedules the close after FLYOUT_CLOSE_DELAY_MS (220ms); entering
+ * either side cancels it, so the pointer can cross the popover-padding +
+ * FLYOUT_MARGIN dead zone into the flyout (and back). All other dismissal
+ * paths (popover scroll, outside click, Escape, popover close) still close
+ * immediately and cancel any pending timer.
  */
 export function ModelSelector({
   agent,
@@ -78,7 +101,28 @@ export function ModelSelector({
     viewportTop: number;
     maxHeight: number;
   }>({ side: "right", left: null, top: 0, viewportTop: 0, maxHeight: 280 });
+  // ROUND-52 (R52-a): the hover-bridge pending-close timer (see
+  // FLYOUT_CLOSE_DELAY_MS above) — leaving the provider row or the flyout
+  // schedules the close; entering either side cancels it. Mirrors the
+  // ContextDonut (R51-c) closeTimerRef pattern.
+  const closeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const clearCloseTimer = (): void => {
+    if (closeTimerRef.current !== null) {
+      clearTimeout(closeTimerRef.current);
+      closeTimerRef.current = null;
+    }
+  };
+  const scheduleClose = (): void => {
+    clearCloseTimer();
+    closeTimerRef.current = setTimeout(() => {
+      closeTimerRef.current = null;
+      setHoveredProvider(null);
+    }, FLYOUT_CLOSE_DELAY_MS);
+  };
+  // Never leak a pending close across an unmount.
+  useEffect(() => clearCloseTimer, []);
   const close = (): void => {
+    clearCloseTimer(); // ROUND-52 (R52-a): no pending close outlives the popover
     setOpen(false);
     setHoveredProvider(null);
   };
@@ -125,6 +169,7 @@ export function ModelSelector({
   /** Measure row + popover + viewport and compute the flyout geometry
    * (side by space, vertical clamp, capped height — pure helper). */
   const openFlyout = (providerId: string, row: HTMLElement): void => {
+    clearCloseTimer(); // ROUND-52 (R52-a): hovering cancels any pending close
     setHoveredProvider(providerId);
     const popover = row.closest("[data-model-popover]") as HTMLElement | null;
     if (popover === null) {
@@ -166,6 +211,13 @@ export function ModelSelector({
       aria-label={`Models of ${hoveredName}`}
       data-model-flyout
       data-flyout-side={flyoutSide}
+      // ROUND-52 (R52-a): the flyout's side of the hover bridge — entering it
+      // cancels the close the row's mouseleave scheduled; leaving it schedules
+      // the close again. Handlers live here on the SHARED root (both render
+      // sites get them); inline mode doesn't need the bridge, but a 220ms
+      // leave delay there is harmless (Back + click paths are unaffected).
+      onMouseEnter={clearCloseTimer}
+      onMouseLeave={scheduleClose}
       className={
         flyoutSide === "inline"
           ? "flex flex-col min-w-0"
@@ -309,7 +361,12 @@ export function ModelSelector({
           // synthetic onScroll bubbles — the FLYOUT's own scrolling must not
           // close it.)
           onScroll={(e) => {
-            if (e.target === e.currentTarget) setHoveredProvider(null);
+            // ROUND-52 (R52-a): a scroll-close also cancels any pending
+            // hover-bridge close (the flyout is already going away).
+            if (e.target === e.currentTarget) {
+              clearCloseTimer();
+              setHoveredProvider(null);
+            }
           }}
           className="absolute bottom-9 right-0 w-64 max-h-[min(24rem,calc(100vh-2rem))] overflow-y-auto auto-scroll rounded-2xl border p-1.5 z-50"
           style={{ background: styles.card, borderColor: styles.border, boxShadow: styles.bentoShadow }}
@@ -365,12 +422,17 @@ export function ModelSelector({
                 providers.map((p) => (
                   <div
                     key={p.id}
+                    data-provider-row={p.id}
                     className="relative flex items-center rounded-lg transition-colors"
                     style={{
                       background: hoveredProvider === p.id ? withAlpha(styles.accent, 0.08) : "transparent",
                     }}
                     onMouseEnter={(e) => openFlyout(p.id, e.currentTarget)}
-                    onMouseLeave={() => setHoveredProvider(null)}
+                    // ROUND-52 (R52-a): don't close instantly — start the grace
+                    // timer so the pointer can cross the popover padding +
+                    // FLYOUT_MARGIN gap into the flyout (entering the flyout,
+                    // or this row again, cancels it).
+                    onMouseLeave={scheduleClose}
                   >
                     <button
                       type="button"

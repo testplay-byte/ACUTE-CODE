@@ -32,6 +32,10 @@ import {
   setSessionStatus,
   subAgentCode,
 } from "../storage/sessions.js";
+// ROUND-52 (R52-b): the shared turn registry — children register their own
+// AbortController so POST /sessions/:id/stop can stop a sub-agent directly,
+// and the supervisor can abort a stalled one.
+import { registerTurn, unregisterTurn, getTurnStopReason, abortTurn } from "../lib/turn-registry.js";
 import { getAgent } from "../storage/agents.js";
 import { getOrchestrationSettings } from "../storage/settings.js";
 import { ProviderKeyring } from "../providers/registry.js";
@@ -100,6 +104,27 @@ function renderTaskPrompt(task: string): string {
   return TASK_SUFFIX.replace("{{TASK}}", task);
 }
 
+/** ROUND-52 (R52-b): the supervisor's heartbeat sample of a running child —
+ * what the main agent (and the sub-agent panel) can see about a child WITHOUT
+ * waiting for it to finish: what it last did, how long ago, how far along its
+ * todos are, how many tool calls it has made. Carried on `running` status
+ * frames as `watch`. */
+export interface SubAgentWatchSample {
+  /** ms since the child's LAST persisted event (message/tool) — the stall signal. */
+  lastEventAgeMs: number;
+  /** The child's last tool call ("run_command …") or message kind. */
+  lastActivity: string;
+  /** Total tool.use events so far. */
+  toolCount: number;
+  todosDone: number;
+  todosTotal: number;
+  /** Wall-clock ms since the child started running. */
+  elapsedMs: number;
+  /** True when lastEventAgeMs exceeds the stall threshold — the watchdog
+   * is about to abort the child (the frame that carries this is a warning). */
+  stalled: boolean;
+}
+
 export interface SubAgentEventPayload {
   type: "subagent-status";
   sessionId: string;
@@ -121,6 +146,54 @@ export interface SubAgentEventPayload {
    * running/completed/failed), so the UI can render it before the first
    * usage_events row lands in the polled /subagents row. */
   model?: string;
+  /** ROUND-52 (R52-b): the supervisor's heartbeat sample (running frames
+   * only) — live "what is this sub-agent doing" stats for the panel. */
+  watch?: SubAgentWatchSample;
+  /** ROUND-52 (R52-b): a human-readable one-liner for terminal frames —
+   * e.g. "stopped by the owner" or "stalled: no activity for 5m" — so the
+   * UI can show WHY a child failed instead of a bare status. */
+  detail?: string;
+}
+
+/** ROUND-52 (R52-b): sample a running child's supervision stats — pure
+ * (db reads only), exported for unit tests. `startedAt` is the delegation's
+ * wall-clock start. */
+export function sampleChildWatch(
+  db: SqliteDatabase,
+  childId: string,
+  startedAt: number,
+  stallTimeoutMs: number,
+  todosDone: number,
+  todosTotal: number,
+): SubAgentWatchSample {
+  const events = listSessionEvents(db, childId);
+  const last = events[events.length - 1];
+  let lastActivity = "waiting for its first model response";
+  for (let i = events.length - 1; i >= 0; i -= 1) {
+    const ev = events[i];
+    if (ev.type === "tool.use") {
+      const name = (ev.payload as { toolName?: string }).toolName ?? "tool";
+      const summary = (ev.payload as { argsSummary?: string }).argsSummary ?? "";
+      lastActivity = `${name} ${summary}`.trim().slice(0, 120);
+      break;
+    }
+    if (ev.type === "message.assistant") {
+      lastActivity = "wrote an assistant message";
+      break;
+    }
+  }
+  // ts is an ISO string (SessionEvent.ts) — parse for the age math.
+  const lastTs = last !== undefined ? Date.parse(last.ts) : Date.now();
+  const lastEventAgeMs = Math.max(0, Date.now() - (Number.isNaN(lastTs) ? Date.now() : lastTs));
+  return {
+    lastEventAgeMs,
+    lastActivity,
+    toolCount: events.filter((e) => e.type === "tool.use").length,
+    todosDone,
+    todosTotal,
+    elapsedMs: Date.now() - startedAt,
+    stalled: lastEventAgeMs > stallTimeoutMs,
+  };
 }
 
 /** Live registry entry (semaphore bookkeeping). */
@@ -302,8 +375,66 @@ class Orchestrator {
       [ProviderKeyring.slotEnvVarName(providerId, 0)]: slotKey,
     });
 
+    // ── ROUND-52 (R52-b): the CHILD SUPERVISOR ────────────────────────────
+    // The owner: "if the subagent or agents are taking up way too much time
+    // then the main agent can take a look at the subagents stats like what it
+    // is currently doing has it run into anything or it has steered to some
+    // other path… so take proper steps." While the child runs:
+    //   1. its own AbortController is REGISTERED in the shared turn registry
+    //      → the owner's Stop button (POST /sessions/:id/stop) now works on
+    //      sub-agents exactly like on the main agent; a parent abort still
+    //      cascades (the listener below forwards it). Registered BEFORE the
+    //      first `running` frame so a stop aimed at that frame's session id
+    //      always lands.
+    //   2. a watchdog samples the child's session every childWatchdogMs and
+    //      emits a RUNNING heartbeat frame carrying `watch` (last activity,
+    //      age, tool count, todos, elapsed) — the live "what is it doing"
+    //      stats for the sub-agent panel AND the audit trail of supervision.
+    //   3. STALL DETECTION: no persisted child events for childStallTimeoutMs
+    //      (a hung command, a dead provider, an infinite wait) → the watchdog
+    //      aborts the child and the delegate result reports the stall
+    //      honestly to the parent (which then decides: re-delegate, check the
+    //      terminal, or report to the owner).
+    const orchestration = getOrchestrationSettings(db);
+    const childAbort = new AbortController();
+    registerTurn(child.id, childAbort);
+    let stallReport: string | null = null;
+    const onParentAbort = (): void => {
+      // Parent stop cascades to the child (R48-e1 semantics preserved).
+      if (!childAbort.signal.aborted) childAbort.abort();
+    };
+    if (signal !== undefined) {
+      // An ALREADY-aborted parent (R48-e1: the pre-flight check must still
+      // hold — the child never calls the provider) aborts the child NOW;
+      // a live parent aborts it later via the listener.
+      if (signal.aborted) childAbort.abort();
+      else signal.addEventListener("abort", onParentAbort, { once: true });
+    }
+
     status("running");
     setSessionStatus(db, child.id, "running");
+
+    const runStartedAt = Date.now();
+    const watchdog = setInterval(() => {
+      if (childAbort.signal.aborted) return;
+      const progress = this.progressOf(db, child.id);
+      const watch = sampleChildWatch(
+        db,
+        child.id,
+        runStartedAt,
+        orchestration.childStallTimeoutMs,
+        progress.todosDone,
+        progress.todosTotal,
+      );
+      if (watch.stalled) {
+        stallReport =
+          `stalled — no activity for ${Math.round(watch.lastEventAgeMs / 1000)}s ` +
+          `(last: ${watch.lastActivity}); the supervisor stopped it`;
+        abortTurn(child.id, "stall");
+        return;
+      }
+      status("running", { watch });
+    }, orchestration.childWatchdogMs);
 
     try {
       const framing = ROLE_FRAMING[role];
@@ -359,9 +490,12 @@ class Orchestrator {
               // R43-5: the temporary sub-agent model override (null = inherit
               // the agent's model — prepareTurn falls back to agent.model).
               modelOverride,
-              // ROUND-48 (R48-e1): the parent's abort signal — the child stops
-              // between iterations + its pending approvals deny on abort.
-              signal,
+              // ROUND-52 (R52-b): the child's OWN signal — aborts when the
+              // owner stops this sub-agent directly, when the parent turn
+              // stops (cascades via onParentAbort above), or when the
+              // supervisor detects a stall. Between-iteration stop +
+              // approval denial on abort are unchanged (R48-e1 semantics).
+              childAbort.signal,
             )
           : await runSingleAgentTurn(
               childDeps,
@@ -369,7 +503,7 @@ class Orchestrator {
               `${framing}\n${renderTaskPrompt(task)}`,
               modelOverride,
               wrappedEmit,
-              signal,
+              childAbort.signal,
             );
       if (outcome.ok) {
         setSessionStatus(db, child.id, "completed");
@@ -391,22 +525,48 @@ class Orchestrator {
           sessionId: child.id,
         };
       }
+      // ROUND-52 (R52-b): terminal frames + the parent's tool result now
+      // carry WHY the child failed: stopped by the owner (Stop button on the
+      // sub-agent card), stalled (supervisor watchdog), or a real error.
+      const stopReason = getTurnStopReason(child.id);
+      const detail =
+        stallReport !== null
+          ? stallReport
+          : stopReason === "owner"
+            ? "stopped by the owner"
+            : outcome.code === "ABORTED"
+              ? "aborted (parent turn stopped)"
+              : undefined;
       setSessionStatus(db, child.id, "failed");
-      status("failed");
+      status("failed", detail !== undefined ? { detail } : undefined);
       // ROUND-40: notify the user the delegated task failed.
       getNotificationBus().publish(db, {
         kind: "subagent_failed",
-        title: `Sub-agent (${role}) failed`,
-        body: outcome.message.slice(0, 160),
+        title:
+          stopReason === "owner"
+            ? `Sub-agent (${role}) stopped by the owner`
+            : stallReport !== null
+              ? `Sub-agent (${role}) stalled — supervisor stopped it`
+              : `Sub-agent (${role}) failed`,
+        body: (stallReport ?? outcome.message).slice(0, 160),
         sessionId: child.id,
         projectId: parent.projectId ?? undefined,
       });
+      const failureLine =
+        stallReport !== null
+          ? `Sub-agent STALLED and was stopped by the supervisor: ${stallReport}. Decide deliberately: re-delegate the task (delegate_task), investigate what it was doing, or report the situation to the user — do not silently retry.`
+          : stopReason === "owner"
+            ? `Sub-agent was STOPPED BY THE OWNER mid-task. Its partial progress is preserved in its session (${child.id}). Do NOT re-delegate or continue the stopped work unless the user asks.`
+            : `Sub-agent failed: ${outcome.message}`;
       return {
         ok: false,
-        output: `[subagent session: ${child.id} | role: ${role}]\nSub-agent failed: ${outcome.message}`,
+        output: `[subagent session: ${child.id} | role: ${role}]\n${failureLine}`,
         sessionId: child.id,
       };
     } finally {
+      clearInterval(watchdog);
+      if (signal !== undefined) signal.removeEventListener("abort", onParentAbort);
+      unregisterTurn(child.id, childAbort);
       this.releaseSlot(providerId, slot, child.id);
     }
   }

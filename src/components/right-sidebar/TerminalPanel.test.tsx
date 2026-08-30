@@ -18,11 +18,14 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { cleanup, fireEvent, screen, waitFor } from "@testing-library/react";
 import {
   createTerminalSession,
+  fetchProjectJobs,
   killTerminalSession,
   runProjectTerminal,
   runProjectTerminalStream,
   sendTerminalSessionInput,
+  stopBackgroundJob,
   streamTerminalSession,
+  type BackgroundJobStatus,
 } from "../../lib/api";
 import { useConfigStore } from "../../lib/config-store";
 import { useRightSidebarStore, type RightSidebarTab } from "../../lib/right-sidebar-store";
@@ -38,6 +41,8 @@ vi.mock("../../lib/api", () => ({
   resizeTerminalSession: vi.fn(),
   killTerminalSession: vi.fn(),
   streamTerminalSession: vi.fn(),
+  fetchProjectJobs: vi.fn(),
+  stopBackgroundJob: vi.fn(),
 }));
 
 afterEach(cleanup);
@@ -84,6 +89,8 @@ beforeEach(() => {
   vi.mocked(killTerminalSession).mockReset();
   vi.mocked(streamTerminalSession).mockReset();
   vi.mocked(streamTerminalSession).mockImplementation(async () => {});
+  vi.mocked(fetchProjectJobs).mockReset().mockResolvedValue([]);
+  vi.mocked(stopBackgroundJob).mockReset().mockResolvedValue({ ok: true, output: "killed" });
 });
 
 async function typeAndRun(command: string): Promise<void> {
@@ -469,5 +476,103 @@ describe("TerminalPanel Shell mode (ROUND-45 R45-b)", () => {
     await waitFor(() => expect(screen.getByText(/Start the sidecar/)).toBeTruthy());
     expect(createTerminalSession).not.toHaveBeenCalled();
     expect(streamTerminalSession).not.toHaveBeenCalled();
+  });
+});
+
+// ─── ROUND-52 (R52-c): the Background jobs section ──────────────────────────
+
+/** One GET /projects/:id/jobs row (the R52-a contract shape). */
+function job(over: Partial<BackgroundJobStatus> = {}): BackgroundJobStatus {
+  return {
+    id: "j1a2b3c4",
+    command: "node server.js",
+    cwd: "/home/z/PROJECT/ACUTE-CODE",
+    projectId: "prj_test",
+    startedAt: Date.now() - 134_000,
+    status: "running",
+    exitCode: null,
+    endedAt: null,
+    pid: 4242,
+    logFile: null,
+    outputTail: "listening on :3000\n",
+    ageMs: 134_000,
+    alive: true,
+    logTail: null,
+    ...over,
+  };
+}
+
+describe("TerminalPanel background jobs (ROUND-52 R52-c)", () => {
+  it("renders a running job (command + age + Stop) and Stop calls stopBackgroundJob", async () => {
+    vi.mocked(fetchProjectJobs).mockResolvedValue([job()]);
+    renderWithProviders(<TerminalPanel projectId="prj_test" tab={tab} />);
+
+    const section = await screen.findByTestId("background-jobs");
+    expect(section.textContent).toContain("Background jobs");
+    // Count badge + the row's mono command + age ("2m 14s").
+    expect(section.textContent).toContain("1");
+    expect(screen.getByText("node server.js")).toBeTruthy();
+    expect(screen.getByTestId("background-job-age").textContent).toBe("2m 14s");
+    expect(screen.getByTestId("background-job-row").getAttribute("data-alive")).toBe("true");
+
+    fireEvent.click(screen.getByRole("button", { name: "Stop background job j1a2b3c4" }));
+    await waitFor(() => expect(stopBackgroundJob).toHaveBeenCalledWith("j1a2b3c4"));
+  });
+
+  it("an exited job shows its exit code (no Stop); clicking a row expands the output tail", async () => {
+    vi.mocked(fetchProjectJobs).mockResolvedValue([
+      job({
+        status: "exited",
+        alive: false,
+        exitCode: 0,
+        endedAt: Date.now() - 1000,
+        outputTail: "starting\nlistening on :3000\nready\n",
+        logTail: "log line from server.log\n",
+      }),
+    ]);
+    renderWithProviders(<TerminalPanel projectId="prj_test" tab={tab} />);
+
+    await screen.findByTestId("background-job-row");
+    // Exited + exit 0: the code shows, no Stop affordance.
+    expect(screen.getByTestId("background-job-row").getAttribute("data-alive")).toBe("false");
+    expect(screen.getByText("exit 0")).toBeTruthy();
+    expect(screen.queryByTestId("background-job-stop")).toBeNull();
+
+    // Clicking the row expands the output tail (the LAST lines of outputTail).
+    fireEvent.click(screen.getByText("node server.js"));
+    const tail = await screen.findByTestId("background-job-tail");
+    expect(tail.textContent).toContain("listening on :3000");
+    expect(tail.textContent).toContain("ready");
+    expect(tail.textContent).not.toContain("log line from server.log");
+  });
+
+  it("the log file's tail renders when the job produced no live output", async () => {
+    vi.mocked(fetchProjectJobs).mockResolvedValue([
+      job({ outputTail: "", logTail: "redirected output line\n" }),
+    ]);
+    renderWithProviders(<TerminalPanel projectId="prj_test" tab={tab} />);
+
+    fireEvent.click(await screen.findByText("node server.js"));
+    const tail = await screen.findByTestId("background-job-tail");
+    expect(tail.textContent).toContain("redirected output line");
+  });
+
+  it("no jobs → the section stays hidden (no clutter on clean projects)", async () => {
+    vi.mocked(fetchProjectJobs).mockResolvedValue([]);
+    renderWithProviders(<TerminalPanel projectId="prj_test" tab={tab} />);
+
+    // The jobs query ran (empty answer) and the section never renders.
+    await waitFor(() => expect(fetchProjectJobs).toHaveBeenCalledWith("prj_test"));
+    expect(screen.queryByTestId("background-jobs")).toBeNull();
+    expect(screen.queryByText("Background jobs")).toBeNull();
+  });
+
+  it("demo mode never polls the jobs endpoint", async () => {
+    useConfigStore.setState({ demoData: true });
+    renderWithProviders(<TerminalPanel projectId="prj_test" tab={tab} />);
+
+    await waitFor(() => expect(screen.getByLabelText("Terminal command input")).toBeTruthy());
+    expect(fetchProjectJobs).not.toHaveBeenCalled();
+    expect(screen.queryByTestId("background-jobs")).toBeNull();
   });
 });

@@ -147,6 +147,9 @@ describe("openDatabase", () => {
       // modes (full|ask|plan|editor, default 'ask') + the cached prompt-token
       // column the context meter's cache-hit-rate line reads.
       { version: 20, name: "0020_permission_modes_attachments.sql" },
+      // ROUND-52 (R52-a): job_status + job_stop appended to template/default
+      // allowlists that include run_command (background-command supervision).
+      { version: 21, name: "0021_background_job_tools.sql" },
     ]);
     expect(appliedSecond).toEqual(appliedFirst);
   });
@@ -192,6 +195,10 @@ describe("template seeding", () => {
           "memory_save",
           "memory_recall",
           "memory_list",
+          // ROUND-52 (R52-a): the background-job supervision tools (seeded
+          // via TOOL_NAMES — companions of run_command above).
+          "job_status",
+          "job_stop",
         ]);
         expect(row.memory_policy).toBe("on-start");
         expect(row.max_turns).toBe(40);

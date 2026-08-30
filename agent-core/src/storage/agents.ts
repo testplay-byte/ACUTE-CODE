@@ -45,6 +45,14 @@ export const TOOL_NAMES = [
   "memory_save",
   "memory_recall",
   "memory_list",
+  // ROUND-52 (R52-a): background-job supervision — run_command resolves
+  // detached launches (start /B …, `… &`, nohup …) immediately with a job
+  // id; job_status polls what the process is doing (alive/output/log tail),
+  // job_stop cleans it up. Migration 0021 appends them to existing
+  // EXPLICIT allowlists (the owner's hung-server round-52 case must never
+  // recur — the agent needs these on day one).
+  "job_status",
+  "job_stop",
 ] as const;
 
 /** Agent JSON as served by the API: AgentRecord plus bookkeeping columns. */

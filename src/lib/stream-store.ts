@@ -125,6 +125,15 @@ export interface SubAgentLiveEntry {
    * entry is created / re-anchored on the running status frame) — the live
    * footer's clock anchor while the stream is in flight. */
   startedAtMs: number;
+  /** ROUND-52 (R52-b): the supervisor's LATEST heartbeat sample (running
+   * frames only, every childWatchdogMs) — the sub-agent panel's live
+   * "what is it doing" watch line. A new attempt clears the stale one. */
+  watch?: SubAgentWatchInfo;
+  /** ROUND-52 (R52-b): WHY the terminal frame fired — "stopped by the
+   * owner", "stalled — no activity for Ns (last: …); the supervisor
+   * stopped it" — rendered as the panel's status line instead of a bare
+   * "failed". Cleared when a new attempt starts. */
+  detail?: string;
 }
 
 /** One ordered entry of a child's live attempt log (see liveSteps). */
@@ -132,13 +141,64 @@ export interface SubAgentLiveStep {
   type: "thinking" | "text" | "tool";
   /** thinking/text: the accumulated raw text; tool: unused. */
   text?: string;
-  /** tool rows only. */
-  tool?: { toolName: string; argsSummary: string; ok: boolean | null; outputSummary?: string };
+  /** tool rows only. `liveOutput` (ROUND-52 R52-c) is the live terminal
+   * tail of an in-flight run_command — stripped the moment its inner
+   * tool-result settles the step. */
+  tool?: {
+    toolName: string;
+    argsSummary: string;
+    ok: boolean | null;
+    outputSummary?: string;
+    liveOutput?: string;
+  };
 }
 
 /** Cap on the ordered live log (a runaway child must not grow the store
  * unbounded; the tail is what the panel streams anyway). */
 const MAX_LIVE_STEPS = 400;
+
+/**
+ * ROUND-52 (R52-b): the supervisor's heartbeat sample of a running child —
+ * mirrored locally from the subagent-status frame's `watch` payload (api.ts
+ * types that shape INLINE on the SSE variant, so the store re-declares it
+ * here to carry it on the live map without widening api.ts).
+ */
+export interface SubAgentWatchInfo {
+  /** ms since the child's last persisted event — the stall signal. */
+  lastEventAgeMs: number;
+  /** The child's last tool call ("run_command …") or message kind. */
+  lastActivity: string;
+  /** Total tool calls so far this attempt. */
+  toolCount: number;
+  todosDone: number;
+  todosTotal: number;
+  /** Wall-clock ms since the attempt started. */
+  elapsedMs: number;
+  /** True when lastEventAgeMs passed the stall threshold — the frame that
+   * carries this is a warning (amber watch line in the panel). */
+  stalled: boolean;
+}
+
+/**
+ * ROUND-52 (R52-c): a ToolUseEntry carrying the LIVE terminal tail of an
+ * in-flight run_command call. Defined LOCALLY (api.ts is frozen this round):
+ * structurally assignable to ToolUseEntry, so the working entries stay
+ * typed as-is and only the store/WorkingSection read the extra field.
+ */
+export type LiveToolUseEntry = ToolUseEntry & { liveOutput?: string };
+
+/** ROUND-52 (R52-c): cap on the accumulated live output tail (~4KB — the
+ * display slices the last lines anyway; the store keeps the tail). */
+const MAX_LIVE_OUTPUT_BYTES = 4096;
+
+/** Append one output chunk to a live tail, keeping the LAST bytes past the
+ * cap (streaming commands can emit megabytes — only the tail matters). */
+function appendLiveOutput(prev: string | undefined, chunk: string): string {
+  const next = (prev ?? "") + chunk;
+  return next.length > MAX_LIVE_OUTPUT_BYTES
+    ? next.slice(next.length - MAX_LIVE_OUTPUT_BYTES)
+    : next;
+}
 
 export interface StreamSessionState {
   liveTurn: LiveTurn | null;
@@ -347,6 +407,21 @@ function handleSubAgentStatus(
       // The attempt's clock anchor: the running frame (or the first inner
       // frame for entries born mid-stream — see handleSubAgentEvent).
       startedAtMs: restarted || prev === undefined ? Date.now() : prev.startedAtMs,
+      // ROUND-52 (R52-b): the heartbeat sample rides running frames every
+      // childWatchdogMs; a (re)start clears the stale sample of the previous
+      // attempt.
+      ...(event.watch !== undefined
+        ? { watch: event.watch }
+        : prev?.watch !== undefined && !restarted
+          ? { watch: prev.watch }
+          : {}),
+      // ROUND-52 (R52-b): WHY a terminal frame fired; a new attempt
+      // (queued/running/completed) clears it.
+      ...(event.detail !== undefined
+        ? { detail: event.detail }
+        : event.status === "failed" && prev?.detail !== undefined
+          ? { detail: prev.detail }
+          : {}),
     };
     return { subagentsLive: { ...s.subagentsLive, [event.sessionId]: next } };
   });
@@ -375,6 +450,8 @@ function summarizeToolActivity(
  *    (the live turn's working entries) WITH subAgentId so the ApprovalCard
  *    renders its "Sub-agent {code} · {role}" attribution;
  *  - tool-call/tool-result refresh the live map's lastActivity;
+ *  - ROUND-52 (R52-c): inner tool-output chunks append to the matching
+ *    in-flight run_command live step (the live terminal tail);
  *  - ROUND-50 (R50-b): text-delta / thinking-delta / tool frames accumulate
  *    the child's LIVE raw-stream state (liveText / liveThinking /
  *    liveSteps — the sub-agent panel's live segment) and inner `finish`
@@ -406,6 +483,7 @@ function handleSubAgentEvent(
     inner.type === "thinking-delta" ||
     inner.type === "tool-call" ||
     inner.type === "tool-result" ||
+    inner.type === "tool-output" ||
     inner.type === "finish"
   ) {
     useStreamStore.setState((s) => {
@@ -450,12 +528,34 @@ function handleSubAgentEvent(
         for (let i = liveSteps.length - 1; i >= 0; i -= 1) {
           const step = liveSteps[i];
           if (step.type === "tool" && step.tool?.toolName === inner.toolName && step.tool.ok === null) {
+            // ROUND-52 (R52-c): strip the live tail — the settled row shows
+            // the FINAL output (outputSummary), never both.
+            const { liveOutput: _cleared, ...settled } = step.tool;
+            liveSteps[i] = {
+              ...step,
+              tool: {
+                ...settled,
+                ok: inner.ok,
+                ...(inner.outputSummary !== undefined ? { outputSummary: inner.outputSummary } : {}),
+              },
+            };
+            break;
+          }
+        }
+      } else if (inner.type === "tool-output") {
+        // ROUND-52 (R52-c): live terminal output of the child's RUNNING
+        // run_command — chunks append to the matching in-flight live step
+        // (same last-pending-match rule as tool-result); the panel's live
+        // tool rows render the streaming tail under the pill.
+        liveSteps = [...liveSteps];
+        for (let i = liveSteps.length - 1; i >= 0; i -= 1) {
+          const step = liveSteps[i];
+          if (step.type === "tool" && step.tool?.toolName === inner.toolName && step.tool.ok === null) {
             liveSteps[i] = {
               ...step,
               tool: {
                 ...step.tool,
-                ok: inner.ok,
-                ...(inner.outputSummary !== undefined ? { outputSummary: inner.outputSummary } : {}),
+                liveOutput: appendLiveOutput(step.tool.liveOutput, inner.chunk),
               },
             };
             break;
@@ -826,10 +926,13 @@ function handleStreamEvent(
       const index = consumed;
       consumed += 1;
       if (index === matched) {
+        // ROUND-52 (R52-c): strip the live tail — the settled pill shows the
+        // FINAL output (outputSummary), never both.
+        const { liveOutput: _cleared, ...settled } = entry.tool as LiveToolUseEntry;
         return {
           ...entry,
           tool: {
-            ...entry.tool,
+            ...settled,
             ok: event.ok,
             ...(event.outputSummary ? { outputSummary: event.outputSummary } : {}),
           },
@@ -848,6 +951,38 @@ function handleStreamEvent(
         void qc.invalidateQueries({ queryKey: ["project-file"] });
       }
     }
+    return;
+  }
+
+  if (event.type === "tool-output") {
+    // ROUND-52 (R52-c, owner: "After running the commands, it should
+    // actually show the terminal interface of those commands too"): live
+    // terminal output of a RUNNING run_command — batched stdout+stderr
+    // chunks append to the matching in-flight tool entry (last null-ok of
+    // the same name); WorkingSection renders the capped tail under the
+    // pill while ok === null. No matching in-flight row → ignore (the
+    // backend always emits tool-call first).
+    const flat = liveTurn.working.flatMap((e) => (e.type === "tool" ? [e.tool] : []));
+    const idx = [...flat].reverse().findIndex(
+      (x) => x.toolName === event.toolName && x.ok === null,
+    );
+    if (idx === -1) return;
+    const matched = flat.length - 1 - idx;
+    let consumed = 0;
+    const working = liveTurn.working.map((entry) => {
+      if (entry.type !== "tool") return entry;
+      const index = consumed;
+      consumed += 1;
+      if (index === matched) {
+        const live = entry.tool as LiveToolUseEntry;
+        return {
+          ...entry,
+          tool: { ...live, liveOutput: appendLiveOutput(live.liveOutput, event.chunk) },
+        };
+      }
+      return entry;
+    });
+    patchSession(sessionId, { liveTurn: { ...liveTurn, working } });
     return;
   }
 
@@ -895,12 +1030,12 @@ function handleStreamEvent(
     return;
   }
 
-  // text-delta / thinking-delta / tool-call / tool-result / approval.* / error
-  // handled above. subagent-status / subagent-event are handled at the top of
-  // this function (R48-e2 live map + approval routing). finish / done /
-  // meta.continuation don't need to mutate the live turn state (the panel
-  // invalidates the session query on done and the folded turn renders from
-  // the event log).
+  // text-delta / thinking-delta / tool-call / tool-result / tool-output /
+  // approval.* / error handled above. subagent-status / subagent-event are
+  // handled at the top of this function (R48-e2 live map + approval routing).
+  // finish / done / meta.continuation don't need to mutate the live turn state
+  // (the panel invalidates the session query on done and the folded turn
+  // renders from the event log).
 }
 
 // ─── ROUND-48 (R48-e2): live sub-agent map selectors ────────────────────────

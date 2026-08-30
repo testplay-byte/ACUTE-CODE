@@ -1,12 +1,16 @@
 import { useEffect, useRef, useState, type KeyboardEvent } from "react";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { LoaderCircle, Square, Trash2, RefreshCw } from "lucide-react";
 import {
   createTerminalSession,
+  fetchProjectJobs,
   killTerminalSession,
   runProjectTerminal,
   runProjectTerminalStream,
   sendTerminalSessionInput,
+  stopBackgroundJob,
   streamTerminalSession,
+  type BackgroundJobStatus,
   type TerminalSessionDescriptor,
   type TerminalSessionFrame,
   type TerminalStreamFrame,
@@ -16,6 +20,7 @@ import { useRightSidebarStore, stateKey, type RightSidebarTab } from "../../lib/
 import { SEMANTIC_COLORS } from "../../lib/semantics";
 import { useThemeStyles } from "../../lib/use-theme-styles";
 import { useScrollFade } from "../../lib/useScrollFade";
+import { withAlpha } from "../dashboard/helpers";
 
 /**
  * ROUND-38/39 right-sidebar Terminal tab (owner: "I can see the terminal on
@@ -81,6 +86,180 @@ const SHELL_HISTORY_CAP = 100;
 const ANSI_ESCAPE_RE = /\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])/g;
 function cleanShellText(text: string): string {
   return text.replace(ANSI_ESCAPE_RE, "").replace(/\r/g, "");
+}
+
+// ─── ROUND-52 (R52-a/R52-c): the Background jobs section ───────────────────
+
+/** "2m 14s" / "48s" / "1h 07m" — a job's age from its ageMs. */
+function formatJobAge(ms: number): string {
+  const s = Math.max(0, Math.floor(ms / 1000));
+  if (s < 60) return `${s}s`;
+  const m = Math.floor(s / 60);
+  if (m < 60) return `${m}m ${String(s % 60).padStart(2, "0")}s`;
+  return `${Math.floor(m / 60)}h ${String(m % 60).padStart(2, "0")}m`;
+}
+
+/** The job row's expandable output tail — the LAST ~12 lines of the live
+ * outputTail (or the redirected log file's tail when the process wrote no
+ * output of its own), mono, clamped. */
+function jobTailLines(job: BackgroundJobStatus): string[] {
+  const raw = job.outputTail !== "" ? job.outputTail : job.logTail ?? "";
+  const cleaned = cleanShellText(raw).replace(/\n+$/, "");
+  if (cleaned === "") return [];
+  return cleaned.split("\n").slice(-12);
+}
+
+/**
+ * ROUND-52 (R52-a/R52-c, owner: the watchdog round — `start /B …` launches
+ * that outlived their tool call): the Terminal panel's Background jobs
+ * strip. GET /projects/:id/jobs polled every 5s; one compact row per job
+ * (pulsing dot while alive, muted once exited; mono command; age; Stop on
+ * alive jobs; the exit code once exited). Clicking a row expands its output
+ * tail. The section renders ONLY when ≥1 job exists — no clutter on clean
+ * projects. Lives between the output area and the input row (transient
+ * supervision info; the terminal transcript stays primary).
+ */
+function BackgroundJobsSection({ projectId }: { projectId: string }) {
+  const styles = useThemeStyles();
+  const queryClient = useQueryClient();
+  const [expandedId, setExpandedId] = useState<string | null>(null);
+
+  const jobsQuery = useQuery({
+    queryKey: ["project-jobs", projectId],
+    queryFn: () => fetchProjectJobs(projectId),
+    refetchInterval: 5000,
+  });
+
+  const stopJob = useMutation({
+    mutationFn: (jobId: string) => stopBackgroundJob(jobId),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ["project-jobs", projectId] });
+    },
+  });
+
+  const jobs = jobsQuery.data ?? [];
+  if (jobs.length === 0) return null;
+
+  return (
+    <div
+      className="shrink-0 border-b px-2 py-1.5 flex flex-col gap-1 max-h-56 overflow-y-auto auto-scroll"
+      style={{ borderColor: styles.border, background: styles.isDark ? "rgba(0,0,0,0.14)" : styles.subtle }}
+      data-testid="background-jobs"
+      aria-label="Background jobs"
+    >
+      <div className="flex items-center gap-1.5">
+        <span
+          className="text-[9.5px] font-bold uppercase tracking-[0.12em]"
+          style={{ color: styles.textTertiary }}
+        >
+          Background jobs
+        </span>
+        <span
+          className="text-[9px] font-mono font-bold px-1.5 py-0.5 rounded-full"
+          style={{ background: styles.subtleHover, color: styles.textSecondary }}
+        >
+          {jobs.length}
+        </span>
+        <span className="flex-1" />
+        {stopJob.isPending ? (
+          <LoaderCircle size={10} className="animate-spin" style={{ color: styles.textTertiary }} aria-hidden />
+        ) : null}
+      </div>
+      {jobs.map((job) => {
+        const alive = job.status === "running" && job.alive;
+        const expanded = expandedId === job.id;
+        const tail = jobTailLines(job);
+        return (
+          <div key={job.id} className="min-w-0" data-testid="background-job-row" data-alive={alive ? "true" : "false"}>
+            <div
+              role="button"
+              tabIndex={0}
+              aria-expanded={tail.length > 0 ? expanded : undefined}
+              onClick={() => setExpandedId(expanded ? null : job.id)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter" || e.key === " ") {
+                  e.preventDefault();
+                  setExpandedId(expanded ? null : job.id);
+                }
+              }}
+              className="flex items-center gap-2 h-6 rounded-md -mx-1 px-1 cursor-pointer transition-colors min-w-0"
+              title={`${job.command}\n${job.cwd}`}
+              onMouseEnter={(e) => {
+                e.currentTarget.style.background = styles.subtleHover;
+              }}
+              onMouseLeave={(e) => {
+                e.currentTarget.style.background = "transparent";
+              }}
+            >
+              <span
+                className={`w-1.5 h-1.5 rounded-full shrink-0 ${alive ? "ac-pulse" : ""}`}
+                style={{ background: alive ? SEMANTIC_COLORS.success : styles.textTertiary }}
+                aria-hidden
+              />
+              <span
+                className="min-w-0 flex-1 truncate font-mono text-[10.5px]"
+                style={{ color: styles.textSecondary }}
+              >
+                {job.command}
+              </span>
+              <span
+                className="shrink-0 font-mono text-[10px] tabular-nums"
+                style={{ color: styles.textTertiary }}
+                data-testid="background-job-age"
+              >
+                {formatJobAge(job.ageMs)}
+              </span>
+              {alive ? (
+                <button
+                  type="button"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    stopJob.mutate(job.id);
+                  }}
+                  disabled={stopJob.isPending}
+                  aria-label={`Stop background job ${job.id}`}
+                  title="Stop this background job"
+                  className="shrink-0 w-6 h-6 grid place-items-center rounded-md transition-colors disabled:opacity-50"
+                  style={{ color: SEMANTIC_COLORS.danger }}
+                  onMouseEnter={(e) => {
+                    e.currentTarget.style.background = withAlpha(SEMANTIC_COLORS.danger, 0.12);
+                  }}
+                  onMouseLeave={(e) => {
+                    e.currentTarget.style.background = "transparent";
+                  }}
+                  data-testid="background-job-stop"
+                >
+                  <Square size={9} fill="currentColor" strokeWidth={0} aria-hidden />
+                </button>
+              ) : job.exitCode !== null ? (
+                <span
+                  className="shrink-0 font-mono text-[10px] font-bold"
+                  style={{ color: job.exitCode === 0 ? SEMANTIC_COLORS.success : SEMANTIC_COLORS.danger }}
+                >
+                  exit {job.exitCode}
+                </span>
+              ) : null}
+            </div>
+            {expanded && tail.length > 0 ? (
+              <div
+                className="mt-0.5 mb-0.5 ml-3.5 rounded-[8px] border px-2 py-1 max-h-40 overflow-y-auto auto-scroll font-mono text-[10px] leading-[1.5] whitespace-pre-wrap break-words"
+                style={{
+                  borderColor: styles.borderSubtle,
+                  background: styles.isDark ? "rgba(0,0,0,0.25)" : styles.bg,
+                  color: styles.textSecondary,
+                }}
+                data-testid="background-job-tail"
+              >
+                {tail.map((line, i) => (
+                  <div key={i}>{line === "" ? " " : line}</div>
+                ))}
+              </div>
+            ) : null}
+          </div>
+        );
+      })}
+    </div>
+  );
 }
 
 export function TerminalPanel({ projectId, tab }: { projectId: string; tab: RightSidebarTab }) {
@@ -563,6 +742,10 @@ export function TerminalPanel({ projectId, tab }: { projectId: string; tab: Righ
           </div>
         ) : null}
       </div>
+      {/* ROUND-52 (R52-c): the project's BACKGROUND JOBS strip (agent-launched
+          `start /B …` servers etc.) — live status, ages, Stop buttons and
+          expandable output tails. Renders nothing on clean projects. */}
+      {liveMode ? <BackgroundJobsSection projectId={projectId} /> : null}
       <div className="shrink-0 flex items-center gap-2 px-2 py-1.5 border-t" style={{ borderColor: styles.border }}>
         <span className="font-mono text-[12px] shrink-0" style={{ color: styles.accent }}>$</span>
         <input

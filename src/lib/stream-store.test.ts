@@ -511,3 +511,199 @@ describe("stream store sub-agent LIVE raw stream (ROUND-50 R50-b)", () => {
     expect(getSubAgentLiveEntry("sess_unknown_child")).toBeUndefined();
   });
 });
+
+// ─── ROUND-52 (R52-b/R52-c): supervision watch/detail + live command output ──
+
+describe("stream store ROUND-52 supervision + live output", () => {
+  /** The heartbeat sample the watchdog emits on every running frame. */
+  function watchSample(over: Record<string, unknown> = {}) {
+    return {
+      lastEventAgeMs: 1200,
+      lastActivity: "run_command pnpm build",
+      toolCount: 3,
+      todosDone: 1,
+      todosTotal: 4,
+      elapsedMs: 47_000,
+      stalled: false,
+      ...over,
+    };
+  }
+
+  it("subagent-status watch samples land on the live entry; a restart clears the stale one", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        sseResponse([
+          statusFrame(),
+          statusFrame({ watch: watchSample() }),
+          statusFrame({ watch: watchSample({ toolCount: 9, elapsedMs: 61_000, todosDone: 2 }) }),
+          { type: "stopped" },
+        ]),
+      ),
+    );
+
+    await useStreamStore.getState().startStream(PARENT, "delegate it");
+
+    // The LATEST sample wins (heartbeat frames overwrite each other).
+    expect(getSubAgentLiveEntry(CHILD)?.watch).toEqual({
+      lastEventAgeMs: 1200,
+      lastActivity: "run_command pnpm build",
+      toolCount: 9,
+      todosDone: 2,
+      todosTotal: 4,
+      elapsedMs: 61_000,
+      stalled: false,
+    });
+
+    // A re-start (retry) clears the previous attempt's sample.
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        sseResponse([
+          statusFrame({ status: "running", watch: watchSample() }),
+          statusFrame({ status: "failed" }),
+          statusFrame({ status: "running" }),
+          { type: "stopped" },
+        ]),
+      ),
+    );
+    await useStreamStore.getState().startStream(PARENT, "delegate again");
+    expect(getSubAgentLiveEntry(CHILD)?.watch).toBeUndefined();
+  });
+
+  it("a failed frame's detail lands on the entry; a new attempt clears it", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        sseResponse([
+          statusFrame(),
+          statusFrame({ status: "failed", detail: "stopped by the owner" }),
+          { type: "stopped" },
+        ]),
+      ),
+    );
+
+    await useStreamStore.getState().startStream(PARENT, "delegate it");
+    expect(getSubAgentLiveEntry(CHILD)?.detail).toBe("stopped by the owner");
+
+    // Retry → a queued/running frame without detail clears the old reason.
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        sseResponse([
+          statusFrame({ status: "queued" }),
+          { type: "stopped" },
+        ]),
+      ),
+    );
+    await useStreamStore.getState().startStream(PARENT, "retry it");
+    expect(getSubAgentLiveEntry(CHILD)?.detail).toBeUndefined();
+  });
+
+  it("MAIN-agent tool-output chunks append to the matching in-flight entry; the tool-result clears the tail", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        sseResponse([
+          { type: "tool-call", toolName: "run_command", argsSummary: "pnpm test" },
+          { type: "tool-output", toolName: "run_command", chunk: "PASS src/a.test.ts\n" },
+          { type: "tool-output", toolName: "run_command", chunk: "PASS src/b.test.ts\n" },
+          { type: "tool-result", toolName: "run_command", argsSummary: "pnpm test", ok: true, outputSummary: "2 passed" },
+          { type: "stopped" },
+        ]),
+      ),
+    );
+
+    await useStreamStore.getState().startStream(PARENT, "run the tests");
+
+    const working = useStreamStore.getState().bySession[PARENT]?.liveTurn?.working ?? [];
+    const tool = working.find((e) => e.type === "tool");
+    // Settled: ok + outputSummary, and the live tail is GONE (the completed
+    // pill shows the final output — never both).
+    expect(tool).toMatchObject({
+      type: "tool",
+      tool: { toolName: "run_command", ok: true, outputSummary: "2 passed" },
+    });
+    expect((tool as { type: "tool"; tool: { liveOutput?: string } }).tool.liveOutput).toBeUndefined();
+
+    // A second run WITHOUT the result proves the accumulation itself:
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        sseResponse([
+          { type: "tool-call", toolName: "run_command", argsSummary: "pnpm build" },
+          { type: "tool-output", toolName: "run_command", chunk: "compiling " },
+          { type: "tool-output", toolName: "run_command", chunk: "done" },
+          { type: "stopped" },
+        ]),
+      ),
+    );
+    await useStreamStore.getState().startStream(PARENT, "build it");
+    const working2 = useStreamStore.getState().bySession[PARENT]?.liveTurn?.working ?? [];
+    const tool2 = working2.find((e) => e.type === "tool");
+    expect((tool2 as { type: "tool"; tool: { liveOutput?: string } }).tool.liveOutput).toBe(
+      "compiling done",
+    );
+  });
+
+  it("tool-output with NO matching in-flight row is ignored (never invents an entry)", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        sseResponse([
+          { type: "tool-output", toolName: "run_command", chunk: "orphan chunk" },
+          { type: "tool-call", toolName: "run_command", argsSummary: "pnpm test" },
+          { type: "stopped" },
+        ]),
+      ),
+    );
+
+    await useStreamStore.getState().startStream(PARENT, "orphan output");
+    const working = useStreamStore.getState().bySession[PARENT]?.liveTurn?.working ?? [];
+    expect(working).toHaveLength(1);
+    expect((working[0] as { type: "tool"; tool: { liveOutput?: string } }).tool.liveOutput).toBeUndefined();
+  });
+
+  it("INNER tool-output chunks append to the child's in-flight live step; the inner tool-result strips the tail", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        sseResponse([
+          statusFrame(),
+          eventFrame({ type: "tool-call", sessionId: CHILD, toolName: "run_command", argsSummary: "pnpm test" }),
+          eventFrame({ type: "tool-output", sessionId: CHILD, toolName: "run_command", chunk: "PASS a\n" }),
+          eventFrame({ type: "tool-output", sessionId: CHILD, toolName: "run_command", chunk: "PASS b" }),
+          eventFrame({ type: "tool-result", sessionId: CHILD, toolName: "run_command", ok: true, outputSummary: "2 passed" }),
+          { type: "stopped" },
+        ]),
+      ),
+    );
+
+    await useStreamStore.getState().startStream(PARENT, "delegate it");
+
+    const steps = getSubAgentLiveEntry(CHILD)?.liveSteps ?? [];
+    expect(steps).toEqual([
+      { type: "tool", tool: { toolName: "run_command", argsSummary: "pnpm test", ok: true, outputSummary: "2 passed" } },
+    ]);
+    // The settled step carries NO live tail.
+
+    // Without the result: the tail accumulates on the in-flight step.
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        sseResponse([
+          statusFrame(),
+          eventFrame({ type: "tool-call", sessionId: CHILD, toolName: "run_command", argsSummary: "pnpm build" }),
+          eventFrame({ type: "tool-output", sessionId: CHILD, toolName: "run_command", chunk: "compiling " }),
+          eventFrame({ type: "tool-output", sessionId: CHILD, toolName: "run_command", chunk: "done" }),
+          { type: "stopped" },
+        ]),
+      ),
+    );
+    await useStreamStore.getState().startStream(PARENT, "build it");
+    const steps2 = getSubAgentLiveEntry(CHILD)?.liveSteps ?? [];
+    expect(steps2).toEqual([
+      { type: "tool", tool: { toolName: "run_command", argsSummary: "pnpm build", ok: null, liveOutput: "compiling done" } },
+    ]);
+  });
+});

@@ -1,4 +1,4 @@
-<!-- last-reviewed: 2026-08-29 round-48 -->
+<!-- last-reviewed: 2026-08-30 round-52 -->
 # TESTING — the verification ladder
 
 Five layers; each has a defined "when mandatory". Rules here are binding
@@ -13,53 +13,61 @@ Five layers; each has a defined "when mandatory". Rules here are binding
 | L4 live battery | real provider turn(s), real disk, fresh DB | sandbox, single invocation | anything touching agents, projects, tools, streaming |
 | L5 browser verification | real UI against the live stack; screenshots machine-verified | sandbox, single invocation | any UI-affecting round |
 
-**Current counts (R48, verified 2026-08-29):** `pnpm test` = **752 tests in
-61 files** (740 unit + 12 e2e — the e2e split is 8 sidecar + 4 terminal-
-session, statically countable in `tests/e2e/` and confirmed in the CI run
-log, where the root run skips them pre-build and the dedicated e2e step
-runs them green). Trajectory: 262 (R42) → 397 (R43) → 471 (R44) → 565
-(R45) → 622 (R46) → 683 (R47) → 752 (R48), same counting basis. New/
-changed R48 suites (every final number re-verified via `vitest list` at
-the tip): `browser-proxy` 33→38 (NEW describe: navigate/viewport/adopt
-never rotate the ticket — mint → navigate → proxy with the ORIGINAL bt
-→ 200, the exact 401-loop sequence; direction/title non-rotation; TTL
-refresh on use unchanged; 4 of 5 stash-verified to FAIL on the pre-fix
-backend) · `BrowserPanel` 9→10 (the fetch mock now mirrors REAL rotation
-semantics — /browser/session rotates, navigate/viewport don't; recovery
-ONCE + loop-PARKS-at-3-per-60s tests) · `approval-flow` 9→11 (no-emit
-child still fails fast, retitled; child WITH emit → approval.requested
-subagent-event envelope → decision route → command runs + resolved
-envelope; denied case) · `orchestrator` 8→16 (code determinism/shape,
-status-envelope ⇄ row agreement, abort between iterations + zero provider
-calls on pre-aborted signal, delegate_task forwards signal, live per-step
-events with no duplicate batch, onStepFinish normalization, children's
-prompt omits the SUB-AGENTS section) · `projects-tools` 21→27 (palette
-shape/default sequence/explicit-color-wins/POST default + migration 0018
-round-robin backfill incl. >8 wrap + custom colors untouched + audit row)
-· `Sidebar` 8→9 (collapsed-rail inset ring, same-36px, scrollable) · `App`
-2→3 (new primary quick action + explicit no-Sessions-nav assertion) ·
-`DashboardScreen` 5→5 (quick-action test rewritten to "Continue in
-<project>") · `WorkingSection` 9→17 (live delegate rows render + click
-opens, attribution incl. the polled-row fallback, "delegating…" beat) ·
-`SubAgentPanel` 6→9 (full transcript render, 1s fake-timer clock, code
-chip, turn.error banner, resolved folding, tab-title prefix strip) ·
-NEW `stream-store` 9 (SSE-driven status→live map + invalidate, approval
-routing with subAgentId, main-agent frame parity, lastActivity summaries)
-· NEW `RightSidebar` 4 (Files quick-menu opens the explorer TAB, picker
-code badge + code-prefixed tab title) · NEW `FilesExplorerPanel` 8
-(tree render, expand/collapse, .md + .ts content, Search fires the
-palette, collapse toggle, honest error+Retry on both panes) · NEW
-`right-sidebar-store` 5 (openFiles singleton dedupe/activate/re-create,
-no collision with single-path file tabs, per-session isolation) · NEW
-`dialogs-script` 8 (script structure + fully-mocked win32 routing for the
-modern-picker chain). Per-suite deltas sum to exactly **+69 = 752 − 683**
-(no baseline drift this round). agent-core total: **460 tests across 27
-files**. Counting honesty note carried from R47: CI's root run on
-windows-latest shows `717 passed | 35 skipped (752)` — the 35 skips are
-the 23 windows-PTY `terminal-sessions` tests + the 12 e2e (skipped
-pre-build in the root pass, then run green by the dedicated e2e step:
-`11 passed | 1 skipped (12)`); the sandbox runs all 752 green in one
-`pnpm test` (dist present).
+**Current counts (R52, verified 2026-08-30):** `pnpm test` = **1035 tests
+in 73 files** (1023 unit + 12 e2e — the e2e split is 8 sidecar + 4
+terminal-session). Trajectory: 262 (R42) → 397 (R43) → 471 (R44) → 565
+(R45) → 622 (R46) → 683 (R47) → 752 (R48) → 815ish (R49) → 930 (R50) →
+978 (R51) → 1035 (R52), same counting basis. New/changed R52 suites:
+`r52-supervision` NEW 14 (exec helpers: background-launch grammar + log-
+redirect parsing; the hang fix: pipe-holding grandchild resolves FAST with
+a job id — the owner's exact trap, cross-platform via node-spawns-node;
+the job flips exited when the grandchild dies; the hard watchdog kills a
+silent never-exiting command as [timeout]; live onOutput frames; normal
+commands keep the old contract; the Unix `&` detached round-trip incl.
+process-group kill — POSIX-only skipIf; a failed launch reports failure,
+no phantom job; the job_status/job_stop tools through the REAL toolset;
+the /jobs REST routes + 404s; the child turn-registry owner-stop with the
+honest parent report; sampleChildWatch stall math) · NEW `r52-plugin-
+registry` 8 (plugin grammar/catalog-computed-from-declarations incl. the
+TOOL_NAMES seed, allowlist semantics through the registry, external .mjs
+loading + EXECUTION, built-in-wins collisions, fail-soft invalid shapes,
+the REAL scope matrix via HOME/USERPROFILE override, the settings scope
+reader) · `usage` 10→16 (getDetailedUsage aggregation: totals, tools
+leaderboard with failures, models, children nested under parents with
+isSubagent/parentId/role, subagentCount, dominant model, days zero-fill,
+orphans→synthetic group, the HTTP route shape + 400 walls) · NEW
+`migration-0021` (settings rows for the supervision knobs) · `stream-
+store` 9→14 (watch samples land/carry/restart-clear, failed detail
+persists/attempt-clears, MAIN tool-output appends + result strips, orphan
+chunks ignored, INNER child tool-output appends + strips) ·
+`SubAgentPanel` →+5 (Stop renders + calls stopSessionTurn + stopping
+chip + disabled, settled shows none, the WatchLine, the stalled amber
+line, the failed detail strip) · `TerminalPanel` →+5 (running job row +
+age + Stop → stopBackgroundJob, exited row shows exit code + expandable
+outputTail, logTail fallback, zero jobs hides the section, demo mode
+never polls) · `WorkingSection` →+4 (LiveOutputTail renders + live
+indicator, settled strips it, no output no tail, last-10-lines) ·
+`SubAgentsTab` →+3 (the supervision card: ms↔s/min round-trip, dirty-only
+PUT, range validation disables Save) · `Composer` 46→48 (the model-flyout
+HOVER BRIDGE: row-leave keeps the flyout open through the 220ms grace;
+flyout-enter cancels + flyout-leave re-schedules) · NEW `UsageScreen` 4
+(hero + stats + leaderboard + model card, drill-down with the nested
+"sub-agent · role" badge + deep-link, the range selector refetches, the
+empty state).
+
+**R52 live battery (L4+L5, all against the real model):** the owner's
+Unix-shaped trap reproduced broken THEN verified fixed (`node … >
+server.log 2>&1 &` resolved instantly with a job id pre-fix: silent
+"(no output)" + "no background jobs tracked"); the agent called
+job_status unprompted right after the launch; the job group-stop via
+POST /jobs/:id/stop; a real delegation streaming 15s watch heartbeats
+(lastActivity evolving, todos, elapsed); a mid-flight child stop via POST
+/sessions/:id/stop → detail "stopped by the owner" → the parent's honest
+delegate_task report; agent-browser: the Usage screen on real data (283K
+tokens, leaderboard, drill-down with nested sub-agent rows, deep-links),
+the Terminal panel's Background-jobs section (live row + UI Stop click →
+exited), and the SubAgentPanel (Stop button → "FAILED / stopped by the
+owner").
 
 ## Hard rules
 

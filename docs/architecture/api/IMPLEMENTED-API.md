@@ -591,6 +591,77 @@ EVERY dialog, classic fallback, `ERROR:` result line). The Tauri-side
 only (no cargo in the sandbox); runtime verification is the owner's
 re-test.
 
+## ROUND-52 additions (implemented)
+
+### Background jobs (run_command supervision — `agent-core/src/lib/background-jobs.ts`)
+
+`run_command` (the `core-terminal` plugin) tracks `exit` and `close`
+separately: a detached grandchild holding the output pipes (Windows
+`start /B …`) or a clean Unix `cmd > log 2>&1 &` launch registers a
+BACKGROUND JOB and the tool call resolves IMMEDIATELY with the job id +
+polling instructions; a shell that never exits within `timeoutMs` (60s
+default) is process-TREE-killed and resolved as `[timeout]`.
+
+| Route | Shape |
+| --- | --- |
+| `GET /api/v1/jobs` | `{jobs: JobStatus[]}` — every tracked job, newest first. `?projectId=` scopes. |
+| `GET /api/v1/jobs/:id` | `{job: JobStatus}` · `404 NOT_FOUND` unknown id. |
+| `GET /api/v1/projects/:id/jobs` | `{jobs: JobStatus[]}` — the project's jobs (the Terminal panel's Background-jobs view polls this every 5s). |
+| `POST /api/v1/jobs/:id/stop` | `{ok, output}` — best-effort stop (tree-kill a live launcher pid; POSIX process-group kill for detached jobs; pgrep/PowerShell command-line match for pipe-holders). Honest "still appears alive" report on failure. |
+
+`JobStatus = {id, command, cwd, projectId, startedAt, status:
+"running"\|"exited", exitCode, endedAt, pid, logFile, outputTail,
+detached, ageMs, alive, logTail}`. Jobs are process-local (one sidecar =
+one registry), capped at 100 / pruned after 12h. Agent-side tools:
+`job_status {job?}` (inspect/list, output tail + log tail) and
+`job_stop {job}`.
+
+### SSE: `tool-output` frames + supervision payloads
+
+`POST /sessions/:id/messages/stream` additionally emits
+`{type:"tool-output", toolName:"run_command", argsSummary, chunk}` —
+batched (~400ms) live stdout/stderr while a command runs (rendered as the
+live terminal tail by the working section / sub-agent panel; stripped
+when the tool-result settles the entry). `subagent-status` running frames
+carry `watch?: {lastEventAgeMs, lastActivity, toolCount, todosDone,
+todosTotal, elapsedMs, stalled}` (the supervisor's 15s heartbeat sample)
+and terminal frames carry `detail?: string` ("stopped by the owner" /
+"stalled — …"). Inner `subagent-event` frames carry the same
+`tool-output` shape for a child's running commands.
+
+### Sub-agent stop (the shared turn registry)
+
+`POST /sessions/:id/stop` now ALSO stops sub-agent children: the
+orchestrator registers each running child in `lib/turn-registry.ts` (the
+same map the server uses for main turns), so stopping a CHILD session id
+aborts only that child — the parent keeps running and its `delegate_task`
+result reports "STOPPED BY THE OWNER" (or "STALLED" for the watchdog's
+abort after `childStallTimeoutMs`).
+
+### Orchestration settings
+
+`GET/PUT /settings/orchestration` gain `childWatchdogMs` (15000 default,
+5s–60s) and `childStallTimeoutMs` (300000 default, 1–60min) — the
+supervisor heartbeat cadence and the stall threshold (Settings →
+Sub-agents exposes them in seconds/minutes).
+
+### `GET /api/v1/usage/detailed?days=1..90`
+
+`{days:[{date,inputTokens,outputTokens,requests,costUsd}](zero-filled),
+totals:{projects,sessions,subagentSessions,toolCalls,requests,tokens,
+costUsd}, tools:[{name,count,failures}], models:[{model,requests,
+inputTokens,outputTokens,cachedInputTokens,totalTokens,costUsd}],
+projects:[{id,name,color,lastActivity,sessions:[…],subagentCount,
+toolCalls, models:[…], totals:{…}}]}` — a faithful port of
+export-usage.mjs's aggregation with a PRIVATE shape (raw ids/titles — the
+public export is the redacted one). `days` scopes ONLY the activity
+series; totals/tools/models/projects are whole-history. Session rows
+carry `{id, title, status, model, isSubagent, parentId, subRole,
+subagentCount, startedAt, endMs, durationMs, requests, tokens, toolCalls,
+costUsd, tools:[{name,count,failures}]}`; children stay nested under
+their parent's project; orphans land in a synthetic unassigned group.
+Default 30; `400 VALIDATION` outside 1–90.
+
 ## NOT implemented (despite API.md)
 
 `/ws` (no WS gateway — SSE per-turn instead) · `/internal/shutdown` ·

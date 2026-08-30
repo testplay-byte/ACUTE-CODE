@@ -344,13 +344,17 @@ describe("migration 0014 (delegate_task + browser_control allowlist repair)", ()
       ) as string[];
     expect(row("agt_tpl_coder")).toContain("delegate_task");
     expect(row("agt_tpl_coder")).toContain("browser_control");
-    // ROUND-44 (R44-a): 0015 appends the memory tools on top of 0014's 18.
-    expect(row("agt_tpl_coder")).toHaveLength(21);
+    // ROUND-44 (R44-a): 0015 appends the memory tools on top of 0014's 18;
+    // ROUND-52 (R52-a): 0021 appends the two job tools (the seed list
+    // includes run_command) → 23.
+    expect(row("agt_tpl_coder")).toHaveLength(23);
     expect(row("agt_default_nova")).toContain("delegate_task");
     expect(row("agt_default_nova")).toContain("browser_control");
     expect(row("agt_mine")).toEqual(JSON.parse(seedTools)); // untouched
     // ROUND-44 (R44-a): the "already has them" template ALSO gets the
-    // memory tools appended by 0015 (it is a template row).
+    // memory tools appended by 0015 (it is a template row). ROUND-52
+    // (R52-a): migration 0021 leaves it UNTOUCHED — its list has no
+    // run_command, and the job tools are companions to run_command.
     expect(row("agt_tpl_already")).toEqual([
       "list_dir",
       "delegate_task",
@@ -366,7 +370,7 @@ describe("migration 0014 (delegate_task + browser_control allowlist repair)", ()
       JSON.parse(
         (again.prepare("SELECT allowed_tools FROM agents WHERE id = 'agt_tpl_coder'").get() as { allowed_tools: string }).allowed_tools,
       ),
-    ).toHaveLength(21);
+    ).toHaveLength(23);
     again.close();
   });
 });

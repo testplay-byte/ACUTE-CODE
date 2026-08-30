@@ -265,7 +265,14 @@ describe("ROUND-36: sub-agent orchestration (ADR-0022)", () => {
   it("orchestration settings round-trip with clamping", async () => {
     const initial = await authInject({ method: "GET", url: "/api/v1/settings/orchestration" });
     expect(initial.statusCode).toBe(200);
-    expect(initial.json()).toEqual({ maxParallel: 5, perKeyLimit: 3, subagentModel: null });
+    // ROUND-52 (R52-b): the supervisor settings joined the payload.
+    expect(initial.json()).toEqual({
+      maxParallel: 5,
+      perKeyLimit: 3,
+      subagentModel: null,
+      childWatchdogMs: 15_000,
+      childStallTimeoutMs: 300_000,
+    });
 
     const updated = await authInject({
       method: "PUT",
@@ -273,7 +280,13 @@ describe("ROUND-36: sub-agent orchestration (ADR-0022)", () => {
       payload: { maxParallel: 20, perKeyLimit: 10 },
     });
     expect(updated.statusCode).toBe(200);
-    expect(updated.json()).toEqual({ maxParallel: 20, perKeyLimit: 10, subagentModel: null });
+    expect(updated.json()).toEqual({
+      maxParallel: 20,
+      perKeyLimit: 10,
+      subagentModel: null,
+      childWatchdogMs: 15_000,
+      childStallTimeoutMs: 300_000,
+    });
 
     const invalid = await authInject({
       method: "PUT",
@@ -281,6 +294,27 @@ describe("ROUND-36: sub-agent orchestration (ADR-0022)", () => {
       payload: { maxParallel: 500 },
     });
     expect(invalid.statusCode).toBe(400);
+
+    // ROUND-52 (R52-b): the supervisor knobs round-trip + validate.
+    const watch = await authInject({
+      method: "PUT",
+      url: "/api/v1/settings/orchestration",
+      payload: { childWatchdogMs: 30_000, childStallTimeoutMs: 600_000 },
+    });
+    expect(watch.statusCode).toBe(200);
+    expect(watch.json()).toEqual({
+      maxParallel: 20,
+      perKeyLimit: 10,
+      subagentModel: null,
+      childWatchdogMs: 30_000,
+      childStallTimeoutMs: 600_000,
+    });
+    const badWatch = await authInject({
+      method: "PUT",
+      url: "/api/v1/settings/orchestration",
+      payload: { childWatchdogMs: 1_000 },
+    });
+    expect(badWatch.statusCode).toBe(400);
   });
 
   it("ROUND-49: memory settings round-trip via /settings/memory (the master switch)", async () => {

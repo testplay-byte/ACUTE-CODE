@@ -648,3 +648,96 @@ describe("collapsed-row icon chips (ROUND-51 R51-d)", () => {
     expect(screen.getByRole("button", { name: /^Searched / })).toBeTruthy();
   });
 });
+
+// ─── ROUND-52 (R52-c): the live terminal tail under in-flight commands ──────
+
+describe("live command output tail (ROUND-52 R52-c)", () => {
+  /** An in-flight run_command with a live tail the store accumulated. */
+  const LIVE_CMD: ToolUseEntry & { liveOutput?: string } = {
+    seq: -3,
+    toolName: "run_command",
+    argsSummary: "pnpm test",
+    ok: null,
+    ts: "2026-08-28T10:00:03Z",
+    liveOutput: "PASS src/a.test.ts\nPASS src/b.test.ts\n",
+  };
+
+  it("an in-flight run_command with accumulated output renders the live tail under the pill", () => {
+    renderWithProviders(
+      <WorkingSection
+        entries={[{ type: "tool", tool: LIVE_CMD }]}
+        sessionId={SESSION_ID}
+        projectId="proj_probe"
+        live
+        defaultOpen
+      />,
+    );
+
+    const tail = screen.getByTestId("live-command-output");
+    // The streamed chunks render + the tiny live indicator.
+    expect(tail.textContent).toContain("PASS src/a.test.ts");
+    expect(tail.textContent).toContain("PASS src/b.test.ts");
+    expect(tail.textContent).toContain("live");
+  });
+
+  it("the tool-result clears the tail — the settled pill shows the final output only", () => {
+    // The settled shape the store produces (liveOutput STRIPPED on the
+    // tool-result, ok + outputSummary attached).
+    const settled: ToolUseEntry = {
+      seq: -3,
+      toolName: "run_command",
+      argsSummary: "pnpm test",
+      ok: true,
+      ts: "2026-08-28T10:00:03Z",
+      outputSummary: "2 passed",
+    };
+    renderWithProviders(
+      <WorkingSection
+        entries={[{ type: "tool", tool: settled }]}
+        sessionId={SESSION_ID}
+        projectId="proj_probe"
+        live
+        defaultOpen
+      />,
+    );
+
+    expect(screen.queryByTestId("live-command-output")).toBeNull();
+    // The completed pill's expanded body shows the FINAL output instead.
+    fireEvent.click(screen.getByRole("button", { name: /^Ran pnpm test/ }));
+    expect(screen.getByText("2 passed")).toBeTruthy();
+  });
+
+  it("an in-flight command with NO output yet renders no tail (nothing to stream)", () => {
+    const noOutput: ToolUseEntry & { liveOutput?: string } = { ...LIVE_CMD, liveOutput: undefined };
+    renderWithProviders(
+      <WorkingSection
+        entries={[{ type: "tool", tool: noOutput }]}
+        sessionId={SESSION_ID}
+        projectId="proj_probe"
+        live
+        defaultOpen
+      />,
+    );
+
+    expect(screen.queryByTestId("live-command-output")).toBeNull();
+  });
+
+  it("the tail keeps only the LAST ~10 lines of the accumulated output", () => {
+    const lines = Array.from({ length: 15 }, (_, i) => `line ${i + 1}`).join("\n");
+    const longTail: ToolUseEntry & { liveOutput?: string } = { ...LIVE_CMD, liveOutput: lines };
+    renderWithProviders(
+      <WorkingSection
+        entries={[{ type: "tool", tool: longTail }]}
+        sessionId={SESSION_ID}
+        projectId="proj_probe"
+        live
+        defaultOpen
+      />,
+    );
+
+    const tail = screen.getByTestId("live-command-output");
+    expect(tail.textContent).toContain("line 15");
+    expect(tail.textContent).toContain("line 6");
+    expect(tail.textContent).not.toContain("line 5");
+  });
+});

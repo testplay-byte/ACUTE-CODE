@@ -90,6 +90,10 @@ describe("R43-5: orchestration.subagentModel storage", () => {
       maxParallel: 5,
       perKeyLimit: 3,
       subagentModel: null,
+      // ROUND-52 (R52-b): the child-supervisor knobs (heartbeat cadence +
+      // stall threshold) joined the settings object.
+      childWatchdogMs: 15_000,
+      childStallTimeoutMs: 300_000,
     });
   });
 

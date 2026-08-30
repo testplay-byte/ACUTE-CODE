@@ -5,6 +5,7 @@ import { ProjectView } from "./components/projects/ProjectView";
 import { DemoViewerScreen } from "./components/demos/DemoViewerScreen";
 import { ProjectChatScreen } from "./components/project-chat";
 import { DashboardScreen } from "./components/dashboard";
+import { UsageScreen } from "./components/usage";
 import { PlaceholderPage } from "./pages/PlaceholderPage";
 import { SettingsPage } from "./pages/SettingsPage";
 import { SetupWizard } from "./components/onboarding/SetupWizard";
@@ -72,16 +73,10 @@ export function App() {
           <Route path="project/:id" element={<ProjectView />} />
           <Route path="project/:id/chat" element={<ProjectChatScreen />} />
           
-          <Route
-            path="usage"
-            element={
-              <PlaceholderPage
-                title="Usage"
-                spec="F7"
-                detail="Cost/token aggregation by day, provider, model and agent — provider-reported vs estimated."
-              />
-            }
-          />
+          {/* ROUND-52 (R52-b): the real Usage screen — was PlaceholderPage
+              (owner: "Usage screen section 2 … you apparently did not
+              implement the usage properly"). */}
+          <Route path="usage" element={<UsageScreen />} />
           <Route path="settings" element={<SettingsPage />} />
           <Route path="demos" element={<DemoViewerScreen />} />
           <Route

@@ -71,6 +71,10 @@ export const TOOL_CATALOG = [
   "memory_save",
   "memory_recall",
   "memory_list",
+  // ROUND-52 (R52-a): background-job supervision (run_command's detached
+  // launches — poll with job_status, clean up with job_stop).
+  "job_status",
+  "job_stop",
 ] as const;
 
 export const PROVIDER_IDS = ["openrouter", "openai", "anthropic", "google"] as const;
@@ -549,6 +553,124 @@ export interface UsageSummary {
 /** Per-day token/request/cost totals over the trailing `days` UTC days (1–90). */
 export function fetchUsageSummary(days = 14): Promise<UsageSummary> {
   return request<UsageSummary>(`/usage/summary?days=${days}`);
+}
+
+// ---------------------------------------------------------------------------
+// ROUND-52 (R52-b): detailed usage analytics (GET /usage/detailed — the in-app
+// /usage screen). Same aggregation the PUBLIC usage.json export runs
+// (scripts/export-usage.mjs → the DASHBOARD site's Usage page) minus its
+// redaction: this is the private bearer-token loopback, so ids/titles/roles
+// are raw. `days` scopes only the zero-filled activity series; the
+// totals/tools/models/projects rollups are whole-history.
+// ---------------------------------------------------------------------------
+
+/** Token triplet shared by every detailed-usage aggregate. */
+export interface DetailedUsageTokens {
+  input: number;
+  output: number;
+  cached: number;
+}
+
+/** One tool's call volume + failure count (session_events tool.use rows). */
+export interface DetailedUsageToolCall {
+  tool: string;
+  count: number;
+  failures: number;
+}
+
+/** Per-model aggregate — calls, token mix and cost for one model id. */
+export interface DetailedUsageModel {
+  model: string;
+  calls: number;
+  tokens: DetailedUsageTokens;
+  costUsd: number;
+}
+
+/** A chat session (or a sub-agent child) row in the projects drill-down. */
+export interface DetailedUsageSession {
+  id: string;
+  title: string;
+  status: string;
+  /** Dominant model (highest input+output tokens across its usage rows). */
+  model: string | null;
+  startedAt: string | null;
+  endedAt: string | null;
+  durationMs: number;
+  tokens: DetailedUsageTokens;
+  costUsd: number;
+  requests: number;
+  toolCalls: DetailedUsageToolCall[];
+  toolCallCount: number;
+  /** How many sub-agent children this session delegated (parent rows). */
+  subagentCount: number;
+  /** True when the row is a delegate_task child. */
+  isSubagent: boolean;
+  /** The delegating parent session's id (null for main sessions). */
+  parentId: string | null;
+  /** The delegated role (planner/researcher/coder/…), null on main sessions. */
+  role: string | null;
+}
+
+export interface DetailedUsageProject {
+  id: string;
+  name: string;
+  color: string;
+  /** True for the synthetic "Unassigned sessions" bucket (no project row). */
+  synthetic: boolean;
+  /** Main (non-sub-agent) session count — what the section header shows. */
+  sessionCount: number;
+  firstActivity: string | null;
+  lastActivity: string | null;
+  totals: {
+    sessions: number;
+    subagents: number;
+    toolCalls: number;
+    requests: number;
+    costUsd: number;
+    tokens: DetailedUsageTokens;
+  };
+  toolCalls: DetailedUsageToolCall[];
+  /** Sub-agent-only rollup nested inside the project totals. */
+  subagents: {
+    count: number;
+    toolCalls: number;
+    requests: number;
+    tokens: DetailedUsageTokens;
+    costUsd: number;
+  };
+  models: DetailedUsageModel[];
+  /** Main + sub-agent children, newest-first (nest children by parentId). */
+  sessions: DetailedUsageSession[];
+}
+
+export interface DetailedUsageTotals {
+  projects: number;
+  sessions: number;
+  subagentSessions: number;
+  toolCalls: number;
+  requests: number;
+  tokens: DetailedUsageTokens;
+  costUsd: number;
+}
+
+export interface DetailedUsage {
+  /** Windowed, zero-filled, ascending — feeds the activity chart. */
+  days: UsageDayBucket[];
+  /** Whole-history rollups (mirrors the public usage.json export). */
+  totals: DetailedUsageTotals;
+  tools: DetailedUsageToolCall[];
+  models: DetailedUsageModel[];
+  /** Most-recently-active first; sub-agent children nested by parentId. */
+  projects: DetailedUsageProject[];
+  generatedAt: string;
+}
+
+/**
+ * Whole-history usage analytics for the /usage screen (activity series over
+ * the trailing `days` UTC days, 1–90, default 30).
+ */
+export function fetchDetailedUsage(days = 30): Promise<DetailedUsage> {
+  return request<DetailedUsage>(`/usage/detailed?days=${days}`);
 }
 
 /**
@@ -1559,6 +1681,45 @@ export interface TerminalSessionDescriptor {
   createdAt: number;
 }
 
+// ── ROUND-52 (R52-a): background jobs ─────────────────────────────────────
+// run_command background launches (`start /B … > log 2>&1`, `… &`, nohup)
+// register in the sidecar's job registry; these client functions drive the
+// Terminal panel's Background Jobs view (live status + output tails + Stop).
+
+/** One background job as served by GET /projects/:id/jobs (and /jobs). */
+export interface BackgroundJobStatus {
+  id: string;
+  command: string;
+  cwd: string;
+  projectId: string | null;
+  startedAt: number;
+  status: "running" | "exited";
+  exitCode: number | null;
+  endedAt: number | null;
+  pid: number | null;
+  logFile: string | null;
+  outputTail: string;
+  ageMs: number;
+  alive: boolean;
+  logTail: string | null;
+  /** ROUND-52 follow-up: a fully-detached launch (Unix `&` + full redirect) —
+   * liveness is the process-group probe, output the log-file tail. */
+  detached?: boolean;
+}
+
+/** ROUND-52 (R52-a): GET /projects/:id/jobs — the project's background jobs,
+ * newest first (running + recently ended). */
+export async function fetchProjectJobs(projectId: string): Promise<BackgroundJobStatus[]> {
+  const body = await request<{ jobs: BackgroundJobStatus[] }>(`/projects/${projectId}/jobs`);
+  return body.jobs;
+}
+
+/** ROUND-52 (R52-a): POST /jobs/:id/stop — best-effort stop of a tracked
+ * background job (tree-kill / pid-match kill; the result reports honestly). */
+export async function stopBackgroundJob(jobId: string): Promise<{ ok: boolean; output: string }> {
+  return request<{ ok: boolean; output: string }>(`/jobs/${jobId}/stop`, { method: "POST" });
+}
+
 /** ROUND-45 (R45-b): POST /projects/:id/terminal-sessions — spawn a shell
  * in the project root. cols/rows default server-side (120x30). */
 export async function createTerminalSession(
@@ -1774,6 +1935,13 @@ export interface OrchestrationSettings {
    * backend has sent it since R43; typed here (ROUND-47 R47-c1) so callers
    * no longer need to widen locally. */
   subagentModel: string | null;
+  /** ROUND-52 (R52-b): how often the supervisor samples a running child and
+   * emits a heartbeat frame (seconds → ms server-side; 5s–60s). */
+  childWatchdogMs: number;
+  /** ROUND-52 (R52-b): no child events for this long = STALLED → the
+   * supervisor aborts the child and reports honestly to the parent
+   * (60s–60min). */
+  childStallTimeoutMs: number;
 }
 
 export async function fetchOrchestrationSettings(): Promise<OrchestrationSettings> {
@@ -2085,6 +2253,18 @@ export type SubAgentInnerEvent =
       ok: boolean;
       outputSummary?: string;
     }
+  /** ROUND-52 (R52-a, owner: "After running the commands, it should actually
+   * show the terminal interface of those commands too"): live terminal
+   * output of a RUNNING tool call (run_command) — batched stdout+stderr
+   * chunks streaming while the command executes. Renders as a live tail in
+   * the working section / sub-agent panel. */
+  | {
+      type: "tool-output";
+      sessionId?: string;
+      toolName: string;
+      argsSummary?: string;
+      chunk: string;
+    }
   /** ROUND-50 (R50-b, owner: "the actual raw data… streamed live just like
    * the main agent"): with children running the STREAMED turn path, inner
    * text frames now arrive as token-level DELTAS (`delta`) instead of the
@@ -2113,6 +2293,9 @@ export type StreamTurnEvent =
   | { type: "thinking-delta"; delta: string }
   | { type: "tool-call"; toolName: string; argsSummary: string }
   | { type: "tool-result"; toolName: string; argsSummary: string; ok: boolean; outputSummary?: string }
+  /** ROUND-52 (R52-a): live terminal output of a running tool call — the
+   * child's run_command streaming its output live inside the envelope. */
+  | { type: "tool-output"; toolName: string; argsSummary?: string; chunk: string }
   /** Round-32: the outer loop starts a new iteration — the live activity
    * block opens a new ROUND group on this event. */
   | { type: "meta.continuation"; iteration: number; reason?: string }
@@ -2138,6 +2321,20 @@ export type StreamTurnEvent =
        * time) — the live stats footer's model line before the polled row's
        * usage-derived `model` lands. */
       model?: string;
+      /** ROUND-52 (R52-b): the supervisor's heartbeat sample (running frames
+       * only) — live "what is this sub-agent doing" stats. */
+      watch?: {
+        lastEventAgeMs: number;
+        lastActivity: string;
+        toolCount: number;
+        todosDone: number;
+        todosTotal: number;
+        elapsedMs: number;
+        stalled: boolean;
+      };
+      /** ROUND-52 (R52-b): WHY a terminal frame fired — "stopped by the
+       * owner", "stalled — no activity for Ns", … — shown on the card. */
+      detail?: string;
     }
   | {
       /** ROUND-48 (R48-e1): a delegated child's live event, wrapped — rides

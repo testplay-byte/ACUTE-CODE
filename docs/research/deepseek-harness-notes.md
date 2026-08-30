@@ -55,13 +55,24 @@ state"), which gives resume/fork/telemetry one shared mechanism. This is the
 same philosophy as our ADR-0010 append-only `session_events`; their version
 pushes it further (invariants asserted at runtime, not just by convention).
 
-**Honest assessment for us:** the plugin machinery is *not* worth adopting at
-our scale — our runtime is a deliberately boring layered monolith, and their
-smallest behavioral unit (plugin + config schema + invariant companion +
-bilingual README + tests) is heavy apparatus for a two-person product. The
-transferable value is in the *individual packages' logic* — detection
-algorithms, trigger policies, escalation contracts — which port cleanly into
-our runtime. That is exactly what R51-f does.
+**Honest assessment for us (as written R51):** the plugin machinery is *not*
+worth adopting at our scale — our runtime is a deliberately boring layered
+monolith, and their smallest behavioral unit (plugin + config schema +
+invariant companion + bilingual README + tests) is heavy apparatus for a
+two-person product. The transferable value is in the *individual packages'
+logic* — detection algorithms, trigger policies, escalation contracts —
+which port cleanly into our runtime. That is exactly what R51-f does.
+
+**R52 UPDATE — the owner overruled the "not worth adopting" verdict** (his
+directive: "a plug-in-based system, just like how DeepSeek harness is… much
+more flexibility… way too many tools just how we want them"), and the
+pragmatic adoption landed as **ADR-0025**: the TOOL LAYER became a plugin
+registry (`tools/plugins/*.ts` + `tools/registry.ts`, the catalog COMPUTED
+from the declarations, external `.mjs` plugins from disk) while the runtime
+stays the boring layered monolith the assessment defended. The R51 judgment
+survives in scoped form: Cordis-style service injection, runtime-mountable
+agent loops, and invariant companions remain un-adopted — only the tool
+grouping + external loading was taken.
 
 ## The orchestrator's three asks
 

@@ -1,0 +1,327 @@
+/**
+ * ROUND-52 (R52-f): the pure filesystem/search TOOL IMPLEMENTATIONS, split
+ * out of tools/index.ts so the plugin modules (tools/plugins/*.ts) can import
+ * them WITHOUT a module cycle (index.ts imports the registry which imports
+ * the plugins). Everything here is verbatim the pre-R52 code — the move is
+ * architectural, not semantic; index.ts re-exports the public surface for
+ * back-compat (server.ts + the test suites import from "./index.js").
+ */
+import { mkdirSync, readdirSync, readFileSync, statSync, unlinkSync, writeFileSync } from "node:fs";
+import { isAbsolute, join, posix, sep } from "node:path";
+import type { ToolResult } from "./registry.js";
+
+/** Maximum bytes a single read returns (keeps context windows sane). */
+const MAX_READ_BYTES = 256 * 1024;
+/** Directory listing depth + entry caps. */
+const MAX_DEPTH = 8;
+const MAX_ENTRIES = 500;
+/** Ignored directory names when walking the tree. */
+const IGNORED_DIRS = new Set(["node_modules", ".git", ".next", "dist", "build", ".venv", "__pycache__"]);
+
+/* ── Explorer support (REST) ─────────────────────────────────────────────── */
+
+export interface TreeNode {
+  name: string;
+  type: "file" | "folder";
+  path: string;
+  /** Line-ish size hint for the UI (bytes for files). */
+  size?: number;
+  children?: TreeNode[];
+}
+
+/** Recursive tree for the explorer panel (caps protect huge workspaces). */
+export function projectTree(root: string): TreeNode[] {
+  return walkDir(root, "", 0);
+}
+
+function walkDir(absBase: string, relative: string, depth: number): TreeNode[] {
+  if (depth > MAX_DEPTH) return [];
+  let entries: string[];
+  try {
+    entries = readdirSync(join(absBase, relative));
+  } catch {
+    return [];
+  }
+  const nodes: TreeNode[] = [];
+  for (const name of entries.slice(0, MAX_ENTRIES)) {
+    const relPath = relative === "" ? name : `${relative}/${name}`;
+    const absPath = join(absBase, relPath);
+    try {
+      const stats = statSync(absPath);
+      if (stats.isDirectory()) {
+        if (IGNORED_DIRS.has(name) || name.startsWith(".") && name !== ".github") continue;
+        nodes.push({
+          name,
+          type: "folder",
+          path: relPath,
+          children: walkDir(absBase, relPath, depth + 1),
+        });
+      } else {
+        nodes.push({ name, type: "file", path: relPath, size: stats.size });
+      }
+    } catch {
+      // Unreadable entry — skip silently.
+    }
+  }
+  nodes.sort((a, b) =>
+    a.type === b.type ? a.name.localeCompare(b.name) : a.type === "folder" ? -1 : 1,
+  );
+  return nodes;
+}
+
+/**
+ * Resolve a user/model-supplied relative path inside the root.
+ * Returns the absolute path, or an error string when containment fails.
+ */
+export function resolveInsideRoot(root: string, relative: string): { abs: string } | { error: string } {
+  const cleaned = relative.trim().replaceAll("\\", "/");
+  if (cleaned === "" || cleaned === ".") return { abs: root };
+  if (isAbsolute(cleaned) || /^[a-zA-Z]:/.test(cleaned)) {
+    return { error: `path must be RELATIVE to the project root (got '${relative}')` };
+  }
+  const normalized = posix.normalize(cleaned);
+  if (normalized.startsWith("..") || normalized === ".." || normalized.includes("../")) {
+    return { error: `path escapes the project root (got '${relative}')` };
+  }
+  return { abs: join(root, ...normalized.split("/")) };
+}
+
+function toRelative(root: string, abs: string): string {
+  return abs.slice(root.length).replace(/^[\\/]/, "");
+}
+
+/** list_dir — entries of a folder (name, type, size). */
+export function listDir(root: string, relative: string): ToolResult {
+  const resolved = resolveInsideRoot(root, relative);
+  if ("error" in resolved) return { ok: false, output: resolved.error };
+  let entries: string[];
+  try {
+    entries = readdirSync(resolved.abs);
+  } catch {
+    return { ok: false, output: `cannot list '${relative}': not a readable directory` };
+  }
+  const lines = entries.slice(0, MAX_ENTRIES).map((name) => {
+    try {
+      const stats = statSync(join(resolved.abs, name));
+      return `${stats.isDirectory() ? "dir " : "file"} ${name}${stats.isDirectory() ? "/" : ` (${stats.size} B)`}`;
+    } catch {
+      return `file ${name}`;
+    }
+  });
+  return { ok: true, output: lines.length > 0 ? lines.join("\n") : "(empty directory)" };
+}
+
+/** read_file — text content, size-capped. */
+export function readFile(root: string, relative: string): ToolResult {
+  const resolved = resolveInsideRoot(root, relative);
+  if ("error" in resolved) return { ok: false, output: resolved.error };
+  try {
+    const stats = statSync(resolved.abs);
+    if (stats.isDirectory()) return { ok: false, output: `'${relative}' is a directory — use list_dir` };
+    const buffer = readFileSync(resolved.abs);
+    const clipped = buffer.length > MAX_READ_BYTES;
+    const content = buffer.subarray(0, MAX_READ_BYTES).toString("utf8");
+    return {
+      ok: true,
+      output: clipped ? `${content}\n…[truncated at ${MAX_READ_BYTES} bytes]` : content,
+    };
+  } catch {
+    return { ok: false, output: `cannot read '${relative}': no such file` };
+  }
+}
+
+/** write_file — create or overwrite (parent folders auto-created). */
+export function writeFile(root: string, relative: string, content: string): ToolResult {
+  const resolved = resolveInsideRoot(root, relative);
+  if ("error" in resolved) return { ok: false, output: resolved.error };
+  try {
+    mkdirSync(resolved.abs.substring(0, resolved.abs.lastIndexOf(sep)), { recursive: true });
+    writeFileSync(resolved.abs, content, "utf8");
+    return { ok: true, output: `wrote ${content.length} bytes to '${toRelative(root, resolved.abs)}'` };
+  } catch (error) {
+    return {
+      ok: false,
+      output: `cannot write '${relative}': ${error instanceof Error ? error.message : "unknown error"}`,
+    };
+  }
+}
+
+/**
+ * edit_file — replace the FIRST exact occurrence of oldString with newString
+ * (Cline-style surgical edit; fails loudly when the anchor is absent or
+ * ambiguous counts are requested).
+ */
+export function editFile(root: string, relative: string, oldString: string, newString: string): ToolResult {
+  const resolved = resolveInsideRoot(root, relative);
+  if ("error" in resolved) return { ok: false, output: resolved.error };
+  let content: string;
+  try {
+    content = readFileSync(resolved.abs, "utf8");
+  } catch {
+    return { ok: false, output: `cannot edit '${relative}': no such file` };
+  }
+  const occurrences = content.split(oldString).length - 1;
+  if (occurrences === 0) {
+    return { ok: false, output: `edit failed: oldString not found in '${relative}'` };
+  }
+  if (occurrences > 1) {
+    return {
+      ok: false,
+      output: `edit failed: oldString matches ${occurrences} times in '${relative}' — provide a longer unique anchor`,
+    };
+  }
+  writeFileSync(resolved.abs, content.replace(oldString, newString), "utf8");
+  return { ok: true, output: `edited '${toRelative(root, resolved.abs)}' (1 replacement)` };
+}
+
+/* ── Round-14 additions: create_dir / delete_file / search_files ─────────── */
+
+/** create_dir — create a folder (with parents) inside the project. */
+export function createDir(root: string, relative: string): ToolResult {
+  const resolved = resolveInsideRoot(root, relative);
+  if ("error" in resolved) return { ok: false, output: resolved.error };
+  try {
+    mkdirSync(resolved.abs, { recursive: true });
+    return { ok: true, output: `directory ready: '${toRelative(root, resolved.abs)}'` };
+  } catch (error) {
+    return {
+      ok: false,
+      output: `cannot create directory '${relative}': ${error instanceof Error ? error.message : "unknown error"}`,
+    };
+  }
+}
+
+/** delete_file — remove ONE file inside the project. Directories are
+ * refused: deleting a tree is destructive and belongs behind the Phase-3
+ * approval engine, not a silent tool call.
+ */
+export function deleteFile(root: string, relative: string): ToolResult {
+  const resolved = resolveInsideRoot(root, relative);
+  if ("error" in resolved) return { ok: false, output: resolved.error };
+  if (resolved.abs === root) return { ok: false, output: "refusing to delete the project root" };
+  try {
+    if (statSync(resolved.abs).isDirectory()) {
+      return {
+        ok: false,
+        output: `'${relative}' is a directory — deleting folders needs your approval (not available in this version yet)`,
+      };
+    }
+  } catch {
+    return { ok: false, output: `cannot delete '${relative}': no such file` };
+  }
+  try {
+    unlinkSync(resolved.abs);
+    return { ok: true, output: `deleted '${toRelative(root, resolved.abs)}'` };
+  } catch (error) {
+    return {
+      ok: false,
+      output: `cannot delete '${relative}': ${error instanceof Error ? error.message : "unknown error"}`,
+    };
+  }
+}
+
+/** search_files — substring search over relative paths (recursive, capped,
+ * same ignore rules as the explorer tree). The workhorse for "where is X".
+ */
+export function searchFiles(root: string, query: string, dir?: string): ToolResult {
+  const needle = query.trim().toLowerCase();
+  if (needle === "") return { ok: false, output: "search_files needs a non-empty 'query'" };
+  const base = dir !== undefined && dir.trim() !== "" ? resolveInsideRoot(root, dir) : ({ abs: root } as const);
+  if ("error" in base) return { ok: false, output: base.error };
+  const hits: string[] = [];
+  const walk = (absDir: string, rel: string, depth: number) => {
+    if (depth > MAX_DEPTH || hits.length >= 50) return;
+    let entries: string[];
+    try {
+      entries = readdirSync(absDir);
+    } catch {
+      return;
+    }
+    for (const name of entries.slice(0, MAX_ENTRIES)) {
+      if (hits.length >= 50) return;
+      if (IGNORED_DIRS.has(name) || (name.startsWith(".") && name !== ".github")) continue;
+      const relPath = rel === "" ? name : `${rel}/${name}`;
+      if (relPath.toLowerCase().includes(needle)) hits.push(relPath);
+      try {
+        if (statSync(join(absDir, name)).isDirectory()) walk(join(absDir, name), relPath, depth + 1);
+      } catch {
+        /* unreadable entry — skip */
+      }
+    }
+  };
+  walk(base.abs, base.abs === root ? "" : toRelative(root, base.abs), 0);
+  if (hits.length === 0) return { ok: true, output: `no paths matching '${query}'` };
+  return { ok: true, output: `${hits.length} match(es) for '${query}':\n${hits.join("\n")}` };
+}
+
+/** search_code — content search over file contents (Kilo/Cline parity).
+ * Finds WHERE a string/regex is used: "where is X imported", "what calls Y".
+ * Round-28 WS-H: extended with case_sensitive, whole_word, file_glob, max_results.
+ */
+export interface SearchCodeOptions {
+  caseSensitive?: boolean;
+  wholeWord?: boolean;
+  fileGlob?: string;
+  maxResults?: number;
+}
+export function searchCode(root: string, query: string, dir?: string, options?: SearchCodeOptions): ToolResult {
+  const needle = query.trim();
+  if (needle === "") return { ok: false, output: "search_code needs a non-empty 'query'" };
+  const isRegex = needle.startsWith("/") && needle.endsWith("/") && needle.length > 2;
+  // wholeWord wraps the pattern in \b...\b (only for non-regex mode).
+  let pattern: string;
+  if (isRegex) {
+    pattern = needle.slice(1, -1);
+  } else {
+    pattern = needle.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    if (options?.wholeWord) pattern = `\\b${pattern}\\b`;
+  }
+  const flags = options?.caseSensitive ? "" : "i";
+  let regex: RegExp;
+  try {
+    regex = new RegExp(pattern, flags);
+  } catch {
+    return { ok: false, output: `invalid regex: ${needle}` };
+  }
+  const maxHits = options?.maxResults ?? 50;
+  const cap = Math.min(maxHits, 200);
+  const globRe = options?.fileGlob ? new RegExp("^" + options.fileGlob.replace(/\./g, "\\.").replace(/\*/g, ".*") + "$", "i") : null;
+  const base = dir !== undefined && dir.trim() !== "" ? resolveInsideRoot(root, dir) : ({ abs: root } as const);
+  if ("error" in base) return { ok: false, output: base.error };
+  const hits: string[] = [];
+  const walk = (absDir: string, rel: string, depth: number) => {
+    if (depth > MAX_DEPTH || hits.length >= cap) return;
+    let entries: string[];
+    try {
+      entries = readdirSync(absDir);
+    } catch {
+      return;
+    }
+    for (const name of entries.slice(0, MAX_ENTRIES)) {
+      if (hits.length >= cap) return;
+      if (IGNORED_DIRS.has(name) || (name.startsWith(".") && name !== ".github")) continue;
+      const relPath = rel === "" ? name : `${rel}/${name}`;
+      try {
+        const stats = statSync(join(absDir, name));
+        if (stats.isDirectory()) {
+          walk(join(absDir, name), relPath, depth + 1);
+        } else if (stats.size < 512 * 1024 && (!globRe || globRe.test(name))) {
+          const buf = readFileSync(join(absDir, name));
+          if (buf.includes(0)) continue; // binary
+          const content = buf.toString("utf8");
+          const lines = content.split("\n");
+          for (let i = 0; i < lines.length && hits.length < cap; i++) {
+            if (regex.test(lines[i])) {
+              hits.push(`${relPath}:${i + 1}: ${lines[i].trim().slice(0, 120)}`);
+            }
+          }
+        }
+      } catch {
+        /* unreadable — skip */
+      }
+    }
+  };
+  walk(base.abs, base.abs === root ? "" : toRelative(root, base.abs), 0);
+  if (hits.length === 0) return { ok: true, output: `no content matches for '${needle}'` };
+  return { ok: true, output: `${hits.length} match(es) for '${needle}':\n${hits.join("\n")}` };
+}

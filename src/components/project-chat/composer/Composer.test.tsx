@@ -37,6 +37,11 @@
  *  - the Session section splits Main agent / Sub-agents / Combined (with a
  *    pre-R51 no-`usage` report falling back to zeros);
  *  - the toolbar never overlaps: shrink-0 clusters + flex spacer + wrap.
+ *
+ * ROUND-52 (R52-a) additions, per the owner's flyout complaint:
+ *  - the provider→models flyout has a HOVER BRIDGE (grace-period close,
+ *    cancellable from the flyout) — leaving the provider row no longer snaps
+ *    it shut in the popover-padding + FLYOUT_MARGIN dead zone.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, cleanup, fireEvent, screen, waitFor } from "@testing-library/react";
@@ -960,6 +965,86 @@ describe("Composer: model selector (owner spec F)", () => {
         "z-ai/glm-5.2:free",
       ),
     );
+  });
+
+  // ROUND-52 (R52-a): the flyout hover bridge — the same grace-period shape
+  // the ContextDonut popover shipped in R51-c, applied to the provider row
+  // → models flyout pair (the flyout is position:fixed one popover padding +
+  // FLYOUT_MARGIN away from the row's box; crossing that dead zone used to
+  // fire the row's mouseleave and close it before the pointer arrived).
+  it("HOVER BRIDGE: leaving the provider row does NOT close the flyout instantly — it closes after the grace period (R52-a)", async () => {
+    await renderPanelWithConversation();
+    expect(await screen.findByText("first question", {}, { timeout: 5000 })).toBeTruthy();
+
+    fireEvent.click(screen.getByRole("button", { name: "Choose model" }));
+    await screen.findByRole("menu", { name: "Choose model" });
+    await waitFor(() =>
+      expect(screen.getByRole("menuitem", { name: "Models of OpenRouter" })).toBeTruthy(),
+    );
+
+    vi.useFakeTimers();
+    const row = (): HTMLElement => document.querySelector(
+      '[data-provider-row="openrouter"]',
+    ) as HTMLElement;
+    const flyoutEl = (): HTMLElement | null => document.querySelector("[data-model-flyout]");
+
+    // Hovering the row opens the flyout (existing behavior — the row itself,
+    // not just its inner menuitem button, carries the handlers).
+    fireEvent.mouseEnter(row());
+    expect(flyoutEl()).not.toBeNull();
+
+    // Leaving the row toward the flyout: stays open through the grace period
+    // (the OLD code closed it instantly — the owner's round-52 complaint).
+    fireEvent.mouseLeave(row());
+    expect(flyoutEl()).not.toBeNull();
+    vi.advanceTimersByTime(210);
+    expect(flyoutEl()).not.toBeNull();
+
+    // After the full grace period the close lands (act(): the timer's
+    // setState must flush before the assertion).
+    act(() => {
+      vi.advanceTimersByTime(40);
+    });
+    expect(flyoutEl()).toBeNull();
+    vi.useRealTimers();
+  });
+
+  it("HOVER BRIDGE: entering the flyout cancels the pending close; leaving it re-schedules (R52-a)", async () => {
+    await renderPanelWithConversation();
+    expect(await screen.findByText("first question", {}, { timeout: 5000 })).toBeTruthy();
+
+    fireEvent.click(screen.getByRole("button", { name: "Choose model" }));
+    await screen.findByRole("menu", { name: "Choose model" });
+    await waitFor(() =>
+      expect(screen.getByRole("menuitem", { name: "Models of OpenRouter" })).toBeTruthy(),
+    );
+
+    vi.useFakeTimers();
+    const row = (): HTMLElement => document.querySelector(
+      '[data-provider-row="openrouter"]',
+    ) as HTMLElement;
+    const flyoutEl = (): HTMLElement | null => document.querySelector("[data-model-flyout]");
+
+    // Row → gap → flyout: the leave schedules a close, the flyout's enter
+    // cancels it entirely (the pointer crossed the dead zone in time).
+    fireEvent.mouseEnter(row());
+    fireEvent.mouseLeave(row());
+    fireEvent.mouseEnter(flyoutEl() as HTMLElement);
+    vi.advanceTimersByTime(2_000);
+    expect(flyoutEl()).not.toBeNull();
+
+    // Leaving the FLYOUT starts the timer again — still open inside the
+    // grace period, closed just past it.
+    fireEvent.mouseLeave(flyoutEl() as HTMLElement);
+    act(() => {
+      vi.advanceTimersByTime(210);
+    });
+    expect(flyoutEl()).not.toBeNull();
+    act(() => {
+      vi.advanceTimersByTime(20);
+    });
+    expect(flyoutEl()).toBeNull();
+    vi.useRealTimers();
   });
 });
 

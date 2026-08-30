@@ -9,6 +9,7 @@ import {
   PanelRightOpen,
   RotateCcw,
   Settings2,
+  Square,
   Terminal,
   type LucideIcon,
 } from "lucide-react";
@@ -18,6 +19,7 @@ import {
   parseDiffArgs,
   resolveSnapshotForTool,
   restoreCheckpoint,
+  stopSessionTurn,
   type DiffLine,
   type SubAgentStatus,
   type ToolUseEntry,
@@ -27,7 +29,7 @@ import {
   fetchSnapshot,
 } from "../../lib/api";
 import { pushLocalToast } from "../../hooks/use-notifications";
-import { selectSubAgentsLive, useStreamStore } from "../../lib/stream-store";
+import { selectSubAgentsLive, useStreamStore, type LiveToolUseEntry } from "../../lib/stream-store";
 import { useRightSidebarStore } from "../../lib/right-sidebar-store";
 import { SubAgentCard } from "./SubAgentCard";
 import { SEMANTIC_COLORS } from "../../lib/semantics";
@@ -60,6 +62,12 @@ import { withAlpha } from "../dashboard/helpers";
  *
  * Sparkles/emoji iconography is deliberately absent (owner R37: "I really
  * hate the SVG icons… it looks ugly, bad, AI-generated").
+ *
+ * ROUND-52 (R52-c, owner: "After running the commands, it should actually
+ * show the terminal interface of those commands too"): an in-flight
+ * run_command pill renders a compact LIVE terminal tail (LiveOutputTail)
+ * under it while the command streams — tool-output chunks the stream-store
+ * accumulates on the entry (see LiveOutputTail for the display rules).
  */
 
 const TOOL_ICONS: Record<string, LucideIcon> = {
@@ -115,6 +123,10 @@ function elapsedSeconds(start: string, end: string): number {
   if (Number.isNaN(a) || Number.isNaN(b)) return 0;
   return Math.max(0, Math.round((b - a) / 1000));
 }
+
+/** ROUND-52 (R52-c): the amber warning tone for the stalled-watch line
+ * (same value SubAgentPanel uses — a semantic, theme-stable warning color). */
+const AMBER = "#f59e0b";
 
 /** Compact token count (same formatting as the SubAgentCard rows). */
 function fmtTokens(n: number): string {
@@ -172,7 +184,10 @@ export function SubAgentCodeChip({
 /** One LIVE child row inside the expanded Delegated card: code chip + role +
  * title + status + todo progress + tokens + the child's current activity
  * (from the stream-store live map — the freshest tool summary, no poll lag).
- * Clicking opens the child's chat tab in the right sidebar. */
+ * Clicking opens the child's chat tab in the right sidebar.
+ * ROUND-52 (R52-c): running rows carry a STOP button (the owner: stop a
+ * sub-agent "just like how I can stop the main agent" — same server route)
+ * and the supervisor's watch sample (age · tools · todos · elapsed). */
 function LiveDelegateRow({
   child,
   live,
@@ -185,12 +200,14 @@ function LiveDelegateRow({
   projectId: string;
 }) {
   const styles = useThemeStyles();
+  const [stopping, setStopping] = useState(false);
   const code = live?.code ?? child.code;
   const role = live?.role ?? child.subRole ?? "agent";
   const status = live?.status ?? child.status;
   const todosDone = live?.todosDone ?? child.todosDone;
   const todosTotal = live?.todosTotal ?? child.todosTotal;
   const title = child.title ?? live?.task ?? "sub-agent task";
+  const watch = live?.watch;
   const tone =
     status === "completed"
       ? SEMANTIC_COLORS.success
@@ -202,6 +219,17 @@ function LiveDelegateRow({
     useRightSidebarStore
       .getState()
       .openSubAgent(projectId, parentSessionId, child.id, `${code} · ${title}`, child.subRole ?? undefined);
+  };
+
+  // ROUND-52 (R52-c): the owner's manual stop — POST /sessions/:id/stop works
+  // for children now (the orchestrator registers them in the shared turn
+  // registry). Optimistic "stopping" chip; the terminal frame + detail line
+  // land through the same live map.
+  const stopChild = (e: React.MouseEvent): void => {
+    e.stopPropagation();
+    if (stopping || status !== "running") return;
+    setStopping(true);
+    void stopSessionTurn(child.id).finally(() => setStopping(false));
   };
 
   return (
@@ -241,7 +269,7 @@ function LiveDelegateRow({
           className="shrink-0 text-[9px] font-bold px-1.5 py-0.5 rounded-full"
           style={{ background: withAlpha(tone, 0.12), color: tone }}
         >
-          {status}
+          {stopping ? "stopping…" : status}
         </span>
         {todosTotal > 0 ? (
           <span className="shrink-0 text-[9px] font-mono" style={{ color: styles.textTertiary }}>
@@ -253,15 +281,65 @@ function LiveDelegateRow({
             ↑{fmtTokens(child.inputTokens)} ↓{fmtTokens(child.outputTokens)}
           </span>
         ) : null}
+        {status === "running" ? (
+          <button
+            type="button"
+            onClick={stopChild}
+            disabled={stopping}
+            aria-label={`Stop sub-agent ${code}`}
+            title="Stop this sub-agent (the parent keeps running)"
+            className="shrink-0 w-6 h-6 grid place-items-center rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+            style={{ color: SEMANTIC_COLORS.danger }}
+            onMouseEnter={(e) => {
+              e.currentTarget.style.background = withAlpha(SEMANTIC_COLORS.danger, 0.1);
+            }}
+            onMouseLeave={(e) => {
+              e.currentTarget.style.background = "transparent";
+            }}
+            data-testid="stop-subagent-btn"
+          >
+            <Square size={11} fill="currentColor" strokeWidth={0} />
+          </button>
+        ) : null}
       </div>
       {live?.lastActivity !== undefined ? (
         <div className="mt-0.5 flex items-center gap-1.5 min-w-0">
           {status === "running" ? (
             <span className="w-1.5 h-1.5 rounded-full ac-pulse shrink-0" style={{ background: tone }} aria-hidden />
           ) : null}
-          <span className="min-w-0 flex-1 truncate font-mono text-[10px]" style={{ color: styles.textTertiary }} title={live.lastActivity}>
+          <span
+            className="min-w-0 flex-1 truncate font-mono text-[10px]"
+            style={{
+              color: watch?.stalled === true ? AMBER : styles.textTertiary,
+            }}
+            title={live.lastActivity}
+          >
             {live.lastActivity}
           </span>
+          {/* ROUND-52 (R52-c): the supervisor's heartbeat sample — run age ·
+              tool count; amber when the child looks stalled. */}
+          {watch !== undefined && status === "running" ? (
+            <span
+              className="shrink-0 font-mono text-[9px]"
+              style={{ color: watch.stalled ? AMBER : styles.textTertiary }}
+              title={
+                watch.stalled
+                  ? `No activity for ${Math.round(watch.lastEventAgeMs / 1000)}s — the supervisor is watching`
+                  : `Running for ${Math.round(watch.elapsedMs / 1000)}s · ${watch.toolCount} tool calls`
+              }
+            >
+              {watch.stalled
+                ? `no activity ${Math.round(watch.lastEventAgeMs / 1000)}s`
+                : `${Math.round(watch.elapsedMs / 1000)}s · ${watch.toolCount} tools`}
+            </span>
+          ) : null}
+        </div>
+      ) : null}
+      {/* ROUND-52 (R52-c): WHY a terminal frame fired — "stopped by the
+          owner" / "stalled — …" — instead of a bare failed chip. */}
+      {live?.detail !== undefined && (status === "failed" || status === "completed") ? (
+        <div className="mt-0.5 text-[9.5px] font-medium truncate" style={{ color: styles.textTertiary }}>
+          {live.detail}
         </div>
       ) : null}
     </div>
@@ -694,12 +772,86 @@ function DiffDetail({ tool, sessionId }: { tool: ToolUseEntry; sessionId: string
   );
 }
 
+// ─── ROUND-52 (R52-c): the LIVE terminal tail of a running command ────────
+
+/**
+ * ROUND-52 (R52-c, owner: "After running the commands, it should actually
+ * show the terminal interface of those commands too"): the compact live
+ * tail rendered UNDER an in-flight run_command pill while the command
+ * streams. The store accumulates tool-output chunks (capped ~4KB); this
+ * view keeps only the LAST ~10 lines, stick-to-bottom scrolled (never yank
+ * the user's scroll — the pinned-bottom check is the panel's convention),
+ * with a tiny pulsing "live" indicator. The matching tool-result CLEARS the
+ * tail — the settled pill's expanded body shows the final output, never
+ * both. Shared with SubAgentPanel's transcript tool rows (same treatment
+ * for subagent-event inner tool-output frames).
+ */
+export function LiveOutputTail({ output }: { output: string }) {
+  const styles = useThemeStyles();
+  const ref = useRef<HTMLDivElement>(null);
+  const stickRef = useRef(true);
+
+  // Track whether the user scrolled up (stop auto-scrolling then).
+  useEffect(() => {
+    const el = ref.current;
+    if (el === null) return;
+    const onScroll = () => {
+      stickRef.current = el.scrollHeight - el.scrollTop - el.clientHeight < 24;
+    };
+    el.addEventListener("scroll", onScroll, { passive: true });
+    return () => el.removeEventListener("scroll", onScroll);
+  }, []);
+  // New chunks arrive → keep the bottom pinned while the user is at it.
+  useEffect(() => {
+    const el = ref.current;
+    if (el !== null && stickRef.current) el.scrollTop = el.scrollHeight;
+  }, [output]);
+
+  // Display: the LAST ~10 lines of the accumulated tail.
+  const shown = output.split("\n").slice(-10);
+  return (
+    <div className="mt-0.5 mb-1 pl-4 min-w-0" data-testid="live-command-output">
+      <div className="flex items-center gap-1.5 h-4 px-0.5">
+        <span className="w-1.5 h-1.5 rounded-full ac-pulse shrink-0" style={{ background: RUNNING_BLUE }} aria-hidden />
+        <span
+          className="text-[9px] font-mono font-bold uppercase tracking-[0.14em]"
+          style={{ color: RUNNING_BLUE }}
+        >
+          live
+        </span>
+      </div>
+      <div
+        ref={ref}
+        className="rounded-[10px] border px-2.5 py-1.5 max-h-32 overflow-y-auto auto-scroll font-mono text-[10px] leading-[1.5] break-words"
+        style={{
+          borderColor: withAlpha(RUNNING_BLUE, 0.35),
+          background: styles.isDark ? "rgba(0,0,0,0.3)" : "rgba(0,0,0,0.03)",
+          color: styles.textSecondary,
+        }}
+      >
+        {shown.map((line, i) => (
+          <div key={i} className="whitespace-pre-wrap break-words">
+            {line === "" ? " " : line}
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 // ─── Terminal detail (run_command expanded body) ────────────────────────────
 
 function TerminalDetail({ tool }: { tool: ToolUseEntry }) {
   const styles = useThemeStyles();
   const [expanded, setExpanded] = useState(false);
   const output = tool.outputSummary ?? null;
+  // ROUND-52 (R52-c): an expanded in-flight run_command shows its LIVE
+  // streaming tail (the same live view as under the pill — the "running…"
+  // placeholder stays for calls with no output yet).
+  const liveOutput = (tool as LiveToolUseEntry).liveOutput;
+  if (output === null && tool.ok === null && liveOutput !== undefined && liveOutput !== "") {
+    return <LiveOutputTail output={liveOutput} />;
+  }
   const lines = output ? output.split("\n").filter((l) => l.length > 0) : [];
   const preview = lines.slice(0, 3);
   const rest = lines.slice(3);
@@ -1038,6 +1190,12 @@ function ToolLine({
         ? "toggle"
         : null;
 
+  // ROUND-52 (R52-c): the live terminal tail of an in-flight run_command —
+  // tool-output chunks the stream-store accumulated under this entry
+  // (folded turns never carry the field; the result clears it).
+  const liveOutput = (tool as LiveToolUseEntry).liveOutput ?? "";
+  const showLiveTail = tool.ok === null && liveOutput !== "";
+
   return (
     <div className="min-w-0">
       <button
@@ -1115,6 +1273,10 @@ function ToolLine({
           <span className="w-2.5 shrink-0" />
         )}
       </button>
+      {/* ROUND-52 (R52-c): the compact live tail under the pill while the
+          command streams — hidden while expanded (the expanded body's
+          TerminalDetail carries the same live view there, never both). */}
+      {showLiveTail && !open ? <LiveOutputTail output={liveOutput} /> : null}
       {open && (
         <div className="mt-0.5 mb-1 pl-4 min-w-0">
           {tool.toolName === "delegate_task" ? (

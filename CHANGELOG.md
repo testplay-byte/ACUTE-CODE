@@ -15,6 +15,92 @@ Planned next: installer code-signing (SmartScreen), the deepseek-harness
 future candidates (compaction pressure-trigger, continuable sub-agent
 children), the Files-tab polish.
 
+## [0.52.0] - 2026-08-30
+
+Round 52 — command supervision, sub-agent control, the real Usage screen,
+and the plugin-based tool system. The headline fix: a background command
+(`start /B node server.js > server.log 2>&1`) can never stall an agent turn
+again — and the agent always knows how to check on what it started.
+
+### Added
+
+- **Background jobs — commands that outlive their tool call are now
+  first-class citizens.** When `run_command` launches something detached
+  (Windows `start /B … > log 2>&1`, Unix `… > log 2>&1 &`, `nohup`), the
+  call returns IMMEDIATELY with a job id, the captured output, and exact
+  polling instructions — never a silent "running…" for ten minutes. A hard
+  watchdog kills any command whose shell never exits within the timeout
+  (60s default) and reports the partial output. Two new tools, `job_status`
+  (list/inspect, with the live output tail and the log-file tail) and
+  `job_stop`, let the agent — and the main agent supervising sub-agents —
+  poll and stop what it started; the prompt now teaches verify-after-start
+  and poll-don't-wait as discipline. The Terminal panel gained a
+  "Background jobs" section: live status, output tails on click, and a
+  Stop button per running job.
+- **Live terminal output in the chat.** Running commands stream their
+  stdout/stderr into the working section while they execute (a compact
+  live tail under the command pill, stick-to-bottom), in the sub-agent
+  panel, and in the expanded command detail — the "terminal interface"
+  of every command, not just its final result.
+- **Sub-agents are stoppable and watchable.** The Stop control now works
+  on sub-agents exactly like the main agent — a Stop button on the
+  sub-agent panel header (and the API route behind it) aborts just that
+  child; the parent gets an honest "sub-agent was STOPPED BY THE OWNER"
+  report instead of a silent hang. While a child runs, the supervisor
+  samples it every 15s and the panel shows a live watch line (last
+  activity, elapsed, tool count, todo progress); a child with no activity
+  for 5 minutes (configurable) is auto-stopped and reported as stalled,
+  and the main agent is taught to act on those reports. The heartbeat
+  cadence and the stall timeout are configurable in Settings →
+  Sub-agents.
+- **The real Usage screen.** The in-app Usage page (previously a
+  placeholder) is now a full analytics view over the local ledger:
+  overview stat cards, a token activity chart with a 7/14/30/90-day range
+  selector, a tool leaderboard with failure counts, model cards with
+  token/cost splits, and a projects → sessions drill-down with sub-agent
+  runs nested under their parents and click-through to each chat.
+- **A plugin-based tool system (DeepSeek-harness style, pragmatic).**
+  Every built-in tool group (filesystem, search, git, terminal+jobs, web,
+  browser, memory, todo, delegation) is now a self-contained plugin module
+  behind a registry — the tool catalog is COMPUTED from the real plugin
+  declarations, so the UI's tool list can never drift from the backend
+  again. External plugins load from disk: drop a `.mjs` file into
+  `~/.acute/plugins/` (on by default) or the project's
+  `.acute/plugins/` (opt-in via settings) to add your own tools with the
+  standard name/grammar/collision rules, fail-soft loading, and caps.
+  See ADR-0025 for the decision record and MAINTENANCE.md for the
+  add-a-tool recipe.
+
+### Fixed
+
+- **The ten-minute command hang (owner-reported).** Node's `close` event
+  only fires when the stdio pipes close — a detached grandchild inherits
+  those pipe handles and holds them for its whole lifetime, so the tool
+  promise never resolved and nothing ever checked status. `exit` and
+  `close` are now tracked separately; a pipe-holding grandchild becomes a
+  tracked background job, a never-exiting shell is tree-killed by the
+  watchdog, and a Unix `&` launch registers a detached job whose liveness
+  is probed via its process group (found live in the round's battery: the
+  fully-redirected Unix case closed its pipes instantly and used to
+  vanish from tracking entirely).
+- **The model-selector flyout no longer snaps shut on the way to it.**
+  Crossing the gap between a provider row and its models flyout used to
+  fire the row's mouse-leave instantly and close the menu before the
+  pointer arrived; the flyout now has the same ~220ms hover-bridge the
+  context donut got in R51 (leave schedules a close, entering the flyout
+  cancels it).
+- **The dev webapp at `http://[::1]:5173` now works.** The IPv6 loopback
+  literal origin was missing from the sidecar's CORS allowlist, so every
+  preflight died 401 and the app silently fell back to demo data.
+
+### Changed
+
+- The system prompt's terminal section now bakes in the
+  background-process discipline (launch detached, verify with
+  `job_status`, poll between steps, stop when done), and the supervision
+  section teaches the main agent to act deliberately when a child stalls
+  or is stopped by the owner.
+
 ## [0.51.0] - 2026-08-30
 
 Round 51 — the desktop shell finally ships to the owner, plus the

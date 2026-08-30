@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link } from "react-router";
-import { Check, Cpu, KeyRound, Plus, Trash2 } from "lucide-react";
+import { Activity, Check, Cpu, KeyRound, Plus, Trash2 } from "lucide-react";
 import { useThemeStyles } from "../../lib/use-theme-styles";
 import { withAlpha } from "../dashboard/helpers";
 import { filterModelsForPicker, useSettingsStore } from "../../lib/settings-store";
@@ -65,6 +65,8 @@ async function saveSubagentSettings(patch: {
   maxParallel?: number;
   perKeyLimit?: number;
   subagentModel?: string | null;
+  childWatchdogMs?: number;
+  childStallTimeoutMs?: number;
 }): Promise<OrchestrationSettings> {
   return updateOrchestrationSettings(patch);
 }
@@ -571,9 +573,246 @@ function SubAgentModelCard() {
   );
 }
 
+/* ── Card 3 (ROUND-52 R52-b): the supervisor knobs ────────────────────────── */
+
+/** childWatchdogMs's valid range in SECONDS (server validates 5000–60000ms). */
+const WATCHDOG_SECONDS_MIN = 5;
+const WATCHDOG_SECONDS_MAX = 60;
+/** childStallTimeoutMs's valid range in MINUTES (server validates
+ * 60000–3600000ms; the field is shown in minutes — every allowed value is
+ * ≥ 1 minute). */
+const STALL_MINUTES_MIN = 1;
+const STALL_MINUTES_MAX = 60;
+
+/** The sidecar's defaults (orchestration settings) — display fallbacks. */
+const WATCHDOG_DEFAULT_MS = 15_000;
+const STALL_DEFAULT_MS = 300_000;
+
+/**
+ * ROUND-52 (R52-b): the two supervisor knobs of the orchestration family:
+ * how often running sub-agents report what they're doing (the heartbeat
+ * that feeds the Sub-agent panel's watch line) and how long a child may
+ * stay silent before the supervisor stops it and reports honestly to the
+ * parent turn. Inputs are in DISPLAY units (seconds / minutes) — the
+ * ms↔s/min conversion happens ONLY here at the boundary.
+ */
+function SubAgentSupervisionCard() {
+  const styles = useThemeStyles();
+  const queryClient = useQueryClient();
+  const [msg, setMsg] = useState<string | null>(null);
+  const [msgIsError, setMsgIsError] = useState(false);
+  // Drafts in DISPLAY units; "" = untouched (the current value shows).
+  const [heartbeatDraft, setHeartbeatDraft] = useState("");
+  const [stallDraft, setStallDraft] = useState("");
+
+  const settingsQuery = useQuery({
+    queryKey: ["orchestration-settings"],
+    queryFn: fetchSubagentSettings,
+  });
+
+  const save = useMutation({
+    mutationFn: (patch: { childWatchdogMs?: number; childStallTimeoutMs?: number }) =>
+      saveSubagentSettings(patch),
+    onSuccess: () => {
+      setMsg("Saved.");
+      setMsgIsError(false);
+      setHeartbeatDraft("");
+      setStallDraft("");
+      setTimeout(() => setMsg(null), 1500);
+      void queryClient.invalidateQueries({ queryKey: ["orchestration-settings"] });
+    },
+    onError: (err: Error) => {
+      setMsg(err.message);
+      setMsgIsError(true);
+    },
+  });
+
+  if (settingsQuery.isError) {
+    return (
+      <section
+        className="rounded-[16px] border-[1.5px] p-4"
+        style={{ background: styles.card, borderColor: styles.border }}
+        aria-label="Sub-agent supervision"
+      >
+        <p className="text-[11px]" style={{ color: "#ef4444" }} role="alert">
+          Agent core unreachable — start the app (or pnpm dev:full) to tune sub-agent supervision.
+        </p>
+      </section>
+    );
+  }
+  const current = settingsQuery.data;
+  if (settingsQuery.isLoading || current === undefined) {
+    return (
+      <section
+        className="rounded-[16px] border-[1.5px] p-4"
+        style={{ background: styles.card, borderColor: styles.border }}
+        aria-label="Sub-agent supervision"
+      >
+        <span className="text-[12px] font-mono" style={{ color: styles.textTertiary }}>
+          loading supervision settings…
+        </span>
+      </section>
+    );
+  }
+
+  // ms → display units at the boundary (rounded; every valid server value
+  // divides cleanly).
+  const heartbeatSeconds = Math.round((current.childWatchdogMs ?? WATCHDOG_DEFAULT_MS) / 1000);
+  const stallMinutes = Math.round((current.childStallTimeoutMs ?? STALL_DEFAULT_MS) / 60_000);
+  const heartbeatValue = heartbeatDraft === "" ? String(heartbeatSeconds) : heartbeatDraft;
+  const stallValue = stallDraft === "" ? String(stallMinutes) : stallDraft;
+
+  const heartbeatNum = Number(heartbeatValue);
+  const heartbeatValid =
+    Number.isInteger(heartbeatNum) &&
+    heartbeatNum >= WATCHDOG_SECONDS_MIN &&
+    heartbeatNum <= WATCHDOG_SECONDS_MAX;
+  const stallNum = Number(stallValue);
+  const stallValid =
+    Number.isInteger(stallNum) && stallNum >= STALL_MINUTES_MIN && stallNum <= STALL_MINUTES_MAX;
+
+  const heartbeatDirty = heartbeatDraft !== "" && heartbeatValue !== String(heartbeatSeconds);
+  const stallDirty = stallDraft !== "" && stallValue !== String(stallMinutes);
+  const dirty = heartbeatDirty || stallDirty;
+
+  const onSave = () => {
+    const patch: { childWatchdogMs?: number; childStallTimeoutMs?: number } = {};
+    if (heartbeatDirty && heartbeatValid) patch.childWatchdogMs = heartbeatNum * 1000;
+    if (stallDirty && stallValid) patch.childStallTimeoutMs = stallNum * 60_000;
+    if (Object.keys(patch).length > 0) save.mutate(patch);
+  };
+
+  const field = (
+    label: string,
+    hint: string,
+    value: string,
+    valid: boolean,
+    rangeError: string,
+    suffix: string,
+    onChange: (v: string) => void,
+    inputLabel: string,
+    min: number,
+    max: number,
+    testId: string,
+  ) => (
+    <div className="flex items-center gap-3 flex-wrap" data-testid={testId}>
+      <div className="min-w-[220px] flex-1">
+        <div className="text-[12.5px] font-bold" style={{ color: styles.text }}>
+          {label}
+        </div>
+        <div className="text-[11px]" style={{ color: styles.textTertiary }}>
+          {hint}
+        </div>
+        {!valid ? (
+          <div
+            className="text-[10.5px] font-bold"
+            style={{ color: "#ef4444" }}
+            role="alert"
+            data-testid={`${testId}-error`}
+          >
+            {rangeError}
+          </div>
+        ) : null}
+      </div>
+      <div className="flex items-center gap-1.5">
+        <input
+          type="number"
+          inputMode="numeric"
+          min={min}
+          max={max}
+          step={1}
+          value={value}
+          onChange={(e) => onChange(e.target.value)}
+          aria-label={inputLabel}
+          className="w-20 h-8 rounded-[8px] border-[1.5px] px-2.5 font-mono text-[11px] outline-none text-right"
+          style={{
+            background: styles.bg,
+            borderColor: !valid ? "#ef4444" : styles.border,
+            color: styles.text,
+          }}
+        />
+        <span className="text-[11px] font-mono shrink-0" style={{ color: styles.textTertiary }}>
+          {suffix}
+        </span>
+      </div>
+    </div>
+  );
+
+  return (
+    <section
+      className="rounded-[16px] border-[1.5px] p-4 flex flex-col gap-2.5"
+      style={{ background: styles.card, borderColor: styles.border }}
+      aria-label="Sub-agent supervision"
+    >
+      <div className="flex items-center gap-2 flex-wrap">
+        <Activity size={13} style={{ color: styles.accent, opacity: 0.8 }} />
+        <span className="text-[13px] font-bold" style={{ color: styles.text }}>
+          Sub-agent supervision
+        </span>
+        <span className="flex-1" />
+        {msg && (
+          <span
+            className="text-[11px] font-bold"
+            style={{ color: msgIsError ? "#ef4444" : "#22c55e" }}
+          >
+            {msg}
+          </span>
+        )}
+      </div>
+      <p className="text-[11px] leading-relaxed" style={{ color: styles.textSecondary }}>
+        The supervisor watches every running sub-agent: each one reports what it is doing on every
+        heartbeat (the Sub-agent panel's live watch line), and one that stays silent past the stall
+        timeout is stopped and reported honestly to the parent turn.
+      </p>
+      <div className="flex flex-col gap-2">
+        {field(
+          "Supervisor heartbeat",
+          "How often running sub-agents report what they're doing",
+          heartbeatValue,
+          heartbeatValid,
+          `Heartbeat must be ${WATCHDOG_SECONDS_MIN}–${WATCHDOG_SECONDS_MAX} seconds`,
+          "s",
+          setHeartbeatDraft,
+          "Supervisor heartbeat seconds",
+          WATCHDOG_SECONDS_MIN,
+          WATCHDOG_SECONDS_MAX,
+          "supervisor-heartbeat-field",
+        )}
+        {field(
+          "Stall timeout",
+          "A sub-agent with no activity for this long is stopped and reported",
+          stallValue,
+          stallValid,
+          `Stall timeout must be ${STALL_MINUTES_MIN}–${STALL_MINUTES_MAX} minutes`,
+          "min",
+          setStallDraft,
+          "Stall timeout minutes",
+          STALL_MINUTES_MIN,
+          STALL_MINUTES_MAX,
+          "supervisor-stall-field",
+        )}
+      </div>
+      <div className="flex items-center gap-3">
+        <p className="text-[10.5px] flex-1" style={{ color: styles.textTertiary }}>
+          Defaults: 15s heartbeat · 5min stall. Stalled children are stopped, never left hanging.
+        </p>
+        <button
+          onClick={onSave}
+          disabled={!dirty || !heartbeatValid || !stallValid || save.isPending}
+          aria-label="Save sub-agent supervision settings"
+          className="h-8 px-3 rounded-[8px] text-[11px] font-bold shrink-0 disabled:opacity-50"
+          style={{ background: withAlpha(styles.accent, 0.12), color: styles.accent }}
+        >
+          {save.isPending ? "Saving…" : "Save"}
+        </button>
+      </div>
+    </section>
+  );
+}
+
 /* ── Composition ──────────────────────────────────────────────────────────── */
 
-/** The two cards (reused by the Advanced tab until the sidebar gains a
+/** The cards (reused by the Advanced tab until the sidebar gains a
  * dedicated Sub-agents section entry). */
 export function SubAgentsSection() {
   const styles = useThemeStyles();
@@ -594,6 +833,10 @@ export function SubAgentsSection() {
       </p>
       <SubAgentKeysCard />
       <SubAgentModelCard />
+      {/* ROUND-52 (R52-b): the supervisor knobs — the orchestration family's
+          newest members (heartbeat + stall timeout; NOT temporary — they
+          stay when the temporary keys/model cards go). */}
+      <SubAgentSupervisionCard />
     </div>
   );
 }
