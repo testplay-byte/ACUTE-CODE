@@ -151,6 +151,19 @@ if (agentPkg.optionalDependencies?.["node-pty"]) {
 // ── 3. assemble the app dir ─────────────────────────────────────────────────
 rmSync(outDir, { recursive: true, force: true });
 mkdirSync(appDir, { recursive: true });
+// ROUND-51 (orchestrator): restore the build-time placeholder tauri-build
+// requires (bundle.resources paths must EXIST for every `cargo check`, not
+// just bundling — see the README itself). The wholesale rmSync above deletes
+// the committed copy; recreating it keeps a fresh checkout + local staging +
+// cargo check all green (on CI the release job stages AFTER its own cargo
+// check, but developers run cargo locally too).
+writeFileSync(
+  resolve(outDir, "README.md"),
+  "# The staged sidecar (a BUILD-TIME placeholder)\n\n" +
+    "Populated by scripts/release/stage-sidecar.mjs before `pnpm tauri build` — " +
+    "this placeholder keeps `tauri-build`'s resource-path existence check green " +
+    "on fresh checkouts. See the repo's .gitignore for what is (never) committed.\n",
+);
 cpSync(resolve(repoRoot, "agent-core", "dist"), resolve(appDir, "dist"), { recursive: true });
 
 const stagedPkg = {
