@@ -113,7 +113,7 @@ try {
     headers: H,
     body: JSON.stringify({ content: "Delegate one sub-agent task: ask it to reply with exactly the word: cedar. Nothing else.", model: "deepseek/deepseek-chat-v3.1" }),
   });
-  const delText = await del.text();
+  await del.text(); // drain the sync-route body (the turn result) — status alone gates the check below
   let childDone = false;
   for (let i = 0; i < 90 && !childDone; i++) {
     await sleep(2000);
