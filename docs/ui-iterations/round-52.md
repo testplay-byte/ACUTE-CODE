@@ -52,6 +52,11 @@ Every built-in tool group moved VERBATIM into `tools/plugins/*.ts` (filesystem, 
 - **CORS `http://[::1]:5173`**: the IPv6 loopback literal origin was missing from the allowlist — every preflight died 401 and the webapp silently fell back to demo data (vite binds ::1 on some hosts).
 - The pnpm v10 dep-status check + unapproved-build-scripts error in the sandbox (workaround: invoke `node_modules/.bin` directly; no repo change).
 
+### Also fixed in the first CI run (windows-latest)
+
+- **The exec test fixtures used inline `node -e "…"` one-liners — cmd.exe mangles them.** Node's `shell:true` on Windows wraps the command in `cmd /d /s /c "…"`; with nested double quotes the quoting collapses and every `>` inside an inline script becomes a cmd REDIRECTION (`setTimeout(()=>{},…)` → node receives a mangled script → exit 1). All 6 CI failures were this one root cause. Fix: the fixtures are SCRIPT FILES (`pipe-holder.js`, `sleeper.js`) written into the per-test project dir — zero quoting hazards on both platforms.
+- **A false-positive test exposed by the same fix**: the job_status tools test asserted the output contains "launcher done" — which the OLD inline fixture satisfied via the `command:` echo (the command string itself contained `console.log('launcher done')`), not via the registry's live pipe tail. The file-based fixture broke the assertion and forced the honest version: the pipe-holder's GRANDCHILD now prints `late-holder-output` at ~3.2s — AFTER the pipe-grace registration — and the test polls job_status until the tail captures it (the post-registration live tail, actually asserted).
+
 ---
 
 ## Evidence

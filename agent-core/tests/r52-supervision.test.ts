@@ -20,7 +20,7 @@
 //      (owner stop → honest "STOPPED BY THE OWNER" report to the parent)
 //   8. the stall sampler (sampleChildWatch) — pure unit on synthetic events
 import { randomUUID } from "node:crypto";
-import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -62,6 +62,9 @@ beforeEach(() => {
   if (tempDir === "") tempDir = mkdtempSync(join(tmpdir(), "acute-r52-"));
   projectDir = join(tempDir, `proj-${randomUUID()}`);
   mkdirSync(projectDir, { recursive: true });
+  // The shell-quoting-safe exec fixtures (see the comment above the consts).
+  writeFileSync(join(projectDir, "pipe-holder.js"), PIPE_HOLDER_JS);
+  writeFileSync(join(projectDir, "sleeper.js"), SLEEPER_JS);
   db = openDatabase(join(tempDir, `${randomUUID()}.db`));
   app = buildServer({
     token: TOKEN,
@@ -105,15 +108,44 @@ function tool(set: ToolSet, name: string): ExecutableTool {
   return (set as unknown as Record<string, ExecutableTool>)[name];
 }
 
-/** A node one-liner whose CHILD (grandchild of the shell) inherits the
- * shell's stdio pipes and lives for `ms` — the EXACT shape of the owner's
+// The exec-mechanics fixtures are SCRIPT FILES, not `node -e` one-liners:
+// Node's `shell:true` on Windows wraps the command in `cmd /d /s /c "…"` —
+// with nested double quotes the quoting collapses and every `>` inside an
+// inline -e script becomes a cmd REDIRECTION (`setTimeout(()=>{},…)` → node
+// gets a mangled script, exit 1 — the first CI run on windows-latest caught
+// exactly that). Files sidestep shell quoting entirely on both platforms.
+
+/** A launcher whose CHILD (grandchild of the shell) inherits the shell's
+ * stdio pipes and lives for `ms` — the EXACT shape of the owner's
  * `start /B node server.js` trap, cross-platform (node spawns node). The
  * `.unref()` is what makes the launcher EXIT while the grandchild keeps
  * holding the inherited pipe write-ends (without it the libuv process
  * handle would keep the launcher alive until the grandchild dies — a
- * different, less insidious failure shape). */
-const PIPE_HOLDER = (ms: number): string =>
-  `node -e "const c=require('child_process').spawn(process.execPath,['-e','setTimeout(()=>{},${ms})'],{stdio:['ignore','inherit','inherit']});c.unref();console.log('launcher done')"`;
+ * different, less insidious failure shape).
+ *
+ * The grandchild ALSO prints `late-holder-output` at `lateMs` (argv[3]) — a
+ * chunk that arrives AFTER the pipe-grace registration, proving the
+ * registry's live tail captures post-registration output. (The original
+ * version of that assertion passed as a FALSE POSITIVE: the inline one-liner
+ * echoed the literal text `console.log('launcher done')` inside the
+ * `command:` line of job_status's output — the file-based fixture exposed
+ * that the tail was never actually asserted.) */
+const PIPE_HOLDER_JS = `${[
+  'const c = require("node:child_process").spawn(',
+  "  process.execPath,",
+  '  ["-e", "setTimeout(() => console.log(\\\"late-holder-output\\\"), " + Number(process.argv[3]) + "); setTimeout(() => {}, " + Number(process.argv[2]) + ")"],',
+  '  { stdio: ["ignore", "inherit", "inherit"] },',
+  ');',
+  'c.unref();',
+  'console.log("launcher done");',
+].join("\n")}\n`;
+
+/** A plain foreground sleeper (the hard-watchdog fixture). */
+const SLEEPER_JS = `setTimeout(() => {}, Number(process.argv[2]) * 1000);\n`;
+
+const PIPE_HOLDER = (ms: number, lateMs = 3200): string =>
+  `node pipe-holder.js ${ms} ${lateMs}`;
+const SLEEPER = (seconds: number): string => `node sleeper.js ${seconds}`;
 
 describe("ROUND-52 (R52-a): exec helpers", () => {
   it("looksLikeBackgroundLaunch detects the launch idioms", () => {
@@ -187,7 +219,7 @@ describe("ROUND-52 (R52-a): the hang fix — pipe-holding grandchildren", () => 
     "hard watchdog: a silent never-exiting command is killed and resolved as a timeout",
     async () => {
       const startedAt = Date.now();
-      const result = await runCommand(projectDir, "node -e \"setTimeout(()=>{},20000)\"", undefined, {
+      const result = await runCommand(projectDir, SLEEPER(20), undefined, {
         timeoutMs: 700,
       });
       const elapsed = Date.now() - startedAt;
@@ -278,7 +310,7 @@ describe("ROUND-52 (R52-a): the hang fix — pipe-holding grandchildren", () => 
 
 describe("ROUND-52 (R52-a): job_status / job_stop tools + REST routes", () => {
   it("the tools exist in the full toolset and job_status lists tracked jobs", async () => {
-    const launch = await runCommand(projectDir, PIPE_HOLDER(4000));
+    const launch = await runCommand(projectDir, PIPE_HOLDER(9000));
     expect(launch.output).toContain("[background job");
 
     const tools = await buildProjectTools(projectDir);
@@ -290,14 +322,22 @@ describe("ROUND-52 (R52-a): job_status / job_stop tools + REST routes", () => {
     expect(listRes.output).toContain("RUNNING");
 
     const idMatch = launch.output.match(/\[background job (j[0-9a-f]+)\]/);
-    const oneRes = await tool(tools, "job_status").execute({ job: idMatch![1] });
+    // The grandchild prints `late-holder-output` at ~3.2s — AFTER the pipe
+    // grace registered the job — so the registry's live tail must capture
+    // it. Poll briefly (registration timing varies on CI runners).
+    const deadline = Date.now() + 6000;
+    let oneRes = await tool(tools, "job_status").execute({ job: idMatch![1] });
+    while (!oneRes.output.includes("late-holder-output") && Date.now() < deadline) {
+      await new Promise((resolve) => setTimeout(resolve, 300));
+      oneRes = await tool(tools, "job_status").execute({ job: idMatch![1] });
+    }
     expect(oneRes.ok).toBe(true);
-    expect(oneRes.output).toContain("launcher done");
+    expect(oneRes.output).toContain("late-holder-output");
     expect(oneRes.output).toContain("command:");
 
     const missing = await tool(tools, "job_status").execute({ job: "jnope000" });
     expect(missing.ok).toBe(false);
-  }, 15_000);
+  }, 20_000);
 
   it("job_stop reports honestly for an already-exited job", async () => {
     // The grandchild outlives the grace (job registers), then dies — stop
