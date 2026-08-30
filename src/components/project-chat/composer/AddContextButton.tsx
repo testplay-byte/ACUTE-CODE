@@ -13,6 +13,10 @@ import { useProjectFilePaths } from "./useProjectFiles";
  * project from there too. I can click Add Attach File and it will open up the
  * Windows file picker…").
  *
+ * ROUND-51 (R51-c): the button is ICON-ONLY (owner: "To add the context there
+ * should be just the logo") — the Paperclip carries aria-label="Add context"
+ * + the title tooltip; the menu below is unchanged.
+ *
  * Menu:
  *  1. "Attach files…" → the REAL OS picker (pickFilesViaBackend — Tauri rfd
  *     inside the app, the sidecar dialog route in browser dev); the chosen
@@ -74,7 +78,7 @@ export function AddContextButton({
         aria-expanded={open}
         aria-label="Add context"
         title={disabled ? "Attachments need the app backend" : "Attach files or project files"}
-        className="flex items-center gap-1.5 h-7 px-2 rounded-[10px] text-[11px] font-semibold transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+        className="flex items-center justify-center h-7 w-7 rounded-[10px] text-[11px] font-semibold transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
         style={{ color: styles.textSecondary }}
         onMouseEnter={(e) => {
           if (!disabled) e.currentTarget.style.background = styles.subtleHover;
@@ -83,8 +87,11 @@ export function AddContextButton({
           e.currentTarget.style.background = "transparent";
         }}
       >
+        {/* ROUND-51 (R51-c, owner: "there should be just the logo. There
+            should not be the context or text or anything like that") — the
+            Paperclip icon alone; the name lives on aria-label + the title
+            tooltip. The menu behavior below is untouched. */}
         <Paperclip size={12} className="shrink-0" />
-        <span>Context</span>
       </button>
       {open ? (
         <div

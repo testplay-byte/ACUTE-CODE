@@ -332,17 +332,27 @@ export function Composer({
         onRemove={(id) => setAttachments((prev) => prev.filter((a) => a.id !== id))}
       />
 
-      {/* TOOLBAR — INSIDE the box (owner directive). */}
+      {/* TOOLBAR — INSIDE the box (owner directive).
+          ROUND-51 (R51-c, owner: "the details on the left and right should
+          not overlap with each other"): both clusters are shrink-0 (never
+          squashed), a flex-1 min-w-0 spacer between them absorbs free space,
+          and the row WRAPS — when one row can't hold both clusters the right
+          cluster moves to a second line below the left one instead of ever
+          overlapping (gap-y keeps the rows apart). */}
       <div
         role="toolbar"
         aria-label="Composer tools"
         data-composer-toolbar
-        className="flex items-center justify-between gap-2 px-2 pb-2 pt-1"
+        className="flex flex-wrap items-center justify-between gap-x-2 gap-y-1 px-2 pb-2 pt-1"
       >
-        <div className="flex items-center gap-1 min-w-0">
+        <div className="flex items-center gap-1 shrink-0">
           <AddContextButton projectId={projectId} disabled={!liveMode} onAttachPaths={attachPaths} />
           <ModeSwitcher mode={permissionMode} disabled={!liveMode} onChange={onModeChange} />
         </div>
+        {/* ROUND-51 (R51-c): the shrink absorber — the two clusters themselves
+            never shrink (shrink-0), the spacer collapses to nothing first and
+            the row wraps only when the clusters genuinely can't share it. */}
+        <div className="flex-1 min-w-0" aria-hidden />
         <div className="flex items-center gap-1 shrink-0">
           <ContextDonut
             sessionId={sessionId}

@@ -5,14 +5,23 @@ name: Release
 # pure scripts (no build): ACUTE.bat + acute.sh + acute_launcher.py +
 # credentials.example.txt + launcher README + CHANGELOG + VERSION.
 #
-# Triggers:
+# ROUND-51 (R51-a): `desktop-installer` builds the real thing — the Windows
+# NSIS installer with the bundled sidecar (pinned node.exe + the staged
+# agent-core tree, ADR-0009). The launcher's desktop flow downloads this
+# installer from the GitHub release and installs/launches it, which is how
+# the native embedded browser (R50) finally reaches the owner: the dev-mode
+# browser flow always ran in the SYSTEM browser where the native child
+# webviews never activate.
+#
+# Triggers (same for both jobs):
 #   - workflow_dispatch (optionally with a `version` input — when set, it must
 #     match the repo's version, guarding "tagged but forgot to bump" mistakes)
-#   - push of a v* tag (the release path: kit + draft release on that tag)
+#     → BOTH jobs build (artifacts on every dispatch; the draft release only
+#     happens on tags)
+#   - push of a v* tag (the release path: kit + installer + draft release)
 #
-# The bundled installer (single .exe with the packaged sidecar) is NOT here —
-# that is the next packaging milestone (ADR-0003); this is the honest v1 for
-# the launcher-based distribution model (docs/runbooks/LOCAL-PC-RUNNER.md).
+# The draft release is tag-only by design: an untagged dispatch still produces
+# the installer ARTIFACT (CI-verifiable), just no release.
 
 on:
   workflow_dispatch:
@@ -107,9 +116,106 @@ jobs:
           path: release/acute-launcher-kit-v${{ steps.version.outputs.version }}.zip
           if-no-files-found: error
 
+  # ROUND-51 (R51-a): the Windows desktop installer. Mirrors ci.yml's toolchain
+  # (pnpm → node → rust) so the Rust gate is the same compiler, then stages the
+  # ADR-0009 sidecar bundle and lets `tauri build` run beforeBuildCommand
+  # (`pnpm build`) itself — one canonical build path, no divergent CI scripts.
+  desktop-installer:
+    runs-on: windows-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+
+      # PINNED on purpose (not a floating "24"): the CI tests the app on this
+      # exact runtime AND the bundle below ships this exact node.exe — drift
+      # between the tested runtime and the shipped one is invisible otherwise.
+      # Bump deliberately, together with SIDECAR_NODE_VERSION.
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24.20.0
+          cache: pnpm
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Version consistency
+        run: pnpm version:check
+
+      # The workspace build must run BEFORE staging (stage-sidecar.mjs copies
+      # agent-core/dist + shared/dist). `pnpm tauri build` below re-runs
+      # `pnpm build` via beforeBuildCommand — idempotent, same commit, same
+      # output; keeping it is the price of one canonical build command.
+      - name: Build the workspace (shared + agent-core + vite)
+        run: pnpm build
+
+      # ADR-0009 sidecar staging: pruned node_modules (win32-x64 prebuilds
+      # only), exact lockfile versions, vendored `shared` with a runnable
+      # package.json. See scripts/release/stage-sidecar.mjs for why pnpm
+      # deploy was rejected (it ships a 202 MB non-running tree).
+      - name: Stage the sidecar bundle
+        run: node scripts/release/stage-sidecar.mjs --platform win32-x64
+
+      # The pinned Node runtime (MIT) beside the staged app + its license
+      # texts for the bundle's LICENSES/ dir (SPEC §6 / ADR-0009: the license
+      # audit's allowed-list is about npm deps; the RUNTIME's compliance
+      # vehicle is shipping its notices inside the installer).
+      - name: Bundle the pinned Node runtime + licenses
+        shell: pwsh
+        env:
+          # Must match setup-node above — the shipped runtime IS the tested one.
+          SIDECAR_NODE_VERSION: 24.20.0
+        run: |
+          $ver = $env:SIDECAR_NODE_VERSION
+          # ${ver} braces: `$ver-win-x64` would still parse, but the braces
+          # make the interpolation unambiguous (and greppable).
+          $zip = "${env:TEMP}\node-v${ver}-win-x64.zip"
+          Invoke-WebRequest -Uri "https://nodejs.org/dist/v${ver}/node-v${ver}-win-x64.zip" -OutFile $zip
+          Expand-Archive -Path $zip -DestinationPath "${env:TEMP}\node-extract" -Force
+          $extract = "${env:TEMP}\node-extract\node-v${ver}-win-x64"
+          $sidecar = "src-tauri/staging/sidecar"
+          Copy-Item "$extract\node.exe" -Destination "$sidecar/node.exe"
+          # v24 ships one combined LICENSE (older releases split a separate
+          # ThirdPartyNotices.md — copy it too when present, future-proof).
+          New-Item -ItemType Directory -Force -Path "$sidecar/LICENSES" | Out-Null
+          Copy-Item "$extract\LICENSE" -Destination "$sidecar/LICENSES/node-v${ver}-LICENSE.txt"
+          if (Test-Path "$extract\ThirdPartyNotices.md") {
+            Copy-Item "$extract\ThirdPartyNotices.md" -Destination "$sidecar/LICENSES/node-v${ver}-ThirdPartyNotices.md"
+          }
+          Get-ChildItem "$sidecar" | Select-Object Name
+          if (-not (Test-Path "$sidecar/node.exe")) { throw "node.exe was not staged" }
+
+      # NSIS (+ WiX tooling) downloads automatically on first use — no admin
+      # needed. currentUser install mode → no UAC prompt on the owner's PC.
+      - name: Build the NSIS installer
+        run: pnpm tauri build
+
+      # Bundler contract (tauri-bundler 2.11.5 nsis/mod.rs): the file is
+      # <productName>_<version>_<arch>-setup.exe → ACUTE-CODE_<v>_x64-setup.exe.
+      - name: Verify + collect the installer
+        shell: pwsh
+        run: |
+          $installers = Get-ChildItem "src-tauri/target/release/bundle/nsis/*-setup.exe"
+          if ($installers.Count -eq 0) { throw "no NSIS installer was produced" }
+          $installers | ForEach-Object { Write-Host "built: $($_.Name) ($([math]::Round($_.Length / 1MB, 1)) MB)" }
+
+      - name: Upload installer artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: acute-installer-windows-x64
+          path: src-tauri/target/release/bundle/nsis/*-setup.exe
+          if-no-files-found: error
+
   # Draft release ONLY on tag pushes — the owner reviews + publishes manually.
   github-release:
-    needs: launcher-kit
+    needs: [launcher-kit, desktop-installer]
     if: startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
     permissions:
@@ -121,10 +227,22 @@ jobs:
         with:
           name: acute-launcher-kit-v${{ needs.launcher-kit.outputs.version }}
 
+      - name: Download the Windows installer artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: acute-installer-windows-x64
+          path: installer
+
       - name: Verify the tag matches the released version
         run: |
           if [ "${{ github.ref_name }}" != "v${{ needs.launcher-kit.outputs.version }}" ]; then
             echo "::error::tag '${{ github.ref_name }}' does not match the repo version '${{ needs.launcher-kit.outputs.version }}' — run 'pnpm version:set <version>' and re-tag"
+            exit 1
+          fi
+          # The installer exe embeds the same version in its name (bundler
+          # contract) — a mismatch means the two jobs built different commits.
+          if ! ls "installer/ACUTE-CODE_${{ needs.launcher-kit.outputs.version }}_x64-setup.exe" >/dev/null 2>&1; then
+            echo "::error::expected installer/ACUTE-CODE_${{ needs.launcher-kit.outputs.version }}_x64-setup.exe — got: $(ls installer/)"
             exit 1
           fi
 
@@ -133,6 +251,8 @@ jobs:
         with:
           draft: true
           body_path: CHANGELOG.md
-          files: acute-launcher-kit-v*.zip
+          files: |
+            acute-launcher-kit-v*.zip
+            installer/ACUTE-CODE_*_x64-setup.exe
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

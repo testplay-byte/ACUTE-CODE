@@ -31,6 +31,8 @@ import { useNotificationStreamStore } from "../../hooks/use-notifications";
 import { useStreamStore } from "../../lib/stream-store";
 import { useRightSidebarStore } from "../../lib/right-sidebar-store";
 import { renderWithProviders, resetTestState } from "../../test-utils";
+import { deriveThemeStyles } from "../../lib/themes";
+import { withAlpha } from "../dashboard/helpers";
 
 vi.mock("../../lib/api", async () => {
   const mod = await import("../../lib/api");
@@ -542,5 +544,107 @@ describe("sub-agent approval attribution (ROUND-48 R48-e2)", () => {
     await waitFor(() => expect(attribution.textContent).toContain("K7Q2"));
     expect(attribution.textContent).toContain("coder");
     expect(fetchSubAgents).toHaveBeenCalledWith(SESSION_ID);
+  });
+});
+
+// ─── ROUND-51 (R51-d): collapsed-row icon chips (delegate + file edits) ──────
+// Owner: "When the agents were called those areas should be highlighted. When
+// the file edits were made those areas should be highlighted properly. Even if
+// they are minimized, those should be highlighted a bit better." The two tool
+// families that CHANGE the project get a tinted rounded-square icon chip that
+// reads at a glance while the row is collapsed — an icon-chip, NOT a left rail
+// (the owner rejected rails in R51-b). Expected colors are computed from the
+// same theme source the component reads (resetTestState pins nova/dark).
+
+describe("collapsed-row icon chips (ROUND-51 R51-d)", () => {
+  const theme = deriveThemeStyles("nova", true); // resetTestState pins nova + dark
+
+  function renderCollapsedRow(tool: ToolUseEntry, live = false) {
+    const entries: WorkingEntry[] = [{ type: "tool", tool }];
+    renderWithProviders(
+      <WorkingSection
+        entries={entries}
+        sessionId={SESSION_ID}
+        projectId="proj_probe"
+        live={live}
+        defaultOpen
+      />,
+    );
+  }
+
+  it("a delegate_task row renders the accent-tinted chip (visible while collapsed)", () => {
+    renderCollapsedRow({
+      ...DELEGATE_TOOL,
+      ok: true,
+      outputSummary: "[subagent session: sess_child-a | role: coder]\nSub-agent completed.",
+    });
+
+    const chip = screen.getByTestId("tool-icon-chip");
+    // Accent wash at low alpha + the accent itself for the glyph (nova dark).
+    expect(chip.style.background).toBe(withAlpha(theme.accent, 0.12));
+    expect(chip.style.color).toBe(theme.accent);
+    // The row itself keeps its shape: one-line button, "Delegated" label, ✓.
+    const row = screen.getByRole("button", { name: /^Delegated / });
+    expect(row.textContent).toContain("Delegated");
+    expect(row.textContent).toContain("✓");
+  });
+
+  it("a completed write_file/edit_file row renders the calm subtle chip", () => {
+    renderCollapsedRow(EDIT_TOOL); // ok: true
+
+    const chip = screen.getByTestId("tool-icon-chip");
+    // Calm treatment: subtle background + textSecondary glyph — the chip
+    // SHAPE differentiates edits, not a loud color. (Whitespace-normalized:
+    // happy-dom re-serializes rgba() with spaces; themes.ts writes it tight.)
+    const tight = (v: string): string => v.replace(/\s+/g, "");
+    expect(tight(chip.style.background)).toBe(tight(theme.subtle));
+    expect(tight(chip.style.color)).toBe(tight(theme.textSecondary));
+    expect(screen.getByRole("button", { name: /^Edited / })).toBeTruthy();
+  });
+
+  it("an in-flight edit row (ok === null) borrows the running-blue in-flight tint", () => {
+    renderCollapsedRow({ ...EDIT_TOOL, ok: null, outputSummary: undefined }, true);
+
+    const chip = screen.getByTestId("tool-icon-chip");
+    expect(chip.style.background).toBe(withAlpha("#3B82F6", 0.12));
+    expect(chip.style.color).toBe("#3B82F6");
+    // Still collapsed + one-line: the chip is the live signal, not an expansion.
+    expect(screen.getByRole("button", { name: /^Edited / })).toBeTruthy();
+    expect(screen.queryByTestId("live-delegate-row")).toBeNull();
+  });
+
+  it("plain tool rows (read_file / search_code) do NOT get a chip", () => {
+    const plainRead: ToolUseEntry = {
+      seq: 3,
+      toolName: "read_file",
+      argsSummary: "path: src/main.ts",
+      ok: true,
+      ts: "2026-08-28T10:00:03Z",
+      outputSummary: "120 lines",
+    };
+    const plainSearch: ToolUseEntry = {
+      seq: 4,
+      toolName: "search_code",
+      argsSummary: "query: auth flow",
+      ok: true,
+      ts: "2026-08-28T10:00:04Z",
+      outputSummary: "3 matches",
+    };
+    renderWithProviders(
+      <WorkingSection
+        entries={[
+          { type: "tool", tool: plainRead },
+          { type: "tool", tool: plainSearch },
+        ]}
+        sessionId={SESSION_ID}
+        projectId="proj_probe"
+        defaultOpen
+      />,
+    );
+
+    // No chip anywhere — plain rows are byte-identical to pre-R51.
+    expect(screen.queryByTestId("tool-icon-chip")).toBeNull();
+    expect(screen.getByRole("button", { name: /^Read / })).toBeTruthy();
+    expect(screen.getByRole("button", { name: /^Searched / })).toBeTruthy();
   });
 });

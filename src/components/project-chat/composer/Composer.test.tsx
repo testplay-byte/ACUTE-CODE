@@ -18,15 +18,28 @@
  *    update + rollback on failure;
  *  - the thinking-level popover offers EXACTLY 4 options and persists per
  *    session (localStorage);
- *  - the model selector shows `Provider · model`, lists providers, opens a
- *    hover flyout of that provider's models, selects + persists the override
- *    per session, and Manage Models / Configure navigate to /settings?tab=api;
+ *  - the model selector lists providers, opens a hover flyout of that
+ *    provider's models, selects + persists the override per session, and
+ *    Manage Models / Configure navigate to /settings?tab=api;
  *  - the context donut renders from GET /sessions/:id/context with the full
  *    breakdown / cache / session-totals popover;
  *  - the send button's disabled states.
+ *
+ * ROUND-51 (R51-c) additions, per the owner's fourth test round:
+ *  - Add Context is ICON-ONLY (no "Context" text) — name on aria+title;
+ *  - the model button shows the MODEL ID ONLY ("Provider · model" on title);
+ *  - computeFlyoutGeometry PURE unit tests (side + vertical clamping);
+ *  - the flyout applies the measured geometry; the popover scrolls
+ *    internally; the flyout carries the provider-name header chip;
+ *  - the donut toolbar shows NO inline % label; the popover has a
+ *    hover-bridge (grace-period close, cancellable from the popover) and the
+ *    ring color grades accent → amber → danger;
+ *  - the Session section splits Main agent / Sub-agents / Combined (with a
+ *    pre-R51 no-`usage` report falling back to zeros);
+ *  - the toolbar never overlaps: shrink-0 clusters + flex spacer + wrap.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { cleanup, fireEvent, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, screen, waitFor } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { MemoryRouter, Route, Routes, useLocation, useSearchParams } from "react-router";
 import type { ReactNode } from "react";
@@ -48,11 +61,23 @@ import {
   type SessionsBackend,
   type ProviderView,
 } from "../../../lib/api";
+import { SEMANTIC_COLORS } from "../../../lib/semantics";
 import { useConfigStore } from "../../../lib/config-store";
 import { useNotificationStreamStore } from "../../../hooks/use-notifications";
 import { useSettingsStore } from "../../../lib/settings-store";
 import { useStreamStore } from "../../../lib/stream-store";
 import { renderWithProviders, resetTestState } from "../../../test-utils";
+import {
+  computeFlyoutGeometry,
+  FLYOUT_MARGIN,
+  type PlainRect,
+} from "./composer-utils";
+import {
+  CONTEXT_DONUT_DANGER,
+  CONTEXT_DONUT_WARN,
+  contextDonutColor,
+  DONUT_WARN_COLOR,
+} from "./ContextDonut";
 
 const MODELS = [
   "z-ai/glm-5.2:free",
@@ -96,6 +121,12 @@ const CONTEXT_REPORT: SessionContextReport = {
   },
   cache: { inputTokens: 100_000, cachedInputTokens: 82_000, hitRate: 0.82 },
   sessionTotals: { inputTokens: 250_000, outputTokens: 12_000, requests: 7, costUsd: 0.1234 },
+  // ROUND-51 (R51-c): the main/sub-agents/combined usage split.
+  usage: {
+    main: { inputTokens: 250_000, outputTokens: 12_000, requests: 7, costUsd: 0.1234 },
+    subagents: { inputTokens: 60_000, outputTokens: 3_400, requests: 4, costUsd: 0.0311 },
+    combined: { inputTokens: 310_000, outputTokens: 15_400, requests: 11, costUsd: 0.1545 },
+  },
 };
 
 const SESSION_ID = "sess_c2_probe";
@@ -142,6 +173,7 @@ vi.mock("../../../lib/api", async () => {
 
 afterEach(() => {
   cleanup();
+  vi.useRealTimers();
   vi.restoreAllMocks();
 });
 
@@ -321,6 +353,33 @@ describe("Composer: toolbar inside the box (owner spec B)", () => {
     expect(document.body.textContent).not.toContain("to send");
     expect(screen.queryByText(/^ctx$/)).toBeNull();
   });
+
+  it("ROUND-51 (R51-c): shrink-0 clusters + flex spacer + wrap — the clusters can never overlap", async () => {
+    await renderEmptyPanel();
+    const toolbar = document.querySelector("[data-composer-toolbar]") as HTMLElement;
+    // The row wraps when the two clusters can't share it (left wraps ABOVE
+    // the right — DOM order left → spacer → right).
+    expect(toolbar.className).toContain("flex-wrap");
+    const children = Array.from(toolbar.children) as HTMLElement[];
+    expect(children.length).toBe(3);
+    const [left, spacer, right] = children;
+    expect(left.className).toContain("shrink-0");
+    expect(right.className).toContain("shrink-0");
+    // The spacer absorbs the shrink (flex-1 min-w-0) — never the clusters.
+    expect(spacer.className).toContain("flex-1");
+    expect(spacer.className).toContain("min-w-0");
+    expect(
+      left.compareDocumentPosition(right) & Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+    // The clusters hold their own controls (left: context + mode; right:
+    // donut + model + thinking + send).
+    expect(left.contains(screen.getByRole("button", { name: "Add context" }))).toBe(true);
+    expect(left.contains(screen.getByRole("button", { name: "Permission mode: Ask" }))).toBe(true);
+    expect(right.contains(screen.getByRole("button", { name: "Context window usage" }))).toBe(true);
+    expect(right.contains(screen.getByRole("button", { name: "Choose model" }))).toBe(true);
+    expect(right.contains(screen.getByRole("button", { name: "Thinking level: Default" }))).toBe(true);
+    expect(right.contains(screen.getByRole("button", { name: "Send message" }))).toBe(true);
+  });
 });
 
 // ── A. Empty state — composer centered, lower half ───────────────────────────
@@ -374,6 +433,19 @@ describe("Composer: empty-state placement (owner spec A)", () => {
 
 // ── C. Add Context ────────────────────────────────────────────────────────────
 describe("Composer: Add Context (owner spec C)", () => {
+  it("the button is ICON-ONLY — no 'Context' text; name on aria-label + title (R51-c)", async () => {
+    await renderEmptyPanel();
+    const btn = screen.getByRole("button", { name: "Add context" });
+    // ROUND-51 (R51-c, owner: "there should be just the logo"): the Paperclip
+    // carries no text — the label lives on aria-label + the title tooltip.
+    expect(btn.textContent?.trim()).toBe("");
+    expect(btn.querySelector("svg")).toBeTruthy();
+    expect(btn.getAttribute("title")).toBe("Attach files or project files");
+    // The toolbar itself carries no "Context" text either.
+    const toolbar = document.querySelector("[data-composer-toolbar]") as HTMLElement;
+    expect(toolbar.textContent).not.toContain("Context");
+  });
+
   it("menu opens with both entry points + the @ hint line", async () => {
     await renderEmptyPanel();
     fireEvent.click(screen.getByRole("button", { name: "Add context" }));
@@ -732,15 +804,17 @@ describe("Composer: thinking level (owner spec E)", () => {
 
 // ── F. Model selector ────────────────────────────────────────────────────────
 describe("Composer: model selector (owner spec F)", () => {
-  it("button shows ProviderLabel · full-model-id (fallback providerId)", async () => {
+  it("button shows the MODEL ID ONLY; the full Provider · model stays on the title (R51-c)", async () => {
     await renderPanelWithConversation();
     expect(await screen.findByText("first question", {}, { timeout: 5000 })).toBeTruthy();
 
     const btn = screen.getByRole("button", { name: "Choose model" });
     // Agent fixture: providerId "openrouter", model "openrouter/ox-alpha";
-    // the providers list names it "OpenRouter".
-    await waitFor(() => expect(btn.textContent).toContain("OpenRouter · openrouter/ox-alpha"));
+    // ROUND-51 (R51-c): the label is the model id ONLY — no provider prefix.
+    await waitFor(() => expect(btn.textContent).toBe("openrouter/ox-alpha"));
+    // The full "Provider · model" stays on the tooltip.
     expect(btn.getAttribute("title")).toBe("OpenRouter · openrouter/ox-alpha");
+    expect(btn.querySelector("[data-model-label]")?.textContent).toBe("openrouter/ox-alpha");
   });
 
   it("popover lists ADDED providers; hover opens the model flyout; picking persists the override", async () => {
@@ -787,6 +861,33 @@ describe("Composer: model selector (owner spec F)", () => {
     await waitFor(() => expect(streamSessionMessage).toHaveBeenCalled());
     expect(vi.mocked(streamSessionMessage).mock.calls[0][3]?.model).toBe("z-ai/glm-5.2:free");
     await sendSettled();
+  });
+
+  it("the flyout applies the MEASURED geometry; the popover scrolls internally; header chip + footer (R51-c)", async () => {
+    await renderPanelWithConversation();
+    expect(await screen.findByText("first question", {}, { timeout: 5000 })).toBeTruthy();
+
+    fireEvent.click(screen.getByRole("button", { name: "Choose model" }));
+    const popover = await screen.findByRole("menu", { name: "Choose model" });
+    // The popover is capped + scrolls — N providers never overflow the viewport.
+    expect(popover.className).toContain("overflow-y-auto");
+    expect(popover.className).toContain("max-h-[min(24rem,calc(100vh-2rem))]");
+
+    // Hover a provider row — happy-dom: every rect is 0 and the viewport is
+    // 1024×768, so the pure helper resolves side=right, left=12, top=12,
+    // maxHeight=280 (the row's zero top clamps up to the 12px margin).
+    fireEvent.mouseEnter(screen.getByRole("menuitem", { name: "Models of OpenRouter" }));
+    const flyout = await screen.findByRole("listbox", { name: "Models of OpenRouter" });
+    expect(flyout.getAttribute("data-flyout-side")).toBe("right");
+    expect(flyout.style.left).toBe("12px");
+    expect(flyout.style.top).toBe("12px");
+    expect(flyout.style.maxHeight).toBe("280px");
+    expect(flyout.style.overflowY).toBe("auto");
+    // Polish: provider-name header chip (with the model count once loaded) +
+    // the hidden-paid footer row.
+    await waitFor(() => expect(flyout.textContent).toContain("1 model"));
+    expect(flyout.textContent).toContain("OpenRouter");
+    expect(flyout.textContent).toContain("2 paid models hidden — show all");
   });
 
   it("Manage Models + per-provider Configure navigate to /settings?tab=api (the api tab deep-link)", async () => {
@@ -864,12 +965,17 @@ describe("Composer: model selector (owner spec F)", () => {
 
 // ── G. Context donut ────────────────────────────────────────────────────────
 describe("Composer: context donut (owner spec G)", () => {
-  it("renders used/window from GET /sessions/:id/context with the compact % label", async () => {
+  it("renders the ring from GET /sessions/:id/context — ICON-ONLY, no inline % label (R51-c)", async () => {
     await renderPanelWithConversation();
     expect(await screen.findByText("first question", {}, { timeout: 5000 })).toBeTruthy();
 
     const donut = await screen.findByRole("button", { name: /Context window: 42% used/ });
-    expect(donut.textContent).toContain("42%");
+    // ROUND-51 (R51-c): the toolbar shows ONLY the ring — the % lives on the
+    // button's title/aria-label and inside the popover, never beside it.
+    expect(document.querySelector("[data-donut-label]")).toBeNull();
+    expect(donut.textContent?.trim()).toBe("");
+    expect(donut.querySelector("svg")).toBeTruthy();
+    expect(donut.getAttribute("title")).toContain("42% used");
     expect(fetchSessionContext).toHaveBeenCalledWith(SESSION_ID, "openrouter/ox-alpha");
   });
 
@@ -906,16 +1012,28 @@ describe("Composer: context donut (owner spec G)", () => {
     expect(popover.textContent).toContain("82%");
     expect(popover.textContent).toContain("82k / 100k cached");
 
-    // Session section (requests, sent, received, cost).
+    // Session section (ROUND-51 R51-c): Main agent / Sub-agents / Combined —
+    // each group with requests, tokens sent ↑ / received ↓, cost.
     const totals = popover.querySelector("[data-session-totals]") as HTMLElement;
-    expect(totals.textContent).toContain("Requests");
-    expect(totals.textContent).toContain("7");
-    expect(totals.textContent).toContain("Tokens sent ↑");
-    expect(totals.textContent).toContain("250k");
-    expect(totals.textContent).toContain("Tokens received ↓");
-    expect(totals.textContent).toContain("12k");
-    expect(totals.textContent).toContain("Cost");
-    expect(totals.textContent).toContain("$0.1234");
+    expect(totals.textContent).toContain("Main agent");
+    expect(totals.textContent).toContain("Sub-agents");
+    expect(totals.textContent).toContain("Combined");
+    const group = (id: string): HTMLElement =>
+      totals.querySelector(`[data-usage-group="${id}"]`) as HTMLElement;
+    for (const id of ["main", "subagents", "combined"]) expect(group(id)).toBeTruthy();
+    expect(group("main").textContent).toContain("Requests");
+    expect(group("main").textContent).toContain("7");
+    expect(group("main").textContent).toContain("250k");
+    expect(group("main").textContent).toContain("12k");
+    expect(group("main").textContent).toContain("$0.1234");
+    expect(group("subagents").textContent).toContain("4");
+    expect(group("subagents").textContent).toContain("60k");
+    expect(group("subagents").textContent).toContain("3.4k");
+    expect(group("subagents").textContent).toContain("$0.0311");
+    expect(group("combined").textContent).toContain("11");
+    expect(group("combined").textContent).toContain("310k");
+    expect(group("combined").textContent).toContain("15k"); // fmtTokens(15 400)
+    expect(group("combined").textContent).toContain("$0.1545");
   });
 
   it("a failed context report renders the honest '—' (never a fake 0%)", async () => {
@@ -924,7 +1042,102 @@ describe("Composer: context donut (owner spec G)", () => {
     expect(await screen.findByText("first question", {}, { timeout: 5000 })).toBeTruthy();
 
     const donut = await screen.findByRole("button", { name: "Context window usage unavailable" });
-    expect(donut.textContent).toContain("—");
+    // Icon-only: no '—' text label either — just the ring with the danger track.
+    expect(donut.textContent?.trim()).toBe("");
+  });
+
+  it("a pre-R51 report (no `usage` split) falls back: main = sessionTotals, sub-agents = zeros (R51-c)", async () => {
+    const { usage: _usage, ...flatReport } = CONTEXT_REPORT;
+    vi.mocked(fetchSessionContext).mockResolvedValue(flatReport);
+    await renderPanelWithConversation();
+    expect(await screen.findByText("first question", {}, { timeout: 5000 })).toBeTruthy();
+
+    fireEvent.click(await screen.findByRole("button", { name: /Context window: 42% used/ }));
+    const popover = await screen.findByRole("dialog", { name: "Context window details" });
+    const totals = popover.querySelector("[data-session-totals]") as HTMLElement;
+    const group = (id: string): HTMLElement =>
+      totals.querySelector(`[data-usage-group="${id}"]`) as HTMLElement;
+    // Main falls back to the flat sessionTotals.
+    expect(group("main").textContent).toContain("7");
+    expect(group("main").textContent).toContain("250k");
+    // Sub-agents honestly show zeros (cost '—' when 0).
+    expect(group("subagents").textContent).toContain("0");
+    expect(group("subagents").textContent).toContain("—");
+    // Combined falls back to main.
+    expect(group("combined").textContent).toContain("250k");
+  });
+
+  it("HOVER BRIDGE: leaving the trigger does NOT close instantly; entering the popover cancels the timer (R51-c)", async () => {
+    await renderPanelWithConversation();
+    expect(await screen.findByText("first question", {}, { timeout: 5000 })).toBeTruthy();
+    const donut = await screen.findByRole("button", { name: /Context window: 42% used/ });
+
+    vi.useFakeTimers();
+    const popoverEl = (): HTMLElement | null => document.querySelector("[data-context-popover]");
+
+    // Hover opens the popover.
+    fireEvent.mouseEnter(donut);
+    expect(popoverEl()).not.toBeNull();
+
+    // Leaving the trigger toward the popover: stays open through the grace
+    // period (the OLD code closed it instantly — the owner's complaint).
+    fireEvent.mouseLeave(donut);
+    expect(popoverEl()).not.toBeNull();
+    vi.advanceTimersByTime(210);
+    expect(popoverEl()).not.toBeNull();
+
+    // Entering the popover cancels the close entirely.
+    fireEvent.mouseEnter(popoverEl() as HTMLElement);
+    vi.advanceTimersByTime(2_000);
+    expect(popoverEl()).not.toBeNull();
+
+    // Leaving the popover starts the timer again — closing after the grace
+    // period (act(): the timer's setState must flush before the assertion).
+    fireEvent.mouseLeave(popoverEl() as HTMLElement);
+    act(() => {
+      vi.advanceTimersByTime(210);
+    });
+    expect(popoverEl()).not.toBeNull();
+    act(() => {
+      vi.advanceTimersByTime(20);
+    });
+    expect(popoverEl()).toBeNull();
+    vi.useRealTimers();
+  });
+
+  it("CLICK still pins: a pinned popover survives leaving both trigger and popover (R51-c)", async () => {
+    await renderPanelWithConversation();
+    expect(await screen.findByText("first question", {}, { timeout: 5000 })).toBeTruthy();
+    const donut = await screen.findByRole("button", { name: /Context window: 42% used/ });
+
+    vi.useFakeTimers();
+    const popoverEl = (): HTMLElement | null => document.querySelector("[data-context-popover]");
+    fireEvent.click(donut); // pin ON
+    expect(popoverEl()).not.toBeNull();
+    fireEvent.mouseLeave(donut);
+    fireEvent.mouseLeave(popoverEl() as HTMLElement);
+    vi.advanceTimersByTime(3_000);
+    expect(popoverEl()).not.toBeNull(); // pinned survives the grace period
+    // Click again unpins + closes immediately (existing semantics).
+    fireEvent.click(donut);
+    expect(popoverEl()).toBeNull();
+    vi.useRealTimers();
+  });
+
+  it("the ring color grades by pressure: amber at 70%, danger at 90% (R51-c)", async () => {
+    vi.mocked(fetchSessionContext).mockResolvedValue({ ...CONTEXT_REPORT, usedTokens: 700_000 });
+    await renderPanelWithConversation();
+    expect(await screen.findByText("first question", {}, { timeout: 5000 })).toBeTruthy();
+    const donut = await screen.findByRole("button", { name: /Context window: 70% used/ });
+    // circles[0] = track, circles[1] = the arc — amber in the 60–85% band.
+    expect(donut.querySelectorAll("circle")[1].getAttribute("stroke")).toBe(DONUT_WARN_COLOR);
+
+    cleanup();
+    vi.mocked(fetchSessionContext).mockResolvedValue({ ...CONTEXT_REPORT, usedTokens: 900_000 });
+    await renderPanelWithConversation();
+    expect(await screen.findByText("first question", {}, { timeout: 5000 })).toBeTruthy();
+    const hot = await screen.findByRole("button", { name: /Context window: 90% used/ });
+    expect(hot.querySelectorAll("circle")[1].getAttribute("stroke")).toBe(SEMANTIC_COLORS.danger);
   });
 });
 
@@ -954,5 +1167,103 @@ describe("Composer: send button states (owner spec H)", () => {
     fireEvent.change(ta, { target: { value: "line one" } });
     fireEvent.keyDown(ta, { key: "Enter", shiftKey: true });
     expect(streamSessionMessage).toHaveBeenCalledTimes(1); // NOT a second send
+  });
+});
+
+// ── ROUND-51 (R51-c): computeFlyoutGeometry — pure placement math ────────────
+describe("computeFlyoutGeometry (ROUND-51 R51-c) — pure unit tests", () => {
+  const row = (top: number, left = 40): PlainRect => ({ top, bottom: top + 30, left, right: left + 220 });
+  const popover = (left: number, right: number, top = 200): PlainRect => ({
+    top,
+    bottom: top + 300,
+    left,
+    right,
+  });
+
+  it("RIGHT side when the viewport has room: left = popover right + margin, top-aligned with the row", () => {
+    // 1280 - 940 = 340 ≥ 280 + 12 → right.
+    const geo = computeFlyoutGeometry(row(300), popover(700, 940), { width: 1280, height: 800 }, 280);
+    expect(geo.side).toBe("right");
+    expect(geo.left).toBe(940 + FLYOUT_MARGIN);
+    expect(geo.viewportTop).toBe(300); // row sits inside the clamp band
+    expect(geo.top).toBe(0); // row-relative offset = 0 (aligned)
+    expect(geo.maxHeight).toBe(280);
+  });
+
+  it("LEFT side when only the left has room: left = popover left - width - margin", () => {
+    // spaceRight = 1280 - 1240 = 40 < 292; spaceLeft = 1000 ≥ 292.
+    const geo = computeFlyoutGeometry(row(300), popover(1000, 1240), { width: 1280, height: 800 }, 280);
+    expect(geo.side).toBe("left");
+    expect(geo.left).toBe(1000 - 280 - FLYOUT_MARGIN);
+  });
+
+  it("INLINE when neither side has room (narrow/touch fallback)", () => {
+    // spaceRight = 560 - 480 = 80; spaceLeft = 280 — both < 292.
+    const geo = computeFlyoutGeometry(row(300), popover(280, 480), { width: 560, height: 800 }, 280);
+    expect(geo.side).toBe("inline");
+    expect(geo.left).toBeNull();
+    expect(geo.top).toBe(0);
+  });
+
+  it("clamps the flyout INSIDE the viewport when the row sits low (negative top shift)", () => {
+    // Row at y=700, viewport 800 tall, worst-case height 280 → bottom ≤ 788.
+    const geo = computeFlyoutGeometry(row(700), popover(700, 940, 640), { width: 1280, height: 800 }, 280);
+    expect(geo.side).toBe("right");
+    expect(geo.viewportTop).toBe(800 - FLYOUT_MARGIN - 280);
+    expect(geo.top).toBe(800 - FLYOUT_MARGIN - 280 - 700); // negative → shifts UP
+  });
+
+  it("clamps down to the top margin when the row is above it", () => {
+    const geo = computeFlyoutGeometry(row(2), popover(700, 940, 0), { width: 1280, height: 800 }, 280);
+    expect(geo.viewportTop).toBe(FLYOUT_MARGIN);
+    expect(geo.top).toBe(FLYOUT_MARGIN - 2);
+  });
+
+  it("maxHeight = min(280, viewportH - 24) — short viewports cap lower", () => {
+    expect(
+      computeFlyoutGeometry(row(50), popover(700, 940), { width: 1280, height: 700 }, 280).maxHeight,
+    ).toBe(280);
+    expect(
+      computeFlyoutGeometry(row(50), popover(700, 940), { width: 1280, height: 200 }, 280).maxHeight,
+    ).toBe(200 - 24);
+  });
+
+  it("an explicit (measured) flyout height tightens the vertical clamp", () => {
+    const geo = computeFlyoutGeometry(
+      row(700),
+      popover(700, 940, 640),
+      { width: 1280, height: 800 },
+      280,
+      120,
+    );
+    expect(geo.viewportTop).toBe(800 - FLYOUT_MARGIN - 120);
+    expect(geo.top).toBe(800 - FLYOUT_MARGIN - 120 - 700);
+  });
+
+  it("degenerate tiny viewport: the top margin still wins (never an inverted clamp)", () => {
+    // maxHeight = 76 → clamp(rowTop=50, 12, 100-12-76=12) = 12.
+    const geo = computeFlyoutGeometry(row(50), popover(700, 940), { width: 1280, height: 100 }, 280);
+    expect(geo.viewportTop).toBe(FLYOUT_MARGIN);
+  });
+});
+
+// ── ROUND-51 (R51-c): contextDonutColor — pure grading thresholds ────────────
+describe("contextDonutColor grading (ROUND-51 R51-c) — pure unit tests", () => {
+  const ACCENT = "#7c5cff";
+  it("exports the thresholds the UI grades by (accent < 60 ≤ amber ≤ 85 < danger)", () => {
+    expect(CONTEXT_DONUT_WARN).toBe(0.6);
+    expect(CONTEXT_DONUT_DANGER).toBe(0.85);
+  });
+
+  it("accent below 60%, amber in the 60–85% band, danger above 85%", () => {
+    expect(contextDonutColor(59, 100, ACCENT)).toBe(ACCENT);
+    expect(contextDonutColor(60, 100, ACCENT)).toBe(DONUT_WARN_COLOR); // boundary inclusive
+    expect(contextDonutColor(85, 100, ACCENT)).toBe(DONUT_WARN_COLOR); // boundary inclusive
+    expect(contextDonutColor(86, 100, ACCENT)).toBe(SEMANTIC_COLORS.danger);
+  });
+
+  it("no window (or zero usage) never looks scary — accent", () => {
+    expect(contextDonutColor(1, 0, ACCENT)).toBe(ACCENT);
+    expect(contextDonutColor(0, 100, ACCENT)).toBe(ACCENT);
   });
 });

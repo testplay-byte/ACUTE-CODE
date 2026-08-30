@@ -54,22 +54,41 @@ What you'll see, in order:
    ├── acute_launcher.py      ← the workhorse
    ├── credentials.txt        ← your secrets (local only)
    ├── ACUTE-CODE\            ← the app (downloaded, self-updating)
-   └── .acute\                ← helper data (logs, isolated git credentials)
+   └── .acute\                ← helper data (logs, installer downloads)
    ```
-3. Dependencies install (a few minutes, first time only), the backend builds,
-   your OpenRouter key is stored in **Windows Credential Manager**, and the
-   servers start.
-4. Open **http://localhost:5173** in your browser (it opens by itself).
+3. **The packaged desktop app installs** (round 51+): the launcher checks
+   GitHub for the latest `ACUTE-CODE_x64-setup.exe`, downloads it (with a
+   progress bar), installs it **silently — no admin prompt, no dialogs**
+   (it lands in `C:\Users\<you>\AppData\Local\ACUTE-CODE`), stores your
+   OpenRouter keys in **Windows Credential Manager** so the app boots with
+   them, and starts **`ACUTE-CODE.exe`** — a real app window with the
+   embedded Chromium browser and the agent backend bundled inside. No
+   browser tab, no servers to manage, nothing to type.
+4. Keep the launcher window open while using the app (Ctrl+C there just
+   closes that window — the app keeps running in its own window).
+
+> **If the desktop install fails for any reason** (offline, no installer
+> published yet, disk problem…), the launcher prints a clear warning and
+> automatically falls back to the dev-servers flow below — you always end
+> up with a running app.
+
+### The old browser/dev flow (still available)
+
+Add `--web` (or `--no-desktop`) to force the classic mode: dependencies
+   install, the backend builds, your OpenRouter key is stored in **Windows
+   Credential Manager**, the servers start, and
+   **http://localhost:5173** opens in your browser (it opens by itself).
    Keep the window open while using the app; **Ctrl+C** in the window stops
-   the servers cleanly.
+   the servers cleanly. This is also the automatic fallback path.
 
 ## Every later run
 
 Just double-click `ACUTE.bat` again. It checks GitHub for new versions — if
-there are any, it **stops the live servers, updates, rebuilds, and restarts
-them automatically** — then launches. Your agents, sessions, projects and
-settings persist in `ACUTE-CODE\.dev\` and are never touched by updates.
-The launcher even updates itself when the repo ships a newer one.
+there are any, it **updates the launcher, stops the live servers, updates,
+rebuilds, and installs the newest desktop app automatically** — then
+launches. Your agents, sessions, projects and settings persist (the desktop
+app keeps them in `%APPDATA%\acute-code\`, the dev flow in
+`ACUTE-CODE\.dev\`) and are never touched by updates.
 
 ## If anything goes wrong
 
@@ -80,9 +99,12 @@ The launcher even updates itself when the repo ships a newer one.
   it resumes where it stopped.
 - Useful commands (run in cmd from your folder):
   - `ACUTE.bat status` — read-only health report (versions, update state,
-    servers, credential lengths, log path)
-  - `ACUTE.bat update` — update everything but don't start the servers
+    installed desktop app, servers, credential lengths, log path)
+  - `ACUTE.bat update` — update everything but don't start the app
   - `ACUTE.bat start` — start without the update check
+  - `ACUTE.bat desktop` — install/launch ONLY the packaged desktop app
+    (falls back to the dev flow if it cannot)
+  - `ACUTE.bat --web` — skip the desktop app, run the classic browser flow
 
 ## Updating the launcher itself
 
@@ -111,8 +133,13 @@ while it runs), so if the launcher prints
   installed, the .bat detects that and offers to install it via winget
   automatically — then just re-double-click.
 - **Node.js / git**: missing or too old → detected, highlighted in red, and
-  auto-installed via winget on your confirmation.
-- This launcher runs the **dev stack** (console window + browser). The
-  packaged single-`.exe` experience is a later milestone and will slot into
-  the same launcher.
-- Linux/macOS: use `acute.sh` the same way (`bash acute.sh`).
+  auto-installed via winget on your confirmation. (The packaged desktop app
+  needs NEITHER — its Node runtime is bundled inside the installer — but the
+  launcher's update/self-update path still uses them.)
+- The packaged **desktop app** (round 51+) is the default on Windows: it
+  bundles the whole backend (a pinned Node runtime + the agent core) inside
+  the installer, which is what finally activates the embedded Chromium
+  browser — the dev/browser flow can never use it (browsers don't expose
+  the native webview APIs).
+- Linux/macOS: use `acute.sh` the same way (`bash acute.sh`) — the desktop
+  installer is Windows-only, so those platforms always use the dev flow.

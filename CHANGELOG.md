@@ -11,8 +11,72 @@ version number is single-sourced from the root `package.json`
 
 ## [Unreleased]
 
-Planned next: the bundled installer (a single executable with the packaged
-sidecar — ADR-0003); today the launcher kit remains the distribution path.
+Planned next: installer code-signing (SmartScreen), the deepseek-harness
+future candidates (compaction pressure-trigger, continuable sub-agent
+children), the Files-tab polish.
+
+## [0.51.0] - 2026-08-30
+
+Round 51 — the desktop shell finally ships to the owner, plus the
+fourth-test-round polish pass across the composer, the sub-agent panel,
+the main agent's efficiency, and the dashboard.
+
+### Added
+
+- **The Windows desktop app, installable in one click.** The launcher now
+  downloads the release installer and sets up the real desktop app
+  silently (no admin required): the full Tauri shell with the native
+  Chromium browser, the bundled agent backend (a pinned Node 24 runtime +
+  the sidecar, no local Node needed), and the owner's OpenRouter keys
+  seeded straight into Windows Credential Manager. Everything the browser
+  rounds were building toward — the embedded browser finally activates on
+  the owner's machine, and the browser panel shows which engine is live
+  ("Chromium (native)" / "Proxy fallback") with an automatic fallback to
+  the proxy renderer if the native engine ever fails. If anything in the
+  desktop flow fails, the launcher falls back to the previous
+  dev-servers-in-your-browser flow untouched. The app window can no
+  longer be shrunk below a usable size (min 1000×620), and the composer's
+  toolbar wraps instead of ever overlapping its controls.
+- **A fast smoke suite: `pnpm smoke`.** One command runs a curated set of
+  the critical-path tests (320 tests, ~17 seconds) and reports a green/red
+  verdict — the quick "did I break the spine?" check between full gates.
+- **The Usage page on the public dashboard** (with `pnpm usage:export` in
+  the app): per-project and per-session usage statistics — tokens, cost,
+  duration, model, status, every tool call broken out, sub-agent runs
+  nested under their delegating session — rendered as a clean, modern
+  page with overview cards, an activity chart, tool leaderboards, and
+  expandable drill-downs.
+- **A loop-hygiene guard in the agent runtime.** A model that re-calls
+  the same tool with the same arguments now gets a corrective nudge after
+  3 repeats, and an honest, retryable stop after 5 identical calls (or 6
+  consecutive failures) — no more burning turns in circles.
+- **Main-agent / sub-agent / combined session stats** in the context
+  popover: the session's own usage, the summed usage of its sub-agents,
+  and the combined total, each with requests, tokens, and cost.
+
+### Changed
+
+- **The main agent is now explicitly taught to work efficiently.** The
+  system prompt gained an EFFICIENCY section — understand first with one
+  batch of parallel reads, plan once, execute directly, verify only when
+  risk exists — and lost the old mandatory re-read-after-every-write
+  rule and the "use your 80-round-trip budget" step-incentive.
+- **The composer's controls, per the owner's spec:** Add Context is now
+  just the paperclip icon; the model button shows only the model name
+  (provider on the tooltip); the provider→model flyout measures the
+  viewport and can no longer be cut off at the bottom or right; the
+  context donut dropped its inline percentage (details on hover) and its
+  popover now stays open while you move the pointer into it, with
+  amber/red warning colors as the window fills.
+- **The sub-agent panel, de-sloped:** the final report no longer carries
+  the accent left rail (it reads like every other message, with a quiet
+  label); the todo card shows the FULL checklist with per-item status
+  instead of just a progress bar; the stats footer is centered and
+  visually refined.
+- **Delegations and file edits stand out in the transcript:** collapsed
+  tool rows for `delegate_task` and file edits now carry a tinted icon
+  chip so agent calls and file changes are visible at a glance, without
+  expanding anything.
 
 ## [0.50.0] - 2026-08-30
 

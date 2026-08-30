@@ -78,6 +78,14 @@ import {
  *    server history's current URL differs from what we last commanded the
  *    webview to load, we navigate the webview (agent actions render live).
  *
+ * ROUND-51 (R51-a) — native-failure honesty: if the native backend REJECTS
+ * (`nativeTabCreate` failing = WebView2 runtime missing/broken, command
+ * error…), the panel flips itself into the proxy path for the rest of the
+ * mount (`nativeDisabled`) instead of sitting on a dead panel — the owner
+ * still browses, the error card explains the fallback, and the status
+ * footnote's ENGINE BADGE shows which renderer is live ("Chromium
+ * (native)" vs "Proxy fallback") so nobody has to guess.
+ *
  * Ticket auth (iframe path): iframes cannot send Authorization headers, so
  * each tab mints a `bt` ticket (POST /browser/session) and every proxy URL
  * carries it. A dead ticket renders the backend's HTML 401 page INSIDE the
@@ -311,7 +319,14 @@ export function BrowserPanel({ projectId, tab }: { projectId: string; tab: Right
   // ── ROUND-50 (R50-a): native-mode state ─────────────────────────────────
   // Checked per render (NOT module level) so tests can toggle the mocked
   // availability per test. In the shipped app this is constant per process.
-  const nativeMode = isNativeBrowserAvailable();
+  //
+  // ROUND-51 (R51-a): `nativeMode` is the EFFECTIVE mode — availability
+  // minus a native failure already seen this mount (`nativeDisabled`). A
+  // rejected native call flips the panel into the proxy path (see
+  // nativeFail), so a broken webview backend degrades instead of dying.
+  const nativeAvailable = isNativeBrowserAvailable();
+  const [nativeDisabled, setNativeDisabled] = useState(false);
+  const nativeMode = nativeAvailable && !nativeDisabled;
   /** Placeholder for the page area — the native webview floats above it. */
   const placeholderRef = useRef<HTMLDivElement | null>(null);
   /** True once this tab's native webview is known to exist (create resolved). */
@@ -429,7 +444,17 @@ export function BrowserPanel({ projectId, tab }: { projectId: string; tab: Right
   const nativeFail = useCallback(
     (err: unknown) => {
       const message = err instanceof Error ? err.message : String(err);
-      useBrowserTabStore.getState().setError(tabId, `Native browser failed: ${message}`);
+      // ROUND-51 (R51-a): a native backend that REJECTS (WebView2 runtime
+      // missing/broken, command failure) must not leave a dead panel. Flip
+      // this panel into the proxy path for the rest of the mount — the
+      // store still holds the URL, so the iframe renders it and browsing
+      // continues — and say so in the error card. nativeDisabled never
+      // resets this mount: retrying a broken webview backend automatically
+      // would flip-flop the renderer under the user.
+      setNativeDisabled(true);
+      useBrowserTabStore
+        .getState()
+        .setError(tabId, `Native browser unavailable (${message}) — fell back to the proxied renderer.`);
     },
     [tabId],
   );
@@ -1116,6 +1141,30 @@ export function BrowserPanel({ projectId, tab }: { projectId: string; tab: Right
         className="shrink-0 flex items-center gap-1.5 px-3 h-6 border-t text-[10px]"
         style={{ borderColor: styles.border, color: styles.textTertiary }}
       >
+        {/* ROUND-51 (R51-a): the ENGINE BADGE — the owner must be able to SEE
+            which renderer is live at a glance (the recurring "is it the real
+            browser or the proxy?" question). Native = green pill; the proxy
+            path (non-Tauri runs AND native-failure fallbacks) = neutral pill. */}
+        <span
+          data-testid="browser-engine-badge"
+          className="shrink-0 px-1.5 py-0.5 rounded-full font-medium whitespace-nowrap"
+          style={{
+            background: nativeMode
+              ? styles.isDark
+                ? "rgba(16,185,129,0.16)"
+                : "rgba(16,185,129,0.12)"
+              : styles.subtle,
+            color: nativeMode ? (styles.isDark ? "#6ee7b7" : "#047857") : styles.textTertiary,
+            border: `1px solid ${nativeMode ? "rgba(16,185,129,0.35)" : styles.border}`,
+          }}
+          title={
+            nativeMode
+              ? "Pages render in a real WebView2 (Chromium) child webview — full CSS/JS, shared persistent profile"
+              : "Pages render through the sidecar fetch-proxy iframe (sandboxed) — this is also the automatic fallback when the native engine is unavailable"
+          }
+        >
+          {nativeMode ? "Chromium (native)" : "Proxy fallback"}
+        </span>
         <Info size={10} className="shrink-0" />
         <span className="truncate">
           {nativeMode ? (

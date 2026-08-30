@@ -52,13 +52,18 @@ import type { RightSidebarTab } from "../../lib/right-sidebar-store";
  *                       accent-tinted task bubble (AgentChatPanel's
  *                       UserMessage language, scaled for the sidebar)
  *   message.assistant → a markdown bubble (FileViewerPanel's shared Markdown
- *                       renderer); the LAST one on a terminal run wears the
- *                       accent rail + "Final report" label (the old Report
- *                       card's affordance, now inline)
+ *                       renderer); the LAST one on a terminal run wears a
+ *                       subtle "Final report" mini-label (ROUND-51 (R51-b):
+ *                       the old accent left rail + accent border are GONE —
+ *                       the owner's "AI slope" complaint; the report bubble's
+ *                       border is now IDENTICAL to every other assistant
+ *                       bubble, only the quiet tertiary label marks it)
  *   tool.use          → one-line rows in the SAME visual style as the main
  *                       chat's tool lines (icon + past-tense label + mono
  *                       argsSummary + ✓/✗/… state + expandable output)
- *   todo.update       → a compact progress line (bar + n/m + current item)
+ *   todo.update       → a compact FULL checklist (ROUND-51 (R51-b): progress
+ *                       bar + n/m header, then EVERY item as a status-glyph
+ *                       row — the owner only saw the progress before)
  *   approval.*        → compact INFORMATIONAL cards — decisions happen in the
  *                       PARENT chat, where the ask lands with this child's
  *                       code attribution (R48-e1 wire contract)
@@ -74,6 +79,14 @@ import type { RightSidebarTab } from "../../lib/right-sidebar-store";
  * resolved from the live SSE map, falling back to the polled /subagents row)
  * + role chip + title + StatusChip + an elapsed clock that now ticks EVERY
  * SECOND (was 5s — the owner's complaint).
+ *
+ * ROUND-51 (R51-b, owner's fourth test round): (1) the final-report bubble
+ * lost its accent left rail + accent border (the "AI slope" complaint —
+ * NO colored rails/gradients on any entry; only a quiet tertiary
+ * "Final report" mini-label distinguishes it); (2) todo.update now renders
+ * the FULL checklist (every item with its status glyph — the owner only saw
+ * the progress bar before); (3) the stats footer is horizontally CENTERED
+ * with hairline dividers (was left-aligned with a stretching model cell).
  *
  * ROUND-50 (R50-b, owner: the panel must show "the actual live responses…
  * the raw data, the raw thinking, the raw text of it, streamed live just
@@ -189,10 +202,28 @@ interface ApprovalCardData {
 }
 
 interface TodoCardData {
+  /** Derived from the full snapshot — the one-line header's bar + n/m. */
   done: number;
   total: number;
-  current: string | null;
+  /** ROUND-51 (R51-b, owner: "apparently I do not see the full to-do list. I
+   * only see the progress of the to-do list"): the FULL item list of the
+   * snapshot — every item renders as a status-glyph row below the progress
+   * header. The old reducer threw everything but {done,total,current} away.
+   * Capped at MAX_TODO_ITEMS so a runaway snapshot can't blow up the
+   * transcript fold (done/total above stay derived from the FULL array). */
+  items: TodoItemData[];
 }
+
+/** One todo entry of a todo.update snapshot (status-glyph + text row). */
+interface TodoItemData {
+  content: string;
+  status: "completed" | "in_progress" | "pending";
+}
+
+/** Defensive cap on rendered todo rows (the backend's todo_write already
+ * rejects >30 items, but the panel parses the event log UNVALIDATED — a
+ * corrupted/hostile snapshot must not render 10k rows). */
+const MAX_TODO_ITEMS = 50;
 
 interface ErrorCardData {
   code: string;
@@ -263,10 +294,18 @@ function parseSubAgentTranscript(events: SessionEvent[]): {
         ? (payload.todos as Array<{ content?: unknown; status?: unknown }>)
         : [];
       if (raw.length > 0) {
-        const todos = raw.map((t) => ({
+        const todos: TodoItemData[] = raw.map((t): TodoItemData => ({
           content: typeof t.content === "string" ? t.content : "",
-          status: t.status === "completed" || t.status === "in_progress" ? t.status : ("pending" as const),
+          status:
+            t.status === "completed"
+              ? "completed"
+              : t.status === "in_progress"
+                ? "in_progress"
+                : "pending",
         }));
+        // ROUND-51 (R51-b): keep the FULL item list (capped) — the panel
+        // renders every row; done/total stay derived from the whole snapshot
+        // so the header count survives the cap.
         items.push({
           kind: "todo",
           seq: e.seq,
@@ -274,7 +313,7 @@ function parseSubAgentTranscript(events: SessionEvent[]): {
           todos: {
             done: todos.filter((t) => t.status === "completed").length,
             total: todos.length,
-            current: todos.find((t) => t.status === "in_progress")?.content ?? null,
+            items: todos.slice(0, MAX_TODO_ITEMS),
           },
         });
       }
@@ -755,7 +794,11 @@ function TaskBubble({ content }: { content: string }) {
 
 /** An assistant message — a markdown bubble in the main chat's visual
  * language (shared Markdown renderer). The LAST one on a terminal run is the
- * child's final report: accent left rail + a "Final report" mini-label. */
+ * child's final report: identical border/background to every other assistant
+ * bubble (ROUND-51 (R51-b): the accent left rail + accent border are removed —
+ * the owner's "AI slope" complaint; a colored rail on the final answer reads
+ * as decoration, not information), marked ONLY by a quiet tertiary
+ * "Final report" mini-label above the markdown. */
 function AssistantBubble({ content, isReport }: { content: string; isReport: boolean }) {
   const styles = useThemeStyles();
   return (
@@ -767,13 +810,16 @@ function AssistantBubble({ content, isReport }: { content: string; isReport: boo
         className="min-w-0 flex-1 rounded-[12px] px-2.5 py-1.5 border"
         style={{
           background: styles.isDark ? "rgba(0,0,0,0.14)" : styles.subtle,
-          borderColor: isReport ? styles.accent : styles.borderSubtle,
-          borderLeft: isReport ? `3px solid ${styles.accent}` : undefined,
+          borderColor: styles.borderSubtle,
         }}
         data-testid="subagent-assistant-bubble"
       >
         {isReport ? (
-          <div className="text-[9px] font-bold uppercase tracking-[0.14em] mb-1" style={{ color: styles.accent }}>
+          <div
+            className="text-[9px] font-semibold uppercase tracking-[0.14em] mb-1"
+            style={{ color: styles.textTertiary }}
+            data-testid="subagent-final-report-label"
+          >
             Final report
           </div>
         ) : null}
@@ -868,8 +914,15 @@ function TranscriptToolRow({ tool }: { tool: ToolCard }) {
   );
 }
 
-/** todo.update — a compact progress line: bar + done/total + the current
- * in-progress item (truncated, full text on the title). */
+/** todo.update — the FULL checklist (ROUND-51 (R51-b), owner: "I do not see
+ * the full to-do list. I only see the progress of the to-do list"): a
+ * one-line header (icon + progress bar + n/m) above EVERY item as a compact
+ * status-glyph row — ✓ (success) for completed, a pulsing dot (running blue)
+ * for in-progress, ○ (tertiary) for pending. Long lists scroll inside a
+ * max-h-40 clamp so a 30-item plan doesn't blow up the panel. NOTE: this
+ * renders from the POLLED event log — the child's todo_write only persists
+ * todo.update events (the SSE stream carries no todo frames), and the
+ * 600ms-while-running poll keeps the checklist live during a run. */
 function TodoLine({ todos }: { todos: TodoCardData }) {
   const styles = useThemeStyles();
   const pct = todos.total > 0 ? (todos.done / todos.total) * 100 : 0;
@@ -878,28 +931,67 @@ function TodoLine({ todos }: { todos: TodoCardData }) {
       initial={{ opacity: 0, y: -4 }}
       animate={{ opacity: 1, y: 0 }}
       transition={{ duration: 0.2, ease }}
-      className="flex items-center gap-2 h-7 w-full max-w-full px-1.5 -ml-1.5 rounded-md min-w-0"
+      className="rounded-[10px] border px-2 py-1.5 min-w-0"
+      style={{
+        background: styles.isDark ? "rgba(0,0,0,0.18)" : styles.subtle,
+        borderColor: styles.borderSubtle,
+      }}
       data-testid="subagent-todo-line"
     >
-      <ListChecks size={11} className="shrink-0" style={{ color: styles.accent }} />
-      <div className="w-16 h-1.5 rounded-full overflow-hidden shrink-0" style={{ background: styles.subtle }}>
-        <div
-          className="h-full rounded-full transition-all"
-          style={{ width: `${Math.max(todos.done > 0 ? 10 : 3, pct)}%`, background: styles.accent }}
-        />
-      </div>
-      <span className="shrink-0 font-mono text-[10px] font-bold tabular-nums" style={{ color: styles.textSecondary }}>
-        {todos.done}/{todos.total}
-      </span>
-      {todos.current !== null ? (
+      {/* One-line header: icon + progress bar + n/m. */}
+      <div className="flex items-center gap-2 min-w-0">
+        <ListChecks size={11} className="shrink-0" style={{ color: styles.textTertiary }} />
+        <div className="w-16 h-1.5 rounded-full overflow-hidden shrink-0" style={{ background: styles.subtleHover }}>
+          <div
+            className="h-full rounded-full transition-all"
+            style={{ width: `${Math.max(todos.done > 0 ? 10 : 3, pct)}%`, background: styles.accent }}
+          />
+        </div>
         <span
-          className="min-w-0 flex-1 truncate text-[10.5px]"
-          style={{ color: styles.textTertiary }}
-          title={todos.current}
+          className="shrink-0 font-mono text-[10px] font-bold tabular-nums"
+          style={{ color: styles.textSecondary }}
         >
-          {todos.current}
+          {todos.done}/{todos.total}
         </span>
-      ) : null}
+      </div>
+      {/* The full checklist — every item with its status glyph. */}
+      <div className="mt-1 flex flex-col gap-0.5 max-h-40 overflow-y-auto min-w-0">
+        {todos.items.map((item, i) => (
+          <div
+            key={`td-${i}`}
+            className="flex items-center gap-1.5 min-w-0"
+            data-testid="subagent-todo-item"
+            data-status={item.status}
+          >
+            <span className="shrink-0 w-3.5 flex items-center justify-center" aria-hidden>
+              {item.status === "completed" ? (
+                <span className="text-[10px] leading-none" style={{ color: SEMANTIC_COLORS.success }}>
+                  ✓
+                </span>
+              ) : item.status === "in_progress" ? (
+                <PulsingDot color={RUNNING_BLUE} size={5} />
+              ) : (
+                <span className="text-[10px] leading-none" style={{ color: styles.textTertiary }}>
+                  ○
+                </span>
+              )}
+            </span>
+            <span
+              className="min-w-0 flex-1 truncate text-[10.5px] leading-[1.4]"
+              title={item.content}
+              style={{
+                color:
+                  item.status === "in_progress"
+                    ? styles.textSecondary
+                    : styles.textTertiary,
+                fontWeight: item.status === "in_progress" ? 500 : 400,
+              }}
+            >
+              {item.content}
+            </span>
+          </div>
+        ))}
+      </div>
     </motion.div>
   );
 }
@@ -1069,36 +1161,52 @@ function LiveStreamSegment({ entry, streaming }: { entry: SubAgentLiveEntry; str
   );
 }
 
-/** One micro-typography cell of the stats bar: an uppercase tracking label
- * above a mono tabular value. */
+/** One micro-typography cell of the stats bar: a centered uppercase
+ * tracking label above a mono tabular value (ROUND-51 (R51-b): both
+ * centered — the footer is a balanced, centered row now, no stretching
+ * flex-1 cells). `valueMaxWidth` caps wide values (the model id) with a
+ * truncate; the cell's `title` carries the full text. */
 function StatCell({
   label,
   value,
   title,
   styles,
   testId,
+  valueMaxWidth,
 }: {
   label: string;
   value: string;
   title?: string;
   styles: ReturnType<typeof useThemeStyles>;
   testId?: string;
+  valueMaxWidth?: string;
 }) {
   return (
-    <span className="flex flex-col min-w-0 shrink-0" title={title} data-testid={testId}>
+    <span className="flex flex-col items-center min-w-0 shrink-0" title={title} data-testid={testId}>
       <span
-        className="text-[8px] font-bold uppercase tracking-[0.14em] leading-[1.1]"
+        className="text-[8px] font-bold uppercase tracking-[0.14em] leading-[1.1] text-center"
         style={{ color: styles.textTertiary }}
       >
         {label}
       </span>
       <span
-        className="font-mono text-[10px] font-semibold tabular-nums leading-[1.3] truncate max-w-[120px]"
-        style={{ color: styles.textSecondary }}
+        className="font-mono text-[10px] font-semibold tabular-nums leading-[1.3] truncate text-center"
+        style={{
+          color: styles.textSecondary,
+          ...(valueMaxWidth !== undefined ? { maxWidth: valueMaxWidth } : {}),
+        }}
       >
         {value}
       </span>
     </span>
+  );
+}
+
+/** A hairline between the footer's stat cells — the rhythm of the centered
+ * row (ROUND-51 (R51-b)). */
+function StatDivider({ styles }: { styles: ReturnType<typeof useThemeStyles> }) {
+  return (
+    <span className="h-4 w-px shrink-0" style={{ background: styles.borderSubtle }} aria-hidden />
   );
 }
 
@@ -1107,6 +1215,14 @@ function StatCell({
  * very bottom of its responses in live view: the total time taken, the total
  * tokens sent, the total tokens received, the tokens per second feed, the
  * model which was being used") — pinned at the panel's very bottom.
+ *
+ * ROUND-51 (R51-b, owner: "it should be centered and it should be given a
+ * beautiful-looking user interface"): the row is now HORIZONTALLY CENTERED —
+ * five compact centered cells (label above value) separated by hairline
+ * dividers, tight TIME / SENT / RECV / TOK/S / MODEL labels so the row fits
+ * the ~360px sidebar without wrapping, model truncated (~14 chars, full id
+ * on the title). No flex-1 stretching. Presentation only — the VALUE RULES
+ * are unchanged:
  *
  * VALUE RULES:
  *  - While queued/running: LIVE values — the store's finish-event token
@@ -1166,7 +1282,7 @@ function SubAgentStatsBar({
 
   return (
     <div
-      className="shrink-0 flex items-end gap-3.5 px-2.5 h-9 border-t overflow-hidden"
+      className="shrink-0 flex items-center justify-center gap-3 px-2.5 h-10 border-t overflow-hidden"
       style={{
         borderColor: styles.borderSubtle,
         background: styles.isDark ? "rgba(0,0,0,0.18)" : styles.subtle,
@@ -1174,48 +1290,45 @@ function SubAgentStatsBar({
       data-testid="subagent-stats-footer"
     >
       <StatCell
-        label={working ? "Time" : "Total time"}
+        label="TIME"
         value={elapsedFromMs(elapsedMs)}
+        title={working ? "elapsed (live)" : "total time (createdAt → updatedAt)"}
         styles={styles}
         testId="subagent-stat-time"
       />
+      <StatDivider styles={styles} />
       <StatCell
-        label="Sent"
+        label="SENT"
         value={`↑ ${fmtTokens(inputTokens)}`}
         title={`${inputTokens} input tokens`}
         styles={styles}
         testId="subagent-stat-in"
       />
+      <StatDivider styles={styles} />
       <StatCell
-        label="Received"
+        label="RECV"
         value={`↓ ${fmtTokens(outputTokens)}`}
         title={`${outputTokens} output tokens`}
         styles={styles}
         testId="subagent-stat-out"
       />
+      <StatDivider styles={styles} />
       <StatCell
-        label="Tok/s"
+        label="TOK/S"
         value={tps}
         title="output tokens per second"
         styles={styles}
         testId="subagent-stat-tps"
       />
-      <span className="flex flex-col min-w-0 flex-1">
-        <span
-          className="text-[8px] font-bold uppercase tracking-[0.14em] leading-[1.1]"
-          style={{ color: styles.textTertiary }}
-        >
-          Model
-        </span>
-        <span
-          className="font-mono text-[10px] font-semibold leading-[1.3] truncate"
-          style={{ color: styles.textSecondary }}
-          title={model ?? undefined}
-          data-testid="subagent-stat-model"
-        >
-          {model ?? "—"}
-        </span>
-      </span>
+      <StatDivider styles={styles} />
+      <StatCell
+        label="MODEL"
+        value={model ?? "—"}
+        title={model ?? undefined}
+        styles={styles}
+        testId="subagent-stat-model"
+        valueMaxWidth="88px"
+      />
     </div>
   );
 }

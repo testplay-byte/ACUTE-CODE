@@ -1,11 +1,49 @@
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { fetchSessionContext, type SessionContextReport } from "../../../lib/api";
+import {
+  fetchSessionContext,
+  type SessionContextReport,
+  type SessionUsageTotals,
+} from "../../../lib/api";
 import { fmtTokens } from "../../../lib/format";
 import { SEMANTIC_COLORS } from "../../../lib/semantics";
 import { useThemeStyles } from "../../../lib/use-theme-styles";
 import { withAlpha } from "../../dashboard/helpers";
 import { useDismiss } from "./composer-utils";
+
+// ── ROUND-51 (R51-c): donut color grading ────────────────────────────────────
+
+/** Ring stays the theme accent below this fraction of the window used. */
+export const CONTEXT_DONUT_WARN = 0.6;
+/** Ring turns danger ABOVE this fraction (amber in between). */
+export const CONTEXT_DONUT_DANGER = 0.85;
+/**
+ * The amber the codebase already uses for mid-tier warnings (ApprovalLine,
+ * SubAgentPanel) — an intentional, documented raw-hex exception like
+ * SEMANTIC_COLORS.
+ */
+export const DONUT_WARN_COLOR = "#f59e0b";
+
+/**
+ * ROUND-51 (R51-c): the ring color by context-window pressure — accent while
+ * comfortable, amber when filling, danger past the point where one large tool
+ * output could overflow the window. Pure; exported for tests.
+ */
+export function contextDonutColor(usedTokens: number, contextWindow: number, accent: string): string {
+  if (contextWindow <= 0) return accent;
+  const frac = Math.min(1, usedTokens / contextWindow);
+  if (frac > CONTEXT_DONUT_DANGER) return SEMANTIC_COLORS.danger;
+  if (frac >= CONTEXT_DONUT_WARN) return DONUT_WARN_COLOR;
+  return accent;
+}
+
+/**
+ * ROUND-51 (R51-c): the hover-bridge grace period — leaving the trigger (or
+ * the popover) starts this timer; entering the other side cancels it. The fix
+ * for the owner's "When I move my mouse up on the actual window… it does not
+ * keep the window open."
+ */
+const POPOVER_CLOSE_DELAY_MS = 220;
 
 /** SVG donut ring — the toolbar icon and the popover's big donut share the math. */
 function DonutRing({
@@ -82,7 +120,7 @@ function BreakdownRow({
   );
 }
 
-/** A label · value row for the session-totals section. */
+/** A label · value row for the session-totals groups. */
 function StatRow({ label, value }: { label: string; value: string }) {
   const styles = useThemeStyles();
   return (
@@ -97,6 +135,42 @@ function StatRow({ label, value }: { label: string; value: string }) {
   );
 }
 
+const ZERO_TOTALS: SessionUsageTotals = { inputTokens: 0, outputTokens: 0, requests: 0, costUsd: 0 };
+
+/**
+ * ROUND-51 (R51-c): one usage group of the Session section (owner: "The
+ * actual main sessions stats and the sub-agent sessions stats will be kept
+ * separate. They will not be kept separate completely. They will be shown as
+ * combined all together too.") — requests, tokens sent ↑ / received ↓, cost.
+ * A group with no activity shows zeros (cost "—").
+ */
+function UsageGroup({
+  label,
+  totals,
+  group,
+}: {
+  label: string;
+  totals: SessionUsageTotals;
+  group: "main" | "subagents" | "combined";
+}) {
+  const styles = useThemeStyles();
+  return (
+    <div
+      className={`flex flex-col gap-1 pt-1.5 ${group === "main" ? "" : "mt-1 border-t"}`}
+      style={group === "main" ? undefined : { borderColor: styles.borderSubtle }}
+      data-usage-group={group}
+    >
+      <div className="text-[9.5px] font-bold uppercase tracking-wider pb-0.5" style={{ color: styles.textTertiary }}>
+        {label}
+      </div>
+      <StatRow label="Requests" value={String(totals.requests)} />
+      <StatRow label="Tokens sent ↑" value={fmtTokens(totals.inputTokens)} />
+      <StatRow label="Tokens received ↓" value={fmtTokens(totals.outputTokens)} />
+      <StatRow label="Cost" value={totals.costUsd > 0 ? `$${totals.costUsd.toFixed(4)}` : "—"} />
+    </div>
+  );
+}
+
 /**
  * ROUND-50 (R50-c2): the context donut (owner: "It will show me the context
  * window of the model… a donut-shaped circle, which would show the total
@@ -106,9 +180,20 @@ function StatRow({ label, value }: { label: string; value: string }) {
  * actual costs, the total token consumption, and all other stats for the
  * specific session").
  *
- * Small ~22px donut + compact % label in the toolbar; HOVER (pointer) or
- * CLICK (touch) opens the detail popover: big donut + "% used", the six
- * breakdown slices with mini-bars, the cache line, and the session totals.
+ * ROUND-51 (R51-c) per the owner's fourth test round:
+ *  - the toolbar shows ONLY the ~22px ring (owner: "no need to show the
+ *    actual percentage used… when the user hovers then the other details will
+ *    show") — the % lives in the popover's big donut + the button title;
+ *  - HOVER BRIDGE: leaving the trigger starts a ~220ms close timer and
+ *    entering the popover cancels it (and vice versa) — the popover no longer
+ *    snaps shut in the gap between the button and itself. Click still
+ *    pins/unpins (touch path); focus opens, blur gets the same grace period;
+ *  - the ring color grades by pressure (accent → amber → danger —
+ *    contextDonutColor), both the small and the big donut;
+ *  - the Session section splits into Main agent / Sub-agents / Combined
+ *    (the report's usage split; a pre-R51 sidecar falls back to the flat
+ *    totals with zero sub-agents).
+ *
  * Data: fetchSessionContext(sessionId, effectiveModel) via react-query — the
  * transcript length rides the query key so the numbers refresh whenever the
  * conversation changes; 30s staleTime between.
@@ -128,8 +213,29 @@ export function ContextDonut({
   const styles = useThemeStyles();
   const [open, setOpen] = useState(false);
   const [pinned, setPinned] = useState(false);
+  // ROUND-51 (R51-c): the shared close timer + a pinned mirror the timeout
+  // callback can read at fire time (state would be stale in the closure).
+  const pinnedRef = useRef(false);
+  const closeTimerRef = useRef<number | null>(null);
+  const clearCloseTimer = (): void => {
+    if (closeTimerRef.current !== null) {
+      window.clearTimeout(closeTimerRef.current);
+      closeTimerRef.current = null;
+    }
+  };
+  const scheduleClose = (): void => {
+    clearCloseTimer();
+    closeTimerRef.current = window.setTimeout(() => {
+      closeTimerRef.current = null;
+      if (!pinnedRef.current) setOpen(false);
+    }, POPOVER_CLOSE_DELAY_MS);
+  };
+  useEffect(() => clearCloseTimer, []);
+
   const popoverRef = useDismiss(open, () => {
+    clearCloseTimer();
     setOpen(false);
+    pinnedRef.current = false;
     setPinned(false);
   });
 
@@ -146,6 +252,9 @@ export function ContextDonut({
   const window_ = data?.contextWindow ?? 0;
   const pct = data !== null && window_ > 0 ? Math.min(100, (used / window_) * 100) : null;
 
+  // ROUND-51 (R51-c): the graded ring color (accent → amber → danger).
+  const ringColor = contextDonutColor(used, window_, styles.accent);
+
   const summaryText =
     data !== null
       ? `Context window: ${pct !== null ? Math.round(pct) : 0}% used (${fmtTokens(used)} of ${fmtTokens(window_)} tokens)`
@@ -158,18 +267,33 @@ export function ContextDonut({
       ? `${Math.round(data.cache.hitRate * 100)}%`
       : "—";
 
+  // ROUND-51 (R51-c): the main / sub-agents / combined usage split. A
+  // pre-R51 sidecar (or an error fallback) has no `usage` object — main
+  // falls back to the flat sessionTotals, sub-agents honestly read zero.
+  const split = data?.usage ?? null;
+  const mainTotals = split?.main ?? data?.sessionTotals ?? ZERO_TOTALS;
+  const subagentTotals = split?.subagents ?? ZERO_TOTALS;
+  const combinedTotals = split?.combined ?? mainTotals;
+
   return (
     <div className="relative shrink-0" ref={popoverRef}>
       <button
         type="button"
         onClick={() => {
           // Click toggles the PIN (touch path); hover alone also opens.
-          setPinned((v) => {
-            const next = !v;
-            setOpen(next ? true : false);
-            return next;
-          });
+          clearCloseTimer();
+          const next = !pinned;
+          pinnedRef.current = next;
+          setPinned(next);
+          setOpen(next);
         }}
+        onFocus={() => {
+          // ROUND-51 (R51-c): keyboard parity — focus opens (blur gets the
+          // same grace period as the pointer via scheduleClose).
+          clearCloseTimer();
+          setOpen(true);
+        }}
+        onBlur={scheduleClose}
         aria-label={summaryText}
         aria-haspopup="dialog"
         aria-expanded={open}
@@ -178,25 +302,27 @@ export function ContextDonut({
         className="flex items-center gap-1 h-7 px-1.5 rounded-[10px] transition-colors"
         style={{ color: styles.textSecondary }}
         onMouseEnter={(e) => {
+          clearCloseTimer();
           setOpen(true);
           e.currentTarget.style.background = styles.subtleHover;
         }}
         onMouseLeave={(e) => {
-          if (!pinned) setOpen(false);
+          // ROUND-51 (R51-c): don't close instantly — start the grace timer
+          // so the pointer can cross the gap into the popover.
+          scheduleClose();
           e.currentTarget.style.background = "transparent";
         }}
       >
+        {/* ROUND-51 (R51-c): icon-only in the toolbar (owner: "no need to
+            show the actual percentage used") — the % lives in the popover. */}
         <DonutRing
           size={22}
           stroke={3}
           used={used}
           limit={window_}
-          color={styles.accent}
+          color={ringColor}
           track={report.isError ? withAlpha(SEMANTIC_COLORS.danger, 0.4) : styles.subtle}
         />
-        <span className="font-mono text-[10px] font-bold shrink-0" data-donut-label>
-          {report.isError ? "—" : pct !== null ? `${Math.round(pct)}%` : "…"}
-        </span>
       </button>
       {open ? (
         <div
@@ -205,6 +331,8 @@ export function ContextDonut({
           data-context-popover
           className="absolute bottom-9 right-0 w-72 rounded-2xl border p-2.5 z-50"
           style={{ background: styles.card, borderColor: styles.border, boxShadow: styles.bentoShadow }}
+          onMouseEnter={clearCloseTimer}
+          onMouseLeave={scheduleClose}
         >
           {data === null ? (
             <div className="text-[11px] px-1 py-2" style={{ color: styles.textTertiary }}>
@@ -224,7 +352,7 @@ export function ContextDonut({
                     stroke={5}
                     used={used}
                     limit={window_}
-                    color={styles.accent}
+                    color={ringColor}
                     track={styles.subtle}
                   />
                   <span className="absolute font-mono text-[10px] font-bold" style={{ color: styles.text }}>
@@ -275,18 +403,15 @@ export function ContextDonut({
                   ) : null}
                 </span>
               </div>
-              {/* Session totals (owner: "at the very bottom, in a dedicated section") */}
+              {/* Session totals — Main agent / Sub-agents / Combined
+                  (owner, R51: separate BUT also combined). */}
               <div className="flex flex-col gap-1 px-1 pt-1" data-session-totals>
                 <div className="font-mono text-[9px] font-bold uppercase tracking-widest pb-0.5" style={{ color: styles.textTertiary }}>
                   Session
                 </div>
-                <StatRow label="Requests" value={String(data.sessionTotals.requests)} />
-                <StatRow label="Tokens sent ↑" value={fmtTokens(data.sessionTotals.inputTokens)} />
-                <StatRow label="Tokens received ↓" value={fmtTokens(data.sessionTotals.outputTokens)} />
-                <StatRow
-                  label="Cost"
-                  value={data.sessionTotals.costUsd > 0 ? `$${data.sessionTotals.costUsd.toFixed(4)}` : "—"}
-                />
+                <UsageGroup label="Main agent" totals={mainTotals} group="main" />
+                <UsageGroup label="Sub-agents" totals={subagentTotals} group="subagents" />
+                <UsageGroup label="Combined" totals={combinedTotals} group="combined" />
               </div>
             </>
           )}

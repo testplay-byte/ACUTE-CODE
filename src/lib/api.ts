@@ -285,6 +285,13 @@ export interface AttachmentReadResult {
  * first provider call reports input tokens; `sessionTotals` are the
  * session's lifetime sums from usage_events.
  */
+export interface SessionUsageTotals {
+  inputTokens: number;
+  outputTokens: number;
+  requests: number;
+  costUsd: number;
+}
+
 export interface SessionContextReport {
   model: string;
   providerId: string;
@@ -303,11 +310,20 @@ export interface SessionContextReport {
     cachedInputTokens: number;
     hitRate: number | null;
   };
-  sessionTotals: {
-    inputTokens: number;
-    outputTokens: number;
-    requests: number;
-    costUsd: number;
+  sessionTotals: SessionUsageTotals;
+  /**
+   * ROUND-51 (R51-c): the Main agent / Sub-agents / Combined usage split for
+   * the popover's Session section (owner: main-session stats and sub-agent
+   * stats kept separate BUT also shown combined). `main` equals the flat
+   * sessionTotals; `subagents` sums the DIRECT child sessions' usage_events
+   * (the set GET /sessions/:id/subagents lists); `combined` is their sum.
+   * OPTIONAL: a pre-R51 sidecar returns only the flat sessionTotals —
+   * consumers fall back (main = sessionTotals, subagents = zeros).
+   */
+  usage?: {
+    main: SessionUsageTotals;
+    subagents: SessionUsageTotals;
+    combined: SessionUsageTotals;
   };
 }
 

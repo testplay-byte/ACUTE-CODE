@@ -953,9 +953,17 @@ describe("streamed turn runtime (round-16)", () => {
     const emitted: Array<{ type: string }> = [];
     // Mock that CALLS TOOLS but never signals completion — the outer loop
     // continues up to maxOuterLoops (5).
+    // ROUND-51 (R51-f): the args VARY per iteration. The original fixture
+    // repeated the IDENTICAL list_dir call every iteration — exactly the
+    // no-progress loop the new loop-hygiene guard exists to stop (it would
+    // nudge at 3 and halt the turn at 5 before the cap event fired). The
+    // test's intent is unchanged: tool-using iterations without a completion
+    // signal run to the maxOuterLoops cap.
+    let streamCalls = 0;
     const chatStream = async function* (): AsyncGenerator<import("../src/agents/chat").StreamChatEvent> {
-      yield { type: "tool-call", toolName: "list_dir", argsSummary: "path: ." };
-      yield { type: "tool-result", toolName: "list_dir", argsSummary: "path: .", ok: true };
+      streamCalls += 1;
+      yield { type: "tool-call", toolName: "list_dir", argsSummary: `path: ./iter-${streamCalls}` };
+      yield { type: "tool-result", toolName: "list_dir", argsSummary: `path: ./iter-${streamCalls}`, ok: true };
       yield { type: "text-delta", delta: "still working" };
       yield { type: "finish", usage: { inputTokens: 10, outputTokens: 5, totalTokens: 15 } };
     };

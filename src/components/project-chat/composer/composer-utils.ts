@@ -245,6 +245,82 @@ export function detectAtToken(value: string, caret: number): AtToken | null {
   return { at, end: caret, query };
 }
 
+// ── Model flyout geometry (ROUND-51 R51-c: no more viewport cutoff) ─────────
+
+/**
+ * A plain-number rect in VIEWPORT coordinates (a DOMRect stripped to the
+ * fields the geometry math needs) — pure in/out keeps the helper testable.
+ */
+export interface PlainRect {
+  top: number;
+  bottom: number;
+  left: number;
+  right: number;
+}
+
+/** Viewport size (window.innerWidth/innerHeight at measure time). */
+export interface ViewportSize {
+  width: number;
+  height: number;
+}
+
+/** Gap kept between the flyout and any viewport edge / the popover (px). */
+export const FLYOUT_MARGIN = 12;
+/** Hard cap on the flyout's height (px) — it scrolls beyond that. */
+export const FLYOUT_MAX_HEIGHT = 280;
+
+export type FlyoutSide = "right" | "left" | "inline";
+
+/**
+ * ROUND-51 (R51-c): where a provider's model flyout should sit, derived from
+ * MEASURED geometry — the fix for the owner's "it gets cut off at the bottom
+ * and on the right side. It does not adapt its placement accordingly to the
+ * available space."
+ *
+ *  - side: "right" when the viewport has FLYOUT_WIDTH + margin of space right
+ *    of the popover, else "left" when it has that much left of the popover,
+ *    else "inline" (the flyout replaces the list — narrow/touch fallback).
+ *  - vertical: prefer top-aligning with the hovered ROW, clamped so the
+ *    flyout stays inside the viewport with FLYOUT_MARGIN margins:
+ *    flyoutViewportTop = clamp(rowTop, 12, viewportH - 12 - flyoutHeight).
+ *    `top` is the ROW-RELATIVE offset (can be negative — shifts the flyout UP
+ *    alongside the popover) for absolutely-positioned callers;
+ *    `viewportTop` is the same value in viewport space for fixed-positioned
+ *    callers. `flyoutHeight` defaults to the worst case (maxHeight) so the
+ *    clamp can only ever be too conservative, never too loose.
+ *  - maxHeight = min(FLYOUT_MAX_HEIGHT, viewportH - 2*margin).
+ *
+ * Pure: plain numbers in, plain numbers out.
+ */
+export function computeFlyoutGeometry(
+  rowRect: PlainRect,
+  popoverRect: PlainRect,
+  viewport: ViewportSize,
+  flyoutWidth: number,
+  flyoutHeight?: number,
+): { side: FlyoutSide; left: number | null; top: number; viewportTop: number; maxHeight: number } {
+  const side: FlyoutSide =
+    viewport.width - popoverRect.right >= flyoutWidth + FLYOUT_MARGIN
+      ? "right"
+      : popoverRect.left >= flyoutWidth + FLYOUT_MARGIN
+        ? "left"
+        : "inline";
+  const maxHeight = Math.min(FLYOUT_MAX_HEIGHT, viewport.height - 2 * FLYOUT_MARGIN);
+  if (side === "inline") {
+    // Inline replaces the list content — no side positioning to compute.
+    return { side, left: null, top: 0, viewportTop: rowRect.top, maxHeight };
+  }
+  const left =
+    side === "right" ? popoverRect.right + FLYOUT_MARGIN : popoverRect.left - flyoutWidth - FLYOUT_MARGIN;
+  // Clamp with a guarded upper bound so a degenerate (tiny) viewport still
+  // yields a sane top instead of inverting the range.
+  const height = flyoutHeight ?? maxHeight;
+  const clamp = (value: number, lo: number, hi: number): number =>
+    Math.min(Math.max(value, lo), Math.max(lo, hi));
+  const viewportTop = clamp(rowRect.top, FLYOUT_MARGIN, viewport.height - FLYOUT_MARGIN - height);
+  return { side, left, top: viewportTop - rowRect.top, viewportTop, maxHeight };
+}
+
 // ── Dismissal (click-outside + Escape) shared by every popover/menu ─────────
 
 /**

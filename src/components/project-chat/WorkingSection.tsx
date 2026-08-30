@@ -103,6 +103,11 @@ const TOOL_LABELS: Record<string, string> = {
   delegate_task: "Delegated",
 };
 
+/** ROUND-51 (R51-d): the in-flight blue for pending tool rows — the same
+ * value as SubAgentPanel's RUNNING_BLUE (kept local: that panel owns the
+ * canonical const; this file only borrows the hue for in-flight states). */
+const RUNNING_BLUE = "#3B82F6";
+
 /** Elapsed seconds between two ISO stamps (0 when unparseable). */
 function elapsedSeconds(start: string, end: string): number {
   const a = Date.parse(start);
@@ -907,6 +912,38 @@ function ApprovalRow({
 
 // ─── ToolLine: the universal one-line tool row ───────────────────────────────
 
+/**
+ * ROUND-51 (R51-d, owner: "When the agents were called those areas should be
+ * highlighted. When the file edits were made those areas should be
+ * highlighted properly. Even if they are minimized, those should be
+ * highlighted a bit better."): the tinted rounded-square icon chip for the
+ * two tool families that CHANGE the project — delegate_task and the
+ * DIFF_TOOLS write/edit set. Their bare 11px glyph was invisible in a
+ * collapsed transcript; the chip shape is readable at a glance. Deliberately
+ * an icon-chip, NOT a left-rail accent (the owner rejected rails in R51-b).
+ * Decorative: the row button already carries the full aria-label.
+ */
+function ToolIconChip({
+  Icon,
+  background,
+  color,
+}: {
+  Icon: LucideIcon;
+  background: string;
+  color: string;
+}) {
+  return (
+    <span
+      className="shrink-0 grid h-5 w-5 place-items-center rounded-[6px]"
+      style={{ background, color }}
+      data-testid="tool-icon-chip"
+      aria-hidden="true"
+    >
+      <Icon size={11} />
+    </span>
+  );
+}
+
 function ToolLine({
   tool,
   sessionId,
@@ -950,6 +987,22 @@ function ToolLine({
   const Icon = TOOL_ICONS[tool.toolName] ?? Terminal;
   const label = TOOL_LABELS[tool.toolName] ?? tool.toolName;
   const waitingApproval = tool.ok === null && !live && tool.toolName === "run_command";
+
+  // ROUND-51 (R51-d): the chip tint per family. Delegations carry the accent
+  // wash (the strongest signal — a sub-agent is working on the project);
+  // file edits stay calm (subtle + textSecondary, the chip SHAPE is the
+  // differentiator) and borrow the in-flight running blue only while
+  // ok === null — the same in-progress language as SubAgentPanel's live rows.
+  // Every other tool keeps the plain glyph, byte-identical to pre-R51.
+  const chipTone =
+    tool.toolName === "delegate_task"
+      ? { background: withAlpha(styles.accent, 0.12), color: styles.accent }
+      : DIFF_TOOLS.has(tool.toolName)
+        ? {
+            background: tool.ok === null ? withAlpha(RUNNING_BLUE, 0.12) : styles.subtle,
+            color: tool.ok === null ? RUNNING_BLUE : styles.textSecondary,
+          }
+        : null;
 
   const toggle = () => {
     userTouched.current = true;
@@ -1016,7 +1069,11 @@ function ToolLine({
         }}
         onMouseLeave={(e) => (e.currentTarget.style.background = "transparent")}
       >
-        <Icon size={11} className="shrink-0" style={{ color: styles.textTertiary }} />
+        {chipTone !== null ? (
+          <ToolIconChip Icon={Icon} background={chipTone.background} color={chipTone.color} />
+        ) : (
+          <Icon size={11} className="shrink-0" style={{ color: styles.textTertiary }} />
+        )}
         <span className="shrink-0 text-[11px] font-semibold" style={{ color: styles.textSecondary }}>
           {label}
         </span>

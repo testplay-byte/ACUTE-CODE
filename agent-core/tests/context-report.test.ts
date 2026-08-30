@@ -14,6 +14,11 @@
  *   - cache/sessionTotals: exact SQL SUMs over usage_events (requests =
  *     COUNT(*), cachedInputTokens null-safe, hitRate = cached/input with
  *     null before the first input token).
+ *   - ROUND-51 (R51-c) `usage`: the Main agent / Sub-agents / Combined
+ *     split — main = the session's own ledger (identical to sessionTotals),
+ *     subagents = the sum over its DIRECT children's usage_events
+ *     (parent_session_id = this session; grandchildren excluded —
+ *     listSubAgents parity), combined = the sum. Flat fields unchanged.
  */
 import { randomUUID } from "node:crypto";
 import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
@@ -153,6 +158,75 @@ describe("GET /api/v1/sessions/:id/context (ROUND-50 R50-c1)", () => {
     const body = response.json();
     expect(body.cache).toEqual({ inputTokens: 0, cachedInputTokens: 0, hitRate: null });
     expect(body.sessionTotals).toEqual({ inputTokens: 0, outputTokens: 0, requests: 0, costUsd: 0 });
+  });
+
+  // ── ROUND-51 (R51-c): the main / sub-agents / combined usage split ─────────
+  it("usage split: main = own ledger, subagents = the DIRECT children's ledgers, combined = the sum", async () => {
+    const { sessionId, agentId } = await fixtureSession("test/model-1");
+    const now = new Date().toISOString();
+    // Main: two rows (same fixture as the exact-sums test above).
+    recordUsage(db, { agentId, sessionId, provider: "openrouter", model: "test/model-1", inputTokens: 30_000, outputTokens: 5_000, cachedInputTokens: 21_000, costUsd: 0.25, ts: now });
+    recordUsage(db, { agentId, sessionId, provider: "openrouter", model: "test/model-1", inputTokens: 20_000, outputTokens: 7_000, costUsd: 0.17, ts: now });
+    // Two sub-agent children with their own ledgers.
+    const childA = createSession(db, { agentId, mode: "single", parentSessionId: sessionId, subRole: "coder" });
+    const childB = createSession(db, { agentId, mode: "single", parentSessionId: sessionId, subRole: "tester" });
+    recordUsage(db, { agentId, sessionId: childA.id, provider: "openrouter", model: "test/model-1", inputTokens: 8_000, outputTokens: 900, costUsd: 0.02, ts: now });
+    recordUsage(db, { agentId, sessionId: childB.id, provider: "openrouter", model: "test/model-1", inputTokens: 5_000, outputTokens: 500, costUsd: 0.01, ts: now });
+    recordUsage(db, { agentId, sessionId: childB.id, provider: "openrouter", model: "test/model-1", inputTokens: 1_000, outputTokens: 100, costUsd: 0.005, ts: now });
+    // A GRANDCHILD (child of childA) is NOT this session's sub-agent — each
+    // parent's report covers its own direct children (listSubAgents parity).
+    const grandchild = createSession(db, { agentId, mode: "single", parentSessionId: childA.id });
+    recordUsage(db, { agentId, sessionId: grandchild.id, provider: "openrouter", model: "test/model-1", inputTokens: 999, outputTokens: 99, costUsd: 0.009, ts: now });
+
+    const response = await authInject({ method: "GET", url: `/api/v1/sessions/${sessionId}/context` });
+    expect(response.statusCode).toBe(200);
+    const body = response.json();
+    // The FLAT fields stay byte-identical (additive shape — old consumers keep working).
+    expect(body.sessionTotals).toEqual({
+      inputTokens: 50_000,
+      outputTokens: 12_000,
+      requests: 2,
+      costUsd: 0.42,
+    });
+    expect(body.usage.main).toEqual({
+      inputTokens: 50_000,
+      outputTokens: 12_000,
+      requests: 2,
+      costUsd: 0.42,
+    });
+    // Sub-agents = the sum over the two DIRECT children (grandchild excluded).
+    expect(body.usage.subagents).toEqual({
+      inputTokens: 14_000,
+      outputTokens: 1_500,
+      requests: 3,
+      costUsd: 0.035,
+    });
+    expect(body.usage.combined).toEqual({
+      inputTokens: 64_000,
+      outputTokens: 13_500,
+      requests: 5,
+      costUsd: 0.455,
+    });
+  });
+
+  it("usage split: a childless session reports ZERO sub-agents (combined = main)", async () => {
+    const { sessionId, agentId } = await fixtureSession("test/model-1");
+    recordUsage(db, {
+      agentId,
+      sessionId,
+      provider: "openrouter",
+      model: "test/model-1",
+      inputTokens: 10,
+      outputTokens: 2,
+      costUsd: 0.001,
+      ts: new Date().toISOString(),
+    });
+    const response = await authInject({ method: "GET", url: `/api/v1/sessions/${sessionId}/context` });
+    expect(response.statusCode).toBe(200);
+    const body = response.json();
+    expect(body.usage.subagents).toEqual({ inputTokens: 0, outputTokens: 0, requests: 0, costUsd: 0 });
+    expect(body.usage.main).toEqual(body.sessionTotals);
+    expect(body.usage.combined).toEqual(body.usage.main);
   });
 
   it("contextWindow resolution: models-table override → catalog default → 200 000 fallback", async () => {
@@ -300,5 +374,108 @@ describe("buildSystemPromptSections (ROUND-50 R50-c1 refactor — behavior ident
     writeFileSync(join(rulesDir, ".acuterules"), "Always write tests first.", "utf8");
     expect(readCustomRules(rulesDir)).toContain("Always write tests first.");
     expect(readCustomRules(tempDir)).toBeUndefined(); // no rules at the bare temp root
+  });
+});
+
+// ── ROUND-51 (R51-d): the main-agent efficiency prompt rework ───────────────
+// Owner: "It takes up way too many steps… It should work in an optimized
+// way." These pins guard the surgical prompts.ts rework: the mandatory
+// read-back verify is gone (smart verification), the budget line stops
+// inviting step inflation, batching is taught, and every preserved directive
+// (round-33 conversational, multi-turn completion, research loop, delegate
+// parallelism) stays byte-present.
+
+describe("prompt efficiency rework (ROUND-51 R51-d)", () => {
+  const ctx = {
+    projectName: "EffProject",
+    rootPath: "/tmp/eff",
+    toolNames: [
+      "read_file",
+      "write_file",
+      "edit_file",
+      "search_code",
+      "list_dir",
+      "todo_write",
+      "delegate_task",
+    ],
+    maxTurns: 30,
+  };
+
+  it("the EFFICIENCY section exists between AGENTIC LOOP and FILE EDITING RULES, with all four teachings", () => {
+    const full = buildProjectSystemPrompt(ctx);
+    expect(full).toContain("## EFFICIENCY — FEWEST STEPS THAT FULLY SOLVE THE TASK");
+    // Placement: right after the AGENTIC LOOP example, before FILE EDITING RULES.
+    const effIdx = full.indexOf("## EFFICIENCY");
+    expect(effIdx).toBeGreaterThan(full.indexOf("## AGENTIC LOOP"));
+    expect(effIdx).toBeLessThan(full.indexOf("## FILE EDITING RULES"));
+    // The four teachings.
+    expect(full).toContain("UNDERSTAND FIRST");
+    expect(full).toContain("MULTIPLE independent tool calls in the SAME message");
+    expect(full).toContain("PLAN ONCE");
+    expect(full).toContain("FEWEST STEPS: more steps ≠ more thorough");
+    expect(full).toContain("CONCISE REASONING");
+    // Included when tools are present — and it rides the identity meter slice
+    // (the context donut's systemPrompt bucket), never tools/memory/meta.
+    const sections = buildSystemPromptSections(ctx);
+    expect(sections.identity).toContain("## EFFICIENCY — FEWEST STEPS THAT FULLY SOLVE THE TASK");
+    expect(sections.tools).not.toContain("EFFICIENCY");
+  });
+
+  it("the mandatory read-back verify is GONE — smart verification replaces it in BOTH the loop rules and FILE EDITING rule 6", () => {
+    const full = buildProjectSystemPrompt(ctx);
+    // The old mandate (and its example turn) must not appear anywhere.
+    expect(full).not.toContain("verify the save");
+    expect(full).not.toContain("read_file it back");
+    expect(full).not.toContain("(verify save)");
+    expect(full).not.toContain("Verify after edit");
+    // AGENTIC LOOP rule: a successful write IS the confirmation.
+    expect(full).toContain("A successful write_file/edit_file response is itself confirmation");
+    expect(full).toContain("do NOT re-read a file you just wrote unless something indicates a problem");
+    // FILE EDITING RULES rule 6 carries the same semantics.
+    expect(full).toContain("**Smart verification**");
+    expect(full).toContain("only when risk exists — complex edits, high-stakes files, or surprising results");
+  });
+
+  it("the budget line no longer invites step inflation (a cap, not a target — anti-lazy-stop kept)", () => {
+    const full = buildProjectSystemPrompt(ctx);
+    expect(full).not.toContain("Use it when needed");
+    expect(full).not.toContain("budget of up to");
+    // The maxTurns injection survives (Round-28 WS-F contract: the model is
+    // told its real cap)…
+    expect(full).toContain("up to 30 round-trips are available");
+    // …framed as fewest-steps, with the anti-lazy-stop FAILURE clause intact.
+    expect(full).toContain("FEWEST steps that genuinely complete and verify the work, not step count for its own sake");
+    expect(full).toContain("Stopping early on a multi-step task is a FAILURE");
+  });
+
+  it("batching is taught everywhere it must be (TOOL USE rule, lean 4-turn example, TASK PLANNING)", () => {
+    const full = buildProjectSystemPrompt(ctx);
+    // TOOL USE: independent calls batch; dependent calls wait.
+    expect(full).toContain("BATCHED into ONE message");
+    expect(full).not.toContain("ONE tool per message");
+    // The workflow example is the lean 4-turn batched shape (no serial turns
+    // 5–7, no verify-read-back turn).
+    expect(full).toContain("turn 1 (batched discovery)");
+    expect(full).not.toContain("turn 5:");
+    expect(full).not.toContain("turn 6:");
+    expect(full).not.toContain("turn 7:");
+    // TASK PLANNING's batching line.
+    expect(full).toContain(
+      "Batch your initial reads: understanding the request fully first is ONE message with parallel tool calls, not a long serial exploration",
+    );
+  });
+
+  it("regression pins: conversational rule, multi-turn completion, research loop, delegate parallelism all intact", () => {
+    const full = buildProjectSystemPrompt(ctx);
+    // Round-33: no tools for chat.
+    expect(full).toContain("CONVERSATIONAL REQUESTS ARE DIFFERENT (round-33)");
+    expect(full).toContain("reply directly and naturally WITHOUT calling any tools");
+    // The multi-turn completion directive (no stopping after one call).
+    expect(full).toContain("## AGENTIC LOOP — MULTI-TURN COMPLETION");
+    expect(full).toContain("DO NOT summarize and stop after one tool call");
+    // The research → save-files loop.
+    expect(full).toContain("research → save findings to a file → research the next sub-topic → append → repeat");
+    // The parallel delegate_task guidance.
+    expect(full).toContain("call delegate_task MULTIPLE TIMES in ONE message to run sub-agents concurrently");
   });
 });

@@ -21,6 +21,15 @@
  *     lands; the tab-title fallback strips its "CODE · " prefix.
  *  7. The single initial-load spinner + the unbound-tab empty message.
  *
+ * ROUND-51 (R51-b) additions (owner's fourth test round):
+ *  8. The final-report bubble carries NO accent left rail — its border is
+ *     IDENTICAL to a plain assistant bubble, and the "Final report"
+ *     mini-label is quiet tertiary (not the accent).
+ *  9. todo.update renders the FULL checklist — every item row with its
+ *     status glyph (✓ / pulsing dot / ○) inside a max-h-40 scroll clamp.
+ * 10. The stats footer is a CENTERED row (justify-center, hairline
+ *     dividers, no stretching flex-1 cell) with all five stat testids.
+ *
  * api is mocked with the importOriginal spread (FileViewerPanel's shared
  * Markdown renderer rides on use-projects → getProjectsBackend, so the mock
  * must keep the real module's other exports alive).
@@ -143,7 +152,9 @@ describe("SubAgentPanel (R48-e2 chat transcript)", () => {
       screen.getByText("Refactor src/auth into smaller modules and keep the public API."),
     ).toBeTruthy();
 
-    // todo.update — the compact progress line: bar + 1/3 + the current item.
+    // todo.update — the FULL checklist (R51-b): the bar + 1/3 header, then
+    // EVERY item as a status-glyph row (per-item coverage is pinned in the
+    // dedicated R51-b test below; here the header + in-progress text).
     const todoLine = await screen.findByTestId("subagent-todo-line");
     expect(todoLine.textContent).toContain("1/3");
     expect(todoLine.textContent).toContain("Extract session logic");
@@ -265,6 +276,24 @@ describe("SubAgentPanel (R48-e2 chat transcript)", () => {
     expect(screen.getByText("Reading the files now.")).toBeTruthy();
     const strong = screen.getByText("auth split");
     expect(strong.tagName).toBe("STRONG");
+
+    // ROUND-51 (R51-b): NO accent left rail on the final report (the owner's
+    // "AI slope" complaint) — the report bubble's border is IDENTICAL to a
+    // plain assistant bubble: no borderLeft, the same borderColor, and the
+    // quiet "Final report" mini-label wears the same tertiary color as the
+    // bot glyph (NOT the accent — the header's code chip is the accent
+    // reference).
+    const [plainBubble, reportBubble] = screen.getAllByTestId("subagent-assistant-bubble");
+    expect(reportBubble.style.borderLeft).toBe("");
+    expect(reportBubble.style.borderLeftWidth).toBe("");
+    expect(reportBubble.style.borderColor).not.toBe("");
+    expect(reportBubble.style.borderColor).toBe(plainBubble.style.borderColor);
+    const accentColor = screen.getByTestId("subagent-code-chip").style.color;
+    expect(reportBubble.style.borderColor).not.toBe(accentColor);
+    const label = screen.getByTestId("subagent-final-report-label");
+    const botGlyph = reportBubble.previousElementSibling as HTMLElement;
+    expect(label.style.color).toBe(botGlyph.style.color);
+    expect(label.style.color).not.toBe(accentColor);
 
     // Terminal run: no live tail, no clock; the chip reads done.
     expect(screen.queryByText("working…")).toBeNull();
@@ -490,12 +519,14 @@ describe("SubAgentPanel (R50-b live raw stream + stats footer)", () => {
         }
       });
 
-      expect(screen.getByTestId("subagent-stat-time").textContent).toBe("Time1:00");
-      expect(screen.getByTestId("subagent-stat-in").textContent).toBe("Sent↑ 7");
-      expect(screen.getByTestId("subagent-stat-out").textContent).toBe("Received↓ 60");
+      expect(screen.getByTestId("subagent-stat-time").textContent).toBe("TIME1:00");
+      expect(screen.getByTestId("subagent-stat-in").textContent).toBe("SENT↑ 7");
+      expect(screen.getByTestId("subagent-stat-out").textContent).toBe("RECV↓ 60");
       // 60 output tokens over 60s = 1.0 tok/s (live feed).
-      expect(screen.getByTestId("subagent-stat-tps").textContent).toBe("Tok/s1.0");
-      expect(screen.getByTestId("subagent-stat-model").textContent).toBe("deepseek/deepseek-chat-v3.1");
+      expect(screen.getByTestId("subagent-stat-tps").textContent).toBe("TOK/S1.0");
+      // ROUND-51 (R51-b): the model cell is now a centered StatCell like
+      // the others — its testid covers label+value (same as TIME/SENT/…).
+      expect(screen.getByTestId("subagent-stat-model").textContent).toBe("MODELdeepseek/deepseek-chat-v3.1");
     } finally {
       vi.useRealTimers();
     }
@@ -533,10 +564,101 @@ describe("SubAgentPanel (R50-b live raw stream + stats footer)", () => {
     expect(await screen.findByTestId("subagent-stats-footer")).toBeTruthy();
     // Total time = createdAt → updatedAt = 1:30; row tokens 1200/340;
     // tps = 340 / 90s = 3.8; the row's usage-derived model.
-    expect(screen.getByTestId("subagent-stat-time").textContent).toBe("Total time1:30");
-    expect(screen.getByTestId("subagent-stat-in").textContent).toBe("Sent↑ 1.2k");
-    expect(screen.getByTestId("subagent-stat-out").textContent).toBe("Received↓ 340");
-    expect(screen.getByTestId("subagent-stat-tps").textContent).toBe("Tok/s3.8");
-    expect(screen.getByTestId("subagent-stat-model").textContent).toBe("test/model-1");
+    expect(screen.getByTestId("subagent-stat-time").textContent).toBe("TIME1:30");
+    expect(screen.getByTestId("subagent-stat-in").textContent).toBe("SENT↑ 1.2k");
+    expect(screen.getByTestId("subagent-stat-out").textContent).toBe("RECV↓ 340");
+    expect(screen.getByTestId("subagent-stat-tps").textContent).toBe("TOK/S3.8");
+    expect(screen.getByTestId("subagent-stat-model").textContent).toBe("MODELtest/model-1");
+  });
+});
+
+// ─── ROUND-51 (R51-b): the owner's fourth-round polish ─────────────────────
+
+describe("SubAgentPanel (R51-b full todo list + centered stats footer)", () => {
+  it("todo.update renders the FULL checklist — every item row with its per-status glyph, in a max-h-40 scroll clamp", async () => {
+    // A multi-item snapshot through the panel's real path (the polled
+    // transcript — the child's todo_write only persists todo.update events;
+    // the SSE stream carries no todo frames, so this IS the live source too
+    // while the 600ms poll runs).
+    vi.mocked(fetchSubAgentDetail).mockResolvedValue(
+      detail("running", [
+        ev(1, "message.user", { role: "user", content: "Refactor src/auth into smaller modules." }),
+        ev(2, "todo.update", {
+          todos: [
+            { content: "Map the auth module", status: "completed" },
+            { content: "Extract session logic", status: "in_progress" },
+            { content: "Write tests", status: "pending" },
+            { content: "Update the docs", status: "pending" },
+          ],
+        }),
+      ]),
+    );
+    vi.mocked(fetchSubAgents).mockResolvedValue([subRow()]);
+    renderWithProviders(<SubAgentPanel tab={tab} />);
+
+    const todoLine = await screen.findByTestId("subagent-todo-line");
+    // The one-line header: bar + 1/4 (one completed of four — the
+    // TRANSCRIPT's own snapshot rules the header, not the subagents row).
+    expect(todoLine.textContent).toContain("1/4");
+
+    // EVERY item renders — the owner only saw the progress before.
+    const rows = screen.getAllByTestId("subagent-todo-item");
+    expect(rows).toHaveLength(4);
+    expect(rows.map((r) => r.getAttribute("data-status"))).toEqual([
+      "completed",
+      "in_progress",
+      "pending",
+      "pending",
+    ]);
+
+    // Per-status glyphs: ✓ (completed), a pulsing dot (in-progress — no text
+    // glyph), ○ (pending).
+    expect(rows[0].textContent).toContain("Map the auth module");
+    expect(rows[0].textContent).toContain("✓");
+    expect(rows[0].querySelector(".rounded-full")).toBeNull();
+
+    expect(rows[1].textContent).toContain("Extract session logic");
+    expect(rows[1].textContent).not.toContain("✓");
+    expect(rows[1].textContent).not.toContain("○");
+    expect(rows[1].querySelector(".rounded-full")).not.toBeNull();
+
+    expect(rows[2].textContent).toContain("Write tests");
+    expect(rows[2].textContent).toContain("○");
+    expect(rows[3].textContent).toContain("Update the docs");
+    expect(rows[3].textContent).toContain("○");
+
+    // Long plans scroll inside the clamp instead of blowing up the panel.
+    expect(todoLine.querySelector(".max-h-40.overflow-y-auto")).not.toBeNull();
+  });
+
+  it("the stats footer is a CENTERED row — justify-center, hairline dividers, no stretching cell, all five stats", async () => {
+    vi.mocked(fetchSubAgentDetail).mockResolvedValue(
+      detail("completed", [
+        ev(1, "message.user", { role: "user", content: "summarize" }),
+        ev(2, "message.assistant", { role: "assistant", content: "Done." }),
+      ]),
+    );
+    vi.mocked(fetchSubAgents).mockResolvedValue([subRow({ status: "completed" })]);
+    renderWithProviders(<SubAgentPanel tab={tab} />);
+
+    const footer = await screen.findByTestId("subagent-stats-footer");
+    // CENTERED (the owner's ask) — not the old left-aligned items-end row.
+    expect(footer.className).toContain("justify-center");
+    expect(footer.className).not.toContain("items-end");
+    expect(footer.className).toContain("h-10");
+    // No stretching flex-1 model cell (the old layout stretched it left).
+    expect(footer.querySelector(".flex-1")).toBeNull();
+    // Hairline dividers between the five cells.
+    expect(footer.querySelectorAll(".h-4.w-px")).toHaveLength(4);
+    // All five stats render.
+    for (const id of [
+      "subagent-stat-time",
+      "subagent-stat-in",
+      "subagent-stat-out",
+      "subagent-stat-tps",
+      "subagent-stat-model",
+    ]) {
+      expect(footer.querySelector(`[data-testid="${id}"]`)).not.toBeNull();
+    }
   });
 });

@@ -2252,6 +2252,11 @@ export function buildServer(options: ServerOptions): FastifyInstance {
       // All breakdown numbers are ESTIMATES (approximations documented
       // inline below): the goal is an honest donut, not exact provider
       // accounting. usedTokens = the sum of all breakdown slices.
+      //
+      // ROUND-51 (R51-c): the response ALSO carries `usage` — the Main agent
+      // / Sub-agents / Combined split of the session-totals (the donut
+      // popover's Session section). The flat sessionTotals/cache fields are
+      // unchanged (additive shape).
       scope.get("/sessions/:id/context", async (request, reply) => {
         const { id } = request.params as Record<string, string>;
         const query = request.query as Record<string, string | undefined>;
@@ -2359,6 +2364,42 @@ export function buildServer(options: ServerOptions): FastifyInstance {
         };
         const roundUsd = (value: number): number => Math.round(value * 1e6) / 1e6;
 
+        // ── ROUND-51 (R51-c): the Main agent / Sub-agents / Combined usage
+        // split (owner: "The actual main sessions stats and the sub-agent
+        // sessions stats will be kept separate. They will not be kept
+        // separate completely. They will be shown as combined all together
+        // too."). `subagents` sums the usage_events of the session's DIRECT
+        // children — the exact set listSubAgents lists
+        // (parent_session_id = this session; grandchildren roll into their
+        // own parent's report, mirroring the sub-agents panel's rows). The
+        // flat sessionTotals fields above stay byte-identical (additive
+        // shape — old consumers keep working).
+        const subRow = db
+          .prepare(
+            `SELECT
+               COALESCE(SUM(input_tokens), 0) AS inputTokens,
+               COALESCE(SUM(output_tokens), 0) AS outputTokens,
+               COUNT(*) AS requests,
+               COALESCE(SUM(cost_usd), 0) AS costUsd
+             FROM usage_events
+             WHERE session_id IN (SELECT id FROM sessions WHERE parent_session_id = ?)`,
+          )
+          .get(id) as {
+          inputTokens: number;
+          outputTokens: number;
+          requests: number;
+          costUsd: number;
+        };
+        const sumTotals = (
+          a: { inputTokens: number; outputTokens: number; requests: number; costUsd: number },
+          b: { inputTokens: number; outputTokens: number; requests: number; costUsd: number },
+        ): { inputTokens: number; outputTokens: number; requests: number; costUsd: number } => ({
+          inputTokens: a.inputTokens + b.inputTokens,
+          outputTokens: a.outputTokens + b.outputTokens,
+          requests: a.requests + b.requests,
+          costUsd: a.costUsd + b.costUsd,
+        });
+
         return reply.code(200).send({
           model,
           providerId,
@@ -2385,6 +2426,32 @@ export function buildServer(options: ServerOptions): FastifyInstance {
             outputTokens: totalsRow.outputTokens,
             requests: totalsRow.requests,
             costUsd: roundUsd(totalsRow.costUsd),
+          },
+          // ROUND-51 (R51-c): main = THIS session only; subagents = its
+          // direct children; combined = the sum. Rounded exactly like the
+          // flat fields.
+          usage: {
+            main: {
+              inputTokens: totalsRow.inputTokens,
+              outputTokens: totalsRow.outputTokens,
+              requests: totalsRow.requests,
+              costUsd: roundUsd(totalsRow.costUsd),
+            },
+            subagents: {
+              inputTokens: subRow.inputTokens,
+              outputTokens: subRow.outputTokens,
+              requests: subRow.requests,
+              costUsd: roundUsd(subRow.costUsd),
+            },
+            combined: (() => {
+              const c = sumTotals(totalsRow, subRow);
+              return {
+                inputTokens: c.inputTokens,
+                outputTokens: c.outputTokens,
+                requests: c.requests,
+                costUsd: roundUsd(c.costUsd),
+              };
+            })(),
           },
         });
       });

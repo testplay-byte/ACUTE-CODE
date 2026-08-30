@@ -35,9 +35,11 @@
 # Python 3.9+ · Windows / Linux / macOS · run via ACUTE.bat (Windows) or
 # acute.sh (Linux/macOS), or directly: python3 acute_launcher.py [command]
 #
-# Commands:  (default) update-check then launch   · start = no update pass
+# Commands:  (default) update-check then launch  · start = no update pass
 #            update = update only, then exit      · status = read-only report
-# Flags:     --no-update   --verbose
+#            desktop = install/launch the packaged Windows app (round 51)
+# Flags:     --no-update   --verbose   --web (force the browser/dev flow)
+#            --no-desktop (same as --web for the default command)
 
 import hashlib
 import os
@@ -978,6 +980,302 @@ def self_update_check():
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# ROUND-51 (R51-a): the DESKTOP app path (Windows installer from GitHub)
+#
+# The owner's recurring "browser still broken" reports all had one root cause:
+# this launcher ran the DEV stack (vite :5173) and opened the SYSTEM browser,
+# where `window.__TAURI__` is undefined and the R50 native embedded browser
+# (Tauri child webviews = real Chromium) can NEVER activate. The fix is the
+# CI-built NSIS installer (.github/workflows/release.yml → desktop-installer
+# job): one setup.exe with the app + the bundled sidecar (pinned node.exe +
+# agent-core, ADR-0009). This section downloads it from the GitHub release,
+# installs it silently, seeds Credential Manager with the owner's keys, and
+# launches the installed exe. EVERY failure falls back to the dev-servers
+# flow below — nothing the old launcher did is removed.
+# ─────────────────────────────────────────────────────────────────────────────
+
+# The tauri-bundler NSIS contract: <productName>_<version>_<arch>-setup.exe.
+DESKTOP_INSTALLER_RE = re.compile(r"^ACUTE-CODE_(\d+\.\d+\.\d+)_x64-setup\.exe$")
+DESKTOP_EXE_NAME = "ACUTE-CODE.exe"
+# Where the tauri NSIS template (installer.nsi, verified against tauri
+# 2.11.5) writes its uninstall entry: UNINSTKEY = "Software\Microsoft\
+# Windows\CurrentVersion\Uninstall\${PRODUCTNAME}" under HKCU for
+# installMode=currentUser. The identifier / cargo-name variants are probed
+# defensively in case a future bundler rename changes the key shape.
+DESKTOP_UNINSTALL_KEYS = (
+    r"Software\Microsoft\Windows\CurrentVersion\Uninstall\ACUTE-CODE",
+    r"Software\Microsoft\Windows\CurrentVersion\Uninstall\com.acutecode.app",
+    r"Software\Microsoft\Windows\CurrentVersion\Uninstall\acute-code",
+)
+DESKTOP_INSTALL_TIMEOUT_S = 600
+
+
+def _version_tuple(text):
+    """'0.51.0' → (0, 51, 0) for honest ordering; unparseable → (0, 0, 0)."""
+    try:
+        return tuple(int(p) for p in str(text).strip().split("."))
+    except (ValueError, TypeError):
+        return (0, 0, 0)
+
+
+def _desktop_find_installed():
+    """Probe the HKCU/HKLM uninstall registry for the installed desktop app.
+
+    Returns {'version': str, 'location': str} or None. Uses `reg query`
+    (stdlib subprocess — this launcher never grows dependencies). The tauri
+    NSIS template writes InstallLocation QUOTED ("$INSTDIR"), so quotes are
+    stripped before the path is used.
+    """
+    for hive in ("HKCU", "HKLM"):
+        for key in DESKTOP_UNINSTALL_KEYS:
+            code, out = probe(["reg", "query", f"{hive}\\{key}"], timeout=15)
+            if code != 0 or not out:
+                continue
+            values = {}
+            for line in out.splitlines():
+                m = re.match(r"\s+(\w+)\s+REG_SZ\s+(.*)$", line)
+                if m:
+                    values[m.group(1)] = m.group(2).strip()
+            if "InstallLocation" not in values:
+                continue
+            location = values["InstallLocation"].strip().strip('"')
+            if location:
+                return {
+                    "version": values.get("DisplayVersion", ""),
+                    "location": location,
+                }
+    return None
+
+
+def _desktop_latest_release(pat):
+    """Newest GitHub release that carries a Windows installer asset.
+
+    Returns (version_str, asset_id) or None. Authenticated with the owner's
+    PAT (the repo is private AND the CI creates the release as a DRAFT —
+    drafts are only visible to tokens with repo access, which the owner's
+    launcher has). Never raises: offline/404/parse issues → None.
+    """
+    import json as _json
+    import urllib.error
+
+    req = urllib.request.Request(
+        "https://api.github.com/repos/testplay-byte/ACUTE-CODE/releases?per_page=20",
+        headers={
+            "Authorization": f"Bearer {pat}",
+            "User-Agent": "acute-launcher",
+            "Accept": "application/vnd.github+json",
+        },
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=30) as resp:
+            releases = _json.loads(resp.read().decode("utf-8", "replace") or "[]")
+    except (urllib.error.URLError, OSError, ValueError) as exc:
+        note(f"GitHub release check failed ({exc.__class__.__name__}) — falling back to the dev flow")
+        return None
+    if not isinstance(releases, list):
+        return None
+    for release in releases:
+        for asset in release.get("assets", []) or []:
+            name = asset.get("name", "")
+            m = DESKTOP_INSTALLER_RE.match(name)
+            if m and asset.get("id") is not None:
+                return m.group(1), asset["id"]
+    return None
+
+
+def _desktop_download(pat, asset_id, version):
+    """Stream the installer asset into .acute/downloads/ (progress shown).
+
+    Private-repo assets download through the API endpoint with the PAT; the
+    token is registered in SECRETS_TO_REDACT and never appears in logs or
+    panels. Returns the local Path or None.
+    """
+    import urllib.error
+
+    url = f"https://api.github.com/repos/testplay-byte/ACUTE-CODE/releases/assets/{asset_id}"
+    dest_dir = DOT_DIR / "downloads"
+    dest_dir.mkdir(parents=True, exist_ok=True)
+    dest = dest_dir / f"ACUTE-CODE_{version}_x64-setup.exe"
+    req = urllib.request.Request(url, headers={
+        "Authorization": f"Bearer {pat}",
+        "User-Agent": "acute-launcher",
+        "Accept": "application/octet-stream",
+    })
+    try:
+        with urllib.request.urlopen(req, timeout=60) as resp, dest.open("wb") as fh:
+            total = int(resp.headers.get("Content-Length") or 0)
+            done = 0
+            chunk_mb = 4 * 1024 * 1024
+            if RICH:
+                from rich.progress import Progress, BarColumn, DownloadColumn
+
+                with Progress(
+                    "[bold cyan]downloading",
+                    BarColumn(),
+                    DownloadColumn(),
+                    transient=True,
+                ) as progress:
+                    task = progress.add_task("installer", total=total or None)
+                    while True:
+                        chunk = resp.read(chunk_mb)
+                        if not chunk:
+                            break
+                        fh.write(chunk)
+                        done += len(chunk)
+                        progress.update(task, completed=done)
+            else:
+                last_pct = -1
+                while True:
+                    chunk = resp.read(chunk_mb)
+                    if not chunk:
+                        break
+                    fh.write(chunk)
+                    done += len(chunk)
+                    if total:
+                        pct = int(done * 100 / total)
+                        if pct != last_pct and pct % 10 == 0:
+                            print(f"       {pct}% ({done // (1024 * 1024)} MB)")
+                            last_pct = pct
+    except (urllib.error.URLError, OSError) as exc:
+        note(f"installer download failed ({exc.__class__.__name__}: {redact(str(exc))[:120]})")
+        return None
+    if dest.stat().st_size < 1_000_000:
+        # A setup.exe is >100 MB; anything tiny is an error page/API body.
+        note("downloaded file is too small to be the installer — discarding")
+        dest.unlink(missing_ok=True)
+        return None
+    return dest
+
+
+def _desktop_install(installer_path):
+    """Run the NSIS installer silently (/S) and wait for it to finish.
+
+    installMode=currentUser → RequestExecutionLevel user, no UAC prompt. The
+    tauri template ABORTS a silent DOWNGRADE, which the caller prevents by
+    only installing when the release version >= the installed one.
+    """
+    log(f"$ silent install: {installer_path.name} /S")
+    try:
+        proc = subprocess.run(
+            [str(installer_path), "/S"],
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=DESKTOP_INSTALL_TIMEOUT_S,
+        )
+    except (subprocess.TimeoutExpired, OSError) as exc:
+        note(f"installer did not complete ({exc.__class__.__name__})")
+        return False
+    if proc.returncode != 0:
+        note(f"installer exited with code {proc.returncode}")
+        return False
+    return True
+
+
+def _desktop_seed_keys(key, sub_keys):
+    """Push the launcher's keys into Windows Credential Manager via cmdkey.
+
+    The packaged app's Rust shell reads these EXACT generic-credential
+    targets (sidecar.rs provider_key_targets → keys.rs scheme
+    `ACUTE-CODE/provider/<id>`, user `api-key`) at every boot, so the owner
+    never pastes keys into the installed app by hand. Key VALUES never
+    appear in logs (run()'s log line goes through redact(), which has every
+    key registered; cmdkey's own output prints no material either).
+    """
+    with step("Keys → Windows Credential Manager (for the desktop app)"):
+        targets = [("ACUTE-CODE/provider/openrouter", key)]
+        for i, sub in enumerate(sub_keys):
+            if sub:
+                targets.append((f"ACUTE-CODE/provider/openrouter-slot{i + 2}", sub))
+        for target, value in targets:
+            if not value:
+                continue
+            run(
+                ["cmdkey", f"/generic:{target}", "/user:api-key", f"/pass:{value}"],
+                check=False,
+                timeout=30,
+            )
+            ok(f"stored {target} (length {len(value)})")
+
+
+def desktop_flow(pat, key, sub_keys):
+    """Install + launch the packaged desktop app. True = it is running.
+
+    Any failure prints a warning and returns False — the caller falls back
+    to the dev-servers flow, so a desktop hiccup can never leave the owner
+    without a working app.
+    """
+    with step("Desktop app (packaged ACUTE-CODE)"):
+        release = _desktop_latest_release(pat)
+        if release is None:
+            warn("no Windows installer published on GitHub yet — using the dev-servers flow")
+            note("the installer ships with the next tagged release (round 51+)")
+            return False
+        version, asset_id = release
+        installed = _desktop_find_installed()
+        if installed is not None and _version_tuple(installed["version"]) >= _version_tuple(version):
+            ok(f"installed desktop app {installed['version']} is current ({installed['location']})")
+        else:
+            if installed is not None:
+                ok(f"upgrading the desktop app {installed['version']} → {version}")
+            else:
+                ok(f"installing the desktop app {version} (first time)")
+            installer = _desktop_download(pat, asset_id, version)
+            if installer is None:
+                warn("could not download the installer — using the dev-servers flow")
+                return False
+            if not _desktop_install(installer):
+                warn("the silent installer failed — using the dev-servers flow")
+                note("(download kept in .acute/downloads/ — you can run it by double-click)")
+                return False
+            installed = _desktop_find_installed()
+            if installed is None:
+                warn("the installer finished but no installed app was found — using the dev-servers flow")
+                return False
+            ok(f"installed {installed['version']} → {installed['location']}")
+
+    # Credentials BEFORE launch: the app's Rust shell reads Credential
+    # Manager at boot, so the keys must be in place before the exe starts.
+    _desktop_seed_keys(key, sub_keys)
+
+    exe = Path(installed["location"]) / DESKTOP_EXE_NAME
+    if not exe.is_file():
+        warn(f"{exe} not found — using the dev-servers flow")
+        return False
+    with step("Starting the desktop app"):
+        try:
+            # DETACHED_PROCESS: the GUI app gets no console of ours and
+            # survives this launcher window; we keep a handle to report when
+            # it closes.
+            creationflags = 0x00000008 if IS_WIN else 0  # DETACHED_PROCESS
+            proc = subprocess.Popen([str(exe)], cwd=str(installed["location"]), creationflags=creationflags)
+        except OSError as exc:
+            warn(f"could not start the desktop app ({exc.__class__.__name__}) — using the dev-servers flow")
+            return False
+        ok(f"ACUTE-CODE.exe is running (pid {proc.pid})")
+    panel(
+        "The desktop app started — the agent backend is bundled inside\n"
+        "(no servers to manage, no browser tab: it is a real app window\n"
+        "with the embedded Chromium browser).\n\n"
+        "  ➜  Keep this window open while using the app (Ctrl+C just\n"
+        "     closes THIS window — the app keeps running)\n"
+        "  ➜  Your keys were stored in Windows Credential Manager\n"
+        "  ➜  Updates install automatically on the next double-click",
+        style="green",
+        title="▲ ACUTE-CODE desktop app",
+    )
+    log(f"=== desktop launch {time.strftime('%Y-%m-%d %H:%M:%S')} exe={exe} ===")
+    try:
+        proc.wait()
+        ok(f"desktop app closed (session {int(time.time() - STARTED)}s)")
+    except KeyboardInterrupt:
+        warn("launcher closed — the desktop app keeps running in its own window")
+    wait_close()
+    return True
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # modes
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -1004,6 +1302,14 @@ def mode_status(pat, key, env, sub_keys=("", "", "")):
             lines.append(f"dev database {'present — agents/sessions/projects persist' if (APP_DIR / '.dev' / 'acute.db').exists() else 'not created yet'}")
     else:
         lines.append("app          not downloaded yet (first run will fetch it)")
+    # ROUND-51 (R51-a): the packaged desktop app, when installed (read-only
+    # registry probe — never launches anything).
+    if IS_WIN:
+        desktop = _desktop_find_installed()
+        if desktop is not None:
+            lines.append(f"desktop app  {desktop['version']} installed  ·  {desktop['location']}")
+        else:
+            lines.append("desktop app  not installed (the next run will fetch the installer)")
     lines.append(f"GitHub PAT   length {len(pat)}")
     lines.append(f"Router key   length {len(key)}")
     # sub-agent pool presence (length only, never the value)
@@ -1128,6 +1434,14 @@ def main():
     args = [a for a in sys.argv[1:] if not a.startswith("-")]
     cmd = args[0] if args else "run"
 
+    # ROUND-51 (R51-a): the desktop flags. `--web` / `--no-desktop` force the
+    # classic dev-servers + browser flow; `desktop` (a command, below) forces
+    # the packaged-app path. Default behavior on Windows now PREFERS the
+    # packaged desktop app (it embeds the native browser the owner asked
+    # for) and falls back to the dev flow on any failure.
+    desktop_skip = "--web" in sys.argv or "--no-desktop" in sys.argv
+    prefer_desktop = not desktop_skip
+
     banner()
     log(f"===== launcher start {time.strftime('%Y-%m-%d %H:%M:%S')} args={sys.argv[1:]} =====")
 
@@ -1147,20 +1461,39 @@ def main():
     with step("Verifying GitHub access (token + private repository)"):
         validate_github_access(pat)
 
-    panel(
-        "Here is the plan for this run:\n"
-        "\n"
-        "  1.  Verify GitHub access              done (above)\n"
-        "  2.  Check the toolchain               git · Node.js · pnpm — auto-installs when missing\n"
-        "  3.  Download / update ACUTE-CODE      first run downloads it, later runs update it\n"
-        "  4.  Install dependencies + build      skipped when already done\n"
-        "  5.  Store the OpenRouter key          Windows Credential Manager (once)\n"
-        "  6.  Start the app                     open http://localhost:5173\n"
-        "\n"
-        "Every step prints its result. If anything fails you get a red panel\n"
-        "with the exact cause and the fix — the window stays open for copying.",
-        title="the plan",
-    )
+    if IS_WIN and (prefer_desktop or cmd == "desktop"):
+        panel(
+            "Here is the plan for this run:\n"
+            "\n"
+            "  1.  Verify GitHub access              done (above)\n"
+            "  2.  Check for updates                 keeps this launcher + the repo current\n"
+            "  3.  Install / update the DESKTOP app  the packaged ACUTE-CODE with the\n"
+            "                                        embedded browser + bundled backend\n"
+            "  4.  Store your keys                   Windows Credential Manager (once)\n"
+            "  5.  Start the app                     a real app window — no browser tab\n"
+            "\n"
+            "If the desktop install fails for ANY reason the launcher falls back\n"
+            "to the dev-servers flow automatically — you always end up with a\n"
+            "running app. Use --web (or --no-desktop) to skip the desktop path.",
+            title="the plan",
+        )
+    else:
+        if cmd == "desktop":
+            warn("the packaged desktop app is Windows-only — continuing with the dev-servers flow")
+        panel(
+            "Here is the plan for this run:\n"
+            "\n"
+            "  1.  Verify GitHub access              done (above)\n"
+            "  2.  Check the toolchain               git · Node.js · pnpm — auto-installs when missing\n"
+            "  3.  Download / update ACUTE-CODE      first run downloads it, later runs update it\n"
+            "  4.  Install dependencies + build      skipped when already done\n"
+            "  5.  Store the OpenRouter key          Windows Credential Manager (once)\n"
+            "  6.  Start the app                     open http://localhost:5173\n"
+            "\n"
+            "Every step prints its result. If anything fails you get a red panel\n"
+            "with the exact cause and the fix — the window stays open for copying.",
+            title="the plan",
+        )
 
     check_toolchain()
     env = ensure_pnpm(env)
@@ -1171,9 +1504,6 @@ def main():
         with step("Update check skipped (start mode)"):
             updated = False
 
-    install_and_build(env, updated)
-    write_env_file()
-    distribute_key(key, sub_keys)
     self_update_check()
 
     if cmd == "update":
@@ -1182,6 +1512,20 @@ def main():
         note("double-click the launcher again to start the app")
         wait_close()
         return
+
+    # ROUND-51 (R51-a): the DESKTOP path — preferred on Windows. Runs before
+    # install_and_build: a successful desktop launch needs nothing built from
+    # the repo (the installer bundles the backend). Any failure inside
+    # desktop_flow prints a warning and returns False → the dev flow below
+    # stays exactly as it was.
+    if IS_WIN and (prefer_desktop or cmd == "desktop"):
+        if desktop_flow(pat, key, sub_keys):
+            return
+        warn("falling back to the dev-servers flow (browser at http://localhost:5173)")
+
+    install_and_build(env, updated)
+    write_env_file()
+    distribute_key(key, sub_keys)
 
     launch(env, key, sub_keys)
 

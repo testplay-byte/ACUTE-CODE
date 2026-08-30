@@ -6,12 +6,27 @@ import { fetchProviderModels, fetchProviders, type Agent } from "../../../lib/ap
 import { filterModelsForPicker, useSettingsStore } from "../../../lib/settings-store";
 import { useThemeStyles } from "../../../lib/use-theme-styles";
 import { withAlpha } from "../../dashboard/helpers";
-import { useDismiss, type ModelOverride } from "./composer-utils";
+import {
+  computeFlyoutGeometry,
+  useDismiss,
+  type FlyoutSide,
+  type ModelOverride,
+  type PlainRect,
+} from "./composer-utils";
 
 /** Width of the hover flyout (px) — used for the side measurement. */
 const FLYOUT_WIDTH = 280;
 /** Safety cap on the flyout's model rows (same spirit as the old picker's 60). */
 const FLYOUT_MODEL_CAP = 200;
+
+/** Geometry used when the popover can't be measured / the touch path. */
+const INLINE_GEO = { side: "inline" as FlyoutSide, left: null, top: 0, viewportTop: 0, maxHeight: 280 };
+
+/** DOMRect → the plain-number rect computeFlyoutGeometry takes. */
+const plainRect = (el: HTMLElement): PlainRect => {
+  const r = el.getBoundingClientRect();
+  return { top: r.top, bottom: r.bottom, left: r.left, right: r.right };
+};
 
 /**
  * ROUND-50 (R50-c2): the model selector (owner: "It would show me the model
@@ -20,15 +35,23 @@ const FLYOUT_MODEL_CAP = 200;
  * I will be shown the actual models which I can select… at the very bottom it
  * will show me the Manage Models button").
  *
- * The BUTTON shows `ProviderLabel · full-model-id` (provider display name
- * from GET /providers, fallback providerId), truncated with the full text on
- * the title. The POPOVER (not a flat model list): one row per provider at
- * the top, each with a Configure gear → /settings?tab=api; HOVERING a row
- * opens that provider's model FLYOUT on the right or left (chosen by
- * available viewport space — measured; on narrow screens the flyout replaces
- * the list content); the current model carries a check; clicking selects it
- * as the per-send override (persisted per session by the panel). A full-width
- * "Manage Models" footer row navigates to the Models & Providers page.
+ * ROUND-51 (R51-c) polish, per the owner's fourth test round:
+ *  - the BUTTON shows the MODEL ID ONLY (owner: "It should not show the name
+ *    of the provider. It should only show the name of the model itself.");
+ *    the full "Provider · model" stays on the title tooltip;
+ *  - the hover FLYOUT is viewport-aware (computeFlyoutGeometry): side by
+ *    measured space, vertically clamped with 12px margins, capped height —
+ *    never cut off at the bottom or the right again. It is position:fixed
+ *    (viewport coordinates) so the popover's own max-height scroll can never
+ *    clip it, but it stays a DOM CHILD of the provider row — moving the
+ *    pointer from the row into the flyout keeps it open (mouseleave
+ *    containment works off the DOM tree, not the visual box);
+ *  - the popover itself scrolls internally (max-h + overflow-y-auto) so N
+ *    providers never overflow the viewport, and scrolling it closes the
+ *    flyout (a fixed flyout wouldn't track its row scrolling under it);
+ *  - flyout polish: provider-name header chip, consistent rounded rows with
+ *    hover states, check on the selected model, and the hidden-paid-models
+ *    hint styled as a proper footer row.
  */
 export function ModelSelector({
   agent,
@@ -45,7 +68,16 @@ export function ModelSelector({
   const navigate = useNavigate();
   const [open, setOpen] = useState(false);
   const [hoveredProvider, setHoveredProvider] = useState<string | null>(null);
-  const [flyoutSide, setFlyoutSide] = useState<"right" | "left" | "inline">("right");
+  // ROUND-51 (R51-c): measured flyout geometry (side + clamped viewport
+  // position) — replaces the old side-only state that never clamped
+  // vertically (the bottom-cutoff bug).
+  const [flyoutGeo, setFlyoutGeo] = useState<{
+    side: FlyoutSide;
+    left: number | null;
+    top: number;
+    viewportTop: number;
+    maxHeight: number;
+  }>({ side: "right", left: null, top: 0, viewportTop: 0, maxHeight: 280 });
   const close = (): void => {
     setOpen(false);
     setHoveredProvider(null);
@@ -85,22 +117,28 @@ export function ModelSelector({
   const effectiveProviderId = override?.providerId ?? agent?.providerId ?? null;
   const providerLabel =
     providers.find((p) => p.id === effectiveProviderId)?.name ?? effectiveProviderId ?? "";
-  const buttonLabel =
-    effective !== null ? `${providerLabel || "model"} · ${effective}` : "no model";
+  // ROUND-51 (R51-c): the button shows the MODEL ID ONLY; "Provider · model"
+  // stays on the title tooltip.
+  const buttonLabel = effective !== null ? effective : "no model";
+  const buttonTitle = effective !== null ? `${providerLabel || "model"} · ${effective}` : "no model";
 
-  /** Measure which side has room for the flyout; inline when neither does. */
+  /** Measure row + popover + viewport and compute the flyout geometry
+   * (side by space, vertical clamp, capped height — pure helper). */
   const openFlyout = (providerId: string, row: HTMLElement): void => {
     setHoveredProvider(providerId);
     const popover = row.closest("[data-model-popover]") as HTMLElement | null;
     if (popover === null) {
-      setFlyoutSide("inline");
+      setFlyoutGeo(INLINE_GEO);
       return;
     }
-    const rect = popover.getBoundingClientRect();
-    const spaceRight = window.innerWidth - rect.right;
-    if (spaceRight >= FLYOUT_WIDTH + 8) setFlyoutSide("right");
-    else if (rect.left >= FLYOUT_WIDTH + 8) setFlyoutSide("left");
-    else setFlyoutSide("inline");
+    setFlyoutGeo(
+      computeFlyoutGeometry(
+        plainRect(row),
+        plainRect(popover),
+        { width: window.innerWidth, height: window.innerHeight },
+        FLYOUT_WIDTH,
+      ),
+    );
   };
 
   const pickModel = (model: string, providerId: string): void => {
@@ -114,25 +152,57 @@ export function ModelSelector({
     navigate("/settings?tab=api");
   };
 
+  // ROUND-51 (R51-c): the flyout's geometry-driven placement. Side mode is
+  // position:FIXED (viewport coordinates — immune to the popover's scroll
+  // clipping) while remaining a DOM child of the hovered provider row (hover
+  // containment). Inline mode still REPLACES the list (narrow/touch path).
+  const flyoutSide = flyoutGeo.side;
+  const hoveredName =
+    providers.find((p) => p.id === hoveredProvider)?.name ?? hoveredProvider ?? "";
+
   const flyout = hoveredProvider === null ? null : (
     <div
       role="listbox"
-      aria-label={`Models of ${providers.find((p) => p.id === hoveredProvider)?.name ?? hoveredProvider}`}
+      aria-label={`Models of ${hoveredName}`}
       data-model-flyout
+      data-flyout-side={flyoutSide}
       className={
         flyoutSide === "inline"
           ? "flex flex-col min-w-0"
-          : `absolute top-0 w-[280px] max-h-64 overflow-y-auto auto-scroll rounded-2xl border p-1.5 z-50 ${
-              flyoutSide === "right" ? "left-full ml-1.5" : "right-full mr-1.5"
-            }`
+          : "fixed w-[280px] rounded-2xl border p-1.5 z-50 auto-scroll"
       }
-      style={{ background: styles.card, borderColor: styles.border, boxShadow: styles.bentoShadow }}
+      style={{
+        ...(flyoutSide === "inline"
+          ? {}
+          : {
+              left: `${flyoutGeo.left ?? 0}px`,
+              top: `${flyoutGeo.viewportTop}px`,
+              maxHeight: `${flyoutGeo.maxHeight}px`,
+              overflowY: "auto",
+            }),
+        background: styles.card,
+        borderColor: styles.border,
+        boxShadow: styles.bentoShadow,
+      }}
     >
-      {flyoutSide === "inline" ? (
-        <div className="flex items-center justify-between gap-2 px-1 pb-1.5 mb-1 border-b" style={{ borderColor: styles.borderSubtle }}>
-          <span className="text-[10px] font-bold uppercase tracking-wide truncate" style={{ color: styles.textTertiary }}>
-            {providers.find((p) => p.id === hoveredProvider)?.name ?? hoveredProvider}
+      {/* Header chip — whose models you're scanning (Back only in inline
+          mode, where there's no provider list visible behind it). */}
+      <div
+        className="flex items-center gap-2 px-1 pb-1.5 mb-1 border-b"
+        style={{ borderColor: styles.borderSubtle }}
+      >
+        <span
+          className="text-[10px] font-bold uppercase tracking-wide truncate"
+          style={{ color: styles.textTertiary }}
+        >
+          {hoveredName}
+        </span>
+        {!modelsQuery.isLoading && models.length > 0 ? (
+          <span className="ml-auto font-mono text-[9px] shrink-0" style={{ color: styles.textTertiary }}>
+            {models.length} model{models.length === 1 ? "" : "s"}
           </span>
+        ) : null}
+        {flyoutSide === "inline" ? (
           <button
             type="button"
             onClick={() => setHoveredProvider(null)}
@@ -141,8 +211,8 @@ export function ModelSelector({
           >
             Back
           </button>
-        </div>
-      ) : null}
+        ) : null}
+      </div>
       {models.length === 0 ? (
         <div className="text-[11px] px-2 py-1.5" style={{ color: styles.textTertiary }}>
           {modelsQuery.isLoading ? "loading models…" : "no models listed"}
@@ -180,12 +250,21 @@ export function ModelSelector({
           );
         })
       )}
+      {/* Footer — the hidden-paid-models hint as a proper footer row. */}
       {hiddenCount > 0 && modelsFreeOnly ? (
         <button
           type="button"
           onClick={() => setModelsFreeOnly(false)}
-          className="w-full text-left px-2 py-1.5 mt-1 rounded-lg text-[10.5px] font-semibold border-t"
-          style={{ color: styles.accent, borderColor: styles.borderSubtle }}
+          className="w-full text-left px-2 pt-1.5 pb-1 mt-1 border-t rounded-none text-[10px] font-semibold transition-colors"
+          style={{ color: styles.textTertiary, borderColor: styles.borderSubtle }}
+          onMouseEnter={(e) => {
+            e.currentTarget.style.background = styles.subtleHover;
+            e.currentTarget.style.color = styles.textSecondary;
+          }}
+          onMouseLeave={(e) => {
+            e.currentTarget.style.background = "transparent";
+            e.currentTarget.style.color = styles.textTertiary;
+          }}
         >
           {hiddenCount} paid model{hiddenCount === 1 ? "" : "s"} hidden — show all
         </button>
@@ -202,7 +281,7 @@ export function ModelSelector({
         aria-haspopup="menu"
         aria-expanded={open}
         aria-label="Choose model"
-        title={buttonLabel}
+        title={buttonTitle}
         className="flex items-center gap-1 h-7 px-2 rounded-[10px] text-[11px] font-semibold transition-colors disabled:opacity-50 disabled:cursor-not-allowed max-w-[240px]"
         style={{ color: styles.textSecondary }}
         onMouseEnter={(e) => {
@@ -222,7 +301,17 @@ export function ModelSelector({
           role="menu"
           aria-label="Choose model"
           data-model-popover
-          className="absolute bottom-9 right-0 w-64 rounded-2xl border p-1.5 z-50"
+          // ROUND-51 (R51-c): the popover scrolls INTERNALLY (max-h +
+          // overflow-y-auto) so N providers never overflow the viewport.
+          // Scrolling it closes the side flyout — the flyout is position:fixed
+          // (never clipped by this scroller) and so would not follow its row
+          // scrolling underneath the pointer. (e.target check: React's
+          // synthetic onScroll bubbles — the FLYOUT's own scrolling must not
+          // close it.)
+          onScroll={(e) => {
+            if (e.target === e.currentTarget) setHoveredProvider(null);
+          }}
+          className="absolute bottom-9 right-0 w-64 max-h-[min(24rem,calc(100vh-2rem))] overflow-y-auto auto-scroll rounded-2xl border p-1.5 z-50"
           style={{ background: styles.card, borderColor: styles.border, boxShadow: styles.bentoShadow }}
         >
           {/* Free only / All — the SHARED persisted preference (same store the
@@ -289,7 +378,7 @@ export function ModelSelector({
                       aria-label={`Models of ${p.name}`}
                       onClick={(e) => {
                         // Touch/click path: the flyout replaces the list.
-                        setFlyoutSide("inline");
+                        setFlyoutGeo(INLINE_GEO);
                         setHoveredProvider((cur) => (cur === p.id ? null : p.id));
                         e.currentTarget.blur();
                       }}

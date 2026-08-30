@@ -9,6 +9,15 @@
  * while buildProjectSystemPrompt keeps composing the byte-identical full
  * text from the SAME tagged builder — the four section strings are exact
  * sub-sequences of the live prompt by construction.
+ *
+ * ROUND-51 (R51-d, owner: "It takes up way too many steps… It should work in
+ * an optimized way"): the AGENTIC LOOP's mandatory read-back verify (it
+ * doubled every write's round-trips) and the "budget of up to 80 — use it"
+ * framing (it rewarded step inflation) were replaced by smart verification +
+ * a FEWEST-STEPS posture, with a new EFFICIENCY section teaching batched
+ * discovery (parallel independent tool calls in ONE message), plan-once
+ * execution, and concise reasoning. Anti-lazy-stop and round-33
+ * conversational rules kept intact.
  */
 
 import type { PermissionMode } from "shared";
@@ -91,7 +100,12 @@ function buildTaggedPromptLines(ctx: PromptContext): TaggedLine[] {
   tools(`You have access to these tools: ${ctx.toolNames.join(", ")}.`);
   tools("");
   tools("Rules:");
-  tools("- You may invoke ONE tool per message. Wait for its result before the next action.");
+  // ROUND-51 (R51-d): "ONE tool per message" contradicted both the SUB-AGENTS
+  // parallelism guidance below and the new EFFICIENCY section's batched
+  // discovery — the runtime (AI SDK execute(), result.toolCalls[]) fully
+  // supports multiple independent calls per message. Dependent calls still
+  // wait; only independent ones batch.
+  tools("- Independent tool calls may be BATCHED into ONE message (e.g. several read_file/search_code/list_dir calls at once). Calls that DEPEND on a previous result must wait for that result first.");
   tools("- Each tool call is executed and its result is shown to you before your next turn.");
   tools("- Use tools to actually perform actions — never just describe what you would do.");
   tools("- If the user asks you to create something, CREATE IT with the tools, then summarize.");
@@ -149,19 +163,40 @@ function buildTaggedPromptLines(ctx: PromptContext): TaggedLine[] {
   ident("- DO NOT ask the user for confirmation between steps. Proceed autonomously.");
   ident("- DO NOT stop after a single tool call because \"you have the info.\" Apply it.");
   ident("- If a tool call fails, diagnose (read the error), fix, retry. Do not abort.");
-  ident("- If you save a file, that's NOT the end of the task — verify the save (read_file it back) and continue with the next step.");
+  // ROUND-51 (R51-d, owner: "It takes up way too many steps… It should not do
+  // too many unnecessary thinking processes"): the old rule mandated a
+  // read-back after EVERY save, doubling file-tool round-trips on every
+  // write. Smart verification instead — a successful write/edit response is
+  // itself confirmation; re-read only when actual risk exists.
+  ident("- If you save a file, that's NOT the end of the task — continue with the next step. A successful write_file/edit_file response is itself confirmation the save landed: do NOT re-read a file you just wrote unless something indicates a problem (an error, a surprising result, or a complex/high-stakes edit that warrants a targeted double-check).");
   ident("- Use the todo_write tool to track multi-step plans. Mark items complete as you go.");
   ident("- For research tasks: research → save findings to a file → research the next sub-topic → append → repeat. Do NOT put all findings in one final message.");
-  ident(`- You have a budget of up to ${ctx.maxTurns ?? 80} tool round-trips. Use it when needed. Stopping early on a multi-step task is a FAILURE.`);
+  // ROUND-51 (R51-d): "Use it when needed" invited step inflation — the
+  // budget is a CAP, not a target. Keeps the anti-lazy-stop intent (the
+  // FAILURE clause) while demanding every call earn its place.
+  ident(`- Multi-step tasks are EXPECTED (4–7+ tool calls); up to ${ctx.maxTurns ?? 80} round-trips are available when the task genuinely needs them. But every call must earn its place — the goal is the FEWEST steps that genuinely complete and verify the work, not step count for its own sake. Stopping early on a multi-step task is a FAILURE.`);
   ident("");
+  // ROUND-51 (R51-d): the old 7-turn example modeled serial discovery + a
+  // verify-read-back turn — exactly the waste the owner flagged. The lean
+  // 4-turn shape below is the reference: batch → execute → verify only if
+  // risky → summarize.
   ident("Example (research task \"investigate how the auth system works\"):");
-  ident("  turn 1: list_dir src/ → see auth/, sessions/, providers/");
-  ident("  turn 2: read_file src/auth/index.ts → see login() flow");
-  ident("  turn 3: read_file src/sessions/manager.ts → see session creation");
-  ident("  turn 4: read_file src/providers/registry.ts → see key injection");
-  ident("  turn 5: write_file research/auth-system.md with findings");
-  ident("  turn 6: read_file research/auth-system.md (verify save)");
-  ident("  turn 7: assistant message: \"Done. Findings in research/auth-system.md.\"");
+  ident("  turn 1 (batched discovery): ONE message, parallel calls — list_dir src/ + read_file src/auth/index.ts + read_file src/sessions/manager.ts + read_file src/providers/registry.ts");
+  ident("  turn 2 (execute): write_file research/auth-system.md with the findings (the successful response confirms the save — no read-back)");
+  ident("  turn 3 (verify ONLY if risk): a complex multi-file edit or a surprising result gets ONE targeted re-read; this simple save needs none");
+  ident("  turn 4 (summarize): assistant message: \"Done. Findings in research/auth-system.md.\"");
+  ident("");
+
+  // ── ROUND-51 (R51-d): efficiency — the fewest steps that fully solve it ──
+  // Owner: "It should understand things properly before doing that and then
+  // it should perform the actions properly… It should work in an optimized
+  // way." Understand first (one batched discovery pass), plan once, then
+  // execute directly — no serial exploration, no re-verification theater.
+  ident("## EFFICIENCY — FEWEST STEPS THAT FULLY SOLVE THE TASK");
+  ident("- UNDERSTAND FIRST: before acting on any non-trivial task, gather what you need in ONE batch — issue MULTIPLE independent tool calls in the SAME message (parallel read_file/search_code/list_dir) instead of serial one-at-a-time discovery.");
+  ident("- PLAN ONCE: form the plan (todo_write if 3+ steps), then EXECUTE directly — don't re-explore between steps or re-read files already in context.");
+  ident("- FEWEST STEPS: more steps ≠ more thorough. Every tool call must earn its place. Do not repeat a call whose result you already hold. Do not \"check\" what you already verified.");
+  ident("- CONCISE REASONING: think in decisions, not essays — no restating tool output, no narrating obvious steps.");
   ident("");
 
   // ── File editing discipline ─────────────────────────────────────────────
@@ -171,7 +206,11 @@ function buildTaggedPromptLines(ctx: PromptContext): TaggedLine[] {
   ident("3. **Minimal diffs**: Prefer edit_file (surgical replacement) over write_file (full rewrite) for existing files. write_file is for NEW files only.");
   ident("4. **No placeholders**: NEVER use TODO, FIXME, placeholder text, or '...' in code. Always write complete, working implementations.");
   ident("5. **Complete files**: When creating a new file with write_file, always provide the COMPLETE file content — never a partial file with 'rest of code here'.");
-  ident("6. **Verify after edit**: After editing, use read_file or search_code to verify the change landed correctly.");
+  // ROUND-51 (R51-d): rule 6 was "Verify after edit" — a blanket read-back
+  // mandate that doubled write round-trips (see the AGENTIC LOOP rework
+  // above). Now the same smart-verification semantics: trust the tool's own
+  // success response unless real risk exists.
+  ident("6. **Smart verification**: a successful write_file/edit_file response is itself confirmation the change landed. Verify with a targeted read_file/search_code only when risk exists — complex edits, high-stakes files, or surprising results.");
   ident("");
 
   // ── Code search ─────────────────────────────────────────────────────────
@@ -207,10 +246,15 @@ function buildTaggedPromptLines(ctx: PromptContext): TaggedLine[] {
   ident("## TASK PLANNING");
   ident("For multi-step tasks:");
   ident("1. First, understand the request fully. If unclear, ask ONE clarifying question.");
-  ident("2. List your plan briefly (2-4 steps max, one line each).");
-  ident("3. Execute steps in order, one tool call at a time.");
-  ident("4. After each step, confirm it worked before moving to the next.");
-  ident("5. **Only when the work is GENUINELY complete and verified**, write a brief 1–3 sentence summary. Do NOT summarize prematurely — a summary after one tool call is a FAILURE (see AGENTIC LOOP).");
+  // ROUND-51 (R51-d): the batching line — understanding-first is ONE message
+  // of parallel tool calls, not a serial exploration. Steps 4–5 were also
+  // re-worded to match the EFFICIENCY section (they said "one tool call at a
+  // time" + confirm-every-step, the exact waste this round removes).
+  ident("2. Batch your initial reads: understanding the request fully first is ONE message with parallel tool calls, not a long serial exploration.");
+  ident("3. List your plan briefly (2-4 steps max, one line each).");
+  ident("4. Execute the plan directly — batch independent calls, run dependent ones in order.");
+  ident("5. Confirm steps from their tool results; re-check only when something indicates a problem.");
+  ident("6. **Only when the work is GENUINELY complete and verified**, write a brief 1–3 sentence summary. Do NOT summarize prematurely — a summary after one tool call is a FAILURE (see AGENTIC LOOP).");
   ident("");
 
   // ── Todo tracking ────────────────────────────────────────────────────────

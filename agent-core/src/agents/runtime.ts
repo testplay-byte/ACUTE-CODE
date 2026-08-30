@@ -15,7 +15,7 @@ import {
   resolveProvider,
 } from "../providers/registry.js";
 import { buildProjectTools, NO_TOOLS } from "../tools/index.js";
-import { logTool, logTurnEnd, logTurnStart } from "../lib/log.js";
+import { log, logTool, logTurnEnd, logTurnStart } from "../lib/log.js";
 import {
   appendSessionEvent,
   getSession,
@@ -214,6 +214,171 @@ function toolIntentMentioned(text: string, toolNames: readonly string[]): boolea
   return false;
 }
 
+// ── ROUND-51 (R51-f): the loop-hygiene guard ────────────────────────────────
+
+/**
+ * ROUND-51 (R51-f, owner: "It takes up way too many steps… It should work in
+ * an optimized way"): the loop-hygiene guard, ported IN SPIRIT from
+ * deepseek-harness's `guard/repeat-tool-reminder` plugin (MIT © 2026 DeepSeek
+ * — ideas only, no code copied; the study lives at
+ * docs/research/deepseek-harness-notes.md). A model stuck in a no-progress
+ * loop — re-calling the SAME tool with the SAME arguments, or hammering a
+ * failing call — used to burn every remaining SDK step and every remaining
+ * outer iteration (maxTurns × maxOuterLoops provider round-trips) before the
+ * loop's own caps ended the turn. The guard watches the executed-call
+ * sequence and acts twice:
+ *
+ *   1. NUDGE (advisory, deepseek-harness's core idea): when one exact call
+ *      repeats REPEAT_NUDGE times consecutively, a user-role correction
+ *      message rides the NEXT outer iteration's in-memory message list
+ *      (the same machinery as ROUND-49's TOOL_INTENT_NUDGE — never
+ *      persisted; it is a machine correction, not a chat turn).
+ *   2. STOP (our hard divergence — their guard is advisory-only, our owner
+ *      explicitly asked for step efficiency): when the streak reaches
+ *      REPEAT_STOP, or MAX_CONSECUTIVE_FAILURES calls fail in a row (any
+ *      args — a model hammering a denied/failing call is exactly the loop
+ *      worth breaking), the turn ends honestly: persisted turn.error event
+ *      (R42/R43 rule — LOUD, persisted, retryable) + a 502 envelope with
+ *      code LOOP_GUARD. NOT a throw; partial work is already persisted.
+ *
+ * Scope: PER-TURN (fresh per runSingleAgentTurn / runStreamedAgentTurn — a
+ * new user message is a fresh context, matching their per-agent reset on
+ * user interjection). The streak resets when a call DIFFERS (name or
+ * canonical args); the failure counter resets on ANY successful call.
+ *
+ * Observability (v1 choice): the existing logger carries the firing
+ * (loop_guard.nudge / loop_guard.stop lines — name + argsSummary only, never
+ * outputs/secrets) and the turn result note + persisted turn.error make it
+ * visible in the transcript. No new SSE event types were invented — the
+ * streamed path's normal error frame ({type:'error'} with code LOOP_GUARD,
+ * which TurnErrorCard renders) closes the live stream honestly.
+ */
+
+/** ROUND-51 (R51-f): consecutive identical calls before the nudge message
+ * (deepseek-harness's first threshold — 3 in their defaults [3, 5, 8] too). */
+export const REPEAT_NUDGE = 3;
+
+/** ROUND-51 (R51-f): consecutive identical calls before the honest STOP
+ * (their guard only reminds; our owner's directive needs a hard floor). */
+export const REPEAT_STOP = 5;
+
+/** ROUND-51 (R51-f): consecutive FAILED calls (any args) before the honest
+ * STOP — catches hammering loops their exact-match chain alone would miss
+ * (e.g. read_file a, read_file b, read_file c … all failing). */
+export const MAX_CONSECUTIVE_FAILURES = 6;
+
+/** Deep key-sort so two argument objects that differ only in property order
+ * canonicalize identically (the deepseek-harness guard's exact-match rule —
+ * `sortJsonValue` + `canonicalize` there). Pure; no cycles can arrive from
+ * JSON-parsed args, but the caller may hand us anything, so the stringify is
+ * guarded anyway. */
+function sortJsonKeys(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(sortJsonKeys);
+  if (value !== null && typeof value === "object") {
+    const record = value as Record<string, unknown>;
+    const sorted: Record<string, unknown> = {};
+    for (const key of Object.keys(record).sort()) {
+      sorted[key] = sortJsonKeys(record[key]);
+    }
+    return sorted;
+  }
+  return value;
+}
+
+/**
+ * ROUND-51 (R51-f): the canonical identity of a call's arguments. Our chat
+ * adapters expose the compact `argsSummary` STRING (chat.ts is outside this
+ * round's ownership), so strings pass through verbatim — identical raw args
+ * always produce an identical summary. Objects (possible from future
+ * adapters / direct onToolCall use) get the stable key-sort + stringify, and
+ * anything unstringifiable degrades to String(args) instead of throwing.
+ * Honest v1 limitation: two DIFFERENT calls can share a summary (two same-
+ * length `content` bodies both render "content: 100 chars") — a rare false
+ * positive that only ever produces a nudge/stop the model can answer by
+ * changing arguments, and the honest fix (threading raw args through
+ * ChatToolCall) belongs to a future chat.ts round.
+ */
+export function canonicalToolArgs(args: unknown): string {
+  if (typeof args === "string") return args;
+  try {
+    const stringified = JSON.stringify(sortJsonKeys(args));
+    return stringified ?? String(args);
+  } catch {
+    return String(args);
+  }
+}
+
+/** ROUND-51 (R51-f): one guard verdict per executed tool call. */
+export interface LoopGuardAction {
+  action: "continue" | "nudge" | "stop";
+  /** present on "nudge" — the ready-to-inject user-role message. */
+  nudge?: string;
+  /** present on "stop" — the honest end-of-turn message (also the log line
+   * and the persisted turn.error message). */
+  reason?: string;
+}
+
+/** ROUND-51 (R51-f): the pure, per-turn guard (see the section comment). */
+export interface LoopGuard {
+  onToolCall(toolName: string, args: unknown, ok: boolean): LoopGuardAction;
+}
+
+/**
+ * ROUND-51 (R51-f): create a fresh per-turn guard. Pure state machine — no
+ * DB, no clock, no I/O — so tests hit the thresholds directly and both turn
+ * paths (sync + streamed) share one implementation.
+ */
+export function createLoopGuard(): LoopGuard {
+  let lastKey: string | null = null;
+  let repeatStreak = 0;
+  let consecutiveFailures = 0;
+  let nudgedThisStreak = false;
+  let stopReason: string | null = null;
+
+  return {
+    onToolCall(toolName: string, args: unknown, ok: boolean): LoopGuardAction {
+      // Once stopped, stay stopped — a caller that keeps feeding (it
+      // shouldn't; both paths break immediately) never re-arms the guard.
+      if (stopReason !== null) return { action: "stop", reason: stopReason };
+
+      const key = `${toolName}\u0000${canonicalToolArgs(args)}`;
+      if (key === lastKey) {
+        repeatStreak += 1;
+      } else {
+        lastKey = key;
+        repeatStreak = 1;
+        nudgedThisStreak = false;
+      }
+      // Any successful call clears the failure run; failures of ANY args
+      // (identical or not) accumulate.
+      consecutiveFailures = ok ? 0 : consecutiveFailures + 1;
+
+      if (repeatStreak >= REPEAT_STOP) {
+        stopReason = `Loop guard: stopped after ${repeatStreak} identical consecutive calls to ${toolName} — likely a no-progress loop.`;
+        return { action: "stop", reason: stopReason };
+      }
+      if (consecutiveFailures >= MAX_CONSECUTIVE_FAILURES) {
+        stopReason = `Loop guard: stopped after ${consecutiveFailures} consecutive failed tool calls (last: ${toolName}) — likely a no-progress loop.`;
+        return { action: "stop", reason: stopReason };
+      }
+      // One nudge per streak: at 3 the model gets the correction; if it
+      // ignores it and keeps repeating, the STOP at 5 ends the turn — no
+      // reminder spam in between (their [3, 5, 8] re-reminds; we escalate).
+      if (!nudgedThisStreak && repeatStreak >= REPEAT_NUDGE) {
+        nudgedThisStreak = true;
+        return {
+          action: "nudge",
+          nudge:
+            `You have called ${toolName} with identical arguments ${repeatStreak} times in a row with no progress. ` +
+            "Stop repeating: re-read the last result, change your approach, or ask the owner. " +
+            "If the task is genuinely complete, finish with your summary.",
+        };
+      }
+      return { action: "continue" };
+    },
+  };
+}
+
 export function delegationDepth(db: SqliteDatabase, sessionId: string): number {
   let depth = 0;
   let cursor: string | null = sessionId;
@@ -244,8 +409,13 @@ export type TurnOutcome =
       ok: false;
       status: 404 | 409 | 499 | 502;
       /** ROUND-42: ABORTED = the user explicitly stopped the stream.
-       * ROUND-47: PROVIDER_DISABLED = the provider row is enabled=false. */
-      code: "NOT_FOUND" | "CONFLICT" | "ABORTED" | "PROVIDER_ERROR" | "PROVIDER_DISABLED";
+       * ROUND-47: PROVIDER_DISABLED = the provider row is enabled=false.
+       * ROUND-51 (R51-f): LOOP_GUARD = the loop-hygiene guard ended a
+       * no-progress turn (identical-call streak or consecutive failures).
+       * Carries status 502 so the streamed route's `status >= 500` rule
+       * fires the honest task_failed notification — the task did NOT
+       * complete; the provider itself did not fail either. */
+      code: "NOT_FOUND" | "CONFLICT" | "ABORTED" | "PROVIDER_ERROR" | "PROVIDER_DISABLED" | "LOOP_GUARD";
       message: string;
       details?: Record<string, unknown>;
     };
@@ -857,6 +1027,13 @@ export async function runSingleAgentTurn(
   // list only (never persisted — it is a machine correction, not a chat turn).
   let nudgeUsed = false;
   let pendingNudge: ChatTurnMessage | null = null;
+  // ROUND-51 (R51-f): the loop-hygiene guard (per-turn — see the section
+  // comment near createLoopGuard). The sync path observes each executed call
+  // in the post-call audit loop below (one feed per call — onStepFinish live
+  // frames carry the same calls and are NOT double-counted).
+  const loopGuard = createLoopGuard();
+  let guardNudge: ChatTurnMessage | null = null;
+  let loopGuardStop: string | null = null;
 
   for (let outerIter = 0; outerIter < maxOuterLoops; outerIter++) {
     // ROUND-48 (R48-e1): a child whose parent was stopped finishes the
@@ -893,6 +1070,14 @@ export async function runSingleAgentTurn(
     if (pendingNudge !== null) {
       messages.push(pendingNudge);
       pendingNudge = null;
+    }
+    // ROUND-51 (R51-f): the loop guard's nudge rides the same in-memory path
+    // as the intent nudge (next iteration only, never persisted). Mutually
+    // exclusive with it by construction: the intent nudge fires only on
+    // zero-tool iterations, the guard nudge only on tool-using ones.
+    if (guardNudge !== null) {
+      messages.push(guardNudge);
+      guardNudge = null;
     }
 
     const startedAt = Date.now();
@@ -970,6 +1155,27 @@ export async function runSingleAgentTurn(
             : {}),
         },
       });
+      // ROUND-51 (R51-f): feed the loop-hygiene guard AFTER the call's own
+      // event is persisted — the audit trail stays complete regardless of
+      // what the guard decides. A stop is only FLAGGED here (the iteration's
+      // assistant message still lands below); the break happens after it.
+      const guardAction = loopGuard.onToolCall(call.name, call.argsSummary, call.ok);
+      if (guardAction.action === "stop") {
+        loopGuardStop = guardAction.reason ?? "Loop guard: stopped — no progress.";
+        log("warn", "loop_guard.stop", {
+          sessionId: session.id,
+          agentId: agent.id,
+          reason: loopGuardStop,
+        });
+      } else if (guardAction.action === "nudge" && guardAction.nudge !== undefined) {
+        guardNudge = { role: "user", content: guardAction.nudge };
+        log("info", "loop_guard.nudge", {
+          sessionId: session.id,
+          agentId: agent.id,
+          toolName: call.name,
+          repeatStreak: REPEAT_NUDGE,
+        });
+      }
     }
 
     // ROUND-40: forward live tool events to the parent's UI when an emit is
@@ -1019,6 +1225,12 @@ export async function runSingleAgentTurn(
       emit({ type: "finish", sessionId: session.id });
     }
 
+    // ROUND-51 (R51-f): the guard's hard threshold fired during this
+    // iteration — stop the outer loop BEFORE spending another provider call
+    // on the same no-progress pattern (the turn closes through the honest
+    // loop-guard exit below the loop).
+    if (loopGuardStop !== null) break;
+
     // ROUND-33 (owner report: "hello, how are you" kept planning + running
     // tools in an infinite loop): an iteration that produced a text reply
     // with ZERO tool calls is a CONVERSATIONAL response — break. ROUND-49
@@ -1066,6 +1278,48 @@ export async function runSingleAgentTurn(
       status: 499,
       code: "ABORTED",
       message: `turn aborted for session ${session.id}`,
+    };
+  }
+
+  // ROUND-51 (R51-f): loop-guard stop — the honest end for a no-progress
+  // loop. Same shape as the provider-error path (persisted turn.error + 502
+  // envelope; the R42/R43 rule: LOUD, persisted, retryable) but the message
+  // names the guard, not a provider. Partial work is already in the event
+  // log; the usage row still records the tokens actually spent (honest
+  // accounting — the burn was real).
+  if (loopGuardStop !== null) {
+    persistTurnError(db, {
+      sessionId: session.id,
+      agentId: agent.id,
+      userSeq: userEvent.seq,
+      code: "LOOP_GUARD",
+      message: loopGuardStop,
+      model,
+      providerId: provider.id,
+      providerError: loopGuardStop,
+      keySecrets,
+    });
+    const usage: UsageRecord = {
+      agentId: agent.id,
+      sessionId: session.id,
+      provider: provider.id,
+      model,
+      inputTokens: totalInputTokens,
+      outputTokens: totalOutputTokens,
+      cachedInputTokens: totalCachedInputTokens,
+      costUsd: computeCost(db, provider.id, model, totalInputTokens, totalOutputTokens),
+      // A guard stop always follows at least one tool-using iteration, so an
+      // assistant event exists — the userSeq fallback is pure defensiveness.
+      ts: lastAssistantEvent !== null ? lastAssistantEvent.ts : userEvent.ts,
+    };
+    recordUsage(db, usage);
+    touchSession(db, session.id);
+    logTurnEnd(session.id, false, Date.now() - syncStartedAt, totalInputTokens, totalOutputTokens);
+    return {
+      ok: false,
+      status: 502,
+      code: "LOOP_GUARD",
+      message: loopGuardStop,
     };
   }
 
@@ -1257,6 +1511,13 @@ export async function runStreamedAgentTurn(
   // as the sync path: one nudge per turn, in-memory only, never persisted.
   let nudgeUsed = false;
   let pendingNudge: ChatTurnMessage | null = null;
+  // ROUND-51 (R51-f): the loop-hygiene guard (per-turn). The streamed path
+  // feeds it LIVE at each tool-result event, so a no-progress loop is
+  // stopped MID-STREAM — before the model burns the rest of this SDK call's
+  // steps, let alone another outer iteration (the owner's exact complaint).
+  const loopGuard = createLoopGuard();
+  let guardNudge: ChatTurnMessage | null = null;
+  let loopGuardStop: string | null = null;
 
   for (let outerIter = 0; outerIter < maxOuterLoops; outerIter++) {
     // Re-assemble messages from the event log — ROUND-34: now WITH tool
@@ -1279,6 +1540,12 @@ export async function runStreamedAgentTurn(
     if (pendingNudge !== null) {
       messages.push(pendingNudge);
       pendingNudge = null;
+    }
+    // ROUND-51 (R51-f): the loop guard's nudge rides the same in-memory path
+    // as the intent nudge (next iteration only, never persisted).
+    if (guardNudge !== null) {
+      messages.push(guardNudge);
+      guardNudge = null;
     }
     const usedTokens = estimateMessageTokens(messages);
     if (compaction.compacted && compaction.detail !== undefined) {
@@ -1442,6 +1709,33 @@ export async function runStreamedAgentTurn(
             },
           });
           logTool(session.id, event.toolName, event.argsSummary, event.ok);
+          // ROUND-51 (R51-f): feed the loop-hygiene guard LIVE — the call's
+          // event is already persisted + emitted above, so the audit trail
+          // stays complete whatever the guard decides. STOP breaks out of the
+          // for-await immediately (its implicit iterator return() ends the
+          // adapter stream): honest trade-off — the aborted call's finish
+          // frame never arrives, so its tokens are under-counted in the
+          // usage row, but the very waste the guard exists to stop is
+          // stopped. NUDGE queues the correction for the next iteration.
+          const guardAction = loopGuard.onToolCall(event.toolName, event.argsSummary, event.ok);
+          if (guardAction.action === "stop") {
+            loopGuardStop = guardAction.reason ?? "Loop guard: stopped — no progress.";
+            log("warn", "loop_guard.stop", {
+              sessionId: session.id,
+              agentId: agent.id,
+              reason: loopGuardStop,
+            });
+            break;
+          }
+          if (guardAction.action === "nudge" && guardAction.nudge !== undefined) {
+            guardNudge = { role: "user", content: guardAction.nudge };
+            log("info", "loop_guard.nudge", {
+              sessionId: session.id,
+              agentId: agent.id,
+              toolName: event.toolName,
+              repeatStreak: REPEAT_NUDGE,
+            });
+          }
         } else if (event.type === "finish") {
           iterInputTokens = event.usage.inputTokens;
           iterOutputTokens = event.usage.outputTokens;
@@ -1529,6 +1823,11 @@ export async function runStreamedAgentTurn(
     }
     statsCarrierNeeded = false;
 
+    // ROUND-51 (R51-f): the guard stopped the stream mid-iteration — end the
+    // turn honestly instead of spending another outer iteration on it (the
+    // turn closes through the loop-guard exit below the loop).
+    if (loopGuardStop !== null) break;
+
     // ROUND-33 FIX (owner report: "hello, how are you" kept planning +
     // running tools in an infinite loop): an iteration that produced a text
     // reply with ZERO tool calls is a CONVERSATIONAL response — the model
@@ -1582,6 +1881,46 @@ export async function runStreamedAgentTurn(
       },
     });
     lastAssistantEvent = { seq: fallback.seq, ts: fallback.ts, content: lastText };
+  }
+
+  // ROUND-51 (R51-f): loop-guard stop — the honest end for a no-progress
+  // loop, mirroring the sync path: persisted turn.error (R42/R43 rule — the
+  // reload shows the failure; the SSE route's generic error frame already
+  // closed the live stream with code LOOP_GUARD) + a 502 envelope + the
+  // usage row for the tokens actually spent. persistTurnError resets the
+  // session to `queued` so the turn stays retryable.
+  if (loopGuardStop !== null) {
+    persistTurnError(db, {
+      sessionId: session.id,
+      agentId: agent.id,
+      userSeq: userEvent.seq,
+      code: "LOOP_GUARD",
+      message: loopGuardStop,
+      model,
+      providerId: provider.id,
+      providerError: loopGuardStop,
+      keySecrets,
+    });
+    const usage: UsageRecord = {
+      agentId: agent.id,
+      sessionId: session.id,
+      provider: provider.id,
+      model,
+      inputTokens: totalInputTokens,
+      outputTokens: totalOutputTokens,
+      cachedInputTokens: totalCachedInputTokens,
+      costUsd: computeCost(db, provider.id, model, totalInputTokens, totalOutputTokens),
+      ts: lastAssistantEvent.ts,
+    };
+    recordUsage(db, usage);
+    touchSession(db, session.id);
+    logTurnEnd(session.id, false, ms, totalInputTokens, totalOutputTokens);
+    return {
+      ok: false,
+      status: 502,
+      code: "LOOP_GUARD",
+      message: loopGuardStop,
+    };
   }
 
   const usage: UsageRecord = {

@@ -542,6 +542,17 @@ describe("BrowserPanel (R43-10 embedded browser)", () => {
       expect(postCalls("/api/v1/browser/navigate").some((c) => c.body?.url === "https://mdn.dev")).toBe(true),
     );
   });
+
+  it("ROUND-51: the engine badge names the live renderer — 'Proxy fallback' outside Tauri", async () => {
+    const tab = makeTab();
+    seedRightSidebar(tab);
+    renderWithProviders(<BrowserPanel projectId="prj_test" tab={tab} />);
+    await waitFor(() => expect(postCalls("/api/v1/browser/session")).toHaveLength(1));
+
+    // The owner must be able to SEE which engine is live (R51-a) — the
+    // non-Tauri dev flow is honestly the proxied renderer.
+    expect(screen.getByTestId("browser-engine-badge").textContent).toBe("Proxy fallback");
+  });
 });
 
 describe("BrowserPanel native mode (R50-a child webviews over the panel)", () => {
@@ -766,5 +777,53 @@ describe("BrowserPanel native mode (R50-a child webviews over the panel)", () =>
     expect(screen.queryByTestId("browser-native-placeholder")).toBeNull();
     expect(create()).not.toHaveBeenCalled();
     expect(setVisible()).not.toHaveBeenCalled();
+  });
+
+  it("ROUND-51: native mode shows the 'Chromium (native)' engine badge", async () => {
+    const tab = makeTab({ browserUrl: "https://github.com" });
+    seedRightSidebar(tab);
+    renderWithProviders(<BrowserPanel projectId="prj_test" tab={tab} />);
+    await waitFor(() => expect(create()).toHaveBeenCalledWith("tab-test-1", "https://github.com"));
+
+    expect(screen.getByTestId("browser-engine-badge").textContent).toBe("Chromium (native)");
+  });
+
+  it("ROUND-51: a REJECTED nativeTabCreate flips the panel into the proxy path for the rest of the mount", async () => {
+    // The native backend is broken in this scenario (e.g. WebView2 runtime
+    // missing): every create rejects.
+    create().mockRejectedValue(new Error("webview2 backend gone"));
+    const tab = makeTab({ browserUrl: "https://github.com" });
+    seedRightSidebar(tab);
+    renderWithProviders(<BrowserPanel projectId="prj_test" tab={tab} />);
+    await waitFor(() => expect(postCalls("/api/v1/browser/session")).toHaveLength(1));
+
+    // The failure surfaces as an EXPLANATORY error card (R51-a copy), not
+    // the old bare "Native browser failed: …" dead-end.
+    const card = await screen.findByTestId("browser-error-card");
+    expect(card.textContent).toContain("Native browser unavailable (webview2 backend gone)");
+    expect(card.textContent).toContain("fell back to the proxied renderer");
+
+    // The panel FLIPPED into web mode: the iframe renders the URL (the
+    // store kept it), the placeholder is gone, and the badge is honest.
+    await waitFor(() => expect(screen.getByTestId("browser-iframe")).toBeTruthy());
+    expect(screen.getByTestId("browser-iframe").getAttribute("src")).toContain(encodeURIComponent("https://github.com"));
+    expect(screen.queryByTestId("browser-native-placeholder")).toBeNull();
+    expect(screen.getByTestId("browser-engine-badge").textContent).toBe("Proxy fallback");
+
+    // Further navigations stay on the proxy path — no more native calls.
+    create().mockClear();
+    const input = screen.getByTestId("browser-address-input") as HTMLInputElement;
+    fireEvent.change(input, { target: { value: "https://example.com" } });
+    fireEvent.submit(input.closest("form") as HTMLFormElement);
+    await waitFor(() =>
+      expect(postCalls("/api/v1/browser/navigate").some((c) => c.body?.url === "https://example.com")).toBe(true),
+    );
+    await waitFor(() => expect(screen.getByTestId("browser-iframe").getAttribute("src")).toContain(encodeURIComponent("https://example.com")));
+    expect(create()).not.toHaveBeenCalled();
+    // The mode-flip re-runs the mount effect, whose CLEANUP hides the
+    // (never-created) webview — setVisible(tabId, false) once is expected
+    // (Rust side: not-found = Ok, idempotent). What must NOT happen is any
+    // further SHOW attempt: no setVisible(tabId, true) after the flip.
+    expect(setVisible()).not.toHaveBeenCalledWith("tab-test-1", true);
   });
 });
