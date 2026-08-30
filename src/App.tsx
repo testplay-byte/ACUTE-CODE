@@ -1,6 +1,7 @@
 import { useEffect } from "react";
 import { Route, Routes, useNavigate } from "react-router";
 import { AppShell } from "./components/shell/AppShell";
+import { ConnectionGate } from "./components/shell/ConnectionGate";
 import { ProjectView } from "./components/projects/ProjectView";
 import { DemoViewerScreen } from "./components/demos/DemoViewerScreen";
 import { ProjectChatScreen } from "./components/project-chat";
@@ -64,7 +65,7 @@ function FirstRunCheck() {
  */
 export function App() {
   return (
-    <>
+    <ConnectionGate>
       <FirstRunCheck />
       <Routes>
         <Route path="/setup" element={<SetupWizard />} />
@@ -72,7 +73,7 @@ export function App() {
           <Route index element={<DashboardScreen />} />
           <Route path="project/:id" element={<ProjectView />} />
           <Route path="project/:id/chat" element={<ProjectChatScreen />} />
-          
+
           {/* ROUND-52 (R52-b): the real Usage screen — was PlaceholderPage
               (owner: "Usage screen section 2 … you apparently did not
               implement the usage properly"). */}
@@ -91,6 +92,6 @@ export function App() {
           />
         </Route>
       </Routes>
-    </>
+    </ConnectionGate>
   );
 }

@@ -1,4 +1,4 @@
-<!-- last-reviewed: 2026-08-25 round-36 -->
+<!-- last-reviewed: 2026-08-30 round-53 -->
 # ADR-0019: Project-scoped 7-tool set is THE tool catalog; allowlist enforced
 
 - **Status:** ACCEPTED (backfilled round-17; enforcement added round-17)

@@ -1,4 +1,4 @@
-<!-- last-reviewed: 2026-08-29 round-48 -->
+<!-- last-reviewed: 2026-08-30 round-53 -->
 # AGENT MEMORY — lessons learned, rules going forward
 
 **Owner directive (2026-08-23):** "learn from the mistakes you made, document

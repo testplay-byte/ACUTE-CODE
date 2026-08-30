@@ -1,4 +1,4 @@
-<!-- last-reviewed: 2026-08-25 round-36 -->
+<!-- last-reviewed: 2026-08-30 round-53 -->
 # PILLARS — the three-product blueprint
 
 **Owner vision (2026-08-22/23):** ACUTE-CODE is three products in one —

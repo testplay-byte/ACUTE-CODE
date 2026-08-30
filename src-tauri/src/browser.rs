@@ -213,7 +213,10 @@ pub fn open_browser_window(app: AppHandle, url: String) -> Result<(), String> {
     // If the browser window already exists, focus it + navigate to the URL.
     if let Some(existing) = app.get_webview_window(BROWSER_WINDOW_LABEL) {
         // eval() navigates the existing webview to the new URL.
-        let init = format!("window.location = {};", serde_json::to_string(&url).map_err(|e| format!("url encode failed: {e}"))?);
+        let init = format!(
+            "window.location = {};",
+            serde_json::to_string(&url).map_err(|e| format!("url encode failed: {e}"))?
+        );
         let _ = existing.eval(&init);
         let _ = existing.set_focus();
         // Re-inject the nav overlay (it may have been lost on a fresh load).
@@ -226,22 +229,19 @@ pub fn open_browser_window(app: AppHandle, url: String) -> Result<(), String> {
         .parse()
         .map_err(|e| format!("invalid url \"{url}\": {e}"))?;
 
-    let builder = WebviewWindowBuilder::new(
-        &app,
-        BROWSER_WINDOW_LABEL,
-        WebviewUrl::External(parsed_url),
-    )
-    .title("Acute Browser")
-    .inner_size(1200.0, 800.0)
-    .min_inner_size(640.0, 480.0)
-    .resizable(true)
-    .fullscreen(false)
-    .decorations(true)
-    // WebView2 (Windows): the persistent user-data dir is where cookies +
-    // login state live. WebKit (macOS): same dir for website data.
-    // (Tauri 2 renamed the builder method from user_data_dir to
-    // data_directory — this is the 2.x name, verified against tauri 2.11.5.)
-    .data_directory(profile);
+    let builder =
+        WebviewWindowBuilder::new(&app, BROWSER_WINDOW_LABEL, WebviewUrl::External(parsed_url))
+            .title("Acute Browser")
+            .inner_size(1200.0, 800.0)
+            .min_inner_size(640.0, 480.0)
+            .resizable(true)
+            .fullscreen(false)
+            .decorations(true)
+            // WebView2 (Windows): the persistent user-data dir is where cookies +
+            // login state live. WebKit (macOS): same dir for website data.
+            // (Tauri 2 renamed the builder method from user_data_dir to
+            // data_directory — this is the 2.x name, verified against tauri 2.11.5.)
+            .data_directory(profile);
 
     // Inject the nav overlay on every navigation (initial load + every
     // subsequent same-page navigation). In Tauri 2 the on_navigation hook
@@ -274,7 +274,10 @@ pub fn navigate_browser(app: AppHandle, url: String) -> Result<(), String> {
     let existing = app
         .get_webview_window(BROWSER_WINDOW_LABEL)
         .ok_or_else(|| "browser window not open — call open_browser_window first".to_string())?;
-    let init = format!("window.location = {};", serde_json::to_string(&url).map_err(|e| format!("url encode failed: {e}"))?);
+    let init = format!(
+        "window.location = {};",
+        serde_json::to_string(&url).map_err(|e| format!("url encode failed: {e}"))?
+    );
     existing
         .eval(&init)
         .map_err(|e| format!("navigate eval failed: {e}"))?;
@@ -286,9 +289,7 @@ pub fn navigate_browser(app: AppHandle, url: String) -> Result<(), String> {
 #[tauri::command]
 pub fn close_browser_window(app: AppHandle) -> Result<(), String> {
     if let Some(existing) = app.get_webview_window(BROWSER_WINDOW_LABEL) {
-        existing
-            .close()
-            .map_err(|e| format!("close failed: {e}"))?;
+        existing.close().map_err(|e| format!("close failed: {e}"))?;
     }
     Ok(())
 }
@@ -438,7 +439,11 @@ pub fn browser_tab_set_bounds(
 /// Ok (idempotent) — hiding a tab that never created its webview is a no-op,
 /// and the unmount cleanup must never crash on a fresh tab.
 #[tauri::command]
-pub fn browser_tab_set_visible(app: AppHandle, tab_id: String, visible: bool) -> Result<(), String> {
+pub fn browser_tab_set_visible(
+    app: AppHandle,
+    tab_id: String,
+    visible: bool,
+) -> Result<(), String> {
     let Some(webview) = find_tab_webview(&app, &tab_id) else {
         return Ok(());
     };

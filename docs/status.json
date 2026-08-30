@@ -3,7 +3,7 @@
   "product": {
     "name": "Acute",
     "tagline": "Local-first multi-agent engineering workbench",
-    "version": "0.1.0",
+    "version": "0.53.0",
     "availability": "Private build — not yet distributed",
     "chips": [
       "Windows desktop",
@@ -152,8 +152,8 @@
   ],
   "plan": {
     "current": {
-      "title": "Round 36 DELIVERED — sub-agent orchestration (Phase 3 core)",
-      "detail": "delegate_task tool + orchestrator (atomic total/per-key semaphores, key-pool assignment preferring sub-agent slots, crash recovery resuming from the event log, boot sweep), sub-agent monitoring (live SubAgentCards with tap-to-inspect logs + retry), settings (maxParallel/perKeyLimit steppers + API key pool CRUD), children excluded from the sidebar. ADR-0022. Live-proven with a real 2-sub-agent parallel delegation. 227 tests."
+      "title": "Round 53 DELIVERED — the connection round (first packaged-app session)",
+      "detail": "The owner's first run of the NSIS-installed desktop app reported 'Could not reach agent-core at http://127.0.0.1:55963 (TypeError: Failed to fetch)' + 'Agent core unreachable' in Settings + keys that looked missing — one root cause, three symptoms. The sidecar binds an EPHEMERAL port per launch; the UI persisted that port to localStorage so the next boot rehydrated a dead endpoint. Fixes: the store persists NOTHING inside Tauri (v1 blobs retired on read); the Rust handshake moved to a background thread; the webview POLLS sidecar_info (fail-fast on sidecar_status errors); the whole app tree is gated by a connection splash so no query can fire at a stale endpoint; an offline screen shows the REAL error with a one-click Restart-engine (new restart_sidecar + sidecar_status shell commands); a child monitor + 20s ping watchdog recover mid-session deaths; every lifecycle line lands in %APPDATA%\\acute-code\\sidecar.log (keys logged as id+length only). 1058 tests + cargo check on the Windows target + a live browser battery (project created through the owner's exact failing path, live chat turn, Usage + Sub-agents on real data)."
     },
     "upcoming": [
       {
@@ -188,5 +188,5 @@
       "Quality over speed — every round verified before push"
     ]
   },
-  "round": 36
+  "round": 53
 }

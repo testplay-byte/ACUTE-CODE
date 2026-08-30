@@ -1,4 +1,4 @@
-<!-- last-reviewed: 2026-08-25 round-36 -->
+<!-- last-reviewed: 2026-08-30 round-53 -->
 # Hermes Agent (Nous Research) — Research Summary
 
 **Target:** ACUTE-CODE reference-project analysis

@@ -4,6 +4,7 @@ import { Link } from "react-router";
 import { Activity, Check, Cpu, KeyRound, Plus, Trash2 } from "lucide-react";
 import { useThemeStyles } from "../../lib/use-theme-styles";
 import { withAlpha } from "../dashboard/helpers";
+import { isTauri } from "../../lib/sidecar";
 import { filterModelsForPicker, useSettingsStore } from "../../lib/settings-store";
 import {
   fetchKeyPool,
@@ -38,6 +39,15 @@ import {
  */
 
 const SUBAGENT_PROVIDER_ID = "openrouter";
+
+/**
+ * ROUND-53: the old copy told the PACKAGED app's owner to run `pnpm dev:full`
+ * — dev-workflow advice shown in a desktop install. Mode-aware now: the
+ * desktop app points at the connection banner's Restart engine action.
+ */
+const coreUnreachableHint = isTauri()
+  ? "agent-core is not responding — if the connection banner is showing, use its Restart engine button, then reopen this tab."
+  : "Agent core unreachable — start the app (or pnpm dev:full).";
 
 /**
  * The three paste slots target pool slots 2, 3, 4 (slot 0 = the owner's
@@ -236,7 +246,7 @@ function SubAgentKeysCard() {
       </p>
       {poolQuery.isError ? (
         <p className="text-[11px]" style={{ color: "#ef4444" }} role="alert">
-          Agent core unreachable — start the app (or pnpm dev:full) to manage sub-agent keys.
+          {coreUnreachableHint} to manage sub-agent keys.
         </p>
       ) : (
         <div className="rounded-[10px] border-[1.5px] overflow-hidden" style={{ borderColor: styles.border }}>
@@ -330,7 +340,7 @@ function SubAgentModelCard() {
         aria-label="Sub-agent model (temporary)"
       >
         <p className="text-[11px]" style={{ color: "#ef4444" }} role="alert">
-          Agent core unreachable — start the app (or pnpm dev:full) to pick a sub-agent model.
+          {coreUnreachableHint} to pick a sub-agent model.
         </p>
       </section>
     );
@@ -635,7 +645,7 @@ function SubAgentSupervisionCard() {
         aria-label="Sub-agent supervision"
       >
         <p className="text-[11px]" style={{ color: "#ef4444" }} role="alert">
-          Agent core unreachable — start the app (or pnpm dev:full) to tune sub-agent supervision.
+          {coreUnreachableHint} to tune sub-agent supervision.
         </p>
       </section>
     );

@@ -1,4 +1,4 @@
-<!-- last-reviewed: 2026-08-30 round-50 -->
+<!-- last-reviewed: 2026-08-30 round-53 -->
 # Changelog
 
 All notable changes to ACUTE-CODE are documented here. Entries are written for
@@ -14,6 +14,55 @@ version number is single-sourced from the root `package.json`
 Planned next: installer code-signing (SmartScreen), the deepseek-harness
 future candidates (compaction pressure-trigger, continuable sub-agent
 children), the Files-tab polish.
+
+## [0.53.0] - 2026-08-30
+
+Round 53 — the connection round. First run of the packaged desktop app
+reported "Could not reach agent-core at http://127.0.0.1:55963 (TypeError:
+Failed to fetch)", "Agent core unreachable" in Settings, and keys that looked
+missing. All three shared one root cause — fixed at every layer, plus the
+diagnostics and recovery the app needed to be self-healing.
+
+### Fixed
+
+- **The stale-port bug (the "55963" error).** The sidecar binds an ephemeral
+  port on every launch, and the UI persisted that port (`baseUrl`) plus
+  `demoData: false` to localStorage — so the NEXT launch rehydrated a
+  previous session's dead endpoint and every request died with "Failed to
+  fetch". Inside the desktop app NOTHING is persisted anymore: every boot
+  starts from safe defaults and adopts the live endpoint in memory
+  (pre-R53 localStorage blobs are retired on read; browser dev keeps its
+  stable-port persistence).
+- **The handshake race (why the port went stale in the first place).** The
+  shell used to answer the UI's `sidecar_info` call exactly once — while its
+  own sidecar handshake (up to 25s of blocking startup inside `setup`) was
+  still running. Losing that race left the app pointed at the dead port for
+  the whole session. The handshake now runs on a background thread (the
+  window paints immediately) and the UI POLLS until the engine is actually
+  up.
+- **The invisible startup failure.** If the sidecar failed to start in the
+  packaged app, the only error went to a console that doesn't exist in a GUI
+  process. Every lifecycle line (spawn command, ready, health, injected
+  provider keys, failures, exits) is now appended to
+  `%APPDATA%\acute-code\sidecar.log`, and the failure reason surfaces IN THE
+  APP.
+
+### Added
+
+- **Connection splash + offline screen.** The app gates its whole tree on
+  the engine: a branded "Connecting to agent-core…" splash while the engine
+  boots (no screen can fire requests at a dead endpoint anymore), and — if
+  the engine fails — a clear screen with the REAL error, a one-click
+  **Restart engine** button (the shell tears down and re-runs the full
+  lifecycle; no app restart), and the sidecar.log pointer.
+- **Mid-session watchdog.** The shell watches the engine process; if it dies
+  while you work, the app notices within ~20s, shows the exit reason, and
+  the same Restart engine button recovers it (all data is safe on disk —
+  reconnecting re-fetches everything).
+- **Live diagnostics for support.** `sidecar_status` (the lifecycle phase +
+  error) and `restart_sidecar` are new shell commands; sidecar.log rotates
+  at 1 MB; provider keys injected at spawn are logged by id + length only
+  (never values).
 
 ## [0.52.0] - 2026-08-30
 

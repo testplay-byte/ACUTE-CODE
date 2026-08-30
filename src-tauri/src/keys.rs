@@ -15,8 +15,11 @@ const KEYRING_SERVICE_PREFIX: &str = "ACUTE-CODE/provider/";
 const KEYRING_USER: &str = "api-key";
 
 fn entry(provider_id: &str) -> Result<keyring::Entry, String> {
-    keyring::Entry::new(&format!("{KEYRING_SERVICE_PREFIX}{provider_id}"), KEYRING_USER)
-        .map_err(|e| format!("opening credential entry: {e}"))
+    keyring::Entry::new(
+        &format!("{KEYRING_SERVICE_PREFIX}{provider_id}"),
+        KEYRING_USER,
+    )
+    .map_err(|e| format!("opening credential entry: {e}"))
 }
 
 /// Provider ids are slugs everywhere in the system (API.md §8.2); enforce that

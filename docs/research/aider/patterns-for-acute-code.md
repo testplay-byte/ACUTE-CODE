@@ -1,4 +1,4 @@
-<!-- last-reviewed: 2026-08-25 round-36 -->
+<!-- last-reviewed: 2026-08-30 round-53 -->
 # Aider — Patterns for ACUTE-CODE
 
 Aider is Apache-2.0 and Python; ACUTE-CODE is Tauri 2 + React 18/TS + Node/TS sidecar (SQLite via localhost REST+WS, max 5 concurrent agents, human-approval safety layer). We adopt **concepts and algorithms only** — never code. Every "WHAT" below was verified in the aider repo/docs (see Sources).

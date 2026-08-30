@@ -13,6 +13,11 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             sidecar::sidecar_info,
+            // ROUND-53 (R53): the connection splash / offline banner poll this
+            // for the lifecycle phase + the REAL startup error, and the Retry
+            // button drives restart_sidecar (crashed backend → no app restart).
+            sidecar::sidecar_status,
+            sidecar::restart_sidecar,
             sidecar::ping_sidecar,
             keys::store_provider_key,
             keys::provider_key_status,

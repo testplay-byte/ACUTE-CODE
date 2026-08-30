@@ -1,4 +1,4 @@
-<!-- last-reviewed: 2026-08-30 round-52 -->
+<!-- last-reviewed: 2026-08-30 round-53 -->
 # TESTING — the verification ladder
 
 Five layers; each has a defined "when mandatory". Rules here are binding
@@ -13,11 +13,34 @@ Five layers; each has a defined "when mandatory". Rules here are binding
 | L4 live battery | real provider turn(s), real disk, fresh DB | sandbox, single invocation | anything touching agents, projects, tools, streaming |
 | L5 browser verification | real UI against the live stack; screenshots machine-verified | sandbox, single invocation | any UI-affecting round |
 
-**Current counts (R52, verified 2026-08-30):** `pnpm test` = **1035 tests
-in 73 files** (1023 unit + 12 e2e — the e2e split is 8 sidecar + 4
+**Current counts (R53, verified 2026-08-30):** `pnpm test` = **1058 tests
+in 75 files** (1046 unit + 12 e2e — the e2e split is 8 sidecar + 4
 terminal-session). Trajectory: 262 (R42) → 397 (R43) → 471 (R44) → 565
 (R45) → 622 (R46) → 683 (R47) → 752 (R48) → 815ish (R49) → 930 (R50) →
-978 (R51) → 1035 (R52), same counting basis. New/changed R52 suites:
+978 (R51) → 1035 (R52) → 1058 (R53), same counting basis. New/changed R53
+suites: `config-store` NEW 7 (THE STALE-PORT REGRESSION: a persisted v1
+blob carrying the owner's dead port 55963 is ignored on Tauri rehydrate —
+baseUrl falls back to the safe default, demoData true, connection
+"connecting"; nothing ever persists in Tauri mode (adoptEndpoint leaves no
+trace); browser mode keeps the historical persistence and rehydrates v2
+blobs; v1 blobs retire in browser mode too; setConnection carries/clears
+the offline error) · `sidecar-connection` NEW 9 (the connect loop: adopt
+after N failures + demoData off + ALL queries invalidated; reads
+sidecar_status between attempts; fail-fast on failed/stopped with the REAL
+error and STOPS polling; honest 90s timeout; browser no-op; the watchdog
+mid-session death → offline with the exit reason; a transient blip
+reconnects + re-invalidates; retryConnection restarts through the shell
+then adopts the fresh endpoint) · `sidecar` 3→10 (the shell-command
+wrappers: sidecar_info resolves/absorbs refusals, sidecar_status passes
+the phase view + failure reason, restart_sidecar/ping_sidecar round-trips
+and refusal reporting) · plus `cargo check` GREEN ON x86_64-pc-windows-gnu
+(the R53 shell changes are the first type-checked against the Windows
+target IN-SANDBOX — via a user-local mingw; CI re-verifies on
+windows-latest). The R53 live battery (L4+L5): fresh-profile browser boot
+→ wizard → project created through the owner's exact failing path → live
+chat turn (glm-5.2:free) replied exactly as asked → Usage on real ledger
+data → Sub-agents tab fully live (key slots + 18/46 model catalog) → zero
+console/page errors.
 `r52-supervision` NEW 14 (exec helpers: background-launch grammar + log-
 redirect parsing; the hang fix: pipe-holding grandchild resolves FAST with
 a job id — the owner's exact trap, cross-platform via node-spawns-node;

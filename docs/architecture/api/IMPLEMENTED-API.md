@@ -1,4 +1,4 @@
-<!-- last-reviewed: 2026-08-30 round-50 -->
+<!-- last-reviewed: 2026-08-30 round-53 -->
 # IMPLEMENTED API — the shipped surface
 
 **Truth = this file.** Verified against `agent-core/src/server.ts` at
@@ -661,6 +661,38 @@ subagentCount, startedAt, endMs, durationMs, requests, tokens, toolCalls,
 costUsd, tools:[{name,count,failures}]}`; children stay nested under
 their parent's project; orphans land in a synthetic unassigned group.
 Default 30; `400 VALIDATION` outside 1–90.
+
+## ROUND-53 additions (implemented)
+
+### Tauri shell commands (NOT REST — `window.__TAURI__.core.invoke`, sidecar.ts wrappers)
+
+`sidecar_status` → `{phase: "starting" | "running" | "failed" | "stopped",
+port?: number, error?: string}` (serde tag="phase") — the connection-gate
+diagnostics channel: the webview's connect loop reads it between refused
+`sidecar_info` attempts to fail fast with the REAL lifecycle error (spawn
+failure, missing bundle, ready-line timeout, mid-session exit code).
+
+`restart_sidecar` → `"restarting"` — graceful teardown (authed
+`/internal/shutdown` → 3s grace → taskkill /T /F) then a fresh handshake on
+a background thread; serialized by a restart lock; "already starting" while
+Starting. Powers the offline screen's Restart-engine button.
+
+Behavior changes to existing commands: `sidecar_info` now ERRORS with the
+phase description until Running (Starting used to be indistinguishable from
+dead — the webview retries now); the handshake itself moved off `setup` to
+a background thread (the window paints immediately; `phase` starts
+`starting`). New artifacts: `%APPDATA%\acute-code\sidecar.log` (every
+lifecycle line, provider keys logged as id+length ONLY, rotated at 1 MB).
+
+### Webview connection contract (src/lib/*, no backend surface)
+
+`config-store` v2: inside Tauri NOTHING persists (the ephemeral port must
+never reach localStorage — the "55963" stale-endpoint bug); `connection`:
+`connecting|connected|offline` + `connectionError` gate the whole app tree
+(ConnectionGate). The connect loop (`sidecar-connection.ts`): poll
+`sidecar_info` every 400ms (90s deadline) → adopt + invalidate ALL queries;
+`failed|stopped` → offline immediately; a 20s `ping_sidecar` watchdog
+re-enters the loop on mid-session death.
 
 ## NOT implemented (despite API.md)
 

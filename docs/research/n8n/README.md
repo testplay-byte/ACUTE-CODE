@@ -1,4 +1,4 @@
-<!-- last-reviewed: 2026-08-25 round-36 -->
+<!-- last-reviewed: 2026-08-30 round-53 -->
 # n8n — Reference Analysis for the ACUTE-CODE Automation Pillar
 
 **Why this analysis exists (owner direction, 2026-08-23):** ACUTE-CODE is
