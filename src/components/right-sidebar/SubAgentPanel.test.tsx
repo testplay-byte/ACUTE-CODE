@@ -86,7 +86,7 @@ function detail(status: SessionDetail["status"], events: SessionEvent[]): Sessio
 
 /** GET /sessions/:parent/subagents row — now carries the required `code`
  * (R48-e1 wire contract; this is the fixture that fixed the repo's one
- * typecheck error). */
+ * typecheck error) and `model` (R50-b stats footer). */
 function subRow(over: Partial<SubAgentStatus> = {}): SubAgentStatus {
   return {
     id: "child-1",
@@ -100,6 +100,7 @@ function subRow(over: Partial<SubAgentStatus> = {}): SubAgentStatus {
     todosTotal: 3,
     inputTokens: 1200,
     outputTokens: 340,
+    model: "deepseek/deepseek-chat-v3.1",
     report: null,
     error: null,
     ...over,
@@ -300,6 +301,15 @@ describe("SubAgentPanel (R48-e2 chat transcript)", () => {
           task: "Refactor auth module",
           status: "running",
           updatedAtMs: Date.now(),
+          // ROUND-50 (R50-b): the live raw-stream fields.
+          liveText: "",
+          liveThinking: "",
+          liveToolCalls: 0,
+          inputTokens: 0,
+          outputTokens: 0,
+          lastActivityTs: 0,
+          liveSteps: [],
+          startedAtMs: Date.now(),
         },
       },
     });
@@ -338,5 +348,195 @@ describe("SubAgentPanel (R48-e2 chat transcript)", () => {
       />,
     );
     expect(screen.getByText("No sub-agent bound to this tab.")).toBeTruthy();
+  });
+});
+
+// ─── ROUND-50 (R50-b): the LIVE raw-stream segment + the pinned stats footer ──
+
+describe("SubAgentPanel (R50-b live raw stream + stats footer)", () => {
+  /** A full live-map entry (the R50-b shape) for the running child. */
+  function liveEntry(over: Partial<Parameters<typeof makeLive>[0]> = {}) {
+    return makeLive(over);
+  }
+  // Helper indirection so the fixture's fields stay optional per-call.
+  function makeLive(over: Record<string, unknown> = {}) {
+    return {
+      childSessionId: "child-1",
+      parentSessionId: "parent-1",
+      code: "K7Q2",
+      role: "coder",
+      task: "Refactor auth module",
+      status: "running" as const,
+      updatedAtMs: Date.now(),
+      model: "deepseek/deepseek-chat-v3.1",
+      liveText: "Reading src/auth.ts",
+      liveThinking: "I should read the file first.",
+      liveToolCalls: 1,
+      inputTokens: 7,
+      outputTokens: 3,
+      lastActivityTs: Date.now(),
+      liveSteps: [
+        { type: "thinking" as const, text: "I should read the file first." },
+        {
+          type: "tool" as const,
+          tool: { toolName: "read_file", argsSummary: "path: src/auth.ts", ok: true, outputSummary: "42 chars" },
+        },
+        { type: "text" as const, text: "Reading src/auth.ts" },
+      ],
+      startedAtMs: Date.now(),
+      ...over,
+    };
+  }
+
+  it("renders the child's LIVE raw stream — thinking block, interleaved tool row, streaming text with caret", async () => {
+    useStreamStore.setState({
+      bySession: {},
+      subagentsLive: { "child-1": liveEntry() },
+    });
+    // The polled detail lags: its persisted tool/assistant rows are for OTHER
+    // work (different content) so the suppression rule is observable.
+    vi.mocked(fetchSubAgentDetail).mockResolvedValue(
+      detail("running", [
+        ev(1, "message.user", { role: "user", content: "Refactor src/auth into smaller modules." }),
+        ev(2, "todo.update", {
+          todos: [{ content: "Map the module", status: "in_progress" }],
+        }),
+        ev(3, "tool.use", { toolName: "run_command", argsSummary: "polled-only row", ok: true }),
+        ev(4, "message.assistant", { role: "assistant", content: "Polled-only interim reply." }),
+      ]),
+    );
+    vi.mocked(fetchSubAgents).mockResolvedValue([subRow()]);
+    renderWithProviders(<SubAgentPanel tab={tab} />);
+
+    // The live segment: raw thinking (ThoughtRow renders live expanded),
+    // the live tool row, and the raw text streaming WITH the main chat's
+    // caret — in arrival order.
+    const segment = await screen.findByTestId("subagent-live-stream");
+    expect(segment.textContent).toContain("I should read the file first.");
+    const liveText = screen.getByTestId("subagent-live-text");
+    expect(liveText.textContent).toContain("Reading src/auth.ts");
+    expect(liveText.querySelector(".ac-caret-blink")).not.toBeNull();
+    const liveToolRow = screen.getByRole("button", { name: "Read path: src/auth.ts" });
+    expect(liveToolRow.textContent).toContain("✓");
+    expect(screen.getByText("streaming live")).toBeTruthy();
+
+    // Poll-suppression rule: the polled tool/assistant rows are hidden while
+    // the live segment renders them (no duplication) — but the task bubble +
+    // todo line (kinds the live stream never carries) still render.
+    expect(screen.queryByRole("button", { name: "Ran polled-only row" })).toBeNull();
+    expect(screen.queryByText("Polled-only interim reply.")).toBeNull();
+    expect(screen.getByTestId("subagent-task-bubble").textContent).toContain(
+      "Refactor src/auth into smaller modules.",
+    );
+    expect(screen.getByTestId("subagent-todo-line").textContent).toContain("0/1");
+
+    // The live segment carries the in-flight beat (no separate "working…" tail).
+    expect(screen.queryByText("working…")).toBeNull();
+  });
+
+  it("the live segment hides once the polled transcript catches up after completion (the handoff rule)", async () => {
+    // Terminal child: the live entry is FROZEN with its final text, and the
+    // polled log already carries the closing assistant reply → the folded
+    // transcript takes over (live segment hidden, full transcript renders).
+    useStreamStore.setState({
+      bySession: {},
+      subagentsLive: {
+        "child-1": liveEntry({ status: "completed", liveText: "Done — auth split.", liveSteps: [
+          { type: "text" as const, text: "Done — auth split." },
+        ] }),
+      },
+    });
+    vi.mocked(fetchSubAgentDetail).mockResolvedValue(
+      detail("completed", [
+        ev(1, "message.user", { role: "user", content: "summarize the change" }),
+        ev(2, "tool.use", { toolName: "read_file", argsSummary: "src/auth/fix.ts", ok: true, outputSummary: null }),
+        ev(3, "message.assistant", { role: "assistant", content: "Done — **auth split** into 3 modules." }),
+      ]),
+    );
+    vi.mocked(fetchSubAgents).mockResolvedValue([subRow({ status: "completed" })]);
+    renderWithProviders(<SubAgentPanel tab={tab} />);
+
+    // The folded transcript owns the render: the persisted tool row + final
+    // assistant bubble are back, the live segment is gone.
+    expect(await screen.findByRole("button", { name: "Read src/auth/fix.ts" })).toBeTruthy();
+    expect(screen.getAllByTestId("subagent-assistant-bubble")).toHaveLength(1);
+    expect(screen.queryByTestId("subagent-live-stream")).toBeNull();
+  });
+
+  it("stats footer — LIVE values while running: live clock, live token counters, live tps, model", async () => {
+    vi.useFakeTimers({ toFake: ["setInterval", "clearInterval", "Date"] });
+    try {
+      const createdAt = new Date(Date.now() - 60_000).toISOString();
+      useStreamStore.setState({
+        bySession: {},
+        subagentsLive: {
+          // Live counters (7/60) differ from the row's (1200/340) — the LIVE
+          // ones must win while the child works.
+          "child-1": liveEntry({ inputTokens: 7, outputTokens: 60 }),
+        },
+      });
+      vi.mocked(fetchSubAgentDetail).mockResolvedValue(
+        detail("running", [
+          ev(1, "message.user", { role: "user", content: "do the work" }),
+        ]),
+      );
+      vi.mocked(fetchSubAgents).mockResolvedValue([subRow({ createdAt, updatedAt: createdAt })]);
+      renderWithProviders(<SubAgentPanel tab={tab} />);
+
+      // Drain the mocked fetch + first render (React 18 macrotask scheduling).
+      await act(async () => {
+        for (let i = 0; i < 20 && screen.queryByTestId("subagent-stats-footer") === null; i += 1) {
+          await new Promise((resolve) => setTimeout(resolve, 0));
+        }
+      });
+
+      expect(screen.getByTestId("subagent-stat-time").textContent).toBe("Time1:00");
+      expect(screen.getByTestId("subagent-stat-in").textContent).toBe("Sent↑ 7");
+      expect(screen.getByTestId("subagent-stat-out").textContent).toBe("Received↓ 60");
+      // 60 output tokens over 60s = 1.0 tok/s (live feed).
+      expect(screen.getByTestId("subagent-stat-tps").textContent).toBe("Tok/s1.0");
+      expect(screen.getByTestId("subagent-stat-model").textContent).toBe("deepseek/deepseek-chat-v3.1");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("stats footer — authoritative ROW values after completion: createdAt→updatedAt elapsed, ledger tokens, row model", async () => {
+    useStreamStore.setState({
+      bySession: {},
+      // A frozen live entry with DIFFERENT values — the row must win.
+      subagentsLive: {
+        "child-1": liveEntry({
+          status: "completed",
+          inputTokens: 7,
+          outputTokens: 3,
+          liveText: "",
+          liveThinking: "",
+          liveSteps: [],
+          liveToolCalls: 0,
+        }),
+      },
+    });
+    const createdAt = new Date(Date.now() - 90_000).toISOString();
+    const updatedAt = new Date(Date.now()).toISOString();
+    vi.mocked(fetchSubAgentDetail).mockResolvedValue(
+      detail("completed", [
+        ev(1, "message.user", { role: "user", content: "summarize" }),
+        ev(2, "message.assistant", { role: "assistant", content: "Done." }),
+      ]),
+    );
+    vi.mocked(fetchSubAgents).mockResolvedValue([
+      subRow({ status: "completed", createdAt, updatedAt, model: "test/model-1" }),
+    ]);
+    renderWithProviders(<SubAgentPanel tab={tab} />);
+
+    expect(await screen.findByTestId("subagent-stats-footer")).toBeTruthy();
+    // Total time = createdAt → updatedAt = 1:30; row tokens 1200/340;
+    // tps = 340 / 90s = 3.8; the row's usage-derived model.
+    expect(screen.getByTestId("subagent-stat-time").textContent).toBe("Total time1:30");
+    expect(screen.getByTestId("subagent-stat-in").textContent).toBe("Sent↑ 1.2k");
+    expect(screen.getByTestId("subagent-stat-out").textContent).toBe("Received↓ 340");
+    expect(screen.getByTestId("subagent-stat-tps").textContent).toBe("Tok/s3.8");
+    expect(screen.getByTestId("subagent-stat-model").textContent).toBe("test/model-1");
   });
 });

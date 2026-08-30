@@ -16,8 +16,12 @@ const createOpenAIMock = vi.hoisted(() =>
   })),
 );
 const generateTextMock = vi.hoisted(() => vi.fn());
+const streamTextMock = vi.hoisted(() => vi.fn());
 vi.mock("ai", () => ({
   generateText: generateTextMock,
+  // ROUND-50 (R50-b): streamAiSdkChat's maxRetries pin needs the streaming
+  // entry point mocked too (previously unused in this suite).
+  streamText: streamTextMock,
   stepCountIs: (count: number) => ({ type: "stepCount", count }),
 }));
 vi.mock("@ai-sdk/openai-compatible", () => ({
@@ -30,7 +34,7 @@ vi.mock("@ai-sdk/openai", () => ({
   createOpenAI: createOpenAIMock,
 }));
 
-import { aiSdkChat, resolveApiFormat } from "../src/agents/chat";
+import { aiSdkChat, resolveApiFormat, streamAiSdkChat } from "../src/agents/chat";
 
 beforeEach(() => {
   generateTextMock.mockReset();
@@ -39,6 +43,12 @@ beforeEach(() => {
     usage: { inputTokens: 1, outputTokens: 2, totalTokens: 3 },
     steps: [],
   });
+  streamTextMock.mockReset();
+  streamTextMock.mockImplementation(() => ({
+    fullStream: (async function* () {})(),
+    totalUsage: Promise.resolve({ inputTokens: 1, outputTokens: 2, totalTokens: 3 }),
+    usage: Promise.resolve({ inputTokens: 1, outputTokens: 2, totalTokens: 3 }),
+  }));
   createOpenAICompatibleMock.mockClear();
   createAnthropicMock.mockClear();
   createOpenAIMock.mockClear();
@@ -139,5 +149,312 @@ describe("provider call timeout (ROUND-46)", () => {
     expect(timed.abortSignal).toBeInstanceOf(AbortSignal);
     await new Promise((r) => setTimeout(r, 15));
     expect(timed.abortSignal?.aborted).toBe(true);
+  });
+});
+
+describe("retry policy (ROUND-50 — owner's third Windows test: \"at least five attempts\")", () => {
+  it("aiSdkChat passes maxRetries: 4 to generateText (1 initial + 4 retries = 5 attempts)", async () => {
+    await aiSdkChat({ ...baseInput, provider: { id: "openrouter", baseUrl: "https://openrouter.ai/api/v1" } });
+    // The AI SDK default is maxRetries: 2 (3 total attempts) — the exact
+    // "failed after three attempts" the owner hit on OpenRouter 429s.
+    expect(generateTextMock.mock.calls[0][0].maxRetries).toBe(4);
+  });
+
+  it("streamAiSdkChat passes maxRetries: 4 to streamText (same five-attempt policy on the streamed path)", async () => {
+    const events: string[] = [];
+    for await (const event of streamAiSdkChat({
+      ...baseInput,
+      provider: { id: "openrouter", baseUrl: "https://openrouter.ai/api/v1" },
+    })) {
+      events.push(event.type);
+    }
+    // The empty mock stream still closes cleanly with one finish frame.
+    expect(events).toEqual(["finish"]);
+    expect(streamTextMock.mock.calls[0][0].maxRetries).toBe(4);
+  });
+});
+
+// ── ROUND-50 (R50-c1): the composer's thinking level ────────────────────────
+
+describe("buildThinkingFetch (ROUND-50 R50-c1 — reasoning.effort injection)", () => {
+  /** Body-capturing mock fetch: records the outgoing JSON bodies verbatim. */
+  function capturingFetch(): { fetchMock: ReturnType<typeof vi.fn>; bodies: string[] } {
+    const bodies: string[] = [];
+    const fetchMock = vi.fn(async (_url: unknown, init?: RequestInit) => {
+      bodies.push(String(init?.body));
+      return new Response(JSON.stringify({ ok: true }), { status: 200 });
+    });
+    return { fetchMock, bodies };
+  }
+
+  it.each([
+    ["low", "low"],
+    ["high", "high"],
+    ["max", "max"],
+  ])("level %s injects reasoning.effort: %s into the outgoing chat-completions body", async (level, effort) => {
+    const { fetchMock, bodies } = capturingFetch();
+    vi.stubGlobal("fetch", fetchMock);
+    try {
+      const { buildThinkingFetch } = await import("../src/agents/chat");
+      await buildThinkingFetch(level as "low" | "high" | "max")(
+        "https://openrouter.ai/api/v1/chat/completions",
+        { method: "POST", body: JSON.stringify({ model: "m", messages: [{ role: "user", content: "hi" }] }) },
+      );
+      expect(bodies).toHaveLength(1);
+      const body = JSON.parse(bodies[0]) as { reasoning?: { effort?: string }; model: string };
+      expect(body.reasoning).toEqual({ effort });
+      // The rest of the body is untouched.
+      expect(body.model).toBe("m");
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it("merges with an existing reasoning object instead of clobbering provider-set fields", async () => {
+    const { fetchMock, bodies } = capturingFetch();
+    vi.stubGlobal("fetch", fetchMock);
+    try {
+      const { buildThinkingFetch } = await import("../src/agents/chat");
+      await buildThinkingFetch("high")("https://x.test/v1", {
+        method: "POST",
+        body: JSON.stringify({ reasoning: { max_tokens: 4096 }, model: "m" }),
+      });
+      const body = JSON.parse(bodies[0]) as { reasoning?: Record<string, unknown> };
+      expect(body.reasoning).toEqual({ max_tokens: 4096, effort: "high" });
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it("non-JSON bodies pass through untouched (no throw, no mutation)", async () => {
+    const { fetchMock, bodies } = capturingFetch();
+    vi.stubGlobal("fetch", fetchMock);
+    try {
+      const { buildThinkingFetch } = await import("../src/agents/chat");
+      await buildThinkingFetch("max")("https://x.test/v1", { method: "POST", body: "not-json{{" });
+      expect(bodies[0]).toBe("not-json{{");
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it("composes OVER an inner fetch (the openrouter free-model fallback wrapper runs under it)", async () => {
+    const innerCalls: string[] = [];
+    const inner = vi.fn(async (_url: string | URL | Request, init?: RequestInit) => {
+      innerCalls.push(String(init?.body));
+      return new Response("{}", { status: 200 });
+    });
+    const { buildThinkingFetch } = await import("../src/agents/chat");
+    const wrapped = buildThinkingFetch("low", inner);
+    await wrapped("https://openrouter.ai/api/v1/chat/completions", {
+      method: "POST",
+      body: JSON.stringify({ model: "z-ai/glm-5.2:free", messages: [] }),
+    });
+    expect(inner).toHaveBeenCalledTimes(1);
+    // The inner wrapper receives the ALREADY-thinking-injected body: the
+    // effort is present AND the fallback rewrite can still happen on top.
+    const body = JSON.parse(innerCalls[0]) as { reasoning?: { effort?: string }; model: string };
+    expect(body.reasoning).toEqual({ effort: "low" });
+    expect(body.model).toBe("z-ai/glm-5.2:free");
+  });
+});
+
+describe("buildModel thinking wiring (ROUND-50 R50-c1)", () => {
+  it("a non-default thinkingLevel wraps the provider fetch (reasoning.effort); default/absent injects NOTHING", async () => {
+    // Non-default level → a fetch wrapper IS handed to createOpenAICompatible.
+    await aiSdkChat({
+      ...baseInput,
+      provider: { id: "prov", baseUrl: "https://api.prov.test/v1" },
+      thinkingLevel: "high",
+    });
+    expect(createOpenAICompatibleMock).toHaveBeenCalledTimes(1);
+    const withLevel = (createOpenAICompatibleMock.mock.calls[0] as unknown[])[0] as { fetch?: unknown };
+    expect(typeof withLevel.fetch).toBe("function");
+
+    // "default" → NO fetch wrapper (the provider's own transport).
+    createOpenAICompatibleMock.mockClear();
+    await aiSdkChat({
+      ...baseInput,
+      provider: { id: "prov", baseUrl: "https://api.prov.test/v1" },
+      thinkingLevel: "default",
+    });
+    const atDefault = (createOpenAICompatibleMock.mock.calls[0] as unknown[])[0] as { fetch?: unknown };
+    expect(atDefault.fetch).toBeUndefined();
+
+    // absent → same as default.
+    createOpenAICompatibleMock.mockClear();
+    await aiSdkChat({ ...baseInput, provider: { id: "prov", baseUrl: "https://api.prov.test/v1" } });
+    const absent = (createOpenAICompatibleMock.mock.calls[0] as unknown[])[0] as { fetch?: unknown };
+    expect(absent.fetch).toBeUndefined();
+
+    // anthropic-messages / responses formats silently skip the level (no
+    // reasoning-effort passthrough wired there — honest limitation).
+    await aiSdkChat({
+      ...baseInput,
+      provider: { id: "anth", baseUrl: "https://api.anthropic.test/v1", apiFormat: "anthropic-messages" },
+      thinkingLevel: "max",
+    });
+    expect(createAnthropicMock).toHaveBeenCalledWith({
+      baseURL: "https://api.anthropic.test/v1",
+      apiKey: "sk-test",
+    });
+  });
+
+  it("the wrapped fetch really injects reasoning.effort per level into the wire body", async () => {
+    const bodies: string[] = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (_url: unknown, init?: RequestInit) => {
+        bodies.push(String(init?.body));
+        return new Response(JSON.stringify({ ok: true }), { status: 200 });
+      }),
+    );
+    try {
+      for (const level of ["low", "high", "max"] as const) {
+        createOpenAICompatibleMock.mockClear();
+        await aiSdkChat({
+          ...baseInput,
+          provider: { id: "prov", baseUrl: "https://api.prov.test/v1" },
+          thinkingLevel: level,
+        });
+        const config = (createOpenAICompatibleMock.mock.calls[0] as unknown[])[0] as {
+          fetch: (url: string | URL | Request, init?: RequestInit) => Promise<Response>;
+        };
+        await config.fetch("https://api.prov.test/v1/chat/completions", {
+          method: "POST",
+          body: JSON.stringify({ model: "m", messages: [] }),
+        });
+        const body = JSON.parse(bodies[bodies.length - 1]) as { reasoning?: { effort?: string } };
+        expect(body.reasoning?.effort).toBe(level);
+      }
+      // "default" injects nothing — the body flows through untouched.
+      createOpenAICompatibleMock.mockClear();
+      await aiSdkChat({
+        ...baseInput,
+        provider: { id: "prov", baseUrl: "https://api.prov.test/v1" },
+        thinkingLevel: "default",
+      });
+      const config = (createOpenAICompatibleMock.mock.calls[0] as unknown[])[0] as { fetch?: unknown };
+      expect(config.fetch).toBeUndefined();
+      const plain = JSON.stringify({ model: "m", messages: [] });
+      expect(bodies[bodies.length - 1]).not.toBe(plain); // last captured was a "max" call
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+});
+
+// ── ROUND-50 (R50-c1): cached prompt-token capture (context meter) ──────────
+
+describe("cachedInputTokens capture (ROUND-50 R50-c1)", () => {
+  it("aiSdkChat maps usage.inputTokenDetails.cacheReadTokens onto the turn output (absent → omitted)", async () => {
+    generateTextMock.mockResolvedValueOnce({
+      text: "ok",
+      usage: {
+        inputTokens: 50_000,
+        outputTokens: 2,
+        totalTokens: 50_002,
+        inputTokenDetails: { cacheReadTokens: 41_000 },
+      },
+      steps: [],
+    });
+    const result = await aiSdkChat({
+      ...baseInput,
+      provider: { id: "openrouter", baseUrl: "https://openrouter.ai/api/v1" },
+    });
+    expect(result.usage.cachedInputTokens).toBe(41_000);
+
+    // No cached tier reported → the field is omitted (not 0 — providers
+    // without a cache legitimately have no value; storage maps it to NULL).
+    generateTextMock.mockResolvedValueOnce({
+      text: "ok",
+      usage: { inputTokens: 10, outputTokens: 2, totalTokens: 12 },
+      steps: [],
+    });
+    const plain = await aiSdkChat({
+      ...baseInput,
+      provider: { id: "openrouter", baseUrl: "https://openrouter.ai/api/v1" },
+    });
+    expect(plain.usage.cachedInputTokens).toBeUndefined();
+  });
+
+  it("streamAiSdkChat carries cachedInputTokens on the finish frame (per-step + totals cross-check)", async () => {
+    streamTextMock.mockImplementation(() => ({
+      fullStream: (async function* () {
+        yield {
+          type: "finish-step",
+          usage: {
+            inputTokens: 50_000,
+            outputTokens: 10,
+            inputTokenDetails: { cacheReadTokens: 41_000 },
+          },
+        };
+      })(),
+      totalUsage: Promise.resolve({
+        inputTokens: 50_000,
+        outputTokens: 10,
+        totalTokens: 50_010,
+        inputTokenDetails: { cacheReadTokens: 41_000 },
+      }),
+      usage: Promise.resolve({
+        inputTokens: 50_000,
+        outputTokens: 10,
+        totalTokens: 50_010,
+        inputTokenDetails: { cacheReadTokens: 41_000 },
+      }),
+    }));
+    const finish = await (async () => {
+      for await (const event of streamAiSdkChat({
+        ...baseInput,
+        provider: { id: "openrouter", baseUrl: "https://openrouter.ai/api/v1" },
+      })) {
+        if (event.type === "finish") return event;
+      }
+      throw new Error("no finish frame");
+    })();
+    expect(finish.usage.inputTokens).toBe(50_000);
+    expect(finish.cachedInputTokens).toBe(41_000);
+
+    // Larger-of-the-two rule: a step reports MORE cached tokens than the
+    // (empty) totals — the max wins.
+    streamTextMock.mockImplementation(() => ({
+      fullStream: (async function* () {
+        yield {
+          type: "finish-step",
+          usage: { inputTokens: 100, outputTokens: 1, inputTokenDetails: { cacheReadTokens: 90 } },
+        };
+      })(),
+      totalUsage: Promise.resolve({ inputTokens: 100, outputTokens: 1, totalTokens: 101 }),
+      usage: Promise.resolve({ inputTokens: 100, outputTokens: 1, totalTokens: 101 }),
+    }));
+    const noTotals = await (async () => {
+      for await (const event of streamAiSdkChat({
+        ...baseInput,
+        provider: { id: "openrouter", baseUrl: "https://openrouter.ai/api/v1" },
+      })) {
+        if (event.type === "finish") return event;
+      }
+      throw new Error("no finish frame");
+    })();
+    expect(noTotals.cachedInputTokens).toBe(90);
+
+    // Nothing reported anywhere → 0 on the frame (the runtime records 0).
+    streamTextMock.mockImplementation(() => ({
+      fullStream: (async function* () {
+        yield { type: "finish-step", usage: { inputTokens: 5, outputTokens: 1 } };
+      })(),
+      totalUsage: Promise.resolve({ inputTokens: 5, outputTokens: 1, totalTokens: 6 }),
+      usage: Promise.resolve({ inputTokens: 5, outputTokens: 1, totalTokens: 6 }),
+    }));
+    const zero = await (async () => {
+      for await (const event of streamAiSdkChat({
+        ...baseInput,
+        provider: { id: "openrouter", baseUrl: "https://openrouter.ai/api/v1" },
+      })) {
+        if (event.type === "finish") return event;
+      }
+      throw new Error("no finish frame");
+    })();
+    expect(zero.cachedInputTokens).toBe(0);
   });
 });

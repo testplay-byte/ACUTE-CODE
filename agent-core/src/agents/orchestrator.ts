@@ -3,8 +3,10 @@
  *
  * One module-level singleton per sidecar process. Responsibilities:
  * - delegateTask: create a CHILD session, acquire a key slot + semaphore
- *   permits, run the child turn (runSingleAgentTurn — the existing runtime,
- *   verbatim per PILLARS §1), and return the child's final report.
+ *   permits, run the child turn (ROUND-50/R50-b: runStreamedAgentTurn when the
+ *   delegating turn streams — live raw deltas through the subagent-event
+ *   envelope; runSingleAgentTurn as the sync fallback, verbatim per PILLARS
+ *   §1), and return the child's final report.
  * - Concurrency: total semaphore (orchestration.maxParallel) + per-key
  *   semaphore (orchestration.perKeyLimit); excess children stay queued.
  * - Key assignment: the LEAST-LOADED pool slot, preferring non-primary slots
@@ -33,7 +35,7 @@ import {
 import { getAgent } from "../storage/agents.js";
 import { getOrchestrationSettings } from "../storage/settings.js";
 import { ProviderKeyring } from "../providers/registry.js";
-import { runSingleAgentTurn } from "./runtime.js";
+import { runSingleAgentTurn, runStreamedAgentTurn } from "./runtime.js";
 import type { TurnDeps } from "./runtime.js";
 // ROUND-40: sub-agent transitions publish app-level notifications so the user
 // sees when a delegated task completes or fails (even if they navigated away).
@@ -112,6 +114,13 @@ export interface SubAgentEventPayload {
   code: string;
   todosDone?: number;
   todosTotal?: number;
+  /** ROUND-50 (R50-b, owner: the sub-agent stats footer must show "the model
+   * which was being used"): the model the child turn ACTUALLY runs on —
+   * orchestration.subagentModel ?? agent.model, resolved at delegation time
+   * and attached to every status frame this delegation emits (queued/
+   * running/completed/failed), so the UI can render it before the first
+   * usage_events row lands in the polled /subagents row. */
+  model?: string;
 }
 
 /** Live registry entry (semaphore bookkeeping). */
@@ -229,7 +238,7 @@ class Orchestrator {
      * parent turn's signal). */
     signal?: AbortSignal,
   ): Promise<{ ok: boolean; output: string; sessionId?: string }> {
-    const { db, keyring, chat } = deps;
+    const { db, keyring, chat, chatStream } = deps;
     const parent = getSession(db, parentSessionId);
     if (parent === undefined) {
       return { ok: false, output: "parent session not found" };
@@ -239,8 +248,19 @@ class Orchestrator {
       return { ok: false, output: "parent agent not found" };
     }
     const providerId = agent.providerId ?? "openrouter";
+    // ROUND-50 (R50-b): the effective child model, resolved ONCE — the
+    // turn's modelOverride (R43-5) AND the `model` field on every
+    // subagent-status frame below (the stats footer's model line).
+    const subagentModel = getOrchestrationSettings(db).subagentModel;
+    const modelOverride = subagentModel ?? undefined;
+    const effectiveModel = subagentModel ?? agent.model;
 
     // Child session: same project + agent config; the role frames the task.
+    // ROUND-50 (R50-c1): the child COPIES the parent's permission mode — a
+    // delegated sub-agent can never outrun the posture the owner picked for
+    // the conversation (plan-mode parents spawn read-only children; editor
+    // children get no run_command; full-mode children auto-approve ask-tier
+    // gates). Enforcement happens in the child's own prepareTurn turn.
     const child = createSession(db, {
       agentId: agent.id,
       mode: "single",
@@ -248,6 +268,7 @@ class Orchestrator {
       title: task.length > 60 ? `${task.slice(0, 60)}…` : task,
       parentSessionId,
       subRole: role,
+      permissionMode: parent.permissionMode,
     });
 
     const status = (s: SubAgentEventPayload["status"], extra?: Partial<SubAgentEventPayload>) => {
@@ -259,6 +280,9 @@ class Orchestrator {
         task,
         role,
         code: subAgentCode(child.id),
+        // ROUND-50 (R50-b): the stats footer's model — resolved at delegation
+        // time so it is available from the FIRST frame (queued) onward.
+        model: effectiveModel,
         ...extra,
       });
     };
@@ -306,18 +330,47 @@ class Orchestrator {
               inner: event,
             })
         : undefined;
-      const outcome = await runSingleAgentTurn(
-        { db, keyring: childKeyring, chat },
-        child.id,
-        `${framing}\n${renderTaskPrompt(task)}`,
-        // R43-5: the temporary sub-agent model override (null = inherit the
-        // agent's model — prepareTurn falls back to agent.model).
-        getOrchestrationSettings(db).subagentModel ?? undefined,
-        wrappedEmit,
-        // ROUND-48 (R48-e1): the parent's abort signal — the child stops
-        // between iterations + its pending approvals deny on abort.
-        signal,
-      );
+      // ROUND-50 (R50-b, owner: "It should be streamed live just like how it
+      // gets handled on the main agent"): when the delegating turn runs the
+      // STREAMED path (deps.chatStream present — the delegate_task toolDeps
+      // forwards it, see runtime.ts prepareTurn) AND we have an emit channel
+      // to forward through, the child runs runStreamedAgentTurn — the SAME
+      // turn path as the main agent, so the parent's SSE carries the child's
+      // LIVE raw stream (thinking-delta / text-delta / tool-call /
+      // tool-result / finish-with-usage) inside the subagent-event envelope,
+      // and the sub-agent panel renders it in real time instead of waiting
+      // for the 600ms polled event log. Both paths return the identical
+      // TurnOutcome shape, so the ok/failed handling below is unchanged.
+      //
+      // NO chatStream (the plain sync route, HTTP retry, or a chat stub)
+      // → the SYNC fallback below, EXACTLY as before R50-b: runSingleAgentTurn
+      // with onStepFinish step snapshots. Channel-less runs must keep the
+      // fail-fast ask semantics (ROUND-48) — the streamed path REQUIRES an
+      // emit, so no emit + chatStream still means sync (runStreamedAgentTurn
+      // takes emit as a required argument).
+      const childDeps = { db, keyring: childKeyring, chat };
+      const outcome =
+        chatStream !== undefined && wrappedEmit !== undefined
+          ? await runStreamedAgentTurn(
+              { ...childDeps, chatStream },
+              child.id,
+              `${framing}\n${renderTaskPrompt(task)}`,
+              wrappedEmit,
+              // R43-5: the temporary sub-agent model override (null = inherit
+              // the agent's model — prepareTurn falls back to agent.model).
+              modelOverride,
+              // ROUND-48 (R48-e1): the parent's abort signal — the child stops
+              // between iterations + its pending approvals deny on abort.
+              signal,
+            )
+          : await runSingleAgentTurn(
+              childDeps,
+              child.id,
+              `${framing}\n${renderTaskPrompt(task)}`,
+              modelOverride,
+              wrappedEmit,
+              signal,
+            );
       if (outcome.ok) {
         setSessionStatus(db, child.id, "completed");
         const progress = this.progressOf(db, child.id);
@@ -371,7 +424,7 @@ class Orchestrator {
     /** ROUND-40: widened to (unknown) => void (see delegateTask). */
     emit?: (event: unknown) => void,
   ): Promise<{ ok: boolean; message: string }> {
-    const { db, keyring, chat } = deps;
+    const { db, keyring, chat, chatStream } = deps;
     const child = getSession(db, childId);
     if (child === undefined || child.parentSessionId !== parentSessionId) {
       return { ok: false, message: `no child session ${childId} under ${parentSessionId}` };
@@ -381,6 +434,11 @@ class Orchestrator {
       : "researcher";
     const agent = getAgent(db, child.agentId ?? "");
     const providerId = agent?.providerId ?? "openrouter";
+    // ROUND-50 (R50-b): same effective-model resolution as delegateTask —
+    // the turn's modelOverride + the `model` on every status frame.
+    const subagentModel = getOrchestrationSettings(db).subagentModel;
+    const modelOverride = subagentModel ?? undefined;
+    const effectiveModel = subagentModel ?? agent?.model ?? "unknown";
 
     const status = (s: SubAgentEventPayload["status"]) => {
       emit?.({
@@ -391,6 +449,8 @@ class Orchestrator {
         task: child.title ?? "",
         role,
         code: subAgentCode(childId),
+        // ROUND-50 (R50-b): the stats footer's model line.
+        model: effectiveModel,
       });
     };
 
@@ -431,15 +491,24 @@ class Orchestrator {
               inner: event,
             })
         : undefined;
-      const outcome = await runSingleAgentTurn(
-        { db, keyring: childKeyring, chat },
-        childId,
-        content,
-        // R43-5: retries honor the same sub-agent model override as fresh
-        // delegations (null = inherit the agent's model).
-        getOrchestrationSettings(db).subagentModel ?? undefined,
-        wrappedEmit,
-      );
+      // ROUND-50 (R50-b): same streamed-vs-sync branch as delegateTask. The
+      // HTTP retry route passes neither chatStream nor emit (no SSE channel
+      // to stream on) → the sync fallback, exactly as before R50-b. A future
+      // channel-backed retry (or a retried child inside a live streamed
+      // parent turn) streams the retried attempt live instead.
+      const childDeps = { db, keyring: childKeyring, chat };
+      const outcome =
+        chatStream !== undefined && wrappedEmit !== undefined
+          ? await runStreamedAgentTurn(
+              { ...childDeps, chatStream },
+              childId,
+              content,
+              wrappedEmit,
+              // R43-5: retries honor the same sub-agent model override as
+              // fresh delegations (null = inherit the agent's model).
+              modelOverride,
+            )
+          : await runSingleAgentTurn(childDeps, childId, content, modelOverride, wrappedEmit);
       if (outcome.ok) {
         setSessionStatus(db, childId, "completed");
         status("completed");

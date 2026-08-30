@@ -1,4 +1,4 @@
-<!-- last-reviewed: 2026-08-29 round-49 -->
+<!-- last-reviewed: 2026-08-30 round-50 -->
 # MAINTENANCE — how to find things and change things safely
 
 **Status:** normative · **Established:** round-44 (owner directive: "complete the
@@ -32,7 +32,20 @@ launcher/            owner's one-click entry (ACUTE.bat → acute_launcher.py:
      |               sub-agent live map (childId → code/role/task/status/
      |               lastActivity from subagent-status frames) + routing of
      |               subagent-event inner approval.* frames into the
-     |               parent's approvals queue (with subAgentId).
+     |               parent's approvals queue (with subAgentId); R50 ALSO
+     |               accumulates each child's LIVE RAW stream (liveText/
+     |               liveThinking/liveSteps + token accumulators from inner
+     |               finish frames) for the SubAgentPanel live view + stats
+     |               footer. src/lib/native-browser.ts (R50): the typed
+     |               Tauri bridge for the NATIVE embedded browser
+     |               (browser_tab_* invokes + the browser-navigated event
+     |               listener) — no-ops outside the desktop shell.
+     |               src/components/project-chat/composer/ (R50): the chat
+     |               composer family (12 files) — Add Context (file picker/
+     |               project files/@-mentions/drag-drop attachments), mode
+     |               switcher, thinking level, provider-flyout model picker,
+     |               context donut; per-session localStorage persistence for
+     |               the model + thinking choices.
   └─ agent-core/     Node/TS Fastify sidecar (dev 127.0.0.1:5178) — the ONLY
      |               process that touches SQLite; routes in src/server.ts
      |               (incl. the terminal routes: one-shot stream + the
@@ -55,13 +68,29 @@ launcher/            owner's one-click entry (ACUTE.bat → acute_launcher.py:
      |               dialogs in src/dialogs.ts (R48: modern IFileOpenDialog
      |               COM primary via C# interop → classic FolderBrowserDialog
      |               fallback → legacy; EVERY dialog owned by a topmost form;
-     |               `ERROR:` result line when all pickers fail)
+     |               `ERROR:` result line when all pickers fail; R50 adds the
+     |               multi-FILE picker — OpenFileDialog Multiselect under the
+     |               same topmost-owner pattern). R50 in src/agents/: runtime
+     |               sessionToolAllowList (permission-mode enforcement —
+     |               shared by prepareTurn + the context route), chat.ts
+     |               maxRetries:4 + buildThinkingFetch (reasoning.effort
+     |               injection) + cachedInputTokens capture (inputTokenDetails
+     |               .cacheReadTokens → usage_events.cached_input_tokens,
+     |               migration 0020), prompts.ts buildSystemPromptSections
+     |               (identity/tools/memory/meta split for the context donut),
+     |               orchestrator children run the STREAMED path when a
+     |               channel exists (chatStream rides toolDeps).
   └─ src-tauri/      Rust Tauri 2 shell — sidecar lifecycle (token mint, spawn,
      |               health poll, shutdown), Credential-Manager key injection.
      |               No cargo in the sandbox; CI is the only Rust oracle (ADR-0012).
      |               R48: pick_folder parents rfd to the main webview window
      |               (compile-verified by CI's cargo check; runtime = owner's
-     |               re-test)
+     |               re-test). R50: browser.rs hosts the NATIVE embedded
+     |               browser — one child webview per browser tab via
+     |               Window::add_child (tauri features=["unstable"]; async
+     |               browser_tab_create dodges the WebView2 sync-command
+     |               deadlock; shared browser-profile dir); pick_files is the
+     |               composer's multi-file picker.
   └─ shared/         canonical domain types both TS packages import
 ```
 

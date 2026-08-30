@@ -171,6 +171,7 @@ describe("RightSidebar sub-agent picker (ROUND-48 R48-e2 code badges)", () => {
     todosTotal: 3,
     inputTokens: 1200,
     outputTokens: 340,
+    model: null, // ROUND-50 (R50-b): stats-footer field (null = no usage row yet)
     report: null,
     error: null,
   };

@@ -9,6 +9,7 @@
  */
 import { mkdirSync, readdirSync, readFileSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 import { isAbsolute, join, posix, sep } from "node:path";
+import type { PermissionMode } from "shared";
 import { jsonSchema, type ToolSet } from "ai";
 import { gitDiff, gitLog, gitStatus } from "./git.js";
 import { runCommand } from "./exec.js";
@@ -383,6 +384,14 @@ export interface ToolDeps {
   keyring?: import("../providers/registry.js").ProviderKeyring;
   /** ROUND-36: the chat fn for child turns (injected to avoid cycles). */
   chat?: import("../agents/chat.js").ChatFn;
+  /** ROUND-50 (R50-b, owner: sub-agent panels must stream the raw live
+   * response "just like the main agent"): the STREAMING adapter, forwarded by
+   * prepareTurn when the parent turn runs the streamed path. Present → the
+   * delegate_task tool hands it to the orchestrator and children run
+   * runStreamedAgentTurn (live text/thinking deltas ride the parent's SSE as
+   * subagent-event envelopes). Absent → children keep the sync step-snapshot
+   * path (channel-less runs: unchanged fail-fast ask semantics). */
+  chatStream?: import("../agents/chat.js").StreamChatFn;
   /** ROUND-37/R48 (approvals): any turn with a live emit channel — the
    * streamed parent turn AND sub-agent children delegated from it — may
    * pause and ask the owner for permission (a child's approvals ride the
@@ -405,6 +414,44 @@ export interface ToolDeps {
    * system prompt carries no memory digest. Undefined = enabled (default),
    * so existing call sites (tests, older paths) keep the tools. */
   memoryEnabled?: boolean;
+  /** ROUND-50 (R50-c1): the session's permission mode (full/ask/plan/
+   * editor), forwarded by runtime.ts prepareTurn. The tool-set RESTRICTIONS
+   * (plan/editor) are applied to the allowlist BEFORE buildProjectTools
+   * runs; this field carries the mode to the approval gates — "full"
+   * auto-approves ask-tier decisions (denylist-supreme refusals stay hard
+   * in every mode, see approvals.ts). */
+  permissionMode?: PermissionMode;
+}
+
+/**
+ * ROUND-50 (R50-c1): sentinel allowlist meaning "register NO tools".
+ * buildProjectTools treats `undefined` AND `[]` as "ALL tools" (ADR-0019 —
+ * the agent-allowlist semantic), so a mode intersection that produced an
+ * EMPTY list (e.g. an explicit allowlist of only run_command in editor
+ * mode) cannot be expressed as `[]`. prepareTurn passes this sentinel in
+ * that case; the fake name matches no registered tool, so the model gets
+ * an empty toolset. (The ROUND-40 bug was the sentinel being applied to
+ * []-allowlist agents by mistake — this is the deliberate, documented use.)
+ */
+export const NO_TOOLS: readonly string[] = ["__none__"];
+
+/**
+ * ROUND-50 (R50-c1): the approval-gate deps every gated tool builds from
+ * toolDeps (run_command, web_fetch, browser_control-navigate) — ONE builder
+ * so the permissionMode forwarding can never drift between call sites.
+ */
+function buildApprovalDeps(toolDeps: ToolDeps): ApprovalRequestDeps {
+  return {
+    db: toolDeps.db,
+    sessionId: toolDeps.sessionId,
+    agentId: toolDeps.agentId,
+    interactive: toolDeps.interactiveApprovals === true,
+    ...(toolDeps.permissionMode !== undefined ? { permissionMode: toolDeps.permissionMode } : {}),
+    ...(toolDeps.projectId !== undefined ? { projectId: toolDeps.projectId } : {}),
+    ...(toolDeps.emit !== undefined ? { emit: toolDeps.emit } : {}),
+    ...(toolDeps.signal !== undefined ? { signal: toolDeps.signal } : {}),
+    ...(toolDeps.appendEvent !== undefined ? { appendEvent: toolDeps.appendEvent } : {}),
+  };
 }
 
 export async function buildProjectTools(root: string, allowedTools?: readonly string[], deps?: ToolDeps): Promise<ToolSet> {
@@ -646,18 +693,7 @@ export async function buildProjectTools(root: string, allowedTools?: readonly st
         runCommand(
           root,
           typeof input.command === "string" ? input.command : "",
-          toolDeps !== undefined
-            ? {
-                db: toolDeps.db,
-                sessionId: toolDeps.sessionId,
-                agentId: toolDeps.agentId,
-                interactive: toolDeps.interactiveApprovals === true,
-                ...(toolDeps.projectId !== undefined ? { projectId: toolDeps.projectId } : {}),
-                ...(toolDeps.emit !== undefined ? { emit: toolDeps.emit } : {}),
-                ...(toolDeps.signal !== undefined ? { signal: toolDeps.signal } : {}),
-                ...(toolDeps.appendEvent !== undefined ? { appendEvent: toolDeps.appendEvent } : {}),
-              }
-            : undefined,
+          toolDeps !== undefined ? buildApprovalDeps(toolDeps) : undefined,
         ),
     },
     todo_write: {
@@ -705,16 +741,7 @@ export async function buildProjectTools(root: string, allowedTools?: readonly st
         if (toolDeps === undefined) {
           return { ok: false, output: "web_fetch unavailable: no approval channel in this context" };
         }
-        const approvalDeps: ApprovalRequestDeps = {
-          db: toolDeps.db,
-          sessionId: toolDeps.sessionId,
-          agentId: toolDeps.agentId,
-          interactive: toolDeps.interactiveApprovals === true,
-          ...(toolDeps.projectId !== undefined ? { projectId: toolDeps.projectId } : {}),
-          ...(toolDeps.emit !== undefined ? { emit: toolDeps.emit } : {}),
-          ...(toolDeps.signal !== undefined ? { signal: toolDeps.signal } : {}),
-          ...(toolDeps.appendEvent !== undefined ? { appendEvent: toolDeps.appendEvent } : {}),
-        };
+        const approvalDeps: ApprovalRequestDeps = buildApprovalDeps(toolDeps);
         const gate = await requestWebFetchApproval(approvalDeps, url);
         if (!gate.allowed) {
           return { ok: false, output: `web_fetch blocked: ${gate.note}` };
@@ -799,16 +826,7 @@ export async function buildProjectTools(root: string, allowedTools?: readonly st
             if (toolDeps === undefined) {
               return { ok: false, output: "browser_control: navigate unavailable — no approval channel in this context" };
             }
-            const approvalDeps: ApprovalRequestDeps = {
-              db: toolDeps.db,
-              sessionId: toolDeps.sessionId,
-              agentId: toolDeps.agentId,
-              interactive: toolDeps.interactiveApprovals === true,
-              ...(toolDeps.projectId !== undefined ? { projectId: toolDeps.projectId } : {}),
-              ...(toolDeps.emit !== undefined ? { emit: toolDeps.emit } : {}),
-              ...(toolDeps.signal !== undefined ? { signal: toolDeps.signal } : {}),
-              ...(toolDeps.appendEvent !== undefined ? { appendEvent: toolDeps.appendEvent } : {}),
-            };
+            const approvalDeps: ApprovalRequestDeps = buildApprovalDeps(toolDeps);
             const gate = await requestWebFetchApproval(approvalDeps, url, "browser_control");
             if (!gate.allowed) {
               return { ok: false, output: `browser_control: navigate blocked — ${gate.note}` };
@@ -992,7 +1010,15 @@ export async function buildProjectTools(root: string, allowedTools?: readonly st
             : "researcher";
         const orchestrator = getOrchestrator();
         const result = await orchestrator.delegateTask(
-          { db: toolDeps.db, keyring: toolDeps.keyring!, chat: toolDeps.chat! },
+          {
+            db: toolDeps.db,
+            keyring: toolDeps.keyring!,
+            chat: toolDeps.chat!,
+            // ROUND-50 (R50-b): forward the streaming adapter — a streamed
+            // parent turn spawns STREAMED children (live raw deltas to the
+            // sub-agent panel); sync parents keep the sync fallback.
+            ...(toolDeps.chatStream !== undefined ? { chatStream: toolDeps.chatStream } : {}),
+          },
           toolDeps.sessionId,
           task,
           role,

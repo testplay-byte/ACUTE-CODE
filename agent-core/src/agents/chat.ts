@@ -7,6 +7,7 @@ import { createAnthropic } from "@ai-sdk/anthropic";
 import { createOpenAI } from "@ai-sdk/openai";
 import { createOpenAICompatible } from "@ai-sdk/openai-compatible";
 import { generateText, streamText, stepCountIs, type LanguageModel, type ToolSet } from "ai";
+import type { ThinkingLevel } from "shared";
 
 export interface ChatTurnMessage {
   role: "user" | "assistant";
@@ -41,6 +42,14 @@ export interface ChatTurnInput {
    * session stayed "running" indefinitely and the outer loop never
    * returned. Defaults to PROVIDER_CALL_TIMEOUT_MS. */
   timeoutMs?: number;
+  /** ROUND-50 (R50-c1, the composer's thinking-level selector): per-send
+   * reasoning-effort hint. For the chat-completions format a non-default
+   * level wraps the provider fetch to inject `"reasoning": { "effort": … }`
+   * into the outgoing JSON body (see buildThinkingFetch); the
+   * anthropic-messages and responses formats silently skip it (honest
+   * limitation — those wire formats have no equivalent passthrough wired
+   * here yet). NOT persisted; sub-agents never inherit it. */
+  thinkingLevel?: ThinkingLevel;
 }
 
 /** Round-46: 10 minutes per provider call — generous enough for slow
@@ -84,6 +93,41 @@ export function buildModelFallbackFetch(): (
   };
 }
 
+/**
+ * ROUND-50 (R50-c1, the composer's thinking-level selector): builds the
+ * fetch wrapper that injects `"reasoning": { "effort": <level> }` into the
+ * outgoing chat-completions JSON body (the OpenRouter/OpenAI
+ * reasoning-effort knob). Mirrors the buildModelFallbackFetch pattern: parse
+ * the body only when it is a non-empty JSON string, MERGE with any existing
+ * `reasoning` object (never clobber provider-set fields), and pass everything
+ * else through untouched. Non-JSON bodies are forwarded verbatim.
+ *
+ * `inner` lets the OpenRouter free-model fallback wrapper compose UNDER this
+ * one (thinking decides the effort, fallback decides the model chain) —
+ * otherwise the global fetch is used. Exported for tests.
+ */
+export function buildThinkingFetch(
+  level: ThinkingLevel,
+  inner?: (url: string | URL | Request, init?: RequestInit) => Promise<Response>,
+): (url: string | URL | Request, init?: RequestInit) => Promise<Response> {
+  return async (url: string | URL | Request, init?: RequestInit) => {
+    if (typeof init?.body === "string" && init.body.length > 0) {
+      try {
+        const body = JSON.parse(init.body) as Record<string, unknown>;
+        const reasoning =
+          typeof body.reasoning === "object" && body.reasoning !== null
+            ? (body.reasoning as Record<string, unknown>)
+            : {};
+        body.reasoning = { ...reasoning, effort: level };
+        init = { ...init, body: JSON.stringify(body) };
+      } catch {
+        // not JSON — pass through untouched
+      }
+    }
+    return inner !== undefined ? inner(url, init) : fetch(url, init);
+  };
+}
+
 function buildModel(input: ChatTurnInput): LanguageModel {
   const format = resolveApiFormat(input.provider.apiFormat);
   if (format === "anthropic-messages") {
@@ -112,9 +156,25 @@ function buildModel(input: ChatTurnInput): LanguageModel {
     // provider-side router transparently retries other free models before
     // the call fails. The meta-router itself rotates across all free models,
     // so a two-entry chain is enough. Non-JSON bodies pass through untouched.
-    ...(input.provider.id === "openrouter" && input.model.endsWith(":free") && input.model !== "openrouter/free"
-      ? { fetch: buildModelFallbackFetch() }
-      : {}),
+    //
+    // ROUND-50 (R50-c1): the composer's thinking level composes ON TOP (the
+    // thinking wrapper runs first, then hands off to the fallback wrapper) —
+    // both rewrite the same JSON body and are chat-completions-only; the
+    // anthropic-messages/responses formats above silently skip the level
+    // (no reasoning-effort passthrough wired there — honest limitation).
+    ...((() => {
+      const fallbackFetch =
+        input.provider.id === "openrouter" &&
+        input.model.endsWith(":free") &&
+        input.model !== "openrouter/free"
+          ? buildModelFallbackFetch()
+          : undefined;
+      const level = input.thinkingLevel;
+      if (level !== undefined && level !== "default") {
+        return { fetch: buildThinkingFetch(level, fallbackFetch) };
+      }
+      return fallbackFetch !== undefined ? { fetch: fallbackFetch } : {};
+    })()),
   });
   return provider.chatModel(input.model);
 }
@@ -139,7 +199,16 @@ export interface ChatStepSnapshot {
 
 export interface ChatTurnOutput {
   text: string;
-  usage: { inputTokens: number; outputTokens: number; totalTokens: number };
+  usage: {
+    inputTokens: number;
+    outputTokens: number;
+    totalTokens: number;
+    /** ROUND-50 (R50-c1): prompt tokens served from the provider cache
+     * (AI SDK v7 usage.inputTokenDetails.cacheReadTokens — OpenRouter maps
+     * prompt_tokens_details.cached_tokens into it). Undefined when the
+     * provider didn't report a cached tier. */
+    cachedInputTokens?: number;
+  };
   /** Executed tool calls in order (empty when no tools were provided/used). */
   toolCalls: ChatToolCall[];
 }
@@ -150,6 +219,12 @@ export type ChatFn = (input: ChatTurnInput) => Promise<ChatTurnOutput>;
 export const aiSdkChat: ChatFn = async (input) => {
   const result = await generateText({
     model: buildModel(input),
+    // ROUND-50 (owner's third Windows test: a rate-limited sub-agent run
+    // "failed after three attempts" — that is the AI SDK's DEFAULT
+    // maxRetries: 2, i.e. 3 total attempts). The owner wants at least five
+    // attempts: maxRetries: 4 = 1 initial + 4 retries with the SDK's
+    // exponential backoff (OpenRouter 429s clear within seconds).
+    maxRetries: 4,
     system: input.system === "" ? undefined : input.system,
     messages: input.messages,
     temperature: input.temperature,
@@ -177,12 +252,17 @@ export const aiSdkChat: ChatFn = async (input) => {
   });
   const inputTokens = result.usage.inputTokens ?? 0;
   const outputTokens = result.usage.outputTokens ?? 0;
+  // ROUND-50 (R50-c1): cached prompt tokens — the openai-compatible provider
+  // maps OpenRouter's prompt_tokens_details.cached_tokens here; other
+  // providers leave it undefined (the usage row then stores NULL).
+  const cachedInputTokens = result.usage.inputTokenDetails?.cacheReadTokens;
   return {
     text: result.text,
     usage: {
       inputTokens,
       outputTokens,
       totalTokens: result.usage.totalTokens ?? inputTokens + outputTokens,
+      ...(typeof cachedInputTokens === "number" ? { cachedInputTokens } : {}),
     },
     toolCalls: extractToolCalls(result.steps),
   };
@@ -283,7 +363,15 @@ export type StreamChatEvent =
   | { type: "thinking-delta"; delta: string }
   | { type: "tool-call"; toolName: string; argsSummary: string }
   | { type: "tool-result"; toolName: string; argsSummary: string; ok: boolean; outputSummary?: string }
-  | { type: "finish"; usage: { inputTokens: number; outputTokens: number; totalTokens: number } };
+  | {
+      type: "finish";
+      usage: { inputTokens: number; outputTokens: number; totalTokens: number };
+      /** ROUND-50 (R50-c1): prompt tokens served from the provider cache
+       * (usage.inputTokenDetails.cacheReadTokens on the finish-step/total
+       * usage). 0 when absent — the runtime accumulates it into the turn's
+       * usage_events row for the context meter's cache-hit-rate line. */
+      cachedInputTokens?: number;
+    };
 
 export interface StreamChatInput extends ChatTurnInput {
   signal?: AbortSignal;
@@ -306,6 +394,10 @@ export const streamAiSdkChat: StreamChatFn = async function* (input) {
     input.signal !== undefined ? AbortSignal.any([input.signal, timeoutSignal]) : timeoutSignal;
   const result = streamText({
     model: buildModel(input),
+    // ROUND-50: same retry policy as generateText above (see the comment
+    // there) — the owner's "failed after three attempts" hit the STREAMED
+    // main-agent path just as hard as the sync sub-agent path.
+    maxRetries: 4,
     system: input.system === "" ? undefined : input.system,
     messages: input.messages,
     temperature: input.temperature,
@@ -317,6 +409,10 @@ export const streamAiSdkChat: StreamChatFn = async function* (input) {
   const usage = { inputTokens: 0, outputTokens: 0, totalTokens: 0 };
   let stepInput = 0;
   let stepOutput = 0;
+  // ROUND-50 (R50-c1): cached prompt tokens — summed from per-step finish
+  // usage and cross-checked against the awaited totals exactly like the
+  // input/output token counts (some providers report only one of the two).
+  let stepCached = 0;
   for await (const part of result.fullStream) {
     if (part.type === "text-delta") {
       yield { type: "text-delta", delta: part.text };
@@ -345,6 +441,9 @@ export const streamAiSdkChat: StreamChatFn = async function* (input) {
       if (stepUsage) {
         stepInput += stepUsage.inputTokens ?? 0;
         stepOutput += stepUsage.outputTokens ?? 0;
+        stepCached +=
+          (part as { usage?: { inputTokenDetails?: { cacheReadTokens?: number } } }).usage
+            ?.inputTokenDetails?.cacheReadTokens ?? 0;
       }
     }
   }
@@ -352,5 +451,10 @@ export const streamAiSdkChat: StreamChatFn = async function* (input) {
   usage.inputTokens = Math.max(totals.inputTokens ?? 0, stepInput);
   usage.outputTokens = Math.max(totals.outputTokens ?? 0, stepOutput);
   usage.totalTokens = totals.totalTokens ?? usage.inputTokens + usage.outputTokens;
-  yield { type: "finish", usage };
+  // Same larger-of-the-two-sources rule as the token counts above.
+  const cachedInputTokens = Math.max(
+    totals.inputTokenDetails?.cacheReadTokens ?? 0,
+    stepCached,
+  );
+  yield { type: "finish", usage, cachedInputTokens };
 };

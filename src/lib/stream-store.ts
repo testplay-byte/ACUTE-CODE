@@ -1,4 +1,5 @@
 import { create } from "zustand";
+import type { MessageAttachment, ThinkingLevel } from "shared";
 import {
   streamSessionMessage,
   stopSessionTurn,
@@ -86,7 +87,58 @@ export interface SubAgentLiveEntry {
   lastActivity?: string;
   /** Wall-clock ms of the last live update (frame ordering/debug aid). */
   updatedAtMs: number;
+  /** ROUND-50 (R50-b, owner: "I was still not seeing the actual live
+   * responses from it, like the actual raw data, the raw thinking, the raw
+   * text of it"): the child's LIVE raw-stream state, accumulated from the
+   * inner frames of its subagent-event envelopes. RESET RULE: a
+   * `subagent-status` frame with status "running" clears the transcript
+   * accumulators (liveText / liveThinking / liveToolCalls / liveSteps) — a
+   * retry RE-STARTS the child, so the live view must start fresh too. Token
+   * counters are deliberately NOT reset: they follow the usage ledger's SUM
+   * semantics (usage_events accumulate across attempts, and so does the
+   * polled /subagents row they feed), keeping the live→final handoff
+   * monotone. */
+  /** Concatenated raw text of the CURRENT attempt (inner text-delta frames —
+   * streamed `delta` tokens or sync-path step snapshots). */
+  liveText: string;
+  /** Concatenated raw thinking of the CURRENT attempt (inner thinking-delta
+   * frames — streamed children only). */
+  liveThinking: string;
+  /** Count of inner tool-call frames in the CURRENT attempt. */
+  liveToolCalls: number;
+  /** Live token counters, accumulated from inner `finish` events (ALL
+   * attempts — see the reset rule above). */
+  inputTokens: number;
+  outputTokens: number;
+  /** Wall-clock ms of the last live INNER frame (deltas/tools/finish) — the
+   * stats footer's freshness stamp. */
+  lastActivityTs: number;
+  /** The model the child runs on (from subagent-status frames — the stats
+   * footer's model line before the polled row lands). */
+  model?: string;
+  /** Ordered interleaved log of the current attempt (thinking → text → tool
+   * rows in true arrival order) — the panel's live segment renders this so
+   * tool rows appear BETWEEN the text they interrupt, exactly like the main
+   * chat's WorkingSection. Bounded (the newest MAX_LIVE_STEPS entries). */
+  liveSteps: SubAgentLiveStep[];
+  /** Wall-clock ms the current attempt's live view started (set when the
+   * entry is created / re-anchored on the running status frame) — the live
+   * footer's clock anchor while the stream is in flight. */
+  startedAtMs: number;
 }
+
+/** One ordered entry of a child's live attempt log (see liveSteps). */
+export interface SubAgentLiveStep {
+  type: "thinking" | "text" | "tool";
+  /** thinking/text: the accumulated raw text; tool: unused. */
+  text?: string;
+  /** tool rows only. */
+  tool?: { toolName: string; argsSummary: string; ok: boolean | null; outputSummary?: string };
+}
+
+/** Cap on the ordered live log (a runaway child must not grow the store
+ * unbounded; the tail is what the panel streams anyway). */
+const MAX_LIVE_STEPS = 400;
 
 export interface StreamSessionState {
   liveTurn: LiveTurn | null;
@@ -107,11 +159,21 @@ interface StreamStore {
    * events (see SubAgentLiveEntry). Independent of bySession so it keeps
    * working across panel remounts, exactly like the rest of the store. */
   subagentsLive: Record<string, SubAgentLiveEntry>;
-  /** Start a streamed turn — runs in the background; resolves on end/abort. */
+  /** Start a streamed turn — runs in the background; resolves on end/abort.
+   *
+   * ROUND-50 (R50-c2): `opts` additively carries the composer's per-send
+   * extras (`thinkingLevel`, `attachments`) straight through to
+   * streamSessionMessage — api.ts already threads them into the POST body
+   * (R50-c1). Purely optional: existing callers that pass only `model` (or
+   * nothing) behave exactly as before. */
   startStream: (
     sessionId: string,
     text: string,
-    opts?: { model?: string },
+    opts?: {
+      model?: string;
+      thinkingLevel?: ThinkingLevel;
+      attachments?: MessageAttachment[];
+    },
   ) => Promise<void>;
   /** User clicked Stop — aborts the in-flight fetch. */
   abortStream: (sessionId: string) => void;
@@ -236,12 +298,20 @@ function patchLiveApproval(
 
 /** `subagent-status` → upsert the live map entry + invalidate the polled
  * ["subagents", parentSessionId] query so the Delegated card's rows and the
- * New-Tab picker converge on the fresh status immediately. */
+ * New-Tab picker converge on the fresh status immediately.
+ *
+ * ROUND-50 (R50-b): the entry also carries the child's live raw-stream state
+ * (liveText/liveThinking/liveSteps/token counters — see SubAgentLiveEntry).
+ * The RESET RULE: a "running" frame clears the transcript accumulators (a
+ * retry re-starts the child → the live view starts fresh) while tokens are
+ * carried forward (SUM semantics — see the entry doc). */
 function handleSubAgentStatus(
   event: Extract<StreamTurnEvent, { type: "subagent-status" }>,
 ): void {
   useStreamStore.setState((s) => {
     const prev = s.subagentsLive[event.sessionId];
+    // A (re)start of the child's turn: the live transcript begins anew.
+    const restarted = event.status === "running";
     const next: SubAgentLiveEntry = {
       childSessionId: event.sessionId,
       parentSessionId: event.parentSessionId,
@@ -261,6 +331,22 @@ function handleSubAgentStatus(
           : {}),
       ...(prev?.lastActivity !== undefined ? { lastActivity: prev.lastActivity } : {}),
       updatedAtMs: Date.now(),
+      ...(event.model !== undefined ? { model: event.model } : prev?.model !== undefined ? { model: prev.model } : {}),
+      // Transcript accumulators: reset on running, carried otherwise (the
+      // frozen live view bridges the poll-lag gap when the child turns
+      // completed/failed — the panel hides it once the polled transcript
+      // catches up, see SubAgentPanel).
+      liveText: restarted ? "" : prev?.liveText ?? "",
+      liveThinking: restarted ? "" : prev?.liveThinking ?? "",
+      liveToolCalls: restarted ? 0 : prev?.liveToolCalls ?? 0,
+      liveSteps: restarted ? [] : prev?.liveSteps ?? [],
+      // Tokens are never reset (SUM semantics across attempts).
+      inputTokens: prev?.inputTokens ?? 0,
+      outputTokens: prev?.outputTokens ?? 0,
+      lastActivityTs: prev?.lastActivityTs ?? 0,
+      // The attempt's clock anchor: the running frame (or the first inner
+      // frame for entries born mid-stream — see handleSubAgentEvent).
+      startedAtMs: restarted || prev === undefined ? Date.now() : prev.startedAtMs,
     };
     return { subagentsLive: { ...s.subagentsLive, [event.sessionId]: next } };
   });
@@ -289,10 +375,12 @@ function summarizeToolActivity(
  *    (the live turn's working entries) WITH subAgentId so the ApprovalCard
  *    renders its "Sub-agent {code} · {role}" attribution;
  *  - tool-call/tool-result refresh the live map's lastActivity;
- *  - everything else is ignored — text-delta/finish (the right-sidebar panel
- *    polls the child's own event log for its transcript) and the child's
- *    forwarded meta.* bookkeeping frames (compaction/context/request limits —
- *    see SubAgentInnerEvent's doc; no branch matches, so they fall through). */
+ *  - ROUND-50 (R50-b): text-delta / thinking-delta / tool frames accumulate
+ *    the child's LIVE raw-stream state (liveText / liveThinking /
+ *    liveSteps — the sub-agent panel's live segment) and inner `finish`
+ *    events accumulate the live token counters (the stats footer);
+ *  - the child's forwarded meta.* bookkeeping frames (compaction/context/
+ *    request limits) still fall through untouched (no branch matches). */
 function handleSubAgentEvent(
   parentTurnSessionId: string,
   event: Extract<StreamTurnEvent, { type: "subagent-event" }>,
@@ -312,23 +400,126 @@ function handleSubAgentEvent(
     patchLiveApproval(parentTurnSessionId, inner.approvalId, inner.decision, inner.remember);
     return;
   }
-  if (inner.type === "tool-call" || inner.type === "tool-result") {
+
+  if (
+    inner.type === "text-delta" ||
+    inner.type === "thinking-delta" ||
+    inner.type === "tool-call" ||
+    inner.type === "tool-result" ||
+    inner.type === "finish"
+  ) {
     useStreamStore.setState((s) => {
       const prev = s.subagentsLive[event.sessionId];
       if (prev === undefined) return s;
-      return {
-        subagentsLive: {
-          ...s.subagentsLive,
-          [event.sessionId]: {
-            ...prev,
-            lastActivity: summarizeToolActivity(inner),
-            updatedAtMs: Date.now(),
-          },
-        },
+      // ROUND-50: the live raw-stream patch for THIS child (the `??` fallbacks
+      // keep a partial/stale entry — one written by an older store shape —
+      // from poisoning the accumulators with undefined).
+      const baseText = prev.liveText ?? "";
+      const baseThinking = prev.liveThinking ?? "";
+      const baseToolCalls = prev.liveToolCalls ?? 0;
+      const baseIn = prev.inputTokens ?? 0;
+      const baseOut = prev.outputTokens ?? 0;
+      let liveSteps = prev.liveSteps ?? [];
+      let liveText = baseText;
+      let liveThinking = baseThinking;
+      let liveToolCalls = baseToolCalls;
+      let inputTokens = baseIn;
+      let outputTokens = baseOut;
+
+      if (inner.type === "text-delta") {
+        // Streamed children send token-level `delta`s; the sync path sends
+        // per-step snapshots as `text` (a call's frames concatenate to the
+        // reply either way — accumulate whichever the frame carries).
+        const chunk = inner.delta ?? inner.text ?? "";
+        liveText = baseText + chunk;
+        liveSteps = appendLiveStep(liveSteps, "text", chunk);
+      } else if (inner.type === "thinking-delta") {
+        liveThinking = baseThinking + inner.delta;
+        liveSteps = appendLiveStep(liveSteps, "thinking", inner.delta);
+      } else if (inner.type === "tool-call") {
+        liveToolCalls = baseToolCalls + 1;
+        liveSteps = appendLiveStep(liveSteps, "tool", undefined, {
+          toolName: inner.toolName,
+          argsSummary: inner.argsSummary,
+          ok: null,
+        });
+      } else if (inner.type === "tool-result") {
+        // Attach the result to the matching in-flight live step (the last
+        // tool step with the same name + a pending ok).
+        liveSteps = [...liveSteps];
+        for (let i = liveSteps.length - 1; i >= 0; i -= 1) {
+          const step = liveSteps[i];
+          if (step.type === "tool" && step.tool?.toolName === inner.toolName && step.tool.ok === null) {
+            liveSteps[i] = {
+              ...step,
+              tool: {
+                ...step.tool,
+                ok: inner.ok,
+                ...(inner.outputSummary !== undefined ? { outputSummary: inner.outputSummary } : {}),
+              },
+            };
+            break;
+          }
+        }
+      } else if (inner.type === "finish" && inner.usage !== undefined) {
+        // ROUND-50: live token counters — the stats footer while running.
+        inputTokens = baseIn + inner.usage.inputTokens;
+        outputTokens = baseOut + inner.usage.outputTokens;
+      }
+
+      const next: SubAgentLiveEntry = {
+        ...prev,
+        liveText,
+        liveThinking,
+        liveToolCalls,
+        inputTokens,
+        outputTokens,
+        liveSteps,
+        updatedAtMs: Date.now(),
+        lastActivityTs: Date.now(),
+        ...(inner.type === "tool-call" || inner.type === "tool-result"
+          ? { lastActivity: summarizeToolActivity(inner) }
+          : {}),
       };
+      return { subagentsLive: { ...s.subagentsLive, [event.sessionId]: next } };
     });
+    return;
   }
-  // text-delta / finish / meta.* — nothing to mutate here (see the doc above).
+  // meta.* — nothing to mutate (see the doc above).
+}
+
+/** Append/merge one step onto the ordered live log: consecutive thinking
+ * deltas merge into ONE thinking block (the main chat renders a single
+ * "Thinking…" row per thought), consecutive text deltas merge into one text
+ * run, tools always append. Bounded at MAX_LIVE_STEPS (newest kept). */
+function appendLiveStep(
+  steps: SubAgentLiveStep[],
+  type: "thinking" | "text",
+  chunk: string,
+): SubAgentLiveStep[];
+function appendLiveStep(
+  steps: SubAgentLiveStep[],
+  type: "tool",
+  chunk: undefined,
+  tool: { toolName: string; argsSummary: string; ok: boolean | null },
+): SubAgentLiveStep[];
+function appendLiveStep(
+  steps: SubAgentLiveStep[],
+  type: "thinking" | "text" | "tool",
+  chunk?: string,
+  tool?: { toolName: string; argsSummary: string; ok: boolean | null },
+): SubAgentLiveStep[] {
+  const last = steps[steps.length - 1];
+  if ((type === "thinking" || type === "text") && last !== undefined && last.type === type) {
+    const merged = [...steps];
+    merged[merged.length - 1] = { type, text: (last.text ?? "") + (chunk ?? "") };
+    return merged;
+  }
+  const next =
+    type === "tool" && tool !== undefined
+      ? [...steps, { type: "tool" as const, tool }]
+      : [...steps, { type, text: chunk ?? "" } as SubAgentLiveStep];
+  return next.length > MAX_LIVE_STEPS ? next.slice(next.length - MAX_LIVE_STEPS) : next;
 }
 
 /** Tools that mutate the project's file tree — when they complete, refresh
@@ -385,7 +576,7 @@ export const useStreamStore = create<StreamStore>((set, get) => ({
         (event: StreamTurnEvent) => {
           handleStreamEvent(sessionId, event);
         },
-        { model: opts?.model, signal: controller.signal },
+        { model: opts?.model, signal: controller.signal, thinkingLevel: opts?.thinkingLevel, attachments: opts?.attachments },
       );
     } catch (err) {
       errored = true;

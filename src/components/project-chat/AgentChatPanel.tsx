@@ -4,15 +4,12 @@ import {
   useMemo,
   useRef,
   useState,
-  type KeyboardEvent as ReactKeyboardEvent,
   type ReactNode,
 } from "react";
 import { AnimatePresence, motion, type Variants } from "framer-motion";
 import {
   AlertTriangle,
-  ArrowUp,
   Check,
-  ChevronDown,
   Copy,
   File,
   FileCode,
@@ -24,7 +21,7 @@ import {
   type LucideIcon,
 } from "lucide-react";
 import { Link, useSearchParams } from "react-router";
-import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { useQueryClient } from "@tanstack/react-query";
 import { useAgents } from "../../hooks/use-agents";
 import { pushLocalToast } from "../../hooks/use-notifications";
 import {
@@ -45,30 +42,43 @@ import {
 import { AcuteLogo } from "../shell/Sidebar";
 import { ClampedText } from "../shared/ClampedText";
 import {
-  type Agent,
+  type AttachmentRef,
   type AssistantTurnItem,
   type ErrorTurnItem,
+  type PermissionMode,
   type Project,
   type ProjectChatItem,
+  type Session,
+  type SessionDetail,
+  type ThinkingLevel,
   type WorkingEntry,
   decideApproval,
-  fetchProviderModels,
+  patchSessionPermissions,
   toProjectChatItems,
 } from "../../lib/api";
 import { useConfigStore } from "../../lib/config-store";
 import { useThemeStore } from "../../lib/theme-store";
-import { filterModelsForPicker, useSettingsStore } from "../../lib/settings-store";
 import { withAlpha } from "../dashboard/helpers";
 import { ease } from "../../lib/motion";
 import { useProjectChatStore } from "../../lib/project-chat-store";
 import { useActiveStreams } from "../../lib/active-streams";
 import { useStreamStore } from "../../lib/stream-store";
-import { formatTime } from "../../lib/format";
+import { fmtBytes, fmtTokens, formatTime } from "../../lib/format";
 import { useRightSidebarStore } from "../../lib/right-sidebar-store";
 import { useRightSidebarEvents } from "../../lib/right-sidebar-events";
 import { SEMANTIC_COLORS } from "../../lib/semantics";
 import { useThemeStyles } from "../../lib/use-theme-styles";
 import { useScrollFade } from "../../lib/useScrollFade";
+import { Composer } from "./composer/Composer";
+import {
+  loadModelOverride,
+  loadThinkingLevel,
+  saveModelOverride,
+  saveThinkingLevel,
+  toMessageAttachment,
+  type ComposerAttachment,
+  type ModelOverride,
+} from "./composer/composer-utils";
 
 /**
  * ROUND-37 (owner "two states" directive): the chat renders ONE assistant
@@ -92,20 +102,6 @@ const msgVariants: Variants = {
   animate: { opacity: 1, y: 0, transition: { duration: 0.35, ease } },
   exit: { opacity: 0, y: -8, transition: { duration: 0.2, ease } },
 };
-
-const fmtTokens = (n: number): string =>
-  n >= 1000 ? `${(n / 1000).toFixed(n >= 10_000 ? 0 : 1)}k` : String(n);
-
-/** Known context windows (tokens) for the context meter. */
-const CONTEXT_LIMITS: Record<string, number> = {
-  "stealth/ox-alpha": 1_048_576,
-};
-const DEFAULT_CONTEXT_LIMIT = 1_000_000;
-
-/** ROUND-33 (owner: "the command + K option… I am on Windows and it should
- * not show me these kinds of things"): show Ctrl labels on Windows. */
-const IS_WINDOWS =
-  typeof navigator !== "undefined" && /Win/i.test(navigator.userAgent);
 
 /** Round-30 empty-state suggestion chips (fill the composer on click). */
 const SUGGESTIONS: Array<{ label: string; prompt: string; icon: LucideIcon }> = [
@@ -218,10 +214,15 @@ const itemKey = (item: ProjectChatItem): string => {
  */
 function UserMessage({
   content,
+  attachments,
   onRevert,
   revertDisabled,
 }: {
   content: string;
+  /** ROUND-50 (R50-c2): display-only attachment chips (name/path/size) on
+   * the user bubble — persisted items carry them from the event log; the
+   * optimistic echo carries the staged chips until the refetch lands. */
+  attachments?: AttachmentRef[];
   onRevert?: () => void;
   revertDisabled?: boolean;
 }) {
@@ -275,6 +276,32 @@ function UserMessage({
             color: styles.text,
           }}
         >
+          {attachments !== undefined && attachments.length > 0 ? (
+            <div
+              role="group"
+              aria-label="Attachments"
+              className="flex flex-wrap gap-1 pb-1.5 mb-1.5 border-b"
+              style={{ borderColor: bubbleBorder }}
+            >
+              {attachments.map((a, i) => (
+                <span
+                  key={`${a.path ?? a.name}-${i}`}
+                  title={a.path ?? a.name}
+                  className="inline-flex items-center gap-1 h-5 pl-1.5 pr-2 rounded-md font-mono text-[9.5px] max-w-[220px]"
+                  style={{
+                    background: withAlpha(styles.accent, styles.isDark ? 0.14 : 0.1),
+                    color: styles.textSecondary,
+                  }}
+                >
+                  <File size={9} className="shrink-0" style={{ color: styles.accent }} />
+                  <span className="truncate">
+                    {a.name}
+                    {a.size !== undefined ? ` · ${fmtBytes(a.size)}` : ""}
+                  </span>
+                </span>
+              ))}
+            </div>
+          ) : null}
           <ClampedText
             text={content}
             lines={6}
@@ -667,16 +694,24 @@ const MessageRenderer = forwardRef<
      * revert, e.g. the optimistic pending echo). */
     onRevert?: () => void;
     revertDisabled?: boolean;
+    /** ROUND-50 (R50-c2): display-only attachment chips for user items —
+     * from the persisted event log OR the optimistic pending echo. */
+    attachments?: AttachmentRef[];
   }
 >(function MessageRenderer(
-  { item, sessionId, projectId, collapseHint, onRetry, retryDisabled, onRevert, revertDisabled },
+  { item, sessionId, projectId, collapseHint, onRetry, retryDisabled, onRevert, revertDisabled, attachments },
   ref,
 ) {
   switch (item.kind) {
     case "user":
       return (
         <div ref={ref}>
-          <UserMessage content={item.content} onRevert={onRevert} revertDisabled={revertDisabled} />
+          <UserMessage
+            content={item.content}
+            onRevert={onRevert}
+            revertDisabled={revertDisabled}
+            attachments={attachments ?? item.attachments}
+          />
         </div>
       );
     case "turn":
@@ -698,191 +733,6 @@ const MessageRenderer = forwardRef<
       );
   }
 });
-
-/**
- * Composer footer (round-16): context-window meter (approx from the last
- * reply's usage), model picker (per-send override; the agent's model is the
- * default), and the keyboard hint.
- */
-function ComposerFooter({
-  agent,
-  modelOverride,
-  onModelChange,
-  items,
-  disabled,
-}: {
-  agent: Agent | null;
-  modelOverride: string | null;
-  onModelChange: (model: string | null) => void;
-  items: ProjectChatItem[];
-  disabled: boolean;
-}) {
-  const styles = useThemeStyles();
-  const [open, setOpen] = useState(false);
-  const menuRef = useRef<HTMLDivElement>(null);
-  const effective = modelOverride ?? agent?.model ?? null;
-
-  // ROUND-43 (owner: free-model default): the per-send picker honors the
-  // shared, persisted `modelsFreeOnly` preference (same store the Settings →
-  // Providers list uses) — with an inline escape hatch right in the picker so
-  // the user can flip it where they pick.
-  const modelsFreeOnly = useSettingsStore((s) => s.modelsFreeOnly);
-  const setModelsFreeOnly = useSettingsStore((s) => s.setModelsFreeOnly);
-
-  const providerId = agent?.providerId ?? null;
-  const modelsQuery = useQuery({
-    queryKey: ["provider-models", providerId],
-    queryFn: () => fetchProviderModels(providerId as string),
-    enabled: providerId !== null && !disabled,
-    staleTime: 5 * 60 * 1000,
-  });
-  const allModels = (modelsQuery.data ?? []).slice(0, 60);
-  const models = filterModelsForPicker(
-    allModels.map((m) => ({ modelId: m })),
-    modelsFreeOnly,
-  ).map((e) => e.modelId);
-  const hiddenCount = allModels.length - models.length;
-
-  useEffect(() => {
-    if (!open) return;
-    const handler = (e: MouseEvent) => {
-      if (menuRef.current && !menuRef.current.contains(e.target as Node)) setOpen(false);
-    };
-    document.addEventListener("mousedown", handler);
-    return () => document.removeEventListener("mousedown", handler);
-  }, [open]);
-
-  // ROUND-37: turn-level stats (usage lives on the turn item now).
-  const lastTurn = [...items].reverse().find((it) => it.kind === "turn" && it.usage !== undefined);
-  const ctxTokens =
-    lastTurn && lastTurn.kind === "turn" && lastTurn.usage
-      ? lastTurn.usage.inputTokens + lastTurn.usage.outputTokens
-      : 0;
-  const limit = (effective !== null ? CONTEXT_LIMITS[effective] : undefined) ?? DEFAULT_CONTEXT_LIMIT;
-  const pct = Math.min(100, (ctxTokens / limit) * 100);
-
-  return (
-    <div className="px-1 pt-1.5 flex items-center justify-between gap-2 font-mono text-[10px]" style={{ color: styles.textTertiary }}>
-      <div className="flex items-center gap-2 min-w-0" title="Approximate context window usage (from the last reply)">
-        <span className="shrink-0">ctx</span>
-        <div className="w-16 h-1 rounded-full overflow-hidden shrink-0" style={{ background: styles.subtle }}>
-          <div className="h-full rounded-full" style={{ width: `${Math.max(2, pct)}%`, background: styles.accent }} />
-        </div>
-        <span className="shrink-0">{fmtTokens(ctxTokens)} / {fmtTokens(limit)}</span>
-      </div>
-      <div className="flex items-center gap-2 shrink-0">
-        <span>{IS_WINDOWS ? "Ctrl K search" : "⌘K search"} · ↵ to send</span>
-        <div className="relative" ref={menuRef}>
-          <button
-            onClick={() => setOpen((v) => !v)}
-            disabled={disabled}
-            aria-haspopup="listbox"
-            aria-expanded={open}
-            aria-label="Choose model"
-            title="Model for the next message"
-            className="flex items-center gap-1 px-1.5 py-0.5 rounded-md transition-colors disabled:opacity-50 max-w-[180px]"
-            style={{ color: styles.textSecondary }}
-            onMouseEnter={(e) => {
-              if (!disabled) e.currentTarget.style.background = styles.subtleHover;
-            }}
-            onMouseLeave={(e) => {
-              e.currentTarget.style.background = "transparent";
-            }}
-          >
-            <span className="truncate">{effective ?? "no model"}</span>
-            <ChevronDown size={10} />
-          </button>
-          {open ? (
-            <div
-              role="listbox"
-              aria-label="Model for the next message"
-              className="absolute bottom-7 right-0 w-72 max-h-72 overflow-y-auto auto-scroll rounded-2xl border p-1.5 z-50"
-              style={{ background: styles.card, borderColor: styles.border, boxShadow: styles.bentoShadow }}
-            >
-              {/* ROUND-43: Free-only filter — segmented control mirroring the
-                  Settings → Providers list; flips the SAME persisted pref so
-                  both pickers stay in sync. */}
-              <div
-                role="group"
-                aria-label="Model filter"
-                className="flex items-center justify-between gap-2 px-1 pb-1.5 mb-1 border-b"
-                style={{ borderColor: styles.borderSubtle }}
-              >
-                <span className="text-[10px] font-bold uppercase tracking-wide" style={{ color: styles.textTertiary }}>
-                  Model
-                </span>
-                <div
-                  className="flex items-center rounded-[10px] border-[1.5px] overflow-hidden"
-                  style={{ borderColor: styles.border }}
-                >
-                  {([
-                    { id: "free", label: "Free only", active: modelsFreeOnly, pick: () => setModelsFreeOnly(true) },
-                    { id: "all", label: "All", active: !modelsFreeOnly, pick: () => setModelsFreeOnly(false) },
-                  ] as const).map((seg) => (
-                    <button
-                      key={seg.id}
-                      onClick={seg.pick}
-                      aria-pressed={seg.active}
-                      className="h-6 px-2 text-[10.5px] font-bold transition-colors"
-                      style={{
-                        background: seg.active ? withAlpha(styles.accent, 0.12) : "transparent",
-                        color: seg.active ? styles.accent : styles.textTertiary,
-                      }}
-                    >
-                      {seg.label}
-                    </button>
-                  ))}
-                </div>
-              </div>
-              {models.length === 0 ? (
-                <div className="text-[11px] px-2 py-1.5" style={{ color: styles.textTertiary }}>
-                  {modelsQuery.isLoading ? "loading models…" : "no models listed"}
-                </div>
-              ) : (
-                models.map((m) => (
-                  <button
-                    key={m}
-                    role="option"
-                    aria-selected={m === effective}
-                    onClick={() => {
-                      onModelChange(m === agent?.model ? null : m);
-                      setOpen(false);
-                    }}
-                    className="w-full text-left px-2.5 py-1.5 rounded-lg font-mono text-[10.5px] truncate"
-                    style={{
-                      color: styles.textSecondary,
-                      background: m === effective ? withAlpha(styles.accent, 0.09) : "transparent",
-                    }}
-                    onMouseEnter={(e) => {
-                      if (m !== effective) e.currentTarget.style.background = styles.subtleHover;
-                    }}
-                    onMouseLeave={(e) => {
-                      if (m !== effective) e.currentTarget.style.background = "transparent";
-                    }}
-                    title={m}
-                  >
-                    {m}
-                  </button>
-                ))
-              )}
-              {/* Escape hatch: when free-only hides entries, say so + flip
-                  right here (syncs the persisted pref). */}
-              {hiddenCount > 0 && modelsFreeOnly ? (
-                <button
-                  onClick={() => setModelsFreeOnly(false)}
-                  className="w-full text-left px-2.5 py-1.5 mt-1 rounded-lg text-[10.5px] font-semibold border-t"
-                  style={{ color: styles.accent, borderColor: styles.borderSubtle }}
-                >
-                  {hiddenCount} paid model{hiddenCount === 1 ? "" : "s"} hidden — show all
-                </button>
-              ) : null}
-            </div>
-          ) : null}
-        </div>
-      </div>
-    </div>
-  );
-}
 
 /** ROUND-39: LiveTurn now lives in src/lib/stream-store.ts so the streaming
  * state survives panel remounts (background sessions). The interface is
@@ -995,10 +845,15 @@ export function AgentChatPanel({
   }, [sessionDetail.data]);
 
   const [input, setInput] = useState("");
-  const [composerFocused, setComposerFocused] = useState(false);
   const [pendingUser, setPendingUser] = useState<string | null>(null);
   const [lastSent, setLastSent] = useState<string | null>(null);
   const [sendError, setSendError] = useState<string | null>(null);
+  // ROUND-50 (R50-c2): the staged chips of the IN-FLIGHT optimistic echo —
+  // shown on the pending user bubble until the refetched event log carries
+  // the persisted (display-only) attachments.
+  const [pendingEchoAttachments, setPendingEchoAttachments] = useState<
+    AttachmentRef[] | null
+  >(null);
 
   // ── ROUND-39: live streaming state moved to src/lib/stream-store.ts so
   //    sessions keep streaming in the background across panel remounts
@@ -1028,9 +883,81 @@ export function AgentChatPanel({
 
   const queryClient = useQueryClient();
   const liveMode = useConfigStore((s) => !s.demoData);
-  // Per-send model override (composer picker); null = the agent's own model.
-  const [modelOverride, setModelOverride] = useState<string | null>(null);
-  const effectiveModel = modelOverride ?? agent?.model ?? null;
+  const dataSource = liveMode ? "live" : "demo";
+
+  // ── ROUND-50 (R50-c2): the composer's per-session state ──────────────────
+  // Model override + thinking level PERSIST PER SESSION (localStorage
+  // acute-model:<id> / acute-thinking:<id>) and ride every send; the
+  // permission mode starts from the session's own permissionMode ("ask"
+  // before the session exists) and PATCHes the backend on change.
+  const [modelOverride, setModelOverride] = useState<ModelOverride | null>(() =>
+    loadModelOverride(session?.id ?? null),
+  );
+  const [thinkingLevel, setThinkingLevel] = useState<ThinkingLevel>(() =>
+    loadThinkingLevel(session?.id ?? null),
+  );
+  const [permissionMode, setPermissionMode] = useState<PermissionMode>(
+    () => session?.permissionMode ?? "ask",
+  );
+  const effectiveModel = modelOverride?.model ?? agent?.model ?? null;
+
+  // Session switch → reload each session's own persisted composer state
+  // (runTurn saves the fresh session's values at creation, so a first send
+  // carries the choices made pre-session into the new session's keys).
+  useEffect(() => {
+    setModelOverride(loadModelOverride(activeSessionId));
+  }, [activeSessionId]);
+  useEffect(() => {
+    setThinkingLevel(loadThinkingLevel(activeSessionId));
+  }, [activeSessionId]);
+  useEffect(() => {
+    setPermissionMode(session?.permissionMode ?? "ask");
+  }, [session?.id, session?.permissionMode]);
+
+  const onModelChange = (v: ModelOverride | null): void => {
+    setModelOverride(v);
+    saveModelOverride(activeSessionId, v);
+  };
+  const onThinkingLevelChange = (level: ThinkingLevel): void => {
+    setThinkingLevel(level);
+    saveThinkingLevel(activeSessionId, level);
+  };
+
+  /** Mode switch: optimistic session-cache update + PATCH
+   * /sessions/:id/permissions; a transient failure rolls BOTH back and
+   * surfaces the error. No session yet → local only, applied at creation
+   * (runTurn). Demo mode → local only (no sidecar). */
+  const onModeChange = async (mode: PermissionMode): Promise<void> => {
+    const prev = permissionMode;
+    if (mode === prev) return;
+    setPermissionMode(mode);
+    if (activeSessionId === null || !liveMode) return;
+    const sid = activeSessionId;
+    const listKey = ["sessions", dataSource] as const;
+    const detailKey = ["session", dataSource, sid] as const;
+    const patchCache = (value: PermissionMode): void => {
+      queryClient.setQueryData<Session[]>(listKey, (old) =>
+        old === undefined
+          ? old
+          : old.map((s) => (s.id === sid ? { ...s, permissionMode: value } : s)),
+      );
+      queryClient.setQueryData<SessionDetail>(detailKey, (old) =>
+        old === undefined ? old : { ...old, permissionMode: value },
+      );
+    };
+    patchCache(mode);
+    try {
+      await patchSessionPermissions(sid, mode);
+    } catch (err) {
+      setPermissionMode(prev);
+      patchCache(prev);
+      pushLocalToast(
+        "Mode change failed",
+        err instanceof Error ? err.message : String(err),
+        "task_failed",
+      );
+    }
+  };
 
   // ROUND-39: file-mutation invalidation moved into the stream store so it
   // fires even when no panel is mounted (background session writes refresh
@@ -1105,13 +1032,26 @@ export function AgentChatPanel({
     if (el) el.scrollTo({ top: el.scrollHeight, behavior: "smooth" });
   }, [items.length, busy, pendingUser, liveWorkingCount, liveTailText.length]);
 
-  const runTurn = async (content: string) => {
+  const runTurn = async (content: string, composerAttachments: ComposerAttachment[] = []) => {
     const text = content.trim();
     if (!text || busy || !agent) return;
     setInput("");
     setLastSent(text);
     setPendingUser(text);
     setSendError(null);
+    // ROUND-50 (R50-c2): staged chips ride the send (persisted on the
+    // message.user event server-side) and display on the optimistic echo
+    // until the refetched log takes over.
+    const messageAttachments = composerAttachments.map(toMessageAttachment);
+    setPendingEchoAttachments(
+      messageAttachments.length > 0
+        ? messageAttachments.map((a) => ({
+            name: a.name,
+            ...(a.path !== undefined ? { path: a.path } : {}),
+            ...(a.size !== undefined ? { size: a.size } : {}),
+          }))
+        : null,
+    );
     let sid = session?.id;
     try {
       if (!sid) {
@@ -1133,6 +1073,19 @@ export function AgentChatPanel({
           },
           { replace: true },
         );
+        // ROUND-50: carry the composer choices made BEFORE the session
+        // existed onto the fresh session — persist the per-session keys and
+        // apply the picked permission mode (sessions are created "ask").
+        saveModelOverride(sid, modelOverride);
+        saveThinkingLevel(sid, thinkingLevel);
+        if (permissionMode !== "ask") {
+          try {
+            await patchSessionPermissions(sid, permissionMode);
+          } catch {
+            // Non-fatal to the turn — the composer still shows the picked
+            // mode; the next explicit change retries the PATCH.
+          }
+        }
       }
       if (liveMode) {
         // ROUND-39: the streaming fetch + state mutations live in the global
@@ -1143,6 +1096,10 @@ export function AgentChatPanel({
         useStreamStore.getState().setPendingEcho(sid, text);
         await useStreamStore.getState().startStream(sid, text, {
           model: effectiveModel ?? undefined,
+          // ROUND-50: the composer's per-send extras (R50-c1 threaded them
+          // through streamSessionMessage's POST body).
+          thinkingLevel,
+          ...(messageAttachments.length > 0 ? { attachments: messageAttachments } : {}),
         });
         // The store's startStream resolved — the stream ended (or errored).
         // Invalidate so the canonical folded turn renders from the event log.
@@ -1150,6 +1107,8 @@ export function AgentChatPanel({
         await queryClient.invalidateQueries({ queryKey: ["sessions"] });
         await queryClient.invalidateQueries({ queryKey: ["usage"] });
         void queryClient.invalidateQueries({ queryKey: ["project-tree"] });
+        // ROUND-50: the context donut refreshes with the new transcript.
+        void queryClient.invalidateQueries({ queryKey: ["session-context"] });
         // The live turn is now folded into the event log; clear the store's
         // echo + liveTurn for this session (the folded turn owns the render).
         useStreamStore.getState().setPendingEcho(sid, null);
@@ -1164,7 +1123,12 @@ export function AgentChatPanel({
         }
       } else {
         // Fixture/demo mode: no sidecar → sync hook (canned reply).
-        await sendMessage.mutateAsync({ sessionId: sid, content: text });
+        await sendMessage.mutateAsync({
+          sessionId: sid,
+          content: text,
+          thinkingLevel,
+          ...(messageAttachments.length > 0 ? { attachments: messageAttachments } : {}),
+        });
       }
     } catch (err) {
       // The stream may have errored client-side (network, CORS, abort) while
@@ -1189,6 +1153,7 @@ export function AgentChatPanel({
       // Drop the optimistic local echo (the store's pendingEcho was cleared
       // above for live mode; for demo mode it's the local pendingUser).
       setPendingUser(null);
+      setPendingEchoAttachments(null);
     }
   };
 
@@ -1269,12 +1234,40 @@ export function AgentChatPanel({
     }
   };
 
-  const onInputKeyDown = (e: ReactKeyboardEvent<HTMLTextAreaElement>) => {
-    if (e.key === "Enter" && !e.shiftKey) {
-      e.preventDefault();
-      void runTurn(input);
-    }
-  };
+  // ── ROUND-50 (R50-c2): composer placement + props ─────────────────────────
+  // Empty transcript (no items, no optimistic echo) → the composer renders
+  // centered INSIDE the scroll column, pushed below the middle; otherwise it
+  // docks at the panel's bottom edge.
+  const composerDocked = items.length > 0 || pendingEcho !== null;
+  const renderComposer = (autoFocus: boolean): ReactNode => (
+    <Composer
+      agent={agent}
+      projectId={projectId}
+      sessionId={activeSessionId}
+      liveMode={liveMode}
+      input={input}
+      onInputChange={setInput}
+      busy={busy}
+      onSend={(content, attachments) => void runTurn(content, attachments)}
+      onStop={() => {
+        // ROUND-39: stop routes through the stream store so it works
+        // regardless of which panel is mounted (background sessions can be
+        // stopped from their sidebar row, too).
+        if (activeSessionId !== null) {
+          useStreamStore.getState().abortStream(activeSessionId);
+        }
+      }}
+      permissionMode={permissionMode}
+      onModeChange={(m) => void onModeChange(m)}
+      thinkingLevel={thinkingLevel}
+      onThinkingLevelChange={onThinkingLevelChange}
+      modelOverride={modelOverride}
+      onModelChange={onModelChange}
+      transcriptLength={items.length}
+      autoFocus={autoFocus}
+      inputRef={inputRef}
+    />
+  );
 
   // ── Live-turn rendering (same shape as the folded AssistantTurn) ──────────
   const liveSection = (() => {
@@ -1363,59 +1356,73 @@ export function AgentChatPanel({
               symmetric readable column instead of either stretched lines or
               content-hugging with a void on the right. */}
           <div className={`${density === "compact" ? "px-4 py-4" : "px-5 md:px-10 py-5"} ${CONTENT_COL_CLASS} min-h-full flex flex-col gap-5`}>
-            {/* Empty-state greeting fills the available space and centers. */}
+            {/* ROUND-50 (R50-c2, owner: "When there is nothing, the very first
+                chat… almost centered but a bit more towards the bottom half of
+                the screen"): the greeting + suggestion chips sit ABOVE the
+                composer; the composer is centered horizontally and pushed
+                below the vertical middle by the 45/55 flex spacers (it
+                reflows with the pane — never absolutely positioned); the
+                bottom spacer keeps filling so there is no dead gap below. */}
             {items.length === 0 && !pendingEcho ? (
-              /* ROUND-30 OVERHAUL: centered greeting + suggestion chips.
-                 ROUND-37: the approved AcuteLogo replaces the Sparkles tile. */
-              <div className="flex-1 flex flex-col items-center justify-center text-center gap-5">
-                <AcuteLogo size={52} ariaLabel="Acute" />
-                <div className="min-w-0 max-w-md">
-                  <div className="text-[22px] font-black tracking-tight leading-tight" style={{ color: styles.text }}>
-                    How can I help with {project.name}?
+              <div
+                data-empty-state
+                className="flex-1 min-h-0 flex flex-col items-center text-center"
+              >
+                <div className="flex-[0.45] min-h-8" aria-hidden />
+                <div className="flex flex-col items-center gap-4">
+                  <AcuteLogo size={52} ariaLabel="Acute" />
+                  <div className="min-w-0 max-w-md">
+                    <div className="text-[22px] font-black tracking-tight leading-tight" style={{ color: styles.text }}>
+                      How can I help with {project.name}?
+                    </div>
+                    <div className="text-[12.5px] mt-2 leading-relaxed" style={{ color: styles.textSecondary }}>
+                      {agent?.name ?? "Acute"} · {agent?.model ?? "no model"} · streaming replies with live tool calls
+                    </div>
+                    {agents.length === 0 ? (
+                      <div className="text-[12px] mt-3" style={{ color: styles.textSecondary }}>
+                        Create an agent in{" "}
+                        <Link to="/settings" style={{ color: styles.accent }}>
+                          Settings
+                        </Link>{" "}
+                        first
+                      </div>
+                    ) : null}
                   </div>
-                  <div className="text-[12.5px] mt-2 leading-relaxed" style={{ color: styles.textSecondary }}>
-                    {agent?.name ?? "Acute"} · {agent?.model ?? "no model"} · streaming replies with live tool calls
-                  </div>
-                  {agents.length === 0 ? (
-                    <div className="text-[12px] mt-3" style={{ color: styles.textSecondary }}>
-                      Create an agent in{" "}
-                      <Link to="/settings" style={{ color: styles.accent }}>
-                        Settings
-                      </Link>{" "}
-                      first
+                  {agents.length > 0 ? (
+                    <div className="flex flex-wrap items-center justify-center gap-2 max-w-lg">
+                      {SUGGESTIONS.map((s) => (
+                        <button
+                          key={s.label}
+                          onClick={() => {
+                            setInput(s.prompt);
+                            inputRef.current?.focus();
+                          }}
+                          className="flex items-center gap-2 h-9 px-3.5 rounded-full border text-[12px] font-medium transition-all hover:-translate-y-px"
+                          style={{
+                            borderColor: styles.border,
+                            background: styles.bg,
+                            color: styles.textSecondary,
+                          }}
+                          onMouseEnter={(e) => {
+                            e.currentTarget.style.borderColor = withAlpha(styles.accent, 0.5);
+                            e.currentTarget.style.color = styles.text;
+                          }}
+                          onMouseLeave={(e) => {
+                            e.currentTarget.style.borderColor = styles.border;
+                            e.currentTarget.style.color = styles.textSecondary;
+                          }}
+                        >
+                          <s.icon size={12} style={{ color: styles.accent }} className="shrink-0" />
+                          {s.label}
+                        </button>
+                      ))}
                     </div>
                   ) : null}
                 </div>
-                {agents.length > 0 ? (
-                  <div className="flex flex-wrap items-center justify-center gap-2 max-w-lg">
-                    {SUGGESTIONS.map((s) => (
-                      <button
-                        key={s.label}
-                        onClick={() => {
-                          setInput(s.prompt);
-                          inputRef.current?.focus();
-                        }}
-                        className="flex items-center gap-2 h-9 px-3.5 rounded-full border text-[12px] font-medium transition-all hover:-translate-y-px"
-                        style={{
-                          borderColor: styles.border,
-                          background: styles.bg,
-                          color: styles.textSecondary,
-                        }}
-                        onMouseEnter={(e) => {
-                          e.currentTarget.style.borderColor = withAlpha(styles.accent, 0.5);
-                          e.currentTarget.style.color = styles.text;
-                        }}
-                        onMouseLeave={(e) => {
-                          e.currentTarget.style.borderColor = styles.border;
-                          e.currentTarget.style.color = styles.textSecondary;
-                        }}
-                      >
-                        <s.icon size={12} style={{ color: styles.accent }} className="shrink-0" />
-                        {s.label}
-                      </button>
-                    ))}
-                  </div>
-                ) : null}
+                <div className="h-6 shrink-0" aria-hidden />
+                {/* The composer itself — centered, slightly below the middle. */}
+                <div className={CONTENT_COL_CLASS}>{renderComposer(true)}</div>
+                <div className="flex-[0.55] min-h-8" aria-hidden />
               </div>
             ) : null}
 
@@ -1456,6 +1463,7 @@ export function AgentChatPanel({
                   item={{ kind: "user", seq: -1, content: pendingEcho, ts: new Date().toISOString() }}
                   sessionId={null}
                   projectId={projectId}
+                  {...(pendingEchoAttachments !== null ? { attachments: pendingEchoAttachments } : {})}
                 />
               ) : null}
             </AnimatePresence>
@@ -1527,92 +1535,25 @@ export function AgentChatPanel({
           </div>
         </div>
       ) : null}
-
-      {/* Composer — ROUND-32 (design Frame 5): radius 18, warm bg, accent
-          border + soft glow ring on focus. Auto-growing textarea (Enter sends,
-          Shift+Enter newlines). ROUND-43: the input + footer share the SAME
-          capped, centered column as the messages (CONTENT_COL_CLASS) so the
-          chat reads as one coherent column at every window size; the border-t
-          still spans the full panel. */}
-      <div className="shrink-0 p-2.5 border-t" style={{ borderColor: styles.borderSubtle }}>
-        <div className={CONTENT_COL_CLASS}>
-          <div
-            className="flex items-end gap-2 p-2 rounded-[18px] border transition-all"
-          style={{
-            background: styles.isDark ? "rgba(255,255,255,0.04)" : styles.bg,
-            borderColor: composerFocused ? withAlpha(styles.accent, 0.4) : styles.border,
-            boxShadow: composerFocused ? `0 0 0 4px ${withAlpha(styles.accent, 0.13)}` : "none",
-          }}
+      {/* ── ROUND-50 (R50-c2) composer placement ─────────────────────────────
+          Owner: "When there is nothing, the very first chat with the agent on
+          that screen… it will show them almost centered but a bit more towards
+          the bottom half of the screen." EMPTY transcript → the composer lives
+          INSIDE the scroll column, horizontally centered and pushed below the
+          vertical middle (flex spacers — reflow-safe, never absolutely
+          positioned), with the greeting + suggestion chips ABOVE it. Once the
+          conversation exists, the composer docks at the bottom edge (border-t
+          row, same capped reading column as the messages). */}
+      {composerDocked ? (
+        <div
+          className={`shrink-0 border-t ${compact ? "p-2" : "p-2.5"}`}
+          style={{ borderColor: styles.borderSubtle }}
         >
-          <textarea
-            ref={inputRef}
-            value={input}
-            onChange={(e) => {
-              setInput(e.target.value);
-              // Auto-grow to fit content (max 6 rows), then scroll inside.
-              const el = e.currentTarget;
-              el.style.height = "auto";
-              el.style.height = `${Math.min(el.scrollHeight, 132)}px`;
-            }}
-            onFocus={() => setComposerFocused(true)}
-            onBlur={() => setComposerFocused(false)}
-            onKeyDown={onInputKeyDown}
-            rows={1}
-            aria-label="Message composer"
-            placeholder={`Message ${agent?.name ?? "Acute"}…`}
-            className="flex-1 min-w-0 bg-transparent outline-none resize-none text-[13px] leading-[1.5] max-h-[132px] py-1.5 px-1"
-            style={{ color: styles.text }}
-          />
-          {busy ? (
-            <button
-              // ROUND-39: stop is now routed through the stream store so it
-              // works regardless of which panel is mounted (background
-              // sessions can be stopped from their sidebar row, too). The
-              // backend sees the client close; the runTurn catch re-fetches
-              // the session so any partial response renders from the log.
-              onClick={() => {
-                if (activeSessionId !== null) {
-                  useStreamStore.getState().abortStream(activeSessionId);
-                }
-              }}
-              aria-label="Stop generation"
-              title="Stop generation"
-              className="w-9 h-9 rounded-xl grid place-items-center shrink-0 transition-transform hover:scale-105 active:scale-95"
-              style={{ backgroundColor: SEMANTIC_COLORS.danger, color: "#fff" }}
-            >
-              <span className="w-3 h-3 rounded-sm bg-white/90" />
-            </button>
-          ) : null}
-          <button
-            onClick={() => void runTurn(input)}
-            disabled={!input.trim()}
-            aria-label="Send message"
-            title="Send (Enter · Shift+Enter for a new line)"
-            className="w-9 h-9 rounded-xl grid place-items-center shrink-0 transition-all hover:scale-105 active:scale-95 disabled:hover:scale-100"
-            style={
-              input.trim()
-                ? {
-                    backgroundColor: styles.accent,
-                    color: styles.accentText,
-                    boxShadow: `0 2px 10px ${withAlpha(styles.accent, 0.35)}`,
-                  }
-                : { backgroundColor: styles.inputBg, color: styles.textTertiary }
-            }
-          >
-            <ArrowUp size={15} strokeWidth={2.5} />
-          </button>
+          <div className={CONTENT_COL_CLASS} data-composer-dock>
+            {renderComposer(false)}
+          </div>
         </div>
-        {!compact ? (
-          <ComposerFooter
-            agent={agent}
-            modelOverride={modelOverride}
-            onModelChange={setModelOverride}
-            items={items}
-            disabled={!liveMode}
-          />
-        ) : null}
-        </div>
-      </div>
+      ) : null}
     </div>
   );
 }

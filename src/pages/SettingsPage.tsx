@@ -62,11 +62,20 @@ export function SettingsPage() {
       </div>
 
       {/* ROUND-34: wider content (the master-detail provider screen needs the
-          room); the appearance page constrains itself internally. */}
-      <div className="min-h-0 flex-1 overflow-y-auto px-5 md:px-8 py-5 mx-auto w-full max-w-5xl">
+          room); the appearance page constrains itself internally.
+          ROUND-50 (R50-d): for Models & Providers the content area LOCKS to
+          the viewport (overflow-hidden, no page scroll) — the tab's provider
+          list and detail pane each scroll INDEPENDENTLY (owner directive). */}
+      <div
+        className={
+          tab === "api"
+            ? "flex min-h-0 flex-1 flex-col overflow-hidden px-5 md:px-8 py-5 mx-auto w-full max-w-5xl"
+            : "min-h-0 flex-1 overflow-y-auto px-5 md:px-8 py-5 mx-auto w-full max-w-5xl"
+        }
+      >
         {/* ROUND-35 (owner: "above the appearance but below the top heading"):
           the back-to-dashboard affordance lives HERE in the content area. */}
-        <div className="mb-5">
+        <div className={tab === "api" ? "mb-5 shrink-0" : "mb-5"}>
           <Link
             to="/"
             className="inline-flex items-center gap-1.5 h-9 px-3.5 rounded-full border-[1.5px] text-[12px] font-bold transition-colors"
@@ -79,7 +88,11 @@ export function SettingsPage() {
         </div>
         {tab === "appearance" && <AppearanceTab />}
         {tab === "agents" && <AgentsScreen embedded />}
-        {tab === "api" && <ModelsProvidersTab />}
+        {tab === "api" && (
+          <div className="flex min-h-0 flex-1 flex-col">
+            <ModelsProvidersTab />
+          </div>
+        )}
         {tab === "subagents" && <SubAgentsTab />}
         {tab === "advanced" && <AdvancedTab />}
       </div>

@@ -19,7 +19,8 @@ vi.mock("ai", () => ({
 }));
 
 import { aiSdkChat } from "../src/agents/chat";
-import type { ChatFn } from "../src/agents/chat";
+import type { ChatFn, StreamChatFn, StreamChatInput } from "../src/agents/chat";
+import { runStreamedAgentTurn } from "../src/agents/runtime";
 import { getOrchestrator, Orchestrator } from "../src/agents/orchestrator";
 import { ProviderKeyring } from "../src/providers/registry";
 import { openDatabase, type SqliteDatabase } from "../src/storage/db";
@@ -27,6 +28,7 @@ import { buildServer } from "../src/server";
 import { createSession, getSession, listSessionEvents, listSubAgents, subAgentCode } from "../src/storage/sessions";
 import { setOrchestrationSettings } from "../src/storage/settings";
 import { createAgent } from "../src/storage/agents";
+import { SUBAGENT_DEFAULT_MODEL_ID } from "../src/storage/models";
 
 const TOKEN = "test-token-36";
 const KEY = "sk-or-vtest-36a";
@@ -692,5 +694,302 @@ describe("ROUND-48 (R48-e1): sub-agent codes, signal forwarding, honest aborts",
     expect(systems[0]).not.toContain("delegate_task"); // not in the tool list either
     expect(systems[0]).toContain("write_file"); // project tools intact
     expect(systems[0]).toContain("You have access to these tools");
+  });
+});
+
+// ─── ROUND-50 (R50-b): children run the STREAMED path + model on status
+// frames + the /subagents row's model — the owner's "streamed live just like
+// the main agent" + stats-footer directives. ─────────────────────────────────
+
+describe("ROUND-50 (R50-b): streamed sub-agent delegation", () => {
+  /** A streamed child adapter: one outer iteration with raw thinking, text
+   * deltas AROUND a tool call, and a usage-carrying finish — exactly the
+   * frame sequence streamAiSdkChat produces. */
+  const streamedChild: StreamChatFn = async function* () {
+    yield { type: "thinking-delta", delta: "Reading the target files first." };
+    yield { type: "text-delta", delta: "Fixing the auth module." };
+    yield { type: "tool-call", toolName: "read_file", argsSummary: "path: src/auth.ts" };
+    yield { type: "tool-result", toolName: "read_file", argsSummary: "path: src/auth.ts", ok: true, outputSummary: "42 chars" };
+    yield { type: "text-delta", delta: " Done." };
+    yield { type: "finish", usage: { inputTokens: 7, outputTokens: 3, totalTokens: 10 } };
+  };
+
+  it("delegateTask WITH chatStream runs the STREAMED path — the child's raw deltas ride the parent's emit live", async () => {
+    const agent = createAgent(db, {
+      name: "R50b Streamed",
+      providerId: "openrouter",
+      model: "test/orch-1",
+    });
+    const parent = createSession(db, { agentId: agent.id, mode: "single" });
+    const envelopes: Array<Record<string, unknown>> = [];
+    const emit = (event: unknown) => envelopes.push(event as Record<string, unknown>);
+    const chat: ChatFn = async () => ({
+      text: "compaction summary",
+      usage: { inputTokens: 1, outputTokens: 1, totalTokens: 2 },
+      toolCalls: [],
+    });
+
+    const result = await new Orchestrator().delegateTask(
+      { db, keyring: new ProviderKeyring({ ACUTE_PROVIDER_OPENROUTER: KEY }), chat, chatStream: streamedChild },
+      parent.id,
+      "fix the auth module",
+      "coder",
+      emit,
+    );
+
+    expect(result.ok).toBe(true);
+    expect(result.output).toContain("Fixing the auth module. Done.");
+    expect(getSession(db, result.sessionId!)?.status).toBe("completed");
+
+    // The child's inner frames arrive as DELTA-shaped live events (the
+    // STREAMED turn path) — token-level text-delta with `delta`, a
+    // thinking-delta, the tool pair, and a finish that CARRIES USAGE. The
+    // sync path's step snapshots would carry `text` + a bare finish instead
+    // (pinned by the next test).
+    const inners = envelopes
+      .filter((e) => e.type === "subagent-event")
+      .map((e) => e.inner as Record<string, unknown>);
+    expect(inners.map((e) => e.type)).toEqual([
+      "thinking-delta",
+      "text-delta",
+      "tool-call",
+      "tool-result",
+      "text-delta",
+      "finish",
+    ]);
+    expect(inners[0]).toMatchObject({ delta: "Reading the target files first." });
+    expect(inners[1]).toMatchObject({ type: "text-delta", delta: "Fixing the auth module." });
+    expect((inners[1] as { text?: unknown }).text).toBeUndefined();
+    expect(inners[2]).toMatchObject({ toolName: "read_file", argsSummary: "path: src/auth.ts" });
+    expect(inners[3]).toMatchObject({ toolName: "read_file", ok: true, outputSummary: "42 chars" });
+    expect(inners[5]).toMatchObject({ usage: { inputTokens: 7, outputTokens: 3, totalTokens: 10 } });
+
+    // Persistence: the streamed path's interleaved event log (ADR-0010) —
+    // interim assistant segment (thinking + text), the tool call, the final
+    // assistant segment.
+    expect(listSessionEvents(db, result.sessionId!).map((e) => e.type)).toEqual([
+      "message.user",
+      "message.assistant",
+      "tool.use",
+      "message.assistant",
+    ]);
+
+    // The /subagents row: usage-ledger tokens + the model the child ran on.
+    // (report = the LAST persisted assistant segment — the streamed path
+    // flushes "Fixing the auth module." before the tool call and " Done."
+    // after it; the delegation's OUTPUT carries the full iteration text.)
+    const row = listSubAgents(db, parent.id)[0];
+    expect(row).toMatchObject({
+      id: result.sessionId,
+      status: "completed",
+      inputTokens: 7,
+      outputTokens: 3,
+      model: "test/orch-1",
+      report: " Done.",
+    });
+
+    // The GET route passes the model through verbatim (no field whitelist).
+    const response = await authInject({
+      method: "GET",
+      url: `/api/v1/sessions/${parent.id}/subagents`,
+    });
+    expect(response.statusCode).toBe(200);
+    expect(response.json().subagents[0]).toMatchObject({
+      id: result.sessionId,
+      model: "test/orch-1",
+      inputTokens: 7,
+      outputTokens: 3,
+    });
+  });
+
+  it("every subagent-status frame carries the effective model (agent.model when no override)", async () => {
+    const agent = createAgent(db, {
+      name: "R50b Model",
+      providerId: "openrouter",
+      model: "test/orch-1",
+    });
+    const parent = createSession(db, { agentId: agent.id, mode: "single" });
+    const statuses: Array<Record<string, unknown>> = [];
+    const emit = (event: unknown) => {
+      const ev = event as Record<string, unknown>;
+      if (ev.type === "subagent-status") statuses.push(ev);
+    };
+    const chat: ChatFn = async () => ({
+      text: "done",
+      usage: { inputTokens: 1, outputTokens: 1, totalTokens: 2 },
+      toolCalls: [],
+    });
+
+    const result = await new Orchestrator().delegateTask(
+      { db, keyring: new ProviderKeyring({ ACUTE_PROVIDER_OPENROUTER: KEY }), chat, chatStream: streamedChild },
+      parent.id,
+      "model frame check",
+      "researcher",
+      emit,
+    );
+    expect(result.ok).toBe(true);
+    expect(statuses.length).toBeGreaterThanOrEqual(3); // queued → running → completed
+    for (const s of statuses) {
+      expect(s.model).toBe("test/orch-1");
+    }
+  });
+
+  it("orchestration.subagentModel overrides BOTH the child's model and the status frames' model field", async () => {
+    setOrchestrationSettings(db, { subagentModel: SUBAGENT_DEFAULT_MODEL_ID });
+    const agent = createAgent(db, {
+      name: "R50b Override",
+      providerId: "openrouter",
+      model: "test/orch-1",
+    });
+    const parent = createSession(db, { agentId: agent.id, mode: "single" });
+    const models: string[] = [];
+    const emit = (event: unknown) => {
+      const ev = event as Record<string, unknown>;
+      if (ev.type === "subagent-status") models.push(String(ev.model));
+    };
+    const chat: ChatFn = async () => ({
+      text: "done",
+      usage: { inputTokens: 1, outputTokens: 1, totalTokens: 2 },
+      toolCalls: [],
+    });
+
+    const result = await new Orchestrator().delegateTask(
+      { db, keyring: new ProviderKeyring({ ACUTE_PROVIDER_OPENROUTER: KEY }), chat, chatStream: streamedChild },
+      parent.id,
+      "override check",
+      "researcher",
+      emit,
+    );
+    expect(result.ok).toBe(true);
+    expect(models.length).toBeGreaterThan(0);
+    expect(new Set(models)).toEqual(new Set([SUBAGENT_DEFAULT_MODEL_ID]));
+    // The usage-ledger-derived /subagents row model follows the override.
+    expect(listSubAgents(db, parent.id)[0]?.model).toBe(SUBAGENT_DEFAULT_MODEL_ID);
+  });
+
+  it("NO chatStream → the SYNC fallback keeps step-snapshot semantics (text-delta carries `text`, finish carries no usage)", async () => {
+    const agent = createAgent(db, {
+      name: "R50b Sync",
+      providerId: "openrouter",
+      model: "test/orch-1",
+    });
+    const parent = createSession(db, { agentId: agent.id, mode: "single" });
+    const envelopes: Array<Record<string, unknown>> = [];
+    const emit = (event: unknown) => envelopes.push(event as Record<string, unknown>);
+
+    // A sync adapter reporting live steps through onStepFinish — the
+    // pre-R50-b delegation behavior, byte-for-byte.
+    const chat: ChatFn = async (input) => {
+      input.onStepFinish?.({
+        text: "reading the file ",
+        toolCalls: [{ name: "read_file", argsSummary: "path: a.md", ok: true, outputSummary: "10 chars" }],
+      });
+      input.onStepFinish?.({ text: "Done. Final report.", toolCalls: [] });
+      return {
+        text: "reading the file Done. Final report.",
+        usage: { inputTokens: 1, outputTokens: 1, totalTokens: 2 },
+        toolCalls: [{ name: "read_file", argsSummary: "path: a.md", ok: true, outputSummary: "10 chars" }],
+      };
+    };
+
+    const result = await new Orchestrator().delegateTask(
+      { db, keyring: new ProviderKeyring({ ACUTE_PROVIDER_OPENROUTER: KEY }), chat },
+      parent.id,
+      "sync fallback check",
+      "researcher",
+      emit,
+    );
+    expect(result.ok).toBe(true);
+
+    const inners = envelopes
+      .filter((e) => e.type === "subagent-event")
+      .map((e) => e.inner as Record<string, unknown>);
+    expect(inners.map((e) => e.type)).toEqual([
+      "tool-call",
+      "tool-result",
+      "text-delta",
+      "text-delta",
+      "finish",
+    ]);
+    // Step-snapshot shape: the FULL step text, no token-level `delta`; the
+    // finish frame carries NO usage (tokens stay on the polled row).
+    expect(inners[2]).toMatchObject({ text: "reading the file " });
+    expect((inners[2] as { delta?: unknown }).delta).toBeUndefined();
+    expect(inners[4]).toMatchObject({ type: "finish" });
+    expect((inners[4] as { usage?: unknown }).usage).toBeUndefined();
+  });
+
+  it("the delegate_task TOOL forwards chatStream (prepareTurn toolDeps wiring) — its child runs STREAMED", async () => {
+    // End-to-end wiring proof: a STREAMED parent turn (the main agent's
+    // route) executes the delegate_task tool from its toolset — the tool's
+    // toolDeps must carry the chatStream prepareTurn forwarded, so the
+    // spawned child runs the streamed path too (delta-shaped frames riding
+    // the parent's emit).
+    const project = await authInject({
+      method: "POST",
+      url: "/api/v1/projects",
+      payload: { name: "R50b Wiring", rootPath: tempDir },
+    });
+    const projectId = project.json().id as string;
+    const agent = createAgent(db, {
+      name: "R50b Wiring Agent",
+      providerId: "openrouter",
+      model: "test/orch-1",
+    });
+    const parent = createSession(db, { agentId: agent.id, mode: "single", projectId });
+    const envelopes: Array<Record<string, unknown>> = [];
+    const emit = (event: unknown) => envelopes.push(event as Record<string, unknown>);
+
+    let calls = 0;
+    const chat: ChatFn = async () => ({
+      text: "sync chat unused",
+      usage: { inputTokens: 1, outputTokens: 1, totalTokens: 2 },
+      toolCalls: [],
+    });
+    // The PARENT's streamed adapter executes delegate_task directly (the
+    // model's tool call, simulated); the second invocation is the CHILD's
+    // own streamed turn.
+    const chatStream: StreamChatFn = async function* (input: StreamChatInput) {
+      calls += 1;
+      if (calls === 1) {
+        const tools = input.tools as unknown as Record<
+          string,
+          { execute: (i: Record<string, unknown>) => Promise<{ ok: boolean; output: string }> }
+        >;
+        const res = await tools.delegate_task.execute({ task: "grandchild work", role: "researcher" });
+        // NOTE: the text deliberately avoids delegation words — the R49
+        // tool-intent nudge would otherwise spend a second iteration on a
+        // zero-tool reply that merely MENTIONS delegating.
+        yield { type: "text-delta", delta: `ok=${res.ok}` };
+      } else {
+        yield { type: "text-delta", delta: "child final report" };
+      }
+      yield { type: "finish", usage: { inputTokens: 1, outputTokens: 1, totalTokens: 2 } };
+    };
+
+    const outcome = await runStreamedAgentTurn(
+      { db, keyring: new ProviderKeyring({ ACUTE_PROVIDER_OPENROUTER: KEY }), chat, chatStream },
+      parent.id,
+      "delegate the work",
+      emit,
+    );
+    expect(outcome.ok).toBe(true);
+    expect(calls).toBe(2); // parent iteration + the child's streamed turn
+
+    // The child's frames ride the parent's emit as DELTA-shaped subagent-event
+    // envelopes — toolDeps.chatStream → delegate_task → orchestrator →
+    // runStreamedAgentTurn.
+    const childEvents = envelopes.filter((e) => e.type === "subagent-event") as Array<{
+      inner?: Record<string, unknown>;
+    }>;
+    const childText = childEvents.find((e) => e.inner?.type === "text-delta");
+    expect(childText?.inner).toMatchObject({ type: "text-delta", delta: "child final report" });
+    const childFinish = childEvents.find((e) => e.inner?.type === "finish");
+    expect(childFinish?.inner).toMatchObject({ usage: { inputTokens: 1, outputTokens: 1 } });
+    // The child completed + is linked under the parent.
+    const children = listSubAgents(db, parent.id);
+    expect(children).toHaveLength(1);
+    expect(children[0]?.status).toBe("completed");
+    expect(children[0]?.model).toBe("test/orch-1");
   });
 });

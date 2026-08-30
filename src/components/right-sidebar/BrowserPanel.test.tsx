@@ -6,6 +6,7 @@ import type { RightSidebarTab } from "../../lib/right-sidebar-store";
 import { useRightSidebarStore } from "../../lib/right-sidebar-store";
 import { useBrowserTabStore } from "../../lib/browser-store";
 import { renderWithProviders, resetTestState } from "../../test-utils";
+import * as nativeBrowser from "../../lib/native-browser";
 
 /**
  * ROUND-43 (R43-10) BrowserPanel — the embedded in-sidebar browser.
@@ -27,7 +28,43 @@ import { renderWithProviders, resetTestState } from "../../test-utils";
  *   - the /browser/proxy probe 401s iff the bt is not the session's CURRENT
  *     server-side ticket (a dead/rotated/unknown ticket), else answers the
  *     probe's harmless 400.
+ *
+ * ROUND-50 (R50-a): a second suite covers NATIVE mode — the Tauri child
+ * webviews that replace the proxy iframe inside the desktop shell. The
+ * ../../lib/native-browser bridge is mocked (the Rust side has no business
+ * in a DOM test); `nativeState.available` toggles per test, and
+ * `nativeState.navigatedListener` captures the panel's browser-navigated
+ * subscription so tests can simulate the Rust on_navigation hook.
  */
+
+/**
+ * Shared mutable state for the native-browser module mock (vi.mock factories
+ * are hoisted above every import — state they close over must come from
+ * vi.hoisted).
+ */
+const nativeState = vi.hoisted(() => ({
+  available: false,
+  navigatedListener: null as ((tabId: string, url: string) => void) | null,
+}));
+
+vi.mock("../../lib/native-browser", () => ({
+  isNativeBrowserAvailable: () => nativeState.available,
+  nativeInvoke: () => null,
+  nativeTabCreate: vi.fn(() => Promise.resolve()),
+  nativeTabNavigate: vi.fn(() => Promise.resolve()),
+  nativeTabSetBounds: vi.fn(() => Promise.resolve()),
+  nativeTabSetVisible: vi.fn(() => Promise.resolve()),
+  nativeTabGo: vi.fn(() => Promise.resolve()),
+  nativeTabUrl: vi.fn(() => Promise.resolve(null)),
+  nativeTabClose: vi.fn(() => Promise.resolve()),
+  nativeTabsCloseAll: vi.fn(() => Promise.resolve()),
+  onBrowserNavigated: vi.fn((cb: (tabId: string, url: string) => void) => {
+    nativeState.navigatedListener = cb;
+    return () => {
+      if (nativeState.navigatedListener === cb) nativeState.navigatedListener = null;
+    };
+  }),
+}));
 
 const BASE = "http://127.0.0.1:5178";
 
@@ -205,6 +242,10 @@ beforeEach(() => {
   mintCount = 0;
   mintFails = false;
   probeAlwaysDead = false;
+  // ROUND-50: fresh native-bridge state + mock call history per test.
+  nativeState.available = false;
+  nativeState.navigatedListener = null;
+  vi.clearAllMocks();
   vi.stubGlobal("fetch", vi.fn(route));
 });
 
@@ -500,5 +541,230 @@ describe("BrowserPanel (R43-10 embedded browser)", () => {
     await waitFor(() =>
       expect(postCalls("/api/v1/browser/navigate").some((c) => c.body?.url === "https://mdn.dev")).toBe(true),
     );
+  });
+});
+
+describe("BrowserPanel native mode (R50-a child webviews over the panel)", () => {
+  /** The mocked bridge's command fns, for call assertions. */
+  const create = () => vi.mocked(nativeBrowser.nativeTabCreate);
+  const setBounds = () => vi.mocked(nativeBrowser.nativeTabSetBounds);
+  const setVisible = () => vi.mocked(nativeBrowser.nativeTabSetVisible);
+  const nativeGo = () => vi.mocked(nativeBrowser.nativeTabGo);
+  const nativeNavigate = () => vi.mocked(nativeBrowser.nativeTabNavigate);
+  const nativeClose = () => vi.mocked(nativeBrowser.nativeTabClose);
+
+  beforeEach(() => {
+    nativeState.available = true;
+  });
+
+  it("activates the tab webview: create with the tab's URL, then show (no iframe)", async () => {
+    const tab = makeTab({ browserUrl: "https://github.com" });
+    seedRightSidebar(tab);
+    renderWithProviders(<BrowserPanel projectId="prj_test" tab={tab} />);
+    await waitFor(() => expect(postCalls("/api/v1/browser/session")).toHaveLength(1));
+
+    // The persisted URL drives BOTH the store and the native webview.
+    await waitFor(() => expect(create()).toHaveBeenCalledWith("tab-test-1", "https://github.com"));
+    await waitFor(() => expect(setVisible()).toHaveBeenCalledWith("tab-test-1", true));
+
+    // Native mode renders the PLACEHOLDER (the OS webview floats above it),
+    // never the proxy iframe.
+    expect(screen.getByTestId("browser-native-placeholder")).toBeTruthy();
+    expect(screen.queryByTestId("browser-iframe")).toBeNull();
+  });
+
+  it("address-bar submit drives BOTH the store (server history) and the native webview", async () => {
+    const tab = makeTab();
+    seedRightSidebar(tab);
+    renderWithProviders(<BrowserPanel projectId="prj_test" tab={tab} />);
+    await waitFor(() => expect(postCalls("/api/v1/browser/session")).toHaveLength(1));
+
+    const input = screen.getByTestId("browser-address-input") as HTMLInputElement;
+    fireEvent.change(input, { target: { value: "example.com" } });
+    fireEvent.submit(input.closest("form") as HTMLFormElement);
+
+    // Store: server-side history entry (the agent's browser_control truth).
+    await waitFor(() =>
+      expect(postCalls("/api/v1/browser/navigate").some((c) => c.body?.url === "https://example.com")).toBe(true),
+    );
+    // Native: the child webview (create is create-OR-navigate in Rust).
+    await waitFor(() => expect(create()).toHaveBeenCalledWith("tab-test-1", "https://example.com"));
+    await waitFor(() => expect(setVisible()).toHaveBeenCalledWith("tab-test-1", true));
+  });
+
+  it("unmount (tab switch / sidebar collapse) HIDES the webview — session persists, nothing is closed", async () => {
+    const tab = makeTab({ browserUrl: "https://github.com" });
+    seedRightSidebar(tab);
+    const { unmount } = renderWithProviders(<BrowserPanel projectId="prj_test" tab={tab} />);
+    await waitFor(() => expect(create()).toHaveBeenCalledWith("tab-test-1", "https://github.com"));
+
+    unmount();
+    await waitFor(() => expect(setVisible()).toHaveBeenCalledWith("tab-test-1", false));
+    // Hidden ≠ closed — the tab's browsing session stays alive.
+    expect(nativeClose()).not.toHaveBeenCalledWith("tab-test-1");
+  });
+
+  it("bounds sync pushes the placeholder's measured rect (natural mode = fill)", async () => {
+    const rectSpy = vi
+      .spyOn(HTMLElement.prototype, "getBoundingClientRect")
+      .mockReturnValue({
+        left: 80,
+        top: 120,
+        width: 400,
+        height: 500,
+        right: 480,
+        bottom: 620,
+        x: 80,
+        y: 120,
+        toJSON: () => ({}),
+      } as DOMRect);
+    try {
+      const tab = makeTab({ browserUrl: "https://example.com" });
+      seedRightSidebar(tab);
+      renderWithProviders(<BrowserPanel projectId="prj_test" tab={tab} />);
+      await waitFor(() => expect(create()).toHaveBeenCalledWith("tab-test-1", "https://example.com"));
+
+      // After the webview exists, the rAF-debounced sync positions it exactly
+      // over the (mocked) placeholder rect — natural mode fills it.
+      await waitFor(
+        () => expect(setBounds()).toHaveBeenCalledWith("tab-test-1", 80, 120, 400, 500),
+        { timeout: 2500 },
+      );
+    } finally {
+      rectSpy.mockRestore();
+    }
+  });
+
+  it("agent-driven navigation (browser_control) reconciles the native webview through the live-follow poll", async () => {
+    // Fake timers from the START — the poll interval must be created under
+    // them so a single advance fires it (an interval created before
+    // useFakeTimers stays real and never fires inside the test).
+    vi.useFakeTimers();
+    try {
+      const tab = makeTab();
+      seedRightSidebar(tab);
+      renderWithProviders(<BrowserPanel projectId="prj_test" tab={tab} />);
+      // Mount effects + the mint POST resolve on microtasks — one advance
+      // flushes them (waitFor would hang under fake timers).
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(0);
+      });
+      expect(postCalls("/api/v1/browser/session")).toHaveLength(1);
+
+      const input = screen.getByTestId("browser-address-input") as HTMLInputElement;
+      fireEvent.change(input, { target: { value: "https://a.example/one" } });
+      fireEvent.submit(input.closest("form") as HTMLFormElement);
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(0);
+      });
+      expect(create()).toHaveBeenCalledWith("tab-test-1", "https://a.example/one");
+
+      // The AGENT navigates the server-side session behind our back —
+      // exactly what browser_control does. The next poll (POLL_MS=4000)
+      // must follow it in the native webview.
+      (histories["tab-test-1"] ??= []).push({ url: "https://a.example/two", title: null });
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(4100);
+      });
+      expect(nativeNavigate()).toHaveBeenCalledWith("tab-test-1", "https://a.example/two");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("user navigation INSIDE the webview records into server history + the address bar; our own commands don't double-record", async () => {
+    const tab = makeTab();
+    seedRightSidebar(tab);
+    renderWithProviders(<BrowserPanel projectId="prj_test" tab={tab} />);
+    await waitFor(() => expect(postCalls("/api/v1/browser/session")).toHaveLength(1));
+
+    const input = screen.getByTestId("browser-address-input") as HTMLInputElement;
+    fireEvent.change(input, { target: { value: "https://example.com" } });
+    fireEvent.submit(input.closest("form") as HTMLFormElement);
+    await waitFor(() => expect(create()).toHaveBeenCalledWith("tab-test-1", "https://example.com"));
+    await waitFor(() =>
+      expect(postCalls("/api/v1/browser/navigate").filter((c) => c.body?.url === "https://example.com")).toHaveLength(1),
+    );
+
+    // The Rust on_navigation hook echoes OUR command back (same URL) — the
+    // panel must NOT record a second server entry for it.
+    await act(async () => {
+      nativeState.navigatedListener?.("tab-test-1", "https://example.com");
+    });
+    expect(postCalls("/api/v1/browser/navigate").filter((c) => c.body?.url === "https://example.com")).toHaveLength(1);
+
+    // A link click INSIDE the page (a URL we never commanded) — recorded so
+    // the agent's browser_control get_state stays truthful, and the address
+    // bar follows.
+    await act(async () => {
+      nativeState.navigatedListener?.("tab-test-1", "https://example.com/page2");
+    });
+    await waitFor(() =>
+      expect(postCalls("/api/v1/browser/navigate").some((c) => c.body?.url === "https://example.com/page2")).toBe(true),
+    );
+    await waitFor(() =>
+      expect((screen.getByTestId("browser-address-input") as HTMLInputElement).value).toBe("https://example.com/page2"),
+    );
+  });
+
+  it("back walks BOTH histories: the webview's own (history.back) and the server's", async () => {
+    const tab = makeTab();
+    seedRightSidebar(tab);
+    renderWithProviders(<BrowserPanel projectId="prj_test" tab={tab} />);
+    await waitFor(() => expect(postCalls("/api/v1/browser/session")).toHaveLength(1));
+
+    const input = screen.getByTestId("browser-address-input") as HTMLInputElement;
+    for (const url of ["https://a.example/one", "https://a.example/two"]) {
+      fireEvent.change(input, { target: { value: url } });
+      fireEvent.submit(input.closest("form") as HTMLFormElement);
+      await waitFor(() => expect(create()).toHaveBeenCalledWith("tab-test-1", url));
+    }
+    await waitFor(() => expect((screen.getByTestId("browser-back") as HTMLButtonElement).disabled).toBe(false));
+
+    fireEvent.click(screen.getByTestId("browser-back"));
+    await waitFor(() => expect(nativeGo()).toHaveBeenCalledWith("tab-test-1", "back"));
+    await waitFor(() =>
+      expect(postCalls("/api/v1/browser/navigate").some((c) => c.body?.direction === "back")).toBe(true),
+    );
+  });
+
+  it("closing a browser tab in the strip destroys its webview (the reaper) — even while mounted", async () => {
+    const tabA = makeTab({ id: "tab-a", browserUrl: "https://a.example" });
+    const tabB = makeTab({ id: "tab-b", browserUrl: "https://b.example" });
+    useRightSidebarStore.setState({
+      byProject: {
+        "prj_test::default": { open: true, width: 460, tabs: [tabA, tabB], activeTabId: tabA.id, terminalLinesByTab: {} },
+      },
+      activeProjectId: "prj_test",
+      activeSessionByProject: {},
+    });
+    renderWithProviders(<BrowserPanel projectId="prj_test" tab={tabA} />);
+    await waitFor(() => expect(create()).toHaveBeenCalledWith("tab-a", "https://a.example"));
+
+    // The user closes tab A in the tab strip (the panel is mounted directly,
+    // so only the reaper sees it).
+    act(() => {
+      useRightSidebarStore.getState().closeTab("prj_test", "tab-a");
+    });
+    await waitFor(() => expect(nativeClose()).toHaveBeenCalledWith("tab-a"));
+    // The OTHER browser tab's webview is untouched.
+    expect(nativeClose()).not.toHaveBeenCalledWith("tab-b");
+  });
+
+  it("non-Tauri fallback: the proxy iframe renders and NO native command is invoked", async () => {
+    nativeState.available = false;
+    const tab = makeTab();
+    seedRightSidebar(tab);
+    renderWithProviders(<BrowserPanel projectId="prj_test" tab={tab} />);
+    await waitFor(() => expect(postCalls("/api/v1/browser/session")).toHaveLength(1));
+
+    const input = screen.getByTestId("browser-address-input") as HTMLInputElement;
+    fireEvent.change(input, { target: { value: "github.com" } });
+    fireEvent.submit(input.closest("form") as HTMLFormElement);
+
+    await waitFor(() => expect(screen.getByTestId("browser-iframe")).toBeTruthy());
+    expect(screen.queryByTestId("browser-native-placeholder")).toBeNull();
+    expect(create()).not.toHaveBeenCalled();
+    expect(setVisible()).not.toHaveBeenCalled();
   });
 });

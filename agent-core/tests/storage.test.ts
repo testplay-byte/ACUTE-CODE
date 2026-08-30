@@ -143,6 +143,10 @@ describe("openDatabase", () => {
       // accidentally narrowed from [] (= ALL tools) to just the appended
       // orchestration/browser/memory tools.
       { version: 19, name: "0019_repair_default_agent_tools.sql" },
+      // ROUND-50 (R50-c1, the owner's composer round): per-session permission
+      // modes (full|ask|plan|editor, default 'ask') + the cached prompt-token
+      // column the context meter's cache-hit-rate line reads.
+      { version: 20, name: "0020_permission_modes_attachments.sql" },
     ]);
     expect(appliedSecond).toEqual(appliedFirst);
   });

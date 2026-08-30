@@ -1,9 +1,11 @@
 // @vitest-environment happy-dom
 /**
- * ROUND-43 frontend tests — chat layout contract + the per-send model
- * picker's free-only filter (owner: "a lot of empty space on the right side
- * of the chat window… a scroll bar at the bottom" + "the maximum width…
- * gets restricted" + the free-models-only default directive).
+ * ROUND-43 frontend tests — chat layout contract. (The per-send model
+ * picker's free-only filter tests that lived here were REPLACED in ROUND-50
+ * by src/components/project-chat/composer/Composer.test.tsx — the old flat
+ * ComposerFooter list became the provider popover + hover flyout; its
+ * ctx-meter duty moved into the context donut. Kept honestly: this file now
+ * covers the layout contract + the R44-c revert flow only.)
  *
  * The api module is mocked at the BACKEND-SELECTOR level: live mode
  * (demoData=false, which enables the composer's model picker) still serves
@@ -25,13 +27,6 @@ import { useNotificationStreamStore } from "../../hooks/use-notifications";
 import { useSettingsStore } from "../../lib/settings-store";
 import { renderWithProviders, resetTestState } from "../../test-utils";
 
-const MODELS = [
-  "z-ai/glm-5.2:free",
-  "openrouter/ox-alpha", // paid (the retired dead id — a known non-free id)
-  "minimax/minimax-m3:free",
-  "openrouter/gpt-5.2", // paid
-];
-
 /** ROUND-44 (R44-c): per-test override for getSessionsBackend(). */
 const customBackend = vi.hoisted((): { backend: SessionsBackend | null } => ({
   backend: null,
@@ -45,7 +40,6 @@ vi.mock("../../lib/api", async () => {
     ...mod,
     getAgentsBackend: () => agentsFx.getFixtureAgents(),
     getSessionsBackend: () => customBackend.backend ?? sessionsFx.getFixtureSessions(),
-    fetchProviderModels: vi.fn(async () => [...MODELS]),
   };
 });
 
@@ -53,8 +47,8 @@ afterEach(cleanup);
 
 beforeEach(() => {
   resetTestState();
-  // Live mode so the composer footer's model picker is enabled; the api mock
-  // above keeps every query on the offline fixture adapters.
+  // Live mode so the composer's backend-backed controls are enabled; the api
+  // mock above keeps every query on the offline fixture adapters.
   useConfigStore.setState({ demoData: false });
   useSettingsStore.setState({ modelsFreeOnly: true });
   customBackend.backend = null;
@@ -93,81 +87,6 @@ describe("AgentChatPanel layout contract (Round 43)", () => {
       expect(col.className).toContain("mx-auto");
       expect(col.className).toContain("w-full");
     }
-  });
-});
-
-describe("ComposerFooter model picker — free-only filter (Round 43)", () => {
-  async function openPicker() {
-    fireEvent.click(screen.getByRole("button", { name: "Choose model" }));
-    await waitFor(() => expect(screen.getByRole("listbox")).toBeTruthy());
-  }
-
-  it("lists only free models by default (persisted modelsFreeOnly=true)", async () => {
-    await renderPanel();
-    await openPicker();
-    // The models query resolves async — wait for the free-only list.
-    await waitFor(() => expect(screen.getAllByRole("option").length).toBe(2));
-
-    const options = screen.getAllByRole("option").map((o) => o.textContent);
-    expect(options).toEqual(["z-ai/glm-5.2:free", "minimax/minimax-m3:free"]);
-
-    // The inline escape hatch: segmented Free-only/All control, in the picker.
-    const group = screen.getByRole("group", { name: "Model filter" });
-    expect(group).toBeTruthy();
-    expect(
-      (screen.getByRole("button", { name: "Free only" }) as HTMLElement).getAttribute("aria-pressed"),
-    ).toBe("true");
-    expect(
-      (screen.getByRole("button", { name: "All" }) as HTMLElement).getAttribute("aria-pressed"),
-    ).toBe("false");
-
-    // Subtle affordance: hidden paid models are counted + one click away.
-    expect(screen.getByText(/2 paid models hidden — show all/i)).toBeTruthy();
-  });
-
-  it("the inline toggle flips the SHARED persisted preference and reveals all models", async () => {
-    await renderPanel();
-    await openPicker();
-
-    fireEvent.click(screen.getByRole("button", { name: "All" }));
-
-    await waitFor(() => {
-      expect(screen.getAllByRole("option").map((o) => o.textContent)).toEqual(MODELS);
-    });
-    // Same store the Settings → Providers list reads — both stay in sync.
-    expect(useSettingsStore.getState().modelsFreeOnly).toBe(false);
-    // No "hidden" hint while everything is shown.
-    expect(screen.queryByText(/paid models hidden/i)).toBeNull();
-  });
-
-  it("'show all' escape-hint row flips the same preference", async () => {
-    await renderPanel();
-    await openPicker();
-    await waitFor(() => expect(screen.getByText(/2 paid models hidden — show all/i)).toBeTruthy());
-
-    fireEvent.click(screen.getByText(/2 paid models hidden — show all/i));
-    await waitFor(() => {
-      expect(useSettingsStore.getState().modelsFreeOnly).toBe(false);
-    });
-    await waitFor(() => {
-      expect(screen.getAllByRole("option").length).toBe(4);
-    });
-  });
-
-  it("picking a model selects it as the per-send override", async () => {
-    await renderPanel();
-    await openPicker();
-    await waitFor(() => expect(screen.getAllByRole("option").length).toBe(2));
-
-    fireEvent.click(screen.getByRole("option", { name: "minimax/minimax-m3:free" }));
-
-    // The footer button now shows the override (agent fixture model is
-    // openrouter/ox-alpha, so the label change proves the override landed).
-    await waitFor(() => {
-      expect(screen.getByRole("button", { name: /choose model/i }).textContent).toContain(
-        "minimax/minimax-m3:free",
-      );
-    });
   });
 });
 

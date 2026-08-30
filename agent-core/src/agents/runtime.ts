@@ -6,7 +6,7 @@
  * message.user → tool.use (one per executed call, as each completes) →
  * message.assistant (with per-reply usage+ms stats) → usage_events row.
  */
-import type { SessionStatus, UsageRecord } from "shared";
+import type { MessageAttachment, SessionStatus, ThinkingLevel, UsageRecord } from "shared";
 import { getAgent, TOOL_NAMES } from "../storage/agents.js";
 import { getProject } from "../storage/projects.js";
 import type Database from "better-sqlite3";
@@ -14,7 +14,7 @@ import {
   ProviderKeyring,
   resolveProvider,
 } from "../providers/registry.js";
-import { buildProjectTools } from "../tools/index.js";
+import { buildProjectTools, NO_TOOLS } from "../tools/index.js";
 import { logTool, logTurnEnd, logTurnStart } from "../lib/log.js";
 import {
   appendSessionEvent,
@@ -33,7 +33,7 @@ import { getIndexSummary } from "../storage/index.js";
 import { memoryDigest } from "../storage/memory.js";
 // ROUND-49: the memory master switch (Settings → Advanced).
 import { getMemorySettings } from "../storage/settings.js";
-import { lookupPricing } from "../storage/models.js";
+import { getCatalogModel, lookupPricing } from "../storage/models.js";
 import { estimateMessageTokens, type ContextBudget } from "../context.js";
 // ROUND-46 (R46-b): context compaction — summarize the over-budget head
 // instead of silently dropping it.
@@ -82,6 +82,105 @@ const TERMINAL_STATUSES: readonly SessionStatus[] = ["completed", "failed", "can
  * keeps the fan-out finite by construction.
  */
 export const MAX_DELEGATION_DEPTH = 3;
+
+// ── ROUND-50 (R50-c1): permission modes — the composer's switcher ────────────
+
+/**
+ * PLAN mode's read-only/research tool set (owner spec, exact): research,
+ * navigation, web, todos, memory, and delegation — but NO file mutation
+ * (write_file/edit_file/create_dir/delete_file), NO run_command, NO
+ * index_project (it writes to the DB + walks the tree). Applied as an
+ * INTERSECTION with the agent's own allowlist, so a mode never widens it.
+ */
+export const PLAN_MODE_TOOLS: readonly string[] = [
+  "read_file",
+  "list_dir",
+  "search_files",
+  "search_code",
+  "web_search",
+  "web_fetch",
+  "browser_control",
+  "todo_write",
+  "memory_save",
+  "memory_recall",
+  "memory_list",
+  "delegate_task",
+];
+
+/**
+ * The per-mode allowlist transformation (undefined = no restriction).
+ * - "ask"/"full": every tool stays (full widens the ASK-TIER GATES only,
+ *   through toolDeps.permissionMode → approvals.ts).
+ * - "plan": the fixed read-only set above.
+ * - "editor" (owner: "It will not go with any commands or any terminals"):
+ *   EVERYTHING except run_command — file tools stay auto-approved as today,
+ *   delete_file keeps its current ask-tier semantics.
+ */
+export function modeAllowList(mode: "full" | "ask" | "plan" | "editor"): readonly string[] | undefined {
+  if (mode === "plan") return PLAN_MODE_TOOLS;
+  if (mode === "editor") return TOOL_NAMES.filter((t) => t !== "run_command");
+  return undefined;
+}
+
+/**
+ * ROUND-50 (R50-c1): the FINAL allowlist a turn on this session passes to
+ * buildProjectTools — agent allowlist (ADR-0019: []/undefined = ALL) →
+ * delegation-depth rules (children at the cap lose delegate_task) →
+ * permission-mode intersection (plan/editor). An empty product becomes the
+ * NO_TOOLS sentinel (an empty array would mean "ALL" downstream). Shared by
+ * prepareTurn and the context-meter route so both agree by construction.
+ */
+export function sessionToolAllowList(
+  session: { id: string; parentSessionId: string | null; permissionMode: "full" | "ask" | "plan" | "editor" },
+  agent: { allowedTools: readonly string[] },
+  /** The delegation depth of `session` (delegationDepth) — pass it when you
+   * already computed it; omitted = 0 (a main session — can delegate). */
+  depth?: number,
+): readonly string[] | undefined {
+  const isChild = session.parentSessionId !== null;
+  const canDelegate = (depth ?? 0) < MAX_DELEGATION_DEPTH;
+  const withoutDelegate = (list: readonly string[]): readonly string[] =>
+    (list.length === 0 ? (TOOL_NAMES as readonly string[]) : list).filter(
+      (t) => t !== "delegate_task",
+    );
+  const childAllowList: readonly string[] | undefined = isChild
+    ? canDelegate
+      ? agent.allowedTools
+      : withoutDelegate(agent.allowedTools)
+    : agent.allowedTools;
+  const modeAllow = modeAllowList(session.permissionMode);
+  if (modeAllow === undefined) return childAllowList;
+  const base =
+    childAllowList === undefined || childAllowList.length === 0
+      ? (TOOL_NAMES as readonly string[])
+      : childAllowList;
+  const filtered = base.filter((t) => modeAllow.includes(t));
+  return filtered.length > 0 ? filtered : NO_TOOLS;
+}
+
+/**
+ * ROUND-50 (R50-c1): the effective tool-NAME list a turn on this session
+ * would receive — sessionToolAllowList projected onto TOOL_NAMES and
+ * filtered by the memory master switch (buildProjectTools drops memory_*
+ * when it's off). Serves the context-meter route's "system tools" slice so
+ * the donut reflects the post-mode toolset. delegate_task rides along when
+ * the allowlist permits it (the keyring/chat presence buildProjectTools
+ * additionally requires is true on every production call path — routes and
+ * delegation both pass them).
+ */
+export function effectiveToolNames(
+  db: SqliteDatabase,
+  session: { id: string; parentSessionId: string | null; permissionMode: "full" | "ask" | "plan" | "editor" },
+  agent: { allowedTools: readonly string[] },
+): string[] {
+  const allowList = sessionToolAllowList(session, agent, delegationDepth(db, session.id));
+  const base =
+    allowList === undefined || allowList.length === 0
+      ? (TOOL_NAMES as readonly string[])
+      : TOOL_NAMES.filter((t) => allowList.includes(t));
+  const memoryEnabled = getMemorySettings(db).enabled;
+  return memoryEnabled === false ? base.filter((t) => !t.startsWith("memory_")) : [...base];
+}
 
 /**
  * Walks the parent_session_id chain to count how deep a session sits
@@ -159,8 +258,12 @@ export interface TurnDeps {
   chatStream?: StreamChatFn;
 }
 
-/** Narrows an event payload back to the {role, content} chat shape we write. */
-function asChatMessage(event: { type: string; payload: unknown }): ChatTurnMessage | undefined {
+/** Narrows an event payload back to the {role, content} chat shape we write.
+ * ROUND-50 (R50-c1): message.user payloads may carry `attachments` — the
+ * validated send-route list; they ride along for assembleHistory's rendering. */
+function asChatMessage(
+  event: { type: string; payload: unknown },
+): (ChatTurnMessage & { attachments?: MessageAttachment[] }) | undefined {
   if (event.type !== "message.user" && event.type !== "message.assistant") return undefined;
   if (typeof event.payload !== "object" || event.payload === null) return undefined;
   const payload = event.payload as Record<string, unknown>;
@@ -169,7 +272,38 @@ function asChatMessage(event: { type: string; payload: unknown }): ChatTurnMessa
   // empty content — sending {role:"assistant", content:""} makes
   // Anthropic-protocol endpoints 400. Skip them for history.
   if (event.type === "message.assistant" && payload.content === "") return undefined;
-  return { role: event.type === "message.user" ? "user" : "assistant", content: payload.content };
+  // ROUND-50 (R50-c1): tolerate older rows / hand-written payloads — only a
+  // well-formed array of {name} objects counts as attachments.
+  const rawAttachments = payload.attachments;
+  const attachments = Array.isArray(rawAttachments)
+    ? rawAttachments.filter(
+        (a): a is MessageAttachment =>
+          typeof a === "object" && a !== null && typeof (a as { name?: unknown }).name === "string",
+      )
+    : undefined;
+  return {
+    role: event.type === "message.user" ? "user" : "assistant",
+    content: payload.content,
+    ...(attachments !== undefined && attachments.length > 0 ? { attachments } : {}),
+  };
+}
+
+/**
+ * ROUND-50 (R50-c1): render a message.user event's attachments into the
+ * model-facing content AFTER the user text. The RAW event payload stays
+ * clean ({role, content, attachments}) — this block exists only in the
+ * model-facing history, so the display never shows it. Binary/unreadable
+ * attachments (text: null) render a one-line placeholder instead.
+ */
+function renderAttachments(content: string, attachments: readonly MessageAttachment[]): string {
+  let out = content;
+  for (const a of attachments) {
+    out +=
+      typeof a.text === "string" && a.text !== ""
+        ? `\n\n--- attached file: ${a.name} ---\n${a.text}\n--- end of ${a.name} ---`
+        : `\n\n--- attached file: ${a.name} (no readable text) ---`;
+  }
+  return out;
 }
 
 /**
@@ -221,7 +355,17 @@ export function assembleHistory(db: SqliteDatabase, sessionId: string): SeqMessa
     if (event.type === "message.user" || event.type === "message.assistant") {
       flushTools();
       const msg = asChatMessage(event);
-      if (msg) messages.push({ ...msg, throughSeq: event.seq });
+      if (msg)
+        messages.push({
+          role: msg.role,
+          // ROUND-50 (R50-c1): user attachments render into the model-facing
+          // content here (assistant events never carry them).
+          content:
+            msg.role === "user" && msg.attachments !== undefined
+              ? renderAttachments(msg.content, msg.attachments)
+              : msg.content,
+          throughSeq: event.seq,
+        });
     } else if (event.type === "tool.use") {
       const payload =
         event.payload && typeof event.payload === "object"
@@ -316,6 +460,9 @@ interface PreparedTurn {
   model: string;
   tools: Awaited<ReturnType<typeof buildProjectTools>> | undefined;
   system: string;
+  /** ROUND-50 (R50-c1): the per-send thinking level, threaded to the chat
+   * adapters (chat.ts buildModel). Not persisted. */
+  thinkingLevel?: ThinkingLevel;
 }
 
 /** Shared pre-flight: validation, provider/key resolution, tools, system,
@@ -328,6 +475,16 @@ async function prepareTurn(
   modelOverride?: string,
   /** ROUND-36: the chat fn (delegate_task spawns child turns through it). */
   chatForTools?: ChatFn,
+  /** ROUND-50 (R50-b, owner: the sub-agent panel must stream "the actual raw
+   * data, the raw thinking, the raw text of it… just like the main agent"):
+   * the STREAMING adapter. The streamed turn passes its deps.chatStream here
+   * so toolDeps carries it — the delegate_task tool then hands it to the
+   * orchestrator, and delegated children run runStreamedAgentTurn (live
+   * text/thinking deltas + tool events through the subagent-event envelope)
+   * instead of the sync step-snapshot path. Absent on the plain sync route —
+   * sync parents keep spawning sync children (fail-fast ask semantics for
+   * channel-less runs are unchanged, see the ROUND-48 comments below). */
+  chatStreamForTools?: StreamChatFn,
   /** ROUND-36 (streamed turns): forward live subagent-status events to SSE.
    * ROUND-48 (R48-e1): also passed by the SYNC path for emitted sub-agent
    * children (the orchestrator's wrappedEmit) — see interactiveApprovals. */
@@ -336,6 +493,9 @@ async function prepareTurn(
    * deny on abort. ROUND-48 (R48-e1): now also forwarded by the sync path
    * for sub-agent children (the parent's stop propagates to the child). */
   signalForTools?: AbortSignal,
+  /** ROUND-50 (R50-c1): the composer's per-send thinking level. Returned on
+   * PreparedTurn for the turn runners to hand to the chat adapters. */
+  thinkingLevel?: ThinkingLevel,
 ): Promise<PreparedTurn | { error: Extract<TurnOutcome, { ok: false }> }> {
   const session = getSession(db, sessionId);
   if (session === undefined) {
@@ -459,9 +619,15 @@ async function prepareTurn(
   // when the memory master switch (Settings → Advanced) is on.
   const isChild = session.parentSessionId !== null;
   const memoryEnabled = getMemorySettings(db).enabled;
+  // ROUND-50 (R50-c1): the depth feeds the shared sessionToolAllowList
+  // helper below (children at/beyond the delegation cap lose delegate_task).
   const depth = delegationDepth(db, session.id);
-  const canDelegate = depth < MAX_DELEGATION_DEPTH;
   const turnSeq = lastSessionSeq(db, session.id) + 1;
+  // ROUND-50 (R50-c1): the session's permission mode (migration 0020; the
+  // composer's switcher). Sub-agent children copied their parent's mode at
+  // delegation (orchestrator.ts), so the same enforcement applies to them
+  // through this exact path — no extra wiring.
+  const permissionMode = session.permissionMode;
   // ROUND-36 (ADR-0022): keyring + chat let the delegate_task tool spawn
   // child turns; `emit` is added per-path (the streamed turn forwards live
   // subagent-status events onto its SSE).
@@ -473,6 +639,10 @@ async function prepareTurn(
     projectId: session.projectId ?? undefined,
     keyring,
     ...(chatForTools !== undefined ? { chat: chatForTools } : {}),
+    // ROUND-50 (R50-b): the streaming adapter rides the same deps object so
+    // delegate_task can hand it to the orchestrator — children delegated from
+    // a STREAMED parent turn then stream live (see chatStreamForTools above).
+    ...(chatStreamForTools !== undefined ? { chatStream: chatStreamForTools } : {}),
     ...(emitForTools !== undefined ? { emit: emitForTools } : {}),
     // ROUND-48 (R48-e1, owner: "sub-agents … they should be an almost exact
     // copy of the main agent — same functioning, same workings, only
@@ -505,6 +675,10 @@ async function prepareTurn(
     // ROUND-49: the memory master switch rides the deps so buildProjectTools
     // can drop the memory_* tools entirely when the system is off.
     memoryEnabled,
+    // ROUND-50 (R50-c1): the permission mode rides the deps so the approval
+    // gates can widen ("full" auto-approves ask-tier decisions; the
+    // denylist-supreme refusals stay hard in every mode — approvals.ts).
+    permissionMode,
   };
   // ROUND-40 → ROUND-49 (owner: "sub-agents … exactly like how the main agent
   // works. Everything about it should be the same — the only difference is
@@ -516,18 +690,21 @@ async function prepareTurn(
   // at/beyond MAX_DELEGATION_DEPTH have it stripped (the recursion guard).
   // The `[]`-allowlist path passes the agent list through UNCHANGED so an
   // empty list keeps meaning "ALL tools, including delegation".
-  const withoutDelegate = (list: readonly string[]): readonly string[] =>
-    (list.length === 0 ? (TOOL_NAMES as readonly string[]) : list).filter(
-      (t) => t !== "delegate_task",
-    );
-  const childAllowList: readonly string[] | undefined = isChild
-    ? canDelegate
-      ? agent.allowedTools
-      : withoutDelegate(agent.allowedTools)
-    : agent.allowedTools;
+  //
+  // ROUND-50 (R50-c1): PERMISSION-MODE TOOL RESTRICTION — the shared
+  // sessionToolAllowList helper intersects the (post-allowlist,
+  // post-delegation-depth) list with the mode's set:
+  //   plan   → PLAN_MODE_TOOLS (read-only/research);
+  //   editor → everything except run_command (owner: no terminals);
+  //   ask/full → no restriction (full widens the ask-tier GATES only).
+  // The intersection can only NARROW (a mode never widens the agent's own
+  // allowlist), and an EMPTY product must mean "no tools" — buildProjectTools
+  // treats []/undefined as ALL (ADR-0019), so the NO_TOOLS sentinel carries
+  // the empty case (tools/index.ts).
+  const allowListWithMode = sessionToolAllowList(session, agent, depth);
   const tools =
     project !== undefined
-      ? await buildProjectTools(project.rootPath, childAllowList, toolDeps)
+      ? await buildProjectTools(project.rootPath, allowListWithMode, toolDeps)
       : undefined;
   // ROUND-40: the system prompt's toolNames must reflect the EXACT tool set the
   // model will actually receive. The old code rebuilt tools from
@@ -558,6 +735,12 @@ async function prepareTurn(
           memoryEnabled && !isChild && session.projectId !== null
             ? memoryDigest(db, session.projectId) || undefined
             : undefined,
+        // ROUND-50 (R50-c1): narrate the active permission mode (full/plan/
+        // editor; "ask" stays silent — the default posture is already
+        // narrated by the TERMINAL/WEB ACCESS sections). The toolNames list
+        // above already reflects the post-mode tool set (the tools object
+        // was built from the mode-filtered allowlist).
+        permissionMode,
       })
     : agent.systemPrompt;
   return {
@@ -570,6 +753,7 @@ async function prepareTurn(
     model: modelOverride && modelOverride.trim() !== "" ? modelOverride.trim() : agent.model,
     tools,
     system,
+    ...(thinkingLevel !== undefined ? { thinkingLevel } : {}),
   };
 }
 
@@ -590,6 +774,14 @@ export async function runSingleAgentTurn(
    * path's stop semantics; a stop is not an error, so no turn.error is
    * persisted). Absent on the plain sync route. */
   signal?: AbortSignal,
+  /** ROUND-50 (R50-c1): the composer's per-send thinking level — threaded
+   * to the chat adapter (chat-completions reasoning.effort). NOT persisted;
+   * sub-agents never inherit it (the orchestrator calls without it). */
+  thinkingLevel?: ThinkingLevel,
+  /** ROUND-50 (R50-c1): the send's attachments — persisted on the
+   * message.user event payload (alongside role/content) and rendered into
+   * the model-facing history by assembleHistory. */
+  attachments?: MessageAttachment[],
 ): Promise<TurnOutcome> {
   const { db, keyring, chat } = deps;
   // ROUND-48 (R48-e1): forward emit AND signal into the turn prep so the
@@ -597,7 +789,20 @@ export async function runSingleAgentTurn(
   // emitted children (the owner's "sub-agents can ask for permission") and
   // run_command/web_fetch/browser_control ask-tiers wait on the owner's
   // decision instead of failing fast.
-  const prepared = await prepareTurn(db, keyring, sessionId, modelOverride, chat, emit, signal);
+  // ROUND-50 (R50-b): NO chatStream on the sync path — a sync turn's children
+  // stay sync (the orchestrator's fallback branch), preserving the exact
+  // pre-R50-b behavior for channel-less runs.
+  const prepared = await prepareTurn(
+    db,
+    keyring,
+    sessionId,
+    modelOverride,
+    chat,
+    undefined,
+    emit,
+    signal,
+    thinkingLevel,
+  );
   if ("error" in prepared) return prepared.error;
   const { session, agent, provider, apiKey, model, tools, system } = prepared;
   const syncStartedAt = Date.now();
@@ -609,7 +814,13 @@ export async function runSingleAgentTurn(
   const userEvent = appendSessionEvent(db, session.id, {
     type: "message.user",
     agentId: agent.id,
-    payload: { role: "user", content },
+    // ROUND-50 (R50-c1): attachments ride the raw payload (display data);
+    // assembleHistory renders them into the model-facing content.
+    payload: {
+      role: "user",
+      content,
+      ...(attachments !== undefined && attachments.length > 0 ? { attachments } : {}),
+    },
   });
 
   const keySecrets = keyring.list();
@@ -627,6 +838,9 @@ export async function runSingleAgentTurn(
   const maxOuterLoops = agent.maxOuterLoops ?? 5;
   let totalInputTokens = 0;
   let totalOutputTokens = 0;
+  // ROUND-50 (R50-c1): cached prompt tokens, accumulated per provider call
+  // into the turn's single usage_events row (context-meter cache hit rate).
+  let totalCachedInputTokens = 0;
   let lastAssistantEvent: { seq: number; ts: string; content: string } | null = null;
   let lastError: { ok: false; status: 502; code: "PROVIDER_ERROR"; message: string; details: { providerError: string } } | null = null;
   // ROUND-48 (R48-e1): set when the loop exits via the between-iterations
@@ -693,6 +907,9 @@ export async function runSingleAgentTurn(
         temperature: agent.temperature,
         maxTurns: agent.maxTurns,
         ...(tools !== undefined ? { tools } : {}),
+        // ROUND-50 (R50-c1): the per-send thinking level (chat-completions
+        // reasoning.effort injection — see chat.ts buildThinkingFetch).
+        ...(prepared.thinkingLevel !== undefined ? { thinkingLevel: prepared.thinkingLevel } : {}),
         // ROUND-48 (R48-e1, stretch): LIVE per-step events. A single chat()
         // call can run maxTurns tool round-trips internally; without this
         // hook the parent UI sees nothing until the WHOLE call completes.
@@ -736,6 +953,7 @@ export async function runSingleAgentTurn(
     const ms = Date.now() - startedAt;
     totalInputTokens += result.usage.inputTokens;
     totalOutputTokens += result.usage.outputTokens;
+    totalCachedInputTokens += result.usage.cachedInputTokens ?? 0;
 
     // Audit trail: one event per executed tool call, in order (ADR-0010 log).
     for (const call of result.toolCalls) {
@@ -904,6 +1122,9 @@ export async function runSingleAgentTurn(
     model,
     inputTokens: totalInputTokens,
     outputTokens: totalOutputTokens,
+    // ROUND-50 (R50-c1): 0 when no provider call reported a cached tier —
+    // recorded as a plain 0 (not null) because at least one call ran.
+    cachedInputTokens: totalCachedInputTokens,
     costUsd: computeCost(db, provider.id, model, totalInputTokens, totalOutputTokens),
     ts: lastAssistantEvent.ts,
   };
@@ -952,6 +1173,15 @@ export async function runStreamedAgentTurn(
   emit: (event: unknown) => void,
   modelOverride?: string,
   signal?: AbortSignal,
+  /** ROUND-50 (R50-c1): the composer's per-send thinking level — threaded
+   * to the streaming adapter (chat-completions reasoning.effort). NOT
+   * persisted; sub-agents never inherit it (the orchestrator calls without
+   * it — children keep "default"). */
+  thinkingLevel?: ThinkingLevel,
+  /** ROUND-50 (R50-c1): the send's attachments — persisted on the
+   * message.user event payload and rendered into the model-facing history
+   * by assembleHistory. */
+  attachments?: MessageAttachment[],
 ): Promise<StreamedTurnOutcome> {
   const { db, keyring, chat, chatStream } = deps;
   // ROUND-34: values the keyring holds — scrubbed from persisted tool output
@@ -965,7 +1195,21 @@ export async function runStreamedAgentTurn(
       message: "streaming is not available in this build",
     };
   }
-  const prepared = await prepareTurn(db, keyring, sessionId, modelOverride, chat, emit, signal);
+  const prepared = await prepareTurn(
+    db,
+    keyring,
+    sessionId,
+    modelOverride,
+    chat,
+    // ROUND-50 (R50-b): forward the streaming adapter so this turn's
+    // delegate_task toolDeps carries it — children delegated from a streamed
+    // turn run the STREAMED path themselves (live raw deltas to the UI).
+    chatStream,
+    emit,
+    signal,
+    // ROUND-50 (R50-c1): the per-send thinking level.
+    thinkingLevel,
+  );
   if ("error" in prepared) return prepared.error;
   const { session, agent, provider, apiKey, model, tools, system } = prepared;
 
@@ -976,7 +1220,13 @@ export async function runStreamedAgentTurn(
   const userEvent = appendSessionEvent(db, session.id, {
     type: "message.user",
     agentId: agent.id,
-    payload: { role: "user", content },
+    // ROUND-50 (R50-c1): attachments ride the raw payload (display data);
+    // assembleHistory renders them into the model-facing content.
+    payload: {
+      role: "user",
+      content,
+      ...(attachments !== undefined && attachments.length > 0 ? { attachments } : {}),
+    },
   });
 
   const budget: ContextBudget = {
@@ -996,6 +1246,10 @@ export async function runStreamedAgentTurn(
   const startedAt = Date.now();
   let totalInputTokens = 0;
   let totalOutputTokens = 0;
+  // ROUND-50 (R50-c1): cached prompt tokens — accumulated from the finish
+  // frames (chat.ts reads usage.inputTokenDetails.cacheReadTokens) into the
+  // turn's single usage_events row (context-meter cache hit rate).
+  let totalCachedInputTokens = 0;
   let totalRequests = 0;
   let lastAssistantEvent: { seq: number; ts: string; content: string } | null = null;
   let lastText = "";
@@ -1066,6 +1320,8 @@ export async function runStreamedAgentTurn(
     let iterAllText = ""; // never reset — completion-signal detection across segments
     let iterInputTokens = 0;
     let iterOutputTokens = 0;
+    // ROUND-50 (R50-c1): this iteration's cached prompt tokens.
+    let iterCachedInputTokens = 0;
     let iterToolCalls = 0;
     totalRequests++;
 
@@ -1134,6 +1390,9 @@ export async function runStreamedAgentTurn(
         temperature: agent.temperature,
         maxTurns: agent.maxTurns,
         ...(tools !== undefined ? { tools } : {}),
+        // ROUND-50 (R50-c1): the per-send thinking level (chat-completions
+        // reasoning.effort injection — see chat.ts buildThinkingFetch).
+        ...(prepared.thinkingLevel !== undefined ? { thinkingLevel: prepared.thinkingLevel } : {}),
         ...(signal !== undefined ? { signal } : {}),
       })) {
         if (event.type === "tool-result") {
@@ -1186,6 +1445,9 @@ export async function runStreamedAgentTurn(
         } else if (event.type === "finish") {
           iterInputTokens = event.usage.inputTokens;
           iterOutputTokens = event.usage.outputTokens;
+          // ROUND-50 (R50-c1): cached prompt tokens ride the finish frame
+          // (0 when the provider didn't report a cached tier).
+          iterCachedInputTokens = event.cachedInputTokens ?? 0;
         }
       }
     } catch (error) {
@@ -1240,6 +1502,7 @@ export async function runStreamedAgentTurn(
 
     totalInputTokens += iterInputTokens;
     totalOutputTokens += iterOutputTokens;
+    totalCachedInputTokens += iterCachedInputTokens;
     lastText = iterAllText;
 
     // ROUND-35: flush the iteration's FINAL segment (with stats). Interim
@@ -1328,6 +1591,9 @@ export async function runStreamedAgentTurn(
     model,
     inputTokens: totalInputTokens,
     outputTokens: totalOutputTokens,
+    // ROUND-50 (R50-c1): 0 when no provider call reported a cached tier —
+    // recorded as a plain 0 (not null) because at least one call ran.
+    cachedInputTokens: totalCachedInputTokens,
     costUsd: computeCost(db, provider.id, model, totalInputTokens, totalOutputTokens),
     ts: lastAssistantEvent.ts,
   };
@@ -1373,10 +1639,16 @@ function computeCost(
   );
 }
 
-/** Look up the model's context window (fallback 200k if not configured). */
-function getModelContextWindow(db: SqliteDatabase, providerId: string, modelId: string): number {
+/**
+ * Look up the model's context window. Resolution order (ROUND-50 R50-c1,
+ * shared by the turn budget and the context-meter route):
+ *   1. the models table row for (providerId, model) — the owner's override;
+ *   2. the built-in catalog's contextWindow (storage/models.ts CatalogModel);
+ *   3. 200 000 (the pre-R50 fallback).
+ */
+export function getModelContextWindow(db: SqliteDatabase, providerId: string, modelId: string): number {
   const row = db
     .prepare("SELECT context_window FROM models WHERE provider_id = ? AND model_id = ?")
     .get(providerId, modelId) as { context_window: number | null } | undefined;
-  return row?.context_window ?? 200_000;
+  return row?.context_window ?? getCatalogModel(modelId)?.contextWindow ?? 200_000;
 }

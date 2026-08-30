@@ -5,14 +5,27 @@
  * later waves.
  */
 import { randomUUID, timingSafeEqual } from "node:crypto";
-import { existsSync, readdirSync, statSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
-import Fastify, { type FastifyError, type FastifyInstance } from "fastify";
-import type { MemoryPolicy, RunMode } from "shared";
+import Fastify, { type FastifyError, type FastifyInstance, type FastifyReply } from "fastify";
+import type {
+  MemoryPolicy,
+  MessageAttachment,
+  PermissionMode,
+  RunMode,
+  ThinkingLevel,
+} from "shared";
+import { PERMISSION_MODES, THINKING_LEVELS } from "shared";
 import { aiSdkChat, streamAiSdkChat, type ChatFn } from "./agents/chat.js";
-import { runSingleAgentTurn, runStreamedAgentTurn } from "./agents/runtime.js";
-import { pickFolder } from "./dialogs.js";
-import { projectTree, readFile, searchCode, searchFiles } from "./tools/index.js";
+import {
+  assembleHistory,
+  effectiveToolNames,
+  getModelContextWindow,
+  runSingleAgentTurn,
+  runStreamedAgentTurn,
+} from "./agents/runtime.js";
+import { pickFiles, pickFolder } from "./dialogs.js";
+import { projectTree, readFile, resolveInsideRoot, searchCode, searchFiles } from "./tools/index.js";
 import {
   ProviderKeyring,
   ProviderTestError,
@@ -49,6 +62,7 @@ import {
   listSubAgents,
   revertSession,
   searchSessions,
+  updateSessionPermissionMode,
   updateSessionTitle,
 } from "./storage/sessions.js";
 import {
@@ -91,8 +105,10 @@ import { listSnapshots, restoreSnapshot, getSnapshotBySeq } from "./storage/snap
 // ROUND-44 (R44-a): the agent memory system — per-project persistent
 // knowledge (facts/decisions/preferences) with REST read/delete for the
 // right-sidebar Memory tab. Saves happen via the memory_save tool.
-import { deleteMemory, listMemories } from "./storage/memory.js";
+import { deleteMemory, listMemories, memoryDigest } from "./storage/memory.js";
 import { getIndexSummary, searchIndexSymbols } from "./storage/index.js";
+import { estimateMessageTokens, estimateTokens } from "./context.js";
+import { buildSystemPromptSections, readCustomRules } from "./agents/prompts.js";
 import { openDatabase, type SqliteDatabase } from "./storage/db.js";
 import {
   TOOL_NAMES,
@@ -279,6 +295,191 @@ function validateAgentInput(
   }
 
   return { issues, input };
+}
+
+/* ── ROUND-50 (R50-d): model-config field gate ────────────────────────────────
+ *
+ * The owner now edits per-model pricing/context/limits through the Settings
+ * → Models & Providers config dialog (POST /providers/:id/models upsert +
+ * PATCH /models/:id). Both routes previously WHITELISTED the fields but
+ * silently DROPPED any value of the wrong type — a patch that "saved" while
+ * discarding the pricing the user typed. Every whitelisted field is now
+ * validated strictly: a malformed value is a 400 VALIDATION naming the field.
+ *
+ * Nullability contract (mirrored by storage/models.ts upsertModel):
+ *   number        → set the field
+ *   null          → clear it back to "unknown" (NULL in the DB)
+ *   absent        → leave the stored value untouched (upsert semantics)
+ */
+const MODEL_NUMERIC_FIELDS = [
+  "contextWindow",
+  "maxOutputTokens",
+  "inputPricePerMtok",
+  "inputPriceCachedPerMtok",
+  "outputPricePerMtok",
+] as const;
+
+type ModelNumericValues = Partial<
+  Record<(typeof MODEL_NUMERIC_FIELDS)[number], number | null>
+>;
+
+/** Reads the whitelisted numeric model fields off a raw JSON body.
+ * Returns the values that are present, or the first offending field name
+ * (mapped by the routes to 400 VALIDATION). */
+function readModelNumericFields(
+  raw: Record<string, unknown>,
+): { ok: true; values: ModelNumericValues } | { ok: false; field: string } {
+  const values: ModelNumericValues = {};
+  for (const field of MODEL_NUMERIC_FIELDS) {
+    const value = raw[field];
+    if (value === undefined) continue;
+    if (value === null || typeof value === "number") {
+      values[field] = value;
+      continue;
+    }
+    return { ok: false, field };
+  }
+  return { ok: true, values };
+}
+
+/** Strict gate for the non-numeric model-config fields: displayName must be a
+ * string, the toggles booleans. Returns the offending field name for 400s. */
+function readModelScalarFields(
+  raw: Record<string, unknown>,
+): { ok: true } | { ok: false; field: string } {
+  if (raw.displayName !== undefined && typeof raw.displayName !== "string") {
+    return { ok: false, field: "displayName" };
+  }
+  if (raw.supportsThinking !== undefined && typeof raw.supportsThinking !== "boolean") {
+    return { ok: false, field: "supportsThinking" };
+  }
+  if (raw.hidden !== undefined && typeof raw.hidden !== "boolean") {
+    return { ok: false, field: "hidden" };
+  }
+  return { ok: true };
+}
+
+// ── ROUND-50 (R50-c1): composer send-route field validation ───────────────────
+
+/** Max attachments per send (mirrors /attachments/read's path cap). */
+const MAX_ATTACHMENTS_PER_SEND = 20;
+/** Server-side cap on a single attachment's text (128KB head — the same
+ * slice POST /attachments/read would have produced). */
+const MAX_ATTACHMENT_TEXT_CHARS = 128 * 1024;
+
+export interface ComposerSendFields {
+  thinkingLevel?: ThinkingLevel;
+  attachments?: MessageAttachment[];
+}
+
+/**
+ * ROUND-50 (R50-c1): validate the composer's extra send fields shared by
+ * BOTH send routes (POST /sessions/:id/messages and /messages/stream):
+ * - `thinkingLevel` — optional; when present it must be one of the 4
+ *   ThinkingLevel values (400 VALIDATION otherwise).
+ * - `attachments` — optional array (≤20 items) of
+ *   { name: non-empty string ≤200 chars, path?, size?, text?: string|null }.
+ *   The text is capped server-side to 128KB; unknown/extra fields are
+ *   dropped (never echoed into the persisted payload).
+ * Returns the error reply on failure (mirrors the routes' 400 shape).
+ */
+function readComposerSendFields(
+  raw: Record<string, unknown>,
+  reply: FastifyReply,
+): { ok: true; value: ComposerSendFields } | { ok: false } {
+  let thinkingLevel: ThinkingLevel | undefined;
+  if (raw.thinkingLevel !== undefined) {
+    if (typeof raw.thinkingLevel !== "string" || !THINKING_LEVELS.includes(raw.thinkingLevel as ThinkingLevel)) {
+      reply.code(400).send(
+        errorBody("VALIDATION", "thinkingLevel must be one of default|low|high|max", {
+          field: "body.thinkingLevel",
+        }),
+      );
+      return { ok: false };
+    }
+    if (raw.thinkingLevel !== "default") thinkingLevel = raw.thinkingLevel as ThinkingLevel;
+  }
+
+  let attachments: MessageAttachment[] | undefined;
+  if (raw.attachments !== undefined) {
+    if (!Array.isArray(raw.attachments)) {
+      reply.code(400).send(
+        errorBody("VALIDATION", "attachments must be an array", { field: "body.attachments" }),
+      );
+      return { ok: false };
+    }
+    if (raw.attachments.length > MAX_ATTACHMENTS_PER_SEND) {
+      reply.code(400).send(
+        errorBody("VALIDATION", `at most ${MAX_ATTACHMENTS_PER_SEND} attachments per message`, {
+          field: "body.attachments",
+        }),
+      );
+      return { ok: false };
+    }
+    const parsed: MessageAttachment[] = [];
+    for (const [i, entry] of raw.attachments.entries()) {
+      if (typeof entry !== "object" || entry === null || Array.isArray(entry)) {
+        reply.code(400).send(
+          errorBody("VALIDATION", `attachments[${i}] must be an object`, {
+            field: `body.attachments[${i}]`,
+          }),
+        );
+        return { ok: false };
+      }
+      const item = entry as Record<string, unknown>;
+      if (typeof item.name !== "string" || item.name.trim() === "" || item.name.length > 200) {
+        reply.code(400).send(
+          errorBody("VALIDATION", `attachments[${i}].name must be a non-empty string (≤200 chars)`, {
+            field: `body.attachments[${i}].name`,
+          }),
+        );
+        return { ok: false };
+      }
+      if (item.path !== undefined && typeof item.path !== "string") {
+        reply.code(400).send(
+          errorBody("VALIDATION", `attachments[${i}].path must be a string`, {
+            field: `body.attachments[${i}].path`,
+          }),
+        );
+        return { ok: false };
+      }
+      if (item.size !== undefined && (typeof item.size !== "number" || !Number.isFinite(item.size) || item.size < 0)) {
+        reply.code(400).send(
+          errorBody("VALIDATION", `attachments[${i}].size must be a non-negative number`, {
+            field: `body.attachments[${i}].size`,
+          }),
+        );
+        return { ok: false };
+      }
+      if (item.text !== undefined && item.text !== null && typeof item.text !== "string") {
+        reply.code(400).send(
+          errorBody("VALIDATION", `attachments[${i}].text must be a string or null`, {
+            field: `body.attachments[${i}].text`,
+          }),
+        );
+        return { ok: false };
+      }
+      parsed.push({
+        name: item.name,
+        ...(typeof item.path === "string" ? { path: item.path } : {}),
+        ...(typeof item.size === "number" ? { size: item.size } : {}),
+        ...(typeof item.text === "string"
+          ? { text: item.text.slice(0, MAX_ATTACHMENT_TEXT_CHARS) }
+          : item.text === null
+            ? { text: null }
+            : {}),
+      });
+    }
+    if (parsed.length > 0) attachments = parsed;
+  }
+
+  return {
+    ok: true,
+    value: {
+      ...(thinkingLevel !== undefined ? { thinkingLevel } : {}),
+      ...(attachments !== undefined ? { attachments } : {}),
+    },
+  };
 }
 
 export interface ServerOptions {
@@ -478,6 +679,23 @@ export function buildServer(options: ServerOptions): FastifyInstance {
       );
     }
     return { path: picked.path, ...(picked.error ? { error: picked.error } : {}) };
+  });
+
+  // ROUND-50 (R50-c1): the composer's multi-FILE picker — the mirror of the
+  // folder route above for "Add Context" attachments (PowerShell
+  // OpenFileDialog with Multiselect on Windows / zenity --multiple on Unix;
+  // the Tauri shell invokes its own rfd pick_files command instead). Same
+  // bearer wall; same 501 DIALOG_UNAVAILABLE contract; 200 { files: [] }
+  // = user cancelled (never an error). Never hit by tests: the dialog
+  // blocks on a human (dialogs-script.test.ts pins the script structure).
+  app.post("/api/v1/internal/dialog/files", async (_request, reply) => {
+    const picked = await pickFiles();
+    if (picked.error && picked.error.includes("not supported on")) {
+      return reply.code(501).send(
+        errorBody("DIALOG_UNAVAILABLE", picked.error),
+      );
+    }
+    return { files: picked.files, ...(picked.error ? { error: picked.error } : {}) };
   });
 
   app.register(
@@ -872,16 +1090,36 @@ export function buildServer(options: ServerOptions): FastifyInstance {
             errorBody("VALIDATION", "modelId must be a non-empty string", { field: "body.modelId" }),
           );
         }
+        // ROUND-50 (R50-d): strict field validation — a malformed value is a
+        // 400 naming the field, never a silently dropped "successful" save.
+        const numerics = readModelNumericFields(raw);
+        if (!numerics.ok) {
+          return reply.code(400).send(
+            errorBody("VALIDATION", `${numerics.field} must be a number or null`, {
+              field: `body.${numerics.field}`,
+            }),
+          );
+        }
+        const scalars = readModelScalarFields(raw);
+        if (!scalars.ok) {
+          return reply.code(400).send(
+            errorBody(
+              "VALIDATION",
+              `${scalars.field} must be ${scalars.field === "displayName" ? "a string" : "a boolean"}`,
+              { field: `body.${scalars.field}` },
+            ),
+          );
+        }
         const model = upsertModel(db, id, {
           modelId: raw.modelId.trim(),
           displayName: typeof raw.displayName === "string" ? raw.displayName : undefined,
-          contextWindow: typeof raw.contextWindow === "number" ? raw.contextWindow : undefined,
-          maxOutputTokens: typeof raw.maxOutputTokens === "number" ? raw.maxOutputTokens : undefined,
-          inputPricePerMtok: typeof raw.inputPricePerMtok === "number" ? raw.inputPricePerMtok : undefined,
-          inputPriceCachedPerMtok: typeof raw.inputPriceCachedPerMtok === "number" ? raw.inputPriceCachedPerMtok : undefined,
-          outputPricePerMtok: typeof raw.outputPricePerMtok === "number" ? raw.outputPricePerMtok : undefined,
-          supportsThinking: raw.supportsThinking === true,
-          hidden: raw.hidden === true,
+          ...numerics.values,
+          // Absent toggles stay undefined so upsertModel KEEPS the stored
+          // value (the old `=== true` coercion reset them to false on every
+          // re-upsert of an existing model — the "add model" flow no longer
+          // wipes supportsThinking/hidden).
+          supportsThinking: typeof raw.supportsThinking === "boolean" ? raw.supportsThinking : undefined,
+          hidden: typeof raw.hidden === "boolean" ? raw.hidden : undefined,
         });
         return reply.code(201).send(model);
       });
@@ -895,13 +1133,30 @@ export function buildServer(options: ServerOptions): FastifyInstance {
             .send(errorBody("VALIDATION", "body must be a JSON object", { field: "body" }));
         }
         const raw = body as Record<string, unknown>;
+        // ROUND-50 (R50-d): same strict gate as the POST route — number sets,
+        // null clears to "unknown", absent leaves the stored value; a wrong
+        // type is a 400 VALIDATION naming the field (never a silent drop).
+        const numerics = readModelNumericFields(raw);
+        if (!numerics.ok) {
+          return reply.code(400).send(
+            errorBody("VALIDATION", `${numerics.field} must be a number or null`, {
+              field: `body.${numerics.field}`,
+            }),
+          );
+        }
+        const scalars = readModelScalarFields(raw);
+        if (!scalars.ok) {
+          return reply.code(400).send(
+            errorBody(
+              "VALIDATION",
+              `${scalars.field} must be ${scalars.field === "displayName" ? "a string" : "a boolean"}`,
+              { field: `body.${scalars.field}` },
+            ),
+          );
+        }
         const patch: Record<string, unknown> = {};
         if (typeof raw.displayName === "string") patch.displayName = raw.displayName;
-        if (typeof raw.contextWindow === "number" || raw.contextWindow === null) patch.contextWindow = raw.contextWindow;
-        if (typeof raw.maxOutputTokens === "number" || raw.maxOutputTokens === null) patch.maxOutputTokens = raw.maxOutputTokens;
-        if (typeof raw.inputPricePerMtok === "number" || raw.inputPricePerMtok === null) patch.inputPricePerMtok = raw.inputPricePerMtok;
-        if (typeof raw.inputPriceCachedPerMtok === "number" || raw.inputPriceCachedPerMtok === null) patch.inputPriceCachedPerMtok = raw.inputPriceCachedPerMtok;
-        if (typeof raw.outputPricePerMtok === "number" || raw.outputPricePerMtok === null) patch.outputPricePerMtok = raw.outputPricePerMtok;
+        Object.assign(patch, numerics.values);
         if (typeof raw.supportsThinking === "boolean") patch.supportsThinking = raw.supportsThinking;
         if (typeof raw.hidden === "boolean") patch.hidden = raw.hidden;
         const model = updateModel(db, id, patch);
@@ -1949,6 +2204,295 @@ export function buildServer(options: ServerOptions): FastifyInstance {
         return reply.code(200).send(updated);
       });
 
+      // ── ROUND-50 (R50-c1): the composer's permission-mode switcher ─────────
+      // PATCH /sessions/:id/permissions — body { mode } with mode ∈
+      // full|ask|plan|editor (400 VALIDATION otherwise). Persists on the
+      // session row (migration 0020) and returns the updated session in the
+      // SAME shape as GET /sessions/:id ({...session, events, lastSeq}).
+      // Enforcement happens at TURN time (runtime.ts prepareTurn tool-set
+      // restriction + approvals.ts ask-tier widening) — switching mid-session
+      // applies to the NEXT turn.
+      scope.patch("/sessions/:id/permissions", async (request, reply) => {
+        const { id } = request.params as Record<string, string>;
+        const body: unknown = request.body;
+        if (typeof body !== "object" || body === null || Array.isArray(body)) {
+          return reply
+            .code(400)
+            .send(errorBody("VALIDATION", "body must be a JSON object", { field: "body" }));
+        }
+        const raw = body as Record<string, unknown>;
+        if (
+          typeof raw.mode !== "string" ||
+          !PERMISSION_MODES.includes(raw.mode as PermissionMode)
+        ) {
+          return reply.code(400).send(
+            errorBody("VALIDATION", "mode must be one of full|ask|plan|editor", {
+              field: "body.mode",
+            }),
+          );
+        }
+        const updated = updateSessionPermissionMode(db, id, raw.mode as PermissionMode);
+        if (updated === undefined) {
+          return reply.code(404).send(errorBody("NOT_FOUND", `no session with id ${id}`));
+        }
+        return reply.code(200).send({
+          ...updated,
+          events: listSessionEvents(db, id),
+          lastSeq: lastSessionSeq(db, id),
+        });
+      });
+
+      // ── ROUND-50 (R50-c1): the composer's context donut ────────────────────
+      // GET /sessions/:id/context?model=<modelId> — the context meter's data
+      // source: context window, per-slice token ESTIMATES (the donut), the
+      // cache hit-rate line, and the session's lifetime token/cost totals.
+      // `model` is optional (defaults to the session agent's model — the
+      // composer's per-send model picker passes its selection).
+      //
+      // All breakdown numbers are ESTIMATES (approximations documented
+      // inline below): the goal is an honest donut, not exact provider
+      // accounting. usedTokens = the sum of all breakdown slices.
+      scope.get("/sessions/:id/context", async (request, reply) => {
+        const { id } = request.params as Record<string, string>;
+        const query = request.query as Record<string, string | undefined>;
+        const session = getSession(db, id);
+        if (session === undefined) {
+          return reply.code(404).send(errorBody("NOT_FOUND", `no session with id ${id}`));
+        }
+        if (session.agentId === null) {
+          return reply
+            .code(409)
+            .send(errorBody("CONFLICT", `session ${id} has no bound agent`));
+        }
+        const agent = getAgent(db, session.agentId);
+        if (agent === undefined) {
+          return reply.code(409).send(
+            errorBody("CONFLICT", `session agent ${session.agentId} no longer exists`),
+          );
+        }
+        if (agent.providerId === null || agent.model === null) {
+          return reply.code(409).send(
+            errorBody("CONFLICT", `agent '${agent.name}' has no providerId/model configured`, {
+              agentId: agent.id,
+              field: "providerId",
+            }),
+          );
+        }
+        const providerId = agent.providerId;
+        const model =
+          typeof query.model === "string" && query.model.trim() !== ""
+            ? query.model.trim()
+            : agent.model;
+        const project =
+          session.projectId !== null ? getProject(db, session.projectId) : undefined;
+
+        // Tool names: the post-mode, post-allowlist set a REAL turn would
+        // receive (runtime.ts effectiveToolNames — shared with prepareTurn's
+        // computation, so the donut reflects the live toolset).
+        const toolNames = project !== undefined ? effectiveToolNames(db, session, agent) : [];
+
+        // System-prompt slices via the R50-c1 section split (prompts.ts).
+        // Projectless sessions run on agent.systemPrompt with NO tools.
+        const sections =
+          project !== undefined
+            ? buildSystemPromptSections({
+                projectName: project.name,
+                rootPath: project.rootPath,
+                toolNames,
+                customRules: readCustomRules(project.rootPath),
+                maxTurns: agent.maxTurns,
+                indexSummary:
+                  session.projectId !== null
+                    ? getIndexSummary(db, session.projectId) ?? undefined
+                    : undefined,
+                memoryDigest:
+                  getMemorySettings(db).enabled &&
+                  session.parentSessionId === null &&
+                  session.projectId !== null
+                    ? memoryDigest(db, session.projectId) || undefined
+                    : undefined,
+                permissionMode: session.permissionMode,
+              })
+            : null;
+
+        // ── Breakdown approximations (context.ts estimateTokens ~4 chars/token):
+        // systemPrompt: the identity section — the core prompt text minus the
+        //   tool list, memory digest, and meta sections.
+        // systemTools: the prompt's tool-names section (measured) PLUS ~350
+        //   tokens per tool for the JSON schemas the API carries alongside the
+        //   prompt (the schema objects aren't cheaply stringifiable — the
+        //   fixed per-tool figure is the documented approximation).
+        // memory: the memory digest section. meta: codebase index + custom
+        //   rules. messages: assembleHistory with attachments rendered,
+        //   exactly what a real turn would send. mcpTools: honest 0 (no MCP
+        //   system yet — the UI shows "none").
+        const TOOL_SCHEMA_TOKENS = 350;
+        const systemPrompt = sections !== null ? estimateTokens(sections.identity) : estimateTokens(agent.systemPrompt);
+        const systemTools =
+          sections !== null ? estimateTokens(sections.tools) + TOOL_SCHEMA_TOKENS * toolNames.length : 0;
+        const memory = sections !== null ? estimateTokens(sections.memory) : 0;
+        const meta = sections !== null ? estimateTokens(sections.meta) : 0;
+        const messages = estimateMessageTokens(assembleHistory(db, id));
+        const mcpTools = 0;
+        const usedTokens = systemPrompt + systemTools + memory + messages + meta + mcpTools;
+
+        // ── Cache + lifetime totals: SQL SUMs over the session's usage rows
+        // (COUNT(*) = requests; SUM(cost_usd) rounded like the usage summary;
+        // cached_input_tokens is NULL pre-0020 / on providers without a
+        // cached tier — COALESCE handles it).
+        const totalsRow = db
+          .prepare(
+            `SELECT
+               COALESCE(SUM(input_tokens), 0) AS inputTokens,
+               COALESCE(SUM(output_tokens), 0) AS outputTokens,
+               COALESCE(SUM(cached_input_tokens), 0) AS cachedInputTokens,
+               COUNT(*) AS requests,
+               COALESCE(SUM(cost_usd), 0) AS costUsd
+             FROM usage_events WHERE session_id = ?`,
+          )
+          .get(id) as {
+          inputTokens: number;
+          outputTokens: number;
+          cachedInputTokens: number;
+          requests: number;
+          costUsd: number;
+        };
+        const roundUsd = (value: number): number => Math.round(value * 1e6) / 1e6;
+
+        return reply.code(200).send({
+          model,
+          providerId,
+          contextWindow: getModelContextWindow(db, providerId, model),
+          usedTokens,
+          breakdown: {
+            systemPrompt,
+            systemTools,
+            memory,
+            messages,
+            meta,
+            mcpTools,
+          },
+          cache: {
+            inputTokens: totalsRow.inputTokens,
+            cachedInputTokens: totalsRow.cachedInputTokens,
+            hitRate:
+              totalsRow.inputTokens > 0
+                ? totalsRow.cachedInputTokens / totalsRow.inputTokens
+                : null,
+          },
+          sessionTotals: {
+            inputTokens: totalsRow.inputTokens,
+            outputTokens: totalsRow.outputTokens,
+            requests: totalsRow.requests,
+            costUsd: roundUsd(totalsRow.costUsd),
+          },
+        });
+      });
+
+      // ── ROUND-50 (R50-c1): reading attachment content ──────────────────────
+      // POST /attachments/read — body { paths: string[], projectId? } → the
+      // text heads the composer attaches. Per-file outcomes (NEVER a 500):
+      //   - relative paths resolve ONLY inside the given project's root
+      //     (escape / missing project → per-file error entry);
+      //   - absolute paths read as-is (user-picked files; local-first app,
+      //     user-initiated read);
+      //   - files > 512KB are refused; text = the first 128KB head
+      //     (truncated: true when longer);
+      //   - a NUL byte in the first 8KB marks binary → text: null.
+      scope.post("/attachments/read", async (request, reply) => {
+        const body: unknown = request.body;
+        if (typeof body !== "object" || body === null || Array.isArray(body)) {
+          return reply
+            .code(400)
+            .send(errorBody("VALIDATION", "body must be a JSON object", { field: "body" }));
+        }
+        const raw = body as Record<string, unknown>;
+        if (!Array.isArray(raw.paths) || raw.paths.some((p) => typeof p !== "string")) {
+          return reply.code(400).send(
+            errorBody("VALIDATION", "paths must be an array of strings", {
+              field: "body.paths",
+            }),
+          );
+        }
+        const paths = raw.paths as string[];
+        if (paths.length > 20) {
+          return reply.code(400).send(
+            errorBody("VALIDATION", "at most 20 paths per request", { field: "body.paths" }),
+          );
+        }
+        if (raw.projectId !== undefined && typeof raw.projectId !== "string") {
+          return reply.code(400).send(
+            errorBody("VALIDATION", "projectId must be a string", { field: "body.projectId" }),
+          );
+        }
+        const projectId = typeof raw.projectId === "string" ? raw.projectId : undefined;
+        const project = projectId !== undefined ? getProject(db, projectId) : undefined;
+
+        const MAX_READABLE_BYTES = 512 * 1024;
+        const TEXT_HEAD_BYTES = 128 * 1024;
+        const BINARY_SNIFF_BYTES = 8 * 1024;
+
+        const files = paths.map((path): Record<string, unknown> => {
+          const name = path.split(/[\\/]/).filter(Boolean).pop() ?? path;
+          const errorEntry = (error: string): Record<string, unknown> => ({
+            path,
+            name,
+            size: 0,
+            text: null,
+            truncated: false,
+            error,
+          });
+
+          // Resolve: absolute (user-picked) vs project-relative.
+          let abs: string;
+          const isAbsoluteLike = path.startsWith("/") || /^[a-zA-Z]:[\\/]/.test(path);
+          if (isAbsoluteLike) {
+            abs = path;
+          } else {
+            if (project === undefined) {
+              return errorEntry(
+                projectId !== undefined
+                  ? `project ${projectId} not found — relative paths need a valid project`
+                  : "relative paths need a projectId",
+              );
+            }
+            const resolved = resolveInsideRoot(project.rootPath, path);
+            if ("error" in resolved) return errorEntry(resolved.error);
+            abs = resolved.abs;
+          }
+
+          try {
+            const stats = statSync(abs);
+            if (stats.isDirectory()) {
+              return errorEntry(`'${path}' is a directory, not a file`);
+            }
+            if (stats.size > MAX_READABLE_BYTES) {
+              return errorEntry(
+                `file is ${stats.size} bytes — above the 512KB attachment read limit`,
+              );
+            }
+            const head = readFileSync(abs);
+            const sniff = head.subarray(0, BINARY_SNIFF_BYTES);
+            if (sniff.includes(0)) {
+              // Binary (a NUL byte in the first 8KB) — no text, honest size.
+              return { path, name, size: stats.size, text: null, truncated: false };
+            }
+            const text = head.subarray(0, TEXT_HEAD_BYTES).toString("utf8");
+            return {
+              path,
+              name,
+              size: stats.size,
+              text,
+              truncated: stats.size > TEXT_HEAD_BYTES,
+            };
+          } catch {
+            return errorEntry(`cannot read '${path}': no such file or unreadable`);
+          }
+        });
+
+        return reply.code(200).send({ files });
+      });
+
       // DELETE /sessions/:id (round-30, owner request: "I am not able to
       // delete any of the sessions"). Transactionally removes the session row
       // AND its dependent rows (event log, usage lines, approvals, file
@@ -2263,8 +2807,22 @@ export function buildServer(options: ServerOptions): FastifyInstance {
         }
         const modelOverride =
           typeof raw.model === "string" && raw.model.trim() !== "" ? raw.model : undefined;
+        // ROUND-50 (R50-c1): the composer's per-send fields — thinking level
+        // (reasoning.effort, not persisted) and attachments (persisted on the
+        // message.user payload). Validation is shared with the streamed route.
+        const composer = readComposerSendFields(raw, reply);
+        if (!composer.ok) return reply;
 
-        const outcome = await runSingleAgentTurn({ db, keyring, chat }, id, content, modelOverride);
+        const outcome = await runSingleAgentTurn(
+          { db, keyring, chat },
+          id,
+          content,
+          modelOverride,
+          undefined,
+          undefined,
+          composer.value.thinkingLevel,
+          composer.value.attachments,
+        );
         if (outcome.ok) {
           return reply.code(200).send({
             assistantMessage: outcome.assistantMessage,
@@ -2310,6 +2868,10 @@ export function buildServer(options: ServerOptions): FastifyInstance {
         }
         const modelOverride =
           typeof raw.model === "string" && raw.model.trim() !== "" ? raw.model : undefined;
+        // ROUND-50 (R50-c1): the composer's per-send fields (same validation
+        // as the sync route — see the comment there).
+        const composer = readComposerSendFields(raw, reply);
+        if (!composer.ok) return reply;
 
         reply.hijack();
         const res = reply.raw;
@@ -2357,6 +2919,8 @@ export function buildServer(options: ServerOptions): FastifyInstance {
             send,
             modelOverride,
             abort.signal,
+            composer.value.thinkingLevel,
+            composer.value.attachments,
           );
           if (outcome.ok) {
             // ROUND-42: ALWAYS publish task_complete. The R40 didWork gate

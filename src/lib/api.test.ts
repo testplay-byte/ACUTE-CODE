@@ -8,6 +8,7 @@ import {
   fetchModelsCatalog,
   fetchOrchestrationSettings,
   fetchProviderModelConfig,
+  fetchProviderModelEntries,
   fetchProviders,
   getAgentsBackend,
   httpAgents,
@@ -894,6 +895,48 @@ describe("provider management (ROUND-47 R47-c1)", () => {
     });
   });
 
+  // ROUND-50 (R50-d): the per-model config dialog writes the FULL advanced
+  // field set — every pricing/limit field + explicit nulls must survive the
+  // wire verbatim (null clears to "unknown", never silently dropped).
+  it("updateProviderModelConfig round-trips the full advanced config incl. null clears (R50-d)", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      jsonResponse(200, {
+        ...MODEL_ROW,
+        displayName: "Priced Model",
+        contextWindow: 200000,
+        maxOutputTokens: null,
+        inputPricePerMtok: 0.15,
+        inputPriceCachedPerMtok: null,
+        outputPricePerMtok: 0.6,
+        supportsThinking: true,
+        hidden: true,
+      }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const patch = {
+      displayName: "Priced Model",
+      contextWindow: 200000,
+      maxOutputTokens: null,
+      inputPricePerMtok: 0.15,
+      inputPriceCachedPerMtok: null,
+      outputPricePerMtok: 0.6,
+      supportsThinking: true,
+      hidden: true,
+    };
+    const updated = await updateProviderModelConfig("mdl_1", patch);
+
+    expect(updated).toMatchObject({
+      inputPricePerMtok: 0.15,
+      inputPriceCachedPerMtok: null,
+      outputPricePerMtok: 0.6,
+      maxOutputTokens: null,
+      supportsThinking: true,
+      hidden: true,
+    });
+    expectCall(fetchMock, "http://sidecar.test/api/v1/models/mdl_1", "PATCH", patch);
+  });
+
   it("updateProviderModelConfig maps a 404 (unknown model row) onto ApiError", async () => {
     vi.stubGlobal(
       "fetch",
@@ -969,6 +1012,44 @@ describe("provider management (ROUND-47 R47-c1)", () => {
     expect(err).toBeInstanceOf(ApiError);
     expect(err.status).toBe(500);
   });
+
+  // ROUND-50 (R50-d): the "Add models" picker's catalog source — the LIVE
+  // provider catalog WITH display names (ids alone can't power a searchable
+  // multi-select).
+  it("fetchProviderModelEntries GETs /providers/:id/models and keeps id + name", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      jsonResponse(200, {
+        models: [
+          { id: "z-ai/glm-5.2:free", name: "Z.ai: GLM 5.2" },
+          { id: "openai/gpt-4o" }, // nameless entry falls back to the id
+        ],
+      }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const entries = await fetchProviderModelEntries("openrouter");
+
+    expect(entries).toEqual([
+      { id: "z-ai/glm-5.2:free", name: "Z.ai: GLM 5.2" },
+      { id: "openai/gpt-4o", name: "openai/gpt-4o" },
+    ]);
+    expectCall(fetchMock, "http://sidecar.test/api/v1/providers/openrouter/models", "GET");
+  });
+
+  it("fetchProviderModelEntries maps an upstream 502 onto ApiError", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        jsonResponse(502, {
+          error: { code: "PROVIDER_ERROR", message: "GET https://x/models failed: timeout" },
+        }),
+      ),
+    );
+
+    const err = await fetchProviderModelEntries("openrouter").catch((e) => e);
+    expect(err).toBeInstanceOf(ApiError);
+    expect(err.status).toBe(502);
+  });
 });
 
 // ROUND-47 (R47-c1): OrchestrationSettings finally carries subagentModel
@@ -1011,5 +1092,285 @@ describe("orchestration settings (subagentModel, ROUND-47 R47-c1)", () => {
     expect(JSON.parse(init.body as string)).toEqual({
       subagentModel: "nvidia/nemotron-3.5-lightning:free",
     });
+  });
+});
+
+// ── ROUND-50 (R50-c1): the composer's backend helpers ───────────────────────
+
+import {
+  fetchSessionContext,
+  httpSessions,
+  patchSessionPermissions,
+  pickFilesViaBackend,
+  readAttachmentFiles,
+  streamSessionMessage,
+  type SessionContextReport,
+} from "./api";
+
+describe("pickFilesViaBackend (ROUND-50 R50-c1)", () => {
+  it("inside Tauri: invokes the Rust pick_files command and returns the paths", async () => {
+    const invoke = vi.fn().mockResolvedValue(["C:\\Users\\owner\\Docs\\a.md", "C:\\Users\\owner\\Docs\\b.md"]);
+    vi.stubGlobal("window", { __TAURI__: { core: { invoke } } });
+    try {
+      const files = await pickFilesViaBackend();
+      expect(files).toEqual(["C:\\Users\\owner\\Docs\\a.md", "C:\\Users\\owner\\Docs\\b.md"]);
+      expect(invoke).toHaveBeenCalledWith("pick_files");
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it("Tauri invoke with a non-array result resolves to [] (defensive)", async () => {
+    const invoke = vi.fn().mockResolvedValue(null);
+    vi.stubGlobal("window", { __TAURI__: { core: { invoke } } });
+    try {
+      await expect(pickFilesViaBackend()).resolves.toEqual([]);
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it("browser dev: posts to the sidecar /internal/dialog/files with the bearer token and unwraps files", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      jsonResponse(200, { files: ["/home/owner/notes.md", "/home/owner/spec.ts"] }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    const files = await pickFilesViaBackend();
+    expect(files).toEqual(["/home/owner/notes.md", "/home/owner/spec.ts"]);
+    const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    expect(url).toBe("http://sidecar.test/api/v1/internal/dialog/files");
+    expect(init.method).toBe("POST");
+    expect((init.headers as Record<string, string>).Authorization).toBe("Bearer tok_123");
+  });
+
+  it("501 (no dialog backend on this machine) resolves to [] — a cancel, never an error", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(jsonResponse(501, {})));
+    await expect(pickFilesViaBackend()).resolves.toEqual([]);
+  });
+
+  it("HTTP failure and dialog errors THROW (callers surface the failure)", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(jsonResponse(500, {})));
+    await expect(pickFilesViaBackend()).rejects.toThrow(/HTTP 500/);
+
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(jsonResponse(200, { files: [], error: "zenity missing" })));
+    await expect(pickFilesViaBackend()).rejects.toThrow(/zenity missing/);
+
+    vi.stubGlobal("fetch", vi.fn().mockRejectedValue(new TypeError("fetch failed")));
+    await expect(pickFilesViaBackend()).rejects.toThrow(/could not open the file picker/);
+  });
+});
+
+describe("readAttachmentFiles (ROUND-50 R50-c1)", () => {
+  it("posts { paths, projectId } and unwraps the files array", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      jsonResponse(200, {
+        files: [
+          { path: "notes.md", name: "notes.md", size: 16, text: "hello attachment", truncated: false },
+          { path: "logo.png", name: "logo.png", size: 4096, text: null, truncated: false },
+        ],
+      }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const files = await readAttachmentFiles(["notes.md", "logo.png"], "proj_1");
+    expect(files).toHaveLength(2);
+    expect(files[0].text).toBe("hello attachment");
+    expect(files[1].text).toBeNull();
+    const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    expect(url).toBe("http://sidecar.test/api/v1/attachments/read");
+    expect(init.method).toBe("POST");
+    expect(JSON.parse(init.body as string)).toEqual({ paths: ["notes.md", "logo.png"], projectId: "proj_1" });
+  });
+
+  it("omits projectId when not given", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse(200, { files: [] }));
+    vi.stubGlobal("fetch", fetchMock);
+    await readAttachmentFiles(["/abs/path.txt"]);
+    expect(JSON.parse((fetchMock.mock.calls[0] as [string, RequestInit])[1].body as string)).toEqual({
+      paths: ["/abs/path.txt"],
+    });
+  });
+
+  it("maps the API.md error envelope onto ApiError", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        jsonResponse(400, {
+          error: { code: "VALIDATION", message: "at most 20 paths per request", details: { field: "body.paths" } },
+        }),
+      ),
+    );
+    const err = await readAttachmentFiles(Array.from({ length: 21 }, (_, i) => `f${i}`)).catch((e) => e);
+    expect(err).toBeInstanceOf(ApiError);
+    expect(err.code).toBe("VALIDATION");
+  });
+});
+
+describe("patchSessionPermissions (ROUND-50 R50-c1)", () => {
+  it("PATCHes { mode } and returns the session-detail shape", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      jsonResponse(200, {
+        id: "sess_1",
+        projectId: null,
+        agentId: "agt_1",
+        mode: "single",
+        status: "queued",
+        title: null,
+        createdAt: "2026-08-30T00:00:00Z",
+        updatedAt: "2026-08-30T00:00:00Z",
+        parentSessionId: null,
+        subRole: null,
+        permissionMode: "plan",
+        events: [],
+        lastSeq: 0,
+      }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const updated = await patchSessionPermissions("sess_1", "plan");
+    expect(updated.permissionMode).toBe("plan");
+    const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    expect(url).toBe("http://sidecar.test/api/v1/sessions/sess_1/permissions");
+    expect(init.method).toBe("PATCH");
+    expect(JSON.parse(init.body as string)).toEqual({ mode: "plan" });
+  });
+
+  it("400 VALIDATION for an unknown mode surfaces as ApiError", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        jsonResponse(400, {
+          error: { code: "VALIDATION", message: "mode must be one of full|ask|plan|editor", details: { field: "body.mode" } },
+        }),
+      ),
+    );
+    const err = await patchSessionPermissions("sess_1", "yolo" as "plan").catch((e) => e);
+    expect(err).toBeInstanceOf(ApiError);
+    expect(err.details).toEqual({ field: "body.mode" });
+  });
+});
+
+describe("fetchSessionContext (ROUND-50 R50-c1)", () => {
+  const report: SessionContextReport = {
+    model: "test/model-1",
+    providerId: "openrouter",
+    contextWindow: 200_000,
+    usedTokens: 12_345,
+    breakdown: { systemPrompt: 800, systemTools: 4200, memory: 350, messages: 6500, meta: 200, mcpTools: 0 },
+    cache: { inputTokens: 50_000, cachedInputTokens: 41_000, hitRate: 0.82 },
+    sessionTotals: { inputTokens: 50_000, outputTokens: 12_000, requests: 17, costUsd: 0.42 },
+  };
+
+  it("GETs /sessions/:id/context and returns the report verbatim", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse(200, report));
+    vi.stubGlobal("fetch", fetchMock);
+    const result = await fetchSessionContext("sess_1");
+    expect(result).toEqual(report);
+    const [url] = fetchMock.mock.calls[0] as [string, RequestInit];
+    expect(url).toBe("http://sidecar.test/api/v1/sessions/sess_1/context");
+  });
+
+  it("?model= rides the query string (the per-send picker)", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse(200, report));
+    vi.stubGlobal("fetch", fetchMock);
+    await fetchSessionContext("sess_1", "z-ai/glm-5.2:free");
+    const [url] = fetchMock.mock.calls[0] as [string, RequestInit];
+    expect(url).toBe("http://sidecar.test/api/v1/sessions/sess_1/context?model=z-ai%2Fglm-5.2%3Afree");
+  });
+});
+
+describe("composer send passthrough (ROUND-50 R50-c1)", () => {
+  it("httpSessions().sendMessage threads attachments + thinkingLevel into the POST body (and omits defaults)", async () => {
+    // A fresh Response per call (a body can only be read once).
+    const fetchMock = vi.fn().mockImplementation(() =>
+      jsonResponse(200, {
+        assistantMessage: { seq: 2, role: "assistant", agentId: "a", content: "ok", ts: "t" },
+        usage: { agentId: "a", sessionId: "s", provider: "p", model: "m", inputTokens: 1, outputTokens: 1, costUsd: 0, ts: "t" },
+      }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    await httpSessions().sendMessage("sess_1", "review this", {
+      attachments: [{ name: "a.ts", path: "src/a.ts", size: 11, text: "const a=1;" }],
+      thinkingLevel: "high",
+    });
+    const [url] = fetchMock.mock.calls[0] as [string, RequestInit];
+    expect(url).toBe("http://sidecar.test/api/v1/sessions/sess_1/messages");
+    let init = (fetchMock.mock.calls[0] as [string, RequestInit])[1];
+    expect(JSON.parse(init.body as string)).toEqual({
+      content: "review this",
+      attachments: [{ name: "a.ts", path: "src/a.ts", size: 11, text: "const a=1;" }],
+      thinkingLevel: "high",
+    });
+
+    // Defaults are NOT shipped: absent extras → a plain {content} body.
+    fetchMock.mockClear();
+    await httpSessions().sendMessage("sess_1", "plain", { thinkingLevel: "default" });
+    init = (fetchMock.mock.calls[0] as [string, RequestInit])[1];
+    expect(JSON.parse(init.body as string)).toEqual({ content: "plain" });
+  });
+
+  it("streamSessionMessage threads attachments + thinkingLevel into the stream POST body", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response("data: {\"type\":\"done\"}\n\n", {
+        status: 200,
+        headers: { "Content-Type": "text/event-stream" },
+      }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const events: string[] = [];
+    await streamSessionMessage("sess_1", "review this", (e) => events.push(e.type), {
+      model: "test/model-1",
+      thinkingLevel: "max",
+      attachments: [{ name: "spec.md", size: 6, text: "# spec" }],
+    });
+    expect(events).toContain("done");
+    const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    expect(url).toBe("http://sidecar.test/api/v1/sessions/sess_1/messages/stream");
+    expect(JSON.parse(init.body as string)).toEqual({
+      content: "review this",
+      model: "test/model-1",
+      thinkingLevel: "max",
+      attachments: [{ name: "spec.md", size: 6, text: "# spec" }],
+    });
+  });
+});
+
+describe("toProjectChatItems attachment passthrough (ROUND-50 R50-c1)", () => {
+  it("user items carry DISPLAY-ONLY AttachmentRefs — the file text never ships back to the UI", () => {
+    const items = toProjectChatItems([
+      ev(1, "message.user", {
+        role: "user",
+        content: "review these",
+        attachments: [
+          { name: "a.ts", path: "src/a.ts", size: 11, text: "SECRET-FILE-CONTENT" },
+          { name: "logo.png", path: "assets/logo.png", size: 4096, text: null },
+          { name: "no-meta.md" },
+          // Junk entries are dropped, never crash the fold.
+          { path: "no-name.txt" },
+          "garbage",
+        ],
+      }, "agt_scribe"),
+      ev(2, "message.assistant", { role: "assistant", content: "Reviewed." }, "agt_scribe"),
+    ]);
+
+    expect(items.map((i) => i.kind)).toEqual(["user", "turn"]);
+    const user = items[0];
+    if (user.kind !== "user") throw new Error("expected user item");
+    expect(user.content).toBe("review these");
+    expect(user.attachments).toEqual([
+      { name: "a.ts", path: "src/a.ts", size: 11 },
+      { name: "logo.png", path: "assets/logo.png", size: 4096 },
+      { name: "no-meta.md" },
+    ]);
+    // The TEXT is never echoed into the UI item (display-only contract).
+    expect(JSON.stringify(user.attachments)).not.toContain("SECRET-FILE-CONTENT");
+
+    // No attachments on the payload → no attachments key on the item.
+    const plain = toProjectChatItems([ev(1, "message.user", { role: "user", content: "hi" }, "agt_scribe")]);
+    const plainUser = plain[0];
+    if (plainUser.kind !== "user") throw new Error("expected user item");
+    expect(plainUser.attachments).toBeUndefined();
   });
 });

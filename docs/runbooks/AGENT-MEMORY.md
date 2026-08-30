@@ -646,3 +646,24 @@ Format per entry: `N. TITLE (date, source)` → mistake → root cause → rule.
     (hand-applied migrations + hand-seeded rows), never only against fresh
     installs. When a stored "capability" claim contradicts a live report,
     suspect a stale MEMORY before suspecting the code.
+
+69. **A live battery against a SHARED database is only valid under strict
+    single-process hygiene.** (2026-08-30, round-50 battery.) The first
+    battery runs left orphaned sidecar processes (the harness's `kill
+    $SIDECAR` silently failed to reap the backgrounded node process), and a
+    LATER boot's `sweepStaleRunning` then flipped a LIVE session belonging
+    to ANOTHER process to `failed` mid-turn (its last event at sweep time
+    was a tool.use, not a closing assistant message) — the delegation turn
+    then 409'd with "session is failed", sending the orchestrator chasing a
+    phantom status-machine bug through runtime.ts, the SSE close handler,
+    and every `setSessionStatus` call site for half an hour. The product
+    code was CORRECT: one sidecar per DB (the only supported topology — the
+    Tauri shell spawns exactly one) makes the race impossible, and the clean
+    re-run proved queued → running → queued on every turn. RULE: any script
+    that boots a sidecar against a persistent DB must (a) `pkill -f` by
+    exact entrypoint + verify the port is FREE before booting, (b) verify
+    the process actually died after `kill` (check the port, not the exit
+    code), and (c) treat "a status changed but no code path writes that
+    status" as MULTI-PROCESS interference first — grep the writers, and if
+    the only writer is a boot-time sweep, suspect a second boot you didn't
+    know about.

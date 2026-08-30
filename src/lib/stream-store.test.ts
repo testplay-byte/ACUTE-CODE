@@ -337,3 +337,177 @@ describe("stream store sub-agent frames (ROUND-48 R48-e2)", () => {
     expect(getSubAgentLiveEntry(CHILD)?.status).toBe("failed");
   });
 });
+
+// ─── ROUND-50 (R50-b): the child's LIVE raw-stream accumulators ──────────────
+
+describe("stream store sub-agent LIVE raw stream (ROUND-50 R50-b)", () => {
+  it("inner text/thinking deltas + finish usage accumulate per child (streamed shapes)", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        sseResponse([
+          statusFrame({ model: "deepseek/deepseek-chat-v3.1" }),
+          eventFrame({ type: "thinking-delta", sessionId: CHILD, delta: "I should read the file first. " }),
+          eventFrame({ type: "thinking-delta", sessionId: CHILD, delta: "Then edit it." }),
+          eventFrame({ type: "text-delta", sessionId: CHILD, delta: "Reading " }),
+          eventFrame({ type: "text-delta", sessionId: CHILD, delta: "src/auth.ts" }),
+          eventFrame({ type: "tool-call", sessionId: CHILD, toolName: "read_file", argsSummary: "path: src/auth.ts" }),
+          eventFrame({
+            type: "tool-result",
+            sessionId: CHILD,
+            toolName: "read_file",
+            argsSummary: "path: src/auth.ts",
+            ok: true,
+            outputSummary: "42 chars",
+          }),
+          eventFrame({
+            type: "finish",
+            sessionId: CHILD,
+            usage: { inputTokens: 7, outputTokens: 3, totalTokens: 10 },
+          }),
+          { type: "stopped" },
+        ]),
+      ),
+    );
+
+    await useStreamStore.getState().startStream(PARENT, "delegate it");
+
+    const entry = getSubAgentLiveEntry(CHILD);
+    // Flat accumulators: concatenated raw text/thinking + tool count.
+    expect(entry?.liveText).toBe("Reading src/auth.ts");
+    expect(entry?.liveThinking).toBe("I should read the file first. Then edit it.");
+    expect(entry?.liveToolCalls).toBe(1);
+    // Live token counters from the inner finish event (the stats footer).
+    expect(entry?.inputTokens).toBe(7);
+    expect(entry?.outputTokens).toBe(3);
+    // The status frame's model rides the entry (the footer's model line).
+    expect(entry?.model).toBe("deepseek/deepseek-chat-v3.1");
+    expect(entry?.lastActivityTs).toBeGreaterThan(0);
+
+    // The ordered live log: thinking block → text run → tool row (marked ok
+    // by the matching tool-result), interleaved in true arrival order — the
+    // panel renders tool rows BETWEEN the text they interrupt.
+    expect(entry?.liveSteps).toEqual([
+      { type: "thinking", text: "I should read the file first. Then edit it." },
+      { type: "text", text: "Reading src/auth.ts" },
+      { type: "tool", tool: { toolName: "read_file", argsSummary: "path: src/auth.ts", ok: true, outputSummary: "42 chars" } },
+    ]);
+
+    // The parent's own live turn stays untouched (child text ≠ parent text).
+    const slice = useStreamStore.getState().bySession[PARENT];
+    expect(slice?.liveTurn?.streamText).toBe("");
+  });
+
+  it("the SYNC step-snapshot text-delta shape (`text`) accumulates too — fallback children stream as well", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        sseResponse([
+          statusFrame(),
+          eventFrame({ type: "text-delta", sessionId: CHILD, text: "reading the file " }),
+          eventFrame({ type: "text-delta", sessionId: CHILD, text: "Done. Final report." }),
+          { type: "stopped" },
+        ]),
+      ),
+    );
+
+    await useStreamStore.getState().startStream(PARENT, "delegate it");
+
+    expect(getSubAgentLiveEntry(CHILD)?.liveText).toBe("reading the file Done. Final report.");
+  });
+
+  it("a `running` status frame RESETS the transcript accumulators (a retry re-starts) but KEEPS the token sums", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        sseResponse([
+          statusFrame(),
+          eventFrame({ type: "text-delta", sessionId: CHILD, delta: "attempt one text" }),
+          eventFrame({ type: "thinking-delta", sessionId: CHILD, delta: "attempt one thought" }),
+          eventFrame({ type: "tool-call", sessionId: CHILD, toolName: "read_file", argsSummary: "path: a.md" }),
+          eventFrame({
+            type: "finish",
+            sessionId: CHILD,
+            usage: { inputTokens: 7, outputTokens: 3, totalTokens: 10 },
+          }),
+          statusFrame({ status: "failed" }),
+          // The owner clicks Retry → the orchestrator re-runs the child.
+          statusFrame({ status: "running" }),
+          eventFrame({ type: "text-delta", sessionId: CHILD, delta: "attempt two text" }),
+          eventFrame({
+            type: "finish",
+            sessionId: CHILD,
+            usage: { inputTokens: 4, outputTokens: 2, totalTokens: 6 },
+          }),
+          { type: "stopped" },
+        ]),
+      ),
+    );
+
+    await useStreamStore.getState().startStream(PARENT, "delegate it");
+
+    const entry = getSubAgentLiveEntry(CHILD);
+    // RESET RULE: the retry's running frame cleared the transcript view…
+    expect(entry?.liveText).toBe("attempt two text");
+    expect(entry?.liveThinking).toBe("");
+    expect(entry?.liveToolCalls).toBe(0);
+    expect(entry?.liveSteps).toEqual([{ type: "text", text: "attempt two text" }]);
+    // …while the token counters follow the usage ledger's SUM semantics
+    // (usage_events accumulate across attempts, and so does the polled
+    // /subagents row they feed — the live→final handoff stays monotone).
+    expect(entry?.inputTokens).toBe(11);
+    expect(entry?.outputTokens).toBe(5);
+  });
+
+  it("a completed child's frozen live state survives (the panel bridges the poll-lag handoff gap)", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        sseResponse([
+          statusFrame(),
+          eventFrame({ type: "text-delta", sessionId: CHILD, delta: "final report text" }),
+          eventFrame({
+            type: "finish",
+            sessionId: CHILD,
+            usage: { inputTokens: 2, outputTokens: 9, totalTokens: 11 },
+          }),
+          statusFrame({ status: "completed", todosDone: 3, todosTotal: 3 }),
+          { type: "stopped" },
+        ]),
+      ),
+    );
+
+    await useStreamStore.getState().startStream(PARENT, "delegate it");
+
+    // The live accumulators are NOT cleared on completion — the panel keeps
+    // rendering the frozen stream until the polled transcript carries the
+    // final assistant reply, then hides the live segment (SubAgentPanel's
+    // handoff rule).
+    const entry = getSubAgentLiveEntry(CHILD);
+    expect(entry?.status).toBe("completed");
+    expect(entry?.liveText).toBe("final report text");
+    expect(entry?.outputTokens).toBe(9);
+    expect(entry?.todosDone).toBe(3);
+  });
+
+  it("inner text-delta frames for an UNKNOWN child still invent no entry", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        sseResponse([
+          statusFrame(),
+          {
+            type: "subagent-event",
+            sessionId: "sess_unknown_child",
+            parentSessionId: PARENT,
+            inner: { type: "text-delta", sessionId: "sess_unknown_child", delta: "ghost text" },
+          },
+          { type: "stopped" },
+        ]),
+      ),
+    );
+
+    await useStreamStore.getState().startStream(PARENT, "delegate it");
+    expect(getSubAgentLiveEntry("sess_unknown_child")).toBeUndefined();
+  });
+});

@@ -1,6 +1,7 @@
-import { useMemo, useState } from "react";
+import { useMemo, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
+  AlertTriangle,
   ArrowLeft,
   Check,
   Eye,
@@ -9,6 +10,7 @@ import {
   Pencil,
   Plus,
   RefreshCw,
+  Search,
   Trash2,
   X,
   Zap,
@@ -18,13 +20,15 @@ import { withAlpha } from "../dashboard/helpers";
 import { filterModelsForPicker, isFreeModelEntry, useSettingsStore } from "../../lib/settings-store";
 import { isTauri } from "../../lib/sidecar";
 import { nextFreeSlot } from "../../lib/key-pool";
+import { useScrollFade } from "../../lib/useScrollFade";
 import {
   createProvider,
   deleteProvider,
   deleteProviderModelConfig,
   fetchKeyPool,
+  fetchModelsCatalog,
   fetchProviderModelConfig,
-  fetchProviderModels,
+  fetchProviderModelEntries,
   fetchProviders,
   removeKeyPoolSlot,
   setKeyPoolSlot,
@@ -33,6 +37,8 @@ import {
   updateProvider,
   updateProviderModelConfig,
   upsertProviderModelConfig,
+  type CatalogModel,
+  type ProviderModelCatalogEntry,
   type ProviderModelConfig,
   type ProviderModelConfigPatch,
   type ProviderPatch,
@@ -51,12 +57,26 @@ import {
  * > URL, to change the name… and the API key. He can also select the API
  * > format… Anthropic messages / Chat completion / Responses."
  *
- * So: ONE FLAT list of every provider (no built-in/custom groups, no nested
- * pick-a-vendor-inside-a-provider flow). "Add provider" opens a DIALOG that
- * first asks preset-or-custom, then takes name / base URL / API key / API
- * format. Every provider — presets included — is fully editable and
- * deletable (deleting a preset tombstones it so the boot seed doesn't
- * resurrect it; re-adding from the dialog clears the tombstone).
+ * ROUND-50 (R50-d) — the owner's models/providers feedback:
+ *
+ * > "The left sidebar is the one which shows me the providers… and on the
+ * > right side it shows me the details of the providers. Both of them should
+ * > be independent… They will scroll independently from each other. The UI
+ * > of the right side needs to be improved… There is no option to set up
+ * > some advanced details about the models and providers. Configuring the
+ * > models is not that proper. I cannot select the models there, like which
+ * > models I want to add, and I can also not configure the details of the
+ * > models properly, like their input price, output price, cache hit rate
+ * > price, and various other things like those."
+ *
+ * So this round: the tab is a viewport-locked master–detail (the left
+ * provider list and the right detail pane each scroll INDEPENDENTLY — no
+ * shared page scroll), the detail pane is re-sectioned into labeled cards
+ * (Header / Connection / API Key Pool / Models / Danger zone), "Add models"
+ * opens a catalog-driven multi-select picker (with a manual-id fallback for
+ * custom providers), and every model row gets a full configuration dialog
+ * (pricing per Mtok in/out/cache, context window, max output, thinking,
+ * hidden).
  */
 
 /* ── API plumbing ───────────────────────────────────────────────────────────
@@ -128,6 +148,58 @@ const PRESETS: Array<{
 const formatLabel = (id: string | undefined): string =>
   API_FORMATS.find((f) => f.id === id)?.label ?? "Chat completions";
 
+/* ── ROUND-50 (R50-d) shared micro-formatting ─────────────────────────────── */
+
+/** 256000 → "256k ctx", 1048576 → "1.048M ctx" (mono micro-badges). */
+function formatContextWindow(tokens: number | null): string | null {
+  if (tokens === null) return null;
+  if (tokens >= 1_000_000) return `${Number((tokens / 1_000_000).toFixed(2))}M ctx`;
+  return `${Math.round(tokens / 1000)}k ctx`;
+}
+
+/** Compact per-Mtok pricing summary, e.g. "$0.15 in / $0.60 out / $0.02 cache".
+ * Parts that are unknown (null) are simply omitted — never rendered as $0. */
+function formatPricingSummary(model: {
+  inputPricePerMtok: number | null;
+  outputPricePerMtok: number | null;
+  inputPriceCachedPerMtok: number | null;
+}): string | null {
+  const parts: string[] = [];
+  if (model.inputPricePerMtok !== null) parts.push(`$${model.inputPricePerMtok} in`);
+  if (model.outputPricePerMtok !== null) parts.push(`$${model.outputPricePerMtok} out`);
+  if (model.inputPriceCachedPerMtok !== null) parts.push(`$${model.inputPriceCachedPerMtok} cache`);
+  return parts.length > 0 ? parts.join(" / ") : null;
+}
+
+/** Parses a numeric dialog field: "" → null (unknown/inherit), otherwise a
+ * finite number ≥ 0. Returns "invalid" for junk the user must fix. */
+function parseNumericField(raw: string): number | null | "invalid" {
+  const trimmed = raw.trim();
+  if (trimmed === "") return null;
+  const value = Number(trimmed);
+  if (!Number.isFinite(value) || value < 0) return "invalid";
+  return value;
+}
+
+/** The section micro-label the rest of the app uses (uppercase, tracked). */
+function SectionLabel({
+  children,
+  color,
+}: {
+  children: string;
+  color?: string;
+}) {
+  const styles = useThemeStyles();
+  return (
+    <span
+      className="text-[10px] font-bold uppercase tracking-widest"
+      style={{ color: color ?? styles.textTertiary }}
+    >
+      {children}
+    </span>
+  );
+}
+
 /* ── Component ────────────────────────────────────────────────────────────── */
 
 export function ModelsProvidersTab() {
@@ -135,6 +207,11 @@ export function ModelsProvidersTab() {
   const queryClient = useQueryClient();
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [adding, setAdding] = useState(false);
+
+  // ROUND-50 (R50-d): the provider-list scroll column — one of the two
+  // INDEPENDENT scroll containers (the right detail pane is the other).
+  const listScrollRef = useRef<HTMLDivElement | null>(null);
+  useScrollFade(listScrollRef);
 
   const providersQuery = useQuery({
     queryKey: ["settings-providers"],
@@ -152,13 +229,28 @@ export function ModelsProvidersTab() {
   );
 
   return (
-    <div className="flex gap-4 min-h-[480px]">
+    // ROUND-50 (R50-d): viewport-locked master–detail — the tab fills the
+    // settings content area (no shared page scroll); the LEFT provider list
+    // and the RIGHT detail pane each scroll independently.
+    <div className="flex h-full min-h-0 gap-4">
       {/* ── LEFT: the FLAT provider list (ROUND-37: no groups) ─────────── */}
       <div
-        className="w-[280px] shrink-0 rounded-[16px] border-[1.5px] overflow-hidden flex flex-col"
+        className="w-[280px] shrink-0 min-h-0 rounded-[16px] border-[1.5px] overflow-hidden flex flex-col"
         style={{ background: styles.card, borderColor: styles.border }}
       >
-        <div className="flex-1 overflow-y-auto auto-scroll p-1.5">
+        <div
+          className="shrink-0 flex items-center gap-2 px-3.5 py-3 border-b"
+          style={{ borderColor: styles.border }}
+        >
+          <SectionLabel>Providers</SectionLabel>
+          <span className="font-mono text-[10px]" style={{ color: styles.textTertiary }}>
+            {providers.length}
+          </span>
+        </div>
+        <div
+          ref={listScrollRef}
+          className="flex-1 min-h-0 overflow-y-auto auto-scroll p-1.5"
+        >
           {providers.length === 0 && (
             <div className="px-2.5 py-1.5 text-[11px]" style={{ color: styles.textTertiary }}>
               No providers — add one below.
@@ -174,7 +266,7 @@ export function ModelsProvidersTab() {
           ))}
         </div>
         {/* + Add provider → the preset-or-custom DIALOG (owner R37) */}
-        <div className="p-1.5 border-t" style={{ borderColor: styles.border }}>
+        <div className="shrink-0 p-1.5 border-t" style={{ borderColor: styles.border }}>
           <button
             onClick={() => {
               setAdding(true);
@@ -190,20 +282,21 @@ export function ModelsProvidersTab() {
         </div>
       </div>
 
-      {/* ── RIGHT: the detail panel ──────────────────────────────────────── */}
-      <div className="flex-1 min-w-0">
+      {/* ── RIGHT: the detail panel — its OWN scroll container (R50-d) ──── */}
+      <div className="flex-1 min-w-0 min-h-0 flex flex-col">
         {selected ? (
-          <ProviderDetailPane
-            key={selected.id}
-            provider={selected}
-            onChanged={invalidate}
-            onDeleted={() => {
-              setSelectedId(null);
-              invalidate();
-            }}
-          />
+          <DetailScrollArea key={selected.id}>
+            <ProviderDetailPane
+              provider={selected}
+              onChanged={invalidate}
+              onDeleted={() => {
+                setSelectedId(null);
+                invalidate();
+              }}
+            />
+          </DetailScrollArea>
         ) : (
-          <div className="h-full min-h-[480px] grid place-items-center rounded-[16px] border-[1.5px] border-dashed" style={{ borderColor: styles.border }}>
+          <div className="flex-1 min-h-0 grid place-items-center rounded-[16px] border-[1.5px] border-dashed" style={{ borderColor: styles.border }}>
             <div className="text-center px-6">
               <div
                 className="w-12 h-12 mx-auto rounded-[14px] grid place-items-center"
@@ -235,6 +328,20 @@ export function ModelsProvidersTab() {
           }}
         />
       )}
+    </div>
+  );
+}
+
+/** ROUND-50 (R50-d): the RIGHT column's independent scroll container — the
+ * detail pane's cards grow naturally and this area (and ONLY this area)
+ * scrolls; the provider list on the left stays put. Same .auto-scroll +
+ * useScrollFade treatment as every other long panel in the app. */
+function DetailScrollArea({ children }: { children: React.ReactNode }) {
+  const scrollRef = useRef<HTMLDivElement | null>(null);
+  useScrollFade(scrollRef);
+  return (
+    <div ref={scrollRef} className="flex-1 min-h-0 overflow-y-auto auto-scroll pr-1">
+      {children}
     </div>
   );
 }
@@ -308,7 +415,11 @@ function ProviderListRow({
   );
 }
 
-/* ── Right detail pane (ROUND-37: EVERY provider fully editable) ──────────── */
+/* ── Right detail pane (ROUND-37: EVERY provider fully editable) ────────────
+ * ROUND-50 (R50-d): re-sectioned into clearly-labeled cards — Header →
+ * Connection → API Key Pool → Models → Danger zone — with one consistent
+ * spacing rhythm (p-4/p-5 cards, gap-5 between them, uppercase micro-labels
+ * matching the rest of the app). */
 
 function ProviderDetailPane({
   provider,
@@ -358,16 +469,27 @@ function ProviderDetailPane({
     .filter((k) => k.slot > 0 && k.hasKey)
     .map((k) => k.slot);
 
-  // ROUND-47 (R47-c1): the provider's LIVE catalog — feeds the test model
-  // selector AND ModelListSection (hoisted from there; same query key as
-  // before so both keep sharing one cache entry). Fails soft — offline or
-  // custom providers fall back to the configured rows only.
+  // ROUND-50 (R50-d): the provider's LIVE catalog WITH names — feeds the test
+  // model selector AND the "Add models" picker (ids alone can't power a
+  // searchable multi-select). Fails soft — offline or custom providers fall
+  // back to the configured rows + the manual add-by-id path.
   const catalogQuery = useQuery({
     queryKey: ["settings-provider-models-catalog", provider.id],
-    queryFn: () => fetchProviderModels(provider.id),
+    queryFn: () => fetchProviderModelEntries(provider.id),
     retry: false,
   });
-  const catalogIds = catalogQuery.data ?? [];
+  const catalogEntries = catalogQuery.data ?? [];
+  const catalogIds = catalogEntries.map((entry) => entry.id);
+
+  // ROUND-50 (R50-d): the served static catalog (GET /models/catalog) — the
+  // free/paid + pricing metadata the picker pre-fills from. Same query key
+  // as SubAgentsTab/AgentFormDialog (one shared cache entry); fails soft.
+  const staticCatalogQuery = useQuery({
+    queryKey: ["models-catalog"],
+    queryFn: fetchModelsCatalog,
+    retry: false,
+  });
+  const staticCatalog = staticCatalogQuery.data?.models ?? [];
 
   const saveKey = useMutation({
     mutationFn: async (value: string) => {
@@ -440,14 +562,21 @@ function ProviderDetailPane({
   } as const;
 
   return (
-    <div className="flex flex-col gap-4">
-      {/* Header: name (editable for ALL) + Enabled badge + actions */}
+    <div className="flex flex-col gap-5">
+      {/* ── Header: provider identity + status ─────────────────────────── */}
       <div
         className="rounded-[16px] border-[1.5px] p-4 flex items-center gap-3 flex-wrap"
         style={{ background: styles.card, borderColor: styles.border }}
       >
-        {editingName ? (
-          <div className="flex items-center gap-2 flex-1 min-w-[200px]">
+        <span
+          className="w-10 h-10 shrink-0 rounded-[12px] grid place-items-center"
+          style={{ background: withAlpha(styles.accent, 0.1), color: styles.accent }}
+          aria-hidden
+        >
+          <Globe size={17} />
+        </span>
+        <div className="min-w-0 flex-1">
+          {editingName ? (
             <input
               autoFocus
               value={nameDraft}
@@ -471,68 +600,55 @@ function ProviderDetailPane({
                 }
               }}
               aria-label="Provider name"
-              className="h-9 flex-1 rounded-[10px] border-[1.5px] px-3 text-[14px] font-bold outline-none"
+              className="h-9 w-full max-w-[320px] rounded-[10px] border-[1.5px] px-3 text-[14px] font-bold outline-none"
               style={inputStyle}
             />
-          </div>
-        ) : (
-          <button
-            onClick={() => setEditingName(true)}
-            className="flex items-center gap-2 min-w-0"
-            title="Click to rename"
-          >
-            <span className="text-[16px] font-black truncate" style={{ color: styles.text }}>
-              {provider.name}
-            </span>
-            <Pencil size={12} style={{ color: styles.textTertiary }} />
-          </button>
-        )}
-        <span className="flex-1" />
-        {/* Enabled badge + Disable/Enable (every provider) */}
-        <>
+          ) : (
+            <button
+              onClick={() => setEditingName(true)}
+              className="flex items-center gap-2 min-w-0"
+              title="Click to rename"
+            >
+              <span className="text-[16px] font-black truncate" style={{ color: styles.text }}>
+                {provider.name}
+              </span>
+              <Pencil size={12} style={{ color: styles.textTertiary }} />
+            </button>
+          )}
           <span
-            className="px-2 py-0.5 rounded-full text-[10px] font-bold"
-            style={{
-              background: provider.enabled ? withAlpha("#22c55e", 0.12) : styles.subtle,
-              color: provider.enabled ? "#22c55e" : styles.textTertiary,
-            }}
+            className="block truncate font-mono text-[10px]"
+            style={{ color: styles.textTertiary }}
+            title={`${provider.baseUrl ?? "no url"} · ${formatLabel(provider.apiFormat)}`}
           >
-            {provider.enabled ? "● Enabled" : "○ Disabled"}
+            {provider.baseUrl ?? "no url"} · {formatLabel(provider.apiFormat)}
           </span>
-          <button
-            onClick={() => saveDetails.mutate({ enabled: !provider.enabled })}
-            className="text-[11px] font-bold underline"
-            style={{ color: styles.textSecondary }}
-          >
-            {provider.enabled ? "Disable" : "Enable"}
-          </button>
-          <button
-            onClick={() => {
-              if (confirmDelete) {
-                removeProvider.mutate();
-              } else {
-                setConfirmDelete(true);
-                setTimeout(() => setConfirmDelete(false), 3000);
-              }
-            }}
-            aria-label={`Delete provider ${provider.name}`}
-            title="Delete provider"
-            className="h-7 px-2.5 rounded-[8px] text-[11px] font-bold flex items-center gap-1.5 transition-colors"
-            style={
-              confirmDelete
-                ? { background: "#ef4444", color: "#fff" }
-                : { color: styles.textTertiary }
-            }
-            onMouseEnter={(e) => {
-              if (!confirmDelete) e.currentTarget.style.background = withAlpha("#ef4444", 0.12);
-            }}
-            onMouseLeave={(e) => {
-              if (!confirmDelete) e.currentTarget.style.background = "transparent";
-            }}
-          >
-            <Trash2 size={12} /> {confirmDelete ? "Confirm delete" : "Delete"}
-          </button>
-        </>
+        </div>
+        {/* Enabled badge + key badge + Enable/Disable (every provider) */}
+        <span
+          className="px-2 py-0.5 rounded-full text-[10px] font-bold"
+          style={{
+            background: provider.enabled ? withAlpha("#22c55e", 0.12) : styles.subtle,
+            color: provider.enabled ? "#22c55e" : styles.textTertiary,
+          }}
+        >
+          {provider.enabled ? "● Enabled" : "○ Disabled"}
+        </span>
+        <span
+          className="px-2 py-0.5 rounded-full text-[10px] font-bold"
+          style={{
+            background: provider.hasKey ? withAlpha("#22c55e", 0.12) : styles.subtle,
+            color: provider.hasKey ? "#22c55e" : styles.textTertiary,
+          }}
+        >
+          {provider.hasKey ? "● Key stored" : "○ No key"}
+        </span>
+        <button
+          onClick={() => saveDetails.mutate({ enabled: !provider.enabled })}
+          className="text-[11px] font-bold underline"
+          style={{ color: styles.textSecondary }}
+        >
+          {provider.enabled ? "Disable" : "Enable"}
+        </button>
         {saveMsg && (
           <span className="text-[11px] font-bold" style={{ color: styles.accent }}>
             {saveMsg}
@@ -540,14 +656,12 @@ function ProviderDetailPane({
         )}
       </div>
 
-      {/* Connection card: base URL + api format + key + test */}
+      {/* ── Connection: base URL / API format / key + test ─────────────── */}
       <div
-        className="rounded-[16px] border-[1.5px] p-4 flex flex-col gap-4"
+        className="rounded-[16px] border-[1.5px] p-4 md:p-5 flex flex-col gap-4"
         style={{ background: styles.card, borderColor: styles.border }}
       >
-        <span className="text-[10px] font-bold uppercase tracking-widest" style={{ color: styles.textTertiary }}>
-          Connection
-        </span>
+        <SectionLabel>Connection</SectionLabel>
         {/* Base URL (editable for ALL — owner R37) */}
         <div>
           <label className="mb-1.5 block text-[11px] font-bold" style={{ color: styles.textSecondary }}>
@@ -653,14 +767,11 @@ function ProviderDetailPane({
             </p>
           )}
         </div>
-        {/* ── ROUND-36: the API key POOL (sub-agent keys) ─────────────── */}
-        <KeyPoolSection providerId={provider.id} />
-
         {/* Test connection — ROUND-47 (R47-c1): WHICH key + WHICH model are
             explicit now (key selector over the primary + held pool slots,
             model selector over the live catalog; "(reachability only)" is
             the honest default — a cheap ping that does NOT prove the key). */}
-        <div className="flex items-center gap-2.5 flex-wrap">
+        <div className="flex items-center gap-2.5 flex-wrap pt-1">
           <select
             aria-label="Test key"
             title="Which key the probe uses"
@@ -683,7 +794,7 @@ function ProviderDetailPane({
             title="A model upgrades the ping to a real one-token completion"
             value={testModel}
             onChange={(e) => setTestModel(e.target.value)}
-            disabled={catalogQuery.isFetching && catalogIds.length === 0}
+            disabled={catalogQuery.isFetching && catalogEntries.length === 0}
             className="h-9 max-w-[260px] rounded-[10px] border-[1.5px] px-2 text-[11.5px] font-bold outline-none cursor-pointer disabled:opacity-50"
             style={{ background: styles.bg, borderColor: styles.border, color: styles.textSecondary }}
           >
@@ -733,17 +844,82 @@ function ProviderDetailPane({
         </div>
       </div>
 
-      {/* Model list — ROUND-47 (R47-c1): the live catalog query lives in the
-          detail pane now (the test model selector shares it); passed down. */}
+      {/* ── API key pool (its own section now — R50-d) ─────────────────── */}
+      <div
+        className="rounded-[16px] border-[1.5px] p-4 md:p-5 flex flex-col gap-3"
+        style={{ background: styles.card, borderColor: styles.border }}
+      >
+        <div>
+          <SectionLabel>API key pool</SectionLabel>
+          <p className="mt-1 text-[11px]" style={{ color: styles.textTertiary }}>
+            Dedicated keys for sub-agents — the primary stays free for your main chats.
+          </p>
+        </div>
+        {/* ROUND-36 (ADR-0022): the per-provider API key pool */}
+        <KeyPoolSection providerId={provider.id} hideLabel />
+      </div>
+
+      {/* ── Models (the reworked ModelListSection — R50-d) ─────────────── */}
       <ModelListSection
         providerId={provider.id}
         models={models}
         catalog={{
-          ids: catalogIds,
+          entries: catalogEntries,
           isFetching: catalogQuery.isFetching,
           isError: catalogQuery.isError,
         }}
+        staticCatalog={staticCatalog}
       />
+
+      {/* ── Danger zone: delete provider (moved out of the header — R50-d) */}
+      <div
+        className="rounded-[16px] border-[1.5px] p-4 md:p-5 flex items-center gap-4 flex-wrap"
+        style={{
+          background: withAlpha("#ef4444", 0.03),
+          borderColor: withAlpha("#ef4444", 0.25),
+        }}
+      >
+        <span
+          className="w-9 h-9 shrink-0 rounded-[10px] grid place-items-center"
+          style={{ background: withAlpha("#ef4444", 0.1), color: "#ef4444" }}
+          aria-hidden
+        >
+          <AlertTriangle size={15} />
+        </span>
+        <div className="min-w-0 flex-1">
+          <SectionLabel color="#ef4444">Danger zone</SectionLabel>
+          <p className="mt-1 text-[11.5px]" style={{ color: styles.textSecondary }}>
+            Deletes the provider, its stored key, and every model override. Agents still using
+            it must be reassigned first.
+          </p>
+        </div>
+        <button
+          onClick={() => {
+            if (confirmDelete) {
+              removeProvider.mutate();
+            } else {
+              setConfirmDelete(true);
+              setTimeout(() => setConfirmDelete(false), 3000);
+            }
+          }}
+          aria-label={`Delete provider ${provider.name}`}
+          title="Delete provider"
+          className="h-9 px-3.5 rounded-[10px] text-[12px] font-bold flex items-center gap-1.5 transition-colors shrink-0"
+          style={
+            confirmDelete
+              ? { background: "#ef4444", color: "#fff" }
+              : { border: `1.5px solid ${withAlpha("#ef4444", 0.5)}`, color: "#ef4444" }
+          }
+          onMouseEnter={(e) => {
+            if (!confirmDelete) e.currentTarget.style.background = withAlpha("#ef4444", 0.12);
+          }}
+          onMouseLeave={(e) => {
+            if (!confirmDelete) e.currentTarget.style.background = "transparent";
+          }}
+        >
+          <Trash2 size={12} /> {confirmDelete ? "Confirm delete" : "Delete provider"}
+        </button>
+      </div>
     </div>
   );
 }
@@ -1047,43 +1223,62 @@ function AddProviderDialog({
 
 /** One row in the Settings model list: a DB override row (configured) and/or
  * a live-fetched catalog entry. Configured rows carry the server row id and
- * are editable; catalog-only entries render read-only until configured. */
+ * are fully editable; catalog-only entries render read-only until configured
+ * (ROUND-50: enriched with the served catalog's pricing/ctx preview). */
 interface MergedModel {
   /** Server models-table row id — null for catalog-only entries. */
   rowId: string | null;
   modelId: string;
   displayName: string;
   contextWindow: number | null;
+  maxOutputTokens: number | null;
   inputPricePerMtok: number | null;
+  inputPriceCachedPerMtok: number | null;
   outputPricePerMtok: number | null;
+  supportsThinking: boolean;
+  hidden: boolean;
   configured: boolean;
 }
 
-/** DB override rows enriched with live catalog ids (round-43: the list shows
- * the provider's real models so the free-only filter is meaningful). */
+/** DB override rows enriched with live catalog entries (round-43: the list
+ * shows the provider's real models so the free-only filter is meaningful).
+ * ROUND-50 (R50-d): catalog-only rows get the served static catalog's
+ * pricing/context as a READ-ONLY preview (until configured, nothing is
+ * stored — the preview comes from GET /models/catalog constants). */
 function mergeCatalogIntoModels(
   configured: ProviderModelConfig[],
   catalogIds: string[],
+  staticCatalog: CatalogModel[],
 ): MergedModel[] {
+  const staticById = new Map(staticCatalog.map((m) => [m.modelId, m]));
   const merged: MergedModel[] = configured.map((m) => ({
     rowId: m.id,
     modelId: m.modelId,
     displayName: m.displayName || m.modelId,
     contextWindow: m.contextWindow,
+    maxOutputTokens: m.maxOutputTokens,
     inputPricePerMtok: m.inputPricePerMtok,
+    inputPriceCachedPerMtok: m.inputPriceCachedPerMtok,
     outputPricePerMtok: m.outputPricePerMtok,
+    supportsThinking: m.supportsThinking,
+    hidden: m.hidden,
     configured: true,
   }));
   const seen = new Set(configured.map((m) => m.modelId));
   for (const id of catalogIds) {
     if (seen.has(id)) continue;
+    const meta = staticById.get(id);
     merged.push({
       rowId: null,
       modelId: id,
-      displayName: id,
-      contextWindow: null,
-      inputPricePerMtok: null,
-      outputPricePerMtok: null,
+      displayName: meta?.displayName ?? id,
+      contextWindow: meta?.contextWindow ?? null,
+      maxOutputTokens: meta?.maxOutputTokens ?? null,
+      inputPricePerMtok: meta?.inputPricePerMtok ?? null,
+      inputPriceCachedPerMtok: meta?.inputPriceCachedPerMtok ?? null,
+      outputPricePerMtok: meta?.outputPricePerMtok ?? null,
+      supportsThinking: false,
+      hidden: false,
       configured: false,
     });
   }
@@ -1091,9 +1286,10 @@ function mergeCatalogIntoModels(
 }
 
 /** The provider's LIVE catalog, passed down from the detail pane (ROUND-47
- * R47-c1: hoisted so the connection-test model selector shares the query). */
+ * R47-c1: hoisted so the connection-test model selector shares the query;
+ * ROUND-50 R50-d: entries now carry display names for the picker). */
 interface ProviderCatalogState {
-  ids: string[];
+  entries: ProviderModelCatalogEntry[];
   isFetching: boolean;
   isError: boolean;
 }
@@ -1102,18 +1298,19 @@ function ModelListSection({
   providerId,
   models,
   catalog,
+  staticCatalog,
 }: {
   providerId: string;
   models: ProviderModelConfig[];
   catalog: ProviderCatalogState;
+  staticCatalog: CatalogModel[];
 }) {
   const styles = useThemeStyles();
   const queryClient = useQueryClient();
-  const [adding, setAdding] = useState(false);
-  const [newModelId, setNewModelId] = useState("");
-  const [newDisplayName, setNewDisplayName] = useState("");
-  const [editingId, setEditingId] = useState<string | null>(null);
-  const [editDraft, setEditDraft] = useState({ displayName: "", contextWindow: "" });
+  // ROUND-50 (R50-d): the "Add models" picker dialog + the per-model
+  // configuration dialog (replaces the inline type-an-id row editor).
+  const [pickerOpen, setPickerOpen] = useState(false);
+  const [configuring, setConfiguring] = useState<ProviderModelConfig | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   // ROUND-43 (owner: "free-only model filter"): shared persisted pref — the
@@ -1121,46 +1318,14 @@ function ModelListSection({
   const modelsFreeOnly = useSettingsStore((s) => s.modelsFreeOnly);
   const setModelsFreeOnly = useSettingsStore((s) => s.setModelsFreeOnly);
 
-  // The live catalog arrives as a prop now (same route the chat picker uses;
-  // fails soft — offline/custom providers fall back to the configured rows).
-  const catalogIds = catalog.ids;
+  const catalogIds = catalog.entries.map((entry) => entry.id);
 
-  const merged = mergeCatalogIntoModels(models, catalogIds);
+  const merged = mergeCatalogIntoModels(models, catalogIds, staticCatalog);
   const visible = filterModelsForPicker(merged, modelsFreeOnly);
   const freeCount = filterModelsForPicker(merged, true).length;
 
   const invalidate = () =>
     void queryClient.invalidateQueries({ queryKey: ["settings-provider-models", providerId] });
-
-  const addModel = useMutation({
-    mutationFn: () =>
-      upsertProviderModelConfig(providerId, {
-        modelId: newModelId.trim(),
-        ...(newDisplayName.trim() ? { displayName: newDisplayName.trim() } : {}),
-      }),
-    onSuccess: () => {
-      setAdding(false);
-      setNewModelId("");
-      setNewDisplayName("");
-      setError(null);
-      invalidate();
-    },
-    onError: (err: Error) => setError(err.message),
-  });
-
-  const updateModel = useMutation({
-    // Only invoked from the edit row, where editingId is the row's id — the
-    // guard keeps the promise typed without inventing a "/models/null" URL.
-    mutationFn: (patch: ProviderModelConfigPatch) =>
-      editingId === null
-        ? Promise.reject(new Error("no model row is being edited"))
-        : updateProviderModelConfig(editingId, patch),
-    onSuccess: () => {
-      setEditingId(null);
-      invalidate();
-    },
-    onError: (err: Error) => setError(err.message),
-  });
 
   const deleteModel = useMutation({
     mutationFn: (id: string) => deleteProviderModelConfig(id),
@@ -1171,8 +1336,9 @@ function ModelListSection({
   return (
     <div className="rounded-[16px] border-[1.5px] overflow-hidden" style={{ background: styles.card, borderColor: styles.border }}>
       <div className="flex items-center gap-2 px-4 py-3 border-b flex-wrap" style={{ borderColor: styles.border }}>
-        <span className="text-[10px] font-bold uppercase tracking-widest" style={{ color: styles.textTertiary }}>
-          Models ({modelsFreeOnly ? `${freeCount} free of ${merged.length}` : `${merged.length}`})
+        <SectionLabel>Models</SectionLabel>
+        <span className="font-mono text-[10px]" style={{ color: styles.textTertiary }}>
+          {modelsFreeOnly ? `${freeCount} free of ${merged.length}` : `${merged.length}`}
         </span>
         <span className="flex-1" />
         {/* ROUND-43 (owner directive): "Free only | All models" — free is the
@@ -1202,121 +1368,49 @@ function ModelListSection({
             </button>
           ))}
         </div>
+        {/* ROUND-50 (R50-d): "Add models" opens the catalog picker dialog
+            (multi-select from the provider's live catalog, with a manual
+            add-by-id fallback) — replacing the type-an-id inline form. */}
         <button
-          onClick={() => setAdding((v) => !v)}
+          onClick={() => setPickerOpen(true)}
           className="h-7 px-2.5 rounded-full text-[11px] font-bold flex items-center gap-1"
           style={{ background: withAlpha(styles.accent, 0.1), color: styles.accent }}
         >
-          <Plus size={11} strokeWidth={2.5} /> Add model
+          <Plus size={11} strokeWidth={2.5} /> Add models
         </button>
       </div>
 
-      {adding && (
-        <div className="px-4 py-3 border-b flex flex-col gap-2" style={{ borderColor: styles.border, background: withAlpha(styles.accent, 0.03) }}>
-          <div className="flex gap-2 flex-wrap">
-            <input
-              autoFocus
-              value={newModelId}
-              onChange={(e) => setNewModelId(e.target.value)}
-              placeholder="model id, e.g. openai/gpt-4o-mini"
-              aria-label="Model id"
-              className="h-9 flex-1 min-w-[200px] rounded-[10px] border-[1.5px] px-3 font-mono text-[12px] outline-none"
-              style={{ background: styles.bg, borderColor: styles.border, color: styles.text }}
-            />
-            <input
-              value={newDisplayName}
-              onChange={(e) => setNewDisplayName(e.target.value)}
-              placeholder="display name (optional)"
-              aria-label="Display name"
-              className="h-9 flex-1 min-w-[160px] rounded-[10px] border-[1.5px] px-3 text-[12px] outline-none"
-              style={{ background: styles.bg, borderColor: styles.border, color: styles.text }}
-            />
-            <button
-              onClick={() => addModel.mutate()}
-              disabled={!newModelId.trim() || addModel.isPending}
-              className="h-9 px-3.5 rounded-[10px] text-[12px] font-bold disabled:opacity-50"
-              style={{ background: styles.accent, color: styles.accentText }}
-            >
-              Add
-            </button>
-            <button
-              onClick={() => setAdding(false)}
-              aria-label="Cancel add model"
-              className="w-9 h-9 grid place-items-center rounded-[10px]"
-              style={{ color: styles.textTertiary }}
-            >
-              <X size={13} />
-            </button>
-          </div>
-          {error && <p className="text-[11px]" style={{ color: "#ef4444" }}>{error}</p>}
+      {error && (
+        <div className="px-4 py-2 border-b text-[11px]" style={{ borderColor: styles.border, color: "#ef4444" }}>
+          {error}
         </div>
       )}
 
-      {merged.length === 0 && !adding ? (
+      {merged.length === 0 ? (
         <div className="px-4 py-6 text-center text-[12px]" style={{ color: styles.textTertiary }}>
           {catalog.isFetching
             ? "Fetching the provider catalog…"
             : catalog.isError
-              ? "No models configured and the live catalog is unreachable — add entries by hand."
-              : "No models configured — fetched catalog models appear in pickers automatically; add entries here to override pricing or context size."}
+              ? "No models configured and the live catalog is unreachable — use “Add models” to add entries by id."
+              : "No models yet — use “Add models” to pick from the provider's catalog."}
         </div>
-      ) : visible.length === 0 && !adding ? (
+      ) : visible.length === 0 ? (
         <div className="px-4 py-6 text-center text-[12px]" style={{ color: styles.textTertiary }}>
           No free models on this provider — switch to “All models” to see the full list.
         </div>
       ) : (
-        <div className="max-h-72 overflow-y-auto auto-scroll">
+        <div>
           {visible.map((m) => (
             <div
               key={m.rowId ?? `cat:${m.modelId}`}
               className="flex items-center gap-3 px-4 py-2.5 border-b last:border-b-0"
               style={{ borderColor: styles.borderSubtle }}
             >
-              {editingId === m.rowId ? (
-                <>
-                  <input
-                    autoFocus
-                    value={editDraft.displayName}
-                    onChange={(e) => setEditDraft((d) => ({ ...d, displayName: e.target.value }))}
-                    aria-label="Model display name"
-                    className="h-8 flex-1 min-w-0 rounded-[8px] border-[1.5px] px-2.5 text-[12px] outline-none"
-                    style={{ background: styles.bg, borderColor: styles.border, color: styles.text }}
-                  />
-                  <input
-                    value={editDraft.contextWindow}
-                    onChange={(e) => setEditDraft((d) => ({ ...d, contextWindow: e.target.value }))}
-                    placeholder="ctx"
-                    aria-label="Context window tokens"
-                    className="h-8 w-24 rounded-[8px] border-[1.5px] px-2.5 font-mono text-[11px] outline-none"
-                    style={{ background: styles.bg, borderColor: styles.border, color: styles.text }}
-                  />
-                  <button
-                    onClick={() => {
-                      const patch: ProviderModelConfigPatch = {};
-                      if (editDraft.displayName.trim()) patch.displayName = editDraft.displayName.trim();
-                      const ctx = Number(editDraft.contextWindow);
-                      if (Number.isInteger(ctx) && ctx > 0) patch.contextWindow = ctx;
-                      updateModel.mutate(patch);
-                    }}
-                    className="w-7 h-7 grid place-items-center rounded-[8px]"
-                    style={{ background: withAlpha("#22c55e", 0.12), color: "#22c55e" }}
-                    aria-label="Save model"
-                  >
-                    <Check size={12} />
-                  </button>
-                  <button
-                    onClick={() => setEditingId(null)}
-                    className="w-7 h-7 grid place-items-center rounded-[8px]"
-                    style={{ color: styles.textTertiary }}
-                    aria-label="Cancel edit"
-                  >
-                    <X size={12} />
-                  </button>
-                </>
-              ) : (
-                <>
+              {/* left: name + badges / id + pricing summary (R50-d) */}
+              <div className="min-w-0 flex-1 flex flex-col gap-0.5">
+                <div className="flex items-center gap-1.5 min-w-0 flex-wrap">
                   <span
-                    className="min-w-0 flex-1 truncate font-mono text-[12px]"
+                    className="truncate text-[12.5px] font-semibold"
                     style={{ color: m.configured ? styles.text : styles.textSecondary }}
                     title={m.modelId}
                   >
@@ -1330,77 +1424,806 @@ function ModelListSection({
                       FREE
                     </span>
                   )}
-                  {m.contextWindow !== null && (
+                  {m.supportsThinking && (
                     <span
-                      className="shrink-0 px-1.5 py-0.5 rounded-full font-mono text-[10px]"
+                      className="shrink-0 px-1.5 py-0.5 rounded-full text-[10px] font-bold"
                       style={{ background: styles.subtle, color: styles.textTertiary }}
+                      title="Supports thinking / reasoning output"
                     >
-                      {m.contextWindow >= 1_000_000 ? `${m.contextWindow / 1_000_000}M ctx` : `${Math.round(m.contextWindow / 1000)}k ctx`}
+                      THINKING
                     </span>
                   )}
-                  {m.inputPricePerMtok !== null && (
-                    <span className="shrink-0 font-mono text-[10px]" style={{ color: styles.textTertiary }}>
-                      ${m.inputPricePerMtok}/${m.outputPricePerMtok ?? 0} per 1M
+                  {m.hidden && (
+                    <span
+                      className="shrink-0 px-1.5 py-0.5 rounded-full text-[10px] font-bold"
+                      style={{ background: styles.subtle, color: styles.textTertiary }}
+                      title="Hidden from the chat model picker (still visible here)"
+                    >
+                      HIDDEN
                     </span>
                   )}
                   {!m.configured && (
                     <span
                       className="shrink-0 px-1.5 py-0.5 rounded-full font-mono text-[10px]"
                       style={{ background: styles.subtle, color: styles.textTertiary }}
-                      title="Live catalog entry — use “Add model” to create a pricing/context override"
+                      title="Live catalog entry — use “Add models” to store a configuration for it"
                     >
                       catalog
                     </span>
                   )}
-                  {m.configured && m.rowId !== null && (
-                    <>
-                      <button
-                        onClick={() => {
-                          setEditingId(m.rowId);
-                          setEditDraft({
-                            displayName: m.displayName,
-                            contextWindow: m.contextWindow !== null ? String(m.contextWindow) : "",
-                          });
-                        }}
-                        aria-label={`Edit model ${m.displayName || m.modelId}`}
-                        title="Edit"
-                        className="w-7 h-7 grid place-items-center rounded-[8px] shrink-0"
-                        style={{ color: styles.textTertiary }}
-                      >
-                        <Pencil size={12} />
-                      </button>
-                      <button
-                        onClick={() => {
-                          if (window.confirm(`Delete model "${m.displayName || m.modelId}"?`)) deleteModel.mutate(m.rowId!);
-                        }}
-                        aria-label={`Delete model ${m.displayName || m.modelId}`}
-                        title="Delete"
-                        className="w-7 h-7 grid place-items-center rounded-[8px] shrink-0"
-                        style={{ color: styles.textTertiary }}
-                        onMouseEnter={(e) => (e.currentTarget.style.background = withAlpha("#ef4444", 0.12))}
-                        onMouseLeave={(e) => (e.currentTarget.style.background = "transparent")}
-                      >
-                        <Trash2 size={12} />
-                      </button>
-                    </>
+                </div>
+                <div className="flex items-center gap-2 min-w-0 flex-wrap">
+                  <span
+                    className="truncate font-mono text-[10px]"
+                    style={{ color: styles.textTertiary }}
+                  >
+                    {m.modelId}
+                  </span>
+                  {m.contextWindow !== null && (
+                    <span
+                      className="shrink-0 px-1.5 py-0.5 rounded-full font-mono text-[10px]"
+                      style={{ background: styles.subtle, color: styles.textTertiary }}
+                    >
+                      {formatContextWindow(m.contextWindow)}
+                    </span>
                   )}
-                </>
+                  {/* compact pricing summary — mono micro-type (R50-d) */}
+                  {formatPricingSummary(m) !== null ? (
+                    <span className="shrink-0 font-mono text-[10px]" style={{ color: styles.textTertiary }}>
+                      {formatPricingSummary(m)}
+                    </span>
+                  ) : (
+                    <span className="shrink-0 font-mono text-[10px] italic" style={{ color: styles.textTertiary, opacity: 0.7 }}>
+                      pricing not set
+                    </span>
+                  )}
+                </div>
+              </div>
+              {m.configured && m.rowId !== null && (
+                <div className="flex items-center gap-1 shrink-0">
+                  {/* ROUND-50 (R50-d): the full configuration dialog — pricing,
+                      context window, max output, thinking, hidden. */}
+                  <button
+                    onClick={() => {
+                      const row = models.find((row) => row.id === m.rowId);
+                      if (row) setConfiguring(row);
+                    }}
+                    aria-label={`Configure model ${m.displayName || m.modelId}`}
+                    title="Configure — pricing, context window, limits"
+                    className="h-7 px-2 grid place-items-center rounded-[8px] shrink-0 text-[11px] font-bold"
+                    style={{ color: styles.textSecondary }}
+                    onMouseEnter={(e) => (e.currentTarget.style.background = withAlpha(styles.accent, 0.1))}
+                    onMouseLeave={(e) => (e.currentTarget.style.background = "transparent")}
+                  >
+                    <Pencil size={12} />
+                  </button>
+                  <button
+                    onClick={() => {
+                      if (window.confirm(`Delete model "${m.displayName || m.modelId}"?`)) deleteModel.mutate(m.rowId!);
+                    }}
+                    aria-label={`Delete model ${m.displayName || m.modelId}`}
+                    title="Delete"
+                    className="w-7 h-7 grid place-items-center rounded-[8px] shrink-0"
+                    style={{ color: styles.textTertiary }}
+                    onMouseEnter={(e) => (e.currentTarget.style.background = withAlpha("#ef4444", 0.12))}
+                    onMouseLeave={(e) => (e.currentTarget.style.background = "transparent")}
+                  >
+                    <Trash2 size={12} />
+                  </button>
+                </div>
               )}
             </div>
           ))}
         </div>
       )}
+
+      {/* ROUND-50 (R50-d): the catalog-driven picker + the per-model config
+          dialog. Both invalidate THIS provider's models query on change. */}
+      {pickerOpen && (
+        <AddModelsDialog
+          providerId={providerId}
+          catalog={catalog}
+          staticCatalog={staticCatalog}
+          configuredIds={new Set(models.map((m) => m.modelId))}
+          onClose={() => setPickerOpen(false)}
+          onChanged={() => {
+            invalidate();
+            setError(null);
+          }}
+        />
+      )}
+      {configuring && (
+        <ModelConfigDialog
+          model={configuring}
+          onClose={() => setConfiguring(null)}
+          onSaved={() => {
+            invalidate();
+            setConfiguring(null);
+          }}
+        />
+      )}
     </div>
   );
 }
 
-/* ── New provider pane (the "+ Add provider" draft) ───────────────────────── */
+/* ── ROUND-50 (R50-d): the "Add models" catalog picker dialog ─────────────── */
+
+function AddModelsDialog({
+  providerId,
+  catalog,
+  staticCatalog,
+  configuredIds,
+  onClose,
+  onChanged,
+}: {
+  providerId: string;
+  catalog: ProviderCatalogState;
+  staticCatalog: CatalogModel[];
+  configuredIds: Set<string>;
+  onClose: () => void;
+  onChanged: () => void;
+}) {
+  const styles = useThemeStyles();
+  const [query, setQuery] = useState("");
+  const [selected, setSelected] = useState<Set<string>>(new Set());
+  const [manualId, setManualId] = useState("");
+  const [error, setError] = useState<string | null>(null);
+  const [notice, setNotice] = useState<string | null>(null);
+
+  const staticById = useMemo(
+    () => new Map(staticCatalog.map((m) => [m.modelId, m])),
+    [staticCatalog],
+  );
+
+  const q = query.trim().toLowerCase();
+  const rows = catalog.entries
+    .filter(
+      (entry) =>
+        q === "" ||
+        entry.id.toLowerCase().includes(q) ||
+        entry.name.toLowerCase().includes(q),
+    )
+    .slice(0, 300); // sanity cap — the live OpenRouter catalog is huge
+
+  const toggle = (id: string) => {
+    setSelected((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  };
+
+  /** One upsert per selected model — known pricing/context is pre-filled
+   * from the served catalog so the row lands fully configured. Failures are
+   * collected (allSettled) and surfaced honestly; ONE invalidation after. */
+  const addSelected = useMutation({
+    mutationFn: async (): Promise<{ added: number; failed: number; firstError?: string }> => {
+      const ids = [...selected];
+      const results = await Promise.allSettled(
+        ids.map((id) => {
+          const meta = staticById.get(id);
+          const entry = catalog.entries.find((e) => e.id === id);
+          return upsertProviderModelConfig(providerId, {
+            modelId: id,
+            // Prefer the provider's OWN name; fall back to the catalog's.
+            displayName:
+              entry && entry.name !== "" && entry.name !== id
+                ? entry.name
+                : meta?.displayName,
+            ...(meta
+              ? {
+                  contextWindow: meta.contextWindow,
+                  maxOutputTokens: meta.maxOutputTokens,
+                  inputPricePerMtok: meta.inputPricePerMtok,
+                  inputPriceCachedPerMtok: meta.inputPriceCachedPerMtok,
+                  outputPricePerMtok: meta.outputPricePerMtok,
+                }
+              : {}),
+          });
+        }),
+      );
+      const failures = results.filter(
+        (r): r is PromiseRejectedResult => r.status === "rejected",
+      );
+      return {
+        added: ids.length - failures.length,
+        failed: failures.length,
+        firstError:
+          failures.length > 0
+            ? failures[0].reason instanceof Error
+              ? failures[0].reason.message
+              : String(failures[0].reason)
+            : undefined,
+      };
+    },
+    onSuccess: ({ added, failed, firstError }) => {
+      setSelected(new Set());
+      onChanged();
+      if (failed === 0) {
+        onClose();
+        return;
+      }
+      setError(
+        `Added ${added}, failed ${failed} — ${firstError ?? "unknown error"}`,
+      );
+    },
+    onError: (err: Error) => setError(err.message),
+  });
+
+  /** The manual path (owner: ids not in the catalog) — one upsert by id. */
+  const addManual = useMutation({
+    mutationFn: () =>
+      upsertProviderModelConfig(providerId, { modelId: manualId.trim() }),
+    onSuccess: (model) => {
+      setManualId("");
+      setNotice(`Added ${model.modelId}.`);
+      setError(null);
+      onChanged();
+    },
+    onError: (err: Error) => {
+      setNotice(null);
+      setError(err.message);
+    },
+  });
+
+  const inputStyle = {
+    background: styles.bg,
+    borderColor: styles.border,
+    color: styles.text,
+  } as const;
+
+  return (
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center p-6"
+      style={{ background: "rgba(0,0,0,0.35)", backdropFilter: "blur(4px)" }}
+      role="dialog"
+      aria-modal="true"
+      aria-label="Add models"
+      onClick={(e) => {
+        if (e.target === e.currentTarget) onClose();
+      }}
+    >
+      <div
+        className="w-full max-w-[560px] max-h-[82vh] rounded-[20px] border-[1.5px] flex flex-col overflow-hidden"
+        style={{ background: styles.card, borderColor: styles.border, boxShadow: styles.bentoShadow }}
+      >
+        {/* header */}
+        <div className="flex items-center gap-2 px-5 pt-4 pb-3 shrink-0">
+          <span className="text-[15px] font-black" style={{ color: styles.text }}>
+            Add models
+          </span>
+          <span className="flex-1" />
+          <button
+            onClick={onClose}
+            aria-label="Close"
+            className="w-7 h-7 grid place-items-center rounded-[8px]"
+            style={{ color: styles.textTertiary }}
+          >
+            <X size={14} />
+          </button>
+        </div>
+        <p className="px-5 pb-3 text-[11.5px] shrink-0" style={{ color: styles.textSecondary }}>
+          Pick from this provider&apos;s live catalog — known pricing, context windows, and limits are
+          pre-filled from the served catalog and stay editable after adding.
+        </p>
+
+        {/* search */}
+        <div className="px-5 pb-2 shrink-0">
+          <div className="relative">
+            <Search
+              size={13}
+              className="absolute left-3 top-1/2 -translate-y-1/2"
+              style={{ color: styles.textTertiary }}
+              aria-hidden
+            />
+            <input
+              autoFocus
+              value={query}
+              onChange={(e) => setQuery(e.target.value)}
+              placeholder="Search by model id or name…"
+              aria-label="Search catalog models"
+              className="h-9 w-full rounded-[10px] border-[1.5px] pl-8 pr-3 text-[12px] outline-none"
+              style={inputStyle}
+            />
+          </div>
+        </div>
+
+        {/* the catalog rows */}
+        <div className="flex-1 min-h-0 overflow-y-auto auto-scroll px-3 pb-2">
+          {catalog.isFetching && catalog.entries.length === 0 && (
+            <div className="px-2 py-4 text-[11.5px] flex items-center gap-2" style={{ color: styles.textTertiary }}>
+              <RefreshCw size={12} className="animate-spin" /> Fetching the provider catalog…
+            </div>
+          )}
+          {!catalog.isFetching && catalog.entries.length === 0 && (
+            <div className="px-2 py-4 text-[11.5px]" style={{ color: styles.textTertiary }}>
+              {catalog.isError
+                ? "The live catalog is unreachable for this provider — add models by id below."
+                : "This provider serves no catalog — add models by id below."}
+            </div>
+          )}
+          {rows.map((entry) => {
+            const meta = staticById.get(entry.id);
+            const alreadyAdded = configuredIds.has(entry.id);
+            const isSelected = selected.has(entry.id);
+            const free = meta ? meta.free : isFreeModelEntry({ modelId: entry.id });
+            return (
+              <label
+                key={entry.id}
+                className="flex items-center gap-3 px-2.5 py-2 rounded-[10px] cursor-pointer transition-colors"
+                style={{
+                  background: isSelected ? withAlpha(styles.accent, 0.07) : "transparent",
+                  opacity: alreadyAdded ? 0.55 : 1,
+                  cursor: alreadyAdded ? "default" : "pointer",
+                }}
+                title={entry.id}
+              >
+                <input
+                  type="checkbox"
+                  checked={alreadyAdded || isSelected}
+                  disabled={alreadyAdded}
+                  onChange={() => !alreadyAdded && toggle(entry.id)}
+                  aria-label={`Select model ${entry.id}`}
+                  className="w-4 h-4 shrink-0 cursor-pointer"
+                  style={{ accentColor: styles.accent }}
+                />
+                <span className="min-w-0 flex-1 flex flex-col">
+                  <span className="flex items-center gap-1.5 min-w-0 flex-wrap">
+                    <span
+                      className="truncate text-[12px] font-semibold"
+                      style={{ color: styles.text }}
+                    >
+                      {entry.name !== "" && entry.name !== entry.id ? entry.name : entry.id}
+                    </span>
+                    {free ? (
+                      <span
+                        className="shrink-0 px-1.5 py-0.5 rounded-full text-[10px] font-bold"
+                        style={{ background: withAlpha("#22c55e", 0.12), color: "#22c55e" }}
+                      >
+                        FREE
+                      </span>
+                    ) : meta ? (
+                      <span
+                        className="shrink-0 px-1.5 py-0.5 rounded-full text-[10px] font-bold"
+                        style={{ background: styles.subtle, color: styles.textTertiary }}
+                      >
+                        PAID
+                      </span>
+                    ) : null}
+                    {alreadyAdded && (
+                      <span
+                        className="shrink-0 px-1.5 py-0.5 rounded-full text-[10px] font-bold"
+                        style={{ background: withAlpha("#22c55e", 0.12), color: "#22c55e" }}
+                      >
+                        ADDED
+                      </span>
+                    )}
+                  </span>
+                  <span className="flex items-center gap-2 min-w-0 flex-wrap">
+                    <span className="truncate font-mono text-[10px]" style={{ color: styles.textTertiary }}>
+                      {entry.id}
+                    </span>
+                    {meta && (
+                      <span className="shrink-0 font-mono text-[10px]" style={{ color: styles.textTertiary }}>
+                        {formatPricingSummary(meta) ?? "pricing unknown"}
+                        {meta.contextWindow > 0 ? ` · ${formatContextWindow(meta.contextWindow)}` : ""}
+                      </span>
+                    )}
+                  </span>
+                </span>
+              </label>
+            );
+          })}
+          {rows.length === 0 && catalog.entries.length > 0 && (
+            <div className="px-2 py-4 text-[11.5px]" style={{ color: styles.textTertiary }}>
+              No catalog model matches “{query.trim()}” — add it by id below.
+            </div>
+          )}
+        </div>
+
+        {/* footer: manual add-by-id (secondary) + bulk action */}
+        <div
+          className="shrink-0 border-t px-5 py-3.5 flex flex-col gap-3"
+          style={{ borderColor: styles.border, background: withAlpha(styles.accent, 0.02) }}
+        >
+          <div className="flex items-center gap-2">
+            <input
+              value={manualId}
+              onChange={(e) => setManualId(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter" && manualId.trim()) addManual.mutate();
+              }}
+              placeholder="…or add an id not in the list"
+              aria-label="Model id"
+              className="h-9 flex-1 min-w-0 rounded-[10px] border-[1.5px] px-3 font-mono text-[12px] outline-none"
+              style={inputStyle}
+            />
+            <button
+              onClick={() => addManual.mutate()}
+              disabled={!manualId.trim() || addManual.isPending}
+              className="h-9 px-3.5 rounded-[10px] border-[1.5px] text-[12px] font-bold disabled:opacity-50 shrink-0"
+              style={{ borderColor: styles.border, color: styles.textSecondary }}
+            >
+              {addManual.isPending ? "Adding…" : "Add by id"}
+            </button>
+          </div>
+          {error && (
+            <p className="text-[11px]" style={{ color: "#ef4444" }}>
+              {error}
+            </p>
+          )}
+          {notice && (
+            <p className="text-[11px]" style={{ color: "#22c55e" }}>
+              {notice}
+            </p>
+          )}
+          <button
+            onClick={() => addSelected.mutate()}
+            disabled={selected.size === 0 || addSelected.isPending}
+            className="h-10 rounded-full text-[13px] font-bold disabled:opacity-50 transition-transform hover:scale-[1.01] active:scale-[0.99]"
+            style={{ background: styles.accent, color: styles.accentText }}
+          >
+            {addSelected.isPending
+              ? "Adding…"
+              : selected.size === 0
+                ? "Add models"
+                : `Add ${selected.size} model${selected.size === 1 ? "" : "s"}`}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/* ── ROUND-50 (R50-d): the per-model configuration dialog ─────────────────── */
+
+/** Draft state for the config dialog — numerics live as STRINGS so an empty
+ * input can mean "unknown" (null) rather than 0. */
+interface ModelConfigDraft {
+  displayName: string;
+  contextWindow: string;
+  maxOutputTokens: string;
+  inputPrice: string;
+  outputPrice: string;
+  cachePrice: string;
+  supportsThinking: boolean;
+  hidden: boolean;
+}
+
+function draftFromModel(model: ProviderModelConfig): ModelConfigDraft {
+  const num = (v: number | null): string => (v === null ? "" : String(v));
+  return {
+    displayName: model.displayName || "",
+    contextWindow: num(model.contextWindow),
+    maxOutputTokens: num(model.maxOutputTokens),
+    inputPrice: num(model.inputPricePerMtok),
+    outputPrice: num(model.outputPricePerMtok),
+    cachePrice: num(model.inputPriceCachedPerMtok),
+    supportsThinking: model.supportsThinking,
+    hidden: model.hidden,
+  };
+}
+
+function ModelConfigDialog({
+  model,
+  onClose,
+  onSaved,
+}: {
+  model: ProviderModelConfig;
+  onClose: () => void;
+  onSaved: () => void;
+}) {
+  const styles = useThemeStyles();
+  const [draft, setDraft] = useState<ModelConfigDraft>(() => draftFromModel(model));
+  const [error, setError] = useState<string | null>(null);
+
+  const set = <K extends keyof ModelConfigDraft>(key: K, value: ModelConfigDraft[K]) =>
+    setDraft((d) => ({ ...d, [key]: value }));
+
+  const save = useMutation({
+    mutationFn: (patch: ProviderModelConfigPatch) =>
+      updateProviderModelConfig(model.id, patch),
+    onSuccess: onSaved,
+    onError: (err: Error) => setError(err.message),
+  });
+
+  const submit = () => {
+    // Parse every numeric: "" → null (unknown), junk → inline error naming
+    // the field (the server 400s the same shapes — R50-d contract).
+    type NumericDraftKey =
+      | "contextWindow"
+      | "maxOutputTokens"
+      | "inputPrice"
+      | "outputPrice"
+      | "cachePrice";
+    const fields: Array<[NumericDraftKey, string]> = [
+      ["contextWindow", "Context window"],
+      ["maxOutputTokens", "Max output tokens"],
+      ["inputPrice", "Input price"],
+      ["outputPrice", "Output price"],
+      ["cachePrice", "Cache read price"],
+    ];
+    const parsed = {} as Record<NumericDraftKey, number | null>;
+    for (const [key, label] of fields) {
+      const value = parseNumericField(draft[key]);
+      if (value === "invalid") {
+        setError(`${label} must be a number ≥ 0 (or empty for unknown).`);
+        return;
+      }
+      parsed[key] = value;
+    }
+    setError(null);
+    save.mutate({
+      displayName: draft.displayName.trim() || model.modelId,
+      contextWindow: parsed.contextWindow,
+      maxOutputTokens: parsed.maxOutputTokens,
+      inputPricePerMtok: parsed.inputPrice,
+      outputPricePerMtok: parsed.outputPrice,
+      inputPriceCachedPerMtok: parsed.cachePrice,
+      supportsThinking: draft.supportsThinking,
+      hidden: draft.hidden,
+    });
+  };
+
+  const inputStyle = {
+    background: styles.bg,
+    borderColor: styles.border,
+    color: styles.text,
+  } as const;
+
+  /** The On/Off mini-toggle used for the boolean fields. */
+  const Toggle = ({
+    label,
+    value,
+    onChange,
+    hint,
+  }: {
+    label: string;
+    value: boolean;
+    onChange: (next: boolean) => void;
+    hint: string;
+  }) => (
+    <div className="flex items-center gap-3">
+      <div className="min-w-0 flex-1">
+        <span className="block text-[12px] font-bold" style={{ color: styles.textSecondary }}>
+          {label}
+        </span>
+        <span className="block text-[10.5px]" style={{ color: styles.textTertiary }}>
+          {hint}
+        </span>
+      </div>
+      <div
+        role="group"
+        aria-label={label}
+        className="flex items-center rounded-[10px] border-[1.5px] overflow-hidden shrink-0"
+        style={{ borderColor: styles.border }}
+      >
+        {([
+          { id: "on", label: "On", active: value, pick: () => onChange(true) },
+          { id: "off", label: "Off", active: !value, pick: () => onChange(false) },
+        ] as const).map((seg) => (
+          <button
+            key={seg.id}
+            onClick={seg.pick}
+            aria-pressed={seg.active}
+            className="h-7 px-3 text-[11px] font-bold transition-colors"
+            style={{
+              background: seg.active ? withAlpha(styles.accent, 0.12) : "transparent",
+              color: seg.active ? styles.accent : styles.textTertiary,
+            }}
+          >
+            {seg.label}
+          </button>
+        ))}
+      </div>
+    </div>
+  );
+
+  const preview = formatPricingSummary({
+    inputPricePerMtok: parseNumericField(draft.inputPrice) === "invalid" ? null : (parseNumericField(draft.inputPrice) as number | null),
+    outputPricePerMtok: parseNumericField(draft.outputPrice) === "invalid" ? null : (parseNumericField(draft.outputPrice) as number | null),
+    inputPriceCachedPerMtok: parseNumericField(draft.cachePrice) === "invalid" ? null : (parseNumericField(draft.cachePrice) as number | null),
+  });
+
+  return (
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center p-6"
+      style={{ background: "rgba(0,0,0,0.35)", backdropFilter: "blur(4px)" }}
+      role="dialog"
+      aria-modal="true"
+      aria-label="Configure model"
+      onClick={(e) => {
+        if (e.target === e.currentTarget) onClose();
+      }}
+    >
+      <div
+        className="w-full max-w-[520px] max-h-[86vh] overflow-y-auto auto-scroll rounded-[20px] border-[1.5px] p-5 flex flex-col gap-4"
+        style={{ background: styles.card, borderColor: styles.border, boxShadow: styles.bentoShadow }}
+      >
+        {/* header */}
+        <div className="flex items-center gap-2">
+          <span className="text-[15px] font-black" style={{ color: styles.text }}>
+            Configure model
+          </span>
+          <span className="flex-1" />
+          <button
+            onClick={onClose}
+            aria-label="Close"
+            className="w-7 h-7 grid place-items-center rounded-[8px]"
+            style={{ color: styles.textTertiary }}
+          >
+            <X size={14} />
+          </button>
+        </div>
+        <p className="-mt-2 font-mono text-[11px] break-all" style={{ color: styles.textTertiary }}>
+          {model.modelId}
+        </p>
+
+        {/* display name */}
+        <div>
+          <label className="mb-1.5 block text-[11px] font-bold" style={{ color: styles.textSecondary }}>
+            Display name
+          </label>
+          <input
+            value={draft.displayName}
+            onChange={(e) => set("displayName", e.target.value)}
+            placeholder={model.modelId}
+            aria-label="Display name"
+            className="h-10 w-full rounded-[10px] border-[1.5px] px-3 text-[13px] outline-none"
+            style={inputStyle}
+          />
+        </div>
+
+        {/* sizing */}
+        <div className="flex flex-col gap-2">
+          <SectionLabel>Sizing</SectionLabel>
+          <div className="grid grid-cols-2 gap-2">
+            <div>
+              <label className="mb-1 block text-[10.5px] font-bold" style={{ color: styles.textTertiary }}>
+                Context window (tokens)
+              </label>
+              <input
+                value={draft.contextWindow}
+                onChange={(e) => set("contextWindow", e.target.value)}
+                placeholder="unknown"
+                aria-label="Context window (tokens)"
+                className="h-10 w-full rounded-[10px] border-[1.5px] px-3 font-mono text-[12px] outline-none"
+                style={inputStyle}
+              />
+            </div>
+            <div>
+              <label className="mb-1 block text-[10.5px] font-bold" style={{ color: styles.textTertiary }}>
+                Max output tokens
+              </label>
+              <input
+                value={draft.maxOutputTokens}
+                onChange={(e) => set("maxOutputTokens", e.target.value)}
+                placeholder="unknown"
+                aria-label="Max output tokens"
+                className="h-10 w-full rounded-[10px] border-[1.5px] px-3 font-mono text-[12px] outline-none"
+                style={inputStyle}
+              />
+            </div>
+          </div>
+        </div>
+
+        {/* pricing */}
+        <div className="flex flex-col gap-2">
+          <SectionLabel>Pricing — $ per 1M tokens</SectionLabel>
+          <div className="grid grid-cols-3 gap-2">
+            <div>
+              <label className="mb-1 block text-[10.5px] font-bold" style={{ color: styles.textTertiary }}>
+                Input
+              </label>
+              <input
+                value={draft.inputPrice}
+                onChange={(e) => set("inputPrice", e.target.value)}
+                placeholder="unknown"
+                aria-label="Input price ($/Mtok)"
+                className="h-10 w-full rounded-[10px] border-[1.5px] px-3 font-mono text-[12px] outline-none"
+                style={inputStyle}
+              />
+            </div>
+            <div>
+              <label className="mb-1 block text-[10.5px] font-bold" style={{ color: styles.textTertiary }}>
+                Output
+              </label>
+              <input
+                value={draft.outputPrice}
+                onChange={(e) => set("outputPrice", e.target.value)}
+                placeholder="unknown"
+                aria-label="Output price ($/Mtok)"
+                className="h-10 w-full rounded-[10px] border-[1.5px] px-3 font-mono text-[12px] outline-none"
+                style={inputStyle}
+              />
+            </div>
+            <div>
+              <label className="mb-1 block text-[10.5px] font-bold" style={{ color: styles.textTertiary }}>
+                Cache read
+              </label>
+              <input
+                value={draft.cachePrice}
+                onChange={(e) => set("cachePrice", e.target.value)}
+                placeholder="unknown"
+                aria-label="Cache read price ($/Mtok)"
+                className="h-10 w-full rounded-[10px] border-[1.5px] px-3 font-mono text-[12px] outline-none"
+                style={inputStyle}
+              />
+            </div>
+          </div>
+          <p className="text-[10.5px]" style={{ color: styles.textTertiary }}>
+            Leave a field empty for unknown — an empty price is never treated as $0.
+          </p>
+        </div>
+
+        {/* behavior */}
+        <div className="flex flex-col gap-3">
+          <SectionLabel>Behavior</SectionLabel>
+          <Toggle
+            label="Supports thinking"
+            value={draft.supportsThinking}
+            onChange={(v) => set("supportsThinking", v)}
+            hint="The model can emit reasoning output."
+          />
+          <Toggle
+            label="Hidden from chat picker"
+            value={draft.hidden}
+            onChange={(v) => set("hidden", v)}
+            hint="Kept here in Settings, but not offered in the chat model selector."
+          />
+        </div>
+
+        {/* live preview */}
+        <div
+          className="rounded-[10px] px-3 py-2 font-mono text-[10.5px]"
+          style={{ background: styles.subtle, color: styles.textTertiary }}
+        >
+          {preview ?? "pricing not set"}
+          {parseNumericField(draft.contextWindow) !== null &&
+            parseNumericField(draft.contextWindow) !== "invalid" &&
+            ` · ${formatContextWindow(parseNumericField(draft.contextWindow) as number)}`}
+        </div>
+
+        {error && (
+          <p role="alert" className="text-[11.5px]" style={{ color: "#ef4444" }}>
+            {error}
+          </p>
+        )}
+
+        <div className="flex items-center gap-2">
+          <button
+            onClick={onClose}
+            className="h-10 px-4 rounded-[10px] border-[1.5px] text-[12px] font-bold"
+            style={{ borderColor: styles.border, color: styles.textSecondary }}
+          >
+            Cancel
+          </button>
+          <span className="flex-1" />
+          <button
+            onClick={submit}
+            disabled={save.isPending}
+            className="h-10 px-5 rounded-full text-[12.5px] font-bold disabled:opacity-50"
+            style={{ background: styles.accent, color: styles.accentText }}
+          >
+            {save.isPending ? "Saving…" : "Save configuration"}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
 
 /* ── ROUND-36 (ADR-0022): the per-provider API key pool ───────────────────── */
 
 /** Exported for the ROUND-47 (R47-c1) regression test — the slot-collision
- * fix lives in the add-slot mutation below. */
-export function KeyPoolSection({ providerId }: { providerId: string }) {
+ * fix lives in the add-slot mutation below.
+ *
+ * ROUND-50 (R50-d): `hideLabel` — the detail pane now renders this section
+ * inside its own labeled card ("API KEY POOL"); the built-in field label is
+ * suppressed there to avoid a doubled title (default keeps the old look for
+ * any other caller). */
+export function KeyPoolSection({ providerId, hideLabel = false }: { providerId: string; hideLabel?: boolean }) {
   const styles = useThemeStyles();
   const queryClient = useQueryClient();
   const [newKey, setNewKey] = useState("");
@@ -1456,9 +2279,11 @@ export function KeyPoolSection({ providerId }: { providerId: string }) {
 
   return (
     <div>
-      <label className="mb-1.5 block text-[11px] font-bold" style={{ color: styles.textSecondary }}>
-        API key pool <span style={{ color: styles.textTertiary }}>— dedicated keys for sub-agents (primary stays free)</span>
-      </label>
+      {!hideLabel && (
+        <label className="mb-1.5 block text-[11px] font-bold" style={{ color: styles.textSecondary }}>
+          API key pool <span style={{ color: styles.textTertiary }}>— dedicated keys for sub-agents (primary stays free)</span>
+        </label>
+      )}
       <div className="rounded-[10px] border-[1.5px] overflow-hidden" style={{ borderColor: styles.border }}>
         {slots.length === 0 && (
           <div className="px-3 py-2.5 text-[11px]" style={{ color: styles.textTertiary }}>

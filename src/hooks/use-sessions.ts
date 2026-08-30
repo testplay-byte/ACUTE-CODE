@@ -1,4 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import type { MessageAttachment, ThinkingLevel } from "shared";
 import {
   type CreateSessionInput,
   fetchUsageSummary,
@@ -121,13 +122,31 @@ export function useRevertSession() {
  * provider call still leaves the turn's user event in the log (ADR-0010).
  * Errors surface as ApiError envelopes (409 CONFLICT unconfigured agent,
  * 502 PROVIDER_ERROR upstream failure).
+ *
+ * ROUND-50 (R50-c2): the mutation variables additively accept the composer's
+ * per-send extras — `thinkingLevel` and `attachments` — which ride the same
+ * POST body via SendMessageOptions (api.ts, R50-c1). Both optional; callers
+ * that send only { sessionId, content } behave exactly as before.
  */
 export function useSendMessage() {
   const qc = useQueryClient();
   const source = useDataSource();
   return useMutation({
-    mutationFn: ({ sessionId, content }: { sessionId: string; content: string }) =>
-      getSessionsBackend().sendMessage(sessionId, content),
+    mutationFn: ({
+      sessionId,
+      content,
+      thinkingLevel,
+      attachments,
+    }: {
+      sessionId: string;
+      content: string;
+      thinkingLevel?: ThinkingLevel;
+      attachments?: MessageAttachment[];
+    }) =>
+      getSessionsBackend().sendMessage(sessionId, content, {
+        thinkingLevel,
+        attachments,
+      }),
     onSettled: (_result, _error, { sessionId }) => {
       void qc.invalidateQueries({ queryKey: ["session", source, sessionId] });
       void qc.invalidateQueries({ queryKey: ["sessions", source] });

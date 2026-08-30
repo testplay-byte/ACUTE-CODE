@@ -1,8 +1,23 @@
-import type { AgentRecord, RunMode, SessionStatus, UsageRecord } from "shared";
+import type {
+  AgentRecord,
+  MessageAttachment,
+  PermissionMode,
+  RunMode,
+  SessionStatus,
+  ThinkingLevel,
+  UsageRecord,
+} from "shared";
 import { getFixtureAgents } from "./agent-fixtures";
 import { getFixtureProjects } from "./project-fixtures";
 import { getFixtureSessions } from "./session-fixtures";
 import { useConfigStore } from "./config-store";
+import { isTauri } from "./sidecar";
+
+/**
+ * ROUND-50 (R50-c1): the composer's permission-mode + thinking-level unions
+ * re-exported from the shared canonical contract (single source of truth).
+ */
+export type { PermissionMode, ThinkingLevel };
 
 /**
  * Typed client for the agent-core sidecar REST API (docs/architecture/api/API.md).
@@ -197,6 +212,10 @@ export interface Session {
   /** ROUND-36: set on sub-agent children. */
   parentSessionId?: string | null;
   subRole?: string | null;
+  /** ROUND-50 (R50-c1): the composer's permission mode (full/ask/plan/
+   * editor — migration 0020; "ask" is the default). Optional here so
+   * fixture sessions keep compiling; the live sidecar always sends it. */
+  permissionMode?: PermissionMode;
 }
 
 /**
@@ -232,6 +251,66 @@ export interface SendMessageResult {
   usage: UsageRecord;
 }
 
+/**
+ * ROUND-50 (R50-c1): DISPLAY-ONLY attachment descriptor on a user chat item
+ * (name/path/size — the file's TEXT never ships back to the UI; it lives in
+ * the event payload for the model-facing history only).
+ */
+export interface AttachmentRef {
+  name: string;
+  path?: string;
+  size?: number;
+}
+
+/**
+ * ROUND-50 (R50-c1): one file as read by POST /attachments/read (the head of
+ * the file, binary-flagged, or a per-file error — the route never 500s).
+ */
+export interface AttachmentReadResult {
+  path: string;
+  name: string;
+  size: number;
+  /** First 128KB (UTF-8) of the file; null = binary or error. */
+  text: string | null;
+  /** True when the file is larger than the 128KB head. */
+  truncated: boolean;
+  /** Per-file failure (missing file, >512KB, path escape, …). */
+  error?: string;
+}
+
+/**
+ * ROUND-50 (R50-c1): the context donut's data source —
+ * GET /sessions/:id/context. `breakdown` are token ESTIMATES (the donut
+ * slices); usedTokens is their sum; `cache.hitRate` is null before the
+ * first provider call reports input tokens; `sessionTotals` are the
+ * session's lifetime sums from usage_events.
+ */
+export interface SessionContextReport {
+  model: string;
+  providerId: string;
+  contextWindow: number;
+  usedTokens: number;
+  breakdown: {
+    systemPrompt: number;
+    systemTools: number;
+    memory: number;
+    messages: number;
+    meta: number;
+    mcpTools: number;
+  };
+  cache: {
+    inputTokens: number;
+    cachedInputTokens: number;
+    hitRate: number | null;
+  };
+  sessionTotals: {
+    inputTokens: number;
+    outputTokens: number;
+    requests: number;
+    costUsd: number;
+  };
+}
+
 /** Phase 2 scope is single-agent sessions only (ADR-0001); team modes come later. */
 export interface CreateSessionInput {
   agentId: string;
@@ -246,6 +325,15 @@ export interface CreateSessionInput {
 export interface RevertSessionResult {
   ok: boolean;
   removedCount: number;
+}
+
+/** ROUND-50 (R50-c1): the composer's per-send extras threaded through
+ * BOTH send paths (the sync SessionsBackend.sendMessage here and
+ * streamSessionMessage below). Attachments persist on the message.user
+ * payload; thinkingLevel is per-send only (never persisted). */
+export interface SendMessageOptions {
+  attachments?: MessageAttachment[];
+  thinkingLevel?: ThinkingLevel;
 }
 
 /** The session/chat operations the UI needs. */
@@ -271,8 +359,14 @@ export interface SessionsBackend {
   /**
    * One synchronous turn; may take several seconds. 409 CONFLICT when the
    * bound agent is unconfigured, 502 PROVIDER_ERROR on upstream failure.
+   * ROUND-50 (R50-c1): optional composer extras (attachments + thinking
+   * level) ride the same POST body.
    */
-  sendMessage(sessionId: string, content: string): Promise<SendMessageResult>;
+  sendMessage(
+    sessionId: string,
+    content: string,
+    options?: SendMessageOptions,
+  ): Promise<SendMessageResult>;
 }
 
 /** HTTP implementation talking to the sidecar. */
@@ -300,10 +394,18 @@ export function httpSessions(): SessionsBackend {
         method: "POST",
         json: { keepThroughSeq },
       }),
-    sendMessage: (id, content) =>
+    sendMessage: (id, content, options) =>
       request<SendMessageResult>(`/sessions/${id}/messages`, {
         method: "POST",
-        json: { content },
+        json: {
+          content,
+          ...(options?.attachments !== undefined && options.attachments.length > 0
+            ? { attachments: options.attachments }
+            : {}),
+          ...(options?.thinkingLevel !== undefined && options.thinkingLevel !== "default"
+            ? { thinkingLevel: options.thinkingLevel }
+            : {}),
+        },
       }),
   };
 }
@@ -666,7 +768,16 @@ export interface DiffEntry {
 
 /** Renderable timeline item for the project-chat screen (see toProjectChatItems). */
 export type ProjectChatItem =
-  | { kind: "user"; seq: number; content: string; ts: string }
+  | {
+      kind: "user";
+      seq: number;
+      content: string;
+      ts: string;
+      /** ROUND-50 (R50-c1): display-only attachment chips on the user bubble
+       * (name/path/size — the file TEXT never ships back to the UI; the
+       * model-facing rendering happens server-side in assembleHistory). */
+      attachments?: AttachmentRef[];
+    }
   | AssistantTurnItem
   | ErrorTurnItem;
 
@@ -1028,10 +1139,30 @@ export function toProjectChatItems(events: SessionEvent[]): ProjectChatItem[] {
       flushTurn();
       const payload =
         event.payload && typeof event.payload === "object"
-          ? (event.payload as { content?: unknown })
+          ? (event.payload as { content?: unknown; attachments?: unknown })
           : null;
       if (payload !== null && typeof payload.content === "string") {
-        items.push({ kind: "user", seq: event.seq, content: payload.content, ts: event.ts });
+        // ROUND-50 (R50-c1): narrow the persisted attachments into DISPLAY-ONLY
+        // AttachmentRefs (name/path/size — `text` is deliberately dropped).
+        const rawAttachments = Array.isArray(payload.attachments) ? payload.attachments : [];
+        const attachments: AttachmentRef[] = [];
+        for (const entry of rawAttachments) {
+          if (typeof entry !== "object" || entry === null) continue;
+          const item = entry as { name?: unknown; path?: unknown; size?: unknown };
+          if (typeof item.name !== "string" || item.name === "") continue;
+          attachments.push({
+            name: item.name,
+            ...(typeof item.path === "string" ? { path: item.path } : {}),
+            ...(typeof item.size === "number" ? { size: item.size } : {}),
+          });
+        }
+        items.push({
+          kind: "user",
+          seq: event.seq,
+          content: payload.content,
+          ts: event.ts,
+          ...(attachments.length > 0 ? { attachments } : {}),
+        });
       }
       continue;
     }
@@ -1119,6 +1250,102 @@ export async function pickFolderViaBackend(): Promise<{
 }
 
 // ---------------------------------------------------------------------------
+// ROUND-50 (R50-c1): composer backend — file picker, attachment reads,
+// permission modes, context report.
+// ---------------------------------------------------------------------------
+
+/** The Tauri global shape used by pickFilesViaBackend (mirrors Sidebar.tsx). */
+type TauriInvokeGlobal = {
+  core: { invoke: (command: string, args?: Record<string, unknown>) => Promise<unknown> };
+};
+
+/**
+ * ROUND-50 (R50-c1): open the REAL multi-file picker — the composer's
+ * "Add Context" button. Inside the Tauri shell the Rust `pick_files` command
+ * (rfd FileDialog parented to the main window) runs; in plain browser dev
+ * the sidecar route POST /api/v1/internal/dialog/files opens the OS dialog
+ * (PowerShell OpenFileDialog with Multiselect / zenity --multiple).
+ *
+ * Resolves to the chosen absolute paths — EMPTY when the user cancelled (or
+ * this machine has no dialog backend). THROWS when the Tauri command fails
+ * or the sidecar is unreachable/errors (callers surface the failure; a
+ * cancel is never an error).
+ */
+export async function pickFilesViaBackend(): Promise<string[]> {
+  if (isTauri()) {
+    const tauri = (window as { __TAURI__?: TauriInvokeGlobal }).__TAURI__;
+    if (tauri === undefined) return [];
+    const picked = (await tauri.core.invoke("pick_files")) as unknown;
+    return Array.isArray(picked) ? (picked as string[]) : [];
+  }
+  const { baseUrl, token } = useConfigStore.getState();
+  try {
+    const res = await fetch(`${baseUrl}/api/v1/internal/dialog/files`, {
+      method: "POST",
+      ...(token ? { headers: { Authorization: `Bearer ${token}` } } : {}),
+    });
+    if (res.status === 501) return []; // no dialog backend on this machine
+    if (!res.ok) {
+      throw new Error(`sidecar answered HTTP ${res.status}`);
+    }
+    const body = (await res.json()) as { files?: string[]; error?: string };
+    if (body.error) throw new Error(body.error);
+    return Array.isArray(body.files) ? body.files : [];
+  } catch (cause) {
+    throw new Error(`could not open the file picker (${String(cause)})`);
+  }
+}
+
+/**
+ * ROUND-50 (R50-c1): read the text heads of the files the user attached —
+ * POST /attachments/read. Relative paths resolve inside the project root
+ * (pass its id); absolute paths (user-picked) read as-is. Per-file failures
+ * come back as error entries (the route never 500s), so the composer can
+ * show exactly which attachment failed.
+ */
+export async function readAttachmentFiles(
+  paths: string[],
+  projectId?: string,
+): Promise<AttachmentReadResult[]> {
+  const body = await request<{ files: AttachmentReadResult[] }>("/attachments/read", {
+    method: "POST",
+    json: { paths, ...(projectId !== undefined ? { projectId } : {}) },
+  });
+  return body.files;
+}
+
+/**
+ * ROUND-50 (R50-c1): set the session's permission mode (the composer's
+ * Full Access / Ask / Plan / Editor switcher) — PATCH /sessions/:id/permissions
+ * with { mode }. Returns the updated session in the GET /sessions/:id shape
+ * (session row + events + lastSeq). Throws ApiError 400 for an unknown mode,
+ * 404 for an unknown session.
+ */
+export async function patchSessionPermissions(
+  sessionId: string,
+  mode: PermissionMode,
+): Promise<SessionDetail> {
+  return request<SessionDetail>(`/sessions/${sessionId}/permissions`, {
+    method: "PATCH",
+    json: { mode },
+  });
+}
+
+/**
+ * ROUND-50 (R50-c1): the context donut's data source —
+ * GET /sessions/:id/context. `model` is optional (defaults to the session
+ * agent's model; the composer's per-send model picker passes its selection).
+ */
+export async function fetchSessionContext(
+  sessionId: string,
+  model?: string,
+): Promise<SessionContextReport> {
+  const query =
+    model !== undefined && model.trim() !== "" ? `?model=${encodeURIComponent(model)}` : "";
+  return request<SessionContextReport>(`/sessions/${sessionId}/context${query}`);
+}
+
+// ---------------------------------------------------------------------------
 // ROUND-36 (ADR-0022): sub-agent monitoring + orchestration settings
 // ---------------------------------------------------------------------------
 
@@ -1138,6 +1365,10 @@ export interface SubAgentStatus {
   todosTotal: number;
   inputTokens: number;
   outputTokens: number;
+  /** ROUND-50 (R50-b, owner: the sub-agent stats footer must show "the model
+   * which was being used"): the model of the child's latest usage row — null
+   * before its first provider call completes. */
+  model: string | null;
   report: string | null;
   error: string | null;
 }
@@ -1838,8 +2069,25 @@ export type SubAgentInnerEvent =
       ok: boolean;
       outputSummary?: string;
     }
-  | { type: "text-delta"; sessionId?: string; text: string }
-  | { type: "finish"; sessionId?: string }
+  /** ROUND-50 (R50-b, owner: "the actual raw data… streamed live just like
+   * the main agent"): with children running the STREAMED turn path, inner
+   * text frames now arrive as token-level DELTAS (`delta`) instead of the
+   * sync path's per-step snapshots (`text` — the full step text; the frames
+   * of a call still concatenate to the reply, so both shapes accumulate the
+   * same way). stream-store accepts either. */
+  | { type: "text-delta"; sessionId?: string; text?: string; delta?: string }
+  /** ROUND-50 (R50-b): reasoning tokens stream live from streamed children
+   * (the sync path never emits thinking) — the panel renders them in the
+   * main chat's muted "Thinking…" language. */
+  | { type: "thinking-delta"; sessionId?: string; delta: string }
+  /** ROUND-50 (R50-b): the streamed path's finish carries the call's usage —
+   * the live stats footer's token counters (the sync path's finish carries
+   * only the sessionId). */
+  | {
+      type: "finish";
+      sessionId?: string;
+      usage?: { inputTokens: number; outputTokens: number; totalTokens: number };
+    }
   | { type: "meta.continuation"; sessionId?: string; iteration: number; maxOuterLoops?: number };
 
 /** Events arriving over POST /sessions/:id/messages/stream (SSE). */
@@ -1864,10 +2112,16 @@ export type StreamTurnEvent =
       /** ROUND-48 (R48-e1): deterministic 4-char [A-Z0-9] code of the child
        * session — identical to the `code` field on GET /sessions/:id/subagents
        * rows, so the live stream and the polled list join on either id or
-       * code. Tokens/error are NOT on this frame — poll the list for them. */
+       * code. (Tokens arrive live via the child's inner finish events —
+       * R50-b — and authoritatively on the polled row.) */
       code: string;
       todosDone?: number;
       todosTotal?: number;
+      /** ROUND-50 (R50-b): the model the child actually runs on
+       * (orchestration.subagentModel ?? agent.model, resolved at delegation
+       * time) — the live stats footer's model line before the polled row's
+       * usage-derived `model` lands. */
+      model?: string;
     }
   | {
       /** ROUND-48 (R48-e1): a delegated child's live event, wrapped — rides
@@ -1914,12 +2168,22 @@ export type StreamTurnEvent =
  * (text deltas, tool calls/results, finish, done/error). Resolves when the
  * stream ends. Fixture (demo-data) mode has no sidecar — callers fall back
  * to the sync hook instead of calling this.
+ *
+ * ROUND-50 (R50-c1): `options` also carries the composer's per-send extras —
+ * `thinkingLevel` (reasoning.effort, never persisted) and `attachments`
+ * (persisted on the message.user payload, rendered into the model-facing
+ * history server-side).
  */
 export async function streamSessionMessage(
   sessionId: string,
   content: string,
   onEvent: (event: StreamTurnEvent) => void,
-  options?: { model?: string; signal?: AbortSignal },
+  options?: {
+    model?: string;
+    signal?: AbortSignal;
+    thinkingLevel?: ThinkingLevel;
+    attachments?: MessageAttachment[];
+  },
 ): Promise<void> {
   const { baseUrl, token } = useConfigStore.getState();
   const res = await fetch(`${baseUrl}/api/v1/sessions/${sessionId}/messages/stream`, {
@@ -1931,6 +2195,12 @@ export async function streamSessionMessage(
     body: JSON.stringify({
       content,
       ...(options?.model ? { model: options.model } : {}),
+      ...(options?.thinkingLevel && options.thinkingLevel !== "default"
+        ? { thinkingLevel: options.thinkingLevel }
+        : {}),
+      ...(options?.attachments && options.attachments.length > 0
+        ? { attachments: options.attachments }
+        : {}),
     }),
     signal: options?.signal,
   });
@@ -2034,6 +2304,26 @@ export async function fetchProviderModels(providerId: string): Promise<string[]>
     `/providers/${providerId}/models`,
   );
   return body.models.map((m) => m.id);
+}
+
+/** ROUND-50 (R50-d): the LIVE provider catalog WITH display names — the
+ * Settings "Add models" picker needs searchable entries (id + name), which
+ * the ids-only fetchProviderModels above cannot serve. Mirrors agent-core's
+ * ModelSummary {id, name} from GET /providers/:id/models. */
+export interface ProviderModelCatalogEntry {
+  /** Model id sent to the API. */
+  id: string;
+  /** Upstream display name (falls back to the id when absent). */
+  name: string;
+}
+
+export async function fetchProviderModelEntries(
+  providerId: string,
+): Promise<ProviderModelCatalogEntry[]> {
+  const body = await request<{ models: Array<{ id: string; name?: string }> }>(
+    `/providers/${encodeURIComponent(providerId)}/models`,
+  );
+  return body.models.map((m) => ({ id: m.id, name: m.name ?? m.id }));
 }
 
 // ── Round-28 WS-G2/WS-H: codebase index + unified search ────────────────────

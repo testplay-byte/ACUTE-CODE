@@ -786,3 +786,231 @@ describe("GET /api/v1/models/catalog (ROUND-47)", () => {
     expect(response.json().error.code).toBe("UNAUTHORIZED");
   });
 });
+
+/* ── ROUND-50 (R50-d): per-model config routes — pricing round-trip, null
+   clearing, strict 400s ──────────────────────────────────────────────────
+   The Settings "Configure model" dialog now writes pricing/limits through
+   POST /providers/:id/models (upsert) and PATCH /models/:id. These tests
+   pin the wire contract: every whitelisted field round-trips, explicit null
+   CLEARS a stored value back to unknown, and a wrong type is a 400 naming
+   the field (never a silently dropped "successful" save). */
+describe("POST /api/v1/providers/:id/models + PATCH /api/v1/models/:id (ROUND-50 R50-d)", () => {
+  const FULL_MODEL = {
+    modelId: "test/priced-model",
+    displayName: "Priced Model",
+    contextWindow: 200000,
+    maxOutputTokens: 32768,
+    inputPricePerMtok: 0.15,
+    inputPriceCachedPerMtok: 0.02,
+    outputPricePerMtok: 0.6,
+    supportsThinking: true,
+    hidden: false,
+  };
+
+  it("POST upserts a model with the FULL advanced config and round-trips every field", async () => {
+    const created = await authInject({
+      method: "POST",
+      url: "/api/v1/providers/openrouter/models",
+      payload: FULL_MODEL,
+    });
+    expect(created.statusCode).toBe(201);
+    expect(created.json()).toMatchObject({
+      providerId: "openrouter",
+      modelId: "test/priced-model",
+      displayName: "Priced Model",
+      contextWindow: 200000,
+      maxOutputTokens: 32768,
+      inputPricePerMtok: 0.15,
+      inputPriceCachedPerMtok: 0.02,
+      outputPricePerMtok: 0.6,
+      supportsThinking: true,
+      hidden: false,
+    });
+
+    // …and the stored row is served back by models-config verbatim.
+    const listed = await authInject({
+      method: "GET",
+      url: "/api/v1/providers/openrouter/models-config",
+    });
+    const row = listed
+      .json()
+      .models.find((m: { modelId: string }) => m.modelId === "test/priced-model");
+    expect(row).toMatchObject({
+      inputPricePerMtok: 0.15,
+      inputPriceCachedPerMtok: 0.02,
+      outputPricePerMtok: 0.6,
+    });
+  });
+
+  it("POST re-upsert of an existing model KEEPS supportsThinking/hidden when omitted (no reset-to-false)", async () => {
+    await authInject({
+      method: "POST",
+      url: "/api/v1/providers/openrouter/models",
+      payload: { ...FULL_MODEL, supportsThinking: true, hidden: true },
+    });
+    // A catalog-picker bulk add re-upserts with ONLY the modelId + pricing —
+    // the toggles must survive (the old `=== true` coercion wiped them).
+    const reUpserted = await authInject({
+      method: "POST",
+      url: "/api/v1/providers/openrouter/models",
+      payload: { modelId: "test/priced-model", inputPricePerMtok: 0.2 },
+    });
+    expect(reUpserted.statusCode).toBe(201);
+    expect(reUpserted.json()).toMatchObject({
+      supportsThinking: true,
+      hidden: true,
+      inputPricePerMtok: 0.2,
+    });
+  });
+
+  it("PATCH round-trips new pricing and null CLEARS a stored price back to unknown", async () => {
+    const created = await authInject({
+      method: "POST",
+      url: "/api/v1/providers/openrouter/models",
+      payload: FULL_MODEL,
+    });
+    const rowId = created.json().id as string;
+
+    const patched = await authInject({
+      method: "PATCH",
+      url: `/api/v1/models/${rowId}`,
+      payload: {
+        inputPricePerMtok: 1.25,
+        outputPricePerMtok: 10,
+        inputPriceCachedPerMtok: null,
+        contextWindow: 128000,
+        maxOutputTokens: null,
+        supportsThinking: false,
+        hidden: true,
+      },
+    });
+    expect(patched.statusCode).toBe(200);
+    expect(patched.json()).toMatchObject({
+      inputPricePerMtok: 1.25,
+      outputPricePerMtok: 10,
+      inputPriceCachedPerMtok: null,
+      contextWindow: 128000,
+      maxOutputTokens: null,
+      supportsThinking: false,
+      hidden: true,
+    });
+
+    // The nulls PERSISTED (the old `input.x ?? existing.x` collapsed null
+    // into "keep" — this is the regression pin for the storage fix).
+    const listed = await authInject({
+      method: "GET",
+      url: "/api/v1/providers/openrouter/models-config",
+    });
+    const row = listed
+      .json()
+      .models.find((m: { id: string }) => m.id === rowId);
+    expect(row.inputPriceCachedPerMtok).toBeNull();
+    expect(row.maxOutputTokens).toBeNull();
+    expect(row.outputPricePerMtok).toBe(10);
+  });
+
+  it.each([
+    ["inputPricePerMtok", "0.15"],
+    ["outputPricePerMtok", "free"],
+    ["contextWindow", true],
+    ["maxOutputTokens", []],
+  ])("PATCH rejects a malformed %s with 400 VALIDATION (no silent drop)", async (field, bad) => {
+    const created = await authInject({
+      method: "POST",
+      url: "/api/v1/providers/openrouter/models",
+      payload: FULL_MODEL,
+    });
+    const rowId = created.json().id as string;
+
+    const response = await authInject({
+      method: "PATCH",
+      url: `/api/v1/models/${rowId}`,
+      payload: { [field]: bad },
+    });
+    expect(response.statusCode).toBe(400);
+    expect(response.json().error.code).toBe("VALIDATION");
+    expect(response.json().error.details.field).toBe(`body.${field}`);
+
+    // And the stored value is UNCHANGED — the patch was rejected whole.
+    const listed = await authInject({
+      method: "GET",
+      url: "/api/v1/providers/openrouter/models-config",
+    });
+    const row = listed
+      .json()
+      .models.find((m: { id: string }) => m.id === rowId);
+    expect(row[field]).toBe(FULL_MODEL[field as keyof typeof FULL_MODEL]);
+  });
+
+  it("PATCH rejects malformed toggles and displayName the same way", async () => {
+    const created = await authInject({
+      method: "POST",
+      url: "/api/v1/providers/openrouter/models",
+      payload: FULL_MODEL,
+    });
+    const rowId = created.json().id as string;
+
+    const badToggle = await authInject({
+      method: "PATCH",
+      url: `/api/v1/models/${rowId}`,
+      payload: { supportsThinking: "yes" },
+    });
+    expect(badToggle.statusCode).toBe(400);
+    expect(badToggle.json().error.details.field).toBe("body.supportsThinking");
+
+    const badName = await authInject({
+      method: "PATCH",
+      url: `/api/v1/models/${rowId}`,
+      payload: { displayName: 42 },
+    });
+    expect(badName.statusCode).toBe(400);
+    expect(badName.json().error.details.field).toBe("body.displayName");
+  });
+
+  it("POST rejects a malformed pricing field with 400 VALIDATION (the picker's bulk add must not half-save lies)", async () => {
+    const response = await authInject({
+      method: "POST",
+      url: "/api/v1/providers/openrouter/models",
+      payload: { modelId: "test/bad-pricing", inputPricePerMtok: "0.15" },
+    });
+    expect(response.statusCode).toBe(400);
+    expect(response.json().error.code).toBe("VALIDATION");
+    expect(response.json().error.details.field).toBe("body.inputPricePerMtok");
+
+    const listed = await authInject({
+      method: "GET",
+      url: "/api/v1/providers/openrouter/models-config",
+    });
+    expect(
+      listed
+        .json()
+        .models.some((m: { modelId: string }) => m.modelId === "test/bad-pricing"),
+    ).toBe(false);
+  });
+
+  it("PATCH 404s for an unknown model row id (the api-layer 404 mapping is honest)", async () => {
+    const response = await authInject({
+      method: "PATCH",
+      url: "/api/v1/models/mdl_does-not-exist",
+      payload: { inputPricePerMtok: 1 },
+    });
+    expect(response.statusCode).toBe(404);
+    expect(response.json().error.code).toBe("NOT_FOUND");
+  });
+
+  it("requires the bearer token like every other route in the scope", async () => {
+    const post = await app.inject({
+      method: "POST",
+      url: "/api/v1/providers/openrouter/models",
+      payload: { modelId: "test/unauthenticated" },
+    });
+    expect(post.statusCode).toBe(401);
+
+    const patch = await app.inject({
+      method: "PATCH",
+      url: "/api/v1/models/mdl_x",
+      payload: { hidden: true },
+    });
+    expect(patch.statusCode).toBe(401);
+  });
+});

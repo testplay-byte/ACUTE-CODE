@@ -6,7 +6,7 @@
  */
 import { randomUUID } from "node:crypto";
 import type Database from "better-sqlite3";
-import type { RunMode, SessionStatus, UsageRecord } from "shared";
+import type { PermissionMode, RunMode, SessionStatus, UsageRecord } from "shared";
 
 export type SqliteDatabase = Database.Database;
 
@@ -24,6 +24,10 @@ export interface Session {
   parentSessionId: string | null;
   /** ROUND-36: the delegated role (planner/researcher/coder/reviewer/tester). */
   subRole: string | null;
+  /** ROUND-50 (R50-c1): the composer's permission mode (full/ask/plan/editor).
+   * Enforced at turn time (runtime.ts prepareTurn + approvals.ts); children
+   * copy their parent's mode at delegation. */
+  permissionMode: PermissionMode;
 }
 
 export interface SessionInput {
@@ -34,6 +38,9 @@ export interface SessionInput {
   /** ROUND-36: creates a CHILD session when set. */
   parentSessionId?: string | null;
   subRole?: string | null;
+  /** ROUND-50 (R50-c1): the session's permission mode (default "ask" —
+   * exactly the pre-R50 behavior). */
+  permissionMode?: PermissionMode;
 }
 
 /** Event JSON as served by the API (API.md §5.6). `agentId` comes from the payload. */
@@ -63,6 +70,9 @@ interface SessionRow {
   updated_at: string;
   parent_session_id?: string | null;
   sub_role?: string | null;
+  /** ROUND-50 (R50-c1): NOT NULL DEFAULT 'ask' since migration 0020; the
+   * fallback keeps hand-opened pre-0020 databases readable. */
+  permission_mode?: string | null;
 }
 
 interface EventRow {
@@ -71,6 +81,8 @@ interface EventRow {
   payload: string | null;
   ts: string;
 }
+
+const PERMISSION_MODE_VALUES: readonly string[] = ["full", "ask", "plan", "editor"];
 
 function toSession(row: SessionRow): Session {
   return {
@@ -84,6 +96,13 @@ function toSession(row: SessionRow): Session {
     updatedAt: row.updated_at,
     parentSessionId: row.parent_session_id ?? null,
     subRole: row.sub_role ?? null,
+    // ROUND-50 (R50-c1): unknown/null values (corrupted rows, pre-0020
+    // databases opened without the migration) read as "ask" — the
+    // fail-closed default that equals the pre-R50 behavior.
+    permissionMode:
+      typeof row.permission_mode === "string" && PERMISSION_MODE_VALUES.includes(row.permission_mode)
+        ? (row.permission_mode as PermissionMode)
+        : "ask",
   };
 }
 
@@ -114,14 +133,16 @@ export function createSession(db: SqliteDatabase, input: SessionInput): Session 
     updatedAt: now,
     parentSessionId: input.parentSessionId ?? null,
     subRole: input.subRole ?? null,
+    permissionMode: input.permissionMode ?? "ask",
   };
   db.prepare(
-    `INSERT INTO sessions (id, project_id, agent_id, mode, status, title, created_at, updated_at, parent_session_id, sub_role)
-     VALUES (@id, @projectId, @agentId, @mode, @status, @title, @createdAt, @updatedAt, @parentSessionId, @subRole)`,
+    `INSERT INTO sessions (id, project_id, agent_id, mode, status, title, created_at, updated_at, parent_session_id, sub_role, permission_mode)
+     VALUES (@id, @projectId, @agentId, @mode, @status, @title, @createdAt, @updatedAt, @parentSessionId, @subRole, @permissionMode)`,
   ).run({
     ...session,
     parentSessionId: input.parentSessionId ?? null,
     subRole: input.subRole ?? null,
+    permissionMode: input.permissionMode ?? "ask",
   });
   return session;
 }
@@ -170,6 +191,12 @@ export interface SubAgentStatus {
   todosTotal: number;
   inputTokens: number;
   outputTokens: number;
+  /** ROUND-50 (R50-b, owner: the sub-agent stats footer must show "the model
+   * which was being used"): the model of the child's LATEST usage_events row
+   * (the model its last completed provider call actually ran on — it follows
+   * the orchestration.subagentModel override), null before the first usage
+   * row lands. */
+  model: string | null;
   report: string | null;
   error: string | null;
 }
@@ -218,6 +245,13 @@ export function listSubAgents(db: SqliteDatabase, parentSessionId: string): SubA
         "SELECT COALESCE(SUM(input_tokens), 0) AS i, COALESCE(SUM(output_tokens), 0) AS o FROM usage_events WHERE session_id = ?",
       )
       .get(child.id) as { i: number; o: number };
+    // ROUND-50 (R50-b): the model of the LATEST usage row — the stats
+    // footer's authoritative "model which was being used" once the child
+    // has made at least one provider call (null until then; the SSE
+    // subagent-status frames carry the resolved model from the start).
+    const modelRow = db
+      .prepare("SELECT model FROM usage_events WHERE session_id = ? ORDER BY ts DESC LIMIT 1")
+      .get(child.id) as { model?: string } | undefined;
     let report: string | null = null;
     let error: string | null = null;
     for (const ev of listSessionEvents(db, child.id)) {
@@ -242,6 +276,7 @@ export function listSubAgents(db: SqliteDatabase, parentSessionId: string): SubA
       todosTotal,
       inputTokens: usage.i,
       outputTokens: usage.o,
+      model: modelRow?.model ?? null,
       report,
       error,
     };
@@ -282,6 +317,26 @@ export function updateSessionTitle(db: SqliteDatabase, id: string, title: string
   db.prepare(
     "UPDATE sessions SET title = ?, updated_at = ? WHERE id = ?",
   ).run(trimmed === "" ? null : trimmed, new Date().toISOString(), id);
+  return getSession(db, id);
+}
+
+/**
+ * ROUND-50 (R50-c1): set the session's permission mode (the composer's
+ * Full Access / Ask / Plan / Editor switcher). Callers (the PATCH
+ * /sessions/:id/permissions route) validate the value against the 4 known
+ * modes BEFORE calling — this function trusts its argument and only handles
+ * the unknown-id case (undefined). Returns the updated session row.
+ */
+export function updateSessionPermissionMode(
+  db: SqliteDatabase,
+  id: string,
+  mode: PermissionMode,
+): Session | undefined {
+  const existing = getSession(db, id);
+  if (existing === undefined) return undefined;
+  db.prepare(
+    "UPDATE sessions SET permission_mode = ?, updated_at = ? WHERE id = ?",
+  ).run(mode, new Date().toISOString(), id);
   return getSession(db, id);
 }
 
@@ -407,13 +462,25 @@ export function lastSessionSeq(db: SqliteDatabase, sessionId: string): number {
   return last;
 }
 
-/** One billing line per completed model call; costUsd is 0 until estimation lands. */
+/** One billing line per completed model call; costUsd is 0 until estimation lands.
+ * ROUND-50 (R50-c1): cachedInputTokens (the provider's cached prompt-token
+ * count, null when unreported) persists into usage_events.cached_input_tokens. */
 export function recordUsage(db: SqliteDatabase, usage: UsageRecord): void {
   db.prepare(
     `INSERT INTO usage_events
-      (agent_id, session_id, provider, model, input_tokens, output_tokens, cost_usd, ts)
-     VALUES (@agentId, @sessionId, @provider, @model, @inputTokens, @outputTokens, @costUsd, @ts)`,
-  ).run(usage);
+      (agent_id, session_id, provider, model, input_tokens, output_tokens, cached_input_tokens, cost_usd, ts)
+     VALUES (@agentId, @sessionId, @provider, @model, @inputTokens, @outputTokens, @cachedInputTokens, @costUsd, @ts)`,
+  ).run({
+    agentId: usage.agentId,
+    sessionId: usage.sessionId,
+    provider: usage.provider,
+    model: usage.model,
+    inputTokens: usage.inputTokens,
+    outputTokens: usage.outputTokens,
+    cachedInputTokens: usage.cachedInputTokens ?? null,
+    costUsd: usage.costUsd,
+    ts: usage.ts,
+  });
 }
 
 // ── ROUND-44 (R44-c, owner directive: "complete the whole agentic coding
@@ -496,11 +563,14 @@ export function forkSession(db: SqliteDatabase, sessionId: string): Session | un
     // escapes the parent linkage (it is a user-owned copy, not a delegation).
     parentSessionId: null,
     subRole: null,
+    // ROUND-50 (R50-c1): the fork keeps the source session's permission
+    // mode — a copy of the conversation keeps its posture.
+    permissionMode: original.permissionMode,
   };
   const copy = db.transaction((srcId: string) => {
     db.prepare(
-      `INSERT INTO sessions (id, project_id, agent_id, mode, status, title, created_at, updated_at, parent_session_id, sub_role)
-       VALUES (@id, @projectId, @agentId, @mode, @status, @title, @createdAt, @updatedAt, @parentSessionId, @subRole)`,
+      `INSERT INTO sessions (id, project_id, agent_id, mode, status, title, created_at, updated_at, parent_session_id, sub_role, permission_mode)
+       VALUES (@id, @projectId, @agentId, @mode, @status, @title, @createdAt, @updatedAt, @parentSessionId, @subRole, @permissionMode)`,
     ).run(fork);
     // INSERT…SELECT keeps seq/type/payload/ts byte-identical; the autoincrement
     // `id` column is omitted so every copied row gets a fresh row id.

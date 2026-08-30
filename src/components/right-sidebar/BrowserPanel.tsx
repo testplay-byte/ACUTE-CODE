@@ -22,6 +22,20 @@ import {
   probeBrowserTicket,
   useBrowserTabStore,
 } from "../../lib/browser-store";
+// ROUND-50 (R50-a): the native child-webview bridge (Tauri multiwebview —
+// WebView2/Chromium on Windows). When available, the page area is covered by
+// a real browser webview instead of the R43 fetch-proxy iframe.
+import {
+  isNativeBrowserAvailable,
+  nativeInvoke,
+  nativeTabClose,
+  nativeTabCreate,
+  nativeTabGo,
+  nativeTabNavigate,
+  nativeTabSetBounds,
+  nativeTabSetVisible,
+  onBrowserNavigated,
+} from "../../lib/native-browser";
 
 /**
  * ROUND-43 (R43-10) — the EMBEDDED BROWSER, finally inside the right sidebar.
@@ -35,14 +49,45 @@ import {
  * display-size (viewport) state per tab that the `browser_control` agent tool
  * reads/writes live.
  *
- * Ticket auth: iframes cannot send Authorization headers, so each tab mints a
- * `bt` ticket (POST /browser/session) and every proxy URL carries it. A dead
- * ticket renders the backend's HTML 401 page INSIDE the iframe — since the
- * sandbox (deliberately no allow-same-origin) hides the frame's DOM from us,
- * the panel detects that case by "loaded but the escape hatch never
- * postMessaged" + a cheap ticket probe, re-mints and reloads — capped at
- * RECOVERY_MAX recoveries per rolling RECOVERY_WINDOW_MS (R48-d), after
- * which it parks on the error card with a manual Retry instead of looping.
+ * ROUND-50 (R50-a) — the NATIVE mode. The owner's verdict on the proxy: "a
+ * proper full-fledged browser of our own… going with Chromium as the base".
+ * On Windows, Tauri's WebView2 IS Chromium, so when the Tauri shell is
+ * present (`isNativeBrowserAvailable()`) the page area is covered by a CHILD
+ * WEBVIEW of the main window (one per browser tab, Rust side in
+ * src-tauri/src/browser.rs) — no proxy, no tickets, full CSS/JS. The iframe
+ * path below stays EXACTLY as-is for non-Tauri runs (web dev mode / e2e
+ * tests). Both modes share the same store + server-side history, so the
+ * agent's browser_control tool drives and reads either one:
+ *
+ *  - lifecycle: panel mounts → `nativeTabCreate` (idempotent; also called by
+ *    the first address-bar navigation of a fresh tab) → bounds sync → show.
+ *    Panel unmounts (tab switch / sidebar collapse) → `nativeTabSetVisible
+ *    (false)` — the webview STAYS ALIVE so the session persists like a real
+ *    browser's background tab. Browser tab closed in the tab strip → the
+ *    module-scope reaper below calls `nativeTabClose`.
+ *  - bounds: the placeholder div's getBoundingClientRect is piped through
+ *    `computeNativeBounds` and pushed to Rust (ResizeObserver + window
+ *    resize + a 500ms safety-net interval, rAF-debounced).
+ *  - address bar / back / forward / reload drive BOTH the store (server
+ *    history — the agent's truth) and the native webview.
+ *  - `onBrowserNavigated` (fired by the Rust on_navigation hook) reports
+ *    user navigations INSIDE the page (link clicks, redirects) — recorded
+ *    into the server history so browser_control get_state stays truthful,
+ *    exactly like the iframe path's acute:location handler.
+ *  - the live-follow poll reconciles agent-driven navigations: when the
+ *    server history's current URL differs from what we last commanded the
+ *    webview to load, we navigate the webview (agent actions render live).
+ *
+ * Ticket auth (iframe path): iframes cannot send Authorization headers, so
+ * each tab mints a `bt` ticket (POST /browser/session) and every proxy URL
+ * carries it. A dead ticket renders the backend's HTML 401 page INSIDE the
+ * iframe — since the sandbox (deliberately no allow-same-origin) hides the
+ * frame's DOM from us, the panel detects that case by "loaded but the escape
+ * hatch never postMessaged" + a cheap ticket probe, re-mints and reloads —
+ * capped at RECOVERY_MAX recoveries per rolling RECOVERY_WINDOW_MS (R48-d),
+ * after which it parks on the error card with a manual Retry instead of
+ * looping. (The ticket is still minted in native mode — the server-side
+ * history/viewport sessions are the agent's browser_control state.)
  *
  * window.open from inside pages is intercepted by the backend's escape hatch
  * and postMessaged to us ({type:"acute:open"}) — the PANEL decides (navigate
@@ -66,6 +111,14 @@ const POLL_MS = 4000;
  */
 const RECOVERY_MAX = 3;
 const RECOVERY_WINDOW_MS = 60_000;
+/**
+ * ROUND-50 (R50-a): the native-mode bounds safety net. ResizeObserver +
+ * window resize cover every layout change we know of, but a DRIFTED child
+ * webview is worse than a drifted div — it floats ABOVE the app UI — so
+ * bounds are re-asserted on an interval as well (rAF-debounced with the
+ * other triggers so bursts collapse into one invoke).
+ */
+const NATIVE_BOUNDS_INTERVAL_MS = 500;
 
 function normalizeUrl(raw: string): string {
   const trimmed = raw.trim();
@@ -78,15 +131,98 @@ function normalizeUrl(raw: string): string {
   return `https://duckduckgo.com/?q=${encodeURIComponent(trimmed)}`;
 }
 
-/** Type-safe accessor for the Tauri global (only present in the desktop app). */
-function tauriInvoke(): ((cmd: string, args?: Record<string, unknown>) => Promise<unknown>) | null {
-  const w = (window as unknown as {
-    __TAURI__?: { core?: { invoke?: (cmd: string, args?: Record<string, unknown>) => Promise<unknown> } };
-  }).__TAURI__?.core;
-  return w?.invoke ?? null;
+// ── ROUND-50 (R50-a): native-mode geometry ─────────────────────────────────
+
+/** Window-relative bounds for a native child webview (logical px == CSS px). */
+export interface NativeBounds {
+  x: number;
+  y: number;
+  w: number;
+  h: number;
 }
 
-const IS_TAURI = tauriInvoke() !== null;
+/**
+ * The measured page area. Structurally satisfied by DOMRect (the panel passes
+ * getBoundingClientRect() straight in); a plain subset keeps the helper
+ * unit-testable without constructing a full DOMRect.
+ */
+export interface NativeAreaRect {
+  left: number;
+  top: number;
+  width: number;
+  height: number;
+}
+
+/**
+ * Pure geometry for the native child webview (unit-tested in
+ * native-browser.test.tsx):
+ *  - viewport === null → NATURAL mode: the webview fills the area exactly
+ *    (x/y at the area's top-left corner) — what a browser side-panel does.
+ *  - viewport set → PRESET mode: the webview is viewport-sized and CENTERED
+ *    in the area, clamped to the area when the preset (after zoom division)
+ *    is larger — an overflowing webview would cover the app's own UI, which
+ *    is never acceptable.
+ * Degenerate dimensions (zero, negative, NaN) collapse to 1px so a bad
+ * measurement can never create a zero-sized webview.
+ */
+export function computeNativeBounds(
+  area: NativeAreaRect,
+  viewport: { width: number; height: number } | null,
+): NativeBounds {
+  const dim = (v: number): number => (Number.isFinite(v) && v >= 1 ? v : 1);
+  // Sanitize the AREA first — the centering math below must never see NaN.
+  const areaW = dim(area.width);
+  const areaH = dim(area.height);
+  const w = viewport === null ? areaW : dim(Math.min(viewport.width, areaW));
+  const h = viewport === null ? areaH : dim(Math.min(viewport.height, areaH));
+  return {
+    x: area.left + Math.max(0, (areaW - w) / 2),
+    y: area.top + Math.max(0, (areaH - h) / 2),
+    w,
+    h,
+  };
+}
+
+/**
+ * ROUND-50 (R50-a): the tab-close reaper (module scope, installed once).
+ *
+ * A tab's native webview OUTLIVES its BrowserPanel (hidden when the tab is
+ * inactive so the session persists). When a browser tab is CLOSED in the tab
+ * strip — possibly while a DIFFERENT tab type is active, so no BrowserPanel
+ * for it is mounted — its webview must still be destroyed. This subscription
+ * watches the right-sidebar store and closes the native webview of every
+ * browser tab id that disappears from ALL slices. Installed by the first
+ * native-mode panel mount (never uninstalled — the app is the process).
+ */
+let nativeTabReaperInstalled = false;
+function installNativeTabReaper(): void {
+  if (nativeTabReaperInstalled) return;
+  nativeTabReaperInstalled = true;
+  const collectBrowserTabIds = (
+    state: ReturnType<typeof useRightSidebarStore.getState>,
+  ): Set<string> => {
+    const ids = new Set<string>();
+    for (const slice of Object.values(state.byProject)) {
+      for (const t of slice.tabs) {
+        if (t.type === "browser") ids.add(t.id);
+      }
+    }
+    return ids;
+  };
+  let known = collectBrowserTabIds(useRightSidebarStore.getState());
+  useRightSidebarStore.subscribe((state) => {
+    const live = collectBrowserTabIds(state);
+    for (const id of known) {
+      if (!live.has(id)) void nativeTabClose(id).catch(() => {});
+    }
+    known = live;
+  });
+}
+
+/** Best-effort logging for native calls whose failure shouldn't spam the UI. */
+function nativeWarn(err: unknown): void {
+  console.warn("[native-browser]", err);
+}
 
 const QUICK_LINKS: Array<{ label: string; url: string }> = [
   { label: "GitHub", url: "https://github.com" },
@@ -172,6 +308,32 @@ export function BrowserPanel({ projectId, tab }: { projectId: string; tab: Right
   const setLoading = useBrowserTabStore((s) => s.setLoading);
   const clearError = useBrowserTabStore((s) => s.clearError);
 
+  // ── ROUND-50 (R50-a): native-mode state ─────────────────────────────────
+  // Checked per render (NOT module level) so tests can toggle the mocked
+  // availability per test. In the shipped app this is constant per process.
+  const nativeMode = isNativeBrowserAvailable();
+  /** Placeholder for the page area — the native webview floats above it. */
+  const placeholderRef = useRef<HTMLDivElement | null>(null);
+  /** True once this tab's native webview is known to exist (create resolved). */
+  const nativeReadyRef = useRef(false);
+  /**
+   * The last URL we commanded the native webview to load, or null when
+   * unknown (after back/forward — the webview walked its OWN history).
+   * Doubles as the echo-suppressor for onBrowserNavigated (we cause the
+   * event ourselves) and as the agent-reconcile reference in the poll.
+   */
+  const lastCommandedUrlRef = useRef<string | null>(null);
+  /** Pending rAF handle for the debounced bounds sync. */
+  const rafRef = useRef<number | null>(null);
+  /** Latest render's effective viewport dims (read inside sync callbacks). */
+  const effectiveViewportRef = useRef<{ width: number; height: number } | null>(null);
+  /**
+   * Natural mode: the webview fills the page area (no preset). The DEFAULT in
+   * native mode — a real browser panel just fills — while presets remain one
+   * click away for responsive testing (the agent's display-size feature).
+   */
+  const [naturalSize, setNaturalSize] = useState(true);
+
   const iframeRef = useRef<HTMLIFrameElement | null>(null);
   const contentRef = useRef<HTMLDivElement | null>(null);
   /** Did the loaded document postMessage us? Error pages never do. */
@@ -191,13 +353,165 @@ export function BrowserPanel({ projectId, tab }: { projectId: string; tab: Right
     void mint(tabId);
   }, [tabId, ensureTab, mint]);
 
+  // ── derived viewport geometry ───────────────────────────────────────────
+  const vp = state?.viewport;
+  const rotate = vp?.rotate ?? false;
+  const rawW = vp?.width ?? 1280;
+  const rawH = vp?.height ?? 800;
+  const viewW = rotate ? rawH : rawW;
+  const viewH = rotate ? rawW : rawH;
+  const zoom = vp?.zoom ?? 1;
+  const fit = state?.fit ?? true;
+
+  /**
+   * The dims the NATIVE webview should render at, or null for natural mode.
+   *
+   * ZOOM LIMITATION (R50-a, documented per spec): a child webview cannot be
+   * transform-scaled like the iframe — resizing it changes the CSS viewport
+   * the page SEES. So zoom divides the target dims (w/zoom, h/zoom): zooming
+   * "in" shrinks the CSS viewport so content lays out larger RELATIVE to the
+   * (centered) frame. This is a viewport-size approximation of zoom, NOT a
+   * DPI zoom — WebView2's zoomFactor is not exposed through Tauri's webview
+   * API. Zoom-out (zoom < 1) grows the frame past the panel and is clamped
+   * back by computeNativeBounds (effectively 1:1). In natural mode zoom has
+   * no effect (null → fill) — pick a preset to zoom.
+   */
+  const effectiveViewport: { width: number; height: number } | null =
+    !nativeMode || naturalSize ? null : { width: viewW / zoom, height: viewH / zoom };
+  // Mirror into a ref so the interval/rAF callbacks (which must NOT depend on
+  // these values for their identity) always read the latest dims.
+  useEffect(() => {
+    effectiveViewportRef.current = effectiveViewport;
+  });
+
+  // ── native: create/show the tab webview while the panel is mounted ──────
+  //
+  // Push the placeholder's bounds to Rust. Deps are only [tabId, nativeMode]
+  // on purpose: the latest geometry (viewport preset/zoom/rotate/natural) is
+  // read through effectiveViewportRef so this callback's identity stays
+  // stable across viewport changes (the bounds EFFECT below owns re-syncing
+  // on those changes — see its deps).
+  const syncBounds = useCallback(() => {
+    if (!nativeMode || !nativeReadyRef.current) return;
+    const el = placeholderRef.current;
+    if (el === null) return;
+    const rect = el.getBoundingClientRect();
+    const b = computeNativeBounds(rect, effectiveViewportRef.current);
+    void nativeTabSetBounds(tabId, b.x, b.y, b.w, b.h).catch(nativeWarn);
+  }, [tabId, nativeMode]);
+
+  /** rAF-debounced sync — bursts of resize events collapse into one invoke. */
+  const scheduleBoundsSync = useCallback(() => {
+    if (rafRef.current !== null) return;
+    rafRef.current = window.requestAnimationFrame(() => {
+      rafRef.current = null;
+      syncBounds();
+    });
+  }, [syncBounds]);
+
+  /**
+   * Create (idempotently) + show this tab's native webview at `url`. Shared
+   * by the mount lifecycle (panel activation) and every navigation path.
+   */
+  const nativeCreate = useCallback(
+    (url: string): Promise<void> => {
+      lastCommandedUrlRef.current = url;
+      return nativeTabCreate(tabId, url)
+        .then(() => {
+          nativeReadyRef.current = true;
+          scheduleBoundsSync();
+          return nativeTabSetVisible(tabId, true);
+        });
+    },
+    [tabId, scheduleBoundsSync],
+  );
+
+  const nativeFail = useCallback(
+    (err: unknown) => {
+      const message = err instanceof Error ? err.message : String(err);
+      useBrowserTabStore.getState().setError(tabId, `Native browser failed: ${message}`);
+    },
+    [tabId],
+  );
+
+  useEffect(() => {
+    if (!nativeMode) return;
+    installNativeTabReaper();
+    let cancelled = false;
+    // Read from the store at mount (NOT a dep): a tab that already browsed
+    // (tab switch back) resumes its live URL; a fresh tab creates lazily on
+    // its first navigation instead of loading a blank page.
+    const startUrl = useBrowserTabStore.getState().tabs[tabId]?.currentUrl ?? null;
+    if (startUrl !== null) {
+      void nativeCreate(startUrl).catch((err) => {
+        if (!cancelled) nativeFail(err);
+      });
+    }
+    return () => {
+      cancelled = true;
+      // ANY unmount = the panel went away (active tab switched, sidebar
+      // collapsed, tab closed): HIDE the webview but keep it alive — the
+      // browsing session persists, exactly like a background tab.
+      void nativeTabSetVisible(tabId, false).catch(() => {});
+    };
+    // Deps note: deliberately NOT keyed on currentUrl — every navigation
+    // path drives the webview itself; re-running here would hide + re-create
+    // the webview on each URL change. nativeCreate's identity covers tabId.
+  }, [tabId, nativeMode, nativeCreate]);
+
+  // ── native: keep the webview glued to the placeholder ───────────────────
+  useEffect(() => {
+    if (!nativeMode) return;
+    // Initial sync + re-sync whenever the effective viewport (preset / zoom /
+    // rotate / natural toggle) or the active tab changes.
+    scheduleBoundsSync();
+    const el = placeholderRef.current;
+    const observer = new ResizeObserver(() => scheduleBoundsSync());
+    if (el !== null) observer.observe(el);
+    const onResize = () => scheduleBoundsSync();
+    window.addEventListener("resize", onResize);
+    // Safety net — see NATIVE_BOUNDS_INTERVAL_MS.
+    const safetyNet = window.setInterval(scheduleBoundsSync, NATIVE_BOUNDS_INTERVAL_MS);
+    return () => {
+      observer.disconnect();
+      window.removeEventListener("resize", onResize);
+      window.clearInterval(safetyNet);
+      if (rafRef.current !== null) {
+        window.cancelAnimationFrame(rafRef.current);
+        rafRef.current = null;
+      }
+    };
+  }, [nativeMode, scheduleBoundsSync, tabId, viewW, viewH, zoom, rotate, naturalSize]);
+
+  // ── native: user navigations INSIDE the webview ──────────────────────────
+  useEffect(() => {
+    if (!nativeMode) return;
+    return onBrowserNavigated((evtTabId, url) => {
+      if (evtTabId !== tabId) return;
+      if (!/^https?:\/\//i.test(url)) return;
+      // Echo suppression: we caused this navigation (address bar, agent
+      // reconcile) — the store already knows; recording it again would add
+      // duplicate history entries.
+      if (lastCommandedUrlRef.current === url) return;
+      lastCommandedUrlRef.current = url;
+      // The user clicked a link / submitted a form / got redirected INSIDE
+      // the page. Record it into the server-side history so the agent's
+      // browser_control get_state stays truthful — the same intent as the
+      // iframe path's acute:location handler below.
+      void handleLocationMessage(tabId, url);
+    });
+  }, [nativeMode, tabId, handleLocationMessage]);
+
   // A tab opened WITH a url (openBrowser(projectId, url)) navigates once the
   // ticket exists.
   useEffect(() => {
     if (state?.status === "ready" && state.ticket !== null && state.currentUrl === null && tab.browserUrl != null) {
-      void navigate(tabId, normalizeUrl(tab.browserUrl));
+      navigateUrl(normalizeUrl(tab.browserUrl));
     }
-  }, [state?.status, state?.ticket, state?.currentUrl, tab.browserUrl, tabId, navigate]);
+    // Deps note: navigateUrl is intentionally omitted — it is a stable
+    // useCallback over [tabId, nativeMode, store actions]; the guarded
+    // condition (currentUrl === null) makes the effect self-disarming.
+  }, [state?.status, state?.ticket, state?.currentUrl, tab.browserUrl, tabId]);
 
   // Address bar follows the live URL (agent navigations included).
   useEffect(() => {
@@ -217,13 +531,32 @@ export function BrowserPanel({ projectId, tab }: { projectId: string; tab: Right
     if (state?.ticket === null || state?.ticket === undefined) return;
     const tick = () => {
       if (document.visibilityState !== "visible") return;
-      void refresh(tabId);
+      void refresh(tabId).then(() => {
+        if (!nativeMode) return;
+        // ROUND-50: agent-reconcile — the server history is the source of
+        // truth for where the tab "should" be. A URL differing from the last
+        // one we commanded means the AGENT navigated (browser_control);
+        // follow it so agent actions render live.
+        const live = useBrowserTabStore.getState().tabs[tabId];
+        const serverUrl = live?.currentUrl ?? null;
+        if (serverUrl === null) return;
+        if (lastCommandedUrlRef.current === null) {
+          // Unknown (back/forward walked the webview's own history) — adopt
+          // the server URL WITHOUT re-navigating; the webview already moved.
+          lastCommandedUrlRef.current = serverUrl;
+          return;
+        }
+        if (serverUrl !== lastCommandedUrlRef.current) {
+          lastCommandedUrlRef.current = serverUrl;
+          void nativeTabNavigate(tabId, serverUrl).catch(nativeWarn);
+        }
+      });
     };
     const interval = window.setInterval(tick, POLL_MS);
     return () => window.clearInterval(interval);
-  }, [tabId, refresh, state?.ticket]);
+  }, [tabId, refresh, state?.ticket, nativeMode]);
 
-  // ── escape-hatch postMessages from the proxied page ────────────────────
+  // ── escape-hatch postMessages from the proxied page (iframe path) ───────
   useEffect(() => {
     const onMessage = (event: MessageEvent) => {
       // The iframe is sandboxed WITHOUT allow-same-origin → opaque origin,
@@ -315,13 +648,49 @@ export function BrowserPanel({ projectId, tab }: { projectId: string; tab: Right
   }, []);
 
   // ── actions ─────────────────────────────────────────────────────────────
+  /**
+   * Navigate to `url` through BOTH channels: the store (server-side history —
+   * the agent's browser_control truth) AND, in native mode, the child webview
+   * (`nativeTabCreate` is create-OR-navigate, so the FIRST navigation of a
+   * fresh tab creates the webview).
+   */
+  const navigateUrl = useCallback(
+    (url: string) => {
+      if (url === "") return;
+      clearError(tabId);
+      void navigate(tabId, url);
+      if (!nativeMode) return;
+      void nativeCreate(url).catch(nativeFail);
+    },
+    [tabId, nativeMode, clearError, navigate, nativeCreate, nativeFail],
+  );
+
+  /**
+   * Back / forward / reload through BOTH channels. The native webview walks
+   * its OWN session history (eval'd history.back()/forward()/reload — NOT a
+   * navigate-to-URL, which would push a new entry), and lastCommandedUrl
+   * goes "unknown" until onBrowserNavigated or the poll reports where it
+   * landed.
+   */
+  const goDirection = useCallback(
+    (direction: "back" | "forward" | "reload") => {
+      if (!nativeMode || !nativeReadyRef.current) {
+        void go(tabId, direction);
+        return;
+      }
+      lastCommandedUrlRef.current = null;
+      void nativeTabGo(tabId, direction).catch(nativeWarn);
+      void go(tabId, direction);
+    },
+    [tabId, nativeMode, go],
+  );
+
   const onSubmit = (e: FormEvent) => {
     e.preventDefault();
     const url = normalizeUrl(draft);
     if (url === "") return;
     setDraft(url);
-    clearError(tabId);
-    void navigate(tabId, url);
+    navigateUrl(url);
   };
 
   const onKeyDown = (e: KeyboardEvent<HTMLInputElement>) => {
@@ -333,8 +702,7 @@ export function BrowserPanel({ projectId, tab }: { projectId: string; tab: Right
 
   const onQuickLink = (url: string) => {
     setDraft(url);
-    clearError(tabId);
-    void navigate(tabId, url);
+    navigateUrl(url);
   };
 
   const onOpenExternally = () => {
@@ -345,7 +713,7 @@ export function BrowserPanel({ projectId, tab }: { projectId: string; tab: Right
   };
 
   const onPopOut = async () => {
-    const invoke = tauriInvoke();
+    const invoke = nativeInvoke();
     const url = currentUrl;
     if (invoke === null || url === null) return;
     try {
@@ -361,20 +729,11 @@ export function BrowserPanel({ projectId, tab }: { projectId: string; tab: Right
     void mint(tabId).then(() => {
       const live = useBrowserTabStore.getState().tabs[tabId];
       if (live?.ticket !== null && live?.ticket !== undefined && live.currentUrl !== null) {
-        void go(tabId, "reload");
+        goDirection("reload");
       }
     });
   };
 
-  // ── derived viewport geometry ───────────────────────────────────────────
-  const vp = state?.viewport;
-  const rotate = vp?.rotate ?? false;
-  const rawW = vp?.width ?? 1280;
-  const rawH = vp?.height ?? 800;
-  const viewW = rotate ? rawH : rawW;
-  const viewH = rotate ? rawW : rawH;
-  const zoom = vp?.zoom ?? 1;
-  const fit = state?.fit ?? true;
   const fitScale = fit ? Math.min(1, availWidth / Math.max(1, viewW * zoom)) : 1;
   const scale = zoom * fitScale;
   const readout =
@@ -390,6 +749,52 @@ export function BrowserPanel({ projectId, tab }: { projectId: string; tab: Right
 
   const hasPage = state !== null && state.currentUrl !== null && state.ticket !== null;
 
+  const emptyState = (
+    <div className="h-full grid place-items-center px-6 text-center" data-testid="browser-empty">
+      <div>
+        <div
+          className="w-14 h-14 mx-auto mb-3 grid place-items-center rounded-2xl"
+          style={{ background: styles.isDark ? "rgba(0,0,0,0.18)" : styles.card, border: `1px solid ${styles.border}` }}
+        >
+          <Globe size={26} style={{ color: styles.accent }} />
+        </div>
+        <div className="text-[12.5px] font-medium" style={{ color: styles.textSecondary }}>
+          Embedded browser
+        </div>
+        <div className="text-[11px] mt-1.5 max-w-xs mx-auto leading-relaxed" style={{ color: styles.textTertiary }}>
+          {nativeMode ? (
+            <>
+              Pages render in the embedded Chromium engine — full CSS and JavaScript, one shared
+              profile (logins persist). Type an address above, pick a display size below, or ask
+              the agent (“open github.com and check the mobile layout”).
+            </>
+          ) : (
+            <>
+              Pages render inside the app through the sidecar proxy — no external tabs, no popup
+              blockers. Type an address above, pick a display size below, or ask the agent
+              (“open github.com and check the mobile layout”).
+            </>
+          )}
+        </div>
+        <div className="mt-4 flex items-center justify-center gap-2">
+          {QUICK_LINKS.map((link) => (
+            <button
+              key={link.url}
+              onClick={() => onQuickLink(link.url)}
+              className="inline-flex items-center gap-1 h-7 px-3 rounded-full text-[11px] font-medium transition-colors"
+              style={ghostBtn()}
+              onMouseEnter={(e) => { e.currentTarget.style.background = styles.subtleHover; }}
+              onMouseLeave={(e) => { e.currentTarget.style.background = "transparent"; }}
+            >
+              <Globe size={10} />
+              {link.label}
+            </button>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+
   return (
     <div className="h-full flex flex-col min-h-0" data-testid="browser-panel">
       {/* ── Chrome bar: navigation + address + explicit external actions ── */}
@@ -398,7 +803,7 @@ export function BrowserPanel({ projectId, tab }: { projectId: string; tab: Right
         style={{ borderColor: styles.border, background: styles.isDark ? "rgba(0,0,0,0.15)" : styles.subtle }}
       >
         <button
-          onClick={() => void go(tabId, "back")}
+          onClick={() => goDirection("back")}
           disabled={!state?.canBack}
           data-testid="browser-back"
           aria-label="Back"
@@ -411,7 +816,7 @@ export function BrowserPanel({ projectId, tab }: { projectId: string; tab: Right
           <ArrowLeft size={13} />
         </button>
         <button
-          onClick={() => void go(tabId, "forward")}
+          onClick={() => goDirection("forward")}
           disabled={!state?.canForward}
           data-testid="browser-forward"
           aria-label="Forward"
@@ -425,7 +830,7 @@ export function BrowserPanel({ projectId, tab }: { projectId: string; tab: Right
         </button>
         <button
           onClick={() => {
-            if (state?.currentUrl != null) void go(tabId, "reload");
+            if (state?.currentUrl != null) goDirection("reload");
           }}
           disabled={!hasPage}
           data-testid="browser-reload"
@@ -473,7 +878,7 @@ export function BrowserPanel({ projectId, tab }: { projectId: string; tab: Right
           </div>
         </form>
 
-        {IS_TAURI ? (
+        {nativeMode ? (
           <button
             onClick={() => void onPopOut()}
             aria-label="Pop out window"
@@ -481,7 +886,7 @@ export function BrowserPanel({ projectId, tab }: { projectId: string; tab: Right
             className="shrink-0 w-6 h-6 grid place-items-center rounded-md transition-colors"
             style={{ color: styles.textTertiary }}
             onMouseEnter={(e) => { e.currentTarget.style.background = styles.subtleHover; }}
-            onMouseLeave={(e) => (e.currentTarget.style.background = "transparent")}
+            onMouseLeave={(e) => { e.currentTarget.style.background = "transparent" }}
           >
             <PanelTopOpen size={13} />
           </button>
@@ -506,9 +911,17 @@ export function BrowserPanel({ projectId, tab }: { projectId: string; tab: Right
         style={{ borderColor: styles.border, color: styles.textTertiary, background: styles.isDark ? "rgba(0,0,0,0.08)" : "transparent" }}
       >
         <select
-          value={vp?.preset ?? "laptop"}
+          value={nativeMode && naturalSize ? "natural" : (vp?.preset ?? "laptop")}
           onChange={(e) => {
             const value = e.target.value;
+            if (nativeMode && value === "natural") {
+              // Natural mode is PANEL-LOCAL (the webview fills the page
+              // area); the server-side display size stays untouched — the
+              // agent's display-size testing only applies to fixed presets.
+              setNaturalSize(true);
+              return;
+            }
+            if (nativeMode) setNaturalSize(false);
             void setViewport(tabId, value === "custom" ? { preset: "custom" } : { preset: value });
           }}
           aria-label="Display size preset"
@@ -516,6 +929,9 @@ export function BrowserPanel({ projectId, tab }: { projectId: string; tab: Right
           className="h-6 px-1 rounded-md border outline-none cursor-pointer max-w-[118px]"
           style={{ background: styles.card, borderColor: styles.border, color: styles.textSecondary }}
         >
+          {/* ROUND-50: native-mode default — fill the panel like a real
+              browser side-panel; presets remain one click away. */}
+          {nativeMode ? <option value="natural">Natural (fill panel)</option> : null}
           {BROWSER_VIEWPORT_PRESETS.map((p) => (
             <option key={p.id} value={p.id}>
               {p.label}
@@ -528,7 +944,10 @@ export function BrowserPanel({ projectId, tab }: { projectId: string; tab: Right
             value={rawW}
             min={200}
             max={3840}
-            onCommit={(w) => void setViewport(tabId, { width: w })}
+            onCommit={(w) => {
+              if (nativeMode) setNaturalSize(false);
+              void setViewport(tabId, { width: w });
+            }}
             label="Viewport width"
             testId="browser-width-input"
             width={52}
@@ -538,7 +957,10 @@ export function BrowserPanel({ projectId, tab }: { projectId: string; tab: Right
             value={rawH}
             min={200}
             max={4320}
-            onCommit={(h) => void setViewport(tabId, { height: h })}
+            onCommit={(h) => {
+              if (nativeMode) setNaturalSize(false);
+              void setViewport(tabId, { height: h });
+            }}
             label="Viewport height"
             testId="browser-height-input"
             width={52}
@@ -588,7 +1010,11 @@ export function BrowserPanel({ projectId, tab }: { projectId: string; tab: Right
           className="ml-auto shrink-0 font-mono text-[10px] px-1.5 py-0.5 rounded-md"
           data-testid="browser-readout"
           style={{ background: styles.subtle, color: styles.textTertiary }}
-          title={`True viewport ${viewW}×${viewH}px — the page sees these CSS pixels`}
+          title={
+            nativeMode
+              ? `Native mode: presets larger than the panel are clamped to the panel — the page sees the clamped CSS pixels`
+              : `True viewport ${viewW}×${viewH}px — the page sees these CSS pixels`
+          }
         >
           {readout}
         </span>
@@ -633,40 +1059,21 @@ export function BrowserPanel({ projectId, tab }: { projectId: string; tab: Right
         className="flex-1 min-h-0 overflow-auto"
         style={{ background: styles.isDark ? "rgba(0,0,0,0.22)" : styles.subtle }}
       >
-        {!hasPage ? (
-          <div className="h-full grid place-items-center px-6 text-center" data-testid="browser-empty">
-            <div>
-              <div
-                className="w-14 h-14 mx-auto mb-3 grid place-items-center rounded-2xl"
-                style={{ background: styles.isDark ? "rgba(0,0,0,0.18)" : styles.card, border: `1px solid ${styles.border}` }}
-              >
-                <Globe size={26} style={{ color: styles.accent }} />
-              </div>
-              <div className="text-[12.5px] font-medium" style={{ color: styles.textSecondary }}>
-                Embedded browser
-              </div>
-              <div className="text-[11px] mt-1.5 max-w-xs mx-auto leading-relaxed" style={{ color: styles.textTertiary }}>
-                Pages render inside the app through the sidecar proxy — no external tabs, no popup
-                blockers. Type an address above, pick a display size below, or ask the agent
-                (“open github.com and check the mobile layout”).
-              </div>
-              <div className="mt-4 flex items-center justify-center gap-2">
-                {QUICK_LINKS.map((link) => (
-                  <button
-                    key={link.url}
-                    onClick={() => onQuickLink(link.url)}
-                    className="inline-flex items-center gap-1 h-7 px-3 rounded-full text-[11px] font-medium transition-colors"
-                    style={ghostBtn()}
-                    onMouseEnter={(e) => { e.currentTarget.style.background = styles.subtleHover; }}
-                    onMouseLeave={(e) => { e.currentTarget.style.background = "transparent"; }}
-                  >
-                    <Globe size={10} />
-                    {link.label}
-                  </button>
-                ))}
-              </div>
-            </div>
+        {nativeMode ? (
+          /* ROUND-50 (R50-a): the page area placeholder. The native child
+             webview is NOT a DOM child — it is an OS-level child of the
+             window floating ABOVE the web UI, positioned over this div by
+             the bounds sync above. It renders the page (full CSS/JS); this
+             div only marks the rectangle + hosts the empty state. */
+          <div
+            ref={placeholderRef}
+            data-testid="browser-native-placeholder"
+            className="relative h-full w-full"
+          >
+            {!hasPage ? emptyState : null}
           </div>
+        ) : !hasPage ? (
+          emptyState
         ) : (
           <div className="min-h-full w-full grid justify-center px-3 py-3">
             <div
@@ -704,15 +1111,24 @@ export function BrowserPanel({ projectId, tab }: { projectId: string; tab: Right
         )}
       </div>
 
-      {/* ── status footnote: proxy-mode honesty ──────────────────────────── */}
+      {/* ── status footnote: mode honesty ───────────────────────────────── */}
       <div
         className="shrink-0 flex items-center gap-1.5 px-3 h-6 border-t text-[10px]"
         style={{ borderColor: styles.border, color: styles.textTertiary }}
       >
         <Info size={10} className="shrink-0" />
         <span className="truncate">
-          Rendered through the sidecar proxy — logins don’t persist; heavily scripted sites may load
-          partially. “Open externally” is always available.
+          {nativeMode ? (
+            <>
+              Rendered by the embedded Chromium engine (WebView2) — full CSS/JS, one shared profile,
+              logins persist. “Open externally” is always available.
+            </>
+          ) : (
+            <>
+              Rendered through the sidecar proxy — logins don’t persist; heavily scripted sites may load
+              partially. “Open externally” is always available.
+            </>
+          )}
         </span>
       </div>
     </div>

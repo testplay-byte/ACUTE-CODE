@@ -19,7 +19,7 @@
  *   fails fast with a clear note (no 120s burn).
  */
 import { randomUUID } from "node:crypto";
-import type { ToolPermission } from "shared";
+import type { PermissionMode, ToolPermission } from "shared";
 import type { SqliteDatabase } from "./storage/db.js";
 import { logApproval } from "./lib/log.js";
 import { appendSessionEvent } from "./storage/sessions.js";
@@ -447,6 +447,13 @@ export interface ApprovalRequestDeps {
   /** Only INTERACTIVE streamed parent turns may wait for a decision; sync
    * turns + sub-agent children fail fast on non-auto commands. */
   interactive: boolean;
+  /** ROUND-50 (R50-c1, the composer's permission-mode switcher): the
+   * session's standing posture. In "full" mode every ASK-tier decision
+   * auto-approves WITHOUT waiting (the owner pre-trusted the session); the
+   * DENYLIST-SUPREME refusals (decideCommand/decideWebFetch "deny") are
+   * checked BEFORE this and are NEVER bypassed in any mode. Undefined /
+   * "ask" / "plan" / "editor" keep today's ask-tier behavior exactly. */
+  permissionMode?: PermissionMode;
   /** SSE channel of the live turn (approval.requested/resolved ride it). */
   emit?: (event: unknown) => void;
   /** Client abort — the waiter races it (deny on abort, fail-closed). */
@@ -479,6 +486,18 @@ export async function requestCommandApproval(
   }
   if (decision.action === "run") {
     return { allowed: true, note: decision.reason };
+  }
+
+  // ROUND-50 (R50-c1): FULL ACCESS mode — every ask-tier decision
+  // auto-approves without waiting. Checked AFTER the denylist-supreme
+  // refusal above (sudo / rm -rf / curl &c. NEVER run in any mode) and
+  // after the explicit auto/rule tiers (already "run"). Allowlists stay
+  // authoritative: mode only widens within what the session may do.
+  if (deps.permissionMode === "full") {
+    return {
+      allowed: true,
+      note: "auto-approved (session is in Full Access mode)",
+    };
   }
 
   if (!deps.interactive) {
@@ -703,6 +722,16 @@ export async function requestWebFetchApproval(
   }
   if (decision.action === "run") {
     return { allowed: true, note: decision.reason };
+  }
+
+  // ROUND-50 (R50-c1): FULL ACCESS mode — a non-allowlisted host
+  // auto-allows without asking (mirrors requestCommandApproval; the deny
+  // cases above — invalid URL / non-http scheme — are never bypassed).
+  if (deps.permissionMode === "full") {
+    return {
+      allowed: true,
+      note: `auto-approved: ${decision.host} (session is in Full Access mode)`,
+    };
   }
 
   if (!deps.interactive) {

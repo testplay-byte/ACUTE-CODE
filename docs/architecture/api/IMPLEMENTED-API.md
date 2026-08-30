@@ -1,8 +1,8 @@
-<!-- last-reviewed: 2026-08-29 round-49 -->
+<!-- last-reviewed: 2026-08-30 round-50 -->
 # IMPLEMENTED API — the shipped surface
 
 **Truth = this file.** Verified against `agent-core/src/server.ts` at
-round-17 (2026-08-23), refreshed R37→R48. The aspirational full contract (52
+round-17 (2026-08-23), refreshed R37→R50. The aspirational full contract (52
 operations, WS gateway, planned routes) lives in
 [`API.md`](API.md) — anything there and
 not here **does not exist yet**. Base: `http://127.0.0.1:<port>`; dev port
@@ -58,11 +58,15 @@ variant — see ROUND-44 additions).
 
 | Route | Contract |
 |---|---|
-| `POST /sessions` | `{mode:"single", agentId (required, validated), projectId?, title?}` → `202` (queued) |
+| `POST /sessions` | `{mode:"single", agentId (required, validated), projectId?, title?}` → `202` (queued). **ROUND-50: rows carry `permissionMode`** (`full\|ask\|plan\|editor`, default `ask`; sub-agent children copy the parent's mode at delegation) |
 | `GET /sessions?limit=&offset=` | newest-first + total (NO projectId filter — client-side) |
 | `GET /sessions/:id` | session + `events[]` + `lastSeq` (events embedded; no backfill route) |
-| `POST /sessions/:id/messages` | `{content, model?}` — **synchronous whole turn** → `200 {assistantMessage:{seq,role,agentId,content,ts}, usage}`; 404/409 (terminal/unconfigured/no key)/502 provider |
-| `POST /sessions/:id/messages/stream` | **SSE (the UI's primary path)** — same validation; `text/event-stream` frames: `{type:"text-delta",delta}` · `{type:"tool-call",toolName,argsSummary}` · `{type:"tool-result",toolName,argsSummary,ok}` · `{type:"finish",usage}` · terminal `{type:"done",assistantMessage,usage}` or `{type:"error",status,code,message}`. **R42: a client disconnect does NOT abort the turn** — it completes in the background (events persist; the completion notification fires + Web Push delivers it to the closed window's service worker). A deliberate stop is `POST /sessions/:id/stop`. |
+| `PATCH /sessions/:id/permissions` | **ROUND-50** — `{mode: "full"\|"ask"\|"plan"\|"editor"}` → `200` the updated session + `events[]` + `lastSeq` (same shape as GET). `400 VALIDATION body.mode` otherwise, `404` unknown. Enforcement: `sessionToolAllowList` (runtime.ts — shared with the context route): *plan* intersects tools to the 12 read-only/research tools; *editor* strips `run_command`; *full* auto-approves every ask-tier gate EXCEPT the denylist-supreme (sudo/rm -rf/… never bypassed) while agent allowlists stay authoritative; the system prompt gains a PERMISSION MODE section. |
+| `GET /sessions/:id/context?model=` | **ROUND-50 (the composer's context donut)** — `{model, providerId, contextWindow, usedTokens, breakdown:{systemPrompt, systemTools, memory, messages, meta, mcpTools:0}, cache:{inputTokens, cachedInputTokens, hitRate\|null}, sessionTotals:{inputTokens, outputTokens, requests, costUsd}}`. Window = models row → catalog → 200k. Breakdown via `buildSystemPromptSections` + estimateTokens (tool schemas ≈350 tokens/tool, documented approximation); MCP is an honest 0 (no MCP system). Cache from REAL `usage_events.cached_input_tokens` (migration 0020 — captured from the provider's `prompt_tokens_details.cached_tokens` on both turn paths). |
+| `POST /sessions/:id/messages` | `{content, model?}` — **synchronous whole turn** → `200 {assistantMessage:{seq,role,agentId,content,ts}, usage}`; 404/409 (terminal/unconfigured/no key)/502 provider. **ROUND-50: also accepts `thinkingLevel?: "default"\|"low"\|"high"\|"max"` (400 otherwise; injected as `reasoning.effort` on chat-completions bodies) and `attachments?: [{name, path?, size?, text?}]` (≤20, name ≤200 chars, text capped 128 KB server-side; persisted on the `message.user` payload and rendered into model-facing history as `--- attached file: … ---` blocks)** |
+| `POST /sessions/:id/messages/stream` | **SSE (the UI's primary path)** — same validation (incl. the ROUND-50 `thinkingLevel`/`attachments` fields); `text/event-stream` frames: `{type:"text-delta",delta}` · `{type:"thinking-delta",delta}` · `{type:"tool-call",toolName,argsSummary}` · `{type:"tool-result",toolName,argsSummary,ok}` · `{type:"finish",usage[,cachedInputTokens]}` · `subagent-status`/`subagent-event` envelopes (children stream their own live deltas — ROUND-50) · terminal `{type:"done",assistantMessage,usage}` or `{type:"error",status,code,message}`. **R42: a client disconnect does NOT abort the turn** — it completes in the background (events persist; the completion notification fires + Web Push delivers it to the closed window's service worker). A deliberate stop is `POST /sessions/:id/stop`. |
+| `POST /attachments/read` | **ROUND-50** — `{paths: string[] (≤20), projectId?}` → `{files: [{path, name, size, text\|null, truncated, error?}]}`. Text = first 128 KB head (`truncated:true` when longer); NUL-in-first-8KB sniff → `text:null`; relative paths resolve ONLY inside `projectId`'s root (escape/missing project → per-file `error`, never a 500); absolute paths read as-is (user-picked). |
+| `POST /internal/dialog/files` | **ROUND-50** — the multi-FILE OS picker (the composer's Attach files). Tauri `pick_files` (rfd, parented to the main window, topmost) inside the shell; PowerShell `OpenFileDialog` Multiselect fallback (R48 topmost-owner pattern) outside → `{files: string[]}` (`[]` = cancelled). Never called by tests (blocks on a human). |
 | `POST /sessions/:id/stop` | **R42** — explicitly aborts the live streamed turn for the session → `{ok:true, stopped:boolean}`; the stream resolves with `{type:"stopped"}` (NOT an error; no task_failed notification). |
 
 `model` on either turn route overrides the agent's model for that call
@@ -165,6 +169,16 @@ The rewritten page's escape hatch posts `{type:"acute:open"\|"acute:title"\|"acu
   openrouter-scoped rewrite + audit row); migration 0014 appended
   `delegate_task` + `browser_control` to seeded template allowlists
   (delegation was unreachable from seeded agents before it).
+- **ROUND-50: sub-agents stream their RAW deltas + carry stats.** When a
+  channel exists, `delegateTask`/`retryChild` run the child through
+  `runStreamedAgentTurn` — the child's `text-delta`/`thinking-delta`/
+  `tool-call`/`tool-result`/`finish` frames ride the parent's SSE as
+  `subagent-event` envelopes exactly like the main agent's own stream
+  (channel-less runs keep the R48 fail-fast ask semantics).
+  `subagent-status` frames and `/subagents` rows now carry `model` (the
+  child's effective model); provider calls retry **5 total attempts**
+  (AI SDK `maxRetries: 4`, up from the default 2 that produced the owner's
+  "failed after three attempts").
 - **ROUND-49: `GET/PUT /settings/memory` → `{enabled: boolean}`** (default
   `true`; `PUT` validates the type, else `400` with `body.enabled` named).
   While `false`: no memory digest is injected into any system prompt, the

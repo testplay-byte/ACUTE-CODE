@@ -514,6 +514,10 @@ describe("POST /api/v1/sessions/:id/messages", () => {
       model: "test/model-1",
       inputTokens: 12,
       outputTokens: 34,
+      // ROUND-50 (R50-c1): cached prompt tokens ride the turn's usage record
+      // (0 — the mocked generateText reports no cached tier; the provider
+      // call still ran, so it is a plain 0 rather than null).
+      cachedInputTokens: 0,
       costUsd: 0,
       ts: expect.any(String),
     });

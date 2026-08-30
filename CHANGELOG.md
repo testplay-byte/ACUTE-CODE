@@ -1,4 +1,4 @@
-<!-- last-reviewed: 2026-08-29 round-48 -->
+<!-- last-reviewed: 2026-08-30 round-50 -->
 # Changelog
 
 All notable changes to ACUTE-CODE are documented here. Entries are written for
@@ -13,6 +13,66 @@ version number is single-sourced from the root `package.json`
 
 Planned next: the bundled installer (a single executable with the packaged
 sidecar — ADR-0003); today the launcher kit remains the distribution path.
+
+## [0.50.0] - 2026-08-30
+
+Round 50 — the owner's third test round: a real embedded browser, live
+sub-agent streaming, and the fully-specified chat composer.
+
+### Added
+
+- **A native embedded browser.** The browser tab now renders through real
+  Chromium: every tab is a WebView2 child webview hosted inside the app
+  window, positioned exactly over the panel's page area — no proxy, no
+  tickets, no URL rewriting, so every site loads with its real CSS/JS.
+  Tabs share one persistent browser profile (logins survive app restarts
+  and are isolated from the system browser); the address bar, history
+  buttons, and viewport presets drive the webview while the agent's
+  `browser_control` tool stays in sync with what you actually see. The
+  fetch-proxy iframe remains as the fallback outside the desktop shell.
+- **Sub-agents stream their raw thinking and text live.** A delegated
+  sub-agent's panel now shows the actual tokens — thinking and text — as
+  they are generated, exactly like the main chat, plus its tool calls as
+  they happen.
+- **A stats bar at the bottom of the sub-agent live view:** total time,
+  tokens sent, tokens received, tokens per second, and the model in use —
+  live while it works, authoritative values after it finishes.
+- **Five attempts on rate limits.** Provider calls previously gave up
+  after three attempts (the SDK default); they now retry five times with
+  exponential backoff.
+- **A redesigned chat composer** (the controls live inside the message
+  box): **Add Context** — attach files via the Windows file picker, pick
+  project files from a searchable list, `@`-mention files, or drag and
+  drop; **permission modes** — Full Access / Ask (default) / Plan
+  (read-only research) / Editor (file edits without a terminal);
+  **thinking level** — Default / Low / High / Max; **a model picker** that
+  opens your providers and shows each one's models on hover with a
+  Manage-Models shortcut to the settings; and **a context donut** — a ring
+  of the current context usage that opens a detailed breakdown (messages,
+  system prompt, system tools, memory, meta), the cache hit rate, and the
+  session's token and cost totals. An empty chat centers the composer in
+  the lower half of the screen.
+- **The Models & Providers page reworked:** the provider list and the
+  detail pane scroll independently; models are added from a searchable
+  catalog picker with multi-select (free/paid badges, pricing
+  pre-filled); every model's advanced configuration is editable — input,
+  output, and cached-input prices per million tokens, context window, max
+  output tokens, thinking support, and picker visibility.
+
+### Fixed
+
+- Clearing a model's price never persisted (an explicit empty field was
+  silently treated as "keep the old value"), and re-adding an existing
+  model reset its "supports thinking" flag. Both are now field-precise.
+- The context meter now reads the model's real context window from its
+  configuration (previously a fixed 200k assumption for unknown models).
+
+### Changed
+
+- Plan mode restricts the agent to read-only tools; Editor mode removes
+  the terminal; Full Access auto-approves permission asks (hard-blocked
+  commands like `sudo`/`rm -rf` are still refused in every mode).
+- Sub-agent sessions inherit the parent's permission mode.
 
 ## [0.49.0] - 2026-08-29
 

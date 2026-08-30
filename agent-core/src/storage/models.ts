@@ -101,6 +101,13 @@ export function upsertModel(
     .get(providerId, input.modelId) as ModelRow | undefined;
 
   if (existing) {
+    // ROUND-50 (R50-d): explicit-null vs absent — a null field CLEARS the
+    // stored value back to "unknown" (the config dialog's empty input), an
+    // absent field leaves it untouched. The old `input.x ?? existing.x`
+    // collapsed null into "keep", so PATCH {field: null} silently did
+    // nothing — the null-clearing contract never reached the DB.
+    const keep = <T,>(next: T | undefined, prev: T): T =>
+      next === undefined ? prev : next;
     db.prepare(
       `UPDATE models SET
         display_name = @displayName, context_window = @contextWindow,
@@ -112,15 +119,15 @@ export function upsertModel(
         sort_order = @sortOrder, updated_at = @updatedAt
       WHERE id = @id`,
     ).run({
-      displayName: input.displayName ?? existing.display_name,
-      contextWindow: input.contextWindow ?? existing.context_window,
-      maxOutputTokens: input.maxOutputTokens ?? existing.max_output_tokens,
-      inputPricePerMtok: input.inputPricePerMtok ?? existing.input_price_per_mtok,
-      inputPriceCachedPerMtok: input.inputPriceCachedPerMtok ?? existing.input_price_cached_per_mtok,
-      outputPricePerMtok: input.outputPricePerMtok ?? existing.output_price_per_mtok,
+      displayName: typeof input.displayName === "string" ? input.displayName : existing.display_name,
+      contextWindow: keep(input.contextWindow, existing.context_window),
+      maxOutputTokens: keep(input.maxOutputTokens, existing.max_output_tokens),
+      inputPricePerMtok: keep(input.inputPricePerMtok, existing.input_price_per_mtok),
+      inputPriceCachedPerMtok: keep(input.inputPriceCachedPerMtok, existing.input_price_cached_per_mtok),
+      outputPricePerMtok: keep(input.outputPricePerMtok, existing.output_price_per_mtok),
       supportsThinking: (input.supportsThinking ?? existing.supports_thinking === 1) ? 1 : 0,
       hidden: (input.hidden ?? existing.hidden === 1) ? 1 : 0,
-      sortOrder: input.sortOrder ?? existing.sort_order,
+      sortOrder: keep(input.sortOrder, existing.sort_order),
       updatedAt: now,
       id: existing.id,
     });

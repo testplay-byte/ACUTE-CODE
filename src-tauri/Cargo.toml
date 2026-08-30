@@ -18,5 +18,12 @@ keyring = "4.1.6"
 rfd = "0.15"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-tauri = { version = "2", features = [] }
+# ROUND-50 (R50-a): the "unstable" feature unlocks Tauri 2's multiwebview API
+# surface — `Window::add_child`, `tauri::WebviewBuilder` and the
+# `Manager::get_webview`/`Manager::webviews` getters are all feature-gated
+# (`#[cfg(any(test, all(desktop, feature = "unstable")))]` in tauri 2.11.5).
+# The native embedded browser (child webviews over the BrowserPanel) cannot
+# compile without it. "unstable" is Tauri's name for the multiwebview preview
+# — the APIs themselves ship in the stable 2.x runtime.
+tauri = { version = "2", features = ["unstable"] }
 tauri-plugin-shell = "2"

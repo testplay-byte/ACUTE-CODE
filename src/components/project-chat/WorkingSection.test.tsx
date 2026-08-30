@@ -300,6 +300,7 @@ function subAgentRow(over: Partial<SubAgentStatus> = {}): SubAgentStatus {
     todosTotal: 5,
     inputTokens: 1200,
     outputTokens: 340,
+    model: null, // ROUND-50 (R50-b): stats-footer field (null = no usage row yet)
     report: null,
     error: null,
     ...over,
@@ -370,6 +371,16 @@ describe("Delegated card live rows (ROUND-48 R48-e2)", () => {
           status: "running",
           lastActivity: "run_command ✓ exit 0",
           updatedAtMs: Date.now(),
+          // ROUND-50 (R50-b): the live raw-stream fields (empty — this test
+          // only exercises lastActivity).
+          liveText: "",
+          liveThinking: "",
+          liveToolCalls: 0,
+          inputTokens: 0,
+          outputTokens: 0,
+          lastActivityTs: 0,
+          liveSteps: [],
+          startedAtMs: Date.now(),
         },
       },
     });
@@ -449,6 +460,15 @@ describe("sub-agent approval attribution (ROUND-48 R48-e2)", () => {
           task: "Refactor auth module",
           status: "running",
           updatedAtMs: Date.now(),
+          // ROUND-50 (R50-b): the live raw-stream fields.
+          liveText: "",
+          liveThinking: "",
+          liveToolCalls: 0,
+          inputTokens: 0,
+          outputTokens: 0,
+          lastActivityTs: 0,
+          liveSteps: [],
+          startedAtMs: Date.now(),
         },
       },
     });

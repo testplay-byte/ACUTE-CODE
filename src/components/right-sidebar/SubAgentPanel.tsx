@@ -27,6 +27,11 @@ import {
   type SubAgentStatus,
 } from "../../lib/api";
 import { selectSubAgentsLive, useStreamStore } from "../../lib/stream-store";
+import type { SubAgentLiveEntry, SubAgentLiveStep } from "../../lib/stream-store";
+// ROUND-50 (R50-b): the live segment reuses the main chat's EXACT thinking
+// visual (auto-expand while live, collapse when done) so the sub-agent's raw
+// stream reads like the main agent's.
+import { ThoughtRow } from "../project-chat/WorkingSection";
 import { SEMANTIC_COLORS } from "../../lib/semantics";
 import { useThemeStyles } from "../../lib/use-theme-styles";
 import { useScrollFade } from "../../lib/useScrollFade";
@@ -69,6 +74,16 @@ import type { RightSidebarTab } from "../../lib/right-sidebar-store";
  * resolved from the live SSE map, falling back to the polled /subagents row)
  * + role chip + title + StatusChip + an elapsed clock that now ticks EVERY
  * SECOND (was 5s — the owner's complaint).
+ *
+ * ROUND-50 (R50-b, owner: the panel must show "the actual live responses…
+ * the raw data, the raw thinking, the raw text of it, streamed live just
+ * like the main agent" + a stats footer at the very bottom): a LIVE
+ * STREAMING segment renders the child's raw stream (thinking/text/tool rows
+ * in arrival order, main-chat visuals) from the stream-store's live map
+ * while the child works — see LiveStreamSegment + the visibility rule in
+ * SubAgentPanel — and a pinned SubAgentStatsBar shows time / tokens sent /
+ * tokens received / tokens-per-second / model (live values while running,
+ * authoritative row values after completion).
  */
 const ROLE_COLORS: Record<string, string> = {
   planner: "#c792ea",
@@ -134,12 +149,23 @@ function elapsedLabel(startTs: string | undefined, nowMs: number): string | null
   if (startTs === undefined) return null;
   const t = Date.parse(startTs);
   if (Number.isNaN(t)) return null;
-  const s = Math.max(0, Math.round((nowMs - t) / 1000));
+  return elapsedFromMs(Math.max(0, nowMs - t));
+}
+
+/** m:ss (or h:mm:ss) for a raw elapsed-ms duration — the stats footer's
+ * TIME cell (same format as the header clock). */
+function elapsedFromMs(ms: number): string {
+  const s = Math.max(0, Math.round(ms / 1000));
   const mm = Math.floor(s / 60);
   const ss = s % 60;
   const hh = Math.floor(mm / 60);
   if (hh > 0) return `${hh}:${String(mm % 60).padStart(2, "0")}:${String(ss).padStart(2, "0")}`;
   return `${mm}:${String(ss).padStart(2, "0")}`;
+}
+
+/** Compact token count (k above 1000) — the stats footer's token cells. */
+function fmtTokens(n: number): string {
+  return n >= 1000 ? `${(n / 1000).toFixed(n >= 10_000 ? 0 : 1)}k` : String(n);
 }
 
 // ─── Transcript model ────────────────────────────────────────────────────────
@@ -395,6 +421,38 @@ export function SubAgentPanel({ tab }: { tab: RightSidebarTab }) {
   const liveStatus = derivePanelStatus(detailQuery.data, hasRunningTool, retrying);
   const isWorking = liveStatus === "running" || liveStatus === "retrying";
 
+  // ── ROUND-50 (R50-b): the LIVE raw-stream segment ──────────────────────
+  // Visibility rule (documented, deterministic):
+  //  1. The child must have LIVE data in the store (the subagent-event
+  //     envelope stream — thinking/text deltas + tool rows). No live entry
+  //     (reloaded mid-run, channel-less run) → the polled transcript stands
+  //     alone, exactly as before R50-b.
+  //  2. While the child is queued/running the segment renders (frozen tail
+  //     included) — the raw stream the owner asked to see live.
+  //  3. HANDOFF: once the child turns terminal, the segment stays visible
+  //     ONLY until the polled transcript catches up (its LAST event is a
+  //     closing message.assistant or turn.error — both turn paths always
+  //     close a finished attempt with one), bridging the 600ms poll lag so
+  //     nothing flashes away; then the polled transcript takes over.
+  //  4. While the segment is visible, polled TOOL + ASSISTANT rows are
+  //     SUPPRESSED (kind-based, no timestamp races): the live log renders
+  //     exactly those live; user/todo/approval/error rows keep rendering —
+  //     the live stream carries none of them. Zero duplication, main-chat
+  //     parity (live turn above → folded turn below, never both).
+  const liveText = liveEntry?.liveText ?? "";
+  const liveThinking = liveEntry?.liveThinking ?? "";
+  const liveSteps = liveEntry?.liveSteps ?? [];
+  const liveHasContent =
+    liveText !== "" || liveThinking !== "" || liveSteps.length > 0 || (liveEntry?.liveToolCalls ?? 0) > 0;
+  const lastEvent = events[events.length - 1];
+  const polledCaughtUp =
+    lastEvent !== undefined &&
+    (lastEvent.type === "message.assistant" || lastEvent.type === "turn.error");
+  const liveSegmentVisible = liveHasContent && (isWorking || !polledCaughtUp);
+  const renderItems = liveSegmentVisible
+    ? items.filter((it) => it.kind !== "tool" && it.kind !== "assistant")
+    : items;
+
   // The error REASON for the failed banner: the child's recorded error (the
   // subagents listing) → the last failed tool's output → a quiet fallback.
   const lastFailure = (() => {
@@ -427,7 +485,9 @@ export function SubAgentPanel({ tab }: { tab: RightSidebarTab }) {
   // Live feel: auto-scroll pinned to the bottom while new events arrive —
   // but only when the user is already near the bottom (never yank their
   // scroll). Long transcripts live in the same max-height flex scroll with
-  // the right sidebar's custom auto-scroll scrollbar.
+  // the right sidebar's custom auto-scroll scrollbar. ROUND-50 (R50-b): the
+  // live segment's growth (deltas) is in the deps too — the raw stream
+  // scrolls as it streams, like the main chat.
   const scrollRef = useRef<HTMLDivElement>(null);
   useScrollFade(scrollRef);
   const stickRef = useRef(true);
@@ -443,7 +503,7 @@ export function SubAgentPanel({ tab }: { tab: RightSidebarTab }) {
   useEffect(() => {
     const el = scrollRef.current;
     if (el !== null && stickRef.current) el.scrollTop = el.scrollHeight;
-  }, [items.length, liveStatus]);
+  }, [items.length, liveStatus, liveSteps.length, liveText.length, liveThinking.length]);
 
   const doRetry = async () => {
     if (parentSessionId === null || subAgentId === null || retrying) return;
@@ -598,7 +658,7 @@ export function SubAgentPanel({ tab }: { tab: RightSidebarTab }) {
                 ) : null}
               </AnimatePresence>
 
-              {items.map((item) => {
+              {renderItems.map((item) => {
                 switch (item.kind) {
                   case "user":
                     return <TaskBubble key={`u-${item.seq}`} content={item.content} />;
@@ -622,11 +682,25 @@ export function SubAgentPanel({ tab }: { tab: RightSidebarTab }) {
                 return null;
               })}
 
-              {/* The live tail while work is in flight. */}
-              {isWorking ? (
+              {/* ── ROUND-50 (R50-b): the LIVE raw-stream segment — the
+                  child's thinking/text/tool stream as it arrives (owner:
+                  "the actual raw data, the raw thinking, the raw text of it
+                  … streamed live just like the main agent"). See the
+                  visibility rule above the render. ── */}
+              {liveSegmentVisible && liveEntry !== undefined ? (
+                <LiveStreamSegment
+                  entry={liveEntry}
+                  streaming={isWorking}
+                />
+              ) : null}
+
+              {/* The live tail while work is in flight (only when the live
+                  segment ISN'T carrying the feed — no live data = the
+                  pre-R50-b polled-only view). */}
+              {isWorking && !liveSegmentVisible ? (
                 <div className="flex items-center gap-2 px-1.5 h-6 text-[10.5px]" style={{ color: styles.textTertiary }}>
                   <PulsingDot color={RUNNING_BLUE} size={6} />
-                  {items.some((it) => it.kind === "tool" || it.kind === "assistant")
+                  {renderItems.some((it) => it.kind === "tool" || it.kind === "assistant")
                     ? "working…"
                     : "Sub-agent is starting work…"}
                 </div>
@@ -635,6 +709,21 @@ export function SubAgentPanel({ tab }: { tab: RightSidebarTab }) {
           )}
         </div>
       </div>
+
+      {/* ── ROUND-50 (R50-b, owner: "the stats of the subagents should be
+          shown at the very bottom of its responses in live view") — the
+          pinned stats bar: time / tokens sent / tokens received /
+          tokens-per-second / model. Live values while running; authoritative
+          row values after completion. ── */}
+      {!initialLoading && !loadError ? (
+        <SubAgentStatsBar
+          working={isWorking}
+          nowMs={nowMs}
+          live={liveEntry}
+          row={childRow}
+          detail={detailQuery.data}
+        />
+      ) : null}
     </div>
   );
 }
@@ -900,6 +989,234 @@ function ErrorLine({ error }: { error: ErrorCardData }) {
         </div>
       </div>
     </motion.div>
+  );
+}
+
+// ─── ROUND-50 (R50-b): the LIVE raw-stream segment + the pinned stats bar ────
+
+/** The child's LIVE raw stream — thinking (the main chat's ThoughtRow visual,
+ * auto-expanded while streaming), interleaved tool rows (the transcript's
+ * exact row style), and the raw text streaming with the main chat's caret.
+ * `streaming` freezes the caret/thought-rows when the child turned terminal
+ * but the polled transcript hasn't caught up yet (the handoff gap). */
+function LiveStreamSegment({ entry, streaming }: { entry: SubAgentLiveEntry; streaming: boolean }) {
+  const styles = useThemeStyles();
+  // The ordered live log; when only flat accumulators exist (a store entry
+  // written before the ordered log landed), synthesize the two blocks so the
+  // raw stream still renders.
+  const steps: SubAgentLiveStep[] =
+    entry.liveSteps.length > 0
+      ? entry.liveSteps
+      : [
+          ...((entry.liveThinking ?? "") !== ""
+            ? [{ type: "thinking" as const, text: entry.liveThinking }]
+            : []),
+          ...((entry.liveText ?? "") !== "" ? [{ type: "text" as const, text: entry.liveText }] : []),
+        ];
+  const lastIdx = steps.length - 1;
+  return (
+    <div className="flex flex-col gap-1.5 min-w-0" data-testid="subagent-live-stream">
+      {streaming ? (
+        <div
+          className="flex items-center gap-2 px-1.5 h-5 text-[9.5px] font-mono uppercase tracking-[0.12em]"
+          style={{ color: RUNNING_BLUE }}
+        >
+          <PulsingDot color={RUNNING_BLUE} size={5} />
+          streaming live
+        </div>
+      ) : null}
+      {steps.map((step, i) => {
+        if (step.type === "thinking") {
+          return <ThoughtRow key={`lt-${i}`} text={step.text ?? ""} live={streaming && i === lastIdx} />;
+        }
+        if (step.type === "tool" && step.tool !== undefined) {
+          return (
+            <TranscriptToolRow
+              key={`lt-${i}`}
+              tool={{
+                toolName: step.tool.toolName,
+                argsSummary: step.tool.argsSummary,
+                ok: step.tool.ok,
+                outputSummary: step.tool.outputSummary ?? null,
+                ts: "",
+              }}
+            />
+          );
+        }
+        // Text: the LAST text step is the in-flight streaming tail (caret
+        // while streaming); earlier text runs are interim narration in the
+        // main chat's narration style.
+        const isTail = i === lastIdx;
+        return (
+          <div
+            key={`lt-${i}`}
+            className="min-w-0 break-words whitespace-pre-wrap text-[12px] leading-[1.6]"
+            style={{ color: styles.text }}
+            data-testid={isTail ? "subagent-live-text" : "subagent-live-narration"}
+          >
+            {step.text}
+            {isTail && streaming ? (
+              <span
+                className="inline-block w-[6px] h-[12px] ml-0.5 align-middle rounded-sm ac-caret-blink"
+                style={{ background: styles.accent }}
+                aria-hidden
+              />
+            ) : null}
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+/** One micro-typography cell of the stats bar: an uppercase tracking label
+ * above a mono tabular value. */
+function StatCell({
+  label,
+  value,
+  title,
+  styles,
+  testId,
+}: {
+  label: string;
+  value: string;
+  title?: string;
+  styles: ReturnType<typeof useThemeStyles>;
+  testId?: string;
+}) {
+  return (
+    <span className="flex flex-col min-w-0 shrink-0" title={title} data-testid={testId}>
+      <span
+        className="text-[8px] font-bold uppercase tracking-[0.14em] leading-[1.1]"
+        style={{ color: styles.textTertiary }}
+      >
+        {label}
+      </span>
+      <span
+        className="font-mono text-[10px] font-semibold tabular-nums leading-[1.3] truncate max-w-[120px]"
+        style={{ color: styles.textSecondary }}
+      >
+        {value}
+      </span>
+    </span>
+  );
+}
+
+/**
+ * ROUND-50 (R50-b, owner: "the stats of the subagents should be shown at the
+ * very bottom of its responses in live view: the total time taken, the total
+ * tokens sent, the total tokens received, the tokens per second feed, the
+ * model which was being used") — pinned at the panel's very bottom.
+ *
+ * VALUE RULES:
+ *  - While queued/running: LIVE values — the store's finish-event token
+ *    accumulators + a ticking clock anchored at the child's createdAt (the
+ *    same anchor the final value uses, so the handoff is monotone). Tokens
+ *    fall back to the polled row's ledger when no live stream exists
+ *    (reloaded mid-run / channel-less run).
+ *  - After completion (or failure): the AUTHORITATIVE /subagents row —
+ *    inputTokens/outputTokens from the usage ledger, model from the latest
+ *    usage row, elapsed = createdAt → updatedAt.
+ *  - Tokens/sec = output tokens ÷ elapsed seconds (live both ways; "—" until
+ *    a full second exists to divide by).
+ *  - Model: the status frame's resolved model (freshest) → the row's
+ *    usage-derived model → "—".
+ */
+function SubAgentStatsBar({
+  working,
+  nowMs,
+  live,
+  row,
+  detail,
+}: {
+  working: boolean;
+  nowMs: number;
+  live: SubAgentLiveEntry | undefined;
+  row: SubAgentStatus | undefined;
+  detail: SessionDetail | undefined;
+}) {
+  const styles = useThemeStyles();
+  const createdAt = row?.createdAt ?? detail?.createdAt;
+  const updatedAt = row?.updatedAt ?? detail?.updatedAt;
+  const createdMs = createdAt !== undefined ? Date.parse(createdAt) : NaN;
+  const updatedMs = updatedAt !== undefined ? Date.parse(updatedAt) : NaN;
+  const startMs =
+    !Number.isNaN(createdMs) ? createdMs : live?.startedAtMs ?? nowMs;
+  // While working the clock ticks from createdAt; after completion it freezes
+  // at createdAt → updatedAt (the row's own duration).
+  const elapsedMs = working
+    ? Math.max(0, nowMs - startMs)
+    : Number.isNaN(updatedMs)
+      ? Math.max(0, nowMs - startMs)
+      : Math.max(0, updatedMs - startMs);
+  const elapsedSec = elapsedMs / 1000;
+  // Tokens: live accumulators while working (finish events, all attempts —
+  // SUM semantics like the usage ledger); the row's ledger after completion.
+  const inputTokens = working
+    ? live?.inputTokens ?? row?.inputTokens ?? 0
+    : row?.inputTokens ?? live?.inputTokens ?? 0;
+  const outputTokens = working
+    ? live?.outputTokens ?? row?.outputTokens ?? 0
+    : row?.outputTokens ?? live?.outputTokens ?? 0;
+  const tps =
+    outputTokens > 0 && elapsedSec >= 1 ? `${(outputTokens / elapsedSec).toFixed(1)}` : "—";
+  // Model: while working the status frame's resolved model is freshest; after
+  // completion the row's usage-derived model is authoritative.
+  const model = working ? live?.model ?? row?.model ?? null : row?.model ?? live?.model ?? null;
+
+  return (
+    <div
+      className="shrink-0 flex items-end gap-3.5 px-2.5 h-9 border-t overflow-hidden"
+      style={{
+        borderColor: styles.borderSubtle,
+        background: styles.isDark ? "rgba(0,0,0,0.18)" : styles.subtle,
+      }}
+      data-testid="subagent-stats-footer"
+    >
+      <StatCell
+        label={working ? "Time" : "Total time"}
+        value={elapsedFromMs(elapsedMs)}
+        styles={styles}
+        testId="subagent-stat-time"
+      />
+      <StatCell
+        label="Sent"
+        value={`↑ ${fmtTokens(inputTokens)}`}
+        title={`${inputTokens} input tokens`}
+        styles={styles}
+        testId="subagent-stat-in"
+      />
+      <StatCell
+        label="Received"
+        value={`↓ ${fmtTokens(outputTokens)}`}
+        title={`${outputTokens} output tokens`}
+        styles={styles}
+        testId="subagent-stat-out"
+      />
+      <StatCell
+        label="Tok/s"
+        value={tps}
+        title="output tokens per second"
+        styles={styles}
+        testId="subagent-stat-tps"
+      />
+      <span className="flex flex-col min-w-0 flex-1">
+        <span
+          className="text-[8px] font-bold uppercase tracking-[0.14em] leading-[1.1]"
+          style={{ color: styles.textTertiary }}
+        >
+          Model
+        </span>
+        <span
+          className="font-mono text-[10px] font-semibold leading-[1.3] truncate"
+          style={{ color: styles.textSecondary }}
+          title={model ?? undefined}
+          data-testid="subagent-stat-model"
+        >
+          {model ?? "—"}
+        </span>
+      </span>
+    </div>
   );
 }
 
