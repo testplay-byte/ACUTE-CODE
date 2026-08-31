@@ -23,8 +23,13 @@ Thumbs.db
 
 # ROUND-51 (R51-a): staged sidecar bundle for the NSIS installer (CI assembles
 # it via scripts/release/stage-sidecar.mjs + the pinned node.exe — never committed)
+# ROUND-57: the old three-line form un-ignored the sidecar/ DIRECTORY itself,
+# which re-includes EVERYTHING inside it — a local staging run + `git add -A`
+# would sweep 124 MB of node_modules into the index (caught before commit).
+# The correct form ignores the CONTENTS of sidecar/ and re-includes only the
+# README placeholder that tauri-build needs on fresh checkouts.
 /src-tauri/staging/*
-!/src-tauri/staging/sidecar/
+/src-tauri/staging/sidecar/*
 !/src-tauri/staging/sidecar/README.md
 
 # tooling caches

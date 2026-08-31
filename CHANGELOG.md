@@ -1,4 +1,4 @@
-<!-- last-reviewed: 2026-08-31 round-56 -->
+<!-- last-reviewed: 2026-08-31 round-57 -->
 # Changelog
 
 All notable changes to ACUTE-CODE are documented here. Entries are written for
@@ -14,6 +14,43 @@ version number is single-sourced from the root `package.json`
 Planned next: installer code-signing (SmartScreen), the deepseek-harness
 future candidates (compaction pressure-trigger, continuable sub-agent
 children), the Files-tab polish.
+
+## [0.57.0] - 2026-08-31
+
+Round 57 — the engine-bundling round. The owner's tenth Windows test
+session brought the first HALF of the win: the launcher's app-or-site
+question worked, the SITE launched perfectly, and the whole web flow
+(dashboard included) ran clean. But the desktop app still could not reach
+agent-core — and this time the engine's dying words were finally captured
+on stderr: `ERR_MODULE_NOT_FOUND`, on all three startup attempts. That
+error named the last packaged-only crash: the installer's bundled
+`node_modules` was a pnpm LINK FARM (189 symlinks on the build runner =
+189 junctions after extraction) that does not survive
+tauri-bundler + NSIS packing — so the installed engine could not import
+its very first package and died before its first log line, while the
+Linux CI boot check passed happily (Linux preserves links; the owner's
+disk does not).
+
+### Fixed
+
+- **The packaged engine now actually bundles** (the owner's words:
+  "it needs to be bundled in properly"). The staged sidecar tree is
+  installed with pnpm's **hoisted linker** — a classic npm-style
+  `node_modules` of REAL directories, zero symlinks, zero junctions —
+  so NSIS can pack and extract every byte as plain files. The staged
+  tree also shrank from ~302 MB to ~125 MB in the process.
+- **A zero-links gate in the staging script**: the build now FAILS if
+  any symlink or junction appears anywhere in the tree that will be
+  packed into the installer (the 0.56.0 tree carried 189 of them; this
+  gate makes that number permanently zero).
+- **A Windows pre-pack boot gate in the release build**: before the
+  installer is ever built, CI now boots the REAL staged engine with
+  the REAL pinned node.exe on a Windows runner — same command line,
+  same environment, same `ACUTE_READY` handshake the app waits for —
+  and fails the release (printing the engine's stdout/stderr) if it
+  does not come up. A dead engine can never be packed into an
+  installer again. The R51-era check that "proven the tree bootable"
+  ran on Linux only — the exact blind spot that shipped the link farm.
 
 ## [0.56.0] - 2026-08-31
 

@@ -32,13 +32,30 @@
  *                                 all-platform prebuilds in its tarball and
  *                                 node-pty 1.1.0 loads its bundled
  *                                 prebuilds/<platform>-<arch>/ binaries
- *                                 directly, no build script needed)
- *     node_modules/            ← `pnpm install --prod` (registry deps only)
+ *                                 directly, no build script needed) +
+ *                                 nodeLinker: hoisted (see R57 below)
+ *     node_modules/            ← `pnpm install --prod` (registry deps only),
+ *                                 HOISTED npm-style: real directories
  *     node_modules/shared/     ← VENDORED: shared/dist + a patched
  *                                 package.json whose main/exports point at
  *                                 ./dist/index.js (the compiled JS — the
  *                                 workspace's src/index.ts pointer cannot
  *                                 survive inside node_modules, see (3))
+ *
+ * ROUND-57 (the packaged engine's ERR_MODULE_NOT_FOUND): the R51–R56 staging
+ * ran `pnpm install --prod` with pnpm's DEFAULT layout — 189 SYMLINKS on POSIX,
+ * 189 JUNCTIONS/reparse-points on the windows-latest release runner. Linux
+ * boots such a tree fine (links preserved), which is why the R51 "proven
+ * bootable" check on Linux never caught it — but tauri-bundler's resource walk
+ * → NSIS `File` pack → NSIS extract on the owner's disk does not preserve that
+ * link farm, and the installed engine died with ERR_MODULE_NOT_FOUND before
+ * its first log line (owner's 0.56.0 session, sidecar.log 2026-08-31). The fix
+ * is structural: `nodeLinker: hoisted` produces a CLASSIC npm-style tree —
+ * real directories, zero links — and a hard verification gate below fails the
+ * staging if ANY symlink/junction remains anywhere in the staged tree. The
+ * release workflow ALSO boots the staged engine on windows-latest (with the
+ * pinned node.exe) before `pnpm tauri build`, so a dead engine can never ship
+ * again regardless of cause.
  *
  * The CI workflow adds `node.exe` (pinned Node 24 LTS win-x64) and Node's
  * LICENSE/ThirdPartyNotices into `staging/sidecar/` beside `app/` before
@@ -54,7 +71,7 @@
  *   (~60 MB off the installer); omit it to keep all platforms.
  */
 import { spawnSync } from "node:child_process";
-import { cpSync, existsSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { cpSync, existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -157,12 +174,34 @@ mkdirSync(appDir, { recursive: true });
 // the committed copy; recreating it keeps a fresh checkout + local staging +
 // cargo check all green (on CI the release job stages AFTER its own cargo
 // check, but developers run cargo locally too).
+// ROUND-57: this placeholder is byte-identical to the COMMITTED README
+// (src-tauri/staging/sidecar/README.md) so a local staging run no longer
+// leaves the working tree dirty with a shortened variant (the R51–R56 script
+// wrote a 3-line summary; every local stage produced a spurious diff).
 writeFileSync(
   resolve(outDir, "README.md"),
-  "# The staged sidecar (a BUILD-TIME placeholder)\n\n" +
-    "Populated by scripts/release/stage-sidecar.mjs before `pnpm tauri build` — " +
-    "this placeholder keeps `tauri-build`'s resource-path existence check green " +
-    "on fresh checkouts. See the repo's .gitignore for what is (never) committed.\n",
+  [
+    "# The staged sidecar (a BUILD-TIME placeholder)",
+    "",
+    "This directory is populated by `scripts/release/stage-sidecar.mjs` immediately",
+    "before `pnpm tauri build` in the release workflow (`.github/workflows/",
+    "release.yml` → the `desktop-installer` job): the pinned Node runtime",
+    "(`node.exe`), the runnable agent-core tree (`app/dist` + pruned production",
+    "`node_modules/` + the vendored `shared` package), and the Node `LICENSES/`",
+    "folder. The bundle's `resources` map in `tauri.conf.json` copies its CONTENTS",
+    "into the installed app's `sidecar/` resource directory, where the Rust shell's",
+    "release-mode spawn finds them (`resolve_sidecar_command` in `src-tauri/src/",
+    "sidecar.rs`).",
+    "",
+    "Why this placeholder exists: `tauri-build` (build.rs — which runs for EVERY",
+    "`cargo check`, not just bundling) validates that every configured resource",
+    "path EXISTS. On a fresh checkout the staged tree is absent (it is build",
+    "artefact, never committed — see the `/src-tauri/staging/` entry in the root",
+    "`.gitignore`, with this file explicitly un-ignored), so without a placeholder",
+    "the repo would not compile-check. The release workflow overwrites this",
+    "directory wholesale before building; the stray README rides along as a ~300",
+    "byte resource and is harmless.",
+  ].join("\n") + "\n",
 );
 cpSync(resolve(repoRoot, "agent-core", "dist"), resolve(appDir, "dist"), { recursive: true });
 
@@ -178,11 +217,15 @@ const stagedPkg = {
 };
 writeFileSync(resolve(appDir, "package.json"), `${JSON.stringify(stagedPkg, null, 2)}\n`, "utf8");
 
-// Standalone-project marker + build-script allowlist. Without this file pnpm
-// would walk UP and find the repo's pnpm-workspace.yaml (making the staging
-// dir a workspace member of the repo — a fresh root install would then try to
-// adopt it). Without allowBuilds pnpm exits 1 on "ignored build scripts" even
-// though the flagged scripts are no-ops for the prebuilt addons we ship.
+// Standalone-project marker + build-script allowlist + the R57 hoisted linker.
+// Without this file pnpm would walk UP and find the repo's pnpm-workspace.yaml
+// (making the staging dir a workspace member of the repo — a fresh root install
+// would then try to adopt it). Without allowBuilds pnpm exits 1 on "ignored
+// build scripts" even though the flagged scripts are no-ops for the prebuilt
+// addons we ship. And without nodeLinker: hoisted the install produces pnpm's
+// default symlinked layout — 189 junctions on the Windows release runner that
+// NSIS pack/extract does not survive (the owner's ERR_MODULE_NOT_FOUND, R57);
+// hoisted gives a classic npm-style tree of REAL directories.
 writeFileSync(
   resolve(appDir, "pnpm-workspace.yaml"),
   [
@@ -191,6 +234,16 @@ writeFileSync(
     "# install exits 0; better-sqlite3 ships all-platform prebuilds and node-pty",
     "# loads its bundled prebuilds/<platform>-<arch>/ binaries without any build",
     "# script, so allowing them changes nothing on disk.",
+    "# ROUND-57: hoisted (npm-style, real directories — zero symlinks/junctions).",
+    "# The default pnpm layout is a link farm (junctions on Windows) that does",
+    "# not survive tauri-bundler + NSIS pack/extract — the packaged engine died",
+    "# with ERR_MODULE_NOT_FOUND on the owner's machine while Linux CI booted it",
+    "# fine. pnpm 11.x IGNORES this yaml key (npmrc-style settings in",
+    "# pnpm-workspace.yaml are not all honored), so the load-bearing flag is",
+    "# --config.node-linker=hoisted on the install below; this line is kept for",
+    "# future pnpm versions that honor workspace-yaml settings and documents",
+    "# the intent.",
+    "nodeLinker: hoisted",
     "allowBuilds:",
     "  better-sqlite3: true",
     "  node-pty: true",
@@ -200,7 +253,7 @@ writeFileSync(
 );
 
 // ── 4. install the registry dependencies ────────────────────────────────────
-const install = spawnSync("pnpm", ["install", "--prod"], {
+const install = spawnSync("pnpm", ["install", "--prod", "--config.node-linker=hoisted"], {
   cwd: appDir,
   encoding: "utf8",
   shell: process.platform === "win32",
@@ -208,6 +261,12 @@ const install = spawnSync("pnpm", ["install", "--prod"], {
 if (install.status !== 0) {
   fail(`pnpm install --prod failed in the staging dir:\n${(install.stderr || install.stdout || "").slice(-4000)}`);
 }
+
+// ROUND-57: `.bin` holds package executable shims — on POSIX those are
+// SYMLINKS into the store, and even on Windows some shims are links. The
+// staged tree is a RUNTIME tree (the sidecar never spawns package bins),
+// so the whole dir is dead weight that would break the zero-links gate below.
+rmSync(resolve(appDir, "node_modules", ".bin"), { recursive: true, force: true });
 
 // ── 5. vendor `shared` with a runnable package.json ─────────────────────────
 // The workspace's shared/package.json points main/exports at ./src/index.ts
@@ -277,6 +336,49 @@ if (argPlatform !== null && argPlatform !== "") {
   if (sqlitePrebuilds.length !== 1 || ![argPlatform, `${argPlatform}.node`].includes(sqlitePrebuilds[0])) {
     fail(`verification failed: better-sqlite3 prebuilds = [${sqlitePrebuilds.join(", ")}], expected exactly [${argPlatform}]`);
   }
+}
+
+// ROUND-57 — THE ZERO-LINKS GATE: the staged tree must contain NO symlinks and
+// NO junctions/reparse points anywhere. Node's lstatSync().isSymbolicLink()
+// reports junctions as symlinks on Windows, so one walk covers both OSes. Any
+// link that survives here is a link NSIS pack/extract may not preserve on the
+// owner's disk — the exact mechanism behind the 0.56.0 ERR_MODULE_NOT_FOUND.
+// The R51 layout shipped 189 of them; this gate exists so that number is never
+// anything but 0. (The .pnpm store dir must be gone entirely under hoisted.)
+{
+  const offenders = [];
+  const walk = (p) => {
+    for (const entry of readdirSync(p)) {
+      const full = resolve(p, entry);
+      const st = lstatSync(full);
+      if (st.isSymbolicLink()) {
+        offenders.push(full.slice(appDir.length + 1));
+        continue; // do not descend — the link target is irrelevant, it must not exist
+      }
+      if (st.isDirectory()) walk(full);
+    }
+  };
+  walk(appDir);
+  if (offenders.length > 0) {
+    fail(
+      `verification failed: staged tree contains ${offenders.length} symlink(s)/junction(s) ` +
+        `— the installer cannot preserve links (R57, the packaged engine's ` +
+        `ERR_MODULE_NOT_FOUND). First offenders:\n  ${offenders.slice(0, 10).join("\n  ")}`,
+    );
+  }
+  if (existsSync(resolve(appDir, "node_modules", ".pnpm"))) {
+    // Hoisted installs may leave a metadata-only .pnpm (lock.yaml); anything
+    // more (package dirs) means the DEFAULT linker ran and the tree is a link
+    // farm again.
+    const leftovers = readdirSync(resolve(appDir, "node_modules", ".pnpm")).filter((e) => e !== "lock.yaml");
+    if (leftovers.length > 0) {
+      fail(
+        `verification failed: node_modules/.pnpm contains package entries (${leftovers.slice(0, 5).join(", ")}) — ` +
+          `the install did not use the hoisted linker (--config.node-linker=hoisted)`,
+      );
+    }
+  }
+  console.log("stage-sidecar: zero-links gate passed (no symlinks/junctions in the staged tree)");
 }
 
 console.log(`stage-sidecar: staged ${mb(appDir)} → ${outDir}`);

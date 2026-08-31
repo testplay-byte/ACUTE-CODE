@@ -1,4 +1,4 @@
-<!-- last-reviewed: 2026-08-30 round-54 -->
+<!-- last-reviewed: 2026-08-31 round-57 -->
 # AGENT MEMORY — lessons learned, rules going forward
 
 **Owner directive (2026-08-23):** "learn from the mistakes you made, document
@@ -667,3 +667,24 @@ Format per entry: `N. TITLE (date, source)` → mistake → root cause → rule.
     status" as MULTI-PROCESS interference first — grep the writers, and if
     the only writer is a boot-time sweep, suspect a second boot you didn't
     know about.
+
+70. **A green gate that verifies the wrong platform is worse than no
+    gate — it launders the failure into "proven".** (2026-08-31, round-57;
+    the fourth packaged-engine crash in a row, each with a different root
+    cause.) The R51 staging check "booted the staged tree and curled
+    /health" — **on Linux**. The tree it booted was a pnpm link farm
+    (189 symlinks; junctions on the Windows build runner), which Linux
+    resolves happily and tauri-bundler + NSIS pack/extract does NOT
+    preserve — so the owner's installed engine died with
+    ERR_MODULE_NOT_FOUND before its first log line while every check was
+    green. The round-56 audit even called the staging "Sound" because the
+    audit asked "are the versions/layout right?", never "can the
+    INSTALLER's target platform extract this?". RULE: for anything that
+    ships, the verification must run ON THE SHIPPING TARGET with the
+    SHIPPING ARTIFACT (the release now boots the real staged engine with
+    the real pinned node.exe on windows-latest BEFORE packing it), and
+    any tree handed to an installer must be walked for
+    symlinks/junctions — links are a BUILD-machine convenience that
+    installers do not owe you. Generalized: when a check passes but the
+    field fails, the first question is not "what else is broken" but
+    "what does this check NOT actually exercise?".

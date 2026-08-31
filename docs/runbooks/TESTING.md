@@ -1,4 +1,4 @@
-<!-- last-reviewed: 2026-08-31 round-56 -->
+<!-- last-reviewed: 2026-08-31 round-57 -->
 # TESTING — the verification ladder
 
 Five layers; each has a defined "when mandatory". Rules here are binding
@@ -40,6 +40,28 @@ edit and `file`-verified (round-11/R52 lesson). The R56 live battery (L4):
 `R56-LAUNCH-CHOICE-VERIFIED` · session resting state `queued` · zero new
 dev-log errors. Rust: `cargo check` GREEN on x86_64-pc-windows-gnu after
 the tauri.conf.json version bump.
+
+**R57 (the engine-bundling round):** the JS suite is unchanged at
+1071/1071 in 76 files (no product code changed — the fix is in the
+PACKAGING: the staged node_modules is now a hoisted npm-style tree of
+real directories instead of pnpm's 189-link farm). New verification
+surface, all green in-sandbox: (a) staging re-run with
+`--config.node-linker=hoisted` verified with BOTH pnpm 11.24 (local)
+and the exact CI pnpm 11.22.0 — zero symlinks, `.pnpm` metadata-only,
+staged tree 301.5 MB → 124.6 MB; (b) the ZERO-LINKS gate inside
+stage-sidecar.mjs (walks the whole staged tree, fails on any
+symlink/junction — junctions report as symlinks via lstatSync; it
+already caught the yaml-only-setting regression during development);
+(c) staged-boot battery from the staged tree alone: `ACUTE_READY
+{"port":…}` handshake, `/health` → 200 `{"status":"ok"}`,
+`/api/v1/agents` → 200 (auth + SQLite + 20 migrations against a fresh
+DB); (d) the release workflow's NEW Windows pre-pack boot gate runs the
+real staged node.exe + the same env the Rust shell passes on
+windows-latest and fails the release before packing if `ACUTE_READY`
+does not arrive (90 s budget) — the gate the R51 round believed it had.
+docs:check 147/0 (the sandbox's 3 unreachable-URL WARNs are
+raw.githubusercontent 429 rate-limits from THIS sandbox's network, not
+dead links; CI's clean network is the authority).
 `r52-supervision` NEW 14 (exec helpers: background-launch grammar + log-
 redirect parsing; the hang fix: pipe-holding grandchild resolves FAST with
 a job id — the owner's exact trap, cross-platform via node-spawns-node;

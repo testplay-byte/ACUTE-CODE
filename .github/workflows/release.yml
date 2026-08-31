@@ -192,6 +192,60 @@ jobs:
           Get-ChildItem "$sidecar" | Select-Object Name
           if (-not (Test-Path "$sidecar/node.exe")) { throw "node.exe was not staged" }
 
+      # ROUND-57 — THE WINDOWS PRE-PACK BOOT GATE: the staged engine must
+      # actually BOOT on Windows before it is packed into the installer. The
+      # R51 "proven bootable" check ran on Linux only, which is exactly how the
+      # default pnpm link farm (189 junctions on this very runner) shipped:
+      # Linux preserves links, tauri-bundler + NSIS pack/extract on the owner's
+      # disk did not, and the installed engine died with ERR_MODULE_NOT_FOUND
+      # before its first log line (owner's 0.56.0 session). This gate runs the
+      # REAL pinned node.exe against the staged app with the same env the Rust
+      # shell passes (ACUTE_TOKEN / ACUTE_DB_PATH, cwd = the app dir) and polls
+      # for the ACUTE_READY handshake line — the exact first failure the owner
+      # saw. A failed boot prints the engine's stdout/stderr tails and fails
+      # the build BEFORE `pnpm tauri build` can pack a dead engine.
+      - name: Boot the staged engine on Windows (pre-pack gate)
+        shell: pwsh
+        env:
+          ACUTE_BOOT_TIMEOUT_S: "90"
+        run: |
+          $sidecar = "src-tauri/staging/sidecar"
+          $out = "$env:TEMP\acute-boot-stdout.log"
+          $err = "$env:TEMP\acute-boot-stderr.log"
+          $db  = "$env:TEMP\acute-boot-test.db"
+          Remove-Item $out, $err, $db -Force -ErrorAction SilentlyContinue
+          $env:ACUTE_TOKEN = "ci-boot-token"
+          $env:ACUTE_DB_PATH = $db
+          $job = Start-Process -FilePath "$sidecar\node.exe" `
+            -ArgumentList "app\dist\main.js" `
+            -WorkingDirectory "$sidecar\app" `
+            -RedirectStandardOutput $out -RedirectStandardError $err -PassThru
+          $deadline = (Get-Date).AddSeconds([int]$env:ACUTE_BOOT_TIMEOUT_S)
+          $ready = $false
+          try {
+            while ((Get-Date) -lt $deadline) {
+              if ($job.HasExited) { break }
+              if ((Test-Path $out) -and (Select-String -Path $out -Pattern "ACUTE_READY" -Quiet -ErrorAction SilentlyContinue)) {
+                $ready = $true; break
+              }
+              Start-Sleep -Milliseconds 500
+            }
+            if ($ready) {
+              $line = (Select-String -Path $out -Pattern "ACUTE_READY").Line
+              Write-Host "R57 boot gate: staged engine is UP on Windows — $line"
+            } else {
+              Write-Host "::error::R57 boot gate: staged engine did not report ACUTE_READY within $($env:ACUTE_BOOT_TIMEOUT_S)s (exit=$($job.ExitCode)). NEVER pack this tree — this is the owner's 'Can't reach agent-core' failure mode."
+              if (Test-Path $out) { Write-Host "--- engine stdout tail ---"; Get-Content $out -Tail 40 | ForEach-Object { Write-Host $_ } }
+              if (Test-Path $err) { Write-Host "--- engine stderr tail ---"; Get-Content $err -Tail 40 | ForEach-Object { Write-Host $_ } }
+              exit 1
+            }
+          } finally {
+            # Tree-kill: the engine may hold sqlite + children (terminal shells
+            # are only created on demand, but be thorough — a leaked node.exe
+            # would hold the temp DB and slow every later retry).
+            & taskkill /T /F /PID $job.Id | Out-Null
+          }
+
       # NSIS (+ WiX tooling) downloads automatically on first use — no admin
       # needed. currentUser install mode → no UAC prompt on the owner's PC.
       - name: Build the NSIS installer
