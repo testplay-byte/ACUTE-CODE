@@ -209,16 +209,22 @@ jobs:
         env:
           ACUTE_BOOT_TIMEOUT_S: "90"
         run: |
-          $sidecar = "src-tauri/staging/sidecar"
+          # ALL paths ABSOLUTE (round-57, two caught gate bugs): Start-Process
+          # resolves a RELATIVE -ArgumentList against the CHILD's
+          # -WorkingDirectory, not pwsh's cwd — run 1 passed "app\dist\main.js"
+          # → <wd>\app\dist\main.js (doubled app); run 2 passed a repo-relative
+          # path → the whole working dir prefixed onto it. The engine never
+          # ran either time; the gate refused to pack, exactly as designed.
+          $sidecar = Join-Path $PWD "src-tauri\staging\sidecar"
           $out = "$env:TEMP\acute-boot-stdout.log"
           $err = "$env:TEMP\acute-boot-stderr.log"
           $db  = "$env:TEMP\acute-boot-test.db"
           Remove-Item $out, $err, $db -Force -ErrorAction SilentlyContinue
           $env:ACUTE_TOKEN = "ci-boot-token"
           $env:ACUTE_DB_PATH = $db
-          $job = Start-Process -FilePath "$sidecar\node.exe" `
-            -ArgumentList "$sidecar\app\dist\main.js" `
-            -WorkingDirectory "$sidecar\app" `
+          $job = Start-Process -FilePath (Join-Path $sidecar "node.exe") `
+            -ArgumentList (Join-Path $sidecar "app\dist\main.js") `
+            -WorkingDirectory (Join-Path $sidecar "app") `
             -RedirectStandardOutput $out -RedirectStandardError $err -PassThru
           $deadline = (Get-Date).AddSeconds([int]$env:ACUTE_BOOT_TIMEOUT_S)
           $ready = $false
