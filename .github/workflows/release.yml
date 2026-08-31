@@ -217,7 +217,7 @@ jobs:
           $env:ACUTE_TOKEN = "ci-boot-token"
           $env:ACUTE_DB_PATH = $db
           $job = Start-Process -FilePath "$sidecar\node.exe" `
-            -ArgumentList "app\dist\main.js" `
+            -ArgumentList "$sidecar\app\dist\main.js" `
             -WorkingDirectory "$sidecar\app" `
             -RedirectStandardOutput $out -RedirectStandardError $err -PassThru
           $deadline = (Get-Date).AddSeconds([int]$env:ACUTE_BOOT_TIMEOUT_S)
@@ -242,8 +242,12 @@ jobs:
           } finally {
             # Tree-kill: the engine may hold sqlite + children (terminal shells
             # are only created on demand, but be thorough — a leaked node.exe
-            # would hold the temp DB and slow every later retry).
-            & taskkill /T /F /PID $job.Id | Out-Null
+            # would hold the temp DB and slow every later retry). Guard on
+            # HasExited so an already-dead engine doesn't print "process not
+            # found" noise over the real diagnostics.
+            if (-not $job.HasExited) {
+              & taskkill /T /F /PID $job.Id | Out-Null
+            }
           }
 
       # NSIS (+ WiX tooling) downloads automatically on first use — no admin
