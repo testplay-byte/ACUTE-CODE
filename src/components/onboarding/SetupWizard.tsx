@@ -31,8 +31,10 @@ export function SetupWizard() {
   const s = useThemeStyles();
 
   return (
+    // R58: h-full (was h-screen) — the App root's flex column sizes the
+    // wizard (the custom TitleBar sits above it in Tauri; web unchanged).
     <div
-      className="h-screen w-full flex flex-col overflow-hidden relative"
+      className="h-full w-full flex flex-col overflow-hidden relative"
       style={{
         backgroundColor: s.bg,
         color: s.text,

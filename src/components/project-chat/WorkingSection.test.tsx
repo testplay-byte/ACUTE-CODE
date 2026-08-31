@@ -741,3 +741,251 @@ describe("live command output tail (ROUND-52 R52-c)", () => {
     expect(tail.textContent).not.toContain("line 5");
   });
 });
+
+// ─── ROUND-58 (R58-cf): the live write preview + the thinking redesign ──────
+
+describe("live write preview (ROUND-58 R58-cf)", () => {
+  /** An in-flight write_file whose args raw the store attached (tool-call frame landed). */
+  const LIVE_WRITE: ToolUseEntry & { liveInput?: string } = {
+    seq: -4,
+    toolName: "write_file",
+    argsSummary: "path: src/app.ts, content: 22 chars",
+    ok: null,
+    ts: "2026-08-31T12:00:04Z",
+    liveInput: '{"path":"src/app.ts","content":"<!DOCTYPE html>\\n<html>"}',
+  };
+
+  it("an in-flight write_file with liveInput renders the preview UNDER the pill (collapsed row)", () => {
+    renderWithProviders(
+      <WorkingSection
+        entries={[{ type: "tool", tool: LIVE_WRITE }]}
+        sessionId={SESSION_ID}
+        projectId="proj_probe"
+        live
+        defaultOpen
+      />,
+    );
+
+    const preview = screen.getByTestId("live-write-preview");
+    // The label: filename (not the full path) + the decoded char count.
+    expect(preview.textContent).toContain("writing app.ts");
+    expect(preview.textContent).toContain("22 chars");
+    // The partial content, JSON-escapes decoded (\n became a newline node).
+    expect(preview.textContent).toContain("<!DOCTYPE html>");
+    expect(preview.textContent).toContain("<html>");
+    // No diff machinery ran while in flight (the preview IS the body).
+    expect(vi.mocked(fetchSessionCheckpoints)).not.toHaveBeenCalled();
+  });
+
+  it("expanding the in-flight row keeps the preview as the body (the snapshot doesn't exist yet)", () => {
+    renderWithProviders(
+      <WorkingSection
+        entries={[{ type: "tool", tool: LIVE_WRITE }]}
+        sessionId={SESSION_ID}
+        projectId="proj_probe"
+        live
+        defaultOpen
+      />,
+    );
+    fireEvent.click(screen.getByRole("button", { name: /^Wrote / }));
+
+    // Still the preview — never DiffDetail's "loading diff…" placeholder.
+    expect(screen.getByTestId("live-write-preview")).toBeTruthy();
+    expect(screen.queryByText(/loading diff/)).toBeNull();
+    expect(screen.queryByText(/no snapshot recorded/)).toBeNull();
+    expect(vi.mocked(fetchSessionCheckpoints)).not.toHaveBeenCalled();
+  });
+
+  it("the tool-result replaces the preview: the settled row expands into the real DiffDetail", () => {
+    // The settled shape the store produces (liveInput STRIPPED on the result).
+    const settled: ToolUseEntry = {
+      seq: -4,
+      toolName: "write_file",
+      argsSummary: "path: src/app.ts, content: 22 chars",
+      ok: true,
+      ts: "2026-08-31T12:00:04Z",
+      outputSummary: "wrote src/app.ts",
+    };
+    renderWithProviders(
+      <WorkingSection
+        entries={[{ type: "tool", tool: settled }]}
+        sessionId={SESSION_ID}
+        projectId="proj_probe"
+        live
+        defaultOpen
+      />,
+    );
+
+    expect(screen.queryByTestId("live-write-preview")).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: /^Wrote / }));
+    // DiffDetail took over (empty checkpoints → the honest miss line).
+    expect(vi.mocked(fetchSessionCheckpoints)).toHaveBeenCalledWith(SESSION_ID);
+  });
+
+  it("a NON-diff tool never renders the write preview (only write_file/edit_file)", () => {
+    const liveRead: ToolUseEntry & { liveInput?: string } = {
+      seq: -5,
+      toolName: "run_command",
+      argsSummary: "pnpm test",
+      ok: null,
+      ts: "2026-08-31T12:00:05Z",
+      liveInput: '{"command":"pnpm test"}',
+    };
+    renderWithProviders(
+      <WorkingSection
+        entries={[{ type: "tool", tool: liveRead }]}
+        sessionId={SESSION_ID}
+        projectId="proj_probe"
+        live
+        defaultOpen
+      />,
+    );
+
+    expect(screen.queryByTestId("live-write-preview")).toBeNull();
+    expect(screen.queryByTestId("live-write-pending-row")).toBeNull();
+  });
+
+  it("a PENDING write (tool-input frames, no ToolUseEntry yet) renders its own row + preview from the stream store", () => {
+    useStreamStore.setState({
+      bySession: {
+        [SESSION_ID]: {
+          liveTurn: {
+            startedAtMs: Date.now(),
+            working: [],
+            streamText: "",
+            streamThinking: "",
+            stopped: false,
+            stoppedByUser: false,
+            streamingToolInputs: [
+              {
+                toolCallId: "call_w9",
+                toolName: "write_file",
+                raw: '{"path":"src/generated.ts","content":"export const A = 1;\\nexport const B = 2;',
+              },
+            ],
+          },
+          streamBusy: true,
+          sendError: null,
+          liveError: null,
+          pendingEcho: null,
+          lastLiveEndMs: 0,
+          lastTurnStoppedByUser: false,
+          lastTurnStoppedTs: null,
+        },
+      },
+    });
+    renderWithProviders(
+      <WorkingSection
+        entries={[]}
+        sessionId={SESSION_ID}
+        projectId="proj_probe"
+        live
+        defaultOpen
+      />,
+    );
+
+    const row = screen.getByTestId("live-write-pending-row");
+    expect(row.textContent).toContain("Writing");
+    expect(row.textContent).toContain("path: src/generated.ts");
+    const preview = screen.getByTestId("live-write-preview");
+    expect(preview.textContent).toContain("writing generated.ts");
+    expect(preview.textContent).toContain("export const A = 1;");
+  });
+
+  it("folded sections NEVER read the streaming inputs (a reload shows no pending rows)", () => {
+    useStreamStore.setState({
+      bySession: {
+        [SESSION_ID]: {
+          liveTurn: {
+            startedAtMs: Date.now(),
+            working: [],
+            streamText: "",
+            streamThinking: "",
+            stopped: false,
+            stoppedByUser: false,
+            streamingToolInputs: [
+              { toolCallId: "call_w9", toolName: "write_file", raw: '{"path":"a.ts"' },
+            ],
+          },
+          streamBusy: false,
+          sendError: null,
+          liveError: null,
+          pendingEcho: null,
+          lastLiveEndMs: 0,
+          lastTurnStoppedByUser: false,
+          lastTurnStoppedTs: null,
+        },
+      },
+    });
+    renderWithProviders(
+      <WorkingSection
+        entries={[{ type: "text", content: "done", ts: "t" }]}
+        sessionId={SESSION_ID}
+        projectId="proj_probe"
+        defaultOpen
+      />,
+    );
+
+    expect(screen.queryByTestId("live-write-pending-row")).toBeNull();
+  });
+});
+
+describe("thinking display redesign (ROUND-58 R58-cf — no accent rails)", () => {
+  const theme = deriveThemeStyles("nova", true); // resetTestState pins nova + dark
+
+  it("the thought body is a clean notes block: subtle bg, NO left border rail, NO accent color", () => {
+    renderWithProviders(
+      <WorkingSection
+        entries={[{ type: "thinking", text: "I should inspect the file first.", ts: "t" }]}
+        sessionId={SESSION_ID}
+        projectId="proj_probe"
+        defaultOpen
+      />,
+    );
+    // ThoughtRow starts collapsed — expand it.
+    fireEvent.click(screen.getByRole("button", { name: "Expand thought" }));
+
+    const body = screen.getByText("I should inspect the file first.").closest("div.font-mono") as HTMLElement;
+    expect(body).toBeTruthy();
+    // NO rail: neither the class nor a computed left border.
+    expect(body.className).not.toContain("border-l-2");
+    expect(body.style.borderLeftWidth).toBe("");
+    expect(body.style.borderColor).toBe("");
+    // The very subtle neutral wash (styles.subtle ≈ 4% white on nova dark).
+    const tight = (v: string): string => v.replace(/\s+/g, "");
+    expect(tight(body.style.background)).toBe(tight(theme.subtle));
+  });
+
+  it("the section body carries NO accent rail either (rows align in a plain column)", () => {
+    const { container } = renderWithProviders(
+      <WorkingSection
+        entries={[{ type: "thinking", text: "Thinking aloud.", ts: "t" }]}
+        sessionId={SESSION_ID}
+        projectId="proj_probe"
+        defaultOpen
+      />,
+    );
+    const rowsColumn = container.querySelector("div.py-1.flex.flex-col.gap-0\\.5") as HTMLElement;
+    expect(rowsColumn).toBeTruthy();
+    expect(rowsColumn.className).not.toContain("border-l-2");
+    expect(rowsColumn.className).not.toContain("ml-[7px]");
+    expect(rowsColumn.style.borderColor).toBe("");
+  });
+
+  it("the collapse/expand affordances survive the redesign (chevron + label + preview line)", () => {
+    renderWithProviders(
+      <WorkingSection
+        entries={[{ type: "thinking", text: "A longer thought that should preview when collapsed.", ts: "t" }]}
+        sessionId={SESSION_ID}
+        projectId="proj_probe"
+        defaultOpen
+      />,
+    );
+    const toggle = screen.getByRole("button", { name: "Expand thought" });
+    expect(toggle.textContent).toContain("Thought");
+    // The collapsed preview line rides inside the toggle.
+    expect(toggle.textContent).toContain("A longer thought that should preview");
+    fireEvent.click(toggle);
+    expect(screen.getByRole("button", { name: "Collapse thought" })).toBeTruthy();
+  });
+});

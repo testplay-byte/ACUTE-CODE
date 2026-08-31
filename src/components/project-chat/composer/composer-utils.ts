@@ -56,6 +56,16 @@ export function toMessageAttachment(a: ComposerAttachment): MessageAttachment {
 /** The backend caps a message at 20 attachments — mirror that in the UI. */
 export const MAX_ATTACHMENTS = 20;
 
+/**
+ * ROUND-58 (R58-cf): the exact user message the composer's Continue button
+ * sends after a user-stopped turn. A plain follow-up message — the backend's
+ * history now includes the stopped turn's partial text + tool results (the
+ * runtime flushes them on stop), so the model resumes from where it left
+ * off. The string is a product decision pinned here (and asserted in tests):
+ * do NOT reword it ad hoc.
+ */
+export const CONTINUE_FROM_STOP_MESSAGE = "Continue from where you left off.";
+
 /** The backend caps attachment text at 128KB — mirrored for dropped files. */
 export const ATTACHMENT_TEXT_CAP = 131_072;
 

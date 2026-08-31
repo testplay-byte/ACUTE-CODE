@@ -2,6 +2,7 @@ import { useEffect } from "react";
 import { Route, Routes, useNavigate } from "react-router";
 import { AppShell } from "./components/shell/AppShell";
 import { ConnectionGate } from "./components/shell/ConnectionGate";
+import { TitleBar } from "./components/shell/TitleBar";
 import { ProjectView } from "./components/projects/ProjectView";
 import { DemoViewerScreen } from "./components/demos/DemoViewerScreen";
 import { ProjectChatScreen } from "./components/project-chat";
@@ -65,33 +66,43 @@ function FirstRunCheck() {
  */
 export function App() {
   return (
-    <ConnectionGate>
-      <FirstRunCheck />
-      <Routes>
-        <Route path="/setup" element={<SetupWizard />} />
-        <Route element={<AppShell />}>
-          <Route index element={<DashboardScreen />} />
-          <Route path="project/:id" element={<ProjectView />} />
-          <Route path="project/:id/chat" element={<ProjectChatScreen />} />
+    // R58: the custom TitleBar owns the top 40px in Tauri mode (the native
+    // decorations are gone); it renders null in web mode, where the column
+    // degenerates to one full-height child — visually identical to pre-R58.
+    // Everything below fills the remainder, so full-bleed screens (AppShell,
+    // wizard, connection gate) size with h-full instead of h-screen.
+    <div className="flex h-screen flex-col overflow-hidden">
+      <TitleBar />
+      <div className="min-h-0 flex-1">
+        <ConnectionGate>
+          <FirstRunCheck />
+          <Routes>
+            <Route path="/setup" element={<SetupWizard />} />
+            <Route element={<AppShell />}>
+              <Route index element={<DashboardScreen />} />
+              <Route path="project/:id" element={<ProjectView />} />
+              <Route path="project/:id/chat" element={<ProjectChatScreen />} />
 
-          {/* ROUND-52 (R52-b): the real Usage screen — was PlaceholderPage
-              (owner: "Usage screen section 2 … you apparently did not
-              implement the usage properly"). */}
-          <Route path="usage" element={<UsageScreen />} />
-          <Route path="settings" element={<SettingsPage />} />
-          <Route path="demos" element={<DemoViewerScreen />} />
-          <Route
-            path="*"
-            element={
-              <PlaceholderPage
-                title="Not found"
-                spec="—"
-                detail="This screen does not exist. Use the sidebar to navigate."
+              {/* ROUND-52 (R52-b): the real Usage screen — was PlaceholderPage
+                  (owner: "Usage screen section 2 … you apparently did not
+                  implement the usage properly"). */}
+              <Route path="usage" element={<UsageScreen />} />
+              <Route path="settings" element={<SettingsPage />} />
+              <Route path="demos" element={<DemoViewerScreen />} />
+              <Route
+                path="*"
+                element={
+                  <PlaceholderPage
+                    title="Not found"
+                    spec="—"
+                    detail="This screen does not exist. Use the sidebar to navigate."
+                  />
+                }
               />
-            }
-          />
-        </Route>
-      </Routes>
-    </ConnectionGate>
+            </Route>
+          </Routes>
+        </ConnectionGate>
+      </div>
+    </div>
   );
 }

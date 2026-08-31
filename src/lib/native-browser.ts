@@ -146,6 +146,19 @@ export function nativeTabsCloseAll(): Promise<void> {
 }
 
 /**
+ * R58-b: hand `url` to the OPERATING SYSTEM's default browser (the Rust
+ * `open_external_url` command — tauri-plugin-shell's OS-level open, NOT the
+ * embedded WebView2). The panel's explicit "Open externally" affordance
+ * uses this inside the Tauri shell: `window.open` from within a WebView2
+ * webview is silently swallowed by wry, so the handoff must happen on the
+ * Rust side. The command validates http/https in Rust; outside Tauri this
+ * resolves as a safe no-op (callers keep their web-mode `window.open`).
+ */
+export function openExternalUrl(url: string): Promise<void> {
+  return runCommand("open_external_url", { url });
+}
+
+/**
  * Subscribe to `browser-navigated` — emitted by the Rust `on_navigation`
  * hook for every http/https navigation of every tab (initial loads, link
  * clicks, redirects). Payload is `{ tab_id, url }` (serde keeps snake_case).

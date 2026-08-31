@@ -58,6 +58,7 @@ vi.mock("../../lib/native-browser", () => ({
   nativeTabUrl: vi.fn(() => Promise.resolve(null)),
   nativeTabClose: vi.fn(() => Promise.resolve()),
   nativeTabsCloseAll: vi.fn(() => Promise.resolve()),
+  openExternalUrl: vi.fn(() => Promise.resolve()),
   onBrowserNavigated: vi.fn((cb: (tabId: string, url: string) => void) => {
     nativeState.navigatedListener = cb;
     return () => {
@@ -553,6 +554,105 @@ describe("BrowserPanel (R43-10 embedded browser)", () => {
     // non-Tauri dev flow is honestly the proxied renderer.
     expect(screen.getByTestId("browser-engine-badge").textContent).toBe("Proxy fallback");
   });
+
+  // ── R58-b: the URL-bar draft must never be stomped mid-typing ──────────
+
+  it("R58-b: the address draft is NOT reset while the input is focused; blur falls back to the live URL", async () => {
+    const tab = makeTab();
+    seedRightSidebar(tab);
+    renderWithProviders(<BrowserPanel projectId="prj_test" tab={tab} />);
+    await waitFor(() => expect(postCalls("/api/v1/browser/session")).toHaveLength(1));
+
+    const input = screen.getByTestId("browser-address-input") as HTMLInputElement;
+    // The user starts typing while a navigation is in flight — the pre-R58
+    // draft-sync effect fired on every currentUrl change (4s poll,
+    // navigation events) and reset the field right here.
+    fireEvent.focus(input);
+    fireEvent.change(input, { target: { value: "duckduckgo.com/?q=half+typed" } });
+
+    // The live URL moves (navigation event / poll) — the focused field
+    // must keep the user's text.
+    await act(async () => {
+      await useBrowserTabStore.getState().handleLocationMessage(tab.id, "https://example.com/landed");
+    });
+    expect(useBrowserTabStore.getState().tabs[tab.id]?.currentUrl).toBe("https://example.com/landed");
+    expect(input.value).toBe("duckduckgo.com/?q=half+typed");
+
+    // Blur → the draft falls back to the live URL (never stale typing).
+    fireEvent.blur(input);
+    expect(input.value).toBe("https://example.com/landed");
+  });
+
+  // ── R58-b: "Open externally" must actually open something ─────────────
+
+  it("R58-b: 'Open externally' in Tauri mode hands the URL to open_external_url (never window.open — wry swallows it)", async () => {
+    // sidecar.ts's isTauri() checks for the global — stub it (the
+    // native-browser module is mocked above; this only routes the branch).
+    vi.stubGlobal("__TAURI__", { core: { invoke: vi.fn() } });
+    const openSpy = vi.fn();
+    vi.stubGlobal("open", openSpy);
+    const tab = makeTab();
+    seedRightSidebar(tab);
+    renderWithProviders(<BrowserPanel projectId="prj_test" tab={tab} />);
+    await waitFor(() => expect(postCalls("/api/v1/browser/session")).toHaveLength(1));
+
+    const input = screen.getByTestId("browser-address-input") as HTMLInputElement;
+    fireEvent.change(input, { target: { value: "https://example.com" } });
+    fireEvent.submit(input.closest("form") as HTMLFormElement);
+    await waitFor(() =>
+      expect(postCalls("/api/v1/browser/navigate").some((c) => c.body?.url === "https://example.com")).toBe(true),
+    );
+
+    fireEvent.click(screen.getByTestId("browser-open-external"));
+    expect(vi.mocked(nativeBrowser.openExternalUrl)).toHaveBeenCalledWith("https://example.com");
+    // window.open is NOT used in Tauri mode — that is the whole point of
+    // the Rust handoff.
+    expect(openSpy).not.toHaveBeenCalled();
+  });
+
+  it("R58-b: 'Open externally' in web mode keeps window.open (no Tauri command invoked)", async () => {
+    const openSpy = vi.fn();
+    vi.stubGlobal("open", openSpy);
+    const tab = makeTab();
+    seedRightSidebar(tab);
+    renderWithProviders(<BrowserPanel projectId="prj_test" tab={tab} />);
+    await waitFor(() => expect(postCalls("/api/v1/browser/session")).toHaveLength(1));
+
+    const input = screen.getByTestId("browser-address-input") as HTMLInputElement;
+    fireEvent.change(input, { target: { value: "https://example.com" } });
+    fireEvent.submit(input.closest("form") as HTMLFormElement);
+    await waitFor(() =>
+      expect(postCalls("/api/v1/browser/navigate").some((c) => c.body?.url === "https://example.com")).toBe(true),
+    );
+
+    fireEvent.click(screen.getByTestId("browser-open-external"));
+    expect(openSpy).toHaveBeenCalledWith("https://example.com", "_blank", "noopener,noreferrer");
+    expect(vi.mocked(nativeBrowser.openExternalUrl)).not.toHaveBeenCalled();
+  });
+
+  it("R58-b: a REJECTED open_external_url surfaces the error card and falls back to window.open", async () => {
+    vi.stubGlobal("__TAURI__", { core: { invoke: vi.fn() } });
+    const openSpy = vi.fn();
+    vi.stubGlobal("open", openSpy);
+    vi.mocked(nativeBrowser.openExternalUrl).mockRejectedValueOnce(new Error("no default browser"));
+    const tab = makeTab();
+    seedRightSidebar(tab);
+    renderWithProviders(<BrowserPanel projectId="prj_test" tab={tab} />);
+    await waitFor(() => expect(postCalls("/api/v1/browser/session")).toHaveLength(1));
+
+    const input = screen.getByTestId("browser-address-input") as HTMLInputElement;
+    fireEvent.change(input, { target: { value: "https://example.com" } });
+    fireEvent.submit(input.closest("form") as HTMLFormElement);
+    await waitFor(() =>
+      expect(postCalls("/api/v1/browser/navigate").some((c) => c.body?.url === "https://example.com")).toBe(true),
+    );
+
+    fireEvent.click(screen.getByTestId("browser-open-external"));
+    const card = await screen.findByTestId("browser-error-card");
+    expect(card.textContent).toContain("no default browser");
+    // The fallback still tried the webview's own window.open.
+    expect(openSpy).toHaveBeenCalledWith("https://example.com", "_blank", "noopener,noreferrer");
+  });
 });
 
 describe("BrowserPanel native mode (R50-a child webviews over the panel)", () => {
@@ -786,6 +886,59 @@ describe("BrowserPanel native mode (R50-a child webviews over the panel)", () =>
     await waitFor(() => expect(create()).toHaveBeenCalledWith("tab-test-1", "https://github.com"));
 
     expect(screen.getByTestId("browser-engine-badge").textContent).toBe("Chromium (native)");
+  });
+
+  it("R58-b: the readout reports the CLAMPED size when the panel can't fit the preset (honest readout)", async () => {
+    // 400×900 area: full-hd (1920×1080) clamps both ways, mobile-md
+    // (390×844) fits — both states of the honest readout in one test.
+    const rectSpy = vi
+      .spyOn(HTMLElement.prototype, "getBoundingClientRect")
+      .mockReturnValue({
+        left: 80,
+        top: 120,
+        width: 400,
+        height: 900,
+        right: 480,
+        bottom: 1020,
+        x: 80,
+        y: 120,
+        toJSON: () => ({}),
+      } as DOMRect);
+    try {
+      const tab = makeTab({ browserUrl: "https://example.com" });
+      seedRightSidebar(tab);
+      renderWithProviders(<BrowserPanel projectId="prj_test" tab={tab} />);
+      await waitFor(() => expect(create()).toHaveBeenCalledWith("tab-test-1", "https://example.com"));
+      // Natural mode first: the bounds sync lands (rAF), the readout has a
+      // rendered size to be honest about.
+      await waitFor(
+        () => expect(setBounds()).toHaveBeenCalledWith("tab-test-1", 80, 120, 400, 900),
+        { timeout: 2500 },
+      );
+
+      // full-hd (1920×1080) cannot fit the 400×900 panel — the webview is
+      // clamped, and the readout must say so instead of claiming 1920×1080.
+      fireEvent.change(screen.getByTestId("browser-preset-select"), { target: { value: "full-hd" } });
+      await waitFor(() =>
+        expect(calls.some((c) => c.path === "/api/v1/browser/viewport" && c.method === "PUT" && c.body?.preset === "full-hd")).toBe(true),
+      );
+      await waitFor(() => {
+        const text = screen.getByTestId("browser-readout").textContent ?? "";
+        expect(text).toContain("400×900");
+        expect(text).toContain("clamped from 1920×1080");
+        expect(text).toContain("panel too small");
+      });
+
+      // A preset that FITS keeps the plain readout (no clamp note).
+      fireEvent.change(screen.getByTestId("browser-preset-select"), { target: { value: "mobile-md" } });
+      await waitFor(() => {
+        const text = screen.getByTestId("browser-readout").textContent ?? "";
+        expect(text).toContain("390×844");
+        expect(text).not.toContain("clamped");
+      });
+    } finally {
+      rectSpy.mockRestore();
+    }
   });
 
   it("ROUND-51: a REJECTED nativeTabCreate flips the panel into the proxy path for the rest of the mount", async () => {

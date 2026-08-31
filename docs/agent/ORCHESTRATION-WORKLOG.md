@@ -1877,3 +1877,27 @@ Stage Summary:
 - The owner's upgrade path: double-click ACUTE.bat → self-update → the app-or-site question → [1] the desktop app → 0.56.0 → 0.57.0 upgrade → the console should finally print "✓ agent-core is up — port N" and the window should reach the dashboard (the same flow the owner just watched work in the browser).
 - Testing checklist delivered in the session's final message.
 - R57-a follow-up (same round): the docs-only worklog commit's CI run 33411797885 failed on a LATENT FLAKE — all 1035 tests passed but ModelsProvidersTab's 1500ms "Slot added." reset fired after happy-dom teardown (React-DOM dispatchSetState → "window is not defined" → uncaught exception → suite exit 1). The bare `setTimeout(() => setX(null), N)` idiom existed at 11 sites (ModelsProvidersTab 3, SubAgentsTab 4, AgentChatPanel 3, ConnectionGate 1). NEW src/hooks/use-timeout-clear.ts (useTimeoutClear: cancel-on-unmount via useEffect cleanup + replace-on-reschedule) backs all 11 sites; 3 new tests (fires-after-delay / unmount-cancels — the exact CI failure mode / reschedule-replaces) → 1074/1074 in 77 files, lint/typecheck clean. Production never affected (unmounted setState is a no-op in React 18) — the shipped 0.57.0 installer stands; the fix is CI-reliability. Golden rule 3 held: the red run was watched, root-caused, fixed, and re-run to green before the session closed.
+
+
+## R58 — 2026-08-31 — the desktop-polish round (0.58.0)
+
+The owner's eleventh Windows session — the FIRST fully-working desktop run
+(the R57 bundling fix held) — delivered a dense defect list that became six
+parallel workstreams with strict file ownership: (orch) frameless-window
+config + the engine's stop/flush/status/capping fixes; (a) the TitleBar;
+(b) the browser panel's five bugs (async pop-out, system-browser opener,
+URL-bar focus guard, honest clamped readouts, profile copy); (c/cf) stop
+honesty + Continue + live file-write preview (tool-input frames end-to-end
++ tolerant JSON extractor) + the thinking redesign + hover intent; (d) the
+settings restructure (unconfigured group, preset fields hidden, disable
+switch, reveal keys via a new authenticated route, Sub-agents/Advanced
+dedupe, ModelSelector honoring config); (e) the CLI chat harness
+(acute.mjs chat:stream family, live-verified with real model calls).
+
+Gates: 1169/1169 root (80 files) + 631/631 agent-core (38 files), lint +
+typecheck clean both workspaces, docs:check 149/0, version 0.58.0 ×4,
+LIVE battery 5/5 (scripts/battery-r58.mjs — the owner's exact 3-file task
+with frame-order assertions, stop → stopped + queued + persisted partial,
+continue completes, reveal route), agent-browser pass over the settings
+pages, Rust stub-crate cargo-check + CI cargo check. Pushed + tagged
+v0.58.0. Full record: docs/ui-iterations/round-58.md.

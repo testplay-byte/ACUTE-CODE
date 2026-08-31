@@ -1,7 +1,6 @@
 import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Link } from "react-router";
-import { Activity, Check, Cpu, KeyRound, Plus, Trash2 } from "lucide-react";
+import { Activity, Check, Cpu, KeyRound, Plus, Trash2, Workflow } from "lucide-react";
 import { useTimeoutClear } from "../../hooks/use-timeout-clear";
 import { useThemeStyles } from "../../lib/use-theme-styles";
 import { withAlpha } from "../dashboard/helpers";
@@ -19,24 +18,27 @@ import {
 } from "../../lib/api";
 
 /**
- * SubAgentsTab — ROUND-43 (R43-5, owner directive):
+ * SubAgentsTab — ROUND-43 (R43-5, owner directive): the dedicated home for
+ * sub-agent configuration.
  *
- * > "for the sub-agents I should create a dedicated section for their API keys
- * > and for their models, where I can paste in the API keys of all OpenRouter
- * > temporarily and also select a free model from there temporarily. These
- * > settings will be temporary ones… later on it will be completely removed."
- *
- * Two clearly-labeled TEMPORARY cards:
+ * ROUND-58 (R58-d) RESTRUCTURE (owner: "the subagent and advanced options
+ * are apparently mixed up… recreate these two pages properly"): this tab is
+ * now the SINGLE home for everything sub-agent —
  *  1. Sub-agent OpenRouter keys — paste slots writing the EXISTING
  *     /providers/openrouter/keys/N pool routes. Slot 0 (the owner's primary
  *     key) is NEVER touched; the orchestrator already prefers pool slots for
  *     sub-agent traffic so parallel children don't compete with main chats.
  *  2. Sub-agent model — picker over the SERVED model catalog (GET
- *     /models/catalog — ROUND-47 R47-c2; the hand-copied 47-entry
- *     SUBAGENT_MODEL_CATALOG that used to live here is deleted), honoring
- *     the shared modelsFreeOnly pref, persisted as orchestration.subagentModel
- *     (null = "Inherits main model"). Only tool-capable models are
- *     selectable — sub-agents are mandated tool users (ROUND-39).
+ *     /models/catalog — ROUND-47 R47-c2), honoring the shared modelsFreeOnly
+ *     pref, persisted as orchestration.subagentModel (null = "Inherits main
+ *     model"). Only tool-capable models are selectable (ROUND-39).
+ *  3. Sub-agent parallelism — the maxParallel + perKeyLimit steppers MOVED
+ *     here from the old Advanced tab's OrchestrationCard (they are sub-agent
+ *     limits, not advanced ones).
+ *  4. Sub-agent supervision — the R52-b supervisor knobs (heartbeat + stall).
+ *
+ * The old duplication — this whole section ALSO rendering inside the Advanced
+ * tab — is gone; Advanced keeps only the connection + memory cards.
  */
 
 const SUBAGENT_PROVIDER_ID = "openrouter";
@@ -221,12 +223,12 @@ function SubAgentKeysCard() {
     <section
       className="rounded-[16px] border-[1.5px] p-4 flex flex-col gap-2.5"
       style={{ background: styles.card, borderColor: styles.border }}
-      aria-label="Sub-agent OpenRouter keys (temporary)"
+      aria-label="Sub-agent OpenRouter keys"
     >
       <div className="flex items-center gap-2 flex-wrap">
         <KeyRound size={13} style={{ color: styles.accent, opacity: 0.8 }} />
         <span className="text-[13px] font-bold" style={{ color: styles.text }}>
-          Sub-agent OpenRouter keys <span style={{ color: styles.textTertiary }}>(temporary)</span>
+          Sub-agent OpenRouter keys
         </span>
         <span className="flex-1" />
         {msg && (
@@ -289,7 +291,8 @@ function SubAgentKeysCard() {
       )}
       <p className="text-[10.5px]" style={{ color: styles.textTertiary }}>
         Same pool as Models&nbsp;&amp;&nbsp;Providers → key pool; slot&nbsp;0 (your primary key) is
-        never written here. Temporary — this section will be removed in a later round.
+        never written here. ROUND-58 (R58-d): this page is the permanent home for sub-agent
+        configuration — the old “temporary” framing is retired.
       </p>
     </section>
   );
@@ -340,7 +343,7 @@ function SubAgentModelCard() {
       <section
         className="rounded-[16px] border-[1.5px] p-4"
         style={{ background: styles.card, borderColor: styles.border }}
-        aria-label="Sub-agent model (temporary)"
+        aria-label="Sub-agent model"
       >
         <p className="text-[11px]" style={{ color: "#ef4444" }} role="alert">
           {coreUnreachableHint} to pick a sub-agent model.
@@ -356,12 +359,12 @@ function SubAgentModelCard() {
       <section
         className="rounded-[16px] border-[1.5px] p-4 flex flex-col gap-2.5"
         style={{ background: styles.card, borderColor: styles.border }}
-        aria-label="Sub-agent model (temporary)"
+        aria-label="Sub-agent model"
       >
         <div className="flex items-center gap-2">
           <Cpu size={13} style={{ color: styles.accent, opacity: 0.8 }} />
           <span className="text-[13px] font-bold" style={{ color: styles.text }}>
-            Sub-agent model <span style={{ color: styles.textTertiary }}>(temporary)</span>
+            Sub-agent model
           </span>
         </div>
         <p className="text-[11px]" style={{ color: "#ef4444" }} role="alert">
@@ -388,7 +391,7 @@ function SubAgentModelCard() {
       <section
         className="rounded-[16px] border-[1.5px] p-4"
         style={{ background: styles.card, borderColor: styles.border }}
-        aria-label="Sub-agent model (temporary)"
+        aria-label="Sub-agent model"
       >
         <span className="text-[12px] font-mono" style={{ color: styles.textTertiary }}>
           {settingsPending || settings === undefined ? "loading sub-agent model settings…" : "loading the model catalog…"}
@@ -425,12 +428,12 @@ function SubAgentModelCard() {
     <section
       className="rounded-[16px] border-[1.5px] p-4 flex flex-col gap-2.5"
       style={{ background: styles.card, borderColor: styles.border }}
-      aria-label="Sub-agent model (temporary)"
+      aria-label="Sub-agent model"
     >
       <div className="flex items-center gap-2 flex-wrap">
         <Cpu size={13} style={{ color: styles.accent, opacity: 0.8 }} />
         <span className="text-[13px] font-bold" style={{ color: styles.text }}>
-          Sub-agent model <span style={{ color: styles.textTertiary }}>(temporary)</span>
+          Sub-agent model
         </span>
         <span className="flex-1" />
         {msg && (
@@ -575,13 +578,166 @@ function SubAgentModelCard() {
         </div>
       </div>
       <p className="text-[10.5px]" style={{ color: styles.textTertiary }}>
-        Applies to every delegated sub-agent turn (delegate_task + retries). Parallelism limits stay
-        in{" "}
-        <Link to="/settings?tab=advanced" className="font-bold underline" style={{ color: styles.accent }}>
-          Advanced
-        </Link>
-        . Temporary — this section will be removed in a later round.
+        Applies to every delegated sub-agent turn (delegate_task + retries). Parallelism and
+        supervision live in the cards below — same page now.
       </p>
+    </section>
+  );
+}
+
+/* ── Card 3 (ROUND-58 R58-d): sub-agent PARALLELISM — moved from Advanced ─── */
+
+/** The two orchestration limits, moved here from the old Advanced tab's
+ * OrchestrationCard (R58-d: they are sub-agent limits, not advanced ones).
+ * Same wire contract — PUT /settings/orchestration {maxParallel?,
+ * perKeyLimit?} — and the same stepper UX, now beside the keys/model it
+ * actually governs. */
+function SubAgentParallelismCard() {
+  const styles = useThemeStyles();
+  const queryClient = useQueryClient();
+  const resetAfter = useTimeoutClear();
+  const [draft, setDraft] = useState<{ maxParallel?: number; perKeyLimit?: number }>({});
+  const [msg, setMsg] = useState<string | null>(null);
+
+  const settingsQuery = useQuery({
+    queryKey: ["orchestration-settings"],
+    queryFn: fetchSubagentSettings,
+  });
+
+  const update = useMutation({
+    mutationFn: (patch: { maxParallel?: number; perKeyLimit?: number }) =>
+      saveSubagentSettings(patch),
+    onSuccess: () => {
+      setMsg("Saved.");
+      resetAfter(() => setMsg(null), 1500);
+      setDraft({});
+      void queryClient.invalidateQueries({ queryKey: ["orchestration-settings"] });
+    },
+    onError: (err: Error) => setMsg(err.message),
+  });
+
+  if (settingsQuery.isError) {
+    return (
+      <section
+        className="rounded-[16px] border-[1.5px] p-4"
+        style={{ background: styles.card, borderColor: styles.border }}
+        aria-label="Sub-agent parallelism"
+      >
+        <p className="text-[11px]" style={{ color: "#ef4444" }} role="alert">
+          {coreUnreachableHint} to tune sub-agent parallelism.
+        </p>
+      </section>
+    );
+  }
+  const current = settingsQuery.data;
+  if (settingsQuery.isLoading || current === undefined) {
+    return (
+      <section
+        className="rounded-[16px] border-[1.5px] p-4"
+        style={{ background: styles.card, borderColor: styles.border }}
+        aria-label="Sub-agent parallelism"
+      >
+        <span className="text-[12px] font-mono" style={{ color: styles.textTertiary }}>
+          loading parallelism settings…
+        </span>
+      </section>
+    );
+  }
+
+  const stepper = (label: string, hint: string, field: "maxParallel" | "perKeyLimit", min: number, max: number, inputLabel: string, testId: string) => (
+    <div className="flex items-center gap-3 flex-wrap" data-testid={testId}>
+      <div className="min-w-[220px] flex-1">
+        <div className="text-[12.5px] font-bold" style={{ color: styles.text }}>{label}</div>
+        <div className="text-[11px]" style={{ color: styles.textTertiary }}>{hint}</div>
+      </div>
+      <span className="flex-1" />
+      <div className="flex items-center gap-1.5">
+        {[-1, +1].map((delta) => (
+          <button
+            key={delta}
+            onClick={() => {
+              const base = draft[field] ?? current[field];
+              setDraft((d) => ({ ...d, [field]: Math.min(max, Math.max(min, base + delta)) }));
+            }}
+            aria-label={`${delta > 0 ? "Increase" : "Decrease"} ${label}`}
+            className="w-8 h-8 rounded-[10px] grid place-items-center border-[1.5px] text-[14px] font-black shrink-0"
+            style={{ borderColor: styles.border, color: styles.textSecondary, background: styles.bg }}
+          >
+            {delta > 0 ? "+" : "−"}
+          </button>
+        ))}
+        <span
+          className="w-14 text-center text-[15px] font-black tabular-nums rounded-[10px] py-1"
+          style={{ background: withAlpha(styles.accent, 0.09), color: styles.accent }}
+          aria-label={inputLabel}
+        >
+          {draft[field] ?? current[field]}
+        </span>
+      </div>
+    </div>
+  );
+
+  const dirty = draft.maxParallel !== undefined || draft.perKeyLimit !== undefined;
+
+  return (
+    <section
+      className="rounded-[16px] border-[1.5px] p-4 flex flex-col gap-4"
+      style={{ background: styles.card, borderColor: styles.border }}
+      aria-label="Sub-agent parallelism"
+    >
+      <div className="flex items-center gap-2 flex-wrap">
+        <Workflow size={13} style={{ color: styles.accent, opacity: 0.8 }} />
+        <span className="text-[13px] font-bold" style={{ color: styles.text }}>
+          Sub-agent parallelism
+        </span>
+        <span className="flex-1" />
+        {msg && (
+          <span
+            className="text-[11px] font-bold"
+            style={{ color: update.isError ? "#ef4444" : "#22c55e" }}
+          >
+            {msg}
+          </span>
+        )}
+      </div>
+      <p className="text-[11px] leading-relaxed" style={{ color: styles.textSecondary }}>
+        How hard the orchestrator may run delegated children at once — across the whole turn and per
+        API key (the per-key limit protects provider rate limits).
+      </p>
+      <div className="flex flex-col gap-2">
+        {stepper(
+          "Max parallel sub-agents",
+          "Total concurrent sub-agent sessions (1–50)",
+          "maxParallel",
+          1,
+          50,
+          "Max parallel sub-agents value",
+          "max-parallel-field",
+        )}
+        {stepper(
+          "Per API-key limit",
+          "Concurrent sub-agents per API key — protects rate limits (1–20)",
+          "perKeyLimit",
+          1,
+          20,
+          "Per API-key limit value",
+          "per-key-limit-field",
+        )}
+      </div>
+      <div className="flex items-center gap-3">
+        <p className="text-[10.5px] flex-1" style={{ color: styles.textTertiary }}>
+          Sub-agents prefer dedicated key-pool slots (the keys card above) over the primary key.
+        </p>
+        <button
+          onClick={() => update.mutate(draft)}
+          disabled={!dirty || update.isPending}
+          aria-label="Save sub-agent parallelism settings"
+          className="h-8 px-3 rounded-[8px] text-[11px] font-bold shrink-0 disabled:opacity-50"
+          style={{ background: withAlpha(styles.accent, 0.12), color: styles.accent }}
+        >
+          {update.isPending ? "Saving…" : "Save"}
+        </button>
+      </div>
     </section>
   );
 }
@@ -826,39 +982,43 @@ function SubAgentSupervisionCard() {
 
 /* ── Composition ──────────────────────────────────────────────────────────── */
 
-/** The cards (reused by the Advanced tab until the sidebar gains a
- * dedicated Sub-agents section entry). */
+/**
+ * The four sub-agent cards, in reading order (R58-d). Kept as a named export
+ * so tests (and any future embedding) can mount the card stack directly.
+ */
 export function SubAgentsSection() {
-  const styles = useThemeStyles();
   return (
     <div className="flex flex-col gap-4" data-subagents-section>
-      <p
-        className="rounded-[10px] border-[1.5px] px-3 py-2 text-[11px] leading-relaxed"
-        style={{
-          borderColor: withAlpha(styles.accent, 0.35),
-          background: withAlpha(styles.accent, 0.05),
-          color: styles.textSecondary,
-        }}
-      >
-        <strong style={{ color: styles.text }}>Temporary setup.</strong> Paste spare OpenRouter keys
-        and pick a free model for sub-agent traffic — parallel agents then run on their own keys and
-        model instead of competing with your main chats. This whole section will be removed in a
-        later round.
-      </p>
       <SubAgentKeysCard />
       <SubAgentModelCard />
+      {/* ROUND-58 (R58-d): the parallelism limits MOVED here from the old
+          Advanced tab — they govern exactly the children the cards above
+          configure. */}
+      <SubAgentParallelismCard />
       {/* ROUND-52 (R52-b): the supervisor knobs — the orchestration family's
-          newest members (heartbeat + stall timeout; NOT temporary — they
-          stay when the temporary keys/model cards go). */}
+          newest members (heartbeat + stall timeout). */}
       <SubAgentSupervisionCard />
     </div>
   );
 }
 
-/** The dedicated Sub-agents settings tab (?tab=subagents). */
+/** The dedicated Sub-agents settings tab (?tab=subagents) — the single home
+ * for everything sub-agent (R58-d; the Advanced tab no longer duplicates it). */
 export function SubAgentsTab() {
+  const styles = useThemeStyles();
   return (
     <div className="mx-auto flex max-w-2xl flex-col gap-4">
+      {/* Clean page header — the cards below are the whole sub-agent story:
+          keys, model, parallelism, supervision. */}
+      <div className="pb-1">
+        <h2 className="text-[16px] font-black" style={{ color: styles.text }}>
+          Sub-agents
+        </h2>
+        <p className="mt-1 text-[12px]" style={{ color: styles.textSecondary }}>
+          Keys, model, parallelism, and supervision for the agents your main agent delegates to —
+          everything sub-agent lives on this one page.
+        </p>
+      </div>
       <SubAgentsSection />
     </div>
   );

@@ -295,9 +295,14 @@ export function Sidebar() {
         />
       )}
       {/* ROUND-45: mobile trigger — the app logo, matching the chat-route
-          floating toggle; visible below md whenever the drawer is closed. */}
+          floating toggle; visible below md whenever the drawer is closed.
+          R58: in Tauri the custom TitleBar owns the top 40px — drop below it. */}
       {!mobileOpen && (
-        <div className="fixed top-[10px] left-[10px] z-50 md:hidden">
+        <div
+          className={`fixed left-[10px] z-50 md:hidden ${
+            isTauri() ? "top-[50px]" : "top-[10px]"
+          }`}
+        >
           <AcuteLogo
             size={34}
             hoverToggle

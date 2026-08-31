@@ -52,6 +52,7 @@ import { AgentChatPanel } from "../AgentChatPanel";
 import { getFixtureProjects } from "../../../lib/project-fixtures";
 import { createFixtureSessions } from "../../../lib/session-fixtures";
 import {
+  fetchProviderModelConfig,
   fetchProviders,
   fetchSessionContext,
   fetchProviderModels,
@@ -60,6 +61,7 @@ import {
   readAttachmentFiles,
   streamSessionMessage,
   type Project,
+  type ProviderModelConfig,
   type SessionContextReport,
   type SessionDetail,
   type SessionEvent,
@@ -82,6 +84,7 @@ import {
   CONTEXT_DONUT_WARN,
   contextDonutColor,
   DONUT_WARN_COLOR,
+  POPOVER_OPEN_INTENT_MS,
 } from "./ContextDonut";
 
 const MODELS = [
@@ -89,6 +92,33 @@ const MODELS = [
   "openrouter/ox-alpha", // paid (the agent fixture's own model)
   "openrouter/gpt-5.2", // paid
 ];
+
+/** ROUND-58 (R58-d): the provider's models-CONFIG rows (Settings → Models &
+ * Providers) — the model picker merge surface (hidden / displayName /
+ * custom pricing). Empty by default so pre-R58 assertions stay green. */
+const MODEL_CONFIG: ProviderModelConfig[] = [];
+
+/** Build a full models-config row the way the sidecar does (R58-d tests). */
+function modelConfigRow(
+  overrides: Partial<ProviderModelConfig> & { modelId: string },
+): ProviderModelConfig {
+  return {
+    id: `mdl_${overrides.modelId}`,
+    providerId: "openrouter",
+    displayName: overrides.modelId,
+    contextWindow: null,
+    maxOutputTokens: null,
+    inputPricePerMtok: null,
+    inputPriceCachedPerMtok: null,
+    outputPricePerMtok: null,
+    supportsThinking: false,
+    hidden: false,
+    sortOrder: 0,
+    createdAt: "2026-08-30T09:00:00Z",
+    updatedAt: "2026-08-30T09:00:00Z",
+    ...overrides,
+  };
+}
 
 const PROVIDERS: ProviderView[] = [
   {
@@ -167,6 +197,7 @@ vi.mock("../../../lib/api", async () => {
     getProjectsBackend: () => projectsFx.getFixtureProjects(),
     getSessionsBackend: () => customBackend.backend ?? sessionsFx.getFixtureSessions(),
     fetchProviderModels: vi.fn(async () => [...MODELS]),
+    fetchProviderModelConfig: vi.fn(async () => MODEL_CONFIG.map((m) => ({ ...m }))),
     fetchProviders: vi.fn(async () => PROVIDERS.map((p) => ({ ...p }))),
     pickFilesViaBackend: vi.fn(async () => [] as string[]),
     readAttachmentFiles: vi.fn(async () => [] as never[]),
@@ -190,6 +221,7 @@ beforeEach(() => {
   useNotificationStreamStore.getState().reset();
   useStreamStore.setState({ bySession: {}, subagentsLive: {} });
   vi.mocked(fetchProviderModels).mockReset().mockResolvedValue([...MODELS]);
+  vi.mocked(fetchProviderModelConfig).mockReset().mockResolvedValue(MODEL_CONFIG.map((m) => ({ ...m })));
   vi.mocked(fetchProviders).mockReset().mockResolvedValue(PROVIDERS.map((p) => ({ ...p })));
   vi.mocked(pickFilesViaBackend).mockReset().mockResolvedValue([]);
   vi.mocked(readAttachmentFiles).mockReset().mockResolvedValue([]);
@@ -1048,6 +1080,126 @@ describe("Composer: model selector (owner spec F)", () => {
   });
 });
 
+// ── F2. Model selector × models-config merge (ROUND-58 R58-d) ────────────────
+describe("Composer: model selector respects the models config (ROUND-58 R58-d)", () => {
+  /** Open the popover + hover the OpenRouter row → the flyout. */
+  async function openFlyout() {
+    fireEvent.click(screen.getByRole("button", { name: "Choose model" }));
+    await screen.findByRole("menu", { name: "Choose model" });
+    await waitFor(() =>
+      expect(screen.getByRole("menuitem", { name: "Models of OpenRouter" })).toBeTruthy(),
+    );
+    fireEvent.mouseEnter(screen.getByRole("menuitem", { name: "Models of OpenRouter" }));
+    await screen.findByRole("listbox", { name: "Models of OpenRouter" });
+    // Wait for the merged rows to land.
+    await waitFor(() =>
+      expect(screen.getAllByRole("option").length).toBeGreaterThan(0),
+    );
+  }
+
+  it("models hidden in Settings are EXCLUDED — even under \"All\" — with the honest footer note", async () => {
+    vi.mocked(fetchProviderModelConfig).mockResolvedValue([
+      modelConfigRow({ modelId: "openrouter/gpt-5.2", hidden: true }),
+    ]);
+    await renderPanelWithConversation();
+    expect(await screen.findByText("first question", {}, { timeout: 5000 })).toBeTruthy();
+
+    await openFlyout();
+    // Free-only default: only the free model (ox-alpha is paid-and-unknown).
+    await waitFor(() =>
+      expect(screen.getAllByRole("option").map((o) => o.getAttribute("title"))).toEqual([
+        "z-ai/glm-5.2:free",
+      ]),
+    );
+
+    // "show all" reveals the PAID model but NEVER the config-hidden one…
+    fireEvent.click(screen.getByRole("button", { name: "All" }));
+    await waitFor(() =>
+      expect(screen.getAllByRole("option").map((o) => o.getAttribute("title"))).toEqual([
+        "z-ai/glm-5.2:free",
+        "openrouter/ox-alpha",
+      ]),
+    );
+    // …and its own footer note says why.
+    expect(screen.getByText("1 model hidden in Settings")).toBeTruthy();
+  });
+
+  it("a config displayName replaces the raw id in the row — the PICK still sends the raw id", async () => {
+    vi.mocked(fetchProviderModelConfig).mockResolvedValue([
+      modelConfigRow({ modelId: "z-ai/glm-5.2:free", displayName: "My Custom GLM" }),
+    ]);
+    await renderPanelWithConversation();
+    expect(await screen.findByText("first question", {}, { timeout: 5000 })).toBeTruthy();
+
+    await openFlyout();
+    // The option's accessible name is the display name…
+    const option = screen.getByRole("option", { name: "My Custom GLM" });
+    // …while the title carries the raw id (what actually gets sent).
+    expect(option.getAttribute("title")).toBe("z-ai/glm-5.2:free");
+
+    fireEvent.click(option);
+    // The override persists the RAW model id (the API identifier).
+    await waitFor(() =>
+      expect(JSON.parse(window.localStorage.getItem(`acute-model:${SESSION_ID}`) ?? "null")).toEqual({
+        model: "z-ai/glm-5.2:free",
+        providerId: "openrouter",
+      }),
+    );
+  });
+
+  it("a configured model carries the subtle \"configured\" dot", async () => {
+    vi.mocked(fetchProviderModelConfig).mockResolvedValue([
+      modelConfigRow({ modelId: "z-ai/glm-5.2:free", displayName: "My Custom GLM" }),
+    ]);
+    await renderPanelWithConversation();
+    expect(await screen.findByText("first question", {}, { timeout: 5000 })).toBeTruthy();
+
+    await openFlyout();
+    const option = screen.getByRole("option", { name: "My Custom GLM" });
+    // The dot rides INSIDE the option row.
+    expect(option.querySelector('[title="Configured in Settings — pricing and visibility customized"]')).not.toBeNull();
+    // Unconfigured models carry no dot — flip to All to reveal the paid one.
+    fireEvent.click(screen.getByRole("button", { name: "All" }));
+    const paid = await screen.findByRole("option", { name: "openrouter/ox-alpha" });
+    expect(paid.querySelector('[title="Configured in Settings — pricing and visibility customized"]')).toBeNull();
+  });
+
+  it("a config price of $0 makes a paid-id model count as FREE for the shared filter", async () => {
+    vi.mocked(fetchProviderModelConfig).mockResolvedValue([
+      modelConfigRow({ modelId: "openrouter/ox-alpha", inputPricePerMtok: 0 }),
+    ]);
+    await renderPanelWithConversation();
+    expect(await screen.findByText("first question", {}, { timeout: 5000 })).toBeTruthy();
+
+    await openFlyout();
+    // Free-only default now lists BOTH the :free model AND the configured
+    // $0-priced one (isFreeModelEntry honors inputPricePerMtok === 0).
+    await waitFor(() =>
+      expect(screen.getAllByRole("option").map((o) => o.getAttribute("title"))).toEqual([
+        "z-ai/glm-5.2:free",
+        "openrouter/ox-alpha",
+      ]),
+    );
+    // The paid-hidden hint counts only the remaining unknown-price model.
+    expect(screen.getByText("1 paid model hidden — show all")).toBeTruthy();
+  });
+
+  it("a failing config fetch falls back to the plain ids-only list (robust merge)", async () => {
+    vi.mocked(fetchProviderModelConfig).mockRejectedValueOnce(
+      new Error("models-config unreachable"),
+    );
+    await renderPanelWithConversation();
+    expect(await screen.findByText("first question", {}, { timeout: 5000 })).toBeTruthy();
+
+    await openFlyout();
+    // Identical to the pre-R58 behavior: free-only rows, ids as labels.
+    await waitFor(() =>
+      expect(screen.getAllByRole("option").map((o) => o.textContent)).toEqual(["z-ai/glm-5.2:free"]),
+    );
+    expect(screen.getByText("2 paid models hidden — show all")).toBeTruthy();
+  });
+});
+
 // ── G. Context donut ────────────────────────────────────────────────────────
 describe("Composer: context donut (owner spec G)", () => {
   it("renders the ring from GET /sessions/:id/context — ICON-ONLY, no inline % label (R51-c)", async () => {
@@ -1152,6 +1304,62 @@ describe("Composer: context donut (owner spec G)", () => {
     expect(group("combined").textContent).toContain("250k");
   });
 
+  it("HOVER INTENT (R58-cf): the popover does NOT open instantly — only after the pointer rests ~600ms", async () => {
+    await renderPanelWithConversation();
+    expect(await screen.findByText("first question", {}, { timeout: 5000 })).toBeTruthy();
+    const donut = await screen.findByRole("button", { name: /Context window: 42% used/ });
+
+    vi.useFakeTimers();
+    const popoverEl = (): HTMLElement | null => document.querySelector("[data-context-popover]");
+
+    // Entering starts the intent timer — nothing opens yet (the owner's
+    // complaint: the popover startled open on the way to Send).
+    fireEvent.mouseEnter(donut);
+    expect(popoverEl()).toBeNull();
+    act(() => {
+      vi.advanceTimersByTime(POPOVER_OPEN_INTENT_MS - 1);
+    });
+    expect(popoverEl()).toBeNull();
+    // The pointer RESTED the full intent window → open.
+    act(() => {
+      vi.advanceTimersByTime(1);
+    });
+    expect(popoverEl()).not.toBeNull();
+    vi.useRealTimers();
+  });
+
+  it("HOVER INTENT (R58-cf): leaving before the intent fires CANCELS the open — a pass-through never opens it", async () => {
+    await renderPanelWithConversation();
+    expect(await screen.findByText("first question", {}, { timeout: 5000 })).toBeTruthy();
+    const donut = await screen.findByRole("button", { name: /Context window: 42% used/ });
+
+    vi.useFakeTimers();
+    const popoverEl = (): HTMLElement | null => document.querySelector("[data-context-popover]");
+    fireEvent.mouseEnter(donut);
+    act(() => {
+      vi.advanceTimersByTime(300); // resting, but not long enough
+    });
+    expect(popoverEl()).toBeNull();
+    fireEvent.mouseLeave(donut); // cancelled — the pointer moved on
+    act(() => {
+      vi.advanceTimersByTime(5_000);
+    });
+    expect(popoverEl()).toBeNull();
+    vi.useRealTimers();
+  });
+
+  it("FOCUS opens INSTANTLY — the keyboard path never pays the hover-intent toll (R58-cf)", async () => {
+    await renderPanelWithConversation();
+    expect(await screen.findByText("first question", {}, { timeout: 5000 })).toBeTruthy();
+    const donut = await screen.findByRole("button", { name: /Context window: 42% used/ });
+
+    vi.useFakeTimers();
+    const popoverEl = (): HTMLElement | null => document.querySelector("[data-context-popover]");
+    fireEvent.focus(donut);
+    expect(popoverEl()).not.toBeNull(); // no advanceTimersByTime needed
+    vi.useRealTimers();
+  });
+
   it("HOVER BRIDGE: leaving the trigger does NOT close instantly; entering the popover cancels the timer (R51-c)", async () => {
     await renderPanelWithConversation();
     expect(await screen.findByText("first question", {}, { timeout: 5000 })).toBeTruthy();
@@ -1160,8 +1368,11 @@ describe("Composer: context donut (owner spec G)", () => {
     vi.useFakeTimers();
     const popoverEl = (): HTMLElement | null => document.querySelector("[data-context-popover]");
 
-    // Hover opens the popover.
+    // Hover + the full intent window opens the popover (R58-cf).
     fireEvent.mouseEnter(donut);
+    act(() => {
+      vi.advanceTimersByTime(POPOVER_OPEN_INTENT_MS);
+    });
     expect(popoverEl()).not.toBeNull();
 
     // Leaving the trigger toward the popover: stays open through the grace
@@ -1350,5 +1561,77 @@ describe("contextDonutColor grading (ROUND-51 R51-c) — pure unit tests", () =>
   it("no window (or zero usage) never looks scary — accent", () => {
     expect(contextDonutColor(1, 0, ACCENT)).toBe(ACCENT);
     expect(contextDonutColor(0, 100, ACCENT)).toBe(ACCENT);
+  });
+});
+
+// ── I. Continue affordance after a user stop (ROUND-58 R58-cf) ───────────────
+describe("Composer: Continue after a user stop (ROUND-58 R58-cf)", () => {
+  /** The post-stop store slice: the last turn ended by user stop, live turn
+   * already handed to the folded log (the panel clears + re-arms the flag). */
+  function armStoppedSignal(): void {
+    useStreamStore.setState({
+      bySession: {
+        [SESSION_ID]: {
+          liveTurn: null,
+          streamBusy: false,
+          sendError: null,
+          liveError: null,
+          pendingEcho: null,
+          lastLiveEndMs: Date.now(),
+          lastTurnStoppedByUser: true,
+          lastTurnStoppedTs: "2026-08-31T12:00:00Z",
+        },
+      },
+    });
+  }
+
+  it("NO Continue button on a normal session (the last turn was not user-stopped)", async () => {
+    await renderPanelWithConversation();
+    expect(await screen.findByText("first question", {}, { timeout: 5000 })).toBeTruthy();
+    // The marker attribute AND the accessible name are both absent (the
+    // queryByTestId form would silently match nothing — data-continue-button
+    // is not data-testid).
+    expect(document.querySelector("[data-continue-button]")).toBeNull();
+    expect(screen.queryByRole("button", { name: /Continue from where you left off/ })).toBeNull();
+  });
+
+  it("the Continue button appears next to Send after a user stop — secondary styling, Play icon", async () => {
+    await renderPanelWithConversation();
+    expect(await screen.findByText("first question", {}, { timeout: 5000 })).toBeTruthy();
+    armStoppedSignal();
+
+    const btn = await screen.findByRole("button", { name: "Continue from where you left off" });
+    expect(btn.textContent).toContain("Continue");
+    expect(btn.querySelector("svg")).toBeTruthy(); // the Play glyph
+    // Send stays beside it.
+    expect(screen.getByRole("button", { name: "Send message" })).toBeTruthy();
+  });
+
+  it("clicking Continue sends the EXACT resume message as a normal user turn", async () => {
+    await renderPanelWithConversation();
+    expect(await screen.findByText("first question", {}, { timeout: 5000 })).toBeTruthy();
+    armStoppedSignal();
+
+    fireEvent.click(await screen.findByRole("button", { name: "Continue from where you left off" }));
+    await waitFor(() => expect(streamSessionMessage).toHaveBeenCalled());
+    // The exact string is a product decision (composer-utils pins it).
+    expect(
+      vi.mocked(streamSessionMessage).mock.calls.at(-1)?.[1],
+    ).toBe("Continue from where you left off.");
+    await sendSettled();
+    // The next send reset the user-stop signal — the affordance is gone.
+    await waitFor(() => expect(screen.queryByRole("button", { name: /Continue from where you left off/ })).toBeNull());
+  });
+
+  it("the Stop button still owns the toolbar while a turn runs (Continue never shows busy)", async () => {
+    await renderPanelWithConversation();
+    expect(await screen.findByText("first question", {}, { timeout: 5000 })).toBeTruthy();
+    armStoppedSignal();
+    // A new turn goes out (busy) — Continue must vanish while it streams.
+    fireEvent.change(textarea(), { target: { value: "next task" } });
+    fireEvent.keyDown(textarea(), { key: "Enter" });
+    await waitFor(() => expect(screen.getByRole("button", { name: "Stop generation" })).toBeTruthy());
+    expect(screen.queryByRole("button", { name: /Continue from where you left off/ })).toBeNull();
+    await sendSettled();
   });
 });

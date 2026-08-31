@@ -25,6 +25,7 @@ import type { SessionEvent, SessionsBackend } from "../../lib/api";
 import { useConfigStore } from "../../lib/config-store";
 import { useNotificationStreamStore } from "../../hooks/use-notifications";
 import { useSettingsStore } from "../../lib/settings-store";
+import { useStreamStore } from "../../lib/stream-store";
 import { renderWithProviders, resetTestState } from "../../test-utils";
 
 /** ROUND-44 (R44-c): per-test override for getSessionsBackend(). */
@@ -198,5 +199,89 @@ describe("AgentChatPanel revert-to-message (ROUND-44 R44-c)", () => {
     expect(revertSpy).not.toHaveBeenCalled();
     // Assistant text renders as per-word spans — assert on body text.
     expect(document.body.textContent).toContain("second answer");
+  });
+});
+
+// ── ROUND-58 (R58-cf): the deliberate user stop renders a QUIET status card ──
+describe("AgentChatPanel user-stop rendering (ROUND-58 R58-cf)", () => {
+  const SLOW = { timeout: 5000 };
+
+  function messageEvent(
+    seq: number,
+    role: "user" | "assistant",
+    content: string,
+    ts: string,
+  ): SessionEvent {
+    return {
+      seq,
+      type: role === "user" ? "message.user" : "message.assistant",
+      agentId: "agt_scribe",
+      payload: { role, content, agentId: "agt_scribe", ts },
+      ts,
+    };
+  }
+
+  /** A conversation whose last turn was user-stopped (the store carries the
+   * post-clear signal: flag + ts, live turn handed to the folded log). */
+  async function renderStoppedConversation(stoppedByUser: boolean): Promise<void> {
+    const projects = await getFixtureProjects().list();
+    customBackend.backend = createFixtureSessions([
+      {
+        session: {
+          id: "sess_stop_card",
+          projectId: projects[0].id,
+          agentId: "agt_scribe",
+          mode: "single",
+          status: "completed",
+          title: "Stop card probe",
+          createdAt: "2026-08-31T11:00:00Z",
+          updatedAt: "2026-08-31T11:05:00Z",
+        },
+        events: [
+          messageEvent(1, "user", "write me a file", "2026-08-31T11:00:10Z"),
+          // The backend's flushed partial (the stopped turn's reply so far).
+          messageEvent(2, "assistant", "Here is the beginning of the work", "2026-08-31T11:00:20Z"),
+        ],
+      },
+    ]);
+    renderWithProviders(<AgentChatPanel projectId={projects[0].id} project={projects[0]} />);
+    await screen.findByText("write me a file", {}, SLOW);
+    useStreamStore.setState({
+      bySession: {
+        sess_stop_card: {
+          liveTurn: null,
+          streamBusy: false,
+          sendError: null,
+          liveError: null,
+          pendingEcho: null,
+          lastLiveEndMs: Date.now(),
+          lastTurnStoppedByUser: stoppedByUser,
+          lastTurnStoppedTs: stoppedByUser ? "2026-08-31T11:00:25Z" : null,
+        },
+      },
+    });
+  }
+
+  it("renders the quiet 'Stopped by user' card under the persisted partial — never TurnErrorCard", async () => {
+    await renderStoppedConversation(true);
+
+    const card = await waitFor(() => {
+      const el = document.querySelector("[data-stopped-card]") as HTMLElement;
+      expect(el).toBeTruthy();
+      return el;
+    });
+    expect(card.textContent).toContain("Stopped by user");
+    // A quiet STATUS, not an alert: no role=alert, no "Generation failed".
+    expect(card.getAttribute("role")).toBe("status");
+    expect(screen.queryByRole("alert")).toBeNull();
+    expect(screen.queryByText("Generation failed")).toBeNull();
+    // The flushed partial stays visible above the card (RichText tokenizes
+    // the answer into word spans — assert on one token).
+    expect(screen.getByText("beginning")).toBeTruthy();
+  });
+
+  it("NO stopped card on a normal (not user-stopped) transcript", async () => {
+    await renderStoppedConversation(false);
+    expect(document.querySelector("[data-stopped-card]")).toBeNull();
   });
 });

@@ -2310,6 +2310,16 @@ export type StreamTurnEvent =
   | { type: "text-delta"; delta: string }
   /** ROUND-35: thinking/reasoning tokens — rendered separately, muted + collapsible. */
   | { type: "thinking-delta"; delta: string }
+  /** ROUND-58 (R58-cf): the model started generating a tool call's JSON
+   * arguments — the client accumulates the following tool-input-delta
+   * fragments per toolCallId to render a LIVE write preview (path +
+   * content-so-far) while write_file/edit_file args stream. */
+  | { type: "tool-input-start"; toolCallId: string; toolName: string }
+  /** ROUND-58 (R58-cf): one text chunk of a tool call's JSON args —
+   * concatenated per toolCallId (e.g. for write_file the raw grows like
+   * `{"path":"a.txt","content":"<!DOCTYPE…`). The final tool-call frame (with
+   * the completed argsSummary, NO toolCallId) ends the accumulation. */
+  | { type: "tool-input-delta"; toolCallId: string; inputTextDelta: string }
   | { type: "tool-call"; toolName: string; argsSummary: string }
   | { type: "tool-result"; toolName: string; argsSummary: string; ok: boolean; outputSummary?: string }
   /** ROUND-52 (R52-a): live terminal output of a running tool call — the
@@ -2457,6 +2467,14 @@ export async function streamSessionMessage(
   // ends — previously that resolved SILENTLY and the chat showed nothing
   // (the owner's bug). Synthesize a terminal error so the store can surface
   // the failure card + refetch the persisted turn state instead.
+  // ROUND-58 (R58-cf): an exception out of the read loop (AbortError-like or
+  // otherwise) PROPAGATES — it never reaches the synthesis below. When the
+  // LOCAL controller was aborted (the deliberate user stop), some fetch
+  // implementations end the body "cleanly" (done === true, no throw) instead
+  // of rejecting; in that case the signal's aborted flag is the only witness
+  // — synthesizing STREAM_DISCONNECTED there is a LIE (the server's
+  // {type:"stopped"} frame simply can no longer arrive after the local
+  // teardown), and the store's catch must classify the stop as a stop.
   let sawTerminalFrame = false;
   for (;;) {
     const { done, value } = await reader.read();
@@ -2483,6 +2501,12 @@ export async function streamSessionMessage(
     }
   }
   if (!sawTerminalFrame) {
+    if (options?.signal?.aborted === true) {
+      // The local AbortController fired (deliberate user stop grace-abort):
+      // the connection teardown is the CAUSE, not a sidecar crash. No
+      // synthesized error frame — the caller's catch classifies it.
+      return;
+    }
     onEvent({
       type: "error",
       status: 0,

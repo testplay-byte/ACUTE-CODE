@@ -1,16 +1,20 @@
 // @vitest-environment happy-dom
 /**
- * ROUND-43 (R43-5) — the temporary Sub-agents settings section:
+ * ROUND-43 (R43-5) — the Sub-agents settings section:
  *
- *  1. The section renders (temporary banner, keys card, model card, the
- *     "Inherits main model" default).
+ *  1. The section renders (keys card, model card, parallelism card,
+ *     supervision card — R58-d order).
  *  2. Key paste slots write the EXISTING pool routes at slots 2/3/4 — never
  *     slot 0 — and removal DELETEs the same slot.
  *  3. The model picker is free-only by default (shared pref), "All models"
  *     escapes it, tool-less entries are disabled with a hint, and picking a
  *     model persists orchestration.subagentModel (null clears it).
- *  4. The dedicated ?tab=subagents page renders, and Advanced hosts the same
- *     section meanwhile (sidebar entry is a separate owner's file).
+ *  4. The dedicated ?tab=subagents page renders the same section; since
+ *     ROUND-58 (R58-d) Advanced NO LONGER duplicates it (the owner: "the
+ *     subagent and advanced options are apparently mixed up") — Advanced
+ *     keeps only the connection + memory cards.
+ *  5. ROUND-58 (R58-d): the parallelism card (maxParallel + perKeyLimit
+ *     steppers) MOVED here from the old Advanced tab's OrchestrationCard.
  *
  * ROUND-47 (R47-c2) — the picker rows come from GET /models/catalog (the
  * backend's MODEL_CATALOG) instead of a hand-copied local duplicate: rows
@@ -156,7 +160,23 @@ const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => 
       if (typeof patch.childStallTimeoutMs === "number") {
         settings = { ...settings, childStallTimeoutMs: patch.childStallTimeoutMs };
       }
+      // ROUND-58 (R58-d): the parallelism steppers moved onto this tab.
+      if (typeof patch.maxParallel === "number") {
+        settings = { ...settings, maxParallel: patch.maxParallel };
+      }
+      if (typeof patch.perKeyLimit === "number") {
+        settings = { ...settings, perKeyLimit: patch.perKeyLimit };
+      }
       return jsonResponse(settings);
+    }
+  }
+  // Advanced's MemoryCard (GET/PUT /settings/memory) — simple stateful mock.
+  let memoryEnabled = true;
+  if (url.endsWith("/api/v1/settings/memory")) {
+    if (method === "GET") return jsonResponse({ enabled: memoryEnabled });
+    if (method === "PUT") {
+      memoryEnabled = (body as { enabled?: unknown }).enabled === true;
+      return jsonResponse({ enabled: memoryEnabled });
     }
   }
   return { status: 404, ok: false, text: async () => JSON.stringify({ error: { code: "NOT_FOUND", message: `unmocked ${method} ${url}` } }) } as unknown as Response;
@@ -185,21 +205,30 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
-describe("SubAgentsTab — rendering (ROUND-43 R43-5)", () => {
-  it("renders the temporary banner, the keys card, the model card, and the inherit default", async () => {
+describe("SubAgentsTab — rendering (ROUND-43 R43-5 + ROUND-58 R58-d)", () => {
+  it("renders the page header + the keys, model, parallelism, and supervision cards", async () => {
     renderWithProviders(<SubAgentsTab />);
 
     await waitFor(() => expect(screen.getByText("Sub-agent OpenRouter keys")).toBeTruthy());
-    // Clearly labeled temporary (both cards).
-    await waitFor(() =>
-      expect(screen.getAllByText("(temporary)").length).toBeGreaterThanOrEqual(2),
-    );
-    expect(screen.getByText("Temporary setup.")).toBeTruthy();
+    // ROUND-58 (R58-d): clean page header — the stale "Temporary setup"
+    // banner is GONE.
+    expect(screen.getByRole("heading", { level: 2, name: "Sub-agents" })).toBeTruthy();
+    expect(screen.queryByText("Temporary setup.")).toBeNull();
+    expect(screen.getByText(/everything sub-agent lives on this one page/)).toBeTruthy();
     // The owner-directed context copy.
     expect(
       screen.getByText(/Sub-agent traffic prefers these keys so parallel agents don't compete/),
     ).toBeTruthy();
-    expect(screen.getByText("Sub-agent model")).toBeTruthy();
+    await waitFor(() => expect(screen.getByText("Sub-agent model")).toBeTruthy());
+    // ROUND-58 (R58-d): the stale "(temporary)" card labels are retired too
+    // (this page is now the PERMANENT sub-agent home, not a stopgap).
+    expect(screen.queryByText("(temporary)")).toBeNull();
+    expect(screen.getByText(/permanent home for sub-agent configuration/)).toBeTruthy();
+    // ROUND-58 (R58-d): the parallelism card MOVED here from Advanced.
+    await waitFor(() => expect(screen.getByText("Sub-agent parallelism")).toBeTruthy());
+    expect(screen.getByText("Max parallel sub-agents")).toBeTruthy();
+    expect(screen.getByText("Per API-key limit")).toBeTruthy();
+    expect(screen.getByText("Sub-agent supervision")).toBeTruthy();
     // ROUND-47 (R47-c2): the rows are FETCHED from GET /models/catalog —
     // the de-drifted single source of truth, not a local copy.
     await waitFor(() =>
@@ -221,16 +250,23 @@ describe("SubAgentsTab — rendering (ROUND-43 R43-5)", () => {
     expect(screen.getByLabelText("Sub-agent key for pool slot 4")).toBeTruthy();
   });
 
-  it("is reachable via ?tab=subagents and hosted inside Advanced meanwhile", async () => {
+  it("is reachable via ?tab=subagents; Advanced NO LONGER duplicates the section (R58-d)", async () => {
     renderWithProviders(<SettingsPage />, { route: "/settings?tab=subagents" });
     await waitFor(() => expect(screen.getByRole("heading", { level: 1, name: "Sub-agents" })).toBeTruthy());
     expect(screen.getByText("Sub-agent OpenRouter keys")).toBeTruthy();
+    await waitFor(() => expect(screen.getByText("Sub-agent parallelism")).toBeTruthy());
 
+    // ROUND-58 (R58-d): the owner's "subagent and advanced options are
+    // apparently mixed up" — the duplication is GONE. Advanced keeps only
+    // the connection + memory cards.
     cleanup();
     renderWithProviders(<SettingsPage />, { route: "/settings?tab=advanced" });
-    await waitFor(() => expect(screen.getByText("Sub-agent OpenRouter keys")).toBeTruthy());
-    // The Advanced tab still carries the orchestration limits card.
-    await waitFor(() => expect(screen.getByText("Sub-Agent Orchestration")).toBeTruthy());
+    await waitFor(() => expect(screen.getByRole("heading", { level: 1, name: "Advanced" })).toBeTruthy());
+    await waitFor(() => expect(screen.getByText("Agent core connection")).toBeTruthy());
+    await waitFor(() => expect(screen.getByText("Agent memory")).toBeTruthy());
+    expect(screen.queryByText("Sub-agent OpenRouter keys")).toBeNull();
+    expect(screen.queryByText("Sub-agent parallelism")).toBeNull();
+    expect(screen.queryByText("Sub-Agent Orchestration")).toBeNull();
   });
 });
 
@@ -469,5 +505,58 @@ describe("SubAgentsTab — supervisor knobs (ROUND-52 R52-b)", () => {
       );
       expect(put?.body).toEqual({ childStallTimeoutMs: 120_000 });
     });
+  });
+});
+
+// ─── ROUND-58 (R58-d): the parallelism card (moved from Advanced) ────────────
+
+describe("SubAgentsTab — parallelism card (ROUND-58 R58-d)", () => {
+  it("renders the current maxParallel + perKeyLimit; Save disabled until dirty", async () => {
+    renderWithProviders(<SubAgentsSection />);
+
+    await waitFor(() => expect(screen.getByText("Sub-agent parallelism")).toBeTruthy());
+    expect(screen.getByLabelText("Max parallel sub-agents value").textContent).toBe("5");
+    expect(screen.getByLabelText("Per API-key limit value").textContent).toBe("3");
+    const save = screen.getByRole("button", { name: "Save sub-agent parallelism settings" }) as HTMLButtonElement;
+    expect(save.disabled).toBe(true);
+  });
+
+  it("steppers clamp to their ranges and Save PUTs the draft values", async () => {
+    renderWithProviders(<SubAgentsSection />);
+    await waitFor(() => expect(screen.getByText("Sub-agent parallelism")).toBeTruthy());
+
+    // 5 → 6 (max parallel)…
+    fireEvent.click(screen.getByRole("button", { name: "Increase Max parallel sub-agents" }));
+    // 3 → 4 (per key limit)…
+    fireEvent.click(screen.getByRole("button", { name: "Increase Per API-key limit" }));
+    expect(screen.getByLabelText("Max parallel sub-agents value").textContent).toBe("6");
+    expect(screen.getByLabelText("Per API-key limit value").textContent).toBe("4");
+
+    const save = screen.getByRole("button", { name: "Save sub-agent parallelism settings" }) as HTMLButtonElement;
+    expect(save.disabled).toBe(false);
+    fireEvent.click(save);
+
+    await waitFor(() => {
+      const put = calls.find(
+        (c) => c.method === "PUT" && c.url.endsWith("/api/v1/settings/orchestration"),
+      );
+      expect(put?.body).toEqual({ maxParallel: 6, perKeyLimit: 4 });
+    });
+    // The refreshed state round-trips into the steppers.
+    await waitFor(() =>
+      expect(screen.getByLabelText("Max parallel sub-agents value").textContent).toBe("6"),
+    );
+    await waitFor(() => expect(screen.getByText("Saved.")).toBeTruthy());
+  });
+
+  it("steppers clamp at the min (1) — never below", async () => {
+    renderWithProviders(<SubAgentsSection />);
+    await waitFor(() => expect(screen.getByText("Sub-agent parallelism")).toBeTruthy());
+
+    // Click decrease 5 times from 3 → floor at 1.
+    for (let i = 0; i < 5; i++) {
+      fireEvent.click(screen.getByRole("button", { name: "Decrease Per API-key limit" }));
+    }
+    expect(screen.getByLabelText("Per API-key limit value").textContent).toBe("1");
   });
 });

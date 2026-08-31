@@ -65,8 +65,14 @@ function latestTodosAllDone(db: SqliteDatabase, sessionId: string): boolean {
 /** Completion-signal regex (6-e inverted heuristic — phrase matching was
  * brittle; now we require BOTH the signal AND all todos done to STOP). No
  * trailing \b: the signal often ends the message, and \b after a period
- * requires a following word char (absent at end-of-string). */
-const COMPLETION_SIGNAL = /\b(Done\.|Task complete\.|Finished\.|All set\.|All done\.)/i;
+ * requires a following word char (absent at end-of-string).
+ * ROUND-58 (R58-c): broadened with the common final-summary phrasings
+ * ("Task completed.", "The task is complete.") — the owner's Windows field
+ * report had the model finish the 3-file task with a summary that matched
+ * NONE of the signals, so the outer loop forced another provider call on
+ * the full history and the model regurgitated the session. */
+const COMPLETION_SIGNAL =
+  /\b(Done\.|Task complete\.|Task completed\.|The task is complete\.|Finished\.|All set\.|All done\.)/i;
 
 /** API.md §5.4: these session statuses refuse follow-up turns. */
 const TERMINAL_STATUSES: readonly SessionStatus[] = ["completed", "failed", "cancelled"];
@@ -504,17 +510,52 @@ function scrubSecrets(text: string, secrets: readonly string[]): string {
  * it) — the compaction filter needs seq anchors, and revert/fork inherit
  * compaction events for free because assembly stays pure.
  */
+/**
+ * ROUND-58 (R58-c, owner: "after completing the task it started to
+ * hallucinate… it copied and pasted the whole session"): history replay
+ * capping. Every outer-loop iteration re-sends the ENTIRE event log to the
+ * provider, and every tool.use line carried up to 4000 chars of raw tool
+ * output inside a USER-role <tool_results> block — on a long multi-tool
+ * session that is tens of KB of stale output the model was invited to echo
+ * back (weak/free models regurgitate giant user blobs verbatim). The fix:
+ * only the last RECENT_TOOL_RESULTS calls keep their full output summary;
+ * older ones collapse to a short stub (name + args + ok + the first
+ * OLD_TOOL_STUB_CHARS of output), and each replayed <tool_results> block is
+ * bounded to MAX_TOOL_BLOCK_CHARS total (stubbing from the OLDEST lines
+ * first — recent results stay full). Fidelity where it matters (the model
+ * just used these), compaction where it doesn't.
+ */
+const RECENT_TOOL_RESULTS = 8;
+const OLD_TOOL_STUB_CHARS = 200;
+const MAX_TOOL_BLOCK_CHARS = 48_000;
+
 export function assembleHistory(db: SqliteDatabase, sessionId: string): SeqMessage[] {
   const events = listSessionEvents(db, sessionId);
   const messages: SeqMessage[] = [];
   let pendingToolLines: string[] = [];
   let pendingToolSeq = 0;
+  // ROUND-58 (R58-c): seqs of the last RECENT_TOOL_RESULTS tool.use events —
+  // these keep full output summaries in the replay; everything older stubs.
+  const toolUseSeqs: number[] = [];
+  for (const ev of events) {
+    if (ev.type === "tool.use") toolUseSeqs.push(ev.seq);
+  }
+  const recentToolSeqs = new Set(toolUseSeqs.slice(-RECENT_TOOL_RESULTS));
 
   const flushTools = () => {
     if (pendingToolLines.length === 0) return;
+    // ROUND-58 (R58-c): bound the block — stub from the OLDEST lines first
+    // until the joined block is under MAX_TOOL_BLOCK_CHARS.
+    let text = pendingToolLines.join("\n");
+    for (let i = 0; i < pendingToolLines.length && text.length > MAX_TOOL_BLOCK_CHARS; i++) {
+      if (pendingToolLines[i].length > OLD_TOOL_STUB_CHARS) {
+        pendingToolLines[i] = `${pendingToolLines[i].slice(0, OLD_TOOL_STUB_CHARS)}…[older result truncated]`;
+      }
+      text = pendingToolLines.join("\n");
+    }
     messages.push({
       role: "user",
-      content: `<tool_results>\n${pendingToolLines.join("\n")}\n</tool_results>`,
+      content: `<tool_results>\n${text}\n</tool_results>`,
       throughSeq: pendingToolSeq,
     });
     pendingToolLines = [];
@@ -557,9 +598,15 @@ export function assembleHistory(db: SqliteDatabase, sessionId: string): SeqMessa
         /<\/tool_results>/g,
         "<\u200b/tool_results>",
       );
-      pendingToolLines.push(
-        `${toolName}(${argsSummary}) → ${ok ? "ok" : "FAILED"}${safeOutput ? `: ${safeOutput}` : ""}`,
-      );
+      let line =
+        `${toolName}(${argsSummary}) → ${ok ? "ok" : "FAILED"}${safeOutput ? `: ${safeOutput}` : ""}`;
+      // ROUND-58 (R58-c): older tool results stub to OLD_TOOL_STUB_CHARS —
+      // see the assembleHistory section comment. The RECENT set keeps full
+      // fidelity (the model is actively working with those).
+      if (!recentToolSeqs.has(event.seq) && line.length > OLD_TOOL_STUB_CHARS) {
+        line = `${line.slice(0, OLD_TOOL_STUB_CHARS)}…[older result truncated]`;
+      }
+      pendingToolLines.push(line);
       pendingToolSeq = event.seq;
     }
   }
@@ -1271,13 +1318,34 @@ export async function runSingleAgentTurn(
   // persist NO turn.error (R42/R43 rule: a stop is not an error). Work
   // completed by earlier iterations is already persisted in the event log;
   // the orchestrator marks the child failed and reports the stop honestly.
+  // ROUND-58 (R58-c): also record the real usage of completed iterations +
+  // reset the session status (the orchestrator's own "failed" set for
+  // stopped children still lands AFTER this — final state stays designed;
+  // any non-orchestrated caller gets the honest `queued` resting state).
   if (stoppedBySignal) {
+    if (lastAssistantEvent !== null && (totalInputTokens > 0 || totalOutputTokens > 0)) {
+      recordUsage(db, {
+        agentId: agent.id,
+        sessionId: session.id,
+        provider: provider.id,
+        model,
+        inputTokens: totalInputTokens,
+        outputTokens: totalOutputTokens,
+        cachedInputTokens: totalCachedInputTokens,
+        costUsd: computeCost(db, provider.id, model, totalInputTokens, totalOutputTokens),
+        ts: lastAssistantEvent.ts,
+      });
+      touchSession(db, session.id);
+    }
+    if (getSession(db, session.id)?.status === "running") {
+      setSessionStatus(db, session.id, "queued");
+    }
     logTurnEnd(session.id, false, Date.now() - syncStartedAt, totalInputTokens, totalOutputTokens);
     return {
       ok: false,
       status: 499,
       code: "ABORTED",
-      message: `turn aborted for session ${session.id}`,
+      message: `turn aborted for session ${session.id} — stopped by user`,
     };
   }
 
@@ -1678,6 +1746,17 @@ export async function runStreamedAgentTurn(
         } else if (event.type === "thinking-delta") {
           if (iterThinkingStart === null) iterThinkingStart = Date.now();
           iterThinking += event.delta;
+        } else if (event.type === "tool-input-start") {
+          // ROUND-58 (R58-c): the model started generating this call's
+          // ARGUMENTS — any text before it is final. Flush the interim
+          // segment at the same boundary the UI now renders (text → live
+          // file-write preview → tool result), so the persisted event-log
+          // ordering matches the live stream. (The tool-call branch below
+          // keeps its own flush — idempotent once this one ran.)
+          if (iterText.trim() !== "" || iterThinking.trim() !== "") {
+            flushSegment(false);
+            statsCarrierNeeded = true;
+          }
         } else if (event.type === "tool-call") {
           iterToolCalls += 1;
           // ROUND-35: flush the message-so-far BEFORE the tool runs, so the
@@ -1750,12 +1829,41 @@ export async function runStreamedAgentTurn(
       // skip the task_failed notification and the UI can render "Stopped".
       // ROUND-43: also do NOT persist a turn.error — a stop is not an error.
       if (signal?.aborted === true) {
+        // ROUND-58 (R58-c, owner: "stopping should show a dedicated stopped-
+        // by-user message, not a generation-failed error, and the sidebar must
+        // stop showing processing"): the abort previously returned WITHOUT
+        // (a) persisting the in-flight partial segment — the streamed text
+        // vanished from the transcript on the next refetch, so a follow-up
+        // "continue" lost the partial work; (b) resetting the session status
+        // — the row stayed "running" until the next sidecar boot, so the
+        // left-sidebar spinner spun forever after a stop. Now: flush the
+        // partial text/thinking (stats unknown — the finish frame never
+        // arrived), record the usage of COMPLETED iterations (honest
+        // accounting — the spend was real), touch, and reset to `queued`.
+        flushSegment(true);
+        if (lastAssistantEvent !== null && (totalInputTokens > 0 || totalOutputTokens > 0)) {
+          recordUsage(db, {
+            agentId: agent.id,
+            sessionId: session.id,
+            provider: provider.id,
+            model,
+            inputTokens: totalInputTokens,
+            outputTokens: totalOutputTokens,
+            cachedInputTokens: totalCachedInputTokens,
+            costUsd: computeCost(db, provider.id, model, totalInputTokens, totalOutputTokens),
+            ts: lastAssistantEvent.ts,
+          });
+        }
+        touchSession(db, session.id);
+        if (getSession(db, session.id)?.status === "running") {
+          setSessionStatus(db, session.id, "queued");
+        }
         logTurnEnd(session.id, false, Date.now() - startedAt, totalInputTokens, totalOutputTokens);
         return {
           ok: false,
           status: 499,
           code: "ABORTED",
-          message: `turn aborted for session ${session.id}`,
+          message: `turn aborted for session ${session.id} — stopped by user`,
         };
       }
       const normalized = error instanceof Error ? error : new Error(String(error));

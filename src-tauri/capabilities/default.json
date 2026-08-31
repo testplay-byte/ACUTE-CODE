@@ -1,7 +1,13 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
-  "description": "Minimal capability for the Phase 1 scaffold: default core permissions only.",
+  "description": "Default capability: core permissions plus in-app window controls for the frameless main window (R58).",
   "windows": ["main", "acute-browser"],
-  "permissions": ["core:default"]
+  "permissions": [
+    "core:default",
+    "core:window:allow-start-dragging",
+    "core:window:allow-minimize",
+    "core:window:allow-toggle-maximize",
+    "core:window:allow-close"
+  ]
 }

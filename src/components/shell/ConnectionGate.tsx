@@ -42,11 +42,12 @@ export function ConnectionGate({ children }: { children: ReactNode }) {
   return <ConnectingSplash />;
 }
 
-/** Branded full-viewport splash — the wizard's atmosphere, spinner + status. */
+/** Branded full-viewport splash — the wizard's atmosphere, spinner + status.
+ *  R58: h-full (was h-screen) — the App root's flex column sizes it. */
 function ConnectingSplash() {
   return (
     <div
-      className="flex h-screen w-full flex-col items-center justify-center gap-6"
+      className="flex h-full w-full flex-col items-center justify-center gap-6"
       style={{ backgroundColor: "var(--ac-bg)" }}
       role="status"
       aria-live="polite"
@@ -129,8 +130,10 @@ function OfflineScreen({ error }: { error: string | null }) {
   };
 
   return (
+    // R58: h-full (was h-screen) — sized by the App root's flex column
+    // (behind the custom TitleBar in Tauri; unchanged in web).
     <div
-      className="flex h-screen w-full items-center justify-center p-6"
+      className="flex h-full w-full items-center justify-center p-6"
       style={{ backgroundColor: "var(--ac-bg)" }}
       role="alert"
     >

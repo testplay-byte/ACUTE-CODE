@@ -2829,6 +2829,26 @@ export function buildServer(options: ServerOptions): FastifyInstance {
         return { keys: keyring.poolInfo(id) };
       });
 
+      // ROUND-58 (R58-d): POST /providers/:id/keys/reveal — the ONE route
+      // that returns key VALUES. The owner explicitly asked for visible keys
+      // ("Make sure that the API key shows properly there too in our
+      // application. It should not be hidden. I should be able to click the
+      // options there and I should be able to see the API key there, every
+      // single one of the API keys, without any issues.") — this consciously
+      // reverses the R47 "keys never appear in any response" invariant FOR
+      // THIS SINGLE ROUTE ONLY: every other /keys response stays masked
+      // (poolInfo), and the key values are still NEVER logged anywhere.
+      // Same bearer wall + 404 semantics as the sibling pool routes.
+      scope.post("/providers/:id/keys/reveal", async (request, reply) => {
+        const { id } = request.params as Record<string, string>;
+        if (resolveProvider(db, id) === undefined) {
+          return reply.code(404).send(errorBody("NOT_FOUND", `no provider with id ${id}`));
+        }
+        // Every HELD slot with its full value (slot 0 = the primary, plus the
+        // pool slots the keyring holds). getPool never logs, only reads.
+        return { keys: keyring.getPool(id).map(({ slot, key }) => ({ slot, value: key })) };
+      });
+
       scope.put("/providers/:id/keys/:slot", async (request, reply) => {
         const { id, slot } = request.params as Record<string, string>;
         if (resolveProvider(db, id) === undefined) {

@@ -18,6 +18,7 @@ import {
   History,
   ListChecks,
   Search,
+  Square,
   type LucideIcon,
 } from "lucide-react";
 import { Link, useSearchParams } from "react-router";
@@ -45,6 +46,7 @@ import { ClampedText } from "../shared/ClampedText";
 import {
   type AttachmentRef,
   type AssistantTurnItem,
+  DIFF_TOOLS,
   type ErrorTurnItem,
   type PermissionMode,
   type Project,
@@ -679,6 +681,40 @@ export function TurnErrorCard({
   );
 }
 
+/**
+ * ROUND-58 (R58-cf, owner: stopping showed "Generation failed" + "body stream
+ * buffer was aborted" instead of a clean stop): the QUIET status card for a
+ * deliberate user stop — NOT TurnErrorCard, no red, no error semantics. The
+ * partial streamed text/section above it stays visible; after the refetch
+ * the persisted partial (the backend flushes it on stop) replaces the live
+ * text seamlessly and the card stays until the next send. The composer's
+ * Continue affordance rides the same store signal. Icon: the plain Square
+ * glyph (the Stop control's own visual, muted) — no error-flavored mark.
+ */
+export function TurnStoppedCard({ ts }: { ts: string }) {
+  const styles = useThemeStyles();
+  return (
+    <motion.div variants={msgVariants} initial="initial" animate="animate" className="min-w-0">
+      <div
+        role="status"
+        data-stopped-card
+        className="rounded-[14px] border px-3.5 py-2.5 flex items-center gap-2.5"
+        style={{ borderColor: styles.borderSubtle, background: styles.subtle }}
+      >
+        <Square size={12} strokeWidth={2.5} className="mt-0.5 shrink-0" style={{ color: styles.textTertiary }} aria-hidden />
+        <div className="min-w-0 flex-1 flex items-center gap-2">
+          <span className="text-[12px] font-semibold" style={{ color: styles.textSecondary }}>
+            Stopped by user
+          </span>
+          <span className="text-[10px] font-mono shrink-0" style={{ color: styles.textTertiary }}>
+            {formatTime(ts)}
+          </span>
+        </div>
+      </div>
+    </motion.div>
+  );
+}
+
 /** Direct child of AnimatePresence mode="popLayout": framer-motion attaches a
  * measurement ref to this element (React 18 requires forwardRef — the demo
  * could skip it on React 19). The wrapper div is the presence child. */
@@ -875,6 +911,12 @@ export function AgentChatPanel({
   const liveError = streamSlice?.liveError ?? null;
   const streamPendingEcho = streamSlice?.pendingEcho ?? null;
   const lastLiveEndMs = streamSlice?.lastLiveEndMs ?? 0;
+  // ROUND-58 (R58-cf): the last live turn ended by a USER STOP — the quiet
+  // Stopped card below the (folded or still-live) partial + the composer's
+  // Continue affordance both key off this signal (it survives the live-turn
+  // clear after the refetch and resets on the next send).
+  const lastTurnStoppedByUser = streamSlice?.lastTurnStoppedByUser ?? false;
+  const lastTurnStoppedTs = streamSlice?.lastTurnStoppedTs ?? null;
   // R37 review #4: turns that JUST finished while the user watched start
   // collapsed ("Worked for Ns" + answer); cold-loaded sessions use the
   // Detailed preference.
@@ -1116,14 +1158,20 @@ export function AgentChatPanel({
         // The live turn is now folded into the event log; clear the store's
         // echo + liveTurn for this session (the folded turn owns the render).
         useStreamStore.getState().setPendingEcho(sid, null);
-        // Only clear liveTurn if the store hasn't frozen it as "Stopped"
-        // (which happens on error/abort — we want the frozen state to render
-        // until the next message).
+        // ROUND-58 (R58-cf): a USER STOP clears the live turn TOO — unlike an
+        // error, the backend FLUSHES the stopped turn's partial text, so the
+        // refetched folded log carries it and the frozen live copy would
+        // duplicate it. The stop signal is re-armed after the clear so the
+        // Stopped card + Continue affordance persist until the next send.
         const slice = useStreamStore.getState().bySession[sid];
-        if (slice?.liveTurn && !slice.liveTurn.stopped) {
+        const wasUserStopped = slice?.liveTurn?.stoppedByUser === true;
+        if (slice?.liveTurn && (!slice.liveTurn.stopped || wasUserStopped)) {
           // The folded turn owns the render now; clear the live section.
           useStreamStore.getState().clearStream(sid);
           useActiveStreams.getState().stop(sid);
+          if (wasUserStopped) {
+            useStreamStore.getState().setLastTurnStoppedByUser(sid, true);
+          }
         }
       } else {
         // Fixture/demo mode: no sidecar → sync hook (canned reply).
@@ -1243,6 +1291,15 @@ export function AgentChatPanel({
   // centered INSIDE the scroll column, pushed below the middle; otherwise it
   // docks at the panel's bottom edge.
   const composerDocked = items.length > 0 || pendingEcho !== null;
+  // ROUND-58 (R58-cf): the deliberate-stop grace timer. abortStream asks the
+  // SIDECAR to resolve the turn and normally the {type:"stopped"} frame ends
+  // the stream cleanly; if the server never answers, this fires ~2.5s later
+  // and hard-aborts the LOCAL controller (the store's catch then classifies
+  // the abort as a stop via the armed flag — never NETWORK_ERROR).
+  // useTimeoutClear owns the handle (the R57-a no-bare-setTimeout rule); the
+  // delayed hard abort is a NO-OP once the stream ended (the controller map
+  // entry is gone) or a new turn replaced the stopped one.
+  const stopGraceTimer = useTimeoutClear();
   const renderComposer = (autoFocus: boolean): ReactNode => (
     <Composer
       agent={agent}
@@ -1253,12 +1310,20 @@ export function AgentChatPanel({
       onInputChange={setInput}
       busy={busy}
       onSend={(content, attachments) => void runTurn(content, attachments)}
+      // ROUND-58 (R58-cf): the Continue affordance — only after the last turn
+      // ended via user stop (the backend persisted the partial + tool
+      // results, so a follow-up message resumes the response).
+      showContinue={lastTurnStoppedByUser && !busy}
       onStop={() => {
         // ROUND-39: stop routes through the stream store so it works
         // regardless of which panel is mounted (background sessions can be
         // stopped from their sidebar row, too).
         if (activeSessionId !== null) {
           useStreamStore.getState().abortStream(activeSessionId);
+          // ROUND-58 (R58-cf): the grace net (see the comment above).
+          stopGraceTimer(() => {
+            useStreamStore.getState().hardAbortStream(activeSessionId);
+          }, 2500);
         }
       }}
       permissionMode={permissionMode}
@@ -1282,7 +1347,14 @@ export function AgentChatPanel({
         ? [{ type: "thinking" as const, text: liveTurn.streamThinking, ts: new Date().toISOString() }]
         : []),
     ];
-    const hasToolWork = entries.some((e) => e.type === "tool");
+    // ROUND-58 (R58-cf): an in-flight tool-arg write (tool-input-start frame
+    // landed, no ToolUseEntry yet) counts as tool work — the section renders
+    // (with its pending write row + live preview) instead of the bare
+    // thoughts-only shape.
+    const hasPendingWriteInput = liveTurn.streamingToolInputs.some((s) =>
+      DIFF_TOOLS.has(s.toolName),
+    );
+    const hasToolWork = entries.some((e) => e.type === "tool") || hasPendingWriteInput;
     if (hasToolWork) {
       return (
         <WorkingSection
@@ -1495,6 +1567,15 @@ export function AgentChatPanel({
                   </span>
                 ) : null}
               </div>
+            ) : null}
+
+            {/* ── ROUND-58 (R58-cf): the deliberate user stop — a QUIET status
+                card (never TurnErrorCard, no red): the partial above stays
+                visible, the backend flushed the persisted partial on stop,
+                and the composer grew a Continue affordance. Hidden while a
+                new turn streams (startStream resets the signal). ── */}
+            {lastTurnStoppedByUser && !streamBusy && lastTurnStoppedTs !== null ? (
+              <TurnStoppedCard ts={lastTurnStoppedTs} />
             ) : null}
 
             {/* ── ROUND-43: LIVE error card — the stream failed. Rendered

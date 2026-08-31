@@ -96,7 +96,7 @@ for (const doc of docs) {
   const segments = content.split(codeFenceRegex);
   for (let i = 0; i < segments.length; i += 2) {
     const seg = (segments[i] ?? "").replace(/`[^`\n]+`/g, "");
-    const pathRefs = seg.match(/(?:^|\s|[(\[])((?:src|agent-core\/src|shared\/src|scripts|tests)\/[A-Za-z0-9_./-]+\.(?:ts|tsx|js|mjs|sql|md|json))/g) ?? [];
+    const pathRefs = seg.match(/(?:^|\s|[(\[])((?:src|agent-core\/src|shared\/src|scripts|tests)\/[A-Za-z0-9_./-]+\.(?:tsx|ts|js|mjs|sql|md|json))/g) ?? [];
     for (const raw of pathRefs) {
       const refPath = raw.trim().replace(/^[(\[]/, "");
       const abs = join(ROOT, refPath);

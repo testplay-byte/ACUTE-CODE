@@ -6,7 +6,7 @@ import {
   type KeyboardEvent as ReactKeyboardEvent,
   type RefObject,
 } from "react";
-import { ArrowUp } from "lucide-react";
+import { ArrowUp, Play } from "lucide-react";
 import type { PermissionMode, ThinkingLevel } from "shared";
 import { readAttachmentFiles, type Agent } from "../../../lib/api";
 import { pushLocalToast } from "../../../hooks/use-notifications";
@@ -22,6 +22,7 @@ import { ModelSelector } from "./ModelSelector";
 import { ThinkingLevelButton } from "./ThinkingLevelButton";
 import {
   attachmentFromRead,
+  CONTINUE_FROM_STOP_MESSAGE,
   detectAtToken,
   filterProjectFiles,
   MAX_ATTACHMENTS,
@@ -59,6 +60,7 @@ export function Composer({
   busy,
   onSend,
   onStop,
+  showContinue = false,
   permissionMode,
   onModeChange,
   thinkingLevel,
@@ -80,6 +82,10 @@ export function Composer({
   /** Fires with the text + staged attachments; chips clear afterwards. */
   onSend: (content: string, attachments: ComposerAttachment[]) => void;
   onStop: () => void;
+  /** ROUND-58 (R58-cf): the last turn on this session ended via user stop —
+   * show the Continue affordance next to Send (a normal user message with
+   * CONTINUE_FROM_STOP_MESSAGE; the backend history carries the partial). */
+  showContinue?: boolean;
   permissionMode: PermissionMode;
   onModeChange: (mode: PermissionMode) => void;
   thinkingLevel: ThinkingLevel;
@@ -367,6 +373,31 @@ export function Composer({
             disabled={!liveMode}
           />
           <ThinkingLevelButton level={thinkingLevel} onChange={onThinkingLevelChange} />
+          {/* ROUND-58 (R58-cf): the Continue affordance — the last turn ended
+              via user stop (the backend persisted the partial + tool results,
+              so this normal follow-up message resumes the response). Secondary
+              style (border + subtle bg), never shown while a turn runs (the
+              Stop button owns that state). */}
+          {showContinue && !busy ? (
+            <button
+              type="button"
+              onClick={() => {
+                onSend(CONTINUE_FROM_STOP_MESSAGE, []);
+                setAtToken(null);
+                setAtDismissedAt(null);
+              }}
+              aria-label="Continue from where you left off"
+              title="Send another message to resume the stopped response"
+              data-continue-button
+              className="h-8 px-3 rounded-xl flex items-center gap-1.5 shrink-0 border text-[11.5px] font-semibold transition-colors"
+              style={{ borderColor: styles.border, background: styles.subtle, color: styles.textSecondary }}
+              onMouseEnter={(e) => (e.currentTarget.style.background = styles.subtleHover)}
+              onMouseLeave={(e) => (e.currentTarget.style.background = styles.subtle)}
+            >
+              <Play size={11} />
+              Continue
+            </button>
+          ) : null}
           {busy ? (
             <button
               type="button"

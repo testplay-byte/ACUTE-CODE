@@ -29,9 +29,15 @@ import {
   fetchSnapshot,
 } from "../../lib/api";
 import { pushLocalToast } from "../../hooks/use-notifications";
-import { selectSubAgentsLive, useStreamStore, type LiveToolUseEntry } from "../../lib/stream-store";
+import {
+  selectSubAgentsLive,
+  useStreamStore,
+  type LiveToolUseEntry,
+  type StreamingToolInput,
+} from "../../lib/stream-store";
 import { useRightSidebarStore } from "../../lib/right-sidebar-store";
 import { SubAgentCard } from "./SubAgentCard";
+import { extractStringArg } from "./streaming-args";
 import { SEMANTIC_COLORS } from "../../lib/semantics";
 import { useThemeStyles } from "../../lib/use-theme-styles";
 import { withAlpha } from "../dashboard/helpers";
@@ -111,10 +117,15 @@ const TOOL_LABELS: Record<string, string> = {
   delegate_task: "Delegated",
 };
 
-/** ROUND-51 (R51-d): the in-flight blue for pending tool rows — the same
+/** ROUND-52 (R51-d): the in-flight blue for pending tool rows — the same
  * value as SubAgentPanel's RUNNING_BLUE (kept local: that panel owns the
  * canonical const; this file only borrows the hue for in-flight states). */
 const RUNNING_BLUE = "#3B82F6";
+
+/** ROUND-58 (R58-cf): stable empty default for the pending-write-inputs
+ * derive (the store selector returns undefined for folded sections — a
+ * fresh [] there would re-render on every store tick). */
+const EMPTY_STREAMING_INPUTS: StreamingToolInput[] = [];
 
 /** Elapsed seconds between two ISO stamps (0 when unparseable). */
 function elapsedSeconds(start: string, end: string): number {
@@ -483,9 +494,17 @@ export function ThoughtRow({
             transition={{ duration: 0.22, ease: [0.25, 0.1, 0.25, 1] }}
             className="overflow-hidden"
           >
+            {/* ROUND-58 (R58-cf, owner: "On the thought section… on the left
+                side of it there is a weird AI kind of highlighting, which is
+                not good"): the body is now a clean self-contained notes
+                block — rounded, a very subtle neutral wash (styles.subtle),
+                mono, relaxed leading. NO left border rail, NO accent color on
+                the container (Linear/Notion-quiet, not AI glow). The
+                collapse/expand chevron, Thinking… label and "Thought for Ns"
+                duration above stay exactly as they were. */}
             <div
-              className="mt-0.5 mb-1 rounded-[10px] pl-3 py-1.5 font-mono text-[11px] leading-[1.6] whitespace-pre-wrap break-words max-h-64 overflow-y-auto auto-scroll border-l-2"
-              style={{ borderColor: withAlpha(styles.accent, 0.25), color: styles.textSecondary }}
+              className="mt-0.5 mb-1 rounded-[10px] px-3 py-1.5 font-mono text-[11px] leading-[1.6] whitespace-pre-wrap break-words max-h-64 overflow-y-auto auto-scroll"
+              style={{ background: styles.subtle, color: styles.textSecondary }}
             >
               {trimmed}
             </div>
@@ -835,6 +854,129 @@ export function LiveOutputTail({ output }: { output: string }) {
           </div>
         ))}
       </div>
+    </div>
+  );
+}
+
+// ─── ROUND-58 (R58-cf): the LIVE write preview of a streaming file write ────
+
+/** Rendering cap for the preview BODY (~8KB tail — the store already caps the
+ * raw at 256KB; the box shows what is being written RIGHT NOW, and a 250KB
+ * text node would jank the chat column). */
+const MAX_WRITE_PREVIEW_CHARS = 8_000;
+
+/**
+ * ROUND-58 (R58-cf, owner: "no live preview while the agent WRITES files —
+ * the file diff only appears after the tool completes"): the compact live
+ * write preview rendered under an in-flight write_file/edit_file pill while
+ * the model is still GENERATING the call's JSON arguments. Styled after
+ * LiveOutputTail (same box language: rounded-[10px], hairline border, mono
+ * 11px, subtle bg, tiny pulsing dot) — the label reads
+ * `writing <filename> — <N> chars` and the body shows the partial
+ * content-so-far (extracted by the tolerant streaming-args parser — the raw
+ * is a JSON PREFIX, never parseable). Stick-to-bottom like the terminal
+ * tail; the matching tool-result CLEARS the preview — the expanded DiffDetail
+ * (the real diff card) takes over.
+ */
+export function LiveWritePreview({ raw }: { raw: string }) {
+  const styles = useThemeStyles();
+  const ref = useRef<HTMLDivElement>(null);
+  const stickRef = useRef(true);
+
+  const path = extractStringArg(raw, "path");
+  const contentArg = extractStringArg(raw, "content");
+  const content = contentArg.found ? contentArg : extractStringArg(raw, "newString");
+
+  // Filename only (the full path rides the row's title/argsSummary).
+  const filename = path.found
+    ? path.value.split(/[\\/]/).filter((seg) => seg !== "").pop() ?? path.value
+    : "file";
+  const label = `writing ${filename} — ${content.value.length} chars`;
+
+  // Track whether the user scrolled up (stop auto-scrolling then).
+  useEffect(() => {
+    const el = ref.current;
+    if (el === null) return;
+    const onScroll = () => {
+      stickRef.current = el.scrollHeight - el.scrollTop - el.clientHeight < 24;
+    };
+    el.addEventListener("scroll", onScroll, { passive: true });
+    return () => el.removeEventListener("scroll", onScroll);
+  }, []);
+  // The content grows → keep the bottom pinned while the user is at it.
+  useEffect(() => {
+    const el = ref.current;
+    if (el !== null && stickRef.current) el.scrollTop = el.scrollHeight;
+  }, [content.value]);
+
+  const shown =
+    content.value.length > MAX_WRITE_PREVIEW_CHARS
+      ? `…${content.value.slice(content.value.length - MAX_WRITE_PREVIEW_CHARS)}`
+      : content.value;
+
+  return (
+    <div className="mt-0.5 mb-1 pl-4 min-w-0" data-testid="live-write-preview">
+      <div className="flex items-center gap-1.5 h-4 px-0.5">
+        {/* Subtle animated shimmer — CSS-only pulse on the small dot
+            (ac-pulse: the app's shared live-dot animation, reduced-motion
+            aware — same as LiveOutputTail). */}
+        <span className="w-1.5 h-1.5 rounded-full ac-pulse shrink-0" style={{ background: RUNNING_BLUE }} aria-hidden />
+        <span
+          className="text-[9px] font-mono font-bold uppercase tracking-[0.14em] truncate"
+          style={{ color: RUNNING_BLUE }}
+          title={path.found ? path.value : undefined}
+        >
+          {label}
+        </span>
+      </div>
+      <div
+        ref={ref}
+        className="rounded-[10px] border px-2.5 py-1.5 max-h-40 overflow-y-auto auto-scroll font-mono text-[11px] leading-[1.5] break-words whitespace-pre-wrap"
+        style={{
+          borderColor: withAlpha(RUNNING_BLUE, 0.35),
+          background: styles.isDark ? "rgba(0,0,0,0.3)" : "rgba(0,0,0,0.03)",
+          color: styles.textSecondary,
+        }}
+      >
+        {shown === "" ? " " : shown}
+      </div>
+    </div>
+  );
+}
+
+/**
+ * ROUND-58 (R58-cf): a PENDING write row — the model started generating a
+ * write_file/edit_file call's arguments (tool-input-start frame) but the
+ * final tool-call frame hasn't landed, so there is no ToolUseEntry yet. The
+ * row mirrors a collapsed ToolLine's shape (running-blue icon chip + label +
+ * mono path + "…" in-flight status) with the live write preview beneath —
+ * the owner sees the file being written the moment the model starts typing
+ * its content. Not interactive: the preview is always shown.
+ */
+function LiveWritePendingRow({ toolName, raw }: { toolName: string; raw: string }) {
+  const styles = useThemeStyles();
+  const Icon = TOOL_ICONS[toolName] ?? FileCode2;
+  const path = extractStringArg(raw, "path");
+  const argsSummary = path.found ? `path: ${path.value}` : toolName;
+  return (
+    <div className="min-w-0" data-testid="live-write-pending-row">
+      <div
+        className="flex items-center gap-2 h-7 w-full max-w-full px-1 -ml-1"
+        style={{ color: styles.textTertiary }}
+      >
+        <ToolIconChip Icon={Icon} background={withAlpha(RUNNING_BLUE, 0.12)} color={RUNNING_BLUE} />
+        <span className="shrink-0 text-[11px] font-semibold" style={{ color: styles.textSecondary }}>
+          Writing
+        </span>
+        <span className="min-w-0 flex-1 truncate font-mono text-[11px]" style={{ color: styles.textTertiary }} title={path.found ? path.value : undefined}>
+          {argsSummary}
+        </span>
+        <span className="shrink-0 w-4 text-center text-[11px]" style={{ color: styles.textTertiary }}>
+          …
+        </span>
+        <span className="w-2.5 shrink-0" />
+      </div>
+      {raw !== "" ? <LiveWritePreview raw={raw} /> : null}
     </div>
   );
 }
@@ -1195,6 +1337,13 @@ function ToolLine({
   // (folded turns never carry the field; the result clears it).
   const liveOutput = (tool as LiveToolUseEntry).liveOutput ?? "";
   const showLiveTail = tool.ok === null && liveOutput !== "";
+  // ROUND-58 (R58-cf): the live write preview of an in-flight write_file/
+  // edit_file — the stream-store attached the accumulated args raw
+  // (liveInput) when the tool-call frame landed; the tool-result strips it
+  // and the real DiffDetail takes over.
+  const liveInput = (tool as LiveToolUseEntry).liveInput;
+  const showLiveWrite =
+    tool.ok === null && DIFF_TOOLS.has(tool.toolName) && liveInput !== undefined && liveInput !== "";
 
   return (
     <div className="min-w-0">
@@ -1275,14 +1424,24 @@ function ToolLine({
       </button>
       {/* ROUND-52 (R52-c): the compact live tail under the pill while the
           command streams — hidden while expanded (the expanded body's
-          TerminalDetail carries the same live view there, never both). */}
+          TerminalDetail carries the same live view there, never both).
+          ROUND-58 (R58-cf): an in-flight write/edit gets its LIVE write
+          preview the same way (never both with the expanded body). */}
       {showLiveTail && !open ? <LiveOutputTail output={liveOutput} /> : null}
+      {showLiveWrite && !open ? <LiveWritePreview raw={liveInput} /> : null}
       {open && (
         <div className="mt-0.5 mb-1 pl-4 min-w-0">
           {tool.toolName === "delegate_task" ? (
             <DelegateDetail tool={tool} sessionId={sessionId} live={live} projectId={projectId} />
           ) : DIFF_TOOLS.has(tool.toolName) ? (
-            <DiffDetail tool={tool} sessionId={sessionId} />
+            // ROUND-58 (R58-cf): while the write is still in flight the
+            // preview IS the body (the diff snapshot doesn't exist yet); the
+            // tool-result swaps in the real DiffDetail.
+            showLiveWrite ? (
+              <LiveWritePreview raw={liveInput} />
+            ) : (
+              <DiffDetail tool={tool} sessionId={sessionId} />
+            )
           ) : tool.toolName === "run_command" ? (
             <TerminalDetail tool={tool} />
           ) : (
@@ -1438,6 +1597,20 @@ export function WorkingSection({
   const foldedSeconds = ts !== undefined && endTs !== undefined ? elapsedSeconds(ts, endTs) : 0;
   const seconds = live ? liveSeconds : foldedSeconds;
 
+  // ROUND-58 (R58-cf): in-flight tool-ARG streaming — write_file/edit_file
+  // calls whose JSON args the model is still generating (a tool-input-start
+  // frame landed, no ToolUseEntry yet). Live sections only (folded turns
+  // never carry streaming state). The selector returns the store's array
+  // REFERENCE (stable between patches) or undefined — never a fresh array —
+  // so there is no re-render loop; the DIFF filter is a render-time derive.
+  const liveStreamingInputs = useStreamStore((s) =>
+    live && sessionId !== null ? s.bySession[sessionId]?.liveTurn?.streamingToolInputs : undefined,
+  );
+  const pendingWriteInputs: StreamingToolInput[] =
+    liveStreamingInputs === undefined
+      ? EMPTY_STREAMING_INPUTS
+      : liveStreamingInputs.filter((si) => DIFF_TOOLS.has(si.toolName));
+
   const toolCount = entries.filter((e) => e.type === "tool").length;
   const pendingApproval = entries.some((e) => e.type === "approval" && e.status === "pending");
 
@@ -1505,7 +1678,12 @@ export function WorkingSection({
             transition={{ duration: 0.26, ease: [0.25, 0.1, 0.25, 1] }}
             className="overflow-hidden"
           >
-            <div className="relative ml-[7px] pl-3.5 border-l-2 py-1 flex flex-col gap-0.5" style={{ borderColor: withAlpha(styles.accent, 0.22) }}>
+            {/* ROUND-58 (R58-cf, owner: the left rail looked like "a weird AI
+                kind of highlighting"): the accent border-l-2 rail is GONE —
+                the rows sit in a plain column; each row keeps its own
+                self-contained shape (ThoughtRow's subtle notes block, the
+                tool pills, the approval cards). */}
+            <div className="py-1 flex flex-col gap-0.5">
               {entries.map((entry, i) => {
                 if (entry.type === "thinking") {
                   return (
@@ -1528,13 +1706,20 @@ export function WorkingSection({
                 }
                 return <ApprovalRow key={`t-${i}`} entry={entry} sessionId={sessionId} onDecision={onApprovalDecision} />;
               })}
-              {live && entries.length === 0 ? (
+              {live && entries.length === 0 && pendingWriteInputs.length === 0 ? (
                 <div className="flex items-center gap-2 h-7">
                   <span className="text-[11px] font-mono" style={{ color: styles.textTertiary }}>
                     starting<span className="ac-ellipsis" aria-hidden />
                   </span>
                 </div>
               ) : null}
+              {/* ROUND-58 (R58-cf): PENDING write rows — the model is
+                  generating a write_file/edit_file call's args right now; the
+                  live write preview streams beneath each row until the final
+                  tool-call frame converts it into a ToolUseEntry. */}
+              {pendingWriteInputs.map((si) => (
+                <LiveWritePendingRow key={`sw-${si.toolCallId}`} toolName={si.toolName} raw={si.raw} />
+              ))}
             </div>
           </motion.div>
         )}

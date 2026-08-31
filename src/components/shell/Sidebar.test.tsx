@@ -255,4 +255,18 @@ describe("Sidebar session rows (R43 depth pass: border + state-aware icons)", ()
     expect(deriveSessionRowState(session("completed"), false)).toBe("idle");
     expect(deriveSessionRowState(session("queued"), false)).toBe("idle");
   });
+
+  it("ROUND-58 (R58-cf): after a deliberate user stop the row no longer derives running — the backend reset the status to 'queued' and the store cleared the active-streams entry", () => {
+    const base = { id: "s", projectId: null, agentId: null, mode: "single" as const, title: null, createdAt: "", updatedAt: "" };
+    const session = (status: Session["status"]): Session => ({ ...base, status });
+    // MID-STREAM: the persisted status says running AND the store's
+    // active-streams set still marks the session (the pixel-stream spins).
+    expect(deriveSessionRowState(session("running"), true)).toBe("running");
+    // The stop flow ends: the stream store's finally cleared the
+    // active-streams entry (useActiveStreams.stop) and the ["sessions"]
+    // invalidation refetched the backend's reset status ("queued" — the
+    // runtime resets it on a user stop). The row returns to idle — the
+    // sidebar never shows a phantom running indicator after a stop.
+    expect(deriveSessionRowState(session("queued"), false)).toBe("idle");
+  });
 });

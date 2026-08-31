@@ -7,7 +7,16 @@
  * This helper is the fix: the first slot in [min, max] that is not held.
  * SubAgentsTab's add-row does the same scan inline; this is the shared,
  * unit-tested version.
+ *
+ * ROUND-58 (R58-d): also home to the key-REVEAL client fn (the owner's
+ * explicit "every single one of the API keys, without any issues" demand —
+ * POST /providers/:id/keys/reveal, the one route that returns key values).
+ * It lives HERE rather than api.ts deliberately: api.ts is another agent's
+ * file this round, and the reveal contract (full values, explicit user
+ * action, never auto-fetched) is key-pool domain logic.
  */
+import { ApiError } from "./api";
+import { useConfigStore } from "./config-store";
 
 /** Pool slots are addressable 0–31 (slot 0 = the primary key, never written
  * from the pool UI; the pool convention starts at 2 — see SubAgentsTab). */
@@ -25,4 +34,70 @@ export function nextFreeSlot(heldSlots: number[], min = MIN_POOL_SLOT, max = MAX
     if (!held.has(slot)) return slot;
   }
   return -1;
+}
+
+/** One revealed key: the slot number plus the FULL value (R58-d contract). */
+export interface RevealedKey {
+  slot: number;
+  value: string;
+}
+
+/**
+ * ROUND-58 (R58-d): POST /providers/:id/keys/reveal — fetches the FULL key
+ * values for every slot the provider holds (slot 0 = the primary, plus the
+ * pool slots). Mirrors src/lib/api.ts's request() conventions (baseUrl +
+ * bearer token from the config store, typed error envelopes → ApiError)
+ * without touching that file. Call this ONLY on an explicit user action —
+ * revealed values are for display, never for logging.
+ */
+export async function revealProviderKeys(providerId: string): Promise<RevealedKey[]> {
+  const { baseUrl, token } = useConfigStore.getState();
+  const headers: Record<string, string> = {};
+  if (token) headers.Authorization = `Bearer ${token}`;
+
+  let res: Response;
+  try {
+    res = await fetch(`${baseUrl}/api/v1/providers/${encodeURIComponent(providerId)}/keys/reveal`, {
+      method: "POST",
+      headers,
+    });
+  } catch (cause) {
+    throw new ApiError(
+      0,
+      "NETWORK",
+      `Could not reach agent-core at ${baseUrl} (${String(cause)})`,
+    );
+  }
+
+  const text = await res.text();
+  let body: unknown;
+  try {
+    body = text ? JSON.parse(text) : undefined;
+  } catch {
+    body = undefined;
+  }
+
+  if (!res.ok) {
+    const envelope =
+      body && typeof body === "object" && "error" in body
+        ? (body as { error?: { code?: unknown; message?: unknown } }).error
+        : undefined;
+    throw new ApiError(
+      res.status,
+      typeof envelope?.code === "string" ? envelope.code : "UNKNOWN",
+      typeof envelope?.message === "string" ? envelope.message : `Request failed with HTTP ${res.status}`,
+    );
+  }
+
+  const keys = body && typeof body === "object" ? (body as { keys?: unknown }).keys : undefined;
+  if (!Array.isArray(keys)) throw new ApiError(res.status, "UNKNOWN", "reveal response missing keys array");
+  return keys
+    .filter(
+      (k): k is { slot: number; value: string } =>
+        typeof k === "object" &&
+        k !== null &&
+        typeof (k as { slot?: unknown }).slot === "number" &&
+        typeof (k as { value?: unknown }).value === "string",
+    )
+    .map((k) => ({ slot: k.slot, value: k.value }));
 }

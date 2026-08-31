@@ -3,7 +3,7 @@
   "product": {
     "name": "Acute",
     "tagline": "Local-first multi-agent engineering workbench",
-    "version": "0.57.0",
+    "version": "0.58.0",
     "availability": "Private build — not yet distributed",
     "chips": [
       "Windows desktop",
@@ -19,14 +19,14 @@
       "id": "coding",
       "title": "Coding",
       "state": "usable",
-      "progress": 88,
+      "progress": 89,
       "summary": "Projects, 16 sandboxed tools, streaming chat, multi-turn continuation, codebase indexing, grep search, demo viewer"
     },
     {
       "id": "agentic",
       "title": "Agentic system",
       "state": "building",
-      "progress": 45,
+      "progress": 47,
       "summary": "Multi-turn agentic continuation (AGENTIC LOOP + outer loop); multi-agent orchestration owner-gated"
     },
     {
@@ -128,22 +128,26 @@
     {
       "date": "2026-08-31",
       "label": "Round 57 — the engine-bundling round (the 189-junction link farm behind ERR_MODULE_NOT_FOUND; hoisted staging + zero-links gate + the Windows pre-pack boot gate)"
+    },
+    {
+      "date": "2026-08-31",
+      "label": "Round 58 — the desktop-polish round (the first fully-working Windows session; the frameless title bar, the stop/continue/live-write/engine-capping fixes, the settings restructure with visible keys, and the CLI chat harness)"
+    },
+    {
+      "date": "2026-08-31",
+      "label": "Round 58 — the desktop-polish round (the first fully-working Windows session; frameless title bar, honest stops + Continue, live file-write preview, session-replay capping, settings restructure with visible keys, the CLI chat harness)"
     }
   ],
   "quality": {
     "ci": "success",
     "suites": [
       {
-        "name": "agent-core",
-        "tests": 149
-      },
-      {
-        "name": "shared",
-        "tests": 4
-      },
-      {
         "name": "frontend",
-        "tests": 55
+        "tests": 1169
+      },
+      {
+        "name": "agent-core",
+        "tests": 631
       },
       {
         "name": "sidecar e2e",
@@ -164,8 +168,8 @@
   ],
   "plan": {
     "current": {
-      "title": "Round 57 DELIVERED — the engine-bundling round (fifth packaged-app session)",
-      "detail": "The owner's tenth Windows test session: the launcher's app-or-site question worked, the SITE launched and ran perfectly end-to-end (dashboard included) — the first confirmed half-win — but the desktop app still failed to reach agent-core, and the engine's stderr finally named the crash: ERR_MODULE_NOT_FOUND, all three startup attempts. Root cause: the staged sidecar's node_modules was a pnpm LINK FARM (189 symlinks on POSIX = 189 junctions on the Windows release runner) that tauri-bundler + NSIS pack/extract does not preserve — the installed engine could not resolve its first bare import and died before its first log line, while every Linux-side check passed. Fixed structurally with zero product-code changes: the staging install now uses --config.node-linker=hoisted (npm-style tree of REAL directories; 301.5 MB → 124.6 MB), a zero-links gate fails the staging on ANY symlink/junction (junctions report as symlinks via lstatSync — one walk, both OSes), and the release workflow BOOTS the real staged engine with the real pinned node.exe on windows-latest (same env + ACUTE_READY handshake as the app) BEFORE pnpm tauri build can pack it — a dead engine can never ship again. Verified: 1071/1071 tests, lint/typecheck clean, staged-boot battery (ACUTE_READY + /health 200 + /api/v1/agents 200), hoisting verified on the exact CI pnpm 11.22.0. The owner's re-test: ACUTE.bat → app-or-site → [1] the desktop app → install 0.57.0 → the console should finally print '✓ agent-core is up — port N'."
+      "title": "Round 58 DELIVERED — the desktop-polish round (first fully-working Windows session)",
+      "detail": "The owner's eleventh Windows test session: 'This time the application works properly. The app opens up without any errors or any issues at all.' — the R57 engine-bundling fix held, and the session's defect list became this round: the native title bar is gone (a 40px integrated title bar with drag + min/max/close), the pop-out browser window is no longer a white box (async creation + initialization-script overlay), 'open in system browser' works, the URL bar survives typing, viewport readouts are honest, stops render a quiet 'Stopped by user' card (no more generation-failed/body-stream-aborted), the session status resets (no eternal sidebar spinner), the partial reply persists and a Continue button resumes it, tool arguments stream live so files show a 'writing <file>' preview DURING generation, history replay caps stale tool output (the end-of-task session regurgitation), the thinking blocks lost their AI-glow rails, the context popover waits 600ms for hover intent, Settings/Models-Providers/Sub-agents/Advanced were restructured (unconfigured presets grouped, preset fields hidden, proper disable toggle, content-sized provider list, single sub-agent home), every API key is revealable with a click, and the CLI chat harness drives whole sessions from the terminal. Verification: 1169 + 631 tests green, lint/typecheck clean, docs:check 149/0, LIVE battery 5/5 (the owner's exact 3-file task with live tool-input frames, stop → queued + persisted partial, continue completes, reveal route) — scripts/battery-r58.mjs is the permanent artifact."
     },
     "upcoming": [
       {

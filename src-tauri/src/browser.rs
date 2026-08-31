@@ -23,6 +23,19 @@
 //!   working: the BrowserPanel's "pop out" button still opens the R41
 //!   window, and they are harmless if unused).
 //!
+//! - ROUND-58 (R58-b): Windows field-report fixes. `open_browser_window`
+//!   went ASYNC — a sync command runs on the MAIN thread, and
+//!   `WebviewWindowBuilder::build` blocks on a channel to that same main
+//!   thread, the documented WebView2 deadlock (the pop-out window used to
+//!   render completely WHITE/half-created on Windows; same rationale as
+//!   `browser_tab_create` below). The nav overlay now rides the builder's
+//!   `initialization_script` (WebView2's AddScriptToExecuteOnDocumentCreated
+//!   — runs at document-start on EVERY new document, before page scripts)
+//!   instead of the post-build/on_navigation `eval`s, which fired before the
+//!   page load committed and never appeared. And `open_external_url` hands
+//!   a URL to the OS default browser from Rust (window.open inside a
+//!   WebView2 webview is silently swallowed by wry).
+//!
 //! How the child-webview dance works:
 //!  1. The frontend creates a tab webview (`browser_tab_create`) with a
 //!     starting URL. Rust creates it at 1×1 logical px at (0,0) and
@@ -126,75 +139,101 @@ fn browser_profile_dir(app: &AppHandle) -> Result<PathBuf, String> {
 /// The nav-overlay init script — injects a small fixed-position bar at the
 /// top of the browser window with Back / Forward / Reload / address input.
 /// The bar is a separate DOM layer (`z-index: 9999`) so it doesn't interfere
-/// with the page's own layout. Clicking the buttons calls Tauri's webview
-/// navigation APIs via the global `__acuteBrowser` handle.
+/// with the page's own layout; the buttons walk the page's own session
+/// history (window.history / location).
+///
+/// R58-b DELIVERY: registered via `WebviewWindowBuilder::initialization_script`
+/// (WebView2's AddScriptToExecuteOnDocumentCreated) — it runs at
+/// DOCUMENT-START on EVERY new document (initial load, link clicks,
+/// redirects, form submits), before any page script. The old delivery — a
+/// post-build `eval` plus a re-`eval` inside `on_navigation` — fired before
+/// the page load committed, so the overlay never appeared on Windows.
+/// Document-start means `<html>`/`<head>` may not exist yet, hence the
+/// readyState/DOMContentLoaded guard: the body waits for the DOM while the
+/// document is still loading and runs inline otherwise; the
+/// `__acuteBrowserOverlay` flag keeps same-document re-runs idempotent.
 ///
 /// Kept inline (no asset file) so the binary stays self-contained.
 const NAV_OVERLAY_INIT: &str = r#"
 (function () {
-  // Don't double-inject (Tauri eval is idempotent but the script may run
-  // again on a same-page navigation).
+  // Don't double-inject — the script runs once per NEW document (a fresh
+  // document means a fresh JS context, so the flag resets naturally), but
+  // a same-document re-run must be a no-op.
   if (window.__acuteBrowserOverlay) return;
   window.__acuteBrowserOverlay = true;
 
-  var bar = document.createElement('div');
-  bar.id = 'acute-browser-nav';
-  bar.style.cssText = [
-    'position: fixed',
-    'top: 0',
-    'left: 0',
-    'right: 0',
-    'height: 38px',
-    'display: flex',
-    'align-items: center',
-    'gap: 6px',
-    'padding: 0 8px',
-    'background: #1a1816',
-    'color: #f5f3ef',
-    'font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif',
-    'font-size: 12px',
-    'z-index: 2147483647',
-    'box-shadow: 0 1px 3px rgba(0,0,0,0.4)',
-  ].join(';');
-  bar.innerHTML =
-    '<button id="acute-back" title="Back" style="background:none;border:none;color:#f5f3ef;padding:4px 8px;cursor:pointer;border-radius:6px;font-size:14px">←</button>' +
-    '<button id="acute-fwd" title="Forward" style="background:none;border:none;color:#f5f3ef;padding:4px 8px;cursor:pointer;border-radius:6px;font-size:14px">→</button>' +
-    '<button id="acute-reload" title="Reload" style="background:none;border:none;color:#f5f3ef;padding:4px 8px;cursor:pointer;border-radius:6px;font-size:14px">⟳</button>' +
-    '<input id="acute-addr" type="text" placeholder="Search or enter address" style="flex:1;min-width:0;background:#2a2622;border:1px solid #3a342e;color:#f5f3ef;padding:4px 10px;border-radius:8px;font-size:12px;outline:none" />' +
-    '<button id="acute-go" title="Go" style="background:#FF6B2C;border:none;color:#1a1816;padding:4px 12px;cursor:pointer;border-radius:8px;font-size:12px;font-weight:600">Go</button>';
-  document.documentElement.appendChild(bar);
-  // Pad the page so the bar doesn't cover content.
-  var style = document.createElement('style');
-  style.textContent = 'html { padding-top: 38px !important; }';
-  document.head.appendChild(style);
+  var install = function () {
+    var bar = document.createElement('div');
+    bar.id = 'acute-browser-nav';
+    bar.style.cssText = [
+      'position: fixed',
+      'top: 0',
+      'left: 0',
+      'right: 0',
+      'height: 38px',
+      'display: flex',
+      'align-items: center',
+      'gap: 6px',
+      'padding: 0 8px',
+      'background: #1a1816',
+      'color: #f5f3ef',
+      'font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif',
+      'font-size: 12px',
+      'z-index: 2147483647',
+      'box-shadow: 0 1px 3px rgba(0,0,0,0.4)',
+    ].join(';');
+    bar.innerHTML =
+      '<button id="acute-back" title="Back" style="background:none;border:none;color:#f5f3ef;padding:4px 8px;cursor:pointer;border-radius:6px;font-size:14px">←</button>' +
+      '<button id="acute-fwd" title="Forward" style="background:none;border:none;color:#f5f3ef;padding:4px 8px;cursor:pointer;border-radius:6px;font-size:14px">→</button>' +
+      '<button id="acute-reload" title="Reload" style="background:none;border:none;color:#f5f3ef;padding:4px 8px;cursor:pointer;border-radius:6px;font-size:14px">⟳</button>' +
+      '<input id="acute-addr" type="text" placeholder="Search or enter address" style="flex:1;min-width:0;background:#2a2622;border:1px solid #3a342e;color:#f5f3ef;padding:4px 10px;border-radius:8px;font-size:12px;outline:none" />' +
+      '<button id="acute-go" title="Go" style="background:#FF6B2C;border:none;color:#1a1816;padding:4px 12px;cursor:pointer;border-radius:8px;font-size:12px;font-weight:600">Go</button>';
+    document.documentElement.appendChild(bar);
+    // Pad the page so the bar doesn't cover content. (head fallback: a
+    // degenerate document can reach install() without <head> — a <style>
+    // applies from anywhere in the DOM, never crash the overlay for it.)
+    var style = document.createElement('style');
+    style.textContent = 'html { padding-top: 38px !important; }';
+    (document.head || document.documentElement).appendChild(style);
 
-  // Wire nav buttons to the webview's history (window.history) + reload.
-  document.getElementById('acute-back').onclick = function () { window.history.back(); };
-  document.getElementById('acute-fwd').onclick = function () { window.history.forward(); };
-  document.getElementById('acute-reload').onclick = function () { window.location.reload(); };
+    // Wire nav buttons to the webview's history (window.history) + reload.
+    document.getElementById('acute-back').onclick = function () { window.history.back(); };
+    document.getElementById('acute-fwd').onclick = function () { window.history.forward(); };
+    document.getElementById('acute-reload').onclick = function () { window.location.reload(); };
 
-  // The address input: on Enter or "Go" click, navigate.
-  var addr = document.getElementById('acute-addr');
-  var go = function () {
-    var v = (addr.value || '').trim();
-    if (!v) return;
-    // URL-or-search heuristic (same as the BrowserPanel frontend).
-    var url;
-    if (/^https?:\/\//i.test(v)) url = v;
-    else if (/^[a-z][a-z0-9+.-]*:\/\//i.test(v)) url = v;
-    else if (/^[\w-]+(\.[\w-]+)+([/?#].*)?$/.test(v)) url = 'https://' + v;
-    else url = 'https://duckduckgo.com/?q=' + encodeURIComponent(v);
-    window.location.href = url;
+    // The address input: on Enter or "Go" click, navigate.
+    var addr = document.getElementById('acute-addr');
+    var go = function () {
+      var v = (addr.value || '').trim();
+      if (!v) return;
+      // URL-or-search heuristic (same as the BrowserPanel frontend).
+      var url;
+      if (/^https?:\/\//i.test(v)) url = v;
+      else if (/^[a-z][a-z0-9+.-]*:\/\//i.test(v)) url = v;
+      else if (/^[\w-]+(\.[\w-]+)+([/?#].*)?$/.test(v)) url = 'https://' + v;
+      else url = 'https://duckduckgo.com/?q=' + encodeURIComponent(v);
+      window.location.href = url;
+    };
+    document.getElementById('acute-go').onclick = go;
+    addr.addEventListener('keydown', function (e) { if (e.key === 'Enter') go(); });
+
+    // Sync the address input with the current URL on load + on navigation.
+    var sync = function () { addr.value = window.location.href; };
+    sync();
+    window.addEventListener('popstate', sync);
+    // Also poll every 500ms — SPA navigations don't always fire popstate.
+    setInterval(sync, 500);
   };
-  document.getElementById('acute-go').onclick = go;
-  addr.addEventListener('keydown', function (e) { if (e.key === 'Enter') go(); });
 
-  // Sync the address input with the current URL on load + on navigation.
-  var sync = function () { addr.value = window.location.href; };
-  sync();
-  window.addEventListener('popstate', sync);
-  // Also poll every 500ms — SPA navigations don't always fire popstate.
-  setInterval(sync, 500);
+  // R58-b document-start guard: initialization scripts run BEFORE the parser
+  // has built <html>/<head> — everything install() touches may not exist yet.
+  // While the document is still loading, wait for DOMContentLoaded (fires
+  // once, after the DOM exists); otherwise install inline.
+  if (document.readyState === 'loading' || document.documentElement === null) {
+    document.addEventListener('DOMContentLoaded', install);
+  } else {
+    install();
+  }
 })();
 "#;
 
@@ -208,8 +247,22 @@ const NAV_OVERLAY_INIT: &str = r#"
 /// INSIDE the main window, not in a separate OS window). Kept registered: the
 /// BrowserPanel's "pop out" affordance still opens this window, and removing
 /// a registered command would break any persisted frontend that still calls it.
+///
+/// R58-b WHY THIS COMMAND IS `async` (mirrors `browser_tab_create` below):
+/// `WebviewWindowBuilder::build` creates the window AND its webview, which
+/// blocks on a channel to the MAIN thread (`WindowBuilder::with_webview` —
+/// the same mechanism as `Window::add_child`). Tauri runs SYNC commands on
+/// the main thread, so a sync build() ends up waiting for a thread that is
+/// waiting for us — the documented WebView2 deadlock (tauri's WebviewBuilder
+/// docs: "On Windows, this function deadlocks when used in a synchronous
+/// command… You should use async commands and separate threads"). On the
+/// owner's Windows machine the sync build deadlocked mid-creation and the
+/// pop-out window rendered completely WHITE/blank. Async commands run on
+/// the tokio runtime via `async_runtime::spawn`, off the main thread — the
+/// documented workaround. (The eval/set_focus calls below only use
+/// fire-and-forget dispatchers, safe from any thread.)
 #[tauri::command]
-pub fn open_browser_window(app: AppHandle, url: String) -> Result<(), String> {
+pub async fn open_browser_window(app: AppHandle, url: String) -> Result<(), String> {
     // If the browser window already exists, focus it + navigate to the URL.
     if let Some(existing) = app.get_webview_window(BROWSER_WINDOW_LABEL) {
         // eval() navigates the existing webview to the new URL.
@@ -219,8 +272,9 @@ pub fn open_browser_window(app: AppHandle, url: String) -> Result<(), String> {
         );
         let _ = existing.eval(&init);
         let _ = existing.set_focus();
-        // Re-inject the nav overlay (it may have been lost on a fresh load).
-        let _ = existing.eval(NAV_OVERLAY_INIT);
+        // No overlay re-inject: the initialization_script registered when the
+        // window was built runs on EVERY new document this webview ever loads
+        // (AddScriptToExecuteOnDocumentCreated), this navigation included.
         return Ok(());
     }
 
@@ -229,39 +283,30 @@ pub fn open_browser_window(app: AppHandle, url: String) -> Result<(), String> {
         .parse()
         .map_err(|e| format!("invalid url \"{url}\": {e}"))?;
 
-    let builder =
-        WebviewWindowBuilder::new(&app, BROWSER_WINDOW_LABEL, WebviewUrl::External(parsed_url))
-            .title("Acute Browser")
-            .inner_size(1200.0, 800.0)
-            .min_inner_size(640.0, 480.0)
-            .resizable(true)
-            .fullscreen(false)
-            .decorations(true)
-            // WebView2 (Windows): the persistent user-data dir is where cookies +
-            // login state live. WebKit (macOS): same dir for website data.
-            // (Tauri 2 renamed the builder method from user_data_dir to
-            // data_directory — this is the 2.x name, verified against tauri 2.11.5.)
-            .data_directory(profile);
-
-    // Inject the nav overlay on every navigation (initial load + every
-    // subsequent same-page navigation). In Tauri 2 the on_navigation hook
-    // lives on the BUILDER (WebviewWindowBuilder::on_navigation, taking
-    // &Url and returning bool — false cancels the navigation), NOT on the
-    // built WebviewWindow. Verified against tauri 2.11.5 docs.
-    let app_for_hook = app.clone();
-    let builder = builder.on_navigation(move |_url: &Url| {
-        let _ = app_for_hook
-            .get_webview_window(BROWSER_WINDOW_LABEL)
-            .and_then(|w| w.eval(NAV_OVERLAY_INIT).ok());
-        true
-    });
-
-    let window = builder
+    WebviewWindowBuilder::new(&app, BROWSER_WINDOW_LABEL, WebviewUrl::External(parsed_url))
+        .title("Acute Browser")
+        .inner_size(1200.0, 800.0)
+        .min_inner_size(640.0, 480.0)
+        .resizable(true)
+        .fullscreen(false)
+        .decorations(true)
+        // WebView2 (Windows): the persistent user-data dir is where cookies +
+        // login state live. WebKit (macOS): same dir for website data.
+        // (Tauri 2 renamed the builder method from user_data_dir to
+        // data_directory — this is the 2.x name, verified against tauri 2.11.5.)
+        .data_directory(profile)
+        // R58-b: the nav overlay rides the INITIALIZATION script — WebView2's
+        // AddScriptToExecuteOnDocumentCreated runs NAV_OVERLAY_INIT at
+        // document-start on every new document (initial load, link clicks,
+        // redirects), before any page script. This replaces the old post-build
+        // `eval` AND the on_navigation re-`eval` (both fired before the page
+        // load committed, so on Windows the overlay never appeared). With the
+        // evals gone the on_navigation hook itself went too — its only job was
+        // the re-inject, and the `browser-navigated` event the panel consumes
+        // is emitted by `browser_tab_create`'s hook below, untouched.
+        .initialization_script(NAV_OVERLAY_INIT)
         .build()
         .map_err(|e| format!("WebviewWindowBuilder.build failed: {e}"))?;
-
-    // Also inject immediately (the first navigation may already be complete).
-    let _ = window.eval(NAV_OVERLAY_INIT);
 
     Ok(())
 }
@@ -302,6 +347,37 @@ pub fn is_browser_window_open(app: AppHandle) -> bool {
     app.get_webview_window(BROWSER_WINDOW_LABEL).is_some()
 }
 
+/// `open_external_url(url)` — open `url` in the OPERATING SYSTEM's default
+/// browser via tauri-plugin-shell's OS-level open (NOT the embedded
+/// WebView2: `window.open` from inside a webview is silently swallowed by
+/// WebView2/wry, so the handoff to the system browser must happen on the
+/// Rust side).
+///
+/// R58-b: the BrowserPanel's explicit "Open externally" affordance invokes
+/// this inside the Tauri shell. The URL is validated http/https FIRST
+/// (the `parse_http_url` contract — a webview-supplied string must never
+/// reach the OS handler with a file:/data:/tauri: scheme). This is the
+/// RUST-side `ShellExt::open` call, which does NOT go through the JS ACL
+/// permission wall (the shell plugin's own JS `open` command validates
+/// against the configured open scope; the Rust entry point takes the path
+/// unvalidated — our own scheme check is the guard), so no capability
+/// changes are needed.
+///
+/// (`Shell::open` is deprecated upstream in favor of tauri-plugin-opener;
+/// the opener plugin is not in our dependency tree while the shell plugin
+/// is already registered — the `allow(deprecated)` mirrors what the plugin
+/// does on its own `open` command.)
+#[tauri::command]
+#[allow(deprecated)]
+pub fn open_external_url(app: AppHandle, url: String) -> Result<(), String> {
+    // Validate BEFORE the OS ever sees it — only http/https leaves the app.
+    let parsed: Url = parse_http_url(&url)?;
+    use tauri_plugin_shell::ShellExt;
+    app.shell()
+        .open(parsed.as_str(), None)
+        .map_err(|e| e.to_string())
+}
+
 // ── ROUND-50 (R50-a): the native embedded browser (child webviews) ─────────
 //
 // One child webview per right-sidebar browser tab, hosted by the MAIN window
@@ -327,7 +403,9 @@ pub fn is_browser_window_open(app: AppHandle) -> bool {
 /// `async_runtime::spawn`, off the main thread, which is exactly the
 /// documented workaround. The other tab commands below only use
 /// fire-and-forget dispatchers (set_position/set_size/hide/show/navigate/
-/// eval) or inline-safe getters, so they stay sync like the R41 commands.
+/// eval) or inline-safe getters, so they stay sync. (R58-b later moved
+/// `open_browser_window` to async for exactly the same build-blocking
+/// reason — see its doc comment above.)
 #[tauri::command]
 pub async fn browser_tab_create(app: AppHandle, tab_id: String, url: String) -> Result<(), String> {
     let label = tab_label(&tab_id);

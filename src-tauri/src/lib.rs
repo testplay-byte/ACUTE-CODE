@@ -40,6 +40,10 @@ pub fn run() {
             browser::navigate_browser,
             browser::close_browser_window,
             browser::is_browser_window_open,
+            // ROUND-58 (R58-b): hand a URL to the OS default browser from
+            // Rust — the BrowserPanel's "Open externally" affordance
+            // (window.open inside WebView2 is silently swallowed by wry).
+            browser::open_external_url,
             // ROUND-50 (R50-a): the native embedded browser — one child
             // webview per browser tab inside the main window (Chromium/
             // WebView2 rendering, no proxy).

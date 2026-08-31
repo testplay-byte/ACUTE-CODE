@@ -2,6 +2,7 @@ import { Outlet, useLocation } from "react-router";
 import { useSidecarHealth } from "../../hooks/use-sidecar-health";
 import { useProjectChatStore } from "../../lib/project-chat-store";
 import { PushSetup } from "../../lib/push-setup";
+import { isTauri } from "../../lib/sidecar";
 import { AcuteLogo, Sidebar } from "./Sidebar";
 import { NotificationStreamStarter } from "../notifications/NotificationStreamStarter";
 import { Toaster } from "../notifications/Toaster";
@@ -35,7 +36,11 @@ export function AppShell() {
   const showFloatingHamburger = isChatRoute && !appSidebarVisible;
 
   return (
-    <div className="relative h-screen w-full overflow-hidden" style={{ backgroundColor: "var(--ac-bg)" }}>
+    // R58: h-full (was h-screen) — the App root now supplies the h-screen
+    // flex column with the custom TitleBar on top (Tauri only; null in web,
+    // where the single flex-1 child is the whole viewport, so this is
+    // visually identical). All visuals below are untouched.
+    <div className="relative h-full w-full overflow-hidden" style={{ backgroundColor: "var(--ac-bg)" }}>
       {/* ROUND-40: the notification SSE stream lives for the app's lifetime
           — boots once on mount, auto-reconnects on close, no-op in demo
           mode. Mounted HERE so it survives every route change. */}
@@ -104,8 +109,12 @@ export function AppShell() {
  */
 function FloatingSidebarToggle() {
   const setAppSidebarVisible = useProjectChatStore((s) => s.setAppSidebarVisible);
+  // R58: in Tauri the frameless window's 40px custom TitleBar owns the top
+  // strip — drop below it so the floating logo never collides with the bar
+  // (18px + 40px bar + a 12px breathing gap ≈ the sidebar's own top inset).
+  const top = isTauri() ? "top-[50px]" : "top-[18px]";
   return (
-    <div className="fixed top-[18px] left-[18px] z-50">
+    <div className={`fixed ${top} left-[18px] z-50`}>
       <AcuteLogo
         size={38}
         hoverToggle

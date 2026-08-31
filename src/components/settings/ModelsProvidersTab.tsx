@@ -4,6 +4,7 @@ import {
   AlertTriangle,
   ArrowLeft,
   Check,
+  Copy,
   Eye,
   EyeOff,
   Globe,
@@ -16,11 +17,12 @@ import {
   Zap,
 } from "lucide-react";
 import { useTimeoutClear } from "../../hooks/use-timeout-clear";
+import { useAgents } from "../../hooks/use-agents";
 import { useThemeStyles } from "../../lib/use-theme-styles";
 import { withAlpha } from "../dashboard/helpers";
 import { filterModelsForPicker, isFreeModelEntry, useSettingsStore } from "../../lib/settings-store";
 import { isTauri } from "../../lib/sidecar";
-import { nextFreeSlot } from "../../lib/key-pool";
+import { nextFreeSlot, revealProviderKeys } from "../../lib/key-pool";
 import { useScrollFade } from "../../lib/useScrollFade";
 import {
   createProvider,
@@ -149,6 +151,23 @@ const PRESETS: Array<{
 const formatLabel = (id: string | undefined): string =>
   API_FORMATS.find((f) => f.id === id)?.label ?? "Chat completions";
 
+/* ── ROUND-58 (R58-d): preset-provider scoping ──────────────────────────────
+ * Mirrors agent-core's RESERVED_PROVIDER_IDS (storage/providers.ts) — the
+ * seeded built-in adapters whose endpoint + wire format are FIXED. Client-side
+ * copy because the providers list wire format carries no "reserved" flag; the
+ * two constants move together (same review checklist as PRESETS above). */
+const PRESET_PROVIDER_IDS: ReadonlySet<string> = new Set([
+  "anthropic",
+  "openai",
+  "google",
+  "openrouter",
+]);
+
+/** The reserved OpenRouter id — the ONLY provider the served static catalog
+ * describes (its model ids are OpenRouter ids), so the catalog→list merge in
+ * ModelListSection scopes to it (R58-d: custom providers never get it). */
+const OPENROUTER_PROVIDER_ID = "openrouter";
+
 /* ── ROUND-50 (R50-d) shared micro-formatting ─────────────────────────────── */
 
 /** 256000 → "256k ctx", 1048576 → "1.048M ctx" (mono micro-badges). */
@@ -208,6 +227,9 @@ export function ModelsProvidersTab() {
   const queryClient = useQueryClient();
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [adding, setAdding] = useState(false);
+  // ROUND-58 (R58-d): the "Not configured" group — collapsed by default so
+  // seeded-but-keyless presets don't present themselves as live providers.
+  const [showUnconfigured, setShowUnconfigured] = useState(false);
 
   // ROUND-50 (R50-d): the provider-list scroll column — one of the two
   // INDEPENDENT scroll containers (the right detail pane is the other).
@@ -220,6 +242,18 @@ export function ModelsProvidersTab() {
   });
   // ROUND-37: ONE flat list — every provider together, order = created.
   const providers = providersQuery.data ?? [];
+
+  // ROUND-58 (R58-d): honest live/unconfigured split — a provider is
+  // "configured" when it holds a key OR was created by the user (custom
+  // rows are always real choices); seeded PRESET rows without a key go to
+  // the collapsed "Not configured" group (the owner: "Their providers are
+  // like which I haven't even configured… I haven't even configured them").
+  const configuredProviders = providers.filter(
+    (p) => p.hasKey || !PRESET_PROVIDER_IDS.has(p.id),
+  );
+  const unconfiguredProviders = providers.filter(
+    (p) => !p.hasKey && PRESET_PROVIDER_IDS.has(p.id),
+  );
 
   const invalidate = () =>
     void queryClient.invalidateQueries({ queryKey: ["settings-providers"] });
@@ -234,9 +268,12 @@ export function ModelsProvidersTab() {
     // settings content area (no shared page scroll); the LEFT provider list
     // and the RIGHT detail pane each scroll independently.
     <div className="flex h-full min-h-0 gap-4">
-      {/* ── LEFT: the FLAT provider list (ROUND-37: no groups) ─────────── */}
+      {/* ── LEFT: the provider list (ROUND-58 R58-d: content-adaptive height —
+          shrinks with few providers, keeps a 220px floor, still scrolls when
+          many — the owner: "It should adapt its height according to the content
+          inside it… There should be a minimum height"). ─────────────────── */}
       <div
-        className="w-[280px] shrink-0 min-h-0 rounded-[16px] border-[1.5px] overflow-hidden flex flex-col"
+        className="w-[280px] shrink-0 h-fit max-h-full min-h-[220px] rounded-[16px] border-[1.5px] overflow-hidden flex flex-col"
         style={{ background: styles.card, borderColor: styles.border }}
       >
         <div
@@ -257,7 +294,7 @@ export function ModelsProvidersTab() {
               No providers — add one below.
             </div>
           )}
-          {providers.map((p) => (
+          {configuredProviders.map((p) => (
             <ProviderListRow
               key={p.id}
               provider={p}
@@ -265,6 +302,46 @@ export function ModelsProvidersTab() {
               onClick={() => setSelectedId(p.id)}
             />
           ))}
+          {/* ROUND-58 (R58-d): seeded presets WITHOUT a key — reachable for
+              setup, but NOT presented as live. Collapsed by default. */}
+          {unconfiguredProviders.length > 0 && (
+            <div data-not-configured-group>
+              <button
+                onClick={() => setShowUnconfigured((v) => !v)}
+                aria-expanded={showUnconfigured}
+                aria-label={`Not configured providers (${unconfiguredProviders.length})`}
+                className="mt-1.5 w-full h-9 flex items-center gap-2 px-2.5 rounded-[10px] text-left transition-colors"
+                style={{ color: styles.textTertiary }}
+                onMouseEnter={(e) => (e.currentTarget.style.background = styles.subtleHover)}
+                onMouseLeave={(e) => (e.currentTarget.style.background = "transparent")}
+              >
+                <span
+                  className="text-[10px] font-bold uppercase tracking-widest"
+                  aria-hidden
+                >
+                  Not configured
+                </span>
+                <span className="font-mono text-[10px]">{unconfiguredProviders.length}</span>
+                <span
+                  className="ml-auto text-[9px] font-bold"
+                  style={{ transform: showUnconfigured ? "rotate(90deg)" : "none" }}
+                  aria-hidden
+                >
+                  ▸
+                </span>
+              </button>
+              {showUnconfigured &&
+                unconfiguredProviders.map((p) => (
+                  <ProviderListRow
+                    key={p.id}
+                    provider={p}
+                    active={p.id === selectedId}
+                    muted
+                    onClick={() => setSelectedId(p.id)}
+                  />
+                ))}
+            </div>
+          )}
         </div>
         {/* + Add provider → the preset-or-custom DIALOG (owner R37) */}
         <div className="shrink-0 p-1.5 border-t" style={{ borderColor: styles.border }}>
@@ -352,10 +429,14 @@ function DetailScrollArea({ children }: { children: React.ReactNode }) {
 function ProviderListRow({
   provider,
   active,
+  muted = false,
   onClick,
 }: {
   provider: ProviderView;
   active: boolean;
+  /** ROUND-58 (R58-d): rows in the "Not configured" group render dimmed —
+   * reachable for setup, but visually NOT presented as live. */
+  muted?: boolean;
   onClick: () => void;
 }) {
   const styles = useThemeStyles();
@@ -366,6 +447,7 @@ function ProviderListRow({
       className="relative w-full h-11 flex items-center gap-2.5 px-2.5 rounded-[10px] transition-colors text-left"
       style={{
         background: active ? withAlpha(styles.accent, 0.1) : "transparent",
+        opacity: muted ? 0.65 : 1,
       }}
       onMouseEnter={(e) => {
         if (!active) e.currentTarget.style.background = styles.subtleHover;
@@ -446,6 +528,21 @@ function ProviderDetailPane({
   const [baseUrlDraft, setBaseUrlDraft] = useState(provider.baseUrl ?? "");
   const [saveMsg, setSaveMsg] = useState<string | null>(null);
   const [confirmDelete, setConfirmDelete] = useState(false);
+  // ROUND-58 (R58-d): the primary-key reveal state — NEVER auto-fetched;
+  // fetched only on the explicit "show stored key" click, then rendered
+  // read-only with copy + hide (restores the rotate-key input).
+  const [revealState, setRevealState] = useState<
+    | { kind: "idle" }
+    | { kind: "loading" }
+    | { kind: "shown"; value: string }
+    | { kind: "error"; message: string }
+  >({ kind: "idle" });
+  // ROUND-58 (R58-d): the disable-confirm gate — when agents reference this
+  // provider, flipping it off asks first (their turns would fail).
+  const [confirmDisable, setConfirmDisable] = useState(false);
+  // ROUND-58 (R58-d): copy confirmations/errors color themselves (a copy
+  // failure must not inherit the save-mutation's green styling).
+  const [keyStatusIsError, setKeyStatusIsError] = useState(false);
   // ROUND-47 (R47-c1): the test surface got explicit selectors — WHICH key
   // (primary or a held pool slot) and WHICH model (or reachability-only) —
   // instead of an invisible "primary key, no model" default.
@@ -463,6 +560,19 @@ function ProviderDetailPane({
     queryFn: () => fetchProviderModelConfig(provider.id),
   });
   const models = modelsQuery.data ?? [];
+
+  // ROUND-58 (R58-d): the agent registry — powers the disable warning ("N
+  // agent(s) use this provider"). Uses the standard agents hook (fixture
+  // adapter in demo mode, HTTP otherwise); never blocks the pane.
+  const agentsQuery = useAgents(false);
+  const agentsUsingProvider = (agentsQuery.data ?? []).filter(
+    (a) => a.providerId === provider.id,
+  );
+  // ROUND-58 (R58-d): preset providers (the seeded built-ins) — endpoint and
+  // wire format are FIXED, so the Base URL input + API-format grid are hidden
+  // (the owner: "there is actually no need to show the API format options or
+  // the base URL either… It should only be shown for custom providers").
+  const isPreset = PRESET_PROVIDER_IDS.has(provider.id);
 
   // ROUND-47 (R47-c1): the key-pool listing feeds the test key selector.
   // SAME query key as KeyPoolSection's — one shared cache entry per provider.
@@ -560,6 +670,39 @@ function ProviderDetailPane({
     }
   };
 
+  // ROUND-58 (R58-d): fetch + display the ACTUAL stored primary key (the
+  // owner's reveal demand). Only ever invoked from the explicit eye click —
+  // never on mount. A missing slot-0 answer is surfaced honestly.
+  const revealStoredKey = async () => {
+    setRevealState({ kind: "loading" });
+    try {
+      const keys = await revealProviderKeys(provider.id);
+      const primary = keys.find((k) => k.slot === 0);
+      if (primary === undefined) {
+        setRevealState({ kind: "error", message: "No key stored for this provider." });
+        return;
+      }
+      setRevealState({ kind: "shown", value: primary.value });
+    } catch (err) {
+      setRevealState({ kind: "error", message: err instanceof Error ? err.message : String(err) });
+    }
+  };
+
+  // ROUND-58 (R58-d): clipboard helper for revealed keys — the transient
+  // confirmation rides the leak-safe scheduler (no bare setTimeout).
+  const copyToClipboard = async (value: string, confirmation: string) => {
+    try {
+      await navigator.clipboard.writeText(value);
+      setKeyStatusIsError(false);
+      setKeyStatus(confirmation);
+      resetAfter(() => setKeyStatus(null), 1500);
+    } catch {
+      setKeyStatusIsError(true);
+      setKeyStatus("Copy failed — the clipboard is unavailable in this context.");
+      resetAfter(() => setKeyStatus(null), 1500);
+    }
+  };
+
   const inputStyle = {
     background: styles.bg,
     borderColor: styles.border,
@@ -628,7 +771,10 @@ function ProviderDetailPane({
             {provider.baseUrl ?? "no url"} · {formatLabel(provider.apiFormat)}
           </span>
         </div>
-        {/* Enabled badge + key badge + Enable/Disable (every provider) */}
+        {/* Enabled badge + key badge + the enable/disable toggle (every
+            provider — ROUND-58 R58-d: a proper SWITCH, not the old bare
+            underlined text link; disabling a provider with agents on it asks
+            first). */}
         <span
           className="px-2 py-0.5 rounded-full text-[10px] font-bold"
           style={{
@@ -647,13 +793,51 @@ function ProviderDetailPane({
         >
           {provider.hasKey ? "● Key stored" : "○ No key"}
         </span>
-        <button
-          onClick={() => saveDetails.mutate({ enabled: !provider.enabled })}
-          className="text-[11px] font-bold underline"
-          style={{ color: styles.textSecondary }}
-        >
-          {provider.enabled ? "Disable" : "Enable"}
-        </button>
+        {/* ROUND-58 (R58-d): the enable/disable toggle. Enabling is free and
+            immediate; DISABLING gates through the confirm box below when any
+            agent still references the provider. */}
+        <span className="flex items-center gap-1.5">
+          <span className="text-[11px] font-bold" style={{ color: styles.textSecondary }}>
+            {provider.enabled ? "Enabled" : "Disabled"}
+          </span>
+          <button
+            type="button"
+            role="switch"
+            aria-checked={provider.enabled}
+            aria-label={`Toggle provider ${provider.name}`}
+            title={
+              provider.enabled
+                ? agentsUsingProvider.length > 0
+                  ? `${agentsUsingProvider.length} agent(s) use this provider`
+                  : "Disable this provider"
+                : "Re-enable this provider"
+            }
+            disabled={saveDetails.isPending}
+            onClick={() => {
+              if (provider.enabled && agentsUsingProvider.length > 0) {
+                // Agents reference it — ask before breaking their turns.
+                setConfirmDisable(true);
+                return;
+              }
+              saveDetails.mutate({ enabled: !provider.enabled });
+            }}
+            className="relative h-6 w-11 shrink-0 cursor-pointer rounded-full transition-colors disabled:cursor-wait disabled:opacity-60"
+            style={{
+              background: provider.enabled ? styles.accent : withAlpha(styles.text, 0.18),
+              border: `1.5px solid ${provider.enabled ? styles.accent : styles.border}`,
+            }}
+          >
+            <span
+              className="absolute top-1/2 block rounded-full bg-white shadow transition-all"
+              style={{
+                left: provider.enabled ? "calc(100% - 21px)" : "3px",
+                height: 18,
+                width: 18,
+                transform: "translateY(-50%)",
+              }}
+            />
+          </button>
+        </span>
         {saveMsg && (
           <span className="text-[11px] font-bold" style={{ color: styles.accent }}>
             {saveMsg}
@@ -661,108 +845,235 @@ function ProviderDetailPane({
         )}
       </div>
 
+      {/* ROUND-58 (R58-d): the disable confirmation — an inline warning box
+          (no window.confirm), shown only when agents use this provider. */}
+      {confirmDisable && (
+        <div
+          role="alert"
+          data-confirm-disable
+          className="rounded-[16px] border-[1.5px] p-4 flex items-start gap-3 flex-wrap"
+          style={{
+            background: withAlpha("#ef4444", 0.04),
+            borderColor: withAlpha("#ef4444", 0.35),
+          }}
+        >
+          <span
+            className="w-8 h-8 shrink-0 rounded-[10px] grid place-items-center"
+            style={{ background: withAlpha("#ef4444", 0.1), color: "#ef4444" }}
+            aria-hidden
+          >
+            <AlertTriangle size={14} />
+          </span>
+          <div className="min-w-0 flex-1">
+            <p className="text-[12px] font-bold" style={{ color: styles.text }}>
+              {agentsUsingProvider.length} agent{agentsUsingProvider.length === 1 ? "" : "s"} use this
+              provider — their turns will fail until it is re-enabled. Disable anyway?
+            </p>
+            <p className="mt-0.5 text-[11px]" style={{ color: styles.textTertiary }}>
+              {agentsUsingProvider.map((a) => a.name).join(", ")}
+            </p>
+          </div>
+          <span className="flex items-center gap-2 shrink-0">
+            <button
+              onClick={() => setConfirmDisable(false)}
+              className="h-8 px-3.5 rounded-[10px] border-[1.5px] text-[12px] font-bold"
+              style={{ borderColor: styles.border, color: styles.textSecondary }}
+            >
+              Cancel
+            </button>
+            <button
+              onClick={() => {
+                setConfirmDisable(false);
+                saveDetails.mutate({ enabled: false });
+              }}
+              className="h-8 px-3.5 rounded-[10px] text-[12px] font-bold"
+              style={{ background: "#ef4444", color: "#fff" }}
+            >
+              Disable anyway
+            </button>
+          </span>
+        </div>
+      )}
+
       {/* ── Connection: base URL / API format / key + test ─────────────── */}
       <div
         className="rounded-[16px] border-[1.5px] p-4 md:p-5 flex flex-col gap-4"
         style={{ background: styles.card, borderColor: styles.border }}
       >
         <SectionLabel>Connection</SectionLabel>
-        {/* Base URL (editable for ALL — owner R37) */}
-        <div>
-          <label className="mb-1.5 block text-[11px] font-bold" style={{ color: styles.textSecondary }}>
-            Base URL
-          </label>
-          <div className="flex gap-2">
-            <input
-              value={baseUrlDraft}
-              onChange={(e) => setBaseUrlDraft(e.target.value)}
-              aria-label="Base URL"
-              className="h-10 flex-1 min-w-0 rounded-[10px] border-[1.5px] px-3 font-mono text-[12px] outline-none"
-              style={inputStyle}
-            />
-            {baseUrlDraft.trim() !== (provider.baseUrl ?? "") && (
-              <button
-                onClick={() => saveDetails.mutate({ baseUrl: baseUrlDraft.trim() })}
-                className="h-10 px-4 rounded-[10px] text-[12px] font-bold"
-                style={{ background: styles.accent, color: styles.accentText }}
-              >
-                Save
-              </button>
-            )}
-          </div>
-        </div>
-        {/* API format — ROUND-37: the REAL selector (3 formats) */}
-        <div>
-          <label className="mb-1.5 block text-[11px] font-bold" style={{ color: styles.textSecondary }}>
-            API format
-          </label>
-          <div className="grid grid-cols-3 gap-2">
-            {API_FORMATS.map((f) => {
-              const active = (provider.apiFormat ?? "chat-completions") === f.id;
-              return (
-                <button
-                  key={f.id}
-                  onClick={() => !active && saveDetails.mutate({ apiFormat: f.id })}
-                  aria-pressed={active}
-                  title={f.hint}
-                  className="h-10 rounded-[10px] border-[1.5px] text-[12px] font-bold transition-colors"
-                  style={{
-                    borderColor: active ? withAlpha(styles.accent, 0.55) : styles.border,
-                    background: active ? withAlpha(styles.accent, 0.09) : styles.bg,
-                    color: active ? styles.accent : styles.textSecondary,
-                  }}
-                >
-                  {f.label}
-                </button>
-              );
-            })}
-          </div>
-          <p className="mt-1.5 text-[10.5px]" style={{ color: styles.textTertiary }}>
-            {API_FORMATS.find((f) => f.id === (provider.apiFormat ?? "chat-completions"))?.hint}
+        {/* ROUND-58 (R58-d): PRESET providers (the seeded built-ins) hide the
+            Base URL input + API-format grid — endpoint and format are fixed
+            (the owner: "It should only be shown for custom providers"). The
+            API-key input + Test connection below stay for EVERY provider. */}
+        {isPreset ? (
+          <p className="text-[10.5px]" style={{ color: styles.textTertiary }} data-preset-note>
+            Preset provider — endpoint and format are fixed.
           </p>
-        </div>
-        {/* API key */}
+        ) : (
+          <>
+            {/* Base URL (editable — custom providers; owner R37) */}
+            <div>
+              <label className="mb-1.5 block text-[11px] font-bold" style={{ color: styles.textSecondary }}>
+                Base URL
+              </label>
+              <div className="flex gap-2">
+                <input
+                  value={baseUrlDraft}
+                  onChange={(e) => setBaseUrlDraft(e.target.value)}
+                  aria-label="Base URL"
+                  className="h-10 flex-1 min-w-0 rounded-[10px] border-[1.5px] px-3 font-mono text-[12px] outline-none"
+                  style={inputStyle}
+                />
+                {baseUrlDraft.trim() !== (provider.baseUrl ?? "") && (
+                  <button
+                    onClick={() => saveDetails.mutate({ baseUrl: baseUrlDraft.trim() })}
+                    className="h-10 px-4 rounded-[10px] text-[12px] font-bold"
+                    style={{ background: styles.accent, color: styles.accentText }}
+                  >
+                    Save
+                  </button>
+                )}
+              </div>
+            </div>
+            {/* API format — ROUND-37: the REAL selector (3 formats) */}
+            <div>
+              <label className="mb-1.5 block text-[11px] font-bold" style={{ color: styles.textSecondary }}>
+                API format
+              </label>
+              <div className="grid grid-cols-3 gap-2">
+                {API_FORMATS.map((f) => {
+                  const active = (provider.apiFormat ?? "chat-completions") === f.id;
+                  return (
+                    <button
+                      key={f.id}
+                      onClick={() => !active && saveDetails.mutate({ apiFormat: f.id })}
+                      aria-pressed={active}
+                      title={f.hint}
+                      className="h-10 rounded-[10px] border-[1.5px] text-[12px] font-bold transition-colors"
+                      style={{
+                        borderColor: active ? withAlpha(styles.accent, 0.55) : styles.border,
+                        background: active ? withAlpha(styles.accent, 0.09) : styles.bg,
+                        color: active ? styles.accent : styles.textSecondary,
+                      }}
+                    >
+                      {f.label}
+                    </button>
+                  );
+                })}
+              </div>
+              <p className="mt-1.5 text-[10.5px]" style={{ color: styles.textTertiary }}>
+                {API_FORMATS.find((f) => f.id === (provider.apiFormat ?? "chat-completions"))?.hint}
+              </p>
+            </div>
+          </>
+        )}
+        {/* API key — ROUND-58 (R58-d): gains the stored-key REVEAL action
+            (the owner's explicit demand — "I should be able to… see the API key
+            there, every single one of the API keys, without any issues").
+            Fetched ONLY on the explicit click, never on mount. */}
         <div>
           <label className="mb-1.5 block text-[11px] font-bold" style={{ color: styles.textSecondary }}>
             API key {provider.hasKey && <span style={{ color: "#22c55e" }}>· stored</span>}
           </label>
-          <div className="flex gap-2">
-            <div className="relative flex-1 min-w-0">
+          {revealState.kind === "shown" ? (
+            // The revealed stored key: read-only display + copy + hide.
+            <div className="flex gap-2" data-revealed-key>
               <input
-                type={showKey ? "text" : "password"}
-                value={keyInput}
-                onChange={(e) => setKeyInput(e.target.value)}
-                placeholder={provider.hasKey ? "A key is stored — enter a new one to rotate" : "sk-…"}
-                aria-label="API key"
-                className="h-10 w-full rounded-[10px] border-[1.5px] px-3 pr-10 font-mono text-[12px] outline-none"
-                style={inputStyle}
+                type="text"
+                readOnly
+                value={revealState.value}
+                aria-label="Stored API key (revealed)"
+                title={revealState.value}
+                onFocus={(e) => e.currentTarget.select()}
+                className="h-10 flex-1 min-w-0 rounded-[10px] border-[1.5px] px-3 font-mono text-[12px] outline-none"
+                style={{ ...inputStyle, borderColor: withAlpha(styles.accent, 0.45) }}
               />
               <button
-                onClick={() => setShowKey((v) => !v)}
-                aria-label={showKey ? "Hide key" : "Show key"}
-                title={showKey ? "Hide" : "Show"}
-                className="absolute right-2 top-1/2 -translate-y-1/2 w-6 h-6 grid place-items-center rounded-md"
-                style={{ color: styles.textTertiary }}
+                onClick={() => void copyToClipboard(revealState.value, "Key copied to clipboard.")}
+                aria-label="Copy stored key"
+                title="Copy the stored key"
+                className="h-10 px-3.5 rounded-[10px] border-[1.5px] text-[12px] font-bold flex items-center gap-1.5 shrink-0"
+                style={{ borderColor: styles.border, color: styles.textSecondary }}
               >
-                {showKey ? <EyeOff size={13} /> : <Eye size={13} />}
+                <Copy size={12} /> Copy
+              </button>
+              <button
+                onClick={() => setRevealState({ kind: "idle" })}
+                aria-label="Hide stored key"
+                title="Back to the rotate-key input"
+                className="h-10 px-3.5 rounded-[10px] border-[1.5px] text-[12px] font-bold shrink-0"
+                style={{ borderColor: styles.border, color: styles.textSecondary }}
+              >
+                Hide
               </button>
             </div>
-            <button
-              onClick={() => keyInput.trim() && saveKey.mutate(keyInput.trim())}
-              disabled={!keyInput.trim() || saveKey.isPending}
-              className="h-10 px-4 rounded-[10px] text-[12px] font-bold disabled:opacity-50"
-              style={{ background: styles.accent, color: styles.accentText }}
-            >
-              {saveKey.isPending ? "Saving…" : "Save key"}
-            </button>
-          </div>
+          ) : (
+            <div className="flex gap-2">
+              <div className="relative flex-1 min-w-0">
+                <input
+                  type={showKey ? "text" : "password"}
+                  value={keyInput}
+                  onChange={(e) => setKeyInput(e.target.value)}
+                  placeholder={provider.hasKey ? "A key is stored — enter a new one to rotate" : "sk-…"}
+                  aria-label="API key"
+                  className="h-10 w-full rounded-[10px] border-[1.5px] px-3 pr-[56px] font-mono text-[12px] outline-none"
+                  style={inputStyle}
+                />
+                {/* ROUND-58 (R58-d): the stored-key reveal eye — fetches the
+                    ACTUAL stored value from the reveal route (explicit click
+                    only; the visibility eye only toggles this input's type). */}
+                {provider.hasKey && (
+                  <button
+                    onClick={() => void revealStoredKey()}
+                    disabled={revealState.kind === "loading"}
+                    aria-label="Show stored key"
+                    title="Show the stored key"
+                    className="absolute right-8 top-1/2 -translate-y-1/2 w-6 h-6 grid place-items-center rounded-md disabled:opacity-50"
+                    style={{ color: styles.textTertiary }}
+                  >
+                    {revealState.kind === "loading" ? (
+                      <RefreshCw size={13} className="animate-spin" />
+                    ) : (
+                      <Eye size={13} />
+                    )}
+                  </button>
+                )}
+                <button
+                  onClick={() => setShowKey((v) => !v)}
+                  aria-label={showKey ? "Hide key" : "Show key"}
+                  title={showKey ? "Hide" : "Show"}
+                  className="absolute right-2 top-1/2 -translate-y-1/2 w-6 h-6 grid place-items-center rounded-md"
+                  style={{ color: styles.textTertiary }}
+                >
+                  {showKey ? <EyeOff size={13} /> : <Eye size={13} />}
+                </button>
+              </div>
+              <button
+                onClick={() => keyInput.trim() && saveKey.mutate(keyInput.trim())}
+                disabled={!keyInput.trim() || saveKey.isPending}
+                className="h-10 px-4 rounded-[10px] text-[12px] font-bold disabled:opacity-50"
+                style={{ background: styles.accent, color: styles.accentText }}
+              >
+                {saveKey.isPending ? "Saving…" : "Save key"}
+              </button>
+            </div>
+          )}
+          {revealState.kind === "error" && (
+            <p className="mt-1.5 text-[11px] break-all" style={{ color: "#ef4444" }} role="alert">
+              {revealState.message}
+            </p>
+          )}
           {keyStatus && (
-            <p className="mt-1.5 text-[11px]" style={{ color: saveKey.isError ? "#ef4444" : "#22c55e" }}>
+            <p
+              className="mt-1.5 text-[11px]"
+              style={{ color: saveKey.isError || keyStatusIsError ? "#ef4444" : "#22c55e" }}
+            >
               {keyStatus}
             </p>
           )}
           <p className="mt-1 text-[10.5px]" style={{ color: styles.textTertiary }}>
-            Stored in the OS secure store — never in the database or logs.
+            Stored in the OS secure store — never in the database or logs; the reveal view (R58-d)
+            fetches it only on your explicit click.
           </p>
           {/* ROUND-47 (R47-c1): browser-dev honesty — the sidecar keyring is
               in-memory, so browser-stored keys do not survive a restart. */}
@@ -874,6 +1185,7 @@ function ProviderDetailPane({
           isError: catalogQuery.isError,
         }}
         staticCatalog={staticCatalog}
+        includeCatalog={provider.id === OPENROUTER_PROVIDER_ID}
       />
 
       {/* ── Danger zone: delete provider (moved out of the header — R50-d) */}
@@ -1304,11 +1616,17 @@ function ModelListSection({
   models,
   catalog,
   staticCatalog,
+  includeCatalog,
 }: {
   providerId: string;
   models: ProviderModelConfig[];
   catalog: ProviderCatalogState;
   staticCatalog: CatalogModel[];
+  /** ROUND-58 (R58-d): whether the LIVE catalog entries merge into the LIST
+   * rows — scoped to the reserved openrouter id (the only provider the
+   * static catalog describes); custom providers list their configured rows
+   * only (their live catalog still feeds the "Add models" picker). */
+  includeCatalog: boolean;
 }) {
   const styles = useThemeStyles();
   const queryClient = useQueryClient();
@@ -1325,7 +1643,16 @@ function ModelListSection({
 
   const catalogIds = catalog.entries.map((entry) => entry.id);
 
-  const merged = mergeCatalogIntoModels(models, catalogIds, staticCatalog);
+  // ROUND-58 (R58-d): the catalog→list merge is SCOPED — only the reserved
+  // openrouter provider merges its live catalog into the list rows (the
+  // old code merged the static OpenRouter catalog into EVERY provider's
+  // list, leaking openrouter model ids into custom providers). The picker
+  // below still uses the provider's OWN live catalog either way.
+  const merged = mergeCatalogIntoModels(
+    models,
+    includeCatalog ? catalogIds : [],
+    staticCatalog,
+  );
   const visible = filterModelsForPicker(merged, modelsFreeOnly);
   const freeCount = filterModelsForPicker(merged, true).length;
 
@@ -2235,6 +2562,14 @@ export function KeyPoolSection({ providerId, hideLabel = false }: { providerId: 
   const [newKey, setNewKey] = useState("");
   const [showNew, setShowNew] = useState(false);
   const [msg, setMsg] = useState<string | null>(null);
+  // ROUND-58 (R58-d): per-row revealed pool values — masked by default; the
+  // reveal fetch is ONE call per provider (the route returns every slot) and
+  // its result is CACHED here, while the SHOWING state is a per-row toggle.
+  // Never auto-fetched on mount.
+  const [revealedValues, setRevealedValues] = useState<Record<number, string>>({});
+  const [revealedRows, setRevealedRows] = useState<Set<number>>(new Set());
+  const [revealLoading, setRevealLoading] = useState(false);
+  const [revealError, setRevealError] = useState<string | null>(null);
 
   // Same query key the detail pane's test-key selector uses — one cache.
   const poolQuery = useQuery({
@@ -2247,6 +2582,15 @@ export function KeyPoolSection({ providerId, hideLabel = false }: { providerId: 
   const invalidate = () => {
     void queryClient.invalidateQueries({ queryKey: ["key-pool", providerId] });
     void queryClient.invalidateQueries({ queryKey: ["settings-providers"] });
+  };
+
+  // ROUND-58 (R58-d) correction: pool mutations (add/remove) invalidate the
+  // cached reveal map — a value fetched BEFORE the mutation could otherwise
+  // linger as a STALE reveal (removed-and-re-added slots with a new key).
+  // Rows snap back to masked; the next reveal re-fetches (one call).
+  const resetRevealCache = () => {
+    setRevealedValues({});
+    setRevealedRows(new Set());
   };
 
   const addSlot = useMutation({
@@ -2272,6 +2616,7 @@ export function KeyPoolSection({ providerId, hideLabel = false }: { providerId: 
       setNewKey("");
       setMsg("Slot added.");
       resetAfter(() => setMsg(null), 1500);
+      resetRevealCache();
       invalidate();
     },
     onError: (err: Error) => setMsg(err.message),
@@ -2279,9 +2624,69 @@ export function KeyPoolSection({ providerId, hideLabel = false }: { providerId: 
 
   const removeSlot = useMutation({
     mutationFn: (slot: number) => removeKeyPoolSlot(providerId, slot),
-    onSuccess: invalidate,
+    onSuccess: () => {
+      resetRevealCache();
+      invalidate();
+    },
     onError: (err: Error) => setMsg(err.message),
   });
+
+  // ROUND-58 (R58-d): reveal one row's FULL value. The reveal route returns
+  // every held slot in ONE response — the FIRST reveal fetches it and caches
+  // the map (zero extra calls afterwards); each row's showing state is its
+  // own toggle. Never called on mount.
+  const revealSlot = async (slot: number) => {
+    if (revealedRows.has(slot)) {
+      // Toggle off — mask again.
+      setRevealedRows((prev) => {
+        const next = new Set(prev);
+        next.delete(slot);
+        return next;
+      });
+      return;
+    }
+    // The up-to-date slot→value map this call resolves against (the freshly
+    // fetched one on the first reveal; the cached state afterwards — never
+    // the stale closure value across the await).
+    let map = revealedValues;
+    // Re-fetch when the cache is empty OR stale for THIS slot: the masked
+    // listing says the slot HOLDS a key but the cached reveal predates it
+    // (a slot added after the first reveal — cache-miss, not "no key").
+    const listingSaysHeld = slots.find((k) => k.slot === slot)?.hasKey === true;
+    if (Object.keys(map).length === 0 || (map[slot] === undefined && listingSaysHeld)) {
+      // First reveal this mount (or a cache-miss) — one fetch fills it.
+      setRevealError(null);
+      setRevealLoading(true);
+      try {
+        const keys = await revealProviderKeys(providerId);
+        map = {};
+        for (const k of keys) map[k.slot] = k.value;
+        setRevealedValues(map);
+      } catch (err) {
+        setRevealError(err instanceof Error ? err.message : String(err));
+        return;
+      } finally {
+        setRevealLoading(false);
+      }
+    }
+    if (map[slot] === undefined) {
+      // Fetched/cached, but this slot holds no key — honest.
+      setRevealError(`No key stored in slot ${slot}.`);
+      return;
+    }
+    setRevealedRows((prev) => new Set(prev).add(slot));
+  };
+
+  const copySlotValue = async (value: string) => {
+    try {
+      await navigator.clipboard.writeText(value);
+      setMsg("Key copied to clipboard.");
+      resetAfter(() => setMsg(null), 1500);
+    } catch {
+      setMsg("Copy failed — the clipboard is unavailable in this context.");
+      resetAfter(() => setMsg(null), 1500);
+    }
+  };
 
   return (
     <div>
@@ -2296,29 +2701,78 @@ export function KeyPoolSection({ providerId, hideLabel = false }: { providerId: 
             No pool slots — sub-agents share the primary key (rate-limited by the per-key setting).
           </div>
         )}
-        {slots.map((k) => (
-          <div key={k.slot} className="flex items-center gap-2 px-3 py-2 border-b last:border-b-0" style={{ borderColor: styles.borderSubtle }}>
-            <span className="text-[11px] font-mono font-bold shrink-0" style={{ color: styles.textSecondary }}>
-              SLOT {k.slot}
-            </span>
-            <span className="font-mono text-[11px] flex-1 min-w-0 truncate" style={{ color: styles.textTertiary }}>
-              {k.masked ?? "—"}
-            </span>
-            <button
-              onClick={() => {
-                if (window.confirm(`Remove pool slot ${k.slot}?`)) removeSlot.mutate(k.slot);
-              }}
-              aria-label={`Remove slot ${k.slot}`}
-              title="Remove slot"
-              className="w-6 h-6 grid place-items-center rounded-md shrink-0"
-              style={{ color: styles.textTertiary }}
-              onMouseEnter={(e) => (e.currentTarget.style.background = withAlpha("#ef4444", 0.12))}
-              onMouseLeave={(e) => (e.currentTarget.style.background = "transparent")}
-            >
-              <Trash2 size={11} />
-            </button>
-          </div>
-        ))}
+        {slots.map((k) => {
+          const revealed = revealedRows.has(k.slot) ? revealedValues[k.slot] : undefined;
+          return (
+            <div key={k.slot} data-pool-slot={k.slot} className="flex items-center gap-2 px-3 py-2 border-b last:border-b-0" style={{ borderColor: styles.borderSubtle }}>
+              <span className="text-[11px] font-mono font-bold shrink-0" style={{ color: styles.textSecondary }}>
+                SLOT {k.slot}
+              </span>
+              {revealed !== undefined ? (
+                // ROUND-58 (R58-d): the revealed full value — mono, break-all,
+                // with a copy affordance. Masked again via the eye button.
+                <span
+                  className="font-mono text-[11px] flex-1 min-w-0 break-all"
+                  style={{ color: styles.textSecondary }}
+                  data-revealed-value
+                >
+                  {revealed}
+                </span>
+              ) : (
+                <span className="font-mono text-[11px] flex-1 min-w-0 truncate" style={{ color: styles.textTertiary }}>
+                  {k.masked ?? "—"}
+                </span>
+              )}
+              {/* ROUND-58 (R58-d): the reveal eye — only rows that HOLD a key
+                  get it (a keyless row has nothing to reveal). */}
+              {k.hasKey && (
+                <button
+                  onClick={() => void revealSlot(k.slot)}
+                  // ROUND-58 (R58-d): disabled during ANY reveal fetch (the
+                  // first reveal AND a cache-miss re-fetch) — no double-click
+                  // can fire two concurrent fetches.
+                  disabled={revealLoading}
+                  aria-label={revealed !== undefined ? `Hide slot ${k.slot} key` : `Reveal slot ${k.slot} key`}
+                  title={revealed !== undefined ? "Mask again" : "Show the full key"}
+                  className="w-6 h-6 grid place-items-center rounded-md shrink-0 disabled:opacity-50"
+                  style={{ color: styles.textTertiary }}
+                >
+                  {revealLoading ? (
+                    <RefreshCw size={11} className="animate-spin" />
+                  ) : revealed !== undefined ? (
+                    <EyeOff size={11} />
+                  ) : (
+                    <Eye size={11} />
+                  )}
+                </button>
+              )}
+              {revealed !== undefined && (
+                <button
+                  onClick={() => void copySlotValue(revealed)}
+                  aria-label={`Copy slot ${k.slot} key`}
+                  title="Copy the full key"
+                  className="w-6 h-6 grid place-items-center rounded-md shrink-0"
+                  style={{ color: styles.textTertiary }}
+                >
+                  <Copy size={11} />
+                </button>
+              )}
+              <button
+                onClick={() => {
+                  if (window.confirm(`Remove pool slot ${k.slot}?`)) removeSlot.mutate(k.slot);
+                }}
+                aria-label={`Remove slot ${k.slot}`}
+                title="Remove slot"
+                className="w-6 h-6 grid place-items-center rounded-md shrink-0"
+                style={{ color: styles.textTertiary }}
+                onMouseEnter={(e) => (e.currentTarget.style.background = withAlpha("#ef4444", 0.12))}
+                onMouseLeave={(e) => (e.currentTarget.style.background = "transparent")}
+              >
+                <Trash2 size={11} />
+              </button>
+            </div>
+          );
+        })}
         {/* Add slot row */}
         <div className="flex items-center gap-2 px-3 py-2 border-t" style={{ borderColor: styles.borderSubtle, background: withAlpha(styles.accent, 0.03) }}>
           <div className="relative flex-1 min-w-0">
@@ -2351,6 +2805,11 @@ export function KeyPoolSection({ providerId, hideLabel = false }: { providerId: 
         </div>
       </div>
       {msg && <p className="mt-1.5 text-[11px]" style={{ color: addSlot.isError || removeSlot.isError ? "#ef4444" : "#22c55e" }}>{msg}</p>}
+      {revealError && (
+        <p className="mt-1.5 text-[11px] break-all" style={{ color: "#ef4444" }} role="alert">
+          {revealError}
+        </p>
+      )}
       <p className="mt-1 text-[10.5px]" style={{ color: styles.textTertiary }}>
         Sub-agents prefer pool slots (least-loaded first) so the primary key serves your main chats.
       </p>

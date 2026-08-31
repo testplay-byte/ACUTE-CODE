@@ -24,6 +24,7 @@ import {
   nativeTabUrl,
   nativeTabsCloseAll,
   onBrowserNavigated,
+  openExternalUrl,
 } from "../../lib/native-browser";
 
 const AREA = { left: 80, top: 120, width: 400, height: 500 };
@@ -123,6 +124,9 @@ describe("native-browser bridge (R50-a wrappers)", () => {
     await expect(nativeTabClose("t1")).resolves.toBeUndefined();
     await expect(nativeTabsCloseAll()).resolves.toBeUndefined();
     await expect(nativeTabUrl("t1")).resolves.toBeNull();
+    // R58-b: the OS-browser handoff degrades to a no-op too (web mode keeps
+    // its own window.open path).
+    await expect(openExternalUrl("https://example.com")).resolves.toBeUndefined();
     // The event subscription is a permanent no-op and returns an unlisten.
     let fired = 0;
     const unlisten = onBrowserNavigated(() => {
@@ -145,6 +149,9 @@ describe("native-browser bridge (R50-a wrappers)", () => {
     await nativeTabClose("tab-1");
     await nativeTabsCloseAll();
     await nativeTabUrl("tab-1");
+    // R58-b: the BrowserPanel's "Open externally" affordance (OS default
+    // browser handoff — window.open inside WebView2 is swallowed).
+    await openExternalUrl("https://example.com/externally");
 
     expect(calls).toEqual([
       { cmd: "browser_tab_create", args: { tabId: "tab-1", url: "https://example.com" } },
@@ -155,6 +162,7 @@ describe("native-browser bridge (R50-a wrappers)", () => {
       { cmd: "browser_tab_close", args: { tabId: "tab-1" } },
       { cmd: "browser_tabs_close_all", args: undefined },
       { cmd: "browser_tab_url", args: { tabId: "tab-1" } },
+      { cmd: "open_external_url", args: { url: "https://example.com/externally" } },
     ]);
   });
 

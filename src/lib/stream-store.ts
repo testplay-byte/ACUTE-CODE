@@ -40,6 +40,46 @@ export interface LiveTurn {
   streamThinking: string;
   /** Terminal state after a stream error — frozen "Stopped" section. */
   stopped: boolean;
+  /** ROUND-58 (R58-cf): the turn ended because the USER stopped it (the Stop
+   * button / the server's {type:"stopped"} frame). NOT an error: the panel
+   * renders the quiet "Stopped by user" card + the composer's Continue
+   * affordance, and the live turn is handed to the folded log on refetch
+   * (the backend flushes the partial text on stop). Set IMMEDIATELY by
+   * abortStream so the UI can render the stopped state before any frame
+   * arrives. */
+  stoppedByUser: boolean;
+  /** ROUND-58 (R58-cf): in-flight tool-call ARGUMENT streaming — one entry
+   * per `tool-input-start` frame, grown by the matching tool-input-delta
+   * chunks. Removed the moment the final tool-call frame lands (the raw is
+   * attached to the pending ToolUseEntry as liveInput) or the tool-result
+   * settles it. WorkingSection renders live write previews from these. */
+  streamingToolInputs: StreamingToolInput[];
+}
+
+/** ROUND-58 (R58-cf): one accumulating tool-args JSON raw (see LiveTurn.streamingToolInputs). */
+export interface StreamingToolInput {
+  toolCallId: string;
+  toolName: string;
+  /** Concatenated tool-input-delta fragments — a PREFIX of the call's JSON
+   * args (capped at MAX_STREAMING_INPUT_BYTES, head-kept: `path` precedes
+   * `content` in write_file/edit_file args, so the head carries the path). */
+  raw: string;
+}
+
+/** ROUND-58 (R58-cf): defensive cap on an accumulated tool-args raw (~256KB —
+ * the extractor only reads path/content/newString; anything past this is
+ * pathological model output, never a real file preview). */
+const MAX_STREAMING_INPUT_BYTES = 256 * 1024;
+
+/** Append one tool-input delta to an accumulating raw, keeping the HEAD past
+ * the cap (unlike the live terminal tail, the path argument sits at the head
+ * of the JSON — tail-keeping would orphan it). */
+function appendStreamingInput(prev: string, delta: string): string {
+  if (prev.length >= MAX_STREAMING_INPUT_BYTES) return prev;
+  const next = prev + delta;
+  return next.length > MAX_STREAMING_INPUT_BYTES
+    ? next.slice(0, MAX_STREAMING_INPUT_BYTES)
+    : next;
 }
 
 /**
@@ -184,8 +224,15 @@ export interface SubAgentWatchInfo {
  * in-flight run_command call. Defined LOCALLY (api.ts is frozen this round):
  * structurally assignable to ToolUseEntry, so the working entries stay
  * typed as-is and only the store/WorkingSection read the extra field.
+ *
+ * ROUND-58 (R58-cf): `liveInput` is the accumulated tool-args JSON raw of an
+ * in-flight write_file/edit_file call (attached when the final tool-call
+ * frame arrives; stripped by the tool-result — the diff card takes over).
  */
-export type LiveToolUseEntry = ToolUseEntry & { liveOutput?: string };
+export type LiveToolUseEntry = ToolUseEntry & {
+  liveOutput?: string;
+  liveInput?: string;
+};
 
 /** ROUND-52 (R52-c): cap on the accumulated live output tail (~4KB — the
  * display slices the last lines anyway; the store keeps the tail). */
@@ -210,6 +257,14 @@ export interface StreamSessionState {
   pendingEcho: string | null;
   /** When the last live turn ended (for collapseHints). */
   lastLiveEndMs: number;
+  /** ROUND-58 (R58-cf): the last live turn ended because the user stopped
+   * it — survives the live-turn clear (the folded log owns the partial's
+   * render after the refetch) so the "Stopped by user" card + the
+   * composer's Continue affordance persist until the next send. Reset by
+   * startStream. */
+  lastTurnStoppedByUser: boolean;
+  /** When the user stop landed (the card's timestamp). */
+  lastTurnStoppedTs: string | null;
 }
 
 interface StreamStore {
@@ -235,8 +290,25 @@ interface StreamStore {
       attachments?: MessageAttachment[];
     },
   ) => Promise<void>;
-  /** User clicked Stop — aborts the in-flight fetch. */
+  /** ROUND-58 (R58-cf): the user clicked Stop — a DELIBERATE stop, not an
+   * abort-and-pray. (i) marks the live turn stopped-by-user IMMEDIATELY (the
+   * UI renders the stopped state before any frame arrives); (ii) tells the
+   * SIDECAR to stop the turn (POST /sessions/:id/stop — turns survive client
+   * disconnects, so the server must resolve the turn itself; fire-and-forget);
+   * (iii) does NOT touch the local fetch — the server's {type:"stopped"} frame
+   * ends the stream cleanly. The PANEL schedules hardAbortStream as a ~2.5s
+   * grace net for a server that never answers (useTimeoutClear owns the timer
+   * — the store is not a React component). */
   abortStream: (sessionId: string) => void;
+  /** ROUND-58 (R58-cf): the grace-net local abort (the panel's delayed Stop
+   * callback). Aborts the local controller ONLY when the session's live turn
+   * is still the user-stopped one and still in flight — a no-op once the
+   * stream ended (the controller map entry is gone) or a NEW turn replaced
+   * the stopped one (the stoppedByUser guard prevents cross-turn damage). */
+  hardAbortStream: (sessionId: string) => void;
+  /** ROUND-58 (R58-cf): set/clear the "last turn ended by user stop" signal
+   * (the quiet Stopped card + the composer's Continue affordance). */
+  setLastTurnStoppedByUser: (sessionId: string, stopped: boolean) => void;
   /** Clear state for a session (new session / explicit reset). */
   clearStream: (sessionId: string) => void;
   /** Resolve a live approval row (decision landed). */
@@ -276,6 +348,8 @@ function emptyState(): StreamSessionState {
     liveError: null,
     pendingEcho: null,
     lastLiveEndMs: 0,
+    lastTurnStoppedByUser: false,
+    lastTurnStoppedTs: null,
   };
 }
 
@@ -653,11 +727,17 @@ export const useStreamStore = create<StreamStore>((set, get) => ({
         streamText: "",
         streamThinking: "",
         stopped: false,
+        stoppedByUser: false,
+        streamingToolInputs: [],
       },
       streamBusy: true,
       sendError: null,
       // ROUND-43: a fresh turn clears any stale live error card.
       liveError: null,
+      // ROUND-58 (R58-cf): a fresh turn also clears the previous turn's
+      // user-stop signal (the Stopped card + Continue affordance end here).
+      lastTurnStoppedByUser: false,
+      lastTurnStoppedTs: null,
     });
 
     const controller = new AbortController();
@@ -679,12 +759,29 @@ export const useStreamStore = create<StreamStore>((set, get) => ({
         { model: opts?.model, signal: controller.signal, thinkingLevel: opts?.thinkingLevel, attachments: opts?.attachments },
       );
     } catch (err) {
-      errored = true;
-      // Network/CORS/abort — surface as a send error.
-      const msg = err instanceof Error ? err.message : String(err);
-      if (msg !== "The user aborted a request.") {
-        // ROUND-43: the fetch itself failed (never reached SSE) — show the
-        // live error card too. A user stop is excluded: stops aren't errors.
+      // ROUND-58 (R58-cf): a DELIBERATE user stop (abortStream marked the
+      // live turn before the abort could possibly reach this catch — via the
+      // grace hard-abort or the reader's abort rejection) is NOT an error:
+      // no liveError, no sendError, no NETWORK_ERROR card. The stopped flag
+      // was already set by abortStream; only the terminal slice signal needs
+      // arming here (the server's confirmation frame may never arrive).
+      // A non-deliberate failure (real network death, sync-path rejection)
+      // keeps today's behavior: NETWORK_ERROR live card + send error.
+      const deliberate = get().bySession[sessionId]?.liveTurn?.stoppedByUser === true;
+      if (deliberate) {
+        patchSession(sessionId, {
+          lastTurnStoppedByUser: true,
+          ...(get().bySession[sessionId]?.lastTurnStoppedTs === null
+            ? { lastTurnStoppedTs: new Date().toISOString() }
+            : {}),
+        });
+      } else {
+        errored = true;
+        // Network/CORS/abort — surface as a send error + the live error card
+        // (ROUND-43). The old exact-string "The user aborted a request."
+        // check is subsumed: ANY abort on a deliberate-stop turn is a stop,
+        // and there is no other abort source.
+        const msg = err instanceof Error ? err.message : String(err);
         patchSession(sessionId, {
           sendError: msg,
           liveError: {
@@ -735,22 +832,50 @@ export const useStreamStore = create<StreamStore>((set, get) => ({
   },
 
   abortStream: (sessionId) => {
-    // ROUND-42: turns now survive client disconnects (they complete in the
-    // background + notify via Web Push) — so Stop must EXPLICITLY abort the
-    // server-side turn, not just kill the local fetch.
+    // ROUND-58 (R58-cf, owner: stopping showed "Generation failed" + "body
+    // stream buffer was aborted"): Stop is now a DELIBERATE two-step stop.
+    // (i) Mark the live turn stopped-by-user IMMEDIATELY — the UI renders the
+    // quiet stopped state before any frame arrives, and the catch above
+    // classifies the eventual abort as a stop, never NETWORK_ERROR.
+    // (ii) Tell the SIDECAR to resolve the turn (ROUND-42 semantics: turns
+    // survive client disconnects) — fire-and-forget; the server answers with
+    // {type:"stopped"} and closes the stream, which is the CLEAN end.
+    // (iii) Do NOT abort the local fetch here — the panel's useTimeoutClear
+    // grace timer calls hardAbortStream ~2.5s later only if the stream is
+    // still open (a server that never answers).
+    const cur = get().bySession[sessionId];
+    if (cur?.liveTurn) {
+      patchSession(sessionId, {
+        liveTurn: { ...cur.liveTurn, stopped: true, stoppedByUser: true },
+      });
+    }
+    patchSession(sessionId, {
+      lastTurnStoppedByUser: true,
+      lastTurnStoppedTs: new Date().toISOString(),
+    });
     void stopSessionTurn(sessionId);
+  },
+
+  hardAbortStream: (sessionId) => {
+    // ROUND-58 (R58-cf): the grace-net local abort. Only acts while the
+    // session's live turn is STILL the user-stopped one and the controller
+    // is still registered (stream open). Once the stream ended the finally
+    // removed the controller → no-op; once a NEW turn started, the fresh
+    // liveTurn is not stoppedByUser → no-op (never aborts the new turn).
+    const cur = get().bySession[sessionId];
+    if (cur?.liveTurn?.stoppedByUser !== true) return;
     const c = controllers.get(sessionId);
     if (c) {
       c.abort();
       controllers.delete(sessionId);
     }
-    // Mark the live turn as stopped so the UI shows "Stopped".
-    const cur = get().bySession[sessionId];
-    if (cur?.liveTurn) {
-      patchSession(sessionId, {
-        liveTurn: { ...cur.liveTurn, stopped: true },
-      });
-    }
+  },
+
+  setLastTurnStoppedByUser: (sessionId, stopped) => {
+    patchSession(sessionId, {
+      lastTurnStoppedByUser: stopped,
+      lastTurnStoppedTs: stopped ? new Date().toISOString() : null,
+    });
   },
 
   clearStream: (sessionId) => {
@@ -859,7 +984,55 @@ function handleStreamEvent(
     return;
   }
 
+  // ── ROUND-58 (R58-cf): live tool-ARG streaming (the write preview source) ──
+
+  if (event.type === "tool-input-start") {
+    // A new accumulation buffer (idempotent on a replayed start frame).
+    if (liveTurn.streamingToolInputs.some((s) => s.toolCallId === event.toolCallId)) {
+      return;
+    }
+    patchSession(sessionId, {
+      liveTurn: {
+        ...liveTurn,
+        streamingToolInputs: [
+          ...liveTurn.streamingToolInputs,
+          { toolCallId: event.toolCallId, toolName: event.toolName, raw: "" },
+        ],
+      },
+    });
+    return;
+  }
+
+  if (event.type === "tool-input-delta") {
+    let matched = false;
+    const inputs = liveTurn.streamingToolInputs.map((s) => {
+      if (s.toolCallId !== event.toolCallId) return s;
+      matched = true;
+      return { ...s, raw: appendStreamingInput(s.raw, event.inputTextDelta) };
+    });
+    // Unknown id (a start frame we never saw — e.g. joined mid-call): grow
+    // nothing; the final tool-call frame still renders the row.
+    if (!matched) return;
+    patchSession(sessionId, { liveTurn: { ...liveTurn, streamingToolInputs: inputs } });
+    return;
+  }
+
   if (event.type === "tool-call") {
+    // ROUND-58 (R58-cf): the args are COMPLETE — the frame carries no
+    // toolCallId, so the accumulated raw is matched to the LATEST unresolved
+    // streaming-input entry with the same toolName and attached to the new
+    // pending ToolUseEntry as liveInput (the live write preview renders from
+    // it while ok === null; the tool-result strips it when the diff card
+    // takes over). The streaming-input entry is consumed either way.
+    const streamingIdx = [...liveTurn.streamingToolInputs]
+      .reverse()
+      .findIndex((s) => s.toolName === event.toolName);
+    const matchedStreaming =
+      streamingIdx === -1 ? null : liveTurn.streamingToolInputs[liveTurn.streamingToolInputs.length - 1 - streamingIdx];
+    const streamingToolInputs =
+      matchedStreaming === null
+        ? liveTurn.streamingToolInputs
+        : liveTurn.streamingToolInputs.filter((s) => s !== matchedStreaming);
     const entry: ToolUseEntry = {
       seq: getSeq(sessionId),
       toolName: event.toolName,
@@ -867,6 +1040,10 @@ function handleStreamEvent(
       ok: null,
       ts: new Date().toISOString(),
     };
+    const liveEntry: LiveToolUseEntry =
+      matchedStreaming !== null && matchedStreaming.raw !== ""
+        ? { ...entry, liveInput: matchedStreaming.raw }
+        : entry;
     const working: WorkingEntry[] = [
       ...liveTurn.working,
       ...(liveTurn.streamThinking.trim() !== ""
@@ -887,10 +1064,10 @@ function handleStreamEvent(
             },
           ]
         : []),
-      { type: "tool" as const, tool: entry },
+      { type: "tool" as const, tool: liveEntry },
     ];
     patchSession(sessionId, {
-      liveTurn: { ...liveTurn, working, streamThinking: "", streamText: "" },
+      liveTurn: { ...liveTurn, working, streamingToolInputs, streamThinking: "", streamText: "" },
     });
     return;
   }
@@ -927,8 +1104,10 @@ function handleStreamEvent(
       consumed += 1;
       if (index === matched) {
         // ROUND-52 (R52-c): strip the live tail — the settled pill shows the
-        // FINAL output (outputSummary), never both.
-        const { liveOutput: _cleared, ...settled } = entry.tool as LiveToolUseEntry;
+        // FINAL output (outputSummary), never both. ROUND-58 (R58-cf):
+        // liveInput (the write preview's raw) is stripped the same way — the
+        // final result/diff rendering takes over.
+        const { liveOutput: _out, liveInput: _in, ...settled } = entry.tool as LiveToolUseEntry;
         return {
           ...entry,
           tool: {
@@ -940,7 +1119,21 @@ function handleStreamEvent(
       }
       return entry;
     });
-    patchSession(sessionId, { liveTurn: { ...liveTurn, working } });
+    // ROUND-58 (R58-cf): a tool-result also settles any still-unresolved
+    // streaming-input entry of the same tool (the final rendering owns the
+    // args now) — the preview never outlives its tool.
+    const streamingToolInputs = liveTurn.streamingToolInputs.filter(
+      (s) => s.toolName !== event.toolName,
+    );
+    patchSession(sessionId, {
+      liveTurn: {
+        ...liveTurn,
+        working,
+        ...(streamingToolInputs.length !== liveTurn.streamingToolInputs.length
+          ? { streamingToolInputs }
+          : {}),
+      },
+    });
     // ROUND-39: file mutations refresh the explorer + open file even when
     // no panel is mounted (background session writes show up live). The
     // queryClient singleton is set at boot by main.tsx.
@@ -1008,6 +1201,11 @@ function handleStreamEvent(
     // the panel stayed mounted with lastSent set, so reloads lost it (the
     // owner saw nothing). {type:"stopped"} never reaches here — a stop is
     // not an error and renders no card.
+    // ROUND-58 (R58-cf): if a stop was ARMED but the turn actually FAILED
+    // (the stop request raced the failure), the error verdict wins: retract
+    // the stop signal so the quiet Stopped card never stacks under the error
+    // card. The live turn keeps its frozen-stopped shape (the existing error
+    // UX), minus the user-stop classification.
     const details =
       event.details && typeof event.details === "object"
         ? (event.details as Record<string, unknown>)
@@ -1026,16 +1224,56 @@ function handleStreamEvent(
         ...(errorTs !== undefined ? { errorTs } : {}),
         ts: new Date().toISOString(),
       },
+      ...(cur.lastTurnStoppedByUser || liveTurn.stoppedByUser
+        ? {
+            liveTurn: { ...liveTurn, stopped: true, stoppedByUser: false },
+            lastTurnStoppedByUser: false,
+            lastTurnStoppedTs: null,
+          }
+        : {}),
     });
     return;
   }
 
-  // text-delta / thinking-delta / tool-call / tool-result / tool-output /
-  // approval.* / error handled above. subagent-status / subagent-event are
-  // handled at the top of this function (R48-e2 live map + approval routing).
-  // finish / done / meta.continuation don't need to mutate the live turn state
-  // (the panel invalidates the session query on done and the folded turn
-  // renders from the event log).
+  if (event.type === "done") {
+    // ROUND-58 (R58-cf): a normal COMPLETION is not a stop. If the user
+    // clicked Stop a hair before the server finished (the race — the stop
+    // POST lost to the turn's own completion), the flags abortStream armed
+    // would otherwise render the quiet Stopped card + the Continue
+    // affordance under a FULLY completed turn. The done frame is the turn's
+    // own verdict: retract the stop so the folded turn owns the render
+    // exactly like every normal completion.
+    if (cur.lastTurnStoppedByUser || liveTurn.stoppedByUser) {
+      patchSession(sessionId, {
+        liveTurn: { ...liveTurn, stopped: false, stoppedByUser: false },
+        lastTurnStoppedByUser: false,
+        lastTurnStoppedTs: null,
+      });
+    }
+    return;
+  }
+
+  if (event.type === "stopped") {
+    // ROUND-58 (R58-cf): the server confirmed the deliberate stop (POST
+    // /sessions/:id/stop resolved the turn + flushed the partial). Terminal
+    // state on the live turn: frozen timer, quiet "Stopped by user" card,
+    // and the persistent slice signal the composer's Continue affordance
+    // reads. NOT an error — liveError is never set on this path.
+    patchSession(sessionId, {
+      liveTurn: { ...liveTurn, stopped: true, stoppedByUser: true },
+      ...(cur.lastTurnStoppedByUser !== true || cur.lastTurnStoppedTs === null
+        ? { lastTurnStoppedByUser: true, lastTurnStoppedTs: new Date().toISOString() }
+        : {}),
+    });
+    return;
+  }
+
+  // text-delta / thinking-delta / tool-input-* / tool-call / tool-result /
+  // tool-output / approval.* / error / stopped / done handled above.
+  // subagent-status / subagent-event are handled at the top of this function
+  // (R48-e2 live map + approval routing). finish / meta.continuation don't
+  // need to mutate the live turn state (the panel invalidates the session
+  // query on done and the folded turn renders from the event log).
 }
 
 // ─── ROUND-48 (R48-e2): live sub-agent map selectors ────────────────────────

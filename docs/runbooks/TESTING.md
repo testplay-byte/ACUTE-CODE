@@ -1,4 +1,4 @@
-<!-- last-reviewed: 2026-08-31 round-57 -->
+<!-- last-reviewed: 2026-08-31 round-58 -->
 # TESTING — the verification ladder
 
 Five layers; each has a defined "when mandatory". Rules here are binding
@@ -78,6 +78,24 @@ reschedule-replaces). **1074/1074 in 77 files.** Production was never
 affected (an unmounted setState is a silent no-op in React 18; the
 crash only exists in torn-down test environments) — the shipped 0.57.0
 installer stands; the fix is CI-reliability.
+
+**R58 (the desktop-polish round):** the JS suites grew to
+**1169/1169 in 80 files** (root) + **631/631 in 38 files** (agent-core) —
+the round's features carried their own tests (TitleBar 8, stop/continue/
+live-preview 40+, settings restructure + reveal 30+, streaming-args 12,
+CLI-harness live battery). NEW LAYER: `scripts/battery-r58.mjs` — the
+R51 battery pattern (the script supervises its own dedicated sidecar on
+:5199 because the sandbox reaps background processes between commands)
+runs FIVE live checks against the real engine + a real OpenRouter model:
+the owner's exact 3-file task with tool-input frame ORDER assertions,
+the stop path (stopped frame + `queued` status + persisted partial),
+continue-after-stop, and the key-reveal route. Run it with
+`node scripts/battery-r58.mjs` from the repo root (needs
+`/home/z/.secrets/openrouter-main.key`). Two battery gotchas it now
+documents: projectless sessions have NO tools (create a project first),
+and Fastify 400s a JSON content-type with an empty body. For
+terminal-driven session testing generally, see
+`docs/runbooks/CLI-HARNESS.md` (`scripts/acute.mjs chat:stream`).
 `r52-supervision` NEW 14 (exec helpers: background-launch grammar + log-
 redirect parsing; the hang fix: pipe-holding grandchild resolves FAST with
 a job id — the owner's exact trap, cross-platform via node-spawns-node;

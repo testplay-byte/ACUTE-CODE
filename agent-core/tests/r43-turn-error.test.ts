@@ -31,7 +31,7 @@ vi.mock("ai", () => ({
 
 import { aiSdkChat, type StreamChatEvent } from "../src/agents/chat";
 import { runStreamedAgentTurn } from "../src/agents/runtime";
-import { appendSessionEvent, listSessionEvents } from "../src/storage/sessions";
+import { appendSessionEvent, getSession, listSessionEvents } from "../src/storage/sessions";
 import { ProviderKeyring } from "../src/providers/registry";
 import { openDatabase, type SqliteDatabase } from "../src/storage/db";
 import { buildServer } from "../src/server";
@@ -228,10 +228,50 @@ describe("runStreamedAgentTurn provider failure (ROUND-43)", () => {
     if (!outcome.ok) {
       expect(outcome.code).toBe("ABORTED");
       expect(outcome.status).toBe(499);
+      // ROUND-58 (R58-c): the abort message names the deliberate stop.
+      expect(outcome.message).toContain("stopped by user");
     }
-    // Deliberate stop: only the user message persisted — NO error record.
+    // Deliberate stop: NO error record. ROUND-58 (R58-c): the in-flight
+    // partial segment IS now persisted (flushed on abort) so the transcript
+    // keeps the streamed-so-far text and a follow-up "continue" resumes
+    // from it — the old behavior (only message.user) was the partial-text
+    // loss the owner reported. The partial text lands as an assistant
+    // event; still NO turn.error.
     const events = listSessionEvents(db, sessionId);
-    expect(events.map((e) => e.type)).toEqual(["message.user"]);
+    expect(events.map((e) => e.type)).toEqual(["message.user", "message.assistant"]);
+    const partial = events[1].payload as { content?: string };
+    expect(partial.content).toBe("starting…");
+  });
+
+  it("ROUND-58: a user STOP resets the session to queued (no eternal running spinner)", async () => {
+    const { sessionId } = await createAgentAndSession();
+    const controller = new AbortController();
+    controller.abort();
+
+    const chatStream = async function* (): AsyncGenerator<StreamChatEvent> {
+      yield { type: "text-delta", delta: "partial" };
+      throw new Error("aborted");
+    };
+
+    await runStreamedAgentTurn(
+      {
+        db,
+        keyring: new ProviderKeyring({ ACUTE_PROVIDER_OPENROUTER: KEY }),
+        chat: aiSdkChat,
+        chatStream,
+      },
+      sessionId,
+      "stop me",
+      () => undefined,
+      undefined,
+      controller.signal,
+    );
+
+    // The streamed path flips to "running" at turn start; the abort return
+    // must reset it to the resting state — the sidebar's spinner keys off
+    // this status after the streams refetch.
+    const session = getSession(db, sessionId);
+    expect(session?.status).toBe("queued");
   });
 
   it("scrubs the provider API key out of the persisted error detail", async () => {

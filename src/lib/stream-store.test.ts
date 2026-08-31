@@ -707,3 +707,404 @@ describe("stream store ROUND-52 supervision + live output", () => {
     ]);
   });
 });
+
+// ─── ROUND-58 (R58-cf): deliberate user stop + live tool-arg streaming ───────
+
+/** A live SSE body the test drives by hand: frames are EMITTED on demand and
+ * the stream stays open until the test ends it — exactly the shape a running
+ * turn has while the user clicks Stop. */
+function manualSseResponse(): {
+  response: Response;
+  emit: (frame: StreamTurnEvent) => void;
+  error: (reason: unknown) => void;
+  close: () => void;
+} {
+  const encoder = new TextEncoder();
+  let controller: ReadableStreamDefaultController<Uint8Array> | null = null;
+  const stream = new ReadableStream<Uint8Array>({
+    start(c) {
+      controller = c;
+    },
+  });
+  const response = new Response(stream, {
+    status: 200,
+    headers: { "content-type": "text/event-stream" },
+  });
+  const emit = (frame: StreamTurnEvent): void => {
+    controller?.enqueue(encoder.encode(`data: ${JSON.stringify(frame)}\n\n`));
+  };
+  const error = (reason: unknown): void => {
+    controller?.error(reason);
+  };
+  const close = (): void => {
+    controller?.close();
+  };
+  return { response, emit, error, close };
+}
+
+describe("stream store deliberate user stop (ROUND-58 R58-cf)", () => {
+  it("abortStream arms the stopped state INSTANTLY; the server's stopped frame ends the stream cleanly — no error state", async () => {
+    const sse = manualSseResponse();
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(sse.response));
+
+    const promise = useStreamStore.getState().startStream(PARENT, "work");
+    // Stop is clicked while the turn is streaming.
+    useStreamStore.getState().abortStream(PARENT);
+
+    // (i) the flag lands IMMEDIATELY — before any frame arrives.
+    const early = useStreamStore.getState().bySession[PARENT];
+    expect(early?.liveTurn?.stopped).toBe(true);
+    expect(early?.liveTurn?.stoppedByUser).toBe(true);
+    expect(early?.lastTurnStoppedByUser).toBe(true);
+    expect(early?.lastTurnStoppedTs).not.toBeNull();
+
+    // (ii) the server confirms: partial text flushed, stopped frame, close.
+    sse.emit({ type: "text-delta", delta: "partial text" });
+    sse.emit({ type: "stopped" });
+    sse.close();
+    await promise;
+
+    const slice = useStreamStore.getState().bySession[PARENT];
+    expect(slice?.liveError).toBeNull();
+    expect(slice?.sendError).toBeNull();
+    expect(slice?.liveTurn?.stopped).toBe(true);
+    expect(slice?.liveTurn?.stoppedByUser).toBe(true);
+    // The partial text stays visible under the quiet Stopped card.
+    expect(slice?.liveTurn?.streamText).toBe("partial text");
+    expect(slice?.streamBusy).toBe(false);
+    // The sidebar activity indicator cleared (the finally runs regardless).
+    expect(useActiveStreams.getState().active.has(PARENT)).toBe(false);
+  });
+
+  it("a stopped frame WITHOUT a prior abortStream still ends as a user stop (server-side stop resolved first)", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        sseResponse([
+          { type: "text-delta", delta: "partial " },
+          { type: "text-delta", delta: "reply" },
+          { type: "stopped" },
+        ]),
+      ),
+    );
+
+    await useStreamStore.getState().startStream(PARENT, "work");
+
+    const slice = useStreamStore.getState().bySession[PARENT];
+    expect(slice?.liveError).toBeNull();
+    expect(slice?.liveTurn?.stopped).toBe(true);
+    expect(slice?.liveTurn?.stoppedByUser).toBe(true);
+    expect(slice?.lastTurnStoppedByUser).toBe(true);
+    expect(slice?.liveTurn?.streamText).toBe("partial reply");
+  });
+
+  it("a DONE frame after a stop-click race RETRACTS the stop (the turn completed — the stop POST lost the race)", async () => {
+    const sse = manualSseResponse();
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(sse.response));
+
+    const promise = useStreamStore.getState().startStream(PARENT, "work");
+    // The user clicks Stop a hair before the server finishes…
+    useStreamStore.getState().abortStream(PARENT);
+    expect(useStreamStore.getState().bySession[PARENT]?.lastTurnStoppedByUser).toBe(true);
+    // …but the turn was already completing: the server sends its own DONE
+    // verdict instead of a stopped frame.
+    sse.emit({ type: "text-delta", delta: "full answer" });
+    sse.emit({
+      type: "done",
+      assistantMessage: { seq: 2, role: "assistant", agentId: "a", content: "full answer", ts: "t" },
+      usage: {
+        agentId: "a",
+        sessionId: PARENT,
+        provider: "openrouter",
+        model: "m",
+        inputTokens: 1,
+        outputTokens: 1,
+        costUsd: 0,
+        ts: "t",
+      },
+    } as unknown as StreamTurnEvent);
+    sse.close();
+    await promise;
+
+    const slice = useStreamStore.getState().bySession[PARENT];
+    // No Stopped card, no Continue affordance — the folded turn owns it.
+    expect(slice?.lastTurnStoppedByUser).toBe(false);
+    expect(slice?.lastTurnStoppedTs).toBeNull();
+    expect(slice?.liveTurn?.stopped).toBe(false);
+    expect(slice?.liveTurn?.stoppedByUser).toBe(false);
+    expect(slice?.liveTurn?.streamText).toBe("full answer");
+    expect(slice?.liveError).toBeNull();
+  });
+
+  it("an ERROR frame after a stop-click race lets the ERROR verdict win (the Stopped card never stacks under it)", async () => {
+    const sse = manualSseResponse();
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(sse.response));
+
+    const promise = useStreamStore.getState().startStream(PARENT, "work");
+    useStreamStore.getState().abortStream(PARENT);
+    expect(useStreamStore.getState().bySession[PARENT]?.lastTurnStoppedByUser).toBe(true);
+    // The turn actually failed before the stop could be processed.
+    sse.emit({ type: "error", status: 502, code: "PROVIDER_ERROR", message: "upstream 502" });
+    sse.close();
+    await promise;
+
+    const slice = useStreamStore.getState().bySession[PARENT];
+    expect(slice?.liveError).toMatchObject({ code: "PROVIDER_ERROR", message: "upstream 502" });
+    // Retracted: the error card owns the verdict; the live turn keeps its
+    // FROZEN shape (the existing error UX) without the user-stop flags.
+    expect(slice?.lastTurnStoppedByUser).toBe(false);
+    expect(slice?.lastTurnStoppedTs).toBeNull();
+    expect(slice?.liveTurn?.stopped).toBe(true);
+    expect(slice?.liveTurn?.stoppedByUser).toBe(false);
+    expect(slice?.sendError).toBeNull();
+  });
+
+  it("hardAbortStream tears the LOCAL controller down and the catch classifies it as a stop (the grace net)", async () => {
+    const sse = manualSseResponse();
+    let streamSignal: AbortSignal | null | undefined;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockImplementation((_url: string, init?: RequestInit) => {
+        // Only the STREAM call carries a signal (abortStream's fire-and-forget
+        // POST /stop has none — it must not clobber the capture).
+        if (init?.signal != null) streamSignal = init.signal;
+        return Promise.resolve(sse.response);
+      }),
+    );
+
+    const promise = useStreamStore.getState().startStream(PARENT, "work");
+    // Deliberate stop, then the grace timer fires before any server answer.
+    useStreamStore.getState().abortStream(PARENT);
+    useStreamStore.getState().hardAbortStream(PARENT);
+    expect(streamSignal?.aborted).toBe(true);
+    // The abort surfaces as the reader-level rejection (the webview's
+    // "body stream buffer was aborted" path) — NOT an error.
+    sse.error(new DOMException("body stream buffer was aborted"));
+
+    await promise;
+    const slice = useStreamStore.getState().bySession[PARENT];
+    expect(slice?.liveError).toBeNull();
+    expect(slice?.sendError).toBeNull();
+    expect(slice?.liveTurn?.stoppedByUser).toBe(true);
+    expect(slice?.lastTurnStoppedByUser).toBe(true);
+  });
+
+  it("hardAbortStream NEVER touches a NEW turn's controller (the stoppedByUser guard)", async () => {
+    const first = manualSseResponse();
+    let firstSignal: AbortSignal | null | undefined;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockImplementation((_url: string, init?: RequestInit) => {
+        if (init?.signal != null) firstSignal = init.signal;
+        return Promise.resolve(first.response);
+      }),
+    );
+    const firstPromise = useStreamStore.getState().startStream(PARENT, "work");
+    useStreamStore.getState().abortStream(PARENT);
+    useStreamStore.getState().hardAbortStream(PARENT);
+    expect(firstSignal?.aborted).toBe(true);
+    first.error(new DOMException("aborted"));
+    await firstPromise;
+
+    // A NEW turn replaces the stopped live turn — the stale grace timer
+    // (still pending in a real UI) must find nothing to abort.
+    const second = manualSseResponse();
+    let secondSignal: AbortSignal | null | undefined;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockImplementation((_url: string, init?: RequestInit) => {
+        if (init?.signal != null) secondSignal = init.signal;
+        return Promise.resolve(second.response);
+      }),
+    );
+    const secondPromise = useStreamStore.getState().startStream(PARENT, "continue from where you left off.");
+    // The new signal is armed, the fresh liveTurn is NOT user-stopped.
+    expect(useStreamStore.getState().bySession[PARENT]?.liveTurn?.stoppedByUser).toBe(false);
+    useStreamStore.getState().hardAbortStream(PARENT);
+    expect(secondSignal?.aborted).toBe(false);
+    second.emit({ type: "stopped" });
+    second.close();
+    await secondPromise;
+  });
+
+  it("a NEW send resets the user-stop signal (the Stopped card + Continue affordance end)", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(sseResponse([{ type: "stopped" }])),
+    );
+    await useStreamStore.getState().startStream(PARENT, "work");
+    expect(useStreamStore.getState().bySession[PARENT]?.lastTurnStoppedByUser).toBe(true);
+
+    const doneFrame = {
+      type: "done",
+      assistantMessage: { seq: 2, role: "assistant", agentId: "a", content: "resumed", ts: "t" },
+      usage: {
+        agentId: "a",
+        sessionId: PARENT,
+        provider: "openrouter",
+        model: "m",
+        inputTokens: 1,
+        outputTokens: 1,
+        costUsd: 0,
+        ts: "t",
+      },
+    } as unknown as StreamTurnEvent;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        sseResponse([{ type: "text-delta", delta: "resumed" }, doneFrame]),
+      ),
+    );
+    await useStreamStore.getState().startStream(PARENT, "continue");
+    const slice = useStreamStore.getState().bySession[PARENT];
+    expect(slice?.lastTurnStoppedByUser).toBe(false);
+    expect(slice?.lastTurnStoppedTs).toBeNull();
+    expect(slice?.liveTurn?.stoppedByUser).toBe(false);
+  });
+});
+
+// ─── ROUND-58 (R58-cf): live tool-ARG streaming (the write preview source) ──
+
+describe("stream store tool-input streaming (ROUND-58 R58-cf)", () => {
+  it("tool-input-start/delta accumulate per toolCallId in streamingToolInputs (the pending write row source)", async () => {
+    const sse = manualSseResponse();
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(sse.response));
+
+    const promise = useStreamStore.getState().startStream(PARENT, "write it");
+    sse.emit({ type: "tool-input-start", toolCallId: "call_w1", toolName: "write_file" });
+    await vi.waitFor(() => {
+      expect(useStreamStore.getState().bySession[PARENT]?.liveTurn?.streamingToolInputs).toHaveLength(1);
+    });
+    sse.emit({ type: "tool-input-delta", toolCallId: "call_w1", inputTextDelta: '{"path":"a.txt","conte' });
+    sse.emit({ type: "tool-input-delta", toolCallId: "call_w1", inputTextDelta: 'nt":"hello"}' });
+    await vi.waitFor(() => {
+      expect(
+        useStreamStore.getState().bySession[PARENT]?.liveTurn?.streamingToolInputs[0]?.raw,
+      ).toBe('{"path":"a.txt","content":"hello"}');
+    });
+    // A replayed start frame is idempotent (no duplicate buffer).
+    sse.emit({ type: "tool-input-start", toolCallId: "call_w1", toolName: "write_file" });
+    // An unknown toolCallId's delta is ignored.
+    sse.emit({ type: "tool-input-delta", toolCallId: "call_ghost", inputTextDelta: "orphan" });
+    await vi.waitFor(() => {
+      expect(useStreamStore.getState().bySession[PARENT]?.liveTurn?.streamingToolInputs).toHaveLength(1);
+    });
+    sse.emit({ type: "stopped" });
+    sse.close();
+    await promise;
+  });
+
+  it("the final tool-call frame attaches the accumulated raw as liveInput (matched by toolName) and consumes the entry", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        sseResponse([
+          { type: "tool-input-start", toolCallId: "call_w1", toolName: "write_file" },
+          { type: "tool-input-delta", toolCallId: "call_w1", inputTextDelta: '{"path":"src/a.ts","content":"hello"}' },
+          { type: "tool-call", toolName: "write_file", argsSummary: "path: src/a.ts, content: 5 chars" },
+          { type: "stopped" },
+        ]),
+      ),
+    );
+
+    await useStreamStore.getState().startStream(PARENT, "write it");
+
+    const slice = useStreamStore.getState().bySession[PARENT];
+    const working = slice?.liveTurn?.working ?? [];
+    expect(working).toHaveLength(1);
+    expect(working[0]).toMatchObject({
+      type: "tool",
+      tool: {
+        toolName: "write_file",
+        argsSummary: "path: src/a.ts, content: 5 chars",
+        ok: null,
+        liveInput: '{"path":"src/a.ts","content":"hello"}',
+      },
+    });
+    // The streaming-input buffer was consumed by the tool-call frame.
+    expect(slice?.liveTurn?.streamingToolInputs).toHaveLength(0);
+  });
+
+  it("the tool-result strips liveInput (the final result/diff takes over) and settles a lingering streaming entry", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        sseResponse([
+          { type: "tool-input-start", toolCallId: "call_e1", toolName: "edit_file" },
+          { type: "tool-input-delta", toolCallId: "call_e1", inputTextDelta: '{"path":"a.ts","newString":"x"' },
+          { type: "tool-call", toolName: "edit_file", argsSummary: "path: a.ts" },
+          { type: "tool-input-start", toolCallId: "call_e2", toolName: "edit_file" },
+          { type: "tool-input-delta", toolCallId: "call_e2", inputTextDelta: '{"path":"b.ts"' },
+          { type: "tool-result", toolName: "edit_file", argsSummary: "path: a.ts", ok: true, outputSummary: "edited a.ts" },
+          { type: "stopped" },
+        ]),
+      ),
+    );
+
+    await useStreamStore.getState().startStream(PARENT, "edit it");
+
+    const slice = useStreamStore.getState().bySession[PARENT];
+    const working = slice?.liveTurn?.working ?? [];
+    const settled = working.find(
+      (e) => e.type === "tool" && (e as { tool: { argsSummary?: string } }).tool.argsSummary === "path: a.ts",
+    );
+    expect(settled).toMatchObject({
+      type: "tool",
+      tool: { toolName: "edit_file", ok: true, outputSummary: "edited a.ts" },
+    });
+    expect(
+      (settled as { type: "tool"; tool: { liveInput?: string } }).tool.liveInput,
+    ).toBeUndefined();
+    // The matching tool's still-unresolved streaming entry was settled too.
+    expect(slice?.liveTurn?.streamingToolInputs).toHaveLength(0);
+  });
+
+  it("a tool-call frame with NO matching streaming entry renders a plain pending row (pre-R58 stream)", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        sseResponse([
+          { type: "tool-call", toolName: "read_file", argsSummary: "path: a.ts" },
+          { type: "stopped" },
+        ]),
+      ),
+    );
+
+    await useStreamStore.getState().startStream(PARENT, "read it");
+    const working = useStreamStore.getState().bySession[PARENT]?.liveTurn?.working ?? [];
+    expect(working[0]).toMatchObject({
+      type: "tool",
+      tool: { toolName: "read_file", ok: null },
+    });
+    expect((working[0] as { type: "tool"; tool: { liveInput?: string } }).tool.liveInput).toBeUndefined();
+  });
+
+  it("the accumulated raw is capped at 256KB, HEAD-kept (the path argument stays extractable)", async () => {
+    const big = "x".repeat(200_000);
+    const bigger = "y".repeat(200_000);
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        sseResponse([
+          { type: "tool-input-start", toolCallId: "call_big", toolName: "write_file" },
+          { type: "tool-input-delta", toolCallId: "call_big", inputTextDelta: big },
+          { type: "tool-input-delta", toolCallId: "call_big", inputTextDelta: bigger },
+          { type: "stopped" },
+        ]),
+      ),
+    );
+
+    await useStreamStore.getState().startStream(PARENT, "write a huge file");
+
+    const inputs = useStreamStore.getState().bySession[PARENT]?.liveTurn?.streamingToolInputs ?? [];
+    expect(inputs).toHaveLength(1);
+    expect(inputs[0].raw.length).toBe(256 * 1024);
+    // HEAD-kept (not tail-kept): the cap kept the BEGINNING — where the
+    // `path` argument lives — so the extractor can still read it. A tail cap
+    // would have kept only "yyyy…".
+    expect(inputs[0].raw.startsWith("xxxx")).toBe(true);
+    expect(inputs[0].raw.slice(0, 200_000)).toBe(big);
+    // The second delta was truncated mid-way (not dropped entirely).
+    expect(inputs[0].raw.endsWith("yyyy")).toBe(true);
+  });
+});

@@ -395,6 +395,52 @@ describe("ROUND-36: sub-agent orchestration (ADR-0022)", () => {
     const primaryRefused = await authInject({ method: "DELETE", url: "/api/v1/providers/openrouter/keys/0" });
     expect(primaryRefused.statusCode).toBe(409);
   });
+
+  // ROUND-58 (R58-d): the key-reveal route — the owner explicitly asked for
+  // visible keys, consciously reversing the R47 no-keys-in-responses
+  // invariant for this single authenticated route (keys are still never
+  // logged). Sibling semantics: 404 for an unknown provider, bearer wall.
+  describe("POST /providers/:id/keys/reveal (ROUND-58 R58-d)", () => {
+    it("returns the FULL value of every configured slot (primary + pool)", async () => {
+      // Slot 3 was added + removed by the test above; the fresh beforeEach
+      // keyring holds the primary + SLOT2. Ask for a reveal.
+      const res = await authInject({ method: "POST", url: "/api/v1/providers/openrouter/keys/reveal" });
+      expect(res.statusCode).toBe(200);
+      expect(res.json()).toEqual({
+        keys: [
+          { slot: 0, value: KEY },
+          { slot: 2, value: KEY2 },
+        ],
+      });
+    });
+
+    it("includes slots written through the pool routes (PUT /keys/:slot)", async () => {
+      await authInject({
+        method: "PUT",
+        url: "/api/v1/providers/openrouter/keys/5",
+        payload: { value: "sk-or-vtest-36c" },
+      });
+      const res = await authInject({ method: "POST", url: "/api/v1/providers/openrouter/keys/reveal" });
+      expect(res.statusCode).toBe(200);
+      const slots = (res.json().keys as Array<{ slot: number; value: string }>).map((k) => k.slot);
+      expect(slots).toContain(5);
+      expect(
+        (res.json().keys as Array<{ slot: number; value: string }>).find((k) => k.slot === 5)?.value,
+      ).toBe("sk-or-vtest-36c");
+    });
+
+    it("404s for an unknown provider (same envelope as the sibling routes)", async () => {
+      const res = await authInject({ method: "POST", url: "/api/v1/providers/nope/keys/reveal" });
+      expect(res.statusCode).toBe(404);
+      expect(JSON.stringify(res.json())).toContain("no provider with id nope");
+    });
+
+    it("is behind the bearer wall like every other route", async () => {
+      const res = await app.inject({ method: "POST", url: "/api/v1/providers/openrouter/keys/reveal" });
+      expect(res.statusCode).toBe(401);
+      expect(JSON.stringify(res.json())).toContain("bearer token");
+    });
+  });
 });
 
 describe("ROUND-48 (R48-e1): sub-agent codes, signal forwarding, honest aborts", () => {

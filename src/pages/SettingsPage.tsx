@@ -3,19 +3,17 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link, useSearchParams } from "react-router";
 import {
   fetchMemorySettings,
-  fetchOrchestrationSettings,
   updateMemorySettings,
-  updateOrchestrationSettings,
-  type OrchestrationSettings,
 } from "../lib/api";
 import { ArrowLeft, Bot, Brain, Moon, Palette, Server, SlidersHorizontal, Sun, Users } from "lucide-react";
 import { useConfigStore } from "../lib/config-store";
 import { useThemeStore } from "../lib/theme-store";
 import { THEMES, getContrastText } from "../lib/themes";
+import { useTimeoutClear } from "../hooks/use-timeout-clear";
 import { useThemeStyles } from "../lib/use-theme-styles";
 import { AgentsScreen } from "../components/agents/AgentsScreen";
 import { ModelsProvidersTab } from "../components/settings/ModelsProvidersTab";
-import { SubAgentsSection, SubAgentsTab } from "../components/settings/SubAgentsTab";
+import { SubAgentsTab } from "../components/settings/SubAgentsTab";
 import { Button, Field, inputClass } from "../components/ui/controls";
 import { bdr, withAlpha } from "../components/dashboard/helpers";
 
@@ -398,7 +396,12 @@ function SectionTitle({ children }: { children: React.ReactNode }) {
  * "api" tab (verified: zero imports anywhere in src/). Models & Providers
  * is the one provider surface now. */
 
-/* ── Advanced (data source) ─────────────────────────────── */
+/* ── Advanced (data source) ───────────────────────────────
+ * ROUND-58 (R58-d): the sub-agent cards NO LONGER render here (pre-R58 the
+ * whole SubAgentsSection + the OrchestrationCard rendered on BOTH the
+ * subagents tab AND here — the owner: "the subagent and advanced options are
+ * apparently mixed up"). ?tab=subagents is the single home for everything
+ * sub-agent; Advanced keeps exactly the engine connection + agent memory. */
 
 function AdvancedTab() {
   const { baseUrl, token, demoData, setBaseUrl, setToken, setDemoData } = useConfigStore();
@@ -406,23 +409,35 @@ function AdvancedTab() {
   const [urlDraft, setUrlDraft] = useState(baseUrl);
   const [tokenDraft, setTokenDraft] = useState(token ?? "");
   const [saved, setSaved] = useState(false);
+  // ROUND-57-a flake rule: the transient "Saved" reset rides the leak-safe
+  // scheduler (the old bare setTimeout outlived happy-dom teardown).
+  const resetAfter = useTimeoutClear();
 
   const save = () => {
     setBaseUrl(urlDraft);
     setToken(tokenDraft.trim() || null);
     setSaved(true);
-    setTimeout(() => setSaved(false), 1500);
+    resetAfter(() => setSaved(false), 1500);
   };
 
   return (
     <div className="mx-auto flex max-w-2xl flex-col gap-4">
-      {/* ROUND-43 (R43-5): the temporary sub-agent keys + model cards also
-          render here until the sidebar gains a dedicated "Sub-agents" entry
-          (Sidebar.tsx SETTINGS_SECTIONS is owned by the sidebar agent this
-          wave) — keeps them discoverable via Advanced meanwhile. */}
-      <SubAgentsSection />
-      <OrchestrationCard />
-      <MemoryCard />
+      {/* ROUND-58 (R58-d): short section header — the page is now exactly the
+          engine connection + the memory master switch, with a pointer to the
+          Sub-agents page that owns the rest. */}
+      <div className="pb-1">
+        <h2 className="text-[16px] font-black" style={{ color: styles.text }}>
+          Advanced
+        </h2>
+        <p className="mt-1 text-[12px]" style={{ color: styles.textSecondary }}>
+          Engine connection + agent memory. Sub-agent keys, model, parallelism, and supervision
+          live on the{" "}
+          <Link to="/settings?tab=subagents" className="font-bold underline" style={{ color: styles.accent }}>
+            Sub-agents
+          </Link>{" "}
+          page.
+        </p>
+      </div>
       <section
         className="rounded-lg p-4"
         style={{ background: styles.card, border: bdr("1.5px", styles.border) }}
@@ -469,105 +484,11 @@ function AdvancedTab() {
           </div>
         </div>
       </section>
+      <MemoryCard />
     </div>
   );
 }
 
-
-/* ── ROUND-36 (ADR-0022): sub-agent orchestration limits ─────────────────── */
-
-function OrchestrationCard() {
-  const styles = useThemeStyles();
-  const settingsQuery = useQuery({
-    queryKey: ["orchestration-settings"],
-    queryFn: fetchOrchestrationSettings,
-  });
-  const [draft, setDraft] = useState<{ maxParallel?: number; perKeyLimit?: number }>({});
-  const [msg, setMsg] = useState<string | null>(null);
-  const queryClientRef = useQueryClient();
-
-  const update = useMutation({
-    mutationFn: (patch: Partial<OrchestrationSettings>) => updateOrchestrationSettings(patch),
-    onSuccess: () => {
-      void queryClientRef?.invalidateQueries({ queryKey: ["orchestration-settings"] });
-      setMsg("Saved.");
-      setDraft({});
-      setTimeout(() => setMsg(null), 1500);
-    },
-    onError: (err: Error) => setMsg(err.message),
-  });
-
-  const current = settingsQuery.data;
-  if (settingsQuery.isLoading || current === undefined) {
-    return (
-      <section className="rounded-lg p-4" style={{ background: styles.card, border: bdr("1.5px", styles.border) }}>
-        <span className="text-[12px] font-mono" style={{ color: styles.textTertiary }}>
-          loading orchestration settings…
-        </span>
-      </section>
-    );
-  }
-
-  const stepper = (label: string, hint: string, field: "maxParallel" | "perKeyLimit", min: number, max: number) => (
-    <div className="flex items-center gap-3 flex-wrap">
-      <div className="min-w-[180px]">
-        <div className="text-[12.5px] font-bold" style={{ color: styles.text }}>{label}</div>
-        <div className="text-[11px]" style={{ color: styles.textTertiary }}>{hint}</div>
-      </div>
-      <span className="flex-1" />
-      <div className="flex items-center gap-1.5">
-        {[-1, +1].map((delta) => (
-          <button
-            key={delta}
-            onClick={() => {
-              const base = draft[field] ?? current[field];
-              setDraft((d) => ({ ...d, [field]: Math.min(max, Math.max(min, base + delta)) }));
-            }}
-            aria-label={`${delta > 0 ? "Increase" : "Decrease"} ${label}`}
-            className="w-8 h-8 rounded-[10px] grid place-items-center border-[1.5px] text-[14px] font-black"
-            style={{ borderColor: styles.border, color: styles.textSecondary, background: styles.bg }}
-          >
-            {delta > 0 ? "+" : "−"}
-          </button>
-        ))}
-        <span
-          className="w-14 text-center text-[15px] font-black tabular-nums rounded-[10px] py-1"
-          style={{ background: withAlpha(styles.accent, 0.09), color: styles.accent }}
-        >
-          {draft[field] ?? current[field]}
-        </span>
-      </div>
-    </div>
-  );
-
-  const dirty = draft.maxParallel !== undefined || draft.perKeyLimit !== undefined;
-
-  return (
-    <section className="rounded-lg p-4 flex flex-col gap-4" style={{ background: styles.card, border: bdr("1.5px", styles.border) }}>
-      <div className="flex items-center gap-2">
-        <span className="text-[11px] font-bold uppercase tracking-widest" style={{ color: styles.textTertiary }}>
-          Sub-Agent Orchestration
-        </span>
-        {msg && <span className="text-[11px] font-bold" style={{ color: styles.accent }}>{msg}</span>}
-      </div>
-      {stepper("Max parallel sub-agents", "Total concurrent sub-agent sessions (1–50)", "maxParallel", 1, 50)}
-      {stepper("Per API-key limit", "Concurrent sub-agents per API key — protects rate limits (1–20)", "perKeyLimit", 1, 20)}
-      <div className="flex items-center gap-3">
-        <p className="text-[11px] flex-1" style={{ color: styles.textTertiary }}>
-          Sub-agents prefer dedicated key-pool slots (managed per provider in Models &amp; Providers) over the primary key.
-        </p>
-        <button
-          onClick={() => update.mutate(draft)}
-          disabled={!dirty || update.isPending}
-          className="h-9 px-4 rounded-full text-[12px] font-bold disabled:opacity-50"
-          style={{ background: styles.accent, color: styles.accentText }}
-        >
-          {update.isPending ? "Saving…" : "Save"}
-        </button>
-      </div>
-    </section>
-  );
-}
 
 /* ── ROUND-49: the memory master switch (owner: "maybe try giving me a
  * setting in the settings to turn off this memory functionality") ───────── */

@@ -1,8 +1,14 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router";
 import { useQuery } from "@tanstack/react-query";
 import { Check, ChevronDown, ChevronRight, Settings } from "lucide-react";
-import { fetchProviderModels, fetchProviders, type Agent } from "../../../lib/api";
+import {
+  fetchProviderModelConfig,
+  fetchProviderModels,
+  fetchProviders,
+  type Agent,
+  type ProviderModelConfig,
+} from "../../../lib/api";
 import { filterModelsForPicker, useSettingsStore } from "../../../lib/settings-store";
 import { useThemeStyles } from "../../../lib/use-theme-styles";
 import { withAlpha } from "../../dashboard/helpers";
@@ -33,6 +39,20 @@ const FLYOUT_CLOSE_DELAY_MS = 220;
 
 /** Geometry used when the popover can't be measured / the touch path. */
 const INLINE_GEO = { side: "inline" as FlyoutSide, left: null, top: 0, viewportTop: 0, maxHeight: 280 };
+
+/** ROUND-58 (R58-d): one flyout row — the live-catalog id merged with the
+ * provider's models-config (display name, custom pricing, hidden flag). */
+interface FlyoutModel {
+  /** Model id sent to the API (the override value). */
+  modelId: string;
+  /** Config displayName when present — otherwise the raw id. */
+  label: string;
+  /** Any models-config row exists for this model (drives the "configured" dot). */
+  configured: boolean;
+  /** Config input price — null = unknown (the shared free filter falls back
+   * to the `:free` id heuristic). */
+  inputPricePerMtok: number | null;
+}
 
 /** DOMRect → the plain-number rect computeFlyoutGeometry takes. */
 const plainRect = (el: HTMLElement): PlainRect => {
@@ -149,12 +169,50 @@ export function ModelSelector({
     enabled: open && hoveredProvider !== null,
     staleTime: 5 * 60_000,
   });
-  const allModels = (modelsQuery.data ?? []).slice(0, FLYOUT_MODEL_CAP);
-  const models = filterModelsForPicker(
-    allModels.map((m) => ({ modelId: m })),
-    modelsFreeOnly,
-  ).map((e) => e.modelId);
+  // ROUND-58 (R58-d): the provider's models-CONFIG (the Settings models
+  // table) — merged client-side so the picker honors hidden/display-name/
+  // custom-pricing (the owner: "customize which models to show and which
+  // models to not show"). Runs BESIDE the live-catalog query (same gating —
+  // no waterfall); fails soft — an error falls back to today's ids-only
+  // behavior.
+  const modelsConfigQuery = useQuery({
+    queryKey: ["provider-models-config", hoveredProvider],
+    queryFn: () => fetchProviderModelConfig(hoveredProvider as string),
+    enabled: open && hoveredProvider !== null,
+    staleTime: 5 * 60_000,
+    retry: false,
+  });
+  const configByModel = useMemo(() => {
+    const map = new Map<string, ProviderModelConfig>();
+    for (const row of modelsConfigQuery.data ?? []) map.set(row.modelId, row);
+    return map;
+  }, [modelsConfigQuery.data]);
+
+  // ROUND-58 (R58-d): live ids + config merge — hidden rows are EXCLUDED,
+  // display names replace raw ids, and the shared free-only filter sees the
+  // CONFIG's input price (falling back to the id heuristic when unknown).
+  const allModels: FlyoutModel[] = (modelsQuery.data ?? [])
+    .slice(0, FLYOUT_MODEL_CAP)
+    .map((id) => {
+      const config = configByModel.get(id);
+      return {
+        modelId: id,
+        label:
+        config?.displayName !== undefined && config.displayName.trim() !== ""
+          ? config.displayName
+          : id,
+        configured: config !== undefined,
+        inputPricePerMtok: config?.inputPricePerMtok ?? null,
+      };
+    })
+    .filter((m) => configByModel.get(m.modelId)?.hidden !== true);
+  const models = filterModelsForPicker(allModels, modelsFreeOnly);
   const hiddenCount = allModels.length - models.length;
+  // Config-hidden models are NOT reachable via "show all" — surfaced as
+  // their own subtle footer note instead (they're turned off in Settings).
+  const configHiddenCount = (modelsQuery.data ?? [])
+    .slice(0, FLYOUT_MODEL_CAP)
+    .filter((id) => configByModel.get(id)?.hidden === true).length;
 
   // Effective model = override ?? agent.model (unchanged per-send semantics).
   const effective = override?.model ?? agent?.model ?? null;
@@ -271,15 +329,15 @@ export function ModelSelector({
         </div>
       ) : (
         models.map((m) => {
-          const isSelected = m === effective;
+          const isSelected = m.modelId === effective;
           return (
             <button
-              key={m}
+              key={m.modelId}
               type="button"
               role="option"
               aria-selected={isSelected}
-              onClick={() => pickModel(m, hoveredProvider)}
-              title={m}
+              onClick={() => pickModel(m.modelId, hoveredProvider)}
+              title={m.modelId}
               className="w-full flex items-center gap-1.5 text-left px-2 py-1.5 rounded-lg font-mono text-[10.5px] truncate transition-colors"
               style={{
                 color: styles.textSecondary,
@@ -297,7 +355,18 @@ export function ModelSelector({
               ) : (
                 <span className="w-[11px] shrink-0" />
               )}
-              <span className="min-w-0 flex-1 truncate">{m}</span>
+              <span className="min-w-0 flex-1 truncate">{m.label}</span>
+              {/* ROUND-58 (R58-d): the subtle "configured" dot — this model
+                  has a Settings models-config row (custom name/pricing/visibility).
+                  No text content — must not pollute the option's accessible name. */}
+              {m.configured && (
+                <span
+                  className="w-1.5 h-1.5 rounded-full shrink-0"
+                  style={{ background: styles.accent, opacity: 0.7 }}
+                  title="Configured in Settings — pricing and visibility customized"
+                  aria-hidden
+                />
+              )}
             </button>
           );
         })
@@ -320,6 +389,17 @@ export function ModelSelector({
         >
           {hiddenCount} paid model{hiddenCount === 1 ? "" : "s"} hidden — show all
         </button>
+      ) : null}
+      {/* ROUND-58 (R58-d): models hidden via Settings config — NOT reachable
+          through "show all"; their own honest footer note. */}
+      {configHiddenCount > 0 ? (
+        <div
+          className="px-2 pt-1 pb-1.5 text-[10px]"
+          style={{ color: styles.textTertiary }}
+          title="Hidden per model in Settings → Models & Providers"
+        >
+          {configHiddenCount} model{configHiddenCount === 1 ? "" : "s"} hidden in Settings
+        </div>
       ) : null}
     </div>
   );

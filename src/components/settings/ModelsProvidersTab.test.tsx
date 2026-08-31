@@ -33,12 +33,15 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { cleanup, fireEvent, screen, waitFor, within } from "@testing-library/react";
 import { KeyPoolSection, ModelsProvidersTab } from "./ModelsProvidersTab";
 import { resetTestState, renderWithProviders } from "../../test-utils";
+import { useSettingsStore } from "../../lib/settings-store";
 import type { CatalogModel, KeyPoolSlot, ProviderModelConfig, ProviderView } from "../../lib/api";
 
 /* ── Stateful fetch mock (the sidecar API surface this tab touches) ───────── */
 
 const BASE = "http://127.0.0.1:5178";
 const calls: Array<{ method: string; url: string; body?: unknown }> = [];
+/** ROUND-58 (R58-d): the clipboard stub for the reveal-copy assertions. */
+const clipboardWriteText = vi.fn(async (_text: string) => undefined);
 
 const PROVIDER: ProviderView = {
   id: "openrouter",
@@ -51,6 +54,61 @@ const PROVIDER: ProviderView = {
   hasKey: true,
 };
 
+/* ── ROUND-58 (R58-d) test fixtures ───────────────────────────────────────── */
+
+/** A keyless seeded preset ("Their providers are like which I haven't even
+ * configured") — belongs in the collapsed Not-configured group. */
+const ANTHROPIC: ProviderView = {
+  id: "anthropic",
+  name: "Anthropic",
+  kind: "anthropic",
+  baseUrl: "https://api.anthropic.com/v1",
+  apiFormat: "anthropic-messages",
+  enabled: true,
+  createdAt: "2026-08-21T09:01:00Z",
+  hasKey: false,
+};
+const OPENAI: ProviderView = {
+  id: "openai",
+  name: "OpenAI",
+  kind: "openai",
+  baseUrl: "https://api.openai.com/v1",
+  apiFormat: "chat-completions",
+  enabled: true,
+  createdAt: "2026-08-21T09:02:00Z",
+  hasKey: false,
+};
+const GOOGLE: ProviderView = {
+  id: "google",
+  name: "Google",
+  kind: "google",
+  baseUrl: "https://generativelanguage.googleapis.com/v1beta/openai",
+  apiFormat: "chat-completions",
+  enabled: true,
+  createdAt: "2026-08-21T09:03:00Z",
+  hasKey: false,
+};
+
+/** A user-created CUSTOM provider (not a reserved id) — always a "live"
+ * row, and its Connection card shows Base URL + API format. */
+const CUSTOM_PROVIDER: ProviderView = {
+  id: "my-gateway",
+  name: "My Gateway",
+  kind: "openai-compatible",
+  baseUrl: "https://gw.example.com/v1",
+  apiFormat: "chat-completions",
+  enabled: true,
+  createdAt: "2026-08-21T09:04:00Z",
+  hasKey: true,
+};
+
+/** GET /providers response (tests append preset/custom rows). */
+let providersList: ProviderView[] = [];
+/** PATCH /providers/:id bodies (the disable flow). */
+let patchResponses: Array<{ id: string; body: Record<string, unknown> }> = [];
+/** POST /providers/:id/keys/reveal response. */
+let revealKeys: Array<{ slot: number; value: string }> = [];
+
 let pool: KeyPoolSlot[] = [];
 /** What POST /providers/:id/test answers this test (ok:true / ok:false). */
 let testResponse: unknown = {
@@ -61,8 +119,11 @@ let testResponse: unknown = {
 
 /* ── ROUND-50 (R50-d): stateful model-config + catalog mock state ─────────── */
 
-/** GET /providers/:id/models-config rows (POST/PATCH/DELETE mutate this). */
+/** GET /providers/:id/models-config rows (POST/PATCH/DELETE mutate this) —
+ * the openrouter provider's list (the fixture agents' provider). */
 let configured: ProviderModelConfig[] = [];
+/** The CUSTOM provider's models-config rows (R58-d merge-scoping tests). */
+let customConfigured: ProviderModelConfig[] = [];
 
 /** GET /providers/:id/models entries — null ⇒ the route 404s (unreachable). */
 let liveCatalog: Array<{ id: string; name?: string }> | null = [
@@ -130,13 +191,35 @@ const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => 
   calls.push({ method, url, body });
 
   if (url === `${BASE}/api/v1/providers` && method === "GET") {
-    return jsonResponse({ providers: [PROVIDER] });
+    return jsonResponse({ providers: providersList });
   }
-  // Key pool (GET list + stateful PUT/DELETE per slot).
-  const keyMatch = url.match(/\/api\/v1\/providers\/openrouter\/keys(?:\/(\d+))?$/);
+  // ROUND-58 (R58-d): PATCH /providers/:id — the enable/disable toggle.
+  const providerPatchMatch = url.match(/\/api\/v1\/providers\/([^/]+)$/);
+  if (providerPatchMatch !== null && method === "PATCH") {
+    const id = providerPatchMatch[1];
+    const patch = (body ?? {}) as Record<string, unknown>;
+    patchResponses.push({ id, body: patch });
+    const updated = providersList.find((p) => p.id === id);
+    if (updated === undefined) {
+      return {
+        status: 404,
+        ok: false,
+        text: async () => JSON.stringify({ error: { code: "NOT_FOUND", message: `no provider with id ${id}` } }),
+      } as unknown as Response;
+    }
+    Object.assign(updated, patch);
+    return jsonResponse(updated);
+  }
+  // ROUND-58 (R58-d): POST /providers/:id/keys/reveal — the full values.
+  const revealMatch = url.match(/\/api\/v1\/providers\/([^/]+)\/keys\/reveal$/);
+  if (revealMatch !== null && method === "POST") {
+    return jsonResponse({ keys: revealKeys });
+  }
+  // Key pool (GET list + stateful PUT/DELETE per slot) — provider-scoped.
+  const keyMatch = url.match(/\/api\/v1\/providers\/([^/]+)\/keys(?:\/(\d+))?$/);
   if (keyMatch !== null) {
-    if (keyMatch[1] === undefined) return jsonResponse({ keys: pool });
-    const slot = Number(keyMatch[1]);
+    if (keyMatch[2] === undefined) return jsonResponse({ keys: pool });
+    const slot = Number(keyMatch[2]);
     if (method === "PUT") {
       const value = String((body as { value: string }).value);
       pool = pool.filter((k) => k.slot !== slot);
@@ -162,6 +245,10 @@ const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => 
   }
   if (url === `${BASE}/api/v1/providers/openrouter/models-config` && method === "GET") {
     return jsonResponse({ models: configured });
+  }
+  // ROUND-58 (R58-d): the custom provider's models-config (merge scoping).
+  if (url === `${BASE}/api/v1/providers/my-gateway/models-config` && method === "GET") {
+    return jsonResponse({ models: customConfigured });
   }
   // ROUND-50 (R50-d): model-config upsert (the picker's bulk add + manual id).
   if (url === `${BASE}/api/v1/providers/openrouter/models` && method === "POST") {
@@ -211,6 +298,11 @@ const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => 
     }
     return jsonResponse({ models: liveCatalog });
   }
+  // ROUND-58 (R58-d): the custom provider's live catalog (served the same,
+  // but its entries must NOT merge into the models LIST — only the picker).
+  if (url === `${BASE}/api/v1/providers/my-gateway/models` && method === "GET") {
+    return jsonResponse({ models: liveCatalog ?? [] });
+  }
   if (url === `${BASE}/api/v1/providers/openrouter/test` && method === "POST") {
     return jsonResponse(testResponse);
   }
@@ -224,10 +316,19 @@ const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => 
 beforeEach(() => {
   resetTestState();
   calls.length = 0;
+  providersList = [PROVIDER].map((p) => ({ ...p }));
+  patchResponses = [];
+  revealKeys = [];
   pool = [];
   configured = [];
+  customConfigured = [];
   liveCatalog = [{ id: "z-ai/glm-5.2:free", name: "Z.ai: GLM 5.2" }];
   testResponse = { ok: true, latencyMs: 312, message: "Reachable — pick a model for a full key + model test." };
+  clipboardWriteText.mockClear();
+  Object.defineProperty(globalThis.navigator, "clipboard", {
+    value: { writeText: clipboardWriteText },
+    configurable: true,
+  });
   vi.stubGlobal("fetch", fetchMock);
   fetchMock.mockClear();
 });
@@ -632,5 +733,290 @@ describe("Configure model dialog — pricing round-trip (ROUND-50 R50-d)", () =>
     );
     expect(calls.some((c) => c.method === "PATCH")).toBe(false);
     expect(screen.getByRole("dialog", { name: "Configure model" })).toBeTruthy();
+  });
+});
+
+/* ── ROUND-58 (R58-d): the left list — Not-configured group + adaptive height ─ */
+
+describe("Left list — Not-configured group + adaptive height (ROUND-58 R58-d)", () => {
+  it("keyless seeded presets collapse under 'Not configured' — expandable, selectable, collapsible", async () => {
+    providersList = [PROVIDER, ANTHROPIC, OPENAI, GOOGLE].map((p) => ({ ...p }));
+    renderWithProviders(<ModelsProvidersTab />);
+
+    // The configured provider renders as a live row…
+    await waitFor(() => expect(screen.getByTitle("https://openrouter.ai/api/v1 · Chat completions")).toBeTruthy());
+    // …the three keyless presets are grouped + COLLAPSED by default (the
+    // owner: "Their providers are like which I haven't even configured").
+    const groupBtn = await screen.findByRole("button", { name: "Not configured providers (3)" });
+    expect(groupBtn.getAttribute("aria-expanded")).toBe("false");
+    expect(screen.queryByTitle("https://api.anthropic.com/v1 · Anthropic messages")).toBeNull();
+    expect(screen.queryByTitle("https://api.openai.com/v1 · Chat completions")).toBeNull();
+    expect(screen.queryByTitle("https://generativelanguage.googleapis.com/v1beta/openai · Chat completions")).toBeNull();
+
+    // Expand → the rows appear (muted but selectable)…
+    fireEvent.click(groupBtn);
+    expect(screen.getByTitle("https://api.anthropic.com/v1 · Anthropic messages")).toBeTruthy();
+    expect(screen.getByTitle("https://api.openai.com/v1 · Chat completions")).toBeTruthy();
+    // …selecting one opens its detail pane.
+    fireEvent.click(screen.getByTitle("https://api.anthropic.com/v1 · Anthropic messages"));
+    await waitFor(() => expect(screen.getByLabelText("Test key")).toBeTruthy());
+
+    // Collapse again → rows gone FROM THE LEFT LIST (the detail pane's own
+    // endpoint line legitimately keeps the selected provider's title).
+    fireEvent.click(screen.getByRole("button", { name: "Not configured providers (3)" }));
+    const leftCol = document.querySelector(".w-\\[280px\\]") as HTMLElement;
+    expect(within(leftCol).queryByTitle("https://api.anthropic.com/v1 · Anthropic messages")).toBeNull();
+    expect(within(leftCol).queryByTitle("https://api.openai.com/v1 · Chat completions")).toBeNull();
+  });
+
+  it("the left column is content-adaptive with a 220px floor, keeping its own scroller", async () => {
+    renderWithProviders(<ModelsProvidersTab />);
+    const left = document.querySelector(".w-\\[280px\\]") as HTMLElement;
+    expect(left).not.toBeNull();
+    expect(left.className).toContain("h-fit");
+    expect(left.className).toContain("max-h-full");
+    expect(left.className).toContain("min-h-[220px]");
+    // The inner list keeps its scroll container for the many-providers case.
+    expect(left.querySelector(".overflow-y-auto.auto-scroll")).not.toBeNull();
+  });
+
+  it("a keyless CUSTOM provider stays a live row — never grouped", async () => {
+    providersList = [PROVIDER, { ...CUSTOM_PROVIDER, hasKey: false }];
+    renderWithProviders(<ModelsProvidersTab />);
+    await waitFor(() =>
+      expect(screen.getByTitle("https://gw.example.com/v1 · Chat completions")).toBeTruthy(),
+    );
+    expect(screen.queryByRole("button", { name: /Not configured providers/ })).toBeNull();
+  });
+});
+
+/* ── ROUND-58 (R58-d): the Connection card — preset vs custom fields ───────── */
+
+describe("Connection card — preset vs custom fields (ROUND-58 R58-d)", () => {
+  it("openrouter (preset): Base URL + API format HIDDEN with the info line; key + test remain", async () => {
+    renderWithProviders(<ModelsProvidersTab />);
+    fireEvent.click(await screen.findByTitle("https://openrouter.ai/api/v1 · Chat completions"));
+    await waitFor(() => expect(screen.getByLabelText("Test key")).toBeTruthy());
+
+    // The fixed-endpoint fields are GONE…
+    expect(screen.queryByLabelText("Base URL")).toBeNull();
+    expect(screen.queryByText("API format")).toBeNull();
+    // …replaced by the muted info line (the owner: "It should only be shown
+    // for custom providers").
+    expect(screen.getByText("Preset provider — endpoint and format are fixed.")).toBeTruthy();
+    // The API-key input + Test connection stay for EVERY provider.
+    expect(screen.getByLabelText("API key")).toBeTruthy();
+    expect(screen.getByRole("button", { name: /test connection/i })).toBeTruthy();
+  });
+
+  it("custom provider: Base URL + API format shown as before", async () => {
+    providersList = [{ ...CUSTOM_PROVIDER }];
+    renderWithProviders(<ModelsProvidersTab />);
+    fireEvent.click(await screen.findByTitle("https://gw.example.com/v1 · Chat completions"));
+    await waitFor(() => expect(screen.getByLabelText("Test key")).toBeTruthy());
+    expect(screen.getByLabelText("Base URL")).toBeTruthy();
+    expect(screen.getByText("API format")).toBeTruthy();
+    expect(screen.queryByText("Preset provider — endpoint and format are fixed.")).toBeNull();
+  });
+});
+
+/* ── ROUND-58 (R58-d): the enable/disable toggle + agent warning ───────────── */
+
+describe("Enable/disable toggle (ROUND-58 R58-d)", () => {
+  it("disabling a provider with agents referencing it asks first; Cancel aborts with NO PATCH", async () => {
+    renderWithProviders(<ModelsProvidersTab />);
+    fireEvent.click(await screen.findByTitle("https://openrouter.ai/api/v1 · Chat completions"));
+    const toggle = await screen.findByRole("switch", { name: "Toggle provider OpenRouter" });
+    expect(toggle.getAttribute("aria-checked")).toBe("true");
+    // Wait for the agent-registry query to land (the fixture agents all
+    // reference openrouter) — the toggle's tooltip flips to the agent count.
+    await waitFor(() => expect(toggle.getAttribute("title")).toContain("agent(s) use this provider"));
+
+    fireEvent.click(toggle);
+    // The inline warning box appears with the count + the agent names.
+    const alert = await screen.findByRole("alert");
+    expect(alert.textContent).toContain("agents use this provider");
+    expect(alert.textContent).toContain("Disable anyway?");
+    // Cancel → the box closes and NO PATCH left the page.
+    fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+    await waitFor(() => expect(screen.queryByRole("alert")).toBeNull());
+    expect(patchResponses.some((p) => p.body.enabled === false)).toBe(false);
+  });
+
+  it("confirming ('Disable anyway') PATCHes {enabled: false}", async () => {
+    renderWithProviders(<ModelsProvidersTab />);
+    fireEvent.click(await screen.findByTitle("https://openrouter.ai/api/v1 · Chat completions"));
+    const toggle = await screen.findByRole("switch", { name: "Toggle provider OpenRouter" });
+    await waitFor(() => expect(toggle.getAttribute("title")).toContain("agent(s) use this provider"));
+    fireEvent.click(toggle);
+    fireEvent.click(await screen.findByRole("button", { name: "Disable anyway" }));
+    await waitFor(() => {
+      expect(patchResponses).toContainEqual({ id: "openrouter", body: { enabled: false } });
+    });
+  });
+
+  it("a provider with NO agents disables immediately — no confirm box", async () => {
+    providersList = [{ ...CUSTOM_PROVIDER }];
+    renderWithProviders(<ModelsProvidersTab />);
+    fireEvent.click(await screen.findByTitle("https://gw.example.com/v1 · Chat completions"));
+    const toggle = await screen.findByRole("switch", { name: "Toggle provider My Gateway" });
+    // No fixture agent references my-gateway → the tooltip stays generic.
+    await waitFor(() => expect(toggle.getAttribute("title")).toBe("Disable this provider"));
+    fireEvent.click(toggle);
+    await waitFor(() => {
+      expect(patchResponses).toContainEqual({ id: "my-gateway", body: { enabled: false } });
+    });
+    expect(screen.queryByRole("alert")).toBeNull();
+  });
+});
+
+/* ── ROUND-58 (R58-d): the key REVEAL UI (primary + pool rows) ─────────────── */
+
+describe("Key reveal (ROUND-58 R58-d)", () => {
+  it("the stored-key eye POSTs the reveal route and shows the FULL value + copy + hide", async () => {
+    revealKeys = [
+      { slot: 0, value: "sk-or-v1-primary-full" },
+      { slot: 2, value: "sk-or-v1-pool-2-full" },
+    ];
+    renderWithProviders(<ModelsProvidersTab />);
+    fireEvent.click(await screen.findByTitle("https://openrouter.ai/api/v1 · Chat completions"));
+    await waitFor(() => expect(screen.getByLabelText("API key")).toBeTruthy());
+
+    // NEVER auto-fetched on mount — the reveal route is untouched until the
+    // explicit click.
+    expect(calls.every((c) => !c.url.includes("/keys/reveal"))).toBe(true);
+
+    fireEvent.click(screen.getByRole("button", { name: "Show stored key" }));
+    const input = (await screen.findByLabelText("Stored API key (revealed)")) as HTMLInputElement;
+    expect(input.value).toBe("sk-or-v1-primary-full");
+    expect(input.readOnly).toBe(true);
+
+    // Copy → the clipboard receives the FULL value.
+    fireEvent.click(screen.getByRole("button", { name: "Copy stored key" }));
+    await waitFor(() => expect(clipboardWriteText).toHaveBeenCalledWith("sk-or-v1-primary-full"));
+    await waitFor(() => expect(screen.getByText("Key copied to clipboard.")).toBeTruthy());
+
+    // Hide → back to the rotate-key input.
+    fireEvent.click(screen.getByRole("button", { name: "Hide stored key" }));
+    await waitFor(() => expect(screen.getByLabelText("API key")).toBeTruthy());
+    expect(screen.queryByLabelText("Stored API key (revealed)")).toBeNull();
+  });
+
+  it("honestly reports a missing stored key", async () => {
+    revealKeys = []; // nothing stored on the server
+    renderWithProviders(<ModelsProvidersTab />);
+    fireEvent.click(await screen.findByTitle("https://openrouter.ai/api/v1 · Chat completions"));
+    fireEvent.click(await screen.findByRole("button", { name: "Show stored key" }));
+    await waitFor(() => expect(screen.getByText("No key stored for this provider.")).toBeTruthy());
+  });
+
+  it("pool rows reveal their full value — ONE fetch, per-row toggle, copy, re-mask", async () => {
+    pool = [
+      { slot: 2, hasKey: true, masked: "sk-o…aaaa" },
+      { slot: 4, hasKey: true, masked: "sk-o…cccc" },
+    ];
+    revealKeys = [
+      { slot: 2, value: "sk-or-v1-pool-2-full" },
+      { slot: 4, value: "sk-or-v1-pool-4-full" },
+    ];
+    renderWithProviders(<ModelsProvidersTab />);
+    fireEvent.click(await screen.findByTitle("https://openrouter.ai/api/v1 · Chat completions"));
+    await waitFor(() => expect(screen.getByText("SLOT 2")).toBeTruthy());
+
+    // Masked by default; still no auto-fetch.
+    expect(screen.getByText("sk-o…aaaa")).toBeTruthy();
+    expect(calls.every((c) => !c.url.includes("/keys/reveal"))).toBe(true);
+
+    fireEvent.click(screen.getByRole("button", { name: "Reveal slot 2 key" }));
+    await waitFor(() => expect(screen.getByText("sk-or-v1-pool-2-full")).toBeTruthy());
+    // Slot 4 stays masked (per-row toggle)…
+    expect(screen.getByText("sk-o…cccc")).toBeTruthy();
+    // …and reveals from the SAME cached fetch — no second reveal call.
+    fireEvent.click(screen.getByRole("button", { name: "Reveal slot 4 key" }));
+    await waitFor(() => expect(screen.getByText("sk-or-v1-pool-4-full")).toBeTruthy());
+    expect(calls.filter((c) => c.url.includes("/keys/reveal"))).toHaveLength(1);
+
+    // Copy rides the row.
+    fireEvent.click(screen.getByRole("button", { name: "Copy slot 4 key" }));
+    await waitFor(() => expect(clipboardWriteText).toHaveBeenCalledWith("sk-or-v1-pool-4-full"));
+
+    // Toggle back to masked.
+    fireEvent.click(screen.getByRole("button", { name: "Hide slot 4 key" }));
+    await waitFor(() => expect(screen.getByText("sk-o…cccc")).toBeTruthy());
+    expect(screen.queryByText("sk-or-v1-pool-4-full")).toBeNull();
+  });
+
+  it("pool mutations invalidate the reveal cache — a slot added AFTER a reveal re-fetches (never a stale value or a false 'No key stored')", async () => {
+    pool = [{ slot: 2, hasKey: true, masked: "sk-o…aaaa" }];
+    revealKeys = [{ slot: 2, value: "sk-or-v1-pool-2-full" }];
+    renderWithProviders(<ModelsProvidersTab />);
+    fireEvent.click(await screen.findByTitle("https://openrouter.ai/api/v1 · Chat completions"));
+    await waitFor(() => expect(screen.getByText("SLOT 2")).toBeTruthy());
+
+    // First reveal — one fetch, cache populated.
+    fireEvent.click(screen.getByRole("button", { name: "Reveal slot 2 key" }));
+    await waitFor(() => expect(screen.getByText("sk-or-v1-pool-2-full")).toBeTruthy());
+    expect(calls.filter((c) => c.url.includes("/keys/reveal"))).toHaveLength(1);
+
+    // Add slot 3 through the pool UI (the stateful mock PUTs it) and make the
+    // server's reveal answer grow with it.
+    fireEvent.change(await screen.findByLabelText("New pool key"), {
+      target: { value: "sk-or-v1-pool-3-new" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: /add slot/i }));
+    await waitFor(() => expect(screen.getByText("SLOT 3")).toBeTruthy());
+    revealKeys = [
+      { slot: 2, value: "sk-or-v1-pool-2-full" },
+      { slot: 3, value: "sk-or-v1-pool-3-new" },
+    ];
+    // The pool mutation ALSO reset the reveal state — slot 2 masks again
+    // (its cached value predates the mutation; never risk a stale reveal).
+    await waitFor(() => expect(screen.getByText("sk-o…aaaa")).toBeTruthy());
+    expect(screen.queryByText("sk-or-v1-pool-2-full")).toBeNull();
+
+    // Revealing the NEW slot re-fetches (cache-miss, listing says held) and
+    // shows its value — the pre-fix bug here was the false "No key stored in
+    // slot 3." from the stale first-reveal cache.
+    fireEvent.click(screen.getByRole("button", { name: "Reveal slot 3 key" }));
+    await waitFor(() => expect(screen.getByText("sk-or-v1-pool-3-new")).toBeTruthy());
+    expect(calls.filter((c) => c.url.includes("/keys/reveal"))).toHaveLength(2);
+  });
+});
+
+/* ── ROUND-58 (R58-d): catalog merge scoping (custom providers) ────────────── */
+
+describe("Catalog merge scoping (ROUND-58 R58-d)", () => {
+  it("a CUSTOM provider's models list shows ONLY configured rows — the live catalog no longer leaks in, but still feeds the picker", async () => {
+    providersList = [{ ...CUSTOM_PROVIDER }];
+    customConfigured = [
+      modelRow({
+        id: "mdl_gw-1",
+        providerId: "my-gateway",
+        modelId: "gw/model-a",
+        displayName: "GW Model A",
+      }),
+    ];
+    liveCatalog = [{ id: "z-ai/glm-5.2:free", name: "Z.ai: GLM 5.2" }];
+    renderWithProviders(<ModelsProvidersTab />);
+    fireEvent.click(await screen.findByTitle("https://gw.example.com/v1 · Chat completions"));
+
+    // Free-only default: the count chip shows configured rows ONLY (the
+    // live catalog entry did not merge in — "0 free of 1", not 2).
+    await waitFor(() => expect(screen.getByText("0 free of 1")).toBeTruthy());
+    // Switch to All models → the configured row renders…
+    fireEvent.click(screen.getByRole("button", { name: "All models" }));
+    await waitFor(() => expect(screen.getByText("GW Model A")).toBeTruthy());
+    // …and the live catalog entry did NOT become a "catalog" row.
+    expect(screen.queryByText("catalog")).toBeNull();
+    // Restore the shared free-only default for any test that follows.
+    useSettingsStore.setState({ modelsFreeOnly: true });
+
+    // The "Add models" picker still lists the custom provider's OWN live
+    // catalog (the merge scope only affects the list rows).
+    fireEvent.click(screen.getByRole("button", { name: /add models/i }));
+    const dialog = await screen.findByRole("dialog", { name: "Add models" });
+    await waitFor(() =>
+      expect(within(dialog).getByLabelText("Select model z-ai/glm-5.2:free")).toBeTruthy(),
+    );
   });
 });

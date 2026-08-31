@@ -1,4 +1,4 @@
-<!-- last-reviewed: 2026-08-31 round-57 -->
+<!-- last-reviewed: 2026-08-31 round-58 -->
 # AGENT MEMORY — lessons learned, rules going forward
 
 **Owner directive (2026-08-23):** "learn from the mistakes you made, document
@@ -688,3 +688,19 @@ Format per entry: `N. TITLE (date, source)` → mistake → root cause → rule.
     installers do not owe you. Generalized: when a check passes but the
     field fails, the first question is not "what else is broken" but
     "what does this check NOT actually exercise?".
+
+71. **The .d.ts lies twice: read the type the CONSUMER actually resolves,
+    not the one that greps first.** (2026-08-31, round-58; caught by
+    typecheck after the tests passed.) The AI SDK v7 ships TWO
+    `tool-input-start`/`tool-input-delta` shapes: the UI-message parts
+    (`toolCallId` / `inputTextDelta` — greps first near the top of
+    index.d.ts) and the fullStream parts (`id` / `delta` — what
+    `result.fullStream` actually yields). The first implementation (and
+    its passing tests — the mocks mirrored the wrong shape) used the
+    wrong field names; TypeScript flagged `Property 'toolCallId' does not
+    exist` and the fix was two lines. RULE: when consuming a library type
+    through a union/iteration, grep for the type the ITERATION SITE
+    resolves (search the `TextStream*Part` family, not the message
+    family), and treat "tests green" + "types red" as the tests mocking
+    the wrong shape — mock from the CONSUMER's resolved type, never from
+    a doc example.

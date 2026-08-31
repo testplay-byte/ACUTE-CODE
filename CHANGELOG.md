@@ -1,4 +1,4 @@
-<!-- last-reviewed: 2026-08-31 round-57 -->
+<!-- last-reviewed: 2026-08-31 round-58 -->
 # Changelog
 
 All notable changes to ACUTE-CODE are documented here. Entries are written for
@@ -11,9 +11,108 @@ version number is single-sourced from the root `package.json`
 
 ## [Unreleased]
 
-Planned next: installer code-signing (SmartScreen), the deepseek-harness
-future candidates (compaction pressure-trigger, continuable sub-agent
-children), the Files-tab polish.
+Planned next: installer code-signing (SmartScreen), the prompt-section
+registry (modular prompt overrides — the `.acuterules` extension point grows
+into per-section files), the deepseek-harness future candidates (compaction
+pressure-trigger, continuable sub-agent children), the Files-tab polish.
+
+## [0.58.0] - 2026-08-31
+
+Round 58 — the desktop-app-polish round. The owner's eleventh Windows test
+session was the first fully-working desktop run in the product's history
+(the R57 engine-bundling fix held): the app opened clean, projects created,
+tasks ran, files were written. The session's report was a list of UX and
+behavioral bugs, every one of which is fixed here.
+
+### Added
+
+- **Frameless window with an integrated title bar** (the owner: "the top
+  window kind of thing, I don't want you to show that… I want it to look
+  like a full-fledged application"). The native OS title bar (close /
+  restore / minimize + app-name strip) is gone — replaced by a slim in-app
+  bar: full-width drag region (double-click to maximize), app identity at
+  left, minimize / maximize-restore / close controls at right, translucent
+  backdrop-blur over the shell's ambient background. In web mode the bar is
+  absent and the layout is unchanged.
+- **Live file-write preview while the agent writes** (the owner: "while it
+  was writing the files it did not show me anything at all. After it had
+  written the whole file then it showed me"). The model's streamed tool
+  arguments now arrive as live SSE frames (`tool-input-start` /
+  `tool-input-delta`); the working section renders a live `writing
+  <file> — N chars` box with the partial file content (tolerantly decoded
+  from the growing JSON), replaced by the final diff when the write
+  completes. Live-verified: the owner's exact 3-file task streams 40+ arg
+  deltas during generation.
+- **"Continue" after a stop.** The stop button no longer discards the
+  in-flight text: the partial reply is flushed to the transcript, and the
+  composer offers a Continue button that resumes from where the response
+  stopped.
+- **A terminal chat harness** (`docs/runbooks/CLI-HARNESS.md`): `scripts/
+  acute.mjs` grew `chat:new / chat / chat:stream / chat:stop / chat:events /
+  chat:ctx / approvals / approve / deny` — live-streamed agent turns with
+  thinking/tool/approval rendering, Ctrl-C-to-stop, and JSONL `--raw` for
+  scripting. Long-session testing no longer needs the UI.
+- **Visible API keys** (the owner: "It should not be hidden. I should be
+  able to… see the API key there, every single one of the API keys"). A new
+  authenticated reveal route returns the stored key values; the provider
+  page's primary-key field and every key-pool row gained reveal eyes with
+  copy buttons. (Deliberately reverses the old R47 no-keys-in-responses
+  rule — the owner's own local app, the owner's own keys.)
+- **Key-reveal route**: `POST /api/v1/providers/:id/keys/reveal`.
+
+### Fixed
+
+- **Stop no longer reports "Generation failed / body stream buffer was
+  aborted."** A deliberate stop renders a quiet "Stopped by user" card (no
+  red, no error code), the server returns a `stopped` terminal frame, and
+  the client no longer misclassifies its own abort as a network error.
+- **The sidebar no longer spins forever after a stop** — the engine resets
+  the session to its resting state on abort (previously it stayed
+  "running" until the next app restart).
+- **"Open the current page in your system browser" works** (was silently
+  swallowed by the embedded webview): a Rust-side opener hands the URL to
+  the OS default browser; the web build keeps `window.open`.
+- **The pop-out browser window is no longer a white box.** The pop-out
+  command was a synchronous Tauri command that deadlocked webview creation
+  on Windows — it is now async (the same fix pattern the embedded tabs
+  already used), and the injected nav overlay rides an initialization
+  script that actually survives page loads. The pop-out shares the ONE
+  browser profile with the embedded browser (the old tooltip claimed
+  "isolated" — it never was).
+- **The URL bar no longer resets mid-typing** (navigation polls no longer
+  stomp the draft while the field is focused), and the viewport readout is
+  honest when a preset is clamped to the panel size ("843×590 (clamped
+  from 1920×1080 — panel too small)").
+- **The end-of-task session regurgitation is capped.** History replay
+  previously re-sent every tool's full output (up to 4 000 chars each) to
+  the model on every loop iteration — a long task invited the model to
+  echo the whole session as its reply. Only the last 8 tool results keep
+  full output now; older ones collapse to stubs, blocks are bounded, and
+  the completion-signal list grew the phrasings real models actually use.
+- **The thinking block lost its "AI glow"** (the owner: "on the left side
+  of it there is a weird AI kind of highlighting"): the accent rails are
+  gone from thought rows and the working-section spine — a quiet
+  self-contained notes block instead, in the main agent and sub-agents
+  alike.
+- **The context-window popover waits for intent** — hovering the donut no
+  longer snaps open instantly; it opens after ~600 ms of pointer rest
+  (focus and click still open immediately).
+- **Settings → Models & Providers**: unconfigured preset providers
+  (Anthropic / OpenAI / Google without keys) no longer present themselves
+  as live rows — they sit in a collapsed "Not configured" group; the
+  provider list sizes to its content (with a sensible minimum) instead of
+  stretching the full viewport; preset providers hide the base-URL and
+  API-format fields ("Preset provider — endpoint and format are fixed";
+  custom providers keep them); the disable action is a proper toggle with
+  an agent-impact warning; the OpenRouter model catalog no longer leaks
+  into custom providers' model lists.
+- **Settings → Sub-agents and Advanced are no longer the same page
+  twice.** Sub-agents is now the single home for everything sub-agent
+  (keys, model, parallelism limits — moved from Advanced, supervision);
+  Advanced keeps the engine connection and memory. Deep links unchanged.
+- **The chat model picker honors model configuration** — models marked
+  hidden in Settings no longer appear (even under "All"), display names
+  replace raw ids, and configured models carry a marker.
 
 ## [0.57.0] - 2026-08-31
 

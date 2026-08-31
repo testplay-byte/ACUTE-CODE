@@ -9,6 +9,7 @@ import { fmtTokens } from "../../../lib/format";
 import { SEMANTIC_COLORS } from "../../../lib/semantics";
 import { useThemeStyles } from "../../../lib/use-theme-styles";
 import { withAlpha } from "../../dashboard/helpers";
+import { useTimeoutClear } from "../../../hooks/use-timeout-clear";
 import { useDismiss } from "./composer-utils";
 
 // ── ROUND-51 (R51-c): donut color grading ────────────────────────────────────
@@ -44,6 +45,20 @@ export function contextDonutColor(usedTokens: number, contextWindow: number, acc
  * keep the window open."
  */
 const POPOVER_CLOSE_DELAY_MS = 220;
+
+/**
+ * ROUND-58 (R58-cf, owner: the popover "opens instantly on hover" and startles
+ * on the way to the Send button): the HOVER-INTENT delay — the pointer must
+ * REST on the donut this long before the popover opens. Focus and click stay
+ * instant (keyboard/touch never pay the toll).
+ */
+export const POPOVER_OPEN_INTENT_MS = 600;
+
+/** useTimeoutClear schedules a one-shot; CANCELLING one means replacing it
+ * with a never-firing no-op (the hook clears the previous timer whenever a
+ * new one is scheduled, and clears its handle on unmount). 2^31-1 ms ≈ 24.8
+ * days — far past any session, and the callback is a no-op anyway. */
+const NEVER_MS = 2 ** 31 - 1;
 
 /** SVG donut ring — the toolbar icon and the popover's big donut share the math. */
 function DonutRing({
@@ -232,8 +247,21 @@ export function ContextDonut({
   };
   useEffect(() => clearCloseTimer, []);
 
+  // ROUND-58 (R58-cf): the hover-intent open timer (useTimeoutClear — the
+  // R57-a no-bare-setTimeout rule; the existing close bridge keeps its own
+  // ref + unmount cleanup). openAfter(…, POPOVER_OPEN_INTENT_MS) opens the
+  // popover only after the pointer RESTS on the trigger; cancelOpenIntent()
+  // replaces the pending timer with a never-firing no-op (mouseLeave, click,
+  // blur, outside-dismiss) so a stale intent can never re-open the popover
+  // after the user left/unpinned.
+  const openAfter = useTimeoutClear();
+  const cancelOpenIntent = (): void => {
+    openAfter(() => undefined, NEVER_MS);
+  };
+
   const popoverRef = useDismiss(open, () => {
     clearCloseTimer();
+    cancelOpenIntent();
     setOpen(false);
     pinnedRef.current = false;
     setPinned(false);
@@ -280,8 +308,11 @@ export function ContextDonut({
       <button
         type="button"
         onClick={() => {
-          // Click toggles the PIN (touch path); hover alone also opens.
+          // Click toggles the PIN (touch path) — INSTANT, never behind the
+          // hover-intent delay; any pending intent is cancelled so it cannot
+          // re-open an unpinned popover later (R58-cf).
           clearCloseTimer();
+          cancelOpenIntent();
           const next = !pinned;
           pinnedRef.current = next;
           setPinned(next);
@@ -289,11 +320,14 @@ export function ContextDonut({
         }}
         onFocus={() => {
           // ROUND-51 (R51-c): keyboard parity — focus opens (blur gets the
-          // same grace period as the pointer via scheduleClose).
+          // same grace period as the pointer via scheduleClose). Instant.
           clearCloseTimer();
           setOpen(true);
         }}
-        onBlur={scheduleClose}
+        onBlur={() => {
+          cancelOpenIntent();
+          scheduleClose();
+        }}
         aria-label={summaryText}
         aria-haspopup="dialog"
         aria-expanded={open}
@@ -303,12 +337,17 @@ export function ContextDonut({
         style={{ color: styles.textSecondary }}
         onMouseEnter={(e) => {
           clearCloseTimer();
-          setOpen(true);
+          // ROUND-58 (R58-cf): hover INTENT — the popover opens only after
+          // the pointer RESTS here for the intent window (a pass-through on
+          // the way to Send no longer startles the owner).
+          openAfter(() => setOpen(true), POPOVER_OPEN_INTENT_MS);
           e.currentTarget.style.background = styles.subtleHover;
         }}
         onMouseLeave={(e) => {
-          // ROUND-51 (R51-c): don't close instantly — start the grace timer
-          // so the pointer can cross the gap into the popover.
+          // ROUND-58 (R58-cf): leaving before the intent fires cancels it;
+          // ROUND-51 (R51-c): the 220ms grace timer lets the pointer cross
+          // the gap into an OPEN popover without snapping it shut.
+          cancelOpenIntent();
           scheduleClose();
           e.currentTarget.style.background = "transparent";
         }}

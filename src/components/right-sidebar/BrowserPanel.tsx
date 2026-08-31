@@ -35,7 +35,11 @@ import {
   nativeTabSetBounds,
   nativeTabSetVisible,
   onBrowserNavigated,
+  openExternalUrl,
 } from "../../lib/native-browser";
+// ROUND-58 (R58-b): Tauri detection for the "Open externally" handoff —
+// ONE source of truth, same as native-browser.ts itself.
+import { isTauri } from "../../lib/sidecar";
 
 /**
  * ROUND-43 (R43-10) — the EMBEDDED BROWSER, finally inside the right sidebar.
@@ -99,8 +103,12 @@ import {
  *
  * window.open from inside pages is intercepted by the backend's escape hatch
  * and postMessaged to us ({type:"acute:open"}) — the PANEL decides (navigate
- * in-panel). The ONLY window.open left in this panel is the explicit,
- * clearly-labeled "Open externally" ghost button.
+ * in-panel). The ONLY unconditional window.open left in this panel is the
+ * explicit, clearly-labeled "Open externally" ghost button — and R58-b:
+ * inside the Tauri shell even that one goes through the Rust
+ * `open_external_url` command instead (window.open inside WebView2 is
+ * silently swallowed by wry); window.open survives as the web-mode path and
+ * the fallback when the Rust handoff fails.
  */
 
 /** How long after an iframe load without an escape-hatch postMessage we wait
@@ -356,6 +364,26 @@ export function BrowserPanel({ projectId, tab }: { projectId: string; tab: Right
   /** Timestamps of recent dead-ticket recoveries (rolling cap, R48-d). */
   const recoveryLogRef = useRef<number[]>([]);
 
+  /**
+   * R58-b: true while the address input has focus. The draft-sync effect
+   * below must NOT stomp the field mid-typing — currentUrl changes on every
+   * 4s poll tick and every navigation event, and the pre-R58 effect reset
+   * the draft to the live URL while the owner was still typing. (Ref, not
+   * state: the guard is read inside effects/handlers and must never itself
+   * trigger a re-render.)
+   */
+  const urlFocusedRef = useRef(false);
+  /**
+   * R58-b: the dims the native webview ACTUALLY renders at (after
+   * computeNativeBounds clamping), or null until the first bounds sync.
+   * Powers the honest viewport readout — a clamped preset is reported as
+   * the clamped size, not the preset. State + change-detection ref pair:
+   * syncBounds runs on a 500ms interval, so it must only re-render when the
+   * rendered size actually moves.
+   */
+  const [nativeRendered, setNativeRendered] = useState<{ w: number; h: number } | null>(null);
+  const nativeRenderedRef = useRef<{ w: number; h: number } | null>(null);
+
   const [draft, setDraft] = useState<string>(tab.browserUrl ?? "");
   const [availWidth, setAvailWidth] = useState(420);
 
@@ -413,6 +441,14 @@ export function BrowserPanel({ projectId, tab }: { projectId: string; tab: Right
     const rect = el.getBoundingClientRect();
     const b = computeNativeBounds(rect, effectiveViewportRef.current);
     void nativeTabSetBounds(tabId, b.x, b.y, b.w, b.h).catch(nativeWarn);
+    // R58-b: remember what actually rendered (a preset larger than the
+    // panel is CLAMPED here) so the viewport readout can be honest. Only
+    // on change — this callback runs on a 500ms interval.
+    const prev = nativeRenderedRef.current;
+    if (prev === null || prev.w !== b.w || prev.h !== b.h) {
+      nativeRenderedRef.current = { w: b.w, h: b.h };
+      setNativeRendered({ w: b.w, h: b.h });
+    }
   }, [tabId, nativeMode]);
 
   /** rAF-debounced sync — bursts of resize events collapse into one invoke. */
@@ -538,9 +574,13 @@ export function BrowserPanel({ projectId, tab }: { projectId: string; tab: Right
     // condition (currentUrl === null) makes the effect self-disarming.
   }, [state?.status, state?.ticket, state?.currentUrl, tab.browserUrl, tabId]);
 
-  // Address bar follows the live URL (agent navigations included).
+  // Address bar follows the live URL (agent navigations included) — but
+  // NEVER while the user is typing (R58-b): the 4s poll + navigation events
+  // used to reset the field mid-edit. On blur the draft falls back to the
+  // live URL (an un-focused field must never show stale typing — same as a
+  // real browser's address bar).
   useEffect(() => {
-    if (currentUrl !== null) setDraft(currentUrl);
+    if (!urlFocusedRef.current && currentUrl !== null) setDraft(currentUrl);
   }, [currentUrl]);
 
   // Tab strip + persisted tab state track host/title.
@@ -733,7 +773,22 @@ export function BrowserPanel({ projectId, tab }: { projectId: string; tab: Right
   const onOpenExternally = () => {
     const url = currentUrl ?? normalizeUrl(draft);
     if (url === "") return;
-    // The ONLY window.open in the panel — an explicit, labeled action.
+    if (isTauri()) {
+      // R58-b: inside the Tauri shell, window.open is silently swallowed by
+      // WebView2/wry — hand the URL to the OS default browser on the Rust
+      // side (tauri-plugin-shell's OS-level open).
+      void openExternalUrl(url).catch((err) => {
+        const message = err instanceof Error ? err.message : String(err);
+        useBrowserTabStore
+          .getState()
+          .setError(tabId, `Opening the page in your system browser failed (${message}). Retrying with a plain webview tab.`);
+        // Fallback: the Rust handoff failed — let the webview itself try.
+        window.open(url, "_blank", "noopener,noreferrer");
+      });
+      return;
+    }
+    // Web mode: the ONLY unconditional window.open in the panel — an
+    // explicit, labeled action.
     window.open(url, "_blank", "noopener,noreferrer");
   };
 
@@ -745,7 +800,9 @@ export function BrowserPanel({ projectId, tab }: { projectId: string; tab: Right
       await invoke("open_browser_window", { url });
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
-      useBrowserTabStore.getState().setError(tabId, `Pop-out window failed: ${msg}`);
+      useBrowserTabStore
+        .getState()
+        .setError(tabId, `Opening the pop-out browser window failed (${msg}). The page stays open in this panel.`);
     }
   };
 
@@ -761,9 +818,26 @@ export function BrowserPanel({ projectId, tab }: { projectId: string; tab: Right
 
   const fitScale = fit ? Math.min(1, availWidth / Math.max(1, viewW * zoom)) : 1;
   const scale = zoom * fitScale;
+  /**
+   * R58-b: honest native readout. computeNativeBounds CLAMPS a preset larger
+   * than the panel — the webview (and the page inside it) actually render
+   * the clamped CSS px, so claiming the preset dims was a lie. Show what
+   * renders + what was requested. The proxy path keeps the plain readout:
+   * its iframe renders the true preset px (the transform only scales the
+   * footprint), so viewW×viewH stays what the page sees there.
+   */
+  const clampNote =
+    nativeMode &&
+    !naturalSize &&
+    nativeRendered !== null &&
+    (nativeRendered.w < viewW / zoom - 0.5 || nativeRendered.h < viewH / zoom - 0.5)
+      ? `${Math.round(nativeRendered.w)}×${Math.round(nativeRendered.h)} (clamped from ${Math.round(viewW / zoom)}×${Math.round(viewH / zoom)} — panel too small)`
+      : null;
   const readout =
-    `${viewW}×${viewH} @ ${Math.round(zoom * 100)}%` +
-    (fit && fitScale < 1 ? ` (fit ${Math.round(scale * 100)}%)` : "");
+    clampNote !== null
+      ? clampNote
+      : `${viewW}×${viewH} @ ${Math.round(zoom * 100)}%` +
+        (fit && fitScale < 1 ? ` (fit ${Math.round(scale * 100)}%)` : "");
 
   const ghostBtn = (extraStyle?: CSSProperties): CSSProperties => ({
     color: styles.textSecondary,
@@ -882,7 +956,16 @@ export function BrowserPanel({ projectId, tab }: { projectId: string; tab: Right
             <input
               value={draft}
               onChange={(e) => setDraft(e.target.value)}
-              onFocus={(e) => e.target.select()}
+              onFocus={(e) => {
+                urlFocusedRef.current = true;
+                e.target.select();
+              }}
+              onBlur={() => {
+                urlFocusedRef.current = false;
+                // R58-b: a blurred field shows the live URL, never stale
+                // typing (the focus-guard suppressed the sync above).
+                if (currentUrl !== null) setDraft(currentUrl);
+              }}
               onKeyDown={onKeyDown}
               onPaste={(e) => {
                 // Paste-and-go: pasting a bare address navigates immediately.
@@ -907,7 +990,7 @@ export function BrowserPanel({ projectId, tab }: { projectId: string; tab: Right
           <button
             onClick={() => void onPopOut()}
             aria-label="Pop out window"
-            title="Pop out to the native Acute browser window (isolated profile)"
+            title="Pop out to the native Acute browser window (shared profile — same browser profile as the embedded browser)"
             className="shrink-0 w-6 h-6 grid place-items-center rounded-md transition-colors"
             style={{ color: styles.textTertiary }}
             onMouseEnter={(e) => { e.currentTarget.style.background = styles.subtleHover; }}
@@ -1037,7 +1120,7 @@ export function BrowserPanel({ projectId, tab }: { projectId: string; tab: Right
           style={{ background: styles.subtle, color: styles.textTertiary }}
           title={
             nativeMode
-              ? `Native mode: presets larger than the panel are clamped to the panel — the page sees the clamped CSS pixels`
+              ? `Native mode: presets larger than the panel are clamped to the panel — the readout shows the ACTUAL rendered size when that happens`
               : `True viewport ${viewW}×${viewH}px — the page sees these CSS pixels`
           }
         >

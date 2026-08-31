@@ -180,6 +180,62 @@ describe("streamSessionMessage terminal-frame synthesis (ROUND-43)", () => {
     expect(seen.some((e) => e.type === "done")).toBe(true);
     expect(seen.some((e) => e.type === "error")).toBe(false);
   });
+
+  it("ROUND-58 (R58-cf): a LOCALLY ABORTED signal never synthesizes STREAM_DISCONNECTED (a stop is not a disconnect)", async () => {
+    // Some fetch implementations end the body "cleanly" (done === true, no
+    // throw) when the local AbortController fires instead of rejecting the
+    // read — before R58-cf that path synthesized a terminal error frame and
+    // the UI showed "Generation failed" after a deliberate Stop.
+    const controller = new AbortController();
+    const encoder = new TextEncoder();
+    // The body ends WITHOUT a terminal frame AND the signal is aborted — the
+    // exact post-abort shape.
+    const stream = new ReadableStream<Uint8Array>({
+      start(c) {
+        c.enqueue(encoder.encode('data: {"type":"text-delta","delta":"partial "}\n\n'));
+        c.close();
+      },
+    });
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        new Response(stream, { status: 200, headers: { "content-type": "text/event-stream" } }),
+      ),
+    );
+    controller.abort();
+
+    const seen: StreamTurnEvent[] = [];
+    await streamSessionMessage("sess_x", "hello", (e) => seen.push(e), {
+      signal: controller.signal,
+    });
+
+    expect(seen.some((e) => e.type === "text-delta")).toBe(true);
+    expect(seen.some((e) => e.type === "error")).toBe(false);
+  });
+
+  it("ROUND-58 (R58-cf): an abort-flavored reader REJECTION propagates (no synthesized frame) so the store classifies it", async () => {
+    // The webview's reader-level abort message ("body stream buffer was
+    // aborted") — the rejection must bubble up to the store's catch, which
+    // classifies by the deliberate-stop flag, never by this message.
+    const stream = new ReadableStream<Uint8Array>({
+      start(c) {
+        c.enqueue(new TextEncoder().encode('data: {"type":"text-delta","delta":"x"}\n\n'));
+        c.error(new DOMException("body stream buffer was aborted", "AbortError"));
+      },
+    });
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        new Response(stream, { status: 200, headers: { "content-type": "text/event-stream" } }),
+      ),
+    );
+
+    const seen: StreamTurnEvent[] = [];
+    await expect(
+      streamSessionMessage("sess_x", "hello", (e) => seen.push(e)),
+    ).rejects.toThrow(/abort/i);
+    expect(seen.some((e) => e.type === "error")).toBe(false);
+  });
 });
 
 // ── 3. Store: error frames surface; stops do not ────────────────────────────
@@ -246,15 +302,35 @@ describe("stream store error handling (ROUND-43)", () => {
     });
   });
 
-  it("a user-abort rejection (Stop button) sets NO error state", () => {
+  it("a DELIBERATE user stop (abortStream flagged, then the abort rejection) sets NO error state — R58-cf", async () => {
+    // The owner's bug: the local abort surfaced as "Generation failed" +
+    // "body stream buffer was aborted". The store now classifies by the
+    // DELIBERATE flag abortStream armed BEFORE the rejection, not by the
+    // (fetch-implementation-specific) abort message.
+    const rejects: Array<(reason: Error) => void> = [];
     vi.stubGlobal(
       "fetch",
-      vi.fn().mockRejectedValue(new Error("The user aborted a request.")),
+      vi.fn().mockImplementation(
+        () => new Promise<Response>((_resolve, reject) => { rejects.push(reject); }),
+      ),
     );
 
-    return useStreamStore.getState().startStream("sess_abort", "hello").then(() => {
-      const slice = useStreamStore.getState().bySession.sess_abort;
-      expect(slice?.liveError).toBeNull();
-    });
+    const promise = useStreamStore.getState().startStream("sess_abort", "hello");
+    // The user clicks Stop BEFORE the abort rejection can land (the flag
+    // arms synchronously — that is the whole classification contract).
+    useStreamStore.getState().abortStream("sess_abort");
+    // The stream fetch then dies with the abort-flavored error (the grace
+    // hard-abort / the webview's reader-level message).
+    rejects[0](new Error("body stream buffer was aborted"));
+
+    await promise;
+    const slice = useStreamStore.getState().bySession.sess_abort;
+    expect(slice?.liveError).toBeNull();
+    expect(slice?.sendError).toBeNull();
+    // Clean terminal stopped state (NOT the frozen error state).
+    expect(slice?.liveTurn?.stopped).toBe(true);
+    expect(slice?.liveTurn?.stoppedByUser).toBe(true);
+    expect(slice?.lastTurnStoppedByUser).toBe(true);
+    expect(slice?.streamBusy).toBe(false);
   });
 });

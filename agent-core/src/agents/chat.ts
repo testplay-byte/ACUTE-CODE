@@ -361,6 +361,15 @@ export type StreamChatEvent =
    * a dialed-out tone"): reasoning/thinking tokens from reasoning models,
    * streamed separately from the visible answer. */
   | { type: "thinking-delta"; delta: string }
+  /** ROUND-58 (R58-c): the model started streaming a tool call's ARGUMENTS
+   * (AI SDK v7 `tool-input-start`). Forwarded so the UI can render a live
+   * "writing file…" preview while the model is still generating the JSON —
+   * previously nothing appeared until the whole arg object arrived. */
+  | { type: "tool-input-start"; toolCallId: string; toolName: string }
+  /** ROUND-58 (R58-c): one text chunk of a tool call's streamed JSON
+   * arguments (AI SDK v7 `tool-input-delta`). The client accumulates these
+   * per toolCallId and renders the partial file content as it grows. */
+  | { type: "tool-input-delta"; toolCallId: string; inputTextDelta: string }
   | { type: "tool-call"; toolName: string; argsSummary: string }
   | { type: "tool-result"; toolName: string; argsSummary: string; ok: boolean; outputSummary?: string }
   | {
@@ -420,6 +429,21 @@ export const streamAiSdkChat: StreamChatFn = async function* (input) {
       // ROUND-35: thinking tokens stream as a separate channel so the UI can
       // render them in a muted, collapsible block apart from the answer.
       yield { type: "thinking-delta", delta: part.text };
+    } else if (part.type === "tool-input-start") {
+      // ROUND-58 (R58-c): the model started generating a tool call's JSON
+      // arguments — emit immediately so the UI can open a live preview row.
+      // (fullStream part shape: {id, toolName} — normalized to toolCallId
+      // here so nothing downstream sees SDK types.)
+      yield { type: "tool-input-start", toolCallId: part.id, toolName: part.toolName };
+    } else if (part.type === "tool-input-delta") {
+      // ROUND-58 (R58-c): a chunk of the streamed JSON arguments — forwarded
+      // verbatim; the client accumulates per toolCallId. (fullStream part
+      // shape: {id, delta}.)
+      yield {
+        type: "tool-input-delta",
+        toolCallId: part.id,
+        inputTextDelta: part.delta,
+      };
     } else if (part.type === "tool-call") {
       const argsSummary = summarizeArgs(part.input);
       yield { type: "tool-call", toolName: part.toolName, argsSummary };
