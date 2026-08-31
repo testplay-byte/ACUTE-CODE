@@ -1,4 +1,4 @@
-<!-- last-reviewed: 2026-08-30 round-54 -->
+<!-- last-reviewed: 2026-08-31 round-55 -->
 # Changelog
 
 All notable changes to ACUTE-CODE are documented here. Entries are written for
@@ -14,6 +14,60 @@ version number is single-sourced from the root `package.json`
 Planned next: installer code-signing (SmartScreen), the deepseek-harness
 future candidates (compaction pressure-trigger, continuable sub-agent
 children), the Files-tab polish.
+
+## [0.55.0] - 2026-08-31
+
+Round 55 — the engine-boot round. The owner's third desktop session (0.54.0)
+finally produced the crash text behind every "Can't reach agent-core" the
+packaged app has ever shown: `Error: EISDIR: illegal operation on a
+directory, lstat 'C:'` — node.exe dying before the first line of agent-core
+code, on every handshake attempt, while the sidecar log also showed "no
+provider keys found in Credential Manager" seconds after the launcher had
+stored all four keys. Two root causes, both invisible in dev mode, both
+fixed at the source.
+
+### Fixed
+
+- **The engine now actually boots in the packaged app (the EISDIR fix).**
+  Tauri's `resource_dir()` on Windows returns `\\?\`-prefixed verbatim
+  (extended-length) paths, and the shell passed them straight through as the
+  node.exe program, the `main.js` script argument, AND the working directory.
+  node starts from a verbatim program path but its module resolver
+  (`fs.realpathSync` inside `resolveMainPath`) does not support verbatim
+  script paths — handed `\\?\C:\…\main.js` it degenerates to `lstat 'C:'`,
+  fails with EISDIR, and dies before running a single line of user code.
+  Dev mode never saw this because `dev.mjs` passes plain paths. Every path
+  that reaches a child process is now stripped of the verbatim prefix first
+  (safe: the prefixes exist to exceed MAX_PATH and the install tree is
+  nowhere near 260 chars); pinned by unit tests against the exact paths from
+  the owner's log.
+- **The packaged app now finds the launcher's keys (the Credential Manager
+  namespace fix).** The keyring crate derives Windows credential target
+  names as `{user}.{service}` — the app was reading and writing
+  `api-key.ACUTE-CODE/provider/openrouter` while the launcher's cmdkey
+  stores `ACUTE-CODE/provider/openrouter`. Two disjoint namespaces: every
+  boot logged "no provider keys found" moments after "stored (length 73)".
+  The keyring crate is gone, replaced by direct `CredReadW`/`CredWriteW`
+  FFI with exact target-name control: reads and writes now use the
+  launcher's canonical `ACUTE-CODE/provider/<id>` targets (byte-identical
+  to cmdkey — same type, user, and persistence), the pre-R55 keyring-form
+  targets are still read as a legacy fallback so keys saved through older
+  app builds keep working, and saving a key in Settings retires the legacy
+  entry so there is exactly one namespace from now on. The sidecar spawn
+  now injects all four keys (`openrouter`, `openrouter-slot2/3/4`) and
+  sidecar.log says so — keys + Restart-engine + a booting engine means the
+  whole desktop session works.
+
+### Added
+
+- **The launcher prints what's new after an update.** A version bump used to
+  be indistinguishable from "nothing happened": after installing a new
+  desktop version, the ACUTE.bat console now shows that version's changelog
+  summary ("What's new in 0.55.0 — …") straight from the repo.
+- **The post-launch guidance is explicit about how to start the app next
+  time** — desktop shortcut or ACUTE.bat (double-click = update + start),
+  keys picked up automatically, and what to do if the offline screen ever
+  appears.
 
 ## [0.54.0] - 2026-08-30
 

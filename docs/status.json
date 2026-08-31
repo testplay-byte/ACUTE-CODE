@@ -3,7 +3,7 @@
   "product": {
     "name": "Acute",
     "tagline": "Local-first multi-agent engineering workbench",
-    "version": "0.54.0",
+    "version": "0.55.0",
     "availability": "Private build — not yet distributed",
     "chips": [
       "Windows desktop",
@@ -116,6 +116,10 @@
     {
       "date": "2026-08-25",
       "label": "Round 36 — sub-agent orchestration (Phase 3 core)"
+    },
+    {
+      "date": "2026-08-31",
+      "label": "Round 55 — the engine-boot round (EISDIR + Credential-Manager namespace root causes)"
     }
   ],
   "quality": {
@@ -152,8 +156,8 @@
   ],
   "plan": {
     "current": {
-      "title": "Round 54 DELIVERED — the reliability round (second packaged-app session)",
-      "detail": "The owner's second desktop session: 'can't reach agent core' with Restart-engine not recovering it, and after deleting the app folder the launcher said '0.53.0 is current' but 'ACUTE-CODE.exe not found — using the dev-servers flow'. Three root causes fixed: (1) the launcher trusted the NSIS REGISTRY entry, which survives folder deletion — the install is now verified ON DISK (exe + pinned node.exe + sidecar entry) and a broken install is REPAIRED by reinstalling; (2) the packaged app's engine failures were half-blind — agent-core prints its real crash reason to stderr but a GUI process has no stderr handle (Stdio::inherit went nowhere); stderr is now PIPED, drained into sidecar.log, and embedded in the failure error; a failed handshake also KILLED its child now (the old code orphaned a node.exe holding the SQLite DB — the actual mechanism behind 'restart engine didn't work'); the handshake RETRIES (3 attempts, 25s ready budget) before declaring Failed; (3) the offline screen now renders the last 60 sidecar.log lines IN-APP (new sidecar_log_tail shell command) with a Copy-diagnostics button, and the launcher window itself watches sidecar.log after launching the app and prints 'agent-core is up — port N' or the failure tail. Browser-mode folder picking is bounded (2-min abort) with paste-the-path guidance on every failure. cargo check green on the Windows target; launcher helpers logic-tested against the owner's exact scenario; +12 frontend tests."
+      "title": "Round 55 DELIVERED — the engine-boot round (third packaged-app session)",
+      "detail": "The owner's third desktop session (0.54.0) finally captured the real crash behind every 'Can't reach agent-core': node.exe dying with 'Error: EISDIR: illegal operation on a directory, lstat 'C:'' on every handshake attempt — Tauri's resource_dir() hands back \\?-prefixed VERBATIM paths on Windows and the shell passed them straight to the child (program, script arg, AND cwd); node's module resolver (fs.realpathSync) cannot handle verbatim script paths and dies before the first line of agent-core code. Every path that reaches a child process is now stripped of the verbatim prefix first (simplified_path, pinned by unit tests against the owner's exact log). Second root cause in the same log: 'no provider keys found in Credential Manager' seconds after the launcher stored all four keys — the keyring crate derives Windows target names as {user}.{service} (api-key.ACUTE-CODE/provider/x) while the launcher's cmdkey stores ACUTE-CODE/provider/x: two disjoint namespaces since the first packaged build. keyring is gone, replaced by direct CredReadW/CredWriteW FFI (src/wincred.rs) at the launcher's canonical targets, with the pre-R55 keyring-form targets read as a legacy fallback and retired on the next Settings save. Launcher: prints the changelog 'What's new' panel after an update + explicit next-time guidance (desktop shortcut / ACUTE.bat = update + start). cargo check green on x86_64-pc-windows-gnu incl. --all-targets; launcher logic verified in-sandbox against the real CHANGELOG."
     },
     "upcoming": [
       {
@@ -188,5 +192,5 @@
       "Quality over speed — every round verified before push"
     ]
   },
-  "round": 54
+  "round": 55
 }

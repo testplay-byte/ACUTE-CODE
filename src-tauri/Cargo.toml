@@ -14,7 +14,6 @@ tauri-build = { version = "2", features = [] }
 
 [dependencies]
 getrandom = "0.3"
-keyring = "4.1.6"
 rfd = "0.15"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
@@ -27,3 +26,14 @@ serde_json = "1"
 # — the APIs themselves ship in the stable 2.x runtime.
 tauri = { version = "2", features = ["unstable"] }
 tauri-plugin-shell = "2"
+
+# ROUND-55 (R55): direct CredReadW/CredWriteW FFI with exact TargetName
+# control — the keyring crate was dropped because its Windows TargetName is
+# derived as `{user}.{service}` (`api-key.ACUTE-CODE/provider/<id>`), which
+# can never match the launcher's cmdkey targets
+# (`ACUTE-CODE/provider/<id>`). See src/wincred.rs for the post-mortem.
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.59", features = [
+    "Win32_Foundation",
+    "Win32_Security_Credentials",
+] }

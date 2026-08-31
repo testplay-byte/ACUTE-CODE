@@ -2,6 +2,10 @@ mod browser;
 mod dialogs;
 mod keys;
 mod sidecar;
+// ROUND-55 (R55): direct Windows Credential Manager FFI — replaced the
+// keyring crate whose `{user}.{service}` TargetName never matched the
+// launcher's cmdkey targets (see src/wincred.rs for the post-mortem).
+mod wincred;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {

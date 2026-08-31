@@ -1,4 +1,4 @@
-<!-- last-reviewed: 2026-08-30 round-54 -->
+<!-- last-reviewed: 2026-08-31 round-55 -->
 # ACUTE-CODE — System Architecture
 
 | | |
@@ -32,7 +32,7 @@ This split is the field's convergence point — five independent reference proje
 │            │ store_provider_key()    │ stdout ready- │
 │            ▼                          │ line handshake│
 │  credentials: Windows Credential     │               │
-│  Manager via DPAPI (keyring crate)   │               │
+│  Manager via DPAPI (wincred.rs FFI)  │               │
 └────────────┼─────────────────────────┼───────────────┘
              │ REST + WebSocket        │
              │ http(s)://127.0.0.1:<ephemeral>
@@ -76,7 +76,7 @@ The shell is the parent and sole spawner of the sidecar. The pattern is Goose's 
 | Step | Actor | Action | Budget |
 |---|---|---|---|
 | 1 | shell | App launch; Tauri single-instance guard acquires lock (second launch focuses the first window) | — |
-| 2 | shell | Credentials: read provider API keys from Windows Credential Manager (DPAPI) via the Rust `keyring` crate | <100 ms |
+| 2 | shell | Credentials: read provider API keys from Windows Credential Manager (DPAPI) via direct CredReadW/CredWriteW in `src-tauri/src/wincred.rs` (R55 — replaced the keyring crate, whose `{user}.{service}` TargetName never matched the launcher's cmdkey targets) | <100 ms |
 | 3 | shell | Mint a 256-bit random bearer token (`getrandom`); hold in memory only | <1 ms |
 | 4 | shell | Spawn sidecar child (`CREATE_NO_WINDOW`): `agent-core.exe/node … --host 127.0.0.1 --port 0`, token + provider keys via **environment variables** | <200 ms |
 | 5 | sidecar | Bind an **ephemeral port itself** (`:0`) — no race — open SQLite, run pending migrations, emit one stdout ready line: `{"event":"listening","port":43127}` | 0.3–1 s |
@@ -137,7 +137,7 @@ Owns the window, process lifecycle, and OS credentials. Contains **no** product 
 | Module | Responsibility |
 |---|---|
 | `src-tauri/src/main.rs` | Binary entry; `lib.rs` wires plugins, starts the sidecar on setup, and tears it down on app exit. |
-| `src-tauri/src/sidecar.rs` | Sidecar lifecycle state machine, currently in one file: spawn (256-bit token mint via `getrandom`, env assembly incl. Credential-Manager provider-key injection — `keyring` reads `ACUTE-CODE/provider/<id>` and exports `ACUTE_PROVIDER_<ID>`, §7.3), stdout ready-line (`ACUTE_READY {port}`) parsing, health polling, graceful stop + `taskkill /T /F` fallback (§2). Also hosts today's whole Tauri invoke surface: `sidecar_info()`, `ping_sidecar()`. |
+| `src-tauri/src/sidecar.rs` | Sidecar lifecycle state machine, currently in one file: spawn (256-bit token mint via `getrandom`, env assembly incl. Credential-Manager provider-key injection — `wincred.rs` reads `ACUTE-CODE/provider/<id>` and exports `ACUTE_PROVIDER_<ID>`, §7.3; R55: `simplified_path()` strips `\\?\` verbatim prefixes o off every path handed to the child — node's module resolver dies on verbatim script paths, the 0.54.0 EISDIR crash), stdout ready-line (`ACUTE_READY {port}`) parsing, health polling, graceful stop + `taskkill /T /F` fallback (§2). Also hosts today's whole Tauri invoke surface: `sidecar_info()`, `ping_sidecar()`. |
 | `src-tauri/src/supervisor/` · `credentials/` · `commands/` *(planned split)* | Future home of the same responsibilities once Settings key entry (`store_provider_key()`, `delete_provider_key()`), key-update push to the running sidecar, and window controls arrive — purposes stay as declared here; files move out of `sidecar.rs`. |
 | `src-tauri/tauri.conf.json` | Window config, external-binary registration of the sidecar bundle (ADR-0009), CSP allowing only the sidecar origin. |
 
@@ -359,7 +359,8 @@ Order is fixed in code and unit-tested against a permutation table (Phase 3 acce
 Windows Credential Manager (DPAPI at rest)
    │ read at spawn (never on disk in between)
    ▼
-Rust shell (keyring crate — MIT OR Apache-2.0)
+Rust shell (direct CredReadW/CredWriteW in src/wincred.rs — R55; MIT OR
+Apache-2.0 via the windows-sys crate's Win32 API declarations)
    │ env vars at spawn; in-memory push on change
    ▼
 agent-core in-memory vault  ──▶ used only by providers/ at request time

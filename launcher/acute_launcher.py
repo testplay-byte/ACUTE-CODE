@@ -1300,6 +1300,39 @@ def _desktop_install(installer_path):
     return True
 
 
+def _print_whats_new(version):
+    r"""R55: print the changelog entry for the version just installed.
+
+    The owner asked for updates to communicate better — a silent version
+    bump is indistinguishable from "nothing happened". The repo (already
+    pulled current before this point) carries CHANGELOG.md; the matching
+    version section's summary paragraph is printed so the console answers
+    "what did this update change?" without opening anything.
+    """
+    changelog = APP_DIR / "CHANGELOG.md"
+    try:
+        text = changelog.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return
+    match = re.search(
+        rf"^## \[{re.escape(version)}\][^\n]*\n(.*?)(?=^## \[|\Z)", text, re.M | re.S
+    )
+    if not match:
+        return
+    lines = [ln.strip() for ln in match.group(1).splitlines() if ln.strip()]
+    # Summary paragraph only — stop at the first ### subsection.
+    body = []
+    for ln in lines:
+        if ln.startswith("#"):
+            break
+        body.append(ln)
+    keep = body[:6]
+    if len(body) > 6:
+        keep.append("… full details: CHANGELOG.md in the repo")
+    if keep:
+        panel("\n".join(keep), style="cyan", title=f"What's new in {version}")
+
+
 def _desktop_seed_keys(key, sub_keys):
     """Push the launcher's keys into Windows Credential Manager via cmdkey.
 
@@ -1395,6 +1428,9 @@ def desktop_flow(pat, key, sub_keys):
                 )
                 return False
             ok(f"installed {installed['version']} → {installed['location']}")
+            # R55: tell the owner what actually changed — a silent version
+            # bump reads as "nothing happened".
+            _print_whats_new(version)
 
     # Credentials BEFORE launch: the app's Rust shell reads Credential
     # Manager at boot, so the keys must be in place before the exe starts.
@@ -1423,12 +1459,15 @@ def desktop_flow(pat, key, sub_keys):
         "The desktop app started — the agent backend is bundled inside\n"
         "(no servers to manage, no browser tab: it is a real app window\n"
         "with the embedded Chromium browser).\n\n"
+        "  ➜  NEXT TIME: double-click the ACUTE-CODE shortcut on your\n"
+        "     Desktop, or run ACUTE.bat again — it updates everything\n"
+        "     first, then launches the app (double-click = update + start)\n"
         "  ➜  Keep this window open while using the app (Ctrl+C just\n"
         "     closes THIS window — the app keeps running)\n"
-        "  ➜  Your keys were stored in Windows Credential Manager\n"
-        "  ➜  Updates install automatically on the next double-click\n"
+        "  ➜  Your keys were stored in Windows Credential Manager and are\n"
+        "     picked up by the app automatically on every start\n"
         "  ➜  If the app ever shows \"Can't reach agent-core\", its offline\n"
-        "     screen now shows the engine log + a Copy-diagnostics button",
+        "     screen shows the engine log + a Copy-diagnostics button",
         style="green",
         title="▲ ACUTE-CODE desktop app",
     )

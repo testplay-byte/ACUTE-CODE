@@ -51,6 +51,32 @@
 //!      and open a file by hand. `sidecar_log_tail` now serves the last lines
 //!      to the UI, and the Failed error itself carries the recent engine
 //!      output, so the app explains its own failure on screen.
+//!
+//! ROUND-55 (R55) — THE OWNER'S EISDIR POST-MORTEM (0.54.0, third desktop
+//! session). The engine watch + stderr drain added in R54 finally captured
+//! the REAL crash the packaged app had been hitting since the first install:
+//!
+//! ```text
+//! spawning `\\?\C:\…\sidecar\node.exe \\?\C:\…\main.js` in `\\?\C:\…\app`
+//! Error: EISDIR: illegal operation on a directory, lstat 'C:'
+//!     at Object.realpathSync … at resolveMainPath
+//! ```
+//!
+//! Tauri's `resource_dir()` on Windows canonicalizes the install path and
+//! hands back `\\?\`-VERBATIM (extended-length) paths. node.exe itself
+//! starts fine from a verbatim program path, but its module resolver
+//! (`fs.realpathSync` inside `resolveMainPath`) does not support verbatim
+//! paths: handed `\\?\C:\…\main.js` as the entry script it degenerates to
+//! `lstat 'C:'` → EISDIR → the process dies before the first line of user
+//! code → every handshake attempt fails → "Can't reach agent-core". Dev
+//! mode never saw this because `scripts/dev.mjs` passes plain POSIX paths.
+//! THE FIX: `simplified_path()` strips the `\\?\` prefix (safe — verbatim
+//! prefixes exist to exceed MAX_PATH and the install tree is nowhere near
+//! 260 chars) before the exe path, script argument, or cwd reach the child.
+//! The same round fixed the key story: the keyring crate's `{user}.{service}`
+//! TargetName never matched the launcher's cmdkey targets, so the packaged
+//! app's spawns found no provider keys — key reads now go through wincred.rs
+//! at the canonical `ACUTE-CODE/provider/<id>` targets (see keys.rs).
 
 use std::{
     collections::VecDeque,
@@ -453,9 +479,13 @@ fn spawn_and_handshake(app: &AppHandle) -> Result<RunningSidecar, String> {
         .stderr(Stdio::piped());
     // ARCHITECTURE §7: provider keys flow Credential Manager (DPAPI) -> child env,
     // never through the sidecar's REST surface or any file on disk.
+    // R55: the read lives in keys.rs — canonical `ACUTE-CODE/provider/<id>`
+    // targets (the launcher's cmdkey form) with the pre-R55 keyring form as
+    // a legacy fallback, replacing the keyring crate whose `{user}.{service}`
+    // TargetName never matched what the launcher stored.
     let mut injected_keys = Vec::new();
-    for (env_name, provider_id) in provider_key_targets() {
-        if let Some(key) = read_provider_key(&provider_id) {
+    for (env_name, provider_id) in crate::keys::provider_key_env_targets() {
+        if let Some(key) = crate::keys::read_provider_key_lossy(provider_id) {
             // Length only — same convention as the launcher's own output; the
             // VALUE never appears anywhere. This line is what makes "keys not
             // loaded" debuggable from sidecar.log on the owner's machine.
@@ -599,6 +629,11 @@ fn resolve_sidecar_command(app: &AppHandle) -> Result<(Command, PathBuf), String
     }
 
     if let Ok(resource_dir) = app.path().resource_dir() {
+        // R55: strip the `\\?\` verbatim prefix FIRST — every derived path
+        // (pinned node.exe, main.js, cwd) must be a plain Win32 path or
+        // node's module resolver dies with `EISDIR: lstat 'C:'` before the
+        // first line of user code (see the module doc, ROUND-55).
+        let resource_dir = simplified_path(&resource_dir);
         let sidecar_dir = resource_dir.join("sidecar");
         let app_dir = sidecar_dir.join("app");
         let main_js = app_dir.join("dist").join("main.js");
@@ -648,39 +683,26 @@ fn mint_token() -> Result<String, String> {
     Ok(bytes.iter().map(|b| format!("{b:02x}")).collect())
 }
 
-/// Credential Manager targets whose values become ACUTE_PROVIDER_<ID> env
-/// vars. ROUND-51 (R51-a): the sub-agent POOL slots 2/3/4 ride along — the
-/// launcher's `desktop` flow pushes credentials.txt's OPENROUTER_SUB1..3_KEY
-/// values into Credential Manager under exactly these `ACUTE-CODE/provider/
-/// openrouter-slot{2,3,4}` targets (same scheme keys.rs writes), so the pool
-/// keys survive restarts of the PACKAGED app instead of living only in the
-/// spawn env of a dev-mode launch. Slot ids pass validate_provider_id
-/// (lowercase + digits + '-'), so the Settings UI's key-pool slot rows read
-/// the very same entries.
-fn provider_key_targets() -> [(&'static str, &'static str); 4] {
-    [
-        ("ACUTE_PROVIDER_OPENROUTER", "openrouter"),
-        ("ACUTE_PROVIDER_OPENROUTER_SLOT2", "openrouter-slot2"),
-        ("ACUTE_PROVIDER_OPENROUTER_SLOT3", "openrouter-slot3"),
-        ("ACUTE_PROVIDER_OPENROUTER_SLOT4", "openrouter-slot4"),
-    ]
-}
-
-fn read_provider_key(provider_id: &str) -> Option<String> {
-    let entry =
-        keyring::Entry::new(&format!("ACUTE-CODE/provider/{provider_id}"), "api-key").ok()?;
-    match entry.get_password() {
-        Ok(key) if !key.is_empty() => Some(key),
-        // No credential stored yet (owner hasn't entered a key) is normal, not an error.
-        Ok(_) => None,
-        Err(keyring::Error::NoEntry) => None,
-        Err(e) => {
-            log_line(&format!(
-                "sidecar: reading key for {provider_id} failed: {e}"
-            ));
-            None
-        }
+/// R55: strips Windows verbatim/extended-length path prefixes so child
+/// processes receive normal Win32 paths. `std::fs::canonicalize` (and
+/// Tauri's `resource_dir()`, which canonicalizes the install path) on
+/// Windows returns `\\?\C:\…` verbatim paths; node.exe accepts one as the
+/// PROGRAM path but its module resolver (`fs.realpathSync` inside
+/// `resolveMainPath`) chokes on a verbatim SCRIPT path — the owner's
+/// 0.54.0 crash `EISDIR: illegal operation on a directory, lstat 'C:'`,
+/// dead before the first line of user code, i.e. "Can't reach
+/// agent-core". Verbatim prefixes exist to exceed MAX_PATH (260 chars);
+/// the install tree is nowhere near that, so stripping is always safe
+/// here. `\\?\UNC\server\share` maps to `\\server\share`.
+fn simplified_path(path: &Path) -> PathBuf {
+    let text = path.as_os_str().to_string_lossy();
+    if let Some(rest) = text.strip_prefix(r"\\?\UNC\") {
+        return PathBuf::from(format!(r"\\{rest}"));
     }
+    if let Some(rest) = text.strip_prefix(r"\\?\") {
+        return PathBuf::from(rest.to_string());
+    }
+    path.to_path_buf()
 }
 
 /// Per-user state dir holding the DB + sidecar.log. Windows: `%APPDATA%\acute-code`
@@ -715,7 +737,7 @@ fn default_db_path() -> Result<PathBuf, String> {
 /// R53: the packaged app's diagnostics channel — every lifecycle line is
 /// appended here (best-effort; failures are silently ignored so logging can
 /// never break the sidecar). Also `eprintln!`d for dev-mode consoles.
-fn log_line(message: &str) {
+pub(crate) fn log_line(message: &str) {
     let line = format!("[{}] {message}", timestamp());
     eprintln!("{line}");
     let Some(path) = log_path() else { return };
@@ -916,4 +938,43 @@ pub(crate) fn http_status(
         .ok_or_else(|| {
             std::io::Error::new(std::io::ErrorKind::InvalidData, "malformed status line")
         })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::simplified_path;
+    use std::path::Path;
+
+    /// The owner's exact 0.54.0 failure shape: Tauri's resource_dir handed
+    /// back a verbatim path and node's module resolver died on it. The fix
+    /// must turn every verbatim form into a plain Win32 path.
+    #[test]
+    fn verbatim_drive_paths_are_simplified() {
+        assert_eq!(
+            simplified_path(Path::new(
+                r"\\?\C:\Users\khurr\AppData\Local\ACUTE-CODE\sidecar\app\dist\main.js"
+            )),
+            Path::new(r"C:\Users\khurr\AppData\Local\ACUTE-CODE\sidecar\app\dist\main.js")
+        );
+    }
+
+    #[test]
+    fn verbatim_unc_paths_become_normal_unc() {
+        assert_eq!(
+            simplified_path(Path::new(r"\\?\UNC\server\share\app")),
+            Path::new(r"\\server\share\app")
+        );
+    }
+
+    #[test]
+    fn plain_paths_pass_through_untouched() {
+        let plain = r"C:\Users\khurr\AppData\Local\ACUTE-CODE";
+        assert_eq!(simplified_path(Path::new(plain)), Path::new(plain));
+        let posix = "/home/z/PROJECT/ACUTE-CODE";
+        assert_eq!(simplified_path(Path::new(posix)), Path::new(posix));
+        assert_eq!(
+            simplified_path(Path::new("relative/path")),
+            Path::new("relative/path")
+        );
+    }
 }

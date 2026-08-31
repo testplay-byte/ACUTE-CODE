@@ -1,4 +1,4 @@
-<!-- last-reviewed: 2026-08-30 round-54 -->
+<!-- last-reviewed: 2026-08-31 round-55 -->
 # Development Environment Setup (ACUTE-CODE)
 
 Status: Phase 0 snapshot — updated each phase by the Scribe.
@@ -50,15 +50,15 @@ The owner's local `launcher/credentials.txt` (never uploaded; see
 lines in R44:
 
 ```
-OPENROUTER_SUB1_KEY=…   # → keyring pool slot 2
-OPENROUTER_SUB2_KEY=…   # → keyring pool slot 3
-OPENROUTER_SUB3_KEY=…   # → keyring pool slot 4
+OPENROUTER_SUB1_KEY=…   # → credential pool slot 2
+OPENROUTER_SUB2_KEY=…   # → credential pool slot 3
+OPENROUTER_SUB3_KEY=…   # → credential pool slot 4
 ```
 
 Behavior (owner directive: "save them inside credentials.txt so I don't have
 to manually enter them"):
 
-- The launcher parses the three lines and distributes them to the keyring
+- The launcher parses the three lines and distributes them to the credential
   pool as slots **2/3/4** — Windows Credential Manager
   (`ACUTE-CODE/provider/openrouter-slotN`) on the owner's PC, with a
   `~/.acute/openrouter-slotN.key` file fallback — and exports
