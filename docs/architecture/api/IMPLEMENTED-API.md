@@ -1,4 +1,4 @@
-<!-- last-reviewed: 2026-08-30 round-54 -->
+<!-- last-reviewed: 2026-08-31 round-55 -->
 # IMPLEMENTED API — the shipped surface
 
 **Truth = this file.** Verified against `agent-core/src/server.ts` at
@@ -291,7 +291,7 @@ against fixtures; live-verified from the sandbox (8 real results).
 `launcher/acute_launcher.py` now parses optional
 `OPENROUTER_SUB1..3_KEY` lines from `credentials.txt` (auto-APPENDING the
 lines with the baked-in defaults when missing, per the owner's "no manual
-entry" directive) and distributes them to keyring pool slots 2/3/4 as
+entry" directive) and distributes them to credential pool slots 2/3/4 as
 `ACUTE_PROVIDER_OPENROUTER_SLOT{2,3,4}` env at sidecar spawn (Windows
 Credential Manager on the owner's PC; `~/.acute/openrouter-slotN.key` fallback).
 `scripts/dev.mjs` mirrors the env→file→Credential-Manager lookup per slot.
@@ -456,7 +456,7 @@ slot omitted  → primary key (exact pre-R47 behavior, same 409 wording:
                 Credential Manager before testing")
 slot given    → integer 0..31, else 400 VALIDATION { field: "body.slot",
                 message: "slot must be an integer between 0 and 31" }
-key probed    → the keyring POOL key for that slot: slot 0 == primary
+key probed    → the credential POOL key for that slot: slot 0 == primary
                 (ACUTE_PROVIDER_<ID>), slot N → ACUTE_PROVIDER_<ID>_SLOT<N>
 empty slot    → 409 CONFLICT "no API key stored for provider '<id>' slot
                 <n> — save one in Settings → Models & Providers",
@@ -694,6 +694,45 @@ never reach localStorage — the "55963" stale-endpoint bug); `connection`:
 retries 3× before declaring Failed, so the webview must not quit first) →
 adopt + invalidate ALL queries; `failed|stopped` → offline immediately; a 20s
 `ping_sidecar` watchdog re-enters the loop on mid-session death.
+
+## ROUND-55 additions (implemented)
+
+### Credential store: keyring crate → direct FFI (src-tauri/src/wincred.rs)
+
+The keyring crate is REMOVED (Cargo.toml) — its Windows TargetName is
+derived as `{user}.{service}` (`api-key.ACUTE-CODE/provider/<id>`), which
+could never match the launcher's cmdkey targets (`ACUTE-CODE/provider/<id>`):
+the packaged app found none of the launcher-seeded keys ("no provider keys
+found in Credential Manager" on every boot). `wincred.rs` calls
+`CredReadW`/`CredWriteW`/`CredDeleteW` directly (windows-sys) with exact
+TargetName control:
+
+- reads + writes at the canonical `ACUTE-CODE/provider/<id>` targets
+  (user `api-key`, CRED_TYPE_GENERIC, CRED_PERSIST_LOCAL_MACHINE) —
+  byte-compatible with cmdkey;
+- the pre-R55 keyring-form targets are still READ as a legacy fallback
+  (keys saved through ≤ 0.54.0 app builds keep working) and retired on the
+  next Settings save;
+- blobs are UTF-16LE on write, dual-decoded on read (UTF-16 with
+  parity+printable validation, then UTF-8/ASCII) — cmdkey-, UI-, and
+  keyring-seeded values all round-trip;
+- the Tauri command surface is unchanged (`store_provider_key`,
+  `provider_key_status` — same names, args, and semantics); non-Windows dev
+  checkouts get an honest stub (keys flow from dev.mjs env injection there).
+
+### Sidecar spawn: verbatim-path stripping (src-tauri/src/sidecar.rs)
+
+Tauri's `resource_dir()` on Windows returns `\\?\`-verbatim paths;
+`resolve_sidecar_command` passed them to the child as the program, the
+script argument, AND the cwd — node's module resolver
+(`fs.realpathSync`/`resolveMainPath`) cannot handle a verbatim entry script
+and died with `EISDIR: lstat 'C:'` before the first line of agent-core code
+(the packaged app's "Can't reach agent-core" since the first build; dev
+mode passes plain paths and never saw it). `simplified_path()` now strips
+the prefix (`\\?\C:\…` → `C:\…`, `\\?\UNC\…` → `\\…`) off the resource
+dir before any derived path exists. sidecar.log's spawn line now shows
+plain Win32 paths, and the spawn injects the four provider keys
+(`sidecar: injected provider keys: openrouter (len N), …`).
 
 ## ROUND-54 additions (implemented)
 
