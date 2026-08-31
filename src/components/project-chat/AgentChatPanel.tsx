@@ -23,6 +23,7 @@ import {
 import { Link, useSearchParams } from "react-router";
 import { useQueryClient } from "@tanstack/react-query";
 import { useAgents } from "../../hooks/use-agents";
+import { useTimeoutClear } from "../../hooks/use-timeout-clear";
 import { pushLocalToast } from "../../hooks/use-notifications";
 import {
   useCreateSession,
@@ -130,13 +131,14 @@ const SUGGESTIONS: Array<{ label: string; prompt: string; icon: LucideIcon }> = 
 /** Hover copy button with a "Copied" flash (round-16 owner request). */
 function CopyButton({ text }: { text: string }) {
   const styles = useThemeStyles();
+  const resetAfter = useTimeoutClear();
   const [copied, setCopied] = useState(false);
   return (
     <button
       onClick={() => {
         void navigator.clipboard?.writeText(text).then(() => {
           setCopied(true);
-          setTimeout(() => setCopied(false), 1200);
+          resetAfter(() => setCopied(false), 1200);
         });
       }}
       aria-label="Copy message"
@@ -318,6 +320,7 @@ function UserMessage({
 /** Inline code block renderer with copy button (round-24: Kilo Code parity). */
 function CodeBlock({ code }: { code: string }) {
   const styles = useThemeStyles();
+  const resetAfter = useTimeoutClear();
   const [copied, setCopied] = useState(false);
   const lines = code.split("\n");
   return (
@@ -333,7 +336,7 @@ function CodeBlock({ code }: { code: string }) {
           onClick={() => {
             void navigator.clipboard?.writeText(code);
             setCopied(true);
-            setTimeout(() => setCopied(false), 1200);
+            resetAfter(() => setCopied(false), 1200);
           }}
           className="flex items-center gap-1 rounded-md px-2 py-0.5 text-[10px] font-semibold transition-colors"
           style={{ color: styles.textTertiary }}
@@ -596,6 +599,7 @@ export function TurnErrorCard({
   disabled?: boolean;
 }) {
   const styles = useThemeStyles();
+  const resetAfter = useTimeoutClear();
   const [copied, setCopied] = useState(false);
   const reason = error.providerError ?? error.message;
   const shortReason = reason.length > 220 ? `${reason.slice(0, 220)}…` : reason;
@@ -659,7 +663,7 @@ export function TurnErrorCard({
               onClick={() => {
                 void navigator.clipboard?.writeText(detailsText).then(() => {
                   setCopied(true);
-                  setTimeout(() => setCopied(false), 1200);
+                  resetAfter(() => setCopied(false), 1200);
                 });
               }}
               aria-label="Copy error details"

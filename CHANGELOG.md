@@ -43,6 +43,13 @@ disk does not).
   any symlink or junction appears anywhere in the tree that will be
   packed into the installer (the 0.56.0 tree carried 189 of them; this
   gate makes that number permanently zero).
+- **CI reliability (test-only, same round):** a latent suite flake
+  surfaced on the round's own docs commit — a transient-message
+  `setTimeout` fired after the test environment tore down and failed
+  the whole suite despite every test passing. A new leak-safe
+  `useTimeoutClear` hook (cancel-on-unmount, replace-on-reschedule)
+  now backs all 11 transient-reset sites; the shipped installer was
+  never affected.
 - **A Windows pre-pack boot gate in the release build**: before the
   installer is ever built, CI now boots the REAL staged engine with
   the REAL pinned node.exe on a Windows runner — same command line,

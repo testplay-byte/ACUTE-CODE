@@ -15,6 +15,7 @@ import {
   X,
   Zap,
 } from "lucide-react";
+import { useTimeoutClear } from "../../hooks/use-timeout-clear";
 import { useThemeStyles } from "../../lib/use-theme-styles";
 import { withAlpha } from "../dashboard/helpers";
 import { filterModelsForPicker, isFreeModelEntry, useSettingsStore } from "../../lib/settings-store";
@@ -432,6 +433,10 @@ function ProviderDetailPane({
 }) {
   const styles = useThemeStyles();
   const queryClient = useQueryClient();
+  // ROUND-57: every transient-message reset in this pane rides the leak-safe
+  // scheduler — the bare setTimeout variant outlived unmount/teardown and
+  // failed CI with "window is not defined" (run 33411797885).
+  const resetAfter = useTimeoutClear();
 
   const [showKey, setShowKey] = useState(false);
   const [keyInput, setKeyInput] = useState("");
@@ -515,7 +520,7 @@ function ProviderDetailPane({
     mutationFn: (patch: ProviderPatch) => updateProvider(provider.id, patch),
     onSuccess: () => {
       setSaveMsg("Saved.");
-      setTimeout(() => setSaveMsg(null), 2000);
+      resetAfter(() => setSaveMsg(null), 2000);
       onChanged();
     },
     onError: (err: Error) => setSaveMsg(err.message),
@@ -899,7 +904,7 @@ function ProviderDetailPane({
               removeProvider.mutate();
             } else {
               setConfirmDelete(true);
-              setTimeout(() => setConfirmDelete(false), 3000);
+              resetAfter(() => setConfirmDelete(false), 3000);
             }
           }}
           aria-label={`Delete provider ${provider.name}`}
@@ -2226,6 +2231,7 @@ function ModelConfigDialog({
 export function KeyPoolSection({ providerId, hideLabel = false }: { providerId: string; hideLabel?: boolean }) {
   const styles = useThemeStyles();
   const queryClient = useQueryClient();
+  const resetAfter = useTimeoutClear();
   const [newKey, setNewKey] = useState("");
   const [showNew, setShowNew] = useState(false);
   const [msg, setMsg] = useState<string | null>(null);
@@ -2265,7 +2271,7 @@ export function KeyPoolSection({ providerId, hideLabel = false }: { providerId: 
     onSuccess: () => {
       setNewKey("");
       setMsg("Slot added.");
-      setTimeout(() => setMsg(null), 1500);
+      resetAfter(() => setMsg(null), 1500);
       invalidate();
     },
     onError: (err: Error) => setMsg(err.message),

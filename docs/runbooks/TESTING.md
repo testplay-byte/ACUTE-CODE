@@ -62,6 +62,22 @@ does not arrive (90 s budget) — the gate the R51 round believed it had.
 docs:check 147/0 (the sandbox's 3 unreachable-URL WARNs are
 raw.githubusercontent 429 rate-limits from THIS sandbox's network, not
 dead links; CI's clean network is the authority).
+
+**R57 follow-up (the CI flake, fixed same-round):** the docs-only worklog
+commit's CI run (33411797885) exposed a LATENT flake — all 1035 tests
+passed, but `ModelsProvidersTab`'s "Slot added." reset
+(`setTimeout(() => setMsg(null), 1500)`) fired AFTER happy-dom teardown →
+React-DOM's dispatchSetState hit `window is not defined` → vitest failed
+the whole suite on the uncaught exception. The bare-timer idiom existed
+at 11 call sites (ModelsProvidersTab 3, SubAgentsTab 4, AgentChatPanel 3,
+ConnectionGate 1). NEW `src/hooks/use-timeout-clear.ts`
+(`useTimeoutClear`) schedules state resets that cancel on unmount and
+replace-on-reschedule; all 11 sites now ride it (+3 tests:
+fires-after-delay, unmount-cancels — the exact CI failure mode —
+reschedule-replaces). **1074/1074 in 77 files.** Production was never
+affected (an unmounted setState is a silent no-op in React 18; the
+crash only exists in torn-down test environments) — the shipped 0.57.0
+installer stands; the fix is CI-reliability.
 `r52-supervision` NEW 14 (exec helpers: background-launch grammar + log-
 redirect parsing; the hang fix: pipe-holding grandchild resolves FAST with
 a job id — the owner's exact trap, cross-platform via node-spawns-node;

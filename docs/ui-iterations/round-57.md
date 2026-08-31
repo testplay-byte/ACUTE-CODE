@@ -137,6 +137,21 @@ failure to date — before any of them reached the owner.
 - CI + Release runs for this round: recorded in the ORCHESTRATION-WORKLOG
   entry (API-verified to success before this report was finalized).
 
+## Follow-up — the CI flake the round's own docs commit caught
+
+The docs-only worklog commit's CI run (33411797885) failed with every
+test passing: `ModelsProvidersTab`'s "Slot added." reset
+(`setTimeout(() => setMsg(null), 1500)`) fired AFTER happy-dom
+teardown — React-DOM's dispatchSetState hit `window is not defined` and
+vitest failed the suite on the uncaught exception. The bare-timer idiom
+lived at 11 call sites across 4 files. NEW
+`src/hooks/use-timeout-clear.ts` (`useTimeoutClear`) schedules state
+resets that cancel on unmount and replace-on-reschedule; all 11 sites
+now ride it, pinned by 3 tests (including the exact CI failure mode).
+**1074/1074 in 77 files.** Production was never affected — an unmounted
+setState is a silent no-op in React 18; the crash only exists in
+torn-down test environments. The shipped 0.57.0 installer stands.
+
 ## Known limitations (honest)
 
 - The Windows boot gate runs on the build runner, not the owner's

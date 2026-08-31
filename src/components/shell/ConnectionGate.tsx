@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { Check, Copy, Loader2, RotateCcw, ScrollText, Unplug } from "lucide-react";
 import { useConfigStore } from "../../lib/config-store";
+import { useTimeoutClear } from "../../hooks/use-timeout-clear";
 import { beginSidecarConnect, retryConnection } from "../../lib/sidecar-connection";
 import { getSidecarLogTail, isTauri, type SidecarLogTail } from "../../lib/sidecar";
 import { AcuteLogo } from "./Sidebar";
@@ -81,6 +82,7 @@ function OfflineScreen({ error }: { error: string | null }) {
   const [retrying, setRetrying] = useState(false);
   const [logTail, setLogTail] = useState<SidecarLogTail | null>(null);
   const [copied, setCopied] = useState(false);
+  const resetAfter = useTimeoutClear();
 
   // R54: fetch the engine log's last lines whenever the app lands offline (or
   // lands offline AGAIN after a failed Retry — the effect re-runs because the
@@ -120,7 +122,7 @@ function OfflineScreen({ error }: { error: string | null }) {
     try {
       await navigator.clipboard.writeText(diagnostics);
       setCopied(true);
-      setTimeout(() => setCopied(false), 2000);
+      resetAfter(() => setCopied(false), 2000);
     } catch {
       setCopied(false);
     }

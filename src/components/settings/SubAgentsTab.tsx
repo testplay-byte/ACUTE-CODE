@@ -2,6 +2,7 @@ import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link } from "react-router";
 import { Activity, Check, Cpu, KeyRound, Plus, Trash2 } from "lucide-react";
+import { useTimeoutClear } from "../../hooks/use-timeout-clear";
 import { useThemeStyles } from "../../lib/use-theme-styles";
 import { withAlpha } from "../dashboard/helpers";
 import { isTauri } from "../../lib/sidecar";
@@ -86,6 +87,7 @@ async function saveSubagentSettings(patch: {
 function SubAgentKeysCard() {
   const styles = useThemeStyles();
   const queryClient = useQueryClient();
+  const resetAfter = useTimeoutClear();
   const [drafts, setDrafts] = useState<Record<number, string>>({});
   const [extraDraft, setExtraDraft] = useState("");
   const [msg, setMsg] = useState<string | null>(null);
@@ -130,7 +132,7 @@ function SubAgentKeysCard() {
       setDrafts((d) => ({ ...d, [vars.slot]: "" }));
       if (vars.slot === addableSlot) setExtraDraft("");
       setMsg(`Saved to pool slot ${vars.slot}.`);
-      setTimeout(() => setMsg(null), 1500);
+      resetAfter(() => setMsg(null), 1500);
       invalidate();
     },
     onError: (err: Error) => setMsg(err.message),
@@ -140,7 +142,7 @@ function SubAgentKeysCard() {
     mutationFn: (slot: number) => removeKeyPoolSlot(SUBAGENT_PROVIDER_ID, slot),
     onSuccess: (_data, slot) => {
       setMsg(`Removed pool slot ${slot}.`);
-      setTimeout(() => setMsg(null), 1500);
+      resetAfter(() => setMsg(null), 1500);
       invalidate();
     },
     onError: (err: Error) => setMsg(err.message),
@@ -298,6 +300,7 @@ function SubAgentKeysCard() {
 function SubAgentModelCard() {
   const styles = useThemeStyles();
   const queryClient = useQueryClient();
+  const resetAfter = useTimeoutClear();
   const [msg, setMsg] = useState<string | null>(null);
 
   const settingsQuery = useQuery({
@@ -325,7 +328,7 @@ function SubAgentModelCard() {
     mutationFn: (modelId: string | null) => saveSubagentSettings({ subagentModel: modelId }),
     onSuccess: (_data, modelId) => {
       setMsg(modelId === null ? "Cleared — inherits main model." : "Saved.");
-      setTimeout(() => setMsg(null), 1500);
+      resetAfter(() => setMsg(null), 1500);
       void queryClient.invalidateQueries({ queryKey: ["orchestration-settings"] });
     },
     onError: (err: Error) => setMsg(err.message),
@@ -609,6 +612,7 @@ const STALL_DEFAULT_MS = 300_000;
 function SubAgentSupervisionCard() {
   const styles = useThemeStyles();
   const queryClient = useQueryClient();
+  const resetAfter = useTimeoutClear();
   const [msg, setMsg] = useState<string | null>(null);
   const [msgIsError, setMsgIsError] = useState(false);
   // Drafts in DISPLAY units; "" = untouched (the current value shows).
@@ -628,7 +632,7 @@ function SubAgentSupervisionCard() {
       setMsgIsError(false);
       setHeartbeatDraft("");
       setStallDraft("");
-      setTimeout(() => setMsg(null), 1500);
+      resetAfter(() => setMsg(null), 1500);
       void queryClient.invalidateQueries({ queryKey: ["orchestration-settings"] });
     },
     onError: (err: Error) => {
