@@ -1,4 +1,4 @@
-<!-- last-reviewed: 2026-08-31 round-55 -->
+<!-- last-reviewed: 2026-08-31 round-56 -->
 # Changelog
 
 All notable changes to ACUTE-CODE are documented here. Entries are written for
@@ -14,6 +14,65 @@ version number is single-sourced from the root `package.json`
 Planned next: installer code-signing (SmartScreen), the deepseek-harness
 future candidates (compaction pressure-trigger, continuable sub-agent
 children), the Files-tab polish.
+
+## [0.56.0] - 2026-08-31
+
+Round 56 — the launch-choice round. The owner's report after 0.55.0 was
+blunt and actionable: "still not working it failed and I think in the
+acute.bat it should ask how to launch the app or the site." Two answers:
+the launcher now ASKS (app or site, every run, one keypress), and when the
+desktop engine does not come up, the launcher refuses to dead-end — it
+shows the engine's own last words and offers retry / site / keep. The
+launcher self-update also re-runs itself immediately, so launcher
+improvements drive the session they arrive in instead of the next one.
+
+### Added
+
+- **The launch question (the owner's request, verbatim).** Every
+  interactive run now asks how you want to use ACUTE-CODE: **[1] the
+  desktop app** (the packaged window with the embedded browser) or **[2]
+  the site** (local servers + your browser at http://localhost:5173).
+  Enter keeps your last choice (first run defaults to the desktop app);
+  the answer is remembered in `.acute-launch-pref.json` next to the
+  launcher and becomes the next Enter default. Skip the question with a
+  command — `ACUTE.bat app` / `ACUTE.bat site` (or `--app` / `--site` /
+  `--web` / `--no-desktop`) — and non-interactive runs use the remembered
+  choice silently. The plan panel shown at startup reflects the resolved
+  mode (or shows both paths honestly while the question is pending).
+- **Engine-failure recourse — never a dead console again.** When the
+  freshly launched desktop app's engine does not report ready (startup
+  failure, timeout, or the app exiting), the launcher now prints the
+  engine's log tail AND asks what to do next: **[1] retry the desktop
+  app** (close + relaunch, one retry round), **[2] use the SITE instead**
+  (closes the app and falls through to the browser flow — the exact
+  escape the owner asked for), or **[3] keep the desktop app** (its
+  offline screen has Restart-engine + Copy diagnostics). A desktop-engine
+  hiccup can no longer leave you with no working app and no choice.
+- **`ACUTE.bat status` now reports the launch story:** your remembered
+  launch preference, and the engine's last successful boot line from
+  `%APPDATA%\acute-code\sidecar.log` (or "no successful boot on record") —
+  the two facts that turn a vague "it failed" report into a diagnosable
+  one.
+
+### Changed
+
+- **The launcher self-update takes effect THIS session.** The old contract
+  was "copied over, runs on the NEXT double-click" — which quietly meant
+  every launcher improvement (failure handling, questions, panels)
+  arrived exactly one run late, on the run AFTER the one where it
+  mattered. The fresh copy is now exec'd in place: the new code drives
+  the current session, with the original arguments preserved and a loop
+  guard (`ACUTE_LAUNCHER_REEXEC=1`) that makes re-exec failure-safe.
+- **The engine watch's timeout is no longer blind.** A cold boot that
+  outruns the watch used to print only "did not report ready within 45s"
+  with zero diagnostics — the exact silence that hid the EISDIR crash for
+  three sessions. The watch now runs 75s (matching the Rust handshake's
+  3-attempt worst case more closely) and prints the engine's last output
+  lines on timeout, exactly like it already did for explicit startup
+  failures.
+- The startup line names the version being launched ("ACUTE-CODE 0.56.0
+  is running (pid …)") so any report you copy tells us exactly which
+  build failed.
 
 ## [0.55.0] - 2026-08-31
 

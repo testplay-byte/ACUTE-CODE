@@ -1,4 +1,4 @@
-<!-- last-reviewed: 2026-08-31 round-55 -->
+<!-- last-reviewed: 2026-08-31 round-56 -->
 # IMPLEMENTED API — the shipped surface
 
 **Truth = this file.** Verified against `agent-core/src/server.ts` at

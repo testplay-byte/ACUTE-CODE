@@ -35,13 +35,22 @@
 # Python 3.9+ · Windows / Linux / macOS · run via ACUTE.bat (Windows) or
 # acute.sh (Linux/macOS), or directly: python3 acute_launcher.py [command]
 #
-# Commands:  (default) update-check then launch  · start = no update pass
-#            update = update only, then exit      · status = read-only report
-#            desktop = install/launch the packaged Windows app (round 51)
-# Flags:     --no-update   --verbose   --web (force the browser/dev flow)
-#            --no-desktop (same as --web for the default command)
+# Commands:  (default) update-check, ASK app-or-site, then launch
+#            start = no update pass (still asks)  · update = update only, exit
+#            status = read-only health report    · app|desktop = packaged app
+#            site|web = the local servers + browser (no desktop install)
+# Flags:     --no-update   --verbose   --app (force desktop)   --site/--web
+#            --no-desktop (same as --site)
+#
+# ROUND-56 (R56): the launcher ASKS how to launch — the desktop app or the
+# site in the browser — on every interactive run (Enter = your last choice,
+# first run defaults to the desktop app). Explicit commands/flags skip the
+# question. The remembered choice lives in .acute-launch-pref.json next to
+# this file. The self-update now RE-EXECs the fresh launcher so new logic
+# runs THIS session instead of the next one.
 
 import hashlib
+import json
 import os
 import re
 import shutil
@@ -67,6 +76,13 @@ UI_PORT = 5173
 SIDECAR_PORT = 5178
 NODE_MIN_MAJOR = 20
 STARTED = time.time()
+
+# R56: launch-mode commands + the remembered-choice file. The preference is
+# intentionally OUTSIDE .acute (which `status` describes as a cache) — it is
+# user settings, not a download, and must survive a cache wipe.
+SITE_COMMANDS = ("site", "web")
+DESKTOP_COMMANDS = ("desktop", "app")
+PREF_PATH = LAUNCHER_DIR / ".acute-launch-pref.json"
 
 # ─────────────────────────────────────────────────────────────────────────────
 # rich bootstrap (optional, auto-installed on first run; plain fallback)
@@ -955,7 +971,18 @@ def distribute_key(key, sub_keys=("", "", "")):
 
 
 def self_update_check():
-    """If the repo ships a newer launcher, copy it over (takes effect next run)."""
+    """If the repo ships a newer launcher, copy it over and RE-RUN it now.
+
+    R56: the old contract was "takes effect on the NEXT double-click" — which
+    meant every launcher improvement (R55's What's-new panel, R56's
+    app-or-site question, any failure-handling fix) arrived exactly one run
+    LATE: the run that upgraded the app was still driven by the previous
+    launcher's logic. The fresh copy is now exec'd in place, so the new code
+    drives THIS session. The re-exec carries the original arguments and an
+    env guard (ACUTE_LAUNCHER_REEXEC=1) that breaks any pathological loop —
+    if the hashes STILL differ on the second pass, we warn and continue with
+    the running code instead of exec'ing again.
+    """
     with step("Launcher self-update check"):
         repo_copy = APP_DIR / "launcher" / "acute_launcher.py"
         if not repo_copy.exists():
@@ -969,14 +996,189 @@ def self_update_check():
         if sha(mine) == sha(repo_copy):
             ok("launcher is current")
             return
-        shutil.copy2(repo_copy, mine)
+        try:
+            shutil.copy2(repo_copy, mine)
+        except OSError as exc:
+            warn(f"could not copy the newer launcher ({exc.__class__.__name__}) — it stays for the next run")
+            return
         ok("a newer launcher was delivered with this update — copied over")
-        note("the new version takes effect on the NEXT double-click")
 
         bat_repo = APP_DIR / "launcher" / "ACUTE.bat"
         mine_bat = LAUNCHER_DIR / "ACUTE.bat"
         if bat_repo.exists() and (not mine_bat.exists() or sha(mine_bat) != sha(bat_repo)):
-            warn("ACUTE.bat also changed — please re-download it from the repo's launcher/ folder")
+            warn("ACUTE.bat also changed — please re-download it from the repo's launcher/ folder (or the latest launcher kit)")
+
+        if os.environ.get("ACUTE_LAUNCHER_REEXEC") == "1":
+            # Loop guard: the copy happened but the hashes still mismatch
+            # (should be impossible in one run) — never exec twice.
+            warn("launcher still differs after a re-exec — continuing with the current code")
+            return
+        note("restarting the launcher with the new version (same window)…")
+        log("self-update: re-exec'ing the fresh launcher with args={}".format(sys.argv[1:]))
+        try:
+            sys.stdout.flush()
+            sys.stderr.flush()
+            env = dict(os.environ)
+            env["ACUTE_LAUNCHER_REEXEC"] = "1"
+            os.execve(sys.executable, [sys.executable, str(mine)] + list(sys.argv[1:]), env)
+        except OSError as exc:
+            # exec failed (rare) — the update still applies next run.
+            warn(f"could not restart in place ({exc.__class__.__name__}) — the new version runs on the next double-click")
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# ROUND-56 (R56): the launch-mode question — app or site?
+#
+# The owner asked for this explicitly after the desktop engine failed and the
+# launcher gave no way to choose: "in the acute.bat it should ask how to
+# launch the app or the site". One question, asked once per interactive run
+# AFTER the update pass (so the freshly self-updated launcher asks it — the
+# re-exec above guarantees the new code is live). Enter = the last choice;
+# `ACUTE.bat app` / `ACUTE.bat site` (or --app / --site) skip the question.
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _load_launch_pref():
+    """The remembered choice ('desktop' | 'site'), or None when never set."""
+    try:
+        data = json.loads(PREF_PATH.read_text(encoding="utf-8"))
+        mode = data.get("mode")
+        return mode if mode in ("desktop", "site") else None
+    except (OSError, ValueError):
+        return None
+
+
+def _save_launch_pref(mode):
+    """Best-effort persistence — a locked folder must never block a launch."""
+    try:
+        PREF_PATH.write_text(json.dumps({"mode": mode}, indent=2) + "\n", encoding="utf-8")
+    except OSError:
+        pass
+
+
+def resolve_launch_mode(cmd):
+    """How this run launches ACUTE-CODE: 'desktop', 'site', or None = ASK.
+
+    Precedence: explicit command (app/desktop vs site/web) → explicit flag
+    (--app/--desktop vs --site/--web/--no-desktop) → non-Windows is always
+    'site' (the packaged app is Windows-only) → non-interactive stdin uses
+    the remembered choice (or desktop on first contact) → interactive runs
+    return None so main() asks the question.
+    """
+    if cmd in ("status", "update"):
+        return None  # these never launch anything
+    if cmd in DESKTOP_COMMANDS:
+        return "desktop"
+    if cmd in SITE_COMMANDS:
+        return "site"
+    flags = set(sys.argv[1:])
+    if "--app" in flags or "--desktop" in flags:
+        return "desktop"
+    if "--site" in flags or "--web" in flags or "--no-desktop" in flags:
+        return "site"
+    if not IS_WIN:
+        return "site"
+    if not sys.stdin.isatty():
+        return _load_launch_pref() or "desktop"
+    return None  # ask
+
+
+def ask_launch_mode():
+    """The R56 question: launch the desktop app or the site in the browser?
+
+    Returns 'desktop' or 'site' and remembers the choice as the next Enter
+    default. Unrecognized answers re-ask (three tries), then fall back to
+    the default — a question can never brick a launch. EOF (closed stdin)
+    takes the default.
+    """
+    saved = _load_launch_pref()
+    default = "site" if saved == "site" else "desktop"
+    default_hint = "site (your last choice)" if saved == "site" else "desktop app"
+    panel(
+        "How do you want to use ACUTE-CODE today?\n"
+        "\n"
+        "  [1]  Desktop app    the packaged window with the embedded\n"
+        "                      browser + the bundled engine (recommended)\n"
+        "  [2]  Site           the local servers + your browser\n"
+        "                      at http://localhost:5173\n"
+        "\n"
+        f"Enter = {default_hint}. Your answer is remembered as the default.\n"
+        "Skip this question next time:  ACUTE.bat app   or   ACUTE.bat site",
+        title="launch mode",
+    )
+    answers_desktop = {"1", "d", "a", "app", "desktop"}
+    answers_site = {"2", "s", "w", "web", "site", "browser"}
+    prompt = "Launch how? [1=desktop app / 2=site] "
+    for _ in range(3):
+        try:
+            answer = input(prompt).strip().lower()
+        except EOFError:
+            answer = ""
+        except KeyboardInterrupt:
+            print()
+            warn("cancelled — launching the default ({})".format("site" if default == "site" else "desktop app"))
+            answer = ""
+        if answer == "":
+            choice = default
+            break
+        if answer in answers_desktop:
+            choice = "desktop"
+            break
+        if answer in answers_site:
+            choice = "site"
+            break
+        warn("didn't catch that — answer 1 (desktop app) or 2 (site in the browser)")
+    else:
+        choice = default
+    _save_launch_pref(choice)
+    ok("launch mode: " + ("the desktop app (packaged, embedded browser)" if choice == "desktop" else "the site (local servers + browser)"))
+    return choice
+
+
+def _ask_engine_recourse():
+    """R56: the packaged app's engine did not come up — what next?
+
+    Returns 'retry' | 'site' | 'keep'. The default (Enter) retries once;
+    'site' falls through to the dev-servers flow so a desktop-engine hiccup
+    can never leave the owner without a working app — the exact experience
+    the owner asked for when the engine kept failing with no way out.
+    """
+    panel(
+        "The desktop app started, but its engine did not report ready.\n"
+        "\n"
+        "  [1]  Retry the desktop app    close it and start it again\n"
+        "                                 (a cold boot can simply be slow)\n"
+        "  [2]  Use the SITE instead     the browser flow at\n"
+        "                                 http://localhost:5173 — same app,\n"
+        "                                 local servers\n"
+        "  [3]  Keep the desktop app     its offline screen shows the engine\n"
+        "                                 log + Restart-engine + Copy\n"
+        "                                 diagnostics — report it and keep\n"
+        "                                 the window for the log\n"
+        "\n"
+        "Enter = retry. The engine log tail is printed above/below this panel\n"
+        "— it is also saved in %APPDATA%\\acute-code\\sidecar.log.",
+        style="yellow",
+        title="engine did not come up",
+    )
+    answers = {
+        "1": "retry", "r": "retry", "retry": "retry",
+        "2": "site", "s": "site", "site": "site", "web": "site",
+        "3": "keep", "k": "keep", "keep": "keep",
+    }
+    for _ in range(3):
+        try:
+            answer = input("What now? [1=retry / 2=site / 3=keep] ").strip().lower()
+        except EOFError:
+            answer = ""
+        except KeyboardInterrupt:
+            print()
+            answer = ""
+        if answer == "":
+            return "retry"
+        if answer in answers:
+            return answers[answer]
+        warn("answer 1 (retry), 2 (site in the browser) or 3 (keep the desktop app)")
+    return "retry"
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -1092,8 +1294,8 @@ def _desktop_stop_running(installed):
         time.sleep(1.0)
 
 
-def _desktop_watch_engine(proc, timeout_s=45):
-    r"""R54: watch the freshly launched app's engine through sidecar.log.
+def _desktop_watch_engine(proc, timeout_s=75):
+    r"""R54→R56: watch the freshly launched app's engine through sidecar.log.
 
     The app's Rust shell appends every lifecycle line to
     %APPDATA%\acute-code\sidecar.log; 'listening on 127.0.0.1:<port>' means
@@ -1101,20 +1303,29 @@ def _desktop_watch_engine(proc, timeout_s=45):
     test — the owner SEES the engine come up (or the log tail when it does
     not) instead of a console that went quiet while the app window shows its
     offline screen.
+
+    R56 returns an OUTCOME so desktop_flow can offer recourse:
+      'up'         — engine listening (the line every round has chased)
+      'failed'     — the app logged a startup failure (tail printed)
+      'timeout'    — no verdict in time — R56 now prints the log tail here
+                     too (the old timeout was blind: no diagnostic at all,
+                     exactly the shape that hid EISDIR for three sessions)
+      'app-exited' — the desktop process itself died
     """
     appdata = os.environ.get("APPDATA")
     if not IS_WIN or not appdata:
-        return
+        return "up" if proc.poll() is None else "app-exited"
     log_file = Path(appdata) / "acute-code" / "sidecar.log"
     try:
         start_size = log_file.stat().st_size if log_file.is_file() else 0
     except OSError:
         start_size = 0
     deadline = time.time() + timeout_s
+    fresh_lines: list = []
     while time.time() < deadline:
         if proc.poll() is not None:
             warn(f"the desktop app exited on its own (code {proc.returncode})")
-            return
+            return "app-exited"
         time.sleep(1.5)
         try:
             if not log_file.is_file():
@@ -1125,24 +1336,34 @@ def _desktop_watch_engine(proc, timeout_s=45):
             with log_file.open("rb") as fh:
                 fh.seek(start_size)
                 fresh = fh.read().decode("utf-8", "replace")
+            fresh_lines = [line for line in fresh.splitlines() if line.strip()]
         except OSError:
             continue
         match = re.search(r"listening on 127\.0\.0\.1:(\d+)", fresh)
         if match:
             ok(f"agent-core is up — sidecar listening on port {match.group(1)}")
-            return
+            return "up"
         if "startup failed" in fresh:
             warn("the app reports an engine startup failure — its log tail:")
-            tail = [line for line in fresh.splitlines() if line.strip()][-12:]
-            for line in tail:
-                note(line.strip()[:160])
+            _print_engine_tail(fresh_lines)
             note("the same log is shown inside the app (offline screen → Copy diagnostics)")
-            return
+            return "failed"
     warn(
-        f"agent-core did not report ready within {timeout_s}s — the app window "
-        "shows the live status (first launch can be slow while Windows scans "
-        "the new files)"
+        f"agent-core did not report ready within {timeout_s}s — the engine's last output:"
     )
+    _print_engine_tail(fresh_lines)
+    note("the app window shows the live status (its offline screen has Restart-engine + Copy diagnostics)")
+    return "timeout"
+
+
+def _print_engine_tail(lines, limit=14):
+    """R56: the engine's own last words, capped and one line each. Empty when
+    the log has nothing fresh (install the tail — silence is itself a clue)."""
+    if not lines:
+        note("(no fresh engine log lines — the engine produced no output at all)")
+        return
+    for line in lines[-limit:]:
+        note(line.strip()[:200])
 
 
 def _desktop_find_installed():
@@ -1439,35 +1660,64 @@ def desktop_flow(pat, key, sub_keys):
     # R54: never launch a second instance on top of a live one.
     _desktop_stop_running(installed)
 
-    with step("Starting the desktop app"):
-        try:
-            # DETACHED_PROCESS: the GUI app gets no console of ours and
-            # survives this launcher window; we keep a handle to report when
-            # it closes.
-            creationflags = 0x00000008 if IS_WIN else 0  # DETACHED_PROCESS
-            proc = subprocess.Popen(
-                [str(exe)], cwd=str(installed["location"]), creationflags=creationflags
-            )
-        except OSError as exc:
-            warn(f"could not start the desktop app ({exc.__class__.__name__}) — using the dev-servers flow")
-            return False
-        ok(f"ACUTE-CODE.exe is running (pid {proc.pid})")
-        # R54: first-run smoke test — watch agent-core come up (or fail) so
-        # this console tells the owner what the app window is doing.
-        _desktop_watch_engine(proc)
+    # R56: launch + watch + RECOURSE. When the engine does not come up the
+    # owner chooses what happens next (retry / switch to the site / keep the
+    # app) instead of a launcher that silently waits on a dead console while
+    # the app window shows its offline screen — the exact dead-end that
+    # prompted "in the acute.bat it should ask how to launch the app or the
+    # site".
+    proc = None
+    outcome = "app-exited"
+    for attempt in range(1, 3):  # initial launch + one retry round
+        with step("Starting the desktop app" if attempt == 1 else "Restarting the desktop app (retry)"):
+            try:
+                # DETACHED_PROCESS: the GUI app gets no console of ours and
+                # survives this launcher window; we keep a handle to report
+                # when it closes.
+                creationflags = 0x00000008 if IS_WIN else 0  # DETACHED_PROCESS
+                proc = subprocess.Popen(
+                    [str(exe)], cwd=str(installed["location"]), creationflags=creationflags
+                )
+            except OSError as exc:
+                warn(f"could not start the desktop app ({exc.__class__.__name__}) — using the dev-servers flow")
+                return False
+            ok(f"ACUTE-CODE {installed['version']} is running (pid {proc.pid})")
+            # R54: first-run smoke test — watch agent-core come up (or fail)
+            # so this console tells the owner what the app window is doing.
+            outcome = _desktop_watch_engine(proc)
+        if outcome == "up":
+            break
+        if attempt == 1:
+            recourse = _ask_engine_recourse()
+            log(f"engine outcome={outcome} → owner chose: {recourse}")
+            if recourse == "site":
+                warn("switching to the SITE (browser) — closing the desktop app first")
+                _desktop_stop_running(installed)
+                return False  # falls through to the dev-servers flow
+            if recourse == "keep":
+                note("keeping the desktop app — its offline screen has Restart-engine + Copy diagnostics")
+                break
+            # retry: close the just-launched instance (its engine is wedged)
+            _desktop_stop_running(installed)
+        else:
+            warn("the engine still did not come up after the retry — the app window's offline screen has the full log + Restart-engine")
+            note("(next run you can answer 2 at the launch question to use the site instead)")
+    if outcome != "up" and proc is not None and proc.poll() is None:
+        note("continuing with the desktop app as the owner chose — the in-app Restart-engine button re-runs the same handshake")
     panel(
-        "The desktop app started — the agent backend is bundled inside\n"
+        "The desktop app is running — the agent backend is bundled inside\n"
         "(no servers to manage, no browser tab: it is a real app window\n"
         "with the embedded Chromium browser).\n\n"
         "  ➜  NEXT TIME: double-click the ACUTE-CODE shortcut on your\n"
-        "     Desktop, or run ACUTE.bat again — it updates everything\n"
-        "     first, then launches the app (double-click = update + start)\n"
+        "     Desktop, or run ACUTE.bat again — it updates everything,\n"
+        "     then asks app-or-site (Enter keeps your last choice)\n"
         "  ➜  Keep this window open while using the app (Ctrl+C just\n"
         "     closes THIS window — the app keeps running)\n"
         "  ➜  Your keys were stored in Windows Credential Manager and are\n"
         "     picked up by the app automatically on every start\n"
-        "  ➜  If the app ever shows \"Can't reach agent-core\", its offline\n"
-        "     screen shows the engine log + a Copy-diagnostics button",
+        "  ➜  If the app shows \"Can't reach agent-core\", its offline\n"
+        "     screen shows the engine log + Restart-engine + Copy\n"
+        "     diagnostics; you can also run ACUTE.bat and choose the SITE",
         style="green",
         title="▲ ACUTE-CODE desktop app",
     )
@@ -1516,6 +1766,27 @@ def mode_status(pat, key, env, sub_keys=("", "", "")):
             lines.append(f"desktop app  {desktop['version']} installed  ·  {desktop['location']}")
         else:
             lines.append("desktop app  not installed (the next run will fetch the installer)")
+    # R56: the remembered launch choice + the engine's last words — the two
+    # facts that turn a vague "it failed" report into a diagnosable one.
+    pref = _load_launch_pref()
+    lines.append(f"launch mode  {'asks every run' if pref is None else pref + ' (saved default — ACUTE.bat app/site changes it)'}")
+    if IS_WIN:
+        appdata = os.environ.get("APPDATA")
+        sidecar_log = Path(appdata) / "acute-code" / "sidecar.log" if appdata else None
+        if sidecar_log is not None and sidecar_log.is_file():
+            try:
+                tail = [l for l in sidecar_log.read_text(encoding="utf-8", errors="replace").splitlines() if l.strip()]
+                last_up = next((l for l in reversed(tail) if "listening on" in l), None)
+                lines.append(
+                    "engine log   {}  ·  last boot: {}".format(
+                        sidecar_log,
+                        (last_up.strip()[:100] if last_up else "no successful boot on record"),
+                    )
+                )
+            except OSError:
+                pass
+        else:
+            lines.append("engine log   no sidecar.log yet (the packaged app has never run)")
     lines.append(f"GitHub PAT   length {len(pat)}")
     lines.append(f"Router key   length {len(key)}")
     # sub-agent pool presence (length only, never the value)
@@ -1640,14 +1911,6 @@ def main():
     args = [a for a in sys.argv[1:] if not a.startswith("-")]
     cmd = args[0] if args else "run"
 
-    # ROUND-51 (R51-a): the desktop flags. `--web` / `--no-desktop` force the
-    # classic dev-servers + browser flow; `desktop` (a command, below) forces
-    # the packaged-app path. Default behavior on Windows now PREFERS the
-    # packaged desktop app (it embeds the native browser the owner asked
-    # for) and falls back to the dev flow on any failure.
-    desktop_skip = "--web" in sys.argv or "--no-desktop" in sys.argv
-    prefer_desktop = not desktop_skip
-
     banner()
     log(f"===== launcher start {time.strftime('%Y-%m-%d %H:%M:%S')} args={sys.argv[1:]} =====")
 
@@ -1667,7 +1930,33 @@ def main():
     with step("Verifying GitHub access (token + private repository)"):
         validate_github_access(pat)
 
-    if IS_WIN and (prefer_desktop or cmd == "desktop"):
+    # R56: the launch mode resolves AFTER the update pass (below), so the
+    # freshly self-updated launcher — with its possibly-new question code —
+    # is the code that asks. Explicit commands/flags never ask; non-Windows
+    # is always the site; a terminal (interactive run) gets the question.
+    launch_mode = resolve_launch_mode(cmd)
+
+    if launch_mode is None:
+        # The ask is still pending — the plan shows BOTH possible paths so it
+        # stays honest whichever way the owner answers.
+        panel(
+            "Here is the plan for this run:\n"
+            "\n"
+            "  1.  Verify GitHub access      done (above)\n"
+            "  2.  Check for updates         keeps this launcher + the repo current\n"
+            "  3.  Ask: app or site?         you choose (Enter keeps your last choice)\n"
+            "  4.  Launch the chosen mode:\n"
+            "        DESKTOP app             install/update + start the packaged\n"
+            "                                window (embedded browser + engine)\n"
+            "        SITE                    local servers + your browser\n"
+            "                                at http://localhost:5173\n"
+            "\n"
+            "Either path falls back to the other when it fails, so a hiccup in\n"
+            "one mode never leaves you without a running app. Skip the question\n"
+            "next time:  ACUTE.bat app   or   ACUTE.bat site",
+            title="the plan",
+        )
+    elif IS_WIN and launch_mode == "desktop":
         panel(
             "Here is the plan for this run:\n"
             "\n"
@@ -1679,13 +1968,13 @@ def main():
             "  5.  Start the app                     a real app window — no browser tab\n"
             "\n"
             "If the desktop install fails for ANY reason the launcher falls back\n"
-            "to the dev-servers flow automatically — you always end up with a\n"
-            "running app. Use --web (or --no-desktop) to skip the desktop path.",
-            title="the plan",
+            "to the site flow automatically — you always end up with a running\n"
+            "app. Prefer the browser instead?  ACUTE.bat site",
+            title="the plan — desktop app",
         )
     else:
-        if cmd == "desktop":
-            warn("the packaged desktop app is Windows-only — continuing with the dev-servers flow")
+        if cmd in DESKTOP_COMMANDS:
+            warn("the packaged desktop app is Windows-only — continuing with the site flow")
         panel(
             "Here is the plan for this run:\n"
             "\n"
@@ -1694,11 +1983,12 @@ def main():
             "  3.  Download / update ACUTE-CODE      first run downloads it, later runs update it\n"
             "  4.  Install dependencies + build      skipped when already done\n"
             "  5.  Store the OpenRouter key          Windows Credential Manager (once)\n"
-            "  6.  Start the app                     open http://localhost:5173\n"
+            "  6.  Start the site                    open http://localhost:5173 in your browser\n"
             "\n"
             "Every step prints its result. If anything fails you get a red panel\n"
-            "with the exact cause and the fix — the window stays open for copying.",
-            title="the plan",
+            "with the exact cause and the fix — the window stays open for copying.\n"
+            "(Prefer the desktop window?  ACUTE.bat app)",
+            title="the plan — site in your browser",
         )
 
     check_toolchain()
@@ -1715,19 +2005,24 @@ def main():
     if cmd == "update":
         rule()
         ok(f"update pass complete ({int(time.time() - STARTED)}s) — everything ready")
-        note("double-click the launcher again to start the app")
+        note("double-click the launcher again — it asks app-or-site, then launches")
         wait_close()
         return
 
-    # ROUND-51 (R51-a): the DESKTOP path — preferred on Windows. Runs before
-    # install_and_build: a successful desktop launch needs nothing built from
-    # the repo (the installer bundles the backend). Any failure inside
-    # desktop_flow prints a warning and returns False → the dev flow below
-    # stays exactly as it was.
-    if IS_WIN and (prefer_desktop or cmd == "desktop"):
+    # R56: ASK here — after the update + self-update re-exec, so the question
+    # comes from the newest launcher code and reflects the current state.
+    if launch_mode is None:
+        launch_mode = ask_launch_mode()
+
+    # ROUND-51 (R51-a): the DESKTOP path. Runs before install_and_build: a
+    # successful desktop launch needs nothing built from the repo (the
+    # installer bundles the backend). Any failure inside desktop_flow prints
+    # a warning and returns False → the site flow below stays exactly as it
+    # was — including the owner choosing it after an engine failure.
+    if IS_WIN and launch_mode == "desktop":
         if desktop_flow(pat, key, sub_keys):
             return
-        warn("falling back to the dev-servers flow (browser at http://localhost:5173)")
+        warn("falling back to the site flow (browser at http://localhost:5173)")
 
     install_and_build(env, updated)
     write_env_file()

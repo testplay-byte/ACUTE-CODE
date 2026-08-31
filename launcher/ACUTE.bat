@@ -6,15 +6,27 @@ rem  This tiny file is the ONLY thing you double-click. It sets up a clean
 rem  UTF-8 console, then hands off to acute_launcher.py (the workhorse with
 rem  the full terminal UI — panels, spinners, auto-install, self-update).
 rem
+rem  THE LAUNCH QUESTION (round 56): every run ASKS how you want to launch —
+rem      [1] the DESKTOP app  (the packaged window, recommended)
+rem      [2] the SITE         (local servers + your browser)
+rem  Enter keeps your last choice. Skip the question with a command:
+rem
+rem      ACUTE.bat            ask app-or-site, then launch (default)
+rem      ACUTE.bat app        the desktop app, no question
+rem      ACUTE.bat site       the site in your browser, no question
+rem
+rem  If the desktop app's engine fails to start, the launcher asks what to
+rem  do next (retry / use the site / keep) — you are never stuck.
+rem
 rem  Files that belong in THIS folder:
 rem      ACUTE.bat              <- you are here (double-click me)
-rem      acute_launcher.py      <- the workhorse (never needs editing)
+rem      acute_launcher.py      <- the workhorse (self-updates from the repo)
 rem      credentials.txt        <- your secrets (rename from
 rem                                 credentials.example.txt and fill it in)
 rem
 rem  Useful commands:   ACUTE.bat status   read-only health report
 rem                     ACUTE.bat update   update everything, don't start
-rem                     ACUTE.bat start    start without the update check
+rem                     ACUTE.bat start    skip the update check (still asks)
 rem ============================================================================
 
 rem --- UTF-8 console so the rich-UI panels render correctly (fixes borders) --

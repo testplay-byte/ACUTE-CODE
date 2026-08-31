@@ -53,42 +53,57 @@ What you'll see, in order:
    ├── ACUTE.bat              ← you double-click this
    ├── acute_launcher.py      ← the workhorse
    ├── credentials.txt        ← your secrets (local only)
+   ├── .acute-launch-pref.json ← your remembered launch choice (round 56)
    ├── ACUTE-CODE\            ← the app (downloaded, self-updating)
    └── .acute\                ← helper data (logs, installer downloads)
    ```
-3. **The packaged desktop app installs** (round 51+): the launcher checks
-   GitHub for the latest `ACUTE-CODE_x64-setup.exe`, downloads it (with a
-   progress bar), installs it **silently — no admin prompt, no dialogs**
-   (it lands in `C:\Users\<you>\AppData\Local\ACUTE-CODE`), stores your
-   OpenRouter keys in **Windows Credential Manager** so the app boots with
-   them, and starts **`ACUTE-CODE.exe`** — a real app window with the
-   embedded Chromium browser and the agent backend bundled inside. No
-   browser tab, no servers to manage, nothing to type.
-4. Keep the launcher window open while using the app (Ctrl+C there just
+3. **The launch question (round 56)** — every run asks how you want to work:
+   - **[1] Desktop app** (recommended): the packaged window with the embedded
+     browser and the bundled agent backend
+   - **[2] Site**: the local servers + your browser at `http://localhost:5173`
+
+   Press **Enter** to keep your last choice (first run defaults to the
+   desktop app). Your answer is remembered as the next default. Skip the
+   question entirely with a command: **`ACUTE.bat app`** or
+   **`ACUTE.bat site`**.
+4. **Desktop mode** installs/updates the packaged app (round 51+): the
+   launcher checks GitHub for the latest `ACUTE-CODE_x64-setup.exe`,
+   downloads it (with a progress bar), installs it **silently — no admin
+   prompt, no dialogs** (it lands in
+   `C:\Users\<you>\AppData\Local\ACUTE-CODE`), stores your OpenRouter keys
+   in **Windows Credential Manager** so the app boots with them, and starts
+   **`ACUTE-CODE.exe`** — a real app window with the embedded Chromium
+   browser and the agent backend bundled inside. No browser tab, no servers
+   to manage, nothing to type.
+5. Keep the launcher window open while using the app (Ctrl+C there just
    closes that window — the app keeps running in its own window).
 
-> **If the desktop install fails for any reason** (offline, no installer
-> published yet, disk problem…), the launcher prints a clear warning and
-> automatically falls back to the dev-servers flow below — you always end
-> up with a running app.
+> **If the desktop engine fails to come up**, the launcher shows the
+> engine's log tail and asks what to do next: **[1] retry the desktop app**,
+> **[2] use the SITE instead** (same app in your browser), or **[3] keep the
+> desktop app** (its offline screen has Restart-engine + Copy diagnostics).
+> You are never stuck with a dead engine and no way out. Any install
+> failure likewise falls back to the site flow automatically.
 
-### The old browser/dev flow (still available)
+### The site/browser flow (a choice, not a fallback)
 
-Add `--web` (or `--no-desktop`) to force the classic mode: dependencies
-   install, the backend builds, your OpenRouter key is stored in **Windows
-   Credential Manager**, the servers start, and
-   **http://localhost:5173** opens in your browser (it opens by itself).
-   Keep the window open while using the app; **Ctrl+C** in the window stops
-   the servers cleanly. This is also the automatic fallback path.
+Choose **[2] Site** at the launch question (or run **`ACUTE.bat site`** / add
+`--web` / `--no-desktop`): dependencies install, the backend builds, your
+   OpenRouter key is stored in **Windows Credential Manager**, the servers
+   start, and **http://localhost:5173** opens in your browser (it opens by
+   itself). Keep the window open while using the app; **Ctrl+C** in the
+   window stops the servers cleanly. This is also the automatic fallback
+   path when the desktop flow fails.
 
 ## Every later run
 
 Just double-click `ACUTE.bat` again. It checks GitHub for new versions — if
-there are any, it **updates the launcher, stops the live servers, updates,
-rebuilds, and installs the newest desktop app automatically** — then
-launches. Your agents, sessions, projects and settings persist (the desktop
-app keeps them in `%APPDATA%\acute-code\`, the dev flow in
-`ACUTE-CODE\.dev\`) and are never touched by updates.
+there are any, it **updates the launcher (and immediately runs the new
+version), stops the live servers, updates, rebuilds, and installs the newest
+desktop app automatically** — then asks app-or-site and launches. Your
+agents, sessions, projects and settings persist (the desktop app keeps them
+in `%APPDATA%\acute-code\`, the dev flow in `ACUTE-CODE\.dev\`) and are
+never touched by updates.
 
 ## If anything goes wrong
 
@@ -98,19 +113,24 @@ app keeps them in `%APPDATA%\acute-code\`, the dev flow in
 - Everything is idempotent — fix the issue (or don't) and double-click again;
   it resumes where it stopped.
 - Useful commands (run in cmd from your folder):
+  - `ACUTE.bat` — ask app-or-site, then launch (the default)
+  - `ACUTE.bat app` — the packaged desktop app, no question
+  - `ACUTE.bat site` — the site in your browser, no question
   - `ACUTE.bat status` — read-only health report (versions, update state,
-    installed desktop app, servers, credential lengths, log path)
+    installed desktop app, launch preference, engine last-boot line,
+    servers, credential lengths, log path)
   - `ACUTE.bat update` — update everything but don't start the app
-  - `ACUTE.bat start` — start without the update check
-  - `ACUTE.bat desktop` — install/launch ONLY the packaged desktop app
-    (falls back to the dev flow if it cannot)
-  - `ACUTE.bat --web` — skip the desktop app, run the classic browser flow
+  - `ACUTE.bat start` — start without the update check (still asks)
+  - `ACUTE.bat desktop` — same as `app` (install/launch ONLY the packaged
+    desktop app; falls back to the dev flow if it cannot)
+  - `ACUTE.bat --web` — skip the question, run the browser flow
 
 ## Updating the launcher itself
 
 Most of the time you never touch the files again: when the repository ships a
-newer `acute_launcher.py`, the launcher **copies it over automatically** on
-its next run. Only `ACUTE.bat` cannot self-overwrite (Windows locks the file
+newer `acute_launcher.py`, the launcher **copies it over and re-runs itself
+immediately** (round 56) — the new logic drives that very session, not the
+next one. Only `ACUTE.bat` cannot self-overwrite (Windows locks the file
 while it runs), so if the launcher prints
 `! ACUTE.bat also changed — please re-download it`:
 

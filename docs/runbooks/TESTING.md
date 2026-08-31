@@ -1,4 +1,4 @@
-<!-- last-reviewed: 2026-08-31 round-55 -->
+<!-- last-reviewed: 2026-08-31 round-56 -->
 # TESTING — the verification ladder
 
 Five layers; each has a defined "when mandatory". Rules here are binding
@@ -13,23 +13,33 @@ Five layers; each has a defined "when mandatory". Rules here are binding
 | L4 live battery | real provider turn(s), real disk, fresh DB | sandbox, single invocation | anything touching agents, projects, tools, streaming |
 | L5 browser verification | real UI against the live stack; screenshots machine-verified | sandbox, single invocation | any UI-affecting round |
 
-**Current counts (R55, verified 2026-08-31):** `pnpm test` = **1071 tests
+**Current counts (R56, verified 2026-08-31):** `pnpm test` = **1071 tests
 in 76 files** (1059 unit + 12 e2e — the e2e split is 8 sidecar + 4
 terminal-session). Trajectory: 262 (R42) → 397 (R43) → 471 (R44) → 565
 (R45) → 622 (R46) → 683 (R47) → 752 (R48) → 815ish (R49) → 930 (R50) →
-978 (R51) → 1035 (R52) → 1058 (R53) → 1071 (R54→R55, JS suite unchanged
-— R55's changes are the Rust shell + launcher). R55 added **Rust unit tests**
-(cargo `--all-targets`, type-checked on x86_64-pc-windows-gnu, run by `cargo
-test` on a Windows host): `wincred` blob tests 7 (UTF-16 round-trip, ASCII
-fallback incl. odd/even lengths, empty/garbage/non-printable rejections) ·
-`sidecar::simplified_path` 3 (verbatim-drive, verbatim-UNC, pass-through —
-pinned to the owner's exact 0.54.0 log paths) · `keys` 2 (canonical + legacy
-target-name pinning against the launcher's cmdkey form, provider-id
-validation). Launcher: `python3 -m py_compile` + the `_print_whats_new`
-changelog extraction executed against the real CHANGELOG.md. The R55 live
-battery (L4): project + session + real-key turn on the dev stack — the
-reply came back exactly `R55-ENGINE-OK`, session returned to its designed
-resting state, zero dev-log errors.
+978 (R51) → 1035 (R52) → 1058 (R53) → 1071 (R54→R55→R56 — the JS suite is
+unchanged in the launcher rounds; R55's Rust unit tests remain in the
+cargo `--all-targets` gate). **R56 is a launcher round** — its logic tests
+run in-sandbox against the real `acute_launcher.py` (not vitest; the
+launcher ships outside the pnpm workspace): mode resolution (commands ·
+flags · non-Windows · non-interactive stdin · saved pref · no-pref — 21
+checks), `ask_launch_mode` parsing + persistence round-trip,
+`_ask_engine_recourse` parsing, `_desktop_watch_engine` outcomes with
+post-start log appends (failed/listening/app-exited/timeout, threaded),
+`desktop_flow` recourse branches end-to-end (site closes the app + returns
+False · retry relaunches · keep · app-exited→site · up-first-try prompts
+nothing), `main()` dispatch (ask→site · ask→desktop · `site`/`app`/
+`desktop` commands · `--web`/`--site` flags · `status` no-dispatch ·
+default-run asks), and the self-update re-exec VERIFIED AS A REAL PROCESS
+REPLACEMENT (a stub repo copy exec'd, printed its marker + preserved args,
+exit code 42 propagated; the loop-guard run warned and continued).
+`python3 -m py_compile` clean; ACUTE.bat re-normalized to CRLF after its
+edit and `file`-verified (round-11/R52 lesson). The R56 live battery (L4):
+/health 200 · providers openrouter hasKey=true · project + session
+(`agt_tpl_coder`, 202) · real-key streamed turn answered EXACTLY
+`R56-LAUNCH-CHOICE-VERIFIED` · session resting state `queued` · zero new
+dev-log errors. Rust: `cargo check` GREEN on x86_64-pc-windows-gnu after
+the tauri.conf.json version bump.
 `r52-supervision` NEW 14 (exec helpers: background-launch grammar + log-
 redirect parsing; the hang fix: pipe-holding grandchild resolves FAST with
 a job id — the owner's exact trap, cross-platform via node-spawns-node;
