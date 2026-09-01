@@ -469,14 +469,73 @@ pub fn open_external_url(app: AppHandle, url: String) -> Result<(), String> {
 // the pop-out window — see browser_tab_create's window_label). See the
 // module header for the full design rationale.
 
-/// `browser_tab_create(tab_id, url, [window_label])` — create (idempotently)
-/// the child webview for a browser tab. If the webview already exists it is
-/// simply NAVIGATED to the URL (this makes the command safe to call on every
-/// panel activation and from every address-bar navigation). Otherwise a new
-/// child webview is added to the host window at 1×1 logical px, HIDDEN — the
-/// frontend then measures its placeholder, calls `browser_tab_set_bounds`
-/// and `browser_tab_set_visible(true)`. Creating it hidden prevents a flash
-/// of the page at the window's top-left corner before the first bounds sync.
+/// R60 (owner: "The scroll bar should be custom themed on every single
+/// page"): the themed-scrollbar CSS every tab webview injects at
+/// DOCUMENT-START (AddScriptToExecuteOnDocumentCreated — runs on every new
+/// document before page scripts, so there is no visible reflow). Neutral gray
+/// pills — external pages do not carry our CSS variables, and a mid-gray
+/// translucent capsule reads on both light and dark pages. Track and corner
+/// fully transparent; the thumb is inset by 3px of transparent border
+/// (background-clip: padding-box) so it reads as a floating capsule that
+/// never touches content edges — the app's R59 floating-pill language
+/// restated for pages we do not own.
+///
+/// CSP honesty: a page with a strict `style-src` (GitHub and friends) blocks
+/// inline `<style>` elements — there the injection is a silent no-op (the
+/// element exists in the DOM but `element.sheet` stays null, which is exactly
+/// how the R60 pop-out scrollbar detects the failure and keeps the page's own
+/// viewport scrollbar visible instead of doubling it). Best effort on every
+/// page, hard failure never.
+const TAB_SCROLLBAR_CSS: &str = "\
+*::-webkit-scrollbar{width:10px;height:10px}\
+*::-webkit-scrollbar-track{background:transparent}\
+*::-webkit-scrollbar-corner{background:transparent}\
+*::-webkit-scrollbar-thumb{background:rgba(128,128,140,0.35);border:3px solid transparent;border-radius:9999px;background-clip:padding-box}\
+*::-webkit-scrollbar-thumb:hover{background:rgba(128,128,140,0.55);background-clip:padding-box}";
+
+/// R60 (owner: the pop-out scrollbar "should not show inside the section but
+/// on the right side outside it"): when a tab webview is created with
+/// `hide_viewport_scrollbar`, the page's VIEWPORT scrollbar is hidden — the
+/// pop-out window paints its OWN gutter scrollbar OUTSIDE the content card
+/// (positioned in the window chrome, driven by `browser_tab_scroll_state` /
+/// `browser_tab_scroll_to` below). `scrollbar-width: none` on the root hides
+/// the viewport bar in modern Chromium (121+); the `::-webkit-scrollbar`
+/// rules cover older engines and WebKit. Only the VIEWPORT is hidden — inner
+/// scrollables keep (themed) bars, and if CSP blocks the style the page
+/// simply keeps its native viewport bar (the gutter scrollbar then stays
+/// absent — never two bars).
+const TAB_VIEWPORT_HIDE_CSS: &str = "\
+html{scrollbar-width:none!important}\
+html::-webkit-scrollbar{width:0!important;height:0!important;display:none!important}";
+
+/// The document-start script that installs the themed scrollbar CSS. The
+/// element is id-stamped so the scroll-state probe can check BOTH presence
+/// and application (`sheet !== null` — a CSP-blocked style element has a
+/// null sheet). Wrapped in try/catch: an init script that throws would abort
+/// the rest of the page's init scripts.
+fn tab_scrollbar_init_script(hide_viewport_scrollbar: bool) -> String {
+    let css = if hide_viewport_scrollbar {
+        format!("{TAB_SCROLLBAR_CSS}{TAB_VIEWPORT_HIDE_CSS}")
+    } else {
+        TAB_SCROLLBAR_CSS.to_string()
+    };
+    format!(
+        "(function(){{try{{var s=document.createElement('style');\
+s.id='acute-scrollbar-style';\
+s.textContent='{css}';\
+(document.head||document.documentElement).appendChild(s);}}catch(e){{}}}})();"
+    )
+}
+
+/// `browser_tab_create(tab_id, url, [window_label], [hide_viewport_scrollbar])`
+/// — create (idempotently) the child webview for a browser tab. If the webview
+/// already exists it is simply NAVIGATED to the URL (this makes the command
+/// safe to call on every panel activation and from every address-bar
+/// navigation). Otherwise a new child webview is added to the host window at
+/// 1×1 logical px, HIDDEN — the frontend then measures its placeholder, calls
+/// `browser_tab_set_bounds` and `browser_tab_set_visible(true)`. Creating it
+/// hidden prevents a flash of the page at the window's top-left corner before
+/// the first bounds sync.
 ///
 /// R59-b: the OPTIONAL `window_label` decides which window the webview is a
 /// child of. Omitted (None — every pre-R59 call site: the invoke bridge maps
@@ -486,6 +545,13 @@ pub fn open_external_url(app: AppHandle, url: String) -> Result<(), String> {
 /// the pop-out window. Bounds/visibility/go/navigate/url/close resolve the
 /// webview through its globally-unique LABEL (`Manager::get_webview`), so
 /// they are window-agnostic and needed no change.
+///
+/// R60: the OPTIONAL `hide_viewport_scrollbar` (the pop-out passes true)
+/// injects the viewport-hide CSS so the pop-out's OWN gutter scrollbar can
+/// replace the in-page bar (outside the content card, per the owner). The
+/// themed inner-scrollbar CSS is injected either way. Initialization scripts
+/// persist for the webview's LIFETIME (they re-run on every navigation), so
+/// the idempotent-navigate path never needs re-injection.
 ///
 /// WHY THIS COMMAND IS `async`: `Window::add_child` blocks on a channel while
 /// the MAIN thread builds the webview (window/mod.rs:1129 in tauri 2.11.5).
@@ -506,10 +572,13 @@ pub async fn browser_tab_create(
     tab_id: String,
     url: String,
     window_label: Option<String>,
+    hide_viewport_scrollbar: Option<bool>,
 ) -> Result<(), String> {
     let label = tab_label(&tab_id);
 
-    // Idempotent create: an existing webview just navigates.
+    // Idempotent create: an existing webview just navigates. The scrollbar
+    // init script rides the webview for its whole lifetime (R60) — no
+    // re-injection needed here, and the flag only matters at creation.
     if let Some(existing) = app.get_webview(&label) {
         let parsed = parse_http_url(&url)?;
         existing
@@ -544,8 +613,10 @@ pub async fn browser_tab_create(
     // We never block a navigation — this is a browser, not a filter.
     let app_for_hook = app.clone();
     let hook_tab_id = tab_id.clone();
+    let init_script = tab_scrollbar_init_script(hide_viewport_scrollbar.unwrap_or(false));
     let builder = WebviewBuilder::new(label, WebviewUrl::External(parsed))
         .data_directory(profile)
+        .initialization_script(init_script)
         .on_navigation(move |nav: &Url| {
             if nav.scheme() == "http" || nav.scheme() == "https" {
                 let _ = app_for_hook.emit(
@@ -654,6 +725,89 @@ pub fn browser_tab_go(app: AppHandle, tab_id: String, direction: String) -> Resu
     webview
         .eval(script)
         .map_err(|e| format!("go({direction}) tab \"{tab_id}\" failed: {e}"))
+}
+
+/// R60: the JS the scroll-state probe evaluates in the page. Returns a JSON
+/// string with the main scroller's geometry PLUS whether our themed-scrollbar
+/// style element actually APPLIED (`css: true` — a CSP-blocked `<style>` has
+/// `sheet === null`). Everything is wrapped so a hostile/broken page yields a
+/// well-formed (but css:false) answer instead of a rejection.
+const TAB_SCROLL_STATE_JS: &str = r#"(function(){
+try {
+  var el = document.getElementById('acute-scrollbar-style');
+  var css = !!(el && el.sheet !== null);
+  var de = document.documentElement;
+  var b = document.body;
+  var y = window.scrollY || window.pageYOffset || 0;
+  var vh = window.innerHeight;
+  var ch = Math.max(de ? de.scrollHeight : 0, b ? b.scrollHeight : 0);
+  return JSON.stringify({ y: Math.round(y), vh: Math.round(vh), ch: Math.round(ch), css: css });
+} catch (e) {
+  return JSON.stringify({ y: 0, vh: 0, ch: 0, css: false });
+}})()"#;
+
+/// `browser_tab_scroll_state(tab_id)` — R60: the pop-out window's gutter
+/// scrollbar data source. Evaluates a probe in the page (via
+/// `eval_with_callback` — tauri 2.11, the ONLY channel that reads data back
+/// out of an external page without injecting IPC into it) and returns the
+/// JSON string `{y, vh, ch, css}` (scroll offset, viewport height, content
+/// height, whether the themed-scrollbar CSS applied).
+///
+/// ASYNC on purpose: the callback arrives from the webview's renderer thread
+/// and we block a channel until it does (2s timeout — a page whose JS is
+/// wedged must never hang the poller; the frontend treats a rejection as
+/// "no data" and hides the gutter scrollbar).
+#[tauri::command]
+pub async fn browser_tab_scroll_state(app: AppHandle, tab_id: String) -> Result<String, String> {
+    let webview = find_tab_webview(&app, &tab_id)
+        .ok_or_else(|| format!("no native webview for tab \"{tab_id}\""))?;
+    let (tx, rx) = std::sync::mpsc::channel::<String>();
+    webview
+        .eval_with_callback(TAB_SCROLL_STATE_JS, move |result: String| {
+            let _ = tx.send(result);
+        })
+        .map_err(|e| format!("eval scroll state tab \"{tab_id}\" failed: {e}"))?;
+    match rx.recv_timeout(std::time::Duration::from_millis(2000)) {
+        Ok(json) => Ok(json),
+        Err(_) => Err(format!(
+            "scroll state tab \"{tab_id}\" timed out (page JS unresponsive)"
+        )),
+    }
+}
+
+/// `browser_tab_scroll_to(tab_id, y)` — R60: scroll the page's main scroller
+/// to an absolute offset (the pop-out gutter scrollbar's drag/click driver).
+/// Fire-and-forget eval like `browser_tab_go`. `y` is clamped to ≥ 0 (the
+/// page itself clamps to its own max — scrolling past the end is a no-op).
+#[tauri::command]
+pub fn browser_tab_scroll_to(app: AppHandle, tab_id: String, y: f64) -> Result<(), String> {
+    let webview = find_tab_webview(&app, &tab_id)
+        .ok_or_else(|| format!("no native webview for tab \"{tab_id}\""))?;
+    if !y.is_finite() || y < 0.0 {
+        return Err(format!("scroll offset {y} is not a non-negative finite number"));
+    }
+    let script = format!("window.scrollTo(0, {y});");
+    webview
+        .eval(&script)
+        .map_err(|e| format!("scroll_to tab \"{tab_id}\" failed: {e}"))
+}
+
+/// `browser_tab_set_zoom(tab_id, factor)` — R60: the REAL DPI-level page zoom
+/// (WebView2's zoomFactor through tauri's `Webview::set_zoom`), replacing the
+/// R50 divide-the-viewport approximation the BrowserPanel used because the
+/// API "was not exposed" then (it is, in tauri 2.11). Media queries and
+/// rem-based layout re-evaluate exactly like a browser's Ctrl+± zoom, which
+/// is what display-size testing needs. Factor is clamped to 0.1–5.0.
+#[tauri::command]
+pub fn browser_tab_set_zoom(app: AppHandle, tab_id: String, factor: f64) -> Result<(), String> {
+    let webview = find_tab_webview(&app, &tab_id)
+        .ok_or_else(|| format!("no native webview for tab \"{tab_id}\""))?;
+    if !factor.is_finite() || !(0.1..=5.0).contains(&factor) {
+        return Err(format!("zoom factor {factor} out of range (0.1–5.0)"));
+    }
+    webview
+        .set_zoom(factor)
+        .map_err(|e| format!("set_zoom tab \"{tab_id}\" failed: {e}"))
 }
 
 /// `browser_tab_url(tab_id)` — the webview's CURRENT url (what the user

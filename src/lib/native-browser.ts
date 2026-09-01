@@ -146,6 +146,66 @@ export function nativeTabsCloseAll(): Promise<void> {
 }
 
 /**
+ * R60: the page's main-scroller geometry, read OUT of the webview via
+ * `eval_with_callback` (the only channel that returns data from an external
+ * page without injecting IPC into it). `css` reports whether the
+ * document-start themed-scrollbar style actually APPLIED — a page with a
+ * strict CSP blocks the `<style>` element, and the pop-out's gutter
+ * scrollbar must then stay hidden so the page's own viewport bar remains
+ * the ONE scrollbar.
+ *
+ * Null (never a throw) when: not in Tauri, no webview yet, the probe
+ * timed out (wedged page JS), or the payload failed validation — a poller
+ * must treat every miss as "no data", not an error UI.
+ */
+export interface TabScrollState {
+  /** Current scroll offset of the main scroller (px, ≥ 0). */
+  y: number;
+  /** Viewport height (px). */
+  vh: number;
+  /** Content height (px). */
+  ch: number;
+  /** Whether the themed-scrollbar CSS applied (false on CSP-strict pages). */
+  css: boolean;
+}
+
+export async function nativeTabScrollState(tabId: string): Promise<TabScrollState | null> {
+  const tauri = tauriGlobal();
+  if (tauri === null) return null;
+  try {
+    const raw = (await tauri.core.invoke("browser_tab_scroll_state", { tabId })) as unknown;
+    if (typeof raw !== "string") return null;
+    const parsed = JSON.parse(raw) as Partial<TabScrollState>;
+    if (
+      typeof parsed.y !== "number" ||
+      typeof parsed.vh !== "number" ||
+      typeof parsed.ch !== "number" ||
+      typeof parsed.css !== "boolean"
+    ) {
+      return null;
+    }
+    return { y: parsed.y, vh: parsed.vh, ch: parsed.ch, css: parsed.css };
+  } catch {
+    return null;
+  }
+}
+
+/** R60: scroll the tab's main scroller to an absolute offset (px). */
+export function nativeTabScrollTo(tabId: string, y: number): Promise<void> {
+  return runCommand("browser_tab_scroll_to", { tabId, y });
+}
+
+/**
+ * R60: REAL DPI-level page zoom (WebView2 zoomFactor through tauri's
+ * `Webview::set_zoom`) — media queries and rem layout re-evaluate like a
+ * browser's Ctrl+±, which is what the panel's display-size testing needs.
+ * Factor is clamped 0.1–5.0 on the Rust side.
+ */
+export function nativeTabSetZoom(tabId: string, factor: number): Promise<void> {
+  return runCommand("browser_tab_set_zoom", { tabId, factor });
+}
+
+/**
  * R58-b: hand `url` to the OPERATING SYSTEM's default browser (the Rust
  * `open_external_url` command — tauri-plugin-shell's OS-level open, NOT the
  * embedded WebView2). The panel's explicit "Open externally" affordance

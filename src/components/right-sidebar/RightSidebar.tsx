@@ -34,6 +34,15 @@ import { MemoryPanel } from "./MemoryPanel";
 // ROUND-59 (R59-E): the diagnostics console tab panel (error monitoring).
 import { ConsolePanel } from "./ConsolePanel";
 import { fetchSubAgents, type SubAgentStatus } from "../../lib/api";
+// R60-D: hide the active browser tab's native webview while the quick-menu
+// / sub-agent-picker popover is open — native child webviews are OS layers
+// ABOVE all app HTML, so a popover that overlaps the page area renders
+// BEHIND it otherwise (the owner: "the options get hidden behind the actual
+// browser window itself").
+import { nativeTabSetVisible } from "../../lib/native-browser";
+// R60-D: the shared suppression flag the BrowserPanel consults before
+// showing a webview (closes the created-while-popover-open ordering race).
+import { setPopoverWebviewSuppression } from "./popover-webview-guard";
 import { useQuery } from "@tanstack/react-query";
 
 /**
@@ -132,6 +141,11 @@ export function RightSidebar({
   const [quickMenuOpen, setQuickMenuOpen] = useState(false);
   const [subAgentPickerFor, setSubAgentPickerFor] = useState<RightSidebarTabType | null>(null);
 
+  // The active tab, hoisted ABOVE the collapsed-rail early return so the
+  // R60-D popover-hide effect below (a hook — it must run on every render,
+  // rail included) can see it.
+  const activeTab = state.tabs.find((t) => t.id === state.activeTabId) ?? null;
+
   // Live sub-agents list (for the quick-menu's "Sub-agents" option visibility
   // + the picker popover).
   const subAgentsQuery = useQuery({
@@ -197,6 +211,63 @@ export function RightSidebar({
     setQuickMenuOpen(true);
   }, []);
 
+  // ── R60-D: popover-over-webview z-index fix ─────────────────────────────
+  // The QuickMenu / SubAgentPicker popovers are portaled to document.body
+  // with position:fixed — in WEB mode that is enough to sit above the panel.
+  // In TAURI mode the browser panel's page renderer is a NATIVE CHILD
+  // WEBVIEW: an OS-level layer that floats above ALL app HTML, so wherever
+  // the popover overlaps the page area it renders BEHIND the webview (the
+  // owner: "when I click the new tab option then the options get hidden
+  // behind the actual browser window itself"). Fix: while either popover is
+  // open AND the active right-sidebar tab is a browser tab, HIDE that tab's
+  // webview (browser_tab_set_visible false — the same background-tab
+  // mechanism the panel itself uses; the session STAYS ALIVE); restore it
+  // when the popover closes. The restore is GUARDED: it fires only when the
+  // popover closes with that SAME browser tab still active and the sidebar
+  // still open — every other path (tab switched away, sidebar collapsed,
+  // tab closed) leaves the webview hidden, which is exactly what the
+  // panel's own mount/unmount lifecycle wants. In web mode
+  // nativeTabSetVisible degrades to a resolved no-op, so this is
+  // Tauri-only by construction.
+  const popoverHiddenTabRef = useRef<string | null>(null);
+  useEffect(() => {
+    const popoverOpen = quickMenuOpen || subAgentPickerFor !== null;
+    const activeBrowserTabId =
+      open && activeTab !== null && activeTab.type === "browser" ? activeTab.id : null;
+    const warn = (err: unknown) => console.warn("[native-browser]", err);
+    if (popoverOpen) {
+      if (activeBrowserTabId !== null && popoverHiddenTabRef.current !== activeBrowserTabId) {
+        popoverHiddenTabRef.current = activeBrowserTabId;
+        // The module flag is what the BrowserPanel's nativeCreate consults —
+        // a webview created while this popover is open must not show itself.
+        setPopoverWebviewSuppression(activeBrowserTabId);
+        void nativeTabSetVisible(activeBrowserTabId, false).catch(warn);
+      }
+      return;
+    }
+    const hidden = popoverHiddenTabRef.current;
+    if (hidden === null) return;
+    popoverHiddenTabRef.current = null;
+    setPopoverWebviewSuppression(null);
+    // Restore ONLY when the hidden tab is still the ACTIVE browser tab with
+    // the sidebar open (its BrowserPanel is mounted and owns the webview).
+    if (activeBrowserTabId === hidden) {
+      void nativeTabSetVisible(hidden, true).catch(warn);
+    }
+  }, [quickMenuOpen, subAgentPickerFor, open, activeTab]);
+
+  // R60-D: unmount-only cleanup — if the whole sidebar goes away while a
+  // popover is open (project/session switch), clear the module suppression
+  // so no webview stays hidden forever; every panel's own mount/unmount
+  // lifecycle re-owns visibility from there. (Separate empty-deps effect:
+  // the hide/restore effect above must NOT re-run its cleanup per change.)
+  useEffect(() => {
+    return () => {
+      popoverHiddenTabRef.current = null;
+      setPopoverWebviewSuppression(null);
+    };
+  }, []);
+
   if (!open) {
     // Collapsed rail — a reopen button.
     return (
@@ -216,8 +287,6 @@ export function RightSidebar({
       </motion.button>
     );
   }
-
-  const activeTab = state.tabs.find((t) => t.id === state.activeTabId) ?? null;
 
   return (
     <motion.div

@@ -27,11 +27,23 @@ export const POPOUT_TAB_ID = "popout";
  * page passes its own label so the webview floats over THIS window (an
  * existing webview just navigates, which is what makes this safe to call for
  * every address-bar Go, exactly like the panel's nativeTabCreate usage).
+ *
+ * R60: `hideViewportScrollbar: true` — the pop-out's page hides its VIEWPORT
+ * scrollbar (document-start CSS) because the window paints its OWN gutter
+ * scrollbar OUTSIDE the content card (the owner: "It should not show inside
+ * the section but on the right side outside it"). The webview is created
+ * with the flag once; navigations of the existing webview keep the init
+ * script for its whole lifetime.
  */
 export async function createPopoutTab(url: string, windowLabel: string): Promise<void> {
   const invoke = nativeInvoke();
   if (invoke === null) return;
-  await invoke("browser_tab_create", { tabId: POPOUT_TAB_ID, url, windowLabel });
+  await invoke("browser_tab_create", {
+    tabId: POPOUT_TAB_ID,
+    url,
+    windowLabel,
+    hideViewportScrollbar: true,
+  });
 }
 
 /**

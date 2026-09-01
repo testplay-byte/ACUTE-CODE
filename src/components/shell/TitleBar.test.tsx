@@ -2,6 +2,7 @@
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { TitleBar } from "./TitleBar";
+import { useProjectChatStore } from "../../lib/project-chat-store";
 
 /**
  * ROUND-58 (R58-a) — unit tests for the custom title bar of the frameless
@@ -14,7 +15,9 @@ import { TitleBar } from "./TitleBar";
  * null in web mode, the drag-region chrome in Tauri mode, and that the three
  * window controls drive `getCurrentWindow()`'s minimize / toggleMaximize /
  * close (never the wrong method), plus the `tauri://resize` re-query that
- * swaps the maximize/restore icon.
+ * swaps the maximize/restore icon. R60-C adds the identity block's sidebar
+ * toggle contract (the REAL project-chat-store — no mock — so the flip lands
+ * in the actual store state the AppShell reads).
  */
 
 // AcuteLogo lives in Sidebar (a heavy module) — stub the import
@@ -71,7 +74,12 @@ function stubTauri(overrides: { isMaximized?: () => Promise<boolean> } = {}): {
   };
 }
 
-beforeEach(clearTauri);
+beforeEach(() => {
+  clearTauri();
+  // R60-C: the identity toggle reads the real store — reset its state so a
+  // flipped flag can never leak between tests.
+  useProjectChatStore.setState({ appSidebarVisible: true });
+});
 
 afterEach(() => {
   clearTauri();
@@ -104,6 +112,47 @@ describe("TitleBar — Tauri chrome", () => {
     expect(screen.getByRole("button", { name: "Minimize window" })).toBeTruthy();
     expect(screen.getByRole("button", { name: "Maximize window" })).toBeTruthy();
     expect(screen.getByRole("button", { name: "Close window" })).toBeTruthy();
+  });
+
+  // R60-C (owner: "I would need to click on the app's logo at the top left
+  // corner… the project, the name of the application and such. Also I can
+  // click that exact same one to show the sidebar again") — the identity
+  // block (logo + name) IS the sidebar toggle now.
+  it("R60-C: the identity block is a toggle button that flips appSidebarVisible both ways", () => {
+    stubTauri();
+    render(<TitleBar />);
+
+    // Default store state: sidebar visible → the affordance says "Hide".
+    const toggle = screen.getByRole("button", { name: "Hide sidebar" });
+    // CRITICAL Tauri detail: the button carries NO drag region — a drag
+    // region swallows clicks (the same reason the window controls work).
+    expect(toggle.hasAttribute("data-tauri-drag-region")).toBe(false);
+    expect(toggle.getAttribute("aria-pressed")).toBe("true");
+    // The identity itself is unchanged: the Acute mark + the product name.
+    expect(screen.getByTestId("acute-logo")).toBeTruthy();
+    expect(screen.getByText("ACUTE-CODE")).toBeTruthy();
+
+    // Click → the whole sidebar hides.
+    fireEvent.click(toggle);
+    expect(useProjectChatStore.getState().appSidebarVisible).toBe(false);
+    const show = screen.getByRole("button", { name: "Show sidebar" });
+    expect(show.getAttribute("aria-pressed")).toBe("false");
+
+    // The exact same control shows it again.
+    fireEvent.click(show);
+    expect(useProjectChatStore.getState().appSidebarVisible).toBe(true);
+    expect(screen.getByRole("button", { name: "Hide sidebar" })).toBeTruthy();
+  });
+
+  it("R60-C: starting hidden renders the Show affordance (the store is the single source of truth)", () => {
+    stubTauri();
+    useProjectChatStore.setState({ appSidebarVisible: false });
+    render(<TitleBar />);
+
+    const show = screen.getByRole("button", { name: "Show sidebar" });
+    expect(show.getAttribute("aria-pressed")).toBe("false");
+    fireEvent.click(show);
+    expect(useProjectChatStore.getState().appSidebarVisible).toBe(true);
   });
 
   it("each control drives exactly its own window method", () => {

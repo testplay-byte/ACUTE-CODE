@@ -17,6 +17,7 @@ import {
   GitBranch,
   History,
   ListChecks,
+  MessageSquareText,
   Search,
   Square,
   ThumbsDown,
@@ -321,7 +322,16 @@ function TurnFooter({
     writeRows([...snapshot.filter((r) => r.assistantSeq !== assistantSeq), optimistic]);
     setRatingError(null);
     // Bad ratings ask for context ("What went wrong?"); good stays 1-click.
-    setNoteOpen(value === "bad");
+    // R60 polish (owner: "maybe we might need to look into the things a bit
+    // better"): re-rating a SAVED bad reply opens the editor PRE-FILLED with
+    // the existing note — editing context, never losing it. A FRESH bad
+    // rating starts empty.
+    if (value === "bad") {
+      setNoteText(current?.note ?? "");
+      setNoteOpen(true);
+    } else {
+      setNoteOpen(false);
+    }
     rateReply(sessionId, { assistantSeq, rating: value })
       .then(() => refreshRatings())
       .catch((err) => {
@@ -338,7 +348,7 @@ function TurnFooter({
     rateReply(sessionId, { assistantSeq, rating: "bad", ...(text !== "" ? { note: text } : {}) })
       .then(() => {
         setNoteOpen(false);
-        setNoteText("");
+        // Keep the text for a possible reopen — the chip reopens with it.
         refreshRatings();
       })
       .catch((err) => flashRatingError(err));
@@ -385,6 +395,27 @@ function TurnFooter({
           >
             {thumbButton("good", ThumbsUp, "Rate this reply good")}
             {thumbButton("bad", ThumbsDown, "Rate this reply bad")}
+            {/* R60 polish: a SAVED note is visible (a tiny "noted" chip on
+                the cluster) and one click reopens the editor pre-filled —
+                the owner's feedback loop stays discoverable instead of
+                hiding in the DB. */}
+            {current?.note != null && current.note !== "" && !noteOpen ? (
+              <button
+                type="button"
+                onClick={() => {
+                  setNoteText(current.note ?? "");
+                  setNoteOpen(true);
+                }}
+                aria-label="Edit the saved rating note"
+                title={`Saved note: ${current.note}`}
+                data-testid="rating-note-chip"
+                className="ml-0.5 flex h-5 max-w-[180px] items-center gap-1 rounded-full px-1.5 text-[10px] font-semibold"
+                style={{ background: styles.subtle, color: styles.textTertiary }}
+              >
+                <MessageSquareText size={10} aria-hidden />
+                <span className="truncate">noted</span>
+              </button>
+            ) : null}
           </div>
         ) : null}
         <ReplyStats usage={usage} ms={ms} model={model} />

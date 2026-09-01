@@ -16,11 +16,12 @@ import {
   X,
   Zap,
 } from "lucide-react";
+import { AnimatePresence, motion } from "framer-motion";
 import { useTimeoutClear } from "../../hooks/use-timeout-clear";
 import { useAgents } from "../../hooks/use-agents";
 import { useThemeStyles } from "../../lib/use-theme-styles";
 import { withAlpha } from "../dashboard/helpers";
-import { filterModelsForPicker, isFreeModelEntry, useSettingsStore } from "../../lib/settings-store";
+import { isFreeModelEntry, useSettingsStore } from "../../lib/settings-store";
 import { isTauri } from "../../lib/sidecar";
 import { nextFreeSlot, revealProviderKeys } from "../../lib/key-pool";
 import { useScrollFade } from "../../lib/useScrollFade";
@@ -85,9 +86,17 @@ import {
  * preset providers are hidden ENTIRELY (the R58 "Not configured" collapsed
  * group is gone — Add Provider's preset picker is the one way to set one
  * up), the API-key field presents the STORED key masked with ONE clear
- * Show (+ a separate Rotate flow), disabling a provider is OUTRIGHT (no
- * agent-impact confirm), and opening the page pre-selects the FIRST
- * provider.
+ * Show, disabling a provider is OUTRIGHT (no agent-impact confirm), and
+ * opening the page pre-selects the FIRST provider.
+ *
+ * ROUND-60 (R60-B) — the settings deep-clean: the API-key field is ONE
+ * unified layout — [value input][eye toggle in the exact same slot in every
+ * state][context action] — with NO rotate flow (the owner pastes the new
+ * key straight into the field); the models list shows CONFIGURED rows ONLY
+ * (the live catalog lives in the "Add models" picker, which now owns the
+ * Free only ↔ All models toggle on the shared persisted modelsFreeOnly
+ * pref); every stored row — free ones included — stays fully customizable
+ * via the pencil dialog (the FREE badge rides isFreeModelEntry).
  */
 
 /* ── API plumbing ───────────────────────────────────────────────────────────
@@ -170,11 +179,6 @@ const PRESET_PROVIDER_IDS: ReadonlySet<string> = new Set([
   "google",
   "openrouter",
 ]);
-
-/** The reserved OpenRouter id — the ONLY provider the served static catalog
- * describes (its model ids are OpenRouter ids), so the catalog→list merge in
- * ModelListSection scopes to it (R58-d: custom providers never get it). */
-const OPENROUTER_PROVIDER_ID = "openrouter";
 
 /* ── ROUND-50 (R50-d) shared micro-formatting ─────────────────────────────── */
 
@@ -513,19 +517,19 @@ function ProviderDetailPane({
   // failed CI with "window is not defined" (run 33411797885).
   const resetAfter = useTimeoutClear();
 
-  const [keyInput, setKeyInput] = useState<string>("");
   const [keyStatus, setKeyStatus] = useState<string | null>(null);
   const [editingName, setEditingName] = useState(false);
   const [nameDraft, setNameDraft] = useState(provider.name);
   const [baseUrlDraft, setBaseUrlDraft] = useState(provider.baseUrl ?? "");
   const [saveMsg, setSaveMsg] = useState<string | null>(null);
   const [confirmDelete, setConfirmDelete] = useState(false);
-  // ROUND-59 (R59-C): the ROTATE mode — a separate small "Rotate key"
-  // button swaps the API-key block to the editable replacement input (the
-  // R58 dual-eye layout, where a stored-key reveal eye sat beside a
-  // visibility eye toggling an EMPTY input, was the owner's confusion and
-  // is gone).
-  const [rotatingKey, setRotatingKey] = useState(false);
+  // ROUND-60 (R60-B): the paste-to-replace draft — null means "not editing"
+  // (the field displays the STORED key, masked or revealed read-only);
+  // any non-null string is the user's typed/pasted NEW key awaiting Save.
+  // The R59 rotate button + rotatingKey flag are gone: the owner pastes the
+  // new key straight into the field ("There is actually no need to give the
+  // rotate key option at all… The user can directly paste in the new key").
+  const [keyDraft, setKeyDraft] = useState<string | null>(null);
   // ROUND-58 (R58-d): the primary-key reveal state — NEVER auto-fetched;
   // fetched only on the explicit "Show" click, then rendered read-only
   // with Copy + Hide (masks again).
@@ -619,11 +623,12 @@ function ProviderDetailPane({
       await storeProviderKey(provider.id, value);
     },
     onSuccess: () => {
-      // ROUND-59 (R59-C): a saved rotation exits the editable block (the
-      // masked stored-key view returns) and refreshes the pool listing so
-      // the masked slot-0 value is the NEW key's, never the stale one.
-      setKeyInput("");
-      setRotatingKey(false);
+      // ROUND-60 (R60-B): a saved key exits edit mode (the masked
+      // stored-key view returns — a stale revealed OLD value is dropped
+      // too) and refreshes the pool listing so the masked slot-0 value is
+      // the NEW key's, never the stale one.
+      setKeyDraft(null);
+      setRevealState({ kind: "idle" });
       setKeyStatus("Key saved to the secure store.");
       void queryClient.invalidateQueries({ queryKey: ["settings-providers"] });
       void queryClient.invalidateQueries({ queryKey: ["key-pool", provider.id] });
@@ -714,6 +719,14 @@ function ProviderDetailPane({
     borderColor: styles.border,
     color: styles.text,
   } as const;
+
+  // ROUND-60 (R60-B): the two display values the unified key field rides —
+  // storedDisplay is what the input shows while NOT editing (the masked
+  // slot-0 value, or the revealed full key); revealedValue is non-null only
+  // while revealed (captured per render, so the fading-out Copy button can
+  // never copy a stale value).
+  const storedDisplay = revealState.kind === "shown" ? revealState.value : maskedStoredKey;
+  const revealedValue = revealState.kind === "shown" ? revealState.value : null;
 
   return (
     <div className="flex flex-col gap-5">
@@ -920,139 +933,178 @@ function ProviderDetailPane({
             </div>
           </>
         )}
-        {/* API key — ROUND-59 (R59-C): the stored key presents itself MASKED
-            (read-only, the key-pool listing's slot-0 masked value) with ONE
-            primary action "Show" that fetches and displays the FULL value
-            (revealProviderKeys — explicit click only, never on mount); Hide
-            masks again, Copy rides the revealed value. Rotation is a
-            SEPARATE small "Rotate key" button that swaps the block to the
-            editable input + Save key + Cancel. The R58 dual-eye layout (a
-            reveal eye NEXT TO a visibility eye toggling an EMPTY input) was
-            the owner's confusion — "It will be hidden but when I tap on the
-            show button then it will show up. That was not handled properly"
-            — and is gone. */}
+        {/* API key — ROUND-60 (R60-B): ONE unified layout that never
+            reflows: [value input][eye toggle][context action]. The eye sits
+            in the EXACT same slot in every state (Show while masked at
+            rest, a spinner while loading, Hide while revealed — the owner:
+            "the show and hide button should be in the exact same place").
+            Rotation is GONE (the owner: "There is actually no need to give
+            the rotate key option at all… The user can directly paste in the
+            new key"): typing or pasting into the field swaps it to edit
+            mode, the context slot shows Save key (+ Cancel X, Escape also
+            restores), and Copy fades in with a width+opacity transition
+            only while the stored key is revealed (the owner: "the copy
+            button should appear smoothly and not in a bad way"). */}
         <div>
           <label className="mb-1.5 block text-[11px] font-bold" style={{ color: styles.textSecondary }}>
             API key {provider.hasKey && <span style={{ color: "#22c55e" }}>· stored</span>}
           </label>
-          {!provider.hasKey || rotatingKey ? (
-            // No key stored yet, or the explicit ROTATE flow: the editable
-            // replacement input + Save key (+ Cancel while rotating).
-            <div className="flex gap-2">
-              <input
-                // ROUND-59 (R59-C): cleartext on purpose — there is exactly
-                // ONE Show in this block and it belongs to the STORED key;
-                // masking what the user is typing here is what bred the R58
-                // two-eye ambiguity.
-                type="text"
-                value={keyInput}
-                onChange={(e) => setKeyInput(e.target.value)}
-                placeholder={provider.hasKey ? "Enter the new key to rotate" : "sk-…"}
-                aria-label="API key"
-                data-testid={provider.hasKey ? "rotate-key-input" : "new-key-input"}
-                className="h-10 flex-1 min-w-0 rounded-[10px] border-[1.5px] px-3 font-mono text-[12px] outline-none"
-                style={inputStyle}
-              />
-              <button
-                onClick={() => keyInput.trim() && saveKey.mutate(keyInput.trim())}
-                disabled={!keyInput.trim() || saveKey.isPending}
-                className="h-10 px-4 rounded-[10px] text-[12px] font-bold disabled:opacity-50 shrink-0"
-                style={{ background: styles.accent, color: styles.accentText }}
-              >
-                {saveKey.isPending ? "Saving…" : "Save key"}
-              </button>
-              {provider.hasKey && (
-                <button
-                  onClick={() => {
-                    setRotatingKey(false);
-                    setKeyInput("");
-                  }}
-                  aria-label="Cancel key rotation"
-                  data-testid="rotate-key-cancel"
-                  title="Back to the stored key"
-                  className="h-10 px-3.5 rounded-[10px] border-[1.5px] text-[12px] font-bold shrink-0"
-                  style={{ borderColor: styles.border, color: styles.textSecondary }}
-                >
-                  Cancel
-                </button>
+          <div className="flex gap-2 items-stretch">
+            <input
+              // Cleartext on purpose — the ONE eye in this block belongs to
+              // the STORED key; masking the user's own draft is what bred
+              // the R58 two-eye ambiguity.
+              type="text"
+              value={provider.hasKey && keyDraft === null ? storedDisplay : keyDraft ?? ""}
+              placeholder={provider.hasKey ? undefined : "sk-…"}
+              aria-label={
+                provider.hasKey && keyDraft === null
+                  ? revealState.kind === "shown"
+                    ? "Stored API key (revealed)"
+                    : "Stored API key (masked)"
+                  : "API key"
+              }
+              data-testid={
+                provider.hasKey && keyDraft === null
+                  ? revealState.kind === "shown"
+                    ? "stored-key-revealed"
+                    : "stored-key-masked"
+                  : "new-key-input"
+              }
+              title={
+                provider.hasKey
+                  ? keyDraft === null
+                    ? "The stored key — paste a new key to replace it"
+                    : "The new key — Save key replaces the stored one"
+                  : "Paste the provider's API key"
+              }
+              // Whole-value select on focus while at rest: click + paste
+              // replaces the stored key in ONE gesture (paste-to-replace).
+              onFocus={(e) => {
+                if (provider.hasKey && keyDraft === null) e.currentTarget.select();
+              }}
+              onKeyDown={(e) => {
+                if (e.key === "Escape" && keyDraft !== null) {
+                  setKeyDraft(null);
+                }
+                if (
+                  e.key === "Enter" &&
+                  keyDraft !== null &&
+                  keyDraft.trim() !== "" &&
+                  !saveKey.isPending
+                ) {
+                  saveKey.mutate(keyDraft.trim());
+                }
+              }}
+              // ROUND-60: any typed/pasted change while at rest IS the
+              // paste-to-replace gesture — the draft takes over (edit mode).
+              onChange={(e) => setKeyDraft(e.target.value)}
+              className="h-10 flex-1 min-w-0 rounded-[10px] border-[1.5px] px-3 font-mono text-[12px] outline-none"
+              style={{
+                ...inputStyle,
+                borderColor:
+                  keyDraft !== null
+                    ? withAlpha(styles.accent, 0.55)
+                    : revealState.kind === "shown"
+                      ? withAlpha(styles.accent, 0.45)
+                      : styles.border,
+              }}
+            />
+            {/* THE eye toggle — the exact same slot in every state: masked
+                rest → Eye (reveal), loading → spinner, revealed → EyeOff
+                (mask again). Disabled while editing (the draft is the
+                truth now — Cancel restores the stored display first) and
+                keyless (nothing to reveal). */}
+            <button
+              type="button"
+              onClick={() => {
+                if (revealState.kind === "shown") setRevealState({ kind: "idle" });
+                else void revealStoredKey();
+              }}
+              disabled={!provider.hasKey || keyDraft !== null || revealState.kind === "loading"}
+              aria-label={revealState.kind === "shown" ? "Hide stored key" : "Show stored key"}
+              data-testid={revealState.kind === "shown" ? "hide-stored-key-button" : "show-stored-key-button"}
+              title={
+                !provider.hasKey
+                  ? "No stored key to reveal yet"
+                  : revealState.kind === "shown"
+                    ? "Mask the stored key again"
+                    : "Show the stored key"
+              }
+              className="h-10 w-10 grid place-items-center rounded-[10px] border-[1.5px] shrink-0 disabled:opacity-40"
+              style={{
+                background: styles.bg,
+                borderColor: styles.border,
+                color: revealState.kind === "shown" ? styles.accent : styles.textTertiary,
+              }}
+            >
+              {revealState.kind === "loading" ? (
+                <RefreshCw size={13} className="animate-spin" />
+              ) : revealState.kind === "shown" ? (
+                <EyeOff size={13} />
+              ) : (
+                <Eye size={13} />
               )}
-            </div>
-          ) : revealState.kind === "shown" ? (
-            // The revealed stored key: full read-only value + Copy + Hide.
-            <div className="flex gap-2">
-              <input
-                type="text"
-                readOnly
-                value={revealState.value}
-                aria-label="Stored API key (revealed)"
-                data-testid="stored-key-revealed"
-                title={revealState.value}
-                onFocus={(e) => e.currentTarget.select()}
-                className="h-10 flex-1 min-w-0 rounded-[10px] border-[1.5px] px-3 font-mono text-[12px] outline-none"
-                style={{ ...inputStyle, borderColor: withAlpha(styles.accent, 0.45) }}
-              />
-              <button
-                onClick={() => void copyToClipboard(revealState.value, "Key copied to clipboard.")}
-                aria-label="Copy stored key"
-                data-testid="copy-stored-key-button"
-                title="Copy the stored key"
-                className="h-10 px-3.5 rounded-[10px] border-[1.5px] text-[12px] font-bold flex items-center gap-1.5 shrink-0"
-                style={{ borderColor: styles.border, color: styles.textSecondary }}
-              >
-                <Copy size={12} /> Copy
-              </button>
-              <button
-                onClick={() => setRevealState({ kind: "idle" })}
-                aria-label="Hide stored key"
-                data-testid="hide-stored-key-button"
-                title="Mask the stored key again"
-                className="h-10 px-3.5 rounded-[10px] border-[1.5px] text-[12px] font-bold shrink-0"
-                style={{ borderColor: styles.border, color: styles.textSecondary }}
-              >
-                Hide
-              </button>
-            </div>
-          ) : (
-            // The STORED key, masked (read-only) + ONE Show + Rotate key.
-            <div className="flex gap-2">
-              <input
-                type="text"
-                readOnly
-                value={maskedStoredKey}
-                aria-label="Stored API key (masked)"
-                data-testid="stored-key-masked"
-                title="The stored key, masked — Show fetches the full value"
-                className="h-10 flex-1 min-w-0 rounded-[10px] border-[1.5px] px-3 font-mono text-[12px] outline-none"
-                style={inputStyle}
-              />
-              <button
-                onClick={() => void revealStoredKey()}
-                disabled={revealState.kind === "loading"}
-                aria-label="Show stored key"
-                data-testid="show-stored-key-button"
-                title="Show the stored key"
-                className="h-10 px-3.5 rounded-[10px] text-[12px] font-bold flex items-center gap-1.5 shrink-0 disabled:opacity-50"
-                style={{ background: withAlpha(styles.accent, 0.1), color: styles.accent }}
-              >
-                {revealState.kind === "loading" ? (
-                  <RefreshCw size={12} className="animate-spin" />
-                ) : (
-                  <Eye size={12} />
+            </button>
+            {/* Context action slot: Save key (+ Cancel X) while editing or
+                keyless; otherwise Copy, which fades/slides in ONLY while
+                the stored key is revealed. */}
+            {keyDraft !== null || !provider.hasKey ? (
+              <>
+                <button
+                  type="button"
+                  onClick={() => {
+                    if (keyDraft !== null && keyDraft.trim() !== "") saveKey.mutate(keyDraft.trim());
+                  }}
+                  disabled={keyDraft === null || keyDraft.trim() === "" || saveKey.isPending}
+                  aria-label="Save key"
+                  data-testid="save-key-button"
+                  className="h-10 px-4 rounded-[10px] text-[12px] font-bold disabled:opacity-50 shrink-0"
+                  style={{ background: styles.accent, color: styles.accentText }}
+                >
+                  {saveKey.isPending ? "Saving…" : "Save key"}
+                </button>
+                {provider.hasKey && (
+                  <button
+                    type="button"
+                    onClick={() => setKeyDraft(null)}
+                    aria-label="Cancel key edit"
+                    data-testid="cancel-key-edit-button"
+                    title="Restore the stored key display"
+                    className="h-10 w-10 grid place-items-center rounded-[10px] border-[1.5px] shrink-0"
+                    style={{ borderColor: styles.border, color: styles.textTertiary }}
+                  >
+                    <X size={13} />
+                  </button>
                 )}
-                Show
-              </button>
-              <button
-                onClick={() => setRotatingKey(true)}
-                aria-label="Rotate key"
-                data-testid="rotate-key-button"
-                title="Replace the stored key with a new one"
-                className="h-10 px-3.5 rounded-[10px] border-[1.5px] text-[12px] font-bold shrink-0"
-                style={{ borderColor: styles.border, color: styles.textSecondary }}
-              >
-                Rotate key
-              </button>
-            </div>
-          )}
+              </>
+            ) : (
+              <AnimatePresence initial={false}>
+                {revealedValue !== null && (
+                  <motion.div
+                    key="copy-stored-key"
+                    initial={{ opacity: 0, width: 0 }}
+                    animate={{ opacity: 1, width: "auto" }}
+                    exit={{ opacity: 0, width: 0 }}
+                    transition={{ duration: 0.2, ease: "easeOut" }}
+                    className="overflow-hidden shrink-0"
+                  >
+                    <button
+                      type="button"
+                      onClick={() => void copyToClipboard(revealedValue, "Key copied to clipboard.")}
+                      aria-label="Copy stored key"
+                      data-testid="copy-stored-key-button"
+                      title="Copy the stored key"
+                      className="h-10 px-3.5 rounded-[10px] border-[1.5px] text-[12px] font-bold flex items-center gap-1.5 shrink-0 whitespace-nowrap"
+                      style={{ borderColor: styles.border, color: styles.textSecondary }}
+                    >
+                      <Copy size={12} /> Copy
+                    </button>
+                  </motion.div>
+                )}
+              </AnimatePresence>
+            )}
+          </div>
           {revealState.kind === "error" && (
             <p className="mt-1.5 text-[11px] break-all" style={{ color: "#ef4444" }} role="alert">
               {revealState.message}
@@ -1180,7 +1232,6 @@ function ProviderDetailPane({
           isError: catalogQuery.isError,
         }}
         staticCatalog={staticCatalog}
-        includeCatalog={provider.id === OPENROUTER_PROVIDER_ID}
       />
 
       {/* ── Danger zone: delete provider (moved out of the header — R50-d) */}
@@ -1552,11 +1603,11 @@ interface MergedModel {
   configured: boolean;
 }
 
-/** DB override rows enriched with live catalog entries (round-43: the list
- * shows the provider's real models so the free-only filter is meaningful).
- * ROUND-50 (R50-d): catalog-only rows get the served static catalog's
- * pricing/context as a READ-ONLY preview (until configured, nothing is
- * stored — the preview comes from GET /models/catalog constants). */
+/** DB override rows as list rows. ROUND-60 (R60-B): the caller passes []
+ * for catalogIds ALWAYS — the R43/R50/R58 catalog→list merge is gone (the
+ * owner: models appear ONLY after being manually added); the live catalog
+ * feeds the "Add models" picker alone. The MergedModel shape keeps the
+ * catalog fields so the row renderer stays one type. */
 function mergeCatalogIntoModels(
   configured: ProviderModelConfig[],
   catalogIds: string[],
@@ -1611,17 +1662,11 @@ function ModelListSection({
   models,
   catalog,
   staticCatalog,
-  includeCatalog,
 }: {
   providerId: string;
   models: ProviderModelConfig[];
   catalog: ProviderCatalogState;
   staticCatalog: CatalogModel[];
-  /** ROUND-58 (R58-d): whether the LIVE catalog entries merge into the LIST
-   * rows — scoped to the reserved openrouter id (the only provider the
-   * static catalog describes); custom providers list their configured rows
-   * only (their live catalog still feeds the "Add models" picker). */
-  includeCatalog: boolean;
 }) {
   const styles = useThemeStyles();
   const queryClient = useQueryClient();
@@ -1631,25 +1676,14 @@ function ModelListSection({
   const [configuring, setConfiguring] = useState<ProviderModelConfig | null>(null);
   const [error, setError] = useState<string | null>(null);
 
-  // ROUND-43 (owner: "free-only model filter"): shared persisted pref — the
-  // chat composer picker honors the same store in a later wave.
-  const modelsFreeOnly = useSettingsStore((s) => s.modelsFreeOnly);
-  const setModelsFreeOnly = useSettingsStore((s) => s.setModelsFreeOnly);
-
-  const catalogIds = catalog.entries.map((entry) => entry.id);
-
-  // ROUND-58 (R58-d): the catalog→list merge is SCOPED — only the reserved
-  // openrouter provider merges its live catalog into the list rows (the
-  // old code merged the static OpenRouter catalog into EVERY provider's
-  // list, leaking openrouter model ids into custom providers). The picker
-  // below still uses the provider's OWN live catalog either way.
-  const merged = mergeCatalogIntoModels(
-    models,
-    includeCatalog ? catalogIds : [],
-    staticCatalog,
-  );
-  const visible = filterModelsForPicker(merged, modelsFreeOnly);
-  const freeCount = filterModelsForPicker(merged, true).length;
+  // ROUND-60 (R60-B): the list shows CONFIGURED (stored) rows ONLY — the
+  // R58/R50 catalog→list merge is GONE (the owner: "By default none of the
+  // models should be added there… By default there should not be the free
+  // models or all models there at all. I should be able to manually add
+  // the models and only after that they will be shown there"). The live
+  // catalog feeds the "Add models" picker ALONE — catalogIds is [] by
+  // design; the static catalog stays a param for the picker pre-fill.
+  const merged = mergeCatalogIntoModels(models, [], staticCatalog);
 
   const invalidate = () =>
     void queryClient.invalidateQueries({ queryKey: ["settings-provider-models", providerId] });
@@ -1664,37 +1698,13 @@ function ModelListSection({
     <div className="rounded-[16px] border-[1.5px] overflow-hidden" style={{ background: styles.card, borderColor: styles.border }}>
       <div className="flex items-center gap-2 px-4 py-3 border-b flex-wrap" style={{ borderColor: styles.border }}>
         <SectionLabel>Models</SectionLabel>
-        <span className="font-mono text-[10px]" style={{ color: styles.textTertiary }}>
-          {modelsFreeOnly ? `${freeCount} free of ${merged.length}` : `${merged.length}`}
+        {/* ROUND-60 (R60-B): the count is the CONFIGURED row count only —
+            catalog entries are picker-only now (the free/all scope moved
+            into the picker as the Free only ↔ All models toggle). */}
+        <span data-testid="models-count" className="font-mono text-[10px]" style={{ color: styles.textTertiary }}>
+          {merged.length}
         </span>
         <span className="flex-1" />
-        {/* ROUND-43 (owner directive): "Free only | All models" — free is the
-            default; persisted in the shared settings store so the chat model
-            picker honors the same choice. */}
-        <div
-          role="group"
-          aria-label="Model filter"
-          className="flex items-center rounded-[10px] border-[1.5px] overflow-hidden"
-          style={{ borderColor: styles.border }}
-        >
-          {([
-            { id: "free", label: "Free only", active: modelsFreeOnly, pick: () => setModelsFreeOnly(true) },
-            { id: "all", label: "All models", active: !modelsFreeOnly, pick: () => setModelsFreeOnly(false) },
-          ] as const).map((seg) => (
-            <button
-              key={seg.id}
-              onClick={seg.pick}
-              aria-pressed={seg.active}
-              className="h-7 px-2.5 text-[11px] font-bold transition-colors"
-              style={{
-                background: seg.active ? withAlpha(styles.accent, 0.12) : "transparent",
-                color: seg.active ? styles.accent : styles.textTertiary,
-              }}
-            >
-              {seg.label}
-            </button>
-          ))}
-        </div>
         {/* ROUND-50 (R50-d): "Add models" opens the catalog picker dialog
             (multi-select from the provider's live catalog, with a manual
             add-by-id fallback) — replacing the type-an-id inline form. */}
@@ -1715,19 +1725,11 @@ function ModelListSection({
 
       {merged.length === 0 ? (
         <div className="px-4 py-6 text-center text-[12px]" style={{ color: styles.textTertiary }}>
-          {catalog.isFetching
-            ? "Fetching the provider catalog…"
-            : catalog.isError
-              ? "No models configured and the live catalog is unreachable — use “Add models” to add entries by id."
-              : "No models yet — use “Add models” to pick from the provider's catalog."}
-        </div>
-      ) : visible.length === 0 ? (
-        <div className="px-4 py-6 text-center text-[12px]" style={{ color: styles.textTertiary }}>
-          No free models on this provider — switch to “All models” to see the full list.
+          No models yet — use “Add models” to pick from the provider's catalog.
         </div>
       ) : (
         <div>
-          {visible.map((m) => (
+          {merged.map((m) => (
             <div
               key={m.rowId ?? `cat:${m.modelId}`}
               className="flex items-center gap-3 px-4 py-2.5 border-b last:border-b-0"
@@ -1769,15 +1771,8 @@ function ModelListSection({
                       HIDDEN
                     </span>
                   )}
-                  {!m.configured && (
-                    <span
-                      className="shrink-0 px-1.5 py-0.5 rounded-full font-mono text-[10px]"
-                      style={{ background: styles.subtle, color: styles.textTertiary }}
-                      title="Live catalog entry — use “Add models” to store a configuration for it"
-                    >
-                      catalog
-                    </span>
-                  )}
+                  {/* ROUND-60 (R60-B): the "catalog" badge is gone with the
+                      catalog→list merge — every row here is a STORED row. */}
                 </div>
                 <div className="flex items-center gap-2 min-w-0 flex-wrap">
                   <span
@@ -1896,6 +1891,14 @@ function AddModelsDialog({
   const [manualId, setManualId] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
+  // ROUND-60 (R60-B): the Free only ↔ All models scope toggle — moved INTO
+  // the picker from the models list header (the owner: "in the add model for
+  // the open router, there should be an option to switch between free only
+  // and all models properly"). It rides the SHARED persisted pref
+  // (useSettingsStore.modelsFreeOnly — the round-43 design) so the chat
+  // composer's model picker honors the same choice; free is the default.
+  const modelsFreeOnly = useSettingsStore((s) => s.modelsFreeOnly);
+  const setModelsFreeOnly = useSettingsStore((s) => s.setModelsFreeOnly);
 
   const staticById = useMemo(
     () => new Map(staticCatalog.map((m) => [m.modelId, m])),
@@ -1903,6 +1906,8 @@ function AddModelsDialog({
   );
 
   const q = query.trim().toLowerCase();
+  // ROUND-60: free-only filters BEFORE the 300-row sanity cap — `free`
+  // prefers the served catalog's flag, falling back to the id heuristic.
   const rows = catalog.entries
     .filter(
       (entry) =>
@@ -1910,6 +1915,11 @@ function AddModelsDialog({
         entry.id.toLowerCase().includes(q) ||
         entry.name.toLowerCase().includes(q),
     )
+    .filter((entry) => {
+      if (!modelsFreeOnly) return true;
+      const meta = staticById.get(entry.id);
+      return meta ? meta.free : isFreeModelEntry({ modelId: entry.id });
+    })
     .slice(0, 300); // sanity cap — the live OpenRouter catalog is huge
 
   const toggle = (id: string) => {
@@ -2035,9 +2045,9 @@ function AddModelsDialog({
           pre-filled from the served catalog and stay editable after adding.
         </p>
 
-        {/* search */}
-        <div className="px-5 pb-2 shrink-0">
-          <div className="relative">
+        {/* search + the ROUND-60 (R60-B) Free only ↔ All models scope toggle */}
+        <div className="px-5 pb-2 shrink-0 flex items-center gap-2">
+          <div className="relative flex-1 min-w-0">
             <Search
               size={13}
               className="absolute left-3 top-1/2 -translate-y-1/2"
@@ -2053,6 +2063,34 @@ function AddModelsDialog({
               className="h-9 w-full rounded-[10px] border-[1.5px] pl-8 pr-3 text-[12px] outline-none"
               style={inputStyle}
             />
+          </div>
+          {/* Same segmented visual language the rest of the app uses
+              (SubAgentsTab / ModelSelector) — the toggle rides the shared
+              persisted modelsFreeOnly pref. */}
+          <div
+            role="group"
+            aria-label="Catalog filter"
+            className="flex items-center rounded-[10px] border-[1.5px] overflow-hidden shrink-0"
+            style={{ borderColor: styles.border }}
+          >
+            {([
+              { id: "free", label: "Free only", active: modelsFreeOnly, pick: () => setModelsFreeOnly(true) },
+              { id: "all", label: "All models", active: !modelsFreeOnly, pick: () => setModelsFreeOnly(false) },
+            ] as const).map((seg) => (
+              <button
+                key={seg.id}
+                onClick={seg.pick}
+                aria-pressed={seg.active}
+                data-testid={seg.id === "free" ? "picker-free-only-toggle" : "picker-all-models-toggle"}
+                className="h-9 px-2.5 text-[11px] font-bold transition-colors whitespace-nowrap"
+                style={{
+                  background: seg.active ? withAlpha(styles.accent, 0.12) : "transparent",
+                  color: seg.active ? styles.accent : styles.textTertiary,
+                }}
+              >
+                {seg.label}
+              </button>
+            ))}
           </div>
         </div>
 
@@ -2144,7 +2182,11 @@ function AddModelsDialog({
           })}
           {rows.length === 0 && catalog.entries.length > 0 && (
             <div className="px-2 py-4 text-[11.5px]" style={{ color: styles.textTertiary }}>
-              No catalog model matches “{query.trim()}” — add it by id below.
+              {/* ROUND-60: honest about BOTH filters — the free-only scope or
+                  the search text may each have emptied the list. */}
+              {modelsFreeOnly
+                ? "No free models match — switch to “All models” or refine the search."
+                : `No catalog model matches “${query.trim()}” — add it by id below.`}
             </div>
           )}
         </div>

@@ -7,6 +7,8 @@ import { useRightSidebarStore } from "../../lib/right-sidebar-store";
 import { useBrowserTabStore } from "../../lib/browser-store";
 import { renderWithProviders, resetTestState } from "../../test-utils";
 import * as nativeBrowser from "../../lib/native-browser";
+// R60-D: the popover-suppression guard the nativeCreate show consults.
+import { setPopoverWebviewSuppression } from "./popover-webview-guard";
 
 /**
  * ROUND-43 (R43-10) BrowserPanel — the embedded in-sidebar browser.
@@ -54,6 +56,8 @@ vi.mock("../../lib/native-browser", () => ({
   nativeTabNavigate: vi.fn(() => Promise.resolve()),
   nativeTabSetBounds: vi.fn(() => Promise.resolve()),
   nativeTabSetVisible: vi.fn(() => Promise.resolve()),
+  // R60: REAL zoom (Rust browser_tab_set_zoom — asserted by the R60 tests).
+  nativeTabSetZoom: vi.fn(() => Promise.resolve()),
   nativeTabGo: vi.fn(() => Promise.resolve()),
   nativeTabUrl: vi.fn(() => Promise.resolve(null)),
   nativeTabClose: vi.fn(() => Promise.resolve()),
@@ -246,6 +250,8 @@ beforeEach(() => {
   // ROUND-50: fresh native-bridge state + mock call history per test.
   nativeState.available = false;
   nativeState.navigatedListener = null;
+  // R60-D: no popover suppression leaks between tests.
+  setPopoverWebviewSuppression(null);
   vi.clearAllMocks();
   vi.stubGlobal("fetch", vi.fn(route));
 });
@@ -394,6 +400,9 @@ describe("BrowserPanel (R43-10 embedded browser)", () => {
     expect(screen.getByTestId("browser-readout").textContent).toContain("844×390 @ 50%");
 
     // Fit off → 1:1 (footprint = full 844×420 css px, scrollable).
+    // R60: fit stays fully functional on the PROXY path (native mode
+    // disables it — presets are auto-clamped to the panel there).
+    expect((screen.getByTestId("browser-fit") as HTMLButtonElement).disabled).toBe(false);
     fireEvent.click(screen.getByTestId("browser-fit"));
     await waitFor(() => expect((screen.getByTestId("browser-iframe") as HTMLIFrameElement).style.transform).toBe("scale(0.5)"));
     frame = screen.getByTestId("browser-viewport-frame") as HTMLDivElement;
@@ -660,9 +669,28 @@ describe("BrowserPanel native mode (R50-a child webviews over the panel)", () =>
   const create = () => vi.mocked(nativeBrowser.nativeTabCreate);
   const setBounds = () => vi.mocked(nativeBrowser.nativeTabSetBounds);
   const setVisible = () => vi.mocked(nativeBrowser.nativeTabSetVisible);
+  const setZoom = () => vi.mocked(nativeBrowser.nativeTabSetZoom);
   const nativeGo = () => vi.mocked(nativeBrowser.nativeTabGo);
   const nativeNavigate = () => vi.mocked(nativeBrowser.nativeTabNavigate);
   const nativeClose = () => vi.mocked(nativeBrowser.nativeTabClose);
+
+  /** A fixed 400×900 page-area rect (mobile-md 390×844 fits; full-hd and the
+   * default laptop 1280×800 clamp) — the honest-readout + bounds tests. */
+  function mockAreaRect() {
+    return vi
+      .spyOn(HTMLElement.prototype, "getBoundingClientRect")
+      .mockReturnValue({
+        left: 80,
+        top: 120,
+        width: 400,
+        height: 900,
+        right: 480,
+        bottom: 1020,
+        x: 80,
+        y: 120,
+        toJSON: () => ({}),
+      } as DOMRect);
+  }
 
   beforeEach(() => {
     nativeState.available = true;
@@ -937,6 +965,121 @@ describe("BrowserPanel native mode (R50-a child webviews over the panel)", () =>
         expect(text).not.toContain("clamped");
       });
     } finally {
+      rectSpy.mockRestore();
+    }
+  });
+
+  // ── R60: REAL zoom (the Rust browser_tab_set_zoom command) ─────────────
+
+  it("R60: zoom is REAL — creation re-asserts it, a zoom-select change drives browser_tab_set_zoom, and the bounds are NOT divided", async () => {
+    const rectSpy = mockAreaRect();
+    try {
+      const tab = makeTab({ browserUrl: "https://example.com" });
+      seedRightSidebar(tab);
+      renderWithProviders(<BrowserPanel projectId="prj_test" tab={tab} />);
+      await waitFor(() => expect(create()).toHaveBeenCalledWith("tab-test-1", "https://example.com"));
+      // nativeCreate re-asserts the store's zoom (1× by default) right after
+      // the webview exists — a re-created webview must be told the zoom.
+      await waitFor(() => expect(setZoom()).toHaveBeenCalledWith("tab-test-1", 1));
+
+      // Pick a preset that fits the 400×900 area, then zoom to 150%.
+      fireEvent.change(screen.getByTestId("browser-preset-select"), { target: { value: "mobile-md" } });
+      await waitFor(() =>
+        expect(calls.some((c) => c.path === "/api/v1/browser/viewport" && c.method === "PUT" && c.body?.preset === "mobile-md")).toBe(true),
+      );
+      fireEvent.change(screen.getByTestId("browser-zoom-select"), { target: { value: "150" } });
+      await waitFor(() => expect(setZoom()).toHaveBeenCalledWith("tab-test-1", 1.5));
+      // The zoom PUT lands server-side (the agent's browser_control reads it).
+      await waitFor(() =>
+        expect(calls.some((c) => c.path === "/api/v1/browser/viewport" && c.method === "PUT" && c.body?.zoom === 1.5)).toBe(true),
+      );
+
+      // The webview keeps the preset's TRUE dims — the R50 divide-by-zoom
+      // approximation is retired (390 stays 390, never 390/1.5 = 260).
+      await waitFor(
+        () => expect(setBounds()).toHaveBeenLastCalledWith("tab-test-1", 85, 148, 390, 844),
+        { timeout: 2500 },
+      );
+      expect(setBounds().mock.calls.some((c) => c[3] < 300)).toBe(false);
+      // …and the readout reports zoom as a DPI layer on top of the size.
+      expect(screen.getByTestId("browser-readout").textContent).toContain("390×844 @ 150%");
+    } finally {
+      rectSpy.mockRestore();
+    }
+  });
+
+  it("R60: the FIT button is honestly disabled in native mode — presets are auto-clamped to the panel", async () => {
+    const tab = makeTab({ browserUrl: "https://example.com" });
+    seedRightSidebar(tab);
+    renderWithProviders(<BrowserPanel projectId="prj_test" tab={tab} />);
+    await waitFor(() => expect(create()).toHaveBeenCalledWith("tab-test-1", "https://example.com"));
+
+    const fit = screen.getByTestId("browser-fit") as HTMLButtonElement;
+    expect(fit.disabled).toBe(true);
+    // The title explains WHY instead of leaving a dead button.
+    expect(fit.title).toContain("automatically clamped");
+  });
+
+  it("R60-D: a webview created while a popover suppresses the tab stays HIDDEN (the sidebar restores it later)", async () => {
+    // An agent-driven tab open landing while the owner browses the quick
+    // menu: the sidebar's hide invoke already fired as a Rust no-op (no
+    // webview yet), so nativeCreate itself must refuse to show over the
+    // popover — the module guard is the shared truth it consults.
+    setPopoverWebviewSuppression("tab-test-1");
+    const tab = makeTab({ browserUrl: "https://example.com" });
+    seedRightSidebar(tab);
+    renderWithProviders(<BrowserPanel projectId="prj_test" tab={tab} />);
+    await waitFor(() => expect(create()).toHaveBeenCalledWith("tab-test-1", "https://example.com"));
+    await waitFor(() => expect(setZoom()).toHaveBeenCalledWith("tab-test-1", 1));
+    // Create resolved — but NO show over the popover.
+    expect(setVisible()).not.toHaveBeenCalledWith("tab-test-1", true);
+
+    // The popover closes (suppression cleared) → the next activation shows.
+    setPopoverWebviewSuppression(null);
+    fireEvent.change(screen.getByTestId("browser-address-input"), { target: { value: "https://example.com/two" } });
+    fireEvent.submit((screen.getByTestId("browser-address-input") as HTMLInputElement).closest("form") as HTMLFormElement);
+    await waitFor(() => expect(setVisible()).toHaveBeenCalledWith("tab-test-1", true));
+  });
+
+  it("R60: bounds re-sync IMMEDIATELY on preset changes and natural↔preset flips (deterministic sizing)", async () => {
+    const rectSpy = mockAreaRect();
+    vi.useFakeTimers();
+    try {
+      const tab = makeTab({ browserUrl: "https://example.com" });
+      seedRightSidebar(tab);
+      renderWithProviders(<BrowserPanel projectId="prj_test" tab={tab} />);
+      // Flush the mount + mint + create promise chain (microtask rounds),
+      // then the rAF-debounced first sync. 20ms of fake time is FAR below
+      // the 500ms safety-net interval — only the effect-driven re-sync
+      // (deps: viewW/viewH/rotate/naturalSize) can land changes this fast.
+      for (let i = 0; i < 4; i += 1) {
+        await act(async () => {
+          await vi.advanceTimersByTimeAsync(0);
+        });
+      }
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(20);
+      });
+      expect(create()).toHaveBeenCalledWith("tab-test-1", "https://example.com");
+      // Natural mode: the webview fills the area exactly.
+      expect(setBounds()).toHaveBeenLastCalledWith("tab-test-1", 80, 120, 400, 900);
+
+      // Preset mobile-md (390×844) fits → centered in the area.
+      fireEvent.change(screen.getByTestId("browser-preset-select"), { target: { value: "mobile-md" } });
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(20);
+      });
+      expect(setBounds()).toHaveBeenLastCalledWith("tab-test-1", 85, 148, 390, 844);
+
+      // Back to natural → fills again, same immediacy (no waiting for the
+      // 500ms safety net — the naturalSize dep re-syncs right away).
+      fireEvent.change(screen.getByTestId("browser-preset-select"), { target: { value: "natural" } });
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(20);
+      });
+      expect(setBounds()).toHaveBeenLastCalledWith("tab-test-1", 80, 120, 400, 900);
+    } finally {
+      vi.useRealTimers();
       rectSpy.mockRestore();
     }
   });

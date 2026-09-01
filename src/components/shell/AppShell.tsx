@@ -27,13 +27,17 @@ export function AppShell() {
   // fix for the owner's "completes all tasks then shows the results"
   // complaint — root cause was demo mode falling back to the sync route).
   useSidecarHealth();
+  // R60-C (owner): appSidebarVisible is GLOBAL — one control on EVERY route.
+  // The old chat-route special-casing (!isChatRoute || visible) is gone: the
+  // sidebar shows everywhere unless the owner hides it, and the ONE toggle is
+  // the TITLE BAR's identity control (Tauri) or the floating logo (web dev).
   const appSidebarVisible = useProjectChatStore((s) => s.appSidebarVisible);
-  // /project/:id/chat hides the app sidebar unless the user toggled it on
-  // (the hamburger lives ON the sidebar itself per round-22 owner direction).
+  const showSidebar = appSidebarVisible;
+  // Web-mode fallback ONLY: browser dev has no custom title bar to click, so
+  // the floating Acute logo is the show-sidebar affordance there. In Tauri
+  // the title-bar identity control covers it — no floating chrome.
+  const showFloatingHamburger = !isTauri() && !appSidebarVisible;
   const isChatRoute = /^\/project\/[^/]+\/chat\/?$/.test(pathname);
-  const showSidebar = !isChatRoute || appSidebarVisible;
-  // On chat routes when the sidebar is hidden, show a floating hamburger to bring it back.
-  const showFloatingHamburger = isChatRoute && !appSidebarVisible;
 
   return (
     // R58: h-full (was h-screen) — the App root now supplies the h-screen
@@ -51,8 +55,7 @@ export function AppShell() {
       <PushSetup />
       {/* ROUND-40: the Toaster (bottom-right toast stack) — mounted ONCE at
           the app root so toasts surface regardless of which route is
-          active, even when the sidebar (and thus the bell) is hidden on
-          chat routes. */}
+          active, even when the sidebar (and thus the bell) is hidden. */}
       <Toaster />
 
       {/* Dot grid — wizard pattern (28px, subtle) */}
@@ -85,7 +88,11 @@ export function AppShell() {
       />
 
       <div className="relative z-10 flex h-full gap-3 p-3">
-        {showFloatingHamburger && <FloatingSidebarToggle />}        {showSidebar && <Sidebar />}
+        {showFloatingHamburger && <FloatingSidebarToggle />}
+        {/* R60-C: showSidebar === appSidebarVisible on EVERY route — the
+            sidebar is either fully here (270px floating panel) or fully
+            absent (main takes the full width). */}
+        {showSidebar && <Sidebar />}
         {/* Round-32: every route keeps the floating-panel language — the chat
             route renders its own rounded/bordered/soft-shadowed panel inside. */}
         <main
@@ -103,18 +110,17 @@ export function AppShell() {
 }
 
 /**
- * ROUND-33: floating show-sidebar button — the APP LOGO (owner: "I would
- * like you to handle it properly and make it the logo of our application"),
- * pinned to the very top-left of the chat window when the sidebar is hidden.
+ * ROUND-33 · R60-C: floating show-sidebar button — the APP LOGO (owner: "I
+ * would like you to handle it properly and make it the logo of our
+ * application"), pinned to the very top-left when the sidebar is hidden.
+ * WEB DEV MODE ONLY — the desktop app's title-bar identity control owns the
+ * toggle in Tauri, so this never renders there (AppShell gates it on
+ * !isTauri()); its top offset is therefore the plain web-mode inset.
  */
 function FloatingSidebarToggle() {
   const setAppSidebarVisible = useProjectChatStore((s) => s.setAppSidebarVisible);
-  // R58: in Tauri the frameless window's 40px custom TitleBar owns the top
-  // strip — drop below it so the floating logo never collides with the bar
-  // (18px + 40px bar + a 12px breathing gap ≈ the sidebar's own top inset).
-  const top = isTauri() ? "top-[50px]" : "top-[18px]";
   return (
-    <div className={`fixed ${top} left-[18px] z-50`}>
+    <div className="fixed top-[18px] left-[18px] z-50">
       <AcuteLogo
         size={38}
         hoverToggle

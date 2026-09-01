@@ -1,5 +1,5 @@
 // @vitest-environment happy-dom
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { PopoutApp } from "./PopoutApp";
 import { normalizeAddressInput } from "./url";
@@ -18,6 +18,11 @@ import { POPOUT_TAB_ID } from "./popout-tab";
  * `core.invoke` doubles as the command recorder; its `event.listen` captures
  * the page's subscriptions (tauri://resize, browser-navigated,
  * popout-navigate) so tests can fire them like the Rust side would.
+ *
+ * ROUND-60 (R60-A): the stub also answers `browser_tab_scroll_state` (JSON
+ * strings, the Rust wire shape) and records `browser_tab_scroll_to`, so the
+ * content CARD + GUTTER scrollbar integration rides the same wiring — the
+ * component's own unit tests live in GutterScrollbar.test.tsx.
  */
 
 type StubWindow = {
@@ -39,6 +44,9 @@ interface StubOptions {
   createError?: string;
   /** Drives the maximize-icon swap (default: always false). */
   isMaximized?: () => Promise<boolean>;
+  /** R60-A: what `browser_tab_scroll_state` resolves with (default: null —
+   * a non-string payload, which the bridge maps to "no data" → hidden). */
+  scrollState?: () => string;
 }
 
 /** Installs a capturable `window.__TAURI__` (cleared by unstubAllGlobals). */
@@ -61,6 +69,9 @@ function stubTauri(options: StubOptions = {}): {
     }
     if (cmd === "browser_tab_create" && options.createError !== undefined) {
       throw new Error(options.createError);
+    }
+    if (cmd === "browser_tab_scroll_state" && options.scrollState !== undefined) {
+      return options.scrollState();
     }
     return null;
   });
@@ -99,8 +110,27 @@ beforeEach(() => {
 
 afterEach(() => {
   vi.unstubAllGlobals();
+  vi.restoreAllMocks(); // the R60-A geometry spies (getBoundingClientRect)
   cleanup();
 });
+
+/** R60-A: pins every element's rect to a fixed 200px-tall box — the gutter
+ *  scrollbar measures its track through getBoundingClientRect ONLY, so one
+ *  mock pins the whole thumb math (the bounds sync over the placeholder
+ *  reads the same mocked rect; the tests never assert its values). */
+function mockRects(height = 200): void {
+  vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockReturnValue({
+    width: 800,
+    height,
+    top: 0,
+    left: 0,
+    right: 800,
+    bottom: height,
+    x: 0,
+    y: 0,
+    toJSON: () => ({}),
+  } as DOMRect);
+}
 
 describe("normalizeAddressInput (the URL-or-search heuristic)", () => {
   it("a plain term becomes a DuckDuckGo search", () => {
@@ -206,6 +236,9 @@ describe("PopoutApp — URL bar and the content webview", () => {
         tabId: "popout",
         url: "https://example.com/start",
         windowLabel: "acute-browser",
+        // R60: the pop-out hides the page's viewport scrollbar — the window
+        // paints its own gutter bar OUTSIDE the content card.
+        hideViewportScrollbar: true,
       });
     });
     // The position sync over the placeholder ran too (bounds + visible).
@@ -239,6 +272,7 @@ describe("PopoutApp — URL bar and the content webview", () => {
         tabId: "popout",
         url: "https://duckduckgo.com/?q=hello%20world",
         windowLabel: "acute-browser",
+        hideViewportScrollbar: true,
       });
     });
   });
@@ -378,3 +412,77 @@ describe("PopoutApp — URL bar and the content webview", () => {
     await waitFor(() => expect(calls.some((c) => c.cmd === "browser_tab_set_bounds")).toBe(true));
   });
 });
+
+describe("PopoutApp — R60-A: the rounded content card + the gutter scrollbar", () => {
+  it("the content placeholder sits INSIDE a rounded, bordered card (the view reads rounded like the chrome)", async () => {
+    const { calls } = stubTauri();
+    render(<PopoutApp />);
+    await waitFor(() => expect(calls.some((c) => c.cmd === "browser_tab_create")).toBe(true));
+
+    // The placeholder keeps its testid and stays the webview's rectangle…
+    const placeholder = screen.getByTestId("popout-content");
+    // …but its parent is now the visible CARD — rounded 14px with a 1.5px
+    // subtle border (the title-bar/URL-bar card language).
+    const card = placeholder.parentElement as HTMLElement;
+    expect(card).not.toBeNull();
+    expect(card.className).toContain("rounded-[14px]");
+    expect(card.className).toContain("border-[1.5px]");
+    expect(card.className).toContain("flex-1");
+    expect(card.style.borderColor).toBe("var(--ac-border-subtle)");
+    // The placeholder is inset 4px inside the card, so the (square) webview
+    // floats inside the visible rounded frame — never over its corners.
+    expect(placeholder.className).toContain("inset-[4px]");
+  });
+
+  it("the gutter scrollbar column renders OUTSIDE the content card (in the window frame)", async () => {
+    const { calls } = stubTauri();
+    render(<PopoutApp />);
+    await waitFor(() => expect(calls.some((c) => c.cmd === "browser_tab_create")).toBe(true));
+
+    const gutter = screen.getByTestId("popout-gutter-scrollbar");
+    const card = screen.getByTestId("popout-content").parentElement as HTMLElement;
+    // Siblings inside the content row: the scrollbar is NOT inside the card.
+    expect(gutter.parentElement).toBe(card.parentElement);
+    expect(card.contains(gutter)).toBe(false);
+    // With no scroll state (the default stub) it renders nothing visible —
+    // no second scrollbar before a page even exists.
+    expect(screen.queryByTestId("popout-gutter-thumb")).toBeNull();
+    expect(screen.queryByRole("scrollbar")).toBeNull();
+  });
+
+  it("an overflowing page (css applied) shows the themed thumb through the full app wiring", async () => {
+    mockRects(200);
+    const { calls } = stubTauri({
+      scrollState: () => JSON.stringify({ y: 100, vh: 400, ch: 1600, css: true }),
+    });
+    render(<PopoutApp />);
+
+    // T=200, vh=400, ch=1600 → thumbH = 50; y=100 → top = 150 * 100/1200.
+    const thumb = await waitFor(() => screen.getByTestId("popout-gutter-thumb"));
+    expect(thumb.style.height).toBe("50px");
+    expect(thumb.style.top).toBe("12.5px");
+    // The poll probed the pop-out's OWN tab through the real bridge.
+    await waitFor(() =>
+      expect(
+        calls.some((c) => c.cmd === "browser_tab_scroll_state" && c.args?.tabId === POPOUT_TAB_ID),
+      ).toBe(true),
+    );
+  });
+
+  it("a CSP-strict page (css:false) keeps the gutter hidden — the page's own scrollbar stays the ONE", async () => {
+    mockRects(200);
+    stubTauri({
+      scrollState: () => JSON.stringify({ y: 100, vh: 400, ch: 1600, css: false }),
+    });
+    render(<PopoutApp />);
+
+    await actPromise();
+    expect(screen.getByTestId("popout-gutter-scrollbar")).toBeTruthy();
+    expect(screen.queryByTestId("popout-gutter-thumb")).toBeNull();
+  });
+});
+
+/** Flushes the mount poll's microtask chain without waitFor noise. */
+async function actPromise(): Promise<void> {
+  await act(async () => {});
+}

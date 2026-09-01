@@ -1,4 +1,4 @@
-<!-- last-reviewed: 2026-09-01 round-59 -->
+<!-- last-reviewed: 2026-09-01 round-60 -->
 # IMPLEMENTED API — the shipped surface
 
 **Truth = this file.** Verified against `agent-core/src/server.ts` at
@@ -817,3 +817,47 @@ dev port is **5178**, not 8765.
   byte-identical to pre-R59-F (golden-fixture pinned).
 - CLI: `prompt:sections [--project]` + `prompt:show <id> [--project]`.
 - No new routes — the registry composes inside `buildProjectSystemPrompt`.
+
+## ROUND-60 additions (implemented)
+
+**No new sidecar routes this round** — R60's additions are Tauri (IPC)
+commands and frontend modules:
+
+### Browser tab webview — scroll channel + zoom (Tauri commands)
+
+- `browser_tab_scroll_state(tab_id)` → JSON string `{y, vh, ch, css}` — the
+  page's main-scroller geometry read OUT of the child webview via
+  `Webview::eval_with_callback` (tauri 2.11.5; the only channel that returns
+  data from an external page without injecting IPC into it). `css` reports
+  whether the document-start themed-scrollbar style APPLIED (a CSP-blocked
+  `<style>` has `sheet === null`). Async, 2s channel timeout — a wedged page
+  never hangs the poller. Frontend bridge: `nativeTabScrollState`
+  (native-browser.ts; null on every miss — never throws).
+- `browser_tab_scroll_to(tab_id, y)` — `window.scrollTo(0, y)` (finite,
+  non-negative, validated in Rust). Bridge: `nativeTabScrollTo`.
+- `browser_tab_set_zoom(tab_id, factor)` — REAL DPI zoom via
+  `Webview::set_zoom` (WebView2 zoomFactor), factor clamped 0.1–5.0; the
+  BrowserPanel's native mode drives it on zoom changes + activation +
+  navigations (the R50 viewport-divide approximation is deleted). Bridge:
+  `nativeTabSetZoom`.
+- `browser_tab_create` gained optional `hide_viewport_scrollbar` — when true
+  (the pop-out passes it) a document-start `initialization_script` installs
+  the themed-pill scrollbar CSS + hides the page's VIEWPORT scrollbar (the
+  pop-out's GutterScrollbar replaces it, outside the content card).
+  Backward compatible (missing key → None).
+
+### Pop-out gutter scrollbar (frontend module)
+
+- `src/popout/GutterScrollbar.tsx` — the pop-out window's own scrollbar in
+  the right gutter: 250ms `browser_tab_scroll_state` polling (paused during
+  drags), pointer-captured drag + track page-jump + full keyboard contract
+  on a `role="scrollbar"` track, rAF-throttled `browser_tab_scroll_to`.
+  Honesty: hidden when no data / `css:false` (CSP-strict pages keep their
+  own bar — never two) / no overflow; the column stays mounted (stable
+  layout).
+
+### Rating-note visibility (AgentChatPanel)
+
+- A saved bad-rating note renders a "noted" chip on the rating cluster
+  (click → the editor reopens pre-filled); re-rating a saved bad reply
+  pre-fills the editor. No route changes (the existing upsert carries it).

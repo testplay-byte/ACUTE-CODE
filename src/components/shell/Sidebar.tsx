@@ -4,8 +4,6 @@ import {
   ArrowLeft,
   BarChart3,
   Bot,
-  ChevronsLeft,
-  ChevronsRight,
   CircleAlert,
   FolderOpen,
   LayoutDashboard,
@@ -31,7 +29,6 @@ import { useThemeStyles } from "../../lib/use-theme-styles";
 import { useProjects, useCreateProject, useDeleteProject } from "../../hooks/use-projects";
 import { useCreateSession, useDeleteSession, useRenameSession, useSessions } from "../../hooks/use-sessions";
 import { useAgents } from "../../hooks/use-agents";
-import { useProjectChatStore } from "../../lib/project-chat-store";
 import { useActiveStreams } from "../../lib/active-streams";
 import { withAlpha } from "../dashboard/helpers";
 import { NotificationBell } from "../notifications/NotificationBell";
@@ -46,12 +43,8 @@ async function tauriInvoke<T>(command: string, args?: Record<string, unknown>): 
   return tauri.core.invoke(command, args) as Promise<T>;
 }
 
-const COLLAPSE_KEY = "acute-code.sidebar.collapsed";
 const EXPANDED_KEY = "acute-code.sidebar.expandedProjects";
 
-function readCollapsed(): boolean {
-  try { return localStorage.getItem(COLLAPSE_KEY) === "1"; } catch { return false; }
-}
 function readExpanded(): string[] {
   try { return JSON.parse(localStorage.getItem(EXPANDED_KEY) ?? "[]") as string[]; } catch { return []; }
 }
@@ -71,26 +64,20 @@ function shadeHex(hex: string, percent: number): string {
 /** ROUND-42: the project's tile — a soft vertical gradient derived from the
  * project's own color, with an inner top highlight + soft shadow. Replaces
  * the flat colored square (owner: modern, beautiful, cleaner, smoother).
- * ROUND-48 (R48-a): `selected` paints a 2px INSET ring on the tile itself so
- * the collapsed rail's active tile stays the exact same size as its
- * siblings (the old outside outline made it look bigger + clipped it). The
- * ring is WHITE — the tile is already a gradient of project.color, so a
- * project.color ring would vanish against it — and the soft outer glow
- * carries the project's hue. */
+ * R60-C: the `selected` inset-ring variant died with the collapsed rail —
+ * the tile is the expanded-row mark only. */
 function ProjectTile({
   color,
   name,
   size = 32,
   radius = 10,
   fontSize = 13,
-  selected = false,
 }: {
   color: string;
   name: string;
   size?: number;
   radius?: number;
   fontSize?: number;
-  selected?: boolean;
 }) {
   return (
     <span
@@ -102,9 +89,7 @@ function ProjectTile({
         fontSize,
         color: "#fff",
         background: `linear-gradient(150deg, ${shadeHex(color, 0.22)} 0%, ${color} 45%, ${shadeHex(color, -0.24)} 100%)`,
-        boxShadow: selected
-          ? `inset 0 0 0 2px rgba(255,255,255,0.95), inset 0 1px 0 rgba(255,255,255,0.28), inset 0 -1px 2px rgba(0,0,0,0.18), 0 2px 8px ${withAlpha(color, 0.55)}`
-          : "inset 0 1px 0 rgba(255,255,255,0.28), inset 0 -1px 2px rgba(0,0,0,0.18), 0 1px 3px rgba(0,0,0,0.14)",
+        boxShadow: "inset 0 1px 0 rgba(255,255,255,0.28), inset 0 -1px 2px rgba(0,0,0,0.18), 0 1px 3px rgba(0,0,0,0.14)",
         textShadow: "0 1px 1px rgba(0,0,0,0.22)",
       }}
       aria-hidden
@@ -123,11 +108,14 @@ function ProjectTile({
  * a small triangular nose punched out of the silhouette (evenodd holes, the
  * tile's gradient shows through) — detailed enough to read as a cat face
  * from 16px (favicon) to 52px (chat empty state) without turning to mud.
- * Doubles as the sidebar toggle: hover morphs the mark into a panel-left
- * icon (cross-fade), click toggles. Used in the sidebar header, the mobile
- * drawer trigger, the floating show-sidebar button, and the chat empty
- * state — all through the same `size` prop. The mark mirrors
- * public/favicon.svg 1:1.
+ * R60-C: a mark WITH a click handler renders a real <button> (hover morphs
+ * the mark into a panel-left icon, click toggles); a DECORATIVE mark renders
+ * a <span> — the TitleBar's identity control is a <button> that WRAPS the
+ * logo, and interactive content may never nest, so the logo inside it is
+ * the non-interactive variant. Used by the title-bar identity control, the
+ * mobile drawer trigger, the floating show-sidebar button, the chat empty
+ * state, and the connection splash — all through the same `size` prop. The
+ * mark mirrors public/favicon.svg 1:1.
  */
 export function AcuteLogo({
   size = 32,
@@ -143,23 +131,23 @@ export function AcuteLogo({
   title?: string;
 }) {
   const [hovered, setHovered] = useState(false);
-  return (
-    <button
-      onClick={onClick}
-      onMouseEnter={() => setHovered(true)}
-      onMouseLeave={() => setHovered(false)}
-      aria-label={ariaLabel ?? "Acute"}
-      title={title}
-      className="relative grid place-items-center transition-transform hover:scale-[1.05] active:scale-95"
-      style={{
-        width: size,
-        height: size,
-        borderRadius: Math.round(size * 0.28),
-        background: "linear-gradient(155deg, #FF8147 0%, #FF6B2C 52%, #ED5A17 100%)",
-        boxShadow:
-          "inset 0 1px 0 rgba(255,255,255,0.32), 0 2px 10px rgba(255,107,44,0.35)",
-      }}
-    >
+  // Shared presentation for both element kinds (button when interactive).
+  const shared = {
+    "aria-label": ariaLabel ?? "Acute",
+    title,
+    onMouseEnter: () => setHovered(true),
+    onMouseLeave: () => setHovered(false),
+    className: "relative grid place-items-center transition-transform hover:scale-[1.05] active:scale-95",
+    style: {
+      width: size,
+      height: size,
+      borderRadius: Math.round(size * 0.28),
+      background: "linear-gradient(155deg, #FF8147 0%, #FF6B2C 52%, #ED5A17 100%)",
+      boxShadow: "inset 0 1px 0 rgba(255,255,255,0.32), 0 2px 10px rgba(255,107,44,0.35)",
+    },
+  };
+  const mark = (
+    <>
       {/* The cat-face silhouette — solid white head with pointed ears; the
           slanted almond eyes + triangular nose are evenodd punch-outs (the
           tile gradient shows through). Fades out on hover when hoverToggle. */}
@@ -207,22 +195,33 @@ export function AcuteLogo({
           <path d="M9 3v18" />
         </svg>
       )}
+    </>
+  );
+  if (onClick === undefined) {
+    return <span {...shared}>{mark}</span>;
+  }
+  return (
+    <button type="button" onClick={onClick} {...shared}>
+      {mark}
     </button>
   );
 }
 
 /**
- * Sidebar (round-33 owner redesign):
- * - HEADER: the Acute logo tile at the TOP-LEFT (click toggles the sidebar;
- *   hover morphs the mark into a panel-toggle icon) + the collapse button at
- *   the TOP-RIGHT, beside the logo (moved from the footer per owner).
+ * Sidebar (round-33 owner redesign · R60-C refactor):
+ * - NO header row in normal mode — R60-C (owner): the app logo lives in the
+ *   TITLE BAR now and THAT identity control (logo + name, top-left of the
+ *   window) is the one toggle for showing/hiding this whole panel; the
+ *   in-sidebar logo + the collapse button + the 64px collapsed rail are
+ *   GONE. The panel is either fully visible (AppShell's appSidebarVisible)
+ *   or fully absent — no intermediate state, no COLLAPSE_KEY persistence.
+ * - SETTINGS mode keeps its header row: back button + "Settings" title.
  * - GENEROUS spacing between NAVIGATION and PROJECTS (owner: "way too close
  *   together").
  * - PROJECTS: no chevron, no session-count chip; the "+ new session" button
  *   lives ON the project row itself (owner directive); sessions are
  *   renameable (round-33).
  * - FOOTER: a PROMINENT Settings button (card-style, not a plain nav row).
- * - Collapsed rail: logo + icon tiles.
  */
 /** ROUND-34 (owner design frame 1a): the settings sections that REPLACE the
  * normal navigation when the sidebar is in settings mode. ids stay the
@@ -241,47 +240,29 @@ const SETTINGS_SECTIONS = [
 
 export function Sidebar() {
   const styles = useThemeStyles();
-  const [collapsed, setCollapsed] = useState(readCollapsed);
   // ROUND-45 (VLM-pass find): MOBILE DRAWER. Below md the sidebar is a
   // fixed overlay (the old static 270px column left only 69px of content at
   // 375px) — closed by default, opened by the floating logo trigger,
-  // closed by the backdrop, and auto-closed on navigation.
+  // closed by the backdrop, and auto-closed on navigation. R60-C: this is
+  // the ONLY mobile affordance (mobile has no title bar) — kept exactly.
   const [mobileOpen, setMobileOpen] = useState(false);
-  const setAppSidebarVisible = useProjectChatStore((s) => s.setAppSidebarVisible);
-  const appSidebarVisible = useProjectChatStore((s) => s.appSidebarVisible);
   const { pathname, search } = useLocation();
-  const isChatRoute = /^\/project\/[^/]+\/chat\/?$/.test(pathname);
   // ROUND-34: settings mode — the sidebar TRANSFORMS into the settings nav
   // (owner design: "the whole sidebar should change into the settings sidebar").
   const isSettingsRoute = pathname.startsWith("/settings");
   const activeTab = new URLSearchParams(search).get("tab") ?? "appearance";
-  const showSidebar = !isChatRoute || appSidebarVisible;
-  // Hooks BEFORE any early return (rules-of-hooks — review finding #1).
   const navigate = useNavigate();
-
-  useEffect(() => {
-    try { localStorage.setItem(COLLAPSE_KEY, collapsed ? "1" : "0"); } catch { /* */ }
-  }, [collapsed]);
 
   // ROUND-45: any navigation closes the mobile drawer (standard drawer UX).
   useEffect(() => {
     setMobileOpen(false);
   }, [pathname, search]);
 
-  if (!showSidebar) return null;
-
-  // Logo click (owner round-33): on chat routes it hides the sidebar (the
-  // floating logo appears at the chat window's top-left to bring it back);
-  // in settings mode it's the BACK affordance; elsewhere it toggles the rail.
-  const onLogoClick = () => {
-    if (isChatRoute) {
-      setAppSidebarVisible(false);
-    } else if (isSettingsRoute) {
-      navigate("/");
-    } else {
-      setCollapsed((v) => !v);
-    }
-  };
+  // R60-C: the panel's own visibility is NOT decided here — AppShell's
+  // appSidebarVisible (flipped by the TITLE BAR identity control in Tauri,
+  // the floating Acute logo in web dev mode) mounts/unmounts this whole
+  // component. There is no collapsed rail and no in-sidebar toggle anymore:
+  // the panel is either fully visible or fully absent.
 
   return (
     <>
@@ -294,9 +275,10 @@ export function Sidebar() {
           className="fixed inset-0 z-40 cursor-default bg-black/40 md:hidden"
         />
       )}
-      {/* ROUND-45: mobile trigger — the app logo, matching the chat-route
-          floating toggle; visible below md whenever the drawer is closed.
-          R58: in Tauri the custom TitleBar owns the top 40px — drop below it. */}
+      {/* ROUND-45: mobile trigger — the app logo, the ONLY mobile affordance
+          (mobile has no title bar to host the R60-C identity toggle); visible
+          below md whenever the drawer is closed. R58: in Tauri the custom
+          TitleBar owns the top 40px — drop below it. */}
       {!mobileOpen && (
         <div
           className={`fixed left-[10px] z-50 md:hidden ${
@@ -313,11 +295,17 @@ export function Sidebar() {
         </div>
       )}
     <motion.aside
-      initial={false}
-      animate={{ width: collapsed ? 64 : 270 }}
-      transition={{ duration: 0.25, ease: [0.25, 0.1, 0.25, 1] }}
+      // R60-C: fixed width — the rail↔expanded width animation is GONE with
+      // the collapse feature; framer-motion stays mounted only for this
+      // subtle 200ms show-in (fade + nudge) so the panel feels alive when the
+      // title-bar toggle brings it back. The mobile drawer slide is the
+      // Tailwind `translate` property below (it composes with framer's
+      // `transform` — different CSS properties).
+      initial={{ opacity: 0, x: -14 }}
+      animate={{ opacity: 1, x: 0 }}
+      transition={{ duration: 0.2, ease: [0.25, 0.1, 0.25, 1] }}
       className={cn(
-        "shrink-0 flex flex-col overflow-hidden rounded-[20px] border-[1.5px]",
+        "w-[270px] shrink-0 flex flex-col overflow-hidden rounded-[20px] border-[1.5px]",
         // ROUND-45: below md this is an overlay drawer, not a flex column.
         "max-md:fixed max-md:inset-y-3 max-md:left-3 max-md:z-50 max-md:shadow-2xl",
         mobileOpen ? "max-md:translate-x-0" : "max-md:-translate-x-[120%] max-md:pointer-events-none",
@@ -329,55 +317,33 @@ export function Sidebar() {
         borderColor: styles.sidebarBorder,
       }}
     >
-      {/* HEADER — logo (top-left) + collapse button (top-right, beside it).
-          ROUND-34: in settings mode the header gains a back affordance and a
-          "Settings" title beside the logo (owner design frame 1a). */}
-      <div className={cn("shrink-0 flex items-center gap-2 px-3 pt-3", collapsed && "flex-col gap-2.5 px-0")}>
-        <AcuteLogo
-          size={collapsed ? 36 : 32}
-          hoverToggle
-          onClick={onLogoClick}
-          ariaLabel={isSettingsRoute ? "Acute — back to dashboard" : isChatRoute ? "Acute — hide sidebar" : collapsed ? "Acute — expand sidebar" : "Acute — collapse sidebar"}
-          title={isSettingsRoute ? "Back to dashboard" : isChatRoute ? "Hide sidebar" : collapsed ? "Expand sidebar" : "Collapse sidebar"}
-        />
-        {!collapsed && isSettingsRoute && (
-          <>
-            <button
-              onClick={() => navigate("/")}
-              aria-label="Back to dashboard"
-              title="Back to dashboard"
-              className="w-7 h-7 shrink-0 rounded-[9px] grid place-items-center transition-colors"
-              style={{ color: styles.textTertiary }}
-              onMouseEnter={(e) => (e.currentTarget.style.background = styles.sidebarHover)}
-              onMouseLeave={(e) => (e.currentTarget.style.background = "transparent")}
-            >
-              <ArrowLeft size={14} />
-            </button>
-            <span className="text-[13px] font-black tracking-tight truncate" style={{ color: styles.text }}>
-              Settings
-            </span>
-          </>
-        )}
-        {!collapsed && !isSettingsRoute && (
-          <span className="flex-1" />
-        )}
-        <button
-          onClick={() => setCollapsed(!collapsed)}
-          aria-label={collapsed ? "Expand sidebar" : "Collapse sidebar"}
-          title={collapsed ? "Expand sidebar" : "Collapse sidebar"}
-          className="w-8 h-8 shrink-0 rounded-[10px] grid place-items-center transition-colors"
-          style={{ color: styles.textTertiary }}
-          onMouseEnter={(e) => (e.currentTarget.style.background = styles.sidebarHover)}
-          onMouseLeave={(e) => (e.currentTarget.style.background = "transparent")}
-        >
-          {collapsed ? <ChevronsRight size={14} /> : <ChevronsLeft size={14} />}
-        </button>
-      </div>
+      {/* R60-C: NO header row in normal mode — the nav starts at the top
+          (the logo + collapse button moved out with the rail). SETTINGS mode
+          (ROUND-34 owner design frame 1a) keeps its header: back button +
+          "Settings" title, now at the row's start. */}
+      {isSettingsRoute && (
+        <div className="shrink-0 flex items-center gap-2 px-3 pt-3">
+          <button
+            onClick={() => navigate("/")}
+            aria-label="Back to dashboard"
+            title="Back to dashboard"
+            className="w-7 h-7 shrink-0 rounded-[9px] grid place-items-center transition-colors"
+            style={{ color: styles.textTertiary }}
+            onMouseEnter={(e) => (e.currentTarget.style.background = styles.sidebarHover)}
+            onMouseLeave={(e) => (e.currentTarget.style.background = "transparent")}
+          >
+            <ArrowLeft size={14} />
+          </button>
+          <span className="text-[13px] font-black tracking-tight truncate" style={{ color: styles.text }}>
+            Settings
+          </span>
+        </div>
+      )}
 
       {isSettingsRoute ? (
         /* ── SETTINGS MODE (owner design frame 1a): the sidebar's whole body
            becomes the settings section list. ─────────────────────────────── */
-        <nav className={cn("flex-1 flex flex-col gap-1 px-2.5 pt-5 overflow-y-auto", collapsed && "px-1.5")} aria-label="Settings sections">
+        <nav className="flex-1 flex flex-col gap-1 px-2.5 pt-5 overflow-y-auto" aria-label="Settings sections">
           {SETTINGS_SECTIONS.map(({ id, label, icon: Icon }) => {
             const active = activeTab === id;
             return (
@@ -385,11 +351,7 @@ export function Sidebar() {
                 key={id}
                 onClick={() => navigate(`/settings?tab=${id}`)}
                 aria-current={active ? "true" : undefined}
-                title={collapsed ? label : undefined}
-                className={cn(
-                  "relative h-11 flex items-center rounded-[12px] transition-all duration-200 text-[13px] font-bold",
-                  collapsed ? "justify-center w-full" : "gap-2.5 px-2.5",
-                )}
+                className="relative h-11 flex items-center gap-2.5 px-2.5 rounded-[12px] transition-all duration-200 text-[13px] font-bold"
                 style={{
                   background: active ? withAlpha(styles.accent, 0.12) : "transparent",
                   color: active ? styles.text : styles.textSecondary,
@@ -418,44 +380,42 @@ export function Sidebar() {
                 >
                   <Icon size={14} />
                 </span>
-                {!collapsed && <span className="truncate">{label}</span>}
+                <span className="truncate">{label}</span>
               </button>
             );
           })}
           {/* The dashed "more coming" slot (owner design: future sections). */}
-          {!collapsed && (
-            <div
-              className="mt-1 h-10 flex items-center justify-center rounded-[12px] border-[1.5px] border-dashed text-[11px] font-bold"
-              style={{ borderColor: styles.sidebarBorder, color: styles.textTertiary }}
-            >
-              More settings coming soon
-            </div>
-          )}
+          <div
+            className="mt-1 h-10 flex items-center justify-center rounded-[12px] border-[1.5px] border-dashed text-[11px] font-bold"
+            style={{ borderColor: styles.sidebarBorder, color: styles.textTertiary }}
+          >
+            More settings coming soon
+          </div>
         </nav>
       ) : (
         <>
           {/* NAVIGATION SECTION — dedicated section for Dashboard + Usage.
               ROUND-42: same heading language as the refreshed Projects
-              header (heavier weight, wider tracking). */}
-          {!collapsed && (
-            <div className="shrink-0 flex items-center px-4 pt-5 pb-1.5">
-              <span
-                className="text-[10.5px] font-black uppercase tracking-[0.14em]"
-                style={{ color: styles.textTertiary }}
-              >
-                Navigation
-              </span>
-            </div>
-          )}
+              header (heavier weight, wider tracking). R60-C: with the header
+              row gone this starts AT the panel's top — a pt-3 inset keeps it
+              from feeling empty. */}
+          <div className="shrink-0 flex items-center px-4 pt-3 pb-1.5">
+            <span
+              className="text-[10.5px] font-black uppercase tracking-[0.14em]"
+              style={{ color: styles.textTertiary }}
+            >
+              Navigation
+            </span>
+          </div>
           <nav
-            className={cn("flex flex-col gap-1 px-2.5 pb-3", collapsed ? "px-1.5 pt-4" : "pt-1")}
+            className="flex flex-col gap-1 px-2.5 pb-3 pt-1"
             aria-label="Main navigation"
             // ROUND-45: any nav interaction closes the mobile drawer — even a
             // same-route click (the useLocation effect only fires on change).
             onClickCapture={() => setMobileOpen(false)}
           >
-            <DashboardButton collapsed={collapsed} />
-            <UsageButton collapsed={collapsed} />
+            <DashboardButton />
+            <UsageButton />
           </nav>
 
           {/* Divider — generous spacing around it (owner round-33). */}
@@ -463,7 +423,7 @@ export function Sidebar() {
 
           {/* PROJECTS SECTION — expandable tree */}
           <div className="flex-1 flex flex-col min-h-0 overflow-hidden">
-            <ProjectSection collapsed={collapsed} />
+            <ProjectSection />
           </div>
 
           {/* FOOTER — a PROMINENT Settings button (owner round-33) + the
@@ -471,17 +431,19 @@ export function Sidebar() {
               The bell mounts beside Settings as the closest analog to
               "header actions" in this app's chrome. */}
           <div
-            className={cn("shrink-0 border-t px-2.5 pb-3 pt-2.5", collapsed && "px-1.5")}
+            className="shrink-0 border-t px-2.5 pb-3 pt-2.5"
             style={{ borderColor: styles.sidebarBorder }}
           >
-            {/* ROUND-40: small icon row above the prominent Settings
-                button — collapsed = centered bell icon tile; expanded =
-                bell icon aligned to the right (matches the existing
-                footer's right-aligned language). */}
-            <div className={cn("flex items-center mb-1.5", collapsed ? "justify-center" : "justify-end")}>
-              <NotificationBell collapsed={collapsed} />
+            {/* ROUND-40: small icon row above the prominent Settings button —
+                the bell icon aligned to the right (the footer's right-aligned
+                language; the centered collapsed-tile variant is gone). The
+                bell's `collapsed` prop stays (its component lives outside the
+                shell files) — pinned false: the expanded variant is the only
+                one reachable now. */}
+            <div className="flex items-center mb-1.5 justify-end">
+              <NotificationBell collapsed={false} />
             </div>
-            <SettingsButton collapsed={collapsed} />
+            <SettingsButton />
           </div>
         </>
       )}
@@ -491,20 +453,16 @@ export function Sidebar() {
 }
 
 function NavButton({
-  icon: Icon, label, active, collapsed, onClick,
+  icon: Icon, label, active, onClick,
 }: {
-  icon: typeof LayoutDashboard; label: string; active: boolean; collapsed: boolean; onClick: () => void;
+  icon: typeof LayoutDashboard; label: string; active: boolean; onClick: () => void;
 }) {
   const styles = useThemeStyles();
   return (
     <button
       onClick={onClick}
       aria-current={active ? "page" : undefined}
-      title={collapsed ? label : undefined}
-      className={cn(
-        "h-10 flex items-center rounded-[12px] transition-all duration-200 text-[13px] font-bold",
-        collapsed ? "justify-center w-full" : "px-3 gap-2.5",
-      )}
+      className="h-10 flex items-center px-3 gap-2.5 rounded-[12px] transition-all duration-200 text-[13px] font-bold"
       style={{
         background: active ? styles.accent : "transparent",
         color: active ? styles.accentText : styles.textSecondary,
@@ -518,21 +476,21 @@ function NavButton({
       }}
     >
       <Icon size={16} strokeWidth={2} className="shrink-0" />
-      {!collapsed && <span>{label}</span>}
+      <span>{label}</span>
     </button>
   );
 }
 
-function DashboardButton({ collapsed }: { collapsed: boolean }) {
+function DashboardButton() {
   const navigate = useNavigate();
   const active = useLocation().pathname === "/";
-  return <NavButton icon={LayoutDashboard} label="Dashboard" active={active} collapsed={collapsed} onClick={() => navigate("/")} />;
+  return <NavButton icon={LayoutDashboard} label="Dashboard" active={active} onClick={() => navigate("/")} />;
 }
 
-function UsageButton({ collapsed }: { collapsed: boolean }) {
+function UsageButton() {
   const navigate = useNavigate();
   const active = useLocation().pathname.startsWith("/usage");
-  return <NavButton icon={BarChart3} label="Usage" active={active} collapsed={collapsed} onClick={() => navigate("/usage")} />;
+  return <NavButton icon={BarChart3} label="Usage" active={active} onClick={() => navigate("/usage")} />;
 }
 
 /** ROUND-48 removed the Sessions nav entry; ROUND-49 removed the /sessions
@@ -542,30 +500,13 @@ function UsageButton({ collapsed }: { collapsed: boolean }) {
 
 /** Prominent Settings button (owner round-33): a card-style row — icon tile
  * in an accent-tinted square + bold label — visually distinct from the plain
- * nav rows above the divider. Collapsed = a large gear icon tile. */
-function SettingsButton({ collapsed }: { collapsed: boolean }) {
+ * nav rows above the divider. R60-C: expanded card only (the collapsed gear
+ * tile went with the rail). */
+function SettingsButton() {
   const styles = useThemeStyles();
   const navigate = useNavigate();
   const active = useLocation().pathname.startsWith("/settings");
   const [hovered, setHovered] = useState(false);
-  if (collapsed) {
-    return (
-      <button
-        onClick={() => navigate("/settings")}
-        aria-label="Settings"
-        title="Settings"
-        className="w-9 h-9 mx-auto rounded-[12px] grid place-items-center transition-all hover:scale-105"
-        style={{
-          background: active ? styles.accent : withAlpha(styles.accent, hovered ? 0.16 : 0.1),
-          color: active ? styles.accentText : styles.accent,
-        }}
-        onMouseEnter={() => setHovered(true)}
-        onMouseLeave={() => setHovered(false)}
-      >
-        <Settings size={16} />
-      </button>
-    );
-  }
   return (
     <button
       onClick={() => navigate("/settings")}
@@ -598,8 +539,8 @@ function SettingsButton({ collapsed }: { collapsed: boolean }) {
  * the pixel-stream activity animation on a project row whenever ANY of its
  * sessions is running (even when the project is collapsed — the owner: "the
  * animation should move on to the project itself so I can clearly know which
- * project is active"). */
-function ProjectSection({ collapsed }: { collapsed: boolean }) {
+ * project is active"). R60-C: expanded layout only (the rail is gone). */
+function ProjectSection() {
   const styles = useThemeStyles();
   const navigate = useNavigate();
   const { pathname, search } = useLocation();
@@ -612,7 +553,8 @@ function ProjectSection({ collapsed }: { collapsed: boolean }) {
 
   // ROUND-42: the set of running session ids (SSE/stream-driven store) →
   // which PROJECTS currently have live work. Drives the animation on the
-  // project row (collapsed or expanded) + the collapsed-rail tiles.
+  // project row (R60-C: the rail-tile variant is gone — the row is the only
+  // carrier now).
   const runningSessions = useActiveStreams((s) => s.active);
   const runningProjects = new Set(
     sessions.filter((s) => runningSessions.has(s.id)).map((s) => s.projectId),
@@ -667,77 +609,8 @@ function ProjectSection({ collapsed }: { collapsed: boolean }) {
   const agentsQueryForSessions = useAgents(false);
   const agentsForNewSessions = () => (agentsQueryForSessions.data ?? [])[0]?.id ?? null;
 
-  if (collapsed) {
-    return (
-      // ROUND-48 (R48-a): the collapsed rail now SCROLLS (overflow-y-auto +
-      // min-h-0 inside the min-h-0 wrapper) and has top padding — the old
-      // container clipped the first tile and cut long project lists off at
-      // the bottom. Selection is an INSET ring on the tile itself (see
-      // ProjectTile) so the active tile stays exactly 36px like its siblings
-      // (the old outside outline + 2px offset made it look bigger and got
-      // clipped by the overflow-hidden wrapper).
-      <div
-        className="flex flex-col items-center gap-1.5 px-1.5 pt-2 pb-2 min-h-0 overflow-y-auto"
-        style={{ scrollbarWidth: "thin" }}
-        data-testid="collapsed-project-rail"
-      >
-        {projects.map((project) => {
-          const isActive = activeProjectId === project.id;
-          const isRunning = runningProjects.has(project.id);
-          return (
-            <button
-              key={project.id}
-              onClick={() => navigate(`/project/${project.id}/chat`)}
-              title={isRunning ? `${project.name} — working…` : project.name}
-              aria-label={isRunning ? `Open ${project.name} (working)` : `Open ${project.name}`}
-              aria-current={isActive ? "true" : undefined}
-              data-active={isActive ? "true" : "false"}
-              className="relative w-9 h-9 grid place-items-center transition-transform hover:scale-105 active:scale-95"
-              style={{ borderRadius: 12 }}
-            >
-              <ProjectTile
-                color={project.color}
-                name={project.name}
-                size={36}
-                radius={12}
-                fontSize={14}
-                selected={isActive}
-              />
-              {/* ROUND-42: live-work badge on the collapsed tile (owner:
-                  "if the session of a project is going on and I collapse the
-                  project, the animation should move on to the project
-                  itself") — a pulsing accent dot pinned to the tile's
-                  bottom-right. R48-a: the rail's px-1.5/pt-2/pb-2 padding
-                  keeps the half-outset dot inside the scroll box, so it never
-                  clips. */}
-              {isRunning ? (
-                <span
-                  className="absolute -bottom-0.5 -right-0.5 w-[11px] h-[11px] rounded-full animate-pulse"
-                  style={{
-                    background: styles.accent,
-                    boxShadow: `0 0 0 2px ${styles.sidebarBg}, 0 0 6px ${withAlpha(styles.accent, 0.8)}`,
-                  }}
-                  role="status"
-                  aria-label="Project has a session working"
-                />
-              ) : null}
-            </button>
-          );
-        })}
-        <button
-          onClick={() => setShowAddDialog(true)}
-          aria-label="Add project"
-          className="w-9 h-9 rounded-[12px] grid place-items-center border-[1.5px] border-dashed transition-transform hover:scale-105"
-          style={{ borderColor: styles.border, color: styles.textTertiary }}
-        >
-          <Plus size={14} strokeWidth={2.5} />
-        </button>
-        {showAddDialog && (
-          <AddProjectDialog onCreated={(id) => navigate(`/project/${id}/chat`)} onClose={() => setShowAddDialog(false)} />
-        )}
-      </div>
-    );
-  }
+  // R60-C: the collapsed-rail early return is DELETED (along with the rail
+  // itself) — the expanded tree below is the only layout.
 
   return (
     <>

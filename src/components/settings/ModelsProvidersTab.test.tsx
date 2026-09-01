@@ -32,14 +32,28 @@
  * ROUND-59 (R59-C) — the owner's four directives, regressed here:
  *  10. Unconfigured seeded presets are ABSENT from the left list (the R58
  *      "Not configured" group is gone); the count reflects what is shown.
- *  11. The API-key field: masked STORED value + ONE Show (reveal route) +
- *      Hide + Copy; a separate Rotate flow → Save key; honest reveal
- *      errors.
- *  12. Disabling a provider is OUTRIGHT — the PATCH fires immediately, no
+ *  11. Disabling a provider is OUTRIGHT — the PATCH fires immediately, no
  *      confirm box in the DOM (even with agents referencing it).
- *  13. Pre-select: the FIRST provider's detail pane opens without a click;
+ *  12. Pre-select: the FIRST provider's detail pane opens without a click;
  *      an explicit selection survives refreshes; deleting the selected
  *      provider falls to the next one; empty list → placeholder card.
+ *
+ * ROUND-60 (R60-B) — the settings deep-clean, regressed here:
+ *  13. The API-key field: ONE unified layout — [input][eye in the EXACT
+ *      same DOM slot every state][context action]. Show → revealed +
+ *      Copy; Hide → masked again through the same button node; NO rotate
+ *      flow — pasting/typing a new key swaps to edit mode (new-key-input +
+ *      save-key-button + cancel-key-edit-button, Escape restores), Save
+ *      PUTs and the masked view returns with the NEW key's mask.
+ *  14. The models list shows CONFIGURED rows ONLY — live catalog entries
+ *      never render as rows (no "catalog" badge, no count inflation), and
+ *      every configured row — free ones included — is customizable
+ *      (FREE badge + pencil + delete).
+ *  15. The Add-models picker owns the Free only ↔ All models toggle
+ *      (picker-free-only-toggle / picker-all-models-toggle) on the SHARED
+ *      persisted modelsFreeOnly pref the chat picker honors; free-only
+ *      filters the rows BEFORE the 300 cap; an honest empty note when the
+ *      free scope empties the list.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { cleanup, fireEvent, screen, waitFor, within } from "@testing-library/react";
@@ -253,15 +267,19 @@ const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => 
     }
     return jsonResponse({ keys: revealKeys });
   }
-  // R59-C: PUT /providers/:id/key — the rotate-key save (browser-dev path).
-  // Updates the pool listing's slot-0 masked value so the post-rotate
-  // masked display is honest (the pane invalidates + refetches it).
+  // R59-C: PUT /providers/:id/key — the paste-to-replace save (browser-dev
+  // path). Updates the pool listing's slot-0 masked value (the post-save
+  // masked display is honest — the pane invalidates + refetches it) and
+  // flips hasKey on the providers row (a stored key makes a keyless preset
+  // configured again).
   const keyPutMatch = url.match(/\/api\/v1\/providers\/([^/]+)\/key$/);
   if (keyPutMatch !== null && method === "PUT") {
     const value = String((body as { value: string }).value);
     pool = pool.filter((k) => k.slot !== 0);
     pool.push({ slot: 0, hasKey: true, masked: `${value.slice(0, 5)}…${value.slice(-4)}` });
     pool.sort((a, b) => a.slot - b.slot);
+    const saved = providersList.find((p) => p.id === keyPutMatch[1]);
+    if (saved !== undefined) saved.hasKey = true;
     return { status: 204, ok: true, text: async () => "" } as unknown as Response;
   }
   // Key pool (GET list + stateful PUT/DELETE per slot) — provider-scoped.
@@ -364,6 +382,9 @@ const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => 
 
 beforeEach(() => {
   resetTestState();
+  // R60-B: the shared persisted free-only pref — reset to the owner default
+  // for EVERY test (a test that flips it must not leak into the next).
+  useSettingsStore.setState({ modelsFreeOnly: true });
   calls.length = 0;
   providersList = [PROVIDER].map((p) => ({ ...p }));
   patchResponses = [];
@@ -594,6 +615,8 @@ describe("Add models — catalog picker (ROUND-50 R50-d)", () => {
   }
 
   it("lists the live catalog with FREE/PAID badges; already-configured rows are disabled + ADDED", async () => {
+    // R60-B: paid rows render only in the All-models scope — start there.
+    useSettingsStore.setState({ modelsFreeOnly: false });
     liveCatalog = [
       { id: "z-ai/glm-5.2:free", name: "Z.ai: GLM 5.2" },
       { id: "openai/gpt-4o", name: "GPT-4o" },
@@ -613,6 +636,8 @@ describe("Add models — catalog picker (ROUND-50 R50-d)", () => {
   });
 
   it("multi-select + bulk add: ONE upsert per selected model, pricing pre-filled from the served catalog", async () => {
+    // R60-B: the selection spans paid + unknown entries — All-models scope.
+    useSettingsStore.setState({ modelsFreeOnly: false });
     liveCatalog = [
       { id: "z-ai/glm-5.2:free", name: "Z.ai: GLM 5.2" },
       { id: "openai/gpt-4o", name: "GPT-4o" },
@@ -655,6 +680,8 @@ describe("Add models — catalog picker (ROUND-50 R50-d)", () => {
   });
 
   it("search filters by model id AND display name", async () => {
+    // R60-B: the search fixture mixes free + paid — All-models scope.
+    useSettingsStore.setState({ modelsFreeOnly: false });
     liveCatalog = [
       { id: "z-ai/glm-5.2:free", name: "Z.ai: GLM 5.2" },
       { id: "openai/gpt-4o", name: "GPT-4o" },
@@ -941,26 +968,33 @@ describe("Enable/disable toggle (R59-C)", () => {
   });
 });
 
-/* ── ROUND-59 (R59-C): the API-key field — masked stored + ONE Show + rotate ── */
+/* ── ROUND-60 (R60-B): the API-key field — unified eye + paste-to-replace ── */
 
-describe("Key field — masked stored key, one Show, rotate (R59-C)", () => {
-  it("shows the STORED key MASKED (read-only, the pool listing's slot 0) — no editable input, no auto-reveal", async () => {
+describe("Key field — unified eye + paste-to-replace (R60-B)", () => {
+  it("shows the STORED key MASKED at rest with the eye in its ONE slot — no auto-reveal, no rotate affordance", async () => {
     pool = [{ slot: 0, hasKey: true, masked: "sk-o…b4af" }];
     renderWithProviders(<ModelsProvidersTab />);
 
     const masked = (await screen.findByTestId("stored-key-masked")) as HTMLInputElement;
     // The pool listing lands async — the masked value fills in when it does.
     await waitFor(() => expect(masked.value).toBe("sk-o…b4af"));
-    expect(masked.readOnly).toBe(true);
-    // The R58 dual-eye layout is gone: NO editable "API key" input sits in
-    // the block while a key is stored — rotation is the only way to one.
+    // The eye toggle is present in its one stable slot…
+    expect(screen.getByTestId("show-stored-key-button")).toBeTruthy();
+    expect(screen.getByLabelText("Show stored key")).toBeTruthy();
+    // …and the R59 rotate flow is GONE entirely (the owner: paste the new
+    // key directly — no Rotate button, no rotate testids anywhere).
+    expect(screen.queryByTestId("rotate-key-button")).toBeNull();
+    expect(screen.queryByTestId("rotate-key-input")).toBeNull();
+    expect(screen.queryByRole("button", { name: /rotate/i })).toBeNull();
+    // No editable "API key" input while at rest — the field IS the stored
+    // display until the user types/pastes.
     expect(screen.queryByLabelText("API key")).toBeNull();
     // NEVER auto-fetched on mount — the reveal route is untouched until the
-    // explicit Show click.
+    // explicit eye click.
     expect(calls.every((c) => !c.url.includes("/keys/reveal"))).toBe(true);
   });
 
-  it("Show → the reveal route is POSTed and the FULL value renders; Copy copies it; Hide masks again", async () => {
+  it("Show → the reveal route POSTs, the FULL value renders, Copy copies it, and Hide masks again THROUGH THE SAME BUTTON NODE (the slot never moves)", async () => {
     pool = [{ slot: 0, hasKey: true, masked: "sk-o…b4af" }];
     revealKeys = [
       { slot: 0, value: "sk-or-v1-primary-full" },
@@ -968,36 +1002,59 @@ describe("Key field — masked stored key, one Show, rotate (R59-C)", () => {
     ];
     renderWithProviders(<ModelsProvidersTab />);
 
-    fireEvent.click(await screen.findByTestId("show-stored-key-button"));
+    const eye = await screen.findByTestId("show-stored-key-button");
+    fireEvent.click(eye);
     const revealed = (await screen.findByTestId("stored-key-revealed")) as HTMLInputElement;
     expect(revealed.value).toBe("sk-or-v1-primary-full");
-    expect(revealed.readOnly).toBe(true);
     await waitFor(() =>
       expect(calls.some((c) => c.method === "POST" && c.url.includes("/keys/reveal"))).toBe(true),
     );
 
-    // Copy → the clipboard receives the FULL value.
+    // Copy → the clipboard receives the FULL value (the button fades/slides
+    // in — AnimatePresence — but is in the DOM and clickable immediately).
     fireEvent.click(screen.getByTestId("copy-stored-key-button"));
     await waitFor(() => expect(clipboardWriteText).toHaveBeenCalledWith("sk-or-v1-primary-full"));
     await waitFor(() => expect(screen.getByText("Key copied to clipboard.")).toBeTruthy());
 
-    // Hide → masked again (the resting state is MASKED — the R58 flow
-    // dropped back to an editable input, which was the confusion).
-    fireEvent.click(screen.getByTestId("hide-stored-key-button"));
+    // Hide → masked again — and the Hide button is the SAME DOM NODE as the
+    // Show button (React reconciles the eye in place: the exact same slot,
+    // the owner's directive #1).
+    const hideBtn = screen.getByTestId("hide-stored-key-button");
+    expect(hideBtn).toBe(eye);
+    fireEvent.click(hideBtn);
     await waitFor(() => expect(screen.getByTestId("stored-key-masked")).toBeTruthy());
     expect(screen.queryByTestId("stored-key-revealed")).toBeNull();
+    // The Copy affordance leaves with the reveal (it fades out)…
+    await waitFor(
+      () => expect(screen.queryByTestId("copy-stored-key-button")).toBeNull(),
+      { timeout: 2000 },
+    );
+    // …and the eye flipped back to the Show identity in the same slot.
+    expect(screen.getByTestId("show-stored-key-button")).toBe(eye);
   });
 
-  it("Rotate key → the editable input + Save key fires the PUT; the masked view returns with the NEW key's mask", async () => {
+  it("paste-to-replace: typing a new key swaps to edit mode (Save key + Cancel X); Save PUTs and the masked view returns with the NEW key's mask", async () => {
     pool = [{ slot: 0, hasKey: true, masked: "sk-o…b4af" }];
     renderWithProviders(<ModelsProvidersTab />);
 
-    fireEvent.click(await screen.findByTestId("rotate-key-button"));
-    const input = (await screen.findByTestId("rotate-key-input")) as HTMLInputElement;
-    expect(input.value).toBe("");
+    // The user clicks into the stored display and pastes the new key —
+    // the field becomes the draft (edit mode) in place.
+    const masked = (await screen.findByTestId("stored-key-masked")) as HTMLInputElement;
+    await waitFor(() => expect(masked.value).toBe("sk-o…b4af"));
+    fireEvent.change(masked, { target: { value: "sk-or-v1-rotated" } });
 
-    fireEvent.change(input, { target: { value: "sk-or-v1-rotated" } });
-    fireEvent.click(screen.getByRole("button", { name: "Save key" }));
+    const editing = (await screen.findByTestId("new-key-input")) as HTMLInputElement;
+    expect(editing.value).toBe("sk-or-v1-rotated");
+    // The eye stays in its slot (disabled while editing) and the context
+    // action morphs to Save key + Cancel X.
+    const eye = screen.getByTestId("show-stored-key-button") as HTMLButtonElement;
+    expect(eye.disabled).toBe(true);
+    expect(screen.getByTestId("save-key-button")).toBeTruthy();
+    expect(screen.getByTestId("cancel-key-edit-button")).toBeTruthy();
+    // Copy is gone while editing (it belongs to the REVEALED stored value).
+    expect(screen.queryByTestId("copy-stored-key-button")).toBeNull();
+
+    fireEvent.click(screen.getByTestId("save-key-button"));
 
     await waitFor(() => {
       const put = calls.find(
@@ -1014,19 +1071,62 @@ describe("Key field — masked stored key, one Show, rotate (R59-C)", () => {
     });
   });
 
-  it("Cancel exits the rotate flow with NO key PUT", async () => {
+  it("Escape cancels the edit — the stored display returns, NO key PUT", async () => {
     pool = [{ slot: 0, hasKey: true, masked: "sk-o…b4af" }];
     renderWithProviders(<ModelsProvidersTab />);
 
-    fireEvent.click(await screen.findByTestId("rotate-key-button"));
-    fireEvent.change(screen.getByTestId("rotate-key-input"), {
-      target: { value: "typed-then-cancelled" },
-    });
-    fireEvent.click(screen.getByTestId("rotate-key-cancel"));
+    const masked = await screen.findByTestId("stored-key-masked");
+    fireEvent.change(masked, { target: { value: "typed-then-cancelled" } });
+    fireEvent.keyDown(screen.getByTestId("new-key-input"), { key: "Escape" });
 
     await waitFor(() => expect(screen.getByTestId("stored-key-masked")).toBeTruthy());
-    expect(screen.queryByTestId("rotate-key-input")).toBeNull();
+    expect((screen.getByTestId("stored-key-masked") as HTMLInputElement).value).toBe("sk-o…b4af");
+    expect(screen.queryByTestId("new-key-input")).toBeNull();
+    expect(screen.queryByTestId("save-key-button")).toBeNull();
     expect(calls.every((c) => !(c.method === "PUT" && c.url.endsWith("/key")))).toBe(true);
+  });
+
+  it("the Cancel X button restores the stored display — NO key PUT", async () => {
+    pool = [{ slot: 0, hasKey: true, masked: "sk-o…b4af" }];
+    renderWithProviders(<ModelsProvidersTab />);
+
+    const masked = await screen.findByTestId("stored-key-masked");
+    fireEvent.change(masked, { target: { value: "typed-then-cancelled" } });
+    fireEvent.click(screen.getByTestId("cancel-key-edit-button"));
+
+    await waitFor(() => expect(screen.getByTestId("stored-key-masked")).toBeTruthy());
+    expect((screen.getByTestId("stored-key-masked") as HTMLInputElement).value).toBe("sk-o…b4af");
+    expect(screen.queryByTestId("new-key-input")).toBeNull();
+    expect(calls.every((c) => !(c.method === "PUT" && c.url.endsWith("/key")))).toBe(true);
+  });
+
+  it("no key stored: the field is the plain editable input (new-key-input) with the eye disabled in its slot; paste + Save PUTs", async () => {
+    providersList = [{ ...CUSTOM_PROVIDER, hasKey: false }];
+    renderWithProviders(<ModelsProvidersTab />);
+
+    const input = (await screen.findByTestId("new-key-input")) as HTMLInputElement;
+    expect(input.value).toBe("");
+    expect(input.getAttribute("placeholder")).toBe("sk-…");
+    // The eye is present but disabled (nothing to reveal) — the slot never
+    // moves even for a keyless provider.
+    const eye = screen.getByTestId("show-stored-key-button") as HTMLButtonElement;
+    expect(eye.disabled).toBe(true);
+
+    fireEvent.change(input, { target: { value: "sk-fresh-key" } });
+    fireEvent.click(screen.getByTestId("save-key-button"));
+
+    await waitFor(() => {
+      const put = calls.find(
+        (c) => c.method === "PUT" && c.url.endsWith("/providers/my-gateway/key"),
+      );
+      expect(put).toBeDefined();
+      expect(put?.body).toEqual({ value: "sk-fresh-key" });
+    });
+    // The mock flips hasKey on the saved row — the providers refetch lands
+    // and the field settles to the masked stored view of the new key.
+    await waitFor(() =>
+      expect((screen.getByTestId("stored-key-masked") as HTMLInputElement).value).toBe("sk-fr…-key"),
+    );
   });
 
   it("honestly reports a missing stored key (empty reveal answer)", async () => {
@@ -1124,10 +1224,134 @@ describe("Key reveal (ROUND-58 R58-d)", () => {
   });
 });
 
-/* ── ROUND-58 (R58-d): catalog merge scoping (custom providers) ────────────── */
+/* ── ROUND-60 (R60-B): the models list — CONFIGURED rows only ─────────────── */
 
-describe("Catalog merge scoping (ROUND-58 R58-d)", () => {
-  it("a CUSTOM provider's models list shows ONLY configured rows — the live catalog no longer leaks in, but still feeds the picker", async () => {
+describe("Models list — configured rows only (R60-B)", () => {
+  it("the list shows ONLY configured rows — live catalog entries NEVER render, even when the catalog query returns them; the free/all toggle lives in the picker, not the list", async () => {
+    configured = [modelRow({ modelId: "z-ai/glm-5.2:free", displayName: "Z.ai: GLM 5.2" })];
+    liveCatalog = [
+      { id: "z-ai/glm-5.2:free", name: "Z.ai: GLM 5.2" },
+      { id: "openai/gpt-4o", name: "GPT-4o" },
+      { id: "vendor/other:free", name: "Other" },
+    ];
+    // R59-C: pre-select opens the first provider — no click needed.
+    renderWithProviders(<ModelsProvidersTab />);
+
+    // The count chip shows the CONFIGURED row count only — the two extra
+    // live-catalog entries never merge into the list (the owner: "By
+    // default there should not be the free models or all models there").
+    await waitFor(() => expect(screen.getByTestId("models-count").textContent).toBe("1"));
+    await waitFor(() => expect(screen.getByText("Z.ai: GLM 5.2")).toBeTruthy());
+    // The catalog-only entries appear NOWHERE in the list…
+    expect(screen.queryByText("GPT-4o")).toBeNull();
+    expect(screen.queryByText("Other")).toBeNull();
+    // …and the R50 "catalog" row badge is gone with the merge.
+    expect(screen.queryByText("catalog")).toBeNull();
+    // The list header has NO Free only/All models segmented control anymore
+    // (it moved into the Add-models picker — R60-B directive 3).
+    expect(screen.queryByTestId("picker-free-only-toggle")).toBeNull();
+    expect(screen.queryByRole("button", { name: "All models" })).toBeNull();
+  });
+
+  it("empty state: zero configured rows → the honest 'No models yet' line, even with a healthy live catalog", async () => {
+    configured = [];
+    liveCatalog = [{ id: "openai/gpt-4o", name: "GPT-4o" }];
+    renderWithProviders(<ModelsProvidersTab />);
+
+    await waitFor(() =>
+      expect(
+        screen.getByText("No models yet — use “Add models” to pick from the provider's catalog."),
+      ).toBeTruthy(),
+    );
+    expect(screen.getByTestId("models-count").textContent).toBe("0");
+  });
+
+  it("every configured row — FREE ones included — is fully customizable: FREE badge + pencil + delete render (the shared free-only pref does not filter the LIST)", async () => {
+    // The owner's directive 4: "I told you to give me flexibility on
+    // customizing the models properly, even the free models."
+    configured = [
+      modelRow({
+        id: "mdl_z-ai-glm",
+        modelId: "z-ai/glm-5.2:free",
+        displayName: "Z.ai: GLM 5.2",
+        inputPricePerMtok: 0,
+        outputPricePerMtok: 0,
+      }),
+    ];
+    renderWithProviders(<ModelsProvidersTab />);
+
+    await waitFor(() => expect(screen.getByTestId("models-count").textContent).toBe("1"));
+    await waitFor(() => expect(screen.getByText("Z.ai: GLM 5.2")).toBeTruthy());
+    // The FREE badge rides isFreeModelEntry (id heuristic OR $0 price)…
+    expect(screen.getByText("FREE")).toBeTruthy();
+    // …and the stored row carries the pencil + delete affordances.
+    expect(screen.getByRole("button", { name: "Configure model Z.ai: GLM 5.2" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Delete model Z.ai: GLM 5.2" })).toBeTruthy();
+  });
+});
+
+/* ── ROUND-60 (R60-B): the Add-models picker — Free only ↔ All models ─────── */
+
+describe("Add models picker — Free only ↔ All models toggle (R60-B)", () => {
+  /** Open the first provider's detail pane + the picker dialog. */
+  async function openPicker() {
+    renderWithProviders(<ModelsProvidersTab />);
+    // R59-C: pre-select opens the first provider — no click needed.
+    await waitFor(() => expect(screen.getByLabelText("Test key")).toBeTruthy());
+    fireEvent.click(await screen.findByRole("button", { name: /add models/i }));
+    await waitFor(() => expect(screen.getByRole("dialog", { name: "Add models" })).toBeTruthy());
+  }
+
+  it("defaults to FREE-ONLY (the shared persisted pref): paid rows are hidden until the toggle flips — and the choice lands in the store the chat picker honors", async () => {
+    liveCatalog = [
+      { id: "z-ai/glm-5.2:free", name: "Z.ai: GLM 5.2" },
+      { id: "openai/gpt-4o", name: "GPT-4o" },
+    ];
+    await openPicker();
+
+    const dialog = screen.getByRole("dialog", { name: "Add models" });
+    // Free row visible; the PAID row is filtered by the free-only default.
+    await waitFor(() =>
+      expect(within(dialog).getByLabelText("Select model z-ai/glm-5.2:free")).toBeTruthy(),
+    );
+    expect(within(dialog).queryByLabelText("Select model openai/gpt-4o")).toBeNull();
+    // The segmented toggle lives IN the picker now.
+    expect(within(dialog).getByTestId("picker-free-only-toggle").getAttribute("aria-pressed")).toBe("true");
+    expect(within(dialog).getByTestId("picker-all-models-toggle").getAttribute("aria-pressed")).toBe("false");
+
+    // Flip to All models — the paid row appears.
+    fireEvent.click(within(dialog).getByTestId("picker-all-models-toggle"));
+    await waitFor(() =>
+      expect(within(dialog).getByLabelText("Select model openai/gpt-4o")).toBeTruthy(),
+    );
+    expect(within(dialog).getByTestId("picker-all-models-toggle").getAttribute("aria-pressed")).toBe("true");
+    expect(within(dialog).getByTestId("picker-free-only-toggle").getAttribute("aria-pressed")).toBe("false");
+    // The choice rides the SHARED persisted store (the round-43 design —
+    // the chat composer's model picker honors the same pref).
+    expect(useSettingsStore.getState().modelsFreeOnly).toBe(false);
+
+    // …and flipping back re-hides the paid row.
+    fireEvent.click(within(dialog).getByTestId("picker-free-only-toggle"));
+    await waitFor(() =>
+      expect(within(dialog).queryByLabelText("Select model openai/gpt-4o")).toBeNull(),
+    );
+    expect(useSettingsStore.getState().modelsFreeOnly).toBe(true);
+  });
+
+  it("free-only scope with NO free entries → the honest empty note (not a false 'no match')", async () => {
+    liveCatalog = [{ id: "openai/gpt-4o", name: "GPT-4o" }];
+    await openPicker();
+
+    await waitFor(() =>
+      expect(screen.getByText(/No free models match — switch to “All models”/)).toBeTruthy(),
+    );
+  });
+});
+
+/* ── ROUND-58 (R58-d) → R60-B: the list vs the picker for CUSTOM providers ── */
+
+describe("Models list vs picker for custom providers (R60-B)", () => {
+  it("a CUSTOM provider's models list shows ONLY configured rows; its live catalog still feeds the picker", async () => {
     providersList = [{ ...CUSTOM_PROVIDER }];
     customConfigured = [
       modelRow({
@@ -1141,19 +1365,15 @@ describe("Catalog merge scoping (ROUND-58 R58-d)", () => {
     // R59-C: pre-select opens the (only) provider — no click needed.
     renderWithProviders(<ModelsProvidersTab />);
 
-    // Free-only default: the count chip shows configured rows ONLY (the
-    // live catalog entry did not merge in — "0 free of 1", not 2).
-    await waitFor(() => expect(screen.getByText("0 free of 1")).toBeTruthy());
-    // Switch to All models → the configured row renders…
-    fireEvent.click(screen.getByRole("button", { name: "All models" }));
+    // The count chip shows the configured row ONLY (the live catalog entry
+    // did not merge in — "1", never 2), and the row renders.
+    await waitFor(() => expect(screen.getByTestId("models-count").textContent).toBe("1"));
     await waitFor(() => expect(screen.getByText("GW Model A")).toBeTruthy());
-    // …and the live catalog entry did NOT become a "catalog" row.
+    // The live catalog entry did NOT become a "catalog" row.
     expect(screen.queryByText("catalog")).toBeNull();
-    // Restore the shared free-only default for any test that follows.
-    useSettingsStore.setState({ modelsFreeOnly: true });
 
     // The "Add models" picker still lists the custom provider's OWN live
-    // catalog (the merge scope only affects the list rows).
+    // catalog (the list/picker split is the R60-B design).
     fireEvent.click(screen.getByRole("button", { name: /add models/i }));
     const dialog = await screen.findByRole("dialog", { name: "Add models" });
     await waitFor(() =>

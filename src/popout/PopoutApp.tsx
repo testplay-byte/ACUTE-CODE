@@ -29,6 +29,7 @@ import {
 } from "../lib/native-browser";
 import { popoutShell, type PopoutShellShape } from "./tauri";
 import { normalizeAddressInput } from "./url";
+import { GutterScrollbar } from "./GutterScrollbar";
 import {
   createPopoutTab,
   popoutCurrentUrl,
@@ -60,11 +61,15 @@ import {
  *     field falls back to the live URL), a Go affordance, and an
  *     "Open in system browser" button (the Rust open_external_url command —
  *     window.open is swallowed inside WebView2);
- *   - content: a placeholder <div> whose rectangle the child webview is
- *     positioned over (browser_tab_set_bounds — logical px == CSS px because
- *     this app webview fills the window) via a ResizeObserver; the boot flow
- *     reads the stashed initial URL (popout_initial_url) and creates the
- *     webview in THIS window (browser_tab_create with our window label).
+ *   - content: a ROUNDED CARD (R60-A — the owner: "the thing which was not
+ *     rounded off was the actual view") containing a placeholder <div> whose
+ *     rectangle the child webview is positioned over (browser_tab_set_bounds
+ *     — logical px == CSS px because this app webview fills the window) via a
+ *     ResizeObserver; the boot flow reads the stashed initial URL
+ *     (popout_initial_url) and creates the webview in THIS window
+ *     (browser_tab_create with our window label); and the GUTTER scrollbar
+ *     (GutterScrollbar) in the window frame's right gutter, OUTSIDE the card,
+ *     driving the page's scroll through browser_tab_scroll_state/to.
  *
  * Web mode (no __TAURI__): the honest "needs the desktop app" notice — this
  * page has no shell to draw window controls or host a webview.
@@ -537,31 +542,65 @@ export function PopoutApp() {
         </div>
       ) : null}
 
-      {/* The content area — the placeholder whose rectangle the child webview
-          covers. m-1.5 keeps the card's rounded corners honest: the webview
-          is a native SQUARE, so without a margin its corners would overlap
-          the corner curve. Nothing interactive renders here — the webview
-          floats above it. */}
-      <div
-        ref={placeholderRef}
-        data-testid="popout-content"
-        className="relative m-1.5 min-h-0 flex-1"
-        style={{ background: styles.isDark ? "rgba(0,0,0,0.22)" : styles.subtle }}
-      >
-        {booting ? (
-          <div className="absolute inset-0 grid place-items-center" data-testid="popout-booting">
-            <LoaderCircle size={20} className="animate-spin" style={{ color: styles.accent }} aria-hidden />
+      {/* The content ROW — R60-A: the rounded CONTENT CARD + the GUTTER
+          column. The card is the visible frame whose rounded corners +
+          border read as the VIEW's rounding (the owner's "It should be a bit
+          more rounded, actually like the actual web pages and such, on the
+          corners"), and the gutter scrollbar lives OUTSIDE the card in the
+          window frame area (the owner's "not inside the section but on the
+          right side outside it"). */}
+      <div className="m-1.5 flex min-h-0 flex-1 gap-2">
+        {/* The content card — the title-bar/URL-bar card language applied to
+            the view itself. The webview is a native SQUARE floating above;
+            the placeholder is inset 4px so the square's corners stay inside
+            the card's 14px corner curve (the R59 m-1.5 honesty math, now
+            with a real visible border), and the card's background shows
+            through as the frame around the page. Nothing interactive renders
+            here — the webview floats above it. */}
+        <div
+          className="relative min-h-0 flex-1 rounded-[14px] border-[1.5px]"
+          style={{
+            background: styles.isDark ? "rgba(0,0,0,0.22)" : styles.subtle,
+            borderColor: "var(--ac-border-subtle)",
+          }}
+        >
+          {/* The placeholder whose rectangle the child webview covers —
+              inset 4px from the card's inner edge (p-[4px] equivalent via
+              absolute inset). */}
+          <div
+            ref={placeholderRef}
+            data-testid="popout-content"
+            className="absolute inset-[4px]"
+          >
+            {booting ? (
+              <div
+                className="absolute inset-0 grid place-items-center"
+                data-testid="popout-booting"
+              >
+                <LoaderCircle
+                  size={20}
+                  className="animate-spin"
+                  style={{ color: styles.accent }}
+                  aria-hidden
+                />
+              </div>
+            ) : currentUrl === null ? (
+              <div className="absolute inset-0 grid place-items-center px-6 text-center">
+                <div>
+                  <Globe size={26} className="mx-auto mb-2" style={{ color: styles.accent }} aria-hidden />
+                  <p className="text-xs" style={{ color: styles.textSecondary }}>
+                    Enter an address above to start browsing — the first Go creates the page.
+                  </p>
+                </div>
+              </div>
+            ) : null}
           </div>
-        ) : currentUrl === null ? (
-          <div className="absolute inset-0 grid place-items-center px-6 text-center">
-            <div>
-              <Globe size={26} className="mx-auto mb-2" style={{ color: styles.accent }} aria-hidden />
-              <p className="text-xs" style={{ color: styles.textSecondary }}>
-                Enter an address above to start browsing — the first Go creates the page.
-              </p>
-            </div>
-          </div>
-        ) : null}
+        </div>
+
+        {/* The gutter scrollbar — the window's own themed scrollbar in the
+            frame's right gutter (GutterScrollbar owns its honesty: hidden
+            until the page overflows and our CSS actually took). */}
+        <GutterScrollbar tabId={POPOUT_TAB_ID} />
       </div>
     </div>
   );

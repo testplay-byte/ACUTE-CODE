@@ -1,4 +1,4 @@
-<!-- last-reviewed: 2026-09-01 round-59 -->
+<!-- last-reviewed: 2026-09-01 round-60 -->
 # Changelog
 
 All notable changes to ACUTE-CODE are documented here. Entries are written for
@@ -15,6 +15,78 @@ Planned next: installer code-signing (SmartScreen), ratings-driven prompt
 tuning, the deepseek-harness future candidates (compaction
 pressure-trigger, continuable sub-agent children), the Files-tab polish,
 agent web-app-testing tools.
+
+## [0.60.0] - 2026-09-01
+
+Round 60 — the second owner-feedback round on the design language. The
+thirteenth Windows test session confirmed the rounded window PERFECT ("keep
+it as a part of our design language") and the pop-out browser satisfying;
+its polish list became this release.
+
+### Added
+
+- **The pop-out view is rounded** ("the thing which was not rounded off was
+  the actual view"): the page content now sits in a rounded, bordered card
+  matching the title bar and URL bar — the same design language, applied to
+  the browser view itself.
+- **The pop-out gutter scrollbar** ("The scroll bar should be custom themed
+  on every single page. It should not show inside the section but on the
+  right side outside it"): the pop-out window now paints its OWN scrollbar
+  in the frame's right gutter, OUTSIDE the content card — a floating pill
+  you can drag, click-to-jump, and drive from the keyboard, tracking every
+  page in the window. Pages get a themed minimal scrollbar everywhere
+  (injected at document start, before first paint); on strict-CSP sites
+  that block the styling, the page keeps its own scrollbar and ours stays
+  away — never two bars at once.
+- **Real zoom in the embedded browser panel**: the zoom select now performs
+  an actual DPI-level page zoom (the same engine zoom as a browser's
+  Ctrl+/−) — media queries and responsive layouts re-evaluate, which is
+  what display-size testing needs. Previously zoom silently did nothing
+  in native mode.
+- **The Add-models picker's "Free only ↔ All models" toggle** for
+  OpenRouter: pick from the free catalog or the full one (persisted — the
+  chat model picker honors the same choice).
+- **Rating-note visibility**: a saved "what went wrong" note now shows a
+  small "noted" chip on the reply; clicking it reopens the editor with the
+  note pre-filled, and re-rating a saved bad reply pre-fills the editor
+  too (editing context instead of losing it).
+
+### Changed
+
+- **Models list starts EMPTY** ("By default none of the models should be
+  added there"): the Models & Providers list shows only models YOU added
+  via "Add models" — no catalog listing, no pre-populated rows. Every
+  added model (including free ones) is fully configurable (pricing,
+  context window, output limits, thinking, visibility).
+- **The API-key field is one consistent row**: the Show/Hide eye button
+  sits in the exact same place in every state; Copy appears with a smooth
+  fade only when the key is revealed; the "Rotate key" flow is GONE —
+  click into the field, paste a new key, Save (Escape cancels back to the
+  stored display).
+- **The title bar's logo + app name is now the sidebar toggle**: clicking
+  it hides the left sidebar entirely (the content takes the full width);
+  clicking again brings it back. The sidebar's own logo and its collapse
+  button are gone — the sidebar is either fully visible or fully absent,
+  and it now stays visible on chat screens too until you hide it.
+- **Settings lost their side padding**: the content area fills the width
+  (the Models & Providers master-detail edge-to-edge) and the horizontal
+  padding is minimized throughout.
+- **The browser panel's viewport toolbar** was restructured: a clean
+  rounded card with two labeled groups (size: preset/width×height/zoom;
+  view: rotate/fit), wrapping gracefully at narrow panel widths, with the
+  live size readout. "Fit" is honestly disabled in native mode (sizes are
+  already clamped to the panel there) instead of silently doing nothing.
+
+### Fixed
+
+- **The new-tab menu no longer hides behind the browser preview**: opening
+  the right-sidebar "+" menu while a browser tab is active now yields the
+  page to the menu (the native webview steps aside and comes back when the
+  menu closes — the browsing session is never lost).
+- **Scrolling no longer shifts the providers list's width**: the scrollbar
+  gutter is permanently reserved (stable), so the list (and every
+  auto-scrolling panel) keeps its exact width whether or not a scrollbar
+  is visible.
 
 ## [0.59.0] - 2026-09-01
 

@@ -7,6 +7,7 @@ import { ProjectView } from "../projects/ProjectView";
 import { getFixtureProjects } from "../../lib/project-fixtures";
 import { getFixtureSessions } from "../../lib/session-fixtures";
 import { useActiveStreams } from "../../lib/active-streams";
+import { useProjectChatStore } from "../../lib/project-chat-store";
 import type { Session } from "../../lib/api";
 import { renderWithProviders, resetTestState } from "../../test-utils";
 
@@ -117,51 +118,77 @@ describe("Sidebar projects section (fixture ProjectsBackend)", () => {
     expect(screen.queryByText("Agents")).toBeNull();
   });
 
-  it("collapsed rail marks the selected project with an INSET ring at the same 36px size (R48-a)", async () => {
-    const [project] = await getFixtureProjects().list();
-    // Force the collapsed rail (the flag is read on mount).
-    localStorage.setItem("acute-code.sidebar.collapsed", "1");
-    const { container } = renderWithProviders(
+  it("R60-C: no collapse button, no collapsed rail, no header logo — the panel is expanded-only", () => {
+    renderWithProviders(
+      <>
+        <Sidebar />
+        <Routes>
+          <Route path="/" element={<div>dashboard stub</div>} />
+        </Routes>
+      </>,
+    );
+    // The collapse/expand affordances are GONE (owner: no collapse button at
+    // all — the title-bar identity control is the only toggle left).
+    expect(screen.queryByRole("button", { name: /collapse sidebar/i, hidden: true })).toBeNull();
+    expect(screen.queryByRole("button", { name: /expand sidebar/i, hidden: true })).toBeNull();
+    // The 64px rail (with its own tiles + Add button) is gone entirely.
+    expect(document.querySelector('[data-testid="collapsed-project-rail"]')).toBeNull();
+    // The header-row Acute logo is gone; the only logo left is the MOBILE
+    // drawer trigger, which stays by design (mobile has no title bar).
+    expect(screen.getByRole("button", { name: "Acute — open menu", hidden: true })).toBeTruthy();
+    expect(
+      screen.queryByRole("button", { name: /Acute — (collapse|expand|hide|back)/i, hidden: true }),
+    ).toBeNull();
+    // And the collapsed pref is no longer persisted on mount.
+    expect(localStorage.getItem("acute-code.sidebar.collapsed")).toBeNull();
+  });
+
+  it("R60-C: settings mode keeps the back button + Settings title header", () => {
+    renderWithProviders(
+      <>
+        <Sidebar />
+        <Routes>
+          <Route path="/settings" element={<div>settings stub</div>} />
+        </Routes>
+      </>,
+      { route: "/settings?tab=appearance" },
+    );
+    expect(screen.getByRole("button", { name: "Back to dashboard", hidden: true })).toBeTruthy();
+    expect(screen.getByText("Settings")).toBeTruthy();
+    // The settings sections replace the normal navigation.
+    expect(screen.getByRole("button", { name: /appearance/i, hidden: true })).toBeTruthy();
+    expect(screen.queryByText("Navigation")).toBeNull();
+  });
+
+  it("R60-C: normal mode has no header row — the nav starts at the panel's top", () => {
+    renderWithProviders(
+      <>
+        <Sidebar />
+        <Routes>
+          <Route path="/" element={<div>dashboard stub</div>} />
+        </Routes>
+      </>,
+    );
+    expect(screen.queryByRole("button", { name: "Back to dashboard", hidden: true })).toBeNull();
+    expect(screen.getByText("Navigation")).toBeTruthy();
+  });
+
+  it("R60-C: the sidebar renders on chat routes regardless of appSidebarVisible (AppShell owns the mount)", () => {
+    // The store flag no longer early-returns inside Sidebar — AppShell's
+    // showSidebar gate (the title-bar toggle's state) mounts/unmounts the
+    // whole component instead.
+    useProjectChatStore.setState({ appSidebarVisible: false });
+    renderWithProviders(
       <>
         <Sidebar />
         <Routes>
           <Route path="/project/:id/chat" element={<div>chat stub</div>} />
         </Routes>
       </>,
-      { route: `/project/${project.id}/chat` },
+      { route: "/project/prj_x/chat" },
     );
-
-    // The rail exists, scrolls, and pads top/bottom — long project lists are
-    // no longer cut off and the first tile is not clipped.
-    const rail = await waitFor(() => {
-      const el = container.querySelector<HTMLElement>('[data-testid="collapsed-project-rail"]');
-      expect(el).toBeTruthy();
-      return el as HTMLElement;
-    });
-    expect(rail.className).toContain("overflow-y-auto");
-    expect(rail.className).toContain("pt-2");
-
-    // Wait for the fixture projects to land before reading the tiles.
-    const activeButton = await waitFor(() => {
-      const el = container.querySelector<HTMLElement>('[data-active="true"]');
-      expect(el).toBeTruthy();
-      return el as HTMLElement;
-    });
-    const idleButton = container.querySelector<HTMLElement>('[data-active="false"]');
-    expect(idleButton).toBeTruthy();
-    // NO outside outline — it made the selected tile look bigger and clipped
-    // against the overflow-hidden wrapper (the owner's bug report).
-    expect(activeButton?.style.outline).toBe("");
-    // Both tiles are exactly 36px: selection lives in an INSET ring painted
-    // INSIDE the tile, never outside it.
-    const activeTile = activeButton?.querySelector<HTMLElement>('span[aria-hidden="true"]');
-    const idleTile = idleButton?.querySelector<HTMLElement>('span[aria-hidden="true"]');
-    expect(activeTile?.style.width).toBe("36px");
-    expect(activeTile?.style.height).toBe("36px");
-    expect(idleTile?.style.width).toBe("36px");
-    expect(idleTile?.style.height).toBe("36px");
-    expect(activeTile?.style.boxShadow).toContain("inset 0 0 0 2px");
-    expect(idleTile?.style.boxShadow).not.toContain("inset 0 0 0 2px");
+    expect(screen.getByRole("button", { name: /^dashboard$/i, hidden: true })).toBeTruthy();
+    expect(screen.getByText("Navigation")).toBeTruthy();
   });
 
   it("ProjectView shows a not-found state for an unknown id", async () => {

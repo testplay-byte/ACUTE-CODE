@@ -3,8 +3,8 @@
   "product": {
     "name": "Acute",
     "tagline": "Local-first multi-agent engineering workbench",
-    "version": "0.59.0",
-    "availability": "Private build — not yet distributed",
+    "version": "0.60.0",
+    "availability": "Private build \u2014 not yet distributed",
     "chips": [
       "Windows desktop",
       "Tauri 2",
@@ -34,33 +34,33 @@
       "title": "Automation",
       "state": "planned",
       "progress": 10,
-      "summary": "Scheduling & workflow pillar — researched, additive plan ready"
+      "summary": "Scheduling & workflow pillar \u2014 researched, additive plan ready"
     }
   ],
   "milestones": [
     {
       "date": "2026-08-21",
-      "label": "Phase 0 — SPEC approved"
+      "label": "Phase 0 \u2014 SPEC approved"
     },
     {
       "date": "2026-08-22",
-      "label": "Phase 1 — architecture skeleton + CI green"
+      "label": "Phase 1 \u2014 architecture skeleton + CI green"
     },
     {
       "date": "2026-08-22",
-      "label": "Phase 2 — first live agent conversation"
+      "label": "Phase 2 \u2014 first live agent conversation"
     },
     {
       "date": "2026-08-22",
-      "label": "Setup wizard — owner-approved screen by screen"
+      "label": "Setup wizard \u2014 owner-approved screen by screen"
     },
     {
       "date": "2026-08-22",
-      "label": "Shell redo — Settings hub, honest connection test"
+      "label": "Shell redo \u2014 Settings hub, honest connection test"
     },
     {
       "date": "2026-08-23",
-      "label": "Agentic MVP — projects, sandboxed tools, live-proven file writes"
+      "label": "Agentic MVP \u2014 projects, sandboxed tools, live-proven file writes"
     },
     {
       "date": "2026-08-23",
@@ -80,66 +80,70 @@
     },
     {
       "date": "2026-08-23",
-      "label": "Governance round — blueprints, ADR backfill, workflow, this dashboard"
+      "label": "Governance round \u2014 blueprints, ADR backfill, workflow, this dashboard"
     },
     {
       "date": "2026-08-24",
-      "label": "Round 27 — web tools (web_fetch + web_search) + critical deps-wiring fix (todos + checkpoints now live) + demo project built by the agent"
+      "label": "Round 27 \u2014 web tools (web_fetch + web_search) + critical deps-wiring fix (todos + checkpoints now live) + demo project built by the agent"
     },
     {
       "date": "2026-08-24",
-      "label": "Round 28 — sandbox restore + master plan (1123L, 13 workstreams A-M, 5 milestones, 6 sub-agent reviews)"
+      "label": "Round 28 \u2014 sandbox restore + master plan (1123L, 13 workstreams A-M, 5 milestones, 6 sub-agent reviews)"
     },
     {
       "date": "2026-08-24",
-      "label": "Round 28 — UX + agentic-quality overhaul (5 milestones delivered)"
+      "label": "Round 28 \u2014 UX + agentic-quality overhaul (5 milestones delivered)"
     },
     {
-      "label": "Round 30 — Windows bug fixes (CORS streaming + sessions) + sidebar/chat redesign"
-    },
-    {
-      "date": "2026-08-24",
-      "label": "Round 32 — owner-designed UI: floating panels + activity block"
+      "label": "Round 30 \u2014 Windows bug fixes (CORS streaming + sessions) + sidebar/chat redesign"
     },
     {
       "date": "2026-08-24",
-      "label": "Round 33 — hello-loop fix + sidebar/logo system + headerless chat"
+      "label": "Round 32 \u2014 owner-designed UI: floating panels + activity block"
     },
     {
       "date": "2026-08-24",
-      "label": "Round 34 — multi-step tool feedback + settings redesign"
+      "label": "Round 33 \u2014 hello-loop fix + sidebar/logo system + headerless chat"
+    },
+    {
+      "date": "2026-08-24",
+      "label": "Round 34 \u2014 multi-step tool feedback + settings redesign"
     },
     {
       "date": "2026-08-25",
-      "label": "Round 35 — thinking + interleaved tool calls"
+      "label": "Round 35 \u2014 thinking + interleaved tool calls"
     },
     {
       "date": "2026-08-25",
-      "label": "Round 36 — sub-agent orchestration (Phase 3 core)"
+      "label": "Round 36 \u2014 sub-agent orchestration (Phase 3 core)"
     },
     {
       "date": "2026-08-31",
-      "label": "Round 55 — the engine-boot round (EISDIR + Credential-Manager namespace root causes)"
+      "label": "Round 55 \u2014 the engine-boot round (EISDIR + Credential-Manager namespace root causes)"
     },
     {
       "date": "2026-08-31",
-      "label": "Round 56 — the launch-choice round (app-or-site question + engine-failure recourse + immediate self-update)"
+      "label": "Round 56 \u2014 the launch-choice round (app-or-site question + engine-failure recourse + immediate self-update)"
     },
     {
       "date": "2026-08-31",
-      "label": "Round 57 — the engine-bundling round (the 189-junction link farm behind ERR_MODULE_NOT_FOUND; hoisted staging + zero-links gate + the Windows pre-pack boot gate)"
+      "label": "Round 57 \u2014 the engine-bundling round (the 189-junction link farm behind ERR_MODULE_NOT_FOUND; hoisted staging + zero-links gate + the Windows pre-pack boot gate)"
     },
     {
       "date": "2026-08-31",
-      "label": "Round 58 — the desktop-polish round (the first fully-working Windows session; the frameless title bar, the stop/continue/live-write/engine-capping fixes, the settings restructure with visible keys, and the CLI chat harness)"
+      "label": "Round 58 \u2014 the desktop-polish round (the first fully-working Windows session; the frameless title bar, the stop/continue/live-write/engine-capping fixes, the settings restructure with visible keys, and the CLI chat harness)"
     },
     {
       "date": "2026-08-31",
-      "label": "Round 58 — the desktop-polish round (the first fully-working Windows session; frameless title bar, honest stops + Continue, live file-write preview, session-replay capping, settings restructure with visible keys, the CLI chat harness)"
+      "label": "Round 58 \u2014 the desktop-polish round (the first fully-working Windows session; frameless title bar, honest stops + Continue, live file-write preview, session-replay capping, settings restructure with visible keys, the CLI chat harness)"
     },
     {
       "date": "2026-09-01",
-      "label": "R59 — owner-feedback round: rounded window + pill scrollbars, pop-out custom chrome, settings honesty, response ratings with full-context capture, diagnostics console, prompt-section registry (1302 tests)"
+      "label": "R59 \u2014 owner-feedback round: rounded window + pill scrollbars, pop-out custom chrome, settings honesty, response ratings with full-context capture, diagnostics console, prompt-section registry (1302 tests)"
+    },
+    {
+      "date": "2026-09-02",
+      "label": "R60 \u2014 second owner-feedback polish round: pop-out rounded view + gutter scrollbar (eval_with_callback channel), settings deep-clean (consistent key field, empty-by-default models + picker Free/All toggle, padding + scroll-reflow fix), title-bar sidebar toggle, browser-panel fixes (popover z-index, real DPI zoom) (1348 tests)"
     }
   ],
   "quality": {
@@ -147,7 +151,7 @@
     "suites": [
       {
         "name": "frontend",
-        "tests": 601
+        "tests": 647
       },
       {
         "name": "agent-core",
@@ -172,29 +176,29 @@
   ],
   "plan": {
     "current": {
-      "title": "Round 58 DELIVERED — the desktop-polish round (first fully-working Windows session)",
-      "detail": "The owner's eleventh Windows test session: 'This time the application works properly. The app opens up without any errors or any issues at all.' — the R57 engine-bundling fix held, and the session's defect list became this round: the native title bar is gone (a 40px integrated title bar with drag + min/max/close), the pop-out browser window is no longer a white box (async creation + initialization-script overlay), 'open in system browser' works, the URL bar survives typing, viewport readouts are honest, stops render a quiet 'Stopped by user' card (no more generation-failed/body-stream-aborted), the session status resets (no eternal sidebar spinner), the partial reply persists and a Continue button resumes it, tool arguments stream live so files show a 'writing <file>' preview DURING generation, history replay caps stale tool output (the end-of-task session regurgitation), the thinking blocks lost their AI-glow rails, the context popover waits 600ms for hover intent, Settings/Models-Providers/Sub-agents/Advanced were restructured (unconfigured presets grouped, preset fields hidden, proper disable toggle, content-sized provider list, single sub-agent home), every API key is revealable with a click, and the CLI chat harness drives whole sessions from the terminal. Verification: 1169 + 631 tests green, lint/typecheck clean, docs:check 149/0, LIVE battery 5/5 (the owner's exact 3-file task with live tool-input frames, stop → queued + persisted partial, continue completes, reveal route) — scripts/battery-r58.mjs is the permanent artifact."
+      "title": "Round 60 DELIVERED \u2014 the second owner-feedback polish round (0.60.0)",
+      "detail": "The owner's thirteenth Windows test session confirmed the rounded window PERFECT ('It looks way too good, even better than what I imagined it to be or hoped for it to be\u2026 keep it as a part of our design language') and the pop-out browser satisfying ('fully satisfied\u2026 the same clean beautiful UI which I wanted'); the session's polish list became this round: the pop-out VIEW is rounded (a bordered card in the design language), the pop-out scrollbar moved OUTSIDE the content card (the window's own gutter scrollbar \u2014 drag/click/keyboard, driven by the new browser_tab_scroll_state/scroll_to/set_zoom Tauri commands via eval_with_callback; themed pill CSS injected at document start on every page, honest single-scrollbar fallback on CSP-strict sites), the API-key field is one consistent row (same-slot eye, smooth Copy, Rotate deleted \u2014 paste-to-replace), the models list starts EMPTY with the Free/All toggle in the Add-models picker, settings padding stripped + the scroll-reflow width-shift fixed (stable scrollbar gutter), the sidebar's logo + collapse button deleted in favor of the TITLE-BAR identity toggle (global visibility, chat routes included), the new-tab popover renders ABOVE the browser preview (webview yields via popover-webview-guard), and the browser panel's zoom actually zooms (real DPI zoom \u2014 the R50 approximation deleted). Verification: 1348/1348 tests in 91 files, lint/typecheck clean, LIVE agent-browser battery (empty models default, picker free-only default, add/delete model round-trip, key reveal/hide/paste-cancel with zero PUTs, stable scrollbar styles, full-width settings, sidebar toggle on dashboard + chat, popout.html 200, zero console errors); Rust doc-verified against tauri 2.11.5 with CI cargo check as the compile gate."
     },
     "upcoming": [
       {
         "phase": "Owner generates composer/model/context demos (AI-DESIGN-PROMPT-2.md)",
         "status": "awaiting-owner",
-        "note": "Design prompt 2 delivered; implementation follows the owner’s picked design"
+        "note": "Design prompt 2 delivered; implementation follows the owner\u2019s picked design"
       },
       {
         "phase": "Owner re-test on Windows (ACUTE.bat)",
         "status": "awaiting-verdict",
-        "note": "Round 32 targeted the owner’s UI complaints"
+        "note": "Round 32 targeted the owner\u2019s UI complaints"
       },
       {
-        "phase": "Phase 3 — Orchestration engine",
+        "phase": "Phase 3 \u2014 Orchestration engine",
         "status": "owner-gated",
-        "note": "Multi-agent delegation, approval engine, push channel — blueprint ready in PILLARS.md"
+        "note": "Multi-agent delegation, approval engine, push channel \u2014 blueprint ready in PILLARS.md"
       },
       {
         "phase": "Automation pillar",
         "status": "planned",
-        "note": "Workflows, scheduling, visual canvas — n8n-class, additive on the agent runtime"
+        "note": "Workflows, scheduling, visual canvas \u2014 n8n-class, additive on the agent runtime"
       },
       {
         "phase": "Packaging & distribution",
@@ -203,9 +207,9 @@
       }
     ],
     "principles": [
-      "Local-first — all processing on-device",
-      "Additive architecture — no pillar ever forces a rewrite",
-      "Quality over speed — every round verified before push"
+      "Local-first \u2014 all processing on-device",
+      "Additive architecture \u2014 no pillar ever forces a rewrite",
+      "Quality over speed \u2014 every round verified before push"
     ]
   },
   "round": 57

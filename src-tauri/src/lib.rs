@@ -58,7 +58,14 @@ pub fn run() {
             browser::browser_tab_go,
             browser::browser_tab_url,
             browser::browser_tab_close,
-            browser::browser_tabs_close_all
+            browser::browser_tabs_close_all,
+            // ROUND-60 (R60): the pop-out gutter scrollbar's data + control
+            // channel (eval_with_callback reads the page's scroller geometry
+            // back out without injecting IPC into external pages), and the
+            // REAL DPI zoom for the panel's viewport testing.
+            browser::browser_tab_scroll_state,
+            browser::browser_tab_scroll_to,
+            browser::browser_tab_set_zoom
         ])
         .build(tauri::generate_context!())
         .expect("error while running the tauri application")

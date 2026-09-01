@@ -525,16 +525,31 @@
   .ac-ellipsis::after { animation: none !important; content: "..." !important; }
 }
 
+/* ROUND-60 (R60-B) — the stable-gutter fix. The owner: "when I scrolled it
+   showed me the left side bar scroll menu and the whole section shrank a
+   little bit in its width. As I stopped scrolling it increased in its width
+   again." Root cause: the old rules toggled scrollbar-width none ↔ thin
+   with useScrollFade's .scrolling class, so the scrollbar's LAYOUT SPACE
+   appeared/disappeared mid-scroll — a width reflow on every scroll
+   start/stop. Fix: the gutter is reserved PERMANENTLY (scrollbar-width:
+   thin + scrollbar-gutter: stable on every .auto-scroll); only the THUMB
+   is transparent while at rest, tinted by scrollbar-color once .scrolling
+   arrives. Engine semantics: Firefox honors scrollbar-width/scrollbar-color
+   directly; Chromium 121+ also honors them and then IGNORES the custom
+   ::-webkit-scrollbar pseudo rules below (fine — the thumb color comes
+   from scrollbar-color there); older WebKit engines without scrollbar-width
+   support fall back to the pill rules below, which already keep the thumb
+   transparent until .scrolling. The 20% tint matches across engines. */
 .auto-scroll {
-  scrollbar-width: none;
+  scrollbar-width: thin;
+  scrollbar-color: transparent transparent;
+  scrollbar-gutter: stable;
 }
 .auto-scroll.scrolling {
-  scrollbar-width: thin;
-  scrollbar-color: color-mix(in srgb, var(--ac-text) 18%, transparent) transparent;
+  scrollbar-color: color-mix(in srgb, var(--ac-text) 20%, transparent) transparent;
 }
-/* R59-A: the scroll-fade gutter joins the app-wide floating-pill language —
-   hidden until .scrolling (useScrollFade), then a rounded inset pill that
-   fades in over 0.4s, never a hard rail. */
+/* Legacy engines (no scrollbar-width support): the R59-A webkit pill —
+   transparent thumb until .scrolling, then the same 20% tint. */
 .auto-scroll::-webkit-scrollbar {
   width: 10px;
   height: 10px;
@@ -547,7 +562,7 @@
   transition: background 0.4s ease;
 }
 .auto-scroll.scrolling::-webkit-scrollbar-thumb {
-  background: color-mix(in srgb, var(--ac-text) 18%, transparent);
+  background: color-mix(in srgb, var(--ac-text) 20%, transparent);
   background-clip: padding-box;
 }
 .auto-scroll::-webkit-scrollbar-track {

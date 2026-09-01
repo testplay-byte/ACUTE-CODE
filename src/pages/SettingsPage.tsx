@@ -47,7 +47,11 @@ export function SettingsPage() {
 
   return (
     <div className="flex h-full flex-col">
-      <div className="shrink-0 border-b-[1.5px] px-5 md:px-8 py-4" style={{ borderColor: styles.border }}>
+      {/* ROUND-60 (R60-B): the owner's padding directive — "All of the
+          settings have a lot of extra unnecessary padding on the right and
+          left sides… minimize the padding as much as possible." The header
+          strip drops to px-4/px-6. */}
+      <div className="shrink-0 border-b-[1.5px] px-4 md:px-6 py-4" style={{ borderColor: styles.border }}>
         <p
           className="text-[11px] font-bold uppercase tracking-[0.18em] mb-1"
           style={{ color: styles.textTertiary }}
@@ -63,12 +67,16 @@ export function SettingsPage() {
           room); the appearance page constrains itself internally.
           ROUND-50 (R50-d): for Models & Providers the content area LOCKS to
           the viewport (overflow-hidden, no page scroll) — the tab's provider
-          list and detail pane each scroll INDEPENDENTLY (owner directive). */}
+          list and detail pane each scroll INDEPENDENTLY (owner directive).
+          ROUND-60 (R60-B): the padding is minimal (px-4/px-6, py-4) and the
+          Models & Providers tab fills the FULL available width — no max-w
+          cap, no mx-auto centering (the master-detail owns every pixel);
+          the form tabs keep a tighter max-w-4xl for readable lines. */}
       <div
         className={
           tab === "api"
-            ? "flex min-h-0 flex-1 flex-col overflow-hidden px-5 md:px-8 py-5 mx-auto w-full max-w-5xl"
-            : "min-h-0 flex-1 overflow-y-auto px-5 md:px-8 py-5 mx-auto w-full max-w-5xl"
+            ? "flex min-h-0 flex-1 flex-col overflow-hidden px-4 md:px-6 py-4 w-full"
+            : "min-h-0 flex-1 overflow-y-auto px-4 md:px-6 py-4 mx-auto w-full max-w-4xl"
         }
       >
         {/* ROUND-35 (owner: "above the appearance but below the top heading"):

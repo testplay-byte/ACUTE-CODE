@@ -65,8 +65,13 @@ export interface ProjectChatState {
   selectedAgentId: string | null;
   /** Per-project local to-do lists (no backend task events yet — Phase 3). */
   todos: Record<string, TodoItem[]>;
-  /** Round-15 (owner): on the chat screen the APP sidebar is HIDDEN; the
-   * TopBar hamburger toggles it. Transient — never persisted. */
+  /** R60-C (owner): GLOBAL app-sidebar visibility — one control for every
+   * route (chat routes included; the round-15/round-32 chat-route scoping is
+   * gone). true = the left panel renders everywhere; false = the whole panel
+   * is absent and the main content takes the full width (on chat routes that
+   * is the extra chat width). Flipped by the TITLE BAR's identity control in
+   * Tauri, the floating Acute logo in browser dev mode. Transient — never
+   * persisted. */
   appSidebarVisible: boolean;
   /** Round-28 (WS-D1, owner R28 directive): when true the chat screen shows
    * ONLY the chat (left/center-left aligned, maxWidth, no Explorer/Code
@@ -129,9 +134,9 @@ export const useProjectChatStore = create<ProjectChatState>()(
       freeformPanels: DEFAULT_FREEFORM_PANELS,
       selectedAgentId: null,
       todos: {},
-      // Round-32: defaults TRUE — the owner-approved design (Acute-Ui-Screens
-      // Frame 5) shows the floating sidebar beside the chat window; hiding it
-      // by default on chat routes was the old top-bar era behavior.
+      // R60-C: defaults TRUE — the sidebar is visible on EVERY route (the
+      // owner's title-bar identity click is the one and only control that
+      // hides it; the old chat-route auto-hide is gone).
       appSidebarVisible: true,
       chatFocusMode: true,
       // ROUND-38: per-project scoped-state cache (activeProjectId + the

@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { Copy, Minus, Square, X } from "lucide-react";
 import { isTauri } from "../../lib/sidecar";
+import { useProjectChatStore } from "../../lib/project-chat-store";
 import { APP_NAME } from "../../lib/version";
 import { AcuteLogo } from "./Sidebar";
 
@@ -19,14 +20,21 @@ import { AcuteLogo } from "./Sidebar";
  *     no JS here; the attribute is repeated on the non-interactive children
  *     because it only fires on the element that carries it, which is also
  *     why the buttons below work naturally);
- *   - left: the Acute cat-face mark + the product name (quiet chrome);
+ *   - left: the Acute cat-face mark + the product name — R60-C (owner): this
+ *     identity block is now THE SIDEBAR TOGGLE. Click hides the whole left
+ *     panel (the main content takes the full width), click again shows it.
+ *     It renders as a real <button> that deliberately carries NO drag-region
+ *     attribute (a drag region swallows clicks — the same reason the window
+ *     controls work), and the AcuteLogo inside renders its NON-interactive
+ *     span variant so no interactive element nests inside the button;
  *   - right: full-height window controls (minimize / maximize-restore /
  *     close) over the global Tauri window API.
  *
  * Renders null in web mode — `isTauri()` from sidecar.ts is the single
  * source of truth for shell detection, so browser dev and the vitest suite
  * see the exact pre-R58 layout (the App root's flex column degenerates to
- * one full-height child).
+ * one full-height child). Web mode keeps the AppShell's floating Acute logo
+ * as the show-sidebar fallback — there is no title bar to click there.
  */
 
 /** `__TAURI__.window.getCurrentWindow()` — the webview's own OS window. */
@@ -76,6 +84,12 @@ export function TitleBar() {
   // __TAURI__ can never appear mid-session (the shell injects it before the
   // bundle evaluates).
   const [maximized, setMaximized] = useState(false);
+  // R60-C: the identity control's state — the GLOBAL app-sidebar visibility
+  // (project-chat-store, default true). The zustand hooks are shell-
+  // independent: they subscribe fine in web mode too (the early return
+  // below only skips the RENDER; the store subscription itself is inert).
+  const appSidebarVisible = useProjectChatStore((s) => s.appSidebarVisible);
+  const setAppSidebarVisible = useProjectChatStore((s) => s.setAppSidebarVisible);
 
   useEffect(() => {
     const shell = tauriGlobal();
@@ -140,19 +154,32 @@ export function TitleBar() {
         borderColor: "var(--ac-border-subtle)",
       }}
     >
-      {/* App identity — the Acute mark + product name. The drag-region
-          attribute repeats on the wrapper and the label because Tauri only
-          starts a drag when the mousedown TARGET itself carries it. */}
-      <div data-tauri-drag-region className="flex items-center gap-2.5 pl-3.5">
+      {/* App identity — R60-C (owner): the Acute mark + product name is the
+          ONE sidebar toggle. Click → hide the whole left panel (the main
+          content takes the full width); click again → show it. The BUTTON
+          itself must NOT carry data-tauri-drag-region — a drag region
+          swallows clicks (that is exactly why the window controls to the
+          right work); the header around it keeps the attribute so the rest
+          of the strip stays draggable, and neither the logo nor the label
+          carries it either so every click lands on this button. Same
+          spacing/typography as the old quiet chrome, plus a subtle
+          ghost-hover affordance. */}
+      <button
+        type="button"
+        onClick={() => setAppSidebarVisible(!appSidebarVisible)}
+        aria-label={appSidebarVisible ? "Hide sidebar" : "Show sidebar"}
+        aria-pressed={appSidebarVisible}
+        title={appSidebarVisible ? "Hide sidebar" : "Show sidebar"}
+        className="flex h-8 shrink-0 items-center gap-2.5 rounded-[10px] pl-3.5 pr-3 transition-colors hover:bg-hover"
+      >
         <AcuteLogo size={18} ariaLabel={APP_NAME} />
         <span
-          data-tauri-drag-region
           className="text-[11px] font-semibold tracking-[0.18em]"
           style={{ color: "var(--ac-text-secondary)" }}
         >
           {APP_NAME}
         </span>
-      </div>
+      </button>
 
       {/* Window controls — R59-A: inset rounded buttons with a little breathing
           room (pr-1.5 + gap-0.5) so the hover fills stay INSIDE the card's

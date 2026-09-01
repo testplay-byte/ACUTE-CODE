@@ -11,18 +11,31 @@
  * identify which sub-agent is which") and picking one opens a tab titled
  * `CODE · title` (the same convention the Delegated card's live rows use).
  *
+ * ROUND-60 (R60-D) — the popover-over-webview z-index fix: while the
+ * quick-menu / sub-agent-picker popover is open AND the active tab is a
+ * browser tab, the sidebar HIDES that tab's native webview
+ * (browser_tab_set_visible false) so the popover is not covered by the
+ * OS-level webview layer; closing the popover restores it — guarded to the
+ * same-tab-still-active case. The native-browser bridge is mocked
+ * (isNativeBrowserAvailable false → the BrowserPanel renders its proxy
+ * path and makes NO native calls itself, so every setVisible call below is
+ * the sidebar's own effect); global.fetch is stubbed for the panel's
+ * session-mint so the suite stays hermetic.
+ *
  * getProjectsBackend is mocked (in-memory, sidecar-shaped) because the
  * FilesExplorerPanel + the header project name ride on the real
  * useProjectTree/useProjects hooks; fetchSubAgents/fetchSubAgentDetail are
  * stubbed so the sub-agents surfaces never depend on a live sidecar.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { cleanup, fireEvent, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, screen, waitFor } from "@testing-library/react";
 import type { Project, SessionDetail, SubAgentStatus, TreeNode } from "../../lib/api";
 import { useRightSidebarEvents } from "../../lib/right-sidebar-events";
 import { useRightSidebarStore } from "../../lib/right-sidebar-store";
 import { renderWithProviders, resetTestState } from "../../test-utils";
 import { RightSidebar } from "./RightSidebar";
+// R60-D: the popover-suppression guard (asserted + reset by the tests below).
+import { isPopoverWebviewSuppressed, setPopoverWebviewSuppression } from "./popover-webview-guard";
 
 const mocks = vi.hoisted(() => ({
   list: vi.fn(),
@@ -32,6 +45,8 @@ const mocks = vi.hoisted(() => ({
   file: vi.fn(),
   fetchSubAgents: vi.fn(),
   fetchSubAgentDetail: vi.fn(),
+  // R60-D: the nativeTabSetVisible spy the popover z-index tests assert on.
+  setVisible: vi.fn(() => Promise.resolve()),
 }));
 
 vi.mock("../../lib/api", async (importOriginal) => {
@@ -49,6 +64,22 @@ vi.mock("../../lib/api", async (importOriginal) => {
     fetchSubAgentDetail: mocks.fetchSubAgentDetail,
   };
 });
+
+vi.mock("../../lib/native-browser", () => ({
+  isNativeBrowserAvailable: () => false,
+  nativeInvoke: () => null,
+  nativeTabCreate: vi.fn(() => Promise.resolve()),
+  nativeTabNavigate: vi.fn(() => Promise.resolve()),
+  nativeTabSetBounds: vi.fn(() => Promise.resolve()),
+  nativeTabSetVisible: mocks.setVisible,
+  nativeTabSetZoom: vi.fn(() => Promise.resolve()),
+  nativeTabGo: vi.fn(() => Promise.resolve()),
+  nativeTabUrl: vi.fn(() => Promise.resolve(null)),
+  nativeTabClose: vi.fn(() => Promise.resolve()),
+  nativeTabsCloseAll: vi.fn(() => Promise.resolve()),
+  openExternalUrl: vi.fn(() => Promise.resolve()),
+  onBrowserNavigated: vi.fn(() => () => {}),
+}));
 
 afterEach(cleanup);
 
@@ -216,5 +247,146 @@ describe("RightSidebar sub-agent picker (ROUND-48 R48-e2 code badges)", () => {
       subRole: "coder",
       title: "K7Q2 · Refactor auth module",
     });
+  });
+});
+
+describe("RightSidebar popover vs native webview (R60-D z-index fix)", () => {
+  /** The browser tab id the store generated for this test's sidebar. */
+  function browserTabId(): string {
+    const tabs = Object.values(useRightSidebarStore.getState().byProject).flatMap((s) => s.tabs);
+    const id = tabs.find((t) => t.type === "browser")?.id;
+    expect(id).toBeTruthy();
+    return id as string;
+  }
+
+  beforeEach(() => {
+    // Hermetic fetch stub for the BrowserPanel's session mint (the panel
+    // renders its proxy path under the mocked bridge; everything else 404s
+    // and the store's poll catches it silently).
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: RequestInfo | URL) => {
+        const url = typeof input === "string" ? input : input.toString();
+        if (url.includes("/api/v1/browser/session")) {
+          return {
+            ok: true,
+            status: 200,
+            json: async () => ({
+              sessionId: "sess",
+              ticket: "t0",
+              expiresAt: Date.now() + 3600_000,
+              history: { sessionId: "sess", entries: [], index: -1, canBack: false, canForward: false },
+              viewport: { width: 1280, height: 800, preset: "laptop", zoom: 1, rotate: false },
+            }),
+          } as unknown as Response;
+        }
+        return { ok: false, status: 404, json: async () => ({}) } as unknown as Response;
+      }),
+    );
+    mocks.setVisible.mockClear();
+    // No popover-suppression leak between tests (module-level state).
+    setPopoverWebviewSuppression(null);
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("opening the quick menu HIDES the active browser tab's webview; closing it RESTORES the same tab", async () => {
+    renderWithProviders(<RightSidebar projectId="prj_1" sessionId={null} />);
+
+    // Open a browser tab through the quick menu (the panel mounts on the
+    // proxy path — it makes no native calls itself in this suite).
+    fireEvent.click(screen.getByRole("button", { name: "New tab" }));
+    await pickQuickMenuItem("Browse the web in-app");
+    await screen.findByTestId("browser-panel");
+    mocks.setVisible.mockClear();
+    const tabId = browserTabId();
+
+    // Re-open the quick menu: the popover overlaps the page area, the active
+    // tab is a BROWSER tab → its webview must hide UNDER the popover.
+    fireEvent.click(screen.getByRole("button", { name: "New tab" }));
+    await screen.findByText("Browse the project's files");
+    await waitFor(() => expect(mocks.setVisible).toHaveBeenCalledWith(tabId, false));
+
+    // Escape closes the popover → the SAME tab is still active and the
+    // sidebar is open → the webview comes back (the session never died).
+    fireEvent.keyDown(window, { key: "Escape" });
+    await waitFor(() => expect(mocks.setVisible).toHaveBeenCalledWith(tabId, true));
+  });
+
+  it("switching the active tab away while the popover is open leaves the webview hidden (no premature restore)", async () => {
+    renderWithProviders(<RightSidebar projectId="prj_1" sessionId={null} />);
+
+    // A browser tab and a Files tab, then back to the browser tab.
+    fireEvent.click(screen.getByRole("button", { name: "New tab" }));
+    await pickQuickMenuItem("Browse the web in-app");
+    await screen.findByTestId("browser-panel");
+    fireEvent.click(screen.getByRole("button", { name: "New tab" }));
+    await pickQuickMenuItem("Browse the project's files");
+    await screen.findByTestId("files-explorer-panel");
+    const tabId = browserTabId();
+    const filesTab = document.querySelector('[role="tab"][title="Files"]') as HTMLElement;
+    expect(filesTab).toBeTruthy();
+    fireEvent.click(document.querySelector('[role="tab"][title="New tab"]') as HTMLElement);
+    await screen.findByTestId("browser-panel");
+    mocks.setVisible.mockClear();
+
+    // Open the quick menu (hides the active browser tab's webview)…
+    fireEvent.click(screen.getByRole("button", { name: "New tab" }));
+    await waitFor(() => expect(mocks.setVisible).toHaveBeenCalledWith(tabId, false));
+
+    // …then switch the active tab AWAY through the store (no popover-closing
+    // mousedown — a direct setActiveTab keeps the popover open)…
+    const slice = Object.entries(useRightSidebarStore.getState().byProject).find(([, s]) =>
+      s.tabs.some((t) => t.id === tabId),
+    );
+    const filesId = slice?.[1].tabs.find((t) => t.type === "files")?.id;
+    expect(filesId).toBeTruthy();
+    act(() => {
+      useRightSidebarStore.getState().setActiveTab("prj_1", filesId as string);
+    });
+
+    // …and close the popover: the hidden tab is NOT active anymore → NO
+    // restore call (the panel's own remount lifecycle re-shows it later).
+    fireEvent.keyDown(window, { key: "Escape" });
+    await waitFor(() => expect(screen.queryByText("Browse the project's files")).toBeNull());
+    await act(async () => {
+      await Promise.resolve();
+    });
+    expect(mocks.setVisible).not.toHaveBeenCalledWith(tabId, true);
+  });
+
+  it("with no popover open the sidebar never touches the webview (the panel owns its visibility)", async () => {
+    renderWithProviders(<RightSidebar projectId="prj_1" sessionId={null} />);
+
+    fireEvent.click(screen.getByRole("button", { name: "New tab" }));
+    await pickQuickMenuItem("Browse the web in-app");
+    await screen.findByTestId("browser-panel");
+    await act(async () => {
+      await Promise.resolve();
+    });
+    expect(mocks.setVisible).not.toHaveBeenCalled();
+  });
+
+  it("unmounting the sidebar while the popover is open clears the suppression (no webview stays hidden forever)", async () => {
+    const { unmount } = renderWithProviders(<RightSidebar projectId="prj_1" sessionId={null} />);
+
+    fireEvent.click(screen.getByRole("button", { name: "New tab" }));
+    await pickQuickMenuItem("Browse the web in-app");
+    await screen.findByTestId("browser-panel");
+    const tabId = browserTabId();
+
+    // Popover opens over the active browser tab → hidden + suppressed.
+    fireEvent.click(screen.getByRole("button", { name: "New tab" }));
+    await waitFor(() => expect(mocks.setVisible).toHaveBeenCalledWith(tabId, false));
+    expect(isPopoverWebviewSuppressed(tabId)).toBe(true);
+
+    // The whole sidebar goes away (project/session switch) while the
+    // popover is still open → the module suppression must clear so a later
+    // panel mount can show the webview again.
+    unmount();
+    expect(isPopoverWebviewSuppressed(tabId)).toBe(false);
+    setPopoverWebviewSuppression(null);
   });
 });

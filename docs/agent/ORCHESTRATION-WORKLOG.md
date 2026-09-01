@@ -1930,3 +1930,53 @@ typecheck clean, docs:check 151/0, version 0.59.0. The R59-D sub-agent's
 task tool timed out mid-final-typecheck; the orchestrator completed the
 remaining TS fixes + the live battery. Rust popout changes verified against
 the tauri 2.11.5 source in-sandbox; CI cargo check is the backstop.
+
+## R60 — 2026-09-01 — the second owner-feedback polish round (0.60.0)
+
+The thirteenth Windows session confirmed the rounded window PERFECT ("keep
+it as a part of our design language") and the pop-out satisfying; the
+session's polish list became six workstreams with strict file ownership:
+(Task 0, orch) the shared Rust + bridge layer — browser_tab_create's
+optional hide_viewport_scrollbar (document-start themed-scrollbar CSS +
+viewport hide via initialization_script) and the three new commands
+browser_tab_scroll_state (eval_with_callback probe {y, vh, ch, css} —
+doc-verified against tauri 2.11.5 before writing, 2s timeout),
+browser_tab_scroll_to, browser_tab_set_zoom (REAL Webview::set_zoom);
+(A) the pop-out rounded content card + GutterScrollbar (the window's own
+pill in the right gutter, OUTSIDE the card — drag/click/keyboard, 250ms
+poll, honest css:false/CSP degradation); (B) the settings deep-clean — the
+API-key field as one consistent row (same-slot eye, smooth Copy, Rotate
+DELETED, paste-to-replace), models list EMPTY by default (configured rows
+only), the Free/All toggle moved into the AddModelsDialog (shared
+persisted pref), settings padding stripped + the api tab full-width, and
+the .auto-scroll scrollbar-gutter: stable fix for the scroll-reflow
+width-shift; (C) the sidebar refactor — logo + collapse button + the 64px
+rail deleted, the TitleBar identity block (logo + name) is now the global
+sidebar toggle, appSidebarVisible global (chat routes keep the sidebar),
+web-mode floating-logo fallback, mobile drawer untouched; (D) the
+browser-panel fixes — the new-tab popover z-index (the active browser
+webview hides while the QuickMenu/SubAgentPicker is open, with the
+popover-webview-guard module covering the create-while-suppressed race),
+real zoom wiring (the R50 viewport-divide approximation deleted), the
+viewport bar restructured into a two-group rounded card (fit honestly
+disabled in native mode), immediate bounds re-sync on viewport changes.
+
+Integration wave: the rating polish (re-rate pre-fills the saved note;
+a "noted" chip reopens the editor), the full live browser battery
+(agent-browser on :5173 + the live sidecar: empty models default, picker
+free-only default → All = 300 rows, add/delete model round-trip, key
+reveal/hide/paste-cancel with zero PUTs, computed {thin, stable,
+transparent} scrollbar styles, 974px-of-1280 settings width, sidebar
+toggle on dashboard + chat, popout.html 200, zero console errors), docs
+(round-60.md, CHANGELOG, IMPLEMENTED-API, HANDOFF, status.json), version
+0.60.0.
+
+Gates: 1348/1348 root (92 files), lint + typecheck clean. The R60-A and
+R60-D sub-agents' task tools timed out at RESULT DELIVERY (the 2nd/3rd
+occurrences of the pattern — their code landed complete and green; the
+orchestrator verified and appended their worklog entries). No cargo
+toolchain in this sandbox: the Rust changes are doc-verified against
+tauri 2.11.5 (set_zoom + eval_with_callback confirmed in the
+docs/release-notes) and CI's cargo check is the compile gate, same as
+every prior Rust-touching round. Full record:
+docs/ui-iterations/round-60.md.

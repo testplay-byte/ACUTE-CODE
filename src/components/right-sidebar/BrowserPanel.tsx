@@ -34,12 +34,18 @@ import {
   nativeTabNavigate,
   nativeTabSetBounds,
   nativeTabSetVisible,
+  // R60: REAL DPI zoom (Rust browser_tab_set_zoom — WebView2 zoomFactor).
+  nativeTabSetZoom,
   onBrowserNavigated,
   openExternalUrl,
 } from "../../lib/native-browser";
 // ROUND-58 (R58-b): Tauri detection for the "Open externally" handoff —
 // ONE source of truth, same as native-browser.ts itself.
 import { isTauri } from "../../lib/sidecar";
+// R60-D: the shared popover-suppression flag — a webview must never show
+// itself while a RightSidebar popover covers the page area (the sidebar
+// restores visibility when the popover closes).
+import { isPopoverWebviewSuppressed } from "./popover-webview-guard";
 
 /**
  * ROUND-43 (R43-10) — the EMBEDDED BROWSER, finally inside the right sidebar.
@@ -81,6 +87,21 @@ import { isTauri } from "../../lib/sidecar";
  *  - the live-follow poll reconciles agent-driven navigations: when the
  *    server history's current URL differs from what we last commanded the
  *    webview to load, we navigate the webview (agent actions render live).
+ *
+ * ROUND-60 (R60-D) — three owner fixes on top: (1) REAL zoom — the R50
+ * divide-viewport-by-zoom approximation is retired (tauri 2.11 exposes
+ * `Webview::set_zoom`); the store's zoom now drives the Rust
+ * `browser_tab_set_zoom` command so media queries + rem layout re-evaluate
+ * like a browser's Ctrl+±, in natural AND preset mode. (2) The viewport
+ * bar is regrouped (size | view) with flex-wrap so a ~380px sidebar never
+ * clips controls, and the FIT button is honestly DISABLED in native mode
+ * (presets are already auto-clamped to the panel by computeNativeBounds —
+ * there is nothing left to scale down). (3) The R59 rounded design
+ * language: the chrome/viewport/content rows are rounded cards on the
+ * panel's ambient strip, and the content card insets the native webview
+ * so its square OS-level corners stay inside the card's rounded frame.
+ * The proxy/iframe path below keeps its exact geometry math (zoom stays a
+ * transform scale there).
  *
  * ROUND-51 (R51-a) — native-failure honesty: if the native backend REJECTS
  * (`nativeTabCreate` failing = WebView2 runtime missing/broken, command
@@ -298,7 +319,7 @@ function ViewportNumberInput({
       }}
       aria-label={label}
       data-testid={testId}
-      className="px-1 rounded-md border text-center outline-none"
+      className="px-1 rounded-full border text-center outline-none"
       style={{ width, height: 24, background: styles.card, borderColor: styles.border, color: styles.textSecondary }}
     />
   );
@@ -409,18 +430,17 @@ export function BrowserPanel({ projectId, tab }: { projectId: string; tab: Right
   /**
    * The dims the NATIVE webview should render at, or null for natural mode.
    *
-   * ZOOM LIMITATION (R50-a, documented per spec): a child webview cannot be
-   * transform-scaled like the iframe — resizing it changes the CSS viewport
-   * the page SEES. So zoom divides the target dims (w/zoom, h/zoom): zooming
-   * "in" shrinks the CSS viewport so content lays out larger RELATIVE to the
-   * (centered) frame. This is a viewport-size approximation of zoom, NOT a
-   * DPI zoom — WebView2's zoomFactor is not exposed through Tauri's webview
-   * API. Zoom-out (zoom < 1) grows the frame past the panel and is clamped
-   * back by computeNativeBounds (effectively 1:1). In natural mode zoom has
-   * no effect (null → fill) — pick a preset to zoom.
+   * R60: zoom is REAL now. The R50 approximation divided these dims by the
+   * zoom factor to fake a DPI change ("zoom" in = smaller CSS viewport);
+   * tauri 2.11 exposes `Webview::set_zoom` (WebView2 zoomFactor), so the
+   * panel instead drives the Rust `browser_tab_set_zoom` command with the
+   * store's zoom — media queries and rem layout re-evaluate exactly like a
+   * browser's Ctrl+±, in natural AND preset mode. The webview renders the
+   * preset's true CSS px; zoom is a DPI layer on top of that size, so the
+   * effective viewport here is the plain rotated dims (NO division).
    */
   const effectiveViewport: { width: number; height: number } | null =
-    !nativeMode || naturalSize ? null : { width: viewW / zoom, height: viewH / zoom };
+    !nativeMode || naturalSize ? null : { width: viewW, height: viewH };
   // Mirror into a ref so the interval/rAF callbacks (which must NOT depend on
   // these values for their identity) always read the latest dims.
   useEffect(() => {
@@ -463,6 +483,14 @@ export function BrowserPanel({ projectId, tab }: { projectId: string; tab: Right
   /**
    * Create (idempotently) + show this tab's native webview at `url`. Shared
    * by the mount lifecycle (panel activation) and every navigation path.
+   * R60: also (re-)applies the store's zoom after creation — set_zoom
+   * persists per webview so this is idempotent, but a re-created webview
+   * (teardown + fresh create) starts at 1× and must be told the zoom.
+   * R60-D: the show consults the popover-suppression guard — a webview
+   * created while a quick-menu/sub-agent-picker popover is open (an
+   * agent-driven tab open never fires the popover's outside-mousedown
+   * close) must NOT show itself over the popover; the sidebar restores
+   * visibility when the popover closes.
    */
   const nativeCreate = useCallback(
     (url: string): Promise<void> => {
@@ -471,6 +499,14 @@ export function BrowserPanel({ projectId, tab }: { projectId: string; tab: Right
         .then(() => {
           nativeReadyRef.current = true;
           scheduleBoundsSync();
+          const factor = useBrowserTabStore.getState().tabs[tabId]?.viewport.zoom ?? 1;
+          void nativeTabSetZoom(tabId, factor).catch(nativeWarn);
+          if (isPopoverWebviewSuppressed(tabId)) {
+            // Created hidden (Rust builds webviews hidden until the first
+            // bounds sync) — keep it that way; the sidebar's restore owns
+            // the first show.
+            return Promise.resolve();
+          }
           return nativeTabSetVisible(tabId, true);
         });
     },
@@ -520,11 +556,26 @@ export function BrowserPanel({ projectId, tab }: { projectId: string; tab: Right
     // the webview on each URL change. nativeCreate's identity covers tabId.
   }, [tabId, nativeMode, nativeCreate]);
 
+  // ── native: REAL zoom (R60) ─────────────────────────────────────────────
+  // The store's zoom drives the Rust `browser_tab_set_zoom` command
+  // (WebView2 zoomFactor through tauri's Webview::set_zoom). The zoom
+  // PERSISTS on the webview once set; this effect re-applies it on every
+  // change — from the viewport bar's zoom select OR an agent-driven
+  // set_viewport landing through the 4s poll — and on native-mode
+  // activation (cheap + idempotent). Only after the webview exists: the
+  // Rust command errors on a missing webview, and nativeCreate applies the
+  // zoom itself at creation time.
+  useEffect(() => {
+    if (!nativeMode || !nativeReadyRef.current) return;
+    void nativeTabSetZoom(tabId, zoom).catch(nativeWarn);
+  }, [nativeMode, tabId, zoom]);
+
   // ── native: keep the webview glued to the placeholder ───────────────────
   useEffect(() => {
     if (!nativeMode) return;
-    // Initial sync + re-sync whenever the effective viewport (preset / zoom /
-    // rotate / natural toggle) or the active tab changes.
+    // Initial sync + re-sync whenever the effective viewport (preset /
+    // rotate / natural toggle) or the active tab changes — R60: zoom is no
+    // longer part of this set (it is a DPI layer, not a size change).
     scheduleBoundsSync();
     const el = placeholderRef.current;
     const observer = new ResizeObserver(() => scheduleBoundsSync());
@@ -542,7 +593,7 @@ export function BrowserPanel({ projectId, tab }: { projectId: string; tab: Right
         rafRef.current = null;
       }
     };
-  }, [nativeMode, scheduleBoundsSync, tabId, viewW, viewH, zoom, rotate, naturalSize]);
+  }, [nativeMode, scheduleBoundsSync, tabId, viewW, viewH, rotate, naturalSize]);
 
   // ── native: user navigations INSIDE the webview ──────────────────────────
   useEffect(() => {
@@ -819,25 +870,36 @@ export function BrowserPanel({ projectId, tab }: { projectId: string; tab: Right
   const fitScale = fit ? Math.min(1, availWidth / Math.max(1, viewW * zoom)) : 1;
   const scale = zoom * fitScale;
   /**
-   * R58-b: honest native readout. computeNativeBounds CLAMPS a preset larger
-   * than the panel — the webview (and the page inside it) actually render
-   * the clamped CSS px, so claiming the preset dims was a lie. Show what
-   * renders + what was requested. The proxy path keeps the plain readout:
-   * its iframe renders the true preset px (the transform only scales the
-   * footprint), so viewW×viewH stays what the page sees there.
+   * R58-b/R60: honest native readout. computeNativeBounds CLAMPS a preset
+   * larger than the panel — the webview (and the page inside it) actually
+   * render the clamped CSS px, so claiming the preset dims was a lie. Show
+   * what renders + what was requested (R60: zoom no longer divides the
+   * requested dims — the preset IS the requested size, zoom is DPI on top).
+   * Natural mode has no preset: the readout reports the ACTUAL rendered
+   * area (what the page really sees). The proxy path keeps the plain
+   * readout: its iframe renders the true preset px (the transform only
+   * scales the footprint), so viewW×viewH stays what the page sees there.
    */
   const clampNote =
     nativeMode &&
     !naturalSize &&
     nativeRendered !== null &&
-    (nativeRendered.w < viewW / zoom - 0.5 || nativeRendered.h < viewH / zoom - 0.5)
-      ? `${Math.round(nativeRendered.w)}×${Math.round(nativeRendered.h)} (clamped from ${Math.round(viewW / zoom)}×${Math.round(viewH / zoom)} — panel too small)`
+    (nativeRendered.w < viewW - 0.5 || nativeRendered.h < viewH - 0.5)
+      ? `${Math.round(nativeRendered.w)}×${Math.round(nativeRendered.h)} (clamped from ${Math.round(viewW)}×${Math.round(viewH)} — panel too small)`
       : null;
   const readout =
     clampNote !== null
       ? clampNote
-      : `${viewW}×${viewH} @ ${Math.round(zoom * 100)}%` +
-        (fit && fitScale < 1 ? ` (fit ${Math.round(scale * 100)}%)` : "");
+      : nativeMode
+        ? // Native: fit is a proxy-only concept (the button is disabled here
+          // — presets are auto-clamped), so no fit note ever appears.
+          naturalSize
+            ? nativeRendered !== null
+              ? `${Math.round(nativeRendered.w)}×${Math.round(nativeRendered.h)} @ ${Math.round(zoom * 100)}%`
+              : `Natural @ ${Math.round(zoom * 100)}%`
+            : `${viewW}×${viewH} @ ${Math.round(zoom * 100)}%`
+        : `${viewW}×${viewH} @ ${Math.round(zoom * 100)}%` +
+          (fit && fitScale < 1 ? ` (fit ${Math.round(scale * 100)}%)` : "");
 
   const ghostBtn = (extraStyle?: CSSProperties): CSSProperties => ({
     color: styles.textSecondary,
@@ -895,11 +957,18 @@ export function BrowserPanel({ projectId, tab }: { projectId: string; tab: Right
   );
 
   return (
-    <div className="h-full flex flex-col min-h-0" data-testid="browser-panel">
-      {/* ── Chrome bar: navigation + address + explicit external actions ── */}
+    <div
+      className="h-full flex flex-col min-h-0 gap-1.5 p-1.5"
+      data-testid="browser-panel"
+      style={{ background: styles.isDark ? "rgba(0,0,0,0.10)" : styles.subtle }}
+    >
+      {/* ── Chrome bar: navigation + address + explicit external actions.
+          R60-D: the R59 rounded-card language — each panel row is a rounded
+          card on the panel's ambient strip (the pop-out window's exact
+          rhythm, at side-panel scale). ── */}
       <div
-        className="shrink-0 flex items-center gap-1 px-2 h-9 border-b"
-        style={{ borderColor: styles.border, background: styles.isDark ? "rgba(0,0,0,0.15)" : styles.subtle }}
+        className="shrink-0 flex items-center gap-1 px-2 h-9 rounded-[12px] border"
+        style={{ borderColor: styles.border, background: styles.isDark ? "rgba(0,0,0,0.15)" : styles.card }}
       >
         <button
           onClick={() => goDirection("back")}
@@ -1013,109 +1082,137 @@ export function BrowserPanel({ projectId, tab }: { projectId: string; tab: Right
         </button>
       </div>
 
-      {/* ── Viewport bar: the display-size controls (R43-10 core feature) ── */}
+      {/* ── Viewport bar: the display-size controls (R43-10 core feature).
+          R60-D restructure (owner: "layout management does not work
+          properly… could be made cleaner"): the row is now a rounded card
+          with TWO visible groups — [size: preset | W×H | zoom] and
+          [view: rotate | fit] — separated by a hairline divider, and it
+          WRAPS (flex-wrap + min-height instead of a fixed h-8) so a
+          ~380px-wide sidebar never clips or overflows the controls; the
+          readout rides at the row's end. The FIT button is honestly
+          DISABLED in native mode: computeNativeBounds already clamps every
+          preset to the panel, so there is nothing to scale down — the
+          title says so instead of a dead click. ── */}
       <div
-        className="shrink-0 flex items-center gap-1.5 px-2 h-8 border-b text-[10.5px]"
+        data-testid="browser-viewport-bar"
+        className="shrink-0 flex min-h-8 flex-wrap items-center gap-x-1.5 gap-y-1 px-2 py-1 rounded-[12px] border text-[10.5px]"
         style={{ borderColor: styles.border, color: styles.textTertiary, background: styles.isDark ? "rgba(0,0,0,0.08)" : "transparent" }}
       >
-        <select
-          value={nativeMode && naturalSize ? "natural" : (vp?.preset ?? "laptop")}
-          onChange={(e) => {
-            const value = e.target.value;
-            if (nativeMode && value === "natural") {
-              // Natural mode is PANEL-LOCAL (the webview fills the page
-              // area); the server-side display size stays untouched — the
-              // agent's display-size testing only applies to fixed presets.
-              setNaturalSize(true);
-              return;
-            }
-            if (nativeMode) setNaturalSize(false);
-            void setViewport(tabId, value === "custom" ? { preset: "custom" } : { preset: value });
-          }}
-          aria-label="Display size preset"
-          data-testid="browser-preset-select"
-          className="h-6 px-1 rounded-md border outline-none cursor-pointer max-w-[118px]"
-          style={{ background: styles.card, borderColor: styles.border, color: styles.textSecondary }}
-        >
-          {/* ROUND-50: native-mode default — fill the panel like a real
-              browser side-panel; presets remain one click away. */}
-          {nativeMode ? <option value="natural">Natural (fill panel)</option> : null}
-          {BROWSER_VIEWPORT_PRESETS.map((p) => (
-            <option key={p.id} value={p.id}>
-              {p.label}
-            </option>
-          ))}
-          <option value="custom">Custom…</option>
-        </select>
-        <span className="flex items-center gap-0.5">
-          <ViewportNumberInput
-            value={rawW}
-            min={200}
-            max={3840}
-            onCommit={(w) => {
+        {/* Group 1 — size: preset, W×H, zoom. */}
+        <span className="flex min-w-0 items-center gap-1">
+          <select
+            value={nativeMode && naturalSize ? "natural" : (vp?.preset ?? "laptop")}
+            onChange={(e) => {
+              const value = e.target.value;
+              if (nativeMode && value === "natural") {
+                // Natural mode is PANEL-LOCAL (the webview fills the page
+                // area); the server-side display size stays untouched — the
+                // agent's display-size testing only applies to fixed presets.
+                setNaturalSize(true);
+                return;
+              }
               if (nativeMode) setNaturalSize(false);
-              void setViewport(tabId, { width: w });
+              void setViewport(tabId, value === "custom" ? { preset: "custom" } : { preset: value });
             }}
-            label="Viewport width"
-            testId="browser-width-input"
-            width={52}
-          />
-          <span>×</span>
-          <ViewportNumberInput
-            value={rawH}
-            min={200}
-            max={4320}
-            onCommit={(h) => {
-              if (nativeMode) setNaturalSize(false);
-              void setViewport(tabId, { height: h });
-            }}
-            label="Viewport height"
-            testId="browser-height-input"
-            width={52}
-          />
+            aria-label="Display size preset"
+            data-testid="browser-preset-select"
+            className="h-6 min-w-0 max-w-[118px] rounded-full border px-2 outline-none cursor-pointer"
+            style={{ background: styles.card, borderColor: styles.border, color: styles.textSecondary }}
+          >
+            {/* ROUND-50: native-mode default — fill the panel like a real
+                browser side-panel; presets remain one click away. */}
+            {nativeMode ? <option value="natural">Natural (fill panel)</option> : null}
+            {BROWSER_VIEWPORT_PRESETS.map((p) => (
+              <option key={p.id} value={p.id}>
+                {p.label}
+              </option>
+            ))}
+            <option value="custom">Custom…</option>
+          </select>
+          <span className="flex items-center gap-0.5">
+            <ViewportNumberInput
+              value={rawW}
+              min={200}
+              max={3840}
+              onCommit={(w) => {
+                if (nativeMode) setNaturalSize(false);
+                void setViewport(tabId, { width: w });
+              }}
+              label="Viewport width"
+              testId="browser-width-input"
+              width={52}
+            />
+            <span>×</span>
+            <ViewportNumberInput
+              value={rawH}
+              min={200}
+              max={4320}
+              onCommit={(h) => {
+                if (nativeMode) setNaturalSize(false);
+                void setViewport(tabId, { height: h });
+              }}
+              label="Viewport height"
+              testId="browser-height-input"
+              width={52}
+            />
+          </span>
+          {/* R60: REAL DPI zoom in native mode (Rust browser_tab_set_zoom);
+              the proxy path keeps its iframe transform scale. */}
+          <select
+            value={String(Math.round(zoom * 100))}
+            onChange={(e) => void setViewport(tabId, { zoom: Number(e.target.value) / 100 })}
+            aria-label="Zoom"
+            data-testid="browser-zoom-select"
+            className="h-6 rounded-full border px-2 outline-none cursor-pointer"
+            style={{ background: styles.card, borderColor: styles.border, color: styles.textSecondary }}
+          >
+            {ZOOM_STEPS.map((z) => (
+              <option key={z} value={String(Math.round(z * 100))}>
+                {Math.round(z * 100)}%
+              </option>
+            ))}
+          </select>
         </span>
-        <select
-          value={String(Math.round(zoom * 100))}
-          onChange={(e) => void setViewport(tabId, { zoom: Number(e.target.value) / 100 })}
-          aria-label="Zoom"
-          data-testid="browser-zoom-select"
-          className="h-6 px-1 rounded-md border outline-none cursor-pointer"
-          style={{ background: styles.card, borderColor: styles.border, color: styles.textSecondary }}
-        >
-          {ZOOM_STEPS.map((z) => (
-            <option key={z} value={String(Math.round(z * 100))}>
-              {Math.round(z * 100)}%
-            </option>
-          ))}
-        </select>
-        <button
-          onClick={() => void setViewport(tabId, { rotate: !rotate })}
-          aria-pressed={rotate}
-          aria-label="Rotate viewport"
-          title={rotate ? "Rotate back to portrait" : "Rotate (swap width/height)"}
-          data-testid="browser-rotate"
-          className="w-6 h-6 grid place-items-center rounded-md transition-colors"
-          style={{ color: rotate ? styles.accent : styles.textTertiary }}
-          onMouseEnter={(e) => { e.currentTarget.style.background = styles.subtleHover; }}
-          onMouseLeave={(e) => (e.currentTarget.style.background = "transparent")}
-        >
-          <Smartphone size={12} style={rotate ? { transform: "rotate(90deg)" } : undefined} />
-        </button>
-        <button
-          onClick={() => setFit(tabId, !fit)}
-          aria-pressed={fit}
-          aria-label="Fit to panel"
-          title={fit ? "Fit: scaled down to the panel width (true px preserved)" : "1:1 — scroll the panel instead"}
-          data-testid="browser-fit"
-          className="w-6 h-6 grid place-items-center rounded-md transition-colors"
-          style={{ color: fit ? styles.accent : styles.textTertiary }}
-          onMouseEnter={(e) => { e.currentTarget.style.background = styles.subtleHover; }}
-          onMouseLeave={(e) => (e.currentTarget.style.background = "transparent")}
-        >
-          {fit ? <Shrink size={12} /> : <Expand size={12} />}
-        </button>
+        {/* Hairline separator between the size and view groups. */}
+        <span aria-hidden className="h-4 w-px shrink-0" style={{ background: styles.border }} />
+        {/* Group 2 — view: rotate, fit. */}
+        <span className="flex items-center gap-0.5">
+          <button
+            onClick={() => void setViewport(tabId, { rotate: !rotate })}
+            aria-pressed={rotate}
+            aria-label="Rotate viewport"
+            title={rotate ? "Rotate back to portrait" : "Rotate (swap width/height)"}
+            data-testid="browser-rotate"
+            className="w-6 h-6 grid place-items-center rounded-md transition-colors"
+            style={{ color: rotate ? styles.accent : styles.textTertiary }}
+            onMouseEnter={(e) => { e.currentTarget.style.background = styles.subtleHover; }}
+            onMouseLeave={(e) => (e.currentTarget.style.background = "transparent")}
+          >
+            <Smartphone size={12} style={rotate ? { transform: "rotate(90deg)" } : undefined} />
+          </button>
+          <button
+            onClick={() => setFit(tabId, !fit)}
+            disabled={nativeMode}
+            aria-pressed={fit}
+            aria-label="Fit to panel"
+            title={
+              nativeMode
+                ? "Native mode: presets larger than the panel are automatically clamped to it — there is nothing to fit"
+                : fit
+                  ? "Fit: scaled down to the panel width (true px preserved)"
+                  : "1:1 — scroll the panel instead"
+            }
+            data-testid="browser-fit"
+            className="w-6 h-6 grid place-items-center rounded-md transition-colors disabled:cursor-not-allowed disabled:opacity-30"
+            style={{ color: fit && !nativeMode ? styles.accent : styles.textTertiary }}
+            onMouseEnter={(e) => { if (!nativeMode) e.currentTarget.style.background = styles.subtleHover; }}
+            onMouseLeave={(e) => (e.currentTarget.style.background = "transparent")}
+          >
+            {fit ? <Shrink size={12} /> : <Expand size={12} />}
+          </button>
+        </span>
         <span
-          className="ml-auto shrink-0 font-mono text-[10px] px-1.5 py-0.5 rounded-md"
+          className="ml-auto shrink-0 font-mono text-[10px] px-1.5 py-0.5 rounded-full"
           data-testid="browser-readout"
           style={{ background: styles.subtle, color: styles.textTertiary }}
           title={
@@ -1128,10 +1225,11 @@ export function BrowserPanel({ projectId, tab }: { projectId: string; tab: Right
         </span>
       </div>
 
-      {/* ── Panel-level error (session mint / navigation failures) ───────── */}
+      {/* ── Panel-level error (session mint / navigation failures) — a
+          rounded card in the same row rhythm (R60-D). ── */}
       {state?.error != null ? (
         <div
-          className="shrink-0 flex items-start gap-2 px-3 py-2 text-[11px] border-b"
+          className="shrink-0 flex items-start gap-2 px-3 py-2 text-[11px] rounded-[12px] border"
           style={{
             background: styles.isDark ? "rgba(220,38,38,0.12)" : "rgba(254,226,226,1)",
             color: styles.isDark ? "#fca5a5" : "#b91c1c",
@@ -1161,11 +1259,17 @@ export function BrowserPanel({ projectId, tab }: { projectId: string; tab: Right
         </div>
       ) : null}
 
-      {/* ── Content: empty state or the scaled viewport frame ────────────── */}
+      {/* ── Content: empty state or the scaled viewport frame. R60-D: the
+          R59 rounded CONTENT CARD — the card's border + rounded corners read
+          as the page's frame; in native mode the placeholder (the webview's
+          rect) is inset 4px so the webview's square OS-level corners stay
+          inside the card's 12px corner curve and the card's background shows
+          through as the frame around the page (the pop-out's exact pattern).
+          The proxy path's geometry below is EXACTLY as before. ── */}
       <div
         ref={contentRef}
-        className="flex-1 min-h-0 overflow-auto"
-        style={{ background: styles.isDark ? "rgba(0,0,0,0.22)" : styles.subtle }}
+        className="relative flex-1 min-h-0 overflow-auto rounded-[12px] border"
+        style={{ background: styles.isDark ? "rgba(0,0,0,0.22)" : styles.subtle, borderColor: styles.border }}
       >
         {nativeMode ? (
           /* ROUND-50 (R50-a): the page area placeholder. The native child
@@ -1176,7 +1280,7 @@ export function BrowserPanel({ projectId, tab }: { projectId: string; tab: Right
           <div
             ref={placeholderRef}
             data-testid="browser-native-placeholder"
-            className="relative h-full w-full"
+            className="absolute inset-[4px]"
           >
             {!hasPage ? emptyState : null}
           </div>
@@ -1191,7 +1295,7 @@ export function BrowserPanel({ projectId, tab }: { projectId: string; tab: Right
                 width: Math.round(viewW * scale),
                 height: Math.round(viewH * scale),
                 border: `1px solid ${styles.borderStrong}`,
-                borderRadius: 4,
+                borderRadius: 8,
                 overflow: "hidden",
               }}
             >
@@ -1219,10 +1323,12 @@ export function BrowserPanel({ projectId, tab }: { projectId: string; tab: Right
         )}
       </div>
 
-      {/* ── status footnote: mode honesty ───────────────────────────────── */}
+      {/* ── status footnote: mode honesty — a quiet strip on the ambient
+          panel background (R60-D: no border-t; the cards carry the
+          structure now). ── */}
       <div
-        className="shrink-0 flex items-center gap-1.5 px-3 h-6 border-t text-[10px]"
-        style={{ borderColor: styles.border, color: styles.textTertiary }}
+        className="shrink-0 flex items-center gap-1.5 px-2 h-6 text-[10px]"
+        style={{ color: styles.textTertiary }}
       >
         {/* ROUND-51 (R51-a): the ENGINE BADGE — the owner must be able to SEE
             which renderer is live at a glance (the recurring "is it the real

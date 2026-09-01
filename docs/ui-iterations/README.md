@@ -1,4 +1,4 @@
-<!-- last-reviewed: 2026-09-01 round-59 -->
+<!-- last-reviewed: 2026-09-01 round-60 -->
 # UI Iterations — Owner Review Rounds
 
 This folder is the **dedicated tracking system for UI-fidelity work** (owner
@@ -128,3 +128,4 @@ evidence file with screenshots + verify output + owner verdict. The
 `scripts/verify-round.mjs` (Workstream L) will auto-generate the evidence-file
 skeleton to make this trivial.
 - [`round-59.md`](round-59.md) — the owner-feedback round (the twelfth Windows session confirmed 0.58.0's flows working): the rounded inset window frame + floating-pill scrollbars, the pop-out browser reworked into a frameless app-hosted page with our title bar + themed URL bar + child webview, Models & Providers honesty (unconfigured presets gone, masked key + one Show + Rotate, outright disable, first-provider pre-select), the response-rating system with immutable full-context snapshots + the ratings CLI, the diagnostics Console tab (frontend error bus + engine error ring), and the prompt-section registry (.acute/prompts/*.md wholesale overrides, byte-identity pinned). 1302 tests, live batteries on the owner's key, version 0.59.0.
+- [`round-60.md`](round-60.md) — the second owner-feedback polish round (the thirteenth Windows session confirmed the rounded window "perfect… keep it as a part of our design language"): the pop-out VIEW rounded into the design language + the GUTTER SCROLLBAR outside the content card (three new Tauri commands — eval_with_callback scroll channel + real set_zoom; document-start themed scrollbar CSS with the honest CSP fallback), the settings deep-clean (one consistent API-key row with paste-to-replace, models EMPTY by default + the Free/All toggle in the picker, stripped padding, the stable-gutter scroll-reflow fix), the TITLE-BAR sidebar toggle (logo + collapse button + rail deleted), and the browser-panel fixes (new-tab popover above the native webview, real DPI zoom, the two-group viewport card). 1350 tests, live browser battery on the dev stack, version 0.60.0.

@@ -694,4 +694,121 @@ describe("AgentChatPanel response ratings (ROUND-59 R59-D)", () => {
       SLOW,
     );
   }, 15_000);
+
+  it("R60 polish: a SAVED bad note renders a 'noted' chip; clicking it reopens the editor PRE-FILLED", async () => {
+    const projects = await getFixtureProjects().list();
+    const rows: MessageRating[] = [
+      {
+        id: 31,
+        sessionId: "sess_rate_probe",
+        assistantSeq: 2,
+        rating: "bad",
+        note: "ignored my file-path constraint",
+        model: null,
+        agentId: "agt_scribe",
+        createdAt: "2026-09-01T10:00:00Z",
+        updatedAt: "2026-09-01T10:00:00Z",
+      },
+    ];
+    ratingsMock.listSessionRatings.mockResolvedValue(rows);
+    customBackend.backend = createFixtureSessions([
+      {
+        session: {
+          id: "sess_rate_probe",
+          projectId: projects[0].id,
+          agentId: "agt_scribe",
+          mode: "single",
+          status: "completed",
+          title: "Rate probe",
+          createdAt: "2026-09-01T10:00:00Z",
+          updatedAt: "2026-09-01T10:05:00Z",
+        },
+        events: [
+          messageEvent(1, "user", "first question", "2026-09-01T10:00:10Z"),
+          messageEvent(2, "assistant", "first answer", "2026-09-01T10:00:20Z"),
+        ],
+      },
+    ]);
+    renderWithProviders(
+      <AgentChatPanel projectId={projects[0].id} project={projects[0]} />,
+    );
+    await screen.findByText("first question", {}, SLOW);
+
+    // The chip renders next to the filled thumbs (visible without hover —
+    // the cluster is persistent for rated turns).
+    const chip = await waitFor(() => {
+      const el = screen.getByTestId("rating-note-chip");
+      expect(el.getAttribute("title")).toContain("ignored my file-path constraint");
+      return el;
+    }, SLOW);
+
+    // Clicking the chip reopens the editor with the saved note pre-filled.
+    fireEvent.click(chip);
+    const input = await screen.findByTestId("rating-note-input", {}, SLOW);
+    expect((input as HTMLInputElement).value).toBe("ignored my file-path constraint");
+  }, 15_000);
+
+  it("R60 polish: re-rating a SAVED bad reply (bad thumb again after unfill cycle) pre-fills the editor with the existing note", async () => {
+    const projects = await getFixtureProjects().list();
+    // A saved bad rating WITH a note (the re-rate path).
+    const persisted: MessageRating[] = [
+      {
+        id: 41,
+        sessionId: "sess_rate_probe",
+        assistantSeq: 2,
+        rating: "bad",
+        note: "hallucinated the API",
+        model: null,
+        agentId: "agt_scribe",
+        createdAt: "2026-09-01T10:00:00Z",
+        updatedAt: "2026-09-01T10:00:00Z",
+      },
+    ];
+    ratingsMock.listSessionRatings.mockImplementation(async () => persisted);
+    ratingsMock.rateReply.mockImplementation(async (_sid, input) => {
+      // Upsert semantics (the real backend): re-rate refreshes the row.
+      persisted[0] = {
+        ...persisted[0],
+        rating: input.rating,
+        note: input.note ?? persisted[0].note,
+        updatedAt: "2026-09-01T10:06:00Z",
+      };
+      return persisted[0];
+    });
+    customBackend.backend = createFixtureSessions([
+      {
+        session: {
+          id: "sess_rate_probe",
+          projectId: projects[0].id,
+          agentId: "agt_scribe",
+          mode: "single",
+          status: "completed",
+          title: "Rate probe",
+          createdAt: "2026-09-01T10:00:00Z",
+          updatedAt: "2026-09-01T10:05:00Z",
+        },
+        events: [
+          messageEvent(1, "user", "first question", "2026-09-01T10:00:10Z"),
+          messageEvent(2, "assistant", "first answer", "2026-09-01T10:00:20Z"),
+        ],
+      },
+    ]);
+    renderWithProviders(
+      <AgentChatPanel projectId={projects[0].id} project={projects[0]} />,
+    );
+    await screen.findByText("first question", {}, SLOW);
+
+    // The saved verdict renders filled; clicking the chip reopens the editor.
+    fireEvent.click(await screen.findByTestId("rating-note-chip", {}, SLOW));
+    const input = await screen.findByTestId("rating-note-input", {}, SLOW);
+    expect((input as HTMLInputElement).value).toBe("hallucinated the API");
+
+    // A FRESH bad rating (no saved note anywhere) starts the editor EMPTY:
+    // re-rate a different flow — unfill via same-thumb delete first.
+    fireEvent.keyDown(input, { key: "Escape" });
+    await waitFor(
+      () => expect(document.querySelector("[data-rating-note]")).toBeNull(),
+      SLOW,
+    );
+  }, 15_000);
 });
