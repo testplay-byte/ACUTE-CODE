@@ -150,6 +150,9 @@ describe("openDatabase", () => {
       // ROUND-52 (R52-a): job_status + job_stop appended to template/default
       // allowlists that include run_command (background-command supervision).
       { version: 21, name: "0021_background_job_tools.sql" },
+      // ROUND-59 (R59-D): the response-rating table — good|bad per assistant
+      // reply with the frozen turn-context snapshot (no FK on sessions).
+      { version: 22, name: "0022_message_ratings.sql" },
     ]);
     expect(appliedSecond).toEqual(appliedFirst);
   });

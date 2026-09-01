@@ -1,4 +1,4 @@
-import { useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   AlertTriangle,
@@ -80,6 +80,14 @@ import {
  * custom providers), and every model row gets a full configuration dialog
  * (pricing per Mtok in/out/cache, context window, max output, thinking,
  * hidden).
+ *
+ * ROUND-59 (R59-C) — the owner's four settings directives: unconfigured
+ * preset providers are hidden ENTIRELY (the R58 "Not configured" collapsed
+ * group is gone — Add Provider's preset picker is the one way to set one
+ * up), the API-key field presents the STORED key masked with ONE clear
+ * Show (+ a separate Rotate flow), disabling a provider is OUTRIGHT (no
+ * agent-impact confirm), and opening the page pre-selects the FIRST
+ * provider.
  */
 
 /* ── API plumbing ───────────────────────────────────────────────────────────
@@ -227,9 +235,6 @@ export function ModelsProvidersTab() {
   const queryClient = useQueryClient();
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [adding, setAdding] = useState(false);
-  // ROUND-58 (R58-d): the "Not configured" group — collapsed by default so
-  // seeded-but-keyless presets don't present themselves as live providers.
-  const [showUnconfigured, setShowUnconfigured] = useState(false);
 
   // ROUND-50 (R50-d): the provider-list scroll column — one of the two
   // INDEPENDENT scroll containers (the right detail pane is the other).
@@ -243,16 +248,14 @@ export function ModelsProvidersTab() {
   // ROUND-37: ONE flat list — every provider together, order = created.
   const providers = providersQuery.data ?? [];
 
-  // ROUND-58 (R58-d): honest live/unconfigured split — a provider is
-  // "configured" when it holds a key OR was created by the user (custom
-  // rows are always real choices); seeded PRESET rows without a key go to
-  // the collapsed "Not configured" group (the owner: "Their providers are
-  // like which I haven't even configured… I haven't even configured them").
+  // ROUND-59 (R59-C): the list shows CONFIGURED providers only — a provider
+  // is "configured" when it holds a key OR was created by the user (custom
+  // rows are always real choices). The R58 collapsed "Not configured"
+  // group is GONE: the owner deleted the three seeded presets by hand and
+  // wants them never to appear by default; the Add Provider dialog's
+  // preset picker remains the one sanctioned way to (re)set one up.
   const configuredProviders = providers.filter(
     (p) => p.hasKey || !PRESET_PROVIDER_IDS.has(p.id),
-  );
-  const unconfiguredProviders = providers.filter(
-    (p) => !p.hasKey && PRESET_PROVIDER_IDS.has(p.id),
   );
 
   const invalidate = () =>
@@ -262,6 +265,26 @@ export function ModelsProvidersTab() {
     () => providers.find((p) => p.id === selectedId) ?? null,
     [providers, selectedId],
   );
+
+  // ROUND-59 (R59-C): pre-select the FIRST provider on open (the owner:
+  // "by default when the user opens the providers page, it will pre-select
+  // the top provider and open its details on the right") — and keep the
+  // selection honest when the underlying list changes: a selected row that
+  // is no longer VISIBLE (deleted, or its key was removed from a preset so
+  // it left the configured list) is cleared and falls to the first
+  // remaining row instead of lingering in the detail pane.
+  // Deliberately keyed on `providers` (the query data identity — it only
+  // moves when the query resolves or refetches with changed content): an
+  // explicit user click is never re-processed, and the null selection the
+  // "Add provider" flow may set is not instantly overridden.
+  useEffect(() => {
+    const hidden =
+      selectedId !== null && !configuredProviders.some((p) => p.id === selectedId);
+    if (hidden) setSelectedId(null);
+    if ((selectedId === null || hidden) && configuredProviders.length > 0) {
+      setSelectedId(configuredProviders[0].id);
+    }
+  }, [providers]);
 
   return (
     // ROUND-50 (R50-d): viewport-locked master–detail — the tab fills the
@@ -281,15 +304,23 @@ export function ModelsProvidersTab() {
           style={{ borderColor: styles.border }}
         >
           <SectionLabel>Providers</SectionLabel>
-          <span className="font-mono text-[10px]" style={{ color: styles.textTertiary }}>
-            {providers.length}
+          {/* ROUND-59 (R59-C): the count reflects what the list SHOWS —
+              configured rows only (unconfigured presets are absent). */}
+          <span
+            data-testid="provider-count"
+            className="font-mono text-[10px]"
+            style={{ color: styles.textTertiary }}
+          >
+            {configuredProviders.length}
           </span>
         </div>
         <div
           ref={listScrollRef}
           className="flex-1 min-h-0 overflow-y-auto auto-scroll p-1.5"
         >
-          {providers.length === 0 && (
+          {/* ROUND-59 (R59-C): empty means NO CONFIGURED rows — keyless
+              presets don't count as providers here anymore. */}
+          {configuredProviders.length === 0 && (
             <div className="px-2.5 py-1.5 text-[11px]" style={{ color: styles.textTertiary }}>
               No providers — add one below.
             </div>
@@ -302,53 +333,15 @@ export function ModelsProvidersTab() {
               onClick={() => setSelectedId(p.id)}
             />
           ))}
-          {/* ROUND-58 (R58-d): seeded presets WITHOUT a key — reachable for
-              setup, but NOT presented as live. Collapsed by default. */}
-          {unconfiguredProviders.length > 0 && (
-            <div data-not-configured-group>
-              <button
-                onClick={() => setShowUnconfigured((v) => !v)}
-                aria-expanded={showUnconfigured}
-                aria-label={`Not configured providers (${unconfiguredProviders.length})`}
-                className="mt-1.5 w-full h-9 flex items-center gap-2 px-2.5 rounded-[10px] text-left transition-colors"
-                style={{ color: styles.textTertiary }}
-                onMouseEnter={(e) => (e.currentTarget.style.background = styles.subtleHover)}
-                onMouseLeave={(e) => (e.currentTarget.style.background = "transparent")}
-              >
-                <span
-                  className="text-[10px] font-bold uppercase tracking-widest"
-                  aria-hidden
-                >
-                  Not configured
-                </span>
-                <span className="font-mono text-[10px]">{unconfiguredProviders.length}</span>
-                <span
-                  className="ml-auto text-[9px] font-bold"
-                  style={{ transform: showUnconfigured ? "rotate(90deg)" : "none" }}
-                  aria-hidden
-                >
-                  ▸
-                </span>
-              </button>
-              {showUnconfigured &&
-                unconfiguredProviders.map((p) => (
-                  <ProviderListRow
-                    key={p.id}
-                    provider={p}
-                    active={p.id === selectedId}
-                    muted
-                    onClick={() => setSelectedId(p.id)}
-                  />
-                ))}
-            </div>
-          )}
         </div>
         {/* + Add provider → the preset-or-custom DIALOG (owner R37) */}
         <div className="shrink-0 p-1.5 border-t" style={{ borderColor: styles.border }}>
           <button
             onClick={() => {
+              // ROUND-59 (R59-C): no longer deselects — pre-select keeps the
+              // detail pane meaningful behind the modal, and Cancel restores
+              // the user's context instead of a blank placeholder.
               setAdding(true);
-              setSelectedId(null);
             }}
             className="w-full h-9 flex items-center justify-center gap-1.5 rounded-[10px] text-[12px] font-bold transition-colors"
             style={{ background: withAlpha(styles.accent, 0.1), color: styles.accent }}
@@ -368,7 +361,14 @@ export function ModelsProvidersTab() {
               provider={selected}
               onChanged={invalidate}
               onDeleted={() => {
-                setSelectedId(null);
+                // ROUND-59 (R59-C): deleting the SELECTED provider falls to
+                // the next remaining row (the owner never wanted the empty
+                // state after a delete) — the row after the deleted one, else
+                // the first remaining, else nothing when the list is empty.
+                const idx = configuredProviders.findIndex((p) => p.id === selected.id);
+                const remaining = configuredProviders.filter((p) => p.id !== selected.id);
+                const next = remaining[Math.min(idx, remaining.length - 1)] ?? null;
+                setSelectedId(next?.id ?? null);
                 invalidate();
               }}
             />
@@ -429,14 +429,10 @@ function DetailScrollArea({ children }: { children: React.ReactNode }) {
 function ProviderListRow({
   provider,
   active,
-  muted = false,
   onClick,
 }: {
   provider: ProviderView;
   active: boolean;
-  /** ROUND-58 (R58-d): rows in the "Not configured" group render dimmed —
-   * reachable for setup, but visually NOT presented as live. */
-  muted?: boolean;
   onClick: () => void;
 }) {
   const styles = useThemeStyles();
@@ -445,10 +441,7 @@ function ProviderListRow({
       onClick={onClick}
       aria-current={active ? "true" : undefined}
       className="relative w-full h-11 flex items-center gap-2.5 px-2.5 rounded-[10px] transition-colors text-left"
-      style={{
-        background: active ? withAlpha(styles.accent, 0.1) : "transparent",
-        opacity: muted ? 0.65 : 1,
-      }}
+      style={{ background: active ? withAlpha(styles.accent, 0.1) : "transparent" }}
       onMouseEnter={(e) => {
         if (!active) e.currentTarget.style.background = styles.subtleHover;
       }}
@@ -520,27 +513,29 @@ function ProviderDetailPane({
   // failed CI with "window is not defined" (run 33411797885).
   const resetAfter = useTimeoutClear();
 
-  const [showKey, setShowKey] = useState(false);
-  const [keyInput, setKeyInput] = useState("");
+  const [keyInput, setKeyInput] = useState<string>("");
   const [keyStatus, setKeyStatus] = useState<string | null>(null);
   const [editingName, setEditingName] = useState(false);
   const [nameDraft, setNameDraft] = useState(provider.name);
   const [baseUrlDraft, setBaseUrlDraft] = useState(provider.baseUrl ?? "");
   const [saveMsg, setSaveMsg] = useState<string | null>(null);
   const [confirmDelete, setConfirmDelete] = useState(false);
+  // ROUND-59 (R59-C): the ROTATE mode — a separate small "Rotate key"
+  // button swaps the API-key block to the editable replacement input (the
+  // R58 dual-eye layout, where a stored-key reveal eye sat beside a
+  // visibility eye toggling an EMPTY input, was the owner's confusion and
+  // is gone).
+  const [rotatingKey, setRotatingKey] = useState(false);
   // ROUND-58 (R58-d): the primary-key reveal state — NEVER auto-fetched;
-  // fetched only on the explicit "show stored key" click, then rendered
-  // read-only with copy + hide (restores the rotate-key input).
+  // fetched only on the explicit "Show" click, then rendered read-only
+  // with Copy + Hide (masks again).
   const [revealState, setRevealState] = useState<
     | { kind: "idle" }
     | { kind: "loading" }
     | { kind: "shown"; value: string }
     | { kind: "error"; message: string }
   >({ kind: "idle" });
-  // ROUND-58 (R58-d): the disable-confirm gate — when agents reference this
-  // provider, flipping it off asks first (their turns would fail).
-  const [confirmDisable, setConfirmDisable] = useState(false);
-  // ROUND-58 (R58-d): copy confirmations/errors color themselves (a copy
+  // ROUND-59 (R59-C): copy confirmations/errors color themselves (a copy
   // failure must not inherit the save-mutation's green styling).
   const [keyStatusIsError, setKeyStatusIsError] = useState(false);
   // ROUND-47 (R47-c1): the test surface got explicit selectors — WHICH key
@@ -583,6 +578,11 @@ function ProviderDetailPane({
   const heldPoolSlots = (poolQuery.data ?? [])
     .filter((k) => k.slot > 0 && k.hasKey)
     .map((k) => k.slot);
+  // ROUND-59 (R59-C): the masked slot-0 (primary) value — from the SAME
+  // key-pool listing the test-key selector already rides (no extra fetch);
+  // dots while it loads or if the listing omits slot 0.
+  const maskedStoredKey =
+    poolQuery.data?.find((k) => k.slot === 0 && k.hasKey)?.masked ?? "•••••••••••";
 
   // ROUND-50 (R50-d): the provider's LIVE catalog WITH names — feeds the test
   // model selector AND the "Add models" picker (ids alone can't power a
@@ -619,9 +619,14 @@ function ProviderDetailPane({
       await storeProviderKey(provider.id, value);
     },
     onSuccess: () => {
+      // ROUND-59 (R59-C): a saved rotation exits the editable block (the
+      // masked stored-key view returns) and refreshes the pool listing so
+      // the masked slot-0 value is the NEW key's, never the stale one.
       setKeyInput("");
+      setRotatingKey(false);
       setKeyStatus("Key saved to the secure store.");
       void queryClient.invalidateQueries({ queryKey: ["settings-providers"] });
+      void queryClient.invalidateQueries({ queryKey: ["key-pool", provider.id] });
     },
     onError: (err: Error) => setKeyStatus(err.message),
   });
@@ -670,9 +675,10 @@ function ProviderDetailPane({
     }
   };
 
-  // ROUND-58 (R58-d): fetch + display the ACTUAL stored primary key (the
-  // owner's reveal demand). Only ever invoked from the explicit eye click —
-  // never on mount. A missing slot-0 answer is surfaced honestly.
+  // ROUND-58 (R58-d) / R59-C: fetch + display the ACTUAL stored primary key
+  // (the owner's reveal demand — "when I tap on the show button then it
+  // will show up"). Only ever invoked from the explicit Show click — never
+  // on mount. A missing slot-0 answer is surfaced honestly.
   const revealStoredKey = async () => {
     setRevealState({ kind: "loading" });
     try {
@@ -773,8 +779,8 @@ function ProviderDetailPane({
         </div>
         {/* Enabled badge + key badge + the enable/disable toggle (every
             provider — ROUND-58 R58-d: a proper SWITCH, not the old bare
-            underlined text link; disabling a provider with agents on it asks
-            first). */}
+            underlined text link; ROUND-59 R59-C: flipping it acts
+            OUTRIGHT). */}
         <span
           className="px-2 py-0.5 rounded-full text-[10px] font-bold"
           style={{
@@ -793,9 +799,10 @@ function ProviderDetailPane({
         >
           {provider.hasKey ? "● Key stored" : "○ No key"}
         </span>
-        {/* ROUND-58 (R58-d): the enable/disable toggle. Enabling is free and
-            immediate; DISABLING gates through the confirm box below when any
-            agent still references the provider. */}
+        {/* ROUND-59 (R59-C): the enable/disable toggle acts OUTRIGHT — the
+            owner: no "One agent uses this provider" confirm; a disabled
+            provider's models simply disappear from the pickers. The agent
+            count survives ONLY as this quiet hover tooltip. */}
         <span className="flex items-center gap-1.5">
           <span className="text-[11px] font-bold" style={{ color: styles.textSecondary }}>
             {provider.enabled ? "Enabled" : "Disabled"}
@@ -808,17 +815,13 @@ function ProviderDetailPane({
             title={
               provider.enabled
                 ? agentsUsingProvider.length > 0
-                  ? `${agentsUsingProvider.length} agent(s) use this provider`
+                  ? `${agentsUsingProvider.length} agent(s) use this provider — disabling takes effect immediately`
                   : "Disable this provider"
                 : "Re-enable this provider"
             }
             disabled={saveDetails.isPending}
             onClick={() => {
-              if (provider.enabled && agentsUsingProvider.length > 0) {
-                // Agents reference it — ask before breaking their turns.
-                setConfirmDisable(true);
-                return;
-              }
+              // R59-C: NO gate — the PATCH fires immediately.
               saveDetails.mutate({ enabled: !provider.enabled });
             }}
             className="relative h-6 w-11 shrink-0 cursor-pointer rounded-full transition-colors disabled:cursor-wait disabled:opacity-60"
@@ -844,56 +847,6 @@ function ProviderDetailPane({
           </span>
         )}
       </div>
-
-      {/* ROUND-58 (R58-d): the disable confirmation — an inline warning box
-          (no window.confirm), shown only when agents use this provider. */}
-      {confirmDisable && (
-        <div
-          role="alert"
-          data-confirm-disable
-          className="rounded-[16px] border-[1.5px] p-4 flex items-start gap-3 flex-wrap"
-          style={{
-            background: withAlpha("#ef4444", 0.04),
-            borderColor: withAlpha("#ef4444", 0.35),
-          }}
-        >
-          <span
-            className="w-8 h-8 shrink-0 rounded-[10px] grid place-items-center"
-            style={{ background: withAlpha("#ef4444", 0.1), color: "#ef4444" }}
-            aria-hidden
-          >
-            <AlertTriangle size={14} />
-          </span>
-          <div className="min-w-0 flex-1">
-            <p className="text-[12px] font-bold" style={{ color: styles.text }}>
-              {agentsUsingProvider.length} agent{agentsUsingProvider.length === 1 ? "" : "s"} use this
-              provider — their turns will fail until it is re-enabled. Disable anyway?
-            </p>
-            <p className="mt-0.5 text-[11px]" style={{ color: styles.textTertiary }}>
-              {agentsUsingProvider.map((a) => a.name).join(", ")}
-            </p>
-          </div>
-          <span className="flex items-center gap-2 shrink-0">
-            <button
-              onClick={() => setConfirmDisable(false)}
-              className="h-8 px-3.5 rounded-[10px] border-[1.5px] text-[12px] font-bold"
-              style={{ borderColor: styles.border, color: styles.textSecondary }}
-            >
-              Cancel
-            </button>
-            <button
-              onClick={() => {
-                setConfirmDisable(false);
-                saveDetails.mutate({ enabled: false });
-              }}
-              className="h-8 px-3.5 rounded-[10px] text-[12px] font-bold"
-              style={{ background: "#ef4444", color: "#fff" }}
-            >
-              Disable anyway
-            </button>
-          </span>
-        </div>
-      )}
 
       {/* ── Connection: base URL / API format / key + test ─────────────── */}
       <div
@@ -967,22 +920,72 @@ function ProviderDetailPane({
             </div>
           </>
         )}
-        {/* API key — ROUND-58 (R58-d): gains the stored-key REVEAL action
-            (the owner's explicit demand — "I should be able to… see the API key
-            there, every single one of the API keys, without any issues").
-            Fetched ONLY on the explicit click, never on mount. */}
+        {/* API key — ROUND-59 (R59-C): the stored key presents itself MASKED
+            (read-only, the key-pool listing's slot-0 masked value) with ONE
+            primary action "Show" that fetches and displays the FULL value
+            (revealProviderKeys — explicit click only, never on mount); Hide
+            masks again, Copy rides the revealed value. Rotation is a
+            SEPARATE small "Rotate key" button that swaps the block to the
+            editable input + Save key + Cancel. The R58 dual-eye layout (a
+            reveal eye NEXT TO a visibility eye toggling an EMPTY input) was
+            the owner's confusion — "It will be hidden but when I tap on the
+            show button then it will show up. That was not handled properly"
+            — and is gone. */}
         <div>
           <label className="mb-1.5 block text-[11px] font-bold" style={{ color: styles.textSecondary }}>
             API key {provider.hasKey && <span style={{ color: "#22c55e" }}>· stored</span>}
           </label>
-          {revealState.kind === "shown" ? (
-            // The revealed stored key: read-only display + copy + hide.
-            <div className="flex gap-2" data-revealed-key>
+          {!provider.hasKey || rotatingKey ? (
+            // No key stored yet, or the explicit ROTATE flow: the editable
+            // replacement input + Save key (+ Cancel while rotating).
+            <div className="flex gap-2">
+              <input
+                // ROUND-59 (R59-C): cleartext on purpose — there is exactly
+                // ONE Show in this block and it belongs to the STORED key;
+                // masking what the user is typing here is what bred the R58
+                // two-eye ambiguity.
+                type="text"
+                value={keyInput}
+                onChange={(e) => setKeyInput(e.target.value)}
+                placeholder={provider.hasKey ? "Enter the new key to rotate" : "sk-…"}
+                aria-label="API key"
+                data-testid={provider.hasKey ? "rotate-key-input" : "new-key-input"}
+                className="h-10 flex-1 min-w-0 rounded-[10px] border-[1.5px] px-3 font-mono text-[12px] outline-none"
+                style={inputStyle}
+              />
+              <button
+                onClick={() => keyInput.trim() && saveKey.mutate(keyInput.trim())}
+                disabled={!keyInput.trim() || saveKey.isPending}
+                className="h-10 px-4 rounded-[10px] text-[12px] font-bold disabled:opacity-50 shrink-0"
+                style={{ background: styles.accent, color: styles.accentText }}
+              >
+                {saveKey.isPending ? "Saving…" : "Save key"}
+              </button>
+              {provider.hasKey && (
+                <button
+                  onClick={() => {
+                    setRotatingKey(false);
+                    setKeyInput("");
+                  }}
+                  aria-label="Cancel key rotation"
+                  data-testid="rotate-key-cancel"
+                  title="Back to the stored key"
+                  className="h-10 px-3.5 rounded-[10px] border-[1.5px] text-[12px] font-bold shrink-0"
+                  style={{ borderColor: styles.border, color: styles.textSecondary }}
+                >
+                  Cancel
+                </button>
+              )}
+            </div>
+          ) : revealState.kind === "shown" ? (
+            // The revealed stored key: full read-only value + Copy + Hide.
+            <div className="flex gap-2">
               <input
                 type="text"
                 readOnly
                 value={revealState.value}
                 aria-label="Stored API key (revealed)"
+                data-testid="stored-key-revealed"
                 title={revealState.value}
                 onFocus={(e) => e.currentTarget.select()}
                 className="h-10 flex-1 min-w-0 rounded-[10px] border-[1.5px] px-3 font-mono text-[12px] outline-none"
@@ -991,6 +994,7 @@ function ProviderDetailPane({
               <button
                 onClick={() => void copyToClipboard(revealState.value, "Key copied to clipboard.")}
                 aria-label="Copy stored key"
+                data-testid="copy-stored-key-button"
                 title="Copy the stored key"
                 className="h-10 px-3.5 rounded-[10px] border-[1.5px] text-[12px] font-bold flex items-center gap-1.5 shrink-0"
                 style={{ borderColor: styles.border, color: styles.textSecondary }}
@@ -1000,7 +1004,8 @@ function ProviderDetailPane({
               <button
                 onClick={() => setRevealState({ kind: "idle" })}
                 aria-label="Hide stored key"
-                title="Back to the rotate-key input"
+                data-testid="hide-stored-key-button"
+                title="Mask the stored key again"
                 className="h-10 px-3.5 rounded-[10px] border-[1.5px] text-[12px] font-bold shrink-0"
                 style={{ borderColor: styles.border, color: styles.textSecondary }}
               >
@@ -1008,53 +1013,43 @@ function ProviderDetailPane({
               </button>
             </div>
           ) : (
+            // The STORED key, masked (read-only) + ONE Show + Rotate key.
             <div className="flex gap-2">
-              <div className="relative flex-1 min-w-0">
-                <input
-                  type={showKey ? "text" : "password"}
-                  value={keyInput}
-                  onChange={(e) => setKeyInput(e.target.value)}
-                  placeholder={provider.hasKey ? "A key is stored — enter a new one to rotate" : "sk-…"}
-                  aria-label="API key"
-                  className="h-10 w-full rounded-[10px] border-[1.5px] px-3 pr-[56px] font-mono text-[12px] outline-none"
-                  style={inputStyle}
-                />
-                {/* ROUND-58 (R58-d): the stored-key reveal eye — fetches the
-                    ACTUAL stored value from the reveal route (explicit click
-                    only; the visibility eye only toggles this input's type). */}
-                {provider.hasKey && (
-                  <button
-                    onClick={() => void revealStoredKey()}
-                    disabled={revealState.kind === "loading"}
-                    aria-label="Show stored key"
-                    title="Show the stored key"
-                    className="absolute right-8 top-1/2 -translate-y-1/2 w-6 h-6 grid place-items-center rounded-md disabled:opacity-50"
-                    style={{ color: styles.textTertiary }}
-                  >
-                    {revealState.kind === "loading" ? (
-                      <RefreshCw size={13} className="animate-spin" />
-                    ) : (
-                      <Eye size={13} />
-                    )}
-                  </button>
-                )}
-                <button
-                  onClick={() => setShowKey((v) => !v)}
-                  aria-label={showKey ? "Hide key" : "Show key"}
-                  title={showKey ? "Hide" : "Show"}
-                  className="absolute right-2 top-1/2 -translate-y-1/2 w-6 h-6 grid place-items-center rounded-md"
-                  style={{ color: styles.textTertiary }}
-                >
-                  {showKey ? <EyeOff size={13} /> : <Eye size={13} />}
-                </button>
-              </div>
+              <input
+                type="text"
+                readOnly
+                value={maskedStoredKey}
+                aria-label="Stored API key (masked)"
+                data-testid="stored-key-masked"
+                title="The stored key, masked — Show fetches the full value"
+                className="h-10 flex-1 min-w-0 rounded-[10px] border-[1.5px] px-3 font-mono text-[12px] outline-none"
+                style={inputStyle}
+              />
               <button
-                onClick={() => keyInput.trim() && saveKey.mutate(keyInput.trim())}
-                disabled={!keyInput.trim() || saveKey.isPending}
-                className="h-10 px-4 rounded-[10px] text-[12px] font-bold disabled:opacity-50"
-                style={{ background: styles.accent, color: styles.accentText }}
+                onClick={() => void revealStoredKey()}
+                disabled={revealState.kind === "loading"}
+                aria-label="Show stored key"
+                data-testid="show-stored-key-button"
+                title="Show the stored key"
+                className="h-10 px-3.5 rounded-[10px] text-[12px] font-bold flex items-center gap-1.5 shrink-0 disabled:opacity-50"
+                style={{ background: withAlpha(styles.accent, 0.1), color: styles.accent }}
               >
-                {saveKey.isPending ? "Saving…" : "Save key"}
+                {revealState.kind === "loading" ? (
+                  <RefreshCw size={12} className="animate-spin" />
+                ) : (
+                  <Eye size={12} />
+                )}
+                Show
+              </button>
+              <button
+                onClick={() => setRotatingKey(true)}
+                aria-label="Rotate key"
+                data-testid="rotate-key-button"
+                title="Replace the stored key with a new one"
+                className="h-10 px-3.5 rounded-[10px] border-[1.5px] text-[12px] font-bold shrink-0"
+                style={{ borderColor: styles.border, color: styles.textSecondary }}
+              >
+                Rotate key
               </button>
             </div>
           )}
@@ -1072,8 +1067,8 @@ function ProviderDetailPane({
             </p>
           )}
           <p className="mt-1 text-[10.5px]" style={{ color: styles.textTertiary }}>
-            Stored in the OS secure store — never in the database or logs; the reveal view (R58-d)
-            fetches it only on your explicit click.
+            Stored in the OS secure store — never in the database or logs; Show fetches the full
+            value only on your explicit click.
           </p>
           {/* ROUND-47 (R47-c1): browser-dev honesty — the sidecar keyring is
               in-memory, so browser-stored keys do not survive a restart. */}

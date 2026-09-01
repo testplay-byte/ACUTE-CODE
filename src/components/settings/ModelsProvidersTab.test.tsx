@@ -28,6 +28,18 @@
  *
  * The api-level fns themselves are covered exhaustively in
  * src/lib/api.test.ts; this file covers the WIRING.
+ *
+ * ROUND-59 (R59-C) — the owner's four directives, regressed here:
+ *  10. Unconfigured seeded presets are ABSENT from the left list (the R58
+ *      "Not configured" group is gone); the count reflects what is shown.
+ *  11. The API-key field: masked STORED value + ONE Show (reveal route) +
+ *      Hide + Copy; a separate Rotate flow → Save key; honest reveal
+ *      errors.
+ *  12. Disabling a provider is OUTRIGHT — the PATCH fires immediately, no
+ *      confirm box in the DOM (even with agents referencing it).
+ *  13. Pre-select: the FIRST provider's detail pane opens without a click;
+ *      an explicit selection survives refreshes; deleting the selected
+ *      provider falls to the next one; empty list → placeholder card.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { cleanup, fireEvent, screen, waitFor, within } from "@testing-library/react";
@@ -56,8 +68,9 @@ const PROVIDER: ProviderView = {
 
 /* ── ROUND-58 (R58-d) test fixtures ───────────────────────────────────────── */
 
-/** A keyless seeded preset ("Their providers are like which I haven't even
- * configured") — belongs in the collapsed Not-configured group. */
+/** A keyless seeded preset — R59-C: hidden from the list ENTIRELY (the
+ * owner deleted the three by hand and wants them never to appear).
+ * Still served by GET /providers to prove the hiding is client-side. */
 const ANTHROPIC: ProviderView = {
   id: "anthropic",
   name: "Anthropic",
@@ -108,6 +121,8 @@ let providersList: ProviderView[] = [];
 let patchResponses: Array<{ id: string; body: Record<string, unknown> }> = [];
 /** POST /providers/:id/keys/reveal response. */
 let revealKeys: Array<{ slot: number; value: string }> = [];
+/** R59-C: when true, the reveal route answers HTTP 500 (the error path). */
+let revealFails = false;
 
 let pool: KeyPoolSlot[] = [];
 /** What POST /providers/:id/test answers this test (ok:true / ok:false). */
@@ -210,10 +225,44 @@ const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => 
     Object.assign(updated, patch);
     return jsonResponse(updated);
   }
+  // R59-C: DELETE /providers/:id — the delete-selected-falls-to-next flow.
+  if (providerPatchMatch !== null && method === "DELETE") {
+    const id = providerPatchMatch[1];
+    const before = providersList.length;
+    providersList = providersList.filter((p) => p.id !== id);
+    if (providersList.length === before) {
+      return {
+        status: 404,
+        ok: false,
+        text: async () => JSON.stringify({ error: { code: "NOT_FOUND", message: `no provider with id ${id}` } }),
+      } as unknown as Response;
+    }
+    return { status: 204, ok: true, text: async () => "" } as unknown as Response;
+  }
   // ROUND-58 (R58-d): POST /providers/:id/keys/reveal — the full values.
   const revealMatch = url.match(/\/api\/v1\/providers\/([^/]+)\/keys\/reveal$/);
   if (revealMatch !== null && method === "POST") {
+    // R59-C: the honest failure path (HTTP 500 → ApiError → red error line).
+    if (revealFails) {
+      return {
+        status: 500,
+        ok: false,
+        text: async () =>
+          JSON.stringify({ error: { code: "KEYRING", message: "reveal failed (sidecar keyring unavailable)" } }),
+      } as unknown as Response;
+    }
     return jsonResponse({ keys: revealKeys });
+  }
+  // R59-C: PUT /providers/:id/key — the rotate-key save (browser-dev path).
+  // Updates the pool listing's slot-0 masked value so the post-rotate
+  // masked display is honest (the pane invalidates + refetches it).
+  const keyPutMatch = url.match(/\/api\/v1\/providers\/([^/]+)\/key$/);
+  if (keyPutMatch !== null && method === "PUT") {
+    const value = String((body as { value: string }).value);
+    pool = pool.filter((k) => k.slot !== 0);
+    pool.push({ slot: 0, hasKey: true, masked: `${value.slice(0, 5)}…${value.slice(-4)}` });
+    pool.sort((a, b) => a.slot - b.slot);
+    return { status: 204, ok: true, text: async () => "" } as unknown as Response;
   }
   // Key pool (GET list + stateful PUT/DELETE per slot) — provider-scoped.
   const keyMatch = url.match(/\/api\/v1\/providers\/([^/]+)\/keys(?:\/(\d+))?$/);
@@ -319,6 +368,7 @@ beforeEach(() => {
   providersList = [PROVIDER].map((p) => ({ ...p }));
   patchResponses = [];
   revealKeys = [];
+  revealFails = false;
   pool = [];
   configured = [];
   customConfigured = [];
@@ -412,10 +462,10 @@ describe("KeyPoolSection — next-free-slot (ROUND-47 R47-c1)", () => {
 /* ── The connection card's explicit test surface (key + model selectors) ──── */
 
 describe("Connection card — key + model scoped test (ROUND-47 R47-c1)", () => {
-  /** Render the tab and open the (single) provider's detail pane. */
+  /** Render the tab and open the (single) provider's detail pane — R59-C:
+   * pre-select opens the FIRST provider (openrouter) without any click. */
   async function openProviderDetail() {
     renderWithProviders(<ModelsProvidersTab />);
-    fireEvent.click(await screen.findByRole("button", { name: /openrouter/i }));
     await waitFor(() => expect(screen.getByLabelText("Test key")).toBeTruthy());
   }
 
@@ -502,7 +552,7 @@ describe("Connection card — key + model scoped test (ROUND-47 R47-c1)", () => 
 describe("Independent scroll columns + sectioned detail pane (ROUND-50 R50-d)", () => {
   it("renders TWO separate .overflow-y-auto.auto-scroll columns — the left provider list and the right detail pane scroll independently", async () => {
     renderWithProviders(<ModelsProvidersTab />);
-    fireEvent.click(await screen.findByRole("button", { name: /openrouter/i }));
+    // R59-C: pre-select opens the first provider — no click needed.
     await waitFor(() => expect(screen.getByLabelText("Test key")).toBeTruthy());
 
     // The two independent scroll containers (left list body + right pane).
@@ -520,7 +570,6 @@ describe("Independent scroll columns + sectioned detail pane (ROUND-50 R50-d)", 
 
   it("sections the detail pane into labeled cards: Connection / API key pool / Models / Danger zone", async () => {
     renderWithProviders(<ModelsProvidersTab />);
-    fireEvent.click(await screen.findByRole("button", { name: /openrouter/i }));
     await waitFor(() => expect(screen.getByLabelText("Test key")).toBeTruthy());
 
     expect(screen.getByText("Connection")).toBeTruthy();
@@ -535,10 +584,11 @@ describe("Independent scroll columns + sectioned detail pane (ROUND-50 R50-d)", 
 /* ── ROUND-50 (R50-d): the catalog-driven "Add models" picker ─────────────── */
 
 describe("Add models — catalog picker (ROUND-50 R50-d)", () => {
-  /** Open the single provider's detail pane + the picker dialog. */
+  /** Open the first provider's detail pane + the picker dialog. */
   async function openPicker() {
     renderWithProviders(<ModelsProvidersTab />);
-    fireEvent.click(await screen.findByRole("button", { name: /openrouter/i }));
+    // R59-C: pre-select opens the first provider — no click needed.
+    await waitFor(() => expect(screen.getByLabelText("Test key")).toBeTruthy());
     fireEvent.click(await screen.findByRole("button", { name: /add models/i }));
     await waitFor(() => expect(screen.getByRole("dialog", { name: "Add models" })).toBeTruthy());
   }
@@ -670,9 +720,7 @@ describe("Configure model dialog — pricing round-trip (ROUND-50 R50-d)", () =>
       }),
     ];
     renderWithProviders(<ModelsProvidersTab />);
-    fireEvent.click(await screen.findByRole("button", { name: /openrouter/i }));
-
-    // The row shows the compact pricing summary (mono micro-type).
+    // R59-C: pre-select opens the first provider — no click needed.
     await waitFor(() => expect(screen.getByText("$0.15 in / $0.6 out / $0.02 cache")).toBeTruthy());
 
     fireEvent.click(
@@ -719,8 +767,11 @@ describe("Configure model dialog — pricing round-trip (ROUND-50 R50-d)", () =>
       modelRow({ id: "mdl_z-ai-glm", modelId: "z-ai/glm-5.2:free", displayName: "Z.ai: GLM 5.2" }),
     ];
     renderWithProviders(<ModelsProvidersTab />);
-    fireEvent.click(await screen.findByRole("button", { name: /openrouter/i }));
-    fireEvent.click(await screen.findByRole("button", { name: "Configure model Z.ai: GLM 5.2" }));
+    // R59-C: pre-select opens the first provider — no click needed.
+    await waitFor(() =>
+      expect(screen.getByRole("button", { name: "Configure model Z.ai: GLM 5.2" })).toBeTruthy(),
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Configure model Z.ai: GLM 5.2" }));
 
     const dialog = await screen.findByRole("dialog", { name: "Configure model" });
     fireEvent.change(within(dialog).getByLabelText("Input price ($/Mtok)"), {
@@ -736,37 +787,38 @@ describe("Configure model dialog — pricing round-trip (ROUND-50 R50-d)", () =>
   });
 });
 
-/* ── ROUND-58 (R58-d): the left list — Not-configured group + adaptive height ─ */
+/* ── ROUND-59 (R59-C): the left list — CONFIGURED providers only ─────────── */
 
-describe("Left list — Not-configured group + adaptive height (ROUND-58 R58-d)", () => {
-  it("keyless seeded presets collapse under 'Not configured' — expandable, selectable, collapsible", async () => {
+describe("Left list — configured providers only (R59-C)", () => {
+  it("keyless seeded presets are ABSENT entirely — no 'Not configured' group, no preset rows; the header count reflects what is shown", async () => {
     providersList = [PROVIDER, ANTHROPIC, OPENAI, GOOGLE].map((p) => ({ ...p }));
     renderWithProviders(<ModelsProvidersTab />);
 
-    // The configured provider renders as a live row…
-    await waitFor(() => expect(screen.getByTitle("https://openrouter.ai/api/v1 · Chat completions")).toBeTruthy());
-    // …the three keyless presets are grouped + COLLAPSED by default (the
-    // owner: "Their providers are like which I haven't even configured").
-    const groupBtn = await screen.findByRole("button", { name: "Not configured providers (3)" });
-    expect(groupBtn.getAttribute("aria-expanded")).toBe("false");
+    // The configured provider renders as a live row (pre-select opened its
+    // pane, so the title also exists on the pane header — scope to the list)…
+    const left = document.querySelector(".w-\\[280px\\]") as HTMLElement;
+    await waitFor(() =>
+      expect(within(left).getByTitle("https://openrouter.ai/api/v1 · Chat completions")).toBeTruthy(),
+    );
+    // …the three keyless presets appear NOWHERE (the owner deleted them
+    // by hand and wants them never to appear — not even collapsed).
+    expect(screen.queryByText("Not configured")).toBeNull();
+    expect(screen.queryByRole("button", { name: /Not configured providers/ })).toBeNull();
     expect(screen.queryByTitle("https://api.anthropic.com/v1 · Anthropic messages")).toBeNull();
     expect(screen.queryByTitle("https://api.openai.com/v1 · Chat completions")).toBeNull();
     expect(screen.queryByTitle("https://generativelanguage.googleapis.com/v1beta/openai · Chat completions")).toBeNull();
+    expect(document.querySelector("[data-not-configured-group]")).toBeNull();
+    // The count reflects what the list SHOWS — 1, not 4.
+    expect(screen.getByTestId("provider-count").textContent).toBe("1");
+  });
 
-    // Expand → the rows appear (muted but selectable)…
-    fireEvent.click(groupBtn);
-    expect(screen.getByTitle("https://api.anthropic.com/v1 · Anthropic messages")).toBeTruthy();
-    expect(screen.getByTitle("https://api.openai.com/v1 · Chat completions")).toBeTruthy();
-    // …selecting one opens its detail pane.
-    fireEvent.click(screen.getByTitle("https://api.anthropic.com/v1 · Anthropic messages"));
-    await waitFor(() => expect(screen.getByLabelText("Test key")).toBeTruthy());
-
-    // Collapse again → rows gone FROM THE LEFT LIST (the detail pane's own
-    // endpoint line legitimately keeps the selected provider's title).
-    fireEvent.click(screen.getByRole("button", { name: "Not configured providers (3)" }));
-    const leftCol = document.querySelector(".w-\\[280px\\]") as HTMLElement;
-    expect(within(leftCol).queryByTitle("https://api.anthropic.com/v1 · Anthropic messages")).toBeNull();
-    expect(within(leftCol).queryByTitle("https://api.openai.com/v1 · Chat completions")).toBeNull();
+  it("a preset that HOLDS a key stays visible — the predicate is hasKey OR custom", async () => {
+    providersList = [PROVIDER, { ...ANTHROPIC, hasKey: true }].map((p) => ({ ...p }));
+    renderWithProviders(<ModelsProvidersTab />);
+    await waitFor(() =>
+      expect(screen.getByTitle("https://api.anthropic.com/v1 · Anthropic messages")).toBeTruthy(),
+    );
+    expect(screen.getByTestId("provider-count").textContent).toBe("2");
   });
 
   it("the left column is content-adaptive with a 220px floor, keeping its own scroller", async () => {
@@ -780,7 +832,7 @@ describe("Left list — Not-configured group + adaptive height (ROUND-58 R58-d)"
     expect(left.querySelector(".overflow-y-auto.auto-scroll")).not.toBeNull();
   });
 
-  it("a keyless CUSTOM provider stays a live row — never grouped", async () => {
+  it("a keyless CUSTOM provider stays a live row — presets are the only hidden rows", async () => {
     providersList = [PROVIDER, { ...CUSTOM_PROVIDER, hasKey: false }];
     renderWithProviders(<ModelsProvidersTab />);
     await waitFor(() =>
@@ -794,8 +846,8 @@ describe("Left list — Not-configured group + adaptive height (ROUND-58 R58-d)"
 
 describe("Connection card — preset vs custom fields (ROUND-58 R58-d)", () => {
   it("openrouter (preset): Base URL + API format HIDDEN with the info line; key + test remain", async () => {
+    // R59-C: pre-select opens the first provider — no click needed.
     renderWithProviders(<ModelsProvidersTab />);
-    fireEvent.click(await screen.findByTitle("https://openrouter.ai/api/v1 · Chat completions"));
     await waitFor(() => expect(screen.getByLabelText("Test key")).toBeTruthy());
 
     // The fixed-endpoint fields are GONE…
@@ -804,61 +856,80 @@ describe("Connection card — preset vs custom fields (ROUND-58 R58-d)", () => {
     // …replaced by the muted info line (the owner: "It should only be shown
     // for custom providers").
     expect(screen.getByText("Preset provider — endpoint and format are fixed.")).toBeTruthy();
-    // The API-key input + Test connection stay for EVERY provider.
-    expect(screen.getByLabelText("API key")).toBeTruthy();
+    // The key field + Test connection stay for EVERY provider — the key
+    // field shows the STORED key masked (R59-C).
+    expect(screen.getByTestId("stored-key-masked")).toBeTruthy();
     expect(screen.getByRole("button", { name: /test connection/i })).toBeTruthy();
   });
 
   it("custom provider: Base URL + API format shown as before", async () => {
     providersList = [{ ...CUSTOM_PROVIDER }];
+    // R59-C: pre-select opens the (only) provider — no click needed.
     renderWithProviders(<ModelsProvidersTab />);
-    fireEvent.click(await screen.findByTitle("https://gw.example.com/v1 · Chat completions"));
     await waitFor(() => expect(screen.getByLabelText("Test key")).toBeTruthy());
     expect(screen.getByLabelText("Base URL")).toBeTruthy();
     expect(screen.getByText("API format")).toBeTruthy();
     expect(screen.queryByText("Preset provider — endpoint and format are fixed.")).toBeNull();
+    expect(screen.getByTestId("stored-key-masked")).toBeTruthy();
   });
 });
 
-/* ── ROUND-58 (R58-d): the enable/disable toggle + agent warning ───────────── */
+/* ── ROUND-59 (R59-C): the enable/disable toggle — OUTRIGHT ─────────────────── */
 
-describe("Enable/disable toggle (ROUND-58 R58-d)", () => {
-  it("disabling a provider with agents referencing it asks first; Cancel aborts with NO PATCH", async () => {
+describe("Enable/disable toggle (R59-C)", () => {
+  it("flipping the switch disables IMMEDIATELY — PATCH {enabled:false}, NO confirm box (the fixture agents DO reference openrouter)", async () => {
     renderWithProviders(<ModelsProvidersTab />);
-    fireEvent.click(await screen.findByTitle("https://openrouter.ai/api/v1 · Chat completions"));
     const toggle = await screen.findByRole("switch", { name: "Toggle provider OpenRouter" });
     expect(toggle.getAttribute("aria-checked")).toBe("true");
-    // Wait for the agent-registry query to land (the fixture agents all
-    // reference openrouter) — the toggle's tooltip flips to the agent count.
+    // Let the agent-registry query land (every fixture agent references
+    // openrouter) — the old R58 gate used to arm exactly here.
     await waitFor(() => expect(toggle.getAttribute("title")).toContain("agent(s) use this provider"));
 
     fireEvent.click(toggle);
-    // The inline warning box appears with the count + the agent names.
-    const alert = await screen.findByRole("alert");
-    expect(alert.textContent).toContain("agents use this provider");
-    expect(alert.textContent).toContain("Disable anyway?");
-    // Cancel → the box closes and NO PATCH left the page.
-    fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
-    await waitFor(() => expect(screen.queryByRole("alert")).toBeNull());
-    expect(patchResponses.some((p) => p.body.enabled === false)).toBe(false);
-  });
-
-  it("confirming ('Disable anyway') PATCHes {enabled: false}", async () => {
-    renderWithProviders(<ModelsProvidersTab />);
-    fireEvent.click(await screen.findByTitle("https://openrouter.ai/api/v1 · Chat completions"));
-    const toggle = await screen.findByRole("switch", { name: "Toggle provider OpenRouter" });
-    await waitFor(() => expect(toggle.getAttribute("title")).toContain("agent(s) use this provider"));
-    fireEvent.click(toggle);
-    fireEvent.click(await screen.findByRole("button", { name: "Disable anyway" }));
+    // The PATCH fires with NO gate…
     await waitFor(() => {
       expect(patchResponses).toContainEqual({ id: "openrouter", body: { enabled: false } });
     });
+    // …and the R58 confirm box is GONE from the DOM entirely.
+    expect(document.querySelector("[data-confirm-disable]")).toBeNull();
+    expect(screen.queryByRole("alert")).toBeNull();
+    expect(screen.queryByRole("button", { name: "Disable anyway" })).toBeNull();
+    expect(screen.queryByText(/agents use this provider/)).toBeNull();
   });
 
-  it("a provider with NO agents disables immediately — no confirm box", async () => {
-    providersList = [{ ...CUSTOM_PROVIDER }];
+  it("re-enabling rides the same immediate path — PATCH {enabled:true}", async () => {
     renderWithProviders(<ModelsProvidersTab />);
-    fireEvent.click(await screen.findByTitle("https://gw.example.com/v1 · Chat completions"));
+    const toggle = await screen.findByRole("switch", { name: "Toggle provider OpenRouter" });
+    fireEvent.click(toggle);
+    await waitFor(() =>
+      expect(patchResponses).toContainEqual({ id: "openrouter", body: { enabled: false } }),
+    );
+    // The stateful mock applied the patch — the refetched switch is OFF…
+    await waitFor(() => expect(toggle.getAttribute("aria-checked")).toBe("false"));
+    // …and flips straight back on, no questions asked.
+    fireEvent.click(toggle);
+    await waitFor(() =>
+      expect(patchResponses).toContainEqual({ id: "openrouter", body: { enabled: true } }),
+    );
+  });
+
+  it("the agent count survives only as the quiet hover tooltip — honest, non-blocking", async () => {
+    renderWithProviders(<ModelsProvidersTab />);
+    const toggle = await screen.findByRole("switch", { name: "Toggle provider OpenRouter" });
+    await waitFor(() =>
+      expect(toggle.getAttribute("title")).toContain(
+        "agent(s) use this provider — disabling takes effect immediately",
+      ),
+    );
+    // Nothing else renders from the agent registry — no warning box.
+    expect(document.querySelector("[data-confirm-disable]")).toBeNull();
+    expect(screen.queryByRole("alert")).toBeNull();
+  });
+
+  it("a provider with NO agents disables immediately — the generic tooltip path", async () => {
+    providersList = [{ ...CUSTOM_PROVIDER }];
+    // R59-C: pre-select opens the (only) provider — no click needed.
+    renderWithProviders(<ModelsProvidersTab />);
     const toggle = await screen.findByRole("switch", { name: "Toggle provider My Gateway" });
     // No fixture agent references my-gateway → the tooltip stays generic.
     await waitFor(() => expect(toggle.getAttribute("title")).toBe("Disable this provider"));
@@ -870,46 +941,116 @@ describe("Enable/disable toggle (ROUND-58 R58-d)", () => {
   });
 });
 
-/* ── ROUND-58 (R58-d): the key REVEAL UI (primary + pool rows) ─────────────── */
+/* ── ROUND-59 (R59-C): the API-key field — masked stored + ONE Show + rotate ── */
 
-describe("Key reveal (ROUND-58 R58-d)", () => {
-  it("the stored-key eye POSTs the reveal route and shows the FULL value + copy + hide", async () => {
+describe("Key field — masked stored key, one Show, rotate (R59-C)", () => {
+  it("shows the STORED key MASKED (read-only, the pool listing's slot 0) — no editable input, no auto-reveal", async () => {
+    pool = [{ slot: 0, hasKey: true, masked: "sk-o…b4af" }];
+    renderWithProviders(<ModelsProvidersTab />);
+
+    const masked = (await screen.findByTestId("stored-key-masked")) as HTMLInputElement;
+    // The pool listing lands async — the masked value fills in when it does.
+    await waitFor(() => expect(masked.value).toBe("sk-o…b4af"));
+    expect(masked.readOnly).toBe(true);
+    // The R58 dual-eye layout is gone: NO editable "API key" input sits in
+    // the block while a key is stored — rotation is the only way to one.
+    expect(screen.queryByLabelText("API key")).toBeNull();
+    // NEVER auto-fetched on mount — the reveal route is untouched until the
+    // explicit Show click.
+    expect(calls.every((c) => !c.url.includes("/keys/reveal"))).toBe(true);
+  });
+
+  it("Show → the reveal route is POSTed and the FULL value renders; Copy copies it; Hide masks again", async () => {
+    pool = [{ slot: 0, hasKey: true, masked: "sk-o…b4af" }];
     revealKeys = [
       { slot: 0, value: "sk-or-v1-primary-full" },
       { slot: 2, value: "sk-or-v1-pool-2-full" },
     ];
     renderWithProviders(<ModelsProvidersTab />);
-    fireEvent.click(await screen.findByTitle("https://openrouter.ai/api/v1 · Chat completions"));
-    await waitFor(() => expect(screen.getByLabelText("API key")).toBeTruthy());
 
-    // NEVER auto-fetched on mount — the reveal route is untouched until the
-    // explicit click.
-    expect(calls.every((c) => !c.url.includes("/keys/reveal"))).toBe(true);
-
-    fireEvent.click(screen.getByRole("button", { name: "Show stored key" }));
-    const input = (await screen.findByLabelText("Stored API key (revealed)")) as HTMLInputElement;
-    expect(input.value).toBe("sk-or-v1-primary-full");
-    expect(input.readOnly).toBe(true);
+    fireEvent.click(await screen.findByTestId("show-stored-key-button"));
+    const revealed = (await screen.findByTestId("stored-key-revealed")) as HTMLInputElement;
+    expect(revealed.value).toBe("sk-or-v1-primary-full");
+    expect(revealed.readOnly).toBe(true);
+    await waitFor(() =>
+      expect(calls.some((c) => c.method === "POST" && c.url.includes("/keys/reveal"))).toBe(true),
+    );
 
     // Copy → the clipboard receives the FULL value.
-    fireEvent.click(screen.getByRole("button", { name: "Copy stored key" }));
+    fireEvent.click(screen.getByTestId("copy-stored-key-button"));
     await waitFor(() => expect(clipboardWriteText).toHaveBeenCalledWith("sk-or-v1-primary-full"));
     await waitFor(() => expect(screen.getByText("Key copied to clipboard.")).toBeTruthy());
 
-    // Hide → back to the rotate-key input.
-    fireEvent.click(screen.getByRole("button", { name: "Hide stored key" }));
-    await waitFor(() => expect(screen.getByLabelText("API key")).toBeTruthy());
-    expect(screen.queryByLabelText("Stored API key (revealed)")).toBeNull();
+    // Hide → masked again (the resting state is MASKED — the R58 flow
+    // dropped back to an editable input, which was the confusion).
+    fireEvent.click(screen.getByTestId("hide-stored-key-button"));
+    await waitFor(() => expect(screen.getByTestId("stored-key-masked")).toBeTruthy());
+    expect(screen.queryByTestId("stored-key-revealed")).toBeNull();
   });
 
-  it("honestly reports a missing stored key", async () => {
+  it("Rotate key → the editable input + Save key fires the PUT; the masked view returns with the NEW key's mask", async () => {
+    pool = [{ slot: 0, hasKey: true, masked: "sk-o…b4af" }];
+    renderWithProviders(<ModelsProvidersTab />);
+
+    fireEvent.click(await screen.findByTestId("rotate-key-button"));
+    const input = (await screen.findByTestId("rotate-key-input")) as HTMLInputElement;
+    expect(input.value).toBe("");
+
+    fireEvent.change(input, { target: { value: "sk-or-v1-rotated" } });
+    fireEvent.click(screen.getByRole("button", { name: "Save key" }));
+
+    await waitFor(() => {
+      const put = calls.find(
+        (c) => c.method === "PUT" && c.url.endsWith("/providers/openrouter/key"),
+      );
+      expect(put).toBeDefined();
+      expect(put?.body).toEqual({ value: "sk-or-v1-rotated" });
+    });
+    await waitFor(() => expect(screen.getByText("Key saved to the secure store.")).toBeTruthy());
+    // The block returns to the MASKED stored view — with the NEW key's
+    // masked value (the pane invalidated + refetched the pool listing).
+    await waitFor(() => {
+      expect((screen.getByTestId("stored-key-masked") as HTMLInputElement).value).toBe("sk-or…ated");
+    });
+  });
+
+  it("Cancel exits the rotate flow with NO key PUT", async () => {
+    pool = [{ slot: 0, hasKey: true, masked: "sk-o…b4af" }];
+    renderWithProviders(<ModelsProvidersTab />);
+
+    fireEvent.click(await screen.findByTestId("rotate-key-button"));
+    fireEvent.change(screen.getByTestId("rotate-key-input"), {
+      target: { value: "typed-then-cancelled" },
+    });
+    fireEvent.click(screen.getByTestId("rotate-key-cancel"));
+
+    await waitFor(() => expect(screen.getByTestId("stored-key-masked")).toBeTruthy());
+    expect(screen.queryByTestId("rotate-key-input")).toBeNull();
+    expect(calls.every((c) => !(c.method === "PUT" && c.url.endsWith("/key")))).toBe(true);
+  });
+
+  it("honestly reports a missing stored key (empty reveal answer)", async () => {
     revealKeys = []; // nothing stored on the server
     renderWithProviders(<ModelsProvidersTab />);
-    fireEvent.click(await screen.findByTitle("https://openrouter.ai/api/v1 · Chat completions"));
-    fireEvent.click(await screen.findByRole("button", { name: "Show stored key" }));
+    fireEvent.click(await screen.findByTestId("show-stored-key-button"));
     await waitFor(() => expect(screen.getByText("No key stored for this provider.")).toBeTruthy());
   });
 
+  it("reveal failure → the honest red error line; the masked view stays", async () => {
+    revealFails = true;
+    renderWithProviders(<ModelsProvidersTab />);
+    fireEvent.click(await screen.findByTestId("show-stored-key-button"));
+    const err = await screen.findByRole("alert");
+    expect(err.textContent).toContain("reveal failed (sidecar keyring unavailable)");
+    expect(err.style.color).toBe("#ef4444");
+    // The block stays on the masked stored value — nothing half-revealed.
+    expect(screen.getByTestId("stored-key-masked")).toBeTruthy();
+  });
+});
+
+/* ── ROUND-58 (R58-d): the key REVEAL UI (pool rows) ───────────────────────── */
+
+describe("Key reveal (ROUND-58 R58-d)", () => {
   it("pool rows reveal their full value — ONE fetch, per-row toggle, copy, re-mask", async () => {
     pool = [
       { slot: 2, hasKey: true, masked: "sk-o…aaaa" },
@@ -919,8 +1060,8 @@ describe("Key reveal (ROUND-58 R58-d)", () => {
       { slot: 2, value: "sk-or-v1-pool-2-full" },
       { slot: 4, value: "sk-or-v1-pool-4-full" },
     ];
+    // R59-C: pre-select opens the first provider — no click needed.
     renderWithProviders(<ModelsProvidersTab />);
-    fireEvent.click(await screen.findByTitle("https://openrouter.ai/api/v1 · Chat completions"));
     await waitFor(() => expect(screen.getByText("SLOT 2")).toBeTruthy());
 
     // Masked by default; still no auto-fetch.
@@ -949,8 +1090,8 @@ describe("Key reveal (ROUND-58 R58-d)", () => {
   it("pool mutations invalidate the reveal cache — a slot added AFTER a reveal re-fetches (never a stale value or a false 'No key stored')", async () => {
     pool = [{ slot: 2, hasKey: true, masked: "sk-o…aaaa" }];
     revealKeys = [{ slot: 2, value: "sk-or-v1-pool-2-full" }];
+    // R59-C: pre-select opens the first provider — no click needed.
     renderWithProviders(<ModelsProvidersTab />);
-    fireEvent.click(await screen.findByTitle("https://openrouter.ai/api/v1 · Chat completions"));
     await waitFor(() => expect(screen.getByText("SLOT 2")).toBeTruthy());
 
     // First reveal — one fetch, cache populated.
@@ -997,8 +1138,8 @@ describe("Catalog merge scoping (ROUND-58 R58-d)", () => {
       }),
     ];
     liveCatalog = [{ id: "z-ai/glm-5.2:free", name: "Z.ai: GLM 5.2" }];
+    // R59-C: pre-select opens the (only) provider — no click needed.
     renderWithProviders(<ModelsProvidersTab />);
-    fireEvent.click(await screen.findByTitle("https://gw.example.com/v1 · Chat completions"));
 
     // Free-only default: the count chip shows configured rows ONLY (the
     // live catalog entry did not merge in — "0 free of 1", not 2).
@@ -1018,5 +1159,109 @@ describe("Catalog merge scoping (ROUND-58 R58-d)", () => {
     await waitFor(() =>
       expect(within(dialog).getByLabelText("Select model z-ai/glm-5.2:free")).toBeTruthy(),
     );
+  });
+});
+
+/* ── ROUND-59 (R59-C): pre-select + selection lifecycle ───────────────────── */
+
+describe("Pre-select + selection lifecycle (R59-C)", () => {
+  it("providers load → the FIRST provider's detail pane renders WITHOUT a click", async () => {
+    providersList = [PROVIDER, CUSTOM_PROVIDER].map((p) => ({ ...p }));
+    renderWithProviders(<ModelsProvidersTab />);
+
+    // No click anywhere — the first row's details open on the right (the
+    // owner: "it will pre-select the top provider and open its details").
+    await waitFor(() =>
+      expect(screen.getByRole("switch", { name: "Toggle provider OpenRouter" })).toBeTruthy(),
+    );
+    expect(screen.getByText("Connection")).toBeTruthy();
+    // The left row carries the selection marker (the title rides the row's
+    // inner span — walk up to the button that owns aria-current).
+    const left = document.querySelector(".w-\\[280px\\]") as HTMLElement;
+    const row = within(left)
+      .getByTitle("https://openrouter.ai/api/v1 · Chat completions")
+      .closest("button");
+    expect(row?.getAttribute("aria-current")).toBe("true");
+  });
+
+  it("an explicit selection is NOT overridden by a later providers refresh", async () => {
+    providersList = [PROVIDER, CUSTOM_PROVIDER].map((p) => ({ ...p }));
+    renderWithProviders(<ModelsProvidersTab />);
+    await waitFor(() =>
+      expect(screen.getByRole("switch", { name: "Toggle provider OpenRouter" })).toBeTruthy(),
+    );
+
+    // The user picks the SECOND row explicitly…
+    const left = document.querySelector(".w-\\[280px\\]") as HTMLElement;
+    fireEvent.click(within(left).getByTitle("https://gw.example.com/v1 · Chat completions"));
+    await waitFor(() =>
+      expect(screen.getByRole("switch", { name: "Toggle provider My Gateway" })).toBeTruthy(),
+    );
+
+    // …then a providers refresh lands (the toggle PATCH → invalidate →
+    // refetch) — the selection must NOT snap back to the first row.
+    fireEvent.click(screen.getByRole("switch", { name: "Toggle provider My Gateway" }));
+    await waitFor(() =>
+      expect(patchResponses).toContainEqual({ id: "my-gateway", body: { enabled: false } }),
+    );
+    await waitFor(() =>
+      expect(screen.getByRole("switch", { name: "Toggle provider My Gateway" })).toBeTruthy(),
+    );
+    expect(screen.queryByRole("switch", { name: "Toggle provider OpenRouter" })).toBeNull();
+  });
+
+  it("deleting the SELECTED provider selects the next remaining one (not the empty state)", async () => {
+    providersList = [PROVIDER, CUSTOM_PROVIDER].map((p) => ({ ...p }));
+    renderWithProviders(<ModelsProvidersTab />);
+    await waitFor(() =>
+      expect(screen.getByRole("switch", { name: "Toggle provider OpenRouter" })).toBeTruthy(),
+    );
+
+    // The danger-zone two-click confirm flow deletes openrouter…
+    fireEvent.click(screen.getByRole("button", { name: "Delete provider OpenRouter" }));
+    fireEvent.click(screen.getByRole("button", { name: "Delete provider OpenRouter" }));
+
+    // …and the selection falls to the NEXT remaining provider.
+    await waitFor(() =>
+      expect(screen.getByRole("switch", { name: "Toggle provider My Gateway" })).toBeTruthy(),
+    );
+    expect(screen.queryByRole("switch", { name: "Toggle provider OpenRouter" })).toBeNull();
+    const left = document.querySelector(".w-\\[280px\\]") as HTMLElement;
+    expect(within(left).queryByTitle("https://openrouter.ai/api/v1 · Chat completions")).toBeNull();
+  });
+
+  it("empty provider list → the placeholder card + the empty left list", async () => {
+    providersList = [];
+    renderWithProviders(<ModelsProvidersTab />);
+    await waitFor(() => expect(screen.getByText("Select a provider")).toBeTruthy());
+    expect(screen.getByText("No providers — add one below.")).toBeTruthy();
+    expect(screen.queryByRole("switch")).toBeNull();
+    expect(screen.getByTestId("provider-count").textContent).toBe("0");
+  });
+
+  it("a selected provider that LEAVES the configured list (preset key removed) is deselected gracefully — falls to the first remaining", async () => {
+    providersList = [PROVIDER, CUSTOM_PROVIDER].map((p) => ({ ...p }));
+    renderWithProviders(<ModelsProvidersTab />);
+    await waitFor(() =>
+      expect(screen.getByRole("switch", { name: "Toggle provider OpenRouter" })).toBeTruthy(),
+    );
+
+    // The stored key disappears server-side → the preset drops out of the
+    // configured list on the next refresh.
+    providersList[0].hasKey = false;
+    // Trigger the refresh: the toggle PATCH → invalidate → refetch.
+    fireEvent.click(screen.getByRole("switch", { name: "Toggle provider OpenRouter" }));
+    await waitFor(() =>
+      expect(patchResponses).toContainEqual({ id: "openrouter", body: { enabled: false } }),
+    );
+
+    // OpenRouter is now hidden everywhere; the selection fell to the next
+    // configured provider — the detail pane never lingers on a hidden row.
+    await waitFor(() =>
+      expect(screen.getByRole("switch", { name: "Toggle provider My Gateway" })).toBeTruthy(),
+    );
+    expect(screen.queryByRole("switch", { name: "Toggle provider OpenRouter" })).toBeNull();
+    const left = document.querySelector(".w-\\[280px\\]") as HTMLElement;
+    expect(within(left).queryByTitle("https://openrouter.ai/api/v1 · Chat completions")).toBeNull();
   });
 });

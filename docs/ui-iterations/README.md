@@ -1,4 +1,4 @@
-<!-- last-reviewed: 2026-08-31 round-58 -->
+<!-- last-reviewed: 2026-09-01 round-59 -->
 # UI Iterations — Owner Review Rounds
 
 This folder is the **dedicated tracking system for UI-fidelity work** (owner
@@ -127,3 +127,4 @@ work-branch discipline; subsequent rounds inherited the gap).
 evidence file with screenshots + verify output + owner verdict. The
 `scripts/verify-round.mjs` (Workstream L) will auto-generate the evidence-file
 skeleton to make this trivial.
+- [`round-59.md`](round-59.md) — the owner-feedback round (the twelfth Windows session confirmed 0.58.0's flows working): the rounded inset window frame + floating-pill scrollbars, the pop-out browser reworked into a frameless app-hosted page with our title bar + themed URL bar + child webview, Models & Providers honesty (unconfigured presets gone, masked key + one Show + Rotate, outright disable, first-provider pre-select), the response-rating system with immutable full-context snapshots + the ratings CLI, the diagnostics Console tab (frontend error bus + engine error ring), and the prompt-section registry (.acute/prompts/*.md wholesale overrides, byte-identity pinned). 1302 tests, live batteries on the owner's key, version 0.59.0.

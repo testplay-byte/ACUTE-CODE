@@ -28,13 +28,29 @@
 //!   `WebviewWindowBuilder::build` blocks on a channel to that same main
 //!   thread, the documented WebView2 deadlock (the pop-out window used to
 //!   render completely WHITE/half-created on Windows; same rationale as
-//!   `browser_tab_create` below). The nav overlay now rides the builder's
+//!   `browser_tab_create` below). The nav overlay rode the builder's
 //!   `initialization_script` (WebView2's AddScriptToExecuteOnDocumentCreated
 //!   — runs at document-start on EVERY new document, before page scripts)
 //!   instead of the post-build/on_navigation `eval`s, which fired before the
 //!   page load committed and never appeared. And `open_external_url` hands
 //!   a URL to the OS default browser from Rust (window.open inside a
 //!   WebView2 webview is silently swallowed by wry).
+//!
+//! - ROUND-59 (R59-b): the pop-out window got OUR chrome. The owner's
+//!   verdict on R58: the pop-out works and shares the profile, BUT "the
+//!   native title bar is still there… It should be a custom one but
+//!   apparently it was not". The window is now built DECORATIONLESS hosting
+//!   `popout.html` — a SECOND vite entry (vite.config.ts) that is a small
+//!   standalone React page painting the drag-region title bar + themed URL
+//!   bar itself; the page CONTENT is a child webview the page creates via
+//!   `browser_tab_create` with its OWN window label (the same
+//!   child-webview architecture as the in-app panel, same shared
+//!   browser-profile dir). The R58 NAV_OVERLAY_INIT injection is GONE — the
+//!   overlay only existed because an EXTERNAL page cannot render our React
+//!   chrome; the app page owns the chrome natively, so there is nothing to
+//!   inject. The initial URL travels through the `POPOUT_PENDING_URL` stash
+//!   + `popout_initial_url` command (see the static's doc comment for the
+//!   why-not-query-param reasoning).
 //!
 //! How the child-webview dance works:
 //!  1. The frontend creates a tab webview (`browser_tab_create`) with a
@@ -62,6 +78,7 @@
 //! instance with its own profile, cookies, and login state.
 
 use std::path::PathBuf;
+use std::sync::Mutex;
 use tauri::{
     AppHandle, Emitter, LogicalPosition, LogicalSize, Manager, Url, Webview, WebviewBuilder,
     WebviewUrl, WebviewWindowBuilder,
@@ -136,111 +153,132 @@ fn browser_profile_dir(app: &AppHandle) -> Result<PathBuf, String> {
     Ok(profile)
 }
 
-/// The nav-overlay init script — injects a small fixed-position bar at the
-/// top of the browser window with Back / Forward / Reload / address input.
-/// The bar is a separate DOM layer (`z-index: 9999`) so it doesn't interfere
-/// with the page's own layout; the buttons walk the page's own session
-/// history (window.history / location).
+/// ROUND-59 (R59-b): the fixed browser-tab id whose webview hosts the pop-out
+/// window's page content. Fixed (not generated) because there is exactly ONE
+/// pop-out; its webview label is `acute-tab-popout` (TAB_LABEL_PREFIX
+/// formation, globally unique, found by the label-lookup commands and swept
+/// by `browser_tabs_close_all` — it also dies with its window regardless).
+const POPOUT_TAB_ID: &str = "popout";
+
+/// ROUND-59 (R59-b): honest pop-out sizing. The defaults are the R41 values;
+/// the minimum matches `min_inner_size` below (what the window enforces).
+const POPOUT_DEFAULT_W: f64 = 1200.0;
+const POPOUT_DEFAULT_H: f64 = 800.0;
+const POPOUT_MIN_W: f64 = 640.0;
+const POPOUT_MIN_H: f64 = 480.0;
+/// The share of the primary monitor's WORK AREA the pop-out asks for — never
+/// more (the R59 owner directive: handle window sizing honestly on small
+/// screens instead of opening a window larger than the desktop).
+const POPOUT_WORK_AREA_FRACTION: f64 = 0.70;
+
+/// ROUND-59 (R59-b): the URL the pop-out window should open at. Written by
+/// `open_browser_window` on EVERY call (the create path AND the focus path —
+/// the focus path can race the page still mounting) and read by the
+/// popout.html page on mount via the `popout_initial_url` command.
 ///
-/// R58-b DELIVERY: registered via `WebviewWindowBuilder::initialization_script`
-/// (WebView2's AddScriptToExecuteOnDocumentCreated) — it runs at
-/// DOCUMENT-START on EVERY new document (initial load, link clicks,
-/// redirects, form submits), before any page script. The old delivery — a
-/// post-build `eval` plus a re-`eval` inside `on_navigation` — fired before
-/// the page load committed, so the overlay never appeared on Windows.
-/// Document-start means `<html>`/`<head>` may not exist yet, hence the
-/// readyState/DOMContentLoaded guard: the body waits for the DOM while the
-/// document is still loading and runs inline otherwise; the
-/// `__acuteBrowserOverlay` flag keeps same-document re-runs idempotent.
+/// A command instead of a query param on the App URL: tauri joins
+/// `WebviewUrl::App(path)` onto the app origin (`url.join(path)` in
+/// manager/webview.rs), and how a smuggled `?url=…` survives that join + the
+/// production asset resolver is not a contract we want to lean on; the stash
+/// is deterministic in dev AND prod. Kept (not taken) rather than cleared on
+/// read, so a page reload restores the last requested URL instead of an
+/// empty window.
+static POPOUT_PENDING_URL: Mutex<Option<String>> = Mutex::new(None);
+
+/// Publishes the pending pop-out URL (see the static's doc comment).
+fn set_popout_pending_url(url: String) -> Result<(), String> {
+    let mut guard = POPOUT_PENDING_URL
+        .lock()
+        .map_err(|e| format!("popout pending-url lock poisoned: {e}"))?;
+    *guard = Some(url);
+    Ok(())
+}
+
+/// Reads the pending pop-out URL (None until `open_browser_window` ran).
+fn popout_pending_url() -> Result<Option<String>, String> {
+    let guard = POPOUT_PENDING_URL
+        .lock()
+        .map_err(|e| format!("popout pending-url lock poisoned: {e}"))?;
+    Ok(guard.clone())
+}
+
+/// ROUND-59 (R59-b): clamp the pop-out's INITIAL size against the primary
+/// monitor's work area. Pure math over LOGICAL px (the caller converts the
+/// monitor's physical work area) so it is unit-testable without a monitor.
 ///
-/// Kept inline (no asset file) so the binary stays self-contained.
-const NAV_OVERLAY_INIT: &str = r#"
-(function () {
-  // Don't double-inject — the script runs once per NEW document (a fresh
-  // document means a fresh JS context, so the flag resets naturally), but
-  // a same-document re-run must be a no-op.
-  if (window.__acuteBrowserOverlay) return;
-  window.__acuteBrowserOverlay = true;
+/// Per dimension: `min(default, POPOUT_WORK_AREA_FRACTION × work)`, then
+/// floored at the window's minimum inner size — on an absurdly small screen
+/// the minimum WINS (a usable browser beats a sliver, and `min_inner_size`
+/// enforces the same floor, so the number here is what actually opens).
+/// Degenerate work-area data (NaN / ≤ 0 — a lying monitor) falls back to the
+/// defaults rather than a zero-sized window.
+fn clamp_popout_size(default_w: f64, default_h: f64, work_w: f64, work_h: f64) -> (f64, f64) {
+    let usable = work_w.is_finite() && work_w > 0.0 && work_h.is_finite() && work_h > 0.0;
+    if !usable {
+        return (default_w, default_h);
+    }
+    let w = (default_w.min(POPOUT_WORK_AREA_FRACTION * work_w)).max(POPOUT_MIN_W);
+    let h = (default_h.min(POPOUT_WORK_AREA_FRACTION * work_h)).max(POPOUT_MIN_H);
+    (w, h)
+}
 
-  var install = function () {
-    var bar = document.createElement('div');
-    bar.id = 'acute-browser-nav';
-    bar.style.cssText = [
-      'position: fixed',
-      'top: 0',
-      'left: 0',
-      'right: 0',
-      'height: 38px',
-      'display: flex',
-      'align-items: center',
-      'gap: 6px',
-      'padding: 0 8px',
-      'background: #1a1816',
-      'color: #f5f3ef',
-      'font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif',
-      'font-size: 12px',
-      'z-index: 2147483647',
-      'box-shadow: 0 1px 3px rgba(0,0,0,0.4)',
-    ].join(';');
-    bar.innerHTML =
-      '<button id="acute-back" title="Back" style="background:none;border:none;color:#f5f3ef;padding:4px 8px;cursor:pointer;border-radius:6px;font-size:14px">←</button>' +
-      '<button id="acute-fwd" title="Forward" style="background:none;border:none;color:#f5f3ef;padding:4px 8px;cursor:pointer;border-radius:6px;font-size:14px">→</button>' +
-      '<button id="acute-reload" title="Reload" style="background:none;border:none;color:#f5f3ef;padding:4px 8px;cursor:pointer;border-radius:6px;font-size:14px">⟳</button>' +
-      '<input id="acute-addr" type="text" placeholder="Search or enter address" style="flex:1;min-width:0;background:#2a2622;border:1px solid #3a342e;color:#f5f3ef;padding:4px 10px;border-radius:8px;font-size:12px;outline:none" />' +
-      '<button id="acute-go" title="Go" style="background:#FF6B2C;border:none;color:#1a1816;padding:4px 12px;cursor:pointer;border-radius:8px;font-size:12px;font-weight:600">Go</button>';
-    document.documentElement.appendChild(bar);
-    // Pad the page so the bar doesn't cover content. (head fallback: a
-    // degenerate document can reach install() without <head> — a <style>
-    // applies from anywhere in the DOM, never crash the overlay for it.)
-    var style = document.createElement('style');
-    style.textContent = 'html { padding-top: 38px !important; }';
-    (document.head || document.documentElement).appendChild(style);
-
-    // Wire nav buttons to the webview's history (window.history) + reload.
-    document.getElementById('acute-back').onclick = function () { window.history.back(); };
-    document.getElementById('acute-fwd').onclick = function () { window.history.forward(); };
-    document.getElementById('acute-reload').onclick = function () { window.location.reload(); };
-
-    // The address input: on Enter or "Go" click, navigate.
-    var addr = document.getElementById('acute-addr');
-    var go = function () {
-      var v = (addr.value || '').trim();
-      if (!v) return;
-      // URL-or-search heuristic (same as the BrowserPanel frontend).
-      var url;
-      if (/^https?:\/\//i.test(v)) url = v;
-      else if (/^[a-z][a-z0-9+.-]*:\/\//i.test(v)) url = v;
-      else if (/^[\w-]+(\.[\w-]+)+([/?#].*)?$/.test(v)) url = 'https://' + v;
-      else url = 'https://duckduckgo.com/?q=' + encodeURIComponent(v);
-      window.location.href = url;
+/// ROUND-59 (R59-b): the monitor-aware wrapper around `clamp_popout_size` —
+/// converts the primary monitor's PHYSICAL work area to logical px and falls
+/// back to the defaults when no monitor can be identified (`primary_monitor`
+/// returning Ok(None), or an error — both mean "guess honestly").
+fn popout_initial_size(app: &AppHandle) -> (f64, f64) {
+    let monitor = match app.primary_monitor() {
+        Ok(Some(m)) => m,
+        _ => return (POPOUT_DEFAULT_W, POPOUT_DEFAULT_H),
     };
-    document.getElementById('acute-go').onclick = go;
-    addr.addEventListener('keydown', function (e) { if (e.key === 'Enter') go(); });
+    let scale = monitor.scale_factor();
+    if !(scale.is_finite() && scale > 0.0) {
+        return (POPOUT_DEFAULT_W, POPOUT_DEFAULT_H);
+    }
+    let work = monitor.work_area();
+    clamp_popout_size(
+        POPOUT_DEFAULT_W,
+        POPOUT_DEFAULT_H,
+        work.size.width as f64 / scale,
+        work.size.height as f64 / scale,
+    )
+}
 
-    // Sync the address input with the current URL on load + on navigation.
-    var sync = function () { addr.value = window.location.href; };
-    sync();
-    window.addEventListener('popstate', sync);
-    // Also poll every 500ms — SPA navigations don't always fire popstate.
-    setInterval(sync, 500);
-  };
+/// ROUND-59 (R59-b): the `popout-navigate` event payload — emitted when the
+/// pop-out window exists but its content webview does not yet (the page is
+/// still mounting), so the page — which owns the webview — can finish the
+/// navigation itself. Serde field names stay snake_case (the page reads
+/// `event.payload.url`, same convention as `BrowserNavigated`).
+#[derive(Clone, serde::Serialize)]
+struct PopoutNavigate {
+    url: String,
+}
 
-  // R58-b document-start guard: initialization scripts run BEFORE the parser
-  // has built <html>/<head> — everything install() touches may not exist yet.
-  // While the document is still loading, wait for DOMContentLoaded (fires
-  // once, after the DOM exists); otherwise install inline.
-  if (document.readyState === 'loading' || document.documentElement === null) {
-    document.addEventListener('DOMContentLoaded', install);
-  } else {
-    install();
-  }
-})();
-"#;
-
-/// `open_browser_window(url)` — opens (or focuses) the persistent in-app
-/// browser window at the given URL. The window's user-data dir is scoped to
-/// app_local_data_dir/browser-profile — logins persist across app launches
-/// AND are isolated from the system browser.
+/// `open_browser_window(url)` — opens (or focuses) the pop-out browser window
+/// at the given URL. The pop-out shares the ONE browser profile
+/// (app_local_data_dir/browser-profile — attached to its content webview by
+/// `browser_tab_create`), so logins persist across app launches, are shared
+/// with the in-app panel, and stay isolated from the system browser.
+///
+/// ROUND-59 (R59-b): the window is now an APP-HOSTED page with custom chrome.
+/// The owner rejected the native Windows title bar on the pop-out ("It
+/// should be a custom one but apparently it was not"), so the window is built
+/// with `decorations(false)` hosting `popout.html` — a second vite entry that
+/// paints the drag-region title bar + themed URL bar itself (the R58
+/// NAV_OVERLAY_INIT injection is gone: the overlay only existed because an
+/// external page cannot render our React chrome; the app page can). The page
+/// CONTENT is a child webview the page creates via `browser_tab_create` with
+/// its OWN window label — the same architecture as the in-app panel.
+///
+/// The initial URL travels via the `POPOUT_PENDING_URL` stash + the
+/// `popout_initial_url` command (the static's doc comment explains why not a
+/// query param). When the window already exists it is focused and its
+/// CONTENT webview navigated (the pre-R59 behavior — focus + navigate —
+/// preserved); if the page has not created its webview yet, the
+/// `popout-navigate` event lets the page finish the navigation. The URL is
+/// validated http/https up front — that is the contract of the child webview
+/// that will render it (tightened from R58's any-scheme parse; every caller
+/// passes the panel's http/https currentUrl).
 ///
 /// ROUND-50 (R50-a): for the in-app browser PANEL this is superseded by the
 /// `browser_tab_*` child-webview commands below (the owner wants the pages
@@ -259,78 +297,123 @@ const NAV_OVERLAY_INIT: &str = r#"
 /// owner's Windows machine the sync build deadlocked mid-creation and the
 /// pop-out window rendered completely WHITE/blank. Async commands run on
 /// the tokio runtime via `async_runtime::spawn`, off the main thread — the
-/// documented workaround. (The eval/set_focus calls below only use
-/// fire-and-forget dispatchers, safe from any thread.)
+/// documented workaround. (`primary_monitor` below also round-trips the
+/// event loop, but from this async thread the loop is free to answer — the
+/// deadlock only exists when the MAIN thread is the one waiting on us.)
 #[tauri::command]
 pub async fn open_browser_window(app: AppHandle, url: String) -> Result<(), String> {
-    // If the browser window already exists, focus it + navigate to the URL.
+    // Validate http/https FIRST — the child webview that will render this URL
+    // only supports those schemes (the `parse_http_url` contract), and a bad
+    // URL must stash nothing and open nothing.
+    parse_http_url(&url)?;
+
+    // Publish BEFORE anything else: the popout.html page reads this stash on
+    // mount, whichever path below runs.
+    set_popout_pending_url(url.clone())?;
+
+    // Existing window: focus it + navigate its CONTENT webview. (Pre-R59 this
+    // eval'd `window.location = url` into the WINDOW webview — back then that
+    // webview WAS the browser page. Now it hosts the app chrome, and
+    // navigating it would blow the chrome away, so `acute-tab-popout` is the
+    // navigation target.)
     if let Some(existing) = app.get_webview_window(BROWSER_WINDOW_LABEL) {
-        // eval() navigates the existing webview to the new URL.
-        let init = format!(
-            "window.location = {};",
-            serde_json::to_string(&url).map_err(|e| format!("url encode failed: {e}"))?
-        );
-        let _ = existing.eval(&init);
         let _ = existing.set_focus();
-        // No overlay re-inject: the initialization_script registered when the
-        // window was built runs on EVERY new document this webview ever loads
-        // (AddScriptToExecuteOnDocumentCreated), this navigation included.
+        if let Some(content) = app.get_webview(&tab_label(POPOUT_TAB_ID)) {
+            let parsed = parse_http_url(&url)?;
+            content
+                .navigate(parsed)
+                .map_err(|e| format!("navigate pop-out content failed: {e}"))?;
+        } else {
+            // The page is still mounting (its browser_tab_create hasn't run
+            // yet) — broadcast; the page's popout-navigate listener finishes
+            // the navigation. Not an error: the window IS open.
+            let _ = app.emit("popout-navigate", PopoutNavigate { url });
+        }
         return Ok(());
     }
 
-    let profile = browser_profile_dir(&app)?;
-    let parsed_url: Url = url
-        .parse()
-        .map_err(|e| format!("invalid url \"{url}\": {e}"))?;
+    // R59-b: honest sizing — 70% of the primary monitor's WORK AREA, never
+    // above the 1200×800 default, floored at the 640×480 minimum, defaults
+    // when no monitor can be identified (see clamp_popout_size).
+    let (width, height) = popout_initial_size(&app);
 
-    WebviewWindowBuilder::new(&app, BROWSER_WINDOW_LABEL, WebviewUrl::External(parsed_url))
+    WebviewWindowBuilder::new(&app, BROWSER_WINDOW_LABEL, WebviewUrl::App("popout.html".into()))
         .title("Acute Browser")
-        .inner_size(1200.0, 800.0)
-        .min_inner_size(640.0, 480.0)
+        .inner_size(width, height)
+        .min_inner_size(POPOUT_MIN_W, POPOUT_MIN_H)
+        .center()
         .resizable(true)
         .fullscreen(false)
-        .decorations(true)
-        // WebView2 (Windows): the persistent user-data dir is where cookies +
-        // login state live. WebKit (macOS): same dir for website data.
-        // (Tauri 2 renamed the builder method from user_data_dir to
-        // data_directory — this is the 2.x name, verified against tauri 2.11.5.)
-        .data_directory(profile)
-        // R58-b: the nav overlay rides the INITIALIZATION script — WebView2's
-        // AddScriptToExecuteOnDocumentCreated runs NAV_OVERLAY_INIT at
-        // document-start on every new document (initial load, link clicks,
-        // redirects), before any page script. This replaces the old post-build
-        // `eval` AND the on_navigation re-`eval` (both fired before the page
-        // load committed, so on Windows the overlay never appeared). With the
-        // evals gone the on_navigation hook itself went too — its only job was
-        // the re-inject, and the `browser-navigated` event the panel consumes
-        // is emitted by `browser_tab_create`'s hook below, untouched.
-        .initialization_script(NAV_OVERLAY_INIT)
+        // R59-b: NO native decorations — popout.html paints the title bar
+        // (drag region + min/max/restore/close), the R59-A design language.
+        // The window-control permissions are already in
+        // capabilities/default.json for BOTH "main" and "acute-browser".
+        .decorations(false)
+        // No data_directory HERE: this webview hosts the APP page and uses
+        // the same default WebView2 user-data dir as the main window's app
+        // webview. The browser profile is attached to the CONTENT child
+        // webview by browser_tab_create — ONE shared profile across panel +
+        // pop-out (the owner's explicit demand, R58).
         .build()
         .map_err(|e| format!("WebviewWindowBuilder.build failed: {e}"))?;
 
     Ok(())
 }
 
-/// `navigate_browser(url)` — navigate the EXISTING browser window to a new
-/// URL (without re-creating it). No-op + Err if the window isn't open yet.
-/// Used by the BrowserPanel's address bar to drive the open browser window.
+/// `popout_initial_url()` — the URL the pop-out window should open its
+/// content webview at (`open_browser_window`'s stash; see
+/// `POPOUT_PENDING_URL`). Null when this page wasn't opened through that
+/// command (e.g. a plain web-dev visit of popout.html) — the popout page
+/// then shows its idle state and the first address-bar Go creates the
+/// webview.
+///
+/// ROUND-59 (R59-b).
 #[tauri::command]
-pub fn navigate_browser(app: AppHandle, url: String) -> Result<(), String> {
-    let existing = app
-        .get_webview_window(BROWSER_WINDOW_LABEL)
-        .ok_or_else(|| "browser window not open — call open_browser_window first".to_string())?;
-    let init = format!(
-        "window.location = {};",
-        serde_json::to_string(&url).map_err(|e| format!("url encode failed: {e}"))?
-    );
-    existing
-        .eval(&init)
-        .map_err(|e| format!("navigate eval failed: {e}"))?;
-    Ok(())
+pub fn popout_initial_url() -> Result<Option<String>, String> {
+    popout_pending_url()
 }
 
-/// `close_browser_window()` — close the persistent browser window. The
-/// profile survives on disk; re-opening picks up where the user left off.
+/// `navigate_browser(url)` — navigate the EXISTING pop-out window's CONTENT
+/// webview to a new URL (without re-creating the window). Err when the
+/// window isn't open.
+///
+/// R59-b: pre-R59 this eval'd `window.location = url` into the window's
+/// webview (which WAS the browser page); the window webview is now the app
+/// chrome, so the CHILD webview (`acute-tab-popout`) is the navigation
+/// target. When the child doesn't exist yet (page still mounting — or the
+/// panel racing a just-opened window), the pending-url stash +
+/// `popout-navigate` event let the page finish the navigation.
+///
+/// Call sites: registered since R41; the BrowserPanel's address bar drives
+/// the pop-out through `open_browser_window` (which focuses too), so no
+/// live frontend call site remains — kept registered and honest for any
+/// future or external caller.
+#[tauri::command]
+pub fn navigate_browser(app: AppHandle, url: String) -> Result<(), String> {
+    parse_http_url(&url)?;
+    if let Some(content) = app.get_webview(&tab_label(POPOUT_TAB_ID)) {
+        let parsed = parse_http_url(&url)?;
+        return content
+            .navigate(parsed)
+            .map_err(|e| format!("navigate browser window failed: {e}"));
+    }
+    // No content webview: either the pop-out window isn't open at all (the
+    // honest R41 error below) or its page is still mounting — focus the
+    // window and hand the navigation to the page.
+    if let Some(existing) = app.get_webview_window(BROWSER_WINDOW_LABEL) {
+        set_popout_pending_url(url.clone())?;
+        let _ = existing.set_focus();
+        let _ = app.emit("popout-navigate", PopoutNavigate { url });
+        return Ok(());
+    }
+    Err("browser window not open — call open_browser_window first".to_string())
+}
+
+/// `close_browser_window()` — close the pop-out browser window. The profile
+/// survives on disk; re-opening picks up where the user left off. The
+/// window's content webview (`acute-tab-popout`) is destroyed WITH its
+/// window — a webview cannot outlive its window — so there is nothing extra
+/// to clean up here.
 #[tauri::command]
 pub fn close_browser_window(app: AppHandle) -> Result<(), String> {
     if let Some(existing) = app.get_webview_window(BROWSER_WINDOW_LABEL) {
@@ -381,17 +464,28 @@ pub fn open_external_url(app: AppHandle, url: String) -> Result<(), String> {
 // ── ROUND-50 (R50-a): the native embedded browser (child webviews) ─────────
 //
 // One child webview per right-sidebar browser tab, hosted by the MAIN window
-// and positioned over the BrowserPanel's page area by the frontend. See the
+// and positioned over the BrowserPanel's page area by the frontend
+// (ROUND-59/R59-b: plus the pop-out window's own content webview, hosted by
+// the pop-out window — see browser_tab_create's window_label). See the
 // module header for the full design rationale.
 
-/// `browser_tab_create(tab_id, url)` — create (idempotently) the child webview
-/// for a browser tab. If the webview already exists it is simply NAVIGATED to
-/// the URL (this makes the command safe to call on every panel activation and
-/// from every address-bar navigation). Otherwise a new child webview is added
-/// to the main window at 1×1 logical px, HIDDEN — the frontend then measures
-/// its placeholder, calls `browser_tab_set_bounds` and
-/// `browser_tab_set_visible(true)`. Creating it hidden prevents a flash of the
-/// page at the window's top-left corner before the first bounds sync.
+/// `browser_tab_create(tab_id, url, [window_label])` — create (idempotently)
+/// the child webview for a browser tab. If the webview already exists it is
+/// simply NAVIGATED to the URL (this makes the command safe to call on every
+/// panel activation and from every address-bar navigation). Otherwise a new
+/// child webview is added to the host window at 1×1 logical px, HIDDEN — the
+/// frontend then measures its placeholder, calls `browser_tab_set_bounds`
+/// and `browser_tab_set_visible(true)`. Creating it hidden prevents a flash
+/// of the page at the window's top-left corner before the first bounds sync.
+///
+/// R59-b: the OPTIONAL `window_label` decides which window the webview is a
+/// child of. Omitted (None — every pre-R59 call site: the invoke bridge maps
+/// a missing key to None, so the BrowserPanel's `{tabId, url}` payloads are
+/// backward-compatible) it defaults to the MAIN window; the pop-out page
+/// passes its OWN label (`acute-browser`) so its content webview floats over
+/// the pop-out window. Bounds/visibility/go/navigate/url/close resolve the
+/// webview through its globally-unique LABEL (`Manager::get_webview`), so
+/// they are window-agnostic and needed no change.
 ///
 /// WHY THIS COMMAND IS `async`: `Window::add_child` blocks on a channel while
 /// the MAIN thread builds the webview (window/mod.rs:1129 in tauri 2.11.5).
@@ -407,7 +501,12 @@ pub fn open_external_url(app: AppHandle, url: String) -> Result<(), String> {
 /// `open_browser_window` to async for exactly the same build-blocking
 /// reason — see its doc comment above.)
 #[tauri::command]
-pub async fn browser_tab_create(app: AppHandle, tab_id: String, url: String) -> Result<(), String> {
+pub async fn browser_tab_create(
+    app: AppHandle,
+    tab_id: String,
+    url: String,
+    window_label: Option<String>,
+) -> Result<(), String> {
     let label = tab_label(&tab_id);
 
     // Idempotent create: an existing webview just navigates.
@@ -420,11 +519,13 @@ pub async fn browser_tab_create(app: AppHandle, tab_id: String, url: String) -> 
     }
 
     let parsed = parse_http_url(&url)?;
-    // `get_window` (not `get_webview_window`) — `add_child` lives on `Window`,
-    // and a `WebviewWindow` handle does not expose it.
-    let main_window = app
-        .get_window(MAIN_WINDOW_LABEL)
-        .ok_or_else(|| format!("main window \"{MAIN_WINDOW_LABEL}\" not found"))?;
+    // R59-b: the host window. `get_window` (not `get_webview_window`) —
+    // `add_child` lives on `Window`, and a `WebviewWindow` handle does not
+    // expose it.
+    let host_label = window_label.unwrap_or_else(|| MAIN_WINDOW_LABEL.to_string());
+    let host_window = app
+        .get_window(&host_label)
+        .ok_or_else(|| format!("window \"{host_label}\" not found"))?;
 
     // ALL tabs share the one browser-profile dir (same as the R41 window) —
     // logins/cookies/localStorage are shared across tabs like a real browser
@@ -458,7 +559,7 @@ pub async fn browser_tab_create(app: AppHandle, tab_id: String, url: String) -> 
             true
         });
 
-    let webview = main_window
+    let webview = host_window
         .add_child(
             builder,
             LogicalPosition::new(0.0, 0.0),
@@ -583,8 +684,10 @@ pub fn browser_tab_close(app: AppHandle, tab_id: String) -> Result<(), String> {
 
 /// `browser_tabs_close_all()` — destroy EVERY tab webview (anything labeled
 /// `acute-tab-*`). Escape hatch for app shutdown / "close all browser tabs"
-/// affordances; it never touches the R41 `acute-browser` window or the main
-/// webview. Closes as many as it can and reports the first failure.
+/// affordances; it never touches the pop-out WINDOW or the main webview
+/// (R59-b: the pop-out's content webview IS `acute-tab-popout` and IS swept —
+/// it is a tab webview by label, and it cannot outlive its window anyway).
+/// Closes as many as it can and reports the first failure.
 #[tauri::command]
 pub fn browser_tabs_close_all(app: AppHandle) -> Result<(), String> {
     let mut first_error: Option<String> = None;
@@ -598,5 +701,91 @@ pub fn browser_tabs_close_all(app: AppHandle) -> Result<(), String> {
     match first_error {
         Some(e) => Err(e),
         None => Ok(()),
+    }
+}
+
+// ── ROUND-59 (R59-b): unit tests ──────────────────────────────────────────
+//
+// Pure functions only (the keys.rs/sidecar.rs tests-module pattern): the
+// window/webview plumbing needs a running Tauri shell. CI runs `cargo
+// check`; these compile + run under `cargo test`.
+#[cfg(test)]
+mod tests {
+    use super::{
+        clamp_popout_size, popout_pending_url, set_popout_pending_url, POPOUT_DEFAULT_H,
+        POPOUT_DEFAULT_W, POPOUT_MIN_H, POPOUT_MIN_W,
+    };
+
+    /// 70% of a large work area EXCEEDS the defaults → the defaults win
+    /// (never larger than 1200×800, never larger than the desktop).
+    #[test]
+    fn popout_size_defaults_win_on_large_screens() {
+        let (w, h) = clamp_popout_size(POPOUT_DEFAULT_W, POPOUT_DEFAULT_H, 2560.0, 1440.0);
+        assert_eq!((w, h), (POPOUT_DEFAULT_W, POPOUT_DEFAULT_H));
+    }
+
+    /// A mid-sized work area (a laptop with taskbar) shrinks the window to
+    /// 70% — the honest small-screen behavior the owner asked for.
+    /// (0.7 is not binary-exact, hence the tolerance.)
+    #[test]
+    fn popout_size_takes_70_percent_of_a_mid_sized_work_area() {
+        let (w, h) = clamp_popout_size(POPOUT_DEFAULT_W, POPOUT_DEFAULT_H, 1600.0, 900.0);
+        assert!((w - 1120.0).abs() < 1e-6, "width was {w}");
+        assert!((h - 630.0).abs() < 1e-6, "height was {h}");
+    }
+
+    /// On a small work area the minimum inner size WINS (both dimensions) —
+    /// a usable browser beats a sliver, and min_inner_size enforces the
+    /// same floor, so this is what actually opens.
+    #[test]
+    fn popout_size_floors_at_the_minimum_on_small_screens() {
+        let (w, h) = clamp_popout_size(POPOUT_DEFAULT_W, POPOUT_DEFAULT_H, 900.0, 620.0);
+        assert_eq!((w, h), (POPOUT_MIN_W, POPOUT_MIN_H));
+    }
+
+    /// The clamp is per-dimension: a wide-short work area shrinks only the
+    /// height to the floor while the width takes its 70% share.
+    #[test]
+    fn popout_size_clamps_per_dimension() {
+        // 70% of 1440 = 1008 (fits, no floor); 70% of 620 = 434 → floored.
+        let (w, h) = clamp_popout_size(POPOUT_DEFAULT_W, POPOUT_DEFAULT_H, 1440.0, 620.0);
+        assert!((w - 1008.0).abs() < 1e-6, "width was {w}");
+        assert_eq!(h, POPOUT_MIN_H);
+    }
+
+    /// Degenerate monitor data (NaN / zero / negative) falls back to the
+    /// defaults — never a zero-sized or NaN window.
+    #[test]
+    fn popout_size_degenerate_work_area_falls_back_to_defaults() {
+        for (work_w, work_h) in [
+            (0.0, 900.0),
+            (1600.0, 0.0),
+            (-1.0, 900.0),
+            (f64::NAN, 900.0),
+            (1600.0, f64::NAN),
+        ] {
+            let (w, h) = clamp_popout_size(POPOUT_DEFAULT_W, POPOUT_DEFAULT_H, work_w, work_h);
+            assert_eq!((w, h), (POPOUT_DEFAULT_W, POPOUT_DEFAULT_H));
+        }
+    }
+
+    /// The pending-url stash round-trips and the LAST write wins (the
+    /// focus-path re-open must supersede the create-path URL for a page
+    /// that mounts late). One test function because the stash is a shared
+    /// static — parallel sibling tests must not interleave writes.
+    #[test]
+    fn popout_pending_url_roundtrips_and_last_write_wins() {
+        set_popout_pending_url("https://first.example/".to_string())
+            .expect("first stash write");
+        assert_eq!(
+            popout_pending_url().expect("stash read"),
+            Some("https://first.example/".to_string())
+        );
+        set_popout_pending_url("https://second.example/".to_string())
+            .expect("second stash write");
+        assert_eq!(
+            popout_pending_url().expect("stash re-read"),
+            Some("https://second.example/".to_string())
+        );
     }
 }

@@ -40,6 +40,10 @@ pub fn run() {
             browser::navigate_browser,
             browser::close_browser_window,
             browser::is_browser_window_open,
+            // ROUND-59 (R59-b): the pop-out window's custom-chrome page
+            // (popout.html) asks for its initial URL on mount — the stash
+            // open_browser_window published.
+            browser::popout_initial_url,
             // ROUND-58 (R58-b): hand a URL to the OS default browser from
             // Rust — the BrowserPanel's "Open externally" affordance
             // (window.open inside WebView2 is silently swallowed by wry).

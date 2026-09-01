@@ -19,10 +19,12 @@ import {
   ListChecks,
   Search,
   Square,
+  ThumbsDown,
+  ThumbsUp,
   type LucideIcon,
 } from "lucide-react";
 import { Link, useSearchParams } from "react-router";
-import { useQueryClient } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useAgents } from "../../hooks/use-agents";
 import { useTimeoutClear } from "../../hooks/use-timeout-clear";
 import { pushLocalToast } from "../../hooks/use-notifications";
@@ -48,15 +50,21 @@ import {
   type AssistantTurnItem,
   DIFF_TOOLS,
   type ErrorTurnItem,
+  MAX_RATING_NOTE_CHARS,
+  type MessageRating,
   type PermissionMode,
   type Project,
   type ProjectChatItem,
+  type RatingValue,
   type Session,
   type SessionDetail,
   type ThinkingLevel,
   type WorkingEntry,
   decideApproval,
+  deleteRating,
+  listSessionRatings,
   patchSessionPermissions,
+  rateReply,
   toProjectChatItems,
 } from "../../lib/api";
 import { useConfigStore } from "../../lib/config-store";
@@ -193,6 +201,251 @@ function ReplyStats({
           {c}
         </span>
       ))}
+    </div>
+  );
+}
+
+/**
+ * ROUND-59 (R59-D, owner directive: "add the options to mark the responses
+ * as good or bad, and all of these will be tracked and saved"): the
+ * assistant turn's FOOTER — the hover actions row (Copy + the good/bad
+ * rating cluster) and the reply stats, with the optional "What went wrong?"
+ * note editor unfolding BELOW the row after a bad rating (bad ratings get
+ * context from the owner; good ratings stay one-click). Extracted from
+ * AssistantTurn so ALL the rating state (the ["session-ratings", sessionId]
+ * map + the optimistic mutations) lives in ONE place, shared by the folded
+ * turn AND the live-completed turn (the same rating key — the turn's last
+ * non-empty assistant text seq).
+ *
+ * Interaction contract (pinned by AgentChatPanel.test.tsx):
+ * - click a thumb → optimistic accent fill + POST /sessions/:id/ratings;
+ *   a failure REVERTS the fill and shows an honest inline transient message
+ *   (no alert()).
+ * - click the OTHER thumb → re-rate (the backend upserts on
+ *   (session_id, assistant_seq)).
+ * - click the SAME thumb again → clear (DELETE /ratings/:id).
+ * - turns without a rating key (working-only turns) render no thumbs.
+ * - a rated turn's filled thumb renders PERSISTENTLY (not just on hover);
+ *   the unrated cluster reveals on hover like CopyButton.
+ */
+function TurnFooter({
+  sessionId,
+  assistantSeq,
+  copyText,
+  usage,
+  ms,
+  model,
+}: {
+  sessionId: string | null;
+  /** R59-D rating key — the turn's LAST non-empty assistant text seq
+   * (undefined on working-only turns → no rating cluster). */
+  assistantSeq: number | undefined;
+  copyText: string;
+  usage?: { inputTokens: number; outputTokens: number };
+  ms?: number;
+  model?: string;
+}) {
+  const styles = useThemeStyles();
+  const queryClient = useQueryClient();
+  const resetAfter = useTimeoutClear();
+  // Demo (fixture) mode has no sidecar → no ratings; the query stays off.
+  const liveMode = useConfigStore((s) => !s.demoData);
+  // Honest inline transient error (reverts the optimistic fill's verdict).
+  const [ratingError, setRatingError] = useState<string | null>(null);
+  // The bad-rating note editor: opens ONLY on the fresh bad-rating CLICK
+  // transition (a reloaded bad rating renders the filled thumb, no editor).
+  const [noteOpen, setNoteOpen] = useState(false);
+  const [noteText, setNoteText] = useState("");
+
+  const ratingsQuery = useQuery({
+    queryKey: ["session-ratings", sessionId],
+    queryFn: () => listSessionRatings(sessionId as string),
+    enabled: sessionId !== null && liveMode,
+  });
+  const current = useMemo(
+    () =>
+      assistantSeq === undefined
+        ? undefined
+        : (ratingsQuery.data ?? []).find((r) => r.assistantSeq === assistantSeq),
+    [ratingsQuery.data, assistantSeq],
+  );
+
+  const flashRatingError = (err: unknown): void => {
+    setRatingError(err instanceof Error ? err.message : String(err));
+    resetAfter(() => setRatingError(null), 4000);
+  };
+
+  const writeRows = (rows: MessageRating[]): void => {
+    if (sessionId === null) return;
+    queryClient.setQueryData<MessageRating[]>(["session-ratings", sessionId], rows);
+  };
+
+  /** Refetch after each mutation (the ratings map stays canonical). */
+  const refreshRatings = (): void => {
+    if (sessionId === null) return;
+    void queryClient.invalidateQueries({ queryKey: ["session-ratings", sessionId] });
+  };
+
+  const onThumb = (value: RatingValue): void => {
+    if (sessionId === null || assistantSeq === undefined) return;
+    const snapshot = ratingsQuery.data ?? [];
+    // Same thumb again → clear the verdict (optimistic unfill + DELETE).
+    // id ≤ 0 marks the in-flight optimistic row — nothing persisted to
+    // delete yet, so a click in that window is a no-op (the refetch is
+    // already on its way with the real row id).
+    if (current !== undefined && current.rating === value && current.id > 0) {
+      writeRows(snapshot.filter((r) => r.assistantSeq !== assistantSeq));
+      setNoteOpen(false);
+      setRatingError(null);
+      deleteRating(current.id)
+        .then(() => refreshRatings())
+        .catch((err) => {
+          writeRows(snapshot); // revert
+          flashRatingError(err);
+        });
+      return;
+    }
+    // New verdict or re-rate → optimistic fill + upsert POST (the backend
+    // freezes the full turn context server-side at rate time).
+    const optimistic: MessageRating = {
+      id: current?.id ?? 0,
+      sessionId,
+      assistantSeq,
+      rating: value,
+      note: current?.note ?? null,
+      model: current?.model ?? null,
+      agentId: current?.agentId ?? null,
+      createdAt: current?.createdAt ?? new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    };
+    writeRows([...snapshot.filter((r) => r.assistantSeq !== assistantSeq), optimistic]);
+    setRatingError(null);
+    // Bad ratings ask for context ("What went wrong?"); good stays 1-click.
+    setNoteOpen(value === "bad");
+    rateReply(sessionId, { assistantSeq, rating: value })
+      .then(() => refreshRatings())
+      .catch((err) => {
+        writeRows(snapshot); // revert
+        flashRatingError(err);
+      });
+  };
+
+  const onNoteSave = (): void => {
+    if (sessionId === null || assistantSeq === undefined) return;
+    const text = noteText.trim().slice(0, MAX_RATING_NOTE_CHARS);
+    // Re-rate (upsert) carrying the note — the backend overwrites the
+    // rating row and refreshes the frozen context with it.
+    rateReply(sessionId, { assistantSeq, rating: "bad", ...(text !== "" ? { note: text } : {}) })
+      .then(() => {
+        setNoteOpen(false);
+        setNoteText("");
+        refreshRatings();
+      })
+      .catch((err) => flashRatingError(err));
+  };
+
+  const thumbButton = (value: RatingValue, Icon: typeof ThumbsUp, label: string) => {
+    const filled = current?.rating === value;
+    return (
+      <button
+        type="button"
+        onClick={() => onThumb(value)}
+        aria-label={label}
+        aria-pressed={filled}
+        title={label}
+        data-testid={`rate-${value}`}
+        className="w-6 h-6 rounded-md grid place-items-center transition-colors"
+        style={{ color: filled ? styles.accent : styles.textTertiary }}
+        onMouseEnter={(e) => {
+          e.currentTarget.style.background = styles.subtleHover;
+        }}
+        onMouseLeave={(e) => {
+          e.currentTarget.style.background = "transparent";
+        }}
+      >
+        <Icon size={11} style={filled ? { fill: "currentColor" } : undefined} />
+      </button>
+    );
+  };
+
+  return (
+    <div className="min-w-0" data-rating-footer>
+      <div className="flex items-center gap-1">
+        <div className="opacity-0 group-hover:opacity-100 transition-opacity pt-0.5">
+          <CopyButton text={copyText} />
+        </div>
+        {assistantSeq !== undefined ? (
+          <div
+            data-rating-cluster
+            // Unrated → hover-revealed like CopyButton; rated → the filled
+            // thumb stays visible (persistent verdict, not just on hover).
+            className={`flex items-center gap-0.5 pt-0.5 transition-opacity ${
+              current === undefined ? "opacity-0 group-hover:opacity-100" : ""
+            }`}
+          >
+            {thumbButton("good", ThumbsUp, "Rate this reply good")}
+            {thumbButton("bad", ThumbsDown, "Rate this reply bad")}
+          </div>
+        ) : null}
+        <ReplyStats usage={usage} ms={ms} model={model} />
+      </div>
+      {noteOpen ? (
+        <div className="mt-1.5 flex flex-wrap items-center gap-1.5" data-rating-note>
+          <input
+            value={noteText}
+            onChange={(e) => setNoteText(e.target.value.slice(0, MAX_RATING_NOTE_CHARS))}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") {
+                e.preventDefault();
+                onNoteSave();
+              } else if (e.key === "Escape") {
+                setNoteOpen(false);
+              }
+            }}
+            // aria-label carries the placeholder's question — screen readers
+            // get the intent without the visual text.
+            aria-label="What went wrong?"
+            placeholder="What went wrong?"
+            data-testid="rating-note-input"
+            maxLength={MAX_RATING_NOTE_CHARS}
+            className="flex-1 min-w-[160px] h-7 rounded-lg px-2.5 text-[12px] border outline-none"
+            style={{
+              borderColor: styles.border,
+              background: styles.bg,
+              color: styles.text,
+            }}
+          />
+          <button
+            type="button"
+            onClick={onNoteSave}
+            aria-label="Save rating note"
+            data-testid="rating-note-save"
+            className="h-7 px-2.5 rounded-lg text-[11.5px] font-semibold border"
+            style={{ borderColor: withAlpha(styles.accent, 0.5), color: styles.accent }}
+          >
+            Save
+          </button>
+          <button
+            type="button"
+            onClick={() => setNoteOpen(false)}
+            aria-label="Cancel rating note"
+            className="h-7 px-2.5 rounded-lg text-[11.5px] font-semibold border"
+            style={{ borderColor: styles.border, color: styles.textSecondary }}
+          >
+            Cancel
+          </button>
+        </div>
+      ) : null}
+      {ratingError !== null ? (
+        <div
+          role="alert"
+          data-rating-error
+          className="mt-1 text-[11px] leading-[1.4] break-words"
+          style={{ color: SEMANTIC_COLORS.danger }}
+        >
+          {ratingError}
+        </div>
+      ) : null}
     </div>
   );
 }
@@ -566,12 +819,16 @@ function AssistantTurn({
           <RichText content={item.finalText} projectId={projectId} />
         </div>
       ) : null}
-      <div className="flex items-center gap-1">
-        <div className="opacity-0 group-hover:opacity-100 transition-opacity pt-0.5">
-          <CopyButton text={item.finalText} />
-        </div>
-        <ReplyStats usage={item.usage} ms={item.ms} model={item.model} />
-      </div>
+      {/* ROUND-59 (R59-D): the footer owns the response-rating cluster
+          (Copy + good/bad thumbs + stats + the bad-rating note editor). */}
+      <TurnFooter
+        sessionId={sessionId}
+        assistantSeq={item.lastAssistantSeq}
+        copyText={item.finalText}
+        usage={item.usage}
+        ms={item.ms}
+        model={item.model}
+      />
     </motion.div>
   );
 }
@@ -1548,7 +1805,7 @@ export function AgentChatPanel({
                 streaming presumptive-final text (which flows into the
                 section as narration the moment a tool lands). ── */}
             {liveTurn !== null ? (
-              <div aria-live="polite" aria-atomic="false" className="min-w-0">
+              <div aria-live="polite" aria-atomic="false" className="group min-w-0">
                 {liveSection}
                 {liveTurn.streamText !== "" ? (
                   <div className={`min-w-0 break-words text-[13px] leading-[1.65] ${liveTurn.working.length > 0 ? "mt-2" : ""}`} style={{ color: styles.text }}>
@@ -1565,6 +1822,20 @@ export function AgentChatPanel({
                   <span className="text-[12px] font-mono" style={{ color: styles.textSecondary }}>
                     Thinking<span className="ac-ellipsis" aria-hidden />
                   </span>
+                ) : null}
+                {/* ROUND-59 (R59-D): the live turn's rating key lands with the
+                    done frame (LiveTurn.lastAssistantSeq) — the SAME footer
+                    component renders, so a live-completed turn can be rated
+                    immediately, before the refetched folded log takes over
+                    (the key is identical: the turn's last non-empty assistant
+                    text seq, so the optimistic verdict carries over). While
+                    the turn is still in flight there is no key → no cluster. */}
+                {liveTurn.lastAssistantSeq !== undefined && !streamBusy ? (
+                  <TurnFooter
+                    sessionId={session?.id ?? null}
+                    assistantSeq={liveTurn.lastAssistantSeq}
+                    copyText={liveTurn.streamText}
+                  />
                 ) : null}
               </div>
             ) : null}

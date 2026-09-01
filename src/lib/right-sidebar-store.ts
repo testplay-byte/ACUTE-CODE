@@ -57,8 +57,20 @@ export function stateKey(projectId: string, sessionId: string | null): string {
  * side, the actual content of the files"). A singleton tab like the terminal
  * and memory tabs, rendered by FilesExplorerPanel. The single-path "file"
  * tab type (FileViewerPanel) is unchanged — the chat's DiffDetail "Open" and
- * openFile() keep opening one bound file per tab. */
-export type RightSidebarTabType = "file" | "files" | "browser" | "terminal" | "subagent" | "memory";
+ * openFile() keep opening one bound file per tab.
+ *
+ * ROUND-59 (R59-E): "console" — the diagnostics console (owner: "proper
+ * console-like error monitoring and error handling"). A singleton tab like
+ * terminal/memory/files, rendered by ConsolePanel: the frontend error bus +
+ * the engine's error ring in one live, copyable, clearable list. */
+export type RightSidebarTabType =
+  | "file"
+  | "files"
+  | "browser"
+  | "terminal"
+  | "subagent"
+  | "memory"
+  | "console";
 
 export interface TerminalLine {
   /** ROUND-44 (R44-e): "exit" lines carry the streaming exit-code footer
@@ -153,6 +165,9 @@ interface RightSidebarState {
   openTerminal: (projectId: string) => string;
   /** ROUND-44 (R44-a): open (or surface) the project-memory tab. */
   openMemory: (projectId: string) => string;
+  /** ROUND-59 (R59-E): open (or surface) the diagnostics console tab
+   * (singleton — the error console is app-global, one per sidebar). */
+  openConsole: (projectId: string) => string;
   /** Open (or surface) a sub-agent tab. */
   openSubAgent: (
     projectId: string,
@@ -182,7 +197,7 @@ function nextId(): string {
 function findExistingTab(
   state: ProjectRightState,
   type: RightSidebarTabType,
-  key: { filePath?: string; browserUrl?: string | null; subAgentId?: string; terminal?: boolean; memory?: boolean; files?: boolean },
+  key: { filePath?: string; browserUrl?: string | null; subAgentId?: string; terminal?: boolean; memory?: boolean; files?: boolean; console?: boolean },
 ): RightSidebarTab | null {
   for (const t of state.tabs) {
     if (t.type !== type) continue;
@@ -196,6 +211,9 @@ function findExistingTab(
     // ROUND-48 (R48-c): files explorer is a singleton tab like the terminal
     // and memory — one per session's sidebar.
     if (type === "files" && key.files) return t;
+    // ROUND-59 (R59-E): the console is a singleton tab like the terminal /
+    // memory / files — one per session's sidebar.
+    if (type === "console" && key.console) return t;
   }
   return null;
 }
@@ -256,6 +274,7 @@ export const useRightSidebarStore = create<RightSidebarState>()(
             terminal: tabInput.type === "terminal",
             memory: tabInput.type === "memory",
             files: tabInput.type === "files",
+            console: tabInput.type === "console",
           });
           if (existing !== null) {
             resolvedId = existing.id;
@@ -328,6 +347,11 @@ export const useRightSidebarStore = create<RightSidebarState>()(
         get().addTab(projectId, { type: "terminal", title: "Terminal" }),
       openMemory: (projectId) =>
         get().addTab(projectId, { type: "memory", title: "Memory" }),
+      // ROUND-59 (R59-E): the diagnostics console — singleton (deduped by
+      // type, like the terminal/memory/files tabs), so the quick-menu
+      // "Console" action always surfaces the ONE console.
+      openConsole: (projectId) =>
+        get().addTab(projectId, { type: "console", title: "Console" }),
       // ROUND-48 (R48-c): the file explorer — a singleton tab (deduped by
       // type, like the terminal/memory tabs), so the quick-menu "Files"
       // action always surfaces the ONE explorer instead of stacking tabs.

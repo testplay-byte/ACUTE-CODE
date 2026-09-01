@@ -21,7 +21,7 @@ import { cleanup, fireEvent, screen, waitFor } from "@testing-library/react";
 import { AgentChatPanel } from "./AgentChatPanel";
 import { getFixtureProjects } from "../../lib/project-fixtures";
 import { createFixtureSessions } from "../../lib/session-fixtures";
-import type { SessionEvent, SessionsBackend } from "../../lib/api";
+import type { MessageRating, SessionEvent, SessionsBackend } from "../../lib/api";
 import { useConfigStore } from "../../lib/config-store";
 import { useNotificationStreamStore } from "../../hooks/use-notifications";
 import { useSettingsStore } from "../../lib/settings-store";
@@ -33,14 +33,28 @@ const customBackend = vi.hoisted((): { backend: SessionsBackend | null } => ({
   backend: null,
 }));
 
+/** ROUND-59 (R59-D): the ratings client fns, mocked (the api module mock
+ * below installs them). The holder lets tests assert/program them. */
+const ratingsMock = vi.hoisted(() => ({
+  rateReply: null as unknown as ReturnType<typeof vi.fn>,
+  listSessionRatings: null as unknown as ReturnType<typeof vi.fn>,
+  deleteRating: null as unknown as ReturnType<typeof vi.fn>,
+}));
+
 vi.mock("../../lib/api", async () => {
   const mod = await import("../../lib/api");
   const agentsFx = await import("../../lib/agent-fixtures");
   const sessionsFx = await import("../../lib/session-fixtures");
+  ratingsMock.rateReply = vi.fn();
+  ratingsMock.listSessionRatings = vi.fn();
+  ratingsMock.deleteRating = vi.fn();
   return {
     ...mod,
     getAgentsBackend: () => agentsFx.getFixtureAgents(),
     getSessionsBackend: () => customBackend.backend ?? sessionsFx.getFixtureSessions(),
+    rateReply: ratingsMock.rateReply,
+    listSessionRatings: ratingsMock.listSessionRatings,
+    deleteRating: ratingsMock.deleteRating,
   };
 });
 
@@ -54,6 +68,16 @@ beforeEach(() => {
   useSettingsStore.setState({ modelsFreeOnly: true });
   customBackend.backend = null;
   useNotificationStreamStore.getState().reset();
+  // ROUND-59 (R59-D): the ratings client starts empty (each test programs it).
+  // rateReply defaults to a resolved undefined — the component only chains
+  // .then/.catch, and a test that forgets to program it should not crash on
+  // `undefined.then`.
+  ratingsMock.rateReply.mockReset();
+  ratingsMock.listSessionRatings.mockReset();
+  ratingsMock.deleteRating.mockReset();
+  ratingsMock.listSessionRatings.mockResolvedValue([]);
+  ratingsMock.rateReply.mockResolvedValue(undefined);
+  ratingsMock.deleteRating.mockResolvedValue(undefined);
 });
 
 async function renderPanel() {
@@ -284,4 +308,390 @@ describe("AgentChatPanel user-stop rendering (ROUND-58 R58-cf)", () => {
     await renderStoppedConversation(false);
     expect(document.querySelector("[data-stopped-card]")).toBeNull();
   });
+});
+
+// ── ROUND-59 (R59-D): the response-rating cluster ───────────────────────────
+describe("AgentChatPanel response ratings (ROUND-59 R59-D)", () => {
+  const SLOW = { timeout: 5000 };
+
+  function messageEvent(
+    seq: number,
+    role: "user" | "assistant",
+    content: string,
+    ts: string,
+  ): SessionEvent {
+    return {
+      seq,
+      type: role === "user" ? "message.user" : "message.assistant",
+      agentId: "agt_scribe",
+      payload: { role, content, agentId: "agt_scribe", ts },
+      ts,
+    };
+  }
+
+  function toolUseEvent(seq: number): SessionEvent {
+    return {
+      seq,
+      type: "tool.use",
+      agentId: "agt_scribe",
+      payload: {
+        role: "tool",
+        toolName: "read_file",
+        argsSummary: "path: a.ts",
+        ok: true,
+        agentId: "agt_scribe",
+        ts: "2026-09-01T10:00:00Z",
+      },
+      ts: "2026-09-01T10:00:00Z",
+    };
+  }
+
+  /**
+   * One text turn (user q1 → assistant a1, rating key = seq 2) plus a
+   * WORKING-ONLY turn (user q2 → one tool call, no assistant text — no
+   * rating key, nothing to rate). `beforeRender` programs the ratings mock
+   * BEFORE the first mount (React Query caches the initial fetch — a mock
+   * set after render would never be seen without a refetch).
+   */
+  async function renderRatableConversation(beforeRender?: () => void): Promise<void> {
+    const projects = await getFixtureProjects().list();
+    customBackend.backend = createFixtureSessions([
+      {
+        session: {
+          id: "sess_rate_probe",
+          projectId: projects[0].id,
+          agentId: "agt_scribe",
+          mode: "single",
+          status: "completed",
+          title: "Rate probe",
+          createdAt: "2026-09-01T10:00:00Z",
+          updatedAt: "2026-09-01T10:05:00Z",
+        },
+        events: [
+          messageEvent(1, "user", "first question", "2026-09-01T10:00:10Z"),
+          messageEvent(2, "assistant", "first answer", "2026-09-01T10:00:20Z"),
+          messageEvent(3, "user", "second question", "2026-09-01T10:01:00Z"),
+          toolUseEvent(4),
+        ],
+      },
+    ]);
+    beforeRender?.();
+    renderWithProviders(
+      <AgentChatPanel projectId={projects[0].id} project={projects[0]} />,
+    );
+    await screen.findByText("first question", {}, SLOW);
+  }
+
+  it("renders the rating cluster on text-bearing turns ONLY (working-only turns have no key)", async () => {
+    await renderRatableConversation();
+
+    // Exactly ONE cluster: the turn whose last non-empty assistant text is
+    // seq 2. The tool-only turn (seq 4) carries no rating key.
+    const clusters = document.querySelectorAll("[data-rating-cluster]");
+    expect(clusters).toHaveLength(1);
+    const good = screen.getByTestId("rate-good");
+    const bad = screen.getByTestId("rate-bad");
+    expect(good.getAttribute("aria-pressed")).toBe("false");
+    expect(bad.getAttribute("aria-pressed")).toBe("false");
+    // Unrated cluster reveals on hover (opacity-0 until the turn is rated).
+    expect(clusters[0].className).toContain("opacity-0");
+  });
+
+  it("thumbs up → rateReply(sessionId, {assistantSeq, rating:'good'}) + optimistic fill", async () => {
+    await renderRatableConversation();
+    const persisted: MessageRating[] = [];
+    ratingsMock.rateReply.mockImplementation(async (_sid, input) => {
+      const row: MessageRating = {
+        id: 11,
+        sessionId: "sess_rate_probe",
+        assistantSeq: input.assistantSeq,
+        rating: input.rating,
+        note: input.note ?? null,
+        model: null,
+        agentId: "agt_scribe",
+        createdAt: "2026-09-01T10:06:00Z",
+        updatedAt: "2026-09-01T10:06:00Z",
+      };
+      persisted.push(row);
+      return row;
+    });
+    ratingsMock.listSessionRatings.mockImplementation(async () => persisted);
+
+    fireEvent.click(screen.getByTestId("rate-good"));
+
+    await waitFor(
+      () =>
+        expect(ratingsMock.rateReply).toHaveBeenCalledWith("sess_rate_probe", {
+          assistantSeq: 2,
+          rating: "good",
+        }),
+      SLOW,
+    );
+    // Optimistic fill: the good thumb renders pressed.
+    await waitFor(
+      () => expect(screen.getByTestId("rate-good").getAttribute("aria-pressed")).toBe("true"),
+      SLOW,
+    );
+    // Good ratings stay one-click: no note editor opens.
+    expect(document.querySelector("[data-rating-note]")).toBeNull();
+  });
+
+  it("thumbs down opens the note editor; Save sends the note (re-rate upsert)", async () => {
+    await renderRatableConversation();
+    const persisted: MessageRating[] = [];
+    ratingsMock.rateReply.mockImplementation(async (_sid, input) => {
+      const row: MessageRating = {
+        id: 12,
+        sessionId: "sess_rate_probe",
+        assistantSeq: input.assistantSeq,
+        rating: input.rating,
+        note: input.note ?? null,
+        model: null,
+        agentId: "agt_scribe",
+        createdAt: "2026-09-01T10:06:00Z",
+        updatedAt: "2026-09-01T10:06:00Z",
+      };
+      const existing = persisted.findIndex((r) => r.assistantSeq === row.assistantSeq);
+      if (existing >= 0) persisted[existing] = row;
+      else persisted.push(row);
+      return row;
+    });
+    ratingsMock.listSessionRatings.mockImplementation(async () => persisted);
+
+    fireEvent.click(screen.getByTestId("rate-bad"));
+    await waitFor(
+      () =>
+        expect(ratingsMock.rateReply).toHaveBeenCalledWith("sess_rate_probe", {
+          assistantSeq: 2,
+          rating: "bad",
+        }),
+      SLOW,
+    );
+
+    // The "What went wrong?" editor unfolds under the actions row.
+    const input = await screen.findByTestId("rating-note-input", {}, SLOW);
+    expect(input.getAttribute("placeholder")).toBe("What went wrong?");
+    fireEvent.change(input, { target: { value: "it edited the wrong file" } });
+    fireEvent.click(screen.getByTestId("rating-note-save"));
+
+    // The note travels on the re-rate call.
+    await waitFor(
+      () =>
+        expect(ratingsMock.rateReply).toHaveBeenLastCalledWith("sess_rate_probe", {
+          assistantSeq: 2,
+          rating: "bad",
+          note: "it edited the wrong file",
+        }),
+      SLOW,
+    );
+    // Saved → the editor closes.
+    await waitFor(
+      () => expect(document.querySelector("[data-rating-note]")).toBeNull(),
+      SLOW,
+    );
+  });
+
+  it("clicking the SAME thumb on a persisted verdict → deleteRating(id) + optimistic unfill", async () => {
+    // Stateful mock (mirrors the real backend): delete removes the row, so
+    // the post-mutation refetch settles on the UNFILLED state.
+    const row: MessageRating = {
+      id: 5,
+      sessionId: "sess_rate_probe",
+      assistantSeq: 2,
+      rating: "good",
+      note: null,
+      model: null,
+      agentId: "agt_scribe",
+      createdAt: "2026-09-01T10:00:00Z",
+      updatedAt: "2026-09-01T10:00:00Z",
+    };
+    let rows: MessageRating[] = [row];
+    await renderRatableConversation(() => {
+      ratingsMock.listSessionRatings.mockImplementation(async () => rows);
+      ratingsMock.deleteRating.mockImplementation(async (id: number) => {
+        rows = rows.filter((r) => r.id !== id);
+      });
+    });
+
+    // The persisted verdict renders FILLED, persistently (no hover gate).
+    const good = await waitFor(() => {
+      const el = screen.getByTestId("rate-good");
+      expect(el.getAttribute("aria-pressed")).toBe("true");
+      return el;
+    }, SLOW);
+    expect(good.closest("[data-rating-cluster]")?.className).not.toContain("opacity-0");
+
+    // Same thumb again → clear.
+    fireEvent.click(good);
+    await waitFor(() => expect(ratingsMock.deleteRating).toHaveBeenCalledWith(5), SLOW);
+    await waitFor(
+      () => expect(screen.getByTestId("rate-good").getAttribute("aria-pressed")).toBe("false"),
+      SLOW,
+    );
+  }, 15_000);
+
+  it("a failed rating REVERTS the optimistic fill and shows an honest inline transient message (no alert)", async () => {
+    await renderRatableConversation();
+    ratingsMock.rateReply.mockRejectedValue(new Error("sidecar unreachable (rating lost)"));
+    ratingsMock.listSessionRatings.mockImplementation(async () => []);
+
+    fireEvent.click(screen.getByTestId("rate-good"));
+
+    // Revert: the thumb never stays filled.
+    await waitFor(
+      () => expect(screen.getByTestId("rate-good").getAttribute("aria-pressed")).toBe("false"),
+      SLOW,
+    );
+    // The honest inline error line (role=alert, NOT window.alert).
+    const error = await screen.findByText(/sidecar unreachable/, {}, SLOW);
+    expect(error.getAttribute("role")).toBe("alert");
+    expect(error.closest("[data-rating-error]")).toBeTruthy();
+  });
+
+  it("loaded ratings render the filled thumb persistently and SURVIVE a reload (fresh mount + refetch)", async () => {
+    const projects = await getFixtureProjects().list();
+    const rows: MessageRating[] = [
+      {
+        id: 9,
+        sessionId: "sess_rate_probe",
+        assistantSeq: 2,
+        rating: "bad",
+        note: "wrong file",
+        model: null,
+        agentId: "agt_scribe",
+        createdAt: "2026-09-01T10:00:00Z",
+        updatedAt: "2026-09-01T10:00:00Z",
+      },
+    ];
+    ratingsMock.listSessionRatings.mockResolvedValue(rows);
+    const backend = createFixtureSessions([
+      {
+        session: {
+          id: "sess_rate_probe",
+          projectId: projects[0].id,
+          agentId: "agt_scribe",
+          mode: "single",
+          status: "completed",
+          title: "Rate probe",
+          createdAt: "2026-09-01T10:00:00Z",
+          updatedAt: "2026-09-01T10:05:00Z",
+        },
+        events: [
+          messageEvent(1, "user", "first question", "2026-09-01T10:00:10Z"),
+          messageEvent(2, "assistant", "first answer", "2026-09-01T10:00:20Z"),
+        ],
+      },
+    ]);
+    customBackend.backend = backend;
+
+    renderWithProviders(
+      <AgentChatPanel projectId={projects[0].id} project={projects[0]} />,
+    );
+    await screen.findByText("first question", {}, SLOW);
+    const bad = await waitFor(() => {
+      const el = screen.getByTestId("rate-bad");
+      expect(el.getAttribute("aria-pressed")).toBe("true");
+      return el;
+    }, SLOW);
+    expect(bad.closest("[data-rating-cluster]")?.className).not.toContain("opacity-0");
+    void backend;
+
+    // Reload: unmount, fresh mount (fresh QueryClient → fresh listSessionRatings).
+    cleanup();
+    renderWithProviders(
+      <AgentChatPanel projectId={projects[0].id} project={projects[0]} />,
+    );
+    await screen.findByText("first question", {}, SLOW);
+    await waitFor(
+      () => expect(screen.getByTestId("rate-bad").getAttribute("aria-pressed")).toBe("true"),
+      SLOW,
+    );
+  });
+
+  it("LIVE-completed turn: the done-frame seq (LiveTurn.lastAssistantSeq) renders the cluster", async () => {
+    const projects = await getFixtureProjects().list();
+    // A stateful persisted row mirrors the real backend for the live rating.
+    const persisted: MessageRating[] = [];
+    ratingsMock.rateReply.mockImplementation(async (_sid, input) => {
+      persisted.push({
+        id: 21,
+        sessionId: "sess_live_rate",
+        assistantSeq: input.assistantSeq,
+        rating: input.rating,
+        note: input.note ?? null,
+        model: null,
+        agentId: "agt_scribe",
+        createdAt: "2026-09-01T11:06:00Z",
+        updatedAt: "2026-09-01T11:06:00Z",
+      });
+      return persisted[0];
+    });
+    ratingsMock.listSessionRatings.mockImplementation(async () => persisted);
+    // An EMPTY folded log — only the live turn renders, so the cluster count
+    // is unambiguous.
+    customBackend.backend = createFixtureSessions([
+      {
+        session: {
+          id: "sess_live_rate",
+          projectId: projects[0].id,
+          agentId: "agt_scribe",
+          mode: "single",
+          status: "completed",
+          title: "Live rate",
+          createdAt: "2026-09-01T11:00:00Z",
+          updatedAt: "2026-09-01T11:05:00Z",
+        },
+        events: [],
+      },
+    ]);
+    renderWithProviders(
+      <AgentChatPanel projectId={projects[0].id} project={projects[0]} />,
+    );
+    // EMPTY folded log → the centered empty state (composer NOT docked).
+    await waitFor(
+      () => expect(document.querySelector("[data-empty-state]")).toBeTruthy(),
+      SLOW,
+    );
+
+    // The stream store's live turn completed: the done frame pinned seq 6.
+    useStreamStore.setState({
+      bySession: {
+        sess_live_rate: {
+          liveTurn: {
+            startedAtMs: Date.now() - 3000,
+            working: [],
+            streamText: "live reply",
+            streamThinking: "",
+            stopped: false,
+            stoppedByUser: false,
+            streamingToolInputs: [],
+            lastAssistantSeq: 6,
+          },
+          streamBusy: false,
+          sendError: null,
+          liveError: null,
+          pendingEcho: null,
+          lastLiveEndMs: Date.now(),
+          lastTurnStoppedByUser: false,
+          lastTurnStoppedTs: null,
+        },
+      },
+    });
+
+    const cluster = await waitFor(() => {
+      const el = document.querySelector("[data-rating-cluster]");
+      expect(el).toBeTruthy();
+      return el as HTMLElement;
+    }, SLOW);
+    void cluster;
+    fireEvent.click(screen.getByTestId("rate-good"));
+    await waitFor(
+      () =>
+        expect(ratingsMock.rateReply).toHaveBeenCalledWith("sess_live_rate", {
+          assistantSeq: 6,
+          rating: "good",
+        }),
+      SLOW,
+    );
+  }, 15_000);
 });

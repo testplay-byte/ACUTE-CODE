@@ -2,6 +2,9 @@ import { useEffect } from "react";
 import { Route, Routes, useNavigate } from "react-router";
 import { AppShell } from "./components/shell/AppShell";
 import { ConnectionGate } from "./components/shell/ConnectionGate";
+// R59-E: the app-level render error boundary — a throwing screen shows an
+// honest fallback card instead of a blank window, and lands in the Console.
+import { ErrorBoundary } from "./components/shell/ErrorBoundary";
 import { TitleBar } from "./components/shell/TitleBar";
 import { ProjectView } from "./components/projects/ProjectView";
 import { DemoViewerScreen } from "./components/demos/DemoViewerScreen";
@@ -12,6 +15,7 @@ import { PlaceholderPage } from "./pages/PlaceholderPage";
 import { SettingsPage } from "./pages/SettingsPage";
 import { SetupWizard } from "./components/onboarding/SetupWizard";
 import { shouldRunSetup } from "./components/onboarding/providers-api";
+import { isTauri } from "./lib/sidecar";
 
 /**
  * First-run gate (plan-ui-fidelity.md Wave 1): with no `acute.setupDone`
@@ -65,42 +69,68 @@ function FirstRunCheck() {
  * included); only the global sessions browser was removed.
  */
 export function App() {
+  // R59-A (owner: "make that top navigation bar rounded and give it padding
+  // on all four sides"): in Tauri mode the window paints a soft inset FRAME —
+  // 8px of breathing room on every side + an 8px gap — and the TitleBar and
+  // the content area each become a rounded card on the ambient background
+  // (the rounded-corner, padded look the owner asked for; the frame reads as
+  // one continuous window, never a floating toolbar). Web mode keeps the
+  // pre-R58 full-bleed column — the TitleBar renders null there, so the
+  // column degenerates to one full-height child, visually unchanged.
+  const shell = isTauri();
   return (
-    // R58: the custom TitleBar owns the top 40px in Tauri mode (the native
-    // decorations are gone); it renders null in web mode, where the column
-    // degenerates to one full-height child — visually identical to pre-R58.
-    // Everything below fills the remainder, so full-bleed screens (AppShell,
-    // wizard, connection gate) size with h-full instead of h-screen.
-    <div className="flex h-screen flex-col overflow-hidden">
+    <div
+      className={
+        shell
+          ? "flex h-screen flex-col gap-2 p-2 overflow-hidden"
+          : "flex h-screen flex-col overflow-hidden"
+      }
+      style={shell ? { background: "var(--ac-frame-bg, var(--ac-bg))" } : undefined}
+    >
       <TitleBar />
-      <div className="min-h-0 flex-1">
+      <div
+        className={
+          shell
+            ? "min-h-0 flex-1 overflow-hidden rounded-[14px] border-[1.5px]"
+            : "min-h-0 flex-1"
+        }
+        style={shell ? { borderColor: "var(--ac-border-subtle)" } : undefined}
+      >
         <ConnectionGate>
-          <FirstRunCheck />
-          <Routes>
-            <Route path="/setup" element={<SetupWizard />} />
-            <Route element={<AppShell />}>
-              <Route index element={<DashboardScreen />} />
-              <Route path="project/:id" element={<ProjectView />} />
-              <Route path="project/:id/chat" element={<ProjectChatScreen />} />
+          {/* R59-E: ONE boundary around the route content (inside the content
+              card, inside ConnectionGate's children — the R59-A frame layout
+              classes above are untouched). A render throw anywhere below the
+              routes becomes a fallback card + a Console row, never a blank
+              window; the boundary is INSIDE the gate so the connection/offline
+              chrome never gets replaced by the fallback. */}
+          <ErrorBoundary>
+            <FirstRunCheck />
+            <Routes>
+              <Route path="/setup" element={<SetupWizard />} />
+              <Route element={<AppShell />}>
+                <Route index element={<DashboardScreen />} />
+                <Route path="project/:id" element={<ProjectView />} />
+                <Route path="project/:id/chat" element={<ProjectChatScreen />} />
 
-              {/* ROUND-52 (R52-b): the real Usage screen — was PlaceholderPage
-                  (owner: "Usage screen section 2 … you apparently did not
-                  implement the usage properly"). */}
-              <Route path="usage" element={<UsageScreen />} />
-              <Route path="settings" element={<SettingsPage />} />
-              <Route path="demos" element={<DemoViewerScreen />} />
-              <Route
-                path="*"
-                element={
-                  <PlaceholderPage
-                    title="Not found"
-                    spec="—"
-                    detail="This screen does not exist. Use the sidebar to navigate."
-                  />
-                }
-              />
-            </Route>
-          </Routes>
+                {/* ROUND-52 (R52-b): the real Usage screen — was PlaceholderPage
+                    (owner: "Usage screen section 2 … you apparently did not
+                    implement the usage properly"). */}
+                <Route path="usage" element={<UsageScreen />} />
+                <Route path="settings" element={<SettingsPage />} />
+                <Route path="demos" element={<DemoViewerScreen />} />
+                <Route
+                  path="*"
+                  element={
+                    <PlaceholderPage
+                      title="Not found"
+                      spec="—"
+                      detail="This screen does not exist. Use the sidebar to navigate."
+                    />
+                  }
+                />
+              </Route>
+            </Routes>
+          </ErrorBoundary>
         </ConnectionGate>
       </div>
     </div>

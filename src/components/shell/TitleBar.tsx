@@ -124,9 +124,15 @@ export function TitleBar() {
   };
 
   return (
+    // R59-A (owner: "make that top navigation bar rounded and give it padding
+    // on all four sides"): the bar is now a ROUNDED CARD floating on the
+    // window frame's ambient strip (the App root's p-2 + gap-2 supply the
+    // four-sided padding). Rounded on all four corners, hairline border,
+    // same frosted chrome; the window controls become inset rounded buttons
+    // so their hover fills never break the corner radii.
     <header
       data-tauri-drag-region
-      className="flex h-10 w-full shrink-0 select-none items-center justify-between border-b backdrop-blur"
+      className="flex h-10 w-full shrink-0 select-none items-center justify-between rounded-[14px] border-[1.5px] backdrop-blur"
       style={{
         // Translucent frosted chrome over the app's ambient background (the
         // color-mix idiom from index.css/ActionButton) — never a hard edge.
@@ -148,16 +154,17 @@ export function TitleBar() {
         </span>
       </div>
 
-      {/* Window controls — full-height hit targets, VS Code style. The
-          neutral hovers match the app's ghost-button language (AgentCard/
-          dialog.tsx); close carries the destructive red used app-wide. */}
-      <div className="flex h-full items-stretch">
+      {/* Window controls — R59-A: inset rounded buttons with a little breathing
+          room (pr-1.5 + gap-0.5) so the hover fills stay INSIDE the card's
+          corner radii; the ghost-hover language matches the app's buttons,
+          close keeps the destructive red. */}
+      <div className="flex h-full items-center gap-0.5 pr-1.5">
         <button
           type="button"
           aria-label="Minimize window"
           title="Minimize"
           onClick={onMinimize}
-          className="grid h-full w-10 place-items-center text-muted transition-colors hover:bg-hover hover:text-ink"
+          className="grid h-8 w-10 place-items-center rounded-[9px] text-muted transition-colors hover:bg-hover hover:text-ink"
         >
           <Minus className="h-4 w-4" aria-hidden />
         </button>
@@ -166,7 +173,7 @@ export function TitleBar() {
           aria-label={maximized ? "Restore window" : "Maximize window"}
           title={maximized ? "Restore" : "Maximize"}
           onClick={onToggleMaximize}
-          className="grid h-full w-10 place-items-center text-muted transition-colors hover:bg-hover hover:text-ink"
+          className="grid h-8 w-10 place-items-center rounded-[9px] text-muted transition-colors hover:bg-hover hover:text-ink"
         >
           {maximized ? (
             <Copy className="h-3.5 w-3.5" aria-hidden />
@@ -179,7 +186,7 @@ export function TitleBar() {
           aria-label="Close window"
           title="Close"
           onClick={onClose}
-          className="grid h-full w-10 place-items-center text-muted transition-colors hover:bg-red-500/10 hover:text-red-500"
+          className="grid h-8 w-10 place-items-center rounded-[9px] text-muted transition-colors hover:bg-red-500/10 hover:text-red-500"
         >
           <X className="h-4 w-4" aria-hidden />
         </button>

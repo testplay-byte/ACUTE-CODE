@@ -463,6 +463,95 @@ export function revertSession(
   return getSessionsBackend().revert(id, keepThroughSeq);
 }
 
+// ── ROUND-59 (R59-D, owner directive: "add the options to mark the responses
+//    as good or bad, and all of these will be tracked and saved. I can send
+//    you each one of those, and you can determine what went wrong… The full
+//    context will be properly shared."): the response-rating client. Every
+//    assistant reply can be rated good/bad; the backend persists the verdict
+//    WITH a full context snapshot and keeps one row per (session, reply). ──
+
+/** The two verdicts (mirrors agent-core storage/ratings.ts). */
+export type RatingValue = "good" | "bad";
+
+/** Hard cap on the owner's note (the input enforces it client-side; the
+ * route rejects anything past it with 400 VALIDATION). */
+export const MAX_RATING_NOTE_CHARS = 2000;
+
+/** One persisted response rating as the per-session listing serves it
+ * (agent-core RatingView WITHOUT context — the chat UI only needs the
+ * verdict + note keyed by assistantSeq). */
+export interface MessageRating {
+  id: number;
+  sessionId: string;
+  assistantSeq: number;
+  rating: RatingValue;
+  note: string | null;
+  model: string | null;
+  agentId: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+/**
+ * The FROZEN turn context captured at rate time (agent-core
+ * buildRatingContext — the owner's "full context will be properly shared").
+ * Served only by GET /ratings (the analysis/export path the CLI dumps);
+ * content fields are capped with an honest `truncated` flag.
+ */
+export interface RatingContext {
+  version: 1;
+  capturedAt: string;
+  sessionTitle: string | null;
+  agentId: string | null;
+  agentName: string | null;
+  model: string | null;
+  turnStartSeq: number;
+  userMessage: { ts: string; content: string; truncated: boolean } | null;
+  assistantReply: {
+    ts: string;
+    content: string;
+    truncated: boolean;
+    usage?: { inputTokens: number; outputTokens: number };
+    ms?: number;
+  };
+  toolEvents: Array<{
+    seq: number;
+    tool: string;
+    ok: boolean | null;
+    outputSummary: { content: string; truncated: boolean } | null;
+  }>;
+  turnError?: { code: string; message: string; providerError?: string };
+  eventCount: number;
+}
+
+/** POST /sessions/:id/ratings — upsert one verdict on the assistant reply at
+ * `assistantSeq` (re-rating overwrites; the backend freezes the turn context
+ * server-side). Returns the row WITHOUT context. */
+export function rateReply(
+  sessionId: string,
+  input: { assistantSeq: number; rating: RatingValue; note?: string },
+): Promise<MessageRating> {
+  return request<{ rating: MessageRating }>(`/sessions/${sessionId}/ratings`, {
+    method: "POST",
+    json: input,
+  }).then((b) => b.rating);
+}
+
+/** GET /sessions/:id/ratings — the session's verdicts (no context), the
+ * chat panel's rating map. 404 (ApiError) when the session is unknown. */
+export function listSessionRatings(sessionId: string): Promise<MessageRating[]> {
+  return request<{ ratings: MessageRating[] }>(`/sessions/${sessionId}/ratings`).then(
+    (b) => b.ratings,
+  );
+}
+
+/** DELETE /ratings/:id — clear one verdict (the same-thumb click). */
+export function deleteRating(id: number): Promise<void> {
+  return request<{ ok: boolean }>(`/ratings/${id}`, { method: "DELETE" }).then(
+    () => undefined,
+  );
+}
+
 // ---------------------------------------------------------------------------
 // Projects + file explorer (API.md §4a, M3 project-chat screen)
 // ---------------------------------------------------------------------------
@@ -970,6 +1059,13 @@ export interface AssistantTurnItem {
   usage?: { inputTokens: number; outputTokens: number };
   ms?: number;
   model?: string;
+  /** ROUND-59 (R59-D): the seq of the turn's LAST non-empty assistant text
+   * event — the RATING KEY (what POST /sessions/:id/ratings rates; the
+   * backend freezes the full turn context against this seq). Absent for
+   * turns with no assistant text (working-only turns — nothing to rate).
+   * The live path carries the same value (the done frame's
+   * assistantMessage.seq), so live-completed turns rate identically. */
+  lastAssistantSeq?: number;
 }
 
 /** One entry inside a turn's Working section. */
@@ -1269,6 +1365,10 @@ export function toProjectChatItems(events: SessionEvent[]): ProjectChatItem[] {
       ...(usage !== undefined ? { usage } : {}),
       ...(ms !== undefined ? { ms } : {}),
       ...(model !== undefined ? { model } : {}),
+      // ROUND-59 (R59-D): the rating key — last NON-EMPTY assistant text seq
+      // (identical to the runtime's lastAssistantEvent and the done frame's
+      // assistantMessage.seq, so folded and live turns rate the same reply).
+      ...(lastTextSeq !== -1 ? { lastAssistantSeq: lastTextSeq } : {}),
     });
   };
 
@@ -2640,4 +2740,53 @@ export interface ProjectDemo {
 export async function fetchProjectDemos(projectId: string): Promise<ProjectDemo[]> {
   const body = await request<{ demos: ProjectDemo[] }>(`/projects/${projectId}/demos`);
   return body.demos;
+}
+
+// ---------------------------------------------------------------------------
+// ROUND-59 (R59-E): diagnostics — the engine's error ring
+// ---------------------------------------------------------------------------
+
+/**
+ * One row of the sidecar's diagnostics error ring (GET /diagnostics/errors).
+ * The ConsolePanel merges these with the frontend error-bus snapshot into a
+ * single newest-first list. Field-for-field the server's SidecarDiagnosticError
+ * (agent-core/src/server.ts) — scrubbed at capture time (no bodies, no auth
+ * headers, no query strings ever leave the engine through this route).
+ */
+export interface DiagnosticError {
+  id: string;
+  /** ISO timestamp of the failure. */
+  ts: string;
+  source: "sidecar";
+  /** Capture point — "http" (fastify error handler) today. */
+  kind: string;
+  /** Always ≥ 500 (the 4xx-exclusion decision — client noise stays out). */
+  statusCode: number;
+  /** Envelope/error code (INTERNAL, PROVIDER_ERROR, …). */
+  code: string;
+  /** Scrubbed error message. */
+  message: string;
+  /** HTTP method of the failing request. */
+  method: string;
+  /** Request path (query string stripped server-side). */
+  url: string;
+  /** Frontend-parity count field — the server ring keeps 1 per row. */
+  count: number;
+}
+
+/**
+ * ROUND-59 (R59-E): the engine's captured errors, newest-first. Polled by the
+ * right-sidebar Console tab every 5s and merged with the frontend bus.
+ * `limit` bounds the page (server caps at 200).
+ */
+export async function listDiagnosticErrors(limit?: number): Promise<DiagnosticError[]> {
+  const path = limit === undefined ? "/diagnostics/errors" : `/diagnostics/errors?limit=${limit}`;
+  const body = await request<{ errors: DiagnosticError[] }>(path);
+  return body.errors;
+}
+
+/** ROUND-59 (R59-E): clear the engine's error ring (the Console's Clear all —
+ * paired with the frontend bus's clearAll()). */
+export async function clearDiagnosticErrors(): Promise<void> {
+  await request<{ ok: boolean }>("/diagnostics/errors", { method: "DELETE" });
 }

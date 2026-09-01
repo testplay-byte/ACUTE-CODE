@@ -54,6 +54,12 @@ export interface LiveTurn {
    * attached to the pending ToolUseEntry as liveInput) or the tool-result
    * settles it. WorkingSection renders live write previews from these. */
   streamingToolInputs: StreamingToolInput[];
+  /** ROUND-59 (R59-D): the seq of the turn's LAST non-empty assistant text
+   * event, set from the done frame's assistantMessage.seq — the RATING KEY
+   * (same value the folded AssistantTurnItem carries, so a live-completed
+   * turn can be rated immediately instead of waiting for the refetch).
+   * Absent while the turn is still in flight (nothing to rate yet). */
+  lastAssistantSeq?: number;
 }
 
 /** ROUND-58 (R58-cf): one accumulating tool-args JSON raw (see LiveTurn.streamingToolInputs). */
@@ -1249,6 +1255,17 @@ function handleStreamEvent(
         lastTurnStoppedByUser: false,
         lastTurnStoppedTs: null,
       });
+    }
+    // ROUND-59 (R59-D): pin the rating key on the completed live turn — the
+    // done frame's assistantMessage.seq IS the last non-empty assistant text
+    // event (the runtime's lastAssistantEvent), identical to the folded
+    // item's lastAssistantSeq. The panel can render the rating cluster
+    // before the refetch lands.
+    if (Number.isInteger(event.assistantMessage?.seq) && event.assistantMessage.seq > 0) {
+      const fresh = useStreamStore.getState().bySession[sessionId]?.liveTurn;
+      if (fresh !== undefined && fresh !== null) {
+        patchSession(sessionId, { liveTurn: { ...fresh, lastAssistantSeq: event.assistantMessage.seq } });
+      }
     }
     return;
   }

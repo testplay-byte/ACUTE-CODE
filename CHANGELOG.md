@@ -1,4 +1,4 @@
-<!-- last-reviewed: 2026-08-31 round-58 -->
+<!-- last-reviewed: 2026-09-01 round-59 -->
 # Changelog
 
 All notable changes to ACUTE-CODE are documented here. Entries are written for
@@ -11,10 +11,70 @@ version number is single-sourced from the root `package.json`
 
 ## [Unreleased]
 
-Planned next: installer code-signing (SmartScreen), the prompt-section
-registry (modular prompt overrides — the `.acuterules` extension point grows
-into per-section files), the deepseek-harness future candidates (compaction
-pressure-trigger, continuable sub-agent children), the Files-tab polish.
+Planned next: installer code-signing (SmartScreen), ratings-driven prompt
+tuning, the deepseek-harness future candidates (compaction
+pressure-trigger, continuable sub-agent children), the Files-tab polish,
+agent web-app-testing tools.
+
+## [0.59.0] - 2026-09-01
+
+Round 59 — the owner-feedback round. The twelfth Windows test session
+confirmed every 0.58.0 flow working (title bar, pop-out browser, live
+file-write preview, key pool, streaming stops); the session's polish list
+became this release.
+
+### Added
+
+- **The rounded window** (the owner: "make that top navigation bar rounded
+  and give it padding on all four sides"). In the desktop app the window is
+  now a soft inset frame: 8px of breathing room on every side, the title
+  bar and the content area as separate rounded cards, and window controls
+  as inset rounded buttons. Browser mode is unchanged.
+- **Minimal floating-pill scrollbars** app-wide ("go with a better scroll
+  bar… minimal and good-looking"): a transparent track with a rounded thumb
+  that floats inset from the edges, visible in every theme, both axes,
+  with a subtle hover state.
+- **Custom chrome on the pop-out browser window** ("It should be a custom
+  one"): the pop-out is now a frameless window hosting a small dedicated
+  app page — our own drag-region title bar with minimize/maximize/close,
+  a themed editable URL bar (back/forward/reload, open-in-system-browser),
+  and the page content in the same shared-profile embedded webview the
+  in-app panel uses. Sizing is monitor-aware (never opens larger than 70%
+  of your work area).
+- **Response ratings with full context** (the owner: "add the options to
+  mark the responses as good or bad… The full context will be properly
+  shared"). Every assistant reply carries thumbs up/down; bad ratings
+  prompt an optional note; and the rating snapshots the complete evidence
+  at the moment you rate it (your message, the reply with token usage,
+  every tool event, any error). `node scripts/acute.mjs ratings --full`
+  dumps the evidence for analysis so the system prompts can be tuned on
+  real failures.
+- **The Console tab** (right sidebar) — console-like error monitoring: a
+  live, newest-first view of frontend and engine errors with counts,
+  expandable details, copy, and clear. Render crashes now show an honest
+  recovery card instead of a blank screen.
+- **Modular system prompts** (the owner: "built in multiple parts, modules,
+  and such… used when necessary"): every section of the agent's system
+  prompt is now a registry entry that a project can override with a file —
+  `.acute/prompts/<section>.md` replaces that section wholesale, an empty
+  file removes it, and `_order.txt` reorders. `node scripts/acute.mjs
+  prompt:sections` lists every section and which files would override.
+  Without override files the prompt is byte-identical to before.
+
+### Changed
+
+- **Models & Providers — honest provider list**: preset providers you
+  have not configured (Anthropic / OpenAI / Google) no longer appear in
+  the list at all; the Add-provider picker remains the way to set one up.
+- **API key display**: a stored key now shows masked in the key field with
+  one clear **Show** button (reveals the real value, with Copy and Hide),
+  and a separate **Rotate key** action for entering a new one.
+- **Provider disable is immediate**: no more "One agent uses this
+  provider" confirmation — the switch disables outright.
+- **Opening Models & Providers pre-selects the first provider** and shows
+  its details; deleting a provider falls to the next one.
+
+
 
 ## [0.58.0] - 2026-08-31
 

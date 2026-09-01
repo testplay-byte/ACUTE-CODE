@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { motion, AnimatePresence } from "framer-motion";
 import {
+  Activity,
   Bot,
   Brain,
   Files,
@@ -30,6 +31,8 @@ import { BrowserPanel } from "./BrowserPanel";
 import { SubAgentPanel } from "./SubAgentPanel";
 // ROUND-44 (R44-a): the project-memory tab panel.
 import { MemoryPanel } from "./MemoryPanel";
+// ROUND-59 (R59-E): the diagnostics console tab panel (error monitoring).
+import { ConsolePanel } from "./ConsolePanel";
 import { fetchSubAgents, type SubAgentStatus } from "../../lib/api";
 import { useQuery } from "@tanstack/react-query";
 
@@ -53,6 +56,8 @@ const TAB_ICON: Record<RightSidebarTabType, typeof Files> = {
   terminal: TerminalIcon,
   subagent: Bot,
   memory: Brain,
+  // ROUND-59 (R59-E): the diagnostics console (error monitoring) tab.
+  console: Activity,
 };
 
 const ROLE_COLORS: Record<string, string> = {
@@ -95,6 +100,8 @@ export function RightSidebar({
   const openBrowser = useRightSidebarStore((s) => s.openBrowser);
   const openTerminal = useRightSidebarStore((s) => s.openTerminal);
   const openMemory = useRightSidebarStore((s) => s.openMemory);
+  // ROUND-59 (R59-E): the diagnostics console quick-menu action.
+  const openConsole = useRightSidebarStore((s) => s.openConsole);
   // ROUND-48 (R48-c): the file-explorer quick-menu action.
   const openFiles = useRightSidebarStore((s) => s.openFiles);
   const openSubAgent = useRightSidebarStore((s) => s.openSubAgent);
@@ -405,6 +412,9 @@ export function RightSidebar({
                           openTerminal(projectId);
                         } else if (type === "memory") {
                           openMemory(projectId);
+                        } else if (type === "console") {
+                          // R59-E: the diagnostics console — error monitoring.
+                          openConsole(projectId);
                         } else if (type === "subagent") {
                           setSubAgentPickerFor("subagent");
                         }
@@ -466,6 +476,9 @@ export function RightSidebar({
           <BrowserPanel projectId={projectId} tab={activeTab} />
         ) : activeTab.type === "memory" ? (
           <MemoryPanel projectId={projectId} tab={activeTab} />
+        ) : activeTab.type === "console" ? (
+          // ROUND-59 (R59-E): the diagnostics console (error monitoring).
+          <ConsolePanel projectId={projectId} tab={activeTab} />
         ) : (
           <SubAgentPanel tab={activeTab} />
         )}
@@ -517,6 +530,9 @@ function QuickMenu({
     { type: "terminal", label: "Terminal", icon: TerminalIcon, desc: "Run a shell command" },
     // ROUND-44 (R44-a): the agent's persistent project knowledge.
     { type: "memory", label: "Memory", icon: Brain, desc: "Saved project knowledge" },
+    // ROUND-59 (R59-E): the diagnostics console — the owner's "console-like
+    // error monitoring and error handling" directive.
+    { type: "console", label: "Console", icon: Activity, desc: "Error monitoring — frontend + engine" },
   ];
   if (hasSubs) {
     items.push({

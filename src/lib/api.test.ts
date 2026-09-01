@@ -5,6 +5,7 @@ import {
   createProvider,
   deleteProvider,
   deleteProviderModelConfig,
+  deleteRating,
   fetchModelsCatalog,
   fetchOrchestrationSettings,
   fetchProviderModelConfig,
@@ -12,8 +13,10 @@ import {
   fetchProviders,
   getAgentsBackend,
   httpAgents,
+  listSessionRatings,
   parseDiffArgs,
   pickFolderViaBackend,
+  rateReply,
   restoreCheckpoint,
   storeProviderKey,
   testProviderConnection,
@@ -463,7 +466,18 @@ describe("toProjectChatItems (ROUND-37 turn model)", () => {
     ]);
 
     expect(items).toEqual([
-      { kind: "turn", seq: 4, agentId: "agt_scribe", ts: TS(4), endTs: TS(4), working: [], finalText: "Still here." },
+      {
+        kind: "turn",
+        seq: 4,
+        agentId: "agt_scribe",
+        ts: TS(4),
+        endTs: TS(4),
+        working: [],
+        finalText: "Still here.",
+        // ROUND-59 (R59-D): the fold now keys every text-bearing turn with
+        // its last non-empty assistant text seq (the rating key).
+        lastAssistantSeq: 4,
+      },
     ]);
   });
 
@@ -1432,5 +1446,112 @@ describe("toProjectChatItems attachment passthrough (ROUND-50 R50-c1)", () => {
     const plainUser = plain[0];
     if (plainUser.kind !== "user") throw new Error("expected user item");
     expect(plainUser.attachments).toBeUndefined();
+  });
+});
+
+// ── ROUND-59 (R59-D): the response-rating client ────────────────────────────
+describe("response ratings client (ROUND-59 R59-D)", () => {
+  const RATING = {
+    id: 7,
+    sessionId: "sess_r59",
+    assistantSeq: 4,
+    rating: "good",
+    note: null,
+    model: "test/model",
+    agentId: "agt_scribe",
+    createdAt: "2026-09-01T00:00:00Z",
+    updatedAt: "2026-09-01T00:00:00Z",
+  };
+
+  it("rateReply POSTs {assistantSeq, rating, note?} and unwraps the rating", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse(200, { rating: RATING }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const rating = await rateReply("sess_r59", {
+      assistantSeq: 4,
+      rating: "bad",
+      note: "ignored my tests",
+    });
+
+    expect(rating).toEqual(RATING);
+    const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    expect(url).toBe("http://sidecar.test/api/v1/sessions/sess_r59/ratings");
+    expect(init.method).toBe("POST");
+    expect(new Headers(init.headers).get("Authorization")).toBe("Bearer tok_123");
+    expect(new Headers(init.headers).get("Content-Type")).toBe("application/json");
+    expect(JSON.parse(init.body as string)).toEqual({
+      assistantSeq: 4,
+      rating: "bad",
+      note: "ignored my tests",
+    });
+  });
+
+  it("listSessionRatings GETs and unwraps the session's verdicts", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      jsonResponse(200, { ratings: [RATING, { ...RATING, id: 8, assistantSeq: 9, rating: "bad" }] }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const rows = await listSessionRatings("sess_r59");
+    expect(rows).toHaveLength(2);
+    expect(rows[1].rating).toBe("bad");
+    const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    expect(url).toBe("http://sidecar.test/api/v1/sessions/sess_r59/ratings");
+    expect(init.method).toBe("GET");
+    expect(new Headers(init.headers).get("Authorization")).toBe("Bearer tok_123");
+  });
+
+  it("deleteRating DELETEs /ratings/:id and resolves on {ok:true}", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse(200, { ok: true }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(deleteRating(7)).resolves.toBeUndefined();
+    const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    expect(url).toBe("http://sidecar.test/api/v1/ratings/7");
+    expect(init.method).toBe("DELETE");
+  });
+
+  it("maps the error envelope onto ApiError (404 unknown session / 400 unknown assistantSeq)", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        jsonResponse(404, {
+          error: {
+            code: "NOT_FOUND",
+            message: "no session with id sess_ghost",
+            details: undefined,
+          },
+        }),
+      ),
+    );
+    const err = await rateReply("sess_ghost", { assistantSeq: 2, rating: "good" }).catch((e) => e);
+    expect(err).toBeInstanceOf(ApiError);
+    expect(err.status).toBe(404);
+    expect(err.code).toBe("NOT_FOUND");
+    expect(err.message).toBe("no session with id sess_ghost");
+  });
+
+  it("toProjectChatItems keys each turn with its LAST non-empty assistant text seq; working-only turns carry none", () => {
+    // Turn 1: narration → tool → final text (the key is the FINAL text seq).
+    // Turn 2: tool-only (working-only) — no rating key. Turn 3: text-less
+    // carrier events never open a key either.
+    const items = toProjectChatItems([
+      ev(1, "message.user", { role: "user", content: "fix it" }, "agt_scribe"),
+      ev(2, "message.assistant", { role: "assistant", content: "let me look" }, "agt_scribe"),
+      toolUse(3, "read_file", "path: a.ts"),
+      ev(4, "message.assistant", { role: "assistant", content: "done" }, "agt_scribe"),
+      ev(5, "message.user", { role: "user", content: "again" }, "agt_scribe"),
+      toolUse(6, "run_command", "cmd: pnpm test", false),
+      // A stats-carrier (empty content) after the tool — no text, no key.
+      ev(7, "message.assistant", { role: "assistant", content: "" }, "agt_scribe"),
+    ]);
+
+    const turns = items.flatMap((i) => (i.kind === "turn" ? [i] : []));
+    expect(turns).toHaveLength(2);
+    expect(turns[0].lastAssistantSeq).toBe(4); // the final text event
+    expect(turns[0].finalText).toBe("done");
+    // Working-only turn (tool + empty carrier): no key, nothing to rate.
+    expect(turns[1].lastAssistantSeq).toBeUndefined();
+    expect(turns[1].finalText).toBe("");
   });
 });

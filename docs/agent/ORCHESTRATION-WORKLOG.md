@@ -1901,3 +1901,32 @@ with frame-order assertions, stop → stopped + queued + persisted partial,
 continue completes, reveal route), agent-browser pass over the settings
 pages, Rust stub-crate cargo-check + CI cargo check. Pushed + tagged
 v0.58.0. Full record: docs/ui-iterations/round-58.md.
+
+
+## R59 — 2026-09-01 — the owner-feedback round (0.59.0)
+
+Sandbox re-provision #5 (restore via SANDBOX-RESTORE.md; baseline 1169/1169
+re-verified) then six workstreams with strict file ownership, all from the
+owner's twelfth-session 0.58.0 verdict: (A, orch) the rounded inset window
+frame + floating-pill scrollbars; (B) the pop-out browser reworked into a
+decorationless app-hosted page (second vite entry popout.html) with our
+title bar + themed URL bar + a child webview in the pop-out window
+(browser_tab_create's optional window_label) + monitor-clamped sizing —
+NAV_OVERLAY_INIT deleted; (C) Models & Providers honesty (unconfigured
+presets gone entirely, masked-stored key + one Show + Rotate flow, outright
+disable, first-provider pre-select); (D) the response-rating system
+(migration 0022, immutable full-context snapshots, 4 routes, chat thumbs +
+bad-rating notes, ratings CLI with --full evidence dump — live-verified on
+a real OpenRouter turn); (E) the diagnostics console (frontend error bus +
+ErrorBoundary + global handlers + QueryCache.onError, sidecar fastify error
+ring behind GET/DELETE /diagnostics/errors, right-sidebar Console tab);
+(F) the prompt-section registry (20 real sections, .acute/prompts/*.md
+wholesale overrides, _order.txt, byte-identity golden pin, CLI
+prompt:sections/prompt:show, PROMPT-MODULES.md — live-verified: a real
+streamed turn quoted the override verbatim).
+
+Gates: 1302/1302 root (88 files) + 693/693 agent-core (42 files), lint +
+typecheck clean, docs:check 151/0, version 0.59.0. The R59-D sub-agent's
+task tool timed out mid-final-typecheck; the orchestrator completed the
+remaining TS fixes + the live battery. Rust popout changes verified against
+the tauri 2.11.5 source in-sandbox; CI cargo check is the backstop.

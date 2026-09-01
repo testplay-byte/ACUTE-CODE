@@ -3,7 +3,7 @@
   "product": {
     "name": "Acute",
     "tagline": "Local-first multi-agent engineering workbench",
-    "version": "0.58.0",
+    "version": "0.59.0",
     "availability": "Private build — not yet distributed",
     "chips": [
       "Windows desktop",
@@ -136,6 +136,10 @@
     {
       "date": "2026-08-31",
       "label": "Round 58 — the desktop-polish round (the first fully-working Windows session; frameless title bar, honest stops + Continue, live file-write preview, session-replay capping, settings restructure with visible keys, the CLI chat harness)"
+    },
+    {
+      "date": "2026-09-01",
+      "label": "R59 — owner-feedback round: rounded window + pill scrollbars, pop-out custom chrome, settings honesty, response ratings with full-context capture, diagnostics console, prompt-section registry (1302 tests)"
     }
   ],
   "quality": {
@@ -143,11 +147,11 @@
     "suites": [
       {
         "name": "frontend",
-        "tests": 1169
+        "tests": 601
       },
       {
         "name": "agent-core",
-        "tests": 631
+        "tests": 693
       },
       {
         "name": "sidecar e2e",

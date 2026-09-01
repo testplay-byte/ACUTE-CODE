@@ -46,10 +46,35 @@
  *   approvals [--status S]          approval rows (pending by default)
  *   approve <id> | deny <id>        decide a pending approval
  *
+ * Response ratings (R59 — the owner's good/bad feedback loop; every rating
+ * carries a frozen turn-context snapshot for failure analysis):
+ *   ratings [--session <id>]        compact table: id, session, seq,
+ *         [--rating good|bad]       rating, note, model, updated. --full
+ *         [--limit N] [--full]      prints the raw rows WITH the full
+ *                                   context JSON (the dev agent's analysis
+ *                                   dump — "did it perform the request
+ *                                   which it was given properly or not?")
+ *   ratings:rm <id>                 delete one rating row
+ *
+ * Prompt modules (R59 — the owner's "system prompts… highly customizable…
+ * built in multiple parts, modules" directive; offline — reads the project's
+ * .acute/prompts/ dir + the agent-core dist, NO sidecar needed):
+ *   prompt:sections [--project <dir>]  registry table (id, dynamic?,
+ *                                      description) + which files WOULD
+ *                                      override; --project defaults to cwd
+ *   prompt:show <id> [--project <dir>]
+ *                                      the EFFECTIVE text of one section
+ *                                      (override if present, else the
+ *                                      built-in composition)
+ *
  * Env: ACUTE_BASE_URL (default http://127.0.0.1:5178), ACUTE_TOKEN (default
  * acute-dev-local), NO_COLOR (disable the chat harness's ANSI colors).
  * See docs/runbooks/CLI-HARNESS.md for the long-session recipes.
  */
+import { existsSync } from "node:fs";
+import { basename, resolve } from "node:path";
+import { fileURLToPath, pathToFileURL } from "node:url";
+
 const BASE = process.env.ACUTE_BASE_URL ?? "http://127.0.0.1:5178";
 const TOKEN = process.env.ACUTE_TOKEN ?? "acute-dev-local";
 
@@ -450,6 +475,42 @@ async function runStreamedTurn(sessionId, content, flags) {
 
 const [cmd, ...args] = process.argv.slice(2);
 
+// ── R59-F prompt-module helpers (offline: project dir + agent-core dist) ────
+// The section registry lives in agent-core (single source of truth); these
+// commands read the BUILT modules — the same artifacts the sidecar runs — so
+// there is deliberately no HTTP surface for them (server.ts untouched).
+
+async function loadPromptCore() {
+  const distMain = fileURLToPath(new URL("../agent-core/dist/main.js", import.meta.url));
+  if (!existsSync(distMain)) {
+    die(`agent-core is not built (${distMain} missing) — run: pnpm --filter agent-core run build`);
+  }
+  const distUrl = pathToFileURL(fileURLToPath(new URL("../agent-core/dist", import.meta.url))).href;
+  const [registry, prompts, agents] = await Promise.all([
+    import(`${distUrl}/agents/prompt-registry.js`),
+    import(`${distUrl}/agents/prompts.js`),
+    import(`${distUrl}/storage/agents.js`),
+  ]);
+  return { registry, prompts, agents };
+}
+
+/** The representative ctx for offline inspection: the FULL default tool set
+ * (TOOL_NAMES — every tool-gated section present), the project's real custom
+ * rules, no permission-mode/memory digest (honest defaults: those sections
+ * report absent, exactly as they would in an unconfigured session). */
+function representativeCtx(projectPath, prompts, agents) {
+  return {
+    projectName: basename(projectPath) || projectPath,
+    rootPath: projectPath,
+    toolNames: [...agents.TOOL_NAMES],
+    customRules: prompts.readCustomRules(projectPath),
+  };
+}
+
+function projectFlag(flags) {
+  return resolve(flagStr(flags, "project") ?? process.cwd());
+}
+
 switch (cmd) {
   case "health": {
     const res = await fetch(`${BASE}/health`);
@@ -707,6 +768,146 @@ switch (cmd) {
       `${cmd === "approve" ? green("approved") : red("denied")} ${id}` +
         `${json.remember ? dim(` (remember ${json.remember})`) : ""}`,
     );
+    break;
+  }
+  case "ratings": {
+    const { flags } = parseArgs(args);
+    const session = flagStr(flags, "session");
+    const rating = flagStr(flags, "rating");
+    if (rating !== undefined && rating !== "good" && rating !== "bad") {
+      die("usage: ratings [--session <id>] [--rating good|bad] [--limit N] [--full]");
+    }
+    const limitRaw = Number(flagStr(flags, "limit") ?? 200);
+    const limit = Number.isFinite(limitRaw) ? Math.min(Math.max(Math.trunc(limitRaw), 1), 1000) : 200;
+    const params = new URLSearchParams();
+    if (session !== undefined) params.set("sessionId", session);
+    if (rating !== undefined) params.set("rating", rating);
+    params.set("limit", String(limit));
+    const { status, json } = await callChecked("GET", `/ratings?${params.toString()}`);
+    if (status !== 200) fail(status, json);
+    const list = Array.isArray(json.ratings) ? json.ratings : [];
+    if (flags.full === true) {
+      // The dev agent's analysis dump: every row WITH the frozen context
+      // snapshot (user message, reply, tool events, turn error) captured at
+      // rate time. Pipe-safe — pure JSON on stdout.
+      console.log(JSON.stringify({ count: list.length, ratings: list }, null, 1));
+      break;
+    }
+    console.log(
+      `${list.length} rating(s)` +
+        `${session !== undefined ? ` · session ${session}` : ""}` +
+        `${rating !== undefined ? ` · ${rating}` : ""}`,
+    );
+    for (const r of list) {
+      const note =
+        r.note !== null && r.note !== undefined ? trunc(String(r.note).replace(/\s+/g, " "), 44) : "";
+      console.log(
+        `${String(r.id).padStart(4)}  ${String(r.sessionId).slice(0, 10)}  ${String(r.assistantSeq).padStart(4)}  ` +
+          `${r.rating === "good" ? green("good") : red("bad ")}  ` +
+          `${trunc(String(r.model ?? ""), 30).padEnd(30)}  ${note.padEnd(44)}  ${r.updatedAt}`,
+      );
+    }
+    break;
+  }
+  case "ratings:rm": {
+    const { positionals } = parseArgs(args);
+    const id = positionals[0];
+    if (id === undefined || !/^\d+$/.test(id)) die("usage: ratings:rm <ratingId>");
+    const { status, json } = await callChecked("DELETE", `/ratings/${id}`);
+    if (status !== 200) fail(status, json);
+    console.log(`removed rating ${id}`);
+    break;
+  }
+  // ── R59-F: prompt-module inspection (offline — no sidecar needed) ─────────
+  case "prompt:sections": {
+    const { flags } = parseArgs(args);
+    const projectPath = projectFlag(flags);
+    const { registry, prompts, agents } = await loadPromptCore();
+    const loaded = registry.loadPromptOverrides(projectPath);
+    const report = prompts.describePromptSections(representativeCtx(projectPath, prompts, agents));
+    console.log(
+      `${report.sections.length} prompt section(s) · project ${projectPath}` +
+        ` · override dir ${registry.PROMPTS_DIR_NAME}/<id>.md`,
+    );
+    console.log(
+      `${"id".padEnd(24)} ${"dyn".padEnd(4)} ${"bucket".padEnd(9)} ${"state".padEnd(22)} description`,
+    );
+    for (const s of report.sections) {
+      const state = loaded.overrides.has(s.id)
+        ? s.present
+          ? green(`OVERRIDDEN (${String(loaded.overrides.get(s.id)?.length ?? 0)} chars)`)
+          : green(`OVERRIDDEN (empty — dropped)`)
+        : s.present
+          ? "built-in"
+          : "absent*";
+      console.log(
+        `${s.id.padEnd(24)} ${s.dynamic ? "yes" : "no "}  ${s.bucket.padEnd(9)} ${state.padEnd(22)} ${s.description}`,
+      );
+    }
+    const absent = report.sections.filter((s) => !s.present).map((s) => s.id);
+    if (absent.length > 0) {
+      console.log(
+        dim(
+          `* absent in this inspection's representative ctx (all default tools, no mode/memories) — dynamic sections: ${absent.join(", ")}`,
+        ),
+      );
+    }
+    if (report.effectiveOrder.length > 0 && loaded.overrides.size > 0) {
+      console.log(dim(`effective order (overrides active): ${report.effectiveOrder.join(" → ")}`));
+    }
+    if (loaded.order !== undefined) {
+      console.log(
+        dim(
+          `_order.txt present: ${loaded.order.length > 0 ? loaded.order.join(" → ") : "(no valid ids)"} — reorders only with ≥1 section override`,
+        ),
+      );
+    }
+    for (const line of report.diagnostics) console.error(yellow(line));
+    break;
+  }
+  case "prompt:show": {
+    const { flags, positionals } = parseArgs(args);
+    const sectionId = positionals[0];
+    if (!sectionId) die("usage: prompt:show <section-id> [--project <path>]");
+    const projectPath = projectFlag(flags);
+    const { registry, prompts, agents } = await loadPromptCore();
+    const spec = registry.PROMPT_REGISTRY.find((s) => s.id === sectionId);
+    if (spec === undefined) {
+      die(
+        `unknown section id "${sectionId}" — see the registry: node scripts/acute.mjs prompt:sections`,
+      );
+    }
+    const loaded = registry.loadPromptOverrides(projectPath);
+    const ctx = representativeCtx(projectPath, prompts, agents);
+    const text = prompts.buildSectionText(ctx, sectionId);
+    console.error(
+      dim(
+        `${spec.id} · ${spec.description} · ${spec.dynamic ? "dynamic" : "static"} · project ${projectPath}`,
+      ),
+    );
+    if (text !== undefined) {
+      // Effective text = the override if present, else the built-in composition.
+      console.error(
+        dim(loaded.overrides.has(sectionId) ? "source: OVERRIDE (.acute/prompts file)" : "source: built-in composition"),
+      );
+      console.log(text);
+    } else if (loaded.overrides.has(sectionId)) {
+      // The file exists but this section is conditional and absent in the
+      // representative ctx — print the file (it IS the effective text
+      // whenever the section appears) with the honest conditionality note.
+      console.error(
+        yellow(
+          `note: the section is conditional and ABSENT in the representative composition — the override below replaces it whenever it would appear`,
+        ),
+      );
+      const overrideText = loaded.overrides.get(sectionId) ?? "";
+      console.log(overrideText === "" ? "(empty override file — the section is dropped)" : overrideText);
+    } else {
+      die(
+        `section "${sectionId}" is not present in the representative composition (conditional/dynamic section) — ${spec.description}`,
+      );
+    }
+    for (const line of registry.promptOverrideDiagnostics(loaded)) console.error(yellow(line));
     break;
   }
   default:

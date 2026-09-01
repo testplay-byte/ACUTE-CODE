@@ -7,7 +7,7 @@
 import { randomUUID, timingSafeEqual } from "node:crypto";
 import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
-import Fastify, { type FastifyError, type FastifyInstance, type FastifyReply } from "fastify";
+import Fastify, { type FastifyError, type FastifyInstance, type FastifyReply, type FastifyRequest } from "fastify";
 import type {
   MemoryPolicy,
   MessageAttachment,
@@ -102,6 +102,18 @@ import {
   upsertModel,
 } from "./storage/models.js";
 import { listSnapshots, restoreSnapshot, getSnapshotBySeq } from "./storage/snapshots.js";
+// ROUND-59 (R59-D): the RESPONSE RATING system — every assistant reply can
+// be rated good/bad and is persisted WITH a full context snapshot (the
+// owner's "full context will be properly shared"), exportable for failure
+// analysis. Storage + typed errors live in storage/ratings.ts.
+import {
+  MAX_RATING_NOTE_CHARS,
+  RatingError,
+  deleteRating,
+  listRatings,
+  listSessionRatings,
+  rateReply,
+} from "./storage/ratings.js";
 // ROUND-44 (R44-a): the agent memory system — per-project persistent
 // knowledge (facts/decisions/preferences) with REST read/delete for the
 // right-sidebar Memory tab. Saves happen via the memory_save tool.
@@ -168,6 +180,58 @@ export const VERSION = "0.3.0";
 /** API.md §1.3: every non-2xx response carries this single shape. */
 function errorBody(code: string, message: string, details?: Record<string, unknown>): unknown {
   return { error: { code, message, ...(details === undefined ? {} : { details }) } };
+}
+
+// ── ROUND-59 (R59-E): the sidecar's DIAGNOSTICS ERROR RING ────────────────
+// The owner: "proper console-like error monitoring and error handling… If
+// there are any errors along the way then you can easily detect them by
+// yourself." The frontend half lives in src/lib/error-bus.ts; this is the
+// ENGINE half — every THROWN request error (status ≥ 500) lands in an
+// in-memory ring that GET /diagnostics/errors serves to the right-sidebar
+// Console tab, so engine failures and frontend failures read in ONE place.
+
+/** One ring row — deliberately the fields the console renders, nothing else. */
+export interface SidecarDiagnosticError {
+  id: string;
+  /** ISO timestamp of the failure. */
+  ts: string;
+  source: "sidecar";
+  /** Capture point — "http" (fastify error handler) today. */
+  kind: string;
+  /** Always ≥ 500 — see the 4xx-exclusion decision in recordDiagnosticError. */
+  statusCode: number;
+  /** The error code (fastify FST_* code or the envelope code). */
+  code: string;
+  /** Scrubbed, length-bounded error message. */
+  message: string;
+  /** HTTP method of the failing request. */
+  method: string;
+  /** Request path with the query string STRIPPED (query params can carry data). */
+  url: string;
+  /** Frontend-parity field (the bus's AppError carries count) — always 1 here. */
+  count: number;
+}
+
+/** Ring cap — matches the frontend bus ring (src/lib/error-bus.ts). */
+const DIAGNOSTICS_RING_CAP = 200;
+
+/** Message cap per row — stacks and blobs stay bounded. */
+const DIAGNOSTIC_MESSAGE_CAP = 2_000;
+
+/**
+ * Scrub secret-shaped text OUT of ring messages before capture. The ring is
+ * served to the UI verbatim and copied to the clipboard from the console — a
+ * bearer token or provider key embedded in a thrown error's message must
+ * never leave through it. (Request BODIES and auth HEADERS are never
+ * captured at all — the recorder only sees status/code/message/method/path.)
+ */
+function scrubDiagnosticText(text: string): string {
+  let out = text.replace(/Bearer\s+[A-Za-z0-9._~+/=-]{6,}/gi, "Bearer ***");
+  out = out.replace(/\bsk-[A-Za-z0-9_-]{6,}\b/g, "sk-***");
+  if (out.length > DIAGNOSTIC_MESSAGE_CAP) {
+    out = `${out.slice(0, DIAGNOSTIC_MESSAGE_CAP)}… (truncated ${out.length - DIAGNOSTIC_MESSAGE_CAP} chars)`;
+  }
+  return out;
 }
 
 /** Constant-time bearer comparison; the token is per-spawn and loopback-only. */
@@ -621,8 +685,52 @@ export function buildServer(options: ServerOptions): FastifyInstance {
     429: "RATE_LIMITED",
     502: "PROVIDER_ERROR",
   };
+  // R59-E: the engine's error ring (per-buildServer instance — every test
+  // server gets a fresh one). Thrown route-handler errors funnel through
+  // this error handler by fastify's design, so ONE recorder here covers
+  // them all; the app-level 4xx replies (validation, auth, not-found) never
+  // pass through and never pollute the ring.
+  const diagnosticsRing: SidecarDiagnosticError[] = [];
+  /**
+   * R59-E + DECISION (from the live battery): record ONLY status ≥ 500 —
+   * 4xx is client noise (bad input, unknown ids, wrong token), not an
+   * engine error, and the console would drown in them on every owner typo.
+   * A thrown error without a statusCode fastifies to 500, so "route handler
+   * throws" land here by default. Only status/code/message/method/path are
+   * captured — never request bodies, never auth headers.
+   */
+  const recordDiagnosticError = (
+    request: FastifyRequest,
+    statusCode: number,
+    code: string,
+    message: string,
+  ): void => {
+    if (statusCode < 500) return;
+    diagnosticsRing.unshift({
+      id: randomUUID(),
+      ts: new Date().toISOString(),
+      source: "sidecar",
+      kind: "http",
+      statusCode,
+      code,
+      message: scrubDiagnosticText(message),
+      method: request.method,
+      // Strip the query string — params (e.g. ?url= on the browser proxy)
+      // are request data, not diagnostics.
+      url: request.url.split("?")[0],
+      count: 1,
+    });
+    if (diagnosticsRing.length > DIAGNOSTICS_RING_CAP) diagnosticsRing.pop();
+  };
   app.setErrorHandler((error: FastifyError, request, reply) => {
     const status = error.statusCode ?? 500;
+    // R59-E: the diagnostics ring capture point (status ≥ 500 only).
+    recordDiagnosticError(
+      request,
+      status,
+      error.code ?? codeByStatus[status] ?? "INTERNAL",
+      error.message,
+    );
     if (status >= 500) {
       const correlationId = randomUUID();
       request.log.error({ err: error, correlationId });
@@ -717,6 +825,35 @@ export function buildServer(options: ServerOptions): FastifyInstance {
   app.register(
     async (scope) => {
       registerBrowserRoutes(scope, token, db); // ROUND-43 (R43-10): embedded-browser proxy (iframe ticket auth, HTML/CSS rewriting, history + viewport state). ROUND-46 (R46-d): db handle → the per-project cookie jars (migration 0017) restore/persist through it.
+
+      // ── ROUND-59 (R59-E): diagnostics — the engine's error ring ────────
+      // The in-app Console tab (right sidebar) polls GET every 5s and merges
+      // these rows with the frontend error bus; DELETE clears the ring (the
+      // console's Clear all clears BOTH). Same bearer wall as every route in
+      // this scope (the app-level preHandler). The ring rows are already
+      // scrubbed at capture time — this route adds nothing to them.
+      scope.get("/diagnostics/errors", async (request, reply) => {
+        const query = request.query as Record<string, string | undefined>;
+        let limit = DIAGNOSTICS_RING_CAP;
+        if (query.limit !== undefined) {
+          const parsed = Number(query.limit);
+          if (!Number.isInteger(parsed) || parsed < 1) {
+            return reply.code(400).send(
+              errorBody("VALIDATION", "limit must be a positive integer", {
+                field: "query.limit",
+              }),
+            );
+          }
+          limit = Math.min(parsed, DIAGNOSTICS_RING_CAP);
+        }
+        // Newest first (the ring is stored newest-first; slice is the cap).
+        return { errors: diagnosticsRing.slice(0, limit) };
+      });
+
+      scope.delete("/diagnostics/errors", async () => {
+        diagnosticsRing.length = 0;
+        return { ok: true };
+      });
 
       scope.get("/agents", async (request) => {
         const query = request.query as Record<string, string | undefined>;
@@ -2686,6 +2823,135 @@ export function buildServer(options: ServerOptions): FastifyInstance {
           return reply.code(502).send(errorBody("PROVIDER_ERROR", result.message));
         }
         return reply.code(200).send({ ok: true, message: result.message });
+      });
+
+      // ── ROUND-59 (R59-D): response ratings (the owner's flagship request
+      // this round: "add the options to mark the responses as good or bad,
+      // and all of these will be tracked and saved… The full context will be
+      // properly shared"). POST upserts on (session_id, assistant_seq) —
+      // re-rating overwrites, one verdict per reply. The 200 body carries the
+      // row WITHOUT context (the chat UI only needs the verdict); the frozen
+      // snapshot is read back via GET /ratings (the analysis path).
+      scope.post("/sessions/:id/ratings", async (request, reply) => {
+        const { id } = request.params as Record<string, string>;
+        const body: unknown = request.body;
+        if (typeof body !== "object" || body === null || Array.isArray(body)) {
+          return reply
+            .code(400)
+            .send(errorBody("VALIDATION", "body must be a JSON object", { field: "body" }));
+        }
+        const raw = body as Record<string, unknown>;
+        if (
+          typeof raw.assistantSeq !== "number" ||
+          !Number.isInteger(raw.assistantSeq) ||
+          raw.assistantSeq <= 0
+        ) {
+          return reply.code(400).send(
+            errorBody(
+              "VALIDATION",
+              "assistantSeq must be a positive integer (the event seq of the assistant reply being rated)",
+              { field: "body.assistantSeq" },
+            ),
+          );
+        }
+        if (raw.rating !== "good" && raw.rating !== "bad") {
+          return reply.code(400).send(
+            errorBody("VALIDATION", "rating must be 'good' or 'bad'", { field: "body.rating" }),
+          );
+        }
+        let note: string | undefined;
+        if (raw.note !== undefined && raw.note !== null) {
+          if (typeof raw.note !== "string") {
+            return reply
+              .code(400)
+              .send(errorBody("VALIDATION", "note must be a string", { field: "body.note" }));
+          }
+          if (raw.note.length > MAX_RATING_NOTE_CHARS) {
+            return reply.code(400).send(
+              errorBody(
+                "VALIDATION",
+                `note must be at most ${MAX_RATING_NOTE_CHARS} characters`,
+                { field: "body.note" },
+              ),
+            );
+          }
+          note = raw.note;
+        }
+        try {
+          const rating = rateReply(db, {
+            sessionId: id,
+            assistantSeq: raw.assistantSeq,
+            rating: raw.rating,
+            note,
+          });
+          return reply.code(200).send({ rating });
+        } catch (err) {
+          if (err instanceof RatingError) {
+            return reply.code(err.status).send(
+              errorBody(err.code, err.message, err.field !== undefined ? { field: err.field } : undefined),
+            );
+          }
+          throw err;
+        }
+      });
+
+      // The session's verdicts for the chat UI's rating map — light views
+      // (no context; the panel only needs {assistantSeq, rating, note}).
+      scope.get("/sessions/:id/ratings", async (request, reply) => {
+        const { id } = request.params as Record<string, string>;
+        if (getSession(db, id) === undefined) {
+          return reply.code(404).send(errorBody("NOT_FOUND", `no session with id ${id}`));
+        }
+        return { ratings: listSessionRatings(db, id) };
+      });
+
+      // The ANALYSIS/EXPORT path: newest-first with the FULL frozen context
+      // per rating (the data the dev agent dumps to determine "did it
+      // perform the request which it was given properly or not"). Ratings
+      // deliberately outlive session deletes, so an unknown sessionId filter
+      // just yields an empty list. limit follows the /sessions tolerance
+      // (clamped, default 200); a bad rating filter is an honest 400.
+      scope.get("/ratings", async (request, reply) => {
+        const query = request.query as Record<string, string | undefined>;
+        let rating: "good" | "bad" | undefined;
+        if (query.rating !== undefined) {
+          if (query.rating !== "good" && query.rating !== "bad") {
+            return reply.code(400).send(
+              errorBody("VALIDATION", "rating filter must be 'good' or 'bad'", {
+                field: "query.rating",
+              }),
+            );
+          }
+          rating = query.rating;
+        }
+        const limitRaw = Number(query.limit ?? 200);
+        const limit = Number.isInteger(limitRaw) ? Math.min(Math.max(limitRaw, 1), 1000) : 200;
+        return {
+          ratings: listRatings(db, {
+            ...(query.sessionId !== undefined && query.sessionId.trim() !== ""
+              ? { sessionId: query.sessionId }
+              : {}),
+            ...(rating !== undefined ? { rating } : {}),
+            limit,
+          }),
+        };
+      });
+
+      // Remove one verdict (the chat UI's same-thumb click clears it).
+      scope.delete("/ratings/:id", async (request, reply) => {
+        const { id } = request.params as Record<string, string>;
+        const rowId = Number(id);
+        if (!Number.isInteger(rowId) || rowId <= 0) {
+          return reply.code(400).send(
+            errorBody("VALIDATION", "rating id must be a positive integer", {
+              field: "params.id",
+            }),
+          );
+        }
+        if (!deleteRating(db, rowId)) {
+          return reply.code(404).send(errorBody("NOT_FOUND", `no rating with id ${rowId}`));
+        }
+        return { ok: true };
       });
 
       // ── ROUND-37: approvals (ADR-0024 — the human permission flow) ───────

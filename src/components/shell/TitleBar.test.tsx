@@ -194,4 +194,29 @@ describe("TitleBar — Tauri chrome", () => {
     expect(screen.getByRole("button", { name: "Minimize window" })).toBeTruthy();
     warn.mockRestore();
   });
+
+  // R59-A (owner: "make that top navigation bar rounded and give it padding
+  // on all four sides") — the bar is a rounded CARD now: rounded on all four
+  // corners, bordered all around (no more flat border-b strip), and the
+  // window controls are inset rounded buttons instead of edge-to-edge
+  // full-height slabs so hovers never break the corner radii.
+  it("R59-A: the bar renders as a rounded card with inset, rounded window controls", () => {
+    stubTauri();
+    const { container } = render(<TitleBar />);
+
+    const bar = container.firstElementChild as HTMLElement;
+    expect(bar.tagName).toBe("HEADER");
+    expect(bar.className).toContain("rounded-[14px]");
+    expect(bar.className).toContain("border-[1.5px]");
+    // The old full-bleed bottom-strip chrome is gone.
+    expect(bar.className).not.toContain("border-b");
+    expect(bar.className).toContain("backdrop-blur");
+
+    // The controls carry their own rounding (inset buttons, not slabs).
+    for (const name of ["Minimize window", "Maximize window", "Close window"]) {
+      const btn = screen.getByRole("button", { name }) as HTMLElement;
+      expect(btn.className).toContain("rounded-[9px]");
+      expect(btn.className).toContain("h-8");
+    }
+  });
 });

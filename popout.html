@@ -1,0 +1,23 @@
+<!doctype html>
+<!--
+  ROUND-59 (R59-b): the pop-out browser window's page. open_browser_window
+  (src-tauri/src/browser.rs) builds the window with decorations(false) hosting
+  THIS file via WebviewUrl::App("popout.html") — a second vite entry (see
+  vite.config.ts rollupOptions.input). The page is a small standalone React
+  app that paints the window's CUSTOM chrome (drag-region title bar + themed
+  URL bar) and hosts the page content in a child webview (browser_tab_create
+  with this window's label). The native Windows title bar is deliberately
+  absent — that was the owner's R59 verdict on the R58 pop-out.
+-->
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+    <title>Acute Browser</title>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/popout/main.tsx"></script>
+  </body>
+</html>

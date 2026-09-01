@@ -1,4 +1,4 @@
-<!-- last-reviewed: 2026-08-31 round-56 -->
+<!-- last-reviewed: 2026-09-01 round-59 -->
 # IMPLEMENTED API — the shipped surface
 
 **Truth = this file.** Verified against `agent-core/src/server.ts` at
@@ -771,3 +771,49 @@ audit_log routes (approvals ARE implemented — see above) ·
 session events-backfill · connection-test/model-listing for
 non-chat-completions providers (manual model rows work) ·
 dev port is **5178**, not 8765.
+
+## ROUND-59 additions (implemented)
+
+### Response ratings (the owner's feedback loop)
+
+- `POST /sessions/:id/ratings` `{assistantSeq, rating: "good"|"bad", note?}` —
+  rates one assistant reply; **upsert on (session_id, assistant_seq)** (re-rating
+  overwrites rating+note+context, preserves created_at). The server builds an
+  **immutable full-context snapshot at rate time** (user message, assistant
+  reply with usage/ms, tool events ≤50 with 500-char summaries, any
+  turn.error, session title, agent name, model, event count; 8000-char field
+  caps with `truncated` flags). 200 `{rating}` (no context) · 404 unknown
+  session · 400 bad body / unknown assistantSeq.
+- `GET /sessions/:id/ratings` → `{ratings: [...]}` (no context — the chat UI's
+  rated-state map).
+- `GET /ratings?sessionId=&rating=&limit=` → `{ratings: [...]}` **with full
+  context** (the analysis/export path; newest-first, limit default 200).
+- `DELETE /ratings/:id` → `{ok: true}` · 404 unknown.
+- Migration `0022_message_ratings.sql` (UNIQUE upsert key + audit row; no FK —
+  the sessions.ts convention). Storage: `agent-core/src/storage/ratings.ts`.
+- Frontend: `rateReply`/`listSessionRatings`/`deleteRating` (api.ts) + the
+  thumbs cluster in AgentChatPanel (bad ratings prompt a note). CLI:
+  `node scripts/acute.mjs ratings [--session/--rating/--limit/--full]` +
+  `ratings:rm <id>` — `--full` dumps the evidence JSON.
+
+### Diagnostics console (error monitoring)
+
+- `GET /diagnostics/errors?limit=` → `{errors: [...]}` — the sidecar's
+  in-memory fastify error ring (thrown errors + ≥500 responses only; 4xx
+  client mistakes stay out by decision), newest-first, scrubbed (no bodies,
+  no auth, no query strings). 200 entries cap.
+- `DELETE /diagnostics/errors` → `{ok: true}` (clears the ring).
+- Frontend: `listDiagnosticErrors`/`clearDiagnosticErrors` (api.ts) + the
+  right-sidebar **Console** tab (ConsolePanel) merging the sidecar ring with
+  `src/lib/error-bus.ts` (ErrorBoundary render errors, window.onerror,
+  unhandledrejection, TanStack QueryCache.onError — 200-entry ring, 5s
+  same-error dedupe, secret-scrubbed).
+
+### Prompt-section registry (modular system prompts)
+
+- `.acute/prompts/<section-id>.md` per-section overrides (20 registry ids —
+  see `docs/runbooks/PROMPT-MODULES.md`); empty file removes the section;
+  `_order.txt` reorders when ≥1 override exists. No overrides → composition
+  byte-identical to pre-R59-F (golden-fixture pinned).
+- CLI: `prompt:sections [--project]` + `prompt:show <id> [--project]`.
+- No new routes — the registry composes inside `buildProjectSystemPrompt`.
