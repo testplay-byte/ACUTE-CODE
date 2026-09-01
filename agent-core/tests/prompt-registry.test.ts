@@ -107,8 +107,15 @@ describe("PROMPT_REGISTRY (R59-F)", () => {
     // Golden generated from the PRE-R59-F prompts.ts (13643 bytes, all 20
     // sections, every dynamic field pinned to fixed values). If this fails
     // after a deliberate prompts.ts change, regenerate deliberately.
-    const golden = readFileSync(join(import.meta.dirname, "fixtures", "prompt-golden-r59f.txt"), "utf8");
-    expect(buildProjectSystemPrompt(FULL_CTX)).toBe(golden);
+    // R59 CI fix: normalize \r\n → \n on BOTH sides before comparing — the
+    // fixture is committed with LF, but a Windows checkout with autocrlf
+    // rewrites it to CRLF (the R57 CI lesson: never let line endings decide
+    // a byte-identity test). .gitattributes additionally pins the fixture
+    // to LF, but the code-side normalization keeps the test honest even in
+    // working copies with local git overrides.
+    const golden = readFileSync(join(import.meta.dirname, "fixtures", "prompt-golden-r59f.txt"), "utf8").replace(/\r\n/g, "\n");
+    const composed = buildProjectSystemPrompt(FULL_CTX).replace(/\r\n/g, "\n");
+    expect(composed).toBe(golden);
   });
 });
 

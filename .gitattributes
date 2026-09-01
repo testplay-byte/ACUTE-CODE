@@ -1,3 +1,8 @@
 # Windows batch files MUST keep CRLF in every checkout — cmd.exe cannot
 # run an LF .bat (round-11 lesson; the release workflow verifies it).
 *.bat text eol=crlf
+# R59 CI fix: the prompt-golden fixture is a BYTE-IDENTITY pin — its LF
+# endings are part of the contract (a Windows autocrlf checkout rewrote it
+# to CRLF and failed CI run 33500181376; the test also normalizes, this
+# keeps the checked-in bytes stable in every working copy).
+agent-core/tests/fixtures/*.txt text eol=lf
