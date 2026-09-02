@@ -102,7 +102,12 @@ pub(crate) fn vision_provider_ids() -> Vec<String> {
 
 fn note_vision_provider(provider_id: &str) {
     let path = vision_provider_note_path();
-    let _ = std::fs::create_dir_all(path.parent());
+    // create_dir_all takes AsRef<Path> — path.parent() is Option<&Path>, so
+    // the Some case is unwrapped explicitly (the None case — a rootless
+    // relative path — simply skips the mkdir; the write below surfaces it).
+    if let Some(parent) = path.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
     let mut ids = vision_provider_ids();
     if !ids.iter().any(|x| x == provider_id) {
         ids.push(provider_id.to_string());
@@ -155,9 +160,10 @@ pub fn store_vision_key(app: AppHandle, provider_id: String, key: String) -> Res
         .to_string();
         if let Err(e) = sidecar::http_status(
             "POST",
-            &format!("http://127.0.0.1:{port}/internal/providers/keys"),
-            &token,
-            &body,
+            port,
+            "/internal/providers/keys",
+            Some(token.as_str()),
+            Some(body.as_str()),
         ) {
             // The durable credential is written; the in-memory push is a
             // convenience for immediate testing. Log WITHOUT the value.
