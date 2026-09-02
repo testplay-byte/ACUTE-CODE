@@ -1,4 +1,4 @@
-<!-- last-reviewed: 2026-08-30 round-54 -->
+<!-- last-reviewed: 2026-09-02 round-63 -->
 # MAINTENANCE — how to find things and change things safely
 
 **Status:** normative · **Established:** round-44 (owner directive: "complete the
@@ -242,6 +242,33 @@ Example: SessionsScreen / DemoViewerScreen.
 3. Query hooks in `src/hooks/use-sessions.ts` style; tests colocated
    (`src/**/*.test.tsx`).
 
+### g) Shipping a release — THE TAG IS PART OF THE ROUND (R63)
+
+The owner's desktop app only ever updates from a GitHub **release asset**
+(`ACUTE-CODE_<v>_x64-setup.exe`), and the release workflow only builds it **on
+a `v*` tag push**. R61 and R62 bumped versions and pushed commits but never
+pushed the tags — so no installer existed beyond 0.60.0 and the owner's
+packaged app was frozen while the site served the tip. The tag push is a
+REQUIRED close-out step, not an afterthought:
+
+1. Bump the version everywhere (`pnpm version:set X.Y.Z`) and run
+   `pnpm version:check` — the release workflow re-checks and fails on a
+   mismatch.
+2. Full verification ladder green (lint + typecheck + test; the workflow
+   runs them again on the tag).
+3. Commit + push as usual.
+4. **`git tag vX.Y.Z && git push origin vX.Y.Z`** — this triggers
+   `release.yml`: launcher-kit + the Windows installer (with the R57 boot
+   gate) build, then a DRAFT release is opened with both assets.
+5. Watch the workflow run to completion and verify the draft release
+   actually carries `ACUTE-CODE_X.Y.Z_x64-setup.exe` (GitHub API or the web
+   UI). The launcher can see drafts with the owner PAT, so the owner's next
+   `ACUTE.bat` run picks it up immediately; publishing the draft is the
+   owner's call.
+
+A round that ships a version bump WITHOUT its tag has shipped nothing to the
+desktop.
+
 ## Testing conventions
 
 - **Where:** `agent-core/tests/` (backend, AI SDK always mocked — never live
@@ -258,7 +285,11 @@ Example: SessionsScreen / DemoViewerScreen.
 
 1. **NEVER edit** `acute.bat` / `acute.sh` / `credentials.txt`. If
    `acute_launcher.py` absolutely must change, flag it in the round report —
-   the launcher self-updates, `ACUTE.bat` does not.
+   and note that the repo's `launcher/` copies (which self-update delivers to
+   the owner) ARE maintained by agents when the owner's directives demand it
+   (R54/R55/R56/R63 precedent: every launcher change is flagged in the round
+   doc + HANDOFF + the owner report; `ACUTE.bat` keeps CRLF endings — cmd.exe
+   cannot run an LF .bat).
 2. Append to `/home/z/my-project/worklog.md` (sandbox); the canonical snapshot
    is `docs/agent/ORCHESTRATION-WORKLOG.md` in-repo.
 3. After every push: **WATCH the GitHub Actions run to actual SUCCESS** (query

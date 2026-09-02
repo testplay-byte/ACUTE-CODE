@@ -1980,3 +1980,23 @@ tauri 2.11.5 (set_zoom + eval_with_callback confirmed in the
 docs/release-notes) and CI's cargo check is the compile gate, same as
 every prior Rust-touching round. Full record:
 docs/ui-iterations/round-60.md.
+
+---
+Task ID: R63
+Agent: orchestrator (main)
+Task: Round 63 — the desktop-update round (owner: "the desktop application was not reinstalled properly, not updated properly… whenever I run the acute.bat file… it will check the application version, then it will properly update the application on my desktop. If it needs to delete it completely, then it will delete it completely and reinstall it if needed").
+
+Work Log:
+- Diagnosis from the ground up: the GitHub release list's newest installer asset was v0.60.0 — R61 and R62 bumped versions and pushed commits but NEVER pushed their v* tags, and release.yml only builds the installer on a tag push. The launcher was correctly saying "0.60.0 is current" (nothing newer existed) while the site/dev flow served the tip — the exact "features added to the site but the desktop app not updated" report, and the reason desktop-only features (computer use, the embedded browser) were absent for the owner.
+- Launcher hardening (launcher/acute_launcher.py, flagged per golden rule 1): the version-TRUTH chain — every desktop launch compares the newest release against the uninstall REGISTRY version, the installed EXE's real FileVersion on disk (new PowerShell VersionInfo probe), and after launch the running ENGINE's /health version (captured from the sidecar's listening line; token-free probe). A hybrid install (registry bumped, exe stale — the silent-install-over-a-closing-app leftover), missing files, a sticky repair flag, or ACUTE.bat reinstall triggers a FULL removal: stop + poll for process exit (not the R54 fixed sleep) → NSIS uninstaller run synchronously (_?= pins it in place) → rd /s /q residue sweep → stale uninstall-registry entries dropped → fresh install → same verification; one full retry on verify failure; honest site-flow fallback + a sticky repair flag that self-heals the next run. Installer downloads sha256-verified against the GitHub asset digest (one retry). New commands: ACUTE.bat reinstall / ACUTE.bat uninstall (clean removal, no credentials needed, %APPDATA% data always kept); status shows registry version, exe-on-disk version (+ HYBRID warning), latest release + UPDATE PENDING, repair-flag state; the version-check panel prints every signal before any decision; the site plan panel states plainly that the embedded browser + computer use are desktop-only.
+- agent-core: /health's VERSION derives at boot from the package.json next to the compiled code (staged verbatim into the installer) — it was a hardcoded "0.3.0" for 60+ rounds. server.test.ts pins VERSION == package.json version + semver shape.
+- Launcher/ACUTE.bat header docs updated for the new commands (CRLF preserved — 77 CRLF lines, file(1) verified); launcher/README.md documents the verification model.
+- Process fix (the real root cause): docs/runbooks/MAINTENANCE.md recipe g — "Shipping a release — THE TAG IS PART OF THE ROUND": bump → verify → commit → PUSH THE TAG → watch the workflow → verify the draft release carries the installer. A version bump without its tag has shipped nothing to the desktop.
+- Docs: round-63.md (new), CHANGELOG 0.63.0, HANDOFF header, docs/README index row, stamps refreshed; docs:check 158/0.
+- Verification: pnpm lint CLEAN, typecheck CLEAN, root 1542/1542 (104 files), agent-core 801/801 (48 files), version:check 0.63.0 ×4, py_compile + pure-function tests + a 12-scenario desktop_flow simulation battery (current / hybrid / upgrade / newer-kept / forced-reinstall / repair-flag self-heal / engine-mismatch → flag / missing-files / first-install / post-install verify retry / unrepairable fallback / the real _desktop_uninstall against a real temp dir) + a live `status` smoke run on Linux.
+- THIS round ships its tag: v0.63.0 pushed → release.yml builds the installer (R57 boot gate) → draft release with ACUTE-CODE_0.63.0_x64-setup.exe verified via the API before close-out.
+
+Stage Summary:
+- Root cause fixed (the missing release pipeline step) + the launcher now PROVES the desktop app is current instead of trusting one registry string; /health tells the truth; reinstall/uninstall commands shipped.
+- Honest caveat: the launcher's Windows-only paths are code-complete + simulation-verified but live-verify on the owner's machine (headless Linux sandbox); the first ACUTE.bat app run after 0.63.0 IS that verification, with ACUTE.bat reinstall as the nuclear option and status showing the version truth.
+- ACUTE-CODE @ (this commit) v0.63.0, tagged + release verified; suites 1542 root / 801 agent-core.

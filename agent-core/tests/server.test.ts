@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -51,11 +51,19 @@ describe("health (unauthenticated)", () => {
   it("answers GET /health without a token", async () => {
     const response = await app.inject({ method: "GET", url: "/health" });
     expect(response.statusCode).toBe(200);
-    expect(response.json()).toEqual({ status: "ok", app: "acute-code", version: "0.3.0" });
+    expect(response.json()).toEqual({ status: "ok", app: "acute-code", version: VERSION });
   });
 
-  it("exports VERSION matching the health payload", () => {
-    expect(VERSION).toBe("0.3.0");
+  // ROUND-63: VERSION used to be a hardcoded "0.3.0" that went stale for
+  // 60+ rounds. It now derives from agent-core/package.json at boot — the
+  // same file the desktop staging step copies verbatim into the installed
+  // app — so the launcher can prove the installed engine is the new one.
+  it("exports VERSION from package.json (R63: /health tells the truth)", () => {
+    const pkg = JSON.parse(
+      readFileSync(new URL("../../package.json", import.meta.url), "utf8"),
+    ) as { version: string };
+    expect(VERSION).toBe(pkg.version);
+    expect(VERSION).toMatch(/^\d+\.\d+\.\d+$/);
   });
 });
 

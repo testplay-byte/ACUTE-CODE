@@ -18,6 +18,13 @@ rem
 rem  If the desktop app's engine fails to start, the launcher asks what to
 rem  do next (retry / use the site / keep) — you are never stuck.
 rem
+rem  R63 — the desktop app's UPDATE is VERIFIED, not assumed: the launcher
+rem  checks the version in the registry, the exe ON DISK, and the running
+rem  engine's /health, against the newest GitHub release. Anything stale,
+rem  missing or half-replaced (a "hybrid" install) is deleted completely
+rem  and reinstalled from a sha256-verified download. Nothing to click,
+rem  nothing to trust — every run ends with the real newest app.
+rem
 rem  Files that belong in THIS folder:
 rem      ACUTE.bat              <- you are here (double-click me)
 rem      acute_launcher.py      <- the workhorse (self-updates from the repo)
@@ -27,6 +34,12 @@ rem
 rem  Useful commands:   ACUTE.bat status   read-only health report
 rem                     ACUTE.bat update   update everything, don't start
 rem                     ACUTE.bat start    skip the update check (still asks)
+rem  R63 commands:      ACUTE.bat reinstall   delete the desktop app completely,
+rem                                         download + install the newest release,
+rem                                         verify it (registry + exe + engine),
+rem                                         then launch it
+rem                     ACUTE.bat uninstall  remove the packaged desktop app
+rem                                         cleanly (your data is always kept)
 rem ============================================================================
 
 rem --- UTF-8 console so the rich-UI panels render correctly (fixes borders) --

@@ -1,4 +1,4 @@
-<!-- last-reviewed: 2026-09-02 round-62 -->
+<!-- last-reviewed: 2026-09-02 round-63 -->
 # Changelog
 
 All notable changes to ACUTE-CODE are documented here. Entries are written for
@@ -18,6 +18,29 @@ code-signing (SmartScreen), ratings-driven prompt tuning, the
 deepseek-harness future candidates (compaction pressure-trigger,
 continuable sub-agent children), the Files-tab polish, agent
 web-app-testing tools.
+
+## [0.63.0] - 2026-09-02
+
+Round 63 — the desktop-update round. **The launcher now PROVES the desktop
+app is the newest version instead of assuming it.** Rounds 61–62 shipped
+features but never pushed their release tags, so no installer existed
+beyond 0.60.0 — the site served the new code while the packaged app stayed
+frozen (the root cause of "updated properly" reports). 0.63.0 is tagged and
+released: the next `ACUTE.bat` run updates the desktop app 0.60.0 → 0.63.0
+and verifies it. On every app launch the launcher now checks THREE
+versions against the newest GitHub release — the uninstall registry's, the
+installed exe's real FileVersion **on disk**, and (after launch) the
+running engine's `/health` version — and a *hybrid* install (registry
+bumped, exe stale — the leftover of a silent install racing a closing app)
+is **deleted completely and reinstalled** from a sha256-verified download,
+then verified again; a stuck engine version is flagged and self-heals on
+the next run. New commands: `ACUTE.bat reinstall` (delete + fresh install
++ verify + launch) and `ACUTE.bat uninstall` (clean removal; your data in
+`%APPDATA%\acute-code` is always kept), and `status` shows the full
+version truth including the update-pending flag. The engine's `/health`
+now reports the real app version (it had been a hardcoded 0.3.0 for 60+
+rounds). The site flow's plan now says plainly that the embedded browser
+and computer use are desktop-app features.
 
 ## [0.62.0] - 2026-09-02
 

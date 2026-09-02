@@ -105,6 +105,35 @@ agents, sessions, projects and settings persist (the desktop app keeps them
 in `%APPDATA%\acute-code\`, the dev flow in `ACUTE-CODE\.dev\`) and are
 never touched by updates.
 
+### How the DESKTOP app update is verified (round 63)
+
+Nothing about the desktop update is assumed — three versions are checked
+against the newest GitHub release on every app launch:
+
+1. **the uninstall registry's** version (what the installer claims),
+2. **the installed exe's real version on disk** (a PowerShell FileVersion
+   probe — the registry can lie when a past silent install raced a closing
+   app),
+3. **the running engine's `/health` version** after launch (the engine
+   reports the version it actually booted from).
+
+If any of them disagree — a *hybrid install*, exactly the "updated but
+nothing changed" failure — the launcher **deletes the app completely**
+(NSIS uninstaller, folder residue, stale registry entries) and reinstalls
+from a **sha256-verified** download, then verifies again. A stuck engine
+version is flagged on the spot and self-heals on the very next run. Your
+data (`%APPDATA%\acute-code`) is never touched by any of this.
+
+Extra commands when you want to drive it yourself:
+
+- `ACUTE.bat reinstall` — delete the desktop app completely, download +
+  install the newest release, verify it, launch it.
+- `ACUTE.bat uninstall` — remove the packaged desktop app cleanly (data is
+  kept). No credentials needed; works even if the app is half-broken.
+- `ACUTE.bat status` — now shows the full version truth: registry version,
+  exe-on-disk version, latest release on GitHub, update-pending flag, and
+  whether a repair is queued.
+
 ## If anything goes wrong
 
 - The launcher shows a **red panel** with the exact error and the log path
@@ -123,6 +152,9 @@ never touched by updates.
   - `ACUTE.bat start` — start without the update check (still asks)
   - `ACUTE.bat desktop` — same as `app` (install/launch ONLY the packaged
     desktop app; falls back to the dev flow if it cannot)
+  - `ACUTE.bat reinstall` — full delete + fresh install + launch (round 63)
+  - `ACUTE.bat uninstall` — remove the packaged desktop app cleanly (round
+    63; your data in `%APPDATA%\acute-code` is always kept)
   - `ACUTE.bat --web` — skip the question, run the browser flow
 
 ## Updating the launcher itself
@@ -159,7 +191,9 @@ while it runs), so if the launcher prints
 - The packaged **desktop app** (round 51+) is the default on Windows: it
   bundles the whole backend (a pinned Node runtime + the agent core) inside
   the installer, which is what finally activates the embedded Chromium
-  browser — the dev/browser flow can never use it (browsers don't expose
-  the native webview APIs).
+  browser and **computer use** — the dev/browser flow can never use them
+  (browsers don't expose the native webview APIs). Since round 63 the
+  launcher's SITE plan says so explicitly, and the desktop app's version is
+  verified three ways on every install (see above).
 - Linux/macOS: use `acute.sh` the same way (`bash acute.sh`) — the desktop
   installer is Windows-only, so those platforms always use the dev flow.

@@ -39,8 +39,11 @@
 #            start = no update pass (still asks)  · update = update only, exit
 #            status = read-only health report    · app|desktop = packaged app
 #            site|web = the local servers + browser (no desktop install)
+#            reinstall = DELETE the desktop app completely + fresh install
+#            uninstall = remove the packaged desktop app (data is kept)
 # Flags:     --no-update   --verbose   --app (force desktop)   --site/--web
-#            --no-desktop (same as --site)
+#            --no-desktop (same as --site)   --reinstall (force a full
+#            delete-and-reinstall of the desktop app this run)
 #
 # ROUND-56 (R56): the launcher ASKS how to launch — the desktop app or the
 # site in the browser — on every interactive run (Enter = your last choice,
@@ -48,6 +51,24 @@
 # question. The remembered choice lives in .acute-launch-pref.json next to
 # this file. The self-update now RE-EXECs the fresh launcher so new logic
 # runs THIS session instead of the next one.
+#
+# ROUND-63 (R63) — the desktop-UPDATE truth round (owner: "the desktop
+# application was not reinstalled properly, not updated properly"):
+#   • the update decision no longer trusts ONE signal. THREE versions are
+#     checked against the latest GitHub release: the uninstall registry's,
+#     the installed exe's FileVersion ON DISK, and (after launch) the
+#     running engine's GET /health version.
+#   • hybrid installs (registry bumped, exe stale — a silent install over a
+#     running app) are DETECTED and repaired by a FULL removal: NSIS
+#     uninstaller (/S, pinned synchronous with _?=) + folder residue +
+#     stale registry entries, then a fresh install, verified the same way.
+#   • downloads are sha256-verified against the release asset digest; the
+#     app is closed AND waited-for (process poll, not a fixed sleep)
+#     before the installer runs, so no file is ever locked mid-replace.
+#   • new commands:  ACUTE.bat reinstall  (delete + fresh install + launch)
+#     and  ACUTE.bat uninstall  (remove the packaged app cleanly).
+#     A sticky repair flag (.acute/desktop-repair-flag.json) makes the next
+#     run self-heal an engine that booted the wrong version.
 
 import hashlib
 import json
@@ -82,6 +103,10 @@ STARTED = time.time()
 # user settings, not a download, and must survive a cache wipe.
 SITE_COMMANDS = ("site", "web")
 DESKTOP_COMMANDS = ("desktop", "app")
+# R63: full-reinstall / clean-removal commands (see desktop_flow and
+# mode_uninstall). `reinstall` = delete + fresh install + launch;
+# `uninstall` = remove the packaged app (data in %APPDATA% is kept).
+REINSTALL_COMMANDS = ("reinstall", "repair")
 PREF_PATH = LAUNCHER_DIR / ".acute-launch-pref.json"
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -1058,20 +1083,22 @@ def _save_launch_pref(mode):
 def resolve_launch_mode(cmd):
     """How this run launches ACUTE-CODE: 'desktop', 'site', or None = ASK.
 
-    Precedence: explicit command (app/desktop vs site/web) → explicit flag
-    (--app/--desktop vs --site/--web/--no-desktop) → non-Windows is always
-    'site' (the packaged app is Windows-only) → non-interactive stdin uses
-    the remembered choice (or desktop on first contact) → interactive runs
+    Precedence: explicit command (app/desktop vs site/web — R63: reinstall
+    and repair resolve to the desktop flow with a forced full reinstall) →
+    explicit flag (--app/--desktop vs --site/--web/--no-desktop; R63:
+    --reinstall forces the desktop flow) → non-Windows is always 'site'
+    (the packaged app is Windows-only) → non-interactive stdin uses the
+    remembered choice (or desktop on first contact) → interactive runs
     return None so main() asks the question.
     """
-    if cmd in ("status", "update"):
+    if cmd in ("status", "update", "uninstall"):
         return None  # these never launch anything
-    if cmd in DESKTOP_COMMANDS:
+    if cmd in DESKTOP_COMMANDS or cmd in REINSTALL_COMMANDS:
         return "desktop"
     if cmd in SITE_COMMANDS:
         return "site"
     flags = set(sys.argv[1:])
-    if "--app" in flags or "--desktop" in flags:
+    if "--app" in flags or "--desktop" in flags or "--reinstall" in flags:
         return "desktop"
     if "--site" in flags or "--web" in flags or "--no-desktop" in flags:
         return "site"
@@ -1220,6 +1247,96 @@ def _version_tuple(text):
         return (0, 0, 0)
 
 
+def _version_norm(text):
+    """R63: '0.63.0.0' → (0, 63, 0) — Windows FileVersion pads a fourth
+    zero component; padding zeros beyond the third are stripped so
+    0.63.0 == 0.63.0.0 and version EQUALITY (as opposed to ordering) can
+    be trusted while 0.63.0 ≠ 0.63."""
+    try:
+        parts = [int(p) for p in str(text).strip().split(".")]
+    except (ValueError, TypeError):
+        return (0,)
+    while len(parts) > 3 and parts[-1] == 0:
+        parts.pop()
+    return tuple(parts)
+
+
+# R63: the sticky repair note — written when a launched engine reports the
+# WRONG version, read at the top of every desktop flow. It survives the run
+# (unlike a variable) so the self-heal happens on the NEXT double-click even
+# if this one ended with the owner keeping the app open.
+REPAIR_FLAG_PATH = DOT_DIR / "desktop-repair-flag.json"
+
+
+def _read_repair_flag():
+    """The expected version a past launch failed to run, or None."""
+    try:
+        data = json.loads(REPAIR_FLAG_PATH.read_text(encoding="utf-8"))
+        expected = data.get("expected")
+        return expected if isinstance(expected, str) else None
+    except (OSError, ValueError):
+        return None
+
+
+def _write_repair_flag(expected):
+    """Best-effort — a locked .acute dir must never block a launch."""
+    try:
+        DOT_DIR.mkdir(parents=True, exist_ok=True)
+        REPAIR_FLAG_PATH.write_text(
+            json.dumps({"expected": expected}, indent=2) + "\n", encoding="utf-8"
+        )
+        log(f"repair flag set: expected engine {expected}")
+    except OSError:
+        pass
+
+
+def _clear_repair_flag():
+    """Remove the flag once an install is verified current."""
+    try:
+        REPAIR_FLAG_PATH.unlink(missing_ok=True)
+    except OSError:
+        pass
+
+
+def _desktop_exe_version(exe):
+    """R63: the installed EXE's real FileVersion (PowerShell VersionInfo).
+
+    The registry's DisplayVersion is metadata the INSTALLER writes; the exe
+    on disk is the truth. A silent install that ran while the app was still
+    closing can bump the registry while leaving the old exe locked in
+    place — exactly the "not updated properly" hybrid the owner reported.
+    Returns '' when the probe fails (never crashes the launcher).
+    """
+    if not IS_WIN or not exe:
+        return ""
+    quoted = str(exe).replace("'", "''")
+    ps = f"(Get-Item -LiteralPath '{quoted}').VersionInfo.FileVersion"
+    code, out = probe(["powershell", "-NoProfile", "-Command", ps], timeout=25)
+    if code != 0:
+        return ""
+    return out.strip().strip('"')
+
+
+def _desktop_health_version(port, attempts=3):
+    """R63: GET the running engine's token-free /health → its version.
+
+    The sidecar reports the version of the package.json it booted from —
+    the third leg of the version-truth chain (registry + exe + engine).
+    Returns the version string, or None when the engine does not answer
+    (honest skip, not an error: the launch verdict is the watcher's job).
+    """
+    url = f"http://127.0.0.1:{port}/health"
+    for _ in range(attempts):
+        try:
+            with urlopen(url, timeout=2.5) as resp:
+                data = json.loads(resp.read().decode("utf-8", "replace") or "{}")
+            version = data.get("version")
+            return version if isinstance(version, str) else None
+        except Exception:  # noqa: BLE001 — engine may still be binding
+            time.sleep(1.0)
+    return None
+
+
 # R54: the two tauri resource layouts seen across bundler versions — resources
 # land either directly in the install dir or under a resources/ subfolder.
 def _desktop_resource_candidates(base, *relative):
@@ -1294,8 +1411,81 @@ def _desktop_stop_running(installed):
         time.sleep(1.0)
 
 
+def _desktop_wait_for_exit(installed, timeout_s=20):
+    """R63: Stop-Process is asynchronous — poll until the processes are GONE.
+
+    The hybrid-install root cause: the old flow killed the app and slept a
+    fixed 1s; Windows had often not released the file locks yet, the silent
+    NSIS install replaced what it could, bumped the registry — and left the
+    OLD exe in place. Waiting on actual process existence (not on guesses
+    about lock timing) is the honest wait. Returns True when clear.
+    """
+    if not IS_WIN:
+        return True
+    location = str(installed["location"]).replace("'", "''")
+    ps = (
+        "$procs = Get-CimInstance Win32_Process -Filter \"ExecutablePath IS NOT NULL\" | "
+        f"Where-Object {{ $_.ExecutablePath -like '{location}\\*' }}; "
+        "if ($procs) { Write-Output 'busy' } else { Write-Output 'clear' }"
+    )
+    deadline = time.time() + timeout_s
+    while time.time() < deadline:
+        code, out = probe(["powershell", "-NoProfile", "-Command", ps], timeout=15)
+        if code == 0 and out and "clear" in out:
+            return True
+        time.sleep(1.0)
+    warn(
+        f"the desktop app's processes did not fully exit within {timeout_s}s — "
+        "the installer may hit locked files"
+    )
+    return False
+
+
+def _desktop_uninstall(installed):
+    """R63: remove the desktop app COMPLETELY (owner directive: "if it needs
+    to delete it completely, then it will delete it completely and reinstall
+    if needed").
+
+    Sequence: stop + wait for exit → run the bundled NSIS uninstaller
+    SILENTLY and SYNCHRONOUSLY (the `_?=<dir>` argument pins it to the
+    install dir — without it the uninstaller copies itself to %TEMP% and
+    returns before removing anything) → sweep residue (an uninstaller can
+    never delete the directory it is running from) → drop the uninstall
+    registry entries (R54 post-mortem: a hand-deleted folder leaves them
+    behind, which used to fool the launcher into "is current").
+
+    The owner's DATA (%APPDATA%\\acute-code — agents, sessions, projects,
+    settings) is never touched: only the program files go. Returns True
+    when the install dir is gone.
+    """
+    if not IS_WIN:
+        return False
+    _desktop_stop_running(installed)
+    _desktop_wait_for_exit(installed)
+    base = Path(installed["location"])
+    uninstaller = base / "uninstall.exe"
+    if uninstaller.is_file():
+        log(f"$ silent uninstall: {uninstaller} /S _?={base}")
+        probe([str(uninstaller), "/S", f"_?={base}"], timeout=300)
+    else:
+        note("no bundled uninstall.exe found — removing the folder directly")
+    if base.exists():
+        run(["cmd", "/c", "rd", "/s", "/q", str(base)], check=False, timeout=180)
+    # Belt and suspenders: stale uninstall entries must not resurrect a
+    # deleted install on the next _desktop_find_installed() probe.
+    for hive in ("HKCU", "HKLM"):
+        for key in DESKTOP_UNINSTALL_KEYS:
+            run(["reg", "delete", f"{hive}\\{key}", "/f"], check=False, timeout=15)
+    if base.exists():
+        warn(f"could not fully remove {base} (a file is still locked — close the app and run this again)")
+        return False
+    ok(f"removed the desktop app completely ({base})")
+    note("your agents, sessions and settings (%APPDATA%\\acute-code) are untouched")
+    return True
+
+
 def _desktop_watch_engine(proc, timeout_s=75):
-    r"""R54→R56: watch the freshly launched app's engine through sidecar.log.
+    r"""R54→R56→R63: watch the freshly launched app's engine through sidecar.log.
 
     The app's Rust shell appends every lifecycle line to
     %APPDATA%\acute-code\sidecar.log; 'listening on 127.0.0.1:<port>' means
@@ -1311,10 +1501,15 @@ def _desktop_watch_engine(proc, timeout_s=75):
                      too (the old timeout was blind: no diagnostic at all,
                      exactly the shape that hid EISDIR for three sessions)
       'app-exited' — the desktop process itself died
+
+    R63 ALSO returns the engine's /health version when the outcome is 'up'
+    (None otherwise) — the third leg of the version-truth chain: the
+    registry, the exe on disk, AND the booted engine must all agree with
+    the release before the update counts as landed.
     """
     appdata = os.environ.get("APPDATA")
     if not IS_WIN or not appdata:
-        return "up" if proc.poll() is None else "app-exited"
+        return ("up" if proc.poll() is None else "app-exited"), None
     log_file = Path(appdata) / "acute-code" / "sidecar.log"
     try:
         start_size = log_file.stat().st_size if log_file.is_file() else 0
@@ -1325,7 +1520,7 @@ def _desktop_watch_engine(proc, timeout_s=75):
     while time.time() < deadline:
         if proc.poll() is not None:
             warn(f"the desktop app exited on its own (code {proc.returncode})")
-            return "app-exited"
+            return "app-exited", None
         time.sleep(1.5)
         try:
             if not log_file.is_file():
@@ -1341,19 +1536,25 @@ def _desktop_watch_engine(proc, timeout_s=75):
             continue
         match = re.search(r"listening on 127\.0\.0\.1:(\d+)", fresh)
         if match:
-            ok(f"agent-core is up — sidecar listening on port {match.group(1)}")
-            return "up"
+            port = int(match.group(1))
+            ok(f"agent-core is up — sidecar listening on port {port}")
+            engine_version = _desktop_health_version(port)
+            if engine_version:
+                ok(f"engine /health reports version {engine_version}")
+            else:
+                note("engine /health did not answer — the running-version check is skipped")
+            return "up", engine_version
         if "startup failed" in fresh:
             warn("the app reports an engine startup failure — its log tail:")
             _print_engine_tail(fresh_lines)
             note("the same log is shown inside the app (offline screen → Copy diagnostics)")
-            return "failed"
+            return "failed", None
     warn(
         f"agent-core did not report ready within {timeout_s}s — the engine's last output:"
     )
     _print_engine_tail(fresh_lines)
     note("the app window shows the live status (its offline screen has Restart-engine + Copy diagnostics)")
-    return "timeout"
+    return "timeout", None
 
 
 def _print_engine_tail(lines, limit=14):
@@ -1398,10 +1599,13 @@ def _desktop_find_installed():
 def _desktop_latest_release(pat):
     """Newest GitHub release that carries a Windows installer asset.
 
-    Returns (version_str, asset_id) or None. Authenticated with the owner's
-    PAT (the repo is private AND the CI creates the release as a DRAFT —
-    drafts are only visible to tokens with repo access, which the owner's
-    launcher has). Never raises: offline/404/parse issues → None.
+    Returns (version_str, asset_id, digest) or None — the digest is
+    GitHub's own server-side sha256 of the asset (R63: every download is
+    verified against it, so a truncated/corrupt setup.exe can never reach
+    the silent installer). Authenticated with the owner's PAT (the repo is
+    private AND the CI creates the release as a DRAFT — drafts are only
+    visible to tokens with repo access, which the owner's launcher has).
+    Never raises: offline/404/parse issues → None.
     """
     import json as _json
     import urllib.error
@@ -1427,16 +1631,32 @@ def _desktop_latest_release(pat):
             name = asset.get("name", "")
             m = DESKTOP_INSTALLER_RE.match(name)
             if m and asset.get("id") is not None:
-                return m.group(1), asset["id"]
+                return m.group(1), asset["id"], str(asset.get("digest") or "")
     return None
 
 
-def _desktop_download(pat, asset_id, version):
+def _desktop_digest_ok(path, digest):
+    """R63: verify a downloaded file against the release asset's
+    'sha256:<hex>' digest (computed by GitHub when the asset uploads)."""
+    if not digest or not digest.lower().startswith("sha256:"):
+        return True  # no digest published — the size check is all we have
+    expected = digest.split(":", 1)[1].strip().lower()
+    try:
+        actual = hashlib.sha256(Path(path).read_bytes()).hexdigest()
+    except OSError:
+        return False
+    return actual == expected
+
+
+def _desktop_download(pat, asset_id, version, digest=""):
     """Stream the installer asset into .acute/downloads/ (progress shown).
 
     Private-repo assets download through the API endpoint with the PAT; the
     token is registered in SECRETS_TO_REDACT and never appears in logs or
-    panels. Returns the local Path or None.
+    panels. R63: the finished file is VERIFIED against the asset's sha256
+    digest and a mismatch triggers ONE full re-download — a corrupt
+    installer can no longer reach the silent install step. Returns the
+    local Path or None.
     """
     import urllib.error
 
@@ -1444,55 +1664,65 @@ def _desktop_download(pat, asset_id, version):
     dest_dir = DOT_DIR / "downloads"
     dest_dir.mkdir(parents=True, exist_ok=True)
     dest = dest_dir / f"ACUTE-CODE_{version}_x64-setup.exe"
-    req = urllib.request.Request(url, headers={
-        "Authorization": f"Bearer {pat}",
-        "User-Agent": "acute-launcher",
-        "Accept": "application/octet-stream",
-    })
-    try:
-        with urllib.request.urlopen(req, timeout=60) as resp, dest.open("wb") as fh:
-            total = int(resp.headers.get("Content-Length") or 0)
-            done = 0
-            chunk_mb = 4 * 1024 * 1024
-            if RICH:
-                from rich.progress import Progress, BarColumn, DownloadColumn
+    for attempt in (1, 2):
+        req = urllib.request.Request(url, headers={
+            "Authorization": f"Bearer {pat}",
+            "User-Agent": "acute-launcher",
+            "Accept": "application/octet-stream",
+        })
+        try:
+            with urllib.request.urlopen(req, timeout=60) as resp, dest.open("wb") as fh:
+                total = int(resp.headers.get("Content-Length") or 0)
+                done = 0
+                chunk_mb = 4 * 1024 * 1024
+                if RICH:
+                    from rich.progress import Progress, BarColumn, DownloadColumn
 
-                with Progress(
-                    "[bold cyan]downloading",
-                    BarColumn(),
-                    DownloadColumn(),
-                    transient=True,
-                ) as progress:
-                    task = progress.add_task("installer", total=total or None)
+                    with Progress(
+                        "[bold cyan]downloading",
+                        BarColumn(),
+                        DownloadColumn(),
+                        transient=True,
+                    ) as progress:
+                        task = progress.add_task("installer", total=total or None)
+                        while True:
+                            chunk = resp.read(chunk_mb)
+                            if not chunk:
+                                break
+                            fh.write(chunk)
+                            done += len(chunk)
+                            progress.update(task, completed=done)
+                else:
+                    last_pct = -1
                     while True:
                         chunk = resp.read(chunk_mb)
                         if not chunk:
                             break
                         fh.write(chunk)
                         done += len(chunk)
-                        progress.update(task, completed=done)
-            else:
-                last_pct = -1
-                while True:
-                    chunk = resp.read(chunk_mb)
-                    if not chunk:
-                        break
-                    fh.write(chunk)
-                    done += len(chunk)
-                    if total:
-                        pct = int(done * 100 / total)
-                        if pct != last_pct and pct % 10 == 0:
-                            print(f"       {pct}% ({done // (1024 * 1024)} MB)")
-                            last_pct = pct
-    except (urllib.error.URLError, OSError) as exc:
-        note(f"installer download failed ({exc.__class__.__name__}: {redact(str(exc))[:120]})")
-        return None
-    if dest.stat().st_size < 1_000_000:
-        # A setup.exe is >100 MB; anything tiny is an error page/API body.
-        note("downloaded file is too small to be the installer — discarding")
-        dest.unlink(missing_ok=True)
-        return None
-    return dest
+                        if total:
+                            pct = int(done * 100 / total)
+                            if pct != last_pct and pct % 10 == 0:
+                                print(f"       {pct}% ({done // (1024 * 1024)} MB)")
+                                last_pct = pct
+        except (urllib.error.URLError, OSError) as exc:
+            note(f"installer download failed ({exc.__class__.__name__}: {redact(str(exc))[:120]})")
+            return None
+        if dest.stat().st_size < 1_000_000:
+            # A setup.exe is >100 MB; anything tiny is an error page/API body.
+            note("downloaded file is too small to be the installer — discarding")
+            dest.unlink(missing_ok=True)
+            return None
+        if not _desktop_digest_ok(dest, digest):
+            if attempt == 1:
+                warn("the downloaded installer failed its sha256 integrity check — downloading it again")
+                dest.unlink(missing_ok=True)
+                continue
+            note("the re-downloaded installer still fails its integrity check — discarding")
+            dest.unlink(missing_ok=True)
+            return None
+        return dest
+    return None
 
 
 def _desktop_install(installer_path):
@@ -1580,7 +1810,7 @@ def _desktop_seed_keys(key, sub_keys):
             ok(f"stored {target} (length {len(value)})")
 
 
-def desktop_flow(pat, key, sub_keys):
+def desktop_flow(pat, key, sub_keys, force_reinstall=False):
     """Install + launch the packaged desktop app. True = it is running.
 
     Any failure prints a warning and returns False — the caller falls back
@@ -1595,6 +1825,19 @@ def desktop_flow(pat, key, sub_keys):
     are closed before install and launch; and the launched app's engine
     startup is watched through sidecar.log so this console shows the real
     engine state (or its error tail) instead of going silent.
+
+    ROUND-63 — the version-TRUTH chain (owner: "the desktop application
+    was not reinstalled properly, not updated properly"). The decision no
+    longer trusts any ONE signal: the uninstall REGISTRY version, the
+    installed EXE's FileVersion on disk, and — after launch — the running
+    ENGINE's /health version are each compared with the latest GitHub
+    release. A hybrid install (registry bumped, exe stale — what a silent
+    install over a still-closing app leaves behind), a stale repair flag,
+    or `ACUTE.bat reinstall` triggers a FULL removal (NSIS uninstaller +
+    folder residue + stale registry entries) followed by a fresh install,
+    which is then verified the same three ways. The app is closed AND
+    process-waited before any install, and the download is sha256-checked
+    against GitHub's asset digest. Data in %APPDATA% is never touched.
     """
     with step("Desktop app (packaged ACUTE-CODE)"):
         release = _desktop_latest_release(pat)
@@ -1602,33 +1845,100 @@ def desktop_flow(pat, key, sub_keys):
             warn("no Windows installer published on GitHub yet — using the dev-servers flow")
             note("the installer ships with the next tagged release (round 51+)")
             return False
-        version, asset_id = release
+        version, asset_id, digest = release
         installed = _desktop_find_installed()
         exe, missing = (
             _desktop_install_files(installed) if installed is not None else (None, [])
         )
-        if (
+        exe_version = _desktop_exe_version(exe)
+        repair_expected = _read_repair_flag()
+
+        # R63: the version-check panel the owner asked for — every signal
+        # on the table BEFORE any decision is made.
+        panel(
+            "  latest installer on GitHub    " + version + "\n"
+            "  uninstall registry says       " + (installed["version"] if installed else "(not installed)") + "\n"
+            "  installed exe on disk is      " + (exe_version or "(not found)") + "\n"
+            "  install files                 " + ("complete" if not missing else "MISSING: " + ", ".join(missing))
+            + ("\n  repair flag                   expects " + repair_expected if repair_expected else ""),
+            title="desktop app version check",
+        )
+
+        exe_matches = bool(exe_version) and _version_norm(exe_version) == _version_norm(version)
+        registry_current = (
             installed is not None
-            and not missing
             and _version_tuple(installed["version"]) >= _version_tuple(version)
-        ):
-            ok(f"installed desktop app {installed['version']} is current ({installed['location']})")
-        else:
-            if installed is not None and missing:
-                warn(
-                    "registry says {} is installed, but files are missing ({})".format(
-                        installed["version"], ", ".join(missing)
-                    )
+        )
+        # The owner's app is NEWER than the newest release this token can
+        # see (e.g. an unpublished draft) AND its exe agrees with the
+        # registry — keep it; silently downgrading is never the policy.
+        newer_than_release = (
+            installed is not None
+            and _version_tuple(installed["version"]) > _version_tuple(version)
+            and bool(exe_version)
+            and _version_norm(exe_version) == _version_norm(installed["version"])
+        )
+
+        uninstall_first = False
+        reason = ""
+        if force_reinstall:
+            uninstall_first = True
+            reason = f"reinstall requested — deleting the app completely and installing {version} fresh"
+        elif repair_expected is not None:
+            uninstall_first = True
+            reason = (
+                f"the last launch ran engine {repair_expected or 'unknown'} instead of "
+                f"{version} — deleting the app completely and reinstalling"
+            )
+        elif installed is None:
+            reason = f"installing the desktop app {version} (first time)"
+        elif missing:
+            uninstall_first = True
+            reason = (
+                "registry says {} is installed, but files are missing ({}) — reinstalling".format(
+                    installed["version"], ", ".join(missing)
                 )
-                ok("reinstalling the desktop app to repair it")
-            elif installed is not None:
-                ok(f"upgrading the desktop app {installed['version']} → {version}")
-            else:
-                ok(f"installing the desktop app {version} (first time)")
-            # R54: a running instance locks the files the installer replaces.
+            )
+        elif newer_than_release:
+            reason = (
+                f"installed desktop app {installed['version']} is NEWER than the visible "
+                f"release {version} — keeping it"
+            )
+        elif not exe_matches and registry_current:
+            # THE hybrid case: the registry claims the new version but the
+            # exe on disk is older (or unprobed) — the classic leftover of a
+            # silent install that raced a closing app. Only a full delete +
+            # reinstall can fix a half-replaced install.
+            uninstall_first = True
+            reason = (
+                "hybrid install detected: the registry says {} but the exe on disk is {} "
+                "— deleting it completely and reinstalling".format(
+                    installed["version"], exe_version or "missing/unprobed"
+                )
+            )
+        elif not registry_current:
+            reason = f"upgrading the desktop app {installed['version']} → {version}"
+        else:
+            reason = ""
+
+        if not reason:
+            ok(f"installed desktop app {installed['version']} is current ({installed['location']})")
+            note("verified: registry, exe on disk and the latest release all agree")
+            _clear_repair_flag()
+        else:
+            ok(reason)
+            if uninstall_first and installed is not None:
+                if not _desktop_uninstall(installed):
+                    warn("the old install could not be fully removed — installing over it now")
+                installed = None
+                exe = None
+            # R63: close AND WAIT — a live instance locks the files the
+            # installer must replace; the wait polls actual process
+            # existence instead of guessing at lock timing.
             if installed is not None:
                 _desktop_stop_running(installed)
-            installer = _desktop_download(pat, asset_id, version)
+                _desktop_wait_for_exit(installed)
+            installer = _desktop_download(pat, asset_id, version, digest)
             if installer is None:
                 warn("could not download the installer — using the dev-servers flow")
                 return False
@@ -1648,10 +1958,54 @@ def desktop_flow(pat, key, sub_keys):
                     )
                 )
                 return False
+            # R63 POST-INSTALL VERIFICATION: the registry AND the exe on disk
+            # must both report the release version — anything else is a
+            # hybrid install and gets one full delete-and-reinstall retry.
+            exe_version = _desktop_exe_version(exe)
+            registry_version = installed["version"] or ""
+            verified = (
+                (not exe_version or _version_norm(exe_version) == _version_norm(version))
+                and (not registry_version or _version_norm(registry_version) == _version_norm(version))
+            )
+            if not verified:
+                warn(
+                    "the fresh install does not verify: registry {} / exe {} vs release {}".format(
+                        registry_version or "(none)", exe_version or "(unprobed)", version
+                    )
+                )
+                ok("deleting the app completely and reinstalling it once more")
+                if _desktop_uninstall(installed) and _desktop_install(installer):
+                    installed = _desktop_find_installed()
+                    if installed is None:
+                        warn("the second install left no installed app — using the dev-servers flow")
+                        return False
+                    exe, missing = _desktop_install_files(installed)
+                    if missing:
+                        warn(
+                            "the second install is incomplete ({} missing) — using the dev-servers flow".format(
+                                ", ".join(missing)
+                            )
+                        )
+                        return False
+                    exe_version = _desktop_exe_version(exe)
+                    registry_version = installed["version"] or ""
+                    verified = (
+                        (not exe_version or _version_norm(exe_version) == _version_norm(version))
+                        and (not registry_version or _version_norm(registry_version) == _version_norm(version))
+                    )
+                if not verified:
+                    warn(
+                        "the desktop install still does not verify after a full reinstall — "
+                        "using the dev-servers flow (the next run will retry the repair)"
+                    )
+                    _write_repair_flag(version)
+                    return False
             ok(f"installed {installed['version']} → {installed['location']}")
+            note(f"verified: the exe on disk reports {exe_version or version}")
             # R55: tell the owner what actually changed — a silent version
             # bump reads as "nothing happened".
             _print_whats_new(version)
+            _clear_repair_flag()
 
     # Credentials BEFORE launch: the app's Rust shell reads Credential
     # Manager at boot, so the keys must be in place before the exe starts.
@@ -1668,6 +2022,7 @@ def desktop_flow(pat, key, sub_keys):
     # site".
     proc = None
     outcome = "app-exited"
+    engine_version = None
     for attempt in range(1, 3):  # initial launch + one retry round
         with step("Starting the desktop app" if attempt == 1 else "Restarting the desktop app (retry)"):
             try:
@@ -1684,8 +2039,25 @@ def desktop_flow(pat, key, sub_keys):
             ok(f"ACUTE-CODE {installed['version']} is running (pid {proc.pid})")
             # R54: first-run smoke test — watch agent-core come up (or fail)
             # so this console tells the owner what the app window is doing.
-            outcome = _desktop_watch_engine(proc)
+            # R63: an 'up' outcome now also carries the engine's /health
+            # version — the final leg of the version-truth chain.
+            outcome, engine_version = _desktop_watch_engine(proc)
         if outcome == "up":
+            # R63: the booted engine must BE the release version. A hybrid
+            # install (new exe, old staged engine) would pass every disk
+            # check yet still run the old code — this is the one place it
+            # can be caught. Flag it for a full self-healing repair on the
+            # next run instead of breaking the owner's session now.
+            if engine_version and _version_norm(engine_version) != _version_norm(version):
+                warn(
+                    f"the running engine reports version {engine_version}, expected {version} — "
+                    "the install is a hybrid"
+                )
+                ok("flagged: the next run deletes and reinstalls the app automatically "
+                   "(or run ACUTE.bat reinstall now)")
+                _write_repair_flag(version)
+            else:
+                _clear_repair_flag()
             break
         if attempt == 1:
             recourse = _ask_engine_recourse()
@@ -1760,12 +2132,41 @@ def mode_status(pat, key, env, sub_keys=("", "", "")):
         lines.append("app          not downloaded yet (first run will fetch it)")
     # ROUND-51 (R51-a): the packaged desktop app, when installed (read-only
     # registry probe — never launches anything).
+    # ROUND-63: the version-TRUTH status — registry, exe on disk, latest
+    # release, and the repair flag, so "is my desktop app actually current?"
+    # is answered read-only in one place.
     if IS_WIN:
         desktop = _desktop_find_installed()
         if desktop is not None:
             lines.append(f"desktop app  {desktop['version']} installed  ·  {desktop['location']}")
+            exe, missing = _desktop_install_files(desktop)
+            if missing:
+                lines.append(f"  files     MISSING: {', '.join(missing)} — the next app launch reinstalls")
+            elif exe:
+                exe_version = _desktop_exe_version(exe)
+                if exe_version:
+                    agree = _version_norm(exe_version) == _version_norm(desktop["version"] or "")
+                    lines.append(
+                        f"  exe       {exe_version} on disk"
+                        + ("" if agree else f"  ≠ registry {desktop['version']} — HYBRID, the next app launch repairs")
+                    )
+                else:
+                    lines.append("  exe       version could not be probed")
         else:
             lines.append("desktop app  not installed (the next run will fetch the installer)")
+        release = _desktop_latest_release(pat)
+        if release is not None:
+            release_version = release[0]
+            installed_version = desktop["version"] if desktop is not None else "none"
+            if desktop is None or _version_tuple(installed_version) < _version_tuple(release_version):
+                lines.append(f"  release   {release_version} on GitHub — UPDATE PENDING (the next app launch installs it)")
+            else:
+                lines.append(f"  release   {release_version} on GitHub (installed is current)")
+        else:
+            lines.append("  release   GitHub unreachable or no installer published")
+        repair_expected = _read_repair_flag()
+        if repair_expected:
+            lines.append(f"  repair    flagged — the next app launch reinstalls (expects engine {repair_expected})")
     # R56: the remembered launch choice + the engine's last words — the two
     # facts that turn a vague "it failed" report into a diagnosable one.
     pref = _load_launch_pref()
@@ -1808,6 +2209,78 @@ def mode_status(pat, key, env, sub_keys=("", "", "")):
     lines.append("servers      " + (", ".join(busy) if busy else "stopped"))
     lines.append(f"log          {LOG_PATH}")
     panel("\n".join(lines), title="ACUTE-CODE status")
+
+
+def mode_uninstall():
+    """R63: `ACUTE.bat uninstall` — remove the packaged desktop app cleanly.
+
+    A dedicated removal command (owner: "maybe for deleting the application
+    or the PC Windows application"): it closes the app, runs the bundled
+    uninstaller, sweeps residue, and drops the stale uninstall-registry
+    entries — the exact same routine desktop_flow's repair path uses. It
+    needs NO credentials and NO toolchain (nothing is downloaded), and the
+    owner's data (%APPDATA%\acute-code — agents, sessions, projects,
+    settings) is always kept. Reinstall any time with `ACUTE.bat reinstall`
+    (or just `ACUTE.bat app` — it installs on demand).
+    """
+    if not IS_WIN:
+        panel(
+            "The packaged desktop app is Windows-only — nothing to uninstall.\n"
+            "(The dev flow lives in " + str(APP_DIR) + " and is removed by deleting that folder.)",
+            style="yellow",
+            title="uninstall",
+        )
+        return
+    rule("uninstall (remove the packaged desktop app)")
+    installed = _desktop_find_installed()
+    if installed is None:
+        panel(
+            "The packaged desktop app is not installed (no uninstall entry found).\n\n"
+            "Nothing to remove. The site/dev flow lives in:\n  " + str(APP_DIR) + "\n"
+            "(delete that folder if you want it gone too)",
+            style="yellow",
+            title="uninstall",
+        )
+        log("uninstall: nothing installed")
+        wait_close()
+        return
+    panel(
+        "This removes the packaged ACUTE-CODE desktop app:\n\n"
+        "  version    " + (installed["version"] or "(unknown)") + "\n"
+        "  location   " + installed["location"] + "\n\n"
+        "It will be closed first (if running), then fully deleted — including\n"
+        "its registry entries. YOUR DATA IS KEPT: agents, sessions, projects\n"
+        "and settings live in %APPDATA%\acute-code and are never touched.\n\n"
+        "Reinstall any time:  ACUTE.bat reinstall   (delete + fresh install)\n"
+        "or just              ACUTE.bat app      (installs on demand)",
+        style="yellow",
+        title="uninstall the desktop app",
+    )
+    if not confirm("Remove the desktop app now?", default=True):
+        ok("uninstall cancelled — the app is untouched")
+        wait_close()
+        return
+    if _desktop_uninstall(installed):
+        _clear_repair_flag()
+        panel(
+            "The desktop app is fully removed.\n\n"
+            "  ➜  Your agents, sessions and settings are kept in\n"
+            "     %APPDATA%\acute-code\n"
+            "  ➜  To use ACUTE-CODE again: double-click ACUTE.bat and answer\n"
+            "     1 (desktop app) — it downloads and installs the current\n"
+            "     release automatically — or 2 for the site in your browser",
+            style="green",
+            title="▲ uninstalled",
+        )
+    else:
+        panel(
+            "The app could not be fully removed — a file was still locked.\n"
+            "Close the ACUTE-CODE window (and any terminal it opened), then\n"
+            "run  ACUTE.bat uninstall  again — everything is idempotent.",
+            style="yellow",
+            title="uninstall incomplete",
+        )
+    wait_close()
 
 
 def launch(env, key, sub_keys=("", "", "")):
@@ -1914,6 +2387,13 @@ def main():
     banner()
     log(f"===== launcher start {time.strftime('%Y-%m-%d %H:%M:%S')} args={sys.argv[1:]} =====")
 
+    # R63: `ACUTE.bat uninstall` removes the packaged desktop app — a purely
+    # LOCAL operation. It needs NO credentials (nothing is downloaded), so
+    # it runs before read_credentials() can fail on a missing/empty file.
+    if cmd == "uninstall":
+        mode_uninstall()
+        return
+
     pat, key, sub_keys = read_credentials()
     register_secrets(pat, key, authed_url(pat), *[s for s in sub_keys if s])
     env = dict(os.environ)
@@ -1935,6 +2415,9 @@ def main():
     # is the code that asks. Explicit commands/flags never ask; non-Windows
     # is always the site; a terminal (interactive run) gets the question.
     launch_mode = resolve_launch_mode(cmd)
+    # R63: reinstall/repair (command or --reinstall flag) forces the desktop
+    # flow into its DELETE-and-fresh-install path.
+    force_reinstall = cmd in REINSTALL_COMMANDS or "--reinstall" in sys.argv
 
     if launch_mode is None:
         # The ask is still pending — the plan shows BOTH possible paths so it
@@ -1947,7 +2430,9 @@ def main():
             "  3.  Ask: app or site?         you choose (Enter keeps your last choice)\n"
             "  4.  Launch the chosen mode:\n"
             "        DESKTOP app             install/update + start the packaged\n"
-            "                                window (embedded browser + engine)\n"
+            "                                window (embedded browser + engine) —\n"
+            "                                the version is VERIFIED three ways\n"
+            "                                (registry · exe on disk · engine)\n"
             "        SITE                    local servers + your browser\n"
             "                                at http://localhost:5173\n"
             "\n"
@@ -1962,18 +2447,32 @@ def main():
             "\n"
             "  1.  Verify GitHub access              done (above)\n"
             "  2.  Check for updates                 keeps this launcher + the repo current\n"
-            "  3.  Install / update the DESKTOP app  the packaged ACUTE-CODE with the\n"
+            + (
+                "  3.  DELETE the desktop app           complete removal, then a fresh\n"
+                "                                        install (reinstall requested)\n"
+                if force_reinstall
+                else "  3.  Check the app's version          registry · exe on disk · GitHub\n"
+                "                                        release — a hybrid or stale install\n"
+                "                                        is deleted and reinstalled\n"
+            )
+            +
+            "  4.  Install / update the DESKTOP app  the packaged ACUTE-CODE with the\n"
             "                                        embedded browser + bundled backend\n"
-            "  4.  Store your keys                   Windows Credential Manager (once)\n"
-            "  5.  Start the app                     a real app window — no browser tab\n"
+            "  5.  Verify the install                the exe on disk + the registry must\n"
+            "                                        match the release (sha256-checked\n"
+            "                                        download; the engine's version is\n"
+            "                                        checked after launch)\n"
+            "  6.  Store your keys                   Windows Credential Manager (once)\n"
+            "  7.  Start the app                     a real app window — no browser tab\n"
             "\n"
             "If the desktop install fails for ANY reason the launcher falls back\n"
             "to the site flow automatically — you always end up with a running\n"
-            "app. Prefer the browser instead?  ACUTE.bat site",
+            "app. Prefer the browser instead?  ACUTE.bat site\n"
+            "Full delete + fresh install any time:  ACUTE.bat reinstall",
             title="the plan — desktop app",
         )
     else:
-        if cmd in DESKTOP_COMMANDS:
+        if cmd in DESKTOP_COMMANDS or cmd in REINSTALL_COMMANDS:
             warn("the packaged desktop app is Windows-only — continuing with the site flow")
         panel(
             "Here is the plan for this run:\n"
@@ -1987,7 +2486,11 @@ def main():
             "\n"
             "Every step prints its result. If anything fails you get a red panel\n"
             "with the exact cause and the fix — the window stays open for copying.\n"
-            "(Prefer the desktop window?  ACUTE.bat app)",
+            "(Prefer the desktop window?  ACUTE.bat app)\n"
+            "\n"
+            "NOTE: the EMBEDDED BROWSER and COMPUTER USE are desktop-app\n"
+            "features — they need the native webview and cannot run in a\n"
+            "browser tab. Use  ACUTE.bat app  for those.",
             title="the plan — site in your browser",
         )
 
@@ -2019,8 +2522,10 @@ def main():
     # installer bundles the backend). Any failure inside desktop_flow prints
     # a warning and returns False → the site flow below stays exactly as it
     # was — including the owner choosing it after an engine failure.
+    # R63: force_reinstall routes desktop_flow through its delete-completely
+    # + fresh-install path (ACUTE.bat reinstall / repair / --reinstall).
     if IS_WIN and launch_mode == "desktop":
-        if desktop_flow(pat, key, sub_keys):
+        if desktop_flow(pat, key, sub_keys, force_reinstall=force_reinstall):
             return
         warn("falling back to the site flow (browser at http://localhost:5173)")
 
