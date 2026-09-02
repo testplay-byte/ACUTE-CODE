@@ -75,6 +75,29 @@ export class ComputerSession {
   }
 
   /**
+   * ROUND-61 close-out (the live smoke test's find): a NEW AGENT TURN opens
+   * a NEW session after a stop — the kill switch's MID-TURN enforcement is
+   * preserved (the rest of the stopped turn keeps refusing with
+   * kill_switch_active), but the long-lived sidecar is not bricked forever
+   * (the agent's own skill tells it to call stop_computer_control when a
+   * task completes; the owner's STOP button does the same mid-run). Called
+   * from the plugin's per-turn createTools — the one place that marks "a
+   * new turn is starting". The event ring + stop reason are preserved for
+   * the monitor's history until the next ensureStarted resets the stats.
+   */
+  reopenForNewTurn(): void {
+    if (this.startedAt !== null && this.killSwitch) {
+      this.startedAt = null;
+      this.killSwitch = false;
+      this.stopReason = null;
+      this.record(
+        "session_start",
+        "New turn — computer-control session re-armed (the previous stop was heeded)",
+      );
+    }
+  }
+
+  /**
    * The kill switch (stop_computer_control). Enforced: every subsequent
    * call is refused with kill_switch_active. Releases a button held by
    * THIS session (the only sanctioned auto-release). Returns the release

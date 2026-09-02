@@ -144,6 +144,13 @@ export const computerUsePlugin: PluginDefinition = {
     const backend = backendForPlatform();
     const run = realRunner();
     const session = getComputerSession();
+    // ROUND-61 close-out (the live smoke test's find): createTools runs ONCE
+    // per agent turn — the marker that a new turn is starting. A session
+    // stopped in a PREVIOUS turn (the owner's STOP, or the agent's own
+    // end-of-task stop_computer_control) re-arms here; the MID-TURN kill
+    // switch enforcement is untouched (the stopped turn's remaining calls
+    // still refuse — dispatch's gate order puts killSwitch first).
+    session.reopenForNewTurn();
     const dispatcher = new ComputerDispatcher({
       backend,
       run,

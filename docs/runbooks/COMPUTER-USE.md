@@ -36,7 +36,10 @@ kill switch. This runbook is the condensed REAL system; the uploaded spec
 4. **Enforced kill switch.** STOP (monitor panel, mini window, or the agent's
    own `stop_computer_control`) makes every further computer-use call refuse
    with `kill_switch_active` and releases any mouse button the session was
-   holding (a real mouse-up at the recorded point).
+   holding (a real mouse-up at the recorded point). The kill switch ends
+   THAT session — the next agent turn (new message → new toolset build)
+   re-arms a fresh session automatically; the stopped turn itself keeps
+   refusing to its end.
 5. **One control session per engine.** The session (snapshots, frames, stats,
    the monitor ring) is a process singleton; snapshots are keep-last-8 with
    a 120 s TTL and are CONSUMED by any element write (supersession — the
@@ -171,7 +174,9 @@ automatically.
 - **STOP** = `POST /computer-use/stop`: the kill switch engages, a held
   button (if any) is released with a real mouse-up at its recorded point,
   and every further computer-use call refuses with `kill_switch_active`
-  ("Stopped — the kill switch is active" locks in until a new session).
+  ("Stopped — the kill switch is active" locks in for the REST OF THE
+  TURN; the next turn's toolset build re-arms a fresh session — the
+  long-lived engine is never bricked by a stop).
 
 ## The safety contract
 

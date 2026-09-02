@@ -39,6 +39,31 @@ describe("ROUND-61 (R61): ComputerSession — lifecycle", () => {
     expect(s.stopReasonOrNull()).toBe("task complete");
   });
 
+  it("ROUND-61 close-out: a stopped session RE-ARMS on the next turn (reopenForNewTurn) — the mid-turn enforcement stays, the sidecar isn't bricked", () => {
+    const s = resetComputerSessionForTests();
+    s.ensureStarted("linux");
+    s.countActionSent();
+    s.stop("owner hit STOP");
+    expect(s.isKillSwitchActive()).toBe(true);
+    // The plugin's per-turn createTools marker: a NEW turn re-arms.
+    s.reopenForNewTurn();
+    expect(s.isKillSwitchActive()).toBe(false);
+    expect(s.stopReasonOrNull()).toBeNull();
+    expect(s.state().startedAt).toBeNull();
+    // An ACTIVE (unstopped) session is NOT disturbed by the marker.
+    s.ensureStarted("linux");
+    s.countActionSent();
+    s.reopenForNewTurn(); // no-op — killSwitch is false
+    expect(s.active()).toBe(true);
+    expect(s.state().stats.actionsSent).toBe(1);
+    // The re-arm event lands in the ring for the monitor's history.
+    s.stop("done");
+    s.reopenForNewTurn();
+    const rearmEvents = s.state().events.filter((e) => e.kind === "session_start");
+    expect(rearmEvents.length).toBeGreaterThanOrEqual(2);
+    expect(rearmEvents[0].label).toContain("re-armed");
+  });
+
   it("stop releases the held button (the sanctioned auto-release point)", () => {
     const s = resetComputerSessionForTests();
     s.ensureStarted("linux");
