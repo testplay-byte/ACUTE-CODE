@@ -11,17 +11,20 @@ import { create } from "zustand";
  *   1. LIVE SSE frames — every computer-use tool execution emits
  *      {type:"computer-use", kind, tool?, code?} at dispatch time (the
  *      stream-store intercepts them BEFORE the liveTurn guard and calls
- *      pushLiveEvent here — the panel + mini window update mid-turn,
+ *      pushLiveEvent here — the floating monitor surfaces update mid-turn,
  *      with zero polling latency).
  *   2. POLLED session state — GET /computer-use/session returns the
  *      sidecar's authoritative ring (labels + stats + kill-switch state);
- *      refreshFromServer() syncs it (the panel polls 2s while active).
+ *      refreshFromServer() syncs it (the web pill polls 2s while visible;
+ *      the desktop mini window's page polls the engine itself in
+ *      src/mini/mini-client.ts — R64).
  *
  * The store keeps a capped local ring (newest-first, 200 — same cap as the
- * server) so a freshly mounted panel/mini-window has history without
- * waiting for a poll. The mini window's open/closed + drag position live
- * here too (persisted separately by the component — position is a UI
- * concern, this store keeps the transient state).
+ * server) so a freshly mounted surface has history without waiting for a
+ * poll. (ROUND-64: the old `miniWindowOpen` flag + its setter are GONE —
+ * the surface is no longer manually popped out of the deleted right-sidebar
+ * Computer panel; ComputerMiniWindow now AUTO-shows on the `liveActivity`
+ * edge and the always-on-top OS window owns its own lifecycle.)
  */
 
 export interface ComputerMonitorEvent {
@@ -55,8 +58,6 @@ interface ComputerMonitorState {
       visionCalls: number;
     };
   } | null;
-  /** The floating mini window. */
-  miniWindowOpen: boolean;
   /** True while at least one live computer-use frame arrived this turn. */
   liveActivity: boolean;
   /** The last error from polling/stop (honest display, cleared on success). */
@@ -74,7 +75,6 @@ interface ComputerMonitorState {
     stats: ComputerMonitorState["session"] extends null ? never : NonNullable<ComputerMonitorState["session"]>["stats"];
     events: Array<{ seq: number; ts: number; kind: string; label: string; tool?: string; detail?: Record<string, unknown> }>;
   }) => void;
-  setMiniWindowOpen: (open: boolean) => void;
   setLiveActivity: (active: boolean) => void;
   setError: (error: string | null) => void;
   /** Test/reset hook (also used when a new control session starts). */
@@ -106,7 +106,6 @@ function kindLabel(kind: string, tool?: string): string {
 export const useComputerMonitorStore = create<ComputerMonitorState>((set, get) => ({
   events: [],
   session: null,
-  miniWindowOpen: false,
   liveActivity: false,
   error: null,
 
@@ -165,7 +164,6 @@ export const useComputerMonitorStore = create<ComputerMonitorState>((set, get) =
     });
   },
 
-  setMiniWindowOpen: (open) => set({ miniWindowOpen: open }),
   setLiveActivity: (active) => set({ liveActivity: active }),
   setError: (error) => set({ error }),
   clear: () => set({ events: [], session: null, liveActivity: false, error: null }),
@@ -175,5 +173,4 @@ export const useComputerMonitorStore = create<ComputerMonitorState>((set, get) =
 export function resetComputerMonitorForTests(): void {
   nextLocalId = 1;
   useComputerMonitorStore.getState().clear();
-  useComputerMonitorStore.setState({ miniWindowOpen: false });
 }

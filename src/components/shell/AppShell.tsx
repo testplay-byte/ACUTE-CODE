@@ -10,11 +10,14 @@ import { Toaster } from "../notifications/Toaster";
 // R60-D: the shared webview-suppression guard (R62: also the general
 // overlay watcher — installed once here so it covers every route).
 import { installOverlayWebviewWatcher } from "../right-sidebar/popover-webview-guard";
-// ROUND-61 (R61): the floating computer-use mini window (the owner's
+// ROUND-61 (R61): the floating computer-use monitor — the owner's
 // directive: "in a mini window it will show the details and their stats
-// while the agent is using computers"). Mounted ONCE here — app-global,
-// independent of the route; it renders only while the monitor store's
-// miniWindowOpen flag is set (the Computer panel's Pop out button).
+// while the agent is using computers". Mounted ONCE here — app-global,
+// independent of the route. ROUND-64 (R64-b): it is now a CONTROLLER — it
+// AUTO-opens the always-on-top OS monitor window (Tauri) / shows the minimal
+// top-center pill (web) the moment live computer-use activity starts, and
+// auto-dismisses it when the session ends. The right-sidebar computer tab
+// is gone (the floating monitor is the only surface).
 import { ComputerMiniWindow } from "../ComputerMiniWindow";
 
 /**
@@ -80,8 +83,9 @@ export function AppShell() {
           the app root so toasts surface regardless of which route is
           active, even when the sidebar (and thus the bell) is hidden. */}
       <Toaster />
-      {/* ROUND-61 (R61): the draggable computer-use mini window — the live
-          monitor + STOP kill switch while the agent drives the desktop. */}
+      {/* ROUND-61 (R61) / ROUND-64 (R64-b): the floating computer-use
+          monitor — auto-opened OS window (Tauri) / minimal top pill (web)
+          with the STOP kill switch while the agent drives the desktop. */}
       <ComputerMiniWindow />
 
       {/* ROUND-62: the gradient atmosphere layers (dot grid + ambient glows)

@@ -7,12 +7,39 @@
  * agent can recover instead of flail. One factory, used by dispatch.ts and
  * the tools layer; tests pin every message's self-teaching shape.
  */
-import type { Refusal, RefusalCode } from "./types.js";
+import type { AppInfo, Refusal, RefusalCode } from "./types.js";
 
 /** Receipt-shaped refusal outcome (actionSent always false). */
 export interface RefusalOutcome {
   kind: "refusal";
   refusal: Refusal;
+}
+
+/* ── R64-a: recovery payloads for app resolution ─────────────────────────────
+ * The owner's live test: get_app_state("Notepad") → app_not_found, dead end.
+ * Refusals are the system's richest signal (doc 11) — so the app-resolution
+ * refusals now carry the RUNNING APPS themselves (capped): the model picks
+ * the right pid from the payload and retries instead of flailing. */
+
+/** How many running apps ride a refusal payload (list_apps is the full list). */
+export const RUNNING_APPS_PAYLOAD_CAP = 25;
+
+/** One candidate descriptor for app_not_found / ambiguous_app_ref payloads. */
+export interface AppCandidate {
+  /** The app's main window title (AppInfo.name). */
+  name: string;
+  /** The executable/process name, when the backend reports it. */
+  processName?: string;
+  pid: number;
+}
+
+/** The capped {name, processName?, pid} descriptors for a refusal payload. */
+export function appCandidates(apps: AppInfo[], cap = RUNNING_APPS_PAYLOAD_CAP): AppCandidate[] {
+  return apps.slice(0, cap).map((a) => ({
+    name: a.name,
+    ...(a.processName !== undefined ? { processName: a.processName } : {}),
+    pid: a.pid,
+  }));
 }
 
 export function refuse(
@@ -51,21 +78,37 @@ export function hostPolicyDenied(tool: string, why: string): RefusalOutcome {
   );
 }
 
-export function appNotFound(ref: string): RefusalOutcome {
+/**
+ * R64-a: app_not_found now (optionally) carries the running apps so the
+ * model can pick the right pid and retry IN ONE STEP — 'Notepad' failed
+ * against 'Untitled - Notepad' titles and the refusal was a dead end.
+ */
+export function appNotFound(ref: string, running?: AppInfo[]): RefusalOutcome {
+  const hasList = running !== undefined && running.length > 0;
   return refuse(
     "app_not_found",
     `No running application matches '${ref}'.`,
-    "Call list_apps to see what is actually running; re-resolve the app_ref from that list. Never guess a new pid.",
-    { requested: ref },
+    hasList
+      ? "The payload lists the running apps (runningApps: name + processName + pid): pick the one you meant and retry with app_ref {pid}. Never guess a new pid."
+      : "Call list_apps to see what is actually running; re-resolve the app_ref from that list (name can be the window title OR the process name). Never guess a new pid.",
+    {
+      requested: ref,
+      ...(running !== undefined ? { runningApps: appCandidates(running) } : {}),
+    },
   );
 }
 
-export function ambiguousAppRef(name: string, pids: number[]): RefusalOutcome {
+/**
+ * R64-a: ambiguous_app_ref candidates are full descriptors (name +
+ * processName + pid), not bare pids — the model can SEE which app each pid
+ * is and pick without another round-trip.
+ */
+export function ambiguousAppRef(name: string, candidates: AppCandidate[]): RefusalOutcome {
   return refuse(
     "ambiguous_app_ref",
     `The name '${name}' matches multiple running applications.`,
-    "Scope with pid (or bundle_id) instead of the ambiguous name.",
-    { candidates: pids },
+    "The payload lists each match (candidates: name + processName + pid): pick the one you meant and retry with app_ref {pid} (or bundle_id).",
+    { candidates },
   );
 }
 

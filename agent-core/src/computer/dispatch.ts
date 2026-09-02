@@ -19,6 +19,7 @@
  *   · `get_app_state` re-observation is the only path to fresh tokens.
  */
 import type {
+  AppInfo,
   Element,
   Receipt,
   Refusal,
@@ -29,6 +30,7 @@ import type {
 import { RECEIPT_SCHEMA_VERSION } from "./types.js";
 import {
   ambiguousAppRef,
+  appCandidates,
   appNotFound,
   capabilityFailClosed,
   elementStaleChanged,
@@ -41,6 +43,7 @@ import {
   refuse,
   targetlessInputRefused,
   invalidWindowId,
+  type AppCandidate,
 } from "./errors.js";
 import { getComputerSession, MAX_FRAME_AGE_MS, type ComputerSession } from "./session.js";
 import { appendAudit } from "./audit.js";
@@ -203,12 +206,24 @@ export class ComputerDispatcher {
 
     switch (tool) {
       // ── observe & resolve (read-only) ──
-      case "list_apps":
-        return { kind: "data", data: { apps: await this.backend.listApps(this.run) } };
+      case "list_apps": {
+        const { apps, diagnostics } = await this.backend.listApps(this.run);
+        // R64-a: diagnostics ride ONLY empty results (a non-empty list needs
+        // no explanation; an empty one must be debuggable from the transcript).
+        return {
+          kind: "data",
+          data: apps.length === 0 && diagnostics !== undefined ? { apps, diagnostics } : { apps },
+        };
+      }
       case "list_windows":
         return this.toolListWindows(args);
-      case "list_displays":
-        return { kind: "data", data: { displays: await this.backend.listDisplays(this.run) } };
+      case "list_displays": {
+        const { displays, diagnostics } = await this.backend.listDisplays(this.run);
+        return {
+          kind: "data",
+          data: displays.length === 0 && diagnostics !== undefined ? { displays, diagnostics } : { displays },
+        };
+      }
       case "switch_display":
         return this.toolSwitchDisplay(args);
       case "get_app_state":
@@ -315,7 +330,19 @@ export class ComputerDispatcher {
     return { ok: false, refusal: { kind: "refusal", refusal: invalidTarget("type must be 'element' or 'coordinate'").refusal } };
   }
 
-  /** Resolve the app_ref → {pid, name?} + window selection. */
+  /**
+   * Resolve the app_ref → {pid, name?} (doc 03 §3). R64-a: the TIERED
+   * matcher — the owner's live failure was get_app_state("Notepad") →
+   * app_not_found because "Notepad" never EXACT-matched the window title
+   * "Untitled - Notepad". Tiers (first hit wins):
+   *   1. exact pid (unchanged — never consults the list)
+   *   2. exact window-title match (case-insensitive)
+   *   3. exact processName match (e.g. "notepad" — AppInfo.processName, R64-a)
+   *   4. unique substring/contains on title OR processName — exactly one
+   *      resolves; several → ambiguous refusal LISTING the candidates
+   *   5. none → app_not_found whose payload carries `runningApps` (capped)
+   *      so the model picks the right pid and retries in one step.
+   */
   private async resolveAppRef(ref: unknown): Promise<
     { ok: true; app: { pid: number; name?: string; bundleId?: string } } | { ok: false; refusal: DispatchResult }
   > {
@@ -334,24 +361,44 @@ export class ComputerDispatcher {
     if (pid !== undefined && Number.isInteger(pid) && pid > 0) {
       return { ok: true, app: { pid, name, bundleId } };
     }
-    const apps = await this.backend.listApps(this.run);
-    if (name !== undefined) {
-      const matches = apps.filter((a) => a.name.toLowerCase() === name.toLowerCase());
-      if (matches.length === 1) return { ok: true, app: { pid: matches[0].pid, name, bundleId } };
-      if (matches.length > 1) {
-        return { ok: false, refusal: { kind: "refusal", refusal: ambiguousAppRef(name, matches.map((m) => m.pid)).refusal } };
+    const { apps } = await this.backend.listApps(this.run);
+    if (name !== undefined && name.trim() !== "") {
+      const want = name.trim().toLowerCase();
+      const describe = (list: AppInfo[]): AppCandidate[] => appCandidates(list);
+      // Tier 2 — exact window title.
+      const byTitle = apps.filter((a) => a.name.trim().toLowerCase() === want);
+      if (byTitle.length === 1) return { ok: true, app: { pid: byTitle[0].pid, name: byTitle[0].name, bundleId } };
+      if (byTitle.length > 1) {
+        return { ok: false, refusal: { kind: "refusal", refusal: ambiguousAppRef(name, describe(byTitle)).refusal } };
       }
-      return { ok: false, refusal: { kind: "refusal", refusal: appNotFound(name).refusal } };
+      // Tier 3 — exact processName.
+      const byProcess = apps.filter((a) => a.processName !== undefined && a.processName.trim().toLowerCase() === want);
+      if (byProcess.length === 1) return { ok: true, app: { pid: byProcess[0].pid, name: byProcess[0].name, bundleId } };
+      if (byProcess.length > 1) {
+        return { ok: false, refusal: { kind: "refusal", refusal: ambiguousAppRef(name, describe(byProcess)).refusal } };
+      }
+      // Tier 4 — unique substring on title OR processName.
+      const partial = apps.filter(
+        (a) =>
+          a.name.toLowerCase().includes(want) ||
+          (a.processName !== undefined && a.processName.toLowerCase().includes(want)),
+      );
+      if (partial.length === 1) return { ok: true, app: { pid: partial[0].pid, name: partial[0].name, bundleId } };
+      if (partial.length > 1) {
+        return { ok: false, refusal: { kind: "refusal", refusal: ambiguousAppRef(name, describe(partial)).refusal } };
+      }
+      // Tier 5 — nothing matched: the running apps ride the refusal.
+      return { ok: false, refusal: { kind: "refusal", refusal: appNotFound(name, apps).refusal } };
     }
     if (bundleId !== undefined) {
       const matches = apps.filter((a) => a.bundleId === bundleId);
       if (matches.length === 1) return { ok: true, app: { pid: matches[0].pid, name, bundleId } };
       if (matches.length > 1) {
-        return { ok: false, refusal: { kind: "refusal", refusal: ambiguousAppRef(bundleId, matches.map((m) => m.pid)).refusal } };
+        return { ok: false, refusal: { kind: "refusal", refusal: ambiguousAppRef(bundleId, appCandidates(matches)).refusal } };
       }
-      return { ok: false, refusal: { kind: "refusal", refusal: appNotFound(bundleId).refusal } };
+      return { ok: false, refusal: { kind: "refusal", refusal: appNotFound(bundleId, apps).refusal } };
     }
-    return { ok: false, refusal: { kind: "refusal", refusal: appNotFound("(app_ref without pid/name/bundleId)").refusal } };
+    return { ok: false, refusal: { kind: "refusal", refusal: appNotFound("(app_ref without pid/name/bundleId)", apps).refusal } };
   }
 
   /** Element freshness gate (doc 03 §6) + scope/window extraction. */
@@ -430,8 +477,11 @@ export class ComputerDispatcher {
   private async toolListWindows(args: Record<string, unknown>): Promise<DispatchResult> {
     const resolved = await this.resolveAppRef(args["appRef"] ?? args["app_ref"]);
     if (!resolved.ok) return resolved.refusal;
-    const windows = await this.backend.listWindows(this.run, { pid: resolved.app.pid });
-    return { kind: "data", data: { windows } };
+    const { windows, diagnostics } = await this.backend.listWindows(this.run, { pid: resolved.app.pid });
+    return {
+      kind: "data",
+      data: windows.length === 0 && diagnostics !== undefined ? { windows, diagnostics } : { windows },
+    };
   }
 
   private toolSwitchDisplay(args: Record<string, unknown>): DispatchResult {
@@ -450,7 +500,7 @@ export class ComputerDispatcher {
     const detail = args["detail"] === "full" ? "full" : "compact";
     const includeScreenshot = args["includeScreenshot"] === true || args["include_screenshot"] === true;
 
-    const windows = await this.backend.listWindows(this.run, { pid: resolved.app.pid });
+    const { windows } = await this.backend.listWindows(this.run, { pid: resolved.app.pid });
     let window = windows[0];
     if (ref["windowId"] !== undefined || ref["window_id"] !== undefined) {
       const wantId = Number(ref["windowId"] ?? ref["window_id"]);
@@ -523,7 +573,7 @@ export class ComputerDispatcher {
         },
       };
     }
-    const displays = await this.backend.listDisplays(this.run);
+    const { displays } = await this.backend.listDisplays(this.run);
     const display = displays.find((d) => d.index === this.selectedDisplay) ?? displays[0];
     const frontPid = await this.backend.frontmostPid(this.run);
     const { frameId, meta } = this.session.registerFrame(
@@ -973,7 +1023,7 @@ export class ComputerDispatcher {
     const resolved = await this.resolveAppRef(appRef);
     if (!resolved.ok) return resolved.refusal;
     const ref = appRef as Record<string, unknown>;
-    const windows = await this.backend.listWindows(this.run, { pid: resolved.app.pid });
+    const { windows } = await this.backend.listWindows(this.run, { pid: resolved.app.pid });
     const window = windows[0];
     if (window === undefined) {
       return { kind: "refusal", refusal: appNotFound(`pid ${resolved.app.pid} (no windows)`).refusal };
@@ -1094,7 +1144,7 @@ export class ComputerDispatcher {
     const resolved = await this.resolveAppRef(appRef);
     if (!resolved.ok) return resolved.refusal;
     const ref = appRef as Record<string, unknown>;
-    const windows = await this.backend.listWindows(this.run, { pid: resolved.app.pid });
+    const { windows } = await this.backend.listWindows(this.run, { pid: resolved.app.pid });
     const window = windows[0];
     if (window === undefined) {
       return { kind: "refusal", refusal: appNotFound(`pid ${resolved.app.pid} (no windows)`).refusal };

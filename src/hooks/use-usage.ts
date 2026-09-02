@@ -1,5 +1,5 @@
-import { keepPreviousData, useQuery } from "@tanstack/react-query";
-import { fetchDetailedUsage } from "../lib/api";
+import { keepPreviousData, useQuery, useQueries } from "@tanstack/react-query";
+import { fetchDetailedUsage, fetchKeyPool, fetchProviders, type KeyPoolSlot, type ProviderView } from "../lib/api";
 import { useConfigStore } from "../lib/config-store";
 
 /**
@@ -22,4 +22,64 @@ export function useDetailedUsage(days = 30) {
     staleTime: 60_000,
     placeholderData: keepPreviousData,
   });
+}
+
+/**
+ * ROUND-64 (R64-e, owner: per-API-key usage stats): the /usage screen's
+ * "API keys" section needs the providers list + each provider's masked
+ * key-pool info (GET /providers/:id/keys) to join against the detailed
+ * usage's `keys` rollup — that join renders every configured key (zeros +
+ * "not used yet" when unused) and honestly flags usage on slots the
+ * keyring no longer holds ("removed key"). Dashboard semantics like
+ * useDetailedUsage: live sidecar only (idle in demo mode), one refetch on
+ * mount suffices (no live updates); SAME query keys as
+ * ModelsProvidersTab's providers list / KeyPoolSection pools so the shared
+ * react-query cache dedupes them. Fails soft — a failed fetch never claims
+ * a removal, it just omits that provider's masked preview.
+ */
+export function useUsageKeyPools(): {
+  providers: ProviderView[];
+  poolsById: Map<string, KeyPoolSlot[]>;
+  /** Provider ids whose pool query SUCCEEDED — gates the "removed key"
+   * flag so an in-flight OR FAILED pool never reads as a removal. */
+  settledPoolIds: Set<string>;
+  /** True once the providers list settles — gates "removed provider". */
+  providersSettled: boolean;
+  /** Any query still in flight (section hides while true and card-less). */
+  isPending: boolean;
+} {
+  const source = useConfigStore((s) => (s.demoData ? "demo" : "live"));
+  const providersQuery = useQuery({
+    queryKey: ["settings-providers"],
+    queryFn: () => fetchProviders(),
+    enabled: source === "live",
+    staleTime: 60_000,
+    retry: false,
+  });
+  const providers = providersQuery.data ?? [];
+  const poolQueries = useQueries({
+    queries: providers.map((provider) => ({
+      queryKey: ["key-pool", provider.id],
+      queryFn: () => fetchKeyPool(provider.id),
+      enabled: source === "live",
+      staleTime: 60_000,
+      retry: false,
+    })),
+  });
+  const poolsById = new Map<string, KeyPoolSlot[]>();
+  const settledPoolIds = new Set<string>();
+  providers.forEach((provider, index) => {
+    const data = poolQueries[index]?.data;
+    if (data !== undefined) {
+      poolsById.set(provider.id, data);
+      settledPoolIds.add(provider.id);
+    }
+  });
+  return {
+    providers,
+    poolsById,
+    settledPoolIds,
+    providersSettled: !providersQuery.isPending,
+    isPending: providersQuery.isPending || poolQueries.some((query) => query.isPending),
+  };
 }

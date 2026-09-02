@@ -138,6 +138,30 @@ export interface DetailedUsageModel {
   costUsd: number;
 }
 
+/**
+ * ROUND-64 (R64-e, owner: "I want the ability to track each individual API
+ * key's stats, like the total usage of that API key, total tokens used on
+ * that API key"): one provider key-pool slot's whole-history usage rollup.
+ * keySlot 0 = the provider's primary key; N ≥ 2 = the ACUTE_PROVIDER_<ID>_SLOT<N>
+ * pool slot the orchestrator assigns sub-agent children (ADR-0022). Rows
+ * only exist for slots with recorded spend — the UI joins this with
+ * GET /providers/:id/keys (masked poolInfo) to also show configured-but-
+ * unused keys, and flags usage on slots the keyring no longer holds
+ * ("removed key") as honestly removed.
+ */
+export interface DetailedUsageKey {
+  providerId: string;
+  /** 0 = primary key; N ≥ 2 = pool slot N. */
+  keySlot: number;
+  requests: number;
+  inputTokens: number;
+  outputTokens: number;
+  costUsd: number;
+  /** ISO ts of the slot's latest recorded call (MAX(ts)); null never happens
+   * — the GROUP BY only produces rows from existing usage_events. */
+  lastUsedAt: string;
+}
+
 /** A chat session (or a sub-agent child) row in the projects drill-down. */
 export interface DetailedUsageSession {
   id: string;
@@ -212,6 +236,8 @@ export interface DetailedUsage {
   totals: DetailedUsageTotals;
   tools: DetailedUsageToolCall[];
   models: DetailedUsageModel[];
+  /** ROUND-64 (R64-e): per-key (provider × pool slot) rollups, cost-desc. */
+  keys: DetailedUsageKey[];
   projects: DetailedUsageProject[];
   generatedAt: string;
 }
@@ -262,6 +288,17 @@ interface SessionToolRow {
   failures: number;
 }
 
+/** usage_events GROUP BY provider, key_slot row (migration 0024). */
+interface KeyUsageRow {
+  provider: string;
+  key_slot: number;
+  requests: number;
+  input_tokens: number | null;
+  output_tokens: number | null;
+  cost_usd: number | null;
+  last_used: string | null;
+}
+
 /** ISO string → epoch ms; null/invalid → 0 (the export script's ts() helper). */
 function toMillis(iso: string | null | undefined): number {
   return iso && !Number.isNaN(Date.parse(iso)) ? Date.parse(iso) : 0;
@@ -308,6 +345,40 @@ function sortedModels(map: Map<string, { calls: number; tokens: DetailedUsageTok
   return [...map.entries()]
     .map(([model, m]) => ({ model, calls: m.calls, tokens: m.tokens, costUsd: m.costUsd }))
     .sort((a, b) => b.calls - a.calls || a.model.localeCompare(b.model));
+}
+
+/**
+ * ROUND-64 (R64-e): per-key rollups — GROUP BY provider, key_slot over the
+ * whole history (migration 0024's idx_usage_events_provider_slot serves
+ * exactly this scan). Cost-desc like the owner's "which key is spending"
+ * question; provider id then slot number break ties so the section is
+ * deterministic. Token sums COALESCE — pre-0024 rows (and any hand-seeded
+ * row) can hold NULLs per the schema's nullable SUM shape.
+ */
+function keyUsageRows(db: SqliteDatabase): DetailedUsageKey[] {
+  const rows = db
+    .prepare(
+      "SELECT provider, key_slot, COUNT(*) requests, SUM(input_tokens) input_tokens," +
+        " SUM(output_tokens) output_tokens, SUM(cost_usd) cost_usd, MAX(ts) last_used" +
+        " FROM usage_events GROUP BY provider, key_slot",
+    )
+    .all() as KeyUsageRow[];
+  return rows
+    .map((row) => ({
+      providerId: row.provider,
+      keySlot: row.key_slot,
+      requests: row.requests,
+      inputTokens: row.input_tokens ?? 0,
+      outputTokens: row.output_tokens ?? 0,
+      costUsd: roundUsd(row.cost_usd ?? 0),
+      lastUsedAt: row.last_used ?? new Date(0).toISOString(),
+    }))
+    .sort(
+      (a, b) =>
+        b.costUsd - a.costUsd ||
+        a.providerId.localeCompare(b.providerId) ||
+        a.keySlot - b.keySlot,
+    );
 }
 
 /** The session's dominant model — highest input+output tokens (export's topByValue). */
@@ -576,6 +647,9 @@ export function getDetailedUsage(db: SqliteDatabase, options: { days: number }):
     totals,
     tools: sortedToolCalls(globalTools),
     models: sortedModels(globalModels),
+    // ROUND-64 (R64-e): the per-key (provider × slot) rollup for the
+    // /usage screen's "API keys" section.
+    keys: keyUsageRows(db),
     projects,
     generatedAt: new Date().toISOString(),
   };

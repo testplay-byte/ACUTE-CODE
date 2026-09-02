@@ -335,18 +335,30 @@ export function computeFlyoutGeometry(
 
 /**
  * Attach the returned ref to the popover's outermost element; while `open`,
- * a mousedown outside it or an Escape keydown calls `onDismiss`. Mirrors the
- * click-outside pattern AgentChatPanel's old model menu used.
+ * a mousedown outside it (or in `extraInside`, when the popover renders in a
+ * portal and its trigger lives elsewhere in the DOM) or an Escape keydown
+ * calls `onDismiss`. Mirrors the click-outside pattern AgentChatPanel's old
+ * model menu used.
+ * ROUND-64 (R64-c): the optional second ref — ContextDonut's popover moved
+ * to a document.body portal (viewport-clipped positioning), so its TRIGGER
+ * button is no longer inside the dismissed element's subtree; passing the
+ * trigger's wrapper keeps click-to-pin working (a mousedown on the trigger
+ * is NOT an outside-dismiss). Backwards-compatible for every other caller.
  */
 export function useDismiss(
   open: boolean,
   onDismiss: () => void,
+  extraInside?: RefObject<HTMLElement | null>,
 ): RefObject<HTMLDivElement> {
   const ref = useRef<HTMLDivElement>(null);
   useEffect(() => {
     if (!open) return;
     const onDown = (e: MouseEvent): void => {
-      if (ref.current !== null && !ref.current.contains(e.target as Node)) onDismiss();
+      if (ref.current !== null && !ref.current.contains(e.target as Node)) {
+        const extra = extraInside?.current ?? null;
+        if (extra !== null && extra.contains(e.target as Node)) return;
+        onDismiss();
+      }
     };
     const onKey = (e: KeyboardEvent): void => {
       if (e.key === "Escape") onDismiss();
@@ -357,7 +369,7 @@ export function useDismiss(
       document.removeEventListener("mousedown", onDown);
       document.removeEventListener("keydown", onKey);
     };
-  }, [open, onDismiss]);
+  }, [open, onDismiss, extraInside]);
   return ref;
 }
 

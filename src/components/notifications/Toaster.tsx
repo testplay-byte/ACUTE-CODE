@@ -8,8 +8,10 @@
  *     lastNotification. On each new tick, if the record's id isn't in the
  *     toasted-set, push it onto the toasting list (so reconnect-resilience
  *     holds — the same id never toasts twice, even across reconnects).
- *   - Auto-dismiss after 6s EXCEPT for permission_request + task_failed
- *     (those need attention; they persist until the user dismisses them).
+ *   - ROUND-64 (R64-c, owner: "The internal app ones should automatically
+ *     disappear after 1.5 seconds"): non-persistent toasts auto-dismiss
+ *     after 1.5s. permission_request + task_failed stay PERSISTENT — they
+ *     need a decision/attention, so those NEVER auto-dismiss.
  *   - Click the body → mark the notification read + navigate to its session
  *     (via react-router's useNavigate). For permission_request, this drops
  *     the user into the chat where the ApprovalCard lives — the approval
@@ -42,14 +44,26 @@ import { withAlpha } from "../dashboard/helpers";
 import type { NotificationKind, NotificationRecord } from "../../lib/notifications-api";
 import { useNotificationStreamStore } from "../../hooks/use-notifications";
 
-/** Toast kinds that NEVER auto-dismiss — they need user attention. */
-const PERSISTENT_KINDS = new Set<NotificationKind>([
+/** Toast kinds that NEVER auto-dismiss — they need user attention
+ * (permission_request needs a decision; task_failed needs eyes). ROUND-64
+ * (R64-c): exported for tests + the kind policy below. */
+export const PERSISTENT_KINDS: ReadonlySet<NotificationKind> = new Set<NotificationKind>([
   "permission_request",
   "task_failed",
 ]);
 
-/** Auto-dismiss delay for non-persistent toasts. */
-const AUTO_DISMISS_MS = 6_000;
+/** ROUND-64 (R64-c, owner: "On the right side it shows me the notifications.
+ * The internal app ones should automatically disappear after 1.5
+ * seconds."): auto-dismiss delay for every non-persistent (internal/
+ * ephemeral) kind — task_complete, subagent_* events. Exported for tests. */
+export const AUTO_DISMISS_MS = 1_500;
+
+/** ROUND-64 (R64-c): the per-kind dismiss policy — `null` means PERSISTENT
+ * (never auto-dismiss; needs attention), otherwise the auto-dismiss delay.
+ * Exported for tests. */
+export function autoDismissDelayFor(kind: NotificationKind): number | null {
+  return PERSISTENT_KINDS.has(kind) ? null : AUTO_DISMISS_MS;
+}
 
 /** Per-kind accent color (status tones — independent of the theme palette). */
 function toneForKind(kind: NotificationKind): string {
@@ -185,7 +199,7 @@ export function Toaster() {
       const timer = setTimeout(() => {
         setToasts((cur) => cur.filter((t) => t.id !== n.id));
         timersRef.current.delete(n.id);
-      }, AUTO_DISMISS_MS);
+      }, autoDismissDelayFor(n.kind) ?? AUTO_DISMISS_MS);
       timersRef.current.set(n.id, timer);
     }
   }, [lastSeq, lastNotification]);

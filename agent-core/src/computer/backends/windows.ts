@@ -2,6 +2,32 @@
  * ROUND-61 (R61): the WINDOWS backend — doc 04-platform-backends.md §3 (the
  * reference platform of the spec).
  *
+ * ROUND-64-a (R64-a): the owner's live 0.63.0 Windows test reported
+ * list_apps → [], get_app_state("Notepad") → app_not_found, list_displays →
+ * [] while screenshots worked — every list-shaped probe silently emptied.
+ * Root cause (verified by construction, not by live run): piping an ARRAY to
+ * ConvertTo-Json in PowerShell 5.1 — 0 elements emit NOTHING, 1 element
+ * emits a bare OBJECT (the pipeline unwraps the array), only 2+ emit an
+ * array; the JS side then swallowed the parse failure into []. Fixes:
+ *   · OutJson is now SHAPE-AWARE: lists ride `ConvertTo-Json -InputObject
+ *     @($arr)` (the -InputObject parameter binding preserves the array
+ *     wrapper for 0/1/N elements; 0 short-circuits to a literal '[]');
+ *     hashtables ride -InputObject directly (object shape unchanged).
+ *   · list_apps/list_windows are now REAL EnumWindows enumerations (one
+ *     Add-Type / one csc compile in the shared preamble: EnumWindows +
+ *     IsWindowVisible + GetWindowText/GetClassName + WS_EX_TOOLWINDOW and
+ *     zero-size filtering, grouped one-app-per-pid with the LARGEST titled
+ *     window as `name` and the exe's ProcessName as `processName`), with an
+ *     honest Get-Process MainWindowTitle fallback if the walk throws.
+ *   · list_displays returns the REAL AllScreens bounds (the single-display
+ *     collapse used to fall through to a FAKE 1920×1080 — removed: a failed
+ *     enumeration is now an honest [] + diagnostics, never invented bounds).
+ *   · every enumeration result carries diagnostics (processCount,
+ *     foregroundPid, enumWindowsCount…) so an empty is debuggable from the
+ *     transcript.
+ * PowerShell is never executed in this sandbox — the scripts are pinned by
+ * command-construction tests (tests/computer-windows-backend.test.ts).
+ *
  * Every native call is a PowerShell capsule: `powershell.exe -NoProfile
  * -NonInteractive -ExecutionPolicy Bypass -Command -` with the script on
  * STDIN, emitting JSON on stdout (ConvertTo-Json -Compress). The backend
@@ -10,9 +36,10 @@
  * `unsupported_on_backend` — never half-works.
  *
  * Windows specifics encoded (doc 04 §3):
- *   · list_apps: Get-Process + MainWindowHandle; active = GetForegroundWindow pid
- *   · windows: EnumWindows-free approximation via Get-Process MainWindowTitle
- *     + per-pid top-level enumeration through UIA
+ *   · list_apps: EnumWindows (visible, titled, non-toolwindow top-level
+ *     windows) grouped per pid; active = GetForegroundWindow pid
+ *   · windows: ALL of the pid's top-level windows (not just
+ *     MainWindowHandle); main = largest, focused = GetForegroundWindow
  *   · a11y: System.Windows.Automation (UIA) — FromHandle + ControlViewWalker,
  *     patterns: Invoke → Toggle → ExpandCollapse → SelectionItem (doc 07 §4
  *     priority), LegacyIAccessible default-action via InvokePattern fallback
@@ -30,6 +57,8 @@
  * numbers/strings into these fixed scripts.
  */
 import type {
+  AppInfo,
+  DisplayInfo,
   PermissionReport,
   Snapshot,
   WindowInfo,
@@ -39,6 +68,10 @@ import type {
   CuaBackend,
   CommandCapsule,
   ElementDescriptor,
+  EnumerationDiagnostics,
+  ListAppsResult,
+  ListDisplaysResult,
+  ListWindowsResult,
   Raster,
   WindowScope,
 } from "./interface.js";
@@ -47,11 +80,18 @@ import { pngDimensions } from "./linux.js";
 /** The powershell entry program (pwsh when present, else powershell.exe). */
 export const WINDOWS_PS_PROGRAM = "powershell.exe";
 
-/** The shared Preamble every script rides: DPI awareness + JSON out. */
+/**
+ * The shared Preamble every script rides: DPI awareness + the single U32
+ * Add-Type (one csc compile — R64-a folded the EnumWindows helpers into the
+ * SAME TypeDefinition so every capsule still compiles exactly once) + the
+ * shape-aware OutJson. The C# is CodeDom/C#-5-safe for PowerShell 5.1
+ * (no interpolation, no ?. — Add-Type on powershell.exe compiles C# 5).
+ */
 const PS_PREAMBLE = `
 $ErrorActionPreference = 'Stop'
 [void][System.Reflection.Assembly]::LoadWithPartialName('System.Windows.Forms')
-Add-Type -TypeDefinition 'using System;using System.Runtime.InteropServices;public class U32{
+Add-Type -TypeDefinition 'using System;using System.Text;using System.Collections.Generic;using System.Runtime.InteropServices;
+public class U32{
 [DllImport("user32.dll")]public static extern bool SetProcessDPIAware();
 [DllImport("user32.dll")]public static extern bool SetCursorPos(int x,int y);
 [DllImport("user32.dll")]public static extern void mouse_event(uint f,uint dx,uint dy,uint data,UIntPtr extra);
@@ -62,9 +102,51 @@ Add-Type -TypeDefinition 'using System;using System.Runtime.InteropServices;publ
 [DllImport("user32.dll")]public static extern bool BringWindowToTop(IntPtr h);
 [DllImport("user32.dll")]public static extern bool GetWindowRect(IntPtr h,out RECT r);
 [DllImport("user32.dll")]public static extern IntPtr WindowFromPoint(int x,int y);
-public struct RECT{public int Left;public int Top;public int Right;public int Bottom;}}'
+public delegate bool EnumProc(IntPtr h,IntPtr lp);
+[DllImport("user32.dll")]public static extern bool EnumWindows(EnumProc cb,IntPtr lp);
+[DllImport("user32.dll")]public static extern bool IsWindowVisible(IntPtr h);
+[DllImport("user32.dll")]public static extern int GetWindowLong(IntPtr h,int i);
+[DllImport("user32.dll",CharSet=CharSet.Unicode)]public static extern int GetWindowTextLength(IntPtr h);
+[DllImport("user32.dll",CharSet=CharSet.Unicode)]public static extern int GetWindowText(IntPtr h,StringBuilder sb,int max);
+[DllImport("user32.dll",CharSet=CharSet.Unicode)]public static extern int GetClassName(IntPtr h,StringBuilder sb,int max);
+public struct RECT{public int Left;public int Top;public int Right;public int Bottom;}
+public struct WINFO{public long Hwnd;public uint Pid;public string Title;public int L;public int T;public int R;public int B;}
+public static List<WINFO> ListTopWindows(){
+  List<WINFO> list=new List<WINFO>();
+  EnumWindows(delegate(IntPtr h,IntPtr lp){
+    try{
+      if(!IsWindowVisible(h))return true;
+      if((GetWindowLong(h,-20)&0x00000080)!=0)return true;
+      int len=GetWindowTextLength(h);
+      if(len<=0)return true;
+      StringBuilder sb=new StringBuilder(len+1);
+      GetWindowText(h,sb,sb.Capacity);
+      string t=sb.ToString();
+      if(t==null||t.Trim().Length==0)return true;
+      RECT r;GetWindowRect(h,out r);
+      if(r.Right-r.Left<=0||r.Bottom-r.Top<=0)return true;
+      uint pid;GetWindowThreadProcessId(h,out pid);
+      WINFO w;w.Hwnd=h.ToInt64();w.Pid=pid;w.Title=t;w.L=r.Left;w.T=r.Top;w.R=r.Right;w.B=r.Bottom;
+      list.Add(w);
+    }catch(Exception){}
+    return true;
+  },IntPtr.Zero);
+  return list;
+}
+}'
 [void][U32]::SetProcessDPIAware()
-function OutJson($o){ [Console]::OutputEncoding=[System.Text.Encoding]::UTF8; Write-Output ($o | ConvertTo-Json -Compress -Depth 6) }
+function OutJson($o){
+  [Console]::OutputEncoding=[System.Text.Encoding]::UTF8
+  if ($null -eq $o) { Write-Output 'null'; return }
+  $isList = ($o -is [System.Array]) -or ($o -is [System.Collections.IList])
+  if ($isList) {
+    $arr = @($o)
+    if ($arr.Count -eq 0) { Write-Output '[]'; return }
+    Write-Output (ConvertTo-Json -InputObject @($arr) -Compress -Depth 8)
+    return
+  }
+  Write-Output (ConvertTo-Json -InputObject $o -Compress -Depth 8)
+}
 `;
 
 /** Mouse event flags (winuser.h). */
@@ -92,6 +174,80 @@ function okResult(stdout: string): { ok: boolean; error?: string; stale?: boolea
   return { ok: true };
 }
 
+/* ── R64-a: strict JS-side parsers for the deterministic JSON shapes ────────
+ * Every enumeration script emits a wrapper object via the shape-aware
+ * OutJson ({"apps":[…] | "windows":[…] | "displays":[…], "diagnostics":{…}}),
+ * so the parse side can be strict: an unknown/garbage field is DROPPED, a
+ * malformed entry is skipped (never silently mapped into NaN). */
+
+function toBounds(raw: unknown): [number, number, number, number] | undefined {
+  if (!Array.isArray(raw) || raw.length !== 4) return undefined;
+  const nums = raw.map((n) => Number(n));
+  if (nums.some((n) => !Number.isFinite(n))) return undefined;
+  return [nums[0], nums[1], nums[2], nums[3]];
+}
+
+function toAppInfoList(raw: unknown): AppInfo[] {
+  if (!Array.isArray(raw)) return [];
+  const apps: AppInfo[] = [];
+  for (const a of raw) {
+    if (typeof a !== "object" || a === null) continue;
+    const rec = a as Record<string, unknown>;
+    const pid = Number(rec["pid"]);
+    const name = typeof rec["name"] === "string" ? rec["name"] : "";
+    if (!Number.isInteger(pid) || pid <= 0 || name.trim() === "") continue;
+    const app: AppInfo = { name, pid, active: rec["active"] === true };
+    const processName = typeof rec["processName"] === "string" ? rec["processName"] : "";
+    if (processName.trim() !== "") app.processName = processName;
+    apps.push(app);
+  }
+  return apps;
+}
+
+function toWindowInfoList(raw: unknown): WindowInfo[] {
+  if (!Array.isArray(raw)) return [];
+  const windows: WindowInfo[] = [];
+  for (const w of raw) {
+    if (typeof w !== "object" || w === null) continue;
+    const rec = w as Record<string, unknown>;
+    const windowId = Number(rec["windowId"]);
+    const title = typeof rec["title"] === "string" ? rec["title"] : "";
+    const bounds = toBounds(rec["bounds"]);
+    if (!Number.isInteger(windowId) || windowId === 0 || bounds === undefined) continue;
+    windows.push({
+      windowId,
+      title,
+      bounds,
+      main: rec["main"] === true,
+      focused: rec["focused"] === true,
+    });
+  }
+  return windows;
+}
+
+function toDiagnostics(raw: unknown): EnumerationDiagnostics | undefined {
+  if (typeof raw !== "object" || raw === null) return undefined;
+  const r = raw as Record<string, unknown>;
+  const num = (v: unknown): number | undefined => {
+    const n = Number(v);
+    return Number.isFinite(n) ? n : undefined;
+  };
+  const diag: EnumerationDiagnostics = {
+    ...(num(r["processCount"]) !== undefined ? { processCount: num(r["processCount"]) } : {}),
+    ...(r["foregroundPid"] !== undefined ? { foregroundPid: num(r["foregroundPid"]) ?? null } : {}),
+    ...(num(r["enumWindowsCount"]) !== undefined ? { enumWindowsCount: num(r["enumWindowsCount"]) } : {}),
+    ...(r["processRunning"] !== undefined ? { processRunning: r["processRunning"] === true } : {}),
+    ...(num(r["screenCount"]) !== undefined ? { screenCount: num(r["screenCount"]) } : {}),
+    ...(typeof r["note"] === "string" && r["note"].trim() !== "" ? { note: r["note"] } : {}),
+  };
+  return Object.keys(diag).length > 0 ? diag : undefined;
+}
+
+function capsuleFailureDiagnostics(what: string, result: { code: number; stdout: string; stderr: string }): EnumerationDiagnostics {
+  const first = (result.stderr || result.stdout).trim().split("\n")[0] ?? "";
+  return { note: `${what} capsule failed (exit ${result.code}): ${first.slice(0, 200)}` };
+}
+
 const windowsBackend: CuaBackend = {
   kind: "windows",
 
@@ -109,84 +265,70 @@ const windowsBackend: CuaBackend = {
     };
   },
 
-  async listApps(run) {
-    const script = `
-$apps = @()
-foreach ($p in Get-Process) {
-  try {
-    if ($p.MainWindowHandle -ne 0 -and $p.MainWindowTitle) {
-      $apps += [pscustomobject]@{ name = $p.MainWindowTitle; pid = $p.Id; active = $false }
+  async listApps(run): Promise<ListAppsResult> {
+    const result = await run(psCapsule(windowsListAppsScript(), 20000));
+    if (result.code !== 0) {
+      return { apps: [], diagnostics: capsuleFailureDiagnostics("list_apps", result) };
     }
-  } catch {}
-}
-$fg = [U32]::GetForegroundWindow()
-$fgpid = 0
-if ($fg -ne [IntPtr]::Zero) { [void][U32]::GetWindowThreadProcessId($fg, [ref]$fgpid) }
-foreach ($a in $apps) { if ($a.pid -eq $fgpid) { $a.active = $true } }
-OutJson $apps
-`;
-    const result = await run(psCapsule(script, 15000));
-    if (result.code !== 0) return [];
+    const text = result.stdout.trim();
+    if (text === "") {
+      return { apps: [], diagnostics: { note: "list_apps produced no output (the PowerShell session died before emitting JSON)" } };
+    }
     try {
-      const parsed = JSON.parse(result.stdout.trim() || "[]") as Array<{ name: string; pid: number; active: boolean }>;
-      return parsed.map((a) => ({ name: a.name, pid: a.pid, active: !!a.active }));
-    } catch {
-      return [];
+      const parsed = JSON.parse(text) as { apps?: unknown; diagnostics?: unknown };
+      return { apps: toAppInfoList(parsed.apps), diagnostics: toDiagnostics(parsed.diagnostics) };
+    } catch (err) {
+      return { apps: [], diagnostics: { note: `list_apps output was not valid JSON: ${String(err).slice(0, 200)}` } };
     }
   },
 
-  async listWindows(run, app) {
-    if (app.pid === undefined) return [];
-    const script = `
-$p = Get-Process -Id ${app.pid} -ErrorAction Stop
-$wins = @()
-$h = $p.MainWindowHandle
-if ($h -ne [IntPtr]::Zero) {
-  $r = New-Object U32+RECT
-  [void][U32]::GetWindowRect($h, [ref]$r)
-  $wins += [pscustomobject]@{ windowId = [int64]$h; title = $p.MainWindowTitle; bounds = @($r.Left, $r.Top, $r.Right - $r.Left, $r.Bottom - $r.Top); main = $true; focused = $false }
-}
-OutJson $wins
-`;
-    const result = await run(psCapsule(script, 10000));
-    if (result.code !== 0) return [];
+  async listWindows(run, app): Promise<ListWindowsResult> {
+    if (app.pid === undefined || !Number.isInteger(app.pid) || app.pid <= 0) {
+      return { windows: [], diagnostics: { note: "list_windows needs a positive integer pid" } };
+    }
+    const result = await run(psCapsule(windowsListWindowsScript(app.pid), 12000));
+    if (result.code !== 0) {
+      return { windows: [], diagnostics: capsuleFailureDiagnostics("list_windows", result) };
+    }
+    const text = result.stdout.trim();
+    if (text === "") {
+      return { windows: [], diagnostics: { note: "list_windows produced no output (the PowerShell session died before emitting JSON)" } };
+    }
     try {
-      const parsed = JSON.parse(result.stdout.trim() || "[]") as Array<{
-        windowId: number; title: string; bounds: number[]; main: boolean; focused: boolean;
-      }>;
-      return parsed.map((w) => ({
-        windowId: w.windowId,
-        title: w.title,
-        bounds: [w.bounds[0], w.bounds[1], w.bounds[2], w.bounds[3]],
-        main: !!w.main,
-        focused: !!w.focused,
-      }));
-    } catch {
-      return [];
+      const parsed = JSON.parse(text) as { windows?: unknown; diagnostics?: unknown };
+      return { windows: toWindowInfoList(parsed.windows), diagnostics: toDiagnostics(parsed.diagnostics) };
+    } catch (err) {
+      return { windows: [], diagnostics: { note: `list_windows output was not valid JSON: ${String(err).slice(0, 200)}` } };
     }
   },
 
-  async listDisplays(run) {
-    const script = `
-Add-Type -AssemblyName System.Windows.Forms
-$d = @([System.Windows.Forms.Screen]::AllScreens | ForEach-Object -Begin { $i = 1 } -Process {
-  [pscustomobject]@{ index = $i; bounds = @($_.Bounds.X, $_.Bounds.Y, $_.Bounds.Width, $_.Bounds.Height); main = $_.Primary }; $i++
-})
-OutJson $d
-`;
-    const result = await run(psCapsule(script, 10000));
-    if (result.code !== 0) return [{ index: 1, bounds: [0, 0, 1920, 1080], main: true }];
+  async listDisplays(run): Promise<ListDisplaysResult> {
+    const result = await run(psCapsule(windowsListDisplaysScript(), 10000));
+    if (result.code !== 0) {
+      // R64-a: NO fake 1920×1080 — a failed enumeration is an honest []
+      // + diagnostics (the owner's 1280×1024 screen was reported as the
+      // fake fallback for a whole live session).
+      return { displays: [], diagnostics: capsuleFailureDiagnostics("list_displays", result) };
+    }
+    const text = result.stdout.trim();
+    if (text === "") {
+      return { displays: [], diagnostics: { note: "list_displays produced no output (the PowerShell session died before emitting JSON)" } };
+    }
     try {
-      const parsed = JSON.parse(result.stdout.trim() || "[]") as Array<{
-        index: number; bounds: number[]; main: boolean;
-      }>;
-      return parsed.map((d) => ({
-        index: d.index,
-        bounds: [d.bounds[0], d.bounds[1], d.bounds[2], d.bounds[3]] as [number, number, number, number],
-        main: !!d.main,
-      }));
-    } catch {
-      return [{ index: 1, bounds: [0, 0, 1920, 1080], main: true }];
+      const parsed = JSON.parse(text) as { displays?: unknown; diagnostics?: unknown };
+      const displays: DisplayInfo[] = [];
+      if (Array.isArray(parsed.displays)) {
+        for (const d of parsed.displays) {
+          const rec = d as Record<string, unknown>;
+          const index = Number(rec["index"]);
+          const bounds = toBounds(rec["bounds"]);
+          if (!Number.isInteger(index) || index < 1 || bounds === undefined) continue;
+          displays.push({ index, bounds, main: rec["main"] === true });
+        }
+      }
+      return { displays, diagnostics: toDiagnostics(parsed.diagnostics) };
+    } catch (err) {
+      return { displays: [], diagnostics: { note: `list_displays output was not valid JSON: ${String(err).slice(0, 200)}` } };
     }
   },
 
@@ -653,6 +795,137 @@ Write-Output ($p.X.ToString() + "," + $p.Y.ToString())
 };
 
 /* ── script builders (exported for command-construction tests) ─────────────── */
+
+/** The shared preamble (exported so tests pin the one-Add-Type contract,
+ * the EnumWindows surface, and the shape-aware OutJson). */
+export const WINDOWS_PS_PREAMBLE = PS_PREAMBLE;
+
+/**
+ * R64-a list_apps: EnumWindows over visible, titled, non-toolwindow
+ * top-level windows → one app entry per pid (`name` = the LARGEST titled
+ * window's title, `processName` = the exe name), active via
+ * GetForegroundWindow; honest Get-Process fallback when the walk throws;
+ * diagnostics (processCount / foregroundPid / enumWindowsCount) ride the
+ * wrapper. NOTE: `$pid` is a read-only automatic variable in PowerShell —
+ * every loop variable below deliberately avoids that name.
+ */
+export function windowsListAppsScript(): string {
+  return `
+$fg = [U32]::GetForegroundWindow()
+$fgpid = 0
+if ($fg -ne [IntPtr]::Zero) { [void][U32]::GetWindowThreadProcessId($fg, [ref]$fgpid) }
+$diag = @{ processCount = 0; foregroundPid = $fgpid; enumWindowsCount = -1 }
+$procs = @()
+try { $procs = @(Get-Process) } catch { $procs = @() }
+$diag.processCount = $procs.Count
+$procNames = @{}
+foreach ($p in $procs) { try { $procNames[[int]$p.Id] = [string]$p.ProcessName } catch {} }
+$apps = @()
+$enum = $null
+try { $enum = [U32]::ListTopWindows() } catch { $enum = $null }
+if ($null -ne $enum) {
+  $diag.enumWindowsCount = $enum.Count
+  $best = @{}
+  foreach ($w in $enum) {
+    $procId = [int]$w.Pid
+    $pname = ''
+    if ($procNames.ContainsKey($procId)) { $pname = $procNames[$procId] }
+    else { try { $pname = [string](Get-Process -Id $procId -ErrorAction Stop).ProcessName } catch { $pname = '' } }
+    $area = ([int]$w.R - [int]$w.L) * ([int]$w.B - [int]$w.T)
+    $cur = $best[$procId]
+    if ($null -eq $cur -or $area -gt $cur.area) {
+      $best[$procId] = @{ pid = $procId; name = [string]$w.Title; processName = $pname; area = $area; active = ($procId -eq $fgpid) }
+    }
+  }
+  foreach ($k in @($best.Keys)) {
+    $apps += [pscustomobject]@{ name = [string]$best[$k].name; pid = [int]$best[$k].pid; processName = [string]$best[$k].processName; active = [bool]$best[$k].active }
+  }
+  $apps = @($apps | Sort-Object -Property name)
+} else {
+  $diag.note = 'EnumWindows walk failed; using the Get-Process MainWindowTitle fallback'
+  foreach ($p in $procs) {
+    try {
+      if ($p.MainWindowHandle -ne 0 -and $p.MainWindowTitle) {
+        $apps += [pscustomobject]@{ name = [string]$p.MainWindowTitle; pid = [int]$p.Id; processName = [string]$p.ProcessName; active = ([int]$p.Id -eq $fgpid) }
+      }
+    } catch {}
+  }
+}
+OutJson @{ apps = $apps; diagnostics = $diag }
+`;
+}
+
+/**
+ * R64-a list_windows: ALL of the pid's top-level EnumWindows windows (NOT
+ * just MainWindowHandle — secondary windows, tool palettes, dialogs), each
+ * with windowId (HWND), title, bounds, focused (GetForegroundWindow), and
+ * main = largest-area window; the MainWindowHandle fallback only when the
+ * walk yields nothing for a LIVE process.
+ */
+export function windowsListWindowsScript(pid: number): string {
+  return `
+$targetPid = ${pid}
+$fg = [U32]::GetForegroundWindow()
+$fgl = 0
+if ($fg -ne [IntPtr]::Zero) { $fgl = [int64]$fg }
+$wins = @()
+$diag = @{ processRunning = $false; enumWindowsCount = -1 }
+try { $null = Get-Process -Id $targetPid -ErrorAction Stop; $diag.processRunning = $true } catch {}
+$enum = $null
+try { $enum = [U32]::ListTopWindows() } catch { $enum = $null }
+if ($null -ne $enum) {
+  $diag.enumWindowsCount = $enum.Count
+  foreach ($w in $enum) {
+    if ([int]$w.Pid -ne $targetPid) { continue }
+    $wins += [pscustomobject]@{
+      windowId = [int64]$w.Hwnd
+      title = [string]$w.Title
+      bounds = @([int]$w.L, [int]$w.T, ([int]$w.R - [int]$w.L), ([int]$w.B - [int]$w.T))
+      main = $false
+      focused = ($fgl -eq [int64]$w.Hwnd)
+    }
+  }
+  $bestIdx = -1; $bestArea = -1
+  for ($i = 0; $i -lt $wins.Count; $i++) {
+    $a = [int]$wins[$i].bounds[2] * [int]$wins[$i].bounds[3]
+    if ($a -gt $bestArea) { $bestArea = $a; $bestIdx = $i }
+  }
+  if ($bestIdx -ge 0) { $wins[$bestIdx].main = $true }
+}
+if ($wins.Count -eq 0 -and $diag.processRunning) {
+  $diag.note = 'EnumWindows found no titled visible window for this pid; using the MainWindowHandle fallback'
+  try {
+    $p = Get-Process -Id $targetPid -ErrorAction Stop
+    $h = $p.MainWindowHandle
+    if ($h -ne [IntPtr]::Zero) {
+      $r = New-Object U32+RECT
+      [void][U32]::GetWindowRect($h, [ref]$r)
+      $wins += [pscustomobject]@{ windowId = [int64]$h; title = [string]$p.MainWindowTitle; bounds = @([int]$r.Left, [int]$r.Top, ([int]$r.Right - [int]$r.Left), ([int]$r.Bottom - [int]$r.Top)); main = $true; focused = ($fgl -eq [int64]$h) }
+    }
+  } catch {}
+}
+OutJson @{ windows = $wins; diagnostics = $diag }
+`;
+}
+
+/**
+ * R64-a list_displays: the REAL System.Windows.Forms.Screen AllScreens
+ * bounds (the owner's 1280×1024 single display previously collapsed to an
+ * object → parse fail → the FAKE 1920×1080 fallback). Wrapper + diagnostics.
+ */
+export function windowsListDisplaysScript(): string {
+  return `
+Add-Type -AssemblyName System.Windows.Forms
+$screens = [System.Windows.Forms.Screen]::AllScreens
+$displays = @()
+$i = 1
+foreach ($s in $screens) {
+  $displays += [pscustomobject]@{ index = $i; bounds = @([int]$s.Bounds.X, [int]$s.Bounds.Y, [int]$s.Bounds.Width, [int]$s.Bounds.Height); main = [bool]$s.Primary }
+  $i++
+}
+OutJson @{ displays = $displays; diagnostics = @{ screenCount = $screens.Length } }
+`;
+}
 
 function escapePsString(value: string): string {
   return value.replace(/'/g, "''");

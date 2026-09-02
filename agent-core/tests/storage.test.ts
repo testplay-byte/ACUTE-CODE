@@ -157,6 +157,9 @@ describe("openDatabase", () => {
       // skills + mcp_servers tables (the computer-use tools themselves are
       // settings-gated, default OFF; no agent allowlist was touched).
       { version: 23, name: "0023_computer_use.sql" },
+      // ROUND-64 (R64-e): the per-API-key usage dimension — key_slot on
+      // usage_events (0 = primary; pool slots = sub-agent children).
+      { version: 24, name: "0024_usage_key_slot.sql" },
     ]);
     expect(appliedSecond).toEqual(appliedFirst);
   });

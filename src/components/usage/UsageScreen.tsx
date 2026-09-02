@@ -2,13 +2,14 @@ import { useState } from "react";
 import { motion } from "framer-motion";
 import { Activity, MessageSquare, Wrench, Zap } from "lucide-react";
 import { useNavigate } from "react-router";
-import { useDetailedUsage } from "../../hooks/use-usage";
+import { useDetailedUsage, useUsageKeyPools } from "../../hooks/use-usage";
 import { formatTokenCount } from "../../lib/format";
 import { ease, fadeInUp, staggerContainer } from "../../lib/motion";
 import { SEMANTIC_COLORS } from "../../lib/semantics";
 import { useThemeStyles } from "../../lib/use-theme-styles";
 import { StatCard } from "../dashboard/StatCard";
 import { withAlpha } from "../dashboard/helpers";
+import { KeyCards } from "./KeyCards";
 import { ModelCards } from "./ModelCards";
 import { ProjectsDrilldown } from "./ProjectsDrilldown";
 import { ToolsLeaderboard } from "./ToolsLeaderboard";
@@ -68,6 +69,9 @@ export function UsageScreen() {
   const styles = useThemeStyles();
   const [days, setDays] = useState(30);
   const usage = useDetailedUsage(days);
+  // ROUND-64 (R64-e): the "API keys" section's join data — providers +
+  // masked key pools (live sidecar only, same dashboard semantics).
+  const keyPools = useUsageKeyPools();
 
   const totals = usage.data?.totals;
   const totalTokens = (totals?.tokens.input ?? 0) + (totals?.tokens.output ?? 0);
@@ -75,6 +79,21 @@ export function UsageScreen() {
   // "loading" from "disabled" so the screen settles on its empty state.
   const loading = usage.isPending && usage.isFetching;
   const hasData = (totals?.sessions ?? 0) + (totals?.subagentSessions ?? 0) > 0;
+
+  // The keys section renders in BOTH branches — a configured key shows
+  // ("not used yet") even when the ledger has no sessions yet, so the owner
+  // sees every key he configured the moment he opens /usage.
+  const keyCardsSection = (
+    <KeyCards
+      usageKeys={usage.data?.keys ?? []}
+      providers={keyPools.providers}
+      poolsById={keyPools.poolsById}
+      settledPoolIds={keyPools.settledPoolIds}
+      providersSettled={keyPools.providersSettled}
+      isPending={keyPools.isPending}
+      styles={styles}
+    />
+  );
 
   return (
     <motion.div
@@ -168,19 +187,23 @@ export function UsageScreen() {
             then reload.
           </div>
         ) : !hasData ? (
-          /* Empty state — the whole ledger is blank */
-          <div
-            className="rounded-[24px] border-[1.5px] p-10 text-center"
-            style={{ backgroundColor: styles.card, borderColor: styles.border, boxShadow: styles.softShadow }}
-          >
-            <p className="text-[14px] font-bold" style={{ color: styles.text }}>
-              No usage yet — start a conversation
-            </p>
-            <p className="mt-1.5 text-[12px]" style={{ color: styles.textSecondary }}>
-              Tokens, tool calls and sub-agent runs land here the moment your
-              first session makes a model call.
-            </p>
-          </div>
+          <>
+            {/* Empty state — the whole ledger is blank */}
+            <div
+              className="rounded-[24px] border-[1.5px] p-10 text-center"
+              style={{ backgroundColor: styles.card, borderColor: styles.border, boxShadow: styles.softShadow }}
+            >
+              <p className="text-[14px] font-bold" style={{ color: styles.text }}>
+                No usage yet — start a conversation
+              </p>
+              <p className="mt-1.5 text-[12px]" style={{ color: styles.textSecondary }}>
+                Tokens, tool calls and sub-agent runs land here the moment your
+                first session makes a model call.
+              </p>
+            </div>
+            {/* ROUND-64 (R64-e): configured keys still show with "not used yet". */}
+            {keyCardsSection}
+          </>
         ) : (
           <>
             {/* Overview stat cards — wizard recipe (StatCard, dashboard's row) */}
@@ -238,6 +261,9 @@ export function UsageScreen() {
 
             {/* Model mix */}
             <ModelCards models={usage.data?.models ?? []} styles={styles} />
+
+            {/* ROUND-64 (R64-e): per-API-key stats — one card per key. */}
+            {keyCardsSection}
 
             {/* Projects → sessions drill-down (sub-agents nest under parents) */}
             <ProjectsDrilldown

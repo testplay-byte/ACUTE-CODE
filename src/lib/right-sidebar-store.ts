@@ -64,11 +64,11 @@ export function stateKey(projectId: string, sessionId: string | null): string {
  * terminal/memory/files, rendered by ConsolePanel: the frontend error bus +
  * the engine's error ring in one live, copyable, clearable list.
  *
- * ROUND-61 (R61): "computer" — the computer-use monitor (the owner's
- * directive: live details/stats while the agent uses the desktop). A
- * singleton tab like terminal/memory, rendered by ComputerPanel: the live
- * event ring, session stats, the kill-switch state, the STOP button, and
- * the floating mini-window toggle. */
+ * ROUND-64 (R64-b): the ROUND-61 "computer" tab is REMOVED (owner: "There
+ * is actually no need to show the computer use in the right sidebar menu at
+ * all") — the ALWAYS-ON-TOP floating monitor window (src-tauri/src/mini.rs +
+ * src/mini/**) is the only computer-use surface now. Persisted v3 slices
+ * that still carry a computer tab are migrated away (v4 below). */
 export type RightSidebarTabType =
   | "file"
   | "files"
@@ -76,8 +76,7 @@ export type RightSidebarTabType =
   | "terminal"
   | "subagent"
   | "memory"
-  | "console"
-  | "computer";
+  | "console";
 
 export interface TerminalLine {
   /** ROUND-44 (R44-e): "exit" lines carry the streaming exit-code footer
@@ -175,9 +174,6 @@ interface RightSidebarState {
   /** ROUND-59 (R59-E): open (or surface) the diagnostics console tab
    * (singleton — the error console is app-global, one per sidebar). */
   openConsole: (projectId: string) => string;
-  /** ROUND-61 (R61): open (or surface) the computer-use monitor tab
-   * (singleton — the monitor is app-global, one per sidebar). */
-  openComputer: (projectId: string) => string;
   /** Open (or surface) a sub-agent tab. */
   openSubAgent: (
     projectId: string,
@@ -362,11 +358,6 @@ export const useRightSidebarStore = create<RightSidebarState>()(
       // "Console" action always surfaces the ONE console.
       openConsole: (projectId) =>
         get().addTab(projectId, { type: "console", title: "Console" }),
-      // ROUND-61 (R61): the computer-use monitor — singleton (deduped by
-      // type), so the quick-menu "Computer" action always surfaces the ONE
-      // monitor tab.
-      openComputer: (projectId) =>
-        get().addTab(projectId, { type: "computer", title: "Computer" }),
       // ROUND-48 (R48-c): the file explorer — a singleton tab (deduped by
       // type, like the terminal/memory tabs), so the quick-menu "Files"
       // action always surfaces the ONE explorer instead of stacking tabs.
@@ -421,17 +412,51 @@ export const useRightSidebarStore = create<RightSidebarState>()(
     }),
     {
       name: "acute-code.rightSidebar",
-      version: 3,
+      version: 4,
       // v2 → v3 (ROUND-41): the storage key changed from `projectId` to
       // `projectId::sessionId` for per-session sidebar state. Old slices
       // are unreachable under the new key scheme, so drop them. Users
       // re-open files (one click); the cost of a migration shim would
       // exceed the value (few persisted tabs per project).
-      migrate: (_persisted: unknown) => ({
-        byProject: {},
-        activeProjectId: null,
-        activeSessionByProject: {},
-      }),
+      //
+      // v3 → v4 (ROUND-64): the "computer" tab type is GONE (the floating
+      // monitor window replaced the right-sidebar panel). v3 slices that
+      // still carry computer tabs keep every OTHER tab; the computer rows
+      // are dropped and an activeTabId pointing at one falls back to the
+      // first surviving tab (the floating monitor is the surface now —
+      // nothing is lost, the STOP bar is always on top while it matters).
+      migrate: (persisted: unknown, version: number) => {
+        if (version < 3 || typeof persisted !== "object" || persisted === null) {
+          return { byProject: {}, activeProjectId: null, activeSessionByProject: {} };
+        }
+        const state = persisted as {
+          byProject?: Record<string, ProjectRightState>;
+          activeProjectId?: string | null;
+          activeSessionByProject?: Record<string, string | null>;
+        };
+        const byProject: Record<string, ProjectRightState> = {};
+        for (const [key, slice] of Object.entries(state.byProject ?? {})) {
+          // The persisted rows are untrusted JSON — read the type through a
+          // permissive cast (a "computer" row cannot exist in TODAY's store,
+          // but v3 data on disk can still carry one).
+          const rawTabs = Array.isArray(slice?.tabs)
+            ? (slice.tabs as Array<{ id: string; type: string }>)
+            : [];
+          const tabs = rawTabs.filter((t) => t.type !== "computer") as RightSidebarTab[];
+          const activeTabId =
+            slice?.activeTabId !== null &&
+            slice?.activeTabId !== undefined &&
+            tabs.some((t) => t.id === slice.activeTabId)
+              ? slice.activeTabId
+              : (tabs[0]?.id ?? null);
+          byProject[key] = { ...slice, tabs, activeTabId };
+        }
+        return {
+          byProject,
+          activeProjectId: state.activeProjectId ?? null,
+          activeSessionByProject: state.activeSessionByProject ?? {},
+        };
+      },
     },
   ),
 );

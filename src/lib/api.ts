@@ -680,6 +680,29 @@ export interface DetailedUsageModel {
   costUsd: number;
 }
 
+/**
+ * ROUND-64 (R64-e, owner: "I want the ability to track each individual API
+ * key's stats, like the total usage of that API key, total tokens used on
+ * that API key"): one provider key-pool slot's whole-history usage rollup
+ * (usage_events grouped by provider × key_slot, migration 0024). keySlot 0
+ * = the provider's primary key; N ≥ 2 = the ACUTE_PROVIDER_<ID>_SLOT<N>
+ * pool slot the orchestrator assigns sub-agent children. Only slots with
+ * recorded spend appear — the /usage screen joins this with
+ * fetchKeyPool's masked poolInfo to render configured-but-unused keys and
+ * honestly flag removed ones.
+ */
+export interface DetailedUsageKey {
+  providerId: string;
+  /** 0 = primary key; N ≥ 2 = pool slot N. */
+  keySlot: number;
+  requests: number;
+  inputTokens: number;
+  outputTokens: number;
+  costUsd: number;
+  /** ISO ts of the slot's latest recorded call (MAX(ts)). */
+  lastUsedAt: string;
+}
+
 /** A chat session (or a sub-agent child) row in the projects drill-down. */
 export interface DetailedUsageSession {
   id: string;
@@ -754,6 +777,8 @@ export interface DetailedUsage {
   totals: DetailedUsageTotals;
   tools: DetailedUsageToolCall[];
   models: DetailedUsageModel[];
+  /** ROUND-64 (R64-e): per-key (provider × pool slot) rollups, cost-desc. */
+  keys: DetailedUsageKey[];
   /** Most-recently-active first; sub-agent children nested by parentId. */
   projects: DetailedUsageProject[];
   generatedAt: string;

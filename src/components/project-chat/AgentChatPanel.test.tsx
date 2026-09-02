@@ -299,9 +299,9 @@ describe("AgentChatPanel user-stop rendering (ROUND-58 R58-cf)", () => {
     expect(card.getAttribute("role")).toBe("status");
     expect(screen.queryByRole("alert")).toBeNull();
     expect(screen.queryByText("Generation failed")).toBeNull();
-    // The flushed partial stays visible above the card (RichText tokenizes
-    // the answer into word spans — assert on one token).
-    expect(screen.getByText("beginning")).toBeTruthy();
+    // The flushed partial stays visible above the card (ChatMarkdown renders
+    // a plain run as one span — assert on a substring of the answer).
+    expect(screen.getByText("beginning", { exact: false })).toBeTruthy();
   });
 
   it("NO stopped card on a normal (not user-stopped) transcript", async () => {

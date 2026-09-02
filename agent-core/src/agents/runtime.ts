@@ -434,6 +434,16 @@ export interface TurnDeps {
   chat: ChatFn;
   /** Streaming adapter (round-16); the streamed turn refuses without one. */
   chatStream?: StreamChatFn;
+  /**
+   * ROUND-64 (R64-e, owner: per-API-key usage stats): the key-pool slot this
+   * turn's provider key comes from — set by the orchestrator on a CHILD's
+   * deps from the slot it acquired (ADR-0022: children prefer pool slots).
+   * Omitted (main-session turns, HTTP retry routes) = slot 0, the PRIMARY
+   * key — the honest default: those turns resolve keyring.get(provider.id),
+   * which IS the primary. Flows into recordUsage's third parameter so the
+   * usage_events row attributes its tokens/cost to the key that paid them.
+   */
+  keySlot?: number;
 }
 
 /** Narrows an event payload back to the {role, content} chat shape we write.
@@ -1024,6 +1034,10 @@ export async function runSingleAgentTurn(
   attachments?: MessageAttachment[],
 ): Promise<TurnOutcome> {
   const { db, keyring, chat } = deps;
+  // ROUND-64 (R64-e): the key-pool slot this turn's usage rows attribute
+  // their spend to (children: the orchestrator's acquired slot; main turns:
+  // 0 = the primary key). Same value for every recordUsage below.
+  const keySlot = deps.keySlot ?? 0;
   // ROUND-48 (R48-e1): forward emit AND signal into the turn prep so the
   // child's toolDeps carries both — interactiveApprovals becomes true for
   // emitted children (the owner's "sub-agents can ask for permission") and
@@ -1347,17 +1361,22 @@ export async function runSingleAgentTurn(
   // any non-orchestrated caller gets the honest `queued` resting state).
   if (stoppedBySignal) {
     if (lastAssistantEvent !== null && (totalInputTokens > 0 || totalOutputTokens > 0)) {
-      recordUsage(db, {
-        agentId: agent.id,
-        sessionId: session.id,
-        provider: provider.id,
-        model,
-        inputTokens: totalInputTokens,
-        outputTokens: totalOutputTokens,
-        cachedInputTokens: totalCachedInputTokens,
-        costUsd: computeCost(db, provider.id, model, totalInputTokens, totalOutputTokens),
-        ts: lastAssistantEvent.ts,
-      });
+      recordUsage(
+        db,
+        {
+          agentId: agent.id,
+          sessionId: session.id,
+          provider: provider.id,
+          model,
+          inputTokens: totalInputTokens,
+          outputTokens: totalOutputTokens,
+          cachedInputTokens: totalCachedInputTokens,
+          costUsd: computeCost(db, provider.id, model, totalInputTokens, totalOutputTokens),
+          ts: lastAssistantEvent.ts,
+        },
+        // ROUND-64 (R64-e): attribute the partial spend to the serving key.
+        keySlot,
+      );
       touchSession(db, session.id);
     }
     if (getSession(db, session.id)?.status === "running") {
@@ -1403,7 +1422,9 @@ export async function runSingleAgentTurn(
       // assistant event exists — the userSeq fallback is pure defensiveness.
       ts: lastAssistantEvent !== null ? lastAssistantEvent.ts : userEvent.ts,
     };
-    recordUsage(db, usage);
+    // ROUND-64 (R64-e): keySlot rides the guard-stop row too — the burn was
+    // real and the serving key deserves the attribution.
+    recordUsage(db, usage, keySlot);
     touchSession(db, session.id);
     logTurnEnd(session.id, false, Date.now() - syncStartedAt, totalInputTokens, totalOutputTokens);
     return {
@@ -1473,7 +1494,8 @@ export async function runSingleAgentTurn(
     costUsd: computeCost(db, provider.id, model, totalInputTokens, totalOutputTokens),
     ts: lastAssistantEvent.ts,
   };
-  recordUsage(db, usage);
+  // ROUND-64 (R64-e): keySlot attributes the successful turn's spend.
+  recordUsage(db, usage, keySlot);
   touchSession(db, session.id);
   // ROUND-44 (live-battery find): a SUCCESSFUL turn used to leave the session
   // in "running" forever (only the error path reset it) — sessions then read
@@ -1529,6 +1551,10 @@ export async function runStreamedAgentTurn(
   attachments?: MessageAttachment[],
 ): Promise<StreamedTurnOutcome> {
   const { db, keyring, chat, chatStream } = deps;
+  // ROUND-64 (R64-e): the key-pool slot this turn's usage rows attribute
+  // their spend to (children: the orchestrator's acquired slot; main turns:
+  // 0 = the primary key). Same value for every recordUsage below.
+  const keySlot = deps.keySlot ?? 0;
   // ROUND-34: values the keyring holds — scrubbed from persisted tool output
   // summaries (run_command inherits process.env which carries ACUTE_* keys).
   const keySecrets = keyring.list().filter((v) => v.length >= 8);
@@ -1865,17 +1891,22 @@ export async function runStreamedAgentTurn(
         // accounting — the spend was real), touch, and reset to `queued`.
         flushSegment(true);
         if (lastAssistantEvent !== null && (totalInputTokens > 0 || totalOutputTokens > 0)) {
-          recordUsage(db, {
-            agentId: agent.id,
-            sessionId: session.id,
-            provider: provider.id,
-            model,
-            inputTokens: totalInputTokens,
-            outputTokens: totalOutputTokens,
-            cachedInputTokens: totalCachedInputTokens,
-            costUsd: computeCost(db, provider.id, model, totalInputTokens, totalOutputTokens),
-            ts: lastAssistantEvent.ts,
-          });
+          recordUsage(
+            db,
+            {
+              agentId: agent.id,
+              sessionId: session.id,
+              provider: provider.id,
+              model,
+              inputTokens: totalInputTokens,
+              outputTokens: totalOutputTokens,
+              cachedInputTokens: totalCachedInputTokens,
+              costUsd: computeCost(db, provider.id, model, totalInputTokens, totalOutputTokens),
+              ts: lastAssistantEvent.ts,
+            },
+            // ROUND-64 (R64-e): attribute the partial spend to the serving key.
+            keySlot,
+          );
         }
         touchSession(db, session.id);
         if (getSession(db, session.id)?.status === "running") {
@@ -2043,7 +2074,9 @@ export async function runStreamedAgentTurn(
       costUsd: computeCost(db, provider.id, model, totalInputTokens, totalOutputTokens),
       ts: lastAssistantEvent.ts,
     };
-    recordUsage(db, usage);
+    // ROUND-64 (R64-e): keySlot rides the guard-stop row too — the burn was
+    // real and the serving key deserves the attribution.
+    recordUsage(db, usage, keySlot);
     touchSession(db, session.id);
     logTurnEnd(session.id, false, ms, totalInputTokens, totalOutputTokens);
     return {
@@ -2067,7 +2100,8 @@ export async function runStreamedAgentTurn(
     costUsd: computeCost(db, provider.id, model, totalInputTokens, totalOutputTokens),
     ts: lastAssistantEvent.ts,
   };
-  recordUsage(db, usage);
+  // ROUND-64 (R64-e): keySlot attributes the successful turn's spend.
+  recordUsage(db, usage, keySlot);
   touchSession(db, session.id);
   // ROUND-44 (live-battery find): same reset as the sync path — a finished
   // streamed turn must not leave the session stuck in "running".

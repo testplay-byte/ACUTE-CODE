@@ -107,6 +107,49 @@ describe("ROUND-36: sub-agent orchestration (ADR-0022)", () => {
     expect(child?.status).toBe("completed");
   });
 
+  // ROUND-64 (R64-e, owner: per-API-key usage stats): the child's usage row
+  // lands on the POOL SLOT the orchestrator acquired for it — not the
+  // primary. ADR-0022's "children prefer pool slots" becomes observable in
+  // usage_events.key_slot (migration 0024), which is exactly what the
+  // /usage screen's per-key cards group by.
+  it("ROUND-64: a pooled child's usage row records the acquired slot; a pool-less child records slot 0", async () => {
+    const agent = createAgent(db, {
+      name: "Orchestrator",
+      providerId: "openrouter",
+      model: "test/orch-1",
+    });
+    const parent = createSession(db, { agentId: agent.id, mode: "single" });
+    const orchestrator = getOrchestrator();
+
+    // Pool: primary + SLOT2 → the child prefers the non-primary slot 2.
+    const pooled = await orchestrator.delegateTask(
+      { db, keyring: new ProviderKeyring({ ACUTE_PROVIDER_OPENROUTER: KEY, ACUTE_PROVIDER_OPENROUTER_SLOT2: KEY2 }), chat: aiSdkChat },
+      parent.id,
+      "pooled task",
+      "researcher",
+    );
+    // No pool → the child shares the primary under the per-key limit.
+    const poolless = await orchestrator.delegateTask(
+      { db, keyring: new ProviderKeyring({ ACUTE_PROVIDER_OPENROUTER: KEY }), chat: aiSdkChat },
+      parent.id,
+      "pool-less task",
+      "researcher",
+    );
+    expect(pooled.ok).toBe(true);
+    expect(poolless.ok).toBe(true);
+
+    const slotOf = (sessionId: string | undefined): number | undefined =>
+      sessionId === undefined
+        ? undefined
+        : (
+            db
+              .prepare("SELECT key_slot FROM usage_events WHERE session_id = ?")
+              .get(sessionId) as { key_slot: number } | undefined
+          )?.key_slot;
+    expect(slotOf(pooled.sessionId)).toBe(2); // the pool slot that served it
+    expect(slotOf(poolless.sessionId)).toBe(0); // honest: the primary key
+  });
+
   it("lists children with computed status/progress via GET /sessions/:id/subagents", async () => {
     const agent = createAgent(db, {
       name: "Orchestrator",

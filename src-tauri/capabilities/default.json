@@ -2,7 +2,7 @@
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
   "description": "Default capability: core permissions plus in-app window controls for the frameless main window (R58).",
-  "windows": ["main", "acute-browser"],
+  "windows": ["main", "acute-browser", "acute-computer-mini"],
   "permissions": [
     "core:default",
     "core:window:allow-start-dragging",

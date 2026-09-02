@@ -101,6 +101,21 @@ describe("ROUND-61 (R61): the settings gates", () => {
     expect(names).not.toContain("left_click");
     expect(names).not.toContain("type");
   });
+
+  it("R64-a: list_apps / get_app_state descriptions teach the resolution contract (title vs processName, runningApps payload)", async () => {
+    setComputerUseSettings(db, { enabled: true, permission: "act" });
+    const tools = await computerUsePlugin.createTools({ root: tempDir, toolDeps: makeDeps() });
+    const listApps = tools.find((t) => t.name === "list_apps")!;
+    expect(listApps.description).toContain("processName");
+    expect(listApps.description).toContain("WINDOW TITLE");
+    expect(listApps.description).toContain("app_not_found");
+    const getState = tools.find((t) => t.name === "get_app_state")!;
+    expect(getState.description).toContain("processName");
+    expect(getState.description).toContain("runningApps");
+    // The app_ref schema description states the resolution keys too.
+    const typeTool = tools.find((t) => t.name === "type")!;
+    expect(JSON.stringify(typeTool.inputSchema)).toContain("unique substring");
+  });
 });
 
 describe("ROUND-61 (R61): tool output shapes + the monitor + vision wiring", () => {

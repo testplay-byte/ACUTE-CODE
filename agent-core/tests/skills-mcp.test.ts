@@ -58,6 +58,32 @@ describe("ROUND-61 (R61): skills storage", () => {
     expect(getSkill(db, COMPUTER_USE_SKILL_ID)?.body).toBe("MY EDITED BODY");
   });
 
+  it("R64-a: the computer-use body teaches the honest Windows surface (processName, runningApps recovery, verify-after-write)", () => {
+    const cu = getSkill(db, COMPUTER_USE_SKILL_ID);
+    expect(cu).toBeDefined();
+    const body = cu?.body ?? "";
+    // list_apps semantics: BOTH keys are named.
+    expect(body).toContain("list_apps");
+    expect(body).toContain("processName");
+    expect(body).toContain("window TITLE");
+    // Resolution by processName OR title; the runningApps recovery loop.
+    expect(body).toContain("app_not_found");
+    expect(body).toContain("runningApps");
+    expect(body).toContain("ambiguous_app_ref");
+    // UIA-first, no vision needed.
+    expect(body).toMatch(/PRIMARY path/i);
+    // Verify after every write + the post-launch wait.
+    expect(body).toContain("return_state");
+    expect(body).toContain("0.5-1s");
+    // The frontmost rule for raw input + end-of-task stop.
+    expect(body).toContain("FRONTMOST");
+    expect(body).toContain("stop_computer_control");
+    // The agent may act on its OWN window when it blocks the target.
+    expect(body).toContain("win+down");
+    // SKILL.md-shaped and tight (≤ ~60 content lines).
+    expect(body.trim().split("\n").length).toBeLessThanOrEqual(60);
+  });
+
   it("createSkill validates the slug + rejects duplicates; full CRUD works", () => {
     expect(() => createSkill(db, { name: "Bad Name" })).toThrow(/slug/i);
     expect(() => createSkill(db, { name: "x" })).toThrow(/slug/i);

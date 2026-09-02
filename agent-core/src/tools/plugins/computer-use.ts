@@ -107,11 +107,11 @@ const appRefSchema = {
   type: "object",
   properties: {
     pid: { type: "integer" },
-    name: { type: "string" },
+    name: { type: "string", description: "window title OR processName (e.g. 'Untitled - Notepad' or 'notepad'); unique substring also resolves" },
     bundleId: { type: "string", description: "bundle id (macOS) / AUMID (Windows packaged apps)" },
     windowId: { type: "integer", description: "scope to a specific window (from list_windows)" },
   },
-  description: "App reference: pid preferred; name must resolve uniquely",
+  description: "App reference: pid preferred; name resolves by window title, processName, or unique substring",
 };
 
 const strategySchema = {
@@ -253,7 +253,7 @@ export const computerUsePlugin: PluginDefinition = {
       // ── Observe & resolve ──
       tool(
         "list_apps",
-        "List RUNNING applications only (name, pid, active). 'Not in this list' means 'not running' — not 'not installed'. Use to find the pid before get_app_state.",
+        "List RUNNING applications: name = the app's main WINDOW TITLE (e.g. 'Untitled - Notepad'), processName = the executable name (e.g. 'notepad'), plus pid and active. Resolve app refs by processName or pid; when a name misses, an app_not_found refusal lists the running apps in its payload. 'Not in this list' means 'not running' — not 'not installed'.",
         { app: appRefSchema },
       ),
       tool(
@@ -274,7 +274,7 @@ export const computerUsePlugin: PluginDefinition = {
       ),
       tool(
         "get_app_state",
-        "THE core observation: the app window's accessibility tree (index + kind + name + flags per element). Start here — text-only, no screenshot. detail:'full' adds bounds + advertised actions; includeScreenshot:true adds a window raster when you need pixel coordinates.",
+        "THE core observation: the app window's accessibility tree (index + kind + name + flags per element). Start here — text-only, no screenshot. The app_ref resolves by window title, processName (e.g. 'notepad'), or unique substring; an app_not_found refusal lists the running apps (payload.runningApps) — pick the right pid and retry. detail:'full' adds bounds + advertised actions; includeScreenshot:true adds a window raster when you need pixel coordinates.",
         {
           appRef: appRefSchema,
           detail: { type: "string", enum: ["compact", "full"] },

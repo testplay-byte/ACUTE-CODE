@@ -49,6 +49,11 @@
  *  - a HIDDEN config-only row is excluded and counted in the footer note;
  *  - a provider DISABLED in Settings leaves the popover (the button keeps
  *    the agent's own model label).
+ * ROUND-64 (R64-d) replacement — the flyout is CONFIG-ONLY (owner: "only
+ *   the models which I had added in the models and providers Page should
+ *   be shown"): catalog-only models are NOT listed, the live-catalog fetch
+ *   is never issued, and an empty/error config renders the honest pointer
+ *   row ("No models configured — add them in Settings → Models & Providers").
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, cleanup, fireEvent, screen, waitFor, within } from "@testing-library/react";
@@ -102,8 +107,16 @@ const MODELS = [
 
 /** ROUND-58 (R58-d): the provider's models-CONFIG rows (Settings → Models &
  * Providers) — the model picker merge surface (hidden / displayName /
- * custom pricing). Empty by default so pre-R58 assertions stay green. */
-const MODEL_CONFIG: ProviderModelConfig[] = [];
+ * custom pricing). ROUND-64 (R64-d): the config is now the flyout's ONLY
+ * source, so this fixture mirrors the old live-catalog mix (one :free id +
+ * two paid ids, no display names, no custom pricing) — the pre-R64
+ * assertions keep their exact expectations with the config as the origin.
+ * Per-test mockResolvedValue overrides still narrow it. */
+const MODEL_CONFIG: ProviderModelConfig[] = [
+  modelConfigRow({ modelId: "z-ai/glm-5.2:free" }),
+  modelConfigRow({ modelId: "openrouter/ox-alpha" }),
+  modelConfigRow({ modelId: "openrouter/gpt-5.2" }),
+];
 
 /** Build a full models-config row the way the sidecar does (R58-d tests). */
 function modelConfigRow(
@@ -1088,7 +1101,10 @@ describe("Composer: model selector (owner spec F)", () => {
   });
 });
 
-// ── F2. Model selector × models-config merge (ROUND-58 R58-d) ────────────────
+// ── F2. Model selector × models config (ROUND-58 R58-d → ROUND-64 R64-d) ───
+// R64-d: the flyout is CONFIG-ONLY — these cases pin the Settings-sourced
+// list itself (hidden exclusion, display names, pricing filter, honest
+// failure) instead of the old live+config merge.
 describe("Composer: model selector respects the models config (ROUND-58 R58-d)", () => {
   /** Open the popover + hover the OpenRouter row → the flyout. */
   async function openFlyout() {
@@ -1107,6 +1123,8 @@ describe("Composer: model selector respects the models config (ROUND-58 R58-d)",
 
   it("models hidden in Settings are EXCLUDED — even under \"All\" — with the honest footer note", async () => {
     vi.mocked(fetchProviderModelConfig).mockResolvedValue([
+      modelConfigRow({ modelId: "z-ai/glm-5.2:free" }),
+      modelConfigRow({ modelId: "openrouter/ox-alpha" }),
       modelConfigRow({ modelId: "openrouter/gpt-5.2", hidden: true }),
     ]);
     await renderPanelWithConversation();
@@ -1155,36 +1173,37 @@ describe("Composer: model selector respects the models config (ROUND-58 R58-d)",
     );
   });
 
-  it("a configured model carries the subtle \"configured\" dot", async () => {
+  it("a config row with an EMPTY display name falls back to the raw id — and the R58-d \"configured\" dot is retired (R64-d)", async () => {
     vi.mocked(fetchProviderModelConfig).mockResolvedValue([
-      modelConfigRow({ modelId: "z-ai/glm-5.2:free", displayName: "My Custom GLM" }),
+      modelConfigRow({ modelId: "z-ai/glm-5.2:free", displayName: "" }),
+      modelConfigRow({ modelId: "openrouter/ox-alpha" }),
     ]);
     await renderPanelWithConversation();
     expect(await screen.findByText("first question", {}, { timeout: 5000 })).toBeTruthy();
 
     await openFlyout();
-    const option = screen.getByRole("option", { name: "My Custom GLM" });
-    // The dot rides INSIDE the option row.
-    expect(option.querySelector('[title="Configured in Settings — pricing and visibility customized"]')).not.toBeNull();
-    // Unconfigured models carry no dot — flip to All to reveal the paid one.
-    fireEvent.click(screen.getByRole("button", { name: "All" }));
-    const paid = await screen.findByRole("option", { name: "openrouter/ox-alpha" });
-    expect(paid.querySelector('[title="Configured in Settings — pricing and visibility customized"]')).toBeNull();
+    // Empty displayName → the raw id stays the row's label.
+    expect(screen.getByRole("option", { name: "z-ai/glm-5.2:free" })).toBeTruthy();
+    // R64-d: the flyout is config-only, so EVERY row is a configured row —
+    // the marker carried no information and is gone entirely.
+    expect(
+      document.querySelector('[title="Configured in Settings — pricing and visibility customized"]'),
+    ).toBeNull();
   });
 
   it("a config price of $0 makes a paid-id model count as FREE for the shared filter", async () => {
     vi.mocked(fetchProviderModelConfig).mockResolvedValue([
       modelConfigRow({ modelId: "openrouter/ox-alpha", inputPricePerMtok: 0 }),
+      modelConfigRow({ modelId: "openrouter/gpt-5.2" }),
     ]);
     await renderPanelWithConversation();
     expect(await screen.findByText("first question", {}, { timeout: 5000 })).toBeTruthy();
 
     await openFlyout();
-    // Free-only default now lists BOTH the :free model AND the configured
-    // $0-priced one (isFreeModelEntry honors inputPricePerMtok === 0).
+    // Free-only default now lists ONLY the configured $0-priced one
+    // (isFreeModelEntry honors inputPricePerMtok === 0).
     await waitFor(() =>
       expect(screen.getAllByRole("option").map((o) => o.getAttribute("title"))).toEqual([
-        "z-ai/glm-5.2:free",
         "openrouter/ox-alpha",
       ]),
     );
@@ -1192,29 +1211,41 @@ describe("Composer: model selector respects the models config (ROUND-58 R58-d)",
     expect(screen.getByText("1 paid model hidden — show all")).toBeTruthy();
   });
 
-  it("a failing config fetch falls back to the plain ids-only list (robust merge)", async () => {
+  it("a FAILING config fetch renders the honest error row — no catalog fallback (R64-d)", async () => {
     vi.mocked(fetchProviderModelConfig).mockRejectedValueOnce(
       new Error("models-config unreachable"),
     );
     await renderPanelWithConversation();
     expect(await screen.findByText("first question", {}, { timeout: 5000 })).toBeTruthy();
 
-    await openFlyout();
-    // Identical to the pre-R58 behavior: free-only rows, ids as labels.
+    fireEvent.click(screen.getByRole("button", { name: "Choose model" }));
+    await screen.findByRole("menu", { name: "Choose model" });
     await waitFor(() =>
-      expect(screen.getAllByRole("option").map((o) => o.textContent)).toEqual(["z-ai/glm-5.2:free"]),
+      expect(screen.getByRole("menuitem", { name: "Models of OpenRouter" })).toBeTruthy(),
     );
-    expect(screen.getByText("2 paid models hidden — show all")).toBeTruthy();
+    fireEvent.mouseEnter(screen.getByRole("menuitem", { name: "Models of OpenRouter" }));
+    await screen.findByRole("listbox", { name: "Models of OpenRouter" });
+    // The config (the flyout's only source) failed → the honest error row,
+    // NOT the old live-catalog ids-only fallback.
+    expect(
+      await screen.findByText("couldn't load this provider's models — check the connection and retry"),
+    ).toBeTruthy();
+    expect(screen.queryAllByRole("option")).toHaveLength(0);
+    expect(fetchProviderModels).not.toHaveBeenCalled();
   });
 });
 
-// ── ROUND-62 (R62-2b): session-page reflection of Models & Providers edits ──
-// The owner: "the changes applied there don't reflect properly on the agent
-// session page as they should". Two picker-side fixes: config-only rows
-// (models added by id in Settings that the live catalog doesn't list) JOIN
-// the flyout list, and providers DISABLED in Settings leave the popover.
-describe("Composer: model picker reflects Models & Providers edits (R62-2b)", () => {
-  /** Open the popover + hover the OpenRouter row → the flyout (F2 helper). */
+// ── ROUND-62 (R62-2b) → ROUND-64 (R64-d): session-page reflection of ──────
+// Models & Providers edits. R62-2b made the flyout a UNION (config-only
+// rows joined the live catalog, and disabled providers left the popover).
+// R64-d (owner: "only the models which I had added in the models and
+// providers Page should be shown") removed the catalog half: the flyout
+// lists EXACTLY the provider's config rows.
+describe("Composer: model picker reflects Models & Providers edits (R62-2b / R64-d)", () => {
+  /** Open the popover + hover the OpenRouter row → the flyout, settled: the
+   * R64-d config-only list renders honest ROWS (empty/error) when there is
+   * nothing to pick, so the wait is on "loading…" being gone — NOT on
+   * options existing. */
   async function openFlyout() {
     fireEvent.click(screen.getByRole("button", { name: "Choose model" }));
     await screen.findByRole("menu", { name: "Choose model" });
@@ -1223,12 +1254,10 @@ describe("Composer: model picker reflects Models & Providers edits (R62-2b)", ()
     );
     fireEvent.mouseEnter(screen.getByRole("menuitem", { name: "Models of OpenRouter" }));
     await screen.findByRole("listbox", { name: "Models of OpenRouter" });
-    await waitFor(() =>
-      expect(screen.getAllByRole("option").length).toBeGreaterThan(0),
-    );
+    await waitFor(() => expect(screen.queryByText("loading models…")).toBeNull());
   }
 
-  it("a models-config row NOT in the live catalog appears in the flyout — display name label, raw id pick (added by id in Settings)", async () => {
+  it("a config-only row (added by id in Settings) IS the list — display name label, raw id pick (R64-d)", async () => {
     // A $0-priced config-only row: free under the default free-only filter.
     vi.mocked(fetchProviderModelConfig).mockResolvedValue([
       modelConfigRow({
@@ -1242,10 +1271,10 @@ describe("Composer: model picker reflects Models & Providers edits (R62-2b)", ()
     expect(await screen.findByText("first question", {}, { timeout: 5000 })).toBeTruthy();
 
     await openFlyout();
-    // The config-only row rides AFTER the live rows (the union order)…
+    // The flyout lists EXACTLY the config rows — no live-catalog ids ride
+    // along anymore (the union order is gone with the union itself).
     await waitFor(() =>
       expect(screen.getAllByRole("option").map((o) => o.getAttribute("title"))).toEqual([
-        "z-ai/glm-5.2:free",
         "custom/manual-model",
       ]),
     );
@@ -1264,6 +1293,26 @@ describe("Composer: model picker reflects Models & Providers edits (R62-2b)", ()
     );
   });
 
+  it("a CATALOG-ONLY model is NOT listed — the live catalog no longer feeds the flyout (R64-d)", async () => {
+    // Config: only the manual row. The live-catalog mock still offers the
+    // 3-model mix — none of it may appear.
+    vi.mocked(fetchProviderModelConfig).mockResolvedValue([
+      modelConfigRow({ modelId: "custom/manual-model", inputPricePerMtok: 0 }),
+    ]);
+    await renderPanelWithConversation();
+    expect(await screen.findByText("first question", {}, { timeout: 5000 })).toBeTruthy();
+
+    await openFlyout();
+    const titles = screen.getAllByRole("option").map((o) => o.getAttribute("title"));
+    expect(titles).toEqual(["custom/manual-model"]);
+    for (const catalogOnly of MODELS) {
+      expect(titles).not.toContain(catalogOnly);
+    }
+    // The live-catalog fn is never even issued (the query was removed from
+    // the component — the mock only exists to prove the negative).
+    expect(fetchProviderModels).not.toHaveBeenCalled();
+  });
+
   it("a HIDDEN config-only row is excluded and counted in the honest footer note", async () => {
     vi.mocked(fetchProviderModelConfig).mockResolvedValue([
       modelConfigRow({ modelId: "custom/manual-model", hidden: true }),
@@ -1272,13 +1321,28 @@ describe("Composer: model picker reflects Models & Providers edits (R62-2b)", ()
     expect(await screen.findByText("first question", {}, { timeout: 5000 })).toBeTruthy();
 
     await openFlyout();
-    await waitFor(() =>
-      expect(screen.getAllByRole("option").map((o) => o.getAttribute("title"))).toEqual([
-        "z-ai/glm-5.2:free",
-      ]),
-    );
+    // The only config row is hidden → nothing selectable, the honest
+    // empty-state row points at Settings (NO catalog fallback)…
+    expect(screen.queryAllByRole("option")).toHaveLength(0);
     expect(screen.queryByTitle("custom/manual-model")).toBeNull();
+    expect(
+      screen.getByText("No models configured — add them in Settings → Models & Providers"),
+    ).toBeTruthy();
+    // …and the hidden-row footer note still counts it.
     expect(screen.getByText("1 model hidden in Settings")).toBeTruthy();
+  });
+
+  it("an EMPTY config renders the honest pointer row — no options, no catalog fallback (R64-d)", async () => {
+    vi.mocked(fetchProviderModelConfig).mockResolvedValue([]);
+    await renderPanelWithConversation();
+    expect(await screen.findByText("first question", {}, { timeout: 5000 })).toBeTruthy();
+
+    await openFlyout();
+    expect(
+      screen.getByText("No models configured — add them in Settings → Models & Providers"),
+    ).toBeTruthy();
+    expect(screen.queryAllByRole("option")).toHaveLength(0);
+    expect(fetchProviderModels).not.toHaveBeenCalled();
   });
 
   it("a provider DISABLED in Settings is absent from the popover (enabled one stays; the button keeps the current model)", async () => {

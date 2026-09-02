@@ -1,4 +1,4 @@
-<!-- last-reviewed: 2026-09-02 round-61 -->
+<!-- last-reviewed: 2026-09-02 round-64 -->
 # TESTING — the verification ladder
 
 Five layers; each has a defined "when mandatory". Rules here are binding
@@ -13,13 +13,13 @@ Five layers; each has a defined "when mandatory". Rules here are binding
 | L4 live battery | real provider turn(s), real disk, fresh DB | sandbox, single invocation | anything touching agents, projects, tools, streaming |
 | L5 browser verification | real UI against the live stack; screenshots machine-verified | sandbox, single invocation | any UI-affecting round |
 
-**Current counts (R62, verified 2026-09-02):** the root `pnpm test` =
-**1542 tests in 104 files** (all workspace suites from the root vite
-config; agent-core alone = **801/801 in 48 files**). Trajectory: 262 (R42)
+**Current counts (R64, verified 2026-09-02):** the root `pnpm test` =
+**1664 tests in 109 files** (all workspace suites from the root vite
+config; agent-core alone = **885/885 in 52 files**). Trajectory: 262 (R42)
 → 397 (R43) → 471 (R44) → 565 (R45) → 622 (R46) → 683 (R47) → 752 (R48) →
 815ish (R49) → 930 (R50) → 978 (R51) → 1035 (R52) → 1058 (R53) → 1071
 (R54–R56, launcher rounds) → 1169 (R58) → 1302 (R59) → 1348 (R60) → 1491
-(R61) → 1542 (R62).
+(R61) → 1542 (R62) → 1632 (R63) → 1664 (R64).
 
 **R62 (the owner-feedback round):** +50 root — the sidebar rail pair
 (Sidebar.test), the aspect-fit geometry 6 + the fit/zoom/readout 4
@@ -34,6 +34,19 @@ agent-core +14: the browser-tool D8 block 12 (read/eval/screenshot/tabs
 this round: a real model turn drove browser_control get_state/read/eval
 against the dev stack (the honest web-mode eval refusal verified), and
 the readiness probe honestly reported the headless sandbox.
+
+**R64 (the capability round):** +122 root — ChatMarkdown 23 (the block
+scanner + every block/inline kind + path pills + mid-stream partials),
+the mini window suite + the controller + the sidebar-removal absence
+assertions (~35), the delegated-row claim matching + subagent paths, the
+context-donut portal/live tests, the config-only picker reworks,
+approval-deps 5 + safe-list 8 (agent-core). agent-core +84: the windows
+backend 24+11+5+1 (scripts pinned by construction — EnumWindows/OutJson
+shapes/diagnostics), the resolver tiers + runningApps payload, the keys
+aggregate + slot threading + migration list, the estimator calibration
+table. The L5 battery ran LIVE: the app boots with zero console/page
+errors through onboarding → dashboard → usage → a fresh session chat,
+and mini.html renders its honest web-mode notice.
 
 **R54–R56 (launcher rounds, historical):** the JS suite sat at 1071/76 —
 R56's logic tests run in-sandbox against the real `acute_launcher.py`

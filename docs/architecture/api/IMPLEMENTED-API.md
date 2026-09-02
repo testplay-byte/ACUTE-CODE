@@ -1,4 +1,4 @@
-<!-- last-reviewed: 2026-09-02 round-63 -->
+<!-- last-reviewed: 2026-09-02 round-64 -->
 # IMPLEMENTED API — the shipped surface
 
 **Truth = this file.** Verified against `agent-core/src/server.ts` at
@@ -1022,3 +1022,47 @@ commands.
 shipped shape — the spec example is corrected to the real payload
 `{status, app, version}` (the shipped code is unchanged; the example was
 wrong, not the code).
+
+## ROUND-64 additions (implemented)
+
+The capability round — one REST surface extension (the per-key usage
+aggregate), plus payload EXTENSIONS to computer-use tool results (no route
+or signature changes).
+
+### `GET /usage/detailed` — the `keys` aggregate
+
+The response gained a `keys` array: the usage ledger grouped by
+`(provider, key_slot)` — each entry `{providerId, keySlot, requests,
+inputTokens, outputTokens, costUsd, lastUsedAt}`, ordered by cost
+descending. `keySlot` 0 = the provider's PRIMARY key; N ≥ 2 =
+`ACUTE_PROVIDER_<ID>_SLOT<N>` (the pool slots sub-agent children prefer).
+Backed by migration 0024 (`usage_events.key_slot INTEGER NOT NULL DEFAULT 0`
+— the default is the truthful reading of history: nothing recorded slots
+before R64, and pre-R64 rows genuinely ran on the primary) +
+`idx_usage_events_provider_slot`. The runtime threads the slot through
+`TurnDeps.keySlot` (the orchestrator sets it to the acquired pool slot for
+child runs; main sessions omit it → primary). The /usage screen's "API
+keys" section renders one card per key joined with
+`GET /providers/:id/keys` (the masked poolInfo).
+
+### Computer-use tool result extensions (same 30 tools, richer payloads)
+
+- `list_apps` rows gained **`processName`** (the executable name, from the
+  new EnumWindows-based enumeration) and the result carries
+  **`diagnostics`** when the list is empty (`processCount`,
+  `foregroundPid`, `enumWindowsCount`, `note`) — residual failures are
+  readable from the transcript.
+- `app_not_found` / `ambiguous_app_ref` refusals now carry a
+  **`runningApps` payload** (≤25 `{name, processName?, pid}` candidates)
+  so the model self-corrects in one step; app references resolve by
+  window title OR processName with substring matching (5-tier resolver).
+- `list_displays` failures are honest `[]` + diagnostics (the fake
+  1920×1080 fallback is REMOVED); single-display machines return REAL
+  bounds now (the PowerShell JSON array collapse is fixed — see
+  `docs/runbooks/COMPUTER-USE.md`).
+
+### Drift notes (none this round)
+
+No route/signature changes; `estimateTokens` consumers keep their exact
+signatures (the estimator internals changed — a calibrated GPT-style BPE
+approximation — but it remains a pure synchronous function).

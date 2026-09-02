@@ -369,6 +369,12 @@ class Orchestrator {
 
     // The child runs with a keyring VIEW of just its assigned slot — the
     // per-child key never leaks into other turns' scrubbing or lookups.
+    // ROUND-64 (R64-e): keySlot rides the same deps object — the child's
+    // runSingleAgentTurn/runStreamedAgentTurn read it and attribute every
+    // usage_events row to THIS slot (per-key stats on the /usage screen).
+    // The keyring VIEW already aliases slot 0 to the slot key, so
+    // prepareTurn's keyring.get(provider.id) resolves the child's key with
+    // no signature change — keySlot is purely the billing dimension.
     const slotKey = keyring.getPool(providerId).find((p) => p.slot === slot)?.key ?? "";
     const childKeyring = new ProviderKeyring({
       [ProviderKeyring.slotEnvVarName(providerId, slot)]: slotKey,
@@ -479,7 +485,10 @@ class Orchestrator {
       // fail-fast ask semantics (ROUND-48) — the streamed path REQUIRES an
       // emit, so no emit + chatStream still means sync (runStreamedAgentTurn
       // takes emit as a required argument).
-      const childDeps = { db, keyring: childKeyring, chat };
+      // ROUND-64 (R64-e): keySlot = the acquired slot — the child's usage rows
+      // land on the key that actually served them (0 only when the pool was
+      // empty and the child shares the primary).
+      const childDeps: TurnDeps = { db, keyring: childKeyring, chat, keySlot: slot };
       const outcome =
         chatStream !== undefined && wrappedEmit !== undefined
           ? await runStreamedAgentTurn(
@@ -656,7 +665,9 @@ class Orchestrator {
       // to stream on) → the sync fallback, exactly as before R50-b. A future
       // channel-backed retry (or a retried child inside a live streamed
       // parent turn) streams the retried attempt live instead.
-      const childDeps = { db, keyring: childKeyring, chat };
+      // ROUND-64 (R64-e): keySlot = the re-acquired slot — retried children
+      // attribute their (resumed) spend to the key serving THIS attempt.
+      const childDeps: TurnDeps = { db, keyring: childKeyring, chat, keySlot: slot };
       const outcome =
         chatStream !== undefined && wrappedEmit !== undefined
           ? await runStreamedAgentTurn(

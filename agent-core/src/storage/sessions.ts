@@ -464,12 +464,18 @@ export function lastSessionSeq(db: SqliteDatabase, sessionId: string): number {
 
 /** One billing line per completed model call; costUsd is 0 until estimation lands.
  * ROUND-50 (R50-c1): cachedInputTokens (the provider's cached prompt-token
- * count, null when unreported) persists into usage_events.cached_input_tokens. */
-export function recordUsage(db: SqliteDatabase, usage: UsageRecord): void {
+ * count, null when unreported) persists into usage_events.cached_input_tokens.
+ * ROUND-64 (R64-e): keySlot (migration 0024) — which key-pool slot served the
+ * call. 0 = the provider's primary key (the default: main-session turns and
+ * every caller that cannot know a slot); N ≥ 2 = the pool slot the
+ * orchestrator assigned a sub-agent child. Kept as a separate parameter (NOT
+ * on shared's UsageRecord) — the slot is a storage dimension, and shared
+ * stays message-shaped. */
+export function recordUsage(db: SqliteDatabase, usage: UsageRecord, keySlot = 0): void {
   db.prepare(
     `INSERT INTO usage_events
-      (agent_id, session_id, provider, model, input_tokens, output_tokens, cached_input_tokens, cost_usd, ts)
-     VALUES (@agentId, @sessionId, @provider, @model, @inputTokens, @outputTokens, @cachedInputTokens, @costUsd, @ts)`,
+      (agent_id, session_id, provider, model, input_tokens, output_tokens, cached_input_tokens, cost_usd, key_slot, ts)
+     VALUES (@agentId, @sessionId, @provider, @model, @inputTokens, @outputTokens, @cachedInputTokens, @costUsd, @keySlot, @ts)`,
   ).run({
     agentId: usage.agentId,
     sessionId: usage.sessionId,
@@ -479,6 +485,7 @@ export function recordUsage(db: SqliteDatabase, usage: UsageRecord): void {
     outputTokens: usage.outputTokens,
     cachedInputTokens: usage.cachedInputTokens ?? null,
     costUsd: usage.costUsd,
+    keySlot,
     ts: usage.ts,
   });
 }

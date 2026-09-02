@@ -123,14 +123,53 @@ export interface WindowScope {
   title: string;
 }
 
+/**
+ * ROUND-64-a (R64-a): honest-empty diagnostics. The owner's live Windows
+ * test got list_apps → [], list_displays → [] with NO explanation (the
+ * ConvertTo-Json array-collapse bug, since fixed) — a future empty must be
+ * debuggable FROM THE TRANSCRIPT, so the enumeration results carry why:
+ * what the backend actually saw (process count, foreground pid, the
+ * EnumWindows yield) and a note when a path degraded.
+ */
+export interface EnumerationDiagnostics {
+  /** Get-Process total when known (0 = not measured). */
+  processCount?: number;
+  /** The live foreground pid (null = could not read). */
+  foregroundPid?: number | null;
+  /** How many windows the EnumWindows walk yielded (-1 = failed/not run). */
+  enumWindowsCount?: number;
+  /** listWindows: is the target pid a live process? */
+  processRunning?: boolean;
+  /** listDisplays: how many screens AllScreens returned. */
+  screenCount?: number;
+  /** Why the result is empty / degraded — one honest sentence. */
+  note?: string;
+}
+
+export interface ListAppsResult {
+  apps: AppInfo[];
+  diagnostics?: EnumerationDiagnostics;
+}
+
+export interface ListWindowsResult {
+  windows: WindowInfo[];
+  diagnostics?: EnumerationDiagnostics;
+}
+
+export interface ListDisplaysResult {
+  displays: DisplayInfo[];
+  diagnostics?: EnumerationDiagnostics;
+}
+
 export interface CuaBackend {
   readonly kind: CuaBackendKind;
   capabilities(): BackendCapabilities;
 
-  // enumeration
-  listApps(run: RunCommand): Promise<AppInfo[]>;
-  listWindows(run: RunCommand, app: AppRef): Promise<WindowInfo[]>;
-  listDisplays(run: RunCommand): Promise<DisplayInfo[]>;
+  // enumeration (R64-a: wrapped results — the optional diagnostics ride
+  // alongside; plain-list backends just return the wrapper without them)
+  listApps(run: RunCommand): Promise<ListAppsResult>;
+  listWindows(run: RunCommand, app: AppRef): Promise<ListWindowsResult>;
+  listDisplays(run: RunCommand): Promise<ListDisplaysResult>;
 
   // observation
   buildSnapshot(

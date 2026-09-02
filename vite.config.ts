@@ -17,6 +17,10 @@ const appVersion = JSON.parse(readFileSync(new URL("./package.json", import.meta
 // URL.pathname) so the absolute input paths work on Windows drives too.
 const indexEntry = fileURLToPath(new URL("./index.html", import.meta.url));
 const popoutEntry = fileURLToPath(new URL("./popout.html", import.meta.url));
+// ROUND-64 (R64-b): the floating computer-use mini monitor's page — a THIRD
+// entry, same rules (build must land it in dist/ for WebviewUrl::App
+// ("mini.html") to resolve).
+const miniEntry = fileURLToPath(new URL("./mini.html", import.meta.url));
 
 export default defineConfig({
   plugins: [react(), tailwindcss()],
@@ -30,8 +34,9 @@ export default defineConfig({
     target: "es2022",
     outDir: "dist",
     rollupOptions: {
-      // Multi-page: the main app + the pop-out browser window's chrome page.
-      input: { index: indexEntry, popout: popoutEntry },
+      // Multi-page: the main app + the pop-out browser window's chrome page
+      // + the floating computer-use mini monitor page.
+      input: { index: indexEntry, popout: popoutEntry, mini: miniEntry },
     },
   },
   // Vitest runs every workspace's tests from this config. Default environment is

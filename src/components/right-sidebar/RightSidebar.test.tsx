@@ -250,6 +250,37 @@ describe("RightSidebar sub-agent picker (ROUND-48 R48-e2 code badges)", () => {
   });
 });
 
+describe("RightSidebar quick menu — ROUND-64 (R64-b): the Computer entry is GONE", () => {
+  it("the quick menu offers no Computer item (the floating monitor is the only computer surface)", async () => {
+    renderWithProviders(<RightSidebar projectId="prj_1" sessionId={null} />);
+
+    expect(await screen.findByText("No tabs open")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "New tab" }));
+
+    // The ROUND-61 entry (label "Computer", desc "Live desktop-control
+    // monitor + STOP") is fully absent — the always-on-top floating monitor
+    // window replaced the sidebar tab.
+    await screen.findByText("Browse the project's files");
+    expect(screen.queryByText("Computer")).toBeNull();
+    expect(screen.queryByText("Live desktop-control monitor + STOP")).toBeNull();
+
+    // Every OTHER quick-menu entry is untouched.
+    expect(screen.getByText("Browser")).toBeTruthy();
+    expect(screen.getByText("Terminal")).toBeTruthy();
+    expect(screen.getByText("Memory")).toBeTruthy();
+    expect(screen.getByText("Console")).toBeTruthy();
+  });
+
+  it("a persisted computer tab renders as no tab (the store surface no longer produces it)", () => {
+    // The tab type is gone from the store + the panel is deleted; the
+    // v3→v4 migration (right-sidebar-store.test.ts) sweeps persisted
+    // computer rows away. Nothing in the sidebar can create one anymore.
+    expect(
+      (useRightSidebarStore.getState() as unknown as Record<string, unknown>).openComputer,
+    ).toBeUndefined();
+  });
+});
+
 describe("RightSidebar popover vs native webview (R60-D z-index fix)", () => {
   /** The browser tab id the store generated for this test's sidebar. */
   function browserTabId(): string {

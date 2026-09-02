@@ -12,6 +12,7 @@ import {
   getDetailedUsage,
   getUsageSummary,
   type DetailedUsage,
+  type DetailedUsageKey,
   type DetailedUsageProject,
   type DetailedUsageSession,
   type UsageDayBucket,
@@ -293,6 +294,21 @@ describe("GET /api/v1/usage/detailed (ROUND-52 R52-b)", () => {
       { model: "test/model-2", calls: 1, tokens: { input: 200, output: 80, cached: 40 }, costUsd: 0.5 },
     ]);
 
+    // ROUND-64 (R64-e): the per-key rollup — all three rows defaulted to
+    // slot 0 (recordUsage called without a slot = the primary key), so the
+    // single entry carries the whole ledger for that provider × slot.
+    expect(detailed.keys).toEqual([
+      {
+        providerId: "openrouter",
+        keySlot: 0,
+        requests: 3,
+        inputTokens: 330,
+        outputTokens: 150,
+        costUsd: 0.8,
+        lastUsedAt: isoDaysAgo(0),
+      },
+    ]);
+
     // Projects: most-recently-active first; Alpha carries both sessions.
     expect(detailed.projects).toHaveLength(2);
     const alphaSection = detailed.projects.find((p) => p.id === alpha.id) as DetailedUsageProject;
@@ -441,5 +457,169 @@ describe("GET /api/v1/usage/detailed (ROUND-52 R52-b)", () => {
     expect(body.projects).toEqual([]);
     expect(body.tools).toEqual([]);
     expect(body.models).toEqual([]);
+    // ROUND-64 (R64-e): the keys rollup is empty (no usage rows), not absent.
+    expect(body.keys).toEqual([]);
+  });
+});
+
+/* ── ROUND-64 (R64-e, owner: "I want the ability to track each individual
+ * API key's stats, like the total usage of that API key, total tokens used
+ * on that API key"): usage_events.key_slot (migration 0024) — recordUsage's
+ * third parameter threads the orchestrator's pool slot; getDetailedUsage
+ * exposes the per-key rollup the /usage screen's "API keys" section renders. */
+
+describe("ROUND-64 (R64-e): per-key usage (recordUsage keySlot + detailed keys)", () => {
+  it("recordUsage defaults keySlot to 0 (primary) and persists an explicit slot", () => {
+    const session = createSession(db, { agentId: "agt_test", mode: "single" });
+    recordUsage(db, {
+      agentId: "agt_test",
+      sessionId: session.id,
+      provider: "openrouter",
+      model: "test/model-1",
+      inputTokens: 10,
+      outputTokens: 5,
+      costUsd: 0.01,
+      ts: isoDaysAgo(0),
+    });
+    recordUsage(
+      db,
+      {
+        agentId: "agt_test",
+        sessionId: session.id,
+        provider: "openrouter",
+        model: "test/model-1",
+        inputTokens: 20,
+        outputTokens: 8,
+        costUsd: 0.02,
+        ts: isoDaysAgo(1),
+      },
+      2,
+    );
+    const rows = db
+      .prepare("SELECT key_slot, input_tokens FROM usage_events ORDER BY key_slot")
+      .all() as Array<{ key_slot: number; input_tokens: number }>;
+    expect(rows).toEqual([
+      { key_slot: 0, input_tokens: 10 },
+      { key_slot: 2, input_tokens: 20 },
+    ]);
+  });
+
+  it("getDetailedUsage groups the keys rollup by provider × slot, cost-desc, with MAX(ts) as lastUsedAt", () => {
+    const session = createSession(db, { agentId: "agt_test", mode: "single" });
+    // Primary key (slot 0): two cheap calls.
+    recordUsage(db, {
+      agentId: "agt_test",
+      sessionId: session.id,
+      provider: "openrouter",
+      model: "test/model-1",
+      inputTokens: 100,
+      outputTokens: 50,
+      costUsd: 0.25,
+      ts: isoDaysAgo(2),
+    });
+    recordUsage(db, {
+      agentId: "agt_test",
+      sessionId: session.id,
+      provider: "openrouter",
+      model: "test/model-1",
+      inputTokens: 30,
+      outputTokens: 20,
+      costUsd: 0.05,
+      ts: isoDaysAgo(1),
+    }, 0);
+    // Pool slot 2: one expensive sub-agent burn (the orchestrator's child).
+    recordUsage(
+      db,
+      {
+        agentId: "agt_test",
+        sessionId: session.id,
+        provider: "openrouter",
+        model: "test/model-2",
+        inputTokens: 200,
+        outputTokens: 80,
+        costUsd: 0.5,
+        ts: isoDaysAgo(0),
+      },
+      2,
+    );
+    // A second provider entirely (the UI groups cards by provider).
+    recordUsage(
+      db,
+      {
+        agentId: "agt_test",
+        sessionId: session.id,
+        provider: "other",
+        model: "test/model-3",
+        inputTokens: 5,
+        outputTokens: 5,
+        costUsd: 0.4,
+        ts: isoDaysAgo(3),
+      },
+      3,
+    );
+
+    const detailed = getDetailedUsage(db, { days: 30 });
+    const keys: DetailedUsageKey[] = detailed.keys;
+    expect(keys).toEqual([
+      // Cost-desc: 0.5 (slot 2) > 0.4 (other provider slot 3) > 0.3 (primary).
+      {
+        providerId: "openrouter",
+        keySlot: 2,
+        requests: 1,
+        inputTokens: 200,
+        outputTokens: 80,
+        costUsd: 0.5,
+        lastUsedAt: isoDaysAgo(0),
+      },
+      {
+        providerId: "other",
+        keySlot: 3,
+        requests: 1,
+        inputTokens: 5,
+        outputTokens: 5,
+        costUsd: 0.4,
+        lastUsedAt: isoDaysAgo(3),
+      },
+      {
+        providerId: "openrouter",
+        keySlot: 0,
+        requests: 2, // the two primary rows aggregate
+        inputTokens: 130,
+        outputTokens: 70,
+        costUsd: 0.3,
+        lastUsedAt: isoDaysAgo(1), // MAX(ts) of the pair
+      },
+    ]);
+  });
+
+  it("serves the keys rollup over HTTP on GET /usage/detailed", async () => {
+    const session = createSession(db, { agentId: "agt_test", mode: "single" });
+    recordUsage(
+      db,
+      {
+        agentId: "agt_test",
+        sessionId: session.id,
+        provider: "openrouter",
+        model: "test/model-1",
+        inputTokens: 10,
+        outputTokens: 5,
+        costUsd: 0.02,
+        ts: isoDaysAgo(0),
+      },
+      2,
+    );
+    const response = await authInject("/api/v1/usage/detailed?days=7");
+    expect(response.statusCode).toBe(200);
+    expect(response.json().keys).toEqual([
+      {
+        providerId: "openrouter",
+        keySlot: 2,
+        requests: 1,
+        inputTokens: 10,
+        outputTokens: 5,
+        costUsd: 0.02,
+        lastUsedAt: isoDaysAgo(0),
+      },
+    ]);
   });
 });

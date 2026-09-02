@@ -39,6 +39,8 @@ const fakeRun: RunCommand = async (capsule) => {
 let mode: "ok" | "press-stale" | "frontmost-mismatch" | "launch-fail" | "capture-fail" = "ok";
 let fakeFrontmost: number | null = 4242;
 let rawRequiresForeground = true;
+/** R64-a: the resolver test's app table (mutable per-test). */
+let fakeApps: AppInfo[] = [{ name: "App", pid: 4242, active: true }];
 
 const ELEMENTS: Snapshot["elements"] = [
   { index: 0, kind: "window", name: "App", flags: [] },
@@ -61,10 +63,17 @@ const fakeBackend: CuaBackend = {
     rawRequiresForeground,
     permissionGates: [],
   }),
-  listApps: async () => [{ name: "App", pid: 4242, active: true }] as AppInfo[],
+  listApps: async () => ({
+    apps: fakeApps,
+    // R64-a: mimic the windows backend's honest-empty contract — diagnostics
+    // ride EMPTY results so the resolver/diagnostics tests can pin the flow.
+    ...(fakeApps.length === 0
+      ? { diagnostics: { processCount: 3, foregroundPid: 4242, enumWindowsCount: 0 } }
+      : {}),
+  }),
   listWindows: async () =>
-    [{ windowId: 77, title: "App Window", bounds: [10, 20, 800, 600], main: true, focused: true }] as WindowInfo[],
-  listDisplays: async () => [{ index: 1, bounds: [0, 0, 1920, 1080], main: true }],
+    ({ windows: [{ windowId: 77, title: "App Window", bounds: [10, 20, 800, 600] as [number, number, number, number], main: true, focused: true }] as WindowInfo[] }),
+  listDisplays: async () => ({ displays: [{ index: 1, bounds: [0, 0, 1920, 1080] as [number, number, number, number], main: true }] }),
   buildSnapshot: async (_run, app, window, detail) => ({
     stateId: "",
     app: { pid: app.pid, title: window.title },
@@ -134,6 +143,7 @@ function makeDispatcher(allowMutations = true): ComputerDispatcher {
   mode = "ok";
   fakeFrontmost = 4242;
   rawRequiresForeground = true;
+  fakeApps = [{ name: "App", pid: 4242, active: true }];
   return new ComputerDispatcher({ backend: fakeBackend, run: fakeRun, root: tempRoot, allowMutations });
 }
 
@@ -535,6 +545,144 @@ describe("ROUND-61 (R61): app_ref resolution (doc 03 §3)", () => {
     const d = makeDispatcher();
     const result = await d.dispatch("list_windows", { appRef: {} });
     expect(result.kind === "refusal" && result.refusal.error).toBe("app_not_found");
+  });
+});
+
+/* ── R64-a: the TIERED resolver (the 'Notepad' live failure) ─────────────── */
+
+describe("ROUND-64-a (R64-a): tiered app_ref resolution (title → processName → unique substring)", () => {
+  // The owner's live machine, abstracted: Notepad's TITLE is "Untitled - Notepad",
+  // its processName is "notepad"; Chrome runs alongside.
+  const NOTEPAD_APPS: AppInfo[] = [
+    { name: "Untitled - Notepad", processName: "notepad", pid: 111, active: true },
+    { name: "ACUTE-CODE — Mozilla Firefox", processName: "firefox", pid: 222, active: false },
+  ];
+
+  it("tier 2: the exact window TITLE still resolves (unchanged behavior)", async () => {
+    const d = makeDispatcher();
+    fakeApps = NOTEPAD_APPS;
+    const result = await d.dispatch("list_windows", { appRef: { name: "Untitled - Notepad" } });
+    expect(result.kind).toBe("data");
+  });
+
+  it("tier 3: the processName resolves — the get_app_state('Notepad') live failure, fixed", async () => {
+    const d = makeDispatcher();
+    fakeApps = NOTEPAD_APPS;
+    // "notepad" (the model's natural spelling) matches the process name.
+    const result = await d.dispatch("list_windows", { appRef: { name: "notepad" } });
+    expect(result.kind).toBe("data");
+  });
+
+  it("tier 4: a UNIQUE substring resolves ('Mozilla' ⊂ the Firefox title, not a processName)", async () => {
+    const d = makeDispatcher();
+    fakeApps = NOTEPAD_APPS;
+    const result = await d.dispatch("list_windows", { appRef: { name: "Mozilla" } });
+    expect(result.kind).toBe("data");
+  });
+
+  it("tier 3 ambiguous: TWO instances of the same exe (same processName) refuse ambiguous_app_ref", async () => {
+    const d = makeDispatcher();
+    fakeApps = [
+      { name: "Untitled - Notepad", processName: "notepad", pid: 111, active: true },
+      { name: "notes.txt - Notepad", processName: "notepad", pid: 333, active: false },
+    ];
+    const result = await d.dispatch("list_windows", { appRef: { name: "notepad" } });
+    expect(result.kind).toBe("refusal");
+    if (result.kind === "refusal") {
+      expect(result.refusal.error).toBe("ambiguous_app_ref");
+      const candidates = (result.refusal.payload as { candidates: Array<{ name: string; processName?: string; pid: number }> }).candidates;
+      expect(candidates).toHaveLength(2);
+      expect(candidates[0]).toEqual({ name: "Untitled - Notepad", processName: "notepad", pid: 111 });
+      expect(candidates[1]).toEqual({ name: "notes.txt - Notepad", processName: "notepad", pid: 333 });
+    }
+  });
+
+  it("tier 4 ambiguous: several SUBSTRING matches refuse ambiguous_app_ref LISTING the candidates", async () => {
+    const d = makeDispatcher();
+    fakeApps = [
+      { name: "Untitled - Notepad", processName: "notepad", pid: 111, active: true },
+      { name: "readme.txt - Notepad++", processName: "notepad++", pid: 555, active: false },
+    ];
+    // "pad" is a substring of both titles; neither processName equals it → tier 4.
+    const result = await d.dispatch("list_windows", { appRef: { name: "pad" } });
+    expect(result.kind).toBe("refusal");
+    if (result.kind === "refusal") {
+      expect(result.refusal.error).toBe("ambiguous_app_ref");
+      const candidates = (result.refusal.payload as { candidates: Array<{ name: string; processName?: string; pid: number }> }).candidates;
+      expect(candidates).toHaveLength(2);
+      expect(candidates[1]).toEqual({ name: "readme.txt - Notepad++", processName: "notepad++", pid: 555 });
+    }
+  });
+
+  it("tier 5: no match → app_not_found whose payload carries runningApps (capped at 25)", async () => {
+    const d = makeDispatcher();
+    fakeApps = Array.from({ length: 40 }, (_, i) => ({
+      name: `App ${i}`,
+      processName: `app${i}`,
+      pid: 1000 + i,
+      active: i === 0,
+    }));
+    const result = await d.dispatch("list_windows", { appRef: { name: "Ghost" } });
+    expect(result.kind).toBe("refusal");
+    if (result.kind === "refusal") {
+      expect(result.refusal.error).toBe("app_not_found");
+      const payload = result.refusal.payload as { runningApps: Array<{ name: string; processName?: string; pid: number }> };
+      expect(payload.runningApps).toHaveLength(25); // capped
+      expect(payload.runningApps[0]).toEqual({ name: "App 0", processName: "app0", pid: 1000 });
+      expect(result.refusal.recovery).toContain("runningApps");
+    }
+  });
+
+  it("tier 1: an exact pid resolves WITHOUT consulting the app list (even when absent)", async () => {
+    const d = makeDispatcher();
+    fakeApps = []; // empty list — the pid tier must not care
+    const result = await d.dispatch("list_windows", { appRef: { pid: 4242 } });
+    expect(result.kind).toBe("data");
+  });
+
+  it("an empty app list → app_not_found with an honest empty runningApps payload", async () => {
+    const d = makeDispatcher();
+    fakeApps = [];
+    const result = await d.dispatch("list_windows", { appRef: { name: "Anything" } });
+    expect(result.kind === "refusal" && result.refusal.error).toBe("app_not_found");
+    if (result.kind === "refusal") {
+      expect((result.refusal.payload as { runningApps: unknown[] }).runningApps).toEqual([]);
+    }
+  });
+});
+
+/* ── R64-a: honest diagnostics on EMPTY enumerations ─────────────────────── */
+
+describe("ROUND-64-a (R64-a): empty enumerations carry diagnostics (no silent [])", () => {
+  it("list_apps: empty + diagnostics → the tool result carries both {apps: [], diagnostics}", async () => {
+    const d = makeDispatcher();
+    fakeApps = [];
+    const result = await d.dispatch("list_apps", {});
+    expect(result.kind).toBe("data");
+    if (result.kind === "data") {
+      expect(result.data["apps"]).toEqual([]);
+      expect(result.data["diagnostics"]).toEqual({ processCount: 3, foregroundPid: 4242, enumWindowsCount: 0 });
+    }
+  });
+
+  it("list_apps: NON-empty result carries NO diagnostics key (tight output)", async () => {
+    const d = makeDispatcher();
+    const result = await d.dispatch("list_apps", {});
+    expect(result.kind).toBe("data");
+    if (result.kind === "data") {
+      expect((result.data["apps"] as unknown[]).length).toBeGreaterThan(0);
+      expect(result.data["diagnostics"]).toBeUndefined();
+    }
+  });
+
+  it("list_displays: empty + diagnostics → {displays: [], diagnostics}", async () => {
+    const d = makeDispatcher();
+    const result = await d.dispatch("list_displays", {});
+    expect(result.kind).toBe("data");
+    if (result.kind === "data") {
+      expect((result.data["displays"] as unknown[]).length).toBe(1); // fake backend: one display
+      expect(result.data["diagnostics"]).toBeUndefined();
+    }
   });
 });
 

@@ -1,4 +1,4 @@
-<!-- last-reviewed: 2026-09-02 round-61 -->
+<!-- last-reviewed: 2026-09-02 round-64 -->
 # COMPUTER USE — the desktop-control system (owner's guide)
 
 **Status:** normative · **Established:** round-61 (owner directive: computer
@@ -159,18 +159,26 @@ automatically.
 
 ## The monitor (watching the agent work)
 
-- **Right-sidebar "Computer" tab** — the full feed: status chip
-  (OFF/STOPPED/LIVE/Idle), four stat cells (actions sent / refused /
-  observations / vision calls), the elapsed clock + backend, the
-  newest-first event ring (kind icon, label, tool chip, refusal-code chip),
-  and the STOP kill switch.
-- **The floating mini window** (pop-out button in the panel footer; app-wide,
-  draggable, 340 px card) — the same feed condensed: what it's doing now,
-  how it's going (stats + refusal/vision spotlights), and a full-width STOP.
+ROUND-64: **the surface is the ALWAYS-ON-TOP floating monitor** — the
+right-sidebar "Computer" tab is REMOVED (one surface, and it must be
+reachable while the agent drives OTHER apps):
+
+- **Desktop app**: a 360×96 frameless OS window (`acute-computer-mini`)
+  that floats ABOVE EVERYTHING (always-on-top, never in the taskbar, never
+  steals focus), parked top-right of the monitor you're looking at. The
+  minimal bar: pulsing status dot + "Agent is using your computer" +
+  elapsed timer + the latest activity + the STOP kill switch. It appears
+  AUTOMATICALLY the moment the agent starts using the computer (the first
+  live tool frame) and disappears when the session ends (~6-8s grace).
+  Drag it by its header.
+- **Web mode**: the same minimal bar as an in-app pill at the top-center
+  of the window (auto-shown/hidden the same way).
 - **Data path**: every tool execution emits one `{type:"computer-use"}` SSE
-  frame at dispatch time (live, zero polling latency, works even for
-  background turns) + the panel polls `GET /computer-use/session`
-  (2 s while active, 10 s idle) for the authoritative ring + stats.
+  frame at dispatch time (live, zero polling latency) — the main app's
+  controller watches these to open/close the OS window; the mini window
+  itself polls `GET /computer-use/session` every second (its own bearer
+  token via the shell) so it stays honest even if the main window is
+  backgrounded.
 - **STOP** = `POST /computer-use/stop`: the kill switch engages, a held
   button (if any) is released with a real mouse-up at its recorded point,
   and every further computer-use call refuses with `kill_switch_active`
@@ -272,7 +280,11 @@ is tested against an injected fake backend, and the plugin tests run the
 real Linux backend on a headless host where GUI probes fail closed (the
 shape contracts are pinned, the live GUI paths are NOT). The Windows and
 macOS backends are code-complete per the spec but have NEVER run on live
-hardware. **The owner must live-verify on the real machine before relying
+hardware — **the owner's 0.63.0 run was the FIRST live Windows exercise
+and surfaced the R64 bug set (empty app lists, exact-title resolution) —
+now fixed by construction with diagnostics on every empty result.** The
+checklist below is how the 0.64.0 fixes get verified. **The owner must
+live-verify on the real machine before relying
 on computer use.** Per platform, in order:
 
 1. Flip the master switch ON (Settings → Computer Use) and press
@@ -285,9 +297,15 @@ on computer use.** Per platform, in order:
    X app's About button"*) — expect the approval prompt, then a receipt and
    a visible click. Try a refusal path too: a coordinate click with the app
    in the background should refuse `frontmost_pid_mismatch` (Win/Linux).
-5. Open the **mini window** and press **STOP** mid-task — expect every
-   further computer-use call to refuse `kill_switch_active` and any held
-   button released.
+5. Watch the **floating monitor** appear automatically at the top of your
+   screen when the agent starts using the computer (above other apps), and
+   press **STOP** mid-task — expect every further computer-use call to
+   refuse `kill_switch_active`, any held button released, and the monitor
+   to disappear a few seconds after the session ends.
+6. If a list comes back EMPTY, read the result's `diagnostics` block
+   (processCount / foregroundPid / enumWindowsCount) — it exists precisely
+   so a failure is debuggable from the transcript; an `app_not_found`
+   refusal lists the running apps as candidates.
 
 If any step refuses unexpectedly, the refusal's message + recovery line is
 the diagnosis; the engine log (sidecar log; `sidecar_log_tail` in the

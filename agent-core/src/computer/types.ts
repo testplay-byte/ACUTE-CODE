@@ -27,7 +27,12 @@ export interface AppRef {
 }
 
 export interface AppInfo {
+  /** The window TITLE of the app's main (largest) window — NOT the exe name. */
   name: string;
+  /** R64-a: the OS process/executable name (Windows: ProcessName, e.g.
+   * "notepad") — the second resolution key for app refs ("Untitled - Notepad"
+   * never exact-matches a model's "Notepad"; "notepad" does). */
+  processName?: string;
   bundleId?: string;
   pid: number;
   active: boolean;

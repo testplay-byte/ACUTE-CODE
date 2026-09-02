@@ -8,7 +8,6 @@ import {
   Files,
   FolderTree,
   Globe,
-  Monitor,
   Plus,
   Terminal as TerminalIcon,
   X,
@@ -34,9 +33,11 @@ import { SubAgentPanel } from "./SubAgentPanel";
 import { MemoryPanel } from "./MemoryPanel";
 // ROUND-59 (R59-E): the diagnostics console tab panel (error monitoring).
 import { ConsolePanel } from "./ConsolePanel";
-// ROUND-61 (R61): the computer-use monitor tab panel — live event ring +
-// stats + the STOP kill switch + the floating mini-window pop-out.
-import { ComputerPanel } from "./ComputerPanel";
+// ROUND-64 (R64-b): the ROUND-61 computer-use monitor tab panel is DELETED —
+// the always-on-top floating monitor window (src-tauri/src/mini.rs +
+// src/mini/**, auto-opened by ComputerMiniWindow on live activity) is the
+// only computer-use surface now (owner: "There is actually no need to show
+// the computer use in the right sidebar menu at all").
 import { fetchSubAgents, type SubAgentStatus } from "../../lib/api";
 // R60-D: hide the active browser tab's native webview while the quick-menu
 // / sub-agent-picker popover is open — native child webviews are OS layers
@@ -71,8 +72,6 @@ const TAB_ICON: Record<RightSidebarTabType, typeof Files> = {
   memory: Brain,
   // ROUND-59 (R59-E): the diagnostics console (error monitoring) tab.
   console: Activity,
-  // ROUND-61 (R61): the computer-use monitor tab.
-  computer: Monitor,
 };
 
 const ROLE_COLORS: Record<string, string> = {
@@ -117,8 +116,6 @@ export function RightSidebar({
   const openMemory = useRightSidebarStore((s) => s.openMemory);
   // ROUND-59 (R59-E): the diagnostics console quick-menu action.
   const openConsole = useRightSidebarStore((s) => s.openConsole);
-  // ROUND-61 (R61): the computer-use monitor quick-menu action.
-  const openComputer = useRightSidebarStore((s) => s.openComputer);
   // ROUND-48 (R48-c): the file-explorer quick-menu action.
   const openFiles = useRightSidebarStore((s) => s.openFiles);
   const openSubAgent = useRightSidebarStore((s) => s.openSubAgent);
@@ -492,10 +489,6 @@ export function RightSidebar({
                         } else if (type === "console") {
                           // R59-E: the diagnostics console — error monitoring.
                           openConsole(projectId);
-                        } else if (type === "computer") {
-                          // R61: the computer-use monitor (live desktop-control
-                          // activity + the STOP kill switch + mini window).
-                          openComputer(projectId);
                         } else if (type === "subagent") {
                           setSubAgentPickerFor("subagent");
                         }
@@ -560,10 +553,6 @@ export function RightSidebar({
         ) : activeTab.type === "console" ? (
           // ROUND-59 (R59-E): the diagnostics console (error monitoring).
           <ConsolePanel projectId={projectId} tab={activeTab} />
-        ) : activeTab.type === "computer" ? (
-          // ROUND-61 (R61): the computer-use monitor (live ring + STOP +
-          // the floating mini-window pop-out).
-          <ComputerPanel projectId={projectId} tab={activeTab} />
         ) : (
           <SubAgentPanel tab={activeTab} />
         )}
@@ -618,10 +607,6 @@ function QuickMenu({
     // ROUND-59 (R59-E): the diagnostics console — the owner's "console-like
     // error monitoring and error handling" directive.
     { type: "console", label: "Console", icon: Activity, desc: "Error monitoring — frontend + engine" },
-    // ROUND-61 (R61): the computer-use monitor — live desktop-control
-    // activity, stats, and the STOP kill switch (the owner's mini-window
-    // directive; the panel pops the floating window out).
-    { type: "computer", label: "Computer", icon: Monitor, desc: "Live desktop-control monitor + STOP" },
   ];
   if (hasSubs) {
     items.push({

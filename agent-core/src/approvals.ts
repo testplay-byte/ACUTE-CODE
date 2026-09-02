@@ -17,6 +17,13 @@
  *   stale pending rows expired — fail-closed).
  * - Sync turns + sub-agent children are NON-interactive: a non-safe command
  *   fails fast with a clear note (no 120s burn).
+ *
+ * ROUND-64 (R64-d): (1) buildApprovalDeps' permissionMode is now a LIVE
+ * GETTER re-reading the session row — mid-turn mode changes reach the
+ * in-flight turn's gates (see tools/approval-deps.ts); (2) the AUTO list
+ * grew with provably read-only search/inspection + Windows commands, and
+ * matching runs on a whitespace-normalized, word-boundary-checked copy (the
+ * ORIGINAL command still flows to execution untouched).
  */
 import { randomUUID } from "node:crypto";
 import type { PermissionMode, ToolPermission } from "shared";
@@ -38,14 +45,35 @@ export const APPROVAL_TIMEOUT_MS = 120_000;
  * ROUND-37 amendment #1: `npm install`, `git commit`, `git add`, `yarn`,
  * `pip`, `go run` etc. MOVED to "ask" (first use; rule-able afterwards);
  * `env` (dumps non-keyring secrets) and `echo` (pointless as an agent tool)
- * were dropped from auto entirely. */
+ * were dropped from auto entirely.
+ *
+ * ROUND-64 (R64-d, owner: "for normal safe commands it does not need to
+ * ask for permission… like for search commands"): the read-only set grew to
+ * cover the commands the agent actually runs on the owner's WINDOWS
+ * machine + the common search tools. Every entry is PROVABLY read-only —
+ * no writes, no network, no installs, no arbitrary code execution
+ * (sed/awk/powershell -command/wmic/xargs/tee are deliberately NOT here;
+ * fd/find exec-style flags are demoted separately — see hasFdFindExecFlag).
+ * Entries are matched on a WORD BOUNDARY (matchesAutoPrefix: end or space
+ * after the entry), so bare `rg` finally auto-runs and "rgx" does not;
+ * they carry no trailing spaces anymore. */
 const AUTO_PREFIXES: readonly string[] = [
   // listing / reading / searching
-  "ls", "dir", "cat", "type", "head", "tail", "wc", "find", "grep", "rg ", "which", "where",
+  "ls", "dir", "cat", "type", "head", "tail", "wc", "find", "grep", "rg", "which", "where",
+  // ROUND-64 (R64-d): search/navigation + inspection tools (read-only)
+  "fd", "ag", "ack", "command -v", "whereis", "file", "stat", "du", "df",
+  "tree", "more", "fc", "md5sum", "sha256sum", "uname", "whoami",
+  // ROUND-64 (R64-d): Windows/PowerShell READ-ONLY cmdlets + probes
+  "get-childitem", "get-content", "get-item", "get-process", "get-service",
+  "get-date", "get-command", "select-string", "findstr", "tasklist",
+  "systeminfo", "ver",
   // version probes
   "node --version", "npm --version", "pnpm --version", "python --version", "python3 --version",
   // read-only git
   "git status", "git diff", "git log", "git branch", "git show", "git tag",
+  // ROUND-64 (R64-d): read-only git extras
+  "git grep", "git remote -v", "git ls-files", "git stash list",
+  "git describe", "git rev-parse", "git shortlog", "git blame",
   // tests + builds + lints (no installs, no dev servers)
   "npm test", "npm run test", "pnpm test", "pnpm run test", "yarn test",
   "vitest", "jest", "tsc", "npx tsc",
@@ -56,6 +84,33 @@ const AUTO_PREFIXES: readonly string[] = [
   // harmless info
   "pwd", "date", "help",
 ];
+
+/** ROUND-64 (R64-d): prefix match on the WORD BOUNDARY — the entry must be
+ * followed by end-of-string or a space. Bare `rg` auto-runs, `rg pattern`
+ * auto-runs, but "rgx" / "rgexec" do NOT (the old "rg " trailing-space
+ * entry missed the bare form; a bare "rg" entry without a boundary check
+ * would over-match). */
+function matchesAutoPrefix(lowered: string, prefix: string): boolean {
+  if (!lowered.startsWith(prefix)) return false;
+  return lowered.length === prefix.length || lowered[prefix.length] === " ";
+}
+
+/** ROUND-64 (R64-d): fd and find have EXEC/DELETE/FILE-WRITE flag forms
+ * (`fd -x rm`, `find . -delete`, `find . -name x -exec rm {} ;`) that turn a
+ * "read-only search" into arbitrary execution — this round's own safety
+ * review of the widened list. Those forms demote the auto tier to ASK
+ * (fail-closed); plain searches stay auto. */
+function hasFdFindExecFlag(normalized: string): boolean {
+  const tokens = normalized.split(" ");
+  if (tokens[0] !== "fd" && tokens[0] !== "find") return false;
+  return tokens.slice(1).some(
+    (token) =>
+      token === "-x" || token === "-X" || token === "--exec" || token === "--exec-batch" ||
+      token === "-exec" || token === "-execdir" || token === "-ok" || token === "-okdir" ||
+      token === "-delete" || token === "-fprint" || token === "-fprint0" ||
+      token === "-fprintf" || token === "-fls",
+  );
+}
 
 /** Commands that NEVER run — destructive, system-level, or network risk. */
 const BLOCKED_PREFIXES: readonly string[] = [
@@ -103,9 +158,20 @@ function splitCompound(command: string): string[] {
     .filter((segment) => segment !== "");
 }
 
+/** ROUND-64 (R64-d): the MATCHING copy of a command — leading/trailing
+ * whitespace stripped, internal runs collapsed to single spaces, lowercased.
+ * The ORIGINAL string is untouched and still flows to execution — only the
+ * matching copy is normalized — so "git  remote -v" (double space) matches
+ * the "git remote -v" prefix, "RG  PATTERN" matches "rg", and multi-word
+ * prefixes stay robust. */
+function normalizeForMatch(action: string): string {
+  return action.trim().replace(/\s+/g, " ").toLowerCase();
+}
+
 /** The policy tier for a command (pure — no DB, no environment). */
 export function categorize(action: string): ActionCategory {
-  const normalized = action.trim();
+  // ROUND-64 (R64-d): normalization for MATCHING only (see normalizeForMatch).
+  const normalized = normalizeForMatch(action);
   const segments = splitCompound(normalized);
   if (segments.length > 1) {
     // REVIEW B1 (compound bypass): a compound command can hide a blocked
@@ -121,16 +187,18 @@ export function categorize(action: string): ActionCategory {
     }
     return worst === "auto" ? "confirm" : worst;
   }
-  const lowered = normalized.toLowerCase();
   if (hasRecursiveOrForceRm(normalized)) return "blocked";
   for (const pattern of BLOCKED_PATTERNS) {
     if (pattern.test(normalized)) return "blocked";
   }
-  if (BLOCKED_PREFIXES.some((p) => lowered.startsWith(p))) return "blocked";
+  if (BLOCKED_PREFIXES.some((p) => normalized.startsWith(p))) return "blocked";
   for (const pattern of DESTRUCTIVE_PATTERNS) {
     if (pattern.test(normalized)) return "destructive";
   }
-  if (AUTO_PREFIXES.some((p) => lowered.startsWith(p))) return "auto";
+  // ROUND-64 (R64-d): word-boundary matching + the fd/find exec-flag demotion.
+  if (AUTO_PREFIXES.some((p) => matchesAutoPrefix(normalized, p))) {
+    return hasFdFindExecFlag(normalized) ? "confirm" : "auto";
+  }
   return "confirm";
 }
 

@@ -2,7 +2,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { cleanup, fireEvent, screen } from "@testing-library/react";
 import { Route, Routes } from "react-router";
-import { fetchDetailedUsage } from "../../lib/api";
+import { fetchDetailedUsage, fetchKeyPool, fetchProviders, type KeyPoolSlot, type ProviderView } from "../../lib/api";
 import { UsageScreen } from "./UsageScreen";
 import { useConfigStore } from "../../lib/config-store";
 import { renderWithProviders, resetTestState } from "../../test-utils";
@@ -10,11 +10,16 @@ import type { DetailedUsage } from "../../lib/api";
 
 // The screen is a VIEW over GET /usage/detailed — the api module is mocked
 // exactly as the sidecar shapes it (the live-mode hook drives the fetch).
+// ROUND-64 (R64-e): fetchProviders + fetchKeyPool are mocked too — the
+// "API keys" section joins the detailed-usage keys rollup with the
+// providers list + masked key pools.
 vi.mock("../../lib/api", async (importOriginal) => {
   const original = await importOriginal<typeof import("../../lib/api")>();
   return {
     ...original,
     fetchDetailedUsage: vi.fn(),
+    fetchProviders: vi.fn(),
+    fetchKeyPool: vi.fn(),
   };
 });
 
@@ -26,6 +31,10 @@ beforeEach(() => {
   // usage log) — flip the store so the mocked fetch actually executes.
   useConfigStore.setState({ demoData: false });
   vi.mocked(fetchDetailedUsage).mockReset().mockResolvedValue(emptyDetailedUsage());
+  // ROUND-64 (R64-e): no providers / no keys by default — the existing
+  // fixtures exercise the sections without the keys join.
+  vi.mocked(fetchProviders).mockReset().mockResolvedValue([]);
+  vi.mocked(fetchKeyPool).mockReset().mockResolvedValue([]);
 });
 
 /** The /usage route with a stub chat target so session navigation is observable. */
@@ -60,6 +69,8 @@ function emptyDetailedUsage(): DetailedUsage {
     },
     tools: [],
     models: [],
+    // ROUND-64 (R64-e): empty keys rollup (no usage rows).
+    keys: [],
     projects: [],
     generatedAt: "2025-06-02T12:00:00.000Z",
   };
@@ -90,6 +101,28 @@ function seededDetailedUsage(): DetailedUsage {
         calls: 3,
         tokens: tokens(330, 150, 50),
         costUsd: 0.8,
+      },
+    ],
+    // ROUND-64 (R64-e): the per-key rollup — primary spent $0.30, pool slot 2
+    // (the sub-agent child) spent $0.50. Cost-desc order like the server.
+    keys: [
+      {
+        providerId: "openrouter",
+        keySlot: 2,
+        requests: 1,
+        inputTokens: 200,
+        outputTokens: 80,
+        costUsd: 0.5,
+        lastUsedAt: "2025-06-02T10:00:00.000Z",
+      },
+      {
+        providerId: "openrouter",
+        keySlot: 0,
+        requests: 2,
+        inputTokens: 130,
+        outputTokens: 70,
+        costUsd: 0.3,
+        lastUsedAt: "2025-06-02T09:30:00.000Z",
       },
     ],
     projects: [
@@ -181,9 +214,10 @@ describe("UsageScreen (ROUND-52 R52-b)", () => {
     expect(screen.getByRole("button", { name: "Last 30 days" })).toBeTruthy();
 
     // Overview stat cards (await — the skeleton yields to data once the
-    // mocked fetch resolves).
+    // mocked fetch resolves). ROUND-64 (R64-e): the API-keys cards also
+    // label "Requests" — the overview assertion reads ALL of them.
     expect(await screen.findByText("Tokens")).toBeTruthy();
-    expect(screen.getByText("Requests")).toBeTruthy();
+    expect(screen.getAllByText("Requests").length).toBeGreaterThanOrEqual(1);
     expect(screen.getByText("Sessions")).toBeTruthy();
     expect(screen.getByText("Tool calls")).toBeTruthy();
 
@@ -234,5 +268,87 @@ describe("UsageScreen (ROUND-52 R52-b)", () => {
 
     expect(await screen.findByText(/No usage yet — start a conversation/i)).toBeTruthy();
     expect(screen.queryByText("Tokens")).toBeNull(); // stat cards stay hidden
+  });
+});
+
+/* ── ROUND-64 (R64-e): the "API keys" section — per-key cards joining the
+ * detailed-usage keys rollup with the providers list + masked key pools. */
+
+const OPENROUTER_VIEW: ProviderView = {
+  id: "openrouter",
+  name: "OpenRouter",
+  kind: "openai-compatible",
+  baseUrl: "https://openrouter.ai/api/v1",
+  apiFormat: "chat-completions",
+  enabled: true,
+  createdAt: "2025-01-01T00:00:00.000Z",
+  hasKey: true,
+};
+
+function pool(slots: KeyPoolSlot[]): KeyPoolSlot[] {
+  return slots;
+}
+
+describe("UsageScreen API keys section (ROUND-64 R64-e)", () => {
+  it("renders one card per key: usage slots, configured-but-unused slots, masked previews and stats", async () => {
+    vi.mocked(fetchDetailedUsage).mockResolvedValue(seededDetailedUsage());
+    vi.mocked(fetchProviders).mockResolvedValue([OPENROUTER_VIEW]);
+    // The keyring holds the primary + SLOT2 (both used) and SLOT3 (never
+    // used) — the section must show all three.
+    vi.mocked(fetchKeyPool).mockResolvedValue(
+      pool([
+        { slot: 0, hasKey: true, masked: "sk-o…36a" },
+        { slot: 2, hasKey: true, masked: "sk-o…36b" },
+        { slot: 3, hasKey: true, masked: "sk-o…36c" },
+      ]),
+    );
+    renderUsageScreen();
+
+    // Section header: count + all-time cost of the shown keys.
+    expect(await screen.findByRole("region", { name: "API keys" })).toBeTruthy();
+    expect(screen.getByText("3 keys · $0.80 all-time")).toBeTruthy();
+
+    // Provider name + the three slot labels (slot 0 = Primary key).
+    expect(screen.getAllByText("OpenRouter").length).toBe(3);
+    expect(screen.getByText("Primary key")).toBeTruthy();
+    expect(screen.getByText("Pool slot 2")).toBeTruthy();
+    expect(screen.getByText("Pool slot 3")).toBeTruthy();
+
+    // Masked previews (mono, from GET /providers/:id/keys).
+    expect(screen.getByText("sk-o…36a")).toBeTruthy();
+    expect(screen.getByText("sk-o…36b")).toBeTruthy();
+
+    // Usage stats: the pool-slot-2 card (cost-desc first) carries its rollup.
+    expect(screen.getAllByText("$0.50").length).toBeGreaterThanOrEqual(1);
+    expect(screen.getAllByText("$0.30").length).toBeGreaterThanOrEqual(1);
+
+    // The configured-but-unused key shows its honest "not used yet" note.
+    expect(screen.getByText(/Not used yet/i)).toBeTruthy();
+  });
+
+  it("flags usage on a slot the keyring no longer holds as a removed key", async () => {
+    vi.mocked(fetchDetailedUsage).mockResolvedValue(seededDetailedUsage());
+    vi.mocked(fetchProviders).mockResolvedValue([OPENROUTER_VIEW]);
+    // Only the primary is held — slot 2's spend is real but its key is gone.
+    vi.mocked(fetchKeyPool).mockResolvedValue(pool([{ slot: 0, hasKey: true, masked: "sk-o…36a" }]));
+    renderUsageScreen();
+
+    expect(await screen.findByText("removed key")).toBeTruthy();
+    // The removed card still shows its spend (honest accounting).
+    expect(screen.getByText("Pool slot 2")).toBeTruthy();
+    expect(screen.getByText("$0.50")).toBeTruthy();
+  });
+
+  it("shows configured keys below the empty state (zeros + not used yet)", async () => {
+    vi.mocked(fetchDetailedUsage).mockResolvedValue(emptyDetailedUsage());
+    vi.mocked(fetchProviders).mockResolvedValue([OPENROUTER_VIEW]);
+    vi.mocked(fetchKeyPool).mockResolvedValue(pool([{ slot: 0, hasKey: true, masked: "sk-o…36a" }]));
+    renderUsageScreen();
+
+    // The empty ledger state renders AND the configured key's card below it.
+    expect(await screen.findByText(/No usage yet — start a conversation/i)).toBeTruthy();
+    expect(await screen.findByText(/Not used yet/i)).toBeTruthy();
+    expect(screen.getByText("Primary key")).toBeTruthy();
+    expect(screen.getByText("1 key · $0.00 all-time")).toBeTruthy();
   });
 });

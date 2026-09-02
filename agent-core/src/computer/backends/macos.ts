@@ -80,7 +80,7 @@ tell application "System Events"
   return out
 end tell`;
     const result = await run(osaCapsule(source, 10000));
-    if (result.code !== 0) return [];
+    if (result.code !== 0) return { apps: [] };
     const apps: AppInfo[] = [];
     for (const line of result.stdout.split("\n")) {
       const parts = line.trim().split("\t");
@@ -89,11 +89,11 @@ end tell`;
       if (!Number.isFinite(pid)) continue;
       apps.push({ name: parts[0], pid, active: parts[2] === "true" });
     }
-    return apps;
+    return { apps };
   },
 
   async listWindows(run, app) {
-    if (app.pid === undefined) return [];
+    if (app.pid === undefined) return { windows: [] };
     const source = `
 tell application "System Events"
   set p to first process whose unix id is ${app.pid}
@@ -108,7 +108,7 @@ tell application "System Events"
   return out
 end tell`;
     const result = await run(osaCapsule(source, 10000));
-    if (result.code !== 0) return [];
+    if (result.code !== 0) return { windows: [] };
     const windows: WindowInfo[] = [];
     for (const line of result.stdout.split("\n")) {
       const parts = line.trim().split("\t");
@@ -123,18 +123,18 @@ end tell`;
         focused: false,
       });
     }
-    return windows;
+    return { windows };
   },
 
   async listDisplays(run) {
     const source = `tell application "Finder" to get bounds of window of desktop`;
     const result = await run(osaCapsule(source, 8000));
-    if (result.code !== 0) return [{ index: 1, bounds: [0, 0, 1920, 1080], main: true }];
+    if (result.code !== 0) return { displays: [{ index: 1, bounds: [0, 0, 1920, 1080], main: true }] };
     const nums = result.stdout.trim().split(",").map((n) => Number.parseInt(n.trim(), 10));
     if (nums.length !== 4 || nums.some((n) => !Number.isFinite(n))) {
-      return [{ index: 1, bounds: [0, 0, 1920, 1080], main: true }];
+      return { displays: [{ index: 1, bounds: [0, 0, 1920, 1080], main: true }] };
     }
-    return [{ index: 1, bounds: [nums[0], nums[1], nums[2] - nums[0], nums[3] - nums[1]], main: true }];
+    return { displays: [{ index: 1, bounds: [nums[0], nums[1], nums[2] - nums[0], nums[3] - nums[1]], main: true }] };
   },
 
   async buildSnapshot(run, app, window, detail) {

@@ -12,7 +12,6 @@ import {
   Check,
   Copy,
   File,
-  FileCode,
   FolderOpen,
   GitBranch,
   History,
@@ -38,6 +37,7 @@ import {
 } from "../../hooks/use-sessions";
 import { CommandPalette } from "./CommandPalette";
 import { ConfirmDialog } from "../agents/ConfirmDialog";
+import { ChatMarkdown } from "./ChatMarkdown";
 import {
   BareWorkingEntries,
   WorkingSection,
@@ -603,216 +603,92 @@ function UserMessage({
   );
 }
 
-/** Inline code block renderer with copy button (round-24: Kilo Code parity). */
-function CodeBlock({ code }: { code: string }) {
+/** Inline code block renderer with copy button (round-24: Kilo Code parity).
+ * ROUND-64 (R64-c): CodeBlock, PathPill + the path-matching helpers MOVED to
+ * src/components/project-chat/ChatMarkdown.tsx (the new markdown renderer
+ * owns them; nothing here duplicated them) — the old RichText/RichTextInline
+ * pair is fully superseded by ChatMarkdown and deleted. */
+
+/** ROUND-64 (R64-c): one ordered slice of a turn's working entries — a
+ * contiguous run of non-text entries (→ one WorkingSection, or a bare block
+ * when the run has no tools) or a single intermediate assistant text entry
+ * (→ a full markdown answer block that is ALWAYS visible, never collapsed).
+ * Owner: "It started to think and after thinking it showed me the bottom
+ * response only. The above one was not shown." — intermediate assistant
+ * text used to fold into the collapsible WorkingSection, so the earlier
+ * response vanished behind "Worked for Ns". Pure; exported for tests. */
+export type WorkingSegment =
+  | { kind: "text"; content: string; ts: string }
+  | { kind: "work"; entries: WorkingEntry[]; firstIndex: number; lastIndex: number; startTs: string; endTs: string };
+
+/** The ts of a working entry (tool entries carry it on the tool). */
+function workingEntryTs(entry: WorkingEntry): string {
+  return entry.type === "tool" ? entry.tool.ts : entry.ts;
+}
+
+/** Split a turn's working entries into ordered segments: intermediate TEXT
+ * entries become standalone answer blocks; every contiguous run of the
+ * OTHER entries (tool/thinking/approval) becomes one work segment rendered
+ * at its timeline position. The final answer keeps rendering last (the
+ * caller's finalText) exactly as before. */
+export function segmentWorkingEntries(entries: WorkingEntry[]): WorkingSegment[] {
+  const out: WorkingSegment[] = [];
+  let run: WorkingEntry[] = [];
+  let runStart = -1;
+  const flush = (endIndex: number): void => {
+    if (run.length === 0) return;
+    out.push({
+      kind: "work",
+      entries: run,
+      firstIndex: runStart,
+      lastIndex: endIndex,
+      startTs: workingEntryTs(run[0]),
+      endTs: workingEntryTs(run[run.length - 1]),
+    });
+    run = [];
+    runStart = -1;
+  };
+  for (let i = 0; i < entries.length; i++) {
+    const entry = entries[i];
+    if (entry.type === "text") {
+      flush(i - 1);
+      out.push({ kind: "text", content: entry.content, ts: entry.ts });
+      continue;
+    }
+    if (run.length === 0) runStart = i;
+    run.push(entry);
+  }
+  flush(entries.length - 1);
+  return out;
+}
+
+/** ROUND-64 (R64-c): one intermediate assistant text entry rendered as a
+ * FULL markdown answer block in the chat body — always visible, never
+ * folded into the collapsible work section (same typography as the final
+ * answer; ChatMarkdown per fix 1). */
+function IntermediateAnswer({ content, projectId }: { content: string; projectId: string }) {
   const styles = useThemeStyles();
-  const resetAfter = useTimeoutClear();
-  const [copied, setCopied] = useState(false);
-  const lines = code.split("\n");
+  const trimmed = content.trim();
+  if (trimmed === "") return null;
   return (
-    <div className="my-1.5 rounded-[12px] overflow-hidden border" style={{ borderColor: styles.border }}>
-      <div
-        className="flex items-center justify-between px-3 py-1.5 border-b"
-        style={{ background: styles.subtle, borderColor: styles.border }}
-      >
-        <span className="font-mono text-[10px] font-bold" style={{ color: styles.textTertiary }}>
-          {lines.length} {lines.length === 1 ? "line" : "lines"}
-        </span>
-        <button
-          onClick={() => {
-            void navigator.clipboard?.writeText(code);
-            setCopied(true);
-            resetAfter(() => setCopied(false), 1200);
-          }}
-          className="flex items-center gap-1 rounded-md px-2 py-0.5 text-[10px] font-semibold transition-colors"
-          style={{ color: styles.textTertiary }}
-          aria-label="Copy code"
-        >
-          {copied ? <Check size={10} style={{ color: "#22c55e" }} /> : <Copy size={10} />}
-          {copied ? "Copied" : "Copy"}
-        </button>
-      </div>
-      <pre className="overflow-x-auto p-3 font-mono text-[11.5px] leading-[1.6]" style={{ color: styles.text }}>
-        {lines.map((line, i) => (
-          <div key={i} className="flex">
-            <span className="w-7 shrink-0 text-right pr-3 select-none font-mono text-[10px] leading-[1.6]" style={{ color: styles.textTertiary }}>
-              {i + 1}
-            </span>
-            <span className="flex-1 whitespace-pre-wrap break-words">{line || " "}</span>
-          </div>
-        ))}
-      </pre>
+    <div className="mt-1.5 min-w-0 break-words text-[13px] leading-[1.65]" style={{ color: styles.text }}>
+      <ChatMarkdown content={content} projectId={projectId} />
     </div>
   );
 }
 
-/** ROUND-40 (owner: "when the user clicks a file path… it should
- * automatically open in the right sidebar"): detect file-path-like tokens in
- * assistant final-answer text and render them as clickable pills that call
- * `useRightSidebarStore.getState().openFile(projectId, path)`. Conservative —
- * avoids false positives like `Done.`, `i.e.`, version numbers, URLs. */
-const URL_SCHEME = /^(https?|ftp):\/\//i;
-const LEADING_DOT_SLASH = /^\.{1,2}[/\\]/;
-const LEADING_SLASH = /^[/\\]/;
-/** Path shape: word/slash chars + one-or-more dotted segments, where the
- * FINAL segment is 2–4 lowercase letters (a real file extension). Intermediate
- * segments may include digits (e.g. `index.test.ts`, `app.component.tsx`). */
-const PATH_REGEX = /^[a-zA-Z0-9_\-/]+(?:\.[a-z0-9]{1,10})*\.[a-z]{2,4}$/;
-
-/** Strip surrounding quotes/backticks + trailing punctuation, then test if
- * the cleaned token looks like a file path. Returns the cleaned path or null. */
-function matchPath(token: string): string | null {
-  if (token.length === 0) return null;
-  let t = token.replace(/^["'`]+|["'`]+$/g, "");
-  t = t.replace(/[.,;:!?)\]]+$/g, "");
-  if (t.length === 0) return null;
-  if (URL_SCHEME.test(t)) return null;
-  if (LEADING_DOT_SLASH.test(t)) return t;
-  if (LEADING_SLASH.test(t)) return t;
-  if (PATH_REGEX.test(t)) return t;
-  return null;
-}
-
-/** Inline clickable pill for a file path — opens it in the right sidebar. */
-function PathPill({ path, projectId }: { path: string; projectId: string }) {
-  const styles = useThemeStyles();
-  const isCodeLike = /\.(t|j)sx?$|\.py$|\.rs$|\.go$|\.sh$|\.json$|\.toml$|\.ya?ml$|\.xml$|\.html?$|\.css$|\.scss$|\.md$|\.txt$|\.vue$|\.svelte$/i.test(path);
-  const Icon = isCodeLike ? FileCode : File;
-  return (
-    <button
-      type="button"
-      onClick={() => useRightSidebarStore.getState().openFile(projectId, path)}
-      title={`Open ${path} in sidebar`}
-      className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-md font-mono text-[11.5px] transition-colors align-middle cursor-pointer max-w-full overflow-hidden"
-      style={{
-        background: withAlpha(styles.accent, styles.isDark ? 0.13 : 0.08),
-        color: styles.text,
-      }}
-      onMouseEnter={(e) => {
-        e.currentTarget.style.background = withAlpha(styles.accent, styles.isDark ? 0.22 : 0.16);
-      }}
-      onMouseLeave={(e) => {
-        e.currentTarget.style.background = withAlpha(styles.accent, styles.isDark ? 0.13 : 0.08);
-      }}
-    >
-      <Icon size={10} className="shrink-0" style={{ color: styles.accent }} />
-      {/* ROUND-43: a very long path can never widen the chat — the label
-          ellipsizes inside the pill instead (the full path is on the title). */}
-      <span className="min-w-0 flex-1 truncate">{path}</span>
-    </button>
-  );
-}
-
-/** Tokenize a plain-text segment by whitespace, render path-like tokens as
- * clickable PathPills, the rest as plain spans. Preserves whitespace. */
-function renderPathAwareSegment(segment: string, projectId: string, keyPrefix: string): ReactNode[] {
-  if (segment.length === 0) return [];
-  const tokens = segment.split(/(\s+)/);
-  const out: ReactNode[] = [];
-  for (let i = 0; i < tokens.length; i++) {
-    const tok = tokens[i];
-    if (tok === "") continue;
-    if (/^\s+$/.test(tok)) {
-      out.push(<span key={`${keyPrefix}-ws-${i}`}>{tok}</span>);
-      continue;
-    }
-    const path = matchPath(tok);
-    if (path !== null) {
-      out.push(<PathPill key={`${keyPrefix}-p-${i}`} path={path} projectId={projectId} />);
-    } else {
-      out.push(<span key={`${keyPrefix}-t-${i}`}>{tok}</span>);
-    }
-  }
-  return out;
-}
-
-/** Original inline parser (bold + `code`) — used for non-code-block text.
- * ROUND-40: also detects file-path-like tokens (bare OR inside `inline code`)
- * and renders them as clickable PathPills. Fenced ``` blocks are NOT parsed
- * (handled by CodeBlock upstream) — paths inside them stay as code text. */
-function RichTextInline({ content, projectId }: { content: string; projectId: string }) {
-  const styles = useThemeStyles();
-  const elements: ReactNode[] = [];
-  const lines = content.split("\n");
-  for (let i = 0; i < lines.length; i++) {
-    const line = lines[i];
-    const parts = line.split(/\*\*(.*?)\*\*/g);
-    const lineEl: ReactNode[] = [];
-    for (let j = 0; j < parts.length; j++) {
-      if (j % 2 === 1) {
-        lineEl.push(
-          <strong key={`b-${i}-${j}`} style={{ fontWeight: 700 }}>
-            {parts[j]}
-          </strong>,
-        );
-      } else if (parts[j]) {
-        const codeParts = parts[j].split(/`(.*?)`/g);
-        for (let k = 0; k < codeParts.length; k++) {
-          if (k % 2 === 1) {
-            // Inline code; if its content is a path, render as a PathPill
-            // (owner: "a path inside backticks should become a clickable path
-            // pill, which is fine").
-            const codeText = codeParts[k];
-            const codePath = matchPath(codeText);
-            if (codePath !== null) {
-              lineEl.push(<PathPill key={`pc-${i}-${j}-${k}`} path={codePath} projectId={projectId} />);
-            } else {
-              lineEl.push(
-                <code
-                  key={`c-${i}-${j}-${k}`}
-                  className="px-1.5 py-0.5 rounded-md text-[11.5px] font-mono"
-                  style={{
-                    background: withAlpha(styles.accent, styles.isDark ? 0.13 : 0.08),
-                    color: styles.text,
-                  }}
-                >
-                  {codeText}
-                </code>,
-              );
-            }
-          } else if (codeParts[k]) {
-            for (const seg of renderPathAwareSegment(codeParts[k], projectId, `s-${i}-${j}-${k}`)) {
-              lineEl.push(seg);
-            }
-          }
-        }
-      }
-    }
-    if (i > 0) {
-      elements.push(<div key={`br-${i}`} className="mt-1.5" />);
-    }
-    elements.push(<span key={`l-${i}`}>{lineEl}</span>);
-  }
-  return <>{elements}</>;
-}
-
-function RichText({ content, projectId }: { content: string; projectId: string }) {
-  // Detect fenced code blocks (```...```) and render them as CodeBlock
-  const codeBlockRegex = /```[a-zA-Z]*\n([\s\S]*?)```/g;
-  const parts: ReactNode[] = [];
-  let lastIndex = 0;
-  let match;
-  let keyIdx = 0;
-  while ((match = codeBlockRegex.exec(content)) !== null) {
-    // Render text before the code block
-    if (match.index > lastIndex) {
-      parts.push(<RichTextInline key={`rt-${keyIdx++}`} content={content.slice(lastIndex, match.index)} projectId={projectId} />);
-    }
-    parts.push(<CodeBlock key={`cb-${keyIdx++}`} code={match[1].trimEnd()} />);
-    lastIndex = match.index + match[0].length;
-  }
-  // Render remaining text
-  if (lastIndex < content.length) {
-    parts.push(<RichTextInline key={`rt-${keyIdx++}`} content={content.slice(lastIndex)} projectId={projectId} />);
-  }
-  return <>{parts}</>;
-}
-
 /**
  * ROUND-37 AssistantTurn: ONE header-less assistant block per user message.
- * Tools (or multiple working entries) → collapsible WorkingSection; a
+ * Tools (or multiple working entries) → collapsible WorkingSection(s); a
  * tools-free turn renders its thoughts bare. The final answer renders below
  * the section — collapsing the work never hides it (owner directive).
+ * ROUND-64 (R64-c): the turn's working entries are now SEGMENTED (see
+ * segmentWorkingEntries) — intermediate assistant TEXT entries render as
+ * full markdown answer blocks at their timeline position (always visible,
+ * never collapsed — the owner's "after thinking it showed me the bottom
+ * response only"), and each contiguous run of tool/thinking/approval
+ * entries renders as its own WorkingSection between them. The final answer
+ * still renders LAST, exactly as before.
  */
 function AssistantTurn({
   item,
@@ -822,32 +698,41 @@ function AssistantTurn({
 }: {
   item: AssistantTurnItem;
   sessionId: string | null;
-  /** ROUND-40: threaded from AgentChatPanel so RichText + WorkingSection can
-   * open files / sub-agents in the right sidebar. */
+  /** ROUND-40: threaded from AgentChatPanel so the answer renderers +
+   * WorkingSection can open files / sub-agents in the right sidebar. */
   projectId: string;
   /** R37 review #4: true when this turn JUST finished while the user
    * watched — it mounts collapsed ("Worked for Ns" + answer). */
   collapseHint?: boolean;
 }) {
   const styles = useThemeStyles();
+  const segments = segmentWorkingEntries(item.working);
   const hasToolWork = item.working.some((e) => e.type === "tool");
   return (
     <motion.div variants={msgVariants} initial="initial" animate="animate" className="group min-w-0">
-      {hasToolWork ? (
-        <WorkingSection
-          entries={item.working}
-          sessionId={sessionId}
-          projectId={projectId}
-          ts={item.ts}
-          endTs={item.endTs}
-          defaultOpen={collapseHint === true ? false : undefined}
-        />
-      ) : (
-        <BareWorkingEntries entries={item.working} />
+      {segments.map((seg, i) =>
+        seg.kind === "text" ? (
+          <IntermediateAnswer key={`seg-text-${i}`} content={seg.content} projectId={projectId} />
+        ) : seg.entries.some((e) => e.type === "tool") ? (
+          <WorkingSection
+            key={`seg-work-${i}`}
+            entries={seg.entries}
+            sessionId={sessionId}
+            projectId={projectId}
+            ts={seg.startTs}
+            endTs={seg.endTs}
+            defaultOpen={collapseHint === true ? false : undefined}
+          />
+        ) : (
+          <BareWorkingEntries key={`seg-bare-${i}`} entries={seg.entries} />
+        ),
       )}
       {item.finalText.trim() !== "" ? (
         <div className={`min-w-0 break-words text-[13px] leading-[1.65] ${hasToolWork ? "mt-2" : ""}`} style={{ color: styles.text }}>
-          <RichText content={item.finalText} projectId={projectId} />
+          {/* ROUND-64 (R64-c): full markdown formatting (headings, lists,
+              tables, links…) via ChatMarkdown — the old RichText rendered
+              bold/code only and printed everything else as raw text. */}
+          <ChatMarkdown content={item.finalText} projectId={projectId} />
         </div>
       ) : null}
       {/* ROUND-59 (R59-D): the footer owns the response-rating cluster
@@ -1359,6 +1244,10 @@ export function AgentChatPanel({
 
   // Auto-scroll: new items, busy transitions, the live section's entry count,
   // and the growing streaming text (review fix #4 + R37 amendment #11).
+  // ROUND-64 (R64-c): this count doubles as the context donut's `liveTick`
+  // (the panel re-renders on every stream-store patch, so it bumps as tool
+  // calls land — the donut's report refetches instead of waiting for the
+  // turn to end).
   const liveWorkingCount = liveTurn?.working.length ?? 0;
   const liveTailText = liveTurn?.streamText ?? "";
   useEffect(() => {
@@ -1621,12 +1510,22 @@ export function AgentChatPanel({
       modelOverride={modelOverride}
       onModelChange={onModelChange}
       transcriptLength={items.length}
+      liveTick={liveWorkingCount}
+      streaming={streamBusy}
       autoFocus={autoFocus}
       inputRef={inputRef}
     />
   );
 
   // ── Live-turn rendering (same shape as the folded AssistantTurn) ──────────
+  // ROUND-64 (R64-c): the live turn SEGMENTS its working entries exactly like
+  // the folded AssistantTurn (segmentWorkingEntries) — intermediate assistant
+  // text entries render as always-visible markdown answer blocks between the
+  // work sections (the stream-store flushes streamText into working entries
+  // whenever a tool call lands), so nothing vanishes when the section
+  // auto-collapses on completion and the live/folded handoff is seamless.
+  // The LIVE streaming answer text still renders at the BOTTOM with the
+  // caret, exactly as before.
   const liveSection = (() => {
     if (liveTurn === null) return null;
     const entries: WorkingEntry[] = [
@@ -1642,29 +1541,70 @@ export function AgentChatPanel({
     const hasPendingWriteInput = liveTurn.streamingToolInputs.some((s) =>
       DIFF_TOOLS.has(s.toolName),
     );
-    const hasToolWork = entries.some((e) => e.type === "tool") || hasPendingWriteInput;
-    if (hasToolWork) {
+    const liveEntryIdx = liveTurn.streamThinking.trim() !== "" ? entries.length - 1 : undefined;
+    const segments = segmentWorkingEntries(entries);
+    // ROUND-58 (R58-cf): the pending-write rows (live file-write previews)
+    // render INSIDE a live WorkingSection — when no tool entry exists yet but
+    // a write's args are streaming, the LAST work segment (or an empty
+    // trailing section when the turn ends on flushed text) hosts them, so
+    // the owner still sees the file being written the moment it starts.
+    const lastWorkSegIdx = segments.map((s) => s.kind === "work").lastIndexOf(true);
+    const rendered = segments.map((seg, i) => {
+      if (seg.kind === "text") {
+        return (
+          <IntermediateAnswer
+            key={`live-seg-text-${i}`}
+            content={seg.content}
+            projectId={projectId}
+          />
+        );
+      }
+      const isWork = seg.entries.some((e) => e.type === "tool") || (hasPendingWriteInput && i === lastWorkSegIdx);
+      if (isWork) {
+        // liveEntryIndex is an index into the FULL entries array — translate
+        // it into this segment's own coordinates (only the segment that
+        // actually contains the still-streaming thought marks it live).
+        const segLiveIdx =
+          liveEntryIdx !== undefined && liveEntryIdx >= seg.firstIndex && liveEntryIdx <= seg.lastIndex
+            ? liveEntryIdx - seg.firstIndex
+            : undefined;
+        return (
+          <WorkingSection
+            key={`live-seg-work-${i}`}
+            entries={seg.entries}
+            sessionId={session?.id ?? null}
+            projectId={projectId}
+            live
+            startedAtMs={liveTurn.startedAtMs}
+            stopped={liveTurn.stopped}
+            liveEntryIndex={segLiveIdx}
+            onApprovalDecision={(id, decision, remember) => void onApprovalDecision(id, decision, remember)}
+          />
+        );
+      }
       return (
+        <BareWorkingEntries
+          key={`live-seg-bare-${i}`}
+          entries={seg.entries}
+          onApprovalDecision={(id, decision, remember) => void onApprovalDecision(id, decision, remember)}
+        />
+      );
+    });
+    if (hasPendingWriteInput && (segments.length === 0 || segments[segments.length - 1].kind === "text")) {
+      rendered.push(
         <WorkingSection
-          key="live-section"
-          entries={entries}
+          key="live-seg-write-tail"
+          entries={[]}
           sessionId={session?.id ?? null}
           projectId={projectId}
           live
           startedAtMs={liveTurn.startedAtMs}
           stopped={liveTurn.stopped}
-          liveEntryIndex={liveTurn.streamThinking.trim() !== "" ? entries.length - 1 : undefined}
           onApprovalDecision={(id, decision, remember) => void onApprovalDecision(id, decision, remember)}
-        />
+        />,
       );
     }
-    return (
-      <BareWorkingEntries
-        key="live-bare"
-        entries={entries}
-        onApprovalDecision={(id, decision, remember) => void onApprovalDecision(id, decision, remember)}
-      />
-    );
+    return rendered;
   })();
 
   return (
@@ -1834,13 +1774,18 @@ export function AgentChatPanel({
 
             {/* ── ROUND-37 LIVE TURN: the Working section grows above the
                 streaming presumptive-final text (which flows into the
-                section as narration the moment a tool lands). ── */}
+                timeline as a full answer block the moment a tool lands —
+                ROUND-64 R64-c segmentation). ── */}
             {liveTurn !== null ? (
               <div aria-live="polite" aria-atomic="false" className="group min-w-0">
                 {liveSection}
                 {liveTurn.streamText !== "" ? (
                   <div className={`min-w-0 break-words text-[13px] leading-[1.65] ${liveTurn.working.length > 0 ? "mt-2" : ""}`} style={{ color: styles.text }}>
-                    <RichText content={liveTurn.streamText} projectId={projectId} />
+                    {/* ROUND-64 (R64-c): ChatMarkdown — the LIVE answer also
+                        renders full markdown; partial markdown mid-stream is
+                        fine (the parser is line-based, so the text renders
+                        line-by-line as it arrives). */}
+                    <ChatMarkdown content={liveTurn.streamText} projectId={projectId} />
                     {streamBusy && !liveTurn.stopped ? (
                       <span
                         className="inline-block w-[7px] h-[14px] ml-0.5 align-middle rounded-sm ac-caret-blink"

@@ -1,6 +1,9 @@
 mod browser;
 mod dialogs;
 mod keys;
+// ROUND-64 (R64-b): the always-on-top floating computer-use mini monitor
+// window (open/close_computer_mini — see src/mini for the page it hosts).
+mod mini;
 mod sidecar;
 // ROUND-55 (R55): direct Windows Credential Manager FFI — replaced the
 // keyring crate whose `{user}.{service}` TargetName never matched the
@@ -70,7 +73,13 @@ pub fn run() {
             browser::browser_tab_scroll_state,
             browser::browser_tab_scroll_to,
             browser::browser_tab_set_zoom,
-            browser::browser_tab_eval
+            browser::browser_tab_eval,
+            // ROUND-64 (R64-b): the always-on-top floating computer-use
+            // monitor — auto-opened by the main app the moment live
+            // computer-use activity starts; the page (mini.html) closes
+            // itself when the control session ends.
+            mini::open_computer_mini,
+            mini::close_computer_mini
         ])
         .build(tauri::generate_context!())
         .expect("error while running the tauri application")

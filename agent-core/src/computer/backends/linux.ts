@@ -105,9 +105,9 @@ export const linuxBackend: CuaBackend = {
 
   async listApps(run) {
     const haveWmctrl = await hasTool(run, "wmctrl", ["-m"]);
-    if (!haveWmctrl) return [];
+    if (!haveWmctrl) return { apps: [], diagnostics: { note: "wmctrl is not installed (Linux window enumeration)" } };
     const result = await run({ program: "wmctrl", args: ["-lGp"], timeoutMs: 5000 });
-    if (result.code !== 0) return [];
+    if (result.code !== 0) return { apps: [] };
     const seen = new Map<number, AppInfo>();
     for (const line of result.stdout.split("\n")) {
       const parsed = parseWmctrlLine(line);
@@ -120,15 +120,15 @@ export const linuxBackend: CuaBackend = {
     const front = await this.frontmostPid(run);
     const apps = [...seen.values()];
     for (const app of apps) app.active = app.pid === front;
-    return apps;
+    return { apps };
   },
 
   async listWindows(run, app) {
-    if (app.pid === undefined) return [];
+    if (app.pid === undefined) return { windows: [] };
     const haveWmctrl = await hasTool(run, "wmctrl", ["-m"]);
-    if (!haveWmctrl) return [];
+    if (!haveWmctrl) return { windows: [] };
     const result = await run({ program: "wmctrl", args: ["-lGp"], timeoutMs: 5000 });
-    if (result.code !== 0) return [];
+    if (result.code !== 0) return { windows: [] };
     const windows: WindowInfo[] = [];
     for (const line of result.stdout.split("\n")) {
       const parsed = parseWmctrlLine(line);
@@ -155,16 +155,16 @@ export const linuxBackend: CuaBackend = {
       });
       windows[mainIdx].main = true;
     }
-    return windows;
+    return { windows };
   },
 
   async listDisplays(run) {
     const haveXrandr = await hasTool(run, "xrandr", ["--current"]);
     if (!haveXrandr) {
-      return [{ index: 1, bounds: [0, 0, 1920, 1080], main: true }];
+      return { displays: [{ index: 1, bounds: [0, 0, 1920, 1080], main: true }] };
     }
     const result = await run({ program: "xrandr", args: ["--current"], timeoutMs: 5000 });
-    if (result.code !== 0) return [{ index: 1, bounds: [0, 0, 1920, 1080], main: true }];
+    if (result.code !== 0) return { displays: [{ index: 1, bounds: [0, 0, 1920, 1080], main: true }] };
     const displays: DisplayInfo[] = [];
     for (const line of result.stdout.split("\n")) {
       // eDP-1 connected primary 1920x1080+0+0 (…)
@@ -181,9 +181,9 @@ export const linuxBackend: CuaBackend = {
         main: match[2] === "primary",
       });
     }
-    if (displays.length === 0) return [{ index: 1, bounds: [0, 0, 1920, 1080], main: true }];
+    if (displays.length === 0) return { displays: [{ index: 1, bounds: [0, 0, 1920, 1080], main: true }] };
     if (!displays.some((d) => d.main)) displays[0].main = true;
-    return displays;
+    return { displays };
   },
 
   async buildSnapshot(run, app, window, detail) {
@@ -439,7 +439,7 @@ export const linuxBackend: CuaBackend = {
   async activate(run, pid, windowId) {
     const haveXdotool = await hasTool(run, "xdotool");
     if (!haveXdotool) return { ok: false, active: false };
-    const windows = await this.listWindows(run, { pid });
+    const { windows } = await this.listWindows(run, { pid });
     const target = windowId !== undefined
       ? windows.find((w) => w.windowId === windowId)
       : windows.find((w) => w.main) ?? windows[0];
@@ -470,7 +470,7 @@ export const linuxBackend: CuaBackend = {
     // import (ImageMagick) writing PNG to stdout, else scrot to a temp file.
     const haveImport = await hasTool(run, "import", ["-version"]);
     if (haveImport) {
-      const displays = await this.listDisplays(run);
+      const { displays } = await this.listDisplays(run);
       const display = displays.find((d) => d.index === displayIndex) ?? displays[0];
       const geometry = display
         ? `-crop ${display.bounds[2]}x${display.bounds[3]}+${Math.max(0, display.bounds[0])}+${Math.max(0, display.bounds[1])}+repage`
@@ -488,7 +488,7 @@ export const linuxBackend: CuaBackend = {
     }
     const haveScrot = await hasTool(run, "scrot", ["-v"]);
     if (haveScrot) {
-      const displays = await this.listDisplays(run);
+      const { displays } = await this.listDisplays(run);
       const display = displays.find((d) => d.index === displayIndex) ?? displays[0];
       const result = await run({
         program: "sh",

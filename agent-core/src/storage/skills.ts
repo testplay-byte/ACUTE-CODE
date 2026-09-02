@@ -59,30 +59,38 @@ export const COMPUTER_USE_SKILL_ID = "skill_builtin_computer_use";
  * 09-agent-skill-prompt.md, condensed to the operating core (the full doc
  * lives in docs/runbooks/COMPUTER-USE.md). Overridable like any skill
  * (edit the row; the prompt rides YOUR text).
+ *
+ * ROUND-64-a (R64-a): rewritten around the honest Windows surface — the
+ * accessibility-first loop (no vision needed), app resolution by
+ * processName OR title, the runningApps recovery payload, and
+ * verify-after-every-write discipline.
  */
 export const COMPUTER_USE_SKILL_BODY = `# Skill: computer-use
 
-Main-agent only. Never delegate Computer Use to a subagent (subagents lack the session-bound snapshot/frame state).
+Main-agent only. Never delegate Computer Use to a subagent (subagents lack the session-bound snapshot/frame state). UIA/AT-SPI element actions are the PRIMARY path: they need no vision and never steal the user's focus.
 
 ## Core loop
 1. If readiness is unknown, call request_access once.
-2. list_apps shows RUNNING apps only. If the user names an app that is absent, call open_application ONCE with the EXACT user-provided name — character-for-character (case, spaces, punctuation, suffixes like "app"). Never translate, normalize, shorten, retry spellings, or substitute a different running app.
-3. Call get_app_state. Start with the accessibility tree, no screenshot.
-4. If the target is in the tree, use an ELEMENT action ({type:"element", stateId, index}) — semantic, precise, background-safe, never steals the user's focus.
-5. Only when accessibility cannot locate or express the target, take a screenshot and use frame-bound coordinates ({type:"coordinate", x, y} copied UNCHANGED from the latest returned image — never pre-scale, never attach appRef/stateId).
-6. Actions return receipts. action_sent=true means it MAY have happened — never blindly replay. Verify via fresh get_app_state or an external oracle (file exists, process exit code) when the outcome matters.
+2. ALWAYS start with list_apps. name = the app's window TITLE ("Untitled - Notepad"); processName = the executable ("notepad"); both + pid are in every entry.
+3. get_app_state resolves app_ref by pid (best), window title, processName, or a unique substring. If it refuses app_not_found, the payload's runningApps lists what IS running — pick the correct pid and retry with {pid}; never guess a pid. Two matches → ambiguous_app_ref lists the candidates; scope with pid.
+4. If the user names an app that is absent, call open_application ONCE with the EXACT user-provided name — character-for-character (case, spaces, punctuation, suffixes like "app"). Never translate, normalize, shorten, retry spellings, or substitute a different running app.
+5. After open_application, wait 0.5-1s (the wait tool, or return_state) for the window to exist BEFORE get_app_state.
+6. If the target is in the tree, use an ELEMENT action ({type:"element", stateId, index}) — set_value / perform_action / left_click element. detail:"full" gives bounds + the element's advertised actions.
+7. Only when the tree cannot locate or express the target, take a screenshot and use frame-bound coordinates ({type:"coordinate", x, y} copied UNCHANGED from the latest returned image — never pre-scale, never attach appRef/stateId).
+8. VERIFY AFTER EVERY WRITE: pass return_state:"compact" on the action, or call get_app_state again. One observation, one action, then verify.
+9. Actions return receipts. action_sent=true means it MAY have happened — never blindly replay. Verify via fresh get_app_state or an external oracle (file exists, process exit code) when the outcome matters.
 
 ## Discipline
-- One observation, one action, then verify. Never re-observe an unchanged state before acting.
 - type REPLACES a field's contents (select first to insert). set_value is the preferred semantic write. Prefer set_value/perform_action over raw input.
-- Raw input (coordinate clicks, key chords, typing) on Windows/Linux requires the target app frontmost — a frontmost_pid_mismatch refusal means: open_application(activate=true) → fresh get_app_state → retry ONCE.
+- Raw input (coordinate clicks, key chords, app-scoped typing) on Windows/Linux requires the target app FRONTMOST — a frontmost_pid_mismatch refusal means: open_application(activate=true) → fresh get_app_state → retry ONCE.
 - scroll has no accessibility path — always coordinate. double/triple/middle click have no a11y equivalent — element targets fail closed; use coordinates.
 - Modifiers: macOS uses "cmd"; Windows/Linux use "ctrl".
 - Never send targetless type/key — scope with an element target or appRef.
 - An unexpected modal dialog may be intercepting your action: inspect its contents FIRST; dismiss (Escape / its Cancel) only when it is NOT the task.
 - An occlusion_owner_mismatch refusal names the covering window: re-activate the intended app; NEVER move/resize/close the reported window.
 - After any element WRITE the stateId is consumed — get_app_state again before the next element action.
-- After stop_computer_control: no more computer-use calls; end the turn.
+- Your OWN app window is not off-limits: if it covers the target, minimize it (key "win+down" with appRef {pid} of the ACUTE process, or element actions on its minimize button) — but only as much as needed to reach the target app.
+- When the task is done, call stop_computer_control (releases held buttons); after it: no more computer-use calls, end the turn.
 
 ## Safety
 - Destructive or hard-to-reverse actions (delete, overwrite, send, pay) need the user's explicit go-ahead unless durably authorized.

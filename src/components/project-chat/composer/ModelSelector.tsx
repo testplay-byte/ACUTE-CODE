@@ -4,10 +4,8 @@ import { useQuery } from "@tanstack/react-query";
 import { Check, ChevronDown, ChevronRight, Settings } from "lucide-react";
 import {
   fetchProviderModelConfig,
-  fetchProviderModels,
   fetchProviders,
   type Agent,
-  type ProviderModelConfig,
 } from "../../../lib/api";
 import { filterModelsForPicker, useSettingsStore } from "../../../lib/settings-store";
 import { useThemeStyles } from "../../../lib/use-theme-styles";
@@ -40,15 +38,15 @@ const FLYOUT_CLOSE_DELAY_MS = 220;
 /** Geometry used when the popover can't be measured / the touch path. */
 const INLINE_GEO = { side: "inline" as FlyoutSide, left: null, top: 0, viewportTop: 0, maxHeight: 280 };
 
-/** ROUND-58 (R58-d): one flyout row — the live-catalog id merged with the
- * provider's models-config (display name, custom pricing, hidden flag). */
+/** ROUND-58 (R58-d): one flyout row — a provider's models-config row
+ * (display name, custom pricing). ROUND-64 (R64-d): the flyout is
+ * CONFIG-ONLY (see the R64 note below) so every row IS a config row and the
+ * old "configured" marker was retired — the list itself is the config. */
 interface FlyoutModel {
   /** Model id sent to the API (the override value). */
   modelId: string;
   /** Config displayName when present — otherwise the raw id. */
   label: string;
-  /** Any models-config row exists for this model (drives the "configured" dot). */
-  configured: boolean;
   /** Config input price — null = unknown (the shared free filter falls back
    * to the `:free` id heuristic). */
   inputPricePerMtok: number | null;
@@ -99,13 +97,27 @@ const plainRect = (el: HTMLElement): PlainRect => {
  * ROUND-62 (R62-2b, owner: "the changes applied [in Models & Providers]
  * don't reflect properly on the agent session page"): the popover's list
  * filters DISABLED providers (a provider turned off in Settings is no
- * longer selectable here), and the flyout's model list became a UNION of
- * the live catalog and the Settings models-config rows — models added by
- * id in Settings now appear even when the provider's live catalog doesn't
- * list them. The same round teaches ModelsProvidersTab to invalidate this
- * component's query-key families (["composer-providers"],
+ * longer selectable here). The same round teaches ModelsProvidersTab to
+ * invalidate this component's query-key families (["composer-providers"],
  * ["provider-models", id], ["provider-models-config", id]) so edits stop
  * being held back by the 5-minute staleTimes.
+ *
+ * ROUND-64 (R64-d, owner: "When I hovered on the provider, it showed me the
+ * list of models there but those models were not the ones which I added,
+ * only the models which I had added in the models and providers Page
+ * should be shown"): the flyout is now CONFIG-ONLY — exactly the provider's
+ * rows from the Models & Providers page (fetchProviderModelConfig),
+ * hidden rows excluded, display names applied. The LIVE-CATALOG query
+ * (fetchProviderModels) was REMOVED from this component entirely: it fed
+ * the flyout ids the owner never curated and is no longer consulted
+ * here. The ["provider-models-config", id] query key stays THE freshness
+ * source — ModelsProvidersTab's invalidateModelConfigEverywhere still
+ * invalidates it, so add/rename/hide in Settings reflects on the next
+ * popover open. Empty/error configs render an honest pointer row to
+ * Settings instead of falling back to the catalog. The BUTTON's label is
+ * untouched: it shows the effective model's raw id (config-known or not)
+ * and the unfiltered providers list still resolves the provider display
+ * name.
  */
 export function ModelSelector({
   agent,
@@ -185,19 +197,14 @@ export function ModelSelector({
     [providers],
   );
 
-  // The hovered provider's models (same query key the old picker used).
-  const modelsQuery = useQuery({
-    queryKey: ["provider-models", hoveredProvider],
-    queryFn: () => fetchProviderModels(hoveredProvider as string),
-    enabled: open && hoveredProvider !== null,
-    staleTime: 5 * 60_000,
-  });
   // ROUND-58 (R58-d): the provider's models-CONFIG (the Settings models
-  // table) — merged client-side so the picker honors hidden/display-name/
-  // custom-pricing (the owner: "customize which models to show and which
-  // models to not show"). Runs BESIDE the live-catalog query (same gating —
-  // no waterfall); fails soft — an error falls back to today's ids-only
-  // behavior.
+  // table). ROUND-64 (R64-d): this is now the flyout's ONLY source — the
+  // owner curates the list on the Models & Providers page and the hover
+  // flyout shows EXACTLY those rows (hidden excluded, display names
+  // applied, config pricing feeding the shared free filter). The
+  // live-catalog query that used to run beside it is gone (its ids were
+  // the "not the ones which I added" noise). Loading and error are
+  // distinguishable states with honest rows in the flyout body.
   const modelsConfigQuery = useQuery({
     queryKey: ["provider-models-config", hoveredProvider],
     queryFn: () => fetchProviderModelConfig(hoveredProvider as string),
@@ -205,55 +212,28 @@ export function ModelSelector({
     staleTime: 5 * 60_000,
     retry: false,
   });
-  const configByModel = useMemo(() => {
-    const map = new Map<string, ProviderModelConfig>();
-    for (const row of modelsConfigQuery.data ?? []) map.set(row.modelId, row);
-    return map;
-  }, [modelsConfigQuery.data]);
+  const configRows = modelsConfigQuery.data ?? [];
 
-  // ROUND-58 (R58-d): live ids + config merge — hidden rows are EXCLUDED,
-  // display names replace raw ids, and the shared free-only filter sees the
-  // CONFIG's input price (falling back to the id heuristic when unknown).
-  // ROUND-62 (R62-2b): the merge became a UNION — models-config rows the
-  // live catalog does NOT list (manually added by id in Settings, custom
-  // gateways, an unreachable catalog) join the list so "add model in
-  // Settings" is reflected here too, which the pure live-catalog list never
-  // was.
-  const liveIds = (modelsQuery.data ?? []).slice(0, FLYOUT_MODEL_CAP);
-  // Cheap ≤200-entry set — no memo needed (rebuilt per render with the data).
-  const liveIdSet = new Set(liveIds);
-  const configOnlyRows = (modelsConfigQuery.data ?? []).filter(
-    (row) => !liveIdSet.has(row.modelId),
-  );
-  const allModels: FlyoutModel[] = [
-    ...liveIds.map((id) => {
-      const config = configByModel.get(id);
-      return {
-        modelId: id,
-        label:
-        config?.displayName !== undefined && config.displayName.trim() !== ""
-          ? config.displayName
-          : id,
-        configured: config !== undefined,
-        inputPricePerMtok: config?.inputPricePerMtok ?? null,
-      };
-    }),
-    ...configOnlyRows.map((row) => ({
+  // ROUND-64 (R64-d): CONFIG-ONLY list — the provider's rows from the
+  // Models & Providers page: hidden rows excluded, display names applied,
+  // and the shared free-only filter seeing the CONFIG's input price
+  // (falling back to the id heuristic when unknown). R58-d's live+config
+  // merge and R62-2b's union are both retired: the owner's directive is
+  // "only the models which I had added in the models and providers Page
+  // should be shown".
+  const allModels: FlyoutModel[] = configRows
+    .filter((row) => row.hidden !== true)
+    .slice(0, FLYOUT_MODEL_CAP)
+    .map((row) => ({
       modelId: row.modelId,
       label: row.displayName.trim() !== "" ? row.displayName : row.modelId,
-      configured: true,
       inputPricePerMtok: row.inputPricePerMtok,
-    })),
-  ].filter((m) => configByModel.get(m.modelId)?.hidden !== true);
+    }));
   const models = filterModelsForPicker(allModels, modelsFreeOnly);
   const hiddenCount = allModels.length - models.length;
   // Config-hidden models are NOT reachable via "show all" — surfaced as
   // their own subtle footer note instead (they're turned off in Settings).
-  // ROUND-62 (R62-2b): counted over the union (a hidden config-only row is
-  // just as hidden as a hidden live one).
-  const configHiddenCount = (modelsConfigQuery.data ?? []).filter(
-    (row) => row.hidden === true,
-  ).length;
+  const configHiddenCount = configRows.filter((row) => row.hidden === true).length;
 
   // Effective model = override ?? agent.model (unchanged per-send semantics).
   const effective = override?.model ?? agent?.model ?? null;
@@ -348,7 +328,7 @@ export function ModelSelector({
         >
           {hoveredName}
         </span>
-        {!modelsQuery.isLoading && models.length > 0 ? (
+        {!modelsConfigQuery.isLoading && models.length > 0 ? (
           <span className="ml-auto font-mono text-[9px] shrink-0" style={{ color: styles.textTertiary }}>
             {models.length} model{models.length === 1 ? "" : "s"}
           </span>
@@ -364,9 +344,28 @@ export function ModelSelector({
           </button>
         ) : null}
       </div>
-      {models.length === 0 ? (
+      {modelsConfigQuery.isLoading ? (
+        // ROUND-64 (R64-d): the config fetch is the flyout's only source —
+        // loading has its own honest row (kept distinct from empty).
         <div className="text-[11px] px-2 py-1.5" style={{ color: styles.textTertiary }}>
-          {modelsQuery.isLoading ? "loading models…" : "no models listed"}
+          loading models…
+        </div>
+      ) : modelsConfigQuery.isError ? (
+        <div className="text-[11px] px-2 py-1.5" style={{ color: styles.textTertiary }}>
+          couldn't load this provider's models — check the connection and retry
+        </div>
+      ) : allModels.length === 0 ? (
+        // ROUND-64 (R64-d): honest empty state — the config (not the catalog)
+        // is the list, so nothing configured means nothing to pick; point the
+        // owner at where the list is curated.
+        <div className="text-[11px] px-2 py-1.5" style={{ color: styles.textTertiary }}>
+          No models configured — add them in Settings → Models &amp; Providers
+        </div>
+      ) : models.length === 0 ? (
+        // Rows exist but the free-only filter hid them all — the footer's
+        // "show all" button is the way back.
+        <div className="text-[11px] px-2 py-1.5" style={{ color: styles.textTertiary }}>
+          no models listed
         </div>
       ) : (
         models.map((m) => {
@@ -397,17 +396,9 @@ export function ModelSelector({
                 <span className="w-[11px] shrink-0" />
               )}
               <span className="min-w-0 flex-1 truncate">{m.label}</span>
-              {/* ROUND-58 (R58-d): the subtle "configured" dot — this model
-                  has a Settings models-config row (custom name/pricing/visibility).
-                  No text content — must not pollute the option's accessible name. */}
-              {m.configured && (
-                <span
-                  className="w-1.5 h-1.5 rounded-full shrink-0"
-                  style={{ background: styles.accent, opacity: 0.7 }}
-                  title="Configured in Settings — pricing and visibility customized"
-                  aria-hidden
-                />
-              )}
+              {/* ROUND-58's "configured" dot was retired in ROUND-64 (R64-d):
+                  the flyout is config-only now, so EVERY row is a configured
+                  row and the marker carried no information. */}
             </button>
           );
         })

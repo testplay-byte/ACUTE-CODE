@@ -8,6 +8,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import {
+  ambiguousAppRef,
+  appNotFound,
   elementStaleSuperseded,
   frontmostPidMismatch,
   killSwitchActive,
@@ -17,6 +19,7 @@ import {
   uipiBlocked,
   visionDisabled,
 } from "../src/computer/errors";
+import type { AppInfo } from "../src/computer/types";
 import { appendAudit, auditPath, redactForAudit, resetAuditForTests } from "../src/computer/audit";
 
 /* ── errors: the doc-11 message shape ──────────────────────────────────────── */
@@ -65,6 +68,60 @@ describe("ROUND-61 (R61): the refusal catalog (doc 11)", () => {
     expect(refusal.message).toContain("s-7");
     expect(refusal.recovery).toContain("get_app_state");
     expect(refusal.payload).toEqual({ stateId: "s-7", cause: "superseded" });
+  });
+});
+
+/* ── R64-a: app-resolution refusals carry the recovery payload ───────────── */
+
+describe("ROUND-64-a (R64-a): app-resolution refusals list the running apps", () => {
+  const RUNNING: AppInfo[] = [
+    { name: "Untitled - Notepad", processName: "notepad", pid: 4012, active: true },
+    { name: "ACUTE-CODE — Mozilla Firefox", processName: "firefox", pid: 8104, active: false },
+  ];
+
+  it("app_not_found WITH the running list: payload.runningApps (capped) + a pick-the-pid recovery", () => {
+    const { refusal } = appNotFound("Notepad", RUNNING);
+    expect(refusal.error).toBe("app_not_found");
+    expect(refusal.message).toContain("Notepad");
+    expect((refusal.payload as { runningApps: unknown[] }).runningApps).toEqual([
+      { name: "Untitled - Notepad", processName: "notepad", pid: 4012 },
+      { name: "ACUTE-CODE — Mozilla Firefox", processName: "firefox", pid: 8104 },
+    ]);
+    expect(refusal.recovery).toContain("runningApps");
+    expect(refusal.recovery).toContain("pid");
+  });
+
+  it("app_not_found WITHOUT a list keeps the list_apps recovery (no payload bloat)", () => {
+    const { refusal } = appNotFound("Ghost");
+    expect(refusal.payload).toEqual({ requested: "Ghost" });
+    expect(refusal.recovery).toContain("list_apps");
+  });
+
+  it("app_not_found WITH an EMPTY list says so honestly (runningApps: [] — enumeration itself failed)", () => {
+    const { refusal } = appNotFound("Ghost", []);
+    expect((refusal.payload as { runningApps: unknown[] }).runningApps).toEqual([]);
+    // The no-list recovery still applies: nothing is running (or the probe failed).
+    expect(refusal.recovery).toContain("list_apps");
+  });
+
+  it("app_not_found caps runningApps at 25 (list_apps is the full surface)", () => {
+    const many: AppInfo[] = Array.from({ length: 40 }, (_, i) => ({ name: `App ${i}`, pid: 1000 + i, active: false }));
+    const { refusal } = appNotFound("Ghost", many);
+    expect((refusal.payload as { runningApps: unknown[] }).runningApps).toHaveLength(25);
+  });
+
+  it("ambiguous_app_ref lists full candidates (name + processName + pid), not bare pids", () => {
+    const { refusal } = ambiguousAppRef("notepad", [
+      { name: "Untitled - Notepad", processName: "notepad", pid: 4012 },
+      { name: "notes.txt - Notepad", processName: "notepad", pid: 5208 },
+    ]);
+    expect(refusal.error).toBe("ambiguous_app_ref");
+    const candidates = (refusal.payload as { candidates: Array<{ name: string; processName?: string; pid: number }> }).candidates;
+    expect(candidates).toEqual([
+      { name: "Untitled - Notepad", processName: "notepad", pid: 4012 },
+      { name: "notes.txt - Notepad", processName: "notepad", pid: 5208 },
+    ]);
+    expect(refusal.recovery).toContain("pid");
   });
 });
 

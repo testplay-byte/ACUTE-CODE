@@ -1,0 +1,26 @@
+<!doctype html>
+<!--
+  ROUND-64 (R64-b): the ALWAYS-ON-TOP floating computer-use mini monitor
+  window's page. open_computer_mini (src-tauri/src/mini.rs) builds the window
+  with decorations(false) + always_on_top + skip_taskbar hosting THIS file via
+  WebviewUrl::App("mini.html") — a third vite entry (see vite.config.ts
+  rollupOptions.input, after index + popout). The page is a tiny standalone
+  React bundle (src/mini/** — deliberately NOT the main app's bundle: no
+  api.ts, no router) that polls the sidecar's /computer-use/session endpoint
+  every second and paints the owner's "very minimal, clean, beautiful"
+  floating bar: status dot + label + elapsed timer, the latest activity, and
+  the STOP kill switch. It closes itself (close_computer_mini) once the
+  control session has ended.
+-->
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+    <title>Acute Monitor</title>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/mini/main.tsx"></script>
+  </body>
+</html>

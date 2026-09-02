@@ -1,79 +1,57 @@
-import { useEffect, useRef, useState, type PointerEvent as ReactPointerEvent } from "react";
+import { useEffect, useRef, useState } from "react";
 import { AnimatePresence, motion } from "framer-motion";
-import {
-  Activity,
-  Clock,
-  Eye,
-  GripHorizontal,
-  LoaderCircle,
-  Monitor,
-  MousePointerClick,
-  Play,
-  ShieldAlert,
-  Sparkles,
-  Square,
-  X,
-  type LucideIcon,
-} from "lucide-react";
+import { LoaderCircle, Square } from "lucide-react";
 import { fetchComputerUseSession, stopComputerUse } from "../lib/api";
-import {
-  useComputerMonitorStore,
-  type ComputerMonitorEvent,
-} from "../lib/computer-monitor-store";
-import { formatWhen } from "../lib/format";
+import { useComputerMonitorStore } from "../lib/computer-monitor-store";
+import { nativeInvoke } from "../lib/native-browser";
 import { ease } from "../lib/motion";
 import { SEMANTIC_COLORS } from "../lib/semantics";
+import { isTauri } from "../lib/sidecar";
+import type { ThemeStyles } from "../lib/themes";
 import { useThemeStyles } from "../lib/use-theme-styles";
-import { useScrollFade } from "../lib/useScrollFade";
 import { withAlpha } from "./dashboard/helpers";
-import { ClampedText } from "./shared/ClampedText";
 
 /**
- * ROUND-61 (R61-2-b) the FLOATING COMPUTER MONITOR — the owner's centerpiece
- * ("while the agent is using the computer, in a mini window it will show
- * the details and their stats — what it's about to do, how it's thinking,
- * the progress").
+ * ROUND-64 (R64-b) — the FLOATING COMPUTER MONITOR, re-architected per the
+ * owner's directive: "It needs to be very minimal. It needs to be clean. It
+ * needs to be beautiful. It should be a floating one. It will be shown at the
+ * top of each and every single one of the screens… so that I can easily stop
+ * it from there… The floating one will automatically show up as soon as the
+ * agent starts to use the computer skill and starts to interact with the
+ * device."
  *
- * Mounted app-wide (no props): it renders only while
- * useComputerMonitorStore.miniWindowOpen, self-managing via the same merged
- * store the right-sidebar ComputerPanel reads — live SSE frames land
- * instantly (the stream-store intercept), the panel's polls keep the
- * session stats/kill-switch fresh, and a one-shot session fetch on open
- * covers the window opening with no panel behind it.
+ * This component is mounted app-wide (AppShell) and is now a CONTROLLER, not
+ * a card:
  *
- * A FIXED-position draggable card (w-[340px], z-[70]): the title bar is the
- * drag handle (pointer events, clamped to the viewport, position in local
- * component state initialized bottom-right — no persistence). The body
- * answers the owner's three questions in order — WHAT it's doing (the
- * newest event with the biggest weight + two older rows), HOW it's going
- * (stats strip + elapsed clock + the refusal/vision spotlights), and HOW
- * to stop it (the full-width STOP kill switch that locks into the honest
- * "Stopped — the kill switch is active" state).
+ *   DESKTOP (Tauri) — the surface is a dedicated ALWAYS-ON-TOP OS window
+ *   (src-tauri/src/mini.rs, hosting the mini.html page): live SSE
+ *   computer-use frames flip the monitor store's `liveActivity` →
+ *   `open_computer_mini` is invoked (once per burst); the session ending
+ *   (the `session_stop` frame) schedules `close_computer_mini` as a
+ *   backstop — the mini page closes itself via its own poll first. NOTHING
+ *   renders in-app (no double surfaces: the OS window IS the surface, and
+ *   it floats above every screen so STOP is reachable while the agent
+ *   drives other apps).
+ *
+ *   WEB (no Tauri) — the same minimal bar language as an in-app pill:
+ *   `fixed top-3 left-1/2 z-[90]` compact card (status dot + label +
+ *   elapsed timer + latest activity + the STOP kill switch), auto-SHOWN on
+ *   live activity and auto-HIDDEN ~8s after the session ends. The old
+ *   bottom-right draggable card (drag handle + stats grid + event list) is
+ *   deliberately GONE — minimal is the feature.
+ *
+ * FEED SOURCES (the monitor store, unchanged): live SSE frames land via the
+ * stream-store intercept at dispatch time (zero latency), a one-shot session
+ * fetch seeds the boot state, and — while the pill is visible — a light 2s
+ * poll keeps the kill-switch state + stats honest (the surface owns its
+ * poll now that the right-sidebar ComputerPanel tab is gone).
  */
 
-/** Kind icon + color — the same documented exception as the ComputerPanel's
- * KIND_META (kind meaning across every theme/mode); duplicated locally so
- * the always-mounted mini window stays independent of the panel module. */
-const KIND_META: Record<string, { icon: LucideIcon; color: string }> = {
-  observation: { icon: Eye, color: SEMANTIC_COLORS.success },
-  action: { icon: MousePointerClick, color: "#f9a825" },
-  refusal: { icon: ShieldAlert, color: SEMANTIC_COLORS.danger },
-  vision: { icon: Sparkles, color: "#c792ea" },
-  session_start: { icon: Play, color: "#82aaff" },
-  session_stop: { icon: Square, color: "#788494" },
-};
+/** The STOP reason recorded server-side on the kill switch (shared with the
+ * floating monitor page — src/mini/MiniApp.tsx uses the same string). */
+const STOP_REASON = "stopped by the owner from the floating monitor";
 
-/** Muted slate (hex so withAlpha works) for neutral/zero stat cells. */
-const NEUTRAL = "#788494";
-
-/** The STOP reason recorded server-side on the kill switch. */
-const STOP_REASON = "stopped by the owner from the mini window";
-
-/** Card + margin geometry for the drag clamp. */
-const CARD_WIDTH = 340;
-const VIEWPORT_MARGIN = 8;
-
-/** "2m 14s" style elapsed — same format as the panel's session clock. */
+/** "2m 14s" style elapsed — the session clock (startedAt is epoch ms). */
 function fmtElapsed(ms: number): string {
   const s = Math.max(0, Math.round(ms / 1000));
   if (s < 60) return `${s}s`;
@@ -96,36 +74,42 @@ function useNowMs(active: boolean): number {
   return nowMs;
 }
 
-/** The app-wide floating monitor. Renders nothing while closed. */
-export function ComputerMiniWindow() {
-  const open = useComputerMonitorStore((s) => s.miniWindowOpen);
-  return (
-    <AnimatePresence>
-      {open ? <MiniWindowCard key="computer-mini-window" /> : null}
-    </AnimatePresence>
-  );
+/** Timings as props so the tests drive real timers with tiny values. */
+export interface ComputerMiniWindowProps {
+  /** Web pill: how long after the session ends before it auto-hides (8s). */
+  hideDelayMs?: number;
+  /** Tauri: the close_computer_mini backstop delay after the session ends
+   * (6s — the mini page's own poll normally closes it first). */
+  closeDelayMs?: number;
+  /** Web pill: the keep-honest session poll while visible (2s). */
+  pollMs?: number;
 }
 
-/** The card itself — mounted fresh on every open (bottom-right start, clean
- * scroll-fade wiring, honest "idle" body before any event arrives). */
-function MiniWindowCard() {
+export function ComputerMiniWindow({
+  hideDelayMs = 8_000,
+  closeDelayMs = 6_000,
+  pollMs = 2_000,
+}: ComputerMiniWindowProps = {}) {
   const styles = useThemeStyles();
-  const setMiniWindowOpen = useComputerMonitorStore((s) => s.setMiniWindowOpen);
-  const events = useComputerMonitorStore((s) => s.events);
-  const session = useComputerMonitorStore((s) => s.session);
   const liveActivity = useComputerMonitorStore((s) => s.liveActivity);
+  const session = useComputerMonitorStore((s) => s.session);
+  const events = useComputerMonitorStore((s) => s.events);
   const storeError = useComputerMonitorStore((s) => s.error);
 
   const sessionActive = session?.active ?? false;
   const killSwitch = session?.killSwitch ?? false;
-  const stats = session?.stats ?? null;
   const startedAt = session?.startedAt ?? null;
-  const live = liveActivity || sessionActive;
   const nowMs = useNowMs(sessionActive);
+  // One combined "the agent is in control" signal: live SSE frames OR an
+  // active session — and NOT once the kill switch has engaged (the stopped
+  // state starts the dismissal countdown, not a new burst).
+  const live = (liveActivity || sessionActive) && !killSwitch;
+  const inTauri = isTauri();
 
-  // One-shot seed: the window can open with no panel behind it (and no
-  // session in the store yet) — pull the session truth once. Re-attempted
-  // if live frames start arriving while the session is still unknown.
+  // ── one-shot seed: the component mounts before any activity (app-wide),
+  // so a session that is ALREADY active at boot (app reload mid-control)
+  // still surfaces. Re-attempted while live frames arrive with the session
+  // still unknown (the ComputerPanel's old contract, now owned here).
   const hasSession = session !== null;
   useEffect(() => {
     if (hasSession) return;
@@ -146,43 +130,60 @@ function MiniWindowCard() {
     };
   }, [hasSession, liveActivity]);
 
-  // ── Drag: the title bar is the handle ──
-  const cardRef = useRef<HTMLDivElement>(null);
-  const [pos, setPos] = useState(() => ({
-    x: Math.max(VIEWPORT_MARGIN, window.innerWidth - CARD_WIDTH - 20),
-    y: Math.max(VIEWPORT_MARGIN, window.innerHeight - 320),
-  }));
-  const dragCleanupRef = useRef<(() => void) | null>(null);
-  // A mid-drag unmount (window closed) must not leak the window listeners.
-  useEffect(() => () => dragCleanupRef.current?.(), []);
+  // ── the auto show/hide + open/close controller (EDGE-triggered) ─────────
+  // live false→true: show the surface (open the OS window in Tauri / the
+  // pill in web) — once per burst, because it is an edge.
+  // live true→false: the session ended (session_stop frame / kill switch /
+  // inactive session) — schedule the surface's dismissal, CANCELED if
+  // activity resumes (a new burst within the grace period re-shows instead).
+  const [visible, setVisible] = useState(false);
+  const prevLiveRef = useRef(false);
+  useEffect(() => {
+    const prev = prevLiveRef.current;
+    prevLiveRef.current = live;
+    if (live) {
+      if (inTauri) {
+        const invoke = nativeInvoke();
+        invoke?.("open_computer_mini").catch((err: unknown) => {
+          console.warn("[computer-mini] open_computer_mini failed", err);
+        });
+      } else {
+        setVisible(true);
+      }
+      return;
+    }
+    if (!prev) return; // false→false (mount, or long after a dismissal)
+    const delay = inTauri ? closeDelayMs : hideDelayMs;
+    const t = setTimeout(() => {
+      if (inTauri) {
+        const invoke = nativeInvoke();
+        invoke?.("close_computer_mini").catch((err: unknown) => {
+          console.warn("[computer-mini] close_computer_mini failed", err);
+        });
+      } else {
+        setVisible(false);
+      }
+    }, delay);
+    return () => clearTimeout(t);
+  }, [live, inTauri, closeDelayMs, hideDelayMs]);
 
-  const onTitleBarPointerDown = (e: ReactPointerEvent<HTMLDivElement>) => {
-    if (e.button !== 0) return;
-    e.preventDefault();
-    const origin = { x: pos.x, y: pos.y, cx: e.clientX, cy: e.clientY };
-    const onMove = (ev: PointerEvent) => {
-      const cardHeight = Math.max(180, cardRef.current?.offsetHeight ?? 320);
-      const maxX = Math.max(0, window.innerWidth - CARD_WIDTH - VIEWPORT_MARGIN);
-      const maxY = Math.max(0, window.innerHeight - cardHeight - VIEWPORT_MARGIN);
-      setPos({
-        x: Math.min(Math.max(0, origin.x + (ev.clientX - origin.cx)), maxX),
-        y: Math.min(Math.max(0, origin.y + (ev.clientY - origin.cy)), maxY),
-      });
-    };
-    const onUp = () => {
-      window.removeEventListener("pointermove", onMove);
-      window.removeEventListener("pointerup", onUp);
-      window.removeEventListener("pointercancel", onUp);
-      dragCleanupRef.current = null;
-    };
-    dragCleanupRef.current?.();
-    dragCleanupRef.current = onUp;
-    window.addEventListener("pointermove", onMove);
-    window.addEventListener("pointerup", onUp);
-    window.addEventListener("pointercancel", onUp);
-  };
+  // ── web pill: the keep-honest poll while visible ────────────────────────
+  // (In Tauri the OS window's page polls the engine itself — mini-client —
+  // so the main app does NOT double-poll there.)
+  useEffect(() => {
+    if (inTauri || !visible) return;
+    const id = setInterval(() => {
+      void fetchComputerUseSession()
+        .then((state) => useComputerMonitorStore.getState().refreshFromServer(state))
+        .catch(() => {
+          // Keep the last good truth — the tiny error line only flips when
+          // the one-shot seed or a STOP fails (honest, not noisy).
+        });
+    }, pollMs);
+    return () => clearInterval(id);
+  }, [inTauri, visible, pollMs]);
 
-  // ── The STOP kill switch ──
+  // ── the STOP kill switch (the web pill's one prominent action) ──────────
   const [stopping, setStopping] = useState(false);
   const [stopError, setStopError] = useState<string | null>(null);
   const doStop = async () => {
@@ -201,310 +202,162 @@ function MiniWindowCard() {
     }
   };
 
-  // ── What it's doing: newest first, top event with the biggest weight ──
-  const newest = events.length > 0 ? events[0] : null;
-  const older = events.slice(1, 3);
-  const latestVision = events.find((e) => e.kind === "vision") ?? null;
+  // DESKTOP: the OS window is the surface — nothing in-app, ever.
+  if (inTauri) return null;
 
-  const bodyRef = useRef<HTMLDivElement>(null);
-  useScrollFade(bodyRef);
-
-  const topMeta = newest !== null ? KIND_META[newest.kind] : undefined;
-  const TopIcon = topMeta?.icon ?? Activity;
-  const topColor = topMeta?.color ?? styles.textTertiary;
+  const label = killSwitch
+    ? "Agent computer control stopped"
+    : "Agent is using your computer";
+  const newest = events[0] ?? null;
+  const activity = newest !== null ? newest.label : "Waiting for the first action…";
 
   return (
+    // The plain-CSS anchor keeps framer-motion's transform (it animates the
+    // inner card) from fighting Tailwind's -translate-x-1/2.
+    <div className="pointer-events-none fixed top-3 left-1/2 z-[90] -translate-x-1/2">
+      <AnimatePresence>
+        {visible ? (
+          <MiniPill
+            key="computer-mini-pill"
+            styles={styles}
+            live={live}
+            killSwitch={killSwitch}
+            label={label}
+            activity={activity}
+            error={stopError ?? (session === null ? storeError : null)}
+            elapsed={
+              startedAt !== null ? fmtElapsed(Math.max(0, nowMs - startedAt)) : null
+            }
+            stopping={stopping}
+            onStop={() => void doStop()}
+          />
+        ) : null}
+      </AnimatePresence>
+    </div>
+  );
+}
+
+/** The web-mode minimal bar — the same language as the OS window's page
+ * (src/mini/MiniApp.tsx): dot + label + elapsed, one activity line, the
+ * STOP pill. NO stats grid, NO event list, NO drag. */
+function MiniPill({
+  styles,
+  live,
+  killSwitch,
+  label,
+  activity,
+  error,
+  elapsed,
+  stopping,
+  onStop,
+}: {
+  styles: ThemeStyles;
+  live: boolean;
+  killSwitch: boolean;
+  label: string;
+  activity: string;
+  error: string | null;
+  elapsed: string | null;
+  stopping: boolean;
+  onStop: () => void;
+}) {
+  return (
     <motion.div
-      ref={cardRef}
-      initial={{ opacity: 0, scale: 0.94, y: 8 }}
-      animate={{ opacity: 1, scale: 1, y: 0 }}
-      exit={{ opacity: 0, scale: 0.96, y: 8 }}
+      initial={{ opacity: 0, y: -12, scale: 0.97 }}
+      animate={{ opacity: 1, y: 0, scale: 1 }}
+      exit={{ opacity: 0, y: -12, scale: 0.97 }}
       transition={{ duration: 0.18, ease }}
-      className="fixed z-[70] w-[340px] rounded-xl border overflow-hidden flex flex-col"
+      className="pointer-events-auto flex max-w-[480px] items-center gap-3 rounded-2xl border px-3.5 py-2"
       style={{
-        left: pos.x,
-        top: pos.y,
         background: styles.isDark ? withAlpha(styles.card, 0.94) : styles.card,
         backdropFilter: "blur(14px)",
         borderColor: styles.borderStrong,
         boxShadow: styles.softShadow,
       }}
-      role="dialog"
-      aria-label="Agent computer monitor mini window"
-      data-testid="computer-mini-window"
+      role="status"
+      aria-label="Agent computer monitor"
+      data-testid="computer-mini-pill"
     >
-      {/* ── Title bar: the drag handle + LIVE badge + close ── */}
-      <div
-        className="shrink-0 flex items-center gap-1.5 px-2.5 h-9 border-b cursor-grab active:cursor-grabbing select-none"
-        style={{
-          borderColor: styles.border,
-          background: styles.isDark ? "rgba(0,0,0,0.18)" : styles.subtle,
-          touchAction: "none",
-        }}
-        onPointerDown={onTitleBarPointerDown}
-        data-testid="computer-mini-titlebar"
-      >
-        <GripHorizontal size={12} style={{ color: styles.textTertiary }} className="shrink-0" />
-        <Monitor size={12} style={{ color: styles.accent }} className="shrink-0" />
-        <div className="flex-1 min-w-0 truncate text-[11px] font-semibold" style={{ color: styles.text }}>
-          Agent · Computer
-        </div>
-        {live ? (
+      {/* LEFT — status row + the latest activity (one subtle line). */}
+      <div className="flex min-w-0 flex-col gap-0.5">
+        <div className="flex min-w-0 items-center gap-2">
+          <PulsingDot live={live} />
           <span
-            className="shrink-0 flex items-center gap-1 px-1.5 py-0.5 rounded-full text-[8.5px] font-bold uppercase tracking-wider"
-            style={{ background: withAlpha(SEMANTIC_COLORS.success, 0.14), color: SEMANTIC_COLORS.success }}
-            data-testid="mini-live-badge"
+            className="min-w-0 truncate text-[12px] font-semibold"
+            style={{ color: killSwitch ? styles.textSecondary : styles.text }}
+            data-testid="mini-label"
           >
-            <PulsingDot color={SEMANTIC_COLORS.success} size={4} /> LIVE
+            {label}
           </span>
-        ) : null}
-        <button
-          onClick={() => setMiniWindowOpen(false)}
-          aria-label="Close the computer monitor mini window"
-          title="Close"
-          className="shrink-0 w-6 h-6 grid place-items-center rounded-md transition-colors"
-          style={{ color: styles.textTertiary }}
-          onMouseEnter={(e) => {
-            e.currentTarget.style.background = styles.subtleHover;
-            e.currentTarget.style.color = styles.text;
-          }}
-          onMouseLeave={(e) => {
-            e.currentTarget.style.background = "transparent";
-            e.currentTarget.style.color = styles.textTertiary;
-          }}
-        >
-          <X size={13} />
-        </button>
-      </div>
-
-      {/* ── Body: what it's doing + spotlights + stats ── */}
-      <div ref={bodyRef} className="max-h-[260px] overflow-y-auto auto-scroll" data-testid="mini-body">
-        {/* What it's doing — the newest event with the biggest visual weight. */}
-        <div className="px-2.5 pt-2.5 pb-1">
-          <div
-            className="text-[8.5px] font-bold uppercase tracking-wider mb-1.5"
-            style={{ color: styles.textTertiary }}
-          >
-            What it&apos;s doing
-          </div>
-          {newest !== null ? (
-            <div
-              className="rounded-[10px] px-2.5 py-2 flex flex-col gap-1"
-              style={{
-                background: styles.isDark ? "rgba(0,0,0,0.16)" : styles.card,
-                border: `1px solid ${styles.border}`,
-              }}
-              data-testid="mini-top-event"
+          {elapsed !== null ? (
+            <span
+              className="shrink-0 text-[11px] tabular-nums"
+              style={{ color: styles.textTertiary }}
+              data-testid="mini-elapsed"
+              title="Control session elapsed"
             >
-              <div className="flex items-center gap-1.5">
-                <TopIcon size={13} style={{ color: topColor }} className="shrink-0" />
-                <span
-                  className="text-[8.5px] font-bold uppercase tracking-wider truncate"
-                  style={{ color: topColor }}
-                >
-                  {newest.kind}
-                </span>
-                <span className="flex-1" />
-                <span
-                  className="text-[9px] tabular-nums shrink-0"
-                  style={{ color: styles.textTertiary }}
-                  title={new Date(newest.ts).toISOString()}
-                >
-                  {formatWhen(new Date(newest.ts).toISOString())}
-                </span>
-              </div>
-              <ClampedText
-                text={newest.label}
-                lines={2}
-                className="text-[11px] leading-[1.5] break-words"
-                style={{ color: styles.text }}
-              />
-              {newest.tool !== undefined ? (
-                <span
-                  className="self-start text-[9px] font-mono px-1.5 py-0.5 rounded-md"
-                  style={{ color: styles.textSecondary, background: withAlpha(NEUTRAL, 0.12) }}
-                >
-                  {newest.tool}
-                </span>
-              ) : null}
-            </div>
-          ) : (
-            <div
-              className="rounded-[10px] px-2.5 py-3 text-[10.5px] text-center"
-              style={{ color: styles.textTertiary, border: `1px dashed ${styles.border}` }}
-            >
-              Idle — the agent isn&apos;t using the desktop right now.
-            </div>
-          )}
-          {older.map((event) => (
-            <CompactEventRow key={event.id} event={event} />
-          ))}
-        </div>
-
-        {/* Refusal spotlight: the newest event is a refusal — the wall the
-            agent just hit and must recover from. */}
-        {newest !== null && newest.kind === "refusal" ? (
-          <div
-            className="mx-2.5 mt-1 rounded-[10px] px-2.5 py-2"
-            style={{
-              background: withAlpha(SEMANTIC_COLORS.danger, 0.1),
-              border: `1px solid ${withAlpha(SEMANTIC_COLORS.danger, 0.35)}`,
-            }}
-            data-testid="mini-refusal-spotlight"
-          >
-            <div className="flex items-center gap-1.5 text-[10px] font-bold" style={{ color: SEMANTIC_COLORS.danger }}>
-              <ShieldAlert size={11} className="shrink-0" />
-              <span className="truncate">
-                Refused: {newest.tool ?? "policy"}
-                {newest.code !== undefined ? ` · ${newest.code}` : ""}
-              </span>
-            </div>
-            <div className="text-[9.5px] mt-0.5 leading-[1.45]" style={{ color: styles.textSecondary }}>
-              The agent hit a wall — it must change approach before it can retry.
-            </div>
-          </div>
-        ) : null}
-
-        {/* Vision spotlight: the newest vision description (the label carries
-            the "Vision (mode): …" text — what the vision model said). */}
-        {latestVision !== null ? (
-          <div
-            className="mx-2.5 mt-1 rounded-[10px] px-2.5 py-2"
-            style={{
-              background: withAlpha("#c792ea", 0.1),
-              border: `1px solid ${withAlpha("#c792ea", 0.35)}`,
-            }}
-            data-testid="mini-vision-spotlight"
-          >
-            <div className="flex items-center gap-1.5 text-[10px] font-bold" style={{ color: "#c792ea" }}>
-              <Sparkles size={11} className="shrink-0" /> Vision
-            </div>
-            <ClampedText
-              text={latestVision.label}
-              lines={2}
-              className="text-[9.5px] mt-0.5 leading-[1.45] break-words"
-              style={{ color: styles.textSecondary }}
-            />
-          </div>
-        ) : null}
-
-        {/* Stats strip: sent / refused / observations / vision + the clock. */}
-        <div className="px-2.5 pt-2 pb-2.5 flex flex-col gap-1">
-          <div className="grid grid-cols-4 gap-1" data-testid="mini-stats">
-            <MiniStat label="Sent" value={stats?.actionsSent ?? 0} color={SEMANTIC_COLORS.success} title="Actions sent" />
-            <MiniStat
-              label="Refused"
-              value={stats?.actionsRefused ?? 0}
-              color={(stats?.actionsRefused ?? 0) > 0 ? SEMANTIC_COLORS.danger : NEUTRAL}
-              title="Actions refused"
-            />
-            <MiniStat label="Obs" value={stats?.observations ?? 0} color={styles.text} title="Observations" />
-            <MiniStat label="Vision" value={stats?.visionCalls ?? 0} color="#c792ea" title="Vision calls" />
-          </div>
-          <div className="flex items-center gap-1.5 text-[9px]" style={{ color: styles.textTertiary }}>
-            <Clock size={9} className="shrink-0" />
-            <span className="font-mono tabular-nums" data-testid="mini-elapsed">
-              {startedAt !== null ? `Elapsed ${fmtElapsed(Math.max(0, nowMs - startedAt))}` : "Not started"}
+              {elapsed}
             </span>
-            <span className="flex-1" />
-            {live ? <span className="truncate">live</span> : null}
-          </div>
-          {storeError !== null && session === null ? (
-            <div className="text-[9.5px]" style={{ color: SEMANTIC_COLORS.danger }} role="alert">
-              {storeError}
-            </div>
-          ) : null}
-          {stopError !== null ? (
-            <div className="text-[9.5px]" style={{ color: SEMANTIC_COLORS.danger }} role="alert">
-              {stopError}
-            </div>
           ) : null}
         </div>
+        <span
+          className="min-w-0 truncate text-[11px]"
+          style={{ color: error !== null ? SEMANTIC_COLORS.danger : styles.textSecondary }}
+          data-testid="mini-activity"
+          title={activity}
+        >
+          {error !== null ? error : activity}
+        </span>
       </div>
 
-      {/* ── Footer: the BIG STOP kill switch ── */}
-      <div
-        className="shrink-0 border-t px-2.5 py-2"
-        style={{ borderColor: styles.border, background: styles.isDark ? "rgba(0,0,0,0.18)" : styles.subtle }}
+      {/* STOP — the danger pill (the one prominent control). */}
+      <button
+        type="button"
+        onClick={onStop}
+        disabled={stopping || killSwitch}
+        data-testid="mini-stop-button"
+        title={
+          killSwitch
+            ? "The kill switch is active — the agent cannot control the desktop"
+            : "Kill switch — stop the agent's computer control now"
+        }
+        className="flex h-8 shrink-0 items-center gap-1.5 rounded-full border px-3.5 text-[10.5px] font-bold uppercase tracking-wider transition-colors disabled:cursor-default"
+        style={
+          killSwitch
+            ? {
+                color: styles.textTertiary,
+                background: withAlpha("#788494", 0.10),
+                borderColor: styles.border,
+              }
+            : {
+                color: SEMANTIC_COLORS.danger,
+                background: withAlpha(SEMANTIC_COLORS.danger, 0.13),
+                borderColor: withAlpha(SEMANTIC_COLORS.danger, 0.45),
+              }
+        }
       >
-        <button
-          onClick={() => void doStop()}
-          disabled={stopping || killSwitch}
-          data-testid="mini-stop-button"
-          title={killSwitch ? "The kill switch is active — the agent cannot control the desktop" : "Kill switch — stop the agent's computer control now"}
-          className="w-full h-9 rounded-[10px] inline-flex items-center justify-center gap-2 text-[10.5px] font-bold uppercase tracking-wider transition-colors disabled:cursor-default"
-          style={
-            killSwitch
-              ? {
-                  color: styles.textTertiary,
-                  background: withAlpha(NEUTRAL, 0.1),
-                  border: `1px solid ${styles.border}`,
-                }
-              : {
-                  color: SEMANTIC_COLORS.danger,
-                  background: withAlpha(SEMANTIC_COLORS.danger, 0.12),
-                  border: `1px solid ${withAlpha(SEMANTIC_COLORS.danger, 0.45)}`,
-                }
-          }
-        >
-          {stopping ? <LoaderCircle size={12} className="animate-spin" /> : <Square size={12} fill="currentColor" strokeWidth={0} />}
-          {stopping ? "Stopping…" : killSwitch ? "Stopped — the kill switch is active" : "STOP computer control"}
-        </button>
-      </div>
+        {stopping ? (
+          <LoaderCircle size={11} className="animate-spin" aria-hidden />
+        ) : (
+          <Square size={10} fill="currentColor" strokeWidth={0} aria-hidden />
+        )}
+        <span className="leading-none">{stopping ? "Stopping" : killSwitch ? "Stopped" : "Stop"}</span>
+      </button>
     </motion.div>
   );
 }
 
-/** A compact older-event row: icon + clamped label + relative ts. */
-function CompactEventRow({ event }: { event: ComputerMonitorEvent }) {
-  const styles = useThemeStyles();
-  const meta = KIND_META[event.kind];
-  const Icon = meta?.icon ?? Activity;
-  const color = meta?.color ?? styles.textTertiary;
-  return (
-    <div className="flex items-center gap-1.5 px-1 py-0.5">
-      <Icon size={10} style={{ color }} className="shrink-0" />
-      <span className="flex-1 min-w-0 truncate text-[10px]" style={{ color: styles.textSecondary }}>
-        {event.label}
-      </span>
-      <span
-        className="text-[8.5px] shrink-0 tabular-nums"
-        style={{ color: styles.textTertiary }}
-        title={new Date(event.ts).toISOString()}
-      >
-        {formatWhen(new Date(event.ts).toISOString())}
-      </span>
-    </div>
-  );
-}
-
-/** One mini stat cell: the count + the tiny label. */
-function MiniStat({ label, value, color, title }: { label: string; value: number; color: string; title: string }) {
-  const styles = useThemeStyles();
-  return (
-    <div
-      className="flex flex-col items-center gap-0.5 min-w-0 py-1 rounded-lg"
-      style={{ background: withAlpha(color, 0.08) }}
-      title={title}
-    >
-      <span className="text-[12px] font-bold font-mono leading-none tabular-nums" style={{ color }}>
-        {value}
-      </span>
-      <span className="text-[7.5px] font-bold uppercase tracking-wide" style={{ color: styles.textTertiary }}>
-        {label}
-      </span>
-    </div>
-  );
-}
-
-/** The LIVE badge's heartbeat dot. */
-function PulsingDot({ color, size = 6 }: { color: string; size?: number }) {
+/** The status dot — a heartbeat while the agent is in control, a calm gray
+ * point once stopped (the MiniApp PulsingDot discipline). */
+function PulsingDot({ live }: { live: boolean }) {
+  const color = live ? SEMANTIC_COLORS.success : "#788494";
   return (
     <motion.span
-      className="inline-block rounded-full shrink-0"
-      style={{ width: size, height: size, background: color }}
-      animate={{ scale: [1, 1.45, 1], opacity: [1, 0.5, 1] }}
-      transition={{ repeat: Infinity, duration: 1.6, ease: "easeInOut" }}
+      className="inline-block shrink-0 rounded-full"
+      style={{ width: 6, height: 6, background: color }}
+      initial={false}
+      animate={live ? { scale: [1, 1.5, 1], opacity: [1, 0.45, 1] } : { scale: 1, opacity: 0.7 }}
+      transition={live ? { repeat: Infinity, duration: 1.6, ease: "easeInOut" } : { duration: 0.18, ease }}
       aria-hidden
     />
   );

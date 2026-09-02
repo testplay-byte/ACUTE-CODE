@@ -11,7 +11,7 @@ The backend (~8.3k lines: the computer/ engine, 3 platform backends, the mcp/ cl
 |---|---|---|
 | R61-main-1 (orch) | Backend rescue + verify + the frontend contract (api.ts client, computer-monitor store, stream intercept, sidebar tab type) | agent-core/src/computer/**, plugins/{computer-use,skills,mcp}.ts, storage/{computer-use,skills,mcp}.ts, mcp/manager.ts, migration 0023, server.ts ROUND-61, keys.rs, prompts.ts + golden, src/lib/{api,computer-monitor-store,stream-store,right-sidebar-store}.ts |
 | R61-2-a | The THREE settings tabs (Skills / MCP / Computer Use) + tests | src/components/settings/{SkillsTab,McpTab,ComputerUseTab}.tsx + tests (new files only) |
-| R61-2-b | The monitor: right-sidebar ComputerPanel + the floating ComputerMiniWindow + tests | src/components/right-sidebar/ComputerPanel.tsx, src/components/ComputerMiniWindow.tsx + tests |
+| R61-2-b | The monitor: right-sidebar ComputerPanel + the floating ComputerMiniWindow + tests | src/components/ComputerMiniWindow.tsx + tests (ComputerPanel.tsx REMOVED in R64 — the floating monitor became the only surface) |
 | Integration (orch) | SettingsPage sections, RightSidebar tab + panel mount, AppShell mini-window mount, icons | src/pages/SettingsPage.tsx, right-sidebar/RightSidebar.tsx, shell/AppShell.tsx |
 | R61-2-d (docs) | This round file + the two runbooks + IMPLEMENTED-API/CHANGELOG/HANDOFF/TESTING/README updates | docs/** |
 
@@ -39,7 +39,7 @@ The **plugin** (`plugins/computer-use.ts`) registers exactly the **30 doc-02 too
 
 Two surfaces over ONE merged store (`src/lib/computer-monitor-store.ts`):
 
-- **The right-sidebar Computer tab** (`ComputerPanel.tsx`) — the full feed: OFF/STOPPED/LIVE/Idle status chip (master switch wins), the 4 stat cells + elapsed clock + backend, the newest-first event ring (kind icon, label, tool chip, refusal-code chip), the STOP kill switch, the pop-out button. Polls `GET /computer-use/session` 2 s while active / 10 s idle.
+- **The right-sidebar Computer tab** (REMOVED in R64 — the always-on-top floating monitor is the only surface now) — the full feed was: OFF/STOPPED/LIVE/Idle status chip (master switch wins), the 4 stat cells + elapsed clock + backend, the newest-first event ring (kind icon, label, tool chip, refusal-code chip), the STOP kill switch, the pop-out button. Polls `GET /computer-use/session` 2 s while active / 10 s idle.
 - **The floating mini window** (`ComputerMiniWindow.tsx`, app-wide via AppShell, renders only while open) — a 340 px fixed-position draggable card (title bar = drag handle, viewport-clamped) answering the owner's three questions in order: WHAT it's doing (newest event, biggest weight), HOW it's going (stats strip + refusal/vision spotlights), HOW to stop it (full-width STOP).
 - **The data path**: every tool execution emits one `{type:"computer-use", kind, tool?, code?}` SSE envelope at dispatch time; `stream-store.ts` intercepts these BEFORE the liveTurn guard → `pushLiveEvent` (live updates even for background turns, zero polling latency); the polled session truth (server labels + stats + kill-switch state) lands via `refreshFromServer` (server rows win).
 - **STOP** = `POST /computer-use/stop` — the kill switch engages, a session-held button is released with a real mouse-up at its recorded point (the only sanctioned auto-release), and every further computer-use call refuses `kill_switch_active`.
@@ -67,7 +67,7 @@ Settings → Computer Use (PUT /computer-use/config)
        │    │    ├─ getComputerSession() (singleton: snapshots/frames/held/killSwitch/ring)
        │    │    └─ appendAudit → <project>/.acute/computer-use/audit.jsonl (redacted)
        │    ├─ emit {type:"computer-use"} per execution → SSE → stream-store intercept
-       │    │    └─ useComputerMonitorStore → ComputerPanel + ComputerMiniWindow (+ GET session polling)
+       │    │    └─ useComputerMonitorStore → ComputerMiniWindow (R64: the panel is gone) (+ GET session polling)
        │    └─ vision relay (describe:true) → separate slot "<provider>-vision" / main supports_vision
        └─ keys.rs store_vision_key → credential ACUTE-CODE/provider/<id>-vision + env at spawn
 skills table → prompts SKILLS section + read_skill tool (migration 0023 appended allowlists)
@@ -90,7 +90,7 @@ mcp_servers table → mcp/manager.ts child (sanitized env) → mcp__<server>__<t
   audit trail), computer-vision 10 (slot resolution, both wire formats,
   main-mode gating), skills-mcp 10 (skill seed/CRUD/builtin-delete-refused,
   MCP storage, the manager: sanitize/round-trip/fail-soft/probe/banner) ·
-  frontend: SkillsTab 11, McpTab 12, ComputerUseTab 12, ComputerPanel 8,
+  frontend: SkillsTab 11, McpTab 12, ComputerUseTab 12, ComputerPanel 8 (panel removed in R64),
   ComputerMiniWindow 7.
 - **Migration 0023** applied on fresh + upgraded DBs (memory-tools +
   models-catalog pin the 24-name allowlists + the template appends).

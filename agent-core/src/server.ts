@@ -2526,7 +2526,8 @@ export function buildServer(options: ServerOptions): FastifyInstance {
               })
             : null;
 
-        // ── Breakdown approximations (context.ts estimateTokens ~4 chars/token):
+        // ── Breakdown approximations (context.ts estimateTokens — ROUND-64's
+        // GPT-style BPE approximation, calibrated ±15% of cl100k behavior):
         // systemPrompt: the identity section — the core prompt text minus the
         //   tool list, memory digest, and meta sections.
         // systemTools: the prompt's tool-names section (measured) PLUS ~350

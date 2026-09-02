@@ -103,3 +103,59 @@ describe("right-sidebar store — openFiles (R48-c files explorer tab)", () => {
     expect(tabs("prj_1")).toHaveLength(1);
   });
 });
+
+describe("right-sidebar store — ROUND-64 (R64-b): the computer tab is GONE", () => {
+  it("openComputer no longer exists on the store (no computer tab surface)", () => {
+    // The ROUND-61 action was removed with the tab type: the always-on-top
+    // floating monitor window is the only computer-use surface now.
+    expect(
+      (useRightSidebarStore.getState() as unknown as Record<string, unknown>).openComputer,
+    ).toBeUndefined();
+    // Every other singleton action is still there (untouched).
+    const state = useRightSidebarStore.getState() as unknown as Record<string, unknown>;
+    for (const action of ["openFiles", "openTerminal", "openMemory", "openConsole", "openBrowser"]) {
+      expect(typeof state[action]).toBe("function");
+    }
+  });
+
+  it("the v3 → v4 migration drops persisted computer tabs and keeps every other tab", () => {
+    const migrate = useRightSidebarStore.persist.getOptions().migrate;
+    expect(migrate).toBeTypeOf("function");
+
+    const v3 = {
+      activeProjectId: "prj_1",
+      activeSessionByProject: { prj_1: "sess_a" },
+      byProject: {
+        "prj_1::sess_a": {
+          open: true,
+          width: 500,
+          tabs: [
+            { id: "tab-computer", type: "computer", title: "Computer", createdAt: 1 },
+            { id: "tab-terminal", type: "terminal", title: "Terminal", createdAt: 2 },
+            { id: "tab-files", type: "files", title: "Files", createdAt: 3 },
+          ],
+          // The owner had the computer tab ACTIVE when the app last closed.
+          activeTabId: "tab-computer",
+          terminalLinesByTab: { "tab-terminal": [{ kind: "in", text: "ls" }] },
+        },
+      },
+    };
+    const migrated = (migrate as (persisted: unknown, version: number) => unknown)(v3, 3) as {
+      byProject: Record<string, { tabs: Array<{ id: string; type: string }>; activeTabId: string | null }>;
+    };
+
+    const slice = migrated.byProject["prj_1::sess_a"];
+    expect(slice.tabs.map((t) => t.type)).toEqual(["terminal", "files"]);
+    // The active pointer fell back to a SURVIVING tab (never a dangling id).
+    expect(slice.activeTabId).toBe("tab-terminal");
+  });
+
+  it("the migration resets pre-v3 shapes wholesale (the v2 → v3 behavior stays)", () => {
+    const migrate = useRightSidebarStore.persist.getOptions().migrate;
+    const migrated = (migrate as (persisted: unknown, version: number) => unknown)(
+      { byProject: { prj_1: { tabs: [{ id: "t", type: "terminal", title: "Terminal", createdAt: 1 }] } } },
+      2,
+    ) as { byProject: Record<string, unknown> };
+    expect(migrated.byProject).toEqual({});
+  });
+});

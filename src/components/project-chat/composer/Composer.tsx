@@ -68,6 +68,8 @@ export function Composer({
   modelOverride,
   onModelChange,
   transcriptLength,
+  liveTick = 0,
+  streaming = false,
   autoFocus = false,
   inputRef,
 }: {
@@ -94,6 +96,13 @@ export function Composer({
   onModelChange: (v: ModelOverride | null) => void;
   /** Transcript item count — rides the context-donut query key. */
   transcriptLength: number;
+  /** ROUND-64 (R64-c): the active live turn's working-entry count — rides
+   * the context-donut query key so the report refreshes as tool calls land
+   * (the owner: the context window must update live, not at turn end). */
+  liveTick?: number;
+  /** ROUND-64 (R64-c): a live turn is streaming — the context-donut query
+   * polls every 2.5s with staleTime 0 while true. */
+  streaming?: boolean;
   autoFocus?: boolean;
   inputRef?: RefObject<HTMLTextAreaElement>;
 }) {
@@ -364,6 +373,8 @@ export function Composer({
             sessionId={sessionId}
             model={effectiveModel}
             transcriptLength={transcriptLength}
+            liveTick={liveTick}
+            streaming={streaming}
             liveMode={liveMode}
           />
           <ModelSelector

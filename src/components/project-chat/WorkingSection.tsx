@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { AnimatePresence, motion } from "framer-motion";
 import {
@@ -145,6 +145,59 @@ function fmtTokens(n: number): string {
 }
 
 // ─── ROUND-48 (R48-e2): live Delegated rows ──────────────────────────────────
+
+/**
+ * ROUND-64 (R64-c, owner: "Below it showed me 'Delegated task' and then the
+ * description… When I expanded any one of them, it showed me all three or
+ * so sub-agents which were active. This was not good."): claim-match the
+ * parent's live children to the turn's delegate_task rows — every PENDING
+ * row owns EXACTLY ONE child instead of all of them. Assignment rules
+ * (deterministic, computed from data the caller already has):
+ *   1. a COMPLETED delegate row claims the child session id parsed from its
+ *      own output (`session: sess_…`) — that child is taken even if it is
+ *      still running;
+ *   2. each PENDING row, in timeline order, claims the EARLIEST-CREATED
+ *      running/queued child not taken by (1) or an earlier pending row;
+ *   3. a pending row with no unclaimed child claims NOTHING (it renders the
+ *      quiet "delegating…" beat).
+ * Keyed by the tool row's seq (the same key WorkingSection renders rows
+ * by). Pure; exported for tests.
+ */
+export function assignDelegateChildren(
+  entries: WorkingEntry[],
+  children: SubAgentStatus[],
+): Map<number, string | null> {
+  const claims = new Map<number, string | null>();
+  const taken = new Set<string>();
+  // (1) completed rows claim their parsed session ids.
+  for (const entry of entries) {
+    if (entry.type !== "tool" || entry.tool.toolName !== "delegate_task" || entry.tool.ok === null) {
+      continue;
+    }
+    const hay = `${entry.tool.argsSummary} ${entry.tool.outputSummary ?? ""}`;
+    const m = /session: (sess_[A-Za-z0-9-]+)/.exec(hay);
+    if (m !== null) taken.add(m[1]);
+  }
+  // (2) pending rows, in order, claim the earliest-created live child.
+  const live = children
+    .filter((c) => (c.status === "running" || c.status === "queued") && !taken.has(c.id))
+    .sort((a, b) => Date.parse(a.createdAt) - Date.parse(b.createdAt));
+  let next = 0;
+  for (const entry of entries) {
+    if (entry.type !== "tool" || entry.tool.toolName !== "delegate_task" || entry.tool.ok !== null) {
+      continue;
+    }
+    const child = next < live.length ? live[next] : undefined;
+    next += 1;
+    if (child === undefined) {
+      claims.set(entry.tool.seq, null);
+    } else {
+      taken.add(child.id);
+      claims.set(entry.tool.seq, child.id);
+    }
+  }
+  return claims;
+}
 
 /**
  * ROUND-48 (R48-e2, owner: "no option in the main chat to click the Delegated
@@ -1243,6 +1296,7 @@ function ToolLine({
   sessionId,
   projectId,
   live = false,
+  claimedChildId,
 }: {
   tool: ToolUseEntry;
   sessionId: string | null;
@@ -1250,6 +1304,10 @@ function ToolLine({
    * can open the sub-agent's tab in the right sidebar. */
   projectId: string;
   live?: boolean;
+  /** ROUND-64 (R64-c): this pending delegate_task row's CLAIMED child id
+   * (assignDelegateChildren) — the expanded body renders exactly ONE live
+   * child row instead of every running child of the parent. */
+  claimedChildId?: string | null;
 }) {
   const styles = useThemeStyles();
   const [open, setOpen] = useState(false);
@@ -1432,7 +1490,7 @@ function ToolLine({
       {open && (
         <div className="mt-0.5 mb-1 pl-4 min-w-0">
           {tool.toolName === "delegate_task" ? (
-            <DelegateDetail tool={tool} sessionId={sessionId} live={live} projectId={projectId} />
+            <DelegateDetail tool={tool} sessionId={sessionId} live={live} projectId={projectId} claimedChildId={claimedChildId} />
           ) : DIFF_TOOLS.has(tool.toolName) ? (
             // ROUND-58 (R58-cf): while the write is still in flight the
             // preview IS the body (the diff snapshot doesn't exist yet); the
@@ -1455,17 +1513,24 @@ function ToolLine({
 
 /** delegate_task → SubAgentCard (ROUND-36 integration preserved).
  * ROUND-40: threads `projectId` down to SubAgentCard so its onClick can
- * open the child's tab in the right sidebar. */
+ * open the child's tab in the right sidebar.
+ * ROUND-64 (R64-c): `claimedChildId` — the PENDING body renders exactly ONE
+ * live child (this row's claim from assignDelegateChildren, computed once
+ * per render by WorkingSection) instead of every running child of the
+ * parent (owner: expanding one of three parallel delegations showed all
+ * three sub-agents). */
 function DelegateDetail({
   tool,
   sessionId,
   projectId,
   live,
+  claimedChildId,
 }: {
   tool: ToolUseEntry;
   sessionId: string | null;
   projectId: string;
   live: boolean;
+  claimedChildId?: string | null;
 }) {
   // All hooks run unconditionally — the pending → completed transition swaps
   // branches, so the hook order must be identical in every branch.
@@ -1482,10 +1547,14 @@ function DelegateDetail({
   // `session:` id in the output yet — render the parent's LIVE children as
   // clickable rows (status/todo/token progress + the current activity from
   // the SSE live map) instead of a bare "running…" OutputDetail.
+  // ROUND-64 (R64-c): claim-matched — ONLY this row's claimed child renders
+  // (assignDelegateChildren); no claim yet → the quiet "delegating…" beat.
   const pending = tool.ok === null;
-  const liveRows = pending
-    ? (subsQuery.data ?? []).filter((s) => s.status === "running" || s.status === "queued")
-    : [];
+  const claimedChild =
+    claimedChildId !== undefined && claimedChildId !== null
+      ? (subsQuery.data ?? []).find((s) => s.id === claimedChildId) ?? null
+      : null;
+  const liveRows = pending ? (claimedChild !== null ? [claimedChild] : []) : [];
   if (pending && sessionId !== null) {
     return (
       <LiveDelegateRows
@@ -1614,6 +1683,21 @@ export function WorkingSection({
   const toolCount = entries.filter((e) => e.type === "tool").length;
   const pendingApproval = entries.some((e) => e.type === "approval" && e.status === "pending");
 
+  // ── ROUND-64 (R64-c): claim-match the parent's live children to THIS
+  // section's delegate_task rows. WorkingSection maps every tool row of the
+  // turn, so the assignment is computed HERE (once per render, from the
+  // same ["subagents", id] cache the DelegateDetail bodies use) and the
+  // claimed child id rides the row down — each pending row's expanded body
+  // then renders EXACTLY ONE live child instead of all of them (owner:
+  // "When I expanded any one of them, it showed me all three or so
+  // sub-agents which were active. This was not good.").
+  const hasDelegateRow = entries.some((e) => e.type === "tool" && e.tool.toolName === "delegate_task");
+  const delegateChildrenQuery = useDelegateChildren(sessionId, hasDelegateRow);
+  const delegateClaims = useMemo(
+    () => (hasDelegateRow ? assignDelegateChildren(entries, delegateChildrenQuery.data ?? []) : null),
+    [hasDelegateRow, entries, delegateChildrenQuery.data],
+  );
+
   const headerLabel = live
     ? stopped
       ? "Stopped"
@@ -1702,7 +1786,20 @@ export function WorkingSection({
                   // R48: distinct prefix from the index-keyed rows above — a
                   // tool's seq could equal a sibling row's list index and the
                   // shared `t-` prefix produced duplicate React keys.
-                  return <ToolLine key={`tool-${entry.tool.seq}`} tool={entry.tool} sessionId={sessionId} live={live} projectId={projectId} />;
+                  return (
+                    <ToolLine
+                      key={`tool-${entry.tool.seq}`}
+                      tool={entry.tool}
+                      sessionId={sessionId}
+                      live={live}
+                      projectId={projectId}
+                      claimedChildId={
+                        entry.tool.toolName === "delegate_task"
+                          ? delegateClaims?.get(entry.tool.seq)
+                          : undefined
+                      }
+                    />
+                  );
                 }
                 return <ApprovalRow key={`t-${i}`} entry={entry} sessionId={sessionId} onDecision={onApprovalDecision} />;
               })}

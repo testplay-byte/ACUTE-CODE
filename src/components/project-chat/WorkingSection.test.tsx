@@ -14,7 +14,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { cleanup, fireEvent, screen, waitFor } from "@testing-library/react";
 import { QueryClient } from "@tanstack/react-query";
-import { WorkingSection } from "./WorkingSection";
+import { WorkingSection, assignDelegateChildren } from "./WorkingSection";
 import {
   ApiError,
   fetchSessionCheckpoints,
@@ -317,8 +317,8 @@ const DELEGATE_TOOL: ToolUseEntry = {
   ts: "2026-08-28T10:00:07Z",
 };
 
-function renderDelegateSection(tool: ToolUseEntry = DELEGATE_TOOL) {
-  const entries: WorkingEntry[] = [{ type: "tool", tool }];
+function renderDelegateSection(tool: ToolUseEntry = DELEGATE_TOOL, extraEntries: WorkingEntry[] = []) {
+  const entries: WorkingEntry[] = [{ type: "tool", tool }, ...extraEntries];
   renderWithProviders(
     <WorkingSection
       entries={entries}
@@ -336,11 +336,20 @@ describe("Delegated card live rows (ROUND-48 R48-e2)", () => {
       subAgentRow(),
       subAgentRow({ id: "sess_child-b", code: "M3XN", title: "Write tests", subRole: "tester", status: "queued", todosDone: 0, todosTotal: 0, inputTokens: 0, outputTokens: 0 }),
     ]);
-    // Two live children → the row stays a toggle; expanding shows the rows.
-    renderDelegateSection();
-    fireEvent.click(screen.getByRole("button", { name: /^Delegated / }));
+    // ROUND-64 (R64-c): TWO pending delegate rows — each CLAIMS one live
+    // child (earliest-created first), so expanding each row shows its own
+    // child (the pre-R64 code showed ALL live children in EVERY row).
+    const second = {
+      ...DELEGATE_TOOL,
+      seq: 8,
+      argsSummary: "task: Write tests, role: tester",
+    };
+    renderDelegateSection(DELEGATE_TOOL, [{ type: "tool", tool: second }]);
+    fireEvent.click(screen.getByRole("button", { name: /^Delegated task: Refactor auth module/ }));
+    fireEvent.click(screen.getByRole("button", { name: /^Delegated task: Write tests/ }));
 
-    // Both live rows render with their code chips + progress.
+    // Each expanded body renders its OWN claimed child's row (code chip +
+    // progress) — and ONLY that one.
     expect(await screen.findByText("K7Q2")).toBeTruthy();
     expect(screen.getByText("M3XN")).toBeTruthy();
     expect(screen.getByText("2/5 todos")).toBeTruthy();
@@ -436,6 +445,111 @@ describe("Delegated card live rows (ROUND-48 R48-e2)", () => {
 
     expect(await screen.findByText("delegating")).toBeTruthy();
     expect(screen.queryByTestId("live-delegate-row")).toBeNull();
+  });
+
+  // ── ROUND-64 (R64-c): claim-matched delegated rows ──────────────────────
+  it("claim-matching: 3 pending delegate rows each expand to EXACTLY ONE claimed child (never all of them)", async () => {
+    // Owner: "When I expanded any one of them, it showed me all three or so
+    // sub-agents which were active. This was not good."
+    // Children: A is still RUNNING but already CLAIMED by the completed
+    // delegate row (its parsed session id); B (older) and C (newer) are free.
+    const T0 = "2026-08-28T10:00:00Z";
+    vi.mocked(fetchSubAgents).mockResolvedValue([
+      subAgentRow({ id: "sess_child-a", code: "K7Q2", status: "running", createdAt: T0 }),
+      subAgentRow({ id: "sess_child-b", code: "M3XN", title: "Write tests", subRole: "tester", status: "running", createdAt: "2026-08-28T10:00:01Z", todosDone: 0, todosTotal: 3, inputTokens: 0, outputTokens: 0 }),
+      subAgentRow({ id: "sess_child-c", code: "P8LT", title: "Audit deps", subRole: "reviewer", status: "queued", createdAt: "2026-08-28T10:00:02Z", todosDone: 0, todosTotal: 0, inputTokens: 0, outputTokens: 0 }),
+    ]);
+    const pending = (seq: number, task: string): ToolUseEntry => ({
+      ...DELEGATE_TOOL,
+      seq,
+      argsSummary: `task: ${task}, role: coder`,
+    });
+    const done: ToolUseEntry = {
+      ...DELEGATE_TOOL,
+      seq: 6,
+      ok: true,
+      argsSummary: "task: Ship the parser, role: coder",
+      outputSummary: "[subagent session: sess_child-a | role: coder]\nSub-agent completed.\n\nDone.",
+    };
+    renderDelegateSection(pending(7, "Refactor auth module"), [
+      { type: "tool", tool: pending(8, "Write tests") },
+      { type: "tool", tool: pending(9, "Audit deps") },
+      { type: "tool", tool: done },
+    ]);
+
+    // Expanding EVERY pending row (all three stay toggles — 3 live children
+    // means no single-live-child affordance).
+    fireEvent.click(screen.getByRole("button", { name: /^Delegated task: Refactor auth module/ }));
+    fireEvent.click(screen.getByRole("button", { name: /^Delegated task: Write tests/ }));
+    fireEvent.click(screen.getByRole("button", { name: /^Delegated task: Audit deps/ }));
+    fireEvent.click(screen.getByRole("button", { name: /^Delegated task: Ship the parser/ }));
+
+    // Each expanded pending body carries EXACTLY ONE live-delegate-row:
+    // row 7 → child-b (the earliest-created UNCLAIMED running child; child-a
+    // belongs to the completed row), row 8 → child-c, row 9 → no child left
+    // ("delegating…"). The completed row renders its SubAgentCard, not live
+    // rows.
+    await waitFor(() => {
+      expect(screen.getByText("M3XN")).toBeTruthy();
+      expect(screen.getByText("P8LT")).toBeTruthy();
+    });
+    expect(screen.getByText("delegating")).toBeTruthy();
+    const liveRows = document.querySelectorAll('[data-testid="live-delegate-row"]');
+    expect(liveRows).toHaveLength(2);
+    // The completed row's child (K7Q2, still running) never leaks into any
+    // PENDING row's body — it only renders as the completed row's code chip.
+    for (const row of liveRows) {
+      expect(row.textContent).not.toContain("K7Q2");
+    }
+    expect(
+      screen.getAllByTestId("subagent-code-chip").some((el) => el.textContent === "K7Q2"),
+    ).toBe(true);
+
+    // Per-row-container counts: each pending row's ToolLine wrapper owns
+    // EXACTLY its claimed child (the third owns none — "delegating…").
+    const perRow = [
+      /^Delegated task: Refactor auth module/,
+      /^Delegated task: Write tests/,
+      /^Delegated task: Audit deps/,
+    ].map((re) => {
+      const button = screen.getByRole("button", { name: re });
+      const rowRoot = button.closest("div") as HTMLElement;
+      return rowRoot.querySelectorAll('[data-testid="live-delegate-row"]').length;
+    });
+    expect(perRow).toEqual([1, 1, 0]);
+  });
+
+  it("assignDelegateChildren (pure): completed rows claim by parsed session id, pending rows by earliest createdAt", () => {
+    const pending = (seq: number): ToolUseEntry => ({ ...DELEGATE_TOOL, seq });
+    const entries: WorkingEntry[] = [
+      { type: "tool", tool: pending(7) },
+      { type: "tool", tool: pending(8) },
+      {
+        type: "tool",
+        tool: {
+          ...DELEGATE_TOOL,
+          seq: 9,
+          ok: true,
+          outputSummary: "[subagent session: sess_child-a | role: coder]\nDone.",
+        },
+      },
+    ];
+    const children: SubAgentStatus[] = [
+      subAgentRow({ id: "sess_child-a", status: "running", createdAt: "2026-08-28T10:00:00Z" }),
+      subAgentRow({ id: "sess_child-b", status: "queued", createdAt: "2026-08-28T10:00:02Z" }),
+      subAgentRow({ id: "sess_child-c", status: "running", createdAt: "2026-08-28T10:00:01Z" }),
+      subAgentRow({ id: "sess_child-d", status: "completed", createdAt: "2026-08-28T09:59:00Z" }),
+    ];
+    const claims = assignDelegateChildren(entries, children);
+    // sess_child-a is taken by the completed row (parsed session id); the
+    // completed child (sess_child-d) is not live → skipped; pending rows
+    // take the earliest-created live ones: child-c then child-b.
+    expect(claims.get(7)).toBe("sess_child-c");
+    expect(claims.get(8)).toBe("sess_child-b");
+    expect(claims.has(9)).toBe(false); // completed rows are not in the map
+    // More pending rows than children → the leftover row claims nothing.
+    const two = assignDelegateChildren([{ type: "tool", tool: pending(1) }], []);
+    expect(two.get(1)).toBeNull();
   });
 });
 

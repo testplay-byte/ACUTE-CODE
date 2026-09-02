@@ -19,6 +19,45 @@ deepseek-harness future candidates (compaction pressure-trigger,
 continuable sub-agent children), the Files-tab polish, agent
 web-app-testing tools.
 
+## [0.64.0] - 2026-09-02
+
+Round 64 — the capability round, driven by the owner's first live Windows
+run of computer use. **The Windows computer-use backend actually sees your
+desktop now**: the PowerShell JSON layer silently collapsed every 0/1-element
+list (why `list_apps` returned `[]`), app enumeration now walks the REAL
+window list (EnumWindows — every visible top-level window with its process
+name, not just cached process titles), and `get_app_state("Notepad")` works —
+app references resolve by window title OR executable name, with substring
+matching, and an `app_not_found` refusal now LISTS the running apps so the
+agent self-corrects in one step. The built-in skill's instructions were
+rewritten around the visionless UIA-first workflow. **The floating monitor
+is a true always-on-top OS window** — a minimal, clean bar at the top of
+every screen (status dot, what the agent is doing, elapsed, and the STOP
+kill switch) that appears automatically the moment the agent starts using
+the computer and disappears when it stops; the right-sidebar Computer tab is
+removed (one surface, always on top of everything so you can stop it while
+the agent drives other apps). **Agent responses are properly formatted**
+(full markdown: bold, italics, headings, lists, tables, quotes, links —
+during streaming too), and text between tool calls no longer hides behind
+the collapsed "Worked for Ns" section. **The context-window popover** no
+longer clips at the top of the screen (measured fixed-layer placement,
+capped height with scroll, refined border) and updates LIVE as the agent
+works. **Internal notifications dismiss after 1.5s.** **Expanding a
+"Delegated task" row shows only ITS sub-agent** (each row claims the child
+it spawned; live token stats in the sidebar stay fresh). **The model picker
+lists exactly the models you added in Models & Providers** (the live catalog
+no longer leaks in). **Permission changes apply to the very next command**
+(the mode is re-read live, not frozen per turn), and a wide set of provably
+read-only commands — including the Windows/PowerShell reads (`Get-Content`,
+`Get-ChildItem`, `Select-String`, `tasklist`, …) and the usual search tools
+(`rg`, `fd`, `git grep`, …) — never ask. **The Usage screen gained an "API
+keys" section**: one card per key (primary or pool slot) with its requests,
+tokens, cost, last-used and share bar — configured-but-unused keys and
+removed keys render honestly. **The token estimator** is now a GPT-style
+BPE approximation (CJK, digit and punctuation aware — the old chars/4
+undercounted Chinese text 4-8×). 1664 root tests in 109 files (was
+1542/104), agent-core 885/885 in 52 files (was 801/50).
+
 ## [0.63.0] - 2026-09-02
 
 Round 63 — the desktop-update round. **The launcher now PROVES the desktop
