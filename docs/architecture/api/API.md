@@ -63,10 +63,10 @@ Success responses are the resource JSON shown per endpoint; `204 No Content` whe
 Response `200`:
 
 ```json
-{ "status": "ok", "version": "0.1.0", "uptimeMs": 5123, "dbOk": true }
+{ "status": "ok", "app": "acute-code", "version": "0.63.0" }
 ```
 
-Notes: no auth (liveness only); used by the shell supervisor poll (ARCHITECTURE §2.2). Error case: none (process not listening = down).
+Notes: no auth (liveness only); used by the shell supervisor poll (ARCHITECTURE §2.2). Error case: none (process not listening = down). `version` is the real package version since R63 (derived at boot from the package.json beside the compiled code; it was a stale hardcoded "0.3.0" before) — the launcher's desktop-update verification reads exactly this value.
 
 ### 2.2 `POST /internal/shutdown` — internal (shell only)
 

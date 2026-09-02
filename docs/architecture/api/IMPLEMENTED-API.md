@@ -1,4 +1,4 @@
-<!-- last-reviewed: 2026-09-02 round-61 -->
+<!-- last-reviewed: 2026-09-02 round-63 -->
 # IMPLEMENTED API — the shipped surface
 
 **Truth = this file.** Verified against `agent-core/src/server.ts` at
@@ -987,3 +987,38 @@ fields are labeled "$ per 1M tokens" with decimal input, and
 
 The R61 drifts (test-readiness ok/issues; session stopReason) were fixed
 in the R61 close-out; no new contract drifts were found in R62.
+
+## ROUND-63 additions (implemented)
+
+The desktop-update round — no new REST routes; the shipped surface change
+is the health version finally telling the truth (the launcher's new
+version-truth chain depends on it).
+
+### `GET /health` — the version is real now
+
+`VERSION` (server.ts) derives at boot from the **package.json next to the
+compiled code** (`agent-core/package.json` in dev; `sidecar/app/package.json`
+inside the installed desktop app — the staging step copies the exact version
+field). It had been a hardcoded `"0.3.0"` since round 1, which made `/health`
+useless for exactly what it exists for: the launcher's post-launch
+verification that the freshly installed desktop app is really running the new
+engine. A missing/corrupt manifest degrades to `"0.0.0"` (never takes the
+engine down). Pinned by `server.test.ts` (VERSION == the package.json
+version + semver shape; the health payload asserts against `VERSION`).
+
+### The launcher's version-truth chain (consumer side, not an API)
+
+Every desktop launch compares the newest GitHub release against the
+uninstall-registry version, the installed exe's FileVersion ON DISK, and the
+running engine's `/health` version (polled token-free on the sidecar log's
+listening port); a hybrid install is deleted completely and reinstalled, then
+verified the same three ways. See `docs/ui-iterations/round-63.md` and
+`launcher/README.md`. `ACUTE.bat` also gained `reinstall` / `uninstall`
+commands.
+
+### Drift notes
+
+`API.md` §2.1's response example (`uptimeMs`, `dbOk`) never matched the
+shipped shape — the spec example is corrected to the real payload
+`{status, app, version}` (the shipped code is unchanged; the example was
+wrong, not the code).
