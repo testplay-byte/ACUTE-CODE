@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient, type QueryClient } from "@tanstack/react-query";
 import {
   AlertTriangle,
   ArrowLeft,
@@ -97,6 +97,18 @@ import {
  * Free only ↔ All models toggle on the shared persisted modelsFreeOnly
  * pref); every stored row — free ones included — stays fully customizable
  * via the pencil dialog (the FREE badge rides isFreeModelEntry).
+ *
+ * ROUND-62 (R62-2b, owner: "the models and providers page is not proper and
+ * the changes applied there don't reflect properly on the agent session
+ * page as they should and also I am unable to configure the per million
+ * input and output token price for the models properly"): every mutation
+ * here now fans its invalidation out to the SESSION PAGE's model-picker
+ * query-key families (the two pages read the same resources through
+ * different cache keys with up to 5-minute staleTimes — the staleness root
+ * cause); the pricing dialog labels the fields explicitly in $ PER 1M
+ * TOKENS with decimal inputMode and gained the missing supportsVision
+ * toggle (the last uneditable row field); failed loads surface honest
+ * error states instead of silently rendering as empty lists.
  */
 
 /* ── API plumbing ───────────────────────────────────────────────────────────
@@ -111,6 +123,38 @@ import {
  * restart (the desktop app's OS secure store is the durable path). */
 const EPHEMERAL_KEY_NOTE =
   "Browser-dev keys live in server memory only — they reset on restart; use credentials.txt (launcher) for durable keys.";
+
+/* ── ROUND-62 (R62-2b): cross-page cache invalidation ─────────────────────────
+ * The agent session page's model picker (composer/ModelSelector.tsx) reads
+ * the SAME providers + models-config resources through its OWN query-key
+ * families — ["composer-providers"], ["provider-models", id] and
+ * ["provider-models-config", id] — with staleTimes of 60s / 5min / 5min.
+ * This tab used to invalidate ONLY its own ["settings-*"] keys, so a
+ * rename/hide/add/delete made here kept rendering the OLD state on the
+ * session page for up to five minutes (one QueryClient is shared app-wide
+ * by main.tsx, so the invalidation crosses the route change — it marks the
+ * picker's entries stale and the next popover open refetches). */
+
+/** Provider-level mutations (create/rename/toggle/delete/base-url/key): fan
+ * the invalidation out to every page that lists providers. The live-catalog
+ * family rides along because its content depends on the provider row
+ * (baseUrl), and the prefix form hits every provider's entry. */
+export function invalidateProvidersEverywhere(queryClient: QueryClient): void {
+  void queryClient.invalidateQueries({ queryKey: ["settings-providers"] });
+  void queryClient.invalidateQueries({ queryKey: ["composer-providers"] });
+  void queryClient.invalidateQueries({ queryKey: ["provider-models"] });
+}
+
+/** Model-config mutations (add/configure/delete): fan the invalidation out
+ * to the session picker's models-config family (display names, hidden
+ * flags, per-1M-token pricing all live there). */
+export function invalidateModelConfigEverywhere(
+  queryClient: QueryClient,
+  providerId: string,
+): void {
+  void queryClient.invalidateQueries({ queryKey: ["settings-provider-models", providerId] });
+  void queryClient.invalidateQueries({ queryKey: ["provider-models-config"] });
+}
 
 /** The three wire formats the runtime speaks (ROUND-37). */
 const API_FORMATS: Array<{ id: string; label: string; hint: string }> = [
@@ -262,8 +306,10 @@ export function ModelsProvidersTab() {
     (p) => p.hasKey || !PRESET_PROVIDER_IDS.has(p.id),
   );
 
-  const invalidate = () =>
-    void queryClient.invalidateQueries({ queryKey: ["settings-providers"] });
+  // ROUND-62 (R62-2b): the fan-out helper above — provider mutations reach
+  // the session page's picker cache too (the old settings-only
+  // invalidation is why toggles/renames never showed up there).
+  const invalidate = () => invalidateProvidersEverywhere(queryClient);
 
   const selected = useMemo(
     () => providers.find((p) => p.id === selectedId) ?? null,
@@ -295,6 +341,12 @@ export function ModelsProvidersTab() {
     // settings content area (no shared page scroll); the LEFT provider list
     // and the RIGHT detail pane each scroll independently.
     <div className="flex h-full min-h-0 gap-4">
+      {/* ROUND-62 (R62-2b): honest load/error states — a failed GET /providers
+          used to render identically to "you have no providers" (an empty
+          list + the placeholder card), which is exactly a page that looks
+          "not proper". The error now surfaces as a red alert with the
+          server's message; a fetch in flight shows the loading row instead
+          of a misleading "No providers". */}
       {/* ── LEFT: the provider list (ROUND-58 R58-d: content-adaptive height —
           shrinks with few providers, keeps a 220px floor, still scrolls when
           many — the owner: "It should adapt its height according to the content
@@ -318,13 +370,28 @@ export function ModelsProvidersTab() {
             {configuredProviders.length}
           </span>
         </div>
+        {providersQuery.isError && (
+          <div
+            role="alert"
+            className="px-3.5 py-2 border-b text-[11px]"
+            style={{ borderColor: styles.border, color: "#ef4444" }}
+          >
+            Couldn&apos;t load providers —{" "}
+            {providersQuery.error instanceof Error ? providersQuery.error.message : String(providersQuery.error)}
+          </div>
+        )}
         <div
           ref={listScrollRef}
           className="flex-1 min-h-0 overflow-y-auto auto-scroll p-1.5"
         >
+          {providersQuery.isLoading && (
+            <div className="px-2.5 py-1.5 text-[11px]" style={{ color: styles.textTertiary }}>
+              loading providers…
+            </div>
+          )}
           {/* ROUND-59 (R59-C): empty means NO CONFIGURED rows — keyless
               presets don't count as providers here anymore. */}
-          {configuredProviders.length === 0 && (
+          {!providersQuery.isLoading && configuredProviders.length === 0 && (
             <div className="px-2.5 py-1.5 text-[11px]" style={{ color: styles.textTertiary }}>
               No providers — add one below.
             </div>
@@ -630,7 +697,10 @@ function ProviderDetailPane({
       setKeyDraft(null);
       setRevealState({ kind: "idle" });
       setKeyStatus("Key saved to the secure store.");
-      void queryClient.invalidateQueries({ queryKey: ["settings-providers"] });
+      // ROUND-62 (R62-2b): hasKey flips — the picker's provider cache sees
+      // it (the session page doesn't list keyless presets differently, but
+      // one cache, one truth).
+      invalidateProvidersEverywhere(queryClient);
       void queryClient.invalidateQueries({ queryKey: ["key-pool", provider.id] });
     },
     onError: (err: Error) => setKeyStatus(err.message),
@@ -649,7 +719,11 @@ function ProviderDetailPane({
   const removeProvider = useMutation({
     mutationFn: () => deleteProvider(provider.id),
     onSuccess: () => {
+      // ROUND-62 (R62-2b): the provider is GONE — its models-config rows went
+      // with it (ON DELETE CASCADE), so the session picker's config family
+      // is invalidated too (the settings-side prefix invalidation stays).
       void queryClient.invalidateQueries({ queryKey: ["settings-provider-models"] });
+      void queryClient.invalidateQueries({ queryKey: ["provider-models-config"] });
       onDeleted();
     },
     onError: (err: Error) => setSaveMsg(err.message),
@@ -1226,6 +1300,17 @@ function ProviderDetailPane({
       <ModelListSection
         providerId={provider.id}
         models={models}
+        modelsLoadError={
+          // ROUND-62 (R62-2b): a failed models-config fetch renders as an
+          // honest red line — not the misleading "No models yet" empty
+          // state (the page is "not proper" when a dead sidecar looks
+          // identical to a provider with no models).
+          modelsQuery.isError
+            ? modelsQuery.error instanceof Error
+              ? modelsQuery.error.message
+              : String(modelsQuery.error)
+            : null
+        }
         catalog={{
           entries: catalogEntries,
           isFetching: catalogQuery.isFetching,
@@ -1660,11 +1745,15 @@ interface ProviderCatalogState {
 function ModelListSection({
   providerId,
   models,
+  modelsLoadError,
   catalog,
   staticCatalog,
 }: {
   providerId: string;
   models: ProviderModelConfig[];
+  /** ROUND-62 (R62-2b): the models-config query's error message, null when
+   * the load succeeded (the empty list then genuinely means "none added"). */
+  modelsLoadError: string | null;
   catalog: ProviderCatalogState;
   staticCatalog: CatalogModel[];
 }) {
@@ -1685,8 +1774,10 @@ function ModelListSection({
   // design; the static catalog stays a param for the picker pre-fill.
   const merged = mergeCatalogIntoModels(models, [], staticCatalog);
 
-  const invalidate = () =>
-    void queryClient.invalidateQueries({ queryKey: ["settings-provider-models", providerId] });
+  // ROUND-62 (R62-2b): model-config mutations fan out to the session
+  // page's ["provider-models-config"] family (the rename/hide/pricing
+  // staleness fix) — the helper keeps the settings-side invalidation.
+  const invalidate = () => invalidateModelConfigEverywhere(queryClient, providerId);
 
   const deleteModel = useMutation({
     mutationFn: (id: string) => deleteProviderModelConfig(id),
@@ -1723,7 +1814,19 @@ function ModelListSection({
         </div>
       )}
 
-      {merged.length === 0 ? (
+      {/* ROUND-62 (R62-2b): the load error replaces the empty state — an
+          unreachable models-config must never read as "no models added". */}
+      {modelsLoadError !== null && (
+        <div
+          role="alert"
+          className="px-4 py-3 text-[11.5px]"
+          style={{ color: "#ef4444" }}
+        >
+          Couldn&apos;t load this provider&apos;s models — {modelsLoadError}
+        </div>
+      )}
+
+      {modelsLoadError === null && merged.length === 0 ? (
         <div className="px-4 py-6 text-center text-[12px]" style={{ color: styles.textTertiary }}>
           No models yet — use “Add models” to pick from the provider's catalog.
         </div>
@@ -2257,6 +2360,11 @@ interface ModelConfigDraft {
   outputPrice: string;
   cachePrice: string;
   supportsThinking: boolean;
+  // ROUND-62 (R62-2b): the vision flag joins the dialog — it was the ONE
+  // editable row field without a toggle here (only the R61 Computer-Use tab
+  // and the POST prefill could set it), so a row could never be fully
+  // configured from this page.
+  supportsVision: boolean;
   hidden: boolean;
 }
 
@@ -2270,6 +2378,7 @@ function draftFromModel(model: ProviderModelConfig): ModelConfigDraft {
     outputPrice: num(model.outputPricePerMtok),
     cachePrice: num(model.inputPriceCachedPerMtok),
     supportsThinking: model.supportsThinking,
+    supportsVision: model.supportsVision,
     hidden: model.hidden,
   };
 }
@@ -2331,6 +2440,7 @@ function ModelConfigDialog({
       outputPricePerMtok: parsed.outputPrice,
       inputPriceCachedPerMtok: parsed.cachePrice,
       supportsThinking: draft.supportsThinking,
+      supportsVision: draft.supportsVision,
       hidden: draft.hidden,
     });
   };
@@ -2479,50 +2589,60 @@ function ModelConfigDialog({
 
         {/* pricing */}
         <div className="flex flex-col gap-2">
-          <SectionLabel>Pricing — $ per 1M tokens</SectionLabel>
+          {/* ROUND-62 (R62-2b): the unit is now IN each label ("$ per 1M
+              tokens"), not only the section header — the owner's "unable to
+              configure the per million input and output token price
+              properly" complaint; the old "Input"/"Output" one-worders +
+              the jargon aria-label "($/Mtok)" left the unit ambiguous.
+              Decimal inputMode + the string-draft parser keep 0.075-style
+              values first-class ("" still means unknown → null). */}
+          <SectionLabel>Pricing — USD per 1M tokens</SectionLabel>
           <div className="grid grid-cols-3 gap-2">
             <div>
               <label className="mb-1 block text-[10.5px] font-bold" style={{ color: styles.textTertiary }}>
-                Input
+                Input price
               </label>
               <input
                 value={draft.inputPrice}
                 onChange={(e) => set("inputPrice", e.target.value)}
+                inputMode="decimal"
                 placeholder="unknown"
-                aria-label="Input price ($/Mtok)"
+                aria-label="Input price ($ per 1M tokens)"
                 className="h-10 w-full rounded-[10px] border-[1.5px] px-3 font-mono text-[12px] outline-none"
                 style={inputStyle}
               />
             </div>
             <div>
               <label className="mb-1 block text-[10.5px] font-bold" style={{ color: styles.textTertiary }}>
-                Output
+                Output price
               </label>
               <input
                 value={draft.outputPrice}
                 onChange={(e) => set("outputPrice", e.target.value)}
+                inputMode="decimal"
                 placeholder="unknown"
-                aria-label="Output price ($/Mtok)"
+                aria-label="Output price ($ per 1M tokens)"
                 className="h-10 w-full rounded-[10px] border-[1.5px] px-3 font-mono text-[12px] outline-none"
                 style={inputStyle}
               />
             </div>
             <div>
               <label className="mb-1 block text-[10.5px] font-bold" style={{ color: styles.textTertiary }}>
-                Cache read
+                Cache read price
               </label>
               <input
                 value={draft.cachePrice}
                 onChange={(e) => set("cachePrice", e.target.value)}
+                inputMode="decimal"
                 placeholder="unknown"
-                aria-label="Cache read price ($/Mtok)"
+                aria-label="Cache read price ($ per 1M tokens)"
                 className="h-10 w-full rounded-[10px] border-[1.5px] px-3 font-mono text-[12px] outline-none"
                 style={inputStyle}
               />
             </div>
           </div>
           <p className="text-[10.5px]" style={{ color: styles.textTertiary }}>
-            Leave a field empty for unknown — an empty price is never treated as $0.
+            Each field is US dollars per 1 million tokens — leave empty for unknown (an empty price is never treated as $0).
           </p>
         </div>
 
@@ -2534,6 +2654,14 @@ function ModelConfigDialog({
             value={draft.supportsThinking}
             onChange={(v) => set("supportsThinking", v)}
             hint="The model can emit reasoning output."
+          />
+          {/* ROUND-62 (R62-2b): the missing vision toggle — same PATCH field
+              the R61 vision relay gates on (main-mode image inputs). */}
+          <Toggle
+            label="Supports vision"
+            value={draft.supportsVision}
+            onChange={(v) => set("supportsVision", v)}
+            hint="Accepts image inputs (required for main-mode vision relay)."
           />
           <Toggle
             label="Hidden from chat picker"
@@ -2618,7 +2746,10 @@ export function KeyPoolSection({ providerId, hideLabel = false }: { providerId: 
 
   const invalidate = () => {
     void queryClient.invalidateQueries({ queryKey: ["key-pool", providerId] });
-    void queryClient.invalidateQueries({ queryKey: ["settings-providers"] });
+    // ROUND-62 (R62-2b): the fan-out form — pool changes flip nothing the
+    // session picker renders, but one cache entry per resource keeps the
+    // pages from diverging.
+    invalidateProvidersEverywhere(queryClient);
   };
 
   // ROUND-58 (R58-d) correction: pool mutations (add/remove) invalidate the

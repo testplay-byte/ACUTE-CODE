@@ -1,3 +1,4 @@
+import { useEffect } from "react";
 import { Outlet, useLocation } from "react-router";
 import { useSidecarHealth } from "../../hooks/use-sidecar-health";
 import { useProjectChatStore } from "../../lib/project-chat-store";
@@ -6,6 +7,9 @@ import { isTauri } from "../../lib/sidecar";
 import { AcuteLogo, Sidebar } from "./Sidebar";
 import { NotificationStreamStarter } from "../notifications/NotificationStreamStarter";
 import { Toaster } from "../notifications/Toaster";
+// R60-D: the shared webview-suppression guard (R62: also the general
+// overlay watcher — installed once here so it covers every route).
+import { installOverlayWebviewWatcher } from "../right-sidebar/popover-webview-guard";
 // ROUND-61 (R61): the floating computer-use mini window (the owner's
 // directive: "in a mini window it will show the details and their stats
 // while the agent is using computers"). Mounted ONCE here — app-global,
@@ -15,11 +19,16 @@ import { ComputerMiniWindow } from "../ComputerMiniWindow";
 
 /**
  * App shell (round-32 redesign per the owner-approved design
- * Acute-Ui-Screens.html Frame 1/5): themed full-bleed background with the
- * wizard's atmosphere (dot grid + three ambient glows), and BOTH the sidebar
- * and the chat window are FLOATING panels with 12px spacing on all sides
- * (owner: "the sidebar was a floating kind of one with proper spacing on all
- * 4 sides of it and the right side chat window was separate from it").
+ * Acute-Ui-Screens.html Frame 1/5). ROUND-62 (owner: "remove that container
+ * so there is more space — by container i mean the background with the
+ * gradient colours on it; don't remove the padding on the sides and the
+ * rounded corners on the whole view"): the wizard's atmosphere layers (dot
+ * grid + the three ambient accent glows) are GONE — the shell background is
+ * now the flat theme background, which reads as more room for the three
+ * panels. The SIDE PADDING stays (p-2 — one notch tighter than the old p-3,
+ * still visible on every side) and every panel keeps its own rounded
+ * corners; in Tauri mode the App root's inset frame + rounded content card
+ * are untouched (that is "the rounded corners on the whole view").
  *
  * Design language: docs/design/DESIGN-SYSTEM.md + the wizard's DNA (the
  * owner's approved aesthetic): solid accent fills for interactive elements,
@@ -28,6 +37,14 @@ import { ComputerMiniWindow } from "../ComputerMiniWindow";
  */
 export function AppShell() {
   const { pathname } = useLocation();
+  // R62-D9: install the DOM overlay watcher ONCE (app-global) — while any
+  // menu/dialog/popover is open, every native browser webview hides itself
+  // (OS-level webviews float above ALL app HTML; without this every overlay
+  // that opens near the browser renders BEHIND it — the owner: "if a menu
+  // opened up then it would show under the browser").
+  useEffect(() => {
+    installOverlayWebviewWatcher();
+  }, []);
   // Round-28 WS-D2: boot-time health ping. If the sidecar is up + token is
   // set, flip demoData false so the streaming SSE path activates (the real
   // fix for the owner's "completes all tasks then shows the results"
@@ -67,36 +84,11 @@ export function AppShell() {
           monitor + STOP kill switch while the agent drives the desktop. */}
       <ComputerMiniWindow />
 
-      {/* Dot grid — wizard pattern (28px, subtle) */}
-      <div
-        aria-hidden
-        className="pointer-events-none absolute inset-0"
-        style={{
-          backgroundImage:
-            "radial-gradient(circle at 1px 1px, var(--ac-dot-color) 1px, transparent 0)",
-          backgroundSize: "28px 28px",
-          opacity: 0.04,
-        }}
-      />
-
-      {/* Ambient glows — wizard intensities (0.20, 0.08, 0.06) */}
-      <div
-        aria-hidden
-        className="pointer-events-none absolute -top-32 -right-32 h-[420px] w-[420px] rounded-full opacity-[0.20] blur-[80px]"
-        style={{ backgroundColor: "var(--ac-accent)" }}
-      />
-      <div
-        aria-hidden
-        className="pointer-events-none absolute -bottom-40 -left-40 h-[520px] w-[520px] rounded-full opacity-[0.08] blur-[90px]"
-        style={{ backgroundColor: "var(--ac-accent)" }}
-      />
-      <div
-        aria-hidden
-        className="pointer-events-none absolute top-1/3 right-1/4 h-[220px] w-[220px] rounded-full opacity-[0.06] blur-[70px]"
-        style={{ backgroundColor: "var(--ac-accent-2, var(--ac-accent))" }}
-      />
-
-      <div className="relative z-10 flex h-full gap-3 p-3">
+      {/* ROUND-62: the gradient atmosphere layers (dot grid + ambient glows)
+          are DELETED per the owner's directive — flat theme background. The
+          relative z-10 wrapper stays so floating chrome (mini window, toasts,
+          floating logo) always paints above the panels. */}
+      <div className="relative z-10 flex h-full gap-2 p-2">
         {showFloatingHamburger && <FloatingSidebarToggle />}
         {/* R60-C: showSidebar === appSidebarVisible on EVERY route — the
             sidebar is either fully here (270px floating panel) or fully

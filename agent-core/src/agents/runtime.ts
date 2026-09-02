@@ -2094,7 +2094,7 @@ export async function runStreamedAgentTurn(
 }
 
 /** Compute cost from the models table pricing (round-24). */
-function computeCost(
+export function computeCost(
   db: SqliteDatabase,
   providerId: string,
   modelId: string,
@@ -2102,11 +2102,17 @@ function computeCost(
   outputTokens: number,
 ): number {
   const pricing = lookupPricing(db, providerId, modelId);
-  if (pricing.inputPricePerMtok === null || pricing.outputPricePerMtok === null) return 0;
-  return (
-    (inputTokens / 1_000_000) * pricing.inputPricePerMtok +
-    (outputTokens / 1_000_000) * pricing.outputPricePerMtok
-  );
+  // ROUND-62 (owner: "i am unable to configure the per million input and
+  // output token price for the models properly"): pricing sides are
+  // INDEPENDENT — a model priced per-side (input-only, output-only, or one
+  // side left unknown) costs what its KNOWN sides cost, not a hard $0. The
+  // pre-R62 `either-null → 0` gate silently zeroed every partially-priced
+  // turn, which is exactly the "price config doesn't work" report.
+  const inputCost =
+    pricing.inputPricePerMtok === null ? 0 : (inputTokens / 1_000_000) * pricing.inputPricePerMtok;
+  const outputCost =
+    pricing.outputPricePerMtok === null ? 0 : (outputTokens / 1_000_000) * pricing.outputPricePerMtok;
+  return inputCost + outputCost;
 }
 
 /**

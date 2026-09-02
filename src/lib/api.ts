@@ -2226,7 +2226,9 @@ export async function testProviderConnection(
 }
 
 /** DB model-override row from GET /providers/:id/models-config — agent-core's
- * ModelRecord (storage/models.ts) mirrored field-for-field. */
+ * ModelRecord (storage/models.ts) mirrored field-for-field. Pricing fields
+ * are USD PER 1 MILLION TOKENS (ROUND-62 R62-2b doc pin: never per-token or
+ * per-1k — the usage math divides tokens by 1e6 before multiplying). */
 export interface ProviderModelConfig {
   id: string;
   providerId: string;
@@ -2234,8 +2236,11 @@ export interface ProviderModelConfig {
   displayName: string;
   contextWindow: number | null;
   maxOutputTokens: number | null;
+  /** USD per 1M input tokens (null = unknown). */
   inputPricePerMtok: number | null;
+  /** USD per 1M cached input tokens (null = no cached tier / unknown). */
   inputPriceCachedPerMtok: number | null;
+  /** USD per 1M output tokens (null = unknown). */
   outputPricePerMtok: number | null;
   supportsThinking: boolean;
   /** ROUND-61 (R61): image-input modality — the gate for "main" vision
@@ -2256,14 +2261,19 @@ export async function fetchProviderModelConfig(providerId: string): Promise<Prov
 }
 
 /** POST /providers/:id/models payload — upsert-by-modelId per provider (the
- * UNIQUE(provider_id, model_id) constraint makes "add model" an upsert). */
+ * UNIQUE(provider_id, model_id) constraint makes "add model" an upsert).
+ * Pricing fields are USD PER 1M TOKENS (decimals like 0.075 are valid; null
+ * clears back to unknown — see ProviderModelConfig). */
 export interface ProviderModelConfigInput {
   modelId: string;
   displayName?: string;
   contextWindow?: number | null;
   maxOutputTokens?: number | null;
+  /** USD per 1M input tokens. */
   inputPricePerMtok?: number | null;
+  /** USD per 1M cached input tokens. */
   inputPriceCachedPerMtok?: number | null;
+  /** USD per 1M output tokens. */
   outputPricePerMtok?: number | null;
   supportsThinking?: boolean;
   /** ROUND-61 (R61): mark image-input support on add (prefilled from the
@@ -2282,13 +2292,17 @@ export async function upsertProviderModelConfig(
   });
 }
 
-/** PATCH /models/:id payload — any editable subset (null clears a field). */
+/** PATCH /models/:id payload — any editable subset (null clears a field).
+ * Pricing fields are USD PER 1M TOKENS, same contract as the POST above. */
 export interface ProviderModelConfigPatch {
   displayName?: string;
   contextWindow?: number | null;
   maxOutputTokens?: number | null;
+  /** USD per 1M input tokens (null = unknown). */
   inputPricePerMtok?: number | null;
+  /** USD per 1M cached input tokens (null = unknown). */
   inputPriceCachedPerMtok?: number | null;
+  /** USD per 1M output tokens (null = unknown). */
   outputPricePerMtok?: number | null;
   supportsThinking?: boolean;
   /** ROUND-61 (R61): flip the vision flag on a stored row. */
@@ -2528,6 +2542,19 @@ export type StreamTurnEvent =
       kind: string;
       tool?: string;
       code?: string;
+      [extra: string]: unknown;
+    }
+  /** ROUND-62 (R62/D8): the live browser-command bridge — the browser_control
+   * tool's eval / screenshot actions send a command to THIS app (the only
+   * place the native webview lives); the agent-browser-bridge executes it and
+   * POSTs the result to /browser-commands/:commandId/result, which resolves
+   * the pending tool promise in agent-core. */
+  | {
+      type: "browser-command";
+      commandId: string;
+      tabId: string;
+      action: string;
+      payload?: Record<string, unknown>;
       [extra: string]: unknown;
     };
 
@@ -2894,6 +2921,24 @@ export interface ComputerUseSessionState {
 /** GET /computer-use/session — the monitor ring (newest-first) + stats. */
 export async function fetchComputerUseSession(): Promise<ComputerUseSessionState> {
   return request<ComputerUseSessionState>("/computer-use/session");
+}
+
+/**
+ * ROUND-62 (D8): POST /browser-commands/:commandId/result — the agent-browser
+ * bridge's answer channel. The browser_control tool (agent-core) sends a
+ * live command through the turn's SSE stream; this app executes it (eval in
+ * the native webview / the panel's screenshot geometry) and posts the result
+ * here, resolving the tool's pending promise. Fire-and-forget from the UI's
+ * perspective — a 404 (expired command) is fine.
+ */
+export async function postBrowserCommandResult(
+  commandId: string,
+  result: { ok: boolean; data?: unknown; error?: string },
+): Promise<void> {
+  await request(`/browser-commands/${encodeURIComponent(commandId)}/result`, {
+    method: "POST",
+    json: result,
+  });
 }
 
 /** POST /computer-use/stop — the UI kill switch (STOP button). */

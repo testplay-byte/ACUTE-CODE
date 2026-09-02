@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import { useLocation, useNavigate } from "react-router";
 import {
   ArrowLeft,
@@ -12,6 +12,8 @@ import {
   Monitor,
   Palette,
   Pencil,
+  PanelLeftClose,
+  PanelLeftOpen,
   PlugZap,
   Plus,
   Server,
@@ -33,6 +35,7 @@ import { useProjects, useCreateProject, useDeleteProject } from "../../hooks/use
 import { useCreateSession, useDeleteSession, useRenameSession, useSessions } from "../../hooks/use-sessions";
 import { useAgents } from "../../hooks/use-agents";
 import { useActiveStreams } from "../../lib/active-streams";
+import { useProjectChatStore } from "../../lib/project-chat-store";
 import { withAlpha } from "../dashboard/helpers";
 import { NotificationBell } from "../notifications/NotificationBell";
 
@@ -272,8 +275,13 @@ export function Sidebar() {
   // R60-C: the panel's own visibility is NOT decided here — AppShell's
   // appSidebarVisible (flipped by the TITLE BAR identity control in Tauri,
   // the floating Acute logo in web dev mode) mounts/unmounts this whole
-  // component. There is no collapsed rail and no in-sidebar toggle anymore:
-  // the panel is either fully visible or fully absent.
+  // component. ROUND-62 (owner: "i should be given the option to minimize
+  // it rather than just hiding it completely") adds the SECOND state on
+  // top: MINIMIZED — the sidebar becomes its 64px icon rail (nav icons +
+  // project tiles + bell/settings) with the restore button at its very
+  // top. Orthogonal to the full hide; persisted in the project-chat store.
+  const minimized = useProjectChatStore((s) => s.appSidebarMinimized);
+  const setAppSidebarMinimized = useProjectChatStore((s) => s.setAppSidebarMinimized);
 
   return (
     <>
@@ -312,11 +320,14 @@ export function Sidebar() {
       // title-bar toggle brings it back. The mobile drawer slide is the
       // Tailwind `translate` property below (it composes with framer's
       // `transform` — different CSS properties).
+      // ROUND-62: the width is rail-conditional again (270px full · 64px
+      // minimized) with a 200ms width transition so minimizing feels alive.
       initial={{ opacity: 0, x: -14 }}
       animate={{ opacity: 1, x: 0 }}
       transition={{ duration: 0.2, ease: [0.25, 0.1, 0.25, 1] }}
       className={cn(
-        "w-[270px] shrink-0 flex flex-col overflow-hidden rounded-[20px] border-[1.5px]",
+        "shrink-0 flex flex-col overflow-hidden rounded-[20px] border-[1.5px] transition-[width] duration-200",
+        minimized ? "w-[64px]" : "w-[270px]",
         // ROUND-45: below md this is an overlay drawer, not a flex column.
         "max-md:fixed max-md:inset-y-3 max-md:left-3 max-md:z-50 max-md:shadow-2xl",
         mobileOpen ? "max-md:translate-x-0" : "max-md:-translate-x-[120%] max-md:pointer-events-none",
@@ -329,10 +340,21 @@ export function Sidebar() {
       }}
     >
       {/* R60-C: NO header row in normal mode — the nav starts at the top
-          (the logo + collapse button moved out with the rail). SETTINGS mode
-          (ROUND-34 owner design frame 1a) keeps its header: back button +
-          "Settings" title, now at the row's start. */}
-      {isSettingsRoute && (
+          (the logo + collapse button moved out with the rail). ROUND-62: a
+          slim MINIMIZE row returns at the very top (owner: "i should be
+          given the option at the very top to minimize it") — one icon
+          button, right-aligned so it sits where the sidebar meets the chat
+          (the direction it shrinks toward); the rail's restore button is
+          its mirror. SETTINGS mode (ROUND-34 owner design frame 1a) keeps
+          its header: back button + "Settings" title + the same minimize
+          control at the row's end. */}
+      {minimized ? (
+        <MinimizedRail onExpand={() => setAppSidebarMinimized(false)} />
+      ) : isSettingsRoute ? (
+        /* ── SETTINGS MODE (owner design frame 1a): the sidebar's whole body
+           becomes the settings section list (header row first, then nav).
+           ─────────────────────────────────────────────────────────────── */
+        <>
         <div className="shrink-0 flex items-center gap-2 px-3 pt-3">
           <button
             onClick={() => navigate("/")}
@@ -348,13 +370,22 @@ export function Sidebar() {
           <span className="text-[13px] font-black tracking-tight truncate" style={{ color: styles.text }}>
             Settings
           </span>
+          {/* ROUND-62: the minimize control also lives at the very top of the
+              settings sidebar (row's end) — same action as normal mode. */}
+          <button
+            onClick={() => setAppSidebarMinimized(true)}
+            aria-label="Minimize sidebar"
+            title="Minimize sidebar"
+            data-testid="sidebar-minimize"
+            className="w-7 h-7 shrink-0 ml-auto rounded-[9px] grid place-items-center transition-colors"
+            style={{ color: styles.textTertiary }}
+            onMouseEnter={(e) => (e.currentTarget.style.background = styles.sidebarHover)}
+            onMouseLeave={(e) => (e.currentTarget.style.background = "transparent")}
+          >
+            <PanelLeftClose size={14} />
+          </button>
         </div>
-      )}
-
-      {isSettingsRoute ? (
-        /* ── SETTINGS MODE (owner design frame 1a): the sidebar's whole body
-           becomes the settings section list. ─────────────────────────────── */
-        <nav className="flex-1 flex flex-col gap-1 px-2.5 pt-5 overflow-y-auto" aria-label="Settings sections">
+        <nav className="flex-1 flex flex-col gap-1 px-2.5 pt-3 overflow-y-auto" aria-label="Settings sections">
           {SETTINGS_SECTIONS.map(({ id, label, icon: Icon }) => {
             const active = activeTab === id;
             return (
@@ -403,13 +434,31 @@ export function Sidebar() {
             More settings coming soon
           </div>
         </nav>
+        </>
       ) : (
         <>
+          {/* ROUND-62: the MINIMIZE row — the owner's directive ("option at
+              the very top to minimize it"). One quiet icon button,
+              right-aligned where the panel meets the chat (the direction it
+              shrinks toward); its mirror is the rail's expand button. */}
+          <div className="shrink-0 flex items-center justify-end px-2.5 pt-2.5 pb-0.5">
+            <button
+              onClick={() => setAppSidebarMinimized(true)}
+              aria-label="Minimize sidebar"
+              title="Minimize sidebar"
+              data-testid="sidebar-minimize"
+              className="w-7 h-7 rounded-[9px] grid place-items-center transition-colors"
+              style={{ color: styles.textTertiary }}
+              onMouseEnter={(e) => (e.currentTarget.style.background = styles.sidebarHover)}
+              onMouseLeave={(e) => (e.currentTarget.style.background = "transparent")}
+            >
+              <PanelLeftClose size={15} />
+            </button>
+          </div>
+
           {/* NAVIGATION SECTION — dedicated section for Dashboard + Usage.
               ROUND-42: same heading language as the refreshed Projects
-              header (heavier weight, wider tracking). R60-C: with the header
-              row gone this starts AT the panel's top — a pt-3 inset keeps it
-              from feeling empty. */}
+              header (heavier weight, wider tracking). */}
           <div className="shrink-0 flex items-center px-4 pt-3 pb-1.5">
             <span
               className="text-[10.5px] font-black uppercase tracking-[0.14em]"
@@ -447,10 +496,8 @@ export function Sidebar() {
           >
             {/* ROUND-40: small icon row above the prominent Settings button —
                 the bell icon aligned to the right (the footer's right-aligned
-                language; the centered collapsed-tile variant is gone). The
-                bell's `collapsed` prop stays (its component lives outside the
-                shell files) — pinned false: the expanded variant is the only
-                one reachable now. */}
+                language). R62: still expanded-only in the full sidebar (the
+                RAIL has its own collapsed bell). */}
             <div className="flex items-center mb-1.5 justify-end">
               <NotificationBell collapsed={false} />
             </div>
@@ -460,6 +507,137 @@ export function Sidebar() {
       )}
     </motion.aside>
     </>
+  );
+}
+
+/**
+ * ROUND-62 (owner: "i should be given the option to minimize it rather than
+ * just hiding it completely") — the sidebar's MINIMIZED icon rail: a 64px
+ * column with the restore button at the very top, then Dashboard/Usage, the
+ * project tiles (click → that project's chat; the running dot carries the
+ * live-work signal), a flexible spacer, and the collapsed bell + settings
+ * gear at the bottom. Every button carries a `title` tooltip so the rail
+ * stays fully usable without labels. The mobile drawer reuses the same rail
+ * body (a narrow drawer of icons is still perfectly navigable).
+ */
+function MinimizedRail({ onExpand }: { onExpand: () => void }) {
+  const styles = useThemeStyles();
+  const navigate = useNavigate();
+  const { pathname } = useLocation();
+  const projectsQuery = useProjects();
+  const sessionsQuery = useSessions();
+  const projects = projectsQuery.data ?? [];
+  const sessions = sessionsQuery.data ?? [];
+  // ROUND-42 parity: a project with any running session shows the live dot.
+  const runningSessions = useActiveStreams((s) => s.active);
+  const runningProjects = new Set(
+    sessions.filter((s) => runningSessions.has(s.id)).map((s) => s.projectId),
+  );
+  const activeProjectId = pathname.match(/^\/project\/([^/]+)/)?.[1] ?? null;
+  const settingsActive = pathname.startsWith("/settings");
+
+  const railBtn = (
+    label: string,
+    icon: ReactNode,
+    active: boolean,
+    onClick: () => void,
+    testId?: string,
+  ) => (
+    <button
+      onClick={onClick}
+      aria-label={label}
+      aria-current={active ? "page" : undefined}
+      title={label}
+      data-testid={testId}
+      className="w-10 h-10 shrink-0 grid place-items-center rounded-[12px] transition-all duration-200"
+      style={{
+        background: active ? styles.accent : "transparent",
+        color: active ? styles.accentText : styles.textSecondary,
+        boxShadow: active ? `0 2px 8px ${withAlpha(styles.accent, 0.3)}` : "none",
+      }}
+      onMouseEnter={(e) => {
+        if (!active) e.currentTarget.style.background = styles.sidebarHover;
+      }}
+      onMouseLeave={(e) => {
+        if (!active) e.currentTarget.style.background = "transparent";
+      }}
+    >
+      {icon}
+    </button>
+  );
+
+  return (
+    <div
+      className="flex-1 min-h-0 flex flex-col items-center gap-1.5 px-1.5 pt-2.5 pb-2.5 overflow-y-auto"
+      data-testid="sidebar-rail"
+    >
+      {/* RESTORE — at the rail's very top (the minimize button's mirror). */}
+      <button
+        onClick={onExpand}
+        aria-label="Expand sidebar"
+        title="Expand sidebar"
+        data-testid="sidebar-expand"
+        className="w-10 h-10 shrink-0 grid place-items-center rounded-[12px] transition-colors"
+        style={{ color: styles.textTertiary, background: styles.inputBg }}
+        onMouseEnter={(e) => (e.currentTarget.style.background = styles.sidebarHover)}
+        onMouseLeave={(e) => (e.currentTarget.style.background = styles.inputBg)}
+      >
+        <PanelLeftOpen size={16} />
+      </button>
+
+      {railBtn("Dashboard", <LayoutDashboard size={17} strokeWidth={2} />, pathname === "/", () => navigate("/"), "rail-dashboard")}
+      {railBtn("Usage", <BarChart3 size={17} strokeWidth={2} />, pathname.startsWith("/usage"), () => navigate("/usage"), "rail-usage")}
+
+      {/* Hairline divider (the full sidebar's section divider, rail-sized). */}
+      <div className="w-8 shrink-0 border-t-[1.5px] my-1" style={{ borderColor: styles.sidebarBorder }} />
+
+      {/* PROJECT TILES — click opens the project's chat; the tile is the
+          project's own gradient mark (ProjectTile), so color identity
+          survives minimization; running projects get the live dot. */}
+      <div className="flex flex-col items-center gap-1.5 py-0.5" data-testid="rail-projects">
+        {projects.slice(0, 10).map((project) => {
+          const active = activeProjectId === project.id;
+          const running = runningProjects.has(project.id);
+          return (
+            <button
+              key={project.id}
+              onClick={() => navigate(`/project/${project.id}/chat`)}
+              aria-label={`Open ${project.name}`}
+              title={project.name}
+              aria-current={active ? "page" : undefined}
+              className="relative w-10 h-10 shrink-0 grid place-items-center rounded-[12px] transition-all duration-200"
+              style={{
+                background: active ? withAlpha(project.color, 0.14) : "transparent",
+                border: active ? `1.5px solid ${withAlpha(project.color, 0.4)}` : "1.5px solid transparent",
+              }}
+              onMouseEnter={(e) => {
+                if (!active) e.currentTarget.style.background = styles.sidebarHover;
+              }}
+              onMouseLeave={(e) => {
+                if (!active) e.currentTarget.style.background = "transparent";
+              }}
+            >
+              <ProjectTile color={project.color} name={project.name} size={26} radius={8} fontSize={11} />
+              {running && (
+                <span
+                  aria-label="Running"
+                  className="absolute -top-0.5 -right-0.5 w-[10px] h-[10px] rounded-full border-2"
+                  style={{ background: styles.accent, borderColor: styles.sidebarBg }}
+                />
+              )}
+            </button>
+          );
+        })}
+      </div>
+
+      {/* Spacer pushes the footer icons to the bottom (the full sidebar's
+          footer rhythm). */}
+      <div className="flex-1 min-h-2" />
+
+      {/* FOOTER — collapsed bell (its own rail variant) + settings gear. */}
+      <NotificationBell collapsed />
+      {railBtn("Settings", <Settings size={17} strokeWidth={2} />, settingsActive, () => navigate("/settings"), "rail-settings")}
+    </div>
   );
 }
 

@@ -401,10 +401,11 @@ export function buildTaggedPromptLines(ctx: PromptContext): TaggedLine[] {
     beginSection("browser-panel");
     ident("## EMBEDDED BROWSER PANEL (browser_control)");
     ident("- The user has a real web browser embedded in the app's right sidebar. browser_control drives it: pages you navigate to APPEAR LIVE in the user's panel (no external tabs, no popups).");
-    ident("- Actions: navigate (absolute http(s) URL), back/forward/reload (tab history), get_state (currentUrl, title, viewport, canBack/canForward).");
-    ident("- TEST LAYOUTS by changing the display size with set_viewport: presets mobile-sm 375×667, mobile-md 390×844, tablet 768×1024, laptop 1280×800, desktop 1440×900, full-hd 1920×1080, or explicit width/height (+ zoom, rotate swaps w/h). It targets the tab the user is viewing unless you pass sessionId.");
+    ident("- Actions: navigate (absolute http(s) URL), back/forward/reload (tab history), set_viewport (display size + zoom), read (the current page's text, fetched fresh), eval (run JavaScript INSIDE the live page), screenshot (capture the panel + a vision description), get_state (currentUrl, title, viewport, canBack/canForward, every open tab, which tab is active).");
+    ident("- TEST LAYOUTS by changing the display size with set_viewport: presets mobile-sm 375×667, mobile-md 390×844, tablet 768×1024, laptop 1280×800, desktop 1440×900, full-hd 1920×1080, or explicit width/height (+ zoom, rotate swaps w/h). It targets the tab the user is viewing unless you pass sessionId. The panel renders the true size you set — larger presets scale down to fit.");
+    ident("- USE THE BROWSER LIKE A USER WOULD (R62): read the page's text (action read) when you need its content; eval when you need the LIVE page (logins, JS-rendered content, clicking links `document.querySelector('a').click()`, filling forms, extracting DOM state — the script runs as a function body, so end with `return value`); screenshot when you need to SEE what the user sees (needs Computer Use enabled; the vision model describes it).");
     ident("- ALWAYS announce viewport changes in one short line (e.g. \"Switching the browser panel to 375×667 to check the mobile layout\") — the user watches that panel; set_viewport changes what they see.");
-    ident("- The panel renders pages through the sidecar proxy, so heavily scripted sites may partially render; when YOU need the page's text, prefer web_fetch.");
+    ident("- The page the panel shows can differ from a fresh fetch (logins, JS): read = fresh server-side text, eval = the live DOM, screenshot = the pixels the user sees. Pick the right one and say which you used.");
     ident("");
   }
 

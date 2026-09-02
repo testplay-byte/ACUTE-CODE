@@ -69,7 +69,8 @@ pub fn run() {
             // REAL DPI zoom for the panel's viewport testing.
             browser::browser_tab_scroll_state,
             browser::browser_tab_scroll_to,
-            browser::browser_tab_set_zoom
+            browser::browser_tab_set_zoom,
+            browser::browser_tab_eval
         ])
         .build(tauri::generate_context!())
         .expect("error while running the tauri application")

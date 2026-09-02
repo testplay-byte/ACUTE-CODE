@@ -29,31 +29,44 @@ import {
 
 const AREA = { left: 80, top: 120, width: 400, height: 500 };
 
-describe("computeNativeBounds (R50-a native geometry)", () => {
-  it("natural mode (viewport null) fills the area exactly", () => {
-    expect(computeNativeBounds(AREA, null)).toEqual({ x: 80, y: 120, w: 400, h: 500 });
+describe("computeNativeBounds (R50-a native geometry · R62 aspect-fit)", () => {
+  it("natural mode (viewport null) fills the area exactly, scale 1", () => {
+    expect(computeNativeBounds(AREA, null)).toEqual({ x: 80, y: 120, w: 400, h: 500, scale: 1 });
   });
 
-  it("a preset smaller than the area is centered", () => {
+  it("a preset smaller than the area renders 1:1 centered (scale 1)", () => {
     expect(computeNativeBounds(AREA, { width: 200, height: 100 })).toEqual({
       x: 80 + (400 - 200) / 2,
       y: 120 + (500 - 100) / 2,
       w: 200,
       h: 100,
+      scale: 1,
     });
   });
 
-  it("a preset larger than the area is clamped to the area (never covers the app UI)", () => {
-    expect(computeNativeBounds(AREA, { width: 1280, height: 800 })).toEqual({ x: 80, y: 120, w: 400, h: 500 });
+  it("R62: a preset larger than the area is ASPECT-FIT — never clamped (owner: 'the view is not respecting the dimensions set by the user')", () => {
+    // 1280×800 into 400×500 → scale 0.3125 → 400×250, centered vertically.
+    // The page still sees 1280×800 CSS px (the caller composes the scale
+    // into the DPI zoom) — the panel shows a scaled-down VIEW of the true
+    // preset instead of a clamped 400px layout.
+    const b = computeNativeBounds(AREA, { width: 1280, height: 800 });
+    expect(b.scale).toBeCloseTo(0.3125);
+    expect(b.w).toBe(400);
+    expect(b.h).toBe(250);
+    expect(b.x).toBe(80);
+    expect(b.y).toBe(120 + (500 - 250) / 2);
   });
 
-  it("clamping is per-dimension — only the overflowing side fills", () => {
-    // 200 fits horizontally (centered), 1000 overflows vertically (full).
+  it("R62: the fit is bound by the TIGHTER dimension (aspect preserved)", () => {
+    // 200 fits horizontally; 1000 overflows vertically → scale 0.5 →
+    // 100×500 centered horizontally. (The pre-R62 per-dimension clamp
+    // stretched the preset to the area's shape — the shape lie.)
     expect(computeNativeBounds(AREA, { width: 200, height: 1000 })).toEqual({
-      x: 80 + (400 - 200) / 2,
+      x: 80 + (400 - 100) / 2,
       y: 120,
-      w: 200,
+      w: 100,
       h: 500,
+      scale: 0.5,
     });
   });
 
@@ -63,13 +76,13 @@ describe("computeNativeBounds (R50-a native geometry)", () => {
       y: 0,
       w: 1,
       h: 1,
+      scale: 1,
     });
-    expect(computeNativeBounds({ left: 0, top: 0, width: 0, height: 0 }, { width: 300, height: 300 })).toEqual({
-      x: 0,
-      y: 0,
-      w: 1,
-      h: 1,
-    });
+    // Zero area + preset: the 0.05 scale floor keeps the webview alive
+    // (1×1) instead of dividing by zero.
+    const b = computeNativeBounds({ left: 0, top: 0, width: 0, height: 0 }, { width: 300, height: 300 });
+    expect(b.w).toBeGreaterThanOrEqual(1);
+    expect(b.h).toBeGreaterThanOrEqual(1);
   });
 
   it("non-finite measurements collapse to 1px instead of NaN", () => {
@@ -78,12 +91,14 @@ describe("computeNativeBounds (R50-a native geometry)", () => {
       y: 10,
       w: 1,
       h: 100,
+      scale: 1,
     });
     expect(computeNativeBounds({ left: 10, top: 10, width: 100, height: Number.NaN }, null)).toEqual({
       x: 10,
       y: 10,
       w: 100,
       h: 1,
+      scale: 1,
     });
   });
 });

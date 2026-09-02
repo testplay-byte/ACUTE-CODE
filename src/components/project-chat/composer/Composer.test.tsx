@@ -42,9 +42,16 @@
  *  - the provider→models flyout has a HOVER BRIDGE (grace-period close,
  *    cancellable from the flyout) — leaving the provider row no longer snaps
  *    it shut in the popover-padding + FLYOUT_MARGIN dead zone.
+ * ROUND-62 (R62-2b) additions — session-page reflection of Models &
+ *   Providers edits (the owner's directive):
+ *  - a models-config row NOT in the live catalog (added by id in Settings)
+ *    appears in the flyout — display-name label, raw-id pick;
+ *  - a HIDDEN config-only row is excluded and counted in the footer note;
+ *  - a provider DISABLED in Settings leaves the popover (the button keeps
+ *    the agent's own model label).
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { act, cleanup, fireEvent, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, screen, waitFor, within } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { MemoryRouter, Route, Routes, useLocation, useSearchParams } from "react-router";
 import type { ReactNode } from "react";
@@ -1198,6 +1205,102 @@ describe("Composer: model selector respects the models config (ROUND-58 R58-d)",
       expect(screen.getAllByRole("option").map((o) => o.textContent)).toEqual(["z-ai/glm-5.2:free"]),
     );
     expect(screen.getByText("2 paid models hidden — show all")).toBeTruthy();
+  });
+});
+
+// ── ROUND-62 (R62-2b): session-page reflection of Models & Providers edits ──
+// The owner: "the changes applied there don't reflect properly on the agent
+// session page as they should". Two picker-side fixes: config-only rows
+// (models added by id in Settings that the live catalog doesn't list) JOIN
+// the flyout list, and providers DISABLED in Settings leave the popover.
+describe("Composer: model picker reflects Models & Providers edits (R62-2b)", () => {
+  /** Open the popover + hover the OpenRouter row → the flyout (F2 helper). */
+  async function openFlyout() {
+    fireEvent.click(screen.getByRole("button", { name: "Choose model" }));
+    await screen.findByRole("menu", { name: "Choose model" });
+    await waitFor(() =>
+      expect(screen.getByRole("menuitem", { name: "Models of OpenRouter" })).toBeTruthy(),
+    );
+    fireEvent.mouseEnter(screen.getByRole("menuitem", { name: "Models of OpenRouter" }));
+    await screen.findByRole("listbox", { name: "Models of OpenRouter" });
+    await waitFor(() =>
+      expect(screen.getAllByRole("option").length).toBeGreaterThan(0),
+    );
+  }
+
+  it("a models-config row NOT in the live catalog appears in the flyout — display name label, raw id pick (added by id in Settings)", async () => {
+    // A $0-priced config-only row: free under the default free-only filter.
+    vi.mocked(fetchProviderModelConfig).mockResolvedValue([
+      modelConfigRow({
+        modelId: "custom/manual-model",
+        displayName: "Manual Model",
+        inputPricePerMtok: 0,
+        outputPricePerMtok: 0,
+      }),
+    ]);
+    await renderPanelWithConversation();
+    expect(await screen.findByText("first question", {}, { timeout: 5000 })).toBeTruthy();
+
+    await openFlyout();
+    // The config-only row rides AFTER the live rows (the union order)…
+    await waitFor(() =>
+      expect(screen.getAllByRole("option").map((o) => o.getAttribute("title"))).toEqual([
+        "z-ai/glm-5.2:free",
+        "custom/manual-model",
+      ]),
+    );
+    // …with the Settings display name as the accessible label.
+    expect(screen.getByRole("option", { name: "Manual Model" }).getAttribute("title")).toBe(
+      "custom/manual-model",
+    );
+
+    // Picking it persists the RAW id (the API identifier).
+    fireEvent.click(screen.getByRole("option", { name: "Manual Model" }));
+    await waitFor(() =>
+      expect(JSON.parse(window.localStorage.getItem(`acute-model:${SESSION_ID}`) ?? "null")).toEqual({
+        model: "custom/manual-model",
+        providerId: "openrouter",
+      }),
+    );
+  });
+
+  it("a HIDDEN config-only row is excluded and counted in the honest footer note", async () => {
+    vi.mocked(fetchProviderModelConfig).mockResolvedValue([
+      modelConfigRow({ modelId: "custom/manual-model", hidden: true }),
+    ]);
+    await renderPanelWithConversation();
+    expect(await screen.findByText("first question", {}, { timeout: 5000 })).toBeTruthy();
+
+    await openFlyout();
+    await waitFor(() =>
+      expect(screen.getAllByRole("option").map((o) => o.getAttribute("title"))).toEqual([
+        "z-ai/glm-5.2:free",
+      ]),
+    );
+    expect(screen.queryByTitle("custom/manual-model")).toBeNull();
+    expect(screen.getByText("1 model hidden in Settings")).toBeTruthy();
+  });
+
+  it("a provider DISABLED in Settings is absent from the popover (enabled one stays; the button keeps the current model)", async () => {
+    // Z.AI disabled server-side (the Settings toggle's PATCH landed).
+    vi.mocked(fetchProviders).mockResolvedValue(
+      PROVIDERS.map((p) => (p.id === "z-ai" ? { ...p, enabled: false } : { ...p })),
+    );
+    await renderPanelWithConversation();
+    expect(await screen.findByText("first question", {}, { timeout: 5000 })).toBeTruthy();
+
+    fireEvent.click(screen.getByRole("button", { name: "Choose model" }));
+    const menu = await screen.findByRole("menu", { name: "Choose model" });
+    // The enabled provider's row is there…
+    await waitFor(() =>
+      expect(within(menu).getByRole("menuitem", { name: "Models of OpenRouter" })).toBeTruthy(),
+    );
+    // …and the disabled one never renders.
+    expect(within(menu).queryByRole("menuitem", { name: "Models of Z.AI" })).toBeNull();
+    // The button itself still shows the AGENT's model (provider label lookup
+    // keeps the unfiltered list — a disabled provider stays honest there).
+    const label = document.querySelector("[data-model-label]") as HTMLElement | null;
+    expect(label?.textContent).toBe("openrouter/ox-alpha");
   });
 });
 

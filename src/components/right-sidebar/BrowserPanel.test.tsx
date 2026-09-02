@@ -9,6 +9,13 @@ import { renderWithProviders, resetTestState } from "../../test-utils";
 import * as nativeBrowser from "../../lib/native-browser";
 // R60-D: the popover-suppression guard the nativeCreate show consults.
 import { setPopoverWebviewSuppression } from "./popover-webview-guard";
+// R62 (D8): the agent-browser bridge registry — the panel registers its
+// handler; these helpers read/inspect it from the tests.
+import {
+  clearBrowserCommandHandlersForTest,
+  getBrowserCommandHandlerForTest,
+  hasBrowserCommandHandler,
+} from "../../lib/agent-browser-bridge";
 
 /**
  * ROUND-43 (R43-10) BrowserPanel — the embedded in-sidebar browser.
@@ -47,6 +54,10 @@ import { setPopoverWebviewSuppression } from "./popover-webview-guard";
 const nativeState = vi.hoisted(() => ({
   available: false,
   navigatedListener: null as ((tabId: string, url: string) => void) | null,
+  // R62 (D8): the agent-browser command handler's Rust side fakes.
+  evalResult: null as { ok: boolean; value?: unknown; error?: string } | null,
+  evalScripts: [] as string[],
+  windowMetrics: null as { x: number; y: number; scaleFactor: number } | null,
 }));
 
 vi.mock("../../lib/native-browser", () => ({
@@ -63,6 +74,12 @@ vi.mock("../../lib/native-browser", () => ({
   nativeTabClose: vi.fn(() => Promise.resolve()),
   nativeTabsCloseAll: vi.fn(() => Promise.resolve()),
   openExternalUrl: vi.fn(() => Promise.resolve()),
+  // R62 (D8): eval + screenshot geometry (the panel's bridge handler).
+  nativeTabEval: vi.fn((_tabId: string, script: string) => {
+    nativeState.evalScripts.push(script);
+    return Promise.resolve(nativeState.evalResult);
+  }),
+  nativeWindowMetrics: vi.fn(() => Promise.resolve(nativeState.windowMetrics)),
   onBrowserNavigated: vi.fn((cb: (tabId: string, url: string) => void) => {
     nativeState.navigatedListener = cb;
     return () => {
@@ -553,15 +570,19 @@ describe("BrowserPanel (R43-10 embedded browser)", () => {
     );
   });
 
-  it("ROUND-51: the engine badge names the live renderer — 'Proxy fallback' outside Tauri", async () => {
+  it("R62: the status footnote (engine badge + renderer blurb) is REMOVED — the owner's directive", async () => {
     const tab = makeTab();
     seedRightSidebar(tab);
     renderWithProviders(<BrowserPanel projectId="prj_test" tab={tab} />);
     await waitFor(() => expect(postCalls("/api/v1/browser/session")).toHaveLength(1));
 
-    // The owner must be able to SEE which engine is live (R51-a) — the
-    // non-Tauri dev flow is honestly the proxied renderer.
-    expect(screen.getByTestId("browser-engine-badge").textContent).toBe("Proxy fallback");
+    // R62-D7 (owner: "at the bottom this is not needed to be shown so just
+    // remove this" — quoting the Chromium (native) blurb): the whole status
+    // footnote strip is gone — no engine badge, no "Rendered by the
+    // embedded Chromium engine (WebView2)…" text, in either mode.
+    expect(screen.queryByTestId("browser-engine-badge")).toBeNull();
+    expect(screen.queryByText(/Rendered by the embedded Chromium engine/i)).toBeNull();
+    expect(screen.queryByText(/Rendered through the sidecar proxy/i)).toBeNull();
   });
 
   // ── R58-b: the URL-bar draft must never be stomped mid-typing ──────────
@@ -694,6 +715,21 @@ describe("BrowserPanel native mode (R50-a child webviews over the panel)", () =>
 
   beforeEach(() => {
     nativeState.available = true;
+    // R62: the rejected-create test ABOVE leaves a sticky mockRejectedValue
+    // on nativeTabCreate (it used to be the suite's LAST test — the R62
+    // bridge tests that follow would inherit the broken backend and flip
+    // into proxy mode, never registering their command handler). Reset the
+    // command fns to the healthy default before every native test.
+    nativeState.evalResult = null;
+    nativeState.evalScripts = [];
+    nativeState.windowMetrics = null;
+    create().mockReset();
+    create().mockImplementation(() => Promise.resolve());
+    nativeNavigate().mockReset();
+    nativeNavigate().mockImplementation(() => Promise.resolve());
+    nativeGo().mockReset();
+    nativeGo().mockImplementation(() => Promise.resolve());
+    clearBrowserCommandHandlersForTest();
   });
 
   it("activates the tab webview: create with the tab's URL, then show (no iframe)", async () => {
@@ -907,13 +943,14 @@ describe("BrowserPanel native mode (R50-a child webviews over the panel)", () =>
     expect(setVisible()).not.toHaveBeenCalled();
   });
 
-  it("ROUND-51: native mode shows the 'Chromium (native)' engine badge", async () => {
+  it("R62: native mode renders NO engine badge either — the footnote strip is fully gone", async () => {
     const tab = makeTab({ browserUrl: "https://github.com" });
     seedRightSidebar(tab);
     renderWithProviders(<BrowserPanel projectId="prj_test" tab={tab} />);
     await waitFor(() => expect(create()).toHaveBeenCalledWith("tab-test-1", "https://github.com"));
 
-    expect(screen.getByTestId("browser-engine-badge").textContent).toBe("Chromium (native)");
+    expect(screen.queryByTestId("browser-engine-badge")).toBeNull();
+    expect(screen.queryByText(/Rendered by the embedded Chromium engine/i)).toBeNull();
   });
 
   it("R58-b: the readout reports the CLAMPED size when the panel can't fit the preset (honest readout)", async () => {
@@ -944,26 +981,43 @@ describe("BrowserPanel native mode (R50-a child webviews over the panel)", () =>
         { timeout: 2500 },
       );
 
-      // full-hd (1920×1080) cannot fit the 400×900 panel — the webview is
-      // clamped, and the readout must say so instead of claiming 1920×1080.
+      // R62 (owner: "the view is actually not respecting the dimensions set
+      // by the user"): full-hd (1920×1080) in the 400×900 panel is now
+      // ASPECT-FIT, not clamped — the bounds shrink to a scaled-down VIEW
+      // (400×225), the DPI zoom composes the fit (0.2083), and the readout
+      // keeps claiming the TRUE preset the page sees + a fit note.
       fireEvent.change(screen.getByTestId("browser-preset-select"), { target: { value: "full-hd" } });
       await waitFor(() =>
         expect(calls.some((c) => c.path === "/api/v1/browser/viewport" && c.method === "PUT" && c.body?.preset === "full-hd")).toBe(true),
       );
       await waitFor(() => {
         const text = screen.getByTestId("browser-readout").textContent ?? "";
-        expect(text).toContain("400×900");
-        expect(text).toContain("clamped from 1920×1080");
-        expect(text).toContain("panel too small");
+        expect(text).toContain("1920×1080");
+        expect(text).toContain("fits");
+        expect(text).not.toContain("clamped");
       });
+      // The webview itself renders the SCALED footprint (400 wide, aspect
+      // 1920:1080 → 225 high), centered in the 900-tall area.
+      await waitFor(() =>
+        expect(setBounds()).toHaveBeenLastCalledWith("tab-test-1", 80, 120 + (900 - 225) / 2, 400, 225),
+      );
+      // And the composed DPI zoom (fit 0.2083) was pushed to Rust — that is
+      // what makes the PAGE see the full 1920×1080 CSS px.
+      await waitFor(() =>
+        expect(setZoom()).toHaveBeenCalledWith("tab-test-1", 0.20833333333333334),
+      );
 
-      // A preset that FITS keeps the plain readout (no clamp note).
+      // A preset that FITS (390×844 ≤ 400×900) keeps the plain readout and
+      // a 1:1 footprint (no fit note, zoom stays the user's 1×).
       fireEvent.change(screen.getByTestId("browser-preset-select"), { target: { value: "mobile-md" } });
       await waitFor(() => {
         const text = screen.getByTestId("browser-readout").textContent ?? "";
         expect(text).toContain("390×844");
-        expect(text).not.toContain("clamped");
+        expect(text).not.toContain("fits");
       });
+      await waitFor(() =>
+        expect(setBounds()).toHaveBeenLastCalledWith("tab-test-1", 80 + (400 - 390) / 2, 120 + (900 - 844) / 2, 390, 844),
+      );
     } finally {
       rectSpy.mockRestore();
     }
@@ -1008,7 +1062,7 @@ describe("BrowserPanel native mode (R50-a child webviews over the panel)", () =>
     }
   });
 
-  it("R60: the FIT button is honestly disabled in native mode — presets are auto-clamped to the panel", async () => {
+  it("R60/R62: the FIT button is honestly disabled in native mode — presets are auto-fitted to the panel (true size, scaled view)", async () => {
     const tab = makeTab({ browserUrl: "https://example.com" });
     seedRightSidebar(tab);
     renderWithProviders(<BrowserPanel projectId="prj_test" tab={tab} />);
@@ -1017,7 +1071,7 @@ describe("BrowserPanel native mode (R50-a child webviews over the panel)", () =>
     const fit = screen.getByTestId("browser-fit") as HTMLButtonElement;
     expect(fit.disabled).toBe(true);
     // The title explains WHY instead of leaving a dead button.
-    expect(fit.title).toContain("automatically clamped");
+    expect(fit.title).toContain("automatically scaled to fit");
   });
 
   it("R60-D: a webview created while a popover suppresses the tab stays HIDDEN (the sidebar restores it later)", async () => {
@@ -1104,7 +1158,6 @@ describe("BrowserPanel native mode (R50-a child webviews over the panel)", () =>
     await waitFor(() => expect(screen.getByTestId("browser-iframe")).toBeTruthy());
     expect(screen.getByTestId("browser-iframe").getAttribute("src")).toContain(encodeURIComponent("https://github.com"));
     expect(screen.queryByTestId("browser-native-placeholder")).toBeNull();
-    expect(screen.getByTestId("browser-engine-badge").textContent).toBe("Proxy fallback");
 
     // Further navigations stay on the proxy path — no more native calls.
     create().mockClear();
@@ -1121,5 +1174,92 @@ describe("BrowserPanel native mode (R50-a child webviews over the panel)", () =>
     // (Rust side: not-found = Ok, idempotent). What must NOT happen is any
     // further SHOW attempt: no setVisible(tabId, true) after the flip.
     expect(setVisible()).not.toHaveBeenCalledWith("tab-test-1", true);
+  });
+
+  // ── R62 (D8): the agent-browser command bridge handler ─────────────────
+
+  it("R62: the native panel REGISTERS the bridge handler; eval runs browser_tab_eval and returns its envelope", async () => {
+    nativeState.evalResult = { ok: true, value: { title: "Example Domain" } };
+    nativeState.evalScripts = [];
+    const tab = makeTab({ browserUrl: "https://example.com" });
+    seedRightSidebar(tab);
+    renderWithProviders(<BrowserPanel projectId="prj_test" tab={tab} />);
+    await waitFor(() => expect(create()).toHaveBeenCalledWith("tab-test-1", "https://example.com"));
+    await waitFor(() => expect(hasBrowserCommandHandler("tab-test-1")).toBe(true));
+
+    // The agent's eval dispatch: script in, {ok,value} envelope out (the
+    // bridge posts this as the command result; agent-core reads data.ok).
+    const reply = await getBrowserCommandHandlerForTest("tab-test-1")!("eval", {
+      script: "return document.title",
+    });
+    expect(reply.ok).toBe(true);
+    expect(reply.data).toEqual({ ok: true, value: { title: "Example Domain" } });
+    expect(nativeState.evalScripts).toEqual(["return document.title"]);
+    expect(vi.mocked(nativeBrowser.nativeTabEval)).toHaveBeenCalledWith("tab-test-1", "return document.title");
+
+    // Unmount unregisters — a stale handler must never answer for a gone
+    // webview.
+    cleanup();
+    expect(hasBrowserCommandHandler("tab-test-1")).toBe(false);
+  });
+
+  it("R62: eval failures surface the page's error honestly (the {ok:false} envelope)", async () => {
+    nativeState.evalResult = { ok: false, error: "SyntaxError: unexpected token" };
+    const tab = makeTab({ browserUrl: "https://example.com" });
+    seedRightSidebar(tab);
+    renderWithProviders(<BrowserPanel projectId="prj_test" tab={tab} />);
+    await waitFor(() => expect(create()).toHaveBeenCalledWith("tab-test-1", "https://example.com"));
+    const reply = await getBrowserCommandHandlerForTest("tab-test-1")!("eval", {
+      script: "return nope(",
+    });
+    expect(reply.ok).toBe(true); // the BRIDGE call worked…
+    expect((reply.data as { ok: boolean; error: string }).ok).toBe(false); // …the PAGE rejected the script
+    expect((reply.data as { error: string }).error).toContain("SyntaxError");
+  });
+
+  it("R62: screenshot_meta reports the panel's PHYSICAL-px region (rect × scale + window origin)", async () => {
+    const rectSpy = mockAreaRect(); // 80,120 → 480,1020 (400×900 logical)
+    nativeState.windowMetrics = { x: 1920, y: 0, scaleFactor: 2 };
+    try {
+      const tab = makeTab({ browserUrl: "https://example.com" });
+      seedRightSidebar(tab);
+      renderWithProviders(<BrowserPanel projectId="prj_test" tab={tab} />);
+      await waitFor(() => expect(create()).toHaveBeenCalledWith("tab-test-1", "https://example.com"));
+
+      const reply = await getBrowserCommandHandlerForTest("tab-test-1")!("screenshot_meta", {});
+      expect(reply.ok).toBe(true);
+      const data = reply.data as { supported: boolean; region: { x: number; y: number; w: number; h: number }; scaleFactor: number; mode: string };
+      expect(data.supported).toBe(true);
+      expect(data.mode).toBe("native");
+      expect(data.scaleFactor).toBe(2);
+      // (1920 + 80×2, 0 + 120×2, 400×2, 900×2) — the physical region the
+      // computer-use backends capture (scrot/PowerShell are pixel-space).
+      expect(data.region).toEqual({ x: 2080, y: 240, w: 800, h: 1800 });
+    } finally {
+      rectSpy.mockRestore();
+      nativeState.windowMetrics = null;
+    }
+  });
+
+  it("R62: screenshot_meta without window metrics still answers supported (region null → full-display fallback)", async () => {
+    nativeState.windowMetrics = null;
+    const tab = makeTab({ browserUrl: "https://example.com" });
+    seedRightSidebar(tab);
+    renderWithProviders(<BrowserPanel projectId="prj_test" tab={tab} />);
+    await waitFor(() => expect(create()).toHaveBeenCalledWith("tab-test-1", "https://example.com"));
+    const reply = await getBrowserCommandHandlerForTest("tab-test-1")!("screenshot_meta", {});
+    expect(reply.ok).toBe(true);
+    expect((reply.data as { supported: boolean; region: unknown }).supported).toBe(true);
+    expect((reply.data as { region: unknown }).region).toBeNull();
+  });
+
+  it("R62: web/proxy mode registers NO handler (eval is native-only; the bridge answers honestly instead)", async () => {
+    nativeState.available = false;
+    clearBrowserCommandHandlersForTest();
+    const tab = makeTab({ browserUrl: "https://example.com" });
+    seedRightSidebar(tab);
+    renderWithProviders(<BrowserPanel projectId="prj_test" tab={tab} />);
+    await waitFor(() => expect(postCalls("/api/v1/browser/session")).toHaveLength(1));
+    expect(hasBrowserCommandHandler("tab-test-1")).toBe(false);
   });
 });

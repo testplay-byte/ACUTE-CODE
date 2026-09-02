@@ -378,3 +378,33 @@ describe("migration 0014 (delegate_task + browser_control allowlist repair)", ()
     again.close();
   });
 });
+
+
+// ── ROUND-62 (D4): per-side pricing — partial price data costs what the
+// KNOWN sides cost (the pre-R62 either-null → $0 gate is the defect behind
+// "unable to configure the per million input and output token price").
+describe("computeCost (R62 per-side pricing)", () => {
+  it("input-only pricing costs the input side (not a hard $0); output-only mirrors it; both-null stays $0", async () => {
+    const { computeCost } = await import("../src/agents/runtime.js");
+    const db = openDatabase(":memory:");
+    // A provider + a models row with ONLY the input price set.
+    db.prepare(
+      `INSERT INTO providers (id, name, kind, base_url, api_format, enabled, created_at)
+       VALUES ('prov-p', 'P', 'openai-compatible', 'https://p.example', 'chat-completions', 1, '2026-01-01T00:00:00Z')`,
+    ).run();
+    db.prepare(
+      "INSERT OR REPLACE INTO models (provider_id, model_id, input_price_per_mtok, output_price_per_mtok, created_at, updated_at) VALUES ('prov-p', 'in-only', 3.0, NULL, '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z')",
+    ).run();
+    db.prepare(
+      "INSERT OR REPLACE INTO models (provider_id, model_id, input_price_per_mtok, output_price_per_mtok, created_at, updated_at) VALUES ('prov-p', 'out-only', NULL, 5.0, '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z')",
+    ).run();
+    db.prepare(
+      "INSERT OR REPLACE INTO models (provider_id, model_id, input_price_per_mtok, output_price_per_mtok, created_at, updated_at) VALUES ('prov-p', 'none', NULL, NULL, '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z')",
+    ).run();
+    // 2M input + 1M output tokens.
+    expect(computeCost(db, "prov-p", "in-only", 2_000_000, 1_000_000)).toBeCloseTo(6.0);
+    expect(computeCost(db, "prov-p", "out-only", 2_000_000, 1_000_000)).toBeCloseTo(5.0);
+    expect(computeCost(db, "prov-p", "none", 2_000_000, 1_000_000)).toBe(0);
+    db.close();
+  });
+});

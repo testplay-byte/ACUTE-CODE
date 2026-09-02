@@ -95,6 +95,17 @@ const plainRect = (el: HTMLElement): PlainRect => {
  * FLYOUT_MARGIN dead zone into the flyout (and back). All other dismissal
  * paths (popover scroll, outside click, Escape, popover close) still close
  * immediately and cancel any pending timer.
+ *
+ * ROUND-62 (R62-2b, owner: "the changes applied [in Models & Providers]
+ * don't reflect properly on the agent session page"): the popover's list
+ * filters DISABLED providers (a provider turned off in Settings is no
+ * longer selectable here), and the flyout's model list became a UNION of
+ * the live catalog and the Settings models-config rows — models added by
+ * id in Settings now appear even when the provider's live catalog doesn't
+ * list them. The same round teaches ModelsProvidersTab to invalidate this
+ * component's query-key families (["composer-providers"],
+ * ["provider-models", id], ["provider-models-config", id]) so edits stop
+ * being held back by the 5-minute staleTimes.
  */
 export function ModelSelector({
   agent,
@@ -162,6 +173,18 @@ export function ModelSelector({
   const modelsFreeOnly = useSettingsStore((s) => s.modelsFreeOnly);
   const setModelsFreeOnly = useSettingsStore((s) => s.setModelsFreeOnly);
 
+  // ROUND-62 (R62-2b): disabled providers leave the popover — the Settings
+  // enable/disable toggle finally reflects here. The R59-C tooltip already
+  // promised "a disabled provider's models simply disappear from the
+  // pickers", but this list never filtered on `enabled`, so a provider
+  // turned off in Settings stayed fully selectable on the session page.
+  // The BUTTON's label lookup keeps the unfiltered list (the agent's own
+  // provider may be disabled and must still resolve its display name).
+  const enabledProviders = useMemo(
+    () => providers.filter((p) => p.enabled),
+    [providers],
+  );
+
   // The hovered provider's models (same query key the old picker used).
   const modelsQuery = useQuery({
     queryKey: ["provider-models", hoveredProvider],
@@ -191,9 +214,19 @@ export function ModelSelector({
   // ROUND-58 (R58-d): live ids + config merge — hidden rows are EXCLUDED,
   // display names replace raw ids, and the shared free-only filter sees the
   // CONFIG's input price (falling back to the id heuristic when unknown).
-  const allModels: FlyoutModel[] = (modelsQuery.data ?? [])
-    .slice(0, FLYOUT_MODEL_CAP)
-    .map((id) => {
+  // ROUND-62 (R62-2b): the merge became a UNION — models-config rows the
+  // live catalog does NOT list (manually added by id in Settings, custom
+  // gateways, an unreachable catalog) join the list so "add model in
+  // Settings" is reflected here too, which the pure live-catalog list never
+  // was.
+  const liveIds = (modelsQuery.data ?? []).slice(0, FLYOUT_MODEL_CAP);
+  // Cheap ≤200-entry set — no memo needed (rebuilt per render with the data).
+  const liveIdSet = new Set(liveIds);
+  const configOnlyRows = (modelsConfigQuery.data ?? []).filter(
+    (row) => !liveIdSet.has(row.modelId),
+  );
+  const allModels: FlyoutModel[] = [
+    ...liveIds.map((id) => {
       const config = configByModel.get(id);
       return {
         modelId: id,
@@ -204,15 +237,23 @@ export function ModelSelector({
         configured: config !== undefined,
         inputPricePerMtok: config?.inputPricePerMtok ?? null,
       };
-    })
-    .filter((m) => configByModel.get(m.modelId)?.hidden !== true);
+    }),
+    ...configOnlyRows.map((row) => ({
+      modelId: row.modelId,
+      label: row.displayName.trim() !== "" ? row.displayName : row.modelId,
+      configured: true,
+      inputPricePerMtok: row.inputPricePerMtok,
+    })),
+  ].filter((m) => configByModel.get(m.modelId)?.hidden !== true);
   const models = filterModelsForPicker(allModels, modelsFreeOnly);
   const hiddenCount = allModels.length - models.length;
   // Config-hidden models are NOT reachable via "show all" — surfaced as
   // their own subtle footer note instead (they're turned off in Settings).
-  const configHiddenCount = (modelsQuery.data ?? [])
-    .slice(0, FLYOUT_MODEL_CAP)
-    .filter((id) => configByModel.get(id)?.hidden === true).length;
+  // ROUND-62 (R62-2b): counted over the union (a hidden config-only row is
+  // just as hidden as a hidden live one).
+  const configHiddenCount = (modelsConfigQuery.data ?? []).filter(
+    (row) => row.hidden === true,
+  ).length;
 
   // Effective model = override ?? agent.model (unchanged per-send semantics).
   const effective = override?.model ?? agent?.model ?? null;
@@ -494,12 +535,12 @@ export function ModelSelector({
                 <div className="text-[11px] px-2 py-1.5" style={{ color: styles.textTertiary }}>
                   loading providers…
                 </div>
-              ) : providers.length === 0 ? (
+              ) : enabledProviders.length === 0 ? (
                 <div className="text-[11px] px-2 py-1.5" style={{ color: styles.textTertiary }}>
                   no providers configured
                 </div>
               ) : (
-                providers.map((p) => (
+                enabledProviders.map((p) => (
                   <div
                     key={p.id}
                     data-provider-row={p.id}

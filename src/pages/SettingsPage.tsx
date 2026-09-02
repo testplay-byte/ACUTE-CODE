@@ -129,24 +129,28 @@ function AppearanceTab() {
   const setTheme = useThemeStore((s) => s.setTheme);
   const mode = useThemeStore((s) => s.mode);
   const setMode = useThemeStore((s) => s.setMode);
-  // ROUND-34 (owner's appearance design): density + sidebar tint controls.
+  // ROUND-34 (owner's appearance design): density control.
   const density = useThemeStore((s) => s.density);
   const setDensity = useThemeStore((s) => s.setDensity);
-  const sidebarTint = useThemeStore((s) => s.sidebarTint);
-  const setSidebarTint = useThemeStore((s) => s.setSidebarTint);
   // ROUND-35 (owner: tool calls preferences in settings).
   const activityMode = useThemeStore((s) => s.activityMode);
   const setActivityMode = useThemeStore((s) => s.setActivityMode);
 
   return (
-    <div className="mx-auto flex max-w-3xl flex-col gap-5">
-      {/* ── Interface Mode (owner design: segmented toggle + LIVE badge) ── */}
+    // ROUND-62 (R62-2a, owner: "in the settings in the appearence make it
+    // simple easier and much better and also remove the unnecessary not
+    // configured settings"): the tab is ONE simple column at gap-4 — the
+    // mode + theme sections are MERGED, the tool cards lose their mock
+    // previews, and the never-configured "Sidebar Tint" section is removed
+    // (UI-only — the theme-store field stays, other surfaces still read it).
+    <div className="mx-auto flex max-w-3xl flex-col gap-4">
+      {/* ── Theme: light/dark segmented control directly above the grid ── */}
       <section>
-        <SectionTitle>Interface Mode</SectionTitle>
+        <SectionTitle>Theme</SectionTitle>
         <div
-          className="relative grid w-full max-w-[320px] grid-cols-2 gap-1.5 rounded-[16px] p-1"
+          className="relative mb-3 grid w-full max-w-[320px] grid-cols-2 gap-1.5 rounded-[16px] p-1"
           role="radiogroup"
-          aria-label="Interface mode"
+          aria-label="Theme mode"
           style={{ background: styles.toggleTrack, border: bdr("1.5px", styles.border) }}
         >
           <div
@@ -172,13 +176,6 @@ function AppearanceTab() {
             );
           })}
         </div>
-        <p className="mt-2 text-[11px]" style={{ color: styles.textTertiary }}>
-          Changes apply live across the whole app.
-        </p>
-      </section>
-
-      <section>
-        <SectionTitle>Theme</SectionTitle>
         {/* 2-column grid (1 per row on mobile) — modern, compact, shows more at once */}
         <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
           {THEMES.map((t) => {
@@ -238,13 +235,13 @@ function AppearanceTab() {
         </div>
       </section>
 
-      {/* ── Density (owner design frame 2) ──────────────────────────────── */}
+      {/* ── Chat density (owner design frame 2) ─────────────────────────── */}
       <section>
-        <SectionTitle>Density</SectionTitle>
+        <SectionTitle>Chat Density</SectionTitle>
         <div
           className="relative grid w-full max-w-[320px] grid-cols-2 gap-1.5 rounded-[16px] p-1"
           role="radiogroup"
-          aria-label="Density"
+          aria-label="Chat density"
           style={{ background: styles.toggleTrack, border: bdr("1.5px", styles.border) }}
         >
           <div
@@ -269,13 +266,13 @@ function AppearanceTab() {
           })}
         </div>
         <p className="mt-2 text-[11px]" style={{ color: styles.textTertiary }}>
-          Comfortable adds breathing room to the chat; compact fits more on screen.
+          Compact fits more on screen.
         </p>
       </section>
 
-      {/* ── Tool Calls (ROUND-35: the owner's tool-calls preferences) ──── */}
+      {/* ── Tool activity (ROUND-35: the owner's tool-calls preferences) ── */}
       <section>
-        <SectionTitle>Tool Calls</SectionTitle>
+        <SectionTitle>Tool activity</SectionTitle>
         <p className="mt-0 mb-3 text-[12px]" style={{ color: styles.textSecondary }}>
           How the agent's tool activity appears in the chat.
         </p>
@@ -318,83 +315,12 @@ function AppearanceTab() {
                 <p className="mt-1.5 text-[11px] leading-snug" style={{ color: styles.textSecondary }}>
                   {desc}
                 </p>
-                {/* Tiny inline mock of the mode */}
-                <div className="mt-2.5 rounded-[8px] border p-1.5 flex flex-col gap-1" style={{ borderColor: styles.borderSubtle }}>
-                  {id === "detailed" && (
-                    <>
-                      <div className="h-[5px] w-3/4 rounded-full" style={{ background: withAlpha(styles.accent, 0.5) }} />
-                      <div className="h-[5px] w-full rounded-full" style={{ background: withAlpha("#22c55e", 0.5) }} />
-                      <div className="h-[5px] w-2/3 rounded-full" style={{ background: withAlpha(styles.text, 0.2) }} />
-                    </>
-                  )}
-                  {id === "compact" && (
-                    <div className="h-[5px] w-full rounded-full" style={{ background: withAlpha(styles.accent, 0.5) }} />
-                  )}
-                  {id === "hidden" && (
-                    <div className="text-[9px] font-mono text-center py-0.5" style={{ color: styles.textTertiary }}>
-                      — none —
-                    </div>
-                  )}
-                </div>
+                {/* ROUND-62 (2-a): the tiny inline mock preview (the fake bars
+                    + the "— none —" block) is GONE — each card is just the
+                    label + one-line description. */}
               </button>
             );
           })}
-        </div>
-      </section>
-
-      {/* ── Sidebar tint (owner design frame 2) + live mini rail preview ── */}
-      <section>
-        <SectionTitle>Sidebar Tint</SectionTitle>
-        <div className="flex items-start gap-4 flex-wrap">
-          <div
-            className="relative grid w-full max-w-[320px] grid-cols-3 gap-1.5 rounded-[16px] p-1"
-            role="radiogroup"
-            aria-label="Sidebar tint strength"
-            style={{ background: styles.toggleTrack, border: bdr("1.5px", styles.border) }}
-          >
-            <div
-              className="absolute bottom-1 top-1 w-[calc(33.33%-4.66px)] rounded-[12px] transition-all duration-300"
-              style={{
-                left:
-                  sidebarTint === "subtle"
-                    ? "4px"
-                    : sidebarTint === "warm"
-                      ? "calc(33.33% + 0.33px)"
-                      : "calc(66.66% - 4.33px)",
-                background: styles.toggleActive,
-              }}
-            />
-            {(["subtle", "warm", "bold"] as const).map((t) => {
-              const active = sidebarTint === t;
-              return (
-                <button
-                  key={t}
-                  onClick={() => setSidebarTint(t)}
-                  role="radio"
-                  aria-checked={active}
-                  aria-label={`${t} sidebar tint`}
-                  className="relative z-10 flex h-10 cursor-pointer items-center justify-center rounded-[12px] border-none bg-transparent text-[12px] font-bold capitalize transition-colors"
-                  style={{ color: active ? getContrastText(styles.toggleActive) : styles.textTertiary }}
-                >
-                  {t}
-                </button>
-              );
-            })}
-          </div>
-          {/* Live mini rail preview — shows the resulting sidebar surface. */}
-          <div
-            className="w-[104px] h-[112px] rounded-[14px] border-[1.5px] overflow-hidden shrink-0"
-            style={{ borderColor: styles.border, background: styles.bg }}
-            aria-hidden
-          >
-            <div className="h-full w-[42px] p-2 flex flex-col gap-1.5" style={{ background: styles.sidebarBg }}>
-              <div className="h-3 w-3 rounded-[4px]" style={{ background: styles.accent }} />
-              <div className="h-[5px] w-full rounded-full" style={{ background: withAlpha(styles.text, 0.18) }} />
-              <div className="h-[5px] w-3/4 rounded-full" style={{ background: withAlpha(styles.text, 0.14) }} />
-              <div className="h-[5px] w-2/3 rounded-full mt-2" style={{ background: withAlpha(styles.accent, 0.45) }} />
-              <div className="h-[5px] w-1/2 rounded-full" style={{ background: withAlpha(styles.text, 0.12) }} />
-            </div>
-          </div>
         </div>
       </section>
     </div>

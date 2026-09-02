@@ -11,6 +11,8 @@ import {
 import { useActiveStreams } from "./active-streams";
 import { getQueryClient } from "./query-client";
 import { useComputerMonitorStore } from "./computer-monitor-store";
+// R62/D8: the agent-browser bridge — browser-command frames dispatch here.
+import { dispatchBrowserCommand } from "./agent-browser-bridge";
 
 /**
  * ROUND-39 (owner: "It should keep the sessions going in the background even
@@ -964,6 +966,16 @@ function handleStreamEvent(
       tool: event.tool,
       code: event.code,
     });
+    return;
+  }
+  // ROUND-62 (R62/D8): live browser commands are turn-independent as well —
+  // the agent-browser bridge dispatches them to the mounted BrowserPanel
+  // (native webview eval / screenshot geometry) and POSTs the result back
+  // to agent-core, which resolves the browser_control tool's pending
+  // promise. No liveTurn is needed (the panel + webview exist whether or
+  // not this store tracks a turn).
+  if (event.type === "browser-command") {
+    dispatchBrowserCommand(event);
     return;
   }
 

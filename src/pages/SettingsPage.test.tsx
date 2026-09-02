@@ -11,14 +11,24 @@
  *     cap, no mx-auto centering (the master-detail owns every pixel), while
  *     the form tabs keep a readable, tighter max-w-4xl.
  *
+ * ROUND-62 (R62-2a) — the appearance-tab simplification (the owner: "in the
+ * settings in the appearence make it simple easier and much better and also
+ * remove the unnecessary not configured settings"): the Interface Mode +
+ * Theme sections are MERGED (one "Theme" section, segmented control directly
+ * above the unchanged card grid, no "Changes apply live" helper), Density is
+ * "Chat Density" with a one-line hint, "Tool activity" cards are clean
+ * radio cards (the mock previews are gone), and the Sidebar Tint section is
+ * REMOVED from the UI (the theme-store field survives untouched).
+ *
  * The api tab's queries ride a deterministic 401-stubbed fetch (retry is
  * off in the test QueryClient) — the page still renders its layout and the
  * empty provider list, which is all these assertions need.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { cleanup, screen } from "@testing-library/react";
+import { cleanup, fireEvent, screen } from "@testing-library/react";
 import { SettingsPage } from "./SettingsPage";
 import { resetTestState, renderWithProviders } from "../test-utils";
+import { useThemeStore } from "../lib/theme-store";
 
 /** Every request 401s (the bearer wall) — queries fail soft, layout renders. */
 const fetchMock = vi.fn(
@@ -33,6 +43,15 @@ const fetchMock = vi.fn(
 
 beforeEach(() => {
   resetTestState();
+  // R62-2a: resetTestState only pins themeId/mode — the appearance tests
+  // below also toggle density + activityMode, so the whole store is reset.
+  useThemeStore.setState({
+    themeId: "nova",
+    mode: "dark",
+    density: "comfortable",
+    activityMode: "detailed",
+    sidebarTint: "subtle",
+  });
   vi.stubGlobal("fetch", fetchMock);
   fetchMock.mockClear();
 });
@@ -87,5 +106,120 @@ describe("SettingsPage padding (R60-B)", () => {
     // The tab actually rendered behind the 401-stubbed queries: the empty
     // provider list is the honest state.
     await screen.findByText("No providers — add one below.");
+  });
+});
+
+describe("Appearance tab simplification (R62-2a)", () => {
+  it("ONE Theme section — the segmented control sits directly above the UNCHANGED theme grid; no separate Interface Mode section", () => {
+    renderWithProviders(<SettingsPage />); // default tab: appearance
+
+    // The single section title (the old "Interface Mode" title + the
+    // redundant "Changes apply live" helper line are gone).
+    expect(screen.getByText("Theme")).toBeTruthy();
+    expect(screen.queryByText("Interface Mode")).toBeNull();
+    expect(screen.queryByText("Changes apply live across the whole app.")).toBeNull();
+
+    // The segmented control and the theme cards share the SAME section, in
+    // that order (segmented first, grid directly below).
+    const segmented = screen.getByRole("radiogroup", { name: "Theme mode" });
+    const firstCard = screen.getByRole("button", { name: "Theme Nova Cream" });
+    expect(segmented.closest("section")).toBe(firstCard.closest("section"));
+    expect(
+      (segmented.compareDocumentPosition(firstCard) & Node.DOCUMENT_POSITION_FOLLOWING) !== 0,
+    ).toBe(true);
+
+    // All 5 theme cards still render (the grid itself was NOT redesigned).
+    for (const name of ["Nova Cream", "Bento Blue", "Midnight Lab", "Sunset Pop", "Mono Stone"]) {
+      expect(screen.getByRole("button", { name: `Theme ${name}` })).toBeTruthy();
+    }
+  });
+
+  it("the merged Theme section still toggles light/dark", () => {
+    renderWithProviders(<SettingsPage />);
+
+    const light = screen.getByRole("radio", { name: "light mode" });
+    expect(light.getAttribute("aria-checked")).toBe("false");
+    fireEvent.click(light);
+    expect(useThemeStore.getState().mode).toBe("light");
+    expect(light.getAttribute("aria-checked")).toBe("true");
+    expect(screen.getByRole("radio", { name: "dark mode" }).getAttribute("aria-checked")).toBe("false");
+  });
+
+  it("the merged Theme section still selects a theme", () => {
+    renderWithProviders(<SettingsPage />);
+
+    const card = screen.getByRole("button", { name: "Theme Bento Blue" });
+    expect(card.getAttribute("aria-pressed")).toBe("false");
+    fireEvent.click(card);
+    expect(useThemeStore.getState().themeId).toBe("bento");
+    expect(card.getAttribute("aria-pressed")).toBe("true");
+    expect(screen.getByRole("button", { name: "Theme Nova Cream" }).getAttribute("aria-pressed")).toBe("false");
+  });
+
+  it("Chat Density still toggles — helper text is one short line", () => {
+    renderWithProviders(<SettingsPage />);
+
+    expect(screen.getByText("Chat Density")).toBeTruthy();
+    expect(screen.getByText("Compact fits more on screen.")).toBeTruthy();
+    expect(
+      screen.queryByText("Comfortable adds breathing room to the chat; compact fits more on screen."),
+    ).toBeNull();
+
+    const compact = screen.getByRole("radio", { name: "compact density" });
+    fireEvent.click(compact);
+    expect(useThemeStore.getState().density).toBe("compact");
+    expect(compact.getAttribute("aria-checked")).toBe("true");
+    expect(screen.getByRole("radio", { name: "comfortable density" }).getAttribute("aria-checked")).toBe("false");
+  });
+
+  it("Tool activity cards are clean radio cards (label + one-line description only) and still switch modes", () => {
+    renderWithProviders(<SettingsPage />);
+
+    expect(screen.getByText("Tool activity")).toBeTruthy();
+    expect(screen.queryByText("Tool Calls")).toBeNull();
+
+    // The one-line descriptions survive; the tiny inline mock previews
+    // (fake bars + the "— none —" block) are GONE.
+    expect(screen.getByText("Full timeline with diffs and command output")).toBeTruthy();
+    expect(screen.getByText("One-line summary per turn")).toBeTruthy();
+    expect(screen.getByText("Never show tool activity")).toBeTruthy();
+    expect(screen.queryByText("— none —")).toBeNull();
+    expect(document.querySelectorAll('[class*="h-[5px]"]').length).toBe(0);
+
+    const detailed = screen.getByRole("button", { name: /Detailed/ });
+    expect(detailed.getAttribute("aria-pressed")).toBe("true"); // store default
+    fireEvent.click(screen.getByRole("button", { name: /Compact/ }));
+    expect(useThemeStore.getState().activityMode).toBe("compact");
+    expect(screen.getByRole("button", { name: /Compact/ }).getAttribute("aria-pressed")).toBe("true");
+    expect(detailed.getAttribute("aria-pressed")).toBe("false");
+    fireEvent.click(screen.getByRole("button", { name: /Hidden/ }));
+    expect(useThemeStore.getState().activityMode).toBe("hidden");
+  });
+
+  it("the Sidebar Tint section is GONE from the UI (store field untouched)", () => {
+    renderWithProviders(<SettingsPage />);
+
+    expect(screen.queryByText("Sidebar Tint")).toBeNull();
+    expect(screen.queryByRole("radiogroup", { name: "Sidebar tint strength" })).toBeNull();
+    expect(screen.queryByRole("radio", { name: /sidebar tint/i })).toBeNull();
+
+    // The tab is exactly THREE sections now: Theme, Chat density, Tool activity.
+    expect(document.querySelectorAll("section").length).toBe(3);
+
+    // The removal is UI-ONLY — the theme-store field + setter survive
+    // (useThemeSync/deriveThemeStyles still read sidebarTint).
+    const state = useThemeStore.getState();
+    expect(state.sidebarTint).toBe("subtle");
+    expect(typeof state.setSidebarTint).toBe("function");
+  });
+
+  it("the tab reads as ONE simple column with the tighter gap-4 rhythm", () => {
+    renderWithProviders(<SettingsPage />);
+
+    const column = document.querySelector(".max-w-3xl") as HTMLElement;
+    expect(column).not.toBeNull();
+    expect(column.className).toContain("flex-col");
+    expect(column.className).toContain("gap-4");
+    expect(column.className).not.toContain("gap-5");
   });
 });

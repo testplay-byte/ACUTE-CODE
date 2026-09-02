@@ -1,4 +1,5 @@
 <!-- last-reviewed: 2026-09-02 round-61 -->
+- [ui-iterations/round-62.md](ui-iterations/round-62.md) — the R62 owner-feedback round (sidebar rail, layout, browser truth + agent-browser)
 # ACUTE-CODE — Documentation Index
 
 One line per document. **Reading order for a new session:** `HANDOFF.md` →

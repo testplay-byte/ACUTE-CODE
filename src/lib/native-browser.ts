@@ -196,6 +196,73 @@ export function nativeTabScrollTo(tabId: string, y: number): Promise<void> {
 }
 
 /**
+ * R62 (D8, the agent-browser bridge): evaluate a JavaScript snippet INSIDE
+ * the tab's live page and get its value back. The Rust command wraps the
+ * script as a function BODY (use `return …` for data) and answers a JSON
+ * string `{ok:true,value}` / `{ok:false,error}` — page exceptions surface as
+ * data, not rejections. Null (never a throw) outside Tauri.
+ */
+export interface TabEvalResult {
+  ok: boolean;
+  value?: unknown;
+  error?: string;
+}
+
+export async function nativeTabEval(tabId: string, script: string): Promise<TabEvalResult | null> {
+  const tauri = tauriGlobal();
+  if (tauri === null) return null;
+  try {
+    const raw = (await tauri.core.invoke("browser_tab_eval", { tabId, script })) as unknown;
+    if (typeof raw !== "string") return { ok: false, error: "browser_tab_eval returned a non-string" };
+    return JSON.parse(raw) as TabEvalResult;
+  } catch (err) {
+    // Rust-side rejections (missing webview, timeout, validation) map to
+    // the same {ok:false} shape the bridge expects.
+    return { ok: false, error: err instanceof Error ? err.message : String(err) };
+  }
+}
+
+/**
+ * R62 (D8): the main window's on-screen geometry — PHYSICAL px outer
+ * position + the display scale factor. Feeds the agent-browser screenshot
+ * region (panel rect in logical px × scale + window origin = the physical
+ * screen region the computer-use backends capture). Null outside Tauri or
+ * when the window API is unavailable (the caller then falls back to a
+ * full-display capture).
+ */
+export async function nativeWindowMetrics(): Promise<{ x: number; y: number; scaleFactor: number } | null> {
+  if (!isTauri()) return null;
+  const tauri = (window as unknown as {
+    __TAURI__?: {
+      window?: {
+        getCurrentWindow?: () => {
+          outerPosition: () => Promise<{ x: number; y: number }>;
+          scaleFactor: () => Promise<number>;
+        };
+      };
+    };
+  }).__TAURI__;
+  const getCurrentWindow = tauri?.window?.getCurrentWindow;
+  if (typeof getCurrentWindow !== "function") return null;
+  try {
+    const win = getCurrentWindow();
+    const [position, scaleFactor] = await Promise.all([win.outerPosition(), win.scaleFactor()]);
+    if (
+      typeof position?.x !== "number" ||
+      typeof position?.y !== "number" ||
+      typeof scaleFactor !== "number" ||
+      !Number.isFinite(scaleFactor) ||
+      scaleFactor <= 0
+    ) {
+      return null;
+    }
+    return { x: position.x, y: position.y, scaleFactor };
+  } catch {
+    return null;
+  }
+}
+
+/**
  * R60: REAL DPI-level page zoom (WebView2 zoomFactor through tauri's
  * `Webview::set_zoom`) — media queries and rem layout re-evaluate like a
  * browser's Ctrl+±, which is what the panel's display-size testing needs.

@@ -933,3 +933,57 @@ settings-gated default OFF). Full owner guides:
   `computerUse.enabled=true` (default OFF); the "observe" posture registers
   just the 11 read-only ones.
 
+
+## ROUND-62 additions (implemented)
+
+The owner-feedback round: the agent-browser surface, the browser-command
+bridge, and the per-side cost fix. No new tables (D4/D8 ride the R50
+models columns + the R61 computer-use settings).
+
+### POST /api/v1/browser-commands/:commandId/result (the bridge's answer channel)
+
+The browser_control tool's live actions (`eval`, `screenshot`'s meta ask)
+send a `{type:"browser-command", commandId, tabId, action, payload}`
+frame on the turn's SSE stream; the app UI executes it (eval → the Rust
+`browser_tab_eval` in the tab's webview; screenshot_meta → the panel's
+physical-px region) and POSTs the result here. Body
+`{ok: boolean, data?: unknown, error?: string}` → **204** when a pending
+command resolved (or rejected with the honest error), **404** for
+unknown/expired ids (fire-and-forget from the UI). The tool side fails
+closed without a live stream channel ("no live stream channel in this
+context") and times out honestly after 15 s (`browser-command.ts`).
+
+### browser_control — the new actions (no route changes; the shared cores)
+
+- `read` — the session's current page fetched server-side (webFetch's
+  extractor, maxChars ≤ 16 000, honest truncation marker).
+- `eval` — `{script}` (≤ 20 000 chars) → the bridge → the Rust
+  `browser_tab_eval` (function-BODY semantics: `return value`; page
+  exceptions return `{ok:false,error}` as data). Native desktop mode
+  only; the honest refusal elsewhere.
+- `screenshot` — the panel region (via the bridge) → the computer-use
+  `captureRegion`/`captureDisplay` → the vision relay
+  (separate/main model) → the description + honest unavailable notes;
+  needs Computer Use enabled (the relay registry the computer-use plugin
+  publishes per armed turn).
+- `get_state` — now `tabs` (every open session: id, url, title,
+  viewport) + `activeTab` (the LRU tab the user views).
+- New client fn `postBrowserCommandResult`; the `StreamTurnEvent` union
+  grew the `browser-command` variant (intercepted in stream-store BEFORE
+  the liveTurn guard, like computer-use frames).
+
+### The D4 cost fix
+
+`computeCost` (agents/runtime.ts, now exported): pricing sides are
+independent — input-only/output-only priced models cost their KNOWN
+sides (the pre-R62 either-null → $0 gate silently zeroed partially
+priced turns). The settings tab's mutation sites fan out
+`invalidateProvidersEverywhere()` / `invalidateModelConfigEverywhere()`
+so session-page pickers refresh immediately; the model dialog's pricing
+fields are labeled "$ per 1M tokens" with decimal input, and
+`supports_vision` is editable there.
+
+### Drift notes (none this round)
+
+The R61 drifts (test-readiness ok/issues; session stopReason) were fixed
+in the R61 close-out; no new contract drifts were found in R62.

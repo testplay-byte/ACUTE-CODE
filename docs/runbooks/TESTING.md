@@ -13,13 +13,27 @@ Five layers; each has a defined "when mandatory". Rules here are binding
 | L4 live battery | real provider turn(s), real disk, fresh DB | sandbox, single invocation | anything touching agents, projects, tools, streaming |
 | L5 browser verification | real UI against the live stack; screenshots machine-verified | sandbox, single invocation | any UI-affecting round |
 
-**Current counts (R61, verified 2026-09-02):** the root `pnpm test` =
-**1491 tests in 102 files** (all workspace suites from the root vite
-config; agent-core alone = **786/786 in 48 files**). Trajectory: 262 (R42)
+**Current counts (R62, verified 2026-09-02):** the root `pnpm test` =
+**1542 tests in 104 files** (all workspace suites from the root vite
+config; agent-core alone = **801/801 in 48 files**). Trajectory: 262 (R42)
 → 397 (R43) → 471 (R44) → 565 (R45) → 622 (R46) → 683 (R47) → 752 (R48) →
 815ish (R49) → 930 (R50) → 978 (R51) → 1035 (R52) → 1058 (R53) → 1071
 (R54–R56, launcher rounds) → 1169 (R58) → 1302 (R59) → 1348 (R60) → 1491
-(R61).
+(R61) → 1542 (R62).
+
+**R62 (the owner-feedback round):** +50 root — the sidebar rail pair
+(Sidebar.test), the aspect-fit geometry 6 + the fit/zoom/readout 4
+(native-browser + BrowserPanel), the footnote-removal 2, the overlay
+guard 5 (popover-webview-guard.test — including the boot-crash selector
+regression pin), the bridge dispatch 5 (agent-browser-bridge.test), the
+panel handler 5 (BrowserPanel native suite), the appearance 7
+(SettingsPage.test), the models/providers + picker 13 (2-a/2-b files).
+agent-core +14: the browser-tool D8 block 12 (read/eval/screenshot/tabs
++ the result-route + timeout pair), computeCost per-side 1
+(models-catalog), the sticky-mock reset. The L4/L5 batteries ran LIVE
+this round: a real model turn drove browser_control get_state/read/eval
+against the dev stack (the honest web-mode eval refusal verified), and
+the readiness probe honestly reported the headless sandbox.
 
 **R54–R56 (launcher rounds, historical):** the JS suite sat at 1071/76 —
 R56's logic tests run in-sandbox against the real `acute_launcher.py`

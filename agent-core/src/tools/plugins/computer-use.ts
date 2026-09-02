@@ -31,6 +31,10 @@
 import { jsonSchema } from "ai";
 import type { PluginDefinition, ToolDefinition } from "../registry.js";
 import { getComputerUseSettings, visionKeyringId } from "../../storage/computer-use.js";
+// R62 (D8): the live-engine handshake — the browser plugin's screenshot
+// action borrows this turn's backend + run + session for screen-region
+// captures of the embedded browser panel.
+import { setActiveComputerRelay } from "./computer-relay.js";
 import { listModels } from "../../storage/models.js";
 import { backendForPlatform, realRunner } from "../../computer/backends/index.js";
 import { ComputerDispatcher } from "../../computer/dispatch.js";
@@ -158,6 +162,9 @@ export const computerUsePlugin: PluginDefinition = {
       session,
       allowMutations: settings.permission !== "observe",
     });
+    // R62 (D8): publish the live engine for the browser plugin's screenshot
+    // action (fail-closed there when this never runs — Computer Use OFF).
+    setActiveComputerRelay({ backend, run, session });
     const emit = (event: Record<string, unknown>) => {
       try {
         toolDeps.emit?.({ type: "computer-use", ...event });
@@ -557,3 +564,7 @@ function findModelRow(
 }
 
 export { relayVision as relayVisionForTests };
+// R62 (D8): the browser plugin's screenshot action relays the browser-panel
+// capture through the SAME vision pipeline (separate vision model or
+// main-model vision) — one vision configuration, one honest failure story.
+export { relayVision };

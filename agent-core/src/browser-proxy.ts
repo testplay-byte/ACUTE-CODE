@@ -119,6 +119,8 @@
  */
 import { randomBytes } from "node:crypto";
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
+// R62 (D8): the live browser command bridge (eval / screenshot-meta results).
+import { resolveBrowserCommand } from "./browser-command.js";
 import { CookieJar, CookieJarStore } from "./storage/browser-cookies.js";
 import type { SqliteDatabase } from "./storage/db.js";
 
@@ -317,6 +319,11 @@ class SessionStore {
     if (session === undefined) return;
     this.sessions.delete(sessionId);
     this.sessions.set(sessionId, session);
+  }
+
+  /** R62 (D8): every live session (LRU order — most recently used last). */
+  list(): BrowserSession[] {
+    return [...this.sessions.values()];
   }
 
   /**
@@ -1170,6 +1177,29 @@ export function browserViewportCommand(
  * its session — so the visible tab is the most recently used one). Null when
  * no browser session exists at all.
  */
+/**
+ * R62 (D8, owner: the agent should be able to "get the status of the
+ * things"): every live browser session with its current page + viewport —
+ * the `browser_control` get_state `tabs` field. LRU order (the LAST entry
+ * is the tab the user is most recently viewing).
+ */
+export function browserListSessionsCommand(): Array<{
+  sessionId: string;
+  currentUrl: string | null;
+  title: string | null;
+  viewport: BrowserViewport;
+}> {
+  return sharedBrowserStore().list().map((session) => {
+    const entry = session.index >= 0 ? session.history[session.index] : undefined;
+    return {
+      sessionId: session.sessionId,
+      currentUrl: entry?.url ?? null,
+      title: entry?.title ?? null,
+      viewport: { ...session.viewport },
+    };
+  });
+}
+
 export function browserActiveTabSessionId(): string | null {
   return sharedBrowserStore().lastUsedSessionId();
 }
@@ -1559,6 +1589,31 @@ function registerBrowserRoutesInner(browser: FastifyInstance, token: string, db:
     // Strip the internal ok flag — the HTTP contract is exactly the R43-10 shape.
     const { ok: _ok, ...payload } = result;
     return payload;
+  });
+
+  // ── R62 (D8): POST /browser-commands/:commandId/result — the UI's answer
+  // to a live browser command (the eval / screenshot-meta round trip; see
+  // browser-command.ts). Bearer-authed like every other /browser route
+  // (tickets never apply here — the PANEL calls it with the header).
+  // 204 on success; 404 for unknown/expired command ids (the panel treats
+  // that as fire-and-forget); the command itself resolves or rejects the
+  // pending agent tool promise.
+  browser.post("/browser-commands/:commandId/result", async (request: FastifyRequest, reply: FastifyReply) => {
+    const { commandId } = request.params as { commandId?: string };
+    if (typeof commandId !== "string" || commandId === "") {
+      return jsonError(reply, 400, "VALIDATION", "commandId path param is required");
+    }
+    const body = parseJsonObject(request.body);
+    if (body === null) return jsonError(reply, 400, "VALIDATION", "body must be a JSON object");
+    const resolved = resolveBrowserCommand(commandId, {
+      ok: body.ok,
+      data: body.data,
+      error: body.error,
+    });
+    if (!resolved) {
+      return jsonError(reply, 404, "NOT_FOUND", `unknown or expired browser command '${commandId}'`);
+    }
+    return reply.code(204).send();
   });
 
   // ── GET/PUT /browser/viewport — display-size state (panel + agent tool) ──

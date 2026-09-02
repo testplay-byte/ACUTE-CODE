@@ -5,7 +5,6 @@ import {
   ArrowRight,
   ExternalLink,
   Globe,
-  Info,
   LoaderCircle,
   PanelTopOpen,
   RotateCw,
@@ -42,10 +41,16 @@ import {
 // ROUND-58 (R58-b): Tauri detection for the "Open externally" handoff —
 // ONE source of truth, same as native-browser.ts itself.
 import { isTauri } from "../../lib/sidecar";
-// R60-D: the shared popover-suppression flag — a webview must never show
-// itself while a RightSidebar popover covers the page area (the sidebar
-// restores visibility when the popover closes).
-import { isPopoverWebviewSuppressed } from "./popover-webview-guard";
+// R60-D: the shared popover-suppression guard — a webview must never show
+// itself while a RightSidebar popover covers the page area. R62: the guard
+// module is now store-backed + also carries the GLOBAL overlay flag (any
+// open menu/dialog/popover hides every webview — the owner's z-order fix).
+import { isWebviewHiddenNow, useWebviewGuardStore } from "./popover-webview-guard";
+// R62 (D8): the agent-browser command bridge — this panel is the handler:
+// eval runs in THIS tab's webview; screenshot_meta reports this panel's
+// on-screen rect + window metrics for the computer-use region capture.
+import { registerBrowserCommandHandler } from "../../lib/agent-browser-bridge";
+import { nativeTabEval, nativeWindowMetrics } from "../../lib/native-browser";
 
 /**
  * ROUND-43 (R43-10) — the EMBEDDED BROWSER, finally inside the right sidebar.
@@ -102,6 +107,11 @@ import { isPopoverWebviewSuppressed } from "./popover-webview-guard";
  * so its square OS-level corners stay inside the card's rounded frame.
  * The proxy/iframe path below keeps its exact geometry math (zoom stays a
  * transform scale there).
+ *
+ * ROUND-62 (D7) — the status footnote (engine badge + renderer blurb) is
+ * REMOVED entirely (owner: "at the bottom this is not needed to be shown so
+ * just remove this"). The fallback error CARD still explains a native
+ * failure when one actually happens — the standing footnote was the noise.
  *
  * ROUND-51 (R51-a) — native-failure honesty: if the native backend REJECTS
  * (`nativeTabCreate` failing = WebView2 runtime missing/broken, command
@@ -176,6 +186,10 @@ export interface NativeBounds {
   y: number;
   w: number;
   h: number;
+  /** R62: the aspect-fit scale the webview renders at (1 = true size). The
+   *  panel composes this into the DPI zoom so the page sees the full preset
+   *  CSS px — the native twin of the proxy path's transform scale. */
+  scale: number;
 }
 
 /**
@@ -194,11 +208,18 @@ export interface NativeAreaRect {
  * Pure geometry for the native child webview (unit-tested in
  * native-browser.test.tsx):
  *  - viewport === null → NATURAL mode: the webview fills the area exactly
- *    (x/y at the area's top-left corner) — what a browser side-panel does.
- *  - viewport set → PRESET mode: the webview is viewport-sized and CENTERED
- *    in the area, clamped to the area when the preset (after zoom division)
- *    is larger — an overflowing webview would cover the app's own UI, which
- *    is never acceptable.
+ *    (x/y at the area's top-left corner), scale 1 — what a browser
+ *    side-panel does.
+ *  - viewport set → PRESET mode (R62, owner: "the view is actually not
+ *    respecting the dimensions set by the user"): the webview renders the
+ *    preset at TRUE CSS PIXELS — it is ASPECT-FIT into the area (scale =
+ *    min(1, areaW/vw, areaH/vh)) and CENTERED, exactly like the proxy
+ *    path's scaled iframe frame. The caller composes `scale` into the DPI
+ *    zoom (browser_tab_set_zoom), so the PAGE still sees the full preset
+ *    viewport — a 1280×800 preset in a 420px panel renders as a 420×262
+ *    scaled-down VIEW of a real 1280×800 page, not a clamped 420px-wide
+ *    layout. (The pre-R62 behavior clamped w/h to the area and lied with
+ *    the preset readout — the defect the owner reported.)
  * Degenerate dimensions (zero, negative, NaN) collapse to 1px so a bad
  * measurement can never create a zero-sized webview.
  */
@@ -210,13 +231,22 @@ export function computeNativeBounds(
   // Sanitize the AREA first — the centering math below must never see NaN.
   const areaW = dim(area.width);
   const areaH = dim(area.height);
-  const w = viewport === null ? areaW : dim(Math.min(viewport.width, areaW));
-  const h = viewport === null ? areaH : dim(Math.min(viewport.height, areaH));
+  if (viewport === null) {
+    return { x: area.left, y: area.top, w: areaW, h: areaH, scale: 1 };
+  }
+  const vw = dim(viewport.width);
+  const vh = dim(viewport.height);
+  // Aspect-fit: never ABOVE 1 (a preset smaller than the area renders 1:1,
+  // centered — like the proxy frame); never so small the webview vanishes.
+  const scale = Math.max(0.05, Math.min(1, areaW / vw, areaH / vh));
+  const w = Math.max(1, Math.round(vw * scale));
+  const h = Math.max(1, Math.round(vh * scale));
   return {
     x: area.left + Math.max(0, (areaW - w) / 2),
     y: area.top + Math.max(0, (areaH - h) / 2),
     w,
     h,
+    scale,
   };
 }
 
@@ -404,6 +434,16 @@ export function BrowserPanel({ projectId, tab }: { projectId: string; tab: Right
    */
   const [nativeRendered, setNativeRendered] = useState<{ w: number; h: number } | null>(null);
   const nativeRenderedRef = useRef<{ w: number; h: number } | null>(null);
+  /**
+   * R62: the aspect-fit scale of the CURRENT bounds (1 in natural mode).
+   * Mirrored into a ref so the interval-driven syncBounds always composes
+   * the latest fit into the DPI zoom (the effect below re-triggers sync on
+   * viewport changes; the interval keeps it glued regardless).
+   */
+  const fitScaleRef = useRef(1);
+  /** R62: last composed zoom actually pushed to Rust (spam guard — the
+   * 500ms safety net re-runs syncBounds forever). */
+  const lastZoomRef = useRef<number | null>(null);
 
   const [draft, setDraft] = useState<string>(tab.browserUrl ?? "");
   const [availWidth, setAvailWidth] = useState(420);
@@ -451,9 +491,14 @@ export function BrowserPanel({ projectId, tab }: { projectId: string; tab: Right
   //
   // Push the placeholder's bounds to Rust. Deps are only [tabId, nativeMode]
   // on purpose: the latest geometry (viewport preset/zoom/rotate/natural) is
-  // read through effectiveViewportRef so this callback's identity stays
-  // stable across viewport changes (the bounds EFFECT below owns re-syncing
-  // on those changes — see its deps).
+  // read through effectiveViewportRef + the zoomRef below so this callback's
+  // identity stays stable across viewport changes (the bounds EFFECT below
+  // owns re-syncing on those changes — see its deps).
+  //
+  // R62: syncBounds ALSO composes the DPI zoom (fit scale × user zoom) —
+  // that is what makes a preset render at TRUE CSS pixels inside a smaller
+  // panel (the "dimensions must be respected" fix). The zoom persists on
+  // the webview; re-applying per sync is idempotent and change-guarded.
   const syncBounds = useCallback(() => {
     if (!nativeMode || !nativeReadyRef.current) return;
     const el = placeholderRef.current;
@@ -461,9 +506,20 @@ export function BrowserPanel({ projectId, tab }: { projectId: string; tab: Right
     const rect = el.getBoundingClientRect();
     const b = computeNativeBounds(rect, effectiveViewportRef.current);
     void nativeTabSetBounds(tabId, b.x, b.y, b.w, b.h).catch(nativeWarn);
-    // R58-b: remember what actually rendered (a preset larger than the
-    // panel is CLAMPED here) so the viewport readout can be honest. Only
-    // on change — this callback runs on a 500ms interval.
+    // R62: the composed DPI zoom — fit scale × user zoom, clamped to the
+    // Rust command's 0.1–5.0 window (a 3840px preset in a tiny panel at
+    // 25% user zoom would ask for 0.03; the page then renders at a slightly
+    // larger CSS viewport than requested — the honest floor).
+    const composed = Math.min(5, Math.max(0.1, b.scale * zoomRef.current));
+    if (lastZoomRef.current !== composed) {
+      lastZoomRef.current = composed;
+      void nativeTabSetZoom(tabId, composed).catch(nativeWarn);
+    }
+    fitScaleRef.current = b.scale;
+    // R58-b/R62: remember what actually rendered — in natural mode the
+    // readout reports the REAL area; in preset mode the readout reports
+    // the preset (the page sees it) plus the fit percentage. Only on
+    // change — this callback runs on a 500ms interval.
     const prev = nativeRenderedRef.current;
     if (prev === null || prev.w !== b.w || prev.h !== b.h) {
       nativeRenderedRef.current = { w: b.w, h: b.h };
@@ -480,17 +536,28 @@ export function BrowserPanel({ projectId, tab }: { projectId: string; tab: Right
     });
   }, [syncBounds]);
 
+  const zoomRef = useRef(zoom);
+  useEffect(() => {
+    zoomRef.current = zoom;
+    // A user-zoom change must reach the webview immediately: reset the
+    // spam guard AND push a bounds sync (syncBounds composes fit×zoom and
+    // only invokes when the composed value actually changed).
+    lastZoomRef.current = null;
+    if (nativeMode && nativeReadyRef.current) scheduleBoundsSync();
+  }, [zoom, nativeMode, scheduleBoundsSync]);
+
   /**
    * Create (idempotently) + show this tab's native webview at `url`. Shared
    * by the mount lifecycle (panel activation) and every navigation path.
-   * R60: also (re-)applies the store's zoom after creation — set_zoom
+   * R60/R62: also (re-)applies the store's zoom after creation — set_zoom
    * persists per webview so this is idempotent, but a re-created webview
-   * (teardown + fresh create) starts at 1× and must be told the zoom.
-   * R60-D: the show consults the popover-suppression guard — a webview
-   * created while a quick-menu/sub-agent-picker popover is open (an
-   * agent-driven tab open never fires the popover's outside-mousedown
-   * close) must NOT show itself over the popover; the sidebar restores
-   * visibility when the popover closes.
+   * (teardown + fresh create) starts at 1× and must be told the zoom (the
+   * syncBounds compose takes over from the first sync — this is just the
+   * creation-time seed, using the current zoom as a plain DPI factor).
+   * R62: the show consults the overlay guard — a webview created while ANY
+   * overlay (popover, menu, dialog) is open must NOT show itself over it
+   * (isWebviewHiddenNow = the R60 tab-scoped popover guard OR the R62 global
+   * overlay flag); the guard's subscription effect below owns the restore.
    */
   const nativeCreate = useCallback(
     (url: string): Promise<void> => {
@@ -501,10 +568,10 @@ export function BrowserPanel({ projectId, tab }: { projectId: string; tab: Right
           scheduleBoundsSync();
           const factor = useBrowserTabStore.getState().tabs[tabId]?.viewport.zoom ?? 1;
           void nativeTabSetZoom(tabId, factor).catch(nativeWarn);
-          if (isPopoverWebviewSuppressed(tabId)) {
+          if (isWebviewHiddenNow(tabId)) {
             // Created hidden (Rust builds webviews hidden until the first
-            // bounds sync) — keep it that way; the sidebar's restore owns
-            // the first show.
+            // bounds sync) — keep it that way; the guard subscription's
+            // restore owns the first show.
             return Promise.resolve();
           }
           return nativeTabSetVisible(tabId, true);
@@ -556,19 +623,65 @@ export function BrowserPanel({ projectId, tab }: { projectId: string; tab: Right
     // the webview on each URL change. nativeCreate's identity covers tabId.
   }, [tabId, nativeMode, nativeCreate]);
 
-  // ── native: REAL zoom (R60) ─────────────────────────────────────────────
-  // The store's zoom drives the Rust `browser_tab_set_zoom` command
-  // (WebView2 zoomFactor through tauri's Webview::set_zoom). The zoom
-  // PERSISTS on the webview once set; this effect re-applies it on every
-  // change — from the viewport bar's zoom select OR an agent-driven
-  // set_viewport landing through the 4s poll — and on native-mode
-  // activation (cheap + idempotent). Only after the webview exists: the
-  // Rust command errors on a missing webview, and nativeCreate applies the
-  // zoom itself at creation time.
+  // ── native: R62 overlay-hide subscription (replaces the standalone zoom
+  // effect — the zoom now rides syncBounds, composed with the fit scale) ──
+  // R62-D9: hide/show the webview whenever the overlay guard flips. The
+  // guard (popover-webview-guard.ts) is store-backed now: the sidebar's
+  // popover flow flips `popoverTabId`, and the AppShell's DOM watcher flips
+  // `overlayOpen` while ANY menu/dialog/popover is open (OS-level webviews
+  // float above all app HTML — the owner's "menus show under the browser"
+  // fix). This panel is the single visibility writer for ITS tab; the
+  // sidebar's own guarded-restore calls agree with it (same state).
+  const overlayOpen = useWebviewGuardStore((s) => s.overlayOpen);
+  const popoverTabId = useWebviewGuardStore((s) => s.popoverTabId);
+  const webviewHidden = overlayOpen || popoverTabId === tabId;
   useEffect(() => {
     if (!nativeMode || !nativeReadyRef.current) return;
-    void nativeTabSetZoom(tabId, zoom).catch(nativeWarn);
-  }, [nativeMode, tabId, zoom]);
+    void nativeTabSetVisible(tabId, !webviewHidden).catch(nativeWarn);
+  }, [nativeMode, tabId, webviewHidden]);
+
+  // ── R62 (D8): the agent-browser command handler for THIS tab ───────────
+  // Registered while the panel is mounted in native mode (the only mode
+  // with a live webview). eval → browser_tab_eval in this tab's page;
+  // screenshot_meta → this panel's on-screen rectangle (logical rect ×
+  // scale + window origin = PHYSICAL px region) for the computer-use
+  // capture. Unregistered on unmount so a stale handler can never answer
+  // for a hidden/closed webview.
+  useEffect(() => {
+    if (!nativeMode) return;
+    return registerBrowserCommandHandler(tabId, async (action, payload) => {
+      if (action === "eval") {
+        const script = typeof payload.script === "string" ? payload.script : "";
+        if (script === "") return { ok: false, error: "eval: empty script" };
+        const result = await nativeTabEval(tabId, script);
+        if (result === null) {
+          return { ok: false, error: "eval unavailable — the native browser bridge is not present" };
+        }
+        // data IS the Rust command's {ok, value|error} envelope — the tool
+        // reads data.ok/data.value directly.
+        return { ok: true, data: result };
+      }
+      if (action === "screenshot_meta") {
+        const el = placeholderRef.current;
+        if (el === null) return { ok: false, error: "screenshot_meta: the panel area is not measurable right now" };
+        const rect = el.getBoundingClientRect();
+        const metrics = await nativeWindowMetrics();
+        if (metrics === null) {
+          // No window API — still answer supported with no region; the
+          // tool falls back to a full-display capture.
+          return { ok: true, data: { supported: true, region: null, mode: "native" } };
+        }
+        const region = {
+          x: Math.round(metrics.x + rect.left * metrics.scaleFactor),
+          y: Math.round(metrics.y + rect.top * metrics.scaleFactor),
+          w: Math.max(1, Math.round(rect.width * metrics.scaleFactor)),
+          h: Math.max(1, Math.round(rect.height * metrics.scaleFactor)),
+        };
+        return { ok: true, data: { supported: true, region, scaleFactor: metrics.scaleFactor, mode: "native" } };
+      }
+      return { ok: false, error: `unknown browser command '${action}'` };
+    });
+  }, [nativeMode, tabId]);
 
   // ── native: keep the webview glued to the placeholder ───────────────────
   useEffect(() => {
@@ -870,36 +983,24 @@ export function BrowserPanel({ projectId, tab }: { projectId: string; tab: Right
   const fitScale = fit ? Math.min(1, availWidth / Math.max(1, viewW * zoom)) : 1;
   const scale = zoom * fitScale;
   /**
-   * R58-b/R60: honest native readout. computeNativeBounds CLAMPS a preset
-   * larger than the panel — the webview (and the page inside it) actually
-   * render the clamped CSS px, so claiming the preset dims was a lie. Show
-   * what renders + what was requested (R60: zoom no longer divides the
-   * requested dims — the preset IS the requested size, zoom is DPI on top).
-   * Natural mode has no preset: the readout reports the ACTUAL rendered
-   * area (what the page really sees). The proxy path keeps the plain
-   * readout: its iframe renders the true preset px (the transform only
-   * scales the footprint), so viewW×viewH stays what the page sees there.
+   * R62: honest native readout, post aspect-fit. A preset's PAGE now sees
+   * the full preset CSS px (the fit scale rides the DPI zoom), so the
+   * readout reports the REQUESTED dims + zoom, plus the fit percentage when
+   * the visible footprint is scaled down (the native twin of the proxy
+   * path's "fit" note). Natural mode reports the ACTUAL rendered area (what
+   * the page really sees). The proxy path is unchanged: its iframe renders
+   * the true preset px (the transform only scales the footprint).
    */
-  const clampNote =
-    nativeMode &&
-    !naturalSize &&
-    nativeRendered !== null &&
-    (nativeRendered.w < viewW - 0.5 || nativeRendered.h < viewH - 0.5)
-      ? `${Math.round(nativeRendered.w)}×${Math.round(nativeRendered.h)} (clamped from ${Math.round(viewW)}×${Math.round(viewH)} — panel too small)`
-      : null;
-  const readout =
-    clampNote !== null
-      ? clampNote
-      : nativeMode
-        ? // Native: fit is a proxy-only concept (the button is disabled here
-          // — presets are auto-clamped), so no fit note ever appears.
-          naturalSize
-            ? nativeRendered !== null
-              ? `${Math.round(nativeRendered.w)}×${Math.round(nativeRendered.h)} @ ${Math.round(zoom * 100)}%`
-              : `Natural @ ${Math.round(zoom * 100)}%`
-            : `${viewW}×${viewH} @ ${Math.round(zoom * 100)}%`
-        : `${viewW}×${viewH} @ ${Math.round(zoom * 100)}%` +
-          (fit && fitScale < 1 ? ` (fit ${Math.round(scale * 100)}%)` : "");
+  const nativeFit = naturalSize ? 1 : fitScaleRef.current;
+  const readout = nativeMode
+    ? naturalSize
+      ? nativeRendered !== null
+        ? `${Math.round(nativeRendered.w)}×${Math.round(nativeRendered.h)} @ ${Math.round(zoom * 100)}%`
+        : `Natural @ ${Math.round(zoom * 100)}%`
+      : `${viewW}×${viewH} @ ${Math.round(zoom * 100)}%` +
+        (nativeFit < 0.999 ? ` · fits ${Math.round(nativeFit * 100)}%` : "")
+    : `${viewW}×${viewH} @ ${Math.round(zoom * 100)}%` +
+      (fit && fitScale < 1 ? ` (fit ${Math.round(scale * 100)}%)` : "");
 
   const ghostBtn = (extraStyle?: CSSProperties): CSSProperties => ({
     color: styles.textSecondary,
@@ -1197,7 +1298,7 @@ export function BrowserPanel({ projectId, tab }: { projectId: string; tab: Right
             aria-label="Fit to panel"
             title={
               nativeMode
-                ? "Native mode: presets larger than the panel are automatically clamped to it — there is nothing to fit"
+                ? "Native mode: presets render at true size, automatically scaled to fit the panel — the page always sees the dimensions you set"
                 : fit
                   ? "Fit: scaled down to the panel width (true px preserved)"
                   : "1:1 — scroll the panel instead"
@@ -1217,7 +1318,7 @@ export function BrowserPanel({ projectId, tab }: { projectId: string; tab: Right
           style={{ background: styles.subtle, color: styles.textTertiary }}
           title={
             nativeMode
-              ? `Native mode: presets larger than the panel are clamped to the panel — the readout shows the ACTUAL rendered size when that happens`
+              ? `Native mode: the page sees the preset's true CSS pixels — larger presets are scaled down to fit (the fit % is shown); the page always sees the dimensions you set`
               : `True viewport ${viewW}×${viewH}px — the page sees these CSS pixels`
           }
         >
@@ -1323,52 +1424,6 @@ export function BrowserPanel({ projectId, tab }: { projectId: string; tab: Right
         )}
       </div>
 
-      {/* ── status footnote: mode honesty — a quiet strip on the ambient
-          panel background (R60-D: no border-t; the cards carry the
-          structure now). ── */}
-      <div
-        className="shrink-0 flex items-center gap-1.5 px-2 h-6 text-[10px]"
-        style={{ color: styles.textTertiary }}
-      >
-        {/* ROUND-51 (R51-a): the ENGINE BADGE — the owner must be able to SEE
-            which renderer is live at a glance (the recurring "is it the real
-            browser or the proxy?" question). Native = green pill; the proxy
-            path (non-Tauri runs AND native-failure fallbacks) = neutral pill. */}
-        <span
-          data-testid="browser-engine-badge"
-          className="shrink-0 px-1.5 py-0.5 rounded-full font-medium whitespace-nowrap"
-          style={{
-            background: nativeMode
-              ? styles.isDark
-                ? "rgba(16,185,129,0.16)"
-                : "rgba(16,185,129,0.12)"
-              : styles.subtle,
-            color: nativeMode ? (styles.isDark ? "#6ee7b7" : "#047857") : styles.textTertiary,
-            border: `1px solid ${nativeMode ? "rgba(16,185,129,0.35)" : styles.border}`,
-          }}
-          title={
-            nativeMode
-              ? "Pages render in a real WebView2 (Chromium) child webview — full CSS/JS, shared persistent profile"
-              : "Pages render through the sidecar fetch-proxy iframe (sandboxed) — this is also the automatic fallback when the native engine is unavailable"
-          }
-        >
-          {nativeMode ? "Chromium (native)" : "Proxy fallback"}
-        </span>
-        <Info size={10} className="shrink-0" />
-        <span className="truncate">
-          {nativeMode ? (
-            <>
-              Rendered by the embedded Chromium engine (WebView2) — full CSS/JS, one shared profile,
-              logins persist. “Open externally” is always available.
-            </>
-          ) : (
-            <>
-              Rendered through the sidecar proxy — logins don’t persist; heavily scripted sites may load
-              partially. “Open externally” is always available.
-            </>
-          )}
-        </span>
-      </div>
     </div>
   );
 }

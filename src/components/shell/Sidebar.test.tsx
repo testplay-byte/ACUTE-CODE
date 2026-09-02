@@ -118,7 +118,7 @@ describe("Sidebar projects section (fixture ProjectsBackend)", () => {
     expect(screen.queryByText("Agents")).toBeNull();
   });
 
-  it("R60-C: no collapse button, no collapsed rail, no header logo — the panel is expanded-only", () => {
+  it("R62: the MINIMIZE button lives at the very top; clicking swaps the panel to its 64px icon rail; the rail's top button restores", async () => {
     renderWithProviders(
       <>
         <Sidebar />
@@ -127,23 +127,63 @@ describe("Sidebar projects section (fixture ProjectsBackend)", () => {
         </Routes>
       </>,
     );
-    // The collapse/expand affordances are GONE (owner: no collapse button at
-    // all — the title-bar identity control is the only toggle left).
-    expect(screen.queryByRole("button", { name: /collapse sidebar/i, hidden: true })).toBeNull();
-    expect(screen.queryByRole("button", { name: /expand sidebar/i, hidden: true })).toBeNull();
-    // The 64px rail (with its own tiles + Add button) is gone entirely.
-    expect(document.querySelector('[data-testid="collapsed-project-rail"]')).toBeNull();
-    // The header-row Acute logo is gone; the only logo left is the MOBILE
-    // drawer trigger, which stays by design (mobile has no title bar).
-    expect(screen.getByRole("button", { name: "Acute — open menu", hidden: true })).toBeTruthy();
-    expect(
-      screen.queryByRole("button", { name: /Acute — (collapse|expand|hide|back)/i, hidden: true }),
-    ).toBeNull();
-    // And the collapsed pref is no longer persisted on mount.
-    expect(localStorage.getItem("acute-code.sidebar.collapsed")).toBeNull();
+    // ROUND-62 (owner: "option at the very top to minimize it"): the full
+    // panel's first row is the minimize control. (The R60-C
+    // expanded-only test is REVERSED by this directive — the old
+    // collapse rail was removed because it was redundant with the
+    // title-bar hide; minimize is a DIFFERENT, gentler state and lives
+    // on a persisted store flag.)
+    expect(screen.getByTestId("sidebar-minimize")).toBeTruthy();
+    expect(screen.getByText("Navigation")).toBeTruthy();
+    // Before minimizing: labels visible, no rail.
+    expect(screen.queryByTestId("sidebar-rail")).toBeNull();
+
+    fireEvent.click(screen.getByTestId("sidebar-minimize"));
+
+    // Rail state: minimize button + labels are gone, the rail body is
+    // present with the restore button at its very top.
+    expect(await screen.findByTestId("sidebar-rail")).toBeTruthy();
+    expect(screen.queryByTestId("sidebar-minimize")).toBeNull();
+    expect(screen.queryByText("Navigation")).toBeNull();
+    expect(screen.getByTestId("sidebar-expand")).toBeTruthy();
+    expect(screen.getByTestId("rail-dashboard")).toBeTruthy();
+    expect(screen.getByTestId("rail-usage")).toBeTruthy();
+    expect(screen.getByTestId("rail-settings")).toBeTruthy();
+    // The store flag flipped (persisted via the project-chat store).
+    expect(useProjectChatStore.getState().appSidebarMinimized).toBe(true);
+
+    // Restore → the full panel (labels + minimize) comes back.
+    fireEvent.click(screen.getByTestId("sidebar-expand"));
+    expect(await screen.findByText("Navigation")).toBeTruthy();
+    expect(screen.queryByTestId("sidebar-rail")).toBeNull();
+    expect(useProjectChatStore.getState().appSidebarMinimized).toBe(false);
   });
 
-  it("R60-C: settings mode keeps the back button + Settings title header", () => {
+  it("R62: the minimized rail navigates — project tiles open that project's chat, gear opens settings", async () => {
+    // Seed a minimized store BEFORE mount (the persisted-restart path).
+    useProjectChatStore.setState({ appSidebarMinimized: true });
+    renderWithProviders(
+      <>
+        <Sidebar />
+        <Routes>
+          <Route path="/" element={<div>dashboard stub</div>} />
+          <Route path="/project/:id/chat" element={<div>chat stub</div>} />
+          <Route path="/settings" element={<div>settings stub</div>} />
+        </Routes>
+      </>,
+    );
+    const rail = await screen.findByTestId("sidebar-rail");
+    expect(rail).toBeTruthy();
+    // Fixture projects render as tiles with their names as tooltips/labels.
+    const tile = await screen.findByRole("button", { name: /^open marketing-site$/i, hidden: true });
+    fireEvent.click(tile);
+    expect(await screen.findByText("chat stub")).toBeTruthy();
+    // Reset for the next assertion path: gear → settings route.
+    fireEvent.click(screen.getByTestId("rail-settings"));
+    expect(await screen.findByText("settings stub")).toBeTruthy();
+  });
+
+  it("R62: settings mode keeps the header (back + title) and now ALSO the minimize control", () => {
     renderWithProviders(
       <>
         <Sidebar />
@@ -155,6 +195,8 @@ describe("Sidebar projects section (fixture ProjectsBackend)", () => {
     );
     expect(screen.getByRole("button", { name: "Back to dashboard", hidden: true })).toBeTruthy();
     expect(screen.getByText("Settings")).toBeTruthy();
+    // ROUND-62: minimize also lives at the very top of the settings sidebar.
+    expect(screen.getByTestId("sidebar-minimize")).toBeTruthy();
     // The settings sections replace the normal navigation.
     expect(screen.getByRole("button", { name: /appearance/i, hidden: true })).toBeTruthy();
     expect(screen.queryByText("Navigation")).toBeNull();

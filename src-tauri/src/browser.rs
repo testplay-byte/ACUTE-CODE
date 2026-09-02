@@ -792,6 +792,56 @@ pub fn browser_tab_scroll_to(app: AppHandle, tab_id: String, y: f64) -> Result<(
         .map_err(|e| format!("scroll_to tab \"{tab_id}\" failed: {e}"))
 }
 
+/// `browser_tab_eval(tab_id, script)` — R62 (the agent-browser bridge): run
+/// a JavaScript snippet INSIDE the tab's live page and return its value as a
+/// JSON string. The script is wrapped in a function body, so the caller
+/// returns data with `return …`; the wrapper stringifies `{ok, value}` (or
+/// `{ok: false, error}` when the page JS throws) so page-level exceptions
+/// surface as DATA, not command failures.
+///
+/// Validation: non-empty, ≤ 20_000 chars, no NUL bytes. ASYNC with a 3s
+/// callback timeout (same channel as `browser_tab_scroll_state` —
+/// `eval_with_callback` is the only way to read a value back out of an
+/// external page). This is the engine behind the `browser_control` tool's
+/// `eval` action (the agent clicking links, filling forms, reading the DOM
+/// in the page the user watches live).
+#[tauri::command]
+pub async fn browser_tab_eval(app: AppHandle, tab_id: String, script: String) -> Result<String, String> {
+    let webview = find_tab_webview(&app, &tab_id)
+        .ok_or_else(|| format!("no native webview for tab \"{tab_id}\""))?;
+    let trimmed_len = script.trim().len();
+    if trimmed_len == 0 {
+        return Err("eval script is empty".into());
+    }
+    if script.len() > 20_000 {
+        return Err(format!(
+            "eval script too large ({} bytes; max 20000)",
+            script.len()
+        ));
+    }
+    if script.contains('\0') {
+        return Err("eval script contains a NUL byte".into());
+    }
+    // Wrap: function BODY semantics (the caller uses `return`), JSON result,
+    // page exceptions as {ok:false, error} data. The double-brace escaping
+    // is for the format! string below.
+    let wrapped = format!(
+        "(function(){{try{{var __acute_r=(function(){{{script}}})();return JSON.stringify({{ok:true,value:(__acute_r===undefined?null:__acute_r)}});}}catch(e){{return JSON.stringify({{ok:false,error:String((e&&(e.message||e))||e)}});}}}})()"
+    );
+    let (tx, rx) = std::sync::mpsc::channel::<String>();
+    webview
+        .eval_with_callback(&wrapped, move |result: String| {
+            let _ = tx.send(result);
+        })
+        .map_err(|e| format!("eval tab \"{tab_id}\" failed: {e}"))?;
+    match rx.recv_timeout(std::time::Duration::from_millis(3000)) {
+        Ok(json) => Ok(json),
+        Err(_) => Err(format!(
+            "eval tab \"{tab_id}\" timed out (page JS unresponsive)"
+        )),
+    }
+}
+
 /// `browser_tab_set_zoom(tab_id, factor)` — R60: the REAL DPI-level page zoom
 /// (WebView2's zoomFactor through tauri's `Webview::set_zoom`), replacing the
 /// R50 divide-the-viewport approximation the BrowserPanel used because the

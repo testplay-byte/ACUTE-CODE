@@ -54,9 +54,25 @@
  *      persisted modelsFreeOnly pref the chat picker honors; free-only
  *      filters the rows BEFORE the 300 cap; an honest empty note when the
  *      free scope empties the list.
+ *
+ * ROUND-62 (R62-2b) — the owner's "not proper / doesn't reflect / can't
+ * configure per-1M pricing" directive, regressed here:
+ *  16. Every mutation (model save/delete/add, provider toggle/delete) fans
+ *      its invalidation out to the SESSION PAGE's picker cache families
+ *      (["composer-providers"], ["provider-models", id],
+ *      ["provider-models-config", id]) — seeded fresh with a 5-minute
+ *      staleTime in a local QueryClient, flipped STALE by the mutation.
+ *  17. The pricing dialog: the unit is IN every label ("$ per 1M tokens"),
+ *      decimals (0.075) round-trip exactly, and the NEW Supports-vision
+ *      toggle PATCHes supportsVision.
+ *  18. Honest load states: a failed GET /providers renders a red alert (not
+ *      the silent "no providers" page); a failed models-config fetch shows
+ *      the error line instead of the misleading "No models yet".
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { cleanup, fireEvent, screen, waitFor, within } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { QueryClient, QueryClientProvider, type QueryKey } from "@tanstack/react-query";
+import { MemoryRouter } from "react-router";
 import { KeyPoolSection, ModelsProvidersTab } from "./ModelsProvidersTab";
 import { resetTestState, renderWithProviders } from "../../test-utils";
 import { useSettingsStore } from "../../lib/settings-store";
@@ -137,6 +153,11 @@ let patchResponses: Array<{ id: string; body: Record<string, unknown> }> = [];
 let revealKeys: Array<{ slot: number; value: string }> = [];
 /** R59-C: when true, the reveal route answers HTTP 500 (the error path). */
 let revealFails = false;
+/** R62-2b: when true, GET /providers answers HTTP 500 (the load-error path). */
+let providersFail = false;
+/** R62-2b: when true, GET /providers/openrouter/models-config answers
+ * HTTP 500 (the models-load-error path). */
+let modelsConfigFail = false;
 
 let pool: KeyPoolSlot[] = [];
 /** What POST /providers/:id/test answers this test (ok:true / ok:false). */
@@ -221,6 +242,15 @@ const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => 
   calls.push({ method, url, body });
 
   if (url === `${BASE}/api/v1/providers` && method === "GET") {
+    // R62-2b: the honest failure path (HTTP 500 → ApiError → red alert).
+    if (providersFail) {
+      return {
+        status: 500,
+        ok: false,
+        text: async () =>
+          JSON.stringify({ error: { code: "INTERNAL", message: "providers route exploded" } }),
+      } as unknown as Response;
+    }
     return jsonResponse({ providers: providersList });
   }
   // ROUND-58 (R58-d): PATCH /providers/:id — the enable/disable toggle.
@@ -312,6 +342,16 @@ const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => 
     });
   }
   if (url === `${BASE}/api/v1/providers/openrouter/models-config` && method === "GET") {
+    // R62-2b: the honest failure path (HTTP 500 → ApiError → the red line
+    // replaces the misleading "No models yet" empty state).
+    if (modelsConfigFail) {
+      return {
+        status: 500,
+        ok: false,
+        text: async () =>
+          JSON.stringify({ error: { code: "INTERNAL", message: "models-config route exploded" } }),
+      } as unknown as Response;
+    }
     return jsonResponse({ models: configured });
   }
   // ROUND-58 (R58-d): the custom provider's models-config (merge scoping).
@@ -391,6 +431,8 @@ beforeEach(() => {
   patchResponses = [];
   revealKeys = [];
   revealFails = false;
+  providersFail = false;
+  modelsConfigFail = false;
   pool = [];
   configured = [];
   customConfigured = [];
@@ -757,14 +799,14 @@ describe("Configure model dialog — pricing round-trip (ROUND-50 R50-d)", () =>
     const dialog = await screen.findByRole("dialog", { name: "Configure model" });
 
     // Pre-filled from the stored row.
-    const inputPrice = within(dialog).getByLabelText("Input price ($/Mtok)") as HTMLInputElement;
+    const inputPrice = within(dialog).getByLabelText("Input price ($ per 1M tokens)") as HTMLInputElement;
     expect(inputPrice.value).toBe("0.15");
-    expect((within(dialog).getByLabelText("Cache read price ($/Mtok)") as HTMLInputElement).value).toBe("0.02");
+    expect((within(dialog).getByLabelText("Cache read price ($ per 1M tokens)") as HTMLInputElement).value).toBe("0.02");
     expect((within(dialog).getByLabelText("Context window (tokens)") as HTMLInputElement).value).toBe("256000");
 
     // Edit the input price; clear the cache price (empty = unknown → null).
     fireEvent.change(inputPrice, { target: { value: "0.5" } });
-    fireEvent.change(within(dialog).getByLabelText("Cache read price ($/Mtok)"), {
+    fireEvent.change(within(dialog).getByLabelText("Cache read price ($ per 1M tokens)"), {
       target: { value: "" },
     });
 
@@ -781,6 +823,7 @@ describe("Configure model dialog — pricing round-trip (ROUND-50 R50-d)", () =>
         inputPriceCachedPerMtok: null, // cleared — unknown, NOT $0.02 and NOT 0
         outputPricePerMtok: 0.6,
         supportsThinking: true,
+        supportsVision: false, // R62-2b: the dialog now PATCHes the vision flag too
         hidden: false,
       });
     });
@@ -802,7 +845,7 @@ describe("Configure model dialog — pricing round-trip (ROUND-50 R50-d)", () =>
     fireEvent.click(screen.getByRole("button", { name: "Configure model Z.ai: GLM 5.2" }));
 
     const dialog = await screen.findByRole("dialog", { name: "Configure model" });
-    fireEvent.change(within(dialog).getByLabelText("Input price ($/Mtok)"), {
+    fireEvent.change(within(dialog).getByLabelText("Input price ($ per 1M tokens)"), {
       target: { value: "cheap" },
     });
     fireEvent.click(within(dialog).getByRole("button", { name: "Save configuration" }));
@@ -812,6 +855,85 @@ describe("Configure model dialog — pricing round-trip (ROUND-50 R50-d)", () =>
     );
     expect(calls.some((c) => c.method === "PATCH")).toBe(false);
     expect(screen.getByRole("dialog", { name: "Configure model" })).toBeTruthy();
+  });
+});
+
+/* ── ROUND-62 (R62-2b): the pricing dialog — per-1M clarity + vision toggle ── */
+
+describe("Configure model dialog — per-1M pricing + vision (R62-2b)", () => {
+  /** Render + open the single configured row's dialog. */
+  async function openDialog(row: ProviderModelConfig) {
+    configured = [row];
+    renderWithProviders(<ModelsProvidersTab />);
+    await waitFor(() =>
+      expect(screen.getByRole("button", { name: `Configure model ${row.displayName}` })).toBeTruthy(),
+    );
+    fireEvent.click(screen.getByRole("button", { name: `Configure model ${row.displayName}` }));
+    return screen.findByRole("dialog", { name: "Configure model" });
+  }
+
+  it('labels the unit on the section AND every field — "per 1M tokens", with decimal-friendly inputs', async () => {
+    const dialog = await openDialog(
+      modelRow({ id: "mdl_priced", modelId: "vendor/paid-model", displayName: "Paid Model" }),
+    );
+
+    // The section header carries the unit…
+    expect(within(dialog).getByText("Pricing — USD per 1M tokens")).toBeTruthy();
+    // …and each field's accessible name says it explicitly (the old
+    // "($/Mtok)" jargon is gone).
+    expect(within(dialog).getByLabelText("Input price ($ per 1M tokens)")).toBeTruthy();
+    expect(within(dialog).getByLabelText("Output price ($ per 1M tokens)")).toBeTruthy();
+    expect(within(dialog).getByLabelText("Cache read price ($ per 1M tokens)")).toBeTruthy();
+    // The helper line pins the unit in plain words too.
+    expect(
+      within(dialog).getByText(/US dollars per 1 million tokens/i),
+    ).toBeTruthy();
+  });
+
+  it("decimal per-1M prices round-trip exactly — 0.075 in, 3.5 out (never re-scaled or rejected)", async () => {
+    const dialog = await openDialog(
+      modelRow({ id: "mdl_priced", modelId: "vendor/paid-model", displayName: "Paid Model" }),
+    );
+
+    fireEvent.change(within(dialog).getByLabelText("Input price ($ per 1M tokens)"), {
+      target: { value: "0.075" },
+    });
+    fireEvent.change(within(dialog).getByLabelText("Output price ($ per 1M tokens)"), {
+      target: { value: "3.5" },
+    });
+    fireEvent.click(within(dialog).getByRole("button", { name: "Save configuration" }));
+
+    await waitFor(() => {
+      const patch = calls.find((c) => c.method === "PATCH" && c.url.endsWith("/models/mdl_priced"));
+      expect(patch).toBeDefined();
+      expect(patch?.body).toMatchObject({
+        inputPricePerMtok: 0.075,
+        outputPricePerMtok: 3.5,
+      });
+    });
+  });
+
+  it("the NEW Supports vision toggle PATCHes supportsVision (the last uneditable row field)", async () => {
+    const dialog = await openDialog(
+      modelRow({
+        id: "mdl_priced",
+        modelId: "vendor/paid-model",
+        displayName: "Paid Model",
+        supportsVision: false,
+      }),
+    );
+
+    // The toggle group renders beside thinking/hidden…
+    const visionGroup = within(dialog).getByRole("group", { name: "Supports vision" });
+    // …flip it On.
+    fireEvent.click(within(visionGroup).getByRole("button", { name: "On" }));
+    fireEvent.click(within(dialog).getByRole("button", { name: "Save configuration" }));
+
+    await waitFor(() => {
+      const patch = calls.find((c) => c.method === "PATCH" && c.url.endsWith("/models/mdl_priced"));
+      expect(patch).toBeDefined();
+      expect(patch?.body).toMatchObject({ supportsVision: true });
+    });
   });
 });
 
@@ -1455,6 +1577,13 @@ describe("Pre-select + selection lifecycle (R59-C)", () => {
     providersList = [];
     renderWithProviders(<ModelsProvidersTab />);
     await waitFor(() => expect(screen.getByText("Select a provider")).toBeTruthy());
+    // R62-2b: the empty left list now waits for the providers fetch to
+    // settle (the loading row renders first — an honest "not loaded YET"
+    // state instead of a flash of "No providers").
+    await waitFor(() =>
+      expect(screen.queryByText("loading providers…")).toBeNull(),
+      { timeout: 2000 },
+    );
     expect(screen.getByText("No providers — add one below.")).toBeTruthy();
     expect(screen.queryByRole("switch")).toBeNull();
     expect(screen.getByTestId("provider-count").textContent).toBe("0");
@@ -1484,5 +1613,163 @@ describe("Pre-select + selection lifecycle (R59-C)", () => {
     expect(screen.queryByRole("switch", { name: "Toggle provider OpenRouter" })).toBeNull();
     const left = document.querySelector(".w-\\[280px\\]") as HTMLElement;
     expect(within(left).queryByTitle("https://openrouter.ai/api/v1 · Chat completions")).toBeNull();
+  });
+});
+
+/* ── ROUND-62 (R62-2b): cross-page cache invalidation ───────────────────────
+ * The agent session page's model picker (composer/ModelSelector) reads the
+ * same providers/models-config resources through ["composer-providers"],
+ * ["provider-models", id] and ["provider-models-config", id] with staleTimes
+ * of 60s/5min/5min. The settings tab used to invalidate only its own
+ * ["settings-*"] keys — everything edited here stayed stale on the session
+ * page for minutes. These tests seed the PICKER's families into a local
+ * QueryClient (the app's single client, main.tsx) and prove each mutation
+ * flips them stale — the staleness fix, pinned. */
+
+describe("Settings mutations refresh the SESSION page's model caches (R62-2b)", () => {
+  /** The picker's staleTime — only an invalidation can flip a seeded entry
+   * stale mid-test (5 minutes of natural freshness). */
+  const PICKER_STALE_MS = 5 * 60_000;
+
+  /** Render the tab against a LOCAL client seeded with the session-page
+   * picker's cache families — the entries the chat screen would have left
+   * behind in the app's single QueryClient. */
+  function renderTabSeedingPickerCaches(): QueryClient {
+    const client = new QueryClient({
+      defaultOptions: { queries: { retry: false, staleTime: PICKER_STALE_MS } },
+    });
+    client.setQueryData(["composer-providers"], [PROVIDER]);
+    client.setQueryData(["provider-models", "openrouter"], ["z-ai/glm-5.2:free"]);
+    client.setQueryData(["provider-models-config", "openrouter"], []);
+    render(
+      <QueryClientProvider client={client}>
+        <MemoryRouter>
+          <ModelsProvidersTab />
+        </MemoryRouter>
+      </QueryClientProvider>,
+    );
+    return client;
+  }
+
+  const isInvalidated = (client: QueryClient, key: QueryKey): boolean =>
+    // v5 QueryState carries no computed isStale — the raw isInvalidated flag
+    // is exactly what invalidateQueries sets (and nothing un-sets it for
+    // entries with no observers — the picker is unmounted while we're here).
+    client.getQueryState(key)?.isInvalidated === true;
+
+  it("saving a model's configuration marks the chat picker's models-config cache STALE (rename/hide/pricing reflect now)", async () => {
+    configured = [
+      modelRow({ id: "mdl_priced", modelId: "z-ai/glm-5.2:free", displayName: "Z.ai: GLM 5.2" }),
+    ];
+    const client = renderTabSeedingPickerCaches();
+    await waitFor(() =>
+      expect(screen.getByRole("button", { name: "Configure model Z.ai: GLM 5.2" })).toBeTruthy(),
+    );
+
+    const key: QueryKey = ["provider-models-config", "openrouter"];
+    // Seeded FRESH (the picker fetched a moment ago, 5-minute staleTime) —
+    // ONLY the settings mutation's invalidation can flip it this fast.
+    expect(isInvalidated(client, key)).toBe(false);
+
+    fireEvent.click(screen.getByRole("button", { name: "Configure model Z.ai: GLM 5.2" }));
+    const dialog = await screen.findByRole("dialog", { name: "Configure model" });
+    fireEvent.click(within(dialog).getByRole("button", { name: "Save configuration" }));
+
+    await waitFor(() => expect(isInvalidated(client, key)).toBe(true));
+    // The PATCH itself landed (the save was real, not a cache trick).
+    await waitFor(() =>
+      expect(calls.some((c) => c.method === "PATCH" && c.url.endsWith("/models/mdl_priced"))).toBe(true),
+    );
+  });
+
+  it("deleting a model row marks the picker's models-config cache STALE", async () => {
+    configured = [
+      modelRow({ id: "mdl_priced", modelId: "z-ai/glm-5.2:free", displayName: "Z.ai: GLM 5.2" }),
+    ];
+    // The row delete asks for a window.confirm — accept it (SubAgentsTab's
+    // stub pattern).
+    vi.stubGlobal("confirm", vi.fn(() => true));
+    const client = renderTabSeedingPickerCaches();
+    await waitFor(() =>
+      expect(screen.getByRole("button", { name: "Delete model Z.ai: GLM 5.2" })).toBeTruthy(),
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Delete model Z.ai: GLM 5.2" }));
+
+    await waitFor(() =>
+      expect(calls.some((c) => c.method === "DELETE" && c.url.endsWith("/models/mdl_priced"))).toBe(true),
+    );
+    await waitFor(() => expect(isInvalidated(client, ["provider-models-config", "openrouter"])).toBe(true));
+  });
+
+  it("adding a model (Add models → Add by id) marks the picker's models-config cache STALE — new models reach the session page", async () => {
+    const client = renderTabSeedingPickerCaches();
+    await waitFor(() => expect(screen.getByRole("button", { name: /add models/i })).toBeTruthy());
+
+    fireEvent.click(screen.getByRole("button", { name: /add models/i }));
+    await screen.findByRole("dialog", { name: "Add models" });
+    fireEvent.change(screen.getByLabelText("Model id"), {
+      target: { value: "custom/manual-model" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: /add by id/i }));
+
+    await waitFor(() =>
+      expect(
+        calls.some((c) => c.method === "POST" && c.url.endsWith("/providers/openrouter/models")),
+      ).toBe(true),
+    );
+    await waitFor(() => expect(isInvalidated(client, ["provider-models-config", "openrouter"])).toBe(true));
+  });
+
+  it("toggling a provider's enabled switch invalidates the picker's PROVIDER + live-catalog caches", async () => {
+    const client = renderTabSeedingPickerCaches();
+    const toggle = await screen.findByRole("switch", { name: "Toggle provider OpenRouter" });
+    fireEvent.click(toggle);
+
+    await waitFor(() =>
+      expect(patchResponses).toContainEqual({ id: "openrouter", body: { enabled: false } }),
+    );
+    // Both session-page families the provider toggle must refresh.
+    await waitFor(() => expect(isInvalidated(client, ["composer-providers"])).toBe(true));
+    await waitFor(() => expect(isInvalidated(client, ["provider-models", "openrouter"])).toBe(true));
+  });
+
+  it("deleting the PROVIDER invalidates the picker's models-config family (its rows cascade away server-side)", async () => {
+    const client = renderTabSeedingPickerCaches();
+    await waitFor(() =>
+      expect(screen.getByRole("button", { name: "Delete provider OpenRouter" })).toBeTruthy(),
+    );
+    // The two-click confirm flow.
+    fireEvent.click(screen.getByRole("button", { name: "Delete provider OpenRouter" }));
+    fireEvent.click(screen.getByRole("button", { name: "Delete provider OpenRouter" }));
+
+    await waitFor(() =>
+      expect(calls.some((c) => c.method === "DELETE" && c.url.endsWith("/providers/openrouter"))).toBe(true),
+    );
+    await waitFor(() => expect(isInvalidated(client, ["provider-models-config", "openrouter"])).toBe(true));
+  });
+});
+
+/* ── ROUND-62 (R62-2b): honest load states (the "page is not proper" part) ── */
+
+describe("Honest load states (R62-2b)", () => {
+  it("a failed providers load renders the red alert — never the silent 'no providers' page", async () => {
+    providersFail = true;
+    renderWithProviders(<ModelsProvidersTab />);
+
+    const alert = await screen.findByRole("alert");
+    expect(alert.textContent).toContain("Couldn't load providers");
+    expect(alert.textContent).toContain("providers route exploded");
+    expect(alert.style.color).toBe("#ef4444");
+  });
+
+  it("a failed models-config load shows the error line INSTEAD of the misleading 'No models yet'", async () => {
+    modelsConfigFail = true;
+    renderWithProviders(<ModelsProvidersTab />);
+
+    await waitFor(() =>
+      expect(screen.getByText(/Couldn't load this provider's models/)).toBeTruthy(),
+    );
+    expect(screen.queryByText(/No models yet/)).toBeNull();
   });
 });

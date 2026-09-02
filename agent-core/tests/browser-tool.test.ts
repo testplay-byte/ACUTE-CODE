@@ -12,8 +12,25 @@ import { randomUUID } from "node:crypto";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterAll, afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { buildProjectTools } from "../src/tools/index";
+// R62 (D8): the read action calls webFetch — network-free tests mock the
+// fetcher (the real extractor has its own coverage in web-tool tests).
+import * as webModule from "../src/tools/web.js";
+vi.mock("../src/tools/web.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../src/tools/web.js")>();
+  return { ...actual, webFetch: vi.fn() };
+});
+const webFetchMock = vi.mocked(webModule.webFetch);
+// R62 (D8): the browser command bridge + computer relay fakes.
+import {
+  resolveBrowserCommand,
+  sendBrowserCommand,
+} from "../src/browser-command.js";
+import {
+  resetActiveComputerRelayForTest,
+  setActiveComputerRelay,
+} from "../src/tools/plugins/computer-relay.js";
 import { buildServer } from "../src/server";
 import { openDatabase, type SqliteDatabase } from "../src/storage/db";
 import { ProviderKeyring } from "../src/providers/registry";
@@ -33,13 +50,14 @@ let tempDir = "";
  * the tool needs a ToolDeps with an approval channel. This helper builds one
  * against a fresh per-test DB (migrations run → web_host_rules exists).
  */
-async function buildTools(root: string) {
+async function buildTools(root: string, deps?: { emit?: (event: unknown) => void }) {
   db = openDatabase(join(tempDir, `${randomUUID()}.db`));
   return buildProjectTools(root, undefined, {
     db,
     sessionId: "sess_browser_tool",
     agentId: "agt_browser_tool",
     projectId: "proj_browser_tool",
+    ...deps,
   });
 }
 
@@ -51,6 +69,12 @@ beforeEach(async () => {
   if (tempDir === "") tempDir = mkdtempSync(join(tmpdir(), "acute-browser-tool-"));
   // Fresh module store per test → deterministic DEFAULT sessionId resolution.
   resetBrowserStoreForTest();
+  resetActiveComputerRelayForTest();
+  webFetchMock.mockReset();
+});
+
+afterEach(() => {
+  resetActiveComputerRelayForTest();
 });
 
 afterEach(async () => {
@@ -276,5 +300,258 @@ describe("browser_control ↔ route state sharing (one server, no self-fetch)", 
       width: 390,
       preset: "mobile-md",
     });
+  });
+});
+
+
+// ── ROUND-62 (D8): read / eval / screenshot / enriched get_state ──────────
+
+describe("browser_control — read (R62: the current page's text, server-side)", () => {
+  it("read returns the panel's current page text (title + url header)", async () => {
+    const tools = await buildTools(tempDir);
+    const bc = tool(tools, "browser_control");
+    await bc.execute({ action: "navigate", url: "https://en.wikipedia.org/page", sessionId: "tool-tab-read" });
+    webFetchMock.mockResolvedValue({ ok: true, output: "Example Domain. This domain is for use in examples." });
+
+    const read = await bc.execute({ action: "read", sessionId: "tool-tab-read" });
+    expect(read.ok).toBe(true);
+    expect(read.output).toContain("https://en.wikipedia.org/page");
+    expect(read.output).toContain("Example Domain");
+    expect(webFetchMock).toHaveBeenCalledWith("https://en.wikipedia.org/page");
+  });
+
+  it("read truncates honestly at maxChars and refuses without a page", async () => {
+    const tools = await buildTools(tempDir);
+    const bc = tool(tools, "browser_control");
+    await bc.execute({ action: "navigate", url: "https://en.wikipedia.org/long", sessionId: "tool-tab-read2" });
+    webFetchMock.mockResolvedValue({ ok: true, output: "x".repeat(5000) });
+
+    const short = await bc.execute({ action: "read", maxChars: 1000, sessionId: "tool-tab-read2" });
+    expect(short.ok).toBe(true);
+    expect(short.output).toContain("truncated");
+
+    const noPage = await bc.execute({ action: "read", sessionId: "never-opened" });
+    expect(noPage.ok).toBe(false);
+    expect(noPage.output).toContain("no page is open");
+  });
+
+  it("read surfaces a fetch failure instead of pretending success", async () => {
+    const tools = await buildTools(tempDir);
+    const bc = tool(tools, "browser_control");
+    await bc.execute({ action: "navigate", url: "https://en.wikipedia.org/dead", sessionId: "tool-tab-read3" });
+    webFetchMock.mockResolvedValue({ ok: false, output: "web_fetch: request failed: ECONNREFUSED" });
+    const failed = await bc.execute({ action: "read", sessionId: "tool-tab-read3" });
+    expect(failed.ok).toBe(false);
+    expect(failed.output).toContain("ECONNREFUSED");
+  });
+});
+
+describe("browser_control — eval (R62: JavaScript in the live page, via the SSE bridge)", () => {
+  it("eval sends the command frame on the turn stream and returns the page's value", async () => {
+    let captured: unknown = null;
+    const emit = (event: unknown) => {
+      captured = event;
+      // The frontend's bridge answers asynchronously — resolve the pending
+      // tool promise through the real module (the REST route's core).
+      const frame = event as { type: string; commandId: string; tabId: string; action: string };
+      expect(frame.type).toBe("browser-command");
+      expect(frame.tabId).toBe("tool-tab-eval");
+      expect(frame.action).toBe("eval");
+      queueMicrotask(() => {
+        resolveBrowserCommand(frame.commandId, { ok: true, data: { ok: true, value: { title: "Live DOM title" } } });
+      });
+    };
+    const tools = await buildTools(tempDir, { emit });
+    const bc = tool(tools, "browser_control");
+    await bc.execute({ action: "navigate", url: "https://en.wikipedia.org/app", sessionId: "tool-tab-eval" });
+
+    const result = await bc.execute({ action: "eval", script: "return document.title", sessionId: "tool-tab-eval" });
+    expect(result.ok).toBe(true);
+    expect(result.output).toContain("Live DOM title");
+    expect(captured).not.toBeNull();
+  });
+
+  it("eval fails closed without a live emit channel, and surfaces page errors", async () => {
+    const tools = await buildTools(tempDir); // no emit in deps
+    const bc = tool(tools, "browser_control");
+    const noChannel = await bc.execute({ action: "eval", script: "return 1", sessionId: "tool-tab-eval2" });
+    expect(noChannel.ok).toBe(false);
+    expect(noChannel.output).toContain("no live stream channel");
+
+    // With a channel but a page-level error: the {ok:false} envelope.
+    const emit = (event: unknown) => {
+      const frame = event as { commandId: string };
+      queueMicrotask(() => resolveBrowserCommand(frame.commandId, { ok: true, data: { ok: false, error: "TypeError: null is not an object" } }));
+    };
+    const tools2 = await buildTools(tempDir, { emit });
+    const bc2 = tool(tools2, "browser_control");
+    const pageError = await bc2.execute({ action: "eval", script: "return bad(", sessionId: "tool-tab-eval2" });
+    expect(pageError.ok).toBe(false);
+    expect(pageError.output).toContain("TypeError");
+  });
+
+  it("eval validates the script (empty / oversized) before sending anything", async () => {
+    const emit = vi.fn();
+    const tools = await buildTools(tempDir, { emit });
+    const bc = tool(tools, "browser_control");
+    const empty = await bc.execute({ action: "eval", script: "  ", sessionId: "tool-tab-eval3" });
+    expect(empty.ok).toBe(false);
+    const huge = await bc.execute({ action: "eval", script: "x".repeat(20001), sessionId: "tool-tab-eval3" });
+    expect(huge.ok).toBe(false);
+    expect(huge.output).toContain("20000");
+    expect(emit).not.toHaveBeenCalled();
+  });
+});
+
+describe("browser_control — screenshot (R62: computer-use capture + vision relay)", () => {
+  it("fails closed with the enable-Computer-Use pointer when the relay is not armed", async () => {
+    const tools = await buildTools(tempDir);
+    const bc = tool(tools, "browser_control");
+    await bc.execute({ action: "navigate", url: "https://en.wikipedia.org/shot", sessionId: "tool-tab-shot" });
+    const result = await bc.execute({ action: "screenshot", sessionId: "tool-tab-shot" });
+    expect(result.ok).toBe(false);
+    expect(result.output).toContain("Computer Use");
+    expect(result.output).toContain("read");
+  });
+
+  it("captures the panel REGION the UI reports and relays vision (honest off-mode note when vision is off)", async () => {
+    const captured: Array<{ x: number; y: number; w: number; h: number }> = [];
+    const relay = {
+      backend: {
+        captureRegion: async (_run: unknown, region: { x: number; y: number; w: number; h: number }) => {
+          captured.push(region);
+          return {
+            pngBase64: "aW1n",
+            width: region.w,
+            height: region.h,
+            scale: 1,
+            origin: { x: region.x, y: region.y },
+          };
+        },
+      },
+      run: vi.fn(),
+      session: { record: vi.fn() },
+    };
+    setActiveComputerRelay(relay as never);
+    const emit = (event: unknown) => {
+      const frame = event as { commandId: string };
+      queueMicrotask(() =>
+        resolveBrowserCommand(frame.commandId, {
+          ok: true,
+          data: { supported: true, region: { x: 100, y: 200, w: 800, h: 600 }, scaleFactor: 2, mode: "native" },
+        }),
+      );
+    };
+    const tools = await buildTools(tempDir, { emit });
+    const bc = tool(tools, "browser_control");
+    await bc.execute({ action: "navigate", url: "https://en.wikipedia.org/shot2", sessionId: "tool-tab-shot2" });
+
+    const result = await bc.execute({ action: "screenshot", sessionId: "tool-tab-shot2" });
+    // Vision defaults OFF (fresh DB) → the tool is still ok:true with the
+    // honest unavailable note; the CAPTURE happened with the UI's region.
+    expect(result.ok).toBe(true);
+    expect(result.output).toContain("panel region 800×600");
+    expect(result.output).toContain("vision description is unavailable");
+    expect(captured).toEqual([{ x: 100, y: 200, w: 800, h: 600 }]);
+    expect(relay.session.record).toHaveBeenCalled();
+  });
+
+  it("no region answer → falls back to a full-display capture", async () => {
+    const displayCaptures: number[] = [];
+    const relay = {
+      backend: {
+        captureDisplay: async (_run: unknown, displayIndex: number) => {
+          displayCaptures.push(displayIndex);
+          return { pngBase64: "aW1n", width: 1920, height: 1080, scale: 1, origin: { x: 0, y: 0 } };
+        },
+      },
+      run: vi.fn(),
+      session: { record: vi.fn() },
+    };
+    setActiveComputerRelay(relay as never);
+    const tools = await buildTools(tempDir); // no emit → no screenshot_meta ask at all
+    const bc = tool(tools, "browser_control");
+    await bc.execute({ action: "navigate", url: "https://en.wikipedia.org/shot3", sessionId: "tool-tab-shot3" });
+    const result = await bc.execute({ action: "screenshot", sessionId: "tool-tab-shot3" });
+    expect(result.ok).toBe(true);
+    expect(result.output).toContain("full display capture");
+    expect(displayCaptures).toEqual([1]);
+  });
+
+  it("a failed capture surfaces the backend's error", async () => {
+    const relay = {
+      backend: {
+        captureDisplay: async () => ({ error: "no scrot, no import" }),
+      },
+      run: vi.fn(),
+      session: { record: vi.fn() },
+    };
+    setActiveComputerRelay(relay as never);
+    const tools = await buildTools(tempDir);
+    const bc = tool(tools, "browser_control");
+    await bc.execute({ action: "navigate", url: "https://en.wikipedia.org/shot4", sessionId: "tool-tab-shot4" });
+    const result = await bc.execute({ action: "screenshot", sessionId: "tool-tab-shot4" });
+    expect(result.ok).toBe(false);
+    expect(result.output).toContain("no scrot, no import");
+  });
+});
+
+describe("browser_control — get_state enrichment (R62: tabs + active tab)", () => {
+  it("get_state lists every open tab and which one the user views", async () => {
+    const tools = await buildTools(tempDir);
+    const bc = tool(tools, "browser_control");
+    await bc.execute({ action: "navigate", url: "https://en.wikipedia.org/a", sessionId: "tab-alpha" });
+    await bc.execute({ action: "navigate", url: "https://en.wikipedia.org/b", sessionId: "tab-beta" });
+    const state = JSON.parse((await bc.execute({ action: "get_state", sessionId: "tab-alpha" })).output) as {
+      activeTab: string | null;
+      tabs: Array<{ sessionId: string; currentUrl: string | null }>;
+    };
+    expect(state.tabs.map((t) => t.sessionId).sort()).toEqual(["tab-alpha", "tab-beta"]);
+    // LRU: beta navigated LAST → it is the tab the user is viewing.
+    expect(state.activeTab).toBe("tab-beta");
+    expect(state.tabs.find((t) => t.sessionId === "tab-alpha")?.currentUrl).toBe("https://en.wikipedia.org/a");
+  });
+});
+
+describe("browser command bridge (R62 D8) — the REST result route", () => {
+  it("POST /browser-commands/:id/result resolves a live command; unknown ids 404", async () => {
+    await buildTools(tempDir);
+    app = buildServer({
+      token: TOKEN,
+      db,
+      keyring: new ProviderKeyring({ ACUTE_PROVIDER_OPENROUTER: "sk-or-vtest" }),
+    });
+    const frames: Array<{ commandId: string }> = [];
+    const pending = sendBrowserCommand(
+      (event) => {
+        frames.push(event as { commandId: string });
+      },
+      "tab-route",
+      "eval",
+      { script: "return 1" },
+    );
+    // Not yet answered → the command is pending.
+    const unknown = await app.inject({
+      method: "POST",
+      url: "/api/v1/browser-commands/bogus/result",
+      headers: { authorization: `Bearer ${TOKEN}`, "content-type": "application/json" },
+      payload: { ok: true, data: {} },
+    });
+    expect(unknown.statusCode).toBe(404);
+
+    const answered = await app.inject({
+      method: "POST",
+      url: `/api/v1/browser-commands/${frames[0].commandId}/result`,
+      headers: { authorization: `Bearer ${TOKEN}`, "content-type": "application/json" },
+      payload: { ok: true, data: { ok: true, value: 41 } },
+    });
+    expect(answered.statusCode).toBe(204);
+    await expect(pending).resolves.toEqual({ ok: true, value: 41 });
+  });
+
+  it("sendBrowserCommand times out honestly when the UI never answers", async () => {
+    await expect(
+      sendBrowserCommand(() => {}, "tab-timeout", "eval", { script: "return 1" }, 30),
+    ).rejects.toThrow(/timed out/);
   });
 });

@@ -7,6 +7,7 @@ import { resetFixtureProjects } from "./lib/project-fixtures";
 import { resetFixtureSessions } from "./lib/session-fixtures";
 import { useConfigStore } from "./lib/config-store";
 import { useThemeStore } from "./lib/theme-store";
+import { useProjectChatStore } from "./lib/project-chat-store";
 
 /** Fresh QueryClient per render: no retry, no stale cache across tests. */
 function createTestQueryClient() {
@@ -31,6 +32,10 @@ export function resetTestState() {
   resetFixtureSessions();
   useConfigStore.setState({ baseUrl: "http://127.0.0.1:5178", token: null, demoData: true });
   useThemeStore.setState({ themeId: "nova", mode: "dark" });
+  // ROUND-62: the sidebar minimize flag is PERSISTED (the owner expects his
+  // rail to survive a restart) — reset it so tests never inherit a prior
+  // test's rail state (appSidebarVisible needs no reset: transient).
+  useProjectChatStore.setState({ appSidebarMinimized: false });
   localStorage.clear();
   // Shell tests exercise the main app, not first-run onboarding — mark setup done.
   localStorage.setItem("acute.setupDone", "1");

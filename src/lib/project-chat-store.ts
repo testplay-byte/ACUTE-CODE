@@ -73,6 +73,15 @@ export interface ProjectChatState {
    * Tauri, the floating Acute logo in browser dev mode. Transient — never
    * persisted. */
   appSidebarVisible: boolean;
+  /** ROUND-62 (owner: "i should be given the option to minimize it rather
+   * than just hiding it completely — at the very top of the left sidebar"):
+   * when true the sidebar renders its ICON RAIL (~64px — navigation icons,
+   * project tiles, settings/bell) instead of the full panel. The FULL hide
+   * (appSidebarVisible, title-bar identity control) stays orthogonal — hide
+   * > minimize in precedence. PERSISTED (a layout preference like the panel
+   * widths — the owner expects his rail to still be a rail after a
+   * restart). */
+  appSidebarMinimized: boolean;
   /** Round-28 (WS-D1, owner R28 directive): when true the chat screen shows
    * ONLY the chat (left/center-left aligned, maxWidth, no Explorer/Code
    * panels). Default true on chat routes. The ChatTopBar's "Show panels"
@@ -108,6 +117,8 @@ export interface ProjectChatState {
   addTodo: (projectId: string, text: string) => void;
   toggleTodo: (projectId: string, todoId: string) => void;
   setAppSidebarVisible: (visible: boolean) => void;
+  /** ROUND-62: flips the icon-rail minimize state (persisted). */
+  setAppSidebarMinimized: (minimized: boolean) => void;
   setChatFocusMode: (on: boolean) => void;
   /** ROUND-38: snapshot the current project's scoped state + restore the
    * incoming project's (or defaults). Called from AgentChatPanel on
@@ -138,6 +149,7 @@ export const useProjectChatStore = create<ProjectChatState>()(
       // owner's title-bar identity click is the one and only control that
       // hides it; the old chat-route auto-hide is gone).
       appSidebarVisible: true,
+      appSidebarMinimized: false,
       chatFocusMode: true,
       // ROUND-38: per-project scoped-state cache (activeProjectId + the
       // snapshot map). Empty until AgentChatPanel calls setActiveProject.
@@ -189,6 +201,7 @@ export const useProjectChatStore = create<ProjectChatState>()(
           },
         })),
       setAppSidebarVisible: (appSidebarVisible) => set({ appSidebarVisible }),
+      setAppSidebarMinimized: (appSidebarMinimized) => set({ appSidebarMinimized }),
       setChatFocusMode: (chatFocusMode) => set({ chatFocusMode }),
       setActiveProject: (id) => set((s) => {
         // ROUND-38: no-op when the active project is unchanged (avoids

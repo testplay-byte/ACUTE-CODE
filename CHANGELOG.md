@@ -1,4 +1,4 @@
-<!-- last-reviewed: 2026-09-02 round-61 -->
+<!-- last-reviewed: 2026-09-02 round-62 -->
 # Changelog
 
 All notable changes to ACUTE-CODE are documented here. Entries are written for
@@ -11,12 +11,40 @@ version number is single-sourced from the root `package.json`
 
 ## [Unreleased]
 
-Planned next: live verification of computer use on the owner's real
+Planned next: live verification of computer use AND the agent-browser's
+native paths (eval in the page, screenshot + vision) on the owner's real
 machines (the checklist in `docs/runbooks/COMPUTER-USE.md`), installer
 code-signing (SmartScreen), ratings-driven prompt tuning, the
 deepseek-harness future candidates (compaction pressure-trigger,
 continuable sub-agent children), the Files-tab polish, agent
 web-app-testing tools.
+
+## [0.62.0] - 2026-09-02
+
+Round 62 — the owner-feedback round. **The sidebar can now be MINIMIZED**
+(a 64px icon rail with the restore button at its very top — persisted,
+orthogonal to the full hide). **The session screen's gradient background
+is gone** (flat theme background; the side padding + rounded corners
+stay). **The embedded browser now RESPECTS the dimensions you set** —
+larger presets render as a scaled-down view of the true size (the page
+sees the full CSS pixels; the readout says "fits N%"), and the Chromium
+footnote strip is removed. **Any open menu/dialog/popover now renders
+ABOVE the browser webview** (a DOM overlay watcher hides native webviews
+while overlays are open — the "menu opened under the browser" bug). **The
+agent can now USE the right-sidebar browser**: `browser_control` grew
+`read` (the page's text), `eval` (JavaScript in the live page — click
+links, fill forms, read the DOM, native desktop mode), `screenshot`
+(capture the panel + a vision-model description via Computer Use), and
+`get_state` now lists every open tab; the system prompt teaches the
+capability triad. **Settings → Appearance is simplified** (three
+sections; the Sidebar Tint setting is removed). **Models & Providers
+changes reflect on the agent session page immediately** (cross-cache
+invalidation), the per-1M input/output token prices are clearly labeled
+and support decimals, the model dialog gained a Supports-vision toggle,
+and partially-priced models now cost what their known sides cost (the
+silent $0 bug). 1542 root tests in 104 files (was 1492/103), agent-core
+801/801, live-verified end-to-end including a real model turn driving
+the browser tools.
 
 ## [0.61.0] - 2026-09-02
 
