@@ -228,7 +228,7 @@ describe("round-14 tools: create_dir / delete_file / search_files", () => {
 });
 
 describe("round-17: tool-name truth + allowedTools enforcement (ADR-0019)", () => {
-  it("TOOL_NAMES equals the real seed set (round-28: +index_project; R43-10: +browser_control; R43: +delegate_task; R44-a: +memory tools; R52-a: +job tools)", async () => {
+  it("TOOL_NAMES equals the real seed set (round-28: +index_project; R43-10: +browser_control; R43: +delegate_task; R44-a: +memory tools; R52-a: +job tools; R61: +read_skill)", async () => {
     const { TOOL_NAMES } = await import("../src/storage/agents");
     expect([...TOOL_NAMES].sort()).toEqual([
       "browser_control",
@@ -247,6 +247,7 @@ describe("round-17: tool-name truth + allowedTools enforcement (ADR-0019)", () =
       "memory_recall",
       "memory_save",
       "read_file",
+      "read_skill",
       "run_command",
       "search_code",
       "search_files",
@@ -257,7 +258,7 @@ describe("round-17: tool-name truth + allowedTools enforcement (ADR-0019)", () =
     ]);
   });
 
-  it("buildProjectTools filters by allowlist; empty allowlist = all tools (22 base incl. browser_control + memory + job tools)", async () => {
+  it("buildProjectTools filters by allowlist; empty allowlist = all tools (22 base incl. browser_control + memory + job tools; read_skill is deps-gated per R61 — bare calls don't get it)", async () => {
     const { buildProjectTools } = await import("../src/tools/index");
     // ROUND-36: delegate_task requires deps.keyring + deps.chat — without
     // them the base tools return (back-compat), with them more (R43-10

@@ -57,6 +57,16 @@ export interface PromptContext {
    * the section is the honest narration of that fact). Absent → no section
    * (pre-R50 callers and tests get the byte-identical prompt). */
   permissionMode?: PermissionMode;
+  /** ROUND-61 (R61): enabled SKILLS (progressive disclosure — name +
+   * one-line description only; the body loads via read_skill). Absent or
+   * empty → no SKILLS section (byte-identical to pre-R61 for callers that
+   * don't pass it). */
+  skills?: ReadonlyArray<{ name: string; description: string }>;
+  /** ROUND-61 (R61): computer-use availability + posture. When enabled, a
+   * "## COMPUTER USE" section carries the operating discipline (the
+   * extended skill body loads via read_skill("computer-use")). Absent →
+   * no section. */
+  computerUse?: { enabled: boolean; posture: "observe" | "act" | "auto" };
 }
 
 /** Which context-meter bucket a prompt line belongs to. */
@@ -139,6 +149,11 @@ export function buildTaggedPromptLines(ctx: PromptContext): TaggedLine[] {
   tools("- Each tool call is executed and its result is shown to you before your next turn.");
   tools("- Use tools to actually perform actions — never just describe what you would do.");
   tools("- If the user asks you to create something, CREATE IT with the tools, then summarize.");
+  // ROUND-61 (R61, owner: "improve its tool calling skill using"): read
+  // errors before reacting, pick the most specific tool, never fabricate.
+  tools("- READ tool errors fully before reacting: an error message names the cause and often the exact recovery. Follow it instead of guessing, retrying blindly, or switching tools at random. A failed call is information, not noise.");
+  tools("- Pick the MOST SPECIFIC tool for the job: search_code to find symbols (not list_dir spelunking), edit_file for surgical changes (not whole-file rewrites), web_fetch for a known URL (not search-then-guess).");
+  tools("- NEVER fabricate or embellish a tool result. If a call failed, timed out, or returned partial data, that fact IS the data — report it honestly and adapt the plan around it.");
   tools("");
 
   // ── ROUND-50 (R50-c1): the composer's permission mode ───────────────────
@@ -202,6 +217,8 @@ export function buildTaggedPromptLines(ctx: PromptContext): TaggedLine[] {
   ident("- DO NOT ask the user for confirmation between steps. Proceed autonomously.");
   ident("- DO NOT stop after a single tool call because \"you have the info.\" Apply it.");
   ident("- If a tool call fails, diagnose (read the error), fix, retry. Do not abort.");
+  // ROUND-61 (R61): honest reporting — the DeepSeek-harness lesson.
+  ident("- REPORT OUTCOMES FAITHFULLY: when a step fails, say so with the real error; never claim work you did not do or verification you did not perform. A truthful failure report the user can act on beats a confident fiction.");
   // ROUND-51 (R51-d, owner: "It takes up way too many steps… It should not do
   // too many unnecessary thinking processes"): the old rule mandated a
   // read-back after EVERY save, doubling file-tool round-trips on every
@@ -322,6 +339,50 @@ export function buildTaggedPromptLines(ctx: PromptContext): TaggedLine[] {
     ident("");
   }
 
+  // ── Skills (ROUND-61, R61): progressive disclosure ─────────────────────
+  // The system prompt lists ONLY name + one-line description; the body
+  // loads on demand via read_skill (the doc-09 pattern — token-lean,
+  // keeps long procedures out of context until they're needed).
+  if (ctx.skills !== undefined && ctx.skills.length > 0) {
+    beginSection("skills");
+    ident("## SKILLS (load with read_skill)");
+    ident("Capability modules available in this project. When a task matches one, call read_skill with its name FIRST and follow its instructions for the rest of the task:");
+    for (const skill of ctx.skills) {
+      ident(`- **${skill.name}** — ${skill.description}`);
+    }
+    ident("");
+  }
+
+  // ── Computer use (ROUND-61, R61): the operating discipline ─────────────
+  // Only when the owner enabled the master switch. The extended contract
+  // is the computer-use SKILL (read_skill "computer-use"); this section is
+  // the always-on discipline so even a model that never loads the skill
+  // behaves safely.
+  if (ctx.computerUse?.enabled === true) {
+    beginSection("computer-use");
+    ident("## COMPUTER USE (desktop control)");
+    ident("You can observe and actuate the REAL desktop GUI. This touches the user's actual machine — follow the discipline:");
+    ident("- OBSERVE → ACT → VERIFY: get_app_state (the accessibility tree) BEFORE acting; element targets ({type:\"element\"}) are the PRIMARY path — semantic, precise, background-safe (never steals the user's focus).");
+    ident("- Coordinates ({type:\"coordinate\"}) are the FALLBACK: pixels copied UNCHANGED from the LATEST returned raster. Never pre-scale, never attach app_ref/state_id to them.");
+    ident("- Receipts are not promises: action_sent=true means it MAY have happened — verify via fresh get_app_state or an external oracle (file exists, exit code) before building on it.");
+    ident("- Refusals are self-teaching: read the named reason and follow its recovery (frontmost_pid_mismatch → activate → re-observe → retry ONCE). Never replay a sent action.");
+    ident("- Launch apps with the user's EXACT spelling (character-for-character; never translate/shorten/substitute). list_apps lists RUNNING apps only.");
+    ident("- Raw input (typing, keys, coordinate clicks) on Windows/Linux needs the target frontmost. type REPLACES field content; set_value is the preferred write; scroll is coordinate-only.");
+    ident("- Destructive/hard-to-reverse actions need explicit user go-ahead. NEVER type credentials. stop_computer_control ends the session — no further computer-use calls after it.");
+    if (ctx.computerUse.posture === "observe") {
+      ident("- CURRENT POSTURE: OBSERVE-ONLY — mutating actions are refused by policy; read-only observation is all this session may do.");
+    }
+    ident("");
+  }
+
+  // ── MCP bridge note (ROUND-61, R61) ─────────────────────────────────────
+  if (ctx.toolNames.some((n) => n.startsWith("mcp__"))) {
+    beginSection("mcp");
+    ident("## MCP SERVER TOOLS");
+    ident("Tools named mcp__<server>__<tool> come from the owner's configured MCP servers (external extensions). Use them like built-in tools; their schemas are authoritative. A failed MCP tool usually means that server is down or the call's arguments were invalid — report the error, don't retry in a loop.");
+    ident("");
+  }
+
   // ── Web access ──────────────────────────────────────────────────────────
   if (ctx.toolNames.includes("web_fetch") || ctx.toolNames.includes("web_search")) {
     beginSection("web-access");
@@ -354,6 +415,8 @@ export function buildTaggedPromptLines(ctx: PromptContext): TaggedLine[] {
   ident("- When showing code changes, explain WHAT changed and WHY in one sentence.");
   ident("- If something is ambiguous, make the most reasonable assumption and note it briefly.");
   ident("- Use **bold** for file names and `code` for identifiers in responses.");
+  // ROUND-61 (R61): the closing contract — what/verified/next.
+  ident("- When you finish a task, state WHAT you did, WHAT you verified (and how), and any follow-up worth knowing — a few sentences at most.");
   ident("");
 
   // ── Codebase awareness (Round 28 WS-G) ────────────────────────────────

@@ -5,7 +5,7 @@ import {
   fetchMemorySettings,
   updateMemorySettings,
 } from "../lib/api";
-import { ArrowLeft, Bot, Brain, Moon, Palette, Server, SlidersHorizontal, Sun, Users } from "lucide-react";
+import { ArrowLeft, Bot, Brain, Monitor, Moon, Palette, PlugZap, Server, SlidersHorizontal, Sparkles, Sun, Users } from "lucide-react";
 import { useConfigStore } from "../lib/config-store";
 import { useThemeStore } from "../lib/theme-store";
 import { THEMES, getContrastText } from "../lib/themes";
@@ -14,6 +14,13 @@ import { useThemeStyles } from "../lib/use-theme-styles";
 import { AgentsScreen } from "../components/agents/AgentsScreen";
 import { ModelsProvidersTab } from "../components/settings/ModelsProvidersTab";
 import { SubAgentsTab } from "../components/settings/SubAgentsTab";
+// ROUND-61 (R61): the extensibility tabs — skills (multiple user-addable
+// prompt modules), MCP servers (user-configured stdio tool servers), and
+// computer use (the desktop-control master switch + the SEPARATE vision
+// model). Deep-links: ?tab=skills / ?tab=mcp / ?tab=computeruse.
+import { SkillsTab } from "../components/settings/SkillsTab";
+import { McpTab } from "../components/settings/McpTab";
+import { ComputerUseTab } from "../components/settings/ComputerUseTab";
 import { Button, Field, inputClass } from "../components/ui/controls";
 import { bdr, withAlpha } from "../components/dashboard/helpers";
 
@@ -24,6 +31,11 @@ const TABS = [
   // ROUND-43 (R43-5, owner directive): the temporary sub-agent section —
   // dedicated API-key paste slots + model override. Deep-link ?tab=subagents.
   { id: "subagents", label: "Sub-agents", icon: Users },
+  // ROUND-61 (R61, owner directive): the extensibility surface — skills,
+  // MCP servers, and computer use (with its separate vision model).
+  { id: "skills", label: "Skills", icon: Sparkles },
+  { id: "mcp", label: "MCP Servers", icon: PlugZap },
+  { id: "computeruse", label: "Computer Use", icon: Monitor },
   { id: "advanced", label: "Advanced", icon: SlidersHorizontal },
 ] as const;
 
@@ -100,6 +112,9 @@ export function SettingsPage() {
           </div>
         )}
         {tab === "subagents" && <SubAgentsTab />}
+        {tab === "skills" && <SkillsTab />}
+        {tab === "mcp" && <McpTab />}
+        {tab === "computeruse" && <ComputerUseTab />}
         {tab === "advanced" && <AdvancedTab />}
       </div>
     </div>

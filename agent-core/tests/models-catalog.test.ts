@@ -346,8 +346,9 @@ describe("migration 0014 (delegate_task + browser_control allowlist repair)", ()
     expect(row("agt_tpl_coder")).toContain("browser_control");
     // ROUND-44 (R44-a): 0015 appends the memory tools on top of 0014's 18;
     // ROUND-52 (R52-a): 0021 appends the two job tools (the seed list
-    // includes run_command) → 23.
-    expect(row("agt_tpl_coder")).toHaveLength(23);
+    // includes run_command) → 23; ROUND-61 (R61): 0023 appends read_skill
+    // (the skills loader is a global capability) → 24.
+    expect(row("agt_tpl_coder")).toHaveLength(24);
     expect(row("agt_default_nova")).toContain("delegate_task");
     expect(row("agt_default_nova")).toContain("browser_control");
     expect(row("agt_mine")).toEqual(JSON.parse(seedTools)); // untouched
@@ -355,6 +356,8 @@ describe("migration 0014 (delegate_task + browser_control allowlist repair)", ()
     // memory tools appended by 0015 (it is a template row). ROUND-52
     // (R52-a): migration 0021 leaves it UNTOUCHED — its list has no
     // run_command, and the job tools are companions to run_command.
+    // ROUND-61 (R61): migration 0023 appends read_skill (it is a template
+    // row with a non-empty list).
     expect(row("agt_tpl_already")).toEqual([
       "list_dir",
       "delegate_task",
@@ -362,6 +365,7 @@ describe("migration 0014 (delegate_task + browser_control allowlist repair)", ()
       "memory_save",
       "memory_recall",
       "memory_list",
+      "read_skill",
     ]);
     // idempotent on reopen
     db.close();
@@ -370,7 +374,7 @@ describe("migration 0014 (delegate_task + browser_control allowlist repair)", ()
       JSON.parse(
         (again.prepare("SELECT allowed_tools FROM agents WHERE id = 'agt_tpl_coder'").get() as { allowed_tools: string }).allowed_tools,
       ),
-    ).toHaveLength(23);
+    ).toHaveLength(24);
     again.close();
   });
 });

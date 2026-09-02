@@ -511,7 +511,9 @@ describe("migration 0015 (memory table + tool allowlist append)", () => {
     // Template + default get all three memory tools appended — and, since
     // ROUND-52 (R52-a), the two job supervision tools as well (migration
     // 0021 appends them to template/default rows whose list includes
-    // run_command — the memory test's seed list does).
+    // run_command — the memory test's seed list does) — and, since ROUND-61
+    // (R61), read_skill (migration 0023 appends the skills loader to
+    // template/default rows; the test DB runs the full chain).
     expect(row("agt_tpl_coder")).toEqual([
       ...JSON.parse(seedTools) as string[],
       "memory_save",
@@ -519,9 +521,10 @@ describe("migration 0015 (memory table + tool allowlist append)", () => {
       "memory_list",
       "job_status",
       "job_stop",
+      "read_skill",
     ]);
     expect(row("agt_default_nova")).toContain("memory_save");
-    expect(row("agt_default_nova")).toHaveLength(23);
+    expect(row("agt_default_nova")).toHaveLength(24);
     // User-created agents keep their deliberately-authored lists.
     expect(row("agt_mine")).toEqual(JSON.parse(seedTools));
 
@@ -540,14 +543,15 @@ describe("migration 0015 (memory table + tool allowlist append)", () => {
     expect(db2.prepare("SELECT version FROM schema_migrations WHERE version = 15").get()).toBeDefined();
 
     // Idempotent on reopen (no duplicate appends — 21 memory-era tools + the
-    // two ROUND-52 job tools migration 0021 added to this run_command row).
+    // two ROUND-52 job tools + the R61 read_skill migration 0023 appended
+    // to this run_command template row).
     db2.close();
     const again = openDatabase(path);
     expect(
       JSON.parse(
         (again.prepare("SELECT allowed_tools FROM agents WHERE id = 'agt_tpl_coder'").get() as { allowed_tools: string }).allowed_tools,
       ) as string[],
-    ).toHaveLength(23);
+    ).toHaveLength(24);
     again.close();
   });
 

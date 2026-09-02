@@ -1,4 +1,4 @@
-<!-- last-reviewed: 2026-08-31 round-58 -->
+<!-- last-reviewed: 2026-09-02 round-61 -->
 # TESTING — the verification ladder
 
 Five layers; each has a defined "when mandatory". Rules here are binding
@@ -13,33 +13,23 @@ Five layers; each has a defined "when mandatory". Rules here are binding
 | L4 live battery | real provider turn(s), real disk, fresh DB | sandbox, single invocation | anything touching agents, projects, tools, streaming |
 | L5 browser verification | real UI against the live stack; screenshots machine-verified | sandbox, single invocation | any UI-affecting round |
 
-**Current counts (R56, verified 2026-08-31):** `pnpm test` = **1071 tests
-in 76 files** (1059 unit + 12 e2e — the e2e split is 8 sidecar + 4
-terminal-session). Trajectory: 262 (R42) → 397 (R43) → 471 (R44) → 565
-(R45) → 622 (R46) → 683 (R47) → 752 (R48) → 815ish (R49) → 930 (R50) →
-978 (R51) → 1035 (R52) → 1058 (R53) → 1071 (R54→R55→R56 — the JS suite is
-unchanged in the launcher rounds; R55's Rust unit tests remain in the
-cargo `--all-targets` gate). **R56 is a launcher round** — its logic tests
-run in-sandbox against the real `acute_launcher.py` (not vitest; the
-launcher ships outside the pnpm workspace): mode resolution (commands ·
-flags · non-Windows · non-interactive stdin · saved pref · no-pref — 21
-checks), `ask_launch_mode` parsing + persistence round-trip,
-`_ask_engine_recourse` parsing, `_desktop_watch_engine` outcomes with
-post-start log appends (failed/listening/app-exited/timeout, threaded),
-`desktop_flow` recourse branches end-to-end (site closes the app + returns
-False · retry relaunches · keep · app-exited→site · up-first-try prompts
-nothing), `main()` dispatch (ask→site · ask→desktop · `site`/`app`/
-`desktop` commands · `--web`/`--site` flags · `status` no-dispatch ·
-default-run asks), and the self-update re-exec VERIFIED AS A REAL PROCESS
-REPLACEMENT (a stub repo copy exec'd, printed its marker + preserved args,
-exit code 42 propagated; the loop-guard run warned and continued).
-`python3 -m py_compile` clean; ACUTE.bat re-normalized to CRLF after its
-edit and `file`-verified (round-11/R52 lesson). The R56 live battery (L4):
-/health 200 · providers openrouter hasKey=true · project + session
-(`agt_tpl_coder`, 202) · real-key streamed turn answered EXACTLY
-`R56-LAUNCH-CHOICE-VERIFIED` · session resting state `queued` · zero new
-dev-log errors. Rust: `cargo check` GREEN on x86_64-pc-windows-gnu after
-the tauri.conf.json version bump.
+**Current counts (R61, verified 2026-09-02):** the root `pnpm test` =
+**1491 tests in 102 files** (all workspace suites from the root vite
+config; agent-core alone = **786/786 in 48 files**). Trajectory: 262 (R42)
+→ 397 (R43) → 471 (R44) → 565 (R45) → 622 (R46) → 683 (R47) → 752 (R48) →
+815ish (R49) → 930 (R50) → 978 (R51) → 1035 (R52) → 1058 (R53) → 1071
+(R54–R56, launcher rounds) → 1169 (R58) → 1302 (R59) → 1348 (R60) → 1491
+(R61).
+
+**R54–R56 (launcher rounds, historical):** the JS suite sat at 1071/76 —
+R56's logic tests run in-sandbox against the real `acute_launcher.py`
+(not vitest — the launcher ships outside the pnpm workspace): mode
+resolution + `ask_launch_mode` persistence + recourse branches +
+`main()` dispatch + the self-update re-exec verified as a REAL process
+replacement (exec'd stub printed its marker, exit code 42 propagated);
+`python3 -m py_compile` clean; ACUTE.bat CRLF-verified. The R56 live
+battery (L4): /health 200 · real-key streamed turn answered exactly
+`R56-LAUNCH-CHOICE-VERIFIED`.
 
 **R57 (the engine-bundling round):** the JS suite is unchanged at
 1071/1071 in 76 files (no product code changed — the fix is in the
@@ -132,6 +122,46 @@ flyout-enter cancels + flyout-leave re-schedules) · NEW `UsageScreen` 4
 (hero + stats + leaderboard + model card, drill-down with the nested
 "sub-agent · role" badge + deep-link, the range selector refetches, the
 empty state).
+
+**R61 (the computer-use + extensibility round): 1491/1491 in 102 files
+(was 1348/91; agent-core alone 786/786 in 48 files).** Eleven new suites,
+all green: backend `computer-dispatch` **33** (the universal gates —
+kill-switch/observe-posture/unknown-tool refusals; the a11y-first matrix
+— element press/type/set_value/right_click, staleness, fail-closed
+non-editable + double_click/scroll; coordinate actions — frame binding,
+the 10s freshness, raster bounds, the Win/Linux frontmost rule; keyboard
+targetless refusals; open_application launch/activation postconditions;
+stop + held-button release; receipts + the audit journal + monitor
+stats; app_ref resolution) against an INJECTED FAKE backend ·
+`computer-session` **12** (lifecycle, the enforced kill switch, snapshot
+supersession + keep-8 eviction, frame registry + imageToGlobal, the
+200-entry ring, the process singleton) · `computer-errors-audit` **15**
+(every refusal code's what/why/nothing-sent/recovery shape + the journal
+redaction: credential scrub, text/clipboard/value length markers, caps) ·
+`computer-use-plugin` **13** (settings gates: default-OFF, no-deps,
+declaration-context, exactly the 30 doc-02 names, observe = the 11
+read-only subset; output shapes + monitor emission; vision wiring incl.
+the OFF/separate cases; the ask-mode consent gate incl. auto-skip +
+element-press-never-prompts; the audit trail lands under
+`<root>/.acute/computer-use`) — this suite runs the REAL Linux backend on
+the headless sandbox (GUI probes fail closed; the SHAPE contracts are
+pinned, not live GUI behavior) · `computer-vision` **10** (the
+`<id>-vision` slot resolution + primary fallback, chat-completions +
+anthropic wire formats, no-key/no-provider/request-failure honest codes,
+the main-mode supports_vision gate + catalog prefill) · `skills-mcp`
+**10** (skill seed/CRUD/builtin-delete-refused, MCP storage round-trips +
+corrupt-JSON fail-soft, the manager: sanitized env, initialize/tools/call
+against a LIVE child, missing-executable fail-soft, probe, banner-noise
+survival) · frontend `SkillsTab` **11**, `McpTab` **12**,
+`ComputerUseTab` **12** (the settings tabs: master switch optimistic
+update + posture + readiness result cards + vision modes + the masked
+vision-key row + the per-row eye toggle; create/toggle/delete/edit flows,
+inline ApiError surfaces), `ComputerPanel` **8** + `ComputerMiniWindow`
+**7** (the monitor: status chips, stat cells, the event feed with refusal
+codes, STOP semantics, the pop-out, the drag). **LIVE verification of the
+platform backends is NOT done** (headless sandbox; Windows/macOS never
+run on hardware) — the owner's LIVE-VERIFICATION CHECKLIST in
+[`COMPUTER-USE.md`](COMPUTER-USE.md) is the mandatory follow-up.
 
 **R52 live battery (L4+L5, all against the real model):** the owner's
 Unix-shaped trap reproduced broken THEN verified fixed (`node … >

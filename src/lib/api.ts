@@ -75,6 +75,11 @@ export const TOOL_CATALOG = [
   // launches — poll with job_status, clean up with job_stop).
   "job_status",
   "job_stop",
+  // ROUND-61 (R61): the skills progressive-disclosure loader (read_skill —
+  // the system prompt lists skill names; the body loads on demand). The
+  // computer-use tools are SETTINGS-GATED (Settings → Computer Use), not
+  // agent-form vocabulary; MCP tools are dynamic (mcp__<server>__<tool>).
+  "read_skill",
 ] as const;
 
 export const PROVIDER_IDS = ["openrouter", "openai", "anthropic", "google"] as const;
@@ -2233,6 +2238,10 @@ export interface ProviderModelConfig {
   inputPriceCachedPerMtok: number | null;
   outputPricePerMtok: number | null;
   supportsThinking: boolean;
+  /** ROUND-61 (R61): image-input modality — the gate for "main" vision
+   * mode (the vision relay uses the turn's model only when this is true).
+   * Editable per row like supportsThinking. */
+  supportsVision: boolean;
   hidden: boolean;
   sortOrder: number;
   createdAt: string;
@@ -2257,6 +2266,9 @@ export interface ProviderModelConfigInput {
   inputPriceCachedPerMtok?: number | null;
   outputPricePerMtok?: number | null;
   supportsThinking?: boolean;
+  /** ROUND-61 (R61): mark image-input support on add (prefilled from the
+   * catalog's supportsVision when the row comes from GET /models/catalog). */
+  supportsVision?: boolean;
   hidden?: boolean;
 }
 
@@ -2279,6 +2291,8 @@ export interface ProviderModelConfigPatch {
   inputPriceCachedPerMtok?: number | null;
   outputPricePerMtok?: number | null;
   supportsThinking?: boolean;
+  /** ROUND-61 (R61): flip the vision flag on a stored row. */
+  supportsVision?: boolean;
   hidden?: boolean;
 }
 
@@ -2503,7 +2517,19 @@ export type StreamTurnEvent =
     }
   /** ROUND-42: the user explicitly stopped the turn (POST /sessions/:id/stop)
    * — the server resolved it as a deliberate stop, not an error. */
-  | { type: "stopped" };
+  | { type: "stopped" }
+  /** ROUND-61 (R61): the computer-use monitor feed. Every computer-use tool
+   * execution emits one frame at dispatch time (kind: observation | action |
+   * refusal | vision | session_start | session_stop; tool names the call;
+   * code carries the refusal's error code). The right-sidebar Computer panel
+   * + the floating mini window render from these live frames. */
+  | {
+      type: "computer-use";
+      kind: string;
+      tool?: string;
+      code?: string;
+      [extra: string]: unknown;
+    };
 
 /**
  * Run one streamed turn; `onEvent` fires for every SSE event as it lands
@@ -2789,4 +2815,261 @@ export async function listDiagnosticErrors(limit?: number): Promise<DiagnosticEr
  * paired with the frontend bus's clearAll()). */
 export async function clearDiagnosticErrors(): Promise<void> {
   await request<{ ok: boolean }>("/diagnostics/errors", { method: "DELETE" });
+}
+
+/* ══════════════════════════════════════════════════════════════════════════
+ * ROUND-61 (R61): COMPUTER USE + SKILLS + MCP SERVERS + PLUGINS — the
+ * owner's extensibility directive. Types mirror the sidecar's storage
+ * shapes (storage/computer-use.ts, storage/skills.ts, storage/mcp.ts).
+ * ══════════════════════════════════════════════════════════════════════════ */
+
+/** The host policy posture (storage/computer-use.ts). */
+export type ComputerUsePosture = "observe" | "act" | "auto";
+/** The vision-model separation mode. */
+export type ComputerVisionMode = "off" | "separate" | "main";
+
+export interface ComputerUseSettings {
+  enabled: boolean;
+  permission: ComputerUsePosture;
+  vision: {
+    mode: ComputerVisionMode;
+    provider: string | null;
+    modelId: string | null;
+  };
+}
+
+export interface ComputerUseConfigResponse {
+  settings: ComputerUseSettings;
+  platform: string;
+  capabilities: Record<string, boolean>;
+}
+
+/** GET /computer-use/config — settings + the detected backend + capabilities. */
+export async function fetchComputerUseConfig(): Promise<ComputerUseConfigResponse> {
+  return request<ComputerUseConfigResponse>("/computer-use/config");
+}
+
+/** PUT /computer-use/config — partial patch, returns the full settings. */
+export async function updateComputerUseConfig(
+  patch: Partial<Omit<ComputerUseSettings, "vision">> & {
+    vision?: Partial<Pick<ComputerUseSettings["vision"], "mode" | "provider" | "modelId">> & {
+      provider?: string | null;
+      modelId?: string | null;
+    };
+  },
+): Promise<ComputerUseSettings> {
+  const body = await request<{ settings: ComputerUseSettings }>("/computer-use/config", {
+    method: "PUT",
+    json: patch,
+  });
+  return body.settings;
+}
+
+/** One monitor-ring event from the control session (computer/session.ts). */
+export interface ComputerUseEventRow {
+  seq: number;
+  ts: number;
+  kind: string;
+  label: string;
+  tool?: string;
+  detail?: Record<string, unknown>;
+}
+
+export interface ComputerUseSessionState {
+  active: boolean;
+  killSwitch: boolean;
+  backendKind: string;
+  startedAt: number | null;
+  stopReason: string | null;
+  stats: {
+    startedAt: number;
+    actionsSent: number;
+    actionsRefused: number;
+    observations: number;
+    visionCalls: number;
+  };
+  events: ComputerUseEventRow[];
+}
+
+/** GET /computer-use/session — the monitor ring (newest-first) + stats. */
+export async function fetchComputerUseSession(): Promise<ComputerUseSessionState> {
+  return request<ComputerUseSessionState>("/computer-use/session");
+}
+
+/** POST /computer-use/stop — the UI kill switch (STOP button). */
+export async function stopComputerUse(reason?: string): Promise<{ ok: boolean; reason: string }> {
+  return request<{ ok: boolean; reason: string }>("/computer-use/stop", {
+    method: "POST",
+    json: reason ? { reason } : {},
+  });
+}
+
+/** POST /computer-use/test — readiness probe (permissions + capabilities;
+ * never pops dialogs). */
+export async function testComputerUse(): Promise<{
+  report: { ok: boolean; issues?: string[]; [extra: string]: unknown };
+  capabilities: Record<string, boolean>;
+  platform: string;
+}> {
+  return request("/computer-use/test", { method: "POST", json: {} });
+}
+
+/** GET /computer-use/vision-key?providerId=… — hasKey + masked (never the value). */
+export async function fetchVisionKey(providerId: string): Promise<{
+  providerId: string;
+  hasKey: boolean;
+  masked: string | null;
+}> {
+  return request<{ providerId: string; hasKey: boolean; masked: string | null }>(
+    `/computer-use/vision-key?providerId=${encodeURIComponent(providerId)}`,
+  );
+}
+
+/** PUT /computer-use/vision-key — paste the dedicated vision key (web-mode;
+ * the packaged app writes the durable credential via Tauri store_provider_key). */
+export async function setVisionKey(providerId: string, value: string): Promise<void> {
+  await request("/computer-use/vision-key", {
+    method: "PUT",
+    json: { providerId, value },
+  });
+}
+
+/** DELETE /computer-use/vision-key — clear the slot. */
+export async function clearVisionKey(providerId: string): Promise<void> {
+  await request(`/computer-use/vision-key?providerId=${encodeURIComponent(providerId)}`, {
+    method: "DELETE",
+  });
+}
+
+/* ── Skills (the owner's "multiple skills") ───────────────────────────────── */
+
+export interface SkillRecord {
+  id: string;
+  name: string;
+  description: string;
+  body: string;
+  source: "builtin" | "user";
+  enabled: boolean;
+  sortOrder: number;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export async function listSkills(): Promise<SkillRecord[]> {
+  const body = await request<{ skills: SkillRecord[] }>("/skills");
+  return body.skills;
+}
+
+export async function createSkill(input: {
+  name: string;
+  description?: string;
+  body?: string;
+  enabled?: boolean;
+}): Promise<SkillRecord> {
+  return request<SkillRecord>("/skills", { method: "POST", json: input });
+}
+
+export async function updateSkill(
+  id: string,
+  patch: { name?: string; description?: string; body?: string; enabled?: boolean; sortOrder?: number },
+): Promise<SkillRecord> {
+  return request<SkillRecord>(`/skills/${id}`, { method: "PATCH", json: patch });
+}
+
+export async function deleteSkill(id: string): Promise<void> {
+  await request(`/skills/${id}`, { method: "DELETE" });
+}
+
+/* ── MCP servers (the owner's "MCP servers too") ─────────────────────────── */
+
+export interface McpServerRecord {
+  id: string;
+  name: string;
+  command: string;
+  args: string[];
+  env: Record<string, string>;
+  enabled: boolean;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export async function listMcpServers(): Promise<McpServerRecord[]> {
+  const body = await request<{ servers: McpServerRecord[] }>("/mcp");
+  return body.servers;
+}
+
+export async function createMcpServer(input: {
+  name: string;
+  command: string;
+  args?: string[];
+  env?: Record<string, string>;
+  enabled?: boolean;
+}): Promise<McpServerRecord> {
+  return request<McpServerRecord>("/mcp", { method: "POST", json: input });
+}
+
+export async function updateMcpServer(
+  id: string,
+  patch: { name?: string; command?: string; args?: string[]; env?: Record<string, string>; enabled?: boolean },
+): Promise<McpServerRecord> {
+  return request<McpServerRecord>(`/mcp/${id}`, { method: "PATCH", json: patch });
+}
+
+export async function deleteMcpServer(id: string): Promise<void> {
+  await request(`/mcp/${id}`, { method: "DELETE" });
+}
+
+export interface McpToolInfo {
+  name: string;
+  description: string;
+  inputSchema: Record<string, unknown>;
+}
+
+export async function listMcpTools(id: string): Promise<{ tools: McpToolInfo[]; error?: string }> {
+  return request<{ tools: McpToolInfo[]; error?: string }>(`/mcp/${id}/tools`);
+}
+
+export interface McpProbeResult {
+  ok: boolean;
+  toolCount?: number;
+  ms?: number;
+  error?: string;
+}
+
+export async function probeMcpServer(id: string): Promise<McpProbeResult> {
+  return request<McpProbeResult>(`/mcp/${id}/probe`, { method: "POST", json: {} });
+}
+
+/* ── Plugins (the Extensions surface: built-ins + external .mjs) ──────────── */
+
+export interface PluginInfo {
+  id: string;
+  name: string;
+  version: string;
+  category: string;
+  description: string;
+  builtIn: boolean;
+}
+
+export interface PluginCatalogTool {
+  name: string;
+  description: string;
+  category: string;
+}
+
+export interface ExternalPluginFile {
+  file: string;
+  scope: "user" | "project";
+  loaded: boolean;
+}
+
+/** GET /plugins?projectId=… — built-in plugin metadata + the tool catalog +
+ * the external .mjs file report (one surface for the Extensions view). */
+export async function listPlugins(projectId?: string): Promise<{
+  plugins: PluginInfo[];
+  tools: PluginCatalogTool[];
+  external: { files: ExternalPluginFile[]; loadedCount: number; note: string };
+}> {
+  const path = projectId ? `/plugins?projectId=${encodeURIComponent(projectId)}` : "/plugins";
+  return request(path);
 }

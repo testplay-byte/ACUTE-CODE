@@ -131,6 +131,24 @@ export const PROMPT_REGISTRY: readonly PromptSectionSpec[] = Object.freeze([
     bucket: "identity",
   },
   {
+    id: "skills",
+    description: "## SKILLS (load with read_skill) — the enabled-skill index, progressive disclosure (R61)",
+    dynamic: true, // ctx.skills-gated
+    bucket: "identity",
+  },
+  {
+    id: "computer-use",
+    description: "## COMPUTER USE (desktop control) — the always-on operating discipline when the master switch is on (R61)",
+    dynamic: true, // ctx.computerUse.enabled-gated
+    bucket: "identity",
+  },
+  {
+    id: "mcp",
+    description: "## MCP SERVER TOOLS — the mcp__<server>__<tool> naming note (R61)",
+    dynamic: true, // tool-gated (any mcp__ tool present)
+    bucket: "identity",
+  },
+  {
     id: "web-access",
     description: "## WEB ACCESS (only when web_fetch/web_search are allowed)",
     dynamic: true, // tool-gated

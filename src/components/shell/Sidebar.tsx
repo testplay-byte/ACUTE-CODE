@@ -9,12 +9,15 @@ import {
   LayoutDashboard,
   LoaderCircle,
   MessageSquare,
+  Monitor,
   Palette,
   Pencil,
+  PlugZap,
   Plus,
   Server,
   Settings,
   SlidersHorizontal,
+  Sparkles,
   Trash2,
   Users,
   X,
@@ -235,6 +238,14 @@ const SETTINGS_SECTIONS = [
   // R34 design) never listed it, making the whole tab unreachable except by
   // hand-typing ?tab=subagents. Owners could not find the key pool at all.
   { id: "subagents", label: "Sub-agents", icon: Users },
+  // ROUND-61 (R61, owner directive): the extensibility sections — skills
+  // (multiple user-addable prompt modules), MCP servers (user-configured
+  // stdio tool servers), computer use (the desktop-control master switch
+  // + the separate vision model). Same ids as SettingsPage TABS so the
+  // ?tab= deep links line up (the R44 lesson applied at birth).
+  { id: "skills", label: "Skills", icon: Sparkles },
+  { id: "mcp", label: "MCP Servers", icon: PlugZap },
+  { id: "computeruse", label: "Computer Use", icon: Monitor },
   { id: "advanced", label: "Advanced", icon: SlidersHorizontal },
 ] as const;
 

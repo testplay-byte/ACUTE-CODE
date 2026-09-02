@@ -493,6 +493,15 @@ fn spawn_and_handshake(app: &AppHandle) -> Result<RunningSidecar, String> {
             command.env(env_name, key);
         }
     }
+    // ROUND-61 (R61): the SEPARATE vision-model keys — ACUTE_PROVIDER_<ID>_VISION
+    // from the noted vision providers (ids only in the note file; values in
+    // the credential store).
+    for (env_name, provider_id) in crate::keys::vision_env_targets() {
+        if let Some(key) = crate::keys::read_provider_key_lossy(&provider_id) {
+            injected_keys.push(format!("{provider_id} (len {})", key.len()));
+            command.env(env_name, key);
+        }
+    }
     if injected_keys.is_empty() {
         log_line("sidecar: no provider keys found in Credential Manager");
     } else {

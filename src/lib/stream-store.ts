@@ -10,6 +10,7 @@ import {
 } from "./api";
 import { useActiveStreams } from "./active-streams";
 import { getQueryClient } from "./query-client";
+import { useComputerMonitorStore } from "./computer-monitor-store";
 
 /**
  * ROUND-39 (owner: "It should keep the sessions going in the background even
@@ -949,6 +950,20 @@ function handleStreamEvent(
   }
   if (event.type === "subagent-event") {
     handleSubAgentEvent(sessionId, event);
+    return;
+  }
+  // ROUND-61 (R61): computer-use monitor frames are turn-independent too —
+  // they feed the right-sidebar Computer panel + the floating mini window
+  // live (the owner: "a mini window… details and their stats while the
+  // agent is using computers"), whether or not a liveTurn exists (a
+  // background turn still updates the monitor). One frame per tool
+  // execution, emitted at dispatch time by the computer-use plugin.
+  if (event.type === "computer-use") {
+    useComputerMonitorStore.getState().pushLiveEvent({
+      kind: event.kind,
+      tool: event.tool,
+      code: event.code,
+    });
     return;
   }
 

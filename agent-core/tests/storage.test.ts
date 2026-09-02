@@ -153,6 +153,10 @@ describe("openDatabase", () => {
       // ROUND-59 (R59-D): the response-rating table — good|bad per assistant
       // reply with the frozen turn-context snapshot (no FK on sessions).
       { version: 22, name: "0022_message_ratings.sql" },
+      // ROUND-61 (R61): computer use — models.supports_vision column + the
+      // skills + mcp_servers tables (the computer-use tools themselves are
+      // settings-gated, default OFF; no agent allowlist was touched).
+      { version: 23, name: "0023_computer_use.sql" },
     ]);
     expect(appliedSecond).toEqual(appliedFirst);
   });
@@ -202,6 +206,11 @@ describe("template seeding", () => {
           // via TOOL_NAMES — companions of run_command above).
           "job_status",
           "job_stop",
+          // ROUND-61 (R61): the skills loader — a GLOBAL capability seeded
+          // via TOOL_NAMES (existing DBs get it appended by migration 0023;
+          // the computer-use tools are deliberately NOT here: they are the
+          // settings-gated surface, not allowlist vocabulary).
+          "read_skill",
         ]);
         expect(row.memory_policy).toBe("on-start");
         expect(row.max_turns).toBe(40);

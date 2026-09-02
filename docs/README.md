@@ -1,4 +1,4 @@
-<!-- last-reviewed: 2026-08-30 round-54 -->
+<!-- last-reviewed: 2026-09-02 round-61 -->
 # ACUTE-CODE — Documentation Index
 
 One line per document. **Reading order for a new session:** `HANDOFF.md` →
@@ -20,11 +20,13 @@ file the discrepancy and fix the doc in the same round.
 - [`runbooks/AGENT-BOOTSTRAP-PROMPT.md`](runbooks/AGENT-BOOTSTRAP-PROMPT.md) — the paste-once prompt to bootstrap a fresh agent
 - [`runbooks/LOCAL-PC-RUNNER.md`](runbooks/LOCAL-PC-RUNNER.md) — the owner's one-double-click launcher (credentials template is a clean paste zone since R47 — no key material ships with it)
 - [`runbooks/PUBLIC-DASHBOARD.md`](runbooks/PUBLIC-DASHBOARD.md) — the public status dashboard (separate repo), its allow/deny lists and publish flow
+- [`runbooks/COMPUTER-USE.md`](runbooks/COMPUTER-USE.md) — **the desktop-control system (R61)**: setup per platform, the settings gates (master switch / postures / vision modes), the monitor + STOP, the safety contract, the refusal catalog, the 30-tool reference, and the LIVE-VERIFICATION CHECKLIST (the backends are not yet live-verified)
+- [`runbooks/EXTENSIBILITY.md`](runbooks/EXTENSIBILITY.md) — **the four extension surfaces (R61)**: external .mjs plugins, skills (SKILL.md-style, progressive disclosure), MCP servers (stdio JSON-RPC, sanitized env), and the built-in plugin catalog — with working examples of each
 
 ## Requirements & architecture
 - [`specs/SPEC.md`](specs/SPEC.md) — master requirements (F1–F11), owner-approved
 - [`architecture/ARCHITECTURE.md`](architecture/ARCHITECTURE.md) — system design truth (topology, lifecycles, key hand-off) — *partially historical; see IMPLEMENTED-API for the shipped surface*
-- [`architecture/api/IMPLEMENTED-API.md`](architecture/api/IMPLEMENTED-API.md) — **the REST + SSE surface as actually shipped** (verified against code; since R48: sub-agent SSE frames with codes + child approvals through the parent stream, browser tickets rotating only at POST /browser/session, and the modern Windows folder picker are in the ROUND-48 section)
+- [`architecture/api/IMPLEMENTED-API.md`](architecture/api/IMPLEMENTED-API.md) — **the REST + SSE surface as actually shipped** (verified against code; each round's additions are sections — R48 sub-agent SSE/approval frames, R59 ratings/diagnostics, R60 Tauri scroll+zoom, R61 computer-use/skills/MCP/plugins routes + the `computer-use` SSE frame)
 - [`architecture/api/API.md`](architecture/api/API.md) — the full 52-operation *planned* contract (aspirational since Phase 1; WS/planned routes live here, NOT in IMPLEMENTED-API)
 - [`architecture/PROJECT-MAP.md`](architecture/PROJECT-MAP.md) — the product map & naming rules
 - [`architecture/PILLARS.md`](architecture/PILLARS.md) — the three-pillar blueprint (coding / agentic system / automation) and how they interconnect additively

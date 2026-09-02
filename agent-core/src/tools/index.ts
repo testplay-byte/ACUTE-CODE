@@ -103,6 +103,12 @@ export interface ToolDeps {
    * auto-approves ask-tier decisions (denylist-supreme refusals stay hard
    * in every mode, see approvals.ts). */
   permissionMode?: PermissionMode;
+  /** ROUND-61 (R61): the turn's main model — {providerId, modelId} of the
+   * model THIS turn runs on. The computer-use plugin reads it for vision
+   * "main" mode (use the main model for screenshots' descriptions only
+   * when its row has supports_vision = 1). Optional: bare/test builds omit
+   * it, and the vision relay then refuses main-mode honestly. */
+  mainModel?: { providerId: string; modelId: string };
 }
 
 /**

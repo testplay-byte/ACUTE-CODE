@@ -112,6 +112,7 @@ function modelConfigRow(
     inputPriceCachedPerMtok: null,
     outputPricePerMtok: null,
     supportsThinking: false,
+    supportsVision: false,
     hidden: false,
     sortOrder: 0,
     createdAt: "2026-08-30T09:00:00Z",

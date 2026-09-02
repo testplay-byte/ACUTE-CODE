@@ -28,6 +28,8 @@ import {
 } from "../storage/sessions.js";
 import type { ChatFn, ChatStepSnapshot, ChatTurnMessage, ChatTurnOutput, StreamChatFn } from "./chat.js";
 import { buildProjectSystemPrompt, readCustomRules } from "./prompts.js";
+import { listEnabledSkills } from "../storage/skills.js";
+import { getComputerUseSettings } from "../storage/computer-use.js";
 import { getIndexSummary } from "../storage/index.js";
 // ROUND-44 (R44-a): the project memory digest for prompt injection.
 import { memoryDigest } from "../storage/memory.js";
@@ -896,6 +898,14 @@ async function prepareTurn(
     // gates can widen ("full" auto-approves ask-tier decisions; the
     // denylist-supreme refusals stay hard in every mode — approvals.ts).
     permissionMode,
+    // ROUND-61 (R61): the turn's main model for the computer-use vision
+    // relay ("main" mode = describe screenshots with THIS model when its
+    // row supports vision). providerId/model are resolved above (override
+    // or agent defaults) — both non-null by the gate earlier in prepareTurn.
+    mainModel: {
+      providerId: agent.providerId,
+      modelId: modelOverride && modelOverride.trim() !== "" ? modelOverride.trim() : agent.model,
+    },
   };
   // ROUND-40 → ROUND-49 (owner: "sub-agents … exactly like how the main agent
   // works. Everything about it should be the same — the only difference is
@@ -958,6 +968,19 @@ async function prepareTurn(
         // above already reflects the post-mode tool set (the tools object
         // was built from the mode-filtered allowlist).
         permissionMode,
+        // ROUND-61 (R61): the enabled-skills index (progressive disclosure —
+        // names + one-liners; bodies load via read_skill) and the
+        // computer-use master-switch state (the always-on discipline
+        // section rides the tools that are already in toolNames — the
+        // plugin only registers them when the switch is on).
+        skills: listEnabledSkills(db).map((skill) => ({
+          name: skill.name,
+          description: skill.description,
+        })),
+        computerUse: (() => {
+          const cu = getComputerUseSettings(db);
+          return { enabled: cu.enabled, posture: cu.permission };
+        })(),
       })
     : agent.systemPrompt;
   return {

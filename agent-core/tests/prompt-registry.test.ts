@@ -41,11 +41,14 @@ function tempRoot(): string {
  * (every conditional gate open) so the composition pin sees every id. The
  * rootPath is the golden's FIXED path (never exists on disk → no overrides
  * load, and the identity/environment lines match the fixture byte-for-byte). */
-const GOLDEN_ROOT = "/tmp/acute-r59f-golden-root";
+const GOLDEN_ROOT = "/tmp/acute-r61-golden-root";
 const FULL_CTX = {
   projectName: "GoldenProject",
   rootPath: GOLDEN_ROOT,
-  toolNames: [...TOOL_NAMES],
+  // read_skill is IN TOOL_NAMES since R61 (the skills loader is a global
+  // capability) — appending it here would duplicate it; only the dynamic
+  // MCP bridge name is appended (it is never static vocabulary).
+  toolNames: [...TOOL_NAMES, "mcp__demo__echo"],
   customRules: "Always write tests first.",
   maxTurns: 37,
   indexSummary: {
@@ -61,6 +64,14 @@ const FULL_CTX = {
   } as Parameters<typeof buildProjectSystemPrompt>[0]["indexSummary"],
   memoryDigest: "- [fact] The build is pnpm-based.",
   permissionMode: "plan" as const,
+  // ROUND-61 (R61): the new gates — the skills index (progressive
+  // disclosure) + the computer-use master switch, both open so the
+  // COMPLETENESS pin sees every id.
+  skills: [
+    { name: "computer-use", description: "Observe and actuate the desktop GUI: accessibility-first element actions with screenshot-coordinate fallback." },
+    { name: "demo-skill", description: "A demonstration user skill." },
+  ],
+  computerUse: { enabled: true, posture: "act" as const },
 };
 
 afterAll(() => {
@@ -104,16 +115,19 @@ describe("PROMPT_REGISTRY (R59-F)", () => {
   });
 
   it("BYTE-IDENTITY: no override files → the composition equals the pre-R59-F golden byte-for-byte", () => {
-    // Golden generated from the PRE-R59-F prompts.ts (13643 bytes, all 20
-    // sections, every dynamic field pinned to fixed values). If this fails
-    // after a deliberate prompts.ts change, regenerate deliberately.
+    // Golden regenerated in R61 (deliberately — the prompts.ts core
+    // strengthening + the skills/computer-use/mcp sections changed the
+    // composition; every dynamic field pinned to fixed values; the
+    // REGENERATION script lives in this test file's header comment below).
+    // If this fails after a deliberate prompts.ts change, regenerate
+    // deliberately and say so in the round log.
     // R59 CI fix: normalize \r\n → \n on BOTH sides before comparing — the
     // fixture is committed with LF, but a Windows checkout with autocrlf
     // rewrites it to CRLF (the R57 CI lesson: never let line endings decide
     // a byte-identity test). .gitattributes additionally pins the fixture
     // to LF, but the code-side normalization keeps the test honest even in
     // working copies with local git overrides.
-    const golden = readFileSync(join(import.meta.dirname, "fixtures", "prompt-golden-r59f.txt"), "utf8").replace(/\r\n/g, "\n");
+    const golden = readFileSync(join(import.meta.dirname, "fixtures", "prompt-golden-r61.txt"), "utf8").replace(/\r\n/g, "\n");
     const composed = buildProjectSystemPrompt(FULL_CTX).replace(/\r\n/g, "\n");
     expect(composed).toBe(golden);
   });

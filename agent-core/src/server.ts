@@ -118,6 +118,29 @@ import {
 // knowledge (facts/decisions/preferences) with REST read/delete for the
 // right-sidebar Memory tab. Saves happen via the memory_save tool.
 import { deleteMemory, listMemories, memoryDigest } from "./storage/memory.js";
+// ROUND-61 (R61): computer use, skills, MCP — the extension surface.
+import {
+  getComputerUseSettings,
+  setComputerUseSettings,
+  visionKeyringId,
+} from "./storage/computer-use.js";
+import { getComputerSession } from "./computer/session.js";
+import { backendForPlatform, realRunner } from "./computer/backends/index.js";
+import { listSkills, createSkill, updateSkill, deleteSkill } from "./storage/skills.js";
+import {
+  listMcpServers,
+  createMcpServer,
+  updateMcpServer,
+  deleteMcpServer,
+  getMcpServer,
+} from "./storage/mcp.js";
+import {
+  listServerTools,
+  probeServer,
+  resetServerFailure,
+  stopServer,
+} from "./mcp/manager.js";
+import { builtInToolCatalog, BUILT_IN_PLUGINS, externalPluginFileReport } from "./tools/registry.js";
 import { getIndexSummary, searchIndexSymbols } from "./storage/index.js";
 import { estimateMessageTokens, estimateTokens } from "./context.js";
 import { buildSystemPromptSections, readCustomRules } from "./agents/prompts.js";
@@ -430,6 +453,10 @@ function readModelScalarFields(
   }
   if (raw.hidden !== undefined && typeof raw.hidden !== "boolean") {
     return { ok: false, field: "hidden" };
+  }
+  // ROUND-61 (R61): the vision flag — same boolean gate as thinking.
+  if (raw.supportsVision !== undefined && typeof raw.supportsVision !== "boolean") {
+    return { ok: false, field: "supportsVision" };
   }
   return { ok: true };
 }
@@ -1272,6 +1299,7 @@ export function buildServer(options: ServerOptions): FastifyInstance {
           // re-upsert of an existing model — the "add model" flow no longer
           // wipes supportsThinking/hidden).
           supportsThinking: typeof raw.supportsThinking === "boolean" ? raw.supportsThinking : undefined,
+          supportsVision: typeof raw.supportsVision === "boolean" ? raw.supportsVision : undefined,
           hidden: typeof raw.hidden === "boolean" ? raw.hidden : undefined,
         });
         return reply.code(201).send(model);
@@ -1311,6 +1339,7 @@ export function buildServer(options: ServerOptions): FastifyInstance {
         if (typeof raw.displayName === "string") patch.displayName = raw.displayName;
         Object.assign(patch, numerics.values);
         if (typeof raw.supportsThinking === "boolean") patch.supportsThinking = raw.supportsThinking;
+        if (typeof raw.supportsVision === "boolean") patch.supportsVision = raw.supportsVision;
         if (typeof raw.hidden === "boolean") patch.hidden = raw.hidden;
         const model = updateModel(db, id, patch);
         if (model === undefined) {
@@ -3373,6 +3402,313 @@ export function buildServer(options: ServerOptions): FastifyInstance {
         const { id } = request.params as Record<string, string>;
         const stopped = abortTurn(id, "owner");
         return { ok: true, stopped };
+      });
+
+      // ── ROUND-61 (R61): COMPUTER USE — the desktop-control surface ────────
+      // The monitor ring (GET session), the UI kill switch (POST stop), the
+      // settings (GET/PUT config incl. the vision-model separation), the
+      // readiness probe, and the dedicated VISION KEY slot (the
+      // "<providerId>-vision" keyring pseudo-provider — the Tauri shell
+      // writes the durable credential + handoff; this route is the web-dev
+      // + in-session path). Same bearer wall as everything else.
+      scope.get("/computer-use/config", async () => {
+        const settings = getComputerUseSettings(db);
+        const backend = backendForPlatform();
+        return {
+          settings,
+          platform: backend.kind,
+          capabilities: backend.capabilities(),
+        };
+      });
+
+      scope.put("/computer-use/config", async (request, reply) => {
+        const body: unknown = request.body;
+        if (typeof body !== "object" || body === null || Array.isArray(body)) {
+          return reply
+            .code(400)
+            .send(errorBody("VALIDATION", "body must be a JSON object", { field: "body" }));
+        }
+        try {
+          const settings = setComputerUseSettings(db, body as Parameters<typeof setComputerUseSettings>[1]);
+          return { settings };
+        } catch (err) {
+          return reply
+            .code(400)
+            .send(errorBody("VALIDATION", String((err as Error).message), { field: "body" }));
+        }
+      });
+
+      // The monitor: session state + the newest-first event ring (the
+      // floating mini window polls this while a control session is live).
+      scope.get("/computer-use/session", async () => {
+        return getComputerSession().state();
+      });
+
+      // The UI's STOP button: the kill switch (releases a held button; all
+      // further computer-use calls refuse with kill_switch_active).
+      scope.post("/computer-use/stop", async (request) => {
+        const body = (request.body ?? {}) as Record<string, unknown>;
+        const reason =
+          typeof body.reason === "string" && body.reason.trim() !== ""
+            ? body.reason.trim().slice(0, 200)
+            : "stopped by the owner from the UI";
+        const session = getComputerSession();
+        const { releasedHeld } = session.stop(reason);
+        if (releasedHeld) {
+          // The only sanctioned auto-release (doc 08 §2): a real mouse-up
+          // at the recorded point, so the user's desktop is never left
+          // with a stuck button.
+          void backendForPlatform().rawButton(realRunner(), releasedHeld.point, false);
+        }
+        return { ok: true, reason };
+      });
+
+      // Readiness probe (request_access equivalent, for the Settings page):
+      // never pops dialogs; returns the permission report + capabilities.
+      // R61 close-out (docs-round drift fix): the report is COMPOSED into a
+      // UI-ready verdict — ok (both core capabilities granted) + issues (the
+      // report's notes + explicit denied lines) — while the raw
+      // accessibility/screenCapture/backendKind fields still ride the same
+      // object for richer consumers. The ComputerUseTab's Test readiness
+      // button reads exactly {ok, issues}.
+      scope.post("/computer-use/test", async () => {
+        const backend = backendForPlatform();
+        const report = await backend.probePermissions(realRunner());
+        const issues: string[] = [...(report.notes ?? [])];
+        if (report.accessibility === "denied") {
+          issues.push("Accessibility permission is denied — grant it in the OS privacy settings");
+        }
+        if (report.screenCapture === "denied") {
+          issues.push("Screen capture permission is denied — grant it in the OS privacy settings");
+        }
+        const verdict = {
+          ...report,
+          ok: report.accessibility === "granted" && report.screenCapture === "granted",
+          issues,
+        };
+        return { report: verdict, capabilities: backend.capabilities(), platform: backend.kind };
+      });
+
+      // The VISION KEY slot: in-memory keyring write for web-mode. The
+      // packaged app writes the durable credential via the Tauri
+      // store_provider_key command (providerId "<id>-vision") which ALSO
+      // POSTs the internal handoff route. Values never appear in ANY
+      // response — hasKey + masked only.
+      scope.get("/computer-use/vision-key", async (request, reply) => {
+        const query = request.query as Record<string, string | undefined>;
+        const providerId = query.providerId;
+        if (typeof providerId !== "string" || !/^[a-z0-9_-]+$/.test(providerId)) {
+          return reply
+            .code(400)
+            .send(errorBody("VALIDATION", "providerId must be a lowercase slug", { field: "query.providerId" }));
+        }
+        const slotId = visionKeyringId(providerId);
+        const value = keyring.get(slotId);
+        return {
+          providerId,
+          hasKey: value !== undefined,
+          masked: value !== undefined ? `${value.slice(0, 10)}…${value.slice(-4)}` : null,
+        };
+      });
+
+      scope.put("/computer-use/vision-key", async (request, reply) => {
+        const body: unknown = request.body;
+        if (typeof body !== "object" || body === null) {
+          return reply
+            .code(400)
+            .send(errorBody("VALIDATION", "body must be a JSON object", { field: "body" }));
+        }
+        const raw = body as Record<string, unknown>;
+        const providerId = raw.providerId;
+        const value = raw.value;
+        if (typeof providerId !== "string" || !/^[a-z0-9_-]+$/.test(providerId)) {
+          return reply
+            .code(400)
+            .send(errorBody("VALIDATION", "providerId must be a lowercase slug", { field: "body.providerId" }));
+        }
+        if (typeof value !== "string" || value.trim() === "") {
+          return reply
+            .code(400)
+            .send(errorBody("VALIDATION", "value must be a non-empty string", { field: "body.value" }));
+        }
+        keyring.set(visionKeyringId(providerId), value.trim());
+        return reply.code(204).send();
+      });
+
+      scope.delete("/computer-use/vision-key", async (request, reply) => {
+        const query = request.query as Record<string, string | undefined>;
+        const providerId = query.providerId;
+        if (typeof providerId !== "string" || !/^[a-z0-9_-]+$/.test(providerId)) {
+          return reply
+            .code(400)
+            .send(errorBody("VALIDATION", "providerId must be a lowercase slug", { field: "query.providerId" }));
+        }
+        keyring.set(visionKeyringId(providerId), "");
+        return reply.code(204).send();
+      });
+
+      // ── ROUND-61 (R61): SKILLS — the owner's multiple-skills surface ─────
+      scope.get("/skills", async () => {
+        return { skills: listSkills(db) };
+      });
+
+      scope.post("/skills", async (request, reply) => {
+        const body: unknown = request.body;
+        if (typeof body !== "object" || body === null) {
+          return reply
+            .code(400)
+            .send(errorBody("VALIDATION", "body must be a JSON object", { field: "body" }));
+        }
+        try {
+          const skill = createSkill(db, body as Parameters<typeof createSkill>[1]);
+          return reply.code(201).send(skill);
+        } catch (err) {
+          return reply
+            .code(400)
+            .send(errorBody("VALIDATION", String((err as Error).message), { field: "body" }));
+        }
+      });
+
+      scope.patch("/skills/:id", async (request, reply) => {
+        const { id } = request.params as Record<string, string>;
+        const body: unknown = request.body;
+        if (typeof body !== "object" || body === null) {
+          return reply
+            .code(400)
+            .send(errorBody("VALIDATION", "body must be a JSON object", { field: "body" }));
+        }
+        try {
+          const skill = updateSkill(db, id, body as Parameters<typeof updateSkill>[2]);
+          if (skill === undefined) {
+            return reply.code(404).send(errorBody("NOT_FOUND", `no skill with id ${id}`));
+          }
+          return skill;
+        } catch (err) {
+          return reply
+            .code(400)
+            .send(errorBody("VALIDATION", String((err as Error).message), { field: "body" }));
+        }
+      });
+
+      scope.delete("/skills/:id", async (request, reply) => {
+        const { id } = request.params as Record<string, string>;
+        const result = deleteSkill(db, id);
+        if (!result.ok) {
+          return reply
+            .code(result.note === "no such skill" ? 404 : 409)
+            .send(errorBody(result.note === "no such skill" ? "NOT_FOUND" : "CONFLICT", result.note ?? "cannot delete"));
+        }
+        return reply.code(204).send();
+      });
+
+      // ── ROUND-61 (R61): MCP SERVERS — owner-configured stdio extensions ─
+      // Commands are configuration, never model-writable; the manager
+      // sanitizes the child env (no ACUTE_PROVIDER_* leaks).
+      scope.get("/mcp", async () => {
+        const servers = listMcpServers(db);
+        return { servers };
+      });
+
+      scope.post("/mcp", async (request, reply) => {
+        const body: unknown = request.body;
+        if (typeof body !== "object" || body === null) {
+          return reply
+            .code(400)
+            .send(errorBody("VALIDATION", "body must be a JSON object", { field: "body" }));
+        }
+        try {
+          const server = createMcpServer(db, body as Parameters<typeof createMcpServer>[1]);
+          return reply.code(201).send(server);
+        } catch (err) {
+          return reply
+            .code(400)
+            .send(errorBody("VALIDATION", String((err as Error).message), { field: "body" }));
+        }
+      });
+
+      scope.patch("/mcp/:id", async (request, reply) => {
+        const { id } = request.params as Record<string, string>;
+        const body: unknown = request.body;
+        if (typeof body !== "object" || body === null) {
+          return reply
+            .code(400)
+            .send(errorBody("VALIDATION", "body must be a JSON object", { field: "body" }));
+        }
+        try {
+          const server = updateMcpServer(db, id, body as Parameters<typeof updateMcpServer>[2]);
+          if (server === undefined) {
+            return reply.code(404).send(errorBody("NOT_FOUND", `no MCP server with id ${id}`));
+          }
+          // Config changed: drop the cached child so the next call respawns
+          // with the new command/env.
+          resetServerFailure(id);
+          return server;
+        } catch (err) {
+          return reply
+            .code(400)
+            .send(errorBody("VALIDATION", String((err as Error).message), { field: "body" }));
+        }
+      });
+
+      scope.delete("/mcp/:id", async (request, reply) => {
+        const { id } = request.params as Record<string, string>;
+        stopServer(id);
+        if (!deleteMcpServer(db, id)) {
+          return reply.code(404).send(errorBody("NOT_FOUND", `no MCP server with id ${id}`));
+        }
+        return reply.code(204).send();
+      });
+
+      // Live tools/list for ONE server (the Extensions tab's expand row).
+      scope.get("/mcp/:id/tools", async (request, reply) => {
+        const { id } = request.params as Record<string, string>;
+        const server = getMcpServer(db, id);
+        if (server === undefined) {
+          return reply.code(404).send(errorBody("NOT_FOUND", `no MCP server with id ${id}`));
+        }
+        const listed = await listServerTools(server);
+        return listed.ok
+          ? { tools: listed.tools }
+          : { tools: [], error: listed.error };
+      });
+
+      // Health probe: spawn + initialize + tools/list (honest ok/error/ms).
+      scope.post("/mcp/:id/probe", async (request, reply) => {
+        const { id } = request.params as Record<string, string>;
+        const server = getMcpServer(db, id);
+        if (server === undefined) {
+          return reply.code(404).send(errorBody("NOT_FOUND", `no MCP server with id ${id}`));
+        }
+        resetServerFailure(id);
+        const probe = await probeServer(server);
+        return probe;
+      });
+
+      // ── ROUND-61 (R61): PLUGINS — the catalog + load status ─────────────
+      // Built-ins (fixed ids + categories) + the external .mjs registry's
+      // load report (the R52 loader) + the live tool counts from the
+      // registry catalog. One place for the Extensions tab to render.
+      scope.get("/plugins", async (request) => {
+        const query = request.query as Record<string, string | undefined>;
+        const projectId = query.projectId;
+        const root =
+          projectId !== undefined ? getProject(db, projectId)?.rootPath ?? undefined : undefined;
+        // Plugin METADATA straight from the registry (id/name/version/
+        // category/description — the computer-use plugin is listed even
+        // while its master switch is off: the gate is SETTINGS, not
+        // existence). The tool-level catalog (gated plugins contribute
+        // nothing) + the external .mjs file report complete the picture.
+        const plugins = BUILT_IN_PLUGINS.map((plugin) => ({
+          id: plugin.id,
+          name: plugin.name,
+          version: plugin.version,
+          category: plugin.category,
+          description: plugin.description,
+          builtIn: true,
+        }));
+        const catalog = await builtInToolCatalog();
+        const external = externalPluginFileReport(root);
+        return { plugins, tools: catalog, external };
       });
 
       // ---- ROUND-52 (R52-a): background jobs — the agent's run_command

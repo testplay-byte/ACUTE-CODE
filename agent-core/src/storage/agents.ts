@@ -53,6 +53,13 @@ export const TOOL_NAMES = [
   // recur — the agent needs these on day one).
   "job_status",
   "job_stop",
+  // ROUND-61 (R61): the skills progressive-disclosure loader (read_skill).
+  // The skills SYSTEM is always-on (a global capability like todo_write);
+  // explicit-list agents can add it in the agent form. The computer-use
+  // tools are deliberately NOT here — they are a SETTINGS-GATED surface
+  // (computerUse.enabled, default OFF), not allowlist vocabulary; MCP
+  // tools are dynamic (mcp__<server>__<tool>).
+  "read_skill",
 ] as const;
 
 /** Agent JSON as served by the API: AgentRecord plus bookkeeping columns. */

@@ -6,6 +6,12 @@ import { isTauri } from "../../lib/sidecar";
 import { AcuteLogo, Sidebar } from "./Sidebar";
 import { NotificationStreamStarter } from "../notifications/NotificationStreamStarter";
 import { Toaster } from "../notifications/Toaster";
+// ROUND-61 (R61): the floating computer-use mini window (the owner's
+// directive: "in a mini window it will show the details and their stats
+// while the agent is using computers"). Mounted ONCE here — app-global,
+// independent of the route; it renders only while the monitor store's
+// miniWindowOpen flag is set (the Computer panel's Pop out button).
+import { ComputerMiniWindow } from "../ComputerMiniWindow";
 
 /**
  * App shell (round-32 redesign per the owner-approved design
@@ -57,6 +63,9 @@ export function AppShell() {
           the app root so toasts surface regardless of which route is
           active, even when the sidebar (and thus the bell) is hidden. */}
       <Toaster />
+      {/* ROUND-61 (R61): the draggable computer-use mini window — the live
+          monitor + STOP kill switch while the agent drives the desktop. */}
+      <ComputerMiniWindow />
 
       {/* Dot grid — wizard pattern (28px, subtle) */}
       <div

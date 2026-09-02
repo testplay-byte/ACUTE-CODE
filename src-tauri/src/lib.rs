@@ -29,6 +29,10 @@ pub fn run() {
             sidecar::sidecar_log_tail,
             keys::store_provider_key,
             keys::provider_key_status,
+            // ROUND-61 (R61): the separate vision-model key slot (Settings →
+            // Computer Use): credential write + note + in-memory handoff.
+            keys::store_vision_key,
+            keys::vision_key_status,
             dialogs::pick_folder,
             // ROUND-50 (R50-c1): the composer's multi-file "Add Context"
             // picker — same parenting/topmost pattern as pick_folder.

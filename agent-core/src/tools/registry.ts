@@ -47,6 +47,10 @@ import { browserPlugin } from "./plugins/browser.js";
 import { memoryPlugin } from "./plugins/memory.js";
 import { todoPlugin } from "./plugins/todo.js";
 import { delegationPlugin } from "./plugins/delegation.js";
+// ROUND-61 (R61): computer use, skills, MCP — the extension surface.
+import { computerUsePlugin } from "./plugins/computer-use.js";
+import { skillsPlugin } from "./plugins/skills.js";
+import { mcpPlugin } from "./plugins/mcp.js";
 
 /** Every tool's uniform result (moved here from tools/index.ts — the
  * registry is the types home now; index.ts re-exports for back-compat). */
@@ -105,6 +109,13 @@ export const BUILT_IN_PLUGINS: readonly PluginDefinition[] = [
   memoryPlugin,
   todoPlugin,
   delegationPlugin,
+  // ROUND-61 (R61): the computer-use surface is SETTINGS-GATED (default
+  // OFF — createTools returns [] until the owner flips the master switch);
+  // skills' read_skill is always on (observation); MCP bridges only
+  // owner-configured enabled servers.
+  computerUsePlugin,
+  skillsPlugin,
+  mcpPlugin,
 ];
 
 /** Catalog row for UI/docs (metadata only — never an execute handle). */
@@ -365,6 +376,47 @@ export async function loadExternalPlugins(
 /** Test helper: drop the external-plugin cache (between test cases). */
 export function clearExternalPluginCacheForTest(): void {
   externalCache.clear();
+}
+
+/**
+ * ROUND-61 (R61): the external-plugin FILE report for the Extensions tab —
+ * which .mjs files exist in the user dir (always) and the project dir (when
+ * a root is given), each with a loaded:true/false bit (loaded = the load
+ * cache holds plugins for that scope; load ERRORS are in the sidecar log —
+ * the honest caveat the tab renders). Pure fs scan + the cached count; no
+ * double-import.
+ */
+export function externalPluginFileReport(root?: string): {
+  files: Array<{ file: string; scope: "user" | "project"; loaded: boolean }>;
+  loadedCount: number;
+  note: string;
+} {
+  const files: Array<{ file: string; scope: "user" | "project"; loaded: boolean }> = [];
+  const dirs: Array<[string, "user" | "project"]> = [
+    [join(homedir(), ".acute", "plugins"), "user"],
+  ];
+  if (root !== undefined && root !== "") {
+    dirs.push([join(root, ".acute", "plugins"), "project"]);
+  }
+  let loadedCount = 0;
+  for (const [dir, scope] of dirs) {
+    let names: string[] = [];
+    try {
+      names = readdirSync(dir).filter((f) => f.endsWith(".mjs"));
+    } catch {
+      continue; // no dir — the common case
+    }
+    const cached = externalCache.get(`${scope}::${dir}`);
+    if (cached !== undefined) loadedCount += cached.length;
+    for (const file of names) {
+      files.push({ file: join(dir, file), scope, loaded: cached !== undefined && cached.length > 0 });
+    }
+  }
+  return {
+    files,
+    loadedCount,
+    note: "load errors (name collisions, schema violations) are in the sidecar log — one broken plugin never blocks the rest",
+  };
 }
 
 /** Read the external-plugins scope from settings (storage/settings.ts keeps

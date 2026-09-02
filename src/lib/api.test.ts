@@ -604,6 +604,7 @@ describe("provider management (ROUND-47 R47-c1)", () => {
     inputPriceCachedPerMtok: null,
     outputPricePerMtok: 0,
     supportsThinking: false,
+    supportsVision: false,
     hidden: false,
     sortOrder: 0,
     createdAt: "2026-08-22T09:00:00Z",

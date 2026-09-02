@@ -83,7 +83,8 @@ function writeFixturePlugin(dir: string, file: string, toolName: string): void {
 
 describe("ROUND-52 (R52-f): the plugin registry", () => {
   it("every built-in plugin declares a valid id/category and its tools follow the name grammar", async () => {
-    expect(BUILT_IN_PLUGINS.length).toBe(9);
+    // ROUND-61 (R61): + computer-use + skills + mcp = 12.
+    expect(BUILT_IN_PLUGINS.length).toBe(12);
     // Declaration-stub deps (same shape builtInToolCatalog uses) so the
     // delegation plugin — gated on keyring/chat PRESENCE — also declares.
     const { ProviderKeyring } = await import("../src/providers/registry");
@@ -98,10 +99,18 @@ describe("ROUND-52 (R52-f): the plugin registry", () => {
         toolCalls: [],
       })) as unknown as import("../src/agents/chat").ChatFn,
     };
+    // ROUND-61: computer-use (settings default OFF) and mcp (no servers
+    // configured) LEGITIMATELY declare zero tools on a fresh database —
+    // the settings/db gates, not broken plugins. Everything else declares.
+    const zeroByDesign = new Set(["core-computer-use", "core-mcp"]);
     for (const plugin of BUILT_IN_PLUGINS) {
       expect(plugin.id).toMatch(/^core-[a-z-]+$/);
       expect(plugin.category).toMatch(/^[a-z]+$/);
       const tools = await plugin.createTools({ root: tempDir, toolDeps: stubDeps });
+      if (zeroByDesign.has(plugin.id)) {
+        expect(tools).toHaveLength(0);
+        continue;
+      }
       expect(tools.length).toBeGreaterThan(0);
       for (const tool of tools) {
         expect(tool.name).toMatch(/^[a-z][a-z0-9_]{1,31}$/);
@@ -109,6 +118,9 @@ describe("ROUND-52 (R52-f): the plugin registry", () => {
         expect(typeof tool.execute).toBe("function");
       }
     }
+    // The skills plugin declares read_skill on a live db.
+    const skills = await BUILT_IN_PLUGINS.find((p) => p.id === "core-skills")?.createTools({ root: tempDir, toolDeps: stubDeps });
+    expect(skills?.map((t) => t.name)).toEqual(["read_skill"]);
     // Without deps the delegation plugin declares NOTHING (the keyring/chat
     // gate — the historical R36 semantics preserved through the registry).
     const bare = await BUILT_IN_PLUGINS[BUILT_IN_PLUGINS.length - 1].createTools({ root: tempDir });

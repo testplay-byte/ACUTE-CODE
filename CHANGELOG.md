@@ -1,4 +1,4 @@
-<!-- last-reviewed: 2026-09-01 round-60 -->
+<!-- last-reviewed: 2026-09-02 round-61 -->
 # Changelog
 
 All notable changes to ACUTE-CODE are documented here. Entries are written for
@@ -11,10 +11,96 @@ version number is single-sourced from the root `package.json`
 
 ## [Unreleased]
 
-Planned next: installer code-signing (SmartScreen), ratings-driven prompt
-tuning, the deepseek-harness future candidates (compaction
-pressure-trigger, continuable sub-agent children), the Files-tab polish,
-agent web-app-testing tools.
+Planned next: live verification of computer use on the owner's real
+machines (the checklist in `docs/runbooks/COMPUTER-USE.md`), installer
+code-signing (SmartScreen), ratings-driven prompt tuning, the
+deepseek-harness future candidates (compaction pressure-trigger,
+continuable sub-agent children), the Files-tab polish, agent
+web-app-testing tools.
+
+## [0.61.0] - 2026-09-02
+
+Round 61 — the computer-use + extensibility round. The agent can now
+observe and actuate the real desktop GUI (30 gated tools, receipts,
+fail-closed refusals, an enforced kill switch, an audit journal), with a
+SEPARATELY-configurable vision model; plus the owner's extensibility asks:
+user skills, MCP servers, and the settings tabs that manage them all.
+
+### Added
+
+- **Computer use — the agent drives your real desktop** ("give the user
+  the option to turn on and off the computer use"): OFF by default; when
+  you flip the master switch the agent gains 30 tools that read the
+  accessibility tree (a11y-first, background-safe element actions) and
+  fall back to screenshot coordinates. Three postures: **observe**
+  (read-only tools only — the model never even sees a mutating schema),
+  **act** (recommended — real-input actions like typing, drags, and
+  coordinate clicks ask your approval first, through the same approval
+  dialogs as run_command), and **auto** (no per-action prompts). Actions
+  return receipts, never promises; everything the host refuses comes back
+  as a NAMED refusal with the exact recovery step (22 codes, from
+  `element_stale` to `frontmost_pid_mismatch` to `kill_switch_active`).
+  Works on Windows (PowerShell + UI Automation, no extra deps), macOS
+  (osascript + Accessibility/Screen Recording permissions), and Linux X11
+  (xdotool/wmctrl/scrot/xclip + AT-SPI). Honest caveat, stated in the
+  runbook: the logic is fully unit-tested but NO backend has been
+  live-verified on a real display yet — follow the LIVE-VERIFICATION
+  CHECKLIST in `docs/runbooks/COMPUTER-USE.md` before relying on it.
+- **The separate vision model** (the owner: "for the vision we are
+  utilizing a separate model… the provider completely separately"): a new
+  Vision card in Settings → Computer Use with three modes — **off**
+  (default), **separate** (pick any provider + model and paste that
+  model's OWN API key into the dedicated key slot — masked, never shown
+  in full), and **main** (use the turn's model, only when its row is
+  marked supports-vision — the new eye toggle flips that flag per model
+  row). The agent uses vision when you ask it to describe a screenshot
+  (`describe:true`); it is never called silently.
+- **The computer monitor** ("in a mini window it will show the details and
+  their stats while the agent is using computers"): a new **Computer tab**
+  in the right sidebar (status chip, live event feed with refusal codes,
+  action/observation/vision stats, elapsed clock) plus a **floating
+  draggable mini window** you can pop out anywhere — both fed live by
+  per-execution stream events, and both carrying the **STOP kill switch**:
+  one press and every further computer-use call is refused, with any held
+  mouse button physically released.
+- **The audit journal**: every computer-use call is appended to
+  `<project>/.acute/computer-use/audit.jsonl` with credentials scrubbed,
+  clipboard/typed text redacted to length markers, and screenshots never
+  journaled (frame ids only).
+- **Skills — the ability to add multiple**: Settings → Skills manages
+  SKILL.md-style capability modules with progressive disclosure — each
+  enabled skill's name + one-line description rides the system prompt,
+  and the full body loads on demand via the new `read_skill` tool (the
+  built-in `computer-use` skill ships seeded; built-ins can be edited or
+  disabled but not deleted; user skills are full CRUD).
+- **MCP servers — the ability to add MCP servers too**: Settings → MCP
+  configures stdio Model Context Protocol servers (name/command/args/env,
+  probe button, expandable live tools list). Enabled servers' tools join
+  the agent's toolset as `mcp__<server>__<tool>`; child processes run with
+  a sanitized environment — no ACUTE credential can ever reach an MCP
+  server. One broken server never breaks a turn.
+- **A new SYSTEM-PROMPT discipline** ("improve its tool calling skill
+  using"): three tool-discipline rules (read tool errors fully before
+  reacting; pick the most specific tool; never fabricate results), a
+  faithfulness rule (report outcomes honestly — a truthful failure beats
+  a confident fiction), a closing contract (state what you did, what you
+  verified and how, and any follow-up), plus SKILLS / COMPUTER USE / MCP
+  SERVER TOOLS sections that appear exactly when those surfaces are live.
+
+### Changed
+
+- **`read_skill` joins the tool vocabulary** (24 allowlisted names, was
+  23): template and default agents' allowlists gain it via migration
+  0023; explicitly-curated agent allowlists are untouched (their authors
+  can add it in the agent form).
+- The plugin registry grows to **12 built-in plugins** (computer-use,
+  skills, MCP added); `GET /plugins` lists them all with the live tool
+  catalog and the external `.mjs` file report.
+- Test reality: **1491 tests in 102 files** (was 1348/91); agent-core
+  alone 786/786 in 48 files. Migration `0023_computer_use.sql`
+  (`models.supports_vision` + `skills` + `mcp_servers` tables +
+  `read_skill` allowlist append) is applied on upgrade — no existing
+  agent's behavior changes until you turn the new switches on.
 
 ## [0.60.0] - 2026-09-01
 

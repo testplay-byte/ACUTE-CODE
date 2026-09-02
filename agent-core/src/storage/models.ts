@@ -19,6 +19,11 @@ export interface ModelRecord {
   inputPriceCachedPerMtok: number | null;
   outputPricePerMtok: number | null;
   supportsThinking: boolean;
+  /** ROUND-61 (R61): image-input modality — the vision-relay gate for
+   * "main" vision mode (computerUse.vision.mode = "main" uses the turn's
+   * model only when this is true). Prefilled from the ROUND-43 catalog's
+   * supportsVision on insert; editable per row like supportsThinking. */
+  supportsVision: boolean;
   hidden: boolean;
   sortOrder: number;
   createdAt: string;
@@ -34,6 +39,7 @@ export interface ModelInput {
   inputPriceCachedPerMtok?: number | null;
   outputPricePerMtok?: number | null;
   supportsThinking?: boolean;
+  supportsVision?: boolean;
   hidden?: boolean;
   sortOrder?: number;
 }
@@ -49,6 +55,7 @@ interface ModelRow {
   input_price_cached_per_mtok: number | null;
   output_price_per_mtok: number | null;
   supports_thinking: number;
+  supports_vision: number;
   hidden: number;
   sort_order: number;
   created_at: string;
@@ -67,6 +74,7 @@ function toModel(row: ModelRow): ModelRecord {
     inputPriceCachedPerMtok: row.input_price_cached_per_mtok,
     outputPricePerMtok: row.output_price_per_mtok,
     supportsThinking: row.supports_thinking === 1,
+    supportsVision: row.supports_vision === 1,
     hidden: row.hidden === 1,
     sortOrder: row.sort_order,
     createdAt: row.created_at,
@@ -115,7 +123,8 @@ export function upsertModel(
         input_price_per_mtok = @inputPricePerMtok,
         input_price_cached_per_mtok = @inputPriceCachedPerMtok,
         output_price_per_mtok = @outputPricePerMtok,
-        supports_thinking = @supportsThinking, hidden = @hidden,
+        supports_thinking = @supportsThinking, supports_vision = @supportsVision,
+        hidden = @hidden,
         sort_order = @sortOrder, updated_at = @updatedAt
       WHERE id = @id`,
     ).run({
@@ -126,6 +135,7 @@ export function upsertModel(
       inputPriceCachedPerMtok: keep(input.inputPriceCachedPerMtok, existing.input_price_cached_per_mtok),
       outputPricePerMtok: keep(input.outputPricePerMtok, existing.output_price_per_mtok),
       supportsThinking: (input.supportsThinking ?? existing.supports_thinking === 1) ? 1 : 0,
+      supportsVision: (input.supportsVision ?? existing.supports_vision === 1) ? 1 : 0,
       hidden: (input.hidden ?? existing.hidden === 1) ? 1 : 0,
       sortOrder: keep(input.sortOrder, existing.sort_order),
       updatedAt: now,
@@ -139,11 +149,11 @@ export function upsertModel(
     `INSERT INTO models (
       id, provider_id, model_id, display_name, context_window, max_output_tokens,
       input_price_per_mtok, input_price_cached_per_mtok, output_price_per_mtok,
-      supports_thinking, hidden, sort_order, created_at, updated_at
+      supports_thinking, supports_vision, hidden, sort_order, created_at, updated_at
     ) VALUES (
       @id, @providerId, @modelId, @displayName, @contextWindow, @maxOutputTokens,
       @inputPricePerMtok, @inputPriceCachedPerMtok, @outputPricePerMtok,
-      @supportsThinking, @hidden, @sortOrder, @createdAt, @updatedAt
+      @supportsThinking, @supportsVision, @hidden, @sortOrder, @createdAt, @updatedAt
     )`,
   ).run({
     id,
@@ -156,6 +166,11 @@ export function upsertModel(
     inputPriceCachedPerMtok: input.inputPriceCachedPerMtok ?? null,
     outputPricePerMtok: input.outputPricePerMtok ?? null,
     supportsThinking: (input.supportsThinking ?? false) ? 1 : 0,
+    // Catalog prefill: when the caller leaves the flag unset on INSERT, the
+    // ROUND-43 catalog's image-modality bit decides (the user can always
+    // override via PATCH). Absent from the catalog → false (honest default).
+    supportsVision:
+      (input.supportsVision ?? getCatalogModel(input.modelId)?.supportsVision ?? false) ? 1 : 0,
     hidden: (input.hidden ?? false) ? 1 : 0,
     sortOrder: input.sortOrder ?? 0,
     createdAt: now,

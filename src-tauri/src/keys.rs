@@ -49,6 +49,147 @@ pub(crate) fn provider_key_env_targets() -> [(&'static str, &'static str); 4] {
     ]
 }
 
+/// ROUND-61 (R61): the SEPARATE VISION-MODEL key — the owner's directive:
+/// "for the vision we are utilizing a separate model… configure the API for
+/// that model and the provider completely separately." The vision key rides
+/// the SAME conventions as every other key: credential target
+/// `ACUTE-CODE/provider/<providerId>-vision`, sidecar env
+/// `ACUTE_PROVIDER_<ID>_VISION` (the keyring's derivation for the
+/// pseudo-provider "<providerId>-vision"), the same store→handoff flow.
+/// The KEY VALUE lives ONLY in the OS credential store — this file records
+/// provider ID SLUGS (not secrets) so the spawn-time env injection can find
+/// them without enumerating the whole credential store.
+fn vision_provider_note_path() -> std::path::PathBuf {
+    dirs_or_home().join(".acute").join("vision-providers.txt")
+}
+
+/// The home dir without extra crates (the tauri path resolver is async; the
+/// synchronous env-based form is stable on Windows and Unix).
+fn dirs_or_home() -> std::path::PathBuf {
+    #[cfg(windows)]
+    {
+        // USERPROFILE is always set on Windows sessions.
+        std::path::PathBuf::from(
+            std::env::var("USERPROFILE").unwrap_or_else(|_| "C:\\Users\\Public".into()),
+        )
+    }
+    #[cfg(not(windows))]
+    {
+        std::path::PathBuf::from(std::env::var("HOME").unwrap_or_else(|_| "/tmp".into()))
+    }
+}
+
+/// Provider ids with a stored vision key (deduped, slug-validated).
+pub(crate) fn vision_provider_ids() -> Vec<String> {
+    let Ok(text) = std::fs::read_to_string(vision_provider_note_path()) else {
+        return Vec::new();
+    };
+    let mut ids: Vec<String> = Vec::new();
+    for line in text.lines() {
+        let id = line.trim();
+        if id.is_empty() {
+            continue;
+        }
+        if let Err(_) = validate_provider_id(id) {
+            continue; // corrupt line — skip, never fail the spawn
+        }
+        if !ids.iter().any(|x| x == id) {
+            ids.push(id.to_string());
+        }
+    }
+    ids
+}
+
+fn note_vision_provider(provider_id: &str) {
+    let path = vision_provider_note_path();
+    let _ = std::fs::create_dir_all(path.parent());
+    let mut ids = vision_provider_ids();
+    if !ids.iter().any(|x| x == provider_id) {
+        ids.push(provider_id.to_string());
+        let _ = std::fs::write(&path, ids.join("\n"));
+    }
+}
+
+/// The vision keyring pseudo-provider id for a real provider id.
+fn vision_slug(provider_id: &str) -> String {
+    format!("{provider_id}-vision")
+}
+
+/// The env var name for a vision pseudo-provider (the keyring derivation:
+/// ACUTE_PROVIDER_<ID_UPPER> with non-alphanumerics folded to underscores).
+/// Takes the SLUG ("<providerId>-vision") so the result is
+/// ACUTE_PROVIDER_<ID>_VISION — NEVER the provider's primary env var.
+fn vision_env_name(slug: &str) -> String {
+    let upper: String = slug
+        .to_uppercase()
+        .chars()
+        .map(|c| if c.is_ascii_alphanumeric() { c } else { '_' })
+        .collect();
+    format!("ACUTE_PROVIDER_{upper}")
+}
+
+/// ROUND-61: store the SEPARATE vision-model key. Same shape as
+/// store_provider_key: credential write → note the id for spawn-time env
+/// injection → push into the RUNNING sidecar's in-memory vault via the
+/// internal handoff route (providerId "<id>-vision") so a connection test
+/// works without a respawn. The value never appears in any log.
+#[tauri::command]
+pub fn store_vision_key(app: AppHandle, provider_id: String, key: String) -> Result<(), String> {
+    validate_provider_id(&provider_id)?;
+    if key.trim().is_empty() {
+        return Err("key must not be empty".into());
+    }
+    let slug = vision_slug(&provider_id);
+    crate::wincred::write(&canonical_target(&slug), TARGET_USER, &key)
+        .map_err(|e| format!("storing vision credential: {e}"))?;
+
+    note_vision_provider(&provider_id);
+
+    if let Some((port, token)) = sidecar::endpoint(&app) {
+        let body = serde_json::json!({
+            "providerId": slug,
+            "keyName": "vision",
+            "value": key,
+            "action": "set",
+        })
+        .to_string();
+        if let Err(e) = sidecar::http_status(
+            "POST",
+            &format!("http://127.0.0.1:{port}/internal/providers/keys"),
+            &token,
+            &body,
+        ) {
+            // The durable credential is written; the in-memory push is a
+            // convenience for immediate testing. Log WITHOUT the value.
+            crate::sidecar::log_line(&format!(
+                "sidecar: pushing vision key for {provider_id} failed: {e}"
+            ));
+        }
+    }
+    Ok(())
+}
+
+/// ROUND-61: does the vision key exist for this provider (Settings badge)?
+#[tauri::command]
+pub fn vision_key_status(provider_id: String) -> Result<bool, String> {
+    validate_provider_id(&provider_id)?;
+    let slug = vision_slug(&provider_id);
+    Ok(read_provider_key_lossy(&slug).is_some())
+}
+
+/// ROUND-61: the spawn-time env pairs for every noted vision provider
+/// ((env name, credential provider id)). Fused into the sidecar spawn loop
+/// alongside the fixed provider_key_env_targets.
+pub(crate) fn vision_env_targets() -> Vec<(String, String)> {
+    vision_provider_ids()
+        .into_iter()
+        .map(|id| {
+            let slug = vision_slug(&id);
+            (vision_env_name(&slug), slug)
+        })
+        .collect()
+}
+
 /// Provider ids are slugs everywhere in the system (API.md §8.2); enforce that
 /// here so the credential target can't be gamed with odd characters.
 fn validate_provider_id(provider_id: &str) -> Result<(), String> {

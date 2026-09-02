@@ -1,8 +1,8 @@
-<!-- last-reviewed: 2026-09-01 round-60 -->
+<!-- last-reviewed: 2026-09-02 round-61 -->
 # IMPLEMENTED API — the shipped surface
 
 **Truth = this file.** Verified against `agent-core/src/server.ts` at
-round-17 (2026-08-23), refreshed R37→R50. The aspirational full contract (52
+round-17 (2026-08-23), refreshed R37→R61. The aspirational full contract (52
 operations, WS gateway, planned routes) lives in
 [`API.md`](API.md) — anything there and
 not here **does not exist yet**. Base: `http://127.0.0.1:<port>`; dev port
@@ -28,7 +28,7 @@ vite dev origins.
 | Route | Notes |
 |---|---|
 | `GET /agents?includeTemplates=` | list; `false` excludes the 5 templates (default agent "Acute" remains — seeded at DB open, fixed id `agt_default_nova`, provider openrouter / model `z-ai/glm-5.2:free` since R43/migration-0013; was the dead `stealth/ox-alpha`) |
-| `POST /agents` | `AgentDraft` → `201`. `allowedTools` validated against the REAL tool list (`TOOL_NAMES`, **21 tools** incl. `delegate_task` + `browser_control` since R43 and `memory_save`/`memory_recall`/`memory_list` since R44) — SPEC-era names 400 (ADR-0019). Empty list = ALL tools. |
+| `POST /agents` | `AgentDraft` → `201`. `allowedTools` validated against the REAL tool list (`TOOL_NAMES`, **24 tools** — incl. `delegate_task` + `browser_control` since R43, `memory_save`/`memory_recall`/`memory_list` since R44, `job_status`/`job_stop` since R52, and `read_skill` since R61) — SPEC-era names 400 (ADR-0019). Empty list = ALL tools. The 30 computer-use tools are deliberately NOT allowlist vocabulary (settings-gated, default OFF); `mcp__<server>__<tool>` names are dynamic (server-config-derived). |
 | `GET/PATCH/DELETE /agents/:id` | PATCH bumps version; DELETE 409 `{reason:"template"}` for templates |
 | `POST /agents/:id/duplicate` | `{name?}` → `201` |
 
@@ -766,11 +766,13 @@ forever); the timeout error message tells the owner to paste the path.
 ## NOT implemented (despite API.md)
 
 `/ws` (no WS gateway — SSE per-turn instead) · `/internal/shutdown` ·
-project file writes over REST · git/skills/mcp/settings routes ·
+project file writes over REST · git/settings routes ·
 audit_log routes (approvals ARE implemented — see above) ·
 session events-backfill · connection-test/model-listing for
 non-chat-completions providers (manual model rows work) ·
-dev port is **5178**, not 8765.
+dev port is **5178**, not 8765. (The skills + MCP routes the
+pre-R61 "NOT implemented" line carried are implemented since
+ROUND-61 — see below.)
 
 ## ROUND-59 additions (implemented)
 
@@ -861,3 +863,73 @@ commands and frontend modules:
 - A saved bad-rating note renders a "noted" chip on the rating cluster
   (click → the editor reopens pre-filled); re-rating a saved bad reply
   pre-fills the editor. No route changes (the existing upsert carries it).
+
+## ROUND-61 additions (implemented)
+
+The computer-use + extensibility round (migration
+`0023_computer_use.sql`: `models.supports_vision` column, `skills` +
+`mcp_servers` tables, `read_skill` appended to template/default-agent
+allowlists — no computer-use allowlist append, the surface is
+settings-gated default OFF). Full owner guides:
+[`docs/runbooks/COMPUTER-USE.md`](../../runbooks/COMPUTER-USE.md) +
+[`docs/runbooks/EXTENSIBILITY.md`](../../runbooks/EXTENSIBILITY.md).
+
+### /api/v1/computer-use (monitor + config + the vision key)
+
+| Route | Contract |
+|---|---|
+| `GET /computer-use/config` | `{settings:{enabled,permission,vision:{mode,provider,modelId}}, platform, capabilities}` — the detected backend + its honest capability matrix |
+| `PUT /computer-use/config` | Partial patch `{enabled?, permission?, vision?{mode?, provider?, modelId?}}` (storage validates: posture/vision enums, provider slug, modelId ≤256) → `{settings}` · 400 VALIDATION |
+| `GET /computer-use/session` | The monitor snapshot: `{active, killSwitch, backendKind, startedAt, stopReason, stats:{actionsSent,actionsRefused,observations,visionCalls}, events[]}` — newest-first 200-entry ring; `stopReason` is null while running (the R61 close-out drift fix). |
+| `POST /computer-use/stop` | The UI kill switch. `{reason?}` (default "stopped by the owner from the UI") → sets the enforced kill switch, releases a session-held mouse button with a real mouse-up → `{ok:true, reason}`. Every further computer-use tool call refuses `kill_switch_active` |
+| `POST /computer-use/test` | Readiness probe (permissions + capabilities; never pops OS dialogs) → `{report, capabilities, platform}` where `report` is the PermissionReport `{accessibility, screenCapture, backendKind, notes[]}` **+ the composed UI verdict `ok` (both core capabilities granted) and `issues[]` (notes + explicit denied-permission lines)** — exactly what the ComputerUseTab's Test readiness renders (the R61 close-out drift fix). |
+| `GET /computer-use/vision-key?providerId=` | `{providerId, hasKey, masked}` — the dedicated `<providerId>-vision` keyring slot; the VALUE is never returned |
+| `PUT /computer-use/vision-key` | `{providerId (slug), value}` → keyring set → `204` (web/dev mode; the packaged app writes the durable credential via the Tauri `store_vision_key` command → credential target `ACUTE-CODE/provider/<id>-vision` + env `ACUTE_PROVIDER_<ID>_VISION` at spawn) |
+| `DELETE /computer-use/vision-key?providerId=` | Clears the slot → `204` |
+
+### /api/v1/skills + /api/v1/mcp + /api/v1/plugins
+
+| Route | Contract |
+|---|---|
+| `GET /skills` | `{skills:[SkillRecord]}` (id/name/description/body/source/enabled/sortOrder/timestamps) |
+| `POST /skills` | `{name (lowercase slug 2-64), description?, body?, enabled?}` → `201` SkillRecord · 400 (bad slug/duplicate) |
+| `PATCH /skills/:id` | Partial patch (name unique-checked) → SkillRecord · 404 · 400 |
+| `DELETE /skills/:id` | User rows `204`; built-in rows `409 CONFLICT` "built-in skills can be disabled or edited, but not deleted"; unknown `404` |
+| `GET /mcp` | `{servers:[McpServerRecord]}` (id/name/command/args/env/enabled) |
+| `POST /mcp` | `{name (slug 2-32), command, args?, env?, enabled?}` → `201` · 400 — owner-configured only, never model-writable |
+| `PATCH /mcp/:id` | Partial patch; drops the cached child so the next call respawns with the new config → record · 404 · 400 |
+| `DELETE /mcp/:id` | Kills the child process + deletes the row → `204` · 404 |
+| `GET /mcp/:id/tools` | Live `tools/list` → `{tools:[{name,description,inputSchema}]}` or `{tools:[], error}` (in-band honest error) |
+| `POST /mcp/:id/probe` | Health probe (spawn + initialize + tools/list) → `{ok, toolCount?, error?, ms}`; resets the one-strike spawn failure |
+| `GET /plugins?projectId=` | The Extensions surface: `{plugins:[12 built-ins' metadata], tools:[computed catalog], external:{files:[{file,scope,loaded}], loadedCount, note}}` — computer-use is LISTED even while gated off |
+
+### Models: `supportsVision`
+
+- `POST /providers/:id/models` + `PATCH /models/:id` accept
+  `supportsVision: boolean` (same scalar gate as `supportsThinking`; 400
+  otherwise) — prefilled from the catalog for known vision models. The
+  vision relay's "main" mode is allowed only when the turn's model row has
+  this flag; the Computer Use settings tab can flip it per row.
+
+### SSE: the `computer-use` monitor frame
+
+- `POST /sessions/:id/messages/stream` now also emits
+  `{type:"computer-use", kind, tool?, code?}` — one frame per computer-use
+  tool execution at dispatch time (`kind` = the dispatch outcome:
+  `data|receipt|refusal` shapes from the plugin; `code` carries the refusal
+  code). The stream-store routes these to the monitor store BEFORE the
+  live-turn guard, so the right-sidebar Computer panel + the floating mini
+  window update live even for background turns.
+
+### Tools: `read_skill` + `mcp__<server>__<tool>`
+
+- `read_skill` (the skills loader) joins the always-on toolset (deps-gated)
+  and `TOOL_NAMES` (24 — see /api/v1/agents above); migration 0023 appended
+  it to template + default-agent allowlists only.
+- Enabled MCP servers contribute their tools dynamically as
+  `mcp__<server>__<tool>` (grammar-checked; over-length names skipped +
+  logged). A failed/unconfigured server contributes nothing (fail-soft).
+- The 30 computer-use tools register ONLY when
+  `computerUse.enabled=true` (default OFF); the "observe" posture registers
+  just the 11 read-only ones.
+

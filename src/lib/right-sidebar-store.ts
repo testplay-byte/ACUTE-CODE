@@ -62,7 +62,13 @@ export function stateKey(projectId: string, sessionId: string | null): string {
  * ROUND-59 (R59-E): "console" — the diagnostics console (owner: "proper
  * console-like error monitoring and error handling"). A singleton tab like
  * terminal/memory/files, rendered by ConsolePanel: the frontend error bus +
- * the engine's error ring in one live, copyable, clearable list. */
+ * the engine's error ring in one live, copyable, clearable list.
+ *
+ * ROUND-61 (R61): "computer" — the computer-use monitor (the owner's
+ * directive: live details/stats while the agent uses the desktop). A
+ * singleton tab like terminal/memory, rendered by ComputerPanel: the live
+ * event ring, session stats, the kill-switch state, the STOP button, and
+ * the floating mini-window toggle. */
 export type RightSidebarTabType =
   | "file"
   | "files"
@@ -70,7 +76,8 @@ export type RightSidebarTabType =
   | "terminal"
   | "subagent"
   | "memory"
-  | "console";
+  | "console"
+  | "computer";
 
 export interface TerminalLine {
   /** ROUND-44 (R44-e): "exit" lines carry the streaming exit-code footer
@@ -168,6 +175,9 @@ interface RightSidebarState {
   /** ROUND-59 (R59-E): open (or surface) the diagnostics console tab
    * (singleton — the error console is app-global, one per sidebar). */
   openConsole: (projectId: string) => string;
+  /** ROUND-61 (R61): open (or surface) the computer-use monitor tab
+   * (singleton — the monitor is app-global, one per sidebar). */
+  openComputer: (projectId: string) => string;
   /** Open (or surface) a sub-agent tab. */
   openSubAgent: (
     projectId: string,
@@ -352,6 +362,11 @@ export const useRightSidebarStore = create<RightSidebarState>()(
       // "Console" action always surfaces the ONE console.
       openConsole: (projectId) =>
         get().addTab(projectId, { type: "console", title: "Console" }),
+      // ROUND-61 (R61): the computer-use monitor — singleton (deduped by
+      // type), so the quick-menu "Computer" action always surfaces the ONE
+      // monitor tab.
+      openComputer: (projectId) =>
+        get().addTab(projectId, { type: "computer", title: "Computer" }),
       // ROUND-48 (R48-c): the file explorer — a singleton tab (deduped by
       // type, like the terminal/memory tabs), so the quick-menu "Files"
       // action always surfaces the ONE explorer instead of stacking tabs.

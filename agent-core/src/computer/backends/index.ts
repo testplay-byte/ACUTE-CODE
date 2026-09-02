@@ -1,0 +1,94 @@
+/**
+ * ROUND-61 (R61): platform detection + backend selection + the REAL command
+ * runner. One place decides which backend lives on this host; the runner
+ * turns CommandCapsules into child processes (with timeouts, stdout capture,
+ * base64 for binary-safe channels).
+ */
+import { spawn } from "node:child_process";
+import { platform } from "node:os";
+import type { CuaBackend } from "./interface.js";
+import { linuxBackend } from "./linux.js";
+import { windowsBackend } from "./windows.js";
+import { macosBackend } from "./macos.js";
+
+export type PlatformId = "linux" | "win32" | "darwin" | "other";
+
+export function detectPlatform(): PlatformId {
+  const p = platform();
+  if (p === "linux") return "linux";
+  if (p === "win32") return "win32";
+  if (p === "darwin") return "darwin";
+  return "other";
+}
+
+/**
+ * The backend for THIS host. win32/darwin pick their native backend even
+ * when the probing tools are missing (methods fail closed per-call — the
+ * Windows backend IS the right backend on Windows regardless of PowerShell
+ * health). On Linux the linuxBackend applies. "other" platforms get the
+ * Linux backend with an honest unsupported matrix (every probe fails).
+ */
+export function backendForPlatform(id: PlatformId = detectPlatform()): CuaBackend {
+  switch (id) {
+    case "win32":
+      return windowsBackend;
+    case "darwin":
+      return macosBackend;
+    default:
+      return linuxBackend;
+  }
+}
+
+/**
+ * The REAL RunCommand: spawn the capsule, capture stdout (utf8 unless the
+ * caller asked for binary — capsules flag binary by convention: the Linux
+ * capture path pipes through base64 itself, so utf8 is always right),
+ * enforce the timeout, NEVER throws (a failed spawn is code 127-style
+ * result with stderr set). This is the only place child processes are born
+ * for computer use.
+ */
+export function realRunner(): (
+  capsule: import("./interface.js").CommandCapsule,
+) => Promise<import("./interface.js").RunResult> {
+  return (capsule) =>
+    new Promise((resolve) => {
+      const child = spawn(capsule.program, capsule.args, {
+        stdio: ["pipe", "pipe", "pipe"],
+        env: process.env,
+        windowsHide: true,
+      });
+      let stdout = "";
+      let stderr = "";
+      let timedOut = false;
+      const timer = setTimeout(() => {
+        timedOut = true;
+        child.kill("SIGKILL");
+      }, capsule.timeoutMs ?? 15000);
+
+      child.stdout.on("data", (chunk: Buffer) => {
+        stdout += chunk.toString("utf8");
+        if (stdout.length > 64 * 1024 * 1024) child.kill("SIGKILL");
+      });
+      child.stderr.on("data", (chunk: Buffer) => {
+        stderr += chunk.toString("utf8");
+        if (stderr.length > 1024 * 1024) child.kill("SIGKILL");
+      });
+      child.on("error", (err) => {
+        clearTimeout(timer);
+        resolve({ code: 127, stdout: "", stderr: String(err), timedOut });
+      });
+      child.on("close", (code) => {
+        clearTimeout(timer);
+        resolve({ code: code ?? (timedOut ? 124 : 0), stdout, stderr, timedOut });
+      });
+
+      if (capsule.stdin !== undefined) {
+        child.stdin.on("error", () => {
+          // EPIPE when the child exits early — swallow, close handles the rest.
+        });
+        child.stdin.end(capsule.stdin, "utf8");
+      } else {
+        child.stdin.end();
+      }
+    });
+}
