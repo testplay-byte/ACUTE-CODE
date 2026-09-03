@@ -1,6 +1,7 @@
-<!-- last-reviewed: 2026-09-02 round-64 -->
+<!-- last-reviewed: 2026-09-02 round-65 -->
 - [ui-iterations/round-63.md](ui-iterations/round-63.md) — the R63 desktop-update round (release-tag gap closed + the launcher's version-truth chain: registry · exe · engine, uninstall/reinstall, sha256-verified downloads)
 - [ui-iterations/round-64.md](ui-iterations/round-64.md) — the R64 capability round (the Windows computer-use fixes: JSON array collapse + EnumWindows + tiered app resolution; the always-on-top floating monitor; the chat polish backlog; per-key usage + the BPE-style estimator)
+- [ui-iterations/round-65.md](ui-iterations/round-65.md) — the R65 honesty patch (the SURFACE BOUNDARY prompt lines — embedded browser ≠ real desktop; the browser tab auto-open on agent browsing; debug mode with the execution-report switch; the Advanced cleanup + the search-engine allowlist)
 - [ui-iterations/round-62.md](ui-iterations/round-62.md) — the R62 owner-feedback round (sidebar rail, layout, browser truth + agent-browser)
 # ACUTE-CODE — Documentation Index
 

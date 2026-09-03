@@ -66,8 +66,10 @@ import {
   updateSessionTitle,
 } from "./storage/sessions.js";
 import {
+  getDebugSettings,
   getMemorySettings,
   getOrchestrationSettings,
+  setDebugSettings,
   setMemorySettings,
   setOrchestrationSettings,
 } from "./storage/settings.js";
@@ -3128,6 +3130,38 @@ export function buildServer(options: ServerOptions): FastifyInstance {
         }
         try {
           return setMemorySettings(db, {
+            ...(typeof raw.enabled === "boolean" ? { enabled: raw.enabled } : {}),
+          });
+        } catch (error) {
+          return reply.code(400).send(
+            errorBody("VALIDATION", error instanceof Error ? error.message : "invalid settings", {
+              field: "body",
+            }),
+          );
+        }
+      });
+
+      // ── ROUND-65: debug settings (the agent self-report switch) ──────
+
+      scope.get("/settings/debug", async () => {
+        return getDebugSettings(db);
+      });
+
+      scope.put("/settings/debug", async (request, reply) => {
+        const body: unknown = request.body;
+        if (typeof body !== "object" || body === null || Array.isArray(body)) {
+          return reply
+            .code(400)
+            .send(errorBody("VALIDATION", "body must be a JSON object", { field: "body" }));
+        }
+        const raw = body as Record<string, unknown>;
+        if (raw.enabled !== undefined && typeof raw.enabled !== "boolean") {
+          return reply
+            .code(400)
+            .send(errorBody("VALIDATION", "body.enabled must be a boolean", { field: "body.enabled" }));
+        }
+        try {
+          return setDebugSettings(db, {
             ...(typeof raw.enabled === "boolean" ? { enabled: raw.enabled } : {}),
           });
         } catch (error) {

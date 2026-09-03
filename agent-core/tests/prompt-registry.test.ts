@@ -72,6 +72,9 @@ const FULL_CTX = {
     { name: "demo-skill", description: "A demonstration user skill." },
   ],
   computerUse: { enabled: true, posture: "act" as const },
+  // ROUND-65 (R65): the debug-mode gate, open so the COMPLETENESS pin sees
+  // the new "debug" section id.
+  debugMode: true,
 };
 
 afterAll(() => {

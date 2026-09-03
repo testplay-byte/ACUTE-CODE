@@ -34,7 +34,7 @@ import { getIndexSummary } from "../storage/index.js";
 // ROUND-44 (R44-a): the project memory digest for prompt injection.
 import { memoryDigest } from "../storage/memory.js";
 // ROUND-49: the memory master switch (Settings → Advanced).
-import { getMemorySettings } from "../storage/settings.js";
+import { getMemorySettings, getDebugSettings } from "../storage/settings.js";
 import { getCatalogModel, lookupPricing } from "../storage/models.js";
 import { estimateMessageTokens, type ContextBudget } from "../context.js";
 // ROUND-46 (R46-b): context compaction — summarize the over-budget head
@@ -991,6 +991,11 @@ async function prepareTurn(
           const cu = getComputerUseSettings(db);
           return { enabled: cu.enabled, posture: cu.permission };
         })(),
+        // ROUND-65 (R65): the debug-mode switch (Settings → Advanced) — ON
+        // adds the "## DEBUG MODE (ON)" self-report section to THIS turn's
+        // system prompt. Read per-turn so a settings flip applies to the
+        // very next message (the permission-mode live-getter pattern).
+        debugMode: getDebugSettings(db).enabled,
       })
     : agent.systemPrompt;
   return {

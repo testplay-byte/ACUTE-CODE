@@ -2000,3 +2000,42 @@ Stage Summary:
 - Root cause fixed (the missing release pipeline step) + the launcher now PROVES the desktop app is current instead of trusting one registry string; /health tells the truth; reinstall/uninstall commands shipped.
 - Honest caveat: the launcher's Windows-only paths are code-complete + simulation-verified but live-verify on the owner's machine (headless Linux sandbox); the first ACUTE.bat app run after 0.63.0 IS that verification, with ACUTE.bat reinstall as the nuclear option and status showing the version truth.
 - ACUTE-CODE @ (this commit) v0.63.0, tagged + release verified; suites 1542 root / 801 agent-core.
+
+---
+Task ID: R64
+Agent: orchestrator (main)
+Task: R64 — the capability round: computer use actually SEES the desktop + the always-on-top STOP bar + the chat/polish backlog (the owner's first live Windows computer-use report: list_apps → [], get_app_state('Notepad') → app_not_found, list_displays → []).
+
+Work Log:
+- Root causes behind the owner's empty-enumeration report: (1) PowerShell 5.1's ConvertTo-Json PIPELINE ARRAY COLLAPSE (0-element arrays emit NOTHING, 1 element emits a bare object — every list-shaped probe silently died on the JS side); (2) Get-Process-only enumeration (cached MainWindowTitle, one window per process); (3) exact-window-title app resolution ("Notepad" never matches "Untitled - Notepad").
+- Windows backend (R64-a): shape-aware OutJson (-InputObject @($arr), literal '[]' for empty); a REAL EnumWindows walk (every visible top-level window + processName per app; list_windows returns all of a pid's windows); the 5-TIER app resolver (pid → exact title → exact processName → unique substring) whose app_not_found/ambiguous refusals carry a runningApps payload; honest empty-result diagnostics (processCount/foregroundPid/enumWindowsCount); the fake 1920×1080 display fallback REMOVED; the built-in skill rewritten around the visionless UIA-first workflow.
+- Floating monitor (R64-b): a 360×96 frameless ALWAYS-ON-TOP OS window (src-tauri/src/mini.rs, skip_taskbar, focused(false), top-right of the active monitor, the async WebviewWindowBuilder deadlock workaround) hosting mini.html (a third vite entry, 1s poll, self-closing); the in-app web-mode pill; auto open on the first live computer-use frame, close backstop on session_stop; the right-sidebar Computer tab REMOVED (persisted tabs migrated v3→v4).
+- Chat polish (R64-c): ChatMarkdown (full markdown, streaming-friendly) applied to final + intermediate + live text; intermediate text never hidden in the collapsed WorkingSection; the context-window popover as a measured fixed-layer PORTAL updating live; internal notifications auto-dismiss at 1.5s; per-Delegated-row sub-agent claim matching (assignDelegateChildren).
+- Pickers/permissions/usage/tokens (R64-d/e): the model picker lists ONLY configured models; the approval deps' permissionMode is a live GETTER (mid-turn flips apply to the next gate); the safe-command auto list grew Windows/PowerShell read-only reads + search tools; per-API-key usage (migration 0024, key_slot through TurnDeps, /usage/detailed keys aggregate, the Usage screen's key cards); the GPT-style BPE token estimator (CJK 1/char, digits 1/group, punct 0.5 with word-prefix refund).
+- Verification: root 1664/1664 in 109 files, agent-core 885/885 in 52 files, lint/typecheck/docs:check clean, live browser battery zero-errors; version 0.64.0 TAGGED + the draft release verified with both assets.
+
+Stage Summary:
+- R64 COMPLETE on tip 3c3af68 (CI + Release runs green); the Windows backend fixes are construction-tested only — the owner's next live Windows session is the verification, and the diagnostics keys make any residual failure readable from the transcript.
+- The sandbox dev stack + DASHBOARD were synced at R64 close (DASHBOARD 12cde49/caea759: 0.64.0 truth-synced).
+- Golden rule 1 kept (acute.bat/acute.sh/credentials.txt untouched).
+
+---
+Task ID: R65
+Agent: orchestrator (main)
+Task: R65 — the honesty patch: the surface boundary (browser_control ≠ real desktop), the auto-opening browser tab, debug mode, and the Advanced cleanup (the four owner-feedback items outside R64's scope).
+
+Work Log:
+- Sandbox re-provisioned before the round (PROJECT/, .secrets/, pnpm wiped): full restore per SANDBOX-RESTORE.md (pnpm 11, secrets, PAT clone, baseline re-verified 1664/1664 before work).
+- Recon: R64 complete + shipped (tip 3c3af68, CI + Release green, DASHBOARD synced) but the in-repo worklog had NO R64 entry (golden rule 2 gap) and four owner items were still open: the browser/desktop prompt boundary (the hallucination's root), the browser tab auto-open, debug mode, the Advanced cleanup.
+- R65-1 (the boundary): SURFACE BOUNDARY (R65) lines in BOTH the computer-use and browser-panel prompt sections — each names the OTHER surface and forbids narrating embedded-browser actions as desktop actions; the golden fixture regenerated deliberately (additions-only, 6 lines); registry entry "debug" added.
+- R65-2 (debug mode): debug.enabled setting (default OFF) + GET/PUT /settings/debug (the memory-switch pattern) + prepareTurn reads it PER TURN (the live-getter pattern; a flip applies to the next message) + the "## DEBUG MODE (ON)" prompt section (the Execution-report contract) + the Advanced-tab DebugModeCard (role="switch", error surfaces on the card).
+- R65-3 (Advanced cleanup): the "Agent core connection" card (Base URL/Bearer token/Demo data/Save connection) REMOVED — the desktop app manages the sidecar itself; config-store fields survive untouched; the stale SubAgentsTab pin updated + its fetchMock gained the /settings/debug route.
+- R65-4 (auto-open + allowlist): the stream-store bumps a burst-gated (8s) PROJECT-SCOPED activity signal on every browser_control tool-call + browser-command frame (startStream records the session's projectId; unattributed frames never bump); the RightSidebar's edge-triggered controller opens/surfaces the Browser tab once per burst; the persist partialize pins the durable fields (the transient signal never rides localStorage); google.com/bing.com joined DEFAULT_WEB_HOST_ALLOWLIST (exact-host matching, pinned by test).
+- Sub-agent review (owner directive) BEFORE ship: 3 REAL bugs found + all fixed pre-commit — (1) the auto-open minted DUPLICATE BLANK browser tabs once the agent's tab carried a URL (openBrowser(null)'s dedupe misses navigated tabs) → the effect now SURFACES the existing tab; (2) the signal was GLOBAL (a background agent in project A popped tabs in project B's sidebar) → per-project scoping via the startStream projectId; (3) the transient signal was PERSISTED with the store (a stale burst gate could swallow the first post-reload frame) → partialize. Circular imports verified absent; the golden fixture verified additions-only; the allowlist exact-match verified no bypass.
+- Tests: root 1686/1686 in 110 files (+22: r65-honesty-patch 8, orchestrator round-trip 1, r45 search-engines 1, stream-store 5, RightSidebar 5, SettingsPage 3, SubAgentsTab pin update); agent-core 894/894 in 53 files; lint/typecheck/docs:check clean; version:check 0.65.0 ×4.
+- Docs: round-65.md (NEW), CHANGELOG 0.65.0, IMPLEMENTED-API (ROUND-65 section + the /settings/debug row), HANDOFF header, docs/README + ui-iterations/README index rows (63–65 completed); docs:check 160/0.
+
+Stage Summary:
+- R65 COMPLETE on tip (this commit), version 0.65.0, TAGGED + RELEASED (the R63 discipline); the R64 worklog entry restored in the same round.
+- The hallucination now has all three legs: separate tools (R61), verified results (R64), and a NAMED boundary in the prompt (R65). Debug mode + the auto-opening browser + the clean Advanced tab ship together.
+- Honest caveats: the boundary lines are prompt engineering (a weak model can still ignore text — the receipts + honest-reporting contracts are the backstops); debug mode changes the PROMPT, not the transcript (the event log remains ground truth). The owner's next live Windows run is the real verification of R64 + R65 together.

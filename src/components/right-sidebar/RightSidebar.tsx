@@ -130,6 +130,45 @@ export function RightSidebar({
   }, [slice, projectId, ensure]);
   const state = slice ?? defaultProjectRightState();
   const open = state.open;
+
+  // ── ROUND-65 (R65): the agent-browser AUTO-OPEN controller ──────────────────────
+  // The owner: after approving the agent's browser action, "the browser
+  // never even opened" — the agent drove the embedded browser invisibly.
+  // The stream-store bumps `agentBrowserActivity` (burst-gated: one edge per
+  // browsing burst) whenever the agent calls browser_control or a
+  // browser-command bridge frame lands; this edge-triggered effect opens
+  // (or switches to) the Browser tab so the owner SEES the agent's browsing
+  // live in the sidebar. Never fights the user mid-burst: within a burst the
+  // counter bumps only once, and if the active tab is ALREADY a browser tab
+  // the bump is a no-op.
+  // This project's counter (review fix #2: the signal is project-scoped —
+  // another project's browsing never touches this sidebar).
+  const agentBrowserActivity = useRightSidebarStore(
+    (s) => s.agentBrowserActivityByProject[projectId] ?? 0,
+  );
+  // null until the first effect run — the mount-time read is NOT an edge.
+  const prevBrowserActivityRef = useRef<number | null>(null);
+  useEffect(() => {
+    const prev = prevBrowserActivityRef.current;
+    prevBrowserActivityRef.current = agentBrowserActivity;
+    // The mount read (or an unchanged counter) is never an edge.
+    if (prev === null || agentBrowserActivity === prev) return;
+    const s = useRightSidebarStore.getState();
+    const sliceNow = s.byProject[stateKey(projectId, s.activeSessionByProject[projectId] ?? null)];
+    const st = sliceNow ?? defaultProjectRightState();
+    const active = st.tabs.find((t) => t.id === st.activeTabId) ?? null;
+    const browserVisible = st.open && active !== null && active.type === "browser";
+    if (browserVisible) return;
+    // Review fix #1: SURFACE an existing browser tab (whatever URL it
+    // carries — openBrowser's null-URL dedupe would miss a navigated tab
+    // and mint a duplicate blank one); only CREATE when none exists.
+    const existing = st.tabs.find((t) => t.type === "browser");
+    if (existing !== undefined) {
+      setActiveTab(projectId, existing.id); // sets open: true + activates
+    } else {
+      openBrowser(projectId, null);
+    }
+  }, [agentBrowserActivity, projectId, openBrowser, setActiveTab]);
   // ROUND-42: the EFFECTIVE width — the stored (dragged) width clamped by
   // the layout's computed cap. ROUND-43: the floor is the 36px collapse-
   // button column (was 240 — with the R42 cap's own 280px floor that made

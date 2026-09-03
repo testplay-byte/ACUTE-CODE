@@ -22,11 +22,14 @@ import { QueryClient } from "@tanstack/react-query";
 import { useConfigStore } from "./config-store";
 import { setQueryClient } from "./query-client";
 import {
+  clearStreamSessionProjectsForTest,
   getSubAgentLiveEntry,
   selectSubAgentsLive,
   useStreamStore,
 } from "./stream-store";
 import { useActiveStreams } from "./active-streams";
+// ROUND-65 (R65): the agent-browser activity signal the frames below bump.
+import { useRightSidebarStore } from "./right-sidebar-store";
 import type { StreamTurnEvent } from "./api";
 
 function sseResponse(frames: StreamTurnEvent[]): Response {
@@ -78,6 +81,16 @@ beforeEach(() => {
   // Isolate the module-level stores between tests.
   useStreamStore.setState({ bySession: {}, subagentsLive: {} });
   useActiveStreams.setState({ active: new Set<string>() });
+  // ROUND-65 (R65): the activity counters start at zero, no burst in flight.
+  useRightSidebarStore.setState({
+    agentBrowserActivityByProject: {},
+    agentBrowserActivityAtByProject: {},
+    byProject: {},
+    activeProjectId: null,
+    activeSessionByProject: {},
+  });
+  // ROUND-65 (R65): the module-level session→project map starts empty.
+  clearStreamSessionProjectsForTest();
 });
 
 afterEach(() => {
@@ -1106,5 +1119,118 @@ describe("stream store tool-input streaming (ROUND-58 R58-cf)", () => {
     expect(inputs[0].raw.slice(0, 200_000)).toBe(big);
     // The second delta was truncated mid-way (not dropped entirely).
     expect(inputs[0].raw.endsWith("yyyy")).toBe(true);
+  });
+});
+
+// ── ROUND-65 (R65): agent browser activity bumps the right-sidebar signal ──
+// The owner: after approving the agent's browser action, "the browser never
+// even opened". Every browser_command tool-call frame and every
+// browser-command bridge frame now bumps the right-sidebar store's
+// burst-gated counter — the RightSidebar's controller effect auto-opens the
+// Browser tab on the edge. Pinned here at the SOURCE (the bump); the
+// auto-open behavior itself is pinned in RightSidebar.test.tsx.
+
+describe("agent browser activity signal (ROUND-65 R65)", () => {
+  it("a browser_control tool-call frame bumps the session's PROJECT counter — other tools do not", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        sseResponse([
+          { type: "tool-call", toolName: "browser_control", argsSummary: "navigate example.com" },
+          { type: "tool-call", toolName: "read_file", argsSummary: "src/a.ts" },
+          { type: "stopped" },
+        ]),
+      ),
+    );
+
+    await useStreamStore.getState().startStream(PARENT, "open a page", { projectId: "prj_browse" });
+    expect(useRightSidebarStore.getState().agentBrowserActivityByProject["prj_browse"]).toBe(1);
+    expect(useRightSidebarStore.getState().agentBrowserActivityAtByProject["prj_browse"]).not.toBeUndefined();
+    // Review fix #2: OTHER projects are untouched (the signal is scoped).
+    expect(useRightSidebarStore.getState().agentBrowserActivityByProject["prj_other"]).toBeUndefined();
+  });
+
+  it("a browser-command bridge frame bumps the counter (bridge frames are turn-independent)", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        sseResponse([
+          { type: "browser-command", commandId: "cmd_1", tabId: "tab_browser", action: "eval", payload: { script: "return 1" } },
+          { type: "stopped" },
+        ]),
+      ),
+    );
+
+    // No liveTurn needed — the browser-command branch runs before the
+    // liveTurn guard (background turns bump too).
+    await useStreamStore.getState().startStream(PARENT, "eval in the page", { projectId: "prj_browse" });
+    expect(useRightSidebarStore.getState().agentBrowserActivityByProject["prj_browse"]).toBe(1);
+  });
+
+  it("burst-gated: frames within 8s of the last bump refresh the gate WITHOUT a new edge; a later frame is a NEW burst", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        sseResponse([
+          { type: "tool-call", toolName: "browser_control", argsSummary: "navigate a.com" },
+          { type: "tool-call", toolName: "browser_control", argsSummary: "navigate b.com" },
+          { type: "stopped" },
+        ]),
+      ),
+    );
+    await useStreamStore.getState().startStream(PARENT, "browse a burst", { projectId: "prj_browse" });
+    expect(useRightSidebarStore.getState().agentBrowserActivityByProject["prj_browse"]).toBe(1); // ONE edge for the burst
+
+    // Same burst window (the gate timestamp moved with each frame): a third
+    // frame right now is still the same burst.
+    useStreamStore.getState(); // no-op read for clarity
+    const s = useRightSidebarStore.getState();
+    const bumped = vi.fn();
+    useRightSidebarStore.subscribe(bumped);
+    // Rewind the gate to simulate 10s passing (a NEW burst).
+    useRightSidebarStore.setState({
+      agentBrowserActivityAtByProject: { prj_browse: Date.now() - 10_000 },
+    });
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        sseResponse([
+          { type: "tool-call", toolName: "browser_control", argsSummary: "navigate c.com" },
+          { type: "stopped" },
+        ]),
+      ),
+    );
+    await useStreamStore.getState().startStream(PARENT, "browse again later", { projectId: "prj_browse" });
+    expect(useRightSidebarStore.getState().agentBrowserActivityByProject["prj_browse"]).toBe(2); // a NEW burst edge
+    void s; void bumped;
+  });
+
+  it("non-agent activity never bumps (plain text + tool frames from other tools)", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        sseResponse([
+          { type: "text-delta", delta: "working…" },
+          { type: "tool-call", toolName: "web_fetch", argsSummary: "docs" },
+          { type: "stopped" },
+        ]),
+      ),
+    );
+    await useStreamStore.getState().startStream(PARENT, "plain work", { projectId: "prj_browse" });
+    expect(useRightSidebarStore.getState().agentBrowserActivityByProject["prj_browse"]).toBeUndefined();
+  });
+
+  it("review fix #2: UNATTRIBUTED sessions (no projectId at start) never bump — no sidebar gets yanked", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        sseResponse([
+          { type: "tool-call", toolName: "browser_control", argsSummary: "navigate example.com" },
+          { type: "stopped" },
+        ]),
+      ),
+    );
+    await useStreamStore.getState().startStream(PARENT, "no project known");
+    expect(Object.keys(useRightSidebarStore.getState().agentBrowserActivityByProject)).toHaveLength(0);
   });
 });

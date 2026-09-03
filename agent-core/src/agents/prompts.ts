@@ -67,6 +67,11 @@ export interface PromptContext {
    * extended skill body loads via read_skill("computer-use")). Absent →
    * no section. */
   computerUse?: { enabled: boolean; posture: "observe" | "act" | "auto" };
+  /** ROUND-65 (R65): debug mode (Settings → Advanced → Debug mode). When
+   * true, a "## DEBUG MODE" section instructs the model to append a raw
+   * execution report (every tool call + outcome + verification) to its
+   * final answer. Absent/false → no section (byte-identical prompt). */
+  debugMode?: boolean;
 }
 
 /** Which context-meter bucket a prompt line belongs to. */
@@ -369,6 +374,11 @@ export function buildTaggedPromptLines(ctx: PromptContext): TaggedLine[] {
     ident("- Launch apps with the user's EXACT spelling (character-for-character; never translate/shorten/substitute). list_apps lists RUNNING apps only.");
     ident("- Raw input (typing, keys, coordinate clicks) on Windows/Linux needs the target frontmost. type REPLACES field content; set_value is the preferred write; scroll is coordinate-only.");
     ident("- Destructive/hard-to-reverse actions need explicit user go-ahead. NEVER type credentials. stop_computer_control ends the session — no further computer-use calls after it.");
+    // ROUND-65 (R65): the SURFACE BOUNDARY — the owner's live 0.63.0 run had
+    // the agent narrate an embedded-browser_navigation as "I opened Edge on
+    // your computer" (a pure hallucination; only browser_control ran). Both
+    // sections exist independently; this line makes the boundary EXPLICIT.
+    ident("- SURFACE BOUNDARY (R65): these tools drive the user's REAL desktop — real windows, real processes. The EMBEDDED BROWSER PANEL (browser_control) is a DIFFERENT surface: a webview INSIDE this app. Never mix them up: browser_control cannot open or touch the user's real browsers/apps, and computer-use tools cannot drive the embedded panel. If the user asks about their real machine (open Edge, click a desktop button, read the screen), that is computer-use work — never browser_control.");
     if (ctx.computerUse.posture === "observe") {
       ident("- CURRENT POSTURE: OBSERVE-ONLY — mutating actions are refused by policy; read-only observation is all this session may do.");
     }
@@ -405,7 +415,23 @@ export function buildTaggedPromptLines(ctx: PromptContext): TaggedLine[] {
     ident("- TEST LAYOUTS by changing the display size with set_viewport: presets mobile-sm 375×667, mobile-md 390×844, tablet 768×1024, laptop 1280×800, desktop 1440×900, full-hd 1920×1080, or explicit width/height (+ zoom, rotate swaps w/h). It targets the tab the user is viewing unless you pass sessionId. The panel renders the true size you set — larger presets scale down to fit.");
     ident("- USE THE BROWSER LIKE A USER WOULD (R62): read the page's text (action read) when you need its content; eval when you need the LIVE page (logins, JS-rendered content, clicking links `document.querySelector('a').click()`, filling forms, extracting DOM state — the script runs as a function body, so end with `return value`); screenshot when you need to SEE what the user sees (needs Computer Use enabled; the vision model describes it).");
     ident("- ALWAYS announce viewport changes in one short line (e.g. \"Switching the browser panel to 375×667 to check the mobile layout\") — the user watches that panel; set_viewport changes what they see.");
+    // ROUND-65 (R65): the mirror of the computer-use SURFACE BOUNDARY —
+    // a browser_control navigate is NOT "opening the user's Edge", and the
+    // final answer must never describe panel actions as desktop actions.
+    ident("- SURFACE BOUNDARY (R65): this panel lives INSIDE the app — browser_control NEVER opens the user's real browsers (Edge, Chrome, Firefox) and never touches their desktop or files. If the task is about the user's REAL machine, use the computer-use tools instead. NEVER narrate a browser_control action as something that happened on the user's computer — say \"in the embedded browser panel\" when that is where it happened.");
     ident("- The page the panel shows can differ from a fresh fetch (logins, JS): read = fresh server-side text, eval = the live DOM, screenshot = the pixels the user sees. Pick the right one and say which you used.");
+    ident("");
+  }
+
+  // ── Debug mode (ROUND-65, R65) ───────────────────────────────────────────
+  // The owner's debug toggle (Settings → Advanced): ON = the agent
+  // self-reports its full execution trace in the final answer. Off = no
+  // section (byte-identical prompt, the honest default).
+  if (ctx.debugMode === true) {
+    beginSection("debug");
+    ident("## DEBUG MODE (ON)");
+    ident("- Your FINAL answer must end with an \"## Execution report\" section listing, in order: every tool call (tool name, one-line argument summary, outcome — ok or the error), what you observed/verified after each write, and anything that was retried or abandoned.");
+    ident("- The report is raw facts for the owner debugging the system — one line per call, no prose polish, no hiding failed calls. Keep your normal answer style ABOVE the report; the report itself stays plain.");
     ident("");
   }
 

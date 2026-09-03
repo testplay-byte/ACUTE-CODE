@@ -700,6 +700,15 @@ export const DEFAULT_WEB_HOST_ALLOWLIST: readonly string[] = [
   "duckduckgo.com",
   "html.duckduckgo.com",
   "lite.duckduckgo.com",
+  // ROUND-65 (R65, owner directive: simple browsing needs no permission —
+  // the owner was asked to approve a google.com NAVIGATION in the embedded
+  // browser): the everyday search engines join the default allowlist. A
+  // search results page is the same reading tier as the docs hosts above;
+  // site-specific "always allow" stays owner-decided via the approval card.
+  "google.com",
+  "www.google.com",
+  "bing.com",
+  "www.bing.com",
   "en.wikipedia.org",
   "stackoverflow.com",
   "learn.microsoft.com",

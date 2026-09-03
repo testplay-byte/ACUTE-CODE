@@ -161,6 +161,12 @@ export const PROMPT_REGISTRY: readonly PromptSectionSpec[] = Object.freeze([
     bucket: "identity",
   },
   {
+    id: "debug",
+    description: "## DEBUG MODE (ON) — the owner's debug toggle: the final answer self-reports the execution trace (R65)",
+    dynamic: true, // ctx.debugMode-gated
+    bucket: "identity",
+  },
+  {
     id: "communication",
     description: "## COMMUNICATION — reply style",
     dynamic: false,

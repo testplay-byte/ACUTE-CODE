@@ -25,7 +25,7 @@
  * empty provider list, which is all these assertions need.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { cleanup, fireEvent, screen } from "@testing-library/react";
+import { cleanup, fireEvent, screen, waitFor } from "@testing-library/react";
 import { SettingsPage } from "./SettingsPage";
 import { resetTestState, renderWithProviders } from "../test-utils";
 import { useThemeStore } from "../lib/theme-store";
@@ -221,5 +221,117 @@ describe("Appearance tab simplification (R62-2a)", () => {
     expect(column.className).toContain("flex-col");
     expect(column.className).toContain("gap-4");
     expect(column.className).not.toContain("gap-5");
+  });
+});
+
+// ── ROUND-65 (R65): the Advanced tab rebuild ────────────────────────────────
+// The owner's directive: remove the irrelevant "agent core connection" /
+// bearer-token fields from Advanced (the desktop app manages the sidecar
+// itself); add the debug-mode switch (the agent self-reports its execution
+// trace when ON). A routed fetch stub serves /settings/debug (mutable — PUT
+// patches the state like the server) + /settings/memory; everything else
+// 401s like the file-level stub.
+describe("Advanced tab (ROUND-65 R65)", () => {
+  const state = { debug: false, memory: true };
+  const puts: Array<Record<string, unknown>> = [];
+
+  beforeEach(() => {
+    state.debug = false;
+    state.memory = true;
+    puts.length = 0;
+    resetTestState();
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = typeof input === "string" ? input : input.toString();
+        if (url.includes("/api/v1/settings/debug")) {
+          if ((init?.method ?? "GET") === "PUT") {
+            const body = JSON.parse(String(init?.body ?? "{}")) as Record<string, unknown>;
+            puts.push(body);
+            if (typeof body.enabled === "boolean") state.debug = body.enabled;
+          }
+          return {
+            ok: true,
+            status: 200,
+            text: async () => JSON.stringify({ enabled: state.debug }),
+          } as unknown as Response;
+        }
+        if (url.includes("/api/v1/settings/memory")) {
+          return {
+            ok: true,
+            status: 200,
+            text: async () => JSON.stringify({ enabled: state.memory }),
+          } as unknown as Response;
+        }
+        return {
+          status: 401,
+          ok: false,
+          text: async () =>
+            JSON.stringify({ error: { code: "UNAUTHORIZED", message: "no token" } }),
+        } as unknown as Response;
+      }),
+    );
+  });
+
+  afterEach(() => {
+    cleanup();
+    vi.unstubAllGlobals();
+  });
+
+  it("the agent-core connection card is GONE (Base URL / Bearer token / Demo data / Save connection)", async () => {
+    renderWithProviders(<SettingsPage />, { route: "/settings?tab=advanced" });
+
+    // The switch renders (the tab is alive) before the removal assertions.
+    expect(await screen.findByRole("switch", { name: "Toggle debug mode" })).toBeTruthy();
+
+    // The removed card's unique strings are all gone.
+    expect(screen.queryByText("Agent core connection")).toBeNull();
+    expect(screen.queryByText("Base URL")).toBeNull();
+    expect(screen.queryByText("Bearer token")).toBeNull();
+    expect(screen.queryByText("Demo data (fixture adapter when the sidecar is unreachable)")).toBeNull();
+    expect(screen.queryByText("Save connection")).toBeNull();
+
+    // The header copy leads with Debug mode, and the memory card survives.
+    expect(screen.getByText(/Debug mode \+ agent memory/)).toBeTruthy();
+    expect(screen.getByRole("switch", { name: "Toggle agent memory" })).toBeTruthy();
+  });
+
+  it("toggling debug mode PUTs {enabled:true}, refetches, and the switch flips ON", async () => {
+    renderWithProviders(<SettingsPage />, { route: "/settings?tab=advanced" });
+
+    const toggle = await screen.findByRole("switch", { name: "Toggle debug mode" });
+    expect(toggle.getAttribute("aria-checked")).toBe("false"); // honest default
+
+    fireEvent.click(toggle);
+    await waitFor(() => expect(toggle.getAttribute("aria-checked")).toBe("true"));
+
+    expect(puts).toEqual([{ enabled: true }]);
+    expect(screen.getByText("Agent execution self-report")).toBeTruthy();
+  });
+
+  it("an error from the PUT surfaces on the card (honest failure, not a silent flip)", async () => {
+    // The next PUT fails with a 500 envelope.
+    const fetchMock = vi.mocked(vi.fn());
+    void fetchMock;
+    const original = globalThis.fetch;
+    globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = typeof input === "string" ? input : input.toString();
+      if (url.includes("/api/v1/settings/debug") && (init?.method ?? "GET") === "PUT") {
+        return {
+          ok: false,
+          status: 500,
+          text: async () =>
+            JSON.stringify({ error: { code: "INTERNAL", message: "engine exploded" } }),
+        } as unknown as Response;
+      }
+      return original(input, init);
+    }) as typeof fetch;
+
+    renderWithProviders(<SettingsPage />, { route: "/settings?tab=advanced" });
+    const toggle = await screen.findByRole("switch", { name: "Toggle debug mode" });
+    fireEvent.click(toggle);
+    expect(await screen.findByText(/engine exploded/)).toBeTruthy();
+    // The switch honestly stays OFF (the server state never changed).
+    expect(toggle.getAttribute("aria-checked")).toBe("false");
   });
 });

@@ -195,6 +195,12 @@ The rewritten page's escape hatch posts `{type:"acute:open"\|"acute:title"\|"acu
   `memory_save/recall/list` tools are not registered, and the Memory panel
   renders an OFF notice (data is preserved). Sub-agent children NEVER
   receive the digest (independent context) regardless of the switch.
+- **ROUND-65: `GET/PUT /settings/debug` → `{enabled: boolean}`** (default
+  `false`; same validation/envelope as the memory switch). While `true`,
+  `prepareTurn` adds a `## DEBUG MODE (ON)` section to the turn's system
+  prompt (registry id `debug`): the final answer must end with a raw
+  `## Execution report` — every tool call, outcome, verification. Read
+  per-turn; a flip applies to the very next message.
 - **ROUND-49: nested delegation.** Children below `MAX_DELEGATION_DEPTH = 3`
   keep `delegate_task` (a sub-agent can spawn sub-agents — same tools, own
   context + key slot); at/beyond the cap the runtime strips it (recursion
@@ -1066,3 +1072,40 @@ keys" section renders one card per key joined with
 No route/signature changes; `estimateTokens` consumers keep their exact
 signatures (the estimator internals changed — a calibrated GPT-style BPE
 approximation — but it remains a pure synchronous function).
+
+## ROUND-65 additions (implemented)
+
+The honesty patch — one REST surface extension (the debug switch), prompt
+additions, and a frontend auto-open signal. No route signature changes
+beyond `/settings/debug`.
+
+### `GET/PUT /settings/debug`
+
+See the ROUND-49 area above — the memory-switch pattern verbatim
+(`{enabled: boolean}`, `400` with `body.enabled` named on bad payloads).
+
+### Prompt additions (prompts.ts)
+
+- **SURFACE BOUNDARY (R65)** lines in BOTH the `computer-use` and
+  `browser-panel` sections — each names the OTHER surface and forbids
+  narrating embedded-browser actions as desktop actions (the 0.63.0
+  hallucination fix). The golden fixture regenerated (additions-only).
+- **`## DEBUG MODE (ON)`** (registry id `debug`, `ctx.debugMode`-gated):
+  the execution-report contract above.
+
+### Frontend contract additions
+
+- `api.ts`: `fetchDebugSettings()` / `updateDebugSettings(patch)` /
+  `DebugSettings`.
+- `right-sidebar-store`: `noteAgentBrowserActivity(projectId)` — the
+  burst-gated per-project agent-browser activity signal (8s gate);
+  `agentBrowserActivityByProject` / `agentBrowserActivityAtByProject`
+  (transient — the persist `partialize` keeps them out of localStorage).
+- `stream-store`: `startStream(sessionId, text, {projectId?})` — records
+  the session's project (exported `streamSessionProject(sessionId)`); every
+  `browser_control` tool-call frame and `browser-command` bridge frame from
+  an attributed session bumps that project's signal; the RightSidebar's
+  controller effect opens/surfaces the Browser tab on the edge.
+- `DEFAULT_WEB_HOST_ALLOWLIST` gained `google.com`, `www.google.com`,
+  `bing.com`, `www.bing.com` (exact-host matching, no www normalization —
+  `google.com.evil.org` still asks).

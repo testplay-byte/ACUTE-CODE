@@ -1,4 +1,4 @@
-<!-- last-reviewed: 2026-09-02 round-63 -->
+<!-- last-reviewed: 2026-09-02 round-65 -->
 # Changelog
 
 All notable changes to ACUTE-CODE are documented here. Entries are written for
@@ -18,6 +18,28 @@ code-signing (SmartScreen), ratings-driven prompt tuning, the
 deepseek-harness future candidates (compaction pressure-trigger,
 continuable sub-agent children), the Files-tab polish, agent
 web-app-testing tools.
+
+## [0.65.0] - 2026-09-02
+
+Round 65 — the honesty patch. **The embedded browser and your real desktop
+are now explicitly separated in the agent's instructions**: both the
+computer-use and the embedded-browser prompt sections carry a SURFACE
+BOUNDARY line naming the other surface — the agent can no longer
+legitimately conflate "navigate in the embedded panel" with "I opened Edge
+on your computer" (the exact hallucination from the first live Windows run).
+**The browser tab now AUTO-OPENS when the agent browses** — every
+browser_control call (or live browser-command) opens or surfaces the
+embedded browser in the right sidebar, scoped to that project, once per
+browsing burst; it was previously invisible. **Simple browsing asks
+nothing**: google.com and bing.com joined the default auto-allowlist (exact
+host matching). **Debug mode** (Settings → Advanced): when ON, every agent
+answer ends with a raw execution report — each tool call, its outcome, what
+was verified — read live per turn. The **agent-core connection / bearer
+token card is REMOVED from Advanced** (the desktop app manages the engine
+itself); Advanced is now Debug mode + agent memory. A sub-agent review
+before ship caught and fixed three real bugs (duplicate blank browser tabs,
+cross-project tab popping, a persisted burst gate). 1686 root tests (110
+files) + 894 agent-core (53 files), lint/typecheck clean.
 
 ## [0.64.0] - 2026-09-02
 

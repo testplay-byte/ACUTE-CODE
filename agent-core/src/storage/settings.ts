@@ -196,3 +196,31 @@ export function setMemorySettings(db: SqliteDatabase, patch: Partial<MemorySetti
   }
   return getMemorySettings(db);
 }
+
+// ── ROUND-65: debug settings (the agent self-report switch) ────────────────
+
+export interface DebugSettings {
+  enabled: boolean;
+}
+
+export const DEBUG_DEFAULTS: DebugSettings = {
+  enabled: false,
+};
+
+const DEBUG_ENABLED_KEY = "debug.enabled";
+
+export function getDebugSettings(db: SqliteDatabase): DebugSettings {
+  return { enabled: readBoolean(db, DEBUG_ENABLED_KEY, DEBUG_DEFAULTS.enabled) };
+}
+
+export function setDebugSettings(db: SqliteDatabase, patch: Partial<DebugSettings>): DebugSettings {
+  if (patch.enabled !== undefined) {
+    if (typeof patch.enabled !== "boolean") {
+      throw new Error("enabled must be a boolean");
+    }
+    db.prepare(
+      "INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+    ).run(DEBUG_ENABLED_KEY, String(patch.enabled));
+  }
+  return getDebugSettings(db);
+}

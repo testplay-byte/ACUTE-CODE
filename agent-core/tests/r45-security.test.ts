@@ -133,6 +133,18 @@ describe("P0-5: decideWebFetch (host gate)", () => {
     expect(decideWebFetch(db, "proj_x", "https://v2.tauri.app/reference/").action).toBe("run");
   });
 
+  it("ROUND-65 (R65): the everyday search engines are AUTO — simple browsing in the embedded browser asks nothing (the owner's google.com approval report)", () => {
+    for (const url of [
+      "https://www.google.com/search?q=tauri+webview",
+      "https://google.com/",
+      "https://www.bing.com/search?q=openrouter",
+    ]) {
+      const decision = decideWebFetch(db, "proj_x", url);
+      expect(decision.action).toBe("run");
+      expect(decision).toMatchObject({ category: "auto" });
+    }
+  });
+
   it("non-allowlisted hosts ASK (the exfiltration gate)", () => {
     const decision = decideWebFetch(db, "proj_x", "https://evil.example.org/payload");
     expect(decision).toEqual({ action: "ask", host: "evil.example.org" });

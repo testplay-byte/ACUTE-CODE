@@ -13,6 +13,30 @@ import { getQueryClient } from "./query-client";
 import { useComputerMonitorStore } from "./computer-monitor-store";
 // R62/D8: the agent-browser bridge — browser-command frames dispatch here.
 import { dispatchBrowserCommand } from "./agent-browser-bridge";
+// ROUND-65 (R65): agent browser activity bumps the right-sidebar store so
+// the Browser tab AUTO-OPENS (the owner: after approving a browser action,
+// "the browser never even opened"). right-sidebar-store imports nothing
+// from this module — no cycle.
+import { useRightSidebarStore } from "./right-sidebar-store";
+
+// ROUND-65 (R65, review fix #2): session → projectId, recorded when a panel
+// STARTS a stream (the panel knows its project; the store only ever knows
+// the sessionId). The agent-browser activity bump is scoped through this
+// map so a background agent browsing in project A never pops a browser tab
+// in project B's sidebar. Sub-agent children (never started via startStream
+// here) have no entry — their rare browser use does not auto-open anything
+// (honest: the parent's panel shows their work via the Delegated rows).
+const sessionProjects = new Map<string, string>();
+
+/** The project a streaming session belongs to (undefined = unknown). */
+export function streamSessionProject(sessionId: string): string | undefined {
+  return sessionProjects.get(sessionId);
+}
+
+/** Test hook: drop every session→project attribution. */
+export function clearStreamSessionProjectsForTest(): void {
+  sessionProjects.clear();
+}
 
 /**
  * ROUND-39 (owner: "It should keep the sessions going in the background even
@@ -297,6 +321,11 @@ interface StreamStore {
       model?: string;
       thinkingLevel?: ThinkingLevel;
       attachments?: MessageAttachment[];
+      /** ROUND-65 (R65): the session's project — scopes the agent-browser
+       * auto-open signal to the right sidebar. Optional (tests + older
+       * callers): absent = the session's browser activity is unattributed
+       * and never auto-opens a tab. */
+      projectId?: string;
     },
   ) => Promise<void>;
   /** ROUND-58 (R58-cf): the user clicked Stop — a DELIBERATE stop, not an
@@ -720,6 +749,9 @@ export const useStreamStore = create<StreamStore>((set, get) => ({
   subagentsLive: {},
 
   startStream: async (sessionId, text, opts) => {
+    // ROUND-65 (R65): remember the session's project for the scoped
+    // agent-browser activity bumps below.
+    if (opts?.projectId !== undefined) sessionProjects.set(sessionId, opts.projectId);
     // Already streaming? Refuse (the panel should guard too).
     const existing = get().bySession[sessionId];
     if (existing?.streamBusy) return;
@@ -935,6 +967,14 @@ export const useStreamStore = create<StreamStore>((set, get) => ({
   },
 }));
 
+/** ROUND-65 (R65): scoped activity bump — no-op when the session's project
+ * is unknown (never yank an unrelated sidebar). */
+function noteAgentBrowserActivityFor(sessionId: string): void {
+  const pid = sessionProjects.get(sessionId);
+  if (pid === undefined) return;
+  useRightSidebarStore.getState().noteAgentBrowserActivity(pid);
+}
+
 /** Apply a single SSE event to the session's liveTurn (mirrors the prior
  * inline handler in AgentChatPanel — extracted here so the store can run it
  * even when no panel is mounted). */
@@ -975,8 +1015,20 @@ function handleStreamEvent(
   // promise. No liveTurn is needed (the panel + webview exist whether or
   // not this store tracks a turn).
   if (event.type === "browser-command") {
+    // ROUND-65 (R65): the agent is driving the embedded browser — note the
+    // activity BEFORE dispatching (the bridge may await a panel that is
+    // about to be auto-opened by this very bump). Scoped to the session's
+    // project (review fix #2) — unattributed frames never bump.
+    noteAgentBrowserActivityFor(sessionId);
     dispatchBrowserCommand(event);
     return;
+  }
+  // ROUND-65 (R65): a browser_control TOOL CALL (navigate / set_viewport /
+  // read / get_state / eval / screenshot) is agent browser activity too —
+  // noted BEFORE the liveTurn guard so background turns bump as well. No
+  // return: the normal tool-call handling below still runs.
+  if (event.type === "tool-call" && event.toolName === "browser_control") {
+    noteAgentBrowserActivityFor(sessionId);
   }
 
   const cur = useStreamStore.getState().bySession[sessionId];

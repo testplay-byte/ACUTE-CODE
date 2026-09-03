@@ -2,14 +2,14 @@ import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link, useSearchParams } from "react-router";
 import {
+  fetchDebugSettings,
   fetchMemorySettings,
+  updateDebugSettings,
   updateMemorySettings,
 } from "../lib/api";
 import { ArrowLeft, Bot, Brain, Monitor, Moon, Palette, PlugZap, Server, SlidersHorizontal, Sparkles, Sun, Users } from "lucide-react";
-import { useConfigStore } from "../lib/config-store";
 import { useThemeStore } from "../lib/theme-store";
 import { THEMES, getContrastText } from "../lib/themes";
-import { useTimeoutClear } from "../hooks/use-timeout-clear";
 import { useThemeStyles } from "../lib/use-theme-styles";
 import { AgentsScreen } from "../components/agents/AgentsScreen";
 import { ModelsProvidersTab } from "../components/settings/ModelsProvidersTab";
@@ -21,7 +21,6 @@ import { SubAgentsTab } from "../components/settings/SubAgentsTab";
 import { SkillsTab } from "../components/settings/SkillsTab";
 import { McpTab } from "../components/settings/McpTab";
 import { ComputerUseTab } from "../components/settings/ComputerUseTab";
-import { Button, Field, inputClass } from "../components/ui/controls";
 import { bdr, withAlpha } from "../components/dashboard/helpers";
 
 const TABS = [
@@ -345,96 +344,136 @@ function SectionTitle({ children }: { children: React.ReactNode }) {
  * "api" tab (verified: zero imports anywhere in src/). Models & Providers
  * is the one provider surface now. */
 
-/* ── Advanced (data source) ───────────────────────────────
+/* ── Advanced ─────────────────────────────────────────────
  * ROUND-58 (R58-d): the sub-agent cards NO LONGER render here (pre-R58 the
  * whole SubAgentsSection + the OrchestrationCard rendered on BOTH the
  * subagents tab AND here — the owner: "the subagent and advanced options are
  * apparently mixed up"). ?tab=subagents is the single home for everything
- * sub-agent; Advanced keeps exactly the engine connection + agent memory. */
+ * sub-agent.
+ *
+ * ROUND-65 (R65, owner directive): the "Agent core connection" card (Base
+ * URL / Bearer token / Demo data / Save connection) is REMOVED — the owner
+ * called those irrelevant: the desktop app manages the sidecar itself
+ * (ephemeral token injected by the Rust shell; the fields only ever made
+ * sense in web dev mode). Advanced is now exactly: Debug mode + agent
+ * memory. The config-store fields survive untouched (dev-mode wiring +
+ * tests read them); only this UI is gone. */
 
 function AdvancedTab() {
-  const { baseUrl, token, demoData, setBaseUrl, setToken, setDemoData } = useConfigStore();
   const styles = useThemeStyles();
-  const [urlDraft, setUrlDraft] = useState(baseUrl);
-  const [tokenDraft, setTokenDraft] = useState(token ?? "");
-  const [saved, setSaved] = useState(false);
-  // ROUND-57-a flake rule: the transient "Saved" reset rides the leak-safe
-  // scheduler (the old bare setTimeout outlived happy-dom teardown).
-  const resetAfter = useTimeoutClear();
-
-  const save = () => {
-    setBaseUrl(urlDraft);
-    setToken(tokenDraft.trim() || null);
-    setSaved(true);
-    resetAfter(() => setSaved(false), 1500);
-  };
 
   return (
     <div className="mx-auto flex max-w-2xl flex-col gap-4">
-      {/* ROUND-58 (R58-d): short section header — the page is now exactly the
-          engine connection + the memory master switch, with a pointer to the
+      {/* ROUND-65 (R65): short section header — the page is now exactly the
+          debug switch + the memory master switch, with a pointer to the
           Sub-agents page that owns the rest. */}
       <div className="pb-1">
         <h2 className="text-[16px] font-black" style={{ color: styles.text }}>
           Advanced
         </h2>
         <p className="mt-1 text-[12px]" style={{ color: styles.textSecondary }}>
-          Engine connection + agent memory. Sub-agent keys, model, parallelism, and supervision
-          live on the{" "}
+          Debug mode + agent memory. Sub-agent keys, model, parallelism, and supervision live on the{" "}
           <Link to="/settings?tab=subagents" className="font-bold underline" style={{ color: styles.accent }}>
             Sub-agents
           </Link>{" "}
           page.
         </p>
       </div>
-      <section
-        className="rounded-lg p-4"
-        style={{ background: styles.card, border: bdr("1.5px", styles.border) }}
-      >
-        <div className="mb-3 flex items-center gap-2">
-          <Server size={13} style={{ color: styles.accent, opacity: 0.7 }} />
-          <span className="text-[12px] font-semibold" style={{ color: styles.text }}>
-            Agent core connection
-          </span>
-        </div>
-        <div className="flex flex-col gap-3">
-          <Field label="Base URL" hint="Loopback REST address of the sidecar">
-            <input
-              value={urlDraft}
-              onChange={(e) => setUrlDraft(e.target.value)}
-              className={inputClass}
-              style={{ background: styles.inputBg, borderColor: styles.inputBorder, color: styles.text }}
-            />
-          </Field>
-          <Field label="Bearer token" hint="Ephemeral in production; fixed for dev:full">
-            <input
-              value={tokenDraft}
-              onChange={(e) => setTokenDraft(e.target.value)}
-              className={inputClass}
-              style={{ background: styles.inputBg, borderColor: styles.inputBorder, color: styles.text }}
-            />
-          </Field>
-          <label className="flex cursor-pointer items-center gap-2 text-[12px]" style={{ color: styles.text }}>
-            <input
-              type="checkbox"
-              checked={demoData}
-              onChange={(e) => setDemoData(e.target.checked)}
-              className="h-4 w-4 cursor-pointer"
-            />
-            Demo data (fixture adapter when the sidecar is unreachable)
-          </label>
-          <div className="flex items-center gap-2">
-            <Button onClick={save}>Save connection</Button>
-            {saved ? (
-              <span className="text-[11px]" style={{ color: styles.textTertiary }}>
-                Saved — reload to apply.
-              </span>
-            ) : null}
-          </div>
-        </div>
-      </section>
+      <DebugModeCard />
       <MemoryCard />
     </div>
+  );
+}
+
+/* ── ROUND-65 (R65): the debug-mode switch — the owner's "debug mode" ──────
+ * directive (the agent reports details of what it did + a settings
+ * switch). ON = every main-agent turn's final answer ends with a raw
+ * "## Execution report" (every tool call, outcome, verification) — the
+ * engine reads this setting per turn, so a flip applies to the very next
+ * message. OFF (default) = prompts stay byte-identical. */
+
+function DebugModeCard() {
+  const styles = useThemeStyles();
+  const queryClient = useQueryClient();
+  const settingsQuery = useQuery({
+    queryKey: ["debug-settings"],
+    queryFn: fetchDebugSettings,
+  });
+  const [error, setError] = useState<string | null>(null);
+
+  const toggle = useMutation({
+    mutationFn: (enabled: boolean) => updateDebugSettings({ enabled }),
+    onSuccess: () => {
+      setError(null);
+      // The very next agent turn reads this setting server-side (per-turn,
+      // like the permission mode) — only the switch state itself refetches.
+      void queryClient.invalidateQueries({ queryKey: ["debug-settings"] });
+    },
+    onError: (err: Error) => setError(err.message),
+  });
+
+  const current = settingsQuery.data;
+  if (settingsQuery.isLoading || current === undefined) {
+    return (
+      <section className="rounded-lg p-4" style={{ background: styles.card, border: bdr("1.5px", styles.border) }}>
+        <span className="text-[12px] font-mono" style={{ color: styles.textTertiary }}>
+          loading debug settings…
+        </span>
+      </section>
+    );
+  }
+
+  const busy = toggle.isPending;
+
+  return (
+    <section
+      className="rounded-lg p-4"
+      style={{ background: styles.card, border: bdr("1.5px", styles.border) }}
+      aria-label="Debug mode"
+    >
+      <div className="mb-3 flex items-center gap-2">
+        <SlidersHorizontal size={13} style={{ color: styles.accent, opacity: 0.7 }} />
+        <span className="text-[12px] font-semibold" style={{ color: styles.text }}>
+          Debug mode
+        </span>
+      </div>
+      <div className="flex items-start gap-3">
+        <div className="min-w-[200px] flex-1">
+          <div className="text-[12.5px] font-bold" style={{ color: styles.text }}>
+            Agent execution self-report
+          </div>
+          <div className="text-[11px]" style={{ color: styles.textTertiary }}>
+            While ON, every agent answer ends with an honest execution report: each tool call (name,
+            arguments, outcome or error), what was verified after every write, and anything retried
+            or abandoned. Flip it on when checking what the agent actually did; turn it OFF for
+            clean answers. Applies to the next message you send.
+          </div>
+          {error ? (
+            <div className="mt-1.5 text-[11px]" style={{ color: "#e5484d" }} role="alert">
+              {error}
+            </div>
+          ) : null}
+        </div>
+        <button
+          type="button"
+          role="switch"
+          aria-checked={current.enabled}
+          aria-label="Toggle debug mode"
+          disabled={busy}
+          onClick={() => toggle.mutate(!current.enabled)}
+          className="relative h-6 w-11 shrink-0 cursor-pointer rounded-full transition-colors disabled:cursor-wait disabled:opacity-60"
+          style={{
+            background: current.enabled ? styles.accent : withAlpha(styles.text, 0.18),
+            border: bdr("1.5px", current.enabled ? styles.accent : styles.border),
+          }}
+        >
+          <span
+            className="absolute top-1/2 block h-4.5 w-4.5 -translate-y-1/2 rounded-full bg-white shadow transition-all"
+            style={{ left: current.enabled ? "calc(100% - 21px)" : "3px", height: 18, width: 18 }}
+          />
+        </button>
+      </div>
+    </section>
   );
 }
 

@@ -421,3 +421,173 @@ describe("RightSidebar popover vs native webview (R60-D z-index fix)", () => {
     setPopoverWebviewSuppression(null);
   });
 });
+
+// ── ROUND-65 (R65): the agent-browser AUTO-OPEN controller ──────────────────
+// The owner: after approving the agent's browser action, "the browser never
+// even opened". The stream-store bumps `agentBrowserActivity` (burst-gated)
+// whenever the agent drives the embedded browser; the sidebar's edge-triggered
+// effect opens (or switches to) the Browser tab so the browsing is VISIBLE.
+describe("RightSidebar agent-browser AUTO-OPEN (ROUND-65 R65)", () => {
+  beforeEach(() => {
+    // R65: the burst gate is REAL state — reset it per test (bumps within
+    // 8s of the previous test's bump would be swallowed as one burst).
+    useRightSidebarStore.setState({ agentBrowserActivityByProject: {}, agentBrowserActivityAtByProject: {} });
+    // Hermetic fetch stub for the BrowserPanel's session mint (same as the
+    // R60-D suite — the panel renders its proxy path under the mocked
+    // native bridge; everything else 404s and the poll catches it).
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: RequestInfo | URL) => {
+        const url = typeof input === "string" ? input : input.toString();
+        if (url.includes("/api/v1/browser/session")) {
+          return {
+            ok: true,
+            status: 200,
+            json: async () => ({
+              sessionId: "sess",
+              ticket: "t0",
+              expiresAt: Date.now() + 3600_000,
+              history: { sessionId: "sess", entries: [], index: -1, canBack: false, canForward: false },
+              viewport: { width: 1280, height: 800, preset: "laptop", zoom: 1, rotate: false },
+            }),
+          } as unknown as Response;
+        }
+        return { ok: false, status: 404, json: async () => ({}) } as unknown as Response;
+      }),
+    );
+    setPopoverWebviewSuppression(null);
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("an agent browser-activity edge AUTO-OPENS the Browser tab when the sidebar is closed with no tabs", async () => {
+    renderWithProviders(<RightSidebar projectId="prj_1" sessionId={null} />);
+    expect(await screen.findByText("No tabs open")).toBeTruthy();
+
+    // The owner collapsed the sidebar (no tabs, open: false) — the state in
+    // the owner's live report: the agent browsed invisibly.
+    useRightSidebarStore.getState().setOpen("prj_1", false);
+
+    // The agent calls browser_control → the stream-store bumps the edge.
+    act(() => {
+      useRightSidebarStore.getState().noteAgentBrowserActivity("prj_1");
+    });
+
+    // The Browser tab auto-opened and is ACTIVE (the panel renders).
+    await screen.findByTestId("browser-panel");
+    const tabs = Object.values(useRightSidebarStore.getState().byProject).flatMap((s) => s.tabs);
+    const browser = tabs.find((t) => t.type === "browser");
+    expect(browser).toBeTruthy();
+    const slice = Object.values(useRightSidebarStore.getState().byProject)[0];
+    expect(slice.activeTabId).toBe(browser?.id);
+    expect(slice.open).toBe(true);
+  });
+
+  it("an edge switches TO the browser tab when another tab is active (the browsing becomes visible)", async () => {
+    renderWithProviders(<RightSidebar projectId="prj_1" sessionId={null} />);
+
+    // The owner is looking at the Files tab.
+    fireEvent.click(screen.getByRole("button", { name: "New tab" }));
+    await pickQuickMenuItem("Browse the project's files");
+    await screen.findByTestId("files-explorer-panel");
+
+    // The agent starts browsing → the browser tab activates.
+    act(() => {
+      useRightSidebarStore.getState().noteAgentBrowserActivity("prj_1");
+    });
+    await screen.findByTestId("browser-panel");
+    const slice = Object.values(useRightSidebarStore.getState().byProject)[0];
+    const active = slice.tabs.find((t) => t.id === slice.activeTabId);
+    expect(active?.type).toBe("browser");
+  });
+
+  it("no re-fight: an edge while a browser tab is ALREADY active changes nothing (still one tab, same id)", async () => {
+    renderWithProviders(<RightSidebar projectId="prj_1" sessionId={null} />);
+
+    // First edge opens the browser tab.
+    act(() => {
+      useRightSidebarStore.getState().noteAgentBrowserActivity("prj_1");
+    });
+    await screen.findByTestId("browser-panel");
+    const before = Object.values(useRightSidebarStore.getState().byProject)
+      .flatMap((s) => s.tabs)
+      .filter((t) => t.type === "browser");
+
+    // A same-burst follow-up frame (no counter edge) + a NEW burst edge
+    // later — both leave the SAME browser tab active (openBrowser's dedupe
+    // surfaces the existing tab, never a second one).
+    act(() => {
+      useRightSidebarStore.getState().noteAgentBrowserActivity("prj_1"); // same burst (ms apart)
+    });
+    useRightSidebarStore.setState({
+      agentBrowserActivityAtByProject: { prj_1: Date.now() - 10_000 },
+    });
+    act(() => {
+      useRightSidebarStore.getState().noteAgentBrowserActivity("prj_1"); // NEW burst
+    });
+
+    const after = Object.values(useRightSidebarStore.getState().byProject)
+      .flatMap((s) => s.tabs)
+      .filter((t) => t.type === "browser");
+    expect(after).toHaveLength(1);
+    expect(after[0]?.id).toBe(before[0]?.id);
+    const slice = Object.values(useRightSidebarStore.getState().byProject)[0];
+    expect(slice.activeTabId).toBe(after[0]?.id);
+  });
+
+  it("review fix #1: a NEW burst while the browser tab carries a URL SURFACES that tab — never a duplicate blank one", async () => {
+    renderWithProviders(<RightSidebar projectId="prj_1" sessionId={null} />);
+
+    // Burst 1 opens the browser tab.
+    act(() => {
+      useRightSidebarStore.getState().noteAgentBrowserActivity("prj_1");
+    });
+    await screen.findByTestId("browser-panel");
+    const first = Object.values(useRightSidebarStore.getState().byProject)
+      .flatMap((s) => s.tabs)
+      .find((t) => t.type === "browser");
+    expect(first).toBeTruthy();
+
+    // The agent navigated — the tab now carries a URL (what openBrowser's
+    // null-URL dedupe would MISS, minting a duplicate blank tab).
+    useRightSidebarStore.getState().setBrowserUrl("prj_1", (first as { id: string }).id, "https://example.com/page");
+
+    // The user switches to another tab, then a NEW burst fires (> 8s gap).
+    fireEvent.click(screen.getByRole("button", { name: "New tab" }));
+    await pickQuickMenuItem("Browse the project's files");
+    await screen.findByTestId("files-explorer-panel");
+    useRightSidebarStore.setState({
+      agentBrowserActivityAtByProject: { prj_1: Date.now() - 10_000 },
+    });
+    act(() => {
+      useRightSidebarStore.getState().noteAgentBrowserActivity("prj_1");
+    });
+
+    // The ORIGINAL browser tab is active again — exactly ONE browser tab.
+    await screen.findByTestId("browser-panel");
+    const slice = Object.values(useRightSidebarStore.getState().byProject)[0];
+    const browserTabs = slice.tabs.filter((t) => t.type === "browser");
+    expect(browserTabs).toHaveLength(1);
+    expect(slice.activeTabId).toBe(first?.id);
+    expect(browserTabs[0]?.browserUrl).toBe("https://example.com/page");
+  });
+
+  it("mounting with a non-zero counter does NOT open anything (no mount-time edge)", async () => {
+    // A pre-existing counter (persisted across a remount mid-burst) must not
+    // auto-open on the mount read — only a genuine NEW edge opens.
+    useRightSidebarStore.setState({
+      agentBrowserActivityByProject: { prj_1: 7 },
+      agentBrowserActivityAtByProject: { prj_1: Date.now() },
+    });
+    renderWithProviders(<RightSidebar projectId="prj_1" sessionId={null} />);
+    await screen.findByText("No tabs open");
+    // Give any (wrong) effect a beat to fire.
+    await waitFor(() => {
+      expect(screen.getByText("No tabs open")).toBeTruthy();
+    });
+    const slice = Object.values(useRightSidebarStore.getState().byProject)[0];
+    expect(slice.tabs.filter((t) => t.type === "browser")).toHaveLength(0);
+  });
+});

@@ -124,6 +124,9 @@ export const RIGHT_SIDEBAR_MAX_WIDTH = 760;
 export const RIGHT_SIDEBAR_DEFAULT_WIDTH = 460;
 /** Max open tabs per project (LRU eviction past this). */
 const MAX_TABS = 12;
+/** ROUND-65 (R65): agent-browser activity burst gap — frames closer than
+ * this to the previous bump are the SAME burst (one auto-open edge). */
+export const AGENT_BROWSER_BURST_MS = 8_000;
 
 export function defaultProjectRightState(): ProjectRightState {
   return {
@@ -143,6 +146,22 @@ interface RightSidebarState {
   activeProjectId: string | null;
   /** ROUND-41: the active session id per project (drives stateKey). */
   activeSessionByProject: Record<string, string | null>;
+  /** ROUND-65 (R65): agent browser-activity signal, PER PROJECT — bumped
+  * (burst-gated) by the stream-store whenever the agent drives the
+  * embedded browser in THAT project's session (browser_control tool calls
+  * + browser-command bridge frames). The RightSidebar watches its own
+  * project's counter and AUTO-OPENS the browser tab so the owner sees what
+  * the agent is doing (the owner: after approving a browser action "the
+  * browser never even opened"). Per-project scoping (review fix #2): a
+  * background agent browsing in project A never pops a tab in project B's
+  * sidebar. Transient — partialize keeps it out of localStorage. */
+  agentBrowserActivityByProject: Record<string, number>;
+  /** ROUND-65 (R65): last activity-bump timestamp per project (epoch ms) —
+   * the burst gate. Same-burst frames (< 8s apart) refresh this WITHOUT
+   * bumping the counter, so one browsing burst = ONE auto-open edge. */
+  agentBrowserActivityAtByProject: Record<string, number>;
+  /** ROUND-65 (R65): the burst-gated activity bump (see above). */
+  noteAgentBrowserActivity: (projectId: string) => void;
   setActiveProject: (id: string) => void;
   /** ROUND-41: record the active session for a project. Called by
    * ChatFocusLayout whenever useActiveSessionId resolves a new value. */
@@ -230,6 +249,34 @@ export const useRightSidebarStore = create<RightSidebarState>()(
       byProject: {},
       activeProjectId: null,
       activeSessionByProject: {},
+      agentBrowserActivityByProject: {},
+      agentBrowserActivityAtByProject: {},
+      noteAgentBrowserActivity: (projectId) => {
+        const now = Date.now();
+        const last = get().agentBrowserActivityAtByProject[projectId] ?? null;
+        if (last !== null && now - last < AGENT_BROWSER_BURST_MS) {
+          // Same burst — keep the gate fresh WITHOUT a new edge (the sidebar
+          // already opened once for this burst; a sparse follow-up > 8s later
+          // is a NEW burst and bumps again).
+          set({
+            agentBrowserActivityAtByProject: {
+              ...get().agentBrowserActivityAtByProject,
+              [projectId]: now,
+            },
+          });
+          return;
+        }
+        set({
+          agentBrowserActivityByProject: {
+            ...get().agentBrowserActivityByProject,
+            [projectId]: (get().agentBrowserActivityByProject[projectId] ?? 0) + 1,
+          },
+          agentBrowserActivityAtByProject: {
+            ...get().agentBrowserActivityAtByProject,
+            [projectId]: now,
+          },
+        });
+      },
       setActiveProject: (id) => set({ activeProjectId: id }),
       setActiveSession: (projectId, sessionId) =>
         set((s) => ({
@@ -412,6 +459,16 @@ export const useRightSidebarStore = create<RightSidebarState>()(
     }),
     {
       name: "acute-code.rightSidebar",
+      // ROUND-65 (R65, review fix #3): persist ONLY the durable layout
+      // state. The transient agent-browser activity signal (counter + burst
+      // gate) must never ride localStorage — a restored stale
+      // agentBrowserActivityAt would swallow the first post-reload frame
+      // as "same burst" and the auto-open would silently never fire.
+      partialize: (state) => ({
+        byProject: state.byProject,
+        activeProjectId: state.activeProjectId,
+        activeSessionByProject: state.activeSessionByProject,
+      }),
       version: 4,
       // v2 → v3 (ROUND-41): the storage key changed from `projectId` to
       // `projectId::sessionId` for per-session sidebar state. Old slices

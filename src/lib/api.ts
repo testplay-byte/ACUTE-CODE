@@ -2128,6 +2128,27 @@ export async function updateMemorySettings(
   });
 }
 
+/** ROUND-65 (owner directive: debug mode with a settings switch): when on,
+ * every main-agent turn's system prompt gains a "## DEBUG MODE (ON)" section
+ * — the final answer self-reports the full execution trace (every tool
+ * call, outcome, verification). Default off (byte-identical prompts). */
+export interface DebugSettings {
+  enabled: boolean;
+}
+
+export async function fetchDebugSettings(): Promise<DebugSettings> {
+  return request<DebugSettings>("/settings/debug");
+}
+
+export async function updateDebugSettings(
+  patch: Partial<DebugSettings>,
+): Promise<DebugSettings> {
+  return request<DebugSettings>("/settings/debug", {
+    method: "PUT",
+    json: patch,
+  });
+}
+
 /** Key-pool slot info (masked — values never leave the sidecar). */
 export interface KeyPoolSlot {
   slot: number;

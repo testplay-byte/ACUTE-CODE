@@ -1319,6 +1319,9 @@ export function AgentChatPanel({
         useStreamStore.getState().setPendingEcho(sid, text);
         await useStreamStore.getState().startStream(sid, text, {
           model: effectiveModel ?? undefined,
+          // ROUND-65 (R65): scopes the agent-browser auto-open signal to
+          // THIS project's right sidebar (review fix #2).
+          projectId,
           // ROUND-50: the composer's per-send extras (R50-c1 threaded them
           // through streamSessionMessage's POST body).
           thinkingLevel,

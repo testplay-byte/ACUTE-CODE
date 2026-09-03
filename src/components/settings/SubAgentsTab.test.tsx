@@ -179,6 +179,16 @@ const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => 
       return jsonResponse({ enabled: memoryEnabled });
     }
   }
+  // ROUND-65 (R65): Advanced's DebugModeCard (GET/PUT /settings/debug) —
+  // same stateful mock (default OFF — the honest default).
+  let debugEnabled = false;
+  if (url.endsWith("/api/v1/settings/debug")) {
+    if (method === "GET") return jsonResponse({ enabled: debugEnabled });
+    if (method === "PUT") {
+      debugEnabled = (body as { enabled?: unknown }).enabled === true;
+      return jsonResponse({ enabled: debugEnabled });
+    }
+  }
   return { status: 404, ok: false, text: async () => JSON.stringify({ error: { code: "NOT_FOUND", message: `unmocked ${method} ${url}` } }) } as unknown as Response;
 });
 
@@ -257,13 +267,16 @@ describe("SubAgentsTab — rendering (ROUND-43 R43-5 + ROUND-58 R58-d)", () => {
     await waitFor(() => expect(screen.getByText("Sub-agent parallelism")).toBeTruthy());
 
     // ROUND-58 (R58-d): the owner's "subagent and advanced options are
-    // apparently mixed up" — the duplication is GONE. Advanced keeps only
-    // the connection + memory cards.
+    // apparently mixed up" — the duplication is GONE. ROUND-65 (R65, owner
+    // directive): the agent-core connection card itself is REMOVED from
+    // Advanced (irrelevant in the desktop app) — Advanced keeps exactly the
+    // debug-mode + memory cards.
     cleanup();
     renderWithProviders(<SettingsPage />, { route: "/settings?tab=advanced" });
     await waitFor(() => expect(screen.getByRole("heading", { level: 1, name: "Advanced" })).toBeTruthy());
-    await waitFor(() => expect(screen.getByText("Agent core connection")).toBeTruthy());
+    await waitFor(() => expect(screen.getByText("Debug mode")).toBeTruthy());
     await waitFor(() => expect(screen.getByText("Agent memory")).toBeTruthy());
+    expect(screen.queryByText("Agent core connection")).toBeNull();
     expect(screen.queryByText("Sub-agent OpenRouter keys")).toBeNull();
     expect(screen.queryByText("Sub-agent parallelism")).toBeNull();
     expect(screen.queryByText("Sub-Agent Orchestration")).toBeNull();

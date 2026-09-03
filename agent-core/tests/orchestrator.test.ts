@@ -413,6 +413,50 @@ describe("ROUND-36: sub-agent orchestration (ADR-0022)", () => {
     expect(String(preflight.headers["access-control-allow-origin"])).toBe("http://localhost:5173");
   });
 
+  it("ROUND-65: debug settings round-trip via /settings/debug (default off, the self-report switch)", async () => {
+    // Default OFF — prompts stay byte-identical for every existing session.
+    const initial = await authInject({ method: "GET", url: "/api/v1/settings/debug" });
+    expect(initial.statusCode).toBe(200);
+    expect(initial.json()).toEqual({ enabled: false });
+
+    const on = await authInject({
+      method: "PUT",
+      url: "/api/v1/settings/debug",
+      payload: { enabled: true },
+    });
+    expect(on.statusCode).toBe(200);
+    expect(on.json()).toEqual({ enabled: true });
+
+    // Persists across a GET.
+    const reread = await authInject({ method: "GET", url: "/api/v1/settings/debug" });
+    expect(reread.json()).toEqual({ enabled: true });
+
+    // Invalid payload -> 400 with the field named.
+    const invalid = await authInject({
+      method: "PUT",
+      url: "/api/v1/settings/debug",
+      payload: { enabled: "yes" },
+    });
+    expect(invalid.statusCode).toBe(400);
+    expect(JSON.stringify(invalid.json())).toContain("body.enabled");
+
+    // A non-object JSON body (array) is rejected before touching the store.
+    const invalidBody = await authInject({
+      method: "PUT",
+      url: "/api/v1/settings/debug",
+      payload: [] as unknown as Record<string, unknown>,
+    });
+    expect(invalidBody.statusCode).toBe(400);
+
+    // Restore OFF (the honest default other suites rely on).
+    const off = await authInject({
+      method: "PUT",
+      url: "/api/v1/settings/debug",
+      payload: { enabled: false },
+    });
+    expect(off.json()).toEqual({ enabled: false });
+  });
+
   it("key pool: slots are listed masked, written, and removed", async () => {
     const list = await authInject({ method: "GET", url: "/api/v1/providers/openrouter/keys" });
     expect(list.statusCode).toBe(200);
