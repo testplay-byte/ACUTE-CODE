@@ -977,6 +977,8 @@ describe("live write preview (ROUND-58 R58-cf)", () => {
                 raw: '{"path":"src/generated.ts","content":"export const A = 1;\\nexport const B = 2;',
               },
             ],
+            debugReport: null,
+            browserCheckpoint: null,
           },
           streamBusy: true,
           sendError: null,
@@ -1020,6 +1022,8 @@ describe("live write preview (ROUND-58 R58-cf)", () => {
             streamingToolInputs: [
               { toolCallId: "call_w9", toolName: "write_file", raw: '{"path":"a.ts"' },
             ],
+            debugReport: null,
+            browserCheckpoint: null,
           },
           streamBusy: false,
           sendError: null,

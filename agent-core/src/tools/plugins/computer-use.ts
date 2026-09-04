@@ -1,8 +1,9 @@
 /**
- * ROUND-61 (R61): the COMPUTER-USE plugin — all 30 tools from the uploaded
- * spec (computer-use-docs 02-tool-reference.md) behind the settings master
- * switch (computerUse.enabled — default OFF; the owner's "option to turn
- * on and off" directive), shaped by:
+ * ROUND-61 (R61): the COMPUTER-USE plugin — the 30 tools of the uploaded
+ * spec (computer-use-docs 02-tool-reference.md) + find_elements (R66-2-d,
+ * the Edge fix: search the a11y tree by name instead of ingesting it),
+ * behind the settings master switch (computerUse.enabled — default OFF;
+ * the owner's "option to turn on and off" directive), shaped by:
  *
  *   · the POSTURE (computerUse.permission): "observe" registers READ-ONLY
  *     tools (the dispatcher's mutation gate refuses the rest even if an
@@ -15,9 +16,10 @@
  *     permission-mode auto-approve. Element presses (background-safe) and
  *     observations never prompt.
  *   · the VISION relay: screenshot/zoom accept {describe, instruction} —
- *     mode "separate" describes through the dedicated vision model
- *     (provider+model+key configured independently); "main" through the
- *     turn's model when its row has supports_vision; "off" returns the
+ *     read from the GLOBAL vision settings (R66: Settings → Image
+ *     Analysis); mode "separate" describes through the dedicated vision
+ *     model (provider+model+key configured independently); "main" through
+ *     the turn's model when its row has supports_vision; "off" returns the
  *     raster metadata with an honest vision-disabled note.
  *   · the MONITOR: every dispatch records into the session ring (the
  *     owner's mini-window reads GET /computer-use/session); intents also
@@ -30,7 +32,13 @@
  */
 import { jsonSchema } from "ai";
 import type { PluginDefinition, ToolDefinition } from "../registry.js";
-import { getComputerUseSettings, visionKeyringId } from "../../storage/computer-use.js";
+import { getComputerUseSettings } from "../../storage/computer-use.js";
+// R66-2-b (owner B3+B5): the vision settings moved OUT of computer use —
+// the relay below reads the GLOBAL vision configuration (Settings → Image
+// Analysis: vision.mode/provider/modelId) so computer-use screenshots, the
+// embedded-browser screenshots and the general analyze_image tool all share
+// ONE configuration and ONE honest failure story.
+import { getVisionSettings, visionKeyringId } from "../../storage/vision.js";
 // R62 (D8): the live-engine handshake — the browser plugin's screenshot
 // action borrows this turn's backend + run + session for screen-region
 // captures of the embedded browser panel.
@@ -130,7 +138,7 @@ const modifiersSchema = {
 export const computerUsePlugin: PluginDefinition = {
   id: "core-computer-use",
   name: "Computer Use",
-  version: "1.0.0",
+  version: "1.1.0",
   description:
     "Observe and actuate the desktop GUI (Windows/Linux/macOS): accessibility-first element actions with screenshot-coordinate fallback, receipts, fail-closed refusals, kill switch, and a separate vision-model relay.",
   category: "computer",
@@ -247,7 +255,7 @@ export const computerUsePlugin: PluginDefinition = {
       execute: (input: Record<string, unknown>) => execute(name, input),
     });
 
-    /* ── the 30 tools (doc 02) ──────────────────────────────────────────── */
+    /* ── the 31 tools (30 doc-02 + find_elements) ─────────────────────── */
 
     const tools: ToolDefinition[] = [
       // ── Observe & resolve ──
@@ -282,9 +290,23 @@ export const computerUsePlugin: PluginDefinition = {
         },
         ["appRef"],
       ),
+      // R66-2-d (owner directive B2, the live Edge failure): a server-side
+      // tree SEARCH so one control can be located in a Chromium-sized window
+      // without reading the whole snapshot or looping screenshots.
+      tool(
+        "find_elements",
+        "SEARCH an app's accessibility tree by name substring (and optional kind) — returns the matching elements with their indexes + bounds. THE way to find one control in a big app (browsers, Edge, VS Code) without reading the whole tree or taking screenshots: find_elements {appRef, query:'Sign in', kind:'button'} → left_click {target:{type:'element', stateId, index}} using the returned stateId + index. Cheaper than get_app_state detail:'full' on Chromium-sized windows (those return thousands of elements). kind filters by the snapshot's mapped kinds (button, textfield, checkbox, combobox, slider, tab, menuitem, row, text, image, pane, window, scrollbar).",
+        {
+          appRef: appRefSchema,
+          query: { type: "string", description: "case-insensitive name substring" },
+          kind: { type: "string", description: "optional element kind filter (the snapshot's mapped kinds, e.g. 'button')" },
+          limit: { type: "integer", description: "max matches returned (default 20, hard max 40; 'total' in the result reports the uncapped match count)" },
+        },
+        ["appRef", "query"],
+      ),
       tool(
         "screenshot",
-        "Full-display capture (the display chosen by switch_display). The FALLBACK observation — prefer get_app_state. Returns frame metadata (frameId, width, height, scale). describe:true additionally runs the VISION model over the image and returns its textual description (when vision is configured in Settings).",
+        "Full-display capture (the display chosen by switch_display). The FALLBACK observation — prefer get_app_state. Returns frame metadata (frameId, width, height, scale). describe:true additionally runs the VISION model over the image and returns its textual description (when vision is configured in Settings → Image Analysis).",
         {
           describe: { type: "boolean", description: "also describe the image via the configured vision model" },
           instruction: { type: "string", description: "what to look for (forwarded to the vision model)" },
@@ -467,6 +489,7 @@ export const computerUsePlugin: PluginDefinition = {
     if (settings.permission === "observe") {
       const readOnly = new Set([
         "list_apps", "list_windows", "list_displays", "switch_display", "get_app_state",
+        "find_elements",
         "screenshot", "zoom", "cursor_position", "request_access", "read_clipboard",
         "wait",
       ]);
@@ -500,33 +523,33 @@ function consentSummary(tool: string, input: Record<string, unknown>): string {
 /* ── the vision relay wiring ──────────────────────────────────────────────── */
 
 async function relayVision(
-  db: Parameters<typeof getComputerUseSettings>[0],
+  db: Parameters<typeof getVisionSettings>[0],
   keyring: import("../../providers/registry.js").ProviderKeyring | undefined,
   mainModel: { providerId: string; modelId: string } | undefined,
   pngBase64: string,
   instruction: string,
 ): Promise<{ ok: true; text: string; model: string; mode: string; ms: number } | { ok: false; error: string }> {
-  const settings = getComputerUseSettings(db);
-  if (settings.vision.mode === "off") {
+  const settings = getVisionSettings(db);
+  if (settings.mode === "off") {
     return {
       ok: false,
       error:
-        "vision is OFF — enable it in Settings → Computer Use (a separate vision model, or main-model vision when the row supports it); the raster metadata above is still usable with coordinates",
+        "vision is OFF — enable it in Settings → Image Analysis (a separate vision model, or main-model vision when the row supports it); the raster metadata above is still usable with coordinates",
     };
   }
   if (keyring === undefined) {
     return { ok: false, error: "no keyring in this context — vision unavailable" };
   }
-  if (settings.vision.mode === "separate") {
-    if (settings.vision.provider === null || settings.vision.modelId === null) {
+  if (settings.mode === "separate") {
+    if (settings.provider === null || settings.modelId === null) {
       return {
         ok: false,
-        error: "vision mode is 'separate' but the vision provider/model is not configured — set them in Settings → Computer Use",
+        error: "vision mode is 'separate' but the vision provider/model is not configured — set them in Settings → Image Analysis",
       };
     }
     const result = await describeRaster(
-      { db, keyring, visionKeyringId: visionKeyringId(settings.vision.provider) },
-      { mode: "separate", providerId: settings.vision.provider, modelId: settings.vision.modelId },
+      { db, keyring, visionKeyringId: visionKeyringId(settings.provider) },
+      { mode: "separate", providerId: settings.provider, modelId: settings.modelId },
       { imageBase64: pngBase64, instruction },
     );
     return "error" in result ? { ok: false, error: result.error } : { ok: true, ...result };
@@ -540,7 +563,7 @@ async function relayVision(
   if (model === undefined || !model.supportsVision) {
     return {
       ok: false,
-      error: `the turn's model '${mainModel.modelId}' does not support vision (or its row isn't marked supports_vision) — set a separate vision model in Settings → Computer Use`,
+      error: `the turn's model '${mainModel.modelId}' does not support vision (or its row isn't marked supports_vision) — set a separate vision model in Settings → Image Analysis`,
     };
   }
   const result = await describeRaster(
@@ -552,7 +575,7 @@ async function relayVision(
 }
 
 function findModelRow(
-  db: Parameters<typeof getComputerUseSettings>[0],
+  db: Parameters<typeof getVisionSettings>[0],
   providerId: string,
   modelId: string,
 ): { supportsVision: boolean } | undefined {

@@ -38,6 +38,12 @@ import {
 import { CommandPalette } from "./CommandPalette";
 import { ConfirmDialog } from "../agents/ConfirmDialog";
 import { ChatMarkdown } from "./ChatMarkdown";
+// ROUND-66 (R66, C1): the dedicated debug-report section (the context-free
+// post-turn analyst — live while it streams, folded from debug.report events).
+import { DebugReportCard } from "./DebugReportCard";
+// ROUND-66 (R66, A4): the human-verification checkpoint card (bot walls —
+// the wait_for_verification countdown the owner solves).
+import { BrowserCheckpointCard } from "./BrowserCheckpointCard";
 import {
   BareWorkingEntries,
   WorkingSection,
@@ -745,6 +751,18 @@ function AssistantTurn({
         ms={item.ms}
         model={item.model}
       />
+      {/* ROUND-66 (R66, C1): the DEDICATED debug-report section at the very
+          bottom of the turn — the context-free analyst's post-turn report
+          (folded from the persisted debug.report event; NEVER part of the
+          model-facing history, so follow-up turns exclude it by design). */}
+      {item.debugReport !== undefined ? (
+        <div className="mt-2 min-w-0">
+          <DebugReportCard
+            report={{ state: "done", text: item.debugReport.content, model: item.debugReport.model }}
+            projectId={projectId}
+          />
+        </div>
+      ) : null}
     </motion.div>
   );
 }
@@ -1782,6 +1800,16 @@ export function AgentChatPanel({
             {liveTurn !== null ? (
               <div aria-live="polite" aria-atomic="false" className="group min-w-0">
                 {liveSection}
+                {/* ROUND-66 (R66, A4): the human-verification checkpoint — the
+                    browser tool hit a bot wall and is WAITING for the owner.
+                    Rendered ABOVE the streaming text (the agent is paused;
+                    this card is the thing that needs the owner's eyes) with
+                    the live countdown + Mark as done / Stop waiting. */}
+                {liveTurn.browserCheckpoint !== null ? (
+                  <div className="mb-2 min-w-0">
+                    <BrowserCheckpointCard checkpoint={liveTurn.browserCheckpoint} />
+                  </div>
+                ) : null}
                 {liveTurn.streamText !== "" ? (
                   <div className={`min-w-0 break-words text-[13px] leading-[1.65] ${liveTurn.working.length > 0 ? "mt-2" : ""}`} style={{ color: styles.text }}>
                     {/* ROUND-64 (R64-c): ChatMarkdown — the LIVE answer also
@@ -1815,6 +1843,17 @@ export function AgentChatPanel({
                     assistantSeq={liveTurn.lastAssistantSeq}
                     copyText={liveTurn.streamText}
                   />
+                ) : null}
+                {/* ROUND-66 (R66, C1): the LIVE debug-report section — the
+                    turn's answer is complete (the analyst runs AFTER the
+                    outcome, BEFORE the done frame) and the context-free
+                    analyst is streaming below it: spinner while it starts,
+                    live markdown while it streams. The refetch folds it into
+                    AssistantTurnItem.debugReport when done lands. */}
+                {liveTurn.debugReport !== null ? (
+                  <div className="mt-2 min-w-0">
+                    <DebugReportCard report={liveTurn.debugReport} projectId={projectId} />
+                  </div>
                 ) : null}
               </div>
             ) : null}

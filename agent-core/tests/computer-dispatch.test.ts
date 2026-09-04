@@ -41,13 +41,16 @@ let fakeFrontmost: number | null = 4242;
 let rawRequiresForeground = true;
 /** R64-a: the resolver test's app table (mutable per-test). */
 let fakeApps: AppInfo[] = [{ name: "App", pid: 4242, active: true }];
+/** R66-2-d: find_elements tests may swap the fake snapshot's element list
+ * (makeDispatcher resets it to the default 5-element table). */
+let fakeElements: Snapshot["elements"] | null = null;
 
 const ELEMENTS: Snapshot["elements"] = [
-  { index: 0, kind: "window", name: "App", flags: [] },
-  { index: 1, kind: "button", name: "Save", flags: ["pressable"] },
-  { index: 2, kind: "textfield", name: "File name:", flags: ["editable", "focused"], value: "old.txt" },
-  { index: 3, kind: "menuitem", name: "File", flags: ["has_menu", "pressable"], actions: ["Expand"] },
-  { index: 4, kind: "button", name: "Bare", flags: ["pressable"] },
+  { index: 0, kind: "window", name: "App", flags: [], bounds: [10, 20, 800, 600] },
+  { index: 1, kind: "button", name: "Save", flags: ["pressable"], bounds: [100, 200, 80, 30] },
+  { index: 2, kind: "textfield", name: "File name:", flags: ["editable", "focused"], value: "old.txt", bounds: [120, 260, 200, 24] },
+  { index: 3, kind: "menuitem", name: "File", flags: ["has_menu", "pressable"], actions: ["Expand"], bounds: [30, 40, 60, 20] },
+  { index: 4, kind: "button", name: "Bare", flags: ["pressable"], bounds: [400, 500, 90, 30] },
 ];
 
 const fakeBackend: CuaBackend = {
@@ -74,14 +77,17 @@ const fakeBackend: CuaBackend = {
   listWindows: async () =>
     ({ windows: [{ windowId: 77, title: "App Window", bounds: [10, 20, 800, 600] as [number, number, number, number], main: true, focused: true }] as WindowInfo[] }),
   listDisplays: async () => ({ displays: [{ index: 1, bounds: [0, 0, 1920, 1080] as [number, number, number, number], main: true }] }),
-  buildSnapshot: async (_run, app, window, detail) => ({
-    stateId: "",
-    app: { pid: app.pid, title: window.title },
-    window: { title: window.title, windowId: window.windowId, bounds: window.bounds },
-    surface: { kind: "window", actualWindowId: window.windowId, lifecycle: "stable" },
-    elements: detail === "full" ? ELEMENTS.map((e) => ({ ...e })) : ELEMENTS,
-    createdAt: 0,
-  }),
+  buildSnapshot: async (_run, app, window, detail) => {
+    const source = fakeElements ?? ELEMENTS;
+    return {
+      stateId: "",
+      app: { pid: app.pid, title: window.title },
+      window: { title: window.title, windowId: window.windowId, bounds: window.bounds },
+      surface: { kind: "window", actualWindowId: window.windowId, lifecycle: "stable" },
+      elements: detail === "full" ? source.map((e) => ({ ...e })) : source,
+      createdAt: 0,
+    };
+  },
   hitTest: async () => null,
   focusedElementName: async () => null,
   pressElement: async (_run, _pid, _window, _element) => {
@@ -144,6 +150,7 @@ function makeDispatcher(allowMutations = true): ComputerDispatcher {
   fakeFrontmost = 4242;
   rawRequiresForeground = true;
   fakeApps = [{ name: "App", pid: 4242, active: true }];
+  fakeElements = null;
   return new ComputerDispatcher({ backend: fakeBackend, run: fakeRun, root: tempRoot, allowMutations });
 }
 
@@ -521,6 +528,129 @@ describe("ROUND-61 (R61): receipts + the audit journal + monitor stats", () => {
       expect(observation).toBeDefined();
       expect(observation?.stateId).not.toBe(snap.stateId);
     }
+  });
+});
+
+/* ── R66-2-d: find_elements — server-side tree search (the Edge fix) ─────── */
+
+describe("R66-2-d: find_elements — search the tree instead of ingesting it", () => {
+  it("happy path: a query matching 2 of 5 returns indexes + bounds + total + note + a USABLE stateId", async () => {
+    const d = makeDispatcher();
+    const result = await d.dispatch("find_elements", { appRef: { pid: 4242 }, query: "file" });
+    expect(result.kind).toBe("data");
+    if (result.kind === "data") {
+      const matches = result.data["matches"] as Array<{ index: number; kind: string; name: string; bounds: number[] }>;
+      expect(matches.map((m) => m.index)).toEqual([2, 3]);
+      expect(matches.map((m) => m.name)).toEqual(["File name:", "File"]);
+      expect(matches[0]["kind"]).toBe("textfield");
+      expect(matches[1]["kind"]).toBe("menuitem");
+      expect(matches[0]["bounds"]).toEqual([120, 260, 200, 24]);
+      expect(result.data["total"]).toBe(2);
+      expect(result.data["note"]).toBe(
+        "indexes are get_app_state/left_click element target indexes — use them directly",
+      );
+      // The snapshot is REGISTERED — the stateId works as an element target.
+      const stateId = result.data["stateId"] as string;
+      expect(getComputerSession().getSnapshot(stateId)).toBeDefined();
+      expect((result.data["window"] as { title: string }).title).toBe("App Window");
+    }
+  });
+
+  it("kind filter is an AND rule: kind must match AND the name must contain the query", async () => {
+    const d = makeDispatcher();
+    const menu = await d.dispatch("find_elements", { appRef: { pid: 4242 }, query: "file", kind: "menuitem" });
+    expect(menu.kind).toBe("data");
+    if (menu.kind === "data") {
+      expect((menu.data["matches"] as Array<{ index: number }>).map((m) => m.index)).toEqual([3]);
+      expect(menu.data["total"]).toBe(1);
+    }
+    // 'file' matches two names, but NO button kind carries it → honest empty.
+    const none = await d.dispatch("find_elements", { appRef: { pid: 4242 }, query: "file", kind: "button" });
+    expect(none.kind).toBe("refusal");
+    if (none.kind === "refusal") {
+      expect(none.refusal.payload).toMatchObject({ query: "file", kind: "button", elementsWalked: 5 });
+    }
+  });
+
+  it("limit caps the list; total reports the UNCAPPED match count (default 20, hard max 40)", async () => {
+    const d = makeDispatcher();
+    fakeElements = Array.from({ length: 45 }, (_, i) => ({
+      index: i,
+      kind: "button",
+      name: `Result row ${i}`,
+      flags: ["pressable"],
+      bounds: [10, 10 + i * 20, 300, 18] as [number, number, number, number],
+    }));
+    const limited = await d.dispatch("find_elements", { appRef: { pid: 4242 }, query: "result", limit: 10 });
+    expect(limited.kind).toBe("data");
+    if (limited.kind === "data") {
+      expect((limited.data["matches"] as unknown[]).length).toBe(10);
+      expect(limited.data["total"]).toBe(45);
+      expect((limited.data["matches"] as Array<{ index: number }>)[0]["index"]).toBe(0);
+    }
+    const defaulted = await d.dispatch("find_elements", { appRef: { pid: 4242 }, query: "result" });
+    expect(defaulted.kind).toBe("data");
+    if (defaulted.kind === "data") {
+      expect((defaulted.data["matches"] as unknown[]).length).toBe(20); // the default
+      expect(defaulted.data["total"]).toBe(45);
+    }
+    const clamped = await d.dispatch("find_elements", { appRef: { pid: 4242 }, query: "result", limit: 100 });
+    expect(clamped.kind).toBe("data");
+    if (clamped.kind === "data") {
+      expect((clamped.data["matches"] as unknown[]).length).toBe(40); // the hard max
+      expect(clamped.data["total"]).toBe(45);
+    }
+  });
+
+  it("empty match → an honest ok:false-shaped result listing what was searched", async () => {
+    const d = makeDispatcher();
+    const result = await d.dispatch("find_elements", { appRef: { pid: 4242 }, query: "zzz-nothing" });
+    expect(result.kind).toBe("refusal");
+    if (result.kind === "refusal") {
+      expect(result.refusal.message).toContain("zzz-nothing");
+      expect(result.refusal.message).toContain("5");
+      expect(result.refusal.recovery).toContain("substring");
+      expect(result.refusal.payload).toMatchObject({ query: "zzz-nothing", elementsWalked: 5 });
+    }
+  });
+
+  it("find → click: the returned stateId + index drive a REAL element press (the Edge loop)", async () => {
+    const d = makeDispatcher();
+    const found = await d.dispatch("find_elements", { appRef: { pid: 4242 }, query: "Save", kind: "button" });
+    expect(found.kind).toBe("data");
+    if (found.kind !== "data") return;
+    const matches = found.data["matches"] as Array<{ index: number }>;
+    expect(matches).toHaveLength(1);
+    expect(matches[0]["index"]).toBe(1);
+    const click = await d.dispatch("left_click", {
+      target: { type: "element", stateId: found.data["stateId"] as string, index: matches[0]["index"] },
+    });
+    expect(click.kind).toBe("receipt");
+    expect(calls).toEqual(["press"]);
+  });
+
+  it("read-only by classification: observe-only posture lets find_elements run", async () => {
+    const d = makeDispatcher(false);
+    const result = await d.dispatch("find_elements", { appRef: { pid: 4242 }, query: "file" });
+    expect(result.kind).toBe("data");
+  });
+
+  it("the kill switch refuses it like every other observe tool", async () => {
+    const d = makeDispatcher();
+    getComputerSession().ensureStarted("fake");
+    getComputerSession().stop("done");
+    const result = await d.dispatch("find_elements", { appRef: { pid: 4242 }, query: "file" });
+    expect(result.kind === "refusal" && result.refusal.error).toBe("kill_switch_active");
+  });
+
+  it("rides get_app_state's EXACT resolution: invented windowId, ghost app, empty query", async () => {
+    const d = makeDispatcher();
+    const badWindow = await d.dispatch("find_elements", { appRef: { pid: 4242, windowId: 1 }, query: "file" });
+    expect(badWindow.kind === "refusal" && badWindow.refusal.error).toBe("invalid_window_id");
+    const ghost = await d.dispatch("find_elements", { appRef: { name: "Ghost" }, query: "file" });
+    expect(ghost.kind === "refusal" && ghost.refusal.error).toBe("app_not_found");
+    const noQuery = await d.dispatch("find_elements", { appRef: { pid: 4242 }, query: "   " });
+    expect(noQuery.kind === "refusal" && noQuery.refusal.error).toBe("capability_fail_closed");
   });
 });
 

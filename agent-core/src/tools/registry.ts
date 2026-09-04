@@ -51,6 +51,10 @@ import { delegationPlugin } from "./plugins/delegation.js";
 import { computerUsePlugin } from "./plugins/computer-use.js";
 import { skillsPlugin } from "./plugins/skills.js";
 import { mcpPlugin } from "./plugins/mcp.js";
+// ROUND-66 (R66-2-b): the general image-analysis tool — rides EVERY turn
+// (the honest off-mode refusal is the switch), reading the global vision
+// settings (Settings → Image Analysis).
+import { visionPlugin } from "./plugins/vision.js";
 
 /** Every tool's uniform result (moved here from tools/index.ts — the
  * registry is the types home now; index.ts re-exports for back-compat). */
@@ -114,6 +118,9 @@ export const BUILT_IN_PLUGINS: readonly PluginDefinition[] = [
   // skills' read_skill is always on (observation); MCP bridges only
   // owner-configured enabled servers.
   computerUsePlugin,
+  // R66: vision is NOT settings-gated to absence — analyze_image registers
+  // for every turn with a db and refuses honestly when vision is OFF.
+  visionPlugin,
   skillsPlugin,
   mcpPlugin,
 ];

@@ -83,8 +83,9 @@ function writeFixturePlugin(dir: string, file: string, toolName: string): void {
 
 describe("ROUND-52 (R52-f): the plugin registry", () => {
   it("every built-in plugin declares a valid id/category and its tools follow the name grammar", async () => {
-    // ROUND-61 (R61): + computer-use + skills + mcp = 12.
-    expect(BUILT_IN_PLUGINS.length).toBe(12);
+    // ROUND-61 (R61): + computer-use + skills + mcp = 12; ROUND-66 (R66-2-b):
+    // + core-vision (analyze_image) = 13.
+    expect(BUILT_IN_PLUGINS.length).toBe(13);
     // Declaration-stub deps (same shape builtInToolCatalog uses) so the
     // delegation plugin — gated on keyring/chat PRESENCE — also declares.
     const { ProviderKeyring } = await import("../src/providers/registry");
@@ -102,6 +103,8 @@ describe("ROUND-52 (R52-f): the plugin registry", () => {
     // ROUND-61: computer-use (settings default OFF) and mcp (no servers
     // configured) LEGITIMATELY declare zero tools on a fresh database —
     // the settings/db gates, not broken plugins. Everything else declares.
+    // ROUND-66 (R66-2-b): core-vision declares analyze_image even with
+    // vision OFF (the honest refusal IS the switch — no absence gate).
     const zeroByDesign = new Set(["core-computer-use", "core-mcp"]);
     for (const plugin of BUILT_IN_PLUGINS) {
       expect(plugin.id).toMatch(/^core-[a-z-]+$/);

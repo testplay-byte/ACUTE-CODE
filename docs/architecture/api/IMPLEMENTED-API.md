@@ -1,8 +1,8 @@
-<!-- last-reviewed: 2026-09-02 round-64 -->
+<!-- last-reviewed: 2026-09-04 round-66 -->
 # IMPLEMENTED API — the shipped surface
 
 **Truth = this file.** Verified against `agent-core/src/server.ts` at
-round-17 (2026-08-23), refreshed R37→R61. The aspirational full contract (52
+round-17 (2026-08-23), refreshed R37→R66. The aspirational full contract (52
 operations, WS gateway, planned routes) lives in
 [`API.md`](API.md) — anything there and
 not here **does not exist yet**. Base: `http://127.0.0.1:<port>`; dev port
@@ -28,7 +28,7 @@ vite dev origins.
 | Route | Notes |
 |---|---|
 | `GET /agents?includeTemplates=` | list; `false` excludes the 5 templates (default agent "Acute" remains — seeded at DB open, fixed id `agt_default_nova`, provider openrouter / model `z-ai/glm-5.2:free` since R43/migration-0013; was the dead `stealth/ox-alpha`) |
-| `POST /agents` | `AgentDraft` → `201`. `allowedTools` validated against the REAL tool list (`TOOL_NAMES`, **24 tools** — incl. `delegate_task` + `browser_control` since R43, `memory_save`/`memory_recall`/`memory_list` since R44, `job_status`/`job_stop` since R52, and `read_skill` since R61) — SPEC-era names 400 (ADR-0019). Empty list = ALL tools. The 30 computer-use tools are deliberately NOT allowlist vocabulary (settings-gated, default OFF); `mcp__<server>__<tool>` names are dynamic (server-config-derived). |
+| `POST /agents` | `AgentDraft` → `201`. `allowedTools` validated against the REAL tool list (`TOOL_NAMES`, **25 tools** — incl. `delegate_task` + `browser_control` since R43, `memory_save`/`memory_recall`/`memory_list` since R44, `job_status`/`job_stop` since R52, `read_skill` since R61, and `analyze_image` since R66) — SPEC-era names 400 (ADR-0019). Empty list = ALL tools. The 31 computer-use tools are deliberately NOT allowlist vocabulary (settings-gated, default OFF); `mcp__<server>__<tool>` names are dynamic (server-config-derived). |
 | `GET/PATCH/DELETE /agents/:id` | PATCH bumps version; DELETE 409 `{reason:"template"}` for templates |
 | `POST /agents/:id/duplicate` | `{name?}` → `201` |
 
@@ -196,11 +196,12 @@ The rewritten page's escape hatch posts `{type:"acute:open"\|"acute:title"\|"acu
   renders an OFF notice (data is preserved). Sub-agent children NEVER
   receive the digest (independent context) regardless of the switch.
 - **ROUND-65: `GET/PUT /settings/debug` → `{enabled: boolean}`** (default
-  `false`; same validation/envelope as the memory switch). While `true`,
-  `prepareTurn` adds a `## DEBUG MODE (ON)` section to the turn's system
-  prompt (registry id `debug`): the final answer must end with a raw
-  `## Execution report` — every tool call, outcome, verification. Read
-  per-turn; a flip applies to the very next message.
+  `false`; same validation/envelope as the memory switch). **R66 rework:**
+  the switch no longer composes any prompt section (the R65
+  `## DEBUG MODE` self-report is REMOVED) — while `true`, the stream route
+  runs the post-turn CONTEXT-FREE debug analyst after the turn completes
+  (see the ROUND-66 section). Read per-turn; a flip applies to the very
+  next message.
 - **ROUND-49: nested delegation.** Children below `MAX_DELEGATION_DEPTH = 3`
   keep `delegate_task` (a sub-agent can spawn sub-agents — same tools, own
   context + key slot); at/beyond the cap the runtime strips it (recursion
@@ -930,14 +931,14 @@ settings-gated default OFF). Full owner guides:
 ### Tools: `read_skill` + `mcp__<server>__<tool>`
 
 - `read_skill` (the skills loader) joins the always-on toolset (deps-gated)
-  and `TOOL_NAMES` (24 — see /api/v1/agents above); migration 0023 appended
+  and `TOOL_NAMES` (25 — see /api/v1/agents above); migration 0023 appended
   it to template + default-agent allowlists only.
 - Enabled MCP servers contribute their tools dynamically as
   `mcp__<server>__<tool>` (grammar-checked; over-length names skipped +
   logged). A failed/unconfigured server contributes nothing (fail-soft).
-- The 30 computer-use tools register ONLY when
+- The 31 computer-use tools register ONLY when
   `computerUse.enabled=true` (default OFF); the "observe" posture registers
-  just the 11 read-only ones.
+  just the 12 read-only ones.
 
 
 ## ROUND-62 additions (implemented)
@@ -1109,3 +1110,139 @@ See the ROUND-49 area above — the memory-switch pattern verbatim
 - `DEFAULT_WEB_HOST_ALLOWLIST` gained `google.com`, `www.google.com`,
   `bing.com`, `www.bing.com` (exact-host matching, no www normalization —
   `google.com.evil.org` still asks).
+
+## ROUND-66 additions (implemented)
+
+The live-fire patch (the owner's 0.65.0 field report: browser page actions,
+bot-wall checkpoints, instant viewport apply, the vision split, the debug
+analyst, Windows element search). New REST: the browser-checkpoint resolve
+route + the `/vision` settings/test trio. New SSE frames: `browser-viewport`,
+`browser-checkpoint(.resolved)`, and the debug analyst's
+`debug-start|delta|done|error`. New session event type `debug.report`
+(display-only).
+
+### `POST /api/v1/browser-checkpoints/:checkpointId/resolve`
+
+The human-verification checkpoint's answer channel (the
+`browser_control` `wait_for_verification` action opens a countdown card in
+chat and pends; the owner's click answers here). Body
+`{action: "done"|"stop"}` → **200 `{ok:true, resolution}`** when a pending
+checkpoint resolved; **200 `{ok:false, resolution:"timeout", error:
+"unknown or expired checkpoint"}`** for unknown/expired ids (the card's own
+countdown is the fallback); `400 VALIDATION` on a bad body (the action must
+be one of the two). Registered next to the browser routes (same bearer
+wall). The registry (`agent-core/src/browser-checkpoint.ts`) settles every
+checkpoint on REST resolve OR its countdown (default 15 s, hard cap 60 s)
+and emits the resolved frame on every settle. The wall detector itself is
+pure and exported (`detectVerificationWall` — cloudflare > captcha > age >
+"verification" priority, word-boundary markers, ≤120-char evidence).
+
+### `GET /vision/settings` · `PUT /vision/settings` · `POST /vision/test`
+
+The R66 vision split — the vision model moved OUT of computer use into its
+own global settings (Settings → Image Analysis; computer-use + browser
+screenshots AND the new `analyze_image` tool all read this one
+configuration):
+
+- `GET` → the bare `VisionSettings` `{mode: "off"|"separate"|"main",
+  provider: string|null, modelId: string|null}`.
+- `PUT` → validated partial patch (mode enum, provider slug
+  `^[a-z0-9_-]+$`, modelId ≤ 256 chars; `null` clears) → the new settings
+  BARE; `400 VALIDATION` with the field named on bad payloads. The writes
+  land on the new `vision.*` settings rows — migration
+  `0025_vision_settings.sql` seeds them from the legacy
+  `computerUse.vision.*` rows (INSERT…SELECT + OR IGNORE; absent sources
+  insert nothing), and a lazy read covers databases the migration has not
+  touched. `PUT /computer-use/config` with a `vision` field now answers
+  `400 "vision settings moved to PUT /vision/settings"` (honest pointer,
+  never a silent drop); `GET /computer-use/config` returns
+  `{enabled, permission}` only. The vision KEY keeps the R61
+  `/computer-use/vision-key` routes + the `"<providerId>-vision"` keyring
+  slot + the Tauri `store_vision_key` command (unchanged).
+- `POST /vision/test` → a 1×1 transparent PNG through the CURRENT settings:
+  `{ok:true, description, model, ms}` in separate mode (configured); honest
+  `{ok:false, error}` for off ("image analysis is OFF"), main ("main-mode
+  test needs a live turn — flip a provider model's supports-vision flag
+  instead"), and unconfigured separate.
+
+### New SSE frames (`POST /sessions/:id/messages/stream`)
+
+- `{type:"browser-viewport", sessionId:"", tabId, viewport:{width, height,
+  preset, zoom, rotate}}` — emitted by the `set_viewport` action the moment
+  the server state changes; the stream-store intercepts it BEFORE the
+  live-turn guard (turn-independent) and applies it INSTANTLY to the
+  matching tab (the 4 s poll stays as the backfill). The owner's
+  "agent viewport was not applied until I nudged a number" fix.
+- `{type:"browser-checkpoint", sessionId:"", checkpointId, tabId, kind:
+  "captcha"|"cloudflare"|"age"|"verification", url, waitMs}` — mounts the
+  chat countdown card (Mark as done / Stop waiting); handled after the
+  live-turn guard (tools only run inside live turns).
+- `{type:"browser-checkpoint.resolved", sessionId:"", checkpointId,
+  resolution: "done"|"stop"|"timeout"}` — collapses the card on EVERY
+  settle (owner click or countdown).
+- `{type:"debug-start"|"debug-delta"|"debug-done"|"debug-error", sessionId,
+  …}` — the post-turn context-free debug analyst's live stream (see below);
+  the frames ride the still-open SSE BEFORE the turn's terminal `done` /
+  `error` frame.
+- The `computer-use` monitor frames are unchanged, but the browser
+  `screenshot` action NO LONGER records into the computer-use ring (A1 —
+  browser work must never show "agent is using your computer"), and the
+  monitor's live signal is now the decayed (6 s) real-control activity.
+
+### The `debug.report` session event (display-only)
+
+When debug mode is ON and a turn finished on its own (ok, or
+`status >= 500` — never a deliberate ABORTED stop), the stream route runs a
+FRESH model call over the session's whole transcript (user request, every
+tool call with its FULL persisted result, errors; 60 k cap with head+tail
+split; no tools; `maxTurns` 1; keyring secrets scrubbed) and persists the
+report as `{type:"debug.report", payload:{content, model, ts}}` (+
+`agentId` stamped by the storage layer). **`assembleHistory` has no branch
+for the type** — follow-up turns NEVER include it in the model-facing
+history. The frontend folds it onto the analyzed turn
+(`AssistantTurnItem.debugReport`); a stray report with no analyzable turn
+in its gap is dropped honestly. The analyst's own failure sends
+`debug-error` (API key scrubbed) and never breaks the turn's terminal
+frame. Frame order (pinned by test):
+`[turn events…] → debug-start → debug-delta* → (persist) → debug-done →
+done|error`.
+
+### `browser_control` — the 15-action surface
+
+The action enum grew (9 → 15): `navigate | back | forward | reload |
+set_viewport | read | read_dom | source | click | type | press_key | eval |
+screenshot | get_state | wait_for_verification`. The new page actions
+(`click`/`type`/`press_key`/`read_dom`/`source`) each compile to ONE eval
+script over the existing browser-command bridge (user input embedded via
+`JSON.stringify` only); `type` supports `submit:true` and `press_key`
+Enter-in-a-form both trigger native `form.requestSubmit()` (the
+Google-search fix); `navigate`/`read` probe for bot walls and append the ⚠
+note; `wait_for_verification` opens the checkpoint (above). No new bridge
+routes — everything rides `POST /browser-commands/:id/result` (R62).
+
+### Tools: `analyze_image` (TOOL_NAMES 25) + `find_elements`
+
+- `analyze_image` (`agent-core/src/tools/plugins/vision.ts`, plugin
+  `core-vision`) — `{path?|url?, instruction?}`, local file (png/jpg/jpeg/
+  webp/gif/bmp, ≤8 MB) or http(s) URL, described through the global vision
+  relay (the `/vision/settings` configuration above; honest refusal when
+  off/unconfigured). ALWAYS registered (like `web_fetch` — the OFF refusal
+  is the switch), so it joined `TOOL_NAMES` (**25**) + the api.ts
+  `TOOL_CATALOG`; migration `0026_analyze_image_tool.sql` appends it to
+  existing EXPLICIT allowlists (template + default agent rows that carry
+  `web_fetch`; `[]` = ALL already covers it; user curation never widened).
+- `find_elements` (computer-use plugin, 31st tool) — `{appRef, query,
+  kind?, limit?}` searches the a11y snapshot server-side; observe-posture
+  read-only, never consents; NOT `TOOL_NAMES` vocabulary (the
+  settings-gated computer-use surface). The Windows walk behind it:
+  pattern probes on 17 interactive ControlTypes only, ONE 4-probe pass per
+  probed node, `maxEl` 800 → 2400.
+
+### Drift notes
+
+- The browser screenshot's monitor-ring record removal (A1) changed no API
+  surface — only the session ring contents.
+- The R65 `## DEBUG MODE` prompt section is REMOVED (the R66 analyst is
+  route-side); the golden fixture regenerated by the sanctioned procedure
+  (the R62-era description of the prompt as the debug surface is history).
+

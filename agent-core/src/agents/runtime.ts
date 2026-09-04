@@ -991,10 +991,12 @@ async function prepareTurn(
           const cu = getComputerUseSettings(db);
           return { enabled: cu.enabled, posture: cu.permission };
         })(),
-        // ROUND-65 (R65): the debug-mode switch (Settings → Advanced) — ON
-        // adds the "## DEBUG MODE (ON)" self-report section to THIS turn's
-        // system prompt. Read per-turn so a settings flip applies to the
-        // very next message (the permission-mode live-getter pattern).
+        // ROUND-65 (R65) → ROUND-66 (R66, C1): the debug-mode switch
+        // (Settings → Advanced). The R65 prompt-side self-report is GONE —
+        // the agent's prompt never changes. The flag is threaded for the
+        // ROUTE-side post-turn debug analyst (server.ts's runDebugAnalystPhase:
+        // a fresh context-free model call over the whole transcript, streamed
+        // into a dedicated section; never fed back into the history).
         debugMode: getDebugSettings(db).enabled,
       })
     : agent.systemPrompt;

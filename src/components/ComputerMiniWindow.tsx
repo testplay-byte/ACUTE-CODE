@@ -100,10 +100,17 @@ export function ComputerMiniWindow({
   const killSwitch = session?.killSwitch ?? false;
   const startedAt = session?.startedAt ?? null;
   const nowMs = useNowMs(sessionActive);
-  // One combined "the agent is in control" signal: live SSE frames OR an
-  // active session — and NOT once the kill switch has engaged (the stopped
-  // state starts the dismissal countdown, not a new burst).
-  const live = (liveActivity || sessionActive) && !killSwitch;
+  // ROUND-66 (R66, A1/B1 — the owner's report, verbatim: browser turns showed
+  // "the agent is using your computer" at the top right, and during real
+  // computer use "it did not show me the floating menu"): `live` is now the
+  // DECAYED real-control signal ONLY (liveActivity — bumped by actual
+  // computer-use events, rested 6s after the last one; browser screenshot
+  // records no longer pollute the ring). The old `|| sessionActive` clause
+  // was the bug: the singleton session stays ACTIVE the whole time Computer
+  // Use is merely enabled, so live pinned true forever — the edge-triggered
+  // open never re-fired after the mini page self-closed (browser turns kept
+  // the stale window up; later computer-use bursts never re-opened it).
+  const live = liveActivity && !killSwitch;
   const inTauri = isTauri();
 
   // ── one-shot seed: the component mounts before any activity (app-wide),
@@ -267,7 +274,7 @@ function MiniPill({
       animate={{ opacity: 1, y: 0, scale: 1 }}
       exit={{ opacity: 0, y: -12, scale: 0.97 }}
       transition={{ duration: 0.18, ease }}
-      className="pointer-events-auto flex max-w-[480px] items-center gap-3 rounded-2xl border px-3.5 py-2"
+      className="pointer-events-auto flex max-w-[560px] items-center gap-3 rounded-full border px-3.5 py-1.5"
       style={{
         background: styles.isDark ? withAlpha(styles.card, 0.94) : styles.card,
         backdropFilter: "blur(14px)",
@@ -278,36 +285,39 @@ function MiniPill({
       aria-label="Agent computer monitor"
       data-testid="computer-mini-pill"
     >
-      {/* LEFT — status row + the latest activity (one subtle line). */}
-      <div className="flex min-w-0 flex-col gap-0.5">
-        <div className="flex min-w-0 items-center gap-2">
-          <PulsingDot live={live} />
-          <span
-            className="min-w-0 truncate text-[12px] font-semibold"
-            style={{ color: killSwitch ? styles.textSecondary : styles.text }}
-            data-testid="mini-label"
-          >
-            {label}
-          </span>
-          {elapsed !== null ? (
-            <span
-              className="shrink-0 text-[11px] tabular-nums"
-              style={{ color: styles.textTertiary }}
-              data-testid="mini-elapsed"
-              title="Control session elapsed"
-            >
-              {elapsed}
-            </span>
-          ) : null}
-        </div>
+      {/* LEFT — ROUND-66: ONE compact row (the owner's "way too tall" report;
+          the R64 two-row pill collapsed): dot + label + "·" + the latest
+          activity inline (truncated, subtle) + the elapsed timer. */}
+      <div className="flex min-w-0 flex-1 items-center gap-2">
+        <PulsingDot live={live} />
         <span
-          className="min-w-0 truncate text-[11px]"
+          className="shrink-0 truncate text-[12px] font-semibold"
+          style={{ color: killSwitch ? styles.textSecondary : styles.text }}
+          data-testid="mini-label"
+        >
+          {label}
+        </span>
+        <span className="shrink-0 text-[11px]" style={{ color: styles.textTertiary }}>
+          ·
+        </span>
+        <span
+          className="min-w-0 flex-1 truncate text-[11px]"
           style={{ color: error !== null ? SEMANTIC_COLORS.danger : styles.textSecondary }}
           data-testid="mini-activity"
           title={activity}
         >
           {error !== null ? error : activity}
         </span>
+        {elapsed !== null ? (
+          <span
+            className="shrink-0 text-[11px] tabular-nums"
+            style={{ color: styles.textTertiary }}
+            data-testid="mini-elapsed"
+            title="Control session elapsed"
+          >
+            {elapsed}
+          </span>
+        ) : null}
       </div>
 
       {/* STOP — the danger pill (the one prominent control). */}

@@ -13,6 +13,9 @@
  *     "displays":[…],"diagnostics":{…}} and the STRICT JS-side parsers
  *   · the REAL single-display bounds (no fake 1920×1080 fallback)
  *   · `$pid` (a read-only automatic variable) never assigned
+ * R66-2-d adds the buildSnapshot pins: the 2400-element cap + the
+ * interactive-kind probe list that gates every GetCurrentPattern call (the
+ * Edge walk-speed fix) + the unchanged parse path.
  * The parse paths run against a fake RunCommand returning exactly what the
  * fixed PowerShell emits on Windows.
  */
@@ -273,14 +276,101 @@ describe("ROUND-64-a (R64-a): the list_displays script (REAL bounds, no fake fal
   });
 });
 
-/* ── the element action script (unchanged contract, pinned) ───────────────── */
+/* ── the element action script (unchanged walk contract, pinned) ───────── */
 
 describe("ROUND-64-a (R64-a): the element action script keeps its walk caps + identity check", () => {
-  it("re-walks the UIA tree with the 800-element/25-depth caps and verifies index + name", () => {
+  it("re-walks the UIA tree with the 2400-element/25-depth caps (R66-2-d: aligned with buildSnapshot so the index contract holds) and verifies index + name", () => {
     const script = windowsElementActionScript(4012, { windowId: 197266, title: "notes.txt - Notepad" }, { index: 2, kind: "button", name: "Save" }, "press");
-    expect(script).toContain("$maxDepth = 25; $maxEl = 800");
+    expect(script).toContain("$maxDepth = 25; $maxEl = 2400");
     expect(script).toContain("if (2 -ge $els.Count) { Write-Output 'NO_SUCH_ELEMENT'; exit 0 }");
     expect(script).toContain("if ($liveName -ne $wantName) { Write-Output 'STALE_ELEMENT'; exit 0 }");
     expect(script).toContain("$h = [IntPtr]197266");
+  });
+});
+
+/* ── R66-2-d: buildSnapshot — probe gating + the 2400 cap (the Edge fix) ─── */
+
+describe("R66-2-d: buildSnapshot walks 2400 elements and probes ONLY interactive kinds", () => {
+  const APP = { pid: 4012 };
+  const WINDOW = {
+    windowId: 197266,
+    title: "Bing — Microsoft Edge",
+    bounds: [0, 0, 1280, 1024] as [number, number, number, number],
+    main: true,
+    focused: true,
+  };
+
+  /** Runs buildSnapshot once with a valid 1-element payload; returns the emitted script text. */
+  async function snapshotScript(detail: "compact" | "full"): Promise<string> {
+    const run = fakeRun('{"elements":[{"index":0,"kind":"window","name":"Edge","flags":[]}]}');
+    await windowsBackend.buildSnapshot(run, APP, WINDOW, detail);
+    expect(run.capsules).toHaveLength(1);
+    return run.capsules[0].stdin ?? "";
+  }
+
+  it("caps at $maxEl = 2400 with maxDepth 25 (the 800 cap truncated before Edge page content)", async () => {
+    const script = await snapshotScript("full");
+    expect(script).toContain("$maxDepth = 25; $maxEl = 2400");
+    expect(script).not.toContain("$maxEl = 800");
+  });
+
+  it("declares the interactive-kind probe list (UIA ControlType names, pre-Mapping)", async () => {
+    const script = await snapshotScript("full");
+    expect(script).toContain(
+      "$probe = @('Button','Hyperlink','Edit','ComboBox','CheckBox','RadioButton','Slider','TabItem','MenuItem','ListItem','DataItem','TreeItem','Spinner','Thumb','ScrollBar','Document','Custom')",
+    );
+    // Non-interactive kinds are NOT probed (they record kind + name + bounds only).
+    for (const kind of ["'Window'", "'Text'", "'Pane'", "'Group'", "'Image'"]) {
+      expect(script).not.toContain(`,${kind}`);
+    }
+  });
+
+  it("gates EVERY GetCurrentPattern probe behind the interactive branch — 4 probes, one pass", async () => {
+    const script = await snapshotScript("full");
+    expect(script).toContain("$interactive = $probe -contains $ct");
+    expect(script).toContain("if ($interactive) {");
+    // EXACTLY FOUR probes — Invoke, Toggle, ExpandCollapse, Value — all inside
+    // the gated branch; value capture + action advertisement REUSE the cached
+    // handles instead of re-probing (the old script probed 8× per full node).
+    expect(script.split("GetCurrentPattern").length - 1).toBe(4);
+    expect(script).toContain("if ($null -ne $vp) {");
+    expect(script).toContain("if ($null -ne $ip) {");
+    // The gated branch sits INSIDE the per-node Walk (depth-capped recursion).
+    expect(script).toContain("function Walk($el, $depth)");
+  });
+
+  it("bounds stay conditional on detail:full (compact keeps the cheap walk)", async () => {
+    const full = await snapshotScript("full");
+    const compact = await snapshotScript("compact");
+    expect(full).toContain("if ($true) {");
+    expect(compact).toContain("if ($false) {");
+  });
+
+  it("parses the fixed output shape (full elements with value + bounds + actions) unchanged", async () => {
+    const elements = [
+      { index: 0, kind: "window", name: "Bing — Microsoft Edge", flags: [], bounds: [0, 0, 1280, 1024] },
+      { index: 1, kind: "textfield", name: "Search the web", flags: ["editable"], value: "acute code", bounds: [100, 60, 600, 40], actions: ["Invoke"] },
+      { index: 2, kind: "button", name: "Sign in", flags: ["pressable"], bounds: [1100, 20, 90, 30], actions: ["Invoke"] },
+    ];
+    const run = fakeRun(JSON.stringify({ elements }));
+    const result = await windowsBackend.buildSnapshot(run, APP, WINDOW, "full");
+    expect("error" in result).toBe(false);
+    if (!("error" in result)) {
+      expect(result.elements).toHaveLength(3);
+      expect(result.elements[1].value).toBe("acute code");
+      expect(result.elements[2].bounds).toEqual([1100, 20, 90, 30]);
+      expect(result.elements[2].actions).toEqual(["Invoke"]);
+      expect(result.window.windowId).toBe(197266);
+      expect(result.window.title).toBe("Bing — Microsoft Edge");
+    }
+  });
+
+  it("a failed capsule / EMPTY_TREE / garbage JSON refuse honestly (unchanged)", async () => {
+    const failed = await windowsBackend.buildSnapshot(fakeRun("", 1), APP, WINDOW, "full");
+    expect("error" in failed && failed.error).toContain("UIA walk failed");
+    const empty = await windowsBackend.buildSnapshot(fakeRun('{"error":"EMPTY_TREE"}'), APP, WINDOW, "full");
+    expect("error" in empty && empty.emptyTree).toBe(true);
+    const garbage = await windowsBackend.buildSnapshot(fakeRun("not json"), APP, WINDOW, "full");
+    expect("error" in garbage && garbage.error).toContain("not valid JSON");
   });
 });

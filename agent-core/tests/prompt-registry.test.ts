@@ -72,8 +72,10 @@ const FULL_CTX = {
     { name: "demo-skill", description: "A demonstration user skill." },
   ],
   computerUse: { enabled: true, posture: "act" as const },
-  // ROUND-65 (R65): the debug-mode gate, open so the COMPLETENESS pin sees
-  // the new "debug" section id.
+  // ROUND-65 (R65) → R66: debugMode stays in the ctx (the field is retained
+  // for the route-side analyst gate) but composes NOTHING since R66 removed
+  // the self-report section — kept here to pin that the golden ctx passes
+  // it with zero effect on the composition.
   debugMode: true,
 };
 

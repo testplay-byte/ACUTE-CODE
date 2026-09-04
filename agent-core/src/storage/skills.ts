@@ -64,6 +64,11 @@ export const COMPUTER_USE_SKILL_ID = "skill_builtin_computer_use";
  * accessibility-first loop (no vision needed), app resolution by
  * processName OR title, the runningApps recovery payload, and
  * verify-after-every-write discipline.
+ *
+ * ROUND-66-2-d (R66-2-d): the BIG APPS paragraph — find_elements (the
+ * server-side tree search) before screenshots in Chromium-sized windows
+ * (the owner's live Edge failure: the agent looped screenshots because it
+ * could not locate one control in a thousands-element tree).
  */
 export const COMPUTER_USE_SKILL_BODY = `# Skill: computer-use
 
@@ -79,6 +84,11 @@ Main-agent only. Never delegate Computer Use to a subagent (subagents lack the s
 7. Only when the tree cannot locate or express the target, take a screenshot and use frame-bound coordinates ({type:"coordinate", x, y} copied UNCHANGED from the latest returned image — never pre-scale, never attach appRef/stateId).
 8. VERIFY AFTER EVERY WRITE: pass return_state:"compact" on the action, or call get_app_state again. One observation, one action, then verify.
 9. Actions return receipts. action_sent=true means it MAY have happened — never blindly replay. Verify via fresh get_app_state or an external oracle (file exists, process exit code) when the outcome matters.
+
+## Big apps (browsers, Edge, VS Code)
+- get_app_state on a browser/IDE window returns a HUGE tree (Chromium exposes thousands of elements). Do NOT read it whole — SEARCH it: find_elements {appRef, query:"Sign in", kind:"button"} returns just the matching elements with indexes + bounds, far cheaper than get_app_state detail:"full".
+- Prefer find_elements + element clicks (left_click/set_value with the returned stateId + index) over screenshots in big apps.
+- Never loop screenshots when the tree can answer: find_elements by name first; screenshot/zoom only when names genuinely cannot identify the control. An empty result tells you the query and how many elements were searched — retry with a shorter substring or read the tree.
 
 ## Discipline
 - type REPLACES a field's contents (select first to insert). set_value is the preferred semantic write. Prefer set_value/perform_action over raw input.

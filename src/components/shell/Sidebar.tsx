@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
+import { Fragment, useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import { useLocation, useNavigate } from "react-router";
 import {
   ArrowLeft,
@@ -16,6 +16,7 @@ import {
   PanelLeftOpen,
   PlugZap,
   Plus,
+  ScanEye,
   Server,
   Settings,
   SlidersHorizontal,
@@ -249,6 +250,11 @@ const SETTINGS_SECTIONS = [
   { id: "skills", label: "Skills", icon: Sparkles },
   { id: "mcp", label: "MCP Servers", icon: PlugZap },
   { id: "computeruse", label: "Computer Use", icon: Monitor },
+  // ROUND-66 (R66, owner directive): the dedicated image-analysis section
+  // (the vision model's own home, split OUT of Computer Use). Same id as
+  // SettingsPage TABS so the ?tab=vision deep link lines up (the R44
+  // unreachable-tab lesson applied at birth).
+  { id: "vision", label: "Image Analysis", icon: ScanEye },
   { id: "advanced", label: "Advanced", icon: SlidersHorizontal },
 ] as const;
 
@@ -348,8 +354,17 @@ export function Sidebar() {
           its mirror. SETTINGS mode (ROUND-34 owner design frame 1a) keeps
           its header: back button + "Settings" title + the same minimize
           control at the row's end. */}
+      {/* ROUND-66 (R66, B4, owner report: "when I minimize the settings
+          sidebar, it shows me the wrong sidebar — the normal one with the
+          projects"): the minimized rail is now MODE-AWARE — on /settings it
+          renders the SETTINGS rail (back-to-dashboard + the section icons,
+          active = the ?tab=), never the normal projects nav. */}
       {minimized ? (
-        <MinimizedRail onExpand={() => setAppSidebarMinimized(false)} />
+        <MinimizedRail
+          onExpand={() => setAppSidebarMinimized(false)}
+          variant={isSettingsRoute ? "settings" : "normal"}
+          activeSettingsTab={isSettingsRoute ? activeTab : undefined}
+        />
       ) : isSettingsRoute ? (
         /* ── SETTINGS MODE (owner design frame 1a): the sidebar's whole body
            becomes the settings section list (header row first, then nav).
@@ -520,7 +535,21 @@ export function Sidebar() {
  * stays fully usable without labels. The mobile drawer reuses the same rail
  * body (a narrow drawer of icons is still perfectly navigable).
  */
-function MinimizedRail({ onExpand }: { onExpand: () => void }) {
+/** ROUND-66 (R66): the rail's MODE — "normal" (dashboard/usage/projects)
+ * or "settings" (the settings section icons — the owner's B4 report: the
+ * minimized settings sidebar must NOT fall back to the projects rail). */
+export type RailVariant = "normal" | "settings";
+
+function MinimizedRail({
+  onExpand,
+  variant = "normal",
+  activeSettingsTab,
+}: {
+  onExpand: () => void;
+  variant?: RailVariant;
+  /** The ?tab= id to mark active in the settings rail. */
+  activeSettingsTab?: string;
+}) {
   const styles = useThemeStyles();
   const navigate = useNavigate();
   const { pathname } = useLocation();
@@ -585,6 +614,36 @@ function MinimizedRail({ onExpand }: { onExpand: () => void }) {
         <PanelLeftOpen size={16} />
       </button>
 
+      {/* ROUND-66 (R66, B4): the SETTINGS rail — back-to-dashboard + the
+          section icons (active = the ?tab= deep-link id), mirroring the
+          expanded settings sidebar's list exactly (same ids, same order).
+          The projects nav is deliberately NOT here: minimizing a settings
+          page must not teleport the owner into the projects world (his
+          report, verbatim: "it shows me the wrong sidebar"). */}
+      {variant === "settings" ? (
+        <>
+          {railBtn(
+            "Back to dashboard",
+            <ArrowLeft size={17} strokeWidth={2} />,
+            false,
+            () => navigate("/"),
+            "rail-back-dashboard",
+          )}
+          <div className="w-8 shrink-0 border-t-[1.5px] my-1" style={{ borderColor: styles.sidebarBorder }} />
+          {SETTINGS_SECTIONS.map(({ id, label, icon: Icon }) => (
+            <Fragment key={id}>
+              {railBtn(
+                label,
+                <Icon size={17} strokeWidth={2} />,
+                activeSettingsTab === id,
+                () => navigate(`/settings?tab=${id}`),
+                `rail-settings-${id}`,
+              )}
+            </Fragment>
+          ))}
+        </>
+      ) : (
+        <>
       {railBtn("Dashboard", <LayoutDashboard size={17} strokeWidth={2} />, pathname === "/", () => navigate("/"), "rail-dashboard")}
       {railBtn("Usage", <BarChart3 size={17} strokeWidth={2} />, pathname.startsWith("/usage"), () => navigate("/usage"), "rail-usage")}
 
@@ -634,9 +693,13 @@ function MinimizedRail({ onExpand }: { onExpand: () => void }) {
           footer rhythm). */}
       <div className="flex-1 min-h-2" />
 
-      {/* FOOTER — collapsed bell (its own rail variant) + settings gear. */}
+      {/* FOOTER — collapsed bell (its own rail variant) + settings gear.
+          R66: inside the settings-variant conditional, so the settings rail
+          ends after the section icons (no projects footer there). */}
       <NotificationBell collapsed />
       {railBtn("Settings", <Settings size={17} strokeWidth={2} />, settingsActive, () => navigate("/settings"), "rail-settings")}
+        </>
+      )}
     </div>
   );
 }

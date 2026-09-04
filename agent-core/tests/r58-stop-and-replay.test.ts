@@ -16,6 +16,12 @@
  *  4. COMPLETION-SIGNAL BROADENING: "Task completed." now ends a tool-using
  *     turn (previously only "Task complete." matched, forcing an extra
  *     provider call on the full history — the regurgitation trigger).
+ *  5. ROUND-66 (R66-2-c, C1): the POST /sessions/:id/messages/stream DEBUG
+ *     ANALYST phase — debug OFF → no debug frames + no debug.report event;
+ *     debug ON + an ok turn → debug-start → debug-delta* → debug-done +
+ *     the persisted debug.report event, ALL BEFORE the terminal done frame
+ *     (frame ORDER); the analyst's own provider failure → debug-error, the
+ *     turn outcome untouched; a 502 turn (status >= 500) still analyzed.
  */
 import { randomUUID } from "node:crypto";
 import { mkdtempSync, rmSync } from "node:fs";
@@ -35,6 +41,7 @@ vi.mock("ai", () => ({
 import { streamAiSdkChat, type StreamChatEvent } from "../src/agents/chat";
 import { assembleHistory, runStreamedAgentTurn } from "../src/agents/runtime";
 import { appendSessionEvent, listSessionEvents } from "../src/storage/sessions";
+import { setDebugSettings } from "../src/storage/settings";
 import { ProviderKeyring } from "../src/providers/registry";
 import { openDatabase, type SqliteDatabase } from "../src/storage/db";
 import { buildServer } from "../src/server";
@@ -342,5 +349,216 @@ describe("completion signal broadening (ROUND-58 R58-c)", () => {
       "tool.use",
       "message.assistant",
     ]);
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 5. ROUND-66 (R66-2-c, the owner's C1 directive): the DEBUG ANALYST phase on
+//    POST /sessions/:id/messages/stream — a FRESH context-free model call
+//    launched AFTER the turn, streaming its report into the still-open SSE
+//    BEFORE the terminal frame, and persisting a `debug.report` event.
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe("debug analyst phase on the stream route (ROUND-66 R66-2-c)", () => {
+  /** Parse the hijacked SSE body into its data frames. */
+  function parseSse(body: string): Array<Record<string, unknown>> {
+    const frames: Array<Record<string, unknown>> = [];
+    for (const block of body.split("\n\n")) {
+      for (const line of block.split("\n")) {
+        if (line.startsWith("data: ")) frames.push(JSON.parse(line.slice(6)) as Record<string, unknown>);
+      }
+    }
+    return frames;
+  }
+
+  /** POST a message through the streamed route and return the SSE frames. */
+  async function streamTurn(sessionId: string, content: string): Promise<Array<Record<string, unknown>>> {
+    const response = await authInject({
+      method: "POST",
+      url: `/api/v1/sessions/${sessionId}/messages/stream`,
+      payload: { content },
+    });
+    expect(response.statusCode).toBe(200);
+    expect(response.headers["content-type"]).toContain("text/event-stream");
+    return parseSse(response.body as string);
+  }
+
+  /** The main turn's provider stream (call 1): one tool round-trip + a
+   * completion-signaled text. */
+  const turnStream = (): { fullStream: AsyncGenerator<Record<string, unknown>>; totalUsage: Promise<unknown>; usage: Promise<unknown> } => ({
+    fullStream: (async function* () {
+      yield { type: "tool-call", toolName: "write_file", input: { path: "a.txt", content: "hi" } };
+      yield {
+        type: "tool-result",
+        toolName: "write_file",
+        input: { path: "a.txt", content: "hi" },
+        output: { ok: true, output: "wrote 2 bytes" },
+      };
+      yield { type: "text-delta", text: "Task completed. The file is written." };
+    })(),
+    totalUsage: Promise.resolve({ inputTokens: 10, outputTokens: 10, totalTokens: 20 }),
+    usage: Promise.resolve({ inputTokens: 10, outputTokens: 10, totalTokens: 20 }),
+  });
+
+  /** The ANALYST's provider stream (call 2): streamed report text. */
+  const analystStream = (): { fullStream: AsyncGenerator<Record<string, unknown>>; totalUsage: Promise<unknown>; usage: Promise<unknown> } => ({
+    fullStream: (async function* () {
+      yield { type: "text-delta", text: "## What the task was\n" };
+      yield { type: "text-delta", text: "Write a.txt. write_file returned ok — the result is sane." };
+    })(),
+    totalUsage: Promise.resolve({ inputTokens: 40, outputTokens: 30, totalTokens: 70 }),
+    usage: Promise.resolve({ inputTokens: 40, outputTokens: 30, totalTokens: 70 }),
+  });
+
+  it("debug OFF: no debug frames, no debug.report event — the turn closes exactly as before", async () => {
+    const sessionId = await createSession();
+    let calls = 0;
+    streamTextMock.mockImplementation(() => {
+      calls += 1;
+      return turnStream();
+    });
+
+    const frames = await streamTurn(sessionId, "create a.txt");
+    expect(calls).toBe(1); // the turn only — no analyst call
+    const types = frames.map((f) => f.type);
+    expect(types).not.toContain("debug-start");
+    expect(types).not.toContain("debug-delta");
+    expect(types).not.toContain("debug-done");
+    expect(types).not.toContain("debug-error");
+    expect(types[types.length - 1]).toBe("done");
+    // No debug.report event anywhere in the log.
+    expect(listSessionEvents(db, sessionId).some((e) => e.type === "debug.report")).toBe(false);
+  });
+
+  it("debug ON + ok turn: debug-start → deltas → debug-done + persisted debug.report, ALL BEFORE the done frame", async () => {
+    const sessionId = await createSession();
+    setDebugSettings(db, { enabled: true });
+    const calls: Array<Record<string, unknown>> = [];
+    streamTextMock.mockImplementation((input: Record<string, unknown>) => {
+      calls.push(input);
+      return calls.length === 1 ? turnStream() : analystStream();
+    });
+
+    const frames = await streamTurn(sessionId, "create a.txt");
+    expect(calls).toHaveLength(2); // the turn + the context-free analyst
+
+    // FRAME ORDER: the analyst's whole lifecycle lands BEFORE the terminal
+    // done frame (the live turn is still open while the report streams).
+    const types = frames.map((f) => f.type);
+    const doneIndex = types.indexOf("done");
+    const startIndex = types.indexOf("debug-start");
+    const done1 = types.indexOf("debug-done");
+    expect(startIndex).toBeGreaterThan(-1);
+    expect(done1).toBeGreaterThan(startIndex);
+    expect(doneIndex).toBeGreaterThan(done1);
+    expect(types[types.length - 1]).toBe("done");
+    // The deltas arrive between start and done.
+    const deltaIndexes = types
+      .map((t, i) => (t === "debug-delta" ? i : -1))
+      .filter((i) => i !== -1);
+    expect(deltaIndexes.length).toBe(2);
+    expect(Math.min(...deltaIndexes)).toBeGreaterThan(startIndex);
+    expect(Math.max(...deltaIndexes)).toBeLessThan(done1);
+    // The delta frames concatenate to the report text.
+    const deltaText = deltaIndexes
+      .map((i) => (frames[i] as { delta: string }).delta)
+      .join("");
+    const doneFrame = frames[done1] as { content: string; model?: string; sessionId: string };
+    expect(doneFrame.content).toBe(deltaText);
+    expect(doneFrame.model).toBe("test/model-1");
+    expect(doneFrame.sessionId).toBe(sessionId);
+
+    // The ANALYST call is a FRESH context-free conversation: the system
+    // prompt is the analyst's, the ONE user message carries the WHOLE
+    // transcript (user request + FULL tool result), NO tools, and the
+    // session's model (the LanguageModel's modelId).
+    const analystInput = calls[1] as {
+      system?: string;
+      messages?: Array<{ role: string; content: string }>;
+      tools?: unknown;
+      model?: { modelId?: string };
+    };
+    expect(analystInput.system).toContain("You are a DEBUG ANALYST");
+    expect(analystInput.messages).toHaveLength(1);
+    expect(analystInput.messages![0].content).toContain("USER: create a.txt");
+    expect(analystInput.messages![0].content).toContain(
+      "TOOL write_file(path: a.txt, content: 2 chars) → ok: wrote 2 bytes",
+    );
+    expect(analystInput.tools).toBeUndefined();
+    expect(analystInput.model?.modelId).toBe("test/model-1");
+
+    // The persisted debug.report event: content + model + the session's
+    // agent id (the storage layer stamps agentId/ts into the payload).
+    const reportEvent = listSessionEvents(db, sessionId).find((e) => e.type === "debug.report");
+    expect(reportEvent).toBeDefined();
+    const payload = reportEvent!.payload as {
+      content: string;
+      model: string;
+      agentId: string | null;
+      ts: string;
+    };
+    expect(payload.content).toBe(doneFrame.content);
+    expect(payload.model).toBe("test/model-1");
+    expect(typeof payload.agentId).toBe("string");
+    expect(typeof payload.ts).toBe("string");
+    setDebugSettings(db, { enabled: false });
+  });
+
+  it("debug ON + the ANALYST's provider fails: debug-error frame, the turn outcome is UNTOUCHED", async () => {
+    const sessionId = await createSession();
+    setDebugSettings(db, { enabled: true });
+    streamTextMock.mockImplementation(() => {
+      // Call 1: the turn succeeds; call 2 (the analyst) explodes.
+      if (streamTextMock.mock.calls.length === 1) return turnStream();
+      throw new Error(`analyst provider died with ${KEY}`);
+    });
+
+    const frames = await streamTurn(sessionId, "create a.txt");
+    const types = frames.map((f) => f.type);
+    // The turn's own outcome survived: done is still the terminal frame.
+    expect(types[types.length - 1]).toBe("done");
+    expect(types).toContain("done");
+    // The honest analyst failure — debug-error AFTER debug-start, and the
+    // API key never leaks into the frame.
+    const errorIndex = types.indexOf("debug-error");
+    expect(errorIndex).toBeGreaterThan(types.indexOf("debug-start"));
+    const errorFrame = frames[errorIndex] as { message: string; sessionId: string };
+    expect(errorFrame.message).toContain("analyst provider died");
+    expect(errorFrame.message).not.toContain(KEY);
+    expect(errorFrame.sessionId).toBe(sessionId);
+    // No debug-done, no persisted report for a failed analyst.
+    expect(types).not.toContain("debug-done");
+    expect(listSessionEvents(db, sessionId).some((e) => e.type === "debug.report")).toBe(false);
+    setDebugSettings(db, { enabled: false });
+  });
+
+  it("debug ON + a FAILED turn (status 502): the gate still fires — the transcript carries the ERROR line", async () => {
+    const sessionId = await createSession();
+    setDebugSettings(db, { enabled: true });
+    const calls: Array<Record<string, unknown>> = [];
+    streamTextMock.mockImplementation((input: Record<string, unknown>) => {
+      calls.push(input);
+      if (calls.length === 1) throw new Error("the turn's provider 500'd");
+      return analystStream();
+    });
+
+    const frames = await streamTurn(sessionId, "create a.txt");
+    const types = frames.map((f) => f.type);
+    // The turn failed for real: the terminal frame is error, AFTER the
+    // analyst's debug-done (the analyst dissected the failure).
+    const errorIndex = types.indexOf("error");
+    const done1 = types.indexOf("debug-done");
+    expect(errorIndex).toBeGreaterThan(-1);
+    expect(done1).toBeGreaterThan(-1);
+    expect(errorIndex).toBeGreaterThan(done1);
+    expect(types[types.length - 1]).toBe("error");
+    // The transcript the analyst received includes the persisted turn.error.
+    const analystInput = calls[1] as { messages?: Array<{ content: string }> };
+    expect(analystInput.messages![0].content).toContain("ERROR PROVIDER_ERROR:");
+    // Both events persisted: the failure + the analysis of the failure.
+    const eventTypes = listSessionEvents(db, sessionId).map((e) => e.type);
+    expect(eventTypes).toContain("turn.error");
+    expect(eventTypes).toContain("debug.report");
+    setDebugSettings(db, { enabled: false });
   });
 });

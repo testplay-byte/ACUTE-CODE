@@ -405,8 +405,26 @@ export function BrowserPanel({ projectId, tab }: { projectId: string; tab: Right
    * Natural mode: the webview fills the page area (no preset). The DEFAULT in
    * native mode — a real browser panel just fills — while presets remain one
    * click away for responsive testing (the agent's display-size feature).
+   *
+   * ROUND-66 (R66, A5 — the owner's "the agent changed the view to a wider
+   * aspect ratio… the improvements were not applied, I had to manually
+   * change one number"): agent-side viewport changes (browser_control
+   * set_viewport) used to update the STORE but this panel-local gate kept
+   * effectiveViewport null, so nothing rendered differently until a manual
+   * number edit flipped it. The store now bumps agentViewportSeq on every
+   * agent-side change (the instant browser-viewport SSE frame + the 4s
+   * poll's size-field diff), and THIS effect exits natural mode in response
+   * — the agent's display-size change applies live, exactly like the owner
+   * manually picking the preset.
    */
   const [naturalSize, setNaturalSize] = useState(true);
+  const agentViewportSeq = state?.agentViewportSeq ?? 0;
+  const agentViewportSeqRef = useRef(agentViewportSeq);
+  useEffect(() => {
+    if (agentViewportSeq === agentViewportSeqRef.current) return;
+    agentViewportSeqRef.current = agentViewportSeq;
+    if (agentViewportSeq > 0) setNaturalSize(false);
+  }, [agentViewportSeq]);
 
   const iframeRef = useRef<HTMLIFrameElement | null>(null);
   const contentRef = useRef<HTMLDivElement | null>(null);

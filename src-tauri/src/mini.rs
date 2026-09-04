@@ -11,10 +11,12 @@
 //! That is an OS-level window, not an in-app card: while the agent drives
 //! OTHER applications the owner must still see the monitor + its STOP kill
 //! switch, so the window is built `always_on_top` + `skip_taskbar` and parks
-//! at the TOP-RIGHT of the monitor the owner is looking at. The window hosts
-//! `mini.html` (a THIRD vite entry — see vite.config.ts), a 360×96 page whose
-//! own bundle polls the sidecar's `/computer-use/session` endpoint directly
-//! and invokes `close_computer_mini` on itself when the session ends.
+//! at the TOP-CENTER of the monitor the owner is looking at (ROUND-66: the
+//! owner's directive — "make it less tall and make it centered at the top,
+//! not on the top right"). The window hosts `mini.html` (a THIRD vite entry
+//! — see vite.config.ts), a 460×56 single-row page whose own bundle polls
+//! the sidecar's `/computer-use/session` endpoint directly and invokes
+//! `close_computer_mini` on itself when the session ends.
 //!
 //! The lifecycle is driven from the MAIN app (src/components/
 //! ComputerMiniWindow.tsx): live SSE computer-use frames flip the monitor
@@ -36,23 +38,28 @@ const MINI_WINDOW_LABEL: &str = "acute-computer-mini";
 const MAIN_WINDOW_LABEL: &str = "main";
 
 /// The fixed logical size — the page's layout is designed for exactly this
-/// (one status row + one activity row + the STOP pill; NO scroll, NO stats
-/// grid, NO event list: the owner's "very minimal, clean" verdict).
-const MINI_DEFAULT_W: f64 = 360.0;
-const MINI_DEFAULT_H: f64 = 96.0;
+/// (ROUND-66, the owner's directive: "way too tall… make it less tall and
+/// make it centered at the top not on the top right"). ONE compact row —
+/// dot + label + elapsed + one inline activity line + the STOP pill; NO
+/// scroll, NO stats grid, NO event list, NO second row: the owner's
+/// "very minimal, clean" verdict, tightened again.
+const MINI_DEFAULT_W: f64 = 460.0;
+const MINI_DEFAULT_H: f64 = 56.0;
 
-/// Logical-px inset from the work area's top-right corner (the floating
-/// bar must never touch the screen edge).
-const MINI_MARGIN: f64 = 16.0;
+/// Logical-px inset from the work area's top edge (the floating bar must
+/// never touch the screen edge).
+const MINI_MARGIN: f64 = 10.0;
 
-/// Honest guess when no monitor can be identified: top-right of a
-/// conservative 1280×720 work area (1280 − 360 − 16 = 904).
-const MINI_FALLBACK_X: f64 = 904.0;
+/// Honest guess when no monitor can be identified: top-CENTER of a
+/// conservative 1280×720 work area ((1280 − 460) / 2 = 410).
+const MINI_FALLBACK_X: f64 = 410.0;
 
-/// The top-right anchor within a monitor's work area, in LOGICAL px (the
+/// The TOP-CENTER anchor within a monitor's work area, in LOGICAL px (the
 /// caller divides the physical work area by the monitor's scale factor).
 /// Pure math so it is unit-testable without a monitor — the browser.rs
-/// clamp_popout_size discipline.
+/// clamp_popout_size discipline. ROUND-66: the bar centers horizontally
+/// (the owner's directive — it was top-right in R64) and clamps to ≥ margin
+/// so a lying tiny work area can never push it off-screen.
 ///
 /// Guards: a lying monitor (NaN / non-finite / absurdly small work area —
 /// smaller than the window plus margins on EITHER axis) falls back to the
@@ -65,7 +72,8 @@ fn mini_position_for_work_area(work_w: f64, work_h: f64) -> (f64, f64) {
     if !usable {
         return (MINI_FALLBACK_X, MINI_MARGIN);
     }
-    (work_w - MINI_DEFAULT_W - MINI_MARGIN, MINI_MARGIN)
+    let x = ((work_w - MINI_DEFAULT_W) / 2.0).max(MINI_MARGIN);
+    (x, MINI_MARGIN)
 }
 
 /// The monitor-aware wrapper: resolves the MAIN window's current monitor
@@ -120,7 +128,7 @@ pub async fn open_computer_mini(app: AppHandle) -> Result<(), String> {
         return Ok(());
     }
 
-    // Top-right of the monitor the owner is looking at (logical px).
+    // Top-center of the monitor the owner is looking at (logical px).
     let (x, y) = mini_initial_position(&app);
 
     WebviewWindowBuilder::new(&app, MINI_WINDOW_LABEL, WebviewUrl::App("mini.html".into()))
@@ -128,7 +136,7 @@ pub async fn open_computer_mini(app: AppHandle) -> Result<(), String> {
         .inner_size(MINI_DEFAULT_W, MINI_DEFAULT_H)
         // Frameless: the page IS the chrome (its own drag region). The
         // native title bar was the owner's R59 verdict on the pop-out and
-        // a 96px monitor has no room for one anyway.
+        // a 56px monitor has no room for one anyway.
         .decorations(false)
         // Fixed size — the minimal bar, never a resizable panel.
         .resizable(false)
@@ -173,20 +181,21 @@ pub async fn close_computer_mini(app: AppHandle) -> Result<(), String> {
 mod tests {
     use super::{mini_position_for_work_area, MINI_DEFAULT_H, MINI_DEFAULT_W, MINI_MARGIN};
 
-    /// A normal desktop work area anchors the bar at its top-right corner,
-    /// MINI_MARGIN in from the edges.
+    /// A normal desktop work area anchors the bar at its TOP-CENTER,
+    /// MINI_MARGIN in from the top edge (ROUND-66: the owner's directive —
+    /// it anchored top-right in R64).
     #[test]
-    fn mini_position_anchors_top_right_of_a_normal_work_area() {
+    fn mini_position_anchors_top_center_of_a_normal_work_area() {
         let (x, y) = mini_position_for_work_area(1920.0, 1040.0);
-        assert_eq!((x, y), (1920.0 - MINI_DEFAULT_W - MINI_MARGIN, MINI_MARGIN));
+        assert_eq!((x, y), ((1920.0 - MINI_DEFAULT_W) / 2.0, MINI_MARGIN));
     }
 
-    /// A small-but-real laptop work area still anchors top-right (the window
-    /// fits with margins on both axes).
+    /// A small-but-real laptop work area still anchors top-center (the
+    /// window fits with margins on both axes).
     #[test]
-    fn mini_position_small_work_area_still_top_right() {
+    fn mini_position_small_work_area_still_top_center() {
         let (x, y) = mini_position_for_work_area(1280.0, 660.0);
-        assert_eq!((x, y), (1280.0 - MINI_DEFAULT_W - MINI_MARGIN, MINI_MARGIN));
+        assert_eq!((x, y), ((1280.0 - MINI_DEFAULT_W) / 2.0, MINI_MARGIN));
     }
 
     /// Degenerate monitor data (NaN / zero / negative / smaller than the

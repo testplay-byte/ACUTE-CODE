@@ -1132,6 +1132,31 @@ describe("BrowserPanel native mode (R50-a child webviews over the panel)", () =>
         await vi.advanceTimersByTimeAsync(20);
       });
       expect(setBounds()).toHaveBeenLastCalledWith("tab-test-1", 80, 120, 400, 900);
+
+      // ── ROUND-66 (R66, A5): an AGENT-side viewport change exits natural
+      // mode WITHOUT any manual interaction (the owner: "I had to manually
+      // change one number"). The store's applyAgentViewport (driven by the
+      // instant browser-viewport SSE frame / the poll's size diff) bumps
+      // agentViewportSeq — the panel must follow into preset mode. The store
+      // call rides its own act so the render+effect chain (seq effect →
+      // naturalSize flip → mirror → bounds re-sync) flushes before the rAF
+      // advance fires the sync.
+      await act(async () => {
+        useBrowserTabStore.getState().applyAgentViewport("tab-test-1", {
+          width: 390,
+          height: 844,
+          preset: "mobile-md",
+          zoom: 1,
+          rotate: false,
+        });
+      });
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(20);
+      });
+      // Preset applied: the select NO LONGER reads "natural" and the bounds
+      // re-synced to the preset's centered frame.
+      expect((screen.getByTestId("browser-preset-select") as HTMLSelectElement).value).toBe("mobile-md");
+      expect(setBounds()).toHaveBeenLastCalledWith("tab-test-1", 85, 148, 390, 844);
     } finally {
       vi.useRealTimers();
       rectSpy.mockRestore();

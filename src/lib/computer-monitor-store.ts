@@ -84,6 +84,48 @@ interface ComputerMonitorState {
 const RING_CAP = 200;
 let nextLocalId = 1;
 
+/** ROUND-66 (R66, A1/B1): how long after the LAST real computer-use event
+ * the surface stays "live". The old signal never decayed — a stale
+ * `sessionActive` (the singleton session stays active while Computer Use is
+ * merely ENABLED) pinned `live` true forever, so the edge-triggered
+ * open_computer_mini never re-fired after the mini page self-closed, and
+ * browser-only turns (whose only computer-use frame was the browser
+ * screenshot record — removed this round) left "Agent is using your
+ * computer" stuck on screen. Real control events keep re-arming the decay;
+ * 6s of silence = the agent stopped driving the desktop = hide. */
+const LIVE_DECAY_MS = 6_000;
+
+/** The decay timer (module-level — the store is a singleton). */
+let liveDecayTimer: ReturnType<typeof setTimeout> | null = null;
+
+/** Kinds that are CONTROL (bump + re-arm the decay) vs LIFECYCLE (session
+ * bookkeeping — recorded in the ring but they do NOT mark "the agent is
+ * driving the desktop right now"). session_stop additionally rests the
+ * signal immediately. */
+const LIFECYCLE_KINDS = new Set(["session_start"]);
+
+function armLiveDecay(): void {
+  if (liveDecayTimer !== null) clearTimeout(liveDecayTimer);
+  liveDecayTimer = setTimeout(() => {
+    liveDecayTimer = null;
+    useComputerMonitorStore.setState({ liveActivity: false });
+  }, LIVE_DECAY_MS);
+}
+
+/** Test/inspection hook: the decay armed? (drives deterministic tests). */
+export function computerMonitorDecayArmed(): boolean {
+  return liveDecayTimer !== null;
+}
+
+/** Test hook: cancel the pending decay + rest the signal (between tests). */
+export function resetComputerMonitorDecayForTest(): void {
+  if (liveDecayTimer !== null) {
+    clearTimeout(liveDecayTimer);
+    liveDecayTimer = null;
+  }
+  useComputerMonitorStore.setState({ liveActivity: false });
+}
+
 function kindLabel(kind: string, tool?: string): string {
   switch (kind) {
     case "session_start":
@@ -120,16 +162,20 @@ export const useComputerMonitorStore = create<ComputerMonitorState>((set, get) =
     };
     const events = [event, ...get().events];
     if (events.length > RING_CAP) events.length = RING_CAP;
-    set({
-      events,
-      liveActivity: true,
-      // A session_stop frame means the control session ended — flip
-      // liveActivity off after a beat (the caller's turn may continue).
-      ...(frame.kind === "session_stop" ? {} : {}),
-    });
+    set({ events });
+    // ROUND-66 (R66, A1/B1): ONLY real control events mark "live" — the
+    // decay (6s) rests it; session_start is bookkeeping (the singleton
+    // session starting does not mean the desktop is being driven);
+    // session_stop rests it immediately.
     if (frame.kind === "session_stop") {
-      // Keep the ring; the "live" badge rests until the next activity.
+      if (liveDecayTimer !== null) {
+        clearTimeout(liveDecayTimer);
+        liveDecayTimer = null;
+      }
       set({ liveActivity: false });
+    } else if (!LIFECYCLE_KINDS.has(frame.kind)) {
+      set({ liveActivity: true });
+      armLiveDecay();
     }
   },
 
@@ -164,9 +210,23 @@ export const useComputerMonitorStore = create<ComputerMonitorState>((set, get) =
     });
   },
 
-  setLiveActivity: (active) => set({ liveActivity: active }),
+  setLiveActivity: (active) => {
+    // ROUND-66: manual control (tests + the stream-store's session_stop
+    // intercept) — cancels any pending decay when resting.
+    if (!active && liveDecayTimer !== null) {
+      clearTimeout(liveDecayTimer);
+      liveDecayTimer = null;
+    }
+    set({ liveActivity: active });
+  },
   setError: (error) => set({ error }),
-  clear: () => set({ events: [], session: null, liveActivity: false, error: null }),
+  clear: () => {
+    if (liveDecayTimer !== null) {
+      clearTimeout(liveDecayTimer);
+      liveDecayTimer = null;
+    }
+    set({ events: [], session: null, liveActivity: false, error: null });
+  },
 }));
 
 /** Test-only: reset the local id counter (stable snapshots across tests). */

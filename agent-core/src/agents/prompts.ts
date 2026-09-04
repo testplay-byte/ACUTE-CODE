@@ -67,10 +67,13 @@ export interface PromptContext {
    * extended skill body loads via read_skill("computer-use")). Absent →
    * no section. */
   computerUse?: { enabled: boolean; posture: "observe" | "act" | "auto" };
-  /** ROUND-65 (R65): debug mode (Settings → Advanced → Debug mode). When
-   * true, a "## DEBUG MODE" section instructs the model to append a raw
-   * execution report (every tool call + outcome + verification) to its
-   * final answer. Absent/false → no section (byte-identical prompt). */
+  /** ROUND-65 (R65) → R66: debug mode (Settings → Advanced → Debug mode).
+   * R66: retained for the ROUTE-SIDE debug-analyst gate (server.ts reads
+   * the setting and launches the context-free analyst after the turn) —
+   * prompts no longer self-report: an agent grading its own homework had
+   * every incentive to polish, so the R65 "## DEBUG MODE" section was
+   * REMOVED (the owner's C1 directive). Composition-wise this field is
+   * now a no-op; it stays so callers keep type-checking. */
   debugMode?: boolean;
 }
 
@@ -368,6 +371,10 @@ export function buildTaggedPromptLines(ctx: PromptContext): TaggedLine[] {
     ident("## COMPUTER USE (desktop control)");
     ident("You can observe and actuate the REAL desktop GUI. This touches the user's actual machine — follow the discipline:");
     ident("- OBSERVE → ACT → VERIFY: get_app_state (the accessibility tree) BEFORE acting; element targets ({type:\"element\"}) are the PRIMARY path — semantic, precise, background-safe (never steals the user's focus).");
+    // ROUND-66 (R66, B2): find_elements — the owner's Edge report ("not able
+    // to detect where it needs to tap, stuck taking screenshots"): big
+    // Chromium trees need SEARCH, not full-tree reads and not screenshots.
+    ident("- BIG APPS (browsers, Edge, VS Code): find_elements {appRef, query} SEARCHES the accessibility tree by name substring (optional kind filter) and returns the matching elements with their indexes + bounds — use it to locate one control in a huge window instead of reading the whole tree or looping screenshots. Then left_click {target:{type:\"element\"}} with the returned index.");
     ident("- Coordinates ({type:\"coordinate\"}) are the FALLBACK: pixels copied UNCHANGED from the LATEST returned raster. Never pre-scale, never attach app_ref/state_id to them.");
     ident("- Receipts are not promises: action_sent=true means it MAY have happened — verify via fresh get_app_state or an external oracle (file exists, exit code) before building on it.");
     ident("- Refusals are self-teaching: read the named reason and follow its recovery (frontmost_pid_mismatch → activate → re-observe → retry ONCE). Never replay a sent action.");
@@ -411,29 +418,37 @@ export function buildTaggedPromptLines(ctx: PromptContext): TaggedLine[] {
     beginSection("browser-panel");
     ident("## EMBEDDED BROWSER PANEL (browser_control)");
     ident("- The user has a real web browser embedded in the app's right sidebar. browser_control drives it: pages you navigate to APPEAR LIVE in the user's panel (no external tabs, no popups).");
-    ident("- Actions: navigate (absolute http(s) URL), back/forward/reload (tab history), set_viewport (display size + zoom), read (the current page's text, fetched fresh), eval (run JavaScript INSIDE the live page), screenshot (capture the panel + a vision description), get_state (currentUrl, title, viewport, canBack/canForward, every open tab, which tab is active).");
-    ident("- TEST LAYOUTS by changing the display size with set_viewport: presets mobile-sm 375×667, mobile-md 390×844, tablet 768×1024, laptop 1280×800, desktop 1440×900, full-hd 1920×1080, or explicit width/height (+ zoom, rotate swaps w/h). It targets the tab the user is viewing unless you pass sessionId. The panel renders the true size you set — larger presets scale down to fit.");
-    ident("- USE THE BROWSER LIKE A USER WOULD (R62): read the page's text (action read) when you need its content; eval when you need the LIVE page (logins, JS-rendered content, clicking links `document.querySelector('a').click()`, filling forms, extracting DOM state — the script runs as a function body, so end with `return value`); screenshot when you need to SEE what the user sees (needs Computer Use enabled; the vision model describes it).");
+    // ROUND-66 (R66, A3/A6): the action surface grew the HIGH-LEVEL page
+    // actions (click/type/press_key/read_dom/source) — the owner's live
+    // report: the agent typed a Google query but never submitted it. The
+    // new actions make form submission + element interaction reliable
+    // without hand-written eval scripts.
+    ident("- Actions: navigate (absolute http(s) URL), back/forward/reload (tab history), set_viewport (display size + zoom), read (the current page's text, fetched fresh), read_dom (a STRUCTURED page outline — headings, links, buttons, inputs, forms with short selectors + sizes; the way to know the page WITHOUT screenshots), click (click an element by CSS selector or visible text — scrollIntoView + .click()), type (fill an input by selector — framework-visible events; submit:true submits the form), press_key (send a key like Enter; Enter inside a form triggers NATIVE form submission), source (the live page's html | css | scripts), eval (run JavaScript INSIDE the live page), screenshot (capture the panel + a vision description), get_state (currentUrl, title, viewport, canBack/canForward, every open tab, which tab is active), wait_for_verification (pause for the owner to solve a bot wall).");
+    ident("- FORMS & SEARCH BOXES (R66): to SUBMIT a search or form, do NOT just type and hope — use type with submit:true, or press_key with key Enter (it performs the form's native requestSubmit), or click the submit button by text. Typing alone never navigates.");
+    ident("- TEST LAYOUTS by changing the display size with set_viewport: presets mobile-sm 375×667, mobile-md 390×844, tablet 768×1024, laptop 1280×800, desktop 1440×900, full-hd 1920×1080, or explicit width/height (+ zoom, rotate swaps w/h). It targets the tab the user is viewing unless you pass sessionId. The panel applies the size you set LIVE.");
+    ident("- USE THE BROWSER LIKE A USER WOULD (R62/R66): read_dom first (structured outline, no pixels) to identify elements; then click / type / press_key to interact with them; read for the server-side text; eval when you need the LIVE page's full DOM/JS (the script runs as a function body, so end with `return value`); source for the page's HTML/CSS/JS; screenshot when you need to SEE what the user sees (needs Computer Use enabled; the vision model describes it).");
+    // ROUND-66 (R66, A4): the bot-wall protocol — detect (the tool result
+    // warns ⚠) → wait_for_verification (the owner gets a countdown card in
+    // chat with Mark as done / Stop waiting) → honest re-probe result.
+    ident("- BOT WALLS (R66): when a navigate/read/click result warns '⚠ A verification wall', the page is showing a CAPTCHA / Cloudflare / age gate. Call browser_control action wait_for_verification — the user gets a countdown card in chat, solves the wall in the panel, and marks it done; you then receive the honest re-probe result. Do NOT hammer the page with retries while the wall is up.");
     ident("- ALWAYS announce viewport changes in one short line (e.g. \"Switching the browser panel to 375×667 to check the mobile layout\") — the user watches that panel; set_viewport changes what they see.");
     // ROUND-65 (R65): the mirror of the computer-use SURFACE BOUNDARY —
     // a browser_control navigate is NOT "opening the user's Edge", and the
     // final answer must never describe panel actions as desktop actions.
     ident("- SURFACE BOUNDARY (R65): this panel lives INSIDE the app — browser_control NEVER opens the user's real browsers (Edge, Chrome, Firefox) and never touches their desktop or files. If the task is about the user's REAL machine, use the computer-use tools instead. NEVER narrate a browser_control action as something that happened on the user's computer — say \"in the embedded browser panel\" when that is where it happened.");
-    ident("- The page the panel shows can differ from a fresh fetch (logins, JS): read = fresh server-side text, eval = the live DOM, screenshot = the pixels the user sees. Pick the right one and say which you used.");
+    ident("- The page the panel shows can differ from a fresh fetch (logins, JS): read = fresh server-side text, read_dom/click/type/press_key/source/eval = the LIVE page, screenshot = the pixels the user sees. Pick the right one and say which you used.");
     ident("");
   }
 
-  // ── Debug mode (ROUND-65, R65) ───────────────────────────────────────────
-  // The owner's debug toggle (Settings → Advanced): ON = the agent
-  // self-reports its full execution trace in the final answer. Off = no
-  // section (byte-identical prompt, the honest default).
-  if (ctx.debugMode === true) {
-    beginSection("debug");
-    ident("## DEBUG MODE (ON)");
-    ident("- Your FINAL answer must end with an \"## Execution report\" section listing, in order: every tool call (tool name, one-line argument summary, outcome — ok or the error), what you observed/verified after each write, and anything that was retried or abandoned.");
-    ident("- The report is raw facts for the owner debugging the system — one line per call, no prose polish, no hiding failed calls. Keep your normal answer style ABOVE the report; the report itself stays plain.");
-    ident("");
-  }
+  // ── Debug mode ───────────────────────────────────────────────────────────
+  // ROUND-66 (R66, C1): the R65 self-report section is REMOVED — debug mode
+  // no longer changes the model's prompt at all. The switch now gates the
+  // ROUTE-SIDE context-free analyst (agents/debug-analyst.ts): after the
+  // turn completes, a FRESH model call (no context, no tools) receives the
+  // whole session transcript and streams its report into a dedicated
+  // section at the bottom of the turn. Nothing to compose here — the
+  // ctx.debugMode field stays declared (a no-op) so callers keep
+  // type-checking; see the PromptContext comment.
 
   // ── Communication ───────────────────────────────────────────────────────
   beginSection("communication");

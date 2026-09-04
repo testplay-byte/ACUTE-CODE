@@ -80,6 +80,10 @@ export const TOOL_CATALOG = [
   // computer-use tools are SETTINGS-GATED (Settings → Computer Use), not
   // agent-form vocabulary; MCP tools are dynamic (mcp__<server>__<tool>).
   "read_skill",
+  // ROUND-66 (R66, B3): the general image-analysis tool (local file or URL
+  // → the dedicated vision model — Settings → Image Analysis). Always
+  // registered like web_fetch, so it is allowlist vocabulary.
+  "analyze_image",
 ] as const;
 
 export const PROVIDER_IDS = ["openrouter", "openai", "anthropic", "google"] as const;
@@ -1096,6 +1100,13 @@ export interface AssistantTurnItem {
    * The live path carries the same value (the done frame's
    * assistantMessage.seq), so live-completed turns rate identically. */
   lastAssistantSeq?: number;
+  /** ROUND-66 (R66, C1): the post-turn DEBUG ANALYST's report, persisted as
+   * a `debug.report` session event and folded HERE (rendered at the very
+   * bottom of the turn — a dedicated section, never part of the answer).
+   * Absent when debug mode was off or the analyst failed. NEVER sent back
+   * to the model (assembleHistory skips the event type), so follow-up
+   * messages are unaffected — the owner's separation directive. */
+  debugReport?: { content: string; ts: string; model?: string };
 }
 
 /** One entry inside a turn's Working section. */
@@ -1202,6 +1213,10 @@ interface TurnAccumulator {
   endTs: string;
   /** Raw turn events (assistant/tool/approval) in seq order. */
   events: SessionEvent[];
+  /** ROUND-66 (R66-2-c): a `debug.report` event absorbed while this turn
+   * was still OPEN (the analyst runs strictly after the turn's last
+   * assistant event) — attached to the built AssistantTurnItem at flush. */
+  debugReport?: { content: string; ts: string; model?: string };
 }
 
 interface AssistantPayload {
@@ -1222,10 +1237,24 @@ interface ApprovalPayload {
   remember?: unknown;
 }
 
+/** ROUND-66 (R66-2-c): payload of a persisted `debug.report` session event
+ * (the route-side analyst's output — see agent-core's
+ * agents/debug-analyst.ts + the stream route's debug phase). */
+interface DebugReportPayload {
+  content?: unknown;
+  model?: unknown;
+}
+
 export function toProjectChatItems(events: SessionEvent[]): ProjectChatItem[] {
   const ordered = [...events].sort((a, b) => a.seq - b.seq);
   const items: ProjectChatItem[] = [];
   let turn: TurnAccumulator | null = null;
+  // ROUND-66 (R66-2-c): reference to the last-BUILT turn item + the user-gap
+  // bookkeeping for `debug.report` folding — see the debug.report branch in
+  // the loop below for the placement rules.
+  let lastClosedTurn: AssistantTurnItem | null = null;
+  let lastUserSeq = -1;
+  let closedTurnUserSeq = -1;
 
   const openTurn = (event: SessionEvent): TurnAccumulator => {
     turn = {
@@ -1383,8 +1412,8 @@ export function toProjectChatItems(events: SessionEvent[]): ProjectChatItem[] {
       // alive for ts/endTs purposes but add no renderable entries).
     }
 
-    if (working.length === 0 && lastTextSeq === -1) return; // amendment 3e
-    items.push({
+    if (working.length === 0 && lastTextSeq === -1 && acc.debugReport === undefined) return; // amendment 3e
+    const item: AssistantTurnItem = {
       kind: "turn",
       seq: acc.seq,
       agentId: acc.agentId,
@@ -1399,12 +1428,20 @@ export function toProjectChatItems(events: SessionEvent[]): ProjectChatItem[] {
       // (identical to the runtime's lastAssistantEvent and the done frame's
       // assistantMessage.seq, so folded and live turns rate the same reply).
       ...(lastTextSeq !== -1 ? { lastAssistantSeq: lastTextSeq } : {}),
-    });
+      // ROUND-66 (R66-2-c): the post-turn debug analyst's report, folded onto
+      // the turn it analyzed (an amendment-3e turn that carries ONLY a
+      // report is kept alive by the guard above — the card still renders).
+      ...(acc.debugReport !== undefined ? { debugReport: acc.debugReport } : {}),
+    };
+    items.push(item);
+    lastClosedTurn = item;
+    closedTurnUserSeq = lastUserSeq;
   };
 
   for (const event of ordered) {
     if (event.type === "message.user") {
       flushTurn();
+      lastUserSeq = event.seq;
       const payload =
         event.payload && typeof event.payload === "object"
           ? (event.payload as { content?: unknown; attachments?: unknown })
@@ -1475,6 +1512,52 @@ export function toProjectChatItems(events: SessionEvent[]): ProjectChatItem[] {
         ...(userSeq !== undefined ? { userSeq } : {}),
         ts: event.ts,
       });
+      continue;
+    }
+
+    // ROUND-66 (R66-2-c): a persisted `debug.report` event (the post-turn
+    // context-free analyst's output) folds onto the turn it analyzed — the
+    // dedicated card at the very bottom of THAT turn's response.
+    //
+    // PLACEMENT (the honest reading of the event log): the report lands
+    // right after the analyzed turn's LAST assistant event and before the
+    // next user message, so:
+    //   1. a turn is still OPEN → the report rides the accumulator and
+    //      attaches when that turn flushes (normal case; endTs stretches to
+    //      the report's ts — the analysis IS part of the turn's timeline);
+    //   2. NO open turn (the turn was closed by a turn.error flush) →
+    //      attach to the LAST-CLOSED turn item, but ONLY when it closed in
+    //      the SAME user gap (no user message since — the closedTurnUserSeq
+    //      guard) so an older turn never claims a newer failure's report;
+    //   3. anything else (a stray report with no analyzable turn in its gap)
+    //      is dropped — there is no honest place to render it.
+    // Never attached to the NEXT turn: the owner's separation directive — a
+    // follow-up user message must never include the analysis.
+    if (event.type === "debug.report") {
+      const payload =
+        event.payload && typeof event.payload === "object"
+          ? (event.payload as DebugReportPayload)
+          : {};
+      if (typeof payload.content !== "string" || payload.content.length === 0) continue;
+      const model =
+        typeof payload.model === "string" && payload.model.length > 0 ? payload.model : undefined;
+      const report = {
+        content: payload.content,
+        ts: event.ts,
+        ...(model !== undefined ? { model } : {}),
+      };
+      // Widen the closure-captured lets back to their declared types — TS's
+      // flow analysis cannot see the closure assignments (openTurn /
+      // extendTurn / flushTurn), so it wrongly narrows them to null on this
+      // fall-through path. The cast is the honest widening, not a lie.
+      const openAcc = turn as TurnAccumulator | null;
+      const closedAcc = lastClosedTurn as AssistantTurnItem | null;
+      if (openAcc !== null) {
+        openAcc.debugReport = report;
+        openAcc.endTs = event.ts;
+      } else if (closedAcc !== null && closedTurnUserSeq === lastUserSeq) {
+        closedAcc.debugReport = report;
+      }
       continue;
     }
 
@@ -2602,7 +2685,56 @@ export type StreamTurnEvent =
       action: string;
       payload?: Record<string, unknown>;
       [extra: string]: unknown;
-    };
+    }
+  /** ROUND-66 (R66, A5): the browser_control set_viewport action applied a
+   * display-size change server-side — emitted IMMEDIATELY (before the 4s
+   * poll) so the mounted BrowserPanel applies it live instead of waiting
+   * for the poll (the owner's "had to nudge a number" bug: the panel's
+   * natural-mode gate swallowed agent presets). Turn-independent (rides
+   * before the liveTurn guard in stream-store, like computer-use frames). */
+  | {
+      type: "browser-viewport";
+      sessionId: string;
+      tabId: string;
+      viewport: BrowserViewportFrame;
+    }
+  /** ROUND-66 (R66, A4): the browser_control wait_for_verification action
+   * opened a human-verification checkpoint — the page hit a bot wall
+   * (captcha / Cloudflare challenge / age gate). The chat renders the
+   * checkpoint card (live countdown + Mark as done + Stop waiting); the
+   * owner's answer POSTs to /browser-checkpoints/:id/resolve, which
+   * resolves the tool's pending promise. */
+  | {
+      type: "browser-checkpoint";
+      sessionId: string;
+      checkpointId: string;
+      tabId: string;
+      kind: BrowserCheckpointKind;
+      url: string;
+      waitMs: number;
+    }
+  /** ROUND-66 (R66, A4): the checkpoint settled — "done" (owner marked it
+   * solved), "stop" (owner stopped waiting), "timeout" (the wait ran
+   * out). The card collapses to its one-line resolution. */
+  | {
+      type: "browser-checkpoint.resolved";
+      sessionId: string;
+      checkpointId: string;
+      resolution: "done" | "stop" | "timeout";
+    }
+  /** ROUND-66 (R66, C1): debug mode — the turn COMPLETED; the separate
+   * context-free debug analyst is now starting. The chat swaps the
+   * loading shimmer in under the turn's final answer. */
+  | { type: "debug-start"; sessionId: string }
+  /** ROUND-66 (R66, C1): one streamed fragment of the analyst's report. */
+  | { type: "debug-delta"; sessionId: string; delta: string }
+  /** ROUND-66 (R66, C1): the analyst finished — content is the full report
+   * (already persisted as a debug.report session event; the folded turn
+   * renders it from the refetch, so follow-up turns never include it). */
+  | { type: "debug-done"; sessionId: string; content: string; model?: string }
+  /** ROUND-66 (R66, C1): the analyst itself failed (provider error) — the
+   * turn's own answer is untouched; the debug card shows the honest error. */
+  | { type: "debug-error"; sessionId: string; message: string };
 
 /**
  * Run one streamed turn; `onEvent` fires for every SSE event as it lands
@@ -2898,17 +3030,14 @@ export async function clearDiagnosticErrors(): Promise<void> {
 
 /** The host policy posture (storage/computer-use.ts). */
 export type ComputerUsePosture = "observe" | "act" | "auto";
-/** The vision-model separation mode. */
+/** The vision-model separation mode (ROUND-66: the settings moved to their
+ * own GET/PUT /vision/settings — see VisionSettings below; this alias stays
+ * for the vision-key helpers' shared typing). */
 export type ComputerVisionMode = "off" | "separate" | "main";
 
 export interface ComputerUseSettings {
   enabled: boolean;
   permission: ComputerUsePosture;
-  vision: {
-    mode: ComputerVisionMode;
-    provider: string | null;
-    modelId: string | null;
-  };
 }
 
 export interface ComputerUseConfigResponse {
@@ -2922,14 +3051,11 @@ export async function fetchComputerUseConfig(): Promise<ComputerUseConfigRespons
   return request<ComputerUseConfigResponse>("/computer-use/config");
 }
 
-/** PUT /computer-use/config — partial patch, returns the full settings. */
+/** PUT /computer-use/config — partial patch (enabled/permission; vision
+ * settings moved to PUT /vision/settings in ROUND-66), returns the full
+ * settings. */
 export async function updateComputerUseConfig(
-  patch: Partial<Omit<ComputerUseSettings, "vision">> & {
-    vision?: Partial<Pick<ComputerUseSettings["vision"], "mode" | "provider" | "modelId">> & {
-      provider?: string | null;
-      modelId?: string | null;
-    };
-  },
+  patch: Partial<Pick<ComputerUseSettings, "enabled" | "permission">>,
 ): Promise<ComputerUseSettings> {
   const body = await request<{ settings: ComputerUseSettings }>("/computer-use/config", {
     method: "PUT",
@@ -3030,6 +3156,62 @@ export async function clearVisionKey(providerId: string): Promise<void> {
   await request(`/computer-use/vision-key?providerId=${encodeURIComponent(providerId)}`, {
     method: "DELETE",
   });
+}
+
+/** ROUND-66 (R66, A4): the bot-wall classes the browser backend detects
+ * (browser-checkpoint.ts detectVerificationWall) and surfaces in chat. */
+export type BrowserCheckpointKind = "captcha" | "cloudflare" | "age" | "verification";
+
+/** ROUND-66 (R66, A5): the display-size state as the instant-apply frame
+ * carries it (the browser-proxy BrowserViewportState shape). */
+export interface BrowserViewportFrame {
+  width: number;
+  height: number;
+  preset: string;
+  zoom: number;
+  rotate: boolean;
+}
+
+/**
+ * ROUND-66 (R66, A4): POST /browser-checkpoints/:checkpointId/resolve — the
+ * checkpoint card's answer channel. "done" = the owner solved the wall
+ * (the tool re-probes the page and continues); "stop" = stop waiting (the
+ * tool returns immediately with the honest stopped result). Unknown/expired
+ * ids answer {ok:false} — the card then falls back to its timeout path.
+ */
+export async function resolveBrowserCheckpoint(
+  checkpointId: string,
+  action: "done" | "stop",
+): Promise<{ ok: boolean; resolution: "done" | "stop" | "timeout" }> {
+  return request(`/browser-checkpoints/${encodeURIComponent(checkpointId)}/resolve`, {
+    method: "POST",
+    json: { action },
+  });
+}
+
+/* ── ROUND-66 (R66, B3/B5): the DEDICATED image-analysis (vision) settings ── */
+
+/** The global vision configuration (moved OUT of computer use per the
+ * owner's directive — Settings → Image Analysis). Same mode semantics as
+ * the R61 computer-use vision block, now app-wide: every image analysis
+ * (computer-use screenshots, browser screenshots, the analyze_image tool)
+ * reads THIS. */
+export interface VisionSettings {
+  mode: "off" | "separate" | "main";
+  provider: string | null;
+  modelId: string | null;
+}
+
+/** GET /vision/settings — the dedicated image-analysis configuration. */
+export async function fetchVisionSettings(): Promise<VisionSettings> {
+  return request<VisionSettings>("/vision/settings");
+}
+
+/** PUT /vision/settings — partial patch (mode / provider / modelId). */
+export async function updateVisionSettings(
+  patch: Partial<Pick<VisionSettings, "mode" | "provider" | "modelId">>,
+): Promise<VisionSettings> {
+  return request<VisionSettings>("/vision/settings", { method: "PUT", json: patch });
 }
 
 /* ── Skills (the owner's "multiple skills") ───────────────────────────────── */

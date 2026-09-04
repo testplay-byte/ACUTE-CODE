@@ -18,6 +18,10 @@ import { dispatchBrowserCommand } from "./agent-browser-bridge";
 // "the browser never even opened"). right-sidebar-store imports nothing
 // from this module — no cycle.
 import { useRightSidebarStore } from "./right-sidebar-store";
+// ROUND-66 (R66, A5): browser-viewport frames apply instantly to the
+// matching browser tab (browser-store imports nothing from this module —
+// no cycle; the frame handler below is the only touch point).
+import { useBrowserTabStore } from "./browser-store";
 
 // ROUND-65 (R65, review fix #2): session → projectId, recorded when a panel
 // STARTS a stream (the panel knows its project; the store only ever knows
@@ -87,6 +91,35 @@ export interface LiveTurn {
    * turn can be rated immediately instead of waiting for the refetch).
    * Absent while the turn is still in flight (nothing to rate yet). */
   lastAssistantSeq?: number;
+  /** ROUND-66 (R66, C1): the post-turn DEBUG ANALYST's live report — null
+   * until the debug-start frame lands (debug mode OFF, or the analyst
+   * hasn't started yet). Streams via debug-delta; done/error close it.
+   * Rendered in a dedicated section BELOW the final answer; folded into
+   * AssistantTurnItem.debugReport after the refetch. */
+  debugReport: LiveDebugReport | null;
+  /** ROUND-66 (R66, A4): the ACTIVE human-verification checkpoint (a bot
+   * wall — captcha / Cloudflare / age gate — the browser tool is waiting
+   * out for the owner). Null when none is open; the chat renders the
+   * countdown card from this. One at a time per session. */
+  browserCheckpoint: LiveBrowserCheckpoint | null;
+}
+
+/** ROUND-66 (R66, C1): the live debug-analyst report state. */
+export interface LiveDebugReport {
+  state: "streaming" | "done" | "error";
+  text: string;
+  model?: string;
+  error?: string;
+}
+
+/** ROUND-66 (R66, A4): the live checkpoint state (the countdown card). */
+export interface LiveBrowserCheckpoint {
+  checkpointId: string;
+  kind: "captcha" | "cloudflare" | "age" | "verification";
+  url: string;
+  waitMs: number;
+  startedAtMs: number;
+  state: "waiting" | "done" | "stop" | "timeout";
 }
 
 /** ROUND-58 (R58-cf): one accumulating tool-args JSON raw (see LiveTurn.streamingToolInputs). */
@@ -770,6 +803,9 @@ export const useStreamStore = create<StreamStore>((set, get) => ({
         stopped: false,
         stoppedByUser: false,
         streamingToolInputs: [],
+        // ROUND-66: fresh turn → no debug analyst, no open checkpoint.
+        debugReport: null,
+        browserCheckpoint: null,
       },
       streamBusy: true,
       sendError: null,
@@ -1030,10 +1066,99 @@ function handleStreamEvent(
   if (event.type === "tool-call" && event.toolName === "browser_control") {
     noteAgentBrowserActivityFor(sessionId);
   }
+  // ROUND-66 (R66, A5): the browser_control set_viewport action applied a
+  // display-size change server-side and announced it — apply it INSTANTLY to
+  // the matching browser tab (the 4s poll stays as the backfill). Turn-
+  // independent: the panel exists whether or not this store tracks a turn,
+  // and a background turn's viewport change must not wait for focus.
+  if (event.type === "browser-viewport") {
+    const tabId = useBrowserTabStore.getState().tabIdForSession(event.tabId);
+    if (tabId !== null) {
+      useBrowserTabStore.getState().applyAgentViewport(tabId, {
+        width: Number(event.viewport?.width) || 1280,
+        height: Number(event.viewport?.height) || 800,
+        preset: typeof event.viewport?.preset === "string" ? event.viewport.preset : "custom",
+        zoom: Number(event.viewport?.zoom) || 1,
+        rotate: event.viewport?.rotate === true,
+      });
+    }
+    return;
+  }
 
   const cur = useStreamStore.getState().bySession[sessionId];
   if (!cur || cur.liveTurn === null) return;
   const liveTurn = cur.liveTurn;
+
+  // ── ROUND-66 (R66, C1): the debug analyst's live stream ──────────────────
+  // Frames arrive AFTER the turn's final text (the analyst runs post-turn,
+  // BEFORE the done frame) — the liveTurn is still open, so the dedicated
+  // debug section renders below the streamed answer until the refetch folds
+  // it into AssistantTurnItem.debugReport.
+  if (event.type === "debug-start") {
+    patchSession(sessionId, { liveTurn: { ...liveTurn, debugReport: { state: "streaming", text: "" } } });
+    return;
+  }
+  if (event.type === "debug-delta") {
+    const prev = liveTurn.debugReport;
+    patchSession(sessionId, {
+      liveTurn: {
+        ...liveTurn,
+        debugReport:
+          prev === null
+            ? { state: "streaming", text: event.delta }
+            : { ...prev, state: "streaming", text: prev.text + event.delta },
+      },
+    });
+    return;
+  }
+  if (event.type === "debug-done") {
+    patchSession(sessionId, {
+      liveTurn: {
+        ...liveTurn,
+        debugReport: { state: "done", text: event.content, model: event.model },
+      },
+    });
+    return;
+  }
+  if (event.type === "debug-error") {
+    patchSession(sessionId, {
+      liveTurn: {
+        ...liveTurn,
+        debugReport: { state: "error", text: "", error: event.message },
+      },
+    });
+    return;
+  }
+
+  // ── ROUND-66 (R66, A4): the human-verification checkpoint ────────────────
+  if (event.type === "browser-checkpoint") {
+    patchSession(sessionId, {
+      liveTurn: {
+        ...liveTurn,
+        browserCheckpoint: {
+          checkpointId: event.checkpointId,
+          kind: event.kind,
+          url: event.url,
+          waitMs: event.waitMs,
+          startedAtMs: Date.now(),
+          state: "waiting",
+        },
+      },
+    });
+    return;
+  }
+  if (event.type === "browser-checkpoint.resolved") {
+    const checkpoint = liveTurn.browserCheckpoint;
+    if (checkpoint !== null) {
+      patchSession(sessionId, {
+        liveTurn: {
+          ...liveTurn,
+          browserCheckpoint: { ...checkpoint, state: event.resolution },
+        },
+      });
+    }
+    return;
+  }
 
   if (event.type === "text-delta") {
     // Text starting = the in-flight thought is COMPLETE.

@@ -7,13 +7,17 @@
  *     prompt sections carry an explicit R65 boundary line naming the OTHER
  *     surface — a model cannot conflate browser_control (the in-app panel)
  *     with real-desktop computer use without ignoring both lines.
- *  2. DEBUG MODE SECTION (the owner's "debug mode" directive — the agent
- *     self-reports its execution trace + a settings switch): the section
- *     exists ONLY when ctx.debugMode === true; absent otherwise (prompts
- *     stay byte-identical for the default-off world).
- *  3. RUNTIME WIRING — prepareTurn reads the debug setting PER TURN (the
- *     permission-mode live-getter pattern): a flip between turns applies to
- *     the very next turn's system prompt with no restart.
+ *  2. DEBUG MODE (the owner's "debug mode" directive — R65 shipped the
+ *     agent self-report; R66 (R66-2-c, the owner's C1 directive) REMOVED
+ *     it: the model's prompt never self-reports. The report now comes from
+ *     the ROUTE-SIDE context-free analyst (agents/debug-analyst.ts + the
+ *     stream-route phase + debug.report events — covered by
+ *     debug-analyst.test.ts and the r58-stop-and-replay stream-route
+ *     tests). These pins hold the removal: debugMode composes NOTHING.
+ *  3. RUNTIME WIRING — prepareTurn keeps reading the setting per turn
+ *     (getDebugSettings) and passing ctx.debugMode; with the section gone
+ *     the flag is a prompt-level no-op — the live gate is the route-side
+ *     analyst phase, pinned in the stream-route tests.
  */
 import { randomUUID } from "node:crypto";
 import { mkdtempSync, rmSync } from "node:fs";
@@ -82,7 +86,10 @@ describe("SURFACE BOUNDARY (R65 — the hallucination guard)", () => {
     const composed = buildProjectSystemPrompt(FULL_CTX);
     const bp = composed.indexOf("## EMBEDDED BROWSER PANEL (browser_control)");
     expect(bp).toBeGreaterThan(-1);
-    const rest = composed.slice(bp, bp + 3_000);
+    // ROUND-66: the browser section grew (the high-level page actions +
+    // form-submission + bot-wall discipline) — the window is 4_500 now so
+    // the SURFACE BOUNDARY line at the section's end stays covered.
+    const rest = composed.slice(bp, bp + 4_500);
     expect(rest).toContain("SURFACE BOUNDARY (R65)");
     expect(rest).toContain("NEVER opens the user's real browsers");
     expect(rest).toContain('say "in the embedded browser panel" when that is where it happened');
@@ -100,19 +107,19 @@ describe("SURFACE BOUNDARY (R65 — the hallucination guard)", () => {
   });
 });
 
-describe("DEBUG MODE section (R65 — the self-report switch)", () => {
-  it("ON: the section instructs the Execution-report format", () => {
+describe("DEBUG MODE (R65 → R66: the self-report is REMOVED)", () => {
+  it("ON: the prompt composes NO self-report section — the route-side analyst owns the report now", () => {
     const composed = buildProjectSystemPrompt(FULL_CTX);
-    expect(composed).toContain("## DEBUG MODE (ON)");
-    expect(composed).toContain("## Execution report");
-    expect(composed).toContain("no hiding failed calls");
+    expect(composed).not.toContain("## DEBUG MODE");
+    expect(composed).not.toContain("## Execution report");
+    expect(composed).not.toContain("no hiding failed calls");
   });
 
-  it("OFF/absent: no section — the prompt stays byte-identical to the pre-R65 default", () => {
+  it("OFF/absent: identical — the debugMode ctx field is a composition no-op in every state", () => {
+    const on = buildProjectSystemPrompt(FULL_CTX);
     for (const debugMode of [false, undefined]) {
       const composed = buildProjectSystemPrompt({ ...FULL_CTX, debugMode });
-      expect(composed).not.toContain("## DEBUG MODE");
-      expect(composed).not.toContain("## Execution report");
+      expect(composed).toBe(on);
     }
   });
 });
@@ -129,7 +136,7 @@ describe("storage + runtime wiring (R65)", () => {
     expect(getDebugSettings(db)).toEqual({ enabled: false });
   });
 
-  it("prepareTurn reads the setting PER TURN — a flip applies to the very next turn", async () => {
+  it("prepareTurn keeps reading the setting per turn — the flag rides ctx.debugMode as a prompt-level NO-OP", async () => {
     const project = createProject(db, { name: "R65 Wiring", rootPath: tempDir });
     const agent = createAgent(db, {
       name: "R65 Agent",
@@ -151,18 +158,18 @@ describe("storage + runtime wiring (R65)", () => {
     };
     const deps = { db, keyring: new ProviderKeyring({ ACUTE_PROVIDER_OPENROUTER: KEY }), chat };
 
-    // Default OFF → no section.
+    // R66: in EVERY state (off → on → off) the turn's own prompt stays
+    // clean — no self-report, no composition change. The debug setting's
+    // live effect is the ROUTE-SIDE analyst phase (r58-stop-and-replay's
+    // debug-analyst describe pins that per-turn read end-to-end).
     await runSingleAgentTurn(deps, session.id, "turn one");
-    expect(systems[0]).not.toContain("## DEBUG MODE");
-
-    // Flip ON → the VERY NEXT turn's prompt carries the section.
     setDebugSettings(db, { enabled: true });
     await runSingleAgentTurn(deps, session.id, "turn two");
-    expect(systems[1]).toContain("## DEBUG MODE (ON)");
-
-    // Flip OFF mid-session → gone again, no restart.
     setDebugSettings(db, { enabled: false });
     await runSingleAgentTurn(deps, session.id, "turn three");
-    expect(systems[2]).not.toContain("## DEBUG MODE");
+    for (const system of systems) {
+      expect(system).not.toContain("## DEBUG MODE");
+      expect(system).not.toContain("## Execution report");
+    }
   });
 });

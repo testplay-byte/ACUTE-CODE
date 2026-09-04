@@ -202,6 +202,37 @@ describe("Sidebar projects section (fixture ProjectsBackend)", () => {
     expect(screen.queryByText("Navigation")).toBeNull();
   });
 
+  it("R66 (B4): minimizing ON A SETTINGS ROUTE shows the SETTINGS rail, not the projects one", async () => {
+    // Seed a minimized store BEFORE mount at /settings?tab=vision (the
+    // owner's report: "when I minimize the settings sidebar, it shows me the
+    // wrong sidebar — the normal other sidebar with the projects and such").
+    useProjectChatStore.setState({ appSidebarMinimized: true });
+    renderWithProviders(
+      <>
+        <Sidebar />
+        <Routes>
+          <Route path="/" element={<div>dashboard stub</div>} />
+          <Route path="/settings" element={<div>settings stub</div>} />
+        </Routes>
+      </>,
+      { route: "/settings?tab=vision" },
+    );
+    const rail = await screen.findByTestId("sidebar-rail");
+    expect(rail).toBeTruthy();
+    // The SETTINGS rail: back-to-dashboard + the section icons, with the
+    // ?tab= section (vision) marked active.
+    expect(screen.getByTestId("rail-back-dashboard")).toBeTruthy();
+    expect(screen.getByTestId("rail-settings-vision")).toBeTruthy();
+    expect(screen.getByTestId("rail-settings-computeruse")).toBeTruthy();
+    // The projects rail is deliberately ABSENT on a settings route.
+    expect(screen.queryByTestId("rail-dashboard")).toBeNull();
+    expect(screen.queryByTestId("rail-usage")).toBeNull();
+    expect(screen.queryByTestId("rail-projects")).toBeNull();
+    // Section click deep-links; back returns to the dashboard.
+    fireEvent.click(screen.getByTestId("rail-back-dashboard"));
+    expect(await screen.findByText("dashboard stub")).toBeTruthy();
+  });
+
   it("R60-C: normal mode has no header row — the nav starts at the panel's top", () => {
     renderWithProviders(
       <>

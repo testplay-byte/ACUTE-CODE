@@ -227,8 +227,9 @@ describe("Appearance tab simplification (R62-2a)", () => {
 // ── ROUND-65 (R65): the Advanced tab rebuild ────────────────────────────────
 // The owner's directive: remove the irrelevant "agent core connection" /
 // bearer-token fields from Advanced (the desktop app manages the sidecar
-// itself); add the debug-mode switch (the agent self-reports its execution
-// trace when ON). A routed fetch stub serves /settings/debug (mutable — PUT
+// itself); add the debug-mode switch (R66 rework: the main agent answers
+// normally; a context-free post-turn ANALYST streams its execution report
+// in a dedicated section). A routed fetch stub serves /settings/debug (mutable — PUT
 // patches the state like the server) + /settings/memory; everything else
 // 401s like the file-level stub.
 describe("Advanced tab (ROUND-65 R65)", () => {
@@ -306,7 +307,7 @@ describe("Advanced tab (ROUND-65 R65)", () => {
     await waitFor(() => expect(toggle.getAttribute("aria-checked")).toBe("true"));
 
     expect(puts).toEqual([{ enabled: true }]);
-    expect(screen.getByText("Agent execution self-report")).toBeTruthy();
+    expect(screen.getByText("Post-turn debug analyst")).toBeTruthy();
   });
 
   it("an error from the PUT surfaces on the card (honest failure, not a silent flip)", async () => {

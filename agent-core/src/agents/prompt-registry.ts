@@ -160,12 +160,11 @@ export const PROMPT_REGISTRY: readonly PromptSectionSpec[] = Object.freeze([
     dynamic: true, // tool-gated
     bucket: "identity",
   },
-  {
-    id: "debug",
-    description: "## DEBUG MODE (ON) — the owner's debug toggle: the final answer self-reports the execution trace (R65)",
-    dynamic: true, // ctx.debugMode-gated
-    bucket: "identity",
-  },
+  // R66 (R66-2-c): the "debug" section entry is REMOVED together with the
+  // prompts.ts block it registered — debug mode no longer composes a
+  // self-report section (the owner's C1 directive: the route-side
+  // context-free analyst in agents/debug-analyst.ts owns the report now).
+  // The registry-completeness pin guarantees a stale entry can't linger.
   {
     id: "communication",
     description: "## COMMUNICATION — reply style",

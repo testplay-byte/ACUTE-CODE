@@ -13,14 +13,15 @@ import { miniShell, type MiniShellShape } from "./shell";
  *
  * The owner's directive, verbatim intent: "It needs to be very minimal. It
  * needs to be clean. It needs to be beautiful. It should be a floating one…
- * so that I can easily stop it from there." This is the 360×96 always-on-top
- * window's whole UI:
+ * so that I can easily stop it from there." This is the 460×56 always-on-top
+ * window's whole UI (ROUND-66: the R64 360×96 two-row layout collapsed into
+ * ONE compact row per the owner's "make it less tall" report):
  *
- *   row 1 — pulsing status dot + "Agent is using your computer" + elapsed
- *            timer (tabular-nums), and it is the window's DRAG REGION
- *            (data-tauri-drag-region — Tauri's injected script owns dragging);
- *   row 2 — the latest activity, one truncated line, subtle;
- *   right  — the STOP kill switch, a danger-tinted pill spanning both rows.
+ *   one row — pulsing status dot + "Agent is using your computer" + "·" +
+ *             the latest activity (inline, truncated, subtle) + the elapsed
+ *             timer; the WHOLE row is the window's DRAG REGION
+ *             (data-tauri-drag-region — Tauri's injected script owns dragging);
+ *   right   — the STOP kill switch, a danger-tinted compact pill.
  *
  * NO scroll, NO stats grid, NO event list — minimal is the feature.
  *
@@ -247,7 +248,10 @@ export function MiniApp({
     );
   }
 
-  // ── the minimal bar ─────────────────────────────────────────────────────
+  // ── the minimal bar (ROUND-66: ONE compact row — the owner's "less tall…
+  // minimal… centered at the top" directive; the R64 two-row layout is
+  // gone: the label carries the state, the activity rides inline after a
+  // separator dot) ─────────────────────────────────────────────────────
   const newest = session?.events[0] ?? null;
   const label = killSwitch
     ? "Stopped — kill switch active"
@@ -261,11 +265,11 @@ export function MiniApp({
       : newest !== null
         ? newest.label
         : "Waiting for the first action…");
-  const activityColor = stopError !== null ? SEMANTIC_COLORS.danger : styles.textSecondary;
+  const activityColor = stopError !== null ? SEMANTIC_COLORS.danger : styles.textTertiary;
 
   return (
     <div
-      className="flex h-screen w-screen select-none items-stretch overflow-hidden rounded-[14px] border"
+      className="flex h-screen w-screen select-none items-center overflow-hidden rounded-[14px] border"
       style={{
         background: styles.isDark ? alpha(styles.card, 0.92) : styles.card,
         backdropFilter: "blur(16px)",
@@ -276,55 +280,55 @@ export function MiniApp({
       role="status"
       aria-label="Agent computer monitor"
     >
-      {/* LEFT — the two rows (status + latest activity). */}
-      <div className="flex min-w-0 flex-1 flex-col justify-center gap-[5px] pl-3.5 pr-1.5">
-        {/* Row 1 — status + elapsed; THE drag region (the attribute repeats
-            on the non-interactive children because Tauri only starts a drag
-            when the mousedown TARGET carries it). */}
-        <div
+      {/* LEFT — the ONE row (status + inline activity); THE drag region (the
+          attribute repeats on the non-interactive children because Tauri only
+          starts a drag when the mousedown TARGET carries it). ROUND-66: the
+          R64 two-row layout collapsed into a single compact row. */}
+      <div
+        data-tauri-drag-region
+        className="flex min-w-0 flex-1 cursor-default items-center gap-2 pl-3.5 pr-1.5"
+        data-testid="mini-status-row"
+        title="Drag to move the floating monitor"
+      >
+        <PulsingDot live={sessionActive && !killSwitch} />
+        <span
           data-tauri-drag-region
-          className="flex min-w-0 cursor-default items-center gap-2"
-          data-testid="mini-status-row"
-          title="Drag to move the floating monitor"
+          className="shrink-0 truncate text-[12px] font-semibold"
+          style={{ color: killSwitch ? styles.textSecondary : styles.text }}
+          data-testid="mini-label"
         >
-          <PulsingDot live={sessionActive && !killSwitch} />
+          {label}
+        </span>
+        {/* The inline activity — one subtle truncated line after the label
+            (the separator keeps the two visually distinct in one row). */}
+        <span data-tauri-drag-region className="shrink-0 text-[11px]" style={{ color: styles.textTertiary }}>
+          ·
+        </span>
+        <span
+          data-tauri-drag-region
+          className="min-w-0 flex-1 truncate text-[11px]"
+          style={{ color: activityColor }}
+          data-testid="mini-activity"
+          title={activity}
+        >
+          {activity}
+        </span>
+        {startedAt !== null ? (
           <span
             data-tauri-drag-region
-            className="min-w-0 truncate text-[12px] font-semibold"
-            style={{ color: killSwitch ? styles.textSecondary : styles.text }}
-            data-testid="mini-label"
+            className="shrink-0 text-[11px] tabular-nums"
+            style={{ color: styles.textTertiary }}
+            data-testid="mini-elapsed"
+            title="Control session elapsed"
           >
-            {label}
+            {fmtElapsed(Math.max(0, nowMs - startedAt))}
           </span>
-          {startedAt !== null ? (
-            <span
-              data-tauri-drag-region
-              className="ml-auto shrink-0 text-[11px] tabular-nums"
-              style={{ color: styles.textTertiary }}
-              data-testid="mini-elapsed"
-              title="Control session elapsed"
-            >
-              {fmtElapsed(Math.max(0, nowMs - startedAt))}
-            </span>
-          ) : null}
-        </div>
-
-        {/* Row 2 — the latest activity, one subtle truncated line. */}
-        <div className="flex min-w-0 items-center pr-1">
-          <span
-            className="min-w-0 truncate text-[11px]"
-            style={{ color: activityColor }}
-            data-testid="mini-activity"
-            title={activity}
-          >
-            {activity}
-          </span>
-        </div>
+        ) : null}
       </div>
 
-      {/* STOP — the danger pill, spanning both rows (the one prominent
-          control; everything else on the bar is passive). */}
-      <div className="flex shrink-0 items-stretch p-2 pl-1">
+      {/* STOP — the danger pill (the one prominent control; everything else
+          on the bar is passive). R66: horizontal compact pill, one row tall. */}
+      <div className="flex shrink-0 items-center p-2 pl-1">
         <button
           type="button"
           onClick={() => void doStop()}
@@ -335,7 +339,7 @@ export function MiniApp({
               ? "The kill switch is active — the agent cannot control the desktop"
               : "Kill switch — stop the agent's computer control now"
           }
-          className="flex w-[72px] flex-col items-center justify-center gap-1 rounded-[11px] border text-[10.5px] font-bold uppercase tracking-wider transition-colors disabled:cursor-default"
+          className="flex h-8 items-center justify-center gap-1.5 rounded-full border px-3.5 text-[10.5px] font-bold uppercase tracking-wider transition-colors disabled:cursor-default"
           style={
             killSwitch
               ? {
@@ -361,9 +365,9 @@ export function MiniApp({
           }}
         >
           {stopping ? (
-            <LoaderCircle size={12} className="animate-spin" aria-hidden />
+            <LoaderCircle size={11} className="animate-spin" aria-hidden />
           ) : (
-            <Square size={11} fill="currentColor" strokeWidth={0} aria-hidden />
+            <Square size={10} fill="currentColor" strokeWidth={0} aria-hidden />
           )}
           <span className="leading-none">{stopping ? "Stopping" : killSwitch ? "Stopped" : "Stop"}</span>
         </button>

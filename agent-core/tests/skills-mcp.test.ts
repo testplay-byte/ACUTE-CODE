@@ -80,6 +80,11 @@ describe("ROUND-61 (R61): skills storage", () => {
     expect(body).toContain("stop_computer_control");
     // The agent may act on its OWN window when it blocks the target.
     expect(body).toContain("win+down");
+    // R66-2-d: the BIG APPS paragraph — find_elements (server-side tree
+    // search) before screenshots in Chromium-sized windows (the Edge fix).
+    expect(body).toContain("Big apps");
+    expect(body).toContain("find_elements");
+    expect(body).toMatch(/never loop screenshots/i);
     // SKILL.md-shaped and tight (≤ ~60 content lines).
     expect(body.trim().split("\n").length).toBeLessThanOrEqual(60);
   });

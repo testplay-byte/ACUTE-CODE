@@ -1,4 +1,4 @@
-<!-- last-reviewed: 2026-09-02 round-61 -->
+<!-- last-reviewed: 2026-09-04 round-66 -->
 # EXTENSIBILITY — plugins, skills, MCP servers (owner's guide)
 
 **Status:** normative · **Established:** round-61 (owner directive: "the
@@ -25,7 +25,7 @@ Rule of thumb: **behavior → skill; tools → plugin; external server → MCP**
 ## 1. External plugins (.mjs files)
 
 The tool layer is a plugin registry (`agent-core/src/tools/registry.ts`,
-ADR-0025). The 12 built-in plugins are in-repo
+ADR-0025). The 13 built-in plugins are in-repo
 (`agent-core/src/tools/plugins/*.ts`); external ones are plain ES modules
 you drop on disk:
 
@@ -172,7 +172,7 @@ toolset (when the server is enabled). `tools/call` output is capped at
 ## 4. The built-in plugin catalog (`GET /plugins`)
 
 One authenticated call returns the whole extension picture:
-`plugins` (the 12 built-ins' id/name/version/category/description — the
+`plugins` (the 13 built-ins' id/name/version/category/description — the
 computer-use plugin is listed even while its master switch is OFF: the gate
 is settings, not existence), `tools` (the live computed catalog — gated
 plugins contribute nothing), and `external` (the .mjs file report: user +
@@ -188,6 +188,34 @@ project files with loaded bits + the honest load-error note). The
 | MCP server | Settings UI → `mcp_servers` table → `mcp/manager.ts` child |
 | Built-in plugin (new tool group) | `agent-core/src/tools/plugins/<name>.ts` + registry import + tests |
 | Settings-gated surface (like computer-use) | storage accessors + `createTools` gate + migration |
+
+## The R66 addendum (what grew this round)
+
+- **`browser_control`'s action surface grew to 15 actions.** The
+  embedded-browser tool (the `core-browser` plugin, always-on like
+  `web_fetch` since R43) gained the HIGH-LEVEL page actions —
+  `click` / `type` (with `submit:true` → native `form.requestSubmit`) /
+  `press_key` (Enter in a form submits it) / `read_dom` (a structured page
+  outline) / `source` (html | css | scripts) / `wait_for_verification`
+  (the owner-solvable bot-wall checkpoint) — all riding the SAME
+  eval bridge the R62 `eval` action built (one script per action; user
+  input embedded via `JSON.stringify` only). Desktop-only actions refuse
+  honestly in web dev mode. See [EMBEDDED-BROWSER](EMBEDDED-BROWSER.md).
+- **`analyze_image` — the general vision tool.** A NEW built-in plugin
+  (`core-vision`, category `vision`) registers `analyze_image {path?|url?,
+  instruction?}` for EVERY turn with a database — unlike the
+  settings-gated computer-use tools it is ALWAYS-REGISTERED vocabulary:
+  **`TOOL_NAMES` is 25 tools now**, `analyze_image` among them, and
+  migration `0026_analyze_image_tool.sql` appends it to existing
+  EXPLICIT allowlists (template rows + the default agent only, and only
+  rows that already carry `web_fetch` — `[]` rows mean ALL tools and user
+  curation is never widened). The tool describes a local image file
+  (png/jpg/webp/gif/bmp, ≤8 MB) or an http(s) URL through the GLOBAL vision
+  configuration — Settings → Image Analysis (migration 0025 moved it out
+  of Computer Use); vision OFF is the honest refusal that points there.
+- The plugin count 12 → 13 (`core-vision`), and the computer-use plugin
+  grew `find_elements` (its 31st tool — still settings-gated, deliberately
+  NOT `TOOL_NAMES` vocabulary; see [COMPUTER-USE](COMPUTER-USE.md)).
 
 ## Troubleshooting
 
@@ -211,7 +239,8 @@ project files with loaded bits + the honest load-error note). The
 - [TESTING](TESTING.md) — the r52-plugin-registry + skills-mcp suites
 - [MAINTENANCE](MAINTENANCE.md) — the how-to-add-a-tool recipe
 - Code map: `agent-core/src/tools/registry.ts` (loader, grammar, caps,
-  catalog), `agent-core/src/tools/plugins/` (12 built-ins), skills storage
+  catalog), `agent-core/src/tools/plugins/` (13 built-ins — incl.
+  `vision.ts`, the R66 core-vision plugin), skills storage
   `agent-core/src/storage/skills.ts`, MCP storage
   `agent-core/src/storage/mcp.ts` + client `agent-core/src/mcp/manager.ts`,
   routes in `agent-core/src/server.ts` (ROUND-61 section), settings UI in

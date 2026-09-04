@@ -231,7 +231,7 @@ export function visionDisabled(why: string): RefusalOutcome {
   return refuse(
     "vision_disabled",
     `Vision is not available: ${why}.`,
-    "Configure the vision model in Settings → Computer Use (a separate vision model, or main-model vision when the row supports it), or proceed with the accessibility tree only. action_sent=false.",
+    "Configure the vision model in Settings → Image Analysis (a dedicated vision model, or main-model vision when the row supports it), or proceed with the accessibility tree only. action_sent=false.",
   );
 }
 

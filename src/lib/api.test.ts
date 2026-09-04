@@ -1450,6 +1450,113 @@ describe("toProjectChatItems attachment passthrough (ROUND-50 R50-c1)", () => {
   });
 });
 
+// ── ROUND-66 (R66-2-c): the debug.report fold ───────────────────────────────
+describe("toProjectChatItems debug.report folding (ROUND-66 R66-2-c)", () => {
+  /** A debug.report event exactly as the stream route's analyst phase
+   * appends it (payload carries content/model; the storage layer stamps
+   * agentId + ts — ev() passes ts through the helper). */
+  function debugReport(seq: number, content: string, model?: string): SessionEvent {
+    return ev(seq, "debug.report", { content, ...(model !== undefined ? { model } : {}) }, "agt_scribe");
+  }
+
+  it("a report after the turn's last assistant event folds onto THAT turn (content/ts/model)", () => {
+    const items = toProjectChatItems([
+      ev(1, "message.user", { role: "user", content: "write a.txt" }, "agt_scribe"),
+      toolUse(2, "write_file", "path: a.txt, content: 12 chars"),
+      ev(3, "message.assistant", { role: "assistant", content: "Done." }, "agt_scribe"),
+      debugReport(4, "## Failures\n- write_file returned ok but the file was empty", "test/analyst-1"),
+      // The NEXT user message must NOT absorb the previous turn's report.
+      ev(5, "message.user", { role: "user", content: "next task" }, "agt_scribe"),
+      ev(6, "message.assistant", { role: "assistant", content: "Next done." }, "agt_scribe"),
+    ]);
+
+    expect(items.map((i) => i.kind)).toEqual(["user", "turn", "user", "turn"]);
+    const first = items[1];
+    if (first.kind !== "turn") throw new Error("expected turn");
+    expect(first.debugReport).toEqual({
+      content: "## Failures\n- write_file returned ok but the file was empty",
+      ts: TS(4),
+      model: "test/analyst-1",
+    });
+    // The report's ts stretches the turn's timeline (endTs), and the turn's
+    // own answer is untouched.
+    expect(first.endTs).toBe(TS(4));
+    expect(first.finalText).toBe("Done.");
+    const second = items[3];
+    if (second.kind !== "turn") throw new Error("expected turn");
+    expect(second.debugReport).toBeUndefined();
+  });
+
+  it("a report with no model field folds without the model key (tolerant payload)", () => {
+    const items = toProjectChatItems([
+      ev(1, "message.user", { role: "user", content: "go" }, "agt_scribe"),
+      ev(2, "message.assistant", { role: "assistant", content: "Went." }, "agt_scribe"),
+      debugReport(3, "Plain report, no model."),
+    ]);
+    const turn = items[1];
+    if (turn.kind !== "turn") throw new Error("expected turn");
+    expect(turn.debugReport).toEqual({ content: "Plain report, no model.", ts: TS(3) });
+  });
+
+  it("a report after a turn.error flush attaches to the LAST-CLOSED turn in the SAME user gap", () => {
+    const items = toProjectChatItems([
+      ev(1, "message.user", { role: "user", content: "run the build" }, "agt_scribe"),
+      toolUse(2, "run_command", "npm run build", false),
+      ev(3, "turn.error", { code: "PROVIDER_ERROR", message: "provider call failed", userSeq: 1 }, "agt_scribe"),
+      debugReport(4, "## Failures & anomalies\n- run_command FAILED before the provider died"),
+    ]);
+    // user → working-only turn (with the report) → the error item.
+    expect(items.map((i) => i.kind)).toEqual(["user", "turn", "error"]);
+    const turn = items[1];
+    if (turn.kind !== "turn") throw new Error("expected turn");
+    expect(turn.debugReport?.content).toContain("run_command FAILED");
+    expect(turn.finalText).toBe(""); // the failed turn never answered
+  });
+
+  it("a report in a gap whose turn produced NOTHING renderable is dropped (no turn to claim it)", () => {
+    const items = toProjectChatItems([
+      ev(1, "message.user", { role: "user", content: "first" }, "agt_scribe"),
+      ev(2, "message.assistant", { role: "assistant", content: "first done" }, "agt_scribe"),
+      ev(3, "message.user", { role: "user", content: "second (failed, no events)" }, "agt_scribe"),
+      debugReport(4, "Orphaned report — the failed turn rendered nothing."),
+    ]);
+    // The FIRST turn must not claim the second gap's report (the
+    // closedTurnUserSeq guard) — the report is dropped honestly.
+    expect(items.map((i) => i.kind)).toEqual(["user", "turn", "user"]);
+    const first = items[1];
+    if (first.kind !== "turn") throw new Error("expected turn");
+    expect(first.debugReport).toBeUndefined();
+  });
+
+  it("a report with an empty/absent content payload is ignored (junk-tolerant)", () => {
+    const items = toProjectChatItems([
+      ev(1, "message.user", { role: "user", content: "hi" }, "agt_scribe"),
+      ev(2, "message.assistant", { role: "assistant", content: "Hello." }, "agt_scribe"),
+      ev(3, "debug.report", { content: "" }, "agt_scribe"),
+      ev(4, "debug.report", { nope: true }, "agt_scribe"),
+    ]);
+    const turn = items[1];
+    if (turn.kind !== "turn") throw new Error("expected turn");
+    expect(turn.debugReport).toBeUndefined();
+  });
+
+  it("a stats-carrier-only turn still renders when it carries a report (amendment 3e guard)", () => {
+    // The runtime's fallback marker: empty assistant content + usage — a
+    // turn that would drop — but the analyst still analyzed it.
+    const items = toProjectChatItems([
+      ev(1, "message.user", { role: "user", content: "say something" }, "agt_scribe"),
+      ev(2, "message.assistant", { role: "assistant", content: "", usage: { inputTokens: 5, outputTokens: 0 } }, "agt_scribe"),
+      debugReport(3, "The model produced an empty reply."),
+    ]);
+    expect(items.map((i) => i.kind)).toEqual(["user", "turn"]);
+    const turn = items[1];
+    if (turn.kind !== "turn") throw new Error("expected turn");
+    expect(turn.finalText).toBe("");
+    expect(turn.working).toHaveLength(0);
+    expect(turn.debugReport?.content).toBe("The model produced an empty reply.");
+  });
+});
+
 // ── ROUND-59 (R59-D): the response-rating client ────────────────────────────
 describe("response ratings client (ROUND-59 R59-D)", () => {
   const RATING = {

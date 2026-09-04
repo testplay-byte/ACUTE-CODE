@@ -286,6 +286,158 @@ describe("AgentChatPanel user-stop rendering (ROUND-58 R58-cf)", () => {
     });
   }
 
+  it("R66 (A4): a live browser-checkpoint renders the verification card above the streaming text", async () => {
+    const projects = await getFixtureProjects().list();
+    customBackend.backend = createFixtureSessions([
+      {
+        session: {
+          id: "sess_checkpoint",
+          projectId: projects[0].id,
+          agentId: "agt_scribe",
+          mode: "single",
+          status: "completed",
+          title: "Checkpoint probe",
+          createdAt: "2026-09-04T11:00:00Z",
+          updatedAt: "2026-09-04T11:05:00Z",
+        },
+        events: [],
+      },
+    ]);
+    renderWithProviders(<AgentChatPanel projectId={projects[0].id} project={projects[0]} />);
+    await waitFor(
+      () => expect(document.querySelector("[data-empty-state]")).toBeTruthy(),
+      SLOW,
+    );
+    useStreamStore.setState({
+      bySession: {
+        sess_checkpoint: {
+          liveTurn: {
+            startedAtMs: Date.now() - 3000,
+            working: [],
+            streamText: "I am navigating the page for you…",
+            streamThinking: "",
+            stopped: false,
+            stoppedByUser: false,
+            streamingToolInputs: [],
+            debugReport: null,
+            browserCheckpoint: {
+              checkpointId: "bchk_live1",
+              kind: "cloudflare",
+              url: "https://protected.example.com",
+              waitMs: 15000,
+              startedAtMs: Date.now(),
+              state: "waiting",
+            },
+          },
+          streamBusy: true,
+          sendError: null,
+          liveError: null,
+          pendingEcho: null,
+          lastLiveEndMs: Date.now(),
+          lastTurnStoppedByUser: false,
+          lastTurnStoppedTs: null,
+        },
+      },
+    });
+    // The card renders with the owner's exact naming + the countdown + BOTH
+    // controls, and the stream text is visible below it.
+    expect(await screen.findByText("Cloudflare verification needed")).toBeTruthy();
+    expect(screen.getByTestId("browser-checkpoint-countdown")).toBeTruthy();
+    expect(screen.getByTestId("browser-checkpoint-done")).toBeTruthy();
+    expect(screen.getByTestId("browser-checkpoint-stop")).toBeTruthy();
+    expect(screen.getByText(/navigating the page for you/i)).toBeTruthy();
+  });
+
+  it("R66 (C1): a live debugReport streams the analyst card at the very bottom of the turn", async () => {
+    const projects = await getFixtureProjects().list();
+    customBackend.backend = createFixtureSessions([
+      {
+        session: {
+          id: "sess_debuglive",
+          projectId: projects[0].id,
+          agentId: "agt_scribe",
+          mode: "single",
+          status: "completed",
+          title: "Debug live probe",
+          createdAt: "2026-09-04T11:00:00Z",
+          updatedAt: "2026-09-04T11:05:00Z",
+        },
+        events: [],
+      },
+    ]);
+    renderWithProviders(<AgentChatPanel projectId={projects[0].id} project={projects[0]} />);
+    await waitFor(
+      () => expect(document.querySelector("[data-empty-state]")).toBeTruthy(),
+      SLOW,
+    );
+    useStreamStore.setState({
+      bySession: {
+        sess_debuglive: {
+          liveTurn: {
+            startedAtMs: Date.now() - 3000,
+            working: [],
+            streamText: "The task is complete — file written and verified.",
+            streamThinking: "",
+            stopped: false,
+            stoppedByUser: false,
+            streamingToolInputs: [],
+            debugReport: { state: "streaming", text: "## Tool-by-tool trace\n- write_file → ok" },
+            browserCheckpoint: null,
+          },
+          streamBusy: false,
+          sendError: null,
+          liveError: null,
+          pendingEcho: null,
+          lastLiveEndMs: Date.now(),
+          lastTurnStoppedByUser: false,
+          lastTurnStoppedTs: null,
+        },
+      },
+    });
+    // The dedicated section renders BELOW the answer (the answer text is
+    // still present) with the streaming status + live partial markdown.
+    expect(await screen.findByTestId("debug-report-card")).toBeTruthy();
+    expect(screen.getByTestId("debug-report-status").textContent).toContain("Analyzing the last execution");
+    expect(screen.getByText("Tool-by-tool trace")).toBeTruthy();
+    expect(screen.getByText(/task is complete/i)).toBeTruthy();
+  });
+
+  it("R66 (C1): a FOLDED turn with a debug.report event renders the analyst card at the turn's bottom", async () => {
+    const projects = await getFixtureProjects().list();
+    customBackend.backend = createFixtureSessions([
+      {
+        session: {
+          id: "sess_debugfold",
+          projectId: projects[0].id,
+          agentId: "agt_scribe",
+          mode: "single",
+          status: "completed",
+          title: "Debug fold probe",
+          createdAt: "2026-09-04T11:00:00Z",
+          updatedAt: "2026-09-04T11:05:00Z",
+        },
+        events: [
+          messageEvent(1, "user", "analyze this file", "2026-09-04T11:00:10Z"),
+          messageEvent(2, "assistant", "Here is the analysis.", "2026-09-04T11:00:20Z"),
+          {
+            seq: 3,
+            type: "debug.report",
+            agentId: "agt_scribe",
+            payload: { content: "## Failures & anomalies\n- none", model: "test/model-1" },
+            ts: "2026-09-04T11:00:25Z",
+          },
+        ],
+      },
+    ]);
+    renderWithProviders(<AgentChatPanel projectId={projects[0].id} project={projects[0]} />);
+    // The folded answer + the dedicated debug section under it.
+    expect(await screen.findByText("Here is the analysis.", {}, SLOW)).toBeTruthy();
+    const card = await screen.findByTestId("debug-report-card", {}, SLOW);
+    expect(card.textContent).toContain("Debug report");
+    expect(card.textContent).toContain("test/model-1");
+    expect(screen.getByText("Failures & anomalies")).toBeTruthy();
+  });
+
   it("renders the quiet 'Stopped by user' card under the persisted partial — never TurnErrorCard", async () => {
     await renderStoppedConversation(true);
 
@@ -666,6 +818,8 @@ describe("AgentChatPanel response ratings (ROUND-59 R59-D)", () => {
             stoppedByUser: false,
             streamingToolInputs: [],
             lastAssistantSeq: 6,
+            debugReport: null,
+            browserCheckpoint: null,
           },
           streamBusy: false,
           sendError: null,

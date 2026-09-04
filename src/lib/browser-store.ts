@@ -83,6 +83,14 @@ export interface BrowserTabUiState {
   error: string | null;
   /** Increments on every intent to (re)load the iframe. */
   navSeq: number;
+  /** ROUND-66 (R66, A5): increments whenever an AGENT-side display-size
+   * change lands (the instant browser-viewport SSE frame, or a poll that
+   * sees a server viewport DIFFER from the local one on a SIZE field). The
+   * mounted BrowserPanel watches it and EXITS natural mode so the agent's
+   * preset actually applies — the owner's "had to manually nudge a number"
+   * bug: agent presets updated the store but the panel-local naturalSize
+   * gate kept effectiveViewport null. Local user edits never bump it. */
+  agentViewportSeq: number;
 }
 
 // ── sessionId hygiene ──────────────────────────────────────────────────────
@@ -239,6 +247,14 @@ interface BrowserTabStoreState {
   setFit: (tabId: string, fit: boolean) => void;
   /** Poll merge (history + viewport); follows agent-driven changes. */
   refresh: (tabId: string) => Promise<void>;
+  /** ROUND-66 (R66, A5): apply an AGENT-side viewport change instantly (the
+   * browser-viewport SSE frame) — patches the store AND bumps
+   * agentViewportSeq so the mounted panel exits natural mode. No-op for an
+   * unknown tab (the panel isn't mounted; the poll backfills). */
+  applyAgentViewport: (tabId: string, viewport: BrowserViewportState) => void;
+  /** ROUND-66 (R66, A5): the tab whose sidecar session id matches (or null)
+   * — the stream-store maps a frame's session id to THIS store's tab key. */
+  tabIdForSession: (sessionId: string) => string | null;
   /** The escape hatch's acute:location (final URL after redirects). */
   handleLocationMessage: (tabId: string, url: string) => Promise<void>;
   /** The escape hatch's acute:title — stores it as a title-update. */
@@ -269,6 +285,7 @@ function freshTab(sessionId: string): BrowserTabUiState {
     loading: false,
     error: null,
     navSeq: 0,
+    agentViewportSeq: 0,
   };
 }
 
@@ -292,6 +309,22 @@ export const useBrowserTabStore = create<BrowserTabStoreState>()((set, get) => (
     return fresh;
   },
   getTab: (tabId) => get().tabs[tabId],
+  applyAgentViewport: (tabId, viewport) => {
+    const cur = get().tabs[tabId];
+    if (cur === undefined) return;
+    set((s) =>
+      patchTabState(s, tabId, {
+        viewport: { ...viewport },
+        agentViewportSeq: cur.agentViewportSeq + 1,
+      }),
+    );
+  },
+  tabIdForSession: (sessionId) => {
+    for (const [tabId, tab] of Object.entries(get().tabs)) {
+      if (tab.sessionId === sessionId) return tabId;
+    }
+    return null;
+  },
   mint: async (tabId) => {
     const tab = get().tabs[tabId] ?? get().ensureTab(tabId);
     try {
@@ -419,6 +452,18 @@ export const useBrowserTabStore = create<BrowserTabStoreState>()((set, get) => (
         return;
       }
       const followAgent = serverUrl !== null && serverUrl !== cur.currentUrl;
+      // ROUND-66 (R66, A5): the poll is also an agent-viewport detector — the
+      // server viewport DIFFERS from the local one on a SIZE field (width /
+      // height / preset / rotate; zoom applies in natural mode too, so a
+      // zoom-only change never forces the layout switch) → the browser_control
+      // set_viewport action changed the display size while the instant frame
+      // was missed (web mode, or the panel mounted late). Adopt + bump
+      // agentViewportSeq → the mounted panel exits natural mode and applies it.
+      const agentViewport =
+        viewportRes.viewport.width !== cur.viewport.width ||
+        viewportRes.viewport.height !== cur.viewport.height ||
+        viewportRes.viewport.preset !== cur.viewport.preset ||
+        viewportRes.viewport.rotate !== cur.viewport.rotate;
       set((s) => {
         const c = s.tabs[tabId];
         if (c === undefined) return s;
@@ -436,6 +481,7 @@ export const useBrowserTabStore = create<BrowserTabStoreState>()((set, get) => (
               }
             : { currentTitle: serverTitle ?? c.currentTitle }),
           viewport: viewportRes.viewport,
+          ...(agentViewport ? { agentViewportSeq: c.agentViewportSeq + 1 } : {}),
         });
       });
     } catch {

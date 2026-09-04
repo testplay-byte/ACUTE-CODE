@@ -1,10 +1,11 @@
-<!-- last-reviewed: 2026-09-02 round-64 -->
+<!-- last-reviewed: 2026-09-04 round-66 -->
 # COMPUTER USE — the desktop-control system (owner's guide)
 
 **Status:** normative · **Established:** round-61 (owner directive: computer
-use + a separately-configurable vision model) · **Audience:** the owner
-(anyone flipping the switches and watching the monitor) and any agent
-maintaining the system
+use + a separately-configurable vision model; R66 moved the vision model to
+its own section and made the Windows walk big-app-capable) · **Audience:**
+the owner (anyone flipping the switches and watching the monitor) and any
+agent maintaining the system
 
 Computer use lets the agent **observe and actuate your real desktop GUI** —
 read an app's accessibility tree, click its buttons, type into its fields,
@@ -105,24 +106,28 @@ does:
 - `import` (ImageMagick) or `scrot` — capture, PNG to stdout.
 - `xclip` (or `xsel`) — clipboard.
 
-## Settings → Computer Use (the three gates)
+## Settings → Computer Use (the two gates + readiness)
 
 The whole surface is dark until YOU turn it on
-(`computerUse.enabled`, default **OFF** — the owner's on/off directive):
+(`computerUse.enabled`, default **OFF** — the owner's on/off directive).
+R66 note: this tab is now PURELY the desktop-control surface — the vision
+model that used to live here moved to its own section (see below):
 
 1. **Master switch** — OFF by default. While off, the plugin contributes
    zero tools and the agent cannot control the desktop at all.
 2. **Posture** (visible only while ON):
-   - **observe** — only the 11 read-only tools are even registered (the
+   - **observe** — only the 12 read-only tools are even registered (the
      model never sees a mutating schema): `list_apps`, `list_windows`,
-     `list_displays`, `switch_display`, `get_app_state`, `screenshot`,
-     `zoom`, `cursor_position`, `request_access`, `read_clipboard`, `wait`.
-   - **act** (recommended) — all 30 tools; in ask permission-mode the
+     `list_displays`, `switch_display`, `get_app_state`, `find_elements`,
+     `screenshot`, `zoom`, `cursor_position`, `request_access`,
+     `read_clipboard`, `wait`.
+   - **act** (recommended) — all 31 tools; in ask permission-mode the
      real-input risk classes (typing, keys, clipboard writes, drags,
      coordinate/raw clicks, activations) ride the SAME approval flow as
      `run_command` — you see a dialog before the agent moves your real
      mouse. Element presses (background-safe) and observations never prompt.
-   - **auto** — all 30 tools with no per-action approval prompts.
+     `find_elements` is observe-only — it never prompts in any posture.
+   - **auto** — all 31 tools with no per-action approval prompts.
 3. **Test readiness** — runs the engine's readiness probe (permissions +
    backend capabilities; never pops OS dialogs) and shows the result:
    green "Ready" or amber "Issues" with the report's lines. The probe's
@@ -130,17 +135,26 @@ The whole surface is dark until YOU turn it on
    capabilities granted, `issues` = the report's notes (+ explicit
    denied-permission lines).
 
-## The vision model (completely separate, by directive)
+A small pointer card at the bottom of the tab notes where the vision model
+went ("Image analysis (the vision model) now lives in its own section —
+open Settings → Image Analysis").
+
+## The vision model (moved to its own section in R66)
 
 The vision subsystem describes screenshots in text when the agent asks for
-it (`screenshot`/`zoom` with `describe:true`). Configure in
-Settings → Computer Use:
+it (`screenshot`/`zoom` with `describe:true`) — and, since R66, also powers
+the general `analyze_image` tool and the embedded browser's screenshot
+descriptions. Its configuration is GLOBAL and lives in
+**Settings → Image Analysis** (`vision.mode`/`vision.provider`/
+`vision.modelId` — migration 0025 seeds them from the old
+`computerUse.vision.*` rows, so an existing setup moves losslessly):
 
 - **off** (default) — screenshots still return raster METADATA (frame id,
   size, scale) and coordinates still work; the a11y tree remains the
   observation channel. Nothing breaks.
 - **separate** — pick any provider + a model id, and paste that model's OWN
-  API key into the dedicated vision-key slot. The key rides the keyring
+  API key into the dedicated vision-key slot (the key row rides the SAVED
+  provider in the Image Analysis tab). The key rides the keyring
   pseudo-provider `<providerId>-vision` (credential target
   `ACUTE-CODE/provider/<providerId>-vision`, env
   `ACUTE_PROVIDER_<ID>_VISION`) — the same store/handoff pattern as every
@@ -148,9 +162,12 @@ Settings → Computer Use:
   no dedicated key is pasted, the provider's PRIMARY key is used (one
   provider, one key — a valid configuration, reported honestly).
 - **main** — use the turn's main model, allowed ONLY when that model's row
-  is marked **supports vision**. Flip the eye toggle on model rows in the
-  Computer Use tab (or set the flag in Models & Providers); the flag is
-  prefilled from the catalog for known vision models.
+  is marked **supports vision**. Flip the eye toggle on the model rows in
+  the Image Analysis tab (or set the flag in Models & Providers); the flag
+  is prefilled from the catalog for known vision models.
+
+See the [EXTENSIBILITY](EXTENSIBILITY.md) R66 addendum for the
+`analyze_image` tool this configuration also powers.
 
 The relay speaks `chat-completions` (OpenAI/OpenRouter/Google-compat) and
 `anthropic-messages` formats, direct fetch, one image + one instruction,
@@ -161,18 +178,28 @@ automatically.
 
 ROUND-64: **the surface is the ALWAYS-ON-TOP floating monitor** — the
 right-sidebar "Computer" tab is REMOVED (one surface, and it must be
-reachable while the agent drives OTHER apps):
+reachable while the agent drives OTHER apps). ROUND-66 (R66, the owner's
+A1/B1 report) reshaped it:
 
-- **Desktop app**: a 360×96 frameless OS window (`acute-computer-mini`)
-  that floats ABOVE EVERYTHING (always-on-top, never in the taskbar, never
-  steals focus), parked top-right of the monitor you're looking at. The
-  minimal bar: pulsing status dot + "Agent is using your computer" +
-  elapsed timer + the latest activity + the STOP kill switch. It appears
-  AUTOMATICALLY the moment the agent starts using the computer (the first
-  live tool frame) and disappears when the session ends (~6-8s grace).
-  Drag it by its header.
+- **Desktop app**: a **460×56 single-row** frameless OS window
+  (`acute-computer-mini`) that floats ABOVE EVERYTHING (always-on-top,
+  never in the taskbar, never steals focus), parked **top-center** of the
+  monitor you're looking at (was top-right + taller — the owner: "make it
+  less tall and make it centered at the top, not on the top right"). The
+  one compact row: pulsing status dot + "Agent is using your computer" +
+  elapsed timer + the latest activity + the STOP kill switch. Drag it by
+  its header.
 - **Web mode**: the same minimal bar as an in-app pill at the top-center
   of the window (auto-shown/hidden the same way).
+- **THE LIVE SIGNAL (R66 rework): real control events only, with a 6-second
+  decay.** The monitor shows "live" while — and only while — real
+  computer-use frames keep arriving; 6 s of silence = the agent stopped
+  driving your desktop = hide. A merely-ENABLED session (the long-lived
+  singleton stays active while Computer Use is on) no longer pins it on
+  forever, and **browser turns never trip it**: the embedded browser's
+  `screenshot` action no longer records into this ring at all (browser
+  work is not computer use — that was the owner's A1 report). The web pill
+  and the OS window both key off the same decayed signal.
 - **Data path**: every tool execution emits one `{type:"computer-use"}` SSE
   frame at dispatch time (live, zero polling latency) — the main app's
   controller watches these to open/close the OS window; the mini window
@@ -207,7 +234,57 @@ reachable while the agent drives OTHER apps):
 - **Only the owner configures** — no computer-use setting is model-writable;
   all writes go through the authenticated settings routes.
 
-## The 30 tools (quick reference)
+## Big apps (browsers, Edge, VS Code) — find_elements (R66)
+
+The owner's live Edge report: the agent was "not able to detect where it
+needs to tap, stuck taking screenshots" — a Chromium-sized window exposes
+THOUSANDS of a11y elements, and reading the whole tree (or looping
+screenshots) is exactly the wrong move. R66 adds the search:
+
+- `find_elements {appRef, query, kind?, limit?}` — a SERVER-side filtered
+  walk of the same snapshot `get_app_state` builds: name-substring match
+  (case-insensitive), optional kind filter (button, textfield, checkbox,
+  combobox, slider, tab, menuitem, row, text, image, pane, window,
+  scrollbar), small capped result (default 20, hard max 40) whose entries
+  carry `index` + `kind` + `name` + `flags` + `bounds` — and the `stateId`
+  rides every result, so the indexes are DIRECTLY actionable element
+  targets: `find_elements {appRef, query:"Sign in", kind:"button"}` →
+  `left_click {target:{type:"element", stateId, index}}`. Cheaper than
+  `get_app_state detail:"full"` on Chromium-sized windows.
+- **No matches** is an honest refusal that names the query, the kind
+  filter, and how many elements were walked (retry with a shorter/looser
+  substring, drop the kind filter, or read the tree).
+- The discipline (taught in the prompt section AND the built-in skill):
+  in big apps, SEARCH first (`find_elements` + element clicks), NEVER loop
+  screenshots when the tree can answer.
+
+## The Windows walk (R66: fast + deep enough for Edge)
+
+The Windows UIA walk was rebuilt for Chromium-sized trees:
+
+- **Pattern probes only on potentially-interactive ControlTypes** (17 of
+  them: Button, Hyperlink, Edit, ComboBox, CheckBox, RadioButton, Slider,
+  TabItem, MenuItem, ListItem, DataItem, TreeItem, Spinner, Thumb,
+  ScrollBar, Document, Custom). Every other kind (Window, Pane, Text,
+  Image, Group, Table, … — the majority of Chromium's nodes) records
+  kind+name+bounds with ZERO `GetCurrentPattern` calls.
+- **ONE 4-probe pass per probed node** (Invoke/Toggle/ExpandCollapse/
+  Value) whose handles are reused for flags + value capture + action
+  advertisement — was up to 8 probes per node at `detail:"full"`.
+- **maxEl 800 → 2400** (maxDepth stays 25): the walk reaches page content
+  in Edge-sized trees, and the element-action re-walk moved with it
+  (otherwise indexes 800+ would be findable-but-never-actionable).
+- Non-probed kinds never carry pressable/editable/has-menu flags, a value,
+  or advertised actions — fail-closed downstream, documented in the script.
+
+**Honest note: the Windows backend remains construction-tested only** —
+this sandbox is a headless Linux host (the walk's PowerShell script is
+pinned by construction tests: the exact probe list, the 4-probe count, the
+2400/25 caps, the cached-handle reuse). The owner's next live Windows run
+is the real proof; if Edge walks time out in the field, the 25 s capsule
+timeout is the first knob to raise.
+
+## The 31 tools (quick reference)
 
 | Tool | Purpose |
 |---|---|
@@ -215,6 +292,7 @@ reachable while the agent drives OTHER apps):
 | `open_application` | Launch by EXACT user-provided name (character-for-character) or activate a running one (`activate:true`) |
 | `list_windows` | An app's windows (id, title, bounds, main, focused) |
 | `get_app_state` | THE core observation: the window's a11y tree (detail:full adds bounds + actions; includeScreenshot adds a raster) |
+| `find_elements` | SEARCH the tree by name substring (+ optional kind) — the big-app locator; returns small match lists whose indexes are directly actionable (R66) |
 | `screenshot` | Full-display capture (the fallback observation); `describe:true` runs the vision model over it |
 | `zoom` | Close-up region of the latest raster — a NEW raster to pick pixels from |
 | `list_displays` | Displays (1-based index, bounds, main) |
@@ -274,7 +352,7 @@ Every refusal is `{error, message, recovery}` — the codes:
 ## LIVE-VERIFICATION CHECKLIST (honesty — read before trusting it)
 
 The engine's logic is test-covered (gates, matrix, receipts, refusals,
-audit, consent, vision relay, the 30-tool surface — see
+audit, consent, vision relay, the 31-tool surface — see
 [TESTING](TESTING.md)), **but this sandbox has no display**: the dispatcher
 is tested against an injected fake backend, and the plugin tests run the
 real Linux backend on a headless host where GUI probes fail closed (the
@@ -328,16 +406,22 @@ offline screen) carries the capsule errors.
 
 ## See also
 
+- [EMBEDDED-BROWSER](EMBEDDED-BROWSER.md) — the sibling surface (the app's
+  in-app browser panel; the R65 boundary lines name each other)
 - [EXTENSIBILITY](EXTENSIBILITY.md) — the sibling runbook (plugins, skills,
   MCP servers, the plugins listing route)
-- [TESTING](TESTING.md) — the R61 suites and the verification ladder
+- [TESTING](TESTING.md) — the R61+R66 suites and the verification ladder
 - [MAINTENANCE](MAINTENANCE.md) — where things live in the tree
 - Code map: engine in `agent-core/src/computer/` (types, errors, session,
   audit, dispatch, vision, backends/{interface,linux,windows,macos,index}),
   tools in `agent-core/src/tools/plugins/computer-use.ts`, settings in
-  `agent-core/src/storage/computer-use.ts`, migration
+  `agent-core/src/storage/computer-use.ts` (vision settings now in
+  `agent-core/src/storage/vision.ts` — migration
+  `agent-core/src/storage/migrations/0025_vision_settings.sql`), migration
   `agent-core/src/storage/migrations/0023_computer_use.sql`, routes in
   `agent-core/src/server.ts` (ROUND-61 section), monitor UI in
-  `src/components/right-sidebar/ComputerPanel.tsx` +
-  `src/components/ComputerMiniWindow.tsx`, settings UI in
-  `src/components/settings/ComputerUseTab.tsx`.
+  `src/components/ComputerMiniWindow.tsx` + the mini window page
+  `src/mini/MiniApp.tsx` + the OS window `src-tauri/src/mini.rs`, the live
+  signal `src/lib/computer-monitor-store.ts`, settings UI in
+  `src/components/settings/ComputerUseTab.tsx` (vision:
+  `src/components/settings/ImageAnalysisTab.tsx`).

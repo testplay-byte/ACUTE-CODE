@@ -228,9 +228,10 @@ describe("round-14 tools: create_dir / delete_file / search_files", () => {
 });
 
 describe("round-17: tool-name truth + allowedTools enforcement (ADR-0019)", () => {
-  it("TOOL_NAMES equals the real seed set (round-28: +index_project; R43-10: +browser_control; R43: +delegate_task; R44-a: +memory tools; R52-a: +job tools; R61: +read_skill)", async () => {
+  it("TOOL_NAMES equals the real seed set (round-28: +index_project; R43-10: +browser_control; R43: +delegate_task; R44-a: +memory tools; R52-a: +job tools; R61: +read_skill; R66: +analyze_image)", async () => {
     const { TOOL_NAMES } = await import("../src/storage/agents");
     expect([...TOOL_NAMES].sort()).toEqual([
+      "analyze_image",
       "browser_control",
       "create_dir",
       "delegate_task",

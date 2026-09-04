@@ -1,7 +1,8 @@
-<!-- last-reviewed: 2026-09-02 round-65 -->
+<!-- last-reviewed: 2026-09-04 round-66 -->
 - [ui-iterations/round-63.md](ui-iterations/round-63.md) — the R63 desktop-update round (release-tag gap closed + the launcher's version-truth chain: registry · exe · engine, uninstall/reinstall, sha256-verified downloads)
 - [ui-iterations/round-64.md](ui-iterations/round-64.md) — the R64 capability round (the Windows computer-use fixes: JSON array collapse + EnumWindows + tiered app resolution; the always-on-top floating monitor; the chat polish backlog; per-key usage + the BPE-style estimator)
 - [ui-iterations/round-65.md](ui-iterations/round-65.md) — the R65 honesty patch (the SURFACE BOUNDARY prompt lines — embedded browser ≠ real desktop; the browser tab auto-open on agent browsing; debug mode with the execution-report switch; the Advanced cleanup + the search-engine allowlist)
+- [ui-iterations/round-66.md](ui-iterations/round-66.md) — the R66 live-fire patch (the 15-action browser page actions + form submission; the owner-solvable bot-wall checkpoint; the instant viewport apply; the vision split + analyze_image; the post-turn context-free debug analyst; the Windows find_elements + 2400 walk; the top-center 460×56 monitor + the decayed live signal; the settings rail)
 - [ui-iterations/round-62.md](ui-iterations/round-62.md) — the R62 owner-feedback round (sidebar rail, layout, browser truth + agent-browser)
 # ACUTE-CODE — Documentation Index
 
@@ -24,13 +25,15 @@ file the discrepancy and fix the doc in the same round.
 - [`runbooks/AGENT-BOOTSTRAP-PROMPT.md`](runbooks/AGENT-BOOTSTRAP-PROMPT.md) — the paste-once prompt to bootstrap a fresh agent
 - [`runbooks/LOCAL-PC-RUNNER.md`](runbooks/LOCAL-PC-RUNNER.md) — the owner's one-double-click launcher (credentials template is a clean paste zone since R47 — no key material ships with it)
 - [`runbooks/PUBLIC-DASHBOARD.md`](runbooks/PUBLIC-DASHBOARD.md) — the public status dashboard (separate repo), its allow/deny lists and publish flow
-- [`runbooks/COMPUTER-USE.md`](runbooks/COMPUTER-USE.md) — **the desktop-control system (R61)**: setup per platform, the settings gates (master switch / postures / vision modes), the monitor + STOP, the safety contract, the refusal catalog, the 30-tool reference, and the LIVE-VERIFICATION CHECKLIST (the backends are not yet live-verified)
-- [`runbooks/EXTENSIBILITY.md`](runbooks/EXTENSIBILITY.md) — **the four extension surfaces (R61)**: external .mjs plugins, skills (SKILL.md-style, progressive disclosure), MCP servers (stdio JSON-RPC, sanitized env), and the built-in plugin catalog — with working examples of each
+- [`runbooks/COMPUTER-USE.md`](runbooks/COMPUTER-USE.md) — **the desktop-control system (R61, R66-patched)**: setup per platform, the settings gates (master switch / postures / readiness — the vision model moved to its own section), the big-apps find_elements workflow + the R66 Windows walk, the top-center 460×56 monitor + STOP + the decayed live signal, the safety contract, the refusal catalog, the 31-tool reference, and the LIVE-VERIFICATION CHECKLIST (the backends are not yet live-verified)
+- [`runbooks/EMBEDDED-BROWSER.md`](runbooks/EMBEDDED-BROWSER.md) — **the in-app browser panel (R66)**: the 15-action `browser_control` surface (which actions need the native bridge), the form-submission discipline, the bot-wall checkpoint protocol (detect → the countdown card → REST resolve → the honest re-probe), the instant viewport apply, and read_dom/source — the page without screenshots
+- [`runbooks/DEBUG-MODE.md`](runbooks/DEBUG-MODE.md) — **the post-turn context-free debug analyst (R66)**: the C1 contract (no self-report), the flow (turn → debug-start → live deltas → persisted `debug.report` → done), what the analyst receives, the isolation guarantees (follow-ups never see it), the switch, and the honest limitations
+- [`runbooks/EXTENSIBILITY.md`](runbooks/EXTENSIBILITY.md) — **the four extension surfaces (R61, + the R66 addendum)**: external .mjs plugins, skills (SKILL.md-style, progressive disclosure), MCP servers (stdio JSON-RPC, sanitized env), and the built-in plugin catalog — with working examples of each
 
 ## Requirements & architecture
 - [`specs/SPEC.md`](specs/SPEC.md) — master requirements (F1–F11), owner-approved
 - [`architecture/ARCHITECTURE.md`](architecture/ARCHITECTURE.md) — system design truth (topology, lifecycles, key hand-off) — *partially historical; see IMPLEMENTED-API for the shipped surface*
-- [`architecture/api/IMPLEMENTED-API.md`](architecture/api/IMPLEMENTED-API.md) — **the REST + SSE surface as actually shipped** (verified against code; each round's additions are sections — R48 sub-agent SSE/approval frames, R59 ratings/diagnostics, R60 Tauri scroll+zoom, R61 computer-use/skills/MCP/plugins routes + the `computer-use` SSE frame)
+- [`architecture/api/IMPLEMENTED-API.md`](architecture/api/IMPLEMENTED-API.md) — **the REST + SSE surface as actually shipped** (verified against code; each round's additions are sections — R61 computer-use/skills/MCP/plugins routes + the `computer-use` SSE frame, R62 the browser-command bridge, R65 the debug switch + browser auto-open, R66 the checkpoint resolve + `/vision` routes + the new SSE frames + `debug.report` + `analyze_image`)
 - [`architecture/api/API.md`](architecture/api/API.md) — the full 52-operation *planned* contract (aspirational since Phase 1; WS/planned routes live here, NOT in IMPLEMENTED-API)
 - [`architecture/PROJECT-MAP.md`](architecture/PROJECT-MAP.md) — the product map & naming rules
 - [`architecture/PILLARS.md`](architecture/PILLARS.md) — the three-pillar blueprint (coding / agentic system / automation) and how they interconnect additively

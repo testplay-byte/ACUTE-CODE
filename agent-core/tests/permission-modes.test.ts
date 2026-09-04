@@ -286,7 +286,11 @@ describe("prepareTurn tool-set enforcement per mode (ROUND-50 R50-c1)", () => {
     );
     expect(outcome.ok).toBe(true);
     // Sorted: delegate_task registers LAST (a dynamic import after the allow
-    // filter) — same SET as TOOL_NAMES, registration order aside.
+    // filter) — same SET as TOOL_NAMES, registration order aside. R66 close-out:
+    // analyze_image JOINED TOOL_NAMES (allowlist vocabulary like web_fetch —
+    // api.ts TOOL_CATALOG + migration 0026 with it), so the set IS TOOL_NAMES
+    // (the core-vision plugin rides every turn with a db; honest refusal
+    // when vision is OFF).
     expect([...toolNames[0]].sort()).toEqual([...TOOL_NAMES].sort()); // full default set (memory on)
   });
 
@@ -331,6 +335,7 @@ describe("prepareTurn tool-set enforcement per mode (ROUND-50 R50-c1)", () => {
       "do everything",
     );
     expect(outcome.ok).toBe(true);
+    // R66 close-out: analyze_image is IN TOOL_NAMES now (see the ask-mode note).
     expect([...toolNames[0]].sort()).toEqual([...TOOL_NAMES].sort());
   });
 

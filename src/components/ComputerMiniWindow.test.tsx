@@ -81,6 +81,35 @@ describe("ComputerMiniWindow — web mode (no Tauri shell)", () => {
     expect(screen.queryByTestId("computer-mini-pill")).toBeNull();
   });
 
+  it("R66 (A1): an ACTIVE-but-idle session does NOT show the pill (live = real control events, not session aliveness)", async () => {
+    // The owner's report: browser-only turns showed "agent is using your
+    // computer" because the singleton session (active while Computer Use is
+    // merely ENABLED) pinned `live` true forever. The session is active,
+    // the seed lands it — but NO live control event ever arrives.
+    nextSession = sessionFixture({ active: true });
+    renderWithProviders(<ComputerMiniWindow />);
+    await act(async () => {
+      await Promise.resolve();
+    });
+    await waitFor(() => {
+      expect(useComputerMonitorStore.getState().session?.active).toBe(true);
+    });
+    // No frames → no liveActivity → NO pill, no stale window.
+    expect(screen.queryByTestId("computer-mini-pill")).toBeNull();
+  });
+
+  it("R66 (A1): a session_start frame alone is bookkeeping — the pill waits for a real control event", async () => {
+    renderWithProviders(<ComputerMiniWindow />);
+    liveFrame("session_start");
+    await act(async () => {
+      await Promise.resolve();
+    });
+    expect(screen.queryByTestId("computer-mini-pill")).toBeNull();
+    // The first REAL control event shows it.
+    liveFrame("action", "left_click");
+    expect(await screen.findByTestId("computer-mini-pill")).toBeTruthy();
+  });
+
   it("AUTO-shows on the first live computer-use frame with label, activity and elapsed", async () => {
     // The sidecar's ring already carries the dispatched action (server rows
     // are the authoritative feed the one-shot seed lands).

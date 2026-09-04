@@ -60,6 +60,12 @@ export const TOOL_NAMES = [
   // (computerUse.enabled, default OFF), not allowlist vocabulary; MCP
   // tools are dynamic (mcp__<server>__<tool>).
   "read_skill",
+  // ROUND-66 (R66, B3): the GENERAL image-analysis tool — describe any
+  // local/URL image with the dedicated vision model (Settings → Image
+  // Analysis; honest refusal while unconfigured). Always registered (not
+  // settings-gated) like web_fetch, so it belongs in the allowlist
+  // vocabulary. Migration 0026 appends it to existing EXPLICIT allowlists.
+  "analyze_image",
 ] as const;
 
 /** Agent JSON as served by the API: AgentRecord plus bookkeeping columns. */

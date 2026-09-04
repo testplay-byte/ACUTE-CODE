@@ -5,7 +5,8 @@
  * "if the main model supports vision then the user will be given an option
  * to configure that too".
  *
- * Modes (computerUse.vision.mode):
+ * Modes (vision.mode — R66 moved the settings to their own section,
+ * Settings → Image Analysis):
  *   · "off"      — refuse honestly (vision_disabled); screenshots still
  *                  return raster METADATA (the a11y tree remains the
  *                  observation channel — nothing breaks).
@@ -13,8 +14,8 @@
  *                  with the image; the key rides the keyring pseudo-slot
  *                  "<providerId>-vision" (ACUTE_PROVIDER_<ID>_VISION — the
  *                  same credential-target + handoff-route pattern as every
- *                  other key; the owner pastes it in Settings → Computer
- *                  Use and it lands in the OS credential store).
+ *                  other key; the owner pastes it in Settings → Image
+ *                  Analysis and it lands in the OS credential store).
  *   · "main"     — the SAME relay, aimed at the turn's model — allowed only
  *                  when the model row has supports_vision = 1 (checked by
  *                  the caller; the relay trusts the passed provider/model
@@ -86,7 +87,7 @@ export async function describeRaster(
   const apiKey = resolveVisionKey(deps.keyring, config.providerId, config.mode, deps.visionKeyringId);
   if (apiKey === undefined) {
     return {
-      error: `no API key for the vision model (provider '${config.providerId}'${config.mode === "separate" ? " — paste the dedicated vision key in Settings → Computer Use, or the provider's primary key" : ""})`,
+      error: `no API key for the vision model (provider '${config.providerId}'${config.mode === "separate" ? " — paste the dedicated vision key in Settings → Image Analysis, or the provider's primary key" : ""})`,
       code: "vision_no_key",
     };
   }

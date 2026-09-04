@@ -1,9 +1,9 @@
 /**
  * ROUND-61 (R61): the computer-use PLUGIN gate tests — the settings master
  * switch (default OFF → no tools), the posture subsets (observe = read-only
- * surface), the full 30-tool catalog (doc 02 completeness), the consent
- * gate in ask mode, and the vision relay wiring through screenshot
- * describe=true.
+ * surface), the full 31-tool catalog (30 doc-02 + R66-2-d find_elements),
+ * the consent gate in ask mode, and the vision relay wiring through
+ * screenshot describe=true.
  */
 import { mkdtempSync, rmSync, writeFileSync, mkdirSync, readFileSync, existsSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -14,6 +14,9 @@ import { openDatabase, type SqliteDatabase } from "../src/storage/db";
 import { ProviderKeyring } from "../src/providers/registry";
 import { computerUsePlugin } from "../src/tools/plugins/computer-use";
 import { setComputerUseSettings } from "../src/storage/computer-use";
+// R66-2-b: the vision settings moved to their own module (Settings → Image
+// Analysis) — the relay reads vision.mode/provider/modelId now.
+import { setVisionSettings } from "../src/storage/vision";
 import { resetComputerSessionForTests } from "../src/computer/session";
 import { resetAuditForTests } from "../src/computer/audit";
 import { upsertModel } from "../src/storage/models";
@@ -70,12 +73,12 @@ describe("ROUND-61 (R61): the settings gates", () => {
     expect(tools).toHaveLength(0);
   });
 
-  it("ENABLED + act posture: exactly the 30 doc-02 tools", async () => {
+  it("ENABLED + act posture: exactly the 31 tools (30 doc-02 + find_elements)", async () => {
     setComputerUseSettings(db, { enabled: true, permission: "act" });
     const tools = await computerUsePlugin.createTools({ root: tempDir, toolDeps: makeDeps() });
     expect(tools.map((t) => t.name).sort()).toEqual([
       // observe & resolve
-      "cursor_position", "get_app_state", "list_apps", "list_displays", "list_windows",
+      "cursor_position", "find_elements", "get_app_state", "list_apps", "list_displays", "list_windows",
       "open_application", "request_access", "screenshot", "switch_display", "zoom",
       // pointer
       "double_click", "left_click", "left_click_drag", "left_mouse_down", "left_mouse_up",
@@ -87,7 +90,7 @@ describe("ROUND-61 (R61): the settings gates", () => {
       // runtime
       "read_clipboard", "stop_computer_control", "wait", "write_clipboard",
     ].sort());
-    expect(tools).toHaveLength(30);
+    expect(tools).toHaveLength(31);
   });
 
   it("observe posture: ONLY the read-only subset is offered (the model never sees mutating schemas)", async () => {
@@ -95,11 +98,35 @@ describe("ROUND-61 (R61): the settings gates", () => {
     const tools = await computerUsePlugin.createTools({ root: tempDir, toolDeps: makeDeps() });
     const names = tools.map((t) => t.name);
     expect(names.sort()).toEqual([
-      "cursor_position", "get_app_state", "list_apps", "list_displays", "list_windows",
+      "cursor_position", "find_elements", "get_app_state", "list_apps", "list_displays", "list_windows",
       "read_clipboard", "request_access", "screenshot", "switch_display", "wait", "zoom",
     ].sort());
     expect(names).not.toContain("left_click");
     expect(names).not.toContain("type");
+  });
+
+  it("R66-2-d: find_elements is registered with the search contract — present when enabled, ABSENT when off", async () => {
+    // OFF (the default): the tool surface stays dark.
+    const off = await computerUsePlugin.createTools({ root: tempDir, toolDeps: makeDeps() });
+    expect(off.find((t) => t.name === "find_elements")).toBeUndefined();
+    // ON: name + description + schema + required fields.
+    setComputerUseSettings(db, { enabled: true, permission: "act" });
+    const tools = await computerUsePlugin.createTools({ root: tempDir, toolDeps: makeDeps() });
+    const find = tools.find((t) => t.name === "find_elements");
+    expect(find).toBeDefined();
+    expect(find!.description).toContain("SEARCH an app's accessibility tree");
+    expect(find!.description).toContain("Sign in");
+    expect(find!.description).toContain("left_click");
+    expect(find!.description).toContain("Chromium-sized");
+    const schema = JSON.stringify(find!.inputSchema);
+    expect(schema).toContain("query");
+    expect(schema).toContain("kind");
+    expect(schema).toContain("limit");
+    expect(schema).toContain("appRef");
+    expect(schema).toContain("case-insensitive name substring");
+    // jsonSchema() wraps the raw schema ({ jsonSchema: { … } }).
+    const required = (find!.inputSchema as { jsonSchema?: { required?: string[] } }).jsonSchema?.required ?? [];
+    expect([...required].sort()).toEqual(["appRef", "query"]);
   });
 
   it("R64-a: list_apps / get_app_state descriptions teach the resolution contract (title vs processName, runningApps payload)", async () => {
@@ -156,11 +183,10 @@ describe("ROUND-61 (R61): tool output shapes + the monitor + vision wiring", () 
   });
 
   it("screenshot with describe:true + SEPARATE vision configured → the relay's text rides the output", async () => {
-    setComputerUseSettings(db, {
-      enabled: true,
-      permission: "act",
-      vision: { mode: "separate", provider: "openrouter", modelId: "google/gemini-2.5-flash" },
-    });
+    setComputerUseSettings(db, { enabled: true, permission: "act" });
+    // R66: the vision configuration is GLOBAL now (vision.* keys), not part
+    // of the computer-use settings block.
+    setVisionSettings(db, { mode: "separate", provider: "openrouter", modelId: "google/gemini-2.5-flash" });
     upsertModel(db, "openrouter", { modelId: "google/gemini-2.5-flash", supportsVision: true });
     const tools = await computerUsePlugin.createTools({ root: tempDir, toolDeps: makeDeps() });
     const shot = tools.find((t) => t.name === "screenshot")!;

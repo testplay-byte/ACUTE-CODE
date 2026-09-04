@@ -26,6 +26,7 @@ import type {
   Snapshot,
   Target,
   ToolOutcome,
+  WindowInfo,
 } from "./types.js";
 import { RECEIPT_SCHEMA_VERSION } from "./types.js";
 import {
@@ -228,6 +229,9 @@ export class ComputerDispatcher {
         return this.toolSwitchDisplay(args);
       case "get_app_state":
         return this.toolGetAppState(args);
+      // R66-2-d: server-side tree SEARCH (the Edge fix — see toolFindElements).
+      case "find_elements":
+        return this.toolFindElements(args);
       case "screenshot":
         return this.toolScreenshot(args);
       case "zoom":
@@ -494,26 +498,13 @@ export class ComputerDispatcher {
   }
 
   private async toolGetAppState(args: Record<string, unknown>): Promise<DispatchResult> {
-    const resolved = await this.resolveAppRef(args["appRef"] ?? args["app_ref"]);
+    const resolved = await this.resolveAppWindow(args);
     if (!resolved.ok) return resolved.refusal;
-    const ref = (args["appRef"] ?? args["app_ref"]) as Record<string, unknown>;
+    const { app, window } = resolved;
     const detail = args["detail"] === "full" ? "full" : "compact";
     const includeScreenshot = args["includeScreenshot"] === true || args["include_screenshot"] === true;
 
-    const { windows } = await this.backend.listWindows(this.run, { pid: resolved.app.pid });
-    let window = windows[0];
-    if (ref["windowId"] !== undefined || ref["window_id"] !== undefined) {
-      const wantId = Number(ref["windowId"] ?? ref["window_id"]);
-      const match = windows.find((w) => w.windowId === wantId);
-      if (match === undefined) {
-        return { kind: "refusal", refusal: invalidWindowId(wantId).refusal };
-      }
-      window = match;
-    } else if (windows.length === 0) {
-      return { kind: "refusal", refusal: appNotFound(`pid ${resolved.app.pid} (no open windows)`).refusal };
-    }
-
-    const built = await this.backend.buildSnapshot(this.run, resolved.app, window, detail);
+    const built = await this.backend.buildSnapshot(this.run, app, window, detail);
     if ("error" in built) {
       return {
         kind: "refusal",
@@ -546,8 +537,8 @@ export class ComputerDispatcher {
       if (!("error" in raster)) {
         const { frameId, meta } = this.session.registerFrame(
           raster,
-          { kind: "window", pid: resolved.app.pid, windowId: window.windowId },
-          { pid: resolved.app.pid, windowId: window.windowId },
+          { kind: "window", pid: app.pid, windowId: window.windowId },
+          { pid: app.pid, windowId: window.windowId },
           this.selectedDisplay,
         );
         this.cacheRaster(frameId, raster.pngBase64);
@@ -559,6 +550,132 @@ export class ComputerDispatcher {
     const data: Record<string, unknown> = { state: snapshot };
     if (snapshot.raster) data["raster"] = snapshot.raster;
     return { kind: "data", data };
+  }
+
+  /** R66-2-d: the app_ref → tiered resolution → window pick that
+   * get_app_state performs (extracted so find_elements rides the EXACT
+   * same code path — same tiers, same refusal shapes, same windowId
+   * scoping). */
+  private async resolveAppWindow(
+    args: Record<string, unknown>,
+  ): Promise<
+    { ok: true; app: { pid: number; name?: string; bundleId?: string }; window: WindowInfo } | { ok: false; refusal: DispatchResult }
+  > {
+    const resolved = await this.resolveAppRef(args["appRef"] ?? args["app_ref"]);
+    if (!resolved.ok) return { ok: false, refusal: resolved.refusal };
+    const ref = (args["appRef"] ?? args["app_ref"]) as Record<string, unknown>;
+    const { windows } = await this.backend.listWindows(this.run, { pid: resolved.app.pid });
+    let window = windows[0];
+    if (ref["windowId"] !== undefined || ref["window_id"] !== undefined) {
+      const wantId = Number(ref["windowId"] ?? ref["window_id"]);
+      const match = windows.find((w) => w.windowId === wantId);
+      if (match === undefined) {
+        return { ok: false, refusal: { kind: "refusal", refusal: invalidWindowId(wantId).refusal } };
+      }
+      window = match;
+    } else if (windows.length === 0) {
+      return { ok: false, refusal: { kind: "refusal", refusal: appNotFound(`pid ${resolved.app.pid} (no open windows)`).refusal } };
+    }
+    return { ok: true, app: resolved.app, window };
+  }
+
+  /**
+   * R66-2-d (owner directive B2, the live Edge failure): SEARCH the
+   * accessibility tree instead of ingesting it. A Chromium-sized window
+   * returns thousands of elements — get_app_state detail:full is unusable
+   * and the agent drifted into a screenshot loop. This resolves the app +
+   * window exactly like get_app_state, builds the SAME full-detail snapshot
+   * (bounds are the point), then filters server-side: name contains query
+   * (case-insensitive) AND — when kind is given — the snapshot's mapped kind
+   * matches. The returned indexes are REAL snapshot indexes: the snapshot is
+   * registered, its stateId rides the result, and left_click/set_value/
+   * perform_action accept {type:"element", stateId, index} directly.
+   * Read-only (never in MUTATING_TOOLS), kill-switch-gated like every other
+   * observe tool.
+   */
+  private async toolFindElements(args: Record<string, unknown>): Promise<DispatchResult> {
+    const rawQuery = typeof args["query"] === "string" ? (args["query"] as string) : "";
+    if (rawQuery.trim() === "") {
+      return {
+        kind: "refusal",
+        refusal: invalidTarget("find_elements needs a non-empty query (a case-insensitive name substring)").refusal,
+      };
+    }
+    const rawKind = typeof args["kind"] === "string" ? (args["kind"] as string).trim().toLowerCase() : "";
+    const kind = rawKind !== "" ? rawKind : undefined;
+    const rawLimit = Number(args["limit"]);
+    const limit = Number.isInteger(rawLimit) && rawLimit > 0 ? Math.min(rawLimit, 40) : 20;
+
+    const resolved = await this.resolveAppWindow(args);
+    if (!resolved.ok) return resolved.refusal;
+    const { app, window } = resolved;
+
+    const built = await this.backend.buildSnapshot(this.run, app, window, "full");
+    if ("error" in built) {
+      return {
+        kind: "refusal",
+        refusal: {
+          error: "capability_fail_closed",
+          message: built.error,
+          recovery: built.emptyTree
+            ? "Fall back to the visual pipeline: screenshot + frame-bound coordinate actions. Do not assume the tools are broken."
+            : "Read the message; retry observation only after the stated cause is addressed.",
+          payload: built.emptyTree ? { emptyTree: true } : undefined,
+        },
+      };
+    }
+    const snapshot = this.session.registerSnapshot(built);
+    const want = rawQuery.trim().toLowerCase();
+    const matched = snapshot.elements.filter(
+      (el) => el.name.toLowerCase().includes(want) && (kind === undefined || el.kind === kind),
+    );
+    this.session.record(
+      "observe",
+      `Searched '${snapshot.window.title}' for '${rawQuery.trim()}'${kind !== undefined ? ` (kind ${kind})` : ""} — ${matched.length}/${snapshot.elements.length} match`,
+      "find_elements",
+      { stateId: snapshot.stateId, matches: matched.length },
+    );
+    if (matched.length === 0) {
+      // An honest ok:false-shaped empty — WHAT was searched (the element count
+      // walked, the query) and the exact retry, never a silent [] (the model
+      // would flail to screenshots, the exact failure this tool fixes). Reuses
+      // capability_fail_closed like the sibling empty-tree refusal; the
+      // message + payload carry the real no-match semantics.
+      return {
+        kind: "refusal",
+        refusal: {
+          error: "capability_fail_closed",
+          message: `find_elements: none of the ${snapshot.elements.length} elements in '${snapshot.window.title}' has a name containing '${rawQuery.trim()}'${kind !== undefined ? ` with kind '${kind}'` : ""}.`,
+          recovery:
+            "Try a shorter or looser substring (names match case-insensitively), drop the kind filter, or get_app_state to read the tree. Nothing was sent.",
+          payload: {
+            query: rawQuery.trim(),
+            ...(kind !== undefined ? { kind } : {}),
+            elementsWalked: snapshot.elements.length,
+            stateId: snapshot.stateId,
+          },
+        },
+      };
+    }
+    const matches = matched.slice(0, limit).map((el) => ({
+      index: el.index,
+      kind: el.kind,
+      name: el.name,
+      flags: el.flags,
+      ...(el.bounds !== undefined ? { bounds: el.bounds } : {}),
+      ...(el.actions !== undefined ? { actions: el.actions } : {}),
+    }));
+    return {
+      kind: "data",
+      data: {
+        matches,
+        total: matched.length,
+        stateId: snapshot.stateId,
+        app: { pid: app.pid, name: app.name },
+        window: { title: snapshot.window.title, windowId: snapshot.window.windowId },
+        note: "indexes are get_app_state/left_click element target indexes — use them directly",
+      },
+    };
   }
 
   private async toolScreenshot(_args: Record<string, unknown>): Promise<DispatchResult> {

@@ -1,4 +1,4 @@
-<!-- last-reviewed: 2026-09-02 round-64 -->
+<!-- last-reviewed: 2026-09-04 round-66 -->
 # TESTING — the verification ladder
 
 Five layers; each has a defined "when mandatory". Rules here are binding
@@ -13,13 +13,72 @@ Five layers; each has a defined "when mandatory". Rules here are binding
 | L4 live battery | real provider turn(s), real disk, fresh DB | sandbox, single invocation | anything touching agents, projects, tools, streaming |
 | L5 browser verification | real UI against the live stack; screenshots machine-verified | sandbox, single invocation | any UI-affecting round |
 
-**Current counts (R64, verified 2026-09-02):** the root `pnpm test` =
-**1664 tests in 109 files** (all workspace suites from the root vite
-config; agent-core alone = **885/885 in 52 files**). Trajectory: 262 (R42)
-→ 397 (R43) → 471 (R44) → 565 (R45) → 622 (R46) → 683 (R47) → 752 (R48) →
-815ish (R49) → 930 (R50) → 978 (R51) → 1035 (R52) → 1058 (R53) → 1071
-(R54–R56, launcher rounds) → 1169 (R58) → 1302 (R59) → 1348 (R60) → 1491
-(R61) → 1542 (R62) → 1632 (R63) → 1664 (R64).
+**Current counts (R66, verified 2026-09-04 by re-running the suites):**
+the root `pnpm test` = **1807 tests in 118 files** (all workspace suites
+from the root vite config; agent-core alone = **980/980 in 58 files**,
+frontend `src/` alone = **815/815 in 58 files**, root `tests/` e2e = 12).
+Trajectory: 262 (R42) → 397 (R43) → 471 (R44) → 565 (R45) → 622 (R46) →
+683 (R47) → 752 (R48) → 815ish (R49) → 930 (R50) → 978 (R51) → 1035
+(R52) → 1058 (R53) → 1071 (R54–R56, launcher rounds) → 1169 (R58) → 1302
+(R59) → 1348 (R60) → 1491 (R61) → 1542 (R62) → 1632 (R63) → 1664 (R64) →
+1686 (R65) → 1807 (R66).
+
+**R66 (the live-fire patch):** +121 root over R65's 1686 — the round's
+features again carried their own suites (all counts as MEASURED this round,
+not remembered): agent-core NEW/EXTENDED `browser-checkpoint` **16**
+(detector: cloudflare/captcha/age word-boundary + priority + evidence
+trimming; the registry: open→resolve/stop/timeout settles, both frames,
+resolve-after-timeout, the 60 s hard-cap rejection, the reset hook, the
+emit-throws path; the REST resolve route over a real buildServer — 401
+wall, 400 validation, the unknown-id `{ok:false,resolution:"timeout"}`
+contract, the live-id resolve) · `browser-tool` 17 → **43** (the six new
+actions: click/type/press_key happy paths assert the ONE eval frame + the
+JSON.stringify-escaped payloads + the native value setter + input/change
+events + requestSubmit + the key trio; no-target/page-miss honest errors;
+read_dom outline + source html/css/scripts + in-script caps;
+wait_for_verification's full contract incl. the exact
+browser-checkpoint frame + fake-clock timeout; the navigate/read ⚠ notes;
+the set_viewport `browser-viewport` frame; screenshot now pins that
+`relay.session.record` is NOT called — A1) · `vision-plugin` **13**
+(fail-closed gates, always-registered with CU+vision OFF, every honest
+refusal, the end-to-end separate-mode path + URL download) ·
+`migration-0025` **5** (no-seed, seed-from-legacy, OR-IGNORE idempotency,
+the lazy read + switch-over, validation) · `migration-0026` **1** (the
+allowlist append: web_fetch companions only, curation respected) ·
+`debug-analyst` **10** (the transcript renderer's five line kinds, the
+60 k head+tail cap, the degenerate slice, the skip rules, the streamed
+path — NO tools, ONE user message, deltas accumulate — the sync fallback,
+the scrubbed provider failure) · `r58-stop-and-replay` 6 → **10** (the
+stream-route SSE frame ORDER debug-start → 2×delta → debug-done → done,
+the persisted `debug.report` payload, the analyst's provider dying →
+debug-error with the turn's done still terminal, the 502-turn gate) ·
+`computer-dispatch` 44 → **52** (find_elements: happy path with the
+registered stateId + bounds/total, kind AND-rule, limit clamp, empty-match
+refusal, find→click end-to-end, observe-posture runs it, kill-switch
+refuses, resolution parity) · `computer-windows-backend` 24 → **30** (the
+$maxEl 800→2400 pin + construction pins: the exact $probe list,
+non-interactive kinds unprobed, EXACTLY 4 GetCurrentPattern calls inside
+the interactive branch, cached-handle reuse) · `computer-use-plugin` 14 →
+**15** (the 31-tool list × both postures + find_elements registration) ·
+`skills-mcp` **11** (the big-apps/find_elements skill body pin). Frontend
+NEW/EXTENDED `ImageAnalysisTab` **11** (mode radios, provider/model save,
+the masked key row with the Tauri-first durable store, readiness) ·
+`ComputerUseTab` 12 → **8** (vision tests removed; the pointer-card test
+added) · `DebugReportCard` **8** (streaming/done/error states, the amber
+error line) · `BrowserCheckpointCard` **8** (the waiting card: kind
+title, live countdown, BOTH controls, the resolve POSTs, the resolved
+states) · `ComputerMiniWindow` 7 → **10** (the 6 s decay: arms on real
+control events, hides on silence, session_stop rests, browser frames
+never trip it) · `MiniApp` **10** (the single-row layout + honest web
+mode) · `Sidebar` **15** (the minimized SETTINGS rail — section icons +
+`?tab=` navigation; the normal rail unchanged) · `BrowserPanel` **36**
+(the agentViewportSeq natural-mode exit + the poll adoption) · `api.test`
+**90** (the debug.report folding cases). The prompt-removal cascade
+(prompt-registry, r65-honesty-patch, the golden fixture) was re-pinned to
+the R66 reality. **The Windows walk + the native-bridge browser actions
+remain construction/test-pinned only** (headless Linux sandbox — web mode
+refuses the bridge actions honestly); the owner's live Windows run is the
+L4 proof.
 
 **R62 (the owner-feedback round):** +50 root — the sidebar rail pair
 (Sidebar.test), the aspect-fit geometry 6 + the fit/zoom/readout 4

@@ -1,4 +1,4 @@
-<!-- last-reviewed: 2026-09-02 round-65 -->
+<!-- last-reviewed: 2026-09-04 round-66 -->
 # UI Iterations — Owner Review Rounds
 
 This folder is the **dedicated tracking system for UI-fidelity work** (owner
@@ -134,3 +134,4 @@ skeleton to make this trivial.
 | [round-63.md](round-63.md) | The desktop-update round: the version-truth launcher (registry · exe-on-disk · engine /health), uninstall/reinstall repair, sha256-verified downloads, the tag-is-part-of-the-round process fix | 0.63.0 |
 | [round-64.md](round-64.md) | The capability round: computer use actually sees the desktop (PowerShell JSON collapse + EnumWindows + tiered app resolution), the always-on-top floating STOP bar, the chat polish backlog, per-key usage + the BPE-style estimator | 0.64.0 |
 | [round-65.md](round-65.md) | The honesty patch: the surface-boundary prompt lines (embedded browser ≠ real desktop), the browser tab auto-open on agent browsing, debug mode with the execution-report switch, the Advanced cleanup + the search-engine allowlist | 0.65.0 |
+| [round-66.md](round-66.md) | The live-fire patch (the 0.65.0 field report): the 15-action browser surface + native form submission, the owner-solvable bot-wall checkpoint, the instant viewport apply, the vision split (Settings → Image Analysis) + `analyze_image`, the post-turn context-free debug analyst, Windows `find_elements` + the 2400-element walk, the top-center 460×56 monitor + the decayed live signal, the settings rail | 0.66.0 |

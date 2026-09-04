@@ -28,6 +28,25 @@
  * PowerShell is never executed in this sandbox — the scripts are pinned by
  * command-construction tests (tests/computer-windows-backend.test.ts).
  *
+ * ROUND-66-2-d (R66-2-d): the owner's live Windows test hit a Chromium-sized
+ * tree (Edge) — every node paid 4+ cross-process COM pattern probes
+ * (Invoke/Toggle/ExpandCollapse/Value, twice more at detail:full), the
+ * 800-element cap truncated BEFORE page content, and the model had no way
+ * to SEARCH the tree (get_app_state = ingest everything). Fixes in
+ * buildSnapshot: (1) pattern probes run ONLY for potentially-interactive
+ * ControlTypes ($probe); Text/Pane/Window/Group/… nodes record kind + name
+ * + bounds with ZERO GetCurrentPattern calls (their editable/pressable/
+ * has_menu flags, value, and advertised actions are therefore absent —
+ * fail-closed downstream, never fabricated); (2) maxEl 800 → 2400 (maxDepth
+ * stays 25) so Document subtrees survive; (3) the pattern handles are
+ * probed ONCE per node and reused for flags + value + action advertisement
+ * (the old script re-probed 3 more times for actions). The element action
+ * re-walk (windowsElementActionScript) keeps its walk ORDER and index
+ * semantics byte-identical — only its $maxEl cap moved 800 → 2400 with the
+ * snapshot's, so index N still maps to the SAME element (a 2400-element
+ * snapshot with an 800-element re-walk would make indexes 800+ permanently
+ * NO_SUCH_ELEMENT — the index contract this file is built on).
+ *
  * Every native call is a PowerShell capsule: `powershell.exe -NoProfile
  * -NonInteractive -ExecutionPolicy Bypass -Command -` with the script on
  * STDIN, emitting JSON on stdout (ConvertTo-Json -Compress). The backend
@@ -339,7 +358,16 @@ Add-Type -AssemblyName UIAutomationClient
 $root = [System.Windows.Automation.AutomationElement]::FromHandle([IntPtr]${window.windowId})
 $walker = [System.Windows.Automation.TreeWalker]::ControlViewWalker
 $out = New-Object System.Collections.ArrayList
-$maxDepth = 25; $maxEl = 800
+$maxDepth = 25; $maxEl = 2400
+# R66-2-d: ControlTypes that MIGHT carry interactive patterns. Everything
+# else (Window, Pane, Text, Image, Group, Table, TitleBar, MenuBar, StatusBar,
+# ToolBar, ToolTip, Separator, Header, HeaderItem, SemanticZoom, ...) is
+# recorded as kind + name + bounds with NO pattern query — those 4+ cross-
+# process COM probes per node were the cost that made Chromium-sized trees
+# (Edge) crawl. Non-probed kinds simply never carry pressable/editable/
+# has_menu flags, a value, or advertised actions: the tools layer fails
+# closed on them instead of guessing.
+$probe = @('Button','Hyperlink','Edit','ComboBox','CheckBox','RadioButton','Slider','TabItem','MenuItem','ListItem','DataItem','TreeItem','Spinner','Thumb','ScrollBar','Document','Custom')
 function MapKind($ct) {
   switch ($ct) {
     'Window' { return 'window' }
@@ -368,35 +396,35 @@ function Walk($el, $depth) {
     if ($null -eq $el) { return }
     $ct = $el.Current.ControlType.ProgrammaticName -replace '^ControlType.', ''
     $name = $el.Current.Name; if ($null -ne $name -and $name.Length -gt 120) { $name = $name.Substring(0,120) }
+    $interactive = $probe -contains $ct
     $flags = @()
-    try { if ($null -ne $el.GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern)) { $flags += 'pressable' } } catch {}
-    try { if ($null -ne $el.GetCurrentPattern([System.Windows.Automation.TogglePattern]::Pattern)) { $flags += 'pressable' } } catch {}
-    try { if ($null -ne $el.GetCurrentPattern([System.Windows.Automation.ExpandCollapsePattern]::Pattern)) { $flags += 'has_menu' } } catch {}
-    try {
-      $vp = $el.GetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern)
-      $flags += 'editable'
-    } catch {}
+    # ONE pattern pass, interactive kinds only: each handle is reused for
+    # flags + value + action advertisement below (the old script re-probed
+    # Value once more for the value and Invoke/Toggle/ExpandCollapse three
+    # more times for actions — 8 probes per full-detail node).
+    $ip = $null; $tp = $null; $ec = $null; $vp = $null
+    if ($interactive) {
+      try { $ip = $el.GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern) } catch {}
+      try { $tp = $el.GetCurrentPattern([System.Windows.Automation.TogglePattern]::Pattern) } catch {}
+      try { $ec = $el.GetCurrentPattern([System.Windows.Automation.ExpandCollapsePattern]::Pattern) } catch {}
+      try { $vp = $el.GetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern) } catch {}
+      if ($null -ne $ip -or $null -ne $tp) { $flags += 'pressable' }
+      if ($null -ne $ec) { $flags += 'has_menu' }
+      if ($null -ne $vp) { $flags += 'editable' }
+    }
     try { if ($el.Current.IsKeyboardFocused) { $flags += 'focused' } } catch {}
     $entry = [pscustomobject]@{ index = $out.Count; kind = (MapKind $ct); name = [string]$name; flags = $flags }
-    try {
-      $vp = $null
-      try { $vp = $el.GetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern) } catch {}
-      if ($null -ne $vp) { $v = $vp.Current.Value; if ($null -ne $v -and $v.Length -gt 120) { $v = $v.Substring(0,120) }; $entry | Add-Member -NotePropertyName value -NotePropertyValue ([string]$v) }
-    } catch {}
+    if ($null -ne $vp) {
+      try {
+        $v = $vp.Current.Value; if ($null -ne $v -and $v.Length -gt 120) { $v = $v.Substring(0,120) }
+        $entry | Add-Member -NotePropertyName value -NotePropertyValue ([string]$v)
+      } catch {}
+    }
     if (${includeBounds}) {
       try { $b = $el.Current.BoundingRectangle; $entry | Add-Member -NotePropertyName bounds -NotePropertyValue @([int]$b.X, [int]$b.Y, [int]$b.Width, [int]$b.Height) } catch {}
-      try {
-        $ip = $el.GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern)
-        $entry | Add-Member -NotePropertyName actions -NotePropertyValue @('Invoke')
-      } catch {}
-      try {
-        $tp = $el.GetCurrentPattern([System.Windows.Automation.TogglePattern]::Pattern)
-        $entry | Add-Member -NotePropertyName actions -NotePropertyValue @('Toggle')
-      } catch {}
-      try {
-        $ec = $el.GetCurrentPattern([System.Windows.Automation.ExpandCollapsePattern]::Pattern)
-        $entry | Add-Member -NotePropertyName actions -NotePropertyValue @('Expand')
-      } catch {}
+      if ($null -ne $ip) { $entry | Add-Member -NotePropertyName actions -NotePropertyValue @('Invoke') }
+      if ($null -ne $tp) { $entry | Add-Member -NotePropertyName actions -NotePropertyValue @('Toggle') }
+      if ($null -ne $ec) { $entry | Add-Member -NotePropertyName actions -NotePropertyValue @('Expand') }
     }
     [void]$out.Add($entry)
     $child = $walker.GetFirstChildElement($el)
@@ -983,7 +1011,10 @@ if ($h -eq [IntPtr]::Zero) { Write-Output 'ERR:no-window'; exit 0 }
 $root = [System.Windows.Automation.AutomationElement]::FromHandle($h)
 $walker = [System.Windows.Automation.TreeWalker]::ControlViewWalker
 $els = New-Object System.Collections.ArrayList
-$maxDepth = 25; $maxEl = 800
+# R66-2-d: the cap follows buildSnapshot's 800 → 2400 bump so the index
+# contract holds for the whole snapshot (walk ORDER/depth/identity checks
+# are untouched — index N is the same element in both walks).
+$maxDepth = 25; $maxEl = 2400
 function Walk($el, $depth) {
   if ($els.Count -ge $maxEl -or $depth -gt $maxDepth) { return }
   try {

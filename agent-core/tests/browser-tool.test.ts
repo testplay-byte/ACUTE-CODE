@@ -27,6 +27,13 @@ import {
   resolveBrowserCommand,
   sendBrowserCommand,
 } from "../src/browser-command.js";
+// R66 (A4): the checkpoint registry — wait_for_verification tests resolve the
+// owner's answer through the real module (the REST route's core).
+import {
+  pendingBrowserCheckpointCount,
+  resetBrowserCheckpointsForTest,
+  resolveBrowserCheckpoint,
+} from "../src/browser-checkpoint.js";
 import {
   resetActiveComputerRelayForTest,
   setActiveComputerRelay,
@@ -70,6 +77,7 @@ beforeEach(async () => {
   // Fresh module store per test → deterministic DEFAULT sessionId resolution.
   resetBrowserStoreForTest();
   resetActiveComputerRelayForTest();
+  resetBrowserCheckpointsForTest();
   webFetchMock.mockReset();
 });
 
@@ -453,7 +461,10 @@ describe("browser_control — screenshot (R62: computer-use capture + vision rel
     expect(result.output).toContain("panel region 800×600");
     expect(result.output).toContain("vision description is unavailable");
     expect(captured).toEqual([{ x: 100, y: 200, w: 800, h: 600 }]);
-    expect(relay.session.record).toHaveBeenCalled();
+    // R66 (A1): browser screenshots NO LONGER record into the computer-use
+    // monitor ring — the owner must never see "agent is using your computer"
+    // during browser turns. The capture + vision note stand alone.
+    expect(relay.session.record).not.toHaveBeenCalled();
   });
 
   it("no region answer → falls back to a full-display capture", async () => {
@@ -553,5 +564,528 @@ describe("browser command bridge (R62 D8) — the REST result route", () => {
     await expect(
       sendBrowserCommand(() => {}, "tab-timeout", "eval", { script: "return 1" }, 30),
     ).rejects.toThrow(/timed out/);
+  });
+});
+
+// ── ROUND-66 (R66, A3/A6): click / type / press_key / source / read_dom ────
+// All five ride the eval bridge as ONE compiled script each; user input is
+// embedded via JSON.stringify ONLY (injection safety), and they fail closed
+// without a live emit channel exactly like the raw eval action.
+
+describe("browser_control — click (R66: element interaction via the eval bridge)", () => {
+  it("click by selector sends ONE eval command with the escaped selector and returns the clicked element", async () => {
+    const commands: Array<{ action: string; script: string }> = [];
+    const emit = (event: unknown) => {
+      const frame = event as { type: string; commandId: string; action: string; payload: { script?: string } };
+      expect(frame.type).toBe("browser-command");
+      commands.push({ action: frame.action, script: String(frame.payload.script ?? "") });
+      queueMicrotask(() =>
+        resolveBrowserCommand(frame.commandId, {
+          ok: true,
+          data: { ok: true, value: { clicked: { tag: "button", text: "Search", id: "search-btn" } } },
+        }),
+      );
+    };
+    const tools = await buildTools(tempDir, { emit });
+    const bc = tool(tools, "browser_control");
+
+    const result = await bc.execute({ action: "click", selector: 'button[type="submit"]', sessionId: "tab-click" });
+    expect(result.ok).toBe(true);
+    expect(result.output).toContain("button");
+    expect(result.output).toContain("Search");
+    expect(commands).toHaveLength(1);
+    expect(commands[0].action).toBe("eval");
+    // Injection safety: the selector rides as a JSON string literal, never
+    // concatenated raw into the script.
+    expect(commands[0].script).toContain(JSON.stringify('button[type="submit"]'));
+    expect(commands[0].script).toContain("scrollIntoView");
+  });
+
+  it("click by text embeds the text + nth and scans the clickable set", async () => {
+    const scripts: string[] = [];
+    const emit = (event: unknown) => {
+      const frame = event as { commandId: string; payload: { script?: string } };
+      scripts.push(String(frame.payload.script ?? ""));
+      queueMicrotask(() =>
+        resolveBrowserCommand(frame.commandId, {
+          ok: true,
+          data: { ok: true, value: { clicked: { tag: "a", text: "Sign in", href: "/login" } } },
+        }),
+      );
+    };
+    const tools = await buildTools(tempDir, { emit });
+    const bc = tool(tools, "browser_control");
+
+    const result = await bc.execute({ action: "click", text: "Sign in", nth: 2, sessionId: "tab-click-text" });
+    expect(result.ok).toBe(true);
+    expect(result.output).toContain("Sign in");
+    expect(scripts).toHaveLength(1);
+    expect(scripts[0]).toContain(JSON.stringify("Sign in"));
+    expect(scripts[0]).toContain(JSON.stringify(2));
+    // The clickable scan set + label sources from the contract.
+    expect(scripts[0]).toContain("input[type=submit]");
+    expect(scripts[0]).toContain('[role="button"]');
+    expect(scripts[0]).toContain("aria-label");
+  });
+
+  it("click with neither selector nor text is an honest error; a page-level miss surfaces the script's error", async () => {
+    const emit = (event: unknown) => {
+      const frame = event as { commandId: string };
+      queueMicrotask(() =>
+        resolveBrowserCommand(frame.commandId, { ok: true, data: { ok: true, value: { error: "no element matches the CSS selector" } } }),
+      );
+    };
+    const tools = await buildTools(tempDir, { emit });
+    const bc = tool(tools, "browser_control");
+
+    const noTarget = await bc.execute({ action: "click", sessionId: "tab-click3" });
+    expect(noTarget.ok).toBe(false);
+    expect(noTarget.output).toContain("selector");
+
+    const miss = await bc.execute({ action: "click", selector: ".not-there", sessionId: "tab-click3" });
+    expect(miss.ok).toBe(false);
+    expect(miss.output).toContain("no element matches the CSS selector");
+  });
+});
+
+describe("browser_control — type (R66: the framework-visible value setter)", () => {
+  it("type embeds selector+text, uses the native value setter path, and requestSubmit when submit:true", async () => {
+    const scripts: string[] = [];
+    const emit = (event: unknown) => {
+      const frame = event as { commandId: string; payload: { script?: string } };
+      scripts.push(String(frame.payload.script ?? ""));
+      queueMicrotask(() =>
+        resolveBrowserCommand(frame.commandId, {
+          ok: true,
+          data: { ok: true, value: { typed: 'input[name="q"]', submitted: true, submitHow: "form.requestSubmit()" } },
+        }),
+      );
+    };
+    const tools = await buildTools(tempDir, { emit });
+    const bc = tool(tools, "browser_control");
+
+    const result = await bc.execute({
+      action: "type",
+      selector: 'input[name="q"]',
+      text: "acute code editor",
+      submit: true,
+      sessionId: "tab-type",
+    });
+    expect(result.ok).toBe(true);
+    expect(result.output).toContain("submitted");
+    expect(result.output).toContain("requestSubmit");
+    expect(scripts).toHaveLength(1);
+    expect(scripts[0]).toContain(JSON.stringify('input[name="q"]'));
+    expect(scripts[0]).toContain(JSON.stringify("acute code editor"));
+    // The Google-search fix: native prototype value setter + input/change
+    // events (React/Vue) + requestSubmit (native form submission).
+    expect(scripts[0]).toContain("getOwnPropertyDescriptor");
+    expect(scripts[0]).toContain("requestSubmit");
+    expect(scripts[0]).toContain('new Event("input"');
+    expect(scripts[0]).toContain('new Event("change"');
+  });
+
+  it("type without submit dispatches no requestSubmit; missing selector/text is refused", async () => {
+    const scripts: string[] = [];
+    const emit = (event: unknown) => {
+      const frame = event as { commandId: string; payload: { script?: string } };
+      scripts.push(String(frame.payload.script ?? ""));
+      queueMicrotask(() =>
+        resolveBrowserCommand(frame.commandId, {
+          ok: true,
+          data: { ok: true, value: { typed: "#search", submitted: false, submitHow: "" } },
+        }),
+      );
+    };
+    const tools = await buildTools(tempDir, { emit });
+    const bc = tool(tools, "browser_control");
+
+    const result = await bc.execute({ action: "type", selector: "#search", text: "hello", sessionId: "tab-type2" });
+    expect(result.ok).toBe(true);
+    expect(result.output).not.toContain("The form was submitted");
+    // The submit branch is compiled in but gated on the submit flag.
+    expect(scripts[0]).toContain(JSON.stringify(false));
+
+    const missing = await bc.execute({ action: "type", text: "hello", sessionId: "tab-type2" });
+    expect(missing.ok).toBe(false);
+    expect(missing.output).toContain("selector");
+  });
+});
+
+describe("browser_control — press_key (R66: the Enter→requestSubmit fix)", () => {
+  it("press_key Enter dispatches the key trio AND calls form.requestSubmit (the A3 Google fix)", async () => {
+    const scripts: string[] = [];
+    const emit = (event: unknown) => {
+      const frame = event as { commandId: string; payload: { script?: string } };
+      scripts.push(String(frame.payload.script ?? ""));
+      queueMicrotask(() =>
+        resolveBrowserCommand(frame.commandId, { ok: true, data: { ok: true, value: { pressed: "Enter", submitted: true } } }),
+      );
+    };
+    const tools = await buildTools(tempDir, { emit });
+    const bc = tool(tools, "browser_control");
+
+    const result = await bc.execute({ action: "press_key", key: "Enter", selector: 'input[name="q"]', sessionId: "tab-key" });
+    expect(result.ok).toBe(true);
+    expect(result.output).toContain("Enter");
+    expect(result.output).toContain("submitted natively");
+    expect(scripts).toHaveLength(1);
+    expect(scripts[0]).toContain(JSON.stringify("Enter"));
+    expect(scripts[0]).toContain(JSON.stringify('input[name="q"]'));
+    expect(scripts[0]).toContain("requestSubmit");
+    expect(scripts[0]).toContain("keydown");
+    expect(scripts[0]).toContain("keypress");
+    expect(scripts[0]).toContain("keyup");
+    expect(scripts[0]).toContain("keyCode");
+  });
+
+  it("press_key requires a key and refuses absurd ones", async () => {
+    const tools = await buildTools(tempDir, { emit: () => {} });
+    const bc = tool(tools, "browser_control");
+    const noKey = await bc.execute({ action: "press_key", sessionId: "tab-key2" });
+    expect(noKey.ok).toBe(false);
+    expect(noKey.output).toContain("key");
+    const longKey = await bc.execute({ action: "press_key", key: "a".repeat(40), sessionId: "tab-key2" });
+    expect(longKey.ok).toBe(false);
+    expect(longKey.output).toContain("single key name");
+  });
+});
+
+describe("browser_control — source / read_dom (R66: page content without screenshots)", () => {
+  it("source html compiles ONE eval script (outerHTML + in-script maxChars cap) and returns the payload", async () => {
+    const scripts: string[] = [];
+    const emit = (event: unknown) => {
+      const frame = event as { commandId: string; payload: { script?: string } };
+      scripts.push(String(frame.payload.script ?? ""));
+      queueMicrotask(() =>
+        resolveBrowserCommand(frame.commandId, {
+          ok: true,
+          data: { ok: true, value: { part: "html", selector: "", chars: 210, content: "<html><body>hi</body></html>" } },
+        }),
+      );
+    };
+    const tools = await buildTools(tempDir, { emit });
+    const bc = tool(tools, "browser_control");
+
+    const result = await bc.execute({ action: "source", part: "html", maxChars: 8000, sessionId: "tab-source" });
+    expect(result.ok).toBe(true);
+    expect(result.output).toContain("source html ok");
+    expect(result.output).toContain("<html><body>hi</body></html>");
+    expect(scripts).toHaveLength(1);
+    expect(scripts[0]).toContain("outerHTML");
+    expect(scripts[0]).toContain(JSON.stringify(8000));
+    expect(scripts[0]).toContain("truncated");
+
+    const badPart = await bc.execute({ action: "source", sessionId: "tab-source" });
+    expect(badPart.ok).toBe(false);
+    expect(badPart.output).toContain("part html | css | scripts");
+  });
+
+  it("read_dom returns the structured outline JSON (short selectors, visible-only interactives)", async () => {
+    const scripts: string[] = [];
+    const outline = {
+      title: "Example Domain",
+      url: "https://example.com/",
+      headings: [{ tag: "h1", text: "Example Domain" }],
+      interactive: [{ tag: "a", text: "More information", selector: "body > a:nth-of-type(1)", rect: { w: 120, h: 20 } }],
+      forms: [],
+      paragraphs: undefined,
+    };
+    const emit = (event: unknown) => {
+      const frame = event as { commandId: string; payload: { script?: string } };
+      scripts.push(String(frame.payload.script ?? ""));
+      queueMicrotask(() => resolveBrowserCommand(frame.commandId, { ok: true, data: { ok: true, value: outline } }));
+    };
+    const tools = await buildTools(tempDir, { emit });
+    const bc = tool(tools, "browser_control");
+
+    const result = await bc.execute({ action: "read_dom", sessionId: "tab-dom" });
+    expect(result.ok).toBe(true);
+    expect(result.output).toContain("read_dom ok");
+    expect(result.output).toContain("Example Domain");
+    expect(result.output).toContain("nth-of-type");
+    expect(scripts).toHaveLength(1);
+    // The outline builder: short selector chain + page-visibility filter.
+    expect(scripts[0]).toContain("nth-of-type");
+    expect(scripts[0]).toContain("getBoundingClientRect");
+    expect(scripts[0]).toContain("document.forms");
+  });
+
+  it("the new bridge actions all fail closed without a live emit channel", async () => {
+    const tools = await buildTools(tempDir); // no emit in deps
+    const bc = tool(tools, "browser_control");
+    for (const input of [
+      { action: "click", text: "Sign in" },
+      { action: "type", selector: "#q", text: "hi" },
+      { action: "press_key", key: "Enter" },
+      { action: "source", part: "html" },
+      { action: "read_dom" },
+    ]) {
+      const refused = await bc.execute({ ...input, sessionId: "tab-noc" });
+      expect(refused.ok).toBe(false);
+      expect(refused.output).toContain("no live stream channel");
+    }
+  });
+
+  it("every compiled page script (incl. the wall probe) is syntactically valid JavaScript", async () => {
+    // The bridge is mocked everywhere else, so the scripts never RUN here —
+    // this compiles each generated script as a function body (exactly what
+    // the Rust browser_tab_eval wrapper does) to prove the builders emit
+    // parseable JS before the owner's first live Windows run.
+    const scripts: string[] = [];
+    const emit = (event: unknown) => {
+      const frame = event as { type?: string; action?: string; commandId: string; payload?: { script?: string } };
+      if (frame.type === "browser-command" && typeof frame.payload?.script === "string") {
+        scripts.push(frame.payload.script);
+      }
+      queueMicrotask(() =>
+        resolveBrowserCommand(frame.commandId, {
+          ok: true,
+          data: { ok: true, value: { clicked: {}, typed: "x", submitted: false, part: "html", content: "x", title: "t", text: "", markers: [] } },
+        }),
+      );
+    };
+    const tools = await buildTools(tempDir, { emit });
+    const bc = tool(tools, "browser_control");
+    await bc.execute({ action: "navigate", url: "https://en.wikipedia.org/compile", sessionId: "tab-compile" }); // the wall probe script
+    await bc.execute({ action: "click", selector: "#a", sessionId: "tab-compile" });
+    await bc.execute({ action: "click", text: "Sign in", nth: 2, sessionId: "tab-compile" });
+    await bc.execute({ action: "type", selector: "#q", text: "it's \"quoted\"", submit: true, sessionId: "tab-compile" });
+    await bc.execute({ action: "press_key", key: "Enter", selector: "#q", sessionId: "tab-compile" });
+    await bc.execute({ action: "source", part: "html", sessionId: "tab-compile" });
+    await bc.execute({ action: "source", part: "css", selector: "#q", sessionId: "tab-compile" });
+    await bc.execute({ action: "source", part: "scripts", sessionId: "tab-compile" });
+    await bc.execute({ action: "read_dom", sessionId: "tab-compile" });
+    await bc.execute({ action: "read_dom", include: "all", sessionId: "tab-compile" });
+    expect(scripts.length).toBeGreaterThanOrEqual(10);
+    for (const script of scripts) {
+      expect(() => new Function(script)).not.toThrow();
+    }
+  });
+});
+
+// ── ROUND-66 (R66, A4): wait_for_verification — the owner-solvable wait ────
+
+describe("browser_control — wait_for_verification (R66: the checkpoint)", () => {
+  /** An emit mock that answers bridge probes from a scripted answer list. */
+  const bridgeEmit = (
+    answers: Array<{ title: string; text: string; markers: string[] }>,
+    onCheckpoint?: (checkpointId: string) => void,
+  ) => {
+    let commandCount = 0;
+    const events: Array<Record<string, unknown>> = [];
+    const emit = (event: unknown) => {
+      const frame = event as Record<string, unknown>;
+      events.push(frame);
+      if (frame.type === "browser-command") {
+        const answer = answers[Math.min(commandCount, answers.length - 1)];
+        commandCount += 1;
+        queueMicrotask(() =>
+          resolveBrowserCommand((frame as { commandId: string }).commandId, { ok: true, data: { ok: true, value: answer } }),
+        );
+      } else if (frame.type === "browser-checkpoint") {
+        onCheckpoint?.((frame as { checkpointId: string }).checkpointId);
+      }
+    };
+    return { emit, events };
+  };
+
+  it("clean page → honest ok, NO checkpoint frame", async () => {
+    const { emit, events } = bridgeEmit([{ title: "Google", text: "Search the web", markers: [] }]);
+    const tools = await buildTools(tempDir, { emit });
+    const bc = tool(tools, "browser_control");
+    await bc.execute({ action: "navigate", url: "https://en.wikipedia.org/wait", sessionId: "tab-wait" });
+
+    const result = await bc.execute({ action: "wait_for_verification", sessionId: "tab-wait" });
+    expect(result.ok).toBe(true);
+    expect(result.output).toContain("no verification wall detected");
+    expect(result.output).toContain("https://en.wikipedia.org/wait");
+    expect(events.filter((e) => e.type === "browser-checkpoint")).toHaveLength(0);
+  });
+
+  it("a detected wall opens the checkpoint; resolve done + clean re-probe → cleared message", async () => {
+    // Probe order: navigate (clean) → wait probe (cloudflare wall) → re-probe (clean).
+    const { emit, events } = bridgeEmit(
+      [
+        { title: "Google", text: "Search the web", markers: [] },
+        { title: "Just a moment...", text: "Checking your browser before accessing the site.", markers: ["challenge-platform"] },
+        { title: "Example Domain", text: "Example Domain. This domain is for use in examples.", markers: [] },
+      ],
+      (checkpointId) => {
+        queueMicrotask(() => resolveBrowserCheckpoint(checkpointId, "done"));
+      },
+    );
+    const tools = await buildTools(tempDir, { emit });
+    const bc = tool(tools, "browser_control");
+    await bc.execute({ action: "navigate", url: "https://en.wikipedia.org/walled", sessionId: "tab-wall" });
+
+    const result = await bc.execute({ action: "wait_for_verification", sessionId: "tab-wall", waitMs: 3000 });
+    expect(result.ok).toBe(true);
+    expect(result.output).toContain("verification cleared");
+    expect(result.output).toContain("Example Domain");
+    // The chat-card frame: the exact {type, sessionId:"", tabId, kind, url, waitMs} contract.
+    const opened = events.find((e) => e.type === "browser-checkpoint");
+    expect(opened).toMatchObject({
+      type: "browser-checkpoint",
+      sessionId: "",
+      tabId: "tab-wall",
+      kind: "cloudflare",
+      url: "https://en.wikipedia.org/walled",
+      waitMs: 3000,
+    });
+    // The settle frame collapsed the card.
+    expect(events.find((e) => e.type === "browser-checkpoint.resolved")).toMatchObject({ resolution: "done" });
+  });
+
+  it("resolve stop → the honest stopped message (no automatic retry guidance)", async () => {
+    const { emit } = bridgeEmit(
+      [
+        { title: "Just a moment...", text: "Checking your browser", markers: ["challenge-platform"] },
+      ],
+      (checkpointId) => {
+        queueMicrotask(() => resolveBrowserCheckpoint(checkpointId, "stop"));
+      },
+    );
+    const tools = await buildTools(tempDir, { emit });
+    const bc = tool(tools, "browser_control");
+    await bc.execute({ action: "navigate", url: "https://en.wikipedia.org/stopped", sessionId: "tab-stop" });
+
+    const result = await bc.execute({ action: "wait_for_verification", sessionId: "tab-stop" });
+    expect(result.ok).toBe(true);
+    expect(result.output).toContain("the owner stopped the wait");
+    expect(result.output).toContain("do not retry this page automatically");
+  });
+
+  it("timeout → the honest timed-out message with the wall still up (fake clock)", async () => {
+    vi.useFakeTimers();
+    try {
+      // Probe 1 (wait): wall. Probe 2 (re-probe): wall still there.
+      const { emit } = bridgeEmit([{ title: "Just a moment...", text: "Checking your browser", markers: ["challenge-platform"] }]);
+      const tools = await buildTools(tempDir, { emit });
+      const bc = tool(tools, "browser_control");
+      await bc.execute({ action: "navigate", url: "https://en.wikipedia.org/slowwall", sessionId: "tab-slow" });
+
+      const pending = bc.execute({ action: "wait_for_verification", sessionId: "tab-slow" });
+      // Default wait 15s; the owner never answers.
+      await vi.advanceTimersByTimeAsync(15_000);
+      const result = await pending;
+      expect(result.ok).toBe(true);
+      expect(result.output).toContain("timed out with the wall still up");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("web mode (no bridge): the wall is detected via the server-side fetch — no blind wait without a chat channel", async () => {
+    const tools = await buildTools(tempDir); // no emit → fetch probe path
+    const bc = tool(tools, "browser_control");
+    await bc.execute({ action: "navigate", url: "https://en.wikipedia.org/webwall", sessionId: "tab-webwall" });
+    webFetchMock.mockResolvedValue({ ok: true, output: "Just a moment... Checking your browser before accessing the site." });
+
+    const result = await bc.execute({ action: "wait_for_verification", sessionId: "tab-webwall" });
+    expect(result.ok).toBe(false);
+    expect(result.output).toContain("cloudflare");
+    expect(result.output).toContain("no live chat channel");
+    // The checkpoint registry was never touched (no blind wait).
+    expect(pendingBrowserCheckpointCount()).toBe(0);
+  });
+
+  it("refuses honestly when no page is open", async () => {
+    const tools = await buildTools(tempDir);
+    const bc = tool(tools, "browser_control");
+    const result = await bc.execute({ action: "wait_for_verification", sessionId: "never-opened-wait" });
+    expect(result.ok).toBe(false);
+    expect(result.output).toContain("no page is open");
+  });
+});
+
+// ── ROUND-66 (R66, A5): set_viewport's instant-apply frame ─────────────────
+
+describe("browser_control — set_viewport emits the instant-apply browser-viewport frame", () => {
+  it("emits {type:'browser-viewport', tabId, viewport} on the turn stream after the command succeeds", async () => {
+    const frames: Array<Record<string, unknown>> = [];
+    const emit = (event: unknown) => {
+      frames.push(event as Record<string, unknown>);
+    };
+    const tools = await buildTools(tempDir, { emit });
+    const bc = tool(tools, "browser_control");
+
+    const result = await bc.execute({ action: "set_viewport", preset: "mobile-sm", sessionId: "tab-vpframe" });
+    expect(result.ok).toBe(true);
+    const frame = frames.find((f) => f.type === "browser-viewport");
+    expect(frame).toBeDefined();
+    expect(frame).toMatchObject({
+      type: "browser-viewport",
+      sessionId: "",
+      tabId: "tab-vpframe",
+      viewport: { width: 375, height: 667, preset: "mobile-sm", zoom: 1, rotate: false },
+    });
+  });
+
+  it("an emit that throws never breaks set_viewport (the 4s poll is the backfill)", async () => {
+    const emit = (event: unknown) => {
+      if ((event as { type: string }).type === "browser-viewport") {
+        throw new Error("stream already closed");
+      }
+    };
+    const tools = await buildTools(tempDir, { emit });
+    const bc = tool(tools, "browser_control");
+    const result = await bc.execute({ action: "set_viewport", preset: "tablet", sessionId: "tab-vpframe2" });
+    expect(result.ok).toBe(true);
+    expect(result.output).toContain("768×1024");
+  });
+});
+
+// ── ROUND-66 (R66, A4/A1): the navigate/read wall notes + the record removal ─
+
+describe("browser_control — the R66 wall probe on navigate / read", () => {
+  it("navigate appends the ⚠ verification-wall note when the probe sees one (and never fails the navigate)", async () => {
+    const emit = (event: unknown) => {
+      const frame = event as { type: string; commandId: string };
+      if (frame.type === "browser-command") {
+        queueMicrotask(() =>
+          resolveBrowserCommand(frame.commandId, {
+            ok: true,
+            data: { ok: true, value: { title: "Just a moment...", text: "", markers: ["challenge-platform"] } },
+          }),
+        );
+      }
+    };
+    const tools = await buildTools(tempDir, { emit });
+    const bc = tool(tools, "browser_control");
+
+    const result = await bc.execute({ action: "navigate", url: "https://en.wikipedia.org/wallprobe", sessionId: "tab-navwall" });
+    expect(result.ok).toBe(true);
+    expect(result.output).toContain("navigated the embedded browser");
+    expect(result.output).toContain("⚠ A verification wall (cloudflare)");
+    expect(result.output).toContain("wait_for_verification");
+  });
+
+  it("navigate swallows probe errors — a failing probe never fails the navigation", async () => {
+    const emit = (event: unknown) => {
+      const frame = event as { type: string; commandId: string };
+      if (frame.type === "browser-command") {
+        queueMicrotask(() => resolveBrowserCommand(frame.commandId, { ok: false, error: "the panel is not mounted" }));
+      }
+    };
+    const tools = await buildTools(tempDir, { emit });
+    const bc = tool(tools, "browser_control");
+
+    const result = await bc.execute({ action: "navigate", url: "https://en.wikipedia.org/quietprobe", sessionId: "tab-navquiet" });
+    expect(result.ok).toBe(true);
+    expect(result.output).toContain("navigated the embedded browser");
+    expect(result.output).not.toContain("⚠");
+  });
+
+  it("read appends the ⚠ note when the fetched text carries wall markers", async () => {
+    const tools = await buildTools(tempDir);
+    const bc = tool(tools, "browser_control");
+    await bc.execute({ action: "navigate", url: "https://en.wikipedia.org/gated", sessionId: "tab-readwall" });
+    webFetchMock.mockResolvedValue({ ok: true, output: "Just a moment... Checking your browser before accessing example.com." });
+
+    const result = await bc.execute({ action: "read", sessionId: "tab-readwall" });
+    expect(result.ok).toBe(true);
+    expect(result.output).toContain("⚠ A verification wall (cloudflare)");
+    expect(result.output).toContain("wait_for_verification");
   });
 });

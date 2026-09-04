@@ -7,7 +7,7 @@ import {
   updateDebugSettings,
   updateMemorySettings,
 } from "../lib/api";
-import { ArrowLeft, Bot, Brain, Monitor, Moon, Palette, PlugZap, Server, SlidersHorizontal, Sparkles, Sun, Users } from "lucide-react";
+import { ArrowLeft, Bot, Brain, Monitor, Moon, Palette, PlugZap, ScanEye, Server, SlidersHorizontal, Sparkles, Sun, Users } from "lucide-react";
 import { useThemeStore } from "../lib/theme-store";
 import { THEMES, getContrastText } from "../lib/themes";
 import { useThemeStyles } from "../lib/use-theme-styles";
@@ -21,6 +21,11 @@ import { SubAgentsTab } from "../components/settings/SubAgentsTab";
 import { SkillsTab } from "../components/settings/SkillsTab";
 import { McpTab } from "../components/settings/McpTab";
 import { ComputerUseTab } from "../components/settings/ComputerUseTab";
+// ROUND-66 (R66, B3/B5, owner directive): the DEDICATED image-analysis
+// (vision) section — the model+key config moved OUT of Computer Use per the
+// owner's "remove the vision model from there and create a dedicated
+// section" directive. Deep-link ?tab=vision.
+import { ImageAnalysisTab } from "../components/settings/ImageAnalysisTab";
 import { bdr, withAlpha } from "../components/dashboard/helpers";
 
 const TABS = [
@@ -35,6 +40,10 @@ const TABS = [
   { id: "skills", label: "Skills", icon: Sparkles },
   { id: "mcp", label: "MCP Servers", icon: PlugZap },
   { id: "computeruse", label: "Computer Use", icon: Monitor },
+  // ROUND-66 (R66, owner directive): the dedicated image-analysis section —
+  // the vision model's OWN home (provider + model + API key), split out of
+  // Computer Use so it also serves the general analyze_image tool.
+  { id: "vision", label: "Image Analysis", icon: ScanEye },
   { id: "advanced", label: "Advanced", icon: SlidersHorizontal },
 ] as const;
 
@@ -114,6 +123,7 @@ export function SettingsPage() {
         {tab === "skills" && <SkillsTab />}
         {tab === "mcp" && <McpTab />}
         {tab === "computeruse" && <ComputerUseTab />}
+        {tab === "vision" && <ImageAnalysisTab />}
         {tab === "advanced" && <AdvancedTab />}
       </div>
     </div>
@@ -385,12 +395,15 @@ function AdvancedTab() {
   );
 }
 
-/* ── ROUND-65 (R65): the debug-mode switch — the owner's "debug mode" ──────
- * directive (the agent reports details of what it did + a settings
- * switch). ON = every main-agent turn's final answer ends with a raw
- * "## Execution report" (every tool call, outcome, verification) — the
- * engine reads this setting per turn, so a flip applies to the very next
- * message. OFF (default) = prompts stay byte-identical. */
+/* ── ROUND-65 (R65): the debug-mode switch — the owner's "debug mode"
+ * directive. ROUND-66 (R66, C1) REWORK: the main agent NO LONGER
+ * self-reports (no prompt change at all — its answers stay clean). When ON,
+ * the turn COMPLETES normally and THEN a completely fresh, context-free
+ * debug analyst receives the whole conversation transcript + every tool
+ * call's full result and streams its execution report LIVE into a dedicated
+ * section at the bottom of the turn (never fed back to the agent — follow-up
+ * messages are unaffected). The engine reads this setting per turn, so a
+ * flip applies to the very next message. OFF (default) = no analyst. */
 
 function DebugModeCard() {
   const styles = useThemeStyles();
@@ -440,13 +453,14 @@ function DebugModeCard() {
       <div className="flex items-start gap-3">
         <div className="min-w-[200px] flex-1">
           <div className="text-[12.5px] font-bold" style={{ color: styles.text }}>
-            Agent execution self-report
+            Post-turn debug analyst
           </div>
           <div className="text-[11px]" style={{ color: styles.textTertiary }}>
-            While ON, every agent answer ends with an honest execution report: each tool call (name,
-            arguments, outcome or error), what was verified after every write, and anything retried
-            or abandoned. Flip it on when checking what the agent actually did; turn it OFF for
-            clean answers. Applies to the next message you send.
+            While ON, the agent answers normally — then a separate, context-free analyst reviews the
+            whole conversation (every tool call's full result, what was resolved, what failed) and
+            streams its execution report live in a dedicated section under the answer. The report
+            never feeds back into the conversation, so follow-up messages stay clean. Applies to
+            the next message you send.
           </div>
           {error ? (
             <div className="mt-1.5 text-[11px]" style={{ color: "#e5484d" }} role="alert">

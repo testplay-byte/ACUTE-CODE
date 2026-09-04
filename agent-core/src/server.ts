@@ -24,6 +24,11 @@ import {
   runSingleAgentTurn,
   runStreamedAgentTurn,
 } from "./agents/runtime.js";
+// ROUND-66 (R66-2-c, C1): the post-turn CONTEXT-FREE DEBUG ANALYST — a
+// fresh model call (no tools, no history of its own) that receives the
+// session's whole transcript and streams its report back over the SAME
+// still-open SSE before the turn's terminal frame.
+import { runDebugAnalyst } from "./agents/debug-analyst.js";
 import { pickFiles, pickFolder } from "./dialogs.js";
 import { projectTree, readFile, resolveInsideRoot, searchCode, searchFiles } from "./tools/index.js";
 import {
@@ -52,6 +57,7 @@ import {
   projectRootPathExists,
 } from "./storage/projects.js";
 import {
+  appendSessionEvent,
   createSession,
   deleteSession,
   forkSession,
@@ -124,8 +130,12 @@ import { deleteMemory, listMemories, memoryDigest } from "./storage/memory.js";
 import {
   getComputerUseSettings,
   setComputerUseSettings,
-  visionKeyringId,
 } from "./storage/computer-use.js";
+// ROUND-66 (R66-2-b): the DEDICATED image-analysis (vision) settings — the
+// owner's B3+B5 directive moved the vision model OUT of computer use into
+// its own section. The KEY stays on the R61 keyring slot ("<id>-vision").
+import { getVisionSettings, setVisionSettings, visionKeyringId } from "./storage/vision.js";
+import { describeRaster } from "./computer/vision.js";
 import { getComputerSession } from "./computer/session.js";
 import { backendForPlatform, realRunner } from "./computer/backends/index.js";
 import { listSkills, createSkill, updateSkill, deleteSkill } from "./storage/skills.js";
@@ -181,6 +191,10 @@ import { dirname } from "node:path";
 // ROUND-43 (R43-10): embedded-browser proxy backend — all logic + routes live
 // in browser-proxy.ts; server.ts only mounts it on the scoped API surface.
 import { registerBrowserRoutes } from "./browser-proxy.js";
+// ROUND-66 (R66, A4): the human-verification checkpoint registry (the
+// wait_for_verification browser tool pends on it; the resolve route below is
+// the chat card's answer channel).
+import { resolveBrowserCheckpoint } from "./browser-checkpoint.js";
 // ROUND-52 (R52-a): the background-job registry (GET /projects/:id/jobs,
 // POST /jobs/:id/stop).
 import { getJobStatus, listJobs, stopJob } from "./lib/background-jobs.js";
@@ -878,6 +892,42 @@ export function buildServer(options: ServerOptions): FastifyInstance {
   app.register(
     async (scope) => {
       registerBrowserRoutes(scope, token, db); // ROUND-43 (R43-10): embedded-browser proxy (iframe ticket auth, HTML/CSS rewriting, history + viewport state). ROUND-46 (R46-d): db handle → the per-project cookie jars (migration 0017) restore/persist through it.
+
+      // ── ROUND-66 (R66, A4): POST /browser-checkpoints/:checkpointId/resolve ──
+      // The chat CHECKPOINT CARD's answer channel — the mirror of the
+      // browser-command result route (browser-proxy.ts), but the answer
+      // comes from the OWNER ("Mark as done" / "Stop waiting"), not the app
+      // UI, and it resolves the browser_control wait_for_verification tool's
+      // pending promise (browser-checkpoint.ts). Same bearer-auth scope as
+      // every route here. Always 200 {ok, resolution} — ok:false +
+      // resolution:"timeout" for unknown/expired ids (the card falls back to
+      // its own countdown timeout) — exactly the src/lib/api.ts
+      // resolveBrowserCheckpoint contract.
+      scope.post("/browser-checkpoints/:checkpointId/resolve", async (request, reply) => {
+        const { checkpointId } = request.params as { checkpointId?: string };
+        if (typeof checkpointId !== "string" || checkpointId === "") {
+          return reply
+            .code(400)
+            .send(errorBody("VALIDATION", "checkpointId path param is required", { field: "params.checkpointId" }));
+        }
+        const body: unknown = request.body;
+        if (typeof body !== "object" || body === null || Array.isArray(body)) {
+          return reply
+            .code(400)
+            .send(errorBody("VALIDATION", "body must be a JSON object", { field: "body" }));
+        }
+        const action = (body as Record<string, unknown>).action;
+        if (action !== "done" && action !== "stop") {
+          return reply
+            .code(400)
+            .send(errorBody("VALIDATION", "body.action must be 'done' or 'stop'", { field: "body.action" }));
+        }
+        const resolved = resolveBrowserCheckpoint(checkpointId, action);
+        if (!resolved) {
+          return { ok: false, resolution: "timeout", error: "unknown or expired checkpoint" };
+        }
+        return { ok: true, resolution: action };
+      });
 
       // ── ROUND-59 (R59-E): diagnostics — the engine's error ring ────────
       // The in-app Console tab (right sidebar) polls GET every 5s and merges
@@ -3375,6 +3425,111 @@ export function buildServer(options: ServerOptions): FastifyInstance {
         // refuses concurrent turns anyway).
         registerTurn(id, abort);
 
+        // ── ROUND-66 (R66-2-c, owner's C1 directive): the post-turn DEBUG
+        // ANALYST phase. When debug mode (Settings → Advanced) is ON and the
+        // turn finished on its own (ok, or a real failure — NEVER a
+        // deliberate ABORTED stop), a COMPLETELY NEW context-free agent is
+        // launched here: it receives the session's WHOLE transcript (user
+        // request, every tool call with its COMPLETE result, errors) and
+        // streams its analysis live over this still-open SSE as
+        // debug-start / debug-delta* / debug-done (or debug-error) frames,
+        // BEFORE the turn's own done/error frame — so the frontend renders
+        // the dedicated debug section at the bottom of the LIVE turn. On
+        // success the report is ALSO persisted as a `debug.report` session
+        // event (assembleHistory skips the type — a follow-up user message
+        // NEVER includes it; toProjectChatItems folds it into the turn's
+        // AssistantTurnItem.debugReport for reloads). A debug failure must
+        // NEVER break the turn's own terminal frame — the phase catches
+        // everything it can and the route's try/catch below is the
+        // belt-and-suspenders guard.
+        const runDebugAnalystPhase = async (): Promise<void> => {
+          try {
+            // (a) The debug setting — the same accessor the /settings/debug
+            // routes use (default OFF → this whole phase is a no-op).
+            if (getDebugSettings(db).enabled !== true) return;
+            // (c) Minimal provider/model resolution for the session — the
+            // exact helpers prepareTurn uses (session → agent → provider →
+            // keyring key); the model mirrors the TURN's choice (the
+            // per-send override when one was sent, else the agent default).
+            const session = getSession(db, id);
+            if (session === undefined || session.agentId === null) {
+              send({ type: "debug-error", sessionId: id, message: "debug analyst: the session or its agent is gone" });
+              return;
+            }
+            const agent = getAgent(db, session.agentId);
+            if (agent === undefined || agent.providerId === null || agent.model === null) {
+              send({
+                type: "debug-error",
+                sessionId: id,
+                message: "debug analyst: the session's agent has no provider/model configured",
+              });
+              return;
+            }
+            const provider = resolveProvider(db, agent.providerId);
+            if (provider === undefined || provider.baseUrl === null) {
+              send({
+                type: "debug-error",
+                sessionId: id,
+                message: `debug analyst: provider '${agent.providerId}' is not resolvable`,
+              });
+              return;
+            }
+            const apiKey = keyring.get(provider.id);
+            if (apiKey === undefined) {
+              send({
+                type: "debug-error",
+                sessionId: id,
+                message: `debug analyst: no API key for provider '${provider.id}'`,
+              });
+              return;
+            }
+            const model =
+              modelOverride && modelOverride.trim() !== "" ? modelOverride.trim() : agent.model;
+            // (d) The live marker — the frontend opens the dedicated
+            // streaming section (loading animation while the analyst works).
+            send({ type: "debug-start", sessionId: id });
+            // (e) The analyst itself — streams debug-delta frames through
+            // send and never throws (provider failures come back as
+            // { ok: false, error } with the API key scrubbed).
+            const result = await runDebugAnalyst(
+              { db, keyring, chat, chatStream: streamAiSdkChat },
+              {
+                sessionId: id,
+                provider: { id: provider.id, baseUrl: provider.baseUrl, apiFormat: provider.apiFormat },
+                apiKey,
+                model,
+                emit: send,
+              },
+            );
+            if (result.ok) {
+              // (f) Persist the report as a `debug.report` session event —
+              // UNCONDITIONALLY (a closed window still gets the folded card
+              // on reload; only the SSE frames skip when the client is
+              // gone). Payload shape: { content, model, ts } + the storage
+              // layer's own agentId/ts stamping.
+              appendSessionEvent(db, id, {
+                type: "debug.report",
+                agentId: agent.id,
+                payload: { content: result.content, model, ts: new Date().toISOString() },
+              });
+              send({ type: "debug-done", sessionId: id, content: result.content, model });
+            } else {
+              send({ type: "debug-error", sessionId: id, message: result.error });
+            }
+          } catch (error) {
+            // The phase's own guard — an unexpected crash in the closure
+            // still produces the honest debug-error frame (and nothing else:
+            // the turn's terminal frame below is untouched).
+            send({
+              type: "debug-error",
+              sessionId: id,
+              message: `debug analyst failed: ${
+                error instanceof Error ? error.message : String(error)
+              }`.slice(0, 300),
+            });
+          }
+        };
+
         try {
           const outcome = await runStreamedAgentTurn(
             { db, keyring, chat, chatStream: streamAiSdkChat },
@@ -3402,10 +3557,20 @@ export function buildServer(options: ServerOptions): FastifyInstance {
               sessionId: id,
               projectId: session?.projectId ?? undefined,
             });
+            // R66-2-c: the debug analyst runs AFTER the outcome handling
+            // (the completion notification fires the moment the turn is
+            // done) and BEFORE the done frame — the live turn is still open,
+            // so the report streams into the dedicated section under the
+            // answer while the owner watches. The debug.report event +
+            // debug-done frame land before the terminal done frame.
+            await runDebugAnalystPhase();
             send({ type: "done", assistantMessage: outcome.assistantMessage, usage: outcome.usage });
           } else if (outcome.code === "ABORTED") {
             // ROUND-42: the user explicitly stopped the turn — a deliberate
-            // stop is not a failure; no task_failed notification.
+            // stop is not a failure; no task_failed notification, and NO
+            // debug analyst either (the owner deliberately stopped — there
+            // is no completed turn to analyze; status 499 < 500 keeps the
+            // gate below closed for the same reason).
             send({ type: "stopped" });
           } else {
             // ROUND-40/42: real failures (provider errors, crashes) always
@@ -3420,6 +3585,12 @@ export function buildServer(options: ServerOptions): FastifyInstance {
                 sessionId: id,
                 projectId: session?.projectId ?? undefined,
               });
+              // R66-2-c: a REAL failure (status >= 500 — provider error,
+              // loop guard) still ran real work the analyst can dissect
+              // (the turn.error event is already persisted, so the
+              // transcript carries the ERROR line). Validation conflicts
+              // (404/409) and deliberate stops never reach here.
+              await runDebugAnalystPhase();
             }
             send({
               type: "error",
@@ -3465,11 +3636,11 @@ export function buildServer(options: ServerOptions): FastifyInstance {
 
       // ── ROUND-61 (R61): COMPUTER USE — the desktop-control surface ────────
       // The monitor ring (GET session), the UI kill switch (POST stop), the
-      // settings (GET/PUT config incl. the vision-model separation), the
-      // readiness probe, and the dedicated VISION KEY slot (the
-      // "<providerId>-vision" keyring pseudo-provider — the Tauri shell
-      // writes the durable credential + handoff; this route is the web-dev
-      // + in-session path). Same bearer wall as everything else.
+      // settings (GET/PUT config — the VISION block moved OUT in R66 to
+      // /vision/settings), the readiness probe, and the dedicated VISION
+      // KEY slot (the "<providerId>-vision" keyring pseudo-provider — the
+      // Tauri shell writes the durable credential + handoff; this route is
+      // the web-dev + in-session path). Same bearer wall as everything else.
       scope.get("/computer-use/config", async () => {
         const settings = getComputerUseSettings(db);
         const backend = backendForPlatform();
@@ -3486,6 +3657,17 @@ export function buildServer(options: ServerOptions): FastifyInstance {
           return reply
             .code(400)
             .send(errorBody("VALIDATION", "body must be a JSON object", { field: "body" }));
+        }
+        // R66-2-b: the vision block moved — a legacy client PUTting `vision`
+        // gets the honest pointer instead of a silent drop.
+        if ("vision" in (body as Record<string, unknown>)) {
+          return reply
+            .code(400)
+            .send(
+              errorBody("VALIDATION", "vision settings moved to PUT /vision/settings", {
+                field: "body.vision",
+              }),
+            );
         }
         try {
           const settings = setComputerUseSettings(db, body as Parameters<typeof setComputerUseSettings>[1]);
@@ -3604,6 +3786,72 @@ export function buildServer(options: ServerOptions): FastifyInstance {
         }
         keyring.set(visionKeyringId(providerId), "");
         return reply.code(204).send();
+      });
+
+      // ── ROUND-66 (R66-2-b, owner B3+B5): IMAGE ANALYSIS — the DEDICATED
+      // vision-model settings section. The vision model moved OUT of
+      // computer use; these routes are the new home (the frontend half is
+      // src/components/settings/ImageAnalysisTab.tsx). The vision KEY keeps
+      // the R61 /computer-use/vision-key routes above (the "<id>-vision"
+      // keyring slot is THE slot — the Tauri store_vision_key command is
+      // unchanged). Same bearer wall as everything else.
+      // GET /vision/settings → the VisionSettings object itself (the
+      // api.ts client types the response as VisionSettings, not a wrapper).
+      scope.get("/vision/settings", async () => {
+        return getVisionSettings(db);
+      });
+
+      scope.put("/vision/settings", async (request, reply) => {
+        const body: unknown = request.body;
+        if (typeof body !== "object" || body === null || Array.isArray(body)) {
+          return reply
+            .code(400)
+            .send(errorBody("VALIDATION", "body must be a JSON object", { field: "body" }));
+        }
+        try {
+          // Returns the new settings BARE (the api.ts contract).
+          return setVisionSettings(db, body as Parameters<typeof setVisionSettings>[1]);
+        } catch (err) {
+          return reply
+            .code(400)
+            .send(errorBody("VALIDATION", String((err as Error).message), { field: "body" }));
+        }
+      });
+
+      // POST /vision/test — a tiny 1×1 transparent PNG through the CURRENT
+      // settings (separate mode only, honestly): "main" mode has no model to
+      // aim at without a live turn (the relay resolves the TURN's model), so
+      // it answers the honest error instead of guessing; off answers the
+      // honest off error. {ok, description?, model?, error?}.
+      scope.post("/vision/test", async () => {
+        // A 1×1 transparent PNG (the smallest honest probe image).
+        const TEST_PNG_BASE64 =
+          "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==";
+        const settings = getVisionSettings(db);
+        if (settings.mode === "off") {
+          return { ok: false, error: "image analysis is OFF — pick a mode above first" };
+        }
+        if (settings.mode === "main") {
+          return {
+            ok: false,
+            error: "main-mode test needs a live turn — flip a provider model's supports-vision flag instead",
+          };
+        }
+        if (settings.provider === null || settings.modelId === null) {
+          return {
+            ok: false,
+            error: "separate mode is not fully configured — pick a provider and model, then test again",
+          };
+        }
+        const result = await describeRaster(
+          { db, keyring, visionKeyringId: visionKeyringId(settings.provider) },
+          { mode: "separate", providerId: settings.provider, modelId: settings.modelId },
+          { imageBase64: TEST_PNG_BASE64, instruction: "Describe this image in one short sentence." },
+        );
+        if ("error" in result) {
+          return { ok: false, error: result.error };
+        }
+        return { ok: true, description: result.text, model: result.model, ms: result.ms };
       });
 
       // ── ROUND-61 (R61): SKILLS — the owner's multiple-skills surface ─────

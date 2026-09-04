@@ -160,6 +160,12 @@ describe("openDatabase", () => {
       // ROUND-64 (R64-e): the per-API-key usage dimension — key_slot on
       // usage_events (0 = primary; pool slots = sub-agent children).
       { version: 24, name: "0024_usage_key_slot.sql" },
+      // ROUND-66 (R66-2-b): the vision settings split — vision.mode/
+      // provider/modelId seeded from the R61 computerUse.vision.* rows.
+      { version: 25, name: "0025_vision_settings.sql" },
+      // ROUND-66 (R66): analyze_image joins TOOL_NAMES — appended to
+      // template/default allowlists that include web_fetch.
+      { version: 26, name: "0026_analyze_image_tool.sql" },
     ]);
     expect(appliedSecond).toEqual(appliedFirst);
   });
@@ -214,6 +220,9 @@ describe("template seeding", () => {
           // the computer-use tools are deliberately NOT here: they are the
           // settings-gated surface, not allowlist vocabulary).
           "read_skill",
+          // ROUND-66 (R66, B3): the general image-analysis tool — seeded via
+          // TOOL_NAMES (existing DBs get it appended by migration 0026).
+          "analyze_image",
         ]);
         expect(row.memory_policy).toBe("on-start");
         expect(row.max_turns).toBe(40);

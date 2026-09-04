@@ -1,4 +1,4 @@
-<!-- last-reviewed: 2026-09-02 round-65 -->
+<!-- last-reviewed: 2026-09-04 round-66 -->
 # Changelog
 
 All notable changes to ACUTE-CODE are documented here. Entries are written for
@@ -11,13 +11,54 @@ version number is single-sourced from the root `package.json`
 
 ## [Unreleased]
 
-Planned next: live verification of computer use AND the agent-browser's
-native paths (eval in the page, screenshot + vision) on the owner's real
-machines (the checklist in `docs/runbooks/COMPUTER-USE.md`), installer
-code-signing (SmartScreen), ratings-driven prompt tuning, the
-deepseek-harness future candidates (compaction pressure-trigger,
-continuable sub-agent children), the Files-tab polish, agent
-web-app-testing tools.
+Planned next: the owner's live Windows run verifying R66 on real hardware
+(the Windows find_elements + the 2400-element walk, the top-center mini
+window, the checkpoint flow on a real bot wall — the checklist in
+`docs/runbooks/COMPUTER-USE.md` + `EMBEDDED-BROWSER.md`), browser-wall
+self-bypass (future), installer code-signing (SmartScreen),
+ratings-driven prompt tuning, the deepseek-harness future candidates
+(compaction pressure-trigger, continuable sub-agent children), the
+Files-tab polish, agent web-app-testing tools.
+
+## [0.66.0] - 2026-09-04
+
+Round 66 — the live-fire patch, driven by the owner's 0.65.0 field report.
+**The agent can now USE the embedded browser like a user**: six new
+`browser_control` page actions — `click`, `type` (with `submit:true` →
+native form submission), `press_key` (Enter in a form submits it — the
+"typed a Google query but never submitted it" fix), `read_dom` (a
+structured page outline), `source` (html | css | scripts), and
+`wait_for_verification` — 15 actions total, all riding the existing eval
+bridge with no new bridge routes. **Bot walls are now owner-solvable**:
+navigate/read detect captcha/Cloudflare/age gates and warn (⚠);
+`wait_for_verification` opens a live countdown card in CHAT — "CAPTCHA
+verification needed", the countdown timer, **Mark as done** / **Stop
+waiting** — and the agent waits (default 15 s, max 60 s), re-probes, and
+reports honestly. **Agent viewport changes apply INSTANTLY** to the panel
+(a new SSE frame + a store seq that exits natural mode — previously a
+preset change sat unapplied until you nudged a number). **Image analysis
+has its own settings section** (Settings → Image Analysis): the vision
+model moved OUT of Computer Use into a global configuration (off /
+separate provider+model+its own key slot / main model) that now serves the
+computer-use screenshots, the browser screenshots, AND the new general
+**`analyze_image`** tool (describe any local file or URL — works without
+computer use; migration 0025 moves existing settings losslessly, 0026
+appends the tool to allowlists). **Debug mode is a post-turn analyst now**:
+the agent no longer self-reports — after a turn completes, a completely
+fresh, context-free model receives the whole transcript (every tool call's
+FULL result) and streams its report live under the answer; the report is
+persisted for reloads but NEVER fed back into the conversation. **Windows
+goes element-first in big apps**: the UIA walk probes only 17 interactive
+control types (one 4-probe pass, was up to 8 per node) and reaches 2400
+elements (was 800) — deep enough for Edge — plus a new `find_elements`
+tool that SEARCHES the tree by name so the agent stops screenshot-looping.
+**The floating monitor is now top-center 460×56** (less tall, centered —
+not top-right), and its live signal is real control activity only, with a
+6-second decay — a browser turn never shows "agent is using your computer"
+(browser screenshots no longer record into that ring). **The minimized
+settings sidebar shows the settings rail** (section icons + back), not the
+projects nav. 1807 root tests in 118 files (was 1686/110), agent-core
+980/980 in 58 files, lint/typecheck/docs:check clean; version 0.66.0.
 
 ## [0.65.0] - 2026-09-02
 
