@@ -6,6 +6,9 @@ import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vites
 import type { FastifyInstance, LightMyRequestResponse } from "fastify";
 import { openDatabase, type SqliteDatabase } from "../src/storage/db";
 import { VERSION, buildServer, startServer } from "../src/server";
+// ROUND-67 (R67-D): the live screenshot THUMBNAIL raster registry (the
+// /computer-use/frames/:frameId/raster route tests seed + reset it).
+import { registerRaster, resetRasterCacheForTest } from "../src/computer/raster-cache";
 
 const TOKEN = "test-token-3f9a";
 
@@ -345,5 +348,46 @@ describe("startServer", () => {
       log.mockRestore();
       await server?.close();
     }
+  });
+});
+
+// ── ROUND-67 (R67-D): GET /computer-use/frames/:frameId/raster ───────────────
+// The live chat THUMBNAIL fetch — binary image/png off the bearer-walled
+// computer-use scope, honest 404 for unknown/expired ids (rasters are
+// in-memory only), never persisted.
+describe("computer-use frame raster route (ROUND-67 R67-D)", () => {
+  beforeEach(() => {
+    resetRasterCacheForTest();
+  });
+
+  it("serves a registered raster as image/png with no-store", async () => {
+    // "iVBORw0KGgo=" = the PNG magic header prefix, base64-decoded below.
+    registerRaster("f-42", "iVBORw0KGgo=");
+    const response = await authInject({ method: "GET", url: "/api/v1/computer-use/frames/f-42/raster" });
+    expect(response.statusCode).toBe(200);
+    expect(response.headers["content-type"]).toBe("image/png");
+    expect(response.headers["cache-control"]).toBe("no-store");
+    expect(Buffer.from(response.rawPayload).toString("base64")).toBe("iVBORw0KGgo=");
+  });
+
+  it("404s (the honest envelope) for an unknown / expired / evicted frame id", async () => {
+    const response = await authInject({ method: "GET", url: "/api/v1/computer-use/frames/f-gone/raster" });
+    expect(response.statusCode).toBe(404);
+    expect(response.json().error.code).toBe("NOT_FOUND");
+    expect(response.json().error.message).toContain("expire");
+  });
+
+  it("rejects malformed frame ids with 400 VALIDATION (the route param gate)", async () => {
+    const response = await authInject({ method: "GET", url: "/api/v1/computer-use/frames/f%20bad/raster" });
+    expect(response.statusCode).toBe(400);
+    expect(response.json().error.code).toBe("VALIDATION");
+    expect(response.json().error.details.field).toBe("params.frameId");
+  });
+
+  it("keeps the bearer wall: 401 without a token (like the sibling computer-use routes)", async () => {
+    registerRaster("f-43", "iVBORw0KGgo=");
+    const unauthed = await app.inject({ method: "GET", url: "/api/v1/computer-use/frames/f-43/raster" });
+    expect(unauthed.statusCode).toBe(401);
+    expect(unauthed.json().error.code).toBe("UNAUTHORIZED");
   });
 });

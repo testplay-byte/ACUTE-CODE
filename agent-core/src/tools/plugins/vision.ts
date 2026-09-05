@@ -163,7 +163,7 @@ export const visionPlugin: PluginDefinition = {
       {
         name: "analyze_image",
         description:
-          "Describe ANY image — a local file (png/jpg/jpeg/webp/gif/bmp, ≤8MB, relative paths resolve against the project root) or an http(s) URL (≤8MB) — through the configured vision model. Use it whenever you need to SEE image content: screenshots the user mentions, figures/diagrams in the project, web images. Vision off or unconfigured returns an honest refusal pointing at Settings → Image Analysis.",
+          "Describe ANY image — a local file (png/jpg/jpeg/webp/gif/bmp, ≤8MB, relative paths resolve against the project root) or an http(s) URL (≤8MB) — through the configured vision model. Image attachments from chat are saved into the project at attachments/<name> — analyze them with the path EXACTLY as rendered in the user message ('saved in the project at <path>'), never a guessed one. Use it whenever you need to SEE image content: screenshots the user mentions, figures/diagrams in the project, web images. Vision off or unconfigured returns an honest refusal pointing at Settings → Image Analysis.",
         inputSchema: jsonSchema({
           type: "object",
           properties: {

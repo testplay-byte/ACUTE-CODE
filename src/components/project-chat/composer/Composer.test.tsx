@@ -54,6 +54,17 @@
  *   be shown"): catalog-only models are NOT listed, the live-catalog fetch
  *   is never issued, and an empty/error config renders the honest pointer
  *   row ("No models configured — add them in Settings → Models & Providers").
+ * ROUND-67 (R67-A) additions — the REAL attachment ingestion pipeline (the
+ *   owner's #1 complaint: "I uploaded an image directly in chat and the agent
+ *   said the image doesn't exist"):
+ *  - a binary DRIP keeps its bytes (dataBase64): the send path uploads them
+ *    (uploadAttachmentBytes) and the wire attachment carries the
+ *    project-relative path; a failed upload keeps the old path-less shape
+ *    + a visible per-file toast;
+ *  - a PASTED image stages as a chip (preventDefault'd); a text-only paste
+ *    is untouched (no preventDefault, native insertion);
+ *  - a BINARY OS-picker file is INGESTED by absolute path
+ *    (ingestAttachmentPath) — the sidecar copy's path rides the chip.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, cleanup, fireEvent, screen, waitFor, within } from "@testing-library/react";
@@ -68,10 +79,12 @@ import {
   fetchProviders,
   fetchSessionContext,
   fetchProviderModels,
+  ingestAttachmentPath,
   patchSessionPermissions,
   pickFilesViaBackend,
   readAttachmentFiles,
   streamSessionMessage,
+  uploadAttachmentBytes,
   type Project,
   type ProviderModelConfig,
   type SessionContextReport,
@@ -222,6 +235,10 @@ vi.mock("../../../lib/api", async () => {
     fetchProviders: vi.fn(async () => PROVIDERS.map((p) => ({ ...p }))),
     pickFilesViaBackend: vi.fn(async () => [] as string[]),
     readAttachmentFiles: vi.fn(async () => [] as never[]),
+    // ROUND-67 (R67-A): the ingestion pair — defaults are inert shapes; the
+    // R67-A tests override per-case (path/size/mode).
+    uploadAttachmentBytes: vi.fn(async () => ({ path: "attachments/staged.png", name: "staged.png", size: 0 })),
+    ingestAttachmentPath: vi.fn(async () => ({ path: "attachments/staged.png", name: "staged.png", size: 0 })),
     patchSessionPermissions: vi.fn(async () => PATCHED_DETAIL),
     fetchSessionContext: vi.fn(async () => CONTEXT_REPORT),
     streamSessionMessage: vi.fn(async () => undefined),
@@ -246,6 +263,12 @@ beforeEach(() => {
   vi.mocked(fetchProviders).mockReset().mockResolvedValue(PROVIDERS.map((p) => ({ ...p })));
   vi.mocked(pickFilesViaBackend).mockReset().mockResolvedValue([]);
   vi.mocked(readAttachmentFiles).mockReset().mockResolvedValue([]);
+  vi.mocked(uploadAttachmentBytes)
+    .mockReset()
+    .mockResolvedValue({ path: "attachments/staged.png", name: "staged.png", size: 0 });
+  vi.mocked(ingestAttachmentPath)
+    .mockReset()
+    .mockResolvedValue({ path: "attachments/staged.png", name: "staged.png", size: 0 });
   vi.mocked(patchSessionPermissions).mockReset().mockResolvedValue(PATCHED_DETAIL);
   vi.mocked(fetchSessionContext).mockReset().mockResolvedValue(CONTEXT_REPORT);
   vi.mocked(streamSessionMessage).mockReset().mockResolvedValue(undefined);
@@ -576,6 +599,77 @@ describe("Composer: Add Context (owner spec C)", () => {
     expect(screen.queryByText("gone.txt")).toBeNull();
   });
 
+  // ── ROUND-67 (R67-A): the OS-picker BINARY goes into the project ────────
+
+  it("ROUND-67 (R67-A): a BINARY OS-picker file is INGESTED — the sidecar copy's path rides the chip and the send body", async () => {
+    await renderPanelWithConversation();
+    expect(await screen.findByText("first question", {}, { timeout: 5000 })).toBeTruthy();
+
+    vi.mocked(pickFilesViaBackend).mockResolvedValue(["C:\\Users\\dev\\shot.png"]);
+    vi.mocked(readAttachmentFiles).mockResolvedValue([
+      { path: "C:\\Users\\dev\\shot.png", name: "shot.png", size: 4096, text: null, truncated: false },
+    ]);
+    vi.mocked(ingestAttachmentPath).mockResolvedValue({
+      path: "attachments/shot.png",
+      name: "shot.png",
+      size: 4096,
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "Add context" }));
+    fireEvent.click(await screen.findByRole("menuitem", { name: /Attach files…/ }));
+
+    // The picker's ABSOLUTE path is handed to the sidecar for the copy.
+    await waitFor(() =>
+      expect(ingestAttachmentPath).toHaveBeenCalledWith(
+        "prj_seed_acute",
+        "shot.png",
+        "C:\\Users\\dev\\shot.png",
+      ),
+    );
+    await waitFor(() => expect(screen.getByText("shot.png")).toBeTruthy());
+
+    fireEvent.change(textarea(), { target: { value: "read the screenshot" } });
+    fireEvent.click(screen.getByRole("button", { name: "Send message" }));
+    await waitFor(() => expect(streamSessionMessage).toHaveBeenCalled());
+    const opts = vi.mocked(streamSessionMessage).mock.calls[0][3];
+    // The PROJECT-RELATIVE path of the copy — not the OS path — rides the wire.
+    expect(opts?.attachments).toEqual([
+      { name: "shot.png", path: "attachments/shot.png", size: 4096 },
+    ]);
+    await sendSettled();
+  });
+
+  it("ROUND-67 (R67-A): a failed INGEST keeps the chip with the picker's absolute path + a per-file toast (never silent)", async () => {
+    await renderPanelWithConversation();
+    expect(await screen.findByText("first question", {}, { timeout: 5000 })).toBeTruthy();
+
+    vi.mocked(pickFilesViaBackend).mockResolvedValue(["C:\\Users\\dev\\shot.png"]);
+    vi.mocked(readAttachmentFiles).mockResolvedValue([
+      { path: "C:\\Users\\dev\\shot.png", name: "shot.png", size: 4096, text: null, truncated: false },
+    ]);
+    vi.mocked(ingestAttachmentPath).mockRejectedValue(new Error("sidecar answered HTTP 500"));
+
+    fireEvent.click(screen.getByRole("button", { name: "Add context" }));
+    fireEvent.click(await screen.findByRole("menuitem", { name: /Attach files…/ }));
+
+    await waitFor(() => expect(screen.getByText("shot.png")).toBeTruthy());
+    await waitFor(() =>
+      expect(useNotificationStreamStore.getState().lastNotification?.title).toBe(
+        "File could not be uploaded",
+      ),
+    );
+
+    // Old behavior: the chip keeps the picker's absolute path.
+    fireEvent.change(textarea(), { target: { value: "read it anyway" } });
+    fireEvent.click(screen.getByRole("button", { name: "Send message" }));
+    await waitFor(() => expect(streamSessionMessage).toHaveBeenCalled());
+    const opts = vi.mocked(streamSessionMessage).mock.calls[0][3];
+    expect(opts?.attachments).toEqual([
+      { name: "shot.png", path: "C:\\Users\\dev\\shot.png", size: 4096 },
+    ]);
+    await sendSettled();
+  });
+
   it("Add project files… → searchable multi-select → relative paths read WITH the project id", async () => {
     await renderPanelWithConversation();
     expect(await screen.findByText("first question", {}, { timeout: 5000 })).toBeTruthy();
@@ -688,6 +782,130 @@ describe("Composer: drag-and-drop (owner spec C)", () => {
 
     await waitFor(() => expect(screen.getByText("blob.bin")).toBeTruthy());
     expect(screen.getByText("no text")).toBeTruthy();
+  });
+
+  // ── ROUND-67 (R67-A): the dropped binary's BYTES reach the project ──────
+
+  it("ROUND-67 (R67-A): a binary drop keeps its bytes — the SEND path uploads them and the wire attachment carries the project-relative path", async () => {
+    await renderPanelWithConversation();
+    expect(await screen.findByText("first question", {}, { timeout: 5000 })).toBeTruthy();
+
+    vi.mocked(uploadAttachmentBytes).mockResolvedValue({
+      path: "attachments/blob.bin",
+      name: "blob.bin",
+      size: 4,
+    });
+    const binary = new Uint8Array([0x00, 0x01, 0x02, 0x00]);
+    fireEvent.drop(composerBox(), { dataTransfer: { files: [new File([binary], "blob.bin")] } });
+    await waitFor(() => expect(screen.getByText("blob.bin")).toBeTruthy());
+
+    fireEvent.change(textarea(), { target: { value: "analyze this image" } });
+    fireEvent.click(screen.getByRole("button", { name: "Send message" }));
+
+    // The upload happens BEFORE the message leaves, with the exact bytes.
+    await waitFor(() => expect(uploadAttachmentBytes).toHaveBeenCalledTimes(1));
+    expect(uploadAttachmentBytes).toHaveBeenCalledWith("prj_seed_acute", "blob.bin", "AAECAA==");
+    await waitFor(() => expect(streamSessionMessage).toHaveBeenCalled());
+    const opts = vi.mocked(streamSessionMessage).mock.calls[0][3];
+    expect(opts?.attachments).toEqual([
+      { name: "blob.bin", path: "attachments/blob.bin", size: 4 },
+    ]);
+    await sendSettled();
+  });
+
+  it("ROUND-67 (R67-A): a FAILED upload keeps the old behavior (path-less attachment rides the message) + a visible per-file toast", async () => {
+    await renderPanelWithConversation();
+    expect(await screen.findByText("first question", {}, { timeout: 5000 })).toBeTruthy();
+
+    vi.mocked(uploadAttachmentBytes).mockRejectedValue(new Error("sidecar answered HTTP 500"));
+    const binary = new Uint8Array([0x00, 0x01, 0x02, 0x00]);
+    fireEvent.drop(composerBox(), { dataTransfer: { files: [new File([binary], "blob.bin")] } });
+    await waitFor(() => expect(screen.getByText("blob.bin")).toBeTruthy());
+
+    fireEvent.change(textarea(), { target: { value: "analyze anyway" } });
+    fireEvent.click(screen.getByRole("button", { name: "Send message" }));
+
+    // The send is NEVER blocked — the attachment rides the message path-less
+    // (the model sees the honest "no readable text" placeholder).
+    await waitFor(() => expect(streamSessionMessage).toHaveBeenCalled());
+    const opts = vi.mocked(streamSessionMessage).mock.calls[0][3];
+    expect(opts?.attachments).toEqual([{ name: "blob.bin", size: 4 }]);
+    // …and the failure is visible, per-file, exactly like read failures.
+    await waitFor(() =>
+      expect(useNotificationStreamStore.getState().lastNotification?.title).toBe(
+        "File could not be uploaded",
+      ),
+    );
+    await sendSettled();
+  });
+});
+
+// ── ROUND-67 (R67-A): pasted images ─────────────────────────────────────────
+describe("Composer: pasted images (ROUND-67 R67-A)", () => {
+  it("pasting an image file stages a binary chip whose bytes upload on send (the path rides the wire)", async () => {
+    await renderPanelWithConversation();
+    expect(await screen.findByText("first question", {}, { timeout: 5000 })).toBeTruthy();
+
+    vi.mocked(uploadAttachmentBytes).mockResolvedValue({
+      path: "attachments/pasted.png",
+      name: "pasted.png",
+      size: 10,
+    });
+    // PNG magic + NUL bytes (the binary sniff is a NUL byte in the first 8KB
+    // — a real screenshot always carries them; the bare 8-byte magic doesn't).
+    const pngBytes = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0x01]);
+    fireEvent.paste(textarea(), {
+      clipboardData: { files: [new File([pngBytes], "pasted.png", { type: "image/png" })] },
+    });
+
+    // The chip appears (binary — "no text"), exactly like a drop.
+    await waitFor(() => expect(screen.getByText("pasted.png")).toBeTruthy());
+    expect(screen.getByText("no text")).toBeTruthy();
+
+    fireEvent.change(textarea(), { target: { value: "what is in this screenshot" } });
+    fireEvent.click(screen.getByRole("button", { name: "Send message" }));
+
+    await waitFor(() =>
+      expect(uploadAttachmentBytes).toHaveBeenCalledWith("prj_seed_acute", "pasted.png", "iVBORw0KGgoAAQ=="),
+    );
+    await waitFor(() => expect(streamSessionMessage).toHaveBeenCalled());
+    const opts = vi.mocked(streamSessionMessage).mock.calls[0][3];
+    expect(opts?.attachments).toEqual([
+      { name: "pasted.png", path: "attachments/pasted.png", size: 10 },
+    ]);
+    await sendSettled();
+  });
+
+  it("a file paste is preventDefault'd; a TEXT-ONLY paste is untouched (native insertion, no chip)", async () => {
+    await renderPanelWithConversation();
+    expect(await screen.findByText("first question", {}, { timeout: 5000 })).toBeTruthy();
+
+    // A document-level listener reads defaultPrevented AFTER React's root
+    // handler ran (bubbling reaches document last) — the honest way to pin
+    // "text paste keeps the default".
+    let defaultPrevented: boolean | null = null;
+    const onDocPaste = (e: Event): void => {
+      defaultPrevented = e.defaultPrevented;
+    };
+    document.addEventListener("paste", onDocPaste);
+    try {
+      // Image file paste → intercepted (no native insertion). PNG magic +
+      // NULs — a binary blob, like a real clipboard screenshot.
+      const pngBytes = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0x01]);
+      fireEvent.paste(textarea(), {
+        clipboardData: { files: [new File([pngBytes], "clip.png", { type: "image/png" })] },
+      });
+      await waitFor(() => expect(screen.getByText("clip.png")).toBeTruthy());
+      expect(defaultPrevented).toBe(true);
+
+      // Text-only paste → the browser default (no preventDefault, no chip).
+      fireEvent.paste(textarea(), { clipboardData: { files: [] } });
+      expect(defaultPrevented).toBe(false);
+      expect(screen.queryByText("no text")).toBeTruthy(); // only the earlier chip's badge
+      expect(screen.getAllByText("no text")).toHaveLength(1);
+    } finally {
+      document.removeEventListener("paste", onDocPaste);
+    }
   });
 });
 

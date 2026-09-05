@@ -32,7 +32,17 @@ export interface ComposerAttachment {
   /** True when only the first 128KB of a larger file is staged. */
   truncated: boolean;
   /** Where the chip came from (title tooltip on the chip). */
-  source: "picker" | "project" | "at" | "drop";
+  source: "picker" | "project" | "at" | "drop" | "paste";
+  /**
+   * ROUND-67 (R67-A): the FULL bytes as base64 for a dropped/pasted BINARY
+   * file ≤8MB — the send path uploads them (uploadAttachmentBytes →
+   * POST /attachments/upload) and replaces this with the returned
+   * project-relative `path`, so the model's history can point
+   * analyze_image at a REAL file (the owner's #1 v0.66.0 complaint: the
+   * bytes used to be discarded right here). null/undefined = nothing to
+   * upload (text chip, oversized binary, or already persisted).
+   */
+  dataBase64?: string | null;
 }
 
 /** The per-session model override (persisted in localStorage per session). */
@@ -373,20 +383,79 @@ export function useDismiss(
   return ref;
 }
 
-// ── Dropped-file client-side reads (FileReader — no usable path on File) ────
+// ── Dropped/pasted-file client-side reads (FileReader — no usable path on File) ────
+
+/**
+ * ROUND-67 (R67-A): the byte ceiling for a persistable binary attachment —
+ * the same 8MB POST /attachments/upload and analyze_image enforce. Larger
+ * binary drops keep the R50 behavior (text: null, no bytes to persist).
+ */
+export const MAX_BINARY_ATTACHMENT_BYTES = 8 * 1024 * 1024;
+
+/**
+ * ROUND-67 (R67-A): does this path look ABSOLUTE (a POSIX root or a Windows
+ * drive)? Mirrors the server-side check in POST /attachments/read — the
+ * composer uses it to decide whether a binary read result is an OS-picker
+ * file the sidecar should COPY into the project (ingestAttachmentPath).
+ * Project-relative reads ("@" / project picker) never match and stay as-is.
+ */
+export function isAbsoluteLikePath(path: string): boolean {
+  return path.startsWith("/") || /^[a-zA-Z]:[\\/]/.test(path);
+}
+
+/**
+ * Base64 of a full ArrayBuffer — CHUNKED (String.fromCharCode chokes on a
+ * spread larger than ~100k args; an 8MB image needs 256 chunks of 32k).
+ */
+function arrayBufferToBase64(buffer: ArrayBuffer): string {
+  const bytes = new Uint8Array(buffer);
+  let binary = "";
+  const CHUNK = 0x8000;
+  for (let i = 0; i < bytes.length; i += CHUNK) {
+    binary += String.fromCharCode(...bytes.subarray(i, i + CHUNK));
+  }
+  return btoa(binary);
+}
+
+/**
+ * ROUND-67 (R67-A): the full bytes of a File as base64 — the wire format
+ * POST /attachments/upload takes for dropped/pasted attachments. Rejects on
+ * a read failure (callers decide whether that is fatal).
+ */
+export function fileToBase64(file: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    try {
+      const reader = new FileReader();
+      reader.onerror = () => reject(reader.error ?? new Error(`could not read '${file.name}'`));
+      reader.onload = () => {
+        if (reader.result instanceof ArrayBuffer) resolve(arrayBufferToBase64(reader.result));
+        else reject(new Error(`could not read '${file.name}'`));
+      };
+      reader.readAsArrayBuffer(file);
+    } catch (error) {
+      reject(error instanceof Error ? error : new Error(String(error)));
+    }
+  });
+}
 
 /**
  * Read a dropped File client-side: NUL-sniff the first 8KB (binary → chip
  * with "no readable text"), decode up to 128KB of UTF-8 text (the same cap
  * the backend enforces on server reads). Never rejects — a read failure
  * becomes a null-text chip.
+ *
+ * ROUND-67 (R67-A): a binary file ≤8MB now ALSO keeps its bytes — the full
+ * ArrayBuffer lands on the chip as `dataBase64`, and the composer's send
+ * path uploads them into the project (uploadAttachmentBytes) so the model
+ * gets a REAL path to analyze instead of the old "no readable text" dead
+ * end (the owner's #1 complaint). Oversized binaries keep the R50 behavior.
  */
 export function readDroppedFile(
   file: File,
   source: ComposerAttachment["source"] = "drop",
 ): Promise<ComposerAttachment> {
   return new Promise((resolve) => {
-    const fallback = (text: string | null): void =>
+    const done = (text: string | null, dataBase64: string | null = null): void =>
       resolve({
         id: `${file.name}:${file.size}:${file.lastModified}`,
         name: file.name,
@@ -394,33 +463,50 @@ export function readDroppedFile(
         text,
         truncated: file.size > ATTACHMENT_TEXT_CAP,
         source,
+        ...(dataBase64 !== null ? { dataBase64 } : {}),
       });
     try {
       const reader = new FileReader();
-      reader.onerror = () => fallback(null);
+      reader.onerror = () => done(null);
       reader.onload = () => {
         const buf = reader.result;
         if (!(buf instanceof ArrayBuffer)) {
-          fallback(null);
+          done(null);
           return;
         }
         const sniff = new Uint8Array(buf.slice(0, 8192));
         for (let i = 0; i < sniff.length; i++) {
           if (sniff[i] === 0) {
-            fallback(null); // binary — no readable text
+            // Binary — no readable text. ≤8MB: keep the bytes for the
+            // send-time upload; bigger: the old placeholder-only chip.
+            done(
+              null,
+              file.size <= MAX_BINARY_ATTACHMENT_BYTES ? arrayBufferToBase64(buf) : null,
+            );
             return;
           }
         }
         const bytes = new Uint8Array(buf.slice(0, ATTACHMENT_TEXT_CAP));
         try {
-          fallback(new TextDecoder().decode(bytes));
+          done(new TextDecoder().decode(bytes));
         } catch {
-          fallback(null);
+          done(null);
         }
       };
       reader.readAsArrayBuffer(file);
     } catch {
-      fallback(null);
+      done(null);
     }
   });
+}
+
+/**
+ * ROUND-67 (R67-A): stage a PASTED image (e.clipboardData.files) — clipboard
+ * files are binary blobs without paths, so this is the drop-style read with
+ * the "paste" source: the chip carries the base64 bytes the send path
+ * uploads. (A weird text-bearing clipboard file still gets its text head —
+ * the same handling drops get.)
+ */
+export function readClipboardImageFile(file: File): Promise<ComposerAttachment> {
+  return readDroppedFile(file, "paste");
 }

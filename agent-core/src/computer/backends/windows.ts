@@ -28,6 +28,31 @@
  * PowerShell is never executed in this sandbox — the scripts are pinned by
  * command-construction tests (tests/computer-windows-backend.test.ts).
  *
+ * ROUND-67 (R67-C — the owner's v0.66.0 live Windows field report, three
+ * backend robustness failures, all verified by construction, none by live
+ * run):
+ *   · "list_apps returned EMPTY twice — the PowerShell session died before
+ *     emitting JSON" while run_command(tasklist) worked: the capsule rode
+ *     STDIN under `-Command -` (PS 5.1 reports unreliable, often 0, exit
+ *     codes when the piped script aborts; the runner's EPIPE-swallowed
+ *     stdin write meant a child that exited early ran an EMPTY script →
+ *     exit 0, no stdout). Capsules now ride ARGV via -EncodedCommand
+ *     (base64 of UTF-16LE) — the script cannot be lost, and a failed
+ *     Add-Type no longer aborts before the first Write-Output: the ONE U32
+ *     compile is guarded by $script:U32_OK, list_apps degrades to the
+ *     Get-Process MainWindowTitle fallback (honest
+ *     source:"get-process-fallback" entries), and every script that NEEDS
+ *     U32 refuses with its existing error shape.
+ *   · get_app_state(pid of msedgewebview2) → "no running application
+ *     matches": a LIVE WebView2 helper owns no accessible top-level window;
+ *     the honest helper-process refusal now lands in dispatch.ts (the
+ *     resolver no longer claims the app is absent).
+ *   · key "tab" literally typed t-a-b (chords like ctrl+a were typed as
+ *     text): windowsSendKeysScript had no key-name table. The fix:
+ *     composeSendKeysChord — the key-name → SendKeys table + modifier
+ *     prefixes, exported and pinned by construction; rawKey composes ONE
+ *     SendKeys chord instead of typing tokens as literal text.
+ *
  * ROUND-66-2-d (R66-2-d): the owner's live Windows test hit a Chromium-sized
  * tree (Edge) — every node paid 4+ cross-process COM pattern probes
  * (Invoke/Toggle/ExpandCollapse/Value, twice more at detail:full), the
@@ -48,11 +73,12 @@
  * NO_SUCH_ELEMENT — the index contract this file is built on).
  *
  * Every native call is a PowerShell capsule: `powershell.exe -NoProfile
- * -NonInteractive -ExecutionPolicy Bypass -Command -` with the script on
- * STDIN, emitting JSON on stdout (ConvertTo-Json -Compress). The backend
- * code runs on the owner's Windows machines; on Linux/macOS hosts the
- * powershell probe fails and every method fails closed with
- * `unsupported_on_backend` — never half-works.
+ * -NonInteractive -ExecutionPolicy Bypass -EncodedCommand <base64>` — the
+ * script encoded as the base64 of its UTF-16LE text (PowerShell's
+ * -EncodedCommand contract) and carried in ARGV, emitting JSON on stdout
+ * (ConvertTo-Json -Compress). The backend code runs on the owner's Windows
+ * machines; on Linux/macOS hosts the powershell probe fails and every method
+ * fails closed with `unsupported_on_backend` — never half-works.
  *
  * Windows specifics encoded (doc 04 §3):
  *   · list_apps: EnumWindows (visible, titled, non-toolwindow top-level
@@ -78,7 +104,6 @@
 import type {
   AppInfo,
   DisplayInfo,
-  PermissionReport,
   Snapshot,
   WindowInfo,
 } from "../types.js";
@@ -91,6 +116,7 @@ import type {
   ListAppsResult,
   ListDisplaysResult,
   ListWindowsResult,
+  ProbedPermissionReport,
   Raster,
   WindowScope,
 } from "./interface.js";
@@ -102,13 +128,26 @@ export const WINDOWS_PS_PROGRAM = "powershell.exe";
 /**
  * The shared Preamble every script rides: DPI awareness + the single U32
  * Add-Type (one csc compile — R64-a folded the EnumWindows helpers into the
- * SAME TypeDefinition so every capsule still compiles exactly once) + the
- * shape-aware OutJson. The C# is CodeDom/C#-5-safe for PowerShell 5.1
- * (no interpolation, no ?. — Add-Type on powershell.exe compiles C# 5).
+ * SAME TypeDefinition so every capsule still compiles exactly once; R67-C
+ * folded cursorPosition's GetCursorPos/PT into it too — still exactly ONE
+ * compile per capsule) + the shape-aware OutJson. The C# is
+ * CodeDom/C#-5-safe for PowerShell 5.1 (no interpolation, no ?. — Add-Type
+ * on powershell.exe compiles C# 5).
+ *
+ * R67-C: the Add-Type is GUARDED — under $ErrorActionPreference='Stop' a
+ * failed compile used to abort the WHOLE script before any output (the
+ * owner's "the PowerShell session died before emitting JSON"). The flag
+ * $script:U32_OK records the outcome, SetProcessDPIAware only runs when the
+ * helper exists, and each script degrades honestly: list_apps falls back to
+ * the Get-Process MainWindowTitle walk; the scripts that NEED U32 (raw
+ * input, activation, window enumeration, frontmost checks) refuse with
+ * their existing error shapes instead of aborting silently.
  */
 const PS_PREAMBLE = `
 $ErrorActionPreference = 'Stop'
 [void][System.Reflection.Assembly]::LoadWithPartialName('System.Windows.Forms')
+$script:U32_OK = $false
+try {
 Add-Type -TypeDefinition 'using System;using System.Text;using System.Collections.Generic;using System.Runtime.InteropServices;
 public class U32{
 [DllImport("user32.dll")]public static extern bool SetProcessDPIAware();
@@ -121,6 +160,7 @@ public class U32{
 [DllImport("user32.dll")]public static extern bool BringWindowToTop(IntPtr h);
 [DllImport("user32.dll")]public static extern bool GetWindowRect(IntPtr h,out RECT r);
 [DllImport("user32.dll")]public static extern IntPtr WindowFromPoint(int x,int y);
+[DllImport("user32.dll")]public static extern bool GetCursorPos(out PT p);
 public delegate bool EnumProc(IntPtr h,IntPtr lp);
 [DllImport("user32.dll")]public static extern bool EnumWindows(EnumProc cb,IntPtr lp);
 [DllImport("user32.dll")]public static extern bool IsWindowVisible(IntPtr h);
@@ -129,6 +169,7 @@ public delegate bool EnumProc(IntPtr h,IntPtr lp);
 [DllImport("user32.dll",CharSet=CharSet.Unicode)]public static extern int GetWindowText(IntPtr h,StringBuilder sb,int max);
 [DllImport("user32.dll",CharSet=CharSet.Unicode)]public static extern int GetClassName(IntPtr h,StringBuilder sb,int max);
 public struct RECT{public int Left;public int Top;public int Right;public int Bottom;}
+public struct PT{public int X;public int Y;}
 public struct WINFO{public long Hwnd;public uint Pid;public string Title;public int L;public int T;public int R;public int B;}
 public static List<WINFO> ListTopWindows(){
   List<WINFO> list=new List<WINFO>();
@@ -153,7 +194,11 @@ public static List<WINFO> ListTopWindows(){
   return list;
 }
 }'
-[void][U32]::SetProcessDPIAware()
+  $script:U32_OK = $true
+} catch {
+  $script:U32_OK = $false
+}
+if ($script:U32_OK) { [void][U32]::SetProcessDPIAware() }
 function OutJson($o){
   [Console]::OutputEncoding=[System.Text.Encoding]::UTF8
   if ($null -eq $o) { Write-Output 'null'; return }
@@ -177,12 +222,56 @@ const MOUSEEVENTF_MIDDLEDOWN = 0x0020;
 const MOUSEEVENTF_MIDDLEUP = 0x0040;
 const WHEEL_DELTA = 120;
 
+/**
+ * ROUND-67 (R67-C): the capsule now rides ARGV via -EncodedCommand (the
+ * base64 of the UTF-16LE script text — PowerShell's -EncodedCommand
+ * contract) instead of `-Command -` + STDIN. Two live-Windows failure modes
+ * die here:
+ *   · Windows PowerShell 5.1 under `-Command -` reports unreliable (often 0)
+ *     exit codes when a piped script aborts — an aborting script could look
+ *     SUCCESSFUL while emitting nothing.
+ *   · the runner writes stdin right after spawn with EPIPE swallowed: a
+ *     child that exits before reading ran an EMPTY script → exit 0, no
+ *     stdout → "died before emitting JSON". The script cannot be lost when
+ *     it rides ARGV.
+ * `stdin` stays undefined (the runner then just closes the pipe). Sizing
+ * honesty: the biggest script (preamble + buildSnapshot, ~8K chars) encodes
+ * to ~22K base64 chars — well under the 32,767-char CreateProcess
+ * command-line ceiling, and the typing path's own timeout math keeps
+ * practical payloads far below it.
+ */
 const psCapsule = (script: string, timeoutMs = 20000): CommandCapsule => ({
   program: WINDOWS_PS_PROGRAM,
-  args: ["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command", "-"],
-  stdin: `${PS_PREAMBLE}\n${script}`,
+  args: [
+    "-NoProfile",
+    "-NonInteractive",
+    "-ExecutionPolicy",
+    "Bypass",
+    "-EncodedCommand",
+    Buffer.from(`${PS_PREAMBLE}\n${script}`, "utf16le").toString("base64"),
+  ],
   timeoutMs,
 });
+
+/** R67-C: a bare probe capsule (NO preamble) — the tiny Add-Type compile
+ * probe rides this; probe scripts must not drag the U32 preamble in. */
+const rawPsCapsule = (script: string, timeoutMs = 20000): CommandCapsule => ({
+  program: WINDOWS_PS_PROGRAM,
+  args: [
+    "-NoProfile",
+    "-NonInteractive",
+    "-ExecutionPolicy",
+    "Bypass",
+    "-EncodedCommand",
+    Buffer.from(script, "utf16le").toString("base64"),
+  ],
+  timeoutMs,
+});
+
+/** The guard every U32-dependent script begins with: refuse honestly when
+ * the Add-Type compile failed (the script still runs — the R67-C point — it
+ * just never touches [U32]). */
+const U32_GUARD = "if (-not $script:U32_OK) { Write-Output 'ERR:U32-unavailable (the Add-Type helper did not compile on this host - this action is unavailable)'; exit 0 }";
 
 function okResult(stdout: string): { ok: boolean; error?: string; stale?: boolean } {
   const text = stdout.trim();
@@ -480,8 +569,14 @@ OutJson @{ kind = $ct; name = $name; actionable = $actionable }
   },
 
   async focusedElementName(run, pid) {
+    // R67-C: the Tab-walk readback — the dispatcher's key tool calls this
+    // after a successful key press so the agent SEES the focused element
+    // (the owner's element-discovery technique). Guarded on U32 (the
+    // foreground check needs it); a non-foreground target honestly yields
+    // '' → null (the field is then omitted upstream, never fabricated).
     const script = `
 Add-Type -AssemblyName UIAutomationClient
+if (-not $script:U32_OK) { Write-Output ''; exit 0 }
 $fg = [U32]::GetForegroundWindow()
 $fgpid = 0
 [void][U32]::GetWindowThreadProcessId($fg, [ref]$fgpid)
@@ -530,6 +625,7 @@ Write-Output $n
           : [MOUSEEVENTF_MIDDLEDOWN, MOUSEEVENTF_MIDDLEUP];
     const modKeys = modifiers.map((m) => (m === "super" ? "WIN" : m.toUpperCase())).join("");
     const script = `
+${U32_GUARD}
 ${modKeys ? `[System.Windows.Forms.SendKeys]::SendWait('{${modKeys}DOWN}')` : ""}
 [void][U32]::SetCursorPos(${pt.x}, ${pt.y})
 Start-Sleep -Milliseconds 30
@@ -538,9 +634,10 @@ ${modKeys ? `[System.Windows.Forms.SendKeys]::SendWait('{${modKeys}UP}')` : ""}
 Write-Output 'OK'
 `;
     const result = await run(psCapsule(script, 12000));
-    return result.code === 0
-      ? { ok: true }
-      : { ok: false, error: `click failed: ${result.stderr.trim().slice(0, 200)}` };
+    if (result.code !== 0) {
+      return { ok: false, error: `click failed: ${result.stderr.trim().slice(0, 200)}` };
+    }
+    return okResult(result.stdout);
   },
 
   async rawScroll(run, pt, direction, amount) {
@@ -549,6 +646,7 @@ Write-Output 'OK'
     const ticks = Math.max(1, Math.min(33, Math.round(amount / 3) || 1));
     const lines = ticks * WHEEL_DELTA;
     const script = `
+${U32_GUARD}
 [void][U32]::SetCursorPos(${pt.x}, ${pt.y})
 Start-Sleep -Milliseconds 30
 ${direction === "down" || direction === "up"
@@ -557,14 +655,16 @@ ${direction === "down" || direction === "up"
 Write-Output 'OK'
 `;
     const result = await run(psCapsule(script, 12000));
-    return result.code === 0
-      ? { ok: true }
-      : { ok: false, error: `scroll failed: ${result.stderr.trim().slice(0, 200)}` };
+    if (result.code !== 0) {
+      return { ok: false, error: `scroll failed: ${result.stderr.trim().slice(0, 200)}` };
+    }
+    return okResult(result.stdout);
   },
 
   async rawDrag(run, from, to, modifiers) {
     const modKeys = modifiers.map((m) => (m === "super" ? "WIN" : m.toUpperCase())).join("");
     const script = `
+${U32_GUARD}
 ${modKeys ? `[System.Windows.Forms.SendKeys]::SendWait('{${modKeys}DOWN}')` : ""}
 [void][U32]::SetCursorPos(${from.x}, ${from.y})
 Start-Sleep -Milliseconds 60
@@ -583,45 +683,58 @@ ${modKeys ? `[System.Windows.Forms.SendKeys]::SendWait('{${modKeys}UP}')` : ""}
 Write-Output 'OK'
 `;
     const result = await run(psCapsule(script, 20000));
-    return result.code === 0
-      ? { ok: true }
-      : { ok: false, error: `drag failed: ${result.stderr.trim().slice(0, 200)}` };
+    if (result.code !== 0) {
+      return { ok: false, error: `drag failed: ${result.stderr.trim().slice(0, 200)}` };
+    }
+    return okResult(result.stdout);
   },
 
   async rawButton(run, pt, down) {
     const script = `
+${U32_GUARD}
 [void][U32]::SetCursorPos(${pt.x}, ${pt.y})
 Start-Sleep -Milliseconds 30
 [U32]::mouse_event(${down ? MOUSEEVENTF_LEFTDOWN : MOUSEEVENTF_LEFTUP},0,0,0,[UIntPtr]::Zero)
 Write-Output 'OK'
 `;
     const result = await run(psCapsule(script, 8000));
-    return result.code === 0
-      ? { ok: true }
-      : { ok: false, error: `button failed: ${result.stderr.trim().slice(0, 200)}` };
+    if (result.code !== 0) {
+      return { ok: false, error: `button failed: ${result.stderr.trim().slice(0, 200)}` };
+    }
+    return okResult(result.stdout);
   },
 
   async rawKey(run, keys, scope) {
+    // R67-C (THE key fix): the tokens compose ONE SendKeys chord via
+    // composeSendKeysChord — "tab" is {TAB}, "ctrl+a" is ^a, never literal
+    // text (the old path typed t-a-b). An uncomposable chord (the Windows/
+    // Meta key — SendKeys has no such modifier — or an unknown name) refuses
+    // honestly WITHOUT spawning a capsule: nothing is typed.
+    const chord = composeSendKeysChord(keys);
+    if (!chord.ok) return { ok: false, error: chord.error };
     // Scope verification first (Win raw keys land in the frontmost window).
     const script = `
+${U32_GUARD}
 $fg = [U32]::GetForegroundWindow()
 $fgpid = 0
 [void][U32]::GetWindowThreadProcessId($fg, [ref]$fgpid)
 if ($fgpid -ne ${scope.pid}) { Write-Output "FRONTMOST_MISMATCH:$fgpid"; exit 0 }
-${windowsSendKeysScript(keys)}
+[System.Windows.Forms.SendKeys]::SendWait(${psStringLiteral(chord.sendKeys)})
 Write-Output 'OK'
 `;
     const result = await run(psCapsule(script, 10000));
     if (result.stdout.trim().startsWith("FRONTMOST_MISMATCH:")) {
       return { ok: false, error: result.stdout.trim() };
     }
-    return result.code === 0
-      ? { ok: true }
-      : { ok: false, error: `key failed: ${result.stderr.trim().slice(0, 200)}` };
+    if (result.code !== 0) {
+      return { ok: false, error: `key failed: ${result.stderr.trim().slice(0, 200)}` };
+    }
+    return okResult(result.stdout);
   },
 
   async typeText(run, text, scope) {
     const script = `
+${U32_GUARD}
 $fg = [U32]::GetForegroundWindow()
 $fgpid = 0
 [void][U32]::GetWindowThreadProcessId($fg, [ref]$fgpid)
@@ -633,9 +746,10 @@ Write-Output 'OK'
     if (result.stdout.trim().startsWith("FRONTMOST_MISMATCH:")) {
       return { ok: false, error: result.stdout.trim() };
     }
-    return result.code === 0
-      ? { ok: true }
-      : { ok: false, error: `type failed: ${result.stderr.trim().slice(0, 200)}` };
+    if (result.code !== 0) {
+      return { ok: false, error: `type failed: ${result.stderr.trim().slice(0, 200)}` };
+    }
+    return okResult(result.stdout);
   },
 
   async launch(run, spec) {
@@ -661,8 +775,11 @@ try {
   },
 
   async activate(run, pid, windowId) {
-    // The doc 04 §3.3 sequence with postcondition verification.
+    // The doc 04 §3.3 sequence with postcondition verification. R67-C: the
+    // AttachThreadInput sequence NEEDS U32 — guarded, the failure rides the
+    // same ERR channel (activate then reports honestly {ok:false}).
     const script = `
+${U32_GUARD}
 $wins = Get-Process -Id ${pid} -ErrorAction SilentlyContinue
 if ($null -eq $wins) { Write-Output 'ERR:not-running'; exit 0 }
 $h = [IntPtr]${windowId ?? 0}
@@ -690,7 +807,11 @@ if ([U32]::GetForegroundWindow() -eq $h) { Write-Output 'ACTIVE' } else { Write-
   },
 
   async frontmostPid(run) {
+    // R67-C: guarded — with U32 unavailable the frontmost pid is honestly
+    // 0 → null ("unknown"), the dispatcher's foreground gate then skips on
+    // a null front (its existing semantics), never a fabricated pid.
     const script = `
+if (-not $script:U32_OK) { Write-Output '0'; exit 0 }
 $fg = [U32]::GetForegroundWindow()
 if ($fg -eq [IntPtr]::Zero) { Write-Output '0'; exit 0 }
 $fgpid = 0
@@ -767,18 +888,20 @@ Write-Output ("GEO:" + ${region.x} + "," + ${region.y})
   },
 
   async cursorPosition(run) {
+    // R67-C: GetCursorPos/PT was folded into the U32 TypeDefinition (it used
+    // to be a SECOND Add-Type compile in this capsule) — still exactly one
+    // compile, and the guard gives an honest null when it failed.
     const script = `
-Add-Type -TypeDefinition 'using System;using System.Runtime.InteropServices;public struct PT{public int X;public int Y;}
-public class CUR{[DllImport("user32.dll")]public static extern bool GetCursorPos(out PT p);}'
-$p = New-Object PT
-[void][CUR]::GetCursorPos([ref]$p)
+if (-not $script:U32_OK) { Write-Output ''; exit 0 }
+$p = New-Object U32+PT
+[void][U32]::GetCursorPos([ref]$p)
 Write-Output ($p.X.ToString() + "," + $p.Y.ToString())
 `;
     const result = await run(psCapsule(script, 8000));
     if (result.code !== 0) return null;
     const nums = result.stdout.trim().split(",").map((n) => Number.parseInt(n, 10));
     if (nums.length !== 2 || nums.some((n) => !Number.isFinite(n))) return null;
-    return { x: nums[0], y: nums[1] };
+    return { x: nums[0] ?? 0, y: nums[1] ?? 0 };
   },
 
   async readClipboard(run) {
@@ -794,10 +917,17 @@ Write-Output ($p.X.ToString() + "," + $p.Y.ToString())
     return out === "OK" ? { ok: true } : { ok: false, error: out.slice(0, 200) };
   },
 
-  async probePermissions(run): Promise<PermissionReport> {
+  async probePermissions(run): Promise<ProbedPermissionReport> {
     // Windows has no TCC-style gates; the practical readiness = PowerShell
     // reachable + UIA assembly loadable + a capture sanity check (no image
     // returned — doc 08 §1.2: probe only).
+    // R67-C: a THIRD probe — Add-Type -TypeDefinition, the csc compile
+    // every enumeration capsule rides. The owner's live failure ("the
+    // PowerShell session died before emitting JSON") was a dead compile
+    // the probe could not see; addTypeOk now reports it honestly (the
+    // PS_OK probe above would also fail for a fully dead PowerShell, but
+    // a compile-only failure leaves PS_OK green). The probe rides a BARE
+    // capsule (no preamble — it must not drag the U32 compile in).
     const probe = await run(psCapsule(`Write-Output 'PS_OK'`, 8000));
     if (probe.code !== 0 || !probe.stdout.includes("PS_OK")) {
       return {
@@ -810,13 +940,26 @@ Write-Output ($p.X.ToString() + "," + $p.Y.ToString())
     const uia = await run(
       psCapsule(`try { Add-Type -AssemblyName UIAutomationClient; Write-Output 'UIA_OK' } catch { Write-Output 'UIA_FAIL' }`, 10000),
     );
+    const addType = await run(
+      rawPsCapsule(
+        `try { Add-Type -TypeDefinition 'public class AcuteProbe {}'; Write-Output 'ADDTYPE_OK' } catch { Write-Output 'ADDTYPE_FAIL' }`,
+        15000,
+      ),
+    );
     const notes: string[] = [];
     const accessibility = uia.stdout.includes("UIA_OK") ? "granted" : "unavailable";
     if (accessibility !== "granted") notes.push("UIAutomationClient assembly failed to load");
+    const addTypeOk = addType.code === 0 && addType.stdout.includes("ADDTYPE_OK");
+    if (!addTypeOk) {
+      notes.push(
+        "Add-Type -TypeDefinition (the csc compile behind list_apps/list_windows) failed — enumeration falls back to Get-Process or refuses honestly; the U32 walk is unavailable",
+      );
+    }
     return {
       accessibility,
       screenCapture: "granted", // GDI capture needs no grant; UIPI caveats ride notes
       backendKind: "windows",
+      addTypeOk,
       notes: notes.length > 0 ? notes : ["UIPI: elevated targets are refused before dispatch (fail-closed, not silent)"],
     };
   },
@@ -836,11 +979,19 @@ export const WINDOWS_PS_PREAMBLE = PS_PREAMBLE;
  * diagnostics (processCount / foregroundPid / enumWindowsCount) ride the
  * wrapper. NOTE: `$pid` is a read-only automatic variable in PowerShell —
  * every loop variable below deliberately avoids that name.
+ *
+ * R67-C: the walk (and the foreground read) is GATED on $script:U32_OK —
+ * when the Add-Type compile failed the fallback branch is REACHABLE (it
+ * used to be dead: the preamble's unguarded compile aborted the script
+ * before any output — the owner's empty list_apps) and its entries carry
+ * an honest `source: "get-process-fallback"` field (the strict JS parser
+ * tolerates and strips unknown fields).
  */
 export function windowsListAppsScript(): string {
   return `
-$fg = [U32]::GetForegroundWindow()
+$fg = [IntPtr]::Zero
 $fgpid = 0
+if ($script:U32_OK) { try { $fg = [U32]::GetForegroundWindow() } catch { $fg = [IntPtr]::Zero } }
 if ($fg -ne [IntPtr]::Zero) { [void][U32]::GetWindowThreadProcessId($fg, [ref]$fgpid) }
 $diag = @{ processCount = 0; foregroundPid = $fgpid; enumWindowsCount = -1 }
 $procs = @()
@@ -850,7 +1001,7 @@ $procNames = @{}
 foreach ($p in $procs) { try { $procNames[[int]$p.Id] = [string]$p.ProcessName } catch {} }
 $apps = @()
 $enum = $null
-try { $enum = [U32]::ListTopWindows() } catch { $enum = $null }
+if ($script:U32_OK) { try { $enum = [U32]::ListTopWindows() } catch { $enum = $null } }
 if ($null -ne $enum) {
   $diag.enumWindowsCount = $enum.Count
   $best = @{}
@@ -874,7 +1025,7 @@ if ($null -ne $enum) {
   foreach ($p in $procs) {
     try {
       if ($p.MainWindowHandle -ne 0 -and $p.MainWindowTitle) {
-        $apps += [pscustomobject]@{ name = [string]$p.MainWindowTitle; pid = [int]$p.Id; processName = [string]$p.ProcessName; active = ([int]$p.Id -eq $fgpid) }
+        $apps += [pscustomobject]@{ name = [string]$p.MainWindowTitle; pid = [int]$p.Id; processName = [string]$p.ProcessName; active = ([int]$p.Id -eq $fgpid); source = 'get-process-fallback' }
       }
     } catch {}
   }
@@ -889,10 +1040,22 @@ OutJson @{ apps = $apps; diagnostics = $diag }
  * with windowId (HWND), title, bounds, focused (GetForegroundWindow), and
  * main = largest-area window; the MainWindowHandle fallback only when the
  * walk yields nothing for a LIVE process.
+ *
+ * R67-C: U32 guard first — when the Add-Type compile failed there is no
+ * honest window geometry to report (the fallback's GetWindowRect needs U32
+ * and invented bounds are FORBIDDEN, R64-a's fake-1920×1080 lesson), so
+ * the script emits its existing empty-with-diagnostics shape and names the
+ * cause.
  */
 export function windowsListWindowsScript(pid: number): string {
   return `
 $targetPid = ${pid}
+if (-not $script:U32_OK) {
+  $liveProc = $false
+  try { $null = Get-Process -Id $targetPid -ErrorAction Stop; $liveProc = $true } catch {}
+  OutJson @{ windows = @(); diagnostics = @{ processRunning = $liveProc; note = 'the U32 helper (Add-Type -TypeDefinition) did not compile on this host - the EnumWindows window enumeration is unavailable; run request_access and read addTypeOk' } }
+  exit 0
+}
 $fg = [U32]::GetForegroundWindow()
 $fgl = 0
 if ($fg -ne [IntPtr]::Zero) { $fgl = [int64]$fg }
@@ -989,6 +1152,125 @@ export function windowsSendKeysScript(parts: string[]): string {
       return `[System.Windows.Forms.SendKeys]::SendWait(${psStringLiteral(escaped)})`;
     })
     .join("\n");
+}
+
+/* ── R67-C: the key-name → SendKeys table (THE key fix) ────────────────────
+ * The owner's live failure: key "tab" typed the letters t-a-b, because
+ * windowsSendKeysScript only special-cased the literal "{ENTER}" and sent
+ * every other token as TEXT. composeSendKeysChord maps the dispatcher's
+ * lowercased '+'-split tokens to ONE SendKeys chord, matching the LINUX
+ * backend's xdotool semantics for the same input ("ctrl+a" is a chord on
+ * both). Dispatch's splitKeyChord preserves a literal plus ('++' → the
+ * plus key) so single printable characters stay expressible. */
+
+/** Key names → SendKeys literals (names are the dispatcher's lowercased
+ * tokens; the aliases mirror doc 02's key tool vocabulary). */
+const SEND_KEYS_KEY_NAMES: Record<string, string> = {
+  enter: "{ENTER}",
+  return: "{ENTER}",
+  tab: "{TAB}",
+  esc: "{ESC}",
+  escape: "{ESC}",
+  backspace: "{BACKSPACE}",
+  delete: "{DELETE}",
+  del: "{DELETE}",
+  space: " ",
+  up: "{UP}",
+  arrowup: "{UP}",
+  down: "{DOWN}",
+  arrowdown: "{DOWN}",
+  left: "{LEFT}",
+  arrowleft: "{LEFT}",
+  right: "{RIGHT}",
+  arrowright: "{RIGHT}",
+  home: "{HOME}",
+  end: "{END}",
+  pageup: "{PGUP}",
+  pgup: "{PGUP}",
+  pagedown: "{PGDN}",
+  pgdn: "{PGDN}",
+  insert: "{INSERT}",
+  help: "{HELP}",
+  f1: "{F1}",
+  f2: "{F2}",
+  f3: "{F3}",
+  f4: "{F4}",
+  f5: "{F5}",
+  f6: "{F6}",
+  f7: "{F7}",
+  f8: "{F8}",
+  f9: "{F9}",
+  f10: "{F10}",
+  f11: "{F11}",
+  f12: "{F12}",
+};
+
+/** LEADING modifier tokens → SendKeys modifier prefixes. */
+const SEND_KEYS_MODIFIER_PREFIXES: Record<string, string> = {
+  ctrl: "^",
+  control: "^",
+  shift: "+",
+  alt: "%",
+  option: "%",
+};
+
+/** SendKeys has NO Windows-key modifier — these refuse honestly instead of
+ * silently typing nothing (or worse, typing the token as text). */
+const SEND_KEYS_UNSUPPORTED_MODIFIERS = new Set(["meta", "win", "cmd", "super", "command", "windows"]);
+
+/** SendKeys' special characters (the documented brace-escape set — the same
+ * regex windowsSendKeysScript escapes TEXT with). */
+function escapeSendKeysLiteral(ch: string): string {
+  return ch.replace(/([{}()[\]^%~+])/g, "{$1}");
+}
+
+/** The supported-key list every honest compose error names. */
+const SEND_KEYS_SUPPORTED_NAMES =
+  "enter/return, tab, esc/escape, backspace, delete/del, space, up, down, left, right (arrowup/arrowdown/arrowleft/arrowright), home, end, pageup/pgup, pagedown/pgdn, insert, help, f1..f12, single printable characters ('++' for the plus key), and chords like ctrl+a / shift+tab / alt+f4";
+
+/**
+ * R67-C: compose the dispatcher's key tokens into ONE SendKeys string.
+ * Leading modifier tokens become the ^ / + / % prefixes; exactly ONE key
+ * token must remain (mapped through the table, or a brace-escaped printable
+ * char). Anything else refuses honestly — the error names what was wrong
+ * and the full supported list, so the model can self-correct in one step.
+ */
+export function composeSendKeysChord(keys: string[]): { ok: true; sendKeys: string } | { ok: false; error: string } {
+  const tokens = keys.map((k) => k.trim().toLowerCase()).filter((k) => k !== "");
+  if (tokens.length === 0) {
+    return { ok: false, error: "no key tokens given — the key tool needs a key or chord, e.g. 'tab' or 'ctrl+a'" };
+  }
+  for (const t of tokens) {
+    if (SEND_KEYS_UNSUPPORTED_MODIFIERS.has(t)) {
+      return {
+        ok: false,
+        error: `the Windows SendKeys backend cannot synthesize the Windows/Meta key ('${t}') — SendKeys has no Windows-key modifier; use a different chord`,
+      };
+    }
+  }
+  let prefix = "";
+  let i = 0;
+  while (i < tokens.length) {
+    const mod = SEND_KEYS_MODIFIER_PREFIXES[tokens[i]!];
+    if (mod === undefined) break;
+    prefix += mod;
+    i++;
+  }
+  const rest = tokens.slice(i);
+  if (rest.length !== 1) {
+    return {
+      ok: false,
+      error: `a key chord is LEADING modifiers plus exactly ONE key — '${keys.join("+")}' has ${rest.length === 0 ? "no key after the modifier(s)" : `${rest.length} keys after the modifier(s)`}; supported: ${SEND_KEYS_SUPPORTED_NAMES}`,
+    };
+  }
+  const key = rest[0]!;
+  const named = SEND_KEYS_KEY_NAMES[key];
+  if (named !== undefined) return { ok: true, sendKeys: prefix + named };
+  if (key.length === 1) return { ok: true, sendKeys: prefix + escapeSendKeysLiteral(key) };
+  return {
+    ok: false,
+    error: `unknown key name '${key}' — supported: ${SEND_KEYS_SUPPORTED_NAMES}`,
+  };
 }
 
 export function windowsElementActionScript(

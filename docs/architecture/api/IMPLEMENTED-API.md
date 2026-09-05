@@ -1,8 +1,8 @@
-<!-- last-reviewed: 2026-09-04 round-66 -->
+<!-- last-reviewed: 2026-09-05 round-67 -->
 # IMPLEMENTED API — the shipped surface
 
 **Truth = this file.** Verified against `agent-core/src/server.ts` at
-round-17 (2026-08-23), refreshed R37→R66. The aspirational full contract (52
+round-17 (2026-08-23), refreshed R37→R67. The aspirational full contract (52
 operations, WS gateway, planned routes) lives in
 [`API.md`](API.md) — anything there and
 not here **does not exist yet**. Base: `http://127.0.0.1:<port>`; dev port
@@ -65,7 +65,8 @@ variant — see ROUND-44 additions).
 | `GET /sessions/:id/context?model=` | **ROUND-50 (the composer's context donut)** — `{model, providerId, contextWindow, usedTokens, breakdown:{systemPrompt, systemTools, memory, messages, meta, mcpTools:0}, cache:{inputTokens, cachedInputTokens, hitRate\|null}, sessionTotals:{inputTokens, outputTokens, requests, costUsd}}`. Window = models row → catalog → 200k. Breakdown via `buildSystemPromptSections` + estimateTokens (tool schemas ≈350 tokens/tool, documented approximation); MCP is an honest 0 (no MCP system). Cache from REAL `usage_events.cached_input_tokens` (migration 0020 — captured from the provider's `prompt_tokens_details.cached_tokens` on both turn paths). **ROUND-51: also returns `usage:{main, subagents, combined}` (each `{inputTokens, outputTokens, requests, costUsd}`)** — main = the session's own usage ledger (identical to the flat sessionTotals), subagents = the SUM over the DIRECT children's usage_events (`parent_session_id = :id`, listSubAgents parity, grandchildren excluded), combined = main + subagents. Flat fields byte-identical (additive shape). |
 | `POST /sessions/:id/messages` | `{content, model?}` — **synchronous whole turn** → `200 {assistantMessage:{seq,role,agentId,content,ts}, usage}`; 404/409 (terminal/unconfigured/no key)/502 provider. **ROUND-50: also accepts `thinkingLevel?: "default"\|"low"\|"high"\|"max"` (400 otherwise; injected as `reasoning.effort` on chat-completions bodies) and `attachments?: [{name, path?, size?, text?}]` (≤20, name ≤200 chars, text capped 128 KB server-side; persisted on the `message.user` payload and rendered into model-facing history as `--- attached file: … ---` blocks)** |
 | `POST /sessions/:id/messages/stream` | **SSE (the UI's primary path)** — same validation (incl. the ROUND-50 `thinkingLevel`/`attachments` fields); `text/event-stream` frames: `{type:"text-delta",delta}` · `{type:"thinking-delta",delta}` · `{type:"tool-call",toolName,argsSummary}` · `{type:"tool-result",toolName,argsSummary,ok}` · `{type:"finish",usage[,cachedInputTokens]}` · `subagent-status`/`subagent-event` envelopes (children stream their own live deltas — ROUND-50) · terminal `{type:"done",assistantMessage,usage}` or `{type:"error",status,code,message}`. **R42: a client disconnect does NOT abort the turn** — it completes in the background (events persist; the completion notification fires + Web Push delivers it to the closed window's service worker). A deliberate stop is `POST /sessions/:id/stop`. |
-| `POST /attachments/read` | **ROUND-50** — `{paths: string[] (≤20), projectId?}` → `{files: [{path, name, size, text\|null, truncated, error?}]}`. Text = first 128 KB head (`truncated:true` when longer); NUL-in-first-8KB sniff → `text:null`; relative paths resolve ONLY inside `projectId`'s root (escape/missing project → per-file `error`, never a 500); absolute paths read as-is (user-picked). |
+| `POST /attachments/read` | **ROUND-50** — `{paths: string[] (≤20), projectId?}` → `{files: [{path, name, size, text\|null, truncated, error?}]}`. Text = first 128 KB head (`truncated:true` when longer); NUL-in-first-8KB sniff → `text:null`; relative paths resolve ONLY inside `projectId`'s root (escape/missing project → per-file `error`, never a 500); absolute paths read as-is (user-picked). Files >512 KB refuse (the honest per-file error — see the ROUND-67 section for the upload route that supersedes this cap for drop/paste). |
+| `POST /attachments/upload` | **ROUND-67** — the ingestion route (see the ROUND-67 section): `{projectId, name, dataBase64?\|absolutePath?}` (exactly ONE source) → `200 {path: "attachments/<name>", name, size}`; ≤8 MB decoded, sanitized names, content-dedupe (never overwrites). |
 | `POST /internal/dialog/files` | **ROUND-50** — the multi-FILE OS picker (the composer's Attach files). Tauri `pick_files` (rfd, parented to the main window, topmost) inside the shell; PowerShell `OpenFileDialog` Multiselect fallback (R48 topmost-owner pattern) outside → `{files: string[]}` (`[]` = cancelled). Never called by tests (blocks on a human). |
 | `POST /sessions/:id/stop` | **R42** — explicitly aborts the live streamed turn for the session → `{ok:true, stopped:boolean}`; the stream resolves with `{type:"stopped"}` (NOT an error; no task_failed notification). |
 
@@ -144,7 +145,8 @@ headers):
 
 | Route | Contract |
 |---|---|
-| `POST /browser/session` | `{sessionId, projectId?}` → `{ticket}` — mints a random 192-bit ticket bound to the tab's session (rotates on re-mint; 12h TTL refreshed on use; dies with session eviction/deletion). **ROUND-48 (R48-d): this is now the ONLY route that rotates a ticket** — see the ROUND-48 section. ROUND-46 (R46-d): the optional `projectId` binds the session's COOKIE PROFILE (sticky for the session; absent → the shared `_default` profile — the frontend does not send it yet). |
+| `POST /browser/session` | `{sessionId, projectId?}` → `{ticket}` — mints a random 192-bit ticket bound to the tab's session (rotates on re-mint; 12h TTL refreshed on use; dies with session eviction/deletion). **ROUND-48 (R48-d): this is now the ONLY route that rotates a ticket** — see the ROUND-48 section. ROUND-46 (R46-d): the optional `projectId` binds the session's COOKIE PROFILE (sticky for the session; absent → the shared `_default` profile). **ROUND-67 (R67/E4): the frontend now SENDS the projectId on every panel mint** — two projects' tabs keep separate jars. |
+| `POST /browser/bind` | **ROUND-67** — declare a chat session's browser tab (the cross-session-leak fix; see the ROUND-67 section): `{chatSessionId, sessionId\|null}` → `{ok, chatSessionId, sessionId}`; null clears. |
 | `DELETE /browser/session` | `{sessionId}` → drops tab state. The profile's cookie jar deliberately SURVIVES (closing a tab is not logging out). |
 | `GET /browser/proxy?url=…&sessionId=…&bt=…` | Server-side fetch of the page: manual redirect walk (≤10 hops, every hop re-guarded), 20s deadline, 25 MiB cap, Range pass-through (206). HTML is rewritten (`<base href=FINAL-URL>` injected, links/assets/forms/styles re-proxied with `bt` echoed, script bodies placeholder-protected, CSP/XFO meta stripped, escape hatch injected before `</body>`); CSS `url()`/`@import` rewritten; everything else byte passthrough. Framing headers (XFO/CSP/COOP/COEP/HSTS) are never forwarded. Invalid/absent ticket → HTML 401 page (renders in-iframe). Scheme allowlist http/https; private-net guard (hostname-only, v1). ROUND-46 (R46-d): every hop runs through the per-profile COOKIE JAR (`browser_cookies`, migration 0017 — RFC 6265-lite parse, Cookie replayed per hop, Set-Cookie ingested per hop, durable across sidecar restarts, ≤200/profile; cookie values never logged/routed/returned; client Cookie headers never forwarded). **ROUND-49: every rewritten sub-resource URL is now ABSOLUTE against the sidecar's own origin** (derived from the request's Host header) — the injected `<base href=upstream>` used to hijack path-relative rewrites onto the upstream origin (every CSS/JS/img 404'd there → blank unstyled pages). **ROUND-49: sub-resource errors (a CSS/JS/img fetch whose upstream answers ≥400 or fails 502/504) return an EMPTY body with the upstream status + content-type** (signal: `sec-fetch-dest`; fallback: Accept) — navigations (document/iframe) keep the friendly HTML error card. |
 | `POST /browser/proxy?url=…&bt=…` | Form passthrough (method + content-type + urlencoded/multipart body forwarded). |
@@ -888,6 +890,7 @@ settings-gated default OFF). Full owner guides:
 | `GET /computer-use/config` | `{settings:{enabled,permission,vision:{mode,provider,modelId}}, platform, capabilities}` — the detected backend + its honest capability matrix |
 | `PUT /computer-use/config` | Partial patch `{enabled?, permission?, vision?{mode?, provider?, modelId?}}` (storage validates: posture/vision enums, provider slug, modelId ≤256) → `{settings}` · 400 VALIDATION |
 | `GET /computer-use/session` | The monitor snapshot: `{active, killSwitch, backendKind, startedAt, stopReason, stats:{actionsSent,actionsRefused,observations,visionCalls}, events[]}` — newest-first 200-entry ring; `stopReason` is null while running (the R61 close-out drift fix). |
+| `GET /computer-use/frames/:frameId/raster` | **ROUND-67** — the PNG bytes of a capture made THIS process lifetime (the live chat thumbnails; see the ROUND-67 section): frameId `^[A-Za-z0-9_-]{1,64}$` → 400 otherwise; miss (never registered / LRU-evicted / TTL-expired) → the honest 404 envelope; hit → the decoded PNG, `image/png`, `no-store`. |
 | `POST /computer-use/stop` | The UI kill switch. `{reason?}` (default "stopped by the owner from the UI") → sets the enforced kill switch, releases a session-held mouse button with a real mouse-up → `{ok:true, reason}`. Every further computer-use tool call refuses `kill_switch_active` |
 | `POST /computer-use/test` | Readiness probe (permissions + capabilities; never pops OS dialogs) → `{report, capabilities, platform}` where `report` is the PermissionReport `{accessibility, screenCapture, backendKind, notes[]}` **+ the composed UI verdict `ok` (both core capabilities granted) and `issues[]` (notes + explicit denied-permission lines)** — exactly what the ComputerUseTab's Test readiness renders (the R61 close-out drift fix). |
 | `GET /computer-use/vision-key?providerId=` | `{providerId, hasKey, masked}` — the dedicated `<providerId>-vision` keyring slot; the VALUE is never returned |
@@ -1245,4 +1248,142 @@ routes — everything rides `POST /browser-commands/:id/result` (R62).
 - The R65 `## DEBUG MODE` prompt section is REMOVED (the R66 analyst is
   route-side); the golden fixture regenerated by the sanctioned procedure
   (the R62-era description of the prompt as the debug surface is history).
+
+## ROUND-67 additions (implemented)
+
+The bridge round (the owner's 0.66.0 live Windows field report: the
+blank-panel navigate, the WebView2 eval double-encoding, the
+cross-session tab leak, the chat-image upload, the Windows computer-use
+failures, the debug card's copy, the live screenshot visibility). New
+REST: the attachment upload route + the browser bind route + the capture
+raster route. New SSE frames: `browser-navigate`, `browser-open`, and
+`screenshot`. Updated `browser_control` semantics: the chat-session-bound
+default target + the scoped `get_state`. No new tools, no new migrations.
+
+### `POST /attachments/upload`
+
+The chat-image ingestion route (the owner's "it does not actually upload
+the image, it just shows the path" fix). Registered next to
+`/attachments/read` (same bearer wall, same error-envelope style), with a
+**per-route 12 MB `bodyLimit`** (fastify's 1 MB default would 413 the
+~10.7 MB base64 body of an 8 MB image before the handler ran):
+
+- Body `{projectId, name, dataBase64? | absolutePath?}` — EXACTLY ONE
+  source (both/neither/junk-typed → `400 VALIDATION` with the field
+  named). `projectId` must exist (`404`).
+- `name` is sanitized to a plain filename: no separators, no `..`
+  (conservatively anywhere), no control chars, ≤200 chars, non-blank; the
+  EXTENSION survives (the vision tool's extension gate keeps working).
+- `dataBase64`: strict base64 (alphabet regex + length %4 + round-trip
+  decoded length), capped at **8 MB decoded** (the `analyze_image`
+  ceiling). `absolutePath`: must be absolute (the same POSIX-root /
+  Windows-drive check the read route applies), stat/read honest 400s
+  (missing, directory); the write itself uses `copyFile`.
+- Persists at `<project-root>/attachments/<name>` (mkdir recursive, sync
+  fs, `500 INTERNAL` envelope on failure). **Dedupe, never overwrite:**
+  identical content (size AND bytes) reuses the incumbent; different
+  content mints `-2`/`-3`… before the extension (cap 100 variants →
+  `409 CONFLICT`). Reply `200 {path: "attachments/<final-name>",
+  name, size}` (project-relative, forward slashes).
+- Frontend contract: `uploadAttachmentBytes(projectId, name, dataBase64)`
+  (the composer's dropped/pasted bytes, sent BEFORE the message) and
+  `ingestAttachmentPath(projectId, name, absolutePath)` (the picker
+  binary). A failed upload never blocks the send (the honest no-path
+  attachment + a per-file toast).
+
+The model-facing contract (the message attachment path): a
+path-bearing IMAGE attachment renders into the history as
+`--- attached image: <name> (saved in the project at <path>) ---`
+followed by the exact `Use analyze_image with path "<path>" to view it.`
+instruction (`renderAttachments`, runtime.ts); other path-bearing files
+keep their render plus the path line; `MessageAttachment.path` is now
+RELIABLE for uploaded copies (bytes never ride the wire or the event log
+— only the resulting path persists). Full owner guide:
+[`docs/runbooks/ATTACHMENTS.md`](../../runbooks/ATTACHMENTS.md).
+
+### `POST /browser/bind`
+
+Declares which browser tab a CHAT session drives (the cross-session leak
+fix). Body `{chatSessionId: string, sessionId: string|null}` →
+`{ok, chatSessionId, sessionId}`; null clears the binding; `400
+VALIDATION` on a missing/empty chatSessionId, a non-string sessionId, or
+an id that fails the session-id grammar (alphanumeric/-/./_, ≤64). The
+binding is a module-level Map in `browser-proxy.ts` (it survives the
+session store's LRU eviction); the chat panel posts it just before every
+turn starts (fire-and-forget — a failed bind means the tool mints).
+
+`browser_control`'s default target resolution changed accordingly:
+explicit `sessionId` param > the chat session's binding > MINT a
+deterministic `ag-<chatSession>` tab (bound + announced with the
+`browser-open` frame). `get_state`'s `tabs` list is SCOPED to the
+addressed tab (plus the explicit param) with `activeTab` = the addressed
+session — the agent never sees another session's tabs. The legacy
+global-LRU/"agent" fallback survives only for no-chat-session contexts
+(catalog/tests), and the tool output notes it honestly. Cookie profiles
+are per-project now: the panel's `POST /browser/session` mint carries the
+project id (the R46 `projectId` field is finally sent by the frontend).
+
+### `GET /computer-use/frames/:frameId/raster`
+
+The live screenshot THUMBNAIL fetch (see the main computer-use table for
+the contract; the owner's "the images should be shown during its
+thinking in the agent's chat window itself, in a small view"). The
+registry behind it (`agent-core/src/computer/raster-cache.ts`) is
+EPHEMERAL by design: in-memory only (never persisted, never model-facing),
+LRU-capped at 12, 10-minute TTL (expired entries are dropped on lookup —
+never resurrected; re-registration refreshes recency + the TTL clock).
+The plugins register the PNG right after a successful capture —
+computer-use `screenshot`/`zoom`/`get_app_state includeScreenshot` via
+the dispatcher's public `rasterFor(frameId)`; the `browser_control`
+`screenshot` action under a minted `bs_<base36>` id — and emit the
+`screenshot` frame. The frontend lazy-fetches per thumbnail tile
+(`fetchComputerFrameRaster` — a dedicated binary fetch with its own
+Authorization header; a 404 becomes the caller's "expired" tile signal).
+
+### New SSE frames (`POST /sessions/:id/messages/stream`)
+
+- `{type:"browser-navigate", sessionId:"", tabId, url}` — emitted by
+  `navigate`/`back`/`forward`/`reload` the INSTANT the sidecar history
+  changes (the blank-panel fix: the old path had NO frame — the panel
+  learned via the 4 s poll, which adopted the URL without creating the
+  webview). Turn-independent: the stream-store applies it BEFORE the
+  live-turn guard → `browser-store.applyAgentNavigation(tabId, url)`
+  (patch + `agentNavSeq`++) → the mounted panel navigates-or-CREATES the
+  native webview; the poll (its adopt path now creating too) is the
+  backstop. Emit failures are swallowed (the poll backfills).
+- `{type:"browser-open", sessionId:"", tabId, chatSessionId, url:null}` —
+  emitted when the tool MINTS a chat session's agent tab: the
+  stream-store lands it via `openBrowserForChatSession` in the
+  right-sidebar store — the tab lands in the CHAT session's slice (id ==
+  the sidecar session id), auto-opening only the ACTIVE slice (a
+  background turn never yanks the visible sidebar); idempotent re-fires
+  patch the URL.
+- `{type:"screenshot", sessionId, frameId, tool, note?}` — emitted after
+  every successful capture (the tools above; browser captures carry tool
+  `"browser_control"` + note "browser panel"). Handled AFTER the
+  live-turn guard (turn-scoped, like debug-*): appends
+  `{frameId, tool, ts}` to `liveTurn.screenshots` (newest LAST, cap 8;
+  the folded log owns no screenshot history by design — the bytes are
+  ephemeral). SSE-only: never persisted, never model-facing; the frame is
+  an enhancement (try/catch — a missing raster emits nothing, never
+  breaks the tool).
+
+### Drift notes
+
+- The `computer-use` monitor frames are unchanged, but the frontend now
+  also LATCHES them: `holdForTurn(sessionId)` on any computer-use frame
+  during an open turn, `releaseTurnHold` at turn end (every terminal
+  path), `noteStopSignal` on a `stop_computer_control` frame — the
+  monitor's live signal became `(liveActivity || any turn hold) &&
+  !killSwitch` (the mini window no longer closes while the agent thinks;
+  browser-only turns never hold).
+- The PowerShell capsules now ride `-EncodedCommand` argv (no stdin), the
+  key tool composes real SendKeys chords with a focused-element receipt
+  readback, and probePermissions reports `addTypeOk` — none of these
+  change the REST surface (the receipt payload gained the optional
+  `focused` field; the refusal payloads gained `probeNote` and the
+  helper-process `{pid, processRunning, ownsAccessibleWindow}` shape).
+- Three R66 prompt lines were corrected to the R67 truth (get_state's
+  scoping ×2, the default-target claim) and the golden fixture was
+  regenerated by the sanctioned procedure (21 079 chars).
 

@@ -21,6 +21,7 @@ import {
 } from "../../lib/right-sidebar-store";
 import { useRightSidebarEvents } from "../../lib/right-sidebar-events";
 import { useThemeStyles } from "../../lib/use-theme-styles";
+import { isTauri } from "../../lib/sidecar";
 import { withAlpha } from "../dashboard/helpers";
 import { ease } from "../../lib/motion";
 import { FileViewerPanel } from "./FileViewerPanel";
@@ -111,6 +112,7 @@ export function RightSidebar({
   const setActiveTab = useRightSidebarStore((s) => s.setActiveTab);
   const closeTab = useRightSidebarStore((s) => s.closeTab);
   const toggleOpen = useRightSidebarStore((s) => s.toggleOpen);
+  const setOpen = useRightSidebarStore((s) => s.setOpen);
   const openBrowser = useRightSidebarStore((s) => s.openBrowser);
   const openTerminal = useRightSidebarStore((s) => s.openTerminal);
   const openMemory = useRightSidebarStore((s) => s.openMemory);
@@ -162,13 +164,19 @@ export function RightSidebar({
     // Review fix #1: SURFACE an existing browser tab (whatever URL it
     // carries — openBrowser's null-URL dedupe would miss a navigated tab
     // and mint a duplicate blank one); only CREATE when none exists.
+    // R67/E3: the create branch is GONE — the browser_control tool now
+    // announces its agent tab with a browser-open SSE frame (the stream-
+    // store opens the REAL tab, its id being the sidecar session id), so
+    // creating a null-URL tab here would mint a DUPLICATE blank tab right
+    // before that frame lands. The bump just opens the sidebar; the frame
+    // (or the user's existing tab above) fills it.
     const existing = st.tabs.find((t) => t.type === "browser");
     if (existing !== undefined) {
       setActiveTab(projectId, existing.id); // sets open: true + activates
     } else {
-      openBrowser(projectId, null);
+      setOpen(projectId, true);
     }
-  }, [agentBrowserActivity, projectId, openBrowser, setActiveTab]);
+  }, [agentBrowserActivity, projectId, setOpen, setActiveTab]);
   // ROUND-42: the EFFECTIVE width — the stored (dragged) width clamped by
   // the layout's computed cap. ROUND-43: the floor is the 36px collapse-
   // button column (was 240 — with the R42 cap's own 280px floor that made
@@ -336,7 +344,17 @@ export function RightSidebar({
     <motion.div
       initial={false}
       animate={{ width, opacity: 1 }}
-      transition={{ duration: 0.2, ease }}
+      // R67/E5 (the owner: the browser panel felt like an "overlay kind of
+      // vibe"): in the desktop shell the embedded page is an OS-level
+      // WebView2 CHILD that floats ABOVE all app HTML and is glued to the
+      // panel placeholder by a bounds-sync loop — during a 200ms animated
+      // width change the webview LAGS behind the shrinking/growing
+      // placeholder and visually floats over the chat. In Tauri the width
+      // therefore snaps INSTANTLY (duration 0) so the rAF-debounced sync
+      // keeps the webview pixel-glued; the smooth animation stays for the
+      // web build (pure DOM, no floating layer). The owner asked for the
+      // panel to feel "native… part of the right sidebar itself".
+      transition={{ duration: isTauri() ? 0 : 0.2, ease }}
       className="shrink-0 flex flex-col overflow-hidden rounded-2xl"
       style={{ background: styles.card, border: `1.5px solid ${styles.border}` }}
     >

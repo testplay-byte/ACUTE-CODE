@@ -1,9 +1,11 @@
-<!-- last-reviewed: 2026-09-04 round-66 -->
+<!-- last-reviewed: 2026-09-05 round-67 -->
 # DEBUG MODE — the post-turn context-free analyst (owner's guide)
 
 **Status:** normative · **Established:** round-65 (the debug switch; reworked
-round-66 per the owner's C1 directive) · **Audience:** the owner flipping the
-switch and reading the reports, and any agent maintaining the pipeline
+round-66 per the owner's C1 directive; round-67 added the card's copy +
+auto-collapse and the debug-gated full-turn copy) · **Audience:** the owner
+flipping the switch and reading the reports, and any agent maintaining the
+pipeline
 
 Debug mode answers one question — *"what actually happened in that turn?"* —
 with an answer the working agent cannot polish: when ON, a turn completes
@@ -111,6 +113,54 @@ scrubbed from the transcript before it leaves the process boundary.
   succeeded; the ANALYST failed. The amber tone is a warning, not the red
   of a failed turn.
 
+## The card collapses itself (R67)
+
+The owner's directive: expanded while the analyst types, collapsed by
+itself when done, folded cards minimized — and the copy always reachable.
+The R67 card:
+
+- The header row is the collapse toggle (click anywhere on it; the
+  chevron rotates; `aria-expanded` is kept honest). OPEN defaults to
+  `state === "streaming"`, so a live analysis streams expanded and a
+  folded (reloaded) card mounts COLLAPSED.
+- A `useEffect` collapses the card on the streaming→done flip UNLESS you
+  touched it (the ThoughtRow contract — one tap pins the card open or
+  closed across later flips; the effect re-checks the ref, not the DOM).
+- The **"Copy report"** footer sits OUTSIDE the collapsible body — it is
+  rendered whenever the report is done and non-empty, so the MINIMIZED
+  card still offers the copy. The payload (`buildDebugReportCopyText`) is
+  `Debug report — model: <model|unknown>` + a blank line + the full report
+  text — the "which model was being used" question is answered in the
+  clipboard itself. Streaming/error/empty reports copy nothing (the button
+  is simply absent).
+
+## Copy full conversation (debug) — the second copy (R67)
+
+The owner's second directive: a copy option on agent replies exporting the
+  WHOLE turn, visible ONLY when debug mode is on. It is the second button
+  in the reply's hover cluster ("Copy full conversation (debug)", the
+  braces glyph, next to the plain message copy) — rendered only when the
+  shared `debug-settings` query reports the switch ON (the same cache the
+  Settings page uses — one source of truth, no extra fetch pattern).
+
+The export (`buildFullTurnText` in `src/lib/turn-copy.ts`) is plain text:
+the `=== ACUTE-CODE turn export (debug) ===` header with the `Model:` +
+`Duration:` line, the user narration/thinking banner, `[THINKING]` and
+`[TEXT]` lines in order, one `--- TOOL n: name ---` block per tool call
+(running index, the args, the outcome: `ok — <output>`, `FAILED — …`, or
+`pending (call in flight)` for a live row), the approval blocks, and the
+`--- FINAL ANSWER ---` tail. Empty entries are skipped honestly. A
+~100 KB cap keeps the TAIL (the verdict lives at the end) behind an
+explicit truncation marker.
+
+**The honesty limit**: tool outputs ride the PERSISTED `outputSummary` —
+each summary was already capped at 4 000 chars when the event was
+  written (the raw output never crossed the wire to the frontend). The
+export is the transcript the app itself kept, not a full-stdout dump;
+  the truncation markers say so. On the LIVE footer the model is the
+  panel's effective model and the duration is wall-clock (the live turn
+carries neither); the reloaded turn's export is authoritative.
+
 ## How to flip it
 
 **Settings → Advanced → "Debug mode" → "Post-turn debug analyst"** (the
@@ -152,7 +202,8 @@ deliberate STOP is never analyzed (there is no completed turn to dissect).
 ## See also
 
 - [TESTING](TESTING.md) — the debug-analyst (10) + stream-route (r58 suite,
-  +4) + DebugReportCard (8) + api-folding suites and what each pins
+  +4) + DebugReportCard (17 since R67) + turn-copy (9) + api-folding suites
+  and what each pins
 - [EMBEDDED-BROWSER](EMBEDDED-BROWSER.md) — the sibling R66 runbook (the
   browser page actions + the bot-wall checkpoint card)
 - [COMPUTER-USE](COMPUTER-USE.md) — the computer-use surface whose turns
@@ -161,7 +212,9 @@ deliberate STOP is never analyzed (there is no completed turn to dissect).
   the analyst), the stream route's `runDebugAnalystPhase` in
   `agent-core/src/server.ts`, the switch routes
   `GET/PUT /api/v1/settings/debug`, the card
-  `src/components/project-chat/DebugReportCard.tsx`, the folding in
+  `src/components/project-chat/DebugReportCard.tsx` (+
+  `buildDebugReportCopyText`), the full-turn export
+  `src/lib/turn-copy.ts` (`buildFullTurnText`), the folding in
   `src/lib/api.ts` (`toProjectChatItems`), the live frames in
   `src/lib/stream-store.ts`, the switch UI in
   `src/pages/SettingsPage.tsx` (DebugModeCard).

@@ -9,7 +9,7 @@ import { mkdtempSync, rmSync, writeFileSync, mkdirSync, readFileSync, existsSync
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { randomUUID } from "node:crypto";
-import { afterAll, beforeEach, describe, expect, it } from "vitest";
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi, type MockInstance } from "vitest";
 import { openDatabase, type SqliteDatabase } from "../src/storage/db";
 import { ProviderKeyring } from "../src/providers/registry";
 import { computerUsePlugin } from "../src/tools/plugins/computer-use";
@@ -19,6 +19,10 @@ import { setComputerUseSettings } from "../src/storage/computer-use";
 import { setVisionSettings } from "../src/storage/vision";
 import { resetComputerSessionForTests } from "../src/computer/session";
 import { resetAuditForTests } from "../src/computer/audit";
+// ROUND-67 (R67-D): the prototype-spied dispatcher + the route-served raster
+// registry (the screenshot-frame emission contract).
+import { ComputerDispatcher, type DispatchResult } from "../src/computer/dispatch";
+import { rasterFor, resetRasterCacheForTest } from "../src/computer/raster-cache";
 import { upsertModel } from "../src/storage/models";
 import type { ToolDeps } from "../src/tools/index";
 
@@ -250,5 +254,138 @@ describe("ROUND-61 (R61): the audit trail lands under <root>/.acute/computer-use
     const lines = readFileSync(auditFile, "utf8").trim().split("\n");
     expect(lines.length).toBeGreaterThanOrEqual(1);
     expect(JSON.parse(lines[0]).tool).toBe("wait");
+  });
+});
+
+// ── ROUND-67 (R67-D): the live screenshot THUMBNAIL frames ───────────────────
+// A successful capture (screenshot / zoom / get_app_state includeScreenshot)
+// must copy its raster into the route-served registry and announce the frame
+// id over the SSE channel; a refusal (headless sandbox, capture failed) must
+// NOT. The dispatcher is prototype-spied (the plugin constructs it
+// internally) so the capture result is deterministic here — the emission
+// path, not the OS capture, is the contract under test.
+describe("ROUND-67 (R67-D): screenshot frames after successful captures", () => {
+  const PNG = "cG5nQnl0ZXM="; // "pngBytes"
+
+  let dispatchSpy: MockInstance<(tool: string, args: Record<string, unknown>) => Promise<DispatchResult>>;
+  let rasterSpy: MockInstance<(frameId: string) => string | undefined>;
+
+  beforeEach(() => {
+    resetRasterCacheForTest();
+    emitLog = [];
+    // The capture result is faked (headless linux refuses real captures);
+    // rasterFor feeds the emission exactly as a real cache hit would.
+    dispatchSpy = vi
+      .spyOn(ComputerDispatcher.prototype, "dispatch")
+      .mockResolvedValue({ kind: "data", data: { frame: { frameId: "f-77", width: 800, height: 600, scale: 1 } } });
+    rasterSpy = vi.spyOn(ComputerDispatcher.prototype, "rasterFor").mockReturnValue(PNG);
+  });
+
+  afterEach(() => {
+    dispatchSpy.mockRestore();
+    rasterSpy.mockRestore();
+  });
+
+  it("screenshot: emits {type:'screenshot'} with the frame id + registers the raster", async () => {
+    setComputerUseSettings(db, { enabled: true, permission: "observe" });
+    const tools = await computerUsePlugin.createTools({
+      root: tempDir,
+      toolDeps: makeDeps({ emit: (e) => emitLog.push(e) }),
+    });
+    const shot = tools.find((t) => t.name === "screenshot")!;
+    const result = await shot.execute({}, { root: tempDir });
+    expect(result.ok).toBe(true);
+    const frame = emitLog.find((e) => (e as Record<string, unknown>)["type"] === "screenshot") as
+      | { frameId?: string; tool?: string; sessionId?: string; type?: string }
+      | undefined;
+    expect(frame).toBeDefined();
+    expect(frame!.frameId).toBe("f-77");
+    expect(frame!.tool).toBe("screenshot");
+    expect(frame!.sessionId).toBe("sess"); // toolDeps.sessionId rides the frame
+    // The raster landed in the ROUTE-SERVED registry (the thumbnail fetch).
+    expect(rasterFor("f-77")).toMatchObject({ pngBase64: PNG });
+    // The monitor frame still fires too (one per dispatch, unchanged).
+    expect(emitLog.some((e) => (e as Record<string, unknown>)["type"] === "computer-use")).toBe(true);
+  });
+
+  it("zoom: emits the frame with the 'zoomed region' note", async () => {
+    setComputerUseSettings(db, { enabled: true, permission: "observe" });
+    const tools = await computerUsePlugin.createTools({
+      root: tempDir,
+      toolDeps: makeDeps({ emit: (e) => emitLog.push(e) }),
+    });
+    const zoom = tools.find((t) => t.name === "zoom")!;
+    await zoom.execute({ region: [0, 0, 10, 10] }, { root: tempDir });
+    const frame = emitLog.find((e) => (e as Record<string, unknown>)["type"] === "screenshot") as
+      | { tool?: string; note?: string }
+      | undefined;
+    expect(frame).toBeDefined();
+    expect(frame!.tool).toBe("zoom");
+    expect(frame!.note).toBe("zoomed region");
+  });
+
+  it("get_app_state with a raster in the data: emits the frame with the 'window raster' note", async () => {
+    setComputerUseSettings(db, { enabled: true, permission: "observe" });
+    dispatchSpy.mockResolvedValue({
+      kind: "data",
+      data: { state: { stateId: "s-1", elements: [] }, raster: { frameId: "f-78", width: 640, height: 480, scale: 1 } },
+    });
+    const tools = await computerUsePlugin.createTools({
+      root: tempDir,
+      toolDeps: makeDeps({ emit: (e) => emitLog.push(e) }),
+    });
+    const getState = tools.find((t) => t.name === "get_app_state")!;
+    await getState.execute({ appRef: { pid: 1 }, includeScreenshot: true }, { root: tempDir });
+    const frame = emitLog.find((e) => (e as Record<string, unknown>)["type"] === "screenshot") as
+      | { frameId?: string; tool?: string; note?: string }
+      | undefined;
+    expect(frame).toBeDefined();
+    expect(frame!.frameId).toBe("f-78");
+    expect(frame!.tool).toBe("get_app_state");
+    expect(frame!.note).toBe("window raster");
+  });
+
+  it("get_app_state WITHOUT a raster (includeScreenshot off or capture failed): NO frame — nothing to show", async () => {
+    setComputerUseSettings(db, { enabled: true, permission: "observe" });
+    dispatchSpy.mockResolvedValue({ kind: "data", data: { state: { stateId: "s-1", elements: [] } } });
+    const tools = await computerUsePlugin.createTools({
+      root: tempDir,
+      toolDeps: makeDeps({ emit: (e) => emitLog.push(e) }),
+    });
+    const getState = tools.find((t) => t.name === "get_app_state")!;
+    await getState.execute({ appRef: { pid: 1 } }, { root: tempDir });
+    expect(emitLog.some((e) => (e as Record<string, unknown>)["type"] === "screenshot")).toBe(false);
+  });
+
+  it("a REFUSAL (capture failed): NO screenshot frame (honest — nothing was captured)", async () => {
+    setComputerUseSettings(db, { enabled: true, permission: "observe" });
+    dispatchSpy.mockResolvedValue({
+      kind: "refusal",
+      refusal: { error: "capability_fail_closed", message: "Capture failed: no display", recovery: "…" },
+    });
+    const tools = await computerUsePlugin.createTools({
+      root: tempDir,
+      toolDeps: makeDeps({ emit: (e) => emitLog.push(e) }),
+    });
+    const shot = tools.find((t) => t.name === "screenshot")!;
+    const result = await shot.execute({}, { root: tempDir });
+    expect(result.ok).toBe(false);
+    expect(emitLog.some((e) => (e as Record<string, unknown>)["type"] === "screenshot")).toBe(false);
+    // Nothing registered either.
+    expect(rasterFor("f-77")).toBeNull();
+  });
+
+  it("raster already evicted from the dispatcher's 3-frame cache: NO frame, tool still succeeds", async () => {
+    setComputerUseSettings(db, { enabled: true, permission: "observe" });
+    rasterSpy.mockReturnValue(undefined);
+    const tools = await computerUsePlugin.createTools({
+      root: tempDir,
+      toolDeps: makeDeps({ emit: (e) => emitLog.push(e) }),
+    });
+    const shot = tools.find((t) => t.name === "screenshot")!;
+    const result = await shot.execute({}, { root: tempDir });
+    // The tool result is UNAFFECTED (the thumbnail strip is an enhancement).
+    expect(result.ok).toBe(true);
+    expect(emitLog.some((e) => (e as Record<string, unknown>)["type"] === "screenshot")).toBe(false);
   });
 });

@@ -1204,9 +1204,75 @@ export function browserActiveTabSessionId(): string | null {
   return sharedBrowserStore().lastUsedSessionId();
 }
 
+// ────────────── ROUND-67 (R67/E3): chat-session → tab bindings ──────────────
+//
+// The owner's leak report: "I opened a new session in the same project and
+// the embedded browser window of the OTHER session was shown / driven."
+// Root cause: the tool's default target was the process-global LRU tail —
+// whichever tab ANY session touched last — so a new chat session inherited
+// (and navigated) the previous session's still-alive browser tab.
+//
+// The fix is an explicit binding: every CHAT session maps to exactly ONE
+// browser tab session. The frontend declares it (POST /browser/bind — the
+// panel knows which browser tab is active in the chat session's right-sidebar
+// slice, and AgentChatPanel posts it just before a turn starts); when a turn
+// runs with NO binding yet, the browser_control tool MINTS a deterministic
+// agent tab (ag-<chatSession>) for that chat session and announces it with a
+// `browser-open` SSE frame so the sidebar opens a real tab. The binding is
+// sticky for the chat session's lifetime; commands in session B can never
+// land in session A's tab.
+
+/** chatSessionId → bound browser sessionId. Module-level (survives the
+ * session store's LRU eviction — a binding outlives its tab's recency). */
+const chatSessionBindings = new Map<string, string>();
+
+/** Validate + normalize a chat-session id for binding keys. */
+function toBindingKey(chatSessionId: string): string | null {
+  const cleaned = chatSessionId.replace(/[^A-Za-z0-9._-]/g, "").slice(0, 64);
+  return cleaned === "" ? null : cleaned;
+}
+
+/** The deterministic agent-tab id a chat session mints when unbound. Stable
+ * per chat session (re-minting after a sidecar restart reuses the id). */
+export function agentTabIdForChatSession(chatSessionId: string): string | null {
+  const key = toBindingKey(chatSessionId);
+  return key === null ? null : `ag-${key}`.slice(0, 64);
+}
+
+/** Declare (or clear, with null) a chat session's browser-tab binding. */
+export function bindChatSession(chatSessionId: string, browserSessionId: string | null): boolean {
+  const key = toBindingKey(chatSessionId);
+  if (key === null) return false;
+  if (browserSessionId === null || browserSessionId === "") {
+    chatSessionBindings.delete(key);
+    return true;
+  }
+  if (!SESSION_ID_RE.test(browserSessionId)) return false;
+  chatSessionBindings.set(key, browserSessionId);
+  return true;
+}
+
+/** The chat session's bound browser tab (null when unbound). */
+export function browserSessionForChatSession(chatSessionId: string): string | null {
+  const key = toBindingKey(chatSessionId);
+  if (key === null) return null;
+  return chatSessionBindings.get(key) ?? null;
+}
+
+/** Test-only: drop every binding. */
+export function resetChatSessionBindingsForTest(): void {
+  chatSessionBindings.clear();
+}
+
+/** Test-only: the full binding map (for assertions). */
+export function chatSessionBindingsForTest(): Map<string, string> {
+  return chatSessionBindings;
+}
+
 /** Test-only: drop all browser-session state (fresh store for the tool tests). */
 export function resetBrowserStoreForTest(): void {
   activeBrowserStore = new SessionStore();
+  chatSessionBindings.clear();
 }
 
 // ────────────────────────── route registration ─────────────────────────────
@@ -1319,9 +1385,9 @@ function registerBrowserRoutesInner(browser: FastifyInstance, token: string, db:
     } else {
       sessionId = requested;
     }
-    // ROUND-46 (R46-d): optional cookie-profile binding. The frontend does
-    // not send this yet (a later 1-line wire-up) — until then every session
-    // shares the "_default" profile: restart-safe, not yet project-isolated.
+    // ROUND-46 (R46-d) → ROUND-67 (R67/E4) WIRED: the BrowserPanel now sends
+    // its projectId on every mint — sessions of different projects no longer
+    // share the "_default" cookie profile (logins stay project-scoped).
     const requestedProject = body.projectId;
     let projectId: string | undefined;
     if (requestedProject !== undefined && requestedProject !== null && requestedProject !== "") {
@@ -1359,6 +1425,34 @@ function registerBrowserRoutesInner(browser: FastifyInstance, token: string, db:
       return jsonError(reply, 404, "NOT_FOUND", `no browser session ${sessionId}`);
     }
     return { ok: true };
+  });
+
+  // ── POST /browser/bind — ROUND-67 (R67/E3): declare a chat session's tab ──
+  // The frontend (AgentChatPanel, just before a turn starts) posts the
+  // browser session of the chat session's ACTIVE right-sidebar browser tab
+  // (or null to clear). The browser_control tool then targets exactly that
+  // tab for the whole turn — the cross-session leak fix. Body:
+  // {chatSessionId: string, sessionId: string|null}.
+  browser.post("/browser/bind", async (request: FastifyRequest, reply: FastifyReply) => {
+    const body = parseJsonObject(request.body);
+    if (body === null) return jsonError(reply, 400, "VALIDATION", "body must be a JSON object");
+    const chatSessionId = body.chatSessionId;
+    if (typeof chatSessionId !== "string" || chatSessionId === "") {
+      return jsonError(reply, 400, "VALIDATION", "body.chatSessionId is required");
+    }
+    const bound = body.sessionId;
+    if (bound !== undefined && bound !== null && typeof bound !== "string") {
+      return jsonError(reply, 400, "VALIDATION", "body.sessionId must be a string or null");
+    }
+    if (!bindChatSession(chatSessionId, typeof bound === "string" ? bound : null)) {
+      return jsonError(
+        reply,
+        400,
+        "VALIDATION",
+        "body.sessionId must be alphanumeric/-/./_ and at most 64 chars",
+      );
+    }
+    return { ok: true, chatSessionId, sessionId: typeof bound === "string" ? bound : null };
   });
 
   // ── GET/POST /browser/proxy — the workhorse ──────────────────────────────

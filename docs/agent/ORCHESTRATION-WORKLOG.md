@@ -2159,3 +2159,20 @@ functionally identical — the follow-ups are docs + test-infra only),
 DASHBOARD ciNote re-synced to the final run. The three flakes were all
 the same CLASS: tests whose timing assumptions survive the Linux sandbox
 but not a loaded Windows runner — the round's honest lesson.
+
+---
+Task ID: R67-CLOSEOUT
+Agent: orchestrator (main)
+Task: Round 67 — the owner's v0.66.0 live Windows field report, fixed end-to-end (13 failure clusters across the embedded browser, chat attachments, the debug report, computer use, session isolation, copy options, and screenshot visibility), plus the docs + release close-out.
+
+Work Log:
+- 4 parallel Explore agents mapped every owner error string to a root cause: (1) browser navigate sent NO SSE frame and the panel's 4s poll ADOPTED the server URL on a fresh tab without creating the WebView2 (the blank-panel-until-manual-Enter bug + "no native webview for tab"); (2) WebView2's ExecuteScriptAsync returns eval results JSON-encoded while our scripts return JSON.stringify(...) — the callback string was DOUBLE-encoded, the single parse yielded a string, data.ok was undefined → "the page rejected the script" on EVERY click/type/eval on real Windows (sandbox mocks single-encode — why every test passed); (3) browserActiveTabSessionId() was a process-global LRU + a shared cookie profile + never-cleaned webviews (the cross-session leak); (4) dropped/pasted image bytes were discarded client-side and renderAttachments rendered a.name only (the "Image not found" failure); (5) PowerShell capsules rode stdin under -Command - (exit-0-empty + EPIPE failure modes) with a cold csc Add-Type; (6) the Windows key tool typed literal text (key "tab" → t-a-b); (7) the monitor's 6s decay closed the indicator while the agent thought.
+- Wave 1 (parallel): R67-A attachments (POST /attachments/upload, composer drop/paste/ingest, renderAttachments teaches analyze_image(path)); R67-B chat UX (DebugReportCard copy + auto-collapse; the debug-gated full-conversation copy); R67-C computer robustness (-EncodedCommand capsules, the SendKeys table + chords + focused readback, probe fallback, turn-holds in the monitor store). The orchestrator did the browser core inline: the chat-session→tab binding (bind route + ag-<chatSession> minting + browser-open frame + openBrowserForChatSession + scoped get_state), the instant browser-navigate frame + create-on-adopt + the agentNavSeq effect, parseWebViewEvalJson (the double-encoding normalizer), the bind call in runTurn, per-project cookie profiles, and the instant Tauri sidebar width.
+- Wave 2 (parallel): R67-D screenshot thumbnails (raster-cache LRU/TTL + the raster route + the screenshot SSE frame + LiveTurn.screenshots + ScreenshotStrip); R67-E prompts/skills (browser-first discipline, the Tab-walk, image-attachment guidance, tool descriptions, golden fixture regenerated).
+- Live battery on the rebuilt dist: /health; POST /browser/bind 200 + honest 400; the raster route's honest 404 (the ephemeral message) + 401 without auth; POST /attachments/upload → the file ON DISK at attachments/<name> + the -2 dedupe suffix.
+- R67-F (docs): round-67.md (the verbatim directive map), CHANGELOG 0.67.0, HANDOFF refresh, EMBEDDED-BROWSER/COMPUTER-USE/DEBUG-MODE R67 sections, NEW ATTACHMENTS runbook, IMPLEMENTED-API ROUND-67 (3 new routes + 3 new SSE frames), TESTING, both indexes. docs:check 165/0/0 after re-stamping to the environment's date. One drift resolved in the code's favor (plugin 21 / server 25 measured vs the sub-agent's 22/24 claim).
+- Verification: full suite 1961/1961 in 122 files (agent-core 1064/59, src 885/61, e2e 12); lint CLEAN; typecheck CLEAN; version 0.67.0 ×4.
+
+Stage Summary:
+- R67 COMPLETE: every owner-reported failure has a root-caused fix with construction-pinned tests; the honest limitation stands — Windows behavior (the bridge decode, the binding, the key tool, the capsule transport) is pinned by command-construction tests only in this Linux sandbox, so the owner's live Windows run is the real gate.
+- Released as v0.67.0 (tag + draft release with the launcher kit + installer assets).

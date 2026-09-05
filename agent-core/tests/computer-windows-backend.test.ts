@@ -16,6 +16,12 @@
  * R66-2-d adds the buildSnapshot pins: the 2400-element cap + the
  * interactive-kind probe list that gates every GetCurrentPattern call (the
  * Edge walk-speed fix) + the unchanged parse path.
+ * R67-C adds the capsule-transport pins (-EncodedCommand — the script rides
+ * ARGV as base64 of UTF-16LE, no stdin: the "PowerShell session died before
+ * emitting JSON" failure mode), the U32 guard pins ($script:U32_OK + the
+ * reachable Get-Process fallback), and the SendKeys key-table pins (the
+ * key "tab" typed t-a-b fix: composeSendKeysChord + rawKey's composed
+ * chord + the honest meta-chord refusal).
  * The parse paths run against a fake RunCommand returning exactly what the
  * fixed PowerShell emits on Windows.
  */
@@ -23,6 +29,7 @@ import { describe, expect, it } from "vitest";
 import {
   WINDOWS_PS_PROGRAM,
   WINDOWS_PS_PREAMBLE,
+  composeSendKeysChord,
   windowsListAppsScript,
   windowsListWindowsScript,
   windowsListDisplaysScript,
@@ -41,6 +48,15 @@ function fakeRun(stdout: string, code = 0): RecordingRun {
     return { code, stdout, stderr: "", timedOut: false } satisfies RunResult;
   };
   return Object.assign(run, { capsules }) as RecordingRun;
+}
+
+/** R67-C: decode a -EncodedCommand capsule's script back to text (base64 of
+ * UTF-16LE — PowerShell's contract, inverted for content assertions). */
+function decodeCapsuleScript(capsule: CommandCapsule): string {
+  const i = capsule.args.indexOf("-EncodedCommand");
+  expect(i).toBeGreaterThan(-1);
+  expect(capsule.args[i + 1]).toMatch(/^[A-Za-z0-9+/]+={0,2}$/);
+  return Buffer.from(capsule.args[i + 1]!, "base64").toString("utf16le");
 }
 
 /* ── the preamble: one compile, the EnumWindows surface, honest OutJson ──── */
@@ -93,15 +109,39 @@ describe("ROUND-64-a (R64-a): the shared PowerShell preamble", () => {
     expect(WINDOWS_PS_PREAMBLE).not.toContain("$o | ConvertTo-Json");
   });
 
-  it("capsule shape: powershell.exe -NoProfile -NonInteractive, script rides stdin", async () => {
+  it("capsule shape: -EncodedCommand carries the script as base64 UTF-16LE in ARGV — NO stdin (R67-C)", async () => {
     const run = fakeRun('{"apps":[],"diagnostics":{}}');
     await windowsBackend.listApps(run);
     expect(run.capsules).toHaveLength(1);
     const capsule = run.capsules[0];
     expect(capsule.program).toBe(WINDOWS_PS_PROGRAM);
-    expect(capsule.args).toEqual(["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command", "-"]);
-    expect(capsule.stdin).toContain(WINDOWS_PS_PREAMBLE);
-    expect(capsule.stdin).toContain("[U32]::ListTopWindows()");
+    expect(capsule.args.slice(0, 5)).toEqual(["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-EncodedCommand"]);
+    expect(capsule.args).not.toContain("-Command");
+    // The old transport died twice on the owner's machine: PS 5.1 under
+    // `-Command -` reports exit 0 on aborting scripts, and the stdin write
+    // is EPIPE-swallowed when the child exits early (an EMPTY script ran →
+    // no stdout). The script cannot be lost in ARGV.
+    expect(capsule.stdin).toBeUndefined();
+    const script = decodeCapsuleScript(capsule);
+    expect(script).toContain(WINDOWS_PS_PREAMBLE);
+    expect(script).toContain("[U32]::ListTopWindows()");
+  });
+
+  it("R67-C: the U32 Add-Type is GUARDED — a failed compile sets $script:U32_OK instead of aborting the script", () => {
+    // The owner's "the PowerShell session died before emitting JSON": under
+    // $ErrorActionPreference='Stop' an unguarded Add-Type failure killed the
+    // WHOLE script before the first Write-Output. The try/catch + flag is
+    // the fix; SetProcessDPIAware only runs when the helper exists.
+    expect(WINDOWS_PS_PREAMBLE).toContain("$script:U32_OK = $false");
+    expect(WINDOWS_PS_PREAMBLE).toContain("try {");
+    expect(WINDOWS_PS_PREAMBLE).toContain("  $script:U32_OK = $true");
+    expect(WINDOWS_PS_PREAMBLE).toContain("} catch {");
+    expect(WINDOWS_PS_PREAMBLE).toContain("  $script:U32_OK = $false");
+    expect(WINDOWS_PS_PREAMBLE).toContain("if ($script:U32_OK) { [void][U32]::SetProcessDPIAware() }");
+    // GetCursorPos was folded into the SAME TypeDefinition (cursorPosition
+    // used to be a second Add-Type in its capsule).
+    expect(WINDOWS_PS_PREAMBLE).toContain("public static extern bool GetCursorPos(out PT p);");
+    expect(WINDOWS_PS_PREAMBLE).toContain("public struct PT{public int X;public int Y;}");
   });
 });
 
@@ -131,6 +171,16 @@ describe("ROUND-64-a (R64-a): the list_apps script (EnumWindows, one app per pid
     expect(script).toContain("if ($p.MainWindowHandle -ne 0 -and $p.MainWindowTitle)");
   });
 
+  it("R67-C: the walk is GATED on $script:U32_OK — the fallback branch is REACHABLE when the Add-Type compile failed", () => {
+    // Before R67-C the gate didn't exist because the script never GOT here:
+    // the preamble's unguarded compile aborted everything. Now both the
+    // foreground read and the EnumWindows walk are guarded, and the fallback
+    // entries carry an honest source field.
+    expect(script).toContain("if ($script:U32_OK) { try { $fg = [U32]::GetForegroundWindow() } catch { $fg = [IntPtr]::Zero } }");
+    expect(script).toContain("if ($script:U32_OK) { try { $enum = [U32]::ListTopWindows() } catch { $enum = $null } }");
+    expect(script).toContain("source = 'get-process-fallback'");
+  });
+
   it("emits the deterministic wrapper + diagnostics and never assigns the read-only $PID", () => {
     expect(script).toContain("OutJson @{ apps = $apps; diagnostics = $diag }");
     expect(script).toContain("$diag = @{ processCount = 0; foregroundPid = $fgpid; enumWindowsCount = -1 }");
@@ -155,6 +205,21 @@ describe("ROUND-64-a (R64-a): the list_apps script (EnumWindows, one app per pid
     const result = await windowsBackend.listApps(run);
     expect(result.apps).toEqual([]);
     expect(result.diagnostics?.processCount).toBe(214);
+  });
+
+  it("R67-C: the strict parser TOLERATES and strips unknown app fields (the fallback's source marker)", async () => {
+    // What the reachable fallback branch emits on Windows: the same app
+    // shape plus `source: "get-process-fallback"`. The parser must keep the
+    // entry and drop the marker — unknown fields never poison a parse.
+    const run = fakeRun(
+      JSON.stringify({
+        apps: [{ name: "Untitled - Notepad", pid: 4012, processName: "notepad", active: true, source: "get-process-fallback" }],
+        diagnostics: { processCount: 214, foregroundPid: 4012, enumWindowsCount: -1, note: "EnumWindows walk failed; using the Get-Process MainWindowTitle fallback" },
+      }),
+    );
+    const result = await windowsBackend.listApps(run);
+    expect(result.apps).toEqual([{ name: "Untitled - Notepad", pid: 4012, processName: "notepad", active: true }]);
+    expect(result.diagnostics?.note).toContain("Get-Process MainWindowTitle fallback");
   });
 
   it("garbage / empty / failed capsules return {apps: []} + an honest note (never a throw)", async () => {
@@ -188,6 +253,15 @@ describe("ROUND-64-a (R64-a): the list_windows script (ALL top-level windows of 
     const script = windowsListWindowsScript(4012);
     expect(script).toContain("if ($wins.Count -eq 0 -and $diag.processRunning) {");
     expect(script).toContain("$p.MainWindowHandle");
+  });
+
+  it("R67-C: refuses honestly when the U32 helper did not compile (empty + diagnostic note, invented bounds FORBIDDEN)", () => {
+    const script = windowsListWindowsScript(4012);
+    expect(script).toContain("if (-not $script:U32_OK) {");
+    expect(script).toContain("OutJson @{ windows = @(); diagnostics = @{ processRunning = $liveProc; note =");
+    // The refusal names the CAUSE and the probe that reveals it.
+    expect(script).toContain("the U32 helper (Add-Type -TypeDefinition) did not compile");
+    expect(script).toContain("request_access and read addTypeOk");
   });
 
   it("parses the fixed output: multiple windows keep their array shape + bounds", async () => {
@@ -305,7 +379,7 @@ describe("R66-2-d: buildSnapshot walks 2400 elements and probes ONLY interactive
     const run = fakeRun('{"elements":[{"index":0,"kind":"window","name":"Edge","flags":[]}]}');
     await windowsBackend.buildSnapshot(run, APP, WINDOW, detail);
     expect(run.capsules).toHaveLength(1);
-    return run.capsules[0].stdin ?? "";
+    return decodeCapsuleScript(run.capsules[0]!);
   }
 
   it("caps at $maxEl = 2400 with maxDepth 25 (the 800 cap truncated before Edge page content)", async () => {
@@ -372,5 +446,205 @@ describe("R66-2-d: buildSnapshot walks 2400 elements and probes ONLY interactive
     expect("error" in empty && empty.emptyTree).toBe(true);
     const garbage = await windowsBackend.buildSnapshot(fakeRun("not json"), APP, WINDOW, "full");
     expect("error" in garbage && garbage.error).toContain("not valid JSON");
+  });
+});
+
+/* ── R67-C: the SendKeys key table (THE key fix — "tab" typed t-a-b) ─────── */
+
+describe("R67-C: composeSendKeysChord — key names + chords (the key tool fix)", () => {
+  it("maps every key NAME to its SendKeys literal (never literal text)", () => {
+    expect(composeSendKeysChord(["tab"])).toEqual({ ok: true, sendKeys: "{TAB}" });
+    expect(composeSendKeysChord(["enter"])).toEqual({ ok: true, sendKeys: "{ENTER}" });
+    expect(composeSendKeysChord(["return"])).toEqual({ ok: true, sendKeys: "{ENTER}" });
+    expect(composeSendKeysChord(["esc"])).toEqual({ ok: true, sendKeys: "{ESC}" });
+    expect(composeSendKeysChord(["escape"])).toEqual({ ok: true, sendKeys: "{ESC}" });
+    expect(composeSendKeysChord(["backspace"])).toEqual({ ok: true, sendKeys: "{BACKSPACE}" });
+    expect(composeSendKeysChord(["delete"])).toEqual({ ok: true, sendKeys: "{DELETE}" });
+    expect(composeSendKeysChord(["del"])).toEqual({ ok: true, sendKeys: "{DELETE}" });
+    expect(composeSendKeysChord(["space"])).toEqual({ ok: true, sendKeys: " " });
+    expect(composeSendKeysChord(["up"])).toEqual({ ok: true, sendKeys: "{UP}" });
+    expect(composeSendKeysChord(["arrowdown"])).toEqual({ ok: true, sendKeys: "{DOWN}" });
+    expect(composeSendKeysChord(["arrowleft"])).toEqual({ ok: true, sendKeys: "{LEFT}" });
+    expect(composeSendKeysChord(["arrowright"])).toEqual({ ok: true, sendKeys: "{RIGHT}" });
+    expect(composeSendKeysChord(["home"])).toEqual({ ok: true, sendKeys: "{HOME}" });
+    expect(composeSendKeysChord(["end"])).toEqual({ ok: true, sendKeys: "{END}" });
+    expect(composeSendKeysChord(["pageup"])).toEqual({ ok: true, sendKeys: "{PGUP}" });
+    expect(composeSendKeysChord(["pgup"])).toEqual({ ok: true, sendKeys: "{PGUP}" });
+    expect(composeSendKeysChord(["pagedown"])).toEqual({ ok: true, sendKeys: "{PGDN}" });
+    expect(composeSendKeysChord(["pgdn"])).toEqual({ ok: true, sendKeys: "{PGDN}" });
+    expect(composeSendKeysChord(["insert"])).toEqual({ ok: true, sendKeys: "{INSERT}" });
+    expect(composeSendKeysChord(["help"])).toEqual({ ok: true, sendKeys: "{HELP}" });
+    for (let f = 1; f <= 12; f++) {
+      expect(composeSendKeysChord([`f${f}`])).toEqual({ ok: true, sendKeys: `{F${f}}` });
+    }
+  });
+
+  it("composes LEADING modifier chords — ctrl ^, shift +, alt % (linux xdotool parity for 'ctrl+a')", () => {
+    expect(composeSendKeysChord(["ctrl", "a"])).toEqual({ ok: true, sendKeys: "^a" });
+    expect(composeSendKeysChord(["control", "a"])).toEqual({ ok: true, sendKeys: "^a" });
+    expect(composeSendKeysChord(["shift", "tab"])).toEqual({ ok: true, sendKeys: "+{TAB}" });
+    expect(composeSendKeysChord(["alt", "f4"])).toEqual({ ok: true, sendKeys: "%{F4}" });
+    expect(composeSendKeysChord(["option", "f4"])).toEqual({ ok: true, sendKeys: "%{F4}" });
+    expect(composeSendKeysChord(["ctrl", "shift", "t"])).toEqual({ ok: true, sendKeys: "^+t" });
+  });
+
+  it("single printable characters pass through, SendKeys-SPECIALS brace-escaped; a lone '+' token is the plus key", () => {
+    expect(composeSendKeysChord(["a"])).toEqual({ ok: true, sendKeys: "a" });
+    expect(composeSendKeysChord(["5"])).toEqual({ ok: true, sendKeys: "5" });
+    // The escape set (the same regex the TEXT path escapes with):
+    // + ^ % ~ ( ) [ ] { } must be braced or SendKeys reads them as syntax.
+    expect(composeSendKeysChord(["+"])).toEqual({ ok: true, sendKeys: "{+}" });
+    expect(composeSendKeysChord(["%"])).toEqual({ ok: true, sendKeys: "{%}" });
+    expect(composeSendKeysChord(["^"])).toEqual({ ok: true, sendKeys: "{^}" });
+    expect(composeSendKeysChord(["~"])).toEqual({ ok: true, sendKeys: "{~}" });
+    expect(composeSendKeysChord(["("])).toEqual({ ok: true, sendKeys: "{(}" });
+    expect(composeSendKeysChord(["{"])).toEqual({ ok: true, sendKeys: "{{}" });
+    expect(composeSendKeysChord(["ctrl", "+"])).toEqual({ ok: true, sendKeys: "^{+}" });
+  });
+
+  it("refuses the Windows/Meta key HONESTLY (SendKeys has no win-key modifier — nothing is typed)", () => {
+    for (const bad of [["meta", "l"], ["win", "l"], ["cmd", "l"], ["super", "l"], ["meta"]]) {
+      const result = composeSendKeysChord(bad);
+      expect(result.ok).toBe(false);
+      if (!result.ok) {
+        expect(result.error).toContain("the Windows SendKeys backend cannot synthesize the Windows/Meta key");
+        expect(result.error).not.toContain("unknown key name");
+      }
+    }
+  });
+
+  it("refuses unknown names and malformed chords with the full supported list (self-teaching errors)", () => {
+    const unknown = composeSendKeysChord(["tabs"]);
+    expect(unknown.ok).toBe(false);
+    if (!unknown.ok) {
+      expect(unknown.error).toContain("unknown key name 'tabs'");
+      expect(unknown.error).toContain("ctrl+a / shift+tab / alt+f4");
+    }
+    const noKey = composeSendKeysChord(["ctrl"]);
+    expect(noKey.ok).toBe(false);
+    if (!noKey.ok) expect(noKey.error).toContain("exactly ONE key");
+    const twoKeys = composeSendKeysChord(["a", "b"]);
+    expect(twoKeys.ok).toBe(false);
+    if (!twoKeys.ok) expect(twoKeys.error).toContain("exactly ONE key");
+    const trailingMod = composeSendKeysChord(["a", "ctrl"]);
+    expect(trailingMod.ok).toBe(false);
+    if (!trailingMod.ok) expect(trailingMod.error).toContain("exactly ONE key");
+    const empty = composeSendKeysChord([]);
+    expect(empty.ok).toBe(false);
+    if (!empty.ok) expect(empty.error).toContain("no key tokens given");
+  });
+});
+
+describe("R67-C: rawKey sends ONE composed SendKeys chord (never tokens as text)", () => {
+  it("key \"tab\" → SendWait('{TAB}') — the letters t-a-b are NEVER typed", async () => {
+    const run = fakeRun("OK");
+    const result = await windowsBackend.rawKey(run, ["tab"], { pid: 4242, windowId: 77 });
+    expect(result.ok).toBe(true);
+    expect(run.capsules).toHaveLength(1);
+    const script = decodeCapsuleScript(run.capsules[0]!);
+    expect(script).toContain("[System.Windows.Forms.SendKeys]::SendWait(@'{TAB}'@)");
+    expect(script).not.toContain("SendWait(@'tab'@)");
+    // Scope verification survives (Win raw keys land in the frontmost window).
+    expect(script).toContain('if ($fgpid -ne 4242) { Write-Output "FRONTMOST_MISMATCH:$fgpid"; exit 0 }');
+    // R67-C: the U32 guard — a dead Add-Type must refuse, not abort.
+    expect(script).toContain("if (-not $script:U32_OK) { Write-Output 'ERR:U32-unavailable");
+  });
+
+  it("chords arrive composed: ctrl+a → '^a', ctrl+shift+t → '^+t' (one SendWait, not text)", async () => {
+    const run = fakeRun("OK");
+    await windowsBackend.rawKey(run, ["ctrl", "a"], { pid: 4242, windowId: 77 });
+    const script = decodeCapsuleScript(run.capsules[0]!);
+    expect(script).toContain("[System.Windows.Forms.SendKeys]::SendWait(@'^a'@)");
+    expect(script.split("SendWait").length - 1).toBe(1); // ONE chord, one call
+
+    const run2 = fakeRun("OK");
+    await windowsBackend.rawKey(run2, ["ctrl", "shift", "t"], { pid: 4242, windowId: 77 });
+    expect(decodeCapsuleScript(run2.capsules[0]!)).toContain("SendWait(@'^+t'@)");
+  });
+
+  it("the FRONTMOST_MISMATCH channel still refuses (nothing typed); the U32 guard ERR is parsed as a failure", async () => {
+    const mismatch = await windowsBackend.rawKey(fakeRun("FRONTMOST_MISMATCH:9999"), ["tab"], { pid: 4242, windowId: 77 });
+    expect(mismatch).toEqual({ ok: false, error: "FRONTMOST_MISMATCH:9999" });
+    // The guard's ERR: output line is the raw-input scripts' honest failure
+    // channel — okResult parses it into {ok:false, error: "..."}.
+    const guarded = await windowsBackend.rawKey(fakeRun("ERR:U32-unavailable (the Add-Type helper did not compile on this host - this action is unavailable)"), ["tab"], { pid: 4242, windowId: 77 });
+    expect(guarded.ok).toBe(false);
+    if (!guarded.ok) expect(guarded.error).toContain("U32-unavailable");
+  });
+
+  it("an uncomposable chord refuses WITHOUT spawning a capsule (nothing is typed)", async () => {
+    const run = fakeRun("OK");
+    const result = await windowsBackend.rawKey(run, ["meta", "l"], { pid: 4242, windowId: 77 });
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.error).toContain("cannot synthesize the Windows/Meta key");
+    expect(run.capsules).toHaveLength(0);
+  });
+});
+
+describe("R67-C: focusedElementName — the Tab-walk readback script", () => {
+  it("reads AutomationElement.FocusedElement AFTER the foreground-pid scope check, guarded on U32", async () => {
+    const run = fakeRun("Search box");
+    const name = await windowsBackend.focusedElementName(run, 4242);
+    expect(name).toBe("Search box");
+    const script = decodeCapsuleScript(run.capsules[0]!);
+    expect(script).toContain("Add-Type -AssemblyName UIAutomationClient");
+    expect(script).toContain("if (-not $script:U32_OK) { Write-Output ''; exit 0 }");
+    expect(script).toContain("if ($fgpid -ne 4242) { Write-Output ''; exit 0 }");
+    expect(script).toContain("[System.Windows.Automation.AutomationElement]::FocusedElement");
+  });
+
+  it("an empty (non-foreground / no focused element) result is null — never a fabricated name", async () => {
+    const empty = await windowsBackend.focusedElementName(fakeRun(""), 4242);
+    expect(empty).toBeNull();
+    const failed = await windowsBackend.focusedElementName(fakeRun("", 1), 4242);
+    expect(failed).toBeNull();
+  });
+});
+
+describe("R67-C: probePermissions — the THIRD probe (Add-Type -TypeDefinition, the csc compile)", () => {
+  /** A fake runner that answers each capsule in order (probe 1/2/3). */
+  function seqRun(outs: string[], codes: number[] = []): RecordingRun {
+    const capsules: CommandCapsule[] = [];
+    const run: RunCommand = async (capsule) => {
+      const i = capsules.length;
+      capsules.push(capsule);
+      return { code: codes[i] ?? 0, stdout: outs[i] ?? "", stderr: "", timedOut: false } satisfies RunResult;
+    };
+    return Object.assign(run, { capsules }) as RecordingRun;
+  }
+
+  it("probes the tiny compile in a BARE -EncodedCommand capsule (no U32 preamble) and reports addTypeOk", async () => {
+    const run = seqRun(["PS_OK", "UIA_OK", "ADDTYPE_OK"]);
+    const report = await windowsBackend.probePermissions(run);
+    expect(run.capsules).toHaveLength(3);
+    expect(report.accessibility).toBe("granted");
+    expect(report.addTypeOk).toBe(true);
+    // The third capsule is the tiny compile probe: base64 UTF-16LE, no preamble.
+    const probe = run.capsules[2]!;
+    expect(probe.args.slice(0, 5)).toEqual(["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-EncodedCommand"]);
+    expect(probe.stdin).toBeUndefined();
+    const script = decodeCapsuleScript(probe);
+    expect(script).toContain("Add-Type -TypeDefinition 'public class AcuteProbe {}'");
+    expect(script).toContain("Write-Output 'ADDTYPE_OK'");
+    expect(script).not.toContain("ListTopWindows");
+    // The first two probes still carry the preamble (unchanged shape).
+    expect(decodeCapsuleScript(run.capsules[0]!)).toContain("public static List<WINFO> ListTopWindows()");
+  });
+
+  it("a FAILED compile is reported honestly: addTypeOk false + the explanatory note", async () => {
+    // PS_OK + UIA_OK + ADDTYPE_FAIL — the owner's "the PowerShell session
+    // died before emitting JSON" class, now VISIBLE in the probe result
+    // instead of a green PS_OK.
+    const run = seqRun(["PS_OK", "UIA_OK", "ADDTYPE_FAIL"]);
+    const report = await windowsBackend.probePermissions(run);
+    expect(run.capsules).toHaveLength(3);
+    expect(report.addTypeOk).toBe(false);
+    expect(report.notes?.some((n) => n.includes("Add-Type -TypeDefinition (the csc compile behind list_apps/list_windows) failed"))).toBe(true);
+  });
+
+  it("a NONZERO exit on the compile probe is a failure too (not just ADDTYPE_FAIL)", async () => {
+    const run = seqRun(["PS_OK", "UIA_OK", ""], [0, 0, 1]);
+    const report = await windowsBackend.probePermissions(run);
+    expect(report.addTypeOk).toBe(false);
   });
 });

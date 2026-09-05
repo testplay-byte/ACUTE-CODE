@@ -159,3 +159,48 @@ describe("right-sidebar store — ROUND-64 (R64-b): the computer tab is GONE", (
     expect(migrated.byProject).toEqual({});
   });
 });
+
+// ── ROUND-67 (R67/E3): openBrowserForChatSession — the agent browser tab ────
+describe("right-sidebar store — openBrowserForChatSession (R67/E3 agent tab)", () => {
+  it("creates the agent tab with the GIVEN id (== the sidecar session id) in the chat session's slice, active + open", () => {
+    useRightSidebarStore.getState().setActiveSession("prj_1", "sess_a");
+    const id = useRightSidebarStore.getState().openBrowserForChatSession("prj_1", "sess_a", "ag-sess_a", "https://example.com/start");
+
+    const s = useRightSidebarStore.getState().byProject["prj_1::sess_a"];
+    expect(s).toBeDefined();
+    expect(s?.tabs).toHaveLength(1);
+    expect(s?.tabs[0]).toMatchObject({ id, type: "browser", browserUrl: "https://example.com/start" });
+    expect(s?.activeTabId).toBe("ag-sess_a");
+    expect(s?.open).toBe(true);
+    expect(id).toBe("ag-sess_a");
+  });
+
+  it("a BACKGROUND chat session's tab lands in ITS slice — the visible slice is never yanked", () => {
+    useRightSidebarStore.getState().setActiveSession("prj_1", "sess_visible");
+    useRightSidebarStore.getState().setOpen("prj_1", false);
+    useRightSidebarStore.getState().openTerminal("prj_1");
+
+    useRightSidebarStore.getState().openBrowserForChatSession("prj_1", "sess_bg", "ag-sess_bg", null);
+
+    const bg = useRightSidebarStore.getState().byProject["prj_1::sess_bg"];
+    expect(bg?.tabs.find((t) => t.id === "ag-sess_bg")).toBeTruthy();
+    // The VISIBLE slice keeps its terminal as the active tab — no browser
+    // tab appears there, and the visible slice's state is untouched.
+    const visible = useRightSidebarStore.getState().byProject["prj_1::sess_visible"];
+    expect(visible?.tabs.filter((t) => t.type === "browser")).toHaveLength(0);
+    expect(visible?.open).toBe(true); // openTerminal opened it — untouched
+    expect(visible?.tabs.every((t) => t.type !== "browser")).toBe(true);
+  });
+
+  it("idempotent: a re-fired frame with the same tab id NEVER mints a duplicate (patches the URL when one arrives)", () => {
+    useRightSidebarStore.getState().setActiveSession("prj_1", "sess_a");
+    useRightSidebarStore.getState().openBrowserForChatSession("prj_1", "sess_a", "ag-sess_a", null);
+    // The navigate frame follows: same id, now with the URL.
+    useRightSidebarStore.getState().openBrowserForChatSession("prj_1", "sess_a", "ag-sess_a", "https://example.com/next");
+
+    const s = useRightSidebarStore.getState().byProject["prj_1::sess_a"];
+    expect(s?.tabs.filter((t) => t.type === "browser")).toHaveLength(1);
+    expect(s?.tabs[0]?.browserUrl).toBe("https://example.com/next");
+    expect(s?.tabs[0]?.browserHistory).toContain("https://example.com/next");
+  });
+});

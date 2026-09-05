@@ -89,6 +89,24 @@ describe("ROUND-61 (R61): skills storage", () => {
     expect(body.trim().split("\n").length).toBeLessThanOrEqual(60);
   });
 
+  it("R67-E: the body teaches the Tab-walk discovery loop + the embedded-browser boundary (browser_control only)", () => {
+    const cu = getSkill(db, COMPUTER_USE_SKILL_ID);
+    expect(cu).toBeDefined();
+    const body = cu?.body ?? "";
+    // The owner's Tab-walk technique: key "tab" walks the focusable
+    // controls and the key receipt names the FOCUSED element.
+    expect(body).toContain("Tab-walk discovery");
+    expect(body).toContain('key "tab"');
+    expect(body).toContain("FOCUSED element");
+    expect(body).toContain("walk Tab repeatedly");
+    // The embedded browser is NOT a desktop app — browser_control only.
+    expect(body).toContain("embedded browser is NOT a desktop app");
+    expect(body).toContain("ONLY with browser_control");
+    expect(body).toContain("read_dom");
+    // Still tight: the two new paragraphs keep the body ≤ 60 content lines.
+    expect(body.trim().split("\n").length).toBeLessThanOrEqual(60);
+  });
+
   it("createSkill validates the slug + rejects duplicates; full CRUD works", () => {
     expect(() => createSkill(db, { name: "Bad Name" })).toThrow(/slug/i);
     expect(() => createSkill(db, { name: "x" })).toThrow(/slug/i);

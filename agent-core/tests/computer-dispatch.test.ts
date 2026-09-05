@@ -9,9 +9,9 @@ import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, beforeEach, describe, expect, it } from "vitest";
-import { ComputerDispatcher, parseModifiers } from "../src/computer/dispatch";
+import { ComputerDispatcher, parseModifiers, splitKeyChord } from "../src/computer/dispatch";
 import { resetComputerSessionForTests, getComputerSession, MAX_FRAME_AGE_MS } from "../src/computer/session";
-import type { CuaBackend, CommandCapsule, RunCommand, RunResult } from "../src/computer/backends/interface";
+import type { CuaBackend, CommandCapsule, ListAppsResult, ListWindowsResult, RunCommand, RunResult } from "../src/computer/backends/interface";
 import type { Snapshot, WindowInfo, AppInfo } from "../src/computer/types";
 import { auditPath, resetAuditForTests } from "../src/computer/audit";
 
@@ -41,6 +41,19 @@ let fakeFrontmost: number | null = 4242;
 let rawRequiresForeground = true;
 /** R64-a: the resolver test's app table (mutable per-test). */
 let fakeApps: AppInfo[] = [{ name: "App", pid: 4242, active: true }];
+/** R67-C: queued listApps results — non-empty means "shift the next result
+ * off the queue" (the retry/probeNote tests script failures). */
+let fakeListAppsQueue: ListAppsResult[] = [];
+/** R67-C: how many times listApps actually ran (the retry semantics). */
+let listAppsCalls = 0;
+/** R67-C: the pid's window table + its diagnostics (the helper-pid tests
+ * script a live-but-windowless process, e.g. a WebView2 renderer). */
+let fakeWindows: WindowInfo[] = [
+  { windowId: 77, title: "App Window", bounds: [10, 20, 800, 600] as [number, number, number, number], main: true, focused: true },
+];
+let fakeWindowsDiagnostics: ListWindowsResult["diagnostics"] = undefined;
+/** R67-C: the key tool's focused-element readback (null = omit the field). */
+let fakeFocused: string | null = null;
 /** R66-2-d: find_elements tests may swap the fake snapshot's element list
  * (makeDispatcher resets it to the default 5-element table). */
 let fakeElements: Snapshot["elements"] | null = null;
@@ -66,16 +79,20 @@ const fakeBackend: CuaBackend = {
     rawRequiresForeground,
     permissionGates: [],
   }),
-  listApps: async () => ({
-    apps: fakeApps,
-    // R64-a: mimic the windows backend's honest-empty contract — diagnostics
-    // ride EMPTY results so the resolver/diagnostics tests can pin the flow.
-    ...(fakeApps.length === 0
-      ? { diagnostics: { processCount: 3, foregroundPid: 4242, enumWindowsCount: 0 } }
-      : {}),
-  }),
-  listWindows: async () =>
-    ({ windows: [{ windowId: 77, title: "App Window", bounds: [10, 20, 800, 600] as [number, number, number, number], main: true, focused: true }] as WindowInfo[] }),
+  listApps: async () => {
+    listAppsCalls += 1;
+    // R67-C: a queued result (scripted failure/empty) wins over the table.
+    if (fakeListAppsQueue.length > 0) return fakeListAppsQueue.shift()!;
+    return {
+      apps: fakeApps,
+      // R64-a: mimic the windows backend's honest-empty contract — diagnostics
+      // ride EMPTY results so the resolver/diagnostics tests can pin the flow.
+      ...(fakeApps.length === 0
+        ? { diagnostics: { processCount: 3, foregroundPid: 4242, enumWindowsCount: 0 } }
+        : {}),
+    };
+  },
+  listWindows: async () => ({ windows: fakeWindows, ...(fakeWindowsDiagnostics !== undefined ? { diagnostics: fakeWindowsDiagnostics } : {}) }),
   listDisplays: async () => ({ displays: [{ index: 1, bounds: [0, 0, 1920, 1080] as [number, number, number, number], main: true }] }),
   buildSnapshot: async (_run, app, window, detail) => {
     const source = fakeElements ?? ELEMENTS;
@@ -89,7 +106,7 @@ const fakeBackend: CuaBackend = {
     };
   },
   hitTest: async () => null,
-  focusedElementName: async () => null,
+  focusedElementName: async () => fakeFocused,
   pressElement: async (_run, _pid, _window, _element) => {
     calls.push("press");
     return mode === "press-stale" ? { ok: false, stale: true, error: "identity changed" } : { ok: true };
@@ -151,6 +168,13 @@ function makeDispatcher(allowMutations = true): ComputerDispatcher {
   rawRequiresForeground = true;
   fakeApps = [{ name: "App", pid: 4242, active: true }];
   fakeElements = null;
+  fakeListAppsQueue = [];
+  listAppsCalls = 0;
+  fakeWindows = [
+    { windowId: 77, title: "App Window", bounds: [10, 20, 800, 600] as [number, number, number, number], main: true, focused: true },
+  ];
+  fakeWindowsDiagnostics = undefined;
+  fakeFocused = null;
   return new ComputerDispatcher({ backend: fakeBackend, run: fakeRun, root: tempRoot, allowMutations });
 }
 
@@ -818,3 +842,187 @@ describe("ROUND-64-a (R64-a): empty enumerations carry diagnostics (no silent []
 
 void (fakeRun as unknown as (c: CommandCapsule) => Promise<RunResult>);
 void ELEMENTS;
+
+/* ── R67-C: resolveAppRef retry + probeNote (the "session died" flow) ────── */
+
+describe("ROUND-67 (R67-C): failed-empty list_apps is retried once; the refusal explains WHY", () => {
+  it("a transient failed-empty list RECOVERS on the retry (the tiers then resolve normally)", async () => {
+    const d = makeDispatcher();
+    // The owner's live failure: the first call dies with the "PowerShell
+    // session died" note; the retry works. One retry, then resolution.
+    fakeListAppsQueue = [
+      { apps: [], diagnostics: { note: "list_apps produced no output (the PowerShell session died before emitting JSON)" } },
+      { apps: [{ name: "App", pid: 4242, active: true }] },
+    ];
+    const result = await d.dispatch("list_windows", { appRef: { name: "App" } });
+    expect(result.kind).toBe("data");
+    expect(listAppsCalls).toBe(2); // the failed call + the one retry
+  });
+
+  it("a STILL-failed list → app_not_found whose payload carries probeNote with the diagnostics", async () => {
+    const d = makeDispatcher();
+    fakeListAppsQueue = [
+      { apps: [], diagnostics: { note: "list_apps produced no output (the PowerShell session died before emitting JSON)" } },
+      { apps: [], diagnostics: { note: "list_apps produced no output (the PowerShell session died before emitting JSON)" } },
+    ];
+    const result = await d.dispatch("list_windows", { appRef: { name: "App" } });
+    expect(result.kind).toBe("refusal");
+    expect(listAppsCalls).toBe(2); // retried EXACTLY once, no loop
+    if (result.kind === "refusal") {
+      expect(result.refusal.error).toBe("app_not_found");
+      const payload = result.refusal.payload as { probeNote?: string; runningApps: unknown[] };
+      expect(payload.probeNote).toBe("list_apps produced no output (the PowerShell session died before emitting JSON)");
+      expect(payload.runningApps).toEqual([]);
+      // The recovery still teaches the next step.
+      expect(result.refusal.recovery).toContain("list_apps");
+    }
+  });
+
+  it("a BENIGN empty (no failure note) is NOT retried and carries NO probeNote", async () => {
+    const d = makeDispatcher();
+    fakeApps = []; // empty + diagnostics WITHOUT a note (a bare desktop)
+    const result = await d.dispatch("list_windows", { appRef: { name: "App" } });
+    expect(result.kind).toBe("refusal");
+    expect(listAppsCalls).toBe(1); // no retry — nothing indicated a failure
+    if (result.kind === "refusal") {
+      expect((result.refusal.payload as { probeNote?: string }).probeNote).toBeUndefined();
+    }
+  });
+
+  it("the pid tier never consults the app list (the pinned R64-a semantics, unchanged by the retry)", async () => {
+    const d = makeDispatcher();
+    fakeListAppsQueue = [
+      { apps: [], diagnostics: { note: "list_apps produced no output (the PowerShell session died before emitting JSON)" } },
+    ];
+    const result = await d.dispatch("list_windows", { appRef: { pid: 4242 } });
+    expect(result.kind).toBe("data");
+    expect(listAppsCalls).toBe(0); // tier 1 resolved without any list call
+  });
+});
+
+/* ── R67-C: the pid that owns no accessible window (the WebView2 helper) ─── */
+
+describe("ROUND-67 (R67-C): a live-but-windowless pid refuses HONESTLY (helper/child process)", () => {
+  it("get_app_state on a WebView2-renderer pid → the helper-process message, not \"no running application matches\"", async () => {
+    const d = makeDispatcher();
+    fakeWindows = [];
+    fakeWindowsDiagnostics = { processRunning: true, enumWindowsCount: 17 };
+    const result = await d.dispatch("get_app_state", { appRef: { pid: 11980 } });
+    expect(result.kind).toBe("refusal");
+    if (result.kind === "refusal") {
+      expect(result.refusal.error).toBe("app_not_found");
+      expect(result.refusal.message).toContain("process 11980 is running but owns no accessible top-level window");
+      expect(result.refusal.message).toContain("WebView2");
+      expect(result.refusal.message).toContain("target the HOST application instead");
+      expect(result.refusal.recovery).toContain("list_apps");
+      expect(result.refusal.payload).toMatchObject({ pid: 11980, processRunning: true, ownsAccessibleWindow: false });
+    }
+  });
+
+  it("a CONFIRMED-dead pid keeps the plain app_not_found shape (not running)", async () => {
+    const d = makeDispatcher();
+    fakeWindows = [];
+    fakeWindowsDiagnostics = { processRunning: false, enumWindowsCount: 17 };
+    const result = await d.dispatch("get_app_state", { appRef: { pid: 11980 } });
+    expect(result.kind).toBe("refusal");
+    if (result.kind === "refusal") {
+      expect(result.refusal.message).toContain("not running");
+      expect(result.refusal.message).not.toContain("WebView2");
+    }
+  });
+
+  it("UNKNOWN liveness (no diagnostics) gets the helper message too — fail-open on the explanation, never a lie", async () => {
+    const d = makeDispatcher();
+    fakeWindows = [];
+    fakeWindowsDiagnostics = undefined;
+    const result = await d.dispatch("get_app_state", { appRef: { pid: 11980 } });
+    expect(result.kind).toBe("refusal");
+    if (result.kind === "refusal") {
+      expect(result.refusal.message).toContain("owns no accessible top-level window");
+      expect(result.refusal.payload).toMatchObject({ processRunning: null });
+    }
+  });
+
+  it("the type and key tools ride the SAME honest refusal (windowless target)", async () => {
+    const d = makeDispatcher();
+    fakeWindows = [];
+    fakeWindowsDiagnostics = { processRunning: true, enumWindowsCount: 17 };
+    const typed = await d.dispatch("type", { text: "hello", appRef: { pid: 4242 } });
+    expect(typed.kind).toBe("refusal");
+    if (typed.kind === "refusal") expect(typed.refusal.message).toContain("owns no accessible top-level window");
+    const keyed = await d.dispatch("key", { text: "tab", appRef: { pid: 4242 } });
+    expect(keyed.kind).toBe("refusal");
+    if (keyed.kind === "refusal") expect(keyed.refusal.message).toContain("owns no accessible top-level window");
+  });
+});
+
+/* ── R67-C: the key tool — chords + the Tab-walk focused readback ─────────── */
+
+describe("ROUND-67 (R67-C): key chord splitting (splitKeyChord) + the focused readback", () => {
+  it("splitKeyChord: ordinary chords split as before; a literal plus SURVIVES ('++' → the plus key)", () => {
+    expect(splitKeyChord("ctrl+a")).toEqual(["ctrl", "a"]);
+    expect(splitKeyChord("ctrl+shift+t")).toEqual(["ctrl", "shift", "t"]);
+    expect(splitKeyChord("TAB")).toEqual(["tab"]); // tokens lowercase
+    expect(splitKeyChord("++")).toEqual(["+"]); // the escaped plus key
+    expect(splitKeyChord("ctrl++")).toEqual(["ctrl", "+"]); // ctrl + plus
+    expect(splitKeyChord("shift+p")).toEqual(["shift", "p"]);
+    expect(splitKeyChord("ctrl+")).toEqual(["ctrl"]); // trailing separator: no key
+    expect(splitKeyChord("")).toEqual([]);
+  });
+
+  it("a successful key press reads back the FOCUSED element name into the receipt (the Tab-walk)", async () => {
+    const d = makeDispatcher();
+    fakeFocused = "Search box";
+    const result = await d.dispatch("key", { text: "tab", appRef: { pid: 4242 } });
+    expect(result.kind).toBe("receipt");
+    if (result.kind === "receipt") {
+      expect(result.receipt.actionSent).toBe(true);
+      expect((result.receipt as { focused?: string }).focused).toBe("Search box");
+    }
+    expect(calls).toEqual(["rawKey"]);
+  });
+
+  it("a null/empty readback OMITS the focused field — the key action itself still succeeds", async () => {
+    const d = makeDispatcher();
+    const silent = await d.dispatch("key", { text: "tab", appRef: { pid: 4242 } });
+    expect(silent.kind).toBe("receipt");
+    if (silent.kind === "receipt") {
+      expect((silent.receipt as { focused?: string }).focused).toBeUndefined();
+    }
+    // An empty-string readback (e.g. the foreground app changed) is omitted too.
+    fakeFocused = "";
+    const blank = await d.dispatch("key", { text: "tab", appRef: { pid: 4242 } });
+    expect(blank.kind).toBe("receipt");
+    if (blank.kind === "receipt") {
+      expect((blank.receipt as { focused?: string }).focused).toBeUndefined();
+    }
+  });
+
+  it("a THROWING readback never fails the key action (best-effort by contract)", async () => {
+    const d = makeDispatcher();
+    const original = fakeBackend.focusedElementName;
+    fakeBackend.focusedElementName = async () => {
+      throw new Error("readback exploded");
+    };
+    try {
+      const result = await d.dispatch("key", { text: "tab", appRef: { pid: 4242 } });
+      expect(result.kind).toBe("receipt");
+      if (result.kind === "receipt") {
+        expect((result.receipt as { focused?: string }).focused).toBeUndefined();
+      }
+    } finally {
+      fakeBackend.focusedElementName = original;
+    }
+  });
+
+  it("repeat sends the key N times and reads back ONCE at the end", async () => {
+    const d = makeDispatcher();
+    fakeFocused = "Second button";
+    const result = await d.dispatch("key", { text: "tab", appRef: { pid: 4242 }, repeat: 3 });
+    expect(result.kind).toBe("receipt");
+    expect(calls).toEqual(["rawKey", "rawKey", "rawKey"]);
+    if (result.kind === "receipt") {
+      expect((result.receipt as { focused?: string }).focused).toBe("Second button");
+    }
+  });
+});

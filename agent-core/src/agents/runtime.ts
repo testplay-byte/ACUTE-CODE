@@ -480,16 +480,40 @@ function asChatMessage(
  * ROUND-50 (R50-c1): render a message.user event's attachments into the
  * model-facing content AFTER the user text. The RAW event payload stays
  * clean ({role, content, attachments}) — this block exists only in the
- * model-facing history, so the display never shows it. Binary/unreadable
+ * model-facing history, so the display never sees it. Binary/unreadable
  * attachments (text: null) render a one-line placeholder instead.
+ *
+ * ROUND-67 (R67-A, the owner's #1 v0.66.0 complaint: "the agent said the
+ * image doesn't exist"): attachments persisted through POST
+ * /attachments/upload now carry a path, and the model is TAUGHT what to do
+ * with it instead of guessing (the old render showed a.name only, so the
+ * model invented paths and analyze_image ENOENT'd):
+ *   - image extension + path + no text → an explicit `attached image` block
+ *     naming the path AND the exact analyze_image call to make;
+ *   - anything else with a path → the existing render plus a trailing
+ *     "(file saved at …)" line;
+ *   - path-less attachments (inline-dropped text, legacy rows) render
+ *     EXACTLY as before.
  */
+const ATTACHED_IMAGE_EXT_RE = /\.(png|jpe?g|webp|gif|bmp)$/i;
+
 function renderAttachments(content: string, attachments: readonly MessageAttachment[]): string {
   let out = content;
   for (const a of attachments) {
-    out +=
-      typeof a.text === "string" && a.text !== ""
-        ? `\n\n--- attached file: ${a.name} ---\n${a.text}\n--- end of ${a.name} ---`
-        : `\n\n--- attached file: ${a.name} (no readable text) ---`;
+    // ROUND-67 (R67-A): the same extension set as vision.ts's IMAGE_EXT_RE
+    // (kept local — the plugin must stay import-free from the history
+    // renderer). Check both the display name and the path; the sanitized
+    // upload name keeps its extension either way.
+    const path = typeof a.path === "string" && a.path !== "" ? a.path : null;
+    const text = typeof a.text === "string" && a.text !== "" ? a.text : null;
+    const isImage = path !== null && (ATTACHED_IMAGE_EXT_RE.test(a.name) || ATTACHED_IMAGE_EXT_RE.test(path));
+    if (isImage && text === null) {
+      out += `\n\n--- attached image: ${a.name} (saved in the project at ${path}) ---\nUse analyze_image with path "${path}" to view it.`;
+    } else if (text !== null) {
+      out += `\n\n--- attached file: ${a.name} ---\n${text}\n--- end of ${a.name} ---${path !== null ? `\n(file saved at ${path})` : ""}`;
+    } else {
+      out += `\n\n--- attached file: ${a.name} (no readable text) ---${path !== null ? `\n(file saved at ${path})` : ""}`;
+    }
   }
   return out;
 }

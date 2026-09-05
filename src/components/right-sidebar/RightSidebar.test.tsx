@@ -462,7 +462,7 @@ describe("RightSidebar agent-browser AUTO-OPEN (ROUND-65 R65)", () => {
     vi.unstubAllGlobals();
   });
 
-  it("an agent browser-activity edge AUTO-OPENS the Browser tab when the sidebar is closed with no tabs", async () => {
+  it("R67/E3: an edge opens the SIDEBAR; the browser-open frame's tab lands active (the two-step flow)", async () => {
     renderWithProviders(<RightSidebar projectId="prj_1" sessionId={null} />);
     expect(await screen.findByText("No tabs open")).toBeTruthy();
 
@@ -470,18 +470,26 @@ describe("RightSidebar agent-browser AUTO-OPEN (ROUND-65 R65)", () => {
     // the owner's live report: the agent browsed invisibly.
     useRightSidebarStore.getState().setOpen("prj_1", false);
 
-    // The agent calls browser_control → the stream-store bumps the edge.
+    // The agent calls browser_control → the stream-store bumps the edge →
+    // the sidebar OPENS (no tab yet — R67: the bump no longer mints a blank
+    // tab; the tool's browser-open frame owns tab creation).
     act(() => {
       useRightSidebarStore.getState().noteAgentBrowserActivity("prj_1");
     });
+    // The tool's browser-open frame lands (stream-store → openBrowserForChatSession).
+    act(() => {
+      useRightSidebarStore.getState().setActiveSession("prj_1", "sess_auto");
+      useRightSidebarStore.getState().openBrowserForChatSession("prj_1", "sess_auto", "ag-sess_auto", null);
+    });
 
-    // The Browser tab auto-opened and is ACTIVE (the panel renders).
+    // The Browser tab exists and is ACTIVE (the panel renders).
     await screen.findByTestId("browser-panel");
     const tabs = Object.values(useRightSidebarStore.getState().byProject).flatMap((s) => s.tabs);
     const browser = tabs.find((t) => t.type === "browser");
     expect(browser).toBeTruthy();
-    const slice = Object.values(useRightSidebarStore.getState().byProject)[0];
-    expect(slice.activeTabId).toBe(browser?.id);
+    expect(browser?.id).toBe("ag-sess_auto");
+    const slice = useRightSidebarStore.getState().byProject["prj_1::sess_auto"];
+    expect(slice.activeTabId).toBe("ag-sess_auto");
     expect(slice.open).toBe(true);
   });
 
@@ -493,12 +501,14 @@ describe("RightSidebar agent-browser AUTO-OPEN (ROUND-65 R65)", () => {
     await pickQuickMenuItem("Browse the project's files");
     await screen.findByTestId("files-explorer-panel");
 
-    // The agent starts browsing → the browser tab activates.
+    // The agent starts browsing → bump + the browser-open frame's tab.
     act(() => {
+      useRightSidebarStore.getState().setActiveSession("prj_1", "sess_auto");
       useRightSidebarStore.getState().noteAgentBrowserActivity("prj_1");
+      useRightSidebarStore.getState().openBrowserForChatSession("prj_1", "sess_auto", "ag-sess_auto", null);
     });
     await screen.findByTestId("browser-panel");
-    const slice = Object.values(useRightSidebarStore.getState().byProject)[0];
+    const slice = useRightSidebarStore.getState().byProject["prj_1::sess_auto"];
     const active = slice.tabs.find((t) => t.id === slice.activeTabId);
     expect(active?.type).toBe("browser");
   });
@@ -506,9 +516,11 @@ describe("RightSidebar agent-browser AUTO-OPEN (ROUND-65 R65)", () => {
   it("no re-fight: an edge while a browser tab is ALREADY active changes nothing (still one tab, same id)", async () => {
     renderWithProviders(<RightSidebar projectId="prj_1" sessionId={null} />);
 
-    // First edge opens the browser tab.
+    // First burst: bump + the browser-open frame's tab.
     act(() => {
+      useRightSidebarStore.getState().setActiveSession("prj_1", "sess_auto");
       useRightSidebarStore.getState().noteAgentBrowserActivity("prj_1");
+      useRightSidebarStore.getState().openBrowserForChatSession("prj_1", "sess_auto", "ag-sess_auto", null);
     });
     await screen.findByTestId("browser-panel");
     const before = Object.values(useRightSidebarStore.getState().byProject)
@@ -516,8 +528,9 @@ describe("RightSidebar agent-browser AUTO-OPEN (ROUND-65 R65)", () => {
       .filter((t) => t.type === "browser");
 
     // A same-burst follow-up frame (no counter edge) + a NEW burst edge
-    // later — both leave the SAME browser tab active (openBrowser's dedupe
-    // surfaces the existing tab, never a second one).
+    // later — both leave the SAME browser tab active (the re-fire of
+    // openBrowserForChatSession with the same id is idempotent — never a
+    // second tab).
     act(() => {
       useRightSidebarStore.getState().noteAgentBrowserActivity("prj_1"); // same burst (ms apart)
     });
@@ -526,6 +539,8 @@ describe("RightSidebar agent-browser AUTO-OPEN (ROUND-65 R65)", () => {
     });
     act(() => {
       useRightSidebarStore.getState().noteAgentBrowserActivity("prj_1"); // NEW burst
+      // The frame re-fired (idempotent re-open of the same tab id).
+      useRightSidebarStore.getState().openBrowserForChatSession("prj_1", "sess_auto", "ag-sess_auto", null);
     });
 
     const after = Object.values(useRightSidebarStore.getState().byProject)
@@ -533,16 +548,18 @@ describe("RightSidebar agent-browser AUTO-OPEN (ROUND-65 R65)", () => {
       .filter((t) => t.type === "browser");
     expect(after).toHaveLength(1);
     expect(after[0]?.id).toBe(before[0]?.id);
-    const slice = Object.values(useRightSidebarStore.getState().byProject)[0];
+    const slice = useRightSidebarStore.getState().byProject["prj_1::sess_auto"];
     expect(slice.activeTabId).toBe(after[0]?.id);
   });
 
   it("review fix #1: a NEW burst while the browser tab carries a URL SURFACES that tab — never a duplicate blank one", async () => {
     renderWithProviders(<RightSidebar projectId="prj_1" sessionId={null} />);
 
-    // Burst 1 opens the browser tab.
+    // Burst 1: bump + the browser-open frame's tab.
     act(() => {
+      useRightSidebarStore.getState().setActiveSession("prj_1", "sess_auto");
       useRightSidebarStore.getState().noteAgentBrowserActivity("prj_1");
+      useRightSidebarStore.getState().openBrowserForChatSession("prj_1", "sess_auto", "ag-sess_auto", null);
     });
     await screen.findByTestId("browser-panel");
     const first = Object.values(useRightSidebarStore.getState().byProject)
@@ -563,11 +580,14 @@ describe("RightSidebar agent-browser AUTO-OPEN (ROUND-65 R65)", () => {
     });
     act(() => {
       useRightSidebarStore.getState().noteAgentBrowserActivity("prj_1");
+      // The frame re-fires for the SAME tab id (idempotent — surface, never
+      // a duplicate).
+      useRightSidebarStore.getState().openBrowserForChatSession("prj_1", "sess_auto", "ag-sess_auto", null);
     });
 
     // The ORIGINAL browser tab is active again — exactly ONE browser tab.
     await screen.findByTestId("browser-panel");
-    const slice = Object.values(useRightSidebarStore.getState().byProject)[0];
+    const slice = useRightSidebarStore.getState().byProject["prj_1::sess_auto"];
     const browserTabs = slice.tabs.filter((t) => t.type === "browser");
     expect(browserTabs).toHaveLength(1);
     expect(slice.activeTabId).toBe(first?.id);

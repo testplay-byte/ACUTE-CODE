@@ -56,11 +56,27 @@ export const THINKING_LEVELS: readonly ThinkingLevel[] = ["default", "low", "hig
  * of the file, capped at 128KB) rides the message.user event payload and is
  * rendered into the model-facing history by assembleHistory; the UI receives
  * only the display fields (name/path/size) via toProjectChatItems.
+ *
+ * ROUND-67 (R67-A, the owner's #1 v0.66.0 field report: "I uploaded an image
+ * directly in chat and the agent said the image doesn't exist"): `path` is
+ * now RELIABLE for binary attachments too. Dropped/pasted bytes and
+ * OS-picker binaries are persisted server-side into
+ * <root>/attachments/<name> (POST /attachments/upload), and the composer
+ * threads the returned PROJECT-RELATIVE path (forward slashes) here — the
+ * runtime's renderAttachments turns it into the exact analyze_image
+ * instruction. The shape itself is unchanged: no byte field rides the wire
+ * (bytes go straight to the upload route, never into the event log).
  */
 export interface MessageAttachment {
   /** Display name (≤200 chars, non-empty — validated on the send routes). */
   name: string;
-  /** Absolute (user-picked) or project-relative path, when known. */
+  /**
+   * Where the file lives, when known. ROUND-67 (R67-A): for persisted
+   * attachments this is the PROJECT-RELATIVE path of the uploaded copy
+   * ("attachments/photo.png", forward slashes) — resolvable by the agent's
+   * read_file/analyze_image against the project root. Legacy/OS-picker rows
+   * may still carry an absolute path.
+   */
   path?: string;
   /** File size in bytes, when known. */
   size?: number;

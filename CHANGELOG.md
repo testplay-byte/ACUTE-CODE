@@ -1,4 +1,4 @@
-<!-- last-reviewed: 2026-09-04 round-66 -->
+<!-- last-reviewed: 2026-09-05 round-67 -->
 # Changelog
 
 All notable changes to ACUTE-CODE are documented here. Entries are written for
@@ -11,14 +11,83 @@ version number is single-sourced from the root `package.json`
 
 ## [Unreleased]
 
-Planned next: the owner's live Windows run verifying R66 on real hardware
-(the Windows find_elements + the 2400-element walk, the top-center mini
-window, the checkpoint flow on a real bot wall — the checklist in
-`docs/runbooks/COMPUTER-USE.md` + `EMBEDDED-BROWSER.md`), browser-wall
-self-bypass (future), installer code-signing (SmartScreen),
+Planned next: the owner's live Windows run verifying R67 on real hardware
+(the WebView2 bridge end-to-end — navigate/click/type/read_dom, the
+session-bound tabs + per-project cookie profiles, the key tool's SendKeys
+chords + the Tab-walk readback, the chat image upload → analyze_image loop
+— the checklists in `docs/runbooks/EMBEDDED-BROWSER.md` +
+`COMPUTER-USE.md` + `ATTACHMENTS.md`), then the standing queue:
+browser-wall self-bypass (future), installer code-signing (SmartScreen),
 ratings-driven prompt tuning, the deepseek-harness future candidates
 (compaction pressure-trigger, continuable sub-agent children), the
-Files-tab polish, agent web-app-testing tools.
+Files-tab polish, agent web-app-testing tools, relaxing the picker's
+512 KB attachment read cap for ≤8 MB binaries.
+
+## [0.67.0] - 2026-09-05
+
+Round 67 — the bridge round, driven by the owner's 0.66.0 live Windows
+field report. **The embedded browser actually works on Windows now**:
+agent `navigate` (and back/forward/reload) emits an instant
+`browser-navigate` SSE frame and the panel navigates — or CREATES — the
+WebView2 the moment it lands, with the 4 s poll's adopt path fixed to
+create the webview too (the "panel stayed blank until I pressed Enter in
+the address bar" / "no native webview for tab" bug). **Every page action
+was failing with "the page rejected the script"** — root cause found:
+WebView2's `ExecuteScriptAsync` returns eval results JSON-ENCODED, our
+scripts return `JSON.stringify(...)`, so the callback string was
+double-encoded; the new tolerant double-parse in `native-browser.ts`
+handles both transports (WebKit one parse, WebView2 two) for eval AND the
+pop-out gutter scrollbar probe. **Chat sessions own their browser tab
+now** (the cross-session leak): every chat session binds to exactly one
+tab — the panel POSTs `/browser/bind` with the session's active sidebar
+tab before each turn, and an unbound session gets a deterministic
+`ag-<chatSession>` tab minted and announced with a `browser-open` frame
+(the sidebar opens it in THAT session's slice; a background turn never
+yanks your visible sidebar); `get_state` lists only this session's tab,
+and the cookie profile is per-PROJECT (the mint carries the project id —
+two projects no longer share the `_default` jar). **Chat images are real
+files now** ("it does not actually upload the image, it just shows the
+path" fixed): a new `POST /attachments/upload` (base64 bytes or an
+absolute path to copy; ≤8 MB; sanitized names; identical content reuses,
+different content mints -2/-3… — never an overwrite) lands the file at
+`<project>/attachments/<name>`, the composer's drag-drop, paste and
+picker-binary paths all upload/ingest through it, and the model-facing
+history renders the exact `analyze_image with path "<path>"` call — the
+"image doesn't exist" loop is closed. **The debug report card got its Copy
+button and auto-minimizes**: expanded while the analyst streams, collapses
+on completion unless you touched it, folded cards start minimized, and
+the always-reachable "Copy report" footer copies the model + full report;
+assistant replies gained a debug-gated **"Copy full conversation (debug)"**
+exporting the whole turn (thinking, tool calls with outputs, approvals,
+final answer, model, duration — honest 4 000-char output summaries, ~100 KB
+cap, tail kept). **Computer use on Windows got robust**: PowerShell
+capsules ride `-EncodedCommand` argv (no stdin — the "session died before
+emitting JSON" failure mode), the Add-Type compile is guarded with a
+reachable Get-Process fallback, a failed-empty app list is retried once
+and the refusal carries the probe note, a WebView2-helper pid gets the
+honest "target the HOST application" refusal instead of "no running
+application matches", and **the `key` tool finally presses keys**: the
+SendKeys table maps tab/enter/esc/arrows/F1-F12 + ctrl/shift/alt chords
+(`key "tab"` sends `{TAB}`, not t-a-b), every key receipt names the
+FOCUSED element (the Tab-walk technique), and the floating monitor holds
+for the whole turn while the agent thinks (browser-only turns still never
+show it). **Screenshots show live in chat now**: every successful capture
+(computer-use screenshot/zoom/get_app_state and the browser screenshot)
+announces a `screenshot` SSE frame and serves the PNG from an ephemeral
+in-memory registry (`GET /computer-use/frames/:id/raster`, LRU 12,
+10-minute TTL) — a thumbnail strip under the live working section,
+click-to-enlarge, an honest "expired" tile after the TTL. The system
+prompt, the built-in computer-use skill and the browser/vision tool
+descriptions were all taught the new truth (browser_control ONLY on the
+panel — never computer-use tools; read_dom first, then the selector paths;
+analyze_image with the rendered path; the Tab-walk loop), and the golden
+prompt fixture regenerated. 1961 root tests in 122 files (was 1807/118;
+agent-core 1064/1064 in 59, frontend 885/885 in 61), lint/typecheck/
+docs:check clean, version 0.67.0; the live battery verified the bind
+route, the raster route's honest 404/401 and the attachment upload +
+dedupe on disk — the Windows-native paths (bridge decode, SendKeys,
+capsules) are pinned by construction tests and gate on the owner's next
+live run.
 
 ## [0.66.0] - 2026-09-04
 

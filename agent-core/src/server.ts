@@ -5,7 +5,7 @@
  * later waves.
  */
 import { randomUUID, timingSafeEqual } from "node:crypto";
-import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
+import { copyFileSync, existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import Fastify, { type FastifyError, type FastifyInstance, type FastifyReply, type FastifyRequest } from "fastify";
 import type {
@@ -137,6 +137,10 @@ import {
 import { getVisionSettings, setVisionSettings, visionKeyringId } from "./storage/vision.js";
 import { describeRaster } from "./computer/vision.js";
 import { getComputerSession } from "./computer/session.js";
+// ROUND-67 (R67-D): the ephemeral raster registry the live screenshot
+// THUMBNAILS route below reads (in-memory only, LRU 12, 10-minute TTL —
+// never persisted, never model-facing).
+import { rasterFor } from "./computer/raster-cache.js";
 import { backendForPlatform, realRunner } from "./computer/backends/index.js";
 import { listSkills, createSkill, updateSkill, deleteSkill } from "./storage/skills.js";
 import {
@@ -622,6 +626,35 @@ function readComposerSendFields(
       ...(attachments !== undefined ? { attachments } : {}),
     },
   };
+}
+
+// ── ROUND-67 (R67-A): attachment INGESTION constants ──────────────────────────
+
+/**
+ * ROUND-67 (R67-A): decoded-byte ceiling for a single uploaded attachment —
+ * deliberately the SAME 8MB analyze_image enforces (tools/plugins/vision.ts
+ * MAX_IMAGE_BYTES): a file the vision tool would refuse is not worth landing
+ * in the project.
+ */
+const MAX_ATTACHMENT_UPLOAD_BYTES = 8 * 1024 * 1024;
+/**
+ * ROUND-67 (R67-A): per-route body cap for POST /attachments/upload. 8MB of
+ * file bytes rides as ~10.7MB of base64 JSON — far above fastify's 1MB
+ * default, which would 413 the request before the handler ever ran.
+ */
+const ATTACHMENT_UPLOAD_BODY_LIMIT_BYTES = 12 * 1024 * 1024;
+/** ROUND-67 (R67-A): how many -2/-3… dedupe variants one name may mint. */
+const ATTACHMENT_SUFFIX_CAP = 100;
+
+/**
+ * ROUND-67 (R67-A): the dedupe-suffixed form of an attachment name —
+ * "photo.png" → "photo-2.png" (the EXTENSION survives so analyze_image's
+ * extension gate still passes); extension-less names just append. Conservative
+ * and honest: the counter starts at 2 and counts from the ORIGINAL name.
+ */
+function attachmentSuffixName(name: string, counter: number): string {
+  const dot = name.lastIndexOf(".");
+  return dot > 0 ? `${name.slice(0, dot)}-${counter}${name.slice(dot)}` : `${name}-${counter}`;
 }
 
 export interface ServerOptions {
@@ -2819,6 +2852,241 @@ export function buildServer(options: ServerOptions): FastifyInstance {
         return reply.code(200).send({ files });
       });
 
+      // ── ROUND-67 (R67-A): attachment INGESTION ────────────────────────────
+      // POST /attachments/upload — body { projectId, name, dataBase64? |
+      // absolutePath? }, EXACTLY ONE source. The owner's #1 v0.66.0 field
+      // report: "I uploaded an image directly in chat and the agent said the
+      // image doesn't exist. It does not actually upload the image, it just
+      // shows the path." — dropped/pasted bytes died in the BROWSER (the
+      // composer's NUL-sniff read the ArrayBuffer only to discard it), the
+      // wire attachment never carried bytes, and renderAttachments showed the
+      // model a.name only, so analyze_image guessed at paths and ENOENT'd.
+      // This route is the missing half of the pipeline:
+      //   - dataBase64   → the composer's dropped/pasted bytes (≤8MB decoded,
+      //                    base64-validated with a round-trip length check),
+      //                    written to <root>/attachments/<sanitized-name>;
+      //   - absolutePath → an OS-picker file the SIDECAR copies in (fs
+      //                    copyFile — the picker returns trusted absolute
+      //                    paths, the same trust POST /attachments/read reads
+      //                    them with).
+      // The target is DEDUPED: an identical file (same size AND content) is
+      // reused; a DIFFERENT file under the same name gets a -2/-3… suffix
+      // before the extension — NEVER an overwrite. Containment follows the
+      // resolveInsideRoot convention (fs-ops.ts): the name is sanitized to a
+      // single plain filename, then joined under <root>/attachments/. Reply:
+      // 200 { path: "attachments/<final-name>" (PROJECT-RELATIVE, forward
+      // slashes), name, size } — the composer threads `path` back onto the
+      // chip, onto message.user, and renderAttachments renders it as the
+      // exact analyze_image instruction. Per-route bodyLimit: 8MB of bytes
+      // rides as ~10.7MB of base64 JSON, far above fastify's 1MB default.
+      scope.post(
+        "/attachments/upload",
+        { bodyLimit: ATTACHMENT_UPLOAD_BODY_LIMIT_BYTES },
+        async (request, reply) => {
+          const body: unknown = request.body;
+          if (typeof body !== "object" || body === null || Array.isArray(body)) {
+            return reply
+              .code(400)
+              .send(errorBody("VALIDATION", "body must be a JSON object", { field: "body" }));
+          }
+          const raw = body as Record<string, unknown>;
+
+          // Project → whose attachments/ dir receives the file.
+          if (typeof raw.projectId !== "string" || raw.projectId.trim() === "") {
+            return reply.code(400).send(
+              errorBody("VALIDATION", "projectId must be a non-empty string", {
+                field: "body.projectId",
+              }),
+            );
+          }
+          const project = getProject(db, raw.projectId);
+          if (project === undefined) {
+            return reply
+              .code(404)
+              .send(errorBody("NOT_FOUND", `no project with id ${raw.projectId}`));
+          }
+
+          // Name → the on-disk filename. Sanitized to a PLAIN filename: no
+          // path separators, no '..' (conservatively anywhere — also rejects
+          // harmless 'x..y.png', never the traversal vector), no control
+          // characters, ≤200 chars (the readComposerSendFields caps). The
+          // EXTENSION survives (the dedupe suffix keeps it too).
+          if (typeof raw.name !== "string" || raw.name.trim() === "" || raw.name.length > 200) {
+            return reply.code(400).send(
+              errorBody("VALIDATION", "name must be a non-empty string (≤200 chars)", {
+                field: "body.name",
+              }),
+            );
+          }
+          const name = raw.name;
+          if (/[\\/]/.test(name) || name.includes("..") || /[\u0000-\u001f\u007f]/.test(name)) {
+            return reply.code(400).send(
+              errorBody(
+                "VALIDATION",
+                "name must be a plain filename — no path separators, '..', or control characters",
+                { field: "body.name" },
+              ),
+            );
+          }
+
+          // EXACTLY ONE source of bytes (typed checks keep the error honest
+          // for junk values, not just absence).
+          if (raw.dataBase64 !== undefined && typeof raw.dataBase64 !== "string") {
+            return reply.code(400).send(
+              errorBody("VALIDATION", "dataBase64 must be a base64 string", {
+                field: "body.dataBase64",
+              }),
+            );
+          }
+          if (raw.absolutePath !== undefined && typeof raw.absolutePath !== "string") {
+            return reply.code(400).send(
+              errorBody("VALIDATION", "absolutePath must be a string", {
+                field: "body.absolutePath",
+              }),
+            );
+          }
+          const hasData = typeof raw.dataBase64 === "string";
+          const hasPath = typeof raw.absolutePath === "string";
+          if (hasData && hasPath) {
+            return reply.code(400).send(
+              errorBody("VALIDATION", "pass dataBase64 OR absolutePath — one, not both", {
+                field: "body",
+              }),
+            );
+          }
+          if (!hasData && !hasPath) {
+            return reply.code(400).send(
+              errorBody(
+                "VALIDATION",
+                "exactly one of dataBase64 (base64 file bytes) or absolutePath (a file to copy) is required",
+                { field: "body" },
+              ),
+            );
+          }
+
+          // Obtain the bytes. dataBase64: strict base64 (regex + length %4 +
+          // round-trip decoded length) and the 8MB cap. absolutePath: the
+          // same absolute-path trust the read route applies, then stat + read
+          // (the read is needed for the dedupe comparison; the write itself
+          // uses copyFile).
+          let bytes: Buffer;
+          let copyFrom: string | null = null;
+          if (hasData) {
+            const dataBase64 = raw.dataBase64 as string;
+            const padding = dataBase64.endsWith("==") ? 2 : dataBase64.endsWith("=") ? 1 : 0;
+            const expectedBytes = (dataBase64.length / 4) * 3 - padding;
+            if (
+              dataBase64 === "" ||
+              !/^[A-Za-z0-9+/]+={0,2}$/.test(dataBase64) ||
+              dataBase64.length % 4 !== 0
+            ) {
+              return reply.code(400).send(
+                errorBody("VALIDATION", "dataBase64 is not a valid base64 string", {
+                  field: "body.dataBase64",
+                }),
+              );
+            }
+            bytes = Buffer.from(dataBase64, "base64");
+            if (bytes.length !== expectedBytes) {
+              return reply.code(400).send(
+                errorBody("VALIDATION", "dataBase64 is not a valid base64 string", {
+                  field: "body.dataBase64",
+                }),
+              );
+            }
+            if (bytes.length > MAX_ATTACHMENT_UPLOAD_BYTES) {
+              return reply.code(400).send(
+                errorBody(
+                  "VALIDATION",
+                  `attachment is ${bytes.length} bytes — above the ${MAX_ATTACHMENT_UPLOAD_BYTES / (1024 * 1024)}MB upload limit`,
+                  { field: "body.dataBase64" },
+                ),
+              );
+            }
+          } else {
+            const absolutePath = (raw.absolutePath as string).trim();
+            const absoluteLike = absolutePath.startsWith("/") || /^[a-zA-Z]:[\\/]/.test(absolutePath);
+            if (absolutePath === "" || !absoluteLike) {
+              return reply.code(400).send(
+                errorBody("VALIDATION", `absolutePath must be an ABSOLUTE path (got '${raw.absolutePath}')`, {
+                  field: "body.absolutePath",
+                }),
+              );
+            }
+            try {
+              const stats = statSync(absolutePath);
+              if (stats.isDirectory()) {
+                return reply.code(400).send(
+                  errorBody("VALIDATION", `'${absolutePath}' is a directory, not a file`, {
+                    field: "body.absolutePath",
+                  }),
+                );
+              }
+              bytes = readFileSync(absolutePath);
+              copyFrom = absolutePath;
+            } catch {
+              return reply.code(400).send(
+                errorBody("VALIDATION", `cannot read '${absolutePath}': no such file or unreadable`, {
+                  field: "body.absolutePath",
+                }),
+              );
+            }
+          }
+
+          // Persist INSIDE the project (fs-ops writeFile style: sync fs,
+          // mkdir with parents, try/catch, honest envelope).
+          try {
+            const attachmentsDir = join(project.rootPath, "attachments");
+            mkdirSync(attachmentsDir, { recursive: true });
+            let finalName = name;
+            let reused = false;
+            for (let counter = 2; ; counter++) {
+              const candidate = join(attachmentsDir, finalName);
+              if (!existsSync(candidate)) break;
+              let identical = false;
+              try {
+                const existing = readFileSync(candidate);
+                identical = existing.length === bytes.length && existing.equals(bytes);
+              } catch {
+                // Unreadable incumbent — treat as a different file (never a
+                // silent reuse of something we could not verify).
+              }
+              if (identical) {
+                reused = true;
+                break;
+              }
+              if (counter > ATTACHMENT_SUFFIX_CAP) {
+                return reply.code(409).send(
+                  errorBody(
+                    "CONFLICT",
+                    `attachments/${name} already has ${ATTACHMENT_SUFFIX_CAP} different variants — refusing to mint more`,
+                  ),
+                );
+              }
+              finalName = attachmentSuffixName(name, counter);
+            }
+            const target = join(attachmentsDir, finalName);
+            if (!reused) {
+              if (copyFrom !== null) copyFileSync(copyFrom, target);
+              else writeFileSync(target, bytes);
+            }
+            const size = statSync(target).size;
+            return reply.code(200).send({
+              path: `attachments/${finalName}`,
+              name: finalName,
+              size,
+            });
+          } catch (error) {
+            return reply.code(500).send(
+              errorBody(
+                "INTERNAL",
+                `could not persist attachment '${name}': ${error instanceof Error ? error.message : "unknown error"}`,
+              ),
+            );
+          }
+        },
+      );
+
       // DELETE /sessions/:id (round-30, owner request: "I am not able to
       // delete any of the sessions"). Transactionally removes the session row
       // AND its dependent rows (event log, usage lines, approvals, file
@@ -3683,6 +3951,46 @@ export function buildServer(options: ServerOptions): FastifyInstance {
       // floating mini window polls this while a control session is live).
       scope.get("/computer-use/session", async () => {
         return getComputerSession().state();
+      });
+
+      // ── ROUND-67 (R67-D): GET /computer-use/frames/:frameId/raster ───────
+      // The PNG bytes of a frame captured THIS process lifetime — the live
+      // chat THUMBNAIL fetch (the owner: "the images should be shown during
+      // its thinking in the agent's chat window itself, in a small view").
+      // The plugins copy successful captures into the in-memory raster
+      // registry (computer/raster-cache.ts) and announce the frame id over
+      // the turn SSE ({type:"screenshot"}); the frontend lazy-fetches here
+      // per thumbnail. Same bearer wall as the sibling routes. Honest 404
+      // after the 10-minute TTL or the LRU eviction (rasters are EPHEMERAL
+      // — never persisted, never fed to the model; the quiet "expired" tile
+      // in the chat is the deliberate design, not a bug).
+      scope.get("/computer-use/frames/:frameId/raster", async (request, reply) => {
+        const { frameId } = request.params as Record<string, string>;
+        if (typeof frameId !== "string" || !/^[A-Za-z0-9_-]{1,64}$/.test(frameId)) {
+          return reply
+            .code(400)
+            .send(
+              errorBody("VALIDATION", "frameId must be alphanumeric/dash/underscore (max 64 chars)", {
+                field: "params.frameId",
+              }),
+            );
+        }
+        const entry = rasterFor(frameId);
+        if (entry === null) {
+          return reply
+            .code(404)
+            .send(
+              errorBody(
+                "NOT_FOUND",
+                `no raster for frame '${frameId}' — rasters are in-memory only, capped (12) and expire after 10 minutes`,
+              ),
+            );
+        }
+        // Binary reply: the decoded PNG, no-store (a stale thumbnail tile is
+        // worse than a re-fetch; the bytes die with the TTL anyway).
+        reply.header("content-type", "image/png");
+        reply.header("cache-control", "no-store");
+        return reply.send(Buffer.from(entry.pngBase64, "base64"));
       });
 
       // The UI's STOP button: the kill switch (releases a held button; all

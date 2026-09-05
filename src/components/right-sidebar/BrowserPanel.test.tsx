@@ -295,7 +295,9 @@ describe("BrowserPanel (R43-10 embedded browser)", () => {
     renderWithProviders(<BrowserPanel projectId="prj_test" tab={tab} />);
 
     await waitFor(() => expect(postCalls("/api/v1/browser/session")).toHaveLength(1));
-    expect(calls[0]?.body).toEqual({ sessionId: "tab-test-1" });
+    // R67/E4: the mint carries the projectId — the sidecar binds the
+    // session's cookie profile to the project (per-project logins).
+    expect(calls[0]?.body).toEqual({ sessionId: "tab-test-1", projectId: "prj_test" });
 
     // Empty state: quick links + hint copy, no iframe yet.
     expect(screen.getByTestId("browser-empty")).toBeTruthy();
@@ -1286,5 +1288,75 @@ describe("BrowserPanel native mode (R50-a child webviews over the panel)", () =>
     renderWithProviders(<BrowserPanel projectId="prj_test" tab={tab} />);
     await waitFor(() => expect(postCalls("/api/v1/browser/session")).toHaveLength(1));
     expect(hasBrowserCommandHandler("tab-test-1")).toBe(false);
+  });
+});
+
+// ── ROUND-67 (R67/E1): the instant agent-navigation + the create-on-adopt ──
+describe("BrowserPanel R67 — agent navigation frames (E1: instant + create-on-adopt)", () => {
+  const create = () => vi.mocked(nativeBrowser.nativeTabCreate);
+  const nativeNavigate = () => vi.mocked(nativeBrowser.nativeTabNavigate);
+
+  beforeEach(() => {
+    // Same native-mode setup as the R50-a suite above (the mocked bridge's
+    // availability + healthy command defaults).
+    nativeState.available = true;
+    nativeState.evalResult = null;
+    nativeState.evalScripts = [];
+    nativeState.windowMetrics = null;
+    create().mockReset();
+    create().mockImplementation(() => Promise.resolve());
+    nativeNavigate().mockReset();
+    nativeNavigate().mockImplementation(() => Promise.resolve());
+    clearBrowserCommandHandlersForTest();
+  });
+
+  it("R67: an agent navigation (applyAgentNavigation — the stream-store's browser-navigate handler) drives the webview IMMEDIATELY, no 4s poll wait", async () => {
+    const tab = makeTab();
+    seedRightSidebar(tab);
+    renderWithProviders(<BrowserPanel projectId="prj_test" tab={tab} />);
+    // User first navigates (creates the webview) — the mount effect.
+    const input = screen.getByTestId("browser-address-input") as HTMLInputElement;
+    fireEvent.change(input, { target: { value: "https://a.example/one" } });
+    fireEvent.submit(input.closest("form") as HTMLFormElement);
+    await waitFor(() => expect(create()).toHaveBeenCalledWith("tab-test-1", "https://a.example/one"));
+
+    // The AGENT navigates: the stream-store frame handler calls the store's
+    // applyAgentNavigation (agentNavSeq bump) — the panel must command the
+    // native webview on the NEXT render, not on the 4s poll.
+    act(() => {
+      useBrowserTabStore.getState().applyAgentNavigation("tab-test-1", "https://a.example/agent-page");
+    });
+    await waitFor(() => expect(nativeNavigate()).toHaveBeenCalledWith("tab-test-1", "https://a.example/agent-page"));
+  });
+
+  it("R67: a fresh tab whose URL arrives via applyAgentNavigation CREATES the webview AT that URL (the blank-panel fix)", async () => {
+    // Fake timers from the START (the poll interval must be created under
+    // them). waitFor would hang under fake timers — advance + assert.
+    vi.useFakeTimers();
+    try {
+      const tab = makeTab(); // browserUrl null — a fresh auto-opened tab
+      seedRightSidebar(tab);
+      renderWithProviders(<BrowserPanel projectId="prj_test" tab={tab} />);
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(0);
+      });
+      // Mount: no currentUrl → NO webview created yet (lazy creation).
+      expect(create()).not.toHaveBeenCalled();
+
+      // The agent navigates while the panel shows the empty state: the
+      // frame handler stores the URL and bumps agentNavSeq — the panel's
+      // agentNavSeq effect CREATES the webview AT the URL (the old code
+      // ADOPTED the URL on the poll without ever creating — the owner's
+      // blank panel until a manual address-bar Enter).
+      act(() => {
+        useBrowserTabStore.getState().applyAgentNavigation("tab-test-1", "https://b.example/late");
+      });
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(0);
+      });
+      expect(create()).toHaveBeenCalledWith("tab-test-1", "https://b.example/late");
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

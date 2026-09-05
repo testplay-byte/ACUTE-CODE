@@ -1,9 +1,11 @@
-<!-- last-reviewed: 2026-09-04 round-66 -->
+<!-- last-reviewed: 2026-09-05 round-67 -->
 # COMPUTER USE — the desktop-control system (owner's guide)
 
 **Status:** normative · **Established:** round-61 (owner directive: computer
 use + a separately-configurable vision model; R66 moved the vision model to
-its own section and made the Windows walk big-app-capable) · **Audience:**
+its own section and made the Windows walk big-app-capable; R67 hardened the
+Windows transport, taught the key tool to press keys, and stabilized the
+monitor across thinking gaps) · **Audience:**
 the owner (anyone flipping the switches and watching the monitor) and any
 agent maintaining the system
 
@@ -55,12 +57,37 @@ No extra dependencies: PowerShell (always present) + UI Automation
 script (JSON on stdout, DPI-awareness set first so Windows doesn't lie with
 virtualized coordinates). Notes:
 
+- **R67: capsules ride `-EncodedCommand` ARGV** — the script is the base64
+  of its UTF-16LE text, passed as a command-line argument. The old
+  transport piped the script through STDIN under `-Command -`, which has
+  two live failure modes: PowerShell 5.1 can exit 0-with-no-output on an
+  aborted run, and a child that exits early EPIPE-swallows the stdin write
+  (an EMPTY script ran → exit 0, no stdout) — together those were the
+  owner's "the PowerShell session died before emitting JSON" while
+  tasklist worked fine. The biggest capsule (~8 K chars → ~22 K base64)
+  stays under the 32 767-character CreateProcess ceiling.
+- **R67: the Add-Type compile is guarded.** The one U32 helper class is
+  wrapped in try/catch setting `$script:U32_OK`; when the (flaky, cold-csc)
+  compile fails, `list_apps` falls back to Get-Process MainWindowTitle
+  (entries tagged `source:"get-process-fallback"`) instead of the whole
+  script dying before ANY output — the fallback was previously dead code.
+  The readiness probe now also exercises the compile itself (`addTypeOk`
+  in the probe report; a third probe next to the permission checks).
 - Activation is the `SetForegroundWindow` + `AttachThreadInput` sequence
   with a ≤1.5 s **postcondition check** — the receipt's `active` field
   reports the truth, not the API's return value.
 - Raw input is `SetCursorPos` + `mouse_event` (user32); typing is `SendKeys`
-  after focus verification. Raw input on Windows requires the target app
-  frontmost — the engine refuses with `frontmost_pid_mismatch` otherwise.
+  after focus verification (see the key table below — R67 made it press
+  real keys, not spell their names). Raw input on Windows requires the
+  target app frontmost — the engine refuses with `frontmost_pid_mismatch`
+  otherwise.
+- **R67: a helper-process pid answers honestly.** A pid that is running
+  but owns no accessible top-level window (e.g. a WebView2 renderer such
+  as `msedgewebview2`) refuses with "target the HOST application instead
+  (see list_apps)" — not the old misleading "no running application
+  matches". A confirmed-dead pid keeps the plain not-running shape. An
+  app list that comes back EMPTY-with-a-failure-note is retried once, and
+  the refusal carries the note as `probeNote` so the agent sees WHY.
 - Elevated targets (admin apps) refuse with `uipi_blocked` — Windows
   silently discards the input; retrying is pointless (a human step is
   needed).
@@ -199,7 +226,10 @@ A1/B1 report) reshaped it:
   forever, and **browser turns never trip it**: the embedded browser's
   `screenshot` action no longer records into this ring at all (browser
   work is not computer use — that was the owner's A1 report). The web pill
-  and the OS window both key off the same decayed signal.
+  and the OS window both key off the same decayed signal. **R67 adds the
+  TURN HOLD** (see below): while a computer-use turn is open, a stable
+  latch keeps the monitor up through thinking gaps — the decay still hides
+  it after the turn ends or the stop signal fires.
 - **Data path**: every tool execution emits one `{type:"computer-use"}` SSE
   frame at dispatch time (live, zero polling latency) — the main app's
   controller watches these to open/close the OS window; the mini window
@@ -233,6 +263,56 @@ A1/B1 report) reshaped it:
   fails soft — it never takes a turn down.
 - **Only the owner configures** — no computer-use setting is model-writable;
   all writes go through the authenticated settings routes.
+
+## The key tool presses keys (R67 — the SendKeys table + the Tab-walk)
+
+The owner's live failure: `key "tab"` typed the literal letters t-a-b —
+the Windows backend special-cased only `{ENTER}` and sent every other key
+token as TEXT; chords were never composed. R67 fixes the whole surface:
+
+- **The key-name table** (`composeSendKeysChord` in
+  `agent-core/src/computer/backends/windows.ts`): enter/return, tab,
+  esc/escape, backspace, delete/del, space, up/down/left/right (+ the
+  arrow* aliases), home, end, pageup/pgup, pagedown/pgdn, insert, help,
+  and f1..f12 — each maps to its SendKeys literal (`{TAB}`, `{ENTER}`…).
+- **Chords**: LEADING modifier tokens compose the SendKeys prefixes —
+  ctrl/control → `^`, shift → `+`, alt/option → `%` — with exactly one key
+  token left. `key "tab"` sends `{TAB}`; `ctrl+a` sends `^a`;
+  `ctrl+shift+t` sends `^+t`. A single printable character is
+  brace-escaped (`{+}` `{%}` `{^}` `{~}` `{(` `{{}`) and passes through;
+  `'++'` is the plus key.
+- **Honest refusals**: the Windows/Meta key (SendKeys has no such
+  modifier) and unknown key names refuse with the full supported list
+  BEFORE any capsule is spawned — nothing is typed on a guess.
+- **The focused readback**: every successful `key` receipt carries
+  `focused: "<element name>"` — the FOREGROUND app's focused control,
+  best-effort (a null/empty/throwing readback omits the field, never
+  fails the key).
+- **The Tab-walk loop** (taught in the system prompt AND the built-in
+  skill): when `find_elements` comes back empty or screenshots cannot
+  identify the control, press `key "tab"` repeatedly — each receipt
+  names the FOCUSED element, and Tab walks the focusable controls one by
+  one. Combine with `find_elements` (search by name) in big apps.
+
+On Linux nothing changed semantically: the same tokens join into one
+  xdotool chord string as before (ordinary chords are byte-identical; a
+  literal `'++'` now reaches the backend as the plus key instead of a
+  degenerate empty chord).
+
+## The monitor holds for the whole turn (R67)
+
+The owner's report: the mini window disappeared while the agent THOUGHT
+between tool calls — the 6-second liveActivity decay (correctly) treated
+  silence as "stopped driving". R67 adds the **turn hold**: the
+  stream-store calls `holdForTurn(sessionId)` when a computer-use frame
+  arrives during an open turn and `releaseTurnHold` at turn end (every
+  terminal path, including errors); the monitor's live signal is
+  `(liveActivity || any turn hold) && !killSwitch`. The hold is a stable
+  latch — it never decays and never bumps the activity ring — so the pill
+  survives thinking gaps, and it is released (or rested by the
+  `stop_computer_control` frame's `noteStopSignal`) the moment the turn
+  ends. **Browser-only turns never hold** (only computer-use frames arm
+  it) — the R66 "no pill on browser turns" guarantee is structural.
 
 ## Big apps (browsers, Edge, VS Code) — find_elements (R66)
 
@@ -311,7 +391,7 @@ timeout is the first knob to raise.
 | `type` | Type text — element = a11y value write (REPLACES contents); appRef = app-scoped (frontmost on Win/Linux) |
 | `set_value` | Set a settable element's value directly (the preferred text write) |
 | `select_text` | Select [start, length] or place the caret |
-| `key` | Non-text keys and chords ('return', 'ctrl+a'); repeat 1–100 |
+| `key` | Non-text keys and chords ('return', 'ctrl+a'); repeat 1–100 — R67: real SendKeys keys/chords on Windows, the receipt names the FOCUSED element (the Tab-walk loop) |
 | `hold_key` | Hold a key/chord 0–30 s (never targetless) |
 | `perform_action` | Invoke a NAMED a11y action from the element's advertised list |
 | `request_access` | Read-only readiness probe (permissions + capabilities; never pops dialogs) |
@@ -360,30 +440,48 @@ shape contracts are pinned, the live GUI paths are NOT). The Windows and
 macOS backends are code-complete per the spec but have NEVER run on live
 hardware — **the owner's 0.63.0 run was the FIRST live Windows exercise
 and surfaced the R64 bug set (empty app lists, exact-title resolution) —
-now fixed by construction with diagnostics on every empty result.** The
-checklist below is how the 0.64.0 fixes get verified. **The owner must
+now fixed by construction with diagnostics on every empty result; the
+0.66.0 run surfaced the R67 set (the stdin capsule deaths, the dead
+fallback, the key tool typing t-a-b) — also fixed by construction
+(-EncodedCommand argv, the guarded compile, the SendKeys table).** The
+checklist below is how the 0.64.0+R67 fixes get verified. **The owner must
 live-verify on the real machine before relying
 on computer use.** Per platform, in order:
 
 1. Flip the master switch ON (Settings → Computer Use) and press
-   **Test readiness** — expect "Ready" (or read the issue lines).
+   **Test readiness** — expect "Ready" (or read the issue lines; the
+   report now also carries `addTypeOk` — the Add-Type compile probe — on
+   Windows).
 2. Ask the agent: *"list the running apps"* — expect a real app list via
-   `list_apps`.
+   `list_apps` (a FIRST empty with the "session died" note should
+   self-heal via the built-in retry; a second empty carries `probeNote`).
 3. Ask it to **observe** one app (*"look at the X window and tell me what
-   controls it has"*) — expect `get_app_state` output and a tree.
-4. One small **act-mode** action with the approval dialog (e.g. *"click the
+   controls it has"*) — expect `get_app_state` output and a tree. Try a
+   WebView2 renderer pid if you can find one in a task list (e.g.
+   `msedgewebview2`) — expect the honest
+   "target the HOST application instead" refusal, not "no running
+   application matches".
+4. **The key tool (R67)**: ask it to press *"press tab in the X app three
+times and tell me what gets focused"* — expect the receipt's `focused:`
+   field to name a different control after each press (the Tab-walk),
+   and REAL key presses (a text field's caret moves; `key "tab"` never
+   types t-a-b). A chord (`ctrl+a`) selects; `key "enter"` activates.
+5. One small **act-mode** action with the approval dialog (e.g. *"click the
    X app's About button"*) — expect the approval prompt, then a receipt and
    a visible click. Try a refusal path too: a coordinate click with the app
    in the background should refuse `frontmost_pid_mismatch` (Win/Linux).
-5. Watch the **floating monitor** appear automatically at the top of your
-   screen when the agent starts using the computer (above other apps), and
-   press **STOP** mid-task — expect every further computer-use call to
-   refuse `kill_switch_active`, any held button released, and the monitor
-   to disappear a few seconds after the session ends.
-6. If a list comes back EMPTY, read the result's `diagnostics` block
+6. Watch the **floating monitor** appear automatically at the top of your
+   screen when the agent starts using the computer (above other apps) —
+   and STAY UP while the agent thinks between tool calls (the R67 turn
+   hold), disappearing only after the turn ends (the 6-second decay) or
+   STOP. Press **STOP** mid-task — expect every further computer-use call
+   to refuse `kill_switch_active`, any held button released, and the
+   monitor to disappear a few seconds after the session ends.
+7. If a list comes back EMPTY, read the result's `diagnostics` block
    (processCount / foregroundPid / enumWindowsCount) — it exists precisely
    so a failure is debuggable from the transcript; an `app_not_found`
-   refusal lists the running apps as candidates.
+   refusal lists the running apps as candidates (and carries `probeNote`
+   when the list itself failed).
 
 If any step refuses unexpectedly, the refusal's message + recovery line is
 the diagnosis; the engine log (sidecar log; `sidecar_log_tail` in the
@@ -408,9 +506,11 @@ offline screen) carries the capsule errors.
 
 - [EMBEDDED-BROWSER](EMBEDDED-BROWSER.md) — the sibling surface (the app's
   in-app browser panel; the R65 boundary lines name each other)
+- [ATTACHMENTS](ATTACHMENTS.md) — the live screenshot THUMBNAILS the
+  captures now publish (the ephemeral raster registry + route)
 - [EXTENSIBILITY](EXTENSIBILITY.md) — the sibling runbook (plugins, skills,
   MCP servers, the plugins listing route)
-- [TESTING](TESTING.md) — the R61+R66 suites and the verification ladder
+- [TESTING](TESTING.md) — the R61+R66+R67 suites and the verification ladder
 - [MAINTENANCE](MAINTENANCE.md) — where things live in the tree
 - Code map: engine in `agent-core/src/computer/` (types, errors, session,
   audit, dispatch, vision, backends/{interface,linux,windows,macos,index}),
@@ -419,7 +519,8 @@ offline screen) carries the capsule errors.
   `agent-core/src/storage/vision.ts` — migration
   `agent-core/src/storage/migrations/0025_vision_settings.sql`), migration
   `agent-core/src/storage/migrations/0023_computer_use.sql`, routes in
-  `agent-core/src/server.ts` (ROUND-61 section), monitor UI in
+  `agent-core/src/server.ts` (ROUND-61 section; R67: the frames raster
+  route), monitor UI in
   `src/components/ComputerMiniWindow.tsx` + the mini window page
   `src/mini/MiniApp.tsx` + the OS window `src-tauri/src/mini.rs`, the live
   signal `src/lib/computer-monitor-store.ts`, settings UI in

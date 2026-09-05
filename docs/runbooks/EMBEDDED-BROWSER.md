@@ -1,9 +1,11 @@
-<!-- last-reviewed: 2026-09-04 round-66 -->
+<!-- last-reviewed: 2026-09-05 round-67 -->
 # EMBEDDED BROWSER — the agent's in-app browser panel (owner's guide)
 
 **Status:** normative · **Established:** round-43 (the panel + the tool);
-grown round-62 (read/eval/screenshot/tabs) and round-66 (the page-action
-surface, the bot-wall checkpoint, the instant viewport apply) ·
+grown round-62 (read/eval/screenshot/tabs), round-66 (the page-action
+surface, the bot-wall checkpoint, the instant viewport apply) and round-67
+(the working Windows bridge: the instant navigate frame, the WebView2 eval
+decoder, the chat-session tab binding, per-project cookies) ·
 **Audience:** the owner watching the panel and solving walls, and any agent
 maintaining the surface
 
@@ -37,12 +39,93 @@ answers an honest refusal, exactly like the raw `eval` action).
 | `press_key` | Dispatch a key (Enter, Tab, Escape, Backspace, Delete, arrows, Space, a character) to an element or the focused element; **Enter inside a form triggers REAL native form submission** | native bridge |
 | `eval` | Run JavaScript INSIDE the live page and get the value back (function-body semantics: end with `return value`; ≤20 000 chars) | native bridge |
 | `screenshot` | Capture what the panel shows + a vision-model description (needs Computer Use's capture engine enabled; the vision model is configured in Settings → Image Analysis) | bridge + capture engine |
-| `get_state` | currentUrl, title, viewport, canBack/canForward + EVERY open tab + which one you're viewing | any mode |
+| `get_state` | currentUrl, title, viewport, canBack/canForward + THIS chat session's tab (R67: the list is scoped to the binding — never another session's tab) | any mode |
 | `wait_for_verification` | The page is blocked by a bot wall — opens the countdown card in YOUR chat and waits while you solve it (see below) | probe bridge-first, fetch fallback; the card rides the live turn's SSE |
 
-All actions target the tab you are viewing unless the agent passes a
-`sessionId`. Viewport/page changes appear LIVE in the panel; the agent is
-taught to announce them in one line.
+All actions target the tab THIS chat session owns (see the binding model
+below) unless the agent passes an explicit `sessionId`. Viewport/page
+changes appear LIVE in the panel; the agent is taught to announce them in
+one line.
+
+## Navigation is transported (R67 — the blank-panel fix)
+
+The owner's 0.66.0 report: the agent navigated and "the panel stayed blank
+until I pressed Enter in the address bar" (the engine log: "no native
+webview for tab"). Root cause: `navigate` only mutated the sidecar history;
+the panel learned via its 4-second poll, whose adopt path set the tab's URL
+WITHOUT creating the WebView2 child. The fix, in three legs:
+
+- `navigate` / `back` / `forward` / `reload` emit the **`browser-navigate`**
+  SSE frame `{tabId, url}` the INSTANT the sidecar history changes —
+  turn-independent (the stream-store applies it before the live-turn guard,
+  like the R66 viewport frame), so the page lands even while you watch a
+  different turn;
+- the frontend applies it immediately (`browser-store.applyAgentNavigation`
+  patches `currentUrl` and bumps `agentNavSeq`), and the mounted panel's
+  effect navigates — or CREATES — the native webview on any seq bump;
+- the 4-second poll stays as the BACKSTOP, and its adopt path is fixed:
+  an unknown commanded URL with no webview yet now CREATES the webview
+  instead of silently adopting (covers frames missed while the panel was
+  unmounted). The frame needs the turn's live SSE stream — outside a turn
+  the poll (with the same create-on-adopt) is the only channel.
+
+## The binding model (R67 — one chat session, one tab)
+
+The owner's leak report: a NEW chat session drove the PREVIOUS session's
+still-open tab ("the embedded browser window of the OTHER session was shown
+/ driven") — the old default target was the process-global LRU tail, and
+`get_state` listed every session's tabs. Now every CHAT session maps to
+exactly ONE browser tab:
+
+1. **You declare it.** Just before every turn starts, the chat panel POSTs
+   **`/browser/bind`** `{chatSessionId, sessionId|null}` with the chat
+   session's ACTIVE right-sidebar browser tab (the tab you are viewing in
+   that session's sidebar; null when there is none). Fire-and-forget — a
+   failed bind just means the tool mints.
+2. **Or the tool mints one.** An unbound session gets a deterministic
+   `ag-<chatSession>` tab minted server-side, bound, and announced with the
+   **`browser-open`** SSE frame `{tabId, chatSessionId, url:null}` — the
+   sidebar opens a REAL tab whose id IS the sidecar session id (panel,
+   bridge and history align on one id), in the CHAT session's own sidebar
+   slice. A background session's turn browses into ITS OWN slice — never
+   the sidebar you are looking at; the slice only auto-opens when it is
+   the active session's.
+3. **Scoping.** Every `browser_control` action resolves its target as:
+  explicit `sessionId` param > the chat session's binding > the mint.
+  `get_state` lists only the addressed tab — the agent never even sees
+  another session's tab to be tempted by. The legacy shared fallback tab
+  survives only for no-chat-session contexts (catalog/tests), and the tool
+  output says so honestly.
+
+Cookies are PER-PROJECT now (the R46 wire-up is real): the panel's session
+mint carries the project id, so two projects' tabs keep separate jars
+(was the shared `_default` profile — the other half of the leak).
+
+## The WebView2 eval decoder (R67 — "the page rejected the script")
+
+Every page action (`click`/`type`/`press_key`/`read_dom`/`source`/`eval`)
+compiled to exactly the right script on the owner's real Windows machine —
+and then failed with "the page rejected the script". Root cause: WebView2's
+`ExecuteScriptAsync` returns a script's result value **JSON-encoded**; our
+scripts end with `return JSON.stringify(...)`, so the callback string was
+DOUBLE-encoded (the JSON of a string that is itself JSON). One `JSON.parse`
+yielded a STRING, the `{ok}` envelope was never seen, and every action
+failed. The Linux sandbox's mocks single-encode — which is why every test
+stayed green while Windows failed.
+
+The fix is `parseWebViewEvalJson` in `src/lib/native-browser.ts`: parse
+once; if the result is still a string, parse it again; a non-JSON string
+survives as the raw string (honest — the caller validates the shape). Both
+transports decode (WebKit after one parse, WebView2 after two), and an
+unexpected payload is reported with the raw text quoted instead of the old
+misleading rejection. The pop-out GUTTER SCROLLBAR probe rides the same
+normalizer (it was silently dead on Windows for the same reason).
+
+The panel resize no longer floats over the chat either (the owner's
+"overlay kind of vibe"): in the desktop shell the width snaps INSTANTLY
+(duration 0) so the bounds-sync loop keeps the OS-level webview
+pixel-glued to the placeholder; the smooth 200 ms animation stays for the
+web build (pure DOM, no floating layer).
 
 ## Form submission discipline (the Google-search fix)
 
@@ -142,7 +225,11 @@ floating monitor is computer-use-only. The `screenshot` action **no longer
 records into the computer-use session ring** (the R66 fix for the owner's
 A1 report: browser turns wrongly tripped the monitor). The live signal on
 the monitor is the decayed REAL-control activity (6 s decay) — a browser
-turn never shows it.
+turn never shows it, and browser-only turns never arm the R67 turn-hold
+either (only computer-use frames hold; see [COMPUTER-USE](COMPUTER-USE.md)).
+R67-D addition: the `screenshot` action now also publishes the capture as
+a live chat THUMBNAIL (`screenshot` SSE frame + the ephemeral raster route
+— see [ATTACHMENTS](ATTACHMENTS.md), the ephemeral-rasters section).
 
 ## Honest limitations
 
@@ -150,6 +237,15 @@ turn never shows it.
   `click`, `type`, `press_key`, `eval`, the `screenshot` region): web dev
   mode refuses them honestly. `navigate`/history/`set_viewport`/`read`/
   `get_state` work in every mode (server-side state/fetch).
+- **The Windows decode is pinned by construction only** — the
+  double-encoding is a documented `ExecuteScriptAsync` contract; the
+  headless Linux sandbox pins the normalizer's matrix by test (single-
+  encoded, double-encoded, non-JSON) but cannot run a real WebView2. Your
+  live Windows run is the proof (navigate → read_dom → click/type in that
+  order).
+- **The `browser-navigate`/`browser-open` frames ride the turn's live SSE
+  stream** — outside a turn (catalog/test contexts) there is no channel;
+  the 4-second poll (now with create-on-adopt) is the only backfill.
 - **The navigate wall probe is single-try, 5 s, bridge-only, failures
   swallowed** — a page still loading can race the probe (no ⚠ note lands);
   `read`'s detector covers the fetched text as the second chance.
@@ -171,16 +267,25 @@ turn never shows it.
   the R65 boundary lines in both runbooks' source prompts name each other)
 - [DEBUG-MODE](DEBUG-MODE.md) — the post-turn analyst that dissects
   browser turns
+- [ATTACHMENTS](ATTACHMENTS.md) — the chat attachment pipeline (and the
+  ephemeral screenshot rasters the browser screenshot now publishes)
 - [EXTENSIBILITY](EXTENSIBILITY.md) — where `browser_control` sits in the
   tool vocabulary
 - Code map: the tool `agent-core/src/tools/plugins/browser.ts` (15 actions,
-  the page-script builders, the wall probe), the checkpoint registry +
-  detector `agent-core/src/browser-checkpoint.ts`, the resolve route +
-  the wall probe wiring in `agent-core/src/server.ts`, the bridge answer
-  channel `POST /api/v1/browser-commands/:id/result`
+  the page-script builders, the wall probe, the binding resolution + the
+  navigate/open frames + the screenshot thumbnail frame), the binding Map +
+  the bind route + the session mint `agent-core/src/browser-proxy.ts`, the
+  checkpoint registry + detector `agent-core/src/browser-checkpoint.ts`, the
+  resolve route + the wall probe wiring in `agent-core/src/server.ts`, the
+  bridge answer channel `POST /api/v1/browser-commands/:id/result`
   (`agent-core/src/browser-proxy.ts` + `src-tauri/src/browser.rs`), the
-  panel `src/components/right-sidebar/BrowserPanel.tsx`, the tab store +
-  instant apply `src/lib/browser-store.ts`, the chat card
+  eval double-parse `src/lib/native-browser.ts` (`parseWebViewEvalJson`),
+  the panel `src/components/right-sidebar/BrowserPanel.tsx` (the
+  agentNavSeq effect + the create-on-adopt poll backstop), the tab store +
+  instant apply + the bind client `src/lib/browser-store.ts`, the sidebar
+  slice landing `src/lib/right-sidebar-store.ts`
+  (`openBrowserForChatSession`), the instant width
+  `src/components/right-sidebar/RightSidebar.tsx`, the chat card
   `src/components/project-chat/BrowserCheckpointCard.tsx`, the frame
   intercepts `src/lib/stream-store.ts`, the prompt section
   `agent-core/src/agents/prompts.ts` (EMBEDDED BROWSER PANEL).

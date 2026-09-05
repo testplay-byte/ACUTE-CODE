@@ -17,6 +17,23 @@
  *     raw paths on Windows/Linux (the foreground gate doubles as the
  *     occlusion guard); macOS rides AX's own scoping.
  *   · `get_app_state` re-observation is the only path to fresh tokens.
+ *
+ * ROUND-67 (R67-C — the owner's live Windows field report):
+ *   · resolveAppRef RETRIES a failed-empty list_apps ONCE before the tier-5
+ *     app_not_found, and that refusal's payload gains `probeNote` (the
+ *     backend's failure diagnostics) so the agent sees WHY the list is
+ *     empty instead of a blind dead-end.
+ *   · A resolved pid that owns NO accessible window (a live WebView2
+ *     renderer, for example) refuses with the honest helper-process
+ *     message — "no running application matches" was misleading for a
+ *     live process.
+ *   · toolKey splits chords with the plus-preserving splitter and, after a
+ *     successful key press, reads back the FOREGROUND element name
+ *     (focusedElementName) into the receipt as `focused` — the owner's
+ *     Tab-walk element-discovery technique (key "tab" → receipt says what
+ *     is now focused). Best-effort: backends that cannot read it return
+ *     null and the field is omitted; the key action itself never fails on
+ *     a readback failure.
  */
 import type {
   AppInfo,
@@ -45,10 +62,11 @@ import {
   targetlessInputRefused,
   invalidWindowId,
   type AppCandidate,
+  type RefusalOutcome,
 } from "./errors.js";
 import { getComputerSession, MAX_FRAME_AGE_MS, type ComputerSession } from "./session.js";
 import { appendAudit } from "./audit.js";
-import type { CuaBackend, ElementDescriptor, RunCommand, WindowScope } from "./backends/interface.js";
+import type { CuaBackend, ElementDescriptor, EnumerationDiagnostics, RunCommand, WindowScope } from "./backends/interface.js";
 
 export interface DispatcherOptions {
   backend: CuaBackend;
@@ -97,6 +115,63 @@ export function parseModifiers(mods: unknown): string[] {
     .map((m) => m.trim().toLowerCase())
     .filter((m) => ["ctrl", "shift", "alt", "super", "cmd", "option", "meta"].includes(m))
     .map((m) => (m === "cmd" || m === "meta" ? "super" : m === "option" ? "alt" : m));
+}
+
+/**
+ * R67-C: split a key chord on '+', PRESERVING a literal plus — '++' is the
+ * plus key (the escape convention, mirroring SendKeys itself) and 'ctrl++'
+ * is ctrl+plus. The old split+filter-empty dropped every empty segment, so
+ * '++' resolved to NOTHING and 'ctrl++' silently became just "ctrl".
+ * Named tokens are lowercased for the backends' tables; a '+' token stays
+ * verbatim (the Windows SendKeys composer brace-escapes it; Linux joins the
+ * tokens back into one xdotool chord string exactly as before for ordinary
+ * chords like "ctrl+a").
+ */
+export function splitKeyChord(text: string): string[] {
+  const tokens: string[] = [];
+  let cur = "";
+  let i = 0;
+  while (i < text.length) {
+    const ch = text[i]!;
+    if (ch === "+") {
+      if (i + 1 < text.length && text[i + 1] === "+") {
+        // '++' = an escaped plus key token.
+        if (cur.trim() !== "") tokens.push(cur.trim().toLowerCase());
+        cur = "";
+        tokens.push("+");
+        i += 2;
+        continue;
+      }
+      // A separator: close the current token.
+      if (cur.trim() !== "") tokens.push(cur.trim().toLowerCase());
+      cur = "";
+      i += 1;
+      continue;
+    }
+    cur += ch;
+    i += 1;
+  }
+  if (cur.trim() !== "") tokens.push(cur.trim().toLowerCase());
+  return tokens;
+}
+
+/**
+ * R67-C: attach the backend's failed-empty diagnostics note to an
+ * app_not_found refusal as `probeNote` — only when the list is EMPTY and a
+ * failure note exists (a non-empty list needs no explanation; a benign
+ * empty has no note). The agent then sees WHY there is no app list instead
+ * of a blind dead-end.
+ */
+function withProbeNote(
+  outcome: RefusalOutcome,
+  apps: AppInfo[],
+  diagnostics: EnumerationDiagnostics | undefined,
+): Refusal {
+  if (apps.length > 0 || diagnostics?.note === undefined) return outcome.refusal;
+  return {
+    ...outcome.refusal,
+    payload: { ...(outcome.refusal.payload ?? {}), probeNote: diagnostics.note },
+  };
 }
 
 export class ComputerDispatcher {
@@ -346,6 +421,13 @@ export class ComputerDispatcher {
    *      resolves; several → ambiguous refusal LISTING the candidates
    *   5. none → app_not_found whose payload carries `runningApps` (capped)
    *      so the model picks the right pid and retries in one step.
+   *
+   * R67-C: a FAILED-EMPTY list (empty apps + a diagnostics note — e.g. the
+   * owner's "the PowerShell session died before emitting JSON") is retried
+   * ONCE before the tiers run; if the retry still comes back
+   * empty-with-failure, the tier-5 refusal payload carries `probeNote`
+   * (the note) so the agent sees WHY there is no list. A benign empty
+   * (no note — a genuinely bare desktop) is not retried.
    */
   private async resolveAppRef(ref: unknown): Promise<
     { ok: true; app: { pid: number; name?: string; bundleId?: string } } | { ok: false; refusal: DispatchResult }
@@ -365,7 +447,12 @@ export class ComputerDispatcher {
     if (pid !== undefined && Number.isInteger(pid) && pid > 0) {
       return { ok: true, app: { pid, name, bundleId } };
     }
-    const { apps } = await this.backend.listApps(this.run);
+    let { apps, diagnostics } = await this.backend.listApps(this.run);
+    if (apps.length === 0 && diagnostics?.note !== undefined) {
+      const retried = await this.backend.listApps(this.run);
+      apps = retried.apps;
+      diagnostics = retried.diagnostics;
+    }
     if (name !== undefined && name.trim() !== "") {
       const want = name.trim().toLowerCase();
       const describe = (list: AppInfo[]): AppCandidate[] => appCandidates(list);
@@ -392,7 +479,10 @@ export class ComputerDispatcher {
         return { ok: false, refusal: { kind: "refusal", refusal: ambiguousAppRef(name, describe(partial)).refusal } };
       }
       // Tier 5 — nothing matched: the running apps ride the refusal.
-      return { ok: false, refusal: { kind: "refusal", refusal: appNotFound(name, apps).refusal } };
+      return {
+        ok: false,
+        refusal: { kind: "refusal", refusal: withProbeNote(appNotFound(name, apps), apps, diagnostics) },
+      };
     }
     if (bundleId !== undefined) {
       const matches = apps.filter((a) => a.bundleId === bundleId);
@@ -400,9 +490,18 @@ export class ComputerDispatcher {
       if (matches.length > 1) {
         return { ok: false, refusal: { kind: "refusal", refusal: ambiguousAppRef(bundleId, appCandidates(matches)).refusal } };
       }
-      return { ok: false, refusal: { kind: "refusal", refusal: appNotFound(bundleId, apps).refusal } };
+      return {
+        ok: false,
+        refusal: { kind: "refusal", refusal: withProbeNote(appNotFound(bundleId, apps), apps, diagnostics) },
+      };
     }
-    return { ok: false, refusal: { kind: "refusal", refusal: appNotFound("(app_ref without pid/name/bundleId)", apps).refusal } };
+    return {
+      ok: false,
+      refusal: {
+        kind: "refusal",
+        refusal: withProbeNote(appNotFound("(app_ref without pid/name/bundleId)", apps), apps, diagnostics),
+      },
+    };
   }
 
   /** Element freshness gate (doc 03 §6) + scope/window extraction. */
@@ -564,7 +663,7 @@ export class ComputerDispatcher {
     const resolved = await this.resolveAppRef(args["appRef"] ?? args["app_ref"]);
     if (!resolved.ok) return { ok: false, refusal: resolved.refusal };
     const ref = (args["appRef"] ?? args["app_ref"]) as Record<string, unknown>;
-    const { windows } = await this.backend.listWindows(this.run, { pid: resolved.app.pid });
+    const { windows, diagnostics } = await this.backend.listWindows(this.run, { pid: resolved.app.pid });
     let window = windows[0];
     if (ref["windowId"] !== undefined || ref["window_id"] !== undefined) {
       const wantId = Number(ref["windowId"] ?? ref["window_id"]);
@@ -574,9 +673,39 @@ export class ComputerDispatcher {
       }
       window = match;
     } else if (windows.length === 0) {
-      return { ok: false, refusal: { kind: "refusal", refusal: appNotFound(`pid ${resolved.app.pid} (no open windows)`).refusal } };
+      // R67-C: the WebView2-helper live failure — a LIVE process that owns
+      // no accessible top-level window is NOT "no running application
+      // matches". The honest refusal names the helper-process cause and
+      // redirects to the host app (list_apps). A confirmed-not-running pid
+      // keeps the plain app_not_found shape.
+      return { ok: false, refusal: this.noAccessibleWindowRefusal(resolved.app.pid, diagnostics?.processRunning) };
     }
     return { ok: true, app: resolved.app, window };
+  }
+
+  /**
+   * R67-C: the pid resolved but owns no accessible top-level window — the
+   * owner's live failure (get_app_state(pid of msedgewebview2) → "no running
+   * application matches" for a LIVE helper). `processRunning === false`
+   * (the backend checked Get-Process and found the pid dead) keeps the
+   * plain app_not_found shape; anything else gets the honest
+   * helper-process message. Shared by resolveAppWindow, toolType and
+   * toolKey (all three used to emit the misleading generic shape).
+   */
+  private noAccessibleWindowRefusal(pid: number, processRunning: boolean | undefined): DispatchResult {
+    if (processRunning === false) {
+      return { kind: "refusal", refusal: appNotFound(`pid ${pid} (not running)`).refusal };
+    }
+    return {
+      kind: "refusal",
+      refusal: {
+        error: "app_not_found",
+        message: `process ${pid} is running but owns no accessible top-level window — it may be a helper/child process (e.g. a WebView2 renderer); target the HOST application instead (see list_apps).`,
+        recovery:
+          "Call list_apps and re-issue the action against the host application's pid (its `name` is the top-level window title — e.g. the browser or app hosting the WebView2, not the renderer).",
+        payload: { pid, processRunning: processRunning ?? null, ownsAccessibleWindow: false },
+      },
+    };
   }
 
   /**
@@ -1140,12 +1269,13 @@ export class ComputerDispatcher {
     const resolved = await this.resolveAppRef(appRef);
     if (!resolved.ok) return resolved.refusal;
     const ref = appRef as Record<string, unknown>;
-    const { windows } = await this.backend.listWindows(this.run, { pid: resolved.app.pid });
+    void ref;
+    const { windows, diagnostics } = await this.backend.listWindows(this.run, { pid: resolved.app.pid });
     const window = windows[0];
     if (window === undefined) {
-      return { kind: "refusal", refusal: appNotFound(`pid ${resolved.app.pid} (no windows)`).refusal };
+      // R67-C: live-but-windowless pid → the honest helper-process refusal.
+      return this.noAccessibleWindowRefusal(resolved.app.pid, diagnostics?.processRunning);
     }
-    void ref;
     const gate = await this.requireForegroundForRaw(resolved.app.pid);
     if (gate !== null) return gate;
     this.session.record("intent", `Typing into '${window.title}' (app-scoped)`, "type");
@@ -1253,7 +1383,14 @@ export class ComputerDispatcher {
       return { kind: "refusal", refusal: invalidTarget("key text must name a key or chord, e.g. 'return' or 'ctrl+a'").refusal };
     }
     const repeat = Math.max(0, Math.min(100, Number(args["repeat"]) || 1));
-    const keys = text.split("+").map((k) => k.trim().toLowerCase()).filter((k) => k !== "");
+    // R67-C: the plus-preserving splitter — '++' is the plus key, 'ctrl+a'
+    // is a chord the backend composes (Windows: one SendKeys chord;
+    // Linux: one xdotool key string — the exact tokens as before for
+    // ordinary chords).
+    const keys = splitKeyChord(text);
+    if (keys.length === 0) {
+      return { kind: "refusal", refusal: invalidTarget("key text must name a key or chord, e.g. 'return' or 'ctrl+a'").refusal };
+    }
     const appRef = args["appRef"] ?? args["app_ref"];
     if (appRef === undefined) {
       return { kind: "refusal", refusal: targetlessInputRefused("key").refusal };
@@ -1261,12 +1398,13 @@ export class ComputerDispatcher {
     const resolved = await this.resolveAppRef(appRef);
     if (!resolved.ok) return resolved.refusal;
     const ref = appRef as Record<string, unknown>;
-    const { windows } = await this.backend.listWindows(this.run, { pid: resolved.app.pid });
+    void ref;
+    const { windows, diagnostics } = await this.backend.listWindows(this.run, { pid: resolved.app.pid });
     const window = windows[0];
     if (window === undefined) {
-      return { kind: "refusal", refusal: appNotFound(`pid ${resolved.app.pid} (no windows)`).refusal };
+      // R67-C: live-but-windowless pid → the honest helper-process refusal.
+      return this.noAccessibleWindowRefusal(resolved.app.pid, diagnostics?.processRunning);
     }
-    void ref;
     this.session.record("intent", `Sending key '${text}'${repeat > 1 ? ` ×${repeat}` : ""}`, "key");
     let lastResult: { ok: boolean; error?: string } | undefined;
     for (let i = 0; i < Math.max(1, repeat); i++) {
@@ -1283,7 +1421,22 @@ export class ComputerDispatcher {
     if (!lastResult?.ok) {
       return { kind: "refusal", refusal: capabilityFailClosed(lastResult?.error ?? "key dispatch failed").refusal };
     }
-    return { kind: "receipt", receipt: receipt(true, "accepted", false) };
+    // R67-C: the Tab-walk readback — after a successful key press, read the
+    // FOREGROUND app's focused element name. Best-effort on every path: a
+    // null/empty/throwing readback is OMITTED, never a key failure (the
+    // focusedElementName impls themselves scope on the foreground pid, so
+    // the readback is honest only when the target still owns the focus).
+    let focused: string | null = null;
+    try {
+      focused = await this.backend.focusedElementName(this.run, resolved.app.pid);
+    } catch {
+      focused = null;
+    }
+    const keyReceipt: Receipt & { focused?: string } = receipt(true, "accepted", false);
+    if (focused !== null && focused.trim() !== "") {
+      keyReceipt.focused = focused.trim().slice(0, 200);
+    }
+    return { kind: "receipt", receipt: keyReceipt };
   }
 
   private async toolHoldKey(args: Record<string, unknown>): Promise<DispatchResult> {
@@ -1298,8 +1451,9 @@ export class ComputerDispatcher {
     const gate = await this.requireForegroundForRaw(resolved.app.pid);
     if (gate !== null) return gate;
     this.session.record("wait", `Holding '${text}' for ${duration}s`, "hold_key");
-    // Hold = key down, wait, key up (composed from rawKey).
-    const keys = text.split("+").map((k) => k.trim().toLowerCase()).filter((k) => k !== "");
+    // Hold = key down, wait, key up (composed from rawKey). R67-C: the same
+    // plus-preserving splitter as the key tool.
+    const keys = splitKeyChord(text);
     const down = await this.backend.rawKey(this.run, keys, { pid: resolved.app.pid, windowId: 0 });
     if (!down.ok) {
       return { kind: "refusal", refusal: capabilityFailClosed(down.error ?? "hold failed").refusal };

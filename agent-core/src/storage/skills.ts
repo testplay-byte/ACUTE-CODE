@@ -69,6 +69,12 @@ export const COMPUTER_USE_SKILL_ID = "skill_builtin_computer_use";
  * server-side tree search) before screenshots in Chromium-sized windows
  * (the owner's live Edge failure: the agent looped screenshots because it
  * could not locate one control in a thousands-element tree).
+ *
+ * ROUND-67 (R67-E): the TAB-WALK DISCOVERY paragraph — the Windows key
+ * tool now sends REAL SendKeys chords and every key receipt names the
+ * FOCUSED element, so walking Tab discovers the controls (the owner's
+ * technique) — plus the embedded-browser boundary (browser_control only,
+ * never computer-use tools on the in-app panel).
  */
 export const COMPUTER_USE_SKILL_BODY = `# Skill: computer-use
 
@@ -89,6 +95,12 @@ Main-agent only. Never delegate Computer Use to a subagent (subagents lack the s
 - get_app_state on a browser/IDE window returns a HUGE tree (Chromium exposes thousands of elements). Do NOT read it whole — SEARCH it: find_elements {appRef, query:"Sign in", kind:"button"} returns just the matching elements with indexes + bounds, far cheaper than get_app_state detail:"full".
 - Prefer find_elements + element clicks (left_click/set_value with the returned stateId + index) over screenshots in big apps.
 - Never loop screenshots when the tree can answer: find_elements by name first; screenshot/zoom only when names genuinely cannot identify the control. An empty result tells you the query and how many elements were searched — retry with a shorter substring or read the tree.
+
+## Tab-walk discovery (R67)
+- Pressing key "tab" highlights the next focusable control on screen, and every key receipt names the FOCUSED element — walk Tab repeatedly to discover what is interactive when find_elements comes back empty or names cannot identify the target, then act on the element you reached. Combine with find_elements (search by name) when the app is big.
+
+## The embedded browser is NOT a desktop app
+- The app's EMBEDDED browser panel (the right-sidebar webview) is driven ONLY with browser_control (read_dom → click/type the returned selector paths) — NEVER with these computer-use tools. If the task is a web page, it is browser_control work; computer use is for the user's REAL apps.
 
 ## Discipline
 - type REPLACES a field's contents (select first to insert). set_value is the preferred semantic write. Prefer set_value/perform_action over raw input.

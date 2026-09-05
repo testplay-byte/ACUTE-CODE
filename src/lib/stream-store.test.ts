@@ -30,6 +30,10 @@ import {
 import { useActiveStreams } from "./active-streams";
 // ROUND-65 (R65): the agent-browser activity signal the frames below bump.
 import { useRightSidebarStore } from "./right-sidebar-store";
+// ROUND-67 (R67): the browser tab store + the computer monitor store (the
+// instant browser frames + the monitor turn-hold).
+import { useBrowserTabStore } from "./browser-store";
+import { useComputerMonitorStore } from "./computer-monitor-store";
 import type { StreamTurnEvent } from "./api";
 
 function sseResponse(frames: StreamTurnEvent[]): Response {
@@ -1232,5 +1236,226 @@ describe("agent browser activity signal (ROUND-65 R65)", () => {
     );
     await useStreamStore.getState().startStream(PARENT, "no project known");
     expect(Object.keys(useRightSidebarStore.getState().agentBrowserActivityByProject)).toHaveLength(0);
+  });
+});
+
+// ── ROUND-67 (R67): the instant browser frames + the monitor turn-hold ──────
+describe("R67 browser frames + computer monitor turn-hold", () => {
+  beforeEach(() => {
+    useBrowserTabStore.getState().resetAll();
+    useRightSidebarStore.setState({
+      byProject: {},
+      activeSessionByProject: {},
+      agentBrowserActivityByProject: {},
+      agentBrowserActivityAtByProject: {},
+    });
+    useComputerMonitorStore.setState({ turnHolds: {}, liveActivity: false, events: [], session: null, error: null });
+  });
+
+  it("R67/E1: a browser-navigate frame applies the agent navigation INSTANTLY (tab slice + agentNavSeq)", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        sseResponse([
+          { type: "browser-navigate", sessionId: "", tabId: "ag-sess_r67", url: "https://example.com/inst-nav" },
+          { type: "stopped" },
+        ]),
+      ),
+    );
+    await useStreamStore.getState().startStream(PARENT, "navigate", { projectId: "prj_browse" });
+    const tab = useBrowserTabStore.getState().tabs["ag-sess_r67"];
+    // The slice was CREATED by the frame (the panel's mount effect later
+    // reads currentUrl to CREATE the webview — the blank-panel fix).
+    expect(tab).toBeDefined();
+    expect(tab?.currentUrl).toBe("https://example.com/inst-nav");
+    expect(tab?.navSeq).toBe(1);
+    expect(tab?.agentNavSeq).toBe(1);
+    expect(tab?.loading).toBe(true);
+  });
+
+  it("R67/E3: a browser-open frame opens the chat session's agent tab in the ACTIVE slice (auto-open)", async () => {
+    useRightSidebarStore.getState().setActiveSession("prj_browse", PARENT);
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        sseResponse([
+          { type: "browser-open", sessionId: "", tabId: "ag-sess_r67b", chatSessionId: PARENT, url: "https://example.com/opened" },
+          { type: "stopped" },
+        ]),
+      ),
+    );
+    await useStreamStore.getState().startStream(PARENT, "browse", { projectId: "prj_browse" });
+    const slice = useRightSidebarStore.getState().byProject[`prj_browse::${PARENT}`];
+    expect(slice).toBeDefined();
+    const tab = slice?.tabs.find((t) => t.id === "ag-sess_r67b");
+    expect(tab).toBeTruthy();
+    expect(tab?.type).toBe("browser");
+    expect(tab?.browserUrl).toBe("https://example.com/opened");
+    expect(slice?.open).toBe(true);
+    expect(slice?.activeTabId).toBe("ag-sess_r67b");
+  });
+
+  it("R67/E3: a background session's browser-open NEVER yanks the visible slice (isolation)", async () => {
+    // The user is viewing session OTHER in prj_browse's sidebar; PARENT
+    // streams in the background and its agent opens a browser tab.
+    useRightSidebarStore.getState().setActiveSession("prj_browse", "sess_other");
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        sseResponse([
+          { type: "browser-open", sessionId: "", tabId: "ag-sess_r67c", chatSessionId: PARENT, url: null },
+          { type: "stopped" },
+        ]),
+      ),
+    );
+    await useStreamStore.getState().startStream(PARENT, "background browse", { projectId: "prj_browse" });
+    const bg = useRightSidebarStore.getState().byProject[`prj_browse::${PARENT}`];
+    expect(bg?.tabs.find((t) => t.id === "ag-sess_r67c")).toBeTruthy();
+    // The VISIBLE slice (sess_other) has no tab and stays closed.
+    const visible = useRightSidebarStore.getState().byProject["prj_browse::sess_other"];
+    expect(visible?.tabs ?? []).toHaveLength(0);
+    expect(visible?.open).not.toBe(true);
+  });
+
+  it("R67/F1: a computer-use frame latches the monitor TURN-HOLD while the turn is open; the stream end releases it", async () => {
+    const snapshots: Array<Record<string, boolean>> = [];
+    useComputerMonitorStore.subscribe((s) => snapshots.push({ ...s.turnHolds }));
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        sseResponse([
+          { type: "computer-use", kind: "data", tool: "screenshot" },
+          { type: "text-delta", delta: "thinking…" },
+          { type: "stopped" },
+        ]),
+      ),
+    );
+    await useStreamStore.getState().startStream(PARENT, "use the computer", { projectId: "prj_browse" });
+    // The hold WAS latched while the turn streamed (the owner: the indicator
+    // vanished while the agent was still thinking between tool calls).
+    expect(snapshots.some((s) => s[PARENT] === true)).toBe(true);
+    // …and the stream's finally released it (the turn is over).
+    expect(useComputerMonitorStore.getState().turnHolds[PARENT]).toBeUndefined();
+  });
+
+  it("R67/F1: stop_computer_control rests the monitor signal immediately", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        sseResponse([
+          { type: "computer-use", kind: "data", tool: "screenshot" },
+          { type: "computer-use", kind: "receipt", tool: "stop_computer_control" },
+          { type: "stopped" },
+        ]),
+      ),
+    );
+    await useStreamStore.getState().startStream(PARENT, "stop it", { projectId: "prj_browse" });
+    expect(useComputerMonitorStore.getState().turnHolds[PARENT]).toBeUndefined();
+    expect(useComputerMonitorStore.getState().liveActivity).toBe(false);
+  });
+});
+
+// ── ROUND-67 (R67/D): the screenshot THUMBNAIL strip feed ────────────────────
+describe("R67/D screenshot frames → liveTurn.screenshots", () => {
+  beforeEach(() => {
+    useBrowserTabStore.getState().resetAll();
+    useComputerMonitorStore.setState({ turnHolds: {}, liveActivity: false, events: [], session: null, error: null });
+  });
+
+  it("a screenshot frame appends {frameId, tool, ts} to the OPEN liveTurn (newest LAST)", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        sseResponse([
+          { type: "screenshot", sessionId: PARENT, frameId: "f-1", tool: "screenshot" },
+          { type: "screenshot", sessionId: PARENT, frameId: "bs_x", tool: "browser_control", note: "browser panel" },
+          { type: "stopped" },
+        ]),
+      ),
+    );
+    await useStreamStore.getState().startStream(PARENT, "take screenshots");
+    const liveTurn = useStreamStore.getState().bySession[PARENT]?.liveTurn;
+    expect(liveTurn).not.toBeNull();
+    expect(liveTurn!.screenshots).toHaveLength(2);
+    // Newest LAST (render order), tool names preserved, ts is a real clock read.
+    expect(liveTurn!.screenshots![0]).toMatchObject({ frameId: "f-1", tool: "screenshot" });
+    expect(liveTurn!.screenshots![1]).toMatchObject({ frameId: "bs_x", tool: "browser_control" });
+    expect(liveTurn!.screenshots![1].ts).toBeGreaterThanOrEqual(0);
+  });
+
+  it("the strip is capped at 8 — the OLDEST entries drop (the newest survive)", async () => {
+    const frames: StreamTurnEvent[] = [];
+    for (let i = 1; i <= 10; i++) {
+      frames.push({ type: "screenshot", sessionId: PARENT, frameId: `f-${i}`, tool: "screenshot" });
+    }
+    frames.push({ type: "stopped" });
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(sseResponse(frames)));
+    await useStreamStore.getState().startStream(PARENT, "screenshot loop");
+    const shots = useStreamStore.getState().bySession[PARENT]?.liveTurn?.screenshots;
+    expect(shots).toHaveLength(8);
+    expect(shots![0].frameId).toBe("f-3"); // f-1, f-2 dropped
+    expect(shots![7].frameId).toBe("f-10"); // newest kept
+  });
+
+  it("a screenshot frame with NO open liveTurn is dropped, never a crash (rasters belong to the turn that captured them)", async () => {
+    // Drive a mid-stream liveTurn removal: frame 1 lands on the open turn,
+    // then the slice's liveTurn is cleared (the panel's post-done clear
+    // racing a late frame) BEFORE frame 2 (the screenshot) arrives — the
+    // per-event guard must drop it and leave the store consistent.
+    const encoder = new TextEncoder();
+    let release: ((frame: StreamTurnEvent) => void) | null = null;
+    const stream = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(encoder.encode(`data: ${JSON.stringify({ type: "text-delta", delta: "start" })}\n\n`));
+        release = (frame) => {
+          controller.enqueue(encoder.encode(`data: ${JSON.stringify(frame)}\n\n`));
+          controller.close();
+        };
+      },
+    });
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(new Response(stream, { status: 200, headers: { "content-type": "text/event-stream" } })),
+    );
+    const running = useStreamStore.getState().startStream(PARENT, "late frame race");
+    // Let the first frame process (the reader runs in microtasks).
+    await new Promise<void>((resolve) => setTimeout(resolve, 0));
+    useStreamStore.setState((s) => ({
+      bySession: { ...s.bySession, [PARENT]: { ...s.bySession[PARENT], liveTurn: null } },
+    }));
+    release!({ type: "screenshot", sessionId: PARENT, frameId: "f-late", tool: "screenshot" });
+    await running;
+    // No crash, and the guard dropped the frame — nothing recreated the
+    // cleared liveTurn (a broken guard would have built one for the entry).
+    expect(useStreamStore.getState().bySession[PARENT]?.liveTurn).toBeNull();
+  });
+
+  it("a fresh turn RESETS the strip (startStream initializes screenshots: [])", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        sseResponse([
+          { type: "screenshot", sessionId: PARENT, frameId: "f-1", tool: "screenshot" },
+          { type: "stopped" },
+        ]),
+      ),
+    );
+    await useStreamStore.getState().startStream(PARENT, "first turn");
+    expect(useStreamStore.getState().bySession[PARENT]?.liveTurn?.screenshots).toHaveLength(1);
+    // Second turn: the fetch stub still serves the same frames, but the
+    // strip's reset is visible DURING the stream — assert via the fresh
+    // startStream patch order (liveTurn replaced before frames land).
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockImplementation(async () => {
+        // Read the store MID-STREAM: the fresh liveTurn already exists with
+        // an EMPTY strip (the previous turn's capture never leaks in).
+        const mid = useStreamStore.getState().bySession[PARENT]?.liveTurn;
+        expect(mid?.screenshots).toEqual([]);
+        return sseResponse([{ type: "stopped" }]);
+      }),
+    );
+    await useStreamStore.getState().startStream(PARENT, "second turn");
+    expect(useStreamStore.getState().bySession[PARENT]?.liveTurn?.screenshots).toHaveLength(0);
   });
 });

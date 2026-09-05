@@ -426,6 +426,36 @@ export function BrowserPanel({ projectId, tab }: { projectId: string; tab: Right
     if (agentViewportSeq > 0) setNaturalSize(false);
   }, [agentViewportSeq]);
 
+  /**
+   * ROUND-67 (R67, E1): the agent-navigation driver. The store bumps
+   * agentNavSeq on every browser-navigate SSE frame (navigate /
+   * back / forward / reload from the browser_control tool — applied
+   * server-side + announced instantly). THIS effect commands the native
+   * webview the moment the frame lands: NAVIGATE when the webview is
+   * alive, CREATE when it never existed (the owner's blank-panel bug: a
+   * fresh agent tab whose webview was never created stayed empty until a
+   * manual address-bar Enter — the poll's reconcile only ADOPTED the
+   * URL). User navigations never bump agentNavSeq (navigateUrl drives the
+   * webview itself); the 4s poll stays as the backfill.
+   */
+  const agentNavSeq = state?.agentNavSeq ?? 0;
+  const agentNavSeqRef = useRef(agentNavSeq);
+  useEffect(() => {
+    if (agentNavSeq === agentNavSeqRef.current) return;
+    agentNavSeqRef.current = agentNavSeq;
+    if (agentNavSeq === 0 || currentUrl === null) return;
+    if (lastCommandedUrlRef.current === currentUrl) return; // echo of our own command
+    lastCommandedUrlRef.current = currentUrl;
+    if (!nativeMode) return; // iframe path: the navSeq key remount handles it
+    if (nativeReadyRef.current) {
+      void nativeTabNavigate(tabId, currentUrl).catch(nativeWarn);
+    } else {
+      void nativeCreate(currentUrl).catch(nativeFail);
+    }
+    // Deps note: currentUrl/nativeCreate are read at frame time; the seq is
+    // the trigger (the values above are the frame's own, captured at fire).
+  }, [agentNavSeq]);
+
   const iframeRef = useRef<HTMLIFrameElement | null>(null);
   const contentRef = useRef<HTMLDivElement | null>(null);
   /** Did the loaded document postMessage us? Error pages never do. */
@@ -472,8 +502,11 @@ export function BrowserPanel({ projectId, tab }: { projectId: string; tab: Right
   // ── mount: initialize the slice + mint the ticket ──────────────────────
   useEffect(() => {
     ensureTab(tabId);
-    void mint(tabId);
-  }, [tabId, ensureTab, mint]);
+    // R67/E4: the mint carries the project id — the sidecar binds the
+    // session's cookie PROFILE to the project (the R46 wire-up: logins stay
+    // project-scoped, sessions of different projects never share a jar).
+    void mint(tabId, projectId);
+  }, [tabId, ensureTab, mint, projectId]);
 
   // ── derived viewport geometry ───────────────────────────────────────────
   const vp = state?.viewport;
@@ -788,8 +821,20 @@ export function BrowserPanel({ projectId, tab }: { projectId: string; tab: Right
         const serverUrl = live?.currentUrl ?? null;
         if (serverUrl === null) return;
         if (lastCommandedUrlRef.current === null) {
-          // Unknown (back/forward walked the webview's own history) — adopt
-          // the server URL WITHOUT re-navigating; the webview already moved.
+          // R67/E1 backstop: UNKNOWN commanded URL with NO webview yet —
+          // the tab was auto-opened blank and the agent navigated while the
+          // panel was unmounted (or the instant frame was missed). The old
+          // code ADOPTED the URL here without ever creating the webview —
+          // THE blank-panel bug (the owner had to press Enter in the
+          // address bar to make the page appear). CREATE it now instead.
+          if (!nativeReadyRef.current) {
+            lastCommandedUrlRef.current = serverUrl;
+            void nativeCreate(serverUrl).catch(nativeFail);
+            return;
+          }
+          // Webview alive + unknown commanded URL (back/forward walked the
+          // webview's own history) — adopt the server URL WITHOUT
+          // re-navigating; the webview already moved.
           lastCommandedUrlRef.current = serverUrl;
           return;
         }

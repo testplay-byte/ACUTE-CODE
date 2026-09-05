@@ -15,6 +15,10 @@ import { computeNativeBounds } from "./BrowserPanel";
 import {
   isNativeBrowserAvailable,
   nativeInvoke,
+  // R67/E2: the WebView2 double-encoding normalizer + the eval/scroll probes.
+  nativeTabEval,
+  nativeTabScrollState,
+  parseWebViewEvalJson,
   nativeTabClose,
   nativeTabCreate,
   nativeTabGo,
@@ -246,5 +250,72 @@ describe("native-browser bridge (R50-a wrappers)", () => {
     unlisten(); // disposed BEFORE the listen promise resolves
     resolveListen(unlistenFn);
     await vi.waitFor(() => expect(unlistenFn).toHaveBeenCalledTimes(1));
+  });
+});
+
+// ── ROUND-67 (R67/E2): the WebView2 eval double-encoding normalizer ─────────
+describe("R67 parseWebViewEvalJson — the WebView2 double-encoding fix", () => {
+  it("single-encoded (WebKit/webkitgtk shape) parses to the object after ONE parse", () => {
+    const single = JSON.stringify({ ok: true, value: 42 });
+    expect(parseWebViewEvalJson(single)).toEqual({ ok: true, value: 42 });
+  });
+
+  it("DOUBLE-encoded (WebView2 ExecuteScriptAsync shape) parses to the object after the tolerant second parse", () => {
+    // The page script returned JSON.stringify({...}) — a STRING — so
+    // WebView2's ExecuteScriptAsync delivers the JSON OF that string (the
+    // outer quotes + escaping). The old single parse yielded the STRING,
+    // data.ok was undefined, and every action failed with "the page
+    // rejected the script" on real Windows.
+    const payload = JSON.stringify({ ok: true, value: { title: "Google" } });
+    const doubleEncoded = JSON.stringify(payload);
+    expect(parseWebViewEvalJson(doubleEncoded)).toEqual({ ok: true, value: { title: "Google" } });
+  });
+
+  it("a non-JSON string survives as the raw string (the caller validates the shape)", () => {
+    expect(parseWebViewEvalJson("plain text")).toBe("plain text");
+    expect(parseWebViewEvalJson(JSON.stringify("inner text"))).toBe("inner text");
+  });
+
+  it("an object shape (no string round-trip) passes through", () => {
+    // scroll-state style: a script returning an object literal would arrive
+    // single-encoded; a script returning JSON.stringify arrives double —
+    // both normalize to the same object.
+    const obj = JSON.stringify({ y: 10, vh: 800, ch: 2000, css: true });
+    expect(parseWebViewEvalJson(obj)).toEqual({ y: 10, vh: 800, ch: 2000, css: true });
+    expect(parseWebViewEvalJson(JSON.stringify(obj))).toEqual({ y: 10, vh: 800, ch: 2000, css: true });
+  });
+});
+
+describe("R67 nativeTabEval / nativeTabScrollState — both transports return data", () => {
+  it("nativeTabEval: a DOUBLE-encoded eval reply yields {ok:true, value} (the Windows fix)", async () => {
+    const payload = JSON.stringify({ ok: true, value: { clicked: { tag: "a" } } });
+    stubTauri(async () => JSON.stringify(payload)); // the double-encoded string
+    const result = await nativeTabEval("tab-1", "return 1");
+    expect(result).toEqual({ ok: true, value: { clicked: { tag: "a" } } });
+  });
+
+  it("nativeTabEval: a SINGLE-encoded reply (web-mode/mock shape) still works", async () => {
+    stubTauri(async () => JSON.stringify({ ok: true, value: null }));
+    const result = await nativeTabEval("tab-1", "return null");
+    expect(result).toEqual({ ok: true, value: null });
+  });
+
+  it("nativeTabEval: a payload that is still not the envelope reports honestly (no more silent 'page rejected the script')", async () => {
+    stubTauri(async () => JSON.stringify("definitely not json"));
+    const result = await nativeTabEval("tab-1", "return 1");
+    expect(result?.ok).toBe(false);
+    expect(result?.error).toContain("unexpected payload");
+  });
+
+  it("nativeTabScrollState: a DOUBLE-encoded probe reply yields the state (the Windows gutter-scrollbar fix)", async () => {
+    const payload = JSON.stringify({ y: 12, vh: 800, ch: 4321, css: false });
+    stubTauri(async () => JSON.stringify(payload));
+    const state = await nativeTabScrollState("tab-1");
+    expect(state).toEqual({ y: 12, vh: 800, ch: 4321, css: false });
+  });
+
+  it("nativeTabScrollState: a garbage reply returns null (never throws)", async () => {
+    stubTauri(async () => "###");
+    expect(await nativeTabScrollState("tab-1")).toBeNull();
   });
 });

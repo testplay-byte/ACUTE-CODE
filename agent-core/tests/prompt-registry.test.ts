@@ -124,6 +124,12 @@ describe("PROMPT_REGISTRY (R59-F)", () => {
     // strengthening + the skills/computer-use/mcp sections changed the
     // composition; every dynamic field pinned to fixed values; the
     // REGENERATION script lives in this test file's header comment below).
+    // Regenerated AGAIN in R67 (R67-E, deliberately — the ROUND-67 browser
+    // discipline lines, the TAB-WALK DISCOVERY line, the IMAGE ATTACHMENTS
+    // rule, and the R66 truth updates: "every open tab" → "this session's
+    // tab", "the tab the user is viewing" → "this chat session's own tab",
+    // "APPEAR LIVE" → "APPEAR … IMMEDIATELY"; additions-only except those
+    // three honest corrections).
     // If this fails after a deliberate prompts.ts change, regenerate
     // deliberately and say so in the round log.
     // R59 CI fix: normalize \r\n → \n on BOTH sides before comparing — the
@@ -135,6 +141,62 @@ describe("PROMPT_REGISTRY (R59-F)", () => {
     const golden = readFileSync(join(import.meta.dirname, "fixtures", "prompt-golden-r61.txt"), "utf8").replace(/\r\n/g, "\n");
     const composed = buildProjectSystemPrompt(FULL_CTX).replace(/\r\n/g, "\n");
     expect(composed).toBe(golden);
+  });
+});
+
+// ── ROUND-67 (R67-E): the field-report guidance pins ────────────────────────
+// The owner's 0.66.0 live Windows run: the model drove the EMBEDDED browser
+// with computer-use tools (the bridge was broken then — it is fixed now, so
+// the prompt must steer to browser_control), guessed C:\ paths for chat
+// image attachments, and had no element-discovery fallback on Windows. These
+// pins hold the three teaching lines + the two R66 lines the truth retired.
+
+describe("ROUND-67 (R67-E): browser discipline, tab-walk, attachments", () => {
+  it("the browser-panel section teaches per-session tabs + browser_control ONLY (never computer-use tools)", () => {
+    const composed = buildProjectSystemPrompt(FULL_CTX);
+    const bp = composed.indexOf("## EMBEDDED BROWSER PANEL (browser_control)");
+    expect(bp).toBeGreaterThan(-1);
+    const rest = composed.slice(bp, bp + 5_000);
+    expect(rest).toContain("ROUND-67 — THE EMBEDDED BROWSER IS YOURS");
+    expect(rest).toContain("THIS chat session's OWN tab");
+    expect(rest).toContain("get_state lists only this session's tab");
+    expect(rest).toContain("DRIVE THE PANEL ONLY WITH browser_control (R67)");
+    expect(rest).toContain("NEVER computer-use tools (left_click, scroll, type, mouse_move, screenshot)");
+    expect(rest).toContain('never show "agent is using your computer"');
+    // The (b) workflow: read_dom → the returned selector paths → click/type.
+    expect(rest).toContain("read_dom first, then click / type the SELECTOR PATHS it returns");
+    expect(rest).toContain("press_key Enter submits the focused form");
+    // The R66 claims the R67 reality retired are GONE.
+    expect(rest).not.toContain("every open tab, which tab is active");
+    expect(rest).not.toContain("the tab the user is viewing");
+  });
+
+  it("the computer-use section teaches the TAB-WALK discovery fallback (key \"tab\" + the receipt's focused readback)", () => {
+    const composed = buildProjectSystemPrompt(FULL_CTX);
+    const cu = composed.indexOf("## COMPUTER USE (desktop control)");
+    expect(cu).toBeGreaterThan(-1);
+    const rest = composed.slice(cu, cu + 3_000);
+    expect(rest).toContain("TAB-WALK DISCOVERY (R67)");
+    expect(rest).toContain('press key "tab"');
+    expect(rest).toContain("names the FOCUSED element");
+    expect(rest).toContain("Combine with find_elements");
+  });
+
+  it("the tool-use rules teach the image-attachment path contract — analyze_image-gated", () => {
+    const composed = buildProjectSystemPrompt(FULL_CTX);
+    const tu = composed.indexOf("## TOOL USE");
+    expect(tu).toBeGreaterThan(-1);
+    const rest = composed.slice(tu, tu + 3_000);
+    expect(rest).toContain("IMAGE ATTACHMENTS (R67)");
+    expect(rest).toContain('"saved in the project at <path>"');
+    expect(rest).toContain('analyze_image with path "<path>"');
+    // The gate: an allowlist without analyze_image never sees the rule.
+    const noVision = buildProjectSystemPrompt({
+      ...FULL_CTX,
+      toolNames: FULL_CTX.toolNames.filter((n) => n !== "analyze_image"),
+    });
+    expect(noVision).not.toContain("IMAGE ATTACHMENTS (R67)");
+    expect(noVision).toContain("## TOOL USE");
   });
 });
 

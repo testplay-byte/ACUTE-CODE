@@ -9,6 +9,7 @@ import {
 import { AnimatePresence, motion, type Variants } from "framer-motion";
 import {
   AlertTriangle,
+  Braces,
   Check,
   Copy,
   File,
@@ -50,6 +51,9 @@ import {
   type ApprovalDecisionChoice,
   type ApprovalRemember,
 } from "./WorkingSection";
+// ROUND-67 (R67/D): the live screenshot THUMBNAIL strip (the owner: the
+// agent's captures shown in a small view in the chat WHILE it thinks).
+import { ScreenshotStrip } from "./ScreenshotStrip";
 import { AcuteLogo } from "../shell/Sidebar";
 import { ClampedText } from "../shared/ClampedText";
 import {
@@ -69,6 +73,7 @@ import {
   type WorkingEntry,
   decideApproval,
   deleteRating,
+  fetchDebugSettings,
   listSessionRatings,
   patchSessionPermissions,
   rateReply,
@@ -79,10 +84,15 @@ import { useThemeStore } from "../../lib/theme-store";
 import { withAlpha } from "../dashboard/helpers";
 import { ease } from "../../lib/motion";
 import { useProjectChatStore } from "../../lib/project-chat-store";
+// ROUND-67 (R67-B, the owner's second copy option): the full-turn
+// clipboard builder (thinking + tool calls + outputs + final answer).
+import { buildFullTurnText } from "../../lib/turn-copy";
 import { useActiveStreams } from "../../lib/active-streams";
 import { useStreamStore } from "../../lib/stream-store";
 import { fmtBytes, fmtTokens, formatTime } from "../../lib/format";
-import { useRightSidebarStore } from "../../lib/right-sidebar-store";
+// ROUND-67 (R67/E3): the chat-session → browser-tab binding (the leak fix).
+import { stateKey, useRightSidebarStore } from "../../lib/right-sidebar-store";
+import { bindChatBrowserSession, useBrowserTabStore } from "../../lib/browser-store";
 import { useRightSidebarEvents } from "../../lib/right-sidebar-events";
 import { SEMANTIC_COLORS } from "../../lib/semantics";
 import { useThemeStyles } from "../../lib/use-theme-styles";
@@ -145,11 +155,25 @@ const SUGGESTIONS: Array<{ label: string; prompt: string; icon: LucideIcon }> = 
   },
 ];
 
-/** Hover copy button with a "Copied" flash (round-16 owner request). */
-function CopyButton({ text }: { text: string }) {
+/** Hover copy button with a "Copied" flash (round-16 owner request).
+ * ROUND-67 (R67-B): label/title/icon are parameterized so the footer can
+ * mount a SECOND, visually distinct copy control ("Copy full conversation
+ * (debug)" — the Braces glyph) next to the plain message copy. */
+function CopyButton({
+  text,
+  label = "Copy message",
+  title = "Copy",
+  icon,
+}: {
+  text: string;
+  label?: string;
+  title?: string;
+  icon?: LucideIcon;
+}) {
   const styles = useThemeStyles();
   const resetAfter = useTimeoutClear();
   const [copied, setCopied] = useState(false);
+  const Icon = icon ?? Copy;
   return (
     <button
       onClick={() => {
@@ -158,8 +182,8 @@ function CopyButton({ text }: { text: string }) {
           resetAfter(() => setCopied(false), 1200);
         });
       }}
-      aria-label="Copy message"
-      title="Copy"
+      aria-label={label}
+      title={title}
       className="w-6 h-6 rounded-md grid place-items-center transition-colors"
       style={{ color: styles.textTertiary }}
       onMouseEnter={(e) => {
@@ -169,7 +193,7 @@ function CopyButton({ text }: { text: string }) {
         e.currentTarget.style.background = "transparent";
       }}
     >
-      {copied ? <Check size={11} style={{ color: SEMANTIC_COLORS.success }} /> : <Copy size={11} />}
+      {copied ? <Check size={11} style={{ color: SEMANTIC_COLORS.success }} /> : <Icon size={11} />}
     </button>
   );
 }
@@ -242,6 +266,7 @@ function TurnFooter({
   usage,
   ms,
   model,
+  fullCopyText,
 }: {
   sessionId: string | null;
   /** R59-D rating key — the turn's LAST non-empty assistant text seq
@@ -251,6 +276,13 @@ function TurnFooter({
   usage?: { inputTokens: number; outputTokens: number };
   ms?: number;
   model?: string;
+  /** ROUND-67 (R67-B, owner directive #2): the FULL-turn export text
+   * (thinking + tool calls + outputs + final answer + model — built by
+   * lib/turn-copy). Present ONLY when debug mode is enabled in Advanced
+   * settings ("This option will only be shown as the other copy option
+   * when the debug option in the advanced settings has been turned on")
+   * → undefined hides the second copy button entirely. */
+  fullCopyText?: string;
 }) {
   const styles = useThemeStyles();
   const queryClient = useQueryClient();
@@ -387,8 +419,22 @@ function TurnFooter({
   return (
     <div className="min-w-0" data-rating-footer>
       <div className="flex items-center gap-1">
-        <div className="opacity-0 group-hover:opacity-100 transition-opacity pt-0.5">
+        <div className="opacity-0 group-hover:opacity-100 transition-opacity pt-0.5 flex items-center">
           <CopyButton text={copyText} />
+          {/* ROUND-67 (R67-B): the second copy option — the whole turn
+              (thinking, tool calls, outputs, final answer) — shown only in
+              debug mode (fullCopyText is threaded only when the
+              ["debug-settings"] query reports enabled). Distinct glyph
+              (Braces) + title/aria-label so screen readers and tooltips
+              tell the two apart. */}
+          {fullCopyText !== undefined ? (
+            <CopyButton
+              text={fullCopyText}
+              label="Copy full conversation (debug)"
+              title="Copy full conversation (debug)"
+              icon={Braces}
+            />
+          ) : null}
         </div>
         {assistantSeq !== undefined ? (
           <div
@@ -701,6 +747,7 @@ function AssistantTurn({
   sessionId,
   projectId,
   collapseHint,
+  debugMode,
 }: {
   item: AssistantTurnItem;
   sessionId: string | null;
@@ -710,6 +757,10 @@ function AssistantTurn({
   /** R37 review #4: true when this turn JUST finished while the user
    * watched — it mounts collapsed ("Worked for Ns" + answer). */
   collapseHint?: boolean;
+  /** ROUND-67 (R67-B): debug mode (Advanced settings) gates the footer's
+   * second copy option — the full-turn export. Threaded from the panel's
+   * ["debug-settings"] query via MessageRenderer. */
+  debugMode?: boolean;
 }) {
   const styles = useThemeStyles();
   const segments = segmentWorkingEntries(item.working);
@@ -743,6 +794,11 @@ function AssistantTurn({
       ) : null}
       {/* ROUND-59 (R59-D): the footer owns the response-rating cluster
           (Copy + good/bad thumbs + stats + the bad-rating note editor). */}
+      {/* ROUND-67 (R67-B, owner directive #2): in debug mode the footer also
+          carries "Copy full conversation (debug)" — the whole turn (thinking,
+          tool calls + outputs, approval checkpoints, final answer) rendered
+          as text by lib/turn-copy. Built lazily ONLY when debug mode is on
+          so a normal chat never pays for it. */}
       <TurnFooter
         sessionId={sessionId}
         assistantSeq={item.lastAssistantSeq}
@@ -750,6 +806,16 @@ function AssistantTurn({
         usage={item.usage}
         ms={item.ms}
         model={item.model}
+        fullCopyText={
+          debugMode === true
+            ? buildFullTurnText({
+                working: item.working,
+                finalText: item.finalText,
+                model: item.model,
+                ms: item.ms,
+              })
+            : undefined
+        }
       />
       {/* ROUND-66 (R66, C1): the DEDICATED debug-report section at the very
           bottom of the turn — the context-free analyst's post-turn report
@@ -928,9 +994,13 @@ const MessageRenderer = forwardRef<
     /** ROUND-50 (R50-c2): display-only attachment chips for user items —
      * from the persisted event log OR the optimistic pending echo. */
     attachments?: AttachmentRef[];
+    /** ROUND-67 (R67-B): debug mode (Advanced settings) — threaded to
+     * AssistantTurn so its footer can mount the second, full-turn copy
+     * button (gated on the ["debug-settings"] query upstream). */
+    debugMode?: boolean;
   }
 >(function MessageRenderer(
-  { item, sessionId, projectId, collapseHint, onRetry, retryDisabled, onRevert, revertDisabled, attachments },
+  { item, sessionId, projectId, collapseHint, onRetry, retryDisabled, onRevert, revertDisabled, attachments, debugMode },
   ref,
 ) {
   switch (item.kind) {
@@ -948,7 +1018,13 @@ const MessageRenderer = forwardRef<
     case "turn":
       return (
         <div ref={ref}>
-          <AssistantTurn item={item} sessionId={sessionId} projectId={projectId} collapseHint={collapseHint} />
+          <AssistantTurn
+            item={item}
+            sessionId={sessionId}
+            projectId={projectId}
+            collapseHint={collapseHint}
+            debugMode={debugMode}
+          />
         </div>
       );
     case "error":
@@ -1121,6 +1197,21 @@ export function AgentChatPanel({
   const queryClient = useQueryClient();
   const liveMode = useConfigStore((s) => !s.demoData);
   const dataSource = liveMode ? "live" : "demo";
+
+  // ROUND-67 (R67-B, the owner's second copy option): debug mode (Settings →
+  // Advanced) gates the "Copy full conversation (debug)" button on assistant
+  // replies. SHARED cache key ["debug-settings"] — the same one
+  // SettingsPage's DebugModeCard uses, so flipping the switch there updates
+  // this panel on the next focus (react-query refetch-on-window-focus) with
+  // ONE sidecar call. Mirrors the ratings-query conditioning (liveMode off →
+  // demo mode has no sidecar → the query stays disabled and the gate reads
+  // false, hiding the button).
+  const debugSettingsQuery = useQuery({
+    queryKey: ["debug-settings"],
+    queryFn: fetchDebugSettings,
+    enabled: liveMode,
+  });
+  const debugMode = debugSettingsQuery.data?.enabled === true;
 
   // ── ROUND-50 (R50-c2): the composer's per-session state ──────────────────
   // Model override + thinking level PERSIST PER SESSION (localStorage
@@ -1334,6 +1425,32 @@ export function AgentChatPanel({
         // the panel unmounts (project switch / settings nav). The store
         // handles the AbortController + every SSE event → liveTurn update;
         // we just await the stream's end and then invalidate queries.
+        //
+        // ROUND-67 (R67/E3): BEFORE the turn starts, declare which browser
+        // tab THIS chat session drives — the active browser tab of this
+        // session's right-sidebar slice (its sidecar session id), or null so
+        // the browser_control tool mints its own agent tab. The binding is
+        // what keeps sessions isolated: a new session can never inherit the
+        // previous session's tab (the owner's leak report). Fire-and-forget
+        // (the stream POST itself races ahead); a failed bind falls back to
+        // the tool's own minting — honest, never fatal.
+        try {
+          const rs = useRightSidebarStore.getState();
+          const sliceTabs = rs.byProject[stateKey(projectId, sid)]?.tabs ?? [];
+          const activeBrowserTab =
+            sliceTabs.find((t) => t.id === (rs.byProject[stateKey(projectId, sid)]?.activeTabId ?? null) && t.type === "browser") ??
+            sliceTabs.find((t) => t.type === "browser") ??
+            null;
+          const browserSessionId =
+            activeBrowserTab !== null
+              ? useBrowserTabStore.getState().tabs[activeBrowserTab.id]?.sessionId ?? activeBrowserTab.id
+              : null;
+          void bindChatBrowserSession(sid, browserSessionId).catch(() => {
+            // Best-effort: the tool mints its own tab when unbound.
+          });
+        } catch {
+          // Store access must never break a turn.
+        }
         useStreamStore.getState().setPendingEcho(sid, text);
         await useStreamStore.getState().startStream(sid, text, {
           model: effectiveModel ?? undefined,
@@ -1766,6 +1883,9 @@ export function AgentChatPanel({
                   sessionId={session?.id ?? null}
                   projectId={projectId}
                   collapseHint={Date.now() - lastLiveEndRef.current < 5000}
+                  // ROUND-67 (R67-B): the debug-gated full-turn copy rides
+                  // every assistant turn's footer.
+                  debugMode={debugMode}
                   {...(item.kind === "error"
                     ? {
                         onRetry: () => void runTurn(retryTextForError(item)),
@@ -1800,6 +1920,15 @@ export function AgentChatPanel({
             {liveTurn !== null ? (
               <div aria-live="polite" aria-atomic="false" className="group min-w-0">
                 {liveSection}
+                {/* ── ROUND-67 (R67/D): the screenshot THUMBNAIL strip. The
+                    owner: "the images should be shown during its thinking in
+                    the agent's chat window itself, in a small view" — one
+                    tile per capture this turn (computer-use + browser), each
+                    lazy-fetching the EPHEMERAL raster from the sidecar.
+                    Below the WorkingSection, ABOVE the streaming text; the
+                    strip itself renders null while no capture exists. Old
+                    slices may predate the field → ?? [] (optional-safe). */}
+                <ScreenshotStrip screenshots={liveTurn.screenshots ?? []} />
                 {/* ROUND-66 (R66, A4): the human-verification checkpoint — the
                     browser tool hit a bot wall and is WAITING for the owner.
                     Rendered ABOVE the streaming text (the agent is paused;
@@ -1842,6 +1971,22 @@ export function AgentChatPanel({
                     sessionId={session?.id ?? null}
                     assistantSeq={liveTurn.lastAssistantSeq}
                     copyText={liveTurn.streamText}
+                    fullCopyText={
+                      // ROUND-67 (R67-B): the live-completed turn gets the
+                      // same second copy option. The model is the panel's
+                      // effective one (the send carried it — LiveTurn has no
+                      // model of its own; the refetched folded turn carries
+                      // the authoritative event-log model). Duration is
+                      // measured from the live turn's clock.
+                      debugMode
+                        ? buildFullTurnText({
+                            working: liveTurn.working,
+                            finalText: liveTurn.streamText,
+                            model: effectiveModel ?? undefined,
+                            ms: Date.now() - liveTurn.startedAtMs,
+                          })
+                        : undefined
+                    }
                   />
                 ) : null}
                 {/* ROUND-66 (R66, C1): the LIVE debug-report section — the

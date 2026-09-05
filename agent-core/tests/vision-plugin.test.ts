@@ -93,6 +93,17 @@ describe("ROUND-66 (R66-2-b): the core-vision plugin registration", () => {
     // The tool description teaches the honest failure mode.
     expect(analyze.description).toContain("Settings → Image Analysis");
   });
+
+  it("R67-E: the description teaches the chat-attachment path contract (attachments/<name>, rendered path verbatim)", async () => {
+    const analyze = await buildTools();
+    // The owner's 0.66.0 report: the model guessed C:\... paths for chat
+    // image attachments. R67-A made the rendered path real (the upload
+    // pipeline); this pin holds the description's half of the teaching.
+    expect(analyze.description).toContain("attachments/<name>");
+    expect(analyze.description).toContain("EXACTLY as rendered in the user message");
+    expect(analyze.description).toContain("saved in the project at <path>");
+    expect(analyze.description).toContain("never a guessed one");
+  });
 });
 
 describe("ROUND-66 (R66-2-b): analyze_image honesty (never throws)", () => {

@@ -25,6 +25,31 @@ import { create } from "zustand";
  * the surface is no longer manually popped out of the deleted right-sidebar
  * Computer panel; ComputerMiniWindow now AUTO-shows on the `liveActivity`
  * edge and the always-on-top OS window owns its own lifecycle.)
+ *
+ * ROUND-67 (R67-C) — TURN HOLDS, the owner's report: the mini window
+ * DISAPPEARED while the agent was still thinking between computer tool
+ * calls (the 6s liveActivity decay is per-EVENT, not per-TURN). The fix is
+ * a hold keyed by the OPEN TURN's id, and the ORCHESTRATOR'S stream-store
+ * hook owns the turn lifecycle — this store exposes the mechanism ONLY:
+ *   · holdForTurn(sessionId) — call when a computer-use frame arrives (or
+ *     the turn starts with computer activity). Sets the hold; does NOT
+ *     bump liveActivity and does NOT touch the decay (the hold rides
+ *     ALONGSIDE the event signal, it does not replace it).
+ *   · releaseTurnHold(sessionId) — call at TURN END (the SSE turn's final
+ *     frame). Clears that session's hold; liveActivity then rests on its
+ *     own 6s decay and the mini window's existing edge-triggered close
+ *     path hides the surface.
+ *   · noteStopSignal(sessionId?) — call when a computer-use frame with
+ *     tool === "stop_computer_control" arrives (the plugin's frame `kind`
+ *     is the dispatch result kind — "receipt" — NOT the ring's
+ *     session_stop, so that frame RE-ARMS the decay; this action is the
+ *     honest rest: liveActivity false + the hold(s) cleared immediately).
+ *     With no sessionId, ALL holds clear (the stop signal is unscoped).
+ * pushLiveEvent is UNCHANGED (frames keep flowing through it verbatim);
+ * the surface's `live` selector is (liveActivity || any turnHolds entry)
+ * && !killSwitch — a browser-only turn never holds (no computer-use frame
+ * → no holdForTurn call → the surface stays hidden; the R66 guarantee is
+ * untouched by design, not by accident).
  */
 
 export interface ComputerMonitorEvent {
@@ -60,11 +85,25 @@ interface ComputerMonitorState {
   } | null;
   /** True while at least one live computer-use frame arrived this turn. */
   liveActivity: boolean;
+  /** R67-C: per-open-turn holds — any true entry keeps the monitor surface
+   * live across thinking gaps (the stream-store hook holds/releases by the
+   * SSE turn's session id; the surface reduces it to "any hold active"). */
+  turnHolds: Record<string, boolean>;
   /** The last error from polling/stop (honest display, cleared on success). */
   error: string | null;
 
   /** A live SSE frame landed (stream-store calls this). */
   pushLiveEvent: (frame: { kind: string; tool?: string; code?: string }) => void;
+  /** R67-C: hold the live surface for the WHOLE open turn (no liveActivity
+   * bump, no decay arm — see the file docblock for the stream-store
+   * contract). */
+  holdForTurn: (sessionId: string) => void;
+  /** R67-C: the turn ended — clear its hold (liveActivity rests on its own
+   * decay; the surface's edge-triggered close then hides it). */
+  releaseTurnHold: (sessionId: string) => void;
+  /** R67-C: a stop_computer_control frame arrived — rest liveActivity and
+   * clear the hold(s) immediately (no sessionId = clear ALL). */
+  noteStopSignal: (sessionId?: string) => void;
   /** Poll result → replace session + merge the ring (server labels win). */
   refreshFromServer: (state: {
     active: boolean;
@@ -149,6 +188,7 @@ export const useComputerMonitorStore = create<ComputerMonitorState>((set, get) =
   events: [],
   session: null,
   liveActivity: false,
+  turnHolds: {},
   error: null,
 
   pushLiveEvent: (frame) => {
@@ -220,12 +260,48 @@ export const useComputerMonitorStore = create<ComputerMonitorState>((set, get) =
     set({ liveActivity: active });
   },
   setError: (error) => set({ error }),
+
+  holdForTurn: (sessionId) => {
+    // R67-C: the hold is a SEPARATE signal from liveActivity — it never
+    // bumps the event flag nor arms the decay; the surface's live selector
+    // ORs it in, and only releaseTurnHold/noteStopSignal/clear remove it.
+    set((s) => (s.turnHolds[sessionId] ? s : { turnHolds: { ...s.turnHolds, [sessionId]: true } }));
+  },
+
+  releaseTurnHold: (sessionId) => {
+    set((s) => {
+      if (!(sessionId in s.turnHolds)) return s;
+      const next = { ...s.turnHolds };
+      delete next[sessionId];
+      return { turnHolds: next };
+    });
+  },
+
+  noteStopSignal: (sessionId) => {
+    // The stop_computer_control receipt frame re-arms the decay inside
+    // pushLiveEvent (its `kind` is "receipt", not session_stop) — this is
+    // the orchestrator's explicit rest for it: decay cancelled, liveActivity
+    // rested, hold(s) cleared (the kill switch is now active; the surface
+    // shows the stopped state then hides on its existing schedule).
+    if (liveDecayTimer !== null) {
+      clearTimeout(liveDecayTimer);
+      liveDecayTimer = null;
+    }
+    set((s) => ({
+      liveActivity: false,
+      turnHolds:
+        sessionId === undefined
+          ? {}
+          : Object.fromEntries(Object.entries(s.turnHolds).filter(([k]) => k !== sessionId)),
+    }));
+  },
+
   clear: () => {
     if (liveDecayTimer !== null) {
       clearTimeout(liveDecayTimer);
       liveDecayTimer = null;
     }
-    set({ events: [], session: null, liveActivity: false, error: null });
+    set({ events: [], session: null, liveActivity: false, turnHolds: {}, error: null });
   },
 }));
 

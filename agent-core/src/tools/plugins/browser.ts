@@ -34,14 +34,33 @@
  *   · A1 — the screenshot action NO LONGER records into the computer-use
  *     session ring (browser work must never show "agent is using your
  *     computer" — that monitor is computer-use-only).
+ *
+ * ROUND-67 (R67, the owner's 0.66.0 live Windows report):
+ *   · E1 — navigate/back/forward/reload now emit an instant `browser-navigate`
+ *     SSE frame (the panel loads the URL the moment the tool runs — the old
+ *     transport-less navigate + the poll's adopt-without-create left the
+ *     panel BLANK until the user pressed Enter in the address bar);
+ *   · E3 — the default target is the CHAT SESSION's bound browser tab (not
+ *     the process-global LRU tail that leaked across sessions); unbound
+ *     sessions mint a deterministic `ag-<chatSession>` tab announced with a
+ *     `browser-open` frame (the sidebar opens the tab; its id IS the sidecar
+ *     session id, so panel/bridge/history align);
+ *   · E4 — the panel's session mint now carries the project id (per-project
+ *     cookie profiles, closing the R46 wire-up).
+ *   · R67-D — the screenshot action announces the capture to the chat as a
+ *     `screenshot` SSE frame (a minted `bs_<base36>` raster id) so the live
+ *     THUMBNAIL strip can show what the browser tool saw (bytes still never
+ *     enter the computer-use monitor ring — A1 holds).
  */
 import { jsonSchema } from "ai";
 import {
   VIEWPORT_PRESETS,
-  browserActiveTabSessionId,
+  agentTabIdForChatSession,
+  bindChatSession,
   browserGetStateCommand,
   browserListSessionsCommand,
   browserNavigateCommand,
+  browserSessionForChatSession,
   browserViewportCommand,
 } from "../../browser-proxy.js";
 import { sendBrowserCommand } from "../../browser-command.js";
@@ -51,6 +70,9 @@ import { requestWebFetchApproval } from "../../approvals.js";
 import { buildApprovalDeps } from "../approval-deps.js";
 import { getActiveComputerRelay } from "./computer-relay.js";
 import { relayVision } from "./computer-use.js";
+// ROUND-67 (R67-D): the screenshot action copies its capture into the
+// route-served raster registry + announces the chat THUMBNAIL frame.
+import { registerRaster } from "../../computer/raster-cache.js";
 import { webFetch } from "../web.js";
 import type { PluginDefinition, ToolDefinition } from "../registry.js";
 
@@ -373,7 +395,7 @@ export const browserPlugin: PluginDefinition = {
       {
         name: "browser_control",
         description:
-          "Control the user's EMBEDDED BROWSER PANEL — a real in-app web browser the user watches live. Actions: navigate (open/change the page; absolute http(s) URL — documentation/source hosts like github.com navigate freely, other hosts ask the owner for permission first), back | forward | reload (walk that tab's history), set_viewport (change the display size the user sees — test responsive layouts; presets mobile-sm 375×667, mobile-md 390×844, tablet 768×1024, laptop 1280×800, desktop 1440×900, full-hd 1920×1080, or custom width 200-3840 × height 200-4320, zoom 0.25-3, rotate swaps w/h), read (the CURRENT page's text content, fetched fresh server-side — works in every mode), read_dom (a STRUCTURED outline of the live page as JSON — title, headings, every visible interactive element with a short CSS selector + its text/label/value, forms with field names; include 'all' adds the text paragraphs — THE way to know the page content without screenshots; native desktop mode only), source (the live page's raw material: html (outerHTML of the page or one selector), css (stylesheets, plus the computed style of a selector), or scripts (src list + inline bodies); native desktop mode only), click (click an element — by CSS selector, or by a case-insensitive substring of a clickable's visible text/aria-label/name/value/title, e.g. a button's label; native desktop mode only), type (set an input's value with the native value setter + input/change events so React/Vue pages register it, then optionally submit), press_key (dispatch a key to an element or the focused element — Enter inside a form triggers REAL native form submission), eval (run JavaScript INSIDE the live page and get the value back — click links with `return document.querySelector('a').click()`, fill inputs, read the DOM; the page's own state (logins, JS) is live; native desktop mode only), screenshot (capture what the panel shows + a vision-model description — requires Computer Use enabled in Settings), get_state (currentUrl, title, viewport, canBack/canForward + EVERY open tab), wait_for_verification (the page is blocked by a bot wall — captcha/Cloudflare/age gate: opens a countdown card in the OWNER's chat and waits — default 15s, up to 60s — while the owner solves it, then re-checks the page and reports honestly). To submit a search box / form: type with submit:true, or press_key key Enter (it triggers native form submission), or click the submit button. When a tool result warns '⚠ A verification wall', call wait_for_verification — the owner gets a live countdown card in chat to solve it. sessionId optional — defaults to the tab the user is currently viewing. Viewport/page changes appear LIVE in the user's panel; announce them in one line. The page the panel shows may differ from a fresh fetch (logins, JS) — read for text, eval for the live DOM, screenshot for what the user actually sees.",
+          "Control the user's EMBEDDED BROWSER PANEL — a real in-app web browser the user watches live. Actions: navigate (open/change the page; absolute http(s) URL — documentation/source hosts like github.com navigate freely, other hosts ask the owner for permission first), back | forward | reload (walk that tab's history), set_viewport (change the display size the user sees — test responsive layouts; presets mobile-sm 375×667, mobile-md 390×844, tablet 768×1024, laptop 1280×800, desktop 1440×900, full-hd 1920×1080, or custom width 200-3840 × height 200-4320, zoom 0.25-3, rotate swaps w/h), read (the CURRENT page's text content, fetched fresh server-side — works in every mode), read_dom (a STRUCTURED outline of the live page as JSON — title, headings, every visible interactive element with a short CSS selector + its text/label/value, forms with field names; include 'all' adds the text paragraphs — THE way to know the page content without screenshots — call it FIRST and click/type the exact selector paths it returns; native desktop mode only), source (the live page's raw material: html (outerHTML of the page or one selector), css (stylesheets, plus the computed style of a selector), or scripts (src list + inline bodies); native desktop mode only), click (click an element — by CSS selector, or by a case-insensitive substring of a clickable's visible text/aria-label/name/value/title, e.g. a button's label; native desktop mode only), type (set an input's value with the native value setter + input/change events so React/Vue pages register it, then optionally submit), press_key (dispatch a key to an element or the focused element — Enter inside a form triggers REAL native form submission), eval (run JavaScript INSIDE the live page and get the value back — click links with `return document.querySelector('a').click()`, fill inputs, read the DOM; the page's own state (logins, JS) is live; native desktop mode only), screenshot (capture what the panel shows + a vision-model description — requires Computer Use enabled in Settings), get_state (currentUrl, title, viewport, canBack/canForward + this chat session's tab), wait_for_verification (the page is blocked by a bot wall — captcha/Cloudflare/age gate: opens a countdown card in the OWNER's chat and waits — default 15s, up to 60s — while the owner solves it, then re-checks the page and reports honestly). To submit a search box / form: type with submit:true, or press_key key Enter (it triggers native form submission), or click the submit button. When a tool result warns '⚠ A verification wall', call wait_for_verification — the owner gets a live countdown card in chat to solve it. sessionId optional — omit it to drive THIS chat session's own tab (auto-opened for you; never another chat session's tab). click/type/press_key/read_dom/source/eval run through the desktop app's native bridge — in web dev mode they fail fast with an honest error (read works in every mode). Viewport/page changes appear LIVE in the user's panel; announce them in one line. The page the panel shows may differ from a fresh fetch (logins, JS) — read for text, eval for the live DOM, screenshot for what the user actually sees.",
         inputSchema: jsonSchema({
           type: "object",
           properties: {
@@ -464,7 +486,8 @@ export const browserPlugin: PluginDefinition = {
             },
             sessionId: {
               type: "string",
-              description: "Browser tab session id — omit to target the tab the user is viewing",
+              description:
+                "Browser tab session id — omit to target this chat session's own browser tab (one is opened for you if none exists)",
             },
           },
           required: ["action"],
@@ -478,14 +501,65 @@ export const browserPlugin: PluginDefinition = {
           if (explicit !== "" && !SESSION_ID_RE.test(explicit)) {
             return { ok: false, output: "browser_control: sessionId must be alphanumeric/-/./_ (max 64 chars)" };
           }
-          // Default target: the tab the user is looking at (LRU tail of the
-          // sidecar's browser-session store); falls back to the shared
-          // "agent" session when no browser tab has been opened yet.
-          const activeTab = browserActiveTabSessionId();
-          const sessionId = explicit !== "" ? explicit : (activeTab ?? "agent");
+          // ── ROUND-67 (R67/E3): chat-session-scoped tab targeting ────────
+          // The owner's leak report: a NEW chat session drove the PREVIOUS
+          // session's still-open browser tab (the old default target was the
+          // process-global LRU tail). Resolution order is now:
+          //   1. an explicit sessionId param (pinned by the model);
+          //   2. this CHAT session's binding — declared by the frontend
+          //      (POST /browser/bind, the tab the user is viewing in this
+          //      chat session's sidebar) or minted below;
+          //   3. unbound → MINT a deterministic agent tab `ag-<chatSession>`
+          //      for this chat session, bind it, and announce it with a
+          //      `browser-open` frame so the sidebar opens a real tab (the
+          //      panel's tab id IS the session id — the bridge, the webview
+          //      label and the history all align on one id).
+          // The legacy global-LRU/"agent" fallback only survives for
+          // catalog/test contexts with NO chat-session id.
+          const chatSessionId =
+            toolDeps !== undefined && typeof toolDeps.sessionId === "string" && toolDeps.sessionId !== ""
+              ? toolDeps.sessionId
+              : null;
+          let sessionId: string;
+          let mintedAgentTab = false;
+          if (explicit !== "") {
+            sessionId = explicit;
+          } else {
+            const bound = chatSessionId !== null ? browserSessionForChatSession(chatSessionId) : null;
+            if (bound !== null) {
+              sessionId = bound;
+            } else {
+              const minted = chatSessionId !== null ? agentTabIdForChatSession(chatSessionId) : null;
+              if (minted === null || chatSessionId === null) {
+                sessionId = "agent";
+              } else {
+                sessionId = minted;
+                bindChatSession(chatSessionId, minted);
+                mintedAgentTab = true;
+              }
+            }
+          }
+          if (mintedAgentTab && toolDeps !== undefined && typeof toolDeps.emit === "function") {
+            // The sidebar needs a tab for this chat session RIGHT NOW — the
+            // frame carries the minted id so the created tab's id equals the
+            // sidecar session id (panel ↔ bridge ↔ history all align). The
+            // url rides null here; the navigate action (or the user) fills
+            // it. SSE-only: emit never persists (see runtime's emit wiring).
+            try {
+              toolDeps.emit({
+                type: "browser-open",
+                sessionId: "",
+                tabId: sessionId,
+                chatSessionId: chatSessionId ?? "",
+                url: null,
+              });
+            } catch {
+              // The frame is an optimization — the 4s poll backfills.
+            }
+          }
           const noTabHint =
-            activeTab === null && explicit === ""
-              ? " (note: no embedded browser tab is open — this state is not visible to the user yet)"
+            sessionId === "agent" && explicit === ""
+              ? " (note: no chat-session context — using the shared fallback tab; this state is not visible to the user)"
               : "";
 
           // ── R66 (A3/A6): run ONE eval script through the bridge ────────
@@ -579,6 +653,28 @@ export const browserPlugin: PluginDefinition = {
             }
             const result = browserNavigateCommand(sessionId, { url });
             if (!result.ok) return { ok: false, output: `browser_control: ${result.error}` };
+            // ── ROUND-67 (R67/E1): the INSTANT navigation frame ───────────
+            // The owner's blank-panel bug: navigate used to mutate ONLY the
+            // sidecar history and the panel learned via the 4s poll — on a
+            // fresh tab the poll ADOPTED the URL without ever creating the
+            // WebView2, so the panel stayed empty until the user pressed
+            // Enter in the address bar. The frame carries the target tab +
+            // URL so the panel navigates (creating the webview when needed)
+            // IMMEDIATELY; the poll stays as the backfill. Turn-independent
+            // on the frontend (stream-store handles it before the liveTurn
+            // guard), mirroring the R66 browser-viewport frame.
+            if (toolDeps !== undefined && typeof toolDeps.emit === "function") {
+              try {
+                toolDeps.emit({
+                  type: "browser-navigate",
+                  sessionId: "",
+                  tabId: sessionId,
+                  url: result.entry?.url ?? url,
+                });
+              } catch {
+                // The frame is an optimization on top of the 4s poll backfill.
+              }
+            }
             // R66 (A4): ONE short wall probe on the live page — the panel
             // follows within seconds, and bot walls (Cloudflare interstitials,
             // captcha gates) are exactly what the owner needs to know about
@@ -608,7 +704,7 @@ export const browserPlugin: PluginDefinition = {
             }
             return {
               ok: true,
-              output: `navigated the embedded browser to ${result.entry?.url ?? url} (history index ${result.index}, canBack ${result.canBack}, canForward ${result.canForward}). The panel follows within a few seconds.${noTabHint}${note}`,
+              output: `navigated the embedded browser to ${result.entry?.url ?? url} (history index ${result.index}, canBack ${result.canBack}, canForward ${result.canForward}). The panel follows immediately (a browser tab opens in the user's right sidebar if none is open for this session yet).${noTabHint}${note}`,
             };
           }
           if (action === "back" || action === "forward" || action === "reload") {
@@ -617,9 +713,24 @@ export const browserPlugin: PluginDefinition = {
             if (result.action === "noop" || result.entry === null) {
               return { ok: true, output: `browser_control: ${action} did nothing (history boundary; index ${result.index})` };
             }
+            // R67/E1: back/forward/reload announce the landed URL the same
+            // instant-navigate way (the panel loads it immediately; the 4s
+            // poll stays as the backfill).
+            if (toolDeps !== undefined && typeof toolDeps.emit === "function" && result.entry !== null) {
+              try {
+                toolDeps.emit({
+                  type: "browser-navigate",
+                  sessionId: "",
+                  tabId: sessionId,
+                  url: result.entry.url,
+                });
+              } catch {
+                // Backfill via the poll.
+              }
+            }
             return {
               ok: true,
-              output: `${action} → ${result.entry.url} (history index ${result.index}, canBack ${result.canBack}, canForward ${result.canForward}). The panel follows within a few seconds.`,
+              output: `${action} → ${result.entry.url} (history index ${result.index}, canBack ${result.canBack}, canForward ${result.canForward}). The panel follows immediately.`,
             };
           }
           if (action === "set_viewport") {
@@ -1018,6 +1129,31 @@ export const browserPlugin: PluginDefinition = {
                 output: `browser_control: screenshot — screen capture failed: ${raster.error}`,
               };
             }
+            // ── ROUND-67 (R67-D): the chat THUMBNAIL frame ────────────────
+            // The owner: "if the agent takes screenshots… the images should
+            // be shown during its thinking in the agent's chat window itself,
+            // in a small view." The capture's bytes are LOCAL to this plugin
+            // call, so they are copied into the route-served raster registry
+            // under a MINTED id (`bs_<base36>` — no session frame exists for
+            // browser captures) and announced as a `screenshot` SSE frame.
+            // Never recorded into the computer-use monitor ring (A1 above
+            // still holds); never persisted (emit is the SSE-only channel);
+            // never model-facing. Enhancement only — try/catch discipline.
+            if (toolDeps !== undefined && typeof toolDeps.emit === "function") {
+              try {
+                const frameId = `bs_${Date.now().toString(36)}${Math.floor(Math.random() * 1296).toString(36).padStart(2, "0")}`;
+                registerRaster(frameId, raster.pngBase64);
+                toolDeps.emit({
+                  type: "screenshot",
+                  sessionId: toolDeps.sessionId,
+                  frameId,
+                  tool: "browser_control",
+                  note: "browser panel",
+                });
+              } catch {
+                // The thumbnail strip is an enhancement — never break the tool.
+              }
+            }
             // R66 (A1): NO relay.session.record here anymore — browser
             // screenshots must NOT appear in the computer-use monitor ring
             // (the owner: browser work wrongly showed "agent is using your
@@ -1040,18 +1176,27 @@ export const browserPlugin: PluginDefinition = {
           }
 
           if (action === "get_state") {
-            // R62: the state now includes every open tab + which one the
-            // user is viewing (the owner: "get the status of the things").
+            // R62: the state includes the open tabs + which one is active.
+            // R67/E3: the tab list is now SCOPED to what this chat session
+            // can drive — its own bound tab (plus any explicitly-addressed
+            // tab). The owner's leak report: a new session's get_state used
+            // to list EVERY session's tabs globally, inviting the model to
+            // drive another session's still-open tab. With no binding yet,
+            // the tool mints one above (browser-open frame) — so the agent
+            // always sees exactly its own tab.
             const state = browserGetStateCommand(sessionId);
+            const known = new Set<string>([sessionId]);
             const payload = {
               ...state,
-              activeTab: activeTab,
-              tabs: browserListSessionsCommand().map((t) => ({
-                sessionId: t.sessionId,
-                currentUrl: t.currentUrl,
-                title: t.title,
-                viewport: `${t.viewport.width}×${t.viewport.height} @ ${t.viewport.zoom}×${t.viewport.rotate ? " (rotated)" : ""}`,
-              })),
+              activeTab: sessionId,
+              tabs: browserListSessionsCommand()
+                .filter((t) => known.has(t.sessionId))
+                .map((t) => ({
+                  sessionId: t.sessionId,
+                  currentUrl: t.currentUrl,
+                  title: t.title,
+                  viewport: `${t.viewport.width}×${t.viewport.height} @ ${t.viewport.zoom}×${t.viewport.rotate ? " (rotated)" : ""}`,
+                })),
             };
             return { ok: true, output: JSON.stringify(payload) };
           }

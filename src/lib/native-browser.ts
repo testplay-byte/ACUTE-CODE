@@ -175,7 +175,14 @@ export async function nativeTabScrollState(tabId: string): Promise<TabScrollStat
   try {
     const raw = (await tauri.core.invoke("browser_tab_scroll_state", { tabId })) as unknown;
     if (typeof raw !== "string") return null;
-    const parsed = JSON.parse(raw) as Partial<TabScrollState>;
+    // R67/E2: same WebView2 double-encoding as nativeTabEval — the probe
+    // script also returns JSON.stringify(...), so on Windows the callback
+    // string arrives double-encoded and the old single parse silently
+    // returned null (the pop-out gutter scrollbar was dead on Windows).
+    const parsed = parseWebViewEvalJson(raw) as Partial<TabScrollState> | string | null;
+    if (parsed === null || typeof parsed !== "object") {
+      return null;
+    }
     if (
       typeof parsed.y !== "number" ||
       typeof parsed.vh !== "number" ||
@@ -208,13 +215,56 @@ export interface TabEvalResult {
   error?: string;
 }
 
+/**
+ * R67/E2 — the WebView2 eval double-encoding normalizer.
+ *
+ * THE bug: on Windows, wry's `eval_with_callback` rides WebView2's
+ * `ExecuteScriptAsync`, which returns the script's return value
+ * **JSON-encoded**. Our eval scripts end with `return JSON.stringify(...)` —
+ * a STRING — so the callback receives that string JSON-encoded TWICE (the
+ * JSON of a string that is itself JSON). A single `JSON.parse` then yields
+ * a STRING, `data.ok` is undefined, and every click/type/eval/read_dom/
+ * source action failed with "the page rejected the script" on the owner's
+ * real Windows machine (the sandbox's mocks — and webkitgtk — single-
+ * encode, which is exactly why this survived every test).
+ *
+ * The tolerant double-parse below handles BOTH transports: parse once; if
+ * the result is still a string, parse it again (WebKit yields the object
+ * after one parse; WebView2 after two). A non-JSON string survives as the
+ * raw string (honest — the caller validates the shape).
+ */
+export function parseWebViewEvalJson(raw: string): unknown {
+  try {
+    const first: unknown = JSON.parse(raw);
+    if (typeof first === "string") {
+      try {
+        return JSON.parse(first) as unknown;
+      } catch {
+        return first;
+      }
+    }
+    return first;
+  } catch {
+    return raw;
+  }
+}
+
 export async function nativeTabEval(tabId: string, script: string): Promise<TabEvalResult | null> {
   const tauri = tauriGlobal();
   if (tauri === null) return null;
   try {
     const raw = (await tauri.core.invoke("browser_tab_eval", { tabId, script })) as unknown;
     if (typeof raw !== "string") return { ok: false, error: "browser_tab_eval returned a non-string" };
-    return JSON.parse(raw) as TabEvalResult;
+    const parsed = parseWebViewEvalJson(raw) as Partial<TabEvalResult> | string | null;
+    if (parsed === null || typeof parsed !== "object") {
+      // Still not the {ok, value|error} envelope — report the shape honestly
+      // (this is the old "the page rejected the script" class of failure).
+      return { ok: false, error: `browser_tab_eval returned an unexpected payload: ${String(raw).slice(0, 200)}` };
+    }
+    if (typeof parsed.ok !== "boolean") {
+      return { ok: false, error: `browser_tab_eval returned an unexpected payload: ${String(raw).slice(0, 200)}` };
+    }
+    return parsed as TabEvalResult;
   } catch (err) {
     // Rust-side rejections (missing webview, timeout, validation) map to
     // the same {ok:false} shape the bridge expects.

@@ -91,6 +91,13 @@ export interface BrowserTabUiState {
    * bug: agent presets updated the store but the panel-local naturalSize
    * gate kept effectiveViewport null. Local user edits never bump it. */
   agentViewportSeq: number;
+  /** ROUND-67 (R67, E1): increments whenever an AGENT-side navigation lands
+   * (the instant browser-navigate SSE frame). The mounted BrowserPanel
+   * watches it and drives the native webview (navigate — or CREATE when the
+   * tab never loaded) immediately, instead of waiting for the 4s poll's
+   * reconcile. User navigations never bump it (they drive the webview
+   * themselves); history walks by the poll keep using navSeq. */
+  agentNavSeq: number;
 }
 
 // ── sessionId hygiene ──────────────────────────────────────────────────────
@@ -172,9 +179,25 @@ export interface ViewportResponse {
   viewport: BrowserViewportState;
 }
 
-/** POST /browser/session — mint (or rotate) this tab's proxy ticket. */
-export function mintBrowserSession(sessionId: string): Promise<MintSessionResponse> {
-  return browserRequest<MintSessionResponse>("/browser/session", { json: { sessionId } });
+/** POST /browser/session — mint (or rotate) this tab's proxy ticket.
+ * ROUND-67 (R67, E4): the optional projectId binds the session's COOKIE
+ * PROFILE to the project (the R46 wire-up — logins stay project-scoped). */
+export function mintBrowserSession(sessionId: string, projectId?: string): Promise<MintSessionResponse> {
+  return browserRequest<MintSessionResponse>("/browser/session", {
+    json: { sessionId, ...(projectId !== undefined ? { projectId } : {}) },
+  });
+}
+
+/** ROUND-67 (R67, E3): POST /browser/bind — declare which browser tab a CHAT
+ * session drives (null clears). AgentChatPanel posts it right before a turn
+ * starts, with the chat session's active right-sidebar browser tab, so the
+ * browser_control tool targets exactly that tab for the whole turn (the
+ * cross-session leak fix). Fire-and-forget: a failed bind just means the
+ * tool will mint its own agent tab — honest, never fatal. */
+export function bindChatBrowserSession(chatSessionId: string, sessionId: string | null): Promise<{ ok: boolean }> {
+  return browserRequest<{ ok: boolean }>("/browser/bind", {
+    json: { chatSessionId, sessionId },
+  });
 }
 
 /** POST /browser/navigate — record a navigation or walk back/forward/reload. */
@@ -232,8 +255,9 @@ interface BrowserTabStoreState {
   /** Initialize the per-tab slice (idempotent — returns the existing one). */
   ensureTab: (tabId: string) => BrowserTabUiState;
   getTab: (tabId: string) => BrowserTabUiState | undefined;
-  /** Mint (or re-mint) the ticket; adopts server history + viewport. */
-  mint: (tabId: string) => Promise<void>;
+  /** Mint (or re-mint) the ticket; adopts server history + viewport.
+   * R67/E4: the optional projectId binds the cookie profile per project. */
+  mint: (tabId: string, projectId?: string) => Promise<void>;
   /** Address-bar / quick-link / acute:open navigation. */
   navigate: (tabId: string, rawUrl: string) => Promise<void>;
   /** Back / forward / reload. */
@@ -252,6 +276,13 @@ interface BrowserTabStoreState {
    * agentViewportSeq so the mounted panel exits natural mode. No-op for an
    * unknown tab (the panel isn't mounted; the poll backfills). */
   applyAgentViewport: (tabId: string, viewport: BrowserViewportState) => void;
+  /** ROUND-67 (R67, E1): apply an AGENT-side navigation instantly (the
+   * browser-navigate SSE frame) — creates the tab slice when unknown (an
+   * agent-minted tab whose panel is not mounted yet: the slice's currentUrl
+   * is what the panel's mount effect reads to CREATE the webview), then
+   * patches currentUrl + bumps navSeq (iframe reload) AND agentNavSeq (the
+   * mounted panel drives the native webview immediately). */
+  applyAgentNavigation: (tabId: string, url: string) => void;
   /** ROUND-66 (R66, A5): the tab whose sidecar session id matches (or null)
    * — the stream-store maps a frame's session id to THIS store's tab key. */
   tabIdForSession: (sessionId: string) => string | null;
@@ -286,6 +317,7 @@ function freshTab(sessionId: string): BrowserTabUiState {
     error: null,
     navSeq: 0,
     agentViewportSeq: 0,
+    agentNavSeq: 0,
   };
 }
 
@@ -319,16 +351,28 @@ export const useBrowserTabStore = create<BrowserTabStoreState>()((set, get) => (
       }),
     );
   },
+  applyAgentNavigation: (tabId, url) => {
+    const cur = get().tabs[tabId] ?? get().ensureTab(tabId);
+    set((s) =>
+      patchTabState(s, tabId, {
+        currentUrl: url,
+        currentTitle: null,
+        loading: true,
+        navSeq: cur.navSeq + 1,
+        agentNavSeq: cur.agentNavSeq + 1,
+      }),
+    );
+  },
   tabIdForSession: (sessionId) => {
     for (const [tabId, tab] of Object.entries(get().tabs)) {
       if (tab.sessionId === sessionId) return tabId;
     }
     return null;
   },
-  mint: async (tabId) => {
+  mint: async (tabId, projectId) => {
     const tab = get().tabs[tabId] ?? get().ensureTab(tabId);
     try {
-      const minted = await mintBrowserSession(tab.sessionId);
+      const minted = await mintBrowserSession(tab.sessionId, projectId);
       set((s) =>
         patchTabState(s, tabId, {
           status: "ready",

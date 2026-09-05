@@ -162,6 +162,16 @@ export function buildTaggedPromptLines(ctx: PromptContext): TaggedLine[] {
   tools("- READ tool errors fully before reacting: an error message names the cause and often the exact recovery. Follow it instead of guessing, retrying blindly, or switching tools at random. A failed call is information, not noise.");
   tools("- Pick the MOST SPECIFIC tool for the job: search_code to find symbols (not list_dir spelunking), edit_file for surgical changes (not whole-file rewrites), web_fetch for a known URL (not search-then-guess).");
   tools("- NEVER fabricate or embellish a tool result. If a call failed, timed out, or returned partial data, that fact IS the data — report it honestly and adapt the plan around it.");
+  // ROUND-67 (R67, the owner's attachments report): chat image attachments
+  // now land as REAL files in the project at attachments/<name> and the
+  // user message itself names the exact path (runtime's renderAttachments
+  // block). The owner's 0.66.0 run had the model GUESS C:\... paths and ask
+  // the user to re-attach — this rule pins the contract: the rendered path
+  // is the file; call analyze_image with it verbatim. Gated on the tool
+  // being allowed (an allowlist without analyze_image never sees it).
+  if (ctx.toolNames.includes("analyze_image")) {
+    tools("- IMAGE ATTACHMENTS (R67): when a user message says an image was attached and \"saved in the project at <path>\", that file EXISTS there — call analyze_image with path \"<path>\" exactly as the message renders it. Never guess an absolute path and never ask the user to re-attach.");
+  }
   tools("");
 
   // ── ROUND-50 (R50-c1): the composer's permission mode ───────────────────
@@ -375,6 +385,12 @@ export function buildTaggedPromptLines(ctx: PromptContext): TaggedLine[] {
     // to detect where it needs to tap, stuck taking screenshots"): big
     // Chromium trees need SEARCH, not full-tree reads and not screenshots.
     ident("- BIG APPS (browsers, Edge, VS Code): find_elements {appRef, query} SEARCHES the accessibility tree by name substring (optional kind filter) and returns the matching elements with their indexes + bounds — use it to locate one control in a huge window instead of reading the whole tree or looping screenshots. Then left_click {target:{type:\"element\"}} with the returned index.");
+    // ROUND-67 (R67, the owner's Tab-walk technique): the Windows key tool
+    // now maps key names to REAL SendKeys chords, and every key receipt
+    // reports the FOCUSED element's name — pressing Tab walks the focusable
+    // controls one by one and the receipt says where you landed. That is the
+    // element-discovery fallback when find_elements/screenshot loops stall.
+    ident("- TAB-WALK DISCOVERY (R67): when find_elements comes back empty or screenshots cannot identify the control, press key \"tab\" repeatedly — each key receipt names the FOCUSED element, and Tab walks the focusable controls one by one. Combine with find_elements (search by name) when the app is big.");
     ident("- Coordinates ({type:\"coordinate\"}) are the FALLBACK: pixels copied UNCHANGED from the LATEST returned raster. Never pre-scale, never attach app_ref/state_id to them.");
     ident("- Receipts are not promises: action_sent=true means it MAY have happened — verify via fresh get_app_state or an external oracle (file exists, exit code) before building on it.");
     ident("- Refusals are self-teaching: read the named reason and follow its recovery (frontmost_pid_mismatch → activate → re-observe → retry ONCE). Never replay a sent action.");
@@ -417,15 +433,23 @@ export function buildTaggedPromptLines(ctx: PromptContext): TaggedLine[] {
   if (ctx.toolNames.includes("browser_control")) {
     beginSection("browser-panel");
     ident("## EMBEDDED BROWSER PANEL (browser_control)");
-    ident("- The user has a real web browser embedded in the app's right sidebar. browser_control drives it: pages you navigate to APPEAR LIVE in the user's panel (no external tabs, no popups).");
+    ident("- The user has a real web browser embedded in the app's right sidebar. browser_control drives it: pages you navigate to APPEAR in the user's panel IMMEDIATELY (no external tabs, no popups).");
+    // ROUND-67 (R67, the owner's 0.66.0 field report): the bridge WORKS now
+    // (the double-encoded eval parse is fixed) and the default target is
+    // THIS chat session's OWN tab (auto-opened in the sidebar; navigate
+    // emits the instant browser-navigate frame). The owner's transcript had
+    // the model driving the embedded panel with computer-use tools because
+    // every bridge call failed — these lines teach the fixed reality.
+    ident("- ROUND-67 — THE EMBEDDED BROWSER IS YOURS: omit sessionId and every action drives THIS chat session's OWN tab (auto-opened in the user's right sidebar; navigate lands there immediately). get_state lists only this session's tab — never drive another session's tab.");
+    ident("- DRIVE THE PANEL ONLY WITH browser_control (R67): NEVER computer-use tools (left_click, scroll, type, mouse_move, screenshot) — those are for REAL desktop apps, and browser work must never show \"agent is using your computer\". The bridge WORKS: read_dom first, then click / type the SELECTOR PATHS it returns (type submit:true submits the form; press_key Enter submits the focused form).");
     // ROUND-66 (R66, A3/A6): the action surface grew the HIGH-LEVEL page
     // actions (click/type/press_key/read_dom/source) — the owner's live
     // report: the agent typed a Google query but never submitted it. The
     // new actions make form submission + element interaction reliable
     // without hand-written eval scripts.
-    ident("- Actions: navigate (absolute http(s) URL), back/forward/reload (tab history), set_viewport (display size + zoom), read (the current page's text, fetched fresh), read_dom (a STRUCTURED page outline — headings, links, buttons, inputs, forms with short selectors + sizes; the way to know the page WITHOUT screenshots), click (click an element by CSS selector or visible text — scrollIntoView + .click()), type (fill an input by selector — framework-visible events; submit:true submits the form), press_key (send a key like Enter; Enter inside a form triggers NATIVE form submission), source (the live page's html | css | scripts), eval (run JavaScript INSIDE the live page), screenshot (capture the panel + a vision description), get_state (currentUrl, title, viewport, canBack/canForward, every open tab, which tab is active), wait_for_verification (pause for the owner to solve a bot wall).");
+    ident("- Actions: navigate (absolute http(s) URL), back/forward/reload (tab history), set_viewport (display size + zoom), read (the current page's text, fetched fresh), read_dom (a STRUCTURED page outline — headings, links, buttons, inputs, forms with short selectors + sizes; the way to know the page WITHOUT screenshots), click (click an element by CSS selector or visible text — scrollIntoView + .click()), type (fill an input by selector — framework-visible events; submit:true submits the form), press_key (send a key like Enter; Enter inside a form triggers NATIVE form submission), source (the live page's html | css | scripts), eval (run JavaScript INSIDE the live page), screenshot (capture the panel + a vision description), get_state (currentUrl, title, viewport, canBack/canForward, this session's tab), wait_for_verification (pause for the owner to solve a bot wall).");
     ident("- FORMS & SEARCH BOXES (R66): to SUBMIT a search or form, do NOT just type and hope — use type with submit:true, or press_key with key Enter (it performs the form's native requestSubmit), or click the submit button by text. Typing alone never navigates.");
-    ident("- TEST LAYOUTS by changing the display size with set_viewport: presets mobile-sm 375×667, mobile-md 390×844, tablet 768×1024, laptop 1280×800, desktop 1440×900, full-hd 1920×1080, or explicit width/height (+ zoom, rotate swaps w/h). It targets the tab the user is viewing unless you pass sessionId. The panel applies the size you set LIVE.");
+    ident("- TEST LAYOUTS by changing the display size with set_viewport: presets mobile-sm 375×667, mobile-md 390×844, tablet 768×1024, laptop 1280×800, desktop 1440×900, full-hd 1920×1080, or explicit width/height (+ zoom, rotate swaps w/h). It targets this chat session's own tab unless you pass sessionId. The panel applies the size you set LIVE.");
     ident("- USE THE BROWSER LIKE A USER WOULD (R62/R66): read_dom first (structured outline, no pixels) to identify elements; then click / type / press_key to interact with them; read for the server-side text; eval when you need the LIVE page's full DOM/JS (the script runs as a function body, so end with `return value`); source for the page's HTML/CSS/JS; screenshot when you need to SEE what the user sees (needs Computer Use enabled; the vision model describes it).");
     // ROUND-66 (R66, A4): the bot-wall protocol — detect (the tool result
     // warns ⚠) → wait_for_verification (the owner gets a countdown card in

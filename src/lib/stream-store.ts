@@ -102,6 +102,24 @@ export interface LiveTurn {
    * out for the owner). Null when none is open; the chat renders the
    * countdown card from this. One at a time per session. */
   browserCheckpoint: LiveBrowserCheckpoint | null;
+  /** ROUND-67 (R67/D): the screenshots captured DURING this open turn — one
+   * entry per `{type:"screenshot"}` SSE frame (computer-use screenshot /
+   * zoom / get_app_state, browser_control screenshot). Newest LAST, capped
+   * at 8; the chat renders the live THUMBNAIL strip (each tile lazy-fetches
+   * GET /computer-use/frames/:frameId/raster). The rasters are EPHEMERAL —
+   * nothing here persists (the folded turn owns no screenshot history by
+   * design) and old slices written before the field may lack it → read with
+   * `?? []`. */
+  screenshots?: LiveScreenshot[];
+}
+
+/** ROUND-67 (R67/D): one captured screenshot on the live turn (the strip's
+ * data — the PNG bytes themselves live server-side in the raster registry
+ * and are fetched per tile, never in the store). */
+export interface LiveScreenshot {
+  frameId: string;
+  tool: string;
+  ts: number;
 }
 
 /** ROUND-66 (R66, C1): the live debug-analyst report state. */
@@ -806,6 +824,9 @@ export const useStreamStore = create<StreamStore>((set, get) => ({
         // ROUND-66: fresh turn → no debug analyst, no open checkpoint.
         debugReport: null,
         browserCheckpoint: null,
+        // ROUND-67 (R67/D): fresh turn → no screenshots yet (the strip's
+        // entries arrive per {type:"screenshot"} frame below).
+        screenshots: [],
       },
       streamBusy: true,
       sendError: null,
@@ -870,6 +891,11 @@ export const useStreamStore = create<StreamStore>((set, get) => ({
       }
     } finally {
       controllers.delete(sessionId);
+      // ROUND-67 (R67/F1): the turn is OVER (done, error, or network death —
+      // every path lands here). Release the monitor's turn-hold so the
+      // "agent is using your computer" indicator decays away instead of
+      // lingering forever after a turn that used computer tools.
+      useComputerMonitorStore.getState().releaseTurnHold(sessionId);
       const cur = get().bySession[sessionId];
       if (cur) {
         patchSession(sessionId, {
@@ -1042,6 +1068,22 @@ function handleStreamEvent(
       tool: event.tool,
       code: event.code,
     });
+    // ROUND-67 (R67/F1): the owner — while the agent was still THINKING
+    // between computer tool calls, the "Agent is using your computer"
+    // indicator vanished (the 6s liveActivity decay fired mid-gap). The
+    // monitor store now holds a TURN-scoped signal: the first computer-use
+    // frame of a session with an OPEN liveTurn latches the hold, and the
+    // stream's finally-block releases it when the turn truly ends. Browser
+    // frames never route here, so browser-only turns still never show the
+    // indicator. stop_computer_control is the explicit rest.
+    if (event.tool === "stop_computer_control") {
+      useComputerMonitorStore.getState().noteStopSignal(sessionId);
+    } else {
+      const st = useStreamStore.getState().bySession[sessionId];
+      if (st?.liveTurn != null && !st.liveTurn.stopped) {
+        useComputerMonitorStore.getState().holdForTurn(sessionId);
+      }
+    }
     return;
   }
   // ROUND-62 (R62/D8): live browser commands are turn-independent as well —
@@ -1084,10 +1126,54 @@ function handleStreamEvent(
     }
     return;
   }
+  // ROUND-67 (R67, E1): the browser_control navigate/back/forward/reload
+  // action announced the tab's new URL — apply it INSTANTLY (the mounted
+  // panel drives the native webview on agentNavSeq; an unmounted agent tab
+  // gets its store slice created so the panel's mount effect later CREATES
+  // the webview at this URL). The 4s poll stays as the backfill. This is
+  // the owner's blank-panel fix: navigation no longer waits for the poll's
+  // adopt path (which never created a fresh tab's webview at all).
+  if (event.type === "browser-navigate") {
+    if (typeof event.url === "string" && event.url !== "") {
+      useBrowserTabStore.getState().applyAgentNavigation(event.tabId, event.url);
+    }
+    return;
+  }
+  // ROUND-67 (R67, E3): the browser_control tool minted this chat session's
+  // agent browser tab (ag-<chatSession>) — open the REAL sidebar tab now
+  // (its id IS the sidecar session id, so the panel that mounts for it
+  // registers the command-bridge handler under the exact id the agent's
+  // eval/click/type commands target). Scoped to the session's project; the
+  // slice auto-opens only when it is the active session's sidebar.
+  if (event.type === "browser-open") {
+    const pid = sessionProjects.get(sessionId);
+    const chatSessionId = typeof event.chatSessionId === "string" && event.chatSessionId !== "" ? event.chatSessionId : sessionId;
+    if (pid !== undefined) {
+      useRightSidebarStore
+        .getState()
+        .openBrowserForChatSession(pid, chatSessionId, event.tabId, typeof event.url === "string" ? event.url : null);
+    }
+    return;
+  }
 
   const cur = useStreamStore.getState().bySession[sessionId];
   if (!cur || cur.liveTurn === null) return;
   const liveTurn = cur.liveTurn;
+
+  // ── ROUND-67 (R67/D): the screenshot THUMBNAIL strip feed ─────────────────
+  // A capture succeeded mid-turn (computer-use or the browser screenshot
+  // action) and the raster is fetchable server-side for the next 10 minutes.
+  // Appended to the OPEN liveTurn (rasters belong to the turn that captured
+  // them — nothing persists into the folded log), newest LAST, capped at 8
+  // (the strip shows the turn's recent captures, not an archive; the
+  // server-side registry caps at 12 anyway).
+  if (event.type === "screenshot") {
+    const next = [...(liveTurn.screenshots ?? []), { frameId: event.frameId, tool: event.tool, ts: Date.now() }];
+    patchSession(sessionId, {
+      liveTurn: { ...liveTurn, screenshots: next.length > 8 ? next.slice(next.length - 8) : next },
+    });
+    return;
+  }
 
   // ── ROUND-66 (R66, C1): the debug analyst's live stream ──────────────────
   // Frames arrive AFTER the turn's final text (the analyst runs post-turn,

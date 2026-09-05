@@ -1116,10 +1116,12 @@ describe("orchestration settings (subagentModel, ROUND-47 R47-c1)", () => {
 import {
   fetchSessionContext,
   httpSessions,
+  ingestAttachmentPath,
   patchSessionPermissions,
   pickFilesViaBackend,
   readAttachmentFiles,
   streamSessionMessage,
+  uploadAttachmentBytes,
   type SessionContextReport,
 } from "./api";
 
@@ -1278,6 +1280,78 @@ describe("readAttachmentFiles (ROUND-50 R50-c1)", () => {
     const err = await readAttachmentFiles(Array.from({ length: 21 }, (_, i) => `f${i}`)).catch((e) => e);
     expect(err).toBeInstanceOf(ApiError);
     expect(err.code).toBe("VALIDATION");
+  });
+});
+
+// ── ROUND-67 (R67-A): the attachment INGESTION client ──────────────────────
+
+describe("uploadAttachmentBytes + ingestAttachmentPath (ROUND-67 R67-A)", () => {
+  it("uploadAttachmentBytes posts { projectId, name, dataBase64 } and returns the persisted shape", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      jsonResponse(200, { path: "attachments/shot.png", name: "shot.png", size: 4096 }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const saved = await uploadAttachmentBytes("prj_1", "shot.png", "iVBORw0KGgo=");
+    expect(saved).toEqual({ path: "attachments/shot.png", name: "shot.png", size: 4096 });
+    const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    expect(url).toBe("http://sidecar.test/api/v1/attachments/upload");
+    expect(init.method).toBe("POST");
+    expect(JSON.parse(init.body as string)).toEqual({
+      projectId: "prj_1",
+      name: "shot.png",
+      dataBase64: "iVBORw0KGgo=",
+    });
+    // The bearer rides the request like every other composer call.
+    expect((init.headers as Record<string, string>).Authorization).toBe("Bearer tok_123");
+  });
+
+  it("ingestAttachmentPath posts the ABSOLUTE path instead of bytes (the sidecar copies the file in)", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      jsonResponse(200, { path: "attachments/picked.png", name: "picked-2.png", size: 512 }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const saved = await ingestAttachmentPath("prj_1", "picked.png", "C:\\Users\\dev\\picked.png");
+    expect(saved).toEqual({ path: "attachments/picked.png", name: "picked-2.png", size: 512 });
+    const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    expect(url).toBe("http://sidecar.test/api/v1/attachments/upload");
+    expect(JSON.parse(init.body as string)).toEqual({
+      projectId: "prj_1",
+      name: "picked.png",
+      absolutePath: "C:\\Users\\dev\\picked.png",
+    });
+  });
+
+  it("maps the error envelope onto ApiError (404 unknown project / 400 over-cap)", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        jsonResponse(404, {
+          error: { code: "NOT_FOUND", message: "no project with id prj_missing", details: {} },
+        }),
+      ),
+    );
+    const err = await uploadAttachmentBytes("prj_missing", "x.png", "aGk=").catch((e) => e);
+    expect(err).toBeInstanceOf(ApiError);
+    expect(err.status).toBe(404);
+    expect(err.code).toBe("NOT_FOUND");
+
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        jsonResponse(400, {
+          error: {
+            code: "VALIDATION",
+            message: "attachment is 9437184 bytes — above the 8MB upload limit",
+            details: { field: "body.dataBase64" },
+          },
+        }),
+      ),
+    );
+    const tooBig = await ingestAttachmentPath("prj_1", "x.png", "/missing.png").catch((e) => e);
+    expect(tooBig).toBeInstanceOf(ApiError);
+    expect(tooBig.code).toBe("VALIDATION");
   });
 });
 

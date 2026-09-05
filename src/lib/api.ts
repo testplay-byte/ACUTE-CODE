@@ -1685,6 +1685,62 @@ export async function readAttachmentFiles(
 }
 
 /**
+ * ROUND-67 (R67-A): the persisted-attachment result of POST
+ * /attachments/upload. `path` is PROJECT-RELATIVE (forward slashes) and
+ * points at the copy the sidecar wrote into <root>/attachments/ — exactly
+ * the path renderAttachments shows the model, so analyze_image / read_file
+ * can open it.
+ */
+export interface AttachmentUploadResult {
+  /** Project-relative path of the persisted copy ("attachments/shot.png"). */
+  path: string;
+  /** The FINAL on-disk name (dedupe suffix applied when the name was taken). */
+  name: string;
+  /** Persisted size in bytes. */
+  size: number;
+}
+
+/**
+ * ROUND-67 (R67-A): persist DROPPED/PASTED attachment bytes — POST
+ * /attachments/upload with { projectId, name, dataBase64 }. The sidecar
+ * decodes, validates (≤8MB, strict base64), and writes the file into the
+ * project's attachments/ dir (an identical existing file is reused; a
+ * different file under the same name gets a -2… suffix — never an
+ * overwrite). The composer threads the returned path onto the chip so the
+ * agent-facing history can point analyze_image at a REAL file instead of a
+ * guessed path (the owner's #1 v0.66.0 complaint). Throws ApiError on 400
+ * (oversized/invalid base64/bad name) and 404 (unknown project).
+ */
+export async function uploadAttachmentBytes(
+  projectId: string,
+  name: string,
+  dataBase64: string,
+): Promise<AttachmentUploadResult> {
+  return request<AttachmentUploadResult>("/attachments/upload", {
+    method: "POST",
+    json: { projectId, name, dataBase64 },
+  });
+}
+
+/**
+ * ROUND-67 (R67-A): ingest an OS-PICKER file by its absolute path — the
+ * same POST /attachments/upload, with { projectId, name, absolutePath }:
+ * the SIDECAR copies the file into the project's attachments/ dir (the
+ * picker already returned a trusted absolute path; /attachments/read reads
+ * those the same way). Same result contract as uploadAttachmentBytes.
+ */
+export async function ingestAttachmentPath(
+  projectId: string,
+  name: string,
+  absolutePath: string,
+): Promise<AttachmentUploadResult> {
+  return request<AttachmentUploadResult>("/attachments/upload", {
+    method: "POST",
+    json: { projectId, name, absolutePath },
+  });
+}
+
+/**
  * ROUND-50 (R50-c1): set the session's permission mode (the composer's
  * Full Access / Ask / Plan / Editor switcher) — PATCH /sessions/:id/permissions
  * with { mode }. Returns the updated session in the GET /sessions/:id shape
@@ -2698,6 +2754,47 @@ export type StreamTurnEvent =
       tabId: string;
       viewport: BrowserViewportFrame;
     }
+  /** ROUND-67 (R67, E1): the browser_control navigate/back/forward/reload
+   * action recorded a navigation server-side — emitted IMMEDIATELY so the
+   * panel loads the URL (creating the native webview when needed) instead
+   * of waiting for the 4s poll. The owner's blank-panel bug: the poll's
+   * adopt-without-create left a fresh tab empty until a manual address-bar
+   * Enter. Turn-independent (rides before the liveTurn guard). */
+  | {
+      type: "browser-navigate";
+      sessionId: string;
+      tabId: string;
+      url: string;
+    }
+  /** ROUND-67 (R67, E3): the browser_control tool minted THIS chat session's
+   * agent browser tab (ag-<chatSession>) — the sidebar opens a real tab
+   * whose id IS the sidecar session id, so the panel, the command bridge
+   * and the history all align on one id. `url` may be null (tab opens
+   * empty; the navigate action follows). Turn-independent. */
+  | {
+      type: "browser-open";
+      sessionId: string;
+      tabId: string;
+      chatSessionId: string;
+      url: string | null;
+    }
+  /** ROUND-67 (R67/D): the agent captured a screenshot (computer-use
+   * screenshot / zoom / get_app_state includeScreenshot, or the
+   * browser_control screenshot action) and the bytes are now fetchable at
+   * GET /computer-use/frames/:frameId/raster (an EPHEMERAL in-memory raster
+   * — LRU 12, 10-minute TTL; never persisted, never model-facing). The chat
+   * renders the live THUMBNAIL strip from these frames while the turn
+   * streams (the owner: "the images should be shown during its thinking in
+   * the agent's chat window itself, in a small view"). Turn-scoped on the
+   * frontend (the handler appends to the OPEN liveTurn — rasters belong to
+   * the turn that captured them). */
+  | {
+      type: "screenshot";
+      sessionId: string;
+      frameId: string;
+      tool: string;
+      note?: string;
+    }
   /** ROUND-66 (R66, A4): the browser_control wait_for_verification action
    * opened a human-verification checkpoint — the page hit a bot wall
    * (captcha / Cloudflare challenge / age gate). The chat renders the
@@ -3093,6 +3190,50 @@ export interface ComputerUseSessionState {
 /** GET /computer-use/session — the monitor ring (newest-first) + stats. */
 export async function fetchComputerUseSession(): Promise<ComputerUseSessionState> {
   return request<ComputerUseSessionState>("/computer-use/session");
+}
+
+/**
+ * ROUND-67 (R67/D): GET /computer-use/frames/:frameId/raster — the PNG bytes
+ * of a frame captured this sidecar lifetime, as a Blob (the live screenshot
+ * THUMBNAIL strip's lazy per-tile fetch). BINARY (the shared request()
+ * helper is JSON-only), so this carries its own Authorization header like
+ * the SSE fetch + browserRequest do. Throws ApiError on a non-OK reply — a
+ * 404 (TTL/LRU eviction) is the caller's "expired tile" signal, not a
+ * crash; a 0-status network miss surfaces the same honest way.
+ */
+export async function fetchComputerFrameRaster(frameId: string): Promise<Blob> {
+  const { baseUrl, token } = useConfigStore.getState();
+  let res: Response;
+  try {
+    res = await fetch(
+      `${baseUrl}/api/v1/computer-use/frames/${encodeURIComponent(frameId)}/raster`,
+      {
+        headers: token ? { Authorization: `Bearer ${token}` } : {},
+      },
+    );
+  } catch (cause) {
+    throw new ApiError(
+      0,
+      "NETWORK",
+      `Could not reach agent-core at ${baseUrl} (${String(cause)})`,
+    );
+  }
+  if (!res.ok) {
+    const text = await res.text().catch(() => "");
+    let body: unknown;
+    try {
+      body = text ? JSON.parse(text) : undefined;
+    } catch {
+      body = undefined;
+    }
+    const envelope = parseEnvelope(body);
+    throw new ApiError(
+      res.status,
+      envelope?.code ?? "UNKNOWN",
+      envelope?.message ?? `Frame raster fetch failed with HTTP ${res.status}`,
+    );
+  }
+  return res.blob();
 }
 
 /**

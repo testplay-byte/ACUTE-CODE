@@ -1,4 +1,4 @@
-<!-- last-reviewed: 2026-09-04 round-66 -->
+<!-- last-reviewed: 2026-09-05 round-67 -->
 # TESTING — the verification ladder
 
 Five layers; each has a defined "when mandatory". Rules here are binding
@@ -13,15 +13,82 @@ Five layers; each has a defined "when mandatory". Rules here are binding
 | L4 live battery | real provider turn(s), real disk, fresh DB | sandbox, single invocation | anything touching agents, projects, tools, streaming |
 | L5 browser verification | real UI against the live stack; screenshots machine-verified | sandbox, single invocation | any UI-affecting round |
 
-**Current counts (R66, verified 2026-09-04 by re-running the suites):**
-the root `pnpm test` = **1807 tests in 118 files** (all workspace suites
-from the root vite config; agent-core alone = **980/980 in 58 files**,
-frontend `src/` alone = **815/815 in 58 files**, root `tests/` e2e = 12).
+**Current counts (R67, verified 2026-09-05 by re-running the suites):**
+the root `pnpm test` = **1961 tests in 122 files** (all workspace suites
+from the root vite config; agent-core alone = **1064/1064 in 59 files**,
+frontend `src/` alone = **885/885 in 61 files**, root `tests/` e2e = 12).
 Trajectory: 262 (R42) → 397 (R43) → 471 (R44) → 565 (R45) → 622 (R46) →
 683 (R47) → 752 (R48) → 815ish (R49) → 930 (R50) → 978 (R51) → 1035
 (R52) → 1058 (R53) → 1071 (R54–R56, launcher rounds) → 1169 (R58) → 1302
 (R59) → 1348 (R60) → 1491 (R61) → 1542 (R62) → 1632 (R63) → 1664 (R64) →
-1686 (R65) → 1807 (R66).
+1686 (R65) → 1807 (R66) → 1961 (R67).
+
+**R67 (the bridge round):** +154 root over R66's 1807 — the round's
+features again carried their own suites (all counts as MEASURED this
+round by the docs pass, not remembered; two sub-agent worklog counts
+drifted and the runner wins — see the round file): agent-core NEW/EXTENDED
+`composer-attachments` 33 → **58** (the upload route's both modes with
+bytes-on-disk verified, the identical-reuse/-2…-3 dedupe, the 8 MB cap,
+invalid base64, unsafe names, both/neither sources, absolutePath honest
+400s, the 401 wall; renderAttachments' image analyze_image contract incl.
+the exact string) · `raster-cache` **7** (NEW: round-trip, honest-null, LRU
+eviction at 13, recency on re-registration, the exact TTL boundary via
+fake timers, the reset) · `computer-windows-backend` 30 → **48** (the
+-EncodedCommand argv + a decodeCapsuleScript helper asserting the decoded
+script; the U32 guard pins; the REACHABLE Get-Process fallback + its
+source field; the full composeSendKeysChord table/chords/escapes/
+meta-refusal/unknown-name matrix; rawKey's composed chord + refusal without
+a capsule; the three-probe probePermissions incl. addTypeOk false) ·
+`computer-dispatch` 52 → **65** (retry-once recovery, probeNote,
+benign-empty no-retry, the pid zero-calls pin, the WebView2-helper refusal
+across get_app_state/type/key, the splitKeyChord matrix, the focused
+readback incl. null/empty/throwing) · `computer-use-plugin` 15 → **21**
+(the screenshot frame + registry, zoom/get_app_state notes, no frame
+without a raster, refusal → no frame, evicted raster → no frame + the
+tool still ok) · `server.test` → **25** (the raster route: 200 image/png
++ no-store + exact bytes, the honest 404 envelope, 400 malformed id, 401
+without the token) · `browser-tool` 43 → **49** (the binding-scoped
+default-target pins, the bind route validation + null-clear, the
+mint/isolation test, the navigate/open frame emissions, the R67-E
+description contracts) · `vision-plugin` 13 → **14** (the attachment-path
+description contract) · `prompt-registry` 11 → **14** (the ROUND-67
+prompt pins: browser discipline, Tab-walk, image attachments, + the
+NOT-contain pins proving the retired R66 claims are gone) · `skills-mcp`
+11 → **12** (the skill's Tab-walk + embedded-browser-is-not-a-desktop-app
+paragraphs). Frontend NEW/EXTENDED `turn-copy` **9** (NEW: the full-turn
+export format, ordering, FAILED shapes, unknown-model fallback, approvals,
+skipping, in-flight pending, the 100 KB tail-kept truncation) ·
+`computer-monitor-store` **9** (NEW: the turn-hold latch — no bump, no
+decay; multi-hold release; decay-fires-while-held; noteStopSignal
+scoped/unscoped; clear hygiene) · `ScreenshotStrip` **6** (NEW: hidden
+when empty, the lazy fetch + img, the expired tile, the click-to-enlarge
+dialog, revoke-on-unmount, one tile per capture) · `DebugReportCard` 8 →
+**17** (collapsed-by-default-when-done, expanded-while-streaming, the
+auto-collapse flip, manual-tap-wins, the Copy report payload + Copied
+flash, no-copy-while-streaming/error/empty) · `AgentChatPanel` 20 → **22**
+(the full-copy hidden when debug is off; visible + payload with the model
+header/TOOL block/FINAL ANSWER when on; the bind POST before the stream) ·
+`Composer` 65 → **71** (dropped binary → upload + path on the wire; failed
+upload → old behavior + toast, send never blocked; pasted image; picker
+binary → ingest) · `ComputerMiniWindow` 10 → **13** (hold-alone shows the
+pill, NO-FLAP across a simulated decay fire, noteStopSignal hides) ·
+`stream-store` → **45** (the navigate frame intercept, the open frame
+active+background, the turn-hold latch+release, the stop signal, the
+screenshot append/cap-8/no-liveTurn guard/fresh-turn reset) ·
+`BrowserPanel` 36 → **38** (the agentNavSeq navigate-or-CREATE effect +
+the poll create-on-adopt backstop + the mint projectId pin) ·
+`right-sidebar-store` 8 → **11** (openBrowserForChatSession
+active/background/idempotent) · `native-browser` 12 → **21** (the
+double-encoding matrix + the eval/scroll probes on both transports) ·
+`api.test` 90 → **93** (the upload/ingest POST bodies + ApiError mapping).
+The golden fixture was regenerated by the sanctioned procedure (byte-
+identity re-pinned). **The Windows capsule/SendKeys/bridge-decode claims
+remain construction-pinned only** (headless Linux sandbox — PowerShell
+never runs here); the owner's live Windows run is the L4 proof. One
+observed mid-round flake (raster-cache's two TTL tests under load, per
+the R67-E worklog) did NOT reproduce in this round's runs (full ×1,
+scoped ×2, agent-core ×1) — fake-timer tests are load-sensitive, worth a
+deterministic re-pin if it recurs.
 
 **R66 (the live-fire patch):** +121 root over R65's 1686 — the round's
 features again carried their own suites (all counts as MEASURED this round,

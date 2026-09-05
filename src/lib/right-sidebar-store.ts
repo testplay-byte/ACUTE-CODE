@@ -186,6 +186,9 @@ interface RightSidebarState {
   openFiles: (projectId: string) => string;
   /** Open (or surface) a browser tab. */
   openBrowser: (projectId: string, url?: string | null) => string;
+  /** ROUND-67 (R67, E3): open THIS chat session's agent browser tab (the
+   * browser-open SSE frame target) — the tab id IS the sidecar session id. */
+  openBrowserForChatSession: (projectId: string, chatSessionId: string, tabId: string, url?: string | null) => string;
   /** Open (or surface) a terminal tab. */
   openTerminal: (projectId: string) => string;
   /** ROUND-44 (R44-a): open (or surface) the project-memory tab. */
@@ -395,6 +398,64 @@ export const useRightSidebarStore = create<RightSidebarState>()(
           browserUrl: startUrl,
           browserHistory: startUrl === null ? [] : [startUrl],
         });
+      },
+      // ROUND-67 (R67, E3): the browser_control tool minted THIS chat
+      // session's agent tab (ag-<chatSession>) and announced it with a
+      // browser-open SSE frame — the stream-store calls this to open the
+      // tab. Key differences from openBrowser: (a) the tab lands in the
+      // CHAT session's slice even when it is NOT the active sidebar slice
+      // (a background turn browses into its own session's sidebar, never
+      // the visible one); (b) the tab id IS the sidecar session id the
+      // agent drives, so panel/bridge/history align on one id; (c) the
+      // slice only AUTO-OPENS (sidebar expands + tab activates) when it is
+      // the ACTIVE session's slice. Idempotent: a tab with that exact id
+      // already exists (the frame re-fired) just gets activated/patched.
+      openBrowserForChatSession: (projectId, chatSessionId, tabId, url) => {
+        const startUrl = url ?? null;
+        set((s) => {
+          const key = stateKey(projectId, chatSessionId);
+          const cur = s.byProject[key] ?? defaultProjectRightState();
+          const existing = cur.tabs.find((t) => t.id === tabId) ?? null;
+          const isActiveSlice = s.activeSessionByProject[projectId] === chatSessionId;
+          const title =
+            startUrl === null
+              ? "Agent browser"
+              : startUrl.replace(/^https?:\/\//, "").slice(0, 24) || "Agent browser";
+          let tabs: RightSidebarTab[];
+          if (existing !== null) {
+            // Re-fire: patch the URL when one arrived and keep it.
+            tabs = cur.tabs.map((t) =>
+              t.id === tabId && startUrl !== null && (t.browserUrl ?? null) !== startUrl
+                ? { ...t, browserUrl: startUrl, title, browserHistory: [startUrl, ...(t.browserHistory ?? []).filter((u) => u !== startUrl)].slice(0, 20) }
+                : t,
+            );
+          } else {
+            const tab: RightSidebarTab = {
+              type: "browser",
+              title,
+              browserUrl: startUrl,
+              browserHistory: startUrl === null ? [] : [startUrl],
+              id: tabId,
+              createdAt: Date.now(),
+            };
+            // LRU eviction like addTab (drop the OLDEST past MAX_TABS).
+            tabs = [...cur.tabs, tab];
+            while (tabs.length > MAX_TABS) tabs.shift();
+          }
+          return {
+            byProject: {
+              ...s.byProject,
+              [key]: {
+                ...cur,
+                tabs,
+                // Auto-open ONLY the visible slice: a background session's
+                // browsing must never yank the user's sidebar.
+                ...(isActiveSlice ? { open: true, activeTabId: tabId } : {}),
+              },
+            },
+          };
+        });
+        return tabId;
       },
       openTerminal: (projectId) =>
         get().addTab(projectId, { type: "terminal", title: "Terminal" }),

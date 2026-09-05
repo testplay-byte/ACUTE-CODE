@@ -91,7 +91,6 @@ export function ComputerMiniWindow({
   pollMs = 2_000,
 }: ComputerMiniWindowProps = {}) {
   const styles = useThemeStyles();
-  const liveActivity = useComputerMonitorStore((s) => s.liveActivity);
   const session = useComputerMonitorStore((s) => s.session);
   const events = useComputerMonitorStore((s) => s.events);
   const storeError = useComputerMonitorStore((s) => s.error);
@@ -100,17 +99,21 @@ export function ComputerMiniWindow({
   const killSwitch = session?.killSwitch ?? false;
   const startedAt = session?.startedAt ?? null;
   const nowMs = useNowMs(sessionActive);
-  // ROUND-66 (R66, A1/B1 — the owner's report, verbatim: browser turns showed
-  // "the agent is using your computer" at the top right, and during real
-  // computer use "it did not show me the floating menu"): `live` is now the
-  // DECAYED real-control signal ONLY (liveActivity — bumped by actual
-  // computer-use events, rested 6s after the last one; browser screenshot
-  // records no longer pollute the ring). The old `|| sessionActive` clause
-  // was the bug: the singleton session stays ACTIVE the whole time Computer
-  // Use is merely enabled, so live pinned true forever — the edge-triggered
-  // open never re-fired after the mini page self-closed (browser turns kept
-  // the stale window up; later computer-use bursts never re-opened it).
-  const live = liveActivity && !killSwitch;
+  // R67-C: `live` is the decayed real-control signal OR an OPEN TURN HOLD:
+  // the stream-store hook holds the turn when computer-use frames flow and
+  // releases at turn end, so the surface persists through the agent's
+  // THINKING GAPS between computer tool calls (the owner's report: the mini
+  // window disappeared mid-turn because the 6s per-EVENT decay fired while
+  // the model was thinking). The hold is only ever set for turns that ran
+  // computer tools — browser-only turns NEVER hold, so the R66 guarantee
+  // (live = real control events, not session aliveness) is unchanged.
+  // ROUND-66 (R66, A1/B1) history: the old `|| sessionActive` clause was the
+  // opposite bug — the singleton session stays ACTIVE while Computer Use is
+  // merely ENABLED, so live pinned true forever and browser-only turns kept
+  // the stale window up; live stayed REAL-CONTROL-ONLY through R66.
+  const liveActivity = useComputerMonitorStore((s) => s.liveActivity);
+  const turnHeld = useComputerMonitorStore((s) => Object.values(s.turnHolds).some(Boolean));
+  const live = (liveActivity || turnHeld) && !killSwitch;
   const inTauri = isTauri();
 
   // ── one-shot seed: the component mounts before any activity (app-wide),
@@ -135,7 +138,7 @@ export function ComputerMiniWindow({
     return () => {
       cancelled = true;
     };
-  }, [hasSession, liveActivity]);
+  }, [hasSession, liveActivity, turnHeld]);
 
   // ── the auto show/hide + open/close controller (EDGE-triggered) ─────────
   // live false→true: show the surface (open the OS window in Tauri / the

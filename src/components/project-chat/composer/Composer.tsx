@@ -3,12 +3,18 @@ import {
   useEffect,
   useRef,
   useState,
+  type ClipboardEvent as ReactClipboardEvent,
   type KeyboardEvent as ReactKeyboardEvent,
   type RefObject,
 } from "react";
 import { ArrowUp, Play } from "lucide-react";
 import type { PermissionMode, ThinkingLevel } from "shared";
-import { readAttachmentFiles, type Agent } from "../../../lib/api";
+import {
+  ingestAttachmentPath,
+  readAttachmentFiles,
+  uploadAttachmentBytes,
+  type Agent,
+} from "../../../lib/api";
 import { pushLocalToast } from "../../../hooks/use-notifications";
 import { SEMANTIC_COLORS } from "../../../lib/semantics";
 import { useThemeStyles } from "../../../lib/use-theme-styles";
@@ -25,7 +31,10 @@ import {
   CONTINUE_FROM_STOP_MESSAGE,
   detectAtToken,
   filterProjectFiles,
+  isAbsoluteLikePath,
   MAX_ATTACHMENTS,
+  MAX_BINARY_ATTACHMENT_BYTES,
+  readClipboardImageFile,
   readDroppedFile,
   type AtToken,
   type ComposerAttachment,
@@ -145,7 +154,26 @@ export function Composer({
     }
   }, [input, textareaRef]);
 
-  /** Stage chips from a server-side read (picker / project files / @ mention). */
+  /**
+   * ROUND-67 (R67-A): send-time upload gate — persisting binary chips makes
+   * the send path async; this ref blocks a second Enter/click from
+   * double-firing during the upload window (before the panel's `busy` prop
+   * flips when onSend lands).
+   */
+  const uploadingRef = useRef(false);
+
+  /**
+   * Stage chips from a server-side read (picker / project files / @ mention).
+   *
+   * ROUND-67 (R67-A): an OS-picker BINARY (text: null, ≤8MB, absolute path —
+   * the picker's own images) is additionally INGESTED: the sidecar copies it
+   * into <root>/attachments/ (ingestAttachmentPath) and the chip carries the
+   * returned project-relative path, so the model's history can point
+   * analyze_image at a real file. Project-relative reads ("@" / project
+   * picker) are already inside the project — no ingestion. An ingest failure
+   * keeps the old behavior (the chip keeps the picker's absolute path) and
+   * surfaces as a per-file toast — never silent, never a blocked send.
+   */
   const attachPaths = useCallback(
     async (paths: string[], source: ComposerAttachment["source"]): Promise<void> => {
       const capacity = MAX_ATTACHMENTS - attachments.length;
@@ -164,9 +192,26 @@ export function Composer({
       if (chosen.length === 0) return;
       try {
         const results = await readAttachmentFiles(chosen, projectId);
-        const chips = results
-          .map((r) => attachmentFromRead(r, source))
-          .filter((c): c is ComposerAttachment => c !== null);
+        const staged = await Promise.all(
+          results.map(async (r): Promise<ComposerAttachment | null> => {
+            const chip = attachmentFromRead(r, source);
+            if (chip === null) return null;
+            if (r.text === null && r.size <= MAX_BINARY_ATTACHMENT_BYTES && isAbsoluteLikePath(r.path)) {
+              try {
+                const saved = await ingestAttachmentPath(projectId, r.name, r.path);
+                return { ...chip, path: saved.path, size: saved.size };
+              } catch (err) {
+                pushLocalToast(
+                  "File could not be uploaded",
+                  `${r.name}: ${err instanceof Error ? err.message : String(err)}`,
+                  "task_failed",
+                );
+              }
+            }
+            return chip;
+          }),
+        );
+        const chips = staged.filter((c): c is ComposerAttachment => c !== null);
         if (chips.length > 0) {
           setAttachments((prev) => {
             const seen = new Set(prev.map((a) => a.id));
@@ -192,7 +237,11 @@ export function Composer({
     [attachments.length, projectId],
   );
 
-  /** Drag-and-drop: File objects have no usable path — read them client-side. */
+  /**
+   * Drag-and-drop: File objects have no usable path — read them client-side.
+   * ROUND-67 (R67-A): binary drops (images) now stage their bytes as
+   * `dataBase64` (readDroppedFile) for the send-time upload.
+   */
   const onDrop = (e: React.DragEvent<HTMLDivElement>): void => {
     setDragActive(false);
     const files = Array.from(e.dataTransfer?.files ?? []);
@@ -206,6 +255,31 @@ export function Composer({
       return;
     }
     void Promise.all(files.slice(0, capacity).map((f) => readDroppedFile(f))).then((chips) => {
+      setAttachments((prev) => {
+        const seen = new Set(prev.map((a) => a.id));
+        return [...prev, ...chips.filter((c) => !seen.has(c.id))].slice(0, MAX_ATTACHMENTS);
+      });
+    });
+  };
+
+  /**
+   * ROUND-67 (R67-A): pasted files (e.g. a clipboard screenshot) stage as
+   * drop-style chips — binary blobs carry their bytes for the send-time
+   * upload (the fix for pasted images previously doing NOTHING: no onPaste
+   * handler existed anywhere in the composer). A paste with NO files is left
+   * to the browser — text paste behaves exactly as before (no
+   * preventDefault, the textarea inserts the text natively).
+   */
+  const onPaste = (e: ReactClipboardEvent<HTMLTextAreaElement>): void => {
+    const files = Array.from(e.clipboardData?.files ?? []);
+    if (files.length === 0) return;
+    e.preventDefault();
+    const capacity = MAX_ATTACHMENTS - attachments.length;
+    if (capacity <= 0) {
+      pushLocalToast("Attachment limit", `At most ${MAX_ATTACHMENTS} files per message.`, "task_failed");
+      return;
+    }
+    void Promise.all(files.slice(0, capacity).map((f) => readClipboardImageFile(f))).then((chips) => {
       setAttachments((prev) => {
         const seen = new Set(prev.map((a) => a.id));
         return [...prev, ...chips.filter((c) => !seen.has(c.id))].slice(0, MAX_ATTACHMENTS);
@@ -228,13 +302,51 @@ export function Composer({
 
   const send = (): void => {
     const text = input.trim();
-    if (text === "" || busy) return;
-    const staged = attachments;
-    onSend(input, staged);
-    // Chips are per-composer: they cleared with the message they rode.
-    setAttachments([]);
-    setAtToken(null);
-    setAtDismissedAt(null);
+    if (text === "" || busy || uploadingRef.current) return;
+    void sendStaged();
+  };
+
+  /**
+   * ROUND-67 (R67-A): the REAL attachment pipeline — before the message
+   * leaves, every binary chip's bytes (a dropped/pasted image) are persisted
+   * into the project (uploadAttachmentBytes → POST /attachments/upload) and
+   * the chip's `path` becomes the returned project-relative path, which rides
+   * the message.user payload; the runtime's renderAttachments then points
+   * analyze_image at the real file. A failed upload keeps the OLD behavior —
+   * the attachment rides path-less and the model sees the honest "no readable
+   * text" placeholder — plus a per-file toast. Never a blocked send, never a
+   * silent drop.
+   */
+  const sendStaged = async (): Promise<void> => {
+    uploadingRef.current = true;
+    try {
+      const staged = await Promise.all(
+        attachments.map(async (chip): Promise<ComposerAttachment> => {
+          if (chip.dataBase64 === null || chip.dataBase64 === undefined || chip.path !== undefined) {
+            return chip;
+          }
+          try {
+            const saved = await uploadAttachmentBytes(projectId, chip.name, chip.dataBase64);
+            return { ...chip, path: saved.path, size: saved.size };
+          } catch (err) {
+            pushLocalToast(
+              "File could not be uploaded",
+              `${chip.name}: ${err instanceof Error ? err.message : String(err)}`,
+              "task_failed",
+            );
+            // Old behavior: the chip rides the message path-less.
+            return { ...chip, dataBase64: null };
+          }
+        }),
+      );
+      onSend(input, staged);
+      // Chips are per-composer: they cleared with the message they rode.
+      setAttachments([]);
+      setAtToken(null);
+      setAtDismissedAt(null);
+    } finally {
+      uploadingRef.current = false;
+    }
   };
 
   const onInputKeyDown = (e: ReactKeyboardEvent<HTMLTextAreaElement>): void => {
@@ -333,6 +445,7 @@ export function Composer({
         onFocus={() => setComposerFocused(true)}
         onBlur={() => setComposerFocused(false)}
         onKeyDown={onInputKeyDown}
+        onPaste={onPaste}
         rows={1}
         autoFocus={autoFocus}
         aria-label="Message composer"

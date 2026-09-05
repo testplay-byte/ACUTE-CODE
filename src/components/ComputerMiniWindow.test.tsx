@@ -2,7 +2,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, cleanup, fireEvent, screen, waitFor } from "@testing-library/react";
 import { fetchComputerUseSession, stopComputerUse, type ComputerUseSessionState } from "../lib/api";
-import { resetComputerMonitorForTests, useComputerMonitorStore } from "../lib/computer-monitor-store";
+import { resetComputerMonitorDecayForTest, resetComputerMonitorForTests, useComputerMonitorStore } from "../lib/computer-monitor-store";
 import { ComputerMiniWindow } from "./ComputerMiniWindow";
 import { renderWithProviders, resetTestState } from "../test-utils";
 
@@ -146,6 +146,70 @@ describe("ComputerMiniWindow — web mode (no Tauri shell)", () => {
         .refreshFromServer(sessionFixture({ active: false, killSwitch: false }));
     });
 
+    await waitFor(() => expect(screen.queryByTestId("computer-mini-pill")).toBeNull(), {
+      timeout: 2_500,
+    });
+  });
+
+  it("R67-C: a TURN HOLD alone shows the pill (live includes turnHeld, without liveActivity)", async () => {
+    // The orchestrator's stream-store hook holds the turn when computer-use
+    // frames flow. No event, no decay — the hold IS the live signal.
+    renderWithProviders(<ComputerMiniWindow />);
+    act(() => {
+      useComputerMonitorStore.getState().holdForTurn("session-1");
+    });
+    expect(await screen.findByTestId("computer-mini-pill")).toBeTruthy();
+    expect(useComputerMonitorStore.getState().liveActivity).toBe(false);
+  });
+
+  it("R67-C: NO flap — the pill survives the 6s liveActivity decay while the turn is held", async () => {
+    renderWithProviders(<ComputerMiniWindow hideDelayMs={120} />);
+
+    // A computer tool ran, then the agent started THINKING: the stream-store
+    // hook holds the turn; the decay timer fires mid-thought (simulated by
+    // the exported test hook — it runs the timer's exact setState).
+    liveFrame("action", "computer_click");
+    await screen.findByTestId("computer-mini-pill");
+    act(() => {
+      useComputerMonitorStore.getState().holdForTurn("session-1");
+    });
+    act(() => {
+      resetComputerMonitorDecayForTest();
+    });
+    // liveActivity is false, the hold is true → the pill STAYS (no flap).
+    expect(useComputerMonitorStore.getState().liveActivity).toBe(false);
+    expect(useComputerMonitorStore.getState().turnHolds).toEqual({ "session-1": true });
+    await act(async () => {
+      await new Promise((r) => setTimeout(r, 260));
+    });
+    expect(screen.queryByTestId("computer-mini-pill")).not.toBeNull();
+
+    // The turn ends (release) → the already-rested signal lets the pill
+    // close after the hide delay.
+    act(() => {
+      useComputerMonitorStore.getState().releaseTurnHold("session-1");
+    });
+    await waitFor(() => expect(screen.queryByTestId("computer-mini-pill")).toBeNull(), {
+      timeout: 2_500,
+    });
+  });
+
+  it("R67-C: noteStopSignal (the stop_computer_control frame rest) hides the pill after the grace delay", async () => {
+    renderWithProviders(<ComputerMiniWindow hideDelayMs={120} />);
+
+    liveFrame("action", "computer_click");
+    await screen.findByTestId("computer-mini-pill");
+    act(() => {
+      useComputerMonitorStore.getState().holdForTurn("session-1");
+    });
+    // The agent calls stop_computer_control: its SSE frame is kind:"receipt"
+    // (it RE-ARMS the decay — the bug), so the orchestrator's hook calls
+    // noteStopSignal() instead. Everything rests now.
+    act(() => {
+      useComputerMonitorStore.getState().noteStopSignal();
+    });
+    expect(useComputerMonitorStore.getState().liveActivity).toBe(false);
+    expect(useComputerMonitorStore.getState().turnHolds).toEqual({});
     await waitFor(() => expect(screen.queryByTestId("computer-mini-pill")).toBeNull(), {
       timeout: 2_500,
     });

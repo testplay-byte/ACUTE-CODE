@@ -268,5 +268,16 @@ export interface CuaBackend {
   writeClipboard(run: RunCommand, text: string): Promise<{ ok: boolean; error?: string }>;
 
   // health (probe only — NEVER pops dialogs)
-  probePermissions(run: RunCommand): Promise<PermissionReport>;
+  probePermissions(run: RunCommand): Promise<ProbedPermissionReport>;
 }
+
+/**
+ * ROUND-67 (R67-C): the permission report, plus the Windows backend's
+ * Add-Type -TypeDefinition probe result. `addTypeOk` is reported ONLY by
+ * backends that actually ran such a probe (windows — the csc compile every
+ * enumeration capsule rides; the owner's live "the PowerShell session died
+ * before emitting JSON" was a dead compile the old probe could not see).
+ * linux/macos OMIT the field — absence means "not probed on this backend",
+ * never "failed".
+ */
+export type ProbedPermissionReport = PermissionReport & { addTypeOk?: boolean };

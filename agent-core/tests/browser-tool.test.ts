@@ -41,7 +41,7 @@ import {
 import { buildServer } from "../src/server";
 import { openDatabase, type SqliteDatabase } from "../src/storage/db";
 import { ProviderKeyring } from "../src/providers/registry";
-import { resetBrowserStoreForTest } from "../src/browser-proxy";
+import { resetBrowserStoreForTest, browserSessionForChatSession } from "../src/browser-proxy";
 import type { ToolSet } from "ai";
 
 // The AI SDK tool contract — narrow to what the tests call.
@@ -51,6 +51,27 @@ function tool(set: ToolSet, name: string): Tool {
 }
 
 let tempDir = "";
+
+/**
+ * R67: an emit channel that ALSO answers the wall-probe browser-commands
+ * (the navigate action probes the live page through the bridge; a test emit
+ * that never resolves would pend the tool's 5s probe timeout — the same
+ * pattern the eval tests use with queueMicrotask + resolveBrowserCommand).
+ */
+function makeRecordingEmit(frames: unknown[]): (event: unknown) => void {
+  return (event: unknown) => {
+    frames.push(event);
+    const frame = event as { type?: string; commandId?: string };
+    if (frame.type === "browser-command" && typeof frame.commandId === "string") {
+      queueMicrotask(() => {
+        resolveBrowserCommand(frame.commandId as string, {
+          ok: true,
+          data: { ok: true, value: { title: "Clean page", text: "", markers: [] } },
+        });
+      });
+    }
+  };
+}
 
 /**
  * ROUND-45 (P0-5): browser_control navigate (and web_fetch) are host-gated —
@@ -212,17 +233,63 @@ describe("browser_control — set_viewport", () => {
 });
 
 describe("browser_control — input validation + default sessionId", () => {
-  it("defaults to the shared 'agent' session when no browser tab exists (with hint)", async () => {
-    const tools = await buildTools(tempDir);
+  it("R67/E3: an UNBOUND chat session mints its own ag-<chatSession> tab (never another session's tab)", async () => {
+    const frames: unknown[] = [];
+    const tools = await buildTools(tempDir, { emit: makeRecordingEmit(frames) });
     const bc = tool(tools, "browser_control");
 
     const nav = await bc.execute({ action: "navigate", url: "https://en.wikipedia.org/agent-default" });
     expect(nav.ok).toBe(true);
-    expect(nav.output).toContain("no embedded browser tab is open");
+    // The minted deterministic agent tab id for chat session sess_browser_tool.
+    expect(nav.output).not.toContain("no chat-session context");
 
     const state = JSON.parse((await bc.execute({ action: "get_state" })).output) as { sessionId: string; currentUrl: string };
-    expect(state.sessionId).toBe("agent");
+    expect(state.sessionId).toBe("ag-sess_browser_tool");
     expect(state.currentUrl).toBe("https://en.wikipedia.org/agent-default");
+
+    // The mint announced itself with a browser-open frame (the sidebar opens
+    // the real tab — the owner's leak fix: the frame carries the minted id).
+    const opened = frames.find((f) => (f as { type?: string }).type === "browser-open") as
+      | { tabId: string; chatSessionId: string; url: string | null }
+      | undefined;
+    expect(opened).toBeDefined();
+    expect(opened?.tabId).toBe("ag-sess_browser_tool");
+    expect(opened?.chatSessionId).toBe("sess_browser_tool");
+
+    // A SECOND chat session is isolated: it mints its OWN tab, never drives
+    // the first session's (the owner's cross-session leak report).
+    const toolsB = await buildProjectTools(tempDir, undefined, {
+      db,
+      sessionId: "sess_browser_tool_b",
+      agentId: "agt_browser_tool",
+      projectId: "proj_browser_tool",
+    });
+    const bcB = tool(toolsB, "browser_control");
+    const navB = await bcB.execute({ action: "navigate", url: "https://en.wikipedia.org/session-b" });
+    expect(navB.ok).toBe(true);
+    const stateB = JSON.parse((await bcB.execute({ action: "get_state" })).output) as { sessionId: string; currentUrl: string };
+    expect(stateB.sessionId).toBe("ag-sess_browser_tool_b");
+    expect(stateB.currentUrl).toBe("https://en.wikipedia.org/session-b");
+    // Session A's tab is untouched by B's navigation.
+    const stateA = JSON.parse((await bc.execute({ action: "get_state" })).output) as { currentUrl: string };
+    expect(stateA.currentUrl).toBe("https://en.wikipedia.org/agent-default");
+  });
+
+  it("R67/E3: a session WITHOUT a chat-session id (catalog context) keeps the shared 'agent' fallback", async () => {
+    // Fresh db — afterEach closes the module-level one after each test.
+    db = openDatabase(join(tempDir, `${randomUUID()}.db`));
+    const tools = await buildProjectTools(tempDir, undefined, {
+      db,
+      // The catalog-style context: NO chat session — the legacy fallback.
+      sessionId: "",
+      agentId: "agt_browser_tool",
+    });
+    const bc = tool(tools, "browser_control");
+    const nav = await bc.execute({ action: "navigate", url: "https://en.wikipedia.org/agent-fallback" });
+    expect(nav.ok).toBe(true);
+    expect(nav.output).toContain("no chat-session context");
+    const state = JSON.parse((await bc.execute({ action: "get_state" })).output) as { sessionId: string };
+    expect(state.sessionId).toBe("agent");
   });
 
   it("explicit sessionIds are validated and isolated from each other", async () => {
@@ -253,7 +320,7 @@ describe("browser_control — input validation + default sessionId", () => {
 });
 
 describe("browser_control ↔ route state sharing (one server, no self-fetch)", () => {
-  it("the tool's DEFAULT target is the tab session the server minted; tool pushes are visible over HTTP", async () => {
+  it("R67/E3: a BOUND chat session defaults to its declared tab; tool pushes are visible over HTTP", async () => {
     // ROUND-45: buildTools opens a fresh db AND assigns it to the module-level
     // `db` — do it FIRST so the server and the afterEach cleanup share it.
     await buildTools(tempDir);
@@ -264,7 +331,7 @@ describe("browser_control ↔ route state sharing (one server, no self-fetch)", 
     });
 
     // The panel flow: mint a session over HTTP (the route store registers as
-    // the active tool store) — this tab becomes the most recently used one.
+    // the active tool store) — the tab the user is viewing.
     const mint = await app.inject({
       method: "POST",
       url: "/api/v1/browser/session",
@@ -272,6 +339,17 @@ describe("browser_control ↔ route state sharing (one server, no self-fetch)", 
       payload: { sessionId: "tab-live-1" },
     });
     expect(mint.statusCode).toBe(200);
+
+    // R67/E3: the frontend declares the chat session's tab binding over
+    // HTTP (what AgentChatPanel posts before a turn starts).
+    const bind = await app.inject({
+      method: "POST",
+      url: "/api/v1/browser/bind",
+      headers: { authorization: `Bearer ${TOKEN}` },
+      payload: { chatSessionId: "sess_browser_tool", sessionId: "tab-live-1" },
+    });
+    expect(bind.statusCode).toBe(200);
+    expect((bind.json() as { ok: boolean }).ok).toBe(true);
 
     const tools = await buildProjectTools(tempDir, undefined, {
       db,
@@ -281,10 +359,9 @@ describe("browser_control ↔ route state sharing (one server, no self-fetch)", 
     });
     const bc = tool(tools, "browser_control");
 
-    // No explicit sessionId → targets tab-live-1 (the tab the user views).
+    // No explicit sessionId → targets the BOUND tab (tab-live-1).
     const nav = await bc.execute({ action: "navigate", url: "https://en.wikipedia.org/shared" });
     expect(nav.ok).toBe(true);
-    expect(nav.output).not.toContain("no embedded browser tab is open");
 
     // The ROUTE sees the tool's push (same store, no HTTP self-fetch).
     const history = await app.inject({
@@ -308,6 +385,45 @@ describe("browser_control ↔ route state sharing (one server, no self-fetch)", 
       width: 390,
       preset: "mobile-md",
     });
+  });
+
+  it("R67/E3: POST /browser/bind validates honestly (bad ids 400; null clears a binding)", async () => {
+    await buildTools(tempDir);
+    app = buildServer({
+      token: TOKEN,
+      db,
+      keyring: new ProviderKeyring({ ACUTE_PROVIDER_OPENROUTER: "sk-or-vtest" }),
+    });
+    const bad = await app.inject({
+      method: "POST",
+      url: "/api/v1/browser/bind",
+      headers: { authorization: `Bearer ${TOKEN}` },
+      payload: { chatSessionId: "sess-x", sessionId: "../evil id" },
+    });
+    expect(bad.statusCode).toBe(400);
+    const noChat = await app.inject({
+      method: "POST",
+      url: "/api/v1/browser/bind",
+      headers: { authorization: `Bearer ${TOKEN}` },
+      payload: { sessionId: "tab-1" },
+    });
+    expect(noChat.statusCode).toBe(400);
+
+    // null clears: after clearing, an unbound session mints its own tab.
+    await app.inject({
+      method: "POST",
+      url: "/api/v1/browser/bind",
+      headers: { authorization: `Bearer ${TOKEN}` },
+      payload: { chatSessionId: "sess-y", sessionId: "tab-keep" },
+    });
+    const cleared = await app.inject({
+      method: "POST",
+      url: "/api/v1/browser/bind",
+      headers: { authorization: `Bearer ${TOKEN}` },
+      payload: { chatSessionId: "sess-y", sessionId: null },
+    });
+    expect(cleared.statusCode).toBe(200);
+    expect(browserSessionForChatSession("sess-y")).toBeNull();
   });
 });
 
@@ -508,7 +624,7 @@ describe("browser_control — screenshot (R62: computer-use capture + vision rel
 });
 
 describe("browser_control — get_state enrichment (R62: tabs + active tab)", () => {
-  it("get_state lists every open tab and which one the user views", async () => {
+  it("R67/E3: get_state is SCOPED to the addressed tab — another session's tabs are never listed (the leak fix)", async () => {
     const tools = await buildTools(tempDir);
     const bc = tool(tools, "browser_control");
     await bc.execute({ action: "navigate", url: "https://en.wikipedia.org/a", sessionId: "tab-alpha" });
@@ -517,10 +633,53 @@ describe("browser_control — get_state enrichment (R62: tabs + active tab)", ()
       activeTab: string | null;
       tabs: Array<{ sessionId: string; currentUrl: string | null }>;
     };
-    expect(state.tabs.map((t) => t.sessionId).sort()).toEqual(["tab-alpha", "tab-beta"]);
-    // LRU: beta navigated LAST → it is the tab the user is viewing.
-    expect(state.activeTab).toBe("tab-beta");
+    // Only the ADDRESSED tab is listed — the old behavior (every session's
+    // tab globally) invited the model to drive another session's tab.
+    expect(state.tabs.map((t) => t.sessionId)).toEqual(["tab-alpha"]);
+    expect(state.activeTab).toBe("tab-alpha");
     expect(state.tabs.find((t) => t.sessionId === "tab-alpha")?.currentUrl).toBe("https://en.wikipedia.org/a");
+  });
+});
+
+describe("browser_control — the R67 instant frames (E1: navigate; E3: open)", () => {
+  it("navigate emits {type:'browser-navigate', tabId, url} on the turn stream after the command succeeds", async () => {
+    const frames: unknown[] = [];
+    const tools = await buildTools(tempDir, { emit: makeRecordingEmit(frames) });
+    const bc = tool(tools, "browser_control");
+    const nav = await bc.execute({ action: "navigate", url: "https://en.wikipedia.org/frame-nav" });
+    expect(nav.ok).toBe(true);
+    const frame = frames.find((f) => (f as { type?: string }).type === "browser-navigate") as
+      | { tabId: string; url: string }
+      | undefined;
+    expect(frame).toBeDefined();
+    expect(frame?.tabId).toBe("ag-sess_browser_tool");
+    expect(frame?.url).toBe("https://en.wikipedia.org/frame-nav");
+  });
+
+  it("back/forward announce the landed URL too; a noop boundary emits nothing", async () => {
+    const frames: unknown[] = [];
+    const tools = await buildTools(tempDir, { emit: makeRecordingEmit(frames) });
+    const bc = tool(tools, "browser_control");
+    await bc.execute({ action: "navigate", url: "https://en.wikipedia.org/f1" });
+    await bc.execute({ action: "navigate", url: "https://en.wikipedia.org/f2" });
+    frames.length = 0;
+    const back = await bc.execute({ action: "back" });
+    expect(back.ok).toBe(true);
+    const frame = frames.find((f) => (f as { type?: string }).type === "browser-navigate") as
+      | { url: string }
+      | undefined;
+    expect(frame?.url).toBe("https://en.wikipedia.org/f1");
+  });
+
+  it("an emit that throws never breaks the action (the 4s poll is the backfill)", async () => {
+    const tools = await buildTools(tempDir, {
+      emit: () => {
+        throw new Error("stream channel gone");
+      },
+    });
+    const bc = tool(tools, "browser_control");
+    const nav = await bc.execute({ action: "navigate", url: "https://en.wikipedia.org/emit-throws" });
+    expect(nav.ok).toBe(true);
   });
 });
 
@@ -1087,5 +1246,35 @@ describe("browser_control — the R66 wall probe on navigate / read", () => {
     expect(result.ok).toBe(true);
     expect(result.output).toContain("⚠ A verification wall (cloudflare)");
     expect(result.output).toContain("wait_for_verification");
+  });
+});
+
+// ── ROUND-67 (R67-E): the model-facing DESCRIPTION contract ────────────────
+// The owner's 0.66.0 field report: the model flailed because the description
+// still taught the pre-R67 truth. The bridge is fixed and the default target
+// is the chat session's own tab — the description must say so (and stay
+// honest about the web-dev-mode bridge limit).
+
+describe("browser_control — the R67-E description contract (read_dom-first, per-session tabs, native-bridge honesty)", () => {
+  it("teaches the read_dom-first workflow, the per-session default target, and the honest web-dev-mode limit", async () => {
+    const tools = await buildTools(tempDir);
+    const bc = (tools as unknown as Record<string, { description?: string }>)["browser_control"];
+    expect(bc?.description).toBeDefined();
+    const description = bc?.description ?? "";
+    // read_dom FIRST, then act on the returned selector paths.
+    expect(description).toContain("call it FIRST");
+    expect(description).toContain("selector paths it returns");
+    // Per-session tabs: omit sessionId → THIS chat session's own tab.
+    expect(description).toContain("THIS chat session's own tab");
+    expect(description).not.toContain("defaults to the tab the user is currently viewing");
+    // get_state is scoped to this session's tab.
+    expect(description).not.toContain("EVERY open tab");
+    expect(description).toContain("this chat session's tab");
+    // The honest native-bridge note (web dev mode fails fast).
+    expect(description).toContain("native bridge");
+    expect(description).toContain("fail fast");
+    // The R66 form-submission teaching stays (submit:true / Enter).
+    expect(description).toContain("type with submit:true");
+    expect(description).toContain("native form submission");
   });
 });

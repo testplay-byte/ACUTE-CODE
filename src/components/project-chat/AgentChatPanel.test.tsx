@@ -41,6 +41,14 @@ const ratingsMock = vi.hoisted(() => ({
   deleteRating: null as unknown as ReturnType<typeof vi.fn>,
 }));
 
+/** ROUND-67 (R67-B): the debug-settings client fn, mocked the same way —
+ * the panel's ["debug-settings"] query gates the full-turn copy button.
+ * Default resolves { enabled: false } (the sidecar default) so every other
+ * test in this file sees the second copy button HIDDEN. */
+const debugSettingsMock = vi.hoisted(() => ({
+  fetchDebugSettings: null as unknown as ReturnType<typeof vi.fn>,
+}));
+
 vi.mock("../../lib/api", async () => {
   const mod = await import("../../lib/api");
   const agentsFx = await import("../../lib/agent-fixtures");
@@ -48,6 +56,7 @@ vi.mock("../../lib/api", async () => {
   ratingsMock.rateReply = vi.fn();
   ratingsMock.listSessionRatings = vi.fn();
   ratingsMock.deleteRating = vi.fn();
+  debugSettingsMock.fetchDebugSettings = vi.fn();
   return {
     ...mod,
     getAgentsBackend: () => agentsFx.getFixtureAgents(),
@@ -55,6 +64,7 @@ vi.mock("../../lib/api", async () => {
     rateReply: ratingsMock.rateReply,
     listSessionRatings: ratingsMock.listSessionRatings,
     deleteRating: ratingsMock.deleteRating,
+    fetchDebugSettings: debugSettingsMock.fetchDebugSettings,
   };
 });
 
@@ -78,6 +88,10 @@ beforeEach(() => {
   ratingsMock.listSessionRatings.mockResolvedValue([]);
   ratingsMock.rateReply.mockResolvedValue(undefined);
   ratingsMock.deleteRating.mockResolvedValue(undefined);
+  // ROUND-67 (R67-B): debug mode OFF by default — the full-turn copy button
+  // stays hidden unless a test programs it on.
+  debugSettingsMock.fetchDebugSettings.mockReset();
+  debugSettingsMock.fetchDebugSettings.mockResolvedValue({ enabled: false });
 });
 
 async function renderPanel() {
@@ -430,12 +444,19 @@ describe("AgentChatPanel user-stop rendering (ROUND-58 R58-cf)", () => {
       },
     ]);
     renderWithProviders(<AgentChatPanel projectId={projects[0].id} project={projects[0]} />);
-    // The folded answer + the dedicated debug section under it.
+    // The folded answer + the dedicated debug section under it. ROUND-67
+    // (R67-B): the folded card mounts COLLAPSED — expand the header to read
+    // the report (the Copy report button is visible even collapsed).
     expect(await screen.findByText("Here is the analysis.", {}, SLOW)).toBeTruthy();
     const card = await screen.findByTestId("debug-report-card", {}, SLOW);
     expect(card.textContent).toContain("Debug report");
     expect(card.textContent).toContain("test/model-1");
+    expect(screen.queryByText("Failures & anomalies")).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Expand debug report" }));
     expect(screen.getByText("Failures & anomalies")).toBeTruthy();
+    // R67-B: the copy footer rides the minimized card too (outside the
+    // collapsible body — the owner's "copy button at the very bottom").
+    expect(screen.getByRole("button", { name: "Copy debug report" })).toBeTruthy();
   });
 
   it("renders the quiet 'Stopped by user' card under the persisted partial — never TurnErrorCard", async () => {
@@ -965,4 +986,120 @@ describe("AgentChatPanel response ratings (ROUND-59 R59-D)", () => {
       SLOW,
     );
   }, 15_000);
+});
+
+// ── ROUND-67 (R67-B): the debug-gated full-conversation copy option ─────────
+// Owner directive #2: TWO copy options on agent replies — the normal one
+// (final answer only) plus "the whole conversation of it, all the thinking
+// of it, all the tool calls within it" — and the second one appears ONLY
+// when the Advanced-settings debug option is ON (GET /settings/debug via
+// the shared ["debug-settings"] query key).
+describe("AgentChatPanel full-conversation copy (ROUND-67 R67-B)", () => {
+  const SLOW = { timeout: 5000 };
+
+  function messageEvent(
+    seq: number,
+    role: "user" | "assistant",
+    content: string,
+    ts: string,
+    extra: Record<string, unknown> = {},
+  ): SessionEvent {
+    return {
+      seq,
+      type: role === "user" ? "message.user" : "message.assistant",
+      agentId: "agt_scribe",
+      payload: { role, content, agentId: "agt_scribe", ts, ...extra },
+      ts,
+    };
+  }
+
+  /** A tool.use event exactly as the backend writes it (with an output
+   * summary — the copy export rides it). */
+  function toolUseEvent(seq: number): SessionEvent {
+    return {
+      seq,
+      type: "tool.use",
+      agentId: "agt_scribe",
+      payload: {
+        role: "tool",
+        toolName: "read_file",
+        argsSummary: "path: a.ts",
+        ok: true,
+        outputSummary: "read 12 lines",
+        agentId: "agt_scribe",
+        ts: "2026-09-06T10:00:30Z",
+      },
+      ts: "2026-09-06T10:00:30Z",
+    };
+  }
+
+  /** One folded turn: user question → read_file tool call → assistant
+   * answer (model + ms on the assistant stats-carrier payload). */
+  async function renderFullCopyConversation(): Promise<void> {
+    const projects = await getFixtureProjects().list();
+    customBackend.backend = createFixtureSessions([
+      {
+        session: {
+          id: "sess_fullcopy_probe",
+          projectId: projects[0].id,
+          agentId: "agt_scribe",
+          mode: "single",
+          status: "completed",
+          title: "Full-copy probe",
+          createdAt: "2026-09-06T10:00:00Z",
+          updatedAt: "2026-09-06T10:05:00Z",
+        },
+        events: [
+          messageEvent(1, "user", "read the file for me", "2026-09-06T10:00:10Z"),
+          toolUseEvent(2),
+          messageEvent(3, "assistant", "Here is the file's content.", "2026-09-06T10:00:40Z", {
+            model: "test/model-1",
+            ms: 4200,
+          }),
+        ],
+      },
+    ]);
+    renderWithProviders(<AgentChatPanel projectId={projects[0].id} project={projects[0]} />);
+    await screen.findByText("read the file for me", {}, SLOW);
+  }
+
+  it("debug settings OFF → only the plain copy button; the full-conversation copy is HIDDEN", async () => {
+    // beforeEach's default: fetchDebugSettings → { enabled: false }.
+    await renderFullCopyConversation();
+
+    // The plain copy button renders (the normal option, unchanged).
+    expect(screen.getAllByRole("button", { name: "Copy message" }).length).toBeGreaterThan(0);
+    // The debug-gated second option is NOT rendered.
+    expect(screen.queryByRole("button", { name: "Copy full conversation (debug)" })).toBeNull();
+  });
+
+  it("debug settings ON → the full-conversation copy appears and writes the model + tool trace to the clipboard", async () => {
+    debugSettingsMock.fetchDebugSettings.mockResolvedValue({ enabled: true });
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    Object.defineProperty(navigator, "clipboard", {
+      value: { writeText },
+      configurable: true,
+    });
+
+    await renderFullCopyConversation();
+
+    // The SECOND copy option mounts next to the plain one (hover cluster).
+    const fullCopy = await screen.findByRole(
+      "button",
+      { name: "Copy full conversation (debug)" },
+      SLOW,
+    );
+    fireEvent.click(fullCopy);
+
+    await waitFor(() => expect(writeText).toHaveBeenCalledTimes(1), SLOW);
+    const text = writeText.mock.calls[0][0] as string;
+    // The owner's "whole conversation… all the tool calls": the model
+    // header, the tool block with its result, and the final answer.
+    expect(text).toContain("=== ACUTE-CODE turn export (debug) ===");
+    expect(text).toContain("Model: test/model-1 | Duration: 4200ms");
+    expect(text).toContain("--- TOOL 1: read_file ---");
+    expect(text).toContain("result: ok — read 12 lines");
+    expect(text).toContain("--- FINAL ANSWER ---");
+    expect(text).toContain("Here is the file's content.");
+  });
 });

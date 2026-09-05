@@ -48,6 +48,10 @@ import { backendForPlatform, realRunner } from "../../computer/backends/index.js
 import { ComputerDispatcher } from "../../computer/dispatch.js";
 import { getComputerSession } from "../../computer/session.js";
 import { describeRaster } from "../../computer/vision.js";
+// ROUND-67 (R67-D): the live chat THUMBNAILS — successful captures are
+// copied into the route-served raster registry (in-memory, LRU, TTL) and
+// announced over the SSE-only channel as {type:"screenshot"} frames.
+import { registerRaster } from "../../computer/raster-cache.js";
 import { buildApprovalDeps } from "../approval-deps.js";
 import { requestCommandApproval } from "../../approvals.js";
 import type { ToolResult } from "../registry.js";
@@ -181,6 +185,34 @@ export const computerUsePlugin: PluginDefinition = {
       }
     };
 
+    // ── ROUND-67 (R67-D): the live screenshot THUMBNAIL frame ─────────────
+    // The owner: "if the agent takes screenshots… the images should be
+    // shown during its thinking in the agent's chat window itself, in a
+    // small view." After a successful capture (screenshot / zoom /
+    // get_app_state includeScreenshot) the raster bytes are pulled from the
+    // dispatcher's cache via its PUBLIC rasterFor accessor (the bytes live
+    // there only for the vision relay — a 3-frame LRU), copied into the
+    // route-served raster registry, and announced as a `screenshot` frame.
+    // The frame rides toolDeps.emit — the SSE-ONLY channel (never persisted,
+    // never model-facing); the enhancement NEVER breaks the tool (try/catch,
+    // missing raster → no frame — honest).
+    const emitScreenshotFrame = (frameId: string, toolName: string, note?: string): void => {
+      try {
+        const png = dispatcher.rasterFor(frameId);
+        if (png === undefined) return; // already evicted (3-frame LRU) — no frame, never an error
+        registerRaster(frameId, png);
+        toolDeps.emit?.({
+          type: "screenshot",
+          sessionId: toolDeps.sessionId,
+          frameId,
+          tool: toolName,
+          ...(note !== undefined ? { note } : {}),
+        });
+      } catch {
+        // The thumbnail strip is an enhancement — never break the tool call.
+      }
+    };
+
     /* The shared execute wrapper: consent gate → dispatch → shaping. */
     const execute = async (tool: string, input: Record<string, unknown>): Promise<ToolResult> => {
       // 1. The consent gate (ask-mode risk classes; posture act only —
@@ -214,6 +246,22 @@ export const computerUsePlugin: PluginDefinition = {
         // return_state (doc 02 §0.4) is composed by the DISPATCHER itself —
         // the observation rides the receipt when requested.
         return receiptResult(result.receipt, result.observation !== undefined ? { observation: result.observation } : undefined);
+      }
+      // 2.5. ROUND-67 (R67-D): successful captures → the chat THUMBNAIL
+      // frame. screenshot/zoom return {frame: meta}; get_app_state with
+      // includeScreenshot returns {raster: meta} (only when the optional
+      // window capture succeeded — a failed capture is not fatal, and then
+      // there is honestly nothing to show).
+      if (tool === "screenshot" || tool === "zoom") {
+        const frame = (result.data["frame"] ?? {}) as { frameId?: string };
+        if (typeof frame.frameId === "string") {
+          emitScreenshotFrame(frame.frameId, tool, tool === "zoom" ? "zoomed region" : undefined);
+        }
+      } else if (tool === "get_app_state") {
+        const raster = (result.data["raster"] ?? {}) as { frameId?: string };
+        if (typeof raster.frameId === "string") {
+          emitScreenshotFrame(raster.frameId, tool, "window raster");
+        }
       }
       // 3. Data tools — vision relay for screenshot/zoom when describe=true.
       if ((tool === "screenshot" || tool === "zoom") && input["describe"] === true) {
