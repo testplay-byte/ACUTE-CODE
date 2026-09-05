@@ -63,7 +63,11 @@ A same-day follow-up commit (the CI-stability patch) made two
 Windows-runner test flakes deterministic — the checkpoint-card countdown
 tick (now fake-timer driven) and the computer-use plugin's real-OS-probe
 tests (explicit 30 s timeouts; the cold Add-Type compile is multi-second
-on CI) — no production code touched, counts unchanged; CI green and the
+on CI) — and hardened the overlay watcher against a late-debounce
+crash (a pending 80 ms check firing after a test file's environment
+tore down hit `document is not defined` as an unhandled error; the
+callback now guards for a gone environment — inert in the real app).
+No app behavior changed; counts unchanged; CI green and the
 v0.66.0 release (launcher kit + NSIS installer) verified green from the
 Actions API.
 

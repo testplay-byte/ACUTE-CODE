@@ -467,3 +467,24 @@ No production code touched. CI run 33952264863 green on `96cf8f6`; tag
 **v0.66.0** cut on it → Release run 33952608589 green (launcher kit +
 NSIS installer + the draft release with both assets, verified via the
 API); the public DASHBOARD truth-synced to 0.66.0 the same day.
+
+### Addendum 2 (2026-09-05, later the same close-out session)
+
+The DOCS commit (`e9848a6`) then flaked CI with a THIRD failure mode —
+all 1771 in-run tests passed, but vitest caught an **unhandled error**:
+`ReferenceError: document is not defined` inside
+`popover-webview-guard.ts`'s debounce (`overlayPresent` at :88, the
+80 ms `check` at :113). Root cause: `AppShell` installs the overlay
+watcher on mount (module-global, once); any AppShell-rendering test file
+that finishes with a DOM mutation in flight leaves the pending 80 ms
+debounce ALIVE — the timer fires after the file's happy-dom environment
+tore down, and the `document` global is gone. A pure teardown race,
+surfaced by runner timing (the docs commit changed no code).
+
+Fix: the `check` callback now guards `typeof document === "undefined"`
+(the watched world is gone — skip the probe; inert in the real app where
+`document` always exists), and `resetOverlayWatcherForTests()` now also
+DISCONNECTS the observer (module-scoped) instead of only clearing the
+timer. Verified: the guard's own suite + AppShell's suite + the full
+root run 1807/1807 (with the e2e suite live against the built dist),
+lint/typecheck clean.

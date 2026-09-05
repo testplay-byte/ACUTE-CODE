@@ -95,6 +95,8 @@ function overlayPresent(): boolean {
 let watcherInstalled = false;
 /** Debounce handle — streaming DOM churn must not spin the check. */
 let watcherTimer: number | null = null;
+/** The installed observer (module-scoped so the test reset disconnects it). */
+let watcherObserver: MutationObserver | null = null;
 
 /**
  * Install the overlay watcher (ONCE per app — the AppShell calls this on
@@ -110,6 +112,12 @@ export function installOverlayWebviewWatcher(): void {
   watcherInstalled = true;
   const check = () => {
     watcherTimer = null;
+    // CI-stability guard (the e9848a6 flake): a pending 80ms debounce can
+    // fire AFTER a test file's environment tore down (an AppShell-rendering
+    // suite finishing with a mutation in flight) — `document` is gone by
+    // then, and touching it crashed the run as an unhandled error. In the
+    // real app document always exists; this guard is inert there.
+    if (typeof document === "undefined") return;
     useWebviewGuardStore.getState().setOverlayOpen(overlayPresent());
   };
   const observer = new MutationObserver((mutations) => {
@@ -125,6 +133,7 @@ export function installOverlayWebviewWatcher(): void {
     watcherTimer = window.setTimeout(check, 80);
   });
   observer.observe(document.body, { childList: true, subtree: true });
+  watcherObserver = observer;
   // Baseline state (an overlay could already be open at install time).
   useWebviewGuardStore.getState().setOverlayOpen(overlayPresent());
 }
@@ -132,9 +141,11 @@ export function installOverlayWebviewWatcher(): void {
 /** Test hook: reset the module-level install guard between suites. */
 export function resetOverlayWatcherForTests(): void {
   watcherInstalled = false;
-  if (watcherTimer !== null) {
+  watcherObserver?.disconnect();
+  watcherObserver = null;
+  if (watcherTimer !== null && typeof window !== "undefined") {
     window.clearTimeout(watcherTimer);
-    watcherTimer = null;
   }
+  watcherTimer = null;
   useWebviewGuardStore.setState({ overlayOpen: false, popoverTabId: null });
 }
