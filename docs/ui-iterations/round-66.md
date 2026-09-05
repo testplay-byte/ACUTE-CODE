@@ -1,4 +1,4 @@
-<!-- last-reviewed: 2026-09-04 round-66 -->
+<!-- last-reviewed: 2026-09-05 round-66 -->
 # Round 66 — The live-fire patch: browser page actions, owner-solvable bot walls, the vision split, the post-turn debug analyst, and Windows element search
 
 **Date:** 2026-09-04 · **Branch:** `main` · **Version:** 0.66.0 · **Owner
@@ -441,3 +441,29 @@ tool: set_viewport
   text is the second chance).
 - **Wall self-bypass is future work** — the agent never attempts to solve
   a wall itself; it waits for the owner.
+
+## Addendum (2026-09-05, the close-out session)
+
+The round's original push (`47a2da3`) shipped with RED CI — the session
+ended before anyone watched the run (golden rule 3). Two Windows-runner
+flakes, both invisible in the headless Linux sandbox:
+
+1. **BrowserCheckpointCard's countdown-tick test** waited on a REAL
+   1-second boundary flip inside `waitFor`'s default 1000 ms budget — the
+   display can only change after a full wall second, so a loaded runner
+   loses the race (`expected '0:15' not to be '0:15'`). Fix (commit
+   `96cf8f6`): `vi.useFakeTimers()` + `advanceTimersByTime(1100)` drives
+   the flip deterministically (asserting the exact `0:14`), real timers
+   restored in a `finally`.
+2. **computer-use-plugin's `list_apps` execute test** crossed vitest's
+   default 5000 ms — on the Windows runner it dispatches a REAL OS probe
+   (the shared Add-Type/csc preamble compiles cold in seconds, plus the
+   EnumWindows walk); the R65 green run's whole file took 8.7 s, the R66
+   red run 12.7 s. Fix: explicit 30 s timeouts on the four real-probe
+   execute tests (list_apps, screenshot ×2, the auto-posture resolver),
+   with the rationale pinned in a comment. Counts unchanged.
+
+No production code touched. CI run 33952264863 green on `96cf8f6`; tag
+**v0.66.0** cut on it → Release run 33952608589 green (launcher kit +
+NSIS installer + the draft release with both assets, verified via the
+API); the public DASHBOARD truth-synced to 0.66.0 the same day.

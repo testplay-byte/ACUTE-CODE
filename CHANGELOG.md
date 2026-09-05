@@ -59,6 +59,13 @@ not top-right), and its live signal is real control activity only, with a
 settings sidebar shows the settings rail** (section icons + back), not the
 projects nav. 1807 root tests in 118 files (was 1686/110), agent-core
 980/980 in 58 files, lint/typecheck/docs:check clean; version 0.66.0.
+A same-day follow-up commit (the CI-stability patch) made two
+Windows-runner test flakes deterministic — the checkpoint-card countdown
+tick (now fake-timer driven) and the computer-use plugin's real-OS-probe
+tests (explicit 30 s timeouts; the cold Add-Type compile is multi-second
+on CI) — no production code touched, counts unchanged; CI green and the
+v0.66.0 release (launcher kit + NSIS installer) verified green from the
+Actions API.
 
 ## [0.65.0] - 2026-09-02
 

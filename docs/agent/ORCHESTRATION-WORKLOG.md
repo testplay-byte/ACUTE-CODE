@@ -2039,3 +2039,106 @@ Stage Summary:
 - R65 COMPLETE on tip (this commit), version 0.65.0, TAGGED + RELEASED (the R63 discipline); the R64 worklog entry restored in the same round.
 - The hallucination now has all three legs: separate tools (R61), verified results (R64), and a NAMED boundary in the prompt (R65). Debug mode + the auto-opening browser + the clean Advanced tab ship together.
 - Honest caveats: the boundary lines are prompt engineering (a weak model can still ignore text — the receipts + honest-reporting contracts are the backstops); debug mode changes the PROMPT, not the transcript (the event log remains ground truth). The owner's next live Windows run is the real verification of R64 + R65 together.
+
+---
+
+# R66 — 2026-09-04/05 — the live-fire patch, closed out (0.66.0)
+
+Task ID: R66
+Agent: orchestrator (main) — close-out session 2026-09-05 (the round's code
+was built by the R66 sub-agent fleet in the prior session; this entry
+records BOTH the sub-agent round and the close-out).
+
+Task: R66 — the owner's 0.65.0 live-fire field report, closed end to end
+(the 13 feedback items: browser A1-A6, computer use B1-B5, debug mode C1).
+
+Work Log (the sub-agent round, delivered 47a2da3):
+- A1: browser screenshots stopped recording into the computer-use session
+  ring + the monitor's live signal became DECAYED real-control events only
+  (LIVE_DECAY_MS 6000) — a browser turn never shows "agent is using your
+  computer"; session_start alone is bookkeeping (pinned by
+  ComputerMiniWindow tests).
+- A3/A6/A7: browser_control grew to 15 actions — click (selector or a
+  label's visible text), type (native value setter + input/change events,
+  submit:true), press_key (Enter → form.requestSubmit), read_dom
+  (structured outline), source (html|css|scripts), all riding the eval
+  bridge; A5: set_viewport emits the instant-apply browser-viewport SSE
+  frame + agentViewportSeq exits the panel's natural mode.
+- A4: bot walls — detectVerificationWall (cloudflare > captcha > age,
+  word-boundary markers, ≤120-char evidence); wait_for_verification opens
+  a checkpoint (15 s default / 60 s cap) with the chat countdown card
+  (Mark as done / Stop waiting → POST /api/v1/browser-checkpoints/:id/resolve
+  → honest re-probe); navigate/read results carry the ⚠ note.
+- B1/B2: the UIA walk probes 17 interactive ControlTypes in one 4-probe
+  pass, maxEl 800→2400 (both the snapshot and the element-action re-walk);
+  find_elements {appRef, query, kind?, limit?} searches the a11y tree with
+  an honest empty refusal; the big-apps skill guidance.
+- B3/B5: the vision split — Settings → Image Analysis (?tab=vision:
+  mode/provider/model/key + supportsVision rows; migration 0025 seeds from
+  computerUse.vision.*; 0026 appends analyze_image to the allowlists;
+  TOOL_NAMES 25); ComputerUseTab carries a pointer card; the honest 400
+  "vision settings moved" on the old route.
+- B4: the minimized settings sidebar renders the SETTINGS rail (mode-aware
+  variant), never the projects nav. The floating monitor: top-center
+  460×56 (mini.rs (work_w−460)/2 + the single-row MiniApp + the web pill).
+- C1: the debug rework — the R65 self-report prompt section REMOVED; a
+  fresh context-free analyst (agent-core/src/agents/debug-analyst.ts, 60 k
+  head+tail transcript cap, maxTurns 1) streams its report over the SSE
+  (debug-start → debug-delta* → debug-done|debug-error) before the
+  terminal frame; persisted as debug.report which assembleHistory never
+  feeds back; toProjectChatItems folds it onto the analyzed turn; the
+  DebugReportCard mounted in AgentChatPanel.
+
+Work Log (the close-out session, 2026-09-05):
+- Sandbox re-provisioned (PROJECT/, .secrets/ wiped again): full restore
+  per SANDBOX-RESTORE.md (pnpm 11.25, the six secret files + two
+  git-credential stores, PAT clones with sanitized remotes, .env, install);
+  baseline re-verified BEFORE any work: lint CLEAN, typecheck CLEAN,
+  1795 passed + 12 skipped (1807) in 118 files; dev stack up (vite 5173 →
+  200, sidecar 5178 → 401 + /health 0.66.0).
+- FOUND: the R66 push (47a2da3) had shipped RED CI — run 33920243905
+  failed (the session ended unwatched; golden rule 3 violated). Root
+  causes: two Windows-runner flakes invisible in the Linux sandbox (the
+  BrowserCheckpointCard 1-second-boundary countdown tick vs waitFor's
+  1000 ms default; computer-use-plugin's list_apps real-OS-probe execute
+  crossing vitest's 5000 ms default — the cold Add-Type/csc compile).
+- FIXED (96cf8f6, no production code): the countdown tick is now
+  fake-timer driven (vi.useFakeTimers + advanceTimersByTime(1100),
+  asserting the exact 0:14, real timers restored in a finally); the four
+  real-probe execute tests carry explicit 30 s timeouts with the rationale
+  pinned. Full re-verify: 1807/1807 in 118 files, lint/typecheck clean.
+- Audited all 13 owner items against the code (each one located + read:
+  the decayed live signal, the 17-kind probe list, find_elements, the
+  requestSubmit builders, the checkpoint routes + card mount, the vision
+  split + migrations, the settings rail, the debug analyst's full chain —
+  the cards ARE mounted in AgentChatPanel; assembleHistory structurally
+  skips debug.report).
+- CI watched to SUCCESS (run 33952264863 on 96cf8f6) — the missing golden-
+  rule-3 step from the prior session.
+- TAGGED v0.66.0 on 96cf8f6 (version:check 0.66.0 ×4 first) → Release run
+  33952608589 green: launcher kit + NSIS installer; the DRAFT release
+  carries both assets (ACUTE-CODE_0.66.0_x64-setup.exe 36.3 MB,
+  acute-launcher-kit-v0.66.0.zip 71 KB) — verified via the API.
+- DASHBOARD truth-synced (73a3d78): 0.66.0, feature cards 80-84 (the
+  15-action browser, bot-wall checkpoints, Image Analysis, the debug
+  analyst, Windows find-elements), milestone 48, ciNote from the real run
+  IDs, suites 815/980/12 = 1807, licenseAudit 133 deps CLEAN (fresh
+  audit); built (denylist clean), pushed, Pages deploy verified.
+- Docs: CHANGELOG 0.66.0 + the CI-stability note, round-66.md addendum
+  (the two flakes + the release ritual), this entry (the prior session's
+  missing close-out), HANDOFF header refresh.
+- Known limitation carried forward (unchanged through R62-R66):
+  docs/status.json still says round 57 / 0.61.0 — updating its round would
+  fail 132 round-54-stamped docs against the 3-round cap; needs either a
+  real docs review round or an owner-approved policy change, not a silent
+  bump.
+
+Stage Summary:
+- R66 COMPLETE and CLOSED OUT: tip 96cf8f6, CI green, tag v0.66.0 released
+  (draft, both assets), DASHBOARD synced, worklog gap restored.
+- The prior session's honest gaps (red CI unwatched, no release tag, no
+  canonical worklog entry, no dashboard sync) are all closed by this one.
+- Next: the owner's live Windows hardware run verifying the R66 surface
+  (Edge + find_elements + the top-center mini window + a REAL bot wall +
+  the page actions in WebView2) — the checklists live in
+  docs/runbooks/COMPUTER-USE.md + EMBEDDED-BROWSER.md.
