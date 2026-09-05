@@ -28,6 +28,36 @@
  * PowerShell is never executed in this sandbox — the scripts are pinned by
  * command-construction tests (tests/computer-windows-backend.test.ts).
  *
+ * ROUND-68 (R68-C — the owner's v0.67.0 live Windows field report: the
+ * 7-step Edge flow degraded into a screenshot loop and half-failed, all
+ * root-caused by construction against this file):
+ *   · EVERY type/key/scroll call failed capability_fail_closed —
+ *     "[System.Windows.Forms.SendKeys]" was TypeNotFound on the owner's
+ *     host: the preamble loaded Windows.Forms via the DEPRECATED
+ *     [System.Reflection.Assembly]::LoadWithPartialName (silently failing
+ *     on modern .NET), while captureDisplay's own `Add-Type -AssemblyName
+ *     System.Windows.Forms` WORKED live (screenshots succeeded all round).
+ *     Windows.Forms is a DEAD dependency for input now: the preamble's
+ *     LoadWithPartialName line is REMOVED (LoadWithPartialName can fail
+ *     where Add-Type works — the live trace proved it), and every input
+ *     path rides raw SendInput P/Invoke in the SAME U32 TypeDefinition:
+ *     SendText (KEYEVENTF_UNICODE per char — no SendKeys escaping class of
+ *     bugs at all), Chord/TapKey/ModsDown/ModsUp (real VK codes), with the
+ *     platform-correct INPUT layout (Sequential INPUT + Explicit-union
+ *     overlay — the IntPtr member forces union offset 8 on x64 / 4 on x86,
+ *     matching the real INPUT; sizeof rides Marshal.SizeOf).
+ *   · Repeated frontmost_pid_mismatch: Edge loses frontmost (our activate
+ *     verified INACTIVE), and the raw-input tools then REFUSED instead of
+ *     self-healing. activate() now escalates (AttachThreadInput sequence →
+ *     the SW_MINIMIZE/SW_RESTORE trick → re-verify), and dispatch.ts
+ *     auto-retries (activate + retry ONCE) — see dispatch.ts R68-C.
+ *   · Edge accessibility trees SPARSE (only the window element): Chromium
+ *     builds its web accessibility tree ONLY after an assistive technology
+ *     pokes the render widget. PokeChromium (WM_GETOBJECT to every
+ *     Chrome_RenderWidgetHostHWND child) runs BEFORE the UIA walk in
+ *     buildSnapshot, with a 400ms settle and a sparse-retry — the tree
+ *     EXISTS, we just never asked for it.
+ *
  * ROUND-67 (R67-C — the owner's v0.66.0 live Windows field report, three
  * backend robustness failures, all verified by construction, none by live
  * run):
@@ -91,8 +121,10 @@
  *   · DPI: each script calls SetProcessDpiAwarenessContext(
  *     DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2) first (doc 03 §5 — without
  *     it Windows lies with virtualized coordinates)
- *   · raw input: SetCursorPos + mouse_event (user32 P/Invoke)
- *   · typing: SendKeys (chords + text) after focus verification
+ *   · raw input: SetCursorPos + mouse_event + SendInput (user32 P/Invoke —
+ *     R68-C: keyboard input is SendInput ONLY, never Windows.Forms)
+ *   · typing: SendText via SendInput KEYEVENTF_UNICODE after focus
+ *     verification (R68-C — the SendKeys dependency is dead)
  *   · activation: the AttachThreadInput sequence (doc 04 §3.3) with the
  *     ≤1.5 s postcondition check — honest {active} reporting
  *   · capture: System.Drawing CopyFromScreen → PNG → base64
@@ -130,9 +162,21 @@ export const WINDOWS_PS_PROGRAM = "powershell.exe";
  * Add-Type (one csc compile — R64-a folded the EnumWindows helpers into the
  * SAME TypeDefinition so every capsule still compiles exactly once; R67-C
  * folded cursorPosition's GetCursorPos/PT into it too — still exactly ONE
- * compile per capsule) + the shape-aware OutJson. The C# is
- * CodeDom/C#-5-safe for PowerShell 5.1 (no interpolation, no ?. — Add-Type
- * on powershell.exe compiles C# 5).
+ * compile per capsule; R68-C folded the SendInput machinery (input structs
+ * + SendText/Chord/TapKey/ModsDown/ModsUp) and the Chromium accessibility
+ * poke (EnumChildWindows + SendMessage WM_GETOBJECT) into it — STILL one
+ * compile) + the shape-aware OutJson. The C# is CodeDom/C#-5-safe for
+ * PowerShell 5.1 (no interpolation, no ?. — Add-Type on powershell.exe
+ * compiles C# 5).
+ *
+ * R68-C: the preamble NO LONGER loads System.Windows.Forms — the old
+ * `[System.Reflection.Assembly]::LoadWithPartialName('System.Windows.Forms')`
+ * line is DEAD WEIGHT REMOVED. The owner's live trace proved
+ * LoadWithPartialName silently fails on modern .NET (every SendKeys call
+ * died TypeNotFound) while `Add-Type -AssemblyName System.Windows.Forms`
+ * in captureDisplay/captureRegion WORKED (screenshots succeeded all
+ * round). Input needs no assembly at all now (raw SendInput P/Invoke in
+ * U32); the captures keep their OWN proven Add-Type lines.
  *
  * R67-C: the Add-Type is GUARDED — under $ErrorActionPreference='Stop' a
  * failed compile used to abort the WHOLE script before any output (the
@@ -145,7 +189,6 @@ export const WINDOWS_PS_PROGRAM = "powershell.exe";
  */
 const PS_PREAMBLE = `
 $ErrorActionPreference = 'Stop'
-[void][System.Reflection.Assembly]::LoadWithPartialName('System.Windows.Forms')
 $script:U32_OK = $false
 try {
 Add-Type -TypeDefinition 'using System;using System.Text;using System.Collections.Generic;using System.Runtime.InteropServices;
@@ -161,8 +204,12 @@ public class U32{
 [DllImport("user32.dll")]public static extern bool GetWindowRect(IntPtr h,out RECT r);
 [DllImport("user32.dll")]public static extern IntPtr WindowFromPoint(int x,int y);
 [DllImport("user32.dll")]public static extern bool GetCursorPos(out PT p);
+[DllImport("user32.dll")]public static extern bool ShowWindow(IntPtr h,int cmd);
 public delegate bool EnumProc(IntPtr h,IntPtr lp);
 [DllImport("user32.dll")]public static extern bool EnumWindows(EnumProc cb,IntPtr lp);
+public delegate bool ChildProc(IntPtr h,IntPtr lp);
+[DllImport("user32.dll")]public static extern bool EnumChildWindows(IntPtr p,ChildProc cb,IntPtr lp);
+[DllImport("user32.dll")]public static extern IntPtr SendMessage(IntPtr h,uint msg,IntPtr w,IntPtr l);
 [DllImport("user32.dll")]public static extern bool IsWindowVisible(IntPtr h);
 [DllImport("user32.dll")]public static extern int GetWindowLong(IntPtr h,int i);
 [DllImport("user32.dll",CharSet=CharSet.Unicode)]public static extern int GetWindowTextLength(IntPtr h);
@@ -171,6 +218,79 @@ public delegate bool EnumProc(IntPtr h,IntPtr lp);
 public struct RECT{public int Left;public int Top;public int Right;public int Bottom;}
 public struct PT{public int X;public int Y;}
 public struct WINFO{public long Hwnd;public uint Pid;public string Title;public int L;public int T;public int R;public int B;}
+[StructLayout(LayoutKind.Sequential)]
+public struct KEYBDINPUT{public ushort wVk;public ushort wScan;public uint dwFlags;public uint time;public IntPtr dwExtraInfo;}
+[StructLayout(LayoutKind.Sequential)]
+public struct MOUSEINPUT{public int dx;public int dy;public uint mouseData;public uint dwFlags;public uint time;public IntPtr dwExtraInfo;}
+[StructLayout(LayoutKind.Explicit)]
+public struct INPUTUNION{[FieldOffset(0)]public MOUSEINPUT mi;[FieldOffset(0)]public KEYBDINPUT ki;}
+[StructLayout(LayoutKind.Sequential)]
+public struct INPUT{public uint type;public INPUTUNION u;}
+[DllImport("user32.dll",SetLastError=true)]public static extern uint SendInput(uint n,INPUT[] p,int cb);
+private static INPUT KeyInput(ushort vk,ushort scan,uint flags){
+  INPUT i=new INPUT();
+  i.type=1;
+  i.u.ki.wVk=vk;i.u.ki.wScan=scan;i.u.ki.dwFlags=flags;i.u.ki.time=0;i.u.ki.dwExtraInfo=IntPtr.Zero;
+  return i;
+}
+private static uint SendMany(INPUT[] arr){
+  if(arr==null||arr.Length==0)return 0;
+  return SendInput((uint)arr.Length,arr,Marshal.SizeOf(typeof(INPUT)));
+}
+public static uint SendText(string s){
+  if(s==null||s.Length==0)return 0;
+  List<INPUT> list=new List<INPUT>();
+  foreach(char ch in s){
+    if(ch=='\\r')continue;
+    if(ch=='\\n'){
+      list.Add(KeyInput(0x0D,0,0));
+      list.Add(KeyInput(0x0D,0,0x0002));
+    }else{
+      list.Add(KeyInput(0,(ushort)ch,0x0004));
+      list.Add(KeyInput(0,(ushort)ch,0x0006));
+    }
+  }
+  return SendMany(list.ToArray());
+}
+public static uint TapKey(ushort vk){
+  INPUT[] arr=new INPUT[2];
+  arr[0]=KeyInput(vk,0,0);
+  arr[1]=KeyInput(vk,0,0x0002);
+  return SendMany(arr);
+}
+public static uint ModsDown(ushort[] mods){
+  if(mods==null||mods.Length==0)return 0;
+  INPUT[] arr=new INPUT[mods.Length];
+  for(int i=0;i<mods.Length;i++){arr[i]=KeyInput(mods[i],0,0);}
+  return SendMany(arr);
+}
+public static uint ModsUp(ushort[] mods){
+  if(mods==null||mods.Length==0)return 0;
+  INPUT[] arr=new INPUT[mods.Length];
+  for(int i=0;i<mods.Length;i++){arr[i]=KeyInput(mods[i],0,0x0002);}
+  return SendMany(arr);
+}
+public static uint Chord(ushort[] mods,ushort key){
+  List<INPUT> list=new List<INPUT>();
+  if(mods!=null){for(int i=0;i<mods.Length;i++){list.Add(KeyInput(mods[i],0,0));}}
+  list.Add(KeyInput(key,0,0));
+  list.Add(KeyInput(key,0,0x0002));
+  if(mods!=null){for(int i=mods.Length-1;i>=0;i--){list.Add(KeyInput(mods[i],0,0x0002));}}
+  return SendMany(list.ToArray());
+}
+public static int PokeChromium(IntPtr hwnd){
+  List<IntPtr> render=new List<IntPtr>();
+  EnumChildWindows(hwnd,delegate(IntPtr h,IntPtr lp){
+    try{
+      StringBuilder sb=new StringBuilder(64);
+      GetClassName(h,sb,64);
+      if(sb.ToString()=="Chrome_RenderWidgetHostHWND")render.Add(h);
+    }catch(Exception){}
+    return true;
+  },IntPtr.Zero);
+  foreach(IntPtr h in render){SendMessage(h,0x3D,IntPtr.Zero,new IntPtr(unchecked((int)0xFFFFFFFC)));}
+  return render.Count;
+}
 public static List<WINFO> ListTopWindows(){
   List<WINFO> list=new List<WINFO>();
   EnumWindows(delegate(IntPtr h,IntPtr lp){
@@ -235,10 +355,26 @@ const WHEEL_DELTA = 120;
  *     stdout → "died before emitting JSON". The script cannot be lost when
  *     it rides ARGV.
  * `stdin` stays undefined (the runner then just closes the pipe). Sizing
- * honesty: the biggest script (preamble + buildSnapshot, ~8K chars) encodes
- * to ~22K base64 chars — well under the 32,767-char CreateProcess
- * command-line ceiling, and the typing path's own timeout math keeps
- * practical payloads far below it.
+ * honesty, RE-MEASURED at R68-C completion (node over the REAL composed
+ * capsules — every fixed script builder measured; buildSnapshot is the
+ * biggest): the preamble grew 3,527 → 6,682 chars for the SendInput
+ * machinery + the Chromium poke, and the biggest FIXED capsule (preamble
+ * + buildSnapshot) measures 11,587 script chars (detail full) / 11,588
+ * (compact) → 30,900 / 30,904 base64 chars — UNDER the 32,767-char
+ * CreateProcess command-line ceiling (program + the 5 fixed flags add
+ * ~81 more → ~30,985 total) but with only ~1.8K of headroom left: THE
+ * PREAMBLE HAS GROWN PAST COMFORT — any further C# growth must re-measure
+ * here, and the honest next step is moving the walk to a temp .ps1 file
+ * (trimming the C# only buys a little). The three capsules that carry
+ * MODEL-SUPPLIED payloads (typeText / setValue / writeClipboard) cannot
+ * be pinned by a constant — their length is the model's to choose — so
+ * they are guarded AT RUNTIME by ARGV_B64_CEILING below and refuse
+ * BEFORE spawning. (An earlier draft of this comment claimed the typing
+ * path "stays far below" because its timeout math caps text at ~1,400
+ * chars — that was WRONG: Math.min clamps the TIMEOUT at 30s, it does
+ * NOT cap the text; a long type would have crossed the ceiling and died
+ * at CreateProcess with a cryptic spawn error. The runtime guard is the
+ * fix; typeText at the 1,400-char timeout knee measures 22,556 base64.)
  */
 const psCapsule = (script: string, timeoutMs = 20000): CommandCapsule => ({
   program: WINDOWS_PS_PROGRAM,
@@ -252,6 +388,24 @@ const psCapsule = (script: string, timeoutMs = 20000): CommandCapsule => ({
   ],
   timeoutMs,
 });
+
+/** R68-C: the CreateProcess command-line ceiling, in base64 chars. The
+ * full argv is `powershell.exe -NoProfile -NonInteractive
+ * -ExecutionPolicy Bypass -EncodedCommand <blob>` — the fixed part
+ * measures 81 chars (program + flags + separators; the blob itself is
+ * pure base64, never quoted), so the hard max for the blob is 32,767 − 81
+ * = 32,686. The guard fires at 31,875, leaving ~810 chars of defensive
+ * slack. Applied ONLY to the capsules that embed MODEL-SUPPLIED payloads
+ * (typeText text / setValue value / writeClipboard text — see the
+ * psCapsule docblock for the measured fixed capsules). */
+const ARGV_B64_CEILING = 31_875;
+
+/** R68-C: the projected -EncodedCommand blob length of a (preamble +
+ * script) capsule — the exact composition psCapsule performs, measured
+ * without spawning, for the ARGV ceiling guard. */
+function capsuleB64Length(script: string): number {
+  return Buffer.from(`${PS_PREAMBLE}\n${script}`, "utf16le").toString("base64").length;
+}
 
 /** R67-C: a bare probe capsule (NO preamble) — the tiny Add-Type compile
  * probe rides this; probe scripts must not drag the U32 preamble in. */
@@ -442,8 +596,22 @@ const windowsBackend: CuaBackend = {
 
   async buildSnapshot(run, app, window, detail) {
     const includeBounds = detail === "full" ? "$true" : "$false";
+    // R68-C (C4) — the Chromium accessibility POKE: Chromium (Edge/Chrome)
+    // builds its web accessibility tree ONLY after an assistive technology
+    // pokes the render widget (WM_GETOBJECT to the Chrome_RenderWidgetHostHWND
+    // child — exactly what a screen reader does on connect; the owner's own
+    // Tab-highlight intuition). This is why the owner's Edge trees came back
+    // SPARSE (only the window element): the tree EXISTS, we just never asked
+    // for it. One poke site here covers BOTH get_app_state AND find_elements
+    // (the dispatcher routes both through THIS method — verified by read).
+    // U32-gated (the walk itself needs no U32); 400ms settle for the tree to
+    // start building, and a sparse-retry below re-walks ONCE when the poke
+    // fired but the walk still produced only the root window.
     const script = `
 Add-Type -AssemblyName UIAutomationClient
+$pokeCount = 0
+if ($script:U32_OK) { try { $pokeCount = [U32]::PokeChromium([IntPtr]${window.windowId}) } catch { $pokeCount = 0 } }
+if ($pokeCount -gt 0) { Start-Sleep -Milliseconds 400 }
 $root = [System.Windows.Automation.AutomationElement]::FromHandle([IntPtr]${window.windowId})
 $walker = [System.Windows.Automation.TreeWalker]::ControlViewWalker
 $out = New-Object System.Collections.ArrayList
@@ -521,6 +689,15 @@ function Walk($el, $depth) {
   } catch { return }
 }
 Walk $root 0
+# R68-C (C4) sparse-retry: the poke fired but the walk yielded only the root
+# window — the web tree is likely STILL BUILDING. Sleep 600ms and re-walk
+# ONCE (the first walk's ≤1-element $out is discarded; no consumer exists
+# yet — this IS the snapshot being built).
+if ($pokeCount -gt 0 -and $out.Count -le 1) {
+  Start-Sleep -Milliseconds 600
+  $out = New-Object System.Collections.ArrayList
+  Walk $root 0
+}
 if ($out.Count -eq 0) { Write-Output (ConvertTo-Json -Compress @{ error = 'EMPTY_TREE' }); exit 0 }
 OutJson @{ elements = $out }
 `;
@@ -600,6 +777,14 @@ Write-Output $n
 
   async setValue(run, pid, window, element, value) {
     const script = windowsElementActionScript(pid, window, element, "setValue", value);
+    // R68-C: the ARGV ceiling guard — the element write embeds the model's
+    // value (type's element-target mode rides this path); refuse BEFORE
+    // the spawn when the composed capsule would cross CreateProcess's
+    // command-line ceiling (self-teaching: split the write or type).
+    const b64Len = capsuleB64Length(script);
+    if (b64Len > ARGV_B64_CEILING) {
+      return { ok: false, error: `set_value text too long: ${value.length} characters compose a ${b64Len}-char -EncodedCommand (the Windows CreateProcess ceiling is 32,767 command-line chars) — split it across multiple calls (type the rest in chunks)` };
+    }
     const result = await run(psCapsule(script, 15000));
     return okResult(result.stdout);
   },
@@ -617,20 +802,28 @@ Write-Output $n
   },
 
   async rawClick(run, pt, button, clickCount, modifiers) {
+    // R68-C: modifier holds ride SendInput (ModsDown/ModsUp) — the old
+    // SendKeys '{CTRLDOWN}' path died TypeNotFound on the owner's host.
+    // The array declaration is conditional: a plain click carries no mods
+    // machinery at all.
+    const modVks = modifierVks(modifiers);
+    const modsDecl = modVks.length > 0 ? psVkArray("m", modVks) : "";
+    const modsDown = modVks.length > 0 ? "[void][U32]::ModsDown($m)" : "";
+    const modsUp = modVks.length > 0 ? "[void][U32]::ModsUp($m)" : "";
     const flags =
       button === "left"
         ? [MOUSEEVENTF_LEFTDOWN, MOUSEEVENTF_LEFTUP]
         : button === "right"
           ? [MOUSEEVENTF_RIGHTDOWN, MOUSEEVENTF_RIGHTUP]
           : [MOUSEEVENTF_MIDDLEDOWN, MOUSEEVENTF_MIDDLEUP];
-    const modKeys = modifiers.map((m) => (m === "super" ? "WIN" : m.toUpperCase())).join("");
     const script = `
 ${U32_GUARD}
-${modKeys ? `[System.Windows.Forms.SendKeys]::SendWait('{${modKeys}DOWN}')` : ""}
+${modsDecl}
+${modsDown}
 [void][U32]::SetCursorPos(${pt.x}, ${pt.y})
 Start-Sleep -Milliseconds 30
 ${Array.from({ length: Math.min(Math.max(clickCount, 1), 3) }, () => `[U32]::mouse_event(${flags[0]},0,0,0,[UIntPtr]::Zero); Start-Sleep -Milliseconds 35; [U32]::mouse_event(${flags[1]},0,0,0,[UIntPtr]::Zero)`).join("\n")}
-${modKeys ? `[System.Windows.Forms.SendKeys]::SendWait('{${modKeys}UP}')` : ""}
+${modsUp}
 Write-Output 'OK'
 `;
     const result = await run(psCapsule(script, 12000));
@@ -641,8 +834,9 @@ Write-Output 'OK'
   },
 
   async rawScroll(run, pt, direction, amount) {
-    // Vertical wheel = WHEEL delta; horizontal = wheel with SHIFT (the
-    // classic SendInput approximation; amount clamped 0..100 → ticks).
+    // Vertical wheel = WHEEL delta; horizontal = arrow-key taps (the
+    // classic approximation, R68-C now via SendInput TapKey — the SendKeys
+    // path died TypeNotFound on the owner's host); amount 0..100 → ticks.
     const ticks = Math.max(1, Math.min(33, Math.round(amount / 3) || 1));
     const lines = ticks * WHEEL_DELTA;
     const script = `
@@ -651,7 +845,7 @@ ${U32_GUARD}
 Start-Sleep -Milliseconds 30
 ${direction === "down" || direction === "up"
       ? `${Array.from({ length: Math.min(ticks, 33) }, () => `[U32]::mouse_event(0x0800,0,0,${direction === "up" ? lines : -lines},[UIntPtr]::Zero)`).join("\nStart-Sleep -Milliseconds 15\n")}`
-      : `${Array.from({ length: Math.min(ticks, 33) }, () => `[System.Windows.Forms.SendKeys]::SendWait('{${direction === "left" ? "LEFT" : "RIGHT"}}')`).join("\n")}`}
+      : `${Array.from({ length: Math.min(ticks, 33) }, () => `[void][U32]::TapKey(${direction === "left" ? "0x25" : "0x27"})`).join("\nStart-Sleep -Milliseconds 15\n")}`}
 Write-Output 'OK'
 `;
     const result = await run(psCapsule(script, 12000));
@@ -662,10 +856,17 @@ Write-Output 'OK'
   },
 
   async rawDrag(run, from, to, modifiers) {
-    const modKeys = modifiers.map((m) => (m === "super" ? "WIN" : m.toUpperCase())).join("");
+    // R68-C: modifier holds ride SendInput (ModsDown/ModsUp) — the old
+    // SendKeys '{CTRLDOWN}' path died TypeNotFound on the owner's host.
+    // The array declaration is conditional like rawClick's.
+    const modVks = modifierVks(modifiers);
+    const modsDecl = modVks.length > 0 ? psVkArray("m", modVks) : "";
+    const modsDown = modVks.length > 0 ? "[void][U32]::ModsDown($m)" : "";
+    const modsUp = modVks.length > 0 ? "[void][U32]::ModsUp($m)" : "";
     const script = `
 ${U32_GUARD}
-${modKeys ? `[System.Windows.Forms.SendKeys]::SendWait('{${modKeys}DOWN}')` : ""}
+${modsDecl}
+${modsDown}
 [void][U32]::SetCursorPos(${from.x}, ${from.y})
 Start-Sleep -Milliseconds 60
 [U32]::mouse_event(${MOUSEEVENTF_LEFTDOWN},0,0,0,[UIntPtr]::Zero)
@@ -679,7 +880,7 @@ for ($i = 1; $i -le $steps; $i++) {
 }
 Start-Sleep -Milliseconds 60
 [U32]::mouse_event(${MOUSEEVENTF_LEFTUP},0,0,0,[UIntPtr]::Zero)
-${modKeys ? `[System.Windows.Forms.SendKeys]::SendWait('{${modKeys}UP}')` : ""}
+${modsUp}
 Write-Output 'OK'
 `;
     const result = await run(psCapsule(script, 20000));
@@ -705,21 +906,29 @@ Write-Output 'OK'
   },
 
   async rawKey(run, keys, scope) {
-    // R67-C (THE key fix): the tokens compose ONE SendKeys chord via
-    // composeSendKeysChord — "tab" is {TAB}, "ctrl+a" is ^a, never literal
-    // text (the old path typed t-a-b). An uncomposable chord (the Windows/
-    // Meta key — SendKeys has no such modifier — or an unknown name) refuses
-    // honestly WITHOUT spawning a capsule: nothing is typed.
-    const chord = composeSendKeysChord(keys);
+    // R68-C: the tokens compose ONE SendInput chord via composeVkChord —
+    // "tab" is VK 0x09, "ctrl+a" is mods [VK_CONTROL] + key 'A', never
+    // literal text (the old path typed t-a-b before R67-C; R68-C kills the
+    // SendKeys engine itself). An uncomposable chord (an unknown name)
+    // refuses honestly WITHOUT spawning a capsule: nothing is typed.
+    // NOTE: the Windows/Meta key is a REAL VK here (LWIN 0x5B) — SendInput
+    // synthesizes it where SendKeys could not.
+    const chord = composeVkChord(keys);
     if (!chord.ok) return { ok: false, error: chord.error };
     // Scope verification first (Win raw keys land in the frontmost window).
+    // The modifier array rides a PowerShell variable (the defensive form:
+    // `[uint16]` casts in the array literal guarantee the object[]→ushort[]
+    // marshaling on PS 5.1; an empty `@()` marshals as a zero-length array
+    // — construction-pinned, PowerShell never runs in this sandbox).
+    const modsDecl = psVkArray("m", chord.mods);
     const script = `
 ${U32_GUARD}
 $fg = [U32]::GetForegroundWindow()
 $fgpid = 0
 [void][U32]::GetWindowThreadProcessId($fg, [ref]$fgpid)
 if ($fgpid -ne ${scope.pid}) { Write-Output "FRONTMOST_MISMATCH:$fgpid"; exit 0 }
-[System.Windows.Forms.SendKeys]::SendWait(${psStringLiteral(chord.sendKeys)})
+${modsDecl}
+[void][U32]::Chord($m, [uint16]${chord.key})
 Write-Output 'OK'
 `;
     const result = await run(psCapsule(script, 10000));
@@ -733,15 +942,35 @@ Write-Output 'OK'
   },
 
   async typeText(run, text, scope) {
+    // R68-C: SendInput KEYEVENTF_UNICODE per char — [U32]::SendText takes
+    // the RAW string in a PowerShell here-string literal (the
+    // psStringLiteral escape for '@ sequences aside, SendInput needs NO
+    // SendKeys-style escaping at all: '+', '%', '~', braces are just
+    // characters — the whole escaping class of bugs is dead; the live trace
+    // PROVED the single-line @'…'@ literal parses on PS 5.1: the type
+    // resolution failed AFTER the parse). Newlines map to real VK_RETURN
+    // presses inside SendText ('\r' is skipped so \r\n pairs type ONE
+    // Enter). The frontmost scope check stays (Win raw input lands in the
+    // frontmost window); the dispatcher auto-activates + retries on
+    // mismatch (R68-C).
     const script = `
 ${U32_GUARD}
 $fg = [U32]::GetForegroundWindow()
 $fgpid = 0
 [void][U32]::GetWindowThreadProcessId($fg, [ref]$fgpid)
 if ($fgpid -ne ${scope.pid}) { Write-Output "FRONTMOST_MISMATCH:$fgpid"; exit 0 }
-${windowsSendKeysScript(splitTextToKeys(text))}
+[void][U32]::SendText(${psStringLiteral(text)})
 Write-Output 'OK'
 `;
+    // R68-C: the ARGV ceiling guard — the capsule embeds the model's text,
+    // so its size is measured, not assumed: a payload that would cross
+    // the CreateProcess command-line ceiling refuses BEFORE the spawn
+    // with a self-teaching error (split the text across multiple calls)
+    // instead of a cryptic spawn failure.
+    const b64Len = capsuleB64Length(script);
+    if (b64Len > ARGV_B64_CEILING) {
+      return { ok: false, error: `type text too long: ${text.length} characters compose a ${b64Len}-char -EncodedCommand (the Windows CreateProcess ceiling is 32,767 command-line chars) — split it across multiple type calls` };
+    }
     const result = await run(psCapsule(script, Math.min(30000, 2000 + text.length * 20)));
     if (result.stdout.trim().startsWith("FRONTMOST_MISMATCH:")) {
       return { ok: false, error: result.stdout.trim() };
@@ -778,6 +1007,20 @@ try {
     // The doc 04 §3.3 sequence with postcondition verification. R67-C: the
     // AttachThreadInput sequence NEEDS U32 — guarded, the failure rides the
     // same ERR channel (activate then reports honestly {ok:false}).
+    //
+    // R68-C (C3): ESCALATION LADDER — the owner's live trace had
+    // open_application(activate=true) verify INACTIVE repeatedly (Edge
+    // steals/holds the foreground through its own focus churn), and every
+    // raw-input tool then refused frontmost_pid_mismatch. When the
+    // AttachThreadInput sequence fails the 1.5s verify, escalate to the
+    // classic bulletproof foreground steal: SW_MINIMIZE (6) → 150ms →
+    // SW_RESTORE (9) — the restore path re-enters through the foreground
+    // grant the shell gives a restoring window, which SetForegroundWindow
+    // alone cannot take from a process the OS considers "not foreground
+    // eligible". TRADEOFF (accepted, documented): the target window
+    // VISIBLY FLICKERS (minimize + restore) — a one-frame flicker is the
+    // honest price of a verified activation when the polite sequence
+    // failed; only then, and only once, does the window flash.
     const script = `
 ${U32_GUARD}
 $wins = Get-Process -Id ${pid} -ErrorAction SilentlyContinue
@@ -797,9 +1040,20 @@ while ((Get-Date) -lt $deadline) {
   Start-Sleep -Milliseconds 100
   if ([U32]::GetForegroundWindow() -eq $h) { break }
 }
+if ([U32]::GetForegroundWindow() -ne $h) {
+  # R68-C: the minimize/restore trick — the classic bulletproof steal.
+  [void][U32]::ShowWindow($h, 6)
+  Start-Sleep -Milliseconds 150
+  [void][U32]::ShowWindow($h, 9)
+  $deadline2 = (Get-Date).AddMilliseconds(1500)
+  while ((Get-Date) -lt $deadline2) {
+    Start-Sleep -Milliseconds 100
+    if ([U32]::GetForegroundWindow() -eq $h) { break }
+  }
+}
 if ([U32]::GetForegroundWindow() -eq $h) { Write-Output 'ACTIVE' } else { Write-Output 'INACTIVE' }
 `;
-    const result = await run(psCapsule(script, 10000));
+    const result = await run(psCapsule(script, 12000));
     const out = result.stdout.trim();
     if (out === "ACTIVE") return { ok: true, active: true };
     if (out === "INACTIVE") return { ok: true, active: false };
@@ -912,6 +1166,12 @@ Write-Output ($p.X.ToString() + "," + $p.Y.ToString())
 
   async writeClipboard(run, text) {
     const script = `try { Set-Clipboard -Value ${psStringLiteral(text)} -ErrorAction Stop; Write-Output 'OK' } catch { Write-Output ("ERR:" + $_.Exception.Message) }`;
+    // R68-C: the ARGV ceiling guard (the clipboard write embeds the
+    // model's text — measured, not assumed; see ARGV_B64_CEILING).
+    const b64Len = capsuleB64Length(script);
+    if (b64Len > ARGV_B64_CEILING) {
+      return { ok: false, error: `clipboard text too long: ${text.length} characters compose a ${b64Len}-char -EncodedCommand (the Windows CreateProcess ceiling is 32,767 command-line chars) — write it in smaller pieces` };
+    }
     const result = await run(psCapsule(script, 8000));
     const out = result.stdout.trim();
     return out === "OK" ? { ok: true } : { ok: false, error: out.slice(0, 200) };
@@ -1126,151 +1386,164 @@ function psStringLiteral(value: string): string {
   return `@'${value.replace(/'@/g, "''@")}'@`;
 }
 
-/** Split text into SendKeys-safe chunks: plain runs + {ENTER} for \n. */
-export function splitTextToKeys(text: string): string[] {
-  const parts: string[] = [];
-  let run = "";
-  for (const ch of text) {
-    if (ch === "\n") {
-      if (run !== "") parts.push(run);
-      parts.push("{ENTER}");
-      run = "";
-    } else {
-      run += ch;
-    }
-  }
-  if (run !== "") parts.push(run);
-  return parts;
-}
+/* ── R68-C: the key-name → VK table (the SendInput chord composer) ─────────
+ * R67-C fixed "key tab typed t-a-b" with a SendKeys chord table; R68-C kills
+ * the SendKeys ENGINE (the owner's host: [System.Windows.Forms.SendKeys]
+ * TypeNotFound — the preamble's LoadWithPartialName silently failed, R68-C
+ * removed it). composeVkChord maps the dispatcher's lowercased '+'-split
+ * tokens to real Virtual-Key codes for [U32]::Chord (mods down → key → key
+ * up → mods up REVERSED, one SendInput batch), matching the LINUX backend's
+ * xdotool semantics for the same input. The Windows/Meta key is a REAL VK
+ * now (LWIN 0x5B) — SendInput synthesizes it where SendKeys could not.
+ * Dispatch's splitKeyChord preserves a literal plus ('++' → the plus key)
+ * so single printable characters stay expressible. Unknown names refuse
+ * HONESTLY — nothing is typed (the R67-C contract, unchanged). */
 
-/** Build the SendKeys statements for a list of key-part strings. */
-export function windowsSendKeysScript(parts: string[]): string {
-  return parts
-    .map((part) => {
-      if (part === "{ENTER}") return `[System.Windows.Forms.SendKeys]::SendWait('{ENTER}')`;
-      const escaped = part.replace(/([{}()[\]^%~+])/g, "{$1}");
-      return `[System.Windows.Forms.SendKeys]::SendWait(${psStringLiteral(escaped)})`;
-    })
-    .join("\n");
-}
-
-/* ── R67-C: the key-name → SendKeys table (THE key fix) ────────────────────
- * The owner's live failure: key "tab" typed the letters t-a-b, because
- * windowsSendKeysScript only special-cased the literal "{ENTER}" and sent
- * every other token as TEXT. composeSendKeysChord maps the dispatcher's
- * lowercased '+'-split tokens to ONE SendKeys chord, matching the LINUX
- * backend's xdotool semantics for the same input ("ctrl+a" is a chord on
- * both). Dispatch's splitKeyChord preserves a literal plus ('++' → the
- * plus key) so single printable characters stay expressible. */
-
-/** Key names → SendKeys literals (names are the dispatcher's lowercased
- * tokens; the aliases mirror doc 02's key tool vocabulary). */
-const SEND_KEYS_KEY_NAMES: Record<string, string> = {
-  enter: "{ENTER}",
-  return: "{ENTER}",
-  tab: "{TAB}",
-  esc: "{ESC}",
-  escape: "{ESC}",
-  backspace: "{BACKSPACE}",
-  delete: "{DELETE}",
-  del: "{DELETE}",
-  space: " ",
-  up: "{UP}",
-  arrowup: "{UP}",
-  down: "{DOWN}",
-  arrowdown: "{DOWN}",
-  left: "{LEFT}",
-  arrowleft: "{LEFT}",
-  right: "{RIGHT}",
-  arrowright: "{RIGHT}",
-  home: "{HOME}",
-  end: "{END}",
-  pageup: "{PGUP}",
-  pgup: "{PGUP}",
-  pagedown: "{PGDN}",
-  pgdn: "{PGDN}",
-  insert: "{INSERT}",
-  help: "{HELP}",
-  f1: "{F1}",
-  f2: "{F2}",
-  f3: "{F3}",
-  f4: "{F4}",
-  f5: "{F5}",
-  f6: "{F6}",
-  f7: "{F7}",
-  f8: "{F8}",
-  f9: "{F9}",
-  f10: "{F10}",
-  f11: "{F11}",
-  f12: "{F12}",
+/** Modifier names → Virtual-Key codes (LWIN covers win/meta/super/cmd). */
+const VK_MODIFIERS: Record<string, number> = {
+  ctrl: 0x11,
+  control: 0x11,
+  shift: 0x10,
+  alt: 0x12,
+  option: 0x12,
+  win: 0x5b,
+  meta: 0x5b,
+  super: 0x5b,
+  cmd: 0x5b,
+  command: 0x5b,
+  windows: 0x5b,
 };
 
-/** LEADING modifier tokens → SendKeys modifier prefixes. */
-const SEND_KEYS_MODIFIER_PREFIXES: Record<string, string> = {
-  ctrl: "^",
-  control: "^",
-  shift: "+",
-  alt: "%",
-  option: "%",
+/** Key names → Virtual-Key codes (winuser.h; the aliases mirror doc 02's
+ * key tool vocabulary — the R67-C table's names, VK-ified). */
+const VK_KEY_NAMES: Record<string, number> = {
+  enter: 0x0d,
+  return: 0x0d,
+  tab: 0x09,
+  esc: 0x1b,
+  escape: 0x1b,
+  backspace: 0x08,
+  delete: 0x2e,
+  del: 0x2e,
+  insert: 0x2d,
+  help: 0x2f,
+  space: 0x20,
+  up: 0x26,
+  arrowup: 0x26,
+  down: 0x28,
+  arrowdown: 0x28,
+  left: 0x25,
+  arrowleft: 0x25,
+  right: 0x27,
+  arrowright: 0x27,
+  home: 0x24,
+  end: 0x23,
+  pageup: 0x21,
+  pgup: 0x21,
+  pagedown: 0x22,
+  pgdn: 0x22,
+  f1: 0x70,
+  f2: 0x71,
+  f3: 0x72,
+  f4: 0x73,
+  f5: 0x74,
+  f6: 0x75,
+  f7: 0x76,
+  f8: 0x77,
+  f9: 0x78,
+  f10: 0x79,
+  f11: 0x7a,
+  f12: 0x7b,
 };
 
-/** SendKeys has NO Windows-key modifier — these refuse honestly instead of
- * silently typing nothing (or worse, typing the token as text). */
-const SEND_KEYS_UNSUPPORTED_MODIFIERS = new Set(["meta", "win", "cmd", "super", "command", "windows"]);
-
-/** SendKeys' special characters (the documented brace-escape set — the same
- * regex windowsSendKeysScript escapes TEXT with). */
-function escapeSendKeysLiteral(ch: string): string {
-  return ch.replace(/([{}()[\]^%~+])/g, "{$1}");
-}
+/** Single printable characters → VK codes (the OEM punctuation the spec's
+ * key vocabulary uses; '++' from splitKeyChord lands here as '+'). */
+const VK_SINGLE_CHARS: Record<string, number> = {
+  "+": 0xbb,
+  "-": 0xbd,
+  ",": 0xbc,
+  ".": 0xbe,
+  "/": 0xbf,
+  ";": 0xba,
+  "'": 0xde,
+};
 
 /** The supported-key list every honest compose error names. */
-const SEND_KEYS_SUPPORTED_NAMES =
-  "enter/return, tab, esc/escape, backspace, delete/del, space, up, down, left, right (arrowup/arrowdown/arrowleft/arrowright), home, end, pageup/pgup, pagedown/pgdn, insert, help, f1..f12, single printable characters ('++' for the plus key), and chords like ctrl+a / shift+tab / alt+f4";
+const VK_SUPPORTED_NAMES =
+  "enter/return, tab, esc/escape, backspace, delete/del, insert, help, space, up, down, left, right (arrowup/arrowdown/arrowleft/arrowright), home, end, pageup/pgup, pagedown/pgdn, f1..f12, single letters a-z, digits 0-9, plus ('++'), minus, comma, period, slash, semicolon, quote, and chords like ctrl+a / shift+tab / alt+f4 / win+l";
 
 /**
- * R67-C: compose the dispatcher's key tokens into ONE SendKeys string.
- * Leading modifier tokens become the ^ / + / % prefixes; exactly ONE key
- * token must remain (mapped through the table, or a brace-escaped printable
- * char). Anything else refuses honestly — the error names what was wrong
- * and the full supported list, so the model can self-correct in one step.
+ * R68-C: compose the dispatcher's key tokens into ONE SendInput chord —
+ * LEADING modifier VKs + exactly ONE key VK. Anything else refuses honestly
+ * (the error names what was wrong and the full supported list, so the model
+ * can self-correct in one step).
  */
-export function composeSendKeysChord(keys: string[]): { ok: true; sendKeys: string } | { ok: false; error: string } {
+export function composeVkChord(keys: string[]): { ok: true; mods: number[]; key: number } | { ok: false; error: string } {
   const tokens = keys.map((k) => k.trim().toLowerCase()).filter((k) => k !== "");
   if (tokens.length === 0) {
     return { ok: false, error: "no key tokens given — the key tool needs a key or chord, e.g. 'tab' or 'ctrl+a'" };
   }
-  for (const t of tokens) {
-    if (SEND_KEYS_UNSUPPORTED_MODIFIERS.has(t)) {
-      return {
-        ok: false,
-        error: `the Windows SendKeys backend cannot synthesize the Windows/Meta key ('${t}') — SendKeys has no Windows-key modifier; use a different chord`,
-      };
-    }
-  }
-  let prefix = "";
+  const mods: number[] = [];
   let i = 0;
   while (i < tokens.length) {
-    const mod = SEND_KEYS_MODIFIER_PREFIXES[tokens[i]!];
+    const mod = VK_MODIFIERS[tokens[i]!];
     if (mod === undefined) break;
-    prefix += mod;
+    mods.push(mod);
     i++;
   }
   const rest = tokens.slice(i);
   if (rest.length !== 1) {
     return {
       ok: false,
-      error: `a key chord is LEADING modifiers plus exactly ONE key — '${keys.join("+")}' has ${rest.length === 0 ? "no key after the modifier(s)" : `${rest.length} keys after the modifier(s)`}; supported: ${SEND_KEYS_SUPPORTED_NAMES}`,
+      error: `a key chord is LEADING modifiers plus exactly ONE key — '${keys.join("+")}' has ${rest.length === 0 ? "no key after the modifier(s)" : `${rest.length} keys after the modifier(s)`}; supported: ${VK_SUPPORTED_NAMES}`,
     };
   }
   const key = rest[0]!;
-  const named = SEND_KEYS_KEY_NAMES[key];
-  if (named !== undefined) return { ok: true, sendKeys: prefix + named };
-  if (key.length === 1) return { ok: true, sendKeys: prefix + escapeSendKeysLiteral(key) };
+  const named = VK_KEY_NAMES[key];
+  if (named !== undefined) return { ok: true, mods, key: named };
+  if (key.length === 1) {
+    if (key >= "a" && key <= "z") return { ok: true, mods, key: 0x41 + (key.charCodeAt(0) - 0x61) };
+    if (key >= "0" && key <= "9") return { ok: true, mods, key: 0x30 + (key.charCodeAt(0) - 0x30) };
+    const oem = VK_SINGLE_CHARS[key];
+    if (oem !== undefined) return { ok: true, mods, key: oem };
+    return {
+      ok: false,
+      error: `the key '${key}' has no Windows Virtual-Key code in the supported table — type it with the type tool instead; supported: ${VK_SUPPORTED_NAMES}`,
+    };
+  }
   return {
     ok: false,
-    error: `unknown key name '${key}' — supported: ${SEND_KEYS_SUPPORTED_NAMES}`,
+    error: `unknown key name '${key}' — supported: ${VK_SUPPORTED_NAMES}`,
   };
+}
+
+/**
+ * R68-C: the dispatcher's modifier NAMES ("ctrl", "shift", "super"…) → VK
+ * codes for the click/drag modifier holds ([U32]::ModsDown/ModsUp). Unknown
+ * names are DROPPED (parseModifiers upstream already normalizes the
+ * vocabulary; fail-open here matches the old path's behavior of holding the
+ * modifiers it could express).
+ */
+function modifierVks(modifiers: string[]): number[] {
+  const vks: number[] = [];
+  for (const m of modifiers) {
+    const vk = VK_MODIFIERS[m.toLowerCase()];
+    if (vk !== undefined) vks.push(vk);
+  }
+  return vks;
+}
+
+/**
+ * R68-C: emit a PowerShell ushort[] array-literal statement —
+ * `$<name>=@([uint16]17, [uint16]16)` (the explicit [uint16] casts make the
+ * object[]→ushort[] parameter marshaling defensive on PS 5.1; an empty set
+ * emits `$<name>=@()` which marshals as a zero-length array — SendMany
+ * short-circuits on length 0). PowerShell never executes in this sandbox:
+ * construction-pinned only.
+ */
+function psVkArray(name: string, vks: number[]): string {
+  const elems = vks.map((v) => `[uint16]${v}`).join(", ");
+  return `$${name}=@(${elems})`;
 }
 
 export function windowsElementActionScript(
@@ -1366,10 +1639,21 @@ try {
 Write-Output "ERR:no-such-action:$want"
 `
           : `
+# R68-C: the select gestures ride SendInput (HOME caret placement, then
+# optional shift+END for the whole-text selection) — the old SendKeys
+# {HOME}/+{END} path died TypeNotFound on the owner's host. The other three
+# element actions (press/setValue/action) are pure UIA and need NO U32 —
+# the guard lives HERE, after the identity verification, so a dead compile
+# still reports the element truthfully before refusing.
+${U32_GUARD}
 try {
   $el.SetFocus()
-  [System.Windows.Forms.SendKeys]::SendWait('{HOME}')
-  ${length === null || length === undefined ? "" : `[System.Windows.Forms.SendKeys]::SendWait('+{END}')`}
+  [void][U32]::TapKey([uint16]0x24)
+${length === null || length === undefined ? "" : `  $sel=@([uint16]0x10)
+  [void][U32]::ModsDown($sel)
+  [void][U32]::TapKey([uint16]0x23)
+  [void][U32]::ModsUp($sel)
+`}
   Write-Output 'OK'; exit 0
 } catch {
   Write-Output ("ERR:" + $_.Exception.Message); exit 0

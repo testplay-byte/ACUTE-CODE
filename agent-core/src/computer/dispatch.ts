@@ -34,6 +34,15 @@
  *     is now focused). Best-effort: backends that cannot read it return
  *     null and the field is omitted; the key action itself never fails on
  *     a readback failure.
+ *
+ * ROUND-68 (R68-C — the owner's v0.67.0 live report): FRONTMOST
+ * AUTO-RETRY. Edge churned the foreground (our activate verified INACTIVE)
+ * and every raw-input tool then REFUSED frontmost_pid_mismatch — the
+ * self-teaching recovery the refusal text preached ("activate, then retry
+ * once") is now performed AUTOMATICALLY by withForegroundRetry: gate
+ * mismatch or a script-level FRONTMOST_MISMATCH error activates the target
+ * (the backend's escalated activate ladder) and retries the action ONCE;
+ * only when the activation itself fails does the honest refusal remain.
  */
 import type {
   AppInfo,
@@ -119,13 +128,13 @@ export function parseModifiers(mods: unknown): string[] {
 
 /**
  * R67-C: split a key chord on '+', PRESERVING a literal plus — '++' is the
- * plus key (the escape convention, mirroring SendKeys itself) and 'ctrl++'
- * is ctrl+plus. The old split+filter-empty dropped every empty segment, so
- * '++' resolved to NOTHING and 'ctrl++' silently became just "ctrl".
+ * plus key (the escape convention) and 'ctrl++' is ctrl+plus. The old
+ * split+filter-empty dropped every empty segment, so '++' resolved to
+ * NOTHING and 'ctrl++' silently became just "ctrl".
  * Named tokens are lowercased for the backends' tables; a '+' token stays
- * verbatim (the Windows SendKeys composer brace-escapes it; Linux joins the
- * tokens back into one xdotool chord string exactly as before for ordinary
- * chords like "ctrl+a").
+ * verbatim (R68-C: the Windows composeVkChord maps it to VK_OEM_PLUS
+ * 0xBB; Linux joins the tokens back into one xdotool chord string exactly
+ * as before for ordinary chords like "ctrl+a").
  */
 export function splitKeyChord(text: string): string[] {
   const tokens: string[] = [];
@@ -565,14 +574,71 @@ export class ComputerDispatcher {
     return { ok: true, frame, global: this.session.imageToGlobal(frame, target.x, target.y) };
   }
 
-  /** The Win/Linux raw foreground rule (doc 07 §5). */
-  private async requireForegroundForRaw(scopePid: number): Promise<DispatchResult | null> {
-    if (!this.backend.capabilities().rawRequiresForeground) return null;
-    const front = await this.backend.frontmostPid(this.run);
-    if (front !== null && front !== scopePid) {
-      return { kind: "refusal", refusal: frontmostPidMismatch(scopePid, front).refusal };
+  /**
+   * R68-C (C2): the Win/Linux raw foreground rule (doc 07 §5) + the
+   * self-healing recovery, folded into ONE wrapper (the old standalone
+   * requireForegroundForRaw plain-refusal gate is GONE — every caller now
+   * wants the heal). Run the backend's escalated activation and RE-READ the
+   * frontmost pid — the activation is trusted only when the OS confirms
+   * it (activate's own {active} receipt is checked first, then the
+   * independent frontmost read; a null read means "cannot verify", which
+   * the caller treats as not-healed — honest, never assumed).
+   */
+  private async activateAndRecheck(pid: number, windowId: number | undefined): Promise<boolean> {
+    try {
+      const activated = await this.backend.activate(this.run, pid, windowId);
+      if (!activated.ok || activated.active !== true) return false;
+    } catch {
+      return false;
     }
-    return null;
+    const front = await this.backend.frontmostPid(this.run);
+    return front === pid;
+  }
+
+  /**
+   * R68-C (C2): FRONTMOST AUTO-RETRY — the self-healing wrapper for every
+   * raw-input backend call. Runs the foreground rule; on a mismatch (OR a
+   * FRONTMOST_MISMATCH error from the backend's own script-level check —
+   * the focus can churn between the gate and the SendInput) it ACTIVATES
+   * the target once (the backend's escalated ladder) and retries fn ONCE.
+   * If the activation fails, the ORIGINAL mismatch is returned so the
+   * caller shapes the honest frontmost_pid_mismatch refusal.
+   *
+   * CONSENT REASONING (the design note this file owes the owner): the model
+   * already declared intent to act on THIS app — the tool call named the
+   * appRef/element/frame, the tool-level consent gate (ask-mode risk
+   * classes) already ran on exactly that action, and the refusal text has
+   * ALWAYS told the model to re-activate and retry. Performing that
+   * recovery automatically is not a new capability: it is the SAME action,
+   * on the SAME target, completing the SAME consented intent — the only
+   * visible difference is the window coming forward (which the
+   * open_application(activate:true) path the model was told to call would
+   * have done anyway). Non-mismatch errors NEVER retry here (one retry,
+   * mismatch-class only — no retry storms).
+   */
+  private async withForegroundRetry(
+    pid: number,
+    windowId: number | undefined,
+    fn: () => Promise<{ ok: boolean; error?: string }>,
+  ): Promise<{ ok: boolean; error?: string }> {
+    // Step 1 — the foreground rule (doc 07 §5): mismatch → self-heal once.
+    if (this.backend.capabilities().rawRequiresForeground) {
+      const front = await this.backend.frontmostPid(this.run);
+      if (front !== null && front !== pid) {
+        if (!(await this.activateAndRecheck(pid, windowId))) {
+          // Activation failed or the foreground is STILL someone else's —
+          // the ORIGINAL mismatch error (the caller shapes the honest
+          // refusal; the recovery text names the failed auto-activation).
+          return { ok: false, error: `FRONTMOST_MISMATCH:${front}` };
+        }
+      }
+    }
+    // Step 2 — the action itself.
+    const first = await fn();
+    if (first.ok || !first.error?.startsWith("FRONTMOST_MISMATCH:")) return first;
+    // Step 3 — the script-level check raced the focus churn: heal + retry ONCE.
+    if (!(await this.activateAndRecheck(pid, windowId))) return first;
+    return fn();
   }
 
   /* ── read tools ───────────────────────────────────────────────────────── */
@@ -1068,8 +1134,7 @@ export class ComputerDispatcher {
     }
     const resolved = this.resolveCoordinate(targetRes.target);
     if (!resolved.ok) return resolved.refusal;
-    const gate = await this.requireForegroundForRaw(resolved.frame.ownerAtCapture.pid);
-    if (gate !== null) return gate;
+    // R68-C: frontmost auto-retry (the frame-owner pid scopes the gate).
     // Raw hover = move without click. Linux: xdotool mousemove. Windows:
     // SetCursorPos. macOS: cliclick m. Approximate with rawButton-less move
     // via a zero-press click? No — honest: use the backend's rawScroll-free
@@ -1083,8 +1148,14 @@ export class ComputerDispatcher {
       // express it as a click with 0 clicks via rawClick repetition 1 but
       // no press is wrong. The honest implementation: backends treat
       // rawButton(false) after a move as the move primitive.
-      const moved = await this.backend.rawButton(this.run, resolved.global, false);
+      const moved = await this.withForegroundRetry(resolved.frame.ownerAtCapture.pid, undefined, () =>
+        this.backend.rawButton(this.run, resolved.global, false),
+      );
       if (!moved.ok) {
+        if (moved.error?.startsWith("FRONTMOST_MISMATCH:")) {
+          const active = Number.parseInt(moved.error.split(":")[1] ?? "", 10);
+          return { kind: "refusal", refusal: frontmostPidMismatch(resolved.frame.ownerAtCapture.pid, Number.isFinite(active) ? active : null).refusal };
+        }
         return { kind: "refusal", refusal: capabilityFailClosed(`hover failed: ${moved.error}`).refusal };
       }
       return { kind: "receipt", receipt: receipt(true, "accepted", false) };
@@ -1109,11 +1180,16 @@ export class ComputerDispatcher {
     }
     const resolved = this.resolveCoordinate(targetRes.target);
     if (!resolved.ok) return resolved.refusal;
-    const gate = await this.requireForegroundForRaw(resolved.frame.ownerAtCapture.pid);
-    if (gate !== null) return gate;
     this.session.record("intent", `Scrolling ${direction} at (${targetRes.target.x},${targetRes.target.y})`, "scroll");
-    const result = await this.backend.rawScroll(this.run, resolved.global, direction, amount);
+    // R68-C: frontmost auto-retry (the frame-owner pid scopes the gate).
+    const result = await this.withForegroundRetry(resolved.frame.ownerAtCapture.pid, undefined, () =>
+      this.backend.rawScroll(this.run, resolved.global, direction, amount),
+    );
     if (!result.ok) {
+      if (result.error?.startsWith("FRONTMOST_MISMATCH:")) {
+        const active = Number.parseInt(result.error.split(":")[1] ?? "", 10);
+        return { kind: "refusal", refusal: frontmostPidMismatch(resolved.frame.ownerAtCapture.pid, Number.isFinite(active) ? active : null).refusal };
+      }
       return { kind: "refusal", refusal: capabilityFailClosed(result.error ?? "scroll failed").refusal };
     }
     return { kind: "receipt", receipt: receipt(true, "accepted", false) };
@@ -1169,12 +1245,19 @@ export class ComputerDispatcher {
       toGlobal = resolved.global;
     }
 
-    const gate = await this.requireForegroundForRaw(scopePid);
-    if (gate !== null) return gate;
     if (consumedStateId !== undefined) this.session.markConsumed(consumedStateId);
     this.session.record("intent", `Dragging to (${toGlobal.x},${toGlobal.y})`, "left_click_drag");
-    const result = await this.backend.rawDrag(this.run, fromGlobal, toGlobal, modifiers);
+    // R68-C: frontmost auto-retry — the drag scope's window (element path)
+    // or the frame owner (coordinate path) scopes the gate + activation.
+    const scopeWindowId = fromRes.target.type === "element" ? this.session.getSnapshot(fromRes.target.stateId)?.snapshot.window.windowId : undefined;
+    const result = await this.withForegroundRetry(scopePid, scopeWindowId, () =>
+      this.backend.rawDrag(this.run, fromGlobal, toGlobal, modifiers),
+    );
     if (!result.ok) {
+      if (result.error?.startsWith("FRONTMOST_MISMATCH:")) {
+        const active = Number.parseInt(result.error.split(":")[1] ?? "", 10);
+        return { kind: "refusal", refusal: frontmostPidMismatch(scopePid, Number.isFinite(active) ? active : null).refusal };
+      }
       return { kind: "refusal", refusal: capabilityFailClosed(result.error ?? "drag failed").refusal };
     }
     return { kind: "receipt", receipt: receipt(true, "accepted", false) };
@@ -1201,11 +1284,18 @@ export class ComputerDispatcher {
         global = resolved.global;
         pid = resolved.frame.ownerAtCapture.pid;
       }
-      const gate = await this.requireForegroundForRaw(pid);
-      if (gate !== null) return gate;
       this.session.record("intent", `Pressing mouse down at (${global.x},${global.y})`, "left_mouse_down");
-      const result = await this.backend.rawButton(this.run, global, true);
+      // R68-C: frontmost auto-retry (element path: the snapshot's window;
+      // coordinate path: the frame owner).
+      const scopeWindowId = targetRes.target.type === "element" ? this.session.getSnapshot(targetRes.target.stateId)?.snapshot.window.windowId : undefined;
+      const result = await this.withForegroundRetry(pid, scopeWindowId, () =>
+        this.backend.rawButton(this.run, global, true),
+      );
       if (!result.ok) {
+        if (result.error?.startsWith("FRONTMOST_MISMATCH:")) {
+          const active = Number.parseInt(result.error.split(":")[1] ?? "", 10);
+          return { kind: "refusal", refusal: frontmostPidMismatch(pid, Number.isFinite(active) ? active : null).refusal };
+        }
         return { kind: "refusal", refusal: capabilityFailClosed(result.error ?? "mouse down failed").refusal };
       }
       this.session.holdButton({ pid, windowId: 0 }, global);
@@ -1276,13 +1366,18 @@ export class ComputerDispatcher {
       // R67-C: live-but-windowless pid → the honest helper-process refusal.
       return this.noAccessibleWindowRefusal(resolved.app.pid, diagnostics?.processRunning);
     }
-    const gate = await this.requireForegroundForRaw(resolved.app.pid);
-    if (gate !== null) return gate;
     this.session.record("intent", `Typing into '${window.title}' (app-scoped)`, "type");
-    const result = await this.backend.typeText(this.run, text, {
-      pid: resolved.app.pid,
-      windowId: window.windowId,
-    });
+    // R68-C (C2): the frontmost auto-retry — a gate mismatch or a
+    // script-level FRONTMOST_MISMATCH activates the target app (the
+    // escalated ladder) and retries ONCE; the OLD behavior refused and
+    // told the model to do exactly this by hand (the owner's live trace:
+    // repeated frontmost_pid_mismatch refusals mid-flow).
+    const result = await this.withForegroundRetry(resolved.app.pid, window.windowId, () =>
+      this.backend.typeText(this.run, text, {
+        pid: resolved.app.pid,
+        windowId: window.windowId,
+      }),
+    );
     if (!result.ok && result.error?.startsWith("FRONTMOST_MISMATCH:")) {
       const active = Number.parseInt(result.error.split(":")[1] ?? "", 10);
       return { kind: "refusal", refusal: frontmostPidMismatch(resolved.app.pid, Number.isFinite(active) ? active : null).refusal };
@@ -1384,9 +1479,9 @@ export class ComputerDispatcher {
     }
     const repeat = Math.max(0, Math.min(100, Number(args["repeat"]) || 1));
     // R67-C: the plus-preserving splitter — '++' is the plus key, 'ctrl+a'
-    // is a chord the backend composes (Windows: one SendKeys chord;
-    // Linux: one xdotool key string — the exact tokens as before for
-    // ordinary chords).
+    // is a chord the backend composes (Windows: one SendInput VK chord,
+    // R68-C — [U32]::Chord; Linux: one xdotool key string — the exact
+    // tokens as before for ordinary chords).
     const keys = splitKeyChord(text);
     if (keys.length === 0) {
       return { kind: "refusal", refusal: invalidTarget("key text must name a key or chord, e.g. 'return' or 'ctrl+a'").refusal };
@@ -1408,10 +1503,17 @@ export class ComputerDispatcher {
     this.session.record("intent", `Sending key '${text}'${repeat > 1 ? ` ×${repeat}` : ""}`, "key");
     let lastResult: { ok: boolean; error?: string } | undefined;
     for (let i = 0; i < Math.max(1, repeat); i++) {
-      lastResult = await this.backend.rawKey(this.run, keys, {
-        pid: resolved.app.pid,
-        windowId: window.windowId,
-      });
+      // R68-C (C2): each rawKey call rides the frontmost auto-retry — the
+      // gate (which key never had before), the script-level mismatch
+      // response, and the retry are all inside withForegroundRetry. The
+      // chord composition itself stays the backend's job (one [U32]::Chord
+      // per call — never tokens as text).
+      lastResult = await this.withForegroundRetry(resolved.app.pid, window.windowId, () =>
+        this.backend.rawKey(this.run, keys, {
+          pid: resolved.app.pid,
+          windowId: window.windowId,
+        }),
+      );
       if (lastResult && !lastResult.ok) break;
     }
     if (lastResult && !lastResult.ok && lastResult.error?.startsWith("FRONTMOST_MISMATCH:")) {
@@ -1448,14 +1550,19 @@ export class ComputerDispatcher {
     }
     const resolved = await this.resolveAppRef(appRef);
     if (!resolved.ok) return resolved.refusal;
-    const gate = await this.requireForegroundForRaw(resolved.app.pid);
-    if (gate !== null) return gate;
     this.session.record("wait", `Holding '${text}' for ${duration}s`, "hold_key");
     // Hold = key down, wait, key up (composed from rawKey). R67-C: the same
-    // plus-preserving splitter as the key tool.
+    // plus-preserving splitter as the key tool. R68-C: the down call rides
+    // the frontmost auto-retry (the up call is best-effort cleanup).
     const keys = splitKeyChord(text);
-    const down = await this.backend.rawKey(this.run, keys, { pid: resolved.app.pid, windowId: 0 });
+    const down = await this.withForegroundRetry(resolved.app.pid, undefined, () =>
+      this.backend.rawKey(this.run, keys, { pid: resolved.app.pid, windowId: 0 }),
+    );
     if (!down.ok) {
+      if (down.error?.startsWith("FRONTMOST_MISMATCH:")) {
+        const active = Number.parseInt(down.error.split(":")[1] ?? "", 10);
+        return { kind: "refusal", refusal: frontmostPidMismatch(resolved.app.pid, Number.isFinite(active) ? active : null).refusal };
+      }
       return { kind: "refusal", refusal: capabilityFailClosed(down.error ?? "hold failed").refusal };
     }
     await new Promise((resolve) => setTimeout(resolve, duration * 1000));
@@ -1547,15 +1654,18 @@ export class ComputerDispatcher {
     element?: Element,
     button: "left" | "right" | "middle" = "left",
   ): Promise<DispatchResult> {
-    const gate = await this.requireForegroundForRaw(scopePid);
-    if (gate !== null) return gate;
     if (target.type === "element") this.session.markConsumed(target.stateId);
     this.session.record(
       "intent",
       `Clicking ${button === "right" ? "right" : ""}(${global.x},${global.y})${element ? ` — '${element.name}'` : ""}`,
       button === "right" ? "right_click" : "left_click",
     );
-    const result = await this.backend.rawClick(this.run, global, button, clickCount, modifiers);
+    // R68-C (C2): the frontmost auto-retry — the OLD plain gate refusal is
+    // replaced by activate + gate-retry ONCE (the frame-owner pid scopes
+    // the recovery; a failed activation keeps the honest refusal).
+    const result = await this.withForegroundRetry(scopePid, undefined, () =>
+      this.backend.rawClick(this.run, global, button, clickCount, modifiers),
+    );
     if (!result.ok) {
       if (result.error?.startsWith("FRONTMOST_MISMATCH:")) {
         const active = Number.parseInt(result.error.split(":")[1] ?? "", 10);

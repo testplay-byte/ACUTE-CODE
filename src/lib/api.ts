@@ -1136,6 +1136,30 @@ export type WorkingEntry =
        * card; absent on main-agent approvals (behavior unchanged). */
       subAgentId?: string;
       ts: string;
+    }
+  | {
+      /** ROUND-68 (R68-A, owner: "The screenshots were supposed to be shown
+       * properly when they were actually taken, not at the bottom in a
+       * dedicated section. When the screenshots were taken they should be
+       * shown at that specific time."): one INLINE capture marker inside the
+       * working stream — the `{type:"screenshot"}` SSE sideband frame is
+       * pushed into liveTurn.working AT FRAME ARRIVAL, so the entry lands
+       * right after the in-flight tool row (the sideband fires DURING tool
+       * execution) = exactly the capture moment, and WorkingSection renders
+       * the inline row at its position.
+       *
+       * LIVE-ONLY by design: the server event log never persists rasters,
+       * so the folded log carries no screenshot entries (the bytes expire
+       * server-side in ~10 minutes anyway — the inline entry vanishes with
+       * the live turn; the folded turn re-renders from the event log
+       * alone). The raster itself is fetched lazily by the inline row via
+       * fetchComputerFrameRaster(frameId). */
+      type: "screenshot";
+      /** The captured raster's frame id (fetchable from the sidecar for ~10 min). */
+      frameId: string;
+      /** The tool that captured it (screenshot / zoom / get_app_state / browser_control). */
+      tool: string;
+      ts: string;
     };
 
 /** tool.use payload fields as agent-core's runtime writes them. */
@@ -2778,16 +2802,17 @@ export type StreamTurnEvent =
       chatSessionId: string;
       url: string | null;
     }
-  /** ROUND-67 (R67/D): the agent captured a screenshot (computer-use
-   * screenshot / zoom / get_app_state includeScreenshot, or the
-   * browser_control screenshot action) and the bytes are now fetchable at
-   * GET /computer-use/frames/:frameId/raster (an EPHEMERAL in-memory raster
-   * — LRU 12, 10-minute TTL; never persisted, never model-facing). The chat
-   * renders the live THUMBNAIL strip from these frames while the turn
-   * streams (the owner: "the images should be shown during its thinking in
-   * the agent's chat window itself, in a small view"). Turn-scoped on the
-   * frontend (the handler appends to the OPEN liveTurn — rasters belong to
-   * the turn that captured them). */
+  /** ROUND-67 (R67/D), ROUND-68 (R68-A): the agent captured a screenshot
+   * (computer-use screenshot / zoom / get_app_state includeScreenshot, or
+   * the browser_control screenshot action) and the bytes are now fetchable
+   * at GET /computer-use/frames/:frameId/raster (an EPHEMERAL in-memory
+   * raster — LRU 12, 10-minute TTL; never persisted, never model-facing).
+   * The sideband fires DURING tool execution, and the chat now renders the
+   * shot INLINE at its capture moment (the owner: "When the screenshots
+   * were taken they should be shown at that specific time") — the frame
+   * becomes a `screenshot` WorkingEntry pushed onto the OPEN liveTurn's
+   * working array, landing right after the in-flight tool row. Turn-scoped
+   * on the frontend (rasters belong to the turn that captured them). */
   | {
       type: "screenshot";
       sessionId: string;
@@ -3193,13 +3218,14 @@ export async function fetchComputerUseSession(): Promise<ComputerUseSessionState
 }
 
 /**
- * ROUND-67 (R67/D): GET /computer-use/frames/:frameId/raster — the PNG bytes
- * of a frame captured this sidecar lifetime, as a Blob (the live screenshot
- * THUMBNAIL strip's lazy per-tile fetch). BINARY (the shared request()
- * helper is JSON-only), so this carries its own Authorization header like
- * the SSE fetch + browserRequest do. Throws ApiError on a non-OK reply — a
- * 404 (TTL/LRU eviction) is the caller's "expired tile" signal, not a
- * crash; a 0-status network miss surfaces the same honest way.
+ * ROUND-67 (R67/D), ROUND-68 (R68-A): GET /computer-use/frames/:frameId/raster
+ * — the PNG bytes of a frame captured this sidecar lifetime, as a Blob (the
+ * INLINE screenshot row's lazy fetch, one per `screenshot` WorkingEntry).
+ * BINARY (the shared request() helper is JSON-only), so this carries its own
+ * Authorization header like the SSE fetch + browserRequest do. Throws
+ * ApiError on a non-OK reply — a 404 (TTL/LRU eviction) is the caller's
+ * "expired tile" signal, not a crash; a 0-status network miss surfaces the
+ * same honest way.
  */
 export async function fetchComputerFrameRaster(frameId: string): Promise<Blob> {
   const { baseUrl, token } = useConfigStore.getState();

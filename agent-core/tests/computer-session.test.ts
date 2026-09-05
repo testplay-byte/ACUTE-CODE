@@ -157,11 +157,14 @@ describe("ROUND-61 (R61): ComputerSession — frame registry (doc 03 §4)", () =
     expect(s.latestFrame()?.frameId).toBe("f-1");
   });
 
-  it("frameIsFresh honors MAX_FRAME_AGE_MS (10s) and age kills it", () => {
+  it("frameIsFresh honors MAX_FRAME_AGE_MS (R68-C: 30s — the 10s age died mid-vision-roundtrip) and age kills it", () => {
     const s = resetComputerSessionForTests();
     s.ensureStarted("linux");
     const { frameId } = s.registerFrame({ width: 10, height: 10, scale: 1, origin: { x: 0, y: 0 } }, { kind: "display" }, { pid: 1, windowId: 0 }, 1);
     const frame = s.getFrame(frameId)!;
+    // R68-C: the constant is 30s now (the owner's trace: zoom-then-click
+    // pairs died frame_stale because the vision roundtrip alone is 10-25s).
+    expect(MAX_FRAME_AGE_MS).toBe(30_000);
     expect(s.frameIsFresh(frame, frame.capturedAt)).toBe(true);
     expect(s.frameIsFresh(frame, frame.capturedAt + MAX_FRAME_AGE_MS)).toBe(true);
     expect(s.frameIsFresh(frame, frame.capturedAt + MAX_FRAME_AGE_MS + 1)).toBe(false);

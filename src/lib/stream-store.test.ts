@@ -1355,14 +1355,49 @@ describe("R67 browser frames + computer monitor turn-hold", () => {
   });
 });
 
-// ── ROUND-67 (R67/D): the screenshot THUMBNAIL strip feed ────────────────────
-describe("R67/D screenshot frames → liveTurn.screenshots", () => {
+// ── ROUND-68 (R68-A): the INLINE screenshot feed ────────────────────────────
+describe("R68/A screenshot frames → inline working entries", () => {
   beforeEach(() => {
     useBrowserTabStore.getState().resetAll();
     useComputerMonitorStore.setState({ turnHolds: {}, liveActivity: false, events: [], session: null, error: null });
   });
 
-  it("a screenshot frame appends {frameId, tool, ts} to the OPEN liveTurn (newest LAST)", async () => {
+  it("a screenshot frame appends a {type:\"screenshot\"} WorkingEntry to the OPEN liveTurn — right after the in-flight tool row (the capture moment)", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        sseResponse([
+          { type: "tool-call", toolName: "screenshot", argsSummary: "full display" },
+          // The sideband fires DURING tool execution — after the tool row
+          // landed, before the result settles it.
+          { type: "screenshot", sessionId: PARENT, frameId: "f-1", tool: "screenshot" },
+          { type: "tool-result", toolName: "screenshot", argsSummary: "full display", ok: true, outputSummary: "captured 1920x1080" },
+          { type: "stopped" },
+        ]),
+      ),
+    );
+    await useStreamStore.getState().startStream(PARENT, "take screenshots");
+    const liveTurn = useStreamStore.getState().bySession[PARENT]?.liveTurn;
+    expect(liveTurn).not.toBeNull();
+    // The strip's sidecar array is GONE (R68-A: the entry is the record now).
+    expect((liveTurn as unknown as Record<string, unknown>).screenshots).toBeUndefined();
+    // Order: the tool row (settled IN PLACE by the tool-result — the store
+    // updates the matching in-flight row, it does not append) with the
+    // screenshot entry right AFTER it: the entry landed at its capture
+    // moment, interleaved with the working rows.
+    expect(liveTurn!.working.map((e) => e.type)).toEqual(["tool", "screenshot"]);
+    const shot = liveTurn!.working[1];
+    expect(shot).toMatchObject({ type: "screenshot", frameId: "f-1", tool: "screenshot" });
+    // ts is a real ISO clock read (the capture-moment timestamp the inline
+    // row captions and the export marker ride).
+    expect(typeof (shot as { ts?: unknown }).ts).toBe("string");
+    expect(Number.isNaN(Date.parse((shot as { ts: string }).ts))).toBe(false);
+    // And the tool row ahead of it settled with the real result (ok: true).
+    const toolRow = liveTurn!.working[0];
+    expect(toolRow).toMatchObject({ type: "tool", tool: { toolName: "screenshot", ok: true } });
+  });
+
+  it("browser_control captures ride the same inline entries (tool name preserved, newest LAST)", async () => {
     vi.stubGlobal(
       "fetch",
       vi.fn().mockResolvedValue(
@@ -1373,17 +1408,15 @@ describe("R67/D screenshot frames → liveTurn.screenshots", () => {
         ]),
       ),
     );
-    await useStreamStore.getState().startStream(PARENT, "take screenshots");
+    await useStreamStore.getState().startStream(PARENT, "browser shots");
     const liveTurn = useStreamStore.getState().bySession[PARENT]?.liveTurn;
-    expect(liveTurn).not.toBeNull();
-    expect(liveTurn!.screenshots).toHaveLength(2);
-    // Newest LAST (render order), tool names preserved, ts is a real clock read.
-    expect(liveTurn!.screenshots![0]).toMatchObject({ frameId: "f-1", tool: "screenshot" });
-    expect(liveTurn!.screenshots![1]).toMatchObject({ frameId: "bs_x", tool: "browser_control" });
-    expect(liveTurn!.screenshots![1].ts).toBeGreaterThanOrEqual(0);
+    const shots = liveTurn!.working.filter((e) => e.type === "screenshot");
+    expect(shots).toHaveLength(2);
+    expect(shots[0]).toMatchObject({ type: "screenshot", frameId: "f-1", tool: "screenshot" });
+    expect(shots[1]).toMatchObject({ type: "screenshot", frameId: "bs_x", tool: "browser_control" });
   });
 
-  it("the strip is capped at 8 — the OLDEST entries drop (the newest survive)", async () => {
+  it("NO cap on entries — 10 captures stay 10 inline rows (the server-side 12-LRU/10-min registry is the real limit; expired tiles show the honest placeholder)", async () => {
     const frames: StreamTurnEvent[] = [];
     for (let i = 1; i <= 10; i++) {
       frames.push({ type: "screenshot", sessionId: PARENT, frameId: `f-${i}`, tool: "screenshot" });
@@ -1391,10 +1424,11 @@ describe("R67/D screenshot frames → liveTurn.screenshots", () => {
     frames.push({ type: "stopped" });
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue(sseResponse(frames)));
     await useStreamStore.getState().startStream(PARENT, "screenshot loop");
-    const shots = useStreamStore.getState().bySession[PARENT]?.liveTurn?.screenshots;
-    expect(shots).toHaveLength(8);
-    expect(shots![0].frameId).toBe("f-3"); // f-1, f-2 dropped
-    expect(shots![7].frameId).toBe("f-10"); // newest kept
+    const liveTurn = useStreamStore.getState().bySession[PARENT]?.liveTurn;
+    const shots = liveTurn!.working.filter((e) => e.type === "screenshot");
+    expect(shots).toHaveLength(10); // nothing dropped — order preserved
+    expect((shots[0] as { frameId: string }).frameId).toBe("f-1");
+    expect((shots[9] as { frameId: string }).frameId).toBe("f-10");
   });
 
   it("a screenshot frame with NO open liveTurn is dropped, never a crash (rasters belong to the turn that captured them)", async () => {
@@ -1430,7 +1464,7 @@ describe("R67/D screenshot frames → liveTurn.screenshots", () => {
     expect(useStreamStore.getState().bySession[PARENT]?.liveTurn).toBeNull();
   });
 
-  it("a fresh turn RESETS the strip (startStream initializes screenshots: [])", async () => {
+  it("a fresh turn RESETS the working array (startStream initializes working: [] — the previous turn's captures never leak in)", async () => {
     vi.stubGlobal(
       "fetch",
       vi.fn().mockResolvedValue(
@@ -1441,21 +1475,25 @@ describe("R67/D screenshot frames → liveTurn.screenshots", () => {
       ),
     );
     await useStreamStore.getState().startStream(PARENT, "first turn");
-    expect(useStreamStore.getState().bySession[PARENT]?.liveTurn?.screenshots).toHaveLength(1);
+    expect(
+      useStreamStore.getState().bySession[PARENT]?.liveTurn?.working.filter((e) => e.type === "screenshot"),
+    ).toHaveLength(1);
     // Second turn: the fetch stub still serves the same frames, but the
-    // strip's reset is visible DURING the stream — assert via the fresh
-    // startStream patch order (liveTurn replaced before frames land).
+    // fresh working array is visible DURING the stream — assert via the
+    // fresh startStream patch order (liveTurn replaced before frames land).
     vi.stubGlobal(
       "fetch",
       vi.fn().mockImplementation(async () => {
         // Read the store MID-STREAM: the fresh liveTurn already exists with
-        // an EMPTY strip (the previous turn's capture never leaks in).
+        // an EMPTY working array (the previous turn's capture never leaks in).
         const mid = useStreamStore.getState().bySession[PARENT]?.liveTurn;
-        expect(mid?.screenshots).toEqual([]);
+        expect(mid?.working).toEqual([]);
         return sseResponse([{ type: "stopped" }]);
       }),
     );
     await useStreamStore.getState().startStream(PARENT, "second turn");
-    expect(useStreamStore.getState().bySession[PARENT]?.liveTurn?.screenshots).toHaveLength(0);
+    expect(
+      useStreamStore.getState().bySession[PARENT]?.liveTurn?.working.filter((e) => e.type === "screenshot"),
+    ).toHaveLength(0);
   });
 });

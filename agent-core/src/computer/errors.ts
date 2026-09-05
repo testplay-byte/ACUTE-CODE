@@ -176,10 +176,15 @@ export function occlusionOwnerMismatch(covering: string): RefusalOutcome {
 }
 
 export function frontmostPidMismatch(scopePid: number, activePid: number | null): RefusalOutcome {
+  // R68-C (C2): the recovery text tells the truth about what ALREADY
+  // happened: dispatch now activates the target and retries ONCE before
+  // this refusal ever reaches the model (withForegroundRetry) — so a
+  // frontmost_pid_mismatch means the AUTOMATIC activation failed, not
+  // "you forgot to activate". The steps that remain are the honest ones.
   return refuse(
     "frontmost_pid_mismatch",
-    `Raw input scoped to app pid ${scopePid} was refused because the live frontmost application is pid ${activePid ?? "unknown"}. action_sent=false.`,
-    "Re-activate the target with open_application(activate=true), refresh state with get_app_state, then retry once with the fresh target. Do not replay blindly.",
+    `Raw input scoped to app pid ${scopePid} was refused because the live frontmost application is pid ${activePid ?? "unknown"} — the automatic re-activation of pid ${scopePid} was already attempted and failed. action_sent=false.`,
+    "The auto-activation failed: check the app is still running (list_apps) and still owns the window (list_windows), re-observe with get_app_state, then retry ONCE with the fresh target — or report the focus conflict to the user. Do not replay the action blindly.",
     { scopePid, activePid },
   );
 }

@@ -75,8 +75,10 @@ describe("ROUND-61 (R61): skills storage", () => {
     // Verify after every write + the post-launch wait.
     expect(body).toContain("return_state");
     expect(body).toContain("0.5-1s");
-    // The frontmost rule for raw input + end-of-task stop.
-    expect(body).toContain("FRONTMOST");
+    // The frontmost rule for raw input (R68-C: the AUTO-activation is the
+    // new teaching) + end-of-task stop.
+    expect(body).toContain("frontmost_pid_mismatch");
+    expect(body).toContain("ACTIVATE their target automatically");
     expect(body).toContain("stop_computer_control");
     // The agent may act on its OWN window when it blocks the target.
     expect(body).toContain("win+down");
@@ -104,6 +106,25 @@ describe("ROUND-61 (R61): skills storage", () => {
     expect(body).toContain("ONLY with browser_control");
     expect(body).toContain("read_dom");
     // Still tight: the two new paragraphs keep the body ≤ 60 content lines.
+    expect(body.trim().split("\n").length).toBeLessThanOrEqual(60);
+  });
+
+  it("R68-C: the body teaches the browser-tree truth + the screenshot chain discipline", () => {
+    const cu = getSkill(db, COMPUTER_USE_SKILL_ID);
+    expect(cu).toBeDefined();
+    const body = cu?.body ?? "";
+    // Browser pages: the WEB tree IS searched (the Chromium poke activates
+    // it) — element targets over screenshots for browser content.
+    expect(body).toContain("WEB accessibility tree IS searched");
+    expect(body).toContain("activated automatically");
+    expect(body).toContain("screenshots only when the tree genuinely misses");
+    // The chain discipline: act IMMEDIATELY, verify with a SMALL zoom crop.
+    expect(body).toContain("CHAIN DISCIPLINE");
+    expect(body).toContain("frames stay valid 30s");
+    expect(body).toContain("never re-screenshot between observing and acting");
+    expect(body).toContain("small zoom region crop");
+    expect(body).toContain("middle_click a link = open in new tab");
+    // Still tight: ≤ 60 content lines with the two new lines.
     expect(body.trim().split("\n").length).toBeLessThanOrEqual(60);
   });
 

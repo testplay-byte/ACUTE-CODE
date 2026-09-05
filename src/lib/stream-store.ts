@@ -102,24 +102,18 @@ export interface LiveTurn {
    * out for the owner). Null when none is open; the chat renders the
    * countdown card from this. One at a time per session. */
   browserCheckpoint: LiveBrowserCheckpoint | null;
-  /** ROUND-67 (R67/D): the screenshots captured DURING this open turn — one
-   * entry per `{type:"screenshot"}` SSE frame (computer-use screenshot /
-   * zoom / get_app_state, browser_control screenshot). Newest LAST, capped
-   * at 8; the chat renders the live THUMBNAIL strip (each tile lazy-fetches
-   * GET /computer-use/frames/:frameId/raster). The rasters are EPHEMERAL —
-   * nothing here persists (the folded turn owns no screenshot history by
-   * design) and old slices written before the field may lack it → read with
-   * `?? []`. */
-  screenshots?: LiveScreenshot[];
-}
-
-/** ROUND-67 (R67/D): one captured screenshot on the live turn (the strip's
- * data — the PNG bytes themselves live server-side in the raster registry
- * and are fetched per tile, never in the store). */
-export interface LiveScreenshot {
-  frameId: string;
-  tool: string;
-  ts: number;
+  // ROUND-68 (R68-A, owner: "The screenshots were supposed to be shown
+  // properly when they were actually taken, not at the bottom in a
+  // dedicated section. When the screenshots were taken they should be shown
+  // at that specific time."): the R67-D `screenshots?: LiveScreenshot[]`
+  // sidecar array (the strip's feed) is GONE — a capture is now a
+  // `{type:"screenshot"}` WorkingEntry pushed onto `working` at frame
+  // arrival (see the per-event handler below), so the inline row lands at
+  // its capture moment interleaved with the tool rows. The WorkingEntry
+  // itself is the record now; NO cap on entries (the server-side raster
+  // registry is a 12-LRU with a 10-minute TTL — expired tiles render the
+  // honest "expired" placeholder, so a long turn's early rows degrade
+  // honestly instead of silently vanishing; cap-free is correct).
 }
 
 /** ROUND-66 (R66, C1): the live debug-analyst report state. */
@@ -822,11 +816,10 @@ export const useStreamStore = create<StreamStore>((set, get) => ({
         stoppedByUser: false,
         streamingToolInputs: [],
         // ROUND-66: fresh turn → no debug analyst, no open checkpoint.
+        // (ROUND-68 R68-A: no screenshot reset needed either — captures are
+        // WorkingEntry rows inside `working: []` above, reset with it.)
         debugReport: null,
         browserCheckpoint: null,
-        // ROUND-67 (R67/D): fresh turn → no screenshots yet (the strip's
-        // entries arrive per {type:"screenshot"} frame below).
-        screenshots: [],
       },
       streamBusy: true,
       sendError: null,
@@ -1160,17 +1153,29 @@ function handleStreamEvent(
   if (!cur || cur.liveTurn === null) return;
   const liveTurn = cur.liveTurn;
 
-  // ── ROUND-67 (R67/D): the screenshot THUMBNAIL strip feed ─────────────────
+  // ── ROUND-68 (R68-A): the INLINE screenshot feed ───────────────────────
   // A capture succeeded mid-turn (computer-use or the browser screenshot
   // action) and the raster is fetchable server-side for the next 10 minutes.
-  // Appended to the OPEN liveTurn (rasters belong to the turn that captured
-  // them — nothing persists into the folded log), newest LAST, capped at 8
-  // (the strip shows the turn's recent captures, not an archive; the
-  // server-side registry caps at 12 anyway).
+  // The owner: "The screenshots were supposed to be shown properly when they
+  // were actually taken, not at the bottom in a dedicated section. When the
+  // screenshots were taken they should be shown at that specific time." —
+  // so the frame becomes a `{type:"screenshot"}` WorkingEntry APPENDED to
+  // the open liveTurn's working array (the R67-D strip + its cap-8
+  // `liveTurn.screenshots` array is gone). The SSE sideband fires DURING
+  // tool execution, i.e. AFTER the in-flight tool row landed → the entry
+  // sits right beneath it = exactly the capture moment, rendered inline by
+  // WorkingSection. Turn-scoped (rasters belong to the turn that captured
+  // them — nothing persists into the folded log), NO cap (see the LiveTurn
+  // field note: the 12-LRU/10-min server registry is the real limit).
   if (event.type === "screenshot") {
-    const next = [...(liveTurn.screenshots ?? []), { frameId: event.frameId, tool: event.tool, ts: Date.now() }];
     patchSession(sessionId, {
-      liveTurn: { ...liveTurn, screenshots: next.length > 8 ? next.slice(next.length - 8) : next },
+      liveTurn: {
+        ...liveTurn,
+        working: [
+          ...liveTurn.working,
+          { type: "screenshot", frameId: event.frameId, tool: event.tool, ts: new Date().toISOString() },
+        ],
+      },
     });
     return;
   }

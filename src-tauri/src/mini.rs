@@ -24,6 +24,21 @@
 //! the session ending (`session_stop` frame) → `close_computer_mini` after a
 //! grace period. Both commands are idempotent (open focuses an existing
 //! window, close is a no-op when absent).
+//!
+//! ROUND-68 (R68-B): the monitor is now INVISIBLE TO CAPTURE. The owner's
+//! directive — "the 'agent is using your computer' should not be shown
+//! because in the screenshot 'agent is using your computer' was being shown
+//! and it was being captured and such… It will be an overlay kind of thing.
+//! It will not be detected by our agent and it will also not be shown in the
+//! screenshots which it takes and such" — is delivered by
+//! `SetWindowDisplayAffinity(hwnd, WDA_EXCLUDEFROMCAPTURE)` on the window:
+//! the bar stays fully rendered on the owner's PHYSICAL display yet drops
+//! out of every screen capture layered over the desktop (GDI
+//! CopyFromScreen/BitBlt — exactly the agent-core captureDisplay path —
+//! plus Windows.Graphics.Capture, OBS, screen share), so agent screenshots
+//! show what is BEHIND the bar and the vision model never reads the
+//! indicator text it used to "detect". See `exclude_from_capture` for the
+//! honest pre-Windows-10-2004 caveat and the re-apply-on-reopen reasoning.
 
 use tauri::{AppHandle, Manager, WebviewUrl, WebviewWindowBuilder};
 
@@ -102,6 +117,108 @@ fn mini_initial_position(app: &AppHandle) -> (f64, f64) {
     )
 }
 
+// ── ROUND-68 (R68-B): capture exclusion — the overlay the agent can't see ──
+
+/// `WDA_EXCLUDEFROMCAPTURE` — the display-affinity value (0x11, Windows 10
+/// 2004+) that keeps a window fully rendered on the physical display while
+/// making it invisible to every screen-capture API. Deliberately UNGATED
+/// (not `#[cfg(windows)]`) so the constant-pinning test below runs on every
+/// platform that runs `cargo test`; on non-Windows builds the only would-be
+/// consumer (the FFI call site) is cfg-stripped, and the `cfg_attr` keeps
+/// those compiles warning-clean instead of dead-code-flagging the constant.
+#[cfg_attr(not(windows), allow(dead_code))]
+const WDA_EXCLUDEFROMCAPTURE: u32 = 0x11;
+
+// `SetWindowDisplayAffinity` — raw FFI, ABI-faithful to winuser.h's
+// `BOOL SetWindowDisplayAffinity(HWND hWnd, DWORD dwAffinity)`: HWND is
+// pointer-sized (`isize`), DWORD is `u32`, BOOL is `i32`, calling
+// convention `"system"` (stdcall on i686, C on x86_64). Exported by
+// user32.dll (present since Windows 7 — the WDA_EXCLUDEFROMCAPTURE VALUE is
+// what is 2004+).
+//
+// WHY RAW FFI and not windows-sys: the project's windows-sys dependency
+// (R55) carries only the `Win32_Foundation` + `Win32_Security_Credentials`
+// feature gates (CredReadW/CredWriteW), while this function lives behind
+// `Win32_UI_WindowsAndMessaging`; the `windows` crate (0.61) in the lock
+// file is TRANSITIVE (tauri's), not ours to import. One two-argument call
+// does not justify either dependency-graph change — declare it by hand.
+#[cfg(windows)]
+#[link(name = "user32")]
+extern "system" {
+    fn SetWindowDisplayAffinity(hwnd: isize, dw_affinity: u32) -> i32;
+}
+
+/// ROUND-68 (R68-B) — mark the mini monitor window `WDA_EXCLUDEFROMCAPTURE`,
+/// the R64-b/R66 bar's missing second half. Windows-only.
+///
+/// THE OWNER'S DIRECTIVE (verbatim): "the 'agent is using your computer'
+/// should not be shown because in the screenshot 'agent is using your
+/// computer' was being shown and it was being captured and such. This is
+/// something which needs to be handled properly. It will be an overlay kind
+/// of thing. It will not be detected by our agent and it will also not be
+/// shown in the screenshots which it takes and such."
+///
+/// The bar did the FIRST half of the monitor's job — always on top, STOP one
+/// click away — while sabotaging the agent underneath it: every full-display
+/// GDI capture (the agent-core captureDisplay path, CopyFromScreen of the
+/// whole desktop) had the 460×56 bar burned into its top-center, occluding
+/// the very UI the agent was driving AND handing the vision model the
+/// indicator text to "detect" (the R68-0 root-cause list's "OVERLAY
+/// CAPTURED" line — the agent literally read its own overlay).
+///
+/// `WDA_EXCLUDEFROMCAPTURE` (Windows 10 2004+) kills both problems at the OS
+/// level in one call: the window remains FULLY visible to the owner on the
+/// physical display but is excluded from EVERY capture API layered over the
+/// desktop — GDI CopyFromScreen/BitBlt (ours), Windows.Graphics.Capture,
+/// PrintWindow, OBS, screen share. Captures show what is BEHIND the bar;
+/// vision never "detects" the indicator. (Honest corollary of the semantics:
+/// the OWNER's own recordings/screen-shares of a session won't show the bar
+/// either — the exclusion is global, not agent-specific. That is exactly the
+/// "overlay kind of thing" the owner asked for.)
+///
+/// HONEST failure mode — best-effort, NEVER fatal: on hosts older than
+/// Windows 10 2004 the affinity value is invalid and the BOOL returns 0 —
+/// the monitor still opens, still floats, still stops sessions; it just ALSO
+/// appears in captures there, exactly as it did before this round. Same for
+/// a `hwnd()` that can't resolve (a webview still mid-creation). mini.rs has
+/// no log channel, so the failure is silent BY DESIGN; the re-open path's
+/// re-application is the self-heal. The command never errors, never panics.
+///
+/// WHY RE-APPLICATION ON RE-OPEN IS SAFE (and wanted): display affinity is
+/// per-window state and the call is idempotent (same value → same state) at
+/// the cost of one user32 syscall, so `open_computer_mini` asserts it on
+/// EVERY burst — if a Windows update, a WebView2 child-window recreation, or
+/// anything else ever drops the affinity on a LIVE monitor window, the next
+/// burst re-arms it. Cheap insurance against a regression nobody would
+/// otherwise notice until the owner's next screenshot.
+///
+/// Windows-only (`#[cfg]`): the macOS/Linux computer backends are separate
+/// agent-core concerns with no capture-exclusion need in this app — on
+/// those hosts the function and its two call sites simply do not exist.
+///
+/// Threading: `WebviewWindow::hwnd()` round-trips the event loop for the raw
+/// handle — safe from this async command's tokio worker thread (the
+/// `mini_initial_position` / `current_monitor` discipline: the deadlock only
+/// exists when the MAIN thread is the one waiting). The affinity call itself
+/// is a plain user32 leaf call, no re-entrancy.
+#[cfg(windows)]
+fn exclude_from_capture(app: &AppHandle, label: &str) {
+    if let Some(window) = app.get_webview_window(label) {
+        if let Ok(hwnd) = window.hwnd() {
+            // SAFETY: `hwnd` is tauri's own raw handle for a live window
+            // (HWND whose `.0` is pointer-sized, cast to `isize` per the
+            // extern's ABI-faithful signature); the affinity is a plain
+            // `u32`. SetWindowDisplayAffinity is a leaf user32 call — no
+            // callbacks, no re-entrancy — and the returned BOOL is
+            // deliberately discarded: pre-2004 hosts treat 0x11 as invalid
+            // and fail the call, which is non-fatal by design (see the
+            // honesty note above — the monitor still works there).
+            let _ =
+                unsafe { SetWindowDisplayAffinity(hwnd.0 as isize, WDA_EXCLUDEFROMCAPTURE) };
+        }
+    }
+}
+
 /// `open_computer_mini()` — open (or focus) the always-on-top floating
 /// monitor window. Called by the main app the moment live computer-use
 /// activity starts (the monitor store's `liveActivity` edge), so the owner
@@ -124,6 +241,12 @@ pub async fn open_computer_mini(app: AppHandle) -> Result<(), String> {
     // invokes this once per activity burst; a second burst while the window
     // is still up must not stack a duplicate).
     if let Some(existing) = app.get_webview_window(MINI_WINDOW_LABEL) {
+        // ROUND-68 (R68-B): re-assert capture-exclusion BEFORE focusing —
+        // idempotent, one syscall, self-heals an affinity that a Windows
+        // update or WebView2 recreation could have dropped on the live
+        // monitor (see `exclude_from_capture`).
+        #[cfg(windows)]
+        exclude_from_capture(&app, MINI_WINDOW_LABEL);
         let _ = existing.set_focus();
         return Ok(());
     }
@@ -155,6 +278,14 @@ pub async fn open_computer_mini(app: AppHandle) -> Result<(), String> {
         .build()
         .map_err(|e| format!("WebviewWindowBuilder.build failed: {e}"))?;
 
+    // ROUND-68 (R68-B): the fresh monitor is fully registered by build(),
+    // so the by-label lookup inside the helper finds it — exclude it from
+    // capture immediately, before the agent's very next screenshot can
+    // frame the bar. Pre-2004 hosts: the call fails silently, documented
+    // (the monitor still opens — non-fatal by design).
+    #[cfg(windows)]
+    exclude_from_capture(&app, MINI_WINDOW_LABEL);
+
     Ok(())
 }
 
@@ -179,7 +310,10 @@ pub async fn close_computer_mini(app: AppHandle) -> Result<(), String> {
 // + run under `cargo test`.
 #[cfg(test)]
 mod tests {
-    use super::{mini_position_for_work_area, MINI_DEFAULT_H, MINI_DEFAULT_W, MINI_MARGIN};
+    use super::{
+        mini_position_for_work_area, MINI_DEFAULT_H, MINI_DEFAULT_W, MINI_MARGIN,
+        WDA_EXCLUDEFROMCAPTURE,
+    };
 
     /// A normal desktop work area anchors the bar at its TOP-CENTER,
     /// MINI_MARGIN in from the top edge (ROUND-66: the owner's directive —
@@ -196,6 +330,18 @@ mod tests {
     fn mini_position_small_work_area_still_top_center() {
         let (x, y) = mini_position_for_work_area(1280.0, 660.0);
         assert_eq!((x, y), ((1280.0 - MINI_DEFAULT_W) / 2.0, MINI_MARGIN));
+    }
+
+    /// ROUND-68 (R68-B): the affinity is a magic number handed to raw FFI —
+    /// pin it so a silent typo can never change the monitor's capture
+    /// behavior (0x11 = WDA_EXCLUDEFROMCAPTURE, winuser.h; its dangerous
+    /// neighbor 0x1 = WDA_MONITOR would paint the bar BLACK into captures
+    /// instead of showing what's behind it — and 0x0 is no exclusion at
+    /// all). Runs on every platform (the const is deliberately ungated);
+    /// cargo test is the only consumer on non-Windows builds.
+    #[test]
+    fn wda_exclude_from_capture_constant_is_pinned() {
+        assert_eq!(WDA_EXCLUDEFROMCAPTURE, 0x11);
     }
 
     /// Degenerate monitor data (NaN / zero / negative / smaller than the

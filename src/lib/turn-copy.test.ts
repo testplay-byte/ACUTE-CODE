@@ -173,6 +173,20 @@ describe("buildFullTurnText (ROUND-67 R67-B)", () => {
     expect(out).toContain("result: pending (call in flight)");
   });
 
+  it("ROUND-68 (R68-A): a live screenshot marker renders as the honest one-line fact — the bytes are ephemeral, and it never counts as a tool", () => {
+    const shot: WorkingEntry = { type: "screenshot", frameId: "f-1", tool: "zoom", ts: "2026-09-06T10:00:04Z" };
+    const out = buildFullTurnText({
+      working: [tool(7, "screenshot", "full display", true, "captured"), shot],
+      finalText: "Done.",
+    });
+    // The marker line rides AFTER the tool block that captured it (the
+    // capture moment) and names the capturing tool.
+    expect(out).toContain("[screenshot captured by zoom]");
+    expect(out.indexOf("--- TOOL 1: screenshot ---")).toBeLessThan(out.indexOf("[screenshot captured by zoom]"));
+    // A capture is NOT a tool call: only ONE tool block exists.
+    expect(out).not.toContain("--- TOOL 2:");
+  });
+
   it("huge turns are capped at ~100KB, tail-kept, with an honest truncation marker", () => {
     const huge = "x".repeat(150_000);
     const out = buildFullTurnText({ working: [thinking(huge)], finalText: "The verdict.", model: "m" });

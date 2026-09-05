@@ -12,7 +12,7 @@ import { randomUUID } from "node:crypto";
 import { afterAll, beforeEach, describe, expect, it } from "vitest";
 import { openDatabase, type SqliteDatabase } from "../src/storage/db";
 import { ProviderKeyring } from "../src/providers/registry";
-import { describeRaster, resolveVisionKey } from "../src/computer/vision";
+import { describeRaster, resolveVisionKey, setVisionRetryDelaysForTest, resetVisionRetryDelaysForTest, VISION_RETRY_DELAYS_MS } from "../src/computer/vision";
 import { listModels, upsertModel } from "../src/storage/models";
 import type { VisionFetch } from "../src/computer/vision";
 
@@ -114,16 +114,27 @@ describe("ROUND-61 (R61): describeRaster — chat-completions wire format", () =
     expect("error" in result && result.code).toBe("vision_no_provider");
   });
 
-  it("HTTP failure → vision_request_failed with the status + body excerpt", async () => {
-    const fetch = makeFetch(JSON.stringify({ error: "rate limited" }), 429);
-    const keyring = new ProviderKeyring({ ACUTE_PROVIDER_OPENROUTER_VISION: "k" });
-    const result = await describeRaster(
-      { db, keyring, fetchImpl: fetch },
-      { mode: "separate", providerId: "openrouter", modelId: "m" },
-      { imageBase64: "aa==", instruction: "x" },
-    );
-    expect("error" in result && result.code).toBe("vision_request_failed");
-    if ("error" in result) expect(result.error).toContain("429");
+  it("HTTP failure → vision_request_failed with the status + body excerpt (ALL attempts 429 — the retry exhausts)", async () => {
+    // R68-C (C6): 429 is RETRYABLE now — the single-response fetch here
+    // answers 429 for every attempt, so the relay burns its two retries
+    // and STILL fails honestly. The delays are shrunk via the test hook so
+    // this pins the semantics without sleeping 4.5s.
+    setVisionRetryDelaysForTest([0, 0]);
+    try {
+      const fetch = makeFetch(JSON.stringify({ error: "rate limited" }), 429);
+      const keyring = new ProviderKeyring({ ACUTE_PROVIDER_OPENROUTER_VISION: "k" });
+      const result = await describeRaster(
+        { db, keyring, fetchImpl: fetch },
+        { mode: "separate", providerId: "openrouter", modelId: "m" },
+        { imageBase64: "aa==", instruction: "x" },
+      );
+      expect("error" in result && result.code).toBe("vision_request_failed");
+      if ("error" in result) expect(result.error).toContain("429");
+      // Three POSTs: the attempt + the two retries.
+      expect(fetch.calls).toHaveLength(3);
+    } finally {
+      resetVisionRetryDelaysForTest();
+    }
   });
 
   it("empty content → vision_request_failed (never an empty success)", async () => {
@@ -178,5 +189,108 @@ describe("ROUND-61 (R61): main-mode gating — supports_vision on the model row"
     // "google/gemini-2.5-flash" is in the catalog with supportsVision.
     upsertModel(db, "openrouter", { modelId: "google/gemini-2.5-flash" });
     expect(listModels(db, "openrouter").find((m) => m.modelId === "google/gemini-2.5-flash")?.supportsVision).toBe(true);
+  });
+});
+
+/* ── R68-C (C6): the 429/5xx retry — the owner's trace had "Vision ──────────
+ * rate-limited (429)" killing observations MID-FLOW. One 429 no longer
+ * ends the observation: up to 2 retries with backoff (the delays are
+ * shrunk via the test hook — no sleeping in tests). */
+
+describe("ROUND-68 (R68-C): describeRaster retries 429/5xx (terminal 4xx fails fast)", () => {
+  /** Answers the first `failTimes` calls with the status, then succeeds. */
+  function flakyFetch(failStatus: number, failTimes: number, successBody: string): VisionFetch & { callCount: () => number } {
+    let calls = 0;
+    const fetchImpl: VisionFetch = async (_url, _init) => {
+      calls += 1;
+      if (calls <= failTimes) {
+        return new Response(JSON.stringify({ error: "rate limited" }), { status: failStatus, statusText: "ERR" });
+      }
+      return new Response(successBody, { status: 200, statusText: "OK" });
+    };
+    return Object.assign(fetchImpl, { callCount: () => calls });
+  }
+
+  const COMPLETION = JSON.stringify({ choices: [{ message: { content: "A save dialog with a File name field" } }] });
+
+  it("429 ONCE then success → the retry RECOVERS the observation (the owner's live failure shape)", async () => {
+    setVisionRetryDelaysForTest([0, 0]);
+    try {
+      const fetch = flakyFetch(429, 1, COMPLETION);
+      const keyring = new ProviderKeyring({ ACUTE_PROVIDER_OPENROUTER_VISION: "k" });
+      const result = await describeRaster(
+        { db, keyring, fetchImpl: fetch },
+        { mode: "separate", providerId: "openrouter", modelId: "m" },
+        { imageBase64: "aa==", instruction: "x" },
+      );
+      expect("error" in result).toBe(false);
+      if (!("error" in result)) expect(result.text).toContain("File name field");
+      expect(fetch.callCount()).toBe(2); // the attempt + ONE retry
+    } finally {
+      resetVisionRetryDelaysForTest();
+    }
+  });
+
+  it("5xx is retryable too (503 overload then success)", async () => {
+    setVisionRetryDelaysForTest([0, 0]);
+    try {
+      const fetch = flakyFetch(503, 2, COMPLETION); // both retries needed
+      const keyring = new ProviderKeyring({ ACUTE_PROVIDER_OPENROUTER_VISION: "k" });
+      const result = await describeRaster(
+        { db, keyring, fetchImpl: fetch },
+        { mode: "separate", providerId: "openrouter", modelId: "m" },
+        { imageBase64: "aa==", instruction: "x" },
+      );
+      expect("error" in result).toBe(false);
+      expect(fetch.callCount()).toBe(3); // attempt + two retries
+    } finally {
+      resetVisionRetryDelaysForTest();
+    }
+  });
+
+  it("4xx OTHER than 429 is TERMINAL — one attempt, no retry (auth/shape errors fail fast)", async () => {
+    setVisionRetryDelaysForTest([0, 0]);
+    try {
+      const fetch = flakyFetch(401, 5, COMPLETION);
+      const keyring = new ProviderKeyring({ ACUTE_PROVIDER_OPENROUTER_VISION: "k" });
+      const result = await describeRaster(
+        { db, keyring, fetchImpl: fetch },
+        { mode: "separate", providerId: "openrouter", modelId: "m" },
+        { imageBase64: "aa==", instruction: "x" },
+      );
+      expect("error" in result && result.code).toBe("vision_request_failed");
+      if ("error" in result) expect(result.error).toContain("401");
+      expect(fetch.callCount()).toBe(1); // NEVER retried
+    } finally {
+      resetVisionRetryDelaysForTest();
+    }
+  });
+
+  it("the ANTHROPIC wire format rides the SAME retry loop (both formats share attempt())", async () => {
+    setVisionRetryDelaysForTest([0, 0]);
+    try {
+      const anthropicBody = JSON.stringify({ content: [{ type: "text", text: "the panel is open" }] });
+      const fetch = flakyFetch(529, 1, anthropicBody); // anthropic's overload status, 5xx-class
+      const keyring = new ProviderKeyring({ ACUTE_PROVIDER_ANTHROPIC: "ak" });
+      const result = await describeRaster(
+        { db, keyring, fetchImpl: fetch },
+        { mode: "main", providerId: "anthropic", modelId: "claude-sonnet-4" },
+        { imageBase64: "aGVsbG8=", instruction: "what do you see" },
+      );
+      expect("error" in result).toBe(false);
+      if (!("error" in result)) expect(result.text).toBe("the panel is open");
+      expect(fetch.callCount()).toBe(2);
+    } finally {
+      resetVisionRetryDelaysForTest();
+    }
+  });
+
+  it("VISION_RETRY_DELAYS_MS ships the documented backoff; the hook restores it", () => {
+    expect([...VISION_RETRY_DELAYS_MS]).toEqual([1500, 3000]);
+    setVisionRetryDelaysForTest([1, 2]);
+    resetVisionRetryDelaysForTest();
+    // The reset restores the SHIPPED values (the mutation is copy-on-set —
+    // the exported const itself is never mutated).
+    expect([...VISION_RETRY_DELAYS_MS]).toEqual([1500, 3000]);
   });
 });

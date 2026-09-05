@@ -4,7 +4,8 @@
  * Owns: the snapshot store (state_id → immutable snapshot, keep-last-8,
  * TTL 120 s, CONSUMED after any element write — doc 03 §1), the frame
  * registry (frame_id → capture-time window state, staleness key for
- * coordinate actions, keep-last-8, max age 10 s), held-button ownership,
+ * coordinate actions, keep-last-8, max age 30 s — R68-C: was 10 s, shorter
+ * than the vision roundtrip itself), held-button ownership,
  * the kill switch (enforced, not advisory — doc 08 §2), and the monitor
  * ring (stats + newest-first events for the owner's mini-window directive:
  * "in a mini window it will show the details and their stats while the
@@ -25,7 +26,18 @@ import type {
 const SNAPSHOT_KEEP = 8;
 const SNAPSHOT_TTL_MS = 120_000;
 const FRAME_KEEP = 8;
-export const MAX_FRAME_AGE_MS = 10_000;
+/**
+ * ROUND-68 (R68-C): 10 s → 30 s. The owner's v0.67.0 live trace chained
+ * frame_stale refusals on every zoom-then-click pair: the vision roundtrip
+ * (describeRaster through the separate model) takes 10-25 s by itself, so a
+ * 10 s max-age expired the frame BETWEEN observing and acting — the frame
+ * was already dead the moment the observation finished. 30 s covers the
+ * roundtrip with margin (the debug report's own recommendation #1). The
+ * frame-keep cleanup below still rides MAX_FRAME_AGE_MS*3 = 90 s — frames
+ * refuse as stale at 30 s but stay resolvable (zoom-from-frame, honest
+ * refusal ids) for 90 s, which still makes sense at the new age.
+ */
+export const MAX_FRAME_AGE_MS = 30_000;
 const EVENT_RING_CAP = 200;
 
 interface StoredSnapshot {

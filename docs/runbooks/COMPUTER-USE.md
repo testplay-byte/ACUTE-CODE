@@ -1,11 +1,13 @@
-<!-- last-reviewed: 2026-09-05 round-67 -->
+<!-- last-reviewed: 2026-09-06 round-68 -->
 # COMPUTER USE — the desktop-control system (owner's guide)
 
 **Status:** normative · **Established:** round-61 (owner directive: computer
 use + a separately-configurable vision model; R66 moved the vision model to
 its own section and made the Windows walk big-app-capable; R67 hardened the
 Windows transport, taught the key tool to press keys, and stabilized the
-monitor across thinking gaps) · **Audience:**
+monitor across thinking gaps; R68 overhauled the Windows input path to raw
+SendInput, made the foreground gate self-heal, poked Chromium's web tree
+into existence, and made the monitor invisible to captures) · **Audience:**
 the owner (anyone flipping the switches and watching the monitor) and any
 agent maintaining the system
 
@@ -64,8 +66,12 @@ virtualized coordinates). Notes:
   aborted run, and a child that exits early EPIPE-swallows the stdin write
   (an EMPTY script ran → exit 0, no stdout) — together those were the
   owner's "the PowerShell session died before emitting JSON" while
-  tasklist worked fine. The biggest capsule (~8 K chars → ~22 K base64)
-  stays under the 32 767-character CreateProcess ceiling.
+  tasklist worked fine. **R68 re-measured:** the preamble is now 6,682
+  chars and the biggest FIXED capsule (preamble + buildSnapshot)
+  composes ~30,985 of the 32,767-character CreateProcess command-line
+  ceiling — under it with ~1.8K headroom (past comfort; the model-payload
+  capsules are runtime-guarded, see the ARGV ceiling guard in the key
+  section below).
 - **R67: the Add-Type compile is guarded.** The one U32 helper class is
   wrapped in try/catch setting `$script:U32_OK`; when the (flaky, cold-csc)
   compile fails, `list_apps` falls back to Get-Process MainWindowTitle
@@ -75,12 +81,15 @@ virtualized coordinates). Notes:
   in the probe report; a third probe next to the permission checks).
 - Activation is the `SetForegroundWindow` + `AttachThreadInput` sequence
   with a ≤1.5 s **postcondition check** — the receipt's `active` field
-  reports the truth, not the API's return value.
-- Raw input is `SetCursorPos` + `mouse_event` (user32); typing is `SendKeys`
-  after focus verification (see the key table below — R67 made it press
-  real keys, not spell their names). Raw input on Windows requires the
-  target app frontmost — the engine refuses with `frontmost_pid_mismatch`
-  otherwise.
+  reports the truth, not the API's return value. **R68: the ladder
+  escalates** — see the activate section below.
+- Raw input is `SetCursorPos` + `mouse_event` + **SendInput** (user32
+  P/Invoke — R68-C: keyboard input is SendInput ONLY, never Windows.Forms);
+  typing rides `SendText` (KEYEVENTF_UNICODE per character — see the key
+  section below). **R68: the raw-input tools now ACTIVATE their target
+  automatically and retry once** — a `frontmost_pid_mismatch` refusal
+  means the auto-activation itself failed (see the foreground self-heal
+  section below).
 - **R67: a helper-process pid answers honestly.** A pid that is running
   but owns no accessible top-level window (e.g. a WebView2 renderer such
   as `msedgewebview2`) refuses with "target the HOST application instead
@@ -215,7 +224,17 @@ A1/B1 report) reshaped it:
   less tall and make it centered at the top, not on the top right"). The
   one compact row: pulsing status dot + "Agent is using your computer" +
   elapsed timer + the latest activity + the STOP kill switch. Drag it by
-  its header.
+  its header. **R68: the bar is INVISIBLE TO CAPTURES** —
+  `SetWindowDisplayAffinity(WDA_EXCLUDEFROMCAPTURE)` on the window: fully
+  rendered on YOUR physical display, dropped from every screen-capture
+  API (the agent's own GDI captures — it was being "detected" and
+  occluding the UI it drove — plus Windows.Graphics.Capture, OBS, screen
+  share). Corollary (the semantics, intended): your own recordings and
+  screen-shares of a session will NOT show the bar either — the exclusion
+  is global, not agent-specific. Pre-Windows-10-2004 hosts fall back
+  honestly (the call fails non-fatally; the bar appears in captures
+  there exactly as before). Re-asserted on every re-open (idempotent,
+  self-healing).
 - **Web mode**: the same minimal bar as an in-app pill at the top-center
   of the window (auto-shown/hidden the same way).
 - **THE LIVE SIGNAL (R66 rework): real control events only, with a 6-second
@@ -264,40 +283,163 @@ A1/B1 report) reshaped it:
 - **Only the owner configures** — no computer-use setting is model-writable;
   all writes go through the authenticated settings routes.
 
-## The key tool presses keys (R67 — the SendKeys table + the Tab-walk)
+## The key tool presses keys (R67 named them, R68 drives them through SendInput)
 
-The owner's live failure: `key "tab"` typed the literal letters t-a-b —
-the Windows backend special-cased only `{ENTER}` and sent every other key
-token as TEXT; chords were never composed. R67 fixes the whole surface:
+The owner's R66 live failure: `key "tab"` typed the literal letters t-a-b
+— the backend special-cased only `{ENTER}` and sent every other key token
+as TEXT. R67 fixed the SEMANTICS with a SendKeys chord table; the owner's
+0.67.0 run then killed the ENGINE itself: every input call died
+`capability_fail_closed` because `[System.Windows.Forms.SendKeys]` was
+TypeNotFound — the preamble loaded Windows.Forms via the DEPRECATED
+`[System.Reflection.Assembly]::LoadWithPartialName`, which silently fails
+on modern .NET (while the captures' own `Add-Type -AssemblyName
+System.Windows.Forms` worked live — screenshots succeeded all round; the
+live trace proved LoadWithPartialName dead where Add-Type works).
 
-- **The key-name table** (`composeSendKeysChord` in
-  `agent-core/src/computer/backends/windows.ts`): enter/return, tab,
-  esc/escape, backspace, delete/del, space, up/down/left/right (+ the
-  arrow* aliases), home, end, pageup/pgup, pagedown/pgdn, insert, help,
-  and f1..f12 — each maps to its SendKeys literal (`{TAB}`, `{ENTER}`…).
-- **Chords**: LEADING modifier tokens compose the SendKeys prefixes —
-  ctrl/control → `^`, shift → `+`, alt/option → `%` — with exactly one key
-  token left. `key "tab"` sends `{TAB}`; `ctrl+a` sends `^a`;
-  `ctrl+shift+t` sends `^+t`. A single printable character is
-  brace-escaped (`{+}` `{%}` `{^}` `{~}` `{(` `{{}`) and passes through;
-  `'++'` is the plus key.
-- **Honest refusals**: the Windows/Meta key (SendKeys has no such
-  modifier) and unknown key names refuse with the full supported list
-  BEFORE any capsule is spawned — nothing is typed on a guess.
-- **The focused readback**: every successful `key` receipt carries
-  `focused: "<element name>"` — the FOREGROUND app's focused control,
-  best-effort (a null/empty/throwing readback omits the field, never
-  fails the key).
-- **The Tab-walk loop** (taught in the system prompt AND the built-in
-  skill): when `find_elements` comes back empty or screenshots cannot
-  identify the control, press `key "tab"` repeatedly — each receipt
-  names the FOCUSED element, and Tab walks the focusable controls one by
-  one. Combine with `find_elements` (search by name) in big apps.
+R68's fix is structural — **Windows.Forms is a dead dependency for input**:
+the `LoadWithPartialName` line is REMOVED, and every input path rides raw
+**SendInput** P/Invoke in the SAME single-Add-Type U32 class:
+
+- **Typing** (`typeText`): `SendText` — one KEYEVENTF_UNICODE down+up pair
+  per character. THE PROPERTY THE OWNER CARES ABOUT: text is NEVER
+  escaped — '+', '%', '~', '{', '}' are just characters. SendKeys needed
+  a brace-escape set and an ENTER special case; KEYEVENTF_UNICODE has no
+  syntax at all, so the whole escaping class of bugs is dead. Newlines map
+  to real VK_RETURN presses (`\r` is skipped so a CRLF pair types ONE
+  Enter).
+- **Keys/chords** (`rawKey`): `composeVkChord` maps the key tokens to
+  real Virtual-Key codes — the full R67 vocabulary (enter/return, tab,
+  esc/escape, backspace, delete/del, insert, help, space, arrows + the
+  arrow* aliases, home, end, pageup/pgup, pagedown/pgdn, f1..f12), single
+  letters a-z, digits 0-9, and the OEM punctuation (+ - , . / ; ') —
+  `[U32]::Chord` sends mods down → key → key up → mods up REVERSED in one
+  SendInput batch. `key "tab"` is VK 0x09; `ctrl+a` is VK_CONTROL + 'A'.
+- **THE WINDOWS/META KEY WORKS NOW** (win/meta/super/cmd/command → LWIN
+  0x5B) — SendInput synthesizes it where SendKeys had no such modifier
+  (R67 refused it honestly; R68 plays it), including as a click/drag
+  modifier via `ModsDown`/`ModsUp`.
+- **Everything else rides the same machinery**: the select gestures
+  (`TapKey(HOME)` + shift+END for whole-text selection), horizontal
+  scroll (arrow-key taps), and the click/drag modifier holds.
+- **Honest refusals**: an unknown key name or an unmappable single
+  character refuses with the full supported list + the "type it with the
+  type tool instead" redirect BEFORE any capsule is spawned — nothing is
+  typed on a guess.
+- **The ARGV ceiling guard (R68, new)**: the three capsules that embed
+  MODEL-SUPPLIED text (`type` app-scoped, `set_value`,
+  `write_clipboard`) are measured before spawning — a payload whose
+  composed `-EncodedCommand` would cross 31,875 base64 chars (the
+  32,767-char CreateProcess command-line ceiling minus the fixed argv
+  minus slack) refuses with a self-teaching error ("split it across
+  multiple type calls") instead of dying at spawn. The old sizing comment
+  claimed the typing path "stays far below" the ceiling because its
+  timeout math caps text at ~1,400 chars — that was FALSE (the timeout
+  clamp never capped the text); the guard is the fix. Measured honesty:
+  the preamble is 6,682 chars and the biggest FIXED capsule (preamble +
+  buildSnapshot) composes ~30,985 of the 32,767 ceiling — ~1.8K
+  headroom, past comfort; further C# growth must re-measure, and the
+  documented next step is a temp .ps1 file.
+- **The focused readback** (R67, unchanged): every successful `key`
+  receipt carries `focused: "<element name>"` — best-effort (a
+  null/empty/throwing readback omits the field, never fails the key).
+- **The Tab-walk loop** (taught in the prompt + the skill): when
+  `find_elements` comes back empty or screenshots cannot identify the
+  control, press `key "tab"` repeatedly — each receipt names the FOCUSED
+  element. Combine with `find_elements` (search by name) in big apps.
 
 On Linux nothing changed semantically: the same tokens join into one
   xdotool chord string as before (ordinary chords are byte-identical; a
-  literal `'++'` now reaches the backend as the plus key instead of a
-  degenerate empty chord).
+  literal `'++'` reaches the backend as the plus key, mapped to
+  VK_OEM_PLUS on Windows).
+
+## The foreground gate self-heals (R68 — what the model sees now)
+
+The owner's 0.67.0 trace: `open_application(activate=true)` verified
+INACTIVE (Edge steals/holds the foreground through its own focus churn),
+and every raw-input tool then REFUSED `frontmost_pid_mismatch` — the
+recovery the refusal text preached ("activate, then retry once") was left
+to the model to do by hand, mid-flow, repeatedly.
+
+**The R68 contract:** every raw-input call (type, key per repeat,
+left/right/double/triple/middle click, scroll, drag, mouse-down,
+mouse-move, hold-key down) rides `withForegroundRetry` —
+
+1. The foreground rule runs FIRST: if the target is not frontmost, the
+   engine ACTIVATES it (the escalated ladder below) and re-reads the
+   frontmost pid itself — the activation is trusted only when the OS
+   confirms it (activate's own `{active}` receipt AND the independent
+   frontmost read).
+2. The action runs; if the backend's own script-level check raced the
+   focus churn (FRONTMOST_MISMATCH mid-script), the engine activates and
+   retries ONCE.
+3. Only when the ACTIVATION ITSELF fails does the honest refusal remain —
+   and its text now says so: "the automatic re-activation of pid N was
+   already attempted and failed" + "check the app is still running
+   (list_apps) and still owns the window (list_windows), re-observe with
+   get_app_state, then retry ONCE — or report the focus conflict to the
+   user."
+
+Non-mismatch errors NEVER retry (one retry, mismatch-class only — no
+retry storms). Consent note (documented in dispatch.ts): the model
+already declared intent on THIS app and the tool-level consent gate
+already ran on exactly that action — the auto-activation completes the
+SAME consented intent; the only visible difference is the window coming
+forward, which the open_application(activate:true) the old refusal text
+told the model to call would have done anyway.
+
+**The activate escalation ladder (R68):** the AttachThreadInput sequence
++ 1.5 s verify (R67) now ESCALATES when it fails — the classic
+bulletproof foreground steal: `SW_MINIMIZE` → 150 ms → `SW_RESTORE` → a
+second 1.5 s re-verify → the honest ACTIVE/INACTIVE receipt. The restore
+path re-enters through the foreground grant the shell gives a restoring
+window, which SetForegroundWindow alone cannot take from a process the OS
+considers "not foreground eligible". TRADEOFF (accepted, documented at
+source): the target window VISIBLY FLICKERS (one-frame minimize +
+restore) — only when the polite sequence failed, and only once.
+
+## Edge/Chromium pages are searchable now (R68 — the Chromium poke)
+
+Why the owner's Edge trees came back SPARSE (only the window element):
+Chromium builds its web accessibility tree ONLY after an assistive
+technology pokes the render widget — `WM_GETOBJECT` to the
+`Chrome_RenderWidgetHostHWND` child, exactly what a screen reader does on
+connect. The tree EXISTS; the walk never asked for it.
+
+Every Windows snapshot now pokes BEFORE the UIA walk: `[U32]::
+PokeChromium` enumerates the target window's children, sends
+`WM_GETOBJECT` (OBJID_CLIENT) to every render-widget child, waits 400 ms
+for the tree to start building, then walks — and if the poke fired but
+the walk still produced only the root window, a sparse-retry re-walks
+ONCE (600 ms later, the first walk's output discarded). `find_elements`
+routes through the same buildSnapshot, so ONE poke site covers
+`get_app_state` AND `find_elements`.
+
+**What this changes for Edge workflows**: `find_elements {appRef,
+query:"Wikipedia", kind:"link"}` now returns REAL web elements (links,
+buttons, inputs BY NAME) with directly actionable indexes — element
+targets become the PRIMARY path for browser content and the screenshot
+loop the fallback (the owner: a "coordinate-based system is not proper").
+The prompts, the skill and the tool descriptions teach exactly this.
+
+## Frames stay valid 30 s + the vision relay retries (R68)
+
+- **MAX_FRAME_AGE_MS 10 s → 30 s**: the vision roundtrip (describeRaster
+  through the separate model) takes 10–25 s BY ITSELF — a 10 s max-age
+  expired the frame BETWEEN observing and acting, so every
+  zoom-then-click pair died `frame_stale` (the frame was already dead the
+  moment the observation finished; the debug report's own recommendation
+  #1). 30 s covers the roundtrip with margin; the keep-cleanup still
+  rides ×3 = 90 s (frames refuse as stale at 30 s but stay resolvable
+  for 90 s). TWO DIFFERENT CLOCKS: the 30 s is coordinate freshness; the
+  chat's inline screenshot tiles still expire at the server's 10-minute
+  raster lifetime.
+- **The vision relay retries 429/5xx**: one "Vision rate-limited (429)"
+  used to kill the observation MID-FLOW (the owner's Edge flow stalled on
+  exactly this). describeRaster now shares ONE attempt body across both
+  wire formats (chat-completions + anthropic-messages), retries **429
+  and ≥500 twice** with a 1.5 s + 3 s backoff, and fails fast on every
+  other 4xx (auth/shape errors are terminal — retrying them is
+  pointless).
 
 ## The monitor holds for the whole turn (R67)
 
@@ -388,10 +530,10 @@ timeout is the first knob to raise.
 | `mouse_move` | Hover — raw, coordinate only |
 | `left_mouse_down` | Press-and-hold (pairs with left_mouse_up) |
 | `left_mouse_up` | Release the button held by THIS session (cleanup-release only) |
-| `type` | Type text — element = a11y value write (REPLACES contents); appRef = app-scoped (frontmost on Win/Linux) |
+| `type` | Type text — element = a11y value write (REPLACES contents); appRef = app-scoped (R68: the app is auto-activated + frontmost verified on Win/Linux) |
 | `set_value` | Set a settable element's value directly (the preferred text write) |
 | `select_text` | Select [start, length] or place the caret |
-| `key` | Non-text keys and chords ('return', 'ctrl+a'); repeat 1–100 — R67: real SendKeys keys/chords on Windows, the receipt names the FOCUSED element (the Tab-walk loop) |
+| `key` | Non-text keys and chords ('return', 'ctrl+a', 'win+l'); repeat 1–100 — R68: real SendInput VK keys/chords on Windows (the win key works now), the receipt names the FOCUSED element (the Tab-walk loop) |
 | `hold_key` | Hold a key/chord 0–30 s (never targetless) |
 | `perform_action` | Invoke a NAMED a11y action from the element's advertised list |
 | `request_access` | Read-only readiness probe (permissions + capabilities; never pops dialogs) |
@@ -417,13 +559,13 @@ Every refusal is `{error, message, recovery}` — the codes:
 | `ambiguous_app_ref` | Name matches several apps — scope with pid/bundle_id |
 | `could_not_launch` | Launch failed — verify the EXACT name once; never substitute |
 | `invalid_window_id` | Invented/stale window id — use a real one from list_windows |
-| `frontmost_pid_mismatch` | Raw input but app not frontmost — activate → re-observe → retry ONCE |
+| `frontmost_pid_mismatch` | Raw input but app not frontmost — R68: the engine already auto-activated + retried once; this refusal means the ACTIVATION failed (list_apps/list_windows → re-observe → retry once, or report the conflict) |
 | `foreground_required` | Event path needs focus — repeat activation + fresh observation |
 | `uipi_blocked` | Elevated target (Windows UIPI) — human step; retrying is pointless |
 | `targetless_input_refused` | No target on type/key — scope with element target or appRef |
 | `capability_fail_closed` | Element can't do that action — re-observe detail:full, pick an advertised action |
 | `element_stale` | State token superseded/changed/scope-drifted — fresh `get_app_state` |
-| `frame_stale` | Coordinate raster is stale (>10 s or superseded) — fresh screenshot, resubmit pixels |
+| `frame_stale` | Coordinate raster is stale (>30 s — R68, was 10 s — or superseded) — fresh screenshot, resubmit pixels |
 | `occlusion_owner_mismatch` | Another window covers the point — re-activate the intended app; NEVER touch the covering window |
 | `raster_out_of_bounds` | Pixel outside the latest raster — re-look, never scale |
 | `vision_disabled` | Vision off/unconfigured — configure it or proceed a11y-only |
@@ -443,9 +585,14 @@ and surfaced the R64 bug set (empty app lists, exact-title resolution) —
 now fixed by construction with diagnostics on every empty result; the
 0.66.0 run surfaced the R67 set (the stdin capsule deaths, the dead
 fallback, the key tool typing t-a-b) — also fixed by construction
-(-EncodedCommand argv, the guarded compile, the SendKeys table).** The
-checklist below is how the 0.64.0+R67 fixes get verified. **The owner must
-live-verify on the real machine before relying
+(-EncodedCommand argv, the guarded compile, the chord table); the 0.67.0
+run surfaced the R68 set (the SendKeys engine itself dead on modern .NET,
+the frontmost refusals, the sparse Edge trees, the 10 s frames, the
+vision 429 stalls, the monitor burned into captures) — fixed by
+construction (raw SendInput, the self-healing foreground, the Chromium
+poke, 30 s frames, the vision retry, WDA_EXCLUDEFROMCAPTURE).** The
+checklist below is how the 0.64.0+R67+R68 fixes get verified. **The owner
+must live-verify on the real machine before relying
 on computer use.** Per platform, in order:
 
 1. Flip the master switch ON (Settings → Computer Use) and press
@@ -461,23 +608,38 @@ on computer use.** Per platform, in order:
    `msedgewebview2`) — expect the honest
    "target the HOST application instead" refusal, not "no running
    application matches".
-4. **The key tool (R67)**: ask it to press *"press tab in the X app three
-times and tell me what gets focused"* — expect the receipt's `focused:`
-   field to name a different control after each press (the Tab-walk),
-   and REAL key presses (a text field's caret moves; `key "tab"` never
-   types t-a-b). A chord (`ctrl+a`) selects; `key "enter"` activates.
+4. **The key tool (R67 named them, R68 SendInput)**: ask it to press *"press
+tab in the X app three times and tell me what gets focused"* — expect the
+   receipt's `focused:` field to name a different control after each press
+   (the Tab-walk), and REAL key presses (a text field's caret moves; `key
+   "tab"` never types t-a-b — and with R68 no Windows.Forms dependency can
+   kill the input path). A chord (`ctrl+a`) selects; `key "enter"` activates;
+   `key "win"` now works too (LWIN).
 5. One small **act-mode** action with the approval dialog (e.g. *"click the
    X app's About button"*) — expect the approval prompt, then a receipt and
-   a visible click. Try a refusal path too: a coordinate click with the app
-   in the background should refuse `frontmost_pid_mismatch` (Win/Linux).
+   a visible click. R68 changed the old refusal path: a coordinate click
+   with the app in the background now SELF-HEALS (the engine activates the
+   target — you will SEE the window come forward — and retries once); the
+   `frontmost_pid_mismatch` refusal appears only when the activation
+   itself fails (e.g. the app is gone).
 6. Watch the **floating monitor** appear automatically at the top of your
    screen when the agent starts using the computer (above other apps) —
    and STAY UP while the agent thinks between tool calls (the R67 turn
    hold), disappearing only after the turn ends (the 6-second decay) or
-   STOP. Press **STOP** mid-task — expect every further computer-use call
+   STOP. **R68: take a screenshot (Win+PrintScreen or the Snipping Tool)
+   while the monitor is up — the bar must NOT appear in your capture**
+   (fully visible on the physical display, invisible to every capture
+   API — your own OBS recordings won't show it either, by design). Press
+   **STOP** mid-task — expect every further computer-use call
    to refuse `kill_switch_active`, any held button released, and the
    monitor to disappear a few seconds after the session ends.
-7. If a list comes back EMPTY, read the result's `diagnostics` block
+7. **The Edge flow (R68's acceptance test)**: ask the agent to do a real
+   7-step Edge task (search a page for a link by name, click it, type in
+   a field) — expect `find_elements` to return REAL web elements by name
+   (the Chromium poke), element-target clicks, typing that lands
+   (SendInput), and each screenshot the agent takes to appear INLINE in
+   the chat at the moment it was captured (not pooled at the bottom).
+8. If a list comes back EMPTY, read the result's `diagnostics` block
    (processCount / foregroundPid / enumWindowsCount) — it exists precisely
    so a failure is debuggable from the transcript; an `app_not_found`
    refusal lists the running apps as candidates (and carries `probeNote`
@@ -506,11 +668,13 @@ offline screen) carries the capsule errors.
 
 - [EMBEDDED-BROWSER](EMBEDDED-BROWSER.md) — the sibling surface (the app's
   in-app browser panel; the R65 boundary lines name each other)
-- [ATTACHMENTS](ATTACHMENTS.md) — the live screenshot THUMBNAILS the
-  captures now publish (the ephemeral raster registry + route)
+- [ATTACHMENTS](ATTACHMENTS.md) — the live screenshot RASTERS the captures
+  publish (the ephemeral registry + route that the chat's INLINE capture
+  rows fetch — R68)
 - [EXTENSIBILITY](EXTENSIBILITY.md) — the sibling runbook (plugins, skills,
   MCP servers, the plugins listing route)
-- [TESTING](TESTING.md) — the R61+R66+R67 suites and the verification ladder
+- [TESTING](TESTING.md) — the R61+R66+R67+R68 suites and the verification
+  ladder
 - [MAINTENANCE](MAINTENANCE.md) — where things live in the tree
 - Code map: engine in `agent-core/src/computer/` (types, errors, session,
   audit, dispatch, vision, backends/{interface,linux,windows,macos,index}),
@@ -522,7 +686,8 @@ offline screen) carries the capsule errors.
   `agent-core/src/server.ts` (ROUND-61 section; R67: the frames raster
   route), monitor UI in
   `src/components/ComputerMiniWindow.tsx` + the mini window page
-  `src/mini/MiniApp.tsx` + the OS window `src-tauri/src/mini.rs`, the live
+  `src/mini/MiniApp.tsx` + the OS window `src-tauri/src/mini.rs` (R68: the
+  WDA_EXCLUDEFROMCAPTURE capture exclusion), the live
   signal `src/lib/computer-monitor-store.ts`, settings UI in
   `src/components/settings/ComputerUseTab.tsx` (vision:
   `src/components/settings/ImageAnalysisTab.tsx`).

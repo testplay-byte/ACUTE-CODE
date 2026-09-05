@@ -147,6 +147,36 @@ describe("ROUND-61 (R61): the settings gates", () => {
     const typeTool = tools.find((t) => t.name === "type")!;
     expect(JSON.stringify(typeTool.inputSchema)).toContain("unique substring");
   });
+
+  // R68-C (C7): the anti-screenshot-spam teaching — the owner: "utilizing
+  // the screenshot capturing way too much… it needs to be handled much
+  // better". The descriptions now steer to the SEARCHABLE tree, the
+  // immediate observe→act chain, the small verification crop, and the
+  // type tool's automatic frontmost activation.
+  it("R68-C: the descriptions teach the searchable tree + the chain discipline + the auto-activation", async () => {
+    setComputerUseSettings(db, { enabled: true, permission: "act" });
+    const tools = await computerUsePlugin.createTools({ root: tempDir, toolDeps: makeDeps() });
+    const find = tools.find((t) => t.name === "find_elements")!;
+    expect(find.description).toContain("BROWSER PAGES: the web accessibility tree IS searched");
+    expect(find.description).toContain("the tree is activated automatically");
+    const shot = tools.find((t) => t.name === "screenshot")!;
+    expect(shot.description).toContain("The FALLBACK observation");
+    expect(shot.description).toContain("prefer find_elements for browser content");
+    expect(shot.description).toContain("the web tree is searchable by name");
+    expect(shot.description).toContain("frames stay valid for 30s");
+    expect(shot.description).toContain("don't re-screenshot");
+    const zoom = tools.find((t) => t.name === "zoom")!;
+    expect(zoom.description).toContain("Use a SMALL region");
+    expect(zoom.description).toContain("cheaper and faster than a full screenshot");
+    const type = tools.find((t) => t.name === "type")!;
+    expect(type.description).toContain("brought frontmost automatically");
+    expect(type.description).toContain("a frontmost_pid_mismatch refusal means that activation failed");
+    // The old "the app MUST be frontmost" wording is retired.
+    expect(type.description).not.toContain("MUST be frontmost");
+    // C7's last teaching point: middle_click = new tab on browser links.
+    const middle = tools.find((t) => t.name === "middle_click")!;
+    expect(middle.description).toContain("NEW TAB");
+  });
 });
 
 describe("ROUND-61 (R61): tool output shapes + the monitor + vision wiring", () => {

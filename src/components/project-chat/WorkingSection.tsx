@@ -37,6 +37,9 @@ import {
 } from "../../lib/stream-store";
 import { useRightSidebarStore } from "../../lib/right-sidebar-store";
 import { SubAgentCard } from "./SubAgentCard";
+// ROUND-68 (R68-A): the INLINE screenshot row — one per `screenshot`
+// WorkingEntry, rendered at its capture moment between the tool rows.
+import { ScreenshotRow } from "./ScreenshotRow";
 import { extractStringArg } from "./streaming-args";
 import { SEMANTIC_COLORS } from "../../lib/semantics";
 import { useThemeStyles } from "../../lib/use-theme-styles";
@@ -74,6 +77,15 @@ import { withAlpha } from "../dashboard/helpers";
  * run_command pill renders a compact LIVE terminal tail (LiveOutputTail)
  * under it while the command streams — tool-output chunks the stream-store
  * accumulates on the entry (see LiveOutputTail for the display rules).
+ *
+ * ROUND-68 (R68-A, owner: "The screenshots were supposed to be shown
+ * properly when they were actually taken, not at the bottom in a dedicated
+ * section. When the screenshots were taken they should be shown at that
+ * specific time."): the section's row map now interleaves INLINE
+ * ScreenshotRow tiles with the tool rows — one per `screenshot`
+ * WorkingEntry, at the entry's list position (the capture moment), not in
+ * the R67-D bottom strip (deleted). The rows are live-only: the folded log
+ * never persists rasters, so only a live (or stopped) turn can carry them.
  */
 
 const TOOL_ICONS: Record<string, LucideIcon> = {
@@ -1801,6 +1813,22 @@ export function WorkingSection({
                     />
                   );
                 }
+                // ROUND-68 (R68-A, owner: "When the screenshots were taken
+                // they should be shown at that specific time."): the capture
+                // marker renders INLINE at its list position — the entry was
+                // appended at frame arrival (during tool execution), so it
+                // sits right after the in-flight tool row that captured it,
+                // NOT in a dedicated bottom section (the R67-D strip is
+                // gone). Screenshots never count as tools (toolCount filters
+                // type === "tool" only — unaffected).
+                if (entry.type === "screenshot") {
+                  return (
+                    <ScreenshotRow
+                      key={`shot-${entry.frameId}-${entry.ts}`}
+                      shot={{ frameId: entry.frameId, tool: entry.tool, ts: entry.ts }}
+                    />
+                  );
+                }
                 return <ApprovalRow key={`t-${i}`} entry={entry} sessionId={sessionId} onDecision={onApprovalDecision} />;
               })}
               {live && entries.length === 0 && pendingWriteInputs.length === 0 ? (
@@ -1845,6 +1873,13 @@ export function BareWorkingEntries({
         }
         if (entry.type === "approval") {
           return <ApprovalRow key={`b-${i}`} entry={entry} onDecision={onApprovalDecision} />;
+        }
+        // ROUND-68 (R68-A): screenshots are LIVE-ONLY entries and a bare
+        // (tools-free) block has no section to anchor an inline row — skip
+        // them exactly like tool entries (consistent with the caller's
+        // segmentation: a screenshot can only follow a tool row anyway).
+        if (entry.type === "screenshot") {
+          return null;
         }
         return null; // tool entries imply a section — handled by the caller
       })}

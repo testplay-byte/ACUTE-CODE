@@ -33,6 +33,27 @@ import { visionDisabled } from "./errors.js";
 
 export type VisionFetch = (url: string, init: RequestInit) => Promise<Response>;
 
+/**
+ * ROUND-68 (R68-C, C6): the relay's retry delays for HTTP 429 / 5xx — the
+ * owner's live trace had "Vision rate-limited (429)" killing observations
+ * MID-FLOW (one 429 ended the whole observation; the 7-step Edge flow
+ * stalled). Two retries with backoff: 1.5 s, then 3 s. Module-level
+ * mutable copy + the setter below = the test hook (the private-allowlist
+ * precedent pattern) so tests shrink the delays instead of sleeping.
+ */
+export const VISION_RETRY_DELAYS_MS: readonly number[] = [1500, 3000];
+let visionRetryDelays: number[] = [...VISION_RETRY_DELAYS_MS];
+
+/** Test-only: shrink/shape the retry delays (pass [] to disable retries). */
+export function setVisionRetryDelaysForTest(delays: number[]): void {
+  visionRetryDelays = [...delays];
+}
+
+/** Test-only: restore the shipped delays. */
+export function resetVisionRetryDelaysForTest(): void {
+  visionRetryDelays = [...VISION_RETRY_DELAYS_MS];
+}
+
 export interface VisionRelayConfig {
   mode: "separate" | "main";
   providerId: string;
@@ -95,92 +116,116 @@ export async function describeRaster(
   const baseUrl = (provider.baseUrl ?? "").replace(/\/+$/, "");
   const apiFormat = provider.apiFormat ?? "chat-completions";
 
-  let response: Response;
-  let text: string;
-  if (apiFormat === "anthropic-messages") {
-    response = await fetchImpl(`${baseUrl}/messages`, {
-      method: "POST",
-      headers: {
-        "content-type": "application/json",
-        "x-api-key": apiKey,
-        "anthropic-version": "2023-06-01",
-      },
-      body: JSON.stringify({
-        model: config.modelId,
-        max_tokens: 600,
-        system: RELAY_SYSTEM_PROMPT,
-        messages: [
-          {
-            role: "user",
-            content: [
-              { type: "text", text: request.instruction },
-              {
-                type: "image",
-                source: { type: "base64", media_type: "image/png", data: request.imageBase64 },
-              },
-            ],
-          },
-        ],
-      }),
-    });
-    if (!response.ok) {
-      return {
-        error: `vision relay failed: ${response.status} ${response.statusText} — ${(await response.text().catch(() => "")).slice(0, 200)}`,
-        code: "vision_request_failed",
-      };
-    }
-    const body = (await response.json()) as { content?: Array<{ type: string; text?: string }> };
-    text = (body.content ?? []).filter((c) => c.type === "text").map((c) => c.text ?? "").join("\n").trim();
-  } else {
-    // chat-completions (OpenRouter / OpenAI / Google's compat endpoint).
-    response = await fetchImpl(`${baseUrl}/chat/completions`, {
-      method: "POST",
-      headers: {
-        "content-type": "application/json",
-        authorization: `Bearer ${apiKey}`,
-      },
-      body: JSON.stringify({
-        model: config.modelId,
-        max_tokens: 600,
-        messages: [
-          {
-            role: "system",
-            content: RELAY_SYSTEM_PROMPT,
-          },
-          {
-            role: "user",
-            content: [
-              { type: "text", text: request.instruction },
-              {
-                type: "image_url",
-                image_url: { url: `data:image/png;base64,${request.imageBase64}` },
-              },
-            ],
-          },
-        ],
-      }),
-    });
-    if (!response.ok) {
-      return {
-        error: `vision relay failed: ${response.status} ${response.statusText} — ${(await response.text().catch(() => "")).slice(0, 200)}`,
-        code: "vision_request_failed",
-      };
-    }
-    const body = (await response.json()) as {
-      choices?: Array<{ message?: { content?: string | Array<{ text?: string }> } }>;
-    };
-    const content = body.choices?.[0]?.message?.content;
-    if (typeof content === "string") {
-      text = content.trim();
-    } else if (Array.isArray(content)) {
-      text = content.map((c) => c.text ?? "").join("\n").trim();
+  // R68-C (C6): the shared attempt body — ONE place per wire format (both
+  // anthropic-messages and chat-completions ride the SAME retry loop).
+  // Returns the parsed text, a TERMINAL error (no retry), or a RETRYABLE
+  // marker: HTTP 429 or 5xx (the rate-limit/overload class the owner's
+  // trace hit; every other non-OK — 4xx auth/shape errors — fails fast).
+  const attempt = async (): Promise<
+    { ok: true; text: string } | { ok: false; retryable: boolean; error: string }
+  > => {
+    let response: Response;
+    if (apiFormat === "anthropic-messages") {
+      response = await fetchImpl(`${baseUrl}/messages`, {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          "x-api-key": apiKey,
+          "anthropic-version": "2023-06-01",
+        },
+        body: JSON.stringify({
+          model: config.modelId,
+          max_tokens: 600,
+          system: RELAY_SYSTEM_PROMPT,
+          messages: [
+            {
+              role: "user",
+              content: [
+                { type: "text", text: request.instruction },
+                {
+                  type: "image",
+                  source: { type: "base64", media_type: "image/png", data: request.imageBase64 },
+                },
+              ],
+            },
+          ],
+        }),
+      });
     } else {
-      text = "";
+      // chat-completions (OpenRouter / OpenAI / Google's compat endpoint).
+      response = await fetchImpl(`${baseUrl}/chat/completions`, {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          authorization: `Bearer ${apiKey}`,
+        },
+        body: JSON.stringify({
+          model: config.modelId,
+          max_tokens: 600,
+          messages: [
+            {
+              role: "system",
+              content: RELAY_SYSTEM_PROMPT,
+            },
+            {
+              role: "user",
+              content: [
+                { type: "text", text: request.instruction },
+                {
+                  type: "image_url",
+                  image_url: { url: `data:image/png;base64,${request.imageBase64}` },
+                },
+              ],
+            },
+          ],
+        }),
+      });
     }
+    if (!response.ok) {
+      const detail = (await response.text().catch(() => "")).slice(0, 200);
+      const retryable = response.status === 429 || response.status >= 500;
+      return {
+        ok: false,
+        retryable,
+        error: `vision relay failed: ${response.status} ${response.statusText} — ${detail}`,
+      };
+    }
+    let text: string;
+    if (apiFormat === "anthropic-messages") {
+      const body = (await response.json()) as { content?: Array<{ type: string; text?: string }> };
+      text = (body.content ?? []).filter((c) => c.type === "text").map((c) => c.text ?? "").join("\n").trim();
+    } else {
+      const body = (await response.json()) as {
+        choices?: Array<{ message?: { content?: string | Array<{ text?: string }> } }>;
+      };
+      const content = body.choices?.[0]?.message?.content;
+      if (typeof content === "string") {
+        text = content.trim();
+      } else if (Array.isArray(content)) {
+        text = content.map((c) => c.text ?? "").join("\n").trim();
+      } else {
+        text = "";
+      }
+    }
+    if (text === "") {
+      return { ok: false, retryable: false, error: "the vision model returned no text" };
+    }
+    return { ok: true, text };
+  };
+
+  let outcome = await attempt();
+  for (
+    let i = 0;
+    i < visionRetryDelays.length && !outcome.ok && outcome.retryable;
+    i++
+  ) {
+    await new Promise((resolve) => setTimeout(resolve, visionRetryDelays[i]!));
+    outcome = await attempt();
   }
-  if (text === "") {
-    return { error: "the vision model returned no text", code: "vision_request_failed" };
+  if (!outcome.ok) {
+    return { error: outcome.error, code: "vision_request_failed" };
   }
+  const text = outcome.text;
   return {
     text: text.slice(0, 4000),
     model: config.modelId,

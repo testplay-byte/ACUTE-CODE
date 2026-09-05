@@ -51,9 +51,6 @@ import {
   type ApprovalDecisionChoice,
   type ApprovalRemember,
 } from "./WorkingSection";
-// ROUND-67 (R67/D): the live screenshot THUMBNAIL strip (the owner: the
-// agent's captures shown in a small view in the chat WHILE it thinks).
-import { ScreenshotStrip } from "./ScreenshotStrip";
 import { AcuteLogo } from "../shell/Sidebar";
 import { ClampedText } from "../shared/ClampedText";
 import {
@@ -673,16 +670,19 @@ export type WorkingSegment =
   | { kind: "text"; content: string; ts: string }
   | { kind: "work"; entries: WorkingEntry[]; firstIndex: number; lastIndex: number; startTs: string; endTs: string };
 
-/** The ts of a working entry (tool entries carry it on the tool). */
+/** The ts of a working entry (tool entries carry it on the tool; every
+ * other kind — thinking/text/approval and the R68-A screenshot capture
+ * markers — carries it on the entry itself). */
 function workingEntryTs(entry: WorkingEntry): string {
   return entry.type === "tool" ? entry.tool.ts : entry.ts;
 }
 
 /** Split a turn's working entries into ordered segments: intermediate TEXT
  * entries become standalone answer blocks; every contiguous run of the
- * OTHER entries (tool/thinking/approval) becomes one work segment rendered
- * at its timeline position. The final answer keeps rendering last (the
- * caller's finalText) exactly as before. */
+ * OTHER entries (tool/thinking/approval — and, ROUND-68 R68-A, the `screenshot`
+ * capture markers) becomes one work segment rendered at its timeline
+ * position. The final answer keeps rendering last (the caller's finalText)
+ * exactly as before. */
 export function segmentWorkingEntries(entries: WorkingEntry[]): WorkingSegment[] {
   const out: WorkingSegment[] = [];
   let run: WorkingEntry[] = [];
@@ -770,7 +770,12 @@ function AssistantTurn({
       {segments.map((seg, i) =>
         seg.kind === "text" ? (
           <IntermediateAnswer key={`seg-text-${i}`} content={seg.content} projectId={projectId} />
-        ) : seg.entries.some((e) => e.type === "tool") ? (
+        ) : seg.entries.some((e) => e.type === "tool") ||
+          // ROUND-68 (R68-A): defensive — a capture can only exist after the
+          // tool row that took it, but a screenshot-carrying segment must
+          // still render as a WorkingSection (the inline rows need the
+          // section's column flow), never as a bare block.
+          seg.entries.some((e) => e.type === "screenshot") ? (
           <WorkingSection
             key={`seg-work-${i}`}
             entries={seg.entries}
@@ -1697,7 +1702,14 @@ export function AgentChatPanel({
           />
         );
       }
-      const isWork = seg.entries.some((e) => e.type === "tool") || (hasPendingWriteInput && i === lastWorkSegIdx);
+      // ROUND-68 (R68-A): defensive — a capture can only exist after the tool
+      // row that took it, but a screenshot-carrying segment must still
+      // render as a WorkingSection (the inline rows need the section's
+      // column flow), never as a bare block.
+      const isWork =
+        seg.entries.some((e) => e.type === "tool") ||
+        seg.entries.some((e) => e.type === "screenshot") ||
+        (hasPendingWriteInput && i === lastWorkSegIdx);
       if (isWork) {
         // liveEntryIndex is an index into the FULL entries array — translate
         // it into this segment's own coordinates (only the segment that
@@ -1919,16 +1931,12 @@ export function AgentChatPanel({
                 ROUND-64 R64-c segmentation). ── */}
             {liveTurn !== null ? (
               <div aria-live="polite" aria-atomic="false" className="group min-w-0">
+                {/* ROUND-68 (R68-A): the R67-D screenshot THUMBNAIL strip that
+                    rendered here is GONE — captures now ride INSIDE liveSection
+                    as `screenshot` WorkingEntry rows, rendered by WorkingSection
+                    at their capture moment (the owner: "When the screenshots
+                    were taken they should be shown at that specific time."). */}
                 {liveSection}
-                {/* ── ROUND-67 (R67/D): the screenshot THUMBNAIL strip. The
-                    owner: "the images should be shown during its thinking in
-                    the agent's chat window itself, in a small view" — one
-                    tile per capture this turn (computer-use + browser), each
-                    lazy-fetching the EPHEMERAL raster from the sidecar.
-                    Below the WorkingSection, ABOVE the streaming text; the
-                    strip itself renders null while no capture exists. Old
-                    slices may predate the field → ?? [] (optional-safe). */}
-                <ScreenshotStrip screenshots={liveTurn.screenshots ?? []} />
                 {/* ROUND-66 (R66, A4): the human-verification checkpoint — the
                     browser tool hit a bot wall and is WAITING for the owner.
                     Rendered ABOVE the streaming text (the agent is paused;

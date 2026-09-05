@@ -49,6 +49,13 @@ const debugSettingsMock = vi.hoisted(() => ({
   fetchDebugSettings: null as unknown as ReturnType<typeof vi.fn>,
 }));
 
+/** ROUND-68 (R68-A): the raster client fn for the INLINE screenshot rows,
+ * mocked the same way — a live turn carrying `screenshot` WorkingEntry rows
+ * lazy-fetches each PNG; the mock keeps those rows off the network. */
+const rasterMock = vi.hoisted(() => ({
+  fetchComputerFrameRaster: null as unknown as ReturnType<typeof vi.fn>,
+}));
+
 vi.mock("../../lib/api", async () => {
   const mod = await import("../../lib/api");
   const agentsFx = await import("../../lib/agent-fixtures");
@@ -57,6 +64,7 @@ vi.mock("../../lib/api", async () => {
   ratingsMock.listSessionRatings = vi.fn();
   ratingsMock.deleteRating = vi.fn();
   debugSettingsMock.fetchDebugSettings = vi.fn();
+  rasterMock.fetchComputerFrameRaster = vi.fn();
   return {
     ...mod,
     getAgentsBackend: () => agentsFx.getFixtureAgents(),
@@ -65,6 +73,7 @@ vi.mock("../../lib/api", async () => {
     listSessionRatings: ratingsMock.listSessionRatings,
     deleteRating: ratingsMock.deleteRating,
     fetchDebugSettings: debugSettingsMock.fetchDebugSettings,
+    fetchComputerFrameRaster: rasterMock.fetchComputerFrameRaster,
   };
 });
 
@@ -1101,5 +1110,94 @@ describe("AgentChatPanel full-conversation copy (ROUND-67 R67-B)", () => {
     expect(text).toContain("result: ok — read 12 lines");
     expect(text).toContain("--- FINAL ANSWER ---");
     expect(text).toContain("Here is the file's content.");
+  });
+});
+
+// ── ROUND-68 (R68-A): the INLINE screenshot rows (the strip is gone) ─────────
+describe("AgentChatPanel inline screenshots (ROUND-68 R68-A)", () => {
+  const SLOW = { timeout: 5000 };
+
+  const createObjectURL = vi.fn(() => "blob:panel-shot");
+  const revokeObjectURL = vi.fn();
+
+  beforeEach(() => {
+    // happy-dom implements neither — the object-URL lifecycle is this pair.
+    URL.createObjectURL = createObjectURL as unknown as typeof URL.createObjectURL;
+    URL.revokeObjectURL = revokeObjectURL as unknown as typeof URL.revokeObjectURL;
+    createObjectURL.mockClear();
+    revokeObjectURL.mockClear();
+    rasterMock.fetchComputerFrameRaster.mockReset();
+    rasterMock.fetchComputerFrameRaster.mockResolvedValue(
+      new Blob(["\x89PNG-bytes"], { type: "image/png" }),
+    );
+  });
+
+  /** Render an empty panel, then arm a LIVE turn whose working array carries
+   * an in-flight screenshot tool row + the inline capture entry (the exact
+   * state the stream-store builds when the sideband frame lands mid-tool). */
+  async function renderLiveTurnWithCapture(): Promise<void> {
+    const projects = await getFixtureProjects().list();
+    customBackend.backend = createFixtureSessions([
+      {
+        session: {
+          id: "sess_inline_shot",
+          projectId: projects[0].id,
+          agentId: "agt_scribe",
+          mode: "single",
+          status: "completed",
+          title: "Inline shot probe",
+          createdAt: "2026-09-06T10:00:00Z",
+          updatedAt: "2026-09-06T10:05:00Z",
+        },
+        events: [],
+      },
+    ]);
+    renderWithProviders(<AgentChatPanel projectId={projects[0].id} project={projects[0]} />);
+    await waitFor(
+      () => expect(document.querySelector("[data-empty-state]")).toBeTruthy(),
+      SLOW,
+    );
+    useStreamStore.setState({
+      bySession: {
+        sess_inline_shot: {
+          liveTurn: {
+            startedAtMs: Date.now() - 2000,
+            working: [
+              { type: "tool", tool: { seq: 1, toolName: "screenshot", argsSummary: "full display", ok: null, ts: new Date().toISOString() } },
+              { type: "screenshot", frameId: "f-live", tool: "screenshot", ts: new Date().toISOString() },
+            ],
+            streamText: "",
+            streamThinking: "",
+            stopped: false,
+            stoppedByUser: false,
+            streamingToolInputs: [],
+            debugReport: null,
+            browserCheckpoint: null,
+          },
+          streamBusy: true,
+          sendError: null,
+          liveError: null,
+          pendingEcho: null,
+          lastLiveEndMs: Date.now(),
+          lastTurnStoppedByUser: false,
+          lastTurnStoppedTs: null,
+        },
+      },
+    });
+  }
+
+  it("a live capture entry renders INLINE inside the live Working section — the R67-D bottom strip is GONE", async () => {
+    await renderLiveTurnWithCapture();
+    // The inline row mounts INSIDE the live section (lazy-fetch fired).
+    const row = await screen.findByTestId("screenshot-row", {}, SLOW);
+    expect(row).toBeTruthy();
+    await waitFor(() =>
+      expect(rasterMock.fetchComputerFrameRaster).toHaveBeenCalledWith("f-live"),
+    );
+    // The caption names WHAT was captured.
+    expect(screen.getByText("Screenshot · screenshot")).toBeTruthy();
+    // The strip (header, count, horizontal scroller) no longer renders.
+    expect(screen.queryByTestId("screenshot-strip")).toBeNull();
+    expect(screen.queryByText("Screenshots")).toBeNull();
   });
 });

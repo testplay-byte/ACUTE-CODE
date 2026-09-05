@@ -130,6 +130,11 @@ describe("PROMPT_REGISTRY (R59-F)", () => {
     // tab", "the tab the user is viewing" → "this chat session's own tab",
     // "APPEAR LIVE" → "APPEAR … IMMEDIATELY"; additions-only except those
     // three honest corrections).
+    // Regenerated AGAIN in R68 (R68-C, deliberately — the computer-use
+    // section gained the BROWSER CONTENT IS SEARCHABLE + CHAIN DISCIPLINE
+    // lines and the auto-activation teaching; additions-only except the
+    // frontmost_pid_mismatch refusal parenthetical and the raw-input line,
+    // both updated to the auto-activation truth).
     // If this fails after a deliberate prompts.ts change, regenerate
     // deliberately and say so in the round log.
     // R59 CI fix: normalize \r\n → \n on BOTH sides before comparing — the
@@ -197,6 +202,50 @@ describe("ROUND-67 (R67-E): browser discipline, tab-walk, attachments", () => {
     });
     expect(noVision).not.toContain("IMAGE ATTACHMENTS (R67)");
     expect(noVision).toContain("## TOOL USE");
+  });
+});
+
+// ── ROUND-68 (R68-C): the computer-use anti-screenshot-spam pins ────────────
+// The owner's live 0.67.0 report: "utilizing the screenshot capturing way
+// too much… the coordinate-based system is not proper". The prompt now
+// teaches the SEARCHABLE browser tree, the immediate observe→act chain
+// (frames valid 30s), the small verification crop, middle_click=new-tab,
+// and the raw-input auto-activation.
+
+describe("ROUND-68 (R68-C): the computer-use discipline lines", () => {
+  it("BROWSER CONTENT IS SEARCHABLE + CHAIN DISCIPLINE + middle_click = new tab", () => {
+    const composed = buildProjectSystemPrompt(FULL_CTX);
+    const cu = composed.indexOf("## COMPUTER USE (desktop control)");
+    expect(cu).toBeGreaterThan(-1);
+    // The section grew by two lines — the 3_000-char window covers it.
+    const rest = composed.slice(cu, cu + 4_200);
+    expect(rest).toContain("BROWSER CONTENT IS SEARCHABLE (R68)");
+    expect(rest).toContain("find_elements {appRef, query:'Wikipedia'}");
+    expect(rest).toContain("the web tree is activated automatically before every walk");
+    expect(rest).toContain("element targets are the PRIMARY path for browser content");
+    expect(rest).toContain("CHAIN DISCIPLINE (R68)");
+    expect(rest).toContain("act IMMEDIATELY on its pixels (frames stay valid 30s)");
+    expect(rest).toContain("never re-screenshot between observing and acting");
+    expect(rest).toContain("a small zoom region crop of the one control");
+    expect(rest).toContain("middle_click on a link = open in new tab");
+  });
+
+  it("the auto-activation teaching replaces the manual activate-then-retry dance", () => {
+    const composed = buildProjectSystemPrompt(FULL_CTX);
+    const cu = composed.indexOf("## COMPUTER USE (desktop control)");
+    const rest = composed.slice(cu, cu + 4_200);
+    expect(rest).toContain("ACTIVATE their target app automatically");
+    expect(rest).toContain("a mismatch refusal means the activation itself failed");
+    expect(rest).toContain("frontmost_pid_mismatch → the auto-activation failed");
+    // The old manual-recovery parenthetical is retired.
+    expect(rest).not.toContain("frontmost_pid_mismatch → activate → re-observe");
+  });
+
+  it("the lines are computer-use-gated (the section composes only when the master switch is on)", () => {
+    const off = buildProjectSystemPrompt({ ...FULL_CTX, computerUse: { enabled: false, posture: "act" as const } });
+    expect(off).not.toContain("## COMPUTER USE (desktop control)");
+    expect(off).not.toContain("CHAIN DISCIPLINE (R68)");
+    expect(off).not.toContain("BROWSER CONTENT IS SEARCHABLE (R68)");
   });
 });
 

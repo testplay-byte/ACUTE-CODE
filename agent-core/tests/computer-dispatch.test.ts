@@ -54,6 +54,20 @@ let fakeWindows: WindowInfo[] = [
 let fakeWindowsDiagnostics: ListWindowsResult["diagnostics"] = undefined;
 /** R67-C: the key tool's focused-element readback (null = omit the field). */
 let fakeFocused: string | null = null;
+/** R68-C: frontmost auto-retry knobs — healOnActivate simulates a
+ * SUCCESSFUL escalated activation (the foreground flips to the target pid
+ * as the real backend's ladder would); activateCalls counts them; the
+ * fail-once knobs script a script-level FRONTMOST_MISMATCH (the race where
+ * the focus churns between the gate and the SendInput). */
+let healOnActivate = false;
+let activateCalls = 0;
+let rawKeyAttempts = 0;
+let rawKeyFailOnce = false;
+let rawClickAttempts = 0;
+let rawClickFailOnce = false;
+/** R68-C: a persistent non-mismatch rawKey error (the NO-retry-for-other-
+ * errors pin — withForegroundRetry must not touch this class). */
+let rawKeyError: string | null = null;
 /** R66-2-d: find_elements tests may swap the fake snapshot's element list
  * (makeDispatcher resets it to the default 5-element table). */
 let fakeElements: Snapshot["elements"] | null = null;
@@ -122,6 +136,14 @@ const fakeBackend: CuaBackend = {
   selectRange: async () => ({ ok: true }),
   rawClick: async (_run, pt, button, clickCount, modifiers) => {
     calls.push(`rawClick:${button}:${clickCount}:${modifiers.join("+")}@${pt.x},${pt.y}`);
+    rawClickAttempts += 1;
+    if (rawClickFailOnce && rawClickAttempts === 1) {
+      // The gate passed, but the focus CHURNED between the check and the
+      // SendInput — the script-level mismatch (this also flips the fake
+      // frontmost so the recheck sees the churned state).
+      fakeFrontmost = 9999;
+      return { ok: false, error: "FRONTMOST_MISMATCH:9999" };
+    }
     return mode === "frontmost-mismatch"
       ? { ok: false, error: `FRONTMOST_MISMATCH:${fakeFrontmost}` }
       : { ok: true };
@@ -134,6 +156,11 @@ const fakeBackend: CuaBackend = {
   },
   rawKey: async () => {
     calls.push("rawKey");
+    rawKeyAttempts += 1;
+    if (rawKeyError !== null) return { ok: false, error: rawKeyError };
+    if (rawKeyFailOnce && rawKeyAttempts === 1) {
+      return { ok: false, error: `FRONTMOST_MISMATCH:${fakeFrontmost}` };
+    }
     return { ok: true };
   },
   typeText: async () => {
@@ -142,7 +169,11 @@ const fakeBackend: CuaBackend = {
   },
   launch: async () =>
     mode === "launch-fail" ? { ok: false, error: "not found" } : { ok: true, pid: 4242, active: false },
-  activate: async () => ({ ok: true, active: true }),
+  activate: async () => {
+    activateCalls += 1;
+    if (healOnActivate) fakeFrontmost = 4242; // a successful escalated activation
+    return { ok: true, active: true };
+  },
   frontmostPid: async () => fakeFrontmost,
   captureDisplay: async () =>
     mode === "capture-fail"
@@ -175,6 +206,13 @@ function makeDispatcher(allowMutations = true): ComputerDispatcher {
   ];
   fakeWindowsDiagnostics = undefined;
   fakeFocused = null;
+  healOnActivate = false;
+  activateCalls = 0;
+  rawKeyAttempts = 0;
+  rawKeyFailOnce = false;
+  rawClickAttempts = 0;
+  rawClickFailOnce = false;
+  rawKeyError = null;
   return new ComputerDispatcher({ backend: fakeBackend, run: fakeRun, root: tempRoot, allowMutations });
 }
 
@@ -369,7 +407,7 @@ describe("ROUND-61 (R61): coordinate actions — frame binding + foreground rule
     if (result.kind === "refusal") expect(result.refusal.error).toBe("raster_out_of_bounds");
   });
 
-  it("an AGED frame refuses frame_stale (the 10s rule)", async () => {
+  it("an AGED frame refuses frame_stale (R68-C: the 30s rule — the vision roundtrip no longer expires frames)", async () => {
     const d = makeDispatcher();
     const frameId = await screenshot(d);
     const frame = getComputerSession().getFrame(frameId)!;
@@ -379,7 +417,7 @@ describe("ROUND-61 (R61): coordinate actions — frame binding + foreground rule
     if (result.kind === "refusal") expect(result.refusal.error).toBe("frame_stale");
   });
 
-  it("Win/Linux raw path: frontmost mismatch refuses frontmost_pid_mismatch (nothing sent)", async () => {
+  it("Win/Linux raw path: frontmost mismatch + FAILED auto-activation → the honest frontmost_pid_mismatch (nothing sent)", async () => {
     const d = makeDispatcher();
     await screenshot(d);
     fakeFrontmost = 9999;
@@ -388,9 +426,13 @@ describe("ROUND-61 (R61): coordinate actions — frame binding + foreground rule
     if (result.kind === "refusal") {
       expect(result.refusal.error).toBe("frontmost_pid_mismatch");
       expect(result.refusal.payload).toEqual({ scopePid: 4242, activePid: 9999 });
-      expect(result.refusal.recovery).toContain("activate=true");
+      // R68-C: the recovery names the FAILED auto-activation (the honest
+      // truth: dispatch already tried — what remains is app-level triage).
+      expect(result.refusal.recovery).toContain("auto-activation failed");
+      expect(result.refusal.recovery).toContain("retry ONCE");
     }
-    // The backend NEVER got a click:
+    // The auto-activation RAN (once) and the backend NEVER got a click:
+    expect(activateCalls).toBe(1);
     expect(calls).toHaveLength(0);
   });
 
@@ -1024,5 +1066,102 @@ describe("ROUND-67 (R67-C): key chord splitting (splitKeyChord) + the focused re
     if (result.kind === "receipt") {
       expect((result.receipt as { focused?: string }).focused).toBe("Second button");
     }
+  });
+});
+
+/* ── R68-C (C2): frontmost AUTO-RETRY — self-healing, not refusing ────────── */
+
+describe("ROUND-68 (R68-C): withForegroundRetry — activate + retry ONCE instead of refusing", () => {
+  it("gate mismatch + healable activation → the click is RETRIED once and succeeds (no refusal)", async () => {
+    const d = makeDispatcher();
+    await screenshot(d);
+    fakeFrontmost = 9999;
+    healOnActivate = true; // a successful escalated activation flips the foreground
+    const result = await d.dispatch("left_click", { target: { type: "coordinate", x: 10, y: 10 } });
+    expect(result.kind).toBe("receipt");
+    if (result.kind === "receipt") {
+      expect(result.receipt.actionSent).toBe(true);
+      expect(result.receipt.dispatchStatus).toBe("accepted");
+    }
+    // ONE activation, ONE click (the retry IS the same action, completed).
+    expect(activateCalls).toBe(1);
+    expect(calls).toEqual(["rawClick:left:1:@10,10"]);
+  });
+
+  it("script-level FRONTMOST_MISMATCH (the gate-then-SendInput race) → activate + retry ONCE", async () => {
+    const d = makeDispatcher();
+    await screenshot(d);
+    rawClickFailOnce = true; // the first rawClick reports the mismatch
+    healOnActivate = true;
+    const result = await d.dispatch("left_click", { target: { type: "coordinate", x: 10, y: 10 } });
+    expect(result.kind).toBe("receipt");
+    // The action ran TWICE (failed mismatch, healed retry) — exactly once retried.
+    expect(rawClickAttempts).toBe(2);
+    expect(activateCalls).toBe(1);
+  });
+
+  it("script-level mismatch + FAILED activation → the ORIGINAL mismatch refusal, NO retry", async () => {
+    const d = makeDispatcher();
+    await screenshot(d);
+    rawClickFailOnce = true;
+    // healOnActivate stays false: the activation runs but the foreground
+    // stays elsewhere — the honest shape is the ORIGINAL mismatch error.
+    const result = await d.dispatch("left_click", { target: { type: "coordinate", x: 10, y: 10 } });
+    expect(result.kind).toBe("refusal");
+    if (result.kind === "refusal") {
+      expect(result.refusal.error).toBe("frontmost_pid_mismatch");
+      expect(result.refusal.payload).toEqual({ scopePid: 4242, activePid: 9999 });
+    }
+    expect(rawClickAttempts).toBe(1); // never retried
+    expect(activateCalls).toBe(1); // the heal was attempted
+  });
+
+  it("NON-mismatch errors NEVER retry (one attempt, capability_fail_closed)", async () => {
+    const d = makeDispatcher();
+    rawKeyError = "xdotool exploded";
+    const result = await d.dispatch("key", { text: "tab", appRef: { pid: 4242 } });
+    expect(result.kind).toBe("refusal");
+    if (result.kind === "refusal") {
+      expect(result.refusal.error).toBe("capability_fail_closed");
+      expect(result.refusal.message).toContain("xdotool exploded");
+    }
+    expect(rawKeyAttempts).toBe(1);
+    expect(activateCalls).toBe(0); // the auto-retry is mismatch-class ONLY
+  });
+
+  it("the KEY tool gets the same self-healing (the gate it never had) — receipt + focused readback", async () => {
+    const d = makeDispatcher();
+    fakeFrontmost = 9999;
+    healOnActivate = true;
+    fakeFocused = "Search box";
+    const result = await d.dispatch("key", { text: "tab", appRef: { pid: 4242 } });
+    expect(result.kind).toBe("receipt");
+    if (result.kind === "receipt") {
+      expect((result.receipt as { focused?: string }).focused).toBe("Search box");
+    }
+    expect(activateCalls).toBe(1);
+    expect(calls).toEqual(["rawKey"]);
+  });
+
+  it("the TYPE tool self-heals too (app-scoped typing: activate → typeText → receipt)", async () => {
+    const d = makeDispatcher();
+    fakeFrontmost = 9999;
+    healOnActivate = true;
+    const result = await d.dispatch("type", { text: "hello", appRef: { pid: 4242 } });
+    expect(result.kind).toBe("receipt");
+    if (result.kind === "receipt") expect(result.receipt.actionSent).toBe(true);
+    expect(activateCalls).toBe(1);
+    expect(calls).toEqual(["typeText"]);
+  });
+
+  it("a non-gated backend (rawRequiresForeground=false) runs WITHOUT the frontmost check", async () => {
+    const d = makeDispatcher();
+    rawRequiresForeground = false; // after makeDispatcher (it resets the knob)
+    await screenshot(d);
+    fakeFrontmost = 9999; // macOS-style: the gate is off entirely
+    const result = await d.dispatch("left_click", { target: { type: "coordinate", x: 10, y: 10 } });
+    expect(result.kind).toBe("receipt");
+    expect(activateCalls).toBe(0);
+    expect(calls).toEqual(["rawClick:left:1:@10,10"]);
   });
 });

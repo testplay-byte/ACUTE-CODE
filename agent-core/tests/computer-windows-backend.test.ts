@@ -22,6 +22,20 @@
  * reachable Get-Process fallback), and the SendKeys key-table pins (the
  * key "tab" typed t-a-b fix: composeSendKeysChord + rawKey's composed
  * chord + the honest meta-chord refusal).
+ * R68-C REWRITES the input contract: SendKeys is DEAD (the owner's live
+ * v0.67.0 trace: [System.Windows.Forms.SendKeys] TypeNotFound — the
+ * preamble's LoadWithPartialName silently failed while Add-Type worked).
+ * The pins now hold the SendInput contract:
+ *   · the preamble declares the input structs + SendText/Chord/TapKey/
+ *     ModsDown/ModsUp + ShowWindow + the Chromium poke, and NO LONGER
+ *     loads Windows.Forms at all
+ *   · composeVkChord — the key-name → VK table + leading modifiers +
+ *     honest refusals (the Windows/Meta key is a REAL VK now: LWIN 0x5B)
+ *   · rawKey composes ONE [U32]::Chord call (PowerShell ushort[] array
+ *     via $m=@([uint16]…)) and typeText rides [U32]::SendText with the
+ *     RAW here-string (no SendKeys escaping anywhere)
+ *   · activate escalates (SW_MINIMIZE → SW_RESTORE) and the select
+ *     action rides TapKey/ModsDown instead of SendKeys
  * The parse paths run against a fake RunCommand returning exactly what the
  * fixed PowerShell emits on Windows.
  */
@@ -29,7 +43,7 @@ import { describe, expect, it } from "vitest";
 import {
   WINDOWS_PS_PROGRAM,
   WINDOWS_PS_PREAMBLE,
-  composeSendKeysChord,
+  composeVkChord,
   windowsListAppsScript,
   windowsListWindowsScript,
   windowsListDisplaysScript,
@@ -96,6 +110,66 @@ describe("ROUND-64-a (R64-a): the shared PowerShell preamble", () => {
     expect(WINDOWS_PS_PREAMBLE).not.toContain("$\"");
     expect(WINDOWS_PS_PREAMBLE).not.toContain("?.");
     expect(WINDOWS_PS_PREAMBLE).not.toContain("nameof(");
+  });
+
+  it("R68-C: declares the SendInput machinery (the input path — structs, one P/Invoke, the static helpers)", () => {
+    // The owner's live trace: every type/key/scroll call failed
+    // capability_fail_closed because [System.Windows.Forms.SendKeys] was
+    // TypeNotFound. The U32 class now owns keyboard input end-to-end.
+    for (const needle of [
+      "public struct KEYBDINPUT{public ushort wVk;public ushort wScan;public uint dwFlags;public uint time;public IntPtr dwExtraInfo;}",
+      "public struct MOUSEINPUT{public int dx;public int dy;public uint mouseData;public uint dwFlags;public uint time;public IntPtr dwExtraInfo;}",
+      "[FieldOffset(0)]public MOUSEINPUT mi;[FieldOffset(0)]public KEYBDINPUT ki;",
+      "public struct INPUT{public uint type;public INPUTUNION u;}",
+      "[DllImport(\"user32.dll\",SetLastError=true)]public static extern uint SendInput(uint n,INPUT[] p,int cb);",
+      "public static uint SendText(string s)",
+      "public static uint TapKey(ushort vk)",
+      "public static uint ModsDown(ushort[] mods)",
+      "public static uint ModsUp(ushort[] mods)",
+      "public static uint Chord(ushort[] mods,ushort key)",
+      "public static extern bool ShowWindow(IntPtr h,int cmd);",
+    ]) {
+      expect(WINDOWS_PS_PREAMBLE).toContain(needle);
+    }
+    // The platform-correct INPUT layout: Sequential INPUT + Explicit union
+    // overlay (the union's IntPtr member forces offset 8 on x64 / 4 on x86);
+    // sizeof rides Marshal.SizeOf inside SendMany.
+    expect(WINDOWS_PS_PREAMBLE).toContain("[StructLayout(LayoutKind.Explicit)]");
+    expect(WINDOWS_PS_PREAMBLE).toContain("[StructLayout(LayoutKind.Sequential)]\npublic struct INPUT{");
+    expect(WINDOWS_PS_PREAMBLE).toContain("Marshal.SizeOf(typeof(INPUT))");
+    // SendText maps \n to real VK_RETURN presses ('\r' skipped so \r\n is ONE Enter)
+    // and every other char to KEYEVENTF_UNICODE (0x0004 down, 0x0006 up).
+    expect(WINDOWS_PS_PREAMBLE).toContain("if(ch=='\\n'){");
+    expect(WINDOWS_PS_PREAMBLE).toContain("KeyInput(0,(ushort)ch,0x0004)");
+    expect(WINDOWS_PS_PREAMBLE).toContain("KeyInput(0,(ushort)ch,0x0006)");
+  });
+
+  it("R68-C: NO Windows.Forms for input — LoadWithPartialName is GONE (the dead dependency the live trace exposed)", () => {
+    // The owner's host: LoadWithPartialName('System.Windows.Forms')
+    // silently failed (every SendKeys call → TypeNotFound) while
+    // captureDisplay's own Add-Type -AssemblyName System.Windows.Forms
+    // WORKED live (screenshots succeeded all round). Input is SendInput
+    // P/Invoke now — the assembly is dead weight and REMOVED.
+    expect(WINDOWS_PS_PREAMBLE).not.toContain("LoadWithPartialName");
+    expect(WINDOWS_PS_PREAMBLE).not.toContain("System.Windows.Forms");
+    expect(WINDOWS_PS_PREAMBLE).not.toContain("SendKeys");
+    // captureDisplay/captureRegion keep their OWN proven Add-Type lines
+    // (pinned in their describes below).
+  });
+
+  it("R68-C (C4): declares the Chromium accessibility poke (EnumChildWindows + WM_GETOBJECT to the render widget)", () => {
+    // Chromium builds its web a11y tree ONLY after an AT pokes the render
+    // widget — the poke is what a screen reader does on connect.
+    for (const needle of [
+      "public static int PokeChromium(IntPtr hwnd)",
+      "public delegate bool ChildProc(IntPtr h,IntPtr lp);",
+      "[DllImport(\"user32.dll\")]public static extern bool EnumChildWindows(IntPtr p,ChildProc cb,IntPtr lp);",
+      "[DllImport(\"user32.dll\")]public static extern IntPtr SendMessage(IntPtr h,uint msg,IntPtr w,IntPtr l);",
+      "Chrome_RenderWidgetHostHWND",
+      "SendMessage(h,0x3D,IntPtr.Zero,new IntPtr(unchecked((int)0xFFFFFFFC)));",
+    ]) {
+      expect(WINDOWS_PS_PREAMBLE).toContain(needle);
+    }
   });
 
   it("OutJson is SHAPE-AWARE: lists keep the array wrapper, objects pass through, empty lists emit []", () => {
@@ -447,119 +521,362 @@ describe("R66-2-d: buildSnapshot walks 2400 elements and probes ONLY interactive
     const garbage = await windowsBackend.buildSnapshot(fakeRun("not json"), APP, WINDOW, "full");
     expect("error" in garbage && garbage.error).toContain("not valid JSON");
   });
+
+  it("R68-C (C4): POKEs the Chromium render widget BEFORE the UIA walk + the sparse-retry re-walks ONCE", async () => {
+    // The owner's Edge trees were SPARSE (only the window element): Chromium
+    // builds its web a11y tree ONLY after an AT pokes the render widget.
+    // The poke is U32-gated (the walk itself needs no U32) and runs BEFORE
+    // Walk; a poke that fired but produced ≤1 element re-walks after 600ms.
+    const script = await snapshotScript("full");
+    expect(script.indexOf("[U32]::PokeChromium([IntPtr]197266)")).toBeGreaterThan(-1);
+    expect(script.indexOf("[U32]::PokeChromium")).toBeLessThan(script.indexOf("Walk $root 0"));
+    expect(script).toContain("if ($script:U32_OK) { try { $pokeCount = [U32]::PokeChromium");
+    expect(script).toContain("if ($pokeCount -gt 0) { Start-Sleep -Milliseconds 400 }");
+    expect(script).toContain("if ($pokeCount -gt 0 -and $out.Count -le 1) {");
+    expect(script).toContain("Start-Sleep -Milliseconds 600");
+    // The re-walk resets $out first (the sparse first pass is discarded).
+    expect(script).toContain("$out = New-Object System.Collections.ArrayList\n  Walk $root 0");
+    // Exactly ONE Walk call site at top level... the re-walk adds a second
+    // `Walk $root 0` — pin the count honestly (2: the first walk + the retry).
+    expect(script.split("Walk $root 0").length - 1).toBe(2);
+  });
 });
 
-/* ── R67-C: the SendKeys key table (THE key fix — "tab" typed t-a-b) ─────── */
+/* ── R68-C (C1): rawScroll / rawClick / rawDrag — the SendInput input paths ── */
 
-describe("R67-C: composeSendKeysChord — key names + chords (the key tool fix)", () => {
-  it("maps every key NAME to its SendKeys literal (never literal text)", () => {
-    expect(composeSendKeysChord(["tab"])).toEqual({ ok: true, sendKeys: "{TAB}" });
-    expect(composeSendKeysChord(["enter"])).toEqual({ ok: true, sendKeys: "{ENTER}" });
-    expect(composeSendKeysChord(["return"])).toEqual({ ok: true, sendKeys: "{ENTER}" });
-    expect(composeSendKeysChord(["esc"])).toEqual({ ok: true, sendKeys: "{ESC}" });
-    expect(composeSendKeysChord(["escape"])).toEqual({ ok: true, sendKeys: "{ESC}" });
-    expect(composeSendKeysChord(["backspace"])).toEqual({ ok: true, sendKeys: "{BACKSPACE}" });
-    expect(composeSendKeysChord(["delete"])).toEqual({ ok: true, sendKeys: "{DELETE}" });
-    expect(composeSendKeysChord(["del"])).toEqual({ ok: true, sendKeys: "{DELETE}" });
-    expect(composeSendKeysChord(["space"])).toEqual({ ok: true, sendKeys: " " });
-    expect(composeSendKeysChord(["up"])).toEqual({ ok: true, sendKeys: "{UP}" });
-    expect(composeSendKeysChord(["arrowdown"])).toEqual({ ok: true, sendKeys: "{DOWN}" });
-    expect(composeSendKeysChord(["arrowleft"])).toEqual({ ok: true, sendKeys: "{LEFT}" });
-    expect(composeSendKeysChord(["arrowright"])).toEqual({ ok: true, sendKeys: "{RIGHT}" });
-    expect(composeSendKeysChord(["home"])).toEqual({ ok: true, sendKeys: "{HOME}" });
-    expect(composeSendKeysChord(["end"])).toEqual({ ok: true, sendKeys: "{END}" });
-    expect(composeSendKeysChord(["pageup"])).toEqual({ ok: true, sendKeys: "{PGUP}" });
-    expect(composeSendKeysChord(["pgup"])).toEqual({ ok: true, sendKeys: "{PGUP}" });
-    expect(composeSendKeysChord(["pagedown"])).toEqual({ ok: true, sendKeys: "{PGDN}" });
-    expect(composeSendKeysChord(["pgdn"])).toEqual({ ok: true, sendKeys: "{PGDN}" });
-    expect(composeSendKeysChord(["insert"])).toEqual({ ok: true, sendKeys: "{INSERT}" });
-    expect(composeSendKeysChord(["help"])).toEqual({ ok: true, sendKeys: "{HELP}" });
+describe("R68-C: rawScroll / rawClick / rawDrag ride SendInput (no SendKeys)", () => {
+  it("horizontal scroll taps VK LEFT/RIGHT via [U32]::TapKey; vertical stays mouse_event", async () => {
+    const run = fakeRun("OK");
+    const result = await windowsBackend.rawScroll(run, { x: 10, y: 20 }, "left", 30);
+    expect(result.ok).toBe(true);
+    const script = decodeCapsuleScript(run.capsules[0]!);
+    expect(script).toContain("[void][U32]::TapKey(0x25)");
+    expect(script).not.toContain("SendKeys");
+
+    const run2 = fakeRun("OK");
+    await windowsBackend.rawScroll(run2, { x: 10, y: 20 }, "right", 30);
+    expect(decodeCapsuleScript(run2.capsules[0]!)).toContain("[void][U32]::TapKey(0x27)");
+
+    const run3 = fakeRun("OK");
+    await windowsBackend.rawScroll(run3, { x: 10, y: 20 }, "down", 30);
+    const script3 = decodeCapsuleScript(run3.capsules[0]!);
+    expect(script3).toContain("[U32]::mouse_event(0x0800");
+    // No TapKey CALL in the vertical body (the preamble's declaration is
+    // of course present — the call form is pinned).
+    expect(script3).not.toContain("[U32]::TapKey(");
+  });
+
+  it("modifier clicks hold via [U32]::ModsDown/ModsUp (VK arrays) — the '{CTRLDOWN}' SendKeys path is gone", async () => {
+    const run = fakeRun("OK");
+    const result = await windowsBackend.rawClick(run, { x: 10, y: 20 }, "left", 1, ["ctrl", "shift"]);
+    expect(result.ok).toBe(true);
+    const script = decodeCapsuleScript(run.capsules[0]!);
+    expect(script).toContain("$m=@([uint16]17, [uint16]16)");
+    expect(script).toContain("[void][U32]::ModsDown($m)");
+    expect(script).toContain("[void][U32]::ModsUp($m)");
+    expect(script).not.toContain("SendKeys");
+    // The order: hold BEFORE SetCursorPos, release AFTER the clicks.
+    expect(script.indexOf("[void][U32]::ModsDown($m)")).toBeLessThan(script.indexOf("[void][U32]::SetCursorPos"));
+    expect(script.indexOf("[U32]::mouse_event(2,")).toBeLessThan(script.indexOf("[void][U32]::ModsUp($m)"));
+
+    // No modifiers: NO mods machinery in the body (the call form — the
+    // preamble's declaration is of course present).
+    const run2 = fakeRun("OK");
+    await windowsBackend.rawClick(run2, { x: 10, y: 20 }, "left", 1, []);
+    expect(decodeCapsuleScript(run2.capsules[0]!)).not.toContain("[U32]::ModsDown(");
+    expect(decodeCapsuleScript(run2.capsules[0]!)).not.toContain("$m=@(");
+    // 'super' is a REAL VK now (LWIN 91) — usable as a click modifier.
+    const run3 = fakeRun("OK");
+    await windowsBackend.rawClick(run3, { x: 10, y: 20 }, "left", 1, ["super"]);
+    expect(decodeCapsuleScript(run3.capsules[0]!)).toContain("$m=@([uint16]91)");
+  });
+
+  it("modifier drags hold the same way (ModsDown before the gesture, ModsUp after mouse-up)", async () => {
+    const run = fakeRun("OK");
+    const result = await windowsBackend.rawDrag(run, { x: 10, y: 20 }, { x: 110, y: 120 }, ["ctrl"]);
+    expect(result.ok).toBe(true);
+    const script = decodeCapsuleScript(run.capsules[0]!);
+    expect(script).toContain("$m=@([uint16]17)");
+    expect(script.indexOf("[void][U32]::ModsDown($m)")).toBeLessThan(script.indexOf("[U32]::mouse_event(2,"));
+    expect(script.indexOf("[U32]::mouse_event(4,")).toBeLessThan(script.indexOf("[void][U32]::ModsUp($m)"));
+    expect(script).not.toContain("SendKeys");
+  });
+});
+
+/* ── R68-C (C3): the activate escalation ladder ──────────────────────────── */
+
+describe("R68-C: activate escalates to the minimize/restore trick after the polite sequence fails", () => {
+  it("keeps the AttachThreadInput sequence + 1.5s verify, then SW_MINIMIZE(6) → 150ms → SW_RESTORE(9) + re-verify", async () => {
+    const run = fakeRun("ACTIVE");
+    const result = await windowsBackend.activate(run, 4012, 197266);
+    expect(result).toEqual({ ok: true, active: true });
+    const script = decodeCapsuleScript(run.capsules[0]!);
+    // The polite sequence survives untouched.
+    expect(script).toContain("[void][U32]::AttachThreadInput($curTid, $targetTid, $true)");
+    expect(script).toContain("[void][U32]::BringWindowToTop($h)");
+    expect(script).toContain("[void][U32]::SetForegroundWindow($h)");
+    expect(script).toContain("$deadline = (Get-Date).AddMilliseconds(1500)");
+    // The escalation ladder — only entered when the first verify FAILED.
+    expect(script).toContain("if ([U32]::GetForegroundWindow() -ne $h) {");
+    expect(script).toContain("[void][U32]::ShowWindow($h, 6)");
+    expect(script).toContain("Start-Sleep -Milliseconds 150");
+    expect(script).toContain("[void][U32]::ShowWindow($h, 9)");
+    expect(script).toContain("$deadline2 = (Get-Date).AddMilliseconds(1500)");
+    // The honest postcondition stays: only a verified foreground is ACTIVE.
+    expect(script).toContain("if ([U32]::GetForegroundWindow() -eq $h) { Write-Output 'ACTIVE' } else { Write-Output 'INACTIVE' }");
+  });
+
+  it("INACTIVE is reported honestly when even the escalation fails; ERR: shapes fail closed", async () => {
+    const inactive = await windowsBackend.activate(fakeRun("INACTIVE"), 4012, 197266);
+    expect(inactive).toEqual({ ok: true, active: false });
+    const notRunning = await windowsBackend.activate(fakeRun("ERR:not-running"), 4012, 197266);
+    expect(notRunning).toEqual({ ok: false, active: false });
+  });
+});
+
+/* ── R68-C: the element-action select body rides SendInput ───────────────── */
+
+describe("R68-C: the select_text action taps HOME (+ optional shift+END) via SendInput", () => {
+  it("caret placement = [U32]::TapKey(HOME); with a length = shift held for END — the SendKeys {HOME}/+{END} path is dead", () => {
+    const caret = windowsElementActionScript(
+      4012,
+      { windowId: 197266, title: "notes.txt - Notepad" },
+      { index: 2, kind: "textfield", name: "File name:" },
+      "select",
+    );
+    expect(caret).toContain("[void][U32]::TapKey([uint16]0x24)");
+    expect(caret).not.toContain("[System.Windows.Forms.SendKeys]");
+    expect(caret).not.toContain("[U32]::ModsDown(");
+    expect(caret).not.toContain("$sel=@(");
+
+    const all = windowsElementActionScript(
+      4012,
+      { windowId: 197266, title: "notes.txt - Notepad" },
+      { index: 2, kind: "textfield", name: "File name:" },
+      "select",
+      undefined,
+      undefined,
+      0,
+      10,
+    );
+    expect(all).toContain("$sel=@([uint16]0x10)");
+    expect(all).toContain("[void][U32]::ModsDown($sel)");
+    expect(all).toContain("[void][U32]::TapKey([uint16]0x23)");
+    expect(all).toContain("[void][U32]::ModsUp($sel)");
+    expect(all).not.toContain("[System.Windows.Forms.SendKeys]");
+    // The select body carries the U32 guard (press/setValue/action do not).
+    expect(all).toContain("if (-not $script:U32_OK) { Write-Output 'ERR:U32-unavailable");
+  });
+
+  it("the OTHER element actions stay pure UIA (no U32 guard, no input machinery)", () => {
+    const press = windowsElementActionScript(
+      4012,
+      { windowId: 197266, title: "notes.txt - Notepad" },
+      { index: 1, kind: "button", name: "Save" },
+      "press",
+    );
+    expect(press).not.toContain("U32-unavailable");
+    expect(press).not.toContain("TapKey");
+    expect(press).toContain("$ip.Invoke()");
+  });
+});
+
+/* ── R68-C: the key-name → VK table (the SendInput chord composer) ──────── */
+
+describe("R68-C: capsule sizing honesty (the re-measured -EncodedCommand ceiling math)", () => {
+  it("the biggest FIXED capsule (preamble + buildSnapshot) stays under the 32,767-char CreateProcess ceiling", async () => {
+    // MEASURED at R68-C completion (node over the real composed capsules):
+    // the preamble grew 3,527 → 6,682 chars for the SendInput machinery +
+    // the Chromium poke; buildSnapshot composes 11,587/11,588 script chars
+    // (full/compact) → 30,900/30,904 base64 (the compact variant wins by
+    // the one char of "$false"). Bound-pinned here so future preamble
+    // growth cannot silently cross the line.
+    const run = fakeRun('{"elements":[{"index":0,"kind":"window","name":"Edge","flags":[]}]}');
+    await windowsBackend.buildSnapshot(run, { pid: 4012 }, {
+      windowId: 197266,
+      title: "Bing — Microsoft Edge",
+      bounds: [0, 0, 1280, 1024] as [number, number, number, number],
+      main: true,
+      focused: true,
+    }, "full");
+    const b64 = run.capsules[0]!.args[run.capsules[0]!.args.indexOf("-EncodedCommand") + 1]!;
+    expect(b64.length).toBeGreaterThan(20_000); // it IS the grown capsule (30,900 measured)
+    expect(b64.length).toBeLessThan(32_000); // ~1.8K headroom — the preamble is past comfort, see the psCapsule docblock
+  });
+});
+
+describe("R68-C: the ARGV ceiling guard — model-supplied payloads refuse BEFORE the spawn", () => {
+  // The psCapsule docblock's honest history: an earlier draft claimed the
+  // typeText timeout math caps text at ~1,400 chars — WRONG (Math.min
+  // clamps the TIMEOUT, not the text). A long type/set_value/clipboard
+  // payload would have crossed CreateProcess's 32,767-char command-line
+  // ceiling and died at the spawn with a cryptic error. The three payload
+  // paths now MEASURE the composed capsule and refuse pre-spawn.
+  const SCOPE = { pid: 4242, windowId: 77 };
+  const WIN = { windowId: 197266, title: "notes.txt - Notepad" };
+  const EL = { index: 2, kind: "textfield", name: "File name:" };
+
+  it("typeText: a text long enough to cross the ceiling refuses with the self-teaching error — NO capsule spawned", async () => {
+    const run = fakeRun("OK");
+    const result = await windowsBackend.typeText(run, "x".repeat(7000), SCOPE);
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error).toContain("type text too long");
+      expect(result.error).toContain("split it across multiple type calls");
+      expect(result.error).toContain("32,767");
+    }
+    expect(run.capsules).toHaveLength(0);
+  });
+
+  it("typeText: a large-but-under text still sends (the guard is a ceiling, not a size budget)", async () => {
+    const run = fakeRun("OK");
+    const result = await windowsBackend.typeText(run, "x".repeat(2000), SCOPE);
+    expect(result.ok).toBe(true);
+    expect(run.capsules).toHaveLength(1);
+  });
+
+  it("setValue (the element-target type path) gets the SAME guard — no capsule spawned", async () => {
+    const run = fakeRun("OK");
+    const result = await windowsBackend.setValue(run, 4012, WIN, EL, "x".repeat(7000));
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.error).toContain("set_value text too long");
+    expect(run.capsules).toHaveLength(0);
+  });
+
+  it("writeClipboard gets the SAME guard — no capsule spawned", async () => {
+    const run = fakeRun("OK");
+    const result = await windowsBackend.writeClipboard(run, "x".repeat(7000));
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.error).toContain("clipboard text too long");
+    expect(run.capsules).toHaveLength(0);
+  });
+});
+
+describe("R68-C: composeVkChord — key names + chords (the SendInput rewrite)", () => {
+  it("maps every key NAME to its Virtual-Key code (never literal text)", () => {
+    expect(composeVkChord(["tab"])).toEqual({ ok: true, mods: [], key: 0x09 });
+    expect(composeVkChord(["enter"])).toEqual({ ok: true, mods: [], key: 0x0d });
+    expect(composeVkChord(["return"])).toEqual({ ok: true, mods: [], key: 0x0d });
+    expect(composeVkChord(["esc"])).toEqual({ ok: true, mods: [], key: 0x1b });
+    expect(composeVkChord(["escape"])).toEqual({ ok: true, mods: [], key: 0x1b });
+    expect(composeVkChord(["backspace"])).toEqual({ ok: true, mods: [], key: 0x08 });
+    expect(composeVkChord(["delete"])).toEqual({ ok: true, mods: [], key: 0x2e });
+    expect(composeVkChord(["del"])).toEqual({ ok: true, mods: [], key: 0x2e });
+    expect(composeVkChord(["insert"])).toEqual({ ok: true, mods: [], key: 0x2d });
+    expect(composeVkChord(["help"])).toEqual({ ok: true, mods: [], key: 0x2f });
+    expect(composeVkChord(["space"])).toEqual({ ok: true, mods: [], key: 0x20 });
+    expect(composeVkChord(["up"])).toEqual({ ok: true, mods: [], key: 0x26 });
+    expect(composeVkChord(["arrowdown"])).toEqual({ ok: true, mods: [], key: 0x28 });
+    expect(composeVkChord(["arrowleft"])).toEqual({ ok: true, mods: [], key: 0x25 });
+    expect(composeVkChord(["arrowright"])).toEqual({ ok: true, mods: [], key: 0x27 });
+    expect(composeVkChord(["home"])).toEqual({ ok: true, mods: [], key: 0x24 });
+    expect(composeVkChord(["end"])).toEqual({ ok: true, mods: [], key: 0x23 });
+    expect(composeVkChord(["pageup"])).toEqual({ ok: true, mods: [], key: 0x21 });
+    expect(composeVkChord(["pgup"])).toEqual({ ok: true, mods: [], key: 0x21 });
+    expect(composeVkChord(["pagedown"])).toEqual({ ok: true, mods: [], key: 0x22 });
+    expect(composeVkChord(["pgdn"])).toEqual({ ok: true, mods: [], key: 0x22 });
     for (let f = 1; f <= 12; f++) {
-      expect(composeSendKeysChord([`f${f}`])).toEqual({ ok: true, sendKeys: `{F${f}}` });
+      expect(composeVkChord([`f${f}`])).toEqual({ ok: true, mods: [], key: 0x70 + (f - 1) });
     }
   });
 
-  it("composes LEADING modifier chords — ctrl ^, shift +, alt % (linux xdotool parity for 'ctrl+a')", () => {
-    expect(composeSendKeysChord(["ctrl", "a"])).toEqual({ ok: true, sendKeys: "^a" });
-    expect(composeSendKeysChord(["control", "a"])).toEqual({ ok: true, sendKeys: "^a" });
-    expect(composeSendKeysChord(["shift", "tab"])).toEqual({ ok: true, sendKeys: "+{TAB}" });
-    expect(composeSendKeysChord(["alt", "f4"])).toEqual({ ok: true, sendKeys: "%{F4}" });
-    expect(composeSendKeysChord(["option", "f4"])).toEqual({ ok: true, sendKeys: "%{F4}" });
-    expect(composeSendKeysChord(["ctrl", "shift", "t"])).toEqual({ ok: true, sendKeys: "^+t" });
+  it("composes LEADING modifier chords — ctrl 0x11, shift 0x10, alt 0x12 (linux xdotool parity for 'ctrl+a')", () => {
+    expect(composeVkChord(["ctrl", "a"])).toEqual({ ok: true, mods: [0x11], key: 0x41 });
+    expect(composeVkChord(["control", "a"])).toEqual({ ok: true, mods: [0x11], key: 0x41 });
+    expect(composeVkChord(["shift", "tab"])).toEqual({ ok: true, mods: [0x10], key: 0x09 });
+    expect(composeVkChord(["alt", "f4"])).toEqual({ ok: true, mods: [0x12], key: 0x73 });
+    expect(composeVkChord(["option", "f4"])).toEqual({ ok: true, mods: [0x12], key: 0x73 });
+    // 't' → VK 0x54 (VK codes are the UPPERCASE letter codes: 0x41 + ord).
+    expect(composeVkChord(["ctrl", "shift", "t"])).toEqual({ ok: true, mods: [0x11, 0x10], key: 0x54 });
   });
 
-  it("single printable characters pass through, SendKeys-SPECIALS brace-escaped; a lone '+' token is the plus key", () => {
-    expect(composeSendKeysChord(["a"])).toEqual({ ok: true, sendKeys: "a" });
-    expect(composeSendKeysChord(["5"])).toEqual({ ok: true, sendKeys: "5" });
-    // The escape set (the same regex the TEXT path escapes with):
-    // + ^ % ~ ( ) [ ] { } must be braced or SendKeys reads them as syntax.
-    expect(composeSendKeysChord(["+"])).toEqual({ ok: true, sendKeys: "{+}" });
-    expect(composeSendKeysChord(["%"])).toEqual({ ok: true, sendKeys: "{%}" });
-    expect(composeSendKeysChord(["^"])).toEqual({ ok: true, sendKeys: "{^}" });
-    expect(composeSendKeysChord(["~"])).toEqual({ ok: true, sendKeys: "{~}" });
-    expect(composeSendKeysChord(["("])).toEqual({ ok: true, sendKeys: "{(}" });
-    expect(composeSendKeysChord(["{"])).toEqual({ ok: true, sendKeys: "{{}" });
-    expect(composeSendKeysChord(["ctrl", "+"])).toEqual({ ok: true, sendKeys: "^{+}" });
+  it("R68-C: the Windows/Meta key is a REAL VK now (LWIN 0x5B) — 'win+l' composes where SendKeys refused", () => {
+    // SendInput synthesizes the Windows key; the R67-C honest refusal for
+    // meta chords is retired (the capability gap is gone).
+    expect(composeVkChord(["win", "l"])).toEqual({ ok: true, mods: [0x5b], key: 0x4c });
+    expect(composeVkChord(["meta", "l"])).toEqual({ ok: true, mods: [0x5b], key: 0x4c });
+    expect(composeVkChord(["super", "d"])).toEqual({ ok: true, mods: [0x5b], key: 0x44 });
+    expect(composeVkChord(["cmd", "d"])).toEqual({ ok: true, mods: [0x5b], key: 0x44 });
   });
 
-  it("refuses the Windows/Meta key HONESTLY (SendKeys has no win-key modifier — nothing is typed)", () => {
-    for (const bad of [["meta", "l"], ["win", "l"], ["cmd", "l"], ["super", "l"], ["meta"]]) {
-      const result = composeSendKeysChord(bad);
-      expect(result.ok).toBe(false);
-      if (!result.ok) {
-        expect(result.error).toContain("the Windows SendKeys backend cannot synthesize the Windows/Meta key");
-        expect(result.error).not.toContain("unknown key name");
-      }
-    }
+  it("single characters map to VK codes: letters, digits, and the OEM punctuation ('++' → the plus key)", () => {
+    expect(composeVkChord(["a"])).toEqual({ ok: true, mods: [], key: 0x41 });
+    expect(composeVkChord(["z"])).toEqual({ ok: true, mods: [], key: 0x5a });
+    expect(composeVkChord(["5"])).toEqual({ ok: true, mods: [], key: 0x35 });
+    expect(composeVkChord(["0"])).toEqual({ ok: true, mods: [], key: 0x30 });
+    // The OEM set (splitKeyChord preserves a literal '+' so '++' is the key):
+    expect(composeVkChord(["+"])).toEqual({ ok: true, mods: [], key: 0xbb });
+    expect(composeVkChord(["ctrl", "+"])).toEqual({ ok: true, mods: [0x11], key: 0xbb });
+    expect(composeVkChord(["-"])).toEqual({ ok: true, mods: [], key: 0xbd });
+    expect(composeVkChord([","])).toEqual({ ok: true, mods: [], key: 0xbc });
+    expect(composeVkChord(["."])).toEqual({ ok: true, mods: [], key: 0xbe });
+    expect(composeVkChord(["/"])).toEqual({ ok: true, mods: [], key: 0xbf });
+    expect(composeVkChord([";"])).toEqual({ ok: true, mods: [], key: 0xba });
+    expect(composeVkChord(["'"])).toEqual({ ok: true, mods: [], key: 0xde });
   });
 
-  it("refuses unknown names and malformed chords with the full supported list (self-teaching errors)", () => {
-    const unknown = composeSendKeysChord(["tabs"]);
+  it("refuses unknown names and unsupported single chars honestly (self-teaching errors, nothing typed)", () => {
+    const unknown = composeVkChord(["tabs"]);
     expect(unknown.ok).toBe(false);
     if (!unknown.ok) {
       expect(unknown.error).toContain("unknown key name 'tabs'");
-      expect(unknown.error).toContain("ctrl+a / shift+tab / alt+f4");
+      expect(unknown.error).toContain("ctrl+a / shift+tab / alt+f4 / win+l");
     }
-    const noKey = composeSendKeysChord(["ctrl"]);
+    // A printable char with NO VK in the table (SendKeys-specials like '~'
+    // used to pass through brace-escaped; the honest path now points at type).
+    const tilde = composeVkChord(["~"]);
+    expect(tilde.ok).toBe(false);
+    if (!tilde.ok) expect(tilde.error).toContain("type it with the type tool");
+    const noKey = composeVkChord(["ctrl"]);
     expect(noKey.ok).toBe(false);
     if (!noKey.ok) expect(noKey.error).toContain("exactly ONE key");
-    const twoKeys = composeSendKeysChord(["a", "b"]);
+    const twoKeys = composeVkChord(["a", "b"]);
     expect(twoKeys.ok).toBe(false);
     if (!twoKeys.ok) expect(twoKeys.error).toContain("exactly ONE key");
-    const trailingMod = composeSendKeysChord(["a", "ctrl"]);
+    const trailingMod = composeVkChord(["a", "ctrl"]);
     expect(trailingMod.ok).toBe(false);
     if (!trailingMod.ok) expect(trailingMod.error).toContain("exactly ONE key");
-    const empty = composeSendKeysChord([]);
+    const empty = composeVkChord([]);
     expect(empty.ok).toBe(false);
     if (!empty.ok) expect(empty.error).toContain("no key tokens given");
   });
 });
 
-describe("R67-C: rawKey sends ONE composed SendKeys chord (never tokens as text)", () => {
-  it("key \"tab\" → SendWait('{TAB}') — the letters t-a-b are NEVER typed", async () => {
+describe("R68-C: rawKey sends ONE composed SendInput chord (never tokens as text)", () => {
+  it("key \"tab\" → Chord with VK 9 — the letters t-a-b are NEVER typed, no SendKeys anywhere", async () => {
     const run = fakeRun("OK");
     const result = await windowsBackend.rawKey(run, ["tab"], { pid: 4242, windowId: 77 });
     expect(result.ok).toBe(true);
     expect(run.capsules).toHaveLength(1);
     const script = decodeCapsuleScript(run.capsules[0]!);
-    expect(script).toContain("[System.Windows.Forms.SendKeys]::SendWait(@'{TAB}'@)");
-    expect(script).not.toContain("SendWait(@'tab'@)");
+    expect(script).toContain("[void][U32]::Chord($m, [uint16]9)");
+    // No modifiers: the array literal is the EMPTY form.
+    expect(script).toContain("$m=@()");
+    // The dead dependency is gone from the input path entirely.
+    expect(script).not.toContain("SendKeys");
     // Scope verification survives (Win raw keys land in the frontmost window).
     expect(script).toContain('if ($fgpid -ne 4242) { Write-Output "FRONTMOST_MISMATCH:$fgpid"; exit 0 }');
     // R67-C: the U32 guard — a dead Add-Type must refuse, not abort.
     expect(script).toContain("if (-not $script:U32_OK) { Write-Output 'ERR:U32-unavailable");
   });
 
-  it("chords arrive composed: ctrl+a → '^a', ctrl+shift+t → '^+t' (one SendWait, not text)", async () => {
+  it("chords arrive as VK arrays: ctrl+a → $m=@([uint16]17) + key 65; ctrl+shift+t adds both mods (one Chord call)", async () => {
     const run = fakeRun("OK");
     await windowsBackend.rawKey(run, ["ctrl", "a"], { pid: 4242, windowId: 77 });
     const script = decodeCapsuleScript(run.capsules[0]!);
-    expect(script).toContain("[System.Windows.Forms.SendKeys]::SendWait(@'^a'@)");
-    expect(script.split("SendWait").length - 1).toBe(1); // ONE chord, one call
+    expect(script).toContain("$m=@([uint16]17)");
+    expect(script).toContain("[void][U32]::Chord($m, [uint16]65)");
+    expect(script.split("[U32]::Chord").length - 1).toBe(1); // ONE chord, one call
+    expect(script).not.toContain("SendKeys");
 
     const run2 = fakeRun("OK");
     await windowsBackend.rawKey(run2, ["ctrl", "shift", "t"], { pid: 4242, windowId: 77 });
-    expect(decodeCapsuleScript(run2.capsules[0]!)).toContain("SendWait(@'^+t'@)");
+    expect(decodeCapsuleScript(run2.capsules[0]!)).toContain("$m=@([uint16]17, [uint16]16)");
+    // R68-C: the Windows key composes now (LWIN) — the old honest refusal
+    // for meta chords is retired.
+    const run3 = fakeRun("OK");
+    await windowsBackend.rawKey(run3, ["win", "l"], { pid: 4242, windowId: 77 });
+    expect(decodeCapsuleScript(run3.capsules[0]!)).toContain("$m=@([uint16]91)");
   });
 
   it("the FRONTMOST_MISMATCH channel still refuses (nothing typed); the U32 guard ERR is parsed as a failure", async () => {
@@ -574,10 +891,50 @@ describe("R67-C: rawKey sends ONE composed SendKeys chord (never tokens as text)
 
   it("an uncomposable chord refuses WITHOUT spawning a capsule (nothing is typed)", async () => {
     const run = fakeRun("OK");
-    const result = await windowsBackend.rawKey(run, ["meta", "l"], { pid: 4242, windowId: 77 });
+    const result = await windowsBackend.rawKey(run, ["tabs"], { pid: 4242, windowId: 77 });
     expect(result.ok).toBe(false);
-    if (!result.ok) expect(result.error).toContain("cannot synthesize the Windows/Meta key");
+    if (!result.ok) expect(result.error).toContain("unknown key name 'tabs'");
     expect(run.capsules).toHaveLength(0);
+  });
+});
+
+describe("R68-C: typeText rides [U32]::SendText (KEYEVENTF_UNICODE — the escaping class of bugs is dead)", () => {
+  it("the RAW text rides a here-string literal into SendText — no SendKeys, no splitTextToKeys, no brace-escaping", async () => {
+    const run = fakeRun("OK");
+    const result = await windowsBackend.typeText(run, "hello world", { pid: 4242, windowId: 77 });
+    expect(result.ok).toBe(true);
+    const script = decodeCapsuleScript(run.capsules[0]!);
+    expect(script).toContain("[void][U32]::SendText(@'hello world'@)");
+    expect(script).not.toContain("SendKeys");
+    // Scope verification + the guard ride along.
+    expect(script).toContain('if ($fgpid -ne 4242) { Write-Output "FRONTMOST_MISMATCH:$fgpid"; exit 0 }');
+    expect(script).toContain("if (-not $script:U32_OK) { Write-Output 'ERR:U32-unavailable");
+  });
+
+  it("SendKeys-SPECIAL characters ride RAW (KEYEVENTF_UNICODE needs no +%^~(){} escaping — the whole class is gone)", async () => {
+    const run = fakeRun("OK");
+    await windowsBackend.typeText(run, "a+b%c~(d){e}", { pid: 4242, windowId: 77 });
+    const script = decodeCapsuleScript(run.capsules[0]!);
+    // The literal rides UNESCAPED (the C# side maps each char to its
+    // Unicode code point — brace syntax never existed).
+    expect(script).toContain("[void][U32]::SendText(@'a+b%c~(d){e}'@)");
+    expect(script).not.toContain("{+}");
+    expect(script).not.toContain("{%}");
+    // Newlines ride the RAW text too — the \n → VK_RETURN mapping lives in
+    // the C# SendText (pinned in the preamble describe), not the JS side.
+    const run2 = fakeRun("OK");
+    await windowsBackend.typeText(run2, "line1\nline2", { pid: 4242, windowId: 77 });
+    const script2 = decodeCapsuleScript(run2.capsules[0]!);
+    expect(script2).toContain("[void][U32]::SendText(@'line1\nline2'@)");
+    expect(script2).not.toContain("{ENTER}");
+  });
+
+  it("the FRONTMOST_MISMATCH channel refuses (nothing typed); a failed capsule is an honest failure", async () => {
+    const mismatch = await windowsBackend.typeText(fakeRun("FRONTMOST_MISMATCH:9999"), "hi", { pid: 4242, windowId: 77 });
+    expect(mismatch).toEqual({ ok: false, error: "FRONTMOST_MISMATCH:9999" });
+    const failed = await windowsBackend.typeText(fakeRun("", 1), "hi", { pid: 4242, windowId: 77 });
+    expect(failed.ok).toBe(false);
+    if (!failed.ok) expect(failed.error).toContain("type failed");
   });
 });
 
@@ -598,6 +955,29 @@ describe("R67-C: focusedElementName — the Tab-walk readback script", () => {
     expect(empty).toBeNull();
     const failed = await windowsBackend.focusedElementName(fakeRun("", 1), 4242);
     expect(failed).toBeNull();
+  });
+});
+
+/* ── R68-C: the captures keep their OWN proven Add-Type lines ────────────── */
+
+describe("R68-C: the capture scripts load Windows.Forms via Add-Type (the PROVEN-live path)", () => {
+  it("captureDisplay / captureRegion / list_displays keep their own Add-Type -AssemblyName lines", async () => {
+    // The live trace's asymmetry: the preamble's LoadWithPartialName FAILED
+    // while Add-Type -AssemblyName WORKED (screenshots succeeded all round).
+    // The captures therefore keep their own loads — only INPUT lost the
+    // dependency.
+    const run = fakeRun("GEO:0,0,10,10");
+    await windowsBackend.captureDisplay(run, 1);
+    const script = decodeCapsuleScript(run.capsules[0]!);
+    expect(script).toContain("Add-Type -AssemblyName System.Drawing");
+    expect(script).toContain("Add-Type -AssemblyName System.Windows.Forms");
+    expect(script).toContain("[System.Windows.Forms.Screen]::AllScreens");
+
+    const run2 = fakeRun("GEO:0,0");
+    await windowsBackend.captureRegion(run2, { x: 0, y: 0, w: 10, h: 10 });
+    const regionScript = decodeCapsuleScript(run2.capsules[0]!);
+    expect(regionScript).toContain("Add-Type -AssemblyName System.Drawing");
+    expect(windowsListDisplaysScript()).toContain("Add-Type -AssemblyName System.Windows.Forms");
   });
 });
 

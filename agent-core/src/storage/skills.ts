@@ -71,10 +71,17 @@ export const COMPUTER_USE_SKILL_ID = "skill_builtin_computer_use";
  * could not locate one control in a thousands-element tree).
  *
  * ROUND-67 (R67-E): the TAB-WALK DISCOVERY paragraph — the Windows key
- * tool now sends REAL SendKeys chords and every key receipt names the
- * FOCUSED element, so walking Tab discovers the controls (the owner's
- * technique) — plus the embedded-browser boundary (browser_control only,
- * never computer-use tools on the in-app panel).
+ * tool now sends REAL SendInput chords (R68-C) and every key receipt
+ * names the FOCUSED element, so walking Tab discovers the controls (the
+ * owner's technique) — plus the embedded-browser boundary (browser_control
+ * only, never computer-use tools on the in-app panel).
+ *
+ * ROUND-68 (R68-C): the browser-tree truth + chain discipline — the web
+ * a11y tree IS searched (the Chromium poke activates it), screenshots are
+ * the fallback for browser content, and the observe→act chain is
+ * IMMEDIATE (frames valid 30s; verify with a small zoom crop). The
+ * frontmost line teaches the AUTO-activation (a mismatch refusal now
+ * means that activation failed).
  */
 export const COMPUTER_USE_SKILL_BODY = `# Skill: computer-use
 
@@ -93,8 +100,10 @@ Main-agent only. Never delegate Computer Use to a subagent (subagents lack the s
 
 ## Big apps (browsers, Edge, VS Code)
 - get_app_state on a browser/IDE window returns a HUGE tree (Chromium exposes thousands of elements). Do NOT read it whole — SEARCH it: find_elements {appRef, query:"Sign in", kind:"button"} returns just the matching elements with indexes + bounds, far cheaper than get_app_state detail:"full".
+- Browser pages (Edge/Chrome): the WEB accessibility tree IS searched — find_elements by name finds links, buttons, inputs (the tree is activated automatically). Element targets are the primary path for browser content; screenshots only when the tree genuinely misses.
 - Prefer find_elements + element clicks (left_click/set_value with the returned stateId + index) over screenshots in big apps.
 - Never loop screenshots when the tree can answer: find_elements by name first; screenshot/zoom only when names genuinely cannot identify the control. An empty result tells you the query and how many elements were searched — retry with a shorter substring or read the tree.
+- CHAIN DISCIPLINE: screenshot → act IMMEDIATELY (frames stay valid 30s) — never re-screenshot between observing and acting; verify AFTER the action with a small zoom region crop, not a full screenshot. middle_click a link = open in new tab.
 
 ## Tab-walk discovery (R67)
 - Pressing key "tab" highlights the next focusable control on screen, and every key receipt names the FOCUSED element — walk Tab repeatedly to discover what is interactive when find_elements comes back empty or names cannot identify the target, then act on the element you reached. Combine with find_elements (search by name) when the app is big.
@@ -104,7 +113,7 @@ Main-agent only. Never delegate Computer Use to a subagent (subagents lack the s
 
 ## Discipline
 - type REPLACES a field's contents (select first to insert). set_value is the preferred semantic write. Prefer set_value/perform_action over raw input.
-- Raw input (coordinate clicks, key chords, app-scoped typing) on Windows/Linux requires the target app FRONTMOST — a frontmost_pid_mismatch refusal means: open_application(activate=true) → fresh get_app_state → retry ONCE.
+- Raw input (coordinate clicks, key chords, app-scoped typing) on Windows/Linux needs the target frontmost — the raw-input tools now ACTIVATE their target automatically (R68: verified activation + one retry). A frontmost_pid_mismatch refusal means that auto-activation failed: check the app still runs (list_apps), re-observe, retry ONCE.
 - scroll has no accessibility path — always coordinate. double/triple/middle click have no a11y equivalent — element targets fail closed; use coordinates.
 - Modifiers: macOS uses "cmd"; Windows/Linux use "ctrl".
 - Never send targetless type/key — scope with an element target or appRef.

@@ -385,17 +385,27 @@ export function buildTaggedPromptLines(ctx: PromptContext): TaggedLine[] {
     // to detect where it needs to tap, stuck taking screenshots"): big
     // Chromium trees need SEARCH, not full-tree reads and not screenshots.
     ident("- BIG APPS (browsers, Edge, VS Code): find_elements {appRef, query} SEARCHES the accessibility tree by name substring (optional kind filter) and returns the matching elements with their indexes + bounds — use it to locate one control in a huge window instead of reading the whole tree or looping screenshots. Then left_click {target:{type:\"element\"}} with the returned index.");
+    // ROUND-68 (R68-C): the Chromium poke made browser trees REAL — teach
+    // the model that BROWSER CONTENT IS SEARCHABLE (the owner's live
+    // 0.67.0 trace looped screenshots because it never believed the tree
+    // could answer).
+    ident("- BROWSER CONTENT IS SEARCHABLE (R68): Edge/Chrome web pages expose their REAL element tree — find_elements {appRef, query:'Wikipedia'} finds links/buttons/inputs BY NAME (the web tree is activated automatically before every walk); element targets are the PRIMARY path for browser content — screenshots only when the tree genuinely misses.");
     // ROUND-67 (R67, the owner's Tab-walk technique): the Windows key tool
-    // now maps key names to REAL SendKeys chords, and every key receipt
+    // now maps key names to REAL SendInput chords, and every key receipt
     // reports the FOCUSED element's name — pressing Tab walks the focusable
     // controls one by one and the receipt says where you landed. That is the
     // element-discovery fallback when find_elements/screenshot loops stall.
     ident("- TAB-WALK DISCOVERY (R67): when find_elements comes back empty or screenshots cannot identify the control, press key \"tab\" repeatedly — each key receipt names the FOCUSED element, and Tab walks the focusable controls one by one. Combine with find_elements (search by name) when the app is big.");
+    // ROUND-68 (R68-C): CHAIN DISCIPLINE — the owner: "utilizing the
+    // screenshot capturing way too much". Frames stay valid 30s now
+    // (MAX_FRAME_AGE_MS), so the observe→act pair must be IMMEDIATE; the
+    // verification crop is the cheap zoom, not another full screenshot.
+    ident("- CHAIN DISCIPLINE (R68): screenshot → act IMMEDIATELY on its pixels (frames stay valid 30s) — never re-screenshot between observing and acting; verify AFTER the action with a small zoom region crop of the one control, not a full screenshot. middle_click on a link = open in new tab.");
     ident("- Coordinates ({type:\"coordinate\"}) are the FALLBACK: pixels copied UNCHANGED from the LATEST returned raster. Never pre-scale, never attach app_ref/state_id to them.");
     ident("- Receipts are not promises: action_sent=true means it MAY have happened — verify via fresh get_app_state or an external oracle (file exists, exit code) before building on it.");
-    ident("- Refusals are self-teaching: read the named reason and follow its recovery (frontmost_pid_mismatch → activate → re-observe → retry ONCE). Never replay a sent action.");
+    ident("- Refusals are self-teaching: read the named reason and follow its recovery (frontmost_pid_mismatch → the auto-activation failed: re-observe, then retry ONCE). Never replay a sent action.");
     ident("- Launch apps with the user's EXACT spelling (character-for-character; never translate/shorten/substitute). list_apps lists RUNNING apps only.");
-    ident("- Raw input (typing, keys, coordinate clicks) on Windows/Linux needs the target frontmost. type REPLACES field content; set_value is the preferred write; scroll is coordinate-only.");
+    ident("- Raw input (typing, keys, coordinate clicks) on Windows/Linux needs the target frontmost — the raw-input tools now ACTIVATE their target app automatically (verified activation, honest receipts; a mismatch refusal means the activation itself failed). type REPLACES field content; set_value is the preferred write; scroll is coordinate-only.");
     ident("- Destructive/hard-to-reverse actions need explicit user go-ahead. NEVER type credentials. stop_computer_control ends the session — no further computer-use calls after it.");
     // ROUND-65 (R65): the SURFACE BOUNDARY — the owner's live 0.63.0 run had
     // the agent narrate an embedded-browser_navigation as "I opened Edge on

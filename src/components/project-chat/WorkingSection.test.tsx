@@ -14,9 +14,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { cleanup, fireEvent, screen, waitFor } from "@testing-library/react";
 import { QueryClient } from "@tanstack/react-query";
-import { WorkingSection, assignDelegateChildren } from "./WorkingSection";
+import { BareWorkingEntries, WorkingSection, assignDelegateChildren } from "./WorkingSection";
 import {
   ApiError,
+  fetchComputerFrameRaster,
   fetchSessionCheckpoints,
   fetchSnapshot,
   fetchSubAgents,
@@ -42,6 +43,9 @@ vi.mock("../../lib/api", async () => {
     fetchSnapshot: vi.fn(),
     restoreCheckpoint: vi.fn(),
     fetchSubAgents: vi.fn(),
+    // ROUND-68 (R68-A): the INLINE ScreenshotRow lazy-fetches its raster —
+    // mock it so the inline-row tests below never touch the network.
+    fetchComputerFrameRaster: vi.fn(),
   };
 });
 
@@ -1105,5 +1109,62 @@ describe("thinking display redesign (ROUND-58 R58-cf — no accent rails)", () =
     expect(toggle.textContent).toContain("A longer thought that should preview");
     fireEvent.click(toggle);
     expect(screen.getByRole("button", { name: "Collapse thought" })).toBeTruthy();
+  });
+});
+
+// ── ROUND-68 (R68-A): the INLINE screenshot row ─────────────────────────────
+describe("inline screenshot rows (ROUND-68 R68-A)", () => {
+  beforeEach(() => {
+    vi.mocked(fetchComputerFrameRaster)
+      .mockReset()
+      .mockResolvedValue(new Blob(["\x89PNG-bytes"], { type: "image/png" }));
+  });
+
+  it("a screenshot entry renders INLINE BETWEEN two tool rows (at its capture moment, not a bottom strip)", async () => {
+    const entries: WorkingEntry[] = [
+      { type: "tool", tool: { seq: 11, toolName: "screenshot", argsSummary: "full display", ok: true, ts: "2026-09-06T10:00:03Z" } },
+      { type: "screenshot", frameId: "f-1", tool: "screenshot", ts: "2026-09-06T10:00:04Z" },
+      { type: "tool", tool: { seq: 12, toolName: "zoom", argsSummary: "region: 100,100 300x200", ok: true, ts: "2026-09-06T10:00:05Z" } },
+    ];
+    const { container } = renderWithProviders(
+      <WorkingSection entries={entries} sessionId={SESSION_ID} projectId="proj_probe" defaultOpen />,
+    );
+    const row = await screen.findByTestId("screenshot-row");
+    expect(row).toBeTruthy();
+    // The inline tile fetched its raster and shows the PNG.
+    await waitFor(() => expect(fetchComputerFrameRaster).toHaveBeenCalledWith("f-1"));
+    expect(screen.getByRole("img", { name: "Screenshot captured by screenshot" })).toBeTruthy();
+    // INLINE = BETWEEN the tool rows: the row's DOM position sits after the
+    // screenshot tool pill and before the zoom pill (compareDocumentPosition).
+    const firstTool = screen.getByRole("button", { name: "screenshot full display" }) as HTMLElement;
+    const secondTool = screen.getByRole("button", { name: "zoom region: 100,100 300x200" }) as HTMLElement;
+    expect(firstTool.compareDocumentPosition(row) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(row.compareDocumentPosition(secondTool) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    // No strip remnant: no "Screenshots" section header, no strip testid.
+    expect(screen.queryByText("Screenshots")).toBeNull();
+    expect(container.querySelector('[data-testid="screenshot-strip"]')).toBeNull();
+  });
+
+  it("the section still counts TOOLS only — a screenshot never inflates the actions suffix", async () => {
+    const entries: WorkingEntry[] = [
+      { type: "tool", tool: { seq: 11, toolName: "screenshot", argsSummary: "full display", ok: true, ts: "t" } },
+      { type: "screenshot", frameId: "f-1", tool: "screenshot", ts: "t2" },
+      { type: "screenshot", frameId: "f-2", tool: "zoom", ts: "t3" },
+    ];
+    renderWithProviders(
+      <WorkingSection entries={entries} sessionId={SESSION_ID} projectId="proj_probe" defaultOpen />,
+    );
+    // ONE tool row + two inline captures → "1 action" (not 3).
+    const header = screen.getByRole("button", { name: /Worked for .* · 1 action\./ });
+    expect(header).toBeTruthy();
+    const rows = await screen.findAllByTestId("screenshot-row");
+    expect(rows).toHaveLength(2);
+  });
+
+  it("BareWorkingEntries renders NO inline row for a screenshot (a tools-free block has no section to anchor one)", () => {
+    const { container } = renderWithProviders(
+      <BareWorkingEntries entries={[{ type: "screenshot", frameId: "f-1", tool: "screenshot", ts: "t" }]} />,
+    );
+    expect(container.querySelector('[data-testid="screenshot-row"]')).toBeNull();
   });
 });

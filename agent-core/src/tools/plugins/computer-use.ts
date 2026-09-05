@@ -343,7 +343,7 @@ export const computerUsePlugin: PluginDefinition = {
       // without reading the whole snapshot or looping screenshots.
       tool(
         "find_elements",
-        "SEARCH an app's accessibility tree by name substring (and optional kind) — returns the matching elements with their indexes + bounds. THE way to find one control in a big app (browsers, Edge, VS Code) without reading the whole tree or taking screenshots: find_elements {appRef, query:'Sign in', kind:'button'} → left_click {target:{type:'element', stateId, index}} using the returned stateId + index. Cheaper than get_app_state detail:'full' on Chromium-sized windows (those return thousands of elements). kind filters by the snapshot's mapped kinds (button, textfield, checkbox, combobox, slider, tab, menuitem, row, text, image, pane, window, scrollbar).",
+        "SEARCH an app's accessibility tree by name substring (and optional kind) — returns the matching elements with their indexes + bounds. THE way to find one control in a big app (browsers, Edge, VS Code) without reading the whole tree or taking screenshots: find_elements {appRef, query:'Sign in', kind:'button'} → left_click {target:{type:'element', stateId, index}} using the returned stateId + index. BROWSER PAGES: the web accessibility tree IS searched — links, buttons, inputs by name (the tree is activated automatically). Cheaper than get_app_state detail:'full' on Chromium-sized windows (those return thousands of elements). kind filters by the snapshot's mapped kinds (button, textfield, checkbox, combobox, slider, tab, menuitem, row, text, image, pane, window, scrollbar).",
         {
           appRef: appRefSchema,
           query: { type: "string", description: "case-insensitive name substring" },
@@ -354,7 +354,7 @@ export const computerUsePlugin: PluginDefinition = {
       ),
       tool(
         "screenshot",
-        "Full-display capture (the display chosen by switch_display). The FALLBACK observation — prefer get_app_state. Returns frame metadata (frameId, width, height, scale). describe:true additionally runs the VISION model over the image and returns its textual description (when vision is configured in Settings → Image Analysis).",
+        "Full-display capture (the display chosen by switch_display). The FALLBACK observation — prefer get_app_state, and prefer find_elements for browser content (the web tree is searchable by name). Returns frame metadata (frameId, width, height, scale); frames stay valid for 30s — act on the pixels immediately, don't re-screenshot. describe:true additionally runs the VISION model over the image and returns its textual description (when vision is configured in Settings → Image Analysis).",
         {
           describe: { type: "boolean", description: "also describe the image via the configured vision model" },
           instruction: { type: "string", description: "what to look for (forwarded to the vision model)" },
@@ -362,7 +362,7 @@ export const computerUsePlugin: PluginDefinition = {
       ),
       tool(
         "zoom",
-        "Exceptional close-up of a region of the LATEST raster ([x0,y0,x1,y1] image pixels) — only when the target is too small/ambiguous. Result is a NEW raster: choose pixels from THIS image.",
+        "Exceptional close-up of a region of the LATEST raster ([x0,y0,x1,y1] image pixels) — only when the target is too small/ambiguous. Result is a NEW raster: choose pixels from THIS image. Use a SMALL region covering just the one control you are verifying — cheaper and faster than a full screenshot.",
         {
           region: { type: "array", items: { type: "integer" }, description: "[x0, y0, x1, y1] in the latest raster's pixels" },
           describe: { type: "boolean" },
@@ -413,7 +413,7 @@ export const computerUsePlugin: PluginDefinition = {
       ),
       tool(
         "middle_click",
-        "Middle-click — raw only (coordinate).",
+        "Middle-click — raw only (coordinate). On a browser link, middle-click opens it in a NEW TAB (keeps the current page — the safe way to follow a link mid-flow).",
         { target: targetSchema("coordinate"), modifiers: modifiersSchema },
         ["target"],
       ),
@@ -458,7 +458,7 @@ export const computerUsePlugin: PluginDefinition = {
       // ── Text & keyboard ──
       tool(
         "type",
-        "Type text. Element target = accessibility value write (REPLACES the field's contents; select_text first to insert). appRef = app-scoped typing (Windows/Linux: the app MUST be frontmost). Never targetless.",
+        "Type text. Element target = accessibility value write (REPLACES the field's contents; select_text first to insert). appRef = app-scoped typing — the target app is brought frontmost automatically (verified activation; a frontmost_pid_mismatch refusal means that activation failed). Never targetless.",
         {
           text: { type: "string" },
           target: targetSchema("editable element (preferred)"),

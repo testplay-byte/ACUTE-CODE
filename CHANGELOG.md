@@ -1,4 +1,4 @@
-<!-- last-reviewed: 2026-09-05 round-67 -->
+<!-- last-reviewed: 2026-09-06 round-68 -->
 # Changelog
 
 All notable changes to ACUTE-CODE are documented here. Entries are written for
@@ -11,17 +11,78 @@ version number is single-sourced from the root `package.json`
 
 ## [Unreleased]
 
-Planned next: the owner's live Windows run verifying R67 on real hardware
-(the WebView2 bridge end-to-end — navigate/click/type/read_dom, the
-session-bound tabs + per-project cookie profiles, the key tool's SendKeys
-chords + the Tab-walk readback, the chat image upload → analyze_image loop
-— the checklists in `docs/runbooks/EMBEDDED-BROWSER.md` +
-`COMPUTER-USE.md` + `ATTACHMENTS.md`), then the standing queue:
-browser-wall self-bypass (future), installer code-signing (SmartScreen),
+Planned next: the owner's live Windows verification of R68 on real
+hardware (the 7-step Edge flow is the acceptance test: the searchable
+browser tree via find_elements, the inline screenshot rows at their
+capture moment, the SendInput typing/keys, the self-healing foreground,
+the capture-excluded monitor — the checklist in
+`docs/runbooks/COMPUTER-USE.md`), then the standing queue: browser-wall
+self-bypass (future), installer code-signing (SmartScreen),
 ratings-driven prompt tuning, the deepseek-harness future candidates
 (compaction pressure-trigger, continuable sub-agent children), the
-Files-tab polish, agent web-app-testing tools, relaxing the picker's
-512 KB attachment read cap for ≤8 MB binaries.
+Files-tab polish, agent web-app-testing tools, moving the Windows walk
+to a temp .ps1 if the C# preamble grows again (the ~1.8K argv headroom
+is past comfort).
+
+## [0.68.0] - 2026-09-06
+
+Round 68 — the computer-use overhaul, driven by the owner's v0.67.0 live
+Windows field report (web browse CONFIRMED 100% working — untouched this
+round). **Screenshots now appear INLINE at the moment they were taken**
+(the owner: "The screenshots were supposed to be shown properly when they
+were actually taken, not at the bottom in a dedicated section. When the
+screenshots were taken they should be shown at that specific time."):
+every capture becomes a `screenshot` working entry pushed onto the live
+turn's working stream at frame arrival — landing right after the in-flight
+tool row that took it — rendered inline between the tool rows as a compact
+click-to-enlarge tile (lazy raster fetch, an honest "expired" placeholder
+after the server's 10-minute raster lifetime); the R67 bottom strip, its
+cap-8 sidecar array, and ScreenshotStrip.tsx are gone, and the debug
+full-turn export carries the `[screenshot captured by <tool>]` marker.
+**The floating "Agent is using your computer" monitor is invisible to
+captures now** (the owner: "It will be an overlay kind of thing. It will
+not be detected by our agent and it will also not be shown in the
+screenshots which it takes and such"): `SetWindowDisplayAffinity(
+WDA_EXCLUDEFROMCAPTURE)` on the mini window — fully rendered on your
+physical display, dropped from every screen-capture API (the agent's own
+GDI captures, Windows.Graphics.Capture, OBS, screen share), so agent
+screenshots show what is BEHIND the bar and the vision model never reads
+the indicator text it used to "detect" (also: your own recordings of a
+session won't show the bar — the exclusion is global, documented as
+intended; pre-Windows-10-2004 hosts fall back to the old visible-in-
+captures behavior, non-fatally). **Windows keyboard input is raw SendInput
+now** — every type/key/scroll/click-modifier path failed
+capability_fail_closed on the owner's host because SendKeys was loaded
+via the deprecated `LoadWithPartialName` (dead on modern .NET, while the
+captures' own Add-Type worked — the live trace proved it): Windows.Forms
+is a dead dependency for input; text types via KEYEVENTF_UNICODE per
+character (no escaping class of bugs at all), keys/chords via real
+Virtual-Key codes — the win/meta key works for the first time, and a
+runtime ARGV guard (31,875-char measured ceiling) refuses an over-long
+type/setValue/clipboard payload BEFORE the spawn with a self-teaching
+error instead of a cryptic CreateProcess death. **The foreground gate
+self-heals**: a frontmost mismatch (Edge churns the foreground) no longer
+refuses — the raw-input tools ACTIVATE their target first (an escalated
+ladder: AttachThreadInput, then the minimize/restore trick, then an
+honest verify) and retry ONCE; a `frontmost_pid_mismatch` refusal now
+means the automatic activation itself failed. **Edge/Chromium web pages
+become searchable** — Chromium only builds its web accessibility tree
+after an assistive technology pokes it, which is why the trees came back
+sparse: every snapshot now pokes the render widget (WM_GETOBJECT) before
+the UIA walk, so find_elements returns real links/buttons/inputs BY NAME
+and element targets replace the screenshot loop (the owner: "a
+coordinate-based system is not proper"). **Frames stay valid 30 seconds**
+(was 10 — shorter than the vision roundtrip itself, so every
+zoom-then-click pair died frame_stale between observing and acting), and
+**the vision relay retries 429/5xx** (two retries, 1.5 s + 3 s backoff —
+one rate-limit no longer kills an observation mid-flow). The prompts, the
+built-in computer-use skill and the tool descriptions teach the new truth
+(search the browser tree first, chain observe→act immediately, verify
+with a small zoom crop, middle_click = new tab, the auto-activation).
+2003 root tests in 122 files (was 1961; agent-core 1101/1101 in 59,
+frontend 890/890 in 61), lint/typecheck clean, version 0.68.0 — the
+Windows-native paths remain construction-pinned (PowerShell and cargo
+never run in this sandbox) and gate on the owner's next live run.
 
 ## [0.67.0] - 2026-09-05
 

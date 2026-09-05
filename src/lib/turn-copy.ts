@@ -12,6 +12,9 @@ import type { WorkingEntry } from "./api";
  * context-free analyst's transcript renderer): one line per event, tool
  * calls as `--- TOOL n: name ---` separators with args + result lines,
  * thinking/narration as tagged lines, the final answer last.
+ * ROUND-68 (R68-A): live `screenshot` capture markers render as honest
+ * one-line facts (`[screenshot captured by <tool>]`) — the rasters are
+ * ephemeral server-side, so the bytes are always gone by copy time.
  *
  * HONESTY NOTE (documented deliberately): tool outputs ride the persisted
  * `outputSummary` — the runtime already caps each summary at 4000 chars
@@ -26,7 +29,8 @@ import type { WorkingEntry } from "./api";
 
 /** Input shape shared by both call sites. */
 export interface FullTurnTextInput {
-  /** The turn's working entries in order (thinking / text / tool / approval). */
+  /** The turn's working entries in order (thinking / text / tool /
+   * approval — and, ROUND-68 R68-A, live-only `screenshot` markers). */
   working: WorkingEntry[];
   /** The final answer (folded: AssistantTurnItem.finalText; live: streamText). */
   finalText: string;
@@ -88,6 +92,12 @@ export function buildFullTurnText(input: FullTurnTextInput): string {
       } else {
         blocks.push(`result: FAILED — ${tool.outputSummary ?? "(no output)"}`);
       }
+    } else if (entry.type === "screenshot") {
+      // ROUND-68 (R68-A): a live capture marker — the PNG bytes are EPHEMERAL
+      // server-side (never persisted), so by copy time they are gone: the
+      // export carries the honest one-line fact, not an image. Still does
+      // NOT bump toolCount (a capture is not a tool call).
+      blocks.push(`[screenshot captured by ${entry.tool}]`);
     } else {
       // approval: the human-in-the-loop checkpoint, with its own fields.
       blocks.push("", `--- APPROVAL: ${entry.toolName} (${entry.status}) ---`);

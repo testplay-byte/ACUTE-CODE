@@ -1,9 +1,10 @@
-<!-- last-reviewed: 2026-09-05 round-67 -->
+<!-- last-reviewed: 2026-09-06 round-68 -->
 # DEBUG MODE — the post-turn context-free analyst (owner's guide)
 
 **Status:** normative · **Established:** round-65 (the debug switch; reworked
 round-66 per the owner's C1 directive; round-67 added the card's copy +
-auto-collapse and the debug-gated full-turn copy) · **Audience:** the owner
+auto-collapse and the debug-gated full-turn copy; round-68 added the inline
+screenshot capture rows + their export marker) · **Audience:** the owner
 flipping the switch and reading the reports, and any agent maintaining the
 pipeline
 
@@ -161,6 +162,36 @@ export is the transcript the app itself kept, not a full-stdout dump;
   panel's effective model and the duration is wall-clock (the live turn
 carries neither); the reloaded turn's export is authoritative.
 
+## The inline screenshot capture rows (R68)
+
+R68-A moved the agent's live captures INTO the working stream (the
+owner: "When the screenshots were taken they should be shown at that
+specific time.") — a `screenshot` WorkingEntry lands at the capture
+moment, right after the tool row that took it, and WorkingSection renders
+the inline row between the tool rows. The debug surfaces see exactly
+this:
+
+- **The live view** (what you watch while the turn streams): the compact
+  inline row per capture — the ~300px tile lazy-fetching the ephemeral
+  raster (`GET /computer-use/frames/:frameId/raster`), the honest
+  "expired" placeholder once the server's 10-minute raster lifetime
+  passes, and the click-to-enlarge dialog (full image + the capturing
+  tool + the timestamp).
+- **The full-turn export** (the debug-gated "Copy full conversation"):
+  each live capture renders as the honest ONE-LINE FACT
+  `[screenshot captured by <tool>]` — at its position in the stream,
+  between the tool blocks it interleaved with live. The PNG bytes are
+  EPHEMERAL server-side (never persisted), so they are always gone by
+  copy time: the export carries the fact, not an image. The marker does
+  NOT bump the `--- TOOL n: ---` numbering (a capture is not a tool
+  call — the export's tool index stays comparable with the event log).
+- **The reloaded/folded turn owns NO screenshot history by design** (the
+  R67-D rule, unchanged): the persisted event log never stored rasters,
+  so a reloaded turn's export carries no capture markers — the markers
+  exist only on the live footer's copy (the live turn's working array
+  is the only carrier). The debug ANALYST's transcript renderer
+  (context-free, reading the event log) likewise never sees captures.
+
 ## How to flip it
 
 **Settings → Advanced → "Debug mode" → "Post-turn debug analyst"** (the
@@ -202,8 +233,8 @@ deliberate STOP is never analyzed (there is no completed turn to dissect).
 ## See also
 
 - [TESTING](TESTING.md) — the debug-analyst (10) + stream-route (r58 suite,
-  +4) + DebugReportCard (17 since R67) + turn-copy (9) + api-folding suites
-  and what each pins
+  +4) + DebugReportCard (17 since R67) + turn-copy (10 since R68) +
+  ScreenshotRow (5, R68) + api-folding suites and what each pins
 - [EMBEDDED-BROWSER](EMBEDDED-BROWSER.md) — the sibling R66 runbook (the
   browser page actions + the bot-wall checkpoint card)
 - [COMPUTER-USE](COMPUTER-USE.md) — the computer-use surface whose turns
@@ -214,7 +245,11 @@ deliberate STOP is never analyzed (there is no completed turn to dissect).
   `GET/PUT /api/v1/settings/debug`, the card
   `src/components/project-chat/DebugReportCard.tsx` (+
   `buildDebugReportCopyText`), the full-turn export
-  `src/lib/turn-copy.ts` (`buildFullTurnText`), the folding in
+  `src/lib/turn-copy.ts` (`buildFullTurnText` — R68: the screenshot marker
+  line), the inline capture rows
+  `src/components/project-chat/ScreenshotRow.tsx` (R68 — the working-stream
+  `screenshot` entries in `src/lib/api.ts` + the stream-store push), the
+  folding in
   `src/lib/api.ts` (`toProjectChatItems`), the live frames in
   `src/lib/stream-store.ts`, the switch UI in
   `src/pages/SettingsPage.tsx` (DebugModeCard).
