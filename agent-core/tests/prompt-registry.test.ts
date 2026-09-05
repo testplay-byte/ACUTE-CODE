@@ -205,29 +205,29 @@ describe("ROUND-67 (R67-E): browser discipline, tab-walk, attachments", () => {
   });
 });
 
-// ── ROUND-68 (R68-C): the computer-use anti-screenshot-spam pins ────────────
+// ── ROUND-68 (R68-C) + ROUND-69 (R69, task 4-c-2): the computer-use anti-screenshot-spam pins ──
 // The owner's live 0.67.0 report: "utilizing the screenshot capturing way
-// too much… the coordinate-based system is not proper". The prompt now
-// teaches the SEARCHABLE browser tree, the immediate observe→act chain
-// (frames valid 30s), the small verification crop, middle_click=new-tab,
-// and the raw-input auto-activation.
+// too much… the coordinate-based system is not proper". R68 taught the
+// searchable browser tree; R69 (4-c-2) REWRITES the chain discipline around
+// the auto-observation receipts — every action receipt carries the
+// post-action frame, so the model must READ the receipt instead of
+// re-capturing. The old "verify with a small zoom crop AFTER the action"
+// teaching is retired (that zoom WAS the spam).
 
 describe("ROUND-68 (R68-C): the computer-use discipline lines", () => {
-  it("BROWSER CONTENT IS SEARCHABLE + CHAIN DISCIPLINE + middle_click = new tab", () => {
+  it("BROWSER CONTENT IS SEARCHABLE survives the R69 rewrite (the R68 tree teaching is unchanged)", () => {
     const composed = buildProjectSystemPrompt(FULL_CTX);
     const cu = composed.indexOf("## COMPUTER USE (desktop control)");
     expect(cu).toBeGreaterThan(-1);
-    // The section grew by two lines — the 3_000-char window covers it.
     const rest = composed.slice(cu, cu + 4_200);
     expect(rest).toContain("BROWSER CONTENT IS SEARCHABLE (R68)");
     expect(rest).toContain("find_elements {appRef, query:'Wikipedia'}");
     expect(rest).toContain("the web tree is activated automatically before every walk");
     expect(rest).toContain("element targets are the PRIMARY path for browser content");
-    expect(rest).toContain("CHAIN DISCIPLINE (R68)");
-    expect(rest).toContain("act IMMEDIATELY on its pixels (frames stay valid 30s)");
-    expect(rest).toContain("never re-screenshot between observing and acting");
-    expect(rest).toContain("a small zoom region crop of the one control");
     expect(rest).toContain("middle_click on a link = open in new tab");
+    // The R68 zoom-crop verification teaching is RETIRED by R69's receipts.
+    expect(rest).not.toContain("CHAIN DISCIPLINE (R68)");
+    expect(rest).not.toContain("a small zoom region crop of the one control");
   });
 
   it("the auto-activation teaching replaces the manual activate-then-retry dance", () => {
@@ -244,8 +244,54 @@ describe("ROUND-68 (R68-C): the computer-use discipline lines", () => {
   it("the lines are computer-use-gated (the section composes only when the master switch is on)", () => {
     const off = buildProjectSystemPrompt({ ...FULL_CTX, computerUse: { enabled: false, posture: "act" as const } });
     expect(off).not.toContain("## COMPUTER USE (desktop control)");
-    expect(off).not.toContain("CHAIN DISCIPLINE (R68)");
+    expect(off).not.toContain("CHAIN DISCIPLINE (R69)");
     expect(off).not.toContain("BROWSER CONTENT IS SEARCHABLE (R68)");
+  });
+});
+
+// ── ROUND-69 (R69, task 4-c-2): the auto-observation discipline pins ────────
+// The owner's #1 field failure: the model re-screenshotting after every
+// action. The prompt now teaches the receipt's observation as THE
+// post-action read, the unchanged→adjust-strategy move, element-first, and
+// wait()'s what-changed receipt.
+
+describe("ROUND-69 (4-c-2): the auto-observation chain discipline", () => {
+  it("CHAIN DISCIPLINE (R69): read the receipt's observation — never screenshot/zoom after acting", () => {
+    const composed = buildProjectSystemPrompt(FULL_CTX);
+    const cu = composed.indexOf("## COMPUTER USE (desktop control)");
+    const rest = composed.slice(cu, cu + 4_600);
+    expect(rest).toContain("CHAIN DISCIPLINE (R69)");
+    expect(rest).toContain("every ACTION receipt carries an observation");
+    expect(rest).toContain("Do NOT screenshot or zoom after acting");
+    expect(rest).toContain("read the receipt's observation instead");
+  });
+
+  it("unchanged → the action may not have registered → check focus, adjust, element-first", () => {
+    const composed = buildProjectSystemPrompt(FULL_CTX);
+    const cu = composed.indexOf("## COMPUTER USE (desktop control)");
+    const rest = composed.slice(cu, cu + 4_600);
+    expect(rest).toContain("screen is UNCHANGED");
+    expect(rest).toContain("may not have registered");
+    expect(rest).toContain("check focusedElementName");
+    expect(rest).toContain("Element-first beats coordinate guessing");
+  });
+
+  it("wait() after navigation + the screen_unchanged refusal meaning", () => {
+    const composed = buildProjectSystemPrompt(FULL_CTX);
+    const cu = composed.indexOf("## COMPUTER USE (desktop control)");
+    const rest = composed.slice(cu, cu + 4_600);
+    expect(rest).toContain("After navigation (Enter, links), call wait()");
+    expect(rest).toContain("what changed while you waited");
+    expect(rest).toContain("instead of re-capturing");
+    expect(rest).toContain("A screen_unchanged refusal means: act or change strategy — do not re-capture");
+  });
+
+  it("the receipts-not-promises line points at the observation as the FIRST verification read", () => {
+    const composed = buildProjectSystemPrompt(FULL_CTX);
+    const cu = composed.indexOf("## COMPUTER USE (desktop control)");
+    const rest = composed.slice(cu, cu + 4_600);
+    expect(rest).toContain("the receipt's observation (screenChanged, focusedElementName, activeApp.title) is the first verification read");
+    expect(rest).toContain("an external oracle (file exists, exit code) is the strong one");
   });
 });
 

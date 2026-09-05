@@ -22,8 +22,9 @@
 //! ComputerMiniWindow.tsx): live SSE computer-use frames flip the monitor
 //! store's `liveActivity` → `open_computer_mini` fires (once per burst);
 //! the session ending (`session_stop` frame) → `close_computer_mini` after a
-//! grace period. Both commands are idempotent (open focuses an existing
-//! window, close is a no-op when absent).
+//! grace period. Both commands are idempotent (a re-open re-asserts the
+//! monitor's window settings on the existing window WITHOUT touching
+//! focus — ROUND-69; close is a no-op when absent).
 //!
 //! ROUND-68 (R68-B): the monitor is now INVISIBLE TO CAPTURE. The owner's
 //! directive — "the 'agent is using your computer' should not be shown
@@ -39,12 +40,22 @@
 //! show what is BEHIND the bar and the vision model never reads the
 //! indicator text it used to "detect". See `exclude_from_capture` for the
 //! honest pre-Windows-10-2004 caveat and the re-apply-on-reopen reasoning.
+//!
+//! ROUND-69 (R69-B): the monitor can no longer take focus, by
+//! construction. The re-open path's `set_focus()` (fired once per activity
+//! burst) stole the foreground from the app the agent was driving — the
+//! frontmost-mismatch / focus-churn hazard the R68-0 gap list flagged —
+//! and even a plain click on the bar would have activated it. Both are
+//! gone: a re-open re-asserts the window's settings and returns WITHOUT
+//! focusing, and `WS_EX_NOACTIVATE` (`never_activate` below) keeps even a
+//! click on the STOP pill from moving the foreground off the driven app.
 
 use tauri::{AppHandle, Manager, WebviewUrl, WebviewWindowBuilder};
 
 /// The mini monitor window's label (unique per app, re-used so a re-open
-/// focuses the existing window instead of stacking a second one — the
-/// browser.rs BROWSER_WINDOW_LABEL pattern).
+/// re-arms the existing window instead of stacking a second one — the
+/// browser.rs BROWSER_WINDOW_LABEL pattern; since ROUND-69 a re-open
+/// re-asserts settings WITHOUT focusing it).
 const MINI_WINDOW_LABEL: &str = "acute-computer-mini";
 
 /// The main app window's label (tauri.conf.json default) — its CURRENT
@@ -129,6 +140,22 @@ fn mini_initial_position(app: &AppHandle) -> (f64, f64) {
 #[cfg_attr(not(windows), allow(dead_code))]
 const WDA_EXCLUDEFROMCAPTURE: u32 = 0x11;
 
+/// `GWL_EXSTYLE` — the `Get/SetWindowLongPtrW` index of a window's EXTENDED
+/// style bits (winuser.h; the index parameters of that pair are signed
+/// `int` in the ABI, and EXSTYLE lives at −20). Ungated for the same reason
+/// as the affinity constant above: the pin test below runs on every
+/// platform that runs `cargo test`.
+#[cfg_attr(not(windows), allow(dead_code))]
+const GWL_EXSTYLE: i32 = -20;
+
+/// `WS_EX_NOACTIVATE` — the extended-style bit (0x0800_0000, winuser.h) that
+/// makes a top-level window refuse activation: clicking it never makes it
+/// the foreground window, and the system never raises it when other
+/// windows close. Ungated like the constants around it so its pin test runs
+/// everywhere too.
+#[cfg_attr(not(windows), allow(dead_code))]
+const WS_EX_NOACTIVATE: isize = 0x0800_0000;
+
 // `SetWindowDisplayAffinity` — raw FFI, ABI-faithful to winuser.h's
 // `BOOL SetWindowDisplayAffinity(HWND hWnd, DWORD dwAffinity)`: HWND is
 // pointer-sized (`isize`), DWORD is `u32`, BOOL is `i32`, calling
@@ -146,6 +173,21 @@ const WDA_EXCLUDEFROMCAPTURE: u32 = 0x11;
 #[link(name = "user32")]
 extern "system" {
     fn SetWindowDisplayAffinity(hwnd: isize, dw_affinity: u32) -> i32;
+
+    // ROUND-69 (R69-B) — the extended-style read-modify-write pair, the
+    // same raw-FFI discipline as the affinity call above (why not
+    // windows-sys: identical reasoning — the vendored gates don't carry
+    // `Win32_UI_WindowsAndMessaging` for these either). ABI-faithful to
+    // winuser.h's `LONG_PTR GetWindowLongPtrW(HWND hWnd, int nIndex)` and
+    // `LONG_PTR SetWindowLongPtrW(HWND hWnd, int nIndex, LONG_PTR
+    // dwNewLong)`: LONG_PTR is pointer-sized (`isize`), the index is `i32`,
+    // and the returned LONG_PTR is the PREVIOUS value (0 on failure —
+    // deliberately discarded at the call site, best-effort by design).
+    // Real user32 exports on x86_64 — the project's only Windows target
+    // (the owner's machine, the windows-latest CI runner); on 32-bit they
+    // degrade to the Get/SetWindowLongW macros, which we do not ship.
+    fn GetWindowLongPtrW(hwnd: isize, nindex: i32) -> isize;
+    fn SetWindowLongPtrW(hwnd: isize, nindex: i32, dwnewlong: isize) -> isize;
 }
 
 /// ROUND-68 (R68-B) — mark the mini monitor window `WDA_EXCLUDEFROMCAPTURE`,
@@ -219,10 +261,82 @@ fn exclude_from_capture(app: &AppHandle, label: &str) {
     }
 }
 
-/// `open_computer_mini()` — open (or focus) the always-on-top floating
-/// monitor window. Called by the main app the moment live computer-use
-/// activity starts (the monitor store's `liveActivity` edge), so the owner
-/// can hit STOP while the agent drives other applications.
+/// ROUND-69 (R69-B) — OR `WS_EX_NOACTIVATE` into the mini monitor's extended
+/// window style: the last of the monitor's focus holes. Windows-only.
+///
+/// WHY: the monitor is a session READ plus one STOP pill — it must never own
+/// the foreground while the agent drives another app. R68 already made the
+/// window APPEAR without stealing focus (`focused(false)` at build) and
+/// invisible to capture (`exclude_from_capture`), but two holes remained:
+///   1. the re-open path called `set_focus()` once per activity BURST —
+///      yanking the foreground off the app the agent is mid-action on is
+///      exactly the `frontmost_pid_mismatch` / focus-churn failure class
+///      (the R68-0 gap list's #6). That call is now DELETED — see
+///      `open_computer_mini`.
+///   2. even with it gone, an ordinary mouse click on the bar (the drag
+///      region, the STOP pill) would ACTIVATE the window and take keyboard
+///      focus away from the driven app.
+/// `WS_EX_NOACTIVATE` closes hole 2 at the OS level — the Windows
+/// magnifier / touch-keyboard pattern: the window stays topmost and still
+/// receives every mouse click (STOP still stops, the drag region still
+/// moves the bar — mouse input delivery is independent of activation), but
+/// it never becomes the foreground window and never takes keyboard focus,
+/// not even when clicked — so the foreground PID the agent-core input gate
+/// keys on stays the app being driven.
+///
+/// NOT `WS_EX_TRANSPARENT` (click-through) — deliberately, and worth
+/// pinning why: the frontend is NOT display-only. `src/mini/MiniApp.tsx`
+/// exists for the interactive STOP kill switch (`mini-stop-button`, the
+/// danger pill) plus the `data-tauri-drag-region` row that lets the owner
+/// move the bar; a click-through overlay would neuter both and leave the
+/// owner with no way to stop the agent FROM the monitor — the R64
+/// directive that created it. NOACTIVATE only.
+///
+/// Read-modify-write, idempotent, re-asserted on every re-open for the same
+/// reason as the affinity (cheap self-heal if a Windows update or a WebView2
+/// child-window recreation ever drops the bit). HONEST failure modes, all
+/// best-effort and NEVER fatal: an unresolvable `hwnd()` skips everything;
+/// a `GetWindowLongPtrW` that returns 0 skips the write (this window is
+/// ALWAYS on top, so an honest ex-style always carries WS_EX_TOPMOST 0x8 —
+/// literal 0 can only be a failed read, and writing `0 | WS_EX_NOACTIVATE`
+/// would wipe TOPMOST and sink the bar out of the top of the z-order);
+/// a failing `SetWindowLongPtrW` leaves the style as it was. The
+/// previous-value return is discarded; nothing here can error or panic.
+///
+/// Windows-only (`#[cfg]`) + threading: same shape as
+/// `exclude_from_capture` — the `hwnd()` round-trip is the event-loop
+/// discipline (safe from this async command's tokio worker thread; the
+/// deadlock only exists when the MAIN thread is the one waiting), and both
+/// style calls are plain user32 leaf calls — no callbacks, no re-entrancy.
+#[cfg(windows)]
+fn never_activate(app: &AppHandle, label: &str) {
+    if let Some(window) = app.get_webview_window(label) {
+        if let Ok(hwnd) = window.hwnd() {
+            // SAFETY: `hwnd` is tauri's own raw handle for a live window
+            // (HWND whose `.0` is pointer-sized, cast to `isize` per the
+            // extern's ABI-faithful signature); `GWL_EXSTYLE` is a plain
+            // `i32` index and the style a pointer-sized LONG_PTR. Both calls
+            // are leaf user32 calls — no callbacks, no re-entrancy. The
+            // read's 0-on-failure result is guarded BEFORE the write (see
+            // the honesty note above), and SetWindowLongPtrW's previous-value
+            // return is deliberately discarded (failure is non-fatal by
+            // design — the monitor still works, it just stays activatable).
+            unsafe {
+                let style = GetWindowLongPtrW(hwnd.0 as isize, GWL_EXSTYLE);
+                if style != 0 {
+                    let _ =
+                        SetWindowLongPtrW(hwnd.0 as isize, GWL_EXSTYLE, style | WS_EX_NOACTIVATE);
+                }
+            }
+        }
+    }
+}
+
+/// `open_computer_mini()` — open (or, on a re-open, re-arm) the always-on-top
+/// floating monitor window — WITHOUT ever taking focus (ROUND-69). Called by
+/// the main app the moment live computer-use activity starts (the monitor
+/// store's `liveActivity` edge), so the owner can hit STOP while the agent
+/// drives other applications.
 ///
 /// WHY THIS COMMAND IS `async` (mirrors `open_browser_window` in browser.rs):
 /// `WebviewWindowBuilder::build` creates the window AND its webview, which
@@ -237,17 +351,39 @@ fn exclude_from_capture(app: &AppHandle, label: &str) {
 /// documented workaround.
 #[tauri::command]
 pub async fn open_computer_mini(app: AppHandle) -> Result<(), String> {
-    // Existing window: focus it (the burst re-open path — the main app
-    // invokes this once per activity burst; a second burst while the window
-    // is still up must not stack a duplicate).
-    if let Some(existing) = app.get_webview_window(MINI_WINDOW_LABEL) {
-        // ROUND-68 (R68-B): re-assert capture-exclusion BEFORE focusing —
-        // idempotent, one syscall, self-heals an affinity that a Windows
-        // update or WebView2 recreation could have dropped on the live
-        // monitor (see `exclude_from_capture`).
+    // Existing window: the burst re-open path — the main app invokes this
+    // once per activity burst; a second burst while the window is still up
+    // must not stack a duplicate. The lifecycle is build-or-CLOSE (grep:
+    // nothing ever hides this window — the page self-closes via
+    // close_computer_mini and the main app backstops it), so an existing
+    // window is a VISIBLE one and there is nothing to show.
+    //
+    // ROUND-69 (R69-B): the old `existing.set_focus()` here is DELETED. It
+    // fired once per burst while the agent was mid-action on some OTHER
+    // app — stealing the foreground from it is precisely the
+    // frontmost_pid_mismatch / focus-churn failure class (the R68-0 gap
+    // list's #6), and tao 0.35.3's set_focus goes further: its
+    // force_window_active fallback SYNTHESIZES an ALT-key SendInput pair to
+    // grab foreground permission — stray keyboard input injected while the
+    // agent is driving is exactly the corruption the R68-C input stack was
+    // rebuilt to prevent. The monitor is a display + STOP pill, not an app;
+    // it has nothing worth focusing, and with WS_EX_NOACTIVATE (re-asserted
+    // below) it would not hold the foreground usefully anyway. No
+    // replacement call: `show()` would be a no-op on the always-visible
+    // window, and tao's post-creation show rides SW_SHOW — an ACTIVATING
+    // show — so it would reintroduce the steal this round exists to remove.
+    if app.get_webview_window(MINI_WINDOW_LABEL).is_some() {
+        // ROUND-68 (R68-B): re-assert capture-exclusion — idempotent, one
+        // syscall, self-heals an affinity that a Windows update or WebView2
+        // recreation could have dropped on the live monitor (see
+        // `exclude_from_capture`).
         #[cfg(windows)]
         exclude_from_capture(&app, MINI_WINDOW_LABEL);
-        let _ = existing.set_focus();
+        // ROUND-69 (R69-B): and the same for the no-activate extended style
+        // (see `never_activate`) — the pair of re-asserts is the burst
+        // self-heal.
+        #[cfg(windows)]
+        never_activate(&app, MINI_WINDOW_LABEL);
         return Ok(());
     }
 
@@ -272,7 +408,8 @@ pub async fn open_computer_mini(app: AppHandle) -> Result<(), String> {
         // desktop (Windows: works with decorations off).
         .shadow(true)
         // Appear WITHOUT stealing focus — the owner may be typing when the
-        // agent starts moving the mouse; clicking the window focuses it.
+        // agent starts moving the mouse (ROUND-69: and `never_activate`
+        // below keeps a later CLICK on the bar from stealing focus too).
         .focused(false)
         .position(x, y)
         .build()
@@ -285,6 +422,14 @@ pub async fn open_computer_mini(app: AppHandle) -> Result<(), String> {
     // (the monitor still opens — non-fatal by design).
     #[cfg(windows)]
     exclude_from_capture(&app, MINI_WINDOW_LABEL);
+
+    // ROUND-69 (R69-B): same moment, same reasoning for the no-activate
+    // extended style — the window is fully registered by build(), so the
+    // helper's by-label lookup finds it, and the bar can no longer take
+    // focus before the owner has even seen it. `focused(false)` kept the
+    // APPEARANCE quiet; this keeps every later CLICK quiet too.
+    #[cfg(windows)]
+    never_activate(&app, MINI_WINDOW_LABEL);
 
     Ok(())
 }
@@ -310,9 +455,12 @@ pub async fn close_computer_mini(app: AppHandle) -> Result<(), String> {
 // + run under `cargo test`.
 #[cfg(test)]
 mod tests {
+    // (MINI_DEFAULT_H is deliberately NOT imported: no test below reads it —
+    // the R64 import list carried it unused, which `cargo check --tests`
+    // flags; ROUND-69 trimmed it while touching this list.)
     use super::{
-        mini_position_for_work_area, MINI_DEFAULT_H, MINI_DEFAULT_W, MINI_MARGIN,
-        WDA_EXCLUDEFROMCAPTURE,
+        mini_position_for_work_area, GWL_EXSTYLE, MINI_DEFAULT_W, MINI_MARGIN,
+        WDA_EXCLUDEFROMCAPTURE, WS_EX_NOACTIVATE,
     };
 
     /// A normal desktop work area anchors the bar at its TOP-CENTER,
@@ -342,6 +490,21 @@ mod tests {
     #[test]
     fn wda_exclude_from_capture_constant_is_pinned() {
         assert_eq!(WDA_EXCLUDEFROMCAPTURE, 0x11);
+    }
+
+    /// ROUND-69 (R69-B): the no-activate style parameters are more magic
+    /// numbers handed to raw FFI — pin them. GWL_EXSTYLE must stay −20 (a
+    /// wrong index reads/writes some OTHER window datum, or fails);
+    /// WS_EX_NOACTIVATE must stay 0x0800_0000 (winuser.h; its neighbor
+    /// 0x0008 is WS_EX_TOPMOST — the always-on-top bit the helper's
+    /// read-modify-write exists to PRESERVE, which is exactly why a silent
+    /// value typo here could sink the bar out of the top of the z-order).
+    /// Runs on every platform (the consts are deliberately ungated);
+    /// cargo test is the only consumer on non-Windows builds.
+    #[test]
+    fn no_activate_style_constants_are_pinned() {
+        assert_eq!(GWL_EXSTYLE, -20);
+        assert_eq!(WS_EX_NOACTIVATE, 0x0800_0000);
     }
 
     /// Degenerate monitor data (NaN / zero / negative / smaller than the

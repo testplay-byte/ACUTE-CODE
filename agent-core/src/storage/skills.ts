@@ -82,6 +82,16 @@ export const COMPUTER_USE_SKILL_ID = "skill_builtin_computer_use";
  * IMMEDIATE (frames valid 30s; verify with a small zoom crop). The
  * frontmost line teaches the AUTO-activation (a mismatch refusal now
  * means that activation failed).
+ *
+ * ROUND-69 (R69, verifier task 5): the observation-receipt loop — every
+ * mutating action receipt now CARRIES the post-action observation (fresh
+ * frame id, screenChanged, focusedElementName, activeApp title), so the
+ * R68 "verify with a small zoom crop after the action" line is RETIRED
+ * here (that zoom WAS the owner's screenshot-spam complaint). The body
+ * now matches prompts.ts' R69 CHAIN DISCIPLINE: read the receipt, never
+ * screenshot/zoom after acting; unchanged → adjust strategy, element
+ * first; wait() after navigation reports what changed; a screen_unchanged
+ * refusal means act or change strategy — never re-capture.
  */
 export const COMPUTER_USE_SKILL_BODY = `# Skill: computer-use
 
@@ -95,15 +105,15 @@ Main-agent only. Never delegate Computer Use to a subagent (subagents lack the s
 5. After open_application, wait 0.5-1s (the wait tool, or return_state) for the window to exist BEFORE get_app_state.
 6. If the target is in the tree, use an ELEMENT action ({type:"element", stateId, index}) — set_value / perform_action / left_click element. detail:"full" gives bounds + the element's advertised actions.
 7. Only when the tree cannot locate or express the target, take a screenshot and use frame-bound coordinates ({type:"coordinate", x, y} copied UNCHANGED from the latest returned image — never pre-scale, never attach appRef/stateId).
-8. VERIFY AFTER EVERY WRITE: pass return_state:"compact" on the action, or call get_app_state again. One observation, one action, then verify.
-9. Actions return receipts. action_sent=true means it MAY have happened — never blindly replay. Verify via fresh get_app_state or an external oracle (file exists, process exit code) when the outcome matters.
+8. VERIFY AFTER EVERY WRITE: the action receipt CARRIES a post-action observation (return_state defaults to "compact") — a fresh frame id, screenChanged, focusedElementName, the active app's title. READ the receipt; do NOT screenshot or zoom after acting. Only re-observe with get_app_state when the observation is missing or ambiguous.
+9. Actions return receipts. action_sent=true means it MAY have happened — never blindly replay. The receipt's observation is the FIRST verification read; an external oracle (file exists, process exit code) is the strong one. An UNCHANGED screen means the action may not have registered: check focusedElementName, adjust strategy, switch to element targeting.
 
 ## Big apps (browsers, Edge, VS Code)
 - get_app_state on a browser/IDE window returns a HUGE tree (Chromium exposes thousands of elements). Do NOT read it whole — SEARCH it: find_elements {appRef, query:"Sign in", kind:"button"} returns just the matching elements with indexes + bounds, far cheaper than get_app_state detail:"full".
 - Browser pages (Edge/Chrome): the WEB accessibility tree IS searched — find_elements by name finds links, buttons, inputs (the tree is activated automatically). Element targets are the primary path for browser content; screenshots only when the tree genuinely misses.
 - Prefer find_elements + element clicks (left_click/set_value with the returned stateId + index) over screenshots in big apps.
 - Never loop screenshots when the tree can answer: find_elements by name first; screenshot/zoom only when names genuinely cannot identify the control. An empty result tells you the query and how many elements were searched — retry with a shorter substring or read the tree.
-- CHAIN DISCIPLINE: screenshot → act IMMEDIATELY (frames stay valid 30s) — never re-screenshot between observing and acting; verify AFTER the action with a small zoom region crop, not a full screenshot. middle_click a link = open in new tab.
+- CHAIN DISCIPLINE: screenshot → act IMMEDIATELY (frames stay valid 30s) — never re-screenshot between observing and acting, and never re-capture after acting: the receipt's observation is the post-action read. After navigation (Enter, links), call wait() — its receipt reports what changed while you waited. A screen_unchanged refusal means act or change strategy, not re-capture. middle_click a link = open in new tab.
 
 ## Tab-walk discovery (R67)
 - Pressing key "tab" highlights the next focusable control on screen, and every key receipt names the FOCUSED element — walk Tab repeatedly to discover what is interactive when find_elements comes back empty or names cannot identify the target, then act on the element you reached. Combine with find_elements (search by name) when the app is big.
@@ -114,7 +124,7 @@ Main-agent only. Never delegate Computer Use to a subagent (subagents lack the s
 ## Discipline
 - type REPLACES a field's contents (select first to insert). set_value is the preferred semantic write. Prefer set_value/perform_action over raw input.
 - Raw input (coordinate clicks, key chords, app-scoped typing) on Windows/Linux needs the target frontmost — the raw-input tools now ACTIVATE their target automatically (R68: verified activation + one retry). A frontmost_pid_mismatch refusal means that auto-activation failed: check the app still runs (list_apps), re-observe, retry ONCE.
-- scroll has no accessibility path — always coordinate. double/triple/middle click have no a11y equivalent — element targets fail closed; use coordinates.
+- scroll has no accessibility path — always coordinate. double/triple click are raw-only (coordinate). middle_click and right_click DO take element targets (R69): middle routes a raw click at the element's center; right clicks the center when the element has no menu.
 - Modifiers: macOS uses "cmd"; Windows/Linux use "ctrl".
 - Never send targetless type/key — scope with an element target or appRef.
 - An unexpected modal dialog may be intercepting your action: inspect its contents FIRST; dismiss (Escape / its Cancel) only when it is NOT the task.

@@ -6,7 +6,7 @@ Policy (SPEC section 6): allowed - MIT, Apache-2.0, BSD-2-Clause, BSD-3-Clause, 
 Forbidden - GPL, AGPL, LGPL and any license that cannot be classified (closed-source distribution).
 Every license exception must be recorded as an ADR under `docs/decisions/`.
 
-Audited production dependencies: 133. Verdict: CLEAN.
+Audited production dependencies: 134. Verdict: CLEAN.
 
 | Package | Version | License | Verdict |
 |---|---|---|---|
@@ -106,6 +106,7 @@ Audited production dependencies: 133. Verdict: CLEAN.
 | pino | 10.3.1 | MIT | OK |
 | pino-abstract-transport | 3.0.0 | MIT | OK |
 | pino-std-serializers | 7.1.0 | MIT | OK |
+| pngjs | 7.0.0 | MIT | OK |
 | process-warning | 4.0.1 | MIT | OK |
 | process-warning | 5.1.0 | MIT | OK |
 | quick-format-unescaped | 4.0.4 | MIT | OK |

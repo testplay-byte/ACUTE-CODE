@@ -43,10 +43,65 @@
  * mismatch or a script-level FRONTMOST_MISMATCH error activates the target
  * (the backend's escalated activate ladder) and retries the action ONCE;
  * only when the activation itself fails does the honest refusal remain.
+ *
+ * ROUND-69 (R69, task 4-c-1) — frame intelligence, two behaviors on the
+ * perceptual-hash primitive (framehash.ts):
+ *   · STALE-FRAME AUTO-REFRESH: a COORDINATE-anchored pointer action
+ *     (click/right/middle/double/triple, drag, scroll, mouse_move — NOT
+ *     type/key/set_value, which ride the focus gate, not the frame) on a
+ *     frame older than MAX_FRAME_AGE_MS no longer hard-fails frame_stale.
+ *     Dispatch re-captures the frame's exact coverage (backend capture
+ *     primitive, never a re-implementation), registers the fresh frame
+ *     (provenance "auto_refresh" — zoomable immediately, invisible to the
+ *     spam guard), and compares: full-frame aHash Hamming ≤ 8 → the screen
+ *     is stable → the action PROCEEDS on the model's coordinates (receipt:
+ *     frameRefreshed/refreshFrameId/screenStable). Otherwise the TARGET
+ *     REGION (element bounds, or a ±48px box around the point) is compared:
+ *     Hamming ≤ 6 → proceed (receipt: screenStable:false,
+ *     targetRegionStable:true). Genuinely changed → the NEW frame_changed
+ *     refusal carrying refreshFrameId (the fresh frame is registered, so
+ *     the model zooms it and retries in ONE round-trip). A FAILED refresh
+ *     capture falls back to the old frame_stale signal (never lose the
+ *     failure).
+ *   · SCREENSHOT-SPAM GUARD: the 3rd consecutive model-initiated capture
+ *     (screenshot / zoom / get_app_state{includeScreenshot}) whose
+ *     full-frame aHash is ≤ 4 bits from the previous registered raster —
+ *     with no intervening mutating action — is refused screen_unchanged
+ *     BEFORE registration (the raster is identical anyway). Resets: any
+ *     mutating dispatch, a capture with Hamming > 4 (screen changed), or a
+ *     foreground-app change (pid proxy — the detectable signal without a
+ *     new backend primitive).
+ *
+ * ROUND-69 (R69, task 4-c-2) — AUTO-OBSERVATION RECEIPTS: the #1 field
+ * failure was the model re-capturing a screenshot after EVERY action to see
+ * what happened (5-25s per vision round-trip). Now every mutating action's
+ * receipt AUTOMATICALLY carries a post-action observation: after the action
+ * settles (OBSERVATION_SETTLE_MS), dispatch captures a fresh frame via the
+ * existing display-capture primitive, registers it with provenance
+ * "observation" (invisible to the spam guard — only "model" captures
+ * count), diffs its aHash against the last frame registered BEFORE the
+ * action (the pre-state is FREE: if 4-c-1's stale-frame auto-refresh just
+ * captured, that refresh IS the pre-state), reads the focused element (the
+ * same focusedElementName readback the key tool uses) and the frontmost
+ * app's title (the list_apps path's active-app marker — titleChanged is the
+ * pre-read vs post). The receipt gains `observation` {frameId,
+ * screenChanged, focusedElementName?, activeApp, titleChanged}; a capture
+ * failure reports {captureFailed:true} and NEVER fails the action itself.
+ * OPT-OUT: returnState "none" skips it; "full" keeps the R61 UIA compose
+ * (get_app_state); "compact" (the new DEFAULT for these tools) IS the
+ * observation. Coordinate-click receipts upgrade targetVerificationStatus
+ * "unverified" → "changed"/"unchanged" from screenChanged, and carry
+ * hitElementName (the hit-test that already runs at the click site — the
+ * model learns WHAT it clicked). wait() builds the same observation after
+ * its sleep ("what changed while I waited"). Element targets now route for
+ * middle_click and menu-less right_click (bounds → center → raw button).
  */
 import type {
+  ActionObservation,
   AppInfo,
   Element,
+  FrameInfo,
+  ObservationInfo,
   Receipt,
   Refusal,
   Snapshot,
@@ -62,18 +117,21 @@ import {
   capabilityFailClosed,
   elementStaleChanged,
   elementStaleSuperseded,
+  frameChanged,
   frameStale,
   frontmostPidMismatch,
   invalidTarget,
   killSwitchActive,
   rasterOutOfBounds,
   refuse,
+  screenUnchanged,
   targetlessInputRefused,
   invalidWindowId,
   type AppCandidate,
   type RefusalOutcome,
 } from "./errors.js";
 import { getComputerSession, MAX_FRAME_AGE_MS, type ComputerSession } from "./session.js";
+import { hamming, hashFrame, hashRegion } from "./framehash.js";
 import { appendAudit } from "./audit.js";
 import type { CuaBackend, ElementDescriptor, EnumerationDiagnostics, RunCommand, WindowScope } from "./backends/interface.js";
 
@@ -100,6 +158,50 @@ const MUTATING_TOOLS = new Set([
   "type", "set_value", "select_text", "key", "hold_key", "perform_action",
   "write_clipboard", "open_application",
 ]);
+
+/** R69 (task 4-c-2): the tools whose SENT receipts automatically carry the
+ * post-action observation (the visually-consequential mutating set — the
+ * task's exact list; mouse_move/hold_key/clipboard/launch are excluded:
+ * they do not change on-screen state worth a 600ms+capture round-trip,
+ * and they keep the legacy returnState opt-in semantics). */
+const OBSERVATION_TOOLS = new Set([
+  "left_click", "double_click", "triple_click", "right_click", "middle_click",
+  "scroll", "type", "key", "set_value", "select_text", "left_click_drag",
+]);
+
+/** R69 (task 4-c-2): how long the dispatcher waits after an action before
+ * capturing the post-action frame — animations, navigation repaints, and
+ * focus churn need a moment to land, or the observation would faithfully
+ * capture the PRE-action pixels. Exported for the pin tests; the accepted
+ * latency cost (settle 600ms + capture ~150-300ms) replaces the 5-25s
+ * model screenshot round-trip it exists to kill. Mutable per-dispatcher
+ * via `observationSettleMs` (tests set 0 so the suite stays fast). */
+export const OBSERVATION_SETTLE_MS = 600;
+
+/* ── R69 (task 4-c-1): the frame-intelligence thresholds ──────────────────
+ * Both behaviors compare the 64-bit aHash (framehash.ts). Full-frame ≤ 8
+ * of 64 bits: the screen as a whole is stable. Target-region ≤ 6 of 64:
+ * the pixels AROUND THE TARGET are stable even though the screen moved
+ * elsewhere. Spam guard ≤ 4 of 64: near-identical re-capture. The ±48px
+ * box around the click point is the "target region" for coordinate
+ * targets without element bounds — 48px covers a button + label with
+ * margin, without swallowing a whole toolbar. */
+const REFRESH_FULL_STABLE_HAMMING = 8;
+const REFRESH_REGION_STABLE_HAMMING = 6;
+const REFRESH_REGION_PAD_PX = 48;
+const SPAM_IDENTICAL_HAMMING = 4;
+const SPAM_CONSECUTIVE_LIMIT = 3;
+/** R69 (task 4-c-2): the auto-observation's changed threshold — a
+ * full-frame Hamming > 4 bits vs the pre-action frame (the spam guard's
+ * near-identical bar) means the screen VISIBLY changed. */
+const OBSERVATION_CHANGED_HAMMING = 4;
+
+/** The R69 auto-refresh outcome that rides the receipt (types.ts Receipt). */
+export interface FrameRefreshInfo {
+  frameId: string;
+  screenStable: boolean;
+  targetRegionStable?: boolean;
+}
 
 function receipt(
   actionSent: boolean,
@@ -192,6 +294,19 @@ export class ComputerDispatcher {
   private selectedDisplay = 1;
   /** Latest raster PNGs by frameId (for zoom + vision; capped at 3). */
   private rasterCache = new Map<string, string>();
+  /** R69 (task 4-c-1): consecutive near-identical MODEL-initiated captures
+   * (screenshot-spam guard). Auto-refresh captures never touch it; see
+   * guardModelCapture for every reset condition. */
+  private consecutiveIdenticalCaptures = 0;
+  /** R69: the foreground pid seen at the last model capture (the app-switch
+   * reset signal — a pid proxy for "foreground app title change", the
+   * detectable identity without a new backend primitive). */
+  private lastCaptureForegroundPid: number | null = null;
+  /** R69 (task 4-c-2): the post-action settle before the observation
+   * capture (see OBSERVATION_SETTLE_MS). Public + mutable so the test
+   * suite can run hundreds of dispatches without each paying the real
+   * 600ms — production never touches it. */
+  observationSettleMs = OBSERVATION_SETTLE_MS;
 
   constructor(opts: DispatcherOptions) {
     this.backend = opts.backend;
@@ -204,8 +319,35 @@ export class ComputerDispatcher {
   /** The single entry point every tool call flows through (audit + gates). */
   async dispatch(tool: string, args: Record<string, unknown>): Promise<DispatchResult> {
     this.session.ensureStarted(this.backend.kind);
+    // R69: ANY mutating dispatch resets the screenshot-spam counter — the
+    // model acted between captures, so the next capture is a legitimate
+    // re-observation of a screen that may have changed (attempt-level: a
+    // refused mutation resets too — generous, never over-refusing).
+    if (MUTATING_TOOLS.has(tool)) this.consecutiveIdenticalCaptures = 0;
+    // R69 (task 4-c-2): the PRE-STATE for the auto-observation — the
+    // frontmost title read BEFORE the action (titleChanged's baseline; the
+    // pre-FRAME needs no capture: the last registered frame IS the
+    // pre-state, read after route so 4-c-1's auto-refresh capture counts as
+    // it). Read only when the observation will actually run: the tool is
+    // observation-capable AND return_state is the default/"compact" ("none"
+    // opts out entirely, "full" asks for the UIA compose instead) AND
+    // (posture honesty) not a mutation the observe-only posture will refuse.
+    const requestedReturnState = args["returnState"] ?? args["return_state"];
+    const autoObserve =
+      OBSERVATION_TOOLS.has(tool) &&
+      (requestedReturnState === undefined || requestedReturnState === "compact") &&
+      !(MUTATING_TOOLS.has(tool) && !this.allowMutations);
+    const preTitle = autoObserve ? await this.frontmostAppState() : null;
     const started = Date.now();
     const result = await this.route(tool, args);
+    // R69 (task 4-c-2): attach the auto-observation to SENT action receipts
+    // (refusals carry none — nothing happened). Attached BEFORE the audit
+    // journal line so the journal records the receipt the model actually
+    // received; the observation NEVER fails the action (capture failures
+    // report {captureFailed:true}).
+    if (autoObserve && result.kind === "receipt" && result.receipt.actionSent) {
+      await this.attachAutoObservation(tool, args, result, preTitle);
+    }
     const ms = Date.now() - started;
     // Journal every call (redaction inside audit.ts; failures fail-soft).
     appendAudit(this.root, {
@@ -237,13 +379,17 @@ export class ComputerDispatcher {
     // ROUND-61: return_state (doc 02 §0.4) — when the next step needs fresh
     // UI state, the receipt carries a compact/full observation composed
     // from the action's scope. Only for SENT actions (refusals don't).
+    // R69 (task 4-c-2): for the OBSERVATION_TOOLS, "full" keeps this UIA
+    // compose while "compact" is now the raster observation attached above
+    // (the default) — the non-observation tools keep the legacy opt-in
+    // semantics (explicit compact/full composes a Snapshot).
     if (
       result.kind === "receipt" &&
       result.receipt.actionSent &&
-      (args["returnState"] === "compact" || args["return_state"] === "compact" ||
-        args["returnState"] === "full" || args["return_state"] === "full")
+      (requestedReturnState === "full" ||
+        (requestedReturnState === "compact" && !OBSERVATION_TOOLS.has(tool)))
     ) {
-      const detail = (args["returnState"] ?? args["return_state"]) === "full" ? "full" : "compact";
+      const detail = requestedReturnState === "full" ? "full" : "compact";
       const appRef = this.deriveAppRef(tool, args);
       if (appRef !== null) {
         const observation = await this.route("get_app_state", { appRef, detail });
@@ -545,10 +691,17 @@ export class ComputerDispatcher {
     };
   }
 
-  /** Coordinate freshness gate: frame binding + age + bounds (doc 03 §4/§6). */
+  /** Coordinate freshness gate: frame binding + age + bounds (doc 03 §4/§6).
+   *
+   * R69: the HARD frame_stale fail here remains ONLY for the actions the
+   * spec excludes from auto-refresh (set_value, left_mouse_down — they ride
+   * the focus gate, not the frame) and for the no-frame/bounds errors that
+   * no refresh can heal. The coordinate-anchored pointer tools (click
+   * family, drag, scroll, mouse_move) resolve through
+   * resolveCoordinateAction instead — staleness becomes auto-refresh. */
   private resolveCoordinate(
     target: { type: "coordinate"; x: number; y: number; frameId?: string },
-  ): { ok: true; frame: NonNullable<ReturnType<ComputerSession["getFrame"]>>; global: { x: number; y: number } } | { ok: false; refusal: DispatchResult } {
+  ): { ok: true; frame: FrameInfo; global: { x: number; y: number } } | { ok: false; refusal: DispatchResult } {
     const frame =
       target.frameId !== undefined
         ? this.session.getFrame(target.frameId)
@@ -573,6 +726,347 @@ export class ComputerDispatcher {
     }
     return { ok: true, frame, global: this.session.imageToGlobal(frame, target.x, target.y) };
   }
+
+  /**
+   * R69 (task 4-c-1): the coordinate-anchored pointer tools' resolver — the
+   * same binding/age/bounds rules as resolveCoordinate, but an AGED frame no
+   * longer hard-fails: autoRefreshStaleFrame re-captures, registers the
+   * fresh frame (provenance "auto_refresh"), and decides proceed vs
+   * frame_changed by perceptual comparison. `elementBounds` (GLOBAL points,
+   * detail:"full" element bounds) becomes the target region when present —
+   * otherwise the region is the ±48px box around the action's own point.
+   */
+  private async resolveCoordinateAction(
+    target: { type: "coordinate"; x: number; y: number; frameId?: string },
+    elementBounds?: [number, number, number, number] | null,
+  ): Promise<
+    { ok: true; frame: FrameInfo; global: { x: number; y: number }; refresh?: FrameRefreshInfo } | { ok: false; refusal: DispatchResult }
+  > {
+    const frame =
+      target.frameId !== undefined
+        ? this.session.getFrame(target.frameId)
+        : this.session.latestFrame();
+    if (frame === undefined) {
+      return {
+        ok: false,
+        refusal: { kind: "refusal", refusal: frameStale(target.frameId ?? "latest", "no raster exists yet — take a screenshot first").refusal },
+      };
+    }
+    if (this.session.frameIsFresh(frame)) {
+      return this.boundsChecked(frame, target);
+    }
+    const refreshed = await this.autoRefreshStaleFrame(frame, target, elementBounds ?? null);
+    return refreshed;
+  }
+
+  /** Shared bounds gate (image px against the resolved frame — doc 03 §4). */
+  private boundsChecked(
+    frame: FrameInfo,
+    target: { type: "coordinate"; x: number; y: number; frameId?: string },
+  ): { ok: true; frame: FrameInfo; global: { x: number; y: number } } | { ok: false; refusal: DispatchResult } {
+    if (target.x < 0 || target.y < 0 || target.x >= frame.size.w || target.y >= frame.size.h) {
+      return {
+        ok: false,
+        refusal: { kind: "refusal", refusal: rasterOutOfBounds(target.x, target.y, frame.size.w, frame.size.h).refusal },
+      };
+    }
+    return { ok: true, frame, global: this.session.imageToGlobal(frame, target.x, target.y) };
+  }
+
+  /**
+   * R69 (task 4-c-1): the auto-refresh itself. Captures the STALE frame's
+   * exact global coverage (the same backend captureRegion primitive the
+   * zoom / get_app_state paths use — called, never re-implemented; a
+   * region capture of the old coverage reproduces the old scope, so old vs
+   * new hashes are apples-to-apples), registers the fresh frame as
+   * "auto_refresh", then decides:
+   *   1. full-frame Hamming ≤ 8 → screen stable → PROCEED (the model's
+   *      coordinates map through the new frame identically).
+   *   2. else the target region (element bounds, or the ±48px box around
+   *      the point): Hamming ≤ 6 → target stable → PROCEED.
+   *   3. else → frame_changed (the fresh frame is registered; the model
+   *      zooms it and retries in one round-trip).
+   * A failed capture (or unhashable rasters — no comparison possible) falls
+   * back to the honest frame_stale signal so the failure is never lost.
+   */
+  private async autoRefreshStaleFrame(
+    frame: FrameInfo,
+    target: { type: "coordinate"; x: number; y: number; frameId?: string },
+    elementBounds: [number, number, number, number] | null,
+  ): Promise<
+    { ok: true; frame: FrameInfo; global: { x: number; y: number }; refresh: FrameRefreshInfo } | { ok: false; refusal: DispatchResult }
+  > {
+    const ageS = Math.round((Date.now() - frame.capturedAt) / 1000);
+    // The old raster's GLOBAL coverage (image px ÷ scale = screen pt) — a
+    // region capture of that coverage reproduces the old scope.
+    const coverage = {
+      x: frame.origin.x,
+      y: frame.origin.y,
+      w: coverageWidth(frame),
+      h: coverageHeight(frame),
+    };
+    const raster = await this.backend.captureRegion(this.run, coverage);
+    if ("error" in raster) {
+      // NEVER lose the failure signal: the old frame_stale shape, with the
+      // refresh attempt named honestly in the why.
+      return {
+        ok: false,
+        refusal: {
+          kind: "refusal",
+          refusal: frameStale(frame.frameId, `captured ${ageS}s ago (max ${MAX_FRAME_AGE_MS / 1000}s); the automatic refresh capture failed: ${raster.error}`).refusal,
+        },
+      };
+    }
+    const frontPid = await this.backend.frontmostPid(this.run);
+    const { frameId: refreshFrameId } = this.session.registerFrame(
+      raster,
+      { kind: "display", pid: frontPid ?? frame.ownerAtCapture.pid },
+      { pid: frontPid ?? frame.ownerAtCapture.pid, windowId: frame.ownerAtCapture.windowId },
+      frame.displayIndex,
+      "auto_refresh",
+    );
+    this.cacheRaster(refreshFrameId, raster.pngBase64);
+    this.session.record(
+      "observe",
+      `Auto-refreshed stale frame ${frame.frameId} → ${refreshFrameId} (screen comparison in flight)`,
+      "auto_refresh",
+      { refreshFrameId, staleFrameId: frame.frameId },
+    );
+    const newFrame = this.session.getFrame(refreshFrameId)!;
+    const oldHash = frame.aHash;
+    const newHash = newFrame.aHash;
+    if (oldHash === undefined || newHash === undefined) {
+      // No comparison possible (an undecodable raster on either side) —
+      // the honest fallback is the staleness signal, not a guess.
+      return {
+        ok: false,
+        refusal: {
+          kind: "refusal",
+          refusal: frameStale(frame.frameId, `captured ${ageS}s ago (max ${MAX_FRAME_AGE_MS / 1000}s); the refreshed frame could not be perceptually verified`).refusal,
+        },
+      };
+    }
+    if (hamming(oldHash, newHash) <= REFRESH_FULL_STABLE_HAMMING) {
+      const checked = this.boundsChecked(newFrame, target);
+      if (!checked.ok) return checked;
+      return { ...checked, refresh: { frameId: refreshFrameId, screenStable: true } };
+    }
+    // Screen moved — does the TARGET region still match?
+    const oldPng = this.rasterFor(frame.frameId);
+    const oldRegion = oldPng === undefined ? null : hashRegion(oldPng, this.regionRectFor(frame, target, elementBounds), frame.frameId);
+    const newRegion = hashRegion(raster.pngBase64, this.regionRectFor(newFrame, target, elementBounds), refreshFrameId);
+    if (
+      oldRegion !== null &&
+      newRegion !== null &&
+      hamming(oldRegion.aHash, newRegion.aHash) <= REFRESH_REGION_STABLE_HAMMING
+    ) {
+      const checked = this.boundsChecked(newFrame, target);
+      if (!checked.ok) return checked;
+      return { ...checked, refresh: { frameId: refreshFrameId, screenStable: false, targetRegionStable: true } };
+    }
+    // Genuinely changed (or the old raster was evicted and the region is
+    // unverifiable — the screen DID move, the refusal is honest either way).
+    return {
+      ok: false,
+      refusal: {
+        kind: "refusal",
+        refusal: frameChanged(refreshFrameId, `the frame was captured ${ageS}s ago (max ${MAX_FRAME_AGE_MS / 1000}s) and the target region differs now.`).refusal,
+      },
+    };
+  }
+
+  /**
+   * The target-region rect (IMAGE px of the given frame) for the region
+   * comparison: the element's bounds when the action carries one, else the
+   * ±48px box around the action's own point, clamped to the frame. The
+   * global rect is mapped per-frame (the old and new frames share the old
+   * coverage, but each maps with its own origin/scale).
+   */
+  private regionRectFor(
+    frame: FrameInfo,
+    target: { type: "coordinate"; x: number; y: number; frameId?: string },
+    elementBounds: [number, number, number, number] | null,
+  ): { x: number; y: number; w: number; h: number } {
+    let globalRect: { x: number; y: number; w: number; h: number };
+    if (elementBounds !== null) {
+      globalRect = { x: elementBounds[0], y: elementBounds[1], w: elementBounds[2], h: elementBounds[3] };
+    } else {
+      // The action point in GLOBAL space, padded ±48pt, clamped to the
+      // frame's coverage.
+      const pt = this.session.imageToGlobal(frame, target.x, target.y);
+      const x0 = Math.max(frame.origin.x, pt.x - REFRESH_REGION_PAD_PX);
+      const y0 = Math.max(frame.origin.y, pt.y - REFRESH_REGION_PAD_PX);
+      const x1 = Math.min(frame.origin.x + coverageWidth(frame), pt.x + REFRESH_REGION_PAD_PX);
+      const y1 = Math.min(frame.origin.y + coverageHeight(frame), pt.y + REFRESH_REGION_PAD_PX);
+      globalRect = { x: x0, y: y0, w: Math.max(1, x1 - x0), h: Math.max(1, y1 - y0) };
+    }
+    // GLOBAL → image px for THIS frame (the inverse of imageToGlobal).
+    const ix = Math.round((globalRect.x - frame.origin.x) * frame.scale);
+    const iy = Math.round((globalRect.y - frame.origin.y) * frame.scale);
+    const iw = Math.max(1, Math.round(globalRect.w * frame.scale));
+    const ih = Math.max(1, Math.round(globalRect.h * frame.scale));
+    return {
+      x: Math.min(Math.max(0, ix), Math.max(0, frame.size.w - 1)),
+      y: Math.min(Math.max(0, iy), Math.max(0, frame.size.h - 1)),
+      w: Math.min(iw, frame.size.w),
+      h: Math.min(ih, frame.size.h),
+    };
+  }
+
+  /** Attach the R69 auto-refresh outcome to an action receipt (additive). */
+  private applyRefresh(result: DispatchResult, refresh: FrameRefreshInfo | undefined): DispatchResult {
+    if (refresh === undefined || result.kind !== "receipt") return result;
+    return {
+      ...result,
+      receipt: {
+        ...result.receipt,
+        frameRefreshed: true,
+        refreshFrameId: refresh.frameId,
+        screenStable: refresh.screenStable,
+        ...(refresh.targetRegionStable !== undefined ? { targetRegionStable: refresh.targetRegionStable } : {}),
+      },
+    };
+  }
+
+  /* ── R69 (task 4-c-2): the post-action AUTO-OBSERVATION ────────────────── */
+
+  /**
+   * The frontmost app's {pid, title} via the LIST_APPS path's own frontmost
+   * marker: every backend's listApps flags the app whose pid owns the
+   * foreground window (`active: true`, with `name` = its MAIN WINDOW
+   * title) — the existing frontmost/window-title identity, reused, never
+   * re-implemented. Null when no active app resolves (an empty list, or a
+   * frontmost helper pid that owns no window) — every consumer degrades
+   * honestly (activeApp omitted, never fabricated).
+   */
+  private async frontmostAppState(): Promise<{ pid: number; title: string } | null> {
+    try {
+      const { apps } = await this.backend.listApps(this.run);
+      const active = apps.find((a) => a.active);
+      return active === undefined ? null : { pid: active.pid, title: active.name };
+    } catch {
+      return null;
+    }
+  }
+
+  /**
+   * Capture + compose the compact post-action observation (the shape every
+   * OBSERVATION_TOOLS receipt and the wait() receipt carry):
+   *   1. settle OBSERVATION_SETTLE_MS (configurable; wait() passes none —
+   *      its duration already settled the screen);
+   *   2. captureDisplay (the same primitive toolScreenshot rides) and
+   *      register it with provenance "observation" + raster-cache it (the
+   *      frame is zoomable/vision-servable immediately — the plugins also
+   *      SSE it as an inline thumbnail);
+   *   3. screenChanged: the new frame's aHash vs the LAST frame registered
+   *      before it (the pre-action state — includes 4-c-1's auto-refresh
+   *      capture when one fired; FREE, no extra pre-capture). Hamming > 4
+   *      of 64 bits = changed (the spam guard's near-identical threshold);
+   *   4. focusedElementName: the key tool's readback primitive, scoped on
+   *      the post-action frontmost pid (best-effort, omitted on null);
+   *   5. activeApp {pid, title} + titleChanged (pre-action read vs post).
+   * EVERY failure path degrades honestly: a failed capture returns
+   * {captureFailed:true}; a thrown backend call is swallowed the same way —
+   * the observation NEVER fails the action receipt it rides.
+   */
+  private async captureAutoObservation(
+    toolName: string,
+    preTitle: { pid: number; title: string } | null,
+    settle: boolean,
+  ): Promise<ActionObservation> {
+    try {
+      if (settle && this.observationSettleMs > 0) {
+        await new Promise((resolve) => setTimeout(resolve, this.observationSettleMs));
+      }
+      // The pre-state: the last registered frame BEFORE this capture (an
+      // auto-refresh frame from 4-c-1's resolution counts — it IS the
+      // pre-action truth). Read HERE, not before the action: nothing the
+      // action itself registers, so latestFrame() is still pre-action.
+      const preFrame = this.session.latestFrame();
+      const raster = await this.backend.captureDisplay(this.run, this.selectedDisplay);
+      if ("error" in raster) {
+        return { captureFailed: true };
+      }
+      const front = await this.frontmostAppState();
+      const ownerPid = front?.pid ?? preFrame?.ownerAtCapture.pid ?? 0;
+      const { frameId } = this.session.registerFrame(
+        raster,
+        { kind: "display", pid: ownerPid },
+        { pid: ownerPid, windowId: 0 },
+        this.selectedDisplay,
+        "observation",
+      );
+      this.cacheRaster(frameId, raster.pngBase64);
+      const newFrame = this.session.getFrame(frameId)!;
+      let screenChanged: boolean | undefined;
+      if (preFrame?.aHash !== undefined && newFrame.aHash !== undefined) {
+        screenChanged = hamming(preFrame.aHash, newFrame.aHash) > OBSERVATION_CHANGED_HAMMING;
+      }
+      // The focused readback (the key tool's primitive, on the post-action
+      // frontmost pid — the impl itself refuses '' when the pid lost the
+      // foreground, which is exactly the honest scoping).
+      let focusedElementName: string | undefined;
+      const focusPid = front?.pid ?? preFrame?.ownerAtCapture.pid;
+      if (focusPid !== undefined) {
+        try {
+          const focused = await this.backend.focusedElementName(this.run, focusPid);
+          if (focused !== null && focused.trim() !== "") focusedElementName = focused.trim().slice(0, 200);
+        } catch {
+          // best-effort — the field is omitted, never a failure
+        }
+      }
+      const observation: ObservationInfo = {
+        frameId,
+        ...(screenChanged !== undefined ? { screenChanged } : {}),
+        ...(focusedElementName !== undefined ? { focusedElementName } : {}),
+        ...(front !== null ? { activeApp: { pid: front.pid, title: front.title } } : {}),
+        ...(front !== null && preTitle !== null ? { titleChanged: front.title !== preTitle.title } : {}),
+      };
+      this.session.record(
+        "observe",
+        `Auto-observed post-action frame ${frameId}${
+          screenChanged === true ? " (screen changed)" : screenChanged === false ? " (screen unchanged)" : ""
+        }`,
+        toolName,
+        { frameId, screenChanged: screenChanged ?? null },
+      );
+      return observation;
+    } catch {
+      // The observation is an enhancement riding the receipt — never a
+      // failure channel for the action itself.
+      return { captureFailed: true };
+    }
+  }
+
+  /**
+   * Attach the auto-observation to a SENT action receipt (dispatch's only
+   * caller; wait() builds its own via captureAutoObservation). Also upgrades
+   * a coordinate click's targetVerificationStatus "unverified" →
+   * "changed"/"unchanged" from screenChanged — the receipt then TELLS the
+   * model whether its click visibly registered. Element/a11y receipts keep
+   * "matched" (their actuation was identity-verified by the backend).
+   */
+  private async attachAutoObservation(
+    toolName: string,
+    args: Record<string, unknown>,
+    result: { kind: "receipt"; receipt: Receipt; observation?: Snapshot },
+    preTitle: { pid: number; title: string } | null,
+  ): Promise<void> {
+    const observation = await this.captureAutoObservation(toolName, preTitle, true);
+    result.receipt.observation = observation;
+    if ("captureFailed" in observation) return;
+    const target = args["target"];
+    const coordinateTarget =
+      typeof target === "object" && target !== null && (target as Record<string, unknown>)["type"] === "coordinate";
+    if (
+      observation.screenChanged !== undefined &&
+      coordinateTarget &&
+      result.receipt.targetVerificationStatus === "unverified"
+    ) {
+      result.receipt.targetVerificationStatus = observation.screenChanged ? "changed" : "unchanged";
+    }
+  }
+
 
   /**
    * R68-C (C2): the Win/Linux raw foreground rule (doc 07 §5) + the
@@ -700,11 +1194,16 @@ export class ComputerDispatcher {
         h: window.bounds[3],
       });
       if (!("error" in raster)) {
+        // R69: includeScreenshot is a MODEL capture — the spam guard
+        // applies (the observed app's pid is the foreground identity).
+        const guard = this.guardModelCapture(raster.pngBase64, app.pid);
+        if (guard !== null) return { kind: "refusal", refusal: guard };
         const { frameId, meta } = this.session.registerFrame(
           raster,
           { kind: "window", pid: app.pid, windowId: window.windowId },
           { pid: app.pid, windowId: window.windowId },
           this.selectedDisplay,
+          "model",
         );
         this.cacheRaster(frameId, raster.pngBase64);
         snapshot.raster = meta;
@@ -888,11 +1387,16 @@ export class ComputerDispatcher {
     const { displays } = await this.backend.listDisplays(this.run);
     const display = displays.find((d) => d.index === this.selectedDisplay) ?? displays[0];
     const frontPid = await this.backend.frontmostPid(this.run);
+    // R69: the spam guard runs AFTER the bytes arrive, BEFORE registration —
+    // a refused capture registers/streams nothing.
+    const guard = this.guardModelCapture(raster.pngBase64, frontPid);
+    if (guard !== null) return { kind: "refusal", refusal: guard };
     const { frameId, meta } = this.session.registerFrame(
       raster,
       { kind: "display", pid: frontPid ?? undefined },
       { pid: frontPid ?? 0, windowId: 0 },
       this.selectedDisplay,
+      "model",
     );
     this.cacheRaster(frameId, raster.pngBase64);
     this.session.record("observe", `Captured display ${this.selectedDisplay} (${meta.width}×${meta.height})`, "screenshot", {
@@ -936,11 +1440,16 @@ export class ComputerDispatcher {
         },
       };
     }
+    // R69: zoom-with-capture is a MODEL capture — the spam guard applies
+    // (the source frame's owner pid is the foreground identity here).
+    const guard = this.guardModelCapture(raster.pngBase64, frame.ownerAtCapture.pid);
+    if (guard !== null) return { kind: "refusal", refusal: guard };
     const { frameId, meta } = this.session.registerFrame(
       raster,
       { kind: "display", pid: frame.ownerAtCapture.pid },
       frame.ownerAtCapture,
       frame.displayIndex,
+      "model",
     );
     this.cacheRaster(frameId, raster.pngBase64);
     return { kind: "data", data: { frame: meta } };
@@ -1029,8 +1538,20 @@ export class ComputerDispatcher {
   private async toolWait(args: Record<string, unknown>): Promise<DispatchResult> {
     const duration = Math.max(0, Math.min(30, Number(args["duration"]) || 0));
     this.session.record("wait", `Waiting ${duration}s`, "wait");
+    // R69 (task 4-c-2): the pre-wait frontmost title — the baseline for
+    // titleChanged ("what changed while I waited"), read before the sleep.
+    const preTitle = await this.frontmostAppState();
     await new Promise((resolve) => setTimeout(resolve, duration * 1000));
-    return { kind: "receipt", receipt: receipt(false, "accepted", false) };
+    // R69 (task 4-c-2): wait()'s receipt carries the SAME compact
+    // observation the mutating actions get — after the sleep, capture
+    // (provenance "observation"), diff vs the last registered frame, read
+    // the focused element + the frontmost title. A wait() result is now a
+    // real answer ("the screen changed / the app switched / focus moved")
+    // instead of a bare "ok". No extra settle: the duration already settled
+    // whatever was animating. actionSent stays false (waiting sent
+    // nothing); the observation is the payload.
+    const observation = await this.captureAutoObservation("wait", preTitle, false);
+    return { kind: "receipt", receipt: { ...receipt(false, "accepted", false), observation } };
   }
 
   /* ── pointer tools (doc 07 §2 matrix) ─────────────────────────────────── */
@@ -1045,14 +1566,29 @@ export class ComputerDispatcher {
     const targetRes = this.resolveTarget(args["target"]);
     if (!targetRes.ok) return targetRes.refusal;
 
-    // double/triple/middle: NO a11y equivalent — element fails closed under
+    // double/triple: NO a11y equivalent — element fails closed under
     // auto; coordinate goes raw (raster-bound).
+    // R69 (task 4-c-2, D5): MIDDLE-click element targets no longer fail
+    // closed — they route exactly like left_click's event path (resolve the
+    // element's bounds → click the CENTER with the raw middle button), so
+    // middle_click{target:element} works for "open in new tab" flows. The
+    // receipt carries hitElementName (the element we resolved) + the
+    // post-action observation.
     if (clickCount > 1 || button === "middle") {
       if (targetRes.target.type === "element") {
+        if (button === "middle") {
+          const scope = this.resolveElementScope(targetRes.target);
+          if (!scope.ok) return scope.refusal;
+          const center = elementCenter(scope.element);
+          if (center === null) {
+            return { kind: "refusal", refusal: capabilityFailClosed("the element has no bounds in this snapshot; re-observe with detail:'full'").refusal };
+          }
+          return this.rawClickAt(center, scope.snapshot.app.pid, 1, modifiers, targetRes.target, scope.element, "middle");
+        }
         return {
           kind: "refusal",
           refusal: capabilityFailClosed(
-            `${clickCount > 1 ? `${clickCount === 2 ? "double" : "triple"}_click` : "middle_click"} has no accessibility equivalent for element targets`,
+            `${clickCount === 2 ? "double" : "triple"}_click has no accessibility equivalent for element targets`,
           ).refusal,
         };
       }
@@ -1087,43 +1623,55 @@ export class ComputerDispatcher {
       const scope = this.resolveElementScope(targetRes.target);
       if (!scope.ok) return scope.refusal;
       const hasMenu = scope.element.flags.includes("has_menu");
-      if (!hasMenu && strategy !== "event") {
-        return {
-          kind: "refusal",
-          refusal: capabilityFailClosed("the element advertises no menu (has_menu missing); right_click on elements requires a menu-capable target").refusal,
+      if (hasMenu && strategy !== "event") {
+        // Menu open via the backend's perform-action "Expand"/showMenu.
+        const descriptor: ElementDescriptor = {
+          index: scope.element.index,
+          kind: scope.element.kind,
+          name: scope.element.name,
         };
+        this.session.record("intent", `Opening menu on '${scope.element.name}'`, "right_click");
+        const result = await this.backend.performAction(
+          this.run,
+          scope.snapshot.app.pid,
+          scope.window,
+          descriptor,
+          "Expand",
+        );
+        this.session.markConsumed(targetRes.target.stateId);
+        if (!result.ok) {
+          if (result.stale) return { kind: "refusal", refusal: elementStaleChanged(targetRes.target.stateId).refusal };
+          return { kind: "refusal", refusal: capabilityFailClosed(result.error ?? "menu open failed").refusal };
+        }
+        return { kind: "receipt", receipt: receipt(true, "accepted", false, "matched") };
       }
-      // Menu open via the backend's perform-action "Expand"/showMenu.
-      const descriptor: ElementDescriptor = {
-        index: scope.element.index,
-        kind: scope.element.kind,
-        name: scope.element.name,
-      };
-      this.session.record("intent", `Opening menu on '${scope.element.name}'`, "right_click");
-      const result = await this.backend.performAction(
-        this.run,
-        scope.snapshot.app.pid,
-        scope.window,
-        descriptor,
-        "Expand",
-      );
-      this.session.markConsumed(targetRes.target.stateId);
-      if (!result.ok) {
-        if (result.stale) return { kind: "refusal", refusal: elementStaleChanged(targetRes.target.stateId).refusal };
-        return { kind: "refusal", refusal: capabilityFailClosed(result.error ?? "menu open failed").refusal };
+      // R69 (task 4-c-2, D5): NO menu advertised (or the event strategy
+      // forces raw input — the old path oddly ran Expand even then): route
+      // like left_click's event path — element bounds → center → RAW
+      // right-click (the real context-menu gesture at the element, e.g. a
+      // link's "open in new tab" menu). The old fail-closed cell is GONE.
+      const center = elementCenter(scope.element);
+      if (center === null) {
+        return { kind: "refusal", refusal: capabilityFailClosed("the element has no bounds in this snapshot; re-observe with detail:'full'").refusal };
       }
-      return { kind: "receipt", receipt: receipt(true, "accepted", false, "matched") };
+      return this.rawClickAt(center, scope.snapshot.app.pid, 1, modifiers, targetRes.target, scope.element, "right");
     }
 
     // Coordinate: hit-test for a menu-capable element; else raw right-click.
-    const resolved = this.resolveCoordinate(targetRes.target);
+    // R69: stale frames auto-refresh here (resolveCoordinateAction).
+    const resolved = await this.resolveCoordinateAction(targetRes.target);
     if (!resolved.ok) return resolved.refusal;
+    // R69 (task 4-c-2, D3): the hit-test already runs here — its element
+    // name rides the receipt as hitElementName (the model learns WHAT it
+    // right-clicked), instead of being computed then discarded.
     const hit = await this.backend.hitTest(this.run, resolved.global);
-    if (hit !== null && hit.actionable && strategy !== "event") {
-      // The hit element is pressable — but right-click menus need a menu;
-      // the honest path is the raw right-click at the point.
-    }
-    return this.rawClickAt(resolved.global, resolved.frame.ownerAtCapture.pid, 1, modifiers, targetRes.target, undefined, "right");
+    return this.applyRefresh(
+      withHitElementName(
+        await this.rawClickAt(resolved.global, resolved.frame.ownerAtCapture.pid, 1, modifiers, targetRes.target, undefined, "right"),
+        hit,
+      ),
+      resolved.refresh,
+    );
   }
 
   private async toolMouseMove(args: Record<string, unknown>): Promise<DispatchResult> {
@@ -1132,7 +1680,8 @@ export class ComputerDispatcher {
     if (targetRes.target.type === "element") {
       return { kind: "refusal", refusal: capabilityFailClosed("mouse_move refuses element targets — use left_click to actuate").refusal };
     }
-    const resolved = this.resolveCoordinate(targetRes.target);
+    // R69: stale frames auto-refresh here (resolveCoordinateAction).
+    const resolved = await this.resolveCoordinateAction(targetRes.target);
     if (!resolved.ok) return resolved.refusal;
     // R68-C: frontmost auto-retry (the frame-owner pid scopes the gate).
     // Raw hover = move without click. Linux: xdotool mousemove. Windows:
@@ -1158,9 +1707,9 @@ export class ComputerDispatcher {
         }
         return { kind: "refusal", refusal: capabilityFailClosed(`hover failed: ${moved.error}`).refusal };
       }
-      return { kind: "receipt", receipt: receipt(true, "accepted", false) };
+      return this.applyRefresh({ kind: "receipt", receipt: receipt(true, "accepted", false) }, resolved.refresh);
     }
-    return { kind: "receipt", receipt: receipt(false, "accepted", false) };
+    return this.applyRefresh({ kind: "receipt", receipt: receipt(false, "accepted", false) }, resolved.refresh);
   }
 
   private async toolScroll(args: Record<string, unknown>): Promise<DispatchResult> {
@@ -1178,7 +1727,8 @@ export class ComputerDispatcher {
     if (targetRes.target.type === "element") {
       return { kind: "refusal", refusal: capabilityFailClosed("scroll has NO accessibility actuation — use a coordinate target (the point from the latest raster)").refusal };
     }
-    const resolved = this.resolveCoordinate(targetRes.target);
+    // R69: stale frames auto-refresh here (resolveCoordinateAction).
+    const resolved = await this.resolveCoordinateAction(targetRes.target);
     if (!resolved.ok) return resolved.refusal;
     this.session.record("intent", `Scrolling ${direction} at (${targetRes.target.x},${targetRes.target.y})`, "scroll");
     // R68-C: frontmost auto-retry (the frame-owner pid scopes the gate).
@@ -1192,7 +1742,7 @@ export class ComputerDispatcher {
       }
       return { kind: "refusal", refusal: capabilityFailClosed(result.error ?? "scroll failed").refusal };
     }
-    return { kind: "receipt", receipt: receipt(true, "accepted", false) };
+    return this.applyRefresh({ kind: "receipt", receipt: receipt(true, "accepted", false) }, resolved.refresh);
   }
 
   private async toolDrag(args: Record<string, unknown>): Promise<DispatchResult> {
@@ -1203,9 +1753,15 @@ export class ComputerDispatcher {
     const modifiers = parseModifiers(args["modifiers"]);
 
     // From may be an element (for scoping) — resolve its center as global.
+    // R69: both COORDINATE endpoints auto-refresh a stale frame
+    // (resolveCoordinateAction); an element FROM endpoint supplies its
+    // bounds as the to-side's target-region hint (the dragged source is
+    // the thing whose stability matters).
     let fromGlobal: { x: number; y: number };
     let scopePid: number;
     let consumedStateId: string | undefined;
+    let fromRefresh: FrameRefreshInfo | undefined;
+    let fromElementBounds: [number, number, number, number] | null = null;
     if (fromRes.target.type === "element") {
       const scope = this.resolveElementScope(fromRes.target);
       if (!scope.ok) return scope.refusal;
@@ -1216,13 +1772,16 @@ export class ComputerDispatcher {
       fromGlobal = center;
       scopePid = scope.snapshot.app.pid;
       consumedStateId = fromRes.target.stateId;
+      if (scope.element.bounds !== undefined) fromElementBounds = scope.element.bounds;
     } else {
-      const resolved = this.resolveCoordinate(fromRes.target);
+      const resolved = await this.resolveCoordinateAction(fromRes.target);
       if (!resolved.ok) return resolved.refusal;
       fromGlobal = resolved.global;
       scopePid = resolved.frame.ownerAtCapture.pid;
+      fromRefresh = resolved.refresh;
     }
     let toGlobal: { x: number; y: number };
+    let toRefresh: FrameRefreshInfo | undefined;
     if (toRes.target.type === "element") {
       const scope = this.resolveElementScope(toRes.target);
       if (!scope.ok) return scope.refusal;
@@ -1240,9 +1799,10 @@ export class ComputerDispatcher {
       }
       consumedStateId = toRes.target.stateId;
     } else {
-      const resolved = this.resolveCoordinate(toRes.target);
+      const resolved = await this.resolveCoordinateAction(toRes.target, fromElementBounds);
       if (!resolved.ok) return resolved.refusal;
       toGlobal = resolved.global;
+      toRefresh = resolved.refresh;
     }
 
     if (consumedStateId !== undefined) this.session.markConsumed(consumedStateId);
@@ -1260,7 +1820,10 @@ export class ComputerDispatcher {
       }
       return { kind: "refusal", refusal: capabilityFailClosed(result.error ?? "drag failed").refusal };
     }
-    return { kind: "receipt", receipt: receipt(true, "accepted", false) };
+    return this.applyRefresh(
+      { kind: "receipt", receipt: receipt(true, "accepted", false) },
+      fromRefresh ?? toRefresh,
+    );
   }
 
   private async toolMouseButton(args: Record<string, unknown>, down: boolean): Promise<DispatchResult> {
@@ -1620,17 +2183,27 @@ export class ComputerDispatcher {
 
   /* ── shared click paths ───────────────────────────────────────────────── */
 
-  /** Coordinate click: hit-test (auto) → semantic press; else raw. */
+  /** Coordinate click: hit-test (auto) → semantic press; else raw.
+   * R69: stale frames auto-refresh here (resolveCoordinateAction).
+   * R69 (task 4-c-2, D3): the hit-test's element name rides the receipt as
+   * hitElementName — the model learns WHAT it clicked ("Search" edit,
+   * "Sign in" button) without an extra round-trip. */
   private async coordinateClick(
     target: { type: "coordinate"; x: number; y: number; frameId?: string },
     strategy: "auto" | "a11y" | "event",
     modifiers: string[],
   ): Promise<DispatchResult> {
-    const resolved = this.resolveCoordinate(target);
+    const resolved = await this.resolveCoordinateAction(target);
     if (!resolved.ok) return resolved.refusal;
     if (modifiers.length > 0 || strategy === "event") {
-      return this.rawClickAt(resolved.global, resolved.frame.ownerAtCapture.pid, 1, modifiers, target);
+      return this.applyRefresh(
+        await this.rawClickAt(resolved.global, resolved.frame.ownerAtCapture.pid, 1, modifiers, target),
+        resolved.refresh,
+      );
     }
+    // R69 (4-c-2): the hit-test result is no longer discarded — its name
+    // rides the receipt (see rawClickAt: the raw click actuates whatever is
+    // at the point; hitTest tells the model what that IS).
     const hit = await this.backend.hitTest(this.run, resolved.global);
     if (hit !== null && hit.actionable) {
       if (strategy === "a11y" || strategy === "auto") {
@@ -1641,7 +2214,13 @@ export class ComputerDispatcher {
         // this is window-scoped anyway.
       }
     }
-    return this.rawClickAt(resolved.global, resolved.frame.ownerAtCapture.pid, 1, modifiers, target);
+    return this.applyRefresh(
+      withHitElementName(
+        await this.rawClickAt(resolved.global, resolved.frame.ownerAtCapture.pid, 1, modifiers, target),
+        hit,
+      ),
+      resolved.refresh,
+    );
   }
 
   /** Raw click at global point, with the Win/Linux foreground gate. */
@@ -1673,26 +2252,37 @@ export class ComputerDispatcher {
       }
       return { kind: "refusal", refusal: capabilityFailClosed(result.error ?? "click failed").refusal };
     }
-    return { kind: "receipt", receipt: receipt(true, "accepted", false, "unverified") };
+    // R69 (4-c-2, D5): element-routed raw clicks (middle/right on element
+    // targets, left_click's event path) carry the element's name — the model
+    // learns what the click actuated.
+    const clicked: Receipt = receipt(true, "accepted", false, "unverified");
+    if (element !== undefined && element.name.trim() !== "") {
+      clicked.hitElementName = element.name.trim().slice(0, 120);
+    }
+    return { kind: "receipt", receipt: clicked };
   }
 
-  /** Raw coordinate click without element context. */
+  /** Raw coordinate click without element context.
+   * R69: stale frames auto-refresh here (resolveCoordinateAction). */
   private async rawCoordinateClick(
     target: { type: "coordinate"; x: number; y: number; frameId?: string },
     button: "left" | "middle",
     clickCount: 1 | 2 | 3,
     modifiers: string[],
   ): Promise<DispatchResult> {
-    const resolved = this.resolveCoordinate(target);
+    const resolved = await this.resolveCoordinateAction(target);
     if (!resolved.ok) return resolved.refusal;
-    return this.rawClickAt(
-      resolved.global,
-      resolved.frame.ownerAtCapture.pid,
-      clickCount,
-      modifiers,
-      target,
-      undefined,
-      button === "middle" ? "middle" : "left",
+    return this.applyRefresh(
+      await this.rawClickAt(
+        resolved.global,
+        resolved.frame.ownerAtCapture.pid,
+        clickCount,
+        modifiers,
+        target,
+        undefined,
+        button === "middle" ? "middle" : "left",
+      ),
+      resolved.refresh,
     );
   }
 
@@ -1745,10 +2335,69 @@ export class ComputerDispatcher {
     return this.rasterCache.get(frameId);
   }
 
+  /* ── R69 (task 4-c-1): the screenshot-spam guard ───────────────────────── */
+
+  /**
+   * The gate every MODEL-initiated capture (screenshot / zoom /
+   * get_app_state{includeScreenshot}) passes AFTER the backend returns the
+   * bytes and BEFORE the frame is registered: a refused capture registers
+   * nothing, caches nothing, streams nothing (the raster is near-identical
+   * to the previous one anyway). Auto-refresh captures never come through
+   * here — only the model's own re-observation can spam.
+   *
+   * The counter resets on: (a) any mutating dispatch (dispatch()), (b) a
+   * capture whose full-frame aHash is > SPAM_IDENTICAL_HAMMING bits from the
+   * previous registered raster (the screen changed), (c) a foreground-app
+   * change (pid proxy for a title change — the detectable identity without
+   * a new backend primitive; a same-pid title change is still caught by (b)
+   * when it moves title-bar pixels), (d) an unhashable/first capture (no
+   * comparison possible — never a false refusal). Once the 3rd consecutive
+   * near-identical capture is refused the counter STAYS saturated: every
+   * further identical capture refuses until a real reset happens (the
+   * refusal's alternatives are act/wait/change-strategy — heeding any of
+   * them resets).
+   */
+  private guardModelCapture(pngBase64: string, foregroundPid: number | null): Refusal | null {
+    if (
+      foregroundPid !== null &&
+      this.lastCaptureForegroundPid !== null &&
+      foregroundPid !== this.lastCaptureForegroundPid
+    ) {
+      this.consecutiveIdenticalCaptures = 0;
+    }
+    if (foregroundPid !== null) this.lastCaptureForegroundPid = foregroundPid;
+    const prevFrame = this.session.latestFrame();
+    const newHash = hashFrame(pngBase64);
+    if (newHash === null) {
+      // Unhashable bytes — never a false refusal, never counted.
+      this.consecutiveIdenticalCaptures = 0;
+      return null;
+    }
+    if (prevFrame === undefined || prevFrame.aHash === undefined) {
+      // The FIRST judgeable capture starts the run at length 1 (the "3
+      // identical frames" in the refusal message count the baseline).
+      this.consecutiveIdenticalCaptures = 1;
+      return null;
+    }
+    if (hamming(newHash.aHash, prevFrame.aHash) > SPAM_IDENTICAL_HAMMING) {
+      // The screen changed — a legitimate re-observation; this capture is
+      // the FIRST of a new run.
+      this.consecutiveIdenticalCaptures = 1;
+      return null;
+    }
+    this.consecutiveIdenticalCaptures += 1;
+    if (this.consecutiveIdenticalCaptures >= SPAM_CONSECUTIVE_LIMIT) {
+      return screenUnchanged().refusal;
+    }
+    return null;
+  }
+
   /** Test hook: fresh dispatcher on the same session. */
   resetForTests(): void {
     this.rasterCache.clear();
     this.selectedDisplay = 1;
+    this.consecutiveIdenticalCaptures = 0;
+    this.lastCaptureForegroundPid = null;
   }
 }
 
@@ -1758,9 +2407,40 @@ function parseStrategy(raw: unknown): "auto" | "a11y" | "event" {
   return raw === "a11y" || raw === "event" ? raw : "auto";
 }
 
+/**
+ * R69 (task 4-c-2, D3): stamp a hit-test's element name onto a click
+ * receipt as hitElementName (the hit-test that already runs at the
+ * coordinate-click site was computed-then-discarded; the model now learns
+ * WHAT it clicked). A refusal, a null hit, or an empty name passes through
+ * unchanged — the field is additive, never fabricated.
+ */
+function withHitElementName(
+  result: DispatchResult,
+  hit: { name: string } | null,
+): DispatchResult {
+  if (result.kind !== "receipt" || hit === null || hit.name.trim() === "") return result;
+  return {
+    ...result,
+    receipt: {
+      ...result.receipt,
+      hitElementName: hit.name.trim().slice(0, 120),
+    },
+  };
+}
+
 function elementCenter(el: Element): { x: number; y: number } | null {
   if (el.bounds === undefined) return null;
   return { x: Math.round(el.bounds[0] + el.bounds[2] / 2), y: Math.round(el.bounds[1] + el.bounds[3] / 2) };
+}
+
+/** R69: a frame's raster coverage in GLOBAL points (image px ÷ scale). */
+function coverageWidth(frame: FrameInfo): number {
+  return Math.max(1, Math.round(frame.size.w / frame.scale));
+}
+
+/** R69: see coverageWidth. */
+function coverageHeight(frame: FrameInfo): number {
+  return Math.max(1, Math.round(frame.size.h / frame.scale));
 }
 
 /** Type re-export for the tools layer. */

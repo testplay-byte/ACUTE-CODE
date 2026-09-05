@@ -11,10 +11,12 @@ import {
   ambiguousAppRef,
   appNotFound,
   elementStaleSuperseded,
+  frameChanged,
   frontmostPidMismatch,
   killSwitchActive,
   occlusionOwnerMismatch,
   rasterOutOfBounds,
+  screenUnchanged,
   targetlessInputRefused,
   uipiBlocked,
   visionDisabled,
@@ -43,6 +45,9 @@ describe("ROUND-61 (R61): the refusal catalog (doc 11)", () => {
     { name: "targetless_input_refused", make: () => targetlessInputRefused("key") },
     { name: "uipi_blocked", make: () => uipiBlocked("elevated.exe") },
     { name: "vision_disabled", make: () => visionDisabled("vision is OFF") },
+    // R69 (task 4-c-1): the frame-intelligence refusals.
+    { name: "frame_changed", make: () => frameChanged("f-9", "the target region differs") },
+    { name: "screen_unchanged", make: () => screenUnchanged() },
   ];
 
   for (const { name, make } of cases) {
@@ -68,6 +73,22 @@ describe("ROUND-61 (R61): the refusal catalog (doc 11)", () => {
     expect(refusal.message).toContain("s-7");
     expect(refusal.recovery).toContain("get_app_state");
     expect(refusal.payload).toEqual({ stateId: "s-7", cause: "superseded" });
+  });
+
+  it("R69 frame_changed: carries refreshFrameId in the payload + the zoom-then-retry recovery", () => {
+    const { refusal } = frameChanged("f-9", "the target region differs");
+    expect(refusal.payload).toEqual({ refreshFrameId: "f-9" });
+    expect(refusal.recovery).toContain("fresh frame (id f-9)");
+    expect(refusal.recovery).toContain("zoom it, then retry with current coordinates");
+  });
+
+  it("R69 screen_unchanged: prescribes the three alternatives (act / wait / change strategy)", () => {
+    const { refusal } = screenUnchanged();
+    expect(refusal.message).toContain("3 identical frames");
+    expect(refusal.recovery).toContain("Do not re-capture");
+    expect(refusal.recovery).toContain("act (click/type/scroll");
+    expect(refusal.recovery).toContain("wait()");
+    expect(refusal.recovery).toContain("find_elements");
   });
 });
 

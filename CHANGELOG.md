@@ -1,4 +1,4 @@
-<!-- last-reviewed: 2026-09-06 round-68 -->
+<!-- last-reviewed: 2026-09-05 round-69 -->
 # Changelog
 
 All notable changes to ACUTE-CODE are documented here. Entries are written for
@@ -11,18 +11,80 @@ version number is single-sourced from the root `package.json`
 
 ## [Unreleased]
 
-Planned next: the owner's live Windows verification of R68 on real
-hardware (the 7-step Edge flow is the acceptance test: the searchable
-browser tree via find_elements, the inline screenshot rows at their
-capture moment, the SendInput typing/keys, the self-healing foreground,
-the capture-excluded monitor — the checklist in
-`docs/runbooks/COMPUTER-USE.md`), then the standing queue: browser-wall
-self-bypass (future), installer code-signing (SmartScreen),
-ratings-driven prompt tuning, the deepseek-harness future candidates
-(compaction pressure-trigger, continuable sub-agent children), the
-Files-tab polish, agent web-app-testing tools, moving the Windows walk
-to a temp .ps1 if the C# preamble grows again (the ~1.8K argv headroom
-is past comfort).
+Planned next: the owner's live Windows verification of R69 on real
+hardware — R68's 7-step Edge flow acceptance test PLUS the R69 live
+gates (the dual-object poke waking Edge's UIA provider, the long-type
+stdin paste channel, the HWHEEL horizontal scroll feel, the
+non-activating monitor while STOP/drag stay clickable, the aHash
+thresholds on real 1280×1024 frames, the 600 ms settle catching
+post-click repaints — the checklist in `docs/runbooks/COMPUTER-USE.md`),
+then the standing queue: browser-wall self-bypass (future), installer
+code-signing (SmartScreen), ratings-driven prompt tuning, the
+deepseek-harness future candidates (compaction pressure-trigger,
+continuable sub-agent children), the Files-tab polish, agent
+web-app-testing tools, moving the Windows walk to a temp .ps1 if the
+C# preamble grows again.
+
+## [0.69.0] - 2026-09-06
+
+Round 69 — the computer-use enforcement layer (no new owner field
+report: this round closes the residuals R68's own close-out named).
+R68 built the mechanisms; R69 makes them AUTOMATIC so the agent stops
+re-capturing and starts knowing. **Every mutating action now returns an
+observation receipt** — after a 600 ms settle, the 11 action tools
+(left/right/double/triple/middle click, scroll, type, key, set_value,
+select_text, left_click_drag) attach `{frameId, screenChanged,
+focusedElementName, activeApp, titleChanged}` to the receipt (a fresh
+registered frame, what changed vs the pre-action frame, what's focused
+now, the frontmost app's title) — the verification read the model used
+to buy with a 5–25 s screenshot+vision round now rides the action
+itself, and the post-action frame renders INLINE in the chat at the
+moment it was captured (the same capture-moment pipeline as the
+model's own screenshots). `returnState` selects the depth:
+"compact" (the default, the raster observation), "none" (skip),
+"full" (the complete accessibility compose). **Coordinate clicks
+verify what they hit**: the receipt's verification status upgrades
+from a blind "unverified" to "changed"/"unchanged" (a perceptual
+frame hash), and the hit-test the engine already ran now names the
+element the point landed on (`hitElementName`). **Stale frames
+auto-refresh instead of dead-ending**: a coordinate action on a frame
+older than 30 s re-captures and compares perceptually first — a static
+screen proceeds (with a refresh receipt), a stable-enough target
+region proceeds, and only a genuinely changed screen refuses the new
+`frame_changed` carrying the ALREADY-REGISTERED fresh frame (one zoom
+round-trip, not a screenshot+replan cycle); the old `frame_stale`
+loop is dead for pointer tools. **The screenshot loop is refused
+outright**: a third consecutive near-identical capture (no intervening
+action) refuses `screen_unchanged` with the three productive
+alternatives (act / wait() / find_elements) — nothing registers, so
+the loop cannot feed itself. **`wait()` reports what changed** while
+waiting (its receipt carries the same observation; no action is
+sent). **Element targeting widens**: `middle_click` and `right_click`
+take element targets now (middle = raw click at the element's center
+— open-in-new-tab flows without coordinate guessing; right = a raw
+center click when the element has no menu), double/triple keep their
+honest raw-only contract. **Windows fixes**: the scroll tool was
+QUADRATIC (it sent N wheel events each carrying N×120 — a 10-tick
+scroll moved 100× the intent; now one event, ticks×120, horizontal
+rides real MOUSEEVENTF_HWHEEL instead of arrow-taps that never
+scrolled page content); long typing (>300 chars) rides a stdin
+base64 clipboard paste (Set-Clipboard + Ctrl+V — the 32,767-char
+command-line ceiling no longer caps what you can type into an
+editor); the Chromium accessibility poke is dual-object and
+polls (up to 2 s for a cold tree) and freshly-launched Edge/Chrome
+carry `--force-renderer-accessibility`. **The floating monitor no
+longer steals focus** — its re-open no longer calls set_focus (tao's
+implementation synthesizes an ALT-key keystroke pair to grab the
+foreground — stray synthetic input mid-action) and the window carries
+`WS_EX_NOACTIVATE`; STOP and dragging stay fully interactive. The
+prompts, the built-in skill and the tool descriptions re-teach the
+loop (read the receipt, element-first, wait after navigation).
+2082 root tests in 123 files (was 2003; agent-core 1180/60, frontend
+890/61 unchanged, e2e 12), lint/typecheck clean, build green, cargo
+check (Windows target) clean, license audit CLEAN with pngjs@7 (MIT)
+— the Windows-native paths remain construction-pinned and gate on
+the owner's next live run. Full evidence in
+docs/ui-iterations/round-69.md.
 
 ## [0.68.0] - 2026-09-06
 

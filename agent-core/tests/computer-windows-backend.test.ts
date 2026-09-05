@@ -36,6 +36,24 @@
  *     RAW here-string (no SendKeys escaping anywhere)
  *   · activate escalates (SW_MINIMIZE → SW_RESTORE) and the select
  *     action rides TapKey/ModsDown instead of SendKeys
+ * R69-a adds four input-engine pin groups (scroll math, long-type
+ * clipboard paste, UIA poke hardening, browser a11y flag):
+ *   · rawScroll: ONE wheel event carrying ticks×WHEEL_DELTA (the old
+ *     construction sent `ticks` events × ±(ticks×120) = ticks²×120
+ *     total — a QUADRATIC over-scroll, now dead); horizontal rides
+ *     MOUSEEVENTF_HWHEEL 0x1000 (positive = right), never arrow taps
+ *   · typeText > 300 chars: Set-Clipboard → 200ms settle → Ctrl+V
+ *     Chord, payload over STDIN as base64(UTF-8) (psStdinCapsule — the
+ *     script still rides -EncodedCommand ARGV; only the PAYLOAD moved,
+ *     so the CreateProcess ceiling no longer caps typed text and the
+ *     Unicode survives exactly — the pins decode stdin back to the
+ *     source text). Threshold boundary pinned at 299/300/301.
+ *   · PokeChromium: the second WM_GETOBJECT (lParam 0xFFFFFFFD,
+ *     UiaRootObjectId) + the sparse POLL (re-walk at the cumulative
+ *     checkpoints 400/800/1400/2000ms, 4 attempts max, break once
+ *     non-sparse) replace the fixed 400ms + one 600ms retry
+ *   · launch: Chromium browser executables (msedge/chrome, matched
+ *     flexibly on the basename) get --force-renderer-accessibility
  * The parse paths run against a fake RunCommand returning exactly what the
  * fixed PowerShell emits on Windows.
  */
@@ -43,6 +61,8 @@ import { describe, expect, it } from "vitest";
 import {
   WINDOWS_PS_PROGRAM,
   WINDOWS_PS_PREAMBLE,
+  LONG_TYPE_THRESHOLD,
+  chromiumBrowserExecutable,
   composeVkChord,
   windowsListAppsScript,
   windowsListWindowsScript,
@@ -157,9 +177,12 @@ describe("ROUND-64-a (R64-a): the shared PowerShell preamble", () => {
     // (pinned in their describes below).
   });
 
-  it("R68-C (C4): declares the Chromium accessibility poke (EnumChildWindows + WM_GETOBJECT to the render widget)", () => {
+  it("R68-C (C4) + R69-a: the Chromium poke sends WM_GETOBJECT TWICE per render child — OBJID_CLIENT (0xFFFFFFFC) AND UiaRootObjectId (0xFFFFFFFD)", () => {
     // Chromium builds its web a11y tree ONLY after an AT pokes the render
-    // widget — the poke is what a screen reader does on connect.
+    // widget — the poke is what a screen reader does on connect. R69-a
+    // adds the SECOND lParam: UiaRootObjectId activates the UIA provider
+    // path directly (System.Windows.Automation IS UIA — the poke now asks
+    // in the dialect the walk below speaks).
     for (const needle of [
       "public static int PokeChromium(IntPtr hwnd)",
       "public delegate bool ChildProc(IntPtr h,IntPtr lp);",
@@ -167,6 +190,7 @@ describe("ROUND-64-a (R64-a): the shared PowerShell preamble", () => {
       "[DllImport(\"user32.dll\")]public static extern IntPtr SendMessage(IntPtr h,uint msg,IntPtr w,IntPtr l);",
       "Chrome_RenderWidgetHostHWND",
       "SendMessage(h,0x3D,IntPtr.Zero,new IntPtr(unchecked((int)0xFFFFFFFC)));",
+      "SendMessage(h,0x3D,IntPtr.Zero,new IntPtr(unchecked((int)0xFFFFFFFD)));",
     ]) {
       expect(WINDOWS_PS_PREAMBLE).toContain(needle);
     }
@@ -522,22 +546,38 @@ describe("R66-2-d: buildSnapshot walks 2400 elements and probes ONLY interactive
     expect("error" in garbage && garbage.error).toContain("not valid JSON");
   });
 
-  it("R68-C (C4): POKEs the Chromium render widget BEFORE the UIA walk + the sparse-retry re-walks ONCE", async () => {
+  it("R68-C (C4) + R69-a: POKEs the render widget BEFORE the UIA walk, then POLLS while sparse — 4 checkpoints, immediate return once non-sparse", async () => {
     // The owner's Edge trees were SPARSE (only the window element): Chromium
     // builds its web a11y tree ONLY after an AT pokes the render widget.
     // The poke is U32-gated (the walk itself needs no U32) and runs BEFORE
-    // Walk; a poke that fired but produced ≤1 element re-walks after 600ms.
+    // any walk. R69-a replaced the fixed 400ms settle + one 600ms
+    // sparse-retry with a POLL: while the poked tree stays sparse (≤1
+    // element), re-walk after each wait; the waits are the increments to
+    // the cumulative checkpoints 400/800/1400/2000ms (4 attempts max), and
+    // the loop BREAKS the moment a walk yields >1 elements.
     const script = await snapshotScript("full");
     expect(script.indexOf("[U32]::PokeChromium([IntPtr]197266)")).toBeGreaterThan(-1);
     expect(script.indexOf("[U32]::PokeChromium")).toBeLessThan(script.indexOf("Walk $root 0"));
     expect(script).toContain("if ($script:U32_OK) { try { $pokeCount = [U32]::PokeChromium");
-    expect(script).toContain("if ($pokeCount -gt 0) { Start-Sleep -Milliseconds 400 }");
-    expect(script).toContain("if ($pokeCount -gt 0 -and $out.Count -le 1) {");
-    expect(script).toContain("Start-Sleep -Milliseconds 600");
-    // The re-walk resets $out first (the sparse first pass is discarded).
-    expect(script).toContain("$out = New-Object System.Collections.ArrayList\n  Walk $root 0");
-    // Exactly ONE Walk call site at top level... the re-walk adds a second
-    // `Walk $root 0` — pin the count honestly (2: the first walk + the retry).
+    // The sparse POLL construction.
+    expect(script).toContain("if ($pokeCount -gt 0) {");
+    expect(script).toContain("$waits = @(400, 400, 600, 600)");
+    expect(script).toContain("foreach ($w in $waits) {");
+    expect(script).toContain("Start-Sleep -Milliseconds $w");
+    expect(script).toContain("if ($out.Count -gt 1) { break }");
+    // Every re-walk resets $out first (the sparse pass is discarded — no
+    // consumer exists yet, this IS the snapshot being built).
+    expect(script).toContain("$out = New-Object System.Collections.ArrayList\n    Walk $root 0");
+    // The no-poke path (no Chromium render children found) walks exactly
+    // ONCE — no settle loop at all.
+    expect(script).toContain("} else {\n  Walk $root 0\n}");
+    // The old fixed-settle / single-retry pins are GONE (intentional
+    // behavior change: `if ($pokeCount -gt 0) { Start-Sleep -Milliseconds
+    // 400 }` and the single 600ms re-walk no longer exist).
+    expect(script).not.toContain("Start-Sleep -Milliseconds 400 }");
+    expect(script).not.toContain("Start-Sleep -Milliseconds 600");
+    // Exactly TWO `Walk $root 0` call sites: the poll loop's + the no-poke
+    // else branch's (the Walk function's recursion is $child-driven).
     expect(script.split("Walk $root 0").length - 1).toBe(2);
   });
 });
@@ -545,25 +585,57 @@ describe("R66-2-d: buildSnapshot walks 2400 elements and probes ONLY interactive
 /* ── R68-C (C1): rawScroll / rawClick / rawDrag — the SendInput input paths ── */
 
 describe("R68-C: rawScroll / rawClick / rawDrag ride SendInput (no SendKeys)", () => {
-  it("horizontal scroll taps VK LEFT/RIGHT via [U32]::TapKey; vertical stays mouse_event", async () => {
-    const run = fakeRun("OK");
-    const result = await windowsBackend.rawScroll(run, { x: 10, y: 20 }, "left", 30);
+  it("R69-a: vertical = ONE mouse_event(0x0800) carrying ticks×WHEEL_DELTA; horizontal = MOUSEEVENTF_HWHEEL (0x1000) — the quadratic + arrow-tap constructions are dead", async () => {
+    // amount 30 → ticks = round(30/3) = 10 → delta = 10×WHEEL_DELTA = 1200.
+    // The R68-C bug was QUADRATIC: `ticks` events × ±(ticks×120) each →
+    // ticks²×120 total (a 10-tick scroll delivered 100× the intent; 33
+    // ticks delivered 1089×). Now: ONE event, delta = ticks×120.
+    const down = fakeRun("OK");
+    const result = await windowsBackend.rawScroll(down, { x: 10, y: 20 }, "down", 30);
     expect(result.ok).toBe(true);
-    const script = decodeCapsuleScript(run.capsules[0]!);
-    expect(script).toContain("[void][U32]::TapKey(0x25)");
-    expect(script).not.toContain("SendKeys");
+    const downScript = decodeCapsuleScript(down.capsules[0]!);
+    expect(downScript).toContain("[U32]::mouse_event(0x0800,0,0,-1200,[UIntPtr]::Zero)");
+    expect(downScript.split("[U32]::mouse_event(0x0800").length - 1).toBe(1); // ONE event
+    // The cursor is positioned at the target FIRST (wheel events affect
+    // the window under the cursor) — and no inter-event sleeps remain.
+    expect(downScript.indexOf("[void][U32]::SetCursorPos(10, 20)")).toBeLessThan(
+      downScript.indexOf("[U32]::mouse_event(0x0800"),
+    );
+    expect(downScript).not.toContain("Start-Sleep -Milliseconds 15");
 
-    const run2 = fakeRun("OK");
-    await windowsBackend.rawScroll(run2, { x: 10, y: 20 }, "right", 30);
-    expect(decodeCapsuleScript(run2.capsules[0]!)).toContain("[void][U32]::TapKey(0x27)");
+    const up = fakeRun("OK");
+    await windowsBackend.rawScroll(up, { x: 10, y: 20 }, "up", 30);
+    expect(decodeCapsuleScript(up.capsules[0]!)).toContain("[U32]::mouse_event(0x0800,0,0,1200,[UIntPtr]::Zero)"); // positive = up
 
-    const run3 = fakeRun("OK");
-    await windowsBackend.rawScroll(run3, { x: 10, y: 20 }, "down", 30);
-    const script3 = decodeCapsuleScript(run3.capsules[0]!);
-    expect(script3).toContain("[U32]::mouse_event(0x0800");
-    // No TapKey CALL in the vertical body (the preamble's declaration is
-    // of course present — the call form is pinned).
-    expect(script3).not.toContain("[U32]::TapKey(");
+    // Horizontal rides MOUSEEVENTF_HWHEEL: positive = RIGHT, negative = LEFT
+    // (the old arrow-key TapKey taps moved the CARET, never the page).
+    const right = fakeRun("OK");
+    await windowsBackend.rawScroll(right, { x: 10, y: 20 }, "right", 30);
+    const rightScript = decodeCapsuleScript(right.capsules[0]!);
+    expect(rightScript).toContain("[U32]::mouse_event(0x1000,0,0,1200,[UIntPtr]::Zero)");
+    expect(rightScript).not.toContain("mouse_event(0x0800");
+
+    const left = fakeRun("OK");
+    await windowsBackend.rawScroll(left, { x: 10, y: 20 }, "left", 30);
+    expect(decodeCapsuleScript(left.capsules[0]!)).toContain("[U32]::mouse_event(0x1000,0,0,-1200,[UIntPtr]::Zero)");
+
+    // NO arrow taps in ANY scroll script (the call form — the preamble of
+    // course still declares TapKey for the other paths), no SendKeys.
+    for (const r of [down, up, right, left]) {
+      expect(decodeCapsuleScript(r.capsules[0]!)).not.toContain("[U32]::TapKey(");
+      expect(decodeCapsuleScript(r.capsules[0]!)).not.toContain("SendKeys");
+    }
+  });
+
+  it("R69-a: the clamps hold — ticks ≤ 40, wheel data ≤ ±32767 (amount 100 → 33 ticks = 3960; an insane amount clamps to 40×120 = 4800)", async () => {
+    const run = fakeRun("OK");
+    await windowsBackend.rawScroll(run, { x: 0, y: 0 }, "down", 100);
+    expect(decodeCapsuleScript(run.capsules[0]!)).toContain("[U32]::mouse_event(0x0800,0,0,-3960,[UIntPtr]::Zero)");
+    // A direct backend call bypassing the dispatcher's 0..100 clamp still
+    // composes a sane single event (40 ticks × 120), never ±ticks²×120.
+    const insane = fakeRun("OK");
+    await windowsBackend.rawScroll(insane, { x: 0, y: 0 }, "down", 1e9);
+    expect(decodeCapsuleScript(insane.capsules[0]!)).toContain("[U32]::mouse_event(0x0800,0,0,-4800,[UIntPtr]::Zero)");
   });
 
   it("modifier clicks hold via [U32]::ModsDown/ModsUp (VK arrays) — the '{CTRLDOWN}' SendKeys path is gone", async () => {
@@ -685,10 +757,10 @@ describe("R68-C: the select_text action taps HOME (+ optional shift+END) via Sen
 
 describe("R68-C: capsule sizing honesty (the re-measured -EncodedCommand ceiling math)", () => {
   it("the biggest FIXED capsule (preamble + buildSnapshot) stays under the 32,767-char CreateProcess ceiling", async () => {
-    // MEASURED at R68-C completion (node over the real composed capsules):
-    // the preamble grew 3,527 → 6,682 chars for the SendInput machinery +
-    // the Chromium poke; buildSnapshot composes 11,587/11,588 script chars
-    // (full/compact) → 30,900/30,904 base64 (the compact variant wins by
+    // MEASURED at R69-a (node over the real composed capsules): the
+    // preamble grew 6,682 → 6,766 chars (the second WM_GETOBJECT poke
+    // SendMessage); buildSnapshot composes 11,592/11,593 script chars
+    // (full/compact) → 30,912/30,916 base64 (the compact variant loses by
     // the one char of "$false"). Bound-pinned here so future preamble
     // growth cannot silently cross the line.
     const run = fakeRun('{"elements":[{"index":0,"kind":"window","name":"Edge","flags":[]}]}');
@@ -700,8 +772,8 @@ describe("R68-C: capsule sizing honesty (the re-measured -EncodedCommand ceiling
       focused: true,
     }, "full");
     const b64 = run.capsules[0]!.args[run.capsules[0]!.args.indexOf("-EncodedCommand") + 1]!;
-    expect(b64.length).toBeGreaterThan(20_000); // it IS the grown capsule (30,900 measured)
-    expect(b64.length).toBeLessThan(32_000); // ~1.8K headroom — the preamble is past comfort, see the psCapsule docblock
+    expect(b64.length).toBeGreaterThan(20_000); // it IS the grown capsule (30,912 measured)
+    expect(b64.length).toBeLessThan(32_000); // ~1.77K headroom — the preamble is past comfort, see the psCapsule docblock
   });
 });
 
@@ -710,29 +782,36 @@ describe("R68-C: the ARGV ceiling guard — model-supplied payloads refuse BEFOR
   // typeText timeout math caps text at ~1,400 chars — WRONG (Math.min
   // clamps the TIMEOUT, not the text). A long type/set_value/clipboard
   // payload would have crossed CreateProcess's 32,767-char command-line
-  // ceiling and died at the spawn with a cryptic error. The three payload
-  // paths now MEASURE the composed capsule and refuse pre-spawn.
+  // ceiling and died at the spawn with a cryptic error. R69-a moved
+  // typeText's LONG payloads off the ARGV channel entirely (stdin), so
+  // the guard now guards the paths that still embed payloads in the
+  // -EncodedCommand blob: setValue, writeClipboard, and typeText's SHORT
+  // (≤300-char) per-char path (defense-in-depth — 300 chars can never
+  // cross the ceiling, but the R68-C construction stays).
   const SCOPE = { pid: 4242, windowId: 77 };
   const WIN = { windowId: 197266, title: "notes.txt - Notepad" };
   const EL = { index: 2, kind: "textfield", name: "File name:" };
 
-  it("typeText: a text long enough to cross the ceiling refuses with the self-teaching error — NO capsule spawned", async () => {
+  it("R69-a: typeText's LONG payloads no longer touch ARGV — a 7,000-char type rides the clipboard+stdin path (the pre-spawn refusal is retired for type)", async () => {
+    // Under R68-C this composed a ~37k-base64 blob and refused; the
+    // payload now rides stdin (no command-line ceiling), the SCRIPT stays
+    // a fixed ~20.7k-base64 -EncodedCommand.
     const run = fakeRun("OK");
     const result = await windowsBackend.typeText(run, "x".repeat(7000), SCOPE);
-    expect(result.ok).toBe(false);
-    if (!result.ok) {
-      expect(result.error).toContain("type text too long");
-      expect(result.error).toContain("split it across multiple type calls");
-      expect(result.error).toContain("32,767");
-    }
-    expect(run.capsules).toHaveLength(0);
-  });
-
-  it("typeText: a large-but-under text still sends (the guard is a ceiling, not a size budget)", async () => {
-    const run = fakeRun("OK");
-    const result = await windowsBackend.typeText(run, "x".repeat(2000), SCOPE);
     expect(result.ok).toBe(true);
     expect(run.capsules).toHaveLength(1);
+    expect(run.capsules[0]!.stdin).toBeDefined();
+    const b64 = run.capsules[0]!.args[run.capsules[0]!.args.indexOf("-EncodedCommand") + 1]!;
+    expect(b64.length).toBeGreaterThan(20_000); // preamble + fixed clipboard script
+    expect(b64.length).toBeLessThan(25_000); // ...and it does NOT grow with the 7,000 chars
+  });
+
+  it("typeText: a 300-char text (the per-char path's max) still sends via the per-char capsule, no stdin", async () => {
+    const run = fakeRun("OK");
+    const result = await windowsBackend.typeText(run, "x".repeat(300), SCOPE);
+    expect(result.ok).toBe(true);
+    expect(run.capsules[0]!.stdin).toBeUndefined();
+    expect(decodeCapsuleScript(run.capsules[0]!)).toContain("[void][U32]::SendText(");
   });
 
   it("setValue (the element-target type path) gets the SAME guard — no capsule spawned", async () => {
@@ -938,6 +1017,102 @@ describe("R68-C: typeText rides [U32]::SendText (KEYEVENTF_UNICODE — the escap
   });
 });
 
+/* ── R69-a: typeText LONG text — the clipboard paste path (stdin payload) ── */
+
+describe("R69-a: typeText LONG text rides the clipboard paste (Set-Clipboard → settle → Ctrl+V)", () => {
+  const SCOPE = { pid: 4242, windowId: 77 };
+
+  it("threshold boundary: 299 and 300 chars stay on the per-char SendText path; 301 switches to the clipboard path", async () => {
+    expect(LONG_TYPE_THRESHOLD).toBe(300);
+    for (const len of [299, 300]) {
+      const run = fakeRun("OK");
+      const result = await windowsBackend.typeText(run, "x".repeat(len), SCOPE);
+      expect(result.ok).toBe(true);
+      const script = decodeCapsuleScript(run.capsules[0]!);
+      expect(script).toContain(`[void][U32]::SendText(@'${"x".repeat(len)}'@)`);
+      expect(run.capsules[0]!.stdin).toBeUndefined(); // the per-char path never rides stdin
+      expect(script).not.toContain("Set-Clipboard");
+    }
+    const run = fakeRun("OK");
+    const result = await windowsBackend.typeText(run, "x".repeat(301), SCOPE);
+    expect(result.ok).toBe(true);
+    const script = decodeCapsuleScript(run.capsules[0]!);
+    expect(script).not.toContain("[U32]::SendText("); // no per-char events at all
+    expect(script).toContain("Set-Clipboard -Value $paste -ErrorAction Stop");
+    expect(run.capsules[0]!.stdin).toBeDefined(); // the payload channel
+  });
+
+  it("the paste choreography: frontmost gate → payload → clipboard → 200ms settle → Ctrl+V Chord — in ORDER, before anything is touched", async () => {
+    const run = fakeRun("OK");
+    const result = await windowsBackend.typeText(run, "x".repeat(301), SCOPE);
+    expect(result.ok).toBe(true);
+    const script = decodeCapsuleScript(run.capsules[0]!);
+    // The U32 guard + the frontmost scope check ride along (the mismatch
+    // must refuse BEFORE the user's clipboard is clobbered).
+    expect(script).toContain("if (-not $script:U32_OK) { Write-Output 'ERR:U32-unavailable");
+    expect(script).toContain('if ($fgpid -ne 4242) { Write-Output "FRONTMOST_MISMATCH:$fgpid"; exit 0 }');
+    // The paste choreography, pinned in order.
+    expect(script.indexOf('if ($fgpid -ne 4242)')).toBeLessThan(script.indexOf("Set-Clipboard"));
+    expect(script).toContain("Start-Sleep -Milliseconds 200");
+    expect(script.indexOf("Set-Clipboard")).toBeLessThan(script.indexOf("Start-Sleep -Milliseconds 200"));
+    // Ctrl+V through the EXISTING Chord primitive: VK_CONTROL (0x11) + 'V' (0x56).
+    expect(script).toContain("$cv=@([uint16]17)");
+    expect(script).toContain("[void][U32]::Chord($cv, [uint16]86)");
+    expect(script.indexOf("Start-Sleep -Milliseconds 200")).toBeLessThan(script.indexOf("[void][U32]::Chord($cv, [uint16]86)"));
+    expect(script).not.toContain("SendKeys");
+  });
+
+  it("the payload channel: stdin carries base64(UTF-8) that decodes back to the EXACT text (Unicode survives by construction)", async () => {
+    // Non-ASCII, emoji (surrogate pair), both quote kinds, a newline, and
+    // the here-string edge sequence '@ — the pipe must carry it all intact.
+    const text = "héllo 世界 😀 line1\nline2 'single' \"double\" @' '@ edge — " + "αβγ".repeat(100);
+    const run = fakeRun("OK");
+    await windowsBackend.typeText(run, text, SCOPE);
+    const stdin = run.capsules[0]!.stdin!;
+    // Pure-ASCII base64 + a trailing newline (Trim()med inside the script —
+    // no console-encoding ambiguity ever crosses the pipe).
+    expect(stdin).toMatch(/^[A-Za-z0-9+/]+={0,2}\n$/);
+    expect(Buffer.from(stdin.trim(), "base64").toString("utf8")).toBe(text);
+    // The decode side is pinned in the script: UTF8.GetString(FromBase64String).
+    const script = decodeCapsuleScript(run.capsules[0]!);
+    expect(script).toContain("$payload = [Console]::In.ReadToEnd()");
+    expect(script).toContain("try { $paste = [System.Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($payload)) }");
+    // The SCRIPT itself still rides -EncodedCommand ARGV (R67-C: the
+    // script cannot be lost) — only the PAYLOAD moved to stdin.
+    expect(script).toContain(WINDOWS_PS_PREAMBLE);
+  });
+
+  it("a HUGE payload composes the SAME fixed script — only stdin grows (the ARGV ceiling no longer caps typed text)", async () => {
+    const run = fakeRun("OK");
+    const result = await windowsBackend.typeText(run, "x".repeat(100_000), SCOPE);
+    expect(result.ok).toBe(true);
+    const b64 = run.capsules[0]!.args[run.capsules[0]!.args.indexOf("-EncodedCommand") + 1]!;
+    expect(b64.length).toBeLessThan(25_000); // the fixed clipboard script (~20.7k measured)
+    expect(run.capsules[0]!.stdin!.length).toBeGreaterThan(100_000); // the payload rides stdin
+    expect(Buffer.from(run.capsules[0]!.stdin!.trim(), "base64").toString("utf8")).toBe("x".repeat(100_000));
+  });
+
+  it("an EMPTY stdin payload refuses honestly (the EPIPE class — nothing is typed, no paste happens)", async () => {
+    const run = fakeRun(
+      "ERR:stdin-payload-lost (the clipboard paste received no text on stdin - the long text was not delivered; retry the type call)",
+    );
+    const result = await windowsBackend.typeText(run, "x".repeat(301), SCOPE);
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.error).toContain("stdin-payload-lost");
+    // The refusal is PINNED in the script: an empty payload is detected
+    // and reported — never an empty paste.
+    expect(decodeCapsuleScript(run.capsules[0]!)).toContain("'ERR:stdin-payload-lost");
+  });
+
+  it("the FRONTMOST_MISMATCH channel refuses (nothing typed); a failed capsule is an honest failure", async () => {
+    const mismatch = await windowsBackend.typeText(fakeRun("FRONTMOST_MISMATCH:9999"), "x".repeat(301), SCOPE);
+    expect(mismatch).toEqual({ ok: false, error: "FRONTMOST_MISMATCH:9999" });
+    const failed = await windowsBackend.typeText(fakeRun("", 1), "x".repeat(301), SCOPE);
+    expect(failed.ok).toBe(false);
+    if (!failed.ok) expect(failed.error).toContain("type failed");
+  });
+});
+
 describe("R67-C: focusedElementName — the Tab-walk readback script", () => {
   it("reads AutomationElement.FocusedElement AFTER the foreground-pid scope check, guarded on U32", async () => {
     const run = fakeRun("Search box");
@@ -955,6 +1130,70 @@ describe("R67-C: focusedElementName — the Tab-walk readback script", () => {
     expect(empty).toBeNull();
     const failed = await windowsBackend.focusedElementName(fakeRun("", 1), 4242);
     expect(failed).toBeNull();
+  });
+});
+
+/* ── R69-a: launch — the Chromium browser accessibility flag ─────────── */
+
+describe("R69-a: launch gives Chromium browsers --force-renderer-accessibility", () => {
+  it("msedge / chrome — with or without .exe, with a full path, any case — launch with the flag", async () => {
+    const names = [
+      "msedge",
+      "msedge.exe",
+      "chrome",
+      "chrome.exe",
+      String.raw`C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe`,
+      "MSEDGE.EXE",
+    ];
+    for (const name of names) {
+      const run = fakeRun("OK");
+      const result = await windowsBackend.launch(run, { name, activate: false });
+      expect(result.ok).toBe(true);
+      const script = decodeCapsuleScript(run.capsules[0]!);
+      expect(script).toContain("-ArgumentList '--force-renderer-accessibility'");
+      // The flag rides Start-Process's ArgumentList; the FilePath keeps
+      // the (single-quote-escaped) name the model gave.
+      expect(script).toContain(`Start-Process -FilePath "${name.replace(/'/g, "''")}" -ArgumentList '--force-renderer-accessibility' -ErrorAction Stop`);
+    }
+  });
+
+  it("NON-browser targets launch UNCHANGED — no flag, same Start-Process line as R68-C", async () => {
+    for (const name of ["notepad", "msedgewebview2", "chrome_proxy", "explorer"]) {
+      const run = fakeRun("OK");
+      const result = await windowsBackend.launch(run, { name, activate: false });
+      expect(result.ok).toBe(true);
+      const script = decodeCapsuleScript(run.capsules[0]!);
+      expect(script).not.toContain("--force-renderer-accessibility");
+      expect(script).toContain(`Start-Process -FilePath "${name}" -ErrorAction Stop`);
+    }
+  });
+
+  it("chromiumBrowserExecutable: the flexible matcher (basename · case · .exe · both separators · trimmed)", () => {
+    expect(chromiumBrowserExecutable("msedge")).toBe(true);
+    expect(chromiumBrowserExecutable("MSEDGE.EXE")).toBe(true);
+    expect(chromiumBrowserExecutable("chrome")).toBe(true);
+    expect(chromiumBrowserExecutable("Chrome.EXE")).toBe(true);
+    expect(chromiumBrowserExecutable(String.raw`C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe`)).toBe(true);
+    expect(chromiumBrowserExecutable("C:/Program Files/Google/Chrome/Application/chrome.exe")).toBe(true); // forward slashes too
+    expect(chromiumBrowserExecutable(" msedge ")).toBe(true); // surrounding whitespace tolerated
+    expect(chromiumBrowserExecutable("notepad")).toBe(false);
+    expect(chromiumBrowserExecutable("msedgewebview2")).toBe(false); // the WebView2 helper is NOT a browser
+    expect(chromiumBrowserExecutable("chrome_proxy")).toBe(false); // prefix-only match refused
+    expect(chromiumBrowserExecutable("chromium")).toBe(false); // not in the R69-a browser list
+    expect(chromiumBrowserExecutable("")).toBe(false);
+  });
+
+  it("a pid-only launch spec never spawns a capsule (unchanged identity resolution)", async () => {
+    const run = fakeRun("OK");
+    const result = await windowsBackend.launch(run, { pid: 1234, activate: false });
+    expect(result).toEqual({ ok: true, pid: 1234, active: false });
+    expect(run.capsules).toHaveLength(0);
+  });
+
+  it("a launch failure is reported honestly (the ERR channel — unchanged)", async () => {
+    const failed = await windowsBackend.launch(fakeRun("ERR:This command cannot be found"), { name: "msedge", activate: false });
+    expect(failed.ok).toBe(false);
+    if (!failed.ok) expect(failed.error).toContain("could not launch 'msedge'");
   });
 });
 

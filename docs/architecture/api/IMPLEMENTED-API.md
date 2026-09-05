@@ -1,8 +1,8 @@
-<!-- last-reviewed: 2026-09-06 round-68 -->
+<!-- last-reviewed: 2026-09-05 round-69 -->
 # IMPLEMENTED API — the shipped surface
 
 **Truth = this file.** Verified against `agent-core/src/server.ts` at
-round-17 (2026-08-23), refreshed R37→R68. The aspirational full contract (52
+round-17 (2026-08-23), refreshed R37→R69. The aspirational full contract (52
 operations, WS gateway, planned routes) lives in
 [`API.md`](API.md) — anything there and
 not here **does not exist yet**. Base: `http://127.0.0.1:<port>`; dev port
@@ -1468,3 +1468,55 @@ actually taken, not at the bottom in a dedicated section."):
 - The prompts/skill/tool-description teaching (BROWSER CONTENT IS
   SEARCHABLE, CHAIN DISCIPLINE, the auto-activation) changed the golden
   fixture only — no contract.
+
+## ROUND-69 additions (implemented)
+
+The computer-use enforcement layer (the residuals R68's own close-out
+named; no owner field report). **No new REST routes, no new SSE frame
+TYPES, no new tools, no new migrations** — the plugin's tool RESULTS
+gained the observation payloads, two refusal codes joined the catalog,
+and one existing SSE frame gained new `tool` values. The frontend is
+untouched.
+
+### The `screenshot` SSE frame — ROUND-69 emitters
+
+`{type:"screenshot", sessionId, frameId, tool, note?}` is UNCHANGED on
+the wire (the R67 shape, the R68 consumer contract). R69 adds two
+EMITTERS after a mutating tool's receipt: the stale-frame
+auto-refresh frame (`tool: "auto_refresh"`, note
+"stale-frame auto-refresh") and the post-action OBSERVATION frame
+(`tool:` the ACTION tool's name, note "post-action observation") —
+both registered in the route-side raster cache, both rendered by the
+existing inline `ScreenshotRow` pipeline. A failed observation capture
+or an evicted raster emits nothing.
+
+### The computer-use tool receipts (model-facing, not HTTP)
+
+- **`observation`** on the 11 mutating tools' SENT receipts:
+  `{frameId, screenChanged?, focusedElementName?, activeApp?:
+  {pid, title}, titleChanged?} | {captureFailed: true}` (after a
+  600 ms settle; every optional field omitted when honestly unknown).
+- **`returnState`** (new tool-schema param on those tools):
+  `"compact"` (default) / `"none"` / `"full"`.
+- **`targetVerificationStatus`** gains `"changed" | "unchanged"`
+  (coordinate clicks, upgraded from `"unverified"` by the
+  observation); **`hitElementName`** rides coordinate-click receipts.
+- **New refusal codes**: `frame_changed` (payload
+  `{refreshFrameId}` — the screen changed; a fresh frame is already
+  registered; zoom it and retry) and `screen_unchanged` (the 3rd
+  consecutive near-identical model capture refused pre-registration
+  with act / wait() / find_elements guidance). `frame_stale` is now
+  reachable only for `set_value` / `left_mouse_down` / the honest
+  unhashable-refresh fallback (pointer tools auto-refresh first).
+- **`GET /computer-use/frames/:frameId/raster`** is unchanged — the
+  new observation/auto-refresh frames register in the same LRU-12 /
+  10-min-TTL registry the route serves.
+
+### Drift notes
+
+- The frame aHash/provenance (`agent-core/src/computer/framehash.ts`,
+  pngjs@7 MIT — 134 prod deps, audit CLEAN) and the dispatcher's
+  spam-guard/auto-refresh logic are engine-internal — no wire surface.
+- The long-type stdin paste channel, the HWHEEL scroll math, the
+  dual-object Chromium poke, and the mini monitor's
+  `WS_EX_NOACTIVATE` are backend/shell changes — no REST/SSE surface.

@@ -166,6 +166,40 @@ export function frameStale(frameId: string, why: string): RefusalOutcome {
   );
 }
 
+/**
+ * R69 (task 4-c-1): the stale-frame auto-refresh's honest refusal — the
+ * frame WAS aged, dispatch DID re-capture, but the screen (and the target
+ * region) genuinely changed, so the model's coordinates cannot be trusted.
+ * The fresh frame is ALREADY registered under refreshFrameId — the model
+ * can zoom it immediately (one round-trip, only when the screen really
+ * changed; static screens never reach this refusal — they proceed via the
+ * screenStable path). Replaces the old frame_stale dead-end for the
+ * coordinate-anchored pointer tools.
+ */
+export function frameChanged(refreshFrameId: string, why: string): RefusalOutcome {
+  return refuse(
+    "frame_changed",
+    `The screen changed since your observation: ${why} A fresh frame has been captured and registered for you.`,
+    `Screen changed since your observation. A fresh frame (id ${refreshFrameId}) has been captured — zoom it, then retry with current coordinates.`,
+    { refreshFrameId },
+  );
+}
+
+/**
+ * R69 (task 4-c-1): the screenshot-spam guard. The 3rd consecutive
+ * model-initiated capture whose full-frame aHash is ≤ 4 bits from the
+ * previous raster's (with no intervening mutating action) is refused BEFORE
+ * registration — the raster is identical anyway. The refusal teaches the
+ * three productive alternatives instead of silently feeding the loop.
+ */
+export function screenUnchanged(): RefusalOutcome {
+  return refuse(
+    "screen_unchanged",
+    "Screen is unchanged since your last capture (3 identical frames). Do not re-capture.",
+    "Do not re-capture. Either act (click/type/scroll — action receipts include observations), wait() (returns what changed), or change strategy (find_elements for element-based targeting).",
+  );
+}
+
 export function occlusionOwnerMismatch(covering: string): RefusalOutcome {
   return refuse(
     "occlusion_owner_mismatch",

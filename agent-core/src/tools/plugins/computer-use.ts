@@ -137,6 +137,19 @@ const modifiersSchema = {
   description: "chord like 'ctrl+shift' (macOS: cmd; Windows/Linux: ctrl)",
 };
 
+/** R69 (task 4-c-2): the return_state parameter on the mutating tools whose
+ * receipts carry the post-action auto-observation. "compact" (the DEFAULT —
+ * also what an absent parameter means) IS that observation: a fresh frame
+ * id, screenChanged, focusedElementName, and the active app's title, so the
+ * model NEVER needs to screenshot after acting. "none" skips it; "full"
+ * asks for the full accessibility state snapshot instead. */
+const returnStateSchema = {
+  type: "string",
+  enum: ["none", "compact", "full"],
+  description:
+    "post-action observation: 'compact' (default) = the receipt's observation (fresh frame, screenChanged, focusedElementName, activeApp title); 'none' = skip; 'full' = full accessibility state snapshot",
+};
+
 /* ── the plugin ───────────────────────────────────────────────────────────── */
 
 export const computerUsePlugin: PluginDefinition = {
@@ -243,6 +256,25 @@ export const computerUsePlugin: PluginDefinition = {
         return refusalResult(result.refusal);
       }
       if (result.kind === "receipt") {
+        // R69 (4-c-2): the AUTO-OBSERVATION + the 4-c-1 auto-refresh frames
+        // go INLINE exactly like model captures — the owner explicitly
+        // wants to SEE frames as they happen, and a post-action thumbnail
+        // at the moment the action landed IS that. The receipt carries the
+        // frame ids (observation.frameId / refreshFrameId); the bytes come
+        // from the dispatcher's raster cache (fetched + registered
+        // route-side, the emitScreenshotFrame pattern). refreshFrameId
+        // first (it happened during resolution, BEFORE the action), then
+        // the post-action observation frame — chronological order, one
+        // SSE frame each, tool = the ACTION tool name / "auto_refresh" so
+        // the inline row's caption names the context. Both are try/catch
+        // enhancements — an evicted raster emits nothing, never an error.
+        if (typeof result.receipt.refreshFrameId === "string" && result.receipt.frameRefreshed === true) {
+          emitScreenshotFrame(result.receipt.refreshFrameId, "auto_refresh", "stale-frame auto-refresh");
+        }
+        const observation = result.receipt.observation;
+        if (observation !== undefined && "frameId" in observation) {
+          emitScreenshotFrame(observation.frameId, tool, "post-action observation");
+        }
         // return_state (doc 02 §0.4) is composed by the DISPATCHER itself —
         // the observation rides the receipt when requested.
         return receiptResult(result.receipt, result.observation !== undefined ? { observation: result.observation } : undefined);
@@ -389,52 +421,54 @@ export const computerUsePlugin: PluginDefinition = {
       // ── Pointer ──
       tool(
         "left_click",
-        "Left-click. Element target = accessibility press (background-safe, preferred). Coordinate = a11y hit-test then raw fallback; submit pixels from the LATEST raster unchanged.",
-        { target: targetSchema("element (preferred) or coordinate"), strategy: strategySchema, modifiers: modifiersSchema },
+        "Left-click. Element target = accessibility press (background-safe, preferred). Coordinate = a11y hit-test then raw fallback; submit pixels from the LATEST raster unchanged. The receipt carries a post-action OBSERVATION (returnState default 'compact': fresh frame, screenChanged, focusedElementName, activeApp title) — read it instead of re-screenshotting.",
+        { target: targetSchema("element (preferred) or coordinate"), strategy: strategySchema, modifiers: modifiersSchema, returnState: returnStateSchema },
         ["target"],
       ),
       tool(
         "double_click",
-        "Double-click — NO accessibility equivalent: element targets fail closed; coordinates go raw (raster-bound, foreground on Windows/Linux).",
-        { target: targetSchema("coordinate"), modifiers: modifiersSchema },
+        "Double-click — coordinates go raw (raster-bound, foreground on Windows/Linux). The receipt carries a post-action OBSERVATION (returnState default 'compact') — read it instead of re-screenshotting.",
+        { target: targetSchema("coordinate"), modifiers: modifiersSchema, returnState: returnStateSchema },
         ["target"],
       ),
       tool(
         "triple_click",
-        "Triple-click — raw only (coordinate), same contract as double_click.",
-        { target: targetSchema("coordinate"), modifiers: modifiersSchema },
+        "Triple-click — raw only (coordinate), same contract as double_click. The receipt carries a post-action OBSERVATION (returnState default 'compact').",
+        { target: targetSchema("coordinate"), modifiers: modifiersSchema, returnState: returnStateSchema },
         ["target"],
       ),
       tool(
         "right_click",
-        "Right-click. Element with a menu → accessibility menu-open; element without a menu fails closed under auto. Coordinate → hit-test, else raw right-click.",
-        { target: targetSchema("element with has_menu, or coordinate"), strategy: strategySchema, modifiers: modifiersSchema },
+        "Right-click. Element with a menu → accessibility menu-open; element WITHOUT a menu → raw right-click at its center (bounds resolved from the snapshot); coordinate → hit-test then raw. The receipt carries a post-action OBSERVATION (returnState default 'compact').",
+        { target: targetSchema("element (menu or bounds), or coordinate"), strategy: strategySchema, modifiers: modifiersSchema, returnState: returnStateSchema },
         ["target"],
       ),
       tool(
         "middle_click",
-        "Middle-click — raw only (coordinate). On a browser link, middle-click opens it in a NEW TAB (keeps the current page — the safe way to follow a link mid-flow).",
-        { target: targetSchema("coordinate"), modifiers: modifiersSchema },
+        "Middle-click. Element target → raw middle-click at the element's CENTER (bounds from the snapshot); coordinate → raw (raster-bound). On a browser link, middle-click opens it in a NEW TAB (keeps the current page — the safe way to follow a link mid-flow). The receipt carries a post-action OBSERVATION (returnState default 'compact').",
+        { target: targetSchema("element or coordinate"), modifiers: modifiersSchema, returnState: returnStateSchema },
         ["target"],
       ),
       tool(
         "scroll",
-        "Scroll — NO accessibility actuation: element targets fail closed; ALWAYS coordinate (from the latest raster). direction up|down|left|right; amount 0-100.",
+        "Scroll — element targets fail closed; ALWAYS coordinate (from the latest raster). direction up|down|left|right; amount 0-100. The receipt carries a post-action OBSERVATION (returnState default 'compact') — read screenChanged to see whether the page moved.",
         {
           target: targetSchema("coordinate"),
           scrollDirection: { type: "string", enum: ["up", "down", "left", "right"] },
           scrollAmount: { type: "integer", description: "0-100" },
           strategy: strategySchema,
+          returnState: returnStateSchema,
         },
         ["target", "scrollDirection"],
       ),
       tool(
         "left_click_drag",
-        "Drag from → to (both may be elements for scoping; the gesture is raw). Endpoints must scope to the SAME app.",
+        "Drag from → to (both may be elements for scoping; the gesture is raw). Endpoints must scope to the SAME app. The receipt carries a post-action OBSERVATION (returnState default 'compact').",
         {
           fromTarget: targetSchema("drag source (element or coordinate)"),
           to: targetSchema("drag destination (element or coordinate)"),
           modifiers: modifiersSchema,
+          returnState: returnStateSchema,
         },
         ["fromTarget", "to"],
       ),
@@ -458,34 +492,36 @@ export const computerUsePlugin: PluginDefinition = {
       // ── Text & keyboard ──
       tool(
         "type",
-        "Type text. Element target = accessibility value write (REPLACES the field's contents; select_text first to insert). appRef = app-scoped typing — the target app is brought frontmost automatically (verified activation; a frontmost_pid_mismatch refusal means that activation failed). Never targetless.",
+        "Type text. Element target = accessibility value write (REPLACES the field's contents; select_text first to insert). appRef = app-scoped typing — the target app is brought frontmost automatically (verified activation; a frontmost_pid_mismatch refusal means that activation failed). Never targetless. The receipt carries a post-action OBSERVATION (returnState default 'compact') — read it instead of re-screenshotting.",
         {
           text: { type: "string" },
           target: targetSchema("editable element (preferred)"),
           appRef: appRefSchema,
           strategy: strategySchema,
+          returnState: returnStateSchema,
         },
         ["text"],
       ),
       tool(
         "set_value",
-        "Set a settable element's value directly via accessibility (sliders, text fields) — semantic, background-safe. The PREFERRED text write.",
-        { target: targetSchema("settable element"), value: { type: "string" }, strategy: strategySchema },
+        "Set a settable element's value directly via accessibility (sliders, text fields) — semantic, background-safe. The PREFERRED text write. The receipt carries a post-action OBSERVATION (returnState default 'compact').",
+        { target: targetSchema("settable element"), value: { type: "string" }, strategy: strategySchema, returnState: returnStateSchema },
         ["target", "value"],
       ),
       tool(
         "select_text",
-        "Select [start, length] in a text element, or place the caret (omit textRange).",
-        { target: targetSchema("text element"), textRange: { type: "array", items: { type: "integer" }, description: "[start, length]" } },
+        "Select [start, length] in a text element, or place the caret (omit textRange). The receipt carries a post-action OBSERVATION (returnState default 'compact').",
+        { target: targetSchema("text element"), textRange: { type: "array", items: { type: "integer" }, description: "[start, length]" }, returnState: returnStateSchema },
         ["target"],
       ),
       tool(
         "key",
-        "Non-text keys and chords ('return', 'escape', 'ctrl+a', 'tab'). NOT ordinary text — use type. repeat 1-100. Modifiers: macOS cmd; Windows/Linux ctrl.",
+        "Non-text keys and chords ('return', 'escape', 'ctrl+a', 'tab'). NOT ordinary text — use type. repeat 1-100. Modifiers: macOS cmd; Windows/Linux ctrl. The receipt reports the FOCUSED element name and carries a post-action OBSERVATION (returnState default 'compact') — after Enter/navigation, read it instead of re-screenshotting.",
         {
           text: { type: "string", description: "key name or chord, e.g. 'ctrl+a'" },
           appRef: appRefSchema,
           repeat: { type: "integer", description: "1-100" },
+          returnState: returnStateSchema,
         },
         ["text", "appRef"],
       ),
@@ -515,7 +551,7 @@ export const computerUsePlugin: PluginDefinition = {
       ),
       tool(
         "wait",
-        "Pause 0-30s for animations/loads, then re-observe.",
+        "Pause 0-30s for animations/loads — then the receipt's OBSERVATION tells you what changed while you waited (fresh frame, screenChanged, focusedElementName, activeApp title). Use it after navigation (Enter, links) instead of re-capturing.",
         { duration: { type: "number", description: "seconds 0-30" } },
       ),
       tool(

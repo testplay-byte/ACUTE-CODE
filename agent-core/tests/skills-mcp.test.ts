@@ -118,13 +118,43 @@ describe("ROUND-61 (R61): skills storage", () => {
     expect(body).toContain("WEB accessibility tree IS searched");
     expect(body).toContain("activated automatically");
     expect(body).toContain("screenshots only when the tree genuinely misses");
-    // The chain discipline: act IMMEDIATELY, verify with a SMALL zoom crop.
+    // The chain discipline: act IMMEDIATELY; the R69 receipt-observation
+    // read replaced the old "verify with a SMALL zoom crop" line (that
+    // zoom was the spam — see the R69 test below).
     expect(body).toContain("CHAIN DISCIPLINE");
     expect(body).toContain("frames stay valid 30s");
     expect(body).toContain("never re-screenshot between observing and acting");
-    expect(body).toContain("small zoom region crop");
+    expect(body).not.toContain("small zoom region crop");
     expect(body).toContain("middle_click a link = open in new tab");
     // Still tight: ≤ 60 content lines with the two new lines.
+    expect(body.trim().split("\n").length).toBeLessThanOrEqual(60);
+  });
+
+  it("R69 (verifier task 5): the body teaches the receipt-observation loop — no screenshot/zoom after actions", () => {
+    const cu = getSkill(db, COMPUTER_USE_SKILL_ID);
+    expect(cu).toBeDefined();
+    const body = cu?.body ?? "";
+    // Every ACTION receipt CARRIES the observation — read it instead of
+    // re-capturing (the owner's #1 field failure was the post-action zoom).
+    expect(body).toContain("post-action observation");
+    expect(body).toContain("screenChanged");
+    expect(body).toContain("focusedElementName");
+    expect(body).toContain("active app's title");
+    expect(body).toContain("do NOT screenshot or zoom after acting");
+    expect(body).toContain("receipt's observation is the FIRST verification read");
+    // Unchanged → the action may not have registered → adjust, element-first.
+    expect(body).toContain("may not have registered");
+    expect(body).toContain("switch to element targeting");
+    // wait() after navigation reports what changed; screen_unchanged meaning.
+    expect(body).toContain("After navigation (Enter, links), call wait()");
+    expect(body).toContain("what changed while you waited");
+    expect(body).toContain("act or change strategy, not re-capture");
+    // The retired R68 zoom-crop verify teaching is GONE.
+    expect(body).not.toContain("small zoom region crop");
+    expect(body).not.toContain("verify AFTER the action");
+    // Element middle/right routing replaced the blanket fail-closed line.
+    expect(body).not.toContain("element targets fail closed; use coordinates");
+    // Still tight: ≤ 60 content lines.
     expect(body.trim().split("\n").length).toBeLessThanOrEqual(60);
   });
 

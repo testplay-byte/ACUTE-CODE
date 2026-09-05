@@ -5,7 +5,9 @@
  * TTL 120 s, CONSUMED after any element write — doc 03 §1), the frame
  * registry (frame_id → capture-time window state, staleness key for
  * coordinate actions, keep-last-8, max age 30 s — R68-C: was 10 s, shorter
- * than the vision roundtrip itself), held-button ownership,
+ * than the vision roundtrip itself; R69: each frame also carries its
+ * capture PROVENANCE and, when the raster bytes are handed over, the
+ * full-frame perceptual aHash), held-button ownership,
  * the kill switch (enforced, not advisory — doc 08 §2), and the monitor
  * ring (stats + newest-first events for the owner's mini-window directive:
  * "in a mini window it will show the details and their stats while the
@@ -19,9 +21,11 @@ import type {
   ComputerUseEventKind,
   ComputerUseSessionState,
   FrameInfo,
+  FrameProvenance,
   RasterMeta,
   Snapshot,
 } from "./types.js";
+import { hashFrame } from "./framehash.js";
 
 const SNAPSHOT_KEEP = 8;
 const SNAPSHOT_TTL_MS = 120_000;
@@ -196,7 +200,25 @@ export class ComputerSession {
 
   /* ── frames (doc 03 §4.1) ────────────────────────────────────────────── */
 
-  registerFrame(raster: { width: number; height: number; scale: number; origin: { x: number; y: number } }, captureScope: FrameInfo["captureScope"], ownerAtCapture: FrameInfo["ownerAtCapture"], displayIndex: number): { frameId: string; meta: RasterMeta } {
+  /**
+   * R69 (task 4-c-1): the raster param may carry its pngBase64 — when it
+   * does, the frame record stores the full-frame perceptual aHash
+   * (framehash.ts) at registration time, so later old-vs-new comparisons
+   * (stale-frame auto-refresh, the spam guard) never need the OLD raster's
+   * bytes: the hash travels with the frame record. Provenance defaults to
+   * "model" (every pre-R69 caller); the dispatch layer's auto-refresh path
+   * registers its internal captures as "auto_refresh" — the spam guard
+   * counts only "model" captures. Hashing is best-effort: an undecodable
+   * PNG (test fixtures, backend garbage) leaves aHash undefined and every
+   * consumer degrades honestly (no comparison → no decision).
+   */
+  registerFrame(
+    raster: { width: number; height: number; scale: number; origin: { x: number; y: number }; pngBase64?: string },
+    captureScope: FrameInfo["captureScope"],
+    ownerAtCapture: FrameInfo["ownerAtCapture"],
+    displayIndex: number,
+    provenance: FrameProvenance = "model",
+  ): { frameId: string; meta: RasterMeta } {
     const frameId = `f-${++this.nextFrameId}`;
     const frame: FrameInfo = {
       frameId,
@@ -207,7 +229,14 @@ export class ComputerSession {
       capturedAt: Date.now(),
       captureScope,
       ownerAtCapture,
+      provenance,
     };
+    if (typeof raster.pngBase64 === "string") {
+      // cacheKey = frameId: the registration hash and any later region hash
+      // of the same raster share one PNG decode (framehash's 4-entry LRU).
+      const hash = hashFrame(raster.pngBase64, frameId);
+      if (hash !== null) frame.aHash = hash.aHash;
+    }
     this.frames.set(frameId, frame);
     // Prune AFTER the insert — the cap is exact (see registerSnapshot).
     this.pruneFrames();

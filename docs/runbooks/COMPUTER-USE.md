@@ -1,4 +1,4 @@
-<!-- last-reviewed: 2026-09-06 round-68 -->
+<!-- last-reviewed: 2026-09-05 round-69 -->
 # COMPUTER USE — the desktop-control system (owner's guide)
 
 **Status:** normative · **Established:** round-61 (owner directive: computer
@@ -7,9 +7,11 @@ its own section and made the Windows walk big-app-capable; R67 hardened the
 Windows transport, taught the key tool to press keys, and stabilized the
 monitor across thinking gaps; R68 overhauled the Windows input path to raw
 SendInput, made the foreground gate self-heal, poked Chromium's web tree
-into existence, and made the monitor invisible to captures) · **Audience:**
-the owner (anyone flipping the switches and watching the monitor) and any
-agent maintaining the system
+into existence, and made the monitor invisible to captures; R69 made
+verification AUTOMATIC — every action returns an observation receipt,
+coordinate clicks verify what they hit, stale frames auto-refresh, and the
+re-capture loops refuse) · **Audience:** the owner (anyone flipping the
+switches and watching the monitor) and any agent maintaining the system
 
 Computer use lets the agent **observe and actuate your real desktop GUI** —
 read an app's accessibility tree, click its buttons, type into its fields,
@@ -28,12 +30,17 @@ kill switch. This runbook is the condensed REAL system; the uploaded spec
    (`{type:"element", stateId, index}`) are semantic, background-safe, and
    never steal your focus. Coordinates (`{type:"coordinate", x, y}`) are the
    FALLBACK: pixels copied UNCHANGED from the latest returned raster, valid
-   only while that raster is fresh (10 s), converted to global screen points
-   by the engine (the agent never scales).
-2. **Receipts, not promises.** Every action returns an action receipt
-   (`action_sent`, `dispatchStatus: accepted|refused|possibly_sent`,
-   `retryAction`). `action_sent=true` means it MAY have happened — the
-   system prompt and the built-in skill both teach verify-after-act.
+   only while that raster is fresh (30 s — R68), converted to global screen
+   points by the engine (the agent never scales) — and R69 auto-refreshes a
+   stale frame perceptually instead of dead-ending (see the R69 section).
+2. **Receipts, not promises — and since R69, receipts that OBSERVE.** Every
+   action returns an action receipt (`action_sent`, `dispatchStatus:
+   accepted|refused|possibly_sent`, `retryAction`). `action_sent=true`
+   means it MAY have happened — and R69 attached the verification read to
+   the receipt itself: the 11 mutating tools carry a post-action
+   `observation` (fresh frame, `screenChanged`, `focusedElementName`, the
+   frontmost app's title) after a 600 ms settle, so the model reads the
+   receipt instead of re-capturing (see the R69 section below).
 3. **Fail-closed refusals.** A missing tool, a denied permission, a stale
    element, an out-of-frame coordinate — every one is a NAMED refusal code
    with a one-line explanation and the exact recovery step (see the table
@@ -224,7 +231,15 @@ A1/B1 report) reshaped it:
   less tall and make it centered at the top, not on the top right"). The
   one compact row: pulsing status dot + "Agent is using your computer" +
   elapsed timer + the latest activity + the STOP kill switch. Drag it by
-  its header. **R68: the bar is INVISIBLE TO CAPTURES** —
+  its header. **R69: the bar really never steals focus now** — the re-open
+  path no longer activates it (tao's `set_focus` secretly SYNTHESIZED an
+  ALT-key keystroke pair to grab the foreground — stray synthetic input
+  while the agent is mid-action, exactly the corruption class the R68
+  SendInput rebuild exists to prevent), and the window carries
+  `WS_EX_NOACTIVATE` so even clicking the bar never yanks the foreground
+  from the app being driven; the STOP button and the drag region stay
+  fully interactive (deliberately NO click-through style).
+  **R68: the bar is INVISIBLE TO CAPTURES** —
   `SetWindowDisplayAffinity(WDA_EXCLUDEFROMCAPTURE)` on the window: fully
   rendered on YOUR physical display, dropped from every screen-capture
   API (the agent's own GDI captures — it was being "detected" and
@@ -441,6 +456,115 @@ The prompts, the skill and the tool descriptions teach exactly this.
   other 4xx (auth/shape errors are terminal — retrying them is
   pointless).
 
+## Every action returns an observation receipt (R69 — the enforcement layer)
+
+R68 built the mechanisms (raw SendInput, the self-healing foreground,
+the poked tree, 30 s frames) but VERIFICATION still cost a re-capture:
+the receipt said `action_sent` and the only way to KNOW what happened
+was another screenshot — the "utilizing the screenshot capturing way
+too much" loop survived its own fixes. R69 makes the verification ride
+the action itself:
+
+- **The receipt's `observation`** — all 11 mutating tools (the clicks,
+  `scroll`, `type`, `key`, `set_value`, `select_text`,
+  `left_click_drag`), after a 600 ms settle:
+  `{frameId, screenChanged?, focusedElementName?, activeApp?:
+  {pid, title}, titleChanged?}` — a FRESH registered frame
+  (raster-cached, zoomable), whether the screen CHANGED (a perceptual
+  64-bit frame hash vs the pre-action frame — no vision round), which
+  element holds the focus NOW (the key tool's readback), and the
+  frontmost app + whether its title changed. Every field is omitted
+  when its source is honestly unknown, never guessed; a failed capture
+  yields `{captureFailed: true}` — the action receipt itself never
+  fails on its observation.
+- **`returnState`** (all 11 tools, in the tool schemas): `"compact"`
+  (the DEFAULT) = the raster observation; `"none"` = skip it (tight
+  loops); `"full"` = the complete accessibility compose (the R61
+  shape).
+- **The post-action frame renders INLINE in the chat** at the moment
+  it was captured — `{type:"screenshot", tool: <the action's name>}`
+  through the same R68 pipeline the model's own captures ride; a
+  stale-frame auto-refresh frame emits first (`tool:
+  "auto_refresh"`).
+- **The model is taught to READ the receipt** (prompt + skill): never
+  screenshot or zoom after acting; `screen_unchanged` (below) = act or
+  change strategy; after navigation (Enter, links) call `wait()` —
+  its receipt reports what changed. `wait()` is observable now: the
+  post-sleep receipt carries the same observation (no action sent —
+  `actionSent` stays false).
+- **Per-action cost, honestly**: settle 600 ms + up to 4 PowerShell
+  capsules (capture + list_apps + focused readback + the action) on
+  Windows — the accepted trade: it REPLACES the 5–25 s
+  screenshot+vision verification rounds it makes unnecessary.
+
+### Click verification (coordinate clicks stop being blind)
+
+- A coordinate-click receipt's `targetVerificationStatus` now reads
+  `"changed"` / `"unchanged"` (upgraded from the blind `"unverified"`
+  by the observation's `screenChanged`), and `hitElementName` names
+  the element the point actually LANDED on — the hit-test the engine
+  already ran, no longer discarded ("Search" edit, "Sign in" button).
+- Honest bar: `screenChanged` is a full-frame diff — a click that
+  flips only a small toggle can read `"unchanged"`. Treat unchanged as
+  MAY-NOT-HAVE-REGISTERED: check `focusedElementName`, adjust the
+  strategy, switch to element targeting (the prompt teaches exactly
+  this).
+
+### Element middle/right clicks (R69)
+
+- `middle_click {target: element}` routes to the element's CENTER —
+  open-in-new-tab flows work straight from a `find_elements` index, no
+  coordinate guessing. double/triple click keep the honest
+  raw-only contract (no center-click semantics exist for them).
+- `right_click {target: element}`: keeps the semantic menu-open path
+  when the element has a menu (auto/a11y strategy, receipt
+  `"matched"`); otherwise it now routes a RAW right-click at the
+  element's center (the old no-menu cell refused outright).
+
+### The frame memory (aHash — new in R69)
+
+Every registered frame now carries a perceptual 8×8 average hash
+(Rec.601 grayscale, 64 bits — `agent-core/src/computer/framehash.ts`,
+the round's only new dependency: pngjs, MIT) plus its PROVENANCE
+(`model` | `auto_refresh` | `observation` — WHO captured it). "Did the
+screen change?" becomes a ≤4-bit Hamming question instead of a
+vision-model round; that hash powers the observation, the
+auto-refresh, and the spam guard below.
+
+### Stale frames auto-refresh (R69 — the frame_stale dead-end dies)
+
+A coordinate action on a frame older than 30 s no longer dead-ends.
+The engine re-captures the SAME coverage, registers the fresh frame
+(`provenance: auto_refresh`, raster-cached, zoomable), and compares:
+
+1. full-frame Hamming ≤ 8 → the screen is STATIC → the action
+   PROCEEDS on the fresh frame (receipt: `frameRefreshed`,
+   `refreshFrameId`, `screenStable: true`);
+2. else target-region Hamming ≤ 6 (the element's bounds, or a ±48px
+   box around the point) → the target held still while the screen
+   moved → PROCEEDS (`screenStable: false`, `targetRegionStable:
+   true`);
+3. else the screen genuinely changed → the NEW `frame_changed`
+   refusal carrying `refreshFrameId` — the fresh frame is ALREADY
+   registered, so the recovery is ONE zoom round-trip (see the
+   catalog below).
+
+`set_value` and `left_mouse_down` keep the honest hard `frame_stale`
+(they must not act on a stale anchor at all), and a failed/unhashable
+refresh falls back to `frame_stale` with the honest why — the failure
+signal is never lost.
+
+### The screenshot-spam guard (R69 — `screen_unchanged`)
+
+The THIRD consecutive model capture whose frame hash is ≤4 bits from
+the previous (with no mutating action in between) refuses
+`screen_unchanged` BEFORE anything registers — with the three
+productive alternatives (act / `wait()` / `find_elements`). Resets on
+any mutating action, a genuinely changed capture, or a frontmost-app
+(pid) change; the engine's OWN captures (auto-refresh, observation)
+never count — only the model's `screenshot`/`zoom`/`get_app_state
+{includeScreenshot}` captures do.
+
 ## The monitor holds for the whole turn (R67)
 
 The owner's report: the mini window disappeared while the agent THOUGHT
@@ -520,11 +644,11 @@ timeout is the first knob to raise.
 | `list_displays` | Displays (1-based index, bounds, main) |
 | `switch_display` | Choose which display the next screenshot captures |
 | `cursor_position` | Current pointer position + the display being captured |
-| `left_click` | Click — element target = a11y press (preferred); coordinate = hit-test then raw |
+| `left_click` | Click — element target = a11y press (preferred); coordinate = hit-test then raw — R69: every mutating tool's receipt carries a post-action OBSERVATION (see the R69 section) |
 | `double_click` | Raw only (coordinate) — no a11y equivalent |
 | `triple_click` | Raw only (coordinate) — same contract as double_click |
-| `right_click` | Element with a menu → a11y menu-open; else coordinate/raw |
-| `middle_click` | Raw only (coordinate) |
+| `right_click` | Element with a menu → a11y menu-open; no-menu element → R69: raw click at its center; else coordinate/raw |
+| `middle_click` | Coordinate, or ELEMENT target → R69: raw click at the element's center (open-in-new-tab) |
 | `scroll` | Coordinate-only (no a11y path); direction + amount 0–100 |
 | `left_click_drag` | Drag from → to (same app); the gesture is raw |
 | `mouse_move` | Hover — raw, coordinate only |
@@ -538,7 +662,7 @@ timeout is the first knob to raise.
 | `perform_action` | Invoke a NAMED a11y action from the element's advertised list |
 | `request_access` | Read-only readiness probe (permissions + capabilities; never pops dialogs) |
 | `stop_computer_control` | The kill switch — all further computer-use calls refuse |
-| `wait` | Pause 0–30 s for animations, then re-observe |
+| `wait` | Pause 0–30 s for animations — R69: the receipt reports what CHANGED (screenChanged, focused, title); the post-navigation read |
 | `read_clipboard` | Read the system clipboard text (observation) |
 | `write_clipboard` | Write clipboard text (paste with `key 'ctrl+v'` into apps that fight synthetic typing) |
 
@@ -565,7 +689,9 @@ Every refusal is `{error, message, recovery}` — the codes:
 | `targetless_input_refused` | No target on type/key — scope with element target or appRef |
 | `capability_fail_closed` | Element can't do that action — re-observe detail:full, pick an advertised action |
 | `element_stale` | State token superseded/changed/scope-drifted — fresh `get_app_state` |
-| `frame_stale` | Coordinate raster is stale (>30 s — R68, was 10 s — or superseded) — fresh screenshot, resubmit pixels |
+| `frame_stale` | Coordinate raster is stale (>30 s — R68, was 10 s — or superseded) — R69: pointer tools AUTO-REFRESH first (see the R69 section; `frame_changed` appears only when the screen really changed); `set_value`/`left_mouse_down` keep this honest hard fail — fresh screenshot, resubmit pixels |
+| `frame_changed` | R69: the screen changed since the observation — a FRESH frame was auto-captured and registered (`refreshFrameId`) — zoom it, retry with current coordinates (ONE round-trip) |
+| `screen_unchanged` | R69: the 3rd consecutive near-identical capture refused — act (action receipts carry observations), `wait()`, or change strategy (`find_elements`); never re-capture |
 | `occlusion_owner_mismatch` | Another window covers the point — re-activate the intended app; NEVER touch the covering window |
 | `raster_out_of_bounds` | Pixel outside the latest raster — re-look, never scale |
 | `vision_disabled` | Vision off/unconfigured — configure it or proceed a11y-only |
@@ -590,8 +716,13 @@ run surfaced the R68 set (the SendKeys engine itself dead on modern .NET,
 the frontmost refusals, the sparse Edge trees, the 10 s frames, the
 vision 429 stalls, the monitor burned into captures) — fixed by
 construction (raw SendInput, the self-healing foreground, the Chromium
-poke, 30 s frames, the vision retry, WDA_EXCLUDEFROMCAPTURE).** The
-checklist below is how the 0.64.0+R67+R68 fixes get verified. **The owner
+poke, 30 s frames, the vision retry, WDA_EXCLUDEFROMCAPTURE). R69 is the
+first round with NO new field report — its Windows behavior is
+construction-pinned from the start (the dual-object poke, the stdin paste
+channel, the HWHEEL math, the non-activating monitor, the aHash thresholds
+on real 1280×1024 frames, the 600 ms settle) and gates on this same
+checklist.** The checklist below is how the 0.64.0+R67+R68+R69 fixes get
+verified. **The owner
 must live-verify on the real machine before relying
 on computer use.** Per platform, in order:
 
@@ -639,7 +770,22 @@ tab in the X app three times and tell me what gets focused"* — expect the
    (the Chromium poke), element-target clicks, typing that lands
    (SendInput), and each screenshot the agent takes to appear INLINE in
    the chat at the moment it was captured (not pooled at the bottom).
-8. If a list comes back EMPTY, read the result's `diagnostics` block
+8. **The R69 enforcement layer**: watch any action the agent takes —
+   its receipt should carry the observation (a `frameId`, whether the
+   screen CHANGED, the focused element, the app title) and the
+   post-action frame should appear INLINE in the chat seconds after
+   the click, WITHOUT the agent taking another screenshot to verify
+   (the loop the owner complained about is dead); a link click via
+   `middle_click {target: element}` should open a new tab; `wait()`
+   after a navigation should report what changed; the monitor bar
+   must NOT yank focus when it (re)appears and the driven app must
+   stay foreground while you click STOP or drag the bar; a long paste
+   (ask it to type >300 characters into Notepad) must land complete
+   (the stdin clipboard channel); horizontal scroll on an Edge page
+   must move PAGE CONTENT (HWHEEL, not the caret); wait >30 s on a
+   static screen then ask for a click on the old frame — it must
+   PROCEED via the auto-refresh, not refuse.
+9. If a list comes back EMPTY, read the result's `diagnostics` block
    (processCount / foregroundPid / enumWindowsCount) — it exists precisely
    so a failure is debuggable from the transcript; an `app_not_found`
    refusal lists the running apps as candidates (and carries `probeNote`
@@ -673,11 +819,12 @@ offline screen) carries the capsule errors.
   rows fetch — R68)
 - [EXTENSIBILITY](EXTENSIBILITY.md) — the sibling runbook (plugins, skills,
   MCP servers, the plugins listing route)
-- [TESTING](TESTING.md) — the R61+R66+R67+R68 suites and the verification
+- [TESTING](TESTING.md) — the R61+R66+R67+R68+R69 suites and the verification
   ladder
 - [MAINTENANCE](MAINTENANCE.md) — where things live in the tree
 - Code map: engine in `agent-core/src/computer/` (types, errors, session,
-  audit, dispatch, vision, backends/{interface,linux,windows,macos,index}),
+  audit, dispatch, vision, framehash — R69: the pngjs aHash + region
+  crops, backends/{interface,linux,windows,macos,index}),
   tools in `agent-core/src/tools/plugins/computer-use.ts`, settings in
   `agent-core/src/storage/computer-use.ts` (vision settings now in
   `agent-core/src/storage/vision.ts` — migration
@@ -687,7 +834,8 @@ offline screen) carries the capsule errors.
   route), monitor UI in
   `src/components/ComputerMiniWindow.tsx` + the mini window page
   `src/mini/MiniApp.tsx` + the OS window `src-tauri/src/mini.rs` (R68: the
-  WDA_EXCLUDEFROMCAPTURE capture exclusion), the live
+  WDA_EXCLUDEFROMCAPTURE capture exclusion; R69: WS_EX_NOACTIVATE —
+  the re-open no longer steals focus), the live
   signal `src/lib/computer-monitor-store.ts`, settings UI in
   `src/components/settings/ComputerUseTab.tsx` (vision:
   `src/components/settings/ImageAnalysisTab.tsx`).

@@ -419,3 +419,174 @@ describe("ROUND-67 (R67-D): screenshot frames after successful captures", () => 
     expect(emitLog.some((e) => (e as Record<string, unknown>)["type"] === "screenshot")).toBe(false);
   });
 });
+
+// ── ROUND-69 (R69, task 4-c-2): the auto-observation receipt surface ────────
+// The mutating tools' schemas advertise returnState (default "compact" =
+// the receipt's observation), middle_click accepts element targets, and
+// every action receipt carries the observation — the model is TAUGHT the
+// receipt-read loop instead of the screenshot loop.
+
+describe("ROUND-69 (4-c-2): tool schemas teach the observation receipts", () => {
+  it("the mutating tools advertise returnState + the post-action observation in their schemas and descriptions", async () => {
+    setComputerUseSettings(db, { enabled: true, permission: "act" });
+    const tools = await computerUsePlugin.createTools({ root: tempDir, toolDeps: makeDeps() });
+    const observed = [
+      "left_click", "double_click", "triple_click", "right_click", "middle_click",
+      "scroll", "left_click_drag", "type", "set_value", "select_text", "key",
+    ];
+    for (const name of observed) {
+      const t = tools.find((x) => x.name === name)!;
+      const schema = JSON.stringify(t.inputSchema);
+      expect(schema).toContain("returnState");
+      expect(schema).toContain("'compact' (default)");
+      expect(t.description).toContain("post-action OBSERVATION");
+    }
+    // wait()'s description teaches the what-changed receipt (no parameter —
+    // the observation is unconditional).
+    const wait = tools.find((t) => t.name === "wait")!;
+    expect(wait.description).toContain("what changed while you waited");
+    expect(wait.description).toContain("instead of re-capturing");
+    expect(JSON.stringify(wait.inputSchema)).not.toContain("returnState");
+    // Non-observation mutating tools keep the legacy surface (left_mouse_down
+    // keeps its R61 opt-in parameter, unchanged).
+    const down = tools.find((t) => t.name === "left_mouse_down")!;
+    expect(JSON.stringify(down.inputSchema)).toContain("returnState");
+    expect(down.description).not.toContain("post-action OBSERVATION");
+  });
+
+  it("middle_click + right_click descriptions teach ELEMENT targets (the fail-closed cells are gone)", async () => {
+    setComputerUseSettings(db, { enabled: true, permission: "act" });
+    const tools = await computerUsePlugin.createTools({ root: tempDir, toolDeps: makeDeps() });
+    const middle = tools.find((t) => t.name === "middle_click")!;
+    expect(middle.description).toContain("raw middle-click at the element's CENTER");
+    expect(JSON.stringify(middle.inputSchema)).toContain("element or coordinate");
+    const right = tools.find((t) => t.name === "right_click")!;
+    expect(right.description).toContain("raw right-click at its center");
+  });
+});
+
+// ── ROUND-69 (R69, task 4-c-2): the observation + auto-refresh SSE frames ────
+// After a mutating tool runs, the plugin takes receipt.observation.frameId
+// (and the 4-c-1 refreshFrameId), registers the raster route-side, and
+// fires the {type:"screenshot"} SSE frame — the inline ScreenshotRow shows
+// the post-action frame AT the moment it was taken (the owner's directive).
+
+describe("ROUND-69 (4-c-2): observation + auto-refresh frames go inline", () => {
+  const PNG = "cG5nQnl0ZXM=";
+
+  let dispatchSpy: MockInstance<(tool: string, args: Record<string, unknown>) => Promise<DispatchResult>>;
+  let rasterSpy: MockInstance<(frameId: string) => string | undefined>;
+
+  beforeEach(() => {
+    resetRasterCacheForTest();
+    emitLog = [];
+    dispatchSpy = vi
+      .spyOn(ComputerDispatcher.prototype, "dispatch")
+      .mockResolvedValue({
+        kind: "receipt",
+        receipt: {
+          schemaVersion: "acute-cua-action-receipt-v1",
+          actionSent: true,
+          dispatchStatus: "accepted",
+          retryAction: false,
+          observation: { frameId: "f-81", screenChanged: true, activeApp: { pid: 4242, title: "App" }, titleChanged: false },
+        },
+      });
+    rasterSpy = vi.spyOn(ComputerDispatcher.prototype, "rasterFor").mockReturnValue(PNG);
+  });
+
+  afterEach(() => {
+    dispatchSpy.mockRestore();
+    rasterSpy.mockRestore();
+  });
+
+  it("a left_click receipt with an observation: emits {type:'screenshot'} with the ACTION tool name + registers the raster", async () => {
+    setComputerUseSettings(db, { enabled: true, permission: "auto" });
+    const tools = await computerUsePlugin.createTools({
+      root: tempDir,
+      toolDeps: makeDeps({ emit: (e) => emitLog.push(e) }),
+    });
+    const click = tools.find((t) => t.name === "left_click")!;
+    const result = await click.execute({ target: { type: "element", stateId: "s-1", index: 1 } }, { root: tempDir });
+    expect(result.ok).toBe(true);
+    const frame = emitLog.find((e) => (e as Record<string, unknown>)["type"] === "screenshot") as
+      | { frameId?: string; tool?: string; sessionId?: string; note?: string }
+      | undefined;
+    expect(frame).toBeDefined();
+    expect(frame!.frameId).toBe("f-81");
+    expect(frame!.tool).toBe("left_click"); // the ACTION tool, not "screenshot"
+    expect(frame!.note).toBe("post-action observation");
+    expect(frame!.sessionId).toBe("sess");
+    // The raster landed in the ROUTE-SERVED registry (the thumbnail fetch).
+    expect(rasterFor("f-81")).toMatchObject({ pngBase64: PNG });
+    // The tool result carries the receipt + the observation inside it.
+    const parsed = JSON.parse(result.output) as { action_receipt: { observation?: { frameId?: string } } };
+    expect(parsed.action_receipt.observation?.frameId).toBe("f-81");
+  });
+
+  it("the 4-c-1 refreshFrameId emits its own 'auto_refresh' frame FIRST (chronological), then the observation frame", async () => {
+    setComputerUseSettings(db, { enabled: true, permission: "auto" });
+    dispatchSpy.mockResolvedValue({
+      kind: "receipt",
+      receipt: {
+        schemaVersion: "acute-cua-action-receipt-v1",
+        actionSent: true,
+        dispatchStatus: "accepted",
+        retryAction: false,
+        frameRefreshed: true,
+        refreshFrameId: "f-80",
+        screenStable: true,
+        observation: { frameId: "f-81", screenChanged: false },
+      },
+    });
+    const tools = await computerUsePlugin.createTools({
+      root: tempDir,
+      toolDeps: makeDeps({ emit: (e) => emitLog.push(e) }),
+    });
+    const click = tools.find((t) => t.name === "scroll")!;
+    await click.execute({ target: { type: "coordinate", x: 5, y: 5 }, scrollDirection: "down" }, { root: tempDir });
+    const frames = emitLog
+      .filter((e) => (e as Record<string, unknown>)["type"] === "screenshot")
+      .map((e) => e as { frameId?: string; tool?: string });
+    expect(frames).toHaveLength(2);
+    expect(frames[0]).toMatchObject({ frameId: "f-80", tool: "auto_refresh" }); // the refresh happened FIRST
+    expect(frames[1]).toMatchObject({ frameId: "f-81", tool: "scroll" }); // then the post-action frame
+  });
+
+  it("a captureFailed observation emits NO frame (nothing was captured) but the receipt still carries the honest marker", async () => {
+    setComputerUseSettings(db, { enabled: true, permission: "auto" });
+    dispatchSpy.mockResolvedValue({
+      kind: "receipt",
+      receipt: {
+        schemaVersion: "acute-cua-action-receipt-v1",
+        actionSent: true,
+        dispatchStatus: "accepted",
+        retryAction: false,
+        observation: { captureFailed: true },
+      },
+    });
+    const tools = await computerUsePlugin.createTools({
+      root: tempDir,
+      toolDeps: makeDeps({ emit: (e) => emitLog.push(e) }),
+    });
+    const click = tools.find((t) => t.name === "key")!;
+    const result = await click.execute({ text: "return", appRef: { pid: 1 } }, { root: tempDir });
+    expect(result.ok).toBe(true);
+    expect(emitLog.some((e) => (e as Record<string, unknown>)["type"] === "screenshot")).toBe(false);
+    const parsed = JSON.parse(result.output) as { action_receipt: { observation?: { captureFailed?: boolean } } };
+    expect(parsed.action_receipt.observation).toEqual({ captureFailed: true });
+  });
+
+  it("an evicted observation raster emits nothing (the enhancement never breaks the tool)", async () => {
+    setComputerUseSettings(db, { enabled: true, permission: "auto" });
+    rasterSpy.mockReturnValue(undefined);
+    const tools = await computerUsePlugin.createTools({
+      root: tempDir,
+      toolDeps: makeDeps({ emit: (e) => emitLog.push(e) }),
+    });
+    const click = tools.find((t) => t.name === "left_click")!;
+    const result = await click.execute({ target: { type: "coordinate", x: 1, y: 1 } }, { root: tempDir });
+    expect(result.ok).toBe(true);
+    expect(emitLog.some((e) => (e as Record<string, unknown>)["type"] === "screenshot")).toBe(false);
+  });
+});

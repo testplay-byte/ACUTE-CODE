@@ -3,7 +3,7 @@
   "product": {
     "name": "Acute",
     "tagline": "Local-first multi-agent engineering workbench",
-    "version": "0.61.0",
+    "version": "0.69.0",
     "availability": "Private build — not yet distributed",
     "chips": [
       "Windows desktop",
@@ -148,6 +148,10 @@
     {
       "date": "2026-09-02",
       "label": "R61 — computer use: 30 desktop-control tools (a11y-first, gated by a master switch + approval postures, enforced kill switch, audit journal) + the separate vision model (own provider/model/key slot, or main-model vision when supported) + skills + MCP servers + the live monitor panel + the floating draggable mini window; prompts upgraded (tool discipline + honesty contract) (1491 tests)"
+    },
+    {
+      "date": "2026-09-06",
+      "label": "R69 — the computer-use enforcement layer (milestones for R62–R68 live in CHANGELOG.md): observation receipts on all 11 mutating tools, click verification + hitElementName, stale-frame auto-refresh (frame_changed), screenshot-spam guard (screen_unchanged), the pngjs aHash frame memory, element middle/right clicks, wait() observable, the scroll-math/HWHEEL fix, the stdin long-type paste, the NOACTIVATE monitor (2082 tests)"
     }
   ],
   "quality": {
@@ -155,20 +159,20 @@
     "suites": [
       {
         "name": "frontend",
-        "tests": 647
+        "tests": 890
       },
       {
         "name": "agent-core",
-        "tests": 693
+        "tests": 1180
       },
       {
         "name": "sidecar e2e",
-        "tests": 8
+        "tests": 12
       }
     ],
     "cargoCheck": "green",
     "licenseAudit": {
-      "deps": 107,
+      "deps": 134,
       "verdict": "CLEAN"
     }
   },
@@ -180,8 +184,8 @@
   ],
   "plan": {
     "current": {
-      "title": "Round 60 DELIVERED — the second owner-feedback polish round (0.60.0)",
-      "detail": "The owner's thirteenth Windows test session confirmed the rounded window PERFECT ('It looks way too good, even better than what I imagined it to be or hoped for it to be… keep it as a part of our design language') and the pop-out browser satisfying ('fully satisfied… the same clean beautiful UI which I wanted'); the session's polish list became this round: the pop-out VIEW is rounded (a bordered card in the design language), the pop-out scrollbar moved OUTSIDE the content card (the window's own gutter scrollbar — drag/click/keyboard, driven by the new browser_tab_scroll_state/scroll_to/set_zoom Tauri commands via eval_with_callback; themed pill CSS injected at document start on every page, honest single-scrollbar fallback on CSP-strict sites), the API-key field is one consistent row (same-slot eye, smooth Copy, Rotate deleted — paste-to-replace), the models list starts EMPTY with the Free/All toggle in the Add-models picker, settings padding stripped + the scroll-reflow width-shift fixed (stable scrollbar gutter), the sidebar's logo + collapse button deleted in favor of the TITLE-BAR identity toggle (global visibility, chat routes included), the new-tab popover renders ABOVE the browser preview (webview yields via popover-webview-guard), and the browser panel's zoom actually zooms (real DPI zoom — the R50 approximation deleted). Verification: 1348/1348 tests in 91 files, lint/typecheck clean, LIVE agent-browser battery (empty models default, picker free-only default, add/delete model round-trip, key reveal/hide/paste-cancel with zero PUTs, stable scrollbar styles, full-width settings, sidebar toggle on dashboard + chat, popout.html 200, zero console errors); Rust doc-verified against tauri 2.11.5 with CI cargo check as the compile gate."
+      "title": "Round 69 DELIVERED — the computer-use enforcement layer (0.69.0)",
+      "detail": "R68 built the mechanisms (SendInput, the self-healing foreground, the poked Chromium tree, 30s frames, the capture-excluded monitor); R69 makes verification AUTOMATIC: every mutating action returns an observation receipt (fresh frame + screenChanged + focusedElementName + activeApp title after a 600ms settle; returnState compact default/none/full), coordinate clicks verify changed/unchanged + name the hit element, stale frames auto-refresh perceptually (frame_changed carries the already-registered fresh frame — the frame_stale dead-end dies for pointer tools), and the 3rd near-identical capture refuses screen_unchanged with act/wait()/find_elements guidance. Windows fixes: the quadratic over-scroll eliminated (one wheel event, HWHEEL horizontal), long type >300 chars rides a stdin clipboard paste (ARGV ceiling bypassed), the dual-object Chromium poke + sparse-poll + --force-renderer-accessibility launches. The mini monitor never steals focus (WS_EX_NOACTIVATE; tao's set_focus ALT-key synthesis removed). Prompts + the skill re-taught the receipt-driven loop; pngjs@7 (MIT) joins a CLEAN 134-dep audit. Verification: 2082/2082 tests in 123 files, e2e 12/12, lint/typecheck clean, build green, cargo check (Windows target) clean. The owner's next live Windows run is the gate (all Windows behavior construction-pinned)."
     },
     "upcoming": [
       {

@@ -4,10 +4,13 @@
  * the kill switch, held-button ownership, the monitor ring, and stats.
  */
 import { afterEach, describe, expect, it } from "vitest";
+import { PNG } from "pngjs";
 import { MAX_FRAME_AGE_MS, resetComputerSessionForTests, getComputerSession } from "../src/computer/session";
+import { resetFramehashCacheForTests } from "../src/computer/framehash";
 
 afterEach(() => {
   resetComputerSessionForTests();
+  resetFramehashCacheForTests();
 });
 
 function makeElements(count: number): { index: number; kind: "button"; name: string; flags: ["pressable"] }[] {
@@ -179,6 +182,64 @@ describe("ROUND-61 (R61): ComputerSession — frame registry (doc 03 §4)", () =
     expect(s.getFrame("f-1")).toBeUndefined();
     expect(s.getFrame("f-2")).toBeUndefined();
     expect(s.getFrame("f-10")).toBeDefined();
+  });
+
+  /* ── R69 (task 4-c-1): provenance + the registration-time aHash ──────── */
+  it("registerFrame stamps provenance (default 'model', explicit 'auto_refresh') and computes aHash from a REAL png", () => {
+    const s = resetComputerSessionForTests();
+    s.ensureStarted("linux");
+    const png = new PNG({ width: 32, height: 32 });
+    for (let i = 0; i < 32 * 32; i++) {
+      const v = (i * 7) % 256;
+      png.data[i * 4] = v;
+      png.data[i * 4 + 1] = v;
+      png.data[i * 4 + 2] = v;
+      png.data[i * 4 + 3] = 255;
+    }
+    const b64 = PNG.sync.write(png).toString("base64");
+    const model = s.registerFrame(
+      { width: 32, height: 32, scale: 1, origin: { x: 0, y: 0 }, pngBase64: b64 },
+      { kind: "display" },
+      { pid: 1, windowId: 0 },
+      1,
+    );
+    expect(s.getFrame(model.frameId)?.provenance).toBe("model");
+    expect(s.getFrame(model.frameId)?.aHash).toBeDefined();
+    // The SAME png hash on a second frame (old-vs-new comparability).
+    const twin = s.registerFrame(
+      { width: 32, height: 32, scale: 1, origin: { x: 0, y: 0 }, pngBase64: b64 },
+      { kind: "display" },
+      { pid: 1, windowId: 0 },
+      1,
+      "auto_refresh",
+    );
+    expect(s.getFrame(twin.frameId)?.provenance).toBe("auto_refresh");
+    expect(s.getFrame(twin.frameId)?.aHash).toBe(s.getFrame(model.frameId)?.aHash);
+    // R69 (task 4-c-2): the post-action auto-observation registers with its
+    // own provenance — the spam guard counts ONLY "model" captures, so an
+    // observation frame is a legitimate latestFrame() baseline.
+    const observed = s.registerFrame(
+      { width: 32, height: 32, scale: 1, origin: { x: 0, y: 0 }, pngBase64: b64 },
+      { kind: "display" },
+      { pid: 1, windowId: 0 },
+      1,
+      "observation",
+    );
+    expect(s.getFrame(observed.frameId)?.provenance).toBe("observation");
+    expect(s.getFrame(observed.frameId)?.aHash).toBe(s.getFrame(model.frameId)?.aHash);
+  });
+
+  it("registerFrame without pngBase64 (the pre-R69 call shape) leaves aHash undefined — honest, never a fake hash", () => {
+    const s = resetComputerSessionForTests();
+    s.ensureStarted("linux");
+    const { frameId } = s.registerFrame(
+      { width: 10, height: 10, scale: 1, origin: { x: 0, y: 0 } },
+      { kind: "display" },
+      { pid: 1, windowId: 0 },
+      1,
+    );
+    expect(s.getFrame(frameId)?.provenance).toBe("model");
+    expect(s.getFrame(frameId)?.aHash).toBeUndefined();
   });
 });
 

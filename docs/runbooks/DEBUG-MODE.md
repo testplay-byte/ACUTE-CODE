@@ -1,10 +1,11 @@
-<!-- last-reviewed: 2026-09-06 round-68 -->
+<!-- last-reviewed: 2026-09-05 round-69 -->
 # DEBUG MODE — the post-turn context-free analyst (owner's guide)
 
 **Status:** normative · **Established:** round-65 (the debug switch; reworked
 round-66 per the owner's C1 directive; round-67 added the card's copy +
 auto-collapse and the debug-gated full-turn copy; round-68 added the inline
-screenshot capture rows + their export marker) · **Audience:** the owner
+screenshot capture rows + their export marker; round-69: the post-action
+observation frames ride the same pipeline) · **Audience:** the owner
 flipping the switch and reading the reports, and any agent maintaining the
 pipeline
 
@@ -185,6 +186,12 @@ this:
   copy time: the export carries the fact, not an image. The marker does
   NOT bump the `--- TOOL n: ---` numbering (a capture is not a tool
   call — the export's tool index stays comparable with the event log).
+  R69: the post-action OBSERVATION frames and the stale-frame
+  auto-refresh frames ride the same pipeline (`tool:` the action's
+  name / `"auto_refresh"`), so a mutating tool's receipt and its
+  verification frame both appear in the live view + the export — the
+  tool RESULT text itself now carries the observation (frame id,
+  screenChanged, focused element) too.
 - **The reloaded/folded turn owns NO screenshot history by design** (the
   R67-D rule, unchanged): the persisted event log never stored rasters,
   so a reloaded turn's export carries no capture markers — the markers

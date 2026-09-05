@@ -396,13 +396,19 @@ export function buildTaggedPromptLines(ctx: PromptContext): TaggedLine[] {
     // controls one by one and the receipt says where you landed. That is the
     // element-discovery fallback when find_elements/screenshot loops stall.
     ident("- TAB-WALK DISCOVERY (R67): when find_elements comes back empty or screenshots cannot identify the control, press key \"tab\" repeatedly — each key receipt names the FOCUSED element, and Tab walks the focusable controls one by one. Combine with find_elements (search by name) when the app is big.");
-    // ROUND-68 (R68-C): CHAIN DISCIPLINE — the owner: "utilizing the
-    // screenshot capturing way too much". Frames stay valid 30s now
-    // (MAX_FRAME_AGE_MS), so the observe→act pair must be IMMEDIATE; the
-    // verification crop is the cheap zoom, not another full screenshot.
-    ident("- CHAIN DISCIPLINE (R68): screenshot → act IMMEDIATELY on its pixels (frames stay valid 30s) — never re-screenshot between observing and acting; verify AFTER the action with a small zoom region crop of the one control, not a full screenshot. middle_click on a link = open in new tab.");
+    // ROUND-69 (R69, task 4-c-2): CHAIN DISCIPLINE rewritten around the
+    // AUTO-OBSERVATION — the owner's #1 field failure was the model
+    // re-capturing a screenshot after EVERY action to see what happened
+    // (5-25s per vision round-trip). Every mutating action receipt now
+    // CARRIES the post-action state (fresh frame id, screenChanged,
+    // focusedElementName, activeApp title), so the loop is: act → read the
+    // receipt's observation → decide. The old "verify with a small zoom
+    // crop after the action" teaching is RETIRED — that zoom was the spam.
+    ident("- CHAIN DISCIPLINE (R69): every ACTION receipt carries an observation — a fresh frame id, screenChanged, focusedElementName, and the active app's title. Do NOT screenshot or zoom after acting: read the receipt's observation instead.");
+    ident("- If the observation says the screen is UNCHANGED, your action may not have registered — check focusedElementName, adjust strategy, or switch to element targeting (find_elements). Element-first beats coordinate guessing.");
+    ident("- After navigation (Enter, links), call wait() — its receipt reports what changed while you waited, instead of re-capturing. A screen_unchanged refusal means: act or change strategy — do not re-capture. middle_click on a link = open in new tab.");
     ident("- Coordinates ({type:\"coordinate\"}) are the FALLBACK: pixels copied UNCHANGED from the LATEST returned raster. Never pre-scale, never attach app_ref/state_id to them.");
-    ident("- Receipts are not promises: action_sent=true means it MAY have happened — verify via fresh get_app_state or an external oracle (file exists, exit code) before building on it.");
+    ident("- Receipts are not promises: action_sent=true means it MAY have happened — the receipt's observation (screenChanged, focusedElementName, activeApp.title) is the first verification read; an external oracle (file exists, exit code) is the strong one. Only re-observe with get_app_state when the observation itself is missing or ambiguous.");
     ident("- Refusals are self-teaching: read the named reason and follow its recovery (frontmost_pid_mismatch → the auto-activation failed: re-observe, then retry ONCE). Never replay a sent action.");
     ident("- Launch apps with the user's EXACT spelling (character-for-character; never translate/shorten/substitute). list_apps lists RUNNING apps only.");
     ident("- Raw input (typing, keys, coordinate clicks) on Windows/Linux needs the target frontmost — the raw-input tools now ACTIVATE their target app automatically (verified activation, honest receipts; a mismatch refusal means the activation itself failed). type REPLACES field content; set_value is the preferred write; scroll is coordinate-only.");

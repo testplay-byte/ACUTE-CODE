@@ -128,6 +128,17 @@ export interface RasterMeta {
 
 /* ── Frames (doc 03 §4.1) ──────────────────────────────────────────────────── */
 
+/**
+ * R69 (task 4-c-1): WHO initiated a capture. "model" = a model-facing
+ * capture tool (screenshot / zoom / get_app_state{includeScreenshot});
+ * "auto_refresh" = a dispatch-INTERNAL refresh capture taken while
+ * re-validating a stale coordinate frame; "observation" (task 4-c-2) = the
+ * post-action capture that rides every mutating action's receipt. The
+ * screenshot-spam guard counts ONLY "model" captures — internal refreshes
+ * and post-action observations are not the model spamming.
+ */
+export type FrameProvenance = "model" | "auto_refresh" | "observation";
+
 export interface FrameInfo {
   frameId: string;
   displayIndex: number;
@@ -137,6 +148,18 @@ export interface FrameInfo {
   capturedAt: number;
   captureScope: { kind: "display" | "window"; pid?: number; windowId?: number };
   ownerAtCapture: { pid: number; windowId: number };
+  /** R69: the capture initiator (see FrameProvenance). Always set by the
+   * session's registerFrame (default "model" — the pre-R69 callers). */
+  provenance: FrameProvenance;
+  /** R69: the 64-bit perceptual aHash of the full raster (framehash.ts),
+   * computed at registration. Undefined when the PNG could not be decoded —
+   * every consumer degrades honestly (no comparison → no decision).
+   * WIRE HAZARD (verified R69 4-c-2): bigint explodes JSON.stringify —
+   * FrameInfo is NEVER serialized today (tool results carry RasterMeta; the
+   * SSE/plugin frames carry frameId strings; receipts carry only ids and
+   * plain scalars). If a future wire path needs the whole FrameInfo, map
+   * aHash to a hex string FIRST. */
+  aHash?: bigint;
 }
 
 /* ── Receipts (doc 02 §0.5) — never promises ───────────────────────────────── */
@@ -152,9 +175,63 @@ export interface Receipt {
   dispatchStatus: DispatchStatus;
   /** Server hint whether a fresh-target retry is sensible. */
   retryAction: boolean;
-  /** Element targets: matched | unverified. */
-  targetVerificationStatus?: "matched" | "unverified";
+  /** Element targets: matched | unverified. R69 (task 4-c-2, ADDITIVE):
+   * coordinate clicks upgrade "unverified" to "changed" | "unchanged" from
+   * the post-action observation's screenChanged — the model learns whether
+   * its click visibly registered without re-capturing. */
+  targetVerificationStatus?: "matched" | "unverified" | "changed" | "unchanged";
+  /** R69 (task 4-c-1, ADDITIVE): the stale-frame auto-refresh fired for this
+   * action — a fresh frame was captured, registered, and compared before
+   * the action ran. Absent on every non-refreshed action. */
+  frameRefreshed?: boolean;
+  /** R69: frameId of the auto-refresh capture (the frame the model can zoom
+   * immediately). Present only with frameRefreshed. */
+  refreshFrameId?: string;
+  /** R69: full-frame aHash old-vs-new Hamming ≤ 8 — the whole screen is
+   * unchanged, the model's coordinates are trustworthy as-is. */
+  screenStable?: boolean;
+  /** R69: the screen changed elsewhere but the TARGET REGION (element bounds
+   * or the ±48px box around the point) is aHash-stable — present only when
+   * screenStable is false and the action proceeded anyway. */
+  targetRegionStable?: boolean;
+  /** R69 (task 4-c-2, ADDITIVE): the post-action AUTO-OBSERVATION — a fresh
+   * frame (provenance "observation") captured after the action settled,
+   * what changed vs the pre-action frame, the focused element, and the
+   * frontmost app's title. Present on every mutating-action receipt unless
+   * returnState:"none" opted out or the capture failed (then the honest
+   * {captureFailed:true} shape — the action itself never fails on it).
+   * This is THE answer to the #1 field failure (screenshot-after-action
+   * spam): the model reads the receipt instead of re-capturing. */
+  observation?: ActionObservation;
+  /** R69 (task 4-c-2, ADDITIVE): the element the point actually landed on,
+   * from the hit-test that already runs on the coordinate-click path (the
+   * model learns WHAT it clicked — "Search" edit, "Sign in" button). */
+  hitElementName?: string;
 }
+
+/** R69 (task 4-c-2): the observation that rides a mutating action's receipt.
+ * Every optional field is omitted when its source could not honestly
+ * produce it (no pre-action frame to diff → no screenChanged; a helper
+ * frontmost pid with no window → no activeApp) — never fabricated. */
+export interface ObservationInfo {
+  /** The post-action frame's id (registered, raster-cached — zoomable). */
+  frameId: string;
+  /** Full-frame aHash Hamming > 4 bits vs the pre-action frame. Undefined
+   * when no comparable pre-state existed (first action, unhashable raster). */
+  screenChanged?: boolean;
+  /** The foreground element's a11y name (the focusedElementName readback
+   * the key tool already uses), when the target owns the focus. */
+  focusedElementName?: string;
+  /** The frontmost app (pid + its MAIN WINDOW title), via the list_apps
+   * path's active-app marker. */
+  activeApp?: { pid: number; title: string };
+  /** The frontmost title changed across the action (pre-read vs post). */
+  titleChanged?: boolean;
+}
+
+/** The receipt's observation field: the honest info shape, or the honest
+ * capture-failure marker (the action receipt itself still succeeds). */
+export type ActionObservation = ObservationInfo | { captureFailed: true };
 
 /* ── Refusals (doc 11) — named, self-teaching ─────────────────────────────── */
 
@@ -175,6 +252,8 @@ export type RefusalCode =
   | "capability_fail_closed"
   | "element_stale"
   | "frame_stale"
+  | "frame_changed"
+  | "screen_unchanged"
   | "occlusion_owner_mismatch"
   | "raster_out_of_bounds"
   | "kill_switch_active"

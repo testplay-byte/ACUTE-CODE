@@ -28,6 +28,36 @@
  * PowerShell is never executed in this sandbox — the scripts are pinned by
  * command-construction tests (tests/computer-windows-backend.test.ts).
  *
+ * ROUND-69-a (R69-a — four Windows input-engine fixes, all verified by
+ * construction against this file, none by live run):
+ *   · SCROLL MATH: rawScroll was QUADRATIC (it sent `ticks` events, each
+ *     carrying ±(ticks×WHEEL_DELTA) → ticks²×120 total) and horizontal
+ *     scrolled with arrow-key taps that never move browser CONTENT
+ *     (arrows move focus/caret, not the page). Now ONE wheel event
+ *     carries delta = ticks×WHEEL_DELTA (clamped: ticks ≤ 40, delta ≤
+ *     ±32767); horizontal rides MOUSEEVENTF_HWHEEL (0x1000, positive =
+ *     right); the cursor is positioned at the target point FIRST.
+ *   · LONG TYPE: text > LONG_TYPE_THRESHOLD (300) chars types via the
+ *     CLIPBOARD (Set-Clipboard → 200ms settle → Ctrl+V through the
+ *     existing Chord primitive). The payload channel moves to STDIN as
+ *     base64(UTF-8) — psStdinCapsule — so the 32,767-char CreateProcess
+ *     ARGV ceiling no longer caps typed text and the Unicode survives
+ *     EXACTLY (UTF8.GetString on the decoded base64; only pure-ASCII
+ *     base64 crosses the pipe). Short text keeps the per-char SendText
+ *     path unchanged.
+ *   · A11Y POKE HARDENING: PokeChromium now sends WM_GETOBJECT TWICE per
+ *     Chrome_RenderWidgetHostHWND child (lParam 0xFFFFFFFC OBJID_CLIENT +
+ *     lParam 0xFFFFFFFD UiaRootObjectId — the UIA provider path the
+ *     System.Windows.Automation walk actually speaks), and the fixed
+ *     400ms + one 600ms sparse-retry became a POLL: while the walk stays
+ *     sparse (≤1 element), re-walk at the cumulative checkpoints
+ *     400/800/1400/2000ms (4 attempts max), returning IMMEDIATELY once
+ *     the tree is non-sparse.
+ *   · BROWSER A11Y FLAG: launching a Chromium browser (msedge / chrome —
+ *     flexibly matched on the basename, case/.exe/path-insensitive)
+ *     appends --force-renderer-accessibility so the web a11y tree exists
+ *     at STARTUP instead of after a poke; non-browser targets unchanged.
+ *
  * ROUND-68 (R68-C — the owner's v0.67.0 live Windows field report: the
  * 7-step Edge flow degraded into a screenshot loop and half-failed, all
  * root-caused by construction against this file):
@@ -124,7 +154,9 @@
  *   · raw input: SetCursorPos + mouse_event + SendInput (user32 P/Invoke —
  *     R68-C: keyboard input is SendInput ONLY, never Windows.Forms)
  *   · typing: SendText via SendInput KEYEVENTF_UNICODE after focus
- *     verification (R68-C — the SendKeys dependency is dead)
+ *     verification (R68-C — the SendKeys dependency is dead); > 300 chars
+ *     paste from the CLIPBOARD instead (R69-a — Set-Clipboard + Ctrl+V,
+ *     payload over stdin base64)
  *   · activation: the AttachThreadInput sequence (doc 04 §3.3) with the
  *     ≤1.5 s postcondition check — honest {active} reporting
  *   · capture: System.Drawing CopyFromScreen → PNG → base64
@@ -288,7 +320,10 @@ public static int PokeChromium(IntPtr hwnd){
     }catch(Exception){}
     return true;
   },IntPtr.Zero);
-  foreach(IntPtr h in render){SendMessage(h,0x3D,IntPtr.Zero,new IntPtr(unchecked((int)0xFFFFFFFC)));}
+  foreach(IntPtr h in render){
+    SendMessage(h,0x3D,IntPtr.Zero,new IntPtr(unchecked((int)0xFFFFFFFC)));
+    SendMessage(h,0x3D,IntPtr.Zero,new IntPtr(unchecked((int)0xFFFFFFFD)));
+  }
   return render.Count;
 }
 public static List<WINFO> ListTopWindows(){
@@ -354,27 +389,31 @@ const WHEEL_DELTA = 120;
  *     child that exits before reading ran an EMPTY script → exit 0, no
  *     stdout → "died before emitting JSON". The script cannot be lost when
  *     it rides ARGV.
- * `stdin` stays undefined (the runner then just closes the pipe). Sizing
- * honesty, RE-MEASURED at R68-C completion (node over the REAL composed
- * capsules — every fixed script builder measured; buildSnapshot is the
- * biggest): the preamble grew 3,527 → 6,682 chars for the SendInput
- * machinery + the Chromium poke, and the biggest FIXED capsule (preamble
- * + buildSnapshot) measures 11,587 script chars (detail full) / 11,588
- * (compact) → 30,900 / 30,904 base64 chars — UNDER the 32,767-char
- * CreateProcess command-line ceiling (program + the 5 fixed flags add
- * ~81 more → ~30,985 total) but with only ~1.8K of headroom left: THE
- * PREAMBLE HAS GROWN PAST COMFORT — any further C# growth must re-measure
- * here, and the honest next step is moving the walk to a temp .ps1 file
- * (trimming the C# only buys a little). The three capsules that carry
- * MODEL-SUPPLIED payloads (typeText / setValue / writeClipboard) cannot
- * be pinned by a constant — their length is the model's to choose — so
- * they are guarded AT RUNTIME by ARGV_B64_CEILING below and refuse
- * BEFORE spawning. (An earlier draft of this comment claimed the typing
- * path "stays far below" because its timeout math caps text at ~1,400
- * chars — that was WRONG: Math.min clamps the TIMEOUT at 30s, it does
- * NOT cap the text; a long type would have crossed the ceiling and died
- * at CreateProcess with a cryptic spawn error. The runtime guard is the
- * fix; typeText at the 1,400-char timeout knee measures 22,556 base64.)
+ * `stdin` stays undefined for every psCapsule (the runner then just closes
+ * the pipe); R69-a's psStdinCapsule is the ONE deliberate exception (the
+ * LONG-TYPE payload — see its docblock). Sizing honesty, RE-MEASURED at
+ * R69-a (node over the REAL composed capsules — every fixed script
+ * builder measured; buildSnapshot is the biggest): the preamble grew
+ * 6,682 → 6,766 chars (the second WM_GETOBJECT poke SendMessage), and the
+ * biggest FIXED capsule (preamble + buildSnapshot) measures 11,592 script
+ * chars (detail full) / 11,593 (compact) → 30,912 / 30,916 base64 chars —
+ * UNDER the 32,767-char CreateProcess command-line ceiling (program + the
+ * 5 fixed flags add ~81 more → ~30,997 total) but with only ~1.77K of
+ * headroom left: THE PREAMBLE HAS GROWN PAST COMFORT — any further C#
+ * growth must re-measure here, and the honest next step is moving the
+ * walk to a temp .ps1 file (trimming the C# only buys a little). The
+ * capsules that carry MODEL-SUPPLIED payloads IN ARGV (setValue /
+ * writeClipboard, and typeText's SHORT per-char path) cannot be pinned by
+ * a constant — their length is the model's to choose — so they are
+ * guarded AT RUNTIME by ARGV_B64_CEILING below and refuse BEFORE
+ * spawning. (R69-a moved typeText's long payloads OFF the ARGV channel
+ * entirely: > 300 chars ride psStdinCapsule's STDIN, which has no
+ * command-line ceiling. An earlier R68-C draft of this comment claimed
+ * the typing path "stays far below" because its timeout math caps text at
+ * ~1,400 chars — that was WRONG: Math.min clamps the TIMEOUT at 30s, it
+ * does NOT cap the text; a long type would have crossed the ceiling and
+ * died at CreateProcess with a cryptic spawn error. The runtime guard
+ * was the R68-C fix; the stdin channel is the R69-a fix.)
  */
 const psCapsule = (script: string, timeoutMs = 20000): CommandCapsule => ({
   program: WINDOWS_PS_PROGRAM,
@@ -406,6 +445,48 @@ const ARGV_B64_CEILING = 31_875;
 function capsuleB64Length(script: string): number {
   return Buffer.from(`${PS_PREAMBLE}\n${script}`, "utf16le").toString("base64").length;
 }
+
+/**
+ * R69-a: the payload-channel capsule for LONG TEXT. The SCRIPT rides
+ * -EncodedCommand ARGV exactly like every other capsule (R67-C's contract:
+ * the script cannot be lost — the R67-C stdin failure was the whole SCRIPT
+ * riding `-Command -`, not a payload), while the MODEL'S TEXT rides STDIN
+ * as base64(UTF-8):
+ *   · no CreateProcess 32,767-char command-line ceiling (stdin is a pipe —
+ *     a 100k-char type composes the same small fixed script);
+ *   · the bytes crossing the pipe are PURE ASCII base64 — no console-input
+ *     encoding ambiguity on PS 5.1, and the decode side is pinned exact:
+ *     [System.Text.Encoding]::UTF8.GetString([Convert]::FromBase64String(…)),
+ *     so the clipboard write preserves EXACT Unicode by construction;
+ *   · the runner writes stdin and CLOSES it (backends/index.ts), so
+ *     [Console]::In.ReadToEnd() terminates; an EMPTY payload (the EPIPE
+ *     class) is detected inside the script and refuses honestly — nothing
+ *     is typed.
+ */
+const psStdinCapsule = (script: string, stdin: string, timeoutMs = 12000): CommandCapsule => ({
+  program: WINDOWS_PS_PROGRAM,
+  args: [
+    "-NoProfile",
+    "-NonInteractive",
+    "-ExecutionPolicy",
+    "Bypass",
+    "-EncodedCommand",
+    Buffer.from(`${PS_PREAMBLE}\n${script}`, "utf16le").toString("base64"),
+  ],
+  stdin,
+  timeoutMs,
+});
+
+/**
+ * R69-a: the LONG-TYPE threshold — text longer than this many characters
+ * types via the CLIPBOARD PASTE path (Set-Clipboard + Ctrl+V Chord) instead
+ * of per-char KEYEVENTF_UNICODE. Exported for the threshold-boundary pins
+ * (299/300/301). 300 chars ≈ where per-char typing stops being reasonable
+ * (2 SendInput events per char, ~20ms/char of timeout budget) and where
+ * model payloads start realistically colliding with the ARGV ceiling's
+ * ~4.8k-char capacity.
+ */
+export const LONG_TYPE_THRESHOLD = 300;
 
 /** R67-C: a bare probe capsule (NO preamble) — the tiny Add-Type compile
  * probe rides this; probe scripts must not drag the U32 preamble in. */
@@ -604,14 +685,23 @@ const windowsBackend: CuaBackend = {
     // SPARSE (only the window element): the tree EXISTS, we just never asked
     // for it. One poke site here covers BOTH get_app_state AND find_elements
     // (the dispatcher routes both through THIS method — verified by read).
-    // U32-gated (the walk itself needs no U32); 400ms settle for the tree to
-    // start building, and a sparse-retry below re-walks ONCE when the poke
-    // fired but the walk still produced only the root window.
+    // U32-gated (the walk itself needs no U32).
+    //
+    // R69-a (C4 hardening): the poke now sends WM_GETOBJECT TWICE per render
+    // child — lParam 0xFFFFFFFC (OBJID_CLIENT, the MSAA path, unchanged)
+    // AND lParam 0xFFFFFFFD (UiaRootObjectId, which activates the UIA
+    // provider path directly — System.Windows.Automation IS UIA, so the
+    // second poke asks Chromium for the tree in the dialect the walk below
+    // actually speaks). The settle is now a POLL (see the loop after the
+    // Walk function): while the walk stays SPARSE (≤1 element = only the
+    // root window), re-walk at cumulative checkpoints 400/800/1400/2000ms
+    // (4 attempts max), returning IMMEDIATELY once the tree is non-sparse —
+    // the old fixed 400ms + one 600ms sparse-retry gave a cold Chromium
+    // render tree at most 1s to build.
     const script = `
 Add-Type -AssemblyName UIAutomationClient
 $pokeCount = 0
 if ($script:U32_OK) { try { $pokeCount = [U32]::PokeChromium([IntPtr]${window.windowId}) } catch { $pokeCount = 0 } }
-if ($pokeCount -gt 0) { Start-Sleep -Milliseconds 400 }
 $root = [System.Windows.Automation.AutomationElement]::FromHandle([IntPtr]${window.windowId})
 $walker = [System.Windows.Automation.TreeWalker]::ControlViewWalker
 $out = New-Object System.Collections.ArrayList
@@ -688,14 +778,17 @@ function Walk($el, $depth) {
     while ($null -ne $child) { Walk $child ($depth + 1); $child = $walker.GetNextSiblingElement($child) }
   } catch { return }
 }
-Walk $root 0
-# R68-C (C4) sparse-retry: the poke fired but the walk yielded only the root
-# window — the web tree is likely STILL BUILDING. Sleep 600ms and re-walk
-# ONCE (the first walk's ≤1-element $out is discarded; no consumer exists
-# yet — this IS the snapshot being built).
-if ($pokeCount -gt 0 -and $out.Count -le 1) {
-  Start-Sleep -Milliseconds 600
-  $out = New-Object System.Collections.ArrayList
+# R69-a (C4 hardening): poll while SPARSE — re-walk after each wait, break
+# once the tree yields >1 element; checkpoints 400/800/1400/2000ms (4 max).
+if ($pokeCount -gt 0) {
+  $waits = @(400, 400, 600, 600)
+  foreach ($w in $waits) {
+    Start-Sleep -Milliseconds $w
+    $out = New-Object System.Collections.ArrayList
+    Walk $root 0
+    if ($out.Count -gt 1) { break }
+  }
+} else {
   Walk $root 0
 }
 if ($out.Count -eq 0) { Write-Output (ConvertTo-Json -Compress @{ error = 'EMPTY_TREE' }); exit 0 }
@@ -834,18 +927,29 @@ Write-Output 'OK'
   },
 
   async rawScroll(run, pt, direction, amount) {
-    // Vertical wheel = WHEEL delta; horizontal = arrow-key taps (the
-    // classic approximation, R68-C now via SendInput TapKey — the SendKeys
-    // path died TypeNotFound on the owner's host); amount 0..100 → ticks.
-    const ticks = Math.max(1, Math.min(33, Math.round(amount / 3) || 1));
-    const lines = ticks * WHEEL_DELTA;
+    // R69-a: ONE wheel event carrying delta = ticks × WHEEL_DELTA. The
+    // R68-C construction was QUADRATIC — it sent `ticks` events, each
+    // carrying ±(ticks×WHEEL_DELTA), so the delivered scroll was
+    // ticks²×120 (a 10-tick scroll moved 100× the intent; 33 ticks moved
+    // 1089×). Horizontal now rides MOUSEEVENTF_HWHEEL (0x1000, positive =
+    // right) with the same single-event math — the old arrow-key TapKey
+    // approximation never scrolled browser CONTENT at all (arrows move
+    // focus/caret, not the page). The cursor is positioned at (pt) FIRST
+    // (SetCursorPos + 30ms settle — wheel events affect the window under
+    // the cursor; the dispatcher always resolves a global (x,y) target).
+    const ticks = Math.max(1, Math.min(40, Math.round(amount / 3) || 1));
+    // Clamp the wheel data to the signed-int range mouse_event accepts.
+    const delta = Math.min(32767, ticks * WHEEL_DELTA);
+    const isVertical = direction === "up" || direction === "down";
+    const wheelFlag = isVertical ? "0x0800" : "0x1000"; // MOUSEEVENTF_WHEEL / MOUSEEVENTF_HWHEEL
+    // Vertical: positive = away from the user (up). Horizontal: positive = right.
+    const negative = direction === "down" || direction === "left";
+    const signed = negative ? -delta : delta;
     const script = `
 ${U32_GUARD}
 [void][U32]::SetCursorPos(${pt.x}, ${pt.y})
 Start-Sleep -Milliseconds 30
-${direction === "down" || direction === "up"
-      ? `${Array.from({ length: Math.min(ticks, 33) }, () => `[U32]::mouse_event(0x0800,0,0,${direction === "up" ? lines : -lines},[UIntPtr]::Zero)`).join("\nStart-Sleep -Milliseconds 15\n")}`
-      : `${Array.from({ length: Math.min(ticks, 33) }, () => `[void][U32]::TapKey(${direction === "left" ? "0x25" : "0x27"})`).join("\nStart-Sleep -Milliseconds 15\n")}`}
+[U32]::mouse_event(${wheelFlag},0,0,${signed},[UIntPtr]::Zero)
 Write-Output 'OK'
 `;
     const result = await run(psCapsule(script, 12000));
@@ -953,6 +1057,41 @@ Write-Output 'OK'
     // Enter). The frontmost scope check stays (Win raw input lands in the
     // frontmost window); the dispatcher auto-activates + retries on
     // mismatch (R68-C).
+    //
+    // R69-a: LONG TEXT (> LONG_TYPE_THRESHOLD chars) types via the
+    // CLIPBOARD instead: (a) Set-Clipboard the text, (b) 200ms settle,
+    // (c) Ctrl+V through the existing [U32]::Chord primitive (VK_CONTROL
+    // + 'V'). The payload rides psStdinCapsule's STDIN base64(UTF-8)
+    // channel — see its docblock — so the ARGV ceiling no longer caps
+    // typed text and the Unicode survives EXACTLY (UTF8.GetString on the
+    // decoded base64). Short text (≤ threshold) keeps the per-char path
+    // below UNCHANGED.
+    if (text.length > LONG_TYPE_THRESHOLD) {
+      const script = `
+${U32_GUARD}
+$fg = [U32]::GetForegroundWindow()
+$fgpid = 0
+[void][U32]::GetWindowThreadProcessId($fg, [ref]$fgpid)
+if ($fgpid -ne ${scope.pid}) { Write-Output "FRONTMOST_MISMATCH:$fgpid"; exit 0 }
+$payload = [Console]::In.ReadToEnd()
+$payload = $payload.Trim()
+if ($payload.Length -eq 0) { Write-Output 'ERR:stdin-payload-lost (the clipboard paste received no text on stdin - the long text was not delivered; retry the type call)'; exit 0 }
+try { $paste = [System.Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($payload)) } catch { Write-Output 'ERR:stdin-payload-corrupt (the base64 stdin payload could not be decoded)'; exit 0 }
+try { Set-Clipboard -Value $paste -ErrorAction Stop } catch { Write-Output ("ERR:" + $_.Exception.Message); exit 0 }
+Start-Sleep -Milliseconds 200
+$cv=@([uint16]17)
+[void][U32]::Chord($cv, [uint16]86)
+Write-Output 'OK'
+`;
+      const result = await run(psStdinCapsule(script, `${Buffer.from(text, "utf8").toString("base64")}\n`));
+      if (result.stdout.trim().startsWith("FRONTMOST_MISMATCH:")) {
+        return { ok: false, error: result.stdout.trim() };
+      }
+      if (result.code !== 0) {
+        return { ok: false, error: `type failed: ${result.stderr.trim().slice(0, 200)}` };
+      }
+      return okResult(result.stdout);
+    }
     const script = `
 ${U32_GUARD}
 $fg = [U32]::GetForegroundWindow()
@@ -966,7 +1105,10 @@ Write-Output 'OK'
     // so its size is measured, not assumed: a payload that would cross
     // the CreateProcess command-line ceiling refuses BEFORE the spawn
     // with a self-teaching error (split the text across multiple calls)
-    // instead of a cryptic spawn failure.
+    // instead of a cryptic spawn failure. R69-a note: the per-char path
+    // now only ever carries ≤ LONG_TYPE_THRESHOLD chars (longer text took
+    // the clipboard branch above), so this guard is defense-in-depth for
+    // direct backend calls — the R68-C construction stays.
     const b64Len = capsuleB64Length(script);
     if (b64Len > ARGV_B64_CEILING) {
       return { ok: false, error: `type text too long: ${text.length} characters compose a ${b64Len}-char -EncodedCommand (the Windows CreateProcess ceiling is 32,767 command-line chars) — split it across multiple type calls` };
@@ -985,12 +1127,18 @@ Write-Output 'OK'
     if (spec.pid !== undefined) return { ok: true, pid: spec.pid, active: false };
     const name = spec.name;
     if (name === undefined || name.trim() === "") return { ok: false, error: "no app name given" };
+    // R69-a: a Chromium browser launch carries --force-renderer-accessibility
+    // (Chromium builds its web a11y tree at STARTUP instead of after a
+    // screen-reader poke — the PokeChromium WM_GETOBJECT nudge then finds an
+    // ALREADY-BUILT tree, and the model's get_app_state/find_elements stop
+    // depending on poke timing). Non-browser targets are launched UNCHANGED.
+    const a11yArgs = chromiumBrowserExecutable(name) ? " -ArgumentList '--force-renderer-accessibility'" : "";
     const script = `
 try {
   if ('${spec.bundleId ?? ""}' -ne '') {
     Start-Process "shell:AppsFolder\\${spec.bundleId}" -ErrorAction Stop
   } else {
-    Start-Process -FilePath "${escapePsString(name)}" -ErrorAction Stop
+    Start-Process -FilePath "${escapePsString(name)}"${a11yArgs} -ErrorAction Stop
   }
   Write-Output 'OK'
 } catch {
@@ -1544,6 +1692,20 @@ function modifierVks(modifiers: string[]): number[] {
 function psVkArray(name: string, vks: number[]): string {
   const elems = vks.map((v) => `[uint16]${v}`).join(", ");
   return `$${name}=@(${elems})`;
+}
+
+/**
+ * R69-a: does a launch target name a CHROMIUM BROWSER executable (the ones
+ * whose launch gets --force-renderer-accessibility)? Matching is FLEXIBLE on
+ * the name: path prefixes (both \ and /) are stripped, the .exe suffix and
+ * case are normalized — "msedge", "msedge.exe", "chrome", "chrome.exe", and
+ * "C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe" all match;
+ * "notepad", "msedgewebview2" (the WebView2 helper — not a browser) do not.
+ * Exported for the launch construction pins.
+ */
+export function chromiumBrowserExecutable(name: string): boolean {
+  const base = (name.trim().replace(/\\/g, "/").split("/").pop() ?? "").toLowerCase();
+  return base === "msedge" || base === "msedge.exe" || base === "chrome" || base === "chrome.exe";
 }
 
 export function windowsElementActionScript(

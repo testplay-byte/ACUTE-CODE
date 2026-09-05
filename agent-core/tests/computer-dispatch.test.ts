@@ -9,10 +9,12 @@ import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, beforeEach, describe, expect, it } from "vitest";
-import { ComputerDispatcher, parseModifiers, splitKeyChord } from "../src/computer/dispatch";
+import { PNG } from "pngjs";
+import { ComputerDispatcher, OBSERVATION_SETTLE_MS, parseModifiers, splitKeyChord } from "../src/computer/dispatch";
 import { resetComputerSessionForTests, getComputerSession, MAX_FRAME_AGE_MS } from "../src/computer/session";
-import type { CuaBackend, CommandCapsule, ListAppsResult, ListWindowsResult, RunCommand, RunResult } from "../src/computer/backends/interface";
-import type { Snapshot, WindowInfo, AppInfo } from "../src/computer/types";
+import { resetFramehashCacheForTests } from "../src/computer/framehash";
+import type { CuaBackend, CommandCapsule, HitElement, ListAppsResult, ListWindowsResult, RunCommand, RunResult } from "../src/computer/backends/interface";
+import type { Receipt, Snapshot, WindowInfo, AppInfo } from "../src/computer/types";
 import { auditPath, resetAuditForTests } from "../src/computer/audit";
 
 let tempRoot: string;
@@ -54,6 +56,9 @@ let fakeWindows: WindowInfo[] = [
 let fakeWindowsDiagnostics: ListWindowsResult["diagnostics"] = undefined;
 /** R67-C: the key tool's focused-element readback (null = omit the field). */
 let fakeFocused: string | null = null;
+/** R69 (task 4-c-2): the scriptable hit-test result (null = miss) — the
+ * hitElementName receipt pins drive it. */
+let fakeHit: HitElement | null = null;
 /** R68-C: frontmost auto-retry knobs — healOnActivate simulates a
  * SUCCESSFUL escalated activation (the foreground flips to the target pid
  * as the real backend's ladder would); activateCalls counts them; the
@@ -68,9 +73,45 @@ let rawClickFailOnce = false;
 /** R68-C: a persistent non-mismatch rawKey error (the NO-retry-for-other-
  * errors pin — withForegroundRetry must not touch this class). */
 let rawKeyError: string | null = null;
+/** R69 (task 4-c-2): flip the fake app's window title when the next element
+ * press runs — scripts a mid-action title change (titleChanged:true). */
+let fakeTitleFlipOnClick = false;
 /** R66-2-d: find_elements tests may swap the fake snapshot's element list
  * (makeDispatcher resets it to the default 5-element table). */
 let fakeElements: Snapshot["elements"] | null = null;
+
+/* ── R69 (task 4-c-1): REAL synthetic PNGs for the frame-intelligence paths
+ * ── ──────────────────────────────────────────────────────────────────────────
+ * The legacy fixtures ("fakepng"/"aa==") are deliberately NOT valid PNGs:
+ * every hash-based path degrades honestly on them (the fallback pins).
+ * The tests below queue REAL 128×128 PNGs — one per capture call, shifted
+ * off the queue — so the auto-refresh comparisons and the spam guard see
+ * actual pixels. */
+let fakeCaptureQueue: string[] = [];
+let fakeDisplaySize = { width: 1920, height: 1080 };
+
+/** A grayscale PNG from a per-pixel value function (pngjs). */
+function makePng(w: number, h: number, fn: (x: number, y: number) => number): string {
+  const png = new PNG({ width: w, height: h });
+  for (let y = 0; y < h; y++) {
+    for (let x = 0; x < w; x++) {
+      const v = fn(x, y);
+      const i = (y * w + x) * 4;
+      png.data[i] = v;
+      png.data[i + 1] = v;
+      png.data[i + 2] = v;
+      png.data[i + 3] = 255;
+    }
+  }
+  return PNG.sync.write(png).toString("base64");
+}
+
+/** 128×128 horizontal gradient — the R69 test "screen". */
+const PNG_BASE = makePng(128, 128, (x) => Math.round((x / 127) * 255));
+/** The screen with a big change in the top-left quadrant (far from (96,96)). */
+const PNG_FAR = makePng(128, 128, (x, y) => (x < 64 && y < 64 ? 255 : Math.round((x / 127) * 255)));
+/** The far change PLUS the whole target region [48,128)² overwritten. */
+const PNG_NEAR = makePng(128, 128, (x, y) => (x < 64 && y < 64) || (x >= 48 && y >= 48) ? 255 : Math.round((x / 127) * 255));
 
 const ELEMENTS: Snapshot["elements"] = [
   { index: 0, kind: "window", name: "App", flags: [], bounds: [10, 20, 800, 600] },
@@ -119,10 +160,11 @@ const fakeBackend: CuaBackend = {
       createdAt: 0,
     };
   },
-  hitTest: async () => null,
+  hitTest: async () => fakeHit,
   focusedElementName: async () => fakeFocused,
   pressElement: async (_run, _pid, _window, _element) => {
     calls.push("press");
+    if (fakeTitleFlipOnClick) fakeApps = [{ name: "New Page — App", pid: 4242, active: true }];
     return mode === "press-stale" ? { ok: false, stale: true, error: "identity changed" } : { ok: true };
   },
   setValue: async () => {
@@ -178,8 +220,23 @@ const fakeBackend: CuaBackend = {
   captureDisplay: async () =>
     mode === "capture-fail"
       ? { error: "no capture tool" }
-      : { pngBase64: Buffer.from("fakepng").toString("base64"), width: 1920, height: 1080, scale: 1, origin: { x: 0, y: 0 } },
-  captureRegion: async () => ({ pngBase64: "aa==", width: 10, height: 10, scale: 1, origin: { x: 0, y: 0 } }),
+      : {
+          pngBase64: fakeCaptureQueue.length > 0 ? fakeCaptureQueue.shift()! : Buffer.from("fakepng").toString("base64"),
+          width: fakeDisplaySize.width,
+          height: fakeDisplaySize.height,
+          scale: 1,
+          origin: { x: 0, y: 0 },
+        },
+  captureRegion: async (_run, region) =>
+    mode === "capture-fail"
+      ? { error: "no capture tool" }
+      : {
+          pngBase64: fakeCaptureQueue.length > 0 ? fakeCaptureQueue.shift()! : "aa==",
+          width: region.w,
+          height: region.h,
+          scale: 1,
+          origin: { x: region.x, y: region.y },
+        },
   cursorPosition: async () => ({ x: 5, y: 6 }),
   readClipboard: async () => "clip",
   writeClipboard: async () => {
@@ -206,6 +263,7 @@ function makeDispatcher(allowMutations = true): ComputerDispatcher {
   ];
   fakeWindowsDiagnostics = undefined;
   fakeFocused = null;
+  fakeHit = null;
   healOnActivate = false;
   activateCalls = 0;
   rawKeyAttempts = 0;
@@ -213,7 +271,16 @@ function makeDispatcher(allowMutations = true): ComputerDispatcher {
   rawClickAttempts = 0;
   rawClickFailOnce = false;
   rawKeyError = null;
-  return new ComputerDispatcher({ backend: fakeBackend, run: fakeRun, root: tempRoot, allowMutations });
+  fakeTitleFlipOnClick = false;
+  fakeCaptureQueue = [];
+  fakeDisplaySize = { width: 1920, height: 1080 };
+  resetFramehashCacheForTests();
+  const d = new ComputerDispatcher({ backend: fakeBackend, run: fakeRun, root: tempRoot, allowMutations });
+  // R69 (4-c-2): zero the post-action settle so hundreds of dispatches
+  // don't each pay the real 600ms — the OBSERVATION_SETTLE_MS pin below
+  // asserts the production default separately.
+  d.observationSettleMs = 0;
+  return d;
 }
 
 beforeEach(() => {
@@ -324,17 +391,24 @@ describe("ROUND-61 (R61): element actions — the a11y-first matrix", () => {
     if (result.kind === "refusal") expect(result.refusal.error).toBe("capability_fail_closed");
   });
 
-  it("right_click on a has_menu element → performAction Expand; without has_menu → fail closed", async () => {
+  it("right_click on a has_menu element → performAction Expand; without has_menu → R69: raw right-click at the element CENTER (the fail-closed cell is gone)", async () => {
     const d = makeDispatcher();
     const snap = await observe(d);
     const menu = await d.dispatch("right_click", { target: { type: "element", stateId: snap.stateId, index: 3 } });
     expect(menu.kind).toBe("receipt");
     expect(calls).toEqual(["performAction"]);
-    // Now a fresh snapshot; index 1 (no has_menu) fails closed.
+    // A fresh snapshot; index 1 (Save — no has_menu) now routes like
+    // left_click's event path: bounds → center → RAW right-click.
     const snap2 = await observe(d);
+    fakeCaptureQueue = [PNG_BASE];
     const bare = await d.dispatch("right_click", { target: { type: "element", stateId: snap2.stateId, index: 1 } });
-    expect(bare.kind).toBe("refusal");
-    if (bare.kind === "refusal") expect(bare.refusal.error).toBe("capability_fail_closed");
+    expect(bare.kind).toBe("receipt");
+    expect(calls).toEqual(["performAction", "rawClick:right:1:@140,215"]);
+    if (bare.kind === "receipt") {
+      // The element's name rides the receipt (the model learns what it clicked).
+      expect(bare.receipt.hitElementName).toBe("Save");
+      expect(bare.receipt.actionSent).toBe(true);
+    }
   });
 
   it("double_click / scroll on ELEMENT targets fail closed (no a11y equivalent — doc 07 matrix)", async () => {
@@ -407,14 +481,22 @@ describe("ROUND-61 (R61): coordinate actions — frame binding + foreground rule
     if (result.kind === "refusal") expect(result.refusal.error).toBe("raster_out_of_bounds");
   });
 
-  it("an AGED frame refuses frame_stale (R68-C: the 30s rule — the vision roundtrip no longer expires frames)", async () => {
+  it("an AGED frame with an UNHASHABLE legacy fixture falls back to frame_stale (R69: the refresh ran but could not verify — the failure signal is never lost)", async () => {
     const d = makeDispatcher();
+    // The legacy fake capture ("fakepng") is not a real PNG: the R69
+    // auto-refresh path runs, the hashes come back null, and the honest
+    // fallback is the OLD frame_stale shape (see the R69 describe below for
+    // the REAL-PNG refresh paths: proceed / frame_changed).
     const frameId = await screenshot(d);
     const frame = getComputerSession().getFrame(frameId)!;
     frame.capturedAt = Date.now() - (MAX_FRAME_AGE_MS + 1000);
     const result = await d.dispatch("left_click", { target: { type: "coordinate", x: 10, y: 10 } });
     expect(result.kind).toBe("refusal");
-    if (result.kind === "refusal") expect(result.refusal.error).toBe("frame_stale");
+    if (result.kind === "refusal") {
+      expect(result.refusal.error).toBe("frame_stale");
+      expect(result.refusal.message).toContain("could not be perceptually verified");
+    }
+    expect(calls).toHaveLength(0); // nothing was sent
   });
 
   it("Win/Linux raw path: frontmost mismatch + FAILED auto-activation → the honest frontmost_pid_mismatch (nothing sent)", async () => {
@@ -580,20 +662,51 @@ describe("ROUND-61 (R61): receipts + the audit journal + monitor stats", () => {
     }
   });
 
-  it("return_state:compact attaches a FRESH observation to the receipt", async () => {
+  it("return_state 'full' attaches a FRESH UIA observation; 'compact' (R69) is the raster observation; 'none' skips both", async () => {
     const d = makeDispatcher();
     const snap = await observe(d);
-    const result = await d.dispatch("set_value", {
+    // FULL keeps the R61 UIA compose (get_app_state snapshot in-reply).
+    const full = await d.dispatch("set_value", {
       target: { type: "element", stateId: snap.stateId, index: 2 },
       value: "x",
-      returnState: "compact",
+      returnState: "full",
     });
-    expect(result.kind).toBe("receipt");
-    if (result.kind === "receipt") {
-      const observation = result.observation;
+    expect(full.kind).toBe("receipt");
+    if (full.kind === "receipt") {
+      const observation = full.observation;
       expect(observation).toBeDefined();
       expect(observation?.stateId).not.toBe(snap.stateId);
+      // 'full' skips the raster auto-observation (one observation per call).
+      expect(full.receipt.observation).toBeUndefined();
     }
+    // COMPACT (the new default semantics for the mutating tools) is the
+    // post-action raster observation — no UIA compose runs.
+    const snap2 = await observe(d);
+    fakeCaptureQueue = [PNG_BASE];
+    const compact = await d.dispatch("set_value", {
+      target: { type: "element", stateId: snap2.stateId, index: 2 },
+      value: "y",
+      returnState: "compact",
+    });
+    expect(compact.kind).toBe("receipt");
+    if (compact.kind === "receipt") {
+      expect(compact.observation).toBeUndefined(); // no Snapshot ride-along
+      expect(compact.receipt.observation).toBeDefined();
+      expect((compact.receipt.observation as { frameId?: string }).frameId).toBe("f-1");
+    }
+    // NONE skips everything — no capture, no compose, no observation.
+    const snap3 = await observe(d);
+    const none = await d.dispatch("set_value", {
+      target: { type: "element", stateId: snap3.stateId, index: 2 },
+      value: "z",
+      returnState: "none",
+    });
+    expect(none.kind).toBe("receipt");
+    if (none.kind === "receipt") {
+      expect(none.observation).toBeUndefined();
+      expect(none.receipt.observation).toBeUndefined();
+    }
+    expect(fakeCaptureQueue).toEqual([]); // the compact call consumed THE one capture
   });
 });
 
@@ -1163,5 +1276,643 @@ describe("ROUND-68 (R68-C): withForegroundRetry — activate + retry ONCE instea
     expect(result.kind).toBe("receipt");
     expect(activateCalls).toBe(0);
     expect(calls).toEqual(["rawClick:left:1:@10,10"]);
+  });
+});
+
+/* ── R69 (task 4-c-1): STALE-FRAME AUTO-REFRESH ──────────────────────────────
+ * The owner's #1 reported UX failure: screenshot → zoom (slow vision
+ * roundtrip) → click → frame_stale → screenshot → … loop. Aged frames no
+ * longer hard-fail for the coordinate-anchored pointer tools: dispatch
+ * re-captures the frame's coverage, registers the fresh frame (provenance
+ * "auto_refresh" — zoomable immediately), and compares perceptual hashes:
+ * full-frame Hamming ≤ 8 → proceed (screenStable); else the target region
+ * (±48px box around the point) ≤ 6 → proceed (targetRegionStable); else the
+ * NEW frame_changed refusal carrying refreshFrameId. A failed refresh
+ * capture falls back to frame_stale. Driven with REAL synthetic PNGs (the
+ * queue), aged by rewinding capturedAt. */
+describe("R69 (4-c-1): stale-frame AUTO-REFRESH — the screenshot→zoom→click loop fix", () => {
+  /** Screenshot a REAL 128×128 PNG from the queue, then age its frame. */
+  async function agedFrame(d: ComputerDispatcher, png: string): Promise<string> {
+    fakeCaptureQueue = [png];
+    fakeDisplaySize = { width: 128, height: 128 };
+    const frameId = await screenshot(d);
+    const frame = getComputerSession().getFrame(frameId)!;
+    frame.capturedAt = Date.now() - (MAX_FRAME_AGE_MS + 1000);
+    return frameId;
+  }
+
+  it("(i) identical screen → the action PROCEEDS on the model's coordinates; receipt carries frameRefreshed/refreshFrameId/screenStable; the fresh frame is auto_refresh + zoomable — and the R69 observation rides too", async () => {
+    const d = makeDispatcher();
+    await agedFrame(d, PNG_BASE);
+    // The refresh capture AND the post-action observation both return the
+    // SAME screen (R69 4-c-2: the click now auto-observes).
+    fakeCaptureQueue = [PNG_BASE, PNG_BASE];
+    const result = await d.dispatch("left_click", { target: { type: "coordinate", x: 96, y: 96 } });
+    expect(result.kind).toBe("receipt");
+    if (result.kind === "receipt") {
+      expect(result.receipt.actionSent).toBe(true);
+      expect(result.receipt.frameRefreshed).toBe(true);
+      expect(result.receipt.refreshFrameId).toBe("f-2");
+      expect(result.receipt.screenStable).toBe(true);
+      expect(result.receipt.targetRegionStable).toBeUndefined();
+      // R69 (4-c-2): the post-action observation — the refresh frame IS the
+      // pre-state, so the identical observation reports screenChanged:false
+      // (and the coordinate click's status upgrades unverified → unchanged).
+      expect(result.receipt.observation).toMatchObject({ frameId: "f-3", screenChanged: false });
+      expect(result.receipt.targetVerificationStatus).toBe("unchanged");
+    }
+    expect(calls).toEqual(["rawClick:left:1:@96,96"]); // the model's point, mapped
+    // The fresh frames are registered + cached: the model can zoom them NOW.
+    const fresh = getComputerSession().getFrame("f-2")!;
+    expect(fresh.provenance).toBe("auto_refresh");
+    expect(getComputerSession().getFrame("f-3")?.provenance).toBe("observation");
+    expect(getComputerSession().latestFrame()?.frameId).toBe("f-3");
+    expect(d.rasterFor("f-2")).toBe(PNG_BASE);
+    expect(d.rasterFor("f-3")).toBe(PNG_BASE);
+    expect(fresh.aHash).toBeDefined();
+  });
+
+  it("(ii) screen changed FAR AWAY but the target region stable → PROCEEDS with screenStable:false + targetRegionStable:true", async () => {
+    const d = makeDispatcher();
+    await agedFrame(d, PNG_BASE);
+    fakeCaptureQueue = [PNG_FAR]; // the top-left quadrant changed; (96,96)±48 did not
+    const result = await d.dispatch("left_click", { target: { type: "coordinate", x: 96, y: 96 } });
+    expect(result.kind).toBe("receipt");
+    if (result.kind === "receipt") {
+      expect(result.receipt.actionSent).toBe(true);
+      expect(result.receipt.frameRefreshed).toBe(true);
+      expect(result.receipt.refreshFrameId).toBe("f-2");
+      expect(result.receipt.screenStable).toBe(false);
+      expect(result.receipt.targetRegionStable).toBe(true);
+    }
+    expect(calls).toEqual(["rawClick:left:1:@96,96"]);
+  });
+
+  it("(iii) the TARGET REGION itself changed → the NEW frame_changed refusal carrying refreshFrameId (the fresh frame is registered → zoomable, one round-trip)", async () => {
+    const d = makeDispatcher();
+    await agedFrame(d, PNG_BASE);
+    fakeCaptureQueue = [PNG_NEAR]; // far change + the whole [48,128)² region overwritten
+    const result = await d.dispatch("left_click", { target: { type: "coordinate", x: 96, y: 96 } });
+    expect(result.kind).toBe("refusal");
+    if (result.kind === "refusal") {
+      expect(result.refusal.error).toBe("frame_changed");
+      expect(result.refusal.payload).toMatchObject({ refreshFrameId: "f-2" });
+      // The prescribed recovery: zoom the fresh frame, retry with ITS pixels.
+      expect(result.refusal.recovery).toContain("fresh frame (id f-2)");
+      expect(result.refusal.recovery).toContain("zoom");
+    }
+    expect(calls).toHaveLength(0); // nothing was sent
+    // The fresh frame IS registered + cached — the model zooms it immediately.
+    expect(getComputerSession().getFrame("f-2")?.provenance).toBe("auto_refresh");
+    expect(getComputerSession().latestFrame()?.frameId).toBe("f-2");
+    expect(d.rasterFor("f-2")).toBe(PNG_NEAR);
+  });
+
+  it("(iv) the auto-capture itself FAILS → the old frame_stale fallback (the failure signal is never lost)", async () => {
+    const d = makeDispatcher();
+    await agedFrame(d, PNG_BASE);
+    mode = "capture-fail"; // the refresh captureRegion fails
+    const result = await d.dispatch("left_click", { target: { type: "coordinate", x: 96, y: 96 } });
+    expect(result.kind).toBe("refusal");
+    if (result.kind === "refusal") {
+      expect(result.refusal.error).toBe("frame_stale");
+      expect(result.refusal.message).toContain("automatic refresh capture failed");
+      expect(result.refusal.payload).toEqual({ frameId: "f-1" });
+    }
+    expect(calls).toHaveLength(0);
+  });
+
+  it("(v) non-click coordinate tools refresh too: SCROLL on an aged stable frame proceeds with the refresh receipt", async () => {
+    const d = makeDispatcher();
+    await agedFrame(d, PNG_BASE);
+    fakeCaptureQueue = [PNG_BASE];
+    const result = await d.dispatch("scroll", {
+      target: { type: "coordinate", x: 96, y: 96 },
+      scrollDirection: "down",
+    });
+    expect(result.kind).toBe("receipt");
+    if (result.kind === "receipt") {
+      expect(result.receipt.frameRefreshed).toBe(true);
+      expect(result.receipt.screenStable).toBe(true);
+      expect(result.receipt.refreshFrameId).toBe("f-2");
+    }
+  });
+
+  it("(vi) mouse_move on an aged stable frame: the refresh receipt rides the non-gated (macOS-style) path too", async () => {
+    const d = makeDispatcher();
+    rawRequiresForeground = false; // set after makeDispatcher (it resets the knob)
+    await agedFrame(d, PNG_BASE);
+    fakeCaptureQueue = [PNG_BASE];
+    const result = await d.dispatch("mouse_move", { target: { type: "coordinate", x: 96, y: 96 } });
+    expect(result.kind).toBe("receipt");
+    if (result.kind === "receipt") {
+      expect(result.receipt.frameRefreshed).toBe(true);
+      expect(result.receipt.screenStable).toBe(true);
+    }
+  });
+
+  it("(vii) drag: the FROM endpoint's stale frame refreshes; the action proceeds with the receipt fields", async () => {
+    const d = makeDispatcher();
+    await agedFrame(d, PNG_BASE);
+    fakeCaptureQueue = [PNG_BASE];
+    const result = await d.dispatch("left_click_drag", {
+      fromTarget: { type: "coordinate", x: 96, y: 96 },
+      to: { type: "coordinate", x: 60, y: 60 },
+    });
+    expect(result.kind).toBe("receipt");
+    if (result.kind === "receipt") {
+      expect(result.receipt.frameRefreshed).toBe(true);
+      expect(result.receipt.refreshFrameId).toBe("f-2");
+      expect(result.receipt.screenStable).toBe(true);
+    }
+  });
+
+  it("(viii) set_value (focus-gated, spec-excluded) KEEPS the hard frame_stale fail — no auto-refresh, no capture", async () => {
+    const d = makeDispatcher();
+    await agedFrame(d, PNG_BASE);
+    fakeCaptureQueue = [PNG_BASE];
+    const result = await d.dispatch("set_value", {
+      target: { type: "coordinate", x: 96, y: 96 },
+      value: "x",
+    });
+    expect(result.kind).toBe("refusal");
+    if (result.kind === "refusal") expect(result.refusal.error).toBe("frame_stale");
+    // No refresh capture was consumed (the queue is untouched, no new frame).
+    expect(fakeCaptureQueue).toEqual([PNG_BASE]);
+    expect(getComputerSession().latestFrame()?.frameId).toBe("f-1");
+    expect(calls).toHaveLength(0);
+  });
+
+  it("(ix) FRESH frames never refresh — an in-age click sends no refresh capture, but the R69 observation still fires", async () => {
+    const d = makeDispatcher();
+    fakeCaptureQueue = [PNG_BASE, PNG_BASE];
+    fakeDisplaySize = { width: 128, height: 128 };
+    await screenshot(d);
+    const result = await d.dispatch("left_click", { target: { type: "coordinate", x: 96, y: 96 } });
+    expect(result.kind).toBe("receipt");
+    if (result.kind === "receipt") {
+      expect(result.receipt.frameRefreshed).toBeUndefined();
+      expect(result.receipt.refreshFrameId).toBeUndefined();
+      // No refresh — but the post-action observation captured f-2.
+      expect(result.receipt.observation).toMatchObject({ frameId: "f-2", screenChanged: false });
+      expect(result.receipt.targetVerificationStatus).toBe("unchanged");
+    }
+    expect(getComputerSession().getFrame("f-2")?.provenance).toBe("observation");
+    expect(getComputerSession().latestFrame()?.frameId).toBe("f-2");
+  });
+});
+
+/* ── R69 (task 4-c-1): the SCREENSHOT-SPAM GUARD ─────────────────────────────
+ * The #2 reported failure: the model re-capturing an identical screen in a
+ * loop. The 3rd consecutive model-initiated capture whose full-frame aHash
+ * is ≤ 4 bits from the previous registered raster (no intervening mutating
+ * action) is refused screen_unchanged BEFORE registration. Resets: any
+ * mutating dispatch, a changed capture, a foreground-app change. */
+describe("R69 (4-c-1): the SCREENSHOT-SPAM GUARD (screen_unchanged)", () => {
+  it("2 identical captures OK; the 3rd is refused with the code + the teaching guidance; the raster is NOT registered", async () => {
+    const d = makeDispatcher();
+    fakeDisplaySize = { width: 128, height: 128 };
+    fakeCaptureQueue = [PNG_BASE, PNG_BASE, PNG_BASE, PNG_BASE];
+    const first = await d.dispatch("screenshot", {});
+    expect(first.kind).toBe("data"); // baseline (no previous raster to compare)
+    const second = await d.dispatch("screenshot", {});
+    expect(second.kind).toBe("data"); // 1st consecutive identical — allowed
+    const third = await d.dispatch("screenshot", {});
+    expect(third.kind).toBe("refusal");
+    if (third.kind === "refusal") {
+      expect(third.refusal.error).toBe("screen_unchanged");
+      expect(third.refusal.message).toContain("3 identical frames");
+      // The three prescribed alternatives, verbatim shape.
+      expect(third.refusal.recovery).toContain("act (click/type/scroll");
+      expect(third.refusal.recovery).toContain("wait()");
+      expect(third.refusal.recovery).toContain("find_elements");
+    }
+    // NOT registered / NOT cached: f-3 is never created (the refused capture
+    // registered nothing — the raster is identical anyway).
+    expect(getComputerSession().latestFrame()?.frameId).toBe("f-2");
+    expect(d.rasterFor("f-3")).toBeUndefined();
+  });
+
+  it("the guard STAYS saturated: a 4th identical capture also refuses (heeding a reset condition is required)", async () => {
+    const d = makeDispatcher();
+    fakeDisplaySize = { width: 128, height: 128 };
+    fakeCaptureQueue = [PNG_BASE, PNG_BASE, PNG_BASE, PNG_BASE, PNG_BASE];
+    await d.dispatch("screenshot", {});
+    await d.dispatch("screenshot", {});
+    expect((await d.dispatch("screenshot", {})).kind).toBe("refusal");
+    const fourth = await d.dispatch("screenshot", {});
+    expect(fourth.kind).toBe("refusal");
+    if (fourth.kind === "refusal") expect(fourth.refusal.error).toBe("screen_unchanged");
+  });
+
+  it("RESET after a mutating action: the counter starts over (act → observe is legitimate)", async () => {
+    const d = makeDispatcher();
+    fakeDisplaySize = { width: 128, height: 128 };
+    fakeCaptureQueue = [PNG_BASE, PNG_BASE, PNG_BASE, PNG_BASE, PNG_BASE];
+    await d.dispatch("screenshot", {});
+    await d.dispatch("screenshot", {}); // counter = 1
+    // A mutating dispatch (write_clipboard — no frame needed) resets.
+    const mutated = await d.dispatch("write_clipboard", { text: "x" });
+    expect(mutated.kind).toBe("receipt");
+    const third = await d.dispatch("screenshot", {});
+    expect(third.kind).toBe("data"); // the run restarts at length 1 — allowed
+    expect(getComputerSession().getFrame("f-3")).toBeDefined(); // it registered
+  });
+
+  it("RESET after a CHANGED capture (Hamming > 4 — the screen moved)", async () => {
+    const d = makeDispatcher();
+    fakeDisplaySize = { width: 128, height: 128 };
+    fakeCaptureQueue = [PNG_BASE, PNG_BASE, PNG_BASE, PNG_FAR, PNG_BASE];
+    await d.dispatch("screenshot", {}); // baseline
+    await d.dispatch("screenshot", {}); // counter = 1
+    expect((await d.dispatch("screenshot", {})).kind).toBe("refusal"); // counter = 3 → refused
+    // The screen now changes (the far quadrant flips): allowed + reset.
+    const changed = await d.dispatch("screenshot", {});
+    expect(changed.kind).toBe("data");
+    // Identical again after the change → counter restarts at 1 — allowed.
+    const after = await d.dispatch("screenshot", {});
+    expect(after.kind).toBe("data");
+  });
+
+  it("RESET after a foreground-app change (pid proxy for the title change)", async () => {
+    const d = makeDispatcher();
+    fakeDisplaySize = { width: 128, height: 128 };
+    fakeCaptureQueue = [PNG_BASE, PNG_BASE, PNG_BASE, PNG_BASE];
+    await d.dispatch("screenshot", {}); // baseline, frontmost 4242
+    await d.dispatch("screenshot", {}); // counter = 1
+    fakeFrontmost = 5555; // the foreground app switched between captures
+    const third = await d.dispatch("screenshot", {});
+    expect(third.kind).toBe("data"); // reset by the app switch — allowed
+    expect(getComputerSession().getFrame("f-3")?.ownerAtCapture.pid).toBe(5555);
+  });
+
+  it("AUTO-REFRESH + OBSERVATION captures never count toward the guard (internal, not model spam)", async () => {
+    const d = makeDispatcher();
+    fakeDisplaySize = { width: 128, height: 128 };
+    // screenshot(BASE) → age → click (auto-refresh BASE + observation BASE)
+    // → 2 model captures of the same screen.
+    fakeCaptureQueue = [PNG_BASE, PNG_BASE, PNG_BASE, PNG_BASE, PNG_BASE];
+    const frameId = await screenshot(d);
+    const frame = getComputerSession().getFrame(frameId)!;
+    frame.capturedAt = Date.now() - (MAX_FRAME_AGE_MS + 1000);
+    const clicked = await d.dispatch("left_click", { target: { type: "coordinate", x: 96, y: 96 } });
+    expect(clicked.kind).toBe("receipt"); // the auto-refresh (f-2) + observation (f-3) fired, both identical
+    expect(getComputerSession().getFrame("f-2")?.provenance).toBe("auto_refresh");
+    expect(getComputerSession().getFrame("f-3")?.provenance).toBe("observation");
+    // Two MORE model captures of the same screen: allowed (neither internal
+    // capture counted — if they had, the second one here would be refused).
+    expect((await d.dispatch("screenshot", {})).kind).toBe("data");
+    expect((await d.dispatch("screenshot", {})).kind).toBe("data");
+    // And the NEXT identical one is the 3rd consecutive model capture → refused.
+    fakeCaptureQueue = [PNG_BASE];
+    const refused = await d.dispatch("screenshot", {});
+    expect(refused.kind).toBe("refusal");
+    if (refused.kind === "refusal") expect(refused.refusal.error).toBe("screen_unchanged");
+  });
+
+  it("unhashable legacy captures never refuse (no comparison → no false refusal)", async () => {
+    const d = makeDispatcher();
+    // Default queue → "fakepng" every time: 5 identical unhashable captures.
+    for (let i = 0; i < 5; i++) {
+      const result = await d.dispatch("screenshot", {});
+      expect(result.kind).toBe("data");
+    }
+  });
+});
+
+/* ── R69: the guard covers ALL THREE model-capture sites ───────────────────── */
+describe("R69 (4-c-1): the spam guard on ZOOM and get_app_state{includeScreenshot}", () => {
+  it("zoom spam: repeated identical region captures — the 3rd consecutive identical is refused", async () => {
+    const d = makeDispatcher();
+    fakeDisplaySize = { width: 128, height: 128 };
+    // NOTE: the fake backend's captureRegion returns the queued FULL png
+    // (not a real crop), so every raster here hashes identically — the
+    // counting is what's under test: screenshot (run 1), zoom (run 2),
+    // zoom (run 3 → refused).
+    fakeCaptureQueue = [PNG_BASE, PNG_BASE, PNG_BASE];
+    await screenshot(d);
+    const zoom1 = await d.dispatch("zoom", { region: [0, 0, 32, 32] });
+    expect(zoom1.kind).toBe("data"); // identical to the previous raster — run 2
+    const zoom2 = await d.dispatch("zoom", { region: [0, 0, 32, 32] });
+    expect(zoom2.kind).toBe("refusal");
+    if (zoom2.kind === "refusal") {
+      expect(zoom2.refusal.error).toBe("screen_unchanged");
+      // Not registered: the last frame is still the first zoom's f-2.
+      expect(getComputerSession().latestFrame()?.frameId).toBe("f-2");
+    }
+  });
+
+  it("get_app_state{includeScreenshot} spam: the 3rd identical window capture is refused", async () => {
+    const d = makeDispatcher();
+    fakeCaptureQueue = [PNG_BASE, PNG_BASE, PNG_BASE];
+    const first = await d.dispatch("get_app_state", { appRef: { pid: 4242 }, includeScreenshot: true });
+    expect(first.kind).toBe("data");
+    const second = await d.dispatch("get_app_state", { appRef: { pid: 4242 }, includeScreenshot: true });
+    expect(second.kind).toBe("data");
+    const third = await d.dispatch("get_app_state", { appRef: { pid: 4242 }, includeScreenshot: true });
+    expect(third.kind).toBe("refusal");
+    if (third.kind === "refusal") expect(third.refusal.error).toBe("screen_unchanged");
+    // Only the two allowed captures registered frames.
+    expect(getComputerSession().latestFrame()?.frameId).toBe("f-2");
+  });
+});
+
+/* ── R69 (task 4-c-2): AUTO-OBSERVATION RECEIPTS ─────────────────────────────
+ * The #1 field failure: the model re-captured a screenshot after EVERY
+ * action to see what happened (5-25s per vision round-trip). Every mutating
+ * action receipt now carries the post-action observation — a fresh frame
+ * (provenance "observation"), screenChanged (aHash vs the pre-action frame),
+ * focusedElementName (the key tool's readback), and the frontmost app's
+ * title + titleChanged. Capture failure = {captureFailed:true}, never an
+ * action failure. returnState: default/"compact" IS this observation,
+ * "none" skips it, "full" keeps the UIA compose. Coordinate clicks upgrade
+ * targetVerificationStatus unverified → changed/unchanged; the hit-test's
+ * element name rides the receipt as hitElementName. */
+describe("R69 (4-c-2): AUTO-OBSERVATION RECEIPTS", () => {
+  it("OBSERVATION_SETTLE_MS is 600 and the dispatcher defaults to it (the pin)", () => {
+    expect(OBSERVATION_SETTLE_MS).toBe(600);
+    // A raw dispatcher (not the makeDispatcher-wrapped one) carries the
+    // production default; the suite's makeDispatcher zeroes it for speed.
+    const raw = new ComputerDispatcher({ backend: fakeBackend, run: fakeRun, root: tempRoot });
+    expect(raw.observationSettleMs).toBe(OBSERVATION_SETTLE_MS);
+  });
+
+  it("a sent action receipt carries the full observation: frame (provenance 'observation'), screenChanged, focusedElementName, activeApp, titleChanged", async () => {
+    const d = makeDispatcher();
+    fakeCaptureQueue = [PNG_BASE]; // the observation capture
+    fakeFocused = "File name:"; // the focused readback
+    const snap = await observe(d);
+    const result = await d.dispatch("left_click", { target: { type: "element", stateId: snap.stateId, index: 1 } });
+    expect(result.kind).toBe("receipt");
+    if (result.kind === "receipt") {
+      expect(result.receipt.actionSent).toBe(true);
+      expect(result.receipt.targetVerificationStatus).toBe("matched"); // element path keeps matched
+      const observation = result.receipt.observation;
+      expect(observation).toBeDefined();
+      expect(observation).toMatchObject({
+        frameId: "f-1",
+        focusedElementName: "File name:",
+        activeApp: { pid: 4242, title: "App" },
+        titleChanged: false,
+      });
+      // No pre-action frame existed → screenChanged honestly omitted.
+      expect((observation as { screenChanged?: boolean }).screenChanged).toBeUndefined();
+    }
+    // The frame is registered as an observation + raster-cached (zoomable).
+    expect(getComputerSession().getFrame("f-1")?.provenance).toBe("observation");
+    expect(d.rasterFor("f-1")).toBe(PNG_BASE);
+    expect(getComputerSession().latestFrame()?.frameId).toBe("f-1");
+  });
+
+  it("screenChanged TRUE (a real change) upgrades the coordinate click's status to 'changed'", async () => {
+    const d = makeDispatcher();
+    fakeDisplaySize = { width: 128, height: 128 };
+    fakeCaptureQueue = [PNG_BASE];
+    await screenshot(d); // the pre-action frame (f-1)
+    fakeCaptureQueue = [PNG_FAR]; // the screen changed after the action
+    const result = await d.dispatch("left_click", { target: { type: "coordinate", x: 96, y: 96 } });
+    expect(result.kind).toBe("receipt");
+    if (result.kind === "receipt") {
+      expect(result.receipt.observation).toMatchObject({ frameId: "f-2", screenChanged: true });
+      expect(result.receipt.targetVerificationStatus).toBe("changed");
+    }
+    expect(calls).toEqual(["rawClick:left:1:@96,96"]);
+  });
+
+  it("screenChanged FALSE (identical screen) upgrades the coordinate click's status to 'unchanged'", async () => {
+    const d = makeDispatcher();
+    fakeDisplaySize = { width: 128, height: 128 };
+    fakeCaptureQueue = [PNG_BASE, PNG_BASE];
+    await screenshot(d);
+    const result = await d.dispatch("left_click", { target: { type: "coordinate", x: 96, y: 96 } });
+    expect(result.kind).toBe("receipt");
+    if (result.kind === "receipt") {
+      expect(result.receipt.observation).toMatchObject({ frameId: "f-2", screenChanged: false });
+      expect(result.receipt.targetVerificationStatus).toBe("unchanged");
+    }
+  });
+
+  it("an unhashable observation (no comparable pre-state) leaves the coordinate status at 'unverified'", async () => {
+    const d = makeDispatcher();
+    await screenshot(d); // "fakepng" — unhashable
+    const result = await d.dispatch("left_click", { target: { type: "coordinate", x: 100, y: 200 } });
+    expect(result.kind).toBe("receipt");
+    if (result.kind === "receipt") {
+      // The observation still rides (frameId + activeApp) but screenChanged
+      // is honestly omitted, and no status upgrade happens on a guess.
+      expect(result.receipt.observation).toMatchObject({ frameId: "f-2" });
+      expect((result.receipt.observation as { screenChanged?: boolean }).screenChanged).toBeUndefined();
+      expect(result.receipt.targetVerificationStatus).toBe("unverified");
+    }
+  });
+
+  it("titleChanged TRUE: the frontmost title moved across the action", async () => {
+    const d = makeDispatcher();
+    fakeCaptureQueue = [PNG_BASE];
+    const snap = await observe(d);
+    // The element press flips the app's window title MID-ACTION (the
+    // pre-read saw "App", the post-observation sees "New Page — App").
+    fakeTitleFlipOnClick = true;
+    const result = await d.dispatch("left_click", { target: { type: "element", stateId: snap.stateId, index: 1 } });
+    expect(result.kind).toBe("receipt");
+    if (result.kind === "receipt") {
+      expect(result.receipt.observation).toMatchObject({
+        activeApp: { pid: 4242, title: "New Page — App" },
+        titleChanged: true,
+      });
+    }
+  });
+
+  it("capture failure → observation {captureFailed:true}; the ACTION receipt still succeeds", async () => {
+    const d = makeDispatcher();
+    const snap = await observe(d);
+    mode = "capture-fail"; // the observation's captureDisplay fails
+    const result = await d.dispatch("left_click", { target: { type: "element", stateId: snap.stateId, index: 1 } });
+    expect(result.kind).toBe("receipt");
+    if (result.kind === "receipt") {
+      expect(result.receipt.actionSent).toBe(true);
+      expect(result.receipt.observation).toEqual({ captureFailed: true });
+    }
+    expect(calls).toEqual(["press"]); // the click itself ran
+  });
+
+  it("returnState 'none' opts out entirely: no pre-title read, no capture, no observation field", async () => {
+    const d = makeDispatcher();
+    const snap = await observe(d);
+    const listCallsBefore = listAppsCalls;
+    fakeCaptureQueue = [PNG_BASE];
+    const result = await d.dispatch("left_click", {
+      target: { type: "element", stateId: snap.stateId, index: 1 },
+      returnState: "none",
+    });
+    expect(result.kind).toBe("receipt");
+    if (result.kind === "receipt") {
+      expect(result.receipt.actionSent).toBe(true);
+      expect(result.receipt.observation).toBeUndefined();
+    }
+    // No pre-title read happened (the listApps count is unchanged — the
+    // element click path never calls listApps) and no capture was consumed.
+    expect(listAppsCalls).toBe(listCallsBefore);
+    expect(fakeCaptureQueue).toEqual([PNG_BASE]);
+    expect(getComputerSession().latestFrame()).toBeUndefined();
+  });
+
+  it("wait() receipts report what changed while waiting (the same observation, no extra settle)", async () => {
+    const d = makeDispatcher();
+    fakeDisplaySize = { width: 128, height: 128 };
+    fakeCaptureQueue = [PNG_BASE];
+    await screenshot(d); // the pre-wait frame
+    fakeCaptureQueue = [PNG_FAR]; // the screen changed during the wait
+    fakeFocused = "Search";
+    const result = await d.dispatch("wait", { duration: 0 });
+    expect(result.kind).toBe("receipt");
+    if (result.kind === "receipt") {
+      expect(result.receipt.actionSent).toBe(false); // waiting sends nothing
+      expect(result.receipt.observation).toMatchObject({
+        frameId: "f-2",
+        screenChanged: true,
+        focusedElementName: "Search",
+        activeApp: { pid: 4242, title: "App" },
+        titleChanged: false,
+      });
+    }
+    expect(getComputerSession().getFrame("f-2")?.provenance).toBe("observation");
+  });
+
+  it("the key tool's receipt keeps its own focused readback AND gains the observation", async () => {
+    const d = makeDispatcher();
+    fakeFocused = "File name:";
+    fakeCaptureQueue = [PNG_BASE];
+    const result = await d.dispatch("key", { text: "tab", appRef: { pid: 4242 } });
+    expect(result.kind).toBe("receipt");
+    if (result.kind === "receipt") {
+      expect((result.receipt as Receipt & { focused?: string }).focused).toBe("File name:");
+      expect(result.receipt.observation).toMatchObject({ frameId: "f-1", focusedElementName: "File name:" });
+    }
+    expect(calls).toEqual(["rawKey"]);
+  });
+
+  it("REFUSED actions carry no observation (nothing happened)", async () => {
+    const d = makeDispatcher();
+    const result = await d.dispatch("left_click", { target: { type: "element", stateId: "s-nope", index: 1 } });
+    expect(result.kind).toBe("refusal");
+    // The pre-title read happened (the dispatch tried) but no observation
+    // attached and no frame was registered.
+    expect(getComputerSession().latestFrame()).toBeUndefined();
+    expect(fakeCaptureQueue).toEqual([]);
+  });
+
+  it("the observation is journaled with the receipt (the audit line matches what the model got)", async () => {
+    const d = makeDispatcher();
+    fakeCaptureQueue = [PNG_BASE];
+    const snap = await observe(d);
+    await d.dispatch("left_click", { target: { type: "element", stateId: snap.stateId, index: 1 } });
+    const journal = readFileSync(auditPath(tempRoot), "utf8").trim().split("\n");
+    const clicked = JSON.parse(journal[journal.length - 1]);
+    expect(clicked.tool).toBe("left_click");
+    expect(clicked.outcome.receipt.observation.frameId).toBe("f-1");
+    expect(clicked.outcome.receipt.observation.activeApp).toEqual({ pid: 4242, title: "App" });
+  });
+});
+
+/* ── R69 (task 4-c-2, D5): ELEMENT middle/right click routing ──────────────── */
+describe("R69 (4-c-2): element middle_click + menu-less right_click route raw at the element center", () => {
+  it("middle_click on an ELEMENT target → raw middle click at the element CENTER (the old fail-closed is gone)", async () => {
+    const d = makeDispatcher();
+    fakeCaptureQueue = [PNG_BASE];
+    const snap = await observe(d);
+    const result = await d.dispatch("middle_click", { target: { type: "element", stateId: snap.stateId, index: 1 } });
+    expect(result.kind).toBe("receipt");
+    // Element 1 (Save): bounds [100,200,80,30] → center (140,215).
+    expect(calls).toEqual(["rawClick:middle:1:@140,215"]);
+    if (result.kind === "receipt") {
+      expect(result.receipt.actionSent).toBe(true);
+      expect(result.receipt.hitElementName).toBe("Save");
+      expect(result.receipt.observation).toBeDefined();
+    }
+  });
+
+  it("double_click / triple_click on ELEMENT targets STILL fail closed (no center-click semantics to map)", async () => {
+    const d = makeDispatcher();
+    const snap = await observe(d);
+    const dbl = await d.dispatch("double_click", { target: { type: "element", stateId: snap.stateId, index: 1 } });
+    expect(dbl.kind).toBe("refusal");
+    if (dbl.kind === "refusal") {
+      expect(dbl.refusal.error).toBe("capability_fail_closed");
+      expect(dbl.refusal.message).toContain("no accessibility equivalent");
+    }
+    const tri = await d.dispatch("triple_click", { target: { type: "element", stateId: snap.stateId, index: 1 } });
+    expect(tri.kind).toBe("refusal");
+  });
+
+  it("middle_click on an element WITHOUT bounds still fails closed honestly", async () => {
+    const d = makeDispatcher();
+    // A private element table with bounds stripped (never mutate the shared
+    // ELEMENTS fixture — the compact buildSnapshot hands the array itself
+    // to the session, so a session-side mutation would leak across tests).
+    fakeElements = ELEMENTS.map((e) => ({ ...e }));
+    delete fakeElements[1]!.bounds;
+    const snap = await observe(d);
+    const result = await d.dispatch("middle_click", { target: { type: "element", stateId: snap.stateId, index: 1 } });
+    expect(result.kind).toBe("refusal");
+    if (result.kind === "refusal") {
+      expect(result.refusal.error).toBe("capability_fail_closed");
+      expect(result.refusal.message).toContain("no bounds");
+    }
+  });
+
+  it("right_click element WITHOUT has_menu + strategy 'event' also routes raw (the old event-Expand oddity is gone)", async () => {
+    const d = makeDispatcher();
+    const snap = await observe(d);
+    const result = await d.dispatch("right_click", {
+      target: { type: "element", stateId: snap.stateId, index: 1 },
+      strategy: "event",
+    });
+    expect(result.kind).toBe("receipt");
+    expect(calls).toEqual(["rawClick:right:1:@140,215"]); // NOT performAction
+  });
+});
+
+/* ── R69 (task 4-c-2, D3): hitElementName from the coordinate-click hit-test ── */
+describe("R69 (4-c-2): the discarded hit-test now rides the receipt as hitElementName", () => {
+  it("left_click coordinate: the hit element's name lands on the receipt", async () => {
+    const d = makeDispatcher();
+    fakeDisplaySize = { width: 128, height: 128 };
+    fakeCaptureQueue = [PNG_BASE, PNG_BASE];
+    await screenshot(d);
+    fakeHit = { kind: "button", name: "Sign in", actionable: true };
+    const result = await d.dispatch("left_click", { target: { type: "coordinate", x: 96, y: 96 } });
+    expect(result.kind).toBe("receipt");
+    if (result.kind === "receipt") {
+      expect(result.receipt.hitElementName).toBe("Sign in");
+    }
+    expect(calls).toEqual(["rawClick:left:1:@96,96"]);
+  });
+
+  it("right_click coordinate: the hit-test result (miss or hit) is never wasted; a hit name lands on the receipt", async () => {
+    const d = makeDispatcher();
+    fakeDisplaySize = { width: 128, height: 128 };
+    fakeCaptureQueue = [PNG_BASE, PNG_BASE];
+    await screenshot(d);
+    fakeHit = { kind: "edit", name: "Search", actionable: true };
+    const result = await d.dispatch("right_click", { target: { type: "coordinate", x: 96, y: 96 } });
+    expect(result.kind).toBe("receipt");
+    if (result.kind === "receipt") {
+      expect(result.receipt.hitElementName).toBe("Search");
+    }
+    expect(calls).toEqual(["rawClick:right:1:@96,96"]);
+  });
+
+  it("a hit-test MISS leaves the receipt without hitElementName (never fabricated)", async () => {
+    const d = makeDispatcher();
+    fakeDisplaySize = { width: 128, height: 128 };
+    fakeCaptureQueue = [PNG_BASE, PNG_BASE];
+    await screenshot(d);
+    fakeHit = null;
+    const result = await d.dispatch("left_click", { target: { type: "coordinate", x: 96, y: 96 } });
+    expect(result.kind).toBe("receipt");
+    if (result.kind === "receipt") {
+      expect(result.receipt.hitElementName).toBeUndefined();
+    }
   });
 });
