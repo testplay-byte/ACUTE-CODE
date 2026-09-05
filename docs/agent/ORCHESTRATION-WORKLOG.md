@@ -2142,3 +2142,20 @@ Stage Summary:
   (Edge + find_elements + the top-center mini window + a REAL bot wall +
   the page actions in WebView2) — the checklists live in
   docs/runbooks/COMPUTER-USE.md + EMBEDDED-BROWSER.md.
+
+### Close-out addendum (same session, later)
+
+The close-out itself flaked twice more — honestly recorded: the docs
+commit e9848a6 went RED with a THIRD failure mode (all 1771 in-run tests
+green, but an unhandled `ReferenceError: document is not defined` from
+popover-webview-guard's 80ms debounce firing after a test file's
+environment tore down — AppShell installs the watcher on mount, a
+finishing suite leaves the pending timer alive). Fixed in bfb0925 (the
+check guards for a gone environment — inert in the real app; the test
+reset also disconnects the observer); round-66.md addendum 2 + CHANGELOG
+carry the root cause. FINAL STATE: tip bfb0925, CI run 33954258163 GREEN
+(watched to conclusion), tag v0.66.0 stays on 96cf8f6 (the release is
+functionally identical — the follow-ups are docs + test-infra only),
+DASHBOARD ciNote re-synced to the final run. The three flakes were all
+the same CLASS: tests whose timing assumptions survive the Linux sandbox
+but not a loaded Windows runner — the round's honest lesson.
