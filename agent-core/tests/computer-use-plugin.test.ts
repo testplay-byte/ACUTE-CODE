@@ -146,7 +146,13 @@ describe("ROUND-61 (R61): the settings gates", () => {
 });
 
 describe("ROUND-61 (R61): tool output shapes + the monitor + vision wiring", () => {
-  it("a read tool returns {ok:true, output:JSON} with the data envelope", async () => {
+  // NOTE — the 30s timeouts on the execute() tests below: on the WINDOWS CI
+  // runner these dispatch REAL OS probes (the Add-Type csc compile alone is
+  // multi-second cold — R64's shared preamble, plus the EnumWindows walk).
+  // The R66 push went red because list_apps crossed vitest's default 5s on
+  // a slow runner; the Linux sandbox never sees it (headless → empty, fast).
+  // These are contract tests of the output SHAPE — the real work may be slow.
+  it("a read tool returns {ok:true, output:JSON} with the data envelope", { timeout: 30_000 }, async () => {
     setComputerUseSettings(db, { enabled: true, permission: "observe" });
     const tools = await computerUsePlugin.createTools({ root: tempDir, toolDeps: makeDeps({ emit: (e) => emitLog.push(e) }) });
     const listApps = tools.find((t) => t.name === "list_apps")!;
@@ -170,7 +176,7 @@ describe("ROUND-61 (R61): tool output shapes + the monitor + vision wiring", () 
     expect(parsed.recovery).toContain("get_app_state");
   });
 
-  it("screenshot with describe:true + vision OFF → raster metadata + the honest vision-disabled note", async () => {
+  it("screenshot with describe:true + vision OFF → raster metadata + the honest vision-disabled note", { timeout: 30_000 }, async () => {
     setComputerUseSettings(db, { enabled: true, permission: "act" });
     const tools = await computerUsePlugin.createTools({ root: tempDir, toolDeps: makeDeps() });
     const shot = tools.find((t) => t.name === "screenshot")!;
@@ -182,7 +188,7 @@ describe("ROUND-61 (R61): tool output shapes + the monitor + vision wiring", () 
     expect(() => JSON.parse(result.output)).not.toThrow();
   });
 
-  it("screenshot with describe:true + SEPARATE vision configured → the relay's text rides the output", async () => {
+  it("screenshot with describe:true + SEPARATE vision configured → the relay's text rides the output", { timeout: 30_000 }, async () => {
     setComputerUseSettings(db, { enabled: true, permission: "act" });
     // R66: the vision configuration is GLOBAL now (vision.* keys), not part
     // of the computer-use settings block.
@@ -210,7 +216,7 @@ describe("ROUND-61 (R61): the consent gate (ask-mode risk classes)", () => {
     expect(parsed.message).toContain("declined");
   });
 
-  it("in AUTO posture: no consent prompt — the dispatcher runs (and refuses for real reasons)", async () => {
+  it("in AUTO posture: no consent prompt — the dispatcher runs (and refuses for real reasons)", { timeout: 30_000 }, async () => {
     setComputerUseSettings(db, { enabled: true, permission: "auto" });
     const tools = await computerUsePlugin.createTools({ root: tempDir, toolDeps: makeDeps() });
     const type = tools.find((t) => t.name === "type")!;

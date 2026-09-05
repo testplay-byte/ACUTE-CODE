@@ -38,21 +38,32 @@ beforeEach(() => {
 
 describe("BrowserCheckpointCard (ROUND-66 A4)", () => {
   it("renders the waiting state: kind title, URL, live countdown, progress bar, BOTH controls", async () => {
-    const cp = checkpointFixture();
-    renderCard(cp);
-    // The owner's exact naming ask: "captcha verification is needed".
-    expect(screen.getByText("CAPTCHA verification needed")).toBeTruthy();
-    expect(screen.getByText("https://example.com/login")).toBeTruthy();
-    expect(screen.getByTestId("browser-checkpoint-countdown").textContent).toMatch(/^0:1[0-5]$/);
-    expect(screen.getByRole("progressbar", { name: /time remaining/i })).toBeTruthy();
-    expect(screen.getByTestId("browser-checkpoint-done").textContent).toContain("Mark as done");
-    expect(screen.getByTestId("browser-checkpoint-stop").textContent).toContain("Stop waiting");
-    // The countdown ticks down (100ms interval → the seconds shrink).
-    const first = screen.getByTestId("browser-checkpoint-countdown").textContent ?? "";
-    await waitFor(() => {
+    // The tick is FAKED-deterministic: the R66 Windows-CI flake was the 1s
+    // SECOND-boundary flip racing waitFor's default 1s budget (the display
+    // can only change after a full wall second — a loaded runner loses that
+    // race). Freeze the clock, advance it, assert the exact flip.
+    vi.useFakeTimers();
+    try {
+      const cp = checkpointFixture();
+      renderCard(cp);
+      // The owner's exact naming ask: "captcha verification is needed".
+      expect(screen.getByText("CAPTCHA verification needed")).toBeTruthy();
+      expect(screen.getByText("https://example.com/login")).toBeTruthy();
+      expect(screen.getByTestId("browser-checkpoint-countdown").textContent).toMatch(/^0:1[0-5]$/);
+      expect(screen.getByRole("progressbar", { name: /time remaining/i })).toBeTruthy();
+      expect(screen.getByTestId("browser-checkpoint-done").textContent).toContain("Mark as done");
+      expect(screen.getByTestId("browser-checkpoint-stop").textContent).toContain("Stop waiting");
+      // The countdown ticks down (100ms interval → the seconds shrink).
+      const first = screen.getByTestId("browser-checkpoint-countdown").textContent ?? "";
+      act(() => {
+        vi.advanceTimersByTime(1_100);
+      });
       const now = screen.getByTestId("browser-checkpoint-countdown").textContent ?? "";
       expect(now).not.toBe(first);
-    });
+      expect(now).toBe("0:14"); // 15.0s frozen start − 1.1s advanced, ceil → 14
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("titles the wall classes honestly (cloudflare / age / generic)", () => {
