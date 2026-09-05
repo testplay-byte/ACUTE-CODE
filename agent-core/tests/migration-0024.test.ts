@@ -72,7 +72,13 @@ describe("migration 0024 (usage_events key_slot)", () => {
     again.close();
   });
 
-  it("re-applies verbatim on a pre-0024 database (dropped column + index) and is idempotent on reopen", () => {
+  // R67 CI-stability: this test runs 26 real migrations TWICE (a fresh
+  // fully-migrated open, then the downgrade + a second open) — on the loaded
+  // Windows CI runner the whole file measured 8.3s with THIS test at 6.3s,
+  // over vitest's 5s default (run 33965926186; the Linux sandbox finishes in
+  // ~0.4s). Explicit 30s timeout — the same deterministic fix the R66
+  // close-out applied to the real-OS-probe tests.
+  it("re-applies verbatim on a pre-0024 database (dropped column + index) and is idempotent on reopen", { timeout: 30_000 }, () => {
     const path = join(tempDir, `m0024-rt-${randomUUID()}.db`);
     // Start from a fully-migrated database, then simulate the pre-0024 world:
     // strip the column, the index, the bookkeeping row, and the audit row.
