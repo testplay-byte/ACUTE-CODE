@@ -17,8 +17,12 @@ export const todoPlugin: PluginDefinition = {
     return [
       {
         name: "todo_write",
+        // ROUND-70 (R70-a): Codex + Claude Code's high-leverage todo guidance
+        // (skip trivial tasks, no single-step plans, in_progress BEFORE
+        // starting, update after each sub-task) — the snapshot semantics are
+        // UNCHANGED, only the description teaches the discipline.
         description:
-          "Write the FULL todo list for the current task (snapshot, not a delta). Use for multi-step tasks to track progress. Each item: {content, status: 'pending'|'in_progress'|'completed'}. Provide ALL items every time.",
+          "Write the FULL todo list for the current task (whole-list snapshot, not a delta — provide ALL items every time; one call per update). Use it for genuinely multi-step work: SKIP the todo list for trivial tasks you can finish in one or two steps, and do NOT create single-item plans — a plan needs at least 2 steps or it is not a plan. Write the todos BEFORE starting the work. Mark exactly one item in_progress BEFORE beginning it, and update the list IMMEDIATELY after completing each sub-task (never batch completions). The todo list is your progress contract: when every item is completed and verified, you may finish the task. Each item: {content, status: 'pending'|'in_progress'|'completed'}.",
         inputSchema: jsonSchema({
           type: "object",
           properties: {

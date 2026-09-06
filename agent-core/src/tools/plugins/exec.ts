@@ -93,16 +93,24 @@ export const execPlugin: PluginDefinition = {
                 (status.exitCode !== null ? `, launcher exit code ${status.exitCode}` : ""),
             ];
             if (status.logFile !== null) lines.push(`log file: ${status.logFile}`);
-            if (status.outputTail.trim() !== "") {
+            const hasLiveOutput = status.outputTail.trim() !== "";
+            const hasLogOutput = (status.logTail ?? "").trim() !== "";
+            if (hasLiveOutput) {
               lines.push("recent output:");
               lines.push(status.outputTail.trim().split("\n").slice(-12).join("\n"));
             }
-            if (status.logTail !== null && status.logTail.trim() !== "") {
+            if (hasLogOutput) {
               lines.push(`log tail (${status.logFile}):`);
-              lines.push(status.logTail.trim().split("\n").slice(-12).join("\n"));
+              lines.push((status.logTail ?? "").trim().split("\n").slice(-12).join("\n"));
             }
-            if (status.outputTail.trim() === "" && status.logTail === null) {
-              lines.push("(no output captured — the process may write only to its log file or produce nothing)");
+            // ROUND-70 (R70-a, D4): no output AT ALL must say so explicitly —
+            // including the previously-missed case of an EXISTING but empty
+            // log file (logTail === "" — the old `=== null` check skipped the
+            // note and the result showed neither output nor explanation).
+            if (!hasLiveOutput && !hasLogOutput) {
+              lines.push(
+                "(no output captured yet — the process may still be starting, may write only to its log file, or may genuinely produce nothing)",
+              );
             }
             if (!status.alive && status.status === "exited") {
               lines.push("The background process appears to have EXITED — check the output/log above for why (a crash, a port conflict, a missing dependency) before doing anything else.");

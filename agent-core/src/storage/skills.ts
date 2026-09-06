@@ -9,6 +9,13 @@
  * so a user EDIT persists; deletion of built-ins is REFUSED with a note —
  * disable instead, which hides the prompt line + the read_skill listing).
  * User skills: full CRUD.
+ *
+ * ROUND-70 (R70-b, D2): the built-in family grew from one (computer-use)
+ * to EIGHT — code-review, debugging, testing, git-workflow, web-research,
+ * project-init, browser-use (R70-B recommendation #4). Same seeding
+ * contract, one fixed id each. File-based skills (R70-b D1) merge with
+ * these at the RESOLUTION layer — storage/skills-files.ts (DB rows shadow
+ * same-name files; the DB stays the editable source of truth).
  */
 import type { SqliteDatabase } from "./db.js";
 
@@ -139,6 +146,164 @@ Main-agent only. Never delegate Computer Use to a subagent (subagents lack the s
 - Outward-facing sends are publishing — confirm unless told to proceed.
 - Report outcomes faithfully; UI truth is not world truth.`;
 
+/* ── ROUND-70 (R70-b, D2): the SEVEN new built-ins ───────────────────────────
+ *
+ * R70-B recommendation #4 — the agent's expanded brain, shipped as seeded
+ * DB content (same INSERT OR IGNORE pattern as computer-use: one fixed id
+ * per skill, user edits persist, deletion refused, disable hides). Bodies
+ * 800–2,200 chars, Claude-skill style: terse, high-signal, imperative —
+ * these are instructions the model will FOLLOW, not documentation it will
+ * skim. The SKILLS prompt line carries only the description; the body
+ * loads on demand via read_skill (progressive disclosure).
+ *
+ * `browser-use` deliberately COMPACTS the prompt's browser-panel teaching
+ * into a loadable module (R70-c will trim the prompt section to essentials
+ * and point here) — the body stays self-contained. `project-init` writes
+ * AGENTS.md (R70-c makes the file auto-loadable; this skill creates it). */
+
+export const CODE_REVIEW_SKILL_BODY = `# Skill: code-review
+
+Review the CHANGE, not the whole repo. Scope to what the diff touches.
+
+## Method
+1. Read the diff first: git_diff (the touched paths). No diff to review = say so and stop.
+2. Read enough surrounding code (read_file on the touched files) to judge the change in context — a hunk that looks right can break its caller.
+3. Walk the checklist, then report.
+
+## Checklist
+- Correctness: error paths, nil/undefined returns, off-by-one, empty collections, unicode, timezone, rounding.
+- Boundary conditions: inputs at min/max/empty/0/NULL; repeated or concurrent calls; what happens when the callee fails.
+- Security: injection (SQL, command, path traversal), secrets in code or logs, auth checks on new routes, untrusted deserialization.
+- API misuse: wrong types, stale contracts, breaking renames, missing migrations.
+- Tests: do existing tests cover the changed behavior? Which case is now wrong?
+
+## Report
+Findings FIRST, ordered **critical** (correctness/security) > **bug** > **risk** (works but fragile) > **style** (only when it hides a bug).
+Each finding: path:line + what is wrong + the concrete fix (a sentence or a snippet).
+No praise. No restating what the diff obviously does.
+End with a one-line verdict: approve / approve with N fixes / request changes.
+If nothing is wrong, say exactly that and list the strongest check you ran.`;
+
+export const DEBUGGING_SKILL_BODY = `# Skill: debugging
+
+Fix the cause, never the symptom. Never "fix" a failure you cannot reproduce.
+
+## Method
+1. REPRODUCE. Run the failing case. No reproduction = no fix — report what you know and what you still need.
+2. READ THE ERROR FULLY before reacting. The message names the file, the line, and usually the wrong value — half of all bugs die here. Do not skim; do not chase a different bug than the one reported.
+3. ISOLATE. Narrow to the smallest input and the first wrong line:
+   - git_log + git_diff the touched files — what changed recently?
+   - Comment out or stub suspects; re-run after each cut.
+   - search_code for the failing symbol — find where the bad value originates.
+4. LOCATE the root cause. Trace the wrong value upstream to its source, then state it in one sentence: "X is null because Y only runs on the first mount."
+5. FIX the root cause with a minimal change in the style of the surrounding code.
+6. VERIFY: re-run the exact failing case, then the adjacent tests for that area.
+7. GUARD: add a regression test that fails without the fix and passes with it.
+
+## Discipline
+- One hypothesis at a time: change one thing, re-run, observe.
+- When two fixes both "work", prefer the one that also explains the error message.
+- If you cannot locate the cause in a small number of steps, STOP and report what you ruled out — a pile of speculative edits is damage, not progress.`;
+
+export const TESTING_SKILL_BODY = `# Skill: testing
+
+A change is not done until its tests run and pass.
+
+## Discipline
+- Behavior spec'd but unwritten → write the failing test FIRST; watch it fail for the right reason; then implement.
+- One behavior per test. A test that can fail for three different reasons explains none of them.
+- Assert the error path, not only the happy path: the thrown message, the rejected promise, the empty result. A test that never fails proves nothing about failure.
+- Run the affected suite after EVERY edit, not once at the end.
+- NEVER weaken an assertion, delete a test, or widen a tolerance to make a suite green. A red test is information — making it green without understanding it is lying.
+- A flaky test is a bug: isolate it (repeat, reduce, check time/random/order dependencies) or report it; never silently skip it.
+
+## Commands
+Find the project's REAL commands before inventing any: AGENTS.md, package.json scripts, the repo's CI config. Run the narrowest suite covering your change first (a file or a -t filter), the full affected package before claiming done. If no test setup exists, say so and propose one instead of pretending.`;
+
+export const GIT_WORKFLOW_SKILL_BODY = `# Skill: git-workflow
+
+The working tree belongs to the USER. Read-only by default.
+
+## Rules
+- Commit ONLY when the user asks. A finished task needs no commit — say what is uncommitted instead.
+- NEVER revert, overwrite, or discard the user's uncommitted changes. NEVER git reset --hard, NEVER checkout -- over a modified file, NEVER git clean.
+- If the worktree holds changes you did not make, STOP and report them before touching anything — a surprise in the tree is a signal, not noise.
+- Stage related files explicitly: git add <path> ... . NEVER git add -A / git add . unless asked — commit exactly what the task changed.
+- Before editing: git_status + git_diff to know what is already dirty.
+
+## Commits (when asked)
+- Conventional commits: type(scope): summary — feat/fix/refactor/test/docs/chore; imperative subject <= 72 chars, no trailing period.
+- The body answers WHY (the what is in the diff). Reference the issue/PR when one exists.
+- Verify the staged set (git diff --cached) BEFORE committing: the task's changes and nothing else.
+
+## Branches & PRs
+- Risky or experimental work: create a descriptive kebab-case branch first, when asked.
+- PR description = WHAT changed + WHY + HOW IT WAS TESTED, three short paragraphs.
+- Never amend, rebase, or force-push a branch you do not own.`;
+
+export const WEB_RESEARCH_SKILL_BODY = `# Skill: web-research
+
+Research ends in a DECISION, not a link dump.
+
+## Method
+1. SEARCH first (web_search) — 2-3 precise queries with the exact technical nouns, before fetching anything.
+2. FETCH the 2-3 most authoritative hits (web_fetch). Prefer primary sources in this order: official docs / the project's source / the spec or RFC, then release notes and maintainer answers, then blog posts last (a blog may restate an old version).
+3. When it matters (a version number, a breaking change, a security note), cross-check the claim across TWO independent sources.
+4. Note the version AND date of what you read ("React 19 docs, updated 2025") — a right answer for the wrong version is still wrong.
+5. SYNTHESIZE: the direct answer first, the evidence under it (one line per source, URL inline), then the open questions.
+
+## Discipline
+- Prefer documentation hosts (github.com, npmjs.com, MDN, nodejs.org) — they fetch freely.
+- If sources disagree, say so and name the disagreement — never average two answers into a wrong one.
+- Dated info: say when the newest source is old ("latest post is 2023 — this may have changed").
+- Never invent a URL. Cite only what you actually fetched.`;
+
+export const PROJECT_INIT_SKILL_BODY = `# Skill: project-init
+
+Write the project's AGENTS.md — the convention file coding agents auto-load at session start. Goal: a fresh agent works in this repo correctly on turn one.
+
+## Analyze first
+1. list_dir the root. Read the README, the manifests (package.json / pyproject.toml / Cargo.toml / go.mod — whatever exists), and the CI config (.github/workflows, .gitlab-ci.yml).
+2. Sample 5-10 real source files (the largest and most central, not config). Note the ACTUAL conventions: quote style, naming, error handling, where tests live, import order.
+3. Run index_project; skim the summary for the package structure.
+
+## Write AGENTS.md (<= 150 lines)
+Terse sections:
+- **What this is** — 2-3 sentences from the README, in your own words.
+- **Stack** — languages, frameworks, package manager, key versions.
+- **Commands** — setup, dev, build, test, lint, typecheck. ONLY commands you verified or copied from scripts/CI; mark unverified ones.
+- **Conventions** — the rules a patch must follow (style, naming, test placement, commit style if evident).
+- **Directory map** — one line per top-level directory.
+- **Gotchas** — the traps you hit or can see (codegen, quirky build steps, platform notes, "don't edit X, it is generated").
+
+## Rules
+- Write only what you OBSERVED, never what a typical project of this type would have — a wrong command is worse than a missing one.
+- write_file the result at the repo root, then report what you included and what you skipped.`;
+
+export const BROWSER_USE_SKILL_BODY = `# Skill: browser-use
+
+The embedded browser panel (browser_control) — a real webview the user watches live. It is NOT the user's desktop: never narrate panel actions as machine actions.
+
+## Core loop
+1. navigate to the absolute http(s) URL. Omit sessionId → it drives THIS session's own tab (auto-opened in the panel).
+2. read_dom — the structured page outline (headings, links, buttons, inputs, forms with short selectors). This is how you know the page; screenshots only for layout/visual questions.
+3. Act on DOM IDENTITY, never pixel coordinates: click by the returned selector or visible text; type into the returned selector.
+4. VERIFY with get_state (currentUrl, title, canBack/canForward) — the navigation you expected, not the one you hoped for; read (fresh server text) or read_dom when the check must be about content.
+
+## Forms
+- Submit deliberately: type {selector, submit:true}, or press_key Enter (native form submission), or click the submit button by text. Typing alone never submits.
+- Never eval a manual form click when the submit path above exists.
+
+## Bot walls (CAPTCHA / Cloudflare / age gates)
+- A result warning of a verification wall → STOP retrying. Call wait_for_verification: the user gets a countdown card, solves the wall in the panel, marks it done; you receive the honest re-probe result.
+- Never hammer a walled page; never attempt to solve a CAPTCHA yourself.
+
+## Discipline
+- read = fresh server-side text; read_dom/click/type/eval = the LIVE page. They can disagree (logins, JS) — say which you used.
+- eval runs as a function body in the page — end with return; use it only when read_dom/read/source cannot answer.
+- Announce viewport changes (set_viewport) in one line — the user sees the panel live.
+- source for the page's html/css/js; screenshot only when pixels are the question.`;
+
 const BUILTIN_SKILLS: ReadonlyArray<Pick<SkillRecord, "id" | "name" | "description" | "body" | "source" | "sortOrder">> = [
   {
     id: COMPUTER_USE_SKILL_ID,
@@ -148,6 +313,69 @@ const BUILTIN_SKILLS: ReadonlyArray<Pick<SkillRecord, "id" | "name" | "descripti
     body: COMPUTER_USE_SKILL_BODY,
     source: "builtin",
     sortOrder: 0,
+  },
+  {
+    id: "skill_builtin_code_review",
+    name: "code-review",
+    description:
+      "Review code changes for defects and risks: read the diff first, findings ordered critical/bug/risk/style each with path:line and a concrete fix, no praise, end with a verdict.",
+    body: CODE_REVIEW_SKILL_BODY,
+    source: "builtin",
+    sortOrder: 1,
+  },
+  {
+    id: "skill_builtin_debugging",
+    name: "debugging",
+    description:
+      "Systematic defect fixing: reproduce, read the actual error fully, isolate (git bisect/comment-out), locate the root cause, fix it not the symptom, verify, guard with a regression test.",
+    body: DEBUGGING_SKILL_BODY,
+    source: "builtin",
+    sortOrder: 2,
+  },
+  {
+    id: "skill_builtin_testing",
+    name: "testing",
+    description:
+      "Testing discipline: test-first when behavior is spec'd, run the affected suite after every edit, one behavior per test, assert errors not just the happy path, never weaken an assertion.",
+    body: TESTING_SKILL_BODY,
+    source: "builtin",
+    sortOrder: 3,
+  },
+  {
+    id: "skill_builtin_git_workflow",
+    name: "git-workflow",
+    description:
+      "Safe git habits: read-only by default, commit only when asked, conventional commits, stage related files explicitly (never add -A), never revert or hard-reset user changes, branch before risky work.",
+    body: GIT_WORKFLOW_SKILL_BODY,
+    source: "builtin",
+    sortOrder: 4,
+  },
+  {
+    id: "skill_builtin_web_research",
+    name: "web-research",
+    description:
+      "Research with sources: web_search first, fetch the 2-3 most authoritative results, prefer primary docs over blog restatements, cite URLs inline, synthesize a decision not a link dump.",
+    body: WEB_RESEARCH_SKILL_BODY,
+    source: "builtin",
+    sortOrder: 5,
+  },
+  {
+    id: "skill_builtin_project_init",
+    name: "project-init",
+    description:
+      "The /init skill: analyze the codebase (manifests, CI, sample sources) and write the repo's AGENTS.md — what it is, stack, verified setup/build/test/lint commands, conventions, directory map, gotchas; <= 150 lines.",
+    body: PROJECT_INIT_SKILL_BODY,
+    source: "builtin",
+    sortOrder: 6,
+  },
+  {
+    id: "skill_builtin_browser_use",
+    name: "browser-use",
+    description:
+      "Drive the embedded browser panel: read_dom for interactive elements, click/type by DOM selector (never coordinates), submit forms with submit:true or Enter, the bot-wall wait_for_verification protocol, verify with get_state.",
+    body: BROWSER_USE_SKILL_BODY,
+    source: "builtin",
+    sortOrder: 7,
   },
 ];
 
@@ -199,7 +427,9 @@ export interface SkillInput {
   sortOrder?: number;
 }
 
-const NAME_RE = /^[a-z0-9][a-z0-9-]{1,63}$/;
+/** Tool-name grammar reused for skill names: a lowercase slug. Exported
+ * for skills-files.ts (file-based skill validation shares the contract). */
+export const NAME_RE = /^[a-z0-9][a-z0-9-]{1,63}$/;
 
 export function createSkill(db: SqliteDatabase, input: SkillInput): SkillRecord {
   const name = input.name.trim();

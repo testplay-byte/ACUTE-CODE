@@ -37,10 +37,14 @@ function tempRoot(): string {
   return mkdtempSync(join(tmpdir(), "acute-preg-"));
 }
 
-/** The maximal ctx — every tool, digest, index, mode, rules: ALL 20 sections
+/** The maximal ctx — every tool, digest, index, mode, rules: ALL sections
  * (every conditional gate open) so the composition pin sees every id. The
  * rootPath is the golden's FIXED path (never exists on disk → no overrides
- * load, and the identity/environment lines match the fixture byte-for-byte). */
+ * load, and the identity/environment lines match the fixture byte-for-byte).
+ * ROUND-70 (R70-c): environment + maxOuterLoops are pinned to FIXED values
+ * (the OS-aware TERMINAL branch and the outer-iteration line are part of
+ * the golden now); the R61→R68 sections efficiency/task-planning/
+ * todo-tracking are GONE (consolidated into agentic-loop). */
 const GOLDEN_ROOT = "/tmp/acute-r61-golden-root";
 const FULL_CTX = {
   projectName: "GoldenProject",
@@ -51,6 +55,15 @@ const FULL_CTX = {
   toolNames: [...TOOL_NAMES, "mcp__demo__echo"],
   customRules: "Always write tests first.",
   maxTurns: 37,
+  maxOuterLoops: 5,
+  environment: {
+    osPlatform: "Linux",
+    osRelease: "6.5.0-r70c",
+    shell: "/bin/sh",
+    currentDate: "2026-06-11 (Thursday)",
+    gitBranch: "main",
+    gitDirty: true,
+  },
   indexSummary: {
     projectId: "proj_golden",
     totalFiles: 3,
@@ -104,8 +117,14 @@ describe("PROMPT_REGISTRY (R59-F)", () => {
     expect(PROMPT_SECTION_IDS[0]).toBe("identity");
     expect(PROMPT_SECTION_IDS[PROMPT_SECTION_IDS.length - 1]).toBe("custom-rules");
     expect(PROMPT_SECTION_IDS).toContain("tool-use");
-    expect(PROMPT_SECTION_IDS).toContain("efficiency");
+    expect(PROMPT_SECTION_IDS).toContain("agentic-loop");
     expect(PROMPT_SECTION_IDS).toContain("project-memory");
+    // R70-c (D2): the consolidated sections are RETIRED — the removal pin
+    // (a stale entry can't linger; .acute/prompts/<id>.md for them is now an
+    // unknown-file diagnostic, not an override).
+    expect(PROMPT_SECTION_IDS).not.toContain("efficiency");
+    expect(PROMPT_SECTION_IDS).not.toContain("task-planning");
+    expect(PROMPT_SECTION_IDS).not.toContain("todo-tracking");
   });
 
   it("COMPLETENESS: the ids stamped by buildTaggedPromptLines are exactly the registry ids, in registry order", () => {
@@ -135,8 +154,15 @@ describe("PROMPT_REGISTRY (R59-F)", () => {
     // lines and the auto-activation teaching; additions-only except the
     // frontmost_pid_mismatch refusal parenthetical and the raw-input line,
     // both updated to the auto-activation truth).
-    // If this fails after a deliberate prompts.ts change, regenerate
-    // deliberately and say so in the round log.
+    // Regenerated AGAIN in R70-c (deliberately — the prompt round: env
+    // grounding + the four-section consolidation (efficiency/task-planning/
+    // todo-tracking REMOVED, agentic-loop rewritten as the five-phase loop),
+    // AGENTS.md custom-rules narration, the file-editing/communication
+    // upgrades, the browser-panel/computer-use trims + read_skill pointers,
+    // and the skills reload line). EVERY dynamic field pinned to FIXED
+    // values in FULL_CTX (incl. environment). If this fails after a
+    // deliberate prompts.ts change, regenerate deliberately and say so in
+    // the round log.
     // R59 CI fix: normalize \r\n → \n on BOTH sides before comparing — the
     // fixture is committed with LF, but a Windows checkout with autocrlf
     // rewrites it to CRLF (the R57 CI lesson: never let line endings decide
@@ -146,6 +172,17 @@ describe("PROMPT_REGISTRY (R59-F)", () => {
     const golden = readFileSync(join(import.meta.dirname, "fixtures", "prompt-golden-r61.txt"), "utf8").replace(/\r\n/g, "\n");
     const composed = buildProjectSystemPrompt(FULL_CTX).replace(/\r\n/g, "\n");
     expect(composed).toBe(golden);
+  });
+
+  it("REGEN PROCEDURE: UPDATE_GOLDEN=1 rewrites the fixture from FULL_CTX (the sanctioned regeneration)", () => {
+    // The documented procedure for a DELIBRATE prompts.ts change: run
+    //   UPDATE_GOLDEN=1 npx vitest run agent-core/tests/prompt-registry.test.ts
+    // from the repo root — this test rewrites the fixture byte-exactly from
+    // the composed FULL_CTX (every dynamic field pinned in the file above),
+    // then the BYTE-IDENTITY pin above holds the new composition. Without
+    // the env var this is a no-op (normal runs never touch the fixture).
+    if (process.env.UPDATE_GOLDEN !== "1") return;
+    writeFileSync(join(import.meta.dirname, "fixtures", "prompt-golden-r61.txt"), buildProjectSystemPrompt(FULL_CTX));
   });
 });
 
@@ -161,8 +198,10 @@ describe("ROUND-67 (R67-E): browser discipline, tab-walk, attachments", () => {
     const composed = buildProjectSystemPrompt(FULL_CTX);
     const bp = composed.indexOf("## EMBEDDED BROWSER PANEL (browser_control)");
     expect(bp).toBeGreaterThan(-1);
+    // R70-c: the section was TRIMMED (deep craft → the browser-use skill);
+    // the R67 per-session-tab + bridge teaching survives, folded into the
+    // intro line + the DRIVE line.
     const rest = composed.slice(bp, bp + 5_000);
-    expect(rest).toContain("ROUND-67 — THE EMBEDDED BROWSER IS YOURS");
     expect(rest).toContain("THIS chat session's OWN tab");
     expect(rest).toContain("get_state lists only this session's tab");
     expect(rest).toContain("DRIVE THE PANEL ONLY WITH browser_control (R67)");
@@ -174,17 +213,21 @@ describe("ROUND-67 (R67-E): browser discipline, tab-walk, attachments", () => {
     // The R66 claims the R67 reality retired are GONE.
     expect(rest).not.toContain("every open tab, which tab is active");
     expect(rest).not.toContain("the tab the user is viewing");
+    // R70-c: the deep craft moved to the skill body — the pointer is the
+    // section's closing line, and the old craft lines are retired.
+    expect(rest).toContain('Full browser craft (the core loop, forms, wait patterns, layout testing): read_skill "browser-use"');
+    expect(rest).not.toContain("TEST LAYOUTS by changing the display size");
+    expect(rest).not.toContain("USE THE BROWSER LIKE A USER WOULD");
   });
 
   it("the computer-use section teaches the TAB-WALK discovery fallback (key \"tab\" + the receipt's focused readback)", () => {
     const composed = buildProjectSystemPrompt(FULL_CTX);
     const cu = composed.indexOf("## COMPUTER USE (desktop control)");
     expect(cu).toBeGreaterThan(-1);
-    const rest = composed.slice(cu, cu + 3_000);
+    const rest = composed.slice(cu, cu + 3_600);
     expect(rest).toContain("TAB-WALK DISCOVERY (R67)");
     expect(rest).toContain('press key "tab"');
     expect(rest).toContain("names the FOCUSED element");
-    expect(rest).toContain("Combine with find_elements");
   });
 
   it("the tool-use rules teach the image-attachment path contract — analyze_image-gated", () => {
@@ -224,7 +267,7 @@ describe("ROUND-68 (R68-C): the computer-use discipline lines", () => {
     expect(rest).toContain("find_elements {appRef, query:'Wikipedia'}");
     expect(rest).toContain("the web tree is activated automatically before every walk");
     expect(rest).toContain("element targets are the PRIMARY path for browser content");
-    expect(rest).toContain("middle_click on a link = open in new tab");
+    // R70-c: middle_click guidance moved to the skill body — retired here.
     // The R68 zoom-crop verification teaching is RETIRED by R69's receipts.
     expect(rest).not.toContain("CHAIN DISCIPLINE (R68)");
     expect(rest).not.toContain("a small zoom region crop of the one control");
@@ -282,7 +325,6 @@ describe("ROUND-69 (4-c-2): the auto-observation chain discipline", () => {
     const rest = composed.slice(cu, cu + 4_600);
     expect(rest).toContain("After navigation (Enter, links), call wait()");
     expect(rest).toContain("what changed while you waited");
-    expect(rest).toContain("instead of re-capturing");
     expect(rest).toContain("A screen_unchanged refusal means: act or change strategy — do not re-capture");
   });
 
@@ -290,7 +332,9 @@ describe("ROUND-69 (4-c-2): the auto-observation chain discipline", () => {
     const composed = buildProjectSystemPrompt(FULL_CTX);
     const cu = composed.indexOf("## COMPUTER USE (desktop control)");
     const rest = composed.slice(cu, cu + 4_600);
-    expect(rest).toContain("the receipt's observation (screenChanged, focusedElementName, activeApp.title) is the first verification read");
+    // R70-c: the (screenChanged, …) parenthetical was dropped as duplicate
+    // (the CHAIN DISCIPLINE line above lists it) — the semantics pin stays.
+    expect(rest).toContain("the receipt's observation is the first verification read");
     expect(rest).toContain("an external oracle (file exists, exit code) is the strong one");
   });
 });
@@ -311,12 +355,12 @@ describe("loadPromptOverrides (R59-F)", () => {
     const root = tempRoot();
     const dir = join(root, ".acute", "prompts");
     mkdirSync(dir, { recursive: true });
-    writeFileSync(join(dir, "efficiency.md"), "\n  ## EFFICIENCY (custom)\nBe terse.\n\n");
-    writeFileSync(join(dir, "communication.md"), "Speak like a pirate.");
+    writeFileSync(join(dir, "communication.md"), "\n  ## COMMUNICATION (custom)\nBe terse.\n\n");
+    writeFileSync(join(dir, "git.md"), "Speak like a pirate.");
 
     const result = loadPromptOverrides(root);
-    expect(result.overrides.get("efficiency")).toBe("## EFFICIENCY (custom)\nBe terse.");
-    expect(result.overrides.get("communication")).toBe("Speak like a pirate.");
+    expect(result.overrides.get("communication")).toBe("## COMMUNICATION (custom)\nBe terse.");
+    expect(result.overrides.get("git")).toBe("Speak like a pirate.");
     expect(result.overrides.size).toBe(2);
     expect(result.order).toBeUndefined();
     expect(result.diagnostics).toEqual([]);
@@ -331,19 +375,22 @@ describe("loadPromptOverrides (R59-F)", () => {
     expect(result.overrides.get("git")).toBe("");
   });
 
-  it("UNKNOWN filenames are ignored + diagnosed (wrong name, wrong case, missing .md)", () => {
+  it("UNKNOWN filenames are ignored + diagnosed (wrong name, wrong case, missing .md, RETIRED ids)", () => {
     const root = tempRoot();
     const dir = join(root, ".acute", "prompts");
     mkdirSync(dir, { recursive: true });
-    writeFileSync(join(dir, "Efficiency.md"), "wrong case"); // ids are case-sensitive slugs
+    writeFileSync(join(dir, "Communication.md"), "wrong case"); // ids are case-sensitive slugs
     writeFileSync(join(dir, "not-a-section.md"), "unknown stem");
-    writeFileSync(join(dir, "efficiency.txt"), "wrong extension");
+    writeFileSync(join(dir, "communication.txt"), "wrong extension");
     writeFileSync(join(dir, "readme.md"), "notes");
+    // R70-c: the retired ids are unknown files now — a stale override for
+    // the consolidated sections is DIAGNOSED, never silently honored.
+    writeFileSync(join(dir, "efficiency.md"), "retired id");
 
     const result = loadPromptOverrides(root);
     expect(result.overrides.size).toBe(0); // nothing honored
     const unknowns = result.diagnostics.filter((d) => d.kind === "unknown-file");
-    expect(unknowns.map((d) => d.file).sort()).toEqual(["Efficiency.md", "efficiency.txt", "not-a-section.md", "readme.md"]);
+    expect(unknowns.map((d) => d.file).sort()).toEqual(["Communication.md", "communication.txt", "efficiency.md", "not-a-section.md", "readme.md"]);
   });
 
   it("caps override text at 8000 chars with an honest truncation marker + diagnostic", () => {
@@ -383,7 +430,7 @@ describe("loadPromptOverrides (R59-F)", () => {
   it("a DIRECTORY named like a section file fails into an unreadable diagnostic, never a throw", () => {
     const root = tempRoot();
     const dir = join(root, ".acute", "prompts");
-    mkdirSync(join(dir, "efficiency.md"), { recursive: true }); // a dir, not a file
+    mkdirSync(join(dir, "communication.md"), { recursive: true }); // a dir, not a file
     const result = loadPromptOverrides(root);
     expect(result.overrides.size).toBe(0);
     expect(result.diagnostics.map((d) => d.kind)).toEqual(["unreadable"]);
@@ -400,8 +447,8 @@ describe("promptOverrideDiagnostics (R59-F)", () => {
     const dir = join(root, ".acute", "prompts");
     mkdirSync(dir, { recursive: true });
     writeFileSync(join(dir, "nope.md"), "x");
-    writeFileSync(join(dir, "efficiency.md"), "#".repeat(PROMPT_OVERRIDE_CHAR_CAP + 10));
-    writeFileSync(join(dir, "_order.txt"), "efficiency\nbogus-id\n");
+    writeFileSync(join(dir, "communication.md"), "#".repeat(PROMPT_OVERRIDE_CHAR_CAP + 10));
+    writeFileSync(join(dir, "_order.txt"), "communication\nbogus-id\n");
     const lines = promptOverrideDiagnostics(loadPromptOverrides(root));
     expect(lines.length).toBe(4); // unknown-file, capped, order-unknown-id, order-active
     for (const line of lines) expect(line.startsWith(".acute/prompts/")).toBe(true);

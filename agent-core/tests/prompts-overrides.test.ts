@@ -87,13 +87,15 @@ describe("no-override byte-identity (R59-F)", () => {
     expect(buildProjectSystemPrompt(ctx)).toBe(before); // empty dir
 
     writeFileSync(join(promptsDir, "readme.md"), "notes");
-    writeFileSync(join(promptsDir, "Efficiency.md"), "wrong case");
+    writeFileSync(join(promptsDir, "Communication.md"), "wrong case");
     orderFile(root, "environment\nidentity\nbogus-id\n");
     expect(buildProjectSystemPrompt(ctx)).toBe(before); // unknown + order-only
 
     // The meter view is equally untouched (same composition, per-bucket).
     const sections = buildSystemPromptSections(ctx);
-    expect(sections.identity).toContain("## EFFICIENCY — FEWEST STEPS THAT FULLY SOLVE THE TASK");
+    // R70-c: the EFFICIENCY section was consolidated into AGENTIC LOOP —
+    // the byte-identity anchor is the (static) COMMUNICATION section now.
+    expect(sections.identity).toContain("## COMMUNICATION");
     expect(sections.tools).toContain("## TOOL USE");
   });
 });
@@ -101,19 +103,20 @@ describe("no-override byte-identity (R59-F)", () => {
 // ── static + dynamic replacement ────────────────────────────────────────────
 
 describe("section replacement (R59-F)", () => {
-  it("overriding a STATIC section (efficiency) replaces heading + body with the file text", () => {
+  it("overriding a STATIC section (communication) replaces heading + body with the file text", () => {
     const { root } = projectDir();
-    override(root, "efficiency", "## EFFICIENCY (project override)\nR59F-MARKER-STATIC\nOne rule: be brief.");
+    // R70-c: the sample static section moved from the retired "efficiency"
+    // id to "communication" (still static, still identity-bucket).
+    override(root, "communication", "## COMMUNICATION (project override)\nR59F-MARKER-STATIC\nOne rule: be brief.");
     const prompt = buildProjectSystemPrompt(ctxFor(root));
 
     expect(prompt).toContain("R59F-MARKER-STATIC");
-    expect(prompt).toContain("## EFFICIENCY (project override)");
-    expect(prompt).not.toContain("## EFFICIENCY — FEWEST STEPS THAT FULLY SOLVE THE TASK");
-    expect(prompt).not.toContain("UNDERSTAND FIRST"); // the old body is GONE
+    expect(prompt).toContain("## COMMUNICATION (project override)");
+    expect(prompt).not.toContain("- CONCISE BY DEFAULT"); // the old body is GONE
     // Neighbors survive untouched, with clean single-blank separation.
-    expect(prompt).toContain("## AGENTIC LOOP — MULTI-TURN COMPLETION");
-    expect(prompt).toContain("## FILE EDITING RULES");
-    expect(prompt).toContain("One rule: be brief.\n\n## FILE EDITING RULES");
+    expect(prompt).toContain("## EMBEDDED BROWSER PANEL (browser_control)");
+    expect(prompt).toContain("## CODEBASE AWARENESS");
+    expect(prompt).toContain("One rule: be brief.\n\n## CODEBASE AWARENESS");
     expect(prompt).not.toMatch(/\n\n\n/); // no blank-line pileup anywhere
   });
 
@@ -170,11 +173,11 @@ describe("_order.txt reordering (R59-F)", () => {
     expect(buildProjectSystemPrompt(ctx)).toBe(before);
 
     // Now WITH an override: environment moves to the FRONT (before identity).
-    override(root, "efficiency", "## EFFICIENCY (project override)\nR59F-MARKER-REORDER");
+    override(root, "communication", "## COMMUNICATION (project override)\nR59F-MARKER-REORDER");
     const reordered = buildProjectSystemPrompt(ctx);
     expect(idx(reordered, "## ENVIRONMENT")).toBeGreaterThanOrEqual(0);
     expect(idx(reordered, "## ENVIRONMENT")).toBeLessThan(idx(reordered, "You are an expert software engineer"));
-    expect(idx(reordered, "## EFFICIENCY (project override)")).toBeLessThan(idx(reordered, "## FILE EDITING RULES"));
+    expect(idx(reordered, "## COMMUNICATION (project override)")).toBeLessThan(idx(reordered, "## CODEBASE AWARENESS"));
     // Unlisted sections keep their built-in relative order behind the listed ones.
     expect(idx(reordered, "## TOOL USE")).toBeLessThan(idx(reordered, "## AGENTIC LOOP"));
     expect(reordered).toContain("R59F-MARKER-REORDER");
@@ -184,7 +187,7 @@ describe("_order.txt reordering (R59-F)", () => {
     const { root } = projectDir();
     const ctx = ctxFor(root); // permissionMode undefined → no permission-mode section
     orderFile(root, "permission-mode\nenvironment\n");
-    override(root, "efficiency", "R59F-MARKER-ORDER-ABSENT");
+    override(root, "communication", "R59F-MARKER-ORDER-ABSENT");
     const prompt = buildProjectSystemPrompt(ctx);
     expect(prompt).not.toContain("## PERMISSION MODE"); // never injected
     expect(prompt).toContain("R59F-MARKER-ORDER-ABSENT");
@@ -195,9 +198,9 @@ describe("_order.txt reordering (R59-F)", () => {
 // ── the meter stays attributable ─────────────────────────────────────────────
 
 describe("context-meter buckets with overrides (R59-F)", () => {
-  it("an override keeps its section's ORIGINAL meter bucket (efficiency → identity slice)", () => {
+  it("an override keeps its section's ORIGINAL meter bucket (communication → identity slice)", () => {
     const { root } = projectDir();
-    override(root, "efficiency", "## EFFICIENCY (project override)\nR59F-MARKER-BUCKET");
+    override(root, "communication", "## COMMUNICATION (project override)\nR59F-MARKER-BUCKET");
     const sections = buildSystemPromptSections(ctxFor(root));
     expect(sections.identity).toContain("R59F-MARKER-BUCKET");
     expect(sections.tools).not.toContain("R59F-MARKER-BUCKET");
@@ -206,7 +209,7 @@ describe("context-meter buckets with overrides (R59-F)", () => {
 
   it("the four slices remain an exact PARTITION of the overridden prompt's lines", () => {
     const { root } = projectDir();
-    override(root, "efficiency", "## EFFICIENCY (project override)\nR59F-MARKER-PARTITION\nline");
+    override(root, "communication", "## COMMUNICATION (project override)\nR59F-MARKER-PARTITION\nline");
     override(root, "project-memory", "## Project memory (project override)\nR59F-MARKER-PARTITION-MEM");
     const ctx = ctxFor(root);
     const full = buildProjectSystemPrompt(ctx);
@@ -231,9 +234,9 @@ describe("applySectionOverrides unit (R59-F)", () => {
     { section: "tools", line: "## TOOL USE", sectionId: "tool-use" },
     { section: "tools", line: "tools body", sectionId: "tool-use" },
     { section: "tools", line: "", sectionId: "tool-use" },
-    { section: "identity", line: "## EFFICIENCY", sectionId: "efficiency" },
-    { section: "identity", line: "eff body", sectionId: "efficiency" },
-    { section: "identity", line: "", sectionId: "efficiency" },
+    { section: "identity", line: "## COMMUNICATION", sectionId: "communication" },
+    { section: "identity", line: "comm body", sectionId: "communication" },
+    { section: "identity", line: "", sectionId: "communication" },
   ];
 
   it("returns the SAME array content untouched when no overrides (fast path)", () => {
@@ -242,7 +245,7 @@ describe("applySectionOverrides unit (R59-F)", () => {
   });
 
   it("replaces a section, appends one trailing separator blank, keeps bucket + id", () => {
-    const out = applySectionOverrides(lines, new Map([["efficiency", "REPLACED\nBODY"]]));
+    const out = applySectionOverrides(lines, new Map([["communication", "REPLACED\nBODY"]]));
     expect(out.map((l) => l.line)).toEqual([
       "persona",
       "",
@@ -253,32 +256,32 @@ describe("applySectionOverrides unit (R59-F)", () => {
       "BODY",
       "",
     ]);
-    const replaced = out.filter((l) => l.sectionId === "efficiency");
+    const replaced = out.filter((l) => l.sectionId === "communication");
     expect(replaced.every((l) => l.section === "identity")).toBe(true); // original bucket
   });
 
   it("drops the section for an empty-string override (heading + body + separator)", () => {
-    const out = applySectionOverrides(lines, new Map([["efficiency", ""]]));
+    const out = applySectionOverrides(lines, new Map([["communication", ""]]));
     expect(out.map((l) => l.line)).toEqual(["persona", "", "## TOOL USE", "tools body", ""]);
   });
 
   it("reorders only with overrides: listed first (in order), the rest keep composition order", () => {
     const out = applySectionOverrides(
       lines,
-      new Map([["efficiency", "X"]]),
-      ["tool-use", "efficiency"],
+      new Map([["communication", "X"]]),
+      ["tool-use", "communication"],
     );
     expect(out.map((l) => l.sectionId)).toEqual([
       "tool-use",
       "tool-use",
       "tool-use",
-      "efficiency",
-      "efficiency",
+      "communication",
+      "communication",
       "identity",
       "identity",
     ]);
     // Order with NO overrides would be a no-op — pinned by the equality above.
-    const noop = applySectionOverrides(lines, new Map(), ["tool-use", "efficiency"]);
+    const noop = applySectionOverrides(lines, new Map(), ["tool-use", "communication"]);
     expect(noop).toEqual(lines);
   });
 
@@ -287,7 +290,7 @@ describe("applySectionOverrides unit (R59-F)", () => {
       { section: "identity", line: "a" },
       { section: "identity", line: "b" },
     ];
-    const out = applySectionOverrides(untagged, new Map([["efficiency", "X"]]));
+    const out = applySectionOverrides(untagged, new Map([["communication", "X"]]));
     expect(out).toEqual(untagged);
   });
 });
@@ -297,41 +300,41 @@ describe("applySectionOverrides unit (R59-F)", () => {
 describe("describePromptSections + buildSectionText (R59-F)", () => {
   it("reports the registry with overridden/present flags, effective order, and diagnostics", () => {
     const { root } = projectDir();
-    override(root, "efficiency", "## EFFICIENCY (project override)\nR59F-MARKER-DESCRIBE");
-    orderFile(root, "efficiency\nenvironment\nnope\n");
+    override(root, "communication", "## COMMUNICATION (project override)\nR59F-MARKER-DESCRIBE");
+    orderFile(root, "communication\nenvironment\nnope\n");
     const report = describePromptSections(ctxFor(root));
 
     expect(report.rootPath).toBe(root);
-    expect(report.overridden).toEqual(["efficiency"]);
-    const eff = report.sections.find((s) => s.id === "efficiency");
-    expect(eff?.overridden).toBe(true);
-    expect(eff?.present).toBe(true);
-    expect(eff?.dynamic).toBe(false);
+    expect(report.overridden).toEqual(["communication"]);
+    const comm = report.sections.find((s) => s.id === "communication");
+    expect(comm?.overridden).toBe(true);
+    expect(comm?.present).toBe(true);
+    expect(comm?.dynamic).toBe(false);
     // Conditional sections report absent honestly for this ctx.
     expect(report.sections.find((s) => s.id === "permission-mode")?.present).toBe(false);
     expect(report.sections.find((s) => s.id === "project-memory")?.present).toBe(true);
     // Effective order honors _order.txt (now that an override exists).
-    expect(report.effectiveOrder.indexOf("efficiency")).toBeLessThan(report.effectiveOrder.indexOf("identity"));
+    expect(report.effectiveOrder.indexOf("communication")).toBeLessThan(report.effectiveOrder.indexOf("identity"));
     expect(report.diagnostics.some((d) => d.includes('unknown section id "nope" ignored'))).toBe(true);
     expect(report.diagnostics.some((d) => d.includes("order file active"))).toBe(true);
   });
 
   it("an empty override makes a previously-present section report absent", () => {
     const { root } = projectDir();
-    override(root, "efficiency", "");
+    override(root, "communication", "");
     const report = describePromptSections(ctxFor(root));
-    expect(report.sections.find((s) => s.id === "efficiency")?.present).toBe(false);
-    expect(report.overridden).toEqual(["efficiency"]);
+    expect(report.sections.find((s) => s.id === "communication")?.present).toBe(false);
+    expect(report.overridden).toEqual(["communication"]);
   });
 
   it("buildSectionText: override text when overridden, built-in text otherwise, undefined when absent", () => {
     const { root } = projectDir();
-    override(root, "efficiency", "## EFFICIENCY (project override)\nR59F-MARKER-SHOW");
+    override(root, "communication", "## COMMUNICATION (project override)\nR59F-MARKER-SHOW");
     const ctx = ctxFor(root);
 
-    const effText = buildSectionText(ctx, "efficiency");
-    expect(effText).toBe("## EFFICIENCY (project override)\nR59F-MARKER-SHOW"); // no trailing blank
-    expect(effText).not.toContain("UNDERSTAND FIRST");
+    const commText = buildSectionText(ctx, "communication");
+    expect(commText).toBe("## COMMUNICATION (project override)\nR59F-MARKER-SHOW"); // no trailing blank
+    expect(commText).not.toContain("CONCISE BY DEFAULT");
 
     const gitText = buildSectionText(ctx, "git");
     expect(gitText).toBeDefined();

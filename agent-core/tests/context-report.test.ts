@@ -377,15 +377,14 @@ describe("buildSystemPromptSections (ROUND-50 R50-c1 refactor — behavior ident
   });
 });
 
-// ── ROUND-51 (R51-d): the main-agent efficiency prompt rework ───────────────
+// ── ROUND-51 (R51-d) → ROUND-70 (R70-c, D2): the efficiency rework, re-pinned ──
 // Owner: "It takes up way too many steps… It should work in an optimized
-// way." These pins guard the surgical prompts.ts rework: the mandatory
-// read-back verify is gone (smart verification), the budget line stops
-// inviting step inflation, batching is taught, and every preserved directive
-// (round-33 conversational, multi-turn completion, research loop, delegate
-// parallelism) stays byte-present.
+// way." R51-d's smart-verification + fewest-steps posture is now taught
+// INSIDE the merged AGENTIC LOOP (R70-c consolidated the four-way overlap:
+// agentic-loop + efficiency + task-planning + todo-tracking). These pins
+// hold the rework's semantics in their new home + the removal itself.
 
-describe("prompt efficiency rework (ROUND-51 R51-d)", () => {
+describe("prompt efficiency rework (ROUND-51 R51-d, consolidated ROUND-70 R70-c)", () => {
   const ctx = {
     projectName: "EffProject",
     rootPath: "/tmp/eff",
@@ -399,70 +398,86 @@ describe("prompt efficiency rework (ROUND-51 R51-d)", () => {
       "delegate_task",
     ],
     maxTurns: 30,
+    maxOuterLoops: 5,
   };
 
-  it("the EFFICIENCY section exists between AGENTIC LOOP and FILE EDITING RULES, with all four teachings", () => {
+  it("the merged AGENTIC LOOP carries the five phases; the three overlap sections are GONE", () => {
     const full = buildProjectSystemPrompt(ctx);
-    expect(full).toContain("## EFFICIENCY — FEWEST STEPS THAT FULLY SOLVE THE TASK");
-    // Placement: right after the AGENTIC LOOP example, before FILE EDITING RULES.
-    const effIdx = full.indexOf("## EFFICIENCY");
-    expect(effIdx).toBeGreaterThan(full.indexOf("## AGENTIC LOOP"));
-    expect(effIdx).toBeLessThan(full.indexOf("## FILE EDITING RULES"));
-    // The four teachings.
-    expect(full).toContain("UNDERSTAND FIRST");
-    expect(full).toContain("MULTIPLE independent tool calls in the SAME message");
-    expect(full).toContain("PLAN ONCE");
-    expect(full).toContain("FEWEST STEPS: more steps ≠ more thorough");
-    expect(full).toContain("CONCISE REASONING");
-    // Included when tools are present — and it rides the identity meter slice
-    // (the context donut's systemPrompt bucket), never tools/memory/meta.
+    // The five-phase loop (R70-c D2): PLAN / EXPLORE / ACT / VERIFY / FINISH.
+    expect(full).toContain("## AGENTIC LOOP — MULTI-TURN COMPLETION");
+    for (const phase of ["1. PLAN", "2. EXPLORE", "3. ACT", "4. VERIFY", "5. FINISH"]) {
+      expect(full).toContain(phase);
+    }
+    // The retired sections never compose (any ctx — this one is maximal for
+    // the old gates: todo_write + delegate present).
+    expect(full).not.toContain("## EFFICIENCY");
+    expect(full).not.toContain("## TASK PLANNING");
+    expect(full).not.toContain("## TODO TRACKING");
+    // The efficiency teachings live in EXPLORE/ACT now.
+    expect(full).toContain("independent discovery calls BATCHED in parallel");
+    expect(full).toContain("Do not re-explore between steps or re-read files already in context");
+    expect(full).toContain("the FEWEST steps that genuinely complete the work");
+    // The PLAN phase absorbed the todo guidance (todo_write-gated below).
+    expect(full).toContain("Tasks with 3+ steps get a todo_write list UP FRONT");
+    expect(full).toContain("update after EACH sub-task (never batch completions)");
+    expect(full).toContain("a snapshot, not a delta");
+    // VERIFY absorbed the 3+ file edits adversarial-review affordance.
+    expect(full).toContain("for 3+ file edits, consider a delegate_task adversarial review");
+    // Rides the identity meter slice, never tools/memory/meta.
     const sections = buildSystemPromptSections(ctx);
-    expect(sections.identity).toContain("## EFFICIENCY — FEWEST STEPS THAT FULLY SOLVE THE TASK");
-    expect(sections.tools).not.toContain("EFFICIENCY");
+    expect(sections.identity).toContain("## AGENTIC LOOP — MULTI-TURN COMPLETION");
+    expect(sections.identity).not.toContain("## EFFICIENCY");
+    expect(sections.tools).not.toContain("EXPLORE");
   });
 
-  it("the mandatory read-back verify is GONE — smart verification replaces it in BOTH the loop rules and FILE EDITING rule 6", () => {
+  it("the PLAN todo lines are todo_write-gated (the old todo-tracking gate, kept)", () => {
+    const noTodo = buildProjectSystemPrompt({ ...ctx, toolNames: ctx.toolNames.filter((t) => t !== "todo_write") });
+    expect(noTodo).not.toContain("Tasks with 3+ steps get a todo_write list UP FRONT");
+    expect(noTodo).toContain("1. PLAN");
+    const withTodo = buildProjectSystemPrompt(ctx);
+    expect(withTodo).toContain("Tasks with 3+ steps get a todo_write list UP FRONT");
+  });
+
+  it("the mandatory read-back verify is GONE — smart verification replaces it in BOTH the loop and FILE EDITING", () => {
     const full = buildProjectSystemPrompt(ctx);
     // The old mandate (and its example turn) must not appear anywhere.
     expect(full).not.toContain("verify the save");
     expect(full).not.toContain("read_file it back");
     expect(full).not.toContain("(verify save)");
     expect(full).not.toContain("Verify after edit");
-    // AGENTIC LOOP rule: a successful write IS the confirmation.
+    // ACT rule: a successful write IS the confirmation.
     expect(full).toContain("A successful write_file/edit_file response is itself confirmation");
-    expect(full).toContain("do NOT re-read a file you just wrote unless something indicates a problem");
-    // FILE EDITING RULES rule 6 carries the same semantics.
+    expect(full).toContain("re-read only when something indicates a problem");
+    // FILE EDITING rule 7 carries the same semantics.
     expect(full).toContain("**Smart verification**");
     expect(full).toContain("only when risk exists — complex edits, high-stakes files, or surprising results");
   });
 
-  it("the budget line no longer invites step inflation (a cap, not a target — anti-lazy-stop kept)", () => {
+  it("the budget line no longer invites step inflation (a cap, not a target — anti-lazy-stop kept, outer loops named)", () => {
     const full = buildProjectSystemPrompt(ctx);
     expect(full).not.toContain("Use it when needed");
     expect(full).not.toContain("budget of up to");
     // The maxTurns injection survives (Round-28 WS-F contract: the model is
     // told its real cap)…
-    expect(full).toContain("up to 30 round-trips are available");
-    // …framed as fewest-steps, with the anti-lazy-stop FAILURE clause intact.
+    expect(full).toContain("up to 30 tool round-trips per iteration");
+    // …framed as fewest-steps, with the anti-lazy-stop clause intact…
     expect(full).toContain("FEWEST steps that genuinely complete and verify the work, not step count for its own sake");
-    expect(full).toContain("Stopping early on a multi-step task is a FAILURE");
+    expect(full).toContain("so is stopping early on a multi-step task");
+    // …and the outer-iteration cap is named honestly (R70-c D2).
+    expect(full).toContain("5 outer iterations exist — keep working within them");
   });
 
-  it("batching is taught everywhere it must be (TOOL USE rule, lean 4-turn example, TASK PLANNING)", () => {
+  it("batching is taught everywhere it must be (TOOL USE rule, EXPLORE phase)", () => {
     const full = buildProjectSystemPrompt(ctx);
     // TOOL USE: independent calls batch; dependent calls wait.
     expect(full).toContain("BATCHED into ONE message");
     expect(full).not.toContain("ONE tool per message");
-    // The workflow example is the lean 4-turn batched shape (no serial turns
-    // 5–7, no verify-read-back turn).
-    expect(full).toContain("turn 1 (batched discovery)");
+    // EXPLORE is the batched-discovery teaching (the lean 4-turn example was
+    // folded into the phases — the old example turns 5–7 never return).
+    expect(full).toContain("2. EXPLORE");
     expect(full).not.toContain("turn 5:");
     expect(full).not.toContain("turn 6:");
     expect(full).not.toContain("turn 7:");
-    // TASK PLANNING's batching line.
-    expect(full).toContain(
-      "Batch your initial reads: understanding the request fully first is ONE message with parallel tool calls, not a long serial exploration",
-    );
   });
 
   it("regression pins: conversational rule, multi-turn completion, research loop, delegate parallelism all intact", () => {

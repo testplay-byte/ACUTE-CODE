@@ -1,4 +1,4 @@
-<!-- last-reviewed: 2026-09-05 round-69 -->
+<!-- last-reviewed: 2026-09-06 round-70 -->
 # Changelog
 
 All notable changes to ACUTE-CODE are documented here. Entries are written for
@@ -17,13 +17,78 @@ gates (the dual-object poke waking Edge's UIA provider, the long-type
 stdin paste channel, the HWHEEL horizontal scroll feel, the
 non-activating monitor while STOP/drag stay clickable, the aHash
 thresholds on real 1280×1024 frames, the 600 ms settle catching
-post-click repaints — the checklist in `docs/runbooks/COMPUTER-USE.md`),
-then the standing queue: browser-wall self-bypass (future), installer
+post-click repaints — the checklist in `docs/runbooks/COMPUTER-USE.md`)
+PLUS the R70 live gates (which of the seven new skill bodies need
+tuning on real tasks, whether AGENTS.md conventions load on the owner's
+repos, whether the grounded TERMINAL syntax kills the cross-platform
+command guesses), then the standing queue: edit-linting (SWE-agent's
+ACI #1 finding), browser-wall self-bypass (future), installer
 code-signing (SmartScreen), ratings-driven prompt tuning, the
 deepseek-harness future candidates (compaction pressure-trigger,
 continuable sub-agent children), the Files-tab polish, agent
 web-app-testing tools, moving the Windows walk to a temp .ps1 if the
 C# preamble grows again.
+
+## [0.70.0] - 2026-09-06
+
+Round 70 — the agent brain round (research-driven: the round's own
+prompt audit + an OSS agent study — no new owner field report; the
+model now knows its world, follows conventions, and verifies before
+claiming done). **The model knows its machine**: the system prompt
+states the actual OS + release, the real shell run_command uses
+(cmd.exe on Windows, /bin/sh on POSIX — the TERMINAL section teaches
+only the REAL platform's syntax now, not both), the current date,
+and the git branch + dirty state (a 1.5 s guarded probe with honest
+fallbacks) — and a dirty tree is named as YOUR work the agent must
+never revert. **Project conventions are honored**: AGENTS.md,
+CLAUDE.md, AGENTS.override.md and CLAUDE.local.md at the project root
+auto-load into every turn (the cross-agent standard — Codex, Claude
+Code, Cursor and OpenHands converged on it; 60k+ projects carry the
+file), alongside ACUTE's own `.acute/rules/*.md` and `.acuterules`,
+in a documented order (later = more specific), each part with a
+source marker; AGENTS.md/CLAUDE.md expand `@file` imports (relative
+paths, .md/.txt, max 4, cycle-guarded; 16 K per file, 32 K total).
+A new built-in **project-init** skill writes that AGENTS.md for you
+from codebase analysis. **The prompt got smaller while gaining all
+of this (22,460 → 20,156 chars)**: the four overlapping planning
+sections (agentic-loop + efficiency + task-planning + todo-tracking
+— 4,762 chars of the same advice four different ways) merged into
+ONE five-phase loop — PLAN (todos for 3+ steps, skip trivial) →
+EXPLORE (batched discovery) → ACT (fewest steps) → VERIFY (run the
+touched tests/typecheck/lint before claiming done, commands
+discovered from AGENTS.md/package.json; a delegate_task adversarial
+review for 3+ file edits) → FINISH — and the browser/computer-use
+sections keep only their essentials, pointing at the matching
+skills for the deep craft. **Skill bodies stopped evaporating**:
+read_skill and memory_recall results persist with a 60 K budget and
+skip the 200-char replay stub — a loaded instruction set now
+survives the whole task (the last-resort context cap degrades to 8 K
+with an honest reload marker). **Seven new built-in skills**
+(code-review, debugging, testing, git-workflow, web-research,
+project-init, browser-use — with computer-use, 8 total), and skills
+can now be FILES: `.acute/skills/<name>/SKILL.md` per project and
+`~/.agents/skills/` user-global (the Agent-Skills standard format —
+the same folder works in other agents), with DB rows taking
+precedence, merged listings with provenance in Settings → Skills,
+and honest 409 "edit the SKILL.md" refusals for file-skill edits.
+The per-agent skill allowlist (agent.skills) is finally wired — it
+was stored and patched since R61 and never read. **Tool feedback got
+honest (the ACI round)**: run_command's 64 K output cap now keeps
+head 32 K AND tail 32 K with an explicit middle-omission marker
+(build/test errors live at the END of the log — the tail was
+previously thrown away); read_file returns cat -n line numbers plus
+offset/limit pagination with honest empty-file and end-of-file
+messages (files >256 K keep both ends with the exact paging path);
+todo_write's description carries the planning discipline (no
+single-item plans, update after each sub-task); silent successes now
+say "(no output — the command ran successfully and printed nothing)"
+and job_status's empty-log case explains itself. 2177 root tests in
+126 files, all green (the 12 sidecar-e2e ran in-suite against the fresh
+build; agent-core 1275 in 63 files, frontend 890 unchanged — zero
+frontend files touched),
+lint/typecheck clean, build green, license audit CLEAN (134
+dependencies, no dependency changes this round). Full evidence in
+docs/ui-iterations/round-70.md.
 
 ## [0.69.0] - 2026-09-06
 

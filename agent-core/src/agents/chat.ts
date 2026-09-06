@@ -285,7 +285,7 @@ function extractToolCalls(steps: Array<unknown>): ChatToolCall[] {
           typeof r.output === "object" && r.output !== null && "ok" in r.output
             ? Boolean((r.output as { ok: unknown }).ok)
             : true,
-        outputSummary: summarizeToolOutput(r.output),
+        outputSummary: summarizeToolOutput(r.output, r.toolName),
       });
     }
   }
@@ -299,8 +299,27 @@ function extractToolCalls(steps: Array<unknown>): ChatToolCall[] {
  * BEFORE wrapping so the result stays valid. Secrets (keyring-held API keys,
  * sk-… patterns) are scrubbed — run_command inherits process.env which holds
  * ACUTE_PROVIDER_* values.
+ *
+ * ROUND-70 (R70-b, D3): STICKY RESULT TOOLS. read_skill and memory_recall
+ * results are INSTRUCTIONS/durable facts, not data — they must survive the
+ * whole task (the outer loop replays them every iteration; stubbing the
+ * loaded skill body mid-task made the model drop its own procedure). Those
+ * two tools get STICKY_OUTPUT_BUDGET instead of the 4000-char head+tail
+ * budget at BOTH call sites below (this is the persistence-side half of the
+ * fix; runtime.ts assembleHistory is the replay-side half). Both sources are
+ * already bounded upstream (read_skill caps its output at 60K,
+ * memory_recall returns a handful of facts), so the larger budget cannot
+ * make the event log unbounded.
  */
-export function summarizeToolOutput(output: unknown): string {
+export const STICKY_RESULT_TOOLS: readonly string[] = ["read_skill", "memory_recall"];
+
+export function isStickyResultTool(toolName: string): boolean {
+  return STICKY_RESULT_TOOLS.includes(toolName);
+}
+
+const STICKY_OUTPUT_BUDGET = 60_000;
+
+export function summarizeToolOutput(output: unknown, toolName?: string): string {
   let text: string;
   if (typeof output === "string") {
     text = output;
@@ -323,11 +342,12 @@ export function summarizeToolOutput(output: unknown): string {
   text = text.replace(/sk-[A-Za-z0-9_-]{16,}/g, "sk-***");
   text = text.replace(/github_pat_[A-Za-z0-9_]+/g, "github_pat_***");
   // Head+tail budget: command/read outputs keep 2000 head + 2000 tail chars.
-  const BUDGET = 4000;
-  if (text.length > BUDGET) {
-    const head = text.slice(0, BUDGET / 2);
-    const tail = text.slice(-BUDGET / 2);
-    const omitted = text.length - BUDGET;
+  // Sticky tools (R70-b D3) keep a 60K budget instead — see the header.
+  const budget = toolName !== undefined && isStickyResultTool(toolName) ? STICKY_OUTPUT_BUDGET : 4000;
+  if (text.length > budget) {
+    const head = text.slice(0, budget / 2);
+    const tail = text.slice(-budget / 2);
+    const omitted = text.length - budget;
     text = `${head}\n…[truncated ${omitted} chars]…\n${tail}`;
   }
   return text;
@@ -458,7 +478,7 @@ export const streamAiSdkChat: StreamChatFn = async function* (input) {
         toolName: part.toolName,
         argsSummary: summarizeArgs(part.input),
         ok,
-        outputSummary: summarizeToolOutput(part.output),
+        outputSummary: summarizeToolOutput(part.output, part.toolName),
       };
     } else if (part.type === "finish-step") {
       const stepUsage = (part as { usage?: { inputTokens?: number; outputTokens?: number } }).usage;

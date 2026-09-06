@@ -1,4 +1,4 @@
-<!-- last-reviewed: 2026-09-05 round-69 -->
+<!-- last-reviewed: 2026-09-06 round-70 -->
 # COMPUTER USE — the desktop-control system (owner's guide)
 
 **Status:** normative · **Established:** round-61 (owner directive: computer
@@ -10,7 +10,13 @@ SendInput, made the foreground gate self-heal, poked Chromium's web tree
 into existence, and made the monitor invisible to captures; R69 made
 verification AUTOMATIC — every action returns an observation receipt,
 coordinate clicks verify what they hit, stale frames auto-refresh, and the
-re-capture loops refuse) · **Audience:** the owner (anyone flipping the
+re-capture loops refuse; R70 did not touch the engine — it changed what
+the MODEL brings to it: the prompt's computer-use section kept only its
+always-on discipline and points at the skill body for the deep contract
+(skill bodies no longer evaporate mid-task now), the agent knows its
+real OS/shell/date/git state, and the verify-before-claiming-done
+contract + line-numbered read_file joined the general discipline) ·
+**Audience:** the owner (anyone flipping the
 switches and watching the monitor) and any agent maintaining the system
 
 Computer use lets the agent **observe and actuate your real desktop GUI** —
@@ -629,6 +635,47 @@ pinned by construction tests: the exact probe list, the 4-probe count, the
 2400/25 caps, the cached-handle reuse). The owner's next live Windows run
 is the real proof; if Edge walks time out in the field, the 25 s capsule
 timeout is the first knob to raise.
+
+## R70 — what changed AROUND the engine (the agent-brain round touched zero computer-use code)
+
+The R70 prompt round reshaped what the model knows and does around
+every tool surface, computer use included:
+
+- **The prompt's COMPUTER USE section is the always-on DISCIPLINE now;
+  the deep contract lives in the skill body.** The section kept its
+  safety/posture/chain-discipline lines and ends pointing at
+  `read_skill "computer-use"` for the full contract (app resolution,
+  exact-spelling launches, recovery catalogs, modifiers, occlusion, the
+  write discipline). That pointer now actually WORKS end-to-end: skill
+  bodies are STICKY since R70 (`read_skill` + `memory_recall` results
+  persist with a 60K budget and skip the 200-char replay stub — the
+  6,440-char computer-use body no longer loses its middle in the event
+  log or its whole self on replay; the last-resort context cap degrades
+  to 8K with an honest "call read_skill again" marker, and the prompt
+  teaches the reload).
+- **The skill is gated on the master switch now.** While computer use
+  is OFF, the `computer-use` skill is absent from the prompt's SKILLS
+  index and `read_skill` refuses it ("computer use is disabled in
+  settings — its tools are dark") — a dark surface is no longer
+  advertised.
+- **The agent knows its machine.** Every turn states the real OS +
+  release, the real shell (`run_command` spawns cmd.exe on Windows /
+  /bin/sh on POSIX — the TERMINAL section teaches only the real
+  platform's syntax now), the current date, and the git branch + dirty
+  state — no more guessing the platform before composing a command, and
+  a dirty tree is named the USER's work the agent must never revert.
+- **Line-numbered read_file.** The read_file tool returns `cat -n`
+  output with optional `offset`/`limit` pagination (and both ends kept
+  for oversized files) — path:line citations and exact edit anchors
+  ride on it; the prompt's FILE EDITING section teaches that the
+  number prefix is NOT content.
+- **Verify-before-claiming-done.** The prompt's AGENTIC LOOP VERIFY
+  phase + FILE EDITING rules now require running the touched
+  tests/typecheck/lint before claiming done (commands discovered from
+  the project's AGENTS.md / package.json; ask the owner once +
+  `memory_save` the answer) — the same receipts-not-promises posture
+  this runbook teaches, applied to the agent's own edits. For 3+ file
+  edits the loop also suggests a `delegate_task` adversarial review.
 
 ## The 31 tools (quick reference)
 

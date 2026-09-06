@@ -1,8 +1,8 @@
-<!-- last-reviewed: 2026-09-05 round-69 -->
+<!-- last-reviewed: 2026-09-06 round-70 -->
 # IMPLEMENTED API — the shipped surface
 
 **Truth = this file.** Verified against `agent-core/src/server.ts` at
-round-17 (2026-08-23), refreshed R37→R69. The aspirational full contract (52
+round-17 (2026-08-23), refreshed R37→R70. The aspirational full contract (52
 operations, WS gateway, planned routes) lives in
 [`API.md`](API.md) — anything there and
 not here **does not exist yet**. Base: `http://127.0.0.1:<port>`; dev port
@@ -901,10 +901,10 @@ settings-gated default OFF). Full owner guides:
 
 | Route | Contract |
 |---|---|
-| `GET /skills` | `{skills:[SkillRecord]}` (id/name/description/body/source/enabled/sortOrder/timestamps) |
-| `POST /skills` | `{name (lowercase slug 2-64), description?, body?, enabled?}` → `201` SkillRecord · 400 (bad slug/duplicate) |
-| `PATCH /skills/:id` | Partial patch (name unique-checked) → SkillRecord · 404 · 400 |
-| `DELETE /skills/:id` | User rows `204`; built-in rows `409 CONFLICT` "built-in skills can be disabled or edited, but not deleted"; unknown `404` |
+| `GET /skills` | **R70: the MERGED listing** — `{skills:[SkillRecord & {source: "builtin"|"user"|"project-file"|"global-file", filePath?, projectName?}]}`: DB rows + every registered project's `.acute/skills/` files + user-global `~/.agents/skills/` files (file bodies read from disk at call time — a deleted file de-lists; the `filePath`/`projectName` fields are additive, so the existing frontend type needs no change) |
+| `POST /skills` | `{name (lowercase slug 2-64), description?, body?, enabled?}` → `201` SkillRecord · 400 (bad slug/duplicate) — a DB row created with a file-skill's name SHADOWS the file (the documented override path) |
+| `PATCH /skills/:id` | Partial patch (name unique-checked) → SkillRecord · 404 · 400 · **409 for a FILE-skill synthetic id** (`skill_file_p_…` / `skill_file_g_…`): "file-defined skill: edit the SKILL.md" (the UI's row-error path surfaces it verbatim) |
+| `DELETE /skills/:id` | User rows `204`; built-in rows `409 CONFLICT` "built-in skills can be disabled or edited, but not deleted"; file-skill ids `409` (same message as PATCH); unknown `404` |
 | `GET /mcp` | `{servers:[McpServerRecord]}` (id/name/command/args/env/enabled) |
 | `POST /mcp` | `{name (slug 2-32), command, args?, env?, enabled?}` → `201` · 400 — owner-configured only, never model-writable |
 | `PATCH /mcp/:id` | Partial patch; drops the cached child so the next call respawns with the new config → record · 404 · 400 |
@@ -935,7 +935,13 @@ settings-gated default OFF). Full owner guides:
 
 - `read_skill` (the skills loader) joins the always-on toolset (deps-gated)
   and `TOOL_NAMES` (25 — see /api/v1/agents above); migration 0023 appended
-  it to template + default-agent allowlists only.
+  it to template + default-agent allowlists only. **R70**: it is ALSO a
+  plan-mode tool (`PLAN_MODE_TOOLS`), and it resolves through the ONE
+  shared skill index (`resolveEffectiveSkills`: enabled DB rows with the
+  computer-use gate → file skills not shadowed → the agent's `skills`
+  allowlist) — the same index that composes the prompt's SKILLS section.
+  The `computer-use` skill is refused while the master switch is off
+  ("its tools are dark"); sticky result semantics — see ROUND-70 below.
 - Enabled MCP servers contribute their tools dynamically as
   `mcp__<server>__<tool>` (grammar-checked; over-length names skipped +
   logged). A failed/unconfigured server contributes nothing (fail-soft).
@@ -1520,3 +1526,67 @@ or an evicted raster emits nothing.
 - The long-type stdin paste channel, the HWHEEL scroll math, the
   dual-object Chromium poke, and the mini monitor's
   `WS_EX_NOACTIVATE` are backend/shell changes — no REST/SSE surface.
+
+## ROUND-70 additions (implemented)
+
+The agent brain round (research-driven; no owner field report). The REST
+surface gained only the skills changes above — the round lives in the
+prompt, the tool outputs, and the skills system (engine-internal).
+
+### `GET /api/v1/skills` — the merged listing + the file-skill 409s
+
+See the ROUND-61 table (updated in place): the listing merges DB rows,
+every registered project's `.acute/skills/` files, and user-global
+`~/.agents/skills/` files, with provenance (`source` gains
+`project-file`/`global-file`; `filePath` + `projectName` additive); file
+bodies are read from disk at call time. `PATCH`/`DELETE` on a file-skill's
+synthetic id (`skill_file_p_…`/`skill_file_g_…`) → 409 "file-defined
+skill: edit the SKILL.md" (the UI's existing row-error path surfaces it —
+zero frontend changes).
+
+### `read_skill` gating + the agent allowlist
+
+`read_skill` and the prompt's SKILLS section share ONE resolver
+(`agent-core/src/storage/skills-files.ts` `resolveEffectiveSkills`):
+enabled DB skills (the `computer-use` builtin DROPPED while the master
+switch is off — refused with the specific dark-tools message), then file
+skills not shadowed by any DB name, then the agent's `skills` array as a
+filter (non-empty = allowlist — the field was stored and patched since R61
+and never read; wired this round). Plan mode keeps `read_skill` in its
+tool set (`PLAN_MODE_TOOLS`).
+
+### `read_file` — offset/limit params (model-facing tool schema)
+
+The read_file TOOL's schema gained `offset` (1-based line number,
+  default 1) and `limit` (line count, default the whole file), and its
+  output is now `cat -n`-style line-numbered with honest validation errors
+  (non-integer / past-EOF / limit<1), an empty-file message, and a
+  line-aligned head+tail + paging marker for >256KB windows. The REST
+  viewer route `GET /projects/:id/file` is UNCHANGED (byte-exact raw
+  content — only the MODEL-facing tool output is numbered).
+
+### `run_command` output shape (model-facing, not HTTP)
+
+Oversized output (the 64KB cap) now renders head 32KB + tail 32KB with an
+explicit `…[output truncated: N bytes omitted from the middle — the first
+32KB and the last 32KB are kept]…` marker (one shared clip in
+`agent-core/src/tools/exec.ts` for normal completion, timeouts, and
+background-launch pre-exit output); zero-stdout success says "(no output —
+the command ran successfully and printed nothing)". `job_status`'s
+empty-log-file case explains itself. No REST/SSE surface changed.
+
+### Drift notes
+
+- The event log's tool-result summaries changed SHAPE (model-facing):
+  `read_skill`/`memory_recall` results persist with a 60K budget
+  (STICKY_RESULT_TOOLS in `agent-core/src/agents/chat.ts`) instead of the
+  4K head+tail cap — the persisted `tool.result` payloads for those two
+  tools can now be much longer. Replay-side, sticky lines skip the
+  200-char stub (`assembleHistory`).
+- The system prompt's composition changed (grounding/consolidation/
+  conventions/discipline/communication + the panel trims; the golden
+  fixture regenerated by the sanctioned procedure, 22,625 → 20,156
+  bytes) — prompt-only, no route contract.
+- The 8 builtin skill bodies seed via `INSERT OR IGNORE` at DB open — no
+  migration (an existing DB gains the 7 new rows on next open; user edits
+  persist).

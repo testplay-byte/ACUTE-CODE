@@ -11,7 +11,7 @@ import {
   deleteFile,
   editFile,
   listDir,
-  readFile,
+  readFileWindow,
   resolveInsideRoot,
   writeFile,
 } from "../fs-ops.js";
@@ -43,17 +43,26 @@ export const filesystemPlugin: PluginDefinition = {
       },
       {
         name: "read_file",
+        // ROUND-70 (R70-a): line-numbered output (SWE-agent ACI / Claude Code
+        // Read parity) + offset/limit pagination for large files. The content
+        // after each line-number prefix is byte-exact — the model strips the
+        // prefix when building edit_file anchors.
         description:
-          "Read a text file's content. Path is relative to the project root. Read BEFORE editing so you know the exact current text.",
+          "Read a text file's content, with line numbers (cat -n style: right-aligned line number + two spaces + content). Path is relative to the project root. Read BEFORE editing so you know the exact current text, and cite locations as path:line. The line-number prefix is NOT part of the file — when building edit_file oldString/newString, copy ONLY the content after the prefix. Large files: page through with offset (1-based start line, default 1) and limit (number of lines) instead of re-reading the whole file.",
         inputSchema: jsonSchema({
           type: "object",
           properties: {
             path: { type: "string", description: "File path relative to the project root" },
+            offset: { type: "integer", description: "1-based line number to start reading from (default 1)" },
+            limit: { type: "integer", description: "Number of lines to return (default: whole file within the size cap)" },
           },
           required: ["path"],
         }),
         execute: async (input) =>
-          readFile(root, typeof input.path === "string" ? input.path : ""),
+          readFileWindow(root, typeof input.path === "string" ? input.path : "", {
+            offset: typeof input.offset === "number" ? input.offset : undefined,
+            limit: typeof input.limit === "number" ? input.limit : undefined,
+          }),
       },
       {
         name: "write_file",

@@ -3,7 +3,7 @@
   "product": {
     "name": "Acute",
     "tagline": "Local-first multi-agent engineering workbench",
-    "version": "0.69.0",
+    "version": "0.70.0",
     "availability": "Private build — not yet distributed",
     "chips": [
       "Windows desktop",
@@ -26,8 +26,8 @@
       "id": "agentic",
       "title": "Agentic system",
       "state": "building",
-      "progress": 55,
-      "summary": "Multi-turn agentic continuation (AGENTIC LOOP + outer loop); multi-agent orchestration owner-gated; computer use (desktop observation+actuation, separate vision model, kill switch) owner-gated"
+      "progress": 65,
+      "summary": "Multi-turn agentic continuation with the R70 agent brain (env grounding, AGENTS.md conventions, one five-phase loop, verification discipline); 8 builtin + file-based skills with sticky bodies; multi-agent orchestration owner-gated; computer use (desktop observation+actuation, separate vision model, kill switch) owner-gated"
     },
     {
       "id": "automation",
@@ -152,6 +152,10 @@
     {
       "date": "2026-09-06",
       "label": "R69 — the computer-use enforcement layer (milestones for R62–R68 live in CHANGELOG.md): observation receipts on all 11 mutating tools, click verification + hitElementName, stale-frame auto-refresh (frame_changed), screenshot-spam guard (screen_unchanged), the pngjs aHash frame memory, element middle/right clicks, wait() observable, the scroll-math/HWHEEL fix, the stdin long-type paste, the NOACTIVATE monitor (2082 tests)"
+    },
+    {
+      "date": "2026-09-06",
+      "label": "R70 — the agent brain round (research-driven): env grounding (real OS/shell/date/git in the prompt), AGENTS.md/CLAUDE.md convention loading with @file imports, the four planning sections merged into one five-phase loop, the Codex dirty-worktree + verify-after-edit discipline, the ACI tool-feedback round (head+tail output caps, line-numbered read_file), file-based skills + 7 new builtins + sticky skill bodies + agent.skills wired; prompt 22,460→20,156 chars (2177 tests)"
     }
   ],
   "quality": {
@@ -163,7 +167,7 @@
       },
       {
         "name": "agent-core",
-        "tests": 1180
+        "tests": 1275
       },
       {
         "name": "sidecar e2e",
@@ -184,8 +188,8 @@
   ],
   "plan": {
     "current": {
-      "title": "Round 69 DELIVERED — the computer-use enforcement layer (0.69.0)",
-      "detail": "R68 built the mechanisms (SendInput, the self-healing foreground, the poked Chromium tree, 30s frames, the capture-excluded monitor); R69 makes verification AUTOMATIC: every mutating action returns an observation receipt (fresh frame + screenChanged + focusedElementName + activeApp title after a 600ms settle; returnState compact default/none/full), coordinate clicks verify changed/unchanged + name the hit element, stale frames auto-refresh perceptually (frame_changed carries the already-registered fresh frame — the frame_stale dead-end dies for pointer tools), and the 3rd near-identical capture refuses screen_unchanged with act/wait()/find_elements guidance. Windows fixes: the quadratic over-scroll eliminated (one wheel event, HWHEEL horizontal), long type >300 chars rides a stdin clipboard paste (ARGV ceiling bypassed), the dual-object Chromium poke + sparse-poll + --force-renderer-accessibility launches. The mini monitor never steals focus (WS_EX_NOACTIVATE; tao's set_focus ALT-key synthesis removed). Prompts + the skill re-taught the receipt-driven loop; pngjs@7 (MIT) joins a CLEAN 134-dep audit. Verification: 2082/2082 tests in 123 files, e2e 12/12, lint/typecheck clean, build green, cargo check (Windows target) clean. The owner's next live Windows run is the gate (all Windows behavior construction-pinned)."
+      "title": "Round 70 DELIVERED — the agent brain round (0.70.0)",
+      "detail": "Research-driven (the round's own prompt audit + the OSS agent study; no new owner field report). The model now knows its world, follows conventions, and verifies before claiming done: every turn's prompt states the real OS + release, the real shell, the date, and the git branch/dirty state (TERMINAL teaches only the real platform's syntax); AGENTS.md/CLAUDE.md/AGENTS.override/CLAUDE.local.md auto-load in a documented order with source markers and @file imports (16K/32K caps) — plus a project-init skill that writes that AGENTS.md from codebase analysis; the four overlapping planning sections merged into one five-phase loop (PLAN→EXPLORE→ACT→VERIFY→FINISH; registry 23→20 ids) with the Codex dirty-worktree rule, the verify-after-edit contract, and the path:line communication contract; the ACI round made tool feedback honest (run_command keeps head 32KB + tail 32KB with a middle-omission marker, read_file is cat -n with offset/limit pagination and honest empty/EOF messages, todo_write carries the planning discipline); skills became a system (file-based .acute/skills + ~/.agents/skills with the Agent-Skills standard and DB-row precedence, 8 builtins incl. browser-use and project-init, STICKY bodies that survive the whole task at a 60K budget, the computer-use skill gated on the master switch, agent.skills wired after being dead data since R61) — all while the prompt SHRANK 22,460→20,156 chars. Verification: 2177 root tests in 126 files, all green (agent-core 1275/63 files, frontend 890 unchanged, e2e 12/12 in-suite against the fresh build), lint/typecheck clean, build green, license audit CLEAN (134 deps, no dependency changes). The seven new skill bodies are construction-pinned — the owner's real tasks are the live gate."
     },
     "upcoming": [
       {

@@ -7,6 +7,9 @@
  * message.assistant (with per-reply usage+ms stats) → usage_events row.
  */
 import type { MessageAttachment, SessionStatus, ThinkingLevel, UsageRecord } from "shared";
+// ROUND-70 (R70-c, D1): environment grounding — os metadata + the git probe.
+import { execFile } from "node:child_process";
+import * as os from "node:os";
 import { getAgent, TOOL_NAMES } from "../storage/agents.js";
 import { getProject } from "../storage/projects.js";
 import type Database from "better-sqlite3";
@@ -27,8 +30,13 @@ import {
   touchSession,
 } from "../storage/sessions.js";
 import type { ChatFn, ChatStepSnapshot, ChatTurnMessage, ChatTurnOutput, StreamChatFn } from "./chat.js";
-import { buildProjectSystemPrompt, readCustomRules } from "./prompts.js";
-import { listEnabledSkills } from "../storage/skills.js";
+// ROUND-70 (R70-b, D3): the sticky-result tool set (read_skill /
+// memory_recall — instructions and durable facts survive replay stubbing).
+import { isStickyResultTool } from "./chat.js";
+import { buildProjectSystemPrompt, readCustomRules, type PromptEnvironment } from "./prompts.js";
+// ROUND-70 (R70-b): the skills index resolves through the ONE shared
+// resolver (DB skills + file skills + agent filter + computer-use gate).
+import { resolveEffectiveSkills } from "../storage/skills-files.js";
 import { getComputerUseSettings } from "../storage/computer-use.js";
 import { getIndexSummary } from "../storage/index.js";
 // ROUND-44 (R44-a): the project memory digest for prompt injection.
@@ -113,6 +121,11 @@ export const PLAN_MODE_TOOLS: readonly string[] = [
   "memory_recall",
   "memory_list",
   "delegate_task",
+  // ROUND-70 (R70-b): reading a skill is an observation exactly like
+  // memory_recall — the prompt's SKILLS section says "call read_skill
+  // FIRST", so plan mode must not advertise the index while the loader
+  // is dark (the D4 dark-tools honesty rule, applied to the mode gate).
+  "read_skill",
 ];
 
 /**
@@ -560,15 +573,34 @@ function scrubSecrets(text: string, secrets: readonly string[]): string {
  * bounded to MAX_TOOL_BLOCK_CHARS total (stubbing from the OLDEST lines
  * first — recent results stay full). Fidelity where it matters (the model
  * just used these), compaction where it doesn't.
+ *
+ * ROUND-70 (R70-b, D3): STICKY RESULT LINES. read_skill and memory_recall
+ * results are exempt from BOTH the per-line stub and the block-cap stub:
+ * a loaded skill body is INSTRUCTIONS the model is supposed to follow for
+ * the rest of the task — evaporating it on outer-loop replay (the 200-char
+ * stub after 8 later tool calls) made the model drop its own procedure
+ * mid-task, the exact failure the R70-A analysis flagged. memory_recall is
+ * exempt for the same reason (durable project facts, tiny, and the same
+ * "instructions not data" character). Sticky lines yield ONLY in the
+ * pathological last-resort case (a block that stays over MAX_TOOL_BLOCK_CHARS
+ * even after every non-sticky line stubbed — e.g. dozens of loaded skill
+ * bodies): they then truncate to STICKY_STUB_CHARS with an explicit
+ * "call read_skill again" marker, so even the degradation self-heals.
  */
 const RECENT_TOOL_RESULTS = 8;
 const OLD_TOOL_STUB_CHARS = 200;
 const MAX_TOOL_BLOCK_CHARS = 48_000;
+const STICKY_STUB_CHARS = 8_000;
+
+interface PendingToolLine {
+  text: string;
+  sticky: boolean;
+}
 
 export function assembleHistory(db: SqliteDatabase, sessionId: string): SeqMessage[] {
   const events = listSessionEvents(db, sessionId);
   const messages: SeqMessage[] = [];
-  let pendingToolLines: string[] = [];
+  let pendingToolLines: PendingToolLine[] = [];
   let pendingToolSeq = 0;
   // ROUND-58 (R58-c): seqs of the last RECENT_TOOL_RESULTS tool.use events —
   // these keep full output summaries in the replay; everything older stubs.
@@ -582,12 +614,26 @@ export function assembleHistory(db: SqliteDatabase, sessionId: string): SeqMessa
     if (pendingToolLines.length === 0) return;
     // ROUND-58 (R58-c): bound the block — stub from the OLDEST lines first
     // until the joined block is under MAX_TOOL_BLOCK_CHARS.
-    let text = pendingToolLines.join("\n");
+    let text = pendingToolLines.map((l) => l.text).join("\n");
     for (let i = 0; i < pendingToolLines.length && text.length > MAX_TOOL_BLOCK_CHARS; i++) {
-      if (pendingToolLines[i].length > OLD_TOOL_STUB_CHARS) {
-        pendingToolLines[i] = `${pendingToolLines[i].slice(0, OLD_TOOL_STUB_CHARS)}…[older result truncated]`;
+      // R70-b D3: sticky lines (read_skill / memory_recall) are never
+      // stubbed by the block cap — only the second, last-resort pass below
+      // can touch them.
+      if (pendingToolLines[i].sticky) continue;
+      if (pendingToolLines[i].text.length > OLD_TOOL_STUB_CHARS) {
+        pendingToolLines[i].text = `${pendingToolLines[i].text.slice(0, OLD_TOOL_STUB_CHARS)}…[older result truncated]`;
       }
-      text = pendingToolLines.join("\n");
+      text = pendingToolLines.map((l) => l.text).join("\n");
+    }
+    // R70-b D3 last resort: bounded context is the HARD invariant — if the
+    // block is still over the cap (only possible with many huge sticky
+    // bodies), sticky lines truncate to STICKY_STUB_CHARS, oldest first,
+    // with the honest reload marker.
+    for (let i = 0; i < pendingToolLines.length && text.length > MAX_TOOL_BLOCK_CHARS; i++) {
+      if (pendingToolLines[i].text.length > STICKY_STUB_CHARS) {
+        pendingToolLines[i].text = `${pendingToolLines[i].text.slice(0, STICKY_STUB_CHARS)}…[skill instructions truncated — call read_skill again to reload them]`;
+      }
+      text = pendingToolLines.map((l) => l.text).join("\n");
     }
     messages.push({
       role: "user",
@@ -636,13 +682,14 @@ export function assembleHistory(db: SqliteDatabase, sessionId: string): SeqMessa
       );
       let line =
         `${toolName}(${argsSummary}) → ${ok ? "ok" : "FAILED"}${safeOutput ? `: ${safeOutput}` : ""}`;
-      // ROUND-58 (R58-c): older tool results stub to OLD_TOOL_STUB_CHARS —
-      // see the assembleHistory section comment. The RECENT set keeps full
-      // fidelity (the model is actively working with those).
-      if (!recentToolSeqs.has(event.seq) && line.length > OLD_TOOL_STUB_CHARS) {
+      // ROUND-70 (R70-b, D3): sticky tools (read_skill / memory_recall)
+      // never hit the per-line 200-char stub — instructions and durable
+      // facts must survive the whole task. See the header comment.
+      const sticky = isStickyResultTool(toolName);
+      if (!recentToolSeqs.has(event.seq) && !sticky && line.length > OLD_TOOL_STUB_CHARS) {
         line = `${line.slice(0, OLD_TOOL_STUB_CHARS)}…[older result truncated]`;
       }
-      pendingToolLines.push(line);
+      pendingToolLines.push({ text: line, sticky });
       pendingToolSeq = event.seq;
     }
   }
@@ -716,6 +763,110 @@ interface PreparedTurn {
   /** ROUND-50 (R50-c1): the per-send thinking level, threaded to the chat
    * adapters (chat.ts buildModel). Not persisted. */
   thinkingLevel?: ThinkingLevel;
+}
+
+/* ── ROUND-70 (R70-c, D1): per-turn environment grounding ────────────────────
+ *
+ * R70-A's #1 issue: the composed prompt never said WHICH OS/shell the agent
+ * was commanding — the model guessed (the live reports show cmd.exe-style
+ * launches from POSIX models and vice versa). prepareTurn now computes the
+ * real machine state once per turn and the ENVIRONMENT section renders it;
+ * the TERMINAL section teaches only the actual platform's syntax.
+ *
+ * Contract: NEVER block the turn on this — every probe is timeout-guarded
+ * (git ~1.5s) and degrades to honest display strings ("not a git repo" /
+ * "unknown"). Nothing here is cached across turns (prepareTurn IS the
+ * per-turn cache).
+ */
+
+/** Hard guard for each git probe call (~1.5s per the R70-c spec). */
+const GIT_PROBE_TIMEOUT_MS = 1_500;
+
+/** One execFile call that ALWAYS resolves (ok:false on error/timeout) — a
+ * failed probe is display data ("unknown"), never a turn failure. */
+function execFileQuiet(
+  file: string,
+  args: string[],
+  timeoutMs: number,
+): Promise<{ ok: boolean; stdout: string; stderr: string }> {
+  return new Promise((resolve) => {
+    let settled = false;
+    const done = (ok: boolean, stdout: string, stderr: string): void => {
+      if (settled) return;
+      settled = true;
+      resolve({ ok, stdout, stderr });
+    };
+    try {
+      const child = execFile(
+        file,
+        args,
+        { timeout: timeoutMs, windowsHide: true, maxBuffer: 1024 * 64 },
+        (err, stdout, stderr) => {
+          done(err === null, String(stdout ?? ""), String(stderr ?? ""));
+        },
+      );
+      // Belt-and-braces: execFile's own timeout kills the child, but a
+      // PATH-resolution hang must never hold the turn either — the unref'd
+      // guard timer resolves and kills regardless.
+      const guard = setTimeout(() => {
+        done(false, "", "guard timeout");
+        try {
+          child.kill();
+        } catch {
+          /* already gone */
+        }
+      }, timeoutMs + 250);
+      guard.unref();
+    } catch {
+      done(false, "", "spawn failed");
+    }
+  });
+}
+
+/** The branch + dirty state of the project's worktree, or the honest
+ * fallbacks: "not a git repo" / "unknown". NEVER throws. */
+async function probeGitState(rootPath: string): Promise<{ gitBranch: string; gitDirty: boolean }> {
+  const branchResult = await execFileQuiet(
+    "git",
+    ["-C", rootPath, "rev-parse", "--abbrev-ref", "HEAD"],
+    GIT_PROBE_TIMEOUT_MS,
+  );
+  if (!branchResult.ok) {
+    const notARepo = /not a git repository|must be run in a work tree/i.test(branchResult.stderr);
+    return { gitBranch: notARepo ? "not a git repo" : "unknown", gitDirty: false };
+  }
+  const branch = branchResult.stdout.trim();
+  // Detached HEAD: --abbrev-ref prints the literal "HEAD" — report it
+  // honestly rather than pretending it is a branch name.
+  const gitBranch = branch === "" ? "unknown" : branch === "HEAD" ? "HEAD (detached)" : branch;
+  const statusResult = await execFileQuiet(
+    "git",
+    ["-C", rootPath, "status", "--porcelain"],
+    GIT_PROBE_TIMEOUT_MS,
+  );
+  // A failed status probe leaves dirty=false — the model still gets the
+  // branch; the D4 dirty-worktree discipline holds regardless.
+  const gitDirty = statusResult.ok ? statusResult.stdout.trim() !== "" : false;
+  return { gitBranch, gitDirty };
+}
+
+/** The turn's PromptEnvironment (D1): OS mapped from process.platform, the
+ * shell exec.ts ACTUALLY spawns through (spawn(…, {shell:true}) = cmd.exe on
+ * Windows, /bin/sh on POSIX), the local date, and the git state. */
+async function buildPromptEnvironment(rootPath: string): Promise<PromptEnvironment> {
+  const now = new Date();
+  const weekdays = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
+  const pad = (n: number): string => String(n).padStart(2, "0");
+  const { gitBranch, gitDirty } = await probeGitState(rootPath);
+  return {
+    osPlatform:
+      process.platform === "win32" ? "Windows" : process.platform === "darwin" ? "macOS" : "Linux",
+    osRelease: os.release(),
+    shell: process.platform === "win32" ? "cmd.exe" : "/bin/sh",
+    currentDate: `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())} (${weekdays[now.getDay()]})`,
+    gitBranch,
+    gitDirty,
+  };
 }
 
 /** Shared pre-flight: validation, provider/key resolution, tools, system,
@@ -967,6 +1118,11 @@ async function prepareTurn(
     project !== undefined
       ? await buildProjectTools(project.rootPath, allowListWithMode, toolDeps)
       : undefined;
+  // ROUND-70 (R70-c, D1): the turn's REAL environment — OS/shell/date/git,
+  // computed here (per turn, never cached across turns, never blocking:
+  // the git probe degrades to honest fallback strings). Projectless
+  // sessions run agent.systemPrompt — no environment to ground.
+  const environment = project !== undefined ? await buildPromptEnvironment(project.rootPath) : undefined;
   // ROUND-40: the system prompt's toolNames must reflect the EXACT tool set the
   // model will actually receive. The old code rebuilt tools from
   // `agent.allowedTools` here — for a child that lied in two ways: (a) it
@@ -979,9 +1135,15 @@ async function prepareTurn(
         rootPath: project.rootPath,
         toolNames: tools ? Object.keys(tools) : [],
         customRules: readCustomRules(project.rootPath),
+        // ROUND-70 (R70-c, D1): OS/shell/date/git grounding.
+        environment,
         // Round-28 WS-F: inject the agent's maxTurns budget into the AGENTIC
         // LOOP section so the model knows how many tool round-trips it has.
         maxTurns: agent.maxTurns,
+        // ROUND-70 (R70-c, D2): the outer-iteration cap, mentioned honestly
+        // in the merged AGENTIC LOOP section (the same default the turn
+        // runners apply — agent.maxOuterLoops ?? 5).
+        maxOuterLoops: agent.maxOuterLoops ?? 5,
         // Round-28 WS-G: inject the codebase index summary (if the project
         // has been indexed) so the agent has codebase awareness without
         // needing list_dir + read_file every turn.
@@ -1002,12 +1164,23 @@ async function prepareTurn(
         // above already reflects the post-mode tool set (the tools object
         // was built from the mode-filtered allowlist).
         permissionMode,
-        // ROUND-61 (R61): the enabled-skills index (progressive disclosure —
-        // names + one-liners; bodies load via read_skill) and the
-        // computer-use master-switch state (the always-on discipline
-        // section rides the tools that are already in toolNames — the
-        // plugin only registers them when the switch is on).
-        skills: listEnabledSkills(db).map((skill) => ({
+        // ROUND-61 (R61) → ROUND-70 (R70-b): the enabled-skills index
+        // (progressive disclosure — names + one-liners; bodies load via
+        // read_skill). Resolution goes through the ONE shared resolver
+        // (storage/skills-files.ts) so the prompt and read_skill can never
+        // disagree:
+        //   · D1 — file-based skills (project .acute/skills/ + user-global
+        //     ~/.agents/skills/) join the DB skills (DB rows shadow files;
+        //     project beats global);
+        //   · D4 — the computer-use builtin is gated out while the master
+        //     switch is off (its tools are dark; read_skill refuses it too);
+        //   · D5 — a NON-EMPTY agent.skills allowlist filters the set by
+        //     name (per-agent curation; empty/undefined = all — the field
+        //     was stored since R61 but never read until now).
+        skills: resolveEffectiveSkills(db, {
+          ...(project !== undefined ? { projectRoot: project.rootPath, projectScope: project.id } : {}),
+          ...(agent.skills.length > 0 ? { agentSkills: agent.skills } : {}),
+        }).map((skill) => ({
           name: skill.name,
           description: skill.description,
         })),

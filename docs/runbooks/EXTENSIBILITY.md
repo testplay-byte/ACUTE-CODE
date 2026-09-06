@@ -1,4 +1,4 @@
-<!-- last-reviewed: 2026-09-04 round-66 -->
+<!-- last-reviewed: 2026-09-06 round-70 -->
 # EXTENSIBILITY — plugins, skills, MCP servers (owner's guide)
 
 **Status:** normative · **Established:** round-61 (owner directive: "the
@@ -16,7 +16,7 @@ with its own runbook: [PROMPT-MODULES](PROMPT-MODULES.md) (R59).
 | Surface | Use it when | Where it lives | Gating |
 |---|---|---|---|
 | **External plugin (.mjs)** | You want NEW TOOLS (new model-callable capabilities) in code | `~/.acute/plugins/` (user) or `<project>/.acute/plugins/` (project, opt-in) | Tool-name grammar + agent allowlist; in-process, full trust |
-| **Skill** | You want new BEHAVIOR/CONVENTIONS without code (prompt modules the agent loads on demand) | Settings → Skills (the `skills` table) | Enabled flag; body loaded via `read_skill` (progressive disclosure) |
+| **Skill** | You want new BEHAVIOR/CONVENTIONS without code (prompt modules the agent loads on demand) | Settings → Skills (the `skills` table) **+ files on disk since R70**: `<project>/.acute/skills/<name>/SKILL.md` and `~/.agents/skills/` | Enabled flag (DB rows) / existence (files); body loaded via `read_skill` (progressive disclosure; sticky since R70) |
 | **MCP server** | You want to attach an EXTERNAL tool server (the wide ecosystem — filesystems, browsers, APIs) | Settings → MCP (the `mcp_servers` table) | Owner-configured only; tools bridge as `mcp__<server>__<tool>` |
 | **Built-in plugin catalog** | You want to SEE what's shipped + what each plugin contributes | `GET /plugins` (the Extensions surface) | Read-only; the catalog is computed from real declarations |
 
@@ -91,23 +91,53 @@ Built-in plugins (in-repo) use the richer `PluginDefinition` shape —
 dark until its master switch flips). External modules cannot use `ctx`
 (design: externals are static tool lists; built-ins are code).
 
-## 2. Skills (Settings → Skills)
+## 2. Skills (Settings → Skills + files on disk since R70)
 
 A skill is a SKILL.md-style prompt module with **progressive disclosure**:
 every enabled skill's **name + one-line description** ride each turn's
 system prompt (the `SKILLS (load with read_skill)` section); the **body**
 loads only when the model calls `read_skill("name")`. Long procedures stay
-out of context until needed.
+out of context until needed. Since R70 a loaded body is **STICKY** — it
+persists with a 60K budget and skips the replay stub, so a loaded
+instruction set survives the whole task (the prompt teaches the reload
+affordance for the last-resort 8K truncation case).
 
-- **Built-ins**: the `computer-use` skill (the behavioral contract from the
-  spec's doc-09, condensed) is seeded at database open. Built-ins can be
-  **edited** (your text overrides the seed) or **disabled**, but never
-  deleted — deletion is refused with a note (the seed would recreate them).
-- **User skills**: full CRUD. Name is a lowercase slug (letters/digits/
-  dashes, 2–64 chars, unique); description ≤500 chars (the prompt line);
-  body ≤60 000 chars (the `read_skill` payload).
-- Enabled skills ride EVERY turn's system prompt — keep descriptions
-  one-line; put the detail in the body.
+Skills come from THREE places (one merged view — `GET /skills`, with
+provenance since R70):
+
+- **Built-ins (8 since R70)**: `computer-use` (the behavioral contract
+  from the spec's doc-09, condensed — gated on the computer-use master
+  switch) plus the R70 seeds `code-review`, `debugging`, `testing`,
+  `git-workflow`, `web-research`, `project-init` (writes the project's
+  AGENTS.md from codebase analysis), and `browser-use` (the
+  embedded-browser craft). Built-ins can be **edited** (your text
+  overrides the seed) or **disabled**, but never deleted — deletion is
+  refused with a note (the seed would recreate them; a deleted row even
+  revives on reopen).
+- **User skills (DB)**: full CRUD. Name is a lowercase slug (letters/
+  digits/dashes, 2–64 chars, unique); description ≤500 chars (the
+  prompt line); body ≤60 000 chars (the `read_skill` payload).
+- **File skills (R70, the Agent-Skills standard)**: `<projectRoot>/.acute/
+  skills/<name>/SKILL.md` (or a flat `<name>.md` directly in that dir)
+  and `~/.agents/skills/<name>/SKILL.md` (user-global — the CROSS-AGENT
+  directory, so the same folder works in other agents too). Tolerant
+  frontmatter (`name`/`description`; a valid frontmatter name wins over
+  the dir name; no frontmatter → the slug + a generic description);
+  caps description ≤500, body ≤60K, ≤32 per source. Discovered fresh
+  each turn; bodies are read from disk at CALL time, so a deleted file
+  de-lists honestly. File skills are READ-ONLY — edit/delete in the UI
+  gets the honest 409 "file-defined skill: edit the SKILL.md".
+
+**Precedence**: a DB row with the same name shadows the file in ANY
+state (enabled or disabled — "hidden, not fall-through"; creating a DB
+skill with the file's name is the documented override path). Project
+file beats global file. **The agent form's skill allowlist**
+(`agent.skills`, live since R70 — the field was stored and patched
+since R61 but never read): a non-empty list filters the whole merged
+set for that agent; empty or absent = all skills.
+
+Enabled skills ride EVERY turn's system prompt — keep descriptions
+one-line; put the detail in the body.
 
 ### A working skill (Settings → Skills → New skill)
 
@@ -130,7 +160,27 @@ Then ask the agent something test-related; the prompt lists
 `testing-conventions` and the model calls `read_skill` when it matches.
 `read_skill` is a global capability (always in the toolset when deps
 exist; template agents' allowlists gained it via migration 0023; explicit
-user-curated allowlists can add it in the agent form).
+user-curated allowlists can add it in the agent form; since R70 it is
+ALSO a plan-mode tool — the loader is not dark in read-only posture).
+
+Or skip the UI entirely — drop a file (R70, the Agent-Skills standard;
+the same shape other agents read):
+
+```
+<project>/.acute/skills/testing-conventions/SKILL.md
+---
+name: testing-conventions
+description: How this repo's tests are written and verified.
+---
+# Skill: testing-conventions
+
+(the same body as above)
+```
+
+No database row at all: the file is discovered per turn, appears in the
+SKILLS prompt section and in Settings → Skills (marked as a project
+file, `source: "project-file"`, with its `filePath`), and its body
+loads from disk when `read_skill` is called.
 
 ## 3. MCP servers (Settings → MCP)
 
@@ -217,6 +267,45 @@ project files with loaded bits + the honest load-error note). The
   grew `find_elements` (its 31st tool — still settings-gated, deliberately
   NOT `TOOL_NAMES` vocabulary; see [COMPUTER-USE](COMPUTER-USE.md)).
 
+## The R70 addendum (the skills system round)
+
+- **File-based skills (the Agent-Skills standard).** Skills now also come
+  from disk — `<projectRoot>/.acute/skills/<name>/SKILL.md` (or a flat
+  `<name>.md`) and user-global `~/.agents/skills/<name>/SKILL.md` — with
+  tolerant frontmatter, caps (description ≤500, body ≤60K, ≤32 per
+  source), and read-only semantics (`PATCH`/`DELETE` on a file-skill's
+  synthetic id → 409 "file-defined skill: edit the SKILL.md"). DB rows
+  take precedence over files in any state; the listing (`GET /skills`)
+  merges everything with provenance (`source` gains `project-file` /
+  `global-file`, plus `filePath` and `projectName`; bodies read from disk
+  at call time). §2 above carries the full contract.
+- **EIGHT built-in skills now (was 1).** The same `INSERT OR IGNORE`
+  seeding grew `code-review` (1,362 chars), `debugging` (1,398),
+  `testing` (1,138), `git-workflow` (1,298), `web-research` (1,185),
+  `project-init` (1,468 — the /init skill that WRITES the project's
+  AGENTS.md from codebase analysis; the file auto-loads since R70), and
+  `browser-use` (1,822 — the embedded-browser craft the prompt's
+  browser-panel section used to carry in full). Existing databases get
+  them on next open; user edits persist; a deleted row revives on
+  reopen.
+- **Sticky bodies.** `read_skill` + `memory_recall` results persist with
+  a 60K budget (was the 4K head+tail mangle) and skip the 200-char
+  replay stub — a loaded instruction set survives the whole task; the
+  last-resort context cap truncates to 8K with an honest reload marker
+  (the prompt teaches "call read_skill again").
+- **The computer-use skill is gated on the master switch** — while
+  computer use is OFF the skill is absent from the prompt index and
+  `read_skill` refuses it ("computer use is disabled in settings … its
+  tools are dark"); dark tools are no longer advertised. `read_skill`
+  also joined `PLAN_MODE_TOOLS` (the SKILLS section is advertised in
+  plan mode, so the loader must not be dark there).
+- **`agent.skills` is wired** — the per-agent allowlist in the agent form
+  (stored and patched since R61, never read before): non-empty = a name
+  allowlist over the whole merged set (builtin + user + file skills);
+  empty/absent = all. One shared resolver (`storage/skills-files.ts`
+  `resolveEffectiveSkills`) feeds BOTH the prompt's SKILLS section and
+  `read_skill`, so they can never disagree.
+
 ## Troubleshooting
 
 - **A plugin file exists but `loaded:false`** — read the sidecar log
@@ -224,7 +313,15 @@ project files with loaded bits + the honest load-error note). The
   a spawn/import error; the note in `GET /plugins` says the same.
 - **Skill not in the prompt** — it must be `enabled` (the toggle) and its
   description is the line you'll see; check the SKILLS section exists
-  (no enabled skills = no section).
+  (no enabled skills = no section). A FILE skill needs its SKILL.md on
+  disk at the project root (`.acute/skills/`) or `~/.agents/skills/` —
+  it disappears when the file does. The computer-use builtin is absent
+  while the master switch is off (by design — dark tools are not
+  advertised).
+- **Skill edit refused with 409 "file-defined skill"** — that skill comes
+  from a SKILL.md file, not the database; edit the file (the listing's
+  `filePath` names it) or create a DB skill with the same name to
+  override it.
 - **MCP probe fails** — the honest error names the stage (initialize
   failed / tools/list failed / spawn failed). Check the command resolves
   (`npx -y <pkg>` on PATH), then re-probe (a probe resets the one-strike
@@ -241,7 +338,9 @@ project files with loaded bits + the honest load-error note). The
 - Code map: `agent-core/src/tools/registry.ts` (loader, grammar, caps,
   catalog), `agent-core/src/tools/plugins/` (13 built-ins — incl.
   `vision.ts`, the R66 core-vision plugin), skills storage
-  `agent-core/src/storage/skills.ts`, MCP storage
+  `agent-core/src/storage/skills.ts` (the 8 builtins) +
+  `agent-core/src/storage/skills-files.ts` (file discovery, the shared
+  resolver, the merged listing), MCP storage
   `agent-core/src/storage/mcp.ts` + client `agent-core/src/mcp/manager.ts`,
   routes in `agent-core/src/server.ts` (ROUND-61 section), settings UI in
   `src/components/settings/{SkillsTab,McpTab}.tsx`.

@@ -84,19 +84,18 @@ export const PROMPT_REGISTRY: readonly PromptSectionSpec[] = Object.freeze([
   },
   {
     id: "agentic-loop",
-    description: "## AGENTIC LOOP — MULTI-TURN COMPLETION (maxTurns injected)",
-    dynamic: true, // maxTurns
+    description: "## AGENTIC LOOP — MULTI-TURN COMPLETION — the five-phase loop (PLAN/EXPLORE/ACT/VERIFY/FINISH; maxTurns + maxOuterLoops injected, R70-c merged the old efficiency/task-planning/todo-tracking sections)",
+    dynamic: true, // maxTurns + maxOuterLoops + todo/delegate-gated lines
     bucket: "identity",
   },
-  {
-    id: "efficiency",
-    description: "## EFFICIENCY — FEWEST STEPS THAT FULLY SOLVE THE TASK",
-    dynamic: false,
-    bucket: "identity",
-  },
+  // R70-c (D2): "efficiency", "task-planning" and "todo-tracking" are
+  // REMOVED together with their prompts.ts blocks — the four-way overlap
+  // consolidated into the merged AGENTIC LOOP (R70-A issue #2; the
+  // R66-2-c removal-cascade precedent). The registry-completeness pin
+  // guarantees the stale entries can't linger.
   {
     id: "file-editing",
-    description: "## FILE EDITING RULES — read-before-edit, anchors, smart verification",
+    description: "## FILE EDITING RULES — read-before-edit, line-number anchors, dirty-worktree discipline, verify-after-edit (R70-c)",
     dynamic: false,
     bucket: "identity",
   },
@@ -114,20 +113,8 @@ export const PROMPT_REGISTRY: readonly PromptSectionSpec[] = Object.freeze([
   },
   {
     id: "terminal",
-    description: "## TERMINAL (only when run_command is allowed; background-job contract)",
-    dynamic: true, // tool-gated
-    bucket: "identity",
-  },
-  {
-    id: "task-planning",
-    description: "## TASK PLANNING — the 6-step task shape",
-    dynamic: false,
-    bucket: "identity",
-  },
-  {
-    id: "todo-tracking",
-    description: "## TODO TRACKING (only when todo_write is allowed)",
-    dynamic: true, // tool-gated
+    description: "## TERMINAL (only when run_command is allowed; background-job contract; OS-aware when the turn's environment is known — R70-c)",
+    dynamic: true, // tool-gated + ctx.environment
     bucket: "identity",
   },
   {
@@ -138,7 +125,7 @@ export const PROMPT_REGISTRY: readonly PromptSectionSpec[] = Object.freeze([
   },
   {
     id: "computer-use",
-    description: "## COMPUTER USE (desktop control) — the always-on operating discipline when the master switch is on (R61)",
+    description: "## COMPUTER USE (desktop control) — the always-on safety/posture discipline when the master switch is on (R61; trimmed R70-c, deep contract via read_skill)",
     dynamic: true, // ctx.computerUse.enabled-gated
     bucket: "identity",
   },
@@ -156,7 +143,7 @@ export const PROMPT_REGISTRY: readonly PromptSectionSpec[] = Object.freeze([
   },
   {
     id: "browser-panel",
-    description: "## EMBEDDED BROWSER PANEL (browser_control) (only when the tool is allowed)",
+    description: "## EMBEDDED BROWSER PANEL (browser_control) (only when the tool is allowed; trimmed R70-c — the deep craft lives in the browser-use skill)",
     dynamic: true, // tool-gated
     bucket: "identity",
   },
@@ -185,13 +172,13 @@ export const PROMPT_REGISTRY: readonly PromptSectionSpec[] = Object.freeze([
   },
   {
     id: "environment",
-    description: "## ENVIRONMENT — working-directory discipline (rootPath)",
-    dynamic: true, // rootPath
+    description: "## ENVIRONMENT — OS/shell/date/git grounding when ctx.environment is supplied, else the working-dir-only legacy lines (R70-c)",
+    dynamic: true, // rootPath + ctx.environment
     bucket: "identity",
   },
   {
     id: "custom-rules",
-    description: "## PROJECT RULES — .acuterules + .acute/rules/*.md (only when rules exist)",
+    description: "## PROJECT RULES — AGENTS.md / CLAUDE.md / .acute/rules/*.md / .acuterules / AGENTS.override.md / CLAUDE.local.md with @file imports (only when rules exist; R70-c)",
     dynamic: true, // customRules
     bucket: "meta",
   },

@@ -34,6 +34,14 @@
  *      UI's working section / sub-agent panel can stream a terminal tail.
  *      Background jobs keep emitting (from the registry watcher's point of
  *      view the caller is gone — the tail lives in job_status instead).
+ *
+ * ROUND-70 (R70-a, SWE-agent ACI — "tool feedback quality ≈ model quality"):
+ *   - the 64KB output cap now keeps BOTH ends (head 32KB + tail 32KB with an
+ *     honest omitted-from-the-middle marker) — build/test errors live at the
+ *     END of long logs, and the old HEAD-only clip threw them away before the
+ *     model ever saw them;
+ *   - a successful command that prints NOTHING resolves with an explicit
+ *     "ran successfully and printed nothing" note (no silent empty output).
  */
 import { spawn, type ChildProcess } from "node:child_process";
 import type { ToolResult } from "./index.js";
@@ -45,6 +53,12 @@ import { registerJob, type BackgroundJobSnapshot } from "../lib/background-jobs.
 
 export const COMMAND_TIMEOUT_MS = 60_000;
 const MAX_OUTPUT = 64 * 1024;
+/** ROUND-70 (R70-a): when output exceeds MAX_OUTPUT, keep the first
+ * OUTPUT_HEAD chars + the last OUTPUT_TAIL chars and mark the omitted middle
+ * honestly (total ≈ MAX_OUTPUT + one marker line). The tail matters most —
+ * build/test errors live at the END of long logs. */
+const OUTPUT_HEAD = 32 * 1024;
+const OUTPUT_TAIL = 32 * 1024;
 /** Grace after the shell exits before an open pipe is declared a background job. */
 const PIPE_GRACE_MS = 2_500;
 /** Shorter grace when the command text itself launches a background process. */
@@ -175,7 +189,17 @@ export async function runCommand(
 
     const clip = (text: string): string => {
       const output = text.trim();
-      return output.length > MAX_OUTPUT ? output.slice(0, MAX_OUTPUT) + "\n…[truncated]" : output;
+      if (output.length <= MAX_OUTPUT) return output;
+      // ROUND-70 (R70-a): HEAD + TAIL, never head-only. The old
+      // `slice(0, MAX_OUTPUT)` threw away the tail — where the actual error
+      // summary of a long build/test log lives.
+      const head = output.slice(0, OUTPUT_HEAD);
+      const tail = output.slice(output.length - OUTPUT_TAIL);
+      const omitted = output.length - head.length - tail.length;
+      return (
+        `${head}\n…[output truncated: ${omitted} bytes omitted from the middle — ` +
+        `the first 32KB and the last 32KB are kept]…\n${tail}`
+      );
     };
 
     const finish = (result: ToolResult): void => {
@@ -241,7 +265,13 @@ export async function runCommand(
           return;
         }
         // Normal completion: pipes closed right after the shell exited.
-        const output = clip(combined) || "(no output)";
+        // ROUND-70 (R70-a): zero-output commands say so EXPLICITLY (SWE-agent
+        // ACI — an empty/blank result is ambiguous: did it run? fail?).
+        const output =
+          clip(combined) ||
+          (exitCode === 0
+            ? "(no output — the command ran successfully and printed nothing)"
+            : "(no output)");
         const exitLine = exitCode === 0 ? "" : `\n[exit code: ${exitCode}]`;
         finish({ ok: exitCode === 0, output: output + exitLine });
       });

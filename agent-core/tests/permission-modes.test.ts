@@ -129,6 +129,10 @@ describe("modeAllowList / sessionToolAllowList (ROUND-50 R50-c1)", () => {
         "memory_recall",
         "memory_list",
         "delegate_task",
+        // ROUND-70 (R70-b): reading a skill is an observation (exactly like
+        // memory_recall) — the SKILLS prompt section is advertised in plan
+        // mode, so the loader must not be dark there.
+        "read_skill",
       ].sort(),
     );
     // Every entry must be a REAL registered tool id.
