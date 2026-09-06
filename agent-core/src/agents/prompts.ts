@@ -853,7 +853,7 @@ export function buildSectionText(ctx: PromptContext, sectionId: SectionId): stri
 }
 
 import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
-import { dirname, join, relative, resolve } from "node:path";
+import { dirname, join, relative, resolve, sep } from "node:path";
 
 /* ── ROUND-70 (R70-c, D3): project convention loading ───────────────────────
  *
@@ -903,10 +903,15 @@ function parseImportDirective(line: string): string | null {
 }
 
 /** The `# <path>:` marker path for an imported file — relative to the
- * project root when it lives inside it, else the absolute path. */
+ * project root when it lives inside it, else the absolute path. Separators
+ * are normalized to `/` so markers render IDENTICALLY on every OS (Windows
+ * path.relative yields backslashes; the convention — and the pins — are
+ * forward-slash). Found by CI on windows-latest after the R70 push: the
+ * Linux sandbox never exercises the backslash branch. */
 function importMarkerPath(rootPath: string, absPath: string): string {
   const rel = relative(rootPath, absPath);
-  return rel === "" || rel.startsWith("..") ? absPath : rel;
+  const shown = rel === "" || rel.startsWith("..") ? absPath : rel;
+  return shown.split(sep).join("/");
 }
 
 function safeReadText(absPath: string): string | null {

@@ -327,6 +327,13 @@ describe("D3: @file imports (the AGENTS/CLAUDE bridge)", () => {
     expect(rules).toContain("Conventions: tabs, not spaces.");
     expect(rules).toContain("House rules.");
     expect(rules).toContain("That is all.");
+    // R70 CI-stability pin: every `# <path>:` marker must use FORWARD slashes
+    // only — Windows path.relative yields backslashes and the first R70 push
+    // failed CI exactly here (run 34049175869); the marker contract is
+    // OS-independent.
+    for (const marker of rules.match(/^# .*:$/gm) ?? []) {
+      expect(marker).not.toContain("\\");
+    }
   });
 
   it("imports resolve relative to the INCLUDING file's dir, and nest one level", () => {
