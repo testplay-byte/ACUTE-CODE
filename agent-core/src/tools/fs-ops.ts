@@ -180,7 +180,14 @@ const lineBytes = (text: string): number => Buffer.byteLength(text, "utf8") + 1;
  *   - an EMPTY file resolves to an explicit "File exists but is empty" note;
  *   - the 256KB cap counts CONTENT (pre-prefix); an oversized window keeps
  *     the first ~32KB + the last ~32KB with an honest omitted-middle marker
- *     that points at offset/limit for the middle.
+ *     that carries the file's TOTAL line count and the EXACT next call
+ *     (kilocode's exact-continuation rule, R71-e2 D1: the marker itself
+ *     teaches the model how to page the omitted middle — "use offset=N to
+ *     continue" with N = the first omitted line, never a generic hint);
+ *   - the degenerate single-line cap (one line bigger than the whole budget)
+ *     byte-slices the line and says so HONESTLY: line-based paging cannot
+ *     reach the omitted bytes, and the marker names real recovery tools
+ *     (search_code / run_command) instead of pretending offset/limit works.
  *
  * The RAW `readFile` above is unchanged for the REST file-viewer route
  * (server.ts /projects/:id/file) — only the read_file TOOL output is
@@ -243,14 +250,20 @@ export function readFileWindow(root: string, relative: string, options?: ReadFil
     if (windowLines.length === 1) {
       // Degenerate case: ONE line bigger than the whole cap (a minified
       // asset / data blob). Byte-slice the line itself into head + tail —
-      // both numbered with the line's true number.
+      // both numbered with the line's true number. R71-e2 D1: the marker
+      // carries the total line count + byte semantics AND says honestly
+      // that no continuation call exists (offset/limit pages whole LINES;
+      // there is only one line) — the recovery path is a different tool.
       const line = windowLines[0];
       const headText = numberLine(startLine, byteSliceStart(line, READ_WINDOW_HEAD));
       const tailText = numberLine(startLine, byteSliceEnd(line, READ_WINDOW_TAIL));
-      const omittedOneLine = Math.max(windowBytes - READ_WINDOW_HEAD - READ_WINDOW_TAIL, 0);
+      const lineTotalBytes = Buffer.byteLength(line, "utf8");
+      const omittedOneLine = Math.max(lineTotalBytes - READ_WINDOW_HEAD - READ_WINDOW_TAIL, 0);
       const markerOneLine =
-        `…[file truncated: ${omittedOneLine} bytes omitted from the middle of line ${startLine} — ` +
-        `the file is one long line]…`;
+        `…[file truncated: ${omittedOneLine} bytes omitted from the middle of line ${startLine} of ${totalLines} total ` +
+        `(${lineTotalBytes}-byte single line: first ${READ_WINDOW_HEAD} + last ${READ_WINDOW_TAIL} bytes kept) — ` +
+        `no continuation call can reach this middle: offset/limit pages whole LINES and this is one line; ` +
+        `use search_code (content match) or run_command (grep) to inspect it]…`;
       return { ok: true, output: `${headText}\n${markerOneLine}\n${tailText}` };
     }
     const head: Array<{ n: number; text: string }> = [];
@@ -288,9 +301,16 @@ export function readFileWindow(root: string, relative: string, options?: ReadFil
     const tailText = tail.length > 0 ? tail.map((l) => numberLine(l.n, l.text)).join("\n") : "";
     const lastHeadLine = head.length > 0 ? head[head.length - 1].n : startLine - 1;
     const firstTailLine = tail.length > 0 ? tail[0].n : lastHeadLine + 1;
+    // R71-e2 D1 (kilocode's exact-continuation): the marker carries the
+    // byte count, the two boundary lines, the file's TOTAL line count, and
+    // the EXACT next call — offset = the first OMITTED line (the line right
+    // after the kept head, the same "use offset=1891 to continue" semantic
+    // kilocode proved out). Paging from there walks the middle; when the
+    // model reaches firstTailLine it already has the tail in hand.
+    const continueFrom = lastHeadLine + 1;
     const marker =
-      `…[file truncated: ${omitted} bytes omitted between line ${lastHeadLine} and line ${firstTailLine} — ` +
-      `use offset/limit to page through the middle]…`;
+      `…[file truncated: ${omitted} bytes omitted between line ${lastHeadLine} and line ${firstTailLine} ` +
+      `of ${totalLines} total — use offset=${continueFrom} to continue]…`;
     return {
       ok: true,
       output: tailText !== "" ? `${headText}\n${marker}\n${tailText}` : `${headText}\n${marker}`,

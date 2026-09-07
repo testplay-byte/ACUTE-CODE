@@ -3,7 +3,7 @@
   "product": {
     "name": "Acute",
     "tagline": "Local-first multi-agent engineering workbench",
-    "version": "0.70.0",
+    "version": "0.71.0",
     "availability": "Private build — not yet distributed",
     "chips": [
       "Windows desktop",
@@ -26,8 +26,8 @@
       "id": "agentic",
       "title": "Agentic system",
       "state": "building",
-      "progress": 65,
-      "summary": "Multi-turn agentic continuation with the R70 agent brain (env grounding, AGENTS.md conventions, one five-phase loop, verification discipline); 8 builtin + file-based skills with sticky bodies; multi-agent orchestration owner-gated; computer use (desktop observation+actuation, separate vision model, kill switch) owner-gated"
+      "progress": 68,
+      "summary": "Multi-turn agentic continuation with the R70 agent brain (env grounding, AGENTS.md conventions, one five-phase loop, verification discipline) + the R71 discipline & reliability layer (engineering-discipline prompt section with [KNOWN]/[ASSUMED]/[UNKNOWN] tagging and 3-strike escalation, edit-failure escalation, provider-error classification + context-overflow recovery); 12 builtin + file-based skills with sticky bodies and trigger-rich descriptions; multi-agent orchestration owner-gated; computer use (desktop observation+actuation, separate vision model, kill switch) owner-gated"
     },
     {
       "id": "automation",
@@ -156,6 +156,10 @@
     {
       "date": "2026-09-06",
       "label": "R70 — the agent brain round (research-driven): env grounding (real OS/shell/date/git in the prompt), AGENTS.md/CLAUDE.md convention loading with @file imports, the four planning sections merged into one five-phase loop, the Codex dirty-worktree + verify-after-edit discipline, the ACI tool-feedback round (head+tail output caps, line-numbered read_file), file-based skills + 7 new builtins + sticky skill bodies + agent.skills wired; prompt 22,460→20,156 chars (2177 tests)"
+    },
+    {
+      "date": "2026-09-07",
+      "label": "R71 — the discipline & reliability round (research-driven, the owner's 4 reference repos): the engineering-discipline prompt section (karpathy principles + [KNOWN]/[ASSUMED]/[UNKNOWN] + 3-strike + red flags), verification receipts + 🟢🟡🔴 confidence tags, 12 trigger-rich skills (focused-fix/zero-hallucination/self-eval/ship-gate), edit-failure escalation, owner-denial ≠ failure semantics, 6-class provider-error classification, context-overflow recovery (2287 tests)"
     }
   ],
   "quality": {
@@ -167,7 +171,7 @@
       },
       {
         "name": "agent-core",
-        "tests": 1275
+        "tests": 1385
       },
       {
         "name": "sidecar e2e",
@@ -188,8 +192,8 @@
   ],
   "plan": {
     "current": {
-      "title": "Round 70 DELIVERED — the agent brain round (0.70.0)",
-      "detail": "Research-driven (the round's own prompt audit + the OSS agent study; no new owner field report). The model now knows its world, follows conventions, and verifies before claiming done: every turn's prompt states the real OS + release, the real shell, the date, and the git branch/dirty state (TERMINAL teaches only the real platform's syntax); AGENTS.md/CLAUDE.md/AGENTS.override/CLAUDE.local.md auto-load in a documented order with source markers and @file imports (16K/32K caps) — plus a project-init skill that writes that AGENTS.md from codebase analysis; the four overlapping planning sections merged into one five-phase loop (PLAN→EXPLORE→ACT→VERIFY→FINISH; registry 23→20 ids) with the Codex dirty-worktree rule, the verify-after-edit contract, and the path:line communication contract; the ACI round made tool feedback honest (run_command keeps head 32KB + tail 32KB with a middle-omission marker, read_file is cat -n with offset/limit pagination and honest empty/EOF messages, todo_write carries the planning discipline); skills became a system (file-based .acute/skills + ~/.agents/skills with the Agent-Skills standard and DB-row precedence, 8 builtins incl. browser-use and project-init, STICKY bodies that survive the whole task at a 60K budget, the computer-use skill gated on the master switch, agent.skills wired after being dead data since R61) — all while the prompt SHRANK 22,460→20,156 chars. Verification: 2177 root tests in 126 files, all green (agent-core 1275/63 files, frontend 890 unchanged, e2e 12/12 in-suite against the fresh build), lint/typecheck clean, build green, license audit CLEAN (134 deps, no dependency changes). The seven new skill bodies are construction-pinned — the owner's real tasks are the live gate."
+      "title": "Round 71 DELIVERED — the discipline & reliability round (0.71.0)",
+      "detail": "Research-driven from the owner's four reference repos (karpathy-skills, alirezarezvani/claude-skills, cline, kilocode) after his 'smarter better much more capable and reliable' directive; the R71-c audit found the gaps concentrated in the model-facing layer, and this round closes them. (1) Prompt discipline: a new ENGINEERING DISCIPLINE section (4 karpathy principles with binary self-tests, [KNOWN]/[ASSUMED]/[UNKNOWN] tagging with never-code-on-an-UNKNOWN, 3-strike escalation, a 5-line red-flags table), task→verifiable-goal transforms in PLAN, verification receipts + 🟢🟡🔴 confidence tags + devil's advocate + anti-question-padding in COMMUNICATION, sub-agent scope/no-polling discipline; golden 20,156→23,665 bytes. (2) Tool reliability: read_file/run_command truncation markers carry the exact next call ('use offset=N to continue', spill-to-file recovery), edit_file consecutive-failure escalation (2nd re-read / 3rd change-approach / 5th refuse — NEW edit-streak.ts), owner denials say 'NOT a tool or system failure' with timeouts distinguished, provider errors classified into six classes (context_window_exceeded/auth/rate_limit/network/timeout/unknown) riding the 502 envelope + turn.error event additively, and context-overflow recovery (forced compaction + one retry, visible system line) on both turn paths. (3) Skills: 8 builtin descriptions rewritten trigger-rich ('Use when [phrasings]. NOT for [adjacent case]') + 4 new discipline builtins (focused-fix, zero-hallucination, self-eval, ship-gate — 12 total, INSERT OR IGNORE). Verification: 2287 root tests in 129 files, all green (agent-core 1385/66 files, frontend 890 unchanged, e2e 12), lint/typecheck clean, license audit CLEAN (134 deps, no dependency changes). The live gates (receipts in real replies, skill triggers on real phrasings, escalation ending flail loops, overflow recovery saving long sessions) await the owner's Windows field run."
     },
     "upcoming": [
       {

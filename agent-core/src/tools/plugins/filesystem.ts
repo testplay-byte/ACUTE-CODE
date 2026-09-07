@@ -15,6 +15,9 @@ import {
   resolveInsideRoot,
   writeFile,
 } from "../fs-ops.js";
+// ROUND-71 (R71-e2, D2): the per-session consecutive-failure counter + the
+// cline-style escalation tiers for edit_file anchor failures.
+import { editFailureSuffix, isEditAnchorFailure, recordEditFailure, resetEditStreak } from "../edit-streak.js";
 import { recordSnapshot } from "../../storage/snapshots.js";
 import type { PluginDefinition, ToolDefinition } from "../registry.js";
 
@@ -48,7 +51,7 @@ export const filesystemPlugin: PluginDefinition = {
         // after each line-number prefix is byte-exact — the model strips the
         // prefix when building edit_file anchors.
         description:
-          "Read a text file's content, with line numbers (cat -n style: right-aligned line number + two spaces + content). Path is relative to the project root. Read BEFORE editing so you know the exact current text, and cite locations as path:line. The line-number prefix is NOT part of the file — when building edit_file oldString/newString, copy ONLY the content after the prefix. Large files: page through with offset (1-based start line, default 1) and limit (number of lines) instead of re-reading the whole file.",
+          "Read a text file's content, with line numbers (cat -n style: right-aligned line number + two spaces + content). Path is relative to the project root. Read BEFORE editing so you know the exact current text, and cite locations as path:line. The line-number prefix is NOT part of the file — when building edit_file oldString/newString, copy ONLY the content after the prefix. Large files: page through with offset (1-based start line, default 1) and limit (number of lines) instead of re-reading the whole file. When output is truncated, the marker carries the file's total line count and the EXACT next call — 'use offset=N to continue' — so page from there instead of guessing.",
         inputSchema: jsonSchema({
           type: "object",
           properties: {
@@ -104,7 +107,7 @@ export const filesystemPlugin: PluginDefinition = {
       {
         name: "edit_file",
         description:
-          "Replace ONE exact occurrence of oldString with newString in an existing file. The oldString must match exactly once — include enough surrounding lines to make it unique.",
+          "Replace ONE exact occurrence of oldString with newString in an existing file. The oldString must match exactly once — include enough surrounding lines to make it unique. If the edit fails, the error tells you why; consecutive failures escalate with concrete recovery steps — follow them (re-read the file, then anchor on CURRENT content).",
         inputSchema: jsonSchema({
           type: "object",
           properties: {
@@ -128,6 +131,24 @@ export const filesystemPlugin: PluginDefinition = {
             typeof input.oldString === "string" ? input.oldString : "",
             typeof input.newString === "string" ? input.newString : "",
           );
+          // ROUND-71 (R71-e2, D2): per-session consecutive edit-failure
+          // escalation (cline's progressive-failure pattern). A SUCCESS
+          // resets the streak (the file view is proven current again); an
+          // ANCHOR failure increments it and the existing honest error text
+          // gains the tier suffix (2nd: re-read + copy exactly; 3rd/4th:
+          // change approach; 5th+: refuse the pattern). Keyed by the turn's
+          // session — bare builds (no toolDeps, e.g. tests) never escalate.
+          const streakSession = toolDeps?.sessionId;
+          if (streakSession !== undefined) {
+            if (result.ok) {
+              resetEditStreak(streakSession);
+            } else if (isEditAnchorFailure(result)) {
+              const suffix = editFailureSuffix(recordEditFailure(streakSession));
+              if (suffix !== "") {
+                return { ok: false, output: `${result.output}${suffix}` };
+              }
+            }
+          }
           if (result.ok && toolDeps && beforeContent !== null) {
             let afterContent: string | null = null;
             try {

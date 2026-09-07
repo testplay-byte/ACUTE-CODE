@@ -94,6 +94,12 @@ export const PROMPT_REGISTRY: readonly PromptSectionSpec[] = Object.freeze([
   // R66-2-c removal-cascade precedent). The registry-completeness pin
   // guarantees the stale entries can't linger.
   {
+    id: "engineering-discipline",
+    description: "## ENGINEERING DISCIPLINE — the karpathy principles with binary self-tests, [KNOWN]/[ASSUMED]/[UNKNOWN] tagging, 3-strike escalation, red-flags (R71-e1)",
+    dynamic: false,
+    bucket: "identity",
+  },
+  {
     id: "file-editing",
     description: "## FILE EDITING RULES — read-before-edit, line-number anchors, dirty-worktree discipline, verify-after-edit (R70-c)",
     dynamic: false,

@@ -72,10 +72,15 @@ describe("R70-a D1: run_command keeps the TAIL of oversized output", () => {
       // …the tail is EXACTLY the last 32768 chars (the old code lost this)…
       expect(output.endsWith(BIG.slice(BIG.length - TAIL))).toBe(true);
       // …and the middle is an honest marker, not silence.
+      // R71-e2 (D1): the marker now also carries the recovery guidance
+      // (tail included + redirect-to-file for the omitted middle) — the
+      // ~200 extra chars are the marker line, still ONE line.
       expect(output).toContain(`…[output truncated: ${omitted} bytes omitted from the middle`);
       expect(output.match(/…\[output truncated:/g)?.length).toBe(1);
-      // Total stays ~64KB + the marker line — the cap still holds.
-      expect(output.length).toBeLessThan(HEAD + TAIL + 200);
+      expect(output).toContain("the tail is included");
+      expect(output).toContain("re-run with output redirected to a file and read_file it in slices");
+      // Total stays ~64KB + the one marker line — the cap still holds.
+      expect(output.length).toBeLessThan(HEAD + TAIL + 400);
       // The marker sits BETWEEN the head and the tail.
       const markerAt = output.indexOf("…[output truncated:");
       expect(markerAt).toBeGreaterThan(HEAD - 100);
@@ -217,9 +222,11 @@ describe("R70-a D2: readFileWindow — line numbers + pagination", () => {
     expect(output.split("\n")[0]).toBe(`     1  ${mk(1)}`);
     // …the TAIL is the actual end of the file (the whole point of R70-a)…
     expect(output.endsWith(`  3000  ${mk(3000)}`)).toBe(true);
-    // …the honest marker names the omitted middle…
+    // …the honest marker names the omitted middle AND (R71-e2 D1) the file's
+    // total line count + the EXACT next call — kilocode's exact-continuation:
+    // "use offset=N to continue" with N = the first omitted line.
     expect(output).toMatch(
-      /…\[file truncated: \d+ bytes omitted between line \d+ and line \d+ — use offset\/limit to page through the middle\]…/,
+      /…\[file truncated: \d+ bytes omitted between line \d+ and line \d+ of \d+ total — use offset=\d+ to continue\]…/,
     );
     // …and the middle is really gone (line 1500 is NOT in the output).
     expect(output).not.toContain("  1500  ");
@@ -227,10 +234,22 @@ describe("R70-a D2: readFileWindow — line numbers + pagination", () => {
     expect(output.length).toBeGreaterThan(60_000);
     expect(output.length).toBeLessThan(90_000);
 
-    // The marker's promise is real: offset/limit fetches the omitted middle.
-    const middle = readFileWindow(tempDir, "big.txt", { offset: 1500, limit: 2 });
+    // The marker's promise is real (R71-e2 D1: the EXACT next call in the
+    // marker fetches the omitted middle) — parse the promised offset and
+    // call read_file with EXACTLY it.
+    const promised = output.match(/use offset=(\d+) to continue\]/);
+    expect(promised).not.toBeNull();
+    const continueOffset = Number(promised![1]);
+    const middle = readFileWindow(tempDir, "big.txt", { offset: continueOffset, limit: 2 });
     expect(middle.ok).toBe(true);
-    expect(middle.output).toBe(`  1500  ${mk(1500)}\n  1501  ${mk(1501)}`);
+    // The first line of the continuation is the line AFTER the kept head —
+    // NOT the last head line (which the model already has).
+    expect(middle.output.startsWith(`${String(continueOffset).padStart(6)}  `)).toBe(true);
+    expect(middle.output).toContain("z");
+    // …and the plain offset/limit fetch also still works for the middle.
+    const middle2 = readFileWindow(tempDir, "big.txt", { offset: 1500, limit: 2 });
+    expect(middle2.ok).toBe(true);
+    expect(middle2.output).toBe(`  1500  ${mk(1500)}\n  1501  ${mk(1501)}`);
   });
 
   it("a single line bigger than the whole cap is byte-sliced head+tail (minified-asset shape)", () => {
@@ -242,8 +261,14 @@ describe("R70-a D2: readFileWindow — line numbers + pagination", () => {
     expect(output.startsWith("     1  " + "A".repeat(32 * 1024))).toBe(true);
     // …tail: the last 32KB of the line, same true line number…
     expect(output.endsWith("A".repeat(32 * 1024))).toBe(true);
-    // …and an honest single-line marker between them.
-    expect(output).toContain("bytes omitted from the middle of line 1 — the file is one long line");
+    // …and an honest single-line marker between them. R71-e2 (D1): it now
+    // carries the total line count, the byte semantics (first/last bytes
+    // kept), and says HONESTLY that no continuation call can reach the
+    // middle (offset/limit pages whole LINES; this file is one line).
+    expect(output).toContain("bytes omitted from the middle of line 1 of 1 total");
+    expect(output).toContain("single line: first 32768 + last 32768 bytes kept");
+    expect(output).toContain("no continuation call can reach this middle");
+    expect(output).toContain("use search_code (content match) or run_command (grep) to inspect it");
     expect(output).toMatch(/…\[file truncated: 2\d{5} bytes omitted/);
     expect(output.length).toBeLessThan(90_000);
   });

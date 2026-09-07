@@ -251,7 +251,11 @@ describe("ROUND-37: approval flow (ADR-0024)", () => {
 
     const result = await pending;
     expect(result.ok).toBe(false);
-    expect(result.output).toContain("denied");
+    // R71-e2 (D3): abort is fail-closed but is NOT an owner denial — the
+    // note now says so honestly (the old text conflated abort with "denied").
+    expect(result.output).toContain("the turn was aborted before the owner answered");
+    expect(result.output).toContain("this is not a rejection");
+    expect(result.output).not.toContain("NOT a tool or system failure");
     expect(existsSync(join(projectRoot, "appr-abort.txt"))).toBe(false);
     expect(pendingApprovalCount()).toBe(0);
     // The row was marked expired by the engine (audit trail says why).

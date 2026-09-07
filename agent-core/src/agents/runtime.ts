@@ -224,6 +224,13 @@ export function effectiveToolNames(
 const TOOL_INTENT_NUDGE =
   "You described an action but did not call any tool. Continue now by ACTUALLY CALLING the tool(s) — a real tool call, never text, pseudo-code, or a fenced block. If you believe the task is already complete, reply with a short final summary instead.";
 
+/** ROUND-71 (R71-e2, D5): the system line the overflow-recovery path emits so
+ * the user SEES that a context-window overflow was caught, the conversation
+ * was auto-compacted, and the turn is being retried (the meta-frame pattern
+ * used by meta.compaction / meta.context_limit — SSE-only, never persisted,
+ * never model-facing). */
+const OVERFLOW_RECOVERY_NOTE = "[context overflow → auto-compacted conversation → retrying]";
+
 /** True when a zero-tool reply text mentions a real tool name or delegation
  * words — the evidence threshold for spending the one nudge. */
 function toolIntentMentioned(text: string, toolNames: readonly string[]): boolean {
@@ -697,11 +704,174 @@ export function assembleHistory(db: SqliteDatabase, sessionId: string): SeqMessa
   return messages;
 }
 
+/* ── ROUND-71 (R71-e2, D4): provider-error classification ────────────────────
+ *
+ * Every provider/stream failure used to flatten to the same generic
+ * PROVIDER_ERROR 502 with a scrubbed message — the UI (and the model, on
+ * retry) could not tell a rate limit from a dead key from a genuine
+ * context-window overflow. cline classifies BEFORE flattening
+ * (error-classification.ts: "context_window_exceeded | auth | unknown",
+ * status-only auth rule, deliberate rate-limit VETO on the context-window
+ * patterns because "tokens exceeded" also appears in TPM messages). We
+ * classify into six classes, thread the class into the user-facing message
+ * + envelope (additive — the existing prefix and retry policy are
+ * UNCHANGED), and feed the class into the D5 overflow-recovery loop.
+ */
+
+/** The six provider-failure classes (R71-d design: A6). */
+export type ProviderErrorClass =
+  | "context_window_exceeded"
+  | "auth"
+  | "rate_limit"
+  | "network"
+  | "timeout"
+  | "unknown";
+
+export interface ProviderErrorClassification {
+  class: ProviderErrorClass;
+  /** Class-specific honest one-liner (the "classified line" threaded into
+   * the PROVIDER_ERROR detail — never a raw provider dump). */
+  userMessage: string;
+}
+
+/** Auth statuses — BY STATUS ONLY (cline's rule: matching message text for
+ * 401/403 would misfire on provider bodies that merely quote such words). */
+const AUTH_STATUSES = new Set([401, 403]);
+/** Rate-limit status. */
+const RATE_LIMIT_STATUSES = new Set([429]);
+/** Statuses that unambiguously mean "the request payload is too large".
+ * (A bare 400/422 is deliberately NOT overflow-classified: providers use
+ * them for schema errors too — the message patterns carry the detection.) */
+const CONTEXT_OVERFLOW_STATUSES = new Set([413]);
+
+/** Message shapes that mean "the request does not fit the context window". */
+const CONTEXT_WINDOW_PATTERNS: readonly RegExp[] = [
+  /\bcontext[ _-]?(?:length|window|limit)s?[ _-]?exceed/i,
+  /\bcontext\s+(?:length|window|limit)\b/i,
+  /\bmaximum\s+(?:context|prompt|request|input)\s+(?:length|size|tokens?)\b/i,
+  /\bmaximum.*\btokens?\b/i,
+  /\b(?:prompt|request|input)\s+(?:is\s+)?too\s+long\b/i,
+  /\btoo\s+many\s+(?:input\s+)?tokens\b/i,
+  /\bexceeds?\s+(?:the\s+)?(?:maximum|allowed|context|token)\b/i,
+  /\binput.*tokens?\s+exceed/i,
+];
+
+/** Message shapes that mean rate limiting (checked BEFORE the context-window
+ * patterns — the veto: "tokens exceeded" wording also appears in TPM
+ * rate-limit bodies, and a misfiled overflow would trigger D5 recovery on a
+ * request that compaction cannot fix). */
+const RATE_LIMIT_PATTERNS: readonly RegExp[] = [
+  /\brate[ _-]?limit/i,
+  /\btoo\s+many\s+requests\b/i,
+  /\b(?:requests|tokens|TPM|RPM|quota)[ _-]?(?:limit|exceeded|exhausted)\b/i,
+];
+
+/** Message shapes that mean connection/transport failure. */
+const NETWORK_PATTERNS: readonly RegExp[] = [
+  /\b(?:ECONNRESET|ECONNREFUSED|ETIMEDOUT|EAI_AGAIN|ENOTFOUND|EHOSTUNREACH|ENETUNREACH)\b/,
+  /\bUND_ERR_(?:SOCKET|HEADERS_TIMEOUT|BODY_TIMEOUT)\b/,
+  /\b(?:fetch|socket|network)\s+(?:failed|error)\b/i,
+  /\bsocket\s+hang\s?up\b/i,
+  /\b(?:connection|network)\s+(?:reset|refused|closed|error)\b/i,
+  /\b(?:internal server error|service unavailable|bad gateway|server error)\b/i,
+];
+
+/** Extract a numeric HTTP status from a provider error object. The AI SDK
+ * throws APICallError {statusCode}; wrapped/normalized errors carry it under
+ * status/data — a shallow bounded walk (never a throw) covers the rest. */
+function extractStatus(error: unknown): number | null {
+  const seen = new Set<unknown>();
+  const walk = (value: unknown, depth: number): number | null => {
+    if (value === null || typeof value !== "object" || depth > 3) return null;
+    if (seen.has(value)) return null;
+    seen.add(value);
+    try {
+      const record = value as Record<string, unknown>;
+      for (const key of ["statusCode", "status", "responseStatus"]) {
+        const raw = record[key];
+        if (typeof raw === "number" && Number.isInteger(raw) && raw > 0) return raw;
+      }
+      for (const child of [record.data, record.cause, record.error, record.response]) {
+        const found = walk(child, depth + 1);
+        if (found !== null) return found;
+      }
+    } catch {
+      /* unreachable-object guard — treat as no status */
+    }
+    return null;
+  };
+  return walk(error, 0);
+}
+
+/** Was the error an abort/timeout (AbortSignal.timeout, a user stop that
+ * reached the SDK, a provider-side timeout)? */
+function isAbortLike(error: unknown, message: string): boolean {
+  const name = error instanceof Error ? error.name : "";
+  return name === "TimeoutError" || name === "AbortError" || /\b(?:timed?\s?out|timeout)\b/i.test(message);
+}
+
+const CLASS_MESSAGES: Record<ProviderErrorClass, string> = {
+  context_window_exceeded: "context window exceeded — the request is larger than the model's context window",
+  auth: "authentication failed — the provider rejected the API key",
+  rate_limit: "rate limited — the provider is throttling requests",
+  network: "network/server error — the provider connection failed",
+  timeout: "timeout — the provider call did not complete in time",
+  unknown: "unclassified provider error",
+};
+
+/** Classify a provider/stream error (R71-e2 D4). Pure; never throws. */
+export function classifyProviderError(error: unknown): ProviderErrorClassification {
+  const message = error instanceof Error ? error.message : String(error);
+  const status = extractStatus(error);
+  // 1. Abort/timeout shapes first — TimeoutError/AbortError are unambiguous,
+  // and no later pattern should steal them.
+  if (isAbortLike(error, message)) {
+    return { class: "timeout", userMessage: CLASS_MESSAGES.timeout };
+  }
+  // 2. Status-only classes.
+  if (status !== null && AUTH_STATUSES.has(status)) {
+    return { class: "auth", userMessage: CLASS_MESSAGES.auth };
+  }
+  if (status !== null && RATE_LIMIT_STATUSES.has(status)) {
+    return { class: "rate_limit", userMessage: CLASS_MESSAGES.rate_limit };
+  }
+  // 3. Rate-limit patterns (the deliberate VETO before overflow matching).
+  if (RATE_LIMIT_PATTERNS.some((re) => re.test(message))) {
+    return { class: "rate_limit", userMessage: CLASS_MESSAGES.rate_limit };
+  }
+  // 4. Context-window overflow (message patterns or the 413 payload-too-large
+  //    status — a bare 400/422 is deliberately not overflow-classified).
+  if (CONTEXT_WINDOW_PATTERNS.some((re) => re.test(message)) || (status !== null && CONTEXT_OVERFLOW_STATUSES.has(status))) {
+    return { class: "context_window_exceeded", userMessage: CLASS_MESSAGES.context_window_exceeded };
+  }
+  // 5. Network/transport (patterns or any 5xx).
+  if (NETWORK_PATTERNS.some((re) => re.test(message)) || (status !== null && status >= 500)) {
+    return { class: "network", userMessage: CLASS_MESSAGES.network };
+  }
+  return { class: "unknown", userMessage: CLASS_MESSAGES.unknown };
+}
+
 /** Error text for a 502 envelope — scrubbed of the API key, then length-capped. */
 function providerErrorDetail(error: unknown, apiKey: string): string {
   const raw = error instanceof Error ? error.message : String(error);
   const scrubbed = raw.split(apiKey).join("***");
   return scrubbed.length > 500 ? `${scrubbed.slice(0, 500)}…` : scrubbed;
+}
+
+/** R71-e2 D4: the user-facing PROVIDER_ERROR message — the existing prefix
+ * (tests pin it) with the class appended; a classified terminal line for the
+ * D5 "overflow even after compaction" case. */
+function providerFailureMessage(
+  providerId: string,
+  sessionId: string,
+  classified: ProviderErrorClassification,
+  overflowAlreadyRecovered: boolean,
+): string {
+  const base = `provider '${providerId}' call failed for session ${sessionId} (class: ${classified.class})`;
+  if (classified.class === "context_window_exceeded" && overflowAlreadyRecovered) {
+    return `${base} — context window exceeded even after compaction — start a new session or /compact`;
+  }
+  return base;
 }
 
 /**
@@ -729,6 +899,9 @@ function persistTurnError(
     providerId: string;
     providerError: string;
     keySecrets: readonly string[];
+    /** ROUND-71 (R71-e2, D4): the provider-error class, when one was
+     * classified (additive payload field — older readers ignore it). */
+    errorClass?: ProviderErrorClass;
   },
 ): string {
   const event = appendSessionEvent(db, args.sessionId, {
@@ -741,6 +914,7 @@ function persistTurnError(
       providerId: args.providerId,
       providerError: scrubSecrets(args.providerError, args.keySecrets),
       userSeq: args.userSeq,
+      ...(args.errorClass !== undefined ? { errorClass: args.errorClass } : {}),
     },
   });
   // The turn is over (not mid-flight) — `queued` keeps the session open for
@@ -1300,10 +1474,26 @@ export async function runSingleAgentTurn(
   // into the turn's single usage_events row (context-meter cache hit rate).
   let totalCachedInputTokens = 0;
   let lastAssistantEvent: { seq: number; ts: string; content: string } | null = null;
-  let lastError: { ok: false; status: 502; code: "PROVIDER_ERROR"; message: string; details: { providerError: string } } | null = null;
+  let lastError:
+    | {
+        ok: false;
+        status: 502;
+        code: "PROVIDER_ERROR";
+        message: string;
+        details: { providerError: string; errorClass?: ProviderErrorClass; classMessage?: string };
+      }
+    | null = null;
   // ROUND-48 (R48-e1): set when the loop exits via the between-iterations
   // abort check (a deliberate parent stop) — distinct from a provider error.
   let stoppedBySignal = false;
+  // ROUND-71 (R71-e2, D5): overflow-recovery state (ONE recovery per turn —
+  // cline's generateAssistantMessageWithOverflowRecovery). overflowRecovered
+  // guards the once-per-turn rule; forceCompaction arms the NEXT iteration's
+  // assembleWithCompaction to plan a compaction even when the internal token
+  // ESTIMATE says the history fits (a provider-rejected overflow is the
+  // ground truth — our ±15% estimate is the guess that missed it).
+  let overflowRecovered = false;
+  let forceCompaction = false;
   // ROUND-48 (R48-e1, stretch): count of steps the adapter reported LIVE via
   // onStepFinish. When > 0 the tool/text events for THIS chat() call were
   // already emitted as they happened — the post-call batch emission is
@@ -1347,14 +1537,23 @@ export async function runSingleAgentTurn(
     // ROUND-46 (R46-b): compaction instead of a silent hard trim. The sync
     // path (sub-agents) has no SSE emit — the compacted event lands in the
     // session log either way and later iterations reuse it.
-    const { messages } = await assembleWithCompaction(rawMessages, budget, {
-      db,
-      sessionId: session.id,
-      chat,
-      provider: { id: provider.id, baseUrl: provider.baseUrl, apiFormat: provider.apiFormat },
-      apiKey,
-      model,
-    });
+    // ROUND-71 (R71-e2, D5): forceCompaction is armed by the overflow-
+    // recovery path below (provider-rejected overflow → force a compaction
+    // on this retry regardless of the estimate).
+    const { messages } = await assembleWithCompaction(
+      rawMessages,
+      budget,
+      {
+        db,
+        sessionId: session.id,
+        chat,
+        provider: { id: provider.id, baseUrl: provider.baseUrl, apiFormat: provider.apiFormat },
+        apiKey,
+        model,
+      },
+      forceCompaction ? { force: true } : undefined,
+    );
+    forceCompaction = false;
     if (pendingNudge !== null) {
       messages.push(pendingNudge);
       pendingNudge = null;
@@ -1414,12 +1613,46 @@ export async function runSingleAgentTurn(
       });
     } catch (error) {
       const normalized = error instanceof Error ? error : new Error(String(error));
+      // ROUND-71 (R71-e2, D5): context-window OVERFLOW RECOVERY — classify
+      // the failure; when the provider itself rejected the request as too
+      // large (and nothing from this call reached the log yet), force a
+      // compaction and RETRY once instead of dying. One recovery per turn;
+      // a second overflow lands in the honest terminal message below.
+      const classified = classifyProviderError(normalized);
+      if (
+        classified.class === "context_window_exceeded" &&
+        !overflowRecovered &&
+        // A retry iteration must REMAIN — a recovery `continue` on the last
+        // iteration would otherwise fall out of the loop with no error set
+        // (the turn must never swallow an overflow as a fake success).
+        outerIter < maxOuterLoops - 1 &&
+        liveStepsEmitted === 0
+      ) {
+        overflowRecovered = true;
+        forceCompaction = true;
+        // The visible recovery note (the same meta-frame pattern as
+        // meta.compaction / meta.context_limit — SSE-only, never persisted).
+        emit?.({ type: "meta.overflow_recovery", sessionId: session.id, message: OVERFLOW_RECOVERY_NOTE });
+        log("warn", "provider.overflow_recovery", {
+          sessionId: session.id,
+          agentId: agent.id,
+          providerId: provider.id,
+          model,
+        });
+        continue;
+      }
       lastError = {
         ok: false,
         status: 502,
         code: "PROVIDER_ERROR",
-        message: `provider '${provider.id}' call failed for session ${session.id}`,
-        details: { providerError: providerErrorDetail(normalized, apiKey) },
+        message: providerFailureMessage(provider.id, session.id, classified, overflowRecovered),
+        // R71-e2 D4: the class + the class-specific honest line ride the
+        // envelope additively (existing readers only look at providerError).
+        details: {
+          providerError: providerErrorDetail(normalized, apiKey),
+          errorClass: classified.class,
+          classMessage: classified.userMessage,
+        },
       };
       break;
     }
@@ -1663,6 +1896,9 @@ export async function runSingleAgentTurn(
         typeof fallback.details?.providerError === "string"
           ? fallback.details.providerError
           : "no response produced",
+      // R71-e2 D4: the classified class, when the failure went through the
+      // classifier (the no-response fallback default carries none).
+      ...(fallback.details?.errorClass !== undefined ? { errorClass: fallback.details.errorClass } : {}),
       keySecrets,
     });
     return fallback;
@@ -1681,6 +1917,8 @@ export async function runSingleAgentTurn(
       model,
       providerId: provider.id,
       providerError: String(lastError.details.providerError),
+      // R71-e2 D4: the classified class rides the persisted payload.
+      ...(lastError.details.errorClass !== undefined ? { errorClass: lastError.details.errorClass } : {}),
       keySecrets,
     });
   }
@@ -1839,6 +2077,11 @@ export async function runStreamedAgentTurn(
   const loopGuard = createLoopGuard();
   let guardNudge: ChatTurnMessage | null = null;
   let loopGuardStop: string | null = null;
+  // ROUND-71 (R71-e2, D5): overflow-recovery state — same contract as the
+  // sync path above (ONE forced-compaction + retry per turn, armed by the
+  // catch below when the provider itself rejected the request as too large).
+  let overflowRecovered = false;
+  let forceCompaction = false;
 
   for (let outerIter = 0; outerIter < maxOuterLoops; outerIter++) {
     // Re-assemble messages from the event log — ROUND-34: now WITH tool
@@ -1849,14 +2092,23 @@ export async function runStreamedAgentTurn(
     // streamed path surfaces a meta.compaction event so the UI can show
     // that earlier context was summarized. usedTokens derives from the
     // final message list (the 800K context guard keeps its gate).
-    const compaction = await assembleWithCompaction(rawMessages, budget, {
-      db,
-      sessionId: session.id,
-      chat,
-      provider: { id: provider.id, baseUrl: provider.baseUrl, apiFormat: provider.apiFormat },
-      apiKey,
-      model,
-    });
+    // ROUND-71 (R71-e2, D5): forceCompaction is armed by the overflow-
+    // recovery path in the catch below (provider-rejected overflow → force
+    // a compaction on this retry regardless of the token estimate).
+    const compaction = await assembleWithCompaction(
+      rawMessages,
+      budget,
+      {
+        db,
+        sessionId: session.id,
+        chat,
+        provider: { id: provider.id, baseUrl: provider.baseUrl, apiFormat: provider.apiFormat },
+        apiKey,
+        model,
+      },
+      forceCompaction ? { force: true } : undefined,
+    );
+    forceCompaction = false;
     const messages = compaction.messages;
     if (pendingNudge !== null) {
       messages.push(pendingNudge);
@@ -2125,6 +2377,37 @@ export async function runStreamedAgentTurn(
         };
       }
       const normalized = error instanceof Error ? error : new Error(String(error));
+      // ROUND-71 (R71-e2, D5): context-window OVERFLOW RECOVERY — classify
+      // the failure; when the provider itself rejected the request as too
+      // large, nothing from this iteration reached the log yet (context-
+      // window rejections land BEFORE the first token — cline's "no partial
+      // tool calls" guard), and no recovery ran this turn: emit the visible
+      // recovery line, arm the forced compaction, and RETRY once. A retry
+      // that overflows again (or recovery that found nothing to compact)
+      // falls through to the honest terminal path below.
+      const classified = classifyProviderError(normalized);
+      if (
+        classified.class === "context_window_exceeded" &&
+        !overflowRecovered &&
+        // A retry iteration must REMAIN — a recovery `continue` on the last
+        // iteration would otherwise fall out of the loop with no error set
+        // (the turn must never swallow an overflow as a fake success).
+        outerIter < maxOuterLoops - 1 &&
+        iterToolCalls === 0 &&
+        iterText.trim() === "" &&
+        iterThinking.trim() === ""
+      ) {
+        overflowRecovered = true;
+        forceCompaction = true;
+        emit({ type: "meta.overflow_recovery", sessionId: session.id, message: OVERFLOW_RECOVERY_NOTE });
+        log("warn", "provider.overflow_recovery", {
+          sessionId: session.id,
+          agentId: agent.id,
+          providerId: provider.id,
+          model,
+        });
+        continue;
+      }
       logTurnEnd(session.id, false, Date.now() - startedAt, totalInputTokens, totalOutputTokens);
       // ROUND-43: persist the failure into the session timeline BEFORE
       // returning — otherwise the owner's reload shows a conversation that
@@ -2132,7 +2415,9 @@ export async function runStreamedAgentTurn(
       // bug). The error event lands right after the user message, so the UI
       // renders the error card directly below it.
       const providerErrorText = providerErrorDetail(normalized, apiKey);
-      const message = `provider '${provider.id}' call failed for session ${session.id}`;
+      // R71-e2 D4: the class rides the message (the pinned prefix is kept)
+      // and the envelope; D5's terminal line names the twice-overflow case.
+      const message = providerFailureMessage(provider.id, session.id, classified, overflowRecovered);
       const errorTs = persistTurnError(db, {
         sessionId: session.id,
         agentId: agent.id,
@@ -2142,6 +2427,7 @@ export async function runStreamedAgentTurn(
         model,
         providerId: provider.id,
         providerError: providerErrorText,
+        errorClass: classified.class,
         keySecrets,
       });
       return {
@@ -2151,6 +2437,8 @@ export async function runStreamedAgentTurn(
         message,
         details: {
           providerError: providerErrorText,
+          errorClass: classified.class,
+          classMessage: classified.userMessage,
           model,
           userSeq: userEvent.seq,
           // ROUND-43: the persisted event's ts — the live UI matches on it to

@@ -15,6 +15,11 @@
  *        the index and refused by read_skill while the master switch is off.
  *   D5 — agent.skills WIRED: a non-empty allowlist filters the skill set by
  *        name (prompt + read_skill agree — one shared resolver).
+ *
+ * ROUND-71 (R71-e3) RE-PINS: the builtin family grew 8 → 12 (focused-fix,
+ * zero-hallucination, self-eval, ship-gate — see tests/r71-skills-round.test.ts
+ * for the new skills' own pins). The R70-b pins below stay intact for the
+ * original seven; the counts/orders updated honestly.
  */
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync, unlinkSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -305,7 +310,8 @@ describe("R70-b D1: merge precedence + resolveEffectiveSkills", () => {
   it("the effective index orders DB skills first (sort_order), then file skills; entries carry provenance + ids", () => {
     const root = projectRootWith({ "deploy-flow": FRONTMATTER_SKILL });
     const skills = resolveEffectiveSkills(db, { projectRoot: root, projectScope: "proj-42" });
-    // The 7 R70-b builtins are DB rows (computer-use gated off by default — see D4).
+    // The DB builtin rows ride the index (computer-use gated off by default —
+    // see D4; the R71-e3 additions are part of the same set).
     const names = skills.map((s) => s.name);
     expect(names).toContain("code-review");
     expect(names).toContain("deploy-flow");
@@ -396,7 +402,7 @@ describe("R70-b D1: server routes — merged listing + file-skill read-only", ()
     const skills = (response.json() as { skills: Array<Record<string, unknown>> }).skills;
 
     const byName = new Map(skills.map((s) => [s.name as string, s]));
-    // DB rows (all 8 builtins + the user skill) ride the listing as before.
+    // DB rows (all 12 builtins + the user skill) ride the listing as before.
     expect(byName.get("computer-use")?.source).toBe("builtin");
     expect(byName.get("code-review")?.source).toBe("builtin");
     expect(byName.get("user-made")?.source).toBe("user");
@@ -475,7 +481,7 @@ describe("R70-b D1: server routes — merged listing + file-skill read-only", ()
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
-// D2 — the seven new built-ins
+// D2 — the seven R70-b built-ins (+ the four R71-e3 additions)
 // ─────────────────────────────────────────────────────────────────────────────
 
 describe("R70-b D2: the seven new built-in skills", () => {
@@ -487,9 +493,14 @@ describe("R70-b D2: the seven new built-in skills", () => {
     ["web-research", "skill_builtin_web_research"],
     ["project-init", "skill_builtin_project_init"],
     ["browser-use", "skill_builtin_browser_use"],
+    // R71-e3: the four new ones ride the same house-format contract.
+    ["focused-fix", "skill_builtin_focused_fix"],
+    ["zero-hallucination", "skill_builtin_zero_hallucination"],
+    ["self-eval", "skill_builtin_self_eval"],
+    ["ship-gate", "skill_builtin_ship_gate"],
   ];
 
-  it("all EIGHT builtins seed (computer-use + the seven R70-b additions), ordered by sort_order", () => {
+  it("all TWELVE builtins seed (computer-use + the seven R70-b + the four R71-e3 additions), ordered by sort_order", () => {
     const skills = listSkills(db);
     const builtins = skills.filter((s) => s.source === "builtin");
     expect(builtins.map((s) => s.name)).toEqual([
@@ -501,7 +512,12 @@ describe("R70-b D2: the seven new built-in skills", () => {
       "web-research",
       "project-init",
       "browser-use",
+      "focused-fix",
+      "zero-hallucination",
+      "self-eval",
+      "ship-gate",
     ]);
+    expect(builtins.map((s) => s.sortOrder)).toEqual([0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]);
     expect(builtins.every((s) => s.enabled)).toBe(true);
   });
 

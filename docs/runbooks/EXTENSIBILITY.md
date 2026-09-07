@@ -1,4 +1,4 @@
-<!-- last-reviewed: 2026-09-06 round-70 -->
+<!-- last-reviewed: 2026-09-07 round-71 -->
 # EXTENSIBILITY — plugins, skills, MCP servers (owner's guide)
 
 **Status:** normative · **Established:** round-61 (owner directive: "the
@@ -105,15 +105,18 @@ affordance for the last-resort 8K truncation case).
 Skills come from THREE places (one merged view — `GET /skills`, with
 provenance since R70):
 
-- **Built-ins (8 since R70)**: `computer-use` (the behavioral contract
+- **Built-ins (12 since R71)**: `computer-use` (the behavioral contract
   from the spec's doc-09, condensed — gated on the computer-use master
   switch) plus the R70 seeds `code-review`, `debugging`, `testing`,
   `git-workflow`, `web-research`, `project-init` (writes the project's
   AGENTS.md from codebase analysis), and `browser-use` (the
-  embedded-browser craft). Built-ins can be **edited** (your text
-  overrides the seed) or **disabled**, but never deleted — deletion is
-  refused with a note (the seed would recreate them; a deleted row even
-  revives on reopen).
+  embedded-browser craft) — and the R71 discipline seeds
+  `focused-fix`, `zero-hallucination`, `self-eval`, `ship-gate`. All
+  descriptions follow the R71 trigger-rich convention (see the R71
+  addendum below). Built-ins can be **edited** (your text overrides the
+  seed) or **disabled**, but never deleted — deletion is refused with a
+  note (the seed would recreate them; a deleted row even revives on
+  reopen).
 - **User skills (DB)**: full CRUD. Name is a lowercase slug (letters/
   digits/dashes, 2–64 chars, unique); description ≤500 chars (the
   prompt line); body ≤60 000 chars (the `read_skill` payload).
@@ -306,6 +309,31 @@ project files with loaded bits + the honest load-error note). The
   `resolveEffectiveSkills`) feeds BOTH the prompt's SKILLS section and
   `read_skill`, so they can never disagree.
 
+## The R71 addendum (the trigger surface + the discipline skills)
+
+- **TWELVE built-in skills now (was 8).** Four new discipline seeds
+  (same `INSERT OR IGNORE` contract, sortOrder 8-11 — existing DBs get
+  the rows on next open, user edits persist): `focused-fix` (the Iron
+  Law — NO FIXES WITHOUT COMPLETING SCOPE → TRACE → DIAGNOSE FIRST,
+  with 3-strike escalation), `zero-hallucination`
+  ([KNOWN]/[ASSUMED]/[UNKNOWN] evidence tagging + the YAGNI ladder),
+  `self-eval` (ambition×execution scoring, mandatory devil's advocate),
+  and `ship-gate` (intercepts deploy-intent with a DO NOT SHIP / SHIP
+  WITH NOTES / CLEAR verdict).
+- **The trigger-rich description convention.** Every builtin
+  description now reads "Use when [quoted user phrasings]. [what it
+  delivers]. NOT for [adjacent case]." — because the description is the
+  ONLY thing the model sees at trigger time (the body loads later via
+  `read_skill`). Write YOUR skills' descriptions the same way: quote
+  the phrasings a user would actually type, say what it delivers, and
+  name the nearest adjacent skill in the negative scope so the model
+  can choose between siblings. Keep it ≤500 chars (the storage cap).
+- **Description updates do not overwrite user-edited rows** — the
+  seeding is INSERT OR IGNORE, so a DB that already has a builtin row
+  keeps its text (fresh installs and revived deleted rows get the new
+  text). If you want the newest seed text on an old install: delete the
+  row and reopen, or edit it by hand.
+
 ## Troubleshooting
 
 - **A plugin file exists but `loaded:false`** — read the sidecar log
@@ -338,7 +366,7 @@ project files with loaded bits + the honest load-error note). The
 - Code map: `agent-core/src/tools/registry.ts` (loader, grammar, caps,
   catalog), `agent-core/src/tools/plugins/` (13 built-ins — incl.
   `vision.ts`, the R66 core-vision plugin), skills storage
-  `agent-core/src/storage/skills.ts` (the 8 builtins) +
+  `agent-core/src/storage/skills.ts` (the 12 builtins) +
   `agent-core/src/storage/skills-files.ts` (file discovery, the shared
   resolver, the merged listing), MCP storage
   `agent-core/src/storage/mcp.ts` + client `agent-core/src/mcp/manager.ts`,

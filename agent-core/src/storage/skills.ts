@@ -16,6 +16,18 @@
  * contract, one fixed id each. File-based skills (R70-b D1) merge with
  * these at the RESOLUTION layer — storage/skills-files.ts (DB rows shadow
  * same-name files; the DB stays the editable source of truth).
+ *
+ * ROUND-71 (R71-e3, D1+D2): the trigger-surface round. (1) All EIGHT
+ * descriptions rewritten per the Pocock/karpathy convention — "Use when
+ * [verbatim user phrasings]. [what it delivers]. NOT for [adjacent case]."
+ * The description is the ONLY thing the model sees at trigger time (the
+ * SKILLS prompt line carries name + description; the body loads on demand
+ * via read_skill), so every word must earn its place. Bodies UNCHANGED.
+ * (2) FOUR new builtins (12 total): focused-fix, zero-hallucination,
+ * self-eval, ship-gate — adapted from the R71-b1 research source material
+ * (alirezarezvani/claude-skills), with iron laws in caps, pre-built output
+ * blocks, and ACUTE's real tool names. Same INSERT OR IGNORE contract:
+ * fresh AND existing DBs get the new rows on the next open.
  */
 import type { SqliteDatabase } from "./db.js";
 
@@ -304,12 +316,142 @@ The embedded browser panel (browser_control) — a real webview the user watches
 - Announce viewport changes (set_viewport) in one line — the user sees the panel live.
 - source for the page's html/css/js; screenshot only when pixels are the question.`;
 
+/* ── ROUND-71 (R71-e3, D2): the FOUR new built-ins ───────────────────────────
+ *
+ * Source material: R71-b1 research (/tmp/r71-research/skills-repos.md,
+ * clones at /tmp/research/alirez-skills) — focused-fix, self-eval, ship-gate
+ * (engineering/skills/) and zero-hallucination-coder (engineering/),
+ * adapted to ACUTE's real tool surface (read_file, search_code,
+ * run_command, git_diff, git_status, todo_write, edit_file) and the R70
+ * house style: 1.2-1.8KB bodies, imperative voice, iron laws in caps,
+ * pre-built output-format blocks the model fills verbatim, anti-
+ * rationalization red-flag tables quoting the model's own excuses, and
+ * STOP conditions instead of "be careful". No emoji except self-eval's
+ * 🟢🟡🔴 confidence tags (the R71-b1 quality-loop convention). */
+
+export const FOCUSED_FIX_SKILL_BODY = `# Skill: focused-fix
+
+IRON LAW: NO FIXES WITHOUT COMPLETING SCOPE → TRACE → DIAGNOSE FIRST. Complete all three steps below BEFORE proposing any fix.
+
+## The 3-step contract (in order)
+1. SCOPE — restate the bug's exact observable SYMPTOMS and the EXPECTED behavior, side by side. An unobserved symptom is a guess — write it as a question, not a fact.
+2. TRACE — follow the actual code path. Reproduce with a failing test or command (run_command); read the real code (read_file, search_code). NEVER fix from a guess, a memory, or the error message alone.
+3. DIAGNOSE — name the root cause in ONE sentence BEFORE editing: "X is null because Y only runs on the first mount." No sentence? You are not done diagnosing.
+
+## Output format (fill before touching code)
+SCOPE REPORT: symptom / expected / actual / how reproduced
+TRACE: files + symbols read (path:line) + the reproduction command
+DIAGNOSIS: the one-sentence root cause
+
+## 3-Strike escalation
+3 failed fixes to the same problem = STOP — the bug is probably NOT where you are editing; every fix surfacing a NEW problem elsewhere is the signature of an architectural cause. Re-diagnose with the new evidence or escalate to the user. Never attempt fix #4.
+
+## Red flags — your own excuses
+- "It's a small fix, no need to reproduce." → STOP. No reproduction = nothing to verify against.
+- "I'm sure it's this line." → STOP. Sure is not evidence; trace the path.
+- "I'll just try the change and see." → STOP. Random edits are damage, not progress.
+- "One more fix should do it" (after 2) → STOP. Strike three is approaching.
+
+## The fix
+The SMALLEST change that fixes the diagnosed cause, in the style of the surrounding code (edit_file, one hunk). Verify with the reproduction from SCOPE — the same command or test must now pass — then the adjacent tests, then a regression test that fails without the fix.`;
+
+export const ZERO_HALLUCINATION_SKILL_BODY = `# Skill: zero-hallucination
+
+Zero invented APIs. Zero assumed imports. Zero placeholder code. The discipline: before using any API, symbol, config key, or CLI flag you have NOT read in THIS session, tag it — then act on the tag.
+
+## Evidence tags
+- [KNOWN] — you read it this session; cite it (file:line). Use freely.
+- [ASSUMED] — a reasonable inference from code you did read; state the assumption in a comment and in your reply.
+- [UNKNOWN] — no evidence at all.
+
+NEVER WRITE CODE THAT DEPENDS ON AN [UNKNOWN]. Resolve it first: read_file or search_code the source, or ask the user. An [ASSUMED] on a load-bearing path (auth, data, money, migrations) gets verified the same way before you build on it.
+
+## The 6-rung YAGNI ladder — the best code is the code you never wrote
+Before implementing any unit of work, stop at the FIRST rung that holds:
+1. Does this code need to exist at all? No requirement asking for it = kill it.
+2. Does the stdlib / language itself already do it? Use it.
+3. Does a native platform/runtime feature do it? Use it.
+4. Does an ALREADY-INSTALLED dependency do it? (Check what you read, not what you remember.)
+5. Can it be a trivial one-liner, inline? Write it, no abstraction.
+6. Write the minimum that works — no abstraction for one use, no config system for one value.
+
+Never on the chopping block: validation at trust boundaries, error handling for data loss, security checks.
+
+## Anti-hallucination rules (always on)
+- Never invent imports, flags, paths, or option names. Unsure it exists = it is [UNKNOWN].
+- When the docs disagree with the source, the SOURCE wins.
+- When the source disagrees with the runtime, the REPRODUCTION wins.
+- No placeholders: no "rest of implementation", no silently unimplemented stubs.`;
+
+export const SELF_EVAL_SKILL_BODY = `# Skill: self-eval
+
+Before claiming a task is done, score it. Do NOT pick a number and rationalize it — rate the two axes, then READ THE MATRIX, don't override it.
+
+## The two axes (0-3 each)
+- AMBITION — how completely the request is solved, edge cases included. 0 = abandoned/dodged; 1 = happy path only; 2 = the request as asked; 3 = plus its real edge cases.
+- EXECUTION — verified-by-receipts quality. 0 = nothing verified; 1 = ran something, result unclear; 2 = core claims verified; 3 = every claim has a quoted receipt (command + exit code, or test output).
+
+## The matrix (ambition × execution) → total 0-5
+       e0  e1  e2  e3
+  a0    0   1   1   1
+  a1    1   1   2   2   ← LOW AMBITION CAPS THE TOTAL AT 2
+  a2    1   2   3   4
+  a3    2   3   4   5
+A 5 requires complete ambition AND receipted execution — rare. The honest score for solid ordinary work is 3.
+
+## Anti-grade-inflation
+- A claim without a receipt scores 0 on execution — "should work" is not a receipt.
+- The confidence tag must MATCH the evidence: 🟢 everything cited, 🟡 partially verified, 🔴 unverified. Never 🟢 on assertion alone.
+
+## Mandatory devil's advocate
+One line, always: the strongest counter-argument to the claimed result ("only the reported case is tested — the general class is unguarded"). If you cannot write one, you have not looked hard enough.
+
+## The checklist
+All todos completed (todo_write clean)? Checks green — actually run this turn? Receipts quoted, not summarized? Zero scope creep — every change traces to the request? Campsite clean — no debug leftovers?
+
+## Output format
+VERDICT: <total>/5 (ambition <a>/3, execution <e>/3)
+DEVIL'S ADVOCATE: <the counter-argument>
+CONFIDENCE: 🟢|🟡|🔴 — <why it matches the evidence>
+GAPS: <what remains unverified, or "none">`;
+
+export const SHIP_GATE_SKILL_BODY = `# Skill: ship-gate
+
+Intercept every ship moment. When you or the user say "done", "ship it", "commit and push", "deploy", "release", "go live" — do NOT proceed on the feeling of finished. Run the gate, report, THEN ship (or don't).
+
+## CRITICAL — any failure = DO NOT SHIP
+- Tests, lint, typecheck: ACTUALLY RUN and green (run_command; quote the command + exit code). "They were green earlier" is not a receipt for this change.
+- Build compiles: run the project's real build command, not a hope.
+- No new console errors or warnings introduced by this change (read the diff hunks, not your memory).
+- No secrets or tokens in what is about to be committed (git_diff + git_status the staged set).
+
+## HIGH — fix, or list explicitly
+- Touched-files review: read the FULL git_diff; every hunk traces to the request. An unexplained hunk = stop and explain it first.
+- TODOs you introduced: resolved, or tracked (todo_write) with a named follow-up.
+- Docs updated where the change alters user-visible or config behavior.
+
+## ADVISORY — note, don't block
+- Version bump appropriate? Changelog updated? Follow-ups listed rather than silently dropped?
+
+## Verdicts
+- DO NOT SHIP — any CRITICAL failing: name it, fix it, RE-RUN the gate (a fixed gate is re-verified, never assumed).
+- SHIP WITH NOTES — CRITICAL clean, HIGH issues listed honestly.
+- CLEAR — everything above is receipted.
+NEVER claim SHIP on assertion alone — receipts required for every green check.
+
+## Output format
+GATE REPORT
+CRITICAL: <each check — its receipt (command + exit code), or FAIL: what>
+HIGH: <resolved, or the open list>
+ADVISORY: <noted>
+VERDICT: DO NOT SHIP | SHIP WITH NOTES | CLEAR — <one-line reason>`;
+
 const BUILTIN_SKILLS: ReadonlyArray<Pick<SkillRecord, "id" | "name" | "description" | "body" | "source" | "sortOrder">> = [
   {
     id: COMPUTER_USE_SKILL_ID,
     name: "computer-use",
     description:
-      "Observe and actuate the desktop GUI: accessibility-first element actions with screenshot-coordinate fallback, receipts, fail-closed refusals, verification discipline.",
+      "Use when the user asks you to operate their REAL desktop apps — 'open Notepad', 'click the save button in Excel', 'close that dialog', 'type into that window' — or any task needs reading or driving an installed GUI application. Delivers accessibility-first element actions with screenshot-coordinate fallback and a post-action observation receipt after every write. NOT for web pages in the embedded browser panel (that is browser-use).",
     body: COMPUTER_USE_SKILL_BODY,
     source: "builtin",
     sortOrder: 0,
@@ -318,7 +460,7 @@ const BUILTIN_SKILLS: ReadonlyArray<Pick<SkillRecord, "id" | "name" | "descripti
     id: "skill_builtin_code_review",
     name: "code-review",
     description:
-      "Review code changes for defects and risks: read the diff first, findings ordered critical/bug/risk/style each with path:line and a concrete fix, no praise, end with a verdict.",
+      "Use when the user says 'review this diff', 'look over my changes', 'is this PR ready', 'check my work before I commit' — a change exists and needs adversarial eyes. Delivers a findings-first review scoped to the diff: every finding carries path:line and a concrete fix, ordered critical/bug/risk/style, ending in an approve or request-changes verdict. NOT for hunting one known bug (debugging) or auditing untouched code.",
     body: CODE_REVIEW_SKILL_BODY,
     source: "builtin",
     sortOrder: 1,
@@ -327,7 +469,7 @@ const BUILTIN_SKILLS: ReadonlyArray<Pick<SkillRecord, "id" | "name" | "descripti
     id: "skill_builtin_debugging",
     name: "debugging",
     description:
-      "Systematic defect fixing: reproduce, read the actual error fully, isolate (git bisect/comment-out), locate the root cause, fix it not the symptom, verify, guard with a regression test.",
+      "Use when the user reports a defect — 'this bug', 'my test fails', 'it crashes when I click X', 'fix this error', 'why is this broken' — and the cause is unknown. Delivers the reproduce → read-the-error-fully → isolate → name the root cause in one sentence → minimal fix → verify with the failing case → regression-test loop. NOT for whole-feature multi-file repair (focused-fix) or writing new test suites (testing).",
     body: DEBUGGING_SKILL_BODY,
     source: "builtin",
     sortOrder: 2,
@@ -336,7 +478,7 @@ const BUILTIN_SKILLS: ReadonlyArray<Pick<SkillRecord, "id" | "name" | "descripti
     id: "skill_builtin_testing",
     name: "testing",
     description:
-      "Testing discipline: test-first when behavior is spec'd, run the affected suite after every edit, one behavior per test, assert errors not just the happy path, never weaken an assertion.",
+      "Use when the user says 'write tests for this', 'add coverage', 'this test is flaky' — or whenever you are about to call a change done: its affected tests must actually run and pass first. Delivers the discipline: failing test first when behavior is spec'd, one behavior per test, error paths asserted, suite re-run after every edit, never a weakened assertion to go green. NOT for one-off command runs or CI pipeline setup.",
     body: TESTING_SKILL_BODY,
     source: "builtin",
     sortOrder: 3,
@@ -345,7 +487,7 @@ const BUILTIN_SKILLS: ReadonlyArray<Pick<SkillRecord, "id" | "name" | "descripti
     id: "skill_builtin_git_workflow",
     name: "git-workflow",
     description:
-      "Safe git habits: read-only by default, commit only when asked, conventional commits, stage related files explicitly (never add -A), never revert or hard-reset user changes, branch before risky work.",
+      "Use when the user mentions commits, branches, or PRs — 'commit this', 'before I commit', 'make a branch', 'open a PR', 'what changed?' — and before you edit files (git_status first). Delivers safe git habits: the working tree belongs to the user, commit only when asked, conventional commits, explicit staging (never add -A), never revert or hard-reset uncommitted work. NOT for judging a diff's content (code-review).",
     body: GIT_WORKFLOW_SKILL_BODY,
     source: "builtin",
     sortOrder: 4,
@@ -354,7 +496,7 @@ const BUILTIN_SKILLS: ReadonlyArray<Pick<SkillRecord, "id" | "name" | "descripti
     id: "skill_builtin_web_research",
     name: "web-research",
     description:
-      "Research with sources: web_search first, fetch the 2-3 most authoritative results, prefer primary docs over blog restatements, cite URLs inline, synthesize a decision not a link dump.",
+      "Use when the user says 'search the web', 'look this up', 'what's the latest version of X', 'find the docs for this API', or the answer depends on facts beyond your knowledge. Delivers sourced answers: web_search with precise technical nouns first, fetch the 2-3 most authoritative hits, prefer primary docs over blog restatements, cite fetched URLs inline, synthesize a decision — not a link dump. NOT for codebase searches (search_code).",
     body: WEB_RESEARCH_SKILL_BODY,
     source: "builtin",
     sortOrder: 5,
@@ -363,7 +505,7 @@ const BUILTIN_SKILLS: ReadonlyArray<Pick<SkillRecord, "id" | "name" | "descripti
     id: "skill_builtin_project_init",
     name: "project-init",
     description:
-      "The /init skill: analyze the codebase (manifests, CI, sample sources) and write the repo's AGENTS.md — what it is, stack, verified setup/build/test/lint commands, conventions, directory map, gotchas; <= 150 lines.",
+      "Use when the user says 'set up a new project', '/init', 'write an AGENTS.md for this repo', 'onboard to this codebase', or a repo lacks its convention file. Delivers the repo's AGENTS.md (<= 150 lines) built from observed reality — stack, verified setup/build/test/lint commands, conventions, directory map, gotchas — so a fresh agent works correctly on turn one. NOT for exploring or answering questions about existing code.",
     body: PROJECT_INIT_SKILL_BODY,
     source: "builtin",
     sortOrder: 6,
@@ -372,10 +514,46 @@ const BUILTIN_SKILLS: ReadonlyArray<Pick<SkillRecord, "id" | "name" | "descripti
     id: "skill_builtin_browser_use",
     name: "browser-use",
     description:
-      "Drive the embedded browser panel: read_dom for interactive elements, click/type by DOM selector (never coordinates), submit forms with submit:true or Enter, the bot-wall wait_for_verification protocol, verify with get_state.",
+      "Use when the task is a WEB page — 'open the browser', 'go to this URL', 'log in here', 'fill in this form', 'scrape this page', 'test this site' — in the embedded browser panel the user watches live. Delivers DOM-driven control: read_dom for elements, click/type by selector (never pixel coordinates), submit:true or Enter for forms, the wait_for_verification bot-wall protocol, get_state verification. NOT for desktop apps (computer-use).",
     body: BROWSER_USE_SKILL_BODY,
     source: "builtin",
     sortOrder: 7,
+  },
+  {
+    id: "skill_builtin_focused_fix",
+    name: "focused-fix",
+    description:
+      "Use when a whole feature or module is broken — 'make the auth flow work', 'the export module is broken', 'fix this feature end-to-end', or the same area keeps producing bugs. Delivers the strict SCOPE → TRACE → DIAGNOSE → FIX → VERIFY contract under the Iron Law NO FIXES WITHOUT COMPLETING SCOPE → TRACE → DIAGNOSE FIRST, with 3-strike escalation when fixes cascade. NOT for a single isolated bug (debugging) or refactor requests.",
+    body: FOCUSED_FIX_SKILL_BODY,
+    source: "builtin",
+    sortOrder: 8,
+  },
+  {
+    id: "skill_builtin_zero_hallucination",
+    name: "zero-hallucination",
+    description:
+      "Use when you are about to write code that calls an API, symbol, config key, or CLI flag you have NOT read in this session — and when the user says 'don't hallucinate', 'verify the real API', 'plan carefully before coding'. Delivers [KNOWN]/[ASSUMED]/[UNKNOWN] evidence tagging (never code on an UNKNOWN — read_file/search_code first), the 6-rung YAGNI ladder, and source-beats-docs, reproduction-beats-source rules. NOT for trivial edits or prose work.",
+    body: ZERO_HALLUCINATION_SKILL_BODY,
+    source: "builtin",
+    sortOrder: 9,
+  },
+  {
+    id: "skill_builtin_self_eval",
+    name: "self-eval",
+    description:
+      "Use when you are about to claim work done — before any 'done', 'complete', 'it works', 'am I finished?' statement, or when the user asks 'how well did that go?'. Delivers honest self-scoring: ambition × execution (each 0-3) read from a fixed matrix — low ambition caps the total at 2 — plus a mandatory devil's-advocate line, receipts for every claim, and a 🟢🟡🔴 confidence tag that matches the evidence. NOT for reviewing someone else's code (code-review).",
+    body: SELF_EVAL_SKILL_BODY,
+    source: "builtin",
+    sortOrder: 10,
+  },
+  {
+    id: "skill_builtin_ship_gate",
+    name: "ship-gate",
+    description:
+      "Use when anyone reaches a ship moment — the user says 'commit and push', 'deploy', 'release', 'ship it', 'go live', or you catch yourself declaring 'done' — before the push, deploy, or commit actually happens. Delivers the gate: CRITICAL checks (tests/lint/typecheck actually run + green, build compiles, no new console errors, no secrets committed), HIGH and ADVISORY tiers, and a DO NOT SHIP / SHIP WITH NOTES / CLEAR verdict backed by receipts. NOT for CI/CD pipeline setup or infra provisioning.",
+    body: SHIP_GATE_SKILL_BODY,
+    source: "builtin",
+    sortOrder: 11,
   },
 ];
 

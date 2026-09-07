@@ -1,4 +1,4 @@
-<!-- last-reviewed: 2026-09-06 round-70 -->
+<!-- last-reviewed: 2026-09-07 round-71 -->
 # Changelog
 
 All notable changes to ACUTE-CODE are documented here. Entries are written for
@@ -11,23 +11,79 @@ version number is single-sourced from the root `package.json`
 
 ## [Unreleased]
 
-Planned next: the owner's live Windows verification of R69 on real
-hardware — R68's 7-step Edge flow acceptance test PLUS the R69 live
-gates (the dual-object poke waking Edge's UIA provider, the long-type
-stdin paste channel, the HWHEEL horizontal scroll feel, the
-non-activating monitor while STOP/drag stay clickable, the aHash
-thresholds on real 1280×1024 frames, the 600 ms settle catching
-post-click repaints — the checklist in `docs/runbooks/COMPUTER-USE.md`)
-PLUS the R70 live gates (which of the seven new skill bodies need
-tuning on real tasks, whether AGENTS.md conventions load on the owner's
-repos, whether the grounded TERMINAL syntax kills the cross-platform
-command guesses), then the standing queue: edit-linting (SWE-agent's
-ACI #1 finding), browser-wall self-bypass (future), installer
-code-signing (SmartScreen), ratings-driven prompt tuning, the
-deepseek-harness future candidates (compaction pressure-trigger,
-continuable sub-agent children), the Files-tab polish, agent
-web-app-testing tools, moving the Windows walk to a temp .ps1 if the
-C# preamble grows again.
+Planned next: the owner's live Windows verification of the R71 gates —
+whether the discipline section changes reply quality (verification
+receipts + the 🟢🟡🔴 confidence tags actually appearing in real
+replies, fewer question-padding endings), whether the four new skills
+trigger on real phrasings ("commit and push" → ship-gate, "make the
+auth flow work end-to-end" → focused-fix), whether the edit-escalation
+text ends the stale-anchor flail loops, and whether overflow recovery
+saves long sessions (the "[context overflow → auto-compacted
+conversation → retrying]" line + the turn continuing) — PLUS the R69
+Windows checklist and the R70 live gates still pending, then the R72
+queue: per-directory AGENTS.md injection into read results,
+references/ for file skills, delegate_task task_id/background/resume,
+a generalized system-reminder injector, custom modes
+(.acute/agents/*.md), external plugin ctx enrichment, and the standing
+items (edit-linting — SWE-agent's ACI #1 finding, installer
+code-signing, ratings-driven prompt tuning, the Files-tab polish, agent
+web-app-testing tools).
+
+## [0.71.0] - 2026-09-07
+
+Round 71 — the discipline & reliability round (research-driven from the
+four reference repos the owner supplied; no new field report). **The
+prompt now teaches engineering discipline**: a new ENGINEERING
+DISCIPLINE section carries the four karpathy principles each with a
+binary self-test the model runs on its own diff (don't assume — surface
+tradeoffs; minimum code, nothing speculative; touch only what you must
+— clean up only your own orphans, never pre-existing dead code; define
+success criteria, loop until verified), [KNOWN]/[ASSUMED]/[UNKNOWN]
+tagging with the rule "NEVER write code that depends on an [UNKNOWN]
+API fact — read the source first", a three-strike escalation rule
+(three failed fixes to the same problem = STOP, re-diagnose, escalate —
+no 4th fix of the same shape), and a red-flags table that quotes the
+model's own rationalizations back at it ("I remember the file looking
+like this" → re-read it). Planning turns vague tasks into verifiable
+goals ("fix the bug" → "write a test that reproduces it, then make it
+pass"), and final replies now carry VERIFICATION RECEIPTS (the exact
+command + exit status, never a bare assertion — "an assertion without
+a receipt is not verification"), a 🟢/🟡/🔴 confidence tag, and one
+line of devil's advocate on non-trivial changes, without ending on
+padding questions. **Twelve built-in skills** (was 8): all descriptions
+rewritten trigger-rich in the "Use when [phrasings]. NOT for [adjacent
+case]" convention so the model can actually choose them, plus four new
+discipline skills — focused-fix (the Iron Law: NO FIXES WITHOUT
+COMPLETING SCOPE → TRACE → DIAGNOSE FIRST), zero-hallucination,
+self-eval, and ship-gate (intercepts "commit and push"/"deploy"/"ship
+it" with a DO NOT SHIP / SHIP WITH NOTES / CLEAR verdict). **Failed
+edits now escalate instead of letting the model flail**: a consecutive
+anchor-failure counter per session appends recovery strategy to the
+error (2nd miss → re-read the file and copy the anchor exactly; 3rd →
+change your approach or rewrite with write_file; 5th → refuse the
+pattern) and resets on the first success. **Long read_file / run_command
+outputs carry the exact next call** — truncation markers state the
+file's total line count and the precise "use offset=N to continue"
+(the omitted middle is reachable without guessing), and oversized
+command output teaches the spill-to-file recovery path. **Your
+denials are no longer read as tool failures**: a rejected approval now
+says "denied by the owner — this is NOT a tool or system failure; ask
+why, or propose an alternative", and approval TIMEOUTS are
+distinguished from denials ("the user may be away; do not assume
+rejection"). **Provider errors are classified before they surface** —
+six honest classes (context-window overflow / auth / rate-limit /
+network / timeout / unknown) on the failure message and the error
+event, so a dead key no longer reads like a network blip. **Context
+overflow recovers instead of killing the turn**: when the provider
+rejects an oversized request, the conversation is auto-compacted and
+the turn retried once (a visible "[context overflow → auto-compacted
+conversation → retrying]" line), with an honest terminal message if it
+overflows again. 2287 root tests in 129 files, all green (agent-core
+1385/1385 in 66 files — +110: three new suites r71-prompt-discipline 24
++ r71-tool-reliability 31 + r71-skills-round 51 + re-pins; frontend 890
+unchanged — zero frontend files touched), lint/typecheck clean, license
+audit CLEAN (134 deps, no dependency changes). Full evidence in
+docs/ui-iterations/round-71.md.
 
 ## [0.70.0] - 2026-09-06
 

@@ -28,6 +28,14 @@
  * the read_skill bodies (R70-A issue #2: those two sections were 36% of the
  * prompt). The "efficiency", "task-planning" and "todo-tracking" registry
  * ids are RETIRED (the R66-2-c removal-cascade precedent).
+ *
+ * ROUND-71 (R71-e1, the discipline round): the ENGINEERING DISCIPLINE
+ * section right after the agentic-loop (karpathy's four mantras with binary
+ * self-tests + [KNOWN]/[ASSUMED]/[UNKNOWN] tagging + the 3-strike
+ * escalation + the red-flags anti-rationalization table), the PLAN-phase
+ * task→verifiable-goal transform, COMMUNICATION's verification receipts +
+ * 🟢/🟡/🔴 confidence tags + anti-question-padding, and the SUB-AGENTS
+ * scope/no-polling discipline lines.
  */
 
 import type { PermissionMode } from "shared";
@@ -254,6 +262,13 @@ export function buildTaggedPromptLines(ctx: PromptContext): TaggedLine[] {
     // heartbeat stats) is automatic; this line teaches the parent to ACT on
     // the honest failure reports it receives.
     ident("- SUPERVISION: each delegation is watched automatically — a stalled sub-agent is stopped and reported to you, and the owner may stop one manually. When a child's report says it STALLED or was STOPPED BY THE OWNER, act deliberately: investigate what happened, re-delegate only when that is clearly the right call, and TELL the user what happened — never silently retry stopped work.");
+    // ROUND-71 (R71-e1, D4): delegation discipline (kilocode's task-tool
+    // strings): the child delivers ONLY its delegated scope (the brief is
+    // the contract — the parent never redoes it), and the result arrives
+    // AS a tool result — no sleeping/polling for the sub-agent itself
+    // (job_status is for explicitly-backgrounded SHELL jobs only).
+    ident("- SCOPE DISCIPLINE: the sub-agent reads the delegation brief and delivers only its scope — do not duplicate that work yourself; read the reports and build on them.");
+    ident("- Delegation results arrive as tool results — do NOT sleep, wait, or poll for a sub-agent (job_status exists only for explicitly-backgrounded shell jobs).");
     ident("");
   }
   beginSection("tool-results-are-data");
@@ -282,6 +297,11 @@ export function buildTaggedPromptLines(ctx: PromptContext): TaggedLine[] {
   } else {
     ident("1. PLAN — if the request is unclear, ask ONE clarifying question; otherwise form the plan before executing.");
   }
+  // ROUND-71 (R71-e1, D2): the task→verifiable-goal transform (karpathy §4)
+  // — a vague imperative the user actually says becomes a goal the agent
+  // can verify against BEFORE acting. Unconditional (both PLAN variants
+  // share it), one line, three canonical mappings.
+  ident("   Transform vague tasks into verifiable goals before acting: \"fix the bug\" → \"write a test that reproduces it, then make it pass\"; \"make it faster\" → \"define the measurable, then optimize until it moves\"; \"clean this up\" → \"name the concrete smell, remove exactly it\".");
   ident("2. EXPLORE — understand before acting: ONE message with the independent discovery calls BATCHED in parallel (list_dir / search_files / search_code before read_file; the MOST SPECIFIC tool for each). Do not re-explore between steps or re-read files already in context.");
   ident("3. ACT — the FEWEST steps that genuinely complete the work; every call must earn its place. Prefer editing existing files over creating new ones. A successful write_file/edit_file response is itself confirmation the save landed — re-read only when something indicates a problem (an error, a surprising result, a high-stakes edit).");
   // The adversarial-review affordance only makes sense when delegation exists.
@@ -304,6 +324,43 @@ export function buildTaggedPromptLines(ctx: PromptContext): TaggedLine[] {
   // place. ROUND-70 (R70-c): the outer-iteration cap is now mentioned
   // honestly too (the turn continues across them — keep working within).
   ident(`- Multi-step tasks are EXPECTED (4–7+ tool calls); up to ${ctx.maxTurns ?? 80} tool round-trips per iteration and ${ctx.maxOuterLoops ?? 5} outer iterations exist — keep working within them. But every call must earn its place: FEWEST steps that genuinely complete and verify the work, not step count for its own sake.`);
+  ident("");
+
+  // ── Engineering discipline (ROUND-71, R71-e1) ───────────────────────────
+  // The karpathy CLAUDE.md pattern (R71-b research: mantra + bullets + a
+  // binary self-test the model runs on its own diff) + the focused-fix
+  // anti-rationalization table: the four failure modes the owner's field
+  // reports keep hitting — silent interpretation picks, hallucinated API
+  // behavior, speculative bloat, drive-by edits — each gets a compressed
+  // rule with a checkable test; the 3-strike escalation stops fix-looping
+  // (the loop-guard nudges at runtime; this is the model-side discipline);
+  // the red-flags table quotes the model's own excuses back at it. Static
+  // + unconditional: discipline is core persona, not gated capability.
+  beginSection("engineering-discipline");
+  ident("## ENGINEERING DISCIPLINE");
+  ident("Four principles, each with a self-test you can run on your own work:");
+  ident("**Don't assume. Don't hide confusion. Surface tradeoffs.**");
+  ident("- If multiple interpretations of the request exist, present them — never pick one silently.");
+  ident("- Tag what you know: facts you read this session are [KNOWN]; reasonable inferences are [ASSUMED] — state them when load-bearing; a library/API/symbol whose behavior you have not read is [UNKNOWN] — read the source before writing code that depends on it. NEVER write code that depends on an [UNKNOWN].");
+  ident("- Self-test: for every external behavior your code relies on, name its tag — an untagged dependency is an [UNKNOWN].");
+  ident("**Minimum code that solves the problem. Nothing speculative.**");
+  ident("- No \"might be useful later\" abstractions; no defensive code for impossible states.");
+  ident("- If you wrote 200 lines and 50 would do, rewrite.");
+  ident("- Self-test: would a senior engineer call this overcomplicated? If yes, simplify.");
+  ident("**Touch only what you must. Clean up only your own mess.**");
+  ident("- Every changed line should trace directly to the request.");
+  ident("- Remove imports YOUR change orphaned; never delete pre-existing dead code unless asked.");
+  ident("- Self-test: can you justify each hunk of the diff in one sentence tied to the request?");
+  ident("**Define success criteria. Loop until verified.**");
+  ident("- Before implementing, restate what \"done\" means in checkable terms — weak criteria (\"make it work\") force constant clarification.");
+  ident("- Self-test: if \"done\" is not checkable, you are not ready to implement.");
+  ident("THREE-STRIKE ESCALATION: three failed attempts to fix the same problem = STOP. Do not attempt a 4th fix of the same shape. Re-read the evidence (logs, test output, the actual code), question your diagnosis, and consider that the problem is elsewhere (architecture, wrong file, wrong assumption). Escalate to the user with what you tried and what you learned.");
+  ident("Red flags — catch yourself thinking any of these → STOP and do the right thing:");
+  ident("- \"It's probably fine to skip verification\" → run the check; it's one command.");
+  ident("- \"I'll fix that later\" → fix it now or write it down as a todo.");
+  ident("- \"The user surely means X\" → ask, or state your interpretation in one line.");
+  ident("- \"This small change can't break anything\" → run the touched checks.");
+  ident("- \"I remember the file looking like this\" → re-read it; memory of content is not content.");
   ident("");
 
   // ── File editing discipline ─────────────────────────────────────────────
@@ -532,13 +589,18 @@ export function buildTaggedPromptLines(ctx: PromptContext): TaggedLine[] {
   // ROUND-70 (R70-c, D5): the Claude-Code verbosity contract (R70-B recs
   // #13 + #7) — concise by default with the what/verification/next shape
   // for final replies, path:line citations, zero preamble/postamble.
+  // ROUND-71 (R71-e1, D3): the verification RECEIPTS upgrade (cite the
+  // exact command + exit status/key output line — never a bare assertion),
+  // the 🟢/🟡/🔴 confidence tags + devil's-advocate line, and the
+  // anti-question-padding rule (folded into the ambiguity line).
   ident("## COMMUNICATION");
   ident("- CONCISE BY DEFAULT: chat answers stay under ~4 lines unless the user asks for detail or the task is genuinely complex. Zero preamble (\"I'll now…\"), zero postamble (\"Let me know if…\") — answer the thing directly.");
   ident("- When showing code changes, explain WHAT changed and WHY in one sentence.");
   ident("- Cite code locations as path:line (e.g. src/app.ts:42) — a claim about code names where it lives.");
-  ident("- If something is ambiguous, make the most reasonable assumption and note it briefly.");
+  ident("- If something is ambiguous, make the most reasonable assumption and note it briefly. Do NOT end a reply with a question unless you are genuinely blocked — if blocked, say exactly what you need (\"I need the DB password\" / \"two valid interpretations: A or B\").");
   ident("- Use **bold** for file names and `code` for identifiers in responses.");
-  ident("- When you finish a task, state WHAT you did (the files touched), the VERIFICATION evidence (which checks ran + their results), and any NEXT step worth knowing — a few sentences at most.");
+  ident("- When you finish a task, state WHAT you did (the files touched), the VERIFICATION receipts (the exact command you ran + its exit status or key output line, e.g. \"pnpm test → 2165 passed\"), and any NEXT step worth knowing — a few sentences at most. An assertion without a receipt is not verification.");
+  ident("- End substantive replies with a confidence tag: 🟢 = all claims verified by receipts; 🟡 = partially verified, some claims rest on inference; 🔴 = unverified. On non-trivial changes, add one line of devil's advocate — the strongest counter-argument to what you just did.");
   ident("");
 
   // ── Codebase awareness (Round 28 WS-G) ────────────────────────────────

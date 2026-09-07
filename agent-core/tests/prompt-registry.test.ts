@@ -119,6 +119,11 @@ describe("PROMPT_REGISTRY (R59-F)", () => {
     expect(PROMPT_SECTION_IDS).toContain("tool-use");
     expect(PROMPT_SECTION_IDS).toContain("agentic-loop");
     expect(PROMPT_SECTION_IDS).toContain("project-memory");
+    // R71-e1: the discipline section slots in RIGHT AFTER the agentic-loop
+    // (the R71-d design position — the loop teaches the process, discipline
+    // teaches the judgment right behind it).
+    expect(PROMPT_SECTION_IDS.indexOf("engineering-discipline")).toBe(PROMPT_SECTION_IDS.indexOf("agentic-loop") + 1);
+    expect(PROMPT_SECTION_IDS.indexOf("engineering-discipline")).toBeLessThan(PROMPT_SECTION_IDS.indexOf("file-editing"));
     // R70-c (D2): the consolidated sections are RETIRED — the removal pin
     // (a stale entry can't linger; .acute/prompts/<id>.md for them is now an
     // unknown-file diagnostic, not an override).
@@ -163,6 +168,17 @@ describe("PROMPT_REGISTRY (R59-F)", () => {
     // values in FULL_CTX (incl. environment). If this fails after a
     // deliberate prompts.ts change, regenerate deliberately and say so in
     // the round log.
+    // Regenerated AGAIN in R71-e1 (deliberately — the discipline round:
+    // the ENGINEERING DISCIPLINE section (karpathy mantras + self-tests,
+    // [KNOWN]/[ASSUMED]/[UNKNOWN] tagging, 3-strike escalation, red-flags),
+    // the PLAN-phase task→verifiable-goal transform, COMMUNICATION's
+    // verification receipts + 🟢/🟡/🔴 confidence tags + anti-question rule,
+    // and the SUB-AGENTS scope/no-polling lines. Additions-only: no
+    // pre-existing line was removed except the two COMMUNICATION lines the
+    // receipts/anti-question rules REWROTE ("VERIFICATION evidence (which
+    // checks ran + their results)" → "VERIFICATION receipts (the exact
+    // command… exit status…)"; the ambiguity line gained the blocked-clause).
+    // Golden delta: 20,156 → 23,665 bytes (19,984 → 23,447 chars).
     // R59 CI fix: normalize \r\n → \n on BOTH sides before comparing — the
     // fixture is committed with LF, but a Windows checkout with autocrlf
     // rewrites it to CRLF (the R57 CI lesson: never let line endings decide

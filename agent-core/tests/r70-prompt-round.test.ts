@@ -506,13 +506,20 @@ describe("D4: the FILE EDITING rules", () => {
 
 describe("D5: the COMMUNICATION contract", () => {
   it("verbosity + citations + the final-reply shape", () => {
+    // R71-e1 re-pin: the final-reply contract UPGRADED from "VERIFICATION
+    // evidence (which checks ran + their results)" to VERIFICATION RECEIPTS
+    // (the exact command + exit status / key output line) — a stricter
+    // version of the same R70-c shape, not a weakening.
     const composed = buildProjectSystemPrompt(ctxFor());
     const comm = buildSectionText(ctxFor(), "communication") ?? "";
     expect(comm).toContain("CONCISE BY DEFAULT");
     expect(comm).toContain("under ~4 lines unless the user asks for detail");
     expect(comm).toContain('Zero preamble ("I\'ll now…"), zero postamble ("Let me know if…")');
     expect(comm).toContain("Cite code locations as path:line (e.g. src/app.ts:42)");
-    expect(comm).toContain("state WHAT you did (the files touched), the VERIFICATION evidence (which checks ran + their results), and any NEXT step");
+    expect(comm).toContain(
+      'state WHAT you did (the files touched), the VERIFICATION receipts (the exact command you ran + its exit status or key output line',
+    );
+    expect(comm).toContain("An assertion without a receipt is not verification.");
     // The formatting rules survive.
     expect(comm).toContain("Use **bold** for file names and `code` for identifiers");
     expect(composed).toContain("## COMMUNICATION");

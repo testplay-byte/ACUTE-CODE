@@ -239,8 +239,15 @@ export const computerUsePlugin: PluginDefinition = {
             session.record("refusal", `Owner declined: ${summary}`, tool);
             return refusalResult({
               error: "host_policy_denied",
-              message: `The owner declined this computer-use action (${summary}).`,
+              // ROUND-71 (R71-e2, D3): cline's rejection semantics — an owner
+              // denial is USER FEEDBACK, not a malfunction. The message names
+              // the action (summary) and separates user intent from tool/
+              // system failure; the approval gate's note rides in the payload
+              // (it distinguishes a real Deny from a timeout / non-interactive
+              // fail-fast — approvals.ts R71-e2 D3).
+              message: `The owner declined this computer-use action (${summary}) — this is NOT a tool or system failure. The action was not performed. Ask the user why (one line), or propose an alternative approach.`,
               recovery: "Do not retry the same action; ask what to do differently or continue read-only.",
+              payload: { approvalNote: gate.note },
             });
           }
         }

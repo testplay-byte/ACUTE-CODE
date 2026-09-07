@@ -1,8 +1,8 @@
-<!-- last-reviewed: 2026-09-06 round-70 -->
+<!-- last-reviewed: 2026-09-07 round-71 -->
 # IMPLEMENTED API — the shipped surface
 
 **Truth = this file.** Verified against `agent-core/src/server.ts` at
-round-17 (2026-08-23), refreshed R37→R70. The aspirational full contract (52
+round-17 (2026-08-23), refreshed R37→R71. The aspirational full contract (52
 operations, WS gateway, planned routes) lives in
 [`API.md`](API.md) — anything there and
 not here **does not exist yet**. Base: `http://127.0.0.1:<port>`; dev port
@@ -1590,3 +1590,64 @@ empty-log-file case explains itself. No REST/SSE surface changed.
 - The 8 builtin skill bodies seed via `INSERT OR IGNORE` at DB open — no
   migration (an existing DB gains the 7 new rows on next open; user edits
   persist).
+
+## ROUND-71 additions (implemented)
+
+The discipline & reliability round (research-driven; no owner field
+report). The REST surface gained NOTHING new — the round lives in the
+prompt, the tool output strings, and the failure paths — but three
+existing surfaces changed shape ADDITIVELY:
+
+### The PROVIDER_ERROR 502 envelope + `turn.error` event — the error class
+
+`classifyProviderError` (runtime.ts, exported) classifies every
+provider/stream failure into six classes — `context_window_exceeded` /
+`auth` / `rate_limit` / `network` / `timeout` / `unknown` — BEFORE
+flattening. Additive payload changes (older readers ignore the new
+fields; the existing message prefix and retry policy are unchanged):
+
+- the 502 envelope's `details` gains `errorClass` (the class id) and
+  `classMessage` (the class-specific honest one-liner); the message
+  itself gains `(class: <id>)`, and the twice-overflow case (recovery
+  already ran) names it: "context window exceeded even after compaction
+  — start a new session or /compact";
+- the persisted `turn.error` session event payload gains `errorClass`.
+
+### The `meta.overflow_recovery` SSE frame (NEW frame type, same family
+as `meta.compaction`)
+
+When a classified context-window overflow hits a turn with NOTHING
+streamed yet, the runtime emits
+`{"type":"meta.overflow_recovery","sessionId":…,"message":"[context
+overflow → auto-compacted conversation → retrying]"}` before forcing a
+compaction and retrying the turn ONCE. SSE-only, never persisted, never
+model-facing; the chat UI's stream-store deliberately ignores unlisted
+meta frames (the documented contract — same as `meta.compaction`), so
+no frontend change is required; extend the consumer union only when a
+UI starts rendering it.
+
+### Model-facing (non-HTTP) drift notes
+
+- `read_file`'s >256KB truncation marker now carries the file's TOTAL
+  line count and the exact next call ("use offset=N to continue"); the
+  degenerate single-line cap says honestly that no continuation call
+  can reach the middle and names `search_code`/`run_command` as the
+  recovery tools; `run_command`'s 64KB middle-omission marker teaches
+  the spill-to-file recovery path. Tool-output strings only — no route
+  contract.
+- `edit_file` failures now escalate by consecutive-failure count
+  (NEW `agent-core/src/tools/edit-streak.ts`, per-session in-memory):
+  the 2nd anchor failure appends "re-read the file and copy the anchor
+  EXACTLY", the 3rd/4th "change your approach", the 5th+ refuses the
+  pattern; a success resets the streak. The `ok:false` shape is
+  unchanged — only the output text grows.
+- Owner DENIALS of approvals (command / web request / computer-use
+  consent) now read "this is NOT a tool or system failure" with timeouts
+  and aborts distinguished from denials — `ok:false` contract unchanged,
+  note text only.
+- The builtin skills are now TWELVE (8 → 12: focused-fix,
+  zero-hallucination, self-eval, ship-gate at sortOrder 8-11) and all
+  descriptions were rewritten trigger-rich — same `INSERT OR IGNORE`
+  seeding, no migration, no route change; `GET /skills` shows the new
+  rows on an existing DB at next open (description text updates do NOT
+  overwrite user-edited rows — by design).

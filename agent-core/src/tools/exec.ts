@@ -39,7 +39,9 @@
  *   - the 64KB output cap now keeps BOTH ends (head 32KB + tail 32KB with an
  *     honest omitted-from-the-middle marker) — build/test errors live at the
  *     END of long logs, and the old HEAD-only clip threw them away before the
- *     model ever saw them;
+ *     model ever saw them. ROUND-71 (R71-e2, D1): the marker gained a real
+ *     recovery path for the omitted middle — redirect to a file + read_file
+ *     in slices (kilocode's spill-to-file pattern);
  *   - a successful command that prints NOTHING resolves with an explicit
  *     "ran successfully and printed nothing" note (no silent empty output).
  */
@@ -196,9 +198,14 @@ export async function runCommand(
       const head = output.slice(0, OUTPUT_HEAD);
       const tail = output.slice(output.length - OUTPUT_TAIL);
       const omitted = output.length - head.length - tail.length;
+      // ROUND-71 (R71-e2, D1): byte semantics kept, plus the recovery path
+      // for the omitted middle — the marker now teaches it (the tail is
+      // already included; to see the middle, re-run with output redirected
+      // to a file and read_file it in slices — a real, cheap recovery).
       return (
-        `${head}\n…[output truncated: ${omitted} bytes omitted from the middle — ` +
-        `the first 32KB and the last 32KB are kept]…\n${tail}`
+        `${head}\n…[output truncated: ${omitted} bytes omitted from the middle — the first 32KB and the last 32KB are kept ` +
+        `— the tail is included; if the failure you need is in the omitted middle, re-run with output redirected to a file ` +
+        `and read_file it in slices]…\n${tail}`
       );
     };
 

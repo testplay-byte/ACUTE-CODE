@@ -102,14 +102,23 @@ export function applyCompaction(messages: readonly SeqMessage[], compact: Compac
  * summarizer receives. Always keeps at least the final message. Returns null
  * when nothing needs compacting (under budget) or there is nothing to
  * summarize.
+ *
+ * ROUND-71 (R71-e2, D5): `force` skips the "under budget → nothing to do"
+ * gate — armed by the runtime's overflow-recovery path when the PROVIDER
+ * ITSELF rejected the request as too large (a context_window_exceeded
+ * classification is ground truth; the ±15% token estimate is the guess that
+ * missed it). The empty-to-summarize check still returns null: a session
+ * with a single message has nothing to compact and the recovery must fail
+ * honestly instead of pretending otherwise.
  */
 export function planCompaction(
   messages: readonly SeqMessage[],
   budget: ContextBudget,
+  force = false,
 ): { toSummarize: SeqMessage[]; keep: SeqMessage[]; targetThroughSeq: number } | null {
   const available = budget.contextWindow - budget.maxOutputTokens - budget.margin;
   const total = estimateMessageTokens(messages.map(({ role, content }) => ({ role, content })));
-  if (total <= available) return null;
+  if (!force && total <= available) return null;
   const target = Math.max(1, Math.floor(available * 0.6));
   let acc = 0;
   let boundary = messages.length; // sentinel: nothing fits
@@ -176,17 +185,25 @@ export interface CompactionOutcome {
  * tools, maxTurns 1), persists the event, and returns the message list.
  * Any summarizer failure falls back to the legacy hard trim
  * (assembleWithinBudget) — compaction never becomes a new failure mode.
+ *
+ * ROUND-71 (R71-e2, D5): `opts.force` plans a compaction even when the
+ * token ESTIMATE says the history fits — the overflow-recovery path (a
+ * provider-side context_window_exceeded rejection) calls with it; the
+ * summarize → persist → reuse pipeline below is exactly the same, and the
+ * summarizer-failure hard-trim fallback still applies (a recovery attempt
+ * is a recovery attempt — the retry will honestly fail if it wasn't enough).
  */
 export async function assembleWithCompaction(
   seqMessages: readonly SeqMessage[],
   budget: ContextBudget,
   deps: CompactionDeps,
+  opts?: { force?: boolean },
 ): Promise<CompactionOutcome> {
   const events = listSessionEvents(deps.db, deps.sessionId);
   const latest = findLatestCompaction(events);
   const applied: SeqMessage[] = latest ? applyCompaction(seqMessages, latest) : [...seqMessages];
 
-  const plan = planCompaction(applied, budget);
+  const plan = planCompaction(applied, budget, opts?.force === true);
   if (plan === null) {
     // Within budget (with any prior compaction applied): use as-is. If some
     // prior trim marker is already inside `applied` it stays — nothing to do.

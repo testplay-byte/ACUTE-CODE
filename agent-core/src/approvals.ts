@@ -622,6 +622,16 @@ export async function requestCommandApproval(
   });
 
   let remember: "once" | "always" | undefined;
+  // ROUND-71 (R71-e2, D3): denial ≠ timeout. The waiter resolves "denied"
+  // for THREE different reasons (owner clicked Deny / the 120s timeout fired /
+  // the turn aborted), and the old note conflated them all — a model that
+  // sees "the owner denied this" after a mere timeout wrongly treats an
+  // absent user as an intentional rejection. The distinguishing evidence is
+  // the persisted row: the decision route writes status="denied" BEFORE
+  // waking the waiter, so only a real owner Deny reads back "denied"; a
+  // pending row means nobody answered (timeout/abort — mark it expired for
+  // the audit trail, exactly as before).
+  let expiredWithoutDecision = false;
   if (finalDecision === "approved") {
     const after = getApproval(db, approval.id);
     remember = after?.remember === "always" ? "always" : "once";
@@ -630,9 +640,11 @@ export async function requestCommandApproval(
     }
   } else {
     const after = getApproval(db, approval.id);
-    if (after?.status === "pending") {
-      // aborted/timed out — mark expired so the audit trail says why
-      setApprovalStatus(db, approval.id, "expired", undefined, "system");
+    if (after?.status !== "denied") {
+      expiredWithoutDecision = true;
+      if (after?.status === "pending") {
+        setApprovalStatus(db, approval.id, "expired", undefined, "system");
+      }
     }
   }
 
@@ -649,7 +661,25 @@ export async function requestCommandApproval(
   if (finalDecision === "approved") {
     return { allowed: true, note: remember === "always" ? "approved (always for this project)" : "approved by the owner" };
   }
-  return { allowed: false, note: "command denied by the owner (or the approval timed out) — ask for a different approach" };
+  // ROUND-71 (R71-e2, D3): cline's USER_REJECTED_TOOL_REASON +
+  // TOOL_REJECTION_SUFFIX semantics — an owner denial is USER FEEDBACK, not
+  // a malfunction: ok:false stays (the loop contract), but the text must
+  // separate user intent from tool/system failure so the model asks or
+  // changes course instead of hammering the same call. Timeouts/aborts get
+  // their own honest note (the user may simply be away).
+  if (expiredWithoutDecision) {
+    return {
+      allowed: false,
+      note:
+        deps.signal?.aborted === true
+          ? "the turn was aborted before the owner answered — this is not a rejection; the command was not run. If it is essential, ask."
+          : `approval timed out after ${APPROVAL_TIMEOUT_MS / 1000}s — the user may be away; do not assume rejection. If the command is essential, ask.`,
+    };
+  }
+  return {
+    allowed: false,
+    note: "command denied by the owner — this is NOT a tool or system failure. The action was not performed. Ask the user why (one line), or propose an alternative approach.",
+  };
 }
 
 /* ── ROUND-45 (audit P0-5): web-tool gating (web_fetch + browser_control) ──── */
@@ -861,6 +891,10 @@ export async function requestWebFetchApproval(
   });
 
   let remember: "once" | "always" | undefined;
+  // ROUND-71 (R71-e2, D3): denial ≠ timeout — same evidence rule as
+  // requestCommandApproval above (a persisted "denied" row = the owner
+  // clicked Deny; anything else = nobody answered).
+  let expiredWithoutDecision = false;
   if (finalDecision === "approved") {
     const after = getApproval(db, approval.id);
     remember = after?.remember === "always" ? "always" : "once";
@@ -870,8 +904,11 @@ export async function requestWebFetchApproval(
     }
   } else {
     const after = getApproval(db, approval.id);
-    if (after?.status === "pending") {
-      setApprovalStatus(db, approval.id, "expired", undefined, "system");
+    if (after?.status !== "denied") {
+      expiredWithoutDecision = true;
+      if (after?.status === "pending") {
+        setApprovalStatus(db, approval.id, "expired", undefined, "system");
+      }
     }
   }
 
@@ -891,5 +928,20 @@ export async function requestWebFetchApproval(
       note: remember === "always" ? `approved — ${decision.host} always allowed for this project` : "approved by the owner",
     };
   }
-  return { allowed: false, note: "web request denied by the owner (or the approval timed out)" };
+  // ROUND-71 (R71-e2, D3): rejection ≠ failure (see requestCommandApproval)
+  // — an owner denial is user feedback; a timeout/abort is absence, never a
+  // rejection. The tool surfaces this note verbatim (web_fetch blocked: …).
+  if (expiredWithoutDecision) {
+    return {
+      allowed: false,
+      note:
+        deps.signal?.aborted === true
+          ? "the turn was aborted before the owner answered — this is not a rejection; the request was not made. If it is essential, ask."
+          : `approval timed out after ${APPROVAL_TIMEOUT_MS / 1000}s — the user may be away; do not assume rejection. If the request is essential, ask.`,
+    };
+  }
+  return {
+    allowed: false,
+    note: "web request denied by the owner — this is NOT a tool or system failure. The action was not performed. Ask the user why (one line), or propose an alternative approach.",
+  };
 }
