@@ -41,4 +41,21 @@ export default defineConfig({
   },
   // Vitest runs every workspace's tests from this config. Default environment is
   // "node"; DOM tests opt in per file with a `// @vitest-environment happy-dom` docblock.
+  test: {
+    // ROUND-73 CI-stability patch (R70's lesson, the sequel): the CI runner
+    // (windows-latest) executes this suite 3-4x slower than a dev machine
+    // under parallel load, and the integration files that spin a real
+    // Fastify app per test (r72-references D3, sessions, server,
+    // r73-modes-backend, orchestrator, …) can exceed vitest's 10s DEFAULT
+    // hookTimeout there — CI run 34111934048 failed 2 r72-references tests
+    // purely on beforeEach/afterEach (app.close + db open/close) hook
+    // timeouts while the SAME suite was green locally (2558/2558, and the
+    // same file green on CI at R72). Timeouts only fire on failure — raising
+    // them slows nothing on a fast machine; it stops slow-runner flakes.
+    // testTimeout follows for the same reason (the heaviest integration
+    // tests run 2-4s on CI vs sub-second locally, uncomfortably close to
+    // the 5s default).
+    testTimeout: 30_000,
+    hookTimeout: 30_000,
+  },
 });
