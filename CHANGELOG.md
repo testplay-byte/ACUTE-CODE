@@ -1,4 +1,4 @@
-<!-- last-reviewed: 2026-09-07 round-73 -->
+<!-- last-reviewed: 2026-09-07 round-74 -->
 # Changelog
 
 All notable changes to ACUTE-CODE are documented here. Entries are written for
@@ -11,25 +11,58 @@ version number is single-sourced from the root `package.json`
 
 ## [Unreleased]
 
-Planned next: the owner's live Windows verification of the R73 gates —
-whether the TASK MODES section and its Task signal line appear on real
-task-shaped messages ("fix this bug" should carry a "Task signal: … the
-**debug** posture — consider switch_mode FIRST" advisory), whether
-switch_mode activation makes the ACTIVE TASK MODE section ride the
-following turns' prompts (and /mode none removes it), whether the
-composer picker and the /mode slash round-trip (set / clear / list,
-custom modes from .acute/agents/*.md visible with the custom chip),
-whether the two new skills trigger ("write a spec" → spec-planning,
-"make it faster" → performance), and whether a custom mode's tools
-frontmatter actually narrows the session read-only while active — PLUS
-the R69/R70/R71/R72 live gates still pending, then the R74 queue:
-delegate_task task_id/background/resume (deferred from R73 by design —
-the orchestrator deserved its own round), external plugin ctx
-enrichment (cline's appendContext seam), the lessons-ledger affordance
-as the reminder injector's third consumer, ratings-driven prompt
-tuning, and the standing items (edit-linting — SWE-agent's ACI #1
-finding, installer code-signing, the Files-tab polish, agent
-web-app-testing tools).
+Planned next: the owner's live Windows verification of the R74 updater
+gates — double-click ACUTE.bat and watch the version-truth panel's
+first line name the tag it picked (`latest installer on GitHub 0.74.0
+[v0.74.0]`), the upgrade `0.67.0 → 0.74.0` complete with its
+sha256-verified download + silent install + registry/exe/engine
+verification, and `ACUTE.bat status` report `0.74.0 on GitHub
+(published — installed is current)` — PLUS the R69/R70/R71/R72/R73 live
+gates still pending, then the R75 queue: delegate_task
+task_id/background/resume (deferred from R73 by design — the
+orchestrator deserved its own round), external plugin ctx enrichment
+(cline's appendContext seam), the lessons-ledger affordance as the
+reminder injector's third consumer, ratings-driven prompt tuning, the
+optional v0.68.0 backfill tag, and the standing items (edit-linting —
+SWE-agent's ACI #1 finding, installer code-signing, the Files-tab
+polish, agent web-app-testing tools).
+
+## [0.74.0] - 2026-09-07
+
+Round 74 — the updater-freeze round (the owner's report: "the installed
+desktop app version was 0.67.0 — the application apparently did not
+update"). **Root cause:** GitHub's release list sorts never-published
+DRAFTS above every published release, and the round-63–67 close-outs
+left five drafts (v0.63.0–v0.67.0) sitting at list positions 1–5 — the
+launcher's release check walked that list in raw order, took the first
+installer it saw (draft 0.67.0), and concluded the installed 0.67.0 was
+current while 0.73.0 was live. No error, nothing to see: the update
+simply never triggered. **The fix:** the launcher now picks the newest
+release by **MAX VERSION over the whole list** — never by list order —
+immune to draft placement, re-sorting and page truncation alike (the
+check also widens to 100 entries per page and retries once on a
+transient network error). Drafts remain first-class on purpose: the
+owner's token can see them, so a freshly built release is installable
+on the very next double-click, published or not; a same-version tie
+prefers the published entry. **The freeze is now visible, not silent:**
+the version-truth panel names the tag it picked (and says when it is
+still a draft), and `ACUTE.bat status` annotates published/draft.
+**Ten regression tests** pin the picker's contract — including the
+exact owner-freeze list shape (five drafts above the published
+releases) — and run in both the push and the release CI gates, so every
+tag is protected. **One-time remediation:** the five stale drafts were
+published (the step those rounds' close-outs never got), which also
+un-freezes any install still running the pre-fix launcher — the
+never-downgrade guard was verified to hold against every list state
+the old code could see. Nothing else changed: the decision ladder, the
+sha256-verified download, the silent install, the post-install
+registry+exe+engine verification, the self-update mechanism, and
+ACUTE.bat itself are byte-identical; the fix reaches an existing
+launcher through its own self-update (git pull → copy → re-exec) on
+the owner's next double-click. Anomaly flagged per the standing rule:
+**v0.68.0 never existed** (R68 shipped the version bump but skipped the
+tag push — the exact R61/R62 failure class); left as a documented gap,
+superseded by 0.69.0+.
 
 ## [0.73.0] - 2026-09-07
 

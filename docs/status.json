@@ -3,7 +3,7 @@
   "product": {
     "name": "Acute",
     "tagline": "Local-first multi-agent engineering workbench",
-    "version": "0.73.0",
+    "version": "0.74.0",
     "availability": "Private build — not yet distributed",
     "chips": [
       "Windows desktop",
@@ -168,6 +168,10 @@
     {
       "date": "2026-09-07",
       "label": "R73 — the task modes round (the posture tier of the owner's directive): six builtin posture modes (plan/debug/build/review/explore/refactor) + custom modes (.acute/agents/*.md, shadowing, tool narrowing), the switch_mode tool + composer picker + /mode slash + the mode Task signal line, sessions.active_mode (migration 0027), the generalized system-reminder renderer, skills 18→20 (spec-planning, performance) (2558 tests)"
+    },
+    {
+      "date": "2026-09-07",
+      "label": "R74 — the updater-freeze round: the launcher now picks releases by MAX VERSION (root cause: GitHub lists never-published drafts ABOVE published releases, and five R63-R67 drafts froze the owner's installed app at 0.67.0 while 0.73.0 was live); 10 launcher regression tests wired into both CI gates; the five stale drafts published (2558 root tests + 10 launcher tests)"
     }
   ],
   "quality": {
@@ -184,6 +188,10 @@
       {
         "name": "sidecar e2e",
         "tests": 12
+      },
+      {
+        "name": "launcher (python unittest)",
+        "tests": 10
       }
     ],
     "cargoCheck": "green",
@@ -200,8 +208,8 @@
   ],
   "plan": {
     "current": {
-      "title": "Round 73 DELIVERED — the task modes round (0.73.0)",
-      "detail": "The posture tier of the owner's directive 'proper detailed system prompts which the agent accesses when required and on the basis of the task' — SKILLS = methodology (R61/R70/R72), MODES = posture (this round), REFERENCES = depth (R72-c); nothing auto-activates. (1) The modes core: NEW agents/modes.ts — six builtin postures plan/debug/build/review/explore/refactor (bodies 2,084-2,546 chars, iron laws, PAIRS WITH skill pairings) + custom modes from .acute/agents/*.md (frontmatter name/description/tools, ≤8 × 16K caps, 8 diagnostic kinds, custom shadows builtin, project-root trust); resolveEffectiveModes pure + sync. (2) The backend: prompt-registry 21→23 (task-modes index + active-mode deep body, both after skills, both .acute/prompts/-overridable, strictly ctx-gated — golden fixture byte-stable); computeModeHints (the R72-a shared scorer; computeTaskHints unchanged); sessions.active_mode + migration 0027 (the ALTER + the switch_mode allowlist append with the read_skill companion rule); PATCH /sessions/:id activeMode (null clears, unknown → 400 with available ids) + GET /projects/:id/modes metadata-only; NEW switch_mode tool (list / activate-returns-body-once / deactivate via sentinels none-off-auto + JSON null); prepareTurn threads modes — custom-mode tools narrow the allowlist (narrow-only, NO_TOOLS sentinel), a vanished custom mode is swept with a one-turn note; PLAN_MODE_TOOLS gains switch_mode (the D4 dark-tools honesty rule). (3) The frontend: the composer TaskModePicker + the /mode slash intercept (optimistic PATCH + rollback; word-boundary so /moderation falls through) + api.ts (Session.activeMode, TOOL_CATALOG switch_mode — the R45 drift guard repaired, fetchProjectModes, patchSessionActiveMode). (4) The system-reminder renderer (ONE fenced-reminder mechanism; dir-conventions migrated byte-identically — r72-dir-conventions 20/20 unmodified — plus the per-turn ReminderBudget) and skills 18→20 (spec-planning, performance — INSERT OR IGNORE). Verification: 2558 root tests in 138 files, all green (agent-core 1637/1637 in 74 files — +135; frontend 909/909 in 62 files; e2e 12 env-gated), lint/typecheck clean, license audit CLEAN (134 deps), a live HTTP smoke of the mode routes (GET /modes incl. a custom, PATCH set/bogus-400/null-clear). The live gates (the TASK MODES section + Task signal line on real messages, switch_mode activation riding the following turns, the picker + /mode slash, the two skills' triggers, custom-mode tool narrowings) await the owner's Windows field run. Next: the R74 queue — delegate_task task_id/background/resume (deferred from R73 by design), external plugin ctx enrichment (cline's appendContext seam), the lessons-ledger affordance as the reminder injector's third consumer, ratings-driven prompt tuning."
+      "title": "Round 74 DELIVERED — the updater-freeze round (0.74.0)",
+      "detail": "The owner's field report ('the installed desktop app version was 0.67.0 — it did not update') answered root-cause to remedy. (1) Root cause, proven against the live API: GitHub's /releases list sorts never-published DRAFTS above every published release — the R63-R67 close-outs left five drafts at positions 1-5 — and the launcher's first-match walk returned draft 0.67.0 as 'latest', so the installed 0.67.0 looked current while 0.73.0 was live (no error, nothing to see; it 'used to work' because in that era ALL releases were drafts). (2) The fix (launcher/acute_launcher.py, first launcher change since R63, ACUTE.bat byte-identical/CRLF-verified): NEW pure _pick_latest_release — walks every entry, picks the numerically greatest version (integer tuples: 0.10.0 > 0.9.0, 1.0.0 > 0.99.99), drafts first-class (owner PAT sees them), same-version tie prefers published, malformed entries skipped; _desktop_latest_release rewritten onto it (per_page 20→100, one retry, never-raise + dev-flow fallback byte-identical); the version-truth panel now NAMES the tag it picked and ACUTE.bat status annotates published/draft — the freeze is visible, not silent. (3) NEW launcher/tests/test_pick_latest_release.py — the repo's first Python suite (stdlib unittest, 10 tests incl. the exact owner-freeze list shape) wired into ci.yml's verify job AND release.yml's launcher-kit gate (github-release needs the kit job → every tag gated); kit assembly copies seven named files only, tests cannot leak into the zip. (4) Remediation: the five stale drafts published (releases 381461843/381577121/382282125/383173421/383247624, all HTTP 200 — the R69+ step those close-outs never got; non-destructive, reversible) — also un-freezing any pre-fix launcher (settled list carries v0.73.0 first); the never-downgrade guard verified to hold against every list state the old code could see. The fix reaches the owner via the launcher's own self-update (git pull → copy + re-exec). Anomaly flagged: v0.68.0 never existed (R68 skipped the tag push — the R61/R62 failure class; documented gap, superseded by 0.69.0+). Verification: root vitest 2558 unchanged and re-run green (2,546 + 12 e2e env-gated); launcher suite 10/10; py_compile, lint, typecheck clean; LIVE smoke — the real /releases JSON through the picker → 0.73.0 — run twice (orchestrator + the independent R74-b verifier, 9/9 PASS, verdict SHIP). Next: the R75 queue — delegate_task task_id/background/resume (the R73 deferral), plugin ctx enrichment (cline's appendContext seam), the lessons-ledger third consumer, ratings-driven tuning, the optional v0.68.0 backfill tag."
     },
     "upcoming": [
       {

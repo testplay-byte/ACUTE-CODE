@@ -32,6 +32,12 @@ jobs:
       - name: Version consistency
         run: pnpm version:check
 
+      # R74: the launcher's release-picker unit tests — the drafts-first
+      # API-order freeze (owner stuck on 0.67.0 while 0.73.0 was live)
+      # must never regress.
+      - name: Launcher unit tests
+        run: python launcher/tests/test_pick_latest_release.py
+
       - name: Docs check (freshness + drift — round 28 WS-J1)
         run: pnpm docs:check
         continue-on-error: true  # warn-only for now (existing docs need stamp backfill)

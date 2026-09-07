@@ -1,4 +1,4 @@
-<!-- last-reviewed: 2026-09-07 round-73 -->
+<!-- last-reviewed: 2026-09-07 round-74 -->
 # TESTING — the verification ladder
 
 Five layers; each has a defined "when mandatory". Rules here are binding
@@ -13,21 +13,53 @@ Five layers; each has a defined "when mandatory". Rules here are binding
 | L4 live battery | real provider turn(s), real disk, fresh DB | sandbox, single invocation | anything touching agents, projects, tools, streaming |
 | L5 browser verification | real UI against the live stack; screenshots machine-verified | sandbox, single invocation | any UI-affecting round |
 
-**Current counts (R73, verified 2026-09-07 by re-running the suites):**
+**Current counts (R74, verified 2026-09-07 by re-running the suites):**
 the root `pnpm test` = **2558 tests in 138 files, all green** (measured
 without a fresh `agent-core/dist` — the 12 sidecar-e2e report as
 env-gated skips: 2546 passed + 12 skipped; with the dist present they
-run in-suite. agent-core alone = **1637/1637 in 74 files** (+116 this
-round), frontend alone = **909/909 in 62 files** (+19 — 61 `src/` files
-+ `shared/src/index.test.ts` per the root workspace config, the same
-convention R72's 890 used). The arithmetic reconciles exactly:
-1,637 + 909 + 12 = 2,558 (74 + 62 + 2 = 138 files).
+run in-suite. agent-core alone = **1637/1637 in 74 files** (unchanged
+this round — no TS surface touched), frontend alone = **909/909 in 62
+files** (61 `src/` files + `shared/src/index.test.ts` per the root
+workspace config, the same convention R72's 890 used). The arithmetic
+reconciles exactly: 1,637 + 909 + 12 = 2,558 (74 + 62 + 2 = 138 files).
+**Plus a NEW fourth suite surface (R74): the launcher's Python unittest
+— `launcher/tests/test_pick_latest_release.py`, 10/10, stdlib-only,
+run via `python launcher/tests/test_pick_latest_release.py` (or
+`python -m unittest discover -s launcher/tests`) — wired into ci.yml's
+verify job and release.yml's launcher-kit gate, so the release picker's
+contract is gated on every push AND every tag.**
 Trajectory: 262 (R42) → 397 (R43) → 471 (R44) → 565 (R45) →
 622 (R46) → 683 (R47) → 752 (R48) → 815ish (R49) → 930 (R50) → 978 (R51) →
 1035 (R52) → 1058 (R53) → 1071 (R54–R56, launcher rounds) → 1169 (R58) →
 1302 (R59) → 1348 (R60) → 1491 (R61) → 1542 (R62) → 1632 (R63) → 1664
 (R64) → 1686 (R65) → 1807 (R66) → 1961 (R67) → 2003 (R68) → 2082 (R69) →
-2177 (R70) → 2287 (R71) → 2423 (R72) → 2558 (R73).
+2177 (R70) → 2287 (R71) → 2423 (R72) → 2558 (R73) → 2558 (R74 — the root
+suite unchanged by design: the round's code is Python; its +10 live on
+the new launcher surface above).
+
+**R74 (the updater-freeze round):** root 2558 re-run green, unchanged —
+the round changed ONE Python file (`launcher/acute_launcher.py`, the
+first launcher change since R63, flagged per golden rule 1, ACUTE.bat
+byte-identical) and adds ONE new test surface: the **launcher Python
+suite (10 tests, NEW `launcher/tests/test_pick_latest_release.py`)** —
+the repo's first non-vitest suite, stdlib `unittest` only, loading the
+REAL launcher module via importlib (its module level is constants-only
+by construction — import-safe). The 10 pin `_pick_latest_release`'s
+contract: the exact round-74 owner-freeze list shape (the real
+2026-09-07 API order — five never-published drafts ABOVE the published
+releases — must pick 0.73.0, with the chosen asset's id + digest
+passthrough, the sha256 install verification depending on it), order
+immunity in both directions, the lexicographic trap ('0.9.0' vs
+'0.10.0' — numeric, not string compare), major-beats-minor, the
+all-drafts era (drafts first-class by design — updates still flow),
+the same-version tie preferring the PUBLISHED entry in both list
+orders, no-installer-assets → None, empty list → None, malformed
+entries (non-dict releases / assets:null / id-less / non-dict assets)
+never crashing, and non-matching asset names (arm64, two-component,
+suffixed) ignored while the x64 name matches. Plus the round's
+double-run LIVE smoke: the REAL `/releases?per_page=100` JSON through
+the picker → 0.73.0 — executed by the orchestrator and independently
+re-executed by the R74-b hostile verifier (9/9 PASS, verdict SHIP).
 
 **R73 (the task modes round):** +135 root over R72's 2423 — +116
 agent-core (four NEW suites + honest re-pins) + 19 frontend (the picker

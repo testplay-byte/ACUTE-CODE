@@ -124,6 +124,15 @@ from a **sha256-verified** download, then verifies again. A stuck engine
 version is flagged on the spot and self-heals on the very next run. Your
 data (`%APPDATA%\acute-code`) is never touched by any of this.
 
+Which release counts as "the newest"? The **numerically greatest** one
+that carries a Windows installer — chosen by version, never by list
+order: GitHub lists never-published drafts ABOVE published releases, and
+trusting that order once froze the app at 0.67.0 while 0.73.0 was live
+(round 74). Drafts are included on purpose — your PAT can see them, so a
+freshly built release reaches you on the very next double-click,
+published or not; the version panel and `ACUTE.bat status` always name the
+tag (and say when it is still a draft).
+
 Extra commands when you want to drive it yourself:
 
 - `ACUTE.bat reinstall` — delete the desktop app completely, download +

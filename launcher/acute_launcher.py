@@ -69,6 +69,17 @@
 #     and  ACUTE.bat uninstall  (remove the packaged app cleanly).
 #     A sticky repair flag (.acute/desktop-repair-flag.json) makes the next
 #     run self-heal an engine that booted the wrong version.
+#
+# ROUND-74 (R74) — the draft-order freeze fix (owner: "the installed desktop
+# app version was 0.67.0 — it did not update"): GitHub's /releases list
+# sorts never-published DRAFTS above every published release, and the
+# round-63..67 close-outs left five drafts (v0.63.0 … v0.67.0) sitting at
+# list positions 1-5 — the old first-match walk in _desktop_latest_release
+# returned draft v0.67.0 as "latest", so an installed 0.67.0 looked current
+# while v0.73.0 was live. The winner is now chosen by MAX VERSION
+# (_pick_latest_release: pure, unit-tested in launcher/tests/) — drafts
+# stay first-class (the owner's PAT sees them by design), and the
+# version-truth panel names the tag it picked. Nothing else changed.
 
 import hashlib
 import json
@@ -1596,43 +1607,108 @@ def _desktop_find_installed():
     return None
 
 
+def _pick_latest_release(releases):
+    """R74: the newest installer-bearing release, chosen by MAX VERSION —
+    never by list order.
+
+    Root cause this function exists (owner round-74 report: "the installed
+    desktop app version was 0.67.0 — it did not update"): GitHub's
+    /releases list sorts never-published DRAFTS above every published
+    release — the round-63..67 close-outs left five drafts (v0.63.0 …
+    v0.67.0) sitting at list positions 1-5 — and the old first-match walk
+    returned draft v0.67.0 as "latest", so an installed 0.67.0 looked
+    current while v0.73.0 was already live. This function walks EVERY
+    entry, parses the version out of every matching installer asset and
+    returns the numerically greatest one: immune to draft placement, to
+    list order and to per_page truncation alike.
+
+    Drafts remain first-class candidates (by design since R51: the owner's
+    PAT can see them, so a fresh draft is installable immediately). A
+    same-version tie — a draft and a published release coexisting —
+    prefers the published entry: same bytes, but the one every token can
+    see.
+
+    Returns (version, asset_id, digest, info) with info = {"tag", "draft",
+    "created"} for the version-truth panel, or None when no entry carries a
+    matching installer asset. Pure: no I/O, no globals — pinned by
+    launcher/tests/test_pick_latest_release.py.
+    """
+    best = None  # (version_tuple, published_rank, version, asset_id, digest, info)
+    for release in releases:
+        if not isinstance(release, dict):
+            continue
+        for asset in release.get("assets", []) or []:
+            if not isinstance(asset, dict):
+                continue
+            m = DESKTOP_INSTALLER_RE.match(str(asset.get("name", "")))
+            if not m or asset.get("id") is None:
+                continue
+            version = m.group(1)
+            candidate = (
+                _version_tuple(version),
+                0 if release.get("draft") else 1,
+                version,
+                asset["id"],
+                str(asset.get("digest") or ""),
+                {
+                    "tag": str(release.get("tag_name") or ""),
+                    "draft": bool(release.get("draft")),
+                    "created": str(release.get("created_at") or ""),
+                },
+            )
+            if best is None or (candidate[0], candidate[1]) > (best[0], best[1]):
+                best = candidate
+    if best is None:
+        return None
+    return best[2], best[3], best[4], best[5]
+
+
 def _desktop_latest_release(pat):
     """Newest GitHub release that carries a Windows installer asset.
 
-    Returns (version_str, asset_id, digest) or None — the digest is
+    Returns (version_str, asset_id, digest, info) or None — the digest is
     GitHub's own server-side sha256 of the asset (R63: every download is
     verified against it, so a truncated/corrupt setup.exe can never reach
-    the silent installer). Authenticated with the owner's PAT (the repo is
+    the silent installer); info = {"tag", "draft", "created"} feeds the
+    version-truth panel. Authenticated with the owner's PAT (the repo is
     private AND the CI creates the release as a DRAFT — drafts are only
     visible to tokens with repo access, which the owner's launcher has).
-    Never raises: offline/404/parse issues → None.
+
+    R74: the page is fetched with per_page=100 and the winner is chosen by
+    MAX VERSION in _pick_latest_release — GitHub sorts never-published
+    drafts ABOVE every published release, and the old first-match walk
+    over that order froze the owner at v0.67.0 while v0.73.0 was live. One
+    retry on a transient error (the download step's pattern). Never
+    raises: offline/404/parse issues → None.
     """
     import json as _json
     import urllib.error
 
-    req = urllib.request.Request(
-        "https://api.github.com/repos/testplay-byte/ACUTE-CODE/releases?per_page=20",
-        headers={
-            "Authorization": f"Bearer {pat}",
-            "User-Agent": "acute-launcher",
-            "Accept": "application/vnd.github+json",
-        },
-    )
-    try:
-        with urllib.request.urlopen(req, timeout=30) as resp:
-            releases = _json.loads(resp.read().decode("utf-8", "replace") or "[]")
-    except (urllib.error.URLError, OSError, ValueError) as exc:
-        note(f"GitHub release check failed ({exc.__class__.__name__}) — falling back to the dev flow")
-        return None
+    url = "https://api.github.com/repos/testplay-byte/ACUTE-CODE/releases?per_page=100"
+    releases = None
+    for attempt in (1, 2):
+        req = urllib.request.Request(
+            url,
+            headers={
+                "Authorization": f"Bearer {pat}",
+                "User-Agent": "acute-launcher",
+                "Accept": "application/vnd.github+json",
+            },
+        )
+        try:
+            with urllib.request.urlopen(req, timeout=30) as resp:
+                releases = _json.loads(resp.read().decode("utf-8", "replace") or "[]")
+            break
+        except (urllib.error.URLError, OSError, ValueError) as exc:
+            if attempt == 1:
+                note(f"GitHub release check failed once ({exc.__class__.__name__}) — retrying")
+                time.sleep(2)
+            else:
+                note(f"GitHub release check failed twice ({exc.__class__.__name__}) — falling back to the dev flow")
+                return None
     if not isinstance(releases, list):
         return None
-    for release in releases:
-        for asset in release.get("assets", []) or []:
-            name = asset.get("name", "")
-            m = DESKTOP_INSTALLER_RE.match(name)
-            if m and asset.get("id") is not None:
-                return m.group(1), asset["id"], str(asset.get("digest") or "")
-    return None
+    return _pick_latest_release(releases)
 
 
 def _desktop_digest_ok(path, digest):
@@ -1845,7 +1921,7 @@ def desktop_flow(pat, key, sub_keys, force_reinstall=False):
             warn("no Windows installer published on GitHub yet — using the dev-servers flow")
             note("the installer ships with the next tagged release (round 51+)")
             return False
-        version, asset_id, digest = release
+        version, asset_id, digest, rel_info = release
         installed = _desktop_find_installed()
         exe, missing = (
             _desktop_install_files(installed) if installed is not None else (None, [])
@@ -1854,9 +1930,13 @@ def desktop_flow(pat, key, sub_keys, force_reinstall=False):
         repair_expected = _read_repair_flag()
 
         # R63: the version-check panel the owner asked for — every signal
-        # on the table BEFORE any decision is made.
+        # on the table BEFORE any decision is made. R74: the release line
+        # names the tag it picked (and says when it is still a draft), so a
+        # freeze like round-74's is visible on the owner's screen, not
+        # silent.
+        rel_src = ("draft " if rel_info.get("draft") else "") + (rel_info.get("tag") or "release")
         panel(
-            "  latest installer on GitHub    " + version + "\n"
+            "  latest installer on GitHub    " + version + f"  [{rel_src}]" + "\n"
             "  uninstall registry says       " + (installed["version"] if installed else "(not installed)") + "\n"
             "  installed exe on disk is      " + (exe_version or "(not found)") + "\n"
             "  install files                 " + ("complete" if not missing else "MISSING: " + ", ".join(missing))
@@ -2157,11 +2237,12 @@ def mode_status(pat, key, env, sub_keys=("", "", "")):
         release = _desktop_latest_release(pat)
         if release is not None:
             release_version = release[0]
+            rel_state = "draft, not yet published" if release[3].get("draft") else "published"
             installed_version = desktop["version"] if desktop is not None else "none"
             if desktop is None or _version_tuple(installed_version) < _version_tuple(release_version):
-                lines.append(f"  release   {release_version} on GitHub — UPDATE PENDING (the next app launch installs it)")
+                lines.append(f"  release   {release_version} on GitHub ({rel_state}) — UPDATE PENDING (the next app launch installs it)")
             else:
-                lines.append(f"  release   {release_version} on GitHub (installed is current)")
+                lines.append(f"  release   {release_version} on GitHub ({rel_state} — installed is current)")
         else:
             lines.append("  release   GitHub unreachable or no installer published")
         repair_expected = _read_repair_flag()

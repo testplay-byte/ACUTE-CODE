@@ -64,6 +64,12 @@ jobs:
       - name: Version consistency
         run: node scripts/release/version.mjs check
 
+      # R74: the launcher's release-picker unit tests — the kit ships this
+      # very file, so its regression tests gate the artifact it goes into
+      # (and, via github-release's needs: [launcher-kit, …], every tag).
+      - name: Launcher unit tests
+        run: python3 launcher/tests/test_pick_latest_release.py
+
       - name: Resolve version
         id: version
         run: |

@@ -262,9 +262,16 @@ REQUIRED close-out step, not an afterthought:
    gate) build, then a DRAFT release is opened with both assets.
 5. Watch the workflow run to completion and verify the draft release
    actually carries `ACUTE-CODE_X.Y.Z_x64-setup.exe` (GitHub API or the web
-   UI). The launcher can see drafts with the owner PAT, so the owner's next
-   `ACUTE.bat` run picks it up immediately; publishing the draft is the
-   owner's call.
+   UI). The launcher picks the release by MAX VERSION over the whole list
+   (R74 — drafts included; the owner PAT can see them), so the owner's next
+   `ACUTE.bat` run picks it up immediately even while it is still a draft.
+6. **Publish the draft at close-out** (GitHub API PATCH `draft:false` or the
+   web UI) — the standing step since R69. The R63…R67 close-outs skipped it
+   and their five drafts sat ABOVE every published release in the
+   `/releases` list for a week, which is exactly how the owner's app froze
+   at 0.67.0 while 0.73.0 was live (the R74 lesson: the picker is now
+   immune, but a published release page is still the honest state — sweep
+   draft stragglers when you find them).
 
 A round that ships a version bump WITHOUT its tag has shipped nothing to the
 desktop.
