@@ -80,6 +80,17 @@ export interface PromptContext {
    * empty → no SKILLS section (byte-identical to pre-R61 for callers that
    * don't pass it). */
   skills?: ReadonlyArray<{ name: string; description: string }>;
+  /** ROUND-72 (R72-a): the per-turn TASK HINTS — the deterministic matches
+   * (agents/task-hints.ts computeTaskHints) of THIS turn's user message
+   * against the effective skills above. When non-empty, ONE advisory
+   * "Task signal: …" line renders inside the SKILLS section after the skill
+   * list: honest "looks like" advice to call read_skill with the named
+   * skill FIRST — never an auto-load (progressive disclosure stays the
+   * contract). The line renders ONLY inside the SKILLS section, so hints
+   * without a skills list render nothing. Absent or empty → byte-identical
+   * composition (the golden ctx does not set it). Not persisted: hints are
+   * computed fresh per turn by prepareTurn and live only in this ctx. */
+  taskHints?: ReadonlyArray<{ skillName: string; score: number }>;
   /** ROUND-61 (R61): computer-use availability + posture. When enabled, a
    * "## COMPUTER USE" section carries the operating discipline (the
    * extended skill body loads via read_skill("computer-use")). Absent →
@@ -458,6 +469,20 @@ export function buildTaggedPromptLines(ctx: PromptContext): TaggedLine[] {
     ident("Capability modules available in this project. When a task matches one, call read_skill with its name FIRST and follow its instructions for the rest of the task:");
     for (const skill of ctx.skills) {
       ident(`- **${skill.name}** — ${skill.description}`);
+    }
+    // ROUND-72 (R72-a, D2): the per-turn task signal — one advisory line
+    // AFTER the skill list, naming the top deterministic matches (at most
+    // two) of THIS turn's user message against those descriptions. Honest
+    // "looks like" wording: it is a nudge to read_skill FIRST, never an
+    // auto-loaded body. Renders only when hints exist AND the section does
+    // (no skills list → no line); a single hint drops the parenthetical.
+    if (ctx.taskHints !== undefined && ctx.taskHints.length > 0) {
+      const [first, second] = ctx.taskHints;
+      ident(
+        second === undefined
+          ? `Task signal: this request looks like it matches **${first.skillName}** — consider calling read_skill with that name FIRST and following it for the rest of the task.`
+          : `Task signal: this request looks like it matches **${first.skillName}** (and possibly **${second.skillName}**) — consider calling read_skill with that name FIRST and following it for the rest of the task.`,
+      );
     }
     // ROUND-70 (R70-c, D6): the reload affordance — R70-b made skill bodies
     // sticky in the event log, but the last-resort block cap can still trim

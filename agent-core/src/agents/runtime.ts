@@ -34,6 +34,10 @@ import type { ChatFn, ChatStepSnapshot, ChatTurnMessage, ChatTurnOutput, StreamC
 // memory_recall — instructions and durable facts survive replay stubbing).
 import { isStickyResultTool } from "./chat.js";
 import { buildProjectSystemPrompt, readCustomRules, type PromptEnvironment } from "./prompts.js";
+// ROUND-72 (R72-a): the deterministic task→skill matcher — scores this
+// turn's user message against the effective skills' descriptions so the
+// prompt's SKILLS section can carry an advisory "Task signal" line.
+import { computeTaskHints } from "./task-hints.js";
 // ROUND-70 (R70-b): the skills index resolves through the ONE shared
 // resolver (DB skills + file skills + agent filter + computer-use gate).
 import { resolveEffectiveSkills } from "../storage/skills-files.js";
@@ -1074,6 +1078,13 @@ async function prepareTurn(
   /** ROUND-50 (R50-c1): the composer's per-send thinking level. Returned on
    * PreparedTurn for the turn runners to hand to the chat adapters. */
   thinkingLevel?: ThinkingLevel,
+  /** ROUND-72 (R72-a): the CURRENT turn's incoming user message text — the
+   * `content` the turn runners received (raw, nothing stripped). prepareTurn
+   * runs BEFORE the message.user event is appended, so the incoming text
+   * can only arrive here, not from the event log. Used solely to compute the
+   * per-turn task hints (computeTaskHints — deterministic, free); absent on
+   * no-message callers (none today) → no hints, byte-identical prompt. */
+  turnUserMessage?: string,
 ): Promise<PreparedTurn | { error: Extract<TurnOutcome, { ok: false }> }> {
   const session = getSession(db, sessionId);
   if (session === undefined) {
@@ -1303,6 +1314,24 @@ async function prepareTurn(
   // included delegate_task (children don't get it), and (b) for the default
   // agent ([] = ALL) it would have listed delegate_task too. Reuse the already-
   // built `tools` object so the prompt and the live toolset are always in sync.
+  // ROUND-72 (R72-a): the effective skills hoisted — the SAME list feeds the
+  // prompt's SKILLS section and the task-hint matcher, so a hint can never
+  // name a skill the section doesn't list (one resolver, one truth; the
+  // computer-use gate + agent allowlist are respected by construction).
+  const effectiveSkills = resolveEffectiveSkills(db, {
+    ...(project !== undefined ? { projectRoot: project.rootPath, projectScope: project.id } : {}),
+    ...(agent.skills.length > 0 ? { agentSkills: agent.skills } : {}),
+  }).map((skill) => ({
+    name: skill.name,
+    description: skill.description,
+  }));
+  // ROUND-72 (R72-a): the per-turn task hints — this turn's user message
+  // scored against those same descriptions (pure deterministic matching,
+  // zero cost). EPHEMERAL: rendered into this turn's system prompt only,
+  // never persisted. No message (or no matching signal) → undefined/empty →
+  // no advisory line, byte-identical composition.
+  const taskHints =
+    turnUserMessage !== undefined ? computeTaskHints(turnUserMessage, effectiveSkills) : undefined;
   const system = project
     ? buildProjectSystemPrompt({
         projectName: project.name,
@@ -1351,13 +1380,12 @@ async function prepareTurn(
         //   · D5 — a NON-EMPTY agent.skills allowlist filters the set by
         //     name (per-agent curation; empty/undefined = all — the field
         //     was stored since R61 but never read until now).
-        skills: resolveEffectiveSkills(db, {
-          ...(project !== undefined ? { projectRoot: project.rootPath, projectScope: project.id } : {}),
-          ...(agent.skills.length > 0 ? { agentSkills: agent.skills } : {}),
-        }).map((skill) => ({
-          name: skill.name,
-          description: skill.description,
-        })),
+        // ROUND-72 (R72-a): the hoisted effectiveSkills + the task hints
+        // computed against the turn's user message (see above).
+        skills: effectiveSkills,
+        // ROUND-72 (R72-a): the advisory "Task signal" line's payload —
+        // undefined/empty (no message, or no skill scored) composes nothing.
+        ...(taskHints !== undefined && taskHints.length > 0 ? { taskHints } : {}),
         computerUse: (() => {
           const cu = getComputerUseSettings(db);
           return { enabled: cu.enabled, posture: cu.permission };
@@ -1424,6 +1452,10 @@ export async function runSingleAgentTurn(
   // ROUND-50 (R50-b): NO chatStream on the sync path — a sync turn's children
   // stay sync (the orchestrator's fallback branch), preserving the exact
   // pre-R50-b behavior for channel-less runs.
+  // ROUND-72 (R72-a): the turn's incoming `content` rides along so
+  // prepareTurn can compute the per-turn task hints (the sync path serves
+  // BOTH plain sync turns and sub-agent children — both get the advisory
+  // line the same way).
   const prepared = await prepareTurn(
     db,
     keyring,
@@ -1434,6 +1466,7 @@ export async function runSingleAgentTurn(
     emit,
     signal,
     thinkingLevel,
+    content,
   );
   if ("error" in prepared) return prepared.error;
   const { session, agent, provider, apiKey, model, tools, system } = prepared;
@@ -2022,6 +2055,10 @@ export async function runStreamedAgentTurn(
     signal,
     // ROUND-50 (R50-c1): the per-send thinking level.
     thinkingLevel,
+    // ROUND-72 (R72-a): the turn's incoming `content` rides along so
+    // prepareTurn can compute the per-turn task hints (the streamed main
+    // path and its streamed children share this exact call).
+    content,
   );
   if ("error" in prepared) return prepared.error;
   const { session, agent, provider, apiKey, model, tools, system } = prepared;

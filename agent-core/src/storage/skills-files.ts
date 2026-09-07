@@ -40,10 +40,21 @@
  * Caps (the R61 DB caps mirrored for files): description ≤ 500 chars,
  * body ≤ 60,000 chars, ≤ 32 file skills PER SOURCE (honest skip beyond —
  * logged, not surfaced as an error; one broken source never breaks a turn).
+ *
+ * ROUND-72 (R72-c): REFERENCES DEPTH — dir-form skills may carry a
+ * `references/` subdirectory of deeper .md files (one level, the Agent
+ * Skills standard). Discovery lists them as METADATA ONLY (name = stem,
+ * fileName, bytes — sorted by fileName, ≤ 8, .md only, hidden/underscore
+ * skipped, > 64KB skipped + logged); bodies load at CALL time through
+ * readSkillReference (sanitized name, frontmatter stripped, 64KB cap with
+ * an honest marker) — the progressive-disclosure contract is unchanged.
+ * Flat-file skills never have references. DB skills have none either: the
+ * references ride FileSkillRecord → EffectiveSkill → MergedSkillRecord as
+ * an additive optional field everywhere.
  */
 import { type Dirent, readdirSync, readFileSync, statSync } from "node:fs";
 import { homedir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { log } from "../lib/log.js";
 import type { SqliteDatabase } from "./db.js";
 import {
@@ -65,6 +76,41 @@ export const FILE_SKILL_BODY_CAP = 60_000;
 export const FILE_SKILL_DESC_CAP = 500;
 export const FILE_SKILLS_PER_SOURCE_CAP = 32;
 
+/** ROUND-72 (R72-c): max reference files listed per skill (excess skipped
+ * honestly + logged — the listing stays a digest, not a dump). */
+export const FILE_SKILL_REFERENCES_CAP = 8;
+
+/** ROUND-72 (R72-c): max size of ONE reference file. Discovery skips larger
+ * files (logged); readSkillReference independently caps the returned body
+ * at the same bound with an honest marker (a file that GREW between
+ * discovery and load is bounded, never silently exploded). */
+export const FILE_SKILL_REFERENCE_SIZE_CAP = 64 * 1024;
+
+/** ROUND-72 (R72-c): one reference file of a dir-form skill —
+ * <skillDir>/references/<fileName>. `name` is the fileName stem: exactly
+ * what read_skill's `reference` parameter addresses. */
+export interface FileSkillReference {
+  name: string;
+  fileName: string;
+  bytes: number;
+}
+
+/** Reference names are model-addressable single tokens: letters, digits,
+ * '.', '_', '-' — no separators, no traversal. The boundary guard for
+ * readSkillReference (and the discovery skip rule: everything listed is
+ * loadable). */
+const REFERENCE_NAME_RE = /^[A-Za-z0-9._-]+$/;
+
+export function isValidReferenceName(name: string): boolean {
+  return REFERENCE_NAME_RE.test(name);
+}
+
+/** The shared rejection note (single source — the storage-level guard and
+ * the read_skill tool prefix the same text, so they can never drift). */
+export function referenceNameRejection(name: string): string {
+  return `reference name rejected: '${name}' is not a safe reference name (letters, digits, '.', '_', '-' only — no path separators, no traversal)`;
+}
+
 /** A sane skill file is markdown, never megabytes — beyond this the file is
  * skipped honestly (the body cap is 60K anyway; this guard bounds reads). */
 const FILE_SIZE_HARD_CAP = 512 * 1024;
@@ -82,6 +128,10 @@ export interface FileSkillRecord {
   /** Project display name (project-file skills only — additive, for the
    * settings listing to disambiguate same-name skills across projects). */
   projectName?: string;
+  /** ROUND-72 (R72-c): the references/ metadata (dir-form skills only —
+   * flat files and DB rows always have none). METADATA ONLY: no content is
+   * read at discovery; bodies load at CALL time via readSkillReference. */
+  references: ReadonlyArray<FileSkillReference>;
 }
 
 /* ── synthetic ids for file skills (DB rows keep their real ids) ─────────── */
@@ -160,6 +210,8 @@ interface Candidate {
   slug: string;
   filePath: string;
   dirForm: boolean;
+  /** Dir-form only — the skill's own directory (references/ lives there). */
+  skillDir?: string;
 }
 
 /** One source directory → resolved file skills (name-sorted, capped). */
@@ -187,7 +239,7 @@ function discoverFromDir(
       } catch {
         continue;
       }
-      candidates.push({ slug: entry.name, filePath: skillMd, dirForm: true });
+      candidates.push({ slug: entry.name, filePath: skillMd, dirForm: true, skillDir: join(dir, entry.name) });
     } else if (entry.isFile() && entry.name.endsWith(".md")) {
       candidates.push({ slug: entry.name.slice(0, -3), filePath: join(dir, entry.name), dirForm: false });
     }
@@ -247,9 +299,90 @@ function discoverFromDir(
     const description =
       frontmatter?.get("description")?.trim().slice(0, FILE_SKILL_DESC_CAP) ||
       (source === "project-file" ? GENERIC_PROJECT_DESCRIPTION : GENERIC_GLOBAL_DESCRIPTION);
-    out.push({ name, description, source, filePath: candidate.filePath, scope, ...(projectName !== undefined ? { projectName } : {}) });
+    out.push({
+      name,
+      description,
+      source,
+      filePath: candidate.filePath,
+      scope,
+      references:
+        candidate.dirForm && candidate.skillDir !== undefined ? discoverSkillReferences(candidate.skillDir) : [],
+      ...(projectName !== undefined ? { projectName } : {}),
+    });
   }
   return out;
+}
+
+/**
+ * ROUND-72 (R72-c): list a dir-form skill's references/ — one level of
+ * deeper .md files (the Agent Skills standard). METADATA ONLY (name/fileName/
+ * bytes; no content reads — bodies load at CALL time, keeping discovery
+ * cheap and the progressive-disclosure contract intact). House rules,
+ * mirroring the skills-dir conventions one level up:
+ *   · .md files ONLY, extension case-sensitive (".MD" is not markdown here);
+ *   · hidden (dot-prefixed) and underscore-prefixed files skipped;
+ *   · sorted by fileName, capped at FILE_SKILL_REFERENCES_CAP (the first 8
+ *     in sort order win — excess skipped with an honest log);
+ *   · each ≤ FILE_SKILL_REFERENCE_SIZE_CAP on disk (larger skipped + logged);
+ *   · a stem that is not a safe reference name (spaces, …) is skipped +
+ *     logged — the sanitized loader could never address it, so everything
+ *     listed is loadable.
+ * A missing/unreadable references/ dir (the common case) → [] — never a
+ * throw: one broken skill never breaks a turn.
+ */
+function discoverSkillReferences(skillDir: string): FileSkillReference[] {
+  let entries: Dirent[];
+  try {
+    entries = readdirSync(join(skillDir, "references"), { withFileTypes: true });
+  } catch {
+    return []; // no references/ dir (the common case), perms — no references, no throw
+  }
+  const found: FileSkillReference[] = [];
+  for (const entry of entries) {
+    if (!entry.isFile()) continue;
+    if (entry.name.startsWith(".") || entry.name.startsWith("_")) continue;
+    if (!entry.name.endsWith(".md")) continue;
+    const filePath = join(skillDir, "references", entry.name);
+    const name = entry.name.slice(0, -3);
+    let bytes: number;
+    try {
+      const stats = statSync(filePath);
+      if (!stats.isFile()) continue;
+      bytes = stats.size;
+    } catch {
+      continue; // vanished between readdir and stat — skip honestly
+    }
+    if (bytes > FILE_SKILL_REFERENCE_SIZE_CAP) {
+      log("warn", "skills_files.reference_skipped", {
+        file: filePath,
+        reason: "too large",
+        bytes,
+        cap: FILE_SKILL_REFERENCE_SIZE_CAP,
+      });
+      continue;
+    }
+    if (!isValidReferenceName(name)) {
+      log("warn", "skills_files.reference_skipped", {
+        file: filePath,
+        reason: `unusable reference name ('${name}' — must be letters/digits/._-; the sanitized loader could never address it)`,
+      });
+      continue;
+    }
+    found.push({ name, fileName: entry.name, bytes });
+  }
+  // Deterministic order: fileName byte-order sort (stable across OSes).
+  found.sort((a, b) => (a.fileName < b.fileName ? -1 : a.fileName > b.fileName ? 1 : 0));
+  if (found.length > FILE_SKILL_REFERENCES_CAP) {
+    const skipped = found.length - FILE_SKILL_REFERENCES_CAP;
+    log("warn", "skills_files.reference_cap", {
+      skillDir,
+      skipped,
+      kept: FILE_SKILL_REFERENCES_CAP,
+      cap: FILE_SKILL_REFERENCES_CAP,
+    });
+    return found.slice(0, FILE_SKILL_REFERENCES_CAP);
+  }
+  return found;
 }
 
 /** The user-global standard directory (~/.agents/skills — cross-agent). */
@@ -281,6 +414,10 @@ export type FileSkillBodyResult =
   | { ok: true; body: string }
   | { ok: false; note: string };
 
+export type FileSkillReferenceResult =
+  | { ok: true; body: string }
+  | { ok: false; note: string };
+
 /**
  * Read a file skill's body NOW (frontmatter stripped, capped at
  * FILE_SKILL_BODY_CAP). Honest failure when the file vanished between
@@ -303,6 +440,53 @@ export function readFileSkillBody(filePath: string): FileSkillBodyResult {
   }
 }
 
+/**
+ * ROUND-72 (R72-c): load ONE reference file of a dir-form skill NOW —
+ * read_skill's `reference` parameter ends up here. Signature decision
+ * (documented per the task): the first argument accepts EITHER the skill
+ * DIRECTORY or the SKILL.md path — a ".md" suffix is treated as the skill
+ * FILE and its parent directory becomes the skill dir (the plugin passes
+ * the EffectiveSkill.filePath it already holds; tests and future callers
+ * may pass the dir).
+ *   · The reference name is sanitized FIRST (isValidReferenceName):
+ *     traversal/separators are rejected with the reason, never resolved.
+ *   · The reference's own frontmatter (references may carry one) is
+ *     stripped — at READ time, exactly like SKILL.md bodies.
+ *   · The returned body is capped at FILE_SKILL_REFERENCE_SIZE_CAP with an
+ *     honest marker (fires when the file GREW past the cap after discovery
+ *     — discovery already skips larger files).
+ *   · ENOENT is honest: the file vanished after the session listed it.
+ */
+export function readSkillReference(skillDirOrPath: string, referenceName: string): FileSkillReferenceResult {
+  if (!isValidReferenceName(referenceName)) {
+    return { ok: false, note: referenceNameRejection(referenceName) };
+  }
+  const skillDir = skillDirOrPath.endsWith(".md") ? dirname(skillDirOrPath) : skillDirOrPath;
+  const filePath = join(skillDir, "references", `${referenceName}.md`);
+  let text: string;
+  try {
+    text = readFileSync(filePath, "utf8");
+  } catch (err) {
+    const code = (err as NodeJS.ErrnoException).code;
+    if (code === "ENOENT") {
+      return {
+        ok: false,
+        note: `reference file no longer exists: ${filePath} (it was removed or renamed after the session listed it)`,
+      };
+    }
+    return { ok: false, note: `reference file unreadable: ${filePath} (${code ?? String(err)})` };
+  }
+  const body = stripSkillFrontmatter(text).trim();
+  if (body.length > FILE_SKILL_REFERENCE_SIZE_CAP) {
+    const shown = body.slice(0, FILE_SKILL_REFERENCE_SIZE_CAP);
+    return {
+      ok: true,
+      body: `${shown}\n\n…[reference truncated: ${shown.length} of ${body.length} chars shown — the file on disk is larger than the 64KB reference cap]`,
+    };
+  }
+  return { ok: true, body };
+}
+
 /* ── the effective index (prompt SKILLS section + read_skill) ─────────────── */
 
 /** One entry of the per-turn skill surface: name + description (the
@@ -315,6 +499,11 @@ export interface EffectiveSkill {
   id: string;
   /** File skills only — the SKILL.md path (bodies load from disk). */
   filePath?: string;
+  /** ROUND-72 (R72-c): file skills only — the references/ METADATA
+   * (name/fileName/bytes; DB skills have none). Bodies load at CALL time
+   * via readSkillReference. Additive: the prompt SKILLS section still maps
+   * to name + description only. */
+  references?: ReadonlyArray<FileSkillReference>;
 }
 
 export interface ResolveSkillOptions {
@@ -368,6 +557,9 @@ export function resolveEffectiveSkills(db: SqliteDatabase, opts: ResolveSkillOpt
       source: fileSkill.source,
       id: fileSkillId(fileSkill.source, fileSkill.name, fileSkill.scope),
       filePath: fileSkill.filePath,
+      // R72-c: the references metadata rides the effective index so
+      // read_skill can advertise + load them; DB entries never set it.
+      references: fileSkill.references,
     });
   }
   const allow = opts.agentSkills !== undefined && opts.agentSkills.length > 0 ? new Set(opts.agentSkills) : null;
@@ -378,7 +570,9 @@ export function resolveEffectiveSkills(db: SqliteDatabase, opts: ResolveSkillOpt
 
 /** SkillRecord shape as served by GET /skills: the R61 DB fields plus the
  * file skills (provenance-marked, read-only). Additive over the previous
- * response — `filePath`/`projectName` are new, `source` gained two values. */
+ * response — `filePath`/`projectName` are new, `source` gained two values,
+ * and R72-c added `references` (file skills only, metadata: name/fileName/
+ * bytes — reference CONTENT is never served here; read_skill loads it). */
 export interface MergedSkillRecord {
   id: string;
   name: string;
@@ -393,6 +587,9 @@ export interface MergedSkillRecord {
   filePath?: string;
   /** Project-file skills only — disambiguates same names across projects. */
   projectName?: string;
+  /** ROUND-72 (R72-c): file skills only — the references/ metadata
+   * (possibly an empty array; DB rows omit the field entirely). */
+  references?: ReadonlyArray<FileSkillReference>;
 }
 
 function fileTimestamp(filePath: string): string {
@@ -449,6 +646,7 @@ export function listAllSkillsMerged(db: SqliteDatabase, opts: { globalRoot?: str
       createdAt: ts,
       updatedAt: ts,
       filePath: fileSkill.filePath,
+      references: fileSkill.references,
       ...(fileSkill.projectName !== undefined ? { projectName: fileSkill.projectName } : {}),
     });
   }

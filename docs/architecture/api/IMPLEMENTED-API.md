@@ -1,8 +1,8 @@
-<!-- last-reviewed: 2026-09-07 round-71 -->
+<!-- last-reviewed: 2026-09-07 round-72 -->
 # IMPLEMENTED API — the shipped surface
 
 **Truth = this file.** Verified against `agent-core/src/server.ts` at
-round-17 (2026-08-23), refreshed R37→R71. The aspirational full contract (52
+round-17 (2026-08-23), refreshed R37→R72. The aspirational full contract (52
 operations, WS gateway, planned routes) lives in
 [`API.md`](API.md) — anything there and
 not here **does not exist yet**. Base: `http://127.0.0.1:<port>`; dev port
@@ -901,7 +901,7 @@ settings-gated default OFF). Full owner guides:
 
 | Route | Contract |
 |---|---|
-| `GET /skills` | **R70: the MERGED listing** — `{skills:[SkillRecord & {source: "builtin"|"user"|"project-file"|"global-file", filePath?, projectName?}]}`: DB rows + every registered project's `.acute/skills/` files + user-global `~/.agents/skills/` files (file bodies read from disk at call time — a deleted file de-lists; the `filePath`/`projectName` fields are additive, so the existing frontend type needs no change) |
+| `GET /skills` | **R70: the MERGED listing** — `{skills:[SkillRecord & {source: "builtin"|"user"|"project-file"|"global-file", filePath?, projectName?, references?}]}`: DB rows + every registered project's `.acute/skills/` files + user-global `~/.agents/skills/` files (file bodies read from disk at call time — a deleted file de-lists; the `filePath`/`projectName`/`references` fields are additive, so the existing frontend type needs no change). **R72:** file-skill entries now also carry `references` — the `references/` metadata (`[{name, fileName, bytes}]`, possibly empty; DB rows OMIT the field; metadata only — reference content is never served here, the agent loads it with `read_skill {name, reference}`) |
 | `POST /skills` | `{name (lowercase slug 2-64), description?, body?, enabled?}` → `201` SkillRecord · 400 (bad slug/duplicate) — a DB row created with a file-skill's name SHADOWS the file (the documented override path) |
 | `PATCH /skills/:id` | Partial patch (name unique-checked) → SkillRecord · 404 · 400 · **409 for a FILE-skill synthetic id** (`skill_file_p_…` / `skill_file_g_…`): "file-defined skill: edit the SKILL.md" (the UI's row-error path surfaces it verbatim) |
 | `DELETE /skills/:id` | User rows `204`; built-in rows `409 CONFLICT` "built-in skills can be disabled or edited, but not deleted"; file-skill ids `409` (same message as PATCH); unknown `404` |
@@ -942,6 +942,8 @@ settings-gated default OFF). Full owner guides:
   allowlist) — the same index that composes the prompt's SKILLS section.
   The `computer-use` skill is refused while the master switch is off
   ("its tools are dark"); sticky result semantics — see ROUND-70 below.
+  **R72**: the inputSchema gained the optional `reference` param (load a
+  `references/` file instead of the main body — see ROUND-72 below).
 - Enabled MCP servers contribute their tools dynamically as
   `mcp__<server>__<tool>` (grammar-checked; over-length names skipped +
   logged). A failed/unconfigured server contributes nothing (fail-soft).
@@ -1651,3 +1653,73 @@ UI starts rendering it.
   seeding, no migration, no route change; `GET /skills` shows the new
   rows on an existing DB at next open (description text updates do NOT
   overwrite user-edited rows — by design).
+
+## ROUND-72 additions (implemented)
+
+The adaptive capability round (the owner's "on the basis of the task"
+directive; no owner field report). The REST surface gained NO new
+routes and NO payload removals — one additive response field on
+`GET /skills` (documented at the route row above) and one tool-schema
+parameter (documented at the read_skill row above). The rest of the
+round is model-facing:
+
+### `GET /skills` — the `references` metadata (additive)
+
+File-skill entries (source `project-file`/`global-file`, dir-form
+skills only) now carry `references: [{name, fileName, bytes}]` — the
+skill's `references/` subdirectory listed as METADATA ONLY (one level
+deep, .md only, ≤8 files, ≤64KB each; larger/odd files skipped +
+logged; sorted by fileName). Flat-file skills carry `[]`; DB rows
+OMIT the field entirely. Reference CONTENT is never served over REST
+(the settings listing stays metadata-only by design) — the agent
+loads it with the `read_skill` tool. Zero route/frontend changes
+required (the field is additive; the merged listing is
+`listAllSkillsMerged` in `agent-core/src/storage/skills-files.ts`).
+
+### Tools: `read_skill`'s optional `reference` param (tool schema)
+
+`read_skill {name, reference?}` — with `reference` absent/blank the
+call loads the skill BODY exactly as before (file-skill bodies now
+append a "references available: a, b — load with read_skill { name:
+…, reference: "a" }" listing block when the skill carries references;
+DB and reference-less file skills are byte-identical to R71). With
+`reference` set: the name resolves through the SAME
+`resolveEffectiveSkills` index first (the computer-use gate and the
+agent `skills` allowlist fire identically with or without the
+reference — resolve, then load), then the reference NAME is sanitized
+(traversal/separators → `ok:false` with the reason), then the file
+loads (`# Skill: <name> — reference: <ref>` header, the reference's
+own frontmatter stripped, 64KB cap, ENOENT honest, the 60K output
+budget trimmed WITH an honest marker). DB skill + reference → the
+honest "database skills carry no reference files". The core-skills
+plugin manifest version 1.1.0 → 1.2.0 (manifest-level; the plugin
+catalog in `GET /plugins` reflects it).
+
+### Model-facing (non-HTTP) drift notes
+
+- **The SKILLS prompt section can now carry ONE advisory "Task
+  signal" line** — computed per turn by the deterministic matcher
+  (`agent-core/src/agents/task-hints.ts`: quoted phrases from the
+  skill descriptions × their word count, stopword-filtered tokens +1,
+  top-2 above threshold, against the turn's user message):
+  "Task signal: this request looks like it matches **<name>** —
+  consider calling read_skill with that name FIRST". Prompt-section
+  text only — no route contract; the golden fixture stayed
+  BYTE-IDENTICAL (the ctx field is optional and unset in the golden).
+- **`read_file` may append a conventions reminder** — when a
+  directory STRICTLY BELOW the project root on the read file's path
+  carries its own AGENTS.md (or CLAUDE.md), the first `ok:true` read
+  under that directory per session appends, after the numbered
+  content, a clearly-fenced
+  `--- [conventions from <dir>/AGENTS.md apply to this file] ---
+  <excerpt ≤2,000 chars> --- (end conventions — …)` block (NEW
+  `agent-core/src/tools/dir-conventions.ts`; root files never carry
+  one — readCustomRules already injects the root ladder into the
+  system prompt). The `ok:true` shape and the raw REST file-viewer
+  route are unchanged — only the tool output can grow.
+- The builtin skills are now EIGHTEEN (12 → 18: tdd, api-design,
+  frontend-craft, typescript-craft, security-review, refactoring at
+  sortOrder 12-17) — same `INSERT OR IGNORE` seeding, no migration,
+  no route change; `GET /skills` shows the new rows on an existing DB
+  at next open (description/body updates do NOT overwrite user-edited
+  rows — by design, the standing R71 note).

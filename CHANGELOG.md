@@ -1,4 +1,4 @@
-<!-- last-reviewed: 2026-09-07 round-71 -->
+<!-- last-reviewed: 2026-09-07 round-72 -->
 # Changelog
 
 All notable changes to ACUTE-CODE are documented here. Entries are written for
@@ -11,23 +11,68 @@ version number is single-sourced from the root `package.json`
 
 ## [Unreleased]
 
-Planned next: the owner's live Windows verification of the R71 gates —
-whether the discipline section changes reply quality (verification
-receipts + the 🟢🟡🔴 confidence tags actually appearing in real
-replies, fewer question-padding endings), whether the four new skills
-trigger on real phrasings ("commit and push" → ship-gate, "make the
-auth flow work end-to-end" → focused-fix), whether the edit-escalation
-text ends the stale-anchor flail loops, and whether overflow recovery
-saves long sessions (the "[context overflow → auto-compacted
-conversation → retrying]" line + the turn continuing) — PLUS the R69
-Windows checklist and the R70 live gates still pending, then the R72
-queue: per-directory AGENTS.md injection into read results,
-references/ for file skills, delegate_task task_id/background/resume,
+Planned next: the owner's live Windows verification of the R72 gates —
+whether the task-signal line appears on real messages ("my test keeps
+failing, fix this bug" should carry a "Task signal: … matches
+**debugging**" advisory in the SKILLS prompt section), whether the six
+new skills trigger on their phrasings ("write the test first" → tdd,
+"is this safe" → security-review, "clean this up" → refactoring),
+whether a file skill's references/ subdirectory loads through
+read_skill's new reference param, and whether nested-directory
+AGENTS.md/CLAUDE.md files surface their fenced conventions reminder on
+the first read_file under them — PLUS the R69/R70/R71 live gates still
+pending, then the R73 queue: delegate_task task_id/background/resume,
 a generalized system-reminder injector, custom modes
-(.acute/agents/*.md), external plugin ctx enrichment, and the standing
-items (edit-linting — SWE-agent's ACI #1 finding, installer
-code-signing, ratings-driven prompt tuning, the Files-tab polish, agent
-web-app-testing tools).
+(.acute/agents/*.md), external plugin ctx enrichment, two more skills
+(performance, spec-planning), and the standing items (edit-linting —
+SWE-agent's ACI #1 finding, installer code-signing, ratings-driven
+prompt tuning, the Files-tab polish, agent web-app-testing tools).
+
+## [0.72.0] - 2026-09-07
+
+Round 72 — the adaptive capability round (the owner's directive:
+"proper detailed system prompts which the agent accesses when required
+and on the basis of the task, various in-built skills"). **The agent
+now gets skill guidance on the basis of the task**: every turn's
+incoming message is scored — by a deterministic, zero-cost, zero-
+latency matcher (no extra model call) — against the advertised skills'
+trigger-rich descriptions (quoted phrasings weigh ×5, stopword-
+filtered tokens +1; top-2 above threshold), and the SKILLS prompt
+section gains one honest advisory line — "Task signal: this request
+looks like it matches **debugging** — consider calling read_skill with
+that name FIRST". It is advice, never an auto-load (progressive
+disclosure stays the contract), it flows through the same skill
+resolver (computer-use gate + per-agent allowlist respected), it works
+on both the streamed and sync paths, it is per-turn ephemeral, and the
+golden prompt fixture stayed byte-identical. **Eighteen built-in
+skills** (was 12): six new engineering crafts — tdd (the RED→GREEN→
+REFACTOR loop: "a test you have not watched fail proves nothing"),
+api-design (the contract is written before the handler; fail-closed
+validation; additive-only evolution), frontend-craft (state lives as
+close to its consumers as possible; stable keys; the a11y floor),
+typescript-craft (if a state is illegal its type must make it
+unrepresentable; never `any`; "a cast is a confession"),
+security-review (the big five — injection, path traversal, secrets,
+authz, fail-closed — each with the exact test), and refactoring (no
+move without a green characterization test first; one mechanical move
+per step). **File skills gained a reference tier**: a `references/`
+subdirectory (the Agent-Skills standard, one level deep, ≤8 .md files
+≤64KB each) whose files load through read_skill's new optional
+`reference` parameter — the skill body's output lists what's available
+with the copy-pasteable call syntax; the GET /skills listing carries
+the metadata additively. **read_file now honors the conventions of the
+directory you're about to edit** (the kilocode pattern): when a deeper
+AGENTS.md/CLAUDE.md governs the file's path (the root one is already
+in the system prompt — never double-billed), the first read under that
+directory appends a clearly-fenced, ≤2,000-char excerpt of it — "[conventions
+from a/b/AGENTS.md apply to this file]" — once per session and
+directory, never on failure paths, and the raw REST file view never
+sees it. 2423 root tests in 133 files, all green (agent-core 1521/1521
+in 70 files — +136: four new suites r72-task-hints 27 +
+r72-skills-expansion 32 + r72-references 27 + r72-dir-conventions 20
++ re-pins; frontend 890 unchanged — zero frontend files touched),
+lint/typecheck clean, license audit CLEAN (134 deps, no dependency
+changes). Full evidence in docs/ui-iterations/round-72.md.
 
 ## [0.71.0] - 2026-09-07
 

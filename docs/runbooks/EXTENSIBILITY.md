@@ -1,4 +1,4 @@
-<!-- last-reviewed: 2026-09-07 round-71 -->
+<!-- last-reviewed: 2026-09-07 round-72 -->
 # EXTENSIBILITY — plugins, skills, MCP servers (owner's guide)
 
 **Status:** normative · **Established:** round-61 (owner directive: "the
@@ -105,13 +105,15 @@ affordance for the last-resort 8K truncation case).
 Skills come from THREE places (one merged view — `GET /skills`, with
 provenance since R70):
 
-- **Built-ins (12 since R71)**: `computer-use` (the behavioral contract
+- **Built-ins (18 since R72)**: `computer-use` (the behavioral contract
   from the spec's doc-09, condensed — gated on the computer-use master
   switch) plus the R70 seeds `code-review`, `debugging`, `testing`,
   `git-workflow`, `web-research`, `project-init` (writes the project's
   AGENTS.md from codebase analysis), and `browser-use` (the
-  embedded-browser craft) — and the R71 discipline seeds
-  `focused-fix`, `zero-hallucination`, `self-eval`, `ship-gate`. All
+  embedded-browser craft) — the R71 discipline seeds
+  `focused-fix`, `zero-hallucination`, `self-eval`, `ship-gate` — and
+  the R72 craft seeds `tdd`, `api-design`, `frontend-craft`,
+  `typescript-craft`, `security-review`, `refactoring`. All
   descriptions follow the R71 trigger-rich convention (see the R71
   addendum below). Built-ins can be **edited** (your text overrides the
   seed) or **disabled**, but never deleted — deletion is refused with a
@@ -334,6 +336,61 @@ project files with loaded bits + the honest load-error note). The
   text). If you want the newest seed text on an old install: delete the
   row and reopen, or edit it by hand.
 
+## The R72 addendum (task hints + the craft six + references depth)
+
+- **EIGHTEEN built-in skills now (was 12).** Six new craft seeds (same
+  `INSERT OR IGNORE` contract, sortOrder 12-17): `tdd` (the RED→GREEN→
+  REFACTOR loop — "a test you have not watched fail proves nothing"),
+  `api-design` (the contract is written before the handler; fail-closed
+  validation; additive-only evolution), `frontend-craft` (state
+  colocation, stable keys, derived state, the a11y floor),
+  `typescript-craft` (illegal states unrepresentable; discriminated
+  unions; never `any` — "a cast is a confession"), `security-review`
+  (the big five — injection / traversal / secrets / authz /
+  fail-closed — each with the exact test), and `refactoring` (no move
+  without a green characterization test first; one mechanical move per
+  step). Bodies 1.6-1.9K in the house band, iron laws in caps,
+  pre-built output blocks, ACUTE's real tool names.
+- **The task-hints advisory line.** Every turn, a DETERMINISTIC matcher
+  (`agent-core/src/agents/task-hints.ts` — no LLM, no cost, no
+  latency) scores the incoming user message against the effective
+  skills' descriptions (quoted phrases × their word count, stopword-
+  filtered tokens +1; top-2 above threshold), and the SKILLS prompt
+  section renders ONE line: "Task signal: this request looks like it
+  matches **<name>** — consider calling read_skill with that name
+  FIRST". Advice only — nothing is auto-loaded, progressive disclosure
+  stays the contract. It flows through the shared resolver, so the
+  computer-use gate and the `agent.skills` allowlist are respected
+  (a dark skill is never recommended), it works on both turn paths,
+  and it is per-turn ephemeral (never persisted). Your skill's
+  description is now ALSO the matcher's input: the quoted phrasings
+  you write are what the hint engine matches against.
+- **`references/` — file skills' second tier (the Agent-Skills
+  standard).** A dir-form file skill may carry
+  `<skillDir>/references/*.md` — one level deep, .md only, ≤8 files,
+  ≤64KB each (larger/odd files are skipped + logged). Discovery is
+  METADATA ONLY (`{name, fileName, bytes}` on the `GET /skills`
+  listing, additive; DB rows omit the field). `read_skill` gained the
+  optional `reference` parameter: a name-only call appends the listing
+  block ("references available: a, b — load with read_skill { name:
+  …, reference: "a" }" — copy-pasteable), a name+reference call loads
+  THAT file through the same effective-skills resolution (gate +
+  allowlist fire identically; names are sanitized — traversal
+  rejected with the reason; the reference's own frontmatter is
+  stripped at read; a 64KB cap with an honest truncation marker).
+  This is where the deep material goes (the full checklist, the
+  protocol walkthrough) — the SKILL.md body stays the discipline.
+- **Per-directory conventions on read_file.** When a directory
+  STRICTLY BELOW the project root on a read file's path carries its
+  own `AGENTS.md` (or `CLAUDE.md`), the first `read_file` under it in
+  a session appends a clearly-fenced reminder quoting it (≤2,000
+  chars): "[conventions from a/b/AGENTS.md apply to this file] — …
+  (end conventions — the file content above is unaffected)". The ROOT
+  convention file never rides reads (it is already in every turn's
+  system prompt — no double-billing); deepest file wins; once per
+  (session, directory). Related reading: the R72 round file
+  (docs/ui-iterations/round-72.md §D) for the full design decisions.
+
 ## Troubleshooting
 
 - **A plugin file exists but `loaded:false`** — read the sidecar log
@@ -366,9 +423,10 @@ project files with loaded bits + the honest load-error note). The
 - Code map: `agent-core/src/tools/registry.ts` (loader, grammar, caps,
   catalog), `agent-core/src/tools/plugins/` (13 built-ins — incl.
   `vision.ts`, the R66 core-vision plugin), skills storage
-  `agent-core/src/storage/skills.ts` (the 12 builtins) +
-  `agent-core/src/storage/skills-files.ts` (file discovery, the shared
-  resolver, the merged listing), MCP storage
+  `agent-core/src/storage/skills.ts` (the 18 builtins) +
+  `agent-core/src/storage/skills-files.ts` (file discovery, references/,
+  the shared resolver, the merged listing), the task-hints matcher
+  `agent-core/src/agents/task-hints.ts`, MCP storage
   `agent-core/src/storage/mcp.ts` + client `agent-core/src/mcp/manager.ts`,
   routes in `agent-core/src/server.ts` (ROUND-61 section), settings UI in
   `src/components/settings/{SkillsTab,McpTab}.tsx`.

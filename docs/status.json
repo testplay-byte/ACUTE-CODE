@@ -3,7 +3,7 @@
   "product": {
     "name": "Acute",
     "tagline": "Local-first multi-agent engineering workbench",
-    "version": "0.71.0",
+    "version": "0.72.0",
     "availability": "Private build — not yet distributed",
     "chips": [
       "Windows desktop",
@@ -26,8 +26,8 @@
       "id": "agentic",
       "title": "Agentic system",
       "state": "building",
-      "progress": 68,
-      "summary": "Multi-turn agentic continuation with the R70 agent brain (env grounding, AGENTS.md conventions, one five-phase loop, verification discipline) + the R71 discipline & reliability layer (engineering-discipline prompt section with [KNOWN]/[ASSUMED]/[UNKNOWN] tagging and 3-strike escalation, edit-failure escalation, provider-error classification + context-overflow recovery); 12 builtin + file-based skills with sticky bodies and trigger-rich descriptions; multi-agent orchestration owner-gated; computer use (desktop observation+actuation, separate vision model, kill switch) owner-gated"
+      "progress": 71,
+      "summary": "Multi-turn agentic continuation with the R70 agent brain (env grounding, AGENTS.md conventions, one five-phase loop, verification discipline) + the R71 discipline & reliability layer (engineering-discipline prompt section, edit-failure escalation, provider-error classification + overflow recovery) + the R72 adaptive capability layer (deterministic task→skill hints rendering an advisory 'Task signal' line per turn, 18 builtin skills, references/ depth for file skills, per-directory AGENTS.md/CLAUDE.md conventions injected on read_file); multi-agent orchestration owner-gated; computer use (desktop observation+actuation, separate vision model, kill switch) owner-gated"
     },
     {
       "id": "automation",
@@ -160,6 +160,10 @@
     {
       "date": "2026-09-07",
       "label": "R71 — the discipline & reliability round (research-driven, the owner's 4 reference repos): the engineering-discipline prompt section (karpathy principles + [KNOWN]/[ASSUMED]/[UNKNOWN] + 3-strike + red flags), verification receipts + 🟢🟡🔴 confidence tags, 12 trigger-rich skills (focused-fix/zero-hallucination/self-eval/ship-gate), edit-failure escalation, owner-denial ≠ failure semantics, 6-class provider-error classification, context-overflow recovery (2287 tests)"
+    },
+    {
+      "date": "2026-09-07",
+      "label": "R72 — the adaptive capability round (the owner's 'on the basis of the task' directive): deterministic task→skill hints (the advisory 'Task signal' line, golden byte-stable), 18 builtin skills (+6 crafts: tdd/api-design/frontend-craft/typescript-craft/security-review/refactoring), references/ depth for file skills (read_skill's reference param), per-directory AGENTS.md/CLAUDE.md conventions on read_file (2423 tests)"
     }
   ],
   "quality": {
@@ -171,7 +175,7 @@
       },
       {
         "name": "agent-core",
-        "tests": 1385
+        "tests": 1521
       },
       {
         "name": "sidecar e2e",
@@ -192,8 +196,8 @@
   ],
   "plan": {
     "current": {
-      "title": "Round 71 DELIVERED — the discipline & reliability round (0.71.0)",
-      "detail": "Research-driven from the owner's four reference repos (karpathy-skills, alirezarezvani/claude-skills, cline, kilocode) after his 'smarter better much more capable and reliable' directive; the R71-c audit found the gaps concentrated in the model-facing layer, and this round closes them. (1) Prompt discipline: a new ENGINEERING DISCIPLINE section (4 karpathy principles with binary self-tests, [KNOWN]/[ASSUMED]/[UNKNOWN] tagging with never-code-on-an-UNKNOWN, 3-strike escalation, a 5-line red-flags table), task→verifiable-goal transforms in PLAN, verification receipts + 🟢🟡🔴 confidence tags + devil's advocate + anti-question-padding in COMMUNICATION, sub-agent scope/no-polling discipline; golden 20,156→23,665 bytes. (2) Tool reliability: read_file/run_command truncation markers carry the exact next call ('use offset=N to continue', spill-to-file recovery), edit_file consecutive-failure escalation (2nd re-read / 3rd change-approach / 5th refuse — NEW edit-streak.ts), owner denials say 'NOT a tool or system failure' with timeouts distinguished, provider errors classified into six classes (context_window_exceeded/auth/rate_limit/network/timeout/unknown) riding the 502 envelope + turn.error event additively, and context-overflow recovery (forced compaction + one retry, visible system line) on both turn paths. (3) Skills: 8 builtin descriptions rewritten trigger-rich ('Use when [phrasings]. NOT for [adjacent case]') + 4 new discipline builtins (focused-fix, zero-hallucination, self-eval, ship-gate — 12 total, INSERT OR IGNORE). Verification: 2287 root tests in 129 files, all green (agent-core 1385/66 files, frontend 890 unchanged, e2e 12), lint/typecheck clean, license audit CLEAN (134 deps, no dependency changes). The live gates (receipts in real replies, skill triggers on real phrasings, escalation ending flail loops, overflow recovery saving long sessions) await the owner's Windows field run."
+      "title": "Round 72 DELIVERED — the adaptive capability round (0.72.0)",
+      "detail": "The owner's directive 'proper detailed system prompts which the agent accesses when required and on the basis of the task, various in-built skills' turned into four disjoint workstreams. (1) Task hints: NEW agents/task-hints.ts — a deterministic (no-LLM, zero-cost, zero-latency) matcher scoring the turn's user message against the effective skills' trigger-rich descriptions (quoted phrases ×5, stopword-filtered tokens +1, top-2 above threshold); the SKILLS prompt section renders one advisory 'Task signal: this request looks like it matches **<name>** — consider calling read_skill FIRST' line; both turn paths; per-turn ephemeral; flows through resolveEffectiveSkills (computer-use gate + agent allowlist); golden fixture byte-identical. (2) Skills 12→18: six engineering-craft builtins (tdd, api-design, frontend-craft, typescript-craft, security-review, refactoring — sortOrder 12-17, INSERT OR IGNORE, descriptions 447-490 chars, bodies 1.6-1.9K, iron laws + output blocks). (3) References depth: file skills gain a references/ subdirectory (the Agent-Skills standard: one level, ≤8 .md files ≤64KB); read_skill's optional reference param loads them (listing block with copy-pasteable syntax, traversal-sanitized, honest caps); GET /skills carries the metadata additively. (4) Per-directory conventions: NEW tools/dir-conventions.ts — read_file appends a capped (2K) fenced '[conventions from <dir>/AGENTS.md]' reminder when the deepest AGENTS.md/CLAUDE.md strictly below root governs the file (root skipped — already in the system prompt; once per session+dir). Verification: 2423 root tests in 133 files, all green (agent-core 1521/1521 in 70 files, frontend 890 unchanged, e2e 12; +136 = four new suites 27+32+27+20 + re-pins r71-skills-round 51→75 / r70-skills-system 45→51), lint/typecheck clean, license audit CLEAN (134 deps). The live gates (the task-signal line on real messages, the six skills' triggers, references loading, nested-dir reminders on real repos) await the owner's Windows field run. Next: the R73 queue — delegate_task task_id/background/resume, the generalized system-reminder injector, custom modes (.acute/agents/*.md), external plugin ctx enrichment, two more skills (performance, spec-planning)."
     },
     "upcoming": [
       {

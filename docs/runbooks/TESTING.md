@@ -1,4 +1,4 @@
-<!-- last-reviewed: 2026-09-07 round-71 -->
+<!-- last-reviewed: 2026-09-07 round-72 -->
 # TESTING — the verification ladder
 
 Five layers; each has a defined "when mandatory". Rules here are binding
@@ -13,19 +13,60 @@ Five layers; each has a defined "when mandatory". Rules here are binding
 | L4 live battery | real provider turn(s), real disk, fresh DB | sandbox, single invocation | anything touching agents, projects, tools, streaming |
 | L5 browser verification | real UI against the live stack; screenshots machine-verified | sandbox, single invocation | any UI-affecting round |
 
-**Current counts (R71, verified 2026-09-07 by re-running the suites):**
-the root `pnpm test` = **2287 tests in 129 files, all green** (measured
+**Current counts (R72, verified 2026-09-07 by re-running the suites):**
+the root `pnpm test` = **2423 tests in 133 files, all green** (measured
 without a fresh `agent-core/dist` — the 12 sidecar-e2e report as
-env-gated skips: 2275 passed + 12 skipped; with the dist present they
-run in-suite. agent-core alone = **1385/1385 in 66 files** (+110 this
+env-gated skips: 2411 passed + 12 skipped; with the dist present they
+run in-suite. agent-core alone = **1521/1521 in 70 files** (+136 this
 round), frontend `src/` alone = **890/890 in 61 files** (unchanged —
-R71 touched zero frontend files).
+R72 touched zero frontend files).
 Trajectory: 262 (R42) → 397 (R43) → 471 (R44) → 565 (R45) →
 622 (R46) → 683 (R47) → 752 (R48) → 815ish (R49) → 930 (R50) → 978 (R51) →
 1035 (R52) → 1058 (R53) → 1071 (R54–R56, launcher rounds) → 1169 (R58) →
 1302 (R59) → 1348 (R60) → 1491 (R61) → 1542 (R62) → 1632 (R63) → 1664
 (R64) → 1686 (R65) → 1807 (R66) → 1961 (R67) → 2003 (R68) → 2082 (R69) →
-2177 (R70) → 2287 (R71).
+2177 (R70) → 2287 (R71) → 2423 (R72).
+
+**R72 (the adaptive capability round):** +136 root over R71's 2287 —
+all of it in agent-core, four NEW suites + honest re-pins:
+`r72-task-hints` **27** (NEW: the deterministic matcher — phrase ×5
+dominance with exact scores, case-insensitivity, token accumulation,
+the stopword filter, the score-1 threshold, phrase-alone qualification,
+the top-2 cap, name-asc tie-break, empty/whitespace, both quote types,
+contraction flattening positive + no-fragment-leak negative, the 8K
+cap, the real `debugging` description ≥10 on the canonical message;
+the rendering — exact one/two-name advisory lines, placement, the
+renderer's 2-name cap, absent/[]/undefined → byte-identity,
+hints-without-skills → no line; the e2e on BOTH turn paths — the
+system-capturing chatStream + chat patterns, the exact debugging line
+for "my test keeps failing, fix this bug", unrelated messages → no
+line, the dark-skill pin, per-turn ephemerality) · `r72-skills-
+expansion` **32** (NEW: the 18-in-fixed-order pin; per-skill
+trigger-rich contracts over all six + distinctness + house-format
+it.each; six deep discipline-contract tests; key-rules-verbatim pins;
+idempotent double re-seed; the deleted-row-revives convergence across
+a real close/reopen; user-edit persistence; disable-hides; the D4
+flow-through — all 18 descriptions render in the prompt SKILLS
+section) · `r72-references` **27** (NEW: discovery metadata + caps +
+skip logs; the loader's sanitized-name/ENOENT/64KB-marker contract;
+the read_skill listing block + the {name, reference} path + the honest
+error family + computer-use/allowlist gate parity; the GET /skills
+additive metadata + no-content-leak; the buildProjectTools end-to-end)
+· `r72-dir-conventions` **20** (NEW: the walk pins — deepest wins,
+CLAUDE.md fallback, root-only → null, wrong-shaped falls through, the
+2,000-char cap + marker; the exact reminder format; the dedup pins
+incl. sessionless always-true; the toolset pins incl. RAW readFile
+back-compat + the failure-path no-reminder) · re-pins:
+`r71-skills-round` 51 → **75** (the expected-builtin/trigger-phrase/
+negative-scope tables extended to 18, "TWELVE"→"EIGHTEEN", the
+house-format + emoji discipline extended to the six),
+`r70-skills-system` 45 → **51** (18-seed pin + sortOrder 0-17, the
+NEW_BUILTINS it.each 11→17, the end-to-end loop includes the six). The
+golden fixture BYTE-IDENTICAL (md5 3a5d2c7d…, untouched — ctx.taskHints
+is purely additive; no regen performed or needed). Zero Rust/`src-tauri`
+files touched. The live gates (the task-signal line on real messages,
+the six crafts' triggers, references loading, nested-dir conventions
+reminders) await the owner's Windows field run.
 
 **R71 (the discipline & reliability round):** +110 root over R70's
 2177 — all of it in agent-core, three NEW suites + honest re-pins:

@@ -18,6 +18,10 @@ import {
 // ROUND-71 (R71-e2, D2): the per-session consecutive-failure counter + the
 // cline-style escalation tiers for edit_file anchor failures.
 import { editFailureSuffix, isEditAnchorFailure, recordEditFailure, resetEditStreak } from "../edit-streak.js";
+// ROUND-72 (R72-d): the per-directory AGENTS.md/CLAUDE.md convention
+// reminder appended to successful read_file results (kilocode pattern;
+// root-level files stay readCustomRules' job — no double-billing).
+import { conventionReminder, findDeepestConvention, shouldInject } from "../dir-conventions.js";
 import { recordSnapshot } from "../../storage/snapshots.js";
 import type { PluginDefinition, ToolDefinition } from "../registry.js";
 
@@ -51,7 +55,7 @@ export const filesystemPlugin: PluginDefinition = {
         // after each line-number prefix is byte-exact — the model strips the
         // prefix when building edit_file anchors.
         description:
-          "Read a text file's content, with line numbers (cat -n style: right-aligned line number + two spaces + content). Path is relative to the project root. Read BEFORE editing so you know the exact current text, and cite locations as path:line. The line-number prefix is NOT part of the file — when building edit_file oldString/newString, copy ONLY the content after the prefix. Large files: page through with offset (1-based start line, default 1) and limit (number of lines) instead of re-reading the whole file. When output is truncated, the marker carries the file's total line count and the EXACT next call — 'use offset=N to continue' — so page from there instead of guessing.",
+          "Read a text file's content, with line numbers (cat -n style: right-aligned line number + two spaces + content). Path is relative to the project root. Read BEFORE editing so you know the exact current text, and cite locations as path:line. The line-number prefix is NOT part of the file — when building edit_file oldString/newString, copy ONLY the content after the prefix. Large files: page through with offset (1-based start line, default 1) and limit (number of lines) instead of re-reading the whole file. When output is truncated, the marker carries the file's total line count and the EXACT next call — 'use offset=N to continue' — so page from there instead of guessing. read_file may append a [conventions from <dir>/AGENTS.md] reminder when a deeper directory carries its own AGENTS.md/CLAUDE.md — it is a reminder, not file content.",
         inputSchema: jsonSchema({
           type: "object",
           properties: {
@@ -61,11 +65,29 @@ export const filesystemPlugin: PluginDefinition = {
           },
           required: ["path"],
         }),
-        execute: async (input) =>
-          readFileWindow(root, typeof input.path === "string" ? input.path : "", {
+        execute: async (input) => {
+          const relPath = typeof input.path === "string" ? input.path : "";
+          const result = readFileWindow(root, relPath, {
             offset: typeof input.offset === "number" ? input.offset : undefined,
             limit: typeof input.limit === "number" ? input.limit : undefined,
-          }),
+          });
+          // ROUND-72 (R72-d): per-directory conventions (the kilocode
+          // AGENTS.md pattern). ONLY a successful read carries a reminder —
+          // failures stay byte-exact errors. The reminder quotes the deepest
+          // AGENTS.md/CLAUDE.md STRICTLY below the root (root files are
+          // readCustomRules' job — no double-billing), once per
+          // (session, dir) via the module map; sessionless builds (no
+          // toolDeps) inject deterministically every time. A null convention
+          // (none found / unreadable) leaves the output untouched — a
+          // reminder must never gate the read it rides on.
+          if (result.ok) {
+            const convention = findDeepestConvention(root, relPath);
+            if (convention !== null && shouldInject(toolDeps?.sessionId, convention.dir)) {
+              return { ok: true, output: `${result.output}${conventionReminder(convention)}` };
+            }
+          }
+          return result;
+        },
       },
       {
         name: "write_file",

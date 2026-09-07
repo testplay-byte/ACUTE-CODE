@@ -28,6 +28,15 @@
  * (alirezarezvani/claude-skills), with iron laws in caps, pre-built output
  * blocks, and ACUTE's real tool names. Same INSERT OR IGNORE contract:
  * fresh AND existing DBs get the new rows on the next open.
+ *
+ * ROUND-72 (R72-b, D1): the capability-expansion round — SIX craft-skill
+ * builtins (18 total, sortOrder 12-17): tdd, api-design, frontend-craft,
+ * typescript-craft, security-review, refactoring. Same house style as the
+ * R71 discipline four (trigger-rich descriptions with quoted phrasings +
+ * negative scope; 1.2-1.9KB bodies; iron laws in caps; pre-built
+ * output-format blocks; ACUTE's real tool names; no emoji). Same INSERT OR
+ * IGNORE contract — fresh AND existing DBs converge on 18; user edits to
+ * the six new rows persist like every other builtin.
  */
 import type { SqliteDatabase } from "./db.js";
 
@@ -446,6 +455,187 @@ HIGH: <resolved, or the open list>
 ADVISORY: <noted>
 VERDICT: DO NOT SHIP | SHIP WITH NOTES | CLEAR — <one-line reason>`;
 
+/* ── ROUND-72 (R72-b, D1): the SIX craft built-ins ───────────────────────────
+ *
+ * The R72-d design: the six engineering CRAFTS the R70/R71 families did
+ * not cover — the test-first loop, the HTTP route contract, the component
+ * discipline, the typing discipline, the adversarial security pass, and
+ * behavior-preserving restructuring. Each is a discipline contract (an
+ * iron law in caps, ordered rules, an anti-pattern/red-flag table where
+ * the failure mode is a rationalization, and a pre-built output-format
+ * block the model fills BEFORE acting), written in the R71 house voice:
+ * dense, imperative, honest — instructions the model will FOLLOW, not
+ * documentation it will skim. No emoji. */
+
+export const TDD_SKILL_BODY = `# Skill: tdd
+
+IRON LAW: NEVER WRITE THE TEST AFTER THE CODE TO FIT IT. The test is written from the SPEC; the code is written to pass the test — never the reverse.
+
+## The loop (RED → GREEN → REFACTOR, in order)
+1. RED — write ONE failing test for the next behavior. RUN it (run_command, the project's real test command — find it first) and WATCH it fail. A test you have not watched fail proves nothing: it may pass for the wrong reason, or never run at all.
+2. GREEN — write the MINIMUM code that makes it pass. No speculative generality, no "while I'm here" parameters — YAGNI is the point.
+3. REFACTOR — only on green, and only structure: remove the duplication the test just exposed (edit_file), then re-run. Red after a refactor means the refactor broke behavior — revert it.
+
+## Triangulation (the second case)
+When green feels like the code special-cased the input, add a SECOND test with a different input that forces the general solution — then generalize. Two examples triangulate the abstraction; one example hardcodes it.
+
+## Anti-patterns — each one means STOP
+- Writing the test after the code to match what it already does → STOP. That is not a test, it is a transcript.
+- Deleting or skipping a failing test to go green → STOP. A red test is information.
+- Weakening an assertion so the suite passes → STOP. That is lying with a green check.
+- "Too small to need a test" → STOP. Then it is not a behavior change; if it IS one, it needs a test.
+
+## Guardrails
+- Read the existing suite first (search_code, read_file): match its style, runner, fixtures.
+- One behavior per test; assert the error path too.
+- Track the loop state with todo_write.
+
+## Output format (fill at each step)
+TEST FIRST
+RED: <test name + command run + the observed failure>
+GREEN: <the minimum code written + the passing receipt>
+REFACTOR: <what was restructured, or "none needed">`;
+
+export const API_DESIGN_SKILL_BODY = `# Skill: api-design
+
+IRON LAW: THE CONTRACT IS WRITTEN BEFORE THE HANDLER. Method + path + request schema + response schema + error codes, named in a comment block — THEN the code.
+
+## Contract first
+Before any handler code, write the block below. search_code the existing routes first — the new route joins a family: match its path grammar, casing, version prefix, status-code habits. Consistency beats local taste.
+
+## Validate at the boundary — fail closed
+- Reject early, at the entry point: types checked, ranges bounded, unknown keys rejected or explicitly ignored-and-documented.
+- Fail closed: bad input returns an error, never a best-guess interpretation. Silence is the enemy.
+- Every input field is either validated or documented as unvalidated — no third state.
+
+## The error envelope — one shape, everywhere
+Every error, every route, the same shape: code + message + detail. A stable machine-readable code (SNAKE_CASE), a human message, optional detail. Ad-hoc error shapes are a contract breach even when the status code is right.
+
+## Additive-only evolution
+Consumers exist the moment you ship. New fields: optional, with a default. NEVER remove, rename, or repurpose a shipped field — version the route instead. A response that grew is compatible; a response that shifted is someone else's outage.
+
+## Lists: paginate and cap
+List endpoints: cursor or page params, a hard max page size, an explicit total or nextCursor — an unbounded list is a future outage.
+
+## Verify
+Exercise the route before done: run_command one happy call + one invalid call proving the 4xx envelope.
+
+## Output format (fill before the handler)
+API CONTRACT
+METHOD /path — <operation in one line>
+REQUEST: <fields, types, required/optional, defaults, validation>
+RESPONSE: <200 shape>
+ERRORS: <code — when> (envelope: code + message + detail)
+COMPAT: <what existing consumers see change: nothing>`;
+
+export const FRONTEND_CRAFT_SKILL_BODY = `# Skill: frontend-craft
+
+IRON LAW: STATE LIVES AS CLOSE TO ITS CONSUMERS AS POSSIBLE. Lifting state is a last resort proven by actual sharing — never a preemptive architecture.
+
+## State discipline
+- Colocate: a field's value lives in its form component, not a store. Lift ONLY when distant components demonstrably read the same value — and say why at the lift site.
+- Keys from STABLE IDENTITY, never array index: index keys corrupt state on reorder (the input keeps its stale value). Use the row's id; generate one if missing.
+- Derived state is COMPUTED, not stored: a plain expression or memo beats a useState you must remember to update — stored derived state is a desync waiting to happen.
+- Controlled inputs: value + onChange. Uncontrolled-and-read-later hides the truth until submit.
+
+## Semantic HTML first
+- A click handler on a div is a bug: use button — keyboard, focus, and disabled for free. Navigation is an anchor.
+- label htmlFor the input (or wraps it). Placeholder is not a label.
+- Keyboard path: every control Tab-reachable, Enter/Space operable, focus VISIBLE. Test with the keyboard, not the mouse.
+- aria ONLY when semantics cannot express it; the right element usually fixes it.
+
+## CSS discipline
+- Tailwind utilities composed on the element; NO inline style for non-dynamic values (inline only for genuinely dynamic values, e.g. a computed width).
+- Responsive prefixes (sm: md: lg:) over bespoke breakpoint sheets; mobile layout first.
+- search_code + read_file the siblings: the existing design system wins.
+
+## Output format (fill before the JSX)
+COMPONENT PLAN
+PURPOSE: <one sentence — what this component is for>
+STATE: <each piece — where it lives, why there>
+DERIVED: <what is computed, never stored>
+PROPS: <the contract in + the events out>
+A11Y: <element choices, labels, keyboard path, focus>
+STYLE: <utility composition + responsive notes>`;
+
+export const TYPESCRIPT_CRAFT_SKILL_BODY = `# Skill: typescript-craft
+
+IRON LAW: IF A STATE IS ILLEGAL, ITS TYPE MUST MAKE IT UNREPRESENTABLE. A flag pair that can never be true together is two booleans too many.
+
+## Model the domain
+Prefer unions + literal types over flag soup: { kind: "loading" } | { kind: "error"; message: string } — not isLoading + hasError + errorMessage with their legal-but-wrong combinations. Optional fields only where absence is genuinely meaningful.
+
+## Narrow with discriminated unions
+- Tag each variant (kind/type), switch on the tag, and prove exhaustiveness: a default that assigns to never turns a missed case into a compile error.
+- NEVER cast to bypass a type error. A cast is a confession: either the type is wrong (fix the type) or the value is wrong (fix the code).
+
+## The any ban
+- any is banned. At a truly dynamic boundary use unknown + a NARROWING GUARD (typeof, a validator, a type predicate) before use.
+- Every cast (as / <>) carries an inline justification comment: WHY the value is what you claim. A cast without a comment is a bug with a syntax light.
+
+## Inference vs annotation
+- Annotate EXPORTED signatures — the published contract must be explicit and stable.
+- Infer locals: annotation noise hides the drift that matters.
+
+## Generics only when variance is real
+A type parameter always instantiated to one type is indirection without payoff. Reach for generics when a function must preserve an input→output type relationship; otherwise concrete types.
+
+## Verify
+run_command the typecheck after signature changes (the compiler is the first reviewer); search_code call sites before changing a published signature.
+
+## Output format (fill before code)
+TYPE PLAN
+DOMAIN: <the states, as a union sketch>
+BOUNDARIES: <where unknown enters + the narrowing guard>
+BANNED: <the casts avoided, or each with its justification>
+EXPORTS: <the annotated signatures>`;
+
+export const SECURITY_REVIEW_SKILL_BODY = `# Skill: security-review
+
+Read the code as an attacker who has the source: what can I make it do that the author did not intend? Run this pass before shipping auth, file handling, exec, or anything user-input-touching, and whenever a diff touches paths, shells, tokens, or SQL.
+
+## The big five — each with its exact test
+1. INJECTION — SQL: parameterized statements only, never string-built queries. Commands: argument arrays, never an interpolated shell string — the payload arrives as one inert argument.
+2. PATH TRAVERSAL — user-supplied paths: resolve, then check startsWith(root + path separator). Any mismatch → reject. Never normalize-and-hope.
+3. SECRETS — nothing in code, logs, or commits. git_diff + search_code the change for token patterns BEFORE commit; scrub inputs from error messages and logs; keys come from env/settings, never literals.
+4. AUTHZ — who may call this? Check where the DATA is fetched, not where the UI hides the button — only the server-side check counts. Per-route, not per-habit.
+5. FAIL CLOSED — on error, deny. A catch block that swallows the failure and continues with defaults has converted an exception into a bypass.
+
+## Input validation at boundaries
+Every external input — HTTP body, query, headers, file contents, sub-agent reports — is validated where it enters: shape, type, length. Internal code trusts internal types; validate where trust begins.
+
+## Output format
+SECURITY VERDICT
+FINDINGS: <each — SEVERITY (critical|high|medium|low), path:line, the EXACT exploit path (input → code → impact), the concrete fix>
+or CLEAN: <the five checks, each named, with what was actually examined>`;
+
+export const REFACTORING_SKILL_BODY = `# Skill: refactoring
+
+IRON LAW: NO MOVE WITHOUT A GREEN CHARACTERIZATION TEST FIRST. If current behavior is not pinned by tests, writing those tests IS the first task — or the refactor is refused.
+
+## The contract
+- Behavior is PRESERVED. If observable behavior must change, that is not refactoring — it is a rewrite; name it, plan it, get agreement BEFORE moving (the honesty rule).
+- One MECHANICAL move per step: extract the function → run; move the file → run; inline the variable → run. NEVER two unverified moves in a row — a failure must point at the one change you just made.
+- Rename BEFORE restructure: renames are near-risk-free moves that make the structure obvious. Do them first, verify, then the structural move.
+- Verify each step with the REAL gates (run_command): the narrowest suite over the touched area + the typecheck — both green before the next move.
+- STOP when the pain is gone. "Clean" is not a destination; done is when the hurt that triggered this no longer hurts. Campsite rule: leave it cleaner, structurally only.
+
+## The step ledger
+todo_write one item per mechanical move; each verified before the next. An unverified item is an open risk, not a completed move.
+
+## Red flags — your own excuses
+- "Tests are red but that's expected mid-refactor." → STOP. Red mid-refactor means behavior changed: make it green or revert.
+- "I'll run the tests when the refactor is done." → STOP. That is a rewrite with extra steps.
+- "One more extract while I'm here." → STOP. Park it — one move per step.
+
+## Output format (fill before the first move)
+REFACTOR PLAN
+PAIN: <what hurts, in the user's words>
+SAFETY NET: <the characterization tests pinning current behavior — or what must be written first>
+MOVES: <the ordered mechanical steps, one line each>
+VERIFY: <per step — which suite + which typecheck command>
+STOP CONDITION: <when the pain is gone — what done means>`;
+
 const BUILTIN_SKILLS: ReadonlyArray<Pick<SkillRecord, "id" | "name" | "description" | "body" | "source" | "sortOrder">> = [
   {
     id: COMPUTER_USE_SKILL_ID,
@@ -554,6 +744,60 @@ const BUILTIN_SKILLS: ReadonlyArray<Pick<SkillRecord, "id" | "name" | "descripti
     body: SHIP_GATE_SKILL_BODY,
     source: "builtin",
     sortOrder: 11,
+  },
+  {
+    id: "skill_builtin_tdd",
+    name: "tdd",
+    description:
+      "Use when the user says 'write the test first', 'TDD', 'drive this by tests', or a behavior change is spec'd but unimplemented — and before refactoring anything with no characterization tests. Delivers the RED→GREEN→REFACTOR loop discipline: write the failing test first and RUN it to see it fail, minimum code to green, refactor only on green, never a test written after the code to fit it. NOT for test-suite audits (testing) or exploratory spikes.",
+    body: TDD_SKILL_BODY,
+    source: "builtin",
+    sortOrder: 12,
+  },
+  {
+    id: "skill_builtin_api_design",
+    name: "api-design",
+    description:
+      "Use when the user says 'add an endpoint', 'design the API for', 'expose this as a route', 'what should the response shape be' — any REST/HTTP surface work. Delivers the contract-first discipline: name the operation + inputs + outputs + errors BEFORE the handler, validate inputs fail-closed at the boundary, consistent error envelopes, additive-only evolution (never break a shipped field). NOT for internal function signatures or GraphQL schemas.",
+    body: API_DESIGN_SKILL_BODY,
+    source: "builtin",
+    sortOrder: 13,
+  },
+  {
+    id: "skill_builtin_frontend_craft",
+    name: "frontend-craft",
+    description:
+      "Use when the user says 'build this UI', 'fix the layout', 'make this component', 'the page looks broken', 'add a form' — React/CSS/component work. Delivers the component discipline: colocate state as close to its consumers as possible, keys from stable identity (never array index), derived state computed not stored, controlled inputs, semantic HTML + labels + keyboard paths, Tailwind utility composition over custom CSS. NOT for backend logic or state-library architecture.",
+    body: FRONTEND_CRAFT_SKILL_BODY,
+    source: "builtin",
+    sortOrder: 14,
+  },
+  {
+    id: "skill_builtin_typescript_craft",
+    name: "typescript-craft",
+    description:
+      "Use when you are writing or reviewing TypeScript and types are load-bearing — 'type this properly', 'fix the any', 'these types are wrong', generics/signatures/narrowing questions. Delivers the typing discipline: model the domain so illegal states are unrepresentable, narrow with discriminated unions instead of casting, never any (unknown + narrowing at truly dynamic boundaries), inference over annotation except at published boundaries. NOT for JavaScript without types or build config.",
+    body: TYPESCRIPT_CRAFT_SKILL_BODY,
+    source: "builtin",
+    sortOrder: 15,
+  },
+  {
+    id: "skill_builtin_security_review",
+    name: "security-review",
+    description:
+      "Use when the user says 'is this safe', 'check for vulnerabilities', 'does this leak secrets', before shipping auth, file handling, exec, or anything touching user input — and whenever a diff touches paths, shells, tokens, or SQL. Delivers the adversarial pass: injection, path traversal, secrets in code/logs/commits, authz checked per-route where the data lives, fail-closed error handling. NOT for feature code review (code-review) or dependency CVE scans.",
+    body: SECURITY_REVIEW_SKILL_BODY,
+    source: "builtin",
+    sortOrder: 16,
+  },
+  {
+    id: "skill_builtin_refactoring",
+    name: "refactoring",
+    description:
+      "Use when the user says 'clean this up', 'refactor', 'simplify this module', 'extract this', or the same code hurts three times — WITHOUT behavior change. Delivers the behavior-preserving discipline: characterization tests green BEFORE the first move, one mechanical move per commit-sized step, rename before restructure, verify each step (tests + typecheck), stop when the pain is gone. NOT for bug fixes (debugging) or rewrites (a rewrite is a new module, say so).",
+    body: REFACTORING_SKILL_BODY,
+    source: "builtin",
+    sortOrder: 17,
   },
 ];
 

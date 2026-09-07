@@ -4172,6 +4172,11 @@ export function buildServer(options: ServerOptions): FastifyInstance {
       // every registered project + user-global ~/.agents/skills/), provenance-
       // marked via `source` ("project-file" | "global-file") + the additive
       // `filePath`/`projectName` fields. DB rows shadow same-name files.
+      // ROUND-72 (R72-c, additive): file-skill entries now also carry
+      // `references` — the references/ metadata ({name, fileName, bytes},
+      // possibly empty; DB rows omit the field). Metadata ONLY: reference
+      // content is never served here — the agent loads it with
+      // read_skill { name, reference }. Zero route/frontend changes required.
       scope.get("/skills", async () => {
         return { skills: listAllSkillsMerged(db) };
       });
