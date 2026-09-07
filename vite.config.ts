@@ -57,5 +57,18 @@ export default defineConfig({
     // the 5s default).
     testTimeout: 30_000,
     hookTimeout: 30_000,
+    // ROUND-73 CI-stability patch #2 (runs 34111934048 + 34113189649): the
+    // second failure had ALL 2558 tests GREEN and still exited 1 on an
+    // unhandled `[vitest-worker]: Timeout calling "onTaskUpdate"` — the
+    // 60s birpc deadline (vitest's DEFAULT_TIMEOUT, not user-configurable)
+    // for a worker→main RPC expired because the MAIN process was starved on
+    // the 4-vCPU windows runner while every worker hammered it. Two CI-only
+    // de-saturation levers, env-gated so local dev is byte-identical:
+    //   · reporters "dot" — the default reporter's per-file progress lines
+    //     are the main process's own print load; dot collapses them;
+    //   · maxWorkers 2 — caps the fork pool below the runner's vCPU count,
+    //     leaving the main process real headroom (wall-time cost on CI is
+    //     the honest price of stability; failures still print full diffs).
+    ...(process.env.CI ? { reporters: ["dot"], maxWorkers: 2 } : {}),
   },
 });
