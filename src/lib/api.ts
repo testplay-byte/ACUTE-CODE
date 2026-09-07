@@ -1075,6 +1075,13 @@ export interface ErrorTurnItem {
   providerError?: string;
   /** seq of the user message this failed turn answered (Retry target). */
   userSeq?: number;
+  /** ROUND-75 (R75): the provider-error class (rate_limit / network /
+   * timeout / auth / context_window_exceeded / unknown) — the card's
+   * one-word cause line. */
+  errorClass?: string;
+  /** ROUND-75 (R75): total attempts when the transient-API retry ladder ran
+   * (1 = no ladder) — the card's "failed after N attempts" line. */
+  attempts?: number;
   ts: string;
 }
 
@@ -1536,6 +1543,11 @@ export function toProjectChatItems(events: SessionEvent[]): ProjectChatItem[] {
         typeof payload.userSeq === "number" && Number.isFinite(payload.userSeq)
           ? payload.userSeq
           : undefined;
+      const errorClass = asString(payload.errorClass);
+      const attempts =
+        typeof payload.attempts === "number" && Number.isFinite(payload.attempts) && payload.attempts > 1
+          ? payload.attempts
+          : undefined;
       items.push({
         kind: "error",
         seq: event.seq,
@@ -1545,6 +1557,8 @@ export function toProjectChatItems(events: SessionEvent[]): ProjectChatItem[] {
         ...(providerId !== undefined ? { providerId } : {}),
         ...(providerError !== undefined ? { providerError } : {}),
         ...(userSeq !== undefined ? { userSeq } : {}),
+        ...(errorClass !== undefined ? { errorClass } : {}),
+        ...(attempts !== undefined ? { attempts } : {}),
         ts: event.ts,
       });
       continue;
@@ -1812,6 +1826,11 @@ export interface TaskModeInfo {
   description: string;
   /** "builtin" (the six postures) | "file" (a .acute/agents/*.md custom). */
   source: "builtin" | "file";
+  /** ROUND-75 (R75): true for the hard read-only postures (plan/review/
+   * explore — write tools are ENFORCED away, not just asked away). The
+   * picker renders the badge; the enforcement itself is backend-side
+   * (mode-policy.ts). */
+  readOnly?: boolean;
 }
 
 /**
@@ -2732,6 +2751,28 @@ export type StreamTurnEvent =
   /** Round-32: the outer loop starts a new iteration — the live activity
    * block opens a new ROUND group on this event. */
   | { type: "meta.continuation"; iteration: number; reason?: string }
+  /** ROUND-75 (R75): the transient-API retry ladder — the backend caught a
+   * rate_limit / network / timeout failure and will retry attempt N of 6
+   * after waiting `remainingMs` (the immediate rung is 0). Re-emitted as a
+   * heartbeat every RETRY_TICK_MS with the refreshed remaining time; any
+   * content frame (text-delta / tool-call / finish…) means the retry
+   * SUCCEEDED and the status clears. A terminal error frame after the
+   * ladder exhausted carries attempts=6. */
+  | {
+      type: "meta.retry";
+      attempt: number;
+      totalAttempts: number;
+      waitMs: number;
+      remainingMs: number;
+      retryAt: number;
+      errorClass: string;
+      classMessage: string;
+      message: string;
+    }
+  /** ROUND-75 (R75): the R71 overflow-recovery line, finally typed — a
+   * context overflow was auto-compacted and the turn is retrying (rendered
+   * as a transient status note, not an error). */
+  | { type: "meta.overflow_recovery"; message: string }
   /** ROUND-36 (ADR-0022): a delegated sub-agent changed state — the live
    * SubAgentCards update from these. */
   | {

@@ -31,6 +31,8 @@ const MODES: TaskModeInfo[] = [
     description:
       "Use when the user says 'plan this', 'write a spec', 'design before we build' — the deliverable is a decision-ready specification, not code. NOT for executing an approved plan.",
     source: "builtin",
+    // R75: the enforced read-only postures carry the flag.
+    readOnly: true,
   },
   {
     id: "debug",
@@ -45,6 +47,7 @@ const MODES: TaskModeInfo[] = [
     description:
       "Use when the user says 'review this PR', 'look over my changes' — a tiered verdict with file:line evidence. NOT for implementing the changes yourself.",
     source: "builtin",
+    readOnly: true,
   },
   {
     id: "security",
@@ -100,7 +103,7 @@ describe("TaskModePicker (ROUND-73 R73-c)", () => {
     expect(btn.getAttribute("title")).toContain("no longer in the project's mode list");
   });
 
-  it("menu lists 'Auto (no mode)' FIRST, then every mode with name + description (~2-line clamp)", async () => {
+  it("R75: menu lists 'Auto (no mode)' FIRST, then every mode — NAMES ONLY; the descriptions ride the rows' title tooltips (hover to reveal)", async () => {
     render(<TaskModePicker modes={MODES} activeMode={null} disabled={false} onChange={vi.fn()} />);
     await openMenu();
 
@@ -108,20 +111,37 @@ describe("TaskModePicker (ROUND-73 R73-c)", () => {
     expect(rows).toHaveLength(MODES.length + 1); // Auto + every mode
     // Auto is the FIRST row (the clear affordance leads the list).
     expect(rows[0].textContent).toContain("Auto (no mode)");
-    expect(rows[0].textContent).toContain("The agent picks its posture per request.");
+    // R75 (owner: "by default the description of them should not be shown;
+    // only when the user hovers"): the one-line summary is GONE from the
+    // row text — it rides the native title tooltip.
+    expect(rows[0].textContent).not.toContain("The agent picks its posture");
+    expect(rows[0].getAttribute("title")).toBe("No task mode active — the agent picks its posture per request.");
 
-    // Every mode row: name + description text.
+    // Every mode row: the NAME renders, the description does NOT (title only).
     for (const mode of MODES) {
       const row = screen.getByRole("menuitemradio", { name: new RegExp(mode.name) });
-      expect(row.textContent).toContain(mode.description);
+      expect(row.textContent).toContain(mode.name);
+      expect(row.textContent).not.toContain(mode.description);
+      expect(row.getAttribute("title")).toBe(mode.description);
     }
-    // The trigger-rich descriptions are LONG — the row clamps them to ~2
-    // lines (the full text rides the row's title tooltip).
+    // Single-line rows: no clamped description element survives.
     const planRow = screen.getByRole("menuitemradio", { name: /Plan/ });
-    expect(planRow.getAttribute("title")).toBe(MODES[0].description);
-    const desc = planRow.querySelector(".line-clamp-2") as HTMLElement;
-    expect(desc).toBeTruthy();
-    expect(desc.textContent).toContain("decision-ready specification");
+    expect(planRow.querySelector(".line-clamp-2")).toBeNull();
+  });
+
+  it("R75: read-only modes (plan/review/explore) carry the ENFORCED read-only badge", async () => {
+    render(<TaskModePicker modes={MODES} activeMode={null} disabled={false} onChange={vi.fn()} />);
+    await openMenu();
+    const planRow = screen.getByRole("menuitemradio", { name: /Plan/ });
+    expect(planRow.textContent).toContain("read-only");
+    // The badge itself carries the "Enforced" title (the row's title stays
+    // the mode description — the hover-reveal text).
+    const badge = planRow.querySelector("span[title^='Enforced']") as HTMLElement | null;
+    expect(badge).not.toBeNull();
+    expect(badge!.textContent).toContain("read-only");
+    // A mutating mode (debug) carries no badge.
+    const debugRow = screen.getByRole("menuitemradio", { name: /Debug/ });
+    expect(debugRow.textContent).not.toContain("read-only");
   });
 
   it("custom modes (source 'file') carry a subtle 'custom' chip — builtins do not", async () => {

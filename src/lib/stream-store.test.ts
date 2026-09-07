@@ -1497,3 +1497,132 @@ describe("R68/A screenshot frames → inline working entries", () => {
     ).toHaveLength(0);
   });
 });
+
+/* ── ROUND-75 (R75): the transient-API retry ladder's live state ───────────── */
+
+describe("stream store ROUND-75 retry ladder frames", () => {
+  beforeEach(() => {
+    // The house reset (the other suites' pattern): clear the per-session
+    // map so each test starts with no live stream state.
+    useStreamStore.setState({ bySession: {} });
+  });
+
+  it("a meta.retry frame sets LiveTurn.retry (the ladder card's source); a content frame CLEARS it — the retry succeeded", async () => {
+    const sse = manualSseResponse();
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(sse.response));
+
+    const promise = useStreamStore.getState().startStream(PARENT, "work");
+    sse.emit({ type: "text-delta", delta: "partial work " });
+    // A transient failure lands: the backend emits the ladder frame
+    // (attempt 2 of 6, waiting the 1.5-minute rung).
+    sse.emit({
+      type: "meta.retry",
+      attempt: 2,
+      totalAttempts: 6,
+      waitMs: 90_000,
+      remainingMs: 90_000,
+      retryAt: Date.now() + 90_000,
+      errorClass: "rate_limit",
+      classMessage: "rate limited — the provider is throttling requests",
+      message: "rate limited — the provider is throttling requests — retrying (attempt 2 of 6) in 1.5 min",
+    });
+
+    // (The SSE reader processes frames on the microtask queue — poll for
+    // the state instead of asserting synchronously.)
+    await vi.waitFor(() => {
+      expect(useStreamStore.getState().bySession[PARENT]?.liveTurn?.retry).toMatchObject({
+        attempt: 2,
+        totalAttempts: 6,
+        waitMs: 90_000,
+        errorClass: "rate_limit",
+      });
+    });
+
+    // The heartbeat refresh (a tick while waiting).
+    sse.emit({
+      type: "meta.retry",
+      attempt: 2,
+      totalAttempts: 6,
+      waitMs: 90_000,
+      remainingMs: 30_000,
+      retryAt: Date.now() + 30_000,
+      errorClass: "rate_limit",
+      classMessage: "rate limited — the provider is throttling requests",
+      message: "rate limited — the provider is throttling requests — retrying (attempt 2 of 6) in 30 s",
+    });
+    await vi.waitFor(() => {
+      expect(useStreamStore.getState().bySession[PARENT]?.liveTurn?.retry?.remainingMs).toBe(30_000);
+    });
+
+    // The retry SUCCEEDS: content resumes — the status card clears.
+    sse.emit({ type: "text-delta", delta: "…recovered, finishing the work." });
+    sse.emit({ type: "done", assistantMessage: { seq: 9, role: "assistant", agentId: "agt_r75", content: "done", ts: new Date().toISOString() }, usage: { agentId: "agt_r75", sessionId: PARENT, provider: "openrouter", model: "m", inputTokens: 1, outputTokens: 1, cachedInputTokens: 0, costUsd: 0, ts: "" } });
+    sse.close();
+    await promise;
+
+    const slice = useStreamStore.getState().bySession[PARENT];
+    expect(slice?.liveTurn?.retry).toBeNull();
+    expect(slice?.liveError).toBeNull();
+  });
+
+  it("a terminal error frame after the ladder exhausted carries errorClass + attempts into liveError", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        sseResponse([
+          {
+            type: "meta.retry",
+            attempt: 6,
+            totalAttempts: 6,
+            waitMs: 1_800_000,
+            remainingMs: 1_800_000,
+            retryAt: Date.now() + 1_800_000,
+            errorClass: "rate_limit",
+            classMessage: "rate limited — the provider is throttling requests",
+            message: "rate limited — retrying (attempt 6 of 6) in 30 min",
+          },
+          {
+            type: "error",
+            status: 502,
+            code: "PROVIDER_ERROR",
+            message: "provider 'openrouter' call failed (class: rate_limit) — auto-retry ladder exhausted",
+            details: {
+              providerError: "429 Too Many Requests",
+              errorClass: "rate_limit",
+              classMessage: "rate limited — the provider is throttling requests",
+              attempts: 6,
+            },
+          },
+        ]),
+      ),
+    );
+
+    await useStreamStore.getState().startStream(PARENT, "work");
+
+    const slice = useStreamStore.getState().bySession[PARENT];
+    expect(slice?.liveError?.errorClass).toBe("rate_limit");
+    expect(slice?.liveError?.attempts).toBe(6);
+    expect(slice?.liveError?.message).toContain("auto-retry ladder exhausted");
+  });
+
+  it("a meta.overflow_recovery frame sets the transient note; the first content frame clears it", async () => {
+    const sse = manualSseResponse();
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(sse.response));
+
+    const promise = useStreamStore.getState().startStream(PARENT, "work");
+    sse.emit({ type: "meta.overflow_recovery", message: "[context overflow → auto-compacted conversation → retrying]" });
+
+    await vi.waitFor(() => {
+      expect(useStreamStore.getState().bySession[PARENT]?.liveTurn?.note).toContain("context overflow");
+    });
+
+    sse.emit({ type: "text-delta", delta: "recovered after compaction" });
+    await vi.waitFor(() => {
+      expect(useStreamStore.getState().bySession[PARENT]?.liveTurn?.note).toBeNull();
+    });
+
+    sse.emit({ type: "stopped" });
+    sse.close();
+    await promise;
+  });
+});

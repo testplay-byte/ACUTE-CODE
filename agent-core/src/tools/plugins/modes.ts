@@ -33,6 +33,7 @@
  * lives at execute time.
  */
 import { jsonSchema } from "ai";
+import { isReadOnlyTaskMode } from "../../agents/mode-policy.js";
 import { findMode, resolveEffectiveModes } from "../../agents/modes.js";
 import { renderReminder } from "../../agents/system-reminders.js";
 import { getSession, updateSessionActiveMode } from "../../storage/sessions.js";
@@ -106,6 +107,37 @@ export const modesPlugin: PluginDefinition = {
           const session = getSession(db, toolDeps.sessionId);
           if (session === undefined) {
             return { ok: false, output: `switch_mode: session ${toolDeps.sessionId} no longer exists` };
+          }
+
+          // ROUND-75 (R75): READ-ONLY MODES ARE OWNER-PINNED. While plan/
+          // review/explore is active, the MODEL may not leave or clear the
+          // posture unilaterally — the owner set it (the picker / PATCH),
+          // and the enforcement tier (write tools removed) is exactly what
+          // they asked for ("plan mode tried to make edits — this was not
+          // supposed to happen"). The honest refusal tells the model what
+          // to do instead: present the plan/spec/findings and ASK the owner
+          // to switch. Entering a read-only mode (or any switch while a
+          // NON-read-only mode is active) is unchanged — the model keeps
+          // its posture management everywhere else.
+          if (session.activeMode !== null && isReadOnlyTaskMode(session.activeMode)) {
+            const currentId = session.activeMode;
+            const { modes } = resolveEffectiveModes(projectRoot);
+            const current = findMode(modes, currentId);
+            const requestedId = typeof input.mode === "string" ? input.mode.trim() : input.mode;
+            const isClear =
+              input.mode === null ||
+              (typeof requestedId === "string" && CLEAR_SENTINELS.has(requestedId));
+            const isSame = typeof requestedId === "string" && requestedId === currentId;
+            if (!isSame && (isClear || requestedId !== undefined)) {
+              const currentName = current?.name ?? currentId;
+              return {
+                ok: false,
+                output:
+                  `switch_mode: the session is in ${currentName} mode — a read-only posture the OWNER set. ` +
+                  "It stays active until the owner switches it (the composer's mode picker). " +
+                  "Present your plan/spec/findings and ask the owner to switch modes when they want implementation to start.",
+              };
+            }
           }
 
           // The mode param: absent → the index; null or a clear-sentinel

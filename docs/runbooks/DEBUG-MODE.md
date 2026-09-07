@@ -1,4 +1,4 @@
-<!-- last-reviewed: 2026-09-05 round-69 -->
+<!-- last-reviewed: 2026-09-07 round-75 -->
 # DEBUG MODE — the post-turn context-free analyst (owner's guide)
 
 **Status:** normative · **Established:** round-65 (the debug switch; reworked

@@ -44,7 +44,9 @@ export function ThinkingLevelButton({
         }}
       >
         <Brain size={12} className="shrink-0" style={{ color: styles.accent }} />
-        <span data-thinking-label>{current.label}</span>
+        <span data-thinking-label className="@max-[560px]:hidden">
+          {current.label}
+        </span>
         <ChevronDown size={10} className="shrink-0" />
       </button>
       {open ? (

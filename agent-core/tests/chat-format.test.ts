@@ -458,3 +458,66 @@ describe("cachedInputTokens capture (ROUND-50 R50-c1)", () => {
     expect(zero.cachedInputTokens).toBe(0);
   });
 });
+
+/* ── ROUND-75 (R75): the live 429 find — error PARTS re-thrown ──────────────── */
+
+describe("R75: streamAiSdkChat re-throws the SDK's error PARTS (the real rate-limit path)", () => {
+  it("an {type:'error'} fullStream part THROWS the original error — not the generic no-output rejection", async () => {
+    const realError = new Error("Rate limit exceeded: too many requests (429)");
+    (realError as Error & { statusCode?: number }).statusCode = 429;
+    streamTextMock.mockImplementation(() => ({
+      fullStream: (async function* () {
+        yield { type: "text-delta", text: "partial " };
+        // The SDK's shape for a mid-stream failure: the error rides a PART
+        // (agentic steps with tools deliver provider errors this way), not
+        // an iterator throw.
+        yield { type: "error", error: realError };
+      })(),
+      totalUsage: Promise.resolve({ inputTokens: 1, outputTokens: 1, totalTokens: 2 }),
+      usage: Promise.resolve({ inputTokens: 1, outputTokens: 1, totalTokens: 2 }),
+    }));
+
+    // Consume the async generator — the re-throw surfaces mid-iteration.
+    const consume = async (): Promise<unknown> => {
+      for await (const _ of streamAiSdkChat({
+        ...baseInput,
+        provider: { id: "openrouter", baseUrl: "https://openrouter.ai/api/v1" },
+        messages: [{ role: "user", content: "hi" }],
+      })) {
+        void _;
+      }
+      return "completed";
+    };
+    await expect(consume()).rejects.toBe(realError);
+  });
+
+  it("the re-thrown error classifies as rate_limit — the retry ladder engages on REAL provider 429s", async () => {
+    const realError = new Error("Failed after 5 attempts. Last error: AI_APICallError: Rate limit exceeded: too many requests");
+    streamTextMock.mockImplementation(() => ({
+      fullStream: (async function* () {
+        yield { type: "error", error: realError };
+      })(),
+      totalUsage: Promise.resolve({ inputTokens: 1, outputTokens: 1, totalTokens: 2 }),
+      usage: Promise.resolve({ inputTokens: 1, outputTokens: 1, totalTokens: 2 }),
+    }));
+
+    // The classifier (the runtime catch's first step) reads the message —
+    // the RetryError's embedded provider text matches the rate-limit
+    // patterns even though the status code lives on the inner error.
+    const { classifyProviderError } = await import("../src/agents/error-classification");
+    const classification = classifyProviderError(realError);
+    expect(classification.class).toBe("rate_limit");
+
+    const consume = async (): Promise<unknown> => {
+      for await (const _ of streamAiSdkChat({
+        ...baseInput,
+        provider: { id: "openrouter", baseUrl: "https://openrouter.ai/api/v1" },
+        messages: [{ role: "user", content: "hi" }],
+      })) {
+        void _;
+      }
+      return "completed";
+    };
+    await expect(consume()).rejects.toBe(realError);
+  });
+});

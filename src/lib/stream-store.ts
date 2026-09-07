@@ -102,6 +102,18 @@ export interface LiveTurn {
    * out for the owner). Null when none is open; the chat renders the
    * countdown card from this. One at a time per session. */
   browserCheckpoint: LiveBrowserCheckpoint | null;
+  /** ROUND-75 (R75): the in-flight TRANSIENT-API retry wait (the ladder's
+   * status card source). Null when the turn is streaming normally; set the
+   * moment a meta.retry frame lands (a rate_limit/network/timeout failure
+   * is being waited out), refreshed by each heartbeat tick, and cleared by
+   * ANY content frame — text, thinking, tool activity, or finish — which
+   * means the retry succeeded. A terminal error frame after the ladder
+   * exhausted ends the turn (the folded card carries the attempts count). */
+  retry: LiveTurnRetry | null;
+  /** ROUND-75 (R75): the R71 overflow-recovery status line ("[context
+   * overflow → auto-compacted conversation → retrying]") — a transient
+   * NOTE, not an error; cleared on the first content frame like retry. */
+  note: string | null;
   // ROUND-68 (R68-A, owner: "The screenshots were supposed to be shown
   // properly when they were actually taken, not at the bottom in a
   // dedicated section. When the screenshots were taken they should be shown
@@ -114,6 +126,22 @@ export interface LiveTurn {
   // registry is a 12-LRU with a 10-minute TTL — expired tiles render the
   // honest "expired" placeholder, so a long turn's early rows degrade
   // honestly instead of silently vanishing; cap-free is correct).
+}
+
+/** ROUND-75 (R75): the live retry-ladder status (LiveTurn.retry's shape). */
+export interface LiveTurnRetry {
+  /** The upcoming attempt number (2..6). */
+  attempt: number;
+  totalAttempts: number;
+  /** The FULL rung length (ms) — "1.5 min" / "5 min" / "10 min" / "30 min". */
+  waitMs: number;
+  /** Remaining ms at frame arrival (the heartbeat refreshes it). */
+  remainingMs: number;
+  /** Epoch ms when the retry fires (the countdown's anchor). */
+  retryAt: number;
+  errorClass: string;
+  classMessage: string;
+  message: string;
 }
 
 /** ROUND-66 (R66, C1): the live debug-analyst report state. */
@@ -172,6 +200,10 @@ export interface TurnErrorInfo {
   status?: number;
   model?: string;
   providerError?: string;
+  /** ROUND-75 (R75): the provider-error class + the retry ladder's total
+   * attempts — the card renders the cause word + "failed after N attempts". */
+  errorClass?: string;
+  attempts?: number;
   /** The ts of the PERSISTED turn.error event, when the backend recorded
    * one — used to swap the live card for the folded one without a flash or
    * a duplicate. */
@@ -820,6 +852,9 @@ export const useStreamStore = create<StreamStore>((set, get) => ({
         // WorkingEntry rows inside `working: []` above, reset with it.)
         debugReport: null,
         browserCheckpoint: null,
+        // ROUND-75: fresh turn → no retry wait, no recovery note.
+        retry: null,
+        note: null,
       },
       streamBusy: true,
       sendError: null,
@@ -1151,7 +1186,50 @@ function handleStreamEvent(
 
   const cur = useStreamStore.getState().bySession[sessionId];
   if (!cur || cur.liveTurn === null) return;
-  const liveTurn = cur.liveTurn;
+  let liveTurn = cur.liveTurn;
+
+  // ── ROUND-75 (R75): the retry-ladder / overflow-recovery status lines ──
+  // A meta.retry frame sets liveTurn.retry (the ladder is waiting out a
+  // transient failure); meta.overflow_recovery sets liveTurn.note (the R71
+  // auto-compaction line). ANY content frame below (text, thinking, tool
+  // activity) means the retry/recovery SUCCEEDED — clear both so the status
+  // card disappears the moment real work resumes.
+  if (event.type === "meta.retry") {
+    patchSession(sessionId, {
+      liveTurn: {
+        ...liveTurn,
+        retry: {
+          attempt: event.attempt,
+          totalAttempts: event.totalAttempts,
+          waitMs: event.waitMs,
+          remainingMs: event.remainingMs,
+          retryAt: event.retryAt,
+          errorClass: event.errorClass,
+          classMessage: event.classMessage,
+          message: event.message,
+        },
+      },
+    });
+    return;
+  }
+  if (event.type === "meta.overflow_recovery") {
+    patchSession(sessionId, { liveTurn: { ...liveTurn, note: event.message } });
+    return;
+  }
+  if (
+    (liveTurn.retry !== null || liveTurn.note !== null) &&
+    (event.type === "text-delta" ||
+      event.type === "thinking-delta" ||
+      event.type === "tool-input-start" ||
+      event.type === "tool-input-delta" ||
+      event.type === "tool-call" ||
+      event.type === "tool-result" ||
+      event.type === "tool-output" ||
+      event.type === "finish")
+  ) {
+    liveTurn = { ...liveTurn, retry: null, note: null };
+    patchSession(sessionId, { liveTurn });
+  }
 
   // ── ROUND-68 (R68-A): the INLINE screenshot feed ───────────────────────
   // A capture succeeded mid-turn (computer-use or the browser screenshot
@@ -1515,6 +1593,12 @@ function handleStreamEvent(
     const providerError =
       details && typeof details.providerError === "string" ? details.providerError : undefined;
     const errorTs = details && typeof details.errorTs === "string" ? details.errorTs : undefined;
+    // R75: the class + attempts ride the envelope's details additively.
+    const errorClass = details && typeof details.errorClass === "string" ? details.errorClass : undefined;
+    const attempts =
+      details && typeof details.attempts === "number" && Number.isFinite(details.attempts) && details.attempts > 1
+        ? details.attempts
+        : undefined;
     patchSession(sessionId, {
       liveError: {
         code: event.code,
@@ -1523,6 +1607,8 @@ function handleStreamEvent(
         ...(model !== undefined ? { model } : {}),
         ...(providerError !== undefined ? { providerError } : {}),
         ...(errorTs !== undefined ? { errorTs } : {}),
+        ...(errorClass !== undefined ? { errorClass } : {}),
+        ...(attempts !== undefined ? { attempts } : {}),
         ts: new Date().toISOString(),
       },
       ...(cur.lastTurnStoppedByUser || liveTurn.stoppedByUser

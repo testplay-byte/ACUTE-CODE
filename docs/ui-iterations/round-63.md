@@ -1,4 +1,4 @@
-<!-- last-reviewed: 2026-09-02 round-63 -->
+<!-- last-reviewed: 2026-09-07 round-75 -->
 # Round 63 — The desktop-update round: the release pipeline gap closed + the launcher's version-truth chain
 
 **Date:** 2026-09-02 · **Branch:** `main` · **Version:** 0.63.0 · **Owner directive (verbatim):** "the computer use was not there and also… the desktop application was not reinstalled properly, not updated properly, or anything like that… whenever I run the acute.bat file, it asks me how I want to run it. If I select the application, then it will check the application version, then it will properly update the application on my desktop. If it needs to delete it completely, then it will delete it completely and reinstall it if needed. It will handle each and every single thing properly, because a lot of the features do not work on the website. The computer browse functionality, the computer use, and various other things are apparently not that well suited for the site."

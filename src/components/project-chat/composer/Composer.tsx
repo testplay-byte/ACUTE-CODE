@@ -1,6 +1,7 @@
 import {
   useCallback,
   useEffect,
+  useLayoutEffect,
   useRef,
   useState,
   type ClipboardEvent as ReactClipboardEvent,
@@ -56,14 +57,28 @@ import { useProjectFilePaths } from "./useProjectFiles";
  * There will be a dedicated background and on that background area I can
  * enter the message.").
  *
- *   left group:  [Add Context] [Mode switcher] [Task mode picker]
- *   right group: [Context donut] [Model selector] [Thinking level] [Send]
+ *   ONE row (R75, owner: "the following should be shown in one single row:
+ *   attach file, the access level, the behavior, the context window, the
+ *   model, the reasoning, and the send button"):
+ *   [Add Context] [Access] [Task mode] [Context donut] [Model] [Thinking] [Continue/Send]
+ *
+ *   The box is a CSS CONTAINER (@container) and the selector pills' text
+ *   labels hide below a 560px container (icon-only pills — the row keeps
+ *   fitting at the 480px chat floor; the title tooltips carry the hidden
+ *   labels). flex-wrap stays as the never-overlap emergency fallback
+ *   (R51-c) for absurd widths (the freeform mini windows).
  *
  * The panel (AgentChatPanel) owns the input text, the send path, the model
  * override + thinking level persistence, and the permission-mode PATCH;
  * this component owns the staged attachment chips (cleared on send), the @
  * quick-picker, and drag-and-drop.
  */
+
+/** R75 (owner): the textarea shows AT MOST 5 lines, then scrolls inside —
+ * the height is derived from the live computed line-height (see the
+ * useLayoutEffect below), never a hardcoded pixel cap. */
+const MAX_VISIBLE_LINES = 5;
+
 export function Composer({
   agent,
   projectId,
@@ -167,12 +182,37 @@ export function Composer({
     setAtHighlighted((i) => (atMatches.length === 0 ? 0 : Math.min(i, atMatches.length - 1)));
   }, [atMatches.length]);
 
-  // Auto-grow reset when the text is cleared programmatically (send/chips).
-  useEffect(() => {
+  // ROUND-75 (R75, owner: long messages "get cut off to only two lines at
+  // max and the user has to scroll"): the auto-grow used to set height from
+  // onChange — but the textarea's `flex-1` (flex-basis: 0%) made the flex
+  // algorithm IGNORE the height style entirely (the box rendered at its
+  // intrinsic ~1-line height and scrolled internally — the owner saw "two
+  // lines"; proven live: style.height=132px while clientHeight=34px). THE
+  // FIX, in two parts: (a) `flex-1` is GONE from the textarea — the height
+  // style now governs; (b) the growth lives in a useLayoutEffect keyed on
+  // `input`, so it runs on EVERY value change — user typing AND programmatic
+  // fills (the suggestion chips) — and caps at exactly MAX_VISIBLE_LINES
+  // (5) lines derived from the REAL computed line-height + paddings
+  // (self-maintaining against font/theme changes), after which the box
+  // scrolls internally. The empty case collapses back to one line
+  // (scrollHeight of empty = one line + paddings).
+  useLayoutEffect(() => {
     const el = textareaRef.current;
-    if (input === "" && el !== null) {
-      el.style.height = "auto";
-    }
+    if (el === null) return;
+    const cs = window.getComputedStyle(el);
+    const parsedLh = parseFloat(cs.lineHeight);
+    const parsedPadTop = parseFloat(cs.paddingTop);
+    const parsedPadBottom = parseFloat(cs.paddingBottom);
+    // Defensive fallbacks (test DOMs may not resolve computed styles): the
+    // classes are text-[13px] leading-[1.5] px-3.5 pt-2.5 pb-1.
+    const lineHeight = Number.isFinite(parsedLh) && parsedLh > 0 ? parsedLh : 13 * 1.5;
+    const pads =
+      (Number.isFinite(parsedPadTop) ? parsedPadTop : 10) +
+      (Number.isFinite(parsedPadBottom) ? parsedPadBottom : 4);
+    const cap = Math.ceil(MAX_VISIBLE_LINES * lineHeight + pads);
+    el.style.maxHeight = `${cap}px`;
+    el.style.height = "auto";
+    el.style.height = `${Math.min(el.scrollHeight, cap)}px`;
   }, [input, textareaRef]);
 
   /**
@@ -406,7 +446,7 @@ export function Composer({
   return (
     <div
       data-composer
-      className="relative flex flex-col rounded-[18px] border transition-all"
+      className="@container relative flex flex-col rounded-[18px] border transition-all"
       style={{
         background: dragActive
           ? withAlpha(styles.accent, styles.isDark ? 0.1 : 0.07)
@@ -445,12 +485,12 @@ export function Composer({
         value={input}
         onChange={(e) => {
           onInputChange(e.target.value);
-          // Auto-grow to fit content (max 6 rows), then scroll inside.
-          const el = e.currentTarget;
-          el.style.height = "auto";
-          el.style.height = `${Math.min(el.scrollHeight, 132)}px`;
+          // R75: the auto-grow lives in the useLayoutEffect above (keyed on
+          // `input` — it fires here AND on programmatic fills; the height
+          // style actually applies now that flex-1 is gone).
           // Live @ token detection at the caret. Esc dismisses the CURRENT
           // @ occurrence — it stays closed until a NEW "@" is typed.
+          const el = e.currentTarget;
           const caret = el.selectionStart ?? el.value.length;
           const token = detectAtToken(el.value, caret);
           if (token === null) {
@@ -471,7 +511,7 @@ export function Composer({
         autoFocus={autoFocus}
         aria-label="Message composer"
         placeholder={`Message ${agent?.name ?? "Acute"}…`}
-        className="flex-1 min-w-0 bg-transparent outline-none resize-none text-[13px] leading-[1.5] max-h-[132px] px-3.5 pt-2.5 pb-1"
+        className="w-full min-w-0 bg-transparent outline-none resize-none text-[13px] leading-[1.5] px-3.5 pt-2.5 pb-1"
         style={{ color: styles.text }}
       />
 
@@ -482,113 +522,109 @@ export function Composer({
       />
 
       {/* TOOLBAR — INSIDE the box (owner directive).
-          ROUND-51 (R51-c, owner: "the details on the left and right should
-          not overlap with each other"): both clusters are shrink-0 (never
-          squashed), a flex-1 min-w-0 spacer between them absorbs free space,
-          and the row WRAPS — when one row can't hold both clusters the right
-          cluster moves to a second line below the left one instead of ever
-          overlapping (gap-y keeps the rows apart). */}
+          ROUND-75 (R75, owner: "the following should be shown in one single
+          row: attach file, selecting the access level, selecting the behavior
+          of it, showing the context window and details, selecting the model,
+          selecting the reasoning, sending the message"): ONE flat cluster in
+          the owner's exact order — no left/right split, no justify-between.
+          The box is a CSS @container: below 560px the selector pills' TEXT
+          LABELS hide (icon-only — the row fits at the 480px chat floor; the
+          pills' title tooltips carry the hidden labels). A flex-1 spacer
+          before Continue/Send keeps the action button pinned right when
+          there's room, collapsing to nothing when tight. flex-wrap stays as
+          the R51-c never-overlap emergency fallback for absurd widths. */}
       <div
         role="toolbar"
         aria-label="Composer tools"
         data-composer-toolbar
-        className="flex flex-wrap items-center justify-between gap-x-2 gap-y-1 px-2 pb-2 pt-1"
+        className="flex flex-wrap items-center gap-1 px-2 pb-2 pt-1"
       >
-        <div className="flex items-center gap-1 shrink-0">
-          <AddContextButton projectId={projectId} disabled={!liveMode} onAttachPaths={attachPaths} />
-          <ModeSwitcher mode={permissionMode} disabled={!liveMode} onChange={onModeChange} />
-          {/* ROUND-73 (R73-c): the task-mode pill — adjacent to the permission
-              switcher in the SAME left cluster (shrink-0; the R51-c wrap +
-              spacer rules keep the row from ever overlapping on narrow widths). */}
-          {onTaskModeChange !== undefined ? (
-            <TaskModePicker
-              modes={taskModes}
-              activeMode={activeTaskMode}
-              disabled={taskModeDisabled}
-              onChange={(m) => void onTaskModeChange(m)}
-            />
-          ) : null}
-        </div>
-        {/* ROUND-51 (R51-c): the shrink absorber — the two clusters themselves
-            never shrink (shrink-0), the spacer collapses to nothing first and
-            the row wraps only when the clusters genuinely can't share it. */}
+        <AddContextButton projectId={projectId} disabled={!liveMode} onAttachPaths={attachPaths} />
+        <ModeSwitcher mode={permissionMode} disabled={!liveMode} onChange={onModeChange} />
+        {/* ROUND-73 (R73-c): the task-mode pill — the behavior/posture
+            selector, right after the access-level switcher (the owner's
+            stated order). */}
+        {onTaskModeChange !== undefined ? (
+          <TaskModePicker
+            modes={taskModes}
+            activeMode={activeTaskMode}
+            disabled={taskModeDisabled}
+            onChange={(m) => void onTaskModeChange(m)}
+          />
+        ) : null}
+        <ContextDonut
+          sessionId={sessionId}
+          model={effectiveModel}
+          transcriptLength={transcriptLength}
+          liveTick={liveTick}
+          streaming={streaming}
+          liveMode={liveMode}
+        />
+        <ModelSelector agent={agent} override={modelOverride} onModelChange={onModelChange} disabled={!liveMode} />
+        <ThinkingLevelButton level={thinkingLevel} onChange={onThinkingLevelChange} />
+        {/* R75: the shrink absorber — collapses to nothing when the row is
+            tight so the Send/Stop action hugs the controls; grows to push
+            the action to the right edge when there's room. */}
         <div className="flex-1 min-w-0" aria-hidden />
-        <div className="flex items-center gap-1 shrink-0">
-          <ContextDonut
-            sessionId={sessionId}
-            model={effectiveModel}
-            transcriptLength={transcriptLength}
-            liveTick={liveTick}
-            streaming={streaming}
-            liveMode={liveMode}
-          />
-          <ModelSelector
-            agent={agent}
-            override={modelOverride}
-            onModelChange={onModelChange}
-            disabled={!liveMode}
-          />
-          <ThinkingLevelButton level={thinkingLevel} onChange={onThinkingLevelChange} />
-          {/* ROUND-58 (R58-cf): the Continue affordance — the last turn ended
-              via user stop (the backend persisted the partial + tool results,
-              so this normal follow-up message resumes the response). Secondary
-              style (border + subtle bg), never shown while a turn runs (the
-              Stop button owns that state). */}
-          {showContinue && !busy ? (
-            <button
-              type="button"
-              onClick={() => {
-                onSend(CONTINUE_FROM_STOP_MESSAGE, []);
-                setAtToken(null);
-                setAtDismissedAt(null);
-              }}
-              aria-label="Continue from where you left off"
-              title="Send another message to resume the stopped response"
-              data-continue-button
-              className="h-8 px-3 rounded-xl flex items-center gap-1.5 shrink-0 border text-[11.5px] font-semibold transition-colors"
-              style={{ borderColor: styles.border, background: styles.subtle, color: styles.textSecondary }}
-              onMouseEnter={(e) => (e.currentTarget.style.background = styles.subtleHover)}
-              onMouseLeave={(e) => (e.currentTarget.style.background = styles.subtle)}
-            >
-              <Play size={11} />
-              Continue
-            </button>
-          ) : null}
-          {busy ? (
-            <button
-              type="button"
-              // Stop routes through the stream store (works regardless of
-              // which panel is mounted — ROUND-39 semantics preserved).
-              onClick={onStop}
-              aria-label="Stop generation"
-              title="Stop generation"
-              className="w-8 h-8 rounded-xl grid place-items-center shrink-0 transition-transform hover:scale-105 active:scale-95"
-              style={{ backgroundColor: SEMANTIC_COLORS.danger, color: "#fff" }}
-            >
-              <span className="w-3 h-3 rounded-sm bg-white/90" />
-            </button>
-          ) : (
-            <button
-              type="button"
-              onClick={send}
-              disabled={input.trim() === ""}
-              aria-label="Send message"
-              title="Send (Enter · Shift+Enter for a new line)"
-              className="w-8 h-8 rounded-xl grid place-items-center shrink-0 transition-all hover:scale-105 active:scale-95 disabled:hover:scale-100"
-              style={
-                input.trim() !== ""
-                  ? {
-                      backgroundColor: styles.accent,
-                      color: styles.accentText,
-                      boxShadow: `0 2px 10px ${withAlpha(styles.accent, 0.35)}`,
-                    }
-                  : { backgroundColor: styles.inputBg, color: styles.textTertiary }
-              }
-            >
-              <ArrowUp size={14} strokeWidth={2.5} />
-            </button>
-          )}
-        </div>
+        {/* ROUND-58 (R58-cf): the Continue affordance — the last turn ended
+            via user stop (the backend persisted the partial + tool results,
+            so this normal follow-up message resumes the response). Secondary
+            style (border + subtle bg), never shown while a turn runs (the
+            Stop button owns that state). */}
+        {showContinue && !busy ? (
+          <button
+            type="button"
+            onClick={() => {
+              onSend(CONTINUE_FROM_STOP_MESSAGE, []);
+              setAtToken(null);
+              setAtDismissedAt(null);
+            }}
+            aria-label="Continue from where you left off"
+            title="Send another message to resume the stopped response"
+            data-continue-button
+            className="h-8 px-3 rounded-xl flex items-center gap-1.5 shrink-0 border text-[11.5px] font-semibold transition-colors"
+            style={{ borderColor: styles.border, background: styles.subtle, color: styles.textSecondary }}
+            onMouseEnter={(e) => (e.currentTarget.style.background = styles.subtleHover)}
+            onMouseLeave={(e) => (e.currentTarget.style.background = styles.subtle)}
+          >
+            <Play size={11} />
+            Continue
+          </button>
+        ) : null}
+        {busy ? (
+          <button
+            type="button"
+            // Stop routes through the stream store (works regardless of
+            // which panel is mounted — ROUND-39 semantics preserved).
+            onClick={onStop}
+            aria-label="Stop generation"
+            title="Stop generation"
+            className="w-8 h-8 rounded-xl grid place-items-center shrink-0 transition-transform hover:scale-105 active:scale-95"
+            style={{ backgroundColor: SEMANTIC_COLORS.danger, color: "#fff" }}
+          >
+            <span className="w-3 h-3 rounded-sm bg-white/90" />
+          </button>
+        ) : (
+          <button
+            type="button"
+            onClick={send}
+            disabled={input.trim() === ""}
+            aria-label="Send message"
+            title="Send (Enter · Shift+Enter for a new line)"
+            className="w-8 h-8 rounded-xl grid place-items-center shrink-0 transition-all hover:scale-105 active:scale-95 disabled:hover:scale-100"
+            style={
+              input.trim() !== ""
+                ? {
+                    backgroundColor: styles.accent,
+                    color: styles.accentText,
+                    boxShadow: `0 2px 10px ${withAlpha(styles.accent, 0.35)}`,
+                  }
+                : { backgroundColor: styles.inputBg, color: styles.textTertiary }
+            }
+          >
+            <ArrowUp size={14} strokeWidth={2.5} />
+          </button>
+        )}
       </div>
     </div>
   );

@@ -120,32 +120,12 @@ export const MAX_DELEGATION_DEPTH = 3;
  * index_project (it writes to the DB + walks the tree). Applied as an
  * INTERSECTION with the agent's own allowlist, so a mode never widens it.
  */
-export const PLAN_MODE_TOOLS: readonly string[] = [
-  "read_file",
-  "list_dir",
-  "search_files",
-  "search_code",
-  "web_search",
-  "web_fetch",
-  "browser_control",
-  "todo_write",
-  "memory_save",
-  "memory_recall",
-  "memory_list",
-  "delegate_task",
-  // ROUND-70 (R70-b): reading a skill is an observation exactly like
-  // memory_recall — the prompt's SKILLS section says "call read_skill
-  // FIRST", so plan mode must not advertise the index while the loader
-  // is dark (the D4 dark-tools honesty rule, applied to the mode gate).
-  "read_skill",
-  // ROUND-73 (R73-b follow-up): switching a task mode is an observation-
-  // level SESSION-STATE change (no files, no commands, no network) — the
-  // same D4 honesty rule, now for the TASK MODES section: plan permission
-  // mode advertises the mode index + the "consider switch_mode FIRST"
-  // task-signal line, so the switch must not be dark there. It is also the
-  // natural pairing: plan PERMISSION mode × plan TASK MODE.
-  "switch_mode",
-];
+// ROUND-75 (R75): PLAN_MODE_TOOLS moved to ./mode-policy.ts (the canonical
+// home — the task-mode policy and the permission-mode gate share ONE list).
+// Re-exported for the historical import surface (permission-modes.test.ts).
+export { PLAN_MODE_TOOLS } from "./mode-policy.js";
+import { PLAN_MODE_TOOLS } from "./mode-policy.js";
+import { narrowAllowListByTaskModePolicy } from "./mode-policy.js";
 
 /**
  * The per-mode allowlist transformation (undefined = no restriction).
@@ -770,175 +750,34 @@ export function assembleHistory(db: SqliteDatabase, sessionId: string): SeqMessa
   return messages;
 }
 
-/* ── ROUND-71 (R71-e2, D4): provider-error classification ────────────────────
- *
- * Every provider/stream failure used to flatten to the same generic
- * PROVIDER_ERROR 502 with a scrubbed message — the UI (and the model, on
- * retry) could not tell a rate limit from a dead key from a genuine
- * context-window overflow. cline classifies BEFORE flattening
- * (error-classification.ts: "context_window_exceeded | auth | unknown",
- * status-only auth rule, deliberate rate-limit VETO on the context-window
- * patterns because "tokens exceeded" also appears in TPM messages). We
- * classify into six classes, thread the class into the user-facing message
- * + envelope (additive — the existing prefix and retry policy are
- * UNCHANGED), and feed the class into the D5 overflow-recovery loop.
- */
-
-/** The six provider-failure classes (R71-d design: A6). */
-export type ProviderErrorClass =
-  | "context_window_exceeded"
-  | "auth"
-  | "rate_limit"
-  | "network"
-  | "timeout"
-  | "unknown";
-
-export interface ProviderErrorClassification {
-  class: ProviderErrorClass;
-  /** Class-specific honest one-liner (the "classified line" threaded into
-   * the PROVIDER_ERROR detail — never a raw provider dump). */
-  userMessage: string;
-}
-
-/** Auth statuses — BY STATUS ONLY (cline's rule: matching message text for
- * 401/403 would misfire on provider bodies that merely quote such words). */
-const AUTH_STATUSES = new Set([401, 403]);
-/** Rate-limit status. */
-const RATE_LIMIT_STATUSES = new Set([429]);
-/** Statuses that unambiguously mean "the request payload is too large".
- * (A bare 400/422 is deliberately NOT overflow-classified: providers use
- * them for schema errors too — the message patterns carry the detection.) */
-const CONTEXT_OVERFLOW_STATUSES = new Set([413]);
-
-/** Message shapes that mean "the request does not fit the context window". */
-const CONTEXT_WINDOW_PATTERNS: readonly RegExp[] = [
-  /\bcontext[ _-]?(?:length|window|limit)s?[ _-]?exceed/i,
-  /\bcontext\s+(?:length|window|limit)\b/i,
-  /\bmaximum\s+(?:context|prompt|request|input)\s+(?:length|size|tokens?)\b/i,
-  /\bmaximum.*\btokens?\b/i,
-  /\b(?:prompt|request|input)\s+(?:is\s+)?too\s+long\b/i,
-  /\btoo\s+many\s+(?:input\s+)?tokens\b/i,
-  /\bexceeds?\s+(?:the\s+)?(?:maximum|allowed|context|token)\b/i,
-  /\binput.*tokens?\s+exceed/i,
-];
-
-/** Message shapes that mean rate limiting (checked BEFORE the context-window
- * patterns — the veto: "tokens exceeded" wording also appears in TPM
- * rate-limit bodies, and a misfiled overflow would trigger D5 recovery on a
- * request that compaction cannot fix). */
-const RATE_LIMIT_PATTERNS: readonly RegExp[] = [
-  /\brate[ _-]?limit/i,
-  /\btoo\s+many\s+requests\b/i,
-  /\b(?:requests|tokens|TPM|RPM|quota)[ _-]?(?:limit|exceeded|exhausted)\b/i,
-];
-
-/** Message shapes that mean connection/transport failure. */
-const NETWORK_PATTERNS: readonly RegExp[] = [
-  /\b(?:ECONNRESET|ECONNREFUSED|ETIMEDOUT|EAI_AGAIN|ENOTFOUND|EHOSTUNREACH|ENETUNREACH)\b/,
-  /\bUND_ERR_(?:SOCKET|HEADERS_TIMEOUT|BODY_TIMEOUT)\b/,
-  /\b(?:fetch|socket|network)\s+(?:failed|error)\b/i,
-  /\bsocket\s+hang\s?up\b/i,
-  /\b(?:connection|network)\s+(?:reset|refused|closed|error)\b/i,
-  /\b(?:internal server error|service unavailable|bad gateway|server error)\b/i,
-];
-
-/** Extract a numeric HTTP status from a provider error object. The AI SDK
- * throws APICallError {statusCode}; wrapped/normalized errors carry it under
- * status/data — a shallow bounded walk (never a throw) covers the rest. */
-function extractStatus(error: unknown): number | null {
-  const seen = new Set<unknown>();
-  const walk = (value: unknown, depth: number): number | null => {
-    if (value === null || typeof value !== "object" || depth > 3) return null;
-    if (seen.has(value)) return null;
-    seen.add(value);
-    try {
-      const record = value as Record<string, unknown>;
-      for (const key of ["statusCode", "status", "responseStatus"]) {
-        const raw = record[key];
-        if (typeof raw === "number" && Number.isInteger(raw) && raw > 0) return raw;
-      }
-      for (const child of [record.data, record.cause, record.error, record.response]) {
-        const found = walk(child, depth + 1);
-        if (found !== null) return found;
-      }
-    } catch {
-      /* unreachable-object guard — treat as no status */
-    }
-    return null;
-  };
-  return walk(error, 0);
-}
-
-/** Was the error an abort/timeout (AbortSignal.timeout, a user stop that
- * reached the SDK, a provider-side timeout)? */
-function isAbortLike(error: unknown, message: string): boolean {
-  const name = error instanceof Error ? error.name : "";
-  return name === "TimeoutError" || name === "AbortError" || /\b(?:timed?\s?out|timeout)\b/i.test(message);
-}
-
-const CLASS_MESSAGES: Record<ProviderErrorClass, string> = {
-  context_window_exceeded: "context window exceeded — the request is larger than the model's context window",
-  auth: "authentication failed — the provider rejected the API key",
-  rate_limit: "rate limited — the provider is throttling requests",
-  network: "network/server error — the provider connection failed",
-  timeout: "timeout — the provider call did not complete in time",
-  unknown: "unclassified provider error",
-};
-
-/** Classify a provider/stream error (R71-e2 D4). Pure; never throws. */
-export function classifyProviderError(error: unknown): ProviderErrorClassification {
-  const message = error instanceof Error ? error.message : String(error);
-  const status = extractStatus(error);
-  // 1. Abort/timeout shapes first — TimeoutError/AbortError are unambiguous,
-  // and no later pattern should steal them.
-  if (isAbortLike(error, message)) {
-    return { class: "timeout", userMessage: CLASS_MESSAGES.timeout };
-  }
-  // 2. Status-only classes.
-  if (status !== null && AUTH_STATUSES.has(status)) {
-    return { class: "auth", userMessage: CLASS_MESSAGES.auth };
-  }
-  if (status !== null && RATE_LIMIT_STATUSES.has(status)) {
-    return { class: "rate_limit", userMessage: CLASS_MESSAGES.rate_limit };
-  }
-  // 3. Rate-limit patterns (the deliberate VETO before overflow matching).
-  if (RATE_LIMIT_PATTERNS.some((re) => re.test(message))) {
-    return { class: "rate_limit", userMessage: CLASS_MESSAGES.rate_limit };
-  }
-  // 4. Context-window overflow (message patterns or the 413 payload-too-large
-  //    status — a bare 400/422 is deliberately not overflow-classified).
-  if (CONTEXT_WINDOW_PATTERNS.some((re) => re.test(message)) || (status !== null && CONTEXT_OVERFLOW_STATUSES.has(status))) {
-    return { class: "context_window_exceeded", userMessage: CLASS_MESSAGES.context_window_exceeded };
-  }
-  // 5. Network/transport (patterns or any 5xx).
-  if (NETWORK_PATTERNS.some((re) => re.test(message)) || (status !== null && status >= 500)) {
-    return { class: "network", userMessage: CLASS_MESSAGES.network };
-  }
-  return { class: "unknown", userMessage: CLASS_MESSAGES.unknown };
-}
-
-/** Error text for a 502 envelope — scrubbed of the API key, then length-capped. */
-function providerErrorDetail(error: unknown, apiKey: string): string {
-  const raw = error instanceof Error ? error.message : String(error);
-  const scrubbed = raw.split(apiKey).join("***");
-  return scrubbed.length > 500 ? `${scrubbed.slice(0, 500)}…` : scrubbed;
-}
-
-/** R71-e2 D4: the user-facing PROVIDER_ERROR message — the existing prefix
- * (tests pin it) with the class appended; a classified terminal line for the
- * D5 "overflow even after compaction" case. */
-function providerFailureMessage(
-  providerId: string,
-  sessionId: string,
-  classified: ProviderErrorClassification,
-  overflowAlreadyRecovered: boolean,
-): string {
-  const base = `provider '${providerId}' call failed for session ${sessionId} (class: ${classified.class})`;
-  if (classified.class === "context_window_exceeded" && overflowAlreadyRecovered) {
-    return `${base} — context window exceeded even after compaction — start a new session or /compact`;
-  }
-  return base;
-}
+/* ── ROUND-75 (R75): provider-error classification moved to the pure module
+ * ./error-classification.ts (the retry ladder in lib/retry.ts needs the
+ * class WITHOUT importing this 2.8k-line runtime — a cycle otherwise).
+ * Re-exported below so the historical import surface (tests, debug-analyst)
+ * is unchanged. ──────────────────────────────────────────────────────────── */
+export {
+  classifyProviderError,
+  isTransientApiFailure,
+  providerErrorDetail,
+  providerFailureMessage,
+  type ProviderErrorClass,
+  type ProviderErrorClassification,
+} from "./error-classification.js";
+import {
+  classifyProviderError,
+  providerErrorDetail,
+  providerFailureMessage,
+  type ProviderErrorClass,
+} from "./error-classification.js";
+import { isTransientApiFailure } from "./error-classification.js";
+import {
+  RETRY_LADDER_MS,
+  RETRY_TOTAL_ATTEMPTS,
+  clearActiveRetryWait,
+  formatRetryWaitMs,
+  registerActiveRetryWait,
+  waitForRetry,
+} from "../lib/retry.js";
 
 /**
  * ROUND-43 (owner: "if for some reason our model failed to get a response…
@@ -968,6 +807,10 @@ function persistTurnError(
     /** ROUND-71 (R71-e2, D4): the provider-error class, when one was
      * classified (additive payload field — older readers ignore it). */
     errorClass?: ProviderErrorClass;
+    /** ROUND-75 (R75): total attempts when the transient-API retry ladder
+     * ran (1 = no ladder). Additive payload field — the error card renders
+     * "failed after N attempts" only when > 1. */
+    attempts?: number;
   },
 ): string {
   const event = appendSessionEvent(db, args.sessionId, {
@@ -981,6 +824,7 @@ function persistTurnError(
       providerError: scrubSecrets(args.providerError, args.keySecrets),
       userSeq: args.userSeq,
       ...(args.errorClass !== undefined ? { errorClass: args.errorClass } : {}),
+      ...(args.attempts !== undefined ? { attempts: args.attempts } : {}),
     },
   });
   // The turn is over (not mid-flight) — `queued` keeps the session open for
@@ -1388,9 +1232,17 @@ async function prepareTurn(
     }
   }
   const allowListWithTaskMode = narrowAllowListByTaskMode(allowListWithMode, activeTaskMode);
+  // ROUND-75 (R75): the TASK-MODE POLICY — the hard enforcement the task
+  // modes never had. plan/review/explore intersect the allowlist down to a
+  // read-only set (write_file/edit_file/create_dir/delete_file/run_command/
+  // index_project/job_stop REMOVED — the model never even sees them; debug
+  // keeps the full toolset with its command-tier gate in approvals.ts;
+  // build/refactor/customs pass through). Applied AFTER the R73 frontmatter
+  // narrowing: a custom shadow of a read-only builtin stays read-only.
+  const allowListWithModePolicy = narrowAllowListByTaskModePolicy(allowListWithTaskMode, activeTaskMode);
   const tools =
     project !== undefined
-      ? await buildProjectTools(project.rootPath, allowListWithTaskMode, toolDeps)
+      ? await buildProjectTools(project.rootPath, allowListWithModePolicy, toolDeps)
       : undefined;
   // ROUND-70 (R70-c, D1): the turn's REAL environment — OS/shell/date/git,
   // computed here (per turn, never cached across turns, never blocking:
@@ -1625,7 +1477,7 @@ export async function runSingleAgentTurn(
         status: 502;
         code: "PROVIDER_ERROR";
         message: string;
-        details: { providerError: string; errorClass?: ProviderErrorClass; classMessage?: string };
+        details: { providerError: string; errorClass?: ProviderErrorClass; classMessage?: string; attempts?: number };
       }
     | null = null;
   // ROUND-48 (R48-e1): set when the loop exits via the between-iterations
@@ -1638,6 +1490,9 @@ export async function runSingleAgentTurn(
   // ESTIMATE says the history fits (a provider-rejected overflow is the
   // ground truth — our ±15% estimate is the guess that missed it).
   let overflowRecovered = false;
+  // ROUND-75 (R75): the transient-API retry ladder's used rungs this turn
+  // (0 = none yet; capped at RETRY_LADDER_MS.length = 5 → 6 total attempts).
+  let providerRetries = 0;
   let forceCompaction = false;
   // ROUND-48 (R48-e1, stretch): count of steps the adapter reported LIVE via
   // onStepFinish. When > 0 the tool/text events for THIS chat() call were
@@ -1786,17 +1641,80 @@ export async function runSingleAgentTurn(
         });
         continue;
       }
+      // ROUND-75 (R75): the TRANSIENT-API RETRY LADDER — the owner's spec.
+      // rate_limit / network / timeout failures retry per the schedule
+      // [immediate → 1.5 min → 5 min → 10 min → 30 min → terminal]; every
+      // other class (auth, overflow — handled above, unknown) fails fast.
+      // The retry re-runs THIS iteration (outerIter is compensated below),
+      // history re-assembles from the event log, and the SSE meta.retry
+      // frames keep the stream alive + the countdown visible. A user stop
+      // during the wait aborts the wait immediately and routes through the
+      // loop-top signal guard (a stop is never an error).
+      if (isTransientApiFailure(classified.class) && providerRetries < RETRY_LADDER_MS.length) {
+        providerRetries += 1;
+        const waitMs = RETRY_LADDER_MS[providerRetries - 1];
+        const attempt = providerRetries + 1;
+        const emitRetry = (remainingMs: number): void => {
+          emit?.({
+            type: "meta.retry",
+            sessionId: session.id,
+            attempt,
+            totalAttempts: RETRY_TOTAL_ATTEMPTS,
+            waitMs,
+            remainingMs,
+            retryAt: Date.now() + remainingMs,
+            errorClass: classified.class,
+            classMessage: classified.userMessage,
+            message: `${classified.userMessage} — retrying (attempt ${attempt} of ${RETRY_TOTAL_ATTEMPTS}) in ${formatRetryWaitMs(remainingMs)}`,
+          });
+        };
+        emitRetry(waitMs);
+        log("warn", "provider.retry_ladder", {
+          sessionId: session.id,
+          agentId: agent.id,
+          providerId: provider.id,
+          model,
+          attempt,
+          totalAttempts: RETRY_TOTAL_ATTEMPTS,
+          waitMs,
+          errorClass: classified.class,
+        });
+        registerActiveRetryWait({
+          sessionId: session.id,
+          attempt,
+          totalAttempts: RETRY_TOTAL_ATTEMPTS,
+          waitMs,
+          startedAt: Date.now(),
+          until: Date.now() + waitMs,
+        });
+        const waitOutcome = await waitForRetry({ waitMs, signal, onTick: emitRetry });
+        clearActiveRetryWait(session.id);
+        if (waitOutcome === "completed") {
+          // The retry re-runs THIS iteration — compensate the for-increment
+          // so the ladder never spends the outer-loop budget (bounded by
+          // providerRetries, never infinite). (An abort landing in the
+          // deadline race still self-corrects: the next call throws on the
+          // aborted signal and the catch routes to ABORTED.)
+          outerIter -= 1;
+        }
+        // Aborted during the wait (user stop) → the plain continue: the
+        // loop-top signal guard breaks out and the stopped flow returns the
+        // honest ABORTED outcome.
+        continue;
+      }
       lastError = {
         ok: false,
         status: 502,
         code: "PROVIDER_ERROR",
-        message: providerFailureMessage(provider.id, session.id, classified, overflowRecovered),
+        message: providerFailureMessage(provider.id, session.id, classified, overflowRecovered, providerRetries + 1),
         // R71-e2 D4: the class + the class-specific honest line ride the
         // envelope additively (existing readers only look at providerError).
+        // R75: attempts (ladder rungs used + the initial call) — additive.
         details: {
           providerError: providerErrorDetail(normalized, apiKey),
           errorClass: classified.class,
           classMessage: classified.userMessage,
+          attempts: providerRetries + 1,
         },
       };
       break;
@@ -2044,15 +1962,45 @@ export async function runSingleAgentTurn(
       // R71-e2 D4: the classified class, when the failure went through the
       // classifier (the no-response fallback default carries none).
       ...(fallback.details?.errorClass !== undefined ? { errorClass: fallback.details.errorClass } : {}),
+      // R75: the attempts count, when the retry ladder ran before the
+      // iter-0 death (immediate-retry rung).
+      ...(fallback.details?.attempts !== undefined ? { attempts: fallback.details.attempts } : {}),
       keySecrets,
     });
     return fallback;
   }
 
-  // ROUND-43: a provider failure on a LATER iteration (after partial replies)
-  // still ends the turn abnormally — persist the error event so the timeline
-  // shows the failure after the partial work instead of ending silently.
+  // ROUND-43 → ROUND-75 (R75): a provider failure on a LATER iteration
+  // (after partial replies) still ends the turn abnormally — persist the
+  // error event so the timeline shows the failure after the partial work
+  // instead of ending silently. R75 FIX (the "sub-agent completed" lie):
+  // this block used to persist turn.error and then FALL THROUGH to the
+  // ok:true return — the orchestrator marked the child completed, fired
+  // subagent_complete, and told the parent model the half-done work
+  // succeeded (the owner's "the agent stops halfway and shows no error").
+  // Now it mirrors the streamed twin exactly: record the real usage of the
+  // completed iterations (the LOOP_GUARD precedent — the spend was real),
+  // persist the error, reset to `queued` (persistTurnError does), and
+  // return the 502 — the orchestrator marks the child failed and the
+  // parent decides what to do with the truth.
   if (lastError !== null) {
+    if (lastAssistantEvent !== null && (totalInputTokens > 0 || totalOutputTokens > 0)) {
+      recordUsage(
+        db,
+        {
+          agentId: agent.id,
+          sessionId: session.id,
+          provider: provider.id,
+          model,
+          inputTokens: totalInputTokens,
+          outputTokens: totalOutputTokens,
+          cachedInputTokens: totalCachedInputTokens,
+          costUsd: computeCost(db, provider.id, model, totalInputTokens, totalOutputTokens),
+          ts: lastAssistantEvent.ts,
+        },
+        keySlot,
+      );
+    }
     persistTurnError(db, {
       sessionId: session.id,
       agentId: agent.id,
@@ -2064,8 +2012,23 @@ export async function runSingleAgentTurn(
       providerError: String(lastError.details.providerError),
       // R71-e2 D4: the classified class rides the persisted payload.
       ...(lastError.details.errorClass !== undefined ? { errorClass: lastError.details.errorClass } : {}),
+      // R75: the attempts count, when the retry ladder ran.
+      ...(lastError.details.attempts !== undefined ? { attempts: lastError.details.attempts } : {}),
       keySecrets,
     });
+    logTurnEnd(session.id, false, Date.now() - syncStartedAt, totalInputTokens, totalOutputTokens);
+    return {
+      ok: false,
+      status: 502,
+      code: "PROVIDER_ERROR",
+      message: lastError.message,
+      details: {
+        providerError: String(lastError.details.providerError),
+        errorClass: lastError.details.errorClass,
+        classMessage: lastError.details.classMessage,
+        attempts: lastError.details.attempts,
+      },
+    };
   }
 
   const usage: UsageRecord = {
@@ -2230,6 +2193,9 @@ export async function runStreamedAgentTurn(
   // sync path above (ONE forced-compaction + retry per turn, armed by the
   // catch below when the provider itself rejected the request as too large).
   let overflowRecovered = false;
+  // ROUND-75 (R75): the transient-API retry ladder's used rungs this turn
+  // (0 = none yet; capped at RETRY_LADDER_MS.length = 5 → 6 total attempts).
+  let providerRetries = 0;
   let forceCompaction = false;
 
   for (let outerIter = 0; outerIter < maxOuterLoops; outerIter++) {
@@ -2557,6 +2523,109 @@ export async function runStreamedAgentTurn(
         });
         continue;
       }
+      // ROUND-75 (R75): the TRANSIENT-API RETRY LADDER — the owner's spec.
+      // rate_limit / network / timeout failures retry per the schedule
+      // [immediate → 1.5 min → 5 min → 10 min → 30 min → terminal]; every
+      // other class (auth, overflow — handled above, unknown) fails fast
+      // through the honest terminal path below. Before re-running the
+      // iteration the PARTIAL streamed text is flushed to the event log
+      // (the R58-c abort-path precedent) so the retry's re-assembled
+      // history includes everything the model already said. The wait is
+      // abort-aware (a user stop cuts it short and routes through the
+      // catch's signal.aborted path above on the next throw) and ticks
+      // meta.retry heartbeats (SSE keep-alive + live countdown).
+      if (isTransientApiFailure(classified.class) && providerRetries < RETRY_LADDER_MS.length) {
+        providerRetries += 1;
+        const waitMs = RETRY_LADDER_MS[providerRetries - 1];
+        const attempt = providerRetries + 1;
+        const emitRetry = (remainingMs: number): void => {
+          emit({
+            type: "meta.retry",
+            sessionId: session.id,
+            attempt,
+            totalAttempts: RETRY_TOTAL_ATTEMPTS,
+            waitMs,
+            remainingMs,
+            retryAt: Date.now() + remainingMs,
+            errorClass: classified.class,
+            classMessage: classified.userMessage,
+            message: `${classified.userMessage} — retrying (attempt ${attempt} of ${RETRY_TOTAL_ATTEMPTS}) in ${formatRetryWaitMs(remainingMs)}`,
+          });
+        };
+        emitRetry(waitMs);
+        log("warn", "provider.retry_ladder", {
+          sessionId: session.id,
+          agentId: agent.id,
+          providerId: provider.id,
+          model,
+          attempt,
+          totalAttempts: RETRY_TOTAL_ATTEMPTS,
+          waitMs,
+          errorClass: classified.class,
+        });
+        registerActiveRetryWait({
+          sessionId: session.id,
+          attempt,
+          totalAttempts: RETRY_TOTAL_ATTEMPTS,
+          waitMs,
+          startedAt: Date.now(),
+          until: Date.now() + waitMs,
+        });
+        const waitOutcome = await waitForRetry({ waitMs, signal, onTick: emitRetry });
+        clearActiveRetryWait(session.id);
+        // The partial text/thinking persists now (stats unknown — the
+        // finish frame never arrived); the retry iteration re-assembles
+        // history from the log and CONTINUES from it. (In the aborted case
+        // the abort path's own flush becomes a no-op on the now-empty
+        // segment — the partial work is never lost or duplicated.)
+        flushSegment(true);
+        if (waitOutcome === "completed") {
+          // The retry re-runs THIS iteration — compensate the for-increment
+          // so the ladder never spends the outer-loop budget (bounded by
+          // providerRetries, never infinite).
+          outerIter -= 1;
+        }
+        // Aborted during the wait (user stop) → the plain continue: the
+        // re-run call throws immediately on the aborted signal and the
+        // catch's signal.aborted path above returns the honest ABORTED
+        // outcome. (An abort landing in the deadline race self-corrects
+        // the same way.)
+        continue;
+      }
+      // ROUND-75 (R75): the partial streamed text survives THIS exit too —
+      // the R58-c abort flush, extended to the terminal error path (the
+      // owner's "no silent loss" rule: abort, retry, and terminal failure
+      // all keep what the model already said). The flush lands the
+      // in-flight segment (stats unknown — the finish frame never came),
+      // so the transcript shows the partial work followed by the error
+      // card, and a follow-up "continue" resumes from it.
+      flushSegment(true);
+      // R75: the usage of completed iterations is real spend — record it
+      // (the LOOP_GUARD + sync-swallow precedent; the pre-R75 error path
+      // dropped it). The const capture keeps TS's flow analysis stable
+      // across the awaits above (closure-assigned variables lose their
+      // narrowing at await points).
+      // (The cast tells TS the truth the closure hides: flushSegment — the
+      // only writer — may have assigned a real event; without it TS narrows
+      // the declaration's `null` through the whole catch.)
+      const lastAssistantForUsage = lastAssistantEvent as { seq: number; ts: string; content: string } | null;
+      if (lastAssistantForUsage !== null && (totalInputTokens > 0 || totalOutputTokens > 0)) {
+        recordUsage(
+          db,
+          {
+            agentId: agent.id,
+            sessionId: session.id,
+            provider: provider.id,
+            model,
+            inputTokens: totalInputTokens,
+            outputTokens: totalOutputTokens,
+            cachedInputTokens: totalCachedInputTokens,
+            costUsd: computeCost(db, provider.id, model, totalInputTokens, totalOutputTokens),
+            ts: lastAssistantForUsage.ts,
+          },
+          keySlot,
+        );
+      }
       logTurnEnd(session.id, false, Date.now() - startedAt, totalInputTokens, totalOutputTokens);
       // ROUND-43: persist the failure into the session timeline BEFORE
       // returning — otherwise the owner's reload shows a conversation that
@@ -2566,7 +2635,11 @@ export async function runStreamedAgentTurn(
       const providerErrorText = providerErrorDetail(normalized, apiKey);
       // R71-e2 D4: the class rides the message (the pinned prefix is kept)
       // and the envelope; D5's terminal line names the twice-overflow case.
-      const message = providerFailureMessage(provider.id, session.id, classified, overflowRecovered);
+      // R75: the attempts count (ladder rungs used + the initial call)
+      // rides the message + payload + envelope — the error card says
+      // "failed after N attempts" when the ladder ran.
+      const attempts = providerRetries + 1;
+      const message = providerFailureMessage(provider.id, session.id, classified, overflowRecovered, attempts);
       const errorTs = persistTurnError(db, {
         sessionId: session.id,
         agentId: agent.id,
@@ -2577,6 +2650,7 @@ export async function runStreamedAgentTurn(
         providerId: provider.id,
         providerError: providerErrorText,
         errorClass: classified.class,
+        attempts,
         keySecrets,
       });
       return {
@@ -2590,6 +2664,10 @@ export async function runStreamedAgentTurn(
           classMessage: classified.userMessage,
           model,
           userSeq: userEvent.seq,
+          // R75: the total attempts (1 = no ladder ran) — the live error
+          // card's "failed after N attempts" line + the task_failed
+          // notification's body both read it.
+          attempts,
           // ROUND-43: the persisted event's ts — the live UI matches on it to
           // swap the streamed error card for the folded one (no duplicates).
           errorTs,

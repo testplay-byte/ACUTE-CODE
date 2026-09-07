@@ -1,4 +1,4 @@
-<!-- last-reviewed: 2026-08-30 round-54 -->
+<!-- last-reviewed: 2026-09-07 round-75 -->
 # Aider — Architecture
 
 All facts verified against the live repo (`main` branch) via raw file fetches and the aider.chat docs. Python codebase; entry point `aider = "aider.main:main"` (`pyproject.toml`); CLI surface defined with **argparse** in `aider/args.py` (`get_parser`) — not typer.

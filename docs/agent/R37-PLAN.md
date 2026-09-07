@@ -1,4 +1,4 @@
-<!-- last-reviewed: 2026-08-30 round-54 -->
+<!-- last-reviewed: 2026-09-07 round-75 -->
 # ACUTE-CODE — Round 37 Plan
 
 **Status:** APPROVED-WITH-AMENDMENTS (v2 — plan review passed; amendments folded

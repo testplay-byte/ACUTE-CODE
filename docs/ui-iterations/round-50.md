@@ -1,4 +1,4 @@
-<!-- last-reviewed: 2026-08-30 round-54 -->
+<!-- last-reviewed: 2026-09-07 round-75 -->
 # Round 50 — The native embedded browser (real Chromium child webviews inside the app window) · sub-agents stream their raw thinking/text live · 5-attempt retries · the owner-spec chat composer (permission modes, thinking levels, attachments, the context donut, provider-flyout model picker) · the Models & Providers rework
 
 **Date:** 2026-08-30 · **Branch:** `main` · **Version:** 0.50.0 · **Owner directives:** every workstream in this round traces to the owner's third Windows test session after R49.

@@ -1,4 +1,4 @@
-<!-- last-reviewed: 2026-09-05 round-66 -->
+<!-- last-reviewed: 2026-09-07 round-75 -->
 # Round 66 — The live-fire patch: browser page actions, owner-solvable bot walls, the vision split, the post-turn debug analyst, and Windows element search
 
 **Date:** 2026-09-04 · **Branch:** `main` · **Version:** 0.66.0 · **Owner

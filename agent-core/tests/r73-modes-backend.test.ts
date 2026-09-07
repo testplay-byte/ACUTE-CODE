@@ -618,7 +618,7 @@ describe("R73-b D4: the routes", () => {
     expect(getSession(db, sessionId)?.title).toBe("Posture switch");
   });
 
-  it("GET /projects/:id/modes: metadata-only shape (id/name/description/source — NEVER a body field) + the six builtins in order", async () => {
+  it("GET /projects/:id/modes: metadata-only shape (id/name/description/source/readOnly — NEVER a body field) + the six builtins in order", async () => {
     const root = mkdtempSync(join(tempDir, "modes-proj-"));
     const project = createProject(db, { name: "R73b Modes Project", rootPath: root });
     const response = await authInject({ method: "GET", url: `/api/v1/projects/${project.id}/modes` });
@@ -626,9 +626,20 @@ describe("R73-b D4: the routes", () => {
     const body = response.json() as { modes: Array<Record<string, unknown>> };
     expect(body.modes.map((m) => m.id)).toEqual(["plan", "debug", "build", "review", "explore", "refactor"]);
     for (const mode of body.modes) {
-      expect(Object.keys(mode).sort()).toEqual(["description", "id", "name", "source"]);
+      // R75: readOnly (the mode-policy tier) joined the metadata — the
+      // picker badges the enforced read-only postures without duplicating
+      // the set client-side.
+      expect(Object.keys(mode).sort()).toEqual(["description", "id", "name", "readOnly", "source"]);
       expect(mode.source).toBe("builtin");
     }
+    // The read-only flags: plan/review/explore true, the rest false.
+    const byId = new Map(body.modes.map((m) => [m.id, m.readOnly]));
+    expect(byId.get("plan")).toBe(true);
+    expect(byId.get("review")).toBe(true);
+    expect(byId.get("explore")).toBe(true);
+    expect(byId.get("debug")).toBe(false);
+    expect(byId.get("build")).toBe(false);
+    expect(byId.get("refactor")).toBe(false);
     // The deep bodies are PROMPT-side: never served here.
     expect(JSON.stringify(body)).not.toContain("# Mode: plan");
   });
@@ -780,7 +791,11 @@ describe("R73-b D5: the switch_mode tool", () => {
     expect(noop.ok).toBe(true);
     expect(noop.output).toContain("No task mode was active — nothing to deactivate.");
     // A JSON null is accepted as clear too (lenient schema layers pass it).
-    await tool.execute({ mode: "review" }, { root: tempDir });
+    // ROUND-75 (R75): the probe mode here must be NON-read-only — plan/
+    // review/explore are OWNER-PINNED (switch_mode cannot leave or clear
+    // them; the r75-mode-policy suite pins that refusal). The null-clear
+    // contract itself is what this block tests — build carries it.
+    await tool.execute({ mode: "build" }, { root: tempDir });
     const viaNull = await tool.execute({ mode: null }, { root: tempDir });
     expect(viaNull.ok).toBe(true);
     expect(getSession(db, session.id)?.activeMode).toBeNull();

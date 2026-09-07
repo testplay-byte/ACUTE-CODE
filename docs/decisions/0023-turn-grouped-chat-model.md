@@ -1,4 +1,4 @@
-<!-- last-reviewed: 2026-08-30 round-54 -->
+<!-- last-reviewed: 2026-09-07 round-75 -->
 # ADR-0023: Turn-grouped chat model (the Working section)
 
 **Status:** Accepted (round 37, 2026-08-25)

@@ -1,4 +1,4 @@
-<!-- last-reviewed: 2026-08-30 round-54 -->
+<!-- last-reviewed: 2026-09-07 round-75 -->
 # Round 52 — Command supervision (background jobs + the hang fix + live terminal output) · sub-agents stoppable & supervised (the shared turn registry + the heartbeat watchdog) · the REAL in-app Usage screen · the plugin-based tool system (ADR-0025) · the model-flyout hover bridge
 
 **Date:** 2026-08-30 · **Branch:** `main` · **Version:** 0.52.0 · **Owner directives:** the fifth Windows test session's feedback — "complete all the remaining things and handle the things properly."

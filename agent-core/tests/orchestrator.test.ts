@@ -302,7 +302,14 @@ describe("ROUND-36: sub-agent orchestration (ADR-0022)", () => {
     db.prepare("UPDATE sessions SET status = 'running' WHERE id = ?").run(stale.id);
     const swept = Orchestrator.sweepStaleRunning(db);
     expect(swept).toBeGreaterThanOrEqual(1);
-    expect(getSession(db, stale.id)?.status).toBe("failed");
+    // ROUND-75 (R75): swept sessions stay RETRYABLE (queued — the R43
+    // persistTurnError resting state) instead of terminal `failed`, and the
+    // sweep writes the honest INTERRUPTION event into the timeline.
+    expect(getSession(db, stale.id)?.status).toBe("queued");
+    const events = listSessionEvents(db, stale.id);
+    const error = events.find((e) => e.type === "turn.error");
+    expect(error).toBeDefined();
+    expect((error!.payload as Record<string, unknown>).code).toBe("INTERRUPTED");
   });
 
   it("orchestration settings round-trip with clamping", async () => {

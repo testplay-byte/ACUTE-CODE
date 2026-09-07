@@ -1,4 +1,4 @@
-<!-- last-reviewed: 2026-09-07 round-74 -->
+<!-- last-reviewed: 2026-09-07 round-75 -->
 # TESTING — the verification ladder
 
 Five layers; each has a defined "when mandatory". Rules here are binding
@@ -13,15 +13,15 @@ Five layers; each has a defined "when mandatory". Rules here are binding
 | L4 live battery | real provider turn(s), real disk, fresh DB | sandbox, single invocation | anything touching agents, projects, tools, streaming |
 | L5 browser verification | real UI against the live stack; screenshots machine-verified | sandbox, single invocation | any UI-affecting round |
 
-**Current counts (R74, verified 2026-09-07 by re-running the suites):**
-the root `pnpm test` = **2558 tests in 138 files, all green** (measured
+**Current counts (R75, verified 2026-09-07 by re-running the suites):**
+the root `pnpm test` = **2613 tests in 140 files, all green** (measured
 without a fresh `agent-core/dist` — the 12 sidecar-e2e report as
-env-gated skips: 2546 passed + 12 skipped; with the dist present they
-run in-suite. agent-core alone = **1637/1637 in 74 files** (unchanged
-this round — no TS surface touched), frontend alone = **909/909 in 62
-files** (61 `src/` files + `shared/src/index.test.ts` per the root
-workspace config, the same convention R72's 890 used). The arithmetic
-reconciles exactly: 1,637 + 909 + 12 = 2,558 (74 + 62 + 2 = 138 files).
+env-gated skips; with the dist present they run in-suite). agent-core
+alone = **1685/1685 in 76 files** (+48 over R74's 1637: two NEW suites),
+frontend alone = **916/916 in 62 files** (+7 over R74's 909: the picker
+badge/hover contracts, the single-row toolbar contract, the retry-card
+suite, the stream-store meta.retry frames). The arithmetic reconciles
+exactly: 1,685 + 916 + 12 = 2,613 (76 + 62 + 2 = 140 files).
 **Plus a NEW fourth suite surface (R74): the launcher's Python unittest
 — `launcher/tests/test_pick_latest_release.py`, 10/10, stdlib-only,
 run via `python launcher/tests/test_pick_latest_release.py` (or
@@ -35,7 +35,29 @@ Trajectory: 262 (R42) → 397 (R43) → 471 (R44) → 565 (R45) →
 (R64) → 1686 (R65) → 1807 (R66) → 1961 (R67) → 2003 (R68) → 2082 (R69) →
 2177 (R70) → 2287 (R71) → 2423 (R72) → 2558 (R73) → 2558 (R74 — the root
 suite unchanged by design: the round's code is Python; its +10 live on
-the new launcher surface above).
+the new launcher surface above) → 2613 (R75 — +55: +48 agent-core across
+two NEW suites, +19 frontend minus the 12 e2e overlap accounting).
+
+**R75 (the reliability & enforcement round):** TWO NEW agent-core
+suites + one extended chat suite: `r75-retry-ladder` **19** (NEW: the
+owner's ladder schedule verbatim in constants, the transient split,
+waitForRetry's deadline/abort/tick semantics under fake timers, the
+active-wait registry, the formatter; streamed integration — the
+immediate-rung recovery with the meta.retry frame shape, the FULL
+ladder exhaustion through fake-timer advance of all four timed rungs
+→ attempts=6 on the envelope + the persisted turn.error + queued, the
+non-transient second failure stopping at attempts=2, the user-stop-
+during-a-wait → ABORTED; sync integration — the immediate rung + THE
+SWALLOW FIX: a failure after partial replies returns 502 + a usage row,
+never ok:true) and `r75-mode-policy` **27** (NEW: the policy sets with
+registry-vocabulary validation, the intersection semantics incl. the
+NO_TOOLS sentinel and custom-shadow pinning, TURN integration for all
+six modes + modeless byte-identity (toolset + prompt toolNames + the
+ENFORCED body line), the debug command tier (4 approval cases incl.
+debug × Full-Access denial), delegation inheritance, and the switch_mode
+owner-pinning refusals). Plus chat-format's error-PART re-throw pair
+(the live-429 find: an {type:'error'} fullStream part THROWS the
+original error, and the RetryError message classifies rate_limit).
 
 **R74 (the updater-freeze round):** root 2558 re-run green, unchanged —
 the round changed ONE Python file (`launcher/acute_launcher.py`, the

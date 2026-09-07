@@ -1,4 +1,4 @@
-<!-- last-reviewed: 2026-09-06 round-70 -->
+<!-- last-reviewed: 2026-09-07 round-75 -->
 # COMPUTER USE — the desktop-control system (owner's guide)
 
 **Status:** normative · **Established:** round-61 (owner directive: computer

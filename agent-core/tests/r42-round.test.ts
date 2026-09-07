@@ -35,6 +35,7 @@ import { buildServer } from "../src/server";
 import {
   appendSessionEvent,
   createSession,
+  listSessionEvents,
   maybeAutoTitleSession,
 } from "../src/storage/sessions";
 import { createProject } from "../src/storage/projects";
@@ -364,6 +365,17 @@ describe("Orchestrator.sweepStaleRunning (ROUND-42 fix)", () => {
       .all() as Array<{ id: string; status: string }>;
     const byId = new Map(statuses.map((s) => [s.id, s.status]));
     expect(byId.get(sessionA.id)).toBe("queued"); // alive — accepts messages
-    expect(byId.get(sessionB.id)).toBe("failed"); // crashed — fail closed
+    // ROUND-75 (R75): the crashed session ALSO lands in `queued` — the
+    // pre-R75 terminal `failed` 409'd the next send ("session is failed and
+    // no longer accepts messages") and left NOTHING in the timeline (the
+    // owner's "it just outright stops there" report). Now the sweep writes
+    // the honest INTERRUPTION event and keeps the session retryable.
+    expect(byId.get(sessionB.id)).toBe("queued");
+    const eventsB = listSessionEvents(db, sessionB.id);
+    expect(eventsB.map((e) => e.type)).toEqual(["message.user", "tool.use", "turn.error"]);
+    const errorPayload = eventsB[2].payload as Record<string, unknown>;
+    expect(errorPayload.code).toBe("INTERRUPTED");
+    expect(String(errorPayload.message)).toContain("app restarted");
+    expect(errorPayload.userSeq).toBe(eventsB[0].seq); // the interrupted turn's user message
   });
 });

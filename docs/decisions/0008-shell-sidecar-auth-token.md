@@ -1,4 +1,4 @@
-<!-- last-reviewed: 2026-08-30 round-54 -->
+<!-- last-reviewed: 2026-09-07 round-75 -->
 # ADR-0008: Shell↔sidecar auth — spawn-time random bearer token on loopback
 
 - **Status:** ACCEPTED (implementation-detail decision under the smaller-scope rule; surfaced per protocol)

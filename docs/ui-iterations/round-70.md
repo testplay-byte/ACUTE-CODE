@@ -1,4 +1,4 @@
-<!-- last-reviewed: 2026-09-06 round-70 -->
+<!-- last-reviewed: 2026-09-07 round-75 -->
 # Round 70 — the agent brain round: the model now knows its world, follows conventions, and verifies before claiming done
 
 **Date:** 2026-09-06 · **Branch:** `main` · **Version:** 0.70.0 ·

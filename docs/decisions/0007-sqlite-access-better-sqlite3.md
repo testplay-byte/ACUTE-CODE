@@ -1,4 +1,4 @@
-<!-- last-reviewed: 2026-08-30 round-54 -->
+<!-- last-reviewed: 2026-09-07 round-75 -->
 # ADR-0007: SQLite access — better-sqlite3 with hand-written numbered migrations
 
 - **Status:** ACCEPTED (implementation-detail decision under the smaller-scope rule; surfaced per protocol)

@@ -24,6 +24,7 @@ import {
   runSingleAgentTurn,
   runStreamedAgentTurn,
 } from "./agents/runtime.js";
+import { isReadOnlyTaskMode } from "./agents/mode-policy.js";
 // ROUND-66 (R66-2-c, C1): the post-turn CONTEXT-FREE DEBUG ANALYST — a
 // fresh model call (no tools, no history of its own) that receives the
 // session's whole transcript and streams its report back over the SAME
@@ -1711,6 +1712,10 @@ export function buildServer(options: ServerOptions): FastifyInstance {
             name: mode.name,
             description: mode.description,
             source: mode.source,
+            // ROUND-75 (R75): the read-only postures (plan/review/explore —
+            // the mode-policy enforcement tier) so the picker can badge them
+            // without duplicating the set client-side.
+            readOnly: isReadOnlyTaskMode(mode.id),
           })),
         };
       });
@@ -3950,10 +3955,18 @@ export function buildServer(options: ServerOptions): FastifyInstance {
             // state) are request errors, not task failures — no notification.
             const session = getSession(db, id);
             if (outcome.status >= 500) {
+              // ROUND-75 (R75): when the transient-API retry ladder ran and
+              // exhausted, the notification body says so — the owner asked
+              // to be TOLD when the ladder gives up ("it will stop, notify
+              // the user, and show the error message").
+              const attempts = outcome.details?.attempts;
               getNotificationBus().publish(db, {
                 kind: "task_failed",
                 title: session?.title ?? "Task failed",
-                body: outcome.message,
+                body:
+                  typeof attempts === "number" && attempts > 1
+                    ? `${outcome.message} — auto-retried ${attempts} times (immediate, 1.5, 5, 10, 30 min) before giving up`
+                    : outcome.message,
                 sessionId: id,
                 projectId: session?.projectId ?? undefined,
               });

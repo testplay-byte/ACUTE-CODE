@@ -3,7 +3,7 @@
   "product": {
     "name": "Acute",
     "tagline": "Local-first multi-agent engineering workbench",
-    "version": "0.74.0",
+    "version": "0.75.0",
     "availability": "Private build — not yet distributed",
     "chips": [
       "Windows desktop",
@@ -172,6 +172,12 @@
     {
       "date": "2026-09-07",
       "label": "R74 — the updater-freeze round: the launcher now picks releases by MAX VERSION (root cause: GitHub lists never-published drafts ABOVE published releases, and five R63-R67 drafts froze the owner's installed app at 0.67.0 while 0.73.0 was live); 10 launcher regression tests wired into both CI gates; the five stale drafts published (2558 root tests + 10 launcher tests)"
+    },
+    {
+      "id": 35,
+      "title": "0.75.0 — reliability & enforcement",
+      "date": "2026-09-07",
+      "summary": "The owner's four verbatim asks shipped together: the transient-API retry ladder (immediate → 1.5m → 5m → 10m → 30m → stop+notify, visible status card), hard task-mode enforcement (plan/review/explore read-only at the toolset level, owner-pinned, debug command tier, delegation inheritance), hover-only mode descriptions + read-only badges, and the single-row composer toolbar with the actually-working 5-line textarea. The deepest find: SDK error PARTS were swallowed — real 429s could never classify nor ladder; the adapter now re-throws them (live-verified)."
     }
   ],
   "quality": {
@@ -179,11 +185,11 @@
     "suites": [
       {
         "name": "frontend",
-        "tests": 909
+        "tests": 916
       },
       {
         "name": "agent-core",
-        "tests": 1637
+        "tests": 1685
       },
       {
         "name": "sidecar e2e",
@@ -208,8 +214,16 @@
   ],
   "plan": {
     "current": {
-      "title": "Round 74 DELIVERED — the updater-freeze round (0.74.0)",
-      "detail": "The owner's field report ('the installed desktop app version was 0.67.0 — it did not update') answered root-cause to remedy. (1) Root cause, proven against the live API: GitHub's /releases list sorts never-published DRAFTS above every published release — the R63-R67 close-outs left five drafts at positions 1-5 — and the launcher's first-match walk returned draft 0.67.0 as 'latest', so the installed 0.67.0 looked current while 0.73.0 was live (no error, nothing to see; it 'used to work' because in that era ALL releases were drafts). (2) The fix (launcher/acute_launcher.py, first launcher change since R63, ACUTE.bat byte-identical/CRLF-verified): NEW pure _pick_latest_release — walks every entry, picks the numerically greatest version (integer tuples: 0.10.0 > 0.9.0, 1.0.0 > 0.99.99), drafts first-class (owner PAT sees them), same-version tie prefers published, malformed entries skipped; _desktop_latest_release rewritten onto it (per_page 20→100, one retry, never-raise + dev-flow fallback byte-identical); the version-truth panel now NAMES the tag it picked and ACUTE.bat status annotates published/draft — the freeze is visible, not silent. (3) NEW launcher/tests/test_pick_latest_release.py — the repo's first Python suite (stdlib unittest, 10 tests incl. the exact owner-freeze list shape) wired into ci.yml's verify job AND release.yml's launcher-kit gate (github-release needs the kit job → every tag gated); kit assembly copies seven named files only, tests cannot leak into the zip. (4) Remediation: the five stale drafts published (releases 381461843/381577121/382282125/383173421/383247624, all HTTP 200 — the R69+ step those close-outs never got; non-destructive, reversible) — also un-freezing any pre-fix launcher (settled list carries v0.73.0 first); the never-downgrade guard verified to hold against every list state the old code could see. The fix reaches the owner via the launcher's own self-update (git pull → copy + re-exec). Anomaly flagged: v0.68.0 never existed (R68 skipped the tag push — the R61/R62 failure class; documented gap, superseded by 0.69.0+). Verification: root vitest 2558 unchanged and re-run green (2,546 + 12 e2e env-gated); launcher suite 10/10; py_compile, lint, typecheck clean; LIVE smoke — the real /releases JSON through the picker → 0.73.0 — run twice (orchestrator + the independent R74-b verifier, 9/9 PASS, verdict SHIP). Next: the R75 queue — delegate_task task_id/background/resume (the R73 deferral), plugin ctx enrichment (cline's appendContext seam), the lessons-ledger third consumer, ratings-driven tuning, the optional v0.68.0 backfill tag."
+      "title": "R75 — the reliability & enforcement round",
+      "detail": "The owner's four verbatim asks, all browser-verified: (1) the TRANSIENT-API RETRY LADDER (lib/retry.ts NEW) — rate_limit/network/timeout failures retry immediately then wait 1.5/5/10/30 min (six attempts total) before stopping + notifying + showing the error; auth/overflow/unknown never auto-retry; the amber RetryStatusCard (attempt N/6, class chip, live countdown) shows during waits and clears on the first content frame; the terminal card + task_failed notification carry attempts. (2) TASK MODES ARE NOW HARD-ENFORCED (agents/mode-policy.ts NEW) — plan/review/explore intersect the turn's toolset to read-only (write_file/edit_file/create_dir/delete_file/run_command/index_project/job_stop REMOVED; the prompt's toolNames match — the model never sees a tool it cannot call), debug demotes run_command to the auto tier in approvals (ask-tier denied even under Full Access), children inherit the parent's mode at delegation, and read-only modes are OWNER-PINNED (switch_mode cannot leave them — live-verified: a plan-mode session asked to write a file honestly reported its read-only toolset, no file written). (3) Mode menus are single-line — descriptions ride the rows' title tooltips (hover to reveal) + accent read-only badges. (4) The composer toolbar is ONE row in the owner's exact order (attach, access, mode, context, model, reasoning, send) — the box is a CSS @container, pills collapse to icons below 560px; the textarea ACTUALLY auto-grows now (flex-1 was silently ignoring the height style — the never-worked 'two lines' bug, proven live: style.height=132px while clientHeight=34px): 5 visible lines then internal scroll, driven by a useLayoutEffect keyed on input (programmatic fills resize too). THE ROUND'S DEEPEST FIND: the AI SDK delivers post-retry provider errors as fullStream error PARTS the stream adapter ignored — real 429s classified 'unknown', could never ladder, and showed no honest class; chat.ts now re-throws them (live-verified against a mock 429 provider: meta.retry frames on the wire, attempt 2 immediate → attempt 3 at 90s with heartbeat ticks). Also fixed: the sync-path ok:true sub-agent lie (failed-after-partial turns now return honest 502 + recorded usage), the boot sweep's silent death (crash mid-turn now writes the INTERRUPTED turn.error + keeps the session retryable), errorClass+attempts ride to the UI, meta.overflow_recovery finally renders. 2 NEW suites: r75-retry-ladder (19) + r75-mode-policy (27) incl. pinning. 2613 root tests (2558+55) green; lint + typechecks + docs:check 172/0/0 clean.",
+      "upcoming": [
+        "delegate_task task_id/background/resume (the R73 deferral — the orchestrator round)",
+        "external plugin ctx enrichment (cline's appendContext seam)",
+        "lessons-ledger as the reminder injector's third consumer",
+        "ratings-driven prompt tuning",
+        "the optional v0.68.0 backfill tag",
+        "standing: edit-linting (SWE-agent's ACI #1), installer code-signing, Files-tab polish, agent web-app-testing tools"
+      ]
     },
     "upcoming": [
       {
@@ -244,5 +258,5 @@
       "Quality over speed — every round verified before push"
     ]
   },
-  "round": 57
+  "round": 75
 }

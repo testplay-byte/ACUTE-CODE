@@ -18,9 +18,11 @@ const ICONS = {
  * changes… plan mode: no edits, only plan… [editor]: no commands or
  * terminals; can edit files; cannot delete without permission."). A segmented
  * dropdown button showing the current mode with an icon; the menu lists the
- * 4 modes with their one-line descriptions. The PANEL performs the
- * patchSessionPermissions round-trip (optimistic + rollback) — this component
- * only reports the choice.
+ * 4 modes. ROUND-75 (R75, owner: descriptions "should not be shown by
+ * default… only when the user hovers"): each row renders its LABEL only —
+ * the one-line description rides the row's native title tooltip. The PANEL
+ * performs the patchSessionPermissions round-trip (optimistic + rollback) —
+ * this component only reports the choice.
  */
 export function ModeSwitcher({
   mode,
@@ -61,7 +63,9 @@ export function ModeSwitcher({
         }}
       >
         <Icon size={12} className="shrink-0" style={{ color: styles.accent }} />
-        <span data-mode-label>{current.label}</span>
+        <span data-mode-label className="@max-[560px]:hidden">
+          {current.label}
+        </span>
         <ChevronDown size={10} className="shrink-0" />
       </button>
       {open ? (
@@ -80,6 +84,7 @@ export function ModeSwitcher({
                 type="button"
                 role="menuitemradio"
                 aria-checked={isSelected}
+                title={option.description}
                 onClick={() => {
                   setOpen(false);
                   if (!isSelected) onChange(option.id);
@@ -96,21 +101,18 @@ export function ModeSwitcher({
                 }}
               >
                 <OptionIcon size={12} className="shrink-0 mt-0.5" style={{ color: styles.accent }} />
-                <span className="min-w-0 flex-1">
+                <span className="min-w-0 flex-1 flex items-center gap-1">
                   <span
-                    className="flex items-center gap-1 text-[11.5px] font-bold"
+                    className="text-[11.5px] font-bold"
                     style={{ color: isSelected ? styles.accent : styles.text }}
                   >
                     {option.label}
-                    {option.id === "ask" ? (
-                      <span className="font-mono text-[9px] font-normal" style={{ color: styles.textTertiary }}>
-                        default
-                      </span>
-                    ) : null}
                   </span>
-                  <span className="block text-[10.5px] leading-snug" style={{ color: styles.textTertiary }}>
-                    {option.description}
-                  </span>
+                  {option.id === "ask" ? (
+                    <span className="font-mono text-[9px] font-normal" style={{ color: styles.textTertiary }}>
+                      default
+                    </span>
+                  ) : null}
                 </span>
                 {isSelected ? (
                   <Check size={12} className="shrink-0 mt-0.5" style={{ color: styles.accent }} />

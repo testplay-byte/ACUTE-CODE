@@ -107,9 +107,15 @@ async function createAgentAndSession(): Promise<{ agentId: string; sessionId: st
   return { agentId: agent.id, sessionId: session.id };
 }
 
-/** A provider adapter that dies like a real 4xx/5xx would (mid-stream throw). */
+/**
+ * A provider adapter that dies like a real 4xx/5xx would (mid-stream throw).
+ * ROUND-75: the 429 is TRANSIENT (rate_limit) — the retry ladder now kicks
+ * in before the terminal persist, so tests that want the PERSISTED failure
+ * either advance the fake clock through the whole ladder (test 1) or make
+ * a later attempt fail NON-transiently. This stub stays the owner-faithful
+ * shape: a rate limit that never heals.
+ */
 async function* throwingChatStream(): AsyncGenerator<StreamChatEvent> {
-  yield { type: "text-delta", delta: "partial " };
   throw new Error("429 Too Many Requests: rate limited on test/model-1");
 }
 
@@ -119,17 +125,28 @@ describe("runStreamedAgentTurn provider failure (ROUND-43)", () => {
     const events0 = listSessionEvents(db, sessionId);
     expect(events0).toHaveLength(0);
 
-    const outcome = await runStreamedAgentTurn(
-      {
-        db,
-        keyring: new ProviderKeyring({ ACUTE_PROVIDER_OPENROUTER: KEY }),
-        chat: aiSdkChat,
-        chatStream: throwingChatStream,
-      },
-      sessionId,
-      "please summarize the README",
-      () => undefined,
-    );
+    // ROUND-75: a rate limit now ladders — [immediate, 1.5m, 5m, 10m, 30m]
+    // — before the terminal failure. Advance the fake clock through every
+    // rung; the sixth failed attempt is the honest terminal persist.
+    vi.useFakeTimers();
+    let outcome: Awaited<ReturnType<typeof runStreamedAgentTurn>>;
+    try {
+      const turnPromise = runStreamedAgentTurn(
+        {
+          db,
+          keyring: new ProviderKeyring({ ACUTE_PROVIDER_OPENROUTER: KEY }),
+          chat: aiSdkChat,
+          chatStream: throwingChatStream,
+        },
+        sessionId,
+        "please summarize the README",
+        () => undefined,
+      );
+      await vi.advanceTimersByTimeAsync(90_000 + 300_000 + 600_000 + 1_800_000 + 5_000);
+      outcome = await turnPromise;
+    } finally {
+      vi.useRealTimers();
+    }
 
     // 502 PROVIDER_ERROR envelope, enriched with model + userSeq + errorTs.
     expect(outcome.ok).toBe(false);
@@ -139,6 +156,9 @@ describe("runStreamedAgentTurn provider failure (ROUND-43)", () => {
       expect(outcome.details?.model).toBe("test/model-1");
       expect(outcome.details?.userSeq).toBe(1);
       expect(typeof outcome.details?.errorTs).toBe("string");
+      // R75: the ladder's honest accounting — six attempts, then give up.
+      expect(outcome.details?.attempts).toBe(6);
+      expect(String(outcome.message)).toContain("auto-retry ladder exhausted");
     }
 
     // THE FIX: the failure is in the session timeline — reload shows the
@@ -155,6 +175,10 @@ describe("runStreamedAgentTurn provider failure (ROUND-43)", () => {
     expect(String(error.providerError)).toContain("429 Too Many Requests");
     expect(String(error.message)).toContain("openrouter");
     expect(events[1].agentId).toBe(agentId);
+    // R75: the attempts count rides the persisted payload (the error card
+    // renders "failed after 6 attempts").
+    expect(error.attempts).toBe(6);
+    expect(error.errorClass).toBe("rate_limit");
 
     // The session stays retryable (not running/failed) after the failure.
     const row = db
@@ -165,16 +189,27 @@ describe("runStreamedAgentTurn provider failure (ROUND-43)", () => {
 
   it("keeps partial tool work before the failure, then appends the error event", async () => {
     const { sessionId } = await createAgentAndSession();
+    // ROUND-75: the first failure is a transient 500 (network) — the
+    // immediate ladder rung retries ONCE; the retry dies NON-transiently
+    // (401 auth) so the terminal error lands fast, exactly as the test
+    // always asserted (partial work preserved + error appended after it).
+    let streamCalls = 0;
     const chatStream = async function* (): AsyncGenerator<StreamChatEvent> {
-      yield { type: "tool-call", toolName: "read_file", argsSummary: "path: README.md" };
-      yield {
-        type: "tool-result",
-        toolName: "read_file",
-        argsSummary: "path: README.md",
-        ok: true,
-        outputSummary: "200 chars",
-      };
-      throw new Error("500 Internal Server Error from provider");
+      streamCalls += 1;
+      if (streamCalls === 1) {
+        yield { type: "tool-call", toolName: "read_file", argsSummary: "path: README.md" };
+        yield {
+          type: "tool-result",
+          toolName: "read_file",
+          argsSummary: "path: README.md",
+          ok: true,
+          outputSummary: "200 chars",
+        };
+        throw new Error("500 Internal Server Error from provider");
+      }
+      const authErr = new Error("401 Unauthorized: invalid API key");
+      (authErr as Error & { statusCode?: number }).statusCode = 401;
+      throw authErr;
     };
 
     const outcome = await runStreamedAgentTurn(
@@ -189,6 +224,10 @@ describe("runStreamedAgentTurn provider failure (ROUND-43)", () => {
       () => undefined,
     );
     expect(outcome.ok).toBe(false);
+    if (!outcome.ok) {
+      expect(outcome.details?.attempts).toBe(2); // 500 → retry → 401: stop
+    }
+    expect(streamCalls).toBe(2);
 
     const events = listSessionEvents(db, sessionId);
     expect(events.map((e) => e.type)).toEqual([
@@ -197,7 +236,9 @@ describe("runStreamedAgentTurn provider failure (ROUND-43)", () => {
       "turn.error", // …and the failure is appended right after it
     ]);
     const error = events[2].payload as Record<string, unknown>;
-    expect(String(error.providerError)).toContain("500 Internal Server Error");
+    expect(String(error.providerError)).toContain("401 Unauthorized");
+    expect(error.errorClass).toBe("auth"); // the TERMINAL class
+    expect(error.attempts).toBe(2);
   });
 
   it("a user STOP is not an error: ABORTED outcome, no turn.error event", async () => {

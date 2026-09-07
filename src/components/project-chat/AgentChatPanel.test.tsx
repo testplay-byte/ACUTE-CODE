@@ -25,7 +25,7 @@ import type { MessageRating, SessionEvent, SessionsBackend } from "../../lib/api
 import { useConfigStore } from "../../lib/config-store";
 import { useNotificationStreamStore } from "../../hooks/use-notifications";
 import { useSettingsStore } from "../../lib/settings-store";
-import { useStreamStore } from "../../lib/stream-store";
+import { useStreamStore, type LiveTurn, type TurnErrorInfo } from "../../lib/stream-store";
 import { renderWithProviders, resetTestState } from "../../test-utils";
 
 /** ROUND-44 (R44-c): per-test override for getSessionsBackend(). */
@@ -368,6 +368,8 @@ describe("AgentChatPanel user-stop rendering (ROUND-58 R58-cf)", () => {
               startedAtMs: Date.now(),
               state: "waiting",
             },
+            retry: null,
+            note: null,
           },
           streamBusy: true,
           sendError: null,
@@ -423,6 +425,8 @@ describe("AgentChatPanel user-stop rendering (ROUND-58 R58-cf)", () => {
             streamingToolInputs: [],
             debugReport: { state: "streaming", text: "## Tool-by-tool trace\n- write_file → ok" },
             browserCheckpoint: null,
+            retry: null,
+            note: null,
           },
           streamBusy: false,
           sendError: null,
@@ -867,6 +871,8 @@ describe("AgentChatPanel response ratings (ROUND-59 R59-D)", () => {
             lastAssistantSeq: 6,
             debugReport: null,
             browserCheckpoint: null,
+            retry: null,
+            note: null,
           },
           streamBusy: false,
           sendError: null,
@@ -1190,6 +1196,8 @@ describe("AgentChatPanel inline screenshots (ROUND-68 R68-A)", () => {
             streamingToolInputs: [],
             debugReport: null,
             browserCheckpoint: null,
+            retry: null,
+            note: null,
           },
           streamBusy: true,
           sendError: null,
@@ -1311,12 +1319,24 @@ describe("AgentChatPanel task modes (ROUND-73 R73-c)", () => {
     // The session row carries activeMode: "debug" → the pill names it.
     const pill = await screen.findByRole("button", { name: "Task mode: Debug" }, SLOW);
     expect(pill.textContent).toContain("Debug");
-    // ...and the pill sits NEXT TO the permission switcher in the composer
-    // toolbar's LEFT cluster (the owner's "options inside the chat box").
+    // ...and the pill is a DIRECT toolbar child (R75: ONE flat row — the
+    // owner's "attach, access, mode, context, model, reasoning, send"),
+    // right after the permission switcher.
     const toolbar = document.querySelector("[data-composer-toolbar]") as HTMLElement;
-    const left = toolbar.children[0] as HTMLElement;
-    expect(left.contains(pill)).toBe(true);
-    expect(left.contains(screen.getByRole("button", { name: "Permission mode: Ask" }))).toBe(true);
+    expect(toolbar.contains(pill)).toBe(true);
+    // Selector components wrap their triggers in positioning divs — resolve
+    // each button's closest DIRECT toolbar child for the sibling math.
+    const directChild = (btn: HTMLElement): HTMLElement => {
+      let node: HTMLElement | null = btn;
+      while (node !== null && node.parentElement !== toolbar) node = node.parentElement;
+      return node ?? btn;
+    };
+    const children = Array.from(toolbar.children);
+    const pillIdx = children.indexOf(directChild(pill));
+    const accessIdx = children.indexOf(
+      directChild(screen.getByRole("button", { name: "Permission mode: Ask" }) as HTMLElement),
+    );
+    expect(accessIdx).toBe(pillIdx - 1);
     // ...and the menu Check-marks it once the mode list lands.
     fireEvent.click(pill);
     const debugRow = await screen.findByRole("menuitemradio", { name: /Debug/ }, SLOW);
@@ -1516,5 +1536,135 @@ describe("AgentChatPanel task modes (ROUND-73 R73-c)", () => {
       SLOW,
     );
     expect(modesMock.streamSessionMessage).not.toHaveBeenCalled();
+  });
+});
+
+// ── ROUND-75 (R75): the retry-ladder status card + the enriched error card ──
+describe("AgentChatPanel ROUND-75 retry ladder surfaces", () => {
+  const SLOW = { timeout: 5000 };
+
+  function messageEvent(
+    seq: number,
+    role: "user" | "assistant",
+    content: string,
+    ts: string,
+  ): SessionEvent {
+    return {
+      seq,
+      type: role === "user" ? "message.user" : "message.assistant",
+      agentId: "agt_scribe",
+      payload: { role, content, agentId: "agt_scribe", ts },
+      ts,
+    };
+  }
+
+  async function renderWithLiveTurn(
+    liveTurn: Partial<LiveTurn> | null,
+    liveError: TurnErrorInfo | null = null,
+  ): Promise<void> {
+    const projects = await getFixtureProjects().list();
+    customBackend.backend = createFixtureSessions([
+      {
+        session: {
+          id: "sess_r75_retry",
+          projectId: projects[0].id,
+          agentId: "agt_scribe",
+          mode: "single",
+          status: "running",
+          title: "Retry ladder probe",
+          createdAt: "2026-08-31T11:00:00Z",
+          updatedAt: "2026-08-31T11:05:00Z",
+        },
+        events: [messageEvent(1, "user", "do the work", "2026-08-31T11:00:10Z")],
+      },
+    ]);
+    renderWithProviders(<AgentChatPanel projectId={projects[0].id} project={projects[0]} />);
+    await screen.findByText("do the work", {}, SLOW);
+    useStreamStore.setState({
+      bySession: {
+        sess_r75_retry: {
+          liveTurn:
+            liveTurn === null
+              ? null
+              : {
+                  startedAtMs: Date.now() - 3000,
+                  working: [],
+                  streamText: "",
+                  streamThinking: "",
+                  stopped: false,
+                  stoppedByUser: false,
+                  streamingToolInputs: [],
+                  debugReport: null,
+                  browserCheckpoint: null,
+                  retry: null,
+                  note: null,
+                  ...liveTurn,
+                },
+          streamBusy: true,
+          sendError: null,
+          liveError,
+          pendingEcho: null,
+          lastLiveEndMs: Date.now(),
+          lastTurnStoppedByUser: false,
+          lastTurnStoppedTs: null,
+        },
+      },
+    });
+  }
+
+  it("R75: the RetryStatusCard renders while the ladder waits — amber status, attempt count, class chip, countdown, reassurance", async () => {
+    await renderWithLiveTurn({
+      retry: {
+        attempt: 2,
+        totalAttempts: 6,
+        waitMs: 90_000,
+        remainingMs: 88_000,
+        retryAt: Date.now() + 88_000,
+        errorClass: "rate_limit",
+        classMessage: "rate limited — the provider is throttling requests",
+        message: "rate limited — retrying (attempt 2 of 6) in 1.5 min",
+      },
+    });
+
+    const card = document.querySelector("[data-retry-status-card]") as HTMLElement;
+    expect(card).toBeTruthy();
+    // A STATUS, not an alert — the turn is alive and handling itself.
+    expect(card.getAttribute("role")).toBe("status");
+    expect(screen.queryByRole("alert")).toBeNull();
+    expect(card.textContent).toContain("Retrying — attempt 2 of 6");
+    expect(card.textContent).toContain("rate limit");
+    expect(card.textContent).toContain("rate limited — the provider is throttling requests");
+    expect(card.textContent).toContain("next attempt in");
+    expect(card.textContent).toContain("the agent keeps working automatically");
+  });
+
+  it("R75: the overflow-recovery note renders as a transient status line", async () => {
+    await renderWithLiveTurn({
+      note: "[context overflow → auto-compacted conversation → retrying]",
+    });
+    expect(
+      screen.getByText("[context overflow → auto-compacted conversation → retrying]"),
+    ).toBeTruthy();
+  });
+
+  it("R75: the error card after ladder exhaustion shows the class chip + 'after 6 attempts' + Copy details carries both", async () => {
+    await renderWithLiveTurn(null, {
+      code: "PROVIDER_ERROR",
+      message:
+        "provider 'openrouter' call failed for session s (class: rate_limit) — auto-retry ladder exhausted",
+      status: 502,
+      errorClass: "rate_limit",
+      attempts: 6,
+      providerError: "429 Too Many Requests",
+      ts: "2026-08-31T11:00:30Z",
+    });
+
+    const alert = screen.getByRole("alert");
+    expect(alert.textContent).toContain("Generation failed");
+    expect(alert.textContent).toContain("after 6 attempts");
+    expect(alert.textContent).toContain("rate limit"); // the class chip (snake_case flattened)
+    // The reason line carries the upstream provider error (the card's
+    // existing providerError ?? message precedence).
+    expect(alert.textContent).toContain("429 Too Many Requests");
   });
 });

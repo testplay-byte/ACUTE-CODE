@@ -52,6 +52,12 @@ export interface SessionInput {
   /** ROUND-50 (R50-c1): the session's permission mode (default "ask" —
    * exactly the pre-R50 behavior). */
   permissionMode?: PermissionMode;
+  /** ROUND-75 (R75): the session's ACTIVE TASK MODE at creation — used ONLY
+   * by the orchestrator's delegation path so a child COPIES its parent's
+   * posture (the R50-c1 rule, one tier down: delegated work can never
+   * outrun the mode the owner picked; a plan-mode parent spawns read-only
+   * children). Default null (modeless — the pre-R75 creation behavior). */
+  activeMode?: string | null;
 }
 
 /** Event JSON as served by the API (API.md §5.6). `agentId` comes from the payload. */
@@ -154,8 +160,29 @@ export function createSession(db: SqliteDatabase, input: SessionInput): Session 
     permissionMode: input.permissionMode ?? "ask",
     // ROUND-73 (R73-b): sessions START modeless (the column's NULL default);
     // activation happens through PATCH /sessions/:id or switch_mode.
-    activeMode: null,
+    // ROUND-75 (R75): EXCEPT delegation children, which copy the parent's
+    // posture (input.activeMode — the R50-c1 inheritance, one tier down).
+    activeMode: input.activeMode ?? null,
   };
+  // ROUND-75 (R75): active_mode joins the INSERT ONLY when the caller set
+  // it (delegation children copying their parent's posture). The R73 rule
+  // still holds for every other creation: the column stays OUT of the
+  // statement so a pre-0027 database (migration-test schemas recreate old
+  // layouts verbatim) never sees the unknown column — the NULL default
+  // applies exactly as before.
+  if (typeof input.activeMode === "string" && input.activeMode !== "") {
+    db.prepare(
+      `INSERT INTO sessions (id, project_id, agent_id, mode, status, title, created_at, updated_at, parent_session_id, sub_role, permission_mode, active_mode)
+       VALUES (@id, @projectId, @agentId, @mode, @status, @title, @createdAt, @updatedAt, @parentSessionId, @subRole, @permissionMode, @activeMode)`,
+    ).run({
+      ...session,
+      parentSessionId: input.parentSessionId ?? null,
+      subRole: input.subRole ?? null,
+      permissionMode: input.permissionMode ?? "ask",
+      activeMode: input.activeMode,
+    });
+    return session;
+  }
   db.prepare(
     `INSERT INTO sessions (id, project_id, agent_id, mode, status, title, created_at, updated_at, parent_session_id, sub_role, permission_mode)
      VALUES (@id, @projectId, @agentId, @mode, @status, @title, @createdAt, @updatedAt, @parentSessionId, @subRole, @permissionMode)`,

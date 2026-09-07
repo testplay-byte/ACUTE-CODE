@@ -428,6 +428,17 @@
  * Both honor prefers-reduced-motion (static `|` and "…" respectively) — 6-e
  * accessibility fix.
  */
+/* ROUND-75 (R75): the retry-ladder card's slow spinner — a gentle 3s
+ * rotation (the default 1s animate-spin reads as "frantically busy";
+ * a patient wait deserves a patient icon). Prefers-reduced-motion safe. */
+@keyframes ac-retry-spin {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
+}
+.ac-retry-spin {
+  animation: ac-retry-spin 3s linear infinite;
+}
+
 @keyframes ac-caret-blink {
   0%, 49% { opacity: 1; }
   50%, 100% { opacity: 0; }
@@ -522,6 +533,7 @@
   /* Keep the caret + ellipsis visible (static) instead of hidden by the
      duration-zero rule above. */
   .ac-caret-blink { animation: none !important; opacity: 1 !important; }
+  .ac-retry-spin { animation: none !important; }
   .ac-ellipsis::after { animation: none !important; content: "..." !important; }
 }
 

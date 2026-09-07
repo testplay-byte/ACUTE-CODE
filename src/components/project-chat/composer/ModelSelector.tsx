@@ -455,7 +455,7 @@ export function ModelSelector({
           e.currentTarget.style.background = "transparent";
         }}
       >
-        <span className="truncate" data-model-label>
+        <span className="truncate @max-[560px]:hidden" data-model-label>
           {buttonLabel}
         </span>
         <ChevronDown size={10} className="shrink-0" />

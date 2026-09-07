@@ -45,9 +45,11 @@ const AUTO_LABEL = "Mode: Auto";
  * A compact pill button: Compass icon + the ACTIVE mode's name (e.g. "Debug")
  * or "Mode: Auto" when none (no posture module active — the agent picks its
  * posture per request). The dropdown lists "Auto (no mode)" first (clears),
- * then one row per mode with its trigger-rich description (clamped to two
- * lines, the full text on the row's title), the current mode Check-marked,
- * and a subtle "custom" chip for source === "file".
+ * then ONE SINGLE-LINE row per mode — icon + name (+ "custom" chip, + the
+ * R75 "read-only" badge for plan/review/explore, whose write tools are
+ * ENFORCED away backend-side) — with the trigger-rich description ONLY on
+ * the row's native title tooltip (R75: descriptions are hidden by default;
+ * hovering a row reveals the full text). The current mode is Check-marked.
  *
  * The PANEL (AgentChatPanel) owns the modes query + the
  * patchSessionActiveMode round-trip (optimistic + rollback) and disables the
@@ -106,7 +108,9 @@ export function TaskModePicker({
         }}
       >
         <Compass size={12} className="shrink-0" style={{ color: styles.accent }} />
-        <span data-task-mode-label>{label}</span>
+        <span data-task-mode-label className="@max-[560px]:hidden">
+          {label}
+        </span>
         <ChevronDown size={10} className="shrink-0" />
       </button>
       {open ? (
@@ -138,15 +142,12 @@ export function TaskModePicker({
             }}
           >
             <Compass size={12} className="shrink-0 mt-0.5" style={{ color: styles.accent }} />
-            <span className="min-w-0 flex-1">
+            <span className="min-w-0 flex-1 flex items-center gap-1.5">
               <span
-                className="flex items-center gap-1 text-[11.5px] font-bold"
+                className="text-[11.5px] font-bold"
                 style={{ color: activeMode === null ? styles.accent : styles.text }}
               >
                 Auto (no mode)
-              </span>
-              <span className="block text-[10.5px] leading-snug" style={{ color: styles.textTertiary }}>
-                The agent picks its posture per request.
               </span>
             </span>
             {activeMode === null ? (
@@ -179,29 +180,35 @@ export function TaskModePicker({
                 }}
               >
                 <RowIcon size={12} className="shrink-0 mt-0.5" style={{ color: styles.accent }} />
-                <span className="min-w-0 flex-1">
+                <span className="min-w-0 flex-1 flex items-center gap-1.5">
                   <span
-                    className="flex items-center gap-1 text-[11.5px] font-bold"
+                    className="text-[11.5px] font-bold shrink-0"
                     style={{ color: isSelected ? styles.accent : styles.text }}
                   >
                     {mode.name}
-                    {mode.source === "file" ? (
-                      <span
-                        className="font-mono text-[9px] font-normal uppercase"
-                        style={{ color: styles.textTertiary }}
-                      >
-                        custom
-                      </span>
-                    ) : null}
                   </span>
-                  {/* Trigger-rich descriptions are long — clamp to ~2 lines
-                      (the full text rides the row's title tooltip). */}
-                  <span
-                    className="block text-[10.5px] leading-snug line-clamp-2 break-words"
-                    style={{ color: styles.textTertiary }}
-                  >
-                    {mode.description}
-                  </span>
+                  {mode.source === "file" ? (
+                    <span
+                      className="font-mono text-[9px] font-normal uppercase shrink-0"
+                      style={{ color: styles.textTertiary }}
+                    >
+                      custom
+                    </span>
+                  ) : null}
+                  {/* R75: the ENFORCED read-only badge — plan/review/explore
+                      have their write tools removed at the toolset level. */}
+                  {mode.readOnly === true ? (
+                    <span
+                      className="text-[9px] font-semibold px-1.5 py-0.5 rounded-md shrink-0"
+                      style={{
+                        background: withAlpha(styles.accent, 0.12),
+                        color: styles.accent,
+                      }}
+                      title="Enforced: write tools are removed from the toolset in this mode"
+                    >
+                      read-only
+                    </span>
+                  ) : null}
                 </span>
                 {isSelected ? (
                   <Check size={12} className="shrink-0 mt-0.5" style={{ color: styles.accent }} />

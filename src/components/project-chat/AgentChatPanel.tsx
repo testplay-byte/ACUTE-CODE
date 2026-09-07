@@ -18,6 +18,7 @@ import {
   History,
   ListChecks,
   MessageSquareText,
+  RefreshCw,
   Search,
   Square,
   ThumbsDown,
@@ -88,7 +89,7 @@ import { useProjectChatStore } from "../../lib/project-chat-store";
 // clipboard builder (thinking + tool calls + outputs + final answer).
 import { buildFullTurnText } from "../../lib/turn-copy";
 import { useActiveStreams } from "../../lib/active-streams";
-import { useStreamStore } from "../../lib/stream-store";
+import { useStreamStore, type LiveTurnRetry } from "../../lib/stream-store";
 import { fmtBytes, fmtTokens, formatTime } from "../../lib/format";
 // ROUND-67 (R67/E3): the chat-session → browser-tab binding (the leak fix).
 import { stateKey, useRightSidebarStore } from "../../lib/right-sidebar-store";
@@ -902,7 +903,7 @@ export function TurnErrorCard({
 }: {
   /** The persisted fold item OR a live shape (code/message/model/ts). */
   error: Pick<ErrorTurnItem, "code" | "message" | "ts"> &
-    Partial<Pick<ErrorTurnItem, "model" | "providerId" | "providerError">>;
+    Partial<Pick<ErrorTurnItem, "model" | "providerId" | "providerError" | "errorClass" | "attempts">>;
   sessionId: string | null;
   /** Zero-arg — the PANEL binds the failed turn's user text before calling. */
   onRetry?: () => void;
@@ -918,6 +919,8 @@ export function TurnErrorCard({
     `Session: ${sessionId ?? "unknown"}`,
     `Model: ${error.model ?? "unknown"}`,
     ...(error.providerId ? [`Provider: ${error.providerId}`] : []),
+    ...(error.errorClass !== undefined ? [`Class: ${error.errorClass}`] : []),
+    ...(error.attempts !== undefined ? [`Attempts: ${error.attempts}`] : []),
     `Code: ${error.code}`,
     `Error: ${reason}`,
     `Time: ${error.ts}`,
@@ -936,8 +939,22 @@ export function TurnErrorCard({
         <div className="min-w-0 flex-1">
           <div className="text-[12px] font-bold" style={{ color: SEMANTIC_COLORS.danger }}>
             Generation failed
+            {error.attempts !== undefined ? (
+              <span className="ml-1.5 font-semibold" style={{ color: styles.textSecondary }}>
+                after {error.attempts} attempt{error.attempts === 1 ? "" : "s"}
+              </span>
+            ) : null}
           </div>
           <div className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1 min-w-0">
+            {error.errorClass !== undefined ? (
+              <span
+                className="text-[10px] font-mono px-1.5 py-0.5 rounded-md shrink-0 uppercase tracking-wide"
+                style={{ background: withAlpha(SEMANTIC_COLORS.danger, 0.12), color: SEMANTIC_COLORS.danger }}
+                title={`provider error class: ${error.errorClass}`}
+              >
+                {error.errorClass.replace(/_/g, " ")}
+              </span>
+            ) : null}
             {error.model ? (
               <span
                 className="font-mono text-[10.5px] px-1.5 py-0.5 rounded-md shrink-0 max-w-[240px] truncate"
@@ -982,6 +999,75 @@ export function TurnErrorCard({
             >
               {copied ? "Copied" : "Copy details"}
             </button>
+          </div>
+        </div>
+      </div>
+    </motion.div>
+  );
+}
+
+/**
+ * ROUND-75 (R75, owner: transient API failures should retry visibly — "it
+ * will set up a timer… it will stop, notify the user, and show the error
+ * message"): the LIVE status card shown while the transient-API retry
+ * ladder waits out a rate limit / network error / timeout. Amber, not red
+ * — the turn is ALIVE and working automatically; this is reassurance, not
+ * an alarm. Shows the cause (the class message), the attempt number
+ * (2/6…6/6), and a live countdown to the next attempt. Any content frame
+ * (text, thinking, tool) clears it — the retry succeeded.
+ */
+export function RetryStatusCard({ retry }: { retry: LiveTurnRetry }) {
+  const styles = useThemeStyles();
+  // The live countdown — ticks once a second locally (the backend's 60 s
+  // heartbeat refreshes the anchor; the local tick keeps it smooth).
+  const [nowMs, setNowMs] = useState(Date.now());
+  useEffect(() => {
+    const timer = setInterval(() => setNowMs(Date.now()), 1_000);
+    return () => clearInterval(timer);
+  }, []);
+  const remainingMs = Math.max(0, retry.retryAt - nowMs);
+  const remainingLabel =
+    remainingMs <= 1_000
+      ? "now"
+      : remainingMs < 60_000
+        ? `${Math.ceil(remainingMs / 1000)}s`
+        : `${Math.floor(remainingMs / 60_000)}m ${Math.ceil((remainingMs % 60_000) / 1000 / 10) * 10}s`;
+  const classLabel = retry.errorClass.replace(/_/g, " ");
+  return (
+    <motion.div variants={msgVariants} initial="initial" animate="animate" className="min-w-0">
+      <div
+        role="status"
+        data-retry-status-card
+        className="rounded-[14px] border px-3.5 py-2.5 flex items-start gap-2.5"
+        style={{
+          borderColor: withAlpha("#f59e0b", 0.45),
+          background: withAlpha("#f59e0b", styles.isDark ? 0.09 : 0.06),
+        }}
+      >
+        <RefreshCw size={14} className="mt-0.5 shrink-0 ac-retry-spin" style={{ color: "#f59e0b" }} aria-hidden />
+        <div className="min-w-0 flex-1">
+          <div className="text-[12px] font-bold" style={{ color: "#d97706" }}>
+            Retrying — attempt {retry.attempt} of {retry.totalAttempts}
+          </div>
+          <div className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1 min-w-0">
+            <span
+              className="text-[10px] font-mono px-1.5 py-0.5 rounded-md shrink-0 uppercase tracking-wide"
+              style={{ background: withAlpha("#f59e0b", 0.14), color: "#d97706" }}
+              title={`provider error class: ${retry.errorClass}`}
+            >
+              {classLabel}
+            </span>
+            <span className="text-[11.5px] leading-[1.5] min-w-0 break-words" style={{ color: styles.textSecondary }}>
+              {retry.classMessage}
+            </span>
+          </div>
+          <div className="mt-1.5 flex flex-wrap items-center gap-x-2">
+            <span className="text-[11px] font-mono shrink-0" style={{ color: "#d97706" }}>
+              next attempt in {remainingLabel}
+            </span>
+            <span className="text-[10.5px] min-w-0" style={{ color: styles.textTertiary }}>
+              the agent keeps working automatically — no action needed
+            </span>
           </div>
         </div>
       </div>
@@ -2127,6 +2213,24 @@ export function AgentChatPanel({
                     as `screenshot` WorkingEntry rows, rendered by WorkingSection
                     at their capture moment (the owner: "When the screenshots
                     were taken they should be shown at that specific time."). */}
+                {/* ROUND-75 (R75): the transient-API retry wait — the ladder
+                    card sits ABOVE everything (the owner should always see
+                    WHY the stream is quiet and that it is handling itself). */}
+                {liveTurn.retry !== null ? (
+                  <div className="mb-2 min-w-0">
+                    <RetryStatusCard retry={liveTurn.retry} />
+                  </div>
+                ) : null}
+                {/* ROUND-75 (R75): the R71 overflow-recovery line, finally
+                    visible (previously an untyped fall-through frame). */}
+                {liveTurn.note !== null ? (
+                  <div
+                    className="mb-2 min-w-0 text-[11.5px] font-mono px-3 py-1.5 rounded-[10px] border"
+                    style={{ borderColor: withAlpha("#f59e0b", 0.35), color: styles.textSecondary, background: withAlpha("#f59e0b", 0.05) }}
+                  >
+                    {liveTurn.note}
+                  </div>
+                ) : null}
                 {liveSection}
                 {/* ROUND-66 (R66, A4): the human-verification checkpoint — the
                     browser tool hit a bot wall and is WAITING for the owner.

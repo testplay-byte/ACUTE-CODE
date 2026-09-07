@@ -443,6 +443,21 @@ export const streamAiSdkChat: StreamChatFn = async function* (input) {
   // input/output token counts (some providers report only one of the two).
   let stepCached = 0;
   for await (const part of result.fullStream) {
+    // ROUND-75 (R75, the live 429 find): the SDK surfaces mid-stream
+    // failures — provider errors AFTER its internal retries (429 rate
+    // limits, 5xx, timeouts) — as ERROR PARTS on the fullStream, not
+    // iterator throws (agentic steps with tools especially). The parts
+    // were silently skipped here, so the only error the runtime ever saw
+    // was the generic NoOutputGenerated rejection at the totals await
+    // below — "Check the stream for errors", no status, no message
+    // patterns → class unknown → NO retry ladder on REAL rate limits
+    // (exactly the "stops halfway, no error class" failure the owner
+    // reported). Re-throw the ORIGINAL error: the runtime's classifier
+    // sees the true shape (APICallError{statusCode}/RetryError with the
+    // provider text) and the transient-API ladder engages for real.
+    if (part.type === "error") {
+      throw (part as { error: unknown }).error;
+    }
     if (part.type === "text-delta") {
       yield { type: "text-delta", delta: part.text };
     } else if (part.type === "reasoning-delta") {

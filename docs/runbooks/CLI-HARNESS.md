@@ -1,4 +1,4 @@
-<!-- last-reviewed: 2026-08-31 round-58 -->
+<!-- last-reviewed: 2026-09-07 round-75 -->
 
 # CLI-HARNESS — terminal chat sessions without the UI
 

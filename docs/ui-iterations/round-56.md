@@ -1,4 +1,4 @@
-<!-- last-reviewed: 2026-08-31 round-56 -->
+<!-- last-reviewed: 2026-09-07 round-75 -->
 # Round 56 — The launch-choice round: the launcher ASKS app-or-site (the owner's request), engine failure is never a dead end, and the self-update runs the new code TODAY
 
 **Date:** 2026-08-31 · **Branch:** `main` · **Version:** 0.56.0 · **Owner directives:** the ninth Windows test session's report, blunt and actionable: *"still not working it faild and i think in the acute.bat it should ask how to launch the app or the site."* Two readings, both answered: a REQUEST (the launcher should ask how to launch — app or site) and a SYMPTOM (it failed again, and the launcher gave no way out). No new diagnostics were attached this time — the previous round's fixes (0.55.0: EISDIR + the credential namespace) shipped after the owner's last captured log, so this round also hardened every failure path so the NEXT report names itself.

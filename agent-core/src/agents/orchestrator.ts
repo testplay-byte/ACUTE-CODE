@@ -26,12 +26,18 @@
  */
 import type Database from "better-sqlite3";
 import {
+  appendSessionEvent,
   createSession,
   getSession,
   listSessionEvents,
   setSessionStatus,
   subAgentCode,
 } from "../storage/sessions.js";
+// ROUND-75 (R75): the retry-ladder's active-wait registry — the watchdog
+// consults it so a child legitimately waiting out a 5/10/30-minute
+// transient-API retry is never stall-killed (no persisted events during a
+// wait is EXPECTED, not a hang).
+import { getActiveRetryWait } from "../lib/retry.js";
 // ROUND-52 (R52-b): the shared turn registry — children register their own
 // AbortController so POST /sessions/:id/stop can stop a sub-agent directly,
 // and the supervisor can abort a stalled one.
@@ -342,6 +348,13 @@ class Orchestrator {
       parentSessionId,
       subRole: role,
       permissionMode: parent.permissionMode,
+      // ROUND-75 (R75): the child COPIES the parent's active task mode —
+      // the R50-c1 inheritance rule, one tier down. A plan-mode parent
+      // spawns read-only children (the mode-policy allowlist applies at
+      // the child's own prepareTurn); a debug-mode parent's children keep
+      // the diagnostics command tier. Delegated work can never outrun the
+      // posture the owner picked for the conversation.
+      activeMode: parent.activeMode,
     });
 
     const status = (s: SubAgentEventPayload["status"], extra?: Partial<SubAgentEventPayload>) => {
@@ -432,6 +445,25 @@ class Orchestrator {
         progress.todosDone,
         progress.todosTotal,
       );
+      // ROUND-75 (R75): a child in a TRANSIENT-API retry wait is ALIVE by
+      // construction (the ladder's waitForRetry holds it between provider
+      // attempts — up to 30 min on the final rung, far past the 5-min stall
+      // threshold). The registry entry is the live truth: never stall-kill
+      // a waiting child; surface the wait instead.
+      const retryWait = getActiveRetryWait(child.id);
+      if (retryWait !== undefined) {
+        const remaining = Math.max(0, retryWait.until - Date.now());
+        status("running", {
+          watch: {
+            ...watch,
+            stalled: false,
+            lastActivity:
+              `waiting to retry the provider (attempt ${retryWait.attempt}/${retryWait.totalAttempts}, ` +
+              `${Math.ceil(remaining / 1000)}s remaining — transient failure)`,
+          },
+        });
+        return;
+      }
       if (watch.stalled) {
         stallReport =
           `stalled — no activity for ${Math.round(watch.lastEventAgeMs / 1000)}s ` +
@@ -721,8 +753,8 @@ class Orchestrator {
    * mid-turn crash) → `failed` as ADR-0022 intended. */
   static sweepStaleRunning(db: SqliteDatabase): number {
     const stale = db
-      .prepare("SELECT id FROM sessions WHERE status = 'running'")
-      .all() as Array<{ id: string }>;
+      .prepare("SELECT id, agent_id FROM sessions WHERE status = 'running'")
+      .all() as Array<{ id: string; agent_id: string | null }>;
     let swept = 0;
     for (const row of stale) {
       const events = listSessionEvents(db, row.id);
@@ -731,7 +763,32 @@ class Orchestrator {
         // Idle after a completed turn — the conversation is alive.
         setSessionStatus(db, row.id, "queued");
       } else {
-        setSessionStatus(db, row.id, "failed");
+        // ROUND-75 (R75): a genuine mid-turn crash (the sidecar died while
+        // the turn streamed — the timeline ends at a user message or tool
+        // use with no closing reply). The pre-R75 sweep flipped these to
+        // TERMINAL `failed` with NOTHING written to the timeline: the
+        // owner's reload showed a conversation that simply stops mid-work
+        // (no error card — one of the exact "it just outright stops there"
+        // reports), and the next send 409'd "session is failed and no
+        // longer accepts messages". Now the sweep writes the honest
+        // turn.error event (the R43 persistTurnError pattern — an
+        // INTERRUPTED card lands right after the cut-off work) and resets
+        // to `queued`, the same resting state every other turn failure
+        // uses: the session stays retryable and the interruption is
+        // VISIBLE, forever, in the timeline.
+        const lastUser = [...events].reverse().find((e) => e.type === "message.user");
+        appendSessionEvent(db, row.id, {
+          type: "turn.error",
+          agentId: row.agent_id,
+          payload: {
+            code: "INTERRUPTED",
+            message:
+              "session interrupted — the app restarted while this response was being generated " +
+              "(no provider error; the work above is preserved — send a message to continue)",
+            ...(lastUser !== undefined ? { userSeq: lastUser.seq } : {}),
+          },
+        });
+        setSessionStatus(db, row.id, "queued");
         swept += 1;
       }
     }

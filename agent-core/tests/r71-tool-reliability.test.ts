@@ -648,12 +648,22 @@ describe("R71-e2 D5: overflow recovery — the STREAMED path", () => {
   });
 
   it("a NON-overflow provider error NEVER triggers compaction or recovery (class network)", async () => {
+    // ROUND-75 (R75): a network error is now TRANSIENT — the retry ladder
+    // runs before the terminal path. To keep THIS test's original intent
+    // (non-overflow classes never trigger the D5 compaction/recovery), the
+    // first failure is the same 500, the immediate ladder rung retries
+    // once, and the retry dies NON-transiently (401) so the turn ends fast
+    // and honestly. The ladder's full transient lifecycle is covered in
+    // r75-retry-ladder.test.ts.
     const { sessionId, keyring } = setup("R71-Stream-Network");
     const emitted: Array<Record<string, unknown>> = [];
     let streamCalls = 0;
     const chatStream: StreamChatFn = async function* () {
       streamCalls += 1;
-      throw new Error("500 Internal Server Error from provider");
+      if (streamCalls === 1) throw new Error("500 Internal Server Error from provider");
+      const authErr = new Error("401 Unauthorized: invalid API key");
+      (authErr as Error & { statusCode?: number }).statusCode = 401;
+      throw authErr;
     };
 
     const outcome = await runStreamedAgentTurn(
@@ -665,10 +675,13 @@ describe("R71-e2 D5: overflow recovery — the STREAMED path", () => {
     expect(outcome.ok).toBe(false);
     if (!outcome.ok) {
       expect(outcome.code).toBe("PROVIDER_ERROR");
-      expect(outcome.message).toContain("(class: network)");
-      expect(outcome.details?.errorClass).toBe("network");
+      expect(outcome.message).toContain("(class: auth)");
+      expect(outcome.details?.errorClass).toBe("auth");
+      // R75: the network failure was retried once (the immediate rung)
+      // before the auth error ended the turn.
+      expect(outcome.details?.attempts).toBe(2);
     }
-    expect(streamCalls).toBe(1);
+    expect(streamCalls).toBe(2);
     expect(emitted.some((e) => e.type === "meta.overflow_recovery")).toBe(false);
     const events = listSessionEvents(db, sessionId);
     expect(events.some((e) => e.type === "context.compact")).toBe(false);

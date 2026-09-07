@@ -1,4 +1,4 @@
-<!-- last-reviewed: 2026-09-07 round-74 -->
+<!-- last-reviewed: 2026-09-07 round-75 -->
 # Changelog
 
 All notable changes to ACUTE-CODE are documented here. Entries are written for
@@ -11,21 +11,62 @@ version number is single-sourced from the root `package.json`
 
 ## [Unreleased]
 
-Planned next: the owner's live Windows verification of the R74 updater
-gates — double-click ACUTE.bat and watch the version-truth panel's
-first line name the tag it picked (`latest installer on GitHub 0.74.0
-[v0.74.0]`), the upgrade `0.67.0 → 0.74.0` complete with its
-sha256-verified download + silent install + registry/exe/engine
-verification, and `ACUTE.bat status` report `0.74.0 on GitHub
-(published — installed is current)` — PLUS the R69/R70/R71/R72/R73 live
-gates still pending, then the R75 queue: delegate_task
-task_id/background/resume (deferred from R73 by design — the
-orchestrator deserved its own round), external plugin ctx enrichment
-(cline's appendContext seam), the lessons-ledger affordance as the
-reminder injector's third consumer, ratings-driven prompt tuning, the
-optional v0.68.0 backfill tag, and the standing items (edit-linting —
-SWE-agent's ACI #1 finding, installer code-signing, the Files-tab
-polish, agent web-app-testing tools).
+Planned next: the R75 queue — delegate_task task_id/background/resume
+(deferred from R73 by design — the orchestrator deserved its own round),
+external plugin ctx enrichment (cline's appendContext seam), the
+lessons-ledger affordance as the reminder injector's third consumer,
+ratings-driven prompt tuning, the optional v0.68.0 backfill tag, and the
+standing items (edit-linting — SWE-agent's ACI #1 finding, installer
+code-signing, the Files-tab polish, agent web-app-testing tools).
+
+## [0.75.0] - 2026-09-07
+
+### Added
+- **Transient-API auto-retry ladder** (owner spec, verbatim): rate-limit /
+  network / timeout failures now retry immediately, then wait 1.5 min →
+  5 min → 10 min → 30 min (one final attempt) — six attempts total before
+  stopping, notifying, and showing the error. Auth / overflow / unknown
+  failures never auto-retry (fail fast with the honest card). A live amber
+  "Retrying — attempt 2 of 6" status card with a countdown shows during
+  waits; any content frame means the retry succeeded.
+- **Task modes are now HARD-ENFORCED** (plan / debug / build / review /
+  explore / refactor): plan/review/explore intersect the turn's toolset
+  down to a read-only set — write_file, edit_file, run_command, index_project
+  and friends are REMOVED (the model cannot call them, and the prompt never
+  lists them). Debug keeps the full toolset but run_command demotes to
+  read-only/build/test commands. Delegated sub-agents inherit the parent's
+  mode. Read-only modes are owner-pinned: switch_mode cannot leave them.
+- Mode-picker rows are single-line with the description on hover (title
+  tooltip) and an accent "read-only" badge on plan/review/explore.
+- The composer toolbar is ONE row in the owner's exact order (attach,
+  access, mode, context, model, reasoning, send); below a 560px box the
+  selector pills collapse to icons (labels ride their tooltips).
+- Terminal error cards show the failure class + "after N attempts"; the
+  task-failed notification body says "auto-retried N times".
+
+### Fixed
+- **The composer textarea never auto-grew** (the "cut off to two lines"
+  report): `flex-1` (flex-basis 0%) made the flex algorithm ignore the
+  height style — the box stayed at its intrinsic ~1-line height and
+  scrolled internally. The height style now governs; the box grows to
+  exactly 5 visible lines (derived from the live line-height), then
+  scrolls. Programmatic fills (suggestion chips) resize too.
+- **Sub-agent turns that failed mid-work reported success** — the
+  orchestrator marked them completed and the parent model built on
+  half-done work. Now: the real usage is recorded, the error persisted,
+  and an honest 502 returned.
+- **A sidecar crash mid-turn left no trace** — the session flipped to
+  terminal `failed` with nothing in the timeline and 409'd the next send.
+  The boot sweep now writes an INTERRUPTED error event and keeps the
+  session retryable (queued).
+- **Real provider 429s/5xx were unclassifiable** (the deepest find): the
+  AI SDK delivers post-retry provider errors as fullStream error PARTS,
+  which the stream adapter ignored — the runtime only ever saw the generic
+  "No output generated" rejection, classified unknown, so no retry ladder
+  and no honest class on the card. The adapter re-throws the original
+  error; classification and the ladder now see the real shape.
+- Partial streamed text now survives EVERY exit path (terminal errors
+  flush it, matching the abort path) and the error class reaches the UI.
 
 ## [0.74.0] - 2026-09-07
 

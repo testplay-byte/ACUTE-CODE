@@ -435,31 +435,47 @@ describe("Composer: toolbar inside the box (owner spec B)", () => {
     expect(screen.queryByText(/^ctx$/)).toBeNull();
   });
 
-  it("ROUND-51 (R51-c): shrink-0 clusters + flex spacer + wrap — the clusters can never overlap", async () => {
+  it("ROUND-75 (R75, owner: one single row): every control is a DIRECT toolbar child, in the owner's order, with the send action pinned right by a spacer", async () => {
     await renderEmptyPanel();
     const toolbar = document.querySelector("[data-composer-toolbar]") as HTMLElement;
-    // The row wraps when the two clusters can't share it (left wraps ABOVE
-    // the right — DOM order left → spacer → right).
+    // The never-overlap fallback survives (R51-c) — but the R75 row is ONE
+    // FLAT CLUSTER: no left/right cluster divs, no justify-between.
     expect(toolbar.className).toContain("flex-wrap");
+    expect(toolbar.className).not.toContain("justify-between");
     const children = Array.from(toolbar.children) as HTMLElement[];
-    expect(children.length).toBe(3);
-    const [left, spacer, right] = children;
-    expect(left.className).toContain("shrink-0");
-    expect(right.className).toContain("shrink-0");
-    // The spacer absorbs the shrink (flex-1 min-w-0) — never the clusters.
-    expect(spacer.className).toContain("flex-1");
-    expect(spacer.className).toContain("min-w-0");
-    expect(
-      left.compareDocumentPosition(right) & Node.DOCUMENT_POSITION_FOLLOWING,
-    ).toBeTruthy();
-    // The clusters hold their own controls (left: context + mode; right:
-    // donut + model + thinking + send).
-    expect(left.contains(screen.getByRole("button", { name: "Add context" }))).toBe(true);
-    expect(left.contains(screen.getByRole("button", { name: "Permission mode: Ask" }))).toBe(true);
-    expect(right.contains(screen.getByRole("button", { name: "Context window usage" }))).toBe(true);
-    expect(right.contains(screen.getByRole("button", { name: "Choose model" }))).toBe(true);
-    expect(right.contains(screen.getByRole("button", { name: "Thinking level: Default" }))).toBe(true);
-    expect(right.contains(screen.getByRole("button", { name: "Send message" }))).toBe(true);
+    // ONE spacer (aria-hidden, flex-1 min-w-0) sits between the thinking
+    // level and the send action — everything else is a control.
+    const spacers = children.filter((c) => c.getAttribute("aria-hidden") === "true");
+    expect(spacers).toHaveLength(1);
+    expect(spacers[0].className).toContain("flex-1");
+    expect(spacers[0].className).toContain("min-w-0");
+    // The owner's exact order: attach, access, mode, context, model,
+    // reasoning, send — all DIRECT children of the toolbar.
+    // Selector components wrap their trigger button in a positioning div
+    // (the popover anchor) — resolve the button's closest DIRECT toolbar
+    // child for the order math.
+    const order = (name: string | RegExp): number => {
+      const btn = screen.getByRole("button", { name }) as HTMLElement;
+      let node: HTMLElement | null = btn;
+      while (node !== null && node.parentElement !== toolbar) node = node.parentElement;
+      return children.indexOf(node ?? btn);
+    };
+    const attach = order("Add context");
+    const access = order("Permission mode: Ask");
+    const mode = order(/Task mode/);
+    const context = order("Context window usage");
+    const model = order("Choose model");
+    const thinking = order("Thinking level: Default");
+    const send = order("Send message");
+    expect(attach).toBeGreaterThanOrEqual(0);
+    expect(attach).toBeLessThan(access);
+    expect(access).toBeLessThan(mode);
+    expect(mode).toBeLessThan(context);
+    expect(context).toBeLessThan(model);
+    expect(model).toBeLessThan(thinking);
+    expect(thinking).toBeLessThan(send);
+    // The spacer sits right before the send action (the pin).
+    expect(children.indexOf(spacers[0])).toBe(send - 1);
   });
 });
 
@@ -976,15 +992,20 @@ describe("Composer: permission mode switcher (owner spec D)", () => {
 
     fireEvent.click(btn);
     const menu = await screen.findByRole("menu", { name: "Permission mode" });
-    // All four modes with their one-line descriptions.
+    // R75 (owner: descriptions "should not be shown by default; only on
+    // hover"): the menu lists the four mode NAMES; the one-line descriptions
+    // ride each row's native title tooltip.
     expect(menu.textContent).toContain("Full Access");
-    expect(menu.textContent).toContain("All tools auto-approved. No permission asks.");
     expect(menu.textContent).toContain("Ask");
-    expect(menu.textContent).toContain("Asks before commands and external sites.");
     expect(menu.textContent).toContain("Plan");
-    expect(menu.textContent).toContain("Read-only. Research and plan, no edits.");
     expect(menu.textContent).toContain("Editor");
-    expect(menu.textContent).toContain("Edits files freely. No terminal. Deletes still ask.");
+    expect(menu.textContent).not.toContain("All tools auto-approved");
+    const rows = menu.querySelectorAll('[role="menuitemradio"]');
+    const titles = Array.from(rows).map((r) => r.getAttribute("title"));
+    expect(titles).toContain("All tools auto-approved. No permission asks.");
+    expect(titles).toContain("Asks before commands and external sites.");
+    expect(titles).toContain("Read-only. Research and plan, no edits.");
+    expect(titles).toContain("Edits files freely. No terminal. Deletes still ask.");
 
     fireEvent.click(screen.getByRole("menuitemradio", { name: /Plan/ }));
 

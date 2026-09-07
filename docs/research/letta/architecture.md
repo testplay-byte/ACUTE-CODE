@@ -1,4 +1,4 @@
-<!-- last-reviewed: 2026-08-30 round-54 -->
+<!-- last-reviewed: 2026-09-07 round-75 -->
 # Letta — Architecture Notes
 
 > All claims below verified against the `archive` branch of `letta-ai/letta` (legacy Letta V1 server, `letta` v0.16.8), `letta-ai/letta-code`, and docs.letta.com on 2026-08-21.
