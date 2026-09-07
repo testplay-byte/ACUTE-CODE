@@ -66,6 +66,14 @@ export const TOOL_NAMES = [
   // settings-gated) like web_fetch, so it belongs in the allowlist
   // vocabulary. Migration 0026 appends it to existing EXPLICIT allowlists.
   "analyze_image",
+  // ROUND-73 (R73-b): the TASK-MODES posture switch (activate/clear/list the
+  // session's operating posture — plan/debug/build/review/explore/refactor
+  // builtin or a project .acute/agents/*.md custom). A global session
+  // capability like read_skill (settings-independent, always registered on
+  // real turns), so explicit-list agents need it in their lists — migration
+  // 0027 repairs template/default rows that list read_skill (a mode-capable
+  // agent is one that can read skills); user curation is never widened.
+  "switch_mode",
 ] as const;
 
 /** Agent JSON as served by the API: AgentRecord plus bookkeeping columns. */

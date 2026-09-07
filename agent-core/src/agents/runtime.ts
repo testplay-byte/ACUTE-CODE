@@ -28,6 +28,7 @@ import {
   recordUsage,
   setSessionStatus,
   touchSession,
+  updateSessionActiveMode,
 } from "../storage/sessions.js";
 import type { ChatFn, ChatStepSnapshot, ChatTurnMessage, ChatTurnOutput, StreamChatFn } from "./chat.js";
 // ROUND-70 (R70-b, D3): the sticky-result tool set (read_skill /
@@ -37,7 +38,14 @@ import { buildProjectSystemPrompt, readCustomRules, type PromptEnvironment } fro
 // ROUND-72 (R72-a): the deterministic task→skill matcher — scores this
 // turn's user message against the effective skills' descriptions so the
 // prompt's SKILLS section can carry an advisory "Task signal" line.
-import { computeTaskHints } from "./task-hints.js";
+// ROUND-73 (R73-b): computeModeHints (same scorer, id-keyed) scores the
+// TASK-MODE descriptions for the TASK MODES section's own signal line.
+import { computeModeHints, computeTaskHints } from "./task-hints.js";
+// ROUND-73 (R73-b): the task-modes resolver — the posture tier's ONE
+// resolution (builtins + project .acute/agents/*.md customs, shadowing).
+// prepareTurn threads its index + per-turn hints into the prompt, resolves
+// the session's active mode, and applies a file-mode's tools NARROWING.
+import { findMode, resolveEffectiveModes, type TaskMode } from "./modes.js";
 // ROUND-70 (R70-b): the skills index resolves through the ONE shared
 // resolver (DB skills + file skills + agent filter + computer-use gate).
 import { resolveEffectiveSkills } from "../storage/skills-files.js";
@@ -130,6 +138,13 @@ export const PLAN_MODE_TOOLS: readonly string[] = [
   // FIRST", so plan mode must not advertise the index while the loader
   // is dark (the D4 dark-tools honesty rule, applied to the mode gate).
   "read_skill",
+  // ROUND-73 (R73-b follow-up): switching a task mode is an observation-
+  // level SESSION-STATE change (no files, no commands, no network) — the
+  // same D4 honesty rule, now for the TASK MODES section: plan permission
+  // mode advertises the mode index + the "consider switch_mode FIRST"
+  // task-signal line, so the switch must not be dark there. It is also the
+  // natural pairing: plan PERMISSION mode × plan TASK MODE.
+  "switch_mode",
 ];
 
 /**
@@ -205,6 +220,53 @@ export function effectiveToolNames(
       : TOOL_NAMES.filter((t) => allowList.includes(t));
   const memoryEnabled = getMemorySettings(db).enabled;
   return memoryEnabled === false ? base.filter((t) => !t.startsWith("memory_")) : [...base];
+}
+
+/**
+ * ROUND-73 (R73-b): the CUSTOM-MODE tool narrowing — a FILE-sourced task
+ * mode may declare a `tools` frontmatter list, and while that mode is ACTIVE
+ * the session's tool allowlist is INTERSECTED with it. Rules (mirroring the
+ * permission-mode intersection at every step):
+ *   · Only NARROWS, never widens — the mode's list can only REMOVE names
+ *     from the post-permission-mode allowlist.
+ *   · Names are validated against the REAL registered tool set (TOOL_NAMES,
+ *     ADR-0019's vocabulary): an unknown name in a mode file (a typo, a
+ *     syntactically-plausible slug, an mcp__ dynamic name) is DROPPED
+ *     honestly — a custom mode can never conjure a tool that does not
+ *     exist. If that leaves the mode with no known tools, the honest
+ *     product is NO_TOOLS (the mode asked for nothing real).
+ *   · An empty intersection → the NO_TOOLS sentinel (buildProjectTools
+ *     treats []/undefined as ALL — the same empty-case semantics the
+ *     permission modes use at line ~1290).
+ *   · Builtins declare NO tools list → untouched allowlist (the default
+ *     posture's toolset is the post-permission-mode set, byte-identical).
+ *   · No active mode / a stale-cleared mode (undefined) → untouched.
+ */
+export function narrowAllowListByTaskMode(
+  allowList: readonly string[] | undefined,
+  activeTaskMode: TaskMode | undefined,
+): readonly string[] | undefined {
+  const modeTools = activeTaskMode?.tools;
+  if (
+    activeTaskMode === undefined ||
+    activeTaskMode.source !== "file" ||
+    modeTools === undefined ||
+    modeTools.length === 0
+  ) {
+    return allowList;
+  }
+  // Validate against the real registry vocabulary — unknown names drop.
+  const known = modeTools.filter((tool) => (TOOL_NAMES as readonly string[]).includes(tool));
+  if (known.length === 0) {
+    return NO_TOOLS;
+  }
+  const base =
+    allowList === undefined || allowList.length === 0
+      ? (TOOL_NAMES as readonly string[])
+      : allowList;
+  // NO_TOOLS already means "register nothing" — the intersection keeps it.
+  const filtered = base.filter((tool) => known.includes(tool));
+  return filtered.length > 0 ? filtered : NO_TOOLS;
 }
 
 /**
@@ -1299,9 +1361,36 @@ async function prepareTurn(
   // treats []/undefined as ALL (ADR-0019), so the NO_TOOLS sentinel carries
   // the empty case (tools/index.ts).
   const allowListWithMode = sessionToolAllowList(session, agent, depth);
+  // ROUND-73 (R73-b): the TASK-MODE resolution — ONE call, the same
+  // resolver switch_mode and the /modes route sit on (builtins always; the
+  // project's .acute/agents/*.md customs + shadowing when a root exists).
+  // It must run BEFORE buildProjectTools because a FILE-mode's frontmatter
+  // `tools` list NARROWS the allowlist (a custom mode can only narrow, never
+  // widen — the permission-mode rule, applied one step later). Builtins
+  // declare no tools → no narrowing, byte-identical toolset.
+  const modeResolution = resolveEffectiveModes(project !== undefined ? project.rootPath : undefined);
+  // ROUND-73 (R73-b): the session's ACTIVE mode — session.activeMode
+  // (PATCH /sessions/:id or switch_mode) resolved through the same list. A
+  // mode that no longer resolves (its .acute/agents file was removed) is
+  // STALE: best-effort clear the row (the storage-level writer, updated_at
+  // bump included) and carry the honest note for THIS turn only — the
+  // session keeps running in the default posture instead of silently
+  // resurrecting a vanished guide.
+  let activeTaskMode: TaskMode | undefined;
+  let clearedModeNote: string | undefined;
+  if (session.activeMode !== null) {
+    activeTaskMode = findMode(modeResolution.modes, session.activeMode);
+    if (activeTaskMode === undefined) {
+      updateSessionActiveMode(db, session.id, null);
+      clearedModeNote =
+        `task mode '${session.activeMode}' from a previous turn no longer exists ` +
+        "(its .acute/agents file was removed) — active mode cleared";
+    }
+  }
+  const allowListWithTaskMode = narrowAllowListByTaskMode(allowListWithMode, activeTaskMode);
   const tools =
     project !== undefined
-      ? await buildProjectTools(project.rootPath, allowListWithMode, toolDeps)
+      ? await buildProjectTools(project.rootPath, allowListWithTaskMode, toolDeps)
       : undefined;
   // ROUND-70 (R70-c, D1): the turn's REAL environment — OS/shell/date/git,
   // computed here (per turn, never cached across turns, never blocking:
@@ -1332,6 +1421,12 @@ async function prepareTurn(
   // no advisory line, byte-identical composition.
   const taskHints =
     turnUserMessage !== undefined ? computeTaskHints(turnUserMessage, effectiveSkills) : undefined;
+  // ROUND-73 (R73-b): the per-turn MODE hints — the same message scored
+  // against the resolved task modes' descriptions (computeModeHints, the
+  // R72-a scorer reused verbatim). EPHEMERAL like taskHints: rendered into
+  // this turn's TASK MODES section, never persisted, never auto-activated.
+  const modeHints =
+    turnUserMessage !== undefined ? computeModeHints(turnUserMessage, modeResolution.modes) : undefined;
   const system = project
     ? buildProjectSystemPrompt({
         projectName: project.name,
@@ -1386,6 +1481,23 @@ async function prepareTurn(
         // ROUND-72 (R72-a): the advisory "Task signal" line's payload —
         // undefined/empty (no message, or no skill scored) composes nothing.
         ...(taskHints !== undefined && taskHints.length > 0 ? { taskHints } : {}),
+        // ROUND-73 (R73-b): the TASK MODES section's payload — the
+        // available-mode index (id+name+description, the switch_mode
+        // vocabulary), the per-turn mode hints (undefined/empty composes no
+        // signal line), the ACTIVE mode's deep module (absent while
+        // modeless), and the one-turn honest note when a stale active mode
+        // was cleared above. Every field strictly gated: a caller without
+        // them composes byte-identically (the golden fixture's proof).
+        taskModes: modeResolution.modes.map((mode) => ({
+          id: mode.id,
+          name: mode.name,
+          description: mode.description,
+        })),
+        ...(modeHints !== undefined && modeHints.length > 0 ? { modeHints } : {}),
+        ...(activeTaskMode !== undefined
+          ? { activeTaskMode: { id: activeTaskMode.id, name: activeTaskMode.name, body: activeTaskMode.body } }
+          : {}),
+        ...(clearedModeNote !== undefined ? { clearedModeNote } : {}),
         computerUse: (() => {
           const cu = getComputerUseSettings(db);
           return { enabled: cu.enabled, posture: cu.permission };

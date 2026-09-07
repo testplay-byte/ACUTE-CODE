@@ -49,10 +49,19 @@ const GOLDEN_ROOT = "/tmp/acute-r61-golden-root";
 const FULL_CTX = {
   projectName: "GoldenProject",
   rootPath: GOLDEN_ROOT,
-  // read_skill is IN TOOL_NAMES since R61 (the skills loader is a global
-  // capability) — appending it here would duplicate it; only the dynamic
-  // MCP bridge name is appended (it is never static vocabulary).
-  toolNames: [...TOOL_NAMES, "mcp__demo__echo"],
+  // ROUND-73 (R73-b): the toolNames list is FROZEN to the golden fixture's
+  // exact vocabulary (previously [...TOOL_NAMES, "mcp__demo__echo"], which
+  // silently tracked TOOL_NAMES — every vocabulary round would have rewritten
+  // the golden's TOOL USE line and forced a regeneration; the fixture's md5
+  // is the PIN). New tool vocabulary (R73's switch_mode) joins the LIVE turn
+  // path and the MODES_CTX completeness ctx below — never this fixture.
+  toolNames: [
+    "list_dir", "read_file", "write_file", "edit_file", "create_dir", "delete_file",
+    "search_files", "search_code", "git_status", "git_diff", "git_log", "run_command",
+    "todo_write", "web_fetch", "web_search", "index_project", "delegate_task",
+    "browser_control", "memory_save", "memory_recall", "memory_list",
+    "job_status", "job_stop", "read_skill", "analyze_image", "mcp__demo__echo",
+  ],
   customRules: "Always write tests first.",
   maxTurns: 37,
   maxOuterLoops: 5,
@@ -92,6 +101,31 @@ const FULL_CTX = {
   debugMode: true,
 };
 
+/** ROUND-73 (R73-b): the TASK-MODES completeness ctx — FULL_CTX plus every
+ * R73 gate opened (taskModes index, modeHints, activeTaskMode, and the
+ * clearedModeNote). The BYTE-IDENTITY golden above stays on the bare
+ * FULL_CTX (the sections are strictly gated → the fixture's md5 never
+ * moves); THIS ctx is what proves the two new registry ids compose, in the
+ * registry's exact order. toolNames deliberately tracks the LIVE TOOL_NAMES
+ * here (this ctx is never byte-compared) so future vocabulary stays covered
+ * by the completeness pin. */
+const MODES_CTX = {
+  ...FULL_CTX,
+  toolNames: [...TOOL_NAMES, "mcp__demo__echo"],
+  taskModes: [
+    { id: "plan", name: "Plan", description: "Use when the user says 'plan this', 'write a spec' — the deliverable is a decision-ready specification, not code." },
+    { id: "debug", name: "Debug", description: "Use when the user says 'fix this bug', 'why does this fail' — the cause is unknown; reproduce before theorizing." },
+  ],
+  modeHints: [{ modeId: "debug", score: 12 }],
+  activeTaskMode: {
+    id: "plan",
+    name: "Plan",
+    body: "# Mode: plan — SPEC-FIRST POSTURE\n\nWhile this mode is active, the deliverable is a DECISION-READY SPECIFICATION.",
+  },
+  clearedModeNote:
+    "task mode 'custom-mode' from a previous turn no longer exists (its .acute/agents file was removed) — active mode cleared",
+};
+
 afterAll(() => {
   try {
     rmSync(join(tmpdir(), "acute-preg-"), { recursive: true, force: true });
@@ -124,6 +158,13 @@ describe("PROMPT_REGISTRY (R59-F)", () => {
     // teaches the judgment right behind it).
     expect(PROMPT_SECTION_IDS.indexOf("engineering-discipline")).toBe(PROMPT_SECTION_IDS.indexOf("agentic-loop") + 1);
     expect(PROMPT_SECTION_IDS.indexOf("engineering-discipline")).toBeLessThan(PROMPT_SECTION_IDS.indexOf("file-editing"));
+    // ROUND-73 (R73-b): the task-modes pair slots in DIRECTLY AFTER skills
+    // (the posture tier rides the methodology tier — the modes index is the
+    // switch_mode vocabulary, the skills index is the read_skill one, and
+    // the two access paths sit adjacent).
+    expect(PROMPT_SECTION_IDS.indexOf("task-modes")).toBe(PROMPT_SECTION_IDS.indexOf("skills") + 1);
+    expect(PROMPT_SECTION_IDS.indexOf("active-mode")).toBe(PROMPT_SECTION_IDS.indexOf("task-modes") + 1);
+    expect(PROMPT_SECTION_IDS.indexOf("active-mode")).toBeLessThan(PROMPT_SECTION_IDS.indexOf("computer-use"));
     // R70-c (D2): the consolidated sections are RETIRED — the removal pin
     // (a stale entry can't linger; .acute/prompts/<id>.md for them is now an
     // unknown-file diagnostic, not an override).
@@ -133,8 +174,13 @@ describe("PROMPT_REGISTRY (R59-F)", () => {
   });
 
   it("COMPLETENESS: the ids stamped by buildTaggedPromptLines are exactly the registry ids, in registry order", () => {
+    // ROUND-73 (R73-b): the completeness ctx is MODES_CTX — FULL_CTX with
+    // every R73 gate opened, so the two new sections (task-modes,
+    // active-mode) compose and the pin covers them like every other
+    // conditional section. The bare FULL_CTX (golden ctx) composes NEITHER
+    // — the strict gating is the golden's byte-stability proof.
     const stamped: string[] = [];
-    for (const entry of buildTaggedPromptLines(FULL_CTX)) {
+    for (const entry of buildTaggedPromptLines(MODES_CTX)) {
       expect(entry.sectionId).toBeDefined(); // every composed line is stamped
       if (stamped[stamped.length - 1] !== entry.sectionId) stamped.push(entry.sectionId as string);
     }

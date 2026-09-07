@@ -1,4 +1,4 @@
-<!-- last-reviewed: 2026-09-07 round-72 -->
+<!-- last-reviewed: 2026-09-07 round-73 -->
 # Changelog
 
 All notable changes to ACUTE-CODE are documented here. Entries are written for
@@ -11,22 +11,86 @@ version number is single-sourced from the root `package.json`
 
 ## [Unreleased]
 
-Planned next: the owner's live Windows verification of the R72 gates —
-whether the task-signal line appears on real messages ("my test keeps
-failing, fix this bug" should carry a "Task signal: … matches
-**debugging**" advisory in the SKILLS prompt section), whether the six
-new skills trigger on their phrasings ("write the test first" → tdd,
-"is this safe" → security-review, "clean this up" → refactoring),
-whether a file skill's references/ subdirectory loads through
-read_skill's new reference param, and whether nested-directory
-AGENTS.md/CLAUDE.md files surface their fenced conventions reminder on
-the first read_file under them — PLUS the R69/R70/R71 live gates still
-pending, then the R73 queue: delegate_task task_id/background/resume,
-a generalized system-reminder injector, custom modes
-(.acute/agents/*.md), external plugin ctx enrichment, two more skills
-(performance, spec-planning), and the standing items (edit-linting —
-SWE-agent's ACI #1 finding, installer code-signing, ratings-driven
-prompt tuning, the Files-tab polish, agent web-app-testing tools).
+Planned next: the owner's live Windows verification of the R73 gates —
+whether the TASK MODES section and its Task signal line appear on real
+task-shaped messages ("fix this bug" should carry a "Task signal: … the
+**debug** posture — consider switch_mode FIRST" advisory), whether
+switch_mode activation makes the ACTIVE TASK MODE section ride the
+following turns' prompts (and /mode none removes it), whether the
+composer picker and the /mode slash round-trip (set / clear / list,
+custom modes from .acute/agents/*.md visible with the custom chip),
+whether the two new skills trigger ("write a spec" → spec-planning,
+"make it faster" → performance), and whether a custom mode's tools
+frontmatter actually narrows the session read-only while active — PLUS
+the R69/R70/R71/R72 live gates still pending, then the R74 queue:
+delegate_task task_id/background/resume (deferred from R73 by design —
+the orchestrator deserved its own round), external plugin ctx
+enrichment (cline's appendContext seam), the lessons-ledger affordance
+as the reminder injector's third consumer, ratings-driven prompt
+tuning, and the standing items (edit-linting — SWE-agent's ACI #1
+finding, installer code-signing, the Files-tab polish, agent
+web-app-testing tools).
+
+## [0.73.0] - 2026-09-07
+
+Round 73 — the task modes round, the posture layer that completes the
+owner's directive ("proper detailed system prompts which the agent
+accesses when required and on the basis of the task"). Skills carry
+methodology; **task modes carry POSTURE** — how the agent holds itself
+for a class of work: what it refuses to do first (edit, theorize,
+widen, praise), what it must produce before anything else (a spec, a
+reproduction, a safety net, a map), what "done" means in that stance.
+**Six built-in modes** (plan / debug / build / review / explore /
+refactor, deep 2.0-2.5KB posture bodies with iron laws, ordered
+methods, honesty rules, and a PAIRS WITH line steering to the skills
+that carry the method — e.g. plan's NO EDITS + the 7-question
+interrogation + present-and-wait; debug's NEVER a fix without a
+one-sentence root cause + the unreproduced-bug-is-a-rumor honesty rule
++ 3-strike escalation; review's NO EDITS + the evidence-quoted findings
+format + the mandatory WHAT-I-DID-NOT-CHECK; refactor's no-behavior-
+change iron law + one mechanical move per step). **Three access
+paths, nothing auto-activates**: the agent-side switch_mode tool
+(activates/clears/lists — returns the full guide ONCE on activation,
+then the prompt carries it every following turn; "none"/"off"/"auto"
+or JSON null deactivate), the user-side composer mode picker + /mode
+slash command (set/clear/list, id or name, case-insensitive,
+word-boundary so /moderation falls through), and the advisory Task
+signal line — the R72 deterministic matcher, extended: mode
+descriptions are scored exactly like skill descriptions
+(computeModeHints, the same shared scorer, computeTaskHints unchanged)
+and the new TASK MODES prompt section renders "Task signal: this
+request looks like the **debug** posture — consider switch_mode FIRST"
+(advice only; per-turn ephemeral; the golden prompt fixture stayed
+byte-identical). **Custom modes**: .acute/agents/*.md in the project
+root (the kilocode/claude pattern) — frontmatter name/description/
+tools + a body that becomes the active mode's prompt module; ≤8 files
+× 16KB, honest caps and 8 diagnostic kinds, a custom mode SHADOWS the
+builtin of the same id, and an optional tools list NARROWS the
+session's tool allowlist while active (never widens; unknown tool
+names drop; project-root trust — same level as .acute/prompts
+overrides, no allowlist bypass). **The mode surface is first-class**:
+sessions carry active_mode (migration 0027; existing sessions stay
+exactly today's behavior), PATCH /sessions/:id accepts
+{activeMode: id|null} (unknown id → 400 with the available ids),
+GET /projects/:id/modes serves the metadata-only index, switch_mode
+joined the always-registered vocabulary + plan permission mode's
+tools, and a vanished custom mode is swept clear with a one-turn
+honest note. **Also this round**: the generalized system-reminder
+renderer (ONE mechanism — the per-directory conventions reminder
+migrated onto it byte-identically, switch_mode's activation notice is
+its second consumer, plus a per-turn ReminderBudget of 3) and the
+skills library 18 → **20** (spec-planning: the spec-as-decision-
+document methodology, interfaces first, ≤5 batched questions with
+defaults; performance: NO OPTIMIZATION WITHOUT A BEFORE-NUMBER AND A
+NAMED BOTTLENECK, the 3-rung profiling ladder, complexity before
+micro-tuning). 2558 root tests in 138 files, all green (agent-core
+1637/1637 in 74 files — +135: four new suites r73-modes-core 28 +
+r73-system-reminders 16 + r73-skills-round 17 + r73-modes-backend 45
++ skills re-pins; frontend 909 in 62 files — the picker 10 + panel
+23→32), lint/typecheck clean, license audit CLEAN (134 deps, no
+dependency changes), plus a live HTTP smoke of the mode routes against
+a real sidecar spin (GET /modes with a custom, PATCH set/bogus-400/
+null-clear). Full evidence in docs/ui-iterations/round-73.md.
 
 ## [0.72.0] - 2026-09-07
 

@@ -55,10 +55,27 @@
  *     inherit the resolver's gating for free — hints are scored against the
  *     EFFECTIVE skills (resolveEffectiveSkills: computer-use master switch,
  *     per-agent allowlist), so a dark skill is never recommended.
+ *
+ * ROUND-73 (R73-b): the same deterministic matcher now serves the TASK-MODE
+ * tier — computeModeHints scores mode descriptions (R73-a wrote them in the
+ * same trigger-rich convention) and feeds the TASK MODES section's mode
+ * signal line. The scoring core was EXTRACTED into scoreQualified (shared,
+ * unchanged algorithm); computeTaskHints keeps its exact signature,
+ * behavior, and tie-break (name asc) — the r72 suite must stay green
+ * UNMODIFIED. computeModeHints ties break by id asc (switch_mode addresses
+ * ids). Same constants, same hygiene rules, same top-2 discipline.
  */
 /** One scored match: the skill's name and its deterministic signal score. */
 export interface TaskHint {
   skillName: string;
+  score: number;
+}
+
+/** ROUND-73 (R73-b): the MODE sibling — one scored match carrying the task
+ *  mode's id (switch_mode addresses ids, not names). Same scorer, same
+ *  constants; only the tie-break key differs (id asc, not name asc). */
+export interface ModeHint {
+  modeId: string;
   score: number;
 }
 
@@ -133,16 +150,21 @@ function tokenize(text: string): string[] {
 }
 
 /**
- * Score every skill's description against the incoming user message and
- * return the top hints (score desc, then name asc; at most 2). Pure and
- * synchronous — no LLM, no I/O, no side effects. Empty or whitespace-only
- * message → []; no skills → [].
+ * ROUND-73 (R73-b): the SHARED SCORER CORE — message prep (cap, contraction
+ * flattening, lowercasing, whole-word set), quoted-phrase scoring (word
+ * count × 5, any hit qualifies), and token scoring (≥3 chars, no stopwords,
+ * whole-word membership = 1). This is EXACTLY the algorithm computeTaskHints
+ * ran since R72-a, extracted so the mode matcher (computeModeHints) reuses
+ * the same deterministic core byte-for-byte. Returns the QUALIFIED entries
+ * in INPUT order (index + score) — the public wrappers own the field they
+ * surface (skillName vs modeId), the tie-break key, and the top-N slice.
+ * Empty item list → []; empty/whitespace message → [].
  */
-export function computeTaskHints(
+function scoreQualified(
   userMessage: string,
-  skills: ReadonlyArray<{ name: string; description: string }>,
-): TaskHint[] {
-  if (skills.length === 0) return [];
+  items: ReadonlyArray<{ description: string }>,
+): Array<{ index: number; score: number }> {
+  if (items.length === 0) return [];
   const capped = userMessage.slice(0, MESSAGE_CHAR_CAP);
   if (capped.trim() === "") return [];
 
@@ -152,9 +174,9 @@ export function computeTaskHints(
   // Set membership ≡ a \b-bounded match on the lowercased message).
   const messageWords = new Set(message.split(/[^a-z0-9]+/));
 
-  const hints: TaskHint[] = [];
-  for (const skill of skills) {
-    const description = flattenContractions(skill.description).toLowerCase();
+  const qualified: Array<{ index: number; score: number }> = [];
+  for (let i = 0; i < items.length; i++) {
+    const description = flattenContractions(items[i]!.description).toLowerCase();
     let score = 0;
     let phraseHit = false;
 
@@ -170,12 +192,51 @@ export function computeTaskHints(
     }
 
     if (phraseHit || score >= SCORE_THRESHOLD) {
-      hints.push({ skillName: skill.name, score });
+      qualified.push({ index: i, score });
     }
   }
+  return qualified;
+}
 
+/**
+ * Score every skill's description against the incoming user message and
+ * return the top hints (score desc, then name asc; at most 2). Pure and
+ * synchronous — no LLM, no I/O, no side effects. Empty or whitespace-only
+ * message → []; no skills → [].
+ */
+export function computeTaskHints(
+  userMessage: string,
+  skills: ReadonlyArray<{ name: string; description: string }>,
+): TaskHint[] {
+  const hints: TaskHint[] = scoreQualified(userMessage, skills).map((q) => ({
+    skillName: skills[q.index]!.name,
+    score: q.score,
+  }));
   hints.sort((a, b) =>
     b.score !== a.score ? b.score - a.score : a.skillName < b.skillName ? -1 : a.skillName > b.skillName ? 1 : 0,
+  );
+  return hints.slice(0, MAX_HINTS);
+}
+
+/**
+ * ROUND-73 (R73-b): the mode matcher — the R72-a scorer applied to TASK-MODE
+ * descriptions (R73-a wrote them in the same trigger-rich convention, so
+ * 'fix this bug' surfaces the debug POSTURE exactly like it surfaces the
+ * debugging skill). Same constants (top-2, threshold ≥ 2, phrases × 5);
+ * ties break by id ASC (switch_mode addresses ids — the deterministic
+ * order the picker and the advisory line can both rely on). Pure and
+ * synchronous; hints are per-turn EPHEMERAL. Empty message → []; no modes → [].
+ */
+export function computeModeHints(
+  userMessage: string,
+  modes: ReadonlyArray<{ id: string; description: string }>,
+): ModeHint[] {
+  const hints: ModeHint[] = scoreQualified(userMessage, modes).map((q) => ({
+    modeId: modes[q.index]!.id,
+    score: q.score,
+  }));
+  hints.sort((a, b) =>
+    b.score !== a.score ? b.score - a.score : a.modeId < b.modeId ? -1 : a.modeId > b.modeId ? 1 : 0,
   );
   return hints.slice(0, MAX_HINTS);
 }

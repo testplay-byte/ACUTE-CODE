@@ -23,6 +23,12 @@
  *
  * Sibling rounds cover the rest of R72: task-hints (R72-a), references/
  * depth (R72-c), per-directory conventions (R72-d).
+ *
+ * ROUND-73 (R73-d) RE-PINS: the builtin family grew 18 → 20
+ * (spec-planning, performance — see tests/r73-skills-round.test.ts for
+ * the two new skills' own pins). The R72-b pins below stay intact for
+ * the original six; the counts/orders/contracts extended honestly to
+ * twenty.
  */
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -120,8 +126,8 @@ const R72_BUILTINS: ReadonlyArray<{
   },
 ];
 
-/** The full eighteen — the fixed order the R70/R71/R72 rounds established. */
-const EXPECTED_EIGHTEEN: ReadonlyArray<string> = [
+/** The full twenty — the fixed order the R70/R71/R72/R73 rounds established. */
+const EXPECTED_TWENTY: ReadonlyArray<string> = [
   "computer-use",
   "code-review",
   "debugging",
@@ -140,6 +146,8 @@ const EXPECTED_EIGHTEEN: ReadonlyArray<string> = [
   "typescript-craft",
   "security-review",
   "refactoring",
+  "spec-planning",
+  "performance",
 ];
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -147,9 +155,9 @@ const EXPECTED_EIGHTEEN: ReadonlyArray<string> = [
 // ─────────────────────────────────────────────────────────────────────────────
 
 describe("R72-b D1: six new craft builtins (12 → 18)", () => {
-  it("EIGHTEEN builtins seed in the fixed order, fixed ids, sortOrder 0-17, all enabled", () => {
+  it("TWENTY builtins seed in the fixed order, fixed ids, sortOrder 0-19, all enabled", () => {
     const builtins = listSkills(db).filter((s) => s.source === "builtin");
-    expect(builtins.map((s) => s.name)).toEqual(EXPECTED_EIGHTEEN);
+    expect(builtins.map((s) => s.name)).toEqual(EXPECTED_TWENTY);
     expect(builtins.map((s) => s.id)).toEqual([
       "skill_builtin_computer_use",
       "skill_builtin_code_review",
@@ -164,8 +172,11 @@ describe("R72-b D1: six new craft builtins (12 → 18)", () => {
       "skill_builtin_self_eval",
       "skill_builtin_ship_gate",
       ...R72_BUILTINS.map((b) => b.id),
+      // R73-d: the two methodology additions ride the same fixed-id contract.
+      "skill_builtin_spec_planning",
+      "skill_builtin_performance",
     ]);
-    expect(builtins.map((s) => s.sortOrder)).toEqual(Array.from({ length: 18 }, (_, i) => i));
+    expect(builtins.map((s) => s.sortOrder)).toEqual(Array.from({ length: 20 }, (_, i) => i));
     expect(builtins.every((s) => s.enabled)).toBe(true);
   });
 
@@ -190,17 +201,17 @@ describe("R72-b D1: six new craft builtins (12 → 18)", () => {
     },
   );
 
-  it("the six new descriptions are distinct — from each other AND from the twelve older ones", () => {
+  it("the six new descriptions are distinct — from each other AND from the eighteen older ones", () => {
     const descriptions = listSkills(db)
       .filter((s) => s.source === "builtin")
       .map((s) => s.description);
-    expect(descriptions).toHaveLength(18);
-    expect(new Set(descriptions).size).toBe(18);
+    expect(descriptions).toHaveLength(20);
+    expect(new Set(descriptions).size).toBe(20);
   });
 
   it("the six names are lowercase slugs that do not shadow older builtins (the naming contract)", () => {
     const names = listSkills(db).filter((s) => s.source === "builtin").map((s) => s.name);
-    expect(new Set(names).size).toBe(18);
+    expect(new Set(names).size).toBe(20);
     for (const name of R72_BUILTINS.map((b) => b.name)) {
       expect(name).toMatch(/^[a-z0-9][a-z0-9-]{1,63}$/);
     }
@@ -422,28 +433,28 @@ describe("R72-b D2: the six new bodies (discipline contracts)", () => {
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
-// D3 — the INSERT OR IGNORE contract, eighteen-strong
+// D3 — the INSERT OR IGNORE contract, twenty-strong (R73-d re-pin)
 // ─────────────────────────────────────────────────────────────────────────────
 
-describe("R72-b D3: INSERT OR IGNORE with 18 builtins", () => {
-  it("an explicit re-seed is idempotent: still exactly 18 rows, unique names, unique ids", () => {
+describe("R72-b D3: INSERT OR IGNORE with 20 builtins", () => {
+  it("an explicit re-seed is idempotent: still exactly 20 rows, unique names, unique ids", () => {
     seedBuiltinSkills(db);
     seedBuiltinSkills(db);
     const rows = db.prepare("SELECT * FROM skills").all() as Array<{ id: string; name: string; source: string }>;
     const builtins = rows.filter((r) => r.source === "builtin");
-    expect(builtins).toHaveLength(18);
-    expect(new Set(builtins.map((r) => r.id)).size).toBe(18);
-    expect(new Set(builtins.map((r) => r.name)).size).toBe(18);
+    expect(builtins).toHaveLength(20);
+    expect(new Set(builtins.map((r) => r.id)).size).toBe(20);
+    expect(new Set(builtins.map((r) => r.name)).size).toBe(20);
   });
 
-  it("deleted new-builtin rows revive on reopen (an existing pre-R72 DB converges on 18)", () => {
+  it("deleted new-builtin rows revive on reopen (an existing pre-R73 DB converges on 20)", () => {
     const path = join(tempDir, "converge.db");
     const existing = openDatabase(path); // an "existing user DB" — already seeded
     try {
       // The user nukes two of the six new rows (say, by hand).
       existing.prepare("DELETE FROM skills WHERE id = ?").run("skill_builtin_tdd");
       existing.prepare("DELETE FROM skills WHERE id = ?").run("skill_builtin_refactoring");
-      expect(listSkills(existing).filter((s) => s.source === "builtin")).toHaveLength(16);
+      expect(listSkills(existing).filter((s) => s.source === "builtin")).toHaveLength(18);
     } finally {
       existing.close();
     }
@@ -451,7 +462,7 @@ describe("R72-b D3: INSERT OR IGNORE with 18 builtins", () => {
     const reopened = openDatabase(path);
     try {
       const builtins = listSkills(reopened).filter((s) => s.source === "builtin");
-      expect(builtins).toHaveLength(18);
+      expect(builtins).toHaveLength(20);
       expect(getSkill(reopened, "skill_builtin_tdd")?.name).toBe("tdd");
       expect(getSkill(reopened, "skill_builtin_tdd")?.body).toContain("NEVER WRITE THE TEST AFTER THE CODE");
       expect(getSkill(reopened, "skill_builtin_refactoring")?.body).toContain("NO MOVE WITHOUT A GREEN CHARACTERIZATION TEST");
@@ -474,7 +485,7 @@ describe("R72-b D3: INSERT OR IGNORE with 18 builtins", () => {
   it("disabling a new builtin hides it from the enabled set without deleting the row", () => {
     updateSkill(db, "skill_builtin_security_review", { enabled: false });
     expect(listEnabledSkills(db).map((s) => s.name)).not.toContain("security-review");
-    expect(listSkills(db).filter((s) => s.source === "builtin")).toHaveLength(18);
+    expect(listSkills(db).filter((s) => s.source === "builtin")).toHaveLength(20);
     // Re-enable restores it (the row never left).
     updateSkill(db, "skill_builtin_security_review", { enabled: true });
     expect(listEnabledSkills(db).map((s) => s.name)).toContain("security-review");
@@ -497,11 +508,11 @@ describe("R72-b D4: the six new descriptions ride the prompt SKILLS section verb
     };
   }
 
-  it("all eighteen builtins render as '- **name** — description' with the FULL new descriptions", () => {
+  it("all twenty builtins render as '- **name** — description' with the FULL new descriptions", () => {
     const builtins = listSkills(db)
       .filter((s) => s.source === "builtin")
       .map((s) => ({ name: s.name, description: s.description }));
-    expect(builtins).toHaveLength(18);
+    expect(builtins).toHaveLength(20);
 
     const section = buildSectionText(promptCtx(builtins), "skills") ?? "";
     expect(section).toContain("## SKILLS (load with read_skill)");
@@ -517,6 +528,9 @@ describe("R72-b D4: the six new descriptions ride the prompt SKILLS section verb
     expect(section).toContain("'fix the any'");
     expect(section).toContain("'is this safe'");
     expect(section).toContain("'clean this up'");
+    // R73-d re-pin: the two methodology phrases ride the same surface.
+    expect(section).toContain("'write a spec'");
+    expect(section).toContain("'make it faster'");
     // The reload affordance still rides the section (R70-c D6).
     expect(section).toContain("A skill body that appears truncated after context compaction can be RELOADED: call read_skill again.");
   });

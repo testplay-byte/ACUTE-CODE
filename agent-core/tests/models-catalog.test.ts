@@ -348,8 +348,10 @@ describe("migration 0014 (delegate_task + browser_control allowlist repair)", ()
     // ROUND-52 (R52-a): 0021 appends the two job tools (the seed list
     // includes run_command) → 23; ROUND-61 (R61): 0023 appends read_skill
     // (the skills loader is a global capability) → 24; ROUND-66 (R66):
-    // 0026 appends analyze_image (the seed list includes web_fetch) → 25.
-    expect(row("agt_tpl_coder")).toHaveLength(25);
+    // 0026 appends analyze_image (the seed list includes web_fetch) → 25;
+    // ROUND-73 (R73-b): 0027 appends switch_mode (the read_skill companion
+    // rule — the list has read_skill by then) → 26.
+    expect(row("agt_tpl_coder")).toHaveLength(26);
     expect(row("agt_tpl_coder")).toContain("analyze_image");
     expect(row("agt_default_nova")).toContain("delegate_task");
     expect(row("agt_default_nova")).toContain("browser_control");
@@ -361,6 +363,8 @@ describe("migration 0014 (delegate_task + browser_control allowlist repair)", ()
     // ROUND-61 (R61): migration 0023 appends read_skill (it is a template
     // row with a non-empty list). ROUND-66 (R66): 0026 leaves it UNTOUCHED
     // — its list has no web_fetch (the general-capability companion rule).
+    // ROUND-73 (R73-b): 0027 appends switch_mode (the mode-capable
+    // companion rule — the row HAS read_skill).
     expect(row("agt_tpl_already")).toEqual([
       "list_dir",
       "delegate_task",
@@ -369,6 +373,7 @@ describe("migration 0014 (delegate_task + browser_control allowlist repair)", ()
       "memory_recall",
       "memory_list",
       "read_skill",
+      "switch_mode",
     ]);
     // idempotent on reopen
     db.close();
@@ -377,7 +382,7 @@ describe("migration 0014 (delegate_task + browser_control allowlist repair)", ()
       JSON.parse(
         (again.prepare("SELECT allowed_tools FROM agents WHERE id = 'agt_tpl_coder'").get() as { allowed_tools: string }).allowed_tools,
       ),
-    ).toHaveLength(25);
+    ).toHaveLength(26);
     again.close();
   });
 });

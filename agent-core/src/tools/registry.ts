@@ -55,6 +55,10 @@ import { mcpPlugin } from "./plugins/mcp.js";
 // (the honest off-mode refusal is the switch), reading the global vision
 // settings (Settings → Image Analysis).
 import { visionPlugin } from "./plugins/vision.js";
+// ROUND-73 (R73-b): the task-modes posture switch — a global session
+// capability like read_skill (always registered on real turns,
+// settings-independent), deps-gated so bare declaration builds see nothing.
+import { modesPlugin } from "./plugins/modes.js";
 
 /** Every tool's uniform result (moved here from tools/index.ts — the
  * registry is the types home now; index.ts re-exports for back-compat). */
@@ -123,6 +127,11 @@ export const BUILT_IN_PLUGINS: readonly PluginDefinition[] = [
   visionPlugin,
   skillsPlugin,
   mcpPlugin,
+  // ROUND-73 (R73-b): switch_mode — the TASK-MODES posture switch, always
+  // on like read_skill (a global session capability; the modes themselves
+  // are indexed in the prompt's TASK MODES section). Deps-gated: bare
+  // declaration/test builds see nothing from it.
+  modesPlugin,
 ];
 
 /** Catalog row for UI/docs (metadata only — never an execute handle). */

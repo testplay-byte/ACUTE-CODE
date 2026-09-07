@@ -28,6 +28,17 @@ export interface Session {
    * Enforced at turn time (runtime.ts prepareTurn + approvals.ts); children
    * copy their parent's mode at delegation. */
   permissionMode: PermissionMode;
+  /** ROUND-73 (R73-b): the session's ACTIVE TASK MODE id (the posture tier —
+   * plan/debug/build/review/explore/refactor builtin, or a custom
+   * .acute/agents/*.md id), or null when the session runs in the default
+   * posture. Set/cleared via PATCH /sessions/:id { activeMode } and the
+   * switch_mode tool; resolved against resolveEffectiveModes(session's
+   * project root) at turn time so a VANISHED custom mode is cleared honestly
+   * (runtime.ts prepareTurn threads the note). While set, the mode's deep
+   * body rides the system prompt's ACTIVE TASK MODE section. NULL = the
+   * column default; pre-0027 databases read as null (fail-open to the
+   * default posture — exactly the pre-R73 behavior). */
+  activeMode: string | null;
 }
 
 export interface SessionInput {
@@ -73,6 +84,9 @@ interface SessionRow {
   /** ROUND-50 (R50-c1): NOT NULL DEFAULT 'ask' since migration 0020; the
    * fallback keeps hand-opened pre-0020 databases readable. */
   permission_mode?: string | null;
+  /** ROUND-73 (R73-b): nullable since migration 0027; the fallback keeps
+   * hand-opened pre-0027 databases readable (null = default posture). */
+  active_mode?: string | null;
 }
 
 interface EventRow {
@@ -103,6 +117,10 @@ function toSession(row: SessionRow): Session {
       typeof row.permission_mode === "string" && PERMISSION_MODE_VALUES.includes(row.permission_mode)
         ? (row.permission_mode as PermissionMode)
         : "ask",
+    // ROUND-73 (R73-b): a non-string/corrupted value reads as null — the
+    // default posture (fail-open; a garbage active_mode must never break a
+    // turn, prepareTurn simply resolves nothing and stays modeless).
+    activeMode: typeof row.active_mode === "string" && row.active_mode !== "" ? row.active_mode : null,
   };
 }
 
@@ -134,6 +152,9 @@ export function createSession(db: SqliteDatabase, input: SessionInput): Session 
     parentSessionId: input.parentSessionId ?? null,
     subRole: input.subRole ?? null,
     permissionMode: input.permissionMode ?? "ask",
+    // ROUND-73 (R73-b): sessions START modeless (the column's NULL default);
+    // activation happens through PATCH /sessions/:id or switch_mode.
+    activeMode: null,
   };
   db.prepare(
     `INSERT INTO sessions (id, project_id, agent_id, mode, status, title, created_at, updated_at, parent_session_id, sub_role, permission_mode)
@@ -143,6 +164,10 @@ export function createSession(db: SqliteDatabase, input: SessionInput): Session 
     parentSessionId: input.parentSessionId ?? null,
     subRole: input.subRole ?? null,
     permissionMode: input.permissionMode ?? "ask",
+    // The spread carries activeMode: null; strip it from the bound params —
+    // the column is NOT in the INSERT list (its NULL default applies; an
+    // unbound extra key is ignored by better-sqlite3's named binding).
+    activeMode: undefined,
   });
   return session;
 }
@@ -337,6 +362,32 @@ export function updateSessionPermissionMode(
   db.prepare(
     "UPDATE sessions SET permission_mode = ?, updated_at = ? WHERE id = ?",
   ).run(mode, new Date().toISOString(), id);
+  return getSession(db, id);
+}
+
+/**
+ * ROUND-73 (R73-b): set or clear the session's ACTIVE TASK MODE (the posture
+ * tier; column active_mode, migration 0027). Callers (the PATCH
+ * /sessions/:id route, the switch_mode tool, and prepareTurn's stale-mode
+ * sweep) validate the id against resolveEffectiveModes BEFORE calling —
+ * this function trusts its argument and only handles the unknown-id case
+ * (undefined). A null argument CLEARS the mode (back to the default
+ * posture; idempotent — clearing a modeless session is a no-op write).
+ * Returns the updated session row. The updated_at bump mirrors the
+ * permission-mode setter: a posture change is a session-level event.
+ */
+export function updateSessionActiveMode(
+  db: SqliteDatabase,
+  id: string,
+  activeMode: string | null,
+): Session | undefined {
+  const existing = getSession(db, id);
+  if (existing === undefined) return undefined;
+  db.prepare("UPDATE sessions SET active_mode = ?, updated_at = ? WHERE id = ?").run(
+    activeMode,
+    new Date().toISOString(),
+    id,
+  );
   return getSession(db, id);
 }
 
@@ -573,11 +624,15 @@ export function forkSession(db: SqliteDatabase, sessionId: string): Session | un
     // ROUND-50 (R50-c1): the fork keeps the source session's permission
     // mode — a copy of the conversation keeps its posture.
     permissionMode: original.permissionMode,
+    // ROUND-73 (R73-b): …and the same argument carries the ACTIVE TASK MODE —
+    // the fork inherits the posture the source was running, and its guide
+    // rides the fork's system prompt from turn one.
+    activeMode: original.activeMode,
   };
   const copy = db.transaction((srcId: string) => {
     db.prepare(
-      `INSERT INTO sessions (id, project_id, agent_id, mode, status, title, created_at, updated_at, parent_session_id, sub_role, permission_mode)
-       VALUES (@id, @projectId, @agentId, @mode, @status, @title, @createdAt, @updatedAt, @parentSessionId, @subRole, @permissionMode)`,
+      `INSERT INTO sessions (id, project_id, agent_id, mode, status, title, created_at, updated_at, parent_session_id, sub_role, permission_mode, active_mode)
+       VALUES (@id, @projectId, @agentId, @mode, @status, @title, @createdAt, @updatedAt, @parentSessionId, @subRole, @permissionMode, @activeMode)`,
     ).run(fork);
     // INSERT…SELECT keeps seq/type/payload/ts byte-identical; the autoincrement
     // `id` column is omitted so every copied row gets a fresh row id.

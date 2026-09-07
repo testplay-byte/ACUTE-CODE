@@ -91,6 +91,16 @@ export interface PromptContext {
    * composition (the golden ctx does not set it). Not persisted: hints are
    * computed fresh per turn by prepareTurn and live only in this ctx. */
   taskHints?: ReadonlyArray<{ skillName: string; score: number }>;
+  /** ROUND-73 (R73-b): the available task-mode index (ids+names+descriptions;
+   *  resolved by prepareTurn via resolveEffectiveSkills' sibling resolveEffectiveModes). */
+  taskModes?: ReadonlyArray<{ id: string; name: string; description: string }>;
+  /** ROUND-73 (R73-b): per-turn mode hints (computeModeHints — same deterministic
+   *  matcher as skills). Ephemeral, never persisted. */
+  modeHints?: ReadonlyArray<{ modeId: string; score: number }>;
+  /** ROUND-73 (R73-b): the ACTIVE mode's deep module (session.active_mode resolved). */
+  activeTaskMode?: { id: string; name: string; body: string };
+  /** ROUND-73 (R73-b): honest note when a stale active mode was cleared this turn. */
+  clearedModeNote?: string;
   /** ROUND-61 (R61): computer-use availability + posture. When enabled, a
    * "## COMPUTER USE" section carries the operating discipline (the
    * extended skill body loads via read_skill("computer-use")). Absent →
@@ -488,6 +498,62 @@ export function buildTaggedPromptLines(ctx: PromptContext): TaggedLine[] {
     // sticky in the event log, but the last-resort block cap can still trim
     // one to 8K after heavy compaction; the recovery is a re-read.
     ident("- A skill body that appears truncated after context compaction can be RELOADED: call read_skill again.");
+    ident("");
+  }
+
+  // ── Task modes (ROUND-73, R73-b): the posture index ─────────────────────
+  // The TASK-MODES tier of the owner's "proper detailed system prompts …
+  // accessed when required and on the basis of the task": skills (above)
+  // carry METHODOLOGY the agent reads with read_skill; a task mode changes
+  // the agent's operating POSTURE for a class of work, and while one is
+  // active its deep module rides the ACTIVE TASK MODE section (below). This
+  // index lists ONLY id + name + description — the bodies stay
+  // progressive-disclosed behind switch_mode (the tool returns the full
+  // guide ONCE on activation; from then on the prompt carries it). Strictly
+  // gated on ctx.taskModes: a caller that does not resolve modes (every
+  // pre-R73 caller, the golden fixture) composes byte-identically.
+  if (ctx.taskModes !== undefined && ctx.taskModes.length > 0) {
+    beginSection("task-modes");
+    ident("## TASK MODES (posture modules — activate with switch_mode)");
+    ident("Skills carry methodology you read with read_skill; a task mode changes your operating POSTURE for a class of work — while active, its guide below governs how you approach the task. Modes are selected on the basis of the task; nothing auto-activates.");
+    for (const mode of ctx.taskModes) {
+      ident(`- ${mode.id}: ${mode.name} — ${mode.description}`);
+    }
+    // ROUND-73 (R73-b): the per-turn mode signal — the same honest
+    // "looks like" advisory the SKILLS section renders (R72-a), keyed on
+    // mode IDs because switch_mode addresses ids, not names. One hint → the
+    // concrete switch_mode call; two → the two-name shortlist. Never an
+    // auto-activation: the model still decides.
+    if (ctx.modeHints !== undefined && ctx.modeHints.length > 0) {
+      const [first, second] = ctx.modeHints;
+      ident(
+        second === undefined
+          ? `Task signal: this request looks like the **${first.modeId}** posture — consider switch_mode { mode: "${first.modeId}" } FIRST.`
+          : `Task signal: this request looks like the **${first.modeId}** posture (and possibly **${second.modeId}**) — consider switch_mode FIRST.`,
+      );
+    }
+    // ROUND-73 (R73-b): the honest bracketed note when a mode that was
+    // active on a PREVIOUS turn no longer resolves (its .acute/agents file
+    // was removed) and prepareTurn cleared the session's stale pointer.
+    if (ctx.clearedModeNote !== undefined && ctx.clearedModeNote !== "") {
+      ident(`[${ctx.clearedModeNote}]`);
+    }
+    ident("");
+  }
+
+  // ── Active task mode (ROUND-73, R73-b): the deep posture module ─────────
+  // The ONE place a mode body is ever composed into the system prompt.
+  // prepareTurn resolved session.active_mode through the same
+  // resolveEffectiveModes that produced the index above (custom modes
+  // included); the body rides verbatim, every turn, until cleared with
+  // switch_mode — that persistence is the whole difference between a mode
+  // and a skill. Strictly gated: no active mode → no section.
+  if (ctx.activeTaskMode !== undefined) {
+    beginSection("active-mode");
+    ident(`## ACTIVE TASK MODE — ${ctx.activeTaskMode.name} (${ctx.activeTaskMode.id})`);
+    ident("This posture is ACTIVE for this session (set via switch_mode or the mode picker). Follow it for the rest of the task. Clear with switch_mode { mode: \"none\" }.");
+    ident("");
+    ident(ctx.activeTaskMode.body);
     ident("");
   }
 

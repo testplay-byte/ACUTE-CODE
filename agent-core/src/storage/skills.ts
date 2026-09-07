@@ -30,13 +30,23 @@
  * fresh AND existing DBs get the new rows on the next open.
  *
  * ROUND-72 (R72-b, D1): the capability-expansion round — SIX craft-skill
- * builtins (18 total, sortOrder 12-17): tdd, api-design, frontend-craft,
- * typescript-craft, security-review, refactoring. Same house style as the
- * R71 discipline four (trigger-rich descriptions with quoted phrasings +
- * negative scope; 1.2-1.9KB bodies; iron laws in caps; pre-built
- * output-format blocks; ACUTE's real tool names; no emoji). Same INSERT OR
- * IGNORE contract — fresh AND existing DBs converge on 18; user edits to
- * the six new rows persist like every other builtin.
+ * builtins (18 total at R72, sortOrder 12-17; 20 since R73-d): tdd,
+ * api-design, frontend-craft, typescript-craft, security-review,
+ * refactoring. Same house style as the R71 discipline four (trigger-rich
+ * descriptions with quoted phrasings + negative scope; 1.2-1.9KB bodies;
+ * iron laws in caps; pre-built output-format blocks; ACUTE's real tool
+ * names; no emoji). Same INSERT OR IGNORE contract — fresh AND existing
+ * DBs converge on 18 at R72 (20 since R73-d); user edits to the six new
+ * rows persist like every other builtin.
+ *
+ * ROUND-73 (R73-d): TWO methodology builtins (20 total, sortOrder 18-19):
+ * spec-planning + performance — the R73 queue's "+2 skills". Same house
+ * style (trigger-rich descriptions with quoted phrasings + negative
+ * scope; ~1.9KB bodies; iron laws in caps; red-flag/anti-pattern tables;
+ * ACUTE's real tool names; no emoji). Same INSERT OR IGNORE contract —
+ * fresh AND existing DBs converge on 20; user edits to the two new rows
+ * persist like every other builtin; deleted rows get the new text on
+ * revive (the R71/R72 upgrade-path note, unchanged).
  */
 import type { SqliteDatabase } from "./db.js";
 
@@ -636,6 +646,73 @@ MOVES: <the ordered mechanical steps, one line each>
 VERIFY: <per step — which suite + which typecheck command>
 STOP CONDITION: <when the pain is gone — what done means>`;
 
+/* ── ROUND-73 (R73-d): the TWO methodology built-ins ────────────────────────
+ *
+ * The R73 queue's "+2 skills (performance, spec-planning)": the
+ * spec-writing methodology (pairs with the plan task mode landing this
+ * round) and the measurement-first optimization methodology. Same house
+ * voice as the R71/R72 families: an iron law in caps, a red-flag or
+ * anti-pattern table where the failure mode is a rationalization, dense
+ * imperative prose, ACUTE's real tool names, no emoji. */
+
+export const SPEC_PLANNING_SKILL_BODY = `# Skill: spec-planning
+
+A spec is a DECISION DOCUMENT, not a wishlist: every section removes a decision from the future, so the build never re-asks.
+
+## The canonical sections (the output format — fill in this order)
+1. GOAL — one sentence. If it needs two, there are two projects.
+2. SCOPE — what is IN: the named surfaces, behaviors.
+3. NON-GOALS — what is deliberately OUT. A hidden non-goal is a future argument.
+4. INTERFACES — inputs, outputs, errors, field by field, FIRST: interfaces are the expensive decisions — other code binds to them, internals stay cheap. search_code + read_file the call sites so it fits reality; when the spec shrinks, cut internals, never interfaces or acceptance criteria.
+5. DATA — shapes that persist or cross a boundary + the migration path.
+6. ERROR PATHS — every way this can fail and what happens then (message, fallback, blast radius).
+7. ACCEPTANCE CRITERIA — TESTABLE statements: "GET /x without a token returns 401 with code AUTH_REQUIRED". A criterion you cannot turn into a check is a hope.
+8. RISKS — what breaks, what is irreversible. "No risks" is a blind spot.
+
+## The question budget
+At most FIVE clarifying questions, batched in ONE message, EACH with a proposed default — so the owner can answer "yes". Ask nothing you could answer from the repo.
+
+## Anti-patterns — each means the spec is not done
+- Vague acceptance criteria ("works well", "is fast") → rewrite as a measurable check.
+- Hidden non-goals → move them into NON-GOALS where they are negotiable.
+- Interface-by-implementation ("however the code turns out") → design the signature, then write to it.
+- A risk-free risk section → name the real risk or admit you have not looked.
+
+## The approval gate
+A spec is DONE when the owner approves it, not when it is long: present it, ask for the verdict, stop. write_file it only if the owner asks to keep it.
+Pairs with the plan task mode.`;
+
+export const PERFORMANCE_SKILL_BODY = `# Skill: performance
+
+IRON LAW: NO OPTIMIZATION WITHOUT A BEFORE-NUMBER AND A NAMED BOTTLENECK.
+
+## Red flags — premature optimization
+- "It's probably the database" → a guess. Measure.
+- "I'll add a cache" → before knowing what it misses? No.
+- "Everyone knows it's slow" → folklore. Measure.
+
+## Measure first
+Before touching code, produce BOTH (run_command): a BEFORE-NUMBER for the user-visible path (reqs/sec, p95, build time), measured not remembered; and a NAMED BOTTLENECK — the layer it points at + the evidence. No pair, no optimization.
+
+## The profiling ladder — cheapest tool that sees the suspected layer
+1. APP-LEVEL TIMING — timestamps around the suspect path; cheap, whole-picture.
+2. LANGUAGE PROFILER — node --cpu-prof, cProfile, flamegraphs; when timing cannot split the code further.
+3. SYSTEM TOOLS — perf, strace, iostat, heap dumps; when the profiler says time is outside your code (syscalls, IO, GC, locks).
+
+## The 20/80 reality — complexity before constant factors
+One bottleneck usually dominates: find and fix it BEFORE anything else — three micro-optimizations around a 90% bottleneck are invisible. Re-measure after each fix — the bottleneck moves. O(n²) → O(n) beats micro-tuning: algorithmic fixes survive load and churn, shaved constants do not. read_file the hot path before reshaping it.
+
+## Benchmark receipts
+Every claim carries a receipt: BEFORE and AFTER, same machine, same command, warm-up discarded (JIT, caches, disk), run-to-run VARIANCE noted — a 5% "win" inside 10% noise is not a win. Quote what run_command printed.
+
+## Honesty rules
+- NEVER claim a speedup without a receipt.
+- "Feels faster" is not a result.
+- A regression is reported with its receipt, not buried.
+
+## Stop condition
+Stop when the target is met ("p95 under 200ms") or the next bottleneck is not worth its complexity — optimization has diminishing returns, complexity does not.`;
+
 const BUILTIN_SKILLS: ReadonlyArray<Pick<SkillRecord, "id" | "name" | "description" | "body" | "source" | "sortOrder">> = [
   {
     id: COMPUTER_USE_SKILL_ID,
@@ -798,6 +875,24 @@ const BUILTIN_SKILLS: ReadonlyArray<Pick<SkillRecord, "id" | "name" | "descripti
     body: REFACTORING_SKILL_BODY,
     source: "builtin",
     sortOrder: 17,
+  },
+  {
+    id: "skill_builtin_spec_planning",
+    name: "spec-planning",
+    description:
+      "Use when the user says 'write a spec', 'plan this feature', 'requirements', 'before we build', 'design doc', 'what are the acceptance criteria' — before a feature gets code. Delivers the decision-document discipline: one-sentence goal, scope, NON-GOALS, interfaces first (inputs/outputs/errors are the expensive decisions), testable acceptance criteria, risks, and at most five batched questions, each with a default. NOT for quick fixes, code review, or research questions.",
+    body: SPEC_PLANNING_SKILL_BODY,
+    source: "builtin",
+    sortOrder: 18,
+  },
+  {
+    id: "skill_builtin_performance",
+    name: "performance",
+    description:
+      "Use when the user says 'make it faster', 'this is slow', 'optimize', 'performance problem', 'latency', 'why is it taking so long' — a speed problem, measured or suspected. Delivers the measurement-first discipline: a before-number and a named bottleneck before any change, the cheapest profiler for the suspect layer, complexity fixes before micro-tuning, before/after benchmark receipts with variance noted. NOT for code style, features, or refactors without a measured problem.",
+    body: PERFORMANCE_SKILL_BODY,
+    source: "builtin",
+    sortOrder: 19,
   },
 ];
 

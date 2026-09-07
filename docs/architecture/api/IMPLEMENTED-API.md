@@ -1,8 +1,8 @@
-<!-- last-reviewed: 2026-09-07 round-72 -->
+<!-- last-reviewed: 2026-09-07 round-73 -->
 # IMPLEMENTED API — the shipped surface
 
 **Truth = this file.** Verified against `agent-core/src/server.ts` at
-round-17 (2026-08-23), refreshed R37→R72. The aspirational full contract (52
+round-17 (2026-08-23), refreshed R37→R73. The aspirational full contract (52
 operations, WS gateway, planned routes) lives in
 [`API.md`](API.md) — anything there and
 not here **does not exist yet**. Base: `http://127.0.0.1:<port>`; dev port
@@ -52,7 +52,11 @@ dir; ignores node_modules/.git/dist/… ) ·
 containment-enforced) ·
 `POST /projects/:id/terminal` `{command}` → `{stdout, stderr, exitCode, ms}`
 (synchronous run, 60s timeout / 64 KB combined cap; R44 adds a streaming
-variant — see ROUND-44 additions).
+variant — see ROUND-44 additions) ·
+`GET /projects/:id/modes` → `{modes:[{id,name,description,source}]}`
+(**R73**: the task-mode index for the session's project — the six builtins
++ the project's `.acute/agents/*.md` customs, METADATA ONLY; see the
+ROUND-73 additions).
 
 ## /api/v1/sessions & turns
 
@@ -60,7 +64,8 @@ variant — see ROUND-44 additions).
 |---|---|
 | `POST /sessions` | `{mode:"single", agentId (required, validated), projectId?, title?}` → `202` (queued). **ROUND-50: rows carry `permissionMode`** (`full\|ask\|plan\|editor`, default `ask`; sub-agent children copy the parent's mode at delegation) |
 | `GET /sessions?limit=&offset=` | newest-first + total (NO projectId filter — client-side) |
-| `GET /sessions/:id` | session + `events[]` + `lastSeq` (events embedded; no backfill route) |
+| `GET /sessions/:id` | session + `events[]` + `lastSeq` (events embedded; no backfill route). **R73: rows carry `activeMode`** (the active TASK MODE id or `null`; set/cleared via PATCH below or the `switch_mode` tool; enforcement at turn time — see ROUND-73 additions) |
+| `PATCH /sessions/:id` | **round-33 (rename) · R73 (mode switch)** — body `{title?, activeMode?}`, each independently optional: `title` (string ≤200) renames; `activeMode` is a mode id (resolved against the session's project — projectless resolves builtins only; unknown → `400 VALIDATION` with `availableModes` in details, validated BEFORE any write), `null` clears, absent = untouched. `200` the bare updated session row (NOT the GET shape — no `events`/`lastSeq`). `404` unknown. |
 | `PATCH /sessions/:id/permissions` | **ROUND-50** — `{mode: "full"\|"ask"\|"plan"\|"editor"}` → `200` the updated session + `events[]` + `lastSeq` (same shape as GET). `400 VALIDATION body.mode` otherwise, `404` unknown. Enforcement: `sessionToolAllowList` (runtime.ts — shared with the context route): *plan* intersects tools to the 12 read-only/research tools; *editor* strips `run_command`; *full* auto-approves every ask-tier gate EXCEPT the denylist-supreme (sudo/rm -rf/… never bypassed) while agent allowlists stay authoritative; the system prompt gains a PERMISSION MODE section. |
 | `GET /sessions/:id/context?model=` | **ROUND-50 (the composer's context donut)** — `{model, providerId, contextWindow, usedTokens, breakdown:{systemPrompt, systemTools, memory, messages, meta, mcpTools:0}, cache:{inputTokens, cachedInputTokens, hitRate\|null}, sessionTotals:{inputTokens, outputTokens, requests, costUsd}}`. Window = models row → catalog → 200k. Breakdown via `buildSystemPromptSections` + estimateTokens (tool schemas ≈350 tokens/tool, documented approximation); MCP is an honest 0 (no MCP system). Cache from REAL `usage_events.cached_input_tokens` (migration 0020 — captured from the provider's `prompt_tokens_details.cached_tokens` on both turn paths). **ROUND-51: also returns `usage:{main, subagents, combined}` (each `{inputTokens, outputTokens, requests, costUsd}`)** — main = the session's own usage ledger (identical to the flat sessionTotals), subagents = the SUM over the DIRECT children's usage_events (`parent_session_id = :id`, listSubAgents parity, grandchildren excluded), combined = main + subagents. Flat fields byte-identical (additive shape). |
 | `POST /sessions/:id/messages` | `{content, model?}` — **synchronous whole turn** → `200 {assistantMessage:{seq,role,agentId,content,ts}, usage}`; 404/409 (terminal/unconfigured/no key)/502 provider. **ROUND-50: also accepts `thinkingLevel?: "default"\|"low"\|"high"\|"max"` (400 otherwise; injected as `reasoning.effort` on chat-completions bodies) and `attachments?: [{name, path?, size?, text?}]` (≤20, name ≤200 chars, text capped 128 KB server-side; persisted on the `message.user` payload and rendered into model-facing history as `--- attached file: … ---` blocks)** |
@@ -1723,3 +1728,96 @@ catalog in `GET /plugins` reflects it).
   no route change; `GET /skills` shows the new rows on an existing DB
   at next open (description/body updates do NOT overwrite user-edited
   rows — by design, the standing R71 note).
+
+## ROUND-73 additions (implemented)
+
+The task modes round (the posture tier of the owner's "proper detailed
+system prompts which the agent accesses when required and on the basis
+of the task" directive). The REST surface gained TWO routes/fields —
+`GET /projects/:id/modes` (new), the `PATCH /sessions/:id`
+`activeMode` field (the route itself predates this round; documented at
+its row above), and `activeMode` on session rows — plus one new tool.
+The rest of the round is prompt-side and tool-side:
+
+### `GET /projects/:id/modes` — the mode index (metadata only)
+
+`{modes: [{id, name, description, source: "builtin"|"file"}]}` — the
+six builtins (plan/debug/build/review/explore/refactor, sortOrder
+10-60) plus the project's `.acute/agents/*.md` customs (a custom whose
+id equals a builtin's SHADOWS it — one entry, custom wins; ≤8 files;
+≤16,000-char bodies; ≤500-char descriptions). 404 unknown project.
+Resolved through the ONE `resolveEffectiveModes(project.rootPath)` that
+`prepareTurn` and `switch_mode` also use, so the picker, the prompt's
+TASK MODES index, and the tool can never disagree. **METADATA ONLY —
+mode bodies are never served over REST** (the deep module rides the
+system prompt's ACTIVE TASK MODE section while active; `switch_mode`
+returns it once on activation) — the `GET /skills` honesty, applied to
+the sibling tier.
+
+### `PATCH /sessions/:id` — the `activeMode` field
+
+Body `{title?, activeMode?}` (each independently optional; see the
+route row above for the full validation contract). `activeMode: "debug"`
+sets the session's task mode; `null` clears it; absent leaves it
+untouched. An unknown id is a `400 VALIDATION` carrying
+`availableModes` (the resolvable ids for the session's project) in
+`details`, validated BEFORE any write — a bad mode never renames the
+session as a side effect. Enforcement is at TURN time: `prepareTurn`
+resolves the id through the same resolver, composes the ACTIVE TASK
+MODE prompt section with the body verbatim while set, sweeps a VANISHED
+custom mode clear with a one-turn honest note, and intersects a
+file-mode's `tools` frontmatter into the session's tool allowlist
+(narrow-only; unknown names drop; empty intersection → the NO_TOOLS
+sentinel).
+
+### Tools: `switch_mode` (the 26th TOOL_NAMES entry)
+
+NEW `agent-core/src/tools/plugins/modes.ts` (the `core-modes` plugin,
+1.0.0) — ALWAYS REGISTERED (the read_skill declaration-context
+pattern; gated on toolDeps at execute time): `switch_mode {mode?}` —
+no arguments → the mode index + which mode is active + the usage line;
+`{mode: "<id>"}` → ACTIVATE (the session row's `active_mode` is set
+via the storage-level `updateSessionActiveMode` — the same writer the
+PATCH route uses — and the FULL posture guide returns ONCE, followed
+by the fenced task-mode reminder); `{mode: "none"}` (also "off"/"auto"/""
++ an actual JSON null) → DEACTIVATE (idempotent, honest no-op when
+nothing is active). Unknown id → `ok:false` + the available ids + the
+`.acute/agents/*.md` hint. The description teaches the schema-clean
+sentinel `"none"` (the input schema is type "string"; a nullable union
+does not validate cleanly on every strict provider — both are
+accepted, the reliable one is taught). `switch_mode` also joined
+`PLAN_MODE_TOOLS` (the R70-b D4 dark-tools honesty rule: plan
+permission mode advertises the TASK MODES index + its Task signal
+line, so the switch must not be dark there).
+
+### Model-facing (non-HTTP) drift notes
+
+- **The prompt gained two STRICTLY-GATED sections** (the registry's
+  21 → 23; both directly after SKILLS; both overridable via
+  `.acute/prompts/task-modes.md` / `active-mode.md`):
+  `## TASK MODES (posture modules — activate with switch_mode)` — the
+  available-mode index (id + name + description), the division line
+  ("Skills carry methodology you read with read_skill; a task mode
+  changes your operating POSTURE for a class of work … nothing
+  auto-activates"), the per-turn advisory "Task signal: this request
+  looks like the **<id>** posture — consider switch_mode FIRST" (the
+  R72-a deterministic matcher, extended to mode descriptions via
+  `computeModeHints` — same scorer, id-keyed, `computeTaskHints`
+  behavior unchanged), and the bracketed one-turn note when a stale
+  custom mode was swept; `## ACTIVE TASK MODE — <Name> (<id>)` — the
+  activation note (ends "Clear with switch_mode { mode: \"none\" }.")
+  + the mode body VERBATIM, every turn while active. **The golden
+  fixture stayed BYTE-IDENTICAL** (md5 3a5d2c7d…, both ctx fields
+  optional and unset in the golden).
+- **The system-reminder renderer** (NEW
+  `agent-core/src/agents/system-reminders.ts`) is now the ONE fenced-
+  reminder mechanism — the R72-d per-directory conventions reminder
+  renders through it BYTE-IDENTICALLY (`r72-dir-conventions.test.ts`
+  green unmodified) and `switch_mode`'s activation reminder is its
+  second consumer; a per-turn `ReminderBudget` (default 3) bounds the
+  family. The `read_file` conventions contract documented in the
+  ROUND-72 additions is unchanged.
+- The builtin skills are now TWENTY (18 → 20: spec-planning,
+  performance at sortOrder 18/19) — same `INSERT OR IGNORE` seeding,
+  no migration, no route change; the standing R71/R72 note (existing
+  rows keep their text) applies.

@@ -68,6 +68,7 @@ import {
   listSubAgents,
   revertSession,
   searchSessions,
+  updateSessionActiveMode,
   updateSessionPermissionMode,
   updateSessionTitle,
 } from "./storage/sessions.js";
@@ -164,6 +165,10 @@ import { builtInToolCatalog, BUILT_IN_PLUGINS, externalPluginFileReport } from "
 import { getIndexSummary, searchIndexSymbols } from "./storage/index.js";
 import { estimateMessageTokens, estimateTokens } from "./context.js";
 import { buildSystemPromptSections, readCustomRules } from "./agents/prompts.js";
+// ROUND-73 (R73-b): the task-modes resolver — the project-scoped /modes
+// listing and the PATCH /sessions/:id activeMode validation both sit on the
+// SAME resolveEffectiveModes prepareTurn + switch_mode use.
+import { findMode, resolveEffectiveModes } from "./agents/modes.js";
 import { openDatabase, type SqliteDatabase } from "./storage/db.js";
 import {
   TOOL_NAMES,
@@ -1683,6 +1688,33 @@ export function buildServer(options: ServerOptions): FastifyInstance {
         return { index: summary };
       });
 
+      // ── ROUND-73 (R73-b): TASK MODES — the project-scoped mode listing ──
+      // GET /projects/:id/modes — the mode picker's data source (the
+      // composer's R73-c wave): the six builtins + the project's
+      // .acute/agents/*.md customs (shadowing included), resolved through
+      // the SAME resolveEffectiveModes prepareTurn and switch_mode use, so
+      // the picker, the prompt's TASK MODES index, and the tool can never
+      // disagree. METADATA ONLY (id/name/description/source) — bodies are
+      // PROMPT-SIDE and never served here (GET /skills' metadata-only
+      // honesty: the deep module rides the system prompt while active, and
+      // switch_mode returns it once on activation).
+      scope.get("/projects/:id/modes", async (request, reply) => {
+        const { id } = request.params as Record<string, string>;
+        const project = getProject(db, id);
+        if (project === undefined) {
+          return reply.code(404).send(errorBody("NOT_FOUND", `no project with id ${id}`));
+        }
+        const { modes } = resolveEffectiveModes(project.rootPath);
+        return {
+          modes: modes.map((mode) => ({
+            id: mode.id,
+            name: mode.name,
+            description: mode.description,
+            source: mode.source,
+          })),
+        };
+      });
+
       // ROUND-38 (owner: "I can see the terminal on the right sidebar"): a
       // USER-driven command runner for the right-sidebar Terminal tab. The
       // user types the command themselves, so this bypasses the agent
@@ -2470,7 +2502,19 @@ export function buildServer(options: ServerOptions): FastifyInstance {
       });
 
       // PATCH /sessions/:id (round-33, owner request: renameable sessions).
-      // Currently only the title is mutable; body: { title: string }.
+      // Body: { title?: string, activeMode?: string | null } — each field is
+      // independently optional (absent = untouched). ROUND-73 (R73-b): the
+      // activeMode field — the user-side mode switch (the composer picker's
+      // R73-c wave and the /mode slash will PATCH exactly like this):
+      //   · absent → untouched;
+      //   · null → CLEAR the active task mode (default posture);
+      //   · string → must resolve against the session's project
+      //     (resolveEffectiveModes; a projectless session resolves the
+      //     builtins only) — an unknown id is a 400 VALIDATION carrying the
+      //     available ids, the same honesty the switch_mode tool returns.
+      // Enforcement is at TURN time: prepareTurn resolves the id to the mode
+      // record and threads its body into the ACTIVE TASK MODE prompt
+      // section (a vanished custom mode is cleared with an honest note).
       scope.patch("/sessions/:id", async (request, reply) => {
         const { id } = request.params as Record<string, string>;
         const body: unknown = request.body;
@@ -2480,19 +2524,75 @@ export function buildServer(options: ServerOptions): FastifyInstance {
             .send(errorBody("VALIDATION", "body must be a JSON object", { field: "body" }));
         }
         const raw = body as Record<string, unknown>;
-        if (typeof raw.title !== "string") {
+        const hasTitle = "title" in raw;
+        const hasActiveMode = "activeMode" in raw;
+        if (hasTitle) {
+          if (typeof raw.title !== "string") {
+            return reply.code(400).send(
+              errorBody("VALIDATION", "title must be a string", { field: "body.title" }),
+            );
+          }
+          if (raw.title.length > 200) {
+            return reply.code(400).send(
+              errorBody("VALIDATION", "title must be at most 200 characters", {
+                field: "body.title",
+              }),
+            );
+          }
+        }
+        if (!hasTitle && !hasActiveMode) {
           return reply.code(400).send(
-            errorBody("VALIDATION", "title must be a string", { field: "body.title" }),
+            errorBody("VALIDATION", "body must include title and/or activeMode", { field: "body" }),
           );
         }
-        if (raw.title.length > 200) {
-          return reply.code(400).send(
-            errorBody("VALIDATION", "title must be at most 200 characters", {
-              field: "body.title",
-            }),
-          );
+        const session = getSession(db, id);
+        if (session === undefined) {
+          return reply.code(404).send(errorBody("NOT_FOUND", `no session with id ${id}`));
         }
-        const updated = updateSessionTitle(db, id, raw.title);
+        // ROUND-73 (R73-b): validate the mode BEFORE any write (a bad value
+        // never renames the session as a side effect). Projectless sessions
+        // resolve the builtins only (resolveEffectiveModes' no-root path).
+        let resolvedModeId: string | null | undefined;
+        if (hasActiveMode) {
+          const value = raw.activeMode;
+          if (value === null) {
+            resolvedModeId = null;
+          } else if (typeof value === "string") {
+            const requested = value.trim();
+            const root =
+              session.projectId !== null ? getProject(db, session.projectId)?.rootPath : undefined;
+            const { modes } = resolveEffectiveModes(root);
+            const mode = findMode(modes, requested);
+            if (mode === undefined) {
+              return reply.code(400).send(
+                errorBody("VALIDATION", `activeMode '${requested}' is not an available task mode`, {
+                  field: "body.activeMode",
+                  availableModes: modes.map((m) => m.id),
+                }),
+              );
+            }
+            resolvedModeId = mode.id;
+          } else {
+            return reply.code(400).send(
+              errorBody("VALIDATION", "activeMode must be a mode id string or null", {
+                field: "body.activeMode",
+              }),
+            );
+          }
+        }
+        let updated: ReturnType<typeof getSession> = session;
+        if (hasTitle) {
+          // Validated above (hasTitle ⇒ a string ≤ 200 chars).
+          updated = updateSessionTitle(db, id, raw.title as string);
+        }
+        if (hasActiveMode) {
+          // resolvedModeId is null (clear) or a resolved mode id here — the
+          // string type is narrowed by the validation above.
+          const afterMode = updateSessionActiveMode(db, id, resolvedModeId as string | null);
+          // Both setters return the fresh row; whichever ran LAST wins the
+          // response (they hit the same row — the second re-reads the first).
+          updated = afterMode ?? updated;
+        }
         if (updated === undefined) {
           return reply.code(404).send(errorBody("NOT_FOUND", `no session with id ${id}`));
         }

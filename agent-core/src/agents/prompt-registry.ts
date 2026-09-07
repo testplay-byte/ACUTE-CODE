@@ -129,6 +129,24 @@ export const PROMPT_REGISTRY: readonly PromptSectionSpec[] = Object.freeze([
     dynamic: true, // ctx.skills-gated
     bucket: "identity",
   },
+  // ROUND-73 (R73-b): the TASK-MODES pair — the posture tier over the skills
+  // tier. "task-modes" is the INDEX (ids+names+descriptions, switch_mode
+  // vocabulary, the per-turn Task signal line, the honest cleared-mode note);
+  // "active-mode" is the ACTIVE mode's deep posture module (its body rides the
+  // system prompt while session.active_mode is set — the one place a mode body
+  // is ever composed; everything else stays progressive disclosure).
+  {
+    id: "task-modes",
+    description: "## TASK MODES (posture modules — switch_mode) — the available-mode index + the per-turn mode signal line (R73)",
+    dynamic: true, // gated on ctx.taskModes
+    bucket: "identity",
+  },
+  {
+    id: "active-mode",
+    description: "## ACTIVE TASK MODE — the active mode's deep posture module (only while a mode is active; R73)",
+    dynamic: true, // gated on ctx.activeTaskMode
+    bucket: "identity",
+  },
   {
     id: "computer-use",
     description: "## COMPUTER USE (desktop control) — the always-on safety/posture discipline when the master switch is on (R61; trimmed R70-c, deep contract via read_skill)",

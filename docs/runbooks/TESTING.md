@@ -1,4 +1,4 @@
-<!-- last-reviewed: 2026-09-07 round-72 -->
+<!-- last-reviewed: 2026-09-07 round-73 -->
 # TESTING — the verification ladder
 
 Five layers; each has a defined "when mandatory". Rules here are binding
@@ -13,19 +13,87 @@ Five layers; each has a defined "when mandatory". Rules here are binding
 | L4 live battery | real provider turn(s), real disk, fresh DB | sandbox, single invocation | anything touching agents, projects, tools, streaming |
 | L5 browser verification | real UI against the live stack; screenshots machine-verified | sandbox, single invocation | any UI-affecting round |
 
-**Current counts (R72, verified 2026-09-07 by re-running the suites):**
-the root `pnpm test` = **2423 tests in 133 files, all green** (measured
+**Current counts (R73, verified 2026-09-07 by re-running the suites):**
+the root `pnpm test` = **2558 tests in 138 files, all green** (measured
 without a fresh `agent-core/dist` — the 12 sidecar-e2e report as
-env-gated skips: 2411 passed + 12 skipped; with the dist present they
-run in-suite. agent-core alone = **1521/1521 in 70 files** (+136 this
-round), frontend `src/` alone = **890/890 in 61 files** (unchanged —
-R72 touched zero frontend files).
+env-gated skips: 2546 passed + 12 skipped; with the dist present they
+run in-suite. agent-core alone = **1637/1637 in 74 files** (+116 this
+round), frontend alone = **909/909 in 62 files** (+19 — 61 `src/` files
++ `shared/src/index.test.ts` per the root workspace config, the same
+convention R72's 890 used). The arithmetic reconciles exactly:
+1,637 + 909 + 12 = 2,558 (74 + 62 + 2 = 138 files).
 Trajectory: 262 (R42) → 397 (R43) → 471 (R44) → 565 (R45) →
 622 (R46) → 683 (R47) → 752 (R48) → 815ish (R49) → 930 (R50) → 978 (R51) →
 1035 (R52) → 1058 (R53) → 1071 (R54–R56, launcher rounds) → 1169 (R58) →
 1302 (R59) → 1348 (R60) → 1491 (R61) → 1542 (R62) → 1632 (R63) → 1664
 (R64) → 1686 (R65) → 1807 (R66) → 1961 (R67) → 2003 (R68) → 2082 (R69) →
-2177 (R70) → 2287 (R71) → 2423 (R72).
+2177 (R70) → 2287 (R71) → 2423 (R72) → 2558 (R73).
+
+**R73 (the task modes round):** +135 root over R72's 2423 — +116
+agent-core (four NEW suites + honest re-pins) + 19 frontend (the picker
++ the strengthened panel suite): `r73-modes-core` **28** (NEW: the six
+builtin postures' shape pins — fixed order + sortOrder + frozen
+array/entries, bodies 1,200-3,000 distinct with posture statements,
+descriptions 280-500 in the trigger-rich convention, PAIRS WITH names
+real skills, a computeTaskHints cross-validation — 'fix this bug' →
+Debug, 'clean this up' → Refactor; the `.acute/agents/*.md` discovery
+— happy path with byte-exact stripped body + absolute filePath,
+absent-is-clean, undefined/"" roots, silent skips, determinism + a
+zero-writes snapshot proof; name→id + slugify + the 64 cap +
+first-file-wins; custom-shadows-builtin with the 5 builtins intact; the
+caps — 16K marker + 500 desc + 9 files → 8 + too-many-modes +
+invalid-tools + dedup; the failure family — missing-description exact
+fallback, empty-body, subdirectory not-a-file, chmod-000 unreadable,
+never throws; findMode + all 8 diagnostic kinds rendered) ·
+`r73-system-reminders` **16** (NEW: byte-identity for 3 realistic
+convention inputs + the delegation pin — renderReminder ===
+conventionReminder over 3 real DirConventions + render purity; the
+task-mode/note shape pins; ReminderBudget allows/mark/idempotence/
+default-3/custom-max/no-op-at-max/snapshot/instance purity) ·
+`r73-skills-round` **17** (NEW: the TWENTY-builtin count pin with
+names/ids/sortOrders 0-19; per-skill trigger-rich + house-format it.each
+over the two new seeds; distinctness; INSERT OR IGNORE idempotence +
+the deleted-row-revives convergence → 20; user-edit persistence;
+disable-hides; the flow-through — all 20 render in the prompt SKILLS
+section) · `r73-modes-backend` **45** (NEW: the 23-section registry pin
++ after-skills positions + strict-gating byte-identity incl. tail
+checks; computeModeHints scoring/threshold/top-2/id-asc ties + the
+builtin cross-validation 'fix this bug' → debug; storage + the 0027
+migration matrix incl. the ALTER's one-shot semantics; the route family
+— PATCH set/clear/null/untouched/unknown-400-with-available-ids/
+no-side-effect-rename/404/title+mode-together + GET /modes
+metadata-only + customs + shadowing + resolver parity; switch_mode's
+three calls + sentinels + idempotence + the custom-id path; the runtime
+e2e — index/signal/ACTIVE-body on BOTH turn paths, the vanished-mode
+sweep + one-turn note, the live tools-narrowing + the
+narrowAllowListByTaskMode unit matrix incl. NO_TOOLS cases) · re-pins:
+the skills trio `r71-skills-round` 75 → **83**, `r70-skills-system`
+51 → **53** (the 18-count pins mechanically moved by the 18→20 growth,
+strengthened-only — the R72-b house pattern), the vocabulary re-pins
+(prompt-registry/storage/projects-tools/r52-plugin-registry/memory-
+tools/models-catalog — switch_mode joins TOOL_NAMES, BUILT_IN_PLUGINS
+13→14) with prompt-registry's count unchanged at 22 but its golden
+toolNames FROZEN to the fixture's exact vocabulary (the md5 is the
+pin) + MODES_CTX + order pins added · frontend: `TaskModePicker` **10**
+(NEW — pill labels + aria + the raw-id fallback that never renders
+Auto; menu rows + the line-clamp pin + the full description on the row
+title; the custom chip on file-source rows only; selection reports the
+id; Auto reports null; the current-mode no-op; disabled; Escape) +
+`AgentChatPanel` 23 → **32** (the activeMode sync from the session row,
+the optimistic GUI path, the failed-PATCH rollback + toast, the /mode
+intercept — set/clear/bogus/bare-list/capitalized-NAME — and the
+not-intercepted full turn). The golden fixture BYTE-IDENTICAL (md5
+3a5d2c7d…, untouched — both new prompt sections are strictly ctx-gated;
+no regen performed or needed) and r72-task-hints 27/27 +
+r72-dir-conventions 20/20 GREEN UNMODIFIED (the two hard gates — the
+matcher and the conventions bytes ride unchanged). Zero Rust/`src-tauri`
+files touched. Plus the first LIVE HTTP e2e smoke of the mode routes
+against a real sidecar spin (GET /modes incl. a custom, PATCH set /
+bogus-400-with-availableModes-unchanged / null-clear — all green). The
+live gates (the TASK MODES section + Task signal line on real messages,
+switch_mode activation riding the following turns, the picker + /mode
+slash, the two skills' triggers, custom-mode tool narrowings) await the
+owner's Windows field run.
 
 **R72 (the adaptive capability round):** +136 root over R71's 2287 —
 all of it in agent-core, four NEW suites + honest re-pins:

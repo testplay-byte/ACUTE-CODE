@@ -31,6 +31,11 @@ import {
   type ToolBuildContext,
   type ToolDefinition,
 } from "./registry.js";
+// ROUND-73 (R73-b): the switch_mode plugin — the TASK-MODES posture tier's
+// agent-side access path. Canonical registration lives in registry.ts's
+// BUILT_IN_PLUGINS (with skills/vision before it); this module re-exports
+// it so the assembler's public surface (server.ts + tests) can import the
+// plugin from either door, same as every other plugin module.
 
 // ── Back-compat surface (server.ts + the test suites import these) ─────────
 export {
@@ -50,6 +55,7 @@ export {
 export type { ToolResult, ToolDefinition, PluginDefinition, ToolCatalogEntry } from "./registry.js";
 export { builtInToolCatalog, BUILT_IN_PLUGINS } from "./registry.js";
 export { buildApprovalDeps } from "./approval-deps.js";
+export { modesPlugin } from "./plugins/modes.js";
 
 export interface ToolDeps {
   db: import("better-sqlite3").Database;
@@ -147,7 +153,9 @@ export async function buildProjectTools(
   const allow = allowedTools && allowedTools.length > 0 ? new Set(allowedTools) : null;
   const ctx: ToolBuildContext = { root, ...(deps !== undefined ? { toolDeps: deps } : {}) };
 
-  // Built-in plugins first (registration order = catalog order).
+  // Built-in plugins first (registration order = catalog order). ROUND-73
+  // (R73-b): that list now includes the modes plugin (switch_mode) — see
+  // tools/registry.ts BUILT_IN_PLUGINS for the ROUND-73 entry.
   const definitions: ToolDefinition[] = [];
   for (const plugin of BUILT_IN_PLUGINS) {
     definitions.push(...(await plugin.createTools(ctx)));

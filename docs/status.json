@@ -3,7 +3,7 @@
   "product": {
     "name": "Acute",
     "tagline": "Local-first multi-agent engineering workbench",
-    "version": "0.72.0",
+    "version": "0.73.0",
     "availability": "Private build — not yet distributed",
     "chips": [
       "Windows desktop",
@@ -26,8 +26,8 @@
       "id": "agentic",
       "title": "Agentic system",
       "state": "building",
-      "progress": 71,
-      "summary": "Multi-turn agentic continuation with the R70 agent brain (env grounding, AGENTS.md conventions, one five-phase loop, verification discipline) + the R71 discipline & reliability layer (engineering-discipline prompt section, edit-failure escalation, provider-error classification + overflow recovery) + the R72 adaptive capability layer (deterministic task→skill hints rendering an advisory 'Task signal' line per turn, 18 builtin skills, references/ depth for file skills, per-directory AGENTS.md/CLAUDE.md conventions injected on read_file); multi-agent orchestration owner-gated; computer use (desktop observation+actuation, separate vision model, kill switch) owner-gated"
+      "progress": 74,
+      "summary": "Multi-turn agentic continuation with the R70 agent brain (env grounding, AGENTS.md conventions, one five-phase loop, verification discipline) + the R71 discipline & reliability layer (engineering-discipline prompt section, edit-failure escalation, provider-error classification + overflow recovery) + the R72 adaptive capability layer (deterministic task→skill hints, 18→20 builtin skills, references/ depth, per-directory conventions) + the R73 task-modes posture layer (six builtin posture modules + .acute/agents/*.md customs with shadowing + tool narrowing, the switch_mode tool, the composer picker + /mode slash, sessions.active_mode, the mode Task signal line, the generalized system-reminder renderer); multi-agent orchestration owner-gated; computer use (desktop observation+actuation, separate vision model, kill switch) owner-gated"
     },
     {
       "id": "automation",
@@ -164,6 +164,10 @@
     {
       "date": "2026-09-07",
       "label": "R72 — the adaptive capability round (the owner's 'on the basis of the task' directive): deterministic task→skill hints (the advisory 'Task signal' line, golden byte-stable), 18 builtin skills (+6 crafts: tdd/api-design/frontend-craft/typescript-craft/security-review/refactoring), references/ depth for file skills (read_skill's reference param), per-directory AGENTS.md/CLAUDE.md conventions on read_file (2423 tests)"
+    },
+    {
+      "date": "2026-09-07",
+      "label": "R73 — the task modes round (the posture tier of the owner's directive): six builtin posture modes (plan/debug/build/review/explore/refactor) + custom modes (.acute/agents/*.md, shadowing, tool narrowing), the switch_mode tool + composer picker + /mode slash + the mode Task signal line, sessions.active_mode (migration 0027), the generalized system-reminder renderer, skills 18→20 (spec-planning, performance) (2558 tests)"
     }
   ],
   "quality": {
@@ -171,11 +175,11 @@
     "suites": [
       {
         "name": "frontend",
-        "tests": 890
+        "tests": 909
       },
       {
         "name": "agent-core",
-        "tests": 1521
+        "tests": 1637
       },
       {
         "name": "sidecar e2e",
@@ -196,8 +200,8 @@
   ],
   "plan": {
     "current": {
-      "title": "Round 72 DELIVERED — the adaptive capability round (0.72.0)",
-      "detail": "The owner's directive 'proper detailed system prompts which the agent accesses when required and on the basis of the task, various in-built skills' turned into four disjoint workstreams. (1) Task hints: NEW agents/task-hints.ts — a deterministic (no-LLM, zero-cost, zero-latency) matcher scoring the turn's user message against the effective skills' trigger-rich descriptions (quoted phrases ×5, stopword-filtered tokens +1, top-2 above threshold); the SKILLS prompt section renders one advisory 'Task signal: this request looks like it matches **<name>** — consider calling read_skill FIRST' line; both turn paths; per-turn ephemeral; flows through resolveEffectiveSkills (computer-use gate + agent allowlist); golden fixture byte-identical. (2) Skills 12→18: six engineering-craft builtins (tdd, api-design, frontend-craft, typescript-craft, security-review, refactoring — sortOrder 12-17, INSERT OR IGNORE, descriptions 447-490 chars, bodies 1.6-1.9K, iron laws + output blocks). (3) References depth: file skills gain a references/ subdirectory (the Agent-Skills standard: one level, ≤8 .md files ≤64KB); read_skill's optional reference param loads them (listing block with copy-pasteable syntax, traversal-sanitized, honest caps); GET /skills carries the metadata additively. (4) Per-directory conventions: NEW tools/dir-conventions.ts — read_file appends a capped (2K) fenced '[conventions from <dir>/AGENTS.md]' reminder when the deepest AGENTS.md/CLAUDE.md strictly below root governs the file (root skipped — already in the system prompt; once per session+dir). Verification: 2423 root tests in 133 files, all green (agent-core 1521/1521 in 70 files, frontend 890 unchanged, e2e 12; +136 = four new suites 27+32+27+20 + re-pins r71-skills-round 51→75 / r70-skills-system 45→51), lint/typecheck clean, license audit CLEAN (134 deps). The live gates (the task-signal line on real messages, the six skills' triggers, references loading, nested-dir reminders on real repos) await the owner's Windows field run. Next: the R73 queue — delegate_task task_id/background/resume, the generalized system-reminder injector, custom modes (.acute/agents/*.md), external plugin ctx enrichment, two more skills (performance, spec-planning)."
+      "title": "Round 73 DELIVERED — the task modes round (0.73.0)",
+      "detail": "The posture tier of the owner's directive 'proper detailed system prompts which the agent accesses when required and on the basis of the task' — SKILLS = methodology (R61/R70/R72), MODES = posture (this round), REFERENCES = depth (R72-c); nothing auto-activates. (1) The modes core: NEW agents/modes.ts — six builtin postures plan/debug/build/review/explore/refactor (bodies 2,084-2,546 chars, iron laws, PAIRS WITH skill pairings) + custom modes from .acute/agents/*.md (frontmatter name/description/tools, ≤8 × 16K caps, 8 diagnostic kinds, custom shadows builtin, project-root trust); resolveEffectiveModes pure + sync. (2) The backend: prompt-registry 21→23 (task-modes index + active-mode deep body, both after skills, both .acute/prompts/-overridable, strictly ctx-gated — golden fixture byte-stable); computeModeHints (the R72-a shared scorer; computeTaskHints unchanged); sessions.active_mode + migration 0027 (the ALTER + the switch_mode allowlist append with the read_skill companion rule); PATCH /sessions/:id activeMode (null clears, unknown → 400 with available ids) + GET /projects/:id/modes metadata-only; NEW switch_mode tool (list / activate-returns-body-once / deactivate via sentinels none-off-auto + JSON null); prepareTurn threads modes — custom-mode tools narrow the allowlist (narrow-only, NO_TOOLS sentinel), a vanished custom mode is swept with a one-turn note; PLAN_MODE_TOOLS gains switch_mode (the D4 dark-tools honesty rule). (3) The frontend: the composer TaskModePicker + the /mode slash intercept (optimistic PATCH + rollback; word-boundary so /moderation falls through) + api.ts (Session.activeMode, TOOL_CATALOG switch_mode — the R45 drift guard repaired, fetchProjectModes, patchSessionActiveMode). (4) The system-reminder renderer (ONE fenced-reminder mechanism; dir-conventions migrated byte-identically — r72-dir-conventions 20/20 unmodified — plus the per-turn ReminderBudget) and skills 18→20 (spec-planning, performance — INSERT OR IGNORE). Verification: 2558 root tests in 138 files, all green (agent-core 1637/1637 in 74 files — +135; frontend 909/909 in 62 files; e2e 12 env-gated), lint/typecheck clean, license audit CLEAN (134 deps), a live HTTP smoke of the mode routes (GET /modes incl. a custom, PATCH set/bogus-400/null-clear). The live gates (the TASK MODES section + Task signal line on real messages, switch_mode activation riding the following turns, the picker + /mode slash, the two skills' triggers, custom-mode tool narrowings) await the owner's Windows field run. Next: the R74 queue — delegate_task task_id/background/resume (deferred from R73 by design), external plugin ctx enrichment (cline's appendContext seam), the lessons-ledger affordance as the reminder injector's third consumer, ratings-driven prompt tuning."
     },
     "upcoming": [
       {

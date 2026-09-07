@@ -133,6 +133,11 @@ describe("modeAllowList / sessionToolAllowList (ROUND-50 R50-c1)", () => {
         // memory_recall) — the SKILLS prompt section is advertised in plan
         // mode, so the loader must not be dark there.
         "read_skill",
+        // ROUND-73 (R73-b follow-up): switching a task mode is an observation-
+        // level session-state change — the TASK MODES section (and its
+        // task-signal line) is advertised in plan mode, so the switch must
+        // not be dark there either.
+        "switch_mode",
       ].sort(),
     );
     // Every entry must be a REAL registered tool id.

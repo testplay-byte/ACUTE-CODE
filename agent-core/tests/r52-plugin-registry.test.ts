@@ -84,8 +84,10 @@ function writeFixturePlugin(dir: string, file: string, toolName: string): void {
 describe("ROUND-52 (R52-f): the plugin registry", () => {
   it("every built-in plugin declares a valid id/category and its tools follow the name grammar", async () => {
     // ROUND-61 (R61): + computer-use + skills + mcp = 12; ROUND-66 (R66-2-b):
-    // + core-vision (analyze_image) = 13.
-    expect(BUILT_IN_PLUGINS.length).toBe(13);
+    // + core-vision (analyze_image) = 13; ROUND-73 (R73-b): + core-modes
+    // (switch_mode — the task-mode posture switch, always on like read_skill)
+    // = 14.
+    expect(BUILT_IN_PLUGINS.length).toBe(14);
     // Declaration-stub deps (same shape builtInToolCatalog uses) so the
     // delegation plugin — gated on keyring/chat PRESENCE — also declares.
     const { ProviderKeyring } = await import("../src/providers/registry");

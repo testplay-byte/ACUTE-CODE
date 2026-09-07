@@ -26,6 +26,12 @@
  * refactoring — see tests/r72-skills-expansion.test.ts for the six new
  * skills' own pins). The R70-b/R71-e3 pins below stay intact for the
  * original eleven; the counts/orders updated honestly to eighteen.
+ *
+ * ROUND-73 (R73-d) RE-PINS: the builtin family grew 18 → 20
+ * (spec-planning, performance — see tests/r73-skills-round.test.ts for
+ * the two new skills' own pins). The R70-b/R71-e3/R72-b pins below stay
+ * intact for the original thirteen; the counts/orders updated honestly
+ * to twenty.
  */
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync, unlinkSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -408,7 +414,7 @@ describe("R70-b D1: server routes — merged listing + file-skill read-only", ()
     const skills = (response.json() as { skills: Array<Record<string, unknown>> }).skills;
 
     const byName = new Map(skills.map((s) => [s.name as string, s]));
-    // DB rows (all 18 builtins + the user skill) ride the listing as before.
+    // DB rows (all 20 builtins + the user skill) ride the listing as before.
     expect(byName.get("computer-use")?.source).toBe("builtin");
     expect(byName.get("code-review")?.source).toBe("builtin");
     expect(byName.get("user-made")?.source).toBe("user");
@@ -487,7 +493,7 @@ describe("R70-b D1: server routes — merged listing + file-skill read-only", ()
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
-// D2 — the seven R70-b built-ins (+ the four R71-e3 + the six R72-b additions)
+// D2 — the seven R70-b built-ins (+ the four R71-e3 + the six R72-b + the two R73-d additions)
 // ─────────────────────────────────────────────────────────────────────────────
 
 describe("R70-b D2: the seven new built-in skills", () => {
@@ -511,9 +517,12 @@ describe("R70-b D2: the seven new built-in skills", () => {
     ["typescript-craft", "skill_builtin_typescript_craft"],
     ["security-review", "skill_builtin_security_review"],
     ["refactoring", "skill_builtin_refactoring"],
+    // R73-d: the two methodology additions ride the same house-format contract.
+    ["spec-planning", "skill_builtin_spec_planning"],
+    ["performance", "skill_builtin_performance"],
   ];
 
-  it("all EIGHTEEN builtins seed (computer-use + the seven R70-b + the four R71-e3 + the six R72-b additions), ordered by sort_order", () => {
+  it("all TWENTY builtins seed (computer-use + the seven R70-b + the four R71-e3 + the six R72-b + the two R73-d additions), ordered by sort_order", () => {
     const skills = listSkills(db);
     const builtins = skills.filter((s) => s.source === "builtin");
     expect(builtins.map((s) => s.name)).toEqual([
@@ -535,8 +544,12 @@ describe("R70-b D2: the seven new built-in skills", () => {
       "typescript-craft",
       "security-review",
       "refactoring",
+      "spec-planning",
+      "performance",
     ]);
-    expect(builtins.map((s) => s.sortOrder)).toEqual([0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17]);
+    expect(builtins.map((s) => s.sortOrder)).toEqual([
+      0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19,
+    ]);
     expect(builtins.every((s) => s.enabled)).toBe(true);
   });
 
@@ -857,7 +870,7 @@ describe("R70-b wiring: prepareTurn feeds the prompt SKILLS section from the sha
     const sessionId = createSession(db, { agentId: agent.id, mode: "single", projectId: project.id }).id;
 
     const system = await runTurnAndCaptureSystem(sessionId);
-    for (const name of ["code-review", "debugging", "testing", "git-workflow", "web-research", "project-init", "browser-use", "deploy-flow", "tdd", "api-design", "frontend-craft", "typescript-craft", "security-review", "refactoring"]) {
+    for (const name of ["code-review", "debugging", "testing", "git-workflow", "web-research", "project-init", "browser-use", "deploy-flow", "tdd", "api-design", "frontend-craft", "typescript-craft", "security-review", "refactoring", "spec-planning", "performance"]) {
       expect(system).toContain(`**${name}**`);
     }
     expect(system).not.toContain("**computer-use**"); // D4 still gates (switch off)

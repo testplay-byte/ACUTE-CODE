@@ -1,14 +1,16 @@
-<!-- last-reviewed: 2026-09-07 round-72 -->
-# EXTENSIBILITY — plugins, skills, MCP servers (owner's guide)
+<!-- last-reviewed: 2026-09-07 round-73 -->
+# EXTENSIBILITY — plugins, skills, modes, MCP servers (owner's guide)
 
 **Status:** normative · **Established:** round-61 (owner directive: "the
 ability to add multiple skills… the ability to add MCP servers too" —
-multi-plug-in tooling was the R52 directive) · **Audience:** the owner
+multi-plug-in tooling was the R52 directive) · **R73:** the MODES sibling
+tier joins the table · **Audience:** the owner
 adding capabilities, and any agent extending the toolset
 
-ACUTE-CODE has **four extension surfaces**. This runbook tells you which to
+ACUTE-CODE has **five extension surfaces** (four + the R73 modes tier). This
+runbook tells you which to
 use, how to write each, and where the honesty gates live. The prompt-module
-system (per-project system-prompt section overrides) is a FIFTH surface
+system (per-project system-prompt section overrides) is a SIXTH surface
 with its own runbook: [PROMPT-MODULES](PROMPT-MODULES.md) (R59).
 
 ## Which surface when
@@ -16,16 +18,23 @@ with its own runbook: [PROMPT-MODULES](PROMPT-MODULES.md) (R59).
 | Surface | Use it when | Where it lives | Gating |
 |---|---|---|---|
 | **External plugin (.mjs)** | You want NEW TOOLS (new model-callable capabilities) in code | `~/.acute/plugins/` (user) or `<project>/.acute/plugins/` (project, opt-in) | Tool-name grammar + agent allowlist; in-process, full trust |
-| **Skill** | You want new BEHAVIOR/CONVENTIONS without code (prompt modules the agent loads on demand) | Settings → Skills (the `skills` table) **+ files on disk since R70**: `<project>/.acute/skills/<name>/SKILL.md` and `~/.agents/skills/` | Enabled flag (DB rows) / existence (files); body loaded via `read_skill` (progressive disclosure; sticky since R70) |
+| **Skill** | You want new METHODOLOGY — behavior/conventions the agent loads on demand (prompt modules, progressive disclosure) | Settings → Skills (the `skills` table) **+ files on disk since R70**: `<project>/.acute/skills/<name>/SKILL.md` and `~/.agents/skills/` | Enabled flag (DB rows) / existence (files); body loaded via `read_skill` (progressive disclosure; sticky since R70) |
+| **Task mode** (R73) | You want a new POSTURE — a detailed system-prompt module that rides the prompt WHILE ACTIVE (what the agent refuses first, must produce first, what done means) | Six builtins + `<project>/.acute/agents/<name>.md` customs (frontmatter name/description/tools + the posture body) | Set via the composer picker / `/mode` slash / the `switch_mode` tool; nothing auto-activates |
 | **MCP server** | You want to attach an EXTERNAL tool server (the wide ecosystem — filesystems, browsers, APIs) | Settings → MCP (the `mcp_servers` table) | Owner-configured only; tools bridge as `mcp__<server>__<tool>` |
 | **Built-in plugin catalog** | You want to SEE what's shipped + what each plugin contributes | `GET /plugins` (the Extensions surface) | Read-only; the catalog is computed from real declarations |
 
-Rule of thumb: **behavior → skill; tools → plugin; external server → MCP**.
+Rule of thumb: **methodology → skill; posture → mode; tools → plugin;
+external server → MCP**. Skills and modes are SIBLING TIERS over one
+trigger surface: the skill carries HOW a class of work is executed and
+loads on demand; the mode changes how the agent HOLDS ITSELF and rides
+the prompt every turn while active (R73's division — every builtin mode
+body ends with a PAIRS WITH line naming the skills that carry its
+method).
 
 ## 1. External plugins (.mjs files)
 
 The tool layer is a plugin registry (`agent-core/src/tools/registry.ts`,
-ADR-0025). The 13 built-in plugins are in-repo
+ADR-0025). The 14 built-in plugins are in-repo
 (`agent-core/src/tools/plugins/*.ts`); external ones are plain ES modules
 you drop on disk:
 
@@ -100,20 +109,24 @@ loads only when the model calls `read_skill("name")`. Long procedures stay
 out of context until needed. Since R70 a loaded body is **STICKY** — it
 persists with a 60K budget and skips the replay stub, so a loaded
 instruction set survives the whole task (the prompt teaches the reload
-affordance for the last-resort 8K truncation case).
+affordance for the last-resort 8K truncation case). The SIBLING tier —
+task modes, where the body rides the prompt WHILE ACTIVE — is §2b below.
 
 Skills come from THREE places (one merged view — `GET /skills`, with
 provenance since R70):
 
-- **Built-ins (18 since R72)**: `computer-use` (the behavioral contract
+- **Built-ins (20 since R73)**: `computer-use` (the behavioral contract
   from the spec's doc-09, condensed — gated on the computer-use master
   switch) plus the R70 seeds `code-review`, `debugging`, `testing`,
   `git-workflow`, `web-research`, `project-init` (writes the project's
   AGENTS.md from codebase analysis), and `browser-use` (the
   embedded-browser craft) — the R71 discipline seeds
-  `focused-fix`, `zero-hallucination`, `self-eval`, `ship-gate` — and
-  the R72 craft seeds `tdd`, `api-design`, `frontend-craft`,
-  `typescript-craft`, `security-review`, `refactoring`. All
+  `focused-fix`, `zero-hallucination`, `self-eval`, `ship-gate` — the
+  R72 craft seeds `tdd`, `api-design`, `frontend-craft`,
+  `typescript-craft`, `security-review`, `refactoring` — and the R73
+  seeds `spec-planning` (the spec-as-decision-document methodology)
+  and `performance` (measure first: a before-number and a named
+  bottleneck before any change). All
   descriptions follow the R71 trigger-rich convention (see the R71
   addendum below). Built-ins can be **edited** (your text overrides the
   seed) or **disabled**, but never deleted — deletion is refused with a
@@ -187,6 +200,82 @@ SKILLS prompt section and in Settings → Skills (marked as a project
 file, `source: "project-file"`, with its `filePath`), and its body
 loads from disk when `read_skill` is called.
 
+## 2b. Task modes (R73 — the posture tier, the skills' sibling)
+
+A task mode is a **posture module**: while a mode is ACTIVE, its deep
+body rides the turn's system prompt VERBATIM (the `## ACTIVE TASK MODE`
+section) — no `read_skill` call, no sticky context, the prompt simply
+carries it until cleared. The difference from a skill is the difference
+between *methodology you read* and *a stance you hold*: the skill body
+teaches HOW a class of work is executed; the mode body governs what the
+agent refuses to do first (edit, theorize, widen, praise), what it must
+produce before anything else (a spec, a reproduction, a safety net, a
+map), and what "done" means in that stance. Every builtin mode body
+ends with a **PAIRS WITH** line naming the skills that carry its method
+(plan → spec-planning, debug → debugging, build → tdd, review →
+code-review, explore → web-research, refactor → refactoring).
+
+**Six builtins**: `plan` (spec-first, NO EDITS, present-and-wait),
+`debug` (diagnosis-first — NEVER a fix without a one-sentence root
+cause; the method itself lives in the paired skills, the body is pure
+posture with an Escalation section), `build` (verify after every step,
+vertical slices), `review` (read-only, evidence-quoted findings, the
+mandatory WHAT-I-DID-NOT-CHECK), `explore` (zero side effects,
+[READ]/[INFERRED]/[UNKNOWN] map tags), `refactor` (no behavior change,
+characterization tests first, one mechanical move per step).
+
+**Setting and clearing** (nothing auto-activates — the Task signal
+line in the TASK MODES prompt section is advisory only): the composer's
+mode picker (next to the permission-mode switcher), the `/mode` slash
+command in the composer (`/mode debug`, `/mode Debug`, `/mode none`,
+bare `/mode` lists), the agent's own `switch_mode` tool, or
+`PATCH /sessions/:id {activeMode}` over REST. The activation is stored
+on the session row (`active_mode`, migration 0027) and resolved against
+the project root at every turn — a vanished custom mode is swept clear
+with a one-turn honest note.
+
+**Custom modes — `.acute/agents/<name>.md` in the project root** (the
+kilocode/claude custom-modes pattern; files under `.acute/agents/` are
+project-root trust — the SAME level as `.acute/prompts/` overrides and
+`.acuterules`: they do NOT bypass the bearer wall or tool allowlists):
+
+```
+<project>/.acute/agents/release-notes.md
+---
+name: Release Notes
+description: Use when the user says 'write release notes', 'changelog', 'what changed since' — collects commits and drafts the notes. NOT for commits themselves.
+tools: read_file, search_code, run_command
+---
+# Mode: release-notes — COLLECT-THEN-WRITE POSTURE
+
+(the posture body — what to refuse first, what to produce before
+anything else, what done means; ≤16,000 chars)
+```
+
+The contract (honest caps, all surfaced as diagnostics in the sidecar
+log via `renderModeDiagnostics`): flat `*.md` files only (subdirectories
+are skipped with the honest "not-a-file" note); ≤8 customs per project
+(the first 8 by file-name order; the 9th+ are skipped + diagnosed);
+body ≤16,000 chars (truncated WITH the honest marker); description
+≤500 chars; a missing description still loads, with a fallback line
+(the matcher cannot match what has no text); name ≤64 chars; id =
+slugified name. **A custom mode whose id equals a builtin id SHADOWS
+the builtin** — your project's `debug` overrides the shipped one (one
+entry, custom wins). **The optional `tools` frontmatter NARROWS the
+session's tool allowlist while the mode is active** — never widens,
+unknown tool names drop honestly, and an empty intersection leaves the
+session with NO tools (the NO_TOOLS sentinel): a mode listing
+`tools: read_file, search_code` makes the session read-only for the
+duration. Custom modes are re-resolved from disk EVERY TURN — edit the
+file and the next turn carries the new text (no DB rows, no caching, no
+persistence by design).
+
+**REST surface**: `GET /projects/:id/modes` (the picker's data source
+— id/name/description/source, METADATA ONLY, bodies never served),
+`PATCH /sessions/:id {activeMode: "<id>" | null}` (unknown id → 400
+with the available ids). The full design decisions live in the R73
+round file (docs/ui-iterations/round-73.md).
+
 ## 3. MCP servers (Settings → MCP)
 
 Attaches external stdio MCP servers (the Model Context Protocol ecosystem).
@@ -227,7 +316,7 @@ toolset (when the server is enabled). `tools/call` output is capped at
 ## 4. The built-in plugin catalog (`GET /plugins`)
 
 One authenticated call returns the whole extension picture:
-`plugins` (the 13 built-ins' id/name/version/category/description — the
+`plugins` (the 14 built-ins' id/name/version/category/description — the
 computer-use plugin is listed even while its master switch is OFF: the gate
 is settings, not existence), `tools` (the live computed catalog — gated
 plugins contribute nothing), and `external` (the .mjs file report: user +
@@ -240,6 +329,7 @@ project files with loaded bits + the honest load-error note). The
 |---|---|
 | External plugin | drop a `.mjs` in `~/.acute/plugins/` (no repo change) |
 | Skill | Settings UI → `skills` table → prompt section + `read_skill` |
+| Task mode (custom posture) | drop a `.md` in `<project>/.acute/agents/` (no repo change; §2b) |
 | MCP server | Settings UI → `mcp_servers` table → `mcp/manager.ts` child |
 | Built-in plugin (new tool group) | `agent-core/src/tools/plugins/<name>.ts` + registry import + tests |
 | Settings-gated surface (like computer-use) | storage accessors + `createTools` gate + migration |
@@ -391,6 +481,41 @@ project files with loaded bits + the honest load-error note). The
   (session, directory). Related reading: the R72 round file
   (docs/ui-iterations/round-72.md §D) for the full design decisions.
 
+## The R73 addendum (the MODES tier — posture, the skills' sibling)
+
+- **Task modes are the posture tier** — the skills' SIBLING over the same
+  trigger surface (the full contract in §2b above): SIX builtins
+  (plan/debug/build/review/explore/refactor) whose deep bodies ride the
+  system prompt's ACTIVE TASK MODE section while active, plus custom
+  modes from `.acute/agents/*.md` (the kilocode/claude pattern — your
+  posture modules ship WITH the repo; a custom shadows the builtin of
+  the same id; the optional `tools` frontmatter narrows the session's
+  toolset while active, narrow-only). Sessions carry the active mode on
+  the row (migration 0027 — `active_mode`, NULL default = pre-R73
+  behavior). Three access paths, nothing auto-activates: the composer
+  picker + `/mode` slash, the agent's own `switch_mode` tool, and the
+  advisory Task signal line (the R72-a deterministic matcher extended —
+  `computeModeHints` scores mode descriptions exactly like skill
+  descriptions; your custom mode's description is the matcher's input,
+  so write it trigger-rich with quoted phrasings, same convention as
+  skills).
+- **The system-reminder renderer** — ONE fenced-reminder mechanism now
+  serves the per-directory conventions reminder (byte-identical to
+  R72's) and `switch_mode`'s activation notice; the lessons ledger is
+  the queued third consumer. A per-turn `ReminderBudget` (default 3)
+  bounds the family — reminders are context the model did not ask
+  for; a turn full of them is noise that buries the one that mattered.
+- **TWENTY built-in skills now (was 18).** Two R73 seeds (same `INSERT
+  OR IGNORE` contract, sortOrder 18/19): `spec-planning` (the spec-as-
+  decision-document methodology — the 8 canonical sections with
+  INTERFACES FIRST, ≤5 batched questions each with a default, the
+  approval gate; pairs with the plan task mode) and `performance`
+  (NO OPTIMIZATION WITHOUT A BEFORE-NUMBER AND A NAMED BOTTLENECK —
+  the 3-rung profiling ladder cheapest-first, complexity before
+  micro-tuning, benchmark receipts with variance noted). The standing
+  upgrade-path note applies (INSERT OR IGNORE keeps existing rows;
+  delete + reopen to get the newest seed text on an old install).
+
 ## Troubleshooting
 
 - **A plugin file exists but `loaded:false`** — read the sidecar log
@@ -407,6 +532,17 @@ project files with loaded bits + the honest load-error note). The
   from a SKILL.md file, not the database; edit the file (the listing's
   `filePath` names it) or create a DB skill with the same name to
   override it.
+- **Custom mode not in the picker** — check `.acute/agents/<name>.md` is
+  a flat .md in the project root with a non-empty body; read the sidecar
+  log for the diagnostic (caps, empty-body, too-many-modes — the 9th+
+  file is skipped). A mode that resolved when the session started but
+  whose file was since deleted is swept clear at the next turn with an
+  honest note (by design — no stale posture resurrection).
+- **`/mode <x>` says "Unknown task mode"** — the ids are lowercase slugs
+  ("release-notes", not "Release Notes"); the name resolves too
+  (case-insensitive, exact word — "deb" is not "debug"). If the list
+  shows "(none)" the modes query is still loading (a slow sidecar's
+  metadata GET); retry in a moment.
 - **MCP probe fails** — the honest error names the stage (initialize
   failed / tools/list failed / spawn failed). Check the command resolves
   (`npx -y <pkg>` on PATH), then re-probe (a probe resets the one-strike
@@ -421,12 +557,18 @@ project files with loaded bits + the honest load-error note). The
 - [TESTING](TESTING.md) — the r52-plugin-registry + skills-mcp suites
 - [MAINTENANCE](MAINTENANCE.md) — the how-to-add-a-tool recipe
 - Code map: `agent-core/src/tools/registry.ts` (loader, grammar, caps,
-  catalog), `agent-core/src/tools/plugins/` (13 built-ins — incl.
-  `vision.ts`, the R66 core-vision plugin), skills storage
-  `agent-core/src/storage/skills.ts` (the 18 builtins) +
+  catalog), `agent-core/src/tools/plugins/` (14 built-ins — incl.
+  `modes.ts`, the R73 core-modes plugin, and `vision.ts`, the R66
+  core-vision plugin), skills storage
+  `agent-core/src/storage/skills.ts` (the 20 builtins) +
   `agent-core/src/storage/skills-files.ts` (file discovery, references/,
-  the shared resolver, the merged listing), the task-hints matcher
-  `agent-core/src/agents/task-hints.ts`, MCP storage
+  the shared resolver, the merged listing), the modes core
+  `agent-core/src/agents/modes.ts` (the six postures + custom discovery)
+  and the reminder renderer `agent-core/src/agents/system-reminders.ts`,
+  the task-hints matcher
+  `agent-core/src/agents/task-hints.ts` (skills + modes), MCP storage
   `agent-core/src/storage/mcp.ts` + client `agent-core/src/mcp/manager.ts`,
-  routes in `agent-core/src/server.ts` (ROUND-61 section), settings UI in
-  `src/components/settings/{SkillsTab,McpTab}.tsx`.
+  routes in `agent-core/src/server.ts` (ROUND-61 + ROUND-73 sections),
+  settings UI in
+  `src/components/settings/{SkillsTab,McpTab}.tsx` + the mode picker
+  `src/components/project-chat/composer/TaskModePicker.tsx`.

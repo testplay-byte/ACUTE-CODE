@@ -53,6 +53,8 @@
 import { readFileSync, statSync } from "node:fs";
 import { isAbsolute, join, posix } from "node:path";
 
+import { renderReminder } from "../agents/system-reminders.js";
+
 /** Convention file names, in priority order at each directory level. */
 const CONVENTION_FILE_NAMES: readonly string[] = ["AGENTS.md", "CLAUDE.md"];
 
@@ -128,13 +130,19 @@ export function findDeepestConvention(root: string, relativeFilePath: string): D
  * states explicitly that the file content above is unaffected — so the
  * model can always tell content from reminder (and a convention excerpt
  * that itself contains `---` cannot be mistaken for the closing fence).
+ *
+ * ROUND-73 (R73-d): the formatting now DELEGATES to the ONE generalized
+ * renderer (agents/system-reminders.ts — the same mechanism the R73-b
+ * mode-switch notice and future lessons-ledger affordances will ride).
+ * The delegation is byte-identical to the R72-d format above; the proof is
+ * r72-dir-conventions.test.ts staying green UNMODIFIED.
  */
 export function conventionReminder(convention: DirConvention): string {
-  return (
-    `\n\n--- [conventions from ${convention.file} apply to this file]\n` +
-    `${convention.excerpt}\n` +
-    `--- (end conventions — the file content above is unaffected)`
-  );
+  return renderReminder({
+    kind: "conventions",
+    label: `[conventions from ${convention.file} apply to this file]`,
+    text: convention.excerpt,
+  });
 }
 
 /* ── Session-once dedup (module state, mirroring tools/edit-streak.ts) ────── */

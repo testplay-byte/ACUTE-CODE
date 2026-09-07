@@ -515,7 +515,9 @@ describe("migration 0015 (memory table + tool allowlist append)", () => {
     // (R61), read_skill (migration 0023 appends the skills loader to
     // template/default rows; the test DB runs the full chain) — and, since
     // ROUND-66 (R66), analyze_image (migration 0026 appends it to rows whose
-    // list includes web_fetch — this seed list does).
+    // list includes web_fetch — this seed list does) — and, since ROUND-73
+    // (R73-b), switch_mode (migration 0027 appends the task-mode posture
+    // switch to rows whose list includes read_skill — it does by then).
     expect(row("agt_tpl_coder")).toEqual([
       ...JSON.parse(seedTools) as string[],
       "memory_save",
@@ -525,9 +527,10 @@ describe("migration 0015 (memory table + tool allowlist append)", () => {
       "job_stop",
       "read_skill",
       "analyze_image",
+      "switch_mode",
     ]);
     expect(row("agt_default_nova")).toContain("memory_save");
-    expect(row("agt_default_nova")).toHaveLength(25);
+    expect(row("agt_default_nova")).toHaveLength(26);
     // User-created agents keep their deliberately-authored lists.
     expect(row("agt_mine")).toEqual(JSON.parse(seedTools));
 
@@ -547,14 +550,15 @@ describe("migration 0015 (memory table + tool allowlist append)", () => {
 
     // Idempotent on reopen (no duplicate appends — 21 memory-era tools + the
     // two ROUND-52 job tools + the R61 read_skill migration 0023 + the R66
-    // analyze_image migration 0026 appended to this run_command template row).
+    // analyze_image migration 0026 + the R73-b switch_mode migration 0027
+    // appended to this run_command template row).
     db2.close();
     const again = openDatabase(path);
     expect(
       JSON.parse(
         (again.prepare("SELECT allowed_tools FROM agents WHERE id = 'agt_tpl_coder'").get() as { allowed_tools: string }).allowed_tools,
       ) as string[],
-    ).toHaveLength(25);
+    ).toHaveLength(26);
     again.close();
   });
 

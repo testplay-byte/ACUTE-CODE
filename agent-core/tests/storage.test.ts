@@ -166,6 +166,10 @@ describe("openDatabase", () => {
       // ROUND-66 (R66): analyze_image joins TOOL_NAMES — appended to
       // template/default allowlists that include web_fetch.
       { version: 26, name: "0026_analyze_image_tool.sql" },
+      // ROUND-73 (R73-b): the task-modes round — sessions.active_mode
+      // column (NULL = default posture) + switch_mode appended to
+      // template/default allowlists that include read_skill.
+      { version: 27, name: "0027_task_modes.sql" },
     ]);
     expect(appliedSecond).toEqual(appliedFirst);
   });
@@ -223,6 +227,9 @@ describe("template seeding", () => {
           // ROUND-66 (R66, B3): the general image-analysis tool — seeded via
           // TOOL_NAMES (existing DBs get it appended by migration 0026).
           "analyze_image",
+          // ROUND-73 (R73-b): the task-mode posture switch — seeded via
+          // TOOL_NAMES (existing DBs get it appended by migration 0027).
+          "switch_mode",
         ]);
         expect(row.memory_policy).toBe("on-start");
         expect(row.max_turns).toBe(40);
