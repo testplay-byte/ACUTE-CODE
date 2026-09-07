@@ -1,10 +1,10 @@
-<!-- last-reviewed: 2026-09-07 round-75 -->
+<!-- last-reviewed: 2026-09-07 round-76 -->
 <!-- Canonical copy of the workspace operating rules (backed up from ACUTE_CODE/AGENTS.md). When this repo is opened as a ZCode workspace, this file loads as instructions. Paths written as "acute-code/" refer to THIS repo's root. -->
 # ACUTE-CODE — Workspace Operating Rules
 
 ACUTE-CODE (not "Forge") is a local-first, closed-source Windows desktop app: an extensible multi-agent engineering workbench. "Local-first" means all processing happens on-device; models are cloud APIs only (no local models in v1).
 
-Stack (fixed, changes need owner approval): Tauri 2 (Rust) shell · React 18 + TypeScript UI (Tailwind, shadcn/ui, Zustand, TanStack Query) · Node/TS agent-core sidecar owning SQLite, serving localhost REST + WS · Vercel AI SDK provider layer · pnpm workspaces.
+Stack (fixed, changes need owner approval): Tauri 2 (Rust) shell · React 18 + TypeScript UI (Tailwind, shadcn/ui, Zustand, TanStack Query) · Node/TS agent-core sidecar owning SQLite, serving localhost REST + SSE · Vercel AI SDK provider layer · pnpm workspaces.
 
 ## Working discipline
 
@@ -33,4 +33,4 @@ Product repo: `acute-code/` (this workspace). Documentation index: `docs/README.
 
 - **After every completed task or key milestone, notify the owner via ntfy.sh**: `curl -d "<short message, no secrets>" https://ntfy.sh/TASKISDONE`.
 - **Heavy lifting goes to GitHub Actions** (ADR-0012): repo `testplay-byte/ACUTE-CODE` (PRIVATE), token in Windows Credential Manager via wincred helper (`git:https://testplay-byte@github.com`), remote URL embeds the username. Local cargo/builds only for debugging CI failures; `pnpm verify` locally is the fast pre-push gate.
-- Provider API keys live in Windows Credential Manager under `ACUTE-CODE/provider/<providerId>`; dev testing uses OpenRouter (single allowed model: "ox Alpha").
+- Provider API keys live in Windows Credential Manager under `ACUTE-CODE/provider/<providerId>`; dev testing uses OpenRouter (the free default `z-ai/glm-5.2:free`, R43+ — `stealth/ox-alpha` is dead).

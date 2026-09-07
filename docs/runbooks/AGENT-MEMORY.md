@@ -1,4 +1,4 @@
-<!-- last-reviewed: 2026-09-07 round-75 -->
+<!-- last-reviewed: 2026-09-07 round-76 -->
 # AGENT MEMORY — lessons learned, rules going forward
 
 **Owner directive (2026-08-23):** "learn from the mistakes you made, document
@@ -704,3 +704,75 @@ Format per entry: `N. TITLE (date, source)` → mistake → root cause → rule.
     family), and treat "tests green" + "types red" as the tests mocking
     the wrong shape — mock from the CONSUMER's resolved type, never from
     a doc example.
+
+72. **An ordering you never questioned IS the bug: "latest" is a sort
+    order, not a fact.** (2026-09-07, round-74; the owner's frozen
+    updater.) The installed desktop app sat on 0.67.0 while 0.73.0 was
+    live, with zero errors anywhere — because the launcher's first-match
+    walk trusted GitHub's /releases list order, and that list sorts
+    never-published DRAFTS above every published release (the R63–R67
+    close-outs left five drafts at positions 1–5). It "used to work"
+    precisely because in the all-drafts era list order was harmless.
+    RULE: whenever code derives "the newest/latest/best" from an
+    externally-ordered list, ask what the sort key actually is and
+    compute the fact yourself (max version via integer tuples); and
+    close out drafts the same round they are created (recipe g), because
+    an ordering artifact today is a field incident months later.
+
+73. **A library can report failure WITHOUT throwing: exhaust the
+    non-throw channels before trusting the error you see.** (2026-09-07,
+    round-75; caught only by driving a REAL 429 through the live stack.)
+    The AI SDK surfaces post-retry provider errors as fullStream ERROR
+    PARTS — the iterator never throws — so our adapter's for-await
+    skipped them and the runtime only ever saw the generic
+    `NoOutputGeneratedError` ("Check the stream for errors": no status,
+    no message patterns). Every mock in the suite threw the way the code
+    expected, so 2558 tests were green while REAL rate limits classified
+    `unknown` and the entire retry ladder was dead on arrival. RULE: for
+    any streaming/queue API, enumerate the union of failure channels
+    (throw, error part, error frame, done-with-error flag, empty
+    completion) and test against the channel the real producer actually
+    uses — a live repro of the failure beats any mock for the happy
+    path's error twin.
+
+74. **`flex-1` silently eats inline height styles: when CSS and JS both
+    size an element, verify WHO is winning — on screen, not in the
+    code.** (2026-09-07, round-75; the textarea that never grew.) The
+    autosize JS set `style.height = 132px` and every reader of the code
+    believed it; the live DOM kept `clientHeight = 34px` because the
+    textarea's `flex-1` (flex-basis 0%) let the flex algorithm override
+    the height style — for TWENTY-FIVE rounds, while the owner reported
+    "cut off to two lines" and each round's fix attempt adjusted the JS.
+    RULE: when an element is both flex-sized and style-sized, only ONE
+    wins — pick the single source of truth (here: drop `flex-1`, let the
+    height style govern, set `maxHeight` alongside so CSS and JS never
+    disagree), and prove sizing claims with live `clientHeight`
+    measurements (the agent-browser snapshot), never with code reading.
+
+75. **A freshness gate that fails 100+ files at once is a COHORT
+    aging, not a content rot — diagnose the shape before the sweep.**
+    (2026-09-07, rounds 53/54/75.) `docs:check` failed 162 of 173 docs
+    in one run: the 3-round cap means every doc stamped by round N fails
+    together at round N+4 (round-71's cohort aged out at 75), and
+    `stamp-all.mjs` only ADDS missing stamps — it never bumps existing
+    ones, so the "documented" fix tool cannot fix the actual failure
+    mode. RULE: on a mass gate failure, first bucket the failures by
+    error kind and check whether they share one stamp round (cohort) or
+    scatter (rot); refresh cohorts with first-line-only stamp bumps
+    verified via `git diff` (zero content drift), and record the refresh
+    rule where the next agent will find it (DOC-STANDARDS §8, MAINTENANCE
+    recipe g step 2b).
+
+76. **"Complete but uncommitted" is a claim, not a state: after any
+    session interruption, re-verify from zero before shipping.**
+    (2026-09-07, round-75 close-out.) A prior session left R75 fully
+    implemented, documented as verified — and uncommitted at context
+    exhaustion. Re-running the entire ladder from scratch (2613 tests,
+    lint, both typechecks, docs:check) surfaced exactly one real gap
+    (round-75.md's missing stamp + the aged cohort, item 75) that the
+    prior session's own "docs:check 172/0/0" claim had already papered
+    over — the claim was true when written and false at ship time,
+    because the round counter had moved. RULE: treat handoff claims as
+    hypotheses; re-run the gates yourself, expect at least one drift
+    between "verified" and "now", and never push a commit whose
+    verification you did not personally watch happen.

@@ -1,4 +1,4 @@
-<!-- last-reviewed: 2026-09-07 round-75 -->
+<!-- last-reviewed: 2026-09-07 round-76 -->
 
 # DOC-STANDARDS — how ACUTE-CODE docs are written + maintained
 
@@ -99,6 +99,15 @@ When adding the `<!-- last-reviewed -->` contract to a repo that didn't have
 it, run `node scripts/docs/stamp-all.mjs` to bulk-add the stamp to every
 doc missing it. Re-run after large doc batches. The stamp uses the current
 date + the round number from `docs/status.json`.
+
+**The cohort-aging rule (R75):** the 3-round cap means a whole stamp
+cohort fails `docs:check` at once — every round where `stampRound + 4 ≤
+current` (R75 hit the round-71 cohort: 161 docs). `stamp-all.mjs` only
+ADDS missing stamps (it never bumps existing ones), so a cohort failure
+is fixed by bumping the aged stamps' date+round in place —
+first-line-only diffs, verified with `git diff` before commit (the
+R53/R54/R75 mass-stamp precedent). Run `pnpm docs:check` before every
+release close-out.
 
 ## 9. What NOT to do
 

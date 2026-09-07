@@ -1,8 +1,8 @@
-<!-- last-reviewed: 2026-09-07 round-73 -->
+<!-- last-reviewed: 2026-09-07 round-76 -->
 # IMPLEMENTED API — the shipped surface
 
 **Truth = this file.** Verified against `agent-core/src/server.ts` at
-round-17 (2026-08-23), refreshed R37→R73. The aspirational full contract (52
+round-17 (2026-08-23), refreshed R37→R75. The aspirational full contract (52
 operations, WS gateway, planned routes) lives in
 [`API.md`](API.md) — anything there and
 not here **does not exist yet**. Base: `http://127.0.0.1:<port>`; dev port
@@ -28,7 +28,7 @@ vite dev origins.
 | Route | Notes |
 |---|---|
 | `GET /agents?includeTemplates=` | list; `false` excludes the 5 templates (default agent "Acute" remains — seeded at DB open, fixed id `agt_default_nova`, provider openrouter / model `z-ai/glm-5.2:free` since R43/migration-0013; was the dead `stealth/ox-alpha`) |
-| `POST /agents` | `AgentDraft` → `201`. `allowedTools` validated against the REAL tool list (`TOOL_NAMES`, **25 tools** — incl. `delegate_task` + `browser_control` since R43, `memory_save`/`memory_recall`/`memory_list` since R44, `job_status`/`job_stop` since R52, `read_skill` since R61, and `analyze_image` since R66) — SPEC-era names 400 (ADR-0019). Empty list = ALL tools. The 31 computer-use tools are deliberately NOT allowlist vocabulary (settings-gated, default OFF); `mcp__<server>__<tool>` names are dynamic (server-config-derived). |
+| `POST /agents` | `AgentDraft` → `201`. `allowedTools` validated against the REAL tool list (`TOOL_NAMES`, **26 tools** — incl. `delegate_task` + `browser_control` since R43, `memory_save`/`memory_recall`/`memory_list` since R44, `job_status`/`job_stop` since R52, `read_skill` since R61, `analyze_image` since R66, and `switch_mode` since R73) — SPEC-era names 400 (ADR-0019). Empty list = ALL tools. The 31 computer-use tools are deliberately NOT allowlist vocabulary (settings-gated, default OFF); `mcp__<server>__<tool>` names are dynamic (server-config-derived). |
 | `GET/PATCH/DELETE /agents/:id` | PATCH bumps version; DELETE 409 `{reason:"template"}` for templates |
 | `POST /agents/:id/duplicate` | `{name?}` → `201` |
 
@@ -53,10 +53,12 @@ containment-enforced) ·
 `POST /projects/:id/terminal` `{command}` → `{stdout, stderr, exitCode, ms}`
 (synchronous run, 60s timeout / 64 KB combined cap; R44 adds a streaming
 variant — see ROUND-44 additions) ·
-`GET /projects/:id/modes` → `{modes:[{id,name,description,source}]}`
+`GET /projects/:id/modes` → `{modes:[{id,name,description,source,readOnly}]}`
 (**R73**: the task-mode index for the session's project — the six builtins
 + the project's `.acute/agents/*.md` customs, METADATA ONLY; see the
-ROUND-73 additions).
+ROUND-73 additions. **R75**: `readOnly` is true for plan/review/explore —
+the mode-policy enforcement tier, so the picker badges them without
+duplicating the set).
 
 ## /api/v1/sessions & turns
 
@@ -66,7 +68,7 @@ ROUND-73 additions).
 | `GET /sessions?limit=&offset=` | newest-first + total (NO projectId filter — client-side) |
 | `GET /sessions/:id` | session + `events[]` + `lastSeq` (events embedded; no backfill route). **R73: rows carry `activeMode`** (the active TASK MODE id or `null`; set/cleared via PATCH below or the `switch_mode` tool; enforcement at turn time — see ROUND-73 additions) |
 | `PATCH /sessions/:id` | **round-33 (rename) · R73 (mode switch)** — body `{title?, activeMode?}`, each independently optional: `title` (string ≤200) renames; `activeMode` is a mode id (resolved against the session's project — projectless resolves builtins only; unknown → `400 VALIDATION` with `availableModes` in details, validated BEFORE any write), `null` clears, absent = untouched. `200` the bare updated session row (NOT the GET shape — no `events`/`lastSeq`). `404` unknown. |
-| `PATCH /sessions/:id/permissions` | **ROUND-50** — `{mode: "full"\|"ask"\|"plan"\|"editor"}` → `200` the updated session + `events[]` + `lastSeq` (same shape as GET). `400 VALIDATION body.mode` otherwise, `404` unknown. Enforcement: `sessionToolAllowList` (runtime.ts — shared with the context route): *plan* intersects tools to the 12 read-only/research tools; *editor* strips `run_command`; *full* auto-approves every ask-tier gate EXCEPT the denylist-supreme (sudo/rm -rf/… never bypassed) while agent allowlists stay authoritative; the system prompt gains a PERMISSION MODE section. |
+| `PATCH /sessions/:id/permissions` | **ROUND-50** — `{mode: "full"\|"ask"\|"plan"\|"editor"}` → `200` the updated session + `events[]` + `lastSeq` (same shape as GET). `400 VALIDATION body.mode` otherwise, `404` unknown. Enforcement: `sessionToolAllowList` (runtime.ts — shared with the context route): *plan* intersects tools to the 14-tool `PLAN_MODE_TOOLS` read-only/research set (canonical home `agents/mode-policy.ts` since R75 — runtime.ts re-exports); *editor* strips `run_command`; *full* auto-approves every ask-tier gate EXCEPT the denylist-supreme (sudo/rm -rf/… never bypassed) while agent allowlists stay authoritative; the system prompt gains a PERMISSION MODE section. **R75: task modes now enforce too** — the active task mode's policy intersects AFTER the permission mode (plan/review/explore read-only, debug keeps full tools with run_command demoted to the AUTO tier, children inherit the parent's activeMode at delegation). |
 | `GET /sessions/:id/context?model=` | **ROUND-50 (the composer's context donut)** — `{model, providerId, contextWindow, usedTokens, breakdown:{systemPrompt, systemTools, memory, messages, meta, mcpTools:0}, cache:{inputTokens, cachedInputTokens, hitRate\|null}, sessionTotals:{inputTokens, outputTokens, requests, costUsd}}`. Window = models row → catalog → 200k. Breakdown via `buildSystemPromptSections` + estimateTokens (tool schemas ≈350 tokens/tool, documented approximation); MCP is an honest 0 (no MCP system). Cache from REAL `usage_events.cached_input_tokens` (migration 0020 — captured from the provider's `prompt_tokens_details.cached_tokens` on both turn paths). **ROUND-51: also returns `usage:{main, subagents, combined}` (each `{inputTokens, outputTokens, requests, costUsd}`)** — main = the session's own usage ledger (identical to the flat sessionTotals), subagents = the SUM over the DIRECT children's usage_events (`parent_session_id = :id`, listSubAgents parity, grandchildren excluded), combined = main + subagents. Flat fields byte-identical (additive shape). |
 | `POST /sessions/:id/messages` | `{content, model?}` — **synchronous whole turn** → `200 {assistantMessage:{seq,role,agentId,content,ts}, usage}`; 404/409 (terminal/unconfigured/no key)/502 provider. **ROUND-50: also accepts `thinkingLevel?: "default"\|"low"\|"high"\|"max"` (400 otherwise; injected as `reasoning.effort` on chat-completions bodies) and `attachments?: [{name, path?, size?, text?}]` (≤20, name ≤200 chars, text capped 128 KB server-side; persisted on the `message.user` payload and rendered into model-facing history as `--- attached file: … ---` blocks)** |
 | `POST /sessions/:id/messages/stream` | **SSE (the UI's primary path)** — same validation (incl. the ROUND-50 `thinkingLevel`/`attachments` fields); `text/event-stream` frames: `{type:"text-delta",delta}` · `{type:"thinking-delta",delta}` · `{type:"tool-call",toolName,argsSummary}` · `{type:"tool-result",toolName,argsSummary,ok}` · `{type:"finish",usage[,cachedInputTokens]}` · `subagent-status`/`subagent-event` envelopes (children stream their own live deltas — ROUND-50) · terminal `{type:"done",assistantMessage,usage}` or `{type:"error",status,code,message}`. **R42: a client disconnect does NOT abort the turn** — it completes in the background (events persist; the completion notification fires + Web Push delivers it to the closed window's service worker). A deliberate stop is `POST /sessions/:id/stop`. |
@@ -1607,7 +1609,8 @@ existing surfaces changed shape ADDITIVELY:
 
 ### The PROVIDER_ERROR 502 envelope + `turn.error` event — the error class
 
-`classifyProviderError` (runtime.ts, exported) classifies every
+`classifyProviderError` (`agents/error-classification.ts` since R75,
+runtime.ts re-exports) classifies every
 provider/stream failure into six classes — `context_window_exceeded` /
 `auth` / `rate_limit` / `network` / `timeout` / `unknown` — BEFORE
 flattening. Additive payload changes (older readers ignore the new
@@ -1821,3 +1824,50 @@ line, so the switch must not be dark there).
   performance at sortOrder 18/19) — same `INSERT OR IGNORE` seeding,
   no migration, no route change; the standing R71/R72 note (existing
   rows keep their text) applies.
+
+## ROUND-75 additions (implemented)
+
+The reliability & enforcement round. No new routes; three surfaces
+changed ADDITIVELY and the failure paths gained a retry ladder:
+
+### `GET /projects/:id/modes` — the `readOnly` field (additive)
+
+Each row gains `readOnly: boolean` (true for plan/review/explore) — the
+mode-policy enforcement tier (`agents/mode-policy.ts`), so the picker
+badges read-only postures without duplicating the set.
+
+### The `meta.retry` SSE frame (NEW frame type, the `meta.*` family)
+
+While the transient-API retry ladder (`lib/retry.ts`:
+RETRY_LADDER_MS = [immediate, 1.5 min, 5 min, 10 min, 30 min], six total
+attempts) waits out a rate_limit/network/timeout failure, the stream emits
+`{type:"meta.retry", sessionId, attempt, totalAttempts, waitMs, retryAt,
+errorClass, message}` on entry and every 60 s tick
+(keep-alive + live countdown); the frontend renders the amber
+`RetryStatusCard` (role=status) and clears it on the first content frame.
+auth/context_window_exceeded/unknown NEVER ladder (fail fast). SSE-only,
+never persisted, never model-facing; a user Stop aborts the wait.
+
+### Error payloads gain `attempts`; the 502/`turn.error` shapes
+
+The 502 envelope's `details` and the persisted `turn.error` payload gain
+`attempts` (additive; `errorClass`/`classMessage` since R71). Two honesty
+fixes: the sync `POST /sessions/:id/messages` path no longer lies
+`ok:true` on a failed sub-agent after partial replies (honest 502 + the
+completed iterations' usage recorded), and the boot sweep
+(`sweepStaleRunning`) writes an INTERRUPTED `turn.error` event + resets
+the session to `queued` instead of terminal `failed` (retryable, no 409).
+
+### Model-facing (non-HTTP) drift notes
+
+- `chat.ts` now re-throws fullStream error PARTS (the AI SDK delivers
+  post-retry provider errors as parts, not throws — the live-429 find);
+  without it real 429s classified `unknown` and could never ladder.
+- Task modes are HARD-enforced (see the PATCH /sessions/:id row): the
+  composition order in `prepareTurn` is agent allowlist → delegation depth
+  → permission mode → custom-mode `tools` frontmatter (R73) → task-mode
+  policy (R75); `switch_mode` refuses to leave or clear plan/review/explore
+  (owner-pinned); delegated children COPY the parent's `activeMode`
+  (`createSession` gained the input — internal, not a REST field).
+- `meta.overflow_recovery` is now typed + rendered (was untyped
+  fall-through since R71).

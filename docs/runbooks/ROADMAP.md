@@ -1,9 +1,11 @@
-<!-- last-reviewed: 2026-09-07 round-75 -->
+<!-- last-reviewed: 2026-09-07 round-76 -->
 # ROADMAP — milestones per pillar
 
 Statuses: `done` · `in-flight` · `queued` · `owner-gated` (do not start
 without an explicit owner verdict). Refreshed every round; HANDOFF §9 points
-here. Last refreshed: round-17 (2026-08-23).
+here. Last refreshed: round-75 (2026-09-07) — this file had been frozen at
+round-17; the per-round truth lives in `CHANGELOG.md` +
+`ui-iterations/README.md`.
 
 ## Phase ladder
 
@@ -13,7 +15,7 @@ here. Last refreshed: round-17 (2026-08-23).
 | P1 | Architecture skeleton + sidecar + CI | **done** |
 | P2 | App + UI (wizard rounds 1–7 approved, R8 shell) | **done**; Phase-2 ADR ratifications still queued |
 | MVP | Agentic coding M1–M4 (projects, tools, chat UI, live proof) | **done** (rounds 9–16); owner review continuing |
-| P3 | Orchestration engine (see SPEC F3 + `PILLARS.md` §7 steps ②③) | **owner-gated** |
+| P3 | Orchestration engine (see SPEC F3 + `PILLARS.md` §7 steps ②③) | **shipped progressively** (delegation + sub-agents R36–R43, approval engine ADR-0024 R37, streamed children R50, stop/replay R58 — the Kanban bus/auto-team topology of SPEC §F3 remains queued) |
 | P4+ | Packaging/exe, distribution | queued (ADR-0003 direction) |
 
 ## Pillar 1 — Coding workbench (the product's core loop)
@@ -31,10 +33,12 @@ here. Last refreshed: round-17 (2026-08-23).
 
 ## Pillar 2 — Agentic system (multi-agent orchestration)
 
-- done: design groundwork (`PILLARS.md`, `research/` synthesis, ADR-0001/0011)
-- in-flight: blueprint + candidate-ADR list for delegation (round-17)
-- owner-gated: implementation (Phase 3): delegate tool in chat → child
-  sessions → approval engine → WS push channel → run modes
+- done: design groundwork (`PILLARS.md`, `research/` synthesis, ADR-0001/0011);
+  delegation-as-tool + child sessions + approval round-trip + 5-slot
+  semaphore (R36–R52); R71–R75 reliability layers (error classification,
+  overflow recovery, the retry ladder, task-mode enforcement)
+- queued: delegate_task task_id/background/resume (the R76 head); SSE push
+  (WS never shipped)
 
 ## Pillar 3 — Automation platform (n8n class)
 
@@ -56,6 +60,8 @@ here. Last refreshed: round-17 (2026-08-23).
 
 ## Changelog (one line per round, newest first)
 
+- R18–R75: see `CHANGELOG.md` (one entry per version) and `docs/README.md`'s
+  round index — this list is not duplicated here by design.
 - R17: governance round — docs/ADRs/blueprints/dashboard + tool-truth fixes
 - R16: live streaming + stats + borderless chat + Acute rename + design system
 - R15: owner-verdict fixes — dialog, fullscreen, plug-and-play, centering

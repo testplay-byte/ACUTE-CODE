@@ -1,4 +1,4 @@
-<!-- last-reviewed: 2026-09-07 round-75 -->
+<!-- last-reviewed: 2026-09-07 round-76 -->
 # SECURITY — posture & rules
 
 Round-17 (owner direction: proper documentation of all logic). Describes
@@ -21,9 +21,10 @@ tool outputs sent to it; (3) the local filesystem outside a project root;
    strict allowlist (tauri hosts + the two dev origins).
 2. **Tool path containment** (the real sandbox): every tool resolves paths
    RELATIVE to the session's project root; absolute paths, drive letters,
-   and `..` traversals are rejected (`resolveInsideRoot`). Shell execution is
-   not a tool at all in v1. Directory deletion is refused (approval-gated,
-   Phase 3). Every executed tool call is audit-logged (`tool.use` events).
+   and `..` traversals are rejected (`resolveInsideRoot`). `run_command`
+   ships (ADR-0024 approval engine: blocked/destructive/auto/ask tiers);
+   directory deletion is destructive-tier (always prompts). Every executed
+   tool call is audit-logged (`tool.use` events).
 3. **Tool allowlist** (ADR-0019, round-17): `agent.allowedTools` is now
    enforced at tool-build time; empty = all (the defaults), non-empty = real
    restriction. The canonical name list is single-sourced
@@ -49,6 +50,14 @@ tool outputs sent to it; (3) the local filesystem outside a project root;
    of the pre-push checks.
 6. **License hygiene**: MIT/Apache-2.0/BSD/ISC/MPL-2.0 only; audit gates
    every CI run (closed source).
+7. **Task-mode enforcement tier (R75)**: while plan/review/explore is
+   active, the turn's toolset is hard-intersected to the read-only policy
+   (`agents/mode-policy.ts`) — write/exec/index tools are removed before
+   the model ever sees them; debug demotes run_command to the AUTO tier
+   even under Full Access; read-only modes are owner-pinned (the model
+   cannot switch_mode out); delegated children inherit the parent's mode.
+   Composition: agent allowlist → delegation depth → permission mode →
+   custom `tools` frontmatter → task-mode policy (narrow-only).
 
 ## Known gaps (deliberate, tracked)
 

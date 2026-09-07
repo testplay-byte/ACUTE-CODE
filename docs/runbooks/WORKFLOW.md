@@ -1,4 +1,4 @@
-<!-- last-reviewed: 2026-09-07 round-75 -->
+<!-- last-reviewed: 2026-09-07 round-76 -->
 # WORKFLOW — the session spine
 
 **Normative.** `AGENTS.md` = the rules, `HANDOFF.md` = the state; this file
@@ -74,6 +74,8 @@ workflow … not blindly"), codifying what rounds 9–16 actually proved.
 - `ui-iterations/round-NN.md`: owner direction quoted, per-request changes,
   verification evidence (screenshots, disk asserts, CI run id), open items.
 - `ui-iterations/README.md` board row + round list updated.
+- `pnpm docs:check` green — a mass failure is the stamp cohort aging
+  (DOC-STANDARDS §8), not content rot.
 - **ADR** when a non-trivial decision was made (new dependency, architecture
   or pattern change, policy). Small assumptions → `[ASSUMPTION]` surfaced to
   the owner instead. Never renumber; continue from the last.

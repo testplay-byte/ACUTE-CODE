@@ -1,4 +1,4 @@
-<!-- last-reviewed: 2026-09-07 round-75 -->
+<!-- last-reviewed: 2026-09-07 round-76 -->
 # ACUTE-CODE Design System
 
 **Why this document exists (owner direction, round-16/2026-08-23):** "the UI
@@ -72,9 +72,21 @@ a slot here.
 - **Streaming states**: live Working section counts up (mm:ss) + pulses;
   streamed text renders below it as the presumptive final (a tool-call
   flushes it into the section as narration); "Thinking…" mono line before
-  first delta; stream error freezes the section at "Stopped".
-- **Composer**: pill container (bg token) + attach + input + send (accent
-  when non-empty) + footer (`ctx meter · ⌘K hint · model picker`).
+  first delta; stream error freezes the section at "Stopped"; a
+  transient-API retry wait shows the amber `RetryStatusCard` (role=status,
+  attempt N/6, class chip, live countdown — R75) above the work, cleared
+  by the first content frame; terminal errors show `TurnErrorCard`
+  (role=alert) with the error-class chip + "after N attempts" (R75).
+- **Composer (R50 box, R75 one-row)**: one rounded-[18px] box (bg token,
+  accent border + glow on focus) = auto-growing textarea on top (grows to
+  exactly 5 visible lines via `useLayoutEffect` keyed on `input` —
+  `flex-1` removed, the height style governs, maxHeight synced — then
+  scrolls internally), attachment chip row when any, then ONE toolbar row
+  inside the box in the owner's exact order
+  attach/access/mode/context/model/reasoning/send; the box is a CSS
+  `@container` and the selector pills' text labels hide below 560px
+  (icon-only; tooltips carry them) so the row fits at the 480px chat
+  floor.
 - **Panels**: Explorer (34px rows, depth×14+8 indent, chevron rotate,
   per-ext icon colors), Code (48px gutter, tokenizer highlight, "Acute
   editing" chip), To-Do (progress ring 263.89 dasharray, mission, toggles),

@@ -1,4 +1,4 @@
-<!-- last-reviewed: 2026-09-07 round-75 -->
+<!-- last-reviewed: 2026-09-07 round-76 -->
 # ACUTE-CODE — Sidecar API Contracts (REST + WebSocket)
 
 | | |
@@ -49,7 +49,7 @@ All non-2xx responses carry a single shape:
 | 409 | `CONFLICT` | State conflict (e.g., stop a non-running session, delete an agent referenced by a running session) |
 | 422 | `VALIDATION` | Semantically invalid (e.g., `remember: "project"` on a destructive approval) |
 | 429 | `RATE_LIMITED` | Provider rate limits surfaced through a provider call |
-| 502 | `PROVIDER_ERROR` | Upstream LLM/provider failure (`details.providerError` sanitized — never contains keys) |
+| 502 | `PROVIDER_ERROR` | Upstream LLM/provider failure (`details.providerError` sanitized — never contains keys); the shipped envelope additively carries `errorClass`/`classMessage` (R71) and `attempts` (R75) — see IMPLEMENTED-API ROUND-71/75; the SSE `meta.retry` ladder frames are shipped-surface only |
 | 500 | `INTERNAL` | Unexpected sidecar fault (logged with a correlation id in `message`) |
 
 Success responses are the resource JSON shown per endpoint; `204 No Content` where noted. Field names are `camelCase`; ids are prefixed strings (`prj_`, `agt_`, `sess_`, `apr_`, `tsk_`, `mem_`) except `seq` numbers which are integers.

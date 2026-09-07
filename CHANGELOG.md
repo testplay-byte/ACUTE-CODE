@@ -1,4 +1,4 @@
-<!-- last-reviewed: 2026-09-07 round-75 -->
+<!-- last-reviewed: 2026-09-07 round-76 -->
 # Changelog
 
 All notable changes to ACUTE-CODE are documented here. Entries are written for
@@ -11,7 +11,7 @@ version number is single-sourced from the root `package.json`
 
 ## [Unreleased]
 
-Planned next: the R75 queue — delegate_task task_id/background/resume
+Planned next: the R76 queue — delegate_task task_id/background/resume
 (deferred from R73 by design — the orchestrator deserved its own round),
 external plugin ctx enrichment (cline's appendContext seam), the
 lessons-ledger affordance as the reminder injector's third consumer,

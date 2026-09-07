@@ -178,6 +178,12 @@
       "title": "0.75.0 — reliability & enforcement",
       "date": "2026-09-07",
       "summary": "The owner's four verbatim asks shipped together: the transient-API retry ladder (immediate → 1.5m → 5m → 10m → 30m → stop+notify, visible status card), hard task-mode enforcement (plan/review/explore read-only at the toolset level, owner-pinned, debug command tier, delegation inheritance), hover-only mode descriptions + read-only badges, and the single-row composer toolbar with the actually-working 5-line textarea. The deepest find: SDK error PARTS were swallowed — real 429s could never classify nor ladder; the adapter now re-throws them (live-verified)."
+    },
+    {
+      "id": 36,
+      "title": "R76 — the documentation round",
+      "date": "2026-09-07",
+      "summary": "Docs caught up with the code: the session history backfilled R68-R75 (8 entries, +147 lines), five AGENT-MEMORY lessons recorded (72-76), the two R75 ADRs written (0026 task-mode policy, 0027 retry-ladder), ARCHITECTURE/IMPLEMENTED-API/EXTENSIBILITY/DESIGN-SYSTEM/ROADMAP/SECURITY/HANDOFF corrected to the shipped truth, the docs index completed (5 unindexed runbooks), and the stamp-cohort rule documented where the next agent will find it (DOC-STANDARDS §8 + MAINTENANCE recipe g). Docs-only: 0.75.0 unchanged, no release."
     }
   ],
   "quality": {
@@ -214,9 +220,10 @@
   ],
   "plan": {
     "current": {
-      "title": "R75 — the reliability & enforcement round",
-      "detail": "The owner's four verbatim asks, all browser-verified: (1) the TRANSIENT-API RETRY LADDER (lib/retry.ts NEW) — rate_limit/network/timeout failures retry immediately then wait 1.5/5/10/30 min (six attempts total) before stopping + notifying + showing the error; auth/overflow/unknown never auto-retry; the amber RetryStatusCard (attempt N/6, class chip, live countdown) shows during waits and clears on the first content frame; the terminal card + task_failed notification carry attempts. (2) TASK MODES ARE NOW HARD-ENFORCED (agents/mode-policy.ts NEW) — plan/review/explore intersect the turn's toolset to read-only (write_file/edit_file/create_dir/delete_file/run_command/index_project/job_stop REMOVED; the prompt's toolNames match — the model never sees a tool it cannot call), debug demotes run_command to the auto tier in approvals (ask-tier denied even under Full Access), children inherit the parent's mode at delegation, and read-only modes are OWNER-PINNED (switch_mode cannot leave them — live-verified: a plan-mode session asked to write a file honestly reported its read-only toolset, no file written). (3) Mode menus are single-line — descriptions ride the rows' title tooltips (hover to reveal) + accent read-only badges. (4) The composer toolbar is ONE row in the owner's exact order (attach, access, mode, context, model, reasoning, send) — the box is a CSS @container, pills collapse to icons below 560px; the textarea ACTUALLY auto-grows now (flex-1 was silently ignoring the height style — the never-worked 'two lines' bug, proven live: style.height=132px while clientHeight=34px): 5 visible lines then internal scroll, driven by a useLayoutEffect keyed on input (programmatic fills resize too). THE ROUND'S DEEPEST FIND: the AI SDK delivers post-retry provider errors as fullStream error PARTS the stream adapter ignored — real 429s classified 'unknown', could never ladder, and showed no honest class; chat.ts now re-throws them (live-verified against a mock 429 provider: meta.retry frames on the wire, attempt 2 immediate → attempt 3 at 90s with heartbeat ticks). Also fixed: the sync-path ok:true sub-agent lie (failed-after-partial turns now return honest 502 + recorded usage), the boot sweep's silent death (crash mid-turn now writes the INTERRUPTED turn.error + keeps the session retryable), errorClass+attempts ride to the UI, meta.overflow_recovery finally renders. 2 NEW suites: r75-retry-ladder (19) + r75-mode-policy (27) incl. pinning. 2613 root tests (2558+55) green; lint + typechecks + docs:check 172/0/0 clean.",
+      "title": "R76 — the documentation round (accuracy & structure)",
+      "detail": "The owner's ask: 'update the documentation… everything up to date and well managed… accurate and properly structured.' The audit found the truth docs had drifted behind the code: ORCHESTRATION-WORKLOG (the session history HANDOFF §1 points at) stopped at R67 — eight rounds (R68-R75) backfilled from the round files + git receipts, pure append +147 lines; AGENT-MEMORY stopped at lesson #71/R58 — five new lessons appended (72 drafts-above-published ordering, 73 the SDK error-PART channel, 74 the flex-1/height trap, 75 the stamp-cohort aging, 76 the interrupted-session re-verification pattern); ARCHITECTURE's crash-recovery section said the boot sweep marks sessions terminal failed (R75 changed it to the visible INTERRUPTED event + queued) and its module map predates the R75 modules — both fixed + the WS-gateway design note (SSE is the shipped surface); IMPLEMENTED-API refreshed R73→R75 (26 tools, /modes readOnly, the meta.retry frame, attempts on the error payloads, the ROUND-75 section); EXTENSIBILITY gained the R75 enforcement addendum; DESIGN-SYSTEM's composer anatomy was pre-R50 (rewritten: one-row @container + the 5-line autogrow); ROADMAP had been frozen at round-17 (refreshed to R75 reality); the docs index gained 5 unindexed runbooks + the ADR next-number truth; ADR-0026 (task-mode tool policy) + ADR-0027 (retry-ladder composition) written — the R75 decisions had never been recorded; MAINTENANCE recipe g gained the docs:check step 2b (the cohort-aging rule, also in DOC-STANDARDS §8); SECURITY gained the task-mode enforcement control; HANDOFF/AGENTS/SPEC/README model + transport + verify-chain truths fixed (REST+SSE, glm-5.2:free, 66e949a, ADRs 0001-0027). Two research agents: R76-a (the 20-item edit list, verified against code before flagging) + R76-b (the worklog backfill). Docs-only round: no code changes, no version bump (stays 0.75.0), no release.",
       "upcoming": [
+        "the owner's R75 live gates: plan mode refusing real writes, the retry card on a real rate limit, the one-row toolbar, the 5-line textarea",
         "delegate_task task_id/background/resume (the R73 deferral — the orchestrator round)",
         "external plugin ctx enrichment (cline's appendContext seam)",
         "lessons-ledger as the reminder injector's third consumer",
@@ -227,19 +234,14 @@
     },
     "upcoming": [
       {
-        "phase": "Owner generates composer/model/context demos (AI-DESIGN-PROMPT-2.md)",
-        "status": "awaiting-owner",
-        "note": "Design prompt 2 delivered; implementation follows the owner’s picked design"
-      },
-      {
-        "phase": "Owner re-test on Windows (ACUTE.bat)",
+        "phase": "Owner re-test of v0.75.0 on Windows (ACUTE.bat)",
         "status": "awaiting-verdict",
-        "note": "Round 32 targeted the owner’s UI complaints"
+        "note": "The R75 live gates: plan-mode write refusal, the retry card, the one-row toolbar, the 5-line textarea"
       },
       {
-        "phase": "Phase 3 — Orchestration engine",
-        "status": "owner-gated",
-        "note": "Multi-agent delegation, approval engine, push channel — blueprint ready in PILLARS.md"
+        "phase": "Orchestration deepening (R76 queue head)",
+        "status": "planned",
+        "note": "delegate_task task_id/background/resume — delegation, sub-agents, streamed children, and the R71-R75 reliability layers already shipped"
       },
       {
         "phase": "Automation pillar",
@@ -247,9 +249,9 @@
         "note": "Workflows, scheduling, visual canvas — n8n-class, additive on the agent runtime"
       },
       {
-        "phase": "Packaging & distribution",
-        "status": "planned",
-        "note": "Single .exe via Tauri bundling"
+        "phase": "Installer code-signing",
+        "status": "queued",
+        "note": "The standing distribution item"
       }
     ],
     "principles": [
@@ -258,5 +260,5 @@
       "Quality over speed — every round verified before push"
     ]
   },
-  "round": 75
+  "round": 76
 }

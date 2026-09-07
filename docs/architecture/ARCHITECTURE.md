@@ -1,4 +1,4 @@
-<!-- last-reviewed: 2026-09-07 round-75 -->
+<!-- last-reviewed: 2026-09-07 round-76 -->
 # ACUTE-CODE — System Architecture
 
 | | |
@@ -105,8 +105,8 @@ Goose's diagnostics discipline is adopted: every phase emits a named event (`spa
 
 ### 2.4 Shutdown & crash recovery
 
-- **Normal shutdown:** window close → shell calls `POST /internal/shutdown` (authed) → sidecar stops accepting connections, appends a terminal `session.interrupted` event to any running sessions (status → `failed`), flushes WAL, closes WS with 1001, exits within 5 s → shell falls back to `taskkill /pid <pid> /T /F` if the deadline passes (goose teardown).
-- **Sidecar crash while app open:** shell detects child exit → error screen with the diagnostics file and a "Restart core" action (one automatic retry, then manual). Because sessions are event-sourced, restart marks orphaned `running` sessions as `failed` on the next boot (terminal `session.interrupted` event records the cause; openhands resume-by-log pattern) — no transcript corruption is possible.
+- **Normal shutdown:** window close → shell stops the sidecar (terminal sessions are disposed — R45 kills every live terminal-session shell; WAL is checkpointed by SQLite on close) → shell falls back to `taskkill /pid <pid> /T /F` if the deadline passes (goose teardown). No session events are written at shutdown; recovery is boot-time.
+- **Sidecar crash while app open:** shell detects child exit → error screen with the diagnostics file and a "Restart core" action (one automatic retry, then manual). Because sessions are event-sourced, the next boot's `sweepStaleRunning` sweep (`agents/orchestrator.ts`) repairs orphaned `running` sessions honestly (R75): last event `message.assistant` → back to `queued` (idle, alive); a genuine mid-turn crash → a persisted INTERRUPTED `turn.error` event lands in the timeline and the session resets to `queued` — retryable, no 409, the interruption visible forever (previously terminal `failed` with nothing written). No transcript corruption is possible.
 - **App crash:** sidecar is a child process; Windows terminates it with the shell. Same recovery as above on next launch; SQLite WAL guarantees consistency.
 
 ### 2.5 Process inventory (SPEC §5: no resident extras)
@@ -118,6 +118,8 @@ Exactly two processes in steady state: `acute-code.exe` (shell + WebView2 render
 ## 3. Module map
 
 Anti-drift rule: **every future file must map to a purpose declared here.** A new file that does not fit one of these modules — or a new module — requires editing this section (and an ADR if the change is non-trivial) in the same commit. This is the defense against the monolithic-core and storage-sprawl anti-patterns the research flagged (hermes' 560 KB `run_agent.py`; opencode's pre-migration format sprawl — synthesis §8).
+
+> **Shipped-surface truth = `api/IMPLEMENTED-API.md`.** This module map is the Phase-1 design shape; R75 added `agents/mode-policy.ts` (task-mode enforcement), `agents/error-classification.ts` (provider-error classes), and `lib/retry.ts` (the transient-API ladder) to the sidecar's agents/lib layers. The WS gateway of the Phase-1 design was never built — SSE per-turn streams are the shipped surface.
 
 ```
 acute-code/
@@ -198,7 +200,7 @@ POST /sessions {projectId, mode, prompt, agentId? | agentIds?}
   → terminal event (session.completed | session.cancelled | session.failed)
 ```
 
-**Mode 1 — Single (default).** Topology = one node: the user's chosen agent or the default template. Zero configuration (SPEC §F3). Cline's Plan/Act lesson applies later if we add mode-scoped toolsets (cline); v1 single mode has the full toolset.
+**Mode 1 — Single (default).** Topology = one node: the user's chosen agent or the default template. Zero configuration (SPEC §F3). Mode-scoped toolsets shipped: permission modes (R50) and task modes (R73 prompts, R75 hard enforcement — plan/review/explore read-only via `agents/mode-policy.ts`); debug keeps full tools with run_command at the AUTO tier.
 
 **Mode 2 — Auto-team.** Topology is built at run time:
 
@@ -245,6 +247,7 @@ runner needs completion
       key from in-memory vault (never disk; §7.3)
   → Vercel AI SDK stream call (native or OpenAI-compatible baseURL)
       · retries: 429/5xx with backoff (AI SDK built-ins)
+      · outer ladder (R75): rate_limit/network/timeout retry immediate → 1.5m → 5m → 10m → 30m (6 attempts, abort-aware, `lib/retry.ts`)
       · redaction: keys/headers scrubbed from all log lines
   → on completion, storage/ inserts ONE usage_events row:
       {id, ts, sessionId, agentId, providerId, model,

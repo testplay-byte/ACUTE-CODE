@@ -1,4 +1,4 @@
-<!-- last-reviewed: 2026-09-07 round-75 -->
+<!-- last-reviewed: 2026-09-07 round-76 -->
 # MAINTENANCE — how to find things and change things safely
 
 **Status:** normative · **Established:** round-44 (owner directive: "complete the
@@ -79,7 +79,13 @@ launcher/            owner's one-click entry (ACUTE.bat → acute_launcher.py:
      |               migration 0020), prompts.ts buildSystemPromptSections
      |               (identity/tools/memory/meta split for the context donut),
      |               orchestrator children run the STREAMED path when a
-     |               channel exists (chatStream rides toolDeps).
+     |               channel exists (chatStream rides toolDeps). R75 in
+     |               src/agents/ + src/lib/: mode-policy.ts (task-mode
+     |               enforcement + PLAN_MODE_TOOLS canonical home),
+     |               error-classification.ts (the R71 classifier extracted;
+     |               runtime re-exports), lib/retry.ts (the transient-API
+     |               ladder + the active-wait registry the stall watchdog
+     |               consults).
   └─ src-tauri/      Rust Tauri 2 shell — sidecar lifecycle (token mint, spawn,
      |               health poll, shutdown), Credential-Manager key injection.
      |               No cargo in the sandbox; CI is the only Rust oracle (ADR-0012).
@@ -152,8 +158,10 @@ the owner's DB never learns it, silently. Steps 3 and 4 are not optional.
 
 ### b) A new SQLite migration
 
-Example: `agent-core/src/storage/migrations/0015_memory.sql`; R49's
-`0019_repair_default_agent_tools.sql` is the newest (data-only REPAIR +
+Example: `agent-core/src/storage/migrations/0015_memory.sql`; R73's
+`0027_task_modes.sql` is the newest (the `active_mode` column); R49's
+`0019_repair_default_agent_tools.sql` remains the reference for
+data-only REPAIR +
 audit row — no schema change; it resets the default agent's allowlist to
 `[]` when it exactly matches the fingerprint migrations 0014+0015 could
 produce from an empty array — see AGENT-MEMORY lesson #68 for why
@@ -256,6 +264,14 @@ REQUIRED close-out step, not an afterthought:
    mismatch.
 2. Full verification ladder green (lint + typecheck + test; the workflow
    runs them again on the tag).
+2b. **`pnpm docs:check` before commit** — a mass failure (100+ docs) is
+   the STAMP COHORT AGING, not content rot: the cap is 3 rounds, so every
+   round where `stampRound + 4 ≤ current` fails the whole cohort (R75:
+   161 docs stamped round-71 aged out at round 75). Refresh by bumping
+   the aged stamps' date+round (first-line-only diffs; verify with
+   `git diff` — zero content drift; the R53/R54/R75 mass-stamp
+   precedent). Note `stamp-all.mjs` only ADDS missing stamps, it never
+   bumps existing ones.
 3. Commit + push as usual.
 4. **`git tag vX.Y.Z && git push origin vX.Y.Z`** — this triggers
    `release.yml`: launcher-kit + the Windows installer (with the R57 boot

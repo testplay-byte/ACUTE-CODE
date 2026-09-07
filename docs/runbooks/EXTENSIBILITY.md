@@ -1,4 +1,4 @@
-<!-- last-reviewed: 2026-09-07 round-73 -->
+<!-- last-reviewed: 2026-09-07 round-76 -->
 # EXTENSIBILITY — plugins, skills, modes, MCP servers (owner's guide)
 
 **Status:** normative · **Established:** round-61 (owner directive: "the
@@ -215,12 +215,12 @@ ends with a **PAIRS WITH** line naming the skills that carry its method
 (plan → spec-planning, debug → debugging, build → tdd, review →
 code-review, explore → web-research, refactor → refactoring).
 
-**Six builtins**: `plan` (spec-first, NO EDITS, present-and-wait),
+**Six builtins**: `plan` (spec-first, NO EDITS — and since R75 ENFORCED: the write/run tools are removed from the toolset, present-and-wait),
 `debug` (diagnosis-first — NEVER a fix without a one-sentence root
 cause; the method itself lives in the paired skills, the body is pure
 posture with an Escalation section), `build` (verify after every step,
 vertical slices), `review` (read-only, evidence-quoted findings, the
-mandatory WHAT-I-DID-NOT-CHECK), `explore` (zero side effects,
+mandatory WHAT-I-DID-NOT-CHECK — hard-enforced since R75), `explore` (zero side effects, hard-enforced since R75,
 [READ]/[INFERRED]/[UNKNOWN] map tags), `refactor` (no behavior change,
 characterization tests first, one mechanical move per step).
 
@@ -233,6 +233,17 @@ bare `/mode` lists), the agent's own `switch_mode` tool, or
 on the session row (`active_mode`, migration 0027) and resolved against
 the project root at every turn — a vanished custom mode is swept clear
 with a one-turn honest note.
+
+**R75 enforcement:** while plan/review/explore is active the session's
+toolset is HARD-intersected to the read-only policy
+(`agents/mode-policy.ts` — write_file/edit_file/create_dir/delete_file/
+run_command/index_project/job_stop REMOVED; the prompt's toolNames
+match, so the model never sees a tool it cannot call); debug keeps the
+full toolset but run_command demotes to the AUTO tier in approvals;
+**read-only modes are owner-pinned** — the model's `switch_mode` cannot
+leave or clear them (ask the owner); **delegated children inherit the
+parent's activeMode** (delegated work can never outrun the owner's
+posture).
 
 **Custom modes — `.acute/agents/<name>.md` in the project root** (the
 kilocode/claude custom-modes pattern; files under `.acute/agents/` are
@@ -268,13 +279,17 @@ session with NO tools (the NO_TOOLS sentinel): a mode listing
 `tools: read_file, search_code` makes the session read-only for the
 duration. Custom modes are re-resolved from disk EVERY TURN — edit the
 file and the next turn carries the new text (no DB rows, no caching, no
-persistence by design).
+persistence by design). Since R75 the custom frontmatter list is
+intersected with the builtin policy when the id shadows
+plan/review/explore — a read-only mode stays read-only however it was
+declared.
 
 **REST surface**: `GET /projects/:id/modes` (the picker's data source
-— id/name/description/source, METADATA ONLY, bodies never served),
+— id/name/description/source/readOnly (R75), METADATA ONLY, bodies never served),
 `PATCH /sessions/:id {activeMode: "<id>" | null}` (unknown id → 400
 with the available ids). The full design decisions live in the R73
-round file (docs/ui-iterations/round-73.md).
+round file (docs/ui-iterations/round-73.md) and the enforcement tier in
+ADR-0026.
 
 ## 3. MCP servers (Settings → MCP)
 
@@ -516,6 +531,18 @@ project files with loaded bits + the honest load-error note). The
   upgrade-path note applies (INSERT OR IGNORE keeps existing rows;
   delete + reopen to get the newest seed text on an old install).
 
+## The R75 addendum (the enforcement tier)
+
+The six postures are no longer prompt-only: `agents/mode-policy.ts` is
+the hard tier — read-only intersections for plan/review/explore (the
+canonical `PLAN_MODE_TOOLS` moved here from runtime.ts; review/explore
+add the git inspectors + `analyze_image` + `job_status`), debug's
+AUTO-tier run_command via approvals, owner-pinned `switch_mode`,
+delegation inheritance (children copy the parent's `activeMode` at
+creation), and custom∩policy shadowing. The `/modes` route gained
+`readOnly` so the frontend never duplicates the set. See
+`r75-mode-policy.test.ts` (27 tests) and ADR-0026.
+
 ## Troubleshooting
 
 - **A plugin file exists but `loaded:false`** — read the sidecar log
@@ -564,6 +591,8 @@ project files with loaded bits + the honest load-error note). The
   `agent-core/src/storage/skills-files.ts` (file discovery, references/,
   the shared resolver, the merged listing), the modes core
   `agent-core/src/agents/modes.ts` (the six postures + custom discovery)
+  and the enforcement tier `agent-core/src/agents/mode-policy.ts` (R75:
+  the policy map + PLAN_MODE_TOOLS + TASK_MODE_READ_ONLY),
   and the reminder renderer `agent-core/src/agents/system-reminders.ts`,
   the task-hints matcher
   `agent-core/src/agents/task-hints.ts` (skills + modes), MCP storage
