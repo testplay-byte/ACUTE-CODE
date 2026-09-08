@@ -1,4 +1,4 @@
-<!-- last-reviewed: 2026-09-07 round-76 -->
+<!-- last-reviewed: 2026-09-07 round-77 -->
 # IMPLEMENTED API — the shipped surface
 
 **Truth = this file.** Verified against `agent-core/src/server.ts` at
@@ -247,7 +247,7 @@ The rewritten page's escape hatch posts `{type:"acute:open"\|"acute:title"\|"acu
 |---|---|
 | `GET /sessions?q=<text>&limit=&offset=` | **R44 search** — when `q` is a non-empty trimmed string, `searchSessions` LIKE-matches against the session title AND the event payload JSON (so tool calls and messages are searchable); response is the same shape as the plain list (`{sessions, total}`) but `total` = result count (search is not paginated). Newest-first. |
 | `POST /sessions/:id/fork` | Copies the session row + its FULL event log under a NEW top-level session id, title prefixed `"Fork · <original>"`; usage rows are NOT carried over → `201 {session}`. `404` unknown source. |
-| `POST /sessions/:id/revert` | `{keepThroughSeq: integer >= 0}` — deletes every event AFTER that seq (the user message AT `keepThroughSeq` survives; its reply + later turns are removed) and appends one `session.reverted` marker event → `200 {ok:true, removedCount}`. `404` unknown session · `409 CONFLICT` while a turn is running (deleting under a live stream would race it) · `400` bad body. |
+| `POST /sessions/:id/revert` | `{keepThroughSeq: integer >= 0}` — **R77 semantics**: `keepThroughSeq` is the seq of the USER message being reverted; every event from that seq ONWARD is deleted (the target message itself + its reply + later turns — the UI refills the composer with the message's text so the owner can edit + resend), then one `session.reverted` marker event is appended → `200 {ok:true, removedCount}`. `404` unknown session · `409 CONFLICT` while a turn is running (deleting under a live stream would race it) · `400` bad body. |
 
 The UI surfaces these as the Sessions screen's debounced search + hover Fork
 action, and the chat's user-message hover "Revert to this message" (with a

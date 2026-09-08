@@ -488,8 +488,19 @@ export type TurnOutcome =
        * no-progress turn (identical-call streak or consecutive failures).
        * Carries status 502 so the streamed route's `status >= 500` rule
        * fires the honest task_failed notification — the task did NOT
-       * complete; the provider itself did not fail either. */
-      code: "NOT_FOUND" | "CONFLICT" | "ABORTED" | "PROVIDER_ERROR" | "PROVIDER_DISABLED" | "LOOP_GUARD";
+       * complete; the provider itself did not fail either.
+       * ROUND-77 (R77): NO_OUTPUT = the model returned a blank response
+       * (whitespace-only, zero tool calls — the free-model flake observed
+       * live in the T5 battery). Status 502 for the same honest-failure
+       * rule: the requested work did not happen. */
+      code:
+        | "NOT_FOUND"
+        | "CONFLICT"
+        | "ABORTED"
+        | "PROVIDER_ERROR"
+        | "PROVIDER_DISABLED"
+        | "LOOP_GUARD"
+        | "NO_OUTPUT";
       message: string;
       details?: Record<string, unknown>;
     };
@@ -2178,6 +2189,10 @@ export async function runStreamedAgentTurn(
   let totalRequests = 0;
   let lastAssistantEvent: { seq: number; ts: string; content: string } | null = null;
   let lastText = "";
+  // R77 (the live-battery find): TURN-level tool-call count — the blank-
+  // output guard below needs "did ANY tool run this turn", not the
+  // per-iteration count the conversational-break rule reads.
+  let turnToolCalls = 0;
   // ROUND-49: the intent-nudge state (see TOOL_INTENT_NUDGE) — same contract
   // as the sync path: one nudge per turn, in-memory only, never persisted.
   let nudgeUsed = false;
@@ -2379,6 +2394,7 @@ export async function runStreamedAgentTurn(
           }
         } else if (event.type === "tool-call") {
           iterToolCalls += 1;
+          turnToolCalls += 1;
           // ROUND-35: flush the message-so-far BEFORE the tool runs, so the
           // tool work lands between message segments (owner directive).
           if (iterText.trim() !== "" || iterThinking.trim() !== "") {
@@ -2803,6 +2819,63 @@ export async function runStreamedAgentTurn(
       status: 502,
       code: "LOOP_GUARD",
       message: loopGuardStop,
+    };
+  }
+
+  // ROUND-77 (R77, the live-battery find — the T5 turn-10 flake): a turn
+  // whose ENTIRE output is blank — no visible text AND zero tool calls —
+  // is the free-models' whitespace-reply flake (glm-5.2:free "answered"
+  // with a run of newlines; the requested file edit silently never
+  // happened while the turn completed ok and the UI showed a normal,
+  // empty reply). Guarding ONLY the streamed path (where the flake was
+  // observed live): a tool-using turn with no final text is legitimate
+  // (the tools DID the work — the R35 empty-marker path), and a user STOP
+  // can never reach here (aborts exit through the catch's ABORTED return).
+  // Mirror the loop-guard exit: persist an honest turn.error (the error
+  // card's Retry re-sends the message), record the real token spend, and
+  // return the 502 — never a fake "completed" empty reply.
+  if (turnToolCalls === 0 && lastText.trim() === "") {
+    const blankMessage =
+      `the model returned an empty response (no text, no tool calls) for session ${session.id} — resend the message`;
+    const blankProviderError =
+      "empty response — the model produced only whitespace (a free-model flake); the requested work did not happen";
+    persistTurnError(db, {
+      sessionId: session.id,
+      agentId: agent.id,
+      userSeq: userEvent.seq,
+      code: "NO_OUTPUT",
+      message: blankMessage,
+      model,
+      providerId: provider.id,
+      providerError: blankProviderError,
+      keySecrets,
+    });
+    const blankUsage: UsageRecord = {
+      agentId: agent.id,
+      sessionId: session.id,
+      provider: provider.id,
+      model,
+      inputTokens: totalInputTokens,
+      outputTokens: totalOutputTokens,
+      cachedInputTokens: totalCachedInputTokens,
+      costUsd: computeCost(db, provider.id, model, totalInputTokens, totalOutputTokens),
+      ts: lastAssistantEvent.ts,
+    };
+    recordUsage(db, blankUsage, keySlot);
+    touchSession(db, session.id);
+    logTurnEnd(session.id, false, ms, totalInputTokens, totalOutputTokens);
+    log("warn", "turn.blank_output", {
+      sessionId: session.id,
+      agentId: agent.id,
+      model,
+      providerId: provider.id,
+    });
+    return {
+      ok: false,
+      status: 502,
+      code: "NO_OUTPUT",
+      message: blankMessage,
+      details: { providerError: blankProviderError, model, userSeq: userEvent.seq },
     };
   }
 

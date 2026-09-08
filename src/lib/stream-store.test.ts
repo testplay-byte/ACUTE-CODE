@@ -1626,3 +1626,133 @@ describe("stream store ROUND-75 retry ladder frames", () => {
     await promise;
   });
 });
+
+// ─── ROUND-77 (R77): the unpersisted-failure slice survival ───────────────────
+// The owner's report: "tried sending a message, but it was not that
+// successful… It was not sending the message properly". Root cause: a turn
+// that failed WITHOUT a persisted turn.error (pre-hijack rejections —
+// validation / auth / 409 / PROVIDER_DISABLED) fell through the panel's
+// clearStream wipe, so BOTH the error card AND the optimistic user bubble
+// vanished and the send looked like it never happened. freezeFailedTurn is
+// the store half of the fix: liveError + pendingEcho SURVIVE, the live
+// turn resolves by its content.
+describe("stream store ROUND-77 freezeFailedTurn (unpersisted failures)", () => {
+  beforeEach(() => {
+    useStreamStore.setState({ bySession: {} });
+  });
+
+  it("an EMPTY live turn is DROPPED (no frozen Thinking… row), while liveError + pendingEcho SURVIVE", async () => {
+    // A pre-hijack rejection: the POST answers non-2xx JSON — the error
+    // arrives as an SSE-shaped error event with NO errorTs (never
+    // persisted server-side).
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        sseResponse([
+          {
+            type: "error",
+            status: 409,
+            code: "PROVIDER_DISABLED",
+            message: "Provider 'openrouter' is disabled — enable it in Settings → Models & Providers",
+          },
+        ]),
+      ),
+    );
+
+    // The panel's exact call order: setPendingEcho FIRST, then startStream.
+    useStreamStore.getState().setPendingEcho(PARENT, "please build the thing");
+    await useStreamStore.getState().startStream(PARENT, "please build the thing");
+
+    // Before the fix: the slice would be wiped on the panel side. The
+    // store half: freezeFailedTurn keeps the error + echo, drops the empty
+    // live turn.
+    useStreamStore.getState().freezeFailedTurn(PARENT);
+
+    const slice = useStreamStore.getState().bySession[PARENT];
+    expect(slice).toBeDefined();
+    // The error card's source SURVIVES — with the REAL code (the R77 api.ts
+    // envelope preservation) and no errorTs (nothing was persisted).
+    expect(slice?.liveError).toMatchObject({
+      code: "PROVIDER_DISABLED",
+      status: 409,
+    });
+    expect(slice?.liveError?.errorTs).toBeUndefined();
+    expect(slice?.liveError?.message).toContain("disabled");
+    // The optimistic user bubble SURVIVES (the owner's message stays
+    // visible under the error card).
+    expect(slice?.pendingEcho).toBe("please build the thing");
+    // The empty live turn is dropped — no frozen "Thinking…" row.
+    expect(slice?.liveTurn).toBeNull();
+    // The turn is over: streamBusy false.
+    expect(slice?.streamBusy).toBe(false);
+  });
+
+  it("a live turn with PARTIALS is FROZEN (stopped, not by user) — the R58 thrown-error shape", async () => {
+    const sse = manualSseResponse();
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(sse.response));
+
+    const promise = useStreamStore.getState().startStream(PARENT, "work");
+    useStreamStore.getState().setPendingEcho(PARENT, "work");
+    sse.emit({ type: "text-delta", delta: "partial streamed answer " });
+    await vi.waitFor(() => {
+      expect(useStreamStore.getState().bySession[PARENT]?.liveTurn?.streamText).toContain("partial");
+    });
+    // Mid-stream disconnect: the read loop ends without a terminal frame →
+    // the api client synthesizes STREAM_DISCONNECTED (no errorTs).
+    sse.emit({
+      type: "error",
+      status: 0,
+      code: "STREAM_DISCONNECTED",
+      message: "The stream from the agent ended unexpectedly (connection interrupted). Reconnecting may recover the turn.",
+    });
+    sse.close();
+    await promise;
+
+    useStreamStore.getState().freezeFailedTurn(PARENT);
+
+    const slice = useStreamStore.getState().bySession[PARENT];
+    // The partial text stays visible, frozen.
+    expect(slice?.liveTurn?.streamText).toContain("partial streamed answer");
+    expect(slice?.liveTurn?.stopped).toBe(true);
+    expect(slice?.liveTurn?.stoppedByUser).toBe(false);
+    // The error + echo survive.
+    expect(slice?.liveError?.code).toBe("STREAM_DISCONNECTED");
+    expect(slice?.pendingEcho).toBe("work");
+  });
+
+  it("freezeFailedTurn on a session with NO slice is a safe no-op", () => {
+    expect(() => useStreamStore.getState().freezeFailedTurn("sess_never_existed")).not.toThrow();
+  });
+
+  it("a FRESH turn resets the R77 survivors (liveError + pendingEcho clear on the next send)", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn()
+        .mockResolvedValueOnce(
+          sseResponse([
+            { type: "error", status: 409, code: "PROVIDER_DISABLED", message: "disabled" },
+          ]),
+        )
+        .mockResolvedValueOnce(
+          sseResponse([
+            {
+              type: "done",
+              assistantMessage: { seq: 9, role: "assistant", agentId: "agt_r77", content: "ok", ts: new Date().toISOString() },
+              usage: { agentId: "agt_r77", sessionId: PARENT, provider: "openrouter", model: "m", inputTokens: 1, outputTokens: 1, cachedInputTokens: 0, costUsd: 0, ts: "" },
+            },
+          ]),
+        ),
+    );
+
+    await useStreamStore.getState().startStream(PARENT, "first send fails");
+    useStreamStore.getState().freezeFailedTurn(PARENT);
+    expect(useStreamStore.getState().bySession[PARENT]?.liveError).not.toBeNull();
+
+    // The retry send: startStream resets liveError + pendingEcho (R43/R77
+    // reset semantics) — no stale error card under the new turn.
+    await useStreamStore.getState().startStream(PARENT, "second send works");
+    const slice = useStreamStore.getState().bySession[PARENT];
+    expect(slice?.liveError).toBeNull();
+    expect(slice?.liveTurn?.stopped).toBe(false);
+  });
+});

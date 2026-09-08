@@ -435,47 +435,74 @@ describe("Composer: toolbar inside the box (owner spec B)", () => {
     expect(screen.queryByText(/^ctx$/)).toBeNull();
   });
 
-  it("ROUND-75 (R75, owner: one single row): every control is a DIRECT toolbar child, in the owner's order, with the send action pinned right by a spacer", async () => {
+  it("ROUND-77 (R77, owner: left/right split): attach/access/mode live in the LEFT cluster, everything else in a NOWRAP RIGHT cluster that owns the send action", async () => {
     await renderEmptyPanel();
     const toolbar = document.querySelector("[data-composer-toolbar]") as HTMLElement;
-    // The never-overlap fallback survives (R51-c) — but the R75 row is ONE
-    // FLAT CLUSTER: no left/right cluster divs, no justify-between.
+    // The never-overlap fallback survives (R51-c) on the ROW; the clusters
+    // themselves never wrap internally (the send action can never separate
+    // from its right-side siblings — the R77 fix for the owner's "send
+    // message or stop message button was showing below the designated
+    // options").
     expect(toolbar.className).toContain("flex-wrap");
     expect(toolbar.className).not.toContain("justify-between");
-    const children = Array.from(toolbar.children) as HTMLElement[];
-    // ONE spacer (aria-hidden, flex-1 min-w-0) sits between the thinking
-    // level and the send action — everything else is a control.
-    const spacers = children.filter((c) => c.getAttribute("aria-hidden") === "true");
-    expect(spacers).toHaveLength(1);
-    expect(spacers[0].className).toContain("flex-1");
-    expect(spacers[0].className).toContain("min-w-0");
-    // The owner's exact order: attach, access, mode, context, model,
-    // reasoning, send — all DIRECT children of the toolbar.
-    // Selector components wrap their trigger button in a positioning div
-    // (the popover anchor) — resolve the button's closest DIRECT toolbar
-    // child for the order math.
-    const order = (name: string | RegExp): number => {
+    const left = toolbar.querySelector("[data-composer-left]") as HTMLElement;
+    const right = toolbar.querySelector("[data-composer-right]") as HTMLElement;
+    expect(left).toBeTruthy();
+    expect(right).toBeTruthy();
+    // The right cluster is a nowrap group pinned right via ml-auto —
+    // exactly the two R77 layout guarantees.
+    expect(right.className).toContain("ml-auto");
+    expect(right.className).not.toContain("flex-wrap");
+    expect(right.className).toContain("shrink-0");
+    // R75's spacer is GONE (ml-auto replaced it).
+    const spacers = (Array.from(toolbar.children) as HTMLElement[]).filter(
+      (c) => c.getAttribute("aria-hidden") === "true",
+    );
+    expect(spacers).toHaveLength(0);
+    // LEFT cluster order: attach, access, task mode (the owner's left
+    // trio, the R75 order preserved inside the group).
+    const orderIn = (host: HTMLElement, name: string | RegExp): number => {
       const btn = screen.getByRole("button", { name }) as HTMLElement;
       let node: HTMLElement | null = btn;
-      while (node !== null && node.parentElement !== toolbar) node = node.parentElement;
-      return children.indexOf(node ?? btn);
+      while (node !== null && node.parentElement !== host) node = node.parentElement;
+      const kids = Array.from(host.children) as HTMLElement[];
+      return kids.indexOf(node ?? btn);
     };
-    const attach = order("Add context");
-    const access = order("Permission mode: Ask");
-    const mode = order(/Task mode/);
-    const context = order("Context window usage");
-    const model = order("Choose model");
-    const thinking = order("Thinking level: Default");
-    const send = order("Send message");
+    const attach = orderIn(left, "Add context");
+    const access = orderIn(left, "Permission mode: Ask");
+    const mode = orderIn(left, /Task mode/);
     expect(attach).toBeGreaterThanOrEqual(0);
     expect(attach).toBeLessThan(access);
     expect(access).toBeLessThan(mode);
-    expect(mode).toBeLessThan(context);
+    // RIGHT cluster order: context donut, model, reasoning, send.
+    const context = orderIn(right, "Context window usage");
+    const model = orderIn(right, "Choose model");
+    const thinking = orderIn(right, "Thinking level: Default");
+    const send = orderIn(right, "Send message");
+    expect(context).toBeGreaterThanOrEqual(0);
     expect(context).toBeLessThan(model);
     expect(model).toBeLessThan(thinking);
     expect(thinking).toBeLessThan(send);
-    // The spacer sits right before the send action (the pin).
-    expect(children.indexOf(spacers[0])).toBe(send - 1);
+    // Every control sits INSIDE one of the two clusters (no strays).
+    expect(left.contains(screen.getByRole("button", { name: "Add context" }))).toBe(true);
+    expect(right.contains(screen.getByRole("button", { name: "Send message" }))).toBe(true);
+    // DOM order: the left cluster precedes the right cluster.
+    expect(
+      left.compareDocumentPosition(right) & Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+  });
+
+  it("ROUND-77 (R77): the model pill leads with a Cpu icon — the icon survives the 560px label hide", async () => {
+    await renderEmptyPanel();
+    const modelBtn = screen.getByRole("button", { name: "Choose model" }) as HTMLElement;
+    const icon = modelBtn.querySelector("[data-model-icon]") as HTMLElement;
+    expect(icon).toBeTruthy();
+    expect(icon.tagName.toLowerCase()).toBe("svg");
+    // The label span keeps its @container hide rule; the icon does NOT
+    // carry it (icon-only pill below 560px).
+    const label = modelBtn.querySelector("[data-model-label]") as HTMLElement;
+    expect(label.className).toContain("@max-[560px]:hidden");
+    expect(icon.getAttribute("class") ?? "").not.toContain("@max-[560px]:hidden");
   });
 });
 

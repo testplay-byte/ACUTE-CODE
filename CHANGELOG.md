@@ -1,4 +1,4 @@
-<!-- last-reviewed: 2026-09-07 round-76 -->
+<!-- last-reviewed: 2026-09-07 round-77 -->
 # Changelog
 
 All notable changes to ACUTE-CODE are documented here. Entries are written for
@@ -11,13 +11,80 @@ version number is single-sourced from the root `package.json`
 
 ## [Unreleased]
 
-Planned next: the R76 queue — delegate_task task_id/background/resume
+Planned next: the R77 queue — delegate_task task_id/background/resume
 (deferred from R73 by design — the orchestrator deserved its own round),
 external plugin ctx enrichment (cline's appendContext seam), the
 lessons-ledger affordance as the reminder injector's third consumer,
 ratings-driven prompt tuning, the optional v0.68.0 backfill tag, and the
 standing items (edit-linting — SWE-agent's ACI #1 finding, installer
 code-signing, the Files-tab polish, agent web-app-testing tools).
+
+## [0.76.0] - 2026-09-07
+
+### Changed
+- **Composer toolbar is now split left/right** (owner spec, verbatim): the
+  attach-file button, the access-level selector, and the task-mode selector
+  sit on the LEFT side of the row; the context window, model, reasoning,
+  Continue and Send/Stop sit on the RIGHT — pinned with `ml-auto` in a
+  single no-wrap group, so the send/stop action can never wrap below the
+  other options alone (when space runs out the whole right cluster moves
+  together, send included).
+- **The model selector finally has an icon**: a `Cpu` glyph leads the pill,
+  matching the toolbar's other icon-led controls (Paperclip / Shield /
+  Compass / Brain). Below the 560px container floor the text label hides
+  and the icon stays, so the pill is still identifiable icon-only.
+- **Revert-to-message now behaves like edit-and-resend** (owner spec,
+  verbatim): reverting a message rewinds the session to BEFORE it, deletes
+  that message (and its reply) from the chat, and pastes the message's text
+  back into the composer, focused and ready to edit. The confirm dialog and
+  toast describe exactly that. (Previously the reverted message stayed
+  dangling at the transcript's end with no reply.)
+- **The retry-ladder status card was redesigned**: the spinning refresh icon
+  now sits in a soft circular amber chip; a dot-ladder shows all six
+  attempts at a glance (failed attempts dim, the upcoming one breathing,
+  the rest hollow); the countdown gained a thin progress bar that fills as
+  the wait elapses; the class chip is a rounded pill; the exact
+  remaining-time format no longer rounds seconds to tens.
+
+### Fixed
+- **Failed sends no longer vanish** (the owner's "tried sending a message,
+  but it was not that successful"): a turn that failed without a persisted
+  error — a rejected request (validation / auth / 409 conflict / disabled
+  provider) or a dropped stream — used to wipe BOTH the error card and the
+  user's message bubble, leaving the transcript looking like the send never
+  happened. The error card and the user's message now stay visible (with
+  the retry affordance) until the next send.
+- **API error envelopes arrive intact**: pre-stream rejections (HTTP 4xx/5xx
+  JSON) no longer masquerade as `PROVIDER_ERROR` — the envelope's real code
+  (e.g. `PROVIDER_DISABLED`, `CONFLICT`, `UNAUTHORIZED`) and its details
+  (the actual provider error text, class, attempts) ride the error frame
+  into the card.
+- **Long provider errors show in full**: error reasons over 240 characters
+  collapse to an excerpt with a "Show full error" toggle that expands the
+  complete raw message in a scrollable monospace block ("show the actual
+  error messages too, which were returned from the API"). Copy details
+  always carried the full text; now the card can too.
+- **The error banner no longer discards the real message** when a session
+  cache exists — create-session and demo-send failures always surface the
+  actual `ApiError` text (the discard branch predated the stream store).
+- **A blank model reply is now an honest failure, not a fake success**: a
+  free-model flake observed live during the battery — the model "answered"
+  with only whitespace, no tool calls, and the turn completed ok with an
+  empty reply while the requested work silently never happened — now ends
+  the turn with a visible `NO_OUTPUT` error (persisted, retryable via the
+  error card's Retry). Tool-using turns with no final text remain
+  legitimate (the tools did the work).
+
+### Verified
+- Live end-to-end battery against the real provider: a smoke round-trip, a
+  three-file static-site build, a Python CLI with self-written + self-run
+  green tests, a 3-turn build→extend→refactor session, a 10-turn
+  conversation with context-retention probes, the new revert semantics over
+  the wire, and the error-surfacing path (honest failure frames carrying
+  the real provider text). A real free-tier rate-limit storm during the
+  battery exercised the R75 retry ladder live: retry frames at the exact
+  90 s / 5 m / 10 m / 30 m rungs, the visible amber card, and the honest
+  exhaustion error after six attempts.
 
 ## [0.75.0] - 2026-09-07
 

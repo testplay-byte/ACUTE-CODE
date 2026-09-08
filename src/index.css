@@ -439,6 +439,17 @@
   animation: ac-retry-spin 3s linear infinite;
 }
 
+/* ROUND-77 (R77): the redesigned retry card's CURRENT-attempt dot — a soft
+ * breathing pulse (scale + opacity), the "you are here" marker on the
+ * attempt ladder. Gentle 1.8s cycle, prefers-reduced-motion safe. */
+@keyframes ac-retry-pulse {
+  0%, 100% { opacity: 1; transform: scale(1); }
+  50% { opacity: 0.45; transform: scale(1.25); }
+}
+.ac-retry-pulse {
+  animation: ac-retry-pulse 1.8s ease-in-out infinite;
+}
+
 @keyframes ac-caret-blink {
   0%, 49% { opacity: 1; }
   50%, 100% { opacity: 0; }

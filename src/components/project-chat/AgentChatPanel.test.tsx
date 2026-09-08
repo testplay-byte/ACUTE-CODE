@@ -214,7 +214,7 @@ describe("AgentChatPanel revert-to-message (ROUND-44 R44-c)", () => {
     expect(revertButtons).toHaveLength(2);
   });
 
-  it("confirm flow: dialog shows the target snippet, confirm calls revertSession with the right seq, log truncates, toast lands", async () => {
+  it("confirm flow (R77 semantics): the target message is REMOVED, its text returns to the composer, dialog + toast carry the new copy", async () => {
     const backend = await renderPanelWithConversation();
     const revertSpy = vi.spyOn(backend, "revert");
     expect(await screen.findByText("first question about the parser", {}, SLOW)).toBeTruthy();
@@ -222,31 +222,50 @@ describe("AgentChatPanel revert-to-message (ROUND-44 R44-c)", () => {
     // Hover action on the FIRST user message → the destructive confirm.
     fireEvent.click(screen.getAllByRole("button", { name: "Revert to this message" })[0]);
 
-    // The dialog quotes the targeted message and warns it cannot be undone.
+    // R77 dialog copy: rewinds to BEFORE the message — the message itself
+    // is removed and returns to the composer.
     expect(await screen.findByText("Revert session?", {}, SLOW)).toBeTruthy();
-    const body = screen.getByText(/Removes the reply and everything after/);
+    const body = screen.getByText(/Rewinds to before/);
     expect(body.textContent).toContain("first question about the parser");
+    expect(body.textContent).toContain("puts the message text back in the composer");
     expect(body.textContent).toContain("This cannot be undone.");
 
     // Confirm → revertSession(sessionId, seq of that user message event).
     fireEvent.click(screen.getByRole("button", { name: "Revert" }));
     await waitFor(() => expect(revertSpy).toHaveBeenCalledWith("sess_revert_probe", 1), SLOW);
 
-    // The refetched log drops everything after seq 1: both replies + the
-    // second turn are gone; the targeted user message SURVIVES. (Assistant
-    // text renders as per-word RichText spans, so assert on body text.)
+    // R77: the refetched log drops everything from seq 1 ONWARD — the
+    // targeted user message itself is gone (it lives in the COMPOSER now),
+    // with the reply + second turn. (Assistant text renders as per-word
+    // RichText spans, so assert on body text.)
     await waitFor(() => {
       expect(document.body.textContent).not.toContain("first answer");
       expect(document.body.textContent).not.toContain("second question");
       expect(document.body.textContent).not.toContain("second answer");
     }, SLOW);
-    expect(document.body.textContent).toContain("first question about the parser");
+    // The message is DELETED from the chat transcript — the truncation
+    // removed every user bubble, so NO Revert actions remain. (A raw
+    // text-content check would false-positive: React renders the textarea's
+    // refilled VALUE as its text children.)
+    await waitFor(
+      () =>
+        expect(screen.queryAllByRole("button", { name: "Revert to this message" })).toHaveLength(0),
+      SLOW,
+    );
+    expect(screen.queryAllByText(/first answer/)).toHaveLength(0);
+    // ...and PASTED into the composer's message area (R77, owner: "that
+    // message which was on that should be pasted in the message area").
+    const composer = screen.getByLabelText("Message composer") as HTMLTextAreaElement;
+    expect(composer.value).toBe("first question about the parser");
 
     // Success toast (Toaster lives in AppShell — assert the stream store).
     await waitFor(
       () =>
         expect(useNotificationStreamStore.getState().lastNotification?.title).toBe("Reverted"),
       SLOW,
+    );
+    expect(useNotificationStreamStore.getState().lastNotification?.body).toContain(
+      "back in the composer",
     );
   });
 
@@ -1319,19 +1338,19 @@ describe("AgentChatPanel task modes (ROUND-73 R73-c)", () => {
     // The session row carries activeMode: "debug" → the pill names it.
     const pill = await screen.findByRole("button", { name: "Task mode: Debug" }, SLOW);
     expect(pill.textContent).toContain("Debug");
-    // ...and the pill is a DIRECT toolbar child (R75: ONE flat row — the
-    // owner's "attach, access, mode, context, model, reasoning, send"),
-    // right after the permission switcher.
+    // ...and the pill lives in the LEFT cluster (R77: attach/access/mode on
+    // the left), right after the permission switcher.
     const toolbar = document.querySelector("[data-composer-toolbar]") as HTMLElement;
     expect(toolbar.contains(pill)).toBe(true);
+    const left = toolbar.querySelector("[data-composer-left]") as HTMLElement;
     // Selector components wrap their triggers in positioning divs — resolve
-    // each button's closest DIRECT toolbar child for the sibling math.
+    // each button's closest direct LEFT-cluster child for the sibling math.
     const directChild = (btn: HTMLElement): HTMLElement => {
       let node: HTMLElement | null = btn;
-      while (node !== null && node.parentElement !== toolbar) node = node.parentElement;
+      while (node !== null && node.parentElement !== left) node = node.parentElement;
       return node ?? btn;
     };
-    const children = Array.from(toolbar.children);
+    const children = Array.from(left.children);
     const pillIdx = children.indexOf(directChild(pill));
     const accessIdx = children.indexOf(
       directChild(screen.getByRole("button", { name: "Permission mode: Ask" }) as HTMLElement),
@@ -1636,6 +1655,17 @@ describe("AgentChatPanel ROUND-75 retry ladder surfaces", () => {
     expect(card.textContent).toContain("rate limited — the provider is throttling requests");
     expect(card.textContent).toContain("next attempt in");
     expect(card.textContent).toContain("the agent keeps working automatically");
+    // R77: the attempt DOT-LADDER — one dot per attempt (6 for the ladder).
+    const dots = card.querySelectorAll("[data-retry-dots] > span");
+    expect(dots).toHaveLength(6);
+    // The current attempt (2) breathes (the pulse class); attempts 3-6 are
+    // hollow (transparent background); attempt 1 (done) is dim-filled.
+    expect(dots[1].className).toContain("ac-retry-pulse");
+    expect((dots[2] as HTMLElement).style.background).toContain("transparent");
+    // R77: the countdown bar exists and is filling (waitMs known → the
+    // fraction is computed from the live remaining time).
+    const bar = card.querySelector("[data-retry-status-card] .h-1") as HTMLElement | null;
+    expect(bar).toBeTruthy();
   });
 
   it("R75: the overflow-recovery note renders as a transient status line", async () => {

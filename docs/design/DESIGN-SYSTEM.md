@@ -1,4 +1,4 @@
-<!-- last-reviewed: 2026-09-07 round-76 -->
+<!-- last-reviewed: 2026-09-07 round-77 -->
 # ACUTE-CODE Design System
 
 **Why this document exists (owner direction, round-16/2026-08-23):** "the UI
@@ -74,19 +74,35 @@ a slot here.
   flushes it into the section as narration); "Thinking…" mono line before
   first delta; stream error freezes the section at "Stopped"; a
   transient-API retry wait shows the amber `RetryStatusCard` (role=status,
-  attempt N/6, class chip, live countdown — R75) above the work, cleared
-  by the first content frame; terminal errors show `TurnErrorCard`
-  (role=alert) with the error-class chip + "after N attempts" (R75).
-- **Composer (R50 box, R75 one-row)**: one rounded-[18px] box (bg token,
-  accent border + glow on focus) = auto-growing textarea on top (grows to
-  exactly 5 visible lines via `useLayoutEffect` keyed on `input` —
-  `flex-1` removed, the height style governs, maxHeight synced — then
-  scrolls internally), attachment chip row when any, then ONE toolbar row
-  inside the box in the owner's exact order
-  attach/access/mode/context/model/reasoning/send; the box is a CSS
-  `@container` and the selector pills' text labels hide below 560px
-  (icon-only; tooltips carry them) so the row fits at the 480px chat
-  floor.
+  attempt N/6, class chip, live countdown — R75; redesigned R77: circular
+  spinner chip, attempt dot-ladder with the pulsing current dot, a
+  countdown fill-bar driven by `waitMs`, reassurance line with info icon)
+  above the work, cleared by the first content frame; terminal errors show
+  `TurnErrorCard` (role=alert) with the error-class chip + "after N
+  attempts" (R75) and the R77 full-error toggle — reasons over 240 chars
+  collapse to an excerpt with "Show full error" expanding the COMPLETE raw
+  provider text in a scrollable mono block.
+- **Composer (R50 box, R75 one-row, R77 left/right split)**: one
+  rounded-[18px] box (bg token, accent border + glow on focus) =
+  auto-growing textarea on top (grows to exactly 5 visible lines via
+  `useLayoutEffect` keyed on `input` — `flex-1` removed, the height style
+  governs, maxHeight synced — then scrolls internally), attachment chip
+  row when any, then ONE toolbar row inside the box split into TWO
+  clusters (R77, owner: "the mode selection, the access level selection,
+  and the upload file buttons… left side… all the other options… right
+  side"): LEFT = attach + access + task mode; RIGHT = context donut +
+  model (leads with a `Cpu` icon — R77, icon-only below the container
+  floor) + reasoning + Continue/Send as a single NOWRAP group
+  (`ml-auto shrink-0`) so the action button can never wrap away from its
+  siblings — when the row is too tight the WHOLE right cluster wraps as
+  one unit; the box is a CSS `@container` and the selector pills' text
+  labels hide below 560px (icon-only; tooltips carry them) so the row
+  fits at the 480px chat floor.
+- **Reverted message flow (R77)**: the user-bubble hover "Revert to this
+  message" rewinds to BEFORE the message — the message + its reply are
+  deleted from the log (backend `seq >=` truncation) and the message's
+  text returns to the composer (prefilled + focused) for edit-and-resend;
+  the confirm dialog says exactly that.
 - **Panels**: Explorer (34px rows, depth×14+8 indent, chevron rotate,
   per-ext icon colors), Code (48px gutter, tokenizer highlight, "Acute
   editing" chip), To-Do (progress ring 263.89 dasharray, mission, toggles),

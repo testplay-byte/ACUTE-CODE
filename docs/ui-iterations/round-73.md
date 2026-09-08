@@ -1,4 +1,4 @@
-<!-- last-reviewed: 2026-09-07 round-73 -->
+<!-- last-reviewed: 2026-09-07 round-77 -->
 # Round 73 — the task modes round: the agent now carries posture modules it switches on the basis of the task (six built-in stances, custom modes from .acute/agents/*.md, three access paths, twenty skills, one reminder renderer)
 
 **Date:** 2026-09-07 · **Branch:** `main` · **Version:** 0.73.0 ·

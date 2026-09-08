@@ -426,6 +426,18 @@ interface StreamStore {
   setLastTurnStoppedByUser: (sessionId: string, stopped: boolean) => void;
   /** Clear state for a session (new session / explicit reset). */
   clearStream: (sessionId: string) => void;
+  /** ROUND-77 (R77, owner: "tried sending a message, but it was not that
+   * successful" — a failed send used to look like NOTHING happened): a
+   * turn failed WITHOUT a persisted turn.error (pre-hijack rejections:
+   * validation / auth / 409 conflict / PROVIDER_DISABLED / unknown agent —
+   * none of them ever mint errorTs). The PANEL calls this instead of
+   * clearStream: the live ERROR CARD + the optimistic user ECHO survive
+   * (the owner sees exactly WHAT failed and the message they typed), while
+   * the live turn is either FROZEN (partial streamed text / tool rows stay
+   * visible — the R58 thrown-error shape) or DROPPED (nothing streamed → no
+   * frozen "Thinking…" row lingers under the error card). streamBusy has
+   * already flipped false in startStream's finally. */
+  freezeFailedTurn: (sessionId: string) => void;
   /** Resolve a live approval row (decision landed). */
   resolveApprovalInLiveTurn: (
     sessionId: string,
@@ -1017,6 +1029,32 @@ export const useStreamStore = create<StreamStore>((set, get) => ({
       delete next[sessionId];
       return { bySession: next };
     });
+    useActiveStreams.getState().stop(sessionId);
+  },
+
+  freezeFailedTurn: (sessionId) => {
+    // R77: keep liveError + pendingEcho (the error card + the user's
+    // message), resolve the live turn by its content.
+    const cur = get().bySession[sessionId];
+    if (cur === undefined) {
+      useActiveStreams.getState().stop(sessionId);
+      return;
+    }
+    if (cur.liveTurn !== null) {
+      const lt = cur.liveTurn;
+      const hasPartials =
+        lt.streamText !== "" ||
+        lt.streamThinking.trim() !== "" ||
+        lt.working.length > 0 ||
+        lt.debugReport !== null ||
+        lt.browserCheckpoint !== null;
+      patchSession(sessionId, {
+        // Partials stay visible frozen (stopped, NOT by user — the error
+        // card below them is the verdict); an empty turn is dropped so no
+        // dead "Thinking…" row lingers next to the error card.
+        liveTurn: hasPartials ? { ...lt, stopped: true, stoppedByUser: false } : null,
+      });
+    }
     useActiveStreams.getState().stop(sessionId);
   },
 

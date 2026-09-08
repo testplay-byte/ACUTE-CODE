@@ -680,15 +680,21 @@ export type RevertSessionResult =
 
 /**
  * ROUND-44 (R44-c): rewind a session to an earlier message. Events with
- * seq > keepThroughSeq are deleted (everything up to AND INCLUDING
- * keepThroughSeq survives — the UI passes the USER message's seq, so the user
- * message stays while the assistant reply + later turns are removed), then ONE
- * `session.reverted` marker event is appended with the next seq. Event types
- * are not validated anywhere (appendSessionEvent accepts any string; readers
- * tolerate unknown types — see toProjectChatItems), so no type registration
- * is needed; the marker's payload is
- * { throughSeq, at, revertedEventCount, agentId: null, ts } (appendSessionEvent
- * mirrors agentId + ts into the payload like every other event).
+ * seq >= throughSeq are deleted — ROUND-77 (R77, owner: "when I click on
+ * the revert option on any one of the chats, it should revert to that
+ * session, and that message which was on that should be pasted in the
+ * message area. That message should be deleted from the chat itself with
+ * the agent"): the target message itself is now REMOVED TOO (the wire field
+ * keeps its historical name `keepThroughSeq` — it is the seq of the user
+ * message being reverted; everything from that message onward is deleted,
+ * the UI refills the composer with the message's text, so the owner can
+ * edit + resend it as a fresh turn) — then ONE `session.reverted` marker
+ * event is appended with the next seq. Event types are not validated
+ * anywhere (appendSessionEvent accepts any string; readers tolerate unknown
+ * types — see toProjectChatItems), so no type registration is needed; the
+ * marker's payload is { throughSeq, at, revertedEventCount, agentId: null,
+ * ts } (appendSessionEvent mirrors agentId + ts into the payload like every
+ * other event).
  *
  * The append-only contract (ADR-0010) governs in-flight operation; an
  * owner-driven rewind is the documented exception (same standing as
@@ -698,7 +704,7 @@ export type RevertSessionResult =
  *  - unknown session id → { ok: false, code: "NOT_FOUND" }
  *  - session status "running" (a live turn is streaming) → CONFLICT
  *    "cannot revert a running session" — the deletion would race the turn.
- *  - keepThroughSeq >= max seq → nothing is removed but the marker is STILL
+ *  - throughSeq > max seq → nothing is removed but the marker is STILL
  *    appended (an explicit, auditable no-op rewind).
  */
 export function revertSession(
@@ -721,8 +727,11 @@ export function revertSession(
     };
   }
   const rewind = db.transaction((): number => {
+    // R77: seq >= throughSeq — the target message is deleted with its reply
+    // (was seq > throughSeq, which kept the user message dangling at the
+    // transcript's end with no answer).
     const removed = db
-      .prepare("DELETE FROM session_events WHERE session_id = ? AND seq > ?")
+      .prepare("DELETE FROM session_events WHERE session_id = ? AND seq >= ?")
       .run(sessionId, keepThroughSeq);
     appendSessionEvent(db, sessionId, {
       type: "session.reverted",

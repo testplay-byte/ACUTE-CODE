@@ -3009,14 +3009,34 @@ export async function streamSessionMessage(
   });
   if (!res.ok || !res.body) {
     // Non-2xx: the error envelope is JSON, not SSE.
+    // ROUND-77 (R77, owner: "show the actual error messages too, which were
+    // returned from the API"): preserve the envelope's REAL code + details
+    // (providerError / errorClass / classMessage / attempts when present).
+    // The old shape hardcoded code: "PROVIDER_ERROR" and dropped details,
+    // so a 409 PROVIDER_DISABLED / 400 VALIDATION / 401 UNAUTHORIZED
+    // surfaced with the wrong class and no context.
     let message = `sidecar answered HTTP ${res.status}`;
+    let code: string | undefined;
+    let details: Record<string, unknown> | undefined;
     try {
-      const body = (await res.json()) as { error?: { message?: string } };
+      const body = (await res.json()) as {
+        error?: { code?: string; message?: string; details?: Record<string, unknown> };
+      };
       if (body.error?.message) message = body.error.message;
+      if (typeof body.error?.code === "string") code = body.error.code;
+      if (body.error?.details !== null && typeof body.error?.details === "object") {
+        details = body.error.details;
+      }
     } catch {
       /* keep the status text */
     }
-    onEvent({ type: "error", status: res.status, code: "PROVIDER_ERROR", message });
+    onEvent({
+      type: "error",
+      status: res.status,
+      code: code ?? (res.status === 401 ? "UNAUTHORIZED" : "PROVIDER_ERROR"),
+      message,
+      ...(details !== undefined ? { details } : {}),
+    });
     return;
   }
   const reader = res.body.getReader();

@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router";
 import { useQuery } from "@tanstack/react-query";
-import { Check, ChevronDown, ChevronRight, Settings } from "lucide-react";
+import { Check, ChevronDown, ChevronRight, Cpu, Settings } from "lucide-react";
 import {
   fetchProviderModelConfig,
   fetchProviders,
@@ -455,6 +455,19 @@ export function ModelSelector({
           e.currentTarget.style.background = "transparent";
         }}
       >
+        {/* R77 (owner: "For the model selection, there was no proper icon,
+            so you might need to add a proper icon"): the Cpu badge — every
+            other toolbar pill leads with an icon (Paperclip / Shield / Compass
+            / Brain); the model pill was the lone icon-less text button. The
+            icon STAYS visible below the 560px @container floor (only the text
+            label hides), so the pill stays identifiable when icon-only. */}
+        <Cpu
+          size={12}
+          className="shrink-0"
+          style={{ color: styles.accent }}
+          aria-hidden
+          data-model-icon
+        />
         <span className="truncate @max-[560px]:hidden" data-model-label>
           {buttonLabel}
         </span>

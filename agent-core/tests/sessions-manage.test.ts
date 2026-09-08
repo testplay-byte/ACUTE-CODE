@@ -272,27 +272,44 @@ describe("forkSession (storage)", () => {
 // ── storage: revertSession ──────────────────────────────────────────────────
 
 describe("revertSession (storage)", () => {
-  it("removes ONLY events after keepThroughSeq, appends a session.reverted marker, and resets status to queued", async () => {
+  it("R77: removes events from the TARGET message onward (seq >= keepThroughSeq), appends a session.reverted marker, and resets status to queued", async () => {
     const sessionId = await createSeededSession("Rewind me", [
       ["first question", "first answer"], // seq 1, 2
       ["second question", "second answer"], // seq 3, 4
     ]);
     setSessionStatus(db, sessionId, "completed");
 
-    const result = revertSession(db, sessionId, 1); // keep the FIRST user message
-    expect(result).toEqual({ ok: true, removedCount: 3 }); // seq 2,3,4 removed
+    // R77 (owner: the reverted message is DELETED from the chat and its
+    // text returns to the composer): reverting at the FIRST user message
+    // now removes seq 1,2,3,4 — the target message included.
+    const result = revertSession(db, sessionId, 1);
+    expect(result).toEqual({ ok: true, removedCount: 4 }); // seq 1,2,3,4 removed
 
     const events: SessionEvent[] = listSessionEvents(db, sessionId);
-    expect(events.map((e) => e.seq)).toEqual([1, 2]); // user message survives + marker
-    expect(events[0].type).toBe("message.user");
-    expect(events[1].type).toBe("session.reverted");
-    expect(events[1].payload).toMatchObject({ throughSeq: 1, revertedEventCount: 3 });
-    expect((events[1].payload as { at?: unknown }).at).toEqual(expect.any(String));
+    expect(events.map((e) => e.seq)).toEqual([1]); // ONLY the marker survives
+    expect(events[0].type).toBe("session.reverted");
+    expect(events[0].payload).toMatchObject({ throughSeq: 1, revertedEventCount: 4 });
+    expect((events[0].payload as { at?: unknown }).at).toEqual(expect.any(String));
 
     const status = db
       .prepare("SELECT status FROM sessions WHERE id = ?")
       .get(sessionId) as { status: string };
     expect(status.status).toBe("queued");
+  });
+
+  it("R77: reverting a LATER message keeps the earlier turns intact", async () => {
+    const sessionId = await createSeededSession("Rewind me", [
+      ["first question", "first answer"], // seq 1, 2
+      ["second question", "second answer"], // seq 3, 4
+    ]);
+    const result = revertSession(db, sessionId, 3); // the second user message
+    expect(result).toEqual({ ok: true, removedCount: 2 }); // seq 3,4
+    const events: SessionEvent[] = listSessionEvents(db, sessionId);
+    expect(events.map((e) => e.seq)).toEqual([1, 2, 3]); // turn 1 + marker
+    expect(events[0].type).toBe("message.user");
+    expect(events[1].type).toBe("message.assistant");
+    expect(events[2].type).toBe("session.reverted");
+    expect(events[2].payload).toMatchObject({ throughSeq: 3, revertedEventCount: 2 });
   });
 
   it("refuses a RUNNING session (a live turn would race the deletion)", async () => {
@@ -403,7 +420,7 @@ describe("POST /api/v1/sessions/:id/fork (route)", () => {
 });
 
 describe("POST /api/v1/sessions/:id/revert (route)", () => {
-  it("200 { ok, removedCount } — truncates the log to keepThroughSeq and appends the marker", async () => {
+  it("200 { ok, removedCount } — R77: truncates the log FROM the target message (inclusive) and appends the marker", async () => {
     const sessionId = await createSeededSession("Revert route", [
       ["first question", "first answer"], // seq 1, 2
       ["second question", "second answer"], // seq 3, 4
@@ -414,12 +431,12 @@ describe("POST /api/v1/sessions/:id/revert (route)", () => {
       payload: { keepThroughSeq: 1 },
     });
     expect(response.statusCode).toBe(200);
-    expect(response.json()).toEqual({ ok: true, removedCount: 3 });
+    expect(response.json()).toEqual({ ok: true, removedCount: 4 }); // seq 1,2,3,4
 
     const detail = await authInject({ method: "GET", url: `/api/v1/sessions/${sessionId}` });
     const body = detail.json() as { events: Array<{ seq: number; type: string }>; lastSeq: number };
-    expect(body.events.map((e) => e.type)).toEqual(["message.user", "session.reverted"]);
-    expect(body.lastSeq).toBe(2);
+    expect(body.events.map((e) => e.type)).toEqual(["session.reverted"]);
+    expect(body.lastSeq).toBe(1);
   });
 
   it("400 VALIDATION for a missing / non-integer / negative keepThroughSeq", async () => {

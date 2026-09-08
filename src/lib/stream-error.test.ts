@@ -334,3 +334,81 @@ describe("stream store error handling (ROUND-43)", () => {
     expect(slice?.streamBusy).toBe(false);
   });
 });
+
+// ── ROUND-77 (R77): the non-2xx envelope rides the error frame ───────────────
+// The owner: "show the actual error messages too, which were returned from
+// the API". A pre-hijack rejection (validation / auth / 409 / PROVIDER_DISABLED)
+// answers JSON, not SSE — the old branch hardcoded code "PROVIDER_ERROR" and
+// dropped the envelope's details, so the error card showed the wrong class
+// with no context. The frame now carries the REAL code + message + details.
+describe("streamSessionMessage non-2xx envelope preservation (ROUND-77)", () => {
+  it("a 409 PROVIDER_DISABLED JSON envelope becomes an error frame with the REAL code, message, and details", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        new Response(
+          JSON.stringify({
+            error: {
+              code: "PROVIDER_DISABLED",
+              message: "Provider 'openrouter' is disabled — enable it in Settings → Models & Providers",
+              details: { providerError: "provider disabled at boot" },
+            },
+          }),
+          { status: 409, headers: { "content-type": "application/json" } },
+        ),
+      ),
+    );
+
+    const seen: StreamTurnEvent[] = [];
+    await streamSessionMessage("sess_x", "hello", (e) => seen.push(e));
+
+    expect(seen).toHaveLength(1);
+    expect(seen[0]).toMatchObject({
+      type: "error",
+      status: 409,
+      code: "PROVIDER_DISABLED",
+      message: "Provider 'openrouter' is disabled — enable it in Settings → Models & Providers",
+    });
+    // The details ride the frame (the stream store reads providerError /
+    // errorClass / attempts from here).
+    expect((seen[0] as { details?: Record<string, unknown> }).details).toMatchObject({
+      providerError: "provider disabled at boot",
+    });
+  });
+
+  it("an envelope WITHOUT a code falls back UNAUTHORIZED for 401, PROVIDER_ERROR otherwise", async () => {
+    for (const [status, fallback] of [
+      [401, "UNAUTHORIZED"],
+      [500, "PROVIDER_ERROR"],
+    ] as const) {
+      vi.stubGlobal(
+        "fetch",
+        vi.fn().mockResolvedValue(
+          new Response(JSON.stringify({ error: { message: `http ${status} failure` } }), {
+            status,
+            headers: { "content-type": "application/json" },
+          }),
+        ),
+      );
+      const seen: StreamTurnEvent[] = [];
+      await streamSessionMessage("sess_x", "hello", (e) => seen.push(e));
+      expect(seen[0]).toMatchObject({ type: "error", status, code: fallback });
+    }
+  });
+
+  it("a non-JSON body keeps the honest status fallback text", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        new Response("<html>gateway crashed</html>", {
+          status: 502,
+          headers: { "content-type": "text/html" },
+        }),
+      ),
+    );
+    const seen: StreamTurnEvent[] = [];
+    await streamSessionMessage("sess_x", "hello", (e) => seen.push(e));
+    expect(seen[0]).toMatchObject({ type: "error", code: "PROVIDER_ERROR" });
+    expect((seen[0] as { message: string }).message).toContain("sidecar answered HTTP 502");
+  });
+});

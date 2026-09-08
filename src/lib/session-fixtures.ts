@@ -266,9 +266,11 @@ export function createFixtureSessions(seed: SessionSeed[] = SEED): SessionsBacke
       });
       return ok({ ...fork });
     },
-    // ROUND-44 (R44-c): mirrors POST /sessions/:id/revert — drop events with
-    // seq > keepThroughSeq, append a session.reverted marker, flip the status
-    // back to queued. Running sessions refuse with 409 CONFLICT.
+    // ROUND-44 (R44-c): mirrors POST /sessions/:id/revert — ROUND-77 (R77)
+    // semantics: drop events with seq >= keepThroughSeq (the TARGET message
+    // is removed too — the UI refills the composer with its text), append a
+    // session.reverted marker, flip the status back to queued. Running
+    // sessions refuse with 409 CONFLICT.
     revert: (id, keepThroughSeq) => {
       const target = row(id);
       if (target.session.status === "running") {
@@ -277,7 +279,7 @@ export function createFixtureSessions(seed: SessionSeed[] = SEED): SessionsBacke
         );
       }
       const before = target.events.length;
-      target.events = target.events.filter((event) => event.seq <= keepThroughSeq);
+      target.events = target.events.filter((event) => event.seq < keepThroughSeq);
       const removedCount = before - target.events.length;
       // Next seq mirrors appendSessionEvent: MAX(existing seq) + 1 — when
       // keepThroughSeq is beyond the log's end (no-op removal), the marker

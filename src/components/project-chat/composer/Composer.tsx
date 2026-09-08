@@ -522,109 +522,117 @@ export function Composer({
       />
 
       {/* TOOLBAR — INSIDE the box (owner directive).
-          ROUND-75 (R75, owner: "the following should be shown in one single
-          row: attach file, selecting the access level, selecting the behavior
-          of it, showing the context window and details, selecting the model,
-          selecting the reasoning, sending the message"): ONE flat cluster in
-          the owner's exact order — no left/right split, no justify-between.
+          ROUND-77 (R77, owner: "the mode selection, the access level
+          selection, and the upload file buttons should be shown on the left
+          side, and besides that, all the other options should be aligned to
+          the right side"): TWO clusters. LEFT = attach + access + task mode.
+          RIGHT = context donut + model + reasoning + Continue/Send. The
+          right cluster is a nowrap group with ml-auto — pinned to the right
+          edge when there's room, and when the row is too tight the WHOLE
+          cluster wraps as ONE unit (R77 fix for the owner's "send message
+          or stop button was showing below the designated options" — the
+          action button never separates from its right-side siblings again).
           The box is a CSS @container: below 560px the selector pills' TEXT
           LABELS hide (icon-only — the row fits at the 480px chat floor; the
-          pills' title tooltips carry the hidden labels). A flex-1 spacer
-          before Continue/Send keeps the action button pinned right when
-          there's room, collapsing to nothing when tight. flex-wrap stays as
-          the R51-c never-overlap emergency fallback for absurd widths. */}
+          pills' title tooltips carry the hidden labels). flex-wrap on the
+          row stays as the R51-c never-overlap emergency fallback. */}
       <div
         role="toolbar"
         aria-label="Composer tools"
         data-composer-toolbar
         className="flex flex-wrap items-center gap-1 px-2 pb-2 pt-1"
       >
-        <AddContextButton projectId={projectId} disabled={!liveMode} onAttachPaths={attachPaths} />
-        <ModeSwitcher mode={permissionMode} disabled={!liveMode} onChange={onModeChange} />
-        {/* ROUND-73 (R73-c): the task-mode pill — the behavior/posture
-            selector, right after the access-level switcher (the owner's
-            stated order). */}
-        {onTaskModeChange !== undefined ? (
-          <TaskModePicker
-            modes={taskModes}
-            activeMode={activeTaskMode}
-            disabled={taskModeDisabled}
-            onChange={(m) => void onTaskModeChange(m)}
+        {/* R77: the LEFT cluster — attach, access level, task mode (the
+            owner's left-side trio). */}
+        <div className="flex items-center gap-1 min-w-0" data-composer-left>
+          <AddContextButton projectId={projectId} disabled={!liveMode} onAttachPaths={attachPaths} />
+          <ModeSwitcher mode={permissionMode} disabled={!liveMode} onChange={onModeChange} />
+          {/* ROUND-73 (R73-c): the task-mode pill — the behavior/posture
+              selector, right after the access-level switcher (the owner's
+              stated order). */}
+          {onTaskModeChange !== undefined ? (
+            <TaskModePicker
+              modes={taskModes}
+              activeMode={activeTaskMode}
+              disabled={taskModeDisabled}
+              onChange={(m) => void onTaskModeChange(m)}
+            />
+          ) : null}
+        </div>
+        {/* R77: the RIGHT cluster — everything else + the action button, a
+            single nowrap group (ml-auto pins it right on every line it
+            lands on; shrink-0 keeps the pills from being squeezed). */}
+        <div className="ml-auto flex items-center gap-1 shrink-0" data-composer-right>
+          <ContextDonut
+            sessionId={sessionId}
+            model={effectiveModel}
+            transcriptLength={transcriptLength}
+            liveTick={liveTick}
+            streaming={streaming}
+            liveMode={liveMode}
           />
-        ) : null}
-        <ContextDonut
-          sessionId={sessionId}
-          model={effectiveModel}
-          transcriptLength={transcriptLength}
-          liveTick={liveTick}
-          streaming={streaming}
-          liveMode={liveMode}
-        />
-        <ModelSelector agent={agent} override={modelOverride} onModelChange={onModelChange} disabled={!liveMode} />
-        <ThinkingLevelButton level={thinkingLevel} onChange={onThinkingLevelChange} />
-        {/* R75: the shrink absorber — collapses to nothing when the row is
-            tight so the Send/Stop action hugs the controls; grows to push
-            the action to the right edge when there's room. */}
-        <div className="flex-1 min-w-0" aria-hidden />
-        {/* ROUND-58 (R58-cf): the Continue affordance — the last turn ended
-            via user stop (the backend persisted the partial + tool results,
-            so this normal follow-up message resumes the response). Secondary
-            style (border + subtle bg), never shown while a turn runs (the
-            Stop button owns that state). */}
-        {showContinue && !busy ? (
-          <button
-            type="button"
-            onClick={() => {
-              onSend(CONTINUE_FROM_STOP_MESSAGE, []);
-              setAtToken(null);
-              setAtDismissedAt(null);
-            }}
-            aria-label="Continue from where you left off"
-            title="Send another message to resume the stopped response"
-            data-continue-button
-            className="h-8 px-3 rounded-xl flex items-center gap-1.5 shrink-0 border text-[11.5px] font-semibold transition-colors"
-            style={{ borderColor: styles.border, background: styles.subtle, color: styles.textSecondary }}
-            onMouseEnter={(e) => (e.currentTarget.style.background = styles.subtleHover)}
-            onMouseLeave={(e) => (e.currentTarget.style.background = styles.subtle)}
-          >
-            <Play size={11} />
-            Continue
-          </button>
-        ) : null}
-        {busy ? (
-          <button
-            type="button"
-            // Stop routes through the stream store (works regardless of
-            // which panel is mounted — ROUND-39 semantics preserved).
-            onClick={onStop}
-            aria-label="Stop generation"
-            title="Stop generation"
-            className="w-8 h-8 rounded-xl grid place-items-center shrink-0 transition-transform hover:scale-105 active:scale-95"
-            style={{ backgroundColor: SEMANTIC_COLORS.danger, color: "#fff" }}
-          >
-            <span className="w-3 h-3 rounded-sm bg-white/90" />
-          </button>
-        ) : (
-          <button
-            type="button"
-            onClick={send}
-            disabled={input.trim() === ""}
-            aria-label="Send message"
-            title="Send (Enter · Shift+Enter for a new line)"
-            className="w-8 h-8 rounded-xl grid place-items-center shrink-0 transition-all hover:scale-105 active:scale-95 disabled:hover:scale-100"
-            style={
-              input.trim() !== ""
-                ? {
-                    backgroundColor: styles.accent,
-                    color: styles.accentText,
-                    boxShadow: `0 2px 10px ${withAlpha(styles.accent, 0.35)}`,
-                  }
-                : { backgroundColor: styles.inputBg, color: styles.textTertiary }
-            }
-          >
-            <ArrowUp size={14} strokeWidth={2.5} />
-          </button>
-        )}
+          <ModelSelector agent={agent} override={modelOverride} onModelChange={onModelChange} disabled={!liveMode} />
+          <ThinkingLevelButton level={thinkingLevel} onChange={onThinkingLevelChange} />
+          {/* ROUND-58 (R58-cf): the Continue affordance — the last turn ended
+              via user stop (the backend persisted the partial + tool results,
+              so this normal follow-up message resumes the response). Secondary
+              style (border + subtle bg), never shown while a turn runs (the
+              Stop button owns that state). */}
+          {showContinue && !busy ? (
+            <button
+              type="button"
+              onClick={() => {
+                onSend(CONTINUE_FROM_STOP_MESSAGE, []);
+                setAtToken(null);
+                setAtDismissedAt(null);
+              }}
+              aria-label="Continue from where you left off"
+              title="Send another message to resume the stopped response"
+              data-continue-button
+              className="h-8 px-3 rounded-xl flex items-center gap-1.5 shrink-0 border text-[11.5px] font-semibold transition-colors"
+              style={{ borderColor: styles.border, background: styles.subtle, color: styles.textSecondary }}
+              onMouseEnter={(e) => (e.currentTarget.style.background = styles.subtleHover)}
+              onMouseLeave={(e) => (e.currentTarget.style.background = styles.subtle)}
+            >
+              <Play size={11} />
+              Continue
+            </button>
+          ) : null}
+          {busy ? (
+            <button
+              type="button"
+              // Stop routes through the stream store (works regardless of
+              // which panel is mounted — ROUND-39 semantics preserved).
+              onClick={onStop}
+              aria-label="Stop generation"
+              title="Stop generation"
+              className="w-8 h-8 rounded-xl grid place-items-center shrink-0 transition-transform hover:scale-105 active:scale-95"
+              style={{ backgroundColor: SEMANTIC_COLORS.danger, color: "#fff" }}
+            >
+              <span className="w-3 h-3 rounded-sm bg-white/90" />
+            </button>
+          ) : (
+            <button
+              type="button"
+              onClick={send}
+              disabled={input.trim() === ""}
+              aria-label="Send message"
+              title="Send (Enter · Shift+Enter for a new line)"
+              className="w-8 h-8 rounded-xl grid place-items-center shrink-0 transition-all hover:scale-105 active:scale-95 disabled:hover:scale-100"
+              style={
+                input.trim() !== ""
+                  ? {
+                      backgroundColor: styles.accent,
+                      color: styles.accentText,
+                      boxShadow: `0 2px 10px ${withAlpha(styles.accent, 0.35)}`,
+                    }
+                  : { backgroundColor: styles.inputBg, color: styles.textTertiary }
+              }
+            >
+              <ArrowUp size={14} strokeWidth={2.5} />
+            </button>
+          )}
+        </div>
       </div>
     </div>
   );

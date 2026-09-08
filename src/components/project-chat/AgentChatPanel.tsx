@@ -16,6 +16,7 @@ import {
   FolderOpen,
   GitBranch,
   History,
+  Info,
   ListChecks,
   MessageSquareText,
   RefreshCw,
@@ -23,6 +24,7 @@ import {
   Square,
   ThumbsDown,
   ThumbsUp,
+  Timer,
   type LucideIcon,
 } from "lucide-react";
 import { Link, useSearchParams } from "react-router";
@@ -912,8 +914,15 @@ export function TurnErrorCard({
   const styles = useThemeStyles();
   const resetAfter = useTimeoutClear();
   const [copied, setCopied] = useState(false);
+  // R77 (owner: "show the actual error messages too, which were returned
+  // from the API, so that we know what is going on"): the raw provider text
+  // is no longer chopped at 220 chars — long errors collapse to a short
+  // excerpt with a "Show full error" toggle that expands the COMPLETE text
+  // in a scrollable mono block (Copy details always carried the full text).
+  const [expanded, setExpanded] = useState(false);
   const reason = error.providerError ?? error.message;
-  const shortReason = reason.length > 220 ? `${reason.slice(0, 220)}…` : reason;
+  const isLong = reason.length > 240;
+  const shortReason = reason.length > 240 ? `${reason.slice(0, 240)}…` : reason;
   const detailsText = [
     "Generation failed",
     `Session: ${sessionId ?? "unknown"}`,
@@ -967,7 +976,36 @@ export function TurnErrorCard({
             <span className="text-[11.5px] leading-[1.5] min-w-0 break-words" style={{ color: styles.textSecondary }}>
               {shortReason}
             </span>
+            {/* R77: the full-error toggle — long provider payloads (the raw
+                OpenRouter body can run hundreds of chars) collapse to the
+                excerpt; the toggle reveals everything, scrollable. */}
+            {isLong ? (
+              <button
+                type="button"
+                onClick={() => setExpanded((v) => !v)}
+                aria-expanded={expanded}
+                data-error-expand
+                className="h-6 px-2 rounded-lg text-[11px] font-semibold border transition-colors shrink-0"
+                style={{ borderColor: withAlpha(SEMANTIC_COLORS.danger, 0.4), color: SEMANTIC_COLORS.danger }}
+                title={expanded ? "Collapse the error text" : "Show the complete error message returned by the API"}
+              >
+                {expanded ? "Show less" : "Show full error"}
+              </button>
+            ) : null}
           </div>
+          {expanded ? (
+            <pre
+              data-error-full-text
+              className="mt-1.5 max-h-44 overflow-y-auto rounded-lg border px-2.5 py-2 font-mono text-[10.5px] leading-[1.55] whitespace-pre-wrap break-words min-w-0"
+              style={{
+                borderColor: withAlpha(SEMANTIC_COLORS.danger, 0.3),
+                background: styles.isDark ? "rgba(255,255,255,0.04)" : styles.subtle,
+                color: styles.textSecondary,
+              }}
+            >
+              {reason}
+            </pre>
+          ) : null}
           <div className="mt-1.5 flex flex-wrap items-center gap-2">
             <span className="text-[10px] font-mono shrink-0" style={{ color: styles.textTertiary }}>
               {formatTime(error.ts)}
@@ -1031,27 +1069,72 @@ export function RetryStatusCard({ retry }: { retry: LiveTurnRetry }) {
       ? "now"
       : remainingMs < 60_000
         ? `${Math.ceil(remainingMs / 1000)}s`
-        : `${Math.floor(remainingMs / 60_000)}m ${Math.ceil((remainingMs % 60_000) / 1000 / 10) * 10}s`;
+        : `${Math.floor(remainingMs / 60_000)}m ${Math.round((remainingMs % 60_000) / 1000)}s`;
   const classLabel = retry.errorClass.replace(/_/g, " ");
+  // R77: the wait's fill fraction for the countdown bar — 0 the moment the
+  // rung starts, 1 as the next attempt fires (waitMs = the FULL rung).
+  const waitFraction = Math.min(1, Math.max(0, 1 - remainingMs / Math.max(1, retry.waitMs)));
+  // R77 (owner: "The retrying rate limit attempt was apparently not looking
+  // good. Its UI was bad"): the attempt DOT-LADDER — one dot per attempt;
+  // failed-and-done dots sit dim, the upcoming attempt breathes (the
+  // ac-retry-pulse keyframes), future dots stay hollow.
+  const attemptDots = Array.from({ length: retry.totalAttempts }, (_, i) => i + 1);
   return (
     <motion.div variants={msgVariants} initial="initial" animate="animate" className="min-w-0">
       <div
         role="status"
         data-retry-status-card
-        className="rounded-[14px] border px-3.5 py-2.5 flex items-start gap-2.5"
+        className="rounded-[16px] border px-3.5 py-3 flex items-start gap-3"
         style={{
-          borderColor: withAlpha("#f59e0b", 0.45),
-          background: withAlpha("#f59e0b", styles.isDark ? 0.09 : 0.06),
+          borderColor: withAlpha("#f59e0b", 0.4),
+          background: `linear-gradient(135deg, ${withAlpha("#f59e0b", styles.isDark ? 0.1 : 0.07)} 0%, ${withAlpha(
+            "#f59e0b",
+            styles.isDark ? 0.05 : 0.03,
+          )} 100%)`,
         }}
       >
-        <RefreshCw size={14} className="mt-0.5 shrink-0 ac-retry-spin" style={{ color: "#f59e0b" }} aria-hidden />
+        {/* The spinner badge — the slow patient rotation (R75) now inside a
+            soft circular chip instead of a bare floating glyph. */}
+        <div
+          className="w-7 h-7 rounded-full grid place-items-center shrink-0 mt-0.5"
+          style={{ background: withAlpha("#f59e0b", 0.16) }}
+          aria-hidden
+        >
+          <RefreshCw size={13} className="ac-retry-spin" style={{ color: "#d97706" }} />
+        </div>
         <div className="min-w-0 flex-1">
-          <div className="text-[12px] font-bold" style={{ color: "#d97706" }}>
-            Retrying — attempt {retry.attempt} of {retry.totalAttempts}
+          {/* Header + the attempt dot-ladder. */}
+          <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
+            <span className="text-[12px] font-bold" style={{ color: "#d97706" }}>
+              Retrying — attempt {retry.attempt} of {retry.totalAttempts}
+            </span>
+            <span className="flex items-center gap-[3px]" aria-hidden data-retry-dots>
+              {attemptDots.map((n) => {
+                const isCurrent = n === retry.attempt;
+                const isDone = n < retry.attempt;
+                return (
+                  <span
+                    key={n}
+                    className={isCurrent ? "rounded-full ac-retry-pulse" : "rounded-full"}
+                    style={{
+                      width: isCurrent ? 7 : 5,
+                      height: isCurrent ? 7 : 5,
+                      background: isDone
+                        ? withAlpha("#d97706", 0.55)
+                        : isCurrent
+                          ? "#f59e0b"
+                          : "transparent",
+                      border: isCurrent || isDone ? "none" : `1px solid ${withAlpha("#f59e0b", 0.45)}`,
+                    }}
+                  />
+                );
+              })}
+            </span>
           </div>
-          <div className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1 min-w-0">
+          {/* The cause — class chip (rounded-full now) + the class message. */}
+          <div className="mt-1.5 flex flex-wrap items-center gap-x-2 gap-y-1 min-w-0">
             <span
-              className="text-[10px] font-mono px-1.5 py-0.5 rounded-md shrink-0 uppercase tracking-wide"
+              className="text-[10px] font-mono px-2 py-0.5 rounded-full shrink-0 uppercase tracking-wide"
               style={{ background: withAlpha("#f59e0b", 0.14), color: "#d97706" }}
               title={`provider error class: ${retry.errorClass}`}
             >
@@ -1061,10 +1144,31 @@ export function RetryStatusCard({ retry }: { retry: LiveTurnRetry }) {
               {retry.classMessage}
             </span>
           </div>
-          <div className="mt-1.5 flex flex-wrap items-center gap-x-2">
-            <span className="text-[11px] font-mono shrink-0" style={{ color: "#d97706" }}>
+          {/* The countdown — a mono label + a thin fill bar that empties
+              into the next attempt (progress IS the reassurance). */}
+          <div className="mt-2 flex items-center gap-2">
+            <Timer size={11} className="shrink-0" style={{ color: "#d97706" }} aria-hidden />
+            <span className="text-[11px] font-mono shrink-0 tabular-nums" style={{ color: "#d97706" }}>
               next attempt in {remainingLabel}
             </span>
+            <div
+              className="flex-1 min-w-[48px] h-1 rounded-full overflow-hidden"
+              style={{ background: withAlpha("#f59e0b", 0.16) }}
+              aria-hidden
+            >
+              <div
+                className="h-full rounded-full"
+                style={{
+                  width: `${waitFraction * 100}%`,
+                  background: "#f59e0b",
+                  transition: "width 1s linear",
+                }}
+              />
+            </div>
+          </div>
+          {/* The reassurance line. */}
+          <div className="mt-1.5 flex items-center gap-1.5">
+            <Info size={10.5} className="shrink-0" style={{ color: styles.textTertiary }} aria-hidden />
             <span className="text-[10.5px] min-w-0" style={{ color: styles.textTertiary }}>
               the agent keeps working automatically — no action needed
             </span>
@@ -1743,22 +1847,42 @@ export function AgentChatPanel({
         void queryClient.invalidateQueries({ queryKey: ["project-tree"] });
         // ROUND-50: the context donut refreshes with the new transcript.
         void queryClient.invalidateQueries({ queryKey: ["session-context"] });
-        // The live turn is now folded into the event log; clear the store's
-        // echo + liveTurn for this session (the folded turn owns the render).
-        useStreamStore.getState().setPendingEcho(sid, null);
-        // ROUND-58 (R58-cf): a USER STOP clears the live turn TOO — unlike an
-        // error, the backend FLUSHES the stopped turn's partial text, so the
-        // refetched folded log carries it and the frozen live copy would
-        // duplicate it. The stop signal is re-armed after the clear so the
-        // Stopped card + Continue affordance persist until the next send.
-        const slice = useStreamStore.getState().bySession[sid];
-        const wasUserStopped = slice?.liveTurn?.stoppedByUser === true;
-        if (slice?.liveTurn && (!slice.liveTurn.stopped || wasUserStopped)) {
-          // The folded turn owns the render now; clear the live section.
-          useStreamStore.getState().clearStream(sid);
-          useActiveStreams.getState().stop(sid);
-          if (wasUserStopped) {
-            useStreamStore.getState().setLastTurnStoppedByUser(sid, true);
+        // ROUND-77 (R77, owner: "tried sending a message, but it was not
+        // that successful"): a turn that failed WITHOUT a persisted
+        // turn.error — pre-hijack rejections (validation / auth / 409 /
+        // PROVIDER_DISABLED — none ever mint errorTs) — used to hit BOTH
+        // wipes below (clearStream + setPendingEcho(null) + the finally's
+        // setPendingUser(null)): the error card AND the user's message
+        // bubble vanished together and the transcript looked like the send
+        // never happened. Now the live error card + the optimistic echo
+        // SURVIVE (freezeFailedTurn keeps them; the next send resets both
+        // in startStream), so the owner sees exactly what the API said.
+        const streamSlice = useStreamStore.getState().bySession[sid];
+        const failedUnpersisted =
+          streamSlice?.liveError != null && streamSlice.liveError.errorTs === undefined;
+        if (!failedUnpersisted) {
+          // The folded turn owns the render now; clear the store's echo.
+          useStreamStore.getState().setPendingEcho(sid, null);
+        }
+        if (failedUnpersisted) {
+          // Keep liveError + pendingEcho; freeze/drop the live turn by its
+          // content; stop the sidebar animation (the turn is over).
+          useStreamStore.getState().freezeFailedTurn(sid);
+        } else {
+          // ROUND-58 (R58-cf): a USER STOP clears the live turn TOO — unlike an
+          // error, the backend FLUSHES the stopped turn's partial text, so the
+          // refetched folded log carries it and the frozen live copy would
+          // duplicate it. The stop signal is re-armed after the clear so the
+          // Stopped card + Continue affordance persist until the next send.
+          const liveSlice = useStreamStore.getState().bySession[sid];
+          const wasUserStopped = liveSlice?.liveTurn?.stoppedByUser === true;
+          if (liveSlice?.liveTurn && (!liveSlice.liveTurn.stopped || wasUserStopped)) {
+            // The folded turn owns the render now; clear the live section.
+            useStreamStore.getState().clearStream(sid);
+            useActiveStreams.getState().stop(sid);
+            if (wasUserStopped) {
+              useStreamStore.getState().setLastTurnStoppedByUser(sid, true);
+            }
           }
         }
       } else {
@@ -1777,22 +1901,29 @@ export function AgentChatPanel({
       await queryClient.invalidateQueries({ queryKey: ["session"] });
       await queryClient.invalidateQueries({ queryKey: ["sessions"] });
       void queryClient.invalidateQueries({ queryKey: ["project-tree"] });
-      // R37 review #1: the session query key is ["session", source, id] —
-      // an exact-hash lookup without the source segment never matched.
-      const hasResponse = queryClient.getQueryData([
-        "session",
-        liveMode ? "live" : "demo",
-        session?.id ?? sid,
-      ]);
-      if (!hasResponse) {
-        setSendError(err instanceof Error ? err.message : String(err));
-      } else {
-        setSendError(null);
-      }
+      // ROUND-77 (R77, owner: error handling must "show the actual error
+      // messages too, which were returned from the API"): the old
+      // hasResponse-discard branch was VESTIGIAL — live-mode stream errors
+      // stopped propagating into this catch in R39 (the stream store owns
+      // them), so the only arrivals here are create-session failures and
+      // demo-mode send failures, where the turn NEVER landed on the server.
+      // Always surface the real ApiError message (the envelope's code +
+      // message ride the thrown error from the request wrapper) — the
+      // banner clears on the next send.
+      setSendError(err instanceof Error ? err.message : String(err));
     } finally {
-      // Drop the optimistic local echo (the store's pendingEcho was cleared
-      // above for live mode; for demo mode it's the local pendingUser).
-      setPendingUser(null);
+      // Drop the optimistic local echo — EXCEPT when the live failure path
+      // above kept it on purpose (failedUnpersisted keeps the store's
+      // pendingEcho; this local pendingUser is the demo-mode echo and only
+      // survives when its session query has no cached response to fold
+      // from). For live mode the store's echo owns the bubble; for demo
+      // mode a failed send leaves no folded record either, so keep the
+      // local echo visible under the banner (the R77 vanish fix).
+      const liveKeptEcho =
+        liveMode && typeof sid === "string"
+          ? (useStreamStore.getState().bySession[sid]?.pendingEcho ?? null) !== null
+          : false;
+      if (!liveKeptEcho) setPendingUser(null);
       setPendingEchoAttachments(null);
     }
   };
@@ -1835,8 +1966,13 @@ export function AgentChatPanel({
     items.some((it) => it.kind === "error" && it.ts === liveError.errorTs);
 
   // ── ROUND-44 (R44-c): revert-to-message confirm flow ───────────────────
-  // The ConfirmDialog body quotes the first ~60 chars of the targeted user
-  // message so the owner can see EXACTLY which message the rewind keeps.
+  // ROUND-77 (R77, owner: "when I click on the revert option on any one of
+  // the chats, it should revert to that session, and that message which was
+  // on that should be pasted in the message area. That message should be
+  // deleted from the chat itself with the agent"): the rewind now REMOVES
+  // the target message (backend: seq >= target), and the ConfirmDialog body
+  // quotes the first ~60 chars so the owner sees EXACTLY which message
+  // returns to the composer.
   const revertSnippet = (() => {
     if (revertTarget === null) return "";
     const content = revertTarget.content;
@@ -1851,6 +1987,14 @@ export function AgentChatPanel({
         sessionId: activeSessionId,
         keepThroughSeq: target.seq,
       });
+      // R77: the reverted message's text RETURNS TO THE COMPOSER — set it
+      // BEFORE awaiting the invalidations so the text is in place the
+      // moment the truncated transcript re-renders (the item vanishes from
+      // `items` on the refetch — `target` is the snapshot that survives).
+      // The send-clear (runTurn) and the session-switch reset are the only
+      // things that wipe it, exactly like a hand-typed draft.
+      setInput(target.content);
+      requestAnimationFrame(() => inputRef.current?.focus());
       // The hook's onSettled invalidates the exact session keys; these
       // prefix-wide invalidations mirror the send path so the folded log +
       // sidebar refresh before the toast lands.
@@ -1858,7 +2002,7 @@ export function AgentChatPanel({
       await queryClient.invalidateQueries({ queryKey: ["sessions"] });
       pushLocalToast(
         "Reverted",
-        `Removed ${result.removedCount} event${result.removedCount === 1 ? "" : "s"} after message #${target.seq}.`,
+        `Removed ${result.removedCount} event${result.removedCount === 1 ? "" : "s"} — the message is back in the composer for editing.`,
       );
     } catch (err) {
       // 409 CONFLICT (running session) / 404 (deleted elsewhere) — surface as
@@ -2050,14 +2194,16 @@ export function AgentChatPanel({
           setPaletteOpen(false);
         }}
       />
-      {/* ROUND-44 (R44-c): revert confirmation — destructive log truncation. */}
+      {/* ROUND-44 (R44-c): revert confirmation — destructive log truncation.
+          R77 copy: the target message itself is removed and RETURNS to the
+          composer for editing (the owner's edit-and-resend flow). */}
       <ConfirmDialog
         open={revertTarget !== null}
         onOpenChange={(open) => {
           if (!open) setRevertTarget(null);
         }}
         title="Revert session?"
-        body={`Removes the reply and everything after “${revertSnippet}”. This cannot be undone.`}
+        body={`Rewinds to before “${revertSnippet}” — removes that message and its reply from the chat, and puts the message text back in the composer for editing. This cannot be undone.`}
         confirmLabel="Revert"
         onConfirm={() => void onRevertConfirm()}
       />

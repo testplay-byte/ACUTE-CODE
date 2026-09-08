@@ -80,4 +80,37 @@ describe("TurnErrorCard (ROUND-43)", () => {
     // The "Copied" flash replaces the label after the clipboard write.
     await waitFor(() => expect(screen.getByText("Copied")).toBeTruthy());
   });
+
+  // ── ROUND-77 (R77): the full-error toggle ────────────────────────────────
+  it("R77: a SHORT error renders in full with NO toggle; a LONG error collapses to an excerpt with a Show-full-error toggle that expands the COMPLETE text", () => {
+    renderWithProviders(<TurnErrorCard error={ERROR_ITEM} sessionId="sess_x" />);
+    // Short (< 240 chars): no toggle, no expandable block.
+    expect(screen.queryByRole("button", { name: /show full error/i })).toBeNull();
+    expect(document.querySelector("[data-error-full-text]")).toBeNull();
+
+    cleanup();
+
+    // A LONG provider payload (the raw OpenRouter body shape — hundreds of
+    // chars): collapsed to the excerpt + the toggle.
+    const longError = {
+      ...ERROR_ITEM,
+      providerError: `429 Too Many Requests — the raw provider body: ${"rate-limit detail ".repeat(40)}(trace id ort-1234)`,
+    };
+    renderWithProviders(<TurnErrorCard error={longError} sessionId="sess_x" />);
+    const toggle = screen.getByRole("button", { name: /show full error/i });
+    expect(document.querySelector("[data-error-full-text]")).toBeNull();
+
+    // Expand → the COMPLETE raw text renders in the scrollable mono block
+    // (the owner's "show the actual error messages too, which were returned
+    // from the API").
+    fireEvent.click(toggle);
+    const full = document.querySelector("[data-error-full-text]") as HTMLElement;
+    expect(full).toBeTruthy();
+    expect(full.textContent).toContain("ort-1234");
+    expect(full.textContent).toContain("rate-limit detail");
+
+    // Collapse back.
+    fireEvent.click(screen.getByRole("button", { name: /show less/i }));
+    expect(document.querySelector("[data-error-full-text]")).toBeNull();
+  });
 });

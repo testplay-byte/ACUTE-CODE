@@ -1,4 +1,4 @@
-<!-- last-reviewed: 2026-09-07 round-76 -->
+<!-- last-reviewed: 2026-09-07 round-77 -->
 # AGENT MEMORY — lessons learned, rules going forward
 
 **Owner directive (2026-08-23):** "learn from the mistakes you made, document
@@ -776,3 +776,28 @@ Format per entry: `N. TITLE (date, source)` → mistake → root cause → rule.
     hypotheses; re-run the gates yourself, expect at least one drift
     between "verified" and "now", and never push a commit whose
     verification you did not personally watch happen.
+
+77. **A "fresh key" is not a fresh quota (the R77 storm): OpenRouter's
+    free-models-per-day cap is ACCOUNT-wide, not key-wide.** Swapping the
+    sidecar from the exhausted key to any of the other three changed
+    nothing — every key of one account shares the same daily 50-request
+    free pool, and the 429 body says so (`limit_source:
+    openrouter_free_tier_daily`, `X-RateLimit-Remaining: 0`, a
+    `X-RateLimit-Reset` epoch). RULE: before diagnosing "the provider is
+    broken" or "the app is not sending", read the 429's limit_source;
+    when a battery dies mid-run, check the reset epoch and schedule the
+    remaining stages after it — do not burn an hour re-testing with other
+    keys from the same account.
+
+78. **A vanished failure is worse than a failed failure: the R77 root
+    cause behind "it was not sending the message properly" was not a send
+    bug — it was the cleanup path ERASING the evidence.** A turn that
+    failed without a persisted turn.error (pre-hijack rejections, dropped
+    streams) fell through the stream-slice cleanup: the error card AND
+    the user's optimistic bubble were both wiped, leaving the transcript
+    looking like the send never happened. RULE: whenever you add
+    "clear the live state after the turn ends" logic, ask what ELSE rides
+    that state — an error that only exists in live state (never
+    persisted) dies with the cleanup; keep the failure visible until the
+    next send or persist it. A user who sees a red card retries; a user
+    who sees nothing files "it's broken".

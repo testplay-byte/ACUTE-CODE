@@ -3232,9 +3232,11 @@ export function buildServer(options: ServerOptions): FastifyInstance {
       });
 
       // POST /sessions/:id/revert — rewind the event log to an earlier message.
-      // Body: { keepThroughSeq: integer >= 0 } — everything AFTER that seq is
-      // deleted (the user message at keepThroughSeq SURVIVES; its reply + later
-      // turns are removed) and one `session.reverted` marker event is appended.
+      // Body: { keepThroughSeq: integer >= 0 } — ROUND-77 (R77) semantics: the
+      // seq of the USER message being reverted; everything from that seq ONWARD
+      // is deleted (the target message + its reply + later turns — the UI
+      // refills the composer with the message's text so the owner can edit +
+      // resend) and one `session.reverted` marker event is appended.
       // Response: 200 { ok: true, removedCount }. 404 unknown session, 409 when
       // a turn is running (deleting under a live stream would race it), 400 on
       // a bad body.
