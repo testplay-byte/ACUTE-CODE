@@ -462,6 +462,10 @@ describe("R71-e2 D4: classifyProviderError — the classifier table", () => {
   });
 
   it("every class carries a non-empty, honest userMessage", () => {
+    // ROUND-78 (R78): userMessage is now the REAL provider text (the
+    // unwrapped error's message) — "x" is what the provider said, so "x" is
+    // the honest line; the generic CLASS_MESSAGES one-liner is only the
+    // empty-message fallback. The old >10 pin assumed the generic line.
     for (const error of [
       new Error("prompt is too long"),
       Object.assign(new Error("x"), { statusCode: 401 }),
@@ -471,7 +475,7 @@ describe("R71-e2 D4: classifyProviderError — the classifier table", () => {
       new Error("novel"),
     ]) {
       const cls = classifyProviderError(error);
-      expect(cls.userMessage.length).toBeGreaterThan(10);
+      expect(cls.userMessage.length).toBeGreaterThan(0);
     }
   });
 });

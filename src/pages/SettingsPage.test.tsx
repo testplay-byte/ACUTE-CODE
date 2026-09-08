@@ -292,8 +292,9 @@ describe("Advanced tab (ROUND-65 R65)", () => {
     expect(screen.queryByText("Demo data (fixture adapter when the sidecar is unreachable)")).toBeNull();
     expect(screen.queryByText("Save connection")).toBeNull();
 
-    // The header copy leads with Debug mode, and the memory card survives.
-    expect(screen.getByText(/Debug mode \+ agent memory/)).toBeTruthy();
+    // R78: the header copy leads with the retry card (the tab is "General"
+    // now — auto-retry + debug + memory), and the memory card survives.
+    expect(screen.getByText(/Auto-retry, debug mode, and agent memory/)).toBeTruthy();
     expect(screen.getByRole("switch", { name: "Toggle agent memory" })).toBeTruthy();
   });
 
@@ -334,5 +335,142 @@ describe("Advanced tab (ROUND-65 R65)", () => {
     expect(await screen.findByText(/engine exploded/)).toBeTruthy();
     // The switch honestly stays OFF (the server state never changed).
     expect(toggle.getAttribute("aria-checked")).toBe("false");
+  });
+});
+
+// ── ROUND-78 (R78-C): the General tab + the Auto-retry card ──────────────────
+// The tab's LABEL is "General" (the URL id stays "advanced" — the deep-link
+// contract is load-bearing), and the RetryConfigCard (three per-failure-type
+// auto-retry switches against GET/PUT /settings/retry) mounts ABOVE the
+// DebugModeCard. The routed stub serves /settings/retry (mutable — PUT
+// patches the state like the server) + /settings/debug + /settings/memory.
+describe("General tab + Auto-retry card (ROUND-78 R78-C)", () => {
+  const retryState = { autoRetryRateLimit: true, autoRetryTimeout: true, autoRetryNetwork: true };
+  const retryPuts: Array<Record<string, unknown>> = [];
+
+  beforeEach(() => {
+    retryState.autoRetryRateLimit = true;
+    retryState.autoRetryTimeout = true;
+    retryState.autoRetryNetwork = true;
+    retryPuts.length = 0;
+    resetTestState();
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = typeof input === "string" ? input : input.toString();
+        if (url.includes("/api/v1/settings/retry")) {
+          if ((init?.method ?? "GET") === "PUT") {
+            const body = JSON.parse(String(init?.body ?? "{}")) as Record<string, unknown>;
+            retryPuts.push(body);
+            for (const key of ["autoRetryRateLimit", "autoRetryTimeout", "autoRetryNetwork"] as const) {
+              if (typeof body[key] === "boolean") retryState[key] = body[key] as boolean;
+            }
+          }
+          return {
+            ok: true,
+            status: 200,
+            text: async () => JSON.stringify({ ...retryState }),
+          } as unknown as Response;
+        }
+        if (url.includes("/api/v1/settings/debug")) {
+          return {
+            ok: true,
+            status: 200,
+            text: async () => JSON.stringify({ enabled: false }),
+          } as unknown as Response;
+        }
+        if (url.includes("/api/v1/settings/memory")) {
+          return {
+            ok: true,
+            status: 200,
+            text: async () => JSON.stringify({ enabled: true }),
+          } as unknown as Response;
+        }
+        return {
+          status: 401,
+          ok: false,
+          text: async () =>
+            JSON.stringify({ error: { code: "UNAUTHORIZED", message: "no token" } }),
+        } as unknown as Response;
+      }),
+    );
+  });
+
+  afterEach(() => {
+    cleanup();
+    vi.unstubAllGlobals();
+  });
+
+  it("the tab is GENERAL now (?tab=advanced unchanged): h1 General, the Auto-retry card mounts ABOVE the Debug mode card with all three switches", async () => {
+    renderWithProviders(<SettingsPage />, { route: "/settings?tab=advanced" });
+
+    // The label rename — the h1 reads the TABS entry, the URL id is untouched.
+    expect(screen.getByRole("heading", { level: 1, name: "General" })).toBeTruthy();
+    expect(screen.queryByRole("heading", { level: 1, name: "Advanced" })).toBeNull();
+
+    // The card + its three switches (all default ON — the R75 ladder stands).
+    // Wait for a SWITCH (the loading branch shares the testid but has none).
+    await screen.findByRole("switch", { name: "Toggle auto-retry for rate limits (429)" });
+    const card = screen.getByTestId("retry-settings-card");
+    expect(card.getAttribute("aria-label")).toBe("Auto-retry");
+    for (const name of [
+      "Toggle auto-retry for rate limits (429)",
+      "Toggle auto-retry for timeouts",
+      "Toggle auto-retry for network errors",
+    ]) {
+      expect(screen.getByRole("switch", { name })).toBeTruthy();
+    }
+    // The per-switch testids (the browser-verification hooks).
+    expect(document.querySelector('[data-testid="retry-switch-autoRetryRateLimit"]')).toBeTruthy();
+    expect(document.querySelector('[data-testid="retry-switch-autoRetryTimeout"]')).toBeTruthy();
+    expect(document.querySelector('[data-testid="retry-switch-autoRetryNetwork"]')).toBeTruthy();
+
+    // ABOVE the Debug mode card (retry behavior is a general engine setting,
+    // not an advanced curiosity — the R78-C order).
+    const debugCard = (await screen.findByRole("switch", { name: "Toggle debug mode" }))
+      .closest("section") as HTMLElement;
+    expect(
+      (card.compareDocumentPosition(debugCard) & Node.DOCUMENT_POSITION_FOLLOWING) !== 0,
+    ).toBe(true);
+    // The honest help text teaches the ladder schedule + the fail-fast trade.
+    expect(screen.getByText(/When a switch is off, that failure type shows immediately/)).toBeTruthy();
+    expect(screen.getByText(/6 attempts: immediate, 1\.5 min, 5 min, 10 min, 30 min/)).toBeTruthy();
+  });
+
+  it("toggling a switch PUTs the PARTIAL patch ({autoRetryRateLimit:false}) and the switch flips OFF after the refetch — the other two stay untouched", async () => {
+    renderWithProviders(<SettingsPage />, { route: "/settings?tab=advanced" });
+    const rateLimit = (await screen.findByTestId("retry-switch-autoRetryRateLimit")) as HTMLElement;
+    expect(rateLimit.getAttribute("aria-checked")).toBe("true");
+
+    fireEvent.click(rateLimit);
+    await waitFor(() => expect(rateLimit.getAttribute("aria-checked")).toBe("false"));
+
+    // Exactly ONE partial PUT — the per-switch mutation (never the whole object).
+    expect(retryPuts).toEqual([{ autoRetryRateLimit: false }]);
+    // The siblings honestly stayed ON (the PUT carried nothing for them).
+    expect(screen.getByTestId("retry-switch-autoRetryTimeout").getAttribute("aria-checked")).toBe("true");
+    expect(screen.getByTestId("retry-switch-autoRetryNetwork").getAttribute("aria-checked")).toBe("true");
+  });
+
+  it("a FAILED PUT surfaces the honest error line and the switch stays ON (the server state never changed)", async () => {
+    const original = globalThis.fetch;
+    globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = typeof input === "string" ? input : input.toString();
+      if (url.includes("/api/v1/settings/retry") && (init?.method ?? "GET") === "PUT") {
+        return {
+          ok: false,
+          status: 500,
+          text: async () =>
+            JSON.stringify({ error: { code: "INTERNAL", message: "settings store exploded" } }),
+        } as unknown as Response;
+      }
+      return original(input, init);
+    }) as typeof fetch;
+
+    renderWithProviders(<SettingsPage />, { route: "/settings?tab=advanced" });
+    const timeout = (await screen.findByTestId("retry-switch-autoRetryTimeout")) as HTMLElement;
+    fireEvent.click(timeout);
+    expect(await screen.findByText(/settings store exploded/)).toBeTruthy();
+    expect(timeout.getAttribute("aria-checked")).toBe("true");
   });
 });

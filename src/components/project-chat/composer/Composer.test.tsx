@@ -75,6 +75,7 @@ import { AgentChatPanel } from "../AgentChatPanel";
 import { getFixtureProjects } from "../../../lib/project-fixtures";
 import { createFixtureSessions } from "../../../lib/session-fixtures";
 import {
+  dequeueSessionMessage,
   fetchProviderModelConfig,
   fetchProviders,
   fetchSessionContext,
@@ -82,6 +83,7 @@ import {
   ingestAttachmentPath,
   patchSessionPermissions,
   pickFilesViaBackend,
+  queueSessionMessage,
   readAttachmentFiles,
   streamSessionMessage,
   uploadAttachmentBytes,
@@ -242,6 +244,11 @@ vi.mock("../../../lib/api", async () => {
     patchSessionPermissions: vi.fn(async () => PATCHED_DETAIL),
     fetchSessionContext: vi.fn(async () => CONTEXT_REPORT),
     streamSessionMessage: vi.fn(async () => undefined),
+    // ROUND-78 (R78-D): the queue client pair — defaults resolve happy
+    // paths; the R78 tests program per-case (the NO_LIVE_TURN fallback
+    // lives in AgentChatPanel.test.tsx).
+    queueSessionMessage: vi.fn(async () => ({ ok: true, seq: 41 })),
+    dequeueSessionMessage: vi.fn(async () => undefined),
   };
 });
 
@@ -272,6 +279,9 @@ beforeEach(() => {
   vi.mocked(patchSessionPermissions).mockReset().mockResolvedValue(PATCHED_DETAIL);
   vi.mocked(fetchSessionContext).mockReset().mockResolvedValue(CONTEXT_REPORT);
   vi.mocked(streamSessionMessage).mockReset().mockResolvedValue(undefined);
+  // R78: the queue pair starts at the happy default each test.
+  vi.mocked(queueSessionMessage).mockReset().mockResolvedValue({ ok: true, seq: 41 });
+  vi.mocked(dequeueSessionMessage).mockReset().mockResolvedValue(undefined);
 });
 
 /** Render the panel with an EMPTY transcript (no project-bound sessions). */
@@ -435,26 +445,45 @@ describe("Composer: toolbar inside the box (owner spec B)", () => {
     expect(screen.queryByText(/^ctx$/)).toBeNull();
   });
 
-  it("ROUND-77 (R77, owner: left/right split): attach/access/mode live in the LEFT cluster, everything else in a NOWRAP RIGHT cluster that owns the send action", async () => {
+  it("ROUND-78 (R78-B, owner: \"Continue 按钮等选项有时位置异常\"): the ACTION GROUP is a NON-WRAPPING anchor OUTSIDE the wrapping area — pinned right by justify-between; the selectors wrap INSIDE the flex-1 area", async () => {
     await renderEmptyPanel();
     const toolbar = document.querySelector("[data-composer-toolbar]") as HTMLElement;
-    // The never-overlap fallback survives (R51-c) on the ROW; the clusters
-    // themselves never wrap internally (the send action can never separate
-    // from its right-side siblings — the R77 fix for the owner's "send
-    // message or stop message button was showing below the designated
-    // options").
-    expect(toolbar.className).toContain("flex-wrap");
-    expect(toolbar.className).not.toContain("justify-between");
+    // R78: the toolbar itself NO LONGER wraps — it is justify-between with
+    // TWO children (wrapping area + action anchor). items-end keeps the
+    // actions aligned to the toolbar's LAST line (the owner's drifting
+    // action-button fix).
+    expect(toolbar.className).toContain("justify-between");
+    expect(toolbar.className).toContain("items-end");
+    expect(toolbar.className).not.toContain("flex-wrap");
     const left = toolbar.querySelector("[data-composer-left]") as HTMLElement;
     const right = toolbar.querySelector("[data-composer-right]") as HTMLElement;
+    const actions = toolbar.querySelector("[data-composer-actions]") as HTMLElement;
     expect(left).toBeTruthy();
     expect(right).toBeTruthy();
-    // The right cluster is a nowrap group pinned right via ml-auto —
-    // exactly the two R77 layout guarantees.
-    expect(right.className).toContain("ml-auto");
-    expect(right.className).not.toContain("flex-wrap");
-    expect(right.className).toContain("shrink-0");
-    // R75's spacer is GONE (ml-auto replaced it).
+    expect(actions).toBeTruthy();
+    // The wrapping area: the LEFT cluster's flex-1 min-w-0 parent — wrap
+    // happens THERE (the R51-c never-overlap fallback lives inside the
+    // area, never on the action side).
+    const wrapArea = left.parentElement as HTMLElement;
+    expect(wrapArea).not.toBe(toolbar);
+    expect(wrapArea.className).toContain("flex-wrap");
+    expect(wrapArea.className).toContain("flex-1");
+    expect(wrapArea.className).toContain("min-w-0");
+    // THE ANCHOR: the action group is a SIBLING of the wrapping area (a
+    // DIRECT toolbar child, OUTSIDE the wrapping area — it can never wrap)
+    // and the LAST toolbar child (justify-between pins it right).
+    expect(actions.parentElement).toBe(toolbar);
+    expect(wrapArea.parentElement).toBe(toolbar);
+    const toolbarKids = Array.from(toolbar.children) as HTMLElement[];
+    expect(toolbarKids.indexOf(actions)).toBe(toolbarKids.length - 1);
+    expect(actions.className).toContain("shrink-0");
+    expect(actions.className).not.toContain("flex-wrap");
+    // The send button lives in THE ANCHOR (not the selectors row).
+    const send = screen.getByRole("button", { name: "Send message" }) as HTMLElement;
+    expect(actions.contains(send)).toBe(true);
+    expect(right.contains(send)).toBe(false);
+    // R75's spacer is GONE (ml-auto replaced it long ago; the anchor keeps
+    // it dead).
     const spacers = (Array.from(toolbar.children) as HTMLElement[]).filter(
       (c) => c.getAttribute("aria-hidden") === "true",
     );
@@ -474,21 +503,23 @@ describe("Composer: toolbar inside the box (owner spec B)", () => {
     expect(attach).toBeGreaterThanOrEqual(0);
     expect(attach).toBeLessThan(access);
     expect(access).toBeLessThan(mode);
-    // RIGHT cluster order: context donut, model, reasoning, send.
+    // SELECTORS order (the old right cluster, minus the action button):
+    // context donut, model, reasoning.
     const context = orderIn(right, "Context window usage");
     const model = orderIn(right, "Choose model");
     const thinking = orderIn(right, "Thinking level: Default");
-    const send = orderIn(right, "Send message");
     expect(context).toBeGreaterThanOrEqual(0);
     expect(context).toBeLessThan(model);
     expect(model).toBeLessThan(thinking);
-    expect(thinking).toBeLessThan(send);
     // Every control sits INSIDE one of the two clusters (no strays).
     expect(left.contains(screen.getByRole("button", { name: "Add context" }))).toBe(true);
-    expect(right.contains(screen.getByRole("button", { name: "Send message" }))).toBe(true);
-    // DOM order: the left cluster precedes the right cluster.
+    // DOM order: the left cluster precedes the right cluster (inside the
+    // wrapping area); the wrapping area precedes the action anchor.
     expect(
       left.compareDocumentPosition(right) & Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+    expect(
+      wrapArea.compareDocumentPosition(actions) & Node.DOCUMENT_POSITION_FOLLOWING,
     ).toBeTruthy();
   });
 
@@ -2014,6 +2045,8 @@ describe("Composer: Continue after a user stop (ROUND-58 R58-cf)", () => {
           lastLiveEndMs: Date.now(),
           lastTurnStoppedByUser: true,
           lastTurnStoppedTs: "2026-08-31T12:00:00Z",
+          queued: [],
+          deliveredQueued: [],
         },
       },
     });
@@ -2067,5 +2100,153 @@ describe("Composer: Continue after a user stop (ROUND-58 R58-cf)", () => {
     await waitFor(() => expect(screen.getByRole("button", { name: "Stop generation" })).toBeTruthy());
     expect(screen.queryByRole("button", { name: /Continue from where you left off/ })).toBeNull();
     await sendSettled();
+  });
+});
+
+// ── ROUND-78 (R78-B + R78-D): the ACTION ANCHOR + the queue-send button ─────
+// R78-B (owner: "Continue 按钮等选项有时位置异常" — the action buttons
+// occasionally render in a wrong position): while a turn runs, the action
+// group holds BOTH Stop AND the queue-send button, OUTSIDE the wrapping
+// area (a direct toolbar child pinned right by justify-between) — the
+// actions can never wrap, so their position is stable at every width.
+// R78-D (owner: "工作中发送消息（排队）" — send while the agent works): the
+// queue-send button routes to onQueue (runTurn's queue path →
+// POST /sessions/:id/queue), NOT the normal send; Enter does the same.
+describe("Composer: the action anchor + queue-send (ROUND-78 R78-B/R78-D)", () => {
+  /** Arm a LIVE stream on the session (streamBusy + an open liveTurn) — the
+   * panel's `busy` follows the store, so the busy composer renders without
+   * driving a real send. */
+  function armLiveStream(): void {
+    useStreamStore.setState({
+      bySession: {
+        [SESSION_ID]: {
+          liveTurn: {
+            startedAtMs: Date.now() - 3000,
+            working: [],
+            streamText: "working on it…",
+            streamThinking: "",
+            stopped: false,
+            stoppedByUser: false,
+            streamingToolInputs: [],
+            debugReport: null,
+            browserCheckpoint: null,
+            retry: null,
+            note: null,
+          },
+          streamBusy: true,
+          sendError: null,
+          liveError: null,
+          pendingEcho: null,
+          lastLiveEndMs: Date.now(),
+          lastTurnStoppedByUser: false,
+          lastTurnStoppedTs: null,
+          queued: [],
+          deliveredQueued: [],
+        },
+      },
+    });
+  }
+
+  /** Render the docked composer with the live stream armed (busy). */
+  async function renderBusyComposer(): Promise<void> {
+    await renderPanelWithConversation();
+    expect(await screen.findByText("first question", {}, { timeout: 5000 })).toBeTruthy();
+    armLiveStream();
+    await waitFor(() => expect(screen.getByRole("button", { name: "Stop generation" })).toBeTruthy());
+  }
+
+  it("while busy: Stop AND Queue-send coexist in THE ANCHOR — a direct toolbar child, outside the wrapping area", async () => {
+    await renderBusyComposer();
+
+    const stop = screen.getByRole("button", { name: "Stop generation" }) as HTMLElement;
+    const queue = screen.getByRole("button", { name: "Queue message" }) as HTMLElement;
+    const actions = document.querySelector("[data-composer-actions]") as HTMLElement;
+    const toolbar = document.querySelector("[data-composer-toolbar]") as HTMLElement;
+    expect(actions).toBeTruthy();
+    // BOTH action buttons live in the anchor group.
+    expect(actions.contains(stop)).toBe(true);
+    expect(actions.contains(queue)).toBe(true);
+    // The anchor is a DIRECT toolbar child (a sibling of the wrapping area —
+    // never inside it) and the LAST one (justify-between pins it right).
+    expect(actions.parentElement).toBe(toolbar);
+    const wrapArea = (document.querySelector("[data-composer-left]") as HTMLElement)
+      .parentElement as HTMLElement;
+    expect(wrapArea.parentElement).toBe(toolbar);
+    const kids = Array.from(toolbar.children) as HTMLElement[];
+    expect(kids.indexOf(actions)).toBe(kids.length - 1);
+    // The wrapping area (not the toolbar) carries the wrap fallback.
+    expect(wrapArea.className).toContain("flex-wrap");
+    expect(toolbar.className).not.toContain("flex-wrap");
+    // The busy composer shows NO Send button (Stop owns that state).
+    expect(screen.queryByRole("button", { name: "Send message" })).toBeNull();
+  });
+
+  it("the queue-send button is disabled while the input is empty, enabled with text (the title teaches the affordance)", async () => {
+    await renderBusyComposer();
+
+    const queue = screen.getByRole("button", { name: "Queue message" }) as HTMLButtonElement;
+    expect(queue.disabled).toBe(true);
+    expect(queue.getAttribute("title")).toBe(
+      "Queues right after the agent finishes the current step",
+    );
+
+    fireEvent.change(textarea(), { target: { value: "and also add tests" } });
+    await waitFor(() => expect(queue.disabled).toBe(false));
+  });
+
+  it("clicking Queue-send POSTs the QUEUE (not the send) and clears the composer", async () => {
+    await renderBusyComposer();
+
+    fireEvent.change(textarea(), { target: { value: "and also add tests" } });
+    fireEvent.click(screen.getByRole("button", { name: "Queue message" }));
+
+    await waitFor(() => expect(queueSessionMessage).toHaveBeenCalled());
+    // The queue POST carries the session + the typed content.
+    expect(vi.mocked(queueSessionMessage).mock.calls.at(-1)).toEqual([
+      SESSION_ID,
+      { content: "and also add tests" },
+    ]);
+    // The normal send NEVER fired — the in-flight stream is untouched.
+    expect(streamSessionMessage).not.toHaveBeenCalled();
+    // The composer text cleared exactly like a normal send.
+    await waitFor(() => expect(textarea().value).toBe(""));
+  });
+
+  it("Enter while busy routes to the QUEUE (the R78-D keyboard path)", async () => {
+    await renderBusyComposer();
+
+    fireEvent.change(textarea(), { target: { value: "follow-up while you work" } });
+    fireEvent.keyDown(textarea(), { key: "Enter" });
+
+    await waitFor(() => expect(queueSessionMessage).toHaveBeenCalled());
+    expect(vi.mocked(queueSessionMessage).mock.calls.at(-1)).toEqual([
+      SESSION_ID,
+      { content: "follow-up while you work" },
+    ]);
+    expect(streamSessionMessage).not.toHaveBeenCalled();
+    await waitFor(() => expect(textarea().value).toBe(""));
+  });
+
+  it("WITHOUT onQueue (fixture/demo mode): busy renders Stop ONLY — no queue button, Enter does nothing (the legacy behavior)", async () => {
+    // Fixture mode FROM THE START (flipping demoData mid-render swaps the
+    // data source and re-resolves the session — not what this pins). The
+    // mock's backend selectors are mode-independent, so the same fixture
+    // conversation renders; liveMode=false is the only difference.
+    useConfigStore.setState({ demoData: true });
+    await renderPanelWithConversation();
+    expect(await screen.findByText("first question", {}, { timeout: 5000 })).toBeTruthy();
+    armLiveStream();
+    await waitFor(() => expect(screen.getByRole("button", { name: "Stop generation" })).toBeTruthy());
+
+    // liveMode false → the panel passes NO onQueue → no queue-send button.
+    expect(screen.queryByRole("button", { name: "Queue message" })).toBeNull();
+
+    fireEvent.change(textarea(), { target: { value: "no queue in demo mode" } });
+    fireEvent.keyDown(textarea(), { key: "Enter" });
+    // Nothing fired — no queue POST, no send (the pre-R78 no-op stands).
+    expect(queueSessionMessage).not.toHaveBeenCalled();
+    expect(streamSessionMessage).not.toHaveBeenCalled();
+    // The text stays (the send was refused, not queued).
+    expect(textarea().value).toBe("no queue in demo mode");
   });
 });

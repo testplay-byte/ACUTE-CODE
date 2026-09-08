@@ -4,10 +4,13 @@ import { Link, useSearchParams } from "react-router";
 import {
   fetchDebugSettings,
   fetchMemorySettings,
+  fetchRetrySettings,
   updateDebugSettings,
   updateMemorySettings,
+  updateRetrySettings,
+  type RetrySettings,
 } from "../lib/api";
-import { ArrowLeft, Bot, Brain, Monitor, Moon, Palette, PlugZap, ScanEye, Server, SlidersHorizontal, Sparkles, Sun, Users } from "lucide-react";
+import { ArrowLeft, Bot, Brain, Monitor, Moon, Palette, PlugZap, RefreshCw, ScanEye, Server, SlidersHorizontal, Sparkles, Sun, Users } from "lucide-react";
 import { useThemeStore } from "../lib/theme-store";
 import { THEMES, getContrastText } from "../lib/themes";
 import { useThemeStyles } from "../lib/use-theme-styles";
@@ -44,7 +47,12 @@ const TABS = [
   // the vision model's OWN home (provider + model + API key), split out of
   // Computer Use so it also serves the general analyze_image tool.
   { id: "vision", label: "Image Analysis", icon: ScanEye },
-  { id: "advanced", label: "Advanced", icon: SlidersHorizontal },
+  // ROUND-78 (R78-C, owner: "General Settings 重试配置"): the tab is
+  // LABELED "General" now — the retry switches belong with the general
+  // engine settings, not a scary "Advanced" bin. The id/deep-link STAYS
+  // "advanced" (every existing ?tab=advanced link + doc keeps working;
+  // the URL contract is load-bearing — changing it would break deep links).
+  { id: "advanced", label: "General", icon: SlidersHorizontal },
 ] as const;
 
 type TabId = (typeof TABS)[number]["id"];
@@ -354,7 +362,7 @@ function SectionTitle({ children }: { children: React.ReactNode }) {
  * "api" tab (verified: zero imports anywhere in src/). Models & Providers
  * is the one provider surface now. */
 
-/* ── Advanced ─────────────────────────────────────────────
+/* ── Advanced (URL id) / General (R78 label) ─────────────────────
  * ROUND-58 (R58-d): the sub-agent cards NO LONGER render here (pre-R58 the
  * whole SubAgentsSection + the OrchestrationCard rendered on BOTH the
  * subagents tab AND here — the owner: "the subagent and advanced options are
@@ -365,33 +373,170 @@ function SectionTitle({ children }: { children: React.ReactNode }) {
  * URL / Bearer token / Demo data / Save connection) is REMOVED — the owner
  * called those irrelevant: the desktop app manages the sidecar itself
  * (ephemeral token injected by the Rust shell; the fields only ever made
- * sense in web dev mode). Advanced is now exactly: Debug mode + agent
- * memory. The config-store fields survive untouched (dev-mode wiring +
- * tests read them); only this UI is gone. */
+ * sense in web dev mode). The config-store fields survive untouched
+ * (dev-mode wiring + tests read them); only this UI is gone.
+ *
+ * ROUND-78 (R78-C, owner: "General Settings 重试配置"): the tab's LABEL is
+ * "General" now (the URL id stays "advanced" — every existing ?tab=advanced
+ * deep link + doc keeps working; the URL contract is load-bearing) and it
+ * gained the Auto-retry card (per-failure-type retry switches) ABOVE the
+ * debug switch — retry behavior is a general engine setting, not an
+ * advanced curiosity. The tab is now: Auto-retry + Debug mode + agent
+ * memory. */
 
 function AdvancedTab() {
   const styles = useThemeStyles();
 
   return (
     <div className="mx-auto flex max-w-2xl flex-col gap-4">
-      {/* ROUND-65 (R65): short section header — the page is now exactly the
-          debug switch + the memory master switch, with a pointer to the
+      {/* R78: short section header — the tab is now the general engine
+          settings (auto-retry + debug + memory), with a pointer to the
           Sub-agents page that owns the rest. */}
       <div className="pb-1">
         <h2 className="text-[16px] font-black" style={{ color: styles.text }}>
-          Advanced
+          General
         </h2>
         <p className="mt-1 text-[12px]" style={{ color: styles.textSecondary }}>
-          Debug mode + agent memory. Sub-agent keys, model, parallelism, and supervision live on the{" "}
+          Auto-retry, debug mode, and agent memory. Sub-agent keys, model, parallelism, and supervision live on the{" "}
           <Link to="/settings?tab=subagents" className="font-bold underline" style={{ color: styles.accent }}>
             Sub-agents
           </Link>{" "}
           page.
         </p>
       </div>
+      <RetryConfigCard />
       <DebugModeCard />
       <MemoryCard />
     </div>
+  );
+}
+
+/* ── ROUND-78 (R78-C): the Auto-retry card — per-failure-type gates for the
+ * transient-API retry ladder (the R75 six-attempt schedule: immediate,
+ * 1.5 min, 5 min, 10 min, 30 min). The DebugModeCard pattern exactly: a
+ * shared ["retry-settings"] query key, one mutation per switch, an honest
+ * error line, a loading state. When a switch is OFF that failure class
+ * never ladders — it fails fast through the honest terminal path with the
+ * provider's REAL error text, which is the whole point of the R78
+ * honest-errors round. */
+
+/** The three switches: settings key + row label + one-line description. */
+const RETRY_SWITCHES: ReadonlyArray<{
+  key: keyof RetrySettings;
+  label: string;
+  description: string;
+}> = [
+  {
+    key: "autoRetryRateLimit",
+    label: "Rate limits (429)",
+    description: "429 responses from the provider.",
+  },
+  {
+    key: "autoRetryTimeout",
+    label: "Timeouts",
+    description: "Requests that exceed the provider call timeout.",
+  },
+  {
+    key: "autoRetryNetwork",
+    label: "Network errors",
+    description: "Connection resets, DNS failures, dropped streams.",
+  },
+];
+
+function RetryConfigCard() {
+  const styles = useThemeStyles();
+  const queryClient = useQueryClient();
+  const settingsQuery = useQuery({
+    queryKey: ["retry-settings"],
+    queryFn: fetchRetrySettings,
+  });
+  const [error, setError] = useState<string | null>(null);
+
+  const toggle = useMutation({
+    mutationFn: (patch: Partial<RetrySettings>) => updateRetrySettings(patch),
+    onSuccess: () => {
+      setError(null);
+      // The engine reads these settings at TURN start — a flip applies to
+      // the next message (the same per-turn semantics as debug mode); only
+      // the switch state itself refetches here.
+      void queryClient.invalidateQueries({ queryKey: ["retry-settings"] });
+    },
+    onError: (err: Error) => setError(err.message),
+  });
+
+  const current = settingsQuery.data;
+  if (settingsQuery.isLoading || current === undefined) {
+    return (
+      <section
+        data-testid="retry-settings-card"
+        className="rounded-lg p-4"
+        style={{ background: styles.card, border: bdr("1.5px", styles.border) }}
+      >
+        <span className="text-[12px] font-mono" style={{ color: styles.textTertiary }}>
+          loading retry settings…
+        </span>
+      </section>
+    );
+  }
+
+  const busy = toggle.isPending;
+
+  return (
+    <section
+      data-testid="retry-settings-card"
+      className="rounded-lg p-4"
+      style={{ background: styles.card, border: bdr("1.5px", styles.border) }}
+      aria-label="Auto-retry"
+    >
+      <div className="mb-3 flex items-center gap-2">
+        <RefreshCw size={13} style={{ color: styles.accent, opacity: 0.7 }} />
+        <span className="text-[12px] font-semibold" style={{ color: styles.text }}>
+          Auto-retry
+        </span>
+      </div>
+      <div className="flex flex-col gap-3">
+        {RETRY_SWITCHES.map(({ key, label, description }) => (
+          <div key={key} className="flex items-start gap-3">
+            <div className="min-w-[200px] flex-1">
+              <div className="text-[12.5px] font-bold" style={{ color: styles.text }}>
+                {label}
+              </div>
+              <div className="text-[11px]" style={{ color: styles.textTertiary }}>
+                {description}
+              </div>
+            </div>
+            <button
+              type="button"
+              role="switch"
+              aria-checked={current[key]}
+              aria-label={`Toggle auto-retry for ${label.toLowerCase()}`}
+              data-testid={`retry-switch-${key}`}
+              disabled={busy}
+              onClick={() => toggle.mutate({ [key]: !current[key] })}
+              className="relative h-6 w-11 shrink-0 cursor-pointer rounded-full transition-colors disabled:cursor-wait disabled:opacity-60"
+              style={{
+                background: current[key] ? styles.accent : withAlpha(styles.text, 0.18),
+                border: bdr("1.5px", current[key] ? styles.accent : styles.border),
+              }}
+            >
+              <span
+                className="absolute top-1/2 block h-4.5 w-4.5 -translate-y-1/2 rounded-full bg-white shadow transition-all"
+                style={{ left: current[key] ? "calc(100% - 21px)" : "3px", height: 18, width: 18 }}
+              />
+            </button>
+          </div>
+        ))}
+      </div>
+      {error ? (
+        <div className="mt-2 text-[11px]" style={{ color: "#e5484d" }} role="alert">
+          {error}
+        </div>
+      ) : null}
+      <div className="mt-3 text-[11px] leading-relaxed" style={{ color: styles.textTertiary }}>
+        When a switch is off, that failure type shows immediately with the provider&apos;s real error text instead of
+        auto-retrying (6 attempts: immediate, 1.5 min, 5 min, 10 min, 30 min).
+      </div>
+    </section>
   );
 }
 

@@ -25,6 +25,27 @@
  * fails due to timeout or rate limit, retry; other failures do not
  * auto-retry"), everything else (auth, context_window_exceeded, unknown)
  * fails fast with the honest error card.
+ *
+ * ROUND-78 (R78, owner: "the UI shows 'rate-limited' no matter the real
+ * cause… every other failure must show the API's ACTUAL returned error
+ * text"): HONEST CLASSIFICATION. Two live-probed lies drove this rework:
+ *  (1) The AI SDK v7 delivers exhausted internal retries as a RetryError
+ *      wrapper ({name:"AI_RetryError", lastError, errors}) — the old
+ *      classifier read the FLATTENED wrapper text, extractStatus saw NO
+ *      statusCode at all, so a real 429 classified only by message-pattern
+ *      luck. classifyProviderError now classifies the UNWRAPPED error
+ *      (unwrapRetryError below) while keeping the wrapper message as
+ *      fallback text; extractStatus additionally walks lastError/errors.
+ *  (2) A 403 whose body says "This model is not available in your region"
+ *      classified as auth ("the provider rejected the API key") — a lie
+ *      that sent the owner hunting for a key problem. 403 stays auth ONLY
+ *      when the real message does not clearly say otherwise (the
+ *      REGION_OR_ACCESS patterns below); 401 remains status-only auth
+ *      (cline's rule — quoted words in a provider body must not steal it).
+ *  (3) userMessage is now the REAL provider text (the unwrapped error's
+ *      message, scrubbed of API-key-shaped strings, ~240 chars) — the
+ *      generic class one-liners demote to the fallback when the real text
+ *      is empty. The class chip (UI) keeps carrying the class NAME.
  */
 
 /** The six provider-failure classes (R71-d design: A6). */
@@ -44,7 +65,9 @@ export interface ProviderErrorClassification {
 }
 
 /** Auth statuses — BY STATUS ONLY (cline's rule: matching message text for
- * 401/403 would misfire on provider bodies that merely quote such words). */
+ * 401/403 would misfire on provider bodies that merely quote such words).
+ * ROUND-78 (R78): 401 keeps the status-only rule; 403 gained the refinement
+ * below (a region/moderation/availability 403 is NOT an auth failure). */
 const AUTH_STATUSES = new Set([401, 403]);
 /** Rate-limit status. */
 const RATE_LIMIT_STATUSES = new Set([429]);
@@ -85,13 +108,77 @@ const NETWORK_PATTERNS: readonly RegExp[] = [
   /\b(?:internal server error|service unavailable|bad gateway|server error)\b/i,
 ];
 
+/** ROUND-78 (R78): message shapes that mean a 403 is about REGION / ACCESS /
+ * AVAILABILITY, not the API key. Checked against the REAL (unwrapped)
+ * message BEFORE the 403 → auth mapping — a hit reclassifies to `unknown`
+ * (fail-fast: no retry ladder can heal a region block, a moderation gate,
+ * or a model the account cannot access) with the real text as the
+ * userMessage. The live probe that motivated this: OpenRouter's paid-model
+ * 403 "This model is not available in your region." classified as auth —
+ * the owner was sent hunting for a key problem that did not exist. */
+const REGION_OR_ACCESS_PATTERNS: readonly RegExp[] = [
+  /not available in your region/i,
+  /\bregion\b/i,
+  /\bmoderation\b/i,
+  /\bpermission\b/i,
+  /not available/i,
+  /\bunavailable\b/i,
+  /\bblocked\b/i,
+];
+
+/* ── ROUND-78 (R78): the RetryError unwrap ─────────────────────────────────
+ *
+ * The AI SDK v7 wraps its own internal retries: when streamText/generateText
+ * exhausts maxRetries it throws a RetryError whose `name` is "AI_RetryError",
+ * carrying the FINAL underlying provider error under `lastError` (and every
+ * attempt under `errors`). Its own `message` is the flattened
+ * "Failed after N attempts. Last error: …" — text that carries no statusCode
+ * and buries the real cause. The classifier (and providerErrorDetail) want
+ * the UNDERLYING error; the wrapper message survives only as fallback text
+ * when the underlying error has none. */
+
+/** True when the value looks like the AI SDK v7 RetryError wrapper. */
+function isRetryError(value: unknown): value is Record<string, unknown> {
+  return (
+    typeof value === "object" &&
+    value !== null &&
+    (value as { name?: unknown }).name === "AI_RetryError"
+  );
+}
+
+/**
+ * ROUND-78 (R78): unwrap the AI SDK v7 RetryError — return its `lastError`
+ * when present (falling back to the last element of its `errors` array);
+ * any other value returns unchanged. Never throws, never recurses (one
+ * level of unwrap — the SDK never nests RetryErrors; a nested provider
+ * error still classifies through the bounded status walk below).
+ */
+export function unwrapRetryError(error: unknown): unknown {
+  try {
+    if (!isRetryError(error)) return error;
+    const record = error as Record<string, unknown>;
+    if (record.lastError !== undefined && record.lastError !== null) return record.lastError;
+    if (Array.isArray(record.errors) && record.errors.length > 0) {
+      return record.errors[record.errors.length - 1];
+    }
+    return error;
+  } catch {
+    /* unreachable-object guard — return the input unchanged */
+    return error;
+  }
+}
+
 /** Extract a numeric HTTP status from a provider error object. The AI SDK
  * throws APICallError {statusCode}; wrapped/normalized errors carry it under
- * status/data — a shallow bounded walk (never a throw) covers the rest. */
+ * status/data — a shallow bounded walk (never a throw) covers the rest.
+ * ROUND-78 (R78): the walk additionally descends into a RetryError's
+ * `lastError` and `errors` (same depth ≤ 4 budget, same cycle guard) so a
+ * wrapper's underlying APICallError statusCode is found — previously a
+ * RetryError carried NO extractable status at all. */
 function extractStatus(error: unknown): number | null {
   const seen = new Set<unknown>();
   const walk = (value: unknown, depth: number): number | null => {
-    if (value === null || typeof value !== "object" || depth > 3) return null;
+    if (value === null || typeof value !== "object" || depth > 4) return null;
     if (seen.has(value)) return null;
     seen.add(value);
     try {
@@ -100,7 +187,17 @@ function extractStatus(error: unknown): number | null {
         const raw = record[key];
         if (typeof raw === "number" && Number.isInteger(raw) && raw > 0) return raw;
       }
-      for (const child of [record.data, record.cause, record.error, record.response]) {
+      // R78: RetryError fields join the walk — `lastError` (the final
+      // underlying error) and the tail of `errors` (most recent first is
+      // what we care about, but the walk is order-agnostic and bounded).
+      for (const child of [
+        record.lastError,
+        ...(Array.isArray(record.errors) ? record.errors.slice(-1) : []),
+        record.data,
+        record.cause,
+        record.error,
+        record.response,
+      ]) {
         const found = walk(child, depth + 1);
         if (found !== null) return found;
       }
@@ -112,14 +209,10 @@ function extractStatus(error: unknown): number | null {
   return walk(error, 0);
 }
 
-/** Was the error an abort/timeout (AbortSignal.timeout, a user stop that
- * reached the SDK, a provider-side timeout)? */
-function isAbortLike(error: unknown, message: string): boolean {
-  const name = error instanceof Error ? error.name : "";
-  return name === "TimeoutError" || name === "AbortError" || /\b(?:timed?\s?out|timeout)\b/i.test(message);
-}
-
-const CLASS_MESSAGES: Record<ProviderErrorClass, string> = {
+/** ROUND-78 (R78): exported so tests can pin the FALLBACK lines — the
+ * real-text userMessage demotes these to the empty-message fallback (the
+ * class chip still carries the class name). */
+export const CLASS_MESSAGES: Record<ProviderErrorClass, string> = {
   context_window_exceeded: "context window exceeded — the request is larger than the model's context window",
   auth: "authentication failed — the provider rejected the API key",
   rate_limit: "rate limited — the provider is throttling requests",
@@ -128,41 +221,107 @@ const CLASS_MESSAGES: Record<ProviderErrorClass, string> = {
   unknown: "unclassified provider error",
 };
 
-/** Classify a provider/stream error (R71-e2 D4). Pure; never throws. */
+/** Cap for the real-text userMessage (R78) — long provider payloads stay
+ * readable on one card; the full text still rides providerErrorDetail. */
+const USER_MESSAGE_MAX_CHARS = 240;
+
+/** ROUND-78 (R78): the honest one-liner for a class — the REAL provider
+ * text (message-shaped, whitespace-trimmed) truncated to 240 chars with an
+ * ellipsis; the generic class line only when the real text is empty or not
+ * message-shaped (non-Error objects stringify through String()). The
+ * classifier never knows the API key, so the key-scrub happens at the
+ * PERSISTENCE boundary (runtime's providerErrorDetail) — the envelope's
+ * userMessage rides alongside the already-scrubbed providerError field. */
+function honestUserMessage(realText: string, fallbackClass: ProviderErrorClass): string {
+  const trimmed = realText.trim();
+  if (trimmed === "") return CLASS_MESSAGES[fallbackClass];
+  return trimmed.length > USER_MESSAGE_MAX_CHARS
+    ? `${trimmed.slice(0, USER_MESSAGE_MAX_CHARS)}…`
+    : trimmed;
+}
+
+/** ROUND-78 (R78): extract displayable text from the (unwrapped) error —
+ * Error.message when present; String() otherwise; the WRAPPER's message
+ * when the underlying error says NOTHING of its own (an empty message is no
+ * message — the "Failed after N attempts" line is real evidence too, better
+ * than a generic class line). */
+function realMessageText(unwrapped: unknown, wrapperMessage: string): string {
+  let own = "";
+  if (unwrapped instanceof Error) {
+    own = typeof unwrapped.message === "string" ? unwrapped.message : "";
+  } else if (typeof unwrapped === "object" && unwrapped !== null) {
+    const raw = (unwrapped as { message?: unknown }).message;
+    own = typeof raw === "string" ? raw : "";
+  } else if (unwrapped !== undefined && unwrapped !== null) {
+    own = String(unwrapped);
+  }
+  return own !== "" ? own : wrapperMessage;
+}
+
+/** Classify a provider/stream error (R71-e2 D4). Pure; never throws.
+ * ROUND-78 (R78): classifies the UNWRAPPED error (RetryError → its
+ * lastError) — status, name, and message patterns all read the REAL
+ * underlying failure; the wrapper's flattened message survives only as
+ * userMessage fallback text when the underlying error says nothing. */
 export function classifyProviderError(error: unknown): ProviderErrorClassification {
-  const message = error instanceof Error ? error.message : String(error);
-  const status = extractStatus(error);
+  const wrapperMessage = error instanceof Error ? error.message : "";
+  const unwrapped = unwrapRetryError(error);
+  const message = realMessageText(unwrapped, wrapperMessage);
+  const status = extractStatus(unwrapped);
+  // The real error's own name ("TimeoutError" on the underlying abort, not
+  // "AI_RetryError" on the wrapper) — the unwrap is what makes this read.
+  const errorName = unwrapped instanceof Error ? unwrapped.name : "";
   // 1. Abort/timeout shapes first — TimeoutError/AbortError are unambiguous,
   // and no later pattern should steal them.
-  if (isAbortLike(error, message)) {
-    return { class: "timeout", userMessage: CLASS_MESSAGES.timeout };
+  if (
+    errorName === "TimeoutError" ||
+    errorName === "AbortError" ||
+    /\b(?:timed?\s?out|timeout)\b/i.test(message)
+  ) {
+    return { class: "timeout", userMessage: honestUserMessage(message, "timeout") };
   }
   // 2. Status-only classes.
   if (status !== null && AUTH_STATUSES.has(status)) {
-    return { class: "auth", userMessage: CLASS_MESSAGES.auth };
+    // R78 403 refinement: region / moderation / permission / availability
+    // wording means the failure is NOT about the API key. Reclassify to
+    // `unknown` (fail-fast — no ladder) with the REAL text as the line.
+    // 401 keeps the status-only rule (a key rejection says so by status).
+    if (status === 403 && REGION_OR_ACCESS_PATTERNS.some((re) => re.test(message))) {
+      return { class: "unknown", userMessage: honestUserMessage(message, "unknown") };
+    }
+    return { class: "auth", userMessage: honestUserMessage(message, "auth") };
   }
   if (status !== null && RATE_LIMIT_STATUSES.has(status)) {
-    return { class: "rate_limit", userMessage: CLASS_MESSAGES.rate_limit };
+    return { class: "rate_limit", userMessage: honestUserMessage(message, "rate_limit") };
   }
   // 3. Rate-limit patterns (the deliberate VETO before overflow matching).
   if (RATE_LIMIT_PATTERNS.some((re) => re.test(message))) {
-    return { class: "rate_limit", userMessage: CLASS_MESSAGES.rate_limit };
+    return { class: "rate_limit", userMessage: honestUserMessage(message, "rate_limit") };
   }
   // 4. Context-window overflow (message patterns or the 413 payload-too-large
   //    status — a bare 400/422 is deliberately not overflow-classified).
   if (CONTEXT_WINDOW_PATTERNS.some((re) => re.test(message)) || (status !== null && CONTEXT_OVERFLOW_STATUSES.has(status))) {
-    return { class: "context_window_exceeded", userMessage: CLASS_MESSAGES.context_window_exceeded };
+    return { class: "context_window_exceeded", userMessage: honestUserMessage(message, "context_window_exceeded") };
   }
   // 5. Network/transport (patterns or any 5xx).
   if (NETWORK_PATTERNS.some((re) => re.test(message)) || (status !== null && status >= 500)) {
-    return { class: "network", userMessage: CLASS_MESSAGES.network };
+    return { class: "network", userMessage: honestUserMessage(message, "network") };
   }
-  return { class: "unknown", userMessage: CLASS_MESSAGES.unknown };
+  return { class: "unknown", userMessage: honestUserMessage(message, "unknown") };
 }
 
-/** Error text for a 502 envelope — scrubbed of the API key, then length-capped. */
+/** Error text for a 502 envelope — scrubbed of the API key, then length-capped.
+ * ROUND-78 (R78): unwraps the RetryError FIRST — the envelope must carry the
+ * real underlying body ("Rate limit exceeded: free-models-per-day…"), not
+ * the wrapper's "Failed after N attempts. Last error: …" burial. */
 export function providerErrorDetail(error: unknown, apiKey: string): string {
-  const raw = error instanceof Error ? error.message : String(error);
+  const unwrapped = unwrapRetryError(error);
+  // Same fallback ladder as classifyProviderError: the underlying error's
+  // message, else the wrapper's own message (real evidence), else String().
+  let raw = realMessageText(unwrapped, error instanceof Error ? error.message : "");
+  if (raw === "") {
+    raw = error instanceof Error ? error.message : String(error);
+  }
   const scrubbed = raw.split(apiKey).join("***");
   return scrubbed.length > 500 ? `${scrubbed.slice(0, 500)}…` : scrubbed;
 }

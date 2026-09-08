@@ -224,3 +224,64 @@ export function setDebugSettings(db: SqliteDatabase, patch: Partial<DebugSetting
   }
   return getDebugSettings(db);
 }
+
+// ── ROUND-78 (R78, owner: "General Settings 重试配置" — a retry-config
+//    section) — the per-class AUTO-RETRY switches ─────────────────────────────
+//
+// The R75 transient-API retry ladder auto-retries rate_limit / network /
+// timeout failures (up to six attempts across 30 minutes). These three
+// switches let the owner turn each class OFF — a disabled class FAILS FAST
+// through the honest terminal path (attempts:1, the provider's real error
+// text) instead of waiting out the ladder. Defaults: all ON (the R75
+// behavior — the owner's original "retry timeouts and rate limits" spec;
+// turning them off is the new opt-out).
+//
+//   retry.autoRetryRateLimit — 429 / quota storms wait out the ladder (default true)
+//   retry.autoRetryTimeout   — provider timeouts wait out the ladder (default true)
+//   retry.autoRetryNetwork   — 5xx / transport blips wait out the ladder (default true)
+
+export interface RetrySettings {
+  autoRetryRateLimit: boolean;
+  autoRetryTimeout: boolean;
+  autoRetryNetwork: boolean;
+}
+
+export const RETRY_DEFAULTS: RetrySettings = {
+  autoRetryRateLimit: true,
+  autoRetryTimeout: true,
+  autoRetryNetwork: true,
+};
+
+const AUTO_RETRY_RATE_LIMIT_KEY = "retry.autoRetryRateLimit";
+const AUTO_RETRY_TIMEOUT_KEY = "retry.autoRetryTimeout";
+const AUTO_RETRY_NETWORK_KEY = "retry.autoRetryNetwork";
+
+export function getRetrySettings(db: SqliteDatabase): RetrySettings {
+  return {
+    autoRetryRateLimit: readBoolean(db, AUTO_RETRY_RATE_LIMIT_KEY, RETRY_DEFAULTS.autoRetryRateLimit),
+    autoRetryTimeout: readBoolean(db, AUTO_RETRY_TIMEOUT_KEY, RETRY_DEFAULTS.autoRetryTimeout),
+    autoRetryNetwork: readBoolean(db, AUTO_RETRY_NETWORK_KEY, RETRY_DEFAULTS.autoRetryNetwork),
+  };
+}
+
+/** Partial patch (the setDebugSettings pattern): only provided keys write;
+ * non-boolean values throw — the route maps that to a 400 VALIDATION. */
+export function setRetrySettings(db: SqliteDatabase, patch: Partial<RetrySettings>): RetrySettings {
+  const upsert = db.prepare(
+    "INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+  );
+  const fields: Array<[keyof RetrySettings, string]> = [
+    ["autoRetryRateLimit", AUTO_RETRY_RATE_LIMIT_KEY],
+    ["autoRetryTimeout", AUTO_RETRY_TIMEOUT_KEY],
+    ["autoRetryNetwork", AUTO_RETRY_NETWORK_KEY],
+  ];
+  for (const [field, key] of fields) {
+    const value = patch[field];
+    if (value === undefined) continue;
+    if (typeof value !== "boolean") {
+      throw new Error(`${field} must be a boolean`);
+    }
+    upsert.run(key, String(value));
+  }
+  return getRetrySettings(db);
+}

@@ -11,13 +11,80 @@ version number is single-sourced from the root `package.json`
 
 ## [Unreleased]
 
-Planned next: the R77 queue — delegate_task task_id/background/resume
+Planned next: the R79 queue — delegate_task task_id/background/resume
 (deferred from R73 by design — the orchestrator deserved its own round),
 external plugin ctx enrichment (cline's appendContext seam), the
 lessons-ledger affordance as the reminder injector's third consumer,
 ratings-driven prompt tuning, the optional v0.68.0 backfill tag, and the
 standing items (edit-linting — SWE-agent's ACI #1 finding, installer
 code-signing, the Files-tab polish, agent web-app-testing tools).
+
+## [0.77.0] - 2026-09-08
+
+### Added
+- **Send messages while the agent is working — they queue** (owner spec,
+  verbatim): while the agent is responding or running tools the composer
+  stays interactive; a send (button or Enter) POSTs to the session's queue
+  and renders as an amber chip ("Queued — sends after the current step") in
+  the live area. The message is auto-delivered right after the current tool
+  call — the agent reads it with the full context of the work it just did
+  and continues, never interrupting the in-flight flow. When the turn ends
+  with messages still waiting, the SAME stream continues with the next
+  queued message (a full new turn, capped at 25 continuations). Each chip
+  can be removed (X) or sent immediately ("Send now" when idle); a Stop
+  leaves queued messages queued. A crash or restart never loses them: they
+  deliver, in order, before the next send.
+- **A retry-config section in Settings → General** (owner spec, verbatim):
+  three switches — auto-retry rate limits (429), auto-retry timeouts,
+  auto-retry network errors. A switched-off failure class fails fast with
+  the provider's real error text instead of waiting out the ladder (the
+  schedule is unchanged for the classes left on: 6 attempts — immediate,
+  1.5 min, 5 min, 10 min, 30 min; all on by default).
+- **The retry status card now shows the API's actual error text**: under the
+  class chip, the provider's real words (monospace, up to 3 lines; a
+  "Show full error" toggle expands the complete text for long payloads) —
+  the same honesty the terminal error card gained in 0.76.0, now live
+  during the wait.
+
+### Fixed
+- **The retry ladder no longer misreports the failure** (owner spec,
+  verbatim — "no matter the real cause, the UI always shows
+  'rate-limited'"): the SDK's retry wrapper hid the real status code, so
+  classification rode message-pattern luck, and several non-rate-limit
+  failures were labeled with generic or wrong lines. The chain now unwraps
+  the real error first — only a REAL rate limit ladders and shows as one;
+  a bad model, a quota-blocked free model, and a region block all fail
+  fast with the API's actual returned text.
+- **A 403 region block no longer claims "authentication failed"**: a 403
+  whose body says region / moderation / permission / unavailable is a
+  fail-fast error carrying the provider's own words, not a key rejection
+  (plain 403 and 401 still report auth).
+- **The composer's bottom buttons never render in the wrong position**
+  (owner spec, verbatim): the Continue / Send / Stop / queue-send group is
+  now a never-wrapping anchor pinned to the bottom-right of the toolbar —
+  a DOM sibling of the wrapping area, not inside it — so the action button
+  cannot jump lines or drift when space runs out; the selector pills wrap
+  as a unit instead.
+
+### Changed
+- The Settings tab labeled "Advanced" is now labeled **"General"** (the URL
+  and deep-links keep the `advanced` id — old links still work). The
+  Auto-retry, Debug mode, and agent-memory settings live there.
+
+### Verified
+- Live battery (12/12 stages) against a dedicated sidecar + a local
+  OpenRouter-compatible mock provider that records request bodies as the
+  model-facing oracle: the honest bad-model error, a REAL account-wide 429
+  ladder carrying the real "Rate limit exceeded: free-models-per-day" text,
+  queue-during-the-ladder-wait delivered at the rung boundary, the
+  retry-gate fail-fast, mid-turn delivery (the queued text + the completed
+  tool result in the next prompt), the same-stream continuation, the
+  crash-recovery pre-flip, and the route honesty (409 NO_LIVE_TURN,
+  dequeue, 404s). Browser-verified end-to-end against the real dev stack:
+  the real 429 storm renders the honest card (attempts 2–5 observed), the
+  queue chips deliver live, Stop mid-ladder stays retryable, the settings
+  toggle persists server-side, and the composer anchor is stable at
+  386/480/560/641/900 px.
 
 ## [0.76.0] - 2026-09-07
 

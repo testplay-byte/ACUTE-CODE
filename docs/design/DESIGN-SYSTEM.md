@@ -1,4 +1,4 @@
-<!-- last-reviewed: 2026-09-07 round-77 -->
+<!-- last-reviewed: 2026-09-08 round-78 -->
 # ACUTE-CODE Design System
 
 **Why this document exists (owner direction, round-16/2026-08-23):** "the UI
@@ -76,28 +76,53 @@ a slot here.
   transient-API retry wait shows the amber `RetryStatusCard` (role=status,
   attempt N/6, class chip, live countdown — R75; redesigned R77: circular
   spinner chip, attempt dot-ladder with the pulsing current dot, a
-  countdown fill-bar driven by `waitMs`, reassurance line with info icon)
+  countdown fill-bar driven by `waitMs`, reassurance line with info icon;
+  R78: under the class chip the provider's REAL error text — mono,
+  break-words, 3-line clamp (`data-retry-provider-error`), over 240 chars →
+  excerpt + "Show full error" toggle expanding the complete scrubbed text
+  in a scrollable mono block (the R77 TurnErrorCard treatment; the class
+  chip is the one-glance summary, the API's words are the evidence — never
+  paraphrase the provider into the class line))
   above the work, cleared by the first content frame; terminal errors show
   `TurnErrorCard` (role=alert) with the error-class chip + "after N
   attempts" (R75) and the R77 full-error toggle — reasons over 240 chars
   collapse to an excerpt with "Show full error" expanding the COMPLETE raw
   provider text in a scrollable mono block.
-- **Composer (R50 box, R75 one-row, R77 left/right split)**: one
+- **Queued-message chip (R78)**: while the agent works, a send POSTs to
+  the session queue and renders as an amber chip in the live area under
+  the Working section (`data-testid="queued-chip"`, `Clock` glyph,
+  2-line-clamped content, queue-time ts, title "Queued — sends after the
+  current step"). States: **queued** (X-remove `data-queued-remove`;
+  "Send now" `data-queued-send-now` only when idle) → **delivered** (the
+  `queued.delivered` frame swaps the chip for an ordinary user bubble;
+  after stream end the folded `message.queued` rows own the chips). A
+  Stop or crash leaves chips queued — they persist in the event log and
+  deliver in order before the next send. While the stream is open the
+  LIVE chip owns the render (a mid-stream refetch shows exactly one chip,
+  never zero).
+- **Composer (R50 box, R75 one-row, R77 left/right split, R78 action anchor)**: one
   rounded-[18px] box (bg token, accent border + glow on focus) =
   auto-growing textarea on top (grows to exactly 5 visible lines via
   `useLayoutEffect` keyed on `input` — `flex-1` removed, the height style
   governs, maxHeight synced — then scrolls internally), attachment chip
-  row when any, then ONE toolbar row inside the box split into TWO
-  clusters (R77, owner: "the mode selection, the access level selection,
-  and the upload file buttons… left side… all the other options… right
-  side"): LEFT = attach + access + task mode; RIGHT = context donut +
-  model (leads with a `Cpu` icon — R77, icon-only below the container
-  floor) + reasoning + Continue/Send as a single NOWRAP group
-  (`ml-auto shrink-0`) so the action button can never wrap away from its
-  siblings — when the row is too tight the WHOLE right cluster wraps as
-  one unit; the box is a CSS `@container` and the selector pills' text
-  labels hide below 560px (icon-only; tooltips carry them) so the row
-  fits at the 480px chat floor.
+  row when any, then ONE toolbar row inside the box built as a **wrapping
+  area + a never-wrapping action anchor** (R78, owner: "the chat bottom
+  buttons occasionally render in wrong positions"): the toolbar
+  (`flex items-end justify-between`) has exactly TWO siblings — (1) the
+  WRAP area (`flex-1 min-w-0 flex-wrap items-center gap-1`) holding the
+  LEFT cluster (`data-composer-left`: attach + access + task mode — the
+  owner's R77 left-side trio) and the selector group
+  (`data-composer-right`: context donut + model (leads with a `Cpu` icon,
+  icon-only below the container floor) + thinking, `ml-auto shrink-0` —
+  when the row is too tight the selectors wrap as a unit under the left
+  cluster, right-aligned on their line); (2) **THE ANCHOR**
+  (`data-composer-actions`, `shrink-0`, a DOM sibling NEVER inside the
+  wrap area) holding Continue / Send / Stop + the queue-send button
+  (accent ArrowUp + ListPlus, beside Stop while busy — R78), pinned
+  bottom-right by `justify-between` — the action button can never wrap,
+  jump lines, or drift at any width. The box is a CSS `@container` and
+  the selector pills' text labels hide below 560px (icon-only; tooltips
+  carry them) so the row fits at the 480px chat floor.
 - **Reverted message flow (R77)**: the user-bubble hover "Revert to this
   message" rewinds to BEFORE the message — the message + its reply are
   deleted from the log (backend `seq >=` truncation) and the message's

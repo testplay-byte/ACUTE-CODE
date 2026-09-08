@@ -13,6 +13,7 @@ import type {
   MessageAttachment,
   PermissionMode,
   RunMode,
+  SessionStatus,
   ThinkingLevel,
 } from "shared";
 import { PERMISSION_MODES, THINKING_LEVELS } from "shared";
@@ -58,15 +59,19 @@ import {
   projectRootPathExists,
 } from "./storage/projects.js";
 import {
+  appendQueuedMessage,
   appendSessionEvent,
   createSession,
+  deleteQueuedMessage,
   deleteSession,
+  deliverQueuedMessage,
   forkSession,
   getSession,
   lastSessionSeq,
   listSessionEvents,
   listSessions,
   listSubAgents,
+  listUndeliveredQueuedMessages,
   revertSession,
   searchSessions,
   updateSessionActiveMode,
@@ -77,9 +82,11 @@ import {
   getDebugSettings,
   getMemorySettings,
   getOrchestrationSettings,
+  getRetrySettings,
   setDebugSettings,
   setMemorySettings,
   setOrchestrationSettings,
+  setRetrySettings,
 } from "./storage/settings.js";
 import { Orchestrator } from "./agents/orchestrator.js";
 import {
@@ -217,7 +224,13 @@ import { getJobStatus, listJobs, stopJob } from "./lib/background-jobs.js";
 // are stoppable through the SAME POST /sessions/:id/stop route as main
 // turns. Reasons ("owner" | "stall") let the orchestrator report why a
 // child ended.
-import { registerTurn, unregisterTurn, abortTurn } from "./lib/turn-registry.js";
+import {
+  getTurnController,
+  notifyTurn,
+  registerTurn,
+  unregisterTurn,
+  abortTurn,
+} from "./lib/turn-registry.js";
 
 /**
  * ROUND-63: the app version GET /health reports — read at BOOT from the
@@ -519,6 +532,10 @@ function readModelScalarFields(
 
 /** Max attachments per send (mirrors /attachments/read's path cap). */
 const MAX_ATTACHMENTS_PER_SEND = 20;
+/** ROUND-78 (R78): terminal session statuses — the queue routes mirror
+ * prepareTurn's guard (a terminal session accepts no new messages, queued
+ * or otherwise). Same three statuses runtime.ts's TERMINAL_STATUSES holds. */
+const TERMINAL_SESSION_STATUSES: readonly SessionStatus[] = ["completed", "failed", "cancelled"];
 /** Server-side cap on a single attachment's text (128KB head — the same
  * slice POST /attachments/read would have produced). */
 const MAX_ATTACHMENT_TEXT_CHARS = 128 * 1024;
@@ -3602,6 +3619,47 @@ export function buildServer(options: ServerOptions): FastifyInstance {
         }
       });
 
+      // ── ROUND-78 (R78, owner: "General Settings 重试配置"): the per-class
+      // auto-retry switches. Same shape/behavior as /settings/debug — GET
+      // returns {autoRetryRateLimit, autoRetryTimeout, autoRetryNetwork}, PUT
+      // accepts a partial patch of those booleans and returns the updated
+      // object. The runtime's retry ladder reads these per turn (a disabled
+      // class fails fast with the provider's real error text).
+
+      scope.get("/settings/retry", async () => {
+        return getRetrySettings(db);
+      });
+
+      scope.put("/settings/retry", async (request, reply) => {
+        const body: unknown = request.body;
+        if (typeof body !== "object" || body === null || Array.isArray(body)) {
+          return reply
+            .code(400)
+            .send(errorBody("VALIDATION", "body must be a JSON object", { field: "body" }));
+        }
+        const raw = body as Record<string, unknown>;
+        for (const field of ["autoRetryRateLimit", "autoRetryTimeout", "autoRetryNetwork"] as const) {
+          if (raw[field] !== undefined && typeof raw[field] !== "boolean") {
+            return reply
+              .code(400)
+              .send(errorBody("VALIDATION", `body.${field} must be a boolean`, { field: `body.${field}` }));
+          }
+        }
+        try {
+          return setRetrySettings(db, {
+            ...(typeof raw.autoRetryRateLimit === "boolean" ? { autoRetryRateLimit: raw.autoRetryRateLimit } : {}),
+            ...(typeof raw.autoRetryTimeout === "boolean" ? { autoRetryTimeout: raw.autoRetryTimeout } : {}),
+            ...(typeof raw.autoRetryNetwork === "boolean" ? { autoRetryNetwork: raw.autoRetryNetwork } : {}),
+          });
+        } catch (error) {
+          return reply.code(400).send(
+            errorBody("VALIDATION", error instanceof Error ? error.message : "invalid settings", {
+              field: "body",
+            }),
+          );
+        }
+      });
+
       // ── ROUND-36: API key pool (per provider) ──────────────────────────
 
       scope.get("/providers/:id/keys", async (request, reply) => {
@@ -3802,7 +3860,12 @@ export function buildServer(options: ServerOptions): FastifyInstance {
         // the orchestrator's child turns). One live turn per session — a
         // second turn on the same session replaces the entry (the runtime
         // refuses concurrent turns anyway).
-        registerTurn(id, abort);
+        // ROUND-78 (R78): `send` registers as the turn's NOTIFIER — the queue
+        // route (POST /sessions/:id/queue) rides notifyTurn so its
+        // user.queued frames land on this still-open stream. The single
+        // registration spans the WHOLE queue-continuation loop below (one
+        // registration per SSE request; the runtime never re-registers).
+        registerTurn(id, abort, send);
 
         // ── ROUND-66 (R66-2-c, owner's C1 directive): the post-turn DEBUG
         // ANALYST phase. When debug mode (Settings → Advanced) is ON and the
@@ -3910,82 +3973,146 @@ export function buildServer(options: ServerOptions): FastifyInstance {
         };
 
         try {
-          const outcome = await runStreamedAgentTurn(
-            { db, keyring, chat, chatStream: streamAiSdkChat },
-            id,
-            content,
-            send,
-            modelOverride,
-            abort.signal,
-            composer.value.thinkingLevel,
-            composer.value.attachments,
-          );
-          if (outcome.ok) {
-            // ROUND-42: ALWAYS publish task_complete. The R40 didWork gate
-            // (only tool-using turns) left the owner's conversational test
-            // ("say hello, close the window") silent — a completed reply IS
-            // a completed task from the owner's perspective. The in-page
-            // Toaster only fires desktop notifications when the page is
-            // hidden; the service worker push only fires when no visible
-            // window exists — so an on-screen user still isn't spammed.
-            const session = getSession(db, id);
-            getNotificationBus().publish(db, {
-              kind: "task_complete",
-              title: session?.title ?? "Task complete",
-              body: outcome.assistantMessage.content.slice(0, 160),
-              sessionId: id,
-              projectId: session?.projectId ?? undefined,
-            });
-            // R66-2-c: the debug analyst runs AFTER the outcome handling
-            // (the completion notification fires the moment the turn is
-            // done) and BEFORE the done frame — the live turn is still open,
-            // so the report streams into the dedicated section under the
-            // answer while the owner watches. The debug.report event +
-            // debug-done frame land before the terminal done frame.
-            await runDebugAnalystPhase();
-            send({ type: "done", assistantMessage: outcome.assistantMessage, usage: outcome.usage });
-          } else if (outcome.code === "ABORTED") {
-            // ROUND-42: the user explicitly stopped the turn — a deliberate
-            // stop is not a failure; no task_failed notification, and NO
-            // debug analyst either (the owner deliberately stopped — there
-            // is no completed turn to analyze; status 499 < 500 keeps the
-            // gate below closed for the same reason).
-            send({ type: "stopped" });
-          } else {
-            // ROUND-40/42: real failures (provider errors, crashes) always
-            // notify. Validation conflicts (404 unknown session / 409 wrong
-            // state) are request errors, not task failures — no notification.
-            const session = getSession(db, id);
-            if (outcome.status >= 500) {
-              // ROUND-75 (R75): when the transient-API retry ladder ran and
-              // exhausted, the notification body says so — the owner asked
-              // to be TOLD when the ladder gives up ("it will stop, notify
-              // the user, and show the error message").
-              const attempts = outcome.details?.attempts;
+          // ── ROUND-78 (R78, owner: "工作中发送消息（排队）… the agent reads
+          // it with full context and continues"): the QUEUE-CONTINUATION
+          // loop. After a SUCCESSFUL turn, undelivered queued messages
+          // CONTINUE THE SAME SSE STREAM: the FIRST queued event is CONSUMED
+          // (deleted — its content/attachments become the next
+          // runStreamedAgentTurn call's args), the REST are flipped directly
+          // to message.user so the continuation turn's iteration 0 history
+          // includes them (no queued.delivered frames for these — the folded
+          // log the UI refetches owns their render), a
+          // meta.queue_continue frame announces the count, and the loop
+          // runs another full turn. One registration + one abort controller
+          // span the WHOLE loop (a Stop aborts the in-flight continuation
+          // — queued messages STAY queued, pre-flipped on the next send).
+          // task_complete fires per successful turn; the debug analyst +
+          // terminal frame run ONCE, after the loop exits. ABORTED/error
+          // break the loop. Capped at MAX_QUEUE_CONTINUATIONS so a
+          // queue→turn→queue cycle can never run forever — the honest break
+          // closes the stream normally and leaves the rest queued.
+          const MAX_QUEUE_CONTINUATIONS = 25;
+          let continuations = 0;
+          let currentContent = content;
+          let currentAttachments = composer.value.attachments;
+          // (while(true) — the loop's exits are the outcome branches below;
+          // the queue-continue `continue` is the only loop-around.)
+          while (true) {
+            const outcome = await runStreamedAgentTurn(
+              { db, keyring, chat, chatStream: streamAiSdkChat },
+              id,
+              currentContent,
+              send,
+              modelOverride,
+              abort.signal,
+              composer.value.thinkingLevel,
+              currentAttachments,
+            );
+            if (outcome.ok) {
+              // ROUND-42: ALWAYS publish task_complete. The R40 didWork gate
+              // (only tool-using turns) left the owner's conversational test
+              // ("say hello, close the window") silent — a completed reply IS
+              // a completed task from the owner's perspective. The in-page
+              // Toaster only fires desktop notifications when the page is
+              // hidden; the service worker push only fires when no visible
+              // window exists — so an on-screen user still isn't spammed.
+              // R78: fires per successful turn — continuations included.
+              const session = getSession(db, id);
               getNotificationBus().publish(db, {
-                kind: "task_failed",
-                title: session?.title ?? "Task failed",
-                body:
-                  typeof attempts === "number" && attempts > 1
-                    ? `${outcome.message} — auto-retried ${attempts} times (immediate, 1.5, 5, 10, 30 min) before giving up`
-                    : outcome.message,
+                kind: "task_complete",
+                title: session?.title ?? "Task complete",
+                body: outcome.assistantMessage.content.slice(0, 160),
                 sessionId: id,
                 projectId: session?.projectId ?? undefined,
               });
-              // R66-2-c: a REAL failure (status >= 500 — provider error,
-              // loop guard) still ran real work the analyst can dissect
-              // (the turn.error event is already persisted, so the
-              // transcript carries the ERROR line). Validation conflicts
-              // (404/409) and deliberate stops never reach here.
+              // R78: the queue check — continue the same stream when
+              // messages are waiting (and the cap is not reached).
+              const queued = listUndeliveredQueuedMessages(db, id);
+              if (queued.length > 0 && continuations < MAX_QUEUE_CONTINUATIONS) {
+                continuations += 1;
+                send({ type: "meta.queue_continue", count: queued.length });
+                const first = queued[0];
+                // CONSUME the first (delete the row — its content becomes
+                // the next turn's user message, appended fresh by the
+                // runtime; the stream itself is the notifier, so no
+                // notifyTurn here).
+                deleteQueuedMessage(db, id, first.seq);
+                // DELIVER the rest (type-flip) — the continuation turn's
+                // iteration 0 history includes them as ordinary user events
+                // (the route flips them directly; loop-top delivery is a
+                // no-op for these — no queued.delivered frames).
+                for (const q of queued.slice(1)) deliverQueuedMessage(db, id, q.seq);
+                const firstPayload =
+                  first.payload !== null && typeof first.payload === "object"
+                    ? (first.payload as Record<string, unknown>)
+                    : null;
+                currentContent =
+                  firstPayload !== null && typeof firstPayload.content === "string"
+                    ? firstPayload.content
+                    : "";
+                currentAttachments =
+                  firstPayload !== null && Array.isArray(firstPayload.attachments)
+                    ? (firstPayload.attachments as MessageAttachment[])
+                    : undefined;
+                continue;
+              }
+              // R66-2-c: the debug analyst runs AFTER the outcome handling
+              // (the completion notification fires the moment the turn is
+              // done) and BEFORE the done frame — the live turn is still open,
+              // so the report streams into the dedicated section under the
+              // answer while the owner watches. The debug.report event +
+              // debug-done frame land before the terminal done frame.
+              // R78: once, after the loop's LAST successful turn (queue empty
+              // or the cap's honest break — the remaining chips stay queued).
               await runDebugAnalystPhase();
+              send({ type: "done", assistantMessage: outcome.assistantMessage, usage: outcome.usage });
+            } else if (outcome.code === "ABORTED") {
+              // ROUND-42: the user explicitly stopped the turn — a deliberate
+              // stop is not a failure; no task_failed notification, and NO
+              // debug analyst either (the owner deliberately stopped — there
+              // is no completed turn to analyze; status 499 < 500 keeps the
+              // gate below closed for the same reason). R78: the loop breaks
+              // here — queued messages STAY queued (Stop does not purge the
+              // queue; the chips persist, pre-flipped on the next send).
+              send({ type: "stopped" });
+            } else {
+              // ROUND-40/42: real failures (provider errors, crashes) always
+              // notify. Validation conflicts (404 unknown session / 409 wrong
+              // state) are request errors, not task failures — no notification.
+              // R78: the loop breaks — queued messages stay queued.
+              const session = getSession(db, id);
+              if (outcome.status >= 500) {
+                // ROUND-75 (R75): when the transient-API retry ladder ran and
+                // exhausted, the notification body says so — the owner asked
+                // to be TOLD when the ladder gives up ("it will stop, notify
+                // the user, and show the error message").
+                const attempts = outcome.details?.attempts;
+                getNotificationBus().publish(db, {
+                  kind: "task_failed",
+                  title: session?.title ?? "Task failed",
+                  body:
+                    typeof attempts === "number" && attempts > 1
+                      ? `${outcome.message} — auto-retried ${attempts} times (immediate, 1.5, 5, 10, 30 min) before giving up`
+                      : outcome.message,
+                  sessionId: id,
+                  projectId: session?.projectId ?? undefined,
+                });
+                // R66-2-c: a REAL failure (status >= 500 — provider error,
+                // loop guard) still ran real work the analyst can dissect
+                // (the turn.error event is already persisted, so the
+                // transcript carries the ERROR line). Validation conflicts
+                // (404/409) and deliberate stops never reach here.
+                await runDebugAnalystPhase();
+              }
+              send({
+                type: "error",
+                status: outcome.status,
+                code: outcome.code,
+                message: outcome.message,
+                ...(outcome.details ? { details: outcome.details } : {}),
+              });
             }
-            send({
-              type: "error",
-              status: outcome.status,
-              code: outcome.code,
-              message: outcome.message,
-              ...(outcome.details ? { details: outcome.details } : {}),
-            });
+            break; // every terminal branch above ends the loop (queue-continue `continue`s are the only loop-around)
           }
         } catch (routeError) {
           // ROUND-43: an unexpected crash in the route itself (not a provider
@@ -4019,6 +4146,101 @@ export function buildServer(options: ServerOptions): FastifyInstance {
         const { id } = request.params as Record<string, string>;
         const stopped = abortTurn(id, "owner");
         return { ok: true, stopped };
+      });
+
+      // ── ROUND-78 (R78, owner: "工作中发送消息（排队）" — while the agent is
+      // responding/running tools the user can still send): the MESSAGE QUEUE
+      // surface. POST appends a message.queued event (ONLY while a live turn
+      // is registered — 409 NO_LIVE_TURN otherwise, so the panel falls back
+      // to a normal send); DELETE removes a not-yet-delivered queued message
+      // (the chip's remove). Delivery itself is NOT a route: the runtime's
+      // loop-top flip + the streamed route's turn-end continuation own it. ──
+
+      scope.post("/sessions/:id/queue", async (request, reply) => {
+        const { id } = request.params as Record<string, string>;
+        const body: unknown = request.body;
+        if (typeof body !== "object" || body === null || Array.isArray(body)) {
+          return reply
+            .code(400)
+            .send(errorBody("VALIDATION", "body must be a JSON object", { field: "body" }));
+        }
+        const raw = body as Record<string, unknown>;
+        // Content validates EXACTLY like the send routes.
+        const content = raw.content;
+        if (typeof content !== "string" || content.trim() === "") {
+          return reply.code(400).send(
+            errorBody("VALIDATION", "content must be a non-empty string", {
+              field: "body.content",
+            }),
+          );
+        }
+        // Attachments validate through the SAME shared reader as the send
+        // routes (thinkingLevel is meaningless for a queued message — a
+        // queued event carries NO reasoning-effort; any provided value is
+        // validated for shape and then ignored).
+        const composer = readComposerSendFields(raw, reply);
+        if (!composer.ok) return reply;
+
+        // Session guards, prepareTurn-style: 404 unknown session, 409
+        // terminal status (a completed/failed/cancelled session accepts no
+        // queue — same contract as a normal send).
+        const session = getSession(db, id);
+        if (session === undefined) {
+          return reply.code(404).send(errorBody("NOT_FOUND", `no session with id ${id}`));
+        }
+        if (TERMINAL_SESSION_STATUSES.includes(session.status)) {
+          return reply.code(409).send(
+            errorBody("CONFLICT", `session ${id} is ${session.status} and no longer accepts messages`),
+          );
+        }
+        // A queue entry requires a LIVE registered turn — the message rides
+        // the in-flight stream (loop-top delivery + the turn-end
+        // continuation). No live turn (turn just ended, sub-agent child
+        // without a stream, stale UI state) → the honest 409 so the panel
+        // falls back to an ordinary send.
+        if (getTurnController(id) === undefined) {
+          return reply.code(409).send(
+            errorBody(
+              "NO_LIVE_TURN",
+              "no live turn for this session — send the message normally",
+            ),
+          );
+        }
+
+        const queued = appendQueuedMessage(db, id, {
+          content,
+          ...(composer.value.attachments !== undefined ? { attachments: composer.value.attachments } : {}),
+        });
+        // The live stream's chip: the queued frame rides the registered
+        // notify (the SSE send captured at registerTurn). False = no live
+        // listener (background turn) — the event log still owns the chip on
+        // the next fold.
+        notifyTurn(id, { type: "user.queued", seq: queued.seq, content, ts: queued.ts });
+        return reply.code(200).send({ ok: true, seq: queued.seq });
+      });
+
+      // ROUND-78 (R78): remove a not-yet-delivered queued message (the chip's
+      // X button). Only message.queued rows are deletable — a delivered row
+      // is ordinary transcript history and 404s (the UI never offers removal
+      // on those).
+      scope.delete("/sessions/:id/queue/:seq", async (request, reply) => {
+        const { id, seq } = request.params as Record<string, string>;
+        const parsedSeq = Number(seq);
+        if (!Number.isInteger(parsedSeq) || parsedSeq <= 0) {
+          return reply.code(400).send(
+            errorBody("VALIDATION", "seq must be a positive integer", { field: "params.seq" }),
+          );
+        }
+        const session = getSession(db, id);
+        if (session === undefined) {
+          return reply.code(404).send(errorBody("NOT_FOUND", `no session with id ${id}`));
+        }
+        if (deleteQueuedMessage(db, id, parsedSeq)) {
+          return reply.code(200).send({ ok: true });
+        }
+        return reply.code(404).send(
+          errorBody("NOT_FOUND", `no queued message with seq ${parsedSeq} for session ${id}`),
+        );
       });
 
       // ── ROUND-61 (R61): COMPUTER USE — the desktop-control surface ────────

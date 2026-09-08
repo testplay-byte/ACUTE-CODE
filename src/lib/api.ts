@@ -1050,6 +1050,22 @@ export type ProjectChatItem =
        * model-facing rendering happens server-side in assembleHistory). */
       attachments?: AttachmentRef[];
     }
+  | {
+      /** ROUND-78 (R78-D, owner: "工作中发送消息（排队）" — send while the agent
+       * works): a message the user queued mid-turn that has NOT been delivered
+       * yet — persisted as a `message.queued` event (same payload shape as
+       * message.user) and folded HERE so the refetched log renders the queued
+       * chip after the stream ends (the live store's `queued` array owns the
+       * chip mid-stream). A DELIVERED queued message is the SAME event row
+       * with its type flipped to message.user server-side — it folds as an
+       * ordinary user item, so no fold change and no model-history change
+       * were needed for delivery. */
+      kind: "queued";
+      seq: number;
+      content: string;
+      ts: string;
+      attachments?: AttachmentRef[];
+    }
   | AssistantTurnItem
   | ErrorTurnItem;
 
@@ -1287,6 +1303,26 @@ interface DebugReportPayload {
   model?: unknown;
 }
 
+/** ROUND-78 (R78-b): narrow a raw `attachments` payload array into DISPLAY-ONLY
+ * AttachmentRefs (name/path/size — `text` is deliberately dropped) — the exact
+ * R50-c1 narrowing that lived inline in the message.user branch, extracted so
+ * the new message.queued fold (same payload shape as message.user) shares it. */
+function narrowAttachmentRefs(raw: unknown): AttachmentRef[] {
+  const rawAttachments = Array.isArray(raw) ? raw : [];
+  const attachments: AttachmentRef[] = [];
+  for (const entry of rawAttachments) {
+    if (typeof entry !== "object" || entry === null) continue;
+    const item = entry as { name?: unknown; path?: unknown; size?: unknown };
+    if (typeof item.name !== "string" || item.name === "") continue;
+    attachments.push({
+      name: item.name,
+      ...(typeof item.path === "string" ? { path: item.path } : {}),
+      ...(typeof item.size === "number" ? { size: item.size } : {}),
+    });
+  }
+  return attachments;
+}
+
 export function toProjectChatItems(events: SessionEvent[]): ProjectChatItem[] {
   const ordered = [...events].sort((a, b) => a.seq - b.seq);
   const items: ProjectChatItem[] = [];
@@ -1491,20 +1527,33 @@ export function toProjectChatItems(events: SessionEvent[]): ProjectChatItem[] {
       if (payload !== null && typeof payload.content === "string") {
         // ROUND-50 (R50-c1): narrow the persisted attachments into DISPLAY-ONLY
         // AttachmentRefs (name/path/size — `text` is deliberately dropped).
-        const rawAttachments = Array.isArray(payload.attachments) ? payload.attachments : [];
-        const attachments: AttachmentRef[] = [];
-        for (const entry of rawAttachments) {
-          if (typeof entry !== "object" || entry === null) continue;
-          const item = entry as { name?: unknown; path?: unknown; size?: unknown };
-          if (typeof item.name !== "string" || item.name === "") continue;
-          attachments.push({
-            name: item.name,
-            ...(typeof item.path === "string" ? { path: item.path } : {}),
-            ...(typeof item.size === "number" ? { size: item.size } : {}),
-          });
-        }
+        const attachments = narrowAttachmentRefs(payload.attachments);
         items.push({
           kind: "user",
+          seq: event.seq,
+          content: payload.content,
+          ts: event.ts,
+          ...(attachments.length > 0 ? { attachments } : {}),
+        });
+      }
+      continue;
+    }
+
+    // ROUND-78 (R78-D): a QUEUED (not-yet-delivered) mid-turn message — its
+    // own timeline item (the queued chip the panel renders), NEVER a turn
+    // boundary: the turn it interrupted keeps accumulating across it (the
+    // event row's type flips to message.user at DELIVERY time server-side,
+    // in place — same seq — so the model's history sees the message exactly
+    // where it was queued, and the fold then renders an ordinary user item).
+    if (event.type === "message.queued") {
+      const payload =
+        event.payload && typeof event.payload === "object"
+          ? (event.payload as { content?: unknown; attachments?: unknown })
+          : null;
+      if (payload !== null && typeof payload.content === "string") {
+        const attachments = narrowAttachmentRefs(payload.attachments);
+        items.push({
+          kind: "queued",
           seq: event.seq,
           content: payload.content,
           ts: event.ts,
@@ -2398,6 +2447,30 @@ export async function updateDebugSettings(
   });
 }
 
+/** ROUND-78 (R78-C, owner: "General Settings 重试配置" — per-failure-type
+ * auto-retry switches): the runtime's retry-ladder gates. When a switch is
+ * off, that failure class NEVER enters the 6-attempt ladder — it fails fast
+ * (attempts:1) through the honest terminal path with the provider's REAL
+ * error text. All default true (the R75 ladder behavior). */
+export interface RetrySettings {
+  autoRetryRateLimit: boolean;
+  autoRetryTimeout: boolean;
+  autoRetryNetwork: boolean;
+}
+
+export async function fetchRetrySettings(): Promise<RetrySettings> {
+  return request<RetrySettings>("/settings/retry");
+}
+
+export async function updateRetrySettings(
+  patch: Partial<RetrySettings>,
+): Promise<RetrySettings> {
+  return request<RetrySettings>("/settings/retry", {
+    method: "PUT",
+    json: patch,
+  });
+}
+
 /** Key-pool slot info (masked — values never leave the sidecar). */
 export interface KeyPoolSlot {
   slot: number;
@@ -2757,7 +2830,13 @@ export type StreamTurnEvent =
    * heartbeat every RETRY_TICK_MS with the refreshed remaining time; any
    * content frame (text-delta / tool-call / finish…) means the retry
    * SUCCEEDED and the status clears. A terminal error frame after the
-   * ladder exhausted carries attempts=6. */
+   * ladder exhausted carries attempts=6.
+   * ROUND-78 (R78-A, owner: only a REAL rate limit may show as one — every
+   * other failure shows the API's ACTUAL error text): `providerError` rides
+   * the frame additively — the scrubbed REAL provider text (the R78-A
+   * classifier's unwrap), so the LIVE RetryStatusCard can render what the
+   * API actually said instead of the generic class one-liner. Optional:
+   * pre-R78 sidecars never send it (the card keeps the class message). */
   | {
       type: "meta.retry";
       attempt: number;
@@ -2768,7 +2847,25 @@ export type StreamTurnEvent =
       errorClass: string;
       classMessage: string;
       message: string;
+      providerError?: string;
     }
+  /** ROUND-78 (R78-D, owner: "工作中发送消息（排队）" — send while the agent
+   * works): the user queued a message on a LIVE turn (POST
+   * /sessions/:id/queue) — the chip appears IMMEDIATELY (before the
+   * persisted message.queued event could ride a refetch). Attachments ride
+   * the frame the same MessageAttachment shape the send routes accept. */
+  | { type: "user.queued"; seq: number; content: string; ts: string; attachments?: MessageAttachment[] }
+  /** ROUND-78 (R78-D): a queued message was DELIVERED into the model-facing
+   * history (the event row flipped to message.user in place) — the chip
+   * becomes an ordinary user bubble. The frame carries the content + ts so
+   * the store can render the bubble without waiting for the refetch. */
+  | { type: "queued.delivered"; seq: number; content: string; ts: string }
+  /** ROUND-78 (R78-D): the turn ended with queued messages remaining and the
+   * SAME SSE stream continues on the first one (the rest ride iteration 0).
+   * Informational today — the store types it but takes no action (the
+   * delivered/flipped events own the render); reserved for a future
+   * "continuing with your queued message" status line. */
+  | { type: "meta.queue_continue"; count: number }
   /** ROUND-75 (R75): the R71 overflow-recovery line, finally typed — a
    * context overflow was auto-compacted and the turn is retrying (rendered
    * as a transient status note, not an error). */
@@ -3118,6 +3215,49 @@ export async function stopSessionTurn(sessionId: string): Promise<void> {
     // Best-effort — if the sidecar is unreachable the turn will settle on
     // its own; the UI already shows "Stopped".
   }
+}
+
+/** ROUND-78 (R78-D) queue result: the persisted message.queued event's seq —
+ * the chip's identity (the user.queued frame + the fold + this optimistic
+ * return all join on it). */
+export interface QueueMessageResult {
+  ok: boolean;
+  seq: number;
+}
+
+/**
+ * ROUND-78 (R78-D, owner: "工作中发送消息（排队）" — while the agent is
+ * responding/running tools the user can still send): queue a message on the
+ * session's LIVE turn. The sidecar validates like the send routes, requires
+ * a registered live turn, appends a `message.queued` event, and notifies the
+ * running stream (the user.queued frame renders the chip immediately).
+ *
+ * The 409 NO_LIVE_TURN rejection surfaces as a catchable ApiError with
+ * `.code === "NO_LIVE_TURN"` — the caller (runTurn) falls through to a
+ * NORMAL send in that case (the turn just ended between the Enter and this
+ * POST; the queue POST and the turn-end race are benign).
+ */
+export async function queueSessionMessage(
+  sessionId: string,
+  input: { content: string; attachments?: MessageAttachment[] },
+): Promise<QueueMessageResult> {
+  return request<QueueMessageResult>(`/sessions/${sessionId}/queue`, {
+    method: "POST",
+    json: input,
+  });
+}
+
+/**
+ * ROUND-78 (R78-D): remove a NOT-YET-DELIVERED queued message (the chip's X
+ * button / the "Send now" path's dequeue half — the message never reaches
+ * the model's history). 404s when the event is absent or already delivered
+ * (flipped to message.user) — callers treat that as "already gone", never
+ * fatal.
+ */
+export async function dequeueSessionMessage(sessionId: string, seq: number): Promise<void> {
+  await request<void>(`/sessions/${sessionId}/queue/${seq}`, {
+    method: "DELETE",
+  });
 }
 
 /**

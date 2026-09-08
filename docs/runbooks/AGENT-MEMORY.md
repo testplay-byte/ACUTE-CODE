@@ -1,4 +1,4 @@
-<!-- last-reviewed: 2026-09-07 round-77 -->
+<!-- last-reviewed: 2026-09-08 round-78 -->
 # AGENT MEMORY — lessons learned, rules going forward
 
 **Owner directive (2026-08-23):** "learn from the mistakes you made, document
@@ -801,3 +801,40 @@ Format per entry: `N. TITLE (date, source)` → mistake → root cause → rule.
     persisted) dies with the cleanup; keep the failure visible until the
     next send or persist it. A user who sees a red card retries; a user
     who sees nothing files "it's broken".
+
+
+79. **Never paraphrase the provider's error into a class line: the class is
+    a chip, the API's words are the message.** (2026-09-08, round-78; the
+    owner's "no matter the real cause, the UI always shows 'rate-limited'
+    — every other failure must show the API's ACTUAL error text".) The
+    R71 classifier mapped 403 → "auth — the provider rejected the API key"
+    even when the body said "This model is not available in your region",
+    and every class rendered a GENERIC one-liner ("the provider is
+    throttling requests") while the real text sat on a terminal card the
+    owner only saw after six failed attempts. The owner's trust in every
+    error card burned once — a card that says "rate-limited" during a
+    region block is a lying UI, and the user stops believing ANY of them.
+    RULE: a classification is a CHIP (one-glance routing: ladder or
+    fail-fast), never the displayed message — display the provider's real
+    text (scrubbed, capped) everywhere the error is shown, keep the class
+    as the small label, and when the real text contradicts the class, the
+    CLASS is what moves (403-region → unknown/fail-fast), not the text.
+
+80. **`agent-browser open` is a HARD reload: live store state resets by
+    design — assert persistence through in-app SPA navigation, and unwrap
+    the SDK's RetryError before trusting any status.** (2026-09-08,
+    round-78; the queue-round browser battery.) Two traps cost debugging
+    time: (1) opening a URL fresh wipes the live stream store — the
+    queued chips, the Stopped card + Continue, the retry card are LIVE
+    state by design (the folded log owns the post-stream render), so a
+    "chip disappeared after navigation" test via a fresh open tests the
+    reset, not a bug; navigate in-app (SPA route changes) when asserting
+    that live state survives. (2) The AI SDK wraps exhausted retries in a
+    RetryError whose OWN message ("Failed after 5 attempts. Last error: …")
+    carries NO status — extractStatus saw nothing and classification rode
+    message-pattern luck; the real status lives one unwrap away in
+    `lastError` (or the last `errors[]` element). RULE: when a library
+    wraps failures, unwrap to the UNDERLYING error before classifying or
+    displaying (and walk the wrapper chain for status, bounded + cycle-
+    guarded); when testing ephemeral live state, drive the app like a user
+    (clicks/SPA nav) instead of re-opening pages.

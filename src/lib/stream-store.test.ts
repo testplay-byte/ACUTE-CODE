@@ -1756,3 +1756,226 @@ describe("stream store ROUND-77 freezeFailedTurn (unpersisted failures)", () => 
     expect(slice?.liveTurn?.stopped).toBe(false);
   });
 });
+
+// ─── ROUND-78 (R78-D): the message-queue frames + slice lifecycle ────────────
+// The wire contract: user.queued {seq, content, ts} pushes the chip;
+// queued.delivered {seq, content, ts} moves it to the delivered-bubble list;
+// meta.queue_continue {count} is typed-but-informational. startStream resets
+// both arrays; the stream-end finally clears them (the refetched folded log
+// owns the render — message.queued events fold as `queued` items there).
+// The panel's optimistic push (pushQueuedMessage) dedupes by seq against
+// the frame.
+describe("stream store ROUND-78 message queue", () => {
+  beforeEach(() => {
+    useStreamStore.setState({ bySession: {} });
+  });
+
+  it("a user.queued frame pushes the chip; queued.delivered moves it to deliveredQueued; meta.queue_continue is a typed no-op", async () => {
+    const sse = manualSseResponse();
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(sse.response));
+
+    const promise = useStreamStore.getState().startStream(PARENT, "work");
+    // The queue POST landed server-side; the frame announces the chip.
+    sse.emit({ type: "user.queued", seq: 12, content: "also add tests", ts: "2026-09-14T10:00:01Z" });
+    await vi.waitFor(() => {
+      expect(useStreamStore.getState().bySession[PARENT]?.queued).toEqual([
+        { seq: 12, content: "also add tests", ts: "2026-09-14T10:00:01Z" },
+      ]);
+    });
+
+    // The turn-end continuation announced itself (informational — nothing
+    // observable changes; the delivered flips own the render).
+    sse.emit({ type: "meta.queue_continue", count: 1 });
+    await vi.waitFor(() => {
+      expect(useStreamStore.getState().bySession[PARENT]?.queued).toHaveLength(1);
+    });
+
+    // The loop top delivered the queued message into the model's history.
+    sse.emit({
+      type: "queued.delivered",
+      seq: 12,
+      content: "also add tests",
+      ts: "2026-09-14T10:00:09Z",
+    });
+    await vi.waitFor(() => {
+      const slice = useStreamStore.getState().bySession[PARENT];
+      expect(slice?.queued).toEqual([]);
+      expect(slice?.deliveredQueued).toEqual([
+        { seq: 12, content: "also add tests", ts: "2026-09-14T10:00:09Z" },
+      ]);
+    });
+
+    sse.emit({ type: "stopped" });
+    sse.close();
+    await promise;
+  });
+
+  it("user.queued attachments narrow to display-only AttachmentRefs (name/path/size — never text)", async () => {
+    const sse = manualSseResponse();
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(sse.response));
+
+    const promise = useStreamStore.getState().startStream(PARENT, "work");
+    sse.emit({
+      type: "user.queued",
+      seq: 13,
+      content: "look at this",
+      ts: "2026-09-14T10:01:00Z",
+      attachments: [
+        { name: "shot.png", path: "attachments/shot.png", size: 2048, text: "never ships to the UI" },
+      ],
+    });
+    await vi.waitFor(() => {
+      expect(useStreamStore.getState().bySession[PARENT]?.queued).toEqual([
+        {
+          seq: 13,
+          content: "look at this",
+          ts: "2026-09-14T10:01:00Z",
+          attachments: [{ name: "shot.png", path: "attachments/shot.png", size: 2048 }],
+        },
+      ]);
+    });
+
+    sse.emit({ type: "stopped" });
+    sse.close();
+    await promise;
+  });
+
+  it("pushQueuedMessage (the panel's optimistic POST return) DEDUPES by seq against the frame", async () => {
+    const sse = manualSseResponse();
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(sse.response));
+
+    const promise = useStreamStore.getState().startStream(PARENT, "work");
+    sse.emit({ type: "user.queued", seq: 21, content: "queued msg", ts: "2026-09-14T10:02:00Z" });
+    await vi.waitFor(() => {
+      expect(useStreamStore.getState().bySession[PARENT]?.queued).toHaveLength(1);
+    });
+
+    // The panel's belt-and-suspenders push with the SAME seq — a no-op.
+    useStreamStore.getState().pushQueuedMessage(PARENT, {
+      seq: 21,
+      content: "queued msg",
+      ts: "2026-09-14T10:02:05Z",
+    });
+    expect(useStreamStore.getState().bySession[PARENT]?.queued).toHaveLength(1);
+
+    // A DIFFERENT seq (a second queued message) appends in order.
+    useStreamStore.getState().pushQueuedMessage(PARENT, {
+      seq: 22,
+      content: "second queued msg",
+      ts: "2026-09-14T10:02:06Z",
+    });
+    expect(useStreamStore.getState().bySession[PARENT]?.queued.map((q) => q.seq)).toEqual([21, 22]);
+
+    // removeQueuedMessage (the chip's optimistic X) drops exactly one.
+    useStreamStore.getState().removeQueuedMessage(PARENT, 21);
+    expect(useStreamStore.getState().bySession[PARENT]?.queued.map((q) => q.seq)).toEqual([22]);
+    // Unknown seq is a safe no-op.
+    useStreamStore.getState().removeQueuedMessage(PARENT, 999);
+    expect(useStreamStore.getState().bySession[PARENT]?.queued.map((q) => q.seq)).toEqual([22]);
+
+    sse.emit({ type: "stopped" });
+    sse.close();
+    await promise;
+  });
+
+  it("startStream RESETS the queue arrays (a fresh turn's queue starts empty) and the stream-end finally CLEARS them (the folded log owns the render)", async () => {
+    // First stream: queue a message, let the stream end with it STILL
+    // queued server-side (the plan's stop-does-not-purge semantics).
+    const sse1 = manualSseResponse();
+    const sse2 = manualSseResponse();
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValueOnce(sse1.response).mockResolvedValueOnce(sse2.response),
+    );
+
+    const first = useStreamStore.getState().startStream(PARENT, "work");
+    sse1.emit({ type: "user.queued", seq: 31, content: "still queued after stop", ts: "2026-09-14T10:03:00Z" });
+    await vi.waitFor(() => {
+      expect(useStreamStore.getState().bySession[PARENT]?.queued).toHaveLength(1);
+    });
+    sse1.emit({ type: "stopped" });
+    sse1.close();
+    await first;
+
+    // The finally cleared the live arrays — the refetched fold (a
+    // message.queued event) owns the chip render from here.
+    const afterEnd = useStreamStore.getState().bySession[PARENT];
+    expect(afterEnd?.queued).toEqual([]);
+    expect(afterEnd?.deliveredQueued).toEqual([]);
+    expect(afterEnd?.streamBusy).toBe(false);
+
+    // The NEXT send resets them again (no stale chips ride into the new
+    // turn — the backend pre-flips lingering undelivered events to
+    // message.user before the new message).
+    const second = useStreamStore.getState().startStream(PARENT, "next turn");
+    expect(useStreamStore.getState().bySession[PARENT]?.queued).toEqual([]);
+    // Belt-and-suspenders push AFTER the fresh startStream reset: a NEW
+    // seq lands (the reset happened, the push is post-reset honest).
+    useStreamStore.getState().pushQueuedMessage(PARENT, {
+      seq: 32,
+      content: "queued on the fresh turn",
+      ts: "2026-09-14T10:04:00Z",
+    });
+    expect(useStreamStore.getState().bySession[PARENT]?.queued.map((q) => q.seq)).toEqual([32]);
+    sse2.emit({ type: "stopped" });
+    sse2.close();
+    await second;
+    expect(useStreamStore.getState().bySession[PARENT]?.queued).toEqual([]);
+  });
+
+  it("a meta.retry frame carrying providerError lands it in LiveTurnRetry (the honest live card's source)", async () => {
+    const sse = manualSseResponse();
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(sse.response));
+
+    const promise = useStreamStore.getState().startStream(PARENT, "work");
+    sse.emit({
+      type: "meta.retry",
+      attempt: 2,
+      totalAttempts: 6,
+      waitMs: 90_000,
+      remainingMs: 90_000,
+      retryAt: Date.now() + 90_000,
+      errorClass: "rate_limit",
+      classMessage: "rate limited — the provider is throttling requests",
+      message: "rate limited — retrying (attempt 2 of 6) in 1.5 min",
+      providerError: "Rate limit exceeded: free-models-per-day. Add 10 credits to continue.",
+    });
+
+    await vi.waitFor(() => {
+      expect(useStreamStore.getState().bySession[PARENT]?.liveTurn?.retry?.providerError).toBe(
+        "Rate limit exceeded: free-models-per-day. Add 10 credits to continue.",
+      );
+    });
+
+    sse.emit({ type: "stopped" });
+    sse.close();
+    await promise;
+  });
+
+  it("a meta.retry frame WITHOUT providerError leaves the field undefined (pre-R78 sidecars keep the old card)", async () => {
+    const sse = manualSseResponse();
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(sse.response));
+
+    const promise = useStreamStore.getState().startStream(PARENT, "work");
+    sse.emit({
+      type: "meta.retry",
+      attempt: 3,
+      totalAttempts: 6,
+      waitMs: 300_000,
+      remainingMs: 300_000,
+      retryAt: Date.now() + 300_000,
+      errorClass: "network",
+      classMessage: "network error — the connection dropped",
+      message: "network error — retrying (attempt 3 of 6) in 5 min",
+    });
+
+    await vi.waitFor(() => {
+      expect(useStreamStore.getState().bySession[PARENT]?.liveTurn?.retry?.errorClass).toBe("network");
+    });
+    expect(useStreamStore.getState().bySession[PARENT]?.liveTurn?.retry?.providerError).toBeUndefined();
+
+    sse.emit({ type: "stopped" });
+    sse.close();
+    await promise;
+  });
+});

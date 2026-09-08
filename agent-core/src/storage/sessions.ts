@@ -6,7 +6,7 @@
  */
 import { randomUUID } from "node:crypto";
 import type Database from "better-sqlite3";
-import type { PermissionMode, RunMode, SessionStatus, UsageRecord } from "shared";
+import type { MessageAttachment, PermissionMode, RunMode, SessionStatus, UsageRecord } from "shared";
 
 export type SqliteDatabase = Database.Database;
 
@@ -538,6 +538,119 @@ export function lastSessionSeq(db: SqliteDatabase, sessionId: string): number {
     .prepare("SELECT COALESCE(MAX(seq), 0) AS last FROM session_events WHERE session_id = ?")
     .get(sessionId) as { last: number };
   return last;
+}
+
+// ── ROUND-78 (R78, owner: "工作中发送消息（排队）" — while the agent is
+//    responding/running tools the user can still send; the message QUEUES
+//    and is auto-delivered right after the current tool call completes)
+//    — the message.queued event + its storage lifecycle. ────────────────────
+//
+// A queued message is a session_events ROW of type `message.queued` with the
+// EXACT payload shape of a message.user event ({role:"user", content,
+// attachments?} + appendSessionEvent's agentId/ts mirroring). NOTHING
+// existing reads the type: assembleHistory's fold only matches
+// message.user/message.assistant/tool.use, and toProjectChatItems folds it
+// as a queued chip — so a queued event is invisible to the model by
+// construction. DELIVERY is a type FLIP (message.queued → message.user) on
+// the SAME row: seq, ts, agentId, and payload are untouched, so the message
+// lands in the transcript exactly where it was queued (ordering preserved
+// by construction). This is the one deliberate UPDATE to session_events
+// since ADR-0010 made the log append-only — the flip writes NO new data
+// (the row is the message), it only promotes its visibility, and the
+// queue's own lifecycle (append → deliver/delete) is owner-visible state,
+// not history rewriting (the same standing as revertSession's documented
+// exception).
+
+/**
+ * ROUND-78 (R78): append a queued user message. Mirrors the message.user
+ * append exactly (same payload shape, same agentId mirroring — the event
+ * carries the SESSION's agent so the fold and any reader resolve the author
+ * the same way a delivered row does). Returns the appended event (seq is
+ * the queue identity the wire contract uses).
+ */
+export function appendQueuedMessage(
+  db: SqliteDatabase,
+  sessionId: string,
+  input: { content: string; attachments?: MessageAttachment[] },
+): SessionEvent {
+  const session = getSession(db, sessionId);
+  return appendSessionEvent(db, sessionId, {
+    type: "message.queued",
+    // The session's agent (null on agentless rows — same mirroring the
+    // message.user appends use through prepareTurn's agent).
+    agentId: session?.agentId ?? null,
+    payload: {
+      role: "user",
+      content: input.content,
+      ...(input.attachments !== undefined && input.attachments.length > 0
+        ? { attachments: input.attachments }
+        : {}),
+    },
+  });
+}
+
+/**
+ * ROUND-78 (R78): every not-yet-delivered queued message for a session, in
+ * seq order (the delivery order). Type-filtered — a flipped row is an
+ * ordinary message.user and disappears from this list.
+ */
+export function listUndeliveredQueuedMessages(db: SqliteDatabase, sessionId: string): SessionEvent[] {
+  const rows = db
+    .prepare(
+      "SELECT seq, type, payload, ts FROM session_events WHERE session_id = ? AND type = 'message.queued' ORDER BY seq ASC",
+    )
+    .all(sessionId) as EventRow[];
+  return rows.map(toEvent);
+}
+
+/**
+ * ROUND-78 (R78): deliver ONE queued message — flip the row's type to
+ * `message.user` (seq / ts / agentId / payload untouched, so the message
+ * lands in the transcript exactly where it was queued). Returns false when
+ * the seq is unknown for the session or its event is not a queued one
+ * (already delivered, a user message, any other type) — the flip is
+ * strictly queued → user, never the reverse.
+ */
+export function deliverQueuedMessage(db: SqliteDatabase, sessionId: string, seq: number): boolean {
+  if (!Number.isInteger(seq) || seq <= 0) return false;
+  const result = db
+    .prepare(
+      "UPDATE session_events SET type = 'message.user' WHERE session_id = ? AND seq = ? AND type = 'message.queued'",
+    )
+    .run(sessionId, seq);
+  return result.changes > 0;
+}
+
+/**
+ * ROUND-78 (R78): remove a not-yet-delivered queued message (the queue
+ * chip's remove / send-now path — send-now reads the payload first, then
+ * deletes, then the caller re-sends it as a fresh turn). Delivered rows are
+ * ordinary transcript history: the guard refuses to touch them.
+ */
+export function deleteQueuedMessage(db: SqliteDatabase, sessionId: string, seq: number): boolean {
+  if (!Number.isInteger(seq) || seq <= 0) return false;
+  const result = db
+    .prepare("DELETE FROM session_events WHERE session_id = ? AND seq = ? AND type = 'message.queued'")
+    .run(sessionId, seq);
+  return result.changes > 0;
+}
+
+/**
+ * ROUND-78 (R78): pre-flip — deliver EVERY undelivered queued message for a
+ * session (in seq order) and return how many flipped. The runtime calls
+ * this at the start of a NEW turn (before the turn's own message.user
+ * append): the crash/stop recovery contract — a queue left behind by an
+ * aborted stream or a sidecar kill always eventually delivers, in order,
+ * BEFORE the new message, and the event log owns the render (no frames are
+ * emitted — the folded log the UI refetches shows ordinary user bubbles).
+ */
+export function deliverAllQueuedMessages(db: SqliteDatabase, sessionId: string): number {
+  const queued = listUndeliveredQueuedMessages(db, sessionId);
+  let delivered = 0;
+  for (const event of queued) {
+    if (deliverQueuedMessage(db, sessionId, event.seq)) delivered += 1;
+  }
+  return delivered;
 }
 
 /** One billing line per completed model call; costUsd is 0 until estimation lands.

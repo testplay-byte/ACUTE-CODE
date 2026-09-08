@@ -8,7 +8,7 @@ import {
   type KeyboardEvent as ReactKeyboardEvent,
   type RefObject,
 } from "react";
-import { ArrowUp, Play } from "lucide-react";
+import { ArrowUp, ListPlus, Play } from "lucide-react";
 import type { PermissionMode, ThinkingLevel } from "shared";
 import {
   ingestAttachmentPath,
@@ -62,6 +62,12 @@ import { useProjectFilePaths } from "./useProjectFiles";
  *   model, the reasoning, and the send button"):
  *   [Add Context] [Access] [Task mode] [Context donut] [Model] [Thinking] [Continue/Send]
  *
+ *   ROUND-78 (R78-B): the toolbar's ACTION group (Continue + Send/Stop [+
+ *   Queue-send]) is a NON-WRAPPING anchor pinned right by justify-between —
+ *   a sibling of the wrapping selectors area — so the action button's
+ *   position is stable at every width and state (the R78 fix for the
+ *   owner's drifting action buttons). See the toolbar comment below.
+ *
  *   The box is a CSS CONTAINER (@container) and the selector pills' text
  *   labels hide below a 560px container (icon-only pills — the row keeps
  *   fitting at the 480px chat floor; the title tooltips carry the hidden
@@ -88,6 +94,8 @@ export function Composer({
   onInputChange,
   busy,
   onSend,
+  // ROUND-78 (R78-D): the queue-send handler — see the prop type above.
+  onQueue,
   onStop,
   showContinue = false,
   permissionMode,
@@ -118,6 +126,15 @@ export function Composer({
   busy: boolean;
   /** Fires with the text + staged attachments; chips clear afterwards. */
   onSend: (content: string, attachments: ComposerAttachment[]) => void;
+  /** ROUND-78 (R78-D, owner: "工作中发送消息（排队）" — send while the agent
+   * works): when provided AND busy, the composer's action group grows the
+   * QUEUE-SEND button and Enter routes here instead of being a no-op — the
+   * message queues and auto-delivers right after the agent finishes the
+   * current step. The SAME staged-attachment pipeline as send() (binary
+   * chips upload identically). Wired only in live mode by the panel;
+   * absent → the legacy behavior stands exactly (busy → Stop only, Enter
+   * does nothing). */
+  onQueue?: (content: string, attachments: ComposerAttachment[]) => void;
   onStop: () => void;
   /** ROUND-58 (R58-cf): the last turn on this session ended via user stop —
    * show the Continue affordance next to Send (a normal user message with
@@ -363,8 +380,25 @@ export function Composer({
 
   const send = (): void => {
     const text = input.trim();
-    if (text === "" || busy || uploadingRef.current) return;
-    void sendStaged();
+    if (text === "" || uploadingRef.current) return;
+    // ROUND-78 (R78-D, owner: "工作中发送消息（排队）"): while a turn runs,
+    // Enter routes to the QUEUE when the owner wired onQueue (live mode) —
+    // the message sends without interrupting the in-flight flow. Without
+    // the handler the R75 legacy behavior stands exactly: busy → no-op.
+    if (busy) {
+      if (onQueue !== undefined) void sendStaged("queue");
+      return;
+    }
+    void sendStaged("send");
+  };
+
+  /** R78: the queue-send button's click path — identical staging, only a
+   * busy turn with the queue handler wired can ever fire it (the button
+   * itself renders only in that state). */
+  const queueSend = (): void => {
+    const text = input.trim();
+    if (text === "" || !busy || uploadingRef.current || onQueue === undefined) return;
+    void sendStaged("queue");
   };
 
   /**
@@ -378,7 +412,7 @@ export function Composer({
    * text" placeholder — plus a per-file toast. Never a blocked send, never a
    * silent drop.
    */
-  const sendStaged = async (): Promise<void> => {
+  const sendStaged = async (target: "send" | "queue" = "send"): Promise<void> => {
     uploadingRef.current = true;
     try {
       const staged = await Promise.all(
@@ -400,7 +434,13 @@ export function Composer({
           }
         }),
       );
-      onSend(input, staged);
+      // R78: the queue path routes to onQueue (the panel POSTs
+      // /sessions/:id/queue); every other step of the pipeline is identical.
+      if (target === "queue" && onQueue !== undefined) {
+        onQueue(input, staged);
+      } else {
+        onSend(input, staged);
+      }
       // Chips are per-composer: they cleared with the message they rode.
       setAttachments([]);
       setAtToken(null);
@@ -522,26 +562,38 @@ export function Composer({
       />
 
       {/* TOOLBAR — INSIDE the box (owner directive).
-          ROUND-77 (R77, owner: "the mode selection, the access level
-          selection, and the upload file buttons should be shown on the left
-          side, and besides that, all the other options should be aligned to
-          the right side"): TWO clusters. LEFT = attach + access + task mode.
-          RIGHT = context donut + model + reasoning + Continue/Send. The
-          right cluster is a nowrap group with ml-auto — pinned to the right
-          edge when there's room, and when the row is too tight the WHOLE
-          cluster wraps as ONE unit (R77 fix for the owner's "send message
-          or stop button was showing below the designated options" — the
-          action button never separates from its right-side siblings again).
+          ROUND-78 (R78-B, owner: "Continue 按钮等选项有时位置异常" — the
+          action buttons occasionally render in a wrong position): the R77
+          left/right CLUSTER split kept the action button glued to its
+          right-side siblings, but the whole-cluster wrap made positions
+          UNSTABLE — at tight widths the right cluster (selectors AND the
+          action together) jumped to a second line, so Send/Stop/Continue
+          drifted to different spots at different widths and states. THE
+          ANCHOR: the toolbar is now justify-between with TWO siblings —
+          (1) a WRAPPING area (flex-1 min-w-0) holding the left cluster
+          (attach/access/mode) + the right-side selectors (donut/model/
+          thinking, ml-auto shrink-0) — when the row is too tight the
+          SELECTORS wrap as a unit under the left cluster, INSIDE this area;
+          (2) THE ACTION GROUP (data-composer-actions, shrink-0, NEVER
+          wraps — it is not inside the wrapping area at all): Continue +
+          Send/Stop [+ Queue-send while busy, R78-D]. justify-between pins
+          the actions to the right edge and items-end aligns them to the
+          toolbar's LAST line, so the action button's position is STABLE at
+          every width and every state — exactly the owner's ask.
           The box is a CSS @container: below 560px the selector pills' TEXT
           LABELS hide (icon-only — the row fits at the 480px chat floor; the
           pills' title tooltips carry the hidden labels). flex-wrap on the
-          row stays as the R51-c never-overlap emergency fallback. */}
+          wrapping area stays as the R51-c never-overlap emergency fallback
+          (absurd widths — the freeform mini windows). */}
       <div
         role="toolbar"
         aria-label="Composer tools"
         data-composer-toolbar
-        className="flex flex-wrap items-center gap-1 px-2 pb-2 pt-1"
+        className="flex items-end justify-between gap-1 px-2 pb-2 pt-1"
       >
+        {/* R78: the WRAPPING area — selectors only; the actions are a
+            sibling pinned right by the toolbar's justify-between. */}
+        <div className="flex min-w-0 flex-1 flex-wrap items-center gap-1">
         {/* R77: the LEFT cluster — attach, access level, task mode (the
             owner's left-side trio). */}
         <div className="flex items-center gap-1 min-w-0" data-composer-left>
@@ -559,9 +611,11 @@ export function Composer({
             />
           ) : null}
         </div>
-        {/* R77: the RIGHT cluster — everything else + the action button, a
-            single nowrap group (ml-auto pins it right on every line it
-            lands on; shrink-0 keeps the pills from being squeezed). */}
+        {/* R77: the right-side SELECTORS — context donut, model, reasoning
+            (ml-auto pins them right on their line; shrink-0 keeps the pills
+            from being squeezed). R78: the ACTION button NO LONGER lives
+            here — it moved to the anchor sibling (data-composer-actions)
+            so its position never moves (the owner's R78 ask). */}
         <div className="ml-auto flex items-center gap-1 shrink-0" data-composer-right>
           <ContextDonut
             sessionId={sessionId}
@@ -573,6 +627,12 @@ export function Composer({
           />
           <ModelSelector agent={agent} override={modelOverride} onModelChange={onModelChange} disabled={!liveMode} />
           <ThinkingLevelButton level={thinkingLevel} onChange={onThinkingLevelChange} />
+        </div>
+        </div>
+        {/* R78: THE ACTION ANCHOR — a sibling of the wrapping area (never
+            inside it), pinned right by justify-between; it never wraps, so
+            the action button's position is identical at every width/state. */}
+        <div className="flex items-center gap-1 shrink-0 pb-0.5" data-composer-actions>
           {/* ROUND-58 (R58-cf): the Continue affordance — the last turn ended
               via user stop (the backend persisted the partial + tool results,
               so this normal follow-up message resumes the response). Secondary
@@ -599,18 +659,57 @@ export function Composer({
             </button>
           ) : null}
           {busy ? (
-            <button
-              type="button"
-              // Stop routes through the stream store (works regardless of
-              // which panel is mounted — ROUND-39 semantics preserved).
-              onClick={onStop}
-              aria-label="Stop generation"
-              title="Stop generation"
-              className="w-8 h-8 rounded-xl grid place-items-center shrink-0 transition-transform hover:scale-105 active:scale-95"
-              style={{ backgroundColor: SEMANTIC_COLORS.danger, color: "#fff" }}
-            >
-              <span className="w-3 h-3 rounded-sm bg-white/90" />
-            </button>
+            <>
+              <button
+                type="button"
+                // Stop routes through the stream store (works regardless of
+                // which panel is mounted — ROUND-39 semantics preserved).
+                onClick={onStop}
+                aria-label="Stop generation"
+                title="Stop generation"
+                className="w-8 h-8 rounded-xl grid place-items-center shrink-0 transition-transform hover:scale-105 active:scale-95"
+                style={{ backgroundColor: SEMANTIC_COLORS.danger, color: "#fff" }}
+              >
+                <span className="w-3 h-3 rounded-sm bg-white/90" />
+              </button>
+              {/* ROUND-78 (R78-D, owner: "工作中发送消息（排队）" — while the
+                  agent works the user can still send): the QUEUE-SEND button
+                  rides the anchor NEXT TO Stop. Accent style like Send (the
+                  action reads "your message goes OUT"), sized like Continue
+                  (px-3 — it carries two glyphs). Enter routes here too (send()
+                  above); the message POSTs to /sessions/:id/queue and
+                  auto-delivers right after the current step. Only rendered
+                  when the panel wired onQueue (live mode) — fixture mode
+                  keeps the busy composer Stop-only exactly as before. */}
+              {onQueue !== undefined ? (
+                <button
+                  type="button"
+                  onClick={queueSend}
+                  disabled={input.trim() === ""}
+                  aria-label="Queue message"
+                  title="Queues right after the agent finishes the current step"
+                  data-queue-send-button
+                  className="h-8 px-3 rounded-xl flex items-center gap-1 shrink-0 border text-[11.5px] font-bold transition-all hover:scale-105 active:scale-95 disabled:hover:scale-100 disabled:cursor-not-allowed"
+                  style={
+                    input.trim() !== ""
+                      ? {
+                          backgroundColor: styles.accent,
+                          color: styles.accentText,
+                          borderColor: withAlpha(styles.accent, 0.5),
+                          boxShadow: `0 2px 10px ${withAlpha(styles.accent, 0.35)}`,
+                        }
+                      : {
+                          backgroundColor: styles.inputBg,
+                          color: styles.textTertiary,
+                          borderColor: styles.border,
+                        }
+                  }
+                >
+                  <ArrowUp size={12} strokeWidth={2.5} />
+                  <ListPlus size={11} aria-hidden />
+                </button>
+              ) : null}
+            </>
           ) : (
             <button
               type="button"

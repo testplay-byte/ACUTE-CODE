@@ -19,6 +19,15 @@
  * Entries also carry a REASON ("owner" | "stall") so the orchestrator can
  * distinguish the owner's manual stop from the ROUND-52 watchdog's stall abort
  * in the child's final report to the parent agent.
+ *
+ * ROUND-78 (R78, owner: "工作中发送消息（排队）"): entries gained an optional
+ * `notify` callback — the route registers the SSE `send` as the turn's
+ * notifier, and POST /sessions/:id/queue calls notifyTurn(id, {type:
+ * "user.queued", …}) so the LIVE stream renders the queued-message chip the
+ * moment the message lands (the queue POST cannot write to the hijacked
+ * response itself; the registry is the one shared handle). Absent notify =
+ * a live turn with no interactive listener (children, background turns) —
+ * notifyTurn simply reports false.
  */
 export type TurnStopReason = "owner" | "stall";
 
@@ -27,15 +36,22 @@ interface RegisteredTurn {
   reason: TurnStopReason | null;
   /** When the registration happened (diagnostics only). */
   registeredAt: number;
+  /** ROUND-78 (R78): the live stream's emit callback — the queue route's
+   * user.queued frames ride it. Optional + unknown-typed on purpose: the
+   * registry stays transport-agnostic (SSE today; never imported by the
+   * runtime's turn functions). */
+  notify?: (event: unknown) => void;
 }
 
 const turns = new Map<string, RegisteredTurn>();
 
 /** Register the live turn for a session (main or child). One live turn per
  * session — a second registration for the same id replaces the first (the
- * runtime refuses concurrent turns anyway). */
-export function registerTurn(sessionId: string, controller: AbortController): void {
-  turns.set(sessionId, { controller, reason: null, registeredAt: Date.now() });
+ * runtime refuses concurrent turns anyway).
+ * ROUND-78 (R78): optional `notify` — the route passes its SSE send so
+ * notifyTurn can push user.queued frames onto the still-open stream. */
+export function registerTurn(sessionId: string, controller: AbortController, notify?: (event: unknown) => void): void {
+  turns.set(sessionId, { controller, reason: null, registeredAt: Date.now(), ...(notify !== undefined ? { notify } : {}) });
 }
 
 /** Remove a registration. Pass the SAME controller to avoid deleting a newer
@@ -70,4 +86,23 @@ export function abortTurn(sessionId: string, reason: TurnStopReason): boolean {
 /** Test/introspection helper: ids of every currently live turn. */
 export function liveTurnIds(): string[] {
   return [...turns.keys()];
+}
+
+/**
+ * ROUND-78 (R78): push an event to a LIVE turn's registered notifier (the
+ * route's SSE send). Returns whether a live entry WITH a notify callback
+ * existed and was called — false for no-live-turn, a turn without a
+ * listener (children / background turns), or a notifier that THREW (the
+ * callback's own guards own their errors; a dead socket must never bubble
+ * into the queue route's 200).
+ */
+export function notifyTurn(sessionId: string, event: unknown): boolean {
+  const entry = turns.get(sessionId);
+  if (entry === undefined || entry.notify === undefined) return false;
+  try {
+    entry.notify(event);
+  } catch {
+    return false;
+  }
+  return true;
 }

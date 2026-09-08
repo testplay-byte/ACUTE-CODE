@@ -6,16 +6,19 @@ import {
   deleteProvider,
   deleteProviderModelConfig,
   deleteRating,
+  dequeueSessionMessage,
   fetchModelsCatalog,
   fetchOrchestrationSettings,
   fetchProviderModelConfig,
   fetchProviderModelEntries,
   fetchProviders,
+  fetchRetrySettings,
   getAgentsBackend,
   httpAgents,
   listSessionRatings,
   parseDiffArgs,
   pickFolderViaBackend,
+  queueSessionMessage,
   rateReply,
   restoreCheckpoint,
   storeProviderKey,
@@ -24,6 +27,7 @@ import {
   updateOrchestrationSettings,
   updateProvider,
   updateProviderModelConfig,
+  updateRetrySettings,
   upsertProviderModelConfig,
   type Agent,
   type ProviderModelConfig,
@@ -1735,5 +1739,176 @@ describe("response ratings client (ROUND-59 R59-D)", () => {
     // Working-only turn (tool + empty carrier): no key, nothing to rate.
     expect(turns[1].lastAssistantSeq).toBeUndefined();
     expect(turns[1].finalText).toBe("");
+  });
+});
+
+// ── ROUND-78 (R78-D): the message.queued fold + the queue/retry clients ──────
+describe("toProjectChatItems message.queued folding (ROUND-78 R78-D)", () => {
+  it("a message.queued event folds as its OWN queued item (the chip) — NEVER a turn boundary; the interrupted turn keeps accumulating across it", () => {
+    const items = toProjectChatItems([
+      ev(1, "message.user", { role: "user", content: "run the build" }, "agt_scribe"),
+      ev(2, "message.assistant", { role: "assistant", content: "Starting the build…" }, "agt_scribe"),
+      // The owner queued a message MID-TURN (seq 3) — the turn continues.
+      ev(3, "message.queued", { role: "user", content: "also run the linter" }, "agt_scribe"),
+      toolUse(4, "run_command", "command: pnpm build"),
+      ev(5, "message.assistant", { role: "assistant", content: "Build green." }, "agt_scribe"),
+    ]);
+
+    // The queued item sits BETWEEN the narration and the turn, in seq
+    // order — and the turn did NOT flush at seq 3 (a queued message is not
+    // a new turn; the model only sees it after delivery flips the row to
+    // message.user).
+    expect(items.map((i) => i.kind)).toEqual(["user", "queued", "turn"]);
+    const queued = items[1];
+    if (queued.kind !== "queued") throw new Error("expected queued");
+    expect(queued.seq).toBe(3);
+    expect(queued.content).toBe("also run the linter");
+    expect(queued.ts).toBe(TS(3));
+    // The ONE turn owns everything from seq 2 to 5 — no flush at 3 (the
+    // narration text + the tool call both ride the SAME turn).
+    const turn = items[2];
+    if (turn.kind !== "turn") throw new Error("expected turn");
+    expect(turn.seq).toBe(2);
+    expect(turn.working.map((w) => w.type)).toEqual(["text", "tool"]);
+    expect(turn.finalText).toBe("Build green.");
+  });
+
+  it("a DELIVERED queued message is an ordinary message.user row — it folds as a normal user item and STARTS the next turn (no queued item survives)", () => {
+    const items = toProjectChatItems([
+      ev(1, "message.user", { role: "user", content: "run the build" }, "agt_scribe"),
+      ev(2, "message.assistant", { role: "assistant", content: "Build green." }, "agt_scribe"),
+      // The same message, delivered: the row's type flipped to
+      // message.user IN PLACE (same seq, ordering preserved).
+      ev(3, "message.user", { role: "user", content: "also run the linter" }, "agt_scribe"),
+      ev(4, "message.assistant", { role: "assistant", content: "Lint clean too." }, "agt_scribe"),
+    ]);
+
+    expect(items.map((i) => i.kind)).toEqual(["user", "turn", "user", "turn"]);
+    expect(items.every((i) => i.kind !== "queued")).toBe(true);
+    const delivered = items[2];
+    if (delivered.kind !== "user") throw new Error("expected user");
+    expect(delivered.seq).toBe(3);
+    expect(delivered.content).toBe("also run the linter");
+  });
+
+  it("message.queued attachments narrow to display-only AttachmentRefs (name/path/size — text dropped) and junk rows are tolerated", () => {
+    const items = toProjectChatItems([
+      ev(1, "message.user", { role: "user", content: "go" }, "agt_scribe"),
+      ev(
+        2,
+        "message.queued",
+        {
+          role: "user",
+          content: "look at this",
+          attachments: [
+            { name: "shot.png", path: "attachments/shot.png", size: 2048, text: "never ships" },
+            { name: "", path: "x" }, // empty name — skipped
+            "junk", // not an object — skipped
+            { path: "no-name.png" }, // no name — skipped
+          ],
+        },
+        "agt_scribe",
+      ),
+      // Empty/junk content rows fold to NOTHING (the tolerant-fold rule).
+      ev(3, "message.queued", { role: "user" }, "agt_scribe"),
+      ev(4, "message.queued", "not-an-object", "agt_scribe"),
+    ]);
+
+    expect(items.map((i) => i.kind)).toEqual(["user", "queued"]);
+    const queued = items[1];
+    if (queued.kind !== "queued") throw new Error("expected queued");
+    expect(queued.attachments).toEqual([
+      { name: "shot.png", path: "attachments/shot.png", size: 2048 },
+    ]);
+  });
+});
+
+describe("queue + retry-settings clients (ROUND-78 R78-C/R78-D)", () => {
+  it("queueSessionMessage POSTs /sessions/:id/queue with the auth header + content/attachments body", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse(200, { ok: true, seq: 41 }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const res = await queueSessionMessage("sess_q1", {
+      content: "also add tests",
+      attachments: [{ name: "shot.png", path: "attachments/shot.png", size: 2048 }],
+    });
+
+    expect(res).toEqual({ ok: true, seq: 41 });
+    expect(fetchMock).toHaveBeenCalledWith(
+      "http://sidecar.test/api/v1/sessions/sess_q1/queue",
+      expect.objectContaining({
+        method: "POST",
+        headers: expect.objectContaining({
+          Authorization: "Bearer tok_123",
+          "Content-Type": "application/json",
+        }),
+      }),
+    );
+    const body = JSON.parse(String(fetchMock.mock.calls[0]?.[1]?.body)) as Record<string, unknown>;
+    expect(body.content).toBe("also add tests");
+    expect(body.attachments).toEqual([{ name: "shot.png", path: "attachments/shot.png", size: 2048 }]);
+  });
+
+  it("the 409 NO_LIVE_TURN rejection surfaces as a CATCHABLE ApiError carrying .code (the runTurn fallback's contract)", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        jsonResponse(409, { error: { code: "NO_LIVE_TURN", message: "no live turn is registered for this session" } }),
+      ),
+    );
+
+    let caught: unknown;
+    try {
+      await queueSessionMessage("sess_q1", { content: "x" });
+    } catch (err) {
+      caught = err;
+    }
+    expect(caught).toBeInstanceOf(ApiError);
+    const apiErr = caught as ApiError;
+    expect(apiErr.code).toBe("NO_LIVE_TURN");
+    expect(apiErr.status).toBe(409);
+    expect(apiErr.message).toContain("no live turn");
+  });
+
+  it("dequeueSessionMessage DELETEs /sessions/:id/queue/:seq and unwraps the ok envelope", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse(200, { ok: true }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await dequeueSessionMessage("sess_q1", 41);
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      "http://sidecar.test/api/v1/sessions/sess_q1/queue/41",
+      expect.objectContaining({
+        method: "DELETE",
+        headers: expect.objectContaining({ Authorization: "Bearer tok_123" }),
+      }),
+    );
+  });
+
+  it("fetchRetrySettings/updateRetrySettings round-trip GET/PUT /settings/retry", async () => {
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(
+        jsonResponse(200, { autoRetryRateLimit: true, autoRetryTimeout: true, autoRetryNetwork: true }),
+      )
+      .mockResolvedValueOnce(
+        jsonResponse(200, { autoRetryRateLimit: false, autoRetryTimeout: true, autoRetryNetwork: true }),
+      );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const initial = await fetchRetrySettings();
+    expect(initial).toEqual({ autoRetryRateLimit: true, autoRetryTimeout: true, autoRetryNetwork: true });
+
+    const updated = await updateRetrySettings({ autoRetryRateLimit: false });
+    expect(updated).toEqual({ autoRetryRateLimit: false, autoRetryTimeout: true, autoRetryNetwork: true });
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      2,
+      "http://sidecar.test/api/v1/settings/retry",
+      expect.objectContaining({
+        method: "PUT",
+        headers: expect.objectContaining({ Authorization: "Bearer tok_123" }),
+      }),
+    );
+    const putBody = JSON.parse(String(fetchMock.mock.calls[1]?.[1]?.body)) as Record<string, unknown>;
+    expect(putBody).toEqual({ autoRetryRateLimit: false });
   });
 });

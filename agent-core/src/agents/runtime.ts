@@ -21,9 +21,12 @@ import { buildProjectTools, NO_TOOLS } from "../tools/index.js";
 import { log, logTool, logTurnEnd, logTurnStart } from "../lib/log.js";
 import {
   appendSessionEvent,
+  deliverAllQueuedMessages,
+  deliverQueuedMessage,
   getSession,
   lastSessionSeq,
   listSessionEvents,
+  listUndeliveredQueuedMessages,
   maybeAutoTitleSession,
   recordUsage,
   setSessionStatus,
@@ -54,7 +57,7 @@ import { getIndexSummary } from "../storage/index.js";
 // ROUND-44 (R44-a): the project memory digest for prompt injection.
 import { memoryDigest } from "../storage/memory.js";
 // ROUND-49: the memory master switch (Settings → Advanced).
-import { getMemorySettings, getDebugSettings } from "../storage/settings.js";
+import { getMemorySettings, getDebugSettings, getRetrySettings } from "../storage/settings.js";
 import { getCatalogModel, lookupPricing } from "../storage/models.js";
 import { estimateMessageTokens, type ContextBudget } from "../context.js";
 // ROUND-46 (R46-b): context compaction — summarize the over-budget head
@@ -767,10 +770,12 @@ export function assembleHistory(db: SqliteDatabase, sessionId: string): SeqMessa
  * Re-exported below so the historical import surface (tests, debug-analyst)
  * is unchanged. ──────────────────────────────────────────────────────────── */
 export {
+  CLASS_MESSAGES,
   classifyProviderError,
   isTransientApiFailure,
   providerErrorDetail,
   providerFailureMessage,
+  unwrapRetryError,
   type ProviderErrorClass,
   type ProviderErrorClassification,
 } from "./error-classification.js";
@@ -1419,6 +1424,22 @@ export async function runSingleAgentTurn(
   // their spend to (children: the orchestrator's acquired slot; main turns:
   // 0 = the primary key). Same value for every recordUsage below.
   const keySlot = deps.keySlot ?? 0;
+  // ROUND-78 (R78, owner: "General Settings 重试配置"): the per-class
+  // auto-retry switches, read ONCE per turn (the ladder gate below consults
+  // the cache — no per-rung DB reads while a 30-minute rung waits). A
+  // disabled class fails fast through the honest terminal path (attempts:1).
+  const retrySettings = getRetrySettings(db);
+  /** R78: is auto-retry ON for this transient class? Non-transient classes
+   * are already excluded by isTransientApiFailure — false here just means
+   * "fail fast" for a class the owner switched off. */
+  const retryClassEnabled = (cls: ProviderErrorClass): boolean =>
+    cls === "rate_limit"
+      ? retrySettings.autoRetryRateLimit
+      : cls === "timeout"
+        ? retrySettings.autoRetryTimeout
+        : cls === "network"
+          ? retrySettings.autoRetryNetwork
+          : false;
   // ROUND-48 (R48-e1): forward emit AND signal into the turn prep so the
   // child's toolDeps carries both — interactiveApprovals becomes true for
   // emitted children (the owner's "sub-agents can ask for permission") and
@@ -1450,6 +1471,16 @@ export async function runSingleAgentTurn(
 
   // First message flips a queued session to running (API.md §5 semantics).
   if (session.status === "queued") setSessionStatus(db, session.id, "running");
+
+  // ROUND-78 (R78): queue PRE-FLIP — deliver every lingering undelivered
+  // queued message (seq order) BEFORE this turn's own user event. The
+  // crash/stop recovery contract: a queue left behind by an aborted stream
+  // (ABORTED keeps the queue — Stop does not purge it) or a sidecar kill
+  // always eventually delivers, in order, ahead of the new message. No
+  // frames are emitted on the sync path (there is no SSE here); the folded
+  // event log owns the render — the flipped rows are ordinary message.user
+  // events exactly where they were queued.
+  deliverAllQueuedMessages(db, session.id);
 
   const userEvent = appendSessionEvent(db, session.id, {
     type: "message.user",
@@ -1630,6 +1661,12 @@ export async function runSingleAgentTurn(
       // compaction and RETRY once instead of dying. One recovery per turn;
       // a second overflow lands in the honest terminal message below.
       const classified = classifyProviderError(normalized);
+      // ROUND-78 (R78): the real-text userMessage must be key-scrubbed at THIS
+      // boundary — the pure classifier cannot know the key (its signature is
+      // deliberately key-less), so every emission below uses this scrubbed
+      // line (the same rule providerError already follows; a raw provider
+      // body quoting the key must never reach a frame or an envelope).
+      const classMessage = scrubSecrets(classified.userMessage, keySecrets);
       if (
         classified.class === "context_window_exceeded" &&
         !overflowRecovered &&
@@ -1661,7 +1698,15 @@ export async function runSingleAgentTurn(
       // frames keep the stream alive + the countdown visible. A user stop
       // during the wait aborts the wait immediately and routes through the
       // loop-top signal guard (a stop is never an error).
-      if (isTransientApiFailure(classified.class) && providerRetries < RETRY_LADDER_MS.length) {
+      // ROUND-78 (R78): the per-class switches gate the ladder — a class the
+      // owner switched OFF (Settings → General → retry config) skips it and
+      // falls through to the honest terminal path (attempts stays 1, the
+      // real provider text rides the error card).
+      if (
+        isTransientApiFailure(classified.class) &&
+        retryClassEnabled(classified.class) &&
+        providerRetries < RETRY_LADDER_MS.length
+      ) {
         providerRetries += 1;
         const waitMs = RETRY_LADDER_MS[providerRetries - 1];
         const attempt = providerRetries + 1;
@@ -1675,8 +1720,13 @@ export async function runSingleAgentTurn(
             remainingMs,
             retryAt: Date.now() + remainingMs,
             errorClass: classified.class,
-            classMessage: classified.userMessage,
-            message: `${classified.userMessage} — retrying (attempt ${attempt} of ${RETRY_TOTAL_ATTEMPTS}) in ${formatRetryWaitMs(remainingMs)}`,
+            // R78: the scrubbed real text (see the catch's classMessage const).
+            classMessage,
+            // R78: the provider's REAL scrubbed error text (unwrapped from
+            // any RetryError by providerErrorDetail) — the live retry card
+            // shows what the API actually said, not a generic class line.
+            providerError: providerErrorDetail(normalized, apiKey),
+            message: `${classMessage} — retrying (attempt ${attempt} of ${RETRY_TOTAL_ATTEMPTS}) in ${formatRetryWaitMs(remainingMs)}`,
           });
         };
         emitRetry(waitMs);
@@ -1724,7 +1774,8 @@ export async function runSingleAgentTurn(
         details: {
           providerError: providerErrorDetail(normalized, apiKey),
           errorClass: classified.class,
-          classMessage: classified.userMessage,
+          // R78: the scrubbed real text (the catch's classMessage const).
+          classMessage,
           attempts: providerRetries + 1,
         },
       };
@@ -2116,6 +2167,22 @@ export async function runStreamedAgentTurn(
   // their spend to (children: the orchestrator's acquired slot; main turns:
   // 0 = the primary key). Same value for every recordUsage below.
   const keySlot = deps.keySlot ?? 0;
+  // ROUND-78 (R78, owner: "General Settings 重试配置"): the per-class
+  // auto-retry switches, read ONCE per turn (the ladder gate below consults
+  // the cache — no per-rung DB reads while a 30-minute rung waits). A
+  // disabled class fails fast through the honest terminal path (attempts:1).
+  const retrySettings = getRetrySettings(db);
+  /** R78: is auto-retry ON for this transient class? Non-transient classes
+   * are already excluded by isTransientApiFailure — false here just means
+   * "fail fast" for a class the owner switched off. */
+  const retryClassEnabled = (cls: ProviderErrorClass): boolean =>
+    cls === "rate_limit"
+      ? retrySettings.autoRetryRateLimit
+      : cls === "timeout"
+        ? retrySettings.autoRetryTimeout
+        : cls === "network"
+          ? retrySettings.autoRetryNetwork
+          : false;
   // ROUND-34: values the keyring holds — scrubbed from persisted tool output
   // summaries (run_command inherits process.env which carries ACUTE_* keys).
   const keySecrets = keyring.list().filter((v) => v.length >= 8);
@@ -2152,6 +2219,17 @@ export async function runStreamedAgentTurn(
   if (session.status === "queued") setSessionStatus(db, session.id, "running");
 
   logTurnStart(session.id, agent.id, model, true);
+
+  // ROUND-78 (R78): queue PRE-FLIP — deliver every lingering undelivered
+  // queued message (seq order) BEFORE this turn's own user event. The
+  // crash/stop recovery contract: a queue left behind by an ABORTED turn
+  // (Stop does NOT purge the queue — the chips persist) or a sidecar kill
+  // always eventually delivers, in order, ahead of the new message. No
+  // frames are emitted here — the folded log the UI refetches owns the
+  // render (the flipped rows are ordinary message.user events exactly
+  // where they were queued); the loop-top delivery below emits the live
+  // queued.delivered frames for messages queued DURING this turn.
+  deliverAllQueuedMessages(db, session.id);
 
   const userEvent = appendSessionEvent(db, session.id, {
     type: "message.user",
@@ -2214,6 +2292,32 @@ export async function runStreamedAgentTurn(
   let forceCompaction = false;
 
   for (let outerIter = 0; outerIter < maxOuterLoops; outerIter++) {
+    // ROUND-78 (R78, owner: "the message QUEUES and is auto-delivered right
+    // after the current tool call completes; the agent reads it with full
+    // context and continues"): LOOP-TOP DELIVERY. Messages queued while the
+    // turn was streaming flip to message.user HERE — before this
+    // iteration's history assembly, so the model sees the user's message
+    // (with the tool results it follows) in THIS iteration. Delivery never
+    // consumes outer-loop budget (outerIter is untouched — this is not an
+    // iteration), and on iteration 0 with pre-flipped events nothing
+    // remains (a no-op). Each delivery emits a queued.delivered frame so
+    // the live chip moves into the transcript.
+    const pendingQueued = listUndeliveredQueuedMessages(db, session.id);
+    for (const queuedEvent of pendingQueued) {
+      deliverQueuedMessage(db, session.id, queuedEvent.seq);
+      const queuedPayload =
+        queuedEvent.payload !== null && typeof queuedEvent.payload === "object"
+          ? (queuedEvent.payload as Record<string, unknown>)
+          : null;
+      const queuedContent =
+        queuedPayload !== null && typeof queuedPayload.content === "string" ? queuedPayload.content : "";
+      emit({
+        type: "queued.delivered",
+        seq: queuedEvent.seq,
+        content: queuedContent,
+        ts: queuedEvent.ts,
+      });
+    }
     // Re-assemble messages from the event log — ROUND-34: now WITH tool
     // results, so iteration 2+ sees exactly what its tools did instead of
     // re-planning blind (the multi-step fix).
@@ -2517,6 +2621,12 @@ export async function runStreamedAgentTurn(
       // that overflows again (or recovery that found nothing to compact)
       // falls through to the honest terminal path below.
       const classified = classifyProviderError(normalized);
+      // ROUND-78 (R78): the real-text userMessage must be key-scrubbed at THIS
+      // boundary — the pure classifier cannot know the key (its signature is
+      // deliberately key-less), so every emission below uses this scrubbed
+      // line (the same rule providerError already follows; a raw provider
+      // body quoting the key must never reach a frame or an envelope).
+      const classMessage = scrubSecrets(classified.userMessage, keySecrets);
       if (
         classified.class === "context_window_exceeded" &&
         !overflowRecovered &&
@@ -2550,7 +2660,15 @@ export async function runStreamedAgentTurn(
       // abort-aware (a user stop cuts it short and routes through the
       // catch's signal.aborted path above on the next throw) and ticks
       // meta.retry heartbeats (SSE keep-alive + live countdown).
-      if (isTransientApiFailure(classified.class) && providerRetries < RETRY_LADDER_MS.length) {
+      // ROUND-78 (R78): the per-class switches gate the ladder — a class the
+      // owner switched OFF (Settings → General → retry config) skips it and
+      // falls through to the honest terminal path (attempts stays 1, the
+      // real provider text rides the error card).
+      if (
+        isTransientApiFailure(classified.class) &&
+        retryClassEnabled(classified.class) &&
+        providerRetries < RETRY_LADDER_MS.length
+      ) {
         providerRetries += 1;
         const waitMs = RETRY_LADDER_MS[providerRetries - 1];
         const attempt = providerRetries + 1;
@@ -2564,8 +2682,13 @@ export async function runStreamedAgentTurn(
             remainingMs,
             retryAt: Date.now() + remainingMs,
             errorClass: classified.class,
-            classMessage: classified.userMessage,
-            message: `${classified.userMessage} — retrying (attempt ${attempt} of ${RETRY_TOTAL_ATTEMPTS}) in ${formatRetryWaitMs(remainingMs)}`,
+            // R78: the scrubbed real text (see the catch's classMessage const).
+            classMessage,
+            // R78: the provider's REAL scrubbed error text (unwrapped from
+            // any RetryError by providerErrorDetail) — the live retry card
+            // shows what the API actually said, not a generic class line.
+            providerError: providerErrorDetail(normalized, apiKey),
+            message: `${classMessage} — retrying (attempt ${attempt} of ${RETRY_TOTAL_ATTEMPTS}) in ${formatRetryWaitMs(remainingMs)}`,
           });
         };
         emitRetry(waitMs);
@@ -2677,7 +2800,8 @@ export async function runStreamedAgentTurn(
         details: {
           providerError: providerErrorText,
           errorClass: classified.class,
-          classMessage: classified.userMessage,
+          // R78: the scrubbed real text (the catch's classMessage const).
+          classMessage,
           model,
           userSeq: userEvent.seq,
           // R75: the total attempts (1 = no ladder ran) — the live error

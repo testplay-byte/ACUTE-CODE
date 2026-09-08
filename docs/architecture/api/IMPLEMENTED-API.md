@@ -1,4 +1,4 @@
-<!-- last-reviewed: 2026-09-07 round-77 -->
+<!-- last-reviewed: 2026-09-08 round-78 -->
 # IMPLEMENTED API — the shipped surface
 
 **Truth = this file.** Verified against `agent-core/src/server.ts` at
@@ -1871,3 +1871,104 @@ the session to `queued` instead of terminal `failed` (retryable, no 409).
   (`createSession` gained the input — internal, not a REST field).
 - `meta.overflow_recovery` is now typed + rendered (was untyped
   fall-through since R71).
+
+## ROUND-78 additions (implemented)
+
+The honest-errors + queue round. Two NEW route pairs, one NEW event type,
+three NEW SSE frames, and additive fields on the retry/error surfaces:
+
+### `GET /settings/retry` + `PUT /settings/retry` (the DebugSettings pattern)
+
+`GET` → `{autoRetryRateLimit: boolean, autoRetryTimeout: boolean,
+autoRetryNetwork: boolean}` (all default TRUE — the R75 ladder behavior out
+of the box; keys `retry.autoRetry*` in the settings table). `PUT` accepts a
+PARTIAL body of booleans → 200 with the updated object; a non-boolean field
+→ 400 VALIDATION with `details.field = "body.<field>"`. The runtime reads
+the settings once per turn and gates the retry ladder PER CLASS: a disabled
+class fails fast through the honest terminal path (attempts 1, no
+`meta.retry` frames, the real provider text on the card). Bearer-gated like
+every /api/v1 route.
+
+### `POST /sessions/:id/queue` + `DELETE /sessions/:id/queue/:seq` (NEW)
+
+- `POST /sessions/:id/queue` `{content, attachments?}` — validates exactly
+  like the send routes (content shape, attachments, 404 unknown session,
+  409 terminal status). Requires a LIVE registered turn: no live turn →
+  **409 `{error:{code:"NO_LIVE_TURN", message:"no live turn for this
+  session — send the message normally"}}`** (the panel catches the code and
+  falls back to a normal send). Success appends a `message.queued` event
+  and bridges a `user.queued` frame onto the OPEN SSE stream via the turn
+  registry's notify hook (`registerTurn(id, controller, notify?)` /
+  `notifyTurn(id, event)` — a dead/throwing notifier never fails the POST)
+  → `200 {ok:true, seq}`.
+- `DELETE /sessions/:id/queue/:seq` — removes an UNDELIVERED queued event
+  (the chip's remove / send-now path) → `200 {ok:true}` | 404 (absent or
+  already delivered — a delivered row is transcript history) | 400 (bad
+  seq).
+
+### The `message.queued` event + the delivery FLIP
+
+A queued message is a `session_events` row of NEW type `message.queued`
+with the exact `message.user` payload `{role:"user", content,
+attachments?}` (+ agentId/ts stamped by appendSessionEvent). NOTHING
+existing reads it — `assembleHistory` and the fold skip unknown types (test-pinned). **Delivery is a strict type FLIP** (`message.queued` →
+`message.user` on the same row; seq/ts/payload untouched), so the message
+lands exactly where it was QUEUED — the model sees it at the next model
+call, in the same prompt as the completed tool results. Three delivery
+paths:
+
+1. **Loop-top (mid-turn)**: every outer-loop iteration of the streamed turn
+   flips undelivered queued events BEFORE `assembleHistory` and emits one
+   `queued.delivered` frame each (delivery spends no outer-loop budget).
+   Because the R75 ladder's retry `continue` re-enters the loop top, a
+   message queued during a ladder wait delivers at the next rung boundary.
+2. **Turn-end continuation**: after a SUCCESSFUL turn the streamed route
+   checks the queue — non-empty and under the 25-continuation cap →
+   `meta.queue_continue {count}` frame, the FIRST queued event is CONSUMED
+   (deleted; its content/attachments become the next
+   `runStreamedAgentTurn`'s args), the REST flip directly (they ride the
+   continuation turn's iteration-0 history as ordinary user events), and
+   the SAME SSE stream runs another full turn (own `message.user` + usage
+   + task_complete). The debug analyst + the terminal `done` frame run
+   ONCE after the loop exits; ABORTED/error break the loop (queued
+   messages STAY queued); one registerTurn + one abort controller span the
+   whole loop (a Stop aborts the in-flight continuation). The sync path
+   and sub-agents have NO interactive queueing (no owner composer) — they
+   inherit only the pre-flip.
+3. **Pre-flip (crash/stop recovery)**: BOTH turn functions call
+   `deliverAllQueuedMessages` BEFORE their own `message.user` append — a
+   queue left by an aborted turn or a sidecar kill always delivers, in
+   order, ahead of the next message (no frames; the folded log owns the
+   render).
+
+### New SSE frames + the honest retry fields
+
+- `{type:"user.queued", seq, content, ts}` — rides the OPEN stream at
+  queue-POST time (the notify bridge), renders the amber chip.
+- `{type:"queued.delivered", seq, content, ts}` — loop-top delivery (chip →
+  user bubble).
+- `{type:"meta.queue_continue", count}` — before each continuation turn.
+- `meta.retry` gains `providerError?: string` — the scrubbed REAL provider
+  text (unwrapped from any SDK RetryError by `providerErrorDetail`), so the
+  live RetryStatusCard shows the API's actual words under the class chip;
+  the same field rides the 502 envelope's `details` and the persisted
+  `turn.error` payload.
+- **`classMessage` semantics changed (honest)**: it is now the key-scrubbed
+  REAL provider text (240-char cap) — the R71 generic one-liners demote to
+  the empty-text fallback (still exported as `CLASS_MESSAGES`). Only a REAL
+  rate limit ladders; 403s whose body says region/moderation/permission/
+  unavailable reclassify from `auth` to fail-fast `unknown` with the real
+  text; plain 403 stays auth; 401 stays status-only auth.
+- Frontend fold: `toProjectChatItems` folds a `message.queued` row into the
+  NEW item kind `"queued"` `{kind, seq, content, ts, attachments?}` (never
+  a turn boundary; a flipped row is an ordinary user item).
+
+### Model-facing (non-HTTP) drift notes
+
+- `agents/error-classification.ts` exports NEW `unwrapRetryError` (an
+  AI_RetryError → its `lastError`, else the last `errors[]` element) +
+  `CLASS_MESSAGES`; `classifyProviderError`/`extractStatus` read the
+  UNWRAPPED error (status walk over `lastError`/`errors`, depth ≤ 4,
+  cycle-guarded); `userMessage` is the real text.
+- `runtime.ts` re-exports `unwrapRetryError` + `CLASS_MESSAGES` alongside
+  the historical surface.

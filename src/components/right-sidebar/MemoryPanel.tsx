@@ -56,7 +56,8 @@ export function MemoryPanel({ projectId, tab }: { projectId: string; tab: RightS
   });
   const memories = memoryQuery.data ?? [];
 
-  // ROUND-49: the memory master switch (Settings → Advanced). While OFF the
+  // ROUND-49: the memory master switch (Settings → General, R78's rename of
+  // the advanced tab's label — the URL id stays "advanced"). While OFF the
   // panel stays browsable/deletable (pruning old memories is exactly what
   // you want while debugging the system) but carries a clear OFF notice —
   // nothing is injected into agent turns and the memory tools are gone.
@@ -113,7 +114,7 @@ export function MemoryPanel({ projectId, tab }: { projectId: string; tab: RightS
           <span className="text-[10.5px]" style={{ color: styles.textSecondary }}>
             Memory is <strong>turned off</strong> — agents run on session context alone and the
             memory tools are unavailable. Saved memories are kept (you can still prune them
-            below). Re-enable in Settings → Advanced.
+            below). Re-enable in Settings → General.
           </span>
         </div>
       ) : null}

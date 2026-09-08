@@ -11,6 +11,7 @@ import {
   AlertTriangle,
   Braces,
   Check,
+  Clock,
   Copy,
   File,
   FolderOpen,
@@ -25,6 +26,7 @@ import {
   ThumbsDown,
   ThumbsUp,
   Timer,
+  X,
   type LucideIcon,
 } from "lucide-react";
 import { Link, useSearchParams } from "react-router";
@@ -59,6 +61,7 @@ import { ClampedText } from "../shared/ClampedText";
 import {
   type AttachmentRef,
   type AssistantTurnItem,
+  ApiError,
   DIFF_TOOLS,
   type ErrorTurnItem,
   MAX_RATING_NOTE_CHARS,
@@ -74,11 +77,13 @@ import {
   type WorkingEntry,
   decideApproval,
   deleteRating,
+  dequeueSessionMessage,
   fetchDebugSettings,
   fetchProjectModes,
   listSessionRatings,
   patchSessionActiveMode,
   patchSessionPermissions,
+  queueSessionMessage,
   rateReply,
   toProjectChatItems,
 } from "../../lib/api";
@@ -91,7 +96,11 @@ import { useProjectChatStore } from "../../lib/project-chat-store";
 // clipboard builder (thinking + tool calls + outputs + final answer).
 import { buildFullTurnText } from "../../lib/turn-copy";
 import { useActiveStreams } from "../../lib/active-streams";
-import { useStreamStore, type LiveTurnRetry } from "../../lib/stream-store";
+import {
+  useStreamStore,
+  type LiveTurnRetry,
+  type QueuedMessage,
+} from "../../lib/stream-store";
 import { fmtBytes, fmtTokens, formatTime } from "../../lib/format";
 // ROUND-67 (R67/E3): the chat-session → browser-tab binding (the leak fix).
 import { stateKey, useRightSidebarStore } from "../../lib/right-sidebar-store";
@@ -583,6 +592,12 @@ const itemKey = (item: ProjectChatItem): string => {
   switch (item.kind) {
     case "user":
       return `u-${item.seq}`;
+    // R78: the folded queued chip — the same seq namespace as user items
+    // (the event row flips to message.user at delivery, so a delivered
+    // queued item's key changes `q-` → `u-` and the chip swaps for the
+    // bubble on the refetch — no key collision with the pre-delivery item).
+    case "queued":
+      return `q-${item.seq}`;
     case "turn":
       return `turn-${item.seq}`;
     case "error":
@@ -806,7 +821,8 @@ function AssistantTurn({
   /** R37 review #4: true when this turn JUST finished while the user
    * watched — it mounts collapsed ("Worked for Ns" + answer). */
   collapseHint?: boolean;
-  /** ROUND-67 (R67-B): debug mode (Advanced settings) gates the footer's
+  /** ROUND-67 (R67-B): debug mode (the General tab's settings — R78 renamed
+   * the advanced tab's label; the URL id stays "advanced") gates the footer's
    * second copy option — the full-turn export. Threaded from the panel's
    * ["debug-settings"] query via MessageRenderer. */
   debugMode?: boolean;
@@ -1053,6 +1069,13 @@ export function TurnErrorCard({
  * an alarm. Shows the cause (the class message), the attempt number
  * (2/6…6/6), and a live countdown to the next attempt. Any content frame
  * (text, thinking, tool) clears it — the retry succeeded.
+ *
+ * ROUND-78 (R78-A, owner: "show the actual error messages too, which were
+ * returned from the API"): when the meta.retry frame carries the scrubbed
+ * providerError (the REAL API text, not the generic class one-liner), the
+ * card renders it under the class chip in mono with a ~3-line clamp (long
+ * payloads get the R77 Show-full-error toggle) — the owner sees exactly
+ * what the provider said while the ladder waits.
  */
 export function RetryStatusCard({ retry }: { retry: LiveTurnRetry }) {
   const styles = useThemeStyles();
@@ -1063,6 +1086,10 @@ export function RetryStatusCard({ retry }: { retry: LiveTurnRetry }) {
     const timer = setInterval(() => setNowMs(Date.now()), 1_000);
     return () => clearInterval(timer);
   }, []);
+  // R78: the provider text's expand toggle — the TurnErrorCard (R77) pattern:
+  // payloads over ~240 chars collapse to an excerpt; the toggle reveals the
+  // complete raw text in a scrollable mono block.
+  const [providerExpanded, setProviderExpanded] = useState(false);
   const remainingMs = Math.max(0, retry.retryAt - nowMs);
   const remainingLabel =
     remainingMs <= 1_000
@@ -1071,6 +1098,12 @@ export function RetryStatusCard({ retry }: { retry: LiveTurnRetry }) {
         ? `${Math.ceil(remainingMs / 1000)}s`
         : `${Math.floor(remainingMs / 60_000)}m ${Math.round((remainingMs % 60_000) / 1000)}s`;
   const classLabel = retry.errorClass.replace(/_/g, " ");
+  // R78: the REAL provider text — mono, clamped to ~3 lines; long payloads
+  // (>240 chars) collapse to the excerpt + the R77 expand-toggle treatment.
+  const providerText = retry.providerError ?? null;
+  const providerIsLong = providerText !== null && providerText.length > 240;
+  const providerShort =
+    providerText !== null && providerIsLong ? `${providerText.slice(0, 240)}…` : providerText;
   // R77: the wait's fill fraction for the countdown bar — 0 the moment the
   // rung starts, 1 as the next attempt fires (waitMs = the FULL rung).
   const waitFraction = Math.min(1, Math.max(0, 1 - remainingMs / Math.max(1, retry.waitMs)));
@@ -1144,6 +1177,60 @@ export function RetryStatusCard({ retry }: { retry: LiveTurnRetry }) {
               {retry.classMessage}
             </span>
           </div>
+          {/* ROUND-78 (R78-A, owner: "show the actual error messages too,
+              which were returned from the API, so that we know what is going
+              on"): the API's REAL words, verbatim — mono, ~3-line clamp,
+              break-words. The class line above stays the one-glance summary;
+              THIS line is the evidence. Long payloads (the raw OpenRouter
+              body can run hundreds of chars) collapse to a 240-char excerpt
+              with the R77 TurnErrorCard expand-toggle (Show full error → the
+              complete text, scrollable). Absent (pre-R78 sidecar) → nothing
+              renders here; the class message above stands alone exactly as
+              before. */}
+          {providerShort !== null ? (
+            <div className="mt-1.5 min-w-0" data-retry-provider-error>
+              <div
+                className={`font-mono text-[10.5px] leading-[1.55] min-w-0 break-words ${
+                  providerExpanded ? "" : "line-clamp-3"
+                }`}
+                style={{ color: styles.textSecondary }}
+              >
+                {providerExpanded ? providerText : providerShort}
+              </div>
+              {providerIsLong ? (
+                <>
+                  <button
+                    type="button"
+                    onClick={() => setProviderExpanded((v) => !v)}
+                    aria-expanded={providerExpanded}
+                    data-retry-provider-expand
+                    className="mt-1 h-6 px-2 rounded-lg text-[11px] font-semibold border transition-colors shrink-0"
+                    style={{ borderColor: withAlpha("#f59e0b", 0.4), color: "#d97706" }}
+                    title={
+                      providerExpanded
+                        ? "Collapse the provider text"
+                        : "Show the complete error text returned by the API"
+                    }
+                  >
+                    {providerExpanded ? "Show less" : "Show full error"}
+                  </button>
+                  {providerExpanded ? (
+                    <pre
+                      data-retry-provider-error-full
+                      className="mt-1.5 max-h-44 overflow-y-auto rounded-lg border px-2.5 py-2 font-mono text-[10.5px] leading-[1.55] whitespace-pre-wrap break-words min-w-0"
+                      style={{
+                        borderColor: withAlpha("#f59e0b", 0.3),
+                        background: styles.isDark ? "rgba(255,255,255,0.04)" : styles.subtle,
+                        color: styles.textSecondary,
+                      }}
+                    >
+                      {providerText}
+                    </pre>
+                  ) : null}
+                </>
+              ) : null}
+            </div>
+          ) : null}
           {/* The countdown — a mono label + a thin fill bar that empties
               into the next attempt (progress IS the reassurance). */}
           <div className="mt-2 flex items-center gap-2">
@@ -1213,6 +1300,100 @@ export function TurnStoppedCard({ ts }: { ts: string }) {
   );
 }
 
+/**
+ * ROUND-78 (R78-D, owner: "工作中发送消息（排队）" — while the agent is
+ * responding/running tools the user can still send): the QUEUED MESSAGE
+ * CHIP — a compact amber card (the RetryStatusCard language: amber = alive
+ * and waiting, never red) rendered below the working section for every
+ * message sitting in the session's queue. A Clock glyph + the "sends after
+ * the current step" label + the content clamped to 2 lines + two
+ * affordances: X (remove → DELETE /sessions/:id/queue/:seq, optimistic) and
+ * "Send now" (only while NOT busy → dequeue + a normal send of the content
+ * — no waiting for the current step, which already finished). Renders from
+ * BOTH sources: the live store's `queued` array (mid-stream, pushed by the
+ * user.queued frame) and the folded log's `queued` items (after the
+ * stream ends — message.queued events fold there; the panel dedupes by seq
+ * so the handoff never double-renders).
+ */
+export function QueuedMessageChip({
+  entry,
+  busy,
+  onRemove,
+  onSendNow,
+}: {
+  entry: Pick<QueuedMessage, "seq" | "content" | "ts" | "attachments">;
+  /** Hides "Send now" while a turn runs (the queue itself will deliver). */
+  busy: boolean;
+  /** Live-mode remove affordance (undefined in fixture mode). */
+  onRemove?: () => void;
+  /** Live-mode send-now affordance (undefined while busy / fixture mode). */
+  onSendNow?: () => void;
+}) {
+  const styles = useThemeStyles();
+  return (
+    <motion.div variants={msgVariants} initial="initial" animate="animate" className="min-w-0">
+      <div
+        data-testid="queued-chip"
+        data-queued-seq={entry.seq}
+        className="rounded-[14px] border px-3.5 py-2.5 flex items-start gap-2.5"
+        style={{
+          borderColor: withAlpha("#f59e0b", 0.4),
+          background: withAlpha("#f59e0b", styles.isDark ? 0.08 : 0.05),
+        }}
+      >
+        <Clock size={13} className="mt-0.5 shrink-0" style={{ color: "#d97706" }} aria-hidden />
+        <div className="min-w-0 flex-1">
+          <div className="text-[12px] font-bold" style={{ color: "#d97706" }}>
+            Queued — sends after the current step
+          </div>
+          {/* The message text, clamped to two lines (the full text lives in
+              the event log / the send-now round-trip — the chip is a glance,
+              not the transcript). */}
+          <div
+            className="mt-0.5 line-clamp-2 break-words text-[12px] leading-[1.5]"
+            style={{ color: styles.textSecondary }}
+          >
+            {entry.content}
+          </div>
+          <div className="mt-1.5 flex flex-wrap items-center gap-2">
+            <span className="text-[10px] font-mono shrink-0" style={{ color: styles.textTertiary }}>
+              {formatTime(entry.ts)}
+            </span>
+            {!busy && onSendNow !== undefined ? (
+              <button
+                type="button"
+                onClick={onSendNow}
+                aria-label="Send the queued message now"
+                title="Stop waiting — send this message as a new turn right away"
+                data-queued-send-now
+                className="h-6 px-2 rounded-lg text-[11px] font-semibold border transition-colors shrink-0"
+                style={{ borderColor: withAlpha("#f59e0b", 0.45), color: "#d97706" }}
+              >
+                Send now
+              </button>
+            ) : null}
+          </div>
+        </div>
+        {onRemove !== undefined ? (
+          <button
+            type="button"
+            onClick={onRemove}
+            aria-label="Remove the queued message"
+            title="Remove the queued message"
+            data-queued-remove
+            className="w-6 h-6 rounded-md grid place-items-center shrink-0 transition-colors"
+            style={{ color: styles.textTertiary }}
+            onMouseEnter={(e) => (e.currentTarget.style.background = styles.subtleHover)}
+            onMouseLeave={(e) => (e.currentTarget.style.background = "transparent")}
+          >
+            <X size={11} />
+          </button>
+        ) : null}
+      </div>
+    </motion.div>
+  );
+}
+
 /** Direct child of AnimatePresence mode="popLayout": framer-motion attaches a
  * measurement ref to this element (React 18 requires forwardRef — the demo
  * could skip it on React 19). The wrapper div is the presence child. */
@@ -1235,13 +1416,20 @@ const MessageRenderer = forwardRef<
     /** ROUND-50 (R50-c2): display-only attachment chips for user items —
      * from the persisted event log OR the optimistic pending echo. */
     attachments?: AttachmentRef[];
-    /** ROUND-67 (R67-B): debug mode (Advanced settings) — threaded to
+    /** ROUND-67 (R67-B): debug mode (the General tab's settings — R78's
+     * rename of the old Advanced label) — threaded to
      * AssistantTurn so its footer can mount the second, full-turn copy
      * button (gated on the ["debug-settings"] query upstream). */
     debugMode?: boolean;
+    /** ROUND-78 (R78-D): the queued chip's affordances — bound by the panel
+     * for FOLDED queued items (live-mode only; the busy flag rides the
+     * dedicated prop). */
+    onQueuedRemove?: (seq: number) => void;
+    onQueuedSendNow?: (entry: QueuedMessage) => void;
+    queuedBusy?: boolean;
   }
 >(function MessageRenderer(
-  { item, sessionId, projectId, collapseHint, onRetry, retryDisabled, onRevert, revertDisabled, attachments, debugMode },
+  { item, sessionId, projectId, collapseHint, onRetry, retryDisabled, onRevert, revertDisabled, attachments, debugMode, onQueuedRemove, onQueuedSendNow, queuedBusy },
   ref,
 ) {
   switch (item.kind) {
@@ -1253,6 +1441,19 @@ const MessageRenderer = forwardRef<
             onRevert={onRevert}
             revertDisabled={revertDisabled}
             attachments={attachments ?? item.attachments}
+          />
+        </div>
+      );
+    case "queued":
+      // R78: the folded queued chip (message.queued event) — the SAME chip
+      // the live store renders mid-stream, with the panel-bound affordances.
+      return (
+        <div ref={ref}>
+          <QueuedMessageChip
+            entry={item}
+            busy={queuedBusy ?? false}
+            onRemove={onQueuedRemove !== undefined ? () => onQueuedRemove(item.seq) : undefined}
+            onSendNow={onQueuedSendNow !== undefined ? () => onQueuedSendNow(item) : undefined}
           />
         </div>
       );
@@ -1419,6 +1620,13 @@ export function AgentChatPanel({
   const liveError = streamSlice?.liveError ?? null;
   const streamPendingEcho = streamSlice?.pendingEcho ?? null;
   const lastLiveEndMs = streamSlice?.lastLiveEndMs ?? 0;
+  // ROUND-78 (R78-D): the session's live message QUEUE — chips (not yet
+  // delivered) + delivered bubbles. The frames keep them fresh mid-stream;
+  // startStream resets them and the stream-end finally clears them (the
+  // refetched folded log owns the render after that — message.queued events
+  // fold as `queued` items, delivered ones as ordinary user items).
+  const liveQueued = streamSlice?.queued ?? [];
+  const deliveredQueued = streamSlice?.deliveredQueued ?? [];
   // ROUND-58 (R58-cf): the last live turn ended by a USER STOP — the quiet
   // Stopped card below the (folded or still-live) partial + the composer's
   // Continue affordance both key off this signal (it survives the live-turn
@@ -1440,7 +1648,8 @@ export function AgentChatPanel({
   const dataSource = liveMode ? "live" : "demo";
 
   // ROUND-67 (R67-B, the owner's second copy option): debug mode (Settings →
-  // Advanced) gates the "Copy full conversation (debug)" button on assistant
+  // General, R78's label rename of the old Advanced tab — the URL id stays
+  // "advanced") gates the "Copy full conversation (debug)" button on assistant
   // replies. SHARED cache key ["debug-settings"] — the same one
   // SettingsPage's DebugModeCard uses, so flipping the switch there updates
   // this panel on the next focus (react-query refetch-on-window-focus) with
@@ -1711,14 +1920,25 @@ export function AgentChatPanel({
   // turn to end).
   const liveWorkingCount = liveTurn?.working.length ?? 0;
   const liveTailText = liveTurn?.streamText ?? "";
+  // R78: the queue lengths join the auto-scroll deps — a new chip / a
+  // delivered bubble is new content at the bottom, exactly like a working
+  // entry (the owner should see the chip land without scrolling).
   useEffect(() => {
     const el = scrollRef.current;
     if (el) el.scrollTo({ top: el.scrollHeight, behavior: "smooth" });
-  }, [items.length, busy, pendingUser, liveWorkingCount, liveTailText.length]);
+  }, [
+    items.length,
+    busy,
+    pendingUser,
+    liveWorkingCount,
+    liveTailText.length,
+    liveQueued.length,
+    deliveredQueued.length,
+  ]);
 
   const runTurn = async (content: string, composerAttachments: ComposerAttachment[] = []) => {
     const text = content.trim();
-    if (!text || busy || !agent) return;
+    if (!text || !agent) return;
     // ROUND-73 (R73-c): the /mode slash intercept — the picker's keyboard
     // sibling. A /mode command NEVER becomes a chat message (no optimistic
     // echo, no stream): the composer text clears exactly like a normal send
@@ -1730,6 +1950,73 @@ export function AgentChatPanel({
     if (slashMode !== null) {
       setInput("");
       applyModeSlash(slashMode);
+      return;
+    }
+    // ── ROUND-78 (R78-D, owner: "工作中发送消息（排队）" — send while the
+    // agent works): a LIVE stream is running on this session → QUEUE the
+    // message instead of refusing it. The POST validates server-side and
+    // the user.queued SSE frame renders the chip; the optimistic push below
+    // is belt-and-suspenders for a missed frame (deduped by seq in the
+    // store). The one honest race: the turn can END between the Enter and
+    // the POST — the sidecar answers 409 {code:"NO_LIVE_TURN"} and we FALL
+    // THROUGH to the normal send path below exactly as if not busy (the
+    // stale `busy` closure must not block the retry). Runs BEFORE the busy
+    // guard for that reason. ──
+    const liveSid = session?.id;
+    if (busy && liveMode && streamBusy && liveSid !== undefined) {
+      const queueAttachments = composerAttachments.map(toMessageAttachment);
+      try {
+        const queued = await queueSessionMessage(liveSid, {
+          content: text,
+          ...(queueAttachments.length > 0 ? { attachments: queueAttachments } : {}),
+        });
+        // Optimistic chip (the frame owns it normally; pushQueuedMessage
+        // dedupes by seq so this never doubles).
+        useStreamStore.getState().pushQueuedMessage(liveSid, {
+          seq: queued.seq,
+          content: text,
+          ts: new Date().toISOString(),
+          ...(queueAttachments.length > 0
+            ? {
+                attachments: queueAttachments.map((a) => ({
+                  name: a.name,
+                  ...(a.path !== undefined ? { path: a.path } : {}),
+                  ...(a.size !== undefined ? { size: a.size } : {}),
+                })),
+              }
+            : {}),
+        });
+        // Clear the local staged state exactly like a normal send (the
+        // composer already dropped its chips + @ token; NO pendingEcho —
+        // the chip IS the optimistic render for a queued message).
+        setInput("");
+        setSendError(null);
+        setPendingEchoAttachments(null);
+        return;
+      } catch (err) {
+        if (err instanceof ApiError && err.code === "NO_LIVE_TURN") {
+          // The turn ended mid-POST — the LOCAL reader usually learns a hair
+          // later (the server closes the SSE when it ends the turn; the 409
+          // round-trip beats the close event by milliseconds). startStream
+          // refuses while streamBusy is still true and force-clearing would
+          // abort a possibly-live reader, so WAIT BRIEFLY for the store to
+          // settle, then fall through to the NORMAL send (the busy guard is
+          // skipped: this closure captured busy before the stream ended).
+          const deadline = Date.now() + 2000;
+          while (Date.now() < deadline) {
+            if (useStreamStore.getState().bySession[liveSid]?.streamBusy !== true) break;
+            await new Promise((resolve) => setTimeout(resolve, 50));
+          }
+        } else {
+          // Any other failure (validation / auth / network) surfaces through
+          // the existing send-error banner path.
+          setSendError(err instanceof Error ? err.message : String(err));
+          return;
+        }
+      }
+    } else if (busy) {
+      // Legacy guard: busy without a queueable live stream (demo mode, a
+      // create/send in flight, a stale closure) — the pre-R78 no-op stands.
       return;
     }
     setInput("");
@@ -1940,6 +2227,47 @@ export function AgentChatPanel({
     }
   };
 
+  // ── ROUND-78 (R78-D): the queued chips' affordances (live mode only —
+  // fixture mode never queues: onQueue is undefined there) ────────────────
+  /** The chip's X: optimistically remove the chip from the live store, then
+   * DELETE the queued event server-side. A failed DELETE toasts honestly
+   * (the refetch re-syncs — a 404 means it was already delivered/removed,
+   * which is success in every way that matters). */
+  const removeQueuedMessage = async (seq: number): Promise<void> => {
+    if (activeSessionId === null) return;
+    useStreamStore.getState().removeQueuedMessage(activeSessionId, seq);
+    try {
+      await dequeueSessionMessage(activeSessionId, seq);
+      // The folded log still carries the message.queued event until the next
+      // refetch — invalidate so the chip disappears from the fold too.
+      void queryClient.invalidateQueries({ queryKey: ["session"] });
+    } catch (err) {
+      pushLocalToast(
+        "Could not remove the queued message",
+        err instanceof Error ? err.message : String(err),
+        "task_failed",
+      );
+    }
+  };
+
+  /** The chip's "Send now" (only rendered while !busy): dequeue the event
+   * (so it never double-delivers at the next turn), then run the content
+   * through the NORMAL send path — the user decided not to wait. A failed
+   * dequeue (404 = already gone) never blocks the send: the message goes
+   * out either way. */
+  const sendQueuedNow = async (entry: QueuedMessage): Promise<void> => {
+    if (activeSessionId === null || busy) return;
+    useStreamStore.getState().removeQueuedMessage(activeSessionId, entry.seq);
+    try {
+      await dequeueSessionMessage(activeSessionId, entry.seq);
+    } catch {
+      // Already delivered/removed server-side — the normal send below still
+      // fires; the refetch reconciles the transcript.
+    }
+    void queryClient.invalidateQueries({ queryKey: ["session"] });
+    await runTurn(entry.content, []);
+  };
+
   // ── ROUND-43: error-card retry plumbing ─────────────────────────────────
   // Retry re-sends the FAILED turn's user message as a new turn through the
   // normal send path (runTurn). The text resolves from the folded log via
@@ -2042,6 +2370,15 @@ export function AgentChatPanel({
       onInputChange={setInput}
       busy={busy}
       onSend={(content, attachments) => void runTurn(content, attachments)}
+      // ROUND-78 (R78-D): the queue-send wire — LIVE MODE ONLY (fixture mode
+      // omits it so the composer keeps the legacy busy behavior: Stop only,
+      // Enter a no-op). The composer calls this while busy; runTurn itself
+      // decides queue-vs-send at the top (busy + liveMode + streamBusy →
+      // POST /sessions/:id/queue; a NO_LIVE_TURN 409 falls back to a normal
+      // send — the turn just ended).
+      onQueue={
+        liveMode ? (content, attachments) => void runTurn(content, attachments) : undefined
+      }
       // ROUND-58 (R58-cf): the Continue affordance — only after the last turn
       // ended via user stop (the backend persisted the partial + tool
       // results, so a follow-up message resumes the response).
@@ -2311,33 +2648,53 @@ export function AgentChatPanel({
             )}
 
             <AnimatePresence mode="popLayout">
-              {items.map((item) => (
-                <MessageRenderer
-                  key={itemKey(item)}
-                  item={item}
-                  sessionId={session?.id ?? null}
-                  projectId={projectId}
-                  collapseHint={Date.now() - lastLiveEndRef.current < 5000}
-                  // ROUND-67 (R67-B): the debug-gated full-turn copy rides
-                  // every assistant turn's footer.
-                  debugMode={debugMode}
-                  {...(item.kind === "error"
-                    ? {
-                        onRetry: () => void runTurn(retryTextForError(item)),
-                        retryDisabled: busy,
-                      }
-                    : {})}
-                  // ROUND-44 (R44-c): persisted user bubbles (seq >= 0, session
-                  // bound) can rewind the log; the button is disabled while a
-                  // turn streams (busy = streamBusy | send | create | echo).
-                  {...(item.kind === "user" && item.seq >= 0 && activeSessionId !== null
-                    ? {
-                        onRevert: () => setRevertTarget(item),
-                        revertDisabled: busy,
-                      }
-                    : {})}
-                />
-              ))}
+              {items.map((item) => {
+                // R78: a folded queued chip whose seq is still LIVE-rendered
+                // (a window-focus refetch raced the running stream) — skip it
+                // here; the live queue's chip with the same seq owns the
+                // render until the stream ends (never a double chip).
+                if (item.kind === "queued" && liveQueued.some((q) => q.seq === item.seq)) {
+                  return null;
+                }
+                return (
+                  <MessageRenderer
+                    key={itemKey(item)}
+                    item={item}
+                    sessionId={session?.id ?? null}
+                    projectId={projectId}
+                    collapseHint={Date.now() - lastLiveEndRef.current < 5000}
+                    // ROUND-67 (R67-B): the debug-gated full-turn copy rides
+                    // every assistant turn's footer.
+                    debugMode={debugMode}
+                    {...(item.kind === "error"
+                      ? {
+                          onRetry: () => void runTurn(retryTextForError(item)),
+                          retryDisabled: busy,
+                        }
+                      : {})}
+                    // ROUND-44 (R44-c): persisted user bubbles (seq >= 0, session
+                    // bound) can rewind the log; the button is disabled while a
+                    // turn streams (busy = streamBusy | send | create | echo).
+                    {...(item.kind === "user" && item.seq >= 0 && activeSessionId !== null
+                      ? {
+                          onRevert: () => setRevertTarget(item),
+                          revertDisabled: busy,
+                        }
+                      : {})}
+                    // ROUND-78 (R78-D): FOLDED queued chips (message.queued
+                    // events from the refetch — the stream has ended or the
+                    // panel remounted). The SAME chip component the live area
+                    // renders, with the panel-bound affordances.
+                    {...(item.kind === "queued" && liveMode && activeSessionId !== null
+                      ? {
+                          queuedBusy: busy,
+                          onQueuedRemove: (seq) => void removeQueuedMessage(seq),
+                          onQueuedSendNow: (entry) => void sendQueuedNow(entry),
+                        }
+                      : {})}
+                  />
+                );
+              })}
               {pendingEcho !== null ? (
                 <MessageRenderer
                   item={{ kind: "user", seq: -1, content: pendingEcho, ts: new Date().toISOString() }}
@@ -2347,6 +2704,23 @@ export function AgentChatPanel({
                 />
               ) : null}
             </AnimatePresence>
+
+            {/* ── ROUND-78 (R78-D): queued messages DELIVERED mid-stream — the
+                loop-top flip landed (the event row is message.user now) but
+                the refetch hasn't folded it yet: render the ordinary user
+                bubble from the frame's content+ts, with the pendingEcho dedup
+                trick (once the folded log carries the same content, the live
+                copy drops out — no double bubble). ── */}
+            {deliveredQueued
+              .filter((d) => !items.some((it) => it.kind === "user" && it.content === d.content))
+              .map((d) => (
+                <MessageRenderer
+                  key={`delivered-q-${d.seq}`}
+                  item={{ kind: "user", seq: -1, content: d.content, ts: d.ts }}
+                  sessionId={null}
+                  projectId={projectId}
+                />
+              ))}
 
             {/* ── ROUND-37 LIVE TURN: the Working section grows above the
                 streaming presumptive-final text (which flows into the
@@ -2378,6 +2752,37 @@ export function AgentChatPanel({
                   </div>
                 ) : null}
                 {liveSection}
+                {/* ── ROUND-78 (R78-D): the QUEUED chips — below the working
+                    section (the messages wait BEHIND the current work), above
+                    the streaming answer. Live-store entries only here — the
+                    stream is OPEN, so the LIVE chip owns the render even when
+                    a window-focus refetch already folded the same seq into
+                    `items` (the items loop skips a folded queued chip whose
+                    seq is live-rendered — exactly ONE chip, never two, and
+                    never the zero-chip hole the mutual-skip would leave). The
+                    stream-end finally clears the live array, and the folded
+                    log's `queued` items take over in the items loop above. ── */}
+                {liveQueued.length > 0 ? (
+                  <div className="mt-2 flex flex-col gap-2 min-w-0" data-queued-live-list>
+                    {liveQueued.map((q) => (
+                      <QueuedMessageChip
+                        key={`live-q-${q.seq}`}
+                        entry={q}
+                        busy={busy}
+                        onRemove={
+                          liveMode && activeSessionId !== null
+                            ? () => void removeQueuedMessage(q.seq)
+                            : undefined
+                        }
+                        onSendNow={
+                          liveMode && activeSessionId !== null
+                            ? () => void sendQueuedNow(q)
+                            : undefined
+                        }
+                      />
+                    ))}
+                  </div>
+                ) : null}
                 {/* ROUND-66 (R66, A4): the human-verification checkpoint — the
                     browser tool hit a bot wall and is WAITING for the owner.
                     Rendered ABOVE the streaming text (the agent is paused;

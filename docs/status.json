@@ -3,8 +3,8 @@
   "product": {
     "name": "Acute",
     "tagline": "Local-first multi-agent engineering workbench",
-    "version": "0.76.0",
-    "availability": "Private build \u2014 not yet distributed",
+    "version": "0.77.0",
+    "availability": "Private build — not yet distributed",
     "chips": [
       "Windows desktop",
       "Tauri 2",
@@ -27,40 +27,40 @@
       "title": "Agentic system",
       "state": "building",
       "progress": 74,
-      "summary": "Multi-turn agentic continuation with the R70 agent brain (env grounding, AGENTS.md conventions, one five-phase loop, verification discipline) + the R71 discipline & reliability layer (engineering-discipline prompt section, edit-failure escalation, provider-error classification + overflow recovery) + the R72 adaptive capability layer (deterministic task\u2192skill hints, 18\u219220 builtin skills, references/ depth, per-directory conventions) + the R73 task-modes posture layer (six builtin posture modules + .acute/agents/*.md customs with shadowing + tool narrowing, the switch_mode tool, the composer picker + /mode slash, sessions.active_mode, the mode Task signal line, the generalized system-reminder renderer); multi-agent orchestration owner-gated; computer use (desktop observation+actuation, separate vision model, kill switch) owner-gated"
+      "summary": "Multi-turn agentic continuation with the R70 agent brain (env grounding, AGENTS.md conventions, one five-phase loop, verification discipline) + the R71 discipline & reliability layer (engineering-discipline prompt section, edit-failure escalation, provider-error classification + overflow recovery) + the R72 adaptive capability layer (deterministic task→skill hints, 18→20 builtin skills, references/ depth, per-directory conventions) + the R73 task-modes posture layer (six builtin posture modules + .acute/agents/*.md customs with shadowing + tool narrowing, the switch_mode tool, the composer picker + /mode slash, sessions.active_mode, the mode Task signal line, the generalized system-reminder renderer); multi-agent orchestration owner-gated; computer use (desktop observation+actuation, separate vision model, kill switch) owner-gated"
     },
     {
       "id": "automation",
       "title": "Automation",
       "state": "planned",
       "progress": 10,
-      "summary": "Scheduling & workflow pillar \u2014 researched, additive plan ready"
+      "summary": "Scheduling & workflow pillar — researched, additive plan ready"
     }
   ],
   "milestones": [
     {
       "date": "2026-08-21",
-      "label": "Phase 0 \u2014 SPEC approved"
+      "label": "Phase 0 — SPEC approved"
     },
     {
       "date": "2026-08-22",
-      "label": "Phase 1 \u2014 architecture skeleton + CI green"
+      "label": "Phase 1 — architecture skeleton + CI green"
     },
     {
       "date": "2026-08-22",
-      "label": "Phase 2 \u2014 first live agent conversation"
+      "label": "Phase 2 — first live agent conversation"
     },
     {
       "date": "2026-08-22",
-      "label": "Setup wizard \u2014 owner-approved screen by screen"
+      "label": "Setup wizard — owner-approved screen by screen"
     },
     {
       "date": "2026-08-22",
-      "label": "Shell redo \u2014 Settings hub, honest connection test"
+      "label": "Shell redo — Settings hub, honest connection test"
     },
     {
       "date": "2026-08-23",
-      "label": "Agentic MVP \u2014 projects, sandboxed tools, live-proven file writes"
+      "label": "Agentic MVP — projects, sandboxed tools, live-proven file writes"
     },
     {
       "date": "2026-08-23",
@@ -80,128 +80,134 @@
     },
     {
       "date": "2026-08-23",
-      "label": "Governance round \u2014 blueprints, ADR backfill, workflow, this dashboard"
+      "label": "Governance round — blueprints, ADR backfill, workflow, this dashboard"
     },
     {
       "date": "2026-08-24",
-      "label": "Round 27 \u2014 web tools (web_fetch + web_search) + critical deps-wiring fix (todos + checkpoints now live) + demo project built by the agent"
+      "label": "Round 27 — web tools (web_fetch + web_search) + critical deps-wiring fix (todos + checkpoints now live) + demo project built by the agent"
     },
     {
       "date": "2026-08-24",
-      "label": "Round 28 \u2014 sandbox restore + master plan (1123L, 13 workstreams A-M, 5 milestones, 6 sub-agent reviews)"
+      "label": "Round 28 — sandbox restore + master plan (1123L, 13 workstreams A-M, 5 milestones, 6 sub-agent reviews)"
     },
     {
       "date": "2026-08-24",
-      "label": "Round 28 \u2014 UX + agentic-quality overhaul (5 milestones delivered)"
+      "label": "Round 28 — UX + agentic-quality overhaul (5 milestones delivered)"
     },
     {
-      "label": "Round 30 \u2014 Windows bug fixes (CORS streaming + sessions) + sidebar/chat redesign"
-    },
-    {
-      "date": "2026-08-24",
-      "label": "Round 32 \u2014 owner-designed UI: floating panels + activity block"
+      "label": "Round 30 — Windows bug fixes (CORS streaming + sessions) + sidebar/chat redesign"
     },
     {
       "date": "2026-08-24",
-      "label": "Round 33 \u2014 hello-loop fix + sidebar/logo system + headerless chat"
+      "label": "Round 32 — owner-designed UI: floating panels + activity block"
     },
     {
       "date": "2026-08-24",
-      "label": "Round 34 \u2014 multi-step tool feedback + settings redesign"
+      "label": "Round 33 — hello-loop fix + sidebar/logo system + headerless chat"
+    },
+    {
+      "date": "2026-08-24",
+      "label": "Round 34 — multi-step tool feedback + settings redesign"
     },
     {
       "date": "2026-08-25",
-      "label": "Round 35 \u2014 thinking + interleaved tool calls"
+      "label": "Round 35 — thinking + interleaved tool calls"
     },
     {
       "date": "2026-08-25",
-      "label": "Round 36 \u2014 sub-agent orchestration (Phase 3 core)"
+      "label": "Round 36 — sub-agent orchestration (Phase 3 core)"
     },
     {
       "date": "2026-08-31",
-      "label": "Round 55 \u2014 the engine-boot round (EISDIR + Credential-Manager namespace root causes)"
+      "label": "Round 55 — the engine-boot round (EISDIR + Credential-Manager namespace root causes)"
     },
     {
       "date": "2026-08-31",
-      "label": "Round 56 \u2014 the launch-choice round (app-or-site question + engine-failure recourse + immediate self-update)"
+      "label": "Round 56 — the launch-choice round (app-or-site question + engine-failure recourse + immediate self-update)"
     },
     {
       "date": "2026-08-31",
-      "label": "Round 57 \u2014 the engine-bundling round (the 189-junction link farm behind ERR_MODULE_NOT_FOUND; hoisted staging + zero-links gate + the Windows pre-pack boot gate)"
+      "label": "Round 57 — the engine-bundling round (the 189-junction link farm behind ERR_MODULE_NOT_FOUND; hoisted staging + zero-links gate + the Windows pre-pack boot gate)"
     },
     {
       "date": "2026-08-31",
-      "label": "Round 58 \u2014 the desktop-polish round (the first fully-working Windows session; the frameless title bar, the stop/continue/live-write/engine-capping fixes, the settings restructure with visible keys, and the CLI chat harness)"
+      "label": "Round 58 — the desktop-polish round (the first fully-working Windows session; the frameless title bar, the stop/continue/live-write/engine-capping fixes, the settings restructure with visible keys, and the CLI chat harness)"
     },
     {
       "date": "2026-08-31",
-      "label": "Round 58 \u2014 the desktop-polish round (the first fully-working Windows session; frameless title bar, honest stops + Continue, live file-write preview, session-replay capping, settings restructure with visible keys, the CLI chat harness)"
+      "label": "Round 58 — the desktop-polish round (the first fully-working Windows session; frameless title bar, honest stops + Continue, live file-write preview, session-replay capping, settings restructure with visible keys, the CLI chat harness)"
     },
     {
       "date": "2026-09-01",
-      "label": "R59 \u2014 owner-feedback round: rounded window + pill scrollbars, pop-out custom chrome, settings honesty, response ratings with full-context capture, diagnostics console, prompt-section registry (1302 tests)"
+      "label": "R59 — owner-feedback round: rounded window + pill scrollbars, pop-out custom chrome, settings honesty, response ratings with full-context capture, diagnostics console, prompt-section registry (1302 tests)"
     },
     {
       "date": "2026-09-02",
-      "label": "R60 \u2014 second owner-feedback polish round: pop-out rounded view + gutter scrollbar (eval_with_callback channel), settings deep-clean (consistent key field, empty-by-default models + picker Free/All toggle, padding + scroll-reflow fix), title-bar sidebar toggle, browser-panel fixes (popover z-index, real DPI zoom) (1348 tests)"
+      "label": "R60 — second owner-feedback polish round: pop-out rounded view + gutter scrollbar (eval_with_callback channel), settings deep-clean (consistent key field, empty-by-default models + picker Free/All toggle, padding + scroll-reflow fix), title-bar sidebar toggle, browser-panel fixes (popover z-index, real DPI zoom) (1348 tests)"
     },
     {
       "date": "2026-09-02",
-      "label": "R61 \u2014 computer use: 30 desktop-control tools (a11y-first, gated by a master switch + approval postures, enforced kill switch, audit journal) + the separate vision model (own provider/model/key slot, or main-model vision when supported) + skills + MCP servers + the live monitor panel + the floating draggable mini window; prompts upgraded (tool discipline + honesty contract) (1491 tests)"
+      "label": "R61 — computer use: 30 desktop-control tools (a11y-first, gated by a master switch + approval postures, enforced kill switch, audit journal) + the separate vision model (own provider/model/key slot, or main-model vision when supported) + skills + MCP servers + the live monitor panel + the floating draggable mini window; prompts upgraded (tool discipline + honesty contract) (1491 tests)"
     },
     {
       "date": "2026-09-06",
-      "label": "R69 \u2014 the computer-use enforcement layer (milestones for R62\u2013R68 live in CHANGELOG.md): observation receipts on all 11 mutating tools, click verification + hitElementName, stale-frame auto-refresh (frame_changed), screenshot-spam guard (screen_unchanged), the pngjs aHash frame memory, element middle/right clicks, wait() observable, the scroll-math/HWHEEL fix, the stdin long-type paste, the NOACTIVATE monitor (2082 tests)"
+      "label": "R69 — the computer-use enforcement layer (milestones for R62–R68 live in CHANGELOG.md): observation receipts on all 11 mutating tools, click verification + hitElementName, stale-frame auto-refresh (frame_changed), screenshot-spam guard (screen_unchanged), the pngjs aHash frame memory, element middle/right clicks, wait() observable, the scroll-math/HWHEEL fix, the stdin long-type paste, the NOACTIVATE monitor (2082 tests)"
     },
     {
       "date": "2026-09-06",
-      "label": "R70 \u2014 the agent brain round (research-driven): env grounding (real OS/shell/date/git in the prompt), AGENTS.md/CLAUDE.md convention loading with @file imports, the four planning sections merged into one five-phase loop, the Codex dirty-worktree + verify-after-edit discipline, the ACI tool-feedback round (head+tail output caps, line-numbered read_file), file-based skills + 7 new builtins + sticky skill bodies + agent.skills wired; prompt 22,460\u219220,156 chars (2177 tests)"
+      "label": "R70 — the agent brain round (research-driven): env grounding (real OS/shell/date/git in the prompt), AGENTS.md/CLAUDE.md convention loading with @file imports, the four planning sections merged into one five-phase loop, the Codex dirty-worktree + verify-after-edit discipline, the ACI tool-feedback round (head+tail output caps, line-numbered read_file), file-based skills + 7 new builtins + sticky skill bodies + agent.skills wired; prompt 22,460→20,156 chars (2177 tests)"
     },
     {
       "date": "2026-09-07",
-      "label": "R71 \u2014 the discipline & reliability round (research-driven, the owner's 4 reference repos): the engineering-discipline prompt section (karpathy principles + [KNOWN]/[ASSUMED]/[UNKNOWN] + 3-strike + red flags), verification receipts + \ud83d\udfe2\ud83d\udfe1\ud83d\udd34 confidence tags, 12 trigger-rich skills (focused-fix/zero-hallucination/self-eval/ship-gate), edit-failure escalation, owner-denial \u2260 failure semantics, 6-class provider-error classification, context-overflow recovery (2287 tests)"
+      "label": "R71 — the discipline & reliability round (research-driven, the owner's 4 reference repos): the engineering-discipline prompt section (karpathy principles + [KNOWN]/[ASSUMED]/[UNKNOWN] + 3-strike + red flags), verification receipts + 🟢🟡🔴 confidence tags, 12 trigger-rich skills (focused-fix/zero-hallucination/self-eval/ship-gate), edit-failure escalation, owner-denial ≠ failure semantics, 6-class provider-error classification, context-overflow recovery (2287 tests)"
     },
     {
       "date": "2026-09-07",
-      "label": "R72 \u2014 the adaptive capability round (the owner's 'on the basis of the task' directive): deterministic task\u2192skill hints (the advisory 'Task signal' line, golden byte-stable), 18 builtin skills (+6 crafts: tdd/api-design/frontend-craft/typescript-craft/security-review/refactoring), references/ depth for file skills (read_skill's reference param), per-directory AGENTS.md/CLAUDE.md conventions on read_file (2423 tests)"
+      "label": "R72 — the adaptive capability round (the owner's 'on the basis of the task' directive): deterministic task→skill hints (the advisory 'Task signal' line, golden byte-stable), 18 builtin skills (+6 crafts: tdd/api-design/frontend-craft/typescript-craft/security-review/refactoring), references/ depth for file skills (read_skill's reference param), per-directory AGENTS.md/CLAUDE.md conventions on read_file (2423 tests)"
     },
     {
       "date": "2026-09-07",
-      "label": "R73 \u2014 the task modes round (the posture tier of the owner's directive): six builtin posture modes (plan/debug/build/review/explore/refactor) + custom modes (.acute/agents/*.md, shadowing, tool narrowing), the switch_mode tool + composer picker + /mode slash + the mode Task signal line, sessions.active_mode (migration 0027), the generalized system-reminder renderer, skills 18\u219220 (spec-planning, performance) (2558 tests)"
+      "label": "R73 — the task modes round (the posture tier of the owner's directive): six builtin posture modes (plan/debug/build/review/explore/refactor) + custom modes (.acute/agents/*.md, shadowing, tool narrowing), the switch_mode tool + composer picker + /mode slash + the mode Task signal line, sessions.active_mode (migration 0027), the generalized system-reminder renderer, skills 18→20 (spec-planning, performance) (2558 tests)"
     },
     {
       "date": "2026-09-07",
-      "label": "R74 \u2014 the updater-freeze round: the launcher now picks releases by MAX VERSION (root cause: GitHub lists never-published drafts ABOVE published releases, and five R63-R67 drafts froze the owner's installed app at 0.67.0 while 0.73.0 was live); 10 launcher regression tests wired into both CI gates; the five stale drafts published (2558 root tests + 10 launcher tests)"
+      "label": "R74 — the updater-freeze round: the launcher now picks releases by MAX VERSION (root cause: GitHub lists never-published drafts ABOVE published releases, and five R63-R67 drafts froze the owner's installed app at 0.67.0 while 0.73.0 was live); 10 launcher regression tests wired into both CI gates; the five stale drafts published (2558 root tests + 10 launcher tests)"
     },
     {
       "id": 35,
-      "title": "0.75.0 \u2014 reliability & enforcement",
+      "title": "0.75.0 — reliability & enforcement",
       "date": "2026-09-07",
-      "summary": "The owner's four verbatim asks shipped together: the transient-API retry ladder (immediate \u2192 1.5m \u2192 5m \u2192 10m \u2192 30m \u2192 stop+notify, visible status card), hard task-mode enforcement (plan/review/explore read-only at the toolset level, owner-pinned, debug command tier, delegation inheritance), hover-only mode descriptions + read-only badges, and the single-row composer toolbar with the actually-working 5-line textarea. The deepest find: SDK error PARTS were swallowed \u2014 real 429s could never classify nor ladder; the adapter now re-throws them (live-verified)."
+      "summary": "The owner's four verbatim asks shipped together: the transient-API retry ladder (immediate → 1.5m → 5m → 10m → 30m → stop+notify, visible status card), hard task-mode enforcement (plan/review/explore read-only at the toolset level, owner-pinned, debug command tier, delegation inheritance), hover-only mode descriptions + read-only badges, and the single-row composer toolbar with the actually-working 5-line textarea. The deepest find: SDK error PARTS were swallowed — real 429s could never classify nor ladder; the adapter now re-throws them (live-verified)."
     },
     {
       "id": 36,
-      "title": "R76 \u2014 the documentation round",
+      "title": "R76 — the documentation round",
       "date": "2026-09-07",
-      "summary": "Docs caught up with the code: the session history backfilled R68-R75 (8 entries, +147 lines), five AGENT-MEMORY lessons recorded (72-76), the two R75 ADRs written (0026 task-mode policy, 0027 retry-ladder), ARCHITECTURE/IMPLEMENTED-API/EXTENSIBILITY/DESIGN-SYSTEM/ROADMAP/SECURITY/HANDOFF corrected to the shipped truth, the docs index completed (5 unindexed runbooks), and the stamp-cohort rule documented where the next agent will find it (DOC-STANDARDS \u00a78 + MAINTENANCE recipe g). Docs-only: 0.75.0 unchanged, no release."
+      "summary": "Docs caught up with the code: the session history backfilled R68-R75 (8 entries, +147 lines), five AGENT-MEMORY lessons recorded (72-76), the two R75 ADRs written (0026 task-mode policy, 0027 retry-ladder), ARCHITECTURE/IMPLEMENTED-API/EXTENSIBILITY/DESIGN-SYSTEM/ROADMAP/SECURITY/HANDOFF corrected to the shipped truth, the docs index completed (5 unindexed runbooks), and the stamp-cohort rule documented where the next agent will find it (DOC-STANDARDS §8 + MAINTENANCE recipe g). Docs-only: 0.75.0 unchanged, no release."
     },
     {
       "id": 37,
-      "title": "R77 \u2014 the field-report round",
+      "title": "R77 — the field-report round",
       "date": "2026-09-07",
       "summary": "The 0.75.0 field report addressed end-to-end: the composer split left/right with the send action locked to its cluster, the model pill's Cpu icon, the redesigned retry card, the vanish-on-failure fix (freezeFailedTurn keeps the error card + the user's message), envelope-intact API errors + full-text error cards, revert-as-edit-and-resend (inclusive truncation + composer refill), and a live real-provider E2E battery including a genuine rate-limit storm that exercised the retry ladder live."
+    },
+    {
+      "id": 38,
+      "title": "R78 — the honest-errors + queue round",
+      "date": "2026-09-08",
+      "summary": "The owner’s four verbatim asks shipped together: the error chain robustified (RetryError unwrapped so classification reads the real status; a 403 region block no longer lies ‘authentication failed’; userMessage is the API’s REAL text — only a real rate limit ladders, every other failure shows the provider’s actual words on the live retry card too), the composer’s action group restructured into a never-wrapping bottom-right anchor (Continue/Send/Stop/queue-send can never render in a wrong position), the Settings → General retry config (three per-class auto-retry switches — a disabled class fails fast with the real text), and the message queue (send while the agent works — the message queues as an amber chip, auto-delivers after the current tool call with full context, continues the same stream at turn end, survives stops/crashes via the pre-flip). Verified: 2708 tests (agent-core 1742), the battery-r78 live battery 12/12 (real 429 ladder + a mock-provider request-body oracle), browser-verified on the real dev stack."
     }
   ],
   "quality": {
-    "ci": "success",
+    "ci": "pending — the release agent syncs this field after the v0.77.0 tag + push (the round itself: lint clean, typecheck clean, 2708/2708 tests green in 144 files, battery 12/12, browser-verified)",
     "suites": [
       {
         "name": "frontend",
-        "tests": 925
+        "tests": 954
       },
       {
         "name": "agent-core",
-        "tests": 1690
+        "tests": 1742
       },
       {
         "name": "sidecar e2e",
@@ -226,12 +232,12 @@
   ],
   "plan": {
     "current": {
-      "title": "R77 \u2014 the field-report round (composer layout, error honesty, revert-as-edit, live E2E)",
-      "detail": "The owner's 0.75.0 field report, seven verbatim asks, every one implemented: (1) the composer toolbar split left/right \u2014 attach + access + mode on the LEFT, context/model/reasoning/send on the RIGHT as a nowrap ml-auto group so the send/stop action never wraps below alone; (2) the model pill leads with a Cpu icon (icon-only below the 560px container floor); (3) the RetryStatusCard redesigned (spinner chip, six-dot attempt ladder with a breathing current dot, countdown fill-bar, rounded class pill); (4) failed sends no longer vanish \u2014 a turn that fails WITHOUT a persisted turn.error (pre-hijack rejections, dropped streams) keeps the error card + the optimistic user bubble until the next send (NEW stream-store freezeFailedTurn); (5) API error envelopes arrive intact \u2014 the real code + details ride the error frame, and TurnErrorCard grows a Show-full-error toggle for the complete raw provider text; (6) revert-to-message is now edit-and-resend \u2014 the backend truncates from the target message INCLUSIVE (seq >= keepThroughSeq) and the panel refills the composer with the message's text; (7) a live E2E battery against the real provider: smoke round-trip, 3-file static site, python CLI with self-run green tests, 3-turn build-extend-refactor, 10-turn conversation with retention probes, the new revert semantics over the wire, and error surfacing \u2014 plus a REAL free-tier rate-limit storm that live-verified the R75 ladder end-to-end (frames at 90s/5m/10m/30m, the amber card, the honest exhaustion after six attempts, the boot sweep's INTERRUPTED event).",
+      "title": "R78 — the honest-errors + queue round (retry honesty, composer anchor, retry settings, message queue)",
+      "detail": "The owner’s four verbatim asks, every one implemented + unit-tested + live-battery-verified (12/12) + browser-verified: (1) ERROR-CHAIN HONESTY — the AI SDK’s RetryError is now unwrapped before classification (extractStatus walks lastError/errors, depth ≤ 4), so a wrapped 429 classifies by status instead of message-pattern luck; a 403 whose body says region/moderation/permission/unavailable reclassifies to fail-fast unknown carrying the REAL text (a region block no longer claims ‘authentication failed’); userMessage/classMessage are the provider’s REAL words (240-char cap, generic lines demoted to the empty fallback) and providerError rides every meta.retry frame + the 502 envelope + the persisted turn.error — the live RetryStatusCard shows the class chip + the API’s actual text (mono, 3-line clamp, the R77 expand toggle); (2) THE COMPOSER ACTION ANCHOR — the toolbar is a wrapping area (left cluster + ml-auto selectors) plus a never-wrapping shrink-0 sibling anchor (data-composer-actions) holding Continue/Send/Stop/queue-send pinned bottom-right by justify-between — the action button can never jump lines (verified stable at 386/480/560/641/900 px); (3) RETRY SETTINGS — RetrySettings {autoRetryRateLimit, autoRetryTimeout, autoRetryNetwork} (default all true) behind GET/PUT /settings/retry, the ladder gated per class in both turn paths (a disabled class fails fast: attempts 1, real text), rendered as the Auto-retry card on the Settings tab now LABELED General (URL id ‘advanced’ unchanged); (4) THE MESSAGE QUEUE — a session_events row of new type message.queued (the exact message.user payload; delivery is a strict type flip so the message lands where it was queued), three delivery paths (loop-top flip before assembleHistory — the model reads it with the completed tool results; the turn-end same-stream continuation loop consuming the first + flipping the rest, meta.queue_continue, capped at 25; the pre-flip crash/stop recovery before the next send’s user event), POST /sessions/:id/queue (+ user.queued frame on the open stream via the turn registry’s notify hook) + DELETE /sessions/:id/queue/:seq, and the frontend (queue-send beside Stop, amber chips with X-remove/Send-now, delivered messages as user bubbles, the queued fold item). Root 2708/2708 in 144 files (agent-core 1742, frontend 954, e2e 12); the battery-r78 live battery + browser verification on the real dev stack.",
       "upcoming": [
-        "delegate_task task_id/background/resume (the R73 deferral \u2014 the orchestrator round)",
-        "external plugin ctx enrichment (cline's appendContext seam)",
-        "lessons-ledger affordance as the reminder injector's third consumer",
+        "delegate_task task_id/background/resume (the R73 deferral — the orchestrator round)",
+        "external plugin ctx enrichment (cline’s appendContext seam)",
+        "lessons-ledger affordance as the reminder injector’s third consumer",
         "ratings-driven prompt tuning",
         "the optional v0.68.0 backfill tag",
         "the standing items (edit-linting, installer code-signing, the Files-tab polish, agent web-app-testing tools)"
@@ -246,12 +252,12 @@
       {
         "phase": "Orchestration deepening (R76 queue head)",
         "status": "planned",
-        "note": "delegate_task task_id/background/resume \u2014 delegation, sub-agents, streamed children, and the R71-R75 reliability layers already shipped"
+        "note": "delegate_task task_id/background/resume — delegation, sub-agents, streamed children, and the R71-R75 reliability layers already shipped"
       },
       {
         "phase": "Automation pillar",
         "status": "planned",
-        "note": "Workflows, scheduling, visual canvas \u2014 n8n-class, additive on the agent runtime"
+        "note": "Workflows, scheduling, visual canvas — n8n-class, additive on the agent runtime"
       },
       {
         "phase": "Installer code-signing",
@@ -260,10 +266,10 @@
       }
     ],
     "principles": [
-      "Local-first \u2014 all processing on-device",
-      "Additive architecture \u2014 no pillar ever forces a rewrite",
-      "Quality over speed \u2014 every round verified before push"
+      "Local-first — all processing on-device",
+      "Additive architecture — no pillar ever forces a rewrite",
+      "Quality over speed — every round verified before push"
     ]
   },
-  "round": 77
+  "round": 78
 }

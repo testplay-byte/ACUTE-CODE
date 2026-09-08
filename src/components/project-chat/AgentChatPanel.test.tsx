@@ -22,10 +22,11 @@ import { AgentChatPanel } from "./AgentChatPanel";
 import { getFixtureProjects } from "../../lib/project-fixtures";
 import { createFixtureSessions } from "../../lib/session-fixtures";
 import type { MessageRating, SessionEvent, SessionsBackend } from "../../lib/api";
+import { ApiError } from "../../lib/api";
 import { useConfigStore } from "../../lib/config-store";
 import { useNotificationStreamStore } from "../../hooks/use-notifications";
 import { useSettingsStore } from "../../lib/settings-store";
-import { useStreamStore, type LiveTurn, type TurnErrorInfo } from "../../lib/stream-store";
+import { useStreamStore, type LiveTurn, type LiveTurnRetry, type TurnErrorInfo } from "../../lib/stream-store";
 import { renderWithProviders, resetTestState } from "../../test-utils";
 
 /** ROUND-44 (R44-c): per-test override for getSessionsBackend(). */
@@ -67,6 +68,15 @@ const modesMock = vi.hoisted(() => ({
   streamSessionMessage: null as unknown as ReturnType<typeof vi.fn>,
 }));
 
+/** ROUND-78 (R78-D): the queue client pair, mocked the same way — runTurn's
+ * queue path POSTs /sessions/:id/queue while a stream runs; the chip's
+ * affordances DELETE /sessions/:id/queue/:seq. Defaults resolve happy
+ * paths; the NO_LIVE_TURN fallback test programs the 409 rejection. */
+const queueMock = vi.hoisted(() => ({
+  queueSessionMessage: null as unknown as ReturnType<typeof vi.fn>,
+  dequeueSessionMessage: null as unknown as ReturnType<typeof vi.fn>,
+}));
+
 vi.mock("../../lib/api", async () => {
   const mod = await import("../../lib/api");
   const agentsFx = await import("../../lib/agent-fixtures");
@@ -79,6 +89,8 @@ vi.mock("../../lib/api", async () => {
   modesMock.fetchProjectModes = vi.fn();
   modesMock.patchSessionActiveMode = vi.fn();
   modesMock.streamSessionMessage = vi.fn();
+  queueMock.queueSessionMessage = vi.fn();
+  queueMock.dequeueSessionMessage = vi.fn();
   return {
     ...mod,
     getAgentsBackend: () => agentsFx.getFixtureAgents(),
@@ -91,6 +103,8 @@ vi.mock("../../lib/api", async () => {
     fetchProjectModes: modesMock.fetchProjectModes,
     patchSessionActiveMode: modesMock.patchSessionActiveMode,
     streamSessionMessage: modesMock.streamSessionMessage,
+    queueSessionMessage: queueMock.queueSessionMessage,
+    dequeueSessionMessage: queueMock.dequeueSessionMessage,
   };
 });
 
@@ -118,6 +132,14 @@ beforeEach(() => {
   // stays hidden unless a test programs it on.
   debugSettingsMock.fetchDebugSettings.mockReset();
   debugSettingsMock.fetchDebugSettings.mockResolvedValue({ enabled: false });
+  // ROUND-78 (R78-D): the queue pair starts at the happy default each test
+  // (a deterministic seq so the optimistic push is assertable).
+  queueMock.queueSessionMessage.mockReset();
+  queueMock.queueSessionMessage.mockResolvedValue({ ok: true, seq: 41 });
+  queueMock.dequeueSessionMessage.mockReset();
+  queueMock.dequeueSessionMessage.mockResolvedValue(undefined);
+  // R78: the store starts clean (the queue slices are per-session state).
+  useStreamStore.setState({ bySession: {}, subagentsLive: {} });
 });
 
 async function renderPanel() {
@@ -340,6 +362,8 @@ describe("AgentChatPanel user-stop rendering (ROUND-58 R58-cf)", () => {
           lastLiveEndMs: Date.now(),
           lastTurnStoppedByUser: stoppedByUser,
           lastTurnStoppedTs: stoppedByUser ? "2026-08-31T11:00:25Z" : null,
+          queued: [],
+          deliveredQueued: [],
         },
       },
     });
@@ -397,6 +421,8 @@ describe("AgentChatPanel user-stop rendering (ROUND-58 R58-cf)", () => {
           lastLiveEndMs: Date.now(),
           lastTurnStoppedByUser: false,
           lastTurnStoppedTs: null,
+          queued: [],
+          deliveredQueued: [],
         },
       },
     });
@@ -454,6 +480,8 @@ describe("AgentChatPanel user-stop rendering (ROUND-58 R58-cf)", () => {
           lastLiveEndMs: Date.now(),
           lastTurnStoppedByUser: false,
           lastTurnStoppedTs: null,
+          queued: [],
+          deliveredQueued: [],
         },
       },
     });
@@ -900,6 +928,8 @@ describe("AgentChatPanel response ratings (ROUND-59 R59-D)", () => {
           lastLiveEndMs: Date.now(),
           lastTurnStoppedByUser: false,
           lastTurnStoppedTs: null,
+          queued: [],
+          deliveredQueued: [],
         },
       },
     });
@@ -1225,6 +1255,8 @@ describe("AgentChatPanel inline screenshots (ROUND-68 R68-A)", () => {
           lastLiveEndMs: Date.now(),
           lastTurnStoppedByUser: false,
           lastTurnStoppedTs: null,
+          queued: [],
+          deliveredQueued: [],
         },
       },
     });
@@ -1626,6 +1658,8 @@ describe("AgentChatPanel ROUND-75 retry ladder surfaces", () => {
           lastLiveEndMs: Date.now(),
           lastTurnStoppedByUser: false,
           lastTurnStoppedTs: null,
+          queued: [],
+          deliveredQueued: [],
         },
       },
     });
@@ -1696,5 +1730,330 @@ describe("AgentChatPanel ROUND-75 retry ladder surfaces", () => {
     // The reason line carries the upstream provider error (the card's
     // existing providerError ?? message precedence).
     expect(alert.textContent).toContain("429 Too Many Requests");
+  });
+});
+
+// ── ROUND-78 (R78-D/R78-A): the message-queue wiring + the honest retry card ──
+describe("AgentChatPanel ROUND-78 message queue + honest retry card", () => {
+  const SLOW = { timeout: 5000 };
+  const SESSION_ID = "sess_r78_queue";
+
+  function messageEvent(
+    seq: number,
+    role: "user" | "assistant",
+    content: string,
+    ts: string,
+  ): SessionEvent {
+    return {
+      seq,
+      type: role === "user" ? "message.user" : "message.assistant",
+      agentId: "agt_scribe",
+      payload: { role, content, agentId: "agt_scribe", ts },
+      ts,
+    };
+  }
+
+  /** A persisted `message.queued` event (the chip the fold renders). */
+  function queuedEvent(seq: number, content: string, ts: string): SessionEvent {
+    return {
+      seq,
+      type: "message.queued",
+      agentId: "agt_scribe",
+      payload: { role: "user", content, agentId: "agt_scribe", ts },
+      ts,
+    };
+  }
+
+  async function renderQueuePanel(
+    events: SessionEvent[],
+    status: "running" | "completed" = "running",
+  ): Promise<void> {
+    const projects = await getFixtureProjects().list();
+    customBackend.backend = createFixtureSessions([
+      {
+        session: {
+          id: SESSION_ID,
+          projectId: projects[0].id,
+          agentId: "agt_scribe",
+          mode: "single",
+          status,
+          title: "Queue probe",
+          createdAt: "2026-09-14T10:00:00Z",
+          updatedAt: "2026-09-14T10:05:00Z",
+        },
+        events,
+      },
+    ]);
+    renderWithProviders(<AgentChatPanel projectId={projects[0].id} project={projects[0]} />);
+    // Wait for the transcript's first user message (the session loaded).
+    const firstUser = events.find((e) => e.type === "message.user");
+    await screen.findByText(
+      firstUser !== undefined ? (firstUser.payload as { content: string }).content : "Queue probe",
+      {},
+      SLOW,
+    );
+  }
+
+  /** Arm the store exactly as a live stream + frames would have left it. */
+  function armLiveStream(queued: Array<{ seq: number; content: string; ts: string }> = []): void {
+    useStreamStore.setState({
+      bySession: {
+        [SESSION_ID]: {
+          liveTurn: {
+            startedAtMs: Date.now() - 3000,
+            working: [],
+            streamText: "working on it…",
+            streamThinking: "",
+            stopped: false,
+            stoppedByUser: false,
+            streamingToolInputs: [],
+            debugReport: null,
+            browserCheckpoint: null,
+            retry: null,
+            note: null,
+          },
+          streamBusy: true,
+          sendError: null,
+          liveError: null,
+          pendingEcho: null,
+          lastLiveEndMs: Date.now(),
+          lastTurnStoppedByUser: false,
+          lastTurnStoppedTs: null,
+          queued,
+          deliveredQueued: [],
+        },
+      },
+    });
+  }
+
+  beforeEach(() => {
+    modesMock.fetchProjectModes.mockReset().mockResolvedValue([]);
+    modesMock.patchSessionActiveMode.mockReset().mockResolvedValue({ id: SESSION_ID });
+    modesMock.streamSessionMessage.mockReset().mockResolvedValue(undefined);
+  });
+
+  it("R78-D: Enter while a turn streams POSTs the QUEUE (not the send); the optimistic chip renders and the composer clears", async () => {
+    await renderQueuePanel([messageEvent(1, "user", "do the work", "2026-09-14T10:00:10Z")]);
+    armLiveStream();
+    await waitFor(() => expect(screen.getByRole("button", { name: "Stop generation" })).toBeTruthy(), SLOW);
+
+    // The queue-send button rides the anchor next to Stop (the panel wired
+    // onQueue because liveMode is on).
+    expect(screen.getByRole("button", { name: "Queue message" })).toBeTruthy();
+
+    fireEvent.change(screen.getByLabelText("Message composer"), { target: { value: "also add tests" } });
+    fireEvent.keyDown(screen.getByLabelText("Message composer"), { key: "Enter" });
+
+    // The queue POST carried the session + the typed text; the normal send
+    // NEVER fired — the in-flight stream is untouched.
+    await waitFor(
+      () => expect(queueMock.queueSessionMessage).toHaveBeenCalledWith(SESSION_ID, { content: "also add tests" }),
+      SLOW,
+    );
+    expect(modesMock.streamSessionMessage).not.toHaveBeenCalled();
+    // The optimistic chip (seq 41 — the mocked POST return) is live-rendered.
+    const chip = await screen.findByTestId("queued-chip", {}, SLOW);
+    expect(chip.getAttribute("data-queued-seq")).toBe("41");
+    expect(chip.textContent).toContain("also add tests");
+    expect(chip.textContent).toContain("Queued — sends after the current step");
+    // While the turn runs there is NO "Send now" (the queue will deliver).
+    expect(screen.queryByRole("button", { name: "Send the queued message now" })).toBeNull();
+    // The composer cleared exactly like a normal send.
+    await waitFor(() =>
+      expect((screen.getByLabelText("Message composer") as HTMLTextAreaElement).value).toBe(""),
+    );
+  });
+
+  it("R78-D: NO_LIVE_TURN 409 — the turn ended mid-POST; the panel falls through to the NORMAL send", async () => {
+    await renderQueuePanel([messageEvent(1, "user", "do the work", "2026-09-14T10:00:10Z")]);
+    armLiveStream();
+    await waitFor(() => expect(screen.getByRole("button", { name: "Stop generation" })).toBeTruthy(), SLOW);
+
+    // The race: the POST 409s NO_LIVE_TURN and the local reader learns the
+    // turn ended ~150ms later (the store's streamBusy settles).
+    queueMock.queueSessionMessage.mockImplementation(async () => {
+      setTimeout(() => {
+        const slice = useStreamStore.getState().bySession[SESSION_ID];
+        if (slice !== undefined) {
+          useStreamStore.setState({
+            bySession: {
+              ...useStreamStore.getState().bySession,
+              [SESSION_ID]: { ...slice, streamBusy: false, liveTurn: null },
+            },
+          });
+        }
+      }, 150);
+      throw new ApiError(409, "NO_LIVE_TURN", "no live turn for this session — send the message normally");
+    });
+
+    fireEvent.change(screen.getByLabelText("Message composer"), { target: { value: "you done? then take this" } });
+    fireEvent.keyDown(screen.getByLabelText("Message composer"), { key: "Enter" });
+
+    // The queue POST was attempted, then the send fell through to the NORMAL
+    // stream path with the SAME text (no interrupted message, no lost send).
+    await waitFor(
+      () => expect(modesMock.streamSessionMessage).toHaveBeenCalledWith(
+        SESSION_ID,
+        "you done? then take this",
+        expect.any(Function),
+        expect.anything(),
+      ),
+      SLOW,
+    );
+    // The turn settled — the composer shows Send again.
+    await waitFor(() => expect(screen.getByRole("button", { name: "Send message" })).toBeTruthy(), SLOW);
+  });
+
+  it("R78-D: a queued-frame chip (live store) renders amber with the Clock label; X-REMOVE DELETEs the event and drops the chip optimistically", async () => {
+    await renderQueuePanel([messageEvent(1, "user", "do the work", "2026-09-14T10:00:10Z")]);
+    armLiveStream([{ seq: 77, content: "queued behind the tool call", ts: "2026-09-14T10:01:00Z" }]);
+    const chip = await screen.findByTestId("queued-chip", {}, SLOW);
+    expect(chip.getAttribute("data-queued-seq")).toBe("77");
+    expect(chip.textContent).toContain("queued behind the tool call");
+
+    // X-remove → DELETE /sessions/:id/queue/:seq (optimistic — instant drop).
+    fireEvent.click(screen.getByRole("button", { name: "Remove the queued message" }));
+    await waitFor(() => expect(queueMock.dequeueSessionMessage).toHaveBeenCalledWith(SESSION_ID, 77), SLOW);
+    await waitFor(() => expect(screen.queryByTestId("queued-chip")).toBeNull(), SLOW);
+  });
+
+  it("R78-D: a FOLDED message.queued event renders the same chip; SEND NOW (idle) dequeues + runs a NORMAL turn with the content", async () => {
+    // The stream ENDED (a stop) with the queue left intact — the fold owns
+    // the chips now (message.queued events in the persisted log).
+    await renderQueuePanel(
+      [
+        messageEvent(1, "user", "build the thing", "2026-09-14T10:00:10Z"),
+        messageEvent(2, "assistant", "on it — writing files", "2026-09-14T10:00:20Z"),
+        queuedEvent(3, "and also lint everything", "2026-09-14T10:01:00Z"),
+      ],
+      "completed",
+    );
+    const chip = await screen.findByTestId("queued-chip", {}, SLOW);
+    expect(chip.getAttribute("data-queued-seq")).toBe("3");
+    expect(chip.textContent).toContain("and also lint everything");
+
+    // Idle → the Send-now affordance is there (dequeue + a normal send).
+    fireEvent.click(screen.getByRole("button", { name: "Send the queued message now" }));
+    await waitFor(() => expect(queueMock.dequeueSessionMessage).toHaveBeenCalledWith(SESSION_ID, 3), SLOW);
+    await waitFor(
+      () => expect(modesMock.streamSessionMessage).toHaveBeenCalledWith(
+        SESSION_ID,
+        "and also lint everything",
+        expect.any(Function),
+        expect.anything(),
+      ),
+      SLOW,
+    );
+    await waitFor(() => expect(screen.getByRole("button", { name: "Send message" })).toBeTruthy(), SLOW);
+  });
+
+  it("R78-D: the fold/live handoff dedupes by seq — a refetch that folded the SAME message.queued still shows exactly ONE chip (the live one)", async () => {
+    // The window-focus refetch raced the running stream: the folded log now
+    // carries message.queued seq 41 AND the live store still holds it.
+    await renderQueuePanel(
+      [
+        messageEvent(1, "user", "do the work", "2026-09-14T10:00:10Z"),
+        queuedEvent(41, "queued msg", "2026-09-14T10:01:00Z"),
+      ],
+      "running",
+    );
+    armLiveStream([{ seq: 41, content: "queued msg", ts: "2026-09-14T10:01:00Z" }]);
+    await waitFor(() => expect(screen.getAllByTestId("queued-chip")).toHaveLength(1), SLOW);
+    // The live chip owns it (the X affordance works through the store path).
+    expect(screen.getByRole("button", { name: "Remove the queued message" })).toBeTruthy();
+  });
+
+  // ── R78-A: the honest retry card — the REAL provider text under the chip ──
+  async function renderWithRetry(retry: Partial<LiveTurnRetry>): Promise<void> {
+    await renderQueuePanel([messageEvent(1, "user", "do the work", "2026-09-14T10:00:10Z")]);
+    const base = {
+      startedAtMs: Date.now() - 3000,
+      working: [],
+      streamText: "",
+      streamThinking: "",
+      stopped: false,
+      stoppedByUser: false,
+      streamingToolInputs: [],
+      debugReport: null,
+      browserCheckpoint: null,
+      note: null,
+    } satisfies Omit<LiveTurn, "retry">;
+    useStreamStore.setState({
+      bySession: {
+        [SESSION_ID]: {
+          liveTurn: {
+            ...base,
+            retry: {
+              attempt: 2,
+              totalAttempts: 6,
+              waitMs: 90_000,
+              remainingMs: 88_000,
+              retryAt: Date.now() + 88_000,
+              errorClass: "rate_limit",
+              classMessage: "rate limited — the provider is throttling requests",
+              message: "rate limited — retrying (attempt 2 of 6) in 1.5 min",
+              ...retry,
+            } satisfies LiveTurnRetry,
+          },
+          streamBusy: true,
+          sendError: null,
+          liveError: null,
+          pendingEcho: null,
+          lastLiveEndMs: Date.now(),
+          lastTurnStoppedByUser: false,
+          lastTurnStoppedTs: null,
+          queued: [],
+          deliveredQueued: [],
+        },
+      },
+    });
+    await waitFor(() => expect(document.querySelector("[data-retry-status-card]")).toBeTruthy(), SLOW);
+  }
+
+  it("R78-A: the retry card renders the REAL provider text under the class chip (mono, data-retry-provider-error); absent → nothing extra", async () => {
+    await renderWithRetry({
+      providerError: "Rate limit exceeded: free-models-per-day. Add 10 credits to continue.",
+    });
+    const card = document.querySelector("[data-retry-status-card]") as HTMLElement;
+    expect(card).toBeTruthy();
+    const providerLine = card.querySelector("[data-retry-provider-error]") as HTMLElement;
+    expect(providerLine).toBeTruthy();
+    expect(providerLine.textContent).toContain(
+      "Rate limit exceeded: free-models-per-day. Add 10 credits to continue.",
+    );
+    // Short payload → no expand toggle.
+    expect(card.querySelector("[data-retry-provider-expand]")).toBeNull();
+  });
+
+  it("R78-A: a LONG provider text (>240 chars) collapses to the excerpt + the R77 expand toggle; expanding reveals the FULL scrollable mono block", async () => {
+    const longText =
+      "Rate limit exceeded: free-models-per-day. The provider rejected the request because the account-wide free quota is exhausted; the model will remain unavailable until the daily window resets or credits are added. " +
+      "x".repeat(120);
+    await renderWithRetry({ providerError: longText });
+    const card = document.querySelector("[data-retry-status-card]") as HTMLElement;
+    const providerLine = card.querySelector("[data-retry-provider-error]") as HTMLElement;
+    // Collapsed: the 240-char excerpt + ellipsis, clamped to ~3 lines.
+    expect(providerLine.textContent).toContain(`${longText.slice(0, 240)}…`);
+    const toggle = card.querySelector("[data-retry-provider-expand]") as HTMLButtonElement;
+    expect(toggle).toBeTruthy();
+    expect(toggle.textContent).toContain("Show full error");
+    expect(toggle.getAttribute("aria-expanded")).toBe("false");
+
+    fireEvent.click(toggle);
+    await waitFor(() => expect(toggle.getAttribute("aria-expanded")).toBe("true"));
+    // The complete raw text, in the scrollable mono pre.
+    const full = card.querySelector("[data-retry-provider-error-full]") as HTMLElement;
+    expect(full).toBeTruthy();
+    expect(full.className).toContain("overflow-y-auto");
+    expect(full.textContent).toBe(longText);
+    expect(toggle.textContent).toContain("Show less");
+  });
+
+  it("R78-A: NO providerError (a pre-R78 sidecar) → the card keeps today's class-message line only", async () => {
+    await renderWithRetry({});
+    const card = document.querySelector("[data-retry-status-card]") as HTMLElement;
+    expect(card).toBeTruthy();
+    expect(card.querySelector("[data-retry-provider-error]")).toBeNull();
+    expect(card.textContent).toContain("rate limited — the provider is throttling requests");
   });
 });

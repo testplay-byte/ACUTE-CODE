@@ -3,6 +3,7 @@ import type { MessageAttachment, ThinkingLevel } from "shared";
 import {
   streamSessionMessage,
   stopSessionTurn,
+  type AttachmentRef,
   type StreamTurnEvent,
   type SubAgentInnerEvent,
   type ToolUseEntry,
@@ -142,6 +143,39 @@ export interface LiveTurnRetry {
   errorClass: string;
   classMessage: string;
   message: string;
+  /** ROUND-78 (R78-A, owner: the UI showed "rate-limited" no matter the real
+   * cause — "show the actual error messages too, which were returned from
+   * the API, so that we know what is going on"): the scrubbed REAL provider
+   * text riding the meta.retry frame (the R78-A classifier's unwrap). The
+   * LIVE card renders it under the class chip (mono, clamped) so the owner
+   * sees the API's actual words while the ladder waits. Absent on pre-R78
+   * sidecars — the card keeps the generic classMessage line. */
+  providerError?: string;
+}
+
+/** ROUND-78 (R78-D, owner: "工作中发送消息（排队）" — the user can send while
+ * the agent works): one message queued on the session's LIVE turn, waiting
+ * for delivery at the next outer-loop top (or turn-end continuation).
+ * Pushed by the user.queued SSE frame AND the panel's optimistic
+ * belt-and-suspenders push after POST /sessions/:id/queue (deduped by seq —
+ * both sources carry the same persisted event's seq). Attachments are
+ * display-only AttachmentRefs (the full payloads live in the event log). */
+export interface QueuedMessage {
+  /** The persisted message.queued event's seq — the chip's identity. */
+  seq: number;
+  content: string;
+  ts: string;
+  attachments?: AttachmentRef[];
+}
+
+/** ROUND-78 (R78-D): a queued message that was DELIVERED (flipped to
+ * message.user in place) — rendered as a normal user bubble from the live
+ * slice until the refetched folded log owns it (the panel dedupes by
+ * content, the pendingEcho trick). */
+export interface DeliveredQueuedMessage {
+  seq: number;
+  content: string;
+  ts: string;
 }
 
 /** ROUND-66 (R66, C1): the live debug-analyst report state. */
@@ -375,6 +409,17 @@ export interface StreamSessionState {
   lastTurnStoppedByUser: boolean;
   /** When the user stop landed (the card's timestamp). */
   lastTurnStoppedTs: string | null;
+  /** ROUND-78 (R78-D): messages queued on the LIVE turn, not yet delivered —
+   * the amber chips below the working section. Reset by startStream (a
+   * fresh turn's queue starts empty — the backend pre-flips any lingering
+   * undelivered events to message.user before the new message) and CLEARED
+   * in the stream-end finally (the refetched folded log renders the
+   * message.queued events as `queued` items — the fold owns the render). */
+  queued: QueuedMessage[];
+  /** ROUND-78 (R78-D): queued messages that were delivered mid-stream —
+   * rendered as ordinary user bubbles until the refetch folds the flipped
+   * message.user events. Same reset/clear lifecycle as `queued`. */
+  deliveredQueued: DeliveredQueuedMessage[];
 }
 
 interface StreamStore {
@@ -453,6 +498,16 @@ interface StreamStore {
   /** ROUND-43: clear the live turn-error card (the persisted turn.error
    * event now renders from the folded log — no duplicates). */
   clearLiveError: (sessionId: string) => void;
+  /** ROUND-78 (R78-D): push a queued message onto the session's live queue
+   * (the panel's OPTIMISTIC belt-and-suspenders after POST
+   * /sessions/:id/queue resolves — the user.queued SSE frame owns the chip
+   * normally; both carry the same seq so this is a deduped no-op when the
+   * frame already landed). */
+  pushQueuedMessage: (sessionId: string, entry: QueuedMessage) => void;
+  /** ROUND-78 (R78-D): remove a queued message from the live queue (the
+   * chip's X / "Send now" optimistic half — the DELETE /sessions/:id/queue/:seq
+   * round-trip follows; a failure toasts and the refetch re-syncs). */
+  removeQueuedMessage: (sessionId: string, seq: number) => void;
 }
 
 /** Module-level controllers + seq counters (NOT React state — they don't
@@ -477,6 +532,8 @@ function emptyState(): StreamSessionState {
     lastLiveEndMs: 0,
     lastTurnStoppedByUser: false,
     lastTurnStoppedTs: null,
+    queued: [],
+    deliveredQueued: [],
   };
 }
 
@@ -876,6 +933,12 @@ export const useStreamStore = create<StreamStore>((set, get) => ({
       // user-stop signal (the Stopped card + Continue affordance end here).
       lastTurnStoppedByUser: false,
       lastTurnStoppedTs: null,
+      // ROUND-78 (R78-D): a fresh turn starts with an EMPTY queue (the backend
+      // pre-flips any lingering undelivered queued events to message.user
+      // BEFORE the new message, so nothing of the old queue can ride in) and
+      // no delivered-queue bubbles (the folded log owns those).
+      queued: [],
+      deliveredQueued: [],
     });
 
     const controller = new AbortController();
@@ -941,6 +1004,13 @@ export const useStreamStore = create<StreamStore>((set, get) => ({
         patchSession(sessionId, {
           streamBusy: false,
           lastLiveEndMs: Date.now(),
+          // ROUND-78 (R78-D): the stream is OVER — the live queue state hands
+          // its render to the refetched folded log (message.queued events
+          // fold as `queued` items; delivered events fold as message.user),
+          // exactly like liveTurn/pendingEcho hand off. Queued messages that
+          // REMAIN queued server-side stay visible via the fold.
+          queued: [],
+          deliveredQueued: [],
           // On error: freeze the live section as Stopped so the partial
           // work stays visible. On success: leave liveTurn as-is so the
           // panel can clear it after queryClient invalidation runs (the
@@ -1087,6 +1157,25 @@ export const useStreamStore = create<StreamStore>((set, get) => ({
     patchSession(sessionId, { sendError: msg });
   },
 
+  pushQueuedMessage: (sessionId, entry) => {
+    // R78: dedupe by seq — the optimistic POST return and the user.queued
+    // frame carry the SAME persisted event seq; whichever lands second is a
+    // no-op (a missed frame's belt-and-suspenders, never a double chip).
+    const cur = get().bySession[sessionId];
+    if (cur !== undefined && cur.queued.some((q) => q.seq === entry.seq)) return;
+    patchSession(sessionId, {
+      queued: [...(cur?.queued ?? []), entry],
+    });
+  },
+
+  removeQueuedMessage: (sessionId, seq) => {
+    const cur = get().bySession[sessionId];
+    if (cur === undefined || !cur.queued.some((q) => q.seq === seq)) return;
+    patchSession(sessionId, {
+      queued: cur.queued.filter((q) => q.seq !== seq),
+    });
+  },
+
   clearLiveError: (sessionId) => {
     const cur = get().bySession[sessionId];
     if (cur !== undefined && cur.liveError !== null) {
@@ -1222,6 +1311,58 @@ function handleStreamEvent(
     return;
   }
 
+  // ── ROUND-78 (R78-D): the message-queue frames — TURN-INDEPENDENT (they
+  // mutate the session's queue slice, not liveTurn: a queued message can
+  // land/deliver whether or not the liveTurn tracking is open). The user.queued
+  // frame pushes the amber chip; queued.delivered moves the matching seq to
+  // the delivered-bubble list (content+ts from the frame — no refetch wait);
+  // meta.queue_continue is typed but informational (the delivered events own
+  // the render — a future "continuing with your queued message" line lives
+  // there). Dedupe by seq everywhere: the panel ALSO pushes optimistically
+  // after the queue POST resolves, and both carry the same persisted seq. ──
+  if (event.type === "user.queued") {
+    const entry: QueuedMessage = {
+      seq: event.seq,
+      content: event.content,
+      ts: event.ts,
+      // Display-only narrowing (name/path/size — the `text` payloads stay
+      // in the event log, never shipped back to the UI).
+      ...(event.attachments && event.attachments.length > 0
+        ? {
+            attachments: event.attachments.map((a) => ({
+              name: a.name,
+              ...(a.path !== undefined ? { path: a.path } : {}),
+              ...(a.size !== undefined ? { size: a.size } : {}),
+            })),
+          }
+        : {}),
+    };
+    useStreamStore.getState().pushQueuedMessage(sessionId, entry);
+    return;
+  }
+  if (event.type === "queued.delivered") {
+    const curQ = useStreamStore.getState().bySession[sessionId];
+    // Move the matching seq off the chip list and onto the delivered-bubble
+    // list (an unknown seq — e.g. the chip was removed locally but the server
+    // still flipped the event — still records the bubble: the message
+    // happened, the refetch reconciles).
+    const stillQueued = (curQ?.queued ?? []).filter((q) => q.seq !== event.seq);
+    patchSession(sessionId, {
+      queued: stillQueued,
+      deliveredQueued: [
+        ...(curQ?.deliveredQueued ?? []).filter((d) => d.seq !== event.seq),
+        { seq: event.seq, content: event.content, ts: event.ts },
+      ],
+    });
+    return;
+  }
+  if (event.type === "meta.queue_continue") {
+    // R78: informational no-op (typed above — the frame documents that the
+    // SAME stream continues on the first queued message; the queued.
+    // delivered flips own everything the UI shows).
+    return;
+  }
+
   const cur = useStreamStore.getState().bySession[sessionId];
   if (!cur || cur.liveTurn === null) return;
   let liveTurn = cur.liveTurn;
@@ -1245,6 +1386,9 @@ function handleStreamEvent(
           errorClass: event.errorClass,
           classMessage: event.classMessage,
           message: event.message,
+          // R78: the REAL provider text (scrubbed) — the live card's mono
+          // line under the class chip. Absent on pre-R78 sidecars.
+          ...(event.providerError !== undefined ? { providerError: event.providerError } : {}),
         },
       },
     });
