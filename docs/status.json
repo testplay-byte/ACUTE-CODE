@@ -205,7 +205,7 @@
     }
   ],
   "quality": {
-    "ci": "PENDING — v0.78.0 staged (round 79): the tree sits uncommitted on ff65a5f with the pushed backup/pre-r79 branch as the safety net; the release agent commits, tags v0.78.0, pushes, and replaces this field with the real CI + release verdict at close-out",
+    "ci": "success — v0.78.0 released (round 79 close-out): push ef11d86 → CI run 34223271421: the first run FAILED on a Windows-runner stall (a 1-second models-catalog test timed out at 30 s amid vitest worker RPC timeouts — the runner went unresponsive, not the code; the test passed 3/3 locally and the suite was green before the push). The failed-job RE-RUN (the documented flake path — watched, not a silent retry) → SUCCESS. Tag v0.78.0 → Release run 34223270773 SUCCESS (launcher-kit + desktop-installer + github-release) → release 384700391 PUBLISHED with both assets (ACUTE-CODE_0.78.0_x64-setup.exe 37,413,610 B + acute-launcher-kit-v0.78.0.zip 92,582 B). The DASHBOARD was truth-synced the same hour (commit 8b8f84d — version 0.78.0, suites 960/1769/12/10, the real ciNote incl. the flake story, the R79 cards + milestone 60; Pages serving 0.78.0 verified; the 25-release picker smoke picks v0.78.0).",
     "suites": [
       {
         "name": "frontend",
