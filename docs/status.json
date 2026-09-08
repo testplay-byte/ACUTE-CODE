@@ -199,7 +199,7 @@
     }
   ],
   "quality": {
-    "ci": "pending — the release agent syncs this field after the v0.77.0 tag + push (the round itself: lint clean, typecheck clean, 2708/2708 tests green in 144 files, battery 12/12, browser-verified)",
+    "ci": "success — CI run 34203679389 (push ca5e714, the verify job) concluded SUCCESS on the FIRST push; tag v0.77.0 → Release run 34204320612 SUCCESS (launcher-kit + desktop-installer + github-release) → release 384564517 PUBLISHED with both assets (ACUTE-CODE_0.77.0_x64-setup.exe 37,405,130 B + acute-launcher-kit-v0.77.0.zip 91,486 B); docs:check 178/0/0, root suite 2708/2708 in 144 files",
     "suites": [
       {
         "name": "frontend",
