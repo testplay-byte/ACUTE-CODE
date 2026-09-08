@@ -193,6 +193,7 @@ describe("RightSidebar sub-agent picker (ROUND-48 R48-e2 code badges)", () => {
   const SUB: SubAgentStatus = {
     id: "sess_child_a",
     code: "K7Q2",
+    taskId: null,
     title: "Refactor auth module",
     subRole: "coder",
     status: "running",

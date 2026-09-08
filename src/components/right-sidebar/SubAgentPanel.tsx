@@ -525,6 +525,12 @@ export function SubAgentPanel({ tab }: { tab: RightSidebarTab }) {
   const liveEntry = subAgentId !== null ? liveMap[subAgentId] : undefined;
   const childRow = subAgentId !== null ? (subsQuery.data ?? []).find((s) => s.id === subAgentId) : undefined;
   const code = liveEntry?.code ?? childRow?.code ?? null;
+  // ROUND-79 (R79-b): the delegation address — live first (from the
+  // subagent-status frames, present from the queued one onward), the polled
+  // row as the fallback. The header's task chip (beside the code chip) is
+  // the owner-facing addressable surface: what delegate_task
+  // {"resume":"…"} accepts.
+  const taskId = liveEntry?.taskId ?? childRow?.taskId ?? null;
 
   const events = detailQuery.data?.events ?? [];
   const { items, firstTs, hasRunningTool, lastAssistantSeq } = parseSubAgentTranscript(events);
@@ -692,6 +698,16 @@ export function SubAgentPanel({ tab }: { tab: RightSidebarTab }) {
             data-testid="subagent-code-chip"
           >
             {code}
+          </span>
+        ) : null}
+        {taskId !== null ? (
+          <span
+            className="shrink-0 font-mono text-[10px] font-semibold px-1.5 py-0.5 rounded-md max-w-[120px] truncate"
+            style={{ background: withAlpha(styles.textTertiary, 0.12), color: styles.textSecondary }}
+            title={`Background task id ${taskId} — delegate_task {"resume":"${taskId}"} collects it`}
+            data-testid="subagent-taskid-chip"
+          >
+            {taskId}
           </span>
         ) : null}
         <span

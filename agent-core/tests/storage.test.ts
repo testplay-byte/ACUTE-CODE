@@ -170,6 +170,12 @@ describe("openDatabase", () => {
       // column (NULL = default posture) + switch_mode appended to
       // template/default allowlists that include read_skill.
       { version: 27, name: "0027_task_modes.sql" },
+      // ROUND-79 (R79-a, the orchestrator round): the addressable-delegation
+      // tier — sessions.delegate_task_id column (NULL = unaddressed child,
+      // the pre-R79 behavior) + the idx_sessions_parent_task index for the
+      // duplicate/cap/guard lookups. No allowlist curation (delegate_task
+      // gained parameters, not a new tool name).
+      { version: 28, name: "0028_delegation_task_id.sql" },
     ]);
     expect(appliedSecond).toEqual(appliedFirst);
   });

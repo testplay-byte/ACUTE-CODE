@@ -1,4 +1,4 @@
-<!-- last-reviewed: 2026-09-07 round-75 -->
+<!-- last-reviewed: 2026-09-08 round-79 -->
 # Round 49 — The file-tools repair (migration 0019: the default agent's allowlist was narrowed to 5 tools) · browser sub-resources actually load (absolute proxy rewrites) · nested sub-agents + the tool-intent nudge · the memory master switch · the cat logo · Sessions fully removed
 
 **Date:** 2026-08-29 · **Branch:** `main` · **Owner directives:** every fix in

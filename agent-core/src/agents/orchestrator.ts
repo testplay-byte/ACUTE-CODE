@@ -26,13 +26,21 @@
  */
 import type Database from "better-sqlite3";
 import {
+  appendDelegationCollected,
   appendSessionEvent,
+  BACKGROUND_TASK_REMINDER_CAP,
+  childTerminalText,
+  collectedChildIds,
   createSession,
   getSession,
   listSessionEvents,
+  listSubAgents,
   setSessionStatus,
   subAgentCode,
+  type Session,
+  type SubAgentStatus,
 } from "../storage/sessions.js";
+import type { Agent } from "../storage/agents.js";
 // ROUND-75 (R75): the retry-ladder's active-wait registry — the watchdog
 // consults it so a child legitimately waiting out a 5/10/30-minute
 // transient-API retry is never stall-killed (no persisted events during a
@@ -50,6 +58,9 @@ import type { TurnDeps } from "./runtime.js";
 // ROUND-40: sub-agent transitions publish app-level notifications so the user
 // sees when a delegated task completes or fails (even if they navigated away).
 import { getNotificationBus } from "../lib/notification-bus.js";
+// ROUND-79 (R79-a): background-settlement + detached-crash log lines (the
+// fire-and-forget run has no caller to return to — the log is the trace).
+import { log } from "../lib/log.js";
 
 export type SqliteDatabase = Database.Database;
 
@@ -70,6 +81,45 @@ const ROLE_FRAMING: Record<SubRole, string> = {
   tester:
     "You are acting as a TESTER sub-agent. Design and run checks that prove the task's acceptance criteria; report exact reproduction steps for failures.",
 };
+
+/** ROUND-79 (R79-a, the orchestrator round): the task_id grammar — one
+ * leading alphanumeric, then alphanumerics/dots/underscores/hyphens, 1-64
+ * characters total. Kept deliberately tight: an address the model has to
+ * REPRODUCE in a later delegate_task {"resume":"..."} call, so no spaces,
+ * no unicode, no colons that could bleed into JSON-ish phrasing. */
+const TASK_ID_RE = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/;
+
+/** ROUND-79 (R79-a): the outstanding-background fan-out cap — a parent may
+ * hold at most this many queued|running children WITH a task_id before
+ * further BACKGROUND delegations are refused honestly (runaway-queue
+ * guard; the global orchestration.maxParallel semaphore still caps actual
+ * parallelism — this stops an unbounded backlog, not concurrency). */
+const BACKGROUND_TASK_CAP = 10;
+
+/** ROUND-79 (R79-a): the resume WAIT's session-status poll interval (the
+ * model never sleep-polls — RESUME is the wait; this is the internal
+ * cadence of that wait, ~300ms per the plan). */
+const RESUME_POLL_MS = 300;
+
+/** ROUND-79 (R79-a): the collected-report return — the header + the final
+ * report from the SHARED extraction (childTerminalText: the last non-empty
+ * message.assistant — the exact text the Sub-agents panel row shows as
+ * `report`, so the tool result and the panel can never disagree). Used by
+ * the completed path and the post-retry path of resumeTask. */
+function collectOutcome(
+  db: SqliteDatabase,
+  child: SubAgentStatus,
+): { ok: boolean; output: string } {
+  const header = `[subagent session: ${child.id}${child.taskId !== null ? ` | task_id: ${child.taskId}` : ""} | role: ${child.subRole ?? "researcher"}]`;
+  const { report } = childTerminalText(db, child.id);
+  if (report === null) {
+    return {
+      ok: true,
+      output: `${header}\nSub-agent completed, but its log holds no final report text (no non-empty assistant message) — its session is preserved for inspection.`,
+    };
+  }
+  return { ok: true, output: `${header}\nSub-agent completed.\n\n${report}` };
+}
 
 /**
  * ROUND-39 (owner: "the sub-agents were apparently not capable enough. The
@@ -143,6 +193,12 @@ export interface SubAgentEventPayload {
    * GET /sessions/:id/subagents rows, so the UI can join the live status
    * stream to the polled list + approval attribution by either id or code. */
   code: string;
+  /** ROUND-79 (R79-a): the parent's own address for this child
+   * (sessions.delegate_task_id) when the delegation is addressable — the
+   * same value as the `taskId` field on the polled /subagents row, so the
+   * Sub-agents panel's task chip joins the live frames by it. Absent on
+   * unaddressed delegations (pre-R79 frames are unchanged). */
+  taskId?: string;
   todosDone?: number;
   todosTotal?: number;
   /** ROUND-50 (R50-b, owner: the sub-agent stats footer must show "the model
@@ -296,6 +352,18 @@ class Orchestrator {
   /**
    * Delegate a subtask: creates the child session, runs it to completion
    * (concurrency-limited), and returns the child's final report.
+   *
+   * ROUND-79 (R79-a): the child-run machinery this method used to carry
+   * inline (creation → framing → slot → keyring view → registry →
+   * watchdog → wrapped emit → run → terminal + notify + release) is
+   * EXTRACTED into runChildTurn below so the BLOCKING path and the new
+   * BACKGROUND path (delegateBackground) share ONE implementation — the
+   * observable blocking behavior is unchanged (the existing suite is the
+   * regression gate). New surface: the optional taskId — the parent's own
+   * address for this delegation (validated + duplicate-checked upstream);
+   * a BLOCKING delegation with task_id writes `delegation.collected` on
+   * the parent log at completion, because the report was delivered inline
+   * and the per-turn BACKGROUND TASKS reminder must never nag about it.
    */
   async delegateTask(
     deps: TurnDeps,
@@ -316,37 +384,483 @@ class Orchestrator {
      * parent. The delegate_task tool passes its toolDeps.signal (the live
      * parent turn's signal). */
     signal?: AbortSignal,
+    /** ROUND-79 (R79-a): the parent's own address for this delegation —
+     * validated (TASK_ID_RE) and duplicate-checked against this parent's
+     * children (ANY status: an address is handed out once) BEFORE any
+     * child is created. On completion the parent log gains a
+     * delegation.collected event naming this child (the uniform collected
+     * rule: a blocking task_id is collected when its report is delivered
+     * inline; a background task at resume). */
+    taskId?: string,
   ): Promise<{ ok: boolean; output: string; sessionId?: string }> {
-    const { db, keyring, chat, chatStream } = deps;
+    const resolved = this.resolveDelegation(deps, parentSessionId, task, taskId);
+    if (typeof resolved === "string") {
+      return { ok: false, output: resolved };
+    }
+    const child = this.createChildSession(
+      deps,
+      resolved.parent,
+      resolved.agent,
+      parentSessionId,
+      task,
+      role,
+      resolved.taskId,
+    );
+    const result = await this.runChildTurn(
+      deps,
+      {
+        parentSessionId,
+        parent: resolved.parent,
+        child,
+        task,
+        role,
+        // The delegation input: role framing + the multi-stage mandate.
+        content: `${ROLE_FRAMING[role]}\n${renderTaskPrompt(task)}`,
+        providerId: resolved.providerId,
+        modelOverride: resolved.modelOverride,
+        effectiveModel: resolved.effectiveModel,
+        emit,
+        signal,
+      },
+    );
+    // ROUND-79 (R79-a): a BLOCKING delegation with task_id marks itself
+    // COLLECTED at completion — the tool result (report OR failure line)
+    // was delivered inline, so the per-turn reminder must never list this
+    // task again. EXCEPT when the parent turn was aborted mid-call (the
+    // tool result was abandoned — the model never read it): the reminder
+    // then honestly keeps listing the task so a later turn can resume it.
+    if (resolved.taskId !== undefined && signal?.aborted !== true) {
+      appendDelegationCollected(deps.db, parentSessionId, {
+        taskId: resolved.taskId,
+        childId: child.id,
+        childCode: subAgentCode(child.id),
+      });
+    }
+    return result;
+  }
+
+  /**
+   * ROUND-79 (R79-a, the orchestrator round): delegate a subtask in the
+   * BACKGROUND — create the child, emit the queued frame, kick off the
+   * DETACHED run, and return IMMEDIATELY with the receipt (task_id,
+   * session id, code, role, model + the resume instructions).
+   *
+   * Semantics (the plan's contract, verbatim):
+   *  - NEVER awaited by the tool call: the run carries its own
+   *    fulfill/reject handlers, so there is structurally no unhandled
+   *    rejection.
+   *  - The run acquires its concurrency slot INSIDE the shared machinery —
+   *    a full semaphore leaves the child honestly `queued` while this call
+   *    has already returned.
+   *  - The full watchdog/turn-registry/notification machinery rides the
+   *    shared path exactly as for blocking children.
+   *  - The wrapped emit is BEST-EFFORT (try/catch, swallow): a background
+   *    child routinely OUTLIVES the parent turn's SSE stream, and a write
+   *    on the dead stream must never kill the run.
+   *  - PARENT-TURN ABORT STILL CASCADES (deliberate, documented choice):
+   *    the child receives the same parent signal the blocking path
+   *    forwards, so the owner's Stop on the parent stops the background
+   *    spend too — no zombie children after the owner said stop. A
+   *    normally ENDED parent turn never aborts its controller (only the
+   *    stop route does), so a healthy background child outlives the turn.
+   *  - The child's completion does NOT write delegation.collected (the
+   *    report was not delivered anywhere yet): the per-turn reminder keeps
+   *    listing it as COMPLETED until delegate_task {"resume":"<task_id>"}
+   *    collects it.
+   */
+  async delegateBackground(
+    deps: TurnDeps,
+    parentSessionId: string,
+    task: string,
+    role: SubRole,
+    /** REQUIRED (validated): the parent's address for this delegation. */
+    taskId: string,
+    emit?: (event: unknown) => void,
+    signal?: AbortSignal,
+  ): Promise<{ ok: boolean; output: string; sessionId?: string }> {
+    const resolved = this.resolveDelegation(deps, parentSessionId, task, taskId);
+    if (typeof resolved === "string") {
+      return { ok: false, output: resolved };
+    }
+    // The background-only gate: the ≥10 outstanding fan-out cap (the
+    // runaway-queue guard; the global semaphore still caps real
+    // parallelism). Honest refusal LISTING the outstanding tasks.
+    const capRefusal = this.backgroundCapRefusal(deps.db, parentSessionId);
+    if (capRefusal !== null) {
+      return { ok: false, output: capRefusal };
+    }
+    const child = this.createChildSession(
+      deps,
+      resolved.parent,
+      resolved.agent,
+      parentSessionId,
+      task,
+      role,
+      resolved.taskId,
+    );
+    const code = subAgentCode(child.id);
+    // DETACHED run — the shared machinery, fire-and-forget. Its synchronous
+    // prefix (the queued status frame + the first atomic slot reservation
+    // attempt) executes before the first await, so the queued frame is on
+    // the parent's stream before this call returns.
+    this.runChildTurn(
+      deps,
+      {
+        parentSessionId,
+        parent: resolved.parent,
+        child,
+        task,
+        role,
+        content: `${ROLE_FRAMING[role]}\n${renderTaskPrompt(task)}`,
+        providerId: resolved.providerId,
+        modelOverride: resolved.modelOverride,
+        effectiveModel: resolved.effectiveModel,
+        emit,
+        signal,
+        // The background tolerance: the child outlives the parent's SSE
+        // stream — every emit through this run is best-effort.
+        bestEffortEmit: true,
+      },
+    ).then(
+      (result) => {
+        // The terminal status frame + the owner notification already rode
+        // the shared path; the REPORT itself stays in the child's log for
+        // resume (nothing delivered it inline anywhere).
+        log("info", "delegation.background.settled", {
+          child: child.id,
+          taskId,
+          ok: result.ok,
+        });
+      },
+      (error) => {
+        // DETACHED-FAILURE HONESTY: runChildTurn settles its own failures
+        // through its return value — an exception HERE means the machinery
+        // itself broke. The child must never stay `running` silently: flip
+        // it failed, emit the failed frame (best-effort — the stream may be
+        // long gone), and notify the owner. Every step is itself guarded:
+        // the honesty path must never crash the process.
+        try {
+          setSessionStatus(deps.db, child.id, "failed");
+          try {
+            emit?.({
+              type: "subagent-status",
+              sessionId: child.id,
+              parentSessionId,
+              status: "failed",
+              task,
+              role,
+              code,
+              taskId,
+              model: resolved.effectiveModel,
+              detail: `background run crashed: ${error instanceof Error ? error.message : String(error)}`,
+            });
+          } catch {
+            /* best-effort frame — the stream is gone */
+          }
+          getNotificationBus().publish(deps.db, {
+            kind: "subagent_failed",
+            title: `Sub-agent (${role}) failed`,
+            body: `background run crashed: ${error instanceof Error ? error.message : String(error)}`.slice(0, 160),
+            sessionId: child.id,
+            projectId: resolved.parent.projectId ?? undefined,
+          });
+        } catch {
+          /* never crash the process from the honesty path */
+        }
+        log("warn", "delegation.background.crashed", {
+          child: child.id,
+          taskId,
+          reason: error instanceof Error ? error.message : String(error),
+        });
+      },
+    ).catch(() => {
+      /* belt: the handlers above must never themselves reject */
+    });
+    // The receipt — returned IMMEDIATELY (the run is detached).
+    return {
+      ok: true,
+      output:
+        `[background task: ${taskId} | subagent session: ${child.id} | code: ${code} | role: ${role} | model: ${resolved.effectiveModel}]\n` +
+        "The task is running in the background — it does NOT block you; continue your own work in the meantime.\n" +
+        "Its live progress is visible to the owner in the Sub-agents panel.\n" +
+        `Call delegate_task {"resume":"${taskId}"} to WAIT for it and collect its final report.\n` +
+        "Its status is listed in your next turn's system prompt — do NOT poll; resume waits.",
+      sessionId: child.id,
+    };
+  }
+
+  /**
+   * ROUND-79 (R79-a, the orchestrator round): the COLLECT path —
+   * delegate_task {"resume": "<task_id | child session id | 4-char code>"}.
+   *
+   * Resolution among the PARENT's children, in precedence order:
+   * delegate_task_id match → session id → subAgentCode. Then:
+   *  - `completed`  → return the final report (the SAME last-non-empty
+   *    message.assistant extraction listSubAgents uses — childTerminalText)
+   *    + append `delegation.collected` to the PARENT log (idempotent).
+   *  - `queued|running` → WAIT: poll the session status ~300ms until
+   *    terminal, then handle as completed/failed. The wait is bounded by
+   *    the child's OWN lifecycle (stall watchdog, retry ladder, owner
+   *    Stop). The parent turn's abort signal is honored → the honest
+   *    "still running" line (resume in a later turn).
+   *  - `failed` (or `cancelled`) → the retryChild continuation path
+   *    (ADR-0022 §3: the event log IS the resume point), awaited; on
+   *    success the report + collected event ride the completed path.
+   */
+  async resumeTask(
+    deps: TurnDeps,
+    parentSessionId: string,
+    address: string,
+    emit?: (event: unknown) => void,
+    signal?: AbortSignal,
+  ): Promise<{ ok: boolean; output: string }> {
+    const { db } = deps;
+    const trimmed = address.trim();
+    const children = listSubAgents(db, parentSessionId);
+    // Resolution precedence: task_id → session id → code (case-insensitive:
+    // codes are [A-Z0-9]; a model typing lowercase must still be understood).
+    const child =
+      children.find((c) => c.taskId !== null && c.taskId === trimmed) ??
+      children.find((c) => c.id === trimmed) ??
+      children.find((c) => c.code === trimmed.toUpperCase());
+    if (child === undefined) {
+      return {
+        ok: false,
+        output: this.addressableChildrenOutput(
+          db,
+          parentSessionId,
+          `No sub-agent of this session matches "${trimmed}" — resume accepts a task_id, a child session id, or a 4-char code.`,
+        ),
+      };
+    }
+    let status = child.status;
+    if (status === "queued" || status === "running") {
+      // The WAIT (the R71 no-polling discipline's other half: the MODEL
+      // never sleep-polls — RESUME is the wait). Poll the child's session
+      // status every ~300ms until it goes terminal; bounded by the child's
+      // own lifecycle, never by an artificial timeout here.
+      for (;;) {
+        if (signal?.aborted === true) {
+          return {
+            ok: false,
+            output:
+              `[subagent session: ${child.id}${child.taskId !== null ? ` | task_id: ${child.taskId}` : ""} | role: ${child.subRole ?? "researcher"}]\n` +
+              "The sub-agent is STILL RUNNING — this wait was interrupted. Resume it in a later turn (delegate_task {\"resume\":\"...\"}) to collect its final report; do not re-delegate the task.",
+          };
+        }
+        await new Promise((resolve) => setTimeout(resolve, RESUME_POLL_MS));
+        const fresh = getSession(db, child.id);
+        if (fresh === undefined) {
+          return { ok: false, output: `the sub-agent session ${child.id} no longer exists` };
+        }
+        status = fresh.status;
+        if (status !== "queued" && status !== "running") break;
+      }
+    }
+    if (status === "completed") {
+      // Idempotent collect: re-resuming an already-collected child returns
+      // the report again (harmless) without appending a second event.
+      if (child.taskId !== null && !collectedChildIds(db, parentSessionId).has(child.id)) {
+        appendDelegationCollected(db, parentSessionId, {
+          taskId: child.taskId,
+          childId: child.id,
+          childCode: child.code,
+        });
+      }
+      return collectOutcome(db, child);
+    }
+    // failed | cancelled → the retryChild continuation path, awaited.
+    const retry = await this.retryChild(deps, parentSessionId, child.id, emit);
+    if (!retry.ok) {
+      return {
+        ok: false,
+        output:
+          `[subagent session: ${child.id}${child.taskId !== null ? ` | task_id: ${child.taskId}` : ""} | role: ${child.subRole ?? "researcher"}]\n` +
+          `The sub-agent failed again on resume: ${retry.message}\nIts partial progress is preserved in its session — resume again later, inspect its session, or report the situation to the user.`,
+      };
+    }
+    if (child.taskId !== null && !collectedChildIds(db, parentSessionId).has(child.id)) {
+      appendDelegationCollected(db, parentSessionId, {
+        taskId: child.taskId,
+        childId: child.id,
+        childCode: child.code,
+      });
+    }
+    const refreshed = listSubAgents(db, parentSessionId).find((c) => c.id === child.id) ?? child;
+    return collectOutcome(db, refreshed);
+  }
+
+  /**
+   * ROUND-79 (R79-a): the honest addressable list — every child of the
+   * parent with its three addresses (task_id when it has one, session id,
+   * 4-char code), role, and status. Served on unknown-address resume and
+   * on a task-less + resume-less delegate_task call: the cheap affordance
+   * that lets the model retry with a REAL address immediately (and see
+   * what there is to resume at all).
+   */
+  addressableChildrenOutput(db: SqliteDatabase, parentSessionId: string, intro: string): string {
+    const children = listSubAgents(db, parentSessionId);
+    if (children.length === 0) {
+      return (
+        `${intro}\n` +
+        "This session has no sub-agent children yet. Delegate one with delegate_task {task: \"…\", role: \"researcher\"} — the call then WAITS and returns its final report; add task_id + background:true for a fire-and-forget run you later collect with {\"resume\":\"<task_id>\"}."
+      );
+    }
+    const shown = children.slice(0, BACKGROUND_TASK_REMINDER_CAP);
+    const rows = shown.map(
+      (c) =>
+        `- ${c.taskId !== null ? `task_id: ${c.taskId} | ` : ""}session: ${c.id} | code: ${c.code} | role: ${c.subRole ?? "researcher"} | status: ${c.status}`,
+    );
+    const more = children.length - shown.length;
+    const example = children.find((c) => c.taskId !== null)?.taskId ?? children[0]!.code;
+    return (
+      `${intro}\n` +
+      `Addressable sub-agents of this session (resume by task_id, session id, or 4-char code — e.g. delegate_task {"resume":"${example}"}):\n` +
+      `${rows.join("\n")}${more > 0 ? `\n…and ${more} more` : ""}`
+    );
+  }
+
+  /**
+   * ROUND-79 (R79-a): resolve + validate a delegation target — the gate
+   * BOTH entry points (blocking + background) share. Returns the resolved
+   * bundle (with the TRIMMED taskId), or an honest refusal string.
+   * Validation order: task non-empty → task_id grammar → task_id
+   * uniqueness among the parent's children (ANY status — an address is
+   * handed out once) → parent/agent existence.
+   */
+  private resolveDelegation(
+    deps: TurnDeps,
+    parentSessionId: string,
+    task: string,
+    taskId?: string,
+  ):
+    | {
+        parent: Session;
+        agent: Agent;
+        providerId: string;
+        modelOverride: string | undefined;
+        effectiveModel: string;
+        taskId: string | undefined;
+      }
+    | string {
+    const { db } = deps;
+    // ROUND-79 (R79-a): validate task non-empty (the plugin guards this too
+    // — the orchestrator re-validates for direct callers; the sub-agent
+    // sees ONLY this text).
+    if (task.trim() === "") {
+      return "task must be a non-empty string (the sub-agent cannot see this conversation — the task text is its entire brief)";
+    }
+    let trimmedTaskId: string | undefined;
+    if (taskId !== undefined) {
+      trimmedTaskId = taskId.trim();
+      if (trimmedTaskId === "") {
+        return "task_id must be a non-empty string when provided";
+      }
+      if (!TASK_ID_RE.test(trimmedTaskId)) {
+        return (
+          `task_id "${trimmedTaskId}" is invalid — it must match /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/ ` +
+          "(one leading alphanumeric, then alphanumerics/dots/underscores/hyphens, at most 64 characters)"
+        );
+      }
+      const duplicate = this.duplicateTaskIdRefusal(db, parentSessionId, trimmedTaskId);
+      if (duplicate !== null) {
+        return duplicate;
+      }
+    }
     const parent = getSession(db, parentSessionId);
     if (parent === undefined) {
-      return { ok: false, output: "parent session not found" };
+      return "parent session not found";
     }
     const agent = getAgent(db, parent.agentId ?? "");
     if (agent === undefined) {
-      return { ok: false, output: "parent agent not found" };
+      return "parent agent not found";
     }
     const providerId = agent.providerId ?? "openrouter";
     // ROUND-50 (R50-b): the effective child model, resolved ONCE — the
     // turn's modelOverride (R43-5) AND the `model` field on every
     // subagent-status frame below (the stats footer's model line).
     const subagentModel = getOrchestrationSettings(db).subagentModel;
-    const modelOverride = subagentModel ?? undefined;
-    const effectiveModel = subagentModel ?? agent.model;
+    return {
+      parent,
+      agent,
+      providerId,
+      modelOverride: subagentModel ?? undefined,
+      effectiveModel: subagentModel ?? agent.model ?? "unknown",
+      taskId: trimmedTaskId,
+    };
+  }
 
-    // Child session: same project + agent config; the role frames the task.
-    // ROUND-50 (R50-c1): the child COPIES the parent's permission mode — a
-    // delegated sub-agent can never outrun the posture the owner picked for
-    // the conversation (plan-mode parents spawn read-only children; editor
-    // children get no run_command; full-mode children auto-approve ask-tier
-    // gates). Enforcement happens in the child's own prepareTurn turn.
-    const child = createSession(db, {
+  /** ROUND-79 (R79-a): duplicate-address refusal — an address is handed
+   * out ONCE per parent (any status, forever: completed tasks keep their
+   * address reserved too, so resume can never resolve the wrong child).
+   * Returns null when the taskId is free. */
+  private duplicateTaskIdRefusal(
+    db: SqliteDatabase,
+    parentSessionId: string,
+    taskId: string,
+  ): string | null {
+    const existing = listSubAgents(db, parentSessionId).find((c) => c.taskId === taskId);
+    if (existing === undefined) return null;
+    return (
+      `task_id "${taskId}" is already used by a sub-agent of this session (status: ${existing.status}, role: ${existing.subRole ?? "researcher"}, session: ${existing.id}). ` +
+      `Each task_id must be unique among this session's delegations — pick a different one, or resume the existing task: delegate_task {"resume":"${taskId}"}.`
+    );
+  }
+
+  /** ROUND-79 (R79-a): the ≥10-outstanding fan-out guard (background only)
+   * — a parent already holding BACKGROUND_TASK_CAP children in
+   * queued|running WITH a task_id is refused further background
+   * delegations, LISTING the outstanding tasks honestly (the runaway
+   * queue-backlog guard; the global semaphore still caps real
+   * parallelism). Returns null when under the cap. */
+  private backgroundCapRefusal(db: SqliteDatabase, parentSessionId: string): string | null {
+    const outstanding = listSubAgents(db, parentSessionId).filter(
+      (c) => c.taskId !== null && (c.status === "queued" || c.status === "running"),
+    );
+    if (outstanding.length < BACKGROUND_TASK_CAP) return null;
+    const listed = outstanding
+      .slice(0, BACKGROUND_TASK_CAP)
+      .map(
+        (c) =>
+          `- ${c.taskId} (${c.status}, role: ${c.subRole ?? "researcher"}, session: ${c.id})`,
+      )
+      .join("\n");
+    const more = outstanding.length - BACKGROUND_TASK_CAP;
+    return (
+      `Too many outstanding background tasks: this session already holds ${outstanding.length} addressable children in queued|running state (the cap is ${BACKGROUND_TASK_CAP}). ` +
+      `Wait for them (delegate_task {"resume":"<task_id>"} waits and collects the report), or let the owner stop one from the Sub-agents panel.\nOutstanding tasks:\n${listed}${more > 0 ? `\n…and ${more} more` : ""}`
+    );
+  }
+
+  /**
+   * ROUND-79 (R79-a): the shared child CREATION (extracted from the old
+   * delegateTask inline block — both entry points create the child
+   * identically): same project + agent config, the role frames the task,
+   * the parent's permission mode (R50-c1) + active task mode (R75) are
+   * copied, and the parent's task address rides migration 0028's
+   * delegate_task_id (absent for unaddressed delegations).
+   */
+  private createChildSession(
+    deps: TurnDeps,
+    parent: Session,
+    agent: Agent,
+    parentSessionId: string,
+    task: string,
+    role: SubRole,
+    taskId?: string,
+  ): Session {
+    return createSession(deps.db, {
       agentId: agent.id,
       mode: "single",
       projectId: parent.projectId,
       title: task.length > 60 ? `${task.slice(0, 60)}…` : task,
       parentSessionId,
       subRole: role,
+      // ROUND-50 (R50-c1): the child COPIES the parent's permission mode — a
+      // delegated sub-agent can never outrun the posture the owner picked for
+      // the conversation (plan-mode parents spawn read-only children; editor
+      // children get no run_command; full-mode children auto-approve ask-tier
+      // gates). Enforcement happens in the child's own prepareTurn turn.
       permissionMode: parent.permissionMode,
       // ROUND-75 (R75): the child COPIES the parent's active task mode —
       // the R50-c1 inheritance rule, one tier down. A plan-mode parent
@@ -355,7 +869,63 @@ class Orchestrator {
       // the diagnostics command tier. Delegated work can never outrun the
       // posture the owner picked for the conversation.
       activeMode: parent.activeMode,
+      // ROUND-79 (R79-a): the parent's own address for this delegation
+      // (validated + duplicate-checked upstream; omitted = unaddressed,
+      // the pre-R79 shape).
+      ...(taskId !== undefined ? { taskId } : {}),
     });
+  }
+
+  /**
+   * ROUND-79 (R79-a): the EXTRACTED child-run machinery — the ONE path
+   * blocking and background delegations share (creation happened in the
+   * caller; this runs the child to a terminal state): queued frame →
+   * concurrency slot → per-slot keyring VIEW → turn-registry registration
+   * → stall watchdog → wrapped live-forwarding emit → the streamed/sync
+   * turn → terminal status + owner notification → release. Returns the
+   * same {ok, output, sessionId} shape the blocking path always returned
+   * (byte-identical output strings — the regression gate).
+   */
+  private async runChildTurn(
+    deps: TurnDeps,
+    ctx: {
+      parentSessionId: string;
+      parent: Session;
+      child: Session;
+      task: string;
+      role: SubRole;
+      /** The child's first user message (role framing + task prompt). */
+      content: string;
+      providerId: string;
+      modelOverride: string | undefined;
+      effectiveModel: string;
+      emit?: (event: unknown) => void;
+      signal?: AbortSignal;
+      /** ROUND-79 (R79-a): background runs swallow emit errors (the child
+       * outlives the parent's SSE stream). Blocking runs keep the
+       * historical propagate semantics. */
+      bestEffortEmit?: boolean;
+    },
+  ): Promise<{ ok: boolean; output: string; sessionId: string }> {
+    const { db, keyring, chat, chatStream } = deps;
+    const { parentSessionId, child, task, role, providerId, signal } = ctx;
+    // ROUND-79 (R79-a): BEST-EFFORT emit for background children — every
+    // status frame + every forwarded child event rides the parent's SSE,
+    // and that stream can (and routinely does) close while a background
+    // child is still running. A throwing emit is swallowed; the run is
+    // unaffected. The blocking path keeps the pre-R79 propagate semantics
+    // (observably identical).
+    const emit =
+      ctx.bestEffortEmit === true && ctx.emit !== undefined
+        ? (event: unknown): void => {
+            try {
+              ctx.emit!(event);
+            } catch {
+              /* best-effort: the parent's stream is gone — the child keeps running */
+            }
+          }
+        : ctx.emit;
+    const taskId = child.taskId;
 
     const status = (s: SubAgentEventPayload["status"], extra?: Partial<SubAgentEventPayload>) => {
       emit?.({
@@ -368,7 +938,10 @@ class Orchestrator {
         code: subAgentCode(child.id),
         // ROUND-50 (R50-b): the stats footer's model — resolved at delegation
         // time so it is available from the FIRST frame (queued) onward.
-        model: effectiveModel,
+        model: ctx.effectiveModel,
+        // ROUND-79 (R79-a): the delegation address rides every frame when
+        // the child is addressable (the panel's task_id chip joins on it).
+        ...(taskId !== null ? { taskId } : {}),
         ...extra,
       });
     };
@@ -420,6 +993,9 @@ class Orchestrator {
     let stallReport: string | null = null;
     const onParentAbort = (): void => {
       // Parent stop cascades to the child (R48-e1 semantics preserved).
+      // ROUND-79 (R79-a): applies to background children too — the
+      // documented choice (see delegateBackground): the owner's Stop on
+      // the parent stops the background spend; no zombie children.
       if (!childAbort.signal.aborted) childAbort.abort();
     };
     if (signal !== undefined) {
@@ -475,7 +1051,6 @@ class Orchestrator {
     }, orchestration.childWatchdogMs);
 
     try {
-      const framing = ROLE_FRAMING[role];
       // ROUND-40 (owner: "sub-agents should be highly capable and reliable,
       // just like the original agent"). Three fixes shipped together:
       //  1. The child now receives a FULL tool set (ALL tools minus
@@ -526,11 +1101,11 @@ class Orchestrator {
           ? await runStreamedAgentTurn(
               { ...childDeps, chatStream },
               child.id,
-              `${framing}\n${renderTaskPrompt(task)}`,
+              ctx.content,
               wrappedEmit,
               // R43-5: the temporary sub-agent model override (null = inherit
               // the agent's model — prepareTurn falls back to agent.model).
-              modelOverride,
+              ctx.modelOverride,
               // ROUND-52 (R52-b): the child's OWN signal — aborts when the
               // owner stops this sub-agent directly, when the parent turn
               // stops (cascades via onParentAbort above), or when the
@@ -541,8 +1116,8 @@ class Orchestrator {
           : await runSingleAgentTurn(
               childDeps,
               child.id,
-              `${framing}\n${renderTaskPrompt(task)}`,
-              modelOverride,
+              ctx.content,
+              ctx.modelOverride,
               wrappedEmit,
               childAbort.signal,
             );
@@ -556,7 +1131,7 @@ class Orchestrator {
           title: `Sub-agent (${role}) completed`,
           body: task.slice(0, 120),
           sessionId: child.id,
-          projectId: parent.projectId ?? undefined,
+          projectId: ctx.parent.projectId ?? undefined,
         });
         // ROUND-39: real newlines (the old `\\n` produced literal "\n" text
         // in the parent's view of the sub-agent's report).
@@ -591,7 +1166,7 @@ class Orchestrator {
               : `Sub-agent (${role}) failed`,
         body: (stallReport ?? outcome.message).slice(0, 160),
         sessionId: child.id,
-        projectId: parent.projectId ?? undefined,
+        projectId: ctx.parent.projectId ?? undefined,
       });
       const failureLine =
         stallReport !== null
@@ -611,7 +1186,6 @@ class Orchestrator {
       this.releaseSlot(providerId, slot, child.id);
     }
   }
-
   /**
    * Retry a failed/stale child (ADR-0022 §3): the event log IS the resume
    * point — a continuation message re-runs with all prior progress (R34

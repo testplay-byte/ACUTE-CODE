@@ -1,4 +1,4 @@
-<!-- last-reviewed: 2026-09-08 round-78 -->
+<!-- last-reviewed: 2026-09-08 round-79 -->
 # ACUTE-CODE Design System
 
 **Why this document exists (owner direction, round-16/2026-08-23):** "the UI
@@ -100,6 +100,20 @@ a slot here.
   deliver in order before the next send. While the stream is open the
   LIVE chip owns the render (a mid-stream refetch shows exactly one chip,
   never zero).
+- **Sub-agent task-id chips (R79)**: when a delegated child is
+  ADDRESSABLE (the parent model gave it a `task_id`), the id renders as
+  a small MONO chip — in the Sub-agents panel's detail header beside
+  the code chip (`data-testid="subagent-taskid-chip"`, `max-w-[120px]`
+  truncate, tertiary-tinted) and on the chat's live SubAgentCard meta
+  line between role and status (`data-testid="subagent-card-taskid"`,
+  `max-w-[130px]` truncate). ONLY-when-present: `taskId: null` (every
+  pre-R79 child / unaddressed delegation) renders NO chip — no empty
+  affordances. Both chips carry the tooltip that teaches the resume
+  affordance: `Background task id X — delegate_task {"resume":"X"}
+  collects it` — the owner can read the id off the UI and reason about
+  what the model will collect. The panel chip resolves LIVE-first (the
+  SSE map's carried `taskId`, present from the queued frame onward)
+  with the polled `/subagents` row as the fallback.
 - **Composer (R50 box, R75 one-row, R77 left/right split, R78 action anchor)**: one
   rounded-[18px] box (bg token, accent border + glow on focus) =
   auto-growing textarea on top (grows to exactly 5 visible lines via

@@ -101,6 +101,18 @@ export interface PromptContext {
   activeTaskMode?: { id: string; name: string; body: string };
   /** ROUND-73 (R73-b): honest note when a stale active mode was cleared this turn. */
   clearedModeNote?: string;
+  /** ROUND-79 (R79-a, the orchestrator round): the per-turn BACKGROUND
+   * TASKS payload — THIS session's children with a delegate_task_id whose
+   * reports have not been collected (buildBackgroundTasksReminder in
+   * storage/sessions.ts; prepareTurn computes it fresh every turn, cheap
+   * guard first). Non-empty → a "## BACKGROUND TASKS" section listing
+   * each task's live status with the resume affordance (resume WAITS —
+   * the R71 no-polling discipline). Absent or empty-tasks → NO section,
+   * byte-identical composition (the golden ctx does not set it — the
+   * fixture never moves). EPHEMERAL: never persisted, never a message
+   * mutation; the delegation.collected events on the session log own the
+   * durable collected state the builder consults. */
+  backgroundTasks?: import("../storage/sessions.js").BackgroundTasksPayload;
   /** ROUND-61 (R61): computer-use availability + posture. When enabled, a
    * "## COMPUTER USE" section carries the operating discipline (the
    * extended skill body loads via read_skill("computer-use")). Absent →
@@ -554,6 +566,42 @@ export function buildTaggedPromptLines(ctx: PromptContext): TaggedLine[] {
     ident("This posture is ACTIVE for this session (set via switch_mode or the mode picker). Follow it for the rest of the task. Clear with switch_mode { mode: \"none\" }.");
     ident("");
     ident(ctx.activeTaskMode.body);
+    ident("");
+  }
+
+  // ── Background tasks (ROUND-79, R79-a): the per-turn collection reminder ─
+  // The delivery channel for ADDRESSABLE delegations: every turn the prompt
+  // lists this session's uncollected delegated tasks with their LIVE status
+  // (in flight or awaiting collection), so the model knows what is running
+  // without polling — the resume call IS the wait (the R71 no-polling
+  // discipline's collection half). Strictly gated on a non-empty task list:
+  // absent/empty composes byte-identically (the golden fixture's proof).
+  if (ctx.backgroundTasks !== undefined && ctx.backgroundTasks.tasks.length > 0) {
+    beginSection("background-tasks");
+    ident("## BACKGROUND TASKS");
+    ident(
+      "Delegated tasks in flight or awaiting collection — call delegate_task {\"resume\":\"<task_id>\"} to WAIT for a task and collect its final report; do not poll (resume waits):",
+    );
+    for (const task of ctx.backgroundTasks.tasks) {
+      const where = `${task.taskId} (role: ${task.role ?? "researcher"}, code: ${task.code})`;
+      if (task.status === "running") {
+        ident(`- ${where}: running — ${task.elapsedMinutes}m in, ${task.todosDone}/${task.todosTotal} todos`);
+      } else if (task.status === "completed") {
+        ident(`- ${where}: COMPLETED — resume to read its final report`);
+      } else if (task.status === "failed") {
+        ident(
+          `- ${where}: FAILED (${task.error ?? "no error recorded"}) — resume to retry it from where it stopped`,
+        );
+      } else if (task.status === "queued") {
+        ident(`- ${where}: queued — waiting for a concurrency slot`);
+      } else {
+        // cancelled + any future status — the honest generic line.
+        ident(`- ${where}: ${task.status} — resume to collect or retry it`);
+      }
+    }
+    if (ctx.backgroundTasks.more > 0) {
+      ident(`…and ${ctx.backgroundTasks.more} more`);
+    }
     ident("");
   }
 

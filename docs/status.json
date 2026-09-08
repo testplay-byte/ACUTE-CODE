@@ -3,7 +3,7 @@
   "product": {
     "name": "Acute",
     "tagline": "Local-first multi-agent engineering workbench",
-    "version": "0.77.0",
+    "version": "0.78.0",
     "availability": "Private build — not yet distributed",
     "chips": [
       "Windows desktop",
@@ -27,7 +27,7 @@
       "title": "Agentic system",
       "state": "building",
       "progress": 74,
-      "summary": "Multi-turn agentic continuation with the R70 agent brain (env grounding, AGENTS.md conventions, one five-phase loop, verification discipline) + the R71 discipline & reliability layer (engineering-discipline prompt section, edit-failure escalation, provider-error classification + overflow recovery) + the R72 adaptive capability layer (deterministic task→skill hints, 18→20 builtin skills, references/ depth, per-directory conventions) + the R73 task-modes posture layer (six builtin posture modules + .acute/agents/*.md customs with shadowing + tool narrowing, the switch_mode tool, the composer picker + /mode slash, sessions.active_mode, the mode Task signal line, the generalized system-reminder renderer); multi-agent orchestration owner-gated; computer use (desktop observation+actuation, separate vision model, kill switch) owner-gated"
+      "summary": "Multi-turn agentic continuation with the R70 agent brain (env grounding, AGENTS.md conventions, one five-phase loop, verification discipline) + the R71 discipline & reliability layer (engineering-discipline prompt section, edit-failure escalation, provider-error classification + overflow recovery) + the R72 adaptive capability layer (deterministic task→skill hints, 18→20 builtin skills, references/ depth, per-directory conventions) + the R73 task-modes posture layer (six builtin posture modules + .acute/agents/*.md customs with shadowing + tool narrowing, the switch_mode tool, the composer picker + /mode slash, sessions.active_mode, the mode Task signal line, the generalized system-reminder renderer) + the R79 addressable-delegation tier (delegate_task task_id/background/resume: background children with the immediate receipt + the per-turn BACKGROUND TASKS reminder, resume wait/collect/retry, migration 0028); multi-agent orchestration owner-gated; computer use (desktop observation+actuation, separate vision model, kill switch) owner-gated"
     },
     {
       "id": "automation",
@@ -196,18 +196,24 @@
       "title": "R78 — the honest-errors + queue round",
       "date": "2026-09-08",
       "summary": "The owner’s four verbatim asks shipped together: the error chain robustified (RetryError unwrapped so classification reads the real status; a 403 region block no longer lies ‘authentication failed’; userMessage is the API’s REAL text — only a real rate limit ladders, every other failure shows the provider’s actual words on the live retry card too), the composer’s action group restructured into a never-wrapping bottom-right anchor (Continue/Send/Stop/queue-send can never render in a wrong position), the Settings → General retry config (three per-class auto-retry switches — a disabled class fails fast with the real text), and the message queue (send while the agent works — the message queues as an amber chip, auto-delivers after the current tool call with full context, continues the same stream at turn end, survives stops/crashes via the pre-flip). Verified: 2708 tests (agent-core 1742), the battery-r78 live battery 12/12 (real 429 ladder + a mock-provider request-body oracle), browser-verified on the real dev stack."
+    },
+    {
+      "id": 39,
+      "title": "R79 — the orchestrator round",
+      "date": "2026-09-08",
+      "summary": "The standing R73 deferral shipped — addressable, background, resumable sub-agent tasks (the last unshipped piece of the R71 sub-agent discipline): delegate_task gained task_id (the parent model’s own address, grammar-checked, duplicate-refused, capped at 10 outstanding background tasks), background:true (fire-and-forget with an immediate receipt while the child runs detached — it outlives the parent’s turn, streams to the Sub-agents panel, and its status rides the next turn’s system prompt as the per-turn BACKGROUND TASKS section that disappears once collected), and resume (waits while the task runs, returns the final report idempotently, retries a failed child from where it stopped; the delegation.collected event on the parent’s log is the one delivery marker). The owner sees the address as a mono task-id chip in the panel + the chat card; migration 0028 (sessions.delegate_task_id). Verified: 2741 tests (agent-core 1769 incl. 27 new), the battery-r79 live battery 10/10 with the request-body oracle proving the model SEES the reminder section and its disappearance after collection."
     }
   ],
   "quality": {
-    "ci": "success — CI run 34203679389 (push ca5e714, the verify job) concluded SUCCESS on the FIRST push; tag v0.77.0 → Release run 34204320612 SUCCESS (launcher-kit + desktop-installer + github-release) → release 384564517 PUBLISHED with both assets (ACUTE-CODE_0.77.0_x64-setup.exe 37,405,130 B + acute-launcher-kit-v0.77.0.zip 91,486 B); docs:check 178/0/0, root suite 2708/2708 in 144 files",
+    "ci": "PENDING — v0.78.0 staged (round 79): the tree sits uncommitted on ff65a5f with the pushed backup/pre-r79 branch as the safety net; the release agent commits, tags v0.78.0, pushes, and replaces this field with the real CI + release verdict at close-out",
     "suites": [
       {
         "name": "frontend",
-        "tests": 954
+        "tests": 960
       },
       {
         "name": "agent-core",
-        "tests": 1742
+        "tests": 1769
       },
       {
         "name": "sidecar e2e",
@@ -232,10 +238,9 @@
   ],
   "plan": {
     "current": {
-      "title": "R78 — the honest-errors + queue round (retry honesty, composer anchor, retry settings, message queue)",
-      "detail": "The owner’s four verbatim asks, every one implemented + unit-tested + live-battery-verified (12/12) + browser-verified: (1) ERROR-CHAIN HONESTY — the AI SDK’s RetryError is now unwrapped before classification (extractStatus walks lastError/errors, depth ≤ 4), so a wrapped 429 classifies by status instead of message-pattern luck; a 403 whose body says region/moderation/permission/unavailable reclassifies to fail-fast unknown carrying the REAL text (a region block no longer claims ‘authentication failed’); userMessage/classMessage are the provider’s REAL words (240-char cap, generic lines demoted to the empty fallback) and providerError rides every meta.retry frame + the 502 envelope + the persisted turn.error — the live RetryStatusCard shows the class chip + the API’s actual text (mono, 3-line clamp, the R77 expand toggle); (2) THE COMPOSER ACTION ANCHOR — the toolbar is a wrapping area (left cluster + ml-auto selectors) plus a never-wrapping shrink-0 sibling anchor (data-composer-actions) holding Continue/Send/Stop/queue-send pinned bottom-right by justify-between — the action button can never jump lines (verified stable at 386/480/560/641/900 px); (3) RETRY SETTINGS — RetrySettings {autoRetryRateLimit, autoRetryTimeout, autoRetryNetwork} (default all true) behind GET/PUT /settings/retry, the ladder gated per class in both turn paths (a disabled class fails fast: attempts 1, real text), rendered as the Auto-retry card on the Settings tab now LABELED General (URL id ‘advanced’ unchanged); (4) THE MESSAGE QUEUE — a session_events row of new type message.queued (the exact message.user payload; delivery is a strict type flip so the message lands where it was queued), three delivery paths (loop-top flip before assembleHistory — the model reads it with the completed tool results; the turn-end same-stream continuation loop consuming the first + flipping the rest, meta.queue_continue, capped at 25; the pre-flip crash/stop recovery before the next send’s user event), POST /sessions/:id/queue (+ user.queued frame on the open stream via the turn registry’s notify hook) + DELETE /sessions/:id/queue/:seq, and the frontend (queue-send beside Stop, amber chips with X-remove/Send-now, delivered messages as user bubbles, the queued fold item). Root 2708/2708 in 144 files (agent-core 1742, frontend 954, e2e 12); the battery-r78 live battery + browser verification on the real dev stack.",
+      "title": "R79 — the orchestrator round (delegate_task task_id/background/resume)",
+      "detail": "The standing R73 deferral shipped as its own round — addressable, background, resumable sub-agent tasks (the last unshipped piece of the R71 sub-agent discipline, ADR-0028): the tool gained task_id (the parent model’s own address for a delegation: 1–64 chars, grammar-checked, duplicate-refused by name+status, required for background) + background:true (fire-and-forget — the call returns IMMEDIATELY with a receipt while the child runs DETACHED through the same runChildTurn machinery: status frames, notifications, watchdog, turn-registry, key-slot; it routinely outlives the parent’s SSE, so the child’s emit is best-effort and the parent-abort cascade is forwarded — no zombie spend after a Stop) + resume (resolve by task_id → session id → 4-char code; child running → resume WAITS, abort-honest; completed → the final report, idempotently; failed → the ADR-0022 §3 retry continuation, awaited; unknown → the honest addressable list). Delivery to the parent model is the per-turn ‘## BACKGROUND TASKS’ system-prompt section (the taskHints ephemeral pattern; only UNCOLLECTED addressable children; live status lines; capped at 10 rows; a cheap indexed guard so childless sessions compose byte-identically) + the NEW delegation.collected event on the parent’s log (blocking+task_id writes it at completion — the report was delivered inline; background writes it at resume; assembleHistory + the frontend fold skip it by construction). Migration 0028 adds sessions.delegate_task_id + idx_sessions_parent_task (NULL default = pre-R79 behavior); the /subagents rows + every subagent-status frame carry taskId; the frontend renders the mono task-id chip in the Sub-agents panel header + the chat card (tooltip teaching delegate_task {\"resume\":\"…\"}). Honest caps: ≥10 outstanding background tasks per parent → refusal listing them. Root 2741/2741 in 145 files (agent-core 1769 incl. the 27-test r79-delegation suite; frontend 960 incl. +6); the battery-r79 live battery 10/10 (the request-body oracle: the model SEES the reminder section, and it disappears after collection).",
       "upcoming": [
-        "delegate_task task_id/background/resume (the R73 deferral — the orchestrator round)",
         "external plugin ctx enrichment (cline’s appendContext seam)",
         "lessons-ledger affordance as the reminder injector’s third consumer",
         "ratings-driven prompt tuning",
@@ -250,9 +255,9 @@
         "note": "The R75 live gates: plan-mode write refusal, the retry card, the one-row toolbar, the 5-line textarea"
       },
       {
-        "phase": "Orchestration deepening (R76 queue head)",
-        "status": "planned",
-        "note": "delegate_task task_id/background/resume — delegation, sub-agents, streamed children, and the R71-R75 reliability layers already shipped"
+        "phase": "Orchestration deepening",
+        "status": "shipped",
+        "note": "R79 shipped the addressable-delegation tier (delegate_task task_id/background/resume — ADR-0028): the R71 sub-agent discipline is complete; further orchestration deepening is owner-gated"
       },
       {
         "phase": "Automation pillar",
@@ -271,5 +276,5 @@
       "Quality over speed — every round verified before push"
     ]
   },
-  "round": 78
+  "round": 79
 }

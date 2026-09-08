@@ -1,4 +1,4 @@
-<!-- last-reviewed: 2026-09-07 round-75 -->
+<!-- last-reviewed: 2026-09-08 round-79 -->
 # Round 47 — Provider management, clean + reliable: one API layer · slot+model-scoped connection tests · the served model catalog (hand-copied duplicates deleted) · enabled enforced at turn time · raw-key route removed · launcher key scrub (the R44 leak) + the credentials-parser bug it exposed
 
 **Date:** 2026-08-29 · **Branch:** `main` · **Owner directives:** *"focus on the

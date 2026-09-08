@@ -261,6 +261,11 @@ export interface SubAgentLiveEntry {
   parentSessionId: string;
   /** Deterministic 4-char [A-Z0-9] code (same as the /subagents row). */
   code: string;
+  /** ROUND-79 (R79-b): the delegation address (sessions.delegate_task_id)
+   * when the child is addressable — rides every subagent-status frame from
+   * the queued one onward (absent on unaddressed children). The panel
+   * header's task chip joins on it before the first poll. */
+  taskId?: string;
   role: string;
   task: string;
   status: "queued" | "running" | "completed" | "failed";
@@ -637,6 +642,14 @@ function handleSubAgentStatus(
       role: event.role,
       task: event.task,
       status: event.status,
+      // ROUND-79 (R79-b): the delegation address — from the frame when it
+      // carries one (addressable children), carried from the previous entry
+      // otherwise (same carry semantics as model/todos).
+      ...(event.taskId !== undefined
+        ? { taskId: event.taskId }
+        : prev?.taskId !== undefined
+          ? { taskId: prev.taskId }
+          : {}),
       ...(event.todosDone !== undefined
         ? { todosDone: event.todosDone }
         : prev?.todosDone !== undefined

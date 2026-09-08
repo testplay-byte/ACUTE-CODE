@@ -121,12 +121,20 @@ const TWO_MODES = [
 // ─────────────────────────────────────────────────────────────────────────────
 
 describe("R73-b D1: the registry + the two composed sections", () => {
-  it("the registry pins 23 sections (21 pre-R73 + task-modes + active-mode), the pair sitting DIRECTLY after skills", () => {
-    expect(PROMPT_SECTION_IDS.length).toBe(23);
-    expect(PROMPT_REGISTRY.length).toBe(23);
+  it("the registry pins 24 sections (21 pre-R73 + task-modes + active-mode + ROUND-79 background-tasks), the R73 pair sitting DIRECTLY after skills", () => {
+    // ROUND-79 (R79-a): 23 → 24 — the background-tasks section (the per-turn
+    // uncollected-delegation reminder) joined the registry directly after
+    // active-mode. The count pin is versioned by design: every section round
+    // moves it (R73 moved it 21 → 23 the same way).
+    expect(PROMPT_SECTION_IDS.length).toBe(24);
+    expect(PROMPT_REGISTRY.length).toBe(24);
     expect(PROMPT_SECTION_IDS.indexOf("task-modes")).toBe(PROMPT_SECTION_IDS.indexOf("skills") + 1);
     expect(PROMPT_SECTION_IDS.indexOf("active-mode")).toBe(PROMPT_SECTION_IDS.indexOf("task-modes") + 1);
     expect(PROMPT_SECTION_IDS.indexOf("active-mode")).toBeLessThan(PROMPT_SECTION_IDS.indexOf("computer-use"));
+    // ROUND-79 (R79-a): background-tasks sits DIRECTLY after active-mode
+    // (the delegation reminder rides the posture pair, before computer-use).
+    expect(PROMPT_SECTION_IDS.indexOf("background-tasks")).toBe(PROMPT_SECTION_IDS.indexOf("active-mode") + 1);
+    expect(PROMPT_SECTION_IDS.indexOf("background-tasks")).toBeLessThan(PROMPT_SECTION_IDS.indexOf("computer-use"));
     // The pair is DYNAMIC + identity-bucket, like the design entry says.
     const taskModes = PROMPT_REGISTRY.find((s) => s.id === "task-modes");
     const activeMode = PROMPT_REGISTRY.find((s) => s.id === "active-mode");

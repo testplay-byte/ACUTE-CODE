@@ -1,4 +1,4 @@
-<!-- last-reviewed: 2026-09-07 round-75 -->
+<!-- last-reviewed: 2026-09-08 round-79 -->
 # Kilo Code — Architecture (verified from repo, Aug 2026)
 
 All statements below are verified against the repository (source tree, package manifests, `AGENTS.md`) or the official docs, except where marked **[inferred]** (filename-based inference) or **[UNVERIFIED]**.

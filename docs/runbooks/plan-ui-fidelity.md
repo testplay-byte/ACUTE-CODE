@@ -1,4 +1,4 @@
-<!-- last-reviewed: 2026-09-07 round-75 -->
+<!-- last-reviewed: 2026-09-08 round-79 -->
 # UI Implementation Plan — Demo Fidelity Pass
 
 2026-08-22 · Owner directive: the three shared demos ARE the design spec; current screens don't match. Nova/Bento are STARTING themes only — the system must be trivially extensible (append to a table). No rushing; verify each wave visually.

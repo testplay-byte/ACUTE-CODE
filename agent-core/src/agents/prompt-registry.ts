@@ -147,6 +147,17 @@ export const PROMPT_REGISTRY: readonly PromptSectionSpec[] = Object.freeze([
     dynamic: true, // gated on ctx.activeTaskMode
     bucket: "identity",
   },
+  // ROUND-79 (R79-a, the orchestrator round): the per-turn collection
+  // reminder for ADDRESSABLE delegations — the session's uncollected
+  // children with a delegate_task_id, listed with live status + the resume
+  // affordance (resume WAITS — the R71 no-polling discipline). Strictly
+  // gated on ctx.backgroundTasks (undefined/empty composes byte-identically).
+  {
+    id: "background-tasks",
+    description: "## BACKGROUND TASKS — the per-turn uncollected delegation reminder (addressable children, live status, the resume affordance; R79)",
+    dynamic: true, // gated on ctx.backgroundTasks
+    bucket: "identity",
+  },
   {
     id: "computer-use",
     description: "## COMPUTER USE (desktop control) — the always-on safety/posture discipline when the master switch is on (R61; trimmed R70-c, deep contract via read_skill)",

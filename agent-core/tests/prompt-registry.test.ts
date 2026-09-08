@@ -124,6 +124,35 @@ const MODES_CTX = {
   },
   clearedModeNote:
     "task mode 'custom-mode' from a previous turn no longer exists (its .acute/agents file was removed) — active mode cleared",
+  // ROUND-79 (R79-a): the background-tasks gate — same completeness pattern
+  // as the R73 pair above: opened HERE so the new section's id is covered by
+  // the composition pin, while the BYTE-IDENTITY golden stays on the bare
+  // FULL_CTX (strict gating → the fixture's md5 never moves).
+  backgroundTasks: {
+    tasks: [
+      {
+        taskId: "scan-deps",
+        sessionId: "sess_r79golden0001aaaaaaaaaaaaaaaaaaaaa",
+        code: "R79G",
+        role: "coder",
+        status: "running" as const,
+        todosDone: 2,
+        todosTotal: 5,
+        elapsedMinutes: 3,
+      },
+      {
+        taskId: "lint-report",
+        sessionId: "sess_r79golden0002aaaaaaaaaaaaaaaaaaaaa",
+        code: "R79H",
+        role: "reviewer",
+        status: "completed" as const,
+        todosDone: 4,
+        todosTotal: 4,
+        elapsedMinutes: 9,
+      },
+    ],
+    more: 0,
+  },
 };
 
 afterAll(() => {

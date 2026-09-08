@@ -1,4 +1,4 @@
-<!-- last-reviewed: 2026-09-08 round-78 -->
+<!-- last-reviewed: 2026-09-08 round-79 -->
 # AGENT MEMORY — lessons learned, rules going forward
 
 **Owner directive (2026-08-23):** "learn from the mistakes you made, document
@@ -838,3 +838,47 @@ Format per entry: `N. TITLE (date, source)` → mistake → root cause → rule.
     displaying (and walk the wrapper chain for status, bounded + cycle-
     guarded); when testing ephemeral live state, drive the app like a user
     (clicks/SPA nav) instead of re-opening pages.
+
+
+81. **A mock-provider oracle must assert on what the model RECEIVES, not
+    what it generates — and the mock must fail the way the real failure
+    class fails.** (2026-09-08, round-79; three real bugs in the
+    battery's request-body oracle, each found while proving the R79
+    reminder section.) (1) The first oracle searched the mock's recorded
+    REQUEST bodies for the parent's REPLY text — but the reply is what
+    the model GENERATES; what it receives is keyed by the turn's USER
+    message, so the assertion never matched its own stage. (2) The
+    "doomed child" mock answered 500 — and the R75 ladder correctly
+    classified that as NETWORK-transient and auto-RETRIED it, so the
+    "failed child" never stayed failed (fail-fast tests must use 400;
+    the failure class is the test's contract with the runtime). (3)
+    Dispatching parent-vs-child by the LAST message broke the moment the
+    child's history carried tool results (a tool-looping child's last
+    message is a tool result, not the framing) — and the mock could not
+    decide how many times to fail, because the failure-streak length is
+    the RUNTIME's decision, not the mock's. RULE: for a model-facing
+    oracle, search the recorded request bodies by a marker you PUT in
+    the turn's user message; dispatch on the RAW body (history carries
+    the framing, and tool loops end with tool results); make the mock
+    fail with the HTTP class you mean (400 fail-fast vs 500 transient),
+    and when the scenario needs "it keeps failing until X", latch it in
+    the mock (a `{failForever}` flag the test clears at the pivot), never
+    a counted script.
+
+82. **An interrupted agent's tree is a CLAIM, not a state — verify it
+    line-by-line before building on it, and expect the missing half to
+    be the unglamorous half.** (2026-09-08, round-79; the R79-a backend
+    sub-agent died mid-flight.) The agent's handoff said the work was
+    mostly done — and the line-by-line review found exactly that: the
+    implementation was real and correct (kept, typecheck green, the
+    existing 1742 tests green). What was entirely MISSING was everything
+    that makes it verified: no new tests, no battery, nothing. The
+    interrupted agent had spent its whole budget on the code and none on
+    the proof — the completion claim was true of the IMPLEMENTATION and
+    false of the ROUND. RULE: after any mid-flight death, inventory the
+    claim against the round's definition of done (implementation, tests,
+    live battery, docs) and re-run the gates yourself before reusing so
+    much as one function; the surviving code is a gift, the missing
+    verification is your job, and "the agent said it was done" is a
+    hypothesis, not evidence (see #76 — the same rule from the other
+    side: there the drift was a stamp; here it was the entire proof).

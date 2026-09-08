@@ -297,6 +297,7 @@ function subAgentRow(over: Partial<SubAgentStatus> = {}): SubAgentStatus {
   return {
     id: "sess_child-a",
     code: "K7Q2",
+    taskId: null,
     title: "Refactor auth module",
     subRole: "coder",
     status: "running",
@@ -437,6 +438,22 @@ describe("Delegated card live rows (ROUND-48 R48-e2)", () => {
 
     const chip = await screen.findByTestId("subagent-code-chip");
     expect(chip.textContent).toBe("K7Q2");
+  });
+
+  it("ROUND-79: an addressable child's SubAgentCard shows the task_id chip in the meta line", async () => {
+    vi.mocked(fetchSubAgents).mockResolvedValue([
+      subAgentRow({ status: "completed", taskId: "bg-research" }),
+    ]);
+    renderDelegateSection({
+      ...DELEGATE_TOOL,
+      ok: true,
+      outputSummary: "[subagent session: sess_child-a | role: coder]\nSub-agent completed.\n\nDone.",
+    });
+    fireEvent.click(screen.getByRole("button", { name: /^Delegated / }));
+
+    const taskChip = await screen.findByTestId("subagent-card-taskid");
+    expect(taskChip.textContent).toBe("bg-research");
+    expect(taskChip.getAttribute("title")).toContain('{"resume":"bg-research"}');
   });
 
   it("a pending delegate with NO child session yet shows the quiet 'delegating…' beat", async () => {

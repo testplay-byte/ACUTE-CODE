@@ -144,6 +144,45 @@ describe("stream store sub-agent frames (ROUND-48 R48-e2)", () => {
     expect(selectSubAgentsLive(state)[CHILD]).toBe(entry);
   });
 
+  it("ROUND-79: the frame's taskId rides the live entry and carries forward on frames that omit it", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        sseResponse([
+          // The queued frame of an ADDRESSABLE delegation carries taskId
+          // (R79: from the FIRST frame onward — the panel's chip renders
+          // before the first poll).
+          statusFrame({ status: "queued", taskId: "bg-research" }),
+          statusFrame({ status: "running" }),
+          { type: "stopped" },
+        ]),
+      ),
+    );
+
+    await useStreamStore.getState().startStream(PARENT, "delegate it");
+
+    const entry = getSubAgentLiveEntry(CHILD);
+    expect(entry?.taskId).toBe("bg-research");
+  });
+
+  it("ROUND-79: an unaddressed child's frames (no taskId) leave the entry without one", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        sseResponse([
+          statusFrame({ status: "queued" }),
+          statusFrame({ status: "running" }),
+          { type: "stopped" },
+        ]),
+      ),
+    );
+
+    await useStreamStore.getState().startStream(PARENT, "delegate it");
+
+    const entry = getSubAgentLiveEntry(CHILD);
+    expect(entry?.taskId).toBeUndefined();
+  });
+
   it("a later status frame keeps the freshest values but carries known todos forward", async () => {
     vi.stubGlobal(
       "fetch",

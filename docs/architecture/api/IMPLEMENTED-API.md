@@ -1,8 +1,8 @@
-<!-- last-reviewed: 2026-09-08 round-78 -->
+<!-- last-reviewed: 2026-09-08 round-79 -->
 # IMPLEMENTED API — the shipped surface
 
 **Truth = this file.** Verified against `agent-core/src/server.ts` at
-round-17 (2026-08-23), refreshed R37→R75. The aspirational full contract (52
+round-17 (2026-08-23), refreshed R37→R79. The aspirational full contract (52
 operations, WS gateway, planned routes) lives in
 [`API.md`](API.md) — anything there and
 not here **does not exist yet**. Base: `http://127.0.0.1:<port>`; dev port
@@ -1972,3 +1972,118 @@ paths:
   cycle-guarded); `userMessage` is the real text.
 - `runtime.ts` re-exports `unwrapRetryError` + `CLASS_MESSAGES` alongside
   the historical surface.
+
+## ROUND-79 additions (implemented)
+
+The orchestrator round — the standing R73 deferral (ADR-0028): the
+addressable-delegation tier. NO new REST routes and NO new SSE frame
+types; the changes are the tool's semantics, one additive field on two
+existing shapes, and one NEW event type.
+
+### `delegate_task` — the tool semantics (not an HTTP surface)
+
+```
+delegate_task({
+  task?: string,          // the self-contained task (delegate path)
+  role?: "planner"|"researcher"|"coder"|"reviewer"|"tester",
+  task_id?: string,       // 1–64 chars: ^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$;
+                          // unique among this session's delegations;
+                          // REQUIRED with background:true
+  background?: boolean,   // true = fire-and-forget (the immediate receipt)
+  resume?: string         // task_id | child session id | 4-char code
+})
+```
+
+- **resume present** → the COLLECT path (task/role ignored): resolution
+  precedence task_id → child session id → `subAgentCode(id)`
+  (case-insensitive). Child `queued|running` → the call WAITS (~300 ms
+  session-status poll, bounded by the child's own lifecycle — watchdog /
+  retry ladder / owner Stop — never an artificial timeout; the parent
+  turn's abort → the honest "STILL RUNNING — resume it in a later turn;
+  do not re-delegate" line). Child `completed` → the final report (the
+  same last-non-empty-assistant extraction the `/subagents` row shows,
+  so tool and panel can never disagree), returned IDEMPOTENTLY on
+  re-resume. Child `failed` → the ADR-0022 §3 "continue from where you
+  stopped" retry, awaited (no prior progress → the original task
+  re-sends). Unknown address → honest refusal + the ADDRESSABLE LIST
+  (every child: task_id when present, session id, 4-char code, role,
+  status).
+- **resume absent, task present, `background:true`** → REQUIRES task_id
+  (else the honest refusal teaching both fixes). The call returns
+  IMMEDIATELY: the receipt (task_id, child session id, code, role,
+  model + the "resume to collect" instruction). The child runs DETACHED
+  through the same machinery as the blocking path (status frames,
+  notifications, watchdog, turn-registry, key-slot; queued while the
+  semaphore is full). Detached failures settle via the run's own
+  handlers — never an unhandled rejection, never a silent death. The
+  child's wrapped emit is BEST-EFFORT (a background child routinely
+  outlives the parent's SSE; a throwing emit is swallowed). The parent
+  turn's abort signal cascades to the detached child (no zombie spend
+  after a Stop); a misbehaving background task is stopped by the OWNER
+  from the Sub-agents panel (the existing Stop surface).
+- **resume absent, task present, no background** → the BLOCKING default,
+  verbatim pre-R79 behavior (+ the optional task_id: validated,
+  duplicate-checked, `delegation.collected`-marked at completion — the
+  report was delivered inline).
+- **Honest refusals (the tool NEVER throws; every failure is
+  `{ok:false, output}`):** task_id grammar, duplicate task_id (naming
+  the existing task's status), background-without-task_id,
+  ≥10 outstanding background children of this parent in
+  `queued|running` WITH a task_id (the runaway fan-out cap, listing
+  them), and neither-task-nor-resume (the addressable list).
+
+### Additive fields + the new event
+
+- `GET /sessions/:id/subagents` rows gain **`taskId: string | null`**
+  (migration 0028's `sessions.delegate_task_id`; null = every pre-R79
+  child and every unaddressed delegation).
+- The **`subagent-status` SSE frames** gain the same optional `taskId`
+  (present from the queued frame onward for addressable children;
+  absent on unaddressed ones — pre-R79 frames unchanged). The
+  frontend's live map carries it forward between frames.
+- **`delegation.collected`** — a NEW `session_events` row type on the
+  PARENT's log, payload `{taskId, childId, childCode?}` (+
+  appendSessionEvent's agentId/ts). Written when a BLOCKING delegation
+  with a task_id completes (inline delivery) and when `resume` returns a
+  background task's report (or retry outcome) — idempotently. NOTHING
+  else reads it: `assembleHistory` skips the type by construction (the
+  R78 `message.queued` pattern) and the frontend's event fold
+  (an allowlist chain) never knew it existed. It is the collected
+  marker the reminder filters on.
+
+### The model-facing reminder (the delivery channel — a system-prompt
+section, not an API)
+
+Per turn, `prepareTurn` composes `backgroundTasks` (the taskHints
+ephemeral pattern: rebuilt every turn, never persisted, never a message
+mutation): a cheap indexed guard (`LIMIT 1` on
+`idx_sessions_parent_task`) — empty → NO section, childless sessions
+compose byte-identically; non-empty → the parent's children WITH a
+`delegate_task_id` that are NOT yet collected (status, role, code, todo
+progress, elapsed minutes; capped at 10 rows). `prompts.ts` renders the
+`## BACKGROUND TASKS` section: the header instruction
+("call delegate_task {\"resume\":\"<task_id>\"} to WAIT for a task and
+collect its final report; do not poll") + per-status lines
+(running "Xm in, n/m todos" / COMPLETED — resume to read its final
+report / FAILED (<error>) — resume to retry it from where it stopped /
+queued — waiting for a concurrency slot) + `…and N more`. The
+prompt-registry section id is `background-tasks` (count 23→24,
+strictly ctx-gated — the golden fixture's byte-identity proof).
+
+### Drift notes
+
+- Migration **0028** (`agent-core/src/storage/migrations/
+  0028_delegation_task_id.sql`): `sessions.delegate_task_id TEXT` (NULL
+  default) + `idx_sessions_parent_task(parent_session_id,
+  delegate_task_id)` + the audit_log row. Set only through
+  `createSession`'s `SessionInput.taskId` (the orchestrator's gated
+  path); immutable for the child's lifetime.
+- `agents/orchestrator.ts` exports the new surface
+  (`delegateBackground`, `resumeTask`, `addressableChildrenOutput`) and
+  the shared `runChildTurn` extraction; `storage/sessions.ts` exports
+  `buildBackgroundTasksReminder`, `appendDelegationCollected`,
+  `collectedChildIds`, and the `SubAgentRow.taskId` mapping.
+- Frontend: `api.ts`'s `SubAgentStatus.taskId` + the frame's optional
+  `taskId`; `stream-store.ts`'s live entry carries it; the chips render
+  only when non-null (`subagent-taskid-chip` in the Sub-agents panel
+  header, `subagent-card-taskid` on the chat card).

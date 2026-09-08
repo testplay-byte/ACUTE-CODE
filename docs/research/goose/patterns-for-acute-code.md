@@ -1,4 +1,4 @@
-<!-- last-reviewed: 2026-09-07 round-75 -->
+<!-- last-reviewed: 2026-09-08 round-79 -->
 # Goose — Patterns for ACUTE-CODE
 
 Pattern study only — Apache-2.0 permits dependency use, but ACUTE-CODE policy is to reimplement patterns in our own Node/TS + Tauri code, never to copy code. Each pattern: WHAT goose does (verified), WHY it fits us, HOW it maps to Tauri + Node sidecar + SQLite + React.

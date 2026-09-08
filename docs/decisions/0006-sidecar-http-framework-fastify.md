@@ -1,4 +1,4 @@
-<!-- last-reviewed: 2026-09-07 round-75 -->
+<!-- last-reviewed: 2026-09-08 round-79 -->
 # ADR-0006: Sidecar HTTP framework — Fastify
 
 - **Status:** ACCEPTED (implementation-detail decision under the smaller-scope rule; surfaced per protocol)

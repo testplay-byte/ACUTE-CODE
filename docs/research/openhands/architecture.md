@@ -1,4 +1,4 @@
-<!-- last-reviewed: 2026-09-07 round-75 -->
+<!-- last-reviewed: 2026-09-08 round-79 -->
 # OpenHands — Architecture
 
 Verified 2026-08-21 against `OpenHands/OpenHands`, `OpenHands/software-agent-sdk`, `OpenHands/legacy`, and docs.openhands.dev. All class/file/endpoint names below are quoted from those sources; inferred items are marked.

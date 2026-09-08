@@ -21,6 +21,10 @@ import { buildProjectTools, NO_TOOLS } from "../tools/index.js";
 import { log, logTool, logTurnEnd, logTurnStart } from "../lib/log.js";
 import {
   appendSessionEvent,
+  // ROUND-79 (R79-a): the per-turn BACKGROUND TASKS reminder payload — this
+  // session's uncollected addressed delegations (cheap guard first; the
+  // taskHints/modeHints ephemeral pattern, one tier over).
+  buildBackgroundTasksReminder,
   deliverAllQueuedMessages,
   deliverQueuedMessage,
   getSession,
@@ -1295,6 +1299,16 @@ async function prepareTurn(
   // this turn's TASK MODES section, never persisted, never auto-activated.
   const modeHints =
     turnUserMessage !== undefined ? computeModeHints(turnUserMessage, modeResolution.modes) : undefined;
+  // ROUND-79 (R79-a): the per-turn BACKGROUND TASKS reminder — this
+  // session's children WITH a delegate_task_id whose reports have NOT been
+  // collected yet (no delegation.collected event on THIS session's log
+  // naming the child). The CHEAP GUARD runs first inside the builder (one
+  // indexed LIMIT 1 probe), so a session without addressed children —
+  // every pre-R79 session, every ordinary turn — composes byte-identically
+  // at negligible cost. EPHEMERAL like taskHints/modeHints: rebuilt from
+  // live rows every turn, rendered into THIS turn's system prompt only,
+  // never persisted (the event log owns the durable collected markers).
+  const backgroundTasks = buildBackgroundTasksReminder(db, session.id);
   const system = project
     ? buildProjectSystemPrompt({
         projectName: project.name,
@@ -1362,6 +1376,13 @@ async function prepareTurn(
           description: mode.description,
         })),
         ...(modeHints !== undefined && modeHints.length > 0 ? { modeHints } : {}),
+        // ROUND-79 (R79-a): the BACKGROUND TASKS section's payload — this
+        // turn's uncollected addressed delegations. Strictly optional
+        // spread like taskHints/modeHints: undefined or empty composes
+        // nothing (byte-identical; the golden fixture's proof).
+        ...(backgroundTasks !== undefined && backgroundTasks.tasks.length > 0
+          ? { backgroundTasks }
+          : {}),
         ...(activeTaskMode !== undefined
           ? { activeTaskMode: { id: activeTaskMode.id, name: activeTaskMode.name, body: activeTaskMode.body } }
           : {}),

@@ -1,4 +1,4 @@
-<!-- last-reviewed: 2026-09-07 round-75 -->
+<!-- last-reviewed: 2026-09-08 round-79 -->
 # Aider — Research Summary
 
 **Target:** https://github.com/Aider-AI/aider · **Research date:** 2026-08-21 · **Researcher:** ACUTE-CODE research sub-agent

@@ -1,4 +1,4 @@
-<!-- last-reviewed: 2026-09-07 round-75 -->
+<!-- last-reviewed: 2026-09-08 round-79 -->
 
 # Round 36 — Sub-Agent Orchestration (Phase 3 core)
 

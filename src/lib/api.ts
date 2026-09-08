@@ -1941,6 +1941,14 @@ export interface SubAgentStatus {
    * child (same value as on every subagent-status SSE envelope) — the
    * quick-identify badge in the picker, Delegated rows and panel header. */
   code: string;
+  /** ROUND-79 (R79-b, the orchestrator round): the PARENT's own address for
+   * this delegation (sessions.delegate_task_id — the task_id the parent
+   * model picked; null = an ordinary unaddressed child, the pre-R79
+   * behavior). The panel header + card rows render it as a mono chip — the
+   * addressable surface (what delegate_task {"resume":"…"} accepts, what
+   * the per-turn BACKGROUND TASKS reminder lists). Additive: old consumers
+   * of the other fields are unaffected. */
+  taskId: string | null;
   title: string | null;
   subRole: string | null;
   status: SessionStatus;
@@ -2885,6 +2893,12 @@ export type StreamTurnEvent =
        * code. (Tokens arrive live via the child's inner finish events —
        * R50-b — and authoritatively on the polled row.) */
       code: string;
+      /** ROUND-79 (R79-b): the delegation address (sessions.delegate_task_id)
+       * when the child is addressable — the same value as SubAgentStatus
+       * .taskId, joined from the FIRST (queued) frame onward so the panel's
+       * task chip renders before the first poll. Absent on unaddressed
+       * children (pre-R79 frames unchanged). */
+      taskId?: string;
       todosDone?: number;
       todosTotal?: number;
       /** ROUND-50 (R50-b): the model the child actually runs on

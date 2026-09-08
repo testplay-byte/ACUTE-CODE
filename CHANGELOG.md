@@ -1,4 +1,4 @@
-<!-- last-reviewed: 2026-09-07 round-77 -->
+<!-- last-reviewed: 2026-09-08 round-79 -->
 # Changelog
 
 All notable changes to ACUTE-CODE are documented here. Entries are written for
@@ -11,13 +11,60 @@ version number is single-sourced from the root `package.json`
 
 ## [Unreleased]
 
-Planned next: the R79 queue — delegate_task task_id/background/resume
-(deferred from R73 by design — the orchestrator deserved its own round),
-external plugin ctx enrichment (cline's appendContext seam), the
-lessons-ledger affordance as the reminder injector's third consumer,
-ratings-driven prompt tuning, the optional v0.68.0 backfill tag, and the
-standing items (edit-linting — SWE-agent's ACI #1 finding, installer
-code-signing, the Files-tab polish, agent web-app-testing tools).
+Planned next: the R80 queue — external plugin ctx enrichment (cline's
+appendContext seam), the lessons-ledger affordance as the reminder
+injector's third consumer, ratings-driven prompt tuning, the optional
+v0.68.0 backfill tag, and the standing items (edit-linting — SWE-agent's
+ACI #1 finding, installer code-signing, the Files-tab polish, agent
+web-app-testing tools).
+
+## [0.78.0] - 2026-09-08
+
+### Added
+- **Addressable, background, resumable sub-agent tasks** (the standing
+  R73 deferral — the orchestrator round): `delegate_task` gained
+  `task_id` (the parent model's own address for a delegation: 1–64 chars,
+  unique per session, required for background) and two new call shapes.
+  `background:true` fires-and-forgets — the call returns IMMEDIATELY with
+  a receipt (task_id, session id, code, role, model + the instruction to
+  resume later) while the child runs detached: it routinely outlives the
+  parent's turn, its progress streams to the Sub-agents panel exactly
+  like a blocking child's, and its status rides the NEXT turn's system
+  prompt as a per-turn "## BACKGROUND TASKS" section (running "3m in,
+  4/7 todos" / COMPLETED — resume to read its report / FAILED — resume to
+  retry it from where it stopped; the section disappears once the report
+  is collected, and the model is told never to poll — resume IS the
+  wait). `resume` collects by task_id, child session id, or 4-char code:
+  it waits while the task runs, returns the final report on completion
+  (idempotently), and retries a failed child from where it stopped.
+  Dishonest calls are refused honestly: a bad task_id grammar, a
+  duplicate id (naming the existing task's status), background without a
+  task_id, more than 10 outstanding background tasks (the runaway fan-out
+  cap, listing them), or a resume with no task and no address (the
+  addressable list of what there IS to resume). The owner sees the
+  address everywhere a sub-agent appears: a mono task-id chip beside the
+  code chip in the Sub-agents panel and on the live sub-agent card in the
+  chat (tooltip: `delegate_task {"resume":"<id>"} collects it`), and the
+  `/subagents` rows + live status frames carry `taskId`. A Stop of the
+  parent turn still cascades to the detached child; the owner's panel
+  Stop remains the stop surface for a misbehaving background task.
+  Database migration 0028 adds `sessions.delegate_task_id` (+ the
+  parent/task index) — every pre-R79 child and every task_id-less call
+  is byte-identical to the old behavior.
+
+### Verified
+- 2741/2741 root tests in 145 files (agent-core 1769 incl. 27 new
+  delegation tests; frontend +6), lint + typechecks clean, and the
+  live battery `scripts/battery-r79.mjs` 10/10 against a dedicated
+  sidecar with a mock provider that records REQUEST BODIES as the
+  model-facing oracle: the blocking regression, the background task
+  outliving the parent's turn (~400 ms turn vs a 4 s child) with the
+  receipt inline, the next turn's request body carrying the BACKGROUND
+  TASKS section and the section GONE after collection, resume waiting
+  ~2.7 s for a 3 s child, the duplicate refusal, the taskId on the
+  /subagents rows, the unknown-address list, and the failed-child retry
+  (the "You were interrupted" continuation seen in the child's own
+  request body).
 
 ## [0.77.0] - 2026-09-08
 

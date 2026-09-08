@@ -103,6 +103,7 @@ function subRow(over: Partial<SubAgentStatus> = {}): SubAgentStatus {
   return {
     id: "child-1",
     code: "K7Q2",
+    taskId: null,
     title: "Refactor auth module",
     subRole: "coder",
     status: "running",
@@ -352,6 +353,62 @@ describe("SubAgentPanel (R48-e2 chat transcript)", () => {
 
     expect(await screen.findByTestId("subagent-code-chip")).toBeTruthy();
     expect(screen.getByTestId("subagent-code-chip").textContent).toBe("X9PL");
+  });
+
+  it("ROUND-79: an addressable child shows the task_id chip beside the code chip (polled row)", async () => {
+    // The polled /subagents row carries taskId (migration 0028) — the
+    // addressable surface: what delegate_task {"resume":"…"} accepts.
+    vi.mocked(fetchSubAgentDetail).mockResolvedValue(detail("running", RUNNING_EVENTS));
+    vi.mocked(fetchSubAgents).mockResolvedValue([
+      subRow({ taskId: "bg-research", status: "running" }),
+    ]);
+    renderWithProviders(<SubAgentPanel tab={tab} />);
+
+    expect(await screen.findByTestId("subagent-taskid-chip")).toBeTruthy();
+    expect(screen.getByTestId("subagent-taskid-chip").textContent).toBe("bg-research");
+    // The code chip is still there (the two are siblings, never merged).
+    expect(screen.getByTestId("subagent-code-chip").textContent).toBe("K7Q2");
+  });
+
+  it("ROUND-79: an unaddressed child (taskId null — every pre-R79 child) renders NO task_id chip", async () => {
+    vi.mocked(fetchSubAgentDetail).mockResolvedValue(detail("running", RUNNING_EVENTS));
+    vi.mocked(fetchSubAgents).mockResolvedValue([subRow({ status: "running" })]);
+    renderWithProviders(<SubAgentPanel tab={tab} />);
+
+    expect(await screen.findByTestId("subagent-code-chip")).toBeTruthy();
+    expect(screen.queryByTestId("subagent-taskid-chip")).toBeNull();
+  });
+
+  it("ROUND-79: the task_id chip resolves from the SSE live map (fresher than the poll)", async () => {
+    useStreamStore.setState({
+      bySession: {},
+      subagentsLive: {
+        "child-1": {
+          childSessionId: "child-1",
+          parentSessionId: "parent-1",
+          code: "X9PL",
+          taskId: "live-task",
+          role: "coder",
+          task: "Refactor auth module",
+          status: "running",
+          updatedAtMs: Date.now(),
+          liveText: "",
+          liveThinking: "",
+          liveToolCalls: 0,
+          inputTokens: 0,
+          outputTokens: 0,
+          lastActivityTs: 0,
+          liveSteps: [],
+          startedAtMs: Date.now(),
+        },
+      },
+    });
+    vi.mocked(fetchSubAgentDetail).mockResolvedValue(detail("running", RUNNING_EVENTS));
+    vi.mocked(fetchSubAgents).mockResolvedValue([]);
+    renderWithProviders(<SubAgentPanel tab={tab} />);
+
+    expect(await screen.findByTestId("subagent-taskid-chip")).toBeTruthy();
+    expect(screen.getByTestId("subagent-taskid-chip").textContent).toBe("live-task");
   });
 
   it("without a polled row, the header title falls back to the tab title minus its code prefix (no chip)", async () => {

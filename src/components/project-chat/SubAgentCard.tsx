@@ -147,6 +147,16 @@ export function SubAgentCard({
             <span className="text-[10px] font-black uppercase tracking-widest" style={{ color: statusTone }}>
               {role ?? child?.subRole ?? "agent"}
             </span>
+            {child?.taskId != null && (
+              <span
+                className="text-[9px] font-mono px-1.5 py-0.5 rounded-md max-w-[130px] truncate"
+                style={{ color: styles.textSecondary, background: withAlpha(styles.textTertiary, 0.12) }}
+                title={`Background task id ${child.taskId} — delegate_task {"resume":"${child.taskId}"} collects it`}
+                data-testid="subagent-card-taskid"
+              >
+                {child.taskId}
+              </span>
+            )}
             <span
               className="text-[9px] font-bold px-1.5 py-0.5 rounded-full"
               style={{ background: withAlpha(statusTone, 0.12), color: statusTone }}

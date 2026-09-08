@@ -39,6 +39,16 @@ export interface Session {
    * column default; pre-0027 databases read as null (fail-open to the
    * default posture — exactly the pre-R73 behavior). */
   activeMode: string | null;
+  /** ROUND-79 (R79-a, the orchestrator round): the PARENT's own address for
+   * this session when it was created as an ADDRESSABLE delegation (the
+   * task_id the parent model picked for delegate_task with task_id set, or
+   * a background delegation). NULL = an ordinary unaddressed child (every
+   * pre-R79 child and every task_id-less delegation — exactly the pre-R79
+   * behavior). Immutable for the child's lifetime: resume resolves by it,
+   * the per-turn BACKGROUND TASKS reminder lists by it, and the
+   * duplicate/cap gates refuse against it. Written ONCE through
+   * createSession's SessionInput.taskId (migration 0028). */
+  taskId: string | null;
 }
 
 export interface SessionInput {
@@ -58,6 +68,14 @@ export interface SessionInput {
    * outrun the mode the owner picked; a plan-mode parent spawns read-only
    * children). Default null (modeless — the pre-R75 creation behavior). */
   activeMode?: string | null;
+  /** ROUND-79 (R79-a): the parent model's own address for this delegation
+   * (delegate_task {task, task_id}) — persisted as sessions.delegate_task_id
+   * (migration 0028). The ORCHESTRATOR validates it
+   * (/^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/, duplicate among the parent's
+   * children, the ≥10 outstanding cap) BEFORE calling createSession, so
+   * this function trusts its argument (same contract as every other
+   * SessionInput field). Default null = unaddressed (pre-R79 behavior). */
+  taskId?: string | null;
 }
 
 /** Event JSON as served by the API (API.md §5.6). `agentId` comes from the payload. */
@@ -93,6 +111,9 @@ interface SessionRow {
   /** ROUND-73 (R73-b): nullable since migration 0027; the fallback keeps
    * hand-opened pre-0027 databases readable (null = default posture). */
   active_mode?: string | null;
+  /** ROUND-79 (R79-a): nullable since migration 0028; the fallback keeps
+   * hand-opened pre-0028 databases readable (null = unaddressed child). */
+  delegate_task_id?: string | null;
 }
 
 interface EventRow {
@@ -127,6 +148,10 @@ function toSession(row: SessionRow): Session {
     // default posture (fail-open; a garbage active_mode must never break a
     // turn, prepareTurn simply resolves nothing and stays modeless).
     activeMode: typeof row.active_mode === "string" && row.active_mode !== "" ? row.active_mode : null,
+    // ROUND-79 (R79-a): same fail-open read for the delegation address — a
+    // garbage/empty delegate_task_id reads as null (an unaddressed child;
+    // resume then falls back to session-id/code resolution honestly).
+    taskId: typeof row.delegate_task_id === "string" && row.delegate_task_id !== "" ? row.delegate_task_id : null,
   };
 }
 
@@ -163,38 +188,52 @@ export function createSession(db: SqliteDatabase, input: SessionInput): Session 
     // ROUND-75 (R75): EXCEPT delegation children, which copy the parent's
     // posture (input.activeMode — the R50-c1 inheritance, one tier down).
     activeMode: input.activeMode ?? null,
+    // ROUND-79 (R79-a): the delegation address (migration 0028's
+    // delegate_task_id) — set ONLY by the orchestrator's delegation path
+    // after its own validation (charset/duplicate/cap); null = unaddressed.
+    taskId: input.taskId ?? null,
   };
-  // ROUND-75 (R75): active_mode joins the INSERT ONLY when the caller set
-  // it (delegation children copying their parent's posture). The R73 rule
-  // still holds for every other creation: the column stays OUT of the
-  // statement so a pre-0027 database (migration-test schemas recreate old
-  // layouts verbatim) never sees the unknown column — the NULL default
-  // applies exactly as before.
-  if (typeof input.activeMode === "string" && input.activeMode !== "") {
-    db.prepare(
-      `INSERT INTO sessions (id, project_id, agent_id, mode, status, title, created_at, updated_at, parent_session_id, sub_role, permission_mode, active_mode)
-       VALUES (@id, @projectId, @agentId, @mode, @status, @title, @createdAt, @updatedAt, @parentSessionId, @subRole, @permissionMode, @activeMode)`,
-    ).run({
-      ...session,
-      parentSessionId: input.parentSessionId ?? null,
-      subRole: input.subRole ?? null,
-      permissionMode: input.permissionMode ?? "ask",
-      activeMode: input.activeMode,
-    });
-    return session;
-  }
+  // ROUND-75 (R75) + ROUND-79 (R79-a): active_mode and delegate_task_id join
+  // the INSERT ONLY when the caller set them (delegation children copying
+  // their parent's posture / carrying the parent's task address). The R73
+  // rule still holds for every other creation: the columns stay OUT of the
+  // statement so a pre-0027/pre-0028 database (migration-test schemas
+  // recreate old layouts verbatim) never sees the unknown column — the NULL
+  // default applies exactly as before. The column tail order is fixed
+  // (…, permission_mode, active_mode, delegate_task_id): every legacy
+  // combination binds exactly the columns + values its pre-R79 branch did.
+  const hasActiveMode = typeof input.activeMode === "string" && input.activeMode !== "";
+  const hasTaskId = typeof input.taskId === "string" && input.taskId !== "";
+  // column → named-binding key (the bound object's keys are camelCase —
+  // the exact pairs the pre-R79 statements spelled out inline).
+  const pairs: Array<[column: string, param: string]> = [
+    ["id", "id"],
+    ["project_id", "projectId"],
+    ["agent_id", "agentId"],
+    ["mode", "mode"],
+    ["status", "status"],
+    ["title", "title"],
+    ["created_at", "createdAt"],
+    ["updated_at", "updatedAt"],
+    ["parent_session_id", "parentSessionId"],
+    ["sub_role", "subRole"],
+    ["permission_mode", "permissionMode"],
+  ];
+  if (hasActiveMode) pairs.push(["active_mode", "activeMode"]);
+  if (hasTaskId) pairs.push(["delegate_task_id", "taskId"]);
   db.prepare(
-    `INSERT INTO sessions (id, project_id, agent_id, mode, status, title, created_at, updated_at, parent_session_id, sub_role, permission_mode)
-     VALUES (@id, @projectId, @agentId, @mode, @status, @title, @createdAt, @updatedAt, @parentSessionId, @subRole, @permissionMode)`,
+    `INSERT INTO sessions (${pairs.map(([c]) => c).join(", ")})
+     VALUES (${pairs.map(([, p]) => `@${p}`).join(", ")})`,
   ).run({
     ...session,
     parentSessionId: input.parentSessionId ?? null,
     subRole: input.subRole ?? null,
     permissionMode: input.permissionMode ?? "ask",
-    // The spread carries activeMode: null; strip it from the bound params —
-    // the column is NOT in the INSERT list (its NULL default applies; an
-    // unbound extra key is ignored by better-sqlite3's named binding).
-    activeMode: undefined,
+    // The spread carries activeMode/taskId even when the columns are absent
+    // — unbound extra keys are ignored by better-sqlite3's named binding
+    // (the documented pre-0027 pattern; the NULL default applies).
+    ...(hasActiveMode ? { activeMode: input.activeMode } : {}),
+    ...(hasTaskId ? { taskId: input.taskId } : {}),
   });
   return session;
 }
@@ -234,6 +273,12 @@ export interface SubAgentStatus {
   /** ROUND-48 (R48-e1): deterministic 4-char [A-Z0-9] identifier of the child
    * (same value on every read + on every subagent-status SSE envelope). */
   code: string;
+  /** ROUND-79 (R79-a): the parent's own address for this child
+   * (sessions.delegate_task_id, migration 0028) — the task_id the parent
+   * model picked at delegation; null = an unaddressed child (pre-R79
+   * behavior). The Sub-agents panel rows and the delegate_task resume
+   * resolution both use it, so the wire + the tool agree on one address. */
+  taskId: string | null;
   title: string | null;
   subRole: string | null;
   status: SessionStatus;
@@ -274,6 +319,50 @@ export function subAgentCode(sessionId: string): string {
   return tail.length >= 4 ? tail : tail.padStart(4, "X");
 }
 
+/** ROUND-79 (R79-a): a child's todo progress from its latest todo.update
+ * event (the exact loop listSubAgents always ran — extracted so the
+ * background-task reminder + resume share ONE extraction, never drifting). */
+export function childTodoProgress(
+  db: SqliteDatabase,
+  childId: string,
+): { todosDone: number; todosTotal: number } {
+  let todosDone = 0;
+  let todosTotal = 0;
+  for (const ev of listSessionEvents(db, childId)) {
+    if (ev.type !== "todo.update") continue;
+    const todos = (ev.payload as { todos?: Array<{ status?: string }> }).todos;
+    if (Array.isArray(todos) && todos.length > 0) {
+      todosTotal = todos.length;
+      todosDone = todos.filter((t) => t.status === "completed").length;
+    }
+  }
+  return { todosDone, todosTotal };
+}
+
+/** ROUND-79 (R79-a): a child's terminal texts — the FINAL REPORT (the last
+ * non-empty message.assistant, the exact extraction listSubAgents always
+ * ran) + the ERROR (the last turn.error message). resumeTask returns the
+ * report from HERE, so the tool result and the Sub-agents panel can never
+ * disagree about what a completed child's final report is. */
+export function childTerminalText(
+  db: SqliteDatabase,
+  childId: string,
+): { report: string | null; error: string | null } {
+  let report: string | null = null;
+  let error: string | null = null;
+  for (const ev of listSessionEvents(db, childId)) {
+    if (ev.type === "message.assistant") {
+      const content = (ev.payload as { content?: unknown }).content;
+      if (typeof content === "string" && content.trim() !== "") report = content;
+    }
+    if (ev.type === "turn.error") {
+      const message = (ev.payload as { message?: unknown }).message;
+      if (typeof message === "string") error = message;
+    }
+  }
+  return { report, error };
+}
+
 export function listSubAgents(db: SqliteDatabase, parentSessionId: string): SubAgentStatus[] {
   const children = db
     .prepare(
@@ -281,17 +370,8 @@ export function listSubAgents(db: SqliteDatabase, parentSessionId: string): SubA
     )
     .all(parentSessionId) as SessionRow[];
   return children.map((child) => {
-    // Latest todo.update → progress.
-    let todosDone = 0;
-    let todosTotal = 0;
-    for (const ev of listSessionEvents(db, child.id)) {
-      if (ev.type !== "todo.update") continue;
-      const todos = (ev.payload as { todos?: Array<{ status?: string }> }).todos;
-      if (Array.isArray(todos) && todos.length > 0) {
-        todosTotal = todos.length;
-        todosDone = todos.filter((t) => t.status === "completed").length;
-      }
-    }
+    // Latest todo.update → progress (ROUND-79: the shared extraction).
+    const { todosDone, todosTotal } = childTodoProgress(db, child.id);
     const usage = db
       .prepare(
         "SELECT COALESCE(SUM(input_tokens), 0) AS i, COALESCE(SUM(output_tokens), 0) AS o FROM usage_events WHERE session_id = ?",
@@ -304,21 +384,15 @@ export function listSubAgents(db: SqliteDatabase, parentSessionId: string): SubA
     const modelRow = db
       .prepare("SELECT model FROM usage_events WHERE session_id = ? ORDER BY ts DESC LIMIT 1")
       .get(child.id) as { model?: string } | undefined;
-    let report: string | null = null;
-    let error: string | null = null;
-    for (const ev of listSessionEvents(db, child.id)) {
-      if (ev.type === "message.assistant") {
-        const content = (ev.payload as { content?: unknown }).content;
-        if (typeof content === "string" && content.trim() !== "") report = content;
-      }
-      if (ev.type === "turn.error") {
-        const message = (ev.payload as { message?: unknown }).message;
-        if (typeof message === "string") error = message;
-      }
-    }
+    // ROUND-79 (R79-a): the shared report/error extraction (identical loop).
+    const { report, error } = childTerminalText(db, child.id);
     return {
       id: child.id,
       code: subAgentCode(child.id),
+      // ROUND-79 (R79-a): the delegation address rides the row (null for
+      // unaddressed children — the additive wire shape; old consumers of
+      // the other fields keep working untouched).
+      taskId: child.delegate_task_id ?? null,
       title: child.title,
       subRole: child.sub_role ?? null,
       status: child.status,
@@ -653,6 +727,172 @@ export function deliverAllQueuedMessages(db: SqliteDatabase, sessionId: string):
   return delivered;
 }
 
+// ── ROUND-79 (R79-a, the orchestrator round: delegate_task
+//    task_id/background/resume) — the delegation.collected event + the
+//    background-task reminder payload. ─────────────────────────────────────
+//
+// A delegation.collected event is a session_events ROW of NEW type
+// `delegation.collected` on the PARENT's log with the payload
+// {taskId, childId, childCode?} (+ appendSessionEvent's agentId/ts
+// mirroring). NOTHING existing reads it as a message: assembleHistory's
+// fold only matches message.user/message.assistant/tool.use, so the event
+// is invisible to the model by construction — the R78 message.queued
+// pattern, one tier over (a queued row is a pending MESSAGE; a collected
+// row is durable BOOKKEEPING). Unlike message.queued there is NO delivery
+// flip: the row is written ONCE (a delegation is collected at most one
+// time) and never mutated. The uniform COLLECTED rule:
+//   · a BLOCKING delegation with task_id writes it at COMPLETION (the
+//     report was delivered inline — the reminder must never nag about a
+//     task the parent already has the answer to);
+//   · a BACKGROUND task writes it when RESUME returns the report.
+// The per-turn BACKGROUND TASKS reminder lists only the parent's children
+// whose ids have no collected event yet.
+
+/** The event type string (named once; the orchestrator + tests share it). */
+export const DELEGATION_COLLECTED_EVENT = "delegation.collected";
+
+/**
+ * ROUND-79 (R79-a): append a delegation.collected event to the PARENT's
+ * log — the durable "this task's report was collected" marker the
+ * per-turn reminder consults. Idempotence is the CALLER's contract (the
+ * orchestrator writes it exactly once per delegation: blocking at
+ * completion, background at resume); this function just appends.
+ */
+export function appendDelegationCollected(
+  db: SqliteDatabase,
+  parentSessionId: string,
+  input: { taskId: string; childId: string; childCode?: string },
+): SessionEvent {
+  const parent = getSession(db, parentSessionId);
+  return appendSessionEvent(db, parentSessionId, {
+    type: DELEGATION_COLLECTED_EVENT,
+    agentId: parent?.agentId ?? null,
+    payload: {
+      taskId: input.taskId,
+      childId: input.childId,
+      ...(input.childCode !== undefined ? { childCode: input.childCode } : {}),
+    },
+  });
+}
+
+/**
+ * ROUND-79 (R79-a): the ids of every child whose report the parent has
+ * COLLECTED (the delegation.collected events on the parent's log). Type-
+ * filtered and payload-guarded — a malformed payload contributes nothing
+ * (honest fail-open: an unreadable marker must never hide a task).
+ */
+export function collectedChildIds(db: SqliteDatabase, parentSessionId: string): Set<string> {
+  const collected = new Set<string>();
+  for (const ev of listSessionEvents(db, parentSessionId)) {
+    if (ev.type !== DELEGATION_COLLECTED_EVENT) continue;
+    const childId = (ev.payload as { childId?: unknown }).childId;
+    if (typeof childId === "string" && childId !== "") collected.add(childId);
+  }
+  return collected;
+}
+
+/** ROUND-79 (R79-a): one reminder row — an uncollected addressed child. */
+export interface BackgroundTaskRow {
+  /** The parent's address for the delegation (delegate_task task_id). */
+  taskId: string;
+  /** The child session id (resume accepts it too). */
+  sessionId: string;
+  /** The child's deterministic 4-char code (resume accepts it too). */
+  code: string;
+  /** The delegated role (planner/researcher/coder/reviewer/tester). */
+  role: string | null;
+  status: SessionStatus;
+  todosDone: number;
+  todosTotal: number;
+  /** Whole minutes since the child was CREATED (the delegation age — the
+   * "running — Xm" line's elapsed). Computed at build time; the reminder is
+   * rebuilt every turn so it is always fresh. */
+  elapsedMinutes: number;
+  /** failed rows only: the last turn.error message, excerpted (~120 chars). */
+  error?: string;
+}
+
+/** ROUND-79 (R79-a): the per-turn BACKGROUND TASKS payload — the uncollected
+ * rows (capped at 10, oldest first) + how many more were cut. Strictly
+ * optional in the prompt ctx: undefined composes byte-identically. */
+export interface BackgroundTasksPayload {
+  tasks: BackgroundTaskRow[];
+  /** Rows beyond the cap — rendered as one honest "and N more" line. */
+  more: number;
+}
+
+/** The reminder's row cap (the plan's fan-out discipline: the section stays
+ * a glanceable list, never a wall). */
+export const BACKGROUND_TASK_REMINDER_CAP = 10;
+
+/**
+ * ROUND-79 (R79-a): build the per-turn BACKGROUND TASKS payload for a
+ * session — its children WITH a delegate_task_id whose reports have NOT
+ * been collected yet (no delegation.collected event naming the child id).
+ *
+ * CHEAP GUARD FIRST: one indexed existence probe
+ * (idx_sessions_parent_task) — a session with no addressed children (every
+ * pre-R79 session, every task_id-less delegation, every ordinary turn)
+ * returns undefined and the prompt composes byte-identically at the cost of
+ * a LIMIT 1 lookup. Pure (db reads only); never throws.
+ */
+export function buildBackgroundTasksReminder(
+  db: SqliteDatabase,
+  sessionId: string,
+): BackgroundTasksPayload | undefined {
+  const guard = db
+    .prepare(
+      "SELECT 1 FROM sessions WHERE parent_session_id = ? AND delegate_task_id IS NOT NULL LIMIT 1",
+    )
+    .get(sessionId);
+  if (guard === undefined) return undefined;
+  const collected = collectedChildIds(db, sessionId);
+  const children = db
+    .prepare(
+      "SELECT * FROM sessions WHERE parent_session_id = ? AND delegate_task_id IS NOT NULL ORDER BY created_at ASC, id ASC",
+    )
+    .all(sessionId) as SessionRow[];
+  const tasks: BackgroundTaskRow[] = [];
+  let more = 0;
+  for (const child of children) {
+    const taskId = child.delegate_task_id ?? null;
+    if (taskId === null) continue; // toSession's null-guard, restated
+    if (collected.has(child.id)) continue; // report already collected
+    const { todosDone, todosTotal } = childTodoProgress(db, child.id);
+    const row: BackgroundTaskRow = {
+      taskId,
+      sessionId: child.id,
+      code: subAgentCode(child.id),
+      role: child.sub_role ?? null,
+      status: child.status,
+      todosDone,
+      todosTotal,
+      elapsedMinutes: elapsedMinutesSince(child.created_at),
+    };
+    // failed rows carry the honest error excerpt (~120 chars).
+    if (child.status === "failed") {
+      const { error } = childTerminalText(db, child.id);
+      if (error !== null && error !== "") row.error = excerpt(error, 120);
+    }
+    if (tasks.length < BACKGROUND_TASK_REMINDER_CAP) tasks.push(row);
+    else more += 1;
+  }
+  return { tasks, more };
+}
+
+/** ROUND-79 (R79-a): whole minutes since an ISO ts (0 on parse failure —
+ * honest, never NaN in a prompt line). */
+function elapsedMinutesSince(iso: string): number {
+  const at = Date.parse(iso);
+  if (Number.isNaN(at)) return 0;
+  return Math.max(0, Math.round((Date.now() - at) / 60_000));
+}
+
+/** ROUND-79 (R79-a): a text excerpt at cap chars + ellipsis when longer. */
+function excerpt(text: string, cap: number): string {
+  return text.length > cap ? `${text.slice(0, cap)}…` : text;
+}
+
 /** One billing line per completed model call; costUsd is 0 until estimation lands.
  * ROUND-50 (R50-c1): cachedInputTokens (the provider's cached prompt-token
  * count, null when unreported) persists into usage_events.cached_input_tokens.
@@ -761,6 +1001,10 @@ export function forkSession(db: SqliteDatabase, sessionId: string): Session | un
     // escapes the parent linkage (it is a user-owned copy, not a delegation).
     parentSessionId: null,
     subRole: null,
+    // ROUND-79 (R79-a): …and the fork is NOT addressable either — the
+    // delegation address belongs to the parent-child relationship the fork
+    // just escaped (resume resolves among the PARENT's children only).
+    taskId: null,
     // ROUND-50 (R50-c1): the fork keeps the source session's permission
     // mode — a copy of the conversation keeps its posture.
     permissionMode: original.permissionMode,
