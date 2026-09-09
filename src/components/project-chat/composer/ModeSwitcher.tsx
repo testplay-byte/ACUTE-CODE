@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { Check, ChevronDown, ClipboardList, FileEdit, ShieldCheck, Zap } from "lucide-react";
+import { Check, ChevronDown, ClipboardList, ShieldCheck, Zap } from "lucide-react";
 import type { PermissionMode } from "shared";
 import { useThemeStyles } from "../../../lib/use-theme-styles";
 import { withAlpha } from "../../dashboard/helpers";
@@ -9,20 +9,20 @@ const ICONS = {
   zap: Zap,
   shield: ShieldCheck,
   clipboard: ClipboardList,
-  editor: FileEdit,
 } as const;
 
 /**
- * ROUND-50 (R50-c2): the permission-mode switcher (owner: "Switch between the
- * access I want to grant it. Full access… ask me before running any huge
- * changes… plan mode: no edits, only plan… [editor]: no commands or
- * terminals; can edit files; cannot delete without permission."). A segmented
- * dropdown button showing the current mode with an icon; the menu lists the
- * 4 modes. ROUND-75 (R75, owner: descriptions "should not be shown by
- * default… only when the user hovers"): each row renders its LABEL only —
- * the one-line description rides the row's native title tooltip. The PANEL
- * performs the patchSessionPermissions round-trip (optimistic + rollback) —
- * this component only reports the choice.
+ * ROUND-50 (R50-c2) / ROUND-81 (the unified mode picker): THE mode selector
+ * — one dropdown of exactly THREE operating modes (Full Access / Ask / Plan),
+ * replacing the old 4-value permission switcher AND the R73 task-mode
+ * picker. The owner: full access does everything without asks (the agent
+ * decides how to work and switches postures itself); ask gates important
+ * commands/changes on the owner; plan is read-only research. ROUND-75 (R75,
+ * owner: descriptions "should not be shown by default… only when the user
+ * hovers"): each row renders its LABEL only — the one-line description
+ * rides the row's native title tooltip. The PANEL performs the
+ * patchSessionPermissions round-trip (optimistic + rollback) — this
+ * component only reports the choice.
  */
 export function ModeSwitcher({
   mode,
@@ -47,7 +47,7 @@ export function ModeSwitcher({
         disabled={disabled}
         aria-haspopup="menu"
         aria-expanded={open}
-        aria-label={`Permission mode: ${current.label}`}
+        aria-label={`Operating mode: ${current.label}`}
         title={
           disabled
             ? current.description
@@ -71,7 +71,7 @@ export function ModeSwitcher({
       {open ? (
         <div
           role="menu"
-          aria-label="Permission mode"
+          aria-label="Operating mode"
           className="absolute bottom-9 left-0 w-64 rounded-2xl border p-1.5 z-50"
           style={{ background: styles.card, borderColor: styles.border, boxShadow: styles.bentoShadow }}
         >

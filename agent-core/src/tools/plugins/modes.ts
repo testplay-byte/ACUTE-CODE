@@ -33,7 +33,6 @@
  * lives at execute time.
  */
 import { jsonSchema } from "ai";
-import { isReadOnlyTaskMode } from "../../agents/mode-policy.js";
 import { findMode, resolveEffectiveModes } from "../../agents/modes.js";
 import { renderReminder } from "../../agents/system-reminders.js";
 import { getSession, updateSessionActiveMode } from "../../storage/sessions.js";
@@ -65,9 +64,9 @@ function activationReminder(id: string, name: string): string {
 export const modesPlugin: PluginDefinition = {
   id: "core-modes",
   name: "Task Modes",
-  version: "1.0.0",
+  version: "1.1.0",
   description:
-    "switch_mode — activate, clear, or list the session's TASK MODE (operating posture: plan/debug/build/review/explore/refactor, or project .acute/agents/*.md customs).",
+    "switch_mode — self-select the session's OPERATING POSTURE (plan/debug/build/review/explore/refactor, or project .acute/agents/*.md customs): non-enforcing guidance that shapes HOW you work. The owner's operating mode (Full Access / Ask / Plan) governs WHAT you may do.",
   category: "planning",
   createTools: (ctx): ToolDefinition[] => {
     const toolDeps = ctx.toolDeps;
@@ -81,14 +80,14 @@ export const modesPlugin: PluginDefinition = {
       {
         name: "switch_mode",
         description:
-          "Switch the session's active TASK MODE (operating posture for a class of work — plan/debug/build/review/explore/refactor, or a project .acute/agents/*.md custom mode). While a mode is active, its detailed posture guide rides the system prompt's ACTIVE TASK MODE section. Call with { mode: \"<id>\" } to activate (the tool returns the full guide ONCE, immediately), { mode: \"none\" } to deactivate (also accepts \"off\"/\"auto\"), or no arguments to list available modes. The task-modes index in the system prompt lists what each mode is for; the Task signal line names the mode that matches the current request.",
+          "Self-select the session's OPERATING POSTURE — the working discipline for the class of task at hand (plan/debug/build/review/explore/refactor, or a project .acute/agents/*.md custom mode). Postures are GUIDANCE, not permissions: they shape how you approach the work, while the owner's operating mode (Full Access / Ask / Plan) governs what you may do. Analyze the task, pick the matching posture, and switch freely as the task's shape changes (e.g. explore to map the code, then build to implement). While a posture is active, its detailed guide rides the system prompt's ACTIVE TASK MODE section. Call with { mode: \"<id>\" } to activate (the tool returns the full guide ONCE, immediately), { mode: \"none\" } to deactivate (also accepts \"off\"/\"auto\"), or no arguments to list available postures.",
         inputSchema: jsonSchema({
           type: "object",
           properties: {
             mode: {
               type: "string",
               description:
-                "the mode id to activate, or \"none\"/\"off\"/\"auto\" to deactivate (omit to list modes)",
+                "the posture id to activate, or \"none\"/\"off\"/\"auto\" to deactivate (omit to list postures)",
             },
           },
           required: [],
@@ -109,36 +108,13 @@ export const modesPlugin: PluginDefinition = {
             return { ok: false, output: `switch_mode: session ${toolDeps.sessionId} no longer exists` };
           }
 
-          // ROUND-75 (R75): READ-ONLY MODES ARE OWNER-PINNED. While plan/
-          // review/explore is active, the MODEL may not leave or clear the
-          // posture unilaterally — the owner set it (the picker / PATCH),
-          // and the enforcement tier (write tools removed) is exactly what
-          // they asked for ("plan mode tried to make edits — this was not
-          // supposed to happen"). The honest refusal tells the model what
-          // to do instead: present the plan/spec/findings and ASK the owner
-          // to switch. Entering a read-only mode (or any switch while a
-          // NON-read-only mode is active) is unchanged — the model keeps
-          // its posture management everywhere else.
-          if (session.activeMode !== null && isReadOnlyTaskMode(session.activeMode)) {
-            const currentId = session.activeMode;
-            const { modes } = resolveEffectiveModes(projectRoot);
-            const current = findMode(modes, currentId);
-            const requestedId = typeof input.mode === "string" ? input.mode.trim() : input.mode;
-            const isClear =
-              input.mode === null ||
-              (typeof requestedId === "string" && CLEAR_SENTINELS.has(requestedId));
-            const isSame = typeof requestedId === "string" && requestedId === currentId;
-            if (!isSame && (isClear || requestedId !== undefined)) {
-              const currentName = current?.name ?? currentId;
-              return {
-                ok: false,
-                output:
-                  `switch_mode: the session is in ${currentName} mode — a read-only posture the OWNER set. ` +
-                  "It stays active until the owner switches it (the composer's mode picker). " +
-                  "Present your plan/spec/findings and ask the owner to switch modes when they want implementation to start.",
-              };
-            }
-          }
+          // ROUND-81 (R81, ADR-0029): the R75 OWNER-PIN block is RETIRED —
+          // task modes are NON-ENFORCING posture guidance now, so there is
+          // nothing safety-relevant to pin. Read-only enforcement lives in
+          // the operating mode (permission_mode 'plan'), which no tool can
+          // switch: switch_mode manages the POSTURE pointer only, and the
+          // owner's unified-mode picker (PATCH /sessions/:id/permissions)
+          // is the sole authority for the operating mode.
 
           // The mode param: absent → the index; null or a clear-sentinel
           // string → deactivate; anything else must be a string naming an id.

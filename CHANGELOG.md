@@ -1,4 +1,4 @@
-<!-- last-reviewed: 2026-09-09 round-80 -->
+<!-- last-reviewed: 2026-09-09 round-81 -->
 # Changelog
 
 All notable changes to ACUTE-CODE are documented here. Entries are written for
@@ -11,12 +11,53 @@ version number is single-sourced from the root `package.json`
 
 ## [Unreleased]
 
-Planned next: the R81 queue — external plugin ctx enrichment (cline's
-appendContext seam), the lessons-ledger affordance as the reminder
-injector's third consumer, ratings-driven prompt tuning, the optional
-v0.68.0 backfill tag, and the standing items (edit-linting — SWE-agent's
-ACI #1 finding, installer code-signing, the Files-tab polish, agent
-web-app-testing tools).
+Planned next: the R82+ queue — the modularity roadmap's Wave 2 (the
+server.ts route split, the turn-loop harness, the ToolDeps cycle break),
+models & providers hardening (custom-provider routing fix, the per-model
+test button, capability toggles), honest token/context metering, external
+plugin ctx enrichment, the lessons-ledger affordance, ratings-driven
+prompt tuning, and the standing items (edit-linting, installer
+code-signing, the Files-tab polish, agent web-app-testing tools).
+
+## [0.80.0] - 2026-09-09
+
+### Changed
+- **The unified operating-mode picker (ADR-0029)** — ONE selector of
+  exactly THREE modes replaces BOTH the old four-value access-level
+  switcher and the six-builtin task-mode picker:
+  - **Full Access** — all tools, zero permission asks; the agent decides
+    autonomously how to work (research, plan, build, debug, edit) and
+    switches postures itself as the task's shape changes.
+  - **Ask** (default) — full tools; asks before important commands and
+    changes.
+  - **Plan** — read-only: plan, read files, research; cannot edit the
+    project or run mutating commands.
+- **Task modes became agent self-selected postures** — the six posture
+  bodies (plan/debug/build/review/explore/refactor) and the
+  `.acute/agents/*.md` custom modes survive as NON-ENFORCING guidance
+  the agent picks via `switch_mode` ("postures are guidance, not
+  permissions"). The prompt sections read "OPERATING POSTURES
+  (self-select with switch_mode)" and "ACTIVE POSTURE".
+- **PLAN mode carries the full read-only vocabulary** — the retired
+  review/explore extras (git_status/git_diff/git_log, analyze_image,
+  job_status) joined `PLAN_MODE_TOOLS` (19 tools).
+
+### Removed
+- The **"editor" access level** (fail-closed migration: existing sessions
+  map to **Ask** — commands are gated by the owner instead of absent).
+- The **task-mode picker** and the `/mode` slash command (postures are
+  agent-side now; `PATCH /sessions/:id {activeMode}` remains the REST
+  surface).
+- The R75 task-mode enforcement tier: the plan/review/explore tool
+  narrowing, the debug command tier, and the read-only owner-pin
+  (read-only enforcement now belongs to PLAN mode alone).
+
+### Fixed
+- Historical read-only sessions stay read-only: migration 0029 maps
+  sessions that had a plan/review/explore task mode active to
+  `permission_mode='plan'` (the R75 guarantee, preserved fail-closed).
+- Old clients sending `editor` get an honest 400 naming the mapping
+  ("mode 'editor' was removed in R81 — use 'ask'").
 
 ## [0.79.0] - 2026-09-09
 

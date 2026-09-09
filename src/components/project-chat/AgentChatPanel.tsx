@@ -72,16 +72,13 @@ import {
   type RatingValue,
   type Session,
   type SessionDetail,
-  type TaskModeInfo,
   type ThinkingLevel,
   type WorkingEntry,
   decideApproval,
   deleteRating,
   dequeueSessionMessage,
   fetchDebugSettings,
-  fetchProjectModes,
   listSessionRatings,
-  patchSessionActiveMode,
   patchSessionPermissions,
   queueSessionMessage,
   rateReply,
@@ -142,49 +139,6 @@ const msgVariants: Variants = {
   animate: { opacity: 1, y: 0, transition: { duration: 0.35, ease } },
   exit: { opacity: 0, y: -8, transition: { duration: 0.2, ease } },
 };
-
-// ── ROUND-73 (R73-c): the /mode slash command ────────────────────────────
-// The task-mode picker's keyboard sibling: typed straight into the composer,
-// intercepted at the send entry (runTurn) so NO chat message is emitted. The
-// words that mean "clear" mirror the switch_mode tool's CLEAR_SENTINELS
-// ("none"/"off"/"auto" — the tool also accepts a JSON null, unreachable from
-// a text box).
-const MODE_CLEAR_WORDS: ReadonlySet<string> = new Set(["none", "off", "auto"]);
-
-/** One parsed /mode command (discriminated by `kind`). */
-type ModeSlashCommand =
-  | { kind: "list" } // "/mode" or "/mode list"
-  | { kind: "clear" } // "/mode none" | off | auto
-  | { kind: "set"; value: string }; // "/mode <id-or-name>" (case preserved)
-
-/**
- * ROUND-73 (R73-c): parse a /mode command from the TRIMMED input. "/mode" is
- * matched as a WORD — exactly "/mode" or "/mode ␠…" — so "/moderation" and
- * every other slash stay untouched (they are the backend's or the model's
- * business, never this intercept). Case-insensitive. Returns null for
- * anything that is not a /mode command.
- */
-function parseModeSlash(text: string): ModeSlashCommand | null {
-  if (!/^\/mode(?:\s|$)/i.test(text)) return null;
-  // "</mode" is 5 chars in every case form; the remainder is the argument.
-  const arg = text.slice(5).trim();
-  const lowered = arg.toLowerCase();
-  if (arg === "" || lowered === "list") return { kind: "list" };
-  if (MODE_CLEAR_WORDS.has(lowered)) return { kind: "clear" };
-  return { kind: "set", value: arg };
-}
-
-/**
- * ROUND-73 (R73-c): resolve a /mode argument against the project's mode
- * list — the id OR the display name, case-insensitively ("Debug" → "debug",
- * mirroring how a human reads the picker's labels). Exact word match only:
- * "deb" is not "debug" (the switch_mode tool's same exactness, held here so
- * the slash and the tool can never disagree about what resolves).
- */
-function resolveModeByWord(modes: readonly TaskModeInfo[], word: string): TaskModeInfo | undefined {
-  const lowered = word.trim().toLowerCase();
-  return modes.find((m) => m.id.toLowerCase() === lowered || m.name.toLowerCase() === lowered);
-}
 
 /** Round-30 empty-state suggestion chips (fill the composer on click). */
 const SUGGESTIONS: Array<{ label: string; prompt: string; icon: LucideIcon }> = [
@@ -1663,20 +1617,6 @@ export function AgentChatPanel({
   });
   const debugMode = debugSettingsQuery.data?.enabled === true;
 
-  // ── ROUND-73 (R73-c): the composer's TASK-MODE picker data ────────────────
-  // GET /projects/:id/modes — metadata only (id/name/description/source):
-  // the six builtins + the project's .acute/agents/*.md customs, resolved by
-  // the SAME server-side resolver prepareTurn and switch_mode use. Live mode
-  // only (demo mode has no sidecar → the picker renders "Mode: Auto" with an
-  // empty list, and /mode answers honestly that none are available); the key
-  // embeds the data source exactly like ["project-tree", …].
-  const modesQuery = useQuery({
-    queryKey: ["project-modes", dataSource, projectId],
-    queryFn: () => fetchProjectModes(projectId),
-    enabled: liveMode,
-  });
-  const taskModes = modesQuery.data ?? [];
-
   // ── ROUND-50 (R50-c2): the composer's per-session state ──────────────────
   // Model override + thinking level PERSIST PER SESSION (localStorage
   // acute-model:<id> / acute-thinking:<id>) and ride every send; the
@@ -1691,16 +1631,6 @@ export function AgentChatPanel({
   const [permissionMode, setPermissionMode] = useState<PermissionMode>(
     () => session?.permissionMode ?? "ask",
   );
-  // ROUND-73 (R73-c): the active TASK MODE — same lifecycle as permissionMode
-  // (starts from the session's own row, synced on session change, PATCHed on
-  // change by onTaskModeChange). null = Auto (the agent picks its posture
-  // per request); a stale custom id is swept clear by the backend's next turn.
-  const [activeTaskMode, setActiveTaskMode] = useState<string | null>(
-    () => session?.activeMode ?? null,
-  );
-  // The in-flight PATCH flag — the picker's subtle pending state (its disabled
-  // styling) while the round-trip runs.
-  const [taskModePatching, setTaskModePatching] = useState(false);
   const effectiveModel = modelOverride?.model ?? agent?.model ?? null;
 
   // Session switch → reload each session's own persisted composer state
@@ -1715,12 +1645,6 @@ export function AgentChatPanel({
   useEffect(() => {
     setPermissionMode(session?.permissionMode ?? "ask");
   }, [session?.id, session?.permissionMode]);
-  // ROUND-73 (R73-c): the task mode follows the session row exactly like the
-  // permission mode above (switching sessions swaps the posture).
-  useEffect(() => {
-    setActiveTaskMode(session?.activeMode ?? null);
-  }, [session?.id, session?.activeMode]);
-
   const onModelChange = (v: ModelOverride | null): void => {
     setModelOverride(v);
     saveModelOverride(activeSessionId, v);
@@ -1764,88 +1688,6 @@ export function AgentChatPanel({
         "task_failed",
       );
     }
-  };
-
-  /** ROUND-73 (R73-c): task-mode switch — the permission-mode pattern exactly:
-   * optimistic label + session-cache update, PATCH /sessions/:id
-   * { activeMode }, a transient failure rolls BOTH back and surfaces the error
-   * toast. While the round-trip runs, taskModePatching disables the picker
-   * (its subtle pending state). No session yet → local only, carried onto the
-   * fresh session at creation (runTurn, the permission carry's mirror). Demo
-   * mode → local only (no sidecar). */
-  const onTaskModeChange = async (mode: string | null): Promise<void> => {
-    const prev = activeTaskMode;
-    if (mode === prev) return;
-    setActiveTaskMode(mode);
-    if (activeSessionId === null || !liveMode) return;
-    const sid = activeSessionId;
-    const listKey = ["sessions", dataSource] as const;
-    const detailKey = ["session", dataSource, sid] as const;
-    const patchCache = (value: string | null): void => {
-      queryClient.setQueryData<Session[]>(listKey, (old) =>
-        old === undefined
-          ? old
-          : old.map((s) => (s.id === sid ? { ...s, activeMode: value } : s)),
-      );
-      queryClient.setQueryData<SessionDetail>(detailKey, (old) =>
-        old === undefined ? old : { ...old, activeMode: value },
-      );
-    };
-    patchCache(mode);
-    setTaskModePatching(true);
-    try {
-      await patchSessionActiveMode(sid, mode);
-    } catch (err) {
-      setActiveTaskMode(prev);
-      patchCache(prev);
-      pushLocalToast(
-        "Task mode change failed",
-        err instanceof Error ? err.message : String(err),
-        "task_failed",
-      );
-    } finally {
-      setTaskModePatching(false);
-    }
-  };
-
-  /** ROUND-73 (R73-c): a parsed /mode slash command — NEVER sends a chat turn.
-   * Every answer is a local toast (the panel's existing notice surface): the
-   * list, the set/clear confirmation, or the unknown-id hint carrying the
-   * available ids (the switch_mode tool's same honesty, house voice). */
-  const applyModeSlash = (cmd: ModeSlashCommand): void => {
-    const availableIds = taskModes.map((m) => m.id).join(", ");
-    if (cmd.kind === "list") {
-      pushLocalToast(
-        "Task modes available",
-        taskModes.length === 0
-          ? "No task modes available yet — the mode list is still loading, or the sidecar is unreachable."
-          : `Available: ${availableIds}. Active: ${activeTaskMode ?? "none"}. ` +
-            "Set one with /mode <id>, clear with /mode none.",
-      );
-      return;
-    }
-    if (cmd.kind === "clear") {
-      void onTaskModeChange(null);
-      pushLocalToast(
-        "Task mode cleared",
-        "The ACTIVE TASK MODE section leaves the system prompt from the next turn; default posture applies.",
-      );
-      return;
-    }
-    const mode = resolveModeByWord(taskModes, cmd.value);
-    if (mode === undefined) {
-      pushLocalToast(
-        "Unknown task mode",
-        `'${cmd.value}' is not a task mode. Available: ${availableIds || "(none)"}. ` +
-          "Custom modes come from .acute/agents/*.md in the project root.",
-      );
-      return;
-    }
-    void onTaskModeChange(mode.id);
-    pushLocalToast(
-      `Task mode set to ${mode.name}`,
-      "Its posture guide now rides the agent's system prompt on every following turn — clear with /mode none.",
-    );
   };
 
   // ROUND-39: file-mutation invalidation moved into the stream store so it
@@ -1939,19 +1781,6 @@ export function AgentChatPanel({
   const runTurn = async (content: string, composerAttachments: ComposerAttachment[] = []) => {
     const text = content.trim();
     if (!text || !agent) return;
-    // ROUND-73 (R73-c): the /mode slash intercept — the picker's keyboard
-    // sibling. A /mode command NEVER becomes a chat message (no optimistic
-    // echo, no stream): the composer text clears exactly like a normal send
-    // and the command routes to the task-mode surface (applyModeSlash →
-    // onTaskModeChange → PATCH). Anything that is not a /mode command —
-    // normal messages, other slash commands, even "mode debug" without the
-    // slash — falls through to the normal send path below, untouched.
-    const slashMode = parseModeSlash(text);
-    if (slashMode !== null) {
-      setInput("");
-      applyModeSlash(slashMode);
-      return;
-    }
     // ── ROUND-78 (R78-D, owner: "工作中发送消息（排队）" — send while the
     // agent works): a LIVE stream is running on this session → QUEUE the
     // message instead of refusing it. The POST validates server-side and
@@ -2068,18 +1897,6 @@ export function AgentChatPanel({
           } catch {
             // Non-fatal to the turn — the composer still shows the picked
             // mode; the next explicit change retries the PATCH.
-          }
-        }
-        // ROUND-73 (R73-c): the task-mode carry — the permission carry's
-        // exact mirror: a mode picked BEFORE the session existed rides the
-        // fresh session so the FIRST turn already carries the posture
-        // (sessions are created modeless; best-effort, never fatal).
-        if (activeTaskMode !== null) {
-          try {
-            await patchSessionActiveMode(sid, activeTaskMode);
-          } catch {
-            // Non-fatal to the turn — the picker still shows the mode; the
-            // next explicit change retries the PATCH.
           }
         }
       }
@@ -2397,15 +2214,6 @@ export function AgentChatPanel({
       }}
       permissionMode={permissionMode}
       onModeChange={(m) => void onModeChange(m)}
-      // ROUND-73 (R73-c): the task-mode picker's panel-owned state. The pill
-      // is disabled in demo mode (ModeSwitcher's rule), while a turn runs
-      // (modes apply at TURN time — a mid-stream switch would silently miss
-      // the running turn), and while the PATCH is in flight (the pending
-      // state — the picker's disabled styling).
-      taskModes={taskModes}
-      activeTaskMode={activeTaskMode}
-      taskModeDisabled={!liveMode || busy || taskModePatching}
-      onTaskModeChange={(m) => void onTaskModeChange(m)}
       thinkingLevel={thinkingLevel}
       onThinkingLevelChange={onThinkingLevelChange}
       modelOverride={modelOverride}

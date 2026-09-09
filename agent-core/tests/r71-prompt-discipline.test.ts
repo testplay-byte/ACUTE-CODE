@@ -346,8 +346,13 @@ describe("PLAN mode: every discipline surface composes (read-only vocabulary)", 
 
   it("the mode narration + read-only honesty, with the discipline intact", () => {
     const composed = buildProjectSystemPrompt(planCtx());
-    expect(composed).toContain("## PERMISSION MODE");
-    expect(composed).toContain("PLAN mode: read-only tools only");
+    // ROUND-81: the section is "## OPERATING MODE" (renamed from
+    // "## PERMISSION MODE" by the unified-mode picker) and the plan
+    // narration carries the R81 voice.
+    expect(composed).toContain("## OPERATING MODE");
+    expect(composed).toContain(
+      "You are in PLAN mode: read-only — you can plan, read files, and research, but you cannot edit the project or run commands. Produce plans, analysis, and research.",
+    );
     // D1 — the discipline section (static, unconditional).
     expect(composed).toContain("## ENGINEERING DISCIPLINE");
     expect(composed).toContain("NEVER write code that depends on an [UNKNOWN]");

@@ -6,7 +6,7 @@
  * message.user → tool.use (one per executed call, as each completes) →
  * message.assistant (with per-reply usage+ms stats) → usage_events row.
  */
-import type { MessageAttachment, SessionStatus, ThinkingLevel, UsageRecord } from "shared";
+import type { MessageAttachment, PermissionMode, SessionStatus, ThinkingLevel, UsageRecord } from "shared";
 // ROUND-70 (R70-c, D1): environment grounding — os metadata + the git probe.
 import { execFile } from "node:child_process";
 import * as os from "node:os";
@@ -132,33 +132,34 @@ export const MAX_DELEGATION_DEPTH = 3;
 // Re-exported for the historical import surface (permission-modes.test.ts).
 export { PLAN_MODE_TOOLS } from "./mode-policy.js";
 import { PLAN_MODE_TOOLS } from "./mode-policy.js";
-import { narrowAllowListByTaskModePolicy } from "./mode-policy.js";
 
 /**
- * The per-mode allowlist transformation (undefined = no restriction).
+ * ROUND-81 (R81): the per-OPERATING-MODE allowlist transformation
+ * (undefined = no restriction). The unified picker's three values:
  * - "ask"/"full": every tool stays (full widens the ASK-TIER GATES only,
  *   through toolDeps.permissionMode → approvals.ts).
- * - "plan": the fixed read-only set above.
- * - "editor" (owner: "It will not go with any commands or any terminals"):
- *   EVERYTHING except run_command — file tools stay auto-approved as today,
- *   delete_file keeps its current ask-tier semantics.
+ * - "plan": the fixed read-only set above (PLAN MODE — the agent can plan,
+ *   read, research; it cannot edit the project).
+ * The retired "editor" value maps to "ask" at the storage layer
+ * (sessions.ts LEGACY_PERMISSION_MODE_REMAP + migration 0029).
  */
-export function modeAllowList(mode: "full" | "ask" | "plan" | "editor"): readonly string[] | undefined {
+export function modeAllowList(mode: PermissionMode): readonly string[] | undefined {
   if (mode === "plan") return PLAN_MODE_TOOLS;
-  if (mode === "editor") return TOOL_NAMES.filter((t) => t !== "run_command");
   return undefined;
 }
 
 /**
- * ROUND-50 (R50-c1): the FINAL allowlist a turn on this session passes to
- * buildProjectTools — agent allowlist (ADR-0019: []/undefined = ALL) →
- * delegation-depth rules (children at the cap lose delegate_task) →
- * permission-mode intersection (plan/editor). An empty product becomes the
- * NO_TOOLS sentinel (an empty array would mean "ALL" downstream). Shared by
- * prepareTurn and the context-meter route so both agree by construction.
+ * ROUND-50 (R50-c1) / ROUND-81 (unified modes): the FINAL allowlist a turn
+ * on this session passes to buildProjectTools — agent allowlist (ADR-0019:
+ * []/undefined = ALL) → delegation-depth rules (children at the cap lose
+ * delegate_task) → operating-mode intersection (plan only; full/ask pass
+ * through — ask gates at the approval tier instead). An empty product
+ * becomes the NO_TOOLS sentinel (an empty array would mean "ALL"
+ * downstream). Shared by prepareTurn and the context-meter route so both
+ * agree by construction.
  */
 export function sessionToolAllowList(
-  session: { id: string; parentSessionId: string | null; permissionMode: "full" | "ask" | "plan" | "editor" },
+  session: { id: string; parentSessionId: string | null; permissionMode: PermissionMode },
   agent: { allowedTools: readonly string[] },
   /** The delegation depth of `session` (delegationDepth) — pass it when you
    * already computed it; omitted = 0 (a main session — can delegate). */
@@ -197,7 +198,7 @@ export function sessionToolAllowList(
  */
 export function effectiveToolNames(
   db: SqliteDatabase,
-  session: { id: string; parentSessionId: string | null; permissionMode: "full" | "ask" | "plan" | "editor" },
+  session: { id: string; parentSessionId: string | null; permissionMode: PermissionMode },
   agent: { allowedTools: readonly string[] },
 ): string[] {
   const allowList = sessionToolAllowList(session, agent, delegationDepth(db, session.id));
@@ -1258,17 +1259,16 @@ async function prepareTurn(
     }
   }
   const allowListWithTaskMode = narrowAllowListByTaskMode(allowListWithMode, activeTaskMode);
-  // ROUND-75 (R75): the TASK-MODE POLICY — the hard enforcement the task
-  // modes never had. plan/review/explore intersect the allowlist down to a
-  // read-only set (write_file/edit_file/create_dir/delete_file/run_command/
-  // index_project/job_stop REMOVED — the model never even sees them; debug
-  // keeps the full toolset with its command-tier gate in approvals.ts;
-  // build/refactor/customs pass through). Applied AFTER the R73 frontmatter
-  // narrowing: a custom shadow of a read-only builtin stays read-only.
-  const allowListWithModePolicy = narrowAllowListByTaskModePolicy(allowListWithTaskMode, activeTaskMode);
+  // ROUND-81 (R81, ADR-0029): the task-mode POLICY tier is RETIRED —
+  // enforcement now lives ENTIRELY in the operating mode (full/ask/plan
+  // above). Postures are non-enforcing guidance the agent self-selects
+  // (switch_mode); a read-only PLAN session is narrowed by the permission
+  // gate BEFORE this point, so the toolset below is the final one. The R73
+  // frontmatter `tools` narrowing above survives (opt-in, custom-file only,
+  // narrow-only — the extension surface documented in EXTENSIBILITY.md).
   const tools =
     project !== undefined
-      ? await buildProjectTools(project.rootPath, allowListWithModePolicy, toolDeps)
+      ? await buildProjectTools(project.rootPath, allowListWithTaskMode, toolDeps)
       : undefined;
   // ROUND-70 (R70-c, D1): the turn's REAL environment — OS/shell/date/git,
   // computed here (per turn, never cached across turns, never blocking:

@@ -1,7 +1,13 @@
 /**
- * ROUND-73 (R73-a): TASK MODES — the POSTURE tier of the owner's directive:
- * "proper detailed system prompts which the agent accesses when required
- * and on the basis of the task".
+ * ROUND-73 (R73-a) / ROUND-81 (R81): TASK MODES — the POSTURE tier of the
+ * owner's directive: "proper detailed system prompts which the agent
+ * accesses when required and on the basis of the task".
+ *
+ * ROUND-81 (ADR-0029): modes are now NON-ENFORCING posture guidance the
+ * agent SELF-SELECTS. The owner's unified mode picker (Full Access / Ask /
+ * Plan — the permission tier) governs WHAT is permitted; postures govern
+ * HOW the agent works. The R75 policy/owner-pin enforcement is retired;
+ * read-only enforcement belongs to PLAN mode alone.
  *
  * THE DIVISION OF LABOR (the R72/R73 architecture, two tiers over one
  * trigger surface):
@@ -21,17 +27,18 @@
  * line steering toward the skills that carry its methodology — posture
  * chooses the stance, skills carry the craft.
  *
- * THE THREE ACCESS PATHS being built over this core (R73-b/R73-c waves):
+ * THE ACCESS PATHS over this core (post-R81):
  *   1. AGENT-SIDE — the switch_mode tool: the model itself changes posture
  *      when the task changes shape (spec approved → build; defect found
- *      mid-build → debug).
- *   2. USER-SIDE — the composer's mode picker (+ /mode slash), the
- *      ModeSwitcher sibling pattern.
- *   3. ADVISORY — the task-hints matcher (R72-a computeTaskHints) scoring
+ *      mid-build → debug). This is the PRIMARY path now (the user-side
+ *      picker was retired by the unified mode picker in R81).
+ *   2. ADVISORY — the task-hints matcher (R72-a computeTaskHints) scoring
  *      mode DESCRIPTIONS exactly like skill descriptions: the same
  *      trigger-rich "Use when 'quoted phrasing' … NOT for …" convention
  *      (R71/R72, storage/skills.ts) is why these descriptions carry
  *      verbatim user phrasings in quotes.
+ *   3. API-SIDE — PATCH /sessions/:id { activeMode } (the posture pointer
+ *      surface, retained for programmatic/CLI use).
  *
  * CUSTOM MODES: `.acute/agents/*.md` in the project root (the
  * kilocode/claude custom-modes pattern) — `---` frontmatter
@@ -163,7 +170,7 @@ While this mode is active, the deliverable is a DECISION-READY SPECIFICATION, no
 
 ## Iron law
 NO EDITS. No file writes, no side-effecting commands, no installs. Read, search, and run read-only commands to inform the spec — nothing that changes state. The moment implementation starts, this mode's job is done: say so and switch posture.
-This is ENFORCED, not advisory (R75): write_file, edit_file, create_dir, delete_file, run_command, index_project, and job_stop are REMOVED from your toolset while this mode is active — you literally cannot call them, and the posture is OWNER-PINNED (switch_mode cannot leave it either). Present the spec, then STOP and ask the owner to switch modes when they approve the build.
+Discipline, not permission (R81): if the owner has the session in PLAN mode, the write tools are absent and you CANNOT edit; in Full Access or Ask they are present but you STILL do not touch them while planning — the spec is the deliverable, and editing undercuts it. Present the spec, then STOP; switch to a build posture when the owner approves implementation.
 
 ## Interrogate the problem before proposing the shape
 Work the request until every one of these has an answer:
@@ -199,7 +206,7 @@ Reproduce before you theorize. No fix without a diagnosed root cause. A fix you 
 
 ## Iron law
 NEVER propose or apply a fix until you can state the root cause in ONE sentence and show the failing case that demonstrates it. "It works now" without a diagnosis is a stopped clock being right twice a day.
-Command tier, ENFORCED (R75): run_command works in this mode, but only read-only, build, and test commands run without sign-off — anything that would need the owner's interactive approval is DENIED with a note. Diagnose freely; when the fix needs a heavier command, say so and ask the owner to switch modes (a read-only posture like plan cannot be left by switch_mode — the owner pins those).
+Command discipline (R81): prefer read-only, build, and test commands while diagnosing. If the session is in ASK mode, heavier commands will ask the owner's sign-off — expect that and keep diagnosing; in PLAN mode there is no terminal at all (diagnose by reading). Diagnose freely; the fix comes only after the root cause.
 
 ## Posture, in order
 REPRODUCE first — run the failing case exactly as reported; an unreproduced bug is a rumor, not a bug. Then keep DIAGNOSING until the one-sentence root cause exists: what is the wrong value, where does it become wrong, and since when. Only then FIX — the smallest change that addresses the cause — and VERIFY against the exact failing case plus its neighbors before claiming anything. The full METHOD (bisection, what-changed analysis, tracing values upstream, regression guards) is not re-taught here — it lives in the paired skills; load them instead of improvising a shallower version.
@@ -243,7 +250,7 @@ Findings first. Evidence for every claim. No drive-by edits. Your job is judgmen
 
 ## Iron law
 NO EDITS while this mode is active — unless the owner explicitly asks you to fix what you found (and then the fix is its own task in build or debug posture; switch and say so). A reviewer who edits is no longer reviewing: the diff under review changed the moment you touched it. Read, search, run read-only commands. That is the full toolkit.
-This is ENFORCED, not advisory (R75): write_file, edit_file, create_dir, delete_file, run_command, index_project, and job_stop are REMOVED from your toolset while this mode is active — you literally cannot call them, and the posture is OWNER-PINNED (switch_mode cannot leave it either). Deliver the findings; the owner decides what happens next.
+Discipline, not permission (R81): if the owner has the session in PLAN mode, the write tools are absent and you CANNOT edit; in Full Access or Ask they are present but you STILL do not touch them while reviewing — an edit under review invalidates the review. Deliver the findings; the owner decides what happens next.
 
 ## Method
 1. Establish the scope: what exactly is under review — a diff, a file, a feature, a design? Read it first, completely.
@@ -278,7 +285,7 @@ Map the territory before anyone touches it. The deliverable is a working mental 
 
 ## Iron law
 ZERO EDITS, ZERO SIDE-EFFECTING COMMANDS. Read, search, list, run read-only inspection. If a command would mutate state — install, generate, migrate, write — do not run it; say what you would have run and why you did not.
-This is ENFORCED, not advisory (R75): write_file, edit_file, create_dir, delete_file, run_command, index_project, and job_stop are REMOVED from your toolset while this mode is active — you literally cannot call them, and the posture is OWNER-PINNED (switch_mode cannot leave it either). Report the map; the owner decides what to touch.
+Discipline, not permission (R81): if the owner has the session in PLAN mode, the write tools are absent and you CANNOT edit; in Full Access or Ask they are present but you STILL do not use them while exploring — a side effect contaminates the map. Report the map; the owner decides what to touch.
 
 ## What to map
 Answer the user's literal question FIRST, then the territory around it:

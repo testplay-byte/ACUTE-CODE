@@ -185,11 +185,13 @@ describe("_order.txt reordering (R59-F)", () => {
 
   it("a listed-but-absent section id is skipped, not injected (honest composition)", () => {
     const { root } = projectDir();
-    const ctx = ctxFor(root); // permissionMode undefined → no permission-mode section
+    const ctx = ctxFor(root); // permissionMode undefined → no operating-mode section
     orderFile(root, "permission-mode\nenvironment\n");
     override(root, "communication", "R59F-MARKER-ORDER-ABSENT");
     const prompt = buildProjectSystemPrompt(ctx);
-    expect(prompt).not.toContain("## PERMISSION MODE"); // never injected
+    // ROUND-81: the section's heading is "## OPERATING MODE" (renamed from
+    // "## PERMISSION MODE" by the unified-mode picker) — still never injected.
+    expect(prompt).not.toContain("## OPERATING MODE"); // never injected
     expect(prompt).toContain("R59F-MARKER-ORDER-ABSENT");
     expect(prompt.indexOf("## ENVIRONMENT")).toBeLessThan(prompt.indexOf("You are an expert software engineer"));
   });

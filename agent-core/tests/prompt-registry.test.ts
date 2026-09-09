@@ -254,6 +254,15 @@ describe("PROMPT_REGISTRY (R59-F)", () => {
     // checks ran + their results)" → "VERIFICATION receipts (the exact
     // command… exit status…)"; the ambiguity line gained the blocked-clause).
     // Golden delta: 20,156 → 23,665 bytes (19,984 → 23,447 chars).
+    // Regenerated AGAIN in R81 (deliberately — the unified-mode round: the
+    // permission-mode section heading "## PERMISSION MODE" →
+    // "## OPERATING MODE" (R81 renamed the section for the one-picker
+    // redesign) and the PLAN narration rewritten to the new voice
+    // ("read-only tools only — you cannot edit files or run commands.
+    // Produce plans and research." → "read-only — you can plan, read files,
+    // and research, but you cannot edit the project or run commands.
+    // Produce plans, analysis, and research."). Exactly TWO lines changed
+    // (the heading + the narration); every other byte is identical.
     // R59 CI fix: normalize \r\n → \n on BOTH sides before comparing — the
     // fixture is committed with LF, but a Windows checkout with autocrlf
     // rewrites it to CRLF (the R57 CI lesson: never let line endings decide

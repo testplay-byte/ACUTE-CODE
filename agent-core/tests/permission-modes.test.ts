@@ -1,23 +1,28 @@
 /**
- * ROUND-50 (R50-c1): the composer's permission-mode switcher — full|ask|plan|
- * editor. Three layers are pinned here:
+ * ROUND-50 (R50-c1) / ROUND-81 (the unified mode picker) — the operating-
+ * mode switcher, now exactly THREE values: full|ask|plan ("editor" retired
+ * in R81 — storage remaps it to "ask" on read, migration 0029 rewrites the
+ * rows). Three layers are pinned here:
  *
  *  1. STORAGE + ROUTE — sessions carry permission_mode (default "ask",
- *     migration 0020); PATCH /sessions/:id/permissions validates the 4 known
- *     values (400 otherwise) and persists; createSession defaults to "ask".
+ *     migration 0020); PATCH /sessions/:id/permissions validates the 3
+ *     known values (400 otherwise, with the honest R81 hint when the body
+ *     says "editor") and persists; createSession defaults to "ask".
  *  2. TOOL-SET ENFORCEMENT (runtime.ts prepareTurn via sessionToolAllowList):
- *     plan = the fixed read-only/research set; editor = everything except
- *     run_command (owner: "It will not go with any commands or any
- *     terminals"); ask/full = no restriction. The intersection only NARROWS
- *     the agent's own allowlist, and an empty product becomes NO_TOOLS.
+ *     plan = the fixed read-only/research set (ROUND-81: now the EXTENDED
+ *     list — the retired review/explore read-only extras folded in);
+ *     ask/full = no restriction (ask gates at the approval tier, not the
+ *     toolset). The intersection only NARROWS the agent's own allowlist,
+ *     and an empty product becomes NO_TOOLS.
  *  3. APPROVAL WIDENING (approvals.ts): "full" auto-approves ask-tier gates
  *     (non-auto commands, non-allowlisted web hosts) WITHOUT waiting — while
  *     the denylist-supreme refusals (sudo/rm -rf, invalid URL, non-http
  *     scheme) stay hard in EVERY mode.
  *
- * Plus: the system prompt narrates the active mode, sub-agent children copy
- * the parent's mode at delegation, and the prompt's tool list reflects the
- * post-mode toolset.
+ * Plus: the system prompt narrates the active mode (the "## OPERATING MODE"
+ * section — R81 renamed it from "## PERMISSION MODE"), sub-agent children
+ * copy the parent's mode at delegation, and the prompt's tool list reflects
+ * the post-mode toolset.
  */
 import { randomUUID } from "node:crypto";
 import { mkdtempSync, rmSync } from "node:fs";
@@ -113,8 +118,8 @@ async function routeSession(agentId: string): Promise<string> {
 
 // ── 1. Pure allowlist math (runtime.ts) ─────────────────────────────────────
 
-describe("modeAllowList / sessionToolAllowList (ROUND-50 R50-c1)", () => {
-  it("plan mode's tool set is the owner-spec exact list: read-only/research, no writes, no commands, no indexing", () => {
+describe("modeAllowList / sessionToolAllowList (ROUND-50 R50-c1 / ROUND-81)", () => {
+  it("plan mode's tool set is the owner-spec exact list (R81: the EXTENDED read-only set): research + the retired review/explore extras, no writes, no commands, no indexing", () => {
     expect([...PLAN_MODE_TOOLS].sort()).toEqual(
       [
         "read_file",
@@ -133,11 +138,20 @@ describe("modeAllowList / sessionToolAllowList (ROUND-50 R50-c1)", () => {
         // memory_recall) — the SKILLS prompt section is advertised in plan
         // mode, so the loader must not be dark there.
         "read_skill",
-        // ROUND-73 (R73-b follow-up): switching a task mode is an observation-
-        // level session-state change — the TASK MODES section (and its
-        // task-signal line) is advertised in plan mode, so the switch must
-        // not be dark there either.
+        // ROUND-73 (R73-b follow-up) / ROUND-81: posture management is an
+        // observation-level session-state change — the postures index (and
+        // its task-signal line) is advertised in plan mode, so the switch
+        // must not be dark there either.
         "switch_mode",
+        // ROUND-81: the retired review/explore READ_ONLY_EXTRAS folded in —
+        // the unified PLAN mode is the sole read-only tier, so it carries
+        // the full read-only vocabulary (git inspectors, analyze_image,
+        // job_status; job_stop deliberately stays out — a side effect).
+        "git_status",
+        "git_diff",
+        "git_log",
+        "analyze_image",
+        "job_status",
       ].sort(),
     );
     // Every entry must be a REAL registered tool id.
@@ -148,9 +162,8 @@ describe("modeAllowList / sessionToolAllowList (ROUND-50 R50-c1)", () => {
     }
   });
 
-  it("modeAllowList: plan → the read-only set; editor → all tools except run_command; ask/full → undefined (no restriction)", () => {
+  it("modeAllowList: plan → the read-only set; ask/full → undefined (no restriction — R81 retired the editor branch)", () => {
     expect(modeAllowList("plan")).toEqual(PLAN_MODE_TOOLS);
-    expect(modeAllowList("editor")).toEqual([...TOOL_NAMES].filter((t) => t !== "run_command"));
     expect(modeAllowList("ask")).toBeUndefined();
     expect(modeAllowList("full")).toBeUndefined();
   });
@@ -165,12 +178,6 @@ describe("modeAllowList / sessionToolAllowList (ROUND-50 R50-c1)", () => {
     // becomes the NO_TOOLS sentinel (an empty array would mean "ALL").
     const writer = { allowedTools: ["write_file", "edit_file"] };
     expect(sessionToolAllowList(session, writer)).toBe(NO_TOOLS);
-
-    // editor mode removes run_command from whatever the agent had.
-    const sessionEditor = { id: "s", parentSessionId: null, permissionMode: "editor" as const };
-    expect(sessionToolAllowList(sessionEditor, { allowedTools: [] })).toEqual(
-      [...TOOL_NAMES].filter((t) => t !== "run_command"),
-    );
 
     // ask mode passes the agent allowlist through untouched.
     const sessionAsk = { id: "s", parentSessionId: null, permissionMode: "ask" as const };
@@ -193,14 +200,14 @@ describe("modeAllowList / sessionToolAllowList (ROUND-50 R50-c1)", () => {
 
 // ── 2. Route: PATCH /sessions/:id/permissions ───────────────────────────────
 
-describe("PATCH /api/v1/sessions/:id/permissions (ROUND-50 R50-c1)", () => {
-  it("persists each of the 4 modes and returns the updated session row (GET /sessions/:id shape)", async () => {
+describe("PATCH /api/v1/sessions/:id/permissions (ROUND-50 R50-c1 / ROUND-81)", () => {
+  it("persists each of the 3 modes and returns the updated session row (GET /sessions/:id shape)", async () => {
     const agentId = await routeAgent();
     const sessionId = await routeSession(agentId);
     // Fresh sessions default to "ask".
     expect((await authInject({ method: "GET", url: `/api/v1/sessions/${sessionId}` })).json().permissionMode).toBe("ask");
 
-    for (const mode of ["full", "ask", "plan", "editor"] as const) {
+    for (const mode of ["full", "ask", "plan"] as const) {
       const response = await authInject({
         method: "PATCH",
         url: `/api/v1/sessions/${sessionId}/permissions`,
@@ -218,11 +225,33 @@ describe("PATCH /api/v1/sessions/:id/permissions (ROUND-50 R50-c1)", () => {
     }
   });
 
+  it("rejects the retired 'editor' value with 400 VALIDATION + the honest R81 hint (editor → ask is the mapping, but the OWNER picks)", async () => {
+    // R81: "editor" was removed from the union (shared PermissionMode).
+    // The route refuses it like any unknown value — with one extra hint
+    // naming where it went, so an old picker's client learns the mapping.
+    const agentId = await routeAgent();
+    const sessionId = await routeSession(agentId);
+    const response = await authInject({
+      method: "PATCH",
+      url: `/api/v1/sessions/${sessionId}/permissions`,
+      payload: { mode: "editor" },
+    });
+    expect(response.statusCode).toBe(400);
+    const body = response.json();
+    expect(body.error.code).toBe("VALIDATION");
+    expect(body.error.message).toBe("mode must be one of full|ask|plan");
+    expect(body.error.details.field).toBe("body.mode");
+    expect(body.error.details.hint).toContain("mode 'editor' was removed in R81");
+    expect(body.error.details.hint).toContain("use 'ask'");
+    // The stored mode is untouched (fail-closed: no silent remap on write).
+    expect(getSession(db, sessionId)?.permissionMode).toBe("ask");
+  });
+
   it.each([
     ["unknown mode string", { mode: "yolo" }],
     ["non-string mode", { mode: 42 }],
     ["missing mode", {}],
-  ])("rejects %s with 400 VALIDATION naming body.mode", async (_name, payload) => {
+  ])("rejects %s with 400 VALIDATION naming body.mode (and NO hint — only the retired value gets one)", async (_name, payload) => {
     const agentId = await routeAgent();
     const sessionId = await routeSession(agentId);
     const response = await authInject({
@@ -233,6 +262,7 @@ describe("PATCH /api/v1/sessions/:id/permissions (ROUND-50 R50-c1)", () => {
     expect(response.statusCode).toBe(400);
     expect(response.json().error.code).toBe("VALIDATION");
     expect(response.json().error.details.field).toBe("body.mode");
+    expect(response.json().error.details.hint).toBeUndefined();
     // The stored mode is untouched.
     expect(getSession(db, sessionId)?.permissionMode).toBe("ask");
   });
@@ -267,7 +297,7 @@ function toolCapturingChat(): { chat: ChatFn; toolNames: string[][] } {
   return { chat, toolNames };
 }
 
-async function setupProjectSession(permissionMode: "full" | "ask" | "plan" | "editor"): Promise<string> {
+async function setupProjectSession(permissionMode: "full" | "ask" | "plan"): Promise<string> {
   const project = createProject(db, { name: "PM Project", rootPath: tempDir });
   const agent = createAgent(db, {
     name: "PM Agent",
@@ -284,7 +314,7 @@ async function setupProjectSession(permissionMode: "full" | "ask" | "plan" | "ed
   return session.id;
 }
 
-describe("prepareTurn tool-set enforcement per mode (ROUND-50 R50-c1)", () => {
+describe("prepareTurn tool-set enforcement per mode (ROUND-50 R50-c1 / ROUND-81)", () => {
   it("ask (default): the FULL tool set — exactly today's behavior", async () => {
     const sessionId = await setupProjectSession("ask");
     const { chat, toolNames } = toolCapturingChat();
@@ -320,21 +350,6 @@ describe("prepareTurn tool-set enforcement per mode (ROUND-50 R50-c1)", () => {
     }
   });
 
-  it("editor: file tools stay but run_command is removed entirely", async () => {
-    const sessionId = await setupProjectSession("editor");
-    const { chat, toolNames } = toolCapturingChat();
-    const outcome = await runSingleAgentTurn(
-      { db, keyring: new ProviderKeyring({ ACUTE_PROVIDER_OPENROUTER: KEY }), chat },
-      sessionId,
-      "edit the file",
-    );
-    expect(outcome.ok).toBe(true);
-    expect(toolNames[0]).not.toContain("run_command");
-    expect(toolNames[0]).toContain("write_file");
-    expect(toolNames[0]).toContain("edit_file");
-    expect(toolNames[0]).toContain("delete_file");
-  });
-
   it("full: ALL tools (the widening happens at the approval gates, not the tool set)", async () => {
     const sessionId = await setupProjectSession("full");
     const { chat, toolNames } = toolCapturingChat();
@@ -348,41 +363,37 @@ describe("prepareTurn tool-set enforcement per mode (ROUND-50 R50-c1)", () => {
     expect([...toolNames[0]].sort()).toEqual([...TOOL_NAMES].sort());
   });
 
-  it("the system prompt narrates the active mode and its tool list reflects the post-mode toolset", async () => {
-    // ask stays SILENT (byte-identical to pre-R50 prompts).
+  it("the system prompt narrates the active mode (## OPERATING MODE) and its tool list reflects the post-mode toolset", async () => {
+    // ask stays SILENT (byte-identical to pre-R50 prompts — no section at all).
     const askPrompt = buildProjectSystemPrompt({
       projectName: "P",
       rootPath: "/p",
       toolNames: ["read_file", "list_dir"],
     });
-    expect(askPrompt).not.toContain("PERMISSION MODE");
-    // plan narrates the owner-spec posture.
+    expect(askPrompt).not.toContain("## OPERATING MODE");
+    // plan narrates the R81 operating-mode posture.
     const planPrompt = buildProjectSystemPrompt({
       projectName: "P",
       rootPath: "/p",
       toolNames: ["read_file", "list_dir"],
       permissionMode: "plan",
     });
-    expect(planPrompt).toContain("## PERMISSION MODE");
-    expect(planPrompt).toContain("PLAN mode: read-only tools only");
-    // editor + full narrate too.
-    const editorPrompt = buildProjectSystemPrompt({
-      projectName: "P",
-      rootPath: "/p",
-      toolNames: ["read_file", "write_file"],
-      permissionMode: "editor",
-    });
-    expect(editorPrompt).toContain("EDITOR mode");
-    expect(editorPrompt).toContain("run_command is disabled");
+    expect(planPrompt).toContain("## OPERATING MODE");
+    expect(planPrompt).toContain(
+      "You are in PLAN mode: read-only — you can plan, read files, and research, but you cannot edit the project or run commands. Produce plans, analysis, and research.",
+    );
+    // full narrates too (the autonomous-posture language).
     const fullPrompt = buildProjectSystemPrompt({
       projectName: "P",
       rootPath: "/p",
       toolNames: [...TOOL_NAMES],
       permissionMode: "full",
     });
-    expect(fullPrompt).toContain("FULL ACCESS mode");
+    expect(fullPrompt).toContain("## OPERATING MODE");
+    expect(fullPrompt).toContain("You are in FULL ACCESS mode");
 
-    // End-to-end: a plan-mode turn's system prompt lists ONLY plan tools.
+    // End-to-end: a plan-mode turn's system prompt lists ONLY plan tools
+    // (R81: the extended set — the git inspectors ride along).
     const sessionId = await setupProjectSession("plan");
     const prompts: string[] = [];
     const chat: ChatFn = async (input) => {
@@ -394,26 +405,29 @@ describe("prepareTurn tool-set enforcement per mode (ROUND-50 R50-c1)", () => {
       sessionId,
       "plan it",
     );
-    expect(prompts[0]).toContain("PLAN mode: read-only tools only");
+    expect(prompts[0]).toContain("You are in PLAN mode: read-only");
     const toolsLine = prompts[0].match(/You have access to these tools: ([^\n]+)\./)?.[1] ?? "";
     for (const name of PLAN_MODE_TOOLS) expect(toolsLine).toContain(name);
+    expect(toolsLine).toContain("git_diff"); // the R81 extras are advertised
     expect(toolsLine).not.toContain("write_file");
     expect(toolsLine).not.toContain("run_command");
   });
 
-  it("effectiveToolNames (the context meter's slice) matches the post-mode toolset", async () => {
-    const sessionId = await setupProjectSession("editor");
+  it("effectiveToolNames (the context meter's slice) matches the post-mode toolset (plan includes the R81 extras)", async () => {
+    const sessionId = await setupProjectSession("plan");
     const session = getSession(db, sessionId)!;
     const agent = createAgent(db, { name: "x", providerId: "openrouter", model: "m" });
     const names = effectiveToolNames(db, session, agent);
+    expect([...names].sort()).toEqual([...PLAN_MODE_TOOLS].sort());
     expect(names).not.toContain("run_command");
-    expect(names).toContain("write_file");
+    expect(names).not.toContain("write_file");
+    expect(names).toContain("git_log"); // the folded-in read-only extras
   });
 });
 
 // ── 4. Approval widening in "full" mode (approvals.ts) ──────────────────────
 
-function approvalDeps(sessionId: string, permissionMode: "full" | "ask" | "plan" | "editor") {
+function approvalDeps(sessionId: string, permissionMode: "full" | "ask" | "plan") {
   const emitted: Array<Record<string, unknown>> = [];
   return {
     emitted,
@@ -431,7 +445,7 @@ function approvalDeps(sessionId: string, permissionMode: "full" | "ask" | "plan"
   };
 }
 
-describe("full-mode approval widening (ROUND-50 R50-c1)", () => {
+describe("full-mode approval widening (ROUND-50 R50-c1, unchanged by R81)", () => {
   it("auto-approves an ask-tier command WITHOUT creating an approval row or waiting", async () => {
     const sessionId = createSession(db, { agentId: "agt_pm", mode: "single" }).id;
     const { deps, emitted } = approvalDeps(sessionId, "full");

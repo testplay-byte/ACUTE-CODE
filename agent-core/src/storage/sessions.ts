@@ -24,9 +24,11 @@ export interface Session {
   parentSessionId: string | null;
   /** ROUND-36: the delegated role (planner/researcher/coder/reviewer/tester). */
   subRole: string | null;
-  /** ROUND-50 (R50-c1): the composer's permission mode (full/ask/plan/editor).
-   * Enforced at turn time (runtime.ts prepareTurn + approvals.ts); children
-   * copy their parent's mode at delegation. */
+  /** ROUND-81 (the unified mode picker): the session's OPERATING MODE
+   * (full = Full Access / ask = Ask / plan = Plan). Enforced at turn time
+   * (runtime.ts prepareTurn + approvals.ts); children copy their parent's
+   * mode at delegation. The old "editor" value reads as "ask"
+   * (migration 0029 makes it durable). */
   permissionMode: PermissionMode;
   /** ROUND-73 (R73-b): the session's ACTIVE TASK MODE id (the posture tier —
    * plan/debug/build/review/explore/refactor builtin, or a custom
@@ -123,7 +125,15 @@ interface EventRow {
   ts: string;
 }
 
-const PERMISSION_MODE_VALUES: readonly string[] = ["full", "ask", "plan", "editor"];
+const PERMISSION_MODE_VALUES: readonly string[] = ["full", "ask", "plan"];
+
+/** ROUND-81: legacy rows (pre-0029 databases, or rows written by an older
+ * build) may still carry "editor". It maps to "ask" — fail-closed: editor
+ * had no terminal at all, and ask is the only operating mode that still
+ * gates commands, so nothing the owner had is silently widened. */
+const LEGACY_PERMISSION_MODE_REMAP: Readonly<Record<string, PermissionMode>> = {
+  editor: "ask",
+};
 
 function toSession(row: SessionRow): Session {
   return {
@@ -140,10 +150,15 @@ function toSession(row: SessionRow): Session {
     // ROUND-50 (R50-c1): unknown/null values (corrupted rows, pre-0020
     // databases opened without the migration) read as "ask" — the
     // fail-closed default that equals the pre-R50 behavior.
+    // ROUND-81: "editor" (retired by the unified picker) remaps to "ask"
+    // on read so an un-migrated database stays fail-closed; migration
+    // 0029 rewrites the rows durably.
     permissionMode:
       typeof row.permission_mode === "string" && PERMISSION_MODE_VALUES.includes(row.permission_mode)
         ? (row.permission_mode as PermissionMode)
-        : "ask",
+        : typeof row.permission_mode === "string" && row.permission_mode in LEGACY_PERMISSION_MODE_REMAP
+          ? LEGACY_PERMISSION_MODE_REMAP[row.permission_mode]
+          : "ask",
     // ROUND-73 (R73-b): a non-string/corrupted value reads as null — the
     // default posture (fail-open; a garbage active_mode must never break a
     // turn, prepareTurn simply resolves nothing and stays modeless).

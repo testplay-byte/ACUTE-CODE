@@ -476,14 +476,16 @@ describe("D4: the FILE EDITING rules", () => {
     expect(full).toContain("**Dirty worktree discipline**");
     expect(full).toContain("NEVER revert or discard the user's changes");
     expect(full).toContain("NEVER run git reset --hard, git checkout --, or git clean");
-    // Editor mode strips run_command AND git_* → no discipline line.
-    const editor = buildProjectSystemPrompt({
+    // ROUND-81: "editor" is retired — the pin's point was the TOOLSET gate
+    // (no run_command AND no git_* → no discipline line), so the narrowed
+    // toolNames carry it directly (permissionMode stays the "ask" default:
+    // no permission-mode section, exactly the pre-editor composition).
+    const noGitNoCmd = buildProjectSystemPrompt({
       ...ctxFor(),
       toolNames: TOOL_NAMES.filter((t) => t !== "run_command" && !t.startsWith("git_")),
-      permissionMode: "editor",
     });
-    expect(editor).not.toContain("**Dirty worktree discipline**");
-    expect(editor).not.toContain("**Verify after edit**");
+    expect(noGitNoCmd).not.toContain("**Dirty worktree discipline**");
+    expect(noGitNoCmd).not.toContain("**Verify after edit**");
   });
 
   it("the verify-after-edit procedure is gated on run_command", () => {
