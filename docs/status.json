@@ -249,14 +249,19 @@
     },
     "upcoming": [
       {
+        "phase": "Modularity decision (R80.5 audit delivered)",
+        "status": "awaiting-verdict",
+        "note": "Docs-only analysis round: docs/architecture/MODULARITY-ASSESSMENT.md (verdict + 4-wave roadmap: server.ts route split, turn-loop harness, ToolDeps cycle break = Wave 2; api.ts split + frontend event-handler registry = Wave 3) + docs/runbooks/MODULE-BOUNDARIES.md (the low-context editing contract). Owner scopes R81 from this."
+      },
+      {
         "phase": "Reliability hardening",
         "status": "shipped",
         "note": "R80 shipped the silent-stop fixes (truncation guard, guard stops, route-crash persistence), raw error surfaces, retry customization, and NVIDIA NIM support"
       },
       {
-        "phase": "Owner re-test of v0.75.0 on Windows (ACUTE.bat)",
+        "phase": "Owner re-test of v0.79.0 on Windows (ACUTE.bat)",
         "status": "awaiting-verdict",
-        "note": "The R75 live gates: plan-mode write refusal, the retry card, the one-row toolbar, the 5-line textarea"
+        "note": "The R80 live gates: the silent-stop fixes (real multi-step turns ending cleanly or erroring honestly), the raw error cards, the Settings retry customization card, the NVIDIA provider preset"
       },
       {
         "phase": "Orchestration deepening",
@@ -264,9 +269,14 @@
         "note": "R79 shipped the addressable-delegation tier (delegate_task task_id/background/resume — ADR-0028): the R71 sub-agent discipline is complete; further orchestration deepening is owner-gated"
       },
       {
+        "phase": "R81 feature queue",
+        "status": "planned",
+        "note": "External plugin ctx enrichment (cline's appendContext seam), the lessons-ledger affordance as the reminder injector's third consumer, ratings-driven prompt tuning, the optional v0.68.0 backfill tag"
+      },
+      {
         "phase": "Automation pillar",
         "status": "planned",
-        "note": "Workflows, scheduling, visual canvas — n8n-class, additive on the agent runtime"
+        "note": "Workflows, scheduling, visual canvas — n8n-class, additive on the agent runtime (attach points mapped in MODULARITY-ASSESSMENT.md §11)"
       },
       {
         "phase": "Installer code-signing",

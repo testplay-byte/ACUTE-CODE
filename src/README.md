@@ -1,119 +1,108 @@
 # Frontend (`src/`)
 
-React 18 + TypeScript UI for ACUTE-CODE, built with Vite. The design language
-(visual + motion) is ported from the owner's demos in
-`C:\Users\khurr\Desktop\ZCODE\ACUTE_CODE\design-demos\` — see
-`docs/design/ui-direction.md`.
+React 18 + TypeScript UI for ACUTE-CODE, built with Vite (root package of the pnpm
+workspace). Design language: `docs/design/ui-direction.md` + the living
+`docs/design/DESIGN-SYSTEM.md`; the owner's frozen demos live in `design/demos/`.
+Regenerated at R80.5 (the previous version described a ~round-15 app — 2 hooks and
+placeholder routes; it misdirected agents for ~65 rounds).
 
 ## Layout
 
 ```
 src/
-├── main.tsx                  Entry: providers (QueryClient, BrowserRouter), theme
-│                             painted onto <html> before first render
-├── App.tsx                   Route table — the six SPEC F9 screens
+├── main.tsx / App.tsx        Entry + route table (see Routes below); theme painted
+│                             onto <html> before first render; the Tauri endpoint
+│                             adoption (adoptEndpoint) boots the live backend
 ├── index.css                 Tailwind v4 entry + CSS-variable theme tokens
-│                             (4 blocks: {nova,bento} × {light,dark}) mapped into
-│                             Tailwind via @theme inline → utilities like
-│                             bg-card / text-muted / border-line / bg-accent
-├── vite-env.d.ts             Vite client types + VITE_ACUTE_* env declarations
+│                             (themeId × light/dark blocks) mapped via @theme inline
+│                             → utilities like bg-card / text-muted / border-line
 ├── test-utils.tsx            renderWithProviders + store/fixture reset for tests
 │
-├── lib/
-│   ├── version.ts            APP_NAME + delivery-phase marker
-│   ├── theme-store.ts        Zustand theme store (themeId nova|bento, light|dark),
-│   │                         persisted to localStorage; applies data-theme/-mode
-│   ├── config-store.ts       Sidecar connection config (baseUrl, bearer token,
-│   │                         demoData toggle). Token is memory-only — never
-│   │                         persisted (AGENTS.md secrets rule)
-│   ├── api.ts                Typed REST client for the sidecar (API.md contract):
-│   │                         ApiError (error-envelope aware), AgentsBackend +
-│   │                         SessionsBackend interfaces, http impls, backend
-│   │                         selectors, toChatEntries() event→bubble narrowing
-│   ├── agent-fixtures.ts     In-memory AgentsBackend (demo data + tests)
-│   ├── session-fixtures.ts   In-memory SessionsBackend (demo data + tests):
-│   │                         seeded chats, delayed synchronous turns, 502
-│   │                         PROVIDER_ERROR simulation ("/error" prefix)
-│   ├── motion.ts             Shared motion variants (fadeInUp, stagger*,
-│   │                         scaleIn, shared ease) from the dashboard demo
-│   ├── format.ts             Subtle time formatting for chat/rows
-│   └── utils.ts              cn() class composer (clsx + tailwind-merge)
+├── lib/                      THE data + state layer (see Data flow)
+│   ├── api.ts                Typed REST+SSE client (one flat module, 3.8K lines:
+│   │                         transport + domain types + view-models + the
+│   │                         TOOL_CATALOG mirror — split candidate, see
+│   │                         docs/architecture/MODULARITY-ASSESSMENT.md §10)
+│   ├── stream-store.ts       The live-turn state machine (Zustand): parses SSE
+│   │                         StreamTurnEvents, mutates liveTurn, side-effects
+│   │                         into browser/computer-monitor/right-sidebar stores
+│   ├── active-streams.ts     The running-session registry (background streams)
+│   ├── settings/config/theme/project-chat/right-sidebar/browser/computer-monitor
+│   │                         stores — domain-partitioned Zustand stores
+│   ├── sidecar.ts + sidecar-connection.ts   shell handshake, health polling
+│   ├── notifications-api.ts / push-setup.tsx / error-bus.ts
+│   └── fixtures              demo-data backends (agent/session/project) for tests
 │
-├── hooks/
-│   ├── use-agents.ts         TanStack Query hooks for the agent registry;
-│   │                         query keys embed the data source (demo|live)
-│   └── use-sessions.ts       Session list/detail + create-session and
-│                             send-message mutations (invalidate on settle)
+├── hooks/                    12 TanStack Query hooks (agents, sessions, projects,
+│                             usage, notifications, demos, project index, sidecar
+│                             health) + use-stream-session-message (SSE wiring) +
+│                             use-active-session / use-timeout-clear
 │
 ├── components/
-│   ├── shell/                AppShell (bento layout: dot grid, accent glows,
-│   │                         sidebar card, main card), Sidebar (six F9 nav
-│   │                         items), TopBar (app name, accent-theme switch,
-│   │                         light/dark toggle)
-│   ├── agents/               Agent Registry screen: AgentsScreen (filter +
-│   │                         list + states), AgentCard (registry row),
-│   │                         AgentFormDialog (create/edit, all AgentRecord
-│   │                         fields), ConfirmDialog (delete confirm)
-│   ├── sessions/             Sessions screen (deep-link only since R48 — the
-│   │                         /sessions route has no sidebar nav; everyday
-│   │                         chat lives in /project/:id/chat):
-│   │                         SessionsScreen (two-pane list+chat, stacks below
-│   │                         md), ChatView (event-log bubbles, autoscroll,
-│   │                         composer with Enter/Shift+Enter, thinking dots,
-│   │                         409/502 error banner + retry, per-turn usage
-│   │                         line), NewSessionDialog (agent picker)
-│   └── ui/                   dialog.tsx (Radix Dialog skin), controls.tsx
-│                             (Button, Field, Badge, inputClass)
+│   ├── shell/                AppShell + Sidebar (navigation) — the app frame
+│   ├── project-chat/         THE everyday chat screen (/project/:id/chat):
+│   │                         ProjectChatScreen → ChatFocusLayout / Experimental
+│   │                         (freeform panels) → AgentChatPanel (chat orchestrator)
+│   │                         + WorkingSection (shared turn renderer) + composer/
+│   │                         (Composer, ModelSelector, ContextDonut) + panels/
+│   │                         (Explorer, Todo) + CommandPalette ⌘K + ChatMarkdown
+│   │                         + DebugReportCard / TurnErrorCard / ScreenshotRow /
+│   │                         BrowserCheckpointCard / SubAgentCard
+│   ├── sessions/             Legacy deep-link chat (/sessions/:id) — ChatView is a
+│   │                         SECOND simpler renderer kept in sync by copy
+│   │                         (retirement candidate, MODULARITY-ASSESSMENT §10)
+│   ├── settings/             SettingsPage = thin tab switch; self-contained tabs:
+│   │                         ModelsProviders (the big one), SubAgents, Skills,
+│   │                         Mcp, ComputerUse, ImageAnalysis (+ General card)
+│   ├── right-sidebar/        The panel dock: Browser, Terminal, Console, Files,
+│   │                         Memory, SubAgents panels (tabbed per
+│   │                         `${projectId}::${sessionId}`)
+│   ├── usage/                The usage dashboard (charts, leaderboards, key cards)
+│   ├── agents/ projects/ onboarding/ dashboard/ demos/ notifications/ shared/ ui/
+│   └── ComputerMiniWindow    the floating draggable computer-use monitor
 │
-└── pages/
-    ├── PlaceholderPage.tsx   Titled stub for the not-yet-built F9 screens
-    └── SettingsPage.tsx      Data-source panel (demo ⇄ live sidecar, base URL,
-                              dev token) — rest arrives in later waves
+├── popout/                   The pop-out chat window (custom chrome, its own entry)
+├── mini/                     The mini overlay app (its own entry + client)
+└── pages/                    SettingsPage + SetupWizard (mounted at /setup)
 ```
 
 ## Routes
 
-| Path | Screen | Status |
+| Path | Screen | Notes |
 |---|---|---|
-| `/` | Dashboard (F7) | placeholder |
-| `/project` | Project (F1) | placeholder |
-| `/agents` | **Agent Registry (F2)** | **real** — list/create/edit/duplicate/delete, template filter |
-| `/sessions` | **Sessions (F3)** | **real** — session list + single-agent chat; deep-link only since R48 (no sidebar nav — everyday chat is `/project/:id/chat`) |
-| `/usage` | Usage (F7) | placeholder |
-| `/settings` | Settings (F9) | data-source panel only |
+| `/setup` | Setup wizard | first-run (models/providers) |
+| `/` | Dashboard | usage summary + quick actions |
+| `/project/:id` | Project view | tree + code view |
+| `/project/:id/chat` | **Project chat** | THE everyday agentic chat |
+| `/agents` | Agent registry | list/create/edit/duplicate/delete |
+| `/usage` | Usage screen | token/cost dashboards |
+| `/settings` | Settings hub | the tab switch |
+| `/demos` | Demo viewer | sandboxed iframe demos |
+| `/sessions/:id` | Legacy session chat | deep-link only since R48 |
 
-## Theming
-
-`useThemeStore` (zustand, persisted) holds `themeId` (`nova` | `bento`) and
-`mode` (`light` | `dark`). `applyTheme` mirrors them onto
-`<html data-theme data-mode>`; the CSS token blocks in `index.css` do the rest —
-no rebuild, no re-render churn. Accent-derived alphas use `color-mix`, so a new
-accent theme only needs one CSS block + one catalog entry in `theme-store.ts`.
+Popout (`popout/`) and mini (`mini/`) are separate Vite entries, not routes.
 
 ## Data flow
 
-`use-agents.ts` / `use-sessions.ts` → `getAgentsBackend()` / `getSessionsBackend()` →
-fixture (`demoData: true`, the default until the sidecar lands) or the HTTP client
-(`httpAgents()` / `httpSessions()` — fetch + bearer token + error envelope →
-`ApiError`). Flip the source in Settings → "Data source"; query keys include the
-source so the switch refetches. The token later arrives from the Tauri shell
-(`adoptEndpoint({port, token})`); dev fallback is `VITE_ACUTE_TOKEN` /
-`VITE_ACUTE_BASE_URL`.
+`hooks/*` (TanStack Query) → `lib/api.ts` (typed functions over fetch + bearer +
+error envelope; SSE streams parsed in api.ts into the `StreamTurnEvent` union) →
+`lib/stream-store.ts` (`handleStreamEvent` — the ~650-line dispatcher that owns the
+live turn and cross-store side effects). Stream state is module-level: streams keep
+running with no panel mounted (the R39 background-streaming design). Config/token
+(`config-store.ts`) is memory-only (never persisted). Demo-data fixtures back every
+screen in tests without the sidecar.
 
-Sessions talk to the verified Wave 2 routes: `POST /sessions` (single mode) →
-session; `GET /sessions/{id}` → session + append-only event log + `lastSeq`;
-`POST /sessions/{id}/messages` → synchronous `{assistantMessage, usage}` (409
-CONFLICT when the agent is unconfigured, 502 PROVIDER_ERROR on upstream failure
-— both render as an inline banner with Retry). Chat bubbles come from
-`toChatEntries(events)` which narrows `message.user` / `message.assistant`
-events; other event types render in later waves. The session fixture simulates
-provider latency (~0.7 s) and a 502 for messages starting with `/error`, so the
-whole flow is demonstrable without the sidecar.
+## Extension notes for agents
+
+- Adding a settings tab or right-sidebar panel: self-contained component + one line
+  in the parent switch — the sanctioned pattern (MODULE-BOUNDARIES §3).
+- Adding a stream event type: api.ts union + stream-store dispatcher + component —
+  currently a 4-file change (the Wave-3 handler-registry fix targets this).
+- Restyling: use the shared `ui/` controls + theme tokens; do not introduce new
+  ad-hoc color systems (DESIGN-SYSTEM.md is the reference).
 
 ## Testing
 
-Vitest with happy-dom (opt-in per file via `// @vitest-environment happy-dom`).
-Component tests render through `renderWithProviders` (fresh QueryClient +
-MemoryRouter) and `resetTestState` (re-seed fixtures, reset stores). Vitest
-globals are off, so RTL auto-cleanup doesn't hook in — component test files call
-`afterEach(cleanup)` explicitly.
+Vitest + happy-dom (opt-in per file). Component tests render through
+`renderWithProviders` + `resetTestState`; explicit `afterEach(cleanup)` (globals
+off). ~964 frontend tests across 61 files (suites named `*.test.ts(x)`).

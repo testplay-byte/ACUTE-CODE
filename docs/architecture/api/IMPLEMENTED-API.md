@@ -2,7 +2,9 @@
 # IMPLEMENTED API — the shipped surface
 
 **Truth = this file.** Verified against `agent-core/src/server.ts` at
-round-17 (2026-08-23), refreshed R37→R79. The aspirational full contract (52
+round-17 (2026-08-23), refreshed R37→R80 (+ the R80.5 backfill of 11
+previously-undocumented routes — see the ROUND-80.5 section at the end). The
+aspirational full contract (52
 operations, WS gateway, planned routes) lives in
 [`API.md`](API.md) — anything there and
 not here **does not exist yet**. Base: `http://127.0.0.1:<port>`; dev port
@@ -2170,3 +2172,42 @@ limit}`, `meta.continuation_complete {iterations}`.
   240 → **600**, the providers/registry `scrub` 500 → **4000** and
   `upstreamErrorDetail` 160 → **2000**, the debug-analyst error slice
   300 → **2000**. Key-scrub discipline unchanged everywhere.
+
+## ROUND-80.5 additions (documentation backfill — routes shipped R28-R79, first documented now)
+
+The R80.5 modularity audit found these shipped routes missing from this truth doc.
+No behavior changed in R80.5 — this section only closes the documentation gap:
+
+- `GET /api/v1/notifications?unread=&limit=` → `{notifications:[…], unread}` —
+  the notification-bell list (limit default 50, invalid values fall back to 50;
+  `unread=1|true` filters unread only).
+- `GET /api/v1/notifications/stream` — SSE (hijacked raw socket, same CORS pattern
+  as the message stream): a `hello` frame first `{type:"hello", unread}`, then one
+  `data:` frame per published notification; the client opens it once on app boot
+  (fetch-stream, not EventSource — auth header).
+- `POST /api/v1/notifications/:id/read` → `{ok, unread}` (404 when no UNREAD
+  notification with that id); `POST /api/v1/notifications/read-all` →
+  `{ok, cleared, unread:0}` (the bell's clear-all).
+- `GET /api/v1/sessions/:id/checkpoints` → `{checkpoints:[{id, seq, path,
+  toolName, ts, hadBefore}]}` — the snapshot list WITHOUT content BLOBs (404
+  unknown session). Companion: `GET /api/v1/sessions/:id/snapshots/:seq` → the
+  full `{…, beforeContent, afterContent}` for ONE snapshot (400 invalid seq, 404
+  no snapshot at that seq — older sessions pre-R25); DiffCard renders the real
+  unified diff from this. (The restore route `POST /checkpoints/:id/restore` was
+  already documented in ROUND-28.)
+- `GET /api/v1/projects/:id/index` → `{index: <summary>}` — the codebase-index
+  summary (built by `index_project`; 404 unknown project).
+- `POST /api/v1/projects/:id/search` `{query, kind:"files"|"symbols"|"content",
+  case_sensitive?, whole_word?, file_glob?, max_results?}` → kind-specific results
+  (symbols from the index, capped 50; content/files via the grep/file search tools;
+  400 empty query; 404 unknown project). The CommandPalette ⌘K data source.
+- `GET /api/v1/projects/:id/demos` → `{demos:[{name, path, size, modifiedAt}]}`
+  — the in-app demo viewer's directory walk of `<project>/demos/` HTML files
+  (empty list when the dir doesn't exist; 404 unknown project).
+- `POST /api/v1/providers/:id/keys/reveal` → `{keys:[{slot, value}]}` — every HELD
+  slot's full value (the settings key-pool reveal; getPool never logs, only reads;
+  404 unknown provider).
+- `POST /api/v1/sessions/:id/subagents/:childId/retry` → `{ok, message}` — the
+  R79 retry of a failed child from where it stopped (404 unknown session/child or
+  child not under :id; 409 child already running; 502 PROVIDER_ERROR on failure —
+  orchestrator `retryChild`).
