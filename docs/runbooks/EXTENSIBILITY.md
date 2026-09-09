@@ -19,7 +19,7 @@ with its own runbook: [PROMPT-MODULES](PROMPT-MODULES.md) (R59).
 |---|---|---|---|
 | **External plugin (.mjs)** | You want NEW TOOLS (new model-callable capabilities) in code | `~/.acute/plugins/` (user) or `<project>/.acute/plugins/` (project, opt-in) | Tool-name grammar + agent allowlist; in-process, full trust |
 | **Skill** | You want new METHODOLOGY — behavior/conventions the agent loads on demand (prompt modules, progressive disclosure) | Settings → Skills (the `skills` table) **+ files on disk since R70**: `<project>/.acute/skills/<name>/SKILL.md` and `~/.agents/skills/` | Enabled flag (DB rows) / existence (files); body loaded via `read_skill` (progressive disclosure; sticky since R70) |
-| **Task mode** (R73) | You want a new POSTURE — a detailed system-prompt module that rides the prompt WHILE ACTIVE (what the agent refuses first, must produce first, what done means) | Six builtins + `<project>/.acute/agents/<name>.md` customs (frontmatter name/description/tools + the posture body) | Set via the composer picker / `/mode` slash / the `switch_mode` tool; nothing auto-activates |
+| **Task mode** (R73→R81) | You want a new POSTURE — a detailed system-prompt module that rides the prompt WHILE ACTIVE (what the agent refuses first, must produce first, what done means) | Six builtins + `<project>/.acute/agents/<name>.md` customs (frontmatter name/description/tools + the posture body) | Set via the agent's `switch_mode` tool (self-selection — the primary path since R81) or `PATCH /sessions/:id {activeMode}`; nothing auto-activates |
 | **MCP server** | You want to attach an EXTERNAL tool server (the wide ecosystem — filesystems, browsers, APIs) | Settings → MCP (the `mcp_servers` table) | Owner-configured only; tools bridge as `mcp__<server>__<tool>` |
 | **Built-in plugin catalog** | You want to SEE what's shipped + what each plugin contributes | `GET /plugins` (the Extensions surface) | Read-only; the catalog is computed from real declarations |
 
@@ -200,10 +200,10 @@ SKILLS prompt section and in Settings → Skills (marked as a project
 file, `source: "project-file"`, with its `filePath`), and its body
 loads from disk when `read_skill` is called.
 
-## 2b. Task modes (R73 — the posture tier, the skills' sibling)
+## 2b. Task modes (R73 → R81 — the posture tier, agent self-selected)
 
 A task mode is a **posture module**: while a mode is ACTIVE, its deep
-body rides the turn's system prompt VERBATIM (the `## ACTIVE TASK MODE`
+body rides the turn's system prompt VERBATIM (the `## ACTIVE POSTURE`
 section) — no `read_skill` call, no sticky context, the prompt simply
 carries it until cleared. The difference from a skill is the difference
 between *methodology you read* and *a stance you hold*: the skill body
@@ -215,35 +215,38 @@ ends with a **PAIRS WITH** line naming the skills that carry its method
 (plan → spec-planning, debug → debugging, build → tdd, review →
 code-review, explore → web-research, refactor → refactoring).
 
-**Six builtins**: `plan` (spec-first, NO EDITS — and since R75 ENFORCED: the write/run tools are removed from the toolset, present-and-wait),
-`debug` (diagnosis-first — NEVER a fix without a one-sentence root
-cause; the method itself lives in the paired skills, the body is pure
-posture with an Escalation section), `build` (verify after every step,
-vertical slices), `review` (read-only, evidence-quoted findings, the
-mandatory WHAT-I-DID-NOT-CHECK — hard-enforced since R75), `explore` (zero side effects, hard-enforced since R75,
-[READ]/[INFERRED]/[UNKNOWN] map tags), `refactor` (no behavior change,
-characterization tests first, one mechanical move per step).
+**ROUND-81 (ADR-0029): postures are NON-ENFORCING guidance the AGENT
+self-selects.** The owner's unified mode picker (Full Access / Ask /
+Plan — the permission tier) governs WHAT is permitted; a posture governs
+HOW the agent works. The R75 policy/owner-pin enforcement is retired
+(read-only enforcement belongs to PLAN mode alone); the six bodies'
+"ENFORCED" paragraphs became "Discipline, not permission (R81)"
+paragraphs — in PLAN mode the write tools are absent (hard); in
+Full/Ask the posture shapes behavior without removing tools.
+
+**Six builtins**: `plan` (spec-first, NO EDITS — a discipline; the hard
+gate is the unified PLAN mode), `debug` (diagnosis-first — NEVER a fix
+without a one-sentence root cause; the method itself lives in the paired
+skills, the body is pure posture with an Escalation section), `build`
+(verify after every step, vertical slices), `review` (read-only,
+evidence-quoted findings, the mandatory WHAT-I-DID-NOT-CHECK), `explore`
+(zero side effects, [READ]/[INFERRED]/[UNKNOWN] map tags), `refactor`
+(no behavior change, characterization tests first, one mechanical move
+per step).
 
 **Setting and clearing** (nothing auto-activates — the Task signal
-line in the TASK MODES prompt section is advisory only): the composer's
-mode picker (next to the permission-mode switcher), the `/mode` slash
-command in the composer (`/mode debug`, `/mode Debug`, `/mode none`,
-bare `/mode` lists), the agent's own `switch_mode` tool, or
-`PATCH /sessions/:id {activeMode}` over REST. The activation is stored
-on the session row (`active_mode`, migration 0027) and resolved against
-the project root at every turn — a vanished custom mode is swept clear
-with a one-turn honest note.
+line in the OPERATING POSTURES prompt section is advisory only): **the
+agent's own `switch_mode` tool (the PRIMARY path since R81 — the model
+analyzes the task and picks its posture)**, or `PATCH /sessions/:id
+{activeMode}` over REST (the programmatic surface; the composer picker
+and `/mode` slash were retired with the unified mode picker). The
+activation is stored on the session row (`active_mode`, migration 0027)
+and resolved against the project root at every turn — a vanished custom
+mode is swept clear with a one-turn honest note.
 
-**R75 enforcement:** while plan/review/explore is active the session's
-toolset is HARD-intersected to the read-only policy
-(`agents/mode-policy.ts` — write_file/edit_file/create_dir/delete_file/
-run_command/index_project/job_stop REMOVED; the prompt's toolNames
-match, so the model never sees a tool it cannot call); debug keeps the
-full toolset but run_command demotes to the AUTO tier in approvals;
-**read-only modes are owner-pinned** — the model's `switch_mode` cannot
-leave or clear them (ask the owner); **delegated children inherit the
-parent's activeMode** (delegated work can never outrun the owner's
-posture).
+**Delegation:** children inherit the parent's `activeMode` (posture
+guidance rides down) AND the parent's operating mode (the hard gate
+never outruns the owner).
 
 **Custom modes — `.acute/agents/<name>.md` in the project root** (the
 kilocode/claude custom-modes pattern; files under `.acute/agents/` are
@@ -501,19 +504,20 @@ project files with loaded bits + the honest load-error note). The
 - **Task modes are the posture tier** — the skills' SIBLING over the same
   trigger surface (the full contract in §2b above): SIX builtins
   (plan/debug/build/review/explore/refactor) whose deep bodies ride the
-  system prompt's ACTIVE TASK MODE section while active, plus custom
+  system prompt's ACTIVE POSTURE section while active, plus custom
   modes from `.acute/agents/*.md` (the kilocode/claude pattern — your
   posture modules ship WITH the repo; a custom shadows the builtin of
   the same id; the optional `tools` frontmatter narrows the session's
   toolset while active, narrow-only). Sessions carry the active mode on
   the row (migration 0027 — `active_mode`, NULL default = pre-R73
-  behavior). Three access paths, nothing auto-activates: the composer
-  picker + `/mode` slash, the agent's own `switch_mode` tool, and the
-  advisory Task signal line (the R72-a deterministic matcher extended —
-  `computeModeHints` scores mode descriptions exactly like skill
-  descriptions; your custom mode's description is the matcher's input,
-  so write it trigger-rich with quoted phrasings, same convention as
-  skills).
+  behavior; R81 kept the column as the posture pointer). The access
+  paths post-R81: the agent's own `switch_mode` tool (self-selection —
+  the PRIMARY path) and the advisory Task signal line (the R72-a
+  deterministic matcher extended — `computeModeHints` scores mode
+  descriptions exactly like skill descriptions; your custom mode's
+  description is the matcher's input, so write it trigger-rich with
+  quoted phrasings, same convention as skills). The composer picker +
+  `/mode` slash were retired by the R81 unified mode picker.
 - **The system-reminder renderer** — ONE fenced-reminder mechanism now
   serves the per-directory conventions reminder (byte-identical to
   R72's) and `switch_mode`'s activation notice; the lessons ledger is
@@ -531,17 +535,19 @@ project files with loaded bits + the honest load-error note). The
   upgrade-path note applies (INSERT OR IGNORE keeps existing rows;
   delete + reopen to get the newest seed text on an old install).
 
-## The R75 addendum (the enforcement tier)
+## The R75 addendum (SUPERSEDED by R81/ADR-0029)
 
-The six postures are no longer prompt-only: `agents/mode-policy.ts` is
-the hard tier — read-only intersections for plan/review/explore (the
-canonical `PLAN_MODE_TOOLS` moved here from runtime.ts; review/explore
-add the git inspectors + `analyze_image` + `job_status`), debug's
-AUTO-tier run_command via approvals, owner-pinned `switch_mode`,
-delegation inheritance (children copy the parent's `activeMode` at
-creation), and custom∩policy shadowing. The `/modes` route gained
-`readOnly` so the frontend never duplicates the set. See
-`r75-mode-policy.test.ts` (27 tests) and ADR-0026.
+R75 made the six postures hard-enforced (read-only intersections,
+debug's AUTO-tier commands, owner-pinned switch_mode). **R81 retired
+that entire tier**: enforcement now lives ONLY in the unified operating
+mode (Full Access / Ask / Plan); postures are non-enforcing guidance
+the agent self-selects. The canonical read-only list lives on as
+`PLAN_MODE_TOOLS` (now including the retired review/explore extras —
+the git inspectors, `analyze_image`, `job_status`), consumed by the
+PLAN permission gate. Migration 0029 preserves the R75 guarantee for
+historical sessions (read-only postures → `permission_mode='plan'`).
+See `r81-mode-policy.test.ts` (25 tests), ADR-0026 (the R75 history),
+and ADR-0029 (the R81 decision).
 
 ## Troubleshooting
 

@@ -160,15 +160,20 @@ describe("R73-b D1: the registry + the two composed sections", () => {
     // And the composition's TAIL (where the new sections would sit, right
     // after the SKILLS block's position in the order) contains neither
     // heading — the golden fixture's local proof.
-    expect(without).not.toContain("## TASK MODES");
-    expect(without).not.toContain("## ACTIVE TASK MODE");
+    // (R81: the section headings are now "## OPERATING POSTURES" and
+    // "## ACTIVE POSTURE" — the negative pins track the rename.)
+    expect(without).not.toContain("## OPERATING POSTURES");
+    expect(without).not.toContain("## ACTIVE POSTURE");
   });
 
   it("a ctx with 2 modes composes the index: the heading, the division line, one line per mode", () => {
     const prompt = buildProjectSystemPrompt({ ...BASE_CTX, taskModes: TWO_MODES });
-    expect(prompt).toContain("## TASK MODES (posture modules — activate with switch_mode)");
+    // ROUND-81: the heading + division line were rewritten to posture
+    // SELF-SELECTION language (the task-modes picker was retired by the
+    // unified mode picker; the postures are the agent's own choice now).
+    expect(prompt).toContain("## OPERATING POSTURES (self-select with switch_mode)");
     expect(prompt).toContain(
-      "Skills carry methodology you read with read_skill; a task mode changes your operating POSTURE for a class of work — while active, its guide below governs how you approach the task. Modes are selected on the basis of the task; nothing auto-activates.",
+      "Skills carry methodology you read with read_skill; a POSTURE is the working discipline for a class of work — while active, its guide below governs how you approach the task. Analyze each request, pick the matching posture yourself, and switch as the task's shape changes (nothing auto-activates). Postures are guidance, not permissions — the owner's operating mode (Full Access / Ask / Plan) sets what you may do.",
     );
     expect(prompt).toContain("- plan: Plan — Use when the user says 'plan this', 'write a spec' — the deliverable is a decision-ready specification, not code.");
     expect(prompt).toContain("- debug: Debug — Use when the user says 'fix this bug', 'why does this fail' — the cause is unknown; reproduce before theorizing.");
@@ -225,15 +230,17 @@ describe("R73-b D1: the registry + the two composed sections", () => {
       taskModes: TWO_MODES,
       activeTaskMode: { id: "plan", name: "Plan", body },
     });
-    expect(prompt).toContain("## ACTIVE TASK MODE — Plan (plan)");
+    // ROUND-81: the heading is "## ACTIVE POSTURE — …" and the activation
+    // note says the posture was SELF-SELECTED (guidance, not permission).
+    expect(prompt).toContain("## ACTIVE POSTURE — Plan (plan)");
     expect(prompt).toContain(
-      'This posture is ACTIVE for this session (set via switch_mode or the mode picker). Follow it for the rest of the task. Clear with switch_mode { mode: "none" }.',
+      'This posture is ACTIVE for this session (selected by you with switch_mode — guidance, not a permission change). Follow it for the rest of the task. Clear with switch_mode { mode: "none" }.',
     );
     // The body rides verbatim, every line of it.
     for (const line of body.split("\n")) expect(prompt).toContain(line);
     // Section order: the active module sits directly after the index.
-    expect(prompt.indexOf("## TASK MODES")).toBeGreaterThan(-1);
-    expect(prompt.indexOf("## ACTIVE TASK MODE")).toBeGreaterThan(prompt.indexOf("## TASK MODES"));
+    expect(prompt.indexOf("## OPERATING POSTURES")).toBeGreaterThan(-1);
+    expect(prompt.indexOf("## ACTIVE POSTURE")).toBeGreaterThan(prompt.indexOf("## OPERATING POSTURES"));
   });
 
   it("clearedModeNote renders as the bracketed honest line INSIDE the task-modes section (after the list)", () => {
@@ -271,8 +278,8 @@ describe("R73-b D1: the registry + the two composed sections", () => {
       expect(prompt).toContain("R73B-MARKER-TASK-MODES");
       expect(prompt).toContain("R73B-MARKER-ACTIVE-MODE");
       // The built-in bodies are replaced wholesale (dynamic parts included).
-      expect(prompt).not.toContain("## TASK MODES (posture modules — activate with switch_mode)");
-      expect(prompt).not.toContain("## ACTIVE TASK MODE — Plan (plan)");
+      expect(prompt).not.toContain("## OPERATING POSTURES (self-select with switch_mode)");
+      expect(prompt).not.toContain("## ACTIVE POSTURE — Plan (plan)");
       expect(prompt).not.toContain("- plan: Plan — Use when the user says 'plan this'");
       expect(prompt).not.toContain("NO EDITS.");
     } finally {
@@ -637,14 +644,19 @@ describe("R73-b D4: the routes", () => {
       // R75: readOnly (the mode-policy tier) joined the metadata — the
       // picker badges the enforced read-only postures without duplicating
       // the set client-side.
+      // ROUND-81: readOnly is RETIRED — postures are non-enforcing guidance
+      // now; the field is kept as always-false for wire compatibility with
+      // cached client builds reading this route (the read-only badge lives
+      // on the unified picker's PLAN entry).
       expect(Object.keys(mode).sort()).toEqual(["description", "id", "name", "readOnly", "source"]);
       expect(mode.source).toBe("builtin");
     }
-    // The read-only flags: plan/review/explore true, the rest false.
+    // The read-only flags are FALSE for every posture (R81) — including the
+    // formerly enforced plan/review/explore.
     const byId = new Map(body.modes.map((m) => [m.id, m.readOnly]));
-    expect(byId.get("plan")).toBe(true);
-    expect(byId.get("review")).toBe(true);
-    expect(byId.get("explore")).toBe(true);
+    expect(byId.get("plan")).toBe(false);
+    expect(byId.get("review")).toBe(false);
+    expect(byId.get("explore")).toBe(false);
     expect(byId.get("debug")).toBe(false);
     expect(byId.get("build")).toBe(false);
     expect(byId.get("refactor")).toBe(false);
@@ -719,9 +731,12 @@ describe("R73-b D5: the switch_mode tool", () => {
     expect(tools).toHaveLength(1);
     expect(tools[0]?.name).toBe("switch_mode");
     expect(modesPlugin.id).toBe("core-modes");
-    expect(modesPlugin.version).toBe("1.0.0");
+    // ROUND-81: 1.0.0 → 1.1.0 — the posture self-selection rewrite (the
+    // R75 owner-pin block removed, the descriptions reworded to guidance).
+    expect(modesPlugin.version).toBe("1.1.0");
     expect(modesPlugin.category).toBe("planning");
-    expect(tools[0]?.description).toContain("TASK MODE");
+    expect(modesPlugin.description).toContain("OPERATING POSTURE");
+    expect(tools[0]?.description).toContain("OPERATING POSTURE");
     expect(tools[0]?.description).toContain(".acute/agents/*.md");
   });
 
@@ -799,10 +814,12 @@ describe("R73-b D5: the switch_mode tool", () => {
     expect(noop.ok).toBe(true);
     expect(noop.output).toContain("No task mode was active — nothing to deactivate.");
     // A JSON null is accepted as clear too (lenient schema layers pass it).
-    // ROUND-75 (R75): the probe mode here must be NON-read-only — plan/
-    // review/explore are OWNER-PINNED (switch_mode cannot leave or clear
-    // them; the r75-mode-policy suite pins that refusal). The null-clear
-    // contract itself is what this block tests — build carries it.
+    // ROUND-75 → ROUND-81: under R75 the probe mode here had to be
+    // NON-read-only (plan/review/explore were owner-pinned). R81 retired
+    // the pin — every posture is freely clearable (the r81-mode-policy
+    // suite pins that freedom) — so any posture works as the probe now.
+    // The null-clear contract itself is what this block tests — build
+    // carries it.
     await tool.execute({ mode: "build" }, { root: tempDir });
     const viaNull = await tool.execute({ mode: null }, { root: tempDir });
     expect(viaNull.ok).toBe(true);
@@ -924,44 +941,44 @@ describe("R73-b D6: prepareTurn threading (both turn paths)", () => {
     return createSession(db, { agentId: agent.id, mode: "single", projectId: project.id }).id;
   }
 
-  it("STREAMED path: every project turn carries the TASK MODES index + the mode signal line for the defect message", async () => {
+  it("STREAMED path: every project turn carries the POSTURE index + the mode signal line for the defect message", async () => {
     const sessionId = newSession();
     const system = await runStreamedTurnAndCaptureSystem(sessionId, "my test keeps failing, fix this bug");
-    expect(system).toContain("## TASK MODES (posture modules — activate with switch_mode)");
+    expect(system).toContain("## OPERATING POSTURES (self-select with switch_mode)");
     expect(system).toContain("- plan: Plan — ");
     expect(system).toContain("- refactor: Refactor — ");
     expect(system).toMatch(
       /^Task signal: this request looks like the \*\*debug\*\* posture(?: \(and possibly \*\*[a-z-]+\*\*\))? — consider switch_mode(?: \{ mode: "debug" \})? FIRST\.$/m,
     );
-    // No mode auto-activated: no ACTIVE TASK MODE section on a modeless session.
-    expect(system).not.toContain("## ACTIVE TASK MODE");
+    // No mode auto-activated: no ACTIVE POSTURE section on a modeless session.
+    expect(system).not.toContain("## ACTIVE POSTURE");
   });
 
   it("STREAMED path: an unrelated message → the index but NO signal line (the matcher stays silent)", async () => {
     const sessionId = newSession();
     const system = await runStreamedTurnAndCaptureSystem(sessionId, "what is the capital of France");
-    expect(system).toContain("## TASK MODES");
+    expect(system).toContain("## OPERATING POSTURES");
     expect(system).not.toContain("Task signal:");
   });
 
   it("SYNC path: the same mode signal threading (parity with the streamed path)", async () => {
     const sessionId = newSession();
     const system = await runSyncTurnAndCaptureSystem(sessionId, "my test keeps failing, fix this bug");
-    expect(system).toContain("## TASK MODES (posture modules — activate with switch_mode)");
+    expect(system).toContain("## OPERATING POSTURES (self-select with switch_mode)");
     expect(system).toContain("**debug**");
   });
 
-  it("an ACTIVE mode rides the ACTIVE TASK MODE section every turn (body verbatim), on both paths", async () => {
+  it("an ACTIVE posture rides the ACTIVE POSTURE section every turn (body verbatim), on both paths", async () => {
     const sessionId = newSession();
     updateSessionActiveMode(db, sessionId, "review");
     const streamed = await runStreamedTurnAndCaptureSystem(sessionId, "please check this diff");
-    expect(streamed).toContain("## ACTIVE TASK MODE — Review (review)");
+    expect(streamed).toContain("## ACTIVE POSTURE — Review (review)");
     expect(streamed).toContain(findMode(BUILTIN_MODES, "review")!.body);
     expect(streamed).toContain('Clear with switch_mode { mode: "none" }.');
     const synced = await runSyncTurnAndCaptureSystem(sessionId, "and again");
-    expect(synced).toContain("## ACTIVE TASK MODE — Review (review)");
+    expect(synced).toContain("## ACTIVE POSTURE — Review (review)");
     // The ACTIVE section sits after the index.
-    expect(synced.indexOf("## ACTIVE TASK MODE")).toBeGreaterThan(synced.indexOf("## TASK MODES"));
+    expect(synced.indexOf("## ACTIVE POSTURE")).toBeGreaterThan(synced.indexOf("## OPERATING POSTURES"));
   });
 
   it("a VANISHED custom mode is cleared with the honest one-turn note, and the row is modeless afterwards", async () => {
@@ -974,7 +991,7 @@ describe("R73-b D6: prepareTurn threading (both turn paths)", () => {
     // The mode file disappears before the next turn…
     rmSync(join(agentsDir, "custom-debug.md"));
     const system = await runStreamedTurnAndCaptureSystem(sessionId, "next turn please");
-    expect(system).not.toContain("## ACTIVE TASK MODE");
+    expect(system).not.toContain("## ACTIVE POSTURE");
     expect(system).toContain(
       "[task mode 'custom-debug' from a previous turn no longer exists (its .acute/agents file was removed) — active mode cleared]",
     );
@@ -982,7 +999,7 @@ describe("R73-b D6: prepareTurn threading (both turn paths)", () => {
     // The note is ONE-TURN: the next turn renders neither note nor section.
     const second = await runStreamedTurnAndCaptureSystem(sessionId, "and the next");
     expect(second).not.toContain("active mode cleared");
-    expect(second).not.toContain("## ACTIVE TASK MODE");
+    expect(second).not.toContain("## ACTIVE POSTURE");
   });
 
   it("a custom mode's `tools` frontmatter NARROWS the live toolset (validated against the real registry; empty → NO_TOOLS)", async () => {

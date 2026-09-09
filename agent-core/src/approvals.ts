@@ -29,7 +29,7 @@ import { randomUUID } from "node:crypto";
 import type { PermissionMode, ToolPermission } from "shared";
 import type { SqliteDatabase } from "./storage/db.js";
 import { logApproval } from "./lib/log.js";
-import { appendSessionEvent, getSession } from "./storage/sessions.js";
+import { appendSessionEvent } from "./storage/sessions.js";
 // ROUND-40: permission requests publish an app-level notification so the user
 // sees the prompt even if they're not watching the chat (the owner: "after
 // requesting a permission, and various other things, make sure to add this
@@ -515,12 +515,13 @@ export interface ApprovalRequestDeps {
   /** Only INTERACTIVE streamed parent turns may wait for a decision; sync
    * turns + sub-agent children fail fast on non-auto commands. */
   interactive: boolean;
-  /** ROUND-50 (R50-c1, the composer's permission-mode switcher): the
-   * session's standing posture. In "full" mode every ASK-tier decision
-   * auto-approves WITHOUT waiting (the owner pre-trusted the session); the
-   * DENYLIST-SUPREME refusals (decideCommand/decideWebFetch "deny") are
-   * checked BEFORE this and are NEVER bypassed in any mode. Undefined /
-   * "ask" / "plan" / "editor" keep today's ask-tier behavior exactly. */
+  /** ROUND-50 (R50-c1) / ROUND-81 (the unified mode picker): the
+   * session's operating mode. In FULL ACCESS ("full") every ASK-tier
+   * decision auto-approves WITHOUT waiting (the owner pre-trusted the
+   * session); the DENYLIST-SUPREME refusals (decideCommand/decideWebFetch
+   * "deny") are checked BEFORE this and are NEVER bypassed in any mode.
+   * Undefined / "ask" / "plan" keep today's ask-tier behavior exactly
+   * (plan sessions never see run_command in their toolset at all). */
   permissionMode?: PermissionMode;
   /** SSE channel of the live turn (approval.requested/resolved ride it). */
   emit?: (event: unknown) => void;
@@ -556,25 +557,12 @@ export async function requestCommandApproval(
     return { allowed: true, note: decision.reason };
   }
 
-  // ROUND-75 (R75): DEBUG task mode — the diagnostics command tier. The
-  // session's active task mode is read LIVE (the row, not a turn-start
-  // snapshot — switch_mode mid-turn is honored immediately): under debug,
-  // an ASK-tier command (interactive confirm/destructive) is DENIED with
-  // an honest note steering to switch_mode, exactly as a plan-mode session
-  // never sees run_command in its toolset at all. Deliberately checked
-  // BEFORE the Full-Access widening below: the task mode is a NARROWER
-  // posture than any permission mode (the denylist-supreme ordering — a
-  // mode can restrict what full access would otherwise allow). Auto/rule
-  // commands (read-only, builds, tests — the decided "run" tier above)
-  // still run: a debugger may diagnose, it just may not do anything that
-  // needs the owner's sign-off until the posture changes.
-  const activeTaskMode = getSession(deps.db, deps.sessionId)?.activeMode ?? null;
-  if (activeTaskMode === "debug") {
-    return {
-      allowed: false,
-      note: "debug mode: interactive-tier commands are disabled — diagnostics only (read-only, build, and test commands still run). Use switch_mode to leave debug mode first, then retry.",
-    };
-  }
+  // ROUND-81 (R81, ADR-0029): the R75 DEBUG task-mode command tier is
+  // RETIRED — task modes are non-enforcing posture guidance now (the agent
+  // self-selects), so a "debug" posture no longer denies interactive-tier
+  // commands. Enforcement lives in the operating mode only: PLAN sessions
+  // never see run_command at all; ASK waits for the owner; FULL ACCESS
+  // auto-approves (below, after the denylist-supreme refusal above).
 
   // ROUND-50 (R50-c1): FULL ACCESS mode — every ask-tier decision
   // auto-approves without waiting. Checked AFTER the denylist-supreme

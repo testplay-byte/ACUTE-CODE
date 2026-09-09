@@ -99,41 +99,39 @@ export function attachmentFromRead(
   };
 }
 
-// ── Permission modes (owner: "Switch between the access I want to grant it") ──
+// ── Operating modes (ROUND-81, the owner's unified mode picker: ONE selector
+//    replacing the old 4-value permission switcher AND the 6-builtin task-mode
+//    picker) ──
 
 export interface ModeOption {
   id: PermissionMode;
   label: string;
   description: string;
   /** lucide icon key — resolved in ModeSwitcher (keep this file icon-free). */
-  icon: "zap" | "shield" | "clipboard" | "editor";
+  icon: "zap" | "shield" | "clipboard";
 }
 
-/** The 4 permission modes with their one-line menu descriptions (owner spec). */
+/** The 3 operating modes with their one-line menu descriptions (owner spec).
+ * R81: "editor" is retired (a stale localStorage/session value maps to "ask"
+ * via modeOption's fallback — the backend remaps rows the same way). */
 export const MODE_OPTIONS: readonly ModeOption[] = [
   {
     id: "full",
     label: "Full Access",
-    description: "All tools auto-approved. No permission asks.",
+    description: "All tools, no permission asks — the agent decides how to work (research, plan, build, debug) and switches postures itself.",
     icon: "zap",
   },
   {
     id: "ask",
     label: "Ask",
-    description: "Asks before commands and external sites.",
+    description: "Full tools; asks before important commands and changes.",
     icon: "shield",
   },
   {
     id: "plan",
     label: "Plan",
-    description: "Read-only. Research and plan, no edits.",
+    description: "Read-only — research and plan, no edits or commands.",
     icon: "clipboard",
-  },
-  {
-    id: "editor",
-    label: "Editor",
-    description: "Edits files freely. No terminal. Deletes still ask.",
-    icon: "editor",
   },
 ];
 

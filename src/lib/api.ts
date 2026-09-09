@@ -1855,66 +1855,6 @@ export async function patchSessionPermissions(
   });
 }
 
-/* ══════════════════════════════════════════════════════════════════════════
- * ROUND-73 (R73-c): TASK MODES — the user-side access path to the posture
- * tier (the composer's picker + the /mode slash; switch_mode is the
- * agent-side path). Types mirror the sidecar's GET /projects/:id/modes and
- * PATCH /sessions/:id activeMode surfaces (agent-core server.ts).
- * ══════════════════════════════════════════════════════════════════════════ */
-
-/** One task mode as served by GET /projects/:id/modes — METADATA ONLY
- * (id/name/description/source); the posture BODY is prompt-side and rides
- * the system prompt's ACTIVE TASK MODE section while the mode is active
- * (GET /skills' honesty — the deep module never ships to the picker). */
-export interface TaskModeInfo {
-  /** Slug the picker / /mode slash / switch_mode address: "debug". */
-  id: string;
-  /** Display name: "Debug". */
-  name: string;
-  /** Trigger-rich one-liner (the matcher + picker menu description). */
-  description: string;
-  /** "builtin" (the six postures) | "file" (a .acute/agents/*.md custom). */
-  source: "builtin" | "file";
-  /** ROUND-75 (R75): true for the hard read-only postures (plan/review/
-   * explore — write tools are ENFORCED away, not just asked away). The
-   * picker renders the badge; the enforcement itself is backend-side
-   * (mode-policy.ts). */
-  readOnly?: boolean;
-}
-
-/**
- * ROUND-73 (R73-c): the mode picker's data source —
- * GET /projects/:id/modes. The six builtins (plan/debug/build/review/
- * explore/refactor) plus the project's .acute/agents/*.md customs (shadowing
- * included), resolved through the SAME resolver prepareTurn and switch_mode
- * use — the picker, the prompt's TASK MODES index, and the tool can never
- * disagree. Custom modes may be added/removed between calls (files on
- * disk); callers should treat the list as advisory, re-fetched per project.
- */
-export async function fetchProjectModes(projectId: string): Promise<TaskModeInfo[]> {
-  const body = await request<{ modes: TaskModeInfo[] }>(`/projects/${projectId}/modes`);
-  return body.modes;
-}
-
-/**
- * ROUND-73 (R73-c): set or clear the session's active TASK MODE —
- * PATCH /sessions/:id with { activeMode }. `null` CLEARS (default posture);
- * a string must resolve against the session's project (an unknown id → 400
- * VALIDATION carrying the available ids). Returns the updated session ROW
- * (this route predates the /permissions split — unlike
- * patchSessionPermissions it does NOT attach events/lastSeq). Enforcement is
- * at TURN time: the mode's posture guide rides the system prompt from the
- * NEXT turn. Throws ApiError 400/404.
- */
-export async function patchSessionActiveMode(
-  sessionId: string,
-  activeMode: string | null,
-): Promise<Session> {
-  return request<Session>(`/sessions/${sessionId}`, {
-    method: "PATCH",
-    json: { activeMode },
-  });
-}
 
 /**
  * ROUND-50 (R50-c1): the context donut's data source —

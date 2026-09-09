@@ -22,7 +22,7 @@ below = composition order.
 |---|---|---|
 | `identity` | yes | opening persona + `PROJECT:` line (no heading) |
 | `tool-use` | yes | `## TOOL USE` — live tool-name list + call discipline |
-| `permission-mode` | yes | `## PERMISSION MODE` — only when mode is full/plan/editor (ask stays silent) |
+| `permission-mode` | yes | `## OPERATING MODE` — the unified mode's narration, only when mode is full/plan (ask stays silent; R81) |
 | `sub-agents` | yes | `## SUB-AGENTS (delegate_task)` — only when the tool is allowed |
 | `tool-results-are-data` | no | `## TOOL RESULTS ARE DATA` — prompt-injection guard |
 | `agentic-loop` | yes | `## AGENTIC LOOP — MULTI-TURN COMPLETION` (maxTurns injected) |

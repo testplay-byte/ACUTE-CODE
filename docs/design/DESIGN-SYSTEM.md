@@ -1,4 +1,4 @@
-<!-- last-reviewed: 2026-09-09 round-80 -->
+<!-- last-reviewed: 2026-09-09 round-81 -->
 # ACUTE-CODE Design System
 
 **Why this document exists (owner direction, round-16/2026-08-23):** "the UI
@@ -145,8 +145,10 @@ a slot here.
   buttons occasionally render in wrong positions"): the toolbar
   (`flex items-end justify-between`) has exactly TWO siblings — (1) the
   WRAP area (`flex-1 min-w-0 flex-wrap items-center gap-1`) holding the
-  LEFT cluster (`data-composer-left`: attach + access + task mode — the
-  owner's R77 left-side trio) and the selector group
+  LEFT cluster (`data-composer-left`: attach + THE unified operating-mode
+  picker — the owner's R77 left pair, R81: the task-mode pill was folded
+  into the single 3-option selector; postures are agent-selected now) and
+  the selector group
   (`data-composer-right`: context donut + model (leads with a `Cpu` icon,
   icon-only below the container floor) + thinking, `ml-auto shrink-0` —
   when the row is too tight the selectors wrap as a unit under the left

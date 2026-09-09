@@ -176,6 +176,12 @@ describe("openDatabase", () => {
       // duplicate/cap/guard lookups. No allowlist curation (delegate_task
       // gained parameters, not a new tool name).
       { version: 28, name: "0028_delegation_task_id.sql" },
+      // ROUND-81 (R81, the unified mode picker): data-only mapping that
+      // keeps the R75 read-only guarantee after enforcement moved to the
+      // permission tier — editor permission_mode → ask (fail-closed),
+      // read-only R75 postures (active_mode plan/review/explore) →
+      // permission 'plan'; active_mode kept as the posture pointer.
+      { version: 29, name: "0029_unified_modes.sql" },
     ]);
     expect(appliedSecond).toEqual(appliedFirst);
   });

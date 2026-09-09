@@ -352,7 +352,10 @@ describe("buildSystemPromptSections (ROUND-50 R50-c1 refactor — behavior ident
     const sections = buildSystemPromptSections(ctx);
     // Identity: the persona text WITHOUT the tool list / memory / rules.
     expect(sections.identity).toContain("expert software engineer");
-    expect(sections.identity).toContain("## PERMISSION MODE");
+    // ROUND-81: the operating-mode section (renamed from "## PERMISSION
+    // MODE") rides the identity bucket with the R81 plan narration.
+    expect(sections.identity).toContain("## OPERATING MODE");
+    expect(sections.identity).toContain("You are in PLAN mode: read-only");
     expect(sections.identity).not.toContain("## TOOL USE");
     expect(sections.identity).not.toContain("Project memory");
     expect(sections.identity).not.toContain("PROJECT RULES");

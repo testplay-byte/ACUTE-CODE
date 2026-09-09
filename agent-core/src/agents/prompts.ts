@@ -257,17 +257,17 @@ export function buildTaggedPromptLines(ctx: PromptContext): TaggedLine[] {
   }
   tools("");
 
-  // ── ROUND-50 (R50-c1): the composer's permission mode ───────────────────
-  // One or two lines narrating the active posture. The mode's TOOL-SET
-  // effects (plan = read-only set, editor = no run_command) are enforced in
-  // runtime.ts prepareTurn BEFORE the prompt is built, so the toolNames list
-  // above already reflects them — this section is the honest explanation.
-  // "ask" (the default) emits NO section: that posture is already narrated
-  // by the TERMINAL/WEB ACCESS sections and the prompt stays byte-identical
-  // to pre-R50 for every existing session ("ask = EXACTLY today's behavior").
+  // ── ROUND-50 (R50-c1) / ROUND-81: the session's OPERATING MODE ───────────
+  // One or two lines narrating the active mode. The mode's TOOL-SET
+  // effects (plan = read-only set) are enforced in runtime.ts prepareTurn
+  // BEFORE the prompt is built, so the toolNames list above already
+  // reflects them — this section is the honest explanation. "ask" (the
+  // default) emits NO section: that posture is already narrated by the
+  // TERMINAL/WEB ACCESS sections and the prompt stays byte-identical to
+  // pre-R50 for every existing session ("ask = EXACTLY today's behavior").
   if (ctx.permissionMode !== undefined && ctx.permissionMode !== "ask") {
     beginSection("permission-mode");
-    ident("## PERMISSION MODE");
+    ident("## OPERATING MODE");
     ident(PERMISSION_MODE_PROMPTS[ctx.permissionMode]);
     ident("");
   }
@@ -513,21 +513,23 @@ export function buildTaggedPromptLines(ctx: PromptContext): TaggedLine[] {
     ident("");
   }
 
-  // ── Task modes (ROUND-73, R73-b): the posture index ─────────────────────
+  // ── Task modes (ROUND-73 R73-b / ROUND-81 posture self-selection): the
+  // posture index ──
   // The TASK-MODES tier of the owner's "proper detailed system prompts …
   // accessed when required and on the basis of the task": skills (above)
-  // carry METHODOLOGY the agent reads with read_skill; a task mode changes
-  // the agent's operating POSTURE for a class of work, and while one is
-  // active its deep module rides the ACTIVE TASK MODE section (below). This
-  // index lists ONLY id + name + description — the bodies stay
+  // carry METHODOLOGY the agent reads with read_skill; a task mode is an
+  // OPERATING POSTURE the agent SELF-SELECTS on the basis of the task
+  // (R81: the owner's unified mode picker governs what is permitted; the
+  // postures govern HOW the agent works). While one is active its deep
+  // module rides the ACTIVE POSTURE section (below). This index lists ONLY id + name + description — the bodies stay
   // progressive-disclosed behind switch_mode (the tool returns the full
   // guide ONCE on activation; from then on the prompt carries it). Strictly
   // gated on ctx.taskModes: a caller that does not resolve modes (every
   // pre-R73 caller, the golden fixture) composes byte-identically.
   if (ctx.taskModes !== undefined && ctx.taskModes.length > 0) {
     beginSection("task-modes");
-    ident("## TASK MODES (posture modules — activate with switch_mode)");
-    ident("Skills carry methodology you read with read_skill; a task mode changes your operating POSTURE for a class of work — while active, its guide below governs how you approach the task. Modes are selected on the basis of the task; nothing auto-activates.");
+    ident("## OPERATING POSTURES (self-select with switch_mode)");
+    ident("Skills carry methodology you read with read_skill; a POSTURE is the working discipline for a class of work — while active, its guide below governs how you approach the task. Analyze each request, pick the matching posture yourself, and switch as the task's shape changes (nothing auto-activates). Postures are guidance, not permissions — the owner's operating mode (Full Access / Ask / Plan) sets what you may do.");
     for (const mode of ctx.taskModes) {
       ident(`- ${mode.id}: ${mode.name} — ${mode.description}`);
     }
@@ -553,17 +555,18 @@ export function buildTaggedPromptLines(ctx: PromptContext): TaggedLine[] {
     ident("");
   }
 
-  // ── Active task mode (ROUND-73, R73-b): the deep posture module ─────────
+  // ── Active task mode (ROUND-73 R73-b / ROUND-81: posture guidance) ──
   // The ONE place a mode body is ever composed into the system prompt.
   // prepareTurn resolved session.active_mode through the same
   // resolveEffectiveModes that produced the index above (custom modes
   // included); the body rides verbatim, every turn, until cleared with
   // switch_mode — that persistence is the whole difference between a mode
-  // and a skill. Strictly gated: no active mode → no section.
+  // and a skill. R81: the posture is guidance the agent self-selected, not
+  // an owner-set permission. Strictly gated: no active mode → no section.
   if (ctx.activeTaskMode !== undefined) {
     beginSection("active-mode");
-    ident(`## ACTIVE TASK MODE — ${ctx.activeTaskMode.name} (${ctx.activeTaskMode.id})`);
-    ident("This posture is ACTIVE for this session (set via switch_mode or the mode picker). Follow it for the rest of the task. Clear with switch_mode { mode: \"none\" }.");
+    ident(`## ACTIVE POSTURE — ${ctx.activeTaskMode.name} (${ctx.activeTaskMode.id})`);
+    ident("This posture is ACTIVE for this session (selected by you with switch_mode — guidance, not a permission change). Follow it for the rest of the task. Clear with switch_mode { mode: \"none\" }.");
     ident("");
     ident(ctx.activeTaskMode.body);
     ident("");
@@ -828,21 +831,19 @@ export function buildTaggedPromptLines(ctx: PromptContext): TaggedLine[] {
 }
 
 /**
- * ROUND-50 (R50-c1): the one-or-two-line narration per permission mode.
- * plan's line is the owner-spec example verbatim; the others follow the same
- * voice. "ask" never reaches the prompt (the default posture is already
- * narrated by the TERMINAL/WEB ACCESS sections — see the gate above), but
- * stays in the map so the Record covers the full union.
+ * ROUND-50 (R50-c1) / ROUND-81 (the unified mode picker): the one-or-two-
+ * line narration per OPERATING MODE. "ask" never reaches the prompt (the
+ * default posture is already narrated by the TERMINAL/WEB ACCESS sections —
+ * see the gate above), but stays in the map so the Record covers the full
+ * union. R81: "editor" is retired (migration 0029 → "ask").
  */
 const PERMISSION_MODE_PROMPTS: Record<PermissionMode, string> = {
   full:
-    "You are in FULL ACCESS mode: the owner pre-authorized this session — commands and web fetches run without per-action approval prompts. Hard-blocked dangerous commands (sudo, rm -rf, …) still refuse in every mode.",
+    "You are in FULL ACCESS mode: the owner pre-authorized this session — all tools are available and commands and web fetches run without per-action approval prompts. You decide autonomously how to work: analyze the task, choose your posture (research, plan, build, debug, edit), and switch postures with switch_mode as the task's shape changes. Hard-blocked dangerous commands (sudo, rm -rf, …) still refuse in every mode.",
   ask:
-    "You are in ASK mode: actions that are not read-only (non-safe commands, fetching hosts outside the documentation allowlist) ask the owner for permission first and wait for their decision.",
+    "You are in ASK mode: you have full tool access, but actions that are not read-only (non-safe commands, fetching hosts outside the documentation allowlist) ask the owner for permission first and wait for their decision.",
   plan:
-    "You are in PLAN mode: read-only tools only — you cannot edit files or run commands. Produce plans and research.",
-  editor:
-    "You are in EDITOR mode: file tools are available (your edits apply directly), but there is NO terminal — run_command is disabled; verify with read_file/search_code instead of commands.",
+    "You are in PLAN mode: read-only — you can plan, read files, and research, but you cannot edit the project or run commands. Produce plans, analysis, and research.",
 };
 
 /**

@@ -26,7 +26,6 @@ import {
   runSingleAgentTurn,
   runStreamedAgentTurn,
 } from "./agents/runtime.js";
-import { isReadOnlyTaskMode } from "./agents/mode-policy.js";
 // ROUND-66 (R66-2-c, C1): the post-turn CONTEXT-FREE DEBUG ANALYST — a
 // fresh model call (no tools, no history of its own) that receives the
 // session's whole transcript and streams its report back over the SAME
@@ -1733,10 +1732,11 @@ export function buildServer(options: ServerOptions): FastifyInstance {
             name: mode.name,
             description: mode.description,
             source: mode.source,
-            // ROUND-75 (R75): the read-only postures (plan/review/explore —
-            // the mode-policy enforcement tier) so the picker can badge them
-            // without duplicating the set client-side.
-            readOnly: isReadOnlyTaskMode(mode.id),
+            // ROUND-81 (R81, ADR-0029): readOnly is RETIRED — postures are
+            // non-enforcing guidance now (the unified mode picker carries
+            // the read-only badge on PLAN). Kept as always-false for wire
+            // compatibility with any cached client build reading this route.
+            readOnly: false,
           })),
         };
       });
@@ -2646,9 +2646,16 @@ export function buildServer(options: ServerOptions): FastifyInstance {
           typeof raw.mode !== "string" ||
           !PERMISSION_MODES.includes(raw.mode as PermissionMode)
         ) {
+          // ROUND-81: the retired "editor" value gets the honest mapping
+          // message (the old picker's clients learn where it went).
+          const hint =
+            raw.mode === "editor"
+              ? "mode 'editor' was removed in R81 — use 'ask' (commands are gated by the owner instead of absent)"
+              : undefined;
           return reply.code(400).send(
-            errorBody("VALIDATION", "mode must be one of full|ask|plan|editor", {
+            errorBody("VALIDATION", "mode must be one of full|ask|plan", {
               field: "body.mode",
+              ...(hint === undefined ? {} : { hint }),
             }),
           );
         }

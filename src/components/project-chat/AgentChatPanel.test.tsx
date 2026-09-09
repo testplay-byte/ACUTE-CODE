@@ -57,14 +57,11 @@ const rasterMock = vi.hoisted(() => ({
   fetchComputerFrameRaster: null as unknown as ReturnType<typeof vi.fn>,
 }));
 
-/** ROUND-73 (R73-c): the task-modes client fns + the stream send, mocked the
- * same way — the panel's ["project-modes"] query feeds the picker + the
- * /mode slash resolution; patchSessionActiveMode is the PATCH round-trip the
- * picker/slash drive; streamSessionMessage lets the NOT-intercepted send
- * tests run a full deterministic turn without a sidecar. */
-const modesMock = vi.hoisted(() => ({
-  fetchProjectModes: null as unknown as ReturnType<typeof vi.fn>,
-  patchSessionActiveMode: null as unknown as ReturnType<typeof vi.fn>,
+/** ROUND-73 (R73-c) / ROUND-81: the stream send, mocked — streamSessionMessage
+ * lets the send tests run a full deterministic turn without a sidecar. (The
+ * task-mode client fns fetchProjectModes/patchSessionActiveMode were retired
+ * with the unified mode picker: postures are agent-side via switch_mode now.) */
+const streamMock = vi.hoisted(() => ({
   streamSessionMessage: null as unknown as ReturnType<typeof vi.fn>,
 }));
 
@@ -86,9 +83,7 @@ vi.mock("../../lib/api", async () => {
   ratingsMock.deleteRating = vi.fn();
   debugSettingsMock.fetchDebugSettings = vi.fn();
   rasterMock.fetchComputerFrameRaster = vi.fn();
-  modesMock.fetchProjectModes = vi.fn();
-  modesMock.patchSessionActiveMode = vi.fn();
-  modesMock.streamSessionMessage = vi.fn();
+  streamMock.streamSessionMessage = vi.fn();
   queueMock.queueSessionMessage = vi.fn();
   queueMock.dequeueSessionMessage = vi.fn();
   return {
@@ -100,9 +95,7 @@ vi.mock("../../lib/api", async () => {
     deleteRating: ratingsMock.deleteRating,
     fetchDebugSettings: debugSettingsMock.fetchDebugSettings,
     fetchComputerFrameRaster: rasterMock.fetchComputerFrameRaster,
-    fetchProjectModes: modesMock.fetchProjectModes,
-    patchSessionActiveMode: modesMock.patchSessionActiveMode,
-    streamSessionMessage: modesMock.streamSessionMessage,
+    streamSessionMessage: streamMock.streamSessionMessage,
     queueSessionMessage: queueMock.queueSessionMessage,
     dequeueSessionMessage: queueMock.dequeueSessionMessage,
   };
@@ -1278,318 +1271,6 @@ describe("AgentChatPanel inline screenshots (ROUND-68 R68-A)", () => {
   });
 });
 
-// ── ROUND-73 (R73-c): task modes — the picker wiring + the /mode slash ──────
-// The panel owns the whole surface: the ["project-modes"] query, the
-// activeTaskMode state synced from the session row, the optimistic PATCH
-// round-trip (rollback + toast), the composer pill (rendered inside Composer
-// next to ModeSwitcher), and the /mode slash intercept at the send entry
-// (runTurn) — never a chat message, always a local notice.
-describe("AgentChatPanel task modes (ROUND-73 R73-c)", () => {
-  const SLOW = { timeout: 5000 };
-  const SESSION_ID = "sess_mode_probe";
-
-  /** The six builtin modes as GET /projects/:id/modes serves them
-   * (metadata only — descriptions shortened but trigger-shaped). */
-  const BUILTIN_MODES = [
-    { id: "plan", name: "Plan", description: "Use when the user says 'plan this'. NOT for executing.", source: "builtin" },
-    { id: "debug", name: "Debug", description: "Use when the user says 'fix this bug'. NOT for green-field work.", source: "builtin" },
-    { id: "build", name: "Build", description: "Use when the user says 'implement this'. NOT for planning.", source: "builtin" },
-    { id: "review", name: "Review", description: "Use when the user says 'review this'. NOT for implementing.", source: "builtin" },
-    { id: "explore", name: "Explore", description: "Use when the user says 'explore this'. NOT for editing.", source: "builtin" },
-    { id: "refactor", name: "Refactor", description: "Use when the user says 'clean this up'. NOT for new features.", source: "builtin" },
-  ] as const;
-
-  function messageEvent(
-    seq: number,
-    role: "user" | "assistant",
-    content: string,
-    ts: string,
-  ): SessionEvent {
-    return {
-      seq,
-      type: role === "user" ? "message.user" : "message.assistant",
-      agentId: "agt_scribe",
-      payload: { role, content, agentId: "agt_scribe", ts },
-      ts,
-    };
-  }
-
-  /** Render the panel with ONE persisted turn on a session that optionally
-   * starts with an active task mode (the row the state syncs from). */
-  async function renderModePanel(activeMode?: string): Promise<void> {
-    const projects = await getFixtureProjects().list();
-    customBackend.backend = createFixtureSessions([
-      {
-        session: {
-          id: SESSION_ID,
-          projectId: projects[0].id,
-          agentId: "agt_scribe",
-          mode: "single",
-          status: "completed",
-          title: "Mode probe",
-          createdAt: "2026-09-07T10:00:00Z",
-          updatedAt: "2026-09-07T10:05:00Z",
-          ...(activeMode !== undefined ? { activeMode } : {}),
-        },
-        events: [
-          messageEvent(1, "user", "first question", "2026-09-07T10:00:10Z"),
-          messageEvent(2, "assistant", "first answer", "2026-09-07T10:00:20Z"),
-        ],
-      },
-    ]);
-    renderWithProviders(<AgentChatPanel projectId={projects[0].id} project={projects[0]} />);
-    await screen.findByText("first question", {}, SLOW);
-  }
-
-  /** Deterministically wait for the modes query to have LANDED: open the
-   * pill's menu and await a mode row (the picker renders rows only from the
-   * fetched list), then close it — the composer is free for typing. */
-  async function syncModesLoaded(): Promise<void> {
-    const pill = await screen.findByRole("button", { name: /Task mode/ }, SLOW);
-    fireEvent.click(pill);
-    await screen.findByRole("menuitemradio", { name: /Debug/ }, SLOW);
-    fireEvent.keyDown(document, { key: "Escape" });
-    await waitFor(() => expect(screen.queryByRole("menu", { name: "Task mode" })).toBeNull());
-  }
-
-  /** Type into the composer and send with Enter (the primary path). */
-  async function sendText(text: string): Promise<void> {
-    fireEvent.change(screen.getByLabelText("Message composer"), { target: { value: text } });
-    fireEvent.keyDown(screen.getByLabelText("Message composer"), { key: "Enter" });
-  }
-
-  beforeEach(() => {
-    modesMock.fetchProjectModes.mockReset().mockResolvedValue(BUILTIN_MODES.map((m) => ({ ...m })));
-    modesMock.patchSessionActiveMode.mockReset().mockResolvedValue({ id: SESSION_ID });
-    modesMock.streamSessionMessage.mockReset().mockResolvedValue(undefined);
-    useStreamStore.setState({ bySession: {}, subagentsLive: {} });
-  });
-
-  it("the activeMode state SYNCS from the session row (pill shows the mode's name)", async () => {
-    await renderModePanel("debug");
-    // The session row carries activeMode: "debug" → the pill names it.
-    const pill = await screen.findByRole("button", { name: "Task mode: Debug" }, SLOW);
-    expect(pill.textContent).toContain("Debug");
-    // ...and the pill lives in the LEFT cluster (R77: attach/access/mode on
-    // the left), right after the permission switcher.
-    const toolbar = document.querySelector("[data-composer-toolbar]") as HTMLElement;
-    expect(toolbar.contains(pill)).toBe(true);
-    const left = toolbar.querySelector("[data-composer-left]") as HTMLElement;
-    // Selector components wrap their triggers in positioning divs — resolve
-    // each button's closest direct LEFT-cluster child for the sibling math.
-    const directChild = (btn: HTMLElement): HTMLElement => {
-      let node: HTMLElement | null = btn;
-      while (node !== null && node.parentElement !== left) node = node.parentElement;
-      return node ?? btn;
-    };
-    const children = Array.from(left.children);
-    const pillIdx = children.indexOf(directChild(pill));
-    const accessIdx = children.indexOf(
-      directChild(screen.getByRole("button", { name: "Permission mode: Ask" }) as HTMLElement),
-    );
-    expect(accessIdx).toBe(pillIdx - 1);
-    // ...and the menu Check-marks it once the mode list lands.
-    fireEvent.click(pill);
-    const debugRow = await screen.findByRole("menuitemradio", { name: /Debug/ }, SLOW);
-    expect(debugRow.getAttribute("aria-checked")).toBe("true");
-  });
-
-  it("the picker PATCHes activeMode optimistically (the GUI path — label flips before the round-trip)", async () => {
-    await renderModePanel();
-    await syncModesLoaded();
-
-    fireEvent.click(screen.getByRole("button", { name: /Task mode/ }));
-    fireEvent.click(await screen.findByRole("menuitemradio", { name: /Debug/ }, SLOW));
-
-    await waitFor(
-      () => expect(modesMock.patchSessionActiveMode).toHaveBeenCalledWith(SESSION_ID, "debug"),
-      SLOW,
-    );
-    await waitFor(
-      () => expect(screen.getByRole("button", { name: "Task mode: Debug" })).toBeTruthy(),
-      SLOW,
-    );
-    // No chat turn was started by picking a mode.
-    expect(modesMock.streamSessionMessage).not.toHaveBeenCalled();
-  });
-
-  it("a FAILED task-mode PATCH rolls the pill back + surfaces the error toast", async () => {
-    await renderModePanel();
-    await syncModesLoaded();
-    modesMock.patchSessionActiveMode.mockRejectedValue(new Error("sidecar down"));
-
-    fireEvent.click(screen.getByRole("button", { name: /Task mode/ }));
-    fireEvent.click(await screen.findByRole("menuitemradio", { name: /Debug/ }, SLOW));
-
-    await waitFor(
-      () =>
-        expect(useNotificationStreamStore.getState().lastNotification?.title).toBe(
-          "Task mode change failed",
-        ),
-      SLOW,
-    );
-    await waitFor(
-      () => expect(screen.getByRole("button", { name: "Task mode: Auto" })).toBeTruthy(),
-      SLOW,
-    );
-  });
-
-  it("/mode debug INTERCEPTS the send: PATCH called with 'debug', notice shown, NO message emitted, composer cleared", async () => {
-    await renderModePanel();
-    await syncModesLoaded();
-
-    await sendText("/mode debug");
-
-    await waitFor(
-      () => expect(modesMock.patchSessionActiveMode).toHaveBeenCalledWith(SESSION_ID, "debug"),
-      SLOW,
-    );
-    // The local notice (house voice: what just started riding the prompt).
-    await waitFor(
-      () =>
-        expect(useNotificationStreamStore.getState().lastNotification?.title).toBe(
-          "Task mode set to Debug",
-        ),
-      SLOW,
-    );
-    expect(useNotificationStreamStore.getState().lastNotification?.body).toContain(
-      "posture guide now rides the agent's system prompt",
-    );
-    // NO message emitted: no stream was started, no optimistic echo.
-    expect(modesMock.streamSessionMessage).not.toHaveBeenCalled();
-    expect(useStreamStore.getState().bySession[SESSION_ID]).toBeUndefined();
-    // The optimistic pill flip (the PATCH's optimistic state, not the row).
-    await waitFor(
-      () => expect(screen.getByRole("button", { name: "Task mode: Debug" })).toBeTruthy(),
-      SLOW,
-    );
-    // The composer input is cleared — the slash does not linger.
-    await waitFor(() =>
-      expect((screen.getByLabelText("Message composer") as HTMLTextAreaElement).value).toBe(""),
-    );
-  });
-
-  it("/mode none CLEARS the active mode (PATCH null + cleared notice + pill back to Auto)", async () => {
-    await renderModePanel("debug");
-    await syncModesLoaded();
-    expect(screen.getByRole("button", { name: "Task mode: Debug" })).toBeTruthy();
-
-    await sendText("/mode none");
-
-    await waitFor(
-      () => expect(modesMock.patchSessionActiveMode).toHaveBeenCalledWith(SESSION_ID, null),
-      SLOW,
-    );
-    await waitFor(
-      () =>
-        expect(useNotificationStreamStore.getState().lastNotification?.title).toBe(
-          "Task mode cleared",
-        ),
-      SLOW,
-    );
-    expect(useNotificationStreamStore.getState().lastNotification?.body).toContain(
-      "default posture applies",
-    );
-    await waitFor(
-      () => expect(screen.getByRole("button", { name: "Task mode: Auto" })).toBeTruthy(),
-      SLOW,
-    );
-    expect(modesMock.streamSessionMessage).not.toHaveBeenCalled();
-  });
-
-  it("/mode bogus → notice listing the available ids, NO PATCH, no send", async () => {
-    await renderModePanel();
-    await syncModesLoaded();
-
-    await sendText("/mode bogus");
-
-    await waitFor(
-      () =>
-        expect(useNotificationStreamStore.getState().lastNotification?.title).toBe(
-          "Unknown task mode",
-        ),
-      SLOW,
-    );
-    const body = useNotificationStreamStore.getState().lastNotification?.body ?? "";
-    expect(body).toContain("'bogus' is not a task mode");
-    expect(body).toContain("plan, debug, build, review, explore, refactor");
-    expect(modesMock.patchSessionActiveMode).not.toHaveBeenCalled();
-    expect(modesMock.streamSessionMessage).not.toHaveBeenCalled();
-  });
-
-  it("/mode bare and /mode list → the LIST notice (available ids + active + usage hint)", async () => {
-    await renderModePanel();
-    await syncModesLoaded();
-
-    await sendText("/mode");
-    await waitFor(
-      () =>
-        expect(useNotificationStreamStore.getState().lastNotification?.title).toBe(
-          "Task modes available",
-        ),
-      SLOW,
-    );
-    let body = useNotificationStreamStore.getState().lastNotification?.body ?? "";
-    expect(body).toContain("Available: plan, debug, build, review, explore, refactor");
-    expect(body).toContain("Active: none");
-    expect(body).toContain("/mode <id>");
-    expect(body).toContain("/mode none");
-    expect(modesMock.patchSessionActiveMode).not.toHaveBeenCalled();
-
-    // The explicit list form answers the same notice.
-    await sendText("/mode list");
-    await waitFor(
-      () =>
-        expect(useNotificationStreamStore.getState().lastNotification?.title).toBe(
-          "Task modes available",
-        ),
-      SLOW,
-    );
-    body = useNotificationStreamStore.getState().lastNotification?.body ?? "";
-    expect(body).toContain("Active: none");
-  });
-
-  it("a message that merely STARTS with 'mode' (no slash) is NOT intercepted — the send runs", async () => {
-    await renderModePanel();
-    await syncModesLoaded();
-
-    await sendText("mode change please");
-
-    // The turn started (the real send path — the stream was called with the
-    // text AS a message, not routed to the mode surface).
-    await waitFor(
-      () => expect(modesMock.streamSessionMessage).toHaveBeenCalledWith(
-        SESSION_ID,
-        "mode change please",
-        expect.any(Function),
-        expect.anything(),
-      ),
-      SLOW,
-    );
-    expect(modesMock.patchSessionActiveMode).not.toHaveBeenCalled();
-    expect(useNotificationStreamStore.getState().lastNotification).toBeNull();
-    // Let the turn fully settle (busy clears → Send returns) so no async
-    // continuation races the environment teardown.
-    await waitFor(
-      () => expect(screen.getByRole("button", { name: "Send message" })).toBeTruthy(),
-      SLOW,
-    );
-  });
-
-  it("/mode Debug (the NAME, capitalized) resolves case-insensitively to the id", async () => {
-    await renderModePanel();
-    await syncModesLoaded();
-
-    await sendText("/mode Debug");
-
-    await waitFor(
-      () => expect(modesMock.patchSessionActiveMode).toHaveBeenCalledWith(SESSION_ID, "debug"),
-      SLOW,
-    );
-    expect(modesMock.streamSessionMessage).not.toHaveBeenCalled();
-  });
-});
-
 // ── ROUND-75 (R75): the retry-ladder status card + the enriched error card ──
 describe("AgentChatPanel ROUND-75 retry ladder surfaces", () => {
   const SLOW = { timeout: 5000 };
@@ -1827,9 +1508,7 @@ describe("AgentChatPanel ROUND-78 message queue + honest retry card", () => {
   }
 
   beforeEach(() => {
-    modesMock.fetchProjectModes.mockReset().mockResolvedValue([]);
-    modesMock.patchSessionActiveMode.mockReset().mockResolvedValue({ id: SESSION_ID });
-    modesMock.streamSessionMessage.mockReset().mockResolvedValue(undefined);
+    streamMock.streamSessionMessage.mockReset().mockResolvedValue(undefined);
   });
 
   it("R78-D: Enter while a turn streams POSTs the QUEUE (not the send); the optimistic chip renders and the composer clears", async () => {
@@ -1850,7 +1529,7 @@ describe("AgentChatPanel ROUND-78 message queue + honest retry card", () => {
       () => expect(queueMock.queueSessionMessage).toHaveBeenCalledWith(SESSION_ID, { content: "also add tests" }),
       SLOW,
     );
-    expect(modesMock.streamSessionMessage).not.toHaveBeenCalled();
+    expect(streamMock.streamSessionMessage).not.toHaveBeenCalled();
     // The optimistic chip (seq 41 — the mocked POST return) is live-rendered.
     const chip = await screen.findByTestId("queued-chip", {}, SLOW);
     expect(chip.getAttribute("data-queued-seq")).toBe("41");
@@ -1892,7 +1571,7 @@ describe("AgentChatPanel ROUND-78 message queue + honest retry card", () => {
     // The queue POST was attempted, then the send fell through to the NORMAL
     // stream path with the SAME text (no interrupted message, no lost send).
     await waitFor(
-      () => expect(modesMock.streamSessionMessage).toHaveBeenCalledWith(
+      () => expect(streamMock.streamSessionMessage).toHaveBeenCalledWith(
         SESSION_ID,
         "you done? then take this",
         expect.any(Function),
@@ -1936,7 +1615,7 @@ describe("AgentChatPanel ROUND-78 message queue + honest retry card", () => {
     fireEvent.click(screen.getByRole("button", { name: "Send the queued message now" }));
     await waitFor(() => expect(queueMock.dequeueSessionMessage).toHaveBeenCalledWith(SESSION_ID, 3), SLOW);
     await waitFor(
-      () => expect(modesMock.streamSessionMessage).toHaveBeenCalledWith(
+      () => expect(streamMock.streamSessionMessage).toHaveBeenCalledWith(
         SESSION_ID,
         "and also lint everything",
         expect.any(Function),

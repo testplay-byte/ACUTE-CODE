@@ -66,7 +66,7 @@ export const PROMPT_REGISTRY: readonly PromptSectionSpec[] = Object.freeze([
   },
   {
     id: "permission-mode",
-    description: "## PERMISSION MODE — the active posture (only when mode is full/plan/editor; ask stays silent)",
+    description: "## OPERATING MODE — the active unified mode (only when mode is full/plan; ask stays silent; R81)",
     dynamic: true, // permissionMode
     bucket: "identity",
   },
@@ -137,13 +137,13 @@ export const PROMPT_REGISTRY: readonly PromptSectionSpec[] = Object.freeze([
   // is ever composed; everything else stays progressive disclosure).
   {
     id: "task-modes",
-    description: "## TASK MODES (posture modules — switch_mode) — the available-mode index + the per-turn mode signal line (R73)",
+    description: "## OPERATING POSTURES — the self-selectable posture index + the per-turn mode signal line (R73/R81)",
     dynamic: true, // gated on ctx.taskModes
     bucket: "identity",
   },
   {
     id: "active-mode",
-    description: "## ACTIVE TASK MODE — the active mode's deep posture module (only while a mode is active; R73)",
+    description: "## ACTIVE POSTURE — the active mode's deep posture module (only while a posture is active; R73/R81)",
     dynamic: true, // gated on ctx.activeTaskMode
     bucket: "identity",
   },

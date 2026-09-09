@@ -1393,7 +1393,7 @@ describe("patchSessionPermissions (ROUND-50 R50-c1)", () => {
       "fetch",
       vi.fn().mockResolvedValue(
         jsonResponse(400, {
-          error: { code: "VALIDATION", message: "mode must be one of full|ask|plan|editor", details: { field: "body.mode" } },
+          error: { code: "VALIDATION", message: "mode must be one of full|ask|plan", details: { field: "body.mode" } },
         }),
       ),
     );

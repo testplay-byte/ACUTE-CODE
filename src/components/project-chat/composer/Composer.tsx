@@ -15,7 +15,6 @@ import {
   readAttachmentFiles,
   uploadAttachmentBytes,
   type Agent,
-  type TaskModeInfo,
 } from "../../../lib/api";
 import { pushLocalToast } from "../../../hooks/use-notifications";
 import { SEMANTIC_COLORS } from "../../../lib/semantics";
@@ -27,10 +26,6 @@ import { AttachmentChips } from "./AttachmentChips";
 import { ContextDonut } from "./ContextDonut";
 import { ModeSwitcher } from "./ModeSwitcher";
 import { ModelSelector } from "./ModelSelector";
-// ROUND-73 (R73-c): the task-mode picker — the permission switcher's sibling
-// (access vs posture). Pure prop-threading: the PANEL owns the modes query,
-// the activeMode state, and the PATCH round-trip.
-import { TaskModePicker } from "./TaskModePicker";
 import { ThinkingLevelButton } from "./ThinkingLevelButton";
 import {
   attachmentFromRead,
@@ -100,12 +95,6 @@ export function Composer({
   showContinue = false,
   permissionMode,
   onModeChange,
-  // ROUND-73 (R73-c): the task-mode picker's panel-owned state (threaded
-  // exactly like the permission mode — the picker only reports the choice).
-  taskModes = [],
-  activeTaskMode = null,
-  taskModeDisabled = true,
-  onTaskModeChange,
   thinkingLevel,
   onThinkingLevelChange,
   modelOverride,
@@ -142,16 +131,6 @@ export function Composer({
   showContinue?: boolean;
   permissionMode: PermissionMode;
   onModeChange: (mode: PermissionMode) => void;
-  /** ROUND-73 (R73-c): GET /projects/:id/modes rows (empty until loaded). */
-  taskModes?: TaskModeInfo[];
-  /** The session's active task mode id, or null (Auto). */
-  activeTaskMode?: string | null;
-  /** Disabled while demo mode / a turn runs / the PATCH is in flight — the
-   * panel computes it (ModeSwitcher's own !liveMode gate is not enough:
-   * task modes apply at TURN time, so mid-turn switches are held back). */
-  taskModeDisabled?: boolean;
-  /** Reports the picked mode id (null = clear). The panel PATCHes. */
-  onTaskModeChange?: (mode: string | null) => void | Promise<void>;
   thinkingLevel: ThinkingLevel;
   onThinkingLevelChange: (level: ThinkingLevel) => void;
   modelOverride: ModelOverride | null;
@@ -594,22 +573,13 @@ export function Composer({
         {/* R78: the WRAPPING area — selectors only; the actions are a
             sibling pinned right by the toolbar's justify-between. */}
         <div className="flex min-w-0 flex-1 flex-wrap items-center gap-1">
-        {/* R77: the LEFT cluster — attach, access level, task mode (the
-            owner's left-side trio). */}
+        {/* R77/R81: the LEFT cluster — attach + THE unified operating-mode
+            picker (the owner's left-side pair; the R73 task-mode picker was
+            folded into the single selector — postures are agent-selected
+            via switch_mode now). */}
         <div className="flex items-center gap-1 min-w-0" data-composer-left>
           <AddContextButton projectId={projectId} disabled={!liveMode} onAttachPaths={attachPaths} />
           <ModeSwitcher mode={permissionMode} disabled={!liveMode} onChange={onModeChange} />
-          {/* ROUND-73 (R73-c): the task-mode pill — the behavior/posture
-              selector, right after the access-level switcher (the owner's
-              stated order). */}
-          {onTaskModeChange !== undefined ? (
-            <TaskModePicker
-              modes={taskModes}
-              activeMode={activeTaskMode}
-              disabled={taskModeDisabled}
-              onChange={(m) => void onTaskModeChange(m)}
-            />
-          ) : null}
         </div>
         {/* R77: the right-side SELECTORS — context donut, model, reasoning
             (ml-auto pins them right on their line; shrink-0 keeps the pills

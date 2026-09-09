@@ -55,7 +55,7 @@ containment-enforced) ·
 `POST /projects/:id/terminal` `{command}` → `{stdout, stderr, exitCode, ms}`
 (synchronous run, 60s timeout / 64 KB combined cap; R44 adds a streaming
 variant — see ROUND-44 additions) ·
-`GET /projects/:id/modes` → `{modes:[{id,name,description,source,readOnly}]}`
+`GET /projects/:id/modes` → `{modes:[{id,name,description,source,readOnly}]}` (R81: `readOnly` is always `false` — postures are non-enforcing; the field is kept for wire compat)
 (**R73**: the task-mode index for the session's project — the six builtins
 + the project's `.acute/agents/*.md` customs, METADATA ONLY; see the
 ROUND-73 additions. **R75**: `readOnly` is true for plan/review/explore —
@@ -66,11 +66,11 @@ duplicating the set).
 
 | Route | Contract |
 |---|---|
-| `POST /sessions` | `{mode:"single", agentId (required, validated), projectId?, title?}` → `202` (queued). **ROUND-50: rows carry `permissionMode`** (`full\|ask\|plan\|editor`, default `ask`; sub-agent children copy the parent's mode at delegation) |
+| `POST /sessions` | `{mode:"single", agentId (required, validated), projectId?, title?}` → `202` (queued). **ROUND-50/R81: rows carry `permissionMode`** (`full\|ask\|plan`, default `ask`; the retired `editor` reads as `ask`; sub-agent children copy the parent's mode at delegation) |
 | `GET /sessions?limit=&offset=` | newest-first + total (NO projectId filter — client-side) |
-| `GET /sessions/:id` | session + `events[]` + `lastSeq` (events embedded; no backfill route). **R73: rows carry `activeMode`** (the active TASK MODE id or `null`; set/cleared via PATCH below or the `switch_mode` tool; enforcement at turn time — see ROUND-73 additions) |
-| `PATCH /sessions/:id` | **round-33 (rename) · R73 (mode switch)** — body `{title?, activeMode?}`, each independently optional: `title` (string ≤200) renames; `activeMode` is a mode id (resolved against the session's project — projectless resolves builtins only; unknown → `400 VALIDATION` with `availableModes` in details, validated BEFORE any write), `null` clears, absent = untouched. `200` the bare updated session row (NOT the GET shape — no `events`/`lastSeq`). `404` unknown. |
-| `PATCH /sessions/:id/permissions` | **ROUND-50** — `{mode: "full"\|"ask"\|"plan"\|"editor"}` → `200` the updated session + `events[]` + `lastSeq` (same shape as GET). `400 VALIDATION body.mode` otherwise, `404` unknown. Enforcement: `sessionToolAllowList` (runtime.ts — shared with the context route): *plan* intersects tools to the 14-tool `PLAN_MODE_TOOLS` read-only/research set (canonical home `agents/mode-policy.ts` since R75 — runtime.ts re-exports); *editor* strips `run_command`; *full* auto-approves every ask-tier gate EXCEPT the denylist-supreme (sudo/rm -rf/… never bypassed) while agent allowlists stay authoritative; the system prompt gains a PERMISSION MODE section. **R75: task modes now enforce too** — the active task mode's policy intersects AFTER the permission mode (plan/review/explore read-only, debug keeps full tools with run_command demoted to the AUTO tier, children inherit the parent's activeMode at delegation). |
+| `GET /sessions/:id` | session + `events[]` + `lastSeq` (events embedded; no backfill route). **R73/R81: rows carry `activeMode`** (the active POSTURE id or `null`; set/cleared via PATCH below or the agent's `switch_mode` tool — non-enforcing guidance since R81; see ROUND-73 additions) |
+| `PATCH /sessions/:id` | **round-33 (rename) · R73 (mode switch) · R81 (posture pointer)** — body `{title?, activeMode?}`, each independently optional: `title` (string ≤200) renames; `activeMode` is a POSTURE id (resolved against the session's project — projectless resolves builtins only; unknown → `400 VALIDATION` with `availableModes` in details, validated BEFORE any write), `null` clears, absent = untouched. `200` the bare updated session row (NOT the GET shape — no `events`/`lastSeq`). `404` unknown. R81: the posture is NON-ENFORCING guidance (switch_mode's REST surface — no shipped UI calls it); enforcement lives in the operating mode. |
+| `PATCH /sessions/:id/permissions` | **ROUND-50 · R81 (the unified operating-mode picker)** — `{mode: "full"\|"ask"\|"plan"}` → `200` the updated session + `events[]` + `lastSeq` (same shape as GET). `400 VALIDATION body.mode` otherwise — **R81: `editor` is retired** (the 400 carries a `details.hint` naming the mapping: "mode 'editor' was removed in R81 — use 'ask'…"; migration 0029 + a read-time remap map existing `editor` rows to `ask`, fail-closed). `404` unknown. Enforcement (R81, ADR-0029 — the SOLE enforcement tier): `sessionToolAllowList` (runtime.ts — shared with the context route): *plan* intersects tools to the 19-tool `PLAN_MODE_TOOLS` read-only/research set (canonical home `agents/mode-policy.ts`; includes the git inspectors, `analyze_image`, `job_status` — the retired R75 review/explore extras); *full* auto-approves every ask-tier gate EXCEPT the denylist-supreme (sudo/rm -rf/… never bypassed) while agent allowlists stay authoritative; *ask* keeps the interactive approval gates; the system prompt gains an OPERATING MODE section (non-ask modes only). The R75 task-mode policy tier is RETIRED — postures no longer narrow toolsets. |
 | `GET /sessions/:id/context?model=` | **ROUND-50 (the composer's context donut)** — `{model, providerId, contextWindow, usedTokens, breakdown:{systemPrompt, systemTools, memory, messages, meta, mcpTools:0}, cache:{inputTokens, cachedInputTokens, hitRate\|null}, sessionTotals:{inputTokens, outputTokens, requests, costUsd}}`. Window = models row → catalog → 200k. Breakdown via `buildSystemPromptSections` + estimateTokens (tool schemas ≈350 tokens/tool, documented approximation); MCP is an honest 0 (no MCP system). Cache from REAL `usage_events.cached_input_tokens` (migration 0020 — captured from the provider's `prompt_tokens_details.cached_tokens` on both turn paths). **ROUND-51: also returns `usage:{main, subagents, combined}` (each `{inputTokens, outputTokens, requests, costUsd}`)** — main = the session's own usage ledger (identical to the flat sessionTotals), subagents = the SUM over the DIRECT children's usage_events (`parent_session_id = :id`, listSubAgents parity, grandchildren excluded), combined = main + subagents. Flat fields byte-identical (additive shape). |
 | `POST /sessions/:id/messages` | `{content, model?}` — **synchronous whole turn** → `200 {assistantMessage:{seq,role,agentId,content,ts}, usage}`; 404/409 (terminal/unconfigured/no key)/502 provider. **ROUND-50: also accepts `thinkingLevel?: "default"\|"low"\|"high"\|"max"` (400 otherwise; injected as `reasoning.effort` on chat-completions bodies) and `attachments?: [{name, path?, size?, text?}]` (≤20, name ≤200 chars, text capped 128 KB server-side; persisted on the `message.user` payload and rendered into model-facing history as `--- attached file: … ---` blocks)** |
 | `POST /sessions/:id/messages/stream` | **SSE (the UI's primary path)** — same validation (incl. the ROUND-50 `thinkingLevel`/`attachments` fields); `text/event-stream` frames: `{type:"text-delta",delta}` · `{type:"thinking-delta",delta}` · `{type:"tool-call",toolName,argsSummary}` · `{type:"tool-result",toolName,argsSummary,ok}` · `{type:"finish",usage[,cachedInputTokens]}` · `subagent-status`/`subagent-event` envelopes (children stream their own live deltas — ROUND-50) · terminal `{type:"done",assistantMessage,usage}` or `{type:"error",status,code,message}`. **R42: a client disconnect does NOT abort the turn** — it completes in the background (events persist; the completion notification fires + Web Push delivers it to the closed window's service worker). A deliberate stop is `POST /sessions/:id/stop`. |
@@ -2211,3 +2211,26 @@ No behavior changed in R80.5 — this section only closes the documentation gap:
   R79 retry of a failed child from where it stopped (404 unknown session/child or
   child not under :id; 409 child already running; 502 PROVIDER_ERROR on failure —
   orchestrator `retryChild`).
+
+## ROUND-81 additions (the unified operating modes)
+
+ADR-0029. The value-set changes (all fail-closed, all migrated by
+`0029_unified_modes.sql`):
+
+- `PATCH /sessions/:id/permissions` — `{mode: "full"|"ask"|"plan"}` (editor
+  retired: 400 + `details.hint` naming the ask mapping; legacy rows remapped
+  at read time and durably by migration 0029).
+- `GET /projects/:id/modes` — unchanged shape; `readOnly` is now always
+  `false` (postures are non-enforcing guidance; kept for wire compat).
+- `PATCH /sessions/:id {activeMode}` — unchanged; semantics are now "set the
+  POSTURE pointer" (the switch_mode REST surface; no shipped UI consumer).
+- Session rows: `permissionMode` 3-valued; `activeMode` = the posture
+  pointer (kept).
+- New migration `0029_unified_modes.sql`: `editor`→`ask`;
+  `active_mode IN (plan/review/explore)`→`permission_mode='plan'` (the R75
+  read-only guarantee preserved); `active_mode` kept. Idempotent, audited,
+  pinned by `tests/migration-0029.test.ts`.
+- Enforcement is now solely the operating mode: `PLAN_MODE_TOOLS` grew to 19
+  tools (the retired review/explore read-only extras: `git_status`,
+  `git_diff`, `git_log`, `analyze_image`, `job_status`); the R75 task-mode
+  policy tier, debug command tier, and switch_mode owner-pin are removed.

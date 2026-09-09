@@ -208,10 +208,16 @@
       "title": "R80 — the reliability round",
       "date": "2026-09-09",
       "summary": "The owner's four-clause field report shipped as one round: the silent chat terminations fixed at three root causes (the SSE clean-close truncation guard — a provider dropping the stream mid-generation now throws the honest 'connection closed mid-response' error and the retry ladder engages; the context/request guard stops now persist real turn.errors with CONTEXT_LIMIT/REQUEST_LIMIT codes instead of ending ok:true; a route crash now persists and notifies instead of vanishing on reload), the raw error messages shown (every error-detail cap raised — 4000/600/2000 — with key scrubbing unchanged and the nvapi- prefix joined), the retry ladder made customizable (maxAttempts, per-rung waitMinutes, providerTimeoutSeconds — validated, resolved defensively per turn, edited from the Settings General card, the defaults byte-identical to the R75 behavior), and the NVIDIA NIM provider supported (seeded, key-wired through the env injection + dev key file, live-verified reachable + catalog + key auth). Verified 2772/2772 in 149 files + live on the real keys (a real OpenRouter streamed turn end-to-end, the retry PUT round-trips, the NVIDIA connection test)."
+    },
+    {
+      "id": 41,
+      "title": "R81 — the unified operating modes",
+      "date": "2026-09-09",
+      "summary": "ONE picker of THREE modes (Full Access / Ask / Plan) replaces the task-mode picker + access-level switcher (ADR-0029). Postures became agent self-selection via switch_mode; enforcement lives solely in the operating mode (PLAN grew to the 19-tool read-only set); 'editor' retired fail-closed (migration 0029 preserves every historical guarantee). TaskModePicker/`/mode` deleted from the UI; live battery + browser + VLM verified."
     }
   ],
   "quality": {
-    "ci": "success — v0.79.0 released (round 80 close-out): push 4a9828e → CI run 34317366484 SUCCESS on the FIRST try (verify: lint, typechecks, the 2772/2772 root suite across 149 files, cargo check, license audit 134 deps CLEAN). Tag v0.79.0 → Release run 34318331510 SUCCESS (launcher-kit + desktop-installer + github-release) → release 385274188 PUBLISHED with both assets (ACUTE-CODE_0.79.0_x64-setup.exe 37,418,694 B + acute-launcher-kit-v0.79.0.zip 94,028 B). The DASHBOARD was truth-synced the same hour (commit f69a05c — version 0.79.0, suites 964/1796/12/10, the real ciNote, the R80 cards + milestone 61; Pages serving 0.79.0 verified with HTTP 200). The round was verified live on the real keys before the push: a real OpenRouter streamed turn end-to-end (\"R80 LIVE TURN OK\"), the retry GET/PUT round-trips with honest 400s, and the NVIDIA NIM endpoint + catalog + key auth (the account's model functions are EOL'd server-side — the raw bodies show verbatim).",
+    "ci": "PENDING — R81 push not yet made (this field is synced from the Actions API at close-out per the documented convention)",
     "suites": [
       {
         "name": "frontend",
@@ -244,44 +250,30 @@
   ],
   "plan": {
     "current": {
-      "title": "R80 — the reliability round (silent stops + raw errors + retry customization + NVIDIA)",
-      "detail": "The owner's four-clause field report shipped as one round: (1) SILENT STOPS fixed at three root causes — the SSE clean-close truncation guard (chat.ts: zero finish-step parts + content deltas = the honest 'connection closed mid-response' throw, network-classed so the retry ladder engages; the partial text kept), the context/request guard stops (runtime.ts: CONTEXT_LIMIT/REQUEST_LIMIT codes, persisted turn.error + usage + 502 + the session back to queued — never the pre-R80 ok:true), and the route-crash persistence (server.ts: best-effort persistTurnError + task_failed, crash-guarded); (2) RAW ERROR MESSAGES — every error-detail cap raised (providerErrorDetail 500→4000, userMessage 240→600, connection-test scrub 500/160→4000/2000) with the key-scrub discipline unchanged and nvapi- joined the redaction surfaces; (3) RETRY CUSTOMIZATION — maxAttempts (2–10), waitMinutes (per-rung waits, 0–1440 each), providerTimeoutSeconds (60–3600) on RetrySettings, validated at route + storage with the resolver's exact bounds, resolved defensively per turn (resolveRetrySchedule — defaults byte-identical to the R75 ladder), edited from the Settings General card (stepper + per-rung inputs + timeout + Reset), the task_failed schedule line built from the real settings; (4) NVIDIA NIM — the seeded nvidia provider (integrate.api.nvidia.com/v1, OpenAI-compatible), ACUTE_PROVIDER_NVIDIA env injection (keys.rs + dev.mjs key file), the Settings preset, live-verified reachable + catalog + key auth (the account's model functions are EOL'd server-side — the raw bodies show verbatim). Verified: 2772/2772 in 149 files (agent-core 1796 incl. the four new r80 suites' 27 tests; frontend 964; e2e 12), lint + typechecks clean, and live on the real keys — a real OpenRouter streamed turn end-to-end ('R80 LIVE TURN OK'), the retry GET/PUT round-trips with honest 400s, the NVIDIA endpoint + 81-model catalog work."
+      "title": "R81 — the unified operating modes (one picker, three modes)",
+      "detail": "The owner's directive — combine the six-builtin task-mode picker and the four-value access-level switcher into ONE selector of exactly three modes — shipped as ADR-0029. Full Access (all tools, zero asks, the agent decides how to work and switches postures itself), Ask (default; full tools, gates before important commands), Plan (read-only — plan/read/research, no edits). Task modes became NON-ENFORCING agent self-selected postures (switch_mode is the primary path; the six bodies and .acute/agents customs survive with 'Discipline, not permission' prose); enforcement lives solely in the operating mode (PLAN_MODE_TOOLS grew to 19 tools with the retired review/explore read-only extras). 'editor' retired fail-closed (migration 0029: editor→ask; read-only R75 postures→permission plan — the guarantee preserved); PATCH /permissions rejects editor with an honest 400 hint. Frontend: TaskModePicker + /mode slash + the modes query deleted; the composer's left cluster is attach + THE unified picker (AgentChatPanel 2932→2743 lines). Verified: 2751 root suite (12 skipped), e2e 12/12, and a LIVE battery on the real OpenRouter — a PLAN turn's write_file attempt cannot execute (no file, honest text), a FULL turn writes, an ASK turn gates commands, switch_mode persists a posture; browser + VLM pass on the 3-option menu.",
+      "status": "delivered"
     },
     "upcoming": [
       {
-        "phase": "Modularity decision (R80.5 audit delivered)",
-        "status": "awaiting-verdict",
-        "note": "Docs-only analysis round: docs/architecture/MODULARITY-ASSESSMENT.md (verdict + 4-wave roadmap: server.ts route split, turn-loop harness, ToolDeps cycle break = Wave 2; api.ts split + frontend event-handler registry = Wave 3) + docs/runbooks/MODULE-BOUNDARIES.md (the low-context editing contract). Owner scopes R81 from this."
+        "phase": "Wave 2 of the modularity roadmap (the R80.5 audit)",
+        "status": "next",
+        "note": "Split server.ts (5,086 lines) into routes/<domain>.ts modules with ctx = {db, keyring, chat, ring}; extract the shared turn-loop harness (retry ladder / loop guard / overflow recovery — ~1,700 duplicated lines); break the 25-file agents↔tools SCC at the delegation edge (inject the orchestrator via ToolDeps)."
       },
       {
-        "phase": "Reliability hardening",
-        "status": "shipped",
-        "note": "R80 shipped the silent-stop fixes (truncation guard, guard stops, route-crash persistence), raw error surfaces, retry customization, and NVIDIA NIM support"
-      },
-      {
-        "phase": "Owner re-test of v0.79.0 on Windows (ACUTE.bat)",
-        "status": "awaiting-verdict",
-        "note": "The R80 live gates: the silent-stop fixes (real multi-step turns ending cleanly or erroring honestly), the raw error cards, the Settings retry customization card, the NVIDIA provider preset"
-      },
-      {
-        "phase": "Orchestration deepening",
-        "status": "shipped",
-        "note": "R79 shipped the addressable-delegation tier (delegate_task task_id/background/resume — ADR-0028): the R71 sub-agent discipline is complete; further orchestration deepening is owner-gated"
-      },
-      {
-        "phase": "R81 feature queue",
-        "status": "planned",
-        "note": "External plugin ctx enrichment (cline's appendContext seam), the lessons-ledger affordance as the reminder injector's third consumer, ratings-driven prompt tuning, the optional v0.68.0 backfill tag"
-      },
-      {
-        "phase": "Automation pillar",
-        "status": "planned",
-        "note": "Workflows, scheduling, visual canvas — n8n-class, additive on the agent runtime (attach points mapped in MODULARITY-ASSESSMENT.md §11)"
-      },
-      {
-        "phase": "Installer code-signing",
+        "phase": "Models & providers hardening",
         "status": "queued",
-        "note": "The standing distribution item"
+        "note": "The owner's field report: custom-provider models route through OpenRouter (providerId never rides the send wire — runtime resolves from the agent row only; the fix threads body.providerId through both send routes into prepareTurn); NVIDIA second-class gaps; a per-model TEST button (responds + response-is-reasonable); capability toggles in the model edit dialog (vision/audio/video/tools tri-state)."
+      },
+      {
+        "phase": "Honest token/context metering",
+        "status": "queued",
+        "note": "The owner: 'the context, the token count — highly misleading.' The donut shows an estimate as fact while real per-call usage is persisted but unsurfaced; plan per agent-ctx/research/token-counting-robustness.md (actual block from provider stats + honest estimator labels + one budget + truth hygiene)."
+      },
+      {
+        "phase": "Standing R81-queue items",
+        "status": "queued",
+        "note": "External plugin ctx enrichment (cline's appendContext seam), the lessons-ledger affordance as the reminder injector's third consumer, ratings-driven prompt tuning, the optional v0.68.0 backfill tag, edit-linting, installer code-signing, the Files-tab polish, agent web-app-testing tools."
       }
     ],
     "principles": [
@@ -290,5 +282,5 @@
       "Quality over speed — every round verified before push"
     ]
   },
-  "round": 80
+  "round": 81
 }

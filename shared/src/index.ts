@@ -24,20 +24,26 @@ export type ToolPermission = "auto" | "confirm" | "blocked";
 export type MemoryPolicy = "none" | "on-start" | "every-turn";
 
 /**
- * ROUND-50 (R50-c1, the composer's permission-mode switcher): the session's
- * standing permission posture. Enforced in agent-core's prepareTurn (tool
- * set) and the approvals engine (ask-tier gates):
- * - "full":  all tools; every ASK-tier gate auto-approves (denylist-supreme
- *            refusals — sudo, rm -rf, … — are NEVER bypassed).
- * - "ask":   today's behavior (default) — ask-tier gates wait on the owner.
- * - "plan":  read-only/research tools only (no file writes, no commands).
- * - "editor": file tools stay (auto-approved as today), but run_command is
- *            removed from the tool set entirely.
+ * ROUND-81 (R81, the owner-directed unified mode picker): the session's
+ * OPERATING MODE — one selector replacing the old four-value permission
+ * switcher AND the six-builtin task-mode picker. Exactly three values:
+ * - "full":  FULL ACCESS — all tools, zero approval prompts (every ASK-tier
+ *            gate auto-approves; denylist-supreme refusals — sudo, rm -rf, … —
+ *            are NEVER bypassed). The agent decides autonomously how to work
+ *            (research / plan / build / debug / edit) and switches postures
+ *            via switch_mode as the task's shape changes.
+ * - "ask":   ASK (default) — full tool access, but ask-tier gates wait on
+ *            the owner before important commands/changes.
+ * - "plan":  PLAN — read-only/research tools only (no file writes, no
+ *            commands). The agent can plan, read, and research but cannot
+ *            edit the project.
+ * R81 migration: the old "editor" value maps to "ask" (fail-closed — editor
+ * had no terminal; ask is the only mode that still gates commands).
  */
-export type PermissionMode = "full" | "ask" | "plan" | "editor";
+export type PermissionMode = "full" | "ask" | "plan";
 
-/** The 4 accepted permission-mode values (validation source of truth). */
-export const PERMISSION_MODES: readonly PermissionMode[] = ["full", "ask", "plan", "editor"];
+/** The 3 accepted operating-mode values (validation source of truth). */
+export const PERMISSION_MODES: readonly PermissionMode[] = ["full", "ask", "plan"];
 
 /**
  * ROUND-50 (R50-c1, the composer's thinking-level selector): per-SEND

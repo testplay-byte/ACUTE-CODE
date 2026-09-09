@@ -427,7 +427,7 @@ describe("Composer: toolbar inside the box (owner spec B)", () => {
     // thinking + send. (The box is one element; all buttons live within it.)
     for (const label of [
       "Add context",
-      "Permission mode: Ask",
+      "Operating mode: Ask",
       "Context window usage",
       "Choose model",
       "Thinking level: Default",
@@ -488,8 +488,9 @@ describe("Composer: toolbar inside the box (owner spec B)", () => {
       (c) => c.getAttribute("aria-hidden") === "true",
     );
     expect(spacers).toHaveLength(0);
-    // LEFT cluster order: attach, access, task mode (the owner's left
-    // trio, the R75 order preserved inside the group).
+    // LEFT cluster order (R81): attach, THE unified operating-mode picker —
+    // the R73 task-mode pill was folded into the single selector (postures
+    // are agent-selected via switch_mode now).
     const orderIn = (host: HTMLElement, name: string | RegExp): number => {
       const btn = screen.getByRole("button", { name }) as HTMLElement;
       let node: HTMLElement | null = btn;
@@ -498,11 +499,10 @@ describe("Composer: toolbar inside the box (owner spec B)", () => {
       return kids.indexOf(node ?? btn);
     };
     const attach = orderIn(left, "Add context");
-    const access = orderIn(left, "Permission mode: Ask");
-    const mode = orderIn(left, /Task mode/);
+    const access = orderIn(left, "Operating mode: Ask");
     expect(attach).toBeGreaterThanOrEqual(0);
     expect(attach).toBeLessThan(access);
-    expect(access).toBeLessThan(mode);
+    expect(left.textContent).not.toContain("Task mode");
     // SELECTORS order (the old right cluster, minus the action button):
     // context donut, model, reasoning.
     const context = orderIn(right, "Context window usage");
@@ -1045,31 +1045,32 @@ describe("Composer: permission mode switcher (owner spec D)", () => {
     await renderPanelWithConversation();
     expect(await screen.findByText("first question", {}, { timeout: 5000 })).toBeTruthy();
 
-    const btn = screen.getByRole("button", { name: "Permission mode: Ask" });
+    const btn = screen.getByRole("button", { name: "Operating mode: Ask" });
     expect(btn.textContent).toContain("Ask");
 
     fireEvent.click(btn);
-    const menu = await screen.findByRole("menu", { name: "Permission mode" });
+    const menu = await screen.findByRole("menu", { name: "Operating mode" });
     // R75 (owner: descriptions "should not be shown by default; only on
-    // hover"): the menu lists the four mode NAMES; the one-line descriptions
+    // hover") / R81: the menu lists the THREE operating-mode NAMES (the
+    // unified picker — "Editor" was retired); the one-line descriptions
     // ride each row's native title tooltip.
     expect(menu.textContent).toContain("Full Access");
     expect(menu.textContent).toContain("Ask");
     expect(menu.textContent).toContain("Plan");
-    expect(menu.textContent).toContain("Editor");
-    expect(menu.textContent).not.toContain("All tools auto-approved");
+    expect(menu.textContent).not.toContain("Editor");
+    expect(menu.textContent).not.toContain("no permission asks");
     const rows = menu.querySelectorAll('[role="menuitemradio"]');
+    expect(rows).toHaveLength(3);
     const titles = Array.from(rows).map((r) => r.getAttribute("title"));
-    expect(titles).toContain("All tools auto-approved. No permission asks.");
-    expect(titles).toContain("Asks before commands and external sites.");
-    expect(titles).toContain("Read-only. Research and plan, no edits.");
-    expect(titles).toContain("Edits files freely. No terminal. Deletes still ask.");
+    expect(titles).toContain("All tools, no permission asks — the agent decides how to work (research, plan, build, debug) and switches postures itself.");
+    expect(titles).toContain("Full tools; asks before important commands and changes.");
+    expect(titles).toContain("Read-only — research and plan, no edits or commands.");
 
     fireEvent.click(screen.getByRole("menuitemradio", { name: /Plan/ }));
 
     await waitFor(() => expect(patchSessionPermissions).toHaveBeenCalledWith(SESSION_ID, "plan"));
     await waitFor(() =>
-      expect(screen.getByRole("button", { name: "Permission mode: Plan" }).textContent).toContain("Plan"),
+      expect(screen.getByRole("button", { name: "Operating mode: Plan" }).textContent).toContain("Plan"),
     );
   });
 
@@ -1079,10 +1080,10 @@ describe("Composer: permission mode switcher (owner spec D)", () => {
 
     // The PATCH never resolves: the label must ALREADY show Plan.
     vi.mocked(patchSessionPermissions).mockImplementation(() => new Promise(() => {}));
-    fireEvent.click(screen.getByRole("button", { name: "Permission mode: Ask" }));
+    fireEvent.click(screen.getByRole("button", { name: "Operating mode: Ask" }));
     fireEvent.click(await screen.findByRole("menuitemradio", { name: /Plan/ }));
     await waitFor(() =>
-      expect(screen.getByRole("button", { name: "Permission mode: Plan" })).toBeTruthy(),
+      expect(screen.getByRole("button", { name: "Operating mode: Plan" })).toBeTruthy(),
     );
   });
 
@@ -1091,14 +1092,14 @@ describe("Composer: permission mode switcher (owner spec D)", () => {
     expect(await screen.findByText("first question", {}, { timeout: 5000 })).toBeTruthy();
 
     vi.mocked(patchSessionPermissions).mockRejectedValue(new Error("sidecar down"));
-    fireEvent.click(screen.getByRole("button", { name: "Permission mode: Ask" }));
+    fireEvent.click(screen.getByRole("button", { name: "Operating mode: Ask" }));
     fireEvent.click(await screen.findByRole("menuitemradio", { name: /Plan/ }));
 
     await waitFor(() =>
       expect(useNotificationStreamStore.getState().lastNotification?.title).toBe("Mode change failed"),
     );
     await waitFor(() =>
-      expect(screen.getByRole("button", { name: "Permission mode: Ask" })).toBeTruthy(),
+      expect(screen.getByRole("button", { name: "Operating mode: Ask" })).toBeTruthy(),
     );
   });
 
@@ -1112,17 +1113,17 @@ describe("Composer: permission mode switcher (owner spec D)", () => {
           agentId: "agt_scribe",
           mode: "single",
           status: "completed",
-          title: "Editor-mode session",
+          title: "Plan-mode session",
           createdAt: "2026-08-26T10:00:00Z",
           updatedAt: "2026-08-26T10:05:00Z",
-          permissionMode: "editor",
+          permissionMode: "plan",
         },
         events: [messageEvent(1, "user", "hello", "2026-08-26T10:00:10Z")],
       },
     ]);
     renderWithProviders(<AgentChatPanel projectId={projects[0].id} project={projects[0]} />);
     await waitFor(() =>
-      expect(screen.getByRole("button", { name: "Permission mode: Editor" })).toBeTruthy(),
+      expect(screen.getByRole("button", { name: "Operating mode: Plan" })).toBeTruthy(),
     );
   });
 });
