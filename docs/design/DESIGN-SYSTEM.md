@@ -1,4 +1,4 @@
-<!-- last-reviewed: 2026-09-08 round-79 -->
+<!-- last-reviewed: 2026-09-09 round-80 -->
 # ACUTE-CODE Design System
 
 **Why this document exists (owner direction, round-16/2026-08-23):** "the UI
@@ -82,12 +82,18 @@ a slot here.
   excerpt + "Show full error" toggle expanding the complete scrubbed text
   in a scrollable mono block (the R77 TurnErrorCard treatment; the class
   chip is the one-glance summary, the API's words are the evidence — never
-  paraphrase the provider into the class line))
+  paraphrase the provider into the class line); R80: the attempt count and
+  the schedule are the RESOLVED settings (maxAttempts 2–10 configurable —
+  the dot-ladder and every "attempt N/M" line follow the configured
+  schedule, never a hardcoded six))
   above the work, cleared by the first content frame; terminal errors show
   `TurnErrorCard` (role=alert) with the error-class chip + "after N
   attempts" (R75) and the R77 full-error toggle — reasons over 240 chars
   collapse to an excerpt with "Show full error" expanding the COMPLETE raw
-  provider text in a scrollable mono block.
+  provider text in a scrollable mono block (R80: the caps behind the
+  surfaces rose — the persisted detail to 4000 chars, the user-facing
+  one-liner to 600 — so the toggle reveals more of the real payload;
+  scrubbing unchanged).
 - **Queued-message chip (R78)**: while the agent works, a send POSTs to
   the session queue and renders as an amber chip in the live area under
   the Working section (`data-testid="queued-chip"`, `Clock` glyph,
@@ -114,6 +120,21 @@ a slot here.
   what the model will collect. The panel chip resolves LIVE-first (the
   SSE map's carried `taskId`, present from the queued frame onward)
   with the polled `/subagents` row as the fallback.
+- **Retry schedule controls (R80, Settings → General → Auto-retry)**:
+  below the R78 per-class switches, the Schedule section owns the
+  CUSTOMIZABLE ladder — the Max attempts stepper
+  (`data-testid="retry-max-attempts"` with ± buttons
+  `retry-max-attempts-minus`/`-plus`, disabled at the 2/10 bounds), one
+  numeric wait input per rung (`data-testid="retry-wait-<i>"`, labeled
+  with the attempt it precedes `#2..#N`, step 0.5, 0–1440 min, snap-back
+  on out-of-range blur), the Provider call timeout input
+  (`data-testid="retry-timeout"`, 60–3600 s, step 30), and Reset to
+  defaults (`data-testid="retry-reset"`, the RotateCcw glyph). Every
+  control PUTs a PARTIAL patch through the card's shared mutation; the
+  rung rows, the stepper, and the footnote ("6 attempts: immediately,
+  1.5 min, 5 min, 10 min, 30 min") all re-render from the REFETCHED
+  state — the copy never hardcodes the R75 rungs. Busy state disables
+  the whole section while a PUT is pending.
 - **Composer (R50 box, R75 one-row, R77 left/right split, R78 action anchor)**: one
   rounded-[18px] box (bg token, accent border + glow on focus) =
   auto-growing textarea on top (grows to exactly 5 visible lines via

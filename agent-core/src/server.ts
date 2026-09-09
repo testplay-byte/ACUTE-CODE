@@ -22,6 +22,7 @@ import {
   assembleHistory,
   effectiveToolNames,
   getModelContextWindow,
+  persistTurnError,
   runSingleAgentTurn,
   runStreamedAgentTurn,
 } from "./agents/runtime.js";
@@ -193,6 +194,9 @@ import {
 // sub-agent transitions). The bus is the in-process pub/sub; the storage
 // module is the durable SQLite record + REST read/mark-read surface.
 import { getNotificationBus } from "./lib/notification-bus.js";
+// ROUND-80 (R80): the customizable retry schedule — resolved from the
+// settings for the task_failed notification's schedule line.
+import { describeRetrySchedule, resolveRetrySchedule } from "./lib/retry.js";
 import {
   countUnreadNotifications,
   listNotifications,
@@ -3621,10 +3625,12 @@ export function buildServer(options: ServerOptions): FastifyInstance {
 
       // ── ROUND-78 (R78, owner: "General Settings 重试配置"): the per-class
       // auto-retry switches. Same shape/behavior as /settings/debug — GET
-      // returns {autoRetryRateLimit, autoRetryTimeout, autoRetryNetwork}, PUT
-      // accepts a partial patch of those booleans and returns the updated
-      // object. The runtime's retry ladder reads these per turn (a disabled
-      // class fails fast with the provider's real error text).
+      // returns the full RetrySettings, PUT accepts a partial patch and
+      // returns the updated object. The runtime's retry ladder reads these
+      // per turn (a disabled class fails fast with the provider's real error
+      // text). ROUND-80 (R80): the object gained maxAttempts + waitMinutes +
+      // providerTimeoutSeconds (the customizable schedule; validated against
+      // the same bounds the runtime resolves with).
 
       scope.get("/settings/retry", async () => {
         return getRetrySettings(db);
@@ -3645,11 +3651,63 @@ export function buildServer(options: ServerOptions): FastifyInstance {
               .send(errorBody("VALIDATION", `body.${field} must be a boolean`, { field: `body.${field}` }));
           }
         }
+        // ROUND-80 (R80): the numeric schedule fields — validated here with
+        // the exact bounds setRetrySettings enforces (the route names the
+        // offending field; the storage error is the backstop).
+        if (raw.maxAttempts !== undefined) {
+          if (
+            typeof raw.maxAttempts !== "number" ||
+            !Number.isInteger(raw.maxAttempts) ||
+            raw.maxAttempts < 2 ||
+            raw.maxAttempts > 10
+          ) {
+            return reply.code(400).send(
+              errorBody("VALIDATION", "body.maxAttempts must be an integer between 2 and 10", {
+                field: "body.maxAttempts",
+              }),
+            );
+          }
+        }
+        if (raw.waitMinutes !== undefined) {
+          if (!Array.isArray(raw.waitMinutes) || raw.waitMinutes.length === 0 || raw.waitMinutes.length > 9) {
+            return reply
+              .code(400)
+              .send(errorBody("VALIDATION", "body.waitMinutes must be an array of 1 to 9 numbers", { field: "body.waitMinutes" }));
+          }
+          for (const entry of raw.waitMinutes) {
+            if (typeof entry !== "number" || !Number.isFinite(entry) || entry < 0 || entry > 1440) {
+              return reply.code(400).send(
+                errorBody("VALIDATION", "body.waitMinutes entries must be numbers between 0 and 1440 (minutes)", {
+                  field: "body.waitMinutes",
+                }),
+              );
+            }
+          }
+        }
+        if (raw.providerTimeoutSeconds !== undefined) {
+          if (
+            typeof raw.providerTimeoutSeconds !== "number" ||
+            !Number.isInteger(raw.providerTimeoutSeconds) ||
+            raw.providerTimeoutSeconds < 60 ||
+            raw.providerTimeoutSeconds > 3600
+          ) {
+            return reply.code(400).send(
+              errorBody("VALIDATION", "body.providerTimeoutSeconds must be an integer between 60 and 3600", {
+                field: "body.providerTimeoutSeconds",
+              }),
+            );
+          }
+        }
         try {
           return setRetrySettings(db, {
             ...(typeof raw.autoRetryRateLimit === "boolean" ? { autoRetryRateLimit: raw.autoRetryRateLimit } : {}),
             ...(typeof raw.autoRetryTimeout === "boolean" ? { autoRetryTimeout: raw.autoRetryTimeout } : {}),
             ...(typeof raw.autoRetryNetwork === "boolean" ? { autoRetryNetwork: raw.autoRetryNetwork } : {}),
+            ...(typeof raw.maxAttempts === "number" ? { maxAttempts: raw.maxAttempts } : {}),
+            ...(Array.isArray(raw.waitMinutes) ? { waitMinutes: raw.waitMinutes as number[] } : {}),
+            ...(typeof raw.providerTimeoutSeconds === "number"
+              ? { providerTimeoutSeconds: raw.providerTimeoutSeconds }
+              : {}),
           });
         } catch (error) {
           return reply.code(400).send(
@@ -3967,7 +4025,7 @@ export function buildServer(options: ServerOptions): FastifyInstance {
               sessionId: id,
               message: `debug analyst failed: ${
                 error instanceof Error ? error.message : String(error)
-              }`.slice(0, 300),
+              }`.slice(0, 2000),
             });
           }
         };
@@ -4086,13 +4144,18 @@ export function buildServer(options: ServerOptions): FastifyInstance {
                 // exhausted, the notification body says so — the owner asked
                 // to be TOLD when the ladder gives up ("it will stop, notify
                 // the user, and show the error message").
+                // ROUND-80 (R80): the schedule line is built from the REAL
+                // settings (describeRetrySchedule over the resolved
+                // schedule) — the owner's customized ladder phrased
+                // truthfully, never the hardcoded R75 rungs.
                 const attempts = outcome.details?.attempts;
+                const scheduleLine = describeRetrySchedule(resolveRetrySchedule(getRetrySettings(db)));
                 getNotificationBus().publish(db, {
                   kind: "task_failed",
                   title: session?.title ?? "Task failed",
                   body:
                     typeof attempts === "number" && attempts > 1
-                      ? `${outcome.message} — auto-retried ${attempts} times (immediate, 1.5, 5, 10, 30 min) before giving up`
+                      ? `${outcome.message} — auto-retried ${attempts} times (${scheduleLine}) before giving up`
                       : outcome.message,
                   sessionId: id,
                   projectId: session?.projectId ?? undefined,
@@ -4119,8 +4182,52 @@ export function buildServer(options: ServerOptions): FastifyInstance {
           // failure) must still terminate the SSE stream with an error frame —
           // otherwise the client sees the socket end with no terminal event
           // and the turn dies silently (the owner's bug).
+          // ROUND-80 (R80, the same silent-stop class): the R43 frame alone
+          // was LIVE-ONLY — nothing was persisted, so a reload showed the
+          // conversation ending at the user message with no error and the
+          // session row stayed `running` until the next boot sweep (a
+          // vanished failure). Best-effort persistTurnError (crash-guarded
+          // — the handler must never itself throw) + the honest task_failed
+          // notification + the session-status reset all ride along now.
           const message =
             routeError instanceof Error ? routeError.message : String(routeError);
+          try {
+            const session = getSession(db, id);
+            const agent =
+              session !== undefined && session.agentId !== null
+                ? getAgent(db, session.agentId)
+                : undefined;
+            // The failed turn's user message: the LAST message.user event on
+            // the log (best-effort — the crash may have landed anywhere).
+            const events = listSessionEvents(db, id);
+            let userSeq = 0;
+            for (const ev of events) {
+              if (ev.type === "message.user") userSeq = ev.seq;
+            }
+            if (session !== undefined) {
+              persistTurnError(db, {
+                sessionId: id,
+                agentId: agent?.id ?? "unknown",
+                userSeq,
+                code: "INTERNAL_ERROR",
+                message: `route crash: ${message}`,
+                model: agent?.model ?? "unknown",
+                providerId: agent?.providerId ?? "unknown",
+                providerError: message,
+                keySecrets: keyring.list().filter((v) => v.length >= 8),
+              });
+              getNotificationBus().publish(db, {
+                kind: "task_failed",
+                title: session.title ?? "Task failed",
+                body: `route crash: ${message}`.slice(0, 300),
+                sessionId: id,
+                projectId: session.projectId ?? undefined,
+              });
+            }
+          } catch {
+            /* the crash handler never crashes — the error frame below is
+               the guaranteed terminal event either way */
+          }
           send({ type: "error", status: 500, code: "INTERNAL_ERROR", message });
         } finally {
           unregisterTurn(id, abort);

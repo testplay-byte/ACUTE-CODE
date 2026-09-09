@@ -1,4 +1,4 @@
-<!-- last-reviewed: 2026-09-07 round-76 -->
+<!-- last-reviewed: 2026-09-09 round-80 -->
 # SECURITY — posture & rules
 
 Round-17 (owner direction: proper documentation of all logic). Describes

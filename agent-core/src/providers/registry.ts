@@ -187,9 +187,13 @@ export function clearModelCache(): void {
   modelCache.clear();
 }
 
-/** Strips key material from any error text before it reaches a response or log. */
+/** Strips key material from any error text before it reaches a response or log.
+ * ROUND-80 (R80, owner: "for error messages raw messages should be shown
+ * too"): the readability cap 500 → 4000 — the Settings connection-test and
+ * models-fetch surfaces show the provider's REAL error body; the old cap
+ * hid everything past the first 500 chars. */
 function scrub(text: string, secret: string | undefined): string {
-  const base = text.length > 500 ? `${text.slice(0, 500)}…` : text;
+  const base = text.length > 4000 ? `${text.slice(0, 4000)}…` : text;
   return secret === undefined || secret === "" ? base : base.split(secret).join("***");
 }
 
@@ -384,7 +388,9 @@ async function upstreamErrorDetail(response: Response, apiKey: string): Promise<
     if (parsed !== null && typeof parsed === "object" && "error" in parsed) {
       const err = (parsed as { error?: { message?: unknown } }).error;
       if (err !== null && typeof err === "object" && typeof err.message === "string") {
-        return `: ${scrub(err.message.slice(0, 160), apiKey)}`;
+        // ROUND-80 (R80): raw error bodies — 160 → 2000 (the same
+        // raw-messages ask; the connection-test line carries the real text).
+        return `: ${scrub(err.message.slice(0, 2000), apiKey)}`;
       }
     }
   } catch {

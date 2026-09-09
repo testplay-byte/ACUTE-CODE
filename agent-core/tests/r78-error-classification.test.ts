@@ -19,8 +19,8 @@
  *    → class `unknown` (fail-fast, no ladder) with the REAL text; a plain
  *    403 stays auth; 401 stays status-only auth.
  *  · userMessage is the REAL provider text (the unwrapped message), capped
- *    at 240 chars; empty real text falls back to the generic class line
- *    (CLASS_MESSAGES stays exported for exactly this pin).
+ *    at 600 chars since R80 (240 before); empty real text falls back to the
+ *    generic class line (CLASS_MESSAGES stays exported for exactly this pin).
  *  · providerErrorDetail unwraps the RetryError — the envelope carries the
  *    real body, not "Failed after 5 attempts. Last error: …", and still
  *    scrubs the API key.
@@ -193,11 +193,13 @@ describe("R78: userMessage is the REAL provider text", () => {
     expect(classified.userMessage).not.toBe(CLASS_MESSAGES.rate_limit);
   });
 
-  it("truncates the real text at 240 chars with an ellipsis", () => {
-    const long = "R".repeat(600);
+  it("truncates the real text at 600 chars with an ellipsis (R80 raised 240 → 600)", () => {
+    const long = "R".repeat(900);
     const classified = classifyProviderError(apiCallError(429, long));
-    expect(classified.userMessage.length).toBe(241); // 240 + ellipsis
+    expect(classified.userMessage.length).toBe(601); // 600 + ellipsis
     expect(classified.userMessage.endsWith("…")).toBe(true);
+    // A 600-char real message now rides WHOLE (the R80 raw-visibility ask).
+    expect(classifyProviderError(apiCallError(429, "R".repeat(600))).userMessage.length).toBe(600);
   });
 
   it("an empty real message falls back to the generic class line", () => {
@@ -246,10 +248,14 @@ describe("R78: providerErrorDetail unwraps the RetryError", () => {
     expect(detail).not.toContain("sk-live-abcdef123");
   });
 
-  it("a non-RetryError keeps today's behavior (message + scrub + 500-char cap)", () => {
+  it("a non-RetryError keeps today's behavior (message + scrub + the R80 4000-char cap)", () => {
     const detail = providerErrorDetail(new Error("plain failure"), "nope");
     expect(detail).toBe("plain failure");
-    const long = providerErrorDetail(new Error("x".repeat(600)), "nope");
-    expect(long.length).toBe(501); // 500 + ellipsis
+    // R80 (owner: "raw messages should be shown too"): 500 → 4000 — a
+    // 600-char body rides WHOLE (the old cap truncated real payloads).
+    const ridesWhole = providerErrorDetail(new Error("x".repeat(600)), "nope");
+    expect(ridesWhole.length).toBe(600);
+    const long = providerErrorDetail(new Error("x".repeat(4500)), "nope");
+    expect(long.length).toBe(4001); // 4000 + ellipsis
   });
 });

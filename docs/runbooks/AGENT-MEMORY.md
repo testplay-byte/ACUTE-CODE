@@ -1,4 +1,4 @@
-<!-- last-reviewed: 2026-09-08 round-79 -->
+<!-- last-reviewed: 2026-09-09 round-80 -->
 # AGENT MEMORY — lessons learned, rules going forward
 
 **Owner directive (2026-08-23):** "learn from the mistakes you made, document
@@ -882,3 +882,28 @@ Format per entry: `N. TITLE (date, source)` → mistake → root cause → rule.
     verification is your job, and "the agent said it was done" is a
     hypothesis, not evidence (see #76 — the same rule from the other
     side: there the drift was a stamp; here it was the entire proof).
+
+83. **A mock that models an unfaithful wire teaches the wrong behavior —
+    when a guard is added against a real-world failure shape, every
+    pre-existing mock of that surface becomes a false witness; fix the
+    MOCK to model the real wire, not the guard to tolerate the mock.**
+    (2026-09-09, round-80; the A1 truncation guard.) The R80 guard
+    flags "content streamed but zero finish-step parts" as the
+    clean-close silent stop — and the r58/r78 route-test mocks, written
+    years-of-rounds earlier without finish-step parts, were EXACTLY
+    that shape. Twenty tests failed: some as honest assertion misses,
+    but the route tests as 30-second HANGS (the guard's error
+    classifies as `network` → the retry ladder → the 90s rung → the
+    SSE stays open → the test times out waiting for a done frame).
+    The wrong fix is a `allowMissingFinishStep` escape hatch; the
+    right fix is the mock learning what a healthy provider actually
+    sends (a finish-step part per step — the chat-completions
+    finish_reason the SDK maps). RULE: when a guard exists to catch a
+    REAL wire pathology, the test mocks of that wire must model the
+    healthy real wire in full — otherwise the suite pins the pathology
+    as the contract. Corollary: a NEW guard's blast radius includes
+    every stale mock of its surface; budget time to update them the
+    same round, and when a test times out after adding error-path
+    retry logic, suspect a RETRY WAIT (the ladder's long rung), not a
+    deadlock — read which class the new error maps to before touching
+    the loop code.

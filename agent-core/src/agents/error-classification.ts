@@ -221,13 +221,16 @@ export const CLASS_MESSAGES: Record<ProviderErrorClass, string> = {
   unknown: "unclassified provider error",
 };
 
-/** Cap for the real-text userMessage (R78) — long provider payloads stay
- * readable on one card; the full text still rides providerErrorDetail. */
-const USER_MESSAGE_MAX_CHARS = 240;
+/** Cap for the real-text userMessage (R78). ROUND-80 (R80, owner: "for
+ * error messages raw messages should be shown too"): 240 → 600 — the
+ * one-line message is the card's fallback text when no providerError rode
+ * the payload; the rawer it is, the less the owner has to expand anything.
+ * The full text still rides providerErrorDetail. */
+const USER_MESSAGE_MAX_CHARS = 600;
 
 /** ROUND-78 (R78): the honest one-liner for a class — the REAL provider
- * text (message-shaped, whitespace-trimmed) truncated to 240 chars with an
- * ellipsis; the generic class line only when the real text is empty or not
+ * text (message-shaped, whitespace-trimmed) truncated to USER_MESSAGE_MAX_CHARS
+ * (600 since R80) with an ellipsis; the generic class line only when the real text is empty or not
  * message-shaped (non-Error objects stringify through String()). The
  * classifier never knows the API key, so the key-scrub happens at the
  * PERSISTENCE boundary (runtime's providerErrorDetail) — the envelope's
@@ -323,7 +326,13 @@ export function providerErrorDetail(error: unknown, apiKey: string): string {
     raw = error instanceof Error ? error.message : String(error);
   }
   const scrubbed = raw.split(apiKey).join("***");
-  return scrubbed.length > 500 ? `${scrubbed.slice(0, 500)}…` : scrubbed;
+  // ROUND-80 (R80, owner: "for error messages raw messages should be shown
+  // too"): 500 → 4000 — the cap existed for card readability, but the UI's
+  // R77 expand-toggle already collapses long text with a scrollable mono
+  // block, so the cap only ever HID the provider's real payload. 4000 chars
+  // covers every real provider error body (OpenRouter 429s, NVIDIA NIM
+  // validation dumps) while keeping frames/rows bounded.
+  return scrubbed.length > 4000 ? `${scrubbed.slice(0, 4000)}…` : scrubbed;
 }
 
 /** R71-e2 D4: the user-facing PROVIDER_ERROR message — the existing prefix

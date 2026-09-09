@@ -240,32 +240,100 @@ export function setDebugSettings(db: SqliteDatabase, patch: Partial<DebugSetting
 //   retry.autoRetryTimeout   — provider timeouts wait out the ladder (default true)
 //   retry.autoRetryNetwork   — 5xx / transport blips wait out the ladder (default true)
 
+//   retry.maxAttempts   — ROUND-80 (R80, owner: "in the settings retry
+//   customization is needed"): total provider attempts per turn (initial
+//   call + rungs), integer 2–10, default 6 (the R75 spec).
+//   retry.waitMinutes   — the rung waits in MINUTES (JSON array; index =
+//   retry number - 1), default [0, 1.5, 5, 10, 30] (the R75 schedule).
+//   Each entry validates 0–1440; the runtime's resolveRetrySchedule()
+//   resolves per-rung fallbacks, so a shorter/longer array than
+//   maxAttempts-1 never breaks the ladder.
+//   retry.providerTimeoutSeconds — the per-call provider ceiling (seconds,
+//   integer 60–3600, default 600 = chat.ts PROVIDER_CALL_TIMEOUT_MS);
+//   a call exceeding it aborts → class timeout → the ladder (if enabled).
+
 export interface RetrySettings {
   autoRetryRateLimit: boolean;
   autoRetryTimeout: boolean;
   autoRetryNetwork: boolean;
+  /** R80: total attempts per turn (initial + rungs), 2–10, default 6. */
+  maxAttempts: number;
+  /** R80: rung waits in minutes (rung i = wait before attempt i+2),
+   * default [0, 1.5, 5, 10, 30]. Length may differ from maxAttempts-1;
+   * resolution pads/truncates per-rung. */
+  waitMinutes: number[];
+  /** R80: provider call ceiling in seconds, 60–3600, default 600. */
+  providerTimeoutSeconds: number;
 }
 
 export const RETRY_DEFAULTS: RetrySettings = {
   autoRetryRateLimit: true,
   autoRetryTimeout: true,
   autoRetryNetwork: true,
+  maxAttempts: 6,
+  waitMinutes: [0, 1.5, 5, 10, 30],
+  providerTimeoutSeconds: 600,
 };
 
 const AUTO_RETRY_RATE_LIMIT_KEY = "retry.autoRetryRateLimit";
 const AUTO_RETRY_TIMEOUT_KEY = "retry.autoRetryTimeout";
 const AUTO_RETRY_NETWORK_KEY = "retry.autoRetryNetwork";
+const RETRY_MAX_ATTEMPTS_KEY = "retry.maxAttempts";
+const RETRY_WAIT_MINUTES_KEY = "retry.waitMinutes";
+const PROVIDER_TIMEOUT_SECONDS_KEY = "retry.providerTimeoutSeconds";
+
+/** Reads the waitMinutes JSON row defensively: absent/corrupt/out-of-bounds
+ * entries fall back to the R75 default rung-by-rung (resolveRetrySchedule's
+ * exact rule, applied at the read boundary so every consumer sees a sane
+ * array without re-validating). */
+function readWaitMinutes(db: SqliteDatabase): number[] {
+  const row = db.prepare("SELECT value FROM settings WHERE key = ?").get(RETRY_WAIT_MINUTES_KEY) as
+    | { value: string }
+    | undefined;
+  if (row === undefined) return [...RETRY_DEFAULTS.waitMinutes];
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(row.value);
+  } catch {
+    return [...RETRY_DEFAULTS.waitMinutes];
+  }
+  if (!Array.isArray(parsed)) return [...RETRY_DEFAULTS.waitMinutes];
+  const out: number[] = [];
+  for (let i = 0; i < parsed.length && i < 9; i += 1) {
+    const entry = parsed[i];
+    out.push(
+      typeof entry === "number" && Number.isFinite(entry) && entry >= 0 && entry <= 1440
+        ? entry
+        : (RETRY_DEFAULTS.waitMinutes[i] ?? RETRY_DEFAULTS.waitMinutes[4]),
+    );
+  }
+  return out.length > 0 ? out : [...RETRY_DEFAULTS.waitMinutes];
+}
 
 export function getRetrySettings(db: SqliteDatabase): RetrySettings {
   return {
     autoRetryRateLimit: readBoolean(db, AUTO_RETRY_RATE_LIMIT_KEY, RETRY_DEFAULTS.autoRetryRateLimit),
     autoRetryTimeout: readBoolean(db, AUTO_RETRY_TIMEOUT_KEY, RETRY_DEFAULTS.autoRetryTimeout),
     autoRetryNetwork: readBoolean(db, AUTO_RETRY_NETWORK_KEY, RETRY_DEFAULTS.autoRetryNetwork),
+    // readNumber clamps into bounds (a hand-edited row can never produce an
+    // impossible schedule); waitMinutes reads with its own per-rung fallbacks.
+    maxAttempts: readNumber(db, RETRY_MAX_ATTEMPTS_KEY, RETRY_DEFAULTS.maxAttempts, 2, 10),
+    waitMinutes: readWaitMinutes(db),
+    providerTimeoutSeconds: readNumber(
+      db,
+      PROVIDER_TIMEOUT_SECONDS_KEY,
+      RETRY_DEFAULTS.providerTimeoutSeconds,
+      60,
+      3600,
+    ),
   };
 }
 
 /** Partial patch (the setDebugSettings pattern): only provided keys write;
- * non-boolean values throw — the route maps that to a 400 VALIDATION. */
+ * non-boolean values throw — the route maps that to a 400 VALIDATION.
+ * R80: the numeric fields validate against the same bounds the runtime
+ * resolves with (maxAttempts 2–10, waitMinutes entries 0–1440, array length
+ * ≤ 9, providerTimeoutSeconds 60–3600). */
 export function setRetrySettings(db: SqliteDatabase, patch: Partial<RetrySettings>): RetrySettings {
   const upsert = db.prepare(
     "INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
@@ -282,6 +350,34 @@ export function setRetrySettings(db: SqliteDatabase, patch: Partial<RetrySetting
       throw new Error(`${field} must be a boolean`);
     }
     upsert.run(key, String(value));
+  }
+  if (patch.maxAttempts !== undefined) {
+    if (typeof patch.maxAttempts !== "number" || !Number.isInteger(patch.maxAttempts) || patch.maxAttempts < 2 || patch.maxAttempts > 10) {
+      throw new Error("maxAttempts must be an integer between 2 and 10");
+    }
+    upsert.run(RETRY_MAX_ATTEMPTS_KEY, String(patch.maxAttempts));
+  }
+  if (patch.waitMinutes !== undefined) {
+    if (!Array.isArray(patch.waitMinutes) || patch.waitMinutes.length === 0 || patch.waitMinutes.length > 9) {
+      throw new Error("waitMinutes must be an array of 1 to 9 numbers");
+    }
+    for (const entry of patch.waitMinutes) {
+      if (typeof entry !== "number" || !Number.isFinite(entry) || entry < 0 || entry > 1440) {
+        throw new Error("waitMinutes entries must be numbers between 0 and 1440 (minutes)");
+      }
+    }
+    upsert.run(RETRY_WAIT_MINUTES_KEY, JSON.stringify(patch.waitMinutes));
+  }
+  if (patch.providerTimeoutSeconds !== undefined) {
+    if (
+      typeof patch.providerTimeoutSeconds !== "number" ||
+      !Number.isInteger(patch.providerTimeoutSeconds) ||
+      patch.providerTimeoutSeconds < 60 ||
+      patch.providerTimeoutSeconds > 3600
+    ) {
+      throw new Error("providerTimeoutSeconds must be an integer between 60 and 3600");
+    }
+    upsert.run(PROVIDER_TIMEOUT_SECONDS_KEY, String(patch.providerTimeoutSeconds));
   }
   return getRetrySettings(db);
 }

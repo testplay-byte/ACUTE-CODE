@@ -3,7 +3,7 @@
   "product": {
     "name": "Acute",
     "tagline": "Local-first multi-agent engineering workbench",
-    "version": "0.78.0",
+    "version": "0.79.0",
     "availability": "Private build — not yet distributed",
     "chips": [
       "Windows desktop",
@@ -202,18 +202,24 @@
       "title": "R79 — the orchestrator round",
       "date": "2026-09-08",
       "summary": "The standing R73 deferral shipped — addressable, background, resumable sub-agent tasks (the last unshipped piece of the R71 sub-agent discipline): delegate_task gained task_id (the parent model’s own address, grammar-checked, duplicate-refused, capped at 10 outstanding background tasks), background:true (fire-and-forget with an immediate receipt while the child runs detached — it outlives the parent’s turn, streams to the Sub-agents panel, and its status rides the next turn’s system prompt as the per-turn BACKGROUND TASKS section that disappears once collected), and resume (waits while the task runs, returns the final report idempotently, retries a failed child from where it stopped; the delegation.collected event on the parent’s log is the one delivery marker). The owner sees the address as a mono task-id chip in the panel + the chat card; migration 0028 (sessions.delegate_task_id). Verified: 2741 tests (agent-core 1769 incl. 27 new), the battery-r79 live battery 10/10 with the request-body oracle proving the model SEES the reminder section and its disappearance after collection."
+    },
+    {
+      "id": 40,
+      "title": "R80 — the reliability round",
+      "date": "2026-09-09",
+      "summary": "The owner's four-clause field report shipped as one round: the silent chat terminations fixed at three root causes (the SSE clean-close truncation guard — a provider dropping the stream mid-generation now throws the honest 'connection closed mid-response' error and the retry ladder engages; the context/request guard stops now persist real turn.errors with CONTEXT_LIMIT/REQUEST_LIMIT codes instead of ending ok:true; a route crash now persists and notifies instead of vanishing on reload), the raw error messages shown (every error-detail cap raised — 4000/600/2000 — with key scrubbing unchanged and the nvapi- prefix joined), the retry ladder made customizable (maxAttempts, per-rung waitMinutes, providerTimeoutSeconds — validated, resolved defensively per turn, edited from the Settings General card, the defaults byte-identical to the R75 behavior), and the NVIDIA NIM provider supported (seeded, key-wired through the env injection + dev key file, live-verified reachable + catalog + key auth). Verified 2772/2772 in 149 files + live on the real keys (a real OpenRouter streamed turn end-to-end, the retry PUT round-trips, the NVIDIA connection test)."
     }
   ],
   "quality": {
-    "ci": "success — v0.78.0 released (round 79 close-out): push ef11d86 → CI run 34223271421: the first run FAILED on a Windows-runner stall (a 1-second models-catalog test timed out at 30 s amid vitest worker RPC timeouts — the runner went unresponsive, not the code; the test passed 3/3 locally and the suite was green before the push). The failed-job RE-RUN (the documented flake path — watched, not a silent retry) → SUCCESS. Tag v0.78.0 → Release run 34223270773 SUCCESS (launcher-kit + desktop-installer + github-release) → release 384700391 PUBLISHED with both assets (ACUTE-CODE_0.78.0_x64-setup.exe 37,413,610 B + acute-launcher-kit-v0.78.0.zip 92,582 B). The DASHBOARD was truth-synced the same hour (commit 8b8f84d — version 0.78.0, suites 960/1769/12/10, the real ciNote incl. the flake story, the R79 cards + milestone 60; Pages serving 0.78.0 verified; the 25-release picker smoke picks v0.78.0).",
+    "ci": "PENDING — v0.79.0 staged (round 80): the reliability round (silent-stop fixes, raw error surfaces, retry customization, NVIDIA NIM support) committed and tagged; this field is synced from the Actions API after the push + release runs complete.",
     "suites": [
       {
         "name": "frontend",
-        "tests": 960
+        "tests": 964
       },
       {
         "name": "agent-core",
-        "tests": 1769
+        "tests": 1796
       },
       {
         "name": "sidecar e2e",
@@ -238,17 +244,15 @@
   ],
   "plan": {
     "current": {
-      "title": "R79 — the orchestrator round (delegate_task task_id/background/resume)",
-      "detail": "The standing R73 deferral shipped as its own round — addressable, background, resumable sub-agent tasks (the last unshipped piece of the R71 sub-agent discipline, ADR-0028): the tool gained task_id (the parent model’s own address for a delegation: 1–64 chars, grammar-checked, duplicate-refused by name+status, required for background) + background:true (fire-and-forget — the call returns IMMEDIATELY with a receipt while the child runs DETACHED through the same runChildTurn machinery: status frames, notifications, watchdog, turn-registry, key-slot; it routinely outlives the parent’s SSE, so the child’s emit is best-effort and the parent-abort cascade is forwarded — no zombie spend after a Stop) + resume (resolve by task_id → session id → 4-char code; child running → resume WAITS, abort-honest; completed → the final report, idempotently; failed → the ADR-0022 §3 retry continuation, awaited; unknown → the honest addressable list). Delivery to the parent model is the per-turn ‘## BACKGROUND TASKS’ system-prompt section (the taskHints ephemeral pattern; only UNCOLLECTED addressable children; live status lines; capped at 10 rows; a cheap indexed guard so childless sessions compose byte-identically) + the NEW delegation.collected event on the parent’s log (blocking+task_id writes it at completion — the report was delivered inline; background writes it at resume; assembleHistory + the frontend fold skip it by construction). Migration 0028 adds sessions.delegate_task_id + idx_sessions_parent_task (NULL default = pre-R79 behavior); the /subagents rows + every subagent-status frame carry taskId; the frontend renders the mono task-id chip in the Sub-agents panel header + the chat card (tooltip teaching delegate_task {\"resume\":\"…\"}). Honest caps: ≥10 outstanding background tasks per parent → refusal listing them. Root 2741/2741 in 145 files (agent-core 1769 incl. the 27-test r79-delegation suite; frontend 960 incl. +6); the battery-r79 live battery 10/10 (the request-body oracle: the model SEES the reminder section, and it disappears after collection).",
-      "upcoming": [
-        "external plugin ctx enrichment (cline’s appendContext seam)",
-        "lessons-ledger affordance as the reminder injector’s third consumer",
-        "ratings-driven prompt tuning",
-        "the optional v0.68.0 backfill tag",
-        "the standing items (edit-linting, installer code-signing, the Files-tab polish, agent web-app-testing tools)"
-      ]
+      "title": "R80 — the reliability round (silent stops + raw errors + retry customization + NVIDIA)",
+      "detail": "The owner's four-clause field report shipped as one round: (1) SILENT STOPS fixed at three root causes — the SSE clean-close truncation guard (chat.ts: zero finish-step parts + content deltas = the honest 'connection closed mid-response' throw, network-classed so the retry ladder engages; the partial text kept), the context/request guard stops (runtime.ts: CONTEXT_LIMIT/REQUEST_LIMIT codes, persisted turn.error + usage + 502 + the session back to queued — never the pre-R80 ok:true), and the route-crash persistence (server.ts: best-effort persistTurnError + task_failed, crash-guarded); (2) RAW ERROR MESSAGES — every error-detail cap raised (providerErrorDetail 500→4000, userMessage 240→600, connection-test scrub 500/160→4000/2000) with the key-scrub discipline unchanged and nvapi- joined the redaction surfaces; (3) RETRY CUSTOMIZATION — maxAttempts (2–10), waitMinutes (per-rung waits, 0–1440 each), providerTimeoutSeconds (60–3600) on RetrySettings, validated at route + storage with the resolver's exact bounds, resolved defensively per turn (resolveRetrySchedule — defaults byte-identical to the R75 ladder), edited from the Settings General card (stepper + per-rung inputs + timeout + Reset), the task_failed schedule line built from the real settings; (4) NVIDIA NIM — the seeded nvidia provider (integrate.api.nvidia.com/v1, OpenAI-compatible), ACUTE_PROVIDER_NVIDIA env injection (keys.rs + dev.mjs key file), the Settings preset, live-verified reachable + catalog + key auth (the account's model functions are EOL'd server-side — the raw bodies show verbatim). Verified: 2772/2772 in 149 files (agent-core 1796 incl. the four new r80 suites' 27 tests; frontend 964; e2e 12), lint + typechecks clean, and live on the real keys — a real OpenRouter streamed turn end-to-end ('R80 LIVE TURN OK'), the retry GET/PUT round-trips with honest 400s, the NVIDIA endpoint + 81-model catalog work."
     },
     "upcoming": [
+      {
+        "phase": "Reliability hardening",
+        "status": "shipped",
+        "note": "R80 shipped the silent-stop fixes (truncation guard, guard stops, route-crash persistence), raw error surfaces, retry customization, and NVIDIA NIM support"
+      },
       {
         "phase": "Owner re-test of v0.75.0 on Windows (ACUTE.bat)",
         "status": "awaiting-verdict",
@@ -276,5 +280,5 @@
       "Quality over speed — every round verified before push"
     ]
   },
-  "round": 79
+  "round": 80
 }

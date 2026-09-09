@@ -345,13 +345,33 @@ describe("Advanced tab (ROUND-65 R65)", () => {
 // DebugModeCard. The routed stub serves /settings/retry (mutable — PUT
 // patches the state like the server) + /settings/debug + /settings/memory.
 describe("General tab + Auto-retry card (ROUND-78 R78-C)", () => {
-  const retryState = { autoRetryRateLimit: true, autoRetryTimeout: true, autoRetryNetwork: true };
+  // R80: the state models the CURRENT server shape — the three switches +
+  // the customizable schedule (maxAttempts / waitMinutes /
+  // providerTimeoutSeconds). The card renders the schedule from THIS data.
+  const retryState: {
+    autoRetryRateLimit: boolean;
+    autoRetryTimeout: boolean;
+    autoRetryNetwork: boolean;
+    maxAttempts: number;
+    waitMinutes: number[];
+    providerTimeoutSeconds: number;
+  } = {
+    autoRetryRateLimit: true,
+    autoRetryTimeout: true,
+    autoRetryNetwork: true,
+    maxAttempts: 6,
+    waitMinutes: [0, 1.5, 5, 10, 30],
+    providerTimeoutSeconds: 600,
+  };
   const retryPuts: Array<Record<string, unknown>> = [];
 
   beforeEach(() => {
     retryState.autoRetryRateLimit = true;
     retryState.autoRetryTimeout = true;
     retryState.autoRetryNetwork = true;
+    retryState.maxAttempts = 6;
+    retryState.waitMinutes = [0, 1.5, 5, 10, 30];
+    retryState.providerTimeoutSeconds = 600;
     retryPuts.length = 0;
     resetTestState();
     vi.stubGlobal(
@@ -365,11 +385,16 @@ describe("General tab + Auto-retry card (ROUND-78 R78-C)", () => {
             for (const key of ["autoRetryRateLimit", "autoRetryTimeout", "autoRetryNetwork"] as const) {
               if (typeof body[key] === "boolean") retryState[key] = body[key] as boolean;
             }
+            if (typeof body.maxAttempts === "number") retryState.maxAttempts = body.maxAttempts;
+            if (typeof body.providerTimeoutSeconds === "number") {
+              retryState.providerTimeoutSeconds = body.providerTimeoutSeconds;
+            }
+            if (Array.isArray(body.waitMinutes)) retryState.waitMinutes = body.waitMinutes as number[];
           }
           return {
             ok: true,
             status: 200,
-            text: async () => JSON.stringify({ ...retryState }),
+            text: async () => JSON.stringify({ ...retryState, waitMinutes: [...retryState.waitMinutes] }),
           } as unknown as Response;
         }
         if (url.includes("/api/v1/settings/debug")) {
@@ -434,7 +459,9 @@ describe("General tab + Auto-retry card (ROUND-78 R78-C)", () => {
     ).toBe(true);
     // The honest help text teaches the ladder schedule + the fail-fast trade.
     expect(screen.getByText(/When a switch is off, that failure type shows immediately/)).toBeTruthy();
-    expect(screen.getByText(/6 attempts: immediate, 1\.5 min, 5 min, 10 min, 30 min/)).toBeTruthy();
+    // R80: the footnote now renders the schedule FROM THE DATA (the R75
+    // rungs no longer hardcoded) — "immediately" (run g 0) + the rest.
+    expect(screen.getByText(/6 attempts: immediately, 1\.5 min, 5 min, 10 min, 30 min/)).toBeTruthy();
   });
 
   it("toggling a switch PUTs the PARTIAL patch ({autoRetryRateLimit:false}) and the switch flips OFF after the refetch — the other two stay untouched", async () => {
@@ -472,5 +499,84 @@ describe("General tab + Auto-retry card (ROUND-78 R78-C)", () => {
     fireEvent.click(timeout);
     expect(await screen.findByText(/settings store exploded/)).toBeTruthy();
     expect(timeout.getAttribute("aria-checked")).toBe("true");
+  });
+
+  /* ── ROUND-80 (R80, owner: "in the settings retry customization is
+   * needed"): the customizable schedule — the max-attempts stepper, the
+   * per-rung wait inputs, the provider timeout input, and Reset to
+   * defaults. Every control PUTs a PARTIAL patch through the same
+   * /settings/retry mutation; the card re-renders from the refetched
+   * state (the footnote + the rung rows follow the data). */
+  it("R80: the schedule section renders from the fetched data (stepper value, rung inputs, timeout) and the max-attempts stepper PUTs {maxAttempts:5}", async () => {
+    renderWithProviders(<SettingsPage />, { route: "/settings?tab=advanced" });
+    await screen.findByTestId("retry-max-attempts");
+
+    // The default schedule renders: stepper 6, FIVE rung inputs (attempts
+    // 2..6), the 600 s timeout.
+    expect(screen.getByTestId("retry-max-attempts").textContent).toBe("6");
+    for (const i of [0, 1, 2, 3, 4]) {
+      expect(screen.getByTestId(`retry-wait-${i}`)).toBeTruthy();
+    }
+    expect(screen.queryByTestId("retry-wait-5")).toBeNull();
+    expect((screen.getByTestId("retry-timeout") as HTMLInputElement).value).toBe("600");
+
+    // The rung rows label the ATTEMPT they precede (#2..#6).
+    expect(screen.getByText("#2")).toBeTruthy();
+    expect(screen.getByText("#6")).toBeTruthy();
+
+    // Stepper minus → the partial PUT + the refetched state everywhere.
+    fireEvent.click(screen.getByTestId("retry-max-attempts-minus"));
+    await waitFor(() => expect(screen.getByTestId("retry-max-attempts").textContent).toBe("5"));
+    expect(retryPuts).toContainEqual({ maxAttempts: 5 });
+    // Five attempts → FOUR rung rows (the footnote follows the data too).
+    expect(screen.queryByTestId("retry-wait-4")).toBeNull();
+    expect(screen.getByText(/5 attempts: immediately, 1\.5 min, 5 min, 10 min/)).toBeTruthy();
+  });
+
+  it("R80: editing a rung wait PUTs the padded {waitMinutes} array and the input refetches", async () => {
+    renderWithProviders(<SettingsPage />, { route: "/settings?tab=advanced" });
+    await screen.findByTestId("retry-wait-1");
+    const rung = screen.getByTestId("retry-wait-1") as HTMLInputElement;
+    expect(rung.value).toBe("1.5");
+
+    fireEvent.change(rung, { target: { value: "3" } });
+    await waitFor(() => expect(retryPuts).toContainEqual({ waitMinutes: [0, 3, 5, 10, 30] }));
+    await waitFor(() => expect((screen.getByTestId("retry-wait-1") as HTMLInputElement).value).toBe("3"));
+    // The footnote picked up the new rung.
+    expect(screen.getByText(/6 attempts: immediately, 3 min, 5 min, 10 min, 30 min/)).toBeTruthy();
+  });
+
+  it("R80: the provider timeout input PUTs {providerTimeoutSeconds:900} (clamped server-side)", async () => {
+    renderWithProviders(<SettingsPage />, { route: "/settings?tab=advanced" });
+    await screen.findByTestId("retry-timeout");
+    const timeoutInput = screen.getByTestId("retry-timeout") as HTMLInputElement;
+
+    fireEvent.change(timeoutInput, { target: { value: "900" } });
+    await waitFor(() => expect(retryPuts).toContainEqual({ providerTimeoutSeconds: 900 }));
+    await waitFor(() => expect((screen.getByTestId("retry-timeout") as HTMLInputElement).value).toBe("900"));
+  });
+
+  it("R80: Reset to defaults PUTs the WHOLE default object (switches + schedule)", async () => {
+    // Dirty the state first (maxAttempts 4) so the reset is observable —
+    // one step per refetch (the buttons disable while the PUT is pending).
+    renderWithProviders(<SettingsPage />, { route: "/settings?tab=advanced" });
+    await screen.findByTestId("retry-max-attempts");
+    fireEvent.click(screen.getByTestId("retry-max-attempts-minus"));
+    await waitFor(() => expect(screen.getByTestId("retry-max-attempts").textContent).toBe("5"));
+    fireEvent.click(screen.getByTestId("retry-max-attempts-minus"));
+    await waitFor(() => expect(screen.getByTestId("retry-max-attempts").textContent).toBe("4"));
+
+    fireEvent.click(screen.getByTestId("retry-reset"));
+    await waitFor(() =>
+      expect(retryPuts).toContainEqual({
+        autoRetryRateLimit: true,
+        autoRetryTimeout: true,
+        autoRetryNetwork: true,
+        maxAttempts: 6,
+        waitMinutes: [0, 1.5, 5, 10, 30],
+        providerTimeoutSeconds: 600,
+      }),
+    );
+    await waitFor(() => expect(screen.getByTestId("retry-max-attempts").textContent).toBe("6"));
   });
 });

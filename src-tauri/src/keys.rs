@@ -40,9 +40,16 @@ fn legacy_target(provider_id: &str) -> String {
 /// only in the spawn env of a dev-mode launch. Slot ids pass
 /// validate_provider_id (lowercase + digits + '-'), so the Settings UI's
 /// key-pool slot rows read the very same entries.
-pub(crate) fn provider_key_env_targets() -> [(&'static str, &'static str); 4] {
+// ROUND-80 (R80, owner: "make sure it works with the nvidia api key too"):
+// "nvidia" joins the spawn-time injection — the built-in NIM provider row
+// (storage/providers.ts seeds it) reads ACUTE_PROVIDER_NVIDIA through the
+// same keyring path every other provider uses; the key value lives in
+// Credential Manager under ACUTE-CODE/provider/nvidia (the Settings flow's
+// store_provider_key writes exactly that target).
+pub(crate) fn provider_key_env_targets() -> [(&'static str, &'static str); 5] {
     [
         ("ACUTE_PROVIDER_OPENROUTER", "openrouter"),
+        ("ACUTE_PROVIDER_NVIDIA", "nvidia"),
         ("ACUTE_PROVIDER_OPENROUTER_SLOT2", "openrouter-slot2"),
         ("ACUTE_PROVIDER_OPENROUTER_SLOT3", "openrouter-slot3"),
         ("ACUTE_PROVIDER_OPENROUTER_SLOT4", "openrouter-slot4"),

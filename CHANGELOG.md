@@ -1,4 +1,4 @@
-<!-- last-reviewed: 2026-09-08 round-79 -->
+<!-- last-reviewed: 2026-09-09 round-80 -->
 # Changelog
 
 All notable changes to ACUTE-CODE are documented here. Entries are written for
@@ -11,12 +11,77 @@ version number is single-sourced from the root `package.json`
 
 ## [Unreleased]
 
-Planned next: the R80 queue — external plugin ctx enrichment (cline's
+Planned next: the R81 queue — external plugin ctx enrichment (cline's
 appendContext seam), the lessons-ledger affordance as the reminder
 injector's third consumer, ratings-driven prompt tuning, the optional
 v0.68.0 backfill tag, and the standing items (edit-linting — SWE-agent's
 ACI #1 finding, installer code-signing, the Files-tab polish, agent
 web-app-testing tools).
+
+## [0.79.0] - 2026-09-09
+
+### Fixed
+- **Silent chat terminations** (the owner's field report: "the chat ends
+  without any error message or anything some times"): three distinct
+  root causes, all now ending through the honest terminal path — a
+  persisted `turn.error`, a real 502 outcome, and the session reset to
+  `queued` so the retry affordance stands. (1) A provider closing the
+  SSE stream cleanly mid-generation (no error, no finish signal) used to
+  synthesize a finish and "complete" the turn with truncated text — now
+  the truncation guard throws the honest "connection closed
+  mid-response" error (classified as a transient network failure, so
+  the auto-retry ladder can wait it out; the partial text is kept). (2)
+  The 800k-token context guard and the 200-request guard used to end
+  the turn `ok:true` with SSE-only frames nobody rendered — now they
+  fail honestly with `CONTEXT_LIMIT` / `REQUEST_LIMIT` codes and
+  actionable messages ("run /compact or start a new session" / "send a
+  follow-up message to continue from where it stopped"). (3) A crash
+  inside the stream route itself used to vanish on reload (nothing was
+  persisted, the session row stayed `running`) — now the failure
+  persists and the task-failed notification fires, best-effort and
+  crash-guarded.
+- **Raw error messages** (the owner's ask: "for error messages raw
+  messages should be shown too"): every error-detail cap that only ever
+  hid the provider's real payload was raised — the persisted provider
+  error detail 500 → 4000 chars, the user-facing one-liner 240 → 600,
+  the connection-test and models-fetch surfaces 500/160 → 4000/2000.
+  The UI's expand-toggle already collapses long text; the API-key
+  scrubbing discipline is unchanged.
+
+### Added
+- **Retry customization** (the owner's ask: "in the settings retry
+  customization is needed"): Settings → General → Auto-retry now owns
+  the whole schedule, not just the three per-failure-type switches —
+  max attempts (2–10, default 6), the wait before each retry attempt
+  (one editable input per rung, default 0/1.5/5/10/30 minutes), and the
+  per-call provider timeout (60–3600 s, default 600). Every value is
+  validated at the API and the storage layer with the exact bounds the
+  runtime resolves with; the schedule is resolved defensively per turn
+  so a corrupt row can never break the ladder (the defaults are
+  byte-identical to the previous behavior). The task-failed
+  notification's "auto-retried N times (…)" line and the card's
+  footnote now phrase the schedule you actually configured.
+- **NVIDIA NIM provider support** (the owner's ask: "make sure it works
+  with the nvidia api key too"): `nvidia` is a seeded built-in provider
+  (https://integrate.api.nvidia.com/v1, OpenAI-compatible — the
+  chat-completions adapter speaks it as-is) with `nvapi-…` key support
+  through the packaged app's Credential Manager flow and the dev
+  sidecar's key file, a Settings Add-Provider preset, and the
+  `nvapi-` prefix joined every key-scrub surface. Live-verified: the
+  endpoint, catalog, and key authentication all work (the account's
+  model functions have largely reached end-of-life server-side — the
+  connection test now shows those real provider bodies verbatim).
+
+### Verified
+- 2772/2772 root tests in 149 files (agent-core 1796 incl. the four new
+  R80 suites — 27 tests — + the honest pin updates; frontend 964, +4
+  schedule-control tests; e2e 12), lint + typechecks clean, and live on
+  the real keys: the provider list seeds nvidia with `hasKey:true`, the
+  retry GET/PUT round-trips with honest 400s on out-of-bounds values,
+  the NVIDIA connection test + 81-model catalog fetch work, and a real
+  OpenRouter streamed turn completes end-to-end ("R80 LIVE TURN OK") —
+  the healthy-path proof that the truncation guard has no false
+  positives.
 
 ## [0.78.0] - 2026-09-08
 

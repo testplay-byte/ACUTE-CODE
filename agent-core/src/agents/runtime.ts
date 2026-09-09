@@ -499,7 +499,12 @@ export type TurnOutcome =
        * ROUND-77 (R77): NO_OUTPUT = the model returned a blank response
        * (whitespace-only, zero tool calls — the free-model flake observed
        * live in the T5 battery). Status 502 for the same honest-failure
-       * rule: the requested work did not happen. */
+       * rule: the requested work did not happen.
+       * ROUND-80 (R80, owner: "the chat ends without any error message or
+       * anything some times"): CONTEXT_LIMIT / REQUEST_LIMIT = the 800k-token
+       * and 200-request guards ended the turn. Pre-R80 these broke the loop
+       * with ok:true (a SILENT stop — no error card, no retry); they now
+       * carry the honest terminal path (persisted turn.error + 502). */
       code:
         | "NOT_FOUND"
         | "CONFLICT"
@@ -507,7 +512,9 @@ export type TurnOutcome =
         | "PROVIDER_ERROR"
         | "PROVIDER_DISABLED"
         | "LOOP_GUARD"
-        | "NO_OUTPUT";
+        | "NO_OUTPUT"
+        | "CONTEXT_LIMIT"
+        | "REQUEST_LIMIT";
       message: string;
       details?: Record<string, unknown>;
     };
@@ -791,11 +798,10 @@ import {
 } from "./error-classification.js";
 import { isTransientApiFailure } from "./error-classification.js";
 import {
-  RETRY_LADDER_MS,
-  RETRY_TOTAL_ATTEMPTS,
   clearActiveRetryWait,
   formatRetryWaitMs,
   registerActiveRetryWait,
+  resolveRetrySchedule,
   waitForRetry,
 } from "../lib/retry.js";
 
@@ -812,7 +818,7 @@ import {
  * turn stays retryable (and the boot sweep doesn't flip it to `failed`).
  * Deliberate user stops (ABORTED) never call this — a stop is not an error.
  */
-function persistTurnError(
+export function persistTurnError(
   db: SqliteDatabase,
   args: {
     sessionId: string;
@@ -1450,6 +1456,12 @@ export async function runSingleAgentTurn(
   // the cache — no per-rung DB reads while a 30-minute rung waits). A
   // disabled class fails fast through the honest terminal path (attempts:1).
   const retrySettings = getRetrySettings(db);
+  // ROUND-80 (R80, owner: "in the settings retry customization is
+  // needed"): the CUSTOMIZABLE schedule, resolved once per turn from those
+  // same settings — the ladder rungs, the total attempts, and the provider
+  // call timeout all come from here now (the R75 constants are the DEFAULTS
+  // the resolver falls back to, so default behavior is byte-identical).
+  const retrySchedule = resolveRetrySchedule(retrySettings);
   /** R78: is auto-retry ON for this transient class? Non-transient classes
    * are already excluded by isTransientApiFailure — false here just means
    * "fail fast" for a class the owner switched off. */
@@ -1554,7 +1566,8 @@ export async function runSingleAgentTurn(
   // ground truth — our ±15% estimate is the guess that missed it).
   let overflowRecovered = false;
   // ROUND-75 (R75): the transient-API retry ladder's used rungs this turn
-  // (0 = none yet; capped at RETRY_LADDER_MS.length = 5 → 6 total attempts).
+  // (0 = none yet; capped at the resolved schedule's rung count — 5 rungs
+  // → 6 total attempts at the R75 defaults, R80-customizable).
   let providerRetries = 0;
   let forceCompaction = false;
   // ROUND-48 (R48-e1, stretch): count of steps the adapter reported LIVE via
@@ -1641,6 +1654,9 @@ export async function runSingleAgentTurn(
         messages,
         temperature: agent.temperature,
         maxTurns: agent.maxTurns,
+        // ROUND-80 (R80): the CUSTOMIZABLE provider-call ceiling (Settings
+        // → General → retry config; 600 s = the old hardcoded default).
+        timeoutMs: retrySchedule.timeoutMs,
         ...(tools !== undefined ? { tools } : {}),
         // ROUND-50 (R50-c1): the per-send thinking level (chat-completions
         // reasoning.effort injection — see chat.ts buildThinkingFetch).
@@ -1726,17 +1742,17 @@ export async function runSingleAgentTurn(
       if (
         isTransientApiFailure(classified.class) &&
         retryClassEnabled(classified.class) &&
-        providerRetries < RETRY_LADDER_MS.length
+        providerRetries < retrySchedule.ladderMs.length
       ) {
         providerRetries += 1;
-        const waitMs = RETRY_LADDER_MS[providerRetries - 1];
+        const waitMs = retrySchedule.ladderMs[providerRetries - 1];
         const attempt = providerRetries + 1;
         const emitRetry = (remainingMs: number): void => {
           emit?.({
             type: "meta.retry",
             sessionId: session.id,
             attempt,
-            totalAttempts: RETRY_TOTAL_ATTEMPTS,
+            totalAttempts: retrySchedule.totalAttempts,
             waitMs,
             remainingMs,
             retryAt: Date.now() + remainingMs,
@@ -1747,7 +1763,7 @@ export async function runSingleAgentTurn(
             // any RetryError by providerErrorDetail) — the live retry card
             // shows what the API actually said, not a generic class line.
             providerError: providerErrorDetail(normalized, apiKey),
-            message: `${classMessage} — retrying (attempt ${attempt} of ${RETRY_TOTAL_ATTEMPTS}) in ${formatRetryWaitMs(remainingMs)}`,
+            message: `${classMessage} — retrying (attempt ${attempt} of ${retrySchedule.totalAttempts}) in ${formatRetryWaitMs(remainingMs)}`,
           });
         };
         emitRetry(waitMs);
@@ -1757,14 +1773,14 @@ export async function runSingleAgentTurn(
           providerId: provider.id,
           model,
           attempt,
-          totalAttempts: RETRY_TOTAL_ATTEMPTS,
+          totalAttempts: retrySchedule.totalAttempts,
           waitMs,
           errorClass: classified.class,
         });
         registerActiveRetryWait({
           sessionId: session.id,
           attempt,
-          totalAttempts: RETRY_TOTAL_ATTEMPTS,
+          totalAttempts: retrySchedule.totalAttempts,
           waitMs,
           startedAt: Date.now(),
           until: Date.now() + waitMs,
@@ -2193,6 +2209,12 @@ export async function runStreamedAgentTurn(
   // the cache — no per-rung DB reads while a 30-minute rung waits). A
   // disabled class fails fast through the honest terminal path (attempts:1).
   const retrySettings = getRetrySettings(db);
+  // ROUND-80 (R80, owner: "in the settings retry customization is
+  // needed"): the CUSTOMIZABLE schedule, resolved once per turn from those
+  // same settings — the ladder rungs, the total attempts, and the provider
+  // call timeout all come from here now (the R75 constants are the DEFAULTS
+  // the resolver falls back to, so default behavior is byte-identical).
+  const retrySchedule = resolveRetrySchedule(retrySettings);
   /** R78: is auto-retry ON for this transient class? Non-transient classes
    * are already excluded by isTransientApiFailure — false here just means
    * "fail fast" for a class the owner switched off. */
@@ -2303,12 +2325,21 @@ export async function runStreamedAgentTurn(
   const loopGuard = createLoopGuard();
   let guardNudge: ChatTurnMessage | null = null;
   let loopGuardStop: string | null = null;
+  // ROUND-80 (R80, owner: "the chat ends without any error message or
+  // anything some times"): the CONTEXT/REQUEST guard stops. The pre-R80
+  // guards emitted SSE-only meta frames (which no frontend ever rendered)
+  // and broke the loop with ok:true — the chat just STOPPED mid-task with
+  // no error, no card, no retry affordance (a silent stop). Now they set
+  // this stop (code + honest actionable message) and the post-loop exit
+  // mirrors LOOP_GUARD: persisted turn.error + usage + the 502 outcome.
+  let guardStop: { code: "CONTEXT_LIMIT" | "REQUEST_LIMIT"; message: string } | null = null;
   // ROUND-71 (R71-e2, D5): overflow-recovery state — same contract as the
   // sync path above (ONE forced-compaction + retry per turn, armed by the
   // catch below when the provider itself rejected the request as too large).
   let overflowRecovered = false;
   // ROUND-75 (R75): the transient-API retry ladder's used rungs this turn
-  // (0 = none yet; capped at RETRY_LADDER_MS.length = 5 → 6 total attempts).
+  // (0 = none yet; capped at the resolved schedule's rung count — 5 rungs
+  // → 6 total attempts at the R75 defaults, R80-customizable).
   let providerRetries = 0;
   let forceCompaction = false;
 
@@ -2387,15 +2418,26 @@ export async function runStreamedAgentTurn(
 
     // Context guard (6-f R-F5): abort if assembled context > 800K tokens
     // (the 1M window is a LIMIT, not headroom; 200+ tool round-trips approach
-    // 500KB of tool I/O alone).
+    // 500KB of tool I/O alone). ROUND-80 (R80): the break now carries the
+    // guardStop — the turn ends through the honest terminal path below
+    // (persisted turn.error + 502), never a silent ok:true stop.
     if (usedTokens > 800_000) {
       emit({ type: "meta.context_limit", tokens: usedTokens, limit: 800_000 });
+      guardStop = {
+        code: "CONTEXT_LIMIT",
+        message: `the turn's assembled context exceeded the 800k-token guard (${usedTokens} tokens) for session ${session.id} — run /compact or start a new session`,
+      };
       break;
     }
     // Request guard (6-f R-F6): abort if > 200 total requests (OpenRouter
-    // rate limits apply even on 0-cost models).
+    // rate limits apply even on 0-cost models). ROUND-80 (R80): same honest
+    // stop — the follow-up message continues from the event log.
     if (totalRequests > 200) {
       emit({ type: "meta.request_limit", requests: totalRequests, limit: 200 });
+      guardStop = {
+        code: "REQUEST_LIMIT",
+        message: `the turn exceeded 200 provider requests (${totalRequests}) for session ${session.id} — send a follow-up message to continue from where it stopped`,
+      };
       break;
     }
 
@@ -2484,6 +2526,9 @@ export async function runStreamedAgentTurn(
         messages,
         temperature: agent.temperature,
         maxTurns: agent.maxTurns,
+        // ROUND-80 (R80): the CUSTOMIZABLE provider-call ceiling (Settings
+        // → General → retry config; 600 s = the old hardcoded default).
+        timeoutMs: retrySchedule.timeoutMs,
         ...(tools !== undefined ? { tools } : {}),
         // ROUND-50 (R50-c1): the per-send thinking level (chat-completions
         // reasoning.effort injection — see chat.ts buildThinkingFetch).
@@ -2688,17 +2733,17 @@ export async function runStreamedAgentTurn(
       if (
         isTransientApiFailure(classified.class) &&
         retryClassEnabled(classified.class) &&
-        providerRetries < RETRY_LADDER_MS.length
+        providerRetries < retrySchedule.ladderMs.length
       ) {
         providerRetries += 1;
-        const waitMs = RETRY_LADDER_MS[providerRetries - 1];
+        const waitMs = retrySchedule.ladderMs[providerRetries - 1];
         const attempt = providerRetries + 1;
         const emitRetry = (remainingMs: number): void => {
           emit({
             type: "meta.retry",
             sessionId: session.id,
             attempt,
-            totalAttempts: RETRY_TOTAL_ATTEMPTS,
+            totalAttempts: retrySchedule.totalAttempts,
             waitMs,
             remainingMs,
             retryAt: Date.now() + remainingMs,
@@ -2709,7 +2754,7 @@ export async function runStreamedAgentTurn(
             // any RetryError by providerErrorDetail) — the live retry card
             // shows what the API actually said, not a generic class line.
             providerError: providerErrorDetail(normalized, apiKey),
-            message: `${classMessage} — retrying (attempt ${attempt} of ${RETRY_TOTAL_ATTEMPTS}) in ${formatRetryWaitMs(remainingMs)}`,
+            message: `${classMessage} — retrying (attempt ${attempt} of ${retrySchedule.totalAttempts}) in ${formatRetryWaitMs(remainingMs)}`,
           });
         };
         emitRetry(waitMs);
@@ -2719,14 +2764,14 @@ export async function runStreamedAgentTurn(
           providerId: provider.id,
           model,
           attempt,
-          totalAttempts: RETRY_TOTAL_ATTEMPTS,
+          totalAttempts: retrySchedule.totalAttempts,
           waitMs,
           errorClass: classified.class,
         });
         registerActiveRetryWait({
           sessionId: session.id,
           attempt,
-          totalAttempts: RETRY_TOTAL_ATTEMPTS,
+          totalAttempts: retrySchedule.totalAttempts,
           waitMs,
           startedAt: Date.now(),
           until: Date.now() + waitMs,
@@ -2923,6 +2968,52 @@ export async function runStreamedAgentTurn(
       },
     });
     lastAssistantEvent = { seq: fallback.seq, ts: fallback.ts, content: lastText };
+  }
+
+  // ROUND-80 (R80): the context/request guard stop — the LOOP_GUARD
+  // pattern exactly (the silent-stop fix): persist the honest turn.error
+  // (the error card's Retry re-sends the message; the session resets to
+  // queued so it stays retryable), record the real token spend, and return
+  // the 502 — never the pre-R80 ok:true that ended the chat with no error.
+  if (guardStop !== null) {
+    persistTurnError(db, {
+      sessionId: session.id,
+      agentId: agent.id,
+      userSeq: userEvent.seq,
+      code: guardStop.code,
+      message: guardStop.message,
+      model,
+      providerId: provider.id,
+      providerError: guardStop.message,
+      keySecrets,
+    });
+    const guardUsage: UsageRecord = {
+      agentId: agent.id,
+      sessionId: session.id,
+      provider: provider.id,
+      model,
+      inputTokens: totalInputTokens,
+      outputTokens: totalOutputTokens,
+      cachedInputTokens: totalCachedInputTokens,
+      costUsd: computeCost(db, provider.id, model, totalInputTokens, totalOutputTokens),
+      ts: lastAssistantEvent.ts,
+    };
+    recordUsage(db, guardUsage, keySlot);
+    touchSession(db, session.id);
+    logTurnEnd(session.id, false, ms, totalInputTokens, totalOutputTokens);
+    log("warn", "turn.guard_stop", {
+      sessionId: session.id,
+      agentId: agent.id,
+      code: guardStop.code,
+      model,
+      providerId: provider.id,
+    });
+    return {
+      ok: false,
+      status: 502,
+      code: guardStop.code,
+      message: guardStop.message,
+    };
   }
 
   // ROUND-51 (R51-f): loop-guard stop — the honest end for a no-progress

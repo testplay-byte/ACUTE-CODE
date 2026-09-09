@@ -2457,13 +2457,25 @@ export async function updateDebugSettings(
 
 /** ROUND-78 (R78-C, owner: "General Settings 重试配置" — per-failure-type
  * auto-retry switches): the runtime's retry-ladder gates. When a switch is
- * off, that failure class NEVER enters the 6-attempt ladder — it fails fast
+ * off, that failure class NEVER enters the ladder — it fails fast
  * (attempts:1) through the honest terminal path with the provider's REAL
- * error text. All default true (the R75 ladder behavior). */
+ * error text. All default true (the R75 ladder behavior).
+ * ROUND-80 (R80, owner: "in the settings retry customization is needed"):
+ * the CUSTOMIZABLE schedule joins the object — maxAttempts (2–10, default
+ * 6), waitMinutes (rung waits in minutes, default [0, 1.5, 5, 10, 30]),
+ * and providerTimeoutSeconds (60–3600, default 600). The agent-core
+ * resolveRetrySchedule() turns these into the per-turn ladder; the Settings
+ * card edits them. */
 export interface RetrySettings {
   autoRetryRateLimit: boolean;
   autoRetryTimeout: boolean;
   autoRetryNetwork: boolean;
+  /** R80: total attempts per turn (initial + rungs), 2–10, default 6. */
+  maxAttempts: number;
+  /** R80: rung waits in minutes (rung i = wait before attempt i+2). */
+  waitMinutes: number[];
+  /** R80: provider call ceiling in seconds, 60–3600, default 600. */
+  providerTimeoutSeconds: number;
 }
 
 export async function fetchRetrySettings(): Promise<RetrySettings> {
@@ -2878,6 +2890,18 @@ export type StreamTurnEvent =
    * context overflow was auto-compacted and the turn is retrying (rendered
    * as a transient status note, not an error). */
   | { type: "meta.overflow_recovery"; message: string }
+  /** ROUND-80 (R80): the context/request guard frames — typed for
+   * completeness (they ride the stream right before the terminal error
+   * frame; the persisted turn.error + the error card own the render, so
+   * the store takes no action on either). Pre-R80 these frames arrived
+   * untyped and unrendered while the turn ended ok:true — the silent stop
+   * the round fixes at the runtime layer. */
+  | { type: "meta.context_limit"; tokens: number; limit: number }
+  | { type: "meta.request_limit"; requests: number; limit: number }
+  /** ROUND-80 (R80): the loop-cap frame (maxOuterLoops reached) — same
+   * treatment: informational, no store action, the turn's own terminal
+   * frame follows. */
+  | { type: "meta.continuation_complete"; iterations: number }
   /** ROUND-36 (ADR-0022): a delegated sub-agent changed state — the live
    * SubAgentCards update from these. */
   | {

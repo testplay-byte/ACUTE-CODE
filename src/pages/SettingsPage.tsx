@@ -10,7 +10,7 @@ import {
   updateRetrySettings,
   type RetrySettings,
 } from "../lib/api";
-import { ArrowLeft, Bot, Brain, Monitor, Moon, Palette, PlugZap, RefreshCw, ScanEye, Server, SlidersHorizontal, Sparkles, Sun, Users } from "lucide-react";
+import { ArrowLeft, Bot, Brain, Minus, Monitor, Moon, Palette, Plus, PlugZap, RefreshCw, RotateCcw, ScanEye, Server, SlidersHorizontal, Sparkles, Sun, Timer, Users } from "lucide-react";
 import { useThemeStore } from "../lib/theme-store";
 import { THEMES, getContrastText } from "../lib/themes";
 import { useThemeStyles } from "../lib/use-theme-styles";
@@ -412,17 +412,24 @@ function AdvancedTab() {
 }
 
 /* ── ROUND-78 (R78-C): the Auto-retry card — per-failure-type gates for the
- * transient-API retry ladder (the R75 six-attempt schedule: immediate,
- * 1.5 min, 5 min, 10 min, 30 min). The DebugModeCard pattern exactly: a
- * shared ["retry-settings"] query key, one mutation per switch, an honest
- * error line, a loading state. When a switch is OFF that failure class
- * never ladders — it fails fast through the honest terminal path with the
+ * transient-API retry ladder. The DebugModeCard pattern exactly: a shared
+ * ["retry-settings"] query key, one mutation per field, an honest error
+ * line, a loading state. When a switch is OFF that failure class never
+ * ladders — it fails fast through the honest terminal path with the
  * provider's REAL error text, which is the whole point of the R78
- * honest-errors round. */
+ * honest-errors round.
+ * ROUND-80 (R80, owner: "in the settings retry customization is needed"):
+ * the card grew the SCHEDULE section — the max-attempts stepper, one
+ * editable wait input per rung, the provider-call timeout, and Reset to
+ * defaults. Every edit rides the same PUT /settings/retry mutation
+ * (validated server-side); the engine resolves the schedule per turn, so
+ * changes apply to the next message. */
 
-/** The three switches: settings key + row label + one-line description. */
+/** The three switches: settings key + row label + one-line description.
+ * R80: keyed to the BOOLEAN fields only (RetrySettings also carries the
+ * numeric schedule now — the union would widen current[key]). */
 const RETRY_SWITCHES: ReadonlyArray<{
-  key: keyof RetrySettings;
+  key: "autoRetryRateLimit" | "autoRetryTimeout" | "autoRetryNetwork";
   label: string;
   description: string;
 }> = [
@@ -458,7 +465,7 @@ function RetryConfigCard() {
       setError(null);
       // The engine reads these settings at TURN start — a flip applies to
       // the next message (the same per-turn semantics as debug mode); only
-      // the switch state itself refetches here.
+      // the settings state itself refetches here.
       void queryClient.invalidateQueries({ queryKey: ["retry-settings"] });
     },
     onError: (err: Error) => setError(err.message),
@@ -480,6 +487,58 @@ function RetryConfigCard() {
   }
 
   const busy = toggle.isPending;
+
+  /** R80: the human line for the CURRENT schedule — the agent-core
+   * describeRetrySchedule phrasing mirrored client-side (the footnote and
+   * the card copy never hardcode the R75 rungs again). */
+  const scheduleLabel = current.waitMinutes
+    .slice(0, Math.max(0, current.maxAttempts - 1))
+    .map((m) => (m === 0 ? "immediately" : m < 1 ? `${Math.round(m * 60)} s` : `${m % 1 === 0 ? m : m.toFixed(1)} min`))
+    .join(", ");
+
+  /** R80: one editable wait input per rung (attempt 2..maxAttempts). */
+  const rungCount = Math.max(1, current.maxAttempts - 1);
+  const rungs = Array.from({ length: rungCount }, (_, i) => i);
+
+  const setMaxAttempts = (value: number) => {
+    const clamped = Math.min(10, Math.max(2, Math.round(value)));
+    if (clamped === current.maxAttempts) return;
+    toggle.mutate({ maxAttempts: clamped });
+  };
+
+  const setRungWait = (index: number, value: number) => {
+    const clamped = Math.min(1440, Math.max(0, value));
+    if (clamped === current.waitMinutes[index]) return;
+    const next = [...current.waitMinutes];
+    // Pad with the defaults so the stored row always covers the rungs the
+    // current maxAttempts will resolve (the resolver pads too — belt + braces).
+    while (next.length < rungCount) next.push(30);
+    next[index] = clamped;
+    toggle.mutate({ waitMinutes: next.slice(0, 9) });
+  };
+
+  const setProviderTimeout = (value: number) => {
+    const clamped = Math.min(3600, Math.max(60, Math.round(value)));
+    if (clamped === current.providerTimeoutSeconds) return;
+    toggle.mutate({ providerTimeoutSeconds: clamped });
+  };
+
+  const resetDefaults = () => {
+    toggle.mutate({
+      autoRetryRateLimit: true,
+      autoRetryTimeout: true,
+      autoRetryNetwork: true,
+      maxAttempts: 6,
+      waitMinutes: [0, 1.5, 5, 10, 30],
+      providerTimeoutSeconds: 600,
+    });
+  };
+
+  const inputStyle = {
+    background: styles.subtle,
+    border: bdr("1.5px", styles.border),
+    color: styles.text,
+  } as const;
 
   return (
     <section
@@ -527,6 +586,159 @@ function RetryConfigCard() {
           </div>
         ))}
       </div>
+
+      {/* R80: the CUSTOMIZABLE schedule — max attempts + per-rung waits +
+          the provider call timeout. Every value edits through the same
+          PUT /settings/retry mutation (validated server-side against the
+          same bounds the runtime resolves with). */}
+      <div className="mt-4 pt-3" style={{ borderTop: bdr("1.5px", styles.border) }}>
+        <div className="mb-2.5 flex items-center gap-2">
+          <Timer size={12} style={{ color: styles.accent, opacity: 0.7 }} />
+          <span className="text-[12px] font-semibold" style={{ color: styles.text }}>
+            Schedule
+          </span>
+        </div>
+
+        {/* Max attempts stepper */}
+        <div className="flex items-center gap-3">
+          <div className="min-w-[200px] flex-1">
+            <div className="text-[12.5px] font-bold" style={{ color: styles.text }}>
+              Max attempts
+            </div>
+            <div className="text-[11px]" style={{ color: styles.textTertiary }}>
+              Total provider attempts per turn (initial call + retries).
+            </div>
+          </div>
+          <div className="flex items-center gap-1.5 shrink-0" data-testid="retry-max-attempts-group">
+            <button
+              type="button"
+              aria-label="Decrease max attempts"
+              data-testid="retry-max-attempts-minus"
+              disabled={busy || current.maxAttempts <= 2}
+              onClick={() => setMaxAttempts(current.maxAttempts - 1)}
+              className="h-7 w-7 grid place-items-center rounded-lg border transition-colors disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer"
+              style={inputStyle}
+            >
+              <Minus size={12} />
+            </button>
+            <span
+              data-testid="retry-max-attempts"
+              className="w-8 text-center text-[13px] font-mono font-bold"
+              style={{ color: styles.text }}
+            >
+              {current.maxAttempts}
+            </span>
+            <button
+              type="button"
+              aria-label="Increase max attempts"
+              data-testid="retry-max-attempts-plus"
+              disabled={busy || current.maxAttempts >= 10}
+              onClick={() => setMaxAttempts(current.maxAttempts + 1)}
+              className="h-7 w-7 grid place-items-center rounded-lg border transition-colors disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer"
+              style={inputStyle}
+            >
+              <Plus size={12} />
+            </button>
+          </div>
+        </div>
+
+        {/* Per-rung waits (minutes) */}
+        <div className="mt-3">
+          <div className="text-[12.5px] font-bold mb-1" style={{ color: styles.text }}>
+            Wait before each retry
+          </div>
+          <div className="text-[11px] mb-2" style={{ color: styles.textTertiary }}>
+            Minutes to wait before each retry attempt (0 = retry immediately).
+          </div>
+          <div className="flex flex-wrap gap-2">
+            {rungs.map((i) => (
+              <label key={i} className="flex items-center gap-1.5" data-testid={`retry-wait-row-${i}`}>
+                <span className="text-[10.5px] font-mono shrink-0" style={{ color: styles.textTertiary }}>
+                  #{i + 2}
+                </span>
+                <input
+                  type="number"
+                  min={0}
+                  max={1440}
+                  step={0.5}
+                  disabled={busy}
+                  data-testid={`retry-wait-${i}`}
+                  aria-label={`Wait in minutes before retry attempt ${i + 2}`}
+                  value={current.waitMinutes[i] ?? 30}
+                  onChange={(e) => {
+                    const parsed = Number(e.target.value);
+                    if (Number.isFinite(parsed)) setRungWait(i, parsed);
+                  }}
+                  onBlur={(e) => {
+                    // Out-of-range blur snaps back to the persisted value
+                    // (the server rejects out-of-bounds — never a stuck
+                    // invalid input).
+                    const parsed = Number(e.target.value);
+                    if (!Number.isFinite(parsed) || parsed < 0 || parsed > 1440) {
+                      e.target.value = String(current.waitMinutes[i] ?? 30);
+                    }
+                  }}
+                  className="h-7 w-[74px] rounded-lg px-2 font-mono text-[11.5px] outline-none transition-colors disabled:cursor-wait disabled:opacity-60"
+                  style={inputStyle}
+                />
+                <span className="text-[10.5px] font-mono shrink-0" style={{ color: styles.textTertiary }}>
+                  min
+                </span>
+              </label>
+            ))}
+          </div>
+        </div>
+
+        {/* Provider call timeout */}
+        <div className="mt-3 flex items-center gap-3">
+          <div className="min-w-[200px] flex-1">
+            <div className="text-[12.5px] font-bold" style={{ color: styles.text }}>
+              Provider call timeout
+            </div>
+            <div className="text-[11px]" style={{ color: styles.textTertiary }}>
+              Seconds before a stuck provider call aborts (then retries if timeouts are on).
+            </div>
+          </div>
+          <input
+            type="number"
+            min={60}
+            max={3600}
+            step={30}
+            disabled={busy}
+            data-testid="retry-timeout"
+            aria-label="Provider call timeout in seconds"
+            value={current.providerTimeoutSeconds}
+            onChange={(e) => {
+              const parsed = Number(e.target.value);
+              if (Number.isFinite(parsed)) setProviderTimeout(parsed);
+            }}
+            onBlur={(e) => {
+              const parsed = Number(e.target.value);
+              if (!Number.isFinite(parsed) || parsed < 60 || parsed > 3600) {
+                e.target.value = String(current.providerTimeoutSeconds);
+              }
+            }}
+            className="h-7 w-[84px] rounded-lg px-2 font-mono text-[11.5px] outline-none transition-colors shrink-0 disabled:cursor-wait disabled:opacity-60"
+            style={inputStyle}
+          />
+        </div>
+
+        {/* Reset to defaults */}
+        <div className="mt-3">
+          <button
+            type="button"
+            disabled={busy}
+            data-testid="retry-reset"
+            onClick={resetDefaults}
+            className="h-7 px-2.5 rounded-lg text-[11.5px] font-semibold border transition-colors inline-flex items-center gap-1.5 cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
+            style={{ borderColor: styles.border, color: styles.textSecondary }}
+          >
+            <RotateCcw size={11} />
+            Reset to defaults
+          </button>
+        </div>
+      </div>
+
       {error ? (
         <div className="mt-2 text-[11px]" style={{ color: "#e5484d" }} role="alert">
           {error}
@@ -534,7 +746,7 @@ function RetryConfigCard() {
       ) : null}
       <div className="mt-3 text-[11px] leading-relaxed" style={{ color: styles.textTertiary }}>
         When a switch is off, that failure type shows immediately with the provider&apos;s real error text instead of
-        auto-retrying (6 attempts: immediate, 1.5 min, 5 min, 10 min, 30 min).
+        auto-retrying ({current.maxAttempts} attempts: {scheduleLabel}).
       </div>
     </section>
   );

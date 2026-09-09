@@ -8,12 +8,15 @@ import type Database from "better-sqlite3";
 
 export type SqliteDatabase = Database.Database;
 
-/** Provider ids reserved for the built-in adapters (API.md §8.1); custom rows may not claim them. */
+/** Provider ids reserved for the built-in adapters (API.md §8.1); custom rows may not claim them.
+ * ROUND-80 (R80, owner: "make sure it works with the nvidia api key too"):
+ * "nvidia" joins the reserved set — the built-in NIM row is seeded below. */
 export const RESERVED_PROVIDER_IDS: readonly string[] = [
   "anthropic",
   "openai",
   "google",
   "openrouter",
+  "nvidia",
 ];
 
 /** The only provider kind registerable through the API in v1. */
@@ -42,6 +45,14 @@ const BUILTIN_PROVIDER_SEEDS: readonly BuiltinProviderSeed[] = [
   { id: "anthropic", name: "Anthropic", baseUrl: "https://api.anthropic.com/v1", apiFormat: "anthropic-messages" },
   { id: "openai", name: "OpenAI", baseUrl: "https://api.openai.com/v1" },
   { id: "google", name: "Google", baseUrl: "https://generativelanguage.googleapis.com/v1beta/openai" },
+  // ROUND-80 (R80, owner: "make sure it works with the nvidia api key too"):
+  // NVIDIA NIM (build.nvidia.com) — an OpenAI-compatible /v1 surface at
+  // integrate.api.nvidia.com with `nvapi-…` keys. The chat adapter's
+  // createOpenAICompatible path speaks it as-is; the key rides
+  // ACUTE_PROVIDER_NVIDIA (env spawn injection, keys.rs provider_key_env_targets
+  // + dev.mjs). Models load through the existing provider /models fetch +
+  // POST /providers/:id/models upsert — no catalog seeds needed.
+  { id: "nvidia", name: "NVIDIA", baseUrl: "https://integrate.api.nvidia.com/v1" },
 ];
 
 /**

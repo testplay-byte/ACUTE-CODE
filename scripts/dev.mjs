@@ -8,6 +8,10 @@
  * FIXED port 127.0.0.1:5178 (the address the UI already defaults to) with
  *   - a stable dev SQLite DB at .dev/acute.db (gitignored, survives restarts)
  *   - the OpenRouter key read from Windows Credential Manager (never printed)
+ *   - ROUND-80 (R80): the NVIDIA key (ACUTE_PROVIDER_NVIDIA env or
+ *     ~/.acute/nvidia.key) — the built-in nvidia provider row is seeded on
+ *     every boot; with a key present the connection test + models fetch
+ *     work out of the box.
  * then starts vite. One Ctrl+C stops both.
  *
  * Plain `pnpm dev` (UI only, no sidecar) keeps working exactly as before.
@@ -104,6 +108,31 @@ function readSlotKey(slot) {
   return key;
 }
 
+/**
+ * ROUND-80 (R80, owner: "make sure it works with the nvidia api key too"):
+ * the NVIDIA NIM key — env passthrough (ACUTE_PROVIDER_NVIDIA, how the
+ * packaged app injects it) -> Linux/macOS key file (~/.acute/nvidia.key).
+ * Absence is non-fatal (the nvidia provider row seeds regardless; its
+ * connection test simply reports no key). Never printed — length only.
+ */
+function readNvidiaKey() {
+  if (process.env.ACUTE_PROVIDER_NVIDIA) {
+    const fromEnv = process.env.ACUTE_PROVIDER_NVIDIA;
+    console.error(`[dev] NVIDIA key from ACUTE_PROVIDER_NVIDIA env (length ${fromEnv.length}).`);
+    return fromEnv;
+  }
+  const keyFile = resolve(process.env.HOME ?? ".", ".acute", "nvidia.key");
+  if (process.platform !== "win32" && existsSync(keyFile)) {
+    const fromFile = readFileSync(keyFile, "utf8").trim();
+    if (fromFile) {
+      console.error(`[dev] NVIDIA key from ${keyFile} (length ${fromFile.length}).`);
+      return fromFile;
+    }
+  }
+  console.error("[dev] No NVIDIA key found (ACUTE_PROVIDER_NVIDIA env or ~/.acute/nvidia.key) — the nvidia provider stays keyless until one is stored.");
+  return "";
+}
+
 const poolSlots = [2, 3, 4]
   .map((slot) => [slot, readSlotKey(slot)])
   .filter(([, key]) => key !== "");
@@ -122,6 +151,8 @@ for (const [slot, slotKey] of poolSlots) slotEnv[`ACUTE_PROVIDER_OPENROUTER_SLOT
 if (poolSlots.length > 0) {
   console.error(`[dev] sub-agent key pool: ${poolSlots.length} slot key(s) active (${poolSlots.map(([s]) => `slot ${s}`).join(", ")}).`);
 }
+// ROUND-80 (R80): the NVIDIA key rides the same spawn-env pattern.
+const nvidiaKey = readNvidiaKey();
 const sidecar = spawn(process.execPath, [distMain], {
   cwd: repoRoot,
   env: {
@@ -131,6 +162,7 @@ const sidecar = spawn(process.execPath, [distMain], {
     ACUTE_DB_PATH: resolve(devDir, "acute.db"),
     ...(key ? { ACUTE_PROVIDER_OPENROUTER: key } : {}),
     ...slotEnv,
+    ...(nvidiaKey ? { ACUTE_PROVIDER_NVIDIA: nvidiaKey } : {}),
   },
   stdio: ["ignore", "pipe", "pipe"],
 });

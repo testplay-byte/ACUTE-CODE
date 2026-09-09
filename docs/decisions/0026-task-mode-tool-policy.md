@@ -1,4 +1,4 @@
-<!-- last-reviewed: 2026-09-07 round-76 -->
+<!-- last-reviewed: 2026-09-09 round-80 -->
 # ADR-0026: Task-mode tool policy — hard enforcement with owner pinning
 
 - **Status:** ACCEPTED

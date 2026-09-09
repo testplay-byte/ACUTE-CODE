@@ -132,10 +132,14 @@ describe("streamAiSdkChat tool-input forwarding (ROUND-58 R58-c)", () => {
       fullStream: (async function* () {
         // fullStream part shapes per the AI SDK v7 types: {id, toolName} /
         // {id, delta} — chat.ts normalizes them to toolCallId/inputTextDelta.
+        // (R80: a healthy provider stream ALWAYS ends its steps with a
+        // finish-step part — the mock must model the real wire, else the
+        // R80 truncation guard rightly flags it as a clean-close drop.)
         yield { type: "tool-input-start", id: "call-1", toolName: "write_file" };
         yield { type: "tool-input-delta", id: "call-1", delta: '{"path":"a.t' };
         yield { type: "tool-input-delta", id: "call-1", delta: 'xt","content":"hi"}' };
         yield { type: "tool-call", toolName: "write_file", input: { path: "a.txt", content: "hi" } };
+        yield { type: "finish-step", usage: { inputTokens: 1, outputTokens: 1 } };
       })(),
       totalUsage: Promise.resolve({ inputTokens: 1, outputTokens: 1, totalTokens: 2 }),
       usage: Promise.resolve({ inputTokens: 1, outputTokens: 1, totalTokens: 2 }),
@@ -395,6 +399,9 @@ describe("debug analyst phase on the stream route (ROUND-66 R66-2-c)", () => {
         output: { ok: true, output: "wrote 2 bytes" },
       };
       yield { type: "text-delta", text: "Task completed. The file is written." };
+      // R80: the healthy wire carries its finish-step (else the truncation
+      // guard rightly flags the mock as a clean-close drop).
+      yield { type: "finish-step", usage: { inputTokens: 10, outputTokens: 10 } };
     })(),
     totalUsage: Promise.resolve({ inputTokens: 10, outputTokens: 10, totalTokens: 20 }),
     usage: Promise.resolve({ inputTokens: 10, outputTokens: 10, totalTokens: 20 }),
@@ -405,6 +412,8 @@ describe("debug analyst phase on the stream route (ROUND-66 R66-2-c)", () => {
     fullStream: (async function* () {
       yield { type: "text-delta", text: "## What the task was\n" };
       yield { type: "text-delta", text: "Write a.txt. write_file returned ok — the result is sane." };
+      // R80: the healthy wire carries its finish-step.
+      yield { type: "finish-step", usage: { inputTokens: 40, outputTokens: 30 } };
     })(),
     totalUsage: Promise.resolve({ inputTokens: 40, outputTokens: 30, totalTokens: 70 }),
     usage: Promise.resolve({ inputTokens: 40, outputTokens: 30, totalTokens: 70 }),

@@ -538,6 +538,11 @@ function sdkStream(
   return {
     fullStream: (async function* () {
       for (const part of parts) yield part;
+      // R80: a healthy provider stream ALWAYS ends each step with a
+      // finish-step part (the chat-completions finish_reason, mapped by the
+      // SDK). Without it the R80 truncation guard rightly reads the mock as
+      // a clean-close drop and throws — these tests model HEALTHY streams.
+      yield { type: "finish-step", usage: { inputTokens: 5, outputTokens: 5 } };
     })(),
     totalUsage: Promise.resolve(usage),
     usage: Promise.resolve(usage),
@@ -658,6 +663,8 @@ describe("R78: turn-end continuation on the streamed route", () => {
               payload: { content: "while you were working" },
             });
             yield { type: "text-delta", text: "Task completed." };
+            // R80: the healthy wire carries its finish-step (see sdkStream).
+            yield { type: "finish-step", usage: { inputTokens: 5, outputTokens: 5 } };
           })(),
           totalUsage: Promise.resolve(usage),
           usage: Promise.resolve(usage),

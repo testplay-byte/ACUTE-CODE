@@ -81,6 +81,9 @@ const SCRUB_PATTERNS: [RegExp, string][] = [
   [/Bearer\s+[A-Za-z0-9._~+/=-]{6,}/gi, "Bearer ***"],
   [/\bAuthorization\s*:\s*[^\s"',;]+/gi, "Authorization: ***"],
   [/\bsk-[A-Za-z0-9_-]{6,}\b/g, "sk-***"],
+  // ROUND-80 (R80): the NVIDIA NIM key prefix (nvapi-…) — same rule,
+  // same redaction shape.
+  [/\bnvapi-[A-Za-z0-9_-]{6,}\b/g, "nvapi-***"],
   [/\b(api[-_]?key|token|secret|password)\b\s*[:=]\s*["']?[^\s"',;]+/gi, "$1: ***"],
 ];
 

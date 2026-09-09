@@ -341,6 +341,9 @@ export function summarizeToolOutput(output: unknown, toolName?: string): string 
   // keyring values too, but this guard lives at the source).
   text = text.replace(/sk-[A-Za-z0-9_-]{16,}/g, "sk-***");
   text = text.replace(/github_pat_[A-Za-z0-9_]+/g, "github_pat_***");
+  // ROUND-80 (R80): the NVIDIA NIM key prefix (nvapi-…) joins the
+  // pattern scrub — run_command output and tool summaries must never leak it.
+  text = text.replace(/nvapi-[A-Za-z0-9_-]{16,}/g, "nvapi-***");
   // Head+tail budget: command/read outputs keep 2000 head + 2000 tail chars.
   // Sticky tools (R70-b D3) keep a 60K budget instead — see the header.
   const budget = toolName !== undefined && isStickyResultTool(toolName) ? STICKY_OUTPUT_BUDGET : 4000;
@@ -442,6 +445,17 @@ export const streamAiSdkChat: StreamChatFn = async function* (input) {
   // usage and cross-checked against the awaited totals exactly like the
   // input/output token counts (some providers report only one of the two).
   let stepCached = 0;
+  // ROUND-80 (R80, owner: "the chat ends without any error message or
+  // anything some times"): the silent-truncation witnesses. A HEALTHY
+  // provider stream always carries at least one finish-step part (the
+  // chat-completions finish_reason mapped by the SDK — one per step); a
+  // provider/proxy that closes the SSE connection CLEANLY mid-generation
+  // ends the for-await with NO error part and NO finish-step — the old
+  // adapter synthesized a finish below, the runtime treated the truncated
+  // text as a complete conversational reply, and the chat just stopped with
+  // no error. Zero finish-steps + content deltas streamed = truncation.
+  let stepFinishCount = 0;
+  let sawContentDelta = false;
   for await (const part of result.fullStream) {
     // ROUND-75 (R75, the live 429 find): the SDK surfaces mid-stream
     // failures — provider errors AFTER its internal retries (429 rate
@@ -459,12 +473,15 @@ export const streamAiSdkChat: StreamChatFn = async function* (input) {
       throw (part as { error: unknown }).error;
     }
     if (part.type === "text-delta") {
+      sawContentDelta = true;
       yield { type: "text-delta", delta: part.text };
     } else if (part.type === "reasoning-delta") {
+      sawContentDelta = true;
       // ROUND-35: thinking tokens stream as a separate channel so the UI can
       // render them in a muted, collapsible block apart from the answer.
       yield { type: "thinking-delta", delta: part.text };
     } else if (part.type === "tool-input-start") {
+      sawContentDelta = true;
       // ROUND-58 (R58-c): the model started generating a tool call's JSON
       // arguments — emit immediately so the UI can open a live preview row.
       // (fullStream part shape: {id, toolName} — normalized to toolCallId
@@ -496,6 +513,7 @@ export const streamAiSdkChat: StreamChatFn = async function* (input) {
         outputSummary: summarizeToolOutput(part.output, part.toolName),
       };
     } else if (part.type === "finish-step") {
+      stepFinishCount += 1;
       const stepUsage = (part as { usage?: { inputTokens?: number; outputTokens?: number } }).usage;
       if (stepUsage) {
         stepInput += stepUsage.inputTokens ?? 0;
@@ -505,6 +523,21 @@ export const streamAiSdkChat: StreamChatFn = async function* (input) {
             ?.inputTokenDetails?.cacheReadTokens ?? 0;
       }
     }
+  }
+  // ROUND-80 (R80): the silent-truncation guard — zero finish-step parts
+  // while content deltas streamed means the provider closed the stream
+  // mid-response without an error part (the clean-close drop). Throw the
+  // honest truncation error INSTEAD of synthesizing a finish: the runtime's
+  // classifier reads it as `network` (transient → the retry ladder can
+  // wait it out), the partial text is preserved by the R75 flush, and the
+  // owner sees a real error card instead of a chat that just stops.
+  // Conservative by design: only fires when content WAS streaming (a
+  // contentless empty stream stays on the existing NoOutputGenerated /
+  // R77 NO_OUTPUT paths — no false positives on legitimately-empty replies).
+  if (stepFinishCount === 0 && sawContentDelta) {
+    throw new Error(
+      "provider stream ended without a finish signal — the connection closed mid-response (truncated output)",
+    );
   }
   const totals = (await result.totalUsage) ?? (await result.usage);
   usage.inputTokens = Math.max(totals.inputTokens ?? 0, stepInput);

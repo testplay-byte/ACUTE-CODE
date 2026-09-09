@@ -4,6 +4,10 @@
  *
  *  · RetrySettings storage: all-true defaults, get/set round-trip, invalid
  *    (non-boolean) patches throw, partial patches only write their own keys.
+ *    ROUND-80 (R80): the schedule fields joined the object (maxAttempts 6,
+ *    waitMinutes [0, 1.5, 5, 10, 30], providerTimeoutSeconds 600) — the
+ *    pinned literals below carry them; the SCHEDULE's own validation,
+ *    resolution, and route tests live in r80-retry-schedule.test.ts.
  *  · GET/PUT /settings/retry route: defaults, partial + full PUT round-trips,
  *    400 VALIDATION naming the offending body field, bearer wall.
  *  · The LADDER GATING in runStreamedAgentTurn (the r75-retry-ladder mock
@@ -47,6 +51,15 @@ import { buildServer } from "../src/server";
 
 const TOKEN = "test-token-r78rs";
 const KEY = "sk-or-vtest-r78rs";
+
+/** ROUND-80 (R80): the additive schedule defaults — every R78 pin carries
+ * them now (the booleans' behavior is UNCHANGED; this keeps the literals
+ * honest without repeating five fields ten times). */
+const R80_TAIL = {
+  maxAttempts: 6,
+  waitMinutes: [0, 1.5, 5, 10, 30] as number[],
+  providerTimeoutSeconds: 600,
+};
 
 let tempDir = "";
 let db: SqliteDatabase;
@@ -94,6 +107,7 @@ describe("R78: RetrySettings storage", () => {
       autoRetryRateLimit: true,
       autoRetryTimeout: true,
       autoRetryNetwork: true,
+      ...R80_TAIL,
     } satisfies RetrySettings);
   });
 
@@ -102,17 +116,20 @@ describe("R78: RetrySettings storage", () => {
       autoRetryRateLimit: false,
       autoRetryTimeout: true,
       autoRetryNetwork: true,
+      ...R80_TAIL,
     });
     expect(setRetrySettings(db, { autoRetryTimeout: false, autoRetryNetwork: false })).toEqual({
       autoRetryRateLimit: false,
       autoRetryTimeout: false,
       autoRetryNetwork: false,
+      ...R80_TAIL,
     });
     // A fresh read sees the same values (persisted, not just returned).
     expect(getRetrySettings(db)).toEqual({
       autoRetryRateLimit: false,
       autoRetryTimeout: false,
       autoRetryNetwork: false,
+      ...R80_TAIL,
     });
     // Empty patch = no-op.
     expect(setRetrySettings(db, {})).toEqual(getRetrySettings(db));
@@ -141,6 +158,7 @@ describe("R78: GET/PUT /settings/retry", () => {
       autoRetryRateLimit: true,
       autoRetryTimeout: true,
       autoRetryNetwork: true,
+      ...R80_TAIL,
     });
   });
 
@@ -155,6 +173,7 @@ describe("R78: GET/PUT /settings/retry", () => {
       autoRetryRateLimit: false,
       autoRetryTimeout: true,
       autoRetryNetwork: true,
+      ...R80_TAIL,
     });
     const reread = await authInject({ method: "GET", url: "/api/v1/settings/retry" });
     expect(reread.json()).toEqual(off.json());
@@ -168,6 +187,7 @@ describe("R78: GET/PUT /settings/retry", () => {
       autoRetryRateLimit: false,
       autoRetryTimeout: false,
       autoRetryNetwork: false,
+      ...R80_TAIL,
     });
   });
 

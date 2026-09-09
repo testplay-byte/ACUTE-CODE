@@ -127,6 +127,109 @@ export function waitForRetry(args: {
   });
 }
 
+/* ── ROUND-80 (R80, owner: "in the settings retry customization is needed")
+ * — the CUSTOMIZABLE schedule ──────────────────────────────────────────────
+ *
+ * The R75 ladder above is the DEFAULT schedule (the owner's original spec,
+ * verbatim). R80 makes it configurable: RetrySettings (storage/settings.ts)
+ * now carries maxAttempts + waitMinutes + providerTimeoutSeconds, and the
+ * runtime resolves THIS module's resolveRetrySchedule() per turn from those
+ * settings. The resolution is defensive-by-construction: out-of-bounds or
+ * missing values fall back to the R75 defaults, so a corrupt row can never
+ * produce a zero-rung or negative-wait ladder. The constants above stay as
+ * the documented defaults (tests pin them; the default ladder is byte-
+ * identical to pre-R80 behavior). */
+
+/** Default total attempts (the initial call + the five default rungs). */
+export const DEFAULT_RETRY_MAX_ATTEMPTS: number = 6;
+
+/** Default rung waits in MINUTES (index = retry number - 1): the R75 spec. */
+export const DEFAULT_RETRY_WAIT_MINUTES: readonly number[] = [0, 1.5, 5, 10, 30];
+
+/** Default provider-call ceiling (10 minutes, chat.ts PROVIDER_CALL_TIMEOUT_MS). */
+export const DEFAULT_PROVIDER_TIMEOUT_SECONDS: number = 600;
+
+/** Bounds (storage + route validation + resolution all agree on these). */
+export const RETRY_MAX_ATTEMPTS_BOUNDS = { min: 2, max: 10 } as const;
+export const RETRY_WAIT_MINUTES_BOUNDS = { min: 0, max: 1440 } as const;
+export const PROVIDER_TIMEOUT_SECONDS_BOUNDS = { min: 60, max: 3600 } as const;
+
+/** The settings shape resolveRetrySchedule reads (RetrySettings structurally). */
+export interface RetryScheduleSettings {
+  maxAttempts?: number;
+  waitMinutes?: number[];
+  providerTimeoutSeconds?: number;
+}
+
+/** The per-turn resolved schedule the runtime's catch blocks consume. */
+export interface ResolvedRetrySchedule {
+  /** Rung waits in ms; length = totalAttempts - 1 (≥ 1 by bounds). */
+  ladderMs: number[];
+  /** Total provider attempts per turn (initial + rungs). */
+  totalAttempts: number;
+  /** The provider-call ceiling in ms (chat.ts input.timeoutMs). */
+  timeoutMs: number;
+}
+
+function clampInteger(value: unknown, min: number, max: number, fallback: number): number {
+  if (typeof value !== "number" || !Number.isFinite(value)) return fallback;
+  const rounded = Math.round(value);
+  if (rounded < min || rounded > max) return fallback;
+  return rounded;
+}
+
+/**
+ * Resolve the per-turn retry schedule from the (possibly partial/corrupt)
+ * settings. Pure; never throws. Missing/out-of-bounds maxAttempts → 6;
+ * each rung falls back to DEFAULT_RETRY_WAIT_MINUTES[i] (then the final
+ * default rung for indexes past the default array — a 10-attempt schedule
+ * extends with 30-min waits); timeout falls back to 600 s. Wait entries
+ * outside [0, 1440] minutes fall back rung-by-rung (never clamp silently —
+ * a 2-minute typo stays 2 minutes, an impossible value becomes the default).
+ */
+export function resolveRetrySchedule(settings: RetryScheduleSettings): ResolvedRetrySchedule {
+  const totalAttempts = clampInteger(
+    settings.maxAttempts,
+    RETRY_MAX_ATTEMPTS_BOUNDS.min,
+    RETRY_MAX_ATTEMPTS_BOUNDS.max,
+    DEFAULT_RETRY_MAX_ATTEMPTS,
+  );
+  const rungCount = totalAttempts - 1;
+  const source = Array.isArray(settings.waitMinutes) ? settings.waitMinutes : [];
+  const ladderMs: number[] = [];
+  for (let i = 0; i < rungCount; i += 1) {
+    const provided = source[i];
+    const fallback =
+      DEFAULT_RETRY_WAIT_MINUTES[i] ??
+      DEFAULT_RETRY_WAIT_MINUTES[DEFAULT_RETRY_WAIT_MINUTES.length - 1];
+    const minutes =
+      typeof provided === "number" &&
+      Number.isFinite(provided) &&
+      provided >= RETRY_WAIT_MINUTES_BOUNDS.min &&
+      provided <= RETRY_WAIT_MINUTES_BOUNDS.max
+        ? provided
+        : fallback;
+    ladderMs.push(Math.round(minutes * 60_000));
+  }
+  const timeoutSeconds = clampInteger(
+    settings.providerTimeoutSeconds,
+    PROVIDER_TIMEOUT_SECONDS_BOUNDS.min,
+    PROVIDER_TIMEOUT_SECONDS_BOUNDS.max,
+    DEFAULT_PROVIDER_TIMEOUT_SECONDS,
+  );
+  return { ladderMs, totalAttempts, timeoutMs: timeoutSeconds * 1000 };
+}
+
+/**
+ * The human line for a resolved schedule — "immediately, 1.5 min, 5 min,
+ * 10 min, 30 min" — used by the task_failed notification body (server.ts)
+ * and the Settings card's footnote, so every surface phrases the schedule
+ * the owner configured, never the hardcoded R75 one.
+ */
+export function describeRetrySchedule(schedule: ResolvedRetrySchedule): string {
+  return schedule.ladderMs.map((ms) => formatRetryWaitMs(ms)).join(", ");
+}
+
 /* ── The active-wait registry (supervisor interplay) ───────────────────────── */
 
 export interface ActiveRetryWait {

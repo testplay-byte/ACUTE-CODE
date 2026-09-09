@@ -207,6 +207,18 @@ const PRESETS: Array<{
     apiFormat: "chat-completions",
     blurb: "Gemini models via the OpenAI-compatible surface.",
   },
+  {
+    // ROUND-80 (R80, owner: "make sure it works with the nvidia api key
+    // too"): NVIDIA NIM (build.nvidia.com) — OpenAI-compatible chat
+    // completions at integrate.api.nvidia.com with nvapi-… keys. The row
+    // is a seeded built-in (agent-core storage/providers.ts); this preset
+    // routes the Add-Provider dialog's key storage to the same id.
+    id: "nvidia",
+    name: "NVIDIA",
+    baseUrl: "https://integrate.api.nvidia.com/v1",
+    apiFormat: "chat-completions",
+    blurb: "NIM models (Llama, Nemotron, DeepSeek…) via build.nvidia.com.",
+  },
 ];
 
 const formatLabel = (id: string | undefined): string =>
@@ -222,6 +234,7 @@ const PRESET_PROVIDER_IDS: ReadonlySet<string> = new Set([
   "openai",
   "google",
   "openrouter",
+  "nvidia",
 ]);
 
 /* ── ROUND-50 (R50-d) shared micro-formatting ─────────────────────────────── */

@@ -1,4 +1,4 @@
-<!-- last-reviewed: 2026-09-08 round-79 -->
+<!-- last-reviewed: 2026-09-09 round-80 -->
 # IMPLEMENTED API — the shipped surface
 
 **Truth = this file.** Verified against `agent-core/src/server.ts` at
@@ -2087,3 +2087,86 @@ strictly ctx-gated — the golden fixture's byte-identity proof).
   `taskId`; `stream-store.ts`'s live entry carries it; the chips render
   only when non-null (`subagent-taskid-chip` in the Sub-agents panel
   header, `subagent-card-taskid` on the chat card).
+
+## ROUND-80 additions (implemented)
+
+The reliability round (the owner's four-clause field report: silent
+stops / raw errors / retry customization / NVIDIA). NO new REST routes
+and NO new event types; the changes are three additive fields on
+`/settings/retry`, two NEW turn-error codes, one NEW seeded provider,
+and the raised error-detail caps.
+
+### `GET /settings/retry` + `PUT /settings/retry` — the schedule fields
+
+The R78 object gains three fields (all default = the R75 behavior,
+byte-identical when unset):
+
+- **`maxAttempts`** — total provider attempts per turn (initial call +
+  rungs), integer 2–10, default 6. Settings key `retry.maxAttempts`.
+- **`waitMinutes`** — the rung waits in MINUTES (JSON array; rung i =
+  the wait before attempt i+2), 1–9 entries of 0–1440 each, default
+  `[0, 1.5, 5, 10, 30]`. Settings key `retry.waitMinutes` (stored as
+  JSON; read defensively — corrupt entries fall back rung-by-rung).
+- **`providerTimeoutSeconds`** — the per-call provider ceiling,
+  integer 60–3600, default 600 (the old hardcoded
+  `PROVIDER_CALL_TIMEOUT_MS`). Settings key
+  `retry.providerTimeoutSeconds`.
+
+`PUT` accepts them in the same partial-patch style as the booleans;
+out-of-bounds values → 400 VALIDATION with `details.field` naming the
+offending field (the route validates AND the storage layer re-validates
+— the same bounds both places). The runtime resolves the schedule once
+per turn via `resolveRetrySchedule(retrySettings)` (agent-core
+`lib/retry.ts` — defensive: missing/out-of-bounds values fall back
+rung-by-rung to the R75 defaults, so a corrupt row can never produce a
+zero-rung or negative-wait ladder) and threads `timeoutMs` into the
+chat/chatStream inputs; every `meta.retry` frame's
+`totalAttempts`/`waitMs`, the `task_failed` notification's schedule
+line, and the Settings card's footnote follow the RESOLVED schedule.
+New exported surface: `resolveRetrySchedule`, `describeRetrySchedule`,
+`DEFAULT_RETRY_MAX_ATTEMPTS`, `DEFAULT_RETRY_WAIT_MINUTES`,
+`DEFAULT_PROVIDER_TIMEOUT_SECONDS`, and the three bounds tuples.
+
+### Turn outcome codes: `CONTEXT_LIMIT` + `REQUEST_LIMIT`
+
+The streamed turn's 502 `TurnOutcome.code` union (and the persisted
+`turn.error` payload `code`) gains both — the 800k-token context guard
+and the 200-request guard now end through the honest terminal path
+(persisted turn.error + usage + the 502 outcome + the session reset to
+`queued`; pre-R80 they broke the loop with `ok:true` + SSE-only meta
+frames). The route-level crash handler also persists now: an unexpected
+exception inside the stream route writes a best-effort `turn.error`
+(code `INTERNAL_ERROR`, `route crash: <message>`) + the `task_failed`
+notification, both crash-guarded — the live error frame remains the
+guaranteed terminal event.
+
+### The SSE truncation guard (adapter semantics, not a frame change)
+
+`streamAiSdkChat` counts finish-step parts: zero finish-steps + content
+deltas streamed → the honest throw
+`provider stream ended without a finish signal — the connection closed
+mid-response (truncated output)` instead of a synthesized finish
+(classified `network` — the ladder engages; the partial text is
+preserved by the R75 flush). Three meta frame types are now TYPED in
+the frontend union (the store takes no action by design — the
+persisted turn.error + the error card own the render):
+`meta.context_limit {tokens, limit}`, `meta.request_limit {requests,
+limit}`, `meta.continuation_complete {iterations}`.
+
+### The NVIDIA provider seed + the raised caps
+
+- `nvidia` joins `RESERVED_PROVIDER_IDS` + `BUILTIN_PROVIDER_SEEDS`
+  (id `nvidia`, name "NVIDIA",
+  https://integrate.api.nvidia.com/v1, chat-completions,
+  openai-compatible) — the adapter speaks it as-is; models load through
+  the existing `GET /providers/:id/models`. The packaged app injects
+  the key via `ACUTE_PROVIDER_NVIDIA` (keys.rs
+  `provider_key_env_targets`, 4→5 entries); dev mode reads env →
+  `~/.acute/nvidia.key`. The `nvapi-…` prefix is scrubbed on every
+  key-redaction surface (`error-bus.ts` SCRUB_PATTERNS, `chat.ts`
+  summarizeToolOutput).
+- Error-detail caps raised for the raw-visibility ask:
+  `providerErrorDetail` 500 → **4000** chars, the userMessage one-liner
+  240 → **600**, the providers/registry `scrub` 500 → **4000** and
+  `upstreamErrorDetail` 160 → **2000**, the debug-analyst error slice
+  300 → **2000**. Key-scrub discipline unchanged everywhere.

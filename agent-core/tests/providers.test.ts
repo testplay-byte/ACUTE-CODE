@@ -79,6 +79,7 @@ describe("GET /api/v1/providers", () => {
         { id: "anthropic", enabled: 1 },
         { id: "openai", enabled: 1 },
         { id: "google", enabled: 1 },
+        { id: "nvidia", enabled: 1 }, // R80: the NIM seed
       ]);
     } finally {
       fresh.close();
@@ -93,7 +94,7 @@ describe("GET /api/v1/providers", () => {
     try {
       // The PK on providers.id backstops the existence check: no duplicates.
       const rows = second.prepare("SELECT id FROM providers").all() as { id: string }[];
-      expect(rows.map((row) => row.id)).toEqual(["anthropic", "google", "openai", "openrouter"]);
+      expect(rows.map((row) => row.id)).toEqual(["anthropic", "google", "nvidia", "openai", "openrouter"]);
     } finally {
       second.close();
     }
@@ -127,6 +128,16 @@ describe("GET /api/v1/providers", () => {
             name: "Google",
             kind: "openai-compatible",
             baseUrl: "https://generativelanguage.googleapis.com/v1beta/openai",
+            apiFormat: "chat-completions",
+            enabled: true,
+            createdAt: expect.any(String),
+            hasKey: false,
+          },
+          {
+            id: "nvidia",
+            name: "NVIDIA",
+            kind: "openai-compatible",
+            baseUrl: "https://integrate.api.nvidia.com/v1",
             apiFormat: "chat-completions",
             enabled: true,
             createdAt: expect.any(String),
@@ -173,7 +184,7 @@ describe("GET /api/v1/providers", () => {
     await authInject({ method: "GET", url: "/api/v1/providers" });
     await authInject({ method: "GET", url: "/api/v1/providers" });
     const rows = db.prepare("SELECT id FROM providers").all() as { id: string }[];
-    expect(rows.map((row) => row.id)).toEqual(["anthropic", "google", "openai", "openrouter"]);
+    expect(rows.map((row) => row.id)).toEqual(["anthropic", "google", "nvidia", "openai", "openrouter"]);
   });
 
   it("keeps custom rows and adds no duplicates when an existing database is reopened", () => {
@@ -194,6 +205,7 @@ describe("GET /api/v1/providers", () => {
       expect(rows.map((row) => row.id).sort()).toEqual([
         "anthropic",
         "google",
+        "nvidia",
         "openai",
         "openrouter",
         "prv_groq",
@@ -232,7 +244,7 @@ describe("POST /api/v1/providers", () => {
       .json()
       .providers.map((provider: { id: string }) => provider.id)
       .sort();
-    expect(ids).toEqual(["anthropic", "google", "openai", "openrouter", "prv_groq"]);
+    expect(ids).toEqual(["anthropic", "google", "nvidia", "openai", "openrouter", "prv_groq"]);
   });
 
   it("accepts an explicit id and honors an env-injected key for it", async () => {
