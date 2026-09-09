@@ -211,7 +211,7 @@
     }
   ],
   "quality": {
-    "ci": "PENDING — v0.79.0 staged (round 80): the reliability round (silent-stop fixes, raw error surfaces, retry customization, NVIDIA NIM support) committed and tagged; this field is synced from the Actions API after the push + release runs complete.",
+    "ci": "success — v0.79.0 released (round 80 close-out): push 4a9828e → CI run 34317366484 SUCCESS on the FIRST try (verify: lint, typechecks, the 2772/2772 root suite across 149 files, cargo check, license audit 134 deps CLEAN). Tag v0.79.0 → Release run 34318331510 SUCCESS (launcher-kit + desktop-installer + github-release) → release 385274188 PUBLISHED with both assets (ACUTE-CODE_0.79.0_x64-setup.exe 37,418,694 B + acute-launcher-kit-v0.79.0.zip 94,028 B). The DASHBOARD was truth-synced the same hour (commit f69a05c — version 0.79.0, suites 964/1796/12/10, the real ciNote, the R80 cards + milestone 61; Pages serving 0.79.0 verified with HTTP 200). The round was verified live on the real keys before the push: a real OpenRouter streamed turn end-to-end (\"R80 LIVE TURN OK\"), the retry GET/PUT round-trips with honest 400s, and the NVIDIA NIM endpoint + catalog + key auth (the account's model functions are EOL'd server-side — the raw bodies show verbatim).",
     "suites": [
       {
         "name": "frontend",
