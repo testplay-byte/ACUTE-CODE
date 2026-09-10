@@ -229,7 +229,7 @@
     }
   ],
   "quality": {
-    "ci": "PENDING — R83 push not yet made (this field is synced from the Actions API at close-out per the documented convention)",
+    "ci": "GREEN — R83 push 8920c0e → CI run 34473548501 SUCCESS on the FIRST try (verify: lint, typechecks, the 2,825-test root suite in 155 files, build, license audit 134 CLEAN). The R82 push (1932a9e) had FAILED CI — the 9 no-unused-expressions/no-unused-vars errors in scripts/battery-r82.mjs the R82 session left in the tree while claiming 'lint clean' (run 34459797061, the verify step); R83 fixed all 9 (ternary-statements → if/else + honest status checks on the previously-unused results) and the run is green again. No tag for v0.82.0 yet — the release-tag decision is queued with v0.80.0/v0.81.0.",
     "suites": [
       {
         "name": "frontend",
