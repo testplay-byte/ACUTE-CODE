@@ -190,6 +190,8 @@ milestones/quality synced to the R86 truth, rebuilt with build.mjs
 | `pnpm test:e2e` (vs built dist) | **12/12** |
 | `pnpm license:audit` | 134 deps CLEAN |
 | Live boot smoke | ACUTE_READY + the extracted route answering (honest 404 frame) |
+| CI (windows-latest) | run 34515808594 SUCCESS — the full verify pipeline on the pushed commit |
+| Release workflow | run 34515811591 SUCCESS — v0.84.0 installer + kit built, PUBLISHED at close-out (both assets verified, zero drafts remain) |
 | Round-trip verifier | the moved block byte-identical to `git show HEAD` (dedent-only diff) |
 
 ## 6. What's next (the R87 scoping input)

@@ -247,7 +247,7 @@
     }
   ],
   "quality": {
-    "ci": "PENDING — R86 push not yet made (this field is synced from the Actions API at close-out per the documented convention; the R85 verdict: push f253788 → run 34505690618 SUCCESS).",
+    "ci": "GREEN — R86 push 38ffc83 → CI run 34515808594 SUCCESS (the verification + SSE-extraction round: lint, typechecks, the 2,825-test root suite in 155 files, build, license audit, cargo check, docs check) + the Release run 34515811591 SUCCESS; v0.84.0 tagged, built, and PUBLISHED (both assets verified). The R85 verdict underneath: push f253788 → run 34505690618 SUCCESS.",
     "suites": [
       {
         "name": "frontend",
