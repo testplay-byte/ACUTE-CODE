@@ -75,6 +75,15 @@ export interface ToolDeps {
   keyring?: import("../providers/registry.js").ProviderKeyring;
   /** ROUND-36: the chat fn for child turns (injected to avoid cycles). */
   chat?: import("../agents/chat.js").ChatFn;
+  /** ROUND-84 (R84, Wave 2-c — the 25-file SCC break): the ORCHESTRATOR
+   * seam. The delegation plugin reads this FIRST; the lazy dynamic-import
+   * singleton is the fallback (the type-only import below is ERASED at
+   * runtime — no static tools→orchestrator edge; the import graph is a
+   * clean DAG: orchestrator → runtime → tools, one direction). Injected by
+   * tests that drive the orchestrator directly; production turns use the
+   * singleton fallback (prepareTurn cannot import it statically — that
+   * would re-create the runtime↔orchestrator 2-cycle). */
+  orchestrator?: import("../agents/orchestrator.js").Orchestrator;
   /** ROUND-50 (R50-b, owner: sub-agent panels must stream the raw live
    * response "just like the main agent"): the STREAMING adapter, forwarded by
    * prepareTurn when the parent turn runs the streamed path. Present → the

@@ -77,9 +77,12 @@ function overrideProviderId(
 }
 
 /** Roles map to the seeded templates' framing (children run the PARENT's
- * provider/model/temperature — templates carry no provider config). */
-const SUB_ROLES = ["planner", "researcher", "coder", "reviewer", "tester"] as const;
-export type SubRole = (typeof SUB_ROLES)[number];
+ * provider/model/temperature — templates carry no provider config).
+ * ROUND-84 (R84, Wave 2-c): the vocabulary lives in the sub-roles LEAF
+ * (agents/sub-roles.ts) — re-imported here; the value-import from the
+ * delegation plugin (the 25-file SCC's root cause) is gone. */
+import { SUB_ROLES, type SubRole } from "./sub-roles.js";
+export type { SubRole };
 
 const ROLE_FRAMING: Record<SubRole, string> = {
   planner:
@@ -1429,3 +1432,5 @@ export function getOrchestrator(): Orchestrator {
 }
 
 export { SUB_ROLES };
+// ROUND-84 (R84): the canonical home is agents/sub-roles.ts (the leaf);
+// this re-export keeps every pre-R84 import site byte-identical.

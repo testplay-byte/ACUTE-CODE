@@ -14,7 +14,17 @@
  * throws.
  */
 import { jsonSchema } from "ai";
-import { SUB_ROLES, type SubRole, getOrchestrator } from "../../agents/orchestrator.js";
+// ROUND-84 (R84, Wave 2-c — the 25-file SCC break): the delegation plugin
+// NO LONGER statically imports agents/orchestrator.js. The old edge
+// (delegation → orchestrator → runtime → tools/index → registry →
+// delegation) was ESM-legal but left NO layer boundary between the tool
+// layer and the orchestration layer (the R80.5 audit's root-cause find).
+// The vocabulary arrives from the agents/sub-roles.ts LEAF; the
+// ORCHESTRATOR arrives via the ToolDeps seam below (type-only — erased at
+// runtime) with a lazy dynamic-import fallback, so the STATIC import
+// graph is a clean DAG: tools → (leaf) sub-roles; orchestrator → runtime
+// → tools — one direction, never back.
+import { SUB_ROLES, type SubRole } from "../../agents/sub-roles.js";
 import type { PluginDefinition, ToolDefinition } from "../registry.js";
 
 export const delegationPlugin: PluginDefinition = {
@@ -81,7 +91,15 @@ export const delegationPlugin: PluginDefinition = {
             const taskId = typeof input.task_id === "string" ? input.task_id.trim() : "";
             const background = input.background === true;
             const resume = typeof input.resume === "string" ? input.resume.trim() : "";
-            const orchestrator = getOrchestrator();
+            const orchestrator =
+              // ROUND-84 (R84, Wave 2-c): the ToolDeps seam first (the
+              // audit's preferred injection — same pattern as chat/
+              // chatStream), then the lazy singleton fallback. The dynamic
+              // import is deferred to EXECUTION time: every module is
+              // loaded by then, the module cache makes repeat calls free,
+              // and no static tools→orchestrator edge exists.
+              toolDeps.orchestrator ??
+              (await import("../../agents/orchestrator.js")).getOrchestrator();
             const deps = {
               db: toolDeps.db,
               keyring,
