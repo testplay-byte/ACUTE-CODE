@@ -1,4 +1,4 @@
-<!-- last-reviewed: 2026-09-08 round-79 -->
+<!-- last-reviewed: 2026-09-10 round-83 -->
 # ACUTE-CODE — Project Map
 
 **The living map of what this project is, how every part links together, and

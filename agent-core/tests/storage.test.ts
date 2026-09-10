@@ -189,6 +189,11 @@ describe("openDatabase", () => {
       // The catalog backfill is code-side (db.ts →
       // backfillModelCapabilities, openrouter-scoped).
       { version: 30, name: "0030_model_capabilities.sql" },
+      // ROUND-83 (R83, honest metering): usage_events gains provider_calls
+      // (the REAL SDK-call count behind a turn — DEFAULT 1 keeps every
+      // pre-R83 row exactly true) + origin (turn | compaction | debug —
+      // the hidden-call rows) + the origin index.
+      { version: 31, name: "0031_usage_calls_origin.sql" },
     ]);
     expect(appliedSecond).toEqual(appliedFirst);
   });

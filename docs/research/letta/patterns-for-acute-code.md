@@ -1,4 +1,4 @@
-<!-- last-reviewed: 2026-09-08 round-79 -->
+<!-- last-reviewed: 2026-09-10 round-83 -->
 # Letta — Patterns for ACUTE-CODE
 
 > Pattern study only — no code copying. License verified Apache-2.0 (both repos), compatible with our allowed dependency set (MIT, Apache-2.0, BSD, ISC, MPL-2.0); ideas are free to reimplement. letta-code adds a trademark/brand-assets carve-out (name/logo/ASCII art), irrelevant to us.

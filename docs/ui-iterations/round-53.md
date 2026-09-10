@@ -1,4 +1,4 @@
-<!-- last-reviewed: 2026-09-08 round-79 -->
+<!-- last-reviewed: 2026-09-10 round-83 -->
 # Round 53 — The connection round: the packaged app's "Could not reach agent-core at 127.0.0.1:55963" (stale ephemeral port + handshake race + invisible startup failures), the connection splash/offline screen, restart-engine recovery, and sidecar.log diagnostics
 
 **Date:** 2026-08-30 · **Branch:** `main` · **Version:** 0.53.0 · **Owner directives:** the sixth Windows test session's report — "the application ran into some issues… it was unable to create projects… Could not reach agent-core at http://127.0.0.1:55963 (TypeError: Failed to fetch)… Agent core unreachable — start the app (or pnpm dev:full) to pick a sub-agent model… the pre saved api keys were not loaded by default… quality over speed and verify the things too."

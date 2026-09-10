@@ -111,7 +111,11 @@ export interface AgentRecord {
 
 /** One provider billing line for a completed model call. */
 export interface UsageRecord {
-  agentId: string;
+  /** The agent that authored the call — null for the R83 hidden-call rows
+   * (the compaction summarizer + the debug analyst: real provider spend
+   * with NO agent behind it; usage rows are grouped by session, never
+   * joined on agent — the null is safe by construction). */
+  agentId: string | null;
   sessionId: string;
   provider: string;
   model: string;

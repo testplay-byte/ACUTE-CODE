@@ -4,6 +4,9 @@
  * for days without traffic so the chart gets a dense ascending series.
  */
 import type Database from "better-sqlite3";
+// ROUND-83 (R83): lookupPricing for the unpriced-model honesty (costKnown);
+// models.ts imports only db.js — no cycle.
+import { lookupPricing } from "./models.js";
 
 export type SqliteDatabase = Database.Database;
 
@@ -136,6 +139,15 @@ export interface DetailedUsageModel {
   calls: number;
   tokens: DetailedUsageTokens;
   costUsd: number;
+  /** ROUND-83 (R83): the real SDK-call count behind the aggregate (the
+   * "requests" field counts TURNS/rows — one row per turn since R24; a
+   * 5-iteration turn recorded 1 "request" before). */
+  providerCalls: number;
+  /** ROUND-83 (R83): false when EVERY (provider, model) pricing row that
+   * served this model has BOTH sides unknown — the screens render
+   * "$0.00 (unpriced)" instead of a silent free lunch (the audit's
+   * §2.11). */
+  costKnown: boolean;
 }
 
 /**
@@ -175,6 +187,8 @@ export interface DetailedUsageSession {
   tokens: DetailedUsageTokens;
   costUsd: number;
   requests: number;
+  /** ROUND-83 (R83): the real SDK-call count ("requests" above = turns). */
+  providerCalls: number;
   toolCalls: DetailedUsageToolCall[];
   toolCallCount: number;
   /** How many sub-agent children this session delegated (parent rows). */
@@ -225,6 +239,8 @@ export interface DetailedUsageTotals {
   subagentSessions: number;
   toolCalls: number;
   requests: number;
+  /** ROUND-83 (R83): the real SDK-call count ("requests" above = turns). */
+  providerCalls: number;
   tokens: DetailedUsageTokens;
   costUsd: number;
 }
@@ -267,6 +283,7 @@ interface SessionUsageRow {
   output_tokens: number | null;
   cached_input_tokens: number | null;
   cost_usd: number | null;
+  provider_calls: number | null;
   first_ts: string | null;
   last_ts: string | null;
 }
@@ -279,6 +296,7 @@ interface SessionModelRow {
   output_tokens: number | null;
   cached_input_tokens: number | null;
   cost_usd: number | null;
+  provider_calls: number | null;
 }
 
 interface SessionToolRow {
@@ -341,10 +359,42 @@ function safeProjectColor(raw: string | null | undefined): string {
   return /^#[0-9A-Fa-f]{6}$/.test(String(raw ?? "")) ? String(raw).toUpperCase() : "#FF6B2C";
 }
 
-function sortedModels(map: Map<string, { calls: number; tokens: DetailedUsageTokens; costUsd: number }>): DetailedUsageModel[] {
+function sortedModels(
+  map: Map<string, { calls: number; tokens: DetailedUsageTokens; costUsd: number; providerCalls: number }>,
+  unpriced: ReadonlySet<string>,
+): DetailedUsageModel[] {
   return [...map.entries()]
-    .map(([model, m]) => ({ model, calls: m.calls, tokens: m.tokens, costUsd: m.costUsd }))
+    .map(([model, m]) => ({
+      model,
+      calls: m.calls,
+      tokens: m.tokens,
+      costUsd: m.costUsd,
+      providerCalls: m.providerCalls,
+      costKnown: !unpriced.has(model),
+    }))
     .sort((a, b) => b.calls - a.calls || a.model.localeCompare(b.model));
+}
+
+/**
+ * ROUND-83 (R83): model names whose EVERY (provider, model) pricing row that
+ * served them has both sides unknown (the audit's §2.11 — a paid model added
+ * without pricing rows records cost_usd = 0 and the screens showed a silent
+ * free lunch). Model-name granularity: the same model id served by a priced
+ * provider elsewhere counts as priced (pricing is per provider×model row;
+ * the aggregate is model-keyed — the honest hedge is documented here).
+ */
+function unpricedModelNames(db: SqliteDatabase): Set<string> {
+  const rows = db
+    .prepare("SELECT DISTINCT provider, model FROM usage_events")
+    .all() as { provider: string; model: string }[];
+  const unpriced = new Set<string>();
+  for (const row of rows) {
+    const pricing = lookupPricing(db, row.provider, row.model);
+    if (pricing.inputPricePerMtok === null && pricing.outputPricePerMtok === null) {
+      unpriced.add(row.model);
+    }
+  }
+  return unpriced;
 }
 
 /**
@@ -429,6 +479,7 @@ export function getDetailedUsage(db: SqliteDatabase, options: { days: number }):
     .prepare(
       "SELECT session_id, COUNT(*) requests, SUM(input_tokens) input_tokens, SUM(output_tokens) output_tokens," +
         " SUM(COALESCE(cached_input_tokens, 0)) cached_input_tokens, SUM(cost_usd) cost_usd," +
+        " SUM(COALESCE(provider_calls, 1)) provider_calls," +
         " MIN(ts) first_ts, MAX(ts) last_ts FROM usage_events GROUP BY session_id",
     )
     .all() as SessionUsageRow[]) {
@@ -439,7 +490,8 @@ export function getDetailedUsage(db: SqliteDatabase, options: { days: number }):
   for (const row of db
     .prepare(
       "SELECT session_id, model, COUNT(*) calls, SUM(input_tokens) input_tokens, SUM(output_tokens) output_tokens," +
-        " SUM(COALESCE(cached_input_tokens, 0)) cached_input_tokens, SUM(cost_usd) cost_usd" +
+        " SUM(COALESCE(cached_input_tokens, 0)) cached_input_tokens, SUM(cost_usd) cost_usd," +
+        " SUM(COALESCE(provider_calls, 1)) provider_calls" +
         " FROM usage_events GROUP BY session_id, model",
     )
     .all() as SessionModelRow[]) {
@@ -491,6 +543,9 @@ export function getDetailedUsage(db: SqliteDatabase, options: { days: number }):
       tokens: usage ? addUsageTokens(emptyUsageTokens(), usage) : emptyUsageTokens(),
       costUsd: roundUsd(usage?.cost_usd ?? 0),
       requests: usage?.requests ?? 0,
+      // ROUND-83 (R83): the real SDK-call count (COALESCE(1) keeps
+      // pre-0031 rows exactly true — one row = one call since R24).
+      providerCalls: usage?.provider_calls ?? 0,
       toolCalls: sortedToolCalls(tools),
       toolCallCount,
       subagentCount: 0,
@@ -545,7 +600,7 @@ export function getDetailedUsage(db: SqliteDatabase, options: { days: number }):
       tokens: emptyUsageTokens(),
     };
     const toolMap = new Map<string, { count: number; failures: number }>();
-    const modelMap = new Map<string, { calls: number; tokens: DetailedUsageTokens; costUsd: number }>();
+    const modelMap = new Map<string, { calls: number; tokens: DetailedUsageTokens; costUsd: number; providerCalls: number }>();
     let first = Infinity;
     let last = -Infinity;
     for (const session of sessions) {
@@ -560,10 +615,12 @@ export function getDetailedUsage(db: SqliteDatabase, options: { days: number }):
         toolMap.set(t.tool, m);
       }
       for (const model of modelsBySession.get(session.rawId)?.values() ?? []) {
-        const acc = modelMap.get(model.model) ?? { calls: 0, tokens: emptyUsageTokens(), costUsd: 0 };
+        const acc =
+          modelMap.get(model.model) ?? { calls: 0, tokens: emptyUsageTokens(), costUsd: 0, providerCalls: 0 };
         acc.calls += model.calls;
         addUsageTokens(acc.tokens, model);
         acc.costUsd = roundUsd(acc.costUsd + (model.cost_usd ?? 0));
+        acc.providerCalls += model.provider_calls ?? 0;
         modelMap.set(model.model, acc);
       }
       if (session.startMs > 0) first = Math.min(first, session.startMs);
@@ -587,7 +644,7 @@ export function getDetailedUsage(db: SqliteDatabase, options: { days: number }):
       totals,
       toolCalls: sortedToolCalls(toolMap),
       subagents: subTotals,
-      models: sortedModels(modelMap),
+      models: sortedModels(modelMap, unpriced),
       // Newest-first so the app's capped drill-down shows the recent work
       // (the public export sorts ascending; the screen caps at 20 visible).
       sessions: sessions
@@ -595,6 +652,11 @@ export function getDetailedUsage(db: SqliteDatabase, options: { days: number }):
         .sort((a, b) => (b.startedAt ?? "").localeCompare(a.startedAt ?? "")),
     };
   }
+
+  // ROUND-83 (R83): the unpriced-model set both model leaderboards consult
+  // (costKnown per row — computed ONCE, before the project groups and the
+  // global rollup both read it).
+  const unpriced = unpricedModelNames(db);
 
   const projects: DetailedUsageProject[] = projectRows.map((p) =>
     buildProject(p.name, p.id, byProject.get(p.id) ?? [], false, p.color),
@@ -618,6 +680,7 @@ export function getDetailedUsage(db: SqliteDatabase, options: { days: number }):
     subagentSessions: allViews.filter((s) => s.isSubagent).length,
     toolCalls: allViews.reduce((n, s) => n + s.toolCallCount, 0),
     requests: allViews.reduce((n, s) => n + s.requests, 0),
+    providerCalls: allViews.reduce((n, s) => n + s.providerCalls, 0),
     tokens: allViews.reduce((acc, s) => addUsageTokens(acc, s.tokens), emptyUsageTokens()),
     costUsd: roundUsd(allViews.reduce((n, s) => n + s.costUsd, 0)),
   };
@@ -631,13 +694,15 @@ export function getDetailedUsage(db: SqliteDatabase, options: { days: number }):
       globalTools.set(t.tool, m);
     }
   }
-  const globalModels = new Map<string, { calls: number; tokens: DetailedUsageTokens; costUsd: number }>();
+  const globalModels = new Map<string, { calls: number; tokens: DetailedUsageTokens; costUsd: number; providerCalls: number }>();
   for (const view of allViews) {
     for (const model of modelsBySession.get(view.rawId)?.values() ?? []) {
-      const acc = globalModels.get(model.model) ?? { calls: 0, tokens: emptyUsageTokens(), costUsd: 0 };
+      const acc =
+        globalModels.get(model.model) ?? { calls: 0, tokens: emptyUsageTokens(), costUsd: 0, providerCalls: 0 };
       acc.calls += model.calls;
       addUsageTokens(acc.tokens, model);
       acc.costUsd = roundUsd(acc.costUsd + (model.cost_usd ?? 0));
+      acc.providerCalls += model.provider_calls ?? 0;
       globalModels.set(model.model, acc);
     }
   }
@@ -646,7 +711,7 @@ export function getDetailedUsage(db: SqliteDatabase, options: { days: number }):
     days: dayBuckets,
     totals,
     tools: sortedToolCalls(globalTools),
-    models: sortedModels(globalModels),
+    models: sortedModels(globalModels, unpriced),
     // ROUND-64 (R64-e): the per-key (provider × slot) rollup for the
     // /usage screen's "API keys" section.
     keys: keyUsageRows(db),

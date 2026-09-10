@@ -242,17 +242,21 @@ if (!sessionId) {
     } else if (t.ok === true) {
       const previewOk = typeof t.contentPreview === "string" && t.contentPreview.length > 0;
       const usageOk = t.usage === undefined || (typeof t.usage.inputTokens === "number" && typeof t.usage.outputTokens === "number");
-      previewOk && usageOk
-        ? pass("B82-2", `real model test ok:true in ${t.latencyMs}ms (http/auth/model/content all pass${t.usage ? `, usage ${t.usage.inputTokens}+${t.usage.outputTokens}` : ""})`)
-        : fail("B82-2", `ok:true but preview/usage malformed: ${JSON.stringify(t).slice(0, 300)}`);
+      if (previewOk && usageOk) {
+        pass("B82-2", `real model test ok:true in ${t.latencyMs}ms (http/auth/model/content all pass${t.usage ? `, usage ${t.usage.inputTokens}+${t.usage.outputTokens}` : ""})`);
+      } else {
+        fail("B82-2", `ok:true but preview/usage malformed: ${JSON.stringify(t).slice(0, 300)}`);
+      }
     } else {
       // An honest NO is a valid probe outcome (quota, model retirement) —
       // the REASON must be present, real, and scrubbed.
       const reasonOk = typeof t.reason === "string" && t.reason.length > 0;
       const scrubbed = !t.reason?.includes("sk-or-");
-      reasonOk && scrubbed
-        ? pass("B82-2", `real model test honest ok:false — "${t.reason.slice(0, 140)}" (scrubbed, no crash)`)
-        : fail("B82-2", `ok:false with a bad reason: ${JSON.stringify(t).slice(0, 300)}`);
+      if (reasonOk && scrubbed) {
+        pass("B82-2", `real model test honest ok:false — "${t.reason.slice(0, 140)}" (scrubbed, no crash)`);
+      } else {
+        fail("B82-2", `ok:false with a bad reason: ${JSON.stringify(t).slice(0, 300)}`);
+      }
     }
   }
 }
@@ -272,6 +276,9 @@ if (!sessionId) {
       modelId: "mock/model-a",
       displayName: "Mock Model A",
     });
+    if (modelRow.status !== 201 && modelRow.status !== 200) {
+      fail("B82-3", `custom model row create failed: ${modelRow.status} ${modelRow.text.slice(0, 200)}`);
+    }
     const before = mockHits.length;
     mockScript.push({ delayMs: 150, text: "R82 CUSTOM ROUTING OK" });
     const turn = await streamTurn(sessionId, "Say exactly what your gateway tells you.", {
@@ -315,9 +322,11 @@ if (!sessionId) {
       pass("B82-4", `NIM model test ok:true in ${t.latencyMs}ms — ${JSON.stringify(t.checks)}`);
     } else {
       const scrubbed = !JSON.stringify(t).includes("nvapi-");
-      typeof t.reason === "string" && t.reason.length > 0 && scrubbed
-        ? pass("B82-4", `NIM test honest ok:false — "${t.reason.slice(0, 140)}" (nvapi- scrubbed; the R80 EOL verdict surfaces, no crash)`)
-        : fail("B82-4", `ok:false with a bad/leaky reason: ${JSON.stringify(t).slice(0, 300)}`);
+      if (typeof t.reason === "string" && t.reason.length > 0 && scrubbed) {
+        pass("B82-4", `NIM test honest ok:false — "${t.reason.slice(0, 140)}" (nvapi- scrubbed; the R80 EOL verdict surfaces, no crash)`);
+      } else {
+        fail("B82-4", `ok:false with a bad/leaky reason: ${JSON.stringify(t).slice(0, 300)}`);
+      }
     }
   }
 }
@@ -342,9 +351,11 @@ if (!sessionId) {
   await api("POST", "/internal/providers/keys", { providerId: "prv_evilgw", value: mainKey });
   const test = await api("POST", `/models/${modelId}/test`, {});
   const leaked = JSON.stringify(test.json).includes("sk-or-");
-  !leaked && test.status === 200
-    ? pass("B82-5", `hostile key echo scrubbed from the model-test response (status ${test.status}, reason: ${String(test.json?.reason).slice(0, 100)})`)
-    : fail("B82-5", `key leak or crash: status=${test.status} body=${test.text.slice(0, 300)}`);
+  if (!leaked && test.status === 200) {
+    pass("B82-5", `hostile key echo scrubbed from the model-test response (status ${test.status}, reason: ${String(test.json?.reason).slice(0, 100)})`);
+  } else {
+    fail("B82-5", `key leak or crash: status=${test.status} body=${test.text.slice(0, 300)}`);
+  }
 }
 
 // ── B82-6: subagentModel object form round-trip + validation ───────────────
@@ -352,6 +363,9 @@ if (!sessionId) {
   const put = await api("PUT", "/settings/orchestration", {
     subagentModel: { providerId: "prv_livegw", modelId: "mock/model-a" },
   });
+  if (put.status !== 200) {
+    fail("B82-6", `subagentModel PUT rejected: ${put.status} ${put.text.slice(0, 200)}`);
+  }
   const get = await api("GET", "/settings/orchestration");
   const roundTrip = get.json?.subagentModel?.providerId === "prv_livegw" &&
     get.json?.subagentModel?.modelId === "mock/model-a";
@@ -362,9 +376,11 @@ if (!sessionId) {
   const cleared = await api("PUT", "/settings/orchestration", { subagentModel: null });
   const get2 = await api("GET", "/settings/orchestration");
   const nullClear = get2.json?.subagentModel === null && cleared.status === 200;
-  roundTrip && bogusRejected && nullClear
-    ? pass("B82-6", "subagentModel object form round-trips, unknown provider 400s, null clears")
-    : fail("B82-6", `subagentModel wire: roundTrip=${roundTrip} bogus=${bogus.status} nullClear=${nullClear} (GET: ${JSON.stringify(get.json).slice(0, 200)})`);
+  if (roundTrip && bogusRejected && nullClear) {
+    pass("B82-6", "subagentModel object form round-trips, unknown provider 400s, null clears");
+  } else {
+    fail("B82-6", `subagentModel wire: roundTrip=${roundTrip} bogus=${bogus.status} nullClear=${nullClear} (GET: ${JSON.stringify(get.json).slice(0, 200)})`);
+  }
 }
 
 // ── B82-7: GET /models/configured across providers ─────────────────────────
@@ -374,9 +390,11 @@ if (!sessionId) {
   const hasOpenRouter = Array.isArray(rows) && rows.some((m) => m.providerId === "openrouter");
   const hasCustom = Array.isArray(rows) && rows.some((m) => m.providerId === "prv_livegw");
   const ordered = Array.isArray(rows) && rows.every((m, i) => i === 0 || `${rows[i - 1].providerId}${rows[i - 1].modelId}`.localeCompare(`${m.providerId}${m.modelId}`) <= 0);
-  res.status === 200 && hasOpenRouter && hasCustom
-    ? pass("B82-7", `configured rows across providers (openrouter + prv_livegw present${ordered ? ", ordered" : ""})`)
-    : fail("B82-7", `configured rows wrong: status=${res.status} openrouter=${hasOpenRouter} custom=${hasCustom}`);
+  if (res.status === 200 && hasOpenRouter && hasCustom) {
+    pass("B82-7", `configured rows across providers (openrouter + prv_livegw present${ordered ? ", ordered" : ""})`);
+  } else {
+    fail("B82-7", `configured rows wrong: status=${res.status} openrouter=${hasOpenRouter} custom=${hasCustom}`);
+  }
 }
 
 // ── B82-8: tri-state capability wire on INSERT ─────────────────────────────
@@ -392,9 +410,11 @@ if (!sessionId) {
   const triOk =
     modelRow.status === 201 &&
     t?.supportsTools === true && t?.supportsAudio === null && t?.supportsVideo === false;
-  triOk
-    ? pass("B82-8", "INSERT tri-state wire: true / null(unknown) / false recorded exactly (never null→false)")
-    : fail("B82-8", `tri-state INSERT wrong: ${modelRow.status} ${JSON.stringify(t).slice(0, 250)}`);
+  if (triOk) {
+    pass("B82-8", "INSERT tri-state wire: true / null(unknown) / false recorded exactly (never null→false)");
+  } else {
+    fail("B82-8", `tri-state INSERT wrong: ${modelRow.status} ${JSON.stringify(t).slice(0, 250)}`);
+  }
 }
 
 // ── teardown + verdict ──────────────────────────────────────────────────────

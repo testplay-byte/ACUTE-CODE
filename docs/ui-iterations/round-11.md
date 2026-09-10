@@ -1,4 +1,4 @@
-<!-- last-reviewed: 2026-09-08 round-79 -->
+<!-- last-reviewed: 2026-09-10 round-83 -->
 # Round 11 — Owner Windows-test verdicts fixed: working folder dialog, fullscreen chat, plug-and-play default agent, centered dialogs, HTML-build proof (2026-08-23)
 
 **Owner direction (after testing round-14 on Windows):** four failures +

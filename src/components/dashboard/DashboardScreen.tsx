@@ -108,9 +108,9 @@ export function DashboardScreen() {
           />
           <StatCard
             value={String(totals?.requests ?? 0)}
-            label="Requests"
+            label="Turns"
             icon={Activity}
-            title="Model calls over the last 14 days"
+            title="Turns over the last 14 days (one usage row per turn — the ROUND-83 honest relabel; provider calls live on the /usage screen)"
             styles={styles}
           />
         </motion.div>

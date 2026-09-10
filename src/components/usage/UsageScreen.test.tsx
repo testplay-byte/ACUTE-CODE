@@ -215,9 +215,11 @@ describe("UsageScreen (ROUND-52 R52-b)", () => {
 
     // Overview stat cards (await — the skeleton yields to data once the
     // mocked fetch resolves). ROUND-64 (R64-e): the API-keys cards also
-    // label "Requests" — the overview assertion reads ALL of them.
+    // label turns — the overview assertion reads ALL of them. ROUND-83
+    // (R83): "Requests" → "Turns" (the honest relabel — a usage row is a
+    // TURN since R24; the provider-call count is the StatCard title).
     expect(await screen.findByText("Tokens")).toBeTruthy();
-    expect(screen.getAllByText("Requests").length).toBeGreaterThanOrEqual(1);
+    expect(screen.getAllByText("Turns").length).toBeGreaterThanOrEqual(1);
     expect(screen.getByText("Sessions")).toBeTruthy();
     expect(screen.getByText("Tool calls")).toBeTruthy();
 

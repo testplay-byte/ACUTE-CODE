@@ -20,7 +20,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { QueryClient } from "@tanstack/react-query";
 import { useConfigStore } from "./config-store";
-import { setQueryClient } from "./query-client";
+import { setQueryClient, getQueryClient } from "./query-client";
 import {
   clearStreamSessionProjectsForTest,
   getSubAgentLiveEntry,
@@ -1659,6 +1659,59 @@ describe("stream store ROUND-75 retry ladder frames", () => {
     await vi.waitFor(() => {
       expect(useStreamStore.getState().bySession[PARENT]?.liveTurn?.note).toBeNull();
     });
+
+    sse.emit({ type: "stopped" });
+    sse.close();
+    await promise;
+  });
+
+  // ── ROUND-83 (R83): the compaction + context-limit frames finally RENDER ──
+  it("ROUND-83: a meta.compaction frame sets the honest note AND invalidates the context meter (the ring drops)", async () => {
+    const sse = manualSseResponse();
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(sse.response));
+    const invalidated: string[][] = [];
+    const qc = getQueryClient();
+    if (qc === null) throw new Error("test setup: no query client");
+    const originalInvalidate = qc.invalidateQueries.bind(qc);
+    qc.invalidateQueries = ((arg: { queryKey: string[] }) => {
+      invalidated.push(arg.queryKey);
+      return Promise.resolve();
+    }) as unknown as typeof qc.invalidateQueries;
+
+    const promise = useStreamStore.getState().startStream(PARENT, "work");
+    sse.emit({ type: "meta.compaction", tokensSaved: 28_000, droppedMessages: 34, throughSeq: 40 });
+
+    await vi.waitFor(() => {
+      expect(useStreamStore.getState().bySession[PARENT]?.liveTurn?.note).toContain("context compacted");
+    });
+    expect(useStreamStore.getState().bySession[PARENT]?.liveTurn?.note).toContain("34 messages summarized");
+    expect(invalidated.some((key) => key[0] === "session-context")).toBe(true);
+
+    // A content frame clears the note (the R75 contract — the recovery line
+    // disappears when real work resumes).
+    sse.emit({ type: "text-delta", delta: "continuing after compaction" });
+    await vi.waitFor(() => {
+      expect(useStreamStore.getState().bySession[PARENT]?.liveTurn?.note).toBeNull();
+    });
+
+    // Restore the real implementation for later tests.
+    qc.invalidateQueries = originalInvalidate as unknown as typeof qc.invalidateQueries;
+    sse.emit({ type: "stopped" });
+    sse.close();
+    await promise;
+  });
+
+  it("ROUND-83: a meta.context_limit frame sets the honest terminal note (the pre-R83 store ignored it)", async () => {
+    const sse = manualSseResponse();
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(sse.response));
+
+    const promise = useStreamStore.getState().startStream(PARENT, "work");
+    sse.emit({ type: "meta.context_limit", tokens: 1_095_000, limit: 1_007_808 });
+
+    await vi.waitFor(() => {
+      expect(useStreamStore.getState().bySession[PARENT]?.liveTurn?.note).toContain("context limit reached");
+    });
+    expect(useStreamStore.getState().bySession[PARENT]?.liveTurn?.note).toContain("1007808 available");
 
     sse.emit({ type: "stopped" });
     sse.close();

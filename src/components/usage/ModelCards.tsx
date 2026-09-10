@@ -87,8 +87,23 @@ function ModelCard({ model, maxCalls, styles }: { model: DetailedUsageModel; max
           <dt className="text-[10px] font-bold uppercase tracking-widest" style={{ color: textTertiary }}>
             Cost
           </dt>
-          <dd className="mt-0.5 truncate text-[12px] font-bold" style={{ color: text }}>
+          <dd
+            className="mt-0.5 truncate text-[12px] font-bold"
+            style={{ color: text }}
+            title={
+              model.costKnown === false
+                ? "Unpriced model — no input/output prices configured for the provider×model rows that served it; $0.00 is a placeholder, not free"
+                : undefined
+            }
+          >
             {formatCost(model.costUsd)}
+            {/* ROUND-83 (R83) §2.11: the honest marker — an unpriced model
+                shows "(unpriced)", never a silent free lunch. */}
+            {model.costKnown === false ? (
+              <span className="font-normal text-[10px]" style={{ color: textTertiary }}>
+                {" "}(unpriced)
+              </span>
+            ) : null}
           </dd>
         </div>
       </dl>

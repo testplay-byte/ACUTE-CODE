@@ -222,7 +222,9 @@ function analystErrorDetail(error: unknown, apiKey: string): string {
   return scrubbed.length > 300 ? `${scrubbed.slice(0, 300)}…` : scrubbed;
 }
 
-export type DebugAnalystResult = { ok: true; content: string } | { ok: false; error: string };
+export type DebugAnalystResult =
+  | { ok: true; content: string; usage?: { inputTokens: number; outputTokens: number; cachedInputTokens: number | null } }
+  | { ok: false; error: string };
 
 /**
  * Run the context-free debug analyst for one session: render the transcript,
@@ -274,6 +276,13 @@ export async function runDebugAnalyst(
 
   try {
     let content = "";
+    // ROUND-83 (R83): the analyst's own spend — surfaced to the caller so
+    // the route can record the usage row (origin "debug"; the audit's
+    // §2.12: a REAL provider call over the whole transcript that appeared
+    // in NO usage surface before).
+    let usage:
+      | { inputTokens: number; outputTokens: number; cachedInputTokens: number | null }
+      | undefined;
     if (deps.chatStream !== undefined) {
       // The streamed path — the SAME adapter invocation shape the runtime's
       // runStreamedAgentTurn uses (for-await over the normalized events);
@@ -282,6 +291,12 @@ export async function runDebugAnalyst(
         if (event.type === "text-delta") {
           content += event.delta;
           params.emit({ type: "debug-delta", sessionId: params.sessionId, delta: event.delta });
+        } else if (event.type === "finish") {
+          usage = {
+            inputTokens: event.usage.inputTokens,
+            outputTokens: event.usage.outputTokens,
+            cachedInputTokens: typeof event.cachedInputTokens === "number" ? event.cachedInputTokens : null,
+          };
         }
       }
     } else {
@@ -289,11 +304,16 @@ export async function runDebugAnalyst(
       // no deltas — the caller renders the final content at once.
       const result = await deps.chat(input);
       content = result.text;
+      usage = {
+        inputTokens: result.usage.inputTokens,
+        outputTokens: result.usage.outputTokens,
+        cachedInputTokens: typeof result.usage.cachedInputTokens === "number" ? result.usage.cachedInputTokens : null,
+      };
     }
     if (content.trim() === "") {
       return { ok: false, error: "debug analyst: the model returned an empty report" };
     }
-    return { ok: true, content };
+    return { ok: true, content, ...(usage !== undefined ? { usage } : {}) };
   } catch (error) {
     return { ok: false, error: analystErrorDetail(error, params.apiKey) };
   }

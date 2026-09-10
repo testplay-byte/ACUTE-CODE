@@ -5,15 +5,28 @@
  *
  * The route's job is honest ESTIMATION:
  *   - contextWindow: the models-table override for (providerId, model) →
- *     the catalog default → 200 000 (runtime.ts getModelContextWindow).
- *   - breakdown: systemPrompt (identity section), systemTools (tools section
- *     + 350 tokens/tool schema approximation), memory (digest section),
- *     messages (assembleHistory with attachments rendered), meta (index +
- *     custom-rules sections), mcpTools (honest 0 — no MCP system).
- *   - usedTokens = the SUM of all slices.
+ *     the catalog default → 200 000 (runtime.ts getModelContextWindow) —
+ *     ROUND-83 (R83): WITH contextWindowSource provenance + maxOutputTokens
+ *     + available (resolveTurnBudget — the ONE budget the turn loop and the
+ *     meter share).
+ *   - breakdown: systemPrompt (identity section — R83: with the skills,
+ *     task-modes, active-mode, environment, background-tasks sections a
+ *     REAL turn carries), systemTools (tools section + R83: the MEASURED
+ *     JSON schemas per effective tool, replacing the fixed 350/tool
+ *     approximation), memory (digest section), messages (assembleHistory
+ *     with attachments rendered — R83: with the newest compaction APPLIED),
+ *     meta (index + custom-rules sections), mcpTools (honest 0 — no MCP
+ *     system).
+ *   - usedTokens = the SUM of all slices (R83: usedTokensBasis
+ *     "estimated" — the wire says which number is a projection).
+ *   - R83 `actual`: the provider's OWN number for the last request (the
+ *     newest message.assistant stats carrier) — null before the first reply.
+ *   - R83 `compaction`: the newest context.compact detail.
  *   - cache/sessionTotals: exact SQL SUMs over usage_events (requests =
- *     COUNT(*), cachedInputTokens null-safe, hitRate = cached/input with
- *     null before the first input token).
+ *     COUNT(*) = turns, R83: providerCalls = SUM(provider_calls); hitRate
+ *     null before the first input token AND — R83 — when the provider
+ *     never reported a cached tier: the SUM over all-NULL rows is NULL,
+ *     never a fabricated 0%).
  *   - ROUND-51 (R51-c) `usage`: the Main agent / Sub-agents / Combined
  *     split — main = the session's own ledger (identical to sessionTotals),
  *     subagents = the sum over its DIRECT children's usage_events
@@ -133,12 +146,14 @@ describe("GET /api/v1/sessions/:id/context (ROUND-50 R50-c1)", () => {
     expect(response.statusCode).toBe(200);
     const body = response.json();
 
-    // Exact SQL sums over the session's rows.
+    // Exact SQL sums over the session's rows (ROUND-83: providerCalls —
+    // the real SDK-call count; both fixture rows use the default 1).
     expect(body.sessionTotals).toEqual({
       inputTokens: 50_000,
       outputTokens: 12_000,
       requests: 2,
       costUsd: 0.42,
+      providerCalls: 2,
     });
     // Cache: inputTokens sum, null-safe cached sum, hitRate = cached/input.
     expect(body.cache).toEqual({
@@ -157,7 +172,7 @@ describe("GET /api/v1/sessions/:id/context (ROUND-50 R50-c1)", () => {
     expect(response.statusCode).toBe(200);
     const body = response.json();
     expect(body.cache).toEqual({ inputTokens: 0, cachedInputTokens: 0, hitRate: null });
-    expect(body.sessionTotals).toEqual({ inputTokens: 0, outputTokens: 0, requests: 0, costUsd: 0 });
+    expect(body.sessionTotals).toEqual({ inputTokens: 0, outputTokens: 0, requests: 0, costUsd: 0, providerCalls: 0 });
   });
 
   // ── ROUND-51 (R51-c): the main / sub-agents / combined usage split ─────────
@@ -187,12 +202,14 @@ describe("GET /api/v1/sessions/:id/context (ROUND-50 R50-c1)", () => {
       outputTokens: 12_000,
       requests: 2,
       costUsd: 0.42,
+      providerCalls: 2,
     });
     expect(body.usage.main).toEqual({
       inputTokens: 50_000,
       outputTokens: 12_000,
       requests: 2,
       costUsd: 0.42,
+      providerCalls: 2,
     });
     // Sub-agents = the sum over the two DIRECT children (grandchild excluded).
     expect(body.usage.subagents).toEqual({
@@ -206,6 +223,7 @@ describe("GET /api/v1/sessions/:id/context (ROUND-50 R50-c1)", () => {
       outputTokens: 13_500,
       requests: 5,
       costUsd: 0.455,
+      providerCalls: 2,
     });
   });
 
@@ -307,6 +325,143 @@ describe("GET /api/v1/sessions/:id/context (ROUND-50 R50-c1)", () => {
 
     const unauth = await app.inject({ method: "GET", url: `/api/v1/sessions/${bare.id}/context` });
     expect(unauth.statusCode).toBe(401);
+  });
+});
+
+// ── ROUND-83 (R83): the honest meter — actual / compaction / budget / hitRate ─
+describe("GET /api/v1/sessions/:id/context (ROUND-83 R83 additions)", () => {
+  it("the budget trio + provenance: contextWindowSource, maxOutputTokens, available, usedTokensBasis — for all three resolution paths", async () => {
+    // Override path.
+    upsertModel(db, "openrouter", { modelId: "test/r83-a", displayName: "A", contextWindow: 123_456, maxOutputTokens: 4_096 });
+    const { sessionId: overrideSession } = await fixtureSession("test/r83-a");
+    const override = (await authInject({ method: "GET", url: `/api/v1/sessions/${overrideSession}/context` })).json();
+    expect(override.contextWindow).toBe(123_456);
+    expect(override.contextWindowSource).toBe("override");
+    expect(override.maxOutputTokens).toBe(4_096);
+    expect(override.available).toBe(123_456 - 4_096 - 8_000);
+    expect(override.usedTokensBasis).toBe("estimated");
+
+    // Catalog path.
+    const { sessionId: catalogSession } = await fixtureSession("z-ai/glm-5.2:free");
+    const catalog = (await authInject({ method: "GET", url: `/api/v1/sessions/${catalogSession}/context` })).json();
+    expect(catalog.contextWindowSource).toBe("catalog");
+
+    // Default path — the honest "assumed" label.
+    const { sessionId: fallbackSession } = await fixtureSession("totally/unknown-r83");
+    const fallback = (await authInject({ method: "GET", url: `/api/v1/sessions/${fallbackSession}/context` })).json();
+    expect(fallback.contextWindowSource).toBe("default");
+    expect(fallback.maxOutputTokens).toBe(32_768);
+    expect(fallback.available).toBe(200_000 - 32_768 - 8_000);
+  });
+
+  it("§3.1 the actual block: null before the first provider reply; the NEWEST stats-carrier afterwards (with model + ts)", async () => {
+    const { sessionId, agentId } = await fixtureSession("test/r83-a2");
+    // Before any stats carrier: null — NEVER a fabricated 0.
+    const before = (await authInject({ method: "GET", url: `/api/v1/sessions/${sessionId}/context` })).json();
+    expect(before.actual).toBeNull();
+
+    // Two stats carriers — the NEWEST one is the ground truth.
+    appendSessionEvent(db, sessionId, {
+      type: "message.assistant",
+      agentId,
+      payload: { role: "assistant", content: "first", usage: { inputTokens: 1_000, outputTokens: 100 }, model: "test/r83-a2" },
+    });
+    const older = appendSessionEvent(db, sessionId, {
+      type: "message.assistant",
+      agentId,
+      payload: {
+        role: "assistant",
+        content: "second",
+        // R83: the carrier carries cachedInputTokens when the iteration reported one.
+        usage: { inputTokens: 2_500, outputTokens: 250, cachedInputTokens: 900 },
+        model: "test/r83-a2",
+      },
+    });
+    const after = (await authInject({ method: "GET", url: `/api/v1/sessions/${sessionId}/context` })).json();
+    expect(after.actual).toEqual({
+      inputTokens: 2_500,
+      outputTokens: 250,
+      cachedInputTokens: 900,
+      at: older.ts,
+      model: "test/r83-a2",
+    });
+
+    // A LATER carrier WITHOUT cachedInputTokens → the honest null (the
+    // absence is "not reported", never 0).
+    appendSessionEvent(db, sessionId, {
+      type: "message.assistant",
+      agentId,
+      payload: { role: "assistant", content: "third", usage: { inputTokens: 3_000, outputTokens: 30 }, model: "test/r83-a2" },
+    });
+    const third = (await authInject({ method: "GET", url: `/api/v1/sessions/${sessionId}/context` })).json();
+    expect(third.actual.inputTokens).toBe(3_000);
+    expect(third.actual.cachedInputTokens).toBeNull();
+  });
+
+  it("§2.4/§3.2c closed: after a compaction the messages estimate DROPS (the model receives summary + tail, not the raw log) + the compaction field carries the detail", async () => {
+    const { sessionId, agentId } = await fixtureSession("test/r83-a3");
+    // A long conversation.
+    for (let i = 0; i < 6; i += 1) {
+      appendSessionEvent(db, sessionId, {
+        type: "message.user",
+        agentId,
+        payload: { role: "user", content: `question ${i} ${"detail ".repeat(150)}` },
+      });
+    }
+    const before = (await authInject({ method: "GET", url: `/api/v1/sessions/${sessionId}/context` })).json();
+    expect(before.compaction).toBeUndefined();
+
+    // The compaction event (what a real turn's assembleWithCompaction persists).
+    const rawBefore = estimateMessageTokens(assembleHistory(db, sessionId));
+    appendSessionEvent(db, sessionId, {
+      type: "context.compact",
+      agentId: null,
+      payload: { summary: "The user asked six questions. The agent answered all.", throughSeq: 7, droppedMessages: 4, tokensSaved: 500 },
+    });
+    const after = (await authInject({ method: "GET", url: `/api/v1/sessions/${sessionId}/context` })).json();
+    // The compaction badge data.
+    expect(after.compaction).toEqual({ throughSeq: 7, droppedMessages: 4, tokensSaved: 500 });
+    // The messages slice dropped (summary + kept tail < the raw log).
+    expect(after.breakdown.messages).toBeLessThan(rawBefore);
+    expect(after.breakdown.messages).toBeGreaterThan(0);
+    expect(before.breakdown.messages).toBe(rawBefore);
+  });
+
+  it("§2.10 closed: hitRate is NULL (not 0) when the provider never reported a cached tier — the SUM over all-NULL rows is NULL", async () => {
+    const { sessionId, agentId } = await fixtureSession("test/r83-a4");
+    const now = new Date().toISOString();
+    // Two rows, NO cached tier reported (the R83 write path: null).
+    recordUsage(db, { agentId, sessionId, provider: "openrouter", model: "test/r83-a4", inputTokens: 30_000, outputTokens: 5_000, cachedInputTokens: null, costUsd: 0.25, ts: now });
+    recordUsage(db, { agentId, sessionId, provider: "openrouter", model: "test/r83-a4", inputTokens: 20_000, outputTokens: 7_000, cachedInputTokens: null, costUsd: 0.17, ts: now });
+    const body = (await authInject({ method: "GET", url: `/api/v1/sessions/${sessionId}/context` })).json();
+    expect(body.cache.inputTokens).toBe(50_000);
+    // The DISPLAY total keeps the COALESCE (0 for old consumers)…
+    expect(body.cache.cachedInputTokens).toBe(0);
+    // …but the RATE is null — "not reported", never a fabricated 0%.
+    expect(body.cache.hitRate).toBeNull();
+  });
+
+  it("§3.2a closed: the meter counts the SKILLS + TASK-MODES sections a real turn carries (the under-count fix)", async () => {
+    const { sessionId } = await fixtureSession("test/r83-a5");
+    // Enable a skill in the DB — the meter's SKILLS section appears.
+    const skillRow = db
+      .prepare("SELECT id FROM skills LIMIT 1")
+      .get() as { id: string } | undefined;
+    if (skillRow === undefined) {
+      db.prepare(
+        "INSERT INTO skills (id, name, description, body, source, enabled, created_at, updated_at) VALUES (?, ?, ?, ?, 'db', 1, ?, ?)",
+      ).run(`skl_${randomUUID().slice(0, 8)}`, "code-review", "Review code changes carefully.", "Full body.", new Date().toISOString(), new Date().toISOString());
+    } else {
+      db.prepare("UPDATE skills SET enabled = 1 WHERE id = ?").run(skillRow.id);
+    }
+    const withSkill = (await authInject({ method: "GET", url: `/api/v1/sessions/${sessionId}/context` })).json();
+    // The identity slice now includes the SKILLS lines (findMode/skills flow
+    // through the SAME resolver the turn uses) — the pre-R83 meter counted
+    // NONE of them while labeling a slice "Memory & skills".
+    expect(withSkill.breakdown.systemPrompt).toBeGreaterThan(0);
+    // And the tool-schema measurement replaced the 350-per-tool constant:
+    // the schema tokens are the REAL serialized sizes (distinct per tool).
+    expect(withSkill.breakdown.systemTools).toBeGreaterThan(0);
   });
 });
 

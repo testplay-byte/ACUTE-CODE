@@ -1,4 +1,4 @@
-<!-- last-reviewed: 2026-09-09 round-82 -->
+<!-- last-reviewed: 2026-09-10 round-83 -->
 # Changelog
 
 All notable changes to ACUTE-CODE are documented here. Entries are written for
@@ -11,14 +11,61 @@ version number is single-sourced from the root `package.json`
 
 ## [Unreleased]
 
-Planned next: the R83+ queue — honest token/context metering (the donut's
-estimate-as-fact problem, the provider-reported "actual" block, compaction
-awareness — the token-counting-robustness spec), the modularity roadmap's
-Wave 2 (the server.ts route split, the turn-loop harness, the ToolDeps
-cycle break), external plugin ctx enrichment, the lessons-ledger
-affordance, ratings-driven prompt tuning, and the standing items
-(edit-linting, installer code-signing, the Files-tab polish, agent
-web-app-testing tools).
+Planned next: the modularity roadmap's Wave 2 (the server.ts route split,
+the turn-loop harness, the ToolDeps cycle break), external plugin ctx
+enrichment, the lessons-ledger affordance, ratings-driven prompt tuning, and
+the standing items (edit-linting, installer code-signing, the Files-tab
+polish, agent web-app-testing tools).
+
+## [0.82.0] - 2026-09-10
+
+### Fixed — the context meter tells the truth (the "highly misleading" round)
+- **The donut showed an estimate as fact** — the ring now fills with the
+  estimate (labeled `~% projected … estimated`) while a NEW measured line
+  shows the provider's OWN prompt size for the last request
+  (`actual` on the wire — the number OpenRouter/Anthropic actually bill).
+  "not yet measured" before the first reply — never a fabricated 0.
+- **The displayed number never matched the behavioral one** — ONE budget
+  now drives everything (`resolveTurnBudget`): the meter, the compaction
+  trigger, and the context guard use the same window − output-reserve −
+  margin line, and the donut renders it as a tick + "compaction line" note.
+- **The estimate under-counted the system prompt** — the meter now builds
+  the SAME prompt sections a real turn carries (skills, task-modes index,
+  the active mode's deep module, background tasks, environment grounding),
+  and measures the REAL JSON tool schemas per tool (replacing the fixed
+  350-tokens-per-tool guess).
+- **The donut lied after a compaction** — the messages estimate now applies
+  the newest compaction (the model receives the summary + tail, not the raw
+  log), a "Context compacted — N messages summarized" badge states it, and
+  the ring visibly DROPS; the compaction/context-limit meta frames finally
+  render as live status lines instead of vanishing.
+- **The 800k guard referenced a command that didn't exist** — the guard is
+  now model-relative (the model's own budget, honest numbers in the error)
+  and `POST /sessions/:id/compact` actually EXISTS: force-compacts the
+  session's older context now (summarize → persist → the next turn and the
+  meter read it).
+- **Your per-model max-output setting was ignored** — the editable
+  `max_output_tokens` column (stored since the beginning) now drives the
+  budget's output reserve; the donut shows the honest reserve.
+- **Unknown models silently assumed a 200k window** — the window's SOURCE
+  is labeled on the wire and rendered ("your override" / "catalog default"
+  / "assumed 200k — set it in Settings → Models").
+- **"requests" meant three different things** — usage rows now carry the
+  REAL provider-call count (migration 0031); the UI says "turns · N
+  provider calls" (a 5-iteration turn is 1 turn · 5 calls, not 1
+  "request").
+- **Cache hit rate showed a confident 0% on providers that don't report
+  caching** — the row writes NULL when no call reported a cache tier; the
+  line renders "— not reported by this provider".
+- **$0.00 for unpriced models looked like free** — model rollups carry
+  `costKnown`; the UI shows "(unpriced)" when no pricing rows exist.
+- **Hidden provider calls were unbilled** — the compaction summarizer and
+  the debug analyst now record their own usage rows (origin
+  `compaction`/`debug`): real spend visible for the first time.
+
+### Changed
+- Chat reply token chips say "per model call" (they were per-iteration,
+  labeled "for this turn").
 
 ## [0.81.0] - 2026-09-09
 

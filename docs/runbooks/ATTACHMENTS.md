@@ -1,4 +1,4 @@
-<!-- last-reviewed: 2026-09-08 round-79 -->
+<!-- last-reviewed: 2026-09-10 round-83 -->
 # ATTACHMENTS — the chat attachment pipeline + the live screenshot rasters (owner's guide)
 
 **Status:** normative · **Established:** round-50 (the composer's Add

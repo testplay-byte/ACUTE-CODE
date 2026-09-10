@@ -1,4 +1,4 @@
-<!-- last-reviewed: 2026-09-08 round-79 -->
+<!-- last-reviewed: 2026-09-10 round-83 -->
 # Round 71 — the discipline & reliability round: the prompt now teaches engineering discipline, the tools now escalate instead of letting the model flail, and the twelve skills carry the trigger surface
 
 **Date:** 2026-09-07 · **Branch:** `main` · **Version:** 0.71.0 ·

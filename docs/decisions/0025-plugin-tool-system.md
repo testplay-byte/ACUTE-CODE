@@ -1,4 +1,4 @@
-<!-- last-reviewed: 2026-09-08 round-79 -->
+<!-- last-reviewed: 2026-09-10 round-83 -->
 
 # ADR-0025: Plugin-Based Tool System (registry + external .mjs plugins)
 

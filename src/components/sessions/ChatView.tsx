@@ -380,7 +380,7 @@ function Bubble({
         {usage ? (
           <span
             className="whitespace-nowrap rounded-lg border px-1.5 py-px"
-            title="Tokens in → out for this turn"
+            title="Tokens in → out per model call"
             style={{ borderColor: styles.border, backgroundColor: styles.inputBg }}
           >
             {usage.inputTokens} → {usage.outputTokens} tok

@@ -271,13 +271,15 @@ describe("GET /api/v1/usage/detailed (ROUND-52 R52-b)", () => {
 
     const detailed: DetailedUsage = getDetailedUsage(db, { days: 30 });
 
-    // Whole-history rollups.
+    // Whole-history rollups (ROUND-83: providerCalls — the real SDK-call
+    // count; 3 rows × the default 1).
     expect(detailed.totals).toEqual({
       projects: 2,
       sessions: 1, // main sessions only…
       subagentSessions: 1, // …children counted separately
       toolCalls: 4,
       requests: 3,
+      providerCalls: 3,
       tokens: { input: 330, output: 150, cached: 50 },
       costUsd: 0.8,
     });
@@ -288,10 +290,14 @@ describe("GET /api/v1/usage/detailed (ROUND-52 R52-b)", () => {
       { tool: "write_file", count: 1, failures: 0 },
     ]);
 
-    // Model mix: per-model calls/tokens/cost, call-count order.
+    // Model mix: per-model calls/tokens/cost, call-count order. ROUND-83:
+    // providerCalls (the real SDK-call count) + costKnown (both fixture
+    // models have NO pricing rows — every (provider, model) pair that served
+    // them is unpriced, so the UI must render "(unpriced)", never a silent
+    // $0 free lunch — the honest marker, pinned).
     expect(detailed.models).toEqual([
-      { model: "test/model-1", calls: 2, tokens: { input: 130, output: 70, cached: 10 }, costUsd: 0.3 },
-      { model: "test/model-2", calls: 1, tokens: { input: 200, output: 80, cached: 40 }, costUsd: 0.5 },
+      { model: "test/model-1", calls: 2, tokens: { input: 130, output: 70, cached: 10 }, costUsd: 0.3, providerCalls: 2, costKnown: false },
+      { model: "test/model-2", calls: 1, tokens: { input: 200, output: 80, cached: 40 }, costUsd: 0.5, providerCalls: 1, costKnown: false },
     ]);
 
     // ROUND-64 (R64-e): the per-key rollup — all three rows defaulted to
@@ -451,6 +457,7 @@ describe("GET /api/v1/usage/detailed (ROUND-52 R52-b)", () => {
       subagentSessions: 0,
       toolCalls: 0,
       requests: 0,
+      providerCalls: 0,
       tokens: { input: 0, output: 0, cached: 0 },
       costUsd: 0,
     });

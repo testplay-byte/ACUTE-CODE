@@ -514,10 +514,12 @@ describe("POST /api/v1/sessions/:id/messages", () => {
       model: "test/model-1",
       inputTokens: 12,
       outputTokens: 34,
-      // ROUND-50 (R50-c1): cached prompt tokens ride the turn's usage record
-      // (0 — the mocked generateText reports no cached tier; the provider
-      // call still ran, so it is a plain 0 rather than null).
-      cachedInputTokens: 0,
+      // ROUND-50 (R50-c1) → ROUND-83 (R83): the mocked generateText reports
+      // NO cached tier — the usage row now writes NULL (the shared type's
+      // documented contract, finally honored): the meter's hit-rate line
+      // renders "— not reported" instead of a fabricated 0%. The pre-R83
+      // code recorded a plain 0 here (the audit's §2.10).
+      cachedInputTokens: null,
       costUsd: 0,
       ts: expect.any(String),
     });

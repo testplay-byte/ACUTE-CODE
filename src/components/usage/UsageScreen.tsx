@@ -223,9 +223,9 @@ export function UsageScreen() {
               />
               <StatCard
                 value={(totals?.requests ?? 0).toLocaleString()}
-                label="Requests"
+                label="Turns"
                 icon={Activity}
-                title="All-time model calls in the usage ledger"
+                title={`All-time turns in the usage ledger${totals?.providerCalls !== undefined ? ` · ${(totals.providerCalls).toLocaleString()} provider calls (ROUND-83: the real SDK-call count — a multi-iteration turn is 1 turn · N calls)` : " (one row per turn since R24)"}`}
                 styles={styles}
               />
               <StatCard

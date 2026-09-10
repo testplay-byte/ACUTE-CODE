@@ -3,7 +3,7 @@
   "product": {
     "name": "Acute",
     "tagline": "Local-first multi-agent engineering workbench",
-    "version": "0.81.0",
+    "version": "0.82.0",
     "availability": "Private build — not yet distributed",
     "chips": [
       "Windows desktop",
@@ -220,18 +220,24 @@
       "title": "R82 — models & providers hardening",
       "date": "2026-09-09",
       "summary": "The owner's field report round 2: custom-provider model ROUTING fixed end-to-end (providerId rides the send wire, the vision relay, the context meter, queued messages, sub-agent children — a model picked under a custom gateway or NVIDIA serves there, with restart-surviving keys via the Rust note-file), the per-model TEST button (a real completion probe with http/auth/model/content checks + scrubbed preview/reason), tri-state capability columns (migration 0030: null=unknown, never the 0004 false-lie), the capabilities edit-dialog card, provider-scoped subagentModel {providerId, modelId} (NIM rows pickable), GET /models/configured, and the NVIDIA picker polish (dialog-local free-scope, zero-free auto-switch). Live battery 8/8 on the real keys (custom gateway routing through a mock oracle with its own key, real OpenRouter + NIM probes, hostile key-echo scrubbed)."
+    },
+    {
+      "id": 43,
+      "title": "R83 — honest token & context metering",
+      "date": "2026-09-10",
+      "summary": "The owner's 'highly misleading' round: ONE budget (resolveTurnBudget — window WITH source label, the owner's max_output_tokens finally honored, available = window − output − margin) drives the meter, the compaction trigger, and the context guard; the donut shows the provider's OWN number for the last request (actual block from the stats carriers) beside the labeled ~projected estimate, applies the newest compaction (the ring drops instead of lying high), renders the budget tick + window provenance; schema-measured tool tokens replace the 350/tool guess; the meter's prompt sections match the real turn's (skills/task-modes/active-mode/background/environment); migration 0031's provider_calls + origin make 'N turns · M provider calls' honest and the hidden compaction/debug calls billed; cached-null hit rates ('— not reported'), (unpriced) cost markers, the real POST /sessions/:id/compact (the 800K guard's phantom /compact finally exists), the model-relative guard with honest numbers. Live battery 5/5 on real keys (actual=61 tokens measured end-to-end)."
     }
   ],
   "quality": {
-    "ci": "PENDING — R82 push not yet made (this field is synced from the Actions API at close-out per the documented convention)",
+    "ci": "PENDING — R83 push not yet made (this field is synced from the Actions API at close-out per the documented convention)",
     "suites": [
       {
         "name": "frontend",
-        "tests": 944
+        "tests": 946
       },
       {
         "name": "agent-core",
-        "tests": 1853
+        "tests": 1867
       },
       {
         "name": "sidecar e2e",
@@ -256,30 +262,24 @@
   ],
   "plan": {
     "current": {
-      "title": "R82 — models & providers hardening (the owner's field report round 2)",
-      "detail": "Shipped per the models-providers-fixes spec: (1) THE routing fix — body.providerId threads the per-send override through both send routes, queued messages, the vision relay, the context meter, and the debug analyst; prepareTurn resolves the effective provider; the orchestrator's subagentModel became the provider-scoped {providerId, modelId} ref (legacy strings read openrouter-scoped) and child keyring views key on the override's provider; custom keys survive restarts (keys.rs note-file). (2) POST /models/:id/test — the real per-model probe. (3) Migration 0030's tri-state capability columns + the dialog's capabilities card. (4) NVIDIA polish: dialog-local free-only scope with zero-free auto-switch, GET /models/configured across providers. Verified: root suite 2,809 (agent-core 1,853 incl. four new r82 suites; frontend 944; e2e 12/12), lint + typechecks clean, license audit 134 CLEAN, docs:check green, live battery 8/8 (battery-r82.mjs: mock-gateway routing oracle, real OpenRouter + NIM probes, key-echo scrub).",
-      "next": "R83 — honest token/context metering (the token-counting-robustness spec: the provider-reported 'actual' block on the context report, the estimator fed the REAL turn context, compaction-aware metering, the unified resolveTurnBudget with window-source labels, null-honest cache reporting, the missing /compact the 800K guard already promises), then the modularity Wave 2 (server.ts route split)."
+      "title": "R83 — honest token & context metering (the 'highly misleading' round)",
+      "detail": "Shipped per the token-counting-robustness spec: (1) ONE budget — resolveTurnBudget (models row → catalog → defaults, contextWindowSource labeled, the owner's max_output_tokens honored for the first time, available = window − output − 8,000) shared by the meter route, both turn runners, the compaction trigger, the guard, and the new compact route. (2) The honest donut — the actual block (the provider's OWN prompt tokens for the last request, from the newest stats carrier; null before the first reply), usedTokensBasis 'estimated', the compaction APPLIED to the messages estimate + badge, the budget tick + window provenance, schema-measured tool tokens (measureToolSchemaTokens), the full PromptContext sections (skills/task-modes/active-mode/background/environment). (3) Truth hygiene — migration 0031 (provider_calls + origin, table rebuild relaxing agent_id for the hidden-call rows), cached-NULL hit rates, (unpriced) markers, 'turns · provider calls' relabel, the compaction summarizer + debug analyst usage rows. (4) POST /sessions/:id/compact (force compaction, honest gates) + the model-relative guard (available-based, no phantom /compact). (5) The stream-store renders meta.compaction/context_limit + invalidates session-context on done. Docs: the CONTEXT-METER runbook, IMPLEMENTED-API, CHANGELOG 0.82.0. Verified: root 155 files/2,825 tests, e2e 12/12, lint + typechecks clean, license 134 CLEAN, docs:check 187/0/0, live battery 5/5 (scripts/battery-r83.mjs — actual=61 tokens measured on a real OpenRouter turn)."
     },
     "upcoming": [
       {
         "phase": "Wave 2 of the modularity roadmap (the R80.5 audit)",
         "status": "next",
-        "note": "Split server.ts (5,086 lines) into routes/<domain>.ts modules with ctx = {db, keyring, chat, ring}; extract the shared turn-loop harness (retry ladder / loop guard / overflow recovery — ~1,700 duplicated lines); break the 25-file agents↔tools SCC at the delegation edge (inject the orchestrator via ToolDeps)."
-      },
-      {
-        "phase": "Models & providers hardening",
-        "status": "queued",
-        "note": "The owner's field report: custom-provider models route through OpenRouter (providerId never rides the send wire — runtime resolves from the agent row only; the fix threads body.providerId through both send routes into prepareTurn); NVIDIA second-class gaps; a per-model TEST button (responds + response-is-reasonable); capability toggles in the model edit dialog (vision/audio/video/tools tri-state)."
-      },
-      {
-        "phase": "Honest token/context metering",
-        "status": "queued",
-        "note": "The owner: 'the context, the token count — highly misleading.' The donut shows an estimate as fact while real per-call usage is persisted but unsurfaced; plan per agent-ctx/research/token-counting-robustness.md (actual block from provider stats + honest estimator labels + one budget + truth hygiene)."
+        "note": "Split server.ts (5,5xx lines) into routes/<domain>.ts modules with ctx = {db, keyring, chat, ring}; extract the shared turn-loop harness (retry ladder / loop guard / overflow recovery — ~1,700 duplicated lines); break the 25-file agents↔tools SCC at the delegation edge (inject the orchestrator via ToolDeps)."
       },
       {
         "phase": "Standing R81-queue items",
         "status": "queued",
-        "note": "External plugin ctx enrichment (cline's appendContext seam), the lessons-ledger affordance as the reminder injector's third consumer, ratings-driven prompt tuning, the optional v0.68.0 backfill tag, edit-linting, installer code-signing, the Files-tab polish, agent web-app-testing tools."
+        "note": "External plugin ctx enrichment (cline's appendContext seam), the lessons-ledger affordance as the reminder injector's third consumer, ratings-driven prompt tuning, and the standing items (edit-linting, installer code-signing, the Files-tab polish, agent web-app-testing tools)."
+      },
+      {
+        "phase": "DeepSeek-harness adaptation candidates (the round-2 study)",
+        "status": "queued",
+        "note": "agent-ctx/research/deepseek-harness-round2.md's top-3: C2 per-tool declared timeoutMs with structured TOOL_TIMEOUT results (R51's own next-study candidate); C3 mode/permission policy as folded session events + policy sentence AFTER retained history (fixes revert semantics + stops prompt-cache invalidation on mode switches); C4 tool-result spill (oversized outputs to session-scoped files + locators)."
       }
     ],
     "principles": [
@@ -288,5 +288,5 @@
       "Quality over speed — every round verified before push"
     ]
   },
-  "round": 82
+  "round": 83
 }

@@ -1,4 +1,4 @@
-<!-- last-reviewed: 2026-09-08 round-79 -->
+<!-- last-reviewed: 2026-09-10 round-83 -->
 
 # Round 32 — Owner-Designed UI Implementation (floating panels + activity block + no top bar)
 

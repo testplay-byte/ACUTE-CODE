@@ -185,7 +185,20 @@ const CONTEXT_REPORT: SessionContextReport = {
   model: "openrouter/ox-alpha",
   providerId: "openrouter",
   contextWindow: 1_000_000,
+  // ROUND-83 (R83): the budget trio + provenance + the measured block +
+  // providerCalls — the wire fields the donut's new lines render.
+  contextWindowSource: "override",
+  maxOutputTokens: 32_768,
+  available: 959_232,
+  usedTokensBasis: "estimated",
   usedTokens: 420_000,
+  actual: {
+    inputTokens: 390_000,
+    outputTokens: 12_000,
+    cachedInputTokens: 82_000,
+    at: "2026-09-10T10:00:00Z",
+    model: "openrouter/ox-alpha",
+  },
   breakdown: {
     systemPrompt: 9_000,
     systemTools: 1_000,
@@ -195,12 +208,12 @@ const CONTEXT_REPORT: SessionContextReport = {
     mcpTools: 0,
   },
   cache: { inputTokens: 100_000, cachedInputTokens: 82_000, hitRate: 0.82 },
-  sessionTotals: { inputTokens: 250_000, outputTokens: 12_000, requests: 7, costUsd: 0.1234 },
+  sessionTotals: { inputTokens: 250_000, outputTokens: 12_000, requests: 7, costUsd: 0.1234, providerCalls: 9 },
   // ROUND-51 (R51-c): the main/sub-agents/combined usage split.
   usage: {
-    main: { inputTokens: 250_000, outputTokens: 12_000, requests: 7, costUsd: 0.1234 },
+    main: { inputTokens: 250_000, outputTokens: 12_000, requests: 7, costUsd: 0.1234, providerCalls: 9 },
     subagents: { inputTokens: 60_000, outputTokens: 3_400, requests: 4, costUsd: 0.0311 },
-    combined: { inputTokens: 310_000, outputTokens: 15_400, requests: 11, costUsd: 0.1545 },
+    combined: { inputTokens: 310_000, outputTokens: 15_400, requests: 11, costUsd: 0.1545, providerCalls: 9 },
   },
 };
 
@@ -1676,13 +1689,16 @@ describe("Composer: context donut (owner spec G)", () => {
     await renderPanelWithConversation();
     expect(await screen.findByText("first question", {}, { timeout: 5000 })).toBeTruthy();
 
-    const donut = await screen.findByRole("button", { name: /Context window: 42% used/ });
+    const donut = await screen.findByRole("button", { name: /~42% of context window projected/ });
     // ROUND-51 (R51-c): the toolbar shows ONLY the ring — the % lives on the
     // button's title/aria-label and inside the popover, never beside it.
     expect(document.querySelector("[data-donut-label]")).toBeNull();
     expect(donut.textContent?.trim()).toBe("");
     expect(donut.querySelector("svg")).toBeTruthy();
-    expect(donut.getAttribute("title")).toContain("42% used");
+    // ROUND-83 (R83): the title is the honest two-number summary — the
+    // projection LABELED with a ~ + the provider's measured number.
+    expect(donut.getAttribute("title")).toContain("~42% of context window projected");
+    expect(donut.getAttribute("title")).toContain("390k measured at last request");
     // ROUND-82: the meter now carries the EFFECTIVE provider as a third arg —
     // the report keys its window/pricing lookups on the provider that will
     // serve the next send (override ?? agent.providerId; here the agent's).
@@ -1693,13 +1709,19 @@ describe("Composer: context donut (owner spec G)", () => {
     await renderPanelWithConversation();
     expect(await screen.findByText("first question", {}, { timeout: 5000 })).toBeTruthy();
 
-    fireEvent.click(await screen.findByRole("button", { name: /Context window: 42% used/ }));
+    fireEvent.click(await screen.findByRole("button", { name: /~42% of context window projected/ }));
     const popover = await screen.findByRole("dialog", { name: "Context window details" });
 
-    // Big donut summary: "% used" + used / window tokens + the model line.
-    expect(popover.textContent).toContain("42% used");
-    expect(popover.textContent).toContain("420k / 1000k tokens");
+    // Big donut summary (ROUND-83): "~% projected" + used / window tokens
+    // · estimated + the MEASURED line + the model.
+    expect(popover.textContent).toContain("~42% projected");
+    expect(popover.textContent).toContain("420k / 1000k tokens · estimated");
+    expect(popover.textContent).toContain("390k measured at last request");
     expect(popover.textContent).toContain("openrouter/ox-alpha");
+    // The budget line (the compaction-line tick + the output reserve) and
+    // the window's provenance.
+    expect(popover.querySelector("[data-context-budget]")?.textContent).toContain("compaction line 959k");
+    expect(popover.querySelector("[data-context-budget]")?.textContent).toContain("your override");
 
     // Breakdown rows (mini-bars) — MCP tools honestly "none configured".
     for (const row of [
@@ -1731,7 +1753,11 @@ describe("Composer: context donut (owner spec G)", () => {
     const group = (id: string): HTMLElement =>
       totals.querySelector(`[data-usage-group="${id}"]`) as HTMLElement;
     for (const id of ["main", "subagents", "combined"]) expect(group(id)).toBeTruthy();
-    expect(group("main").textContent).toContain("Requests");
+    expect(group("main").textContent).toContain("Turns");
+    // ROUND-83 (R83): the real SDK-call count beside the turns (7 turns ·
+    // 9 calls — the multi-iteration distinction, pinned).
+    expect(group("main").textContent).toContain("Provider calls");
+    expect(group("main").textContent).toContain("9");
     expect(group("main").textContent).toContain("7");
     expect(group("main").textContent).toContain("250k");
     expect(group("main").textContent).toContain("12k");
@@ -1762,7 +1788,7 @@ describe("Composer: context donut (owner spec G)", () => {
     await renderPanelWithConversation();
     expect(await screen.findByText("first question", {}, { timeout: 5000 })).toBeTruthy();
 
-    fireEvent.click(await screen.findByRole("button", { name: /Context window: 42% used/ }));
+    fireEvent.click(await screen.findByRole("button", { name: /~42% of context window projected/ }));
     const popover = await screen.findByRole("dialog", { name: "Context window details" });
     const totals = popover.querySelector("[data-session-totals]") as HTMLElement;
     const group = (id: string): HTMLElement =>
@@ -1780,7 +1806,7 @@ describe("Composer: context donut (owner spec G)", () => {
   it("HOVER INTENT (R58-cf): the popover does NOT open instantly — only after the pointer rests ~600ms", async () => {
     await renderPanelWithConversation();
     expect(await screen.findByText("first question", {}, { timeout: 5000 })).toBeTruthy();
-    const donut = await screen.findByRole("button", { name: /Context window: 42% used/ });
+    const donut = await screen.findByRole("button", { name: /~42% of context window projected/ });
 
     vi.useFakeTimers();
     const popoverEl = (): HTMLElement | null => document.querySelector("[data-context-popover]");
@@ -1804,7 +1830,7 @@ describe("Composer: context donut (owner spec G)", () => {
   it("HOVER INTENT (R58-cf): leaving before the intent fires CANCELS the open — a pass-through never opens it", async () => {
     await renderPanelWithConversation();
     expect(await screen.findByText("first question", {}, { timeout: 5000 })).toBeTruthy();
-    const donut = await screen.findByRole("button", { name: /Context window: 42% used/ });
+    const donut = await screen.findByRole("button", { name: /~42% of context window projected/ });
 
     vi.useFakeTimers();
     const popoverEl = (): HTMLElement | null => document.querySelector("[data-context-popover]");
@@ -1824,7 +1850,7 @@ describe("Composer: context donut (owner spec G)", () => {
   it("FOCUS opens INSTANTLY — the keyboard path never pays the hover-intent toll (R58-cf)", async () => {
     await renderPanelWithConversation();
     expect(await screen.findByText("first question", {}, { timeout: 5000 })).toBeTruthy();
-    const donut = await screen.findByRole("button", { name: /Context window: 42% used/ });
+    const donut = await screen.findByRole("button", { name: /~42% of context window projected/ });
 
     vi.useFakeTimers();
     const popoverEl = (): HTMLElement | null => document.querySelector("[data-context-popover]");
@@ -1836,7 +1862,7 @@ describe("Composer: context donut (owner spec G)", () => {
   it("HOVER BRIDGE: leaving the trigger does NOT close instantly; entering the popover cancels the timer (R51-c)", async () => {
     await renderPanelWithConversation();
     expect(await screen.findByText("first question", {}, { timeout: 5000 })).toBeTruthy();
-    const donut = await screen.findByRole("button", { name: /Context window: 42% used/ });
+    const donut = await screen.findByRole("button", { name: /~42% of context window projected/ });
 
     vi.useFakeTimers();
     const popoverEl = (): HTMLElement | null => document.querySelector("[data-context-popover]");
@@ -1877,7 +1903,7 @@ describe("Composer: context donut (owner spec G)", () => {
   it("CLICK still pins: a pinned popover survives leaving both trigger and popover (R51-c)", async () => {
     await renderPanelWithConversation();
     expect(await screen.findByText("first question", {}, { timeout: 5000 })).toBeTruthy();
-    const donut = await screen.findByRole("button", { name: /Context window: 42% used/ });
+    const donut = await screen.findByRole("button", { name: /~42% of context window projected/ });
 
     vi.useFakeTimers();
     const popoverEl = (): HTMLElement | null => document.querySelector("[data-context-popover]");
@@ -1897,7 +1923,7 @@ describe("Composer: context donut (owner spec G)", () => {
     vi.mocked(fetchSessionContext).mockResolvedValue({ ...CONTEXT_REPORT, usedTokens: 700_000 });
     await renderPanelWithConversation();
     expect(await screen.findByText("first question", {}, { timeout: 5000 })).toBeTruthy();
-    const donut = await screen.findByRole("button", { name: /Context window: 70% used/ });
+    const donut = await screen.findByRole("button", { name: /~70% of context window projected/ });
     // circles[0] = track, circles[1] = the arc — amber in the 60–85% band.
     expect(donut.querySelectorAll("circle")[1].getAttribute("stroke")).toBe(DONUT_WARN_COLOR);
 
@@ -1905,7 +1931,7 @@ describe("Composer: context donut (owner spec G)", () => {
     vi.mocked(fetchSessionContext).mockResolvedValue({ ...CONTEXT_REPORT, usedTokens: 900_000 });
     await renderPanelWithConversation();
     expect(await screen.findByText("first question", {}, { timeout: 5000 })).toBeTruthy();
-    const hot = await screen.findByRole("button", { name: /Context window: 90% used/ });
+    const hot = await screen.findByRole("button", { name: /~90% of context window projected/ });
     expect(hot.querySelectorAll("circle")[1].getAttribute("stroke")).toBe(SEMANTIC_COLORS.danger);
   });
 });

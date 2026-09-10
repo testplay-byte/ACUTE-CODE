@@ -963,8 +963,11 @@ async function probeGitState(rootPath: string): Promise<{ gitBranch: string; git
 
 /** The turn's PromptEnvironment (D1): OS mapped from process.platform, the
  * shell exec.ts ACTUALLY spawns through (spawn(…, {shell:true}) = cmd.exe on
- * Windows, /bin/sh on POSIX), the local date, and the git state. */
-async function buildPromptEnvironment(rootPath: string): Promise<PromptEnvironment> {
+ * Windows, /bin/sh on POSIX), the local date, and the git state.
+ * ROUND-83 (R83): exported — the context-meter route builds the SAME
+ * environment grounding the real turn's system prompt carries, so the
+ * meter's estimate counts every section (the audit's §2.2). */
+export async function buildPromptEnvironment(rootPath: string): Promise<PromptEnvironment> {
   const now = new Date();
   const weekdays = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
   const pad = (n: number): string => String(n).padStart(2, "0");
@@ -1589,6 +1592,17 @@ export async function runSingleAgentTurn(
   // ROUND-50 (R50-c1): cached prompt tokens, accumulated per provider call
   // into the turn's single usage_events row (context-meter cache hit rate).
   let totalCachedInputTokens = 0;
+  // ROUND-83 (R83): did ANY provider call this turn report a cached tier?
+  // When NO call did, the usage row writes cachedInputTokens = NULL (the
+  // shared type's documented contract — "null when the provider didn't
+  // report a cached tier"), so the meter's hit-rate line renders "— not
+  // reported" instead of a fabricated 0% (the audit's §2.10).
+  let sawCachedReport = false;
+  // ROUND-83 (R83): the sync path's SDK-call counter (the streamed path
+  // always had one) — rides the usage row as provider_calls so the usage
+  // screens can say "N turns · M provider calls" honestly (§2.9: a
+  // 5-iteration turn records 1 "request" today — the label lied).
+  let totalRequests = 0;
   let lastAssistantEvent: { seq: number; ts: string; content: string } | null = null;
   let lastError:
     | {
@@ -1649,11 +1663,10 @@ export async function runSingleAgentTurn(
     // Re-assembled each iteration so the model sees the prior iteration's
     // tool results + assistant text.
     const rawMessages = assembleHistory(db, session.id);
-    const budget: ContextBudget = {
-      contextWindow: getModelContextWindow(db, provider.id, model),
-      maxOutputTokens: 32_768,
-      margin: 8_000,
-    };
+    // ROUND-83 (R83): the shared budget — resolveTurnBudget honors the
+    // owner's per-model max_output_tokens (the audit's §2.8) and is the
+    // SAME number the context meter reports (§2.5: one truth).
+    const budget: TurnBudget = resolveTurnBudget(db, provider.id, model);
     // ROUND-46 (R46-b): compaction instead of a silent hard trim. The sync
     // path (sub-agents) has no SSE emit — the compacted event lands in the
     // session log either way and later iterations reuse it.
@@ -1690,6 +1703,9 @@ export async function runSingleAgentTurn(
     const startedAt = Date.now();
     let result: ChatTurnOutput;
     try {
+      // ROUND-83 (R83): one SDK call per outer iteration (the streamed path's
+      // counter parity — rides the usage row as provider_calls).
+      totalRequests++;
       result = await chat({
         provider: { id: provider.id, baseUrl: provider.baseUrl, apiFormat: provider.apiFormat },
         apiKey,
@@ -1866,6 +1882,11 @@ export async function runSingleAgentTurn(
     totalInputTokens += result.usage.inputTokens;
     totalOutputTokens += result.usage.outputTokens;
     totalCachedInputTokens += result.usage.cachedInputTokens ?? 0;
+    // ROUND-83 (R83): undefined cachedInputTokens = the provider didn't
+    // report a cache tier (chat.ts maps usage.inputTokenDetails.
+    // cacheReadTokens) — track it so the usage row can write NULL instead
+    // of a fake 0 when NO call reported one.
+    if (typeof result.usage.cachedInputTokens === "number") sawCachedReport = true;
 
     // Audit trail: one event per executed tool call, in order (ADR-0010 log).
     for (const call of result.toolCalls) {
@@ -2013,12 +2034,14 @@ export async function runSingleAgentTurn(
           model,
           inputTokens: totalInputTokens,
           outputTokens: totalOutputTokens,
-          cachedInputTokens: totalCachedInputTokens,
+          cachedInputTokens: sawCachedReport ? totalCachedInputTokens : null,
           costUsd: computeCost(db, provider.id, model, totalInputTokens, totalOutputTokens),
           ts: lastAssistantEvent.ts,
         },
         // ROUND-64 (R64-e): attribute the partial spend to the serving key.
         keySlot,
+        // ROUND-83 (R83): the turn's real SDK-call count rides the row.
+        { providerCalls: totalRequests, origin: "turn" },
       );
       touchSession(db, session.id);
     }
@@ -2059,7 +2082,7 @@ export async function runSingleAgentTurn(
       model,
       inputTokens: totalInputTokens,
       outputTokens: totalOutputTokens,
-      cachedInputTokens: totalCachedInputTokens,
+      cachedInputTokens: sawCachedReport ? totalCachedInputTokens : null,
       costUsd: computeCost(db, provider.id, model, totalInputTokens, totalOutputTokens),
       // A guard stop always follows at least one tool-using iteration, so an
       // assistant event exists — the userSeq fallback is pure defensiveness.
@@ -2067,7 +2090,8 @@ export async function runSingleAgentTurn(
     };
     // ROUND-64 (R64-e): keySlot rides the guard-stop row too — the burn was
     // real and the serving key deserves the attribution.
-    recordUsage(db, usage, keySlot);
+    // ROUND-83 (R83): the real SDK-call count rides the row.
+    recordUsage(db, usage, keySlot, { providerCalls: totalRequests, origin: "turn" });
     touchSession(db, session.id);
     logTurnEnd(session.id, false, Date.now() - syncStartedAt, totalInputTokens, totalOutputTokens);
     return {
@@ -2137,11 +2161,13 @@ export async function runSingleAgentTurn(
           model,
           inputTokens: totalInputTokens,
           outputTokens: totalOutputTokens,
-          cachedInputTokens: totalCachedInputTokens,
+          cachedInputTokens: sawCachedReport ? totalCachedInputTokens : null,
           costUsd: computeCost(db, provider.id, model, totalInputTokens, totalOutputTokens),
           ts: lastAssistantEvent.ts,
         },
         keySlot,
+        // ROUND-83 (R83): the turn's real SDK-call count rides the row.
+        { providerCalls: totalRequests, origin: "turn" },
       );
     }
     persistTurnError(db, {
@@ -2181,14 +2207,18 @@ export async function runSingleAgentTurn(
     model,
     inputTokens: totalInputTokens,
     outputTokens: totalOutputTokens,
-    // ROUND-50 (R50-c1): 0 when no provider call reported a cached tier —
-    // recorded as a plain 0 (not null) because at least one call ran.
-    cachedInputTokens: totalCachedInputTokens,
+    // ROUND-50 (R50-c1) → ROUND-83 (R83): NULL when no provider call
+    // reported a cached tier (the shared type's documented contract — a
+    // provider without cache reporting shows "— not reported", never a
+    // fabricated 0% hit rate; the audit's §2.10).
+    cachedInputTokens: sawCachedReport ? totalCachedInputTokens : null,
     costUsd: computeCost(db, provider.id, model, totalInputTokens, totalOutputTokens),
     ts: lastAssistantEvent.ts,
   };
   // ROUND-64 (R64-e): keySlot attributes the successful turn's spend.
-  recordUsage(db, usage, keySlot);
+  // ROUND-83 (R83): providerCalls rides the row (the usage screens' honest
+  // "N turns · M provider calls" line).
+  recordUsage(db, usage, keySlot, { providerCalls: totalRequests, origin: "turn" });
   touchSession(db, session.id);
   // ROUND-44 (live-battery find): a SUCCESSFUL turn used to leave the session
   // in "running" forever (only the error path reset it) — sessions then read
@@ -2330,11 +2360,12 @@ export async function runStreamedAgentTurn(
     },
   });
 
-  const budget: ContextBudget = {
-    contextWindow: getModelContextWindow(db, provider.id, model),
-    maxOutputTokens: 32_768,
-    margin: 8_000,
-  };
+  // ROUND-83 (R83): the shared budget — resolveTurnBudget honors the owner's
+  // per-model max_output_tokens (the audit's §2.8) and is the SAME number the
+  // context meter reports (§2.5: one truth). Computed once per turn (the
+  // window/limit rows don't change mid-turn); the guard below reads
+  // budget.available.
+  const budget: TurnBudget = resolveTurnBudget(db, provider.id, model);
 
   // Round-28 WS-F: multi-turn agentic continuation (owner R28 directive:
   // "It should automatically continue… 4, 5, 6, or 7 iterations… research →
@@ -2352,6 +2383,10 @@ export async function runStreamedAgentTurn(
   // turn's single usage_events row (context-meter cache hit rate).
   let totalCachedInputTokens = 0;
   let totalRequests = 0;
+  // ROUND-83 (R83): did ANY finish frame this turn carry a cached tier?
+  // (chat.ts omits cachedInputTokens from the frame when the provider
+  // didn't report one — the NULL-vs-0 honesty for the usage row.)
+  let sawCachedReport = false;
   let lastAssistantEvent: { seq: number; ts: string; content: string } | null = null;
   let lastText = "";
   // R77 (the live-battery find): TURN-level tool-call count — the blank-
@@ -2460,16 +2495,25 @@ export async function runStreamedAgentTurn(
       });
     }
 
-    // Context guard (6-f R-F5): abort if assembled context > 800K tokens
-    // (the 1M window is a LIMIT, not headroom; 200+ tool round-trips approach
-    // 500KB of tool I/O alone). ROUND-80 (R80): the break now carries the
+    // Context guard (6-f R-F5 → ROUND-83): abort if the assembled context
+    // exceeds the model's OWN budget line (window − output reserve −
+    // margin — the same `available` the compaction trigger and the donut's
+    // budget marker use; ONE truth, R83 §2.5/§2.6). The pre-R83 guard was a
+    // hardcoded 800K: on a 1M-window model it fired BEFORE compaction could
+    // (compaction triggers at window−41K), and the message told the owner to
+    // "run /compact" — a command that did not exist (the audit's honesty
+    // violation). Now: model-relative, and the R83 POST /sessions/:id/compact
+    // route makes the affordance real. ROUND-80 (R80): the break carries the
     // guardStop — the turn ends through the honest terminal path below
     // (persisted turn.error + 502), never a silent ok:true stop.
-    if (usedTokens > 800_000) {
-      emit({ type: "meta.context_limit", tokens: usedTokens, limit: 800_000 });
+    if (usedTokens > budget.available) {
+      emit({ type: "meta.context_limit", tokens: usedTokens, limit: budget.available });
       guardStop = {
         code: "CONTEXT_LIMIT",
-        message: `the turn's assembled context exceeded the 800k-token guard (${usedTokens} tokens) for session ${session.id} — run /compact or start a new session`,
+        message:
+          `the turn's assembled context exceeded the model's budget for session ${session.id} ` +
+          `(${usedTokens} tokens > ${budget.available} available of a ${budget.contextWindow}-token window) — ` +
+          "start a new session, or compact the older context (POST /sessions/:id/compact)",
       };
       break;
     }
@@ -2502,7 +2546,11 @@ export async function runStreamedAgentTurn(
     let iterInputTokens = 0;
     let iterOutputTokens = 0;
     // ROUND-50 (R50-c1): this iteration's cached prompt tokens.
+    // ROUND-83 (R83): iterSawCached — this iteration's finish frame DID
+    // report a cache tier (the stats carrier's payload then carries the
+    // value; absence = not reported, the meter's actual block reads NULL).
     let iterCachedInputTokens = 0;
+    let iterSawCached = false;
     let iterToolCalls = 0;
     totalRequests++;
 
@@ -2544,7 +2592,11 @@ export async function runStreamedAgentTurn(
             : {}),
           ...(withStats
             ? {
-                usage: { inputTokens: iterInputTokens, outputTokens: iterOutputTokens },
+                usage: {
+                  inputTokens: iterInputTokens,
+                  outputTokens: iterOutputTokens,
+                  ...(iterSawCached ? { cachedInputTokens: iterCachedInputTokens } : {}),
+                },
                 ms: iterMs,
                 model,
               }
@@ -2670,7 +2722,13 @@ export async function runStreamedAgentTurn(
           iterOutputTokens = event.usage.outputTokens;
           // ROUND-50 (R50-c1): cached prompt tokens ride the finish frame
           // (0 when the provider didn't report a cached tier).
+          // ROUND-83 (R83): the ABSENCE of the field is the "not reported"
+          // signal — track it for the usage row's NULL-vs-0 honesty.
           iterCachedInputTokens = event.cachedInputTokens ?? 0;
+          if (typeof event.cachedInputTokens === "number") {
+            sawCachedReport = true;
+            iterSawCached = true;
+          }
         }
       }
     } catch (error) {
@@ -2701,12 +2759,14 @@ export async function runStreamedAgentTurn(
               model,
               inputTokens: totalInputTokens,
               outputTokens: totalOutputTokens,
-              cachedInputTokens: totalCachedInputTokens,
+              cachedInputTokens: sawCachedReport ? totalCachedInputTokens : null,
               costUsd: computeCost(db, provider.id, model, totalInputTokens, totalOutputTokens),
               ts: lastAssistantEvent.ts,
             },
             // ROUND-64 (R64-e): attribute the partial spend to the serving key.
             keySlot,
+            // ROUND-83 (R83): the turn's real SDK-call count rides the row.
+            { providerCalls: totalRequests, origin: "turn" },
           );
         }
         touchSession(db, session.id);
@@ -2868,11 +2928,13 @@ export async function runStreamedAgentTurn(
             model,
             inputTokens: totalInputTokens,
             outputTokens: totalOutputTokens,
-            cachedInputTokens: totalCachedInputTokens,
+            cachedInputTokens: sawCachedReport ? totalCachedInputTokens : null,
             costUsd: computeCost(db, provider.id, model, totalInputTokens, totalOutputTokens),
             ts: lastAssistantForUsage.ts,
           },
           keySlot,
+          // ROUND-83 (R83): the turn's real SDK-call count rides the row.
+          { providerCalls: totalRequests, origin: "turn" },
         );
       }
       logTurnEnd(session.id, false, Date.now() - startedAt, totalInputTokens, totalOutputTokens);
@@ -2946,7 +3008,11 @@ export async function runStreamedAgentTurn(
         payload: {
           role: "assistant",
           content: "",
-          usage: { inputTokens: iterInputTokens, outputTokens: iterOutputTokens },
+          usage: {
+            inputTokens: iterInputTokens,
+            outputTokens: iterOutputTokens,
+            ...(iterSawCached ? { cachedInputTokens: iterCachedInputTokens } : {}),
+          },
           ms: iterMs,
           model,
         },
@@ -3006,7 +3072,11 @@ export async function runStreamedAgentTurn(
       payload: {
         role: "assistant",
         content: lastText,
-        usage: { inputTokens: totalInputTokens, outputTokens: totalOutputTokens },
+        usage: {
+          inputTokens: totalInputTokens,
+          outputTokens: totalOutputTokens,
+          ...(sawCachedReport ? { cachedInputTokens: totalCachedInputTokens } : {}),
+        },
         ms,
         model,
       },
@@ -3038,11 +3108,11 @@ export async function runStreamedAgentTurn(
       model,
       inputTokens: totalInputTokens,
       outputTokens: totalOutputTokens,
-      cachedInputTokens: totalCachedInputTokens,
+      cachedInputTokens: sawCachedReport ? totalCachedInputTokens : null,
       costUsd: computeCost(db, provider.id, model, totalInputTokens, totalOutputTokens),
       ts: lastAssistantEvent.ts,
     };
-    recordUsage(db, guardUsage, keySlot);
+    recordUsage(db, guardUsage, keySlot, { providerCalls: totalRequests, origin: "turn" });
     touchSession(db, session.id);
     logTurnEnd(session.id, false, ms, totalInputTokens, totalOutputTokens);
     log("warn", "turn.guard_stop", {
@@ -3085,13 +3155,14 @@ export async function runStreamedAgentTurn(
       model,
       inputTokens: totalInputTokens,
       outputTokens: totalOutputTokens,
-      cachedInputTokens: totalCachedInputTokens,
+      cachedInputTokens: sawCachedReport ? totalCachedInputTokens : null,
       costUsd: computeCost(db, provider.id, model, totalInputTokens, totalOutputTokens),
       ts: lastAssistantEvent.ts,
     };
     // ROUND-64 (R64-e): keySlot rides the guard-stop row too — the burn was
     // real and the serving key deserves the attribution.
-    recordUsage(db, usage, keySlot);
+    // ROUND-83 (R83): the real SDK-call count rides the row.
+    recordUsage(db, usage, keySlot, { providerCalls: totalRequests, origin: "turn" });
     touchSession(db, session.id);
     logTurnEnd(session.id, false, ms, totalInputTokens, totalOutputTokens);
     return {
@@ -3137,11 +3208,11 @@ export async function runStreamedAgentTurn(
       model,
       inputTokens: totalInputTokens,
       outputTokens: totalOutputTokens,
-      cachedInputTokens: totalCachedInputTokens,
+      cachedInputTokens: sawCachedReport ? totalCachedInputTokens : null,
       costUsd: computeCost(db, provider.id, model, totalInputTokens, totalOutputTokens),
       ts: lastAssistantEvent.ts,
     };
-    recordUsage(db, blankUsage, keySlot);
+    recordUsage(db, blankUsage, keySlot, { providerCalls: totalRequests, origin: "turn" });
     touchSession(db, session.id);
     logTurnEnd(session.id, false, ms, totalInputTokens, totalOutputTokens);
     log("warn", "turn.blank_output", {
@@ -3166,14 +3237,18 @@ export async function runStreamedAgentTurn(
     model,
     inputTokens: totalInputTokens,
     outputTokens: totalOutputTokens,
-    // ROUND-50 (R50-c1): 0 when no provider call reported a cached tier —
-    // recorded as a plain 0 (not null) because at least one call ran.
-    cachedInputTokens: totalCachedInputTokens,
+    // ROUND-50 (R50-c1) → ROUND-83 (R83): NULL when no provider call
+    // reported a cached tier (the shared type's documented contract — a
+    // provider without cache reporting shows "— not reported", never a
+    // fabricated 0% hit rate; the audit's §2.10).
+    cachedInputTokens: sawCachedReport ? totalCachedInputTokens : null,
     costUsd: computeCost(db, provider.id, model, totalInputTokens, totalOutputTokens),
     ts: lastAssistantEvent.ts,
   };
   // ROUND-64 (R64-e): keySlot attributes the successful turn's spend.
-  recordUsage(db, usage, keySlot);
+  // ROUND-83 (R83): providerCalls rides the row (the usage screens' honest
+  // "N turns · M provider calls" line).
+  recordUsage(db, usage, keySlot, { providerCalls: totalRequests, origin: "turn" });
   touchSession(db, session.id);
   // ROUND-44 (live-battery find): same reset as the sync path — a finished
   // streamed turn must not leave the session stuck in "running".
@@ -3233,4 +3308,62 @@ export function getModelContextWindow(db: SqliteDatabase, providerId: string, mo
     .prepare("SELECT context_window FROM models WHERE provider_id = ? AND model_id = ?")
     .get(providerId, modelId) as { context_window: number | null } | undefined;
   return row?.context_window ?? getCatalogModel(modelId)?.contextWindow ?? 200_000;
+}
+
+/**
+ * ROUND-83 (R83): where the context window CAME from — the honest source
+ * label the context meter renders ("your override" / "catalog default" /
+ * "assumed 200k — unknown model"). `getModelContextWindow` collapses this
+ * into a bare number; the meter route needs the provenance so a silent
+ * 200K guess can never masquerade as a measured window (the audit's §2.7:
+ * a 1M-window model showed ~5× fuller than reality; a 32K model showed 3%
+ * while the provider was about to reject the request).
+ */
+export type ContextWindowSource = "override" | "catalog" | "default";
+
+/** ROUND-83 (R83): the ONE budget both the turn loop and the meter route use. */
+export interface TurnBudget extends ContextBudget {
+  /** Provenance of contextWindow: models-table override | catalog | 200K default. */
+  contextWindowSource: ContextWindowSource;
+  /** The behavioral line: contextWindow − maxOutputTokens − margin. */
+  available: number;
+}
+
+/**
+ * ROUND-83 (R83): ONE budget, computed ONCE, used by BOTH the meter route
+ * and the turn runners (the audit's §2.5: the donut and the compaction
+ * trigger previously disagreed — the displayed number was never the number
+ * that drove behavior). Resolution:
+ *   · contextWindow — models-table override → catalog → 200_000, with source;
+ *   · maxOutputTokens — models.max_output_tokens → catalog.maxOutputTokens
+ *     → 32_768. The owner's per-model output limit is stored and editable
+ *     since migration 0004 but was NEVER read by the runtime (the audit's
+ *     §2.8) — both budget sites hardcoded 32_768. Now the owner's edit is
+ *     the truth; the catalog's provider cap is the fallback; 32_768 is the
+ *     last resort for unknown models.
+ *   · margin — 8_000 (unchanged: system-prompt + schema slack);
+ *   · available = contextWindow − maxOutputTokens − margin — the same line
+ *     compaction triggers on and (R83) the context guard stops at.
+ */
+export function resolveTurnBudget(db: SqliteDatabase, providerId: string, modelId: string): TurnBudget {
+  const row = db
+    .prepare("SELECT context_window, max_output_tokens FROM models WHERE provider_id = ? AND model_id = ?")
+    .get(providerId, modelId) as { context_window: number | null; max_output_tokens: number | null } | undefined;
+  const catalog = getCatalogModel(modelId);
+  const contextWindow = row?.context_window ?? catalog?.contextWindow ?? 200_000;
+  const contextWindowSource: ContextWindowSource =
+    row?.context_window !== null && row?.context_window !== undefined
+      ? "override"
+      : catalog !== undefined
+        ? "catalog"
+        : "default";
+  const maxOutputTokens = row?.max_output_tokens ?? catalog?.maxOutputTokens ?? 32_768;
+  const margin = 8_000;
+  return {
+    contextWindow,
+    contextWindowSource,
+    maxOutputTokens,
+    margin,
+    available: contextWindow - maxOutputTokens - margin,
+  };
 }

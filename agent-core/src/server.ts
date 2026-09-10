@@ -20,9 +20,10 @@ import { PERMISSION_MODES, THINKING_LEVELS } from "shared";
 import { aiSdkChat, streamAiSdkChat, type ChatFn } from "./agents/chat.js";
 import {
   assembleHistory,
+  buildPromptEnvironment,
   effectiveToolNames,
-  getModelContextWindow,
   persistTurnError,
+  resolveTurnBudget,
   runSingleAgentTurn,
   runStreamedAgentTurn,
   type TurnModelOverride,
@@ -33,7 +34,7 @@ import {
 // still-open SSE before the turn's terminal frame.
 import { runDebugAnalyst } from "./agents/debug-analyst.js";
 import { pickFiles, pickFolder } from "./dialogs.js";
-import { projectTree, readFile, resolveInsideRoot, searchCode, searchFiles } from "./tools/index.js";
+import { projectTree, readFile, resolveInsideRoot, searchCode, searchFiles, measureToolSchemaTokens } from "./tools/index.js";
 import {
   ProviderKeyring,
   ProviderTestError,
@@ -63,6 +64,7 @@ import {
 import {
   appendQueuedMessage,
   appendSessionEvent,
+  buildBackgroundTasksReminder,
   createSession,
   deleteQueuedMessage,
   deleteSession,
@@ -74,6 +76,7 @@ import {
   listSessions,
   listSubAgents,
   listUndeliveredQueuedMessages,
+  recordUsage,
   revertSession,
   searchSessions,
   updateSessionActiveMode,
@@ -119,6 +122,7 @@ import {
   getModel,
   listAllModels,
   listModels,
+  lookupPricing,
   updateModel,
   upsertModel,
 } from "./storage/models.js";
@@ -176,7 +180,15 @@ import {
 import { builtInToolCatalog, BUILT_IN_PLUGINS, externalPluginFileReport } from "./tools/registry.js";
 import { getIndexSummary, searchIndexSymbols } from "./storage/index.js";
 import { estimateMessageTokens, estimateTokens } from "./context.js";
+// ROUND-83 (R83): the meter applies the newest compaction to the messages
+// estimate (the model receives the summary + tail — the raw log is NOT what
+// rides the next request; the audit's §2.4).
+import { applyCompaction, assembleWithCompaction, findLatestCompaction } from "./agents/compaction.js";
 import { buildSystemPromptSections, readCustomRules } from "./agents/prompts.js";
+// ROUND-83 (R83): the meter's skills resolution — the same shared resolver
+// prepareTurn uses, so the SKILLS section the estimate counts is the one the
+// real turn carries.
+import { resolveEffectiveSkills } from "./storage/skills-files.js";
 // ROUND-73 (R73-b): the task-modes resolver — the project-scoped /modes
 // listing and the PATCH /sessions/:id activeMode validation both sit on the
 // SAME resolveEffectiveModes prepareTurn + switch_mode use.
@@ -2965,6 +2977,37 @@ export function buildServer(options: ServerOptions): FastifyInstance {
         // computation, so the donut reflects the live toolset).
         const toolNames = project !== undefined ? effectiveToolNames(db, session, agent) : [];
 
+        // ROUND-83 (R83): the meter now feeds buildSystemPromptSections the
+        // SAME PromptContext a real turn receives (the audit's §2.2: the
+        // meter previously omitted skills, the task-modes index, the ACTIVE
+        // mode's deep module, the background-tasks reminder, and the
+        // environment grounding — a mode/skills-heavy session under-counted
+        // the system prompt by thousands of tokens, while the UI labeled a
+        // slice "Memory & skills" without counting the skills at all).
+        // Honest omission, documented: taskHints/modeHints are per-turn
+        // ephemeral (they depend on the NEXT user message, unknowable here)
+        // and stay out — the estimate errs small, labeled as estimated.
+        const environment =
+          project !== undefined ? await buildPromptEnvironment(project.rootPath) : undefined;
+        const modeResolution =
+          project !== undefined
+            ? resolveEffectiveModes(project.rootPath)
+            : { modes: [] as ReturnType<typeof resolveEffectiveModes>["modes"] };
+        // Read-only mirror of prepareTurn's active-mode resolution (a STALE
+        // mode id resolves to nothing here — the meter never WRITES; the
+        // turn's own resolution does the honest clearing).
+        const meterActiveTaskMode =
+          session.activeMode !== null
+            ? findMode(modeResolution.modes, session.activeMode)
+            : undefined;
+        const meterSkills =
+          project !== undefined
+            ? resolveEffectiveSkills(db, {
+                ...(project !== undefined ? { projectRoot: project.rootPath, projectScope: project.id } : {}),
+                ...(agent.skills.length > 0 ? { agentSkills: agent.skills } : {}),
+              }).map((skill) => ({ name: skill.name, description: skill.description }))
+            : [];
+
         // System-prompt slices via the R50-c1 section split (prompts.ts).
         // Projectless sessions run on agent.systemPrompt with NO tools.
         const sections =
@@ -2975,6 +3018,9 @@ export function buildServer(options: ServerOptions): FastifyInstance {
                 toolNames,
                 customRules: readCustomRules(project.rootPath),
                 maxTurns: agent.maxTurns,
+                // ROUND-83: the merged AGENTIC LOOP section's outer cap —
+                // the same line prepareTurn passes.
+                maxOuterLoops: agent.maxOuterLoops ?? 5,
                 indexSummary:
                   session.projectId !== null
                     ? getIndexSummary(db, session.projectId) ?? undefined
@@ -2986,6 +3032,28 @@ export function buildServer(options: ServerOptions): FastifyInstance {
                     ? memoryDigest(db, session.projectId) || undefined
                     : undefined,
                 permissionMode: session.permissionMode,
+                // ROUND-83: the sections a real turn carries (see above).
+                environment,
+                skills: meterSkills,
+                taskModes: modeResolution.modes.map((mode) => ({
+                  id: mode.id,
+                  name: mode.name,
+                  description: mode.description,
+                })),
+                ...(meterActiveTaskMode !== undefined
+                  ? {
+                      activeTaskMode: {
+                        id: meterActiveTaskMode.id,
+                        name: meterActiveTaskMode.name,
+                        body: meterActiveTaskMode.body,
+                      },
+                    }
+                  : {}),
+                backgroundTasks: buildBackgroundTasksReminder(db, session.id),
+                computerUse: (() => {
+                  const cu = getComputerUseSettings(db);
+                  return { enabled: cu.enabled, posture: cu.permission };
+                })(),
               })
             : null;
 
@@ -2993,34 +3061,93 @@ export function buildServer(options: ServerOptions): FastifyInstance {
         // GPT-style BPE approximation, calibrated ±15% of cl100k behavior):
         // systemPrompt: the identity section — the core prompt text minus the
         //   tool list, memory digest, and meta sections.
-        // systemTools: the prompt's tool-names section (measured) PLUS ~350
-        //   tokens per tool for the JSON schemas the API carries alongside the
-        //   prompt (the schema objects aren't cheaply stringifiable — the
-        //   fixed per-tool figure is the documented approximation).
+        // systemTools: the prompt's tool-names section (measured) PLUS the
+        //   ROUND-83 SCHEMA MEASUREMENT — estimateTokens(JSON.stringify(
+        //   schema)) per effective tool via tools/index.ts
+        //   measureToolSchemaTokens (in-process cached), replacing the
+        //   pre-R83 fixed 350/tool constant (the audit's §2.3: real schemas
+        //   range tiny→large; ±1-3K tokens of error at 15-20 tools).
         // memory: the memory digest section. meta: codebase index + custom
-        //   rules. messages: assembleHistory with attachments rendered,
-        //   exactly what a real turn would send. mcpTools: honest 0 (no MCP
-        //   system yet — the UI shows "none").
-        const TOOL_SCHEMA_TOKENS = 350;
+        //   rules. messages: assembleHistory WITH the newest compaction
+        //   applied (ROUND-83 §2.4 — the model receives the summary + tail,
+        //   not the raw log; the pre-R83 meter counted the full log forever).
+        // mcpTools: honest 0 (no MCP system yet — the UI shows "none").
         const systemPrompt = sections !== null ? estimateTokens(sections.identity) : estimateTokens(agent.systemPrompt);
-        const systemTools =
-          sections !== null ? estimateTokens(sections.tools) + TOOL_SCHEMA_TOKENS * toolNames.length : 0;
+        const schemaTokens =
+          project !== undefined ? await measureToolSchemaTokens(project.rootPath, toolNames) : 0;
+        const systemTools = sections !== null ? estimateTokens(sections.tools) + schemaTokens : 0;
         const memory = sections !== null ? estimateTokens(sections.memory) : 0;
         const meta = sections !== null ? estimateTokens(sections.meta) : 0;
-        const messages = estimateMessageTokens(assembleHistory(db, id));
+        // ROUND-83: compaction-aware messages estimate + the report's
+        // compaction badge data (the newest context.compact event).
+        const meterEvents = listSessionEvents(db, id);
+        const latestCompact = findLatestCompaction(meterEvents);
+        const seqMessages = assembleHistory(db, id);
+        const meterMessages =
+          latestCompact !== null ? applyCompaction(seqMessages, latestCompact) : seqMessages;
+        const messages = estimateMessageTokens(meterMessages);
         const mcpTools = 0;
         const usedTokens = systemPrompt + systemTools + memory + messages + meta + mcpTools;
 
+        // ROUND-83 (R83) §3.1: the `actual` block — the provider's OWN
+        // number for the last request (the newest message.assistant
+        // stats-carrier event; per-SDK-call usage persisted by the streamed
+        // runner since R35). The definition of "context used" cannot be more
+        // honest than this; the estimate above stays the live-filling
+        // projection, labeled as such. null before the first provider reply.
+        let actual: {
+          inputTokens: number;
+          outputTokens: number;
+          cachedInputTokens: number | null;
+          at: string;
+          model: string;
+        } | null = null;
+        for (let i = meterEvents.length - 1; i >= 0; i--) {
+          const ev = meterEvents[i];
+          if (ev.type !== "message.assistant") continue;
+          const payload = (ev.payload ?? {}) as {
+            usage?: { inputTokens?: unknown; outputTokens?: unknown; cachedInputTokens?: unknown };
+            model?: unknown;
+          };
+          if (
+            payload.usage === undefined ||
+            typeof payload.usage.inputTokens !== "number" ||
+            typeof payload.usage.outputTokens !== "number"
+          ) {
+            continue;
+          }
+          actual = {
+            inputTokens: payload.usage.inputTokens,
+            outputTokens: payload.usage.outputTokens,
+            cachedInputTokens: typeof payload.usage.cachedInputTokens === "number" ? payload.usage.cachedInputTokens : null,
+            at: ev.ts,
+            model: typeof payload.model === "string" ? payload.model : model,
+          };
+          break;
+        }
+
+        // ROUND-83 (R83) §3.3: ONE budget — the same resolveTurnBudget the
+        // turn runners use (window WITH source label, the owner's
+        // max_output_tokens finally honored, available = window − output −
+        // margin). The pre-R83 route called getModelContextWindow (a bare
+        // number, silent 200K default) and never told the UI which.
+        const budget = resolveTurnBudget(db, providerId, model);
+
         // ── Cache + lifetime totals: SQL SUMs over the session's usage rows
-        // (COUNT(*) = requests; SUM(cost_usd) rounded like the usage summary;
-        // cached_input_tokens is NULL pre-0020 / on providers without a
-        // cached tier — COALESCE handles it).
+        // (COUNT(*) = turns — the ROUND-83 relabel; SUM(cost_usd) rounded
+        // like the usage summary; cached_input_tokens is NULL pre-0020 AND
+        // (R83) when no provider call reported a cached tier — the RATE
+        // computation reads the raw SUM (no COALESCE) so "not reported"
+        // renders as null, never a fabricated 0%; the DISPLAY total keeps
+        // the COALESCE for old consumers).
         const totalsRow = db
           .prepare(
             `SELECT
                COALESCE(SUM(input_tokens), 0) AS inputTokens,
                COALESCE(SUM(output_tokens), 0) AS outputTokens,
+               SUM(cached_input_tokens) AS cachedInputTokensRaw,
                COALESCE(SUM(cached_input_tokens), 0) AS cachedInputTokens,
+               COALESCE(SUM(provider_calls), 0) AS providerCalls,
                COUNT(*) AS requests,
                COALESCE(SUM(cost_usd), 0) AS costUsd
              FROM usage_events WHERE session_id = ?`,
@@ -3028,11 +3155,19 @@ export function buildServer(options: ServerOptions): FastifyInstance {
           .get(id) as {
           inputTokens: number;
           outputTokens: number;
+          cachedInputTokensRaw: number | null;
           cachedInputTokens: number;
+          providerCalls: number;
           requests: number;
           costUsd: number;
         };
         const roundUsd = (value: number): number => Math.round(value * 1e6) / 1e6;
+        // The honest rate: null when NO row ever reported a cache tier
+        // (SUM over all-NULLs is NULL in SQLite) or when nothing ran yet.
+        const hitRate =
+          totalsRow.cachedInputTokensRaw !== null && totalsRow.inputTokens > 0
+            ? totalsRow.cachedInputTokensRaw / totalsRow.inputTokens
+            : null;
 
         // ── ROUND-51 (R51-c): the Main agent / Sub-agents / Combined usage
         // split (owner: "The actual main sessions stats and the sub-agent
@@ -3073,8 +3208,19 @@ export function buildServer(options: ServerOptions): FastifyInstance {
         return reply.code(200).send({
           model,
           providerId,
-          contextWindow: getModelContextWindow(db, providerId, model),
+          contextWindow: budget.contextWindow,
+          // ROUND-83: the budget trio + provenance — the donut renders the
+          // "compaction line" marker at available/window, shows the
+          // window's source ("your override" / "catalog default" /
+          // "assumed 200k — unknown model"), and reserves the honest
+          // output headroom the pre-R83 donut ignored entirely.
+          contextWindowSource: budget.contextWindowSource,
+          maxOutputTokens: budget.maxOutputTokens,
+          available: budget.available,
           usedTokens,
+          // ROUND-83: every estimate field is LABELED — the wire says which
+          // number is a projection and which is the provider's own.
+          usedTokensBasis: "estimated",
           breakdown: {
             systemPrompt,
             systemTools,
@@ -3083,19 +3229,35 @@ export function buildServer(options: ServerOptions): FastifyInstance {
             meta,
             mcpTools,
           },
+          // ROUND-83: the newest compaction's effect + detail (the donut's
+          // "Context compacted — N messages summarized" badge; tokensSaved
+          // is an estimate delta, rendered with a "~").
+          ...(latestCompact !== null
+            ? {
+                compaction: {
+                  throughSeq: latestCompact.throughSeq,
+                  droppedMessages: latestCompact.droppedMessages,
+                  tokensSaved: latestCompact.tokensSaved,
+                },
+              }
+            : {}),
+          // ROUND-83 §3.1: the provider-measured ground truth for the LAST
+          // request (null before the first reply; the model + ts ride along
+          // so a per-send model switch can never silently mix numbers).
+          actual,
           cache: {
             inputTokens: totalsRow.inputTokens,
             cachedInputTokens: totalsRow.cachedInputTokens,
-            hitRate:
-              totalsRow.inputTokens > 0
-                ? totalsRow.cachedInputTokens / totalsRow.inputTokens
-                : null,
+            hitRate,
           },
           sessionTotals: {
             inputTokens: totalsRow.inputTokens,
             outputTokens: totalsRow.outputTokens,
             requests: totalsRow.requests,
             costUsd: roundUsd(totalsRow.costUsd),
+            // ROUND-83: the real SDK-call count (the "requests" field above
+            // counts TURNS — one row per turn since R24).
+            providerCalls: totalsRow.providerCalls,
           },
           // ROUND-51 (R51-c): main = THIS session only; subagents = its
           // direct children; combined = the sum. Rounded exactly like the
@@ -3106,6 +3268,7 @@ export function buildServer(options: ServerOptions): FastifyInstance {
               outputTokens: totalsRow.outputTokens,
               requests: totalsRow.requests,
               costUsd: roundUsd(totalsRow.costUsd),
+              providerCalls: totalsRow.providerCalls,
             },
             subagents: {
               inputTokens: subRow.inputTokens,
@@ -3120,9 +3283,96 @@ export function buildServer(options: ServerOptions): FastifyInstance {
                 outputTokens: c.outputTokens,
                 requests: c.requests,
                 costUsd: roundUsd(c.costUsd),
+                providerCalls: totalsRow.providerCalls,
               };
             })(),
           },
+        });
+      });
+
+      // ── ROUND-83 (R83): the compaction affordance the 800K guard used to
+      // promise — POST /sessions/:id/compact forces a context compaction
+      // NOW (the same assembleWithCompaction machinery the turn loop runs:
+      // summarize the over-budget head into a dense briefing, persist the
+      // context.compact event, keep the newest messages). Body {} (no
+      // options yet). Honest gates: 404 unknown session, 409 no agent /
+      // vanished agent / unconfigured model / missing key / disabled
+      // provider — never a 500. The response:
+      //   200 { compacted: true,  throughSeq, droppedMessages, tokensSaved }
+      //   200 { compacted: false, reason } — nothing to summarize (a short
+      //        session has no over-budget head; force skips the under-budget
+      //        gate but an empty to-summarize set still declines honestly).
+      // The next turn's assembly (and the context meter, R83) reads the
+      // persisted event — the compaction applies to the model-facing
+      // context immediately and durably (fork/revert inherit it, ADR-0010).
+      scope.post("/sessions/:id/compact", async (request, reply) => {
+        const { id } = request.params as Record<string, string>;
+        const session = getSession(db, id);
+        if (session === undefined) {
+          return reply.code(404).send(errorBody("NOT_FOUND", `no session with id ${id}`));
+        }
+        if (session.agentId === null) {
+          return reply.code(409).send(errorBody("CONFLICT", `session ${id} has no bound agent`));
+        }
+        const agent = getAgent(db, session.agentId);
+        if (agent === undefined) {
+          return reply.code(409).send(
+            errorBody("CONFLICT", `session agent ${session.agentId} no longer exists`),
+          );
+        }
+        if (agent.providerId === null || agent.model === null) {
+          return reply.code(409).send(
+            errorBody("CONFLICT", `agent '${agent.name}' has no providerId/model configured`, {
+              agentId: agent.id,
+              field: "providerId",
+            }),
+          );
+        }
+        const provider = resolveProvider(db, agent.providerId);
+        if (provider === undefined) {
+          return reply.code(409).send(
+            errorBody("CONFLICT", `agent '${agent.name}' references missing provider '${agent.providerId}'`),
+          );
+        }
+        if (provider.baseUrl === null) {
+          return reply.code(409).send(
+            errorBody("CONFLICT", `provider '${provider.id}' has no baseUrl configured`),
+          );
+        }
+        if (provider.enabled === false) {
+          return reply.code(409).send(
+            errorBody("CONFLICT", `provider '${provider.name}' is disabled — enable it in Settings → Models & Providers`),
+          );
+        }
+        const apiKey = keyring.get(provider.id);
+        if (apiKey === undefined) {
+          return reply.code(409).send(
+            errorBody("CONFLICT", `no API key for provider '${provider.id}' — set it in Settings → Models & Providers`),
+          );
+        }
+        const budget = resolveTurnBudget(db, provider.id, agent.model);
+        const outcome = await assembleWithCompaction(assembleHistory(db, id), budget, {
+          db,
+          sessionId: id,
+          // The buildServer-injected chat (tests drive this with fakes —
+          // the same seam the send routes use).
+          chat,
+          provider: { id: provider.id, baseUrl: provider.baseUrl, apiFormat: provider.apiFormat },
+          apiKey,
+          model: agent.model,
+        }, { force: true });
+        if (!outcome.compacted || outcome.detail === undefined) {
+          return reply.code(200).send({
+            compacted: false,
+            reason:
+              "nothing to compact — the session's history is within the model's budget (or too short to summarize)",
+          });
+        }
+        return reply.code(200).send({
+          compacted: true,
+          throughSeq: outcome.detail.throughSeq,
+          droppedMessages: outcome.detail.droppedMessages,
+          tokensSaved: outcome.detail.tokensSaved,
         });
       });
 
@@ -4321,6 +4571,41 @@ export function buildServer(options: ServerOptions): FastifyInstance {
                 payload: { content: result.content, model, ts: new Date().toISOString() },
               });
               send({ type: "debug-done", sessionId: id, content: result.content, model });
+              // ROUND-83 (R83): meter the analyst's own spend (origin
+              // "debug", agentId null — the audit's §2.12: real provider
+              // spend that previously appeared in NO usage surface).
+              // Best-effort: a recording failure never fails the phase.
+              if (result.usage !== undefined && (result.usage.inputTokens > 0 || result.usage.outputTokens > 0)) {
+                try {
+                  const pricing = lookupPricing(db, provider.id, model);
+                  const inputCost =
+                    pricing.inputPricePerMtok === null
+                      ? 0
+                      : (result.usage.inputTokens / 1_000_000) * pricing.inputPricePerMtok;
+                  const outputCost =
+                    pricing.outputPricePerMtok === null
+                      ? 0
+                      : (result.usage.outputTokens / 1_000_000) * pricing.outputPricePerMtok;
+                  recordUsage(
+                    db,
+                    {
+                      agentId: null,
+                      sessionId: id,
+                      provider: provider.id,
+                      model,
+                      inputTokens: result.usage.inputTokens,
+                      outputTokens: result.usage.outputTokens,
+                      cachedInputTokens: result.usage.cachedInputTokens,
+                      costUsd: inputCost + outputCost,
+                      ts: new Date().toISOString(),
+                    },
+                    0,
+                    { providerCalls: 1, origin: "debug" },
+                  );
+                } catch {
+                  // Best-effort accounting — never a debug-phase failure.
+                }
+              }
             } else {
               send({ type: "debug-error", sessionId: id, message: result.error });
             }

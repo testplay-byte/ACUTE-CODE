@@ -314,13 +314,53 @@ export interface SessionUsageTotals {
   outputTokens: number;
   requests: number;
   costUsd: number;
+  /** ROUND-83 (R83): the REAL SDK-call count behind the rows ("requests"
+   * above counts TURNS — one row per turn since R24; a 5-iteration turn
+   * recorded 1 "request"). Optional: a pre-R83 sidecar omits it. */
+  providerCalls?: number;
+}
+
+/** ROUND-83 (R83): the provider's OWN number for the last request — the
+ * ground truth behind the donut's "measured" line. Computed from the newest
+ * message.assistant stats carrier; null before the first provider reply
+ * (NEVER a fabricated 0). The model + ts ride along so a per-send model
+ * switch can never silently mix numbers. */
+export interface SessionContextActual {
+  inputTokens: number;
+  outputTokens: number;
+  cachedInputTokens: number | null;
+  at: string;
+  model: string;
+}
+
+/** ROUND-83 (R83): the newest context.compact detail (the donut's
+ * "Context compacted" badge; tokensSaved is an estimate delta, rendered
+ * with a "~"). Optional — absent when the session never compacted. */
+export interface SessionContextCompaction {
+  throughSeq: number;
+  droppedMessages: number;
+  tokensSaved: number;
 }
 
 export interface SessionContextReport {
   model: string;
   providerId: string;
   contextWindow: number;
+  /** ROUND-83 (R83): where contextWindow came from — "override" (the
+   * models-table row) | "catalog" | "default" (the assumed 200k). The donut
+   * renders the honest provenance ("assumed 200k — set it in Settings"). */
+  contextWindowSource?: "override" | "catalog" | "default";
+  /** ROUND-83 (R83): the output reserve the budget subtracts (the owner's
+   * per-model max_output_tokens, honored for the first time). */
+  maxOutputTokens?: number;
+  /** ROUND-83 (R83): the behavioral line — contextWindow − maxOutputTokens
+   * − margin; the same number the compaction trigger and the context guard
+   * use (ONE budget, one truth). */
+  available?: number;
   usedTokens: number;
+  /** ROUND-83 (R83): "estimated" — the wire says which number is a
+   * projection and which (actual) is the provider's own. */
+  usedTokensBasis?: "estimated";
   breakdown: {
     systemPrompt: number;
     systemTools: number;
@@ -329,9 +369,17 @@ export interface SessionContextReport {
     meta: number;
     mcpTools: number;
   };
+  /** ROUND-83 (R83): the provider-measured ground truth for the LAST
+   * request (null before the first reply). */
+  actual?: SessionContextActual | null;
+  /** ROUND-83 (R83): the newest compaction's effect on the messages
+   * estimate + its detail (the badge). */
+  compaction?: SessionContextCompaction;
   cache: {
     inputTokens: number;
     cachedInputTokens: number;
+    /** ROUND-83 (R83): null ALSO when the provider never reported a cached
+     * tier (all-NULL SUM) — "— not reported", never a fabricated 0%. */
     hitRate: number | null;
   };
   sessionTotals: SessionUsageTotals;
@@ -709,6 +757,12 @@ export interface DetailedUsageModel {
   calls: number;
   tokens: DetailedUsageTokens;
   costUsd: number;
+  /** ROUND-83 (R83): the real SDK-call count behind the aggregate
+   * ("calls"/rows count turns). Optional: a pre-R83 sidecar omits it. */
+  providerCalls?: number;
+  /** ROUND-83 (R83): false when the model has no pricing rows — the UI
+   * renders "(unpriced)", never a silent $0 free lunch. */
+  costKnown?: boolean;
 }
 
 /**
@@ -747,6 +801,8 @@ export interface DetailedUsageSession {
   tokens: DetailedUsageTokens;
   costUsd: number;
   requests: number;
+  /** ROUND-83 (R83): the real SDK-call count. Optional (pre-R83 sidecar). */
+  providerCalls?: number;
   toolCalls: DetailedUsageToolCall[];
   toolCallCount: number;
   /** How many sub-agent children this session delegated (parent rows). */
@@ -796,7 +852,10 @@ export interface DetailedUsageTotals {
   sessions: number;
   subagentSessions: number;
   toolCalls: number;
+  /** Turns (one usage row per turn since R24) — the ROUND-83 honest relabel. */
   requests: number;
+  /** ROUND-83 (R83): the real SDK-call count. Optional (pre-R83 sidecar). */
+  providerCalls?: number;
   tokens: DetailedUsageTokens;
   costUsd: number;
 }
@@ -2950,12 +3009,18 @@ export type StreamTurnEvent =
    * context overflow was auto-compacted and the turn is retrying (rendered
    * as a transient status note, not an error). */
   | { type: "meta.overflow_recovery"; message: string }
+  /** ROUND-83 (R83): a compaction landed THIS turn — the older context was
+   * summarized into a dense briefing (the model now receives summary + tail;
+   * the meter's messages estimate drops with it). The store renders the
+   * honest status line + invalidates the context meter. */
+  | { type: "meta.compaction"; tokensSaved: number; droppedMessages: number; throughSeq: number }
   /** ROUND-80 (R80): the context/request guard frames — typed for
-   * completeness (they ride the stream right before the terminal error
-   * frame; the persisted turn.error + the error card own the render, so
-   * the store takes no action on either). Pre-R80 these frames arrived
-   * untyped and unrendered while the turn ended ok:true — the silent stop
-   * the round fixes at the runtime layer. */
+   * completeness; they ride the stream right before the terminal error
+   * frame. ROUND-83 (R83): the context_limit frame now ALSO renders as the
+   * live turn's terminal note (the store's honest line); the persisted
+   * turn.error + the error card still own the durable render. Pre-R80
+   * these frames arrived untyped and unrendered while the turn ended
+   * ok:true — the silent stop the round fixes at the runtime layer. */
   | { type: "meta.context_limit"; tokens: number; limit: number }
   | { type: "meta.request_limit"; requests: number; limit: number }
   /** ROUND-80 (R80): the loop-cap frame (maxOuterLoops reached) — same

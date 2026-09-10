@@ -1,4 +1,4 @@
-<!-- last-reviewed: 2026-09-08 round-79 -->
+<!-- last-reviewed: 2026-09-10 round-83 -->
 # Round 75 — The Reliability & Enforcement Round
 
 **Owner's report (verbatim asks):**

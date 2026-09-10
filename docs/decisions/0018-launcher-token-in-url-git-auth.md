@@ -1,4 +1,4 @@
-<!-- last-reviewed: 2026-09-08 round-79 -->
+<!-- last-reviewed: 2026-09-10 round-83 -->
 # ADR-0018: Launcher git auth = token-in-URL for one command (no credential helpers)
 
 - **Status:** ACCEPTED (backfilled round-17; decided round-13)

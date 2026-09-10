@@ -1,4 +1,4 @@
-<!-- last-reviewed: 2026-09-08 round-79 -->
+<!-- last-reviewed: 2026-09-10 round-83 -->
 # ADR-0004: [ASSUMPTION] Phase 0 research scope — all three recommended extras — and per-reference folder structure
 
 - **Status:** ACCEPTED (assumption surfaced for owner review in Phase 0 report)

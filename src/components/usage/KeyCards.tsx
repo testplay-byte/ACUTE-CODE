@@ -192,12 +192,12 @@ function KeyCard({
       <dl className="mt-3 grid grid-cols-2 gap-2 sm:grid-cols-4">
         <div className="min-w-0">
           <dt className="text-[10px] font-bold uppercase tracking-widest" style={{ color: textTertiary }}>
-            Requests
+            Turns
           </dt>
           <dd
             className="mt-0.5 truncate text-[12px] font-bold tabular-nums"
             style={{ color: text }}
-            title={`${(usage?.requests ?? 0).toLocaleString()} requests on this key`}
+            title={`${(usage?.requests ?? 0).toLocaleString()} turns on this key (one usage row per turn — the ROUND-83 honest relabel)`}
           >
             {(usage?.requests ?? 0).toLocaleString()}
           </dd>

@@ -76,7 +76,11 @@ const POPOVER_MIN_HEIGHT_PX = 120;
 /** The context report's live-refresh cadence while a turn streams. */
 export const CONTEXT_LIVE_REFETCH_MS = 2_500;
 
-/** SVG donut ring — the toolbar icon and the popover's big donut share the math. */
+/** SVG donut ring — the toolbar icon and the popover's big donut share the math.
+ * ROUND-83 (R83): optional `markerFrac` draws a thin radial TICK at a given
+ * fraction of the ring (the budget line — available/window, the same line
+ * compaction triggers on; the estimate fills live, the tick says where the
+ * behavior changes). */
 function DonutRing({
   size,
   stroke,
@@ -84,6 +88,7 @@ function DonutRing({
   limit,
   color,
   track,
+  markerFrac,
 }: {
   size: number;
   stroke: number;
@@ -91,10 +96,36 @@ function DonutRing({
   limit: number;
   color: string;
   track: string;
+  markerFrac?: number;
 }) {
   const r = (size - stroke) / 2;
   const c = 2 * Math.PI * r;
   const frac = limit > 0 ? Math.min(1, used / limit) : 0;
+  // The budget tick: a short radial line from inner to outer edge at the
+  // marker fraction (−90° rotation matches the fill's origin).
+  const marker =
+    markerFrac !== undefined && markerFrac > 0 && markerFrac < 1
+      ? (() => {
+          const angle = -Math.PI / 2 + markerFrac * 2 * Math.PI;
+          const cx = size / 2;
+          const cy = size / 2;
+          const x1 = cx + Math.cos(angle) * (r - stroke / 2 - 2);
+          const y1 = cy + Math.sin(angle) * (r - stroke / 2 - 2);
+          const x2 = cx + Math.cos(angle) * (r + stroke / 2 + 2);
+          const y2 = cy + Math.sin(angle) * (r + stroke / 2 + 2);
+          return (
+            <line
+              x1={x1}
+              y1={y1}
+              x2={x2}
+              y2={y2}
+              stroke={SEMANTIC_COLORS.danger}
+              strokeWidth={1.5}
+              strokeLinecap="round"
+            />
+          );
+        })()
+      : null;
   return (
     <svg
       width={size}
@@ -118,6 +149,7 @@ function DonutRing({
           transform={`rotate(-90 ${size / 2} ${size / 2})`}
         />
       ) : null}
+      {marker}
     </svg>
   );
 }
@@ -152,10 +184,10 @@ function BreakdownRow({
 }
 
 /** A label · value row for the session-totals groups. */
-function StatRow({ label, value }: { label: string; value: string }) {
+function StatRow({ label, value, title }: { label: string; value: string; title?: string }) {
   const styles = useThemeStyles();
   return (
-    <div className="flex items-center justify-between gap-2">
+    <div className="flex items-center justify-between gap-2" title={title}>
       <span className="text-[10.5px]" style={{ color: styles.textSecondary }}>
         {label}
       </span>
@@ -194,7 +226,13 @@ function UsageGroup({
       <div className="text-[9.5px] font-bold uppercase tracking-wider pb-0.5" style={{ color: styles.textTertiary }}>
         {label}
       </div>
-      <StatRow label="Requests" value={String(totals.requests)} />
+      {/* ROUND-83 (R83): "requests" counted TURNS since R24 (one usage row
+          per turn) — relabeled honestly, with the REAL provider-call count
+          beside it (a 5-iteration turn is 1 turn · 5 calls). */}
+      <StatRow label="Turns" value={String(totals.requests)} />
+      {totals.providerCalls !== undefined ? (
+        <StatRow label="Provider calls" value={String(totals.providerCalls)} />
+      ) : null}
       <StatRow label="Tokens sent ↑" value={fmtTokens(totals.inputTokens)} />
       <StatRow label="Tokens received ↓" value={fmtTokens(totals.outputTokens)} />
       <StatRow label="Cost" value={totals.costUsd > 0 ? `$${totals.costUsd.toFixed(4)}` : "—"} />
@@ -382,12 +420,39 @@ export function ContextDonut({
   const window_ = data?.contextWindow ?? 0;
   const pct = data !== null && window_ > 0 ? Math.min(100, (used / window_) * 100) : null;
 
+  // ROUND-83 (R83): the budget line — available/window (the same line the
+  // compaction trigger and the context guard use; ONE truth). Rendered as
+  // the tick on the big ring + the "compaction line" note under it.
+  const available = data?.available ?? null;
+  const markerFrac =
+    available !== null && window_ > 0 && available > 0 && available < window_
+      ? available / window_
+      : undefined;
+
+  // ROUND-83 (R83): the honest window provenance (§2.7 — a silent 200K
+  // guess can never masquerade as a measured window).
+  const windowSourceNote =
+    data?.contextWindowSource === "override"
+      ? `${fmtTokens(window_)} window · your override`
+      : data?.contextWindowSource === "catalog"
+        ? `${fmtTokens(window_)} window · catalog default`
+        : data?.contextWindowSource === "default"
+          ? `${fmtTokens(window_)} window assumed — set it in Settings → Models`
+          : null;
+
   // ROUND-51 (R51-c): the graded ring color (accent → amber → danger).
   const ringColor = contextDonutColor(used, window_, styles.accent);
 
+  // ROUND-83 (R83) §3.1: the honest summary — the estimate is LABELED as a
+  // projection; the provider's own number (when one exists) rides along.
+  // The old text presented the estimate as fact (the owner: "highly
+  // misleading").
   const summaryText =
     data !== null
-      ? `Context window: ${pct !== null ? Math.round(pct) : 0}% used (${fmtTokens(used)} of ${fmtTokens(window_)} tokens)`
+      ? `~${pct !== null ? Math.round(pct) : 0}% of context window projected` +
+        (data.actual !== null && data.actual !== undefined
+          ? ` · ${fmtTokens(data.actual.inputTokens)} measured at last request (of ${fmtTokens(window_)} window)`
+          : ` (${fmtTokens(used)} of ${fmtTokens(window_)} tokens, estimated)`)
       : report.isError
         ? "Context window usage unavailable"
         : "Context window usage";
@@ -396,6 +461,13 @@ export function ContextDonut({
     data !== null && data.cache.hitRate !== null
       ? `${Math.round(data.cache.hitRate * 100)}%`
       : "—";
+  // ROUND-83 (R83) §3.5: the null hit rate is HONEST — "not reported by
+  // this provider" when usage exists but no call reported a cache tier
+  // (distinct from zero usage, where "—" needs no note).
+  const hitRateNote =
+    data !== null && data.cache.hitRate === null && data.cache.inputTokens > 0
+      ? "not reported by this provider"
+      : undefined;
 
   // ROUND-51 (R51-c): the main / sub-agents / combined usage split. A
   // pre-R51 sidecar (or an error fallback) has no `usage` object — main
@@ -534,7 +606,8 @@ export function ContextDonut({
                   </div>
                 ) : (
                   <>
-                    {/* Big donut + % used + used / window */}
+                    {/* Big donut + % projected + used / window + the
+                        ROUND-83 measured line + budget marker + provenance */}
                     <div
                       className="flex items-center gap-3 px-1 pb-2 mb-2 border-b"
                       style={{ borderColor: styles.borderSubtle }}
@@ -547,6 +620,7 @@ export function ContextDonut({
                           limit={window_}
                           color={ringColor}
                           track={styles.subtle}
+                          markerFrac={markerFrac}
                         />
                         <span className="absolute font-mono text-[10px] font-bold" style={{ color: styles.text }}>
                           {pct !== null ? Math.round(pct) : 0}%
@@ -554,16 +628,79 @@ export function ContextDonut({
                       </div>
                       <div className="min-w-0">
                         <div className="text-[12px] font-bold" style={{ color: styles.text }}>
-                          {pct !== null ? `${Math.round(pct)}% used` : "0% used"}
+                          {/* ROUND-83: the tilde says PROJECTED — the estimate
+                              fills the ring live; the measured line below is
+                              the provider's own number. */}
+                          {pct !== null ? `~${Math.round(pct)}% projected` : "0% projected"}
                         </div>
                         <div className="font-mono text-[10px]" style={{ color: styles.textTertiary }}>
-                          {fmtTokens(used)} / {fmtTokens(window_)} tokens
+                          {fmtTokens(used)} / {fmtTokens(window_)} tokens · estimated
+                        </div>
+                        {/* ROUND-83 (R83) §3.1: the MEASURED line — the
+                            provider's own prompt size for the last request
+                            (with its ts + model so a per-send model switch
+                            can never silently mix numbers). null before the
+                            first reply → "not yet measured", never 0. */}
+                        <div
+                          className="font-mono text-[9.5px] truncate"
+                          data-context-measured
+                          title={
+                            data.actual !== null && data.actual !== undefined
+                              ? `${fmtTokens(data.actual.inputTokens)} tokens · ${new Date(data.actual.at).toLocaleString()}`
+                              : undefined
+                          }
+                          style={{ color: styles.textSecondary }}
+                        >
+                          {data.actual !== null && data.actual !== undefined
+                            ? `${fmtTokens(data.actual.inputTokens)} measured at last request`
+                            : "not yet measured"}
                         </div>
                         <div className="font-mono text-[9.5px] truncate" title={data.model} style={{ color: styles.textTertiary }}>
                           {data.model}
                         </div>
                       </div>
                     </div>
+                    {/* ROUND-83 (R83): the budget line + window provenance —
+                        one row under the header. The tick on the ring + this
+                        note make the BEHAVIORAL line visible (the pre-R83
+                        donut's 85% danger color and the compaction trigger
+                        disagreed — different numerators AND denominators). */}
+                    {(markerFrac !== undefined && available !== null) || windowSourceNote !== null ? (
+                      <div
+                        className="flex flex-col gap-0.5 px-1 pb-2 mb-1"
+                        data-context-budget
+                        style={{ color: styles.textTertiary }}
+                      >
+                        {markerFrac !== undefined && available !== null ? (
+                          <div className="font-mono text-[9.5px]">
+                            compaction line {fmtTokens(available)} · reserve {fmtTokens(data?.maxOutputTokens ?? 0)} output
+                          </div>
+                        ) : null}
+                        {windowSourceNote !== null ? (
+                          <div className="font-mono text-[9.5px] truncate" data-context-window-source>
+                            {windowSourceNote}
+                          </div>
+                        ) : null}
+                      </div>
+                    ) : null}
+                    {/* ROUND-83 (R83) §2.4: the compaction badge — the visible
+                        truth that older context was summarized (the ring DROPS
+                        after a compaction instead of lying high; tokensSaved
+                        is an estimate delta, hence the ~). */}
+                    {data.compaction !== undefined ? (
+                      <div
+                        className="flex items-center gap-1.5 px-1 py-1.5 mb-1 border-y"
+                        style={{ borderColor: styles.borderSubtle }}
+                        data-context-compaction
+                      >
+                        <span className="text-[10.5px] font-bold" style={{ color: styles.accent }}>
+                          Context compacted
+                        </span>
+                        <span className="font-mono text-[10px]" style={{ color: styles.textTertiary }}>
+                          {data.compaction.droppedMessages} messages summarized · ~{fmtTokens(data.compaction.tokensSaved)} saved
+                        </span>
+                      </div>
+                    ) : null}
                     {/* Breakdown slices */}
                     <div className="flex flex-col gap-1.5 px-1 pb-2">
                       <BreakdownRow label="Messages" value={data.breakdown.messages} usedTokens={used} />
@@ -582,6 +719,7 @@ export function ContextDonut({
                     <div
                       className="flex items-center justify-between gap-2 px-1 py-1.5 mb-1 border-y"
                       style={{ borderColor: styles.borderSubtle }}
+                      title={hitRateNote}
                     >
                       <span className="text-[10.5px]" style={{ color: styles.textSecondary }}>
                         Cache hit rate
@@ -592,6 +730,14 @@ export function ContextDonut({
                           <span className="font-normal" style={{ color: styles.textTertiary }}>
                             {" "}
                             · {fmtTokens(data.cache.cachedInputTokens)} / {fmtTokens(data.cache.inputTokens)} cached
+                          </span>
+                        ) : null}
+                        {/* ROUND-83 (R83) §2.10: a null rate on a live session
+                            is the honest "not reported" — never a fabricated
+                            0%. */}
+                        {hitRateNote !== undefined ? (
+                          <span className="font-normal" style={{ color: styles.textTertiary }}>
+                            {" "}· {hitRateNote}
                           </span>
                         ) : null}
                       </span>

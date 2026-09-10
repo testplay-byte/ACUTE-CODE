@@ -160,20 +160,27 @@ const summarizerChat = async () => ({
   toolCalls: [],
 });
 
-describe("R80-A2: the context guard stop (800k tokens — never a silent ok:true)", () => {
+describe("R80-A2 → ROUND-83 (R83): the context guard stop (the model's OWN budget — never a silent ok:true)", () => {
   it("a giant context on a 1M-window model → CONTEXT_LIMIT 502 + the persisted turn.error + session back to queued", async () => {
     // The 1M window is what keeps the giant history un-compacted (the guard
     // protects the 1M-window models — "the 1M window is a LIMIT, not
-    // headroom").
+    // headroom"). ROUND-83 (R83): the guard is now MODEL-RELATIVE —
+    // available = window − maxOutputTokens − margin = 1_048_576 − 32_768 −
+    // 8_000 = 1_007_808 for this row (the pre-R83 hardcoded 800K fired
+    // BEFORE compaction could on big-window models and told the owner to
+    // "run /compact" — a command that did not exist). A single giant message
+    // cannot be compacted (planCompaction keeps the final message; an empty
+    // to-summarize set declines honestly) — the guard is the honest stop.
     upsertModel(db, "openrouter", {
       modelId: "test/r80-1",
       displayName: "R80 Test Model",
       contextWindow: 1_048_576,
     });
     const { sessionId, keyring } = setup("R80-Ctx");
-    // ~902k tokens (the SEGMENT_RE estimator's measured ratio: "a " x 2.8M
-    // ≈ 0.32 tokens/repeat — verified against the real estimateTokens).
-    const giant = "a ".repeat(2_800_000);
+    // ~1.1M tokens (the SEGMENT_RE estimator's measured ratio: "a " x 3.4M
+    // ≈ 0.32 tokens/repeat — verified against the real estimateTokens) —
+    // past available (1_007_808), under nothing else.
+    const giant = "a ".repeat(3_400_000);
     const emitted: Array<Record<string, unknown>> = [];
 
     // The chatStream fake is never reached (the guard fires at loop-top on
@@ -193,7 +200,11 @@ describe("R80-A2: the context guard stop (800k tokens — never a silent ok:true
     if (!outcome.ok) {
       expect(outcome.status).toBe(502);
       expect(outcome.code).toBe("CONTEXT_LIMIT");
-      expect(String(outcome.message)).toContain("800k-token guard");
+      // ROUND-83: the honest budget text — the real numbers, the actionable
+      // affordance (the compact route EXISTS now), never the phantom /compact.
+      expect(String(outcome.message)).toContain("exceeded the model's budget");
+      expect(String(outcome.message)).toContain("1_007_808".replace(/_/g, ""));
+      expect(String(outcome.message)).not.toContain("run /compact");
     }
     // The pre-R80 behavior was the meta frame + a silent ok:true done — now
     // the honest event is on the log and the session is retryable.
@@ -202,8 +213,11 @@ describe("R80-A2: the context guard stop (800k tokens — never a silent ok:true
     expect(turnError).toBeDefined();
     expect((turnError?.payload as { code?: string }).code).toBe("CONTEXT_LIMIT");
     expect(getSession(db, sessionId)?.status).toBe("queued");
-    // The SSE-only meta frame still rides the stream (typed since R80).
-    expect(emitted.some((e) => e.type === "meta.context_limit")).toBe(true);
+    // The SSE-only meta frame still rides the stream (typed since R80) —
+    // ROUND-83: the limit is the model's OWN available, not a hardcoded 800K.
+    const limitFrame = emitted.find((e) => e.type === "meta.context_limit") as { limit?: number } | undefined;
+    expect(limitFrame).toBeDefined();
+    expect(limitFrame?.limit).toBe(1_007_808);
   });
 });
 

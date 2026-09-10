@@ -29,7 +29,8 @@
  *     quality upgrade, never a new failure mode.
  */
 import type Database from "better-sqlite3";
-import { appendSessionEvent, listSessionEvents, type SessionEvent } from "../storage/sessions.js";
+import { appendSessionEvent, listSessionEvents, recordUsage, type SessionEvent } from "../storage/sessions.js";
+import { lookupPricing } from "../storage/models.js";
 import { assembleWithinBudget, estimateMessageTokens, type ContextBudget } from "../context.js";
 import type { ChatFn, ChatTurnMessage } from "./chat.js";
 
@@ -211,6 +212,14 @@ export async function assembleWithCompaction(
   }
 
   let summary = "";
+  // ROUND-83 (R83): the summarizer's own spend — a REAL provider call over
+  // the full over-budget transcript that previously appeared NOWHERE (the
+  // audit's §2.12: unbilled hidden calls). Recorded with origin
+  // "compaction" + agentId null; best-effort (a recording failure must
+  // never fail the compaction itself).
+  let summarizerUsage:
+    | { inputTokens: number; outputTokens: number; cachedInputTokens: number | null }
+    | null = null;
   try {
     const result = await deps.chat({
       provider: deps.provider,
@@ -223,8 +232,43 @@ export async function assembleWithCompaction(
       // No tools: the summarizer must never act, only read.
     });
     summary = result.text.trim();
+    summarizerUsage = {
+      inputTokens: result.usage.inputTokens,
+      outputTokens: result.usage.outputTokens,
+      cachedInputTokens: typeof result.usage.cachedInputTokens === "number" ? result.usage.cachedInputTokens : null,
+    };
   } catch {
     summary = "";
+  }
+  if (summarizerUsage !== null && (summarizerUsage.inputTokens > 0 || summarizerUsage.outputTokens > 0)) {
+    try {
+      // Mirrors runtime.ts computeCost's R62 per-side-independent pricing
+      // (compaction.ts cannot import runtime.ts — cycle); lookupPricing is
+      // the same source of truth.
+      const pricing = lookupPricing(deps.db, deps.provider.id, deps.model);
+      const inputCost =
+        pricing.inputPricePerMtok === null ? 0 : (summarizerUsage.inputTokens / 1_000_000) * pricing.inputPricePerMtok;
+      const outputCost =
+        pricing.outputPricePerMtok === null ? 0 : (summarizerUsage.outputTokens / 1_000_000) * pricing.outputPricePerMtok;
+      recordUsage(
+        deps.db,
+        {
+          agentId: null,
+          sessionId: deps.sessionId,
+          provider: deps.provider.id,
+          model: deps.model,
+          inputTokens: summarizerUsage.inputTokens,
+          outputTokens: summarizerUsage.outputTokens,
+          cachedInputTokens: summarizerUsage.cachedInputTokens,
+          costUsd: inputCost + outputCost,
+          ts: new Date().toISOString(),
+        },
+        0,
+        { providerCalls: 1, origin: "compaction" },
+      );
+    } catch {
+      // Best-effort accounting — never a compaction failure mode.
+    }
   }
 
   if (summary === "") {

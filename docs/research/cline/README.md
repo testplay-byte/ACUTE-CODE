@@ -1,4 +1,4 @@
-<!-- last-reviewed: 2026-09-08 round-79 -->
+<!-- last-reviewed: 2026-09-10 round-83 -->
 # Cline — Research Summary (ACUTE-CODE Reference Study)
 
 - **Target:** https://github.com/cline/cline (canonical; not moved)

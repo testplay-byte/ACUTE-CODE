@@ -1,4 +1,4 @@
-<!-- last-reviewed: 2026-09-08 round-79 -->
+<!-- last-reviewed: 2026-09-10 round-83 -->
 # Research Index — Reference Project Analyses
 
 Phase 0 deliverable · 9 references · all memos verified against live sources on 2026-08-21/22 (the openhands, cline, opencode, kilocode, letta, metagpt, and aider memos were re-verified and corrected in a second pass — earlier drafts' errors are documented inside each memo). Each folder contains `README.md` (executive summary), `architecture.md` (system design), `patterns-for-acute-code.md` (adoption mapping with WHAT/WHY/HOW).

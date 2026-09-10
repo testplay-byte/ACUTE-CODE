@@ -295,7 +295,15 @@ describe("runDebugAnalyst (ROUND-66 R66-2-c)", () => {
       { db, keyring: new ProviderKeyring({ ACUTE_PROVIDER_OPENROUTER: KEY }), chat },
       { ...PARAMS, sessionId, emit: (event) => emitted.push(event) },
     );
-    expect(result).toEqual({ ok: true, content: "## Recommended fixes\n1. none" });
+    // ROUND-83 (R83): the sync result now surfaces the analyst's own usage
+    // (the route records the origin-'debug' usage row from it — the hidden
+    // call is no longer invisible spend). cachedInputTokens null = the mock
+    // reported no cached tier (the honest NULL contract).
+    expect(result).toEqual({
+      ok: true,
+      content: "## Recommended fixes\n1. none",
+      usage: { inputTokens: 1, outputTokens: 1, cachedInputTokens: null },
+    });
     expect(emitted).toHaveLength(0); // no streaming adapter → no delta frames
     expect(inputs).toHaveLength(1); // exactly ONE provider call
   });

@@ -925,6 +925,21 @@ function excerpt(text: string, cap: number): string {
   return text.length > cap ? `${text.slice(0, cap)}…` : text;
 }
 
+/** ROUND-83 (R83): which subsystem spent the tokens — every pre-R83 row is
+ * a plain "turn"; the compaction summarizer and the debug analyst (the
+ * audit's §2.12: real provider spend that appeared NOWHERE) now record
+ * their own rows with their origin so the usage screens can label them. */
+export type UsageOrigin = "turn" | "compaction" | "debug";
+
+/** ROUND-83 (R83): the storage-side dimensions of a usage row beyond the
+ * shared UsageRecord — providerCalls (the real SDK-call count behind the
+ * turn; "requests" in the UI meant TURNS before, a 5-iteration turn counted
+ * as 1) and origin. Optional: omitted → the SQL defaults (1 / 'turn'). */
+export interface UsageMeta {
+  providerCalls?: number;
+  origin?: UsageOrigin;
+}
+
 /** One billing line per completed model call; costUsd is 0 until estimation lands.
  * ROUND-50 (R50-c1): cachedInputTokens (the provider's cached prompt-token
  * count, null when unreported) persists into usage_events.cached_input_tokens.
@@ -933,12 +948,20 @@ function excerpt(text: string, cap: number): string {
  * every caller that cannot know a slot); N ≥ 2 = the pool slot the
  * orchestrator assigned a sub-agent child. Kept as a separate parameter (NOT
  * on shared's UsageRecord) — the slot is a storage dimension, and shared
- * stays message-shaped. */
-export function recordUsage(db: SqliteDatabase, usage: UsageRecord, keySlot = 0): void {
+ * stays message-shaped.
+ * ROUND-83 (R83): meta.providerCalls → usage_events.provider_calls (the SDK
+ * calls behind this row, DEFAULT 1 — one row per turn since R24, so old rows
+ * stay exactly true); meta.origin → usage_events.origin (migration 0031). */
+export function recordUsage(
+  db: SqliteDatabase,
+  usage: UsageRecord,
+  keySlot = 0,
+  meta?: UsageMeta,
+): void {
   db.prepare(
     `INSERT INTO usage_events
-      (agent_id, session_id, provider, model, input_tokens, output_tokens, cached_input_tokens, cost_usd, key_slot, ts)
-     VALUES (@agentId, @sessionId, @provider, @model, @inputTokens, @outputTokens, @cachedInputTokens, @costUsd, @keySlot, @ts)`,
+      (agent_id, session_id, provider, model, input_tokens, output_tokens, cached_input_tokens, cost_usd, key_slot, provider_calls, origin, ts)
+     VALUES (@agentId, @sessionId, @provider, @model, @inputTokens, @outputTokens, @cachedInputTokens, @costUsd, @keySlot, @providerCalls, @origin, @ts)`,
   ).run({
     agentId: usage.agentId,
     sessionId: usage.sessionId,
@@ -949,6 +972,8 @@ export function recordUsage(db: SqliteDatabase, usage: UsageRecord, keySlot = 0)
     cachedInputTokens: usage.cachedInputTokens ?? null,
     costUsd: usage.costUsd,
     keySlot,
+    providerCalls: meta?.providerCalls ?? 1,
+    origin: meta?.origin ?? "turn",
     ts: usage.ts,
   });
 }

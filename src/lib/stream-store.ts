@@ -1059,6 +1059,12 @@ export const useStreamStore = create<StreamStore>((set, get) => ({
         void qc.invalidateQueries({ queryKey: ["session"] });
         void qc.invalidateQueries({ queryKey: ["usage"] });
         void qc.invalidateQueries({ queryKey: ["subagents"] });
+        // ROUND-83 (R83) §3.6: the context meter refreshes when the outer
+        // done frame lands — covers queue-continuations and subagent-driven
+        // changes that never pass through the panel's send path (which
+        // already invalidates). The donut's measured/actual line updates
+        // with the provider's own number for the last request.
+        void qc.invalidateQueries({ queryKey: ["session-context"] });
       }
       // Stop the sidebar animation now that the stream has ended — this
       // fires regardless of whether any panel is mounted (so a background
@@ -1421,6 +1427,33 @@ function handleStreamEvent(
   }
   if (event.type === "meta.overflow_recovery") {
     patchSession(sessionId, { liveTurn: { ...liveTurn, note: event.message } });
+    return;
+  }
+  // ROUND-83 (R83) §3.4: the compaction + context-limit meta frames finally
+  // RENDER (the pre-R83 store ignored them — the user was told nothing while
+  // the donut contradicted reality). Both ride liveTurn.note (the R71
+  // overflow-recovery pattern): a compaction lands mid-turn as the honest
+  // "older context was summarized" line, and the context-limit stop is the
+  // honest terminal note. The ["session-context"] invalidation makes the
+  // donut's ring DROP right after a compaction instead of lying high.
+  if (event.type === "meta.compaction") {
+    const qc = getQueryClient();
+    if (qc) void qc.invalidateQueries({ queryKey: ["session-context"] });
+    patchSession(sessionId, {
+      liveTurn: {
+        ...liveTurn,
+        note: `context compacted — ${event.droppedMessages} messages summarized (~${event.tokensSaved} tokens saved)`,
+      },
+    });
+    return;
+  }
+  if (event.type === "meta.context_limit") {
+    patchSession(sessionId, {
+      liveTurn: {
+        ...liveTurn,
+        note: `context limit reached (${event.tokens} tokens > ${event.limit} available) — the turn stopped honestly`,
+      },
+    });
     return;
   }
   if (

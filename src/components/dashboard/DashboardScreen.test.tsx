@@ -39,7 +39,8 @@ describe("DashboardScreen (fixture backend)", () => {
     expect(screen.getByText("Projects")).toBeTruthy();
     expect(screen.getByText("Sessions")).toBeTruthy();
     expect(screen.getByText("Tokens")).toBeTruthy();
-    expect(screen.getByText("Requests")).toBeTruthy();
+    // ROUND-83 (R83): "Requests" → "Turns" (the honest relabel).
+    expect(screen.getByText("Turns")).toBeTruthy();
   });
 
   it("stat values come from the fixture backends", async () => {

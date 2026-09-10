@@ -1,4 +1,4 @@
-<!-- last-reviewed: 2026-09-08 round-79 -->
+<!-- last-reviewed: 2026-09-10 round-83 -->
 # Round 54 — The reliability round: the packaged app's "restart engine didn't work" (blind stderr + one-shot handshake + orphaned children), the launcher's registry-vs-disk trust bug, and in-app engine diagnostics
 
 **Date:** 2026-08-30 · **Branch:** `main` · **Version:** 0.54.0 · **Owner directives:** the seventh Windows test session's report — "I launched using the acute.bat file… it said 'can't reach agent core'. I tried clicking restart engine but apparently it did not work… I deleted the whole app data folder… it opened up in the browser this time… unable to select a folder and other issues… you might need to improve the acute.bat file to handle things much better… make sure there is proper updating for the system intact… Don't rush anything. Take your time."

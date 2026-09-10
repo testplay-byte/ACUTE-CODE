@@ -24,6 +24,9 @@
  */
 import type { ToolSet } from "ai";
 import type { PermissionMode } from "shared";
+// ROUND-83 (R83): the context meter's schema measurement (measureToolSchemaTokens
+// below) — the same estimator every other token estimate uses.
+import { estimateTokens } from "../context.js";
 import {
   BUILT_IN_PLUGINS,
   loadExternalPlugins,
@@ -198,4 +201,72 @@ export async function buildProjectTools(
   }
 
   return tools as unknown as ToolSet;
+}
+
+// ── ROUND-83 (R83): schema-measured tool tokens for the context meter ────────
+
+/**
+ * In-process cache: root → (tool name → serialized-schema token estimate).
+ * The schemas are STATIC per build (built-ins) or per plugin-file mtime
+ * (externals — rare to change mid-run); the cache rebuilds when a requested
+ * name misses (external plugin added/changed). Tests that swap external
+ * plugins call clearSchemaTokenCacheForTest (below).
+ */
+const schemaTokenCache = new Map<string, Map<string, number>>();
+
+/** ROUND-83 (R83): test hook — drop the schema-token cache (the external
+ * plugin cache's clearExternalPluginCacheForTest companion). */
+export function clearSchemaTokenCacheForTest(): void {
+  schemaTokenCache.clear();
+}
+
+/** Rebuild the root's name→schema-tokens map (bare ctx — no toolDeps: the
+ * SCHEMAS never depend on deps, only membership does, and the meter passes
+ * the names it already resolved via effectiveToolNames). */
+async function buildSchemaTokenMap(root: string): Promise<Map<string, number>> {
+  const ctx: ToolBuildContext = { root };
+  const map = new Map<string, number>();
+  for (const plugin of BUILT_IN_PLUGINS) {
+    for (const tool of await plugin.createTools(ctx)) {
+      map.set(tool.name, estimateTokens(JSON.stringify(tool.inputSchema ?? {})));
+    }
+  }
+  const scope = readExternalPluginScope(undefined);
+  if (scope !== "off") {
+    const external = await loadExternalPlugins(root, scope);
+    const builtInNames = new Set(map.keys());
+    for (const plugin of external) {
+      for (const tool of await plugin.createTools(ctx)) {
+        if (builtInNames.has(tool.name)) continue;
+        map.set(tool.name, estimateTokens(JSON.stringify(tool.inputSchema ?? {})));
+      }
+    }
+  }
+  return map;
+}
+
+/**
+ * ROUND-83 (R83): measure the JSON schemas the provider actually bills for
+ * each request — replacing the context meter's fixed 350-tokens-per-tool
+ * constant (the audit's §2.3: real schemas range from tiny (todo_write) to
+ * large (computer-use/dispatch); ±1-3K tokens of error at 15-20 tools).
+ * Returns the SUM over the given toolNames (a name that didn't build under
+ * the bare ctx contributes 0 — it won't ride the turn either; the estimate
+ * stays labeled "estimated" on the wire either way). In-process cached per
+ * root; the cache rebuilds on a name miss (external plugin added/changed).
+ */
+export async function measureToolSchemaTokens(root: string, toolNames: readonly string[]): Promise<number> {
+  const cached = schemaTokenCache.get(root);
+  let map: Map<string, number>;
+  if (cached === undefined || toolNames.some((name) => !cached.has(name))) {
+    map = await buildSchemaTokenMap(root);
+    schemaTokenCache.set(root, map);
+  } else {
+    map = cached;
+  }
+  let total = 0;
+  for (const name of toolNames) {
+    total += map.get(name) ?? 0;
+  }
+  return total;
 }

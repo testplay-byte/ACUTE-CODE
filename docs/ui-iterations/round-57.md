@@ -1,4 +1,4 @@
-<!-- last-reviewed: 2026-09-08 round-79 -->
+<!-- last-reviewed: 2026-09-10 round-83 -->
 # Round 57 — The engine-bundling round: the packaged engine finally carries its own dependencies (ERR_MODULE_NOT_FOUND + the 189-junction link farm)
 
 **Date:** 2026-08-31 · **Branch:** `main` · **Version:** 0.57.0 · **Owner directives:** the tenth Windows test session (the fifth desktop run) — the first CONFIRMED SUCCESS on half the product: *"I ran the acut.bat file, and it ran successfully... I selected the web page, and when I clicked the web page, it properly launched the web page. Everything loaded properly, everything worked properly, and I was successfully able to go to the dashboard page."* — and the remaining failure, now with the engine's own stderr captured: *"I went on and tried to launch the desktop application... it did launch and open up the application but it failed to reach the agent core. The agent core was not running. We need to handle it properly... It needs to be bundled in properly."*
