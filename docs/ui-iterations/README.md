@@ -1,4 +1,4 @@
-<!-- last-reviewed: 2026-09-09 round-81 -->
+<!-- last-reviewed: 2026-09-09 round-82 -->
 # UI Iterations — Owner Review Rounds
 
 This folder is the **dedicated tracking system for UI-fidelity work** (owner

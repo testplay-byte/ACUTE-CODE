@@ -1,4 +1,4 @@
-<!-- last-reviewed: 2026-09-09 round-81 -->
+<!-- last-reviewed: 2026-09-09 round-82 -->
 # Changelog
 
 All notable changes to ACUTE-CODE are documented here. Entries are written for
@@ -11,13 +11,67 @@ version number is single-sourced from the root `package.json`
 
 ## [Unreleased]
 
-Planned next: the R82+ queue — the modularity roadmap's Wave 2 (the
-server.ts route split, the turn-loop harness, the ToolDeps cycle break),
-models & providers hardening (custom-provider routing fix, the per-model
-test button, capability toggles), honest token/context metering, external
-plugin ctx enrichment, the lessons-ledger affordance, ratings-driven
-prompt tuning, and the standing items (edit-linting, installer
-code-signing, the Files-tab polish, agent web-app-testing tools).
+Planned next: the R83+ queue — honest token/context metering (the donut's
+estimate-as-fact problem, the provider-reported "actual" block, compaction
+awareness — the token-counting-robustness spec), the modularity roadmap's
+Wave 2 (the server.ts route split, the turn-loop harness, the ToolDeps
+cycle break), external plugin ctx enrichment, the lessons-ledger
+affordance, ratings-driven prompt tuning, and the standing items
+(edit-linting, installer code-signing, the Files-tab polish, agent
+web-app-testing tools).
+
+## [0.81.0] - 2026-09-09
+
+### Fixed
+- **Custom-provider model routing** (the field-report headline) — a model
+  picked under a custom gateway or NVIDIA now ROUTES THERE: the per-send
+  override carries `providerId` end-to-end (send routes, queued messages,
+  the vision relay, the context meter, the debug analyst, sub-agent
+  children), so a custom model id is no longer sent verbatim to
+  OpenRouter (the "No endpoints found" / unknown-model misroute). Unknown
+  ids get an honest early 400.
+- **Custom-provider keys died on app restart** — a key saved for a
+  Settings-created provider now survives restarts: the shell notes the
+  provider id and re-injects its env var into every sidecar spawn (the
+  409-after-restart cliff is gone).
+- **Sub-agent children on custom providers** — the child turn's key pool
+  and keyring view key on the OVERRIDE's provider, not the parent
+  agent's (a provider-scoped sub-agent model ref can now actually serve
+  the child; retried children honor the same routing).
+- **The tri-state INSERT lie** — `POST /providers/:id/models` with an
+  explicit `null` capability records UNKNOWN (NULL), never silently
+  false.
+- The Sub-agents settings card could crash with a hook-order error when
+  a query state changed between renders (a Rules-of-Hooks violation
+  introduced mid-round and caught by the suite).
+
+### Added
+- **Per-model Test button** — every configured model row (and the edit
+  dialog) can run a REAL minimal completion probe: HTTP/auth/model-
+  accepted/non-empty-content checks, latency, a scrubbed reply preview,
+  provider-reported usage, and an honest failure reason — for OpenRouter,
+  NVIDIA, and custom gateways alike.
+- **Capability toggles in the model edit dialog** — Reasoning and Vision
+  (on/off) plus Tool use, Audio input, and Video (on/off/UNKNOWN
+  tri-states) with "consumed by" hints; NIM/custom rows start UNKNOWN
+  instead of lying "off" (migration 0030's nullable columns).
+- **NVIDIA models as sub-agent models** — the sub-agent model setting
+  takes the provider-scoped `{providerId, modelId}` pair (the running
+  override shows its provider chip); configured NIM/custom rows are
+  pickable, with an honest 400 when the row is known tool-less.
+- **`GET /models/configured`** — every provider's configured rows in one
+  ordered feed (the sub-agent picker's "your configured models"
+  section).
+
+### Changed
+- **NVIDIA workflow polish** — the Add-models picker's Free/All toggle is
+  dialog-local (no longer silently rewrites the composer's shared
+  preference) and auto-switches to All for catalogs with zero free
+  entries (NIM catalogs previously opened on a "No free models match"
+  empty state that read as broken).
+- The context meter reads the window/pricing rows of the provider that
+  will actually serve the next send (the override's), not always
+  OpenRouter's.
 
 ## [0.80.0] - 2026-09-09
 

@@ -3,7 +3,7 @@
   "product": {
     "name": "Acute",
     "tagline": "Local-first multi-agent engineering workbench",
-    "version": "0.79.0",
+    "version": "0.81.0",
     "availability": "Private build — not yet distributed",
     "chips": [
       "Windows desktop",
@@ -214,18 +214,24 @@
       "title": "R81 — the unified operating modes",
       "date": "2026-09-09",
       "summary": "ONE picker of THREE modes (Full Access / Ask / Plan) replaces the task-mode picker + access-level switcher (ADR-0029). Postures became agent self-selection via switch_mode; enforcement lives solely in the operating mode (PLAN grew to the 19-tool read-only set); 'editor' retired fail-closed (migration 0029 preserves every historical guarantee). TaskModePicker/`/mode` deleted from the UI; live battery + browser + VLM verified."
+    },
+    {
+      "id": 42,
+      "title": "R82 — models & providers hardening",
+      "date": "2026-09-09",
+      "summary": "The owner's field report round 2: custom-provider model ROUTING fixed end-to-end (providerId rides the send wire, the vision relay, the context meter, queued messages, sub-agent children — a model picked under a custom gateway or NVIDIA serves there, with restart-surviving keys via the Rust note-file), the per-model TEST button (a real completion probe with http/auth/model/content checks + scrubbed preview/reason), tri-state capability columns (migration 0030: null=unknown, never the 0004 false-lie), the capabilities edit-dialog card, provider-scoped subagentModel {providerId, modelId} (NIM rows pickable), GET /models/configured, and the NVIDIA picker polish (dialog-local free-scope, zero-free auto-switch). Live battery 8/8 on the real keys (custom gateway routing through a mock oracle with its own key, real OpenRouter + NIM probes, hostile key-echo scrubbed)."
     }
   ],
   "quality": {
-    "ci": "PENDING — R81 push not yet made (this field is synced from the Actions API at close-out per the documented convention)",
+    "ci": "PENDING — R82 push not yet made (this field is synced from the Actions API at close-out per the documented convention)",
     "suites": [
       {
         "name": "frontend",
-        "tests": 964
+        "tests": 944
       },
       {
         "name": "agent-core",
-        "tests": 1796
+        "tests": 1853
       },
       {
         "name": "sidecar e2e",
@@ -250,9 +256,9 @@
   ],
   "plan": {
     "current": {
-      "title": "R81 — the unified operating modes (one picker, three modes)",
-      "detail": "The owner's directive — combine the six-builtin task-mode picker and the four-value access-level switcher into ONE selector of exactly three modes — shipped as ADR-0029. Full Access (all tools, zero asks, the agent decides how to work and switches postures itself), Ask (default; full tools, gates before important commands), Plan (read-only — plan/read/research, no edits). Task modes became NON-ENFORCING agent self-selected postures (switch_mode is the primary path; the six bodies and .acute/agents customs survive with 'Discipline, not permission' prose); enforcement lives solely in the operating mode (PLAN_MODE_TOOLS grew to 19 tools with the retired review/explore read-only extras). 'editor' retired fail-closed (migration 0029: editor→ask; read-only R75 postures→permission plan — the guarantee preserved); PATCH /permissions rejects editor with an honest 400 hint. Frontend: TaskModePicker + /mode slash + the modes query deleted; the composer's left cluster is attach + THE unified picker (AgentChatPanel 2932→2743 lines). Verified: 2751 root suite (12 skipped), e2e 12/12, and a LIVE battery on the real OpenRouter — a PLAN turn's write_file attempt cannot execute (no file, honest text), a FULL turn writes, an ASK turn gates commands, switch_mode persists a posture; browser + VLM pass on the 3-option menu.",
-      "status": "delivered"
+      "title": "R82 — models & providers hardening (the owner's field report round 2)",
+      "detail": "Shipped per the models-providers-fixes spec: (1) THE routing fix — body.providerId threads the per-send override through both send routes, queued messages, the vision relay, the context meter, and the debug analyst; prepareTurn resolves the effective provider; the orchestrator's subagentModel became the provider-scoped {providerId, modelId} ref (legacy strings read openrouter-scoped) and child keyring views key on the override's provider; custom keys survive restarts (keys.rs note-file). (2) POST /models/:id/test — the real per-model probe. (3) Migration 0030's tri-state capability columns + the dialog's capabilities card. (4) NVIDIA polish: dialog-local free-only scope with zero-free auto-switch, GET /models/configured across providers. Verified: root suite 2,809 (agent-core 1,853 incl. four new r82 suites; frontend 944; e2e 12/12), lint + typechecks clean, license audit 134 CLEAN, docs:check green, live battery 8/8 (battery-r82.mjs: mock-gateway routing oracle, real OpenRouter + NIM probes, key-echo scrub).",
+      "next": "R83 — honest token/context metering (the token-counting-robustness spec: the provider-reported 'actual' block on the context report, the estimator fed the REAL turn context, compaction-aware metering, the unified resolveTurnBudget with window-source labels, null-honest cache reporting, the missing /compact the 800K guard already promises), then the modularity Wave 2 (server.ts route split)."
     },
     "upcoming": [
       {
@@ -282,5 +288,5 @@
       "Quality over speed — every round verified before push"
     ]
   },
-  "round": 81
+  "round": 82
 }

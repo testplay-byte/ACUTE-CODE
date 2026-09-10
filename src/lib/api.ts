@@ -370,10 +370,18 @@ export interface RevertSessionResult {
 /** ROUND-50 (R50-c1): the composer's per-send extras threaded through
  * BOTH send paths (the sync SessionsBackend.sendMessage here and
  * streamSessionMessage below). Attachments persist on the message.user
- * payload; thinkingLevel is per-send only (never persisted). */
+ * payload; thinkingLevel is per-send only (never persisted).
+ * ROUND-82 (R82, the owner's custom-provider routing fix): `model` +
+ * `providerId` — the composer's provider-grouped picker captures BOTH; the
+ * pair rides the send wire so a custom-provider model reaches ITS provider
+ * (historically the providerId was captured in the UI and silently dropped
+ * on the wire, so custom ids went verbatim to the agent's provider — the
+ * default agent is openrouter → "unknown model"). */
 export interface SendMessageOptions {
   attachments?: MessageAttachment[];
   thinkingLevel?: ThinkingLevel;
+  model?: string;
+  providerId?: string;
 }
 
 /** The session/chat operations the UI needs. */
@@ -439,6 +447,14 @@ export function httpSessions(): SessionsBackend {
         method: "POST",
         json: {
           content,
+          ...(options?.model !== undefined && options.model.trim() !== ""
+            ? { model: options.model }
+            : {}),
+          // ROUND-82: the override's provider rides the wire with its model
+          // (absent → the agent's provider, the pre-R82 behavior).
+          ...(options?.providerId !== undefined && options.providerId.trim() !== ""
+            ? { providerId: options.providerId }
+            : {}),
           ...(options?.attachments !== undefined && options.attachments.length > 0
             ? { attachments: options.attachments }
             : {}),
@@ -1860,13 +1876,26 @@ export async function patchSessionPermissions(
  * ROUND-50 (R50-c1): the context donut's data source —
  * GET /sessions/:id/context. `model` is optional (defaults to the session
  * agent's model; the composer's per-send model picker passes its selection).
+ * ROUND-82: `providerId` joins `model` (the picker's provider grouping) so
+ * the meter reads the window/pricing rows of the provider that will serve
+ * the next send.
  */
 export async function fetchSessionContext(
   sessionId: string,
   model?: string,
+  providerId?: string,
 ): Promise<SessionContextReport> {
-  const query =
-    model !== undefined && model.trim() !== "" ? `?model=${encodeURIComponent(model)}` : "";
+  // ROUND-82: ?providerId= alongside ?model= — the meter keys the
+  // window/pricing lookups on the provider that will actually serve the
+  // next send (the composer's per-send picker), not just the agent's.
+  const params: string[] = [];
+  if (model !== undefined && model.trim() !== "") {
+    params.push(`model=${encodeURIComponent(model)}`);
+  }
+  if (providerId !== undefined && providerId.trim() !== "") {
+    params.push(`providerId=${encodeURIComponent(providerId)}`);
+  }
+  const query = params.length > 0 ? `?${params.join("&")}` : "";
   return request<SessionContextReport>(`/sessions/${sessionId}/context${query}`);
 }
 
@@ -2322,14 +2351,25 @@ export async function deleteProjectMemory(
   });
 }
 
+/** ROUND-82 (R82, §2.4.5 — the NVIDIA sub-agent gap): the sub-agent model as
+ * a PROVIDER-SCOPED reference. Reads are always normalized to this shape (a
+ * legacy bare-string value reads as openrouter-scoped); null = inherit the
+ * parent agent's model. */
+export interface SubagentModelRef {
+  providerId: string;
+  modelId: string;
+}
+
 export interface OrchestrationSettings {
   maxParallel: number;
   perKeyLimit: number;
   /** ROUND-43 (R43-5): the temporary sub-agent model override — model id ALL
    * sub-agent children run on, null = inherit the parent's model. The
    * backend has sent it since R43; typed here (ROUND-47 R47-c1) so callers
-   * no longer need to widen locally. */
-  subagentModel: string | null;
+   * no longer need to widen locally.
+   * ROUND-82: provider-scoped (SubagentModelRef) — children route to the
+   * ref's provider via the R82 model-override wire. */
+  subagentModel: SubagentModelRef | null;
   /** ROUND-52 (R52-b): how often the supervisor samples a running child and
    * emits a heartbeat frame (seconds → ms server-side; 5s–60s). */
   childWatchdogMs: number;
@@ -2343,13 +2383,28 @@ export async function fetchOrchestrationSettings(): Promise<OrchestrationSetting
   return request<OrchestrationSettings>("/settings/orchestration");
 }
 
+/** ROUND-82: the PATCH input — subagentModel accepts the provider-scoped
+ * ref or null (the legacy bare-string form still works server-side). */
+export interface OrchestrationSettingsPatch
+  extends Partial<Omit<OrchestrationSettings, "subagentModel">> {
+  subagentModel?: SubagentModelRef | null;
+}
+
 export async function updateOrchestrationSettings(
-  patch: Partial<OrchestrationSettings>,
+  patch: OrchestrationSettingsPatch,
 ): Promise<OrchestrationSettings> {
   return request<OrchestrationSettings>("/settings/orchestration", {
     method: "PUT",
     json: patch,
   });
+}
+
+/** ROUND-82 (R82, §2.4.5): every CONFIGURED model row across all providers
+ * (GET /models/configured) — the Sub-agents picker's per-provider section.
+ * A NIM/custom row picked here becomes the provider-scoped subagentModel. */
+export async function fetchConfiguredModels(): Promise<ProviderModelConfig[]> {
+  const body = await request<{ models: ProviderModelConfig[] }>("/models/configured");
+  return body.models;
 }
 
 /** ROUND-49 (owner directive: "a setting in the settings to turn off this
@@ -2553,6 +2608,53 @@ export async function testProviderConnection(
   });
 }
 
+// ── ROUND-82 (R82, owner: "a test button … not only check for a response,
+//    but also check if the response is reasonable"): the PER-MODEL test. ────
+
+/** The probe's staged checks (POST /models/:id/test) — surfaced individually
+ * so the UI can show exactly which stage failed (auth ok, model id
+ * rejected, …). */
+export interface ModelTestChecks {
+  http: boolean;
+  auth: boolean;
+  modelAccepted: boolean;
+  nonEmptyContent: boolean;
+}
+
+/** POST /models/:id/test response: a probe that RAN and got a NO arrives as
+ * HTTP 200 with ok:false + reason (the provider's raw error body, e.g. an
+ * EOL'd NIM function's 410) — only transport failures throw (ApiError 502,
+ * or 409 when the provider/key is missing). ok:true carries the reply
+ * preview + provider-reported usage. */
+export interface ModelTestResult {
+  ok: boolean;
+  latencyMs: number;
+  providerId: string;
+  model: string;
+  checks: ModelTestChecks;
+  /** First ≤200 chars of the reply (scrubbed) — the "is the response
+   * reasonable" eyeball check. */
+  contentPreview?: string;
+  usage?: { inputTokens: number; outputTokens: number };
+  /** Present on ok:false — the failing stage's reason. */
+  reason?: string;
+}
+
+/** Test a CONFIGURED model row (the row id from models-config, `mdl_…`) —
+ * a real one-word completion against the row's own provider. `slot` scopes
+ * the probe to that key-pool key (the backend 409s when empty). */
+export async function testModelConnection(
+  modelRowId: string,
+  opts?: { slot?: number },
+): Promise<ModelTestResult> {
+  return request<ModelTestResult>(`/models/${encodeURIComponent(modelRowId)}/test`, {
+    method: "POST",
+    json: {
+      ...(opts?.slot !== undefined ? { slot: opts.slot } : {}),
+    },
+  });
+}
+
 /** DB model-override row from GET /providers/:id/models-config — agent-core's
  * ModelRecord (storage/models.ts) mirrored field-for-field. Pricing fields
  * are USD PER 1 MILLION TOKENS (ROUND-62 R62-2b doc pin: never per-token or
@@ -2575,6 +2677,13 @@ export interface ProviderModelConfig {
    * mode (the vision relay uses the turn's model only when this is true).
    * Editable per row like supportsThinking. */
   supportsVision: boolean;
+  /** ROUND-82 (R82, owner: the model edit dialog's proper capability
+   * options): TRI-STATE — null = unknown (never set, no catalog source —
+   * the honest default for NIM/custom rows), false = explicitly off,
+   * true = explicitly on. */
+  supportsTools: boolean | null;
+  supportsAudio: boolean | null;
+  supportsVideo: boolean | null;
   hidden: boolean;
   sortOrder: number;
   createdAt: string;
@@ -2607,6 +2716,12 @@ export interface ProviderModelConfigInput {
   /** ROUND-61 (R61): mark image-input support on add (prefilled from the
    * catalog's supportsVision when the row comes from GET /models/catalog). */
   supportsVision?: boolean;
+  /** ROUND-82 (R82): tri-state on add — boolean sets, null = unknown, absent
+   * lets the backend prefill (catalog tools bit for openrouter ids, NULL
+   * otherwise). */
+  supportsTools?: boolean | null;
+  supportsAudio?: boolean | null;
+  supportsVideo?: boolean | null;
   hidden?: boolean;
 }
 
@@ -2635,6 +2750,11 @@ export interface ProviderModelConfigPatch {
   supportsThinking?: boolean;
   /** ROUND-61 (R61): flip the vision flag on a stored row. */
   supportsVision?: boolean;
+  /** ROUND-82 (R82): tri-state PATCH — boolean sets, null clears to
+   * unknown, absent keeps. */
+  supportsTools?: boolean | null;
+  supportsAudio?: boolean | null;
+  supportsVideo?: boolean | null;
   hidden?: boolean;
 }
 
@@ -3058,6 +3178,10 @@ export async function streamSessionMessage(
   onEvent: (event: StreamTurnEvent) => void,
   options?: {
     model?: string;
+    /** ROUND-82 (R82, the owner's custom-provider routing fix): the provider
+     * the model was picked under (the composer's provider-grouped picker).
+     * Absent → the agent's provider, exactly the pre-R82 behavior. */
+    providerId?: string;
     signal?: AbortSignal;
     thinkingLevel?: ThinkingLevel;
     attachments?: MessageAttachment[];
@@ -3073,6 +3197,7 @@ export async function streamSessionMessage(
     body: JSON.stringify({
       content,
       ...(options?.model ? { model: options.model } : {}),
+      ...(options?.providerId ? { providerId: options.providerId } : {}),
       ...(options?.thinkingLevel && options.thinkingLevel !== "default"
         ? { thinkingLevel: options.thinkingLevel }
         : {}),
@@ -3217,7 +3342,15 @@ export interface QueueMessageResult {
  */
 export async function queueSessionMessage(
   sessionId: string,
-  input: { content: string; attachments?: MessageAttachment[] },
+  input: {
+    content: string;
+    attachments?: MessageAttachment[];
+    /** ROUND-82 (R82): the picker state at queue time — the queued
+     * follow-up's own model/provider (the continuation turn routes to
+     * this provider instead of falling back to the agent default). */
+    model?: string;
+    providerId?: string;
+  },
 ): Promise<QueueMessageResult> {
   return request<QueueMessageResult>(`/sessions/${sessionId}/queue`, {
     method: "POST",

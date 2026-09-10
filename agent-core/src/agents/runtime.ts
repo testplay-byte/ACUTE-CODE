@@ -980,14 +980,48 @@ async function buildPromptEnvironment(rootPath: string): Promise<PromptEnvironme
   };
 }
 
+/** ROUND-82 (R82, the owner's custom-provider routing fix): a per-send
+ * model override. The composer's picker captures BOTH the model id AND the
+ * provider it was picked under — historically the wire dropped the
+ * providerId and prepareTurn resolved the provider from the AGENT row
+ * alone (the default agent is openrouter → custom models went verbatim to
+ * OpenRouter → "No endpoints found"). The union keeps the bare-string
+ * shape working for every existing caller (the orchestrator's
+ * subagentModel, tests); the object shape carries the provider routing. */
+export type TurnModelOverride = string | { model: string; providerId?: string };
+
+/** Normalize any override shape to the resolved pair. A blank model (or a
+ * blank providerId) degrades to undefined — the agent defaults apply. */
+function normalizeModelOverride(
+  override: TurnModelOverride | undefined,
+): { model: string; providerId: string | undefined } | undefined {
+  if (override === undefined) return undefined;
+  if (typeof override === "string") {
+    const model = override.trim();
+    return model === "" ? undefined : { model, providerId: undefined };
+  }
+  const model = typeof override.model === "string" ? override.model.trim() : "";
+  if (model === "") return undefined;
+  const providerId =
+    typeof override.providerId === "string" && override.providerId.trim() !== ""
+      ? override.providerId.trim()
+      : undefined;
+  return { model, providerId };
+}
+
 /** Shared pre-flight: validation, provider/key resolution, tools, system,
  * history. modelOverride lets one call use a different model than the
- * agent's default (the chat UI's per-send model picker). */
+ * agent's default (the chat UI's per-send model picker) — and since R82,
+ * a DIFFERENT PROVIDER too (the picker's provider grouping is real: the
+ * override's providerId, when present, is resolved INSTEAD of the agent's
+ * — every guard below (baseUrl, enabled, key) then runs against the
+ * effective provider, so context window, cost, the vision relay, and the
+ * retry ladder all key on the provider that actually serves the call). */
 async function prepareTurn(
   db: SqliteDatabase,
   keyring: ProviderKeyring,
   sessionId: string,
-  modelOverride?: string,
+  modelOverride?: TurnModelOverride,
   /** ROUND-36: the chat fn (delegate_task spawns child turns through it). */
   chatForTools?: ChatFn,
   /** ROUND-50 (R50-b, owner: the sub-agent panel must stream "the actual raw
@@ -1058,15 +1092,25 @@ async function prepareTurn(
       },
     };
   }
-  const provider = resolveProvider(db, agent.providerId);
+  // ROUND-82: the EFFECTIVE provider — the override's providerId when the
+  // send carried one (the composer's provider-grouped picker), else the
+  // agent's. Every guard below runs against this, so a custom provider is
+  // resolved, enabled-checked, and key-checked exactly like the agent's own.
+  const modelOverrideNorm = normalizeModelOverride(modelOverride);
+  const effectiveProviderId = modelOverrideNorm?.providerId ?? agent.providerId;
+  const overrideNamesProvider = modelOverrideNorm?.providerId !== undefined;
+  const provider = resolveProvider(db, effectiveProviderId);
   if (provider === undefined || provider.baseUrl === null) {
     return {
       error: {
         ok: false,
         status: 409,
         code: "CONFLICT",
-        message: `agent '${agent.name}' references provider '${agent.providerId}' without a usable baseUrl`,
-        details: { agentId: agent.id, providerId: agent.providerId },
+        message:
+          overrideNamesProvider
+            ? `model override references provider '${effectiveProviderId}' without a usable baseUrl`
+            : `agent '${agent.name}' references provider '${agent.providerId}' without a usable baseUrl`,
+        details: { agentId: agent.id, providerId: effectiveProviderId },
       },
     };
   }
@@ -1206,8 +1250,8 @@ async function prepareTurn(
     // row supports vision). providerId/model are resolved above (override
     // or agent defaults) — both non-null by the gate earlier in prepareTurn.
     mainModel: {
-      providerId: agent.providerId,
-      modelId: modelOverride && modelOverride.trim() !== "" ? modelOverride.trim() : agent.model,
+      providerId: effectiveProviderId,
+      modelId: modelOverrideNorm?.model ?? agent.model,
     },
   };
   // ROUND-40 → ROUND-49 (owner: "sub-agents … exactly like how the main agent
@@ -1413,7 +1457,7 @@ async function prepareTurn(
     // (chat-completions | anthropic-messages | responses).
     provider: { id: provider.id, baseUrl: provider.baseUrl, apiFormat: provider.apiFormat },
     apiKey,
-    model: modelOverride && modelOverride.trim() !== "" ? modelOverride.trim() : agent.model,
+    model: modelOverrideNorm?.model ?? agent.model,
     tools,
     system,
     ...(thinkingLevel !== undefined ? { thinkingLevel } : {}),
@@ -1424,7 +1468,7 @@ export async function runSingleAgentTurn(
   deps: TurnDeps,
   sessionId: string,
   content: string,
-  modelOverride?: string,
+  modelOverride?: TurnModelOverride,
   /** ROUND-40: optional live-event forwarder. When set (the orchestrator
    * passes a wrapped emit for sub-agent children), the sync loop forwards
    * each tool-call / tool-result / text / continuation event to it so the
@@ -2187,7 +2231,7 @@ export async function runStreamedAgentTurn(
   sessionId: string,
   content: string,
   emit: (event: unknown) => void,
-  modelOverride?: string,
+  modelOverride?: TurnModelOverride,
   signal?: AbortSignal,
   /** ROUND-50 (R50-c1): the composer's per-send thinking level — threaded
    * to the streaming adapter (chat-completions reasoning.effort). NOT

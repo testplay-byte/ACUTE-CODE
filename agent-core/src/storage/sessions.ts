@@ -656,11 +656,24 @@ export function lastSessionSeq(db: SqliteDatabase, sessionId: string): number {
  * carries the SESSION's agent so the fold and any reader resolve the author
  * the same way a delivered row does). Returns the appended event (seq is
  * the queue identity the wire contract uses).
+ * ROUND-82 (R82): the queue entry may carry its OWN per-send override
+ * (`model` + `providerId` — the picker state at queue time). The fields
+ * live in the payload (invisible to the model: the history fold reads
+ * role/content/attachments only) and survive the delivery type-flip
+ * harmlessly; the queue-continuation loop reads them when the entry is
+ * consumed so the follow-up turn routes to the provider the user picked
+ * when queueing — historically a queued follow-up fell back to the agent
+ * default, dropping the override entirely.
  */
 export function appendQueuedMessage(
   db: SqliteDatabase,
   sessionId: string,
-  input: { content: string; attachments?: MessageAttachment[] },
+  input: {
+    content: string;
+    attachments?: MessageAttachment[];
+    model?: string;
+    providerId?: string;
+  },
 ): SessionEvent {
   const session = getSession(db, sessionId);
   return appendSessionEvent(db, sessionId, {
@@ -673,6 +686,10 @@ export function appendQueuedMessage(
       content: input.content,
       ...(input.attachments !== undefined && input.attachments.length > 0
         ? { attachments: input.attachments }
+        : {}),
+      ...(input.model !== undefined && input.model.trim() !== "" ? { model: input.model } : {}),
+      ...(input.providerId !== undefined && input.providerId.trim() !== ""
+        ? { providerId: input.providerId }
         : {}),
     },
   });

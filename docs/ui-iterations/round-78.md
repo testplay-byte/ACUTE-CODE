@@ -1,4 +1,4 @@
-<!-- last-reviewed: 2026-09-08 round-78 -->
+<!-- last-reviewed: 2026-09-09 round-82 -->
 # Round 78 — The Honest-Errors + Queue Round (Retry Honesty, Composer Anchor, Retry Config, Message Queue)
 
 **Owner's report (the four verbatim asks):**

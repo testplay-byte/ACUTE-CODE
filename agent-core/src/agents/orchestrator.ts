@@ -53,7 +53,7 @@ import { registerTurn, unregisterTurn, getTurnStopReason, abortTurn } from "../l
 import { getAgent } from "../storage/agents.js";
 import { getOrchestrationSettings } from "../storage/settings.js";
 import { ProviderKeyring } from "../providers/registry.js";
-import { runSingleAgentTurn, runStreamedAgentTurn } from "./runtime.js";
+import { runSingleAgentTurn, runStreamedAgentTurn, type TurnModelOverride } from "./runtime.js";
 import type { TurnDeps } from "./runtime.js";
 // ROUND-40: sub-agent transitions publish app-level notifications so the user
 // sees when a delegated task completes or fails (even if they navigated away).
@@ -63,6 +63,18 @@ import { getNotificationBus } from "../lib/notification-bus.js";
 import { log } from "../lib/log.js";
 
 export type SqliteDatabase = Database.Database;
+
+/** ROUND-82: the override's provider when it carries one (the provider-scoped
+ * subagentModel ref {providerId, modelId}) — undefined for bare string
+ * overrides and blank providerIds. Used to key the child's slot pool and
+ * keyring VIEW on the EFFECTIVE provider (see runChildTurn). */
+function overrideProviderId(
+  override: TurnModelOverride | undefined,
+): string | undefined {
+  if (override === undefined || typeof override === "string") return undefined;
+  const pid = typeof override.providerId === "string" ? override.providerId.trim() : "";
+  return pid !== "" ? pid : undefined;
+}
 
 /** Roles map to the seeded templates' framing (children run the PARENT's
  * provider/model/temperature — templates carry no provider config). */
@@ -738,7 +750,7 @@ class Orchestrator {
         parent: Session;
         agent: Agent;
         providerId: string;
-        modelOverride: string | undefined;
+        modelOverride: TurnModelOverride | undefined;
         effectiveModel: string;
         taskId: string | undefined;
       }
@@ -779,13 +791,20 @@ class Orchestrator {
     // ROUND-50 (R50-b): the effective child model, resolved ONCE — the
     // turn's modelOverride (R43-5) AND the `model` field on every
     // subagent-status frame below (the stats footer's model line).
+    // ROUND-82 (R82, §2.4.5): subagentModel is now the provider-scoped ref
+    // {providerId, modelId} — the modelOverride object routes the child
+    // turns to the NIM/custom provider (prepareTurn's effective-provider
+    // resolution); the status frames show the bare model id as before.
     const subagentModel = getOrchestrationSettings(db).subagentModel;
     return {
       parent,
       agent,
       providerId,
-      modelOverride: subagentModel ?? undefined,
-      effectiveModel: subagentModel ?? agent.model ?? "unknown",
+      modelOverride:
+        subagentModel !== null
+          ? { model: subagentModel.modelId, providerId: subagentModel.providerId }
+          : undefined,
+      effectiveModel: subagentModel?.modelId ?? agent.model ?? "unknown",
       taskId: trimmedTaskId,
     };
   }
@@ -897,7 +916,7 @@ class Orchestrator {
       /** The child's first user message (role framing + task prompt). */
       content: string;
       providerId: string;
-      modelOverride: string | undefined;
+      modelOverride: TurnModelOverride | undefined;
       effectiveModel: string;
       emit?: (event: unknown) => void;
       signal?: AbortSignal;
@@ -948,7 +967,17 @@ class Orchestrator {
     status("queued");
 
     // Acquire concurrency + key slot (reserves atomically; queues when full).
-    const slot = await this.acquireSlot(db, keyring, providerId, child.id);
+    // ROUND-82 close-out: the child's EFFECTIVE provider — the provider-scoped
+    // subagentModel override (R82 §2.4.5) can route the child turns to a
+    // provider OTHER than the parent agent's (NIM/custom gateway). The slot
+    // pool, the keyring VIEW, the keySlot attribution, and the release below
+    // all key on it, so the child's prepareTurn finds the override
+    // provider's key (the pre-close-out defect, found by R82-TESTS: the view
+    // carried only the AGENT provider's slot env vars → the child 409'd
+    // "no API key for provider 'prv_…'" before any chat call, no matter
+    // which keys were present).
+    const effectiveProviderId = overrideProviderId(ctx.modelOverride) ?? providerId;
+    const slot = await this.acquireSlot(db, keyring, effectiveProviderId, child.id);
     this.runs = this.runs.map((r) =>
       r.childId === child.id ? { ...r, parentSessionId } : r,
     );
@@ -961,10 +990,13 @@ class Orchestrator {
     // The keyring VIEW already aliases slot 0 to the slot key, so
     // prepareTurn's keyring.get(provider.id) resolves the child's key with
     // no signature change — keySlot is purely the billing dimension.
-    const slotKey = keyring.getPool(providerId).find((p) => p.slot === slot)?.key ?? "";
+    // ROUND-82: the view (and the slot above) key on the EFFECTIVE provider,
+    // so slot 0 aliases ACUTE_PROVIDER_<OVERRIDE_ID> — the env var
+    // prepareTurn resolves for the routed provider.
+    const slotKey = keyring.getPool(effectiveProviderId).find((p) => p.slot === slot)?.key ?? "";
     const childKeyring = new ProviderKeyring({
-      [ProviderKeyring.slotEnvVarName(providerId, slot)]: slotKey,
-      [ProviderKeyring.slotEnvVarName(providerId, 0)]: slotKey,
+      [ProviderKeyring.slotEnvVarName(effectiveProviderId, slot)]: slotKey,
+      [ProviderKeyring.slotEnvVarName(effectiveProviderId, 0)]: slotKey,
     });
 
     // ── ROUND-52 (R52-b): the CHILD SUPERVISOR ────────────────────────────
@@ -1183,7 +1215,9 @@ class Orchestrator {
       clearInterval(watchdog);
       if (signal !== undefined) signal.removeEventListener("abort", onParentAbort);
       unregisterTurn(child.id, childAbort);
-      this.releaseSlot(providerId, slot, child.id);
+      // ROUND-82: release under the EFFECTIVE provider (the pool the slot
+      // was acquired from — a mismatched key would leak the reservation).
+      this.releaseSlot(effectiveProviderId, slot, child.id);
     }
   }
   /**
@@ -1211,9 +1245,14 @@ class Orchestrator {
     const providerId = agent?.providerId ?? "openrouter";
     // ROUND-50 (R50-b): same effective-model resolution as delegateTask —
     // the turn's modelOverride + the `model` on every status frame.
+    // ROUND-82 (R82, §2.4.5): the provider-scoped ref routes the retried
+    // child to its provider (see delegateTask's comment).
     const subagentModel = getOrchestrationSettings(db).subagentModel;
-    const modelOverride = subagentModel ?? undefined;
-    const effectiveModel = subagentModel ?? agent?.model ?? "unknown";
+    const modelOverride =
+      subagentModel !== null
+        ? { model: subagentModel.modelId, providerId: subagentModel.providerId }
+        : undefined;
+    const effectiveModel = subagentModel?.modelId ?? agent?.model ?? "unknown";
 
     const status = (s: SubAgentEventPayload["status"]) => {
       emit?.({
@@ -1242,14 +1281,23 @@ class Orchestrator {
       ? `${ROLE_FRAMING[role]}\n\nYou were interrupted while working on this task. Your completed work so far is in your history (including tool results). Continue from where you stopped — call todo_write to refresh your plan if needed, then execute the remaining steps. Only write a final report when the task is genuinely complete.`
       : `${ROLE_FRAMING[role]}\n${renderTaskPrompt(child.title ?? "the assigned task")}`;
 
-    const slot = await this.acquireSlot(db, keyring, providerId, childId);
+    // ROUND-82 close-out: retryChild needs the same effective-provider
+    // resolution as delegateTask/runChildTurn — the retried child routes to
+    // the override's provider when the owner set a provider-scoped
+    // subagentModel ref between attempts (the R82-TESTS retry pin).
+    const effectiveProviderId = overrideProviderId(modelOverride) ?? providerId;
+    const slot = await this.acquireSlot(db, keyring, effectiveProviderId, childId);
     this.runs = this.runs.map((r) =>
       r.childId === childId ? { ...r, parentSessionId } : r,
     );
-    const slotKey = keyring.getPool(providerId).find((p) => p.slot === slot)?.key ?? "";
+    // ROUND-82: same EFFECTIVE-provider keyring view as runChildTurn — the
+    // retried child's override provider serves the attempt (the pre-close-out
+    // defect: this view keyed on the AGENT provider, so a provider-scoped
+    // retry 409'd before any chat call).
+    const slotKey = keyring.getPool(effectiveProviderId).find((p) => p.slot === slot)?.key ?? "";
     const childKeyring = new ProviderKeyring({
-      [ProviderKeyring.slotEnvVarName(providerId, slot)]: slotKey,
-      [ProviderKeyring.slotEnvVarName(providerId, 0)]: slotKey,
+      [ProviderKeyring.slotEnvVarName(effectiveProviderId, slot)]: slotKey,
+      [ProviderKeyring.slotEnvVarName(effectiveProviderId, 0)]: slotKey,
     });
 
     status("running");
@@ -1310,7 +1358,8 @@ class Orchestrator {
       });
       return { ok: false, message: outcome.message };
     } finally {
-      this.releaseSlot(providerId, slot, childId);
+      // ROUND-82: release under the EFFECTIVE provider (see runChildTurn).
+      this.releaseSlot(effectiveProviderId, slot, childId);
     }
   }
 

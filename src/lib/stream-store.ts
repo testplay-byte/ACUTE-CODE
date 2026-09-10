@@ -440,12 +440,18 @@ interface StreamStore {
    * extras (`thinkingLevel`, `attachments`) straight through to
    * streamSessionMessage — api.ts already threads them into the POST body
    * (R50-c1). Purely optional: existing callers that pass only `model` (or
-   * nothing) behave exactly as before. */
+   * nothing) behave exactly as before.
+   * ROUND-82 (R82, the owner's custom-provider routing fix): `providerId`
+   * joins `model` — the composer's provider-grouped picker captures the
+   * pair; the store threads both to the wire so a custom-provider model
+   * reaches ITS provider, not the agent's. */
   startStream: (
     sessionId: string,
     text: string,
     opts?: {
       model?: string;
+      /** ROUND-82: the provider the override's model was picked under. */
+      providerId?: string;
       thinkingLevel?: ThinkingLevel;
       attachments?: MessageAttachment[];
       /** ROUND-65 (R65): the session's project — scopes the agent-browser
@@ -970,7 +976,13 @@ export const useStreamStore = create<StreamStore>((set, get) => ({
         (event: StreamTurnEvent) => {
           handleStreamEvent(sessionId, event);
         },
-        { model: opts?.model, signal: controller.signal, thinkingLevel: opts?.thinkingLevel, attachments: opts?.attachments },
+        {
+          model: opts?.model,
+          providerId: opts?.providerId,
+          signal: controller.signal,
+          thinkingLevel: opts?.thinkingLevel,
+          attachments: opts?.attachments,
+        },
       );
     } catch (err) {
       // ROUND-58 (R58-cf): a DELIBERATE user stop (abortStream marked the

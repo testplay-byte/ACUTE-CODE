@@ -8,6 +8,7 @@ import { createOpenAI } from "@ai-sdk/openai";
 import { createOpenAICompatible } from "@ai-sdk/openai-compatible";
 import { generateText, streamText, stepCountIs, type LanguageModel, type ToolSet } from "ai";
 import type { ThinkingLevel } from "shared";
+import { scrubSecretShapes } from "../lib/secret-shapes.js";
 
 export interface ChatTurnMessage {
   role: "user" | "assistant";
@@ -339,11 +340,11 @@ export function summarizeToolOutput(output: unknown, toolName?: string): string 
   }
   // Scrub obvious secret shapes (defense-in-depth; the runtime scrubs
   // keyring values too, but this guard lives at the source).
-  text = text.replace(/sk-[A-Za-z0-9_-]{16,}/g, "sk-***");
-  text = text.replace(/github_pat_[A-Za-z0-9_]+/g, "github_pat_***");
-  // ROUND-80 (R80): the NVIDIA NIM key prefix (nvapi-…) joins the
-  // pattern scrub — run_command output and tool summaries must never leak it.
-  text = text.replace(/nvapi-[A-Za-z0-9_-]{16,}/g, "nvapi-***");
+  // ROUND-82 (R82): the shape block moved to lib/secret-shapes.ts (the
+  // model-test probe in providers/registry.ts needed the same three
+  // prefixes — one shared definition now; see that module's header for the
+  // consolidation history).
+  text = scrubSecretShapes(text);
   // Head+tail budget: command/read outputs keep 2000 head + 2000 tail chars.
   // Sticky tools (R70-b D3) keep a 60K budget instead — see the header.
   const budget = toolName !== undefined && isStickyResultTool(toolName) ? STICKY_OUTPUT_BUDGET : 4000;

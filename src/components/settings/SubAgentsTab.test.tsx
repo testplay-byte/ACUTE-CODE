@@ -27,7 +27,7 @@ import SubAgentsTab, { SubAgentsSection } from "./SubAgentsTab";
 import { SettingsPage } from "../../pages/SettingsPage";
 import { resetTestState, renderWithProviders } from "../../test-utils";
 import { useSettingsStore } from "../../lib/settings-store";
-import type { KeyPoolSlot, ModelsCatalog } from "../../lib/api";
+import type { KeyPoolSlot, ModelsCatalog, SubagentModelRef } from "../../lib/api";
 
 /* ── Stateful fetch mock (the sidecar API surface this tab touches) ───────── */
 
@@ -36,11 +36,29 @@ let pool: KeyPoolSlot[] = [];
 let settings = {
   maxParallel: 5,
   perKeyLimit: 3,
-  subagentModel: null as string | null,
+  // ROUND-82: provider-scoped ref (the wire shape GET always returns —
+  // legacy strings normalize to openrouter-scoped objects, as the backend
+  // readSubagentModel does).
+  subagentModel: null as SubagentModelRef | string | null,
   // ROUND-52 (R52-b): the supervisor knobs (GET/PUT /settings/orchestration).
   childWatchdogMs: 15_000,
   childStallTimeoutMs: 300_000,
 };
+
+/** ROUND-82: normalize like the backend's readSubagentModel — a legacy
+ * plain string reads as the openrouter-scoped ref; the object passes
+ * through; anything malformed degrades to null. */
+function normalizeSubagentModel(value: unknown): SubagentModelRef | null {
+  if (value === null || value === undefined) return null;
+  if (typeof value === "string") return { providerId: "openrouter", modelId: value };
+  if (typeof value === "object" && value !== null) {
+    const ref = value as { providerId?: unknown; modelId?: unknown };
+    if (typeof ref.providerId === "string" && typeof ref.modelId === "string") {
+      return { providerId: ref.providerId, modelId: ref.modelId };
+    }
+  }
+  return null;
+}
 
 /** Small realistic GET /models/catalog fixture (R47-b contract shape):
  * free+tools, free+tool-less (must render disabled), paid, and the
@@ -148,11 +166,15 @@ const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => 
     return jsonResponse(CATALOG);
   }
   if (url.endsWith("/api/v1/settings/orchestration")) {
-    if (method === "GET") return jsonResponse(settings);
+    if (method === "GET") {
+      // ROUND-82: GET answers the NORMALIZED shape (like the backend).
+      return jsonResponse({ ...settings, subagentModel: normalizeSubagentModel(settings.subagentModel) });
+    }
     if (method === "PUT") {
       const patch = body as Record<string, unknown>;
-      if (typeof patch.subagentModel === "string" || patch.subagentModel === null) {
-        settings = { ...settings, subagentModel: patch.subagentModel as string | null };
+      if (patch.subagentModel !== undefined) {
+        // ROUND-82: accepts the ref object, the legacy string, or null.
+        settings = { ...settings, subagentModel: patch.subagentModel as SubagentModelRef | string | null };
       }
       if (typeof patch.childWatchdogMs === "number") {
         settings = { ...settings, childWatchdogMs: patch.childWatchdogMs };
@@ -375,7 +397,12 @@ describe("SubAgentsTab — model picker", () => {
       const put = calls.find(
         (c) => c.method === "PUT" && c.url.endsWith("/settings/orchestration"),
       );
-      expect(put?.body).toEqual({ subagentModel: "nvidia/nemotron-3.5-lightning:free" });
+      // ROUND-82: catalog picks write the explicit provider-scoped pair —
+      // the orchestrator override routes the child turns to THIS provider
+      // (the pre-R82 bare string was openrouter-implied only).
+      expect(put?.body).toEqual({
+        subagentModel: { providerId: "openrouter", modelId: "nvidia/nemotron-3.5-lightning:free" },
+      });
     });
     // The refreshed state shows the override as the running model.
     await waitFor(() =>

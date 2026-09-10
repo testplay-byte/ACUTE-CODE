@@ -24,6 +24,15 @@ export interface ModelRecord {
    * model only when this is true). Prefilled from the ROUND-43 catalog's
    * supportsVision on insert; editable per row like supportsThinking. */
   supportsVision: boolean;
+  /** ROUND-82 (R82, owner: the model edit dialog's proper capability
+   * options): TRI-STATE capability flags — null = unknown (never set, no
+   * catalog source — the honest default for NIM/custom rows), false =
+   * explicitly off, true = explicitly on. Backfilled from the catalog
+   * ONLY for openrouter rows (the catalog describes OpenRouter-hosted
+   * variants; a NIM row sharing the id string must not inherit them). */
+  supportsTools: boolean | null;
+  supportsAudio: boolean | null;
+  supportsVideo: boolean | null;
   hidden: boolean;
   sortOrder: number;
   createdAt: string;
@@ -40,6 +49,12 @@ export interface ModelInput {
   outputPricePerMtok?: number | null;
   supportsThinking?: boolean;
   supportsVision?: boolean;
+  /** ROUND-82 (R82): tri-state — undefined keeps the stored value, null
+   * RESETS to unknown, true/false sets (the numeric fields' null-clearing
+   * contract, R50-d, applied to the new capability columns). */
+  supportsTools?: boolean | null;
+  supportsAudio?: boolean | null;
+  supportsVideo?: boolean | null;
   hidden?: boolean;
   sortOrder?: number;
 }
@@ -56,10 +71,19 @@ interface ModelRow {
   output_price_per_mtok: number | null;
   supports_thinking: number;
   supports_vision: number;
+  /** ROUND-82 (R82): NULL = unknown, 0 = off, 1 = on. */
+  supports_tools: number | null;
+  supports_audio: number | null;
+  supports_video: number | null;
   hidden: number;
   sort_order: number;
   created_at: string;
   updated_at: string;
+}
+
+/** The tri-state column mapping: NULL → null (unknown), 0 → false, 1 → true. */
+function triState(value: number | null): boolean | null {
+  return value === null ? null : value === 1;
 }
 
 function toModel(row: ModelRow): ModelRecord {
@@ -75,6 +99,9 @@ function toModel(row: ModelRow): ModelRecord {
     outputPricePerMtok: row.output_price_per_mtok,
     supportsThinking: row.supports_thinking === 1,
     supportsVision: row.supports_vision === 1,
+    supportsTools: triState(row.supports_tools),
+    supportsAudio: triState(row.supports_audio),
+    supportsVideo: triState(row.supports_video),
     hidden: row.hidden === 1,
     sortOrder: row.sort_order,
     createdAt: row.created_at,
@@ -95,6 +122,27 @@ export function listVisibleModels(db: SqliteDatabase, providerId: string): Model
 export function getModel(db: SqliteDatabase, id: string): ModelRecord | undefined {
   const row = db.prepare("SELECT * FROM models WHERE id = ?").get(id) as ModelRow | undefined;
   return row ? toModel(row) : undefined;
+}
+
+/**
+ * ROUND-82 (R82, §2.4.5 — the NVIDIA sub-agent gap): every configured model
+ * row across ALL providers, ordered by provider then model id. Feeds GET
+ * /models/configured (the Sub-agents picker's per-provider section — NIM
+ * rows could never be sub-agent models because the picker only listed the
+ * OpenRouter catalog).
+ */
+export function listAllModels(db: SqliteDatabase): ModelRecord[] {
+  return (db
+    .prepare("SELECT * FROM models ORDER BY provider_id ASC, model_id ASC")
+    .all() as ModelRow[]).map(toModel);
+}
+
+/** The tri-state keep: undefined keeps the stored column, null clears to
+ * unknown (NULL), a boolean sets 0/1. */
+function keepTriState(next: boolean | null | undefined, prev: number | null): number | null {
+  if (next === undefined) return prev;
+  if (next === null) return null;
+  return next ? 1 : 0;
 }
 
 /** Upsert a model for a provider (UNIQUE(provider_id, model_id)). */
@@ -124,6 +172,8 @@ export function upsertModel(
         input_price_cached_per_mtok = @inputPriceCachedPerMtok,
         output_price_per_mtok = @outputPricePerMtok,
         supports_thinking = @supportsThinking, supports_vision = @supportsVision,
+        supports_tools = @supportsTools, supports_audio = @supportsAudio,
+        supports_video = @supportsVideo,
         hidden = @hidden,
         sort_order = @sortOrder, updated_at = @updatedAt
       WHERE id = @id`,
@@ -136,6 +186,11 @@ export function upsertModel(
       outputPricePerMtok: keep(input.outputPricePerMtok, existing.output_price_per_mtok),
       supportsThinking: (input.supportsThinking ?? existing.supports_thinking === 1) ? 1 : 0,
       supportsVision: (input.supportsVision ?? existing.supports_vision === 1) ? 1 : 0,
+      // ROUND-82: tri-state columns — undefined keeps, null clears to
+      // unknown, boolean sets (the numeric fields' R50-d contract).
+      supportsTools: keepTriState(input.supportsTools, existing.supports_tools),
+      supportsAudio: keepTriState(input.supportsAudio, existing.supports_audio),
+      supportsVideo: keepTriState(input.supportsVideo, existing.supports_video),
       hidden: (input.hidden ?? existing.hidden === 1) ? 1 : 0,
       sortOrder: keep(input.sortOrder, existing.sort_order),
       updatedAt: now,
@@ -149,11 +204,13 @@ export function upsertModel(
     `INSERT INTO models (
       id, provider_id, model_id, display_name, context_window, max_output_tokens,
       input_price_per_mtok, input_price_cached_per_mtok, output_price_per_mtok,
-      supports_thinking, supports_vision, hidden, sort_order, created_at, updated_at
+      supports_thinking, supports_vision, supports_tools, supports_audio,
+      supports_video, hidden, sort_order, created_at, updated_at
     ) VALUES (
       @id, @providerId, @modelId, @displayName, @contextWindow, @maxOutputTokens,
       @inputPricePerMtok, @inputPriceCachedPerMtok, @outputPricePerMtok,
-      @supportsThinking, @supportsVision, @hidden, @sortOrder, @createdAt, @updatedAt
+      @supportsThinking, @supportsVision, @supportsTools, @supportsAudio,
+      @supportsVideo, @hidden, @sortOrder, @createdAt, @updatedAt
     )`,
   ).run({
     id,
@@ -171,6 +228,21 @@ export function upsertModel(
     // override via PATCH). Absent from the catalog → false (honest default).
     supportsVision:
       (input.supportsVision ?? getCatalogModel(input.modelId)?.supportsVision ?? false) ? 1 : 0,
+    // ROUND-82: tri-state INSERT — explicit boolean wins, explicit null is
+    // UNKNOWN (the NULL column — the 400 gate's own "a boolean or null
+    // (unknown)" promise, found failing by R82-TESTS: the old two-way
+    // ternary folded null→0/false), else the catalog's tools bit, else
+    // NULL (the honest default for NIM/custom ids the catalog knows
+    // nothing about; the edit dialog shows Unknown).
+    supportsTools: input.supportsTools === undefined
+      ? getCatalogModel(input.modelId)?.supportsTools === true ? 1 : null
+      : input.supportsTools === null ? null : input.supportsTools === true ? 1 : 0,
+    supportsAudio: input.supportsAudio === undefined
+      ? null
+      : input.supportsAudio === null ? null : input.supportsAudio === true ? 1 : 0,
+    supportsVideo: input.supportsVideo === undefined
+      ? null
+      : input.supportsVideo === null ? null : input.supportsVideo === true ? 1 : 0,
     hidden: (input.hidden ?? false) ? 1 : 0,
     sortOrder: input.sortOrder ?? 0,
     createdAt: now,
@@ -923,6 +995,26 @@ export function isFreeModelId(
 /** Catalog membership (the migration's "known-good id" guard). */
 export function isKnownCatalogModelId(modelId: string): boolean {
   return catalogById.has(modelId);
+}
+
+/**
+ * ROUND-82 (R82): the 0030 capability BACKFILL — catalog `supportsTools`
+ * bits onto openrouter-scoped rows whose column is still NULL (unknown).
+ * Idempotent by construction (the WHERE supports_tools IS NULL guard — a
+ * second run is a no-op; user-set rows are never touched). Scoped to the
+ * openrouter provider because the catalog describes OpenRouter-hosted
+ * variants — a NIM row sharing the model-id string must not inherit
+ * OpenRouter's metadata. Audio/video have NO catalog source: every row
+ * keeps NULL until the owner sets it (the honest unknown). Called once
+ * from openDatabase after the migrations run (db.ts).
+ */
+export function backfillModelCapabilities(db: SqliteDatabase): void {
+  const stmt = db.prepare(
+    `UPDATE models SET supports_tools = ? WHERE supports_tools IS NULL AND provider_id = 'openrouter' AND model_id = ?`,
+  );
+  for (const model of FREE_MODEL_CATALOG) {
+    stmt.run(model.supportsTools ? 1 : 0, model.modelId);
+  }
 }
 
 /**

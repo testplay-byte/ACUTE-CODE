@@ -10,6 +10,13 @@
 //! through the keyring crate's `{user}.{service}` TargetName) is still READ
 //! as a fallback and retired on the next write — no key is ever lost.
 //!
+//! ROUND-82 (R82-B) — custom-provider ids ride a note file
+//! (`~/.acute/custom-providers.txt`: ids only, never secrets, the same
+//! standing as the ROUND-61 vision note) so keys saved for providers the
+//! owner creates in Settings are re-injected at EVERY sidecar spawn
+//! instead of dying on the first restart (the pre-R82 hardcoded injection
+//! list never knew them).
+//!
 //! Keys cross this boundary only through these Tauri commands: never REST
 //! bodies, never localStorage, never logs or error strings.
 
@@ -46,15 +53,61 @@ fn legacy_target(provider_id: &str) -> String {
 // same keyring path every other provider uses; the key value lives in
 // Credential Manager under ACUTE-CODE/provider/nvidia (the Settings flow's
 // store_provider_key writes exactly that target).
-pub(crate) fn provider_key_env_targets() -> [(&'static str, &'static str); 5] {
-    [
-        ("ACUTE_PROVIDER_OPENROUTER", "openrouter"),
-        ("ACUTE_PROVIDER_NVIDIA", "nvidia"),
-        ("ACUTE_PROVIDER_OPENROUTER_SLOT2", "openrouter-slot2"),
-        ("ACUTE_PROVIDER_OPENROUTER_SLOT3", "openrouter-slot3"),
-        ("ACUTE_PROVIDER_OPENROUTER_SLOT4", "openrouter-slot4"),
-    ]
+// ROUND-82 (R82-B, agent-ctx/research/models-providers-fixes.md §1.4.1 —
+// "custom-provider keys die on app restart"): the list is no longer ONLY
+// these hardcoded builtins. A custom provider (prv_… slugs created in
+// Settings) had its key written to Credential Manager and pushed into the
+// RUNNING sidecar's in-memory vault (POST /internal/providers/keys), but
+// the spawn-time injection never re-injected it — the key worked in the
+// session where it was saved, then failed with `409 no API key for
+// provider 'prv_…'` on every restart after. The cure mirrors the proven
+// ROUND-61 vision-note pattern: store_provider_key notes the custom id in
+// ~/.acute/custom-providers.txt (ids only, never secrets), and this list
+// unions the builtins with the noted ids — the env names follow the sidecar
+// keyring's own derivation, so a noted key is found at spawn exactly like
+// a builtin's. The builtins stay hardcoded verbatim (the launcher's seeded
+// targets) and are deliberately NOT noted — noting them would duplicate
+// entries.
+pub(crate) fn provider_key_env_targets() -> Vec<(String, String)> {
+    // The 5 builtins verbatim (ROUND-51 pool slots + ROUND-80 nvidia).
+    let mut targets: Vec<(String, String)> = vec![
+        ("ACUTE_PROVIDER_OPENROUTER".to_string(), "openrouter".to_string()),
+        ("ACUTE_PROVIDER_NVIDIA".to_string(), "nvidia".to_string()),
+        (
+            "ACUTE_PROVIDER_OPENROUTER_SLOT2".to_string(),
+            "openrouter-slot2".to_string(),
+        ),
+        (
+            "ACUTE_PROVIDER_OPENROUTER_SLOT3".to_string(),
+            "openrouter-slot3".to_string(),
+        ),
+        (
+            "ACUTE_PROVIDER_OPENROUTER_SLOT4".to_string(),
+            "openrouter-slot4".to_string(),
+        ),
+    ];
+    // ROUND-82: one entry per NOTED custom provider — the keyring-derivation
+    // env name (custom_provider_env_name) + the id the credential lives
+    // under. A stale or hand-edited note line whose key is absent is skipped
+    // silently by the consumer loop — never a failed spawn.
+    for id in custom_provider_ids() {
+        targets.push((custom_provider_env_name(&id), id));
+    }
+    targets
 }
+
+/// ROUND-82 (R82-B): the builtin provider ids the hardcoded half of
+/// provider_key_env_targets already covers. store_provider_key skips
+/// NOTING these — a note line would only duplicate the injection entry.
+/// Keep in sync with the array above; the derivation test pins the
+/// equivalence from both sides.
+const BUILTIN_PROVIDER_IDS: [&str; 5] = [
+    "openrouter",
+    "nvidia",
+    "openrouter-slot2",
+    "openrouter-slot3",
+    "openrouter-slot4",
+];
 
 /// ROUND-61 (R61): the SEPARATE VISION-MODEL key — the owner's directive:
 /// "for the vision we are utilizing a separate model… configure the API for
@@ -192,7 +245,8 @@ pub fn vision_key_status(provider_id: String) -> Result<bool, String> {
 
 /// ROUND-61: the spawn-time env pairs for every noted vision provider
 /// ((env name, credential provider id)). Fused into the sidecar spawn loop
-/// alongside the fixed provider_key_env_targets.
+/// alongside provider_key_env_targets (dynamic since ROUND-82: builtins
+/// plus noted custom-provider ids).
 pub(crate) fn vision_env_targets() -> Vec<(String, String)> {
     vision_provider_ids()
         .into_iter()
@@ -201,6 +255,113 @@ pub(crate) fn vision_env_targets() -> Vec<(String, String)> {
             (vision_env_name(&slug), slug)
         })
         .collect()
+}
+
+// ── ROUND-82 (R82-B) — custom-provider keys survive app restarts ────────
+//
+// The defect (agent-ctx/research/models-providers-fixes.md §1.4.1): the
+// spawn-time injection list was the hardcoded 5-entry builtin array, so a
+// custom provider (prv_… slugs the owner creates in Settings) worked in the
+// session where its key was saved — store_provider_key wrote the credential
+// AND pushed it into the RUNNING sidecar's in-memory vault — and then died
+// with `409 no API key for provider 'prv_…'` on every restart after. The
+// cure mirrors the proven ROUND-61 vision pattern (same file, above)
+// exactly: a note file records provider ID SLUGS — never secrets, same
+// standing as vision-providers.txt — so the spawn loop can find them
+// without enumerating the whole credential store.
+
+/// ROUND-82 (R82-B): `~/.acute/custom-providers.txt` — ids only, never
+/// secrets (same standing as the vision note file).
+fn custom_provider_note_path() -> std::path::PathBuf {
+    dirs_or_home().join(".acute").join("custom-providers.txt")
+}
+
+/// ROUND-82 (R82-B): provider ids with a stored custom-provider key
+/// (deduped, slug-validated; junk/corrupt lines skipped, same hardening as
+/// vision_provider_ids — a hand-edited file never fails the spawn).
+pub(crate) fn custom_provider_ids() -> Vec<String> {
+    let Ok(text) = std::fs::read_to_string(custom_provider_note_path()) else {
+        return Vec::new();
+    };
+    let mut ids: Vec<String> = Vec::new();
+    for line in text.lines() {
+        let id = line.trim();
+        if id.is_empty() {
+            continue;
+        }
+        if let Err(_) = validate_provider_id(id) {
+            continue; // corrupt line — skip, never fail the spawn
+        }
+        if !ids.iter().any(|x| x == id) {
+            ids.push(id.to_string());
+        }
+    }
+    ids
+}
+
+/// ROUND-82 (R82-B): idempotent append — the custom twin of
+/// note_vision_provider, called by store_provider_key for NON-builtin ids
+/// only (BUILTIN_PROVIDER_IDS are already covered by the hardcoded half of
+/// the injection list; noting them would duplicate entries).
+fn note_custom_provider(provider_id: &str) {
+    let path = custom_provider_note_path();
+    if let Some(parent) = path.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    let mut ids = custom_provider_ids();
+    if !ids.iter().any(|x| x == provider_id) {
+        ids.push(provider_id.to_string());
+        let _ = std::fs::write(&path, ids.join("\n"));
+    }
+}
+
+/// ROUND-82 (R82-B): drop a provider's note line when its key is REMOVED or
+/// the provider deleted, so the spawn loop stops hunting a credential that
+/// no longer exists. The miss itself is harmless — injection skips absent
+/// keys silently — but custom providers get deleted by users (unlike vision
+/// pseudo-providers), and a stale line is avoidable noise. Missing or
+/// unreadable file = no-op; the rewrite happens only when the id was
+/// actually noted (keeps the file's mtime honest).
+// TODO(R82-follow-up): no call site exists yet — the Rust shell has no
+// key-removal or provider-delete Tauri command (store_provider_key rejects
+// empty keys, and deleting a provider flows through the sidecar's REST
+// route, DELETE /providers/:id in agent-core, which never touches Credential
+// Manager or this note file). Wire unnote_custom_provider into the
+// remove-key / delete-provider Tauri command when one lands; until then a
+// stale line only costs one skipped lookup at spawn.
+#[allow(dead_code)]
+fn unnote_custom_provider(provider_id: &str) {
+    let path = custom_provider_note_path();
+    let Ok(text) = std::fs::read_to_string(&path) else {
+        return; // missing file — nothing to unnote
+    };
+    let noted = text.lines().any(|line| line.trim() == provider_id);
+    if !noted {
+        return; // not in the file — no rewrite
+    }
+    let kept: Vec<String> = text
+        .lines()
+        .map(|line| line.trim().to_string())
+        .filter(|id| !id.is_empty() && id != provider_id)
+        .collect();
+    let _ = std::fs::write(&path, kept.join("\n"));
+}
+
+/// ROUND-82 (R82-B): the env var name for a custom provider — the TypeScript
+/// keyring's derivation replicated EXACTLY (agent-core/src/providers/
+/// registry.ts ProviderKeyring.envVarName:
+/// `ACUTE_PROVIDER_${id.toUpperCase().replace(/[^A-Za-z0-9]/g, "_")}`) so
+/// the sidecar's keyring.get(providerId) finds the very name the spawn loop
+/// injected: prv_my-gateway → ACUTE_PROVIDER_PRV_MY_GATEWAY.
+/// (vision_env_name above is the same math applied to the "<id>-vision"
+/// slugs; custom ids are plain provider ids, so no slug form.)
+fn custom_provider_env_name(provider_id: &str) -> String {
+    let upper: String = provider_id
+        .to_uppercase()
+        .chars()
+        .map(|c| if c.is_ascii_alphanumeric() { c } else { '_' })
+        .collect();
+    format!("ACUTE_PROVIDER_{upper}")
 }
 
 /// Provider ids are slugs everywhere in the system (API.md §8.2); enforce that
@@ -261,6 +422,16 @@ pub fn store_provider_key(app: AppHandle, provider_id: String, key: String) -> R
     // Best-effort retirement of the pre-R55 form — the canonical write is
     // already durable, so a failure here changes nothing for the user.
     let _ = crate::wincred::delete(&legacy_target(&provider_id));
+    // ROUND-82 (R82-B): note the id so the NEXT spawn re-injects this key —
+    // pre-R82 the injection list was hardcoded and a custom provider's key
+    // died on the first restart after saving (`409 no API key for
+    // provider 'prv_…'`). Builtins are skipped: the hardcoded half of
+    // provider_key_env_targets already covers them, and a note line would
+    // duplicate the entry. Best-effort like the retirement above — the
+    // credential itself is already durable.
+    if !BUILTIN_PROVIDER_IDS.contains(&provider_id.as_str()) {
+        note_custom_provider(&provider_id);
+    }
 
     if let Some((port, token)) = sidecar::endpoint(&app) {
         let body = serde_json::json!({
@@ -297,7 +468,10 @@ pub fn provider_key_status(provider_id: String) -> Result<bool, String> {
 
 #[cfg(test)]
 mod tests {
-    use super::{canonical_target, legacy_target, validate_provider_id};
+    use super::{
+        canonical_target, custom_provider_env_name, legacy_target, validate_provider_id,
+        BUILTIN_PROVIDER_IDS,
+    };
 
     /// The R55 contract: reads/writes target the launcher's cmdkey form,
     /// with the pre-R55 keyring form as the legacy fallback. These two
@@ -327,5 +501,32 @@ mod tests {
         assert!(validate_provider_id("").is_err());
         assert!(validate_provider_id("OpenRouter").is_err());
         assert!(validate_provider_id("open router").is_err());
+    }
+
+    /// ROUND-82 (R82-B): the custom-provider env-name derivation must be
+    /// byte-identical to the TypeScript keyring's ProviderKeyring.envVarName
+    /// (`ACUTE_PROVIDER_${id.toUpperCase().replace(/[^A-Za-z0-9]/g, "_")}` —
+    /// agent-core/src/providers/registry.ts) — that is what makes the
+    /// sidecar's keyring.get("prv_…") find the value the spawn loop
+    /// injected. The five builtin rows pin the derivation to the exact env
+    /// names the pre-R82 hardcoded array used, so the dynamic list can
+    /// never drift from it, and BUILTIN_PROVIDER_IDS (store_provider_key's
+    /// don't-note skip list) can never drift from the array.
+    #[test]
+    fn custom_env_names_match_the_typescript_keyring() {
+        assert_eq!(
+            custom_provider_env_name("prv_my-gateway"),
+            "ACUTE_PROVIDER_PRV_MY_GATEWAY"
+        );
+        for (id, env_name) in [
+            ("openrouter", "ACUTE_PROVIDER_OPENROUTER"),
+            ("nvidia", "ACUTE_PROVIDER_NVIDIA"),
+            ("openrouter-slot2", "ACUTE_PROVIDER_OPENROUTER_SLOT2"),
+            ("openrouter-slot3", "ACUTE_PROVIDER_OPENROUTER_SLOT3"),
+            ("openrouter-slot4", "ACUTE_PROVIDER_OPENROUTER_SLOT4"),
+        ] {
+            assert_eq!(custom_provider_env_name(id), env_name);
+            assert!(BUILTIN_PROVIDER_IDS.contains(&id));
+        }
     }
 }

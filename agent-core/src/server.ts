@@ -25,6 +25,7 @@ import {
   persistTurnError,
   runSingleAgentTurn,
   runStreamedAgentTurn,
+  type TurnModelOverride,
 } from "./agents/runtime.js";
 // ROUND-66 (R66-2-c, C1): the post-turn CONTEXT-FREE DEBUG ANALYST — a
 // fresh model call (no tools, no history of its own) that receives the
@@ -39,6 +40,7 @@ import {
   fetchProviderModels,
   listProviderViews,
   resolveProvider,
+  testModelResponse,
   testProviderConnection,
 } from "./providers/registry.js";
 import {
@@ -114,6 +116,8 @@ import {
   RECOMMENDED_MODEL_IDS,
   SUBAGENT_DEFAULT_MODEL_ID,
   deleteModel,
+  getModel,
+  listAllModels,
   listModels,
   updateModel,
   upsertModel,
@@ -528,10 +532,58 @@ function readModelScalarFields(
   if (raw.supportsVision !== undefined && typeof raw.supportsVision !== "boolean") {
     return { ok: false, field: "supportsVision" };
   }
+  // ROUND-82 (R82): the tri-state capability flags — boolean OR null
+  // (null = reset to unknown, the numeric fields' null-clearing contract).
+  // A non-boolean-non-null type 400s (never a silent drop).
+  for (const field of ["supportsTools", "supportsAudio", "supportsVideo"] as const) {
+    if (
+      raw[field] !== undefined &&
+      raw[field] !== null &&
+      typeof raw[field] !== "boolean"
+    ) {
+      return { ok: false, field };
+    }
+  }
   return { ok: true };
 }
 
 // ── ROUND-50 (R50-c1): composer send-route field validation ───────────────────
+
+/**
+ * ROUND-82 (R82, §2.4.5): shape check for the orchestration PATCH's
+ * subagentModel object form — {providerId: string, modelId: string}, both
+ * non-blank. Anything else (wrong types, missing fields) is NOT the object
+ * form and falls through to the legacy string/null branches.
+ */
+function isSubagentModelRefBody(value: unknown): value is { providerId: unknown; modelId: unknown } {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return false;
+  const record = value as Record<string, unknown>;
+  return "providerId" in record && "modelId" in record;
+}
+
+/** ROUND-82: normalize the validated object form (trim + type-check the
+ * two fields; blank strings 400 via the settings validator downstream —
+ * this returns the typed shape). */
+function normalizeSubagentModelRef(
+  value: { providerId: unknown; modelId: unknown },
+): { providerId: string; modelId: string } {
+  return {
+    providerId: typeof value.providerId === "string" ? value.providerId.trim() : "",
+    modelId: typeof value.modelId === "string" ? value.modelId.trim() : "",
+  };
+}
+
+/** ROUND-82 (R82): read a tri-state capability field — boolean sets, null
+ * clears to unknown, anything else (incl. absent) → undefined (keep). The
+ * scalar gate above has already 400'd wrong types, so this is a pure
+ * passthrough filter. */
+function readTriStateField(
+  value: unknown,
+): boolean | null | undefined {
+  if (value === null) return null;
+  if (typeof value === "boolean") return value;
+  return undefined;
+}
 
 /** Max attachments per send (mirrors /attachments/read's path cap). */
 const MAX_ATTACHMENTS_PER_SEND = 20;
@@ -546,6 +598,32 @@ const MAX_ATTACHMENT_TEXT_CHARS = 128 * 1024;
 export interface ComposerSendFields {
   thinkingLevel?: ThinkingLevel;
   attachments?: MessageAttachment[];
+}
+
+/**
+ * ROUND-82 (R82, the owner's custom-provider routing fix): read + validate
+ * the send's OPTIONAL providerId (the composer's provider-grouped model
+ * picker). Absent/null → no override (the agent's provider applies — the
+ * pre-R82 behavior); a non-blank string must name a KNOWN provider row
+ * (the same providerExists validation agent edits use — an unknown id gets
+ * the honest early 400 instead of a confusing downstream 409). Shared by
+ * BOTH send routes.
+ */
+function readOverrideProviderId(
+  db: SqliteDatabase,
+  raw: Record<string, unknown>,
+): { value: string | undefined; error?: string } {
+  const value = raw.providerId;
+  if (value === undefined || value === null) return { value: undefined };
+  if (typeof value !== "string") {
+    return { value: undefined, error: "providerId must be a string when present" };
+  }
+  const trimmed = value.trim();
+  if (trimmed === "") return { value: undefined };
+  if (!providerExists(db, trimmed)) {
+    return { value: undefined, error: `no provider with id '${trimmed}'` };
+  }
+  return { value: trimmed };
 }
 
 /**
@@ -1421,10 +1499,22 @@ export function buildServer(options: ServerOptions): FastifyInstance {
         }
         const scalars = readModelScalarFields(raw);
         if (!scalars.ok) {
+          // ROUND-82: the tri-state capability fields accept boolean OR null
+          // (null = reset to unknown); the legacy fields stay boolean-only.
+          const triState =
+            scalars.field === "supportsTools" ||
+            scalars.field === "supportsAudio" ||
+            scalars.field === "supportsVideo";
           return reply.code(400).send(
             errorBody(
               "VALIDATION",
-              `${scalars.field} must be ${scalars.field === "displayName" ? "a string" : "a boolean"}`,
+              `${scalars.field} must be ${
+                triState
+                  ? "a boolean or null (unknown)"
+                  : scalars.field === "displayName"
+                    ? "a string"
+                    : "a boolean"
+              }`,
               { field: `body.${scalars.field}` },
             ),
           );
@@ -1439,6 +1529,11 @@ export function buildServer(options: ServerOptions): FastifyInstance {
           // wipes supportsThinking/hidden).
           supportsThinking: typeof raw.supportsThinking === "boolean" ? raw.supportsThinking : undefined,
           supportsVision: typeof raw.supportsVision === "boolean" ? raw.supportsVision : undefined,
+          // ROUND-82 (R82): the tri-state capability flags — boolean sets,
+          // null clears to unknown, absent keeps (the R50-d contract).
+          supportsTools: readTriStateField(raw.supportsTools),
+          supportsAudio: readTriStateField(raw.supportsAudio),
+          supportsVideo: readTriStateField(raw.supportsVideo),
           hidden: typeof raw.hidden === "boolean" ? raw.hidden : undefined,
         });
         return reply.code(201).send(model);
@@ -1466,10 +1561,20 @@ export function buildServer(options: ServerOptions): FastifyInstance {
         }
         const scalars = readModelScalarFields(raw);
         if (!scalars.ok) {
+          const triState =
+            scalars.field === "supportsTools" ||
+            scalars.field === "supportsAudio" ||
+            scalars.field === "supportsVideo";
           return reply.code(400).send(
             errorBody(
               "VALIDATION",
-              `${scalars.field} must be ${scalars.field === "displayName" ? "a string" : "a boolean"}`,
+              `${scalars.field} must be ${
+                triState
+                  ? "a boolean or null (unknown)"
+                  : scalars.field === "displayName"
+                    ? "a string"
+                    : "a boolean"
+              }`,
               { field: `body.${scalars.field}` },
             ),
           );
@@ -1479,6 +1584,23 @@ export function buildServer(options: ServerOptions): FastifyInstance {
         Object.assign(patch, numerics.values);
         if (typeof raw.supportsThinking === "boolean") patch.supportsThinking = raw.supportsThinking;
         if (typeof raw.supportsVision === "boolean") patch.supportsVision = raw.supportsVision;
+        // ROUND-82 (R82): tri-state PATCH — boolean sets, null clears to
+        // unknown, absent keeps.
+        if (raw.supportsTools !== undefined) {
+          if (raw.supportsTools === null || typeof raw.supportsTools === "boolean") {
+            patch.supportsTools = raw.supportsTools;
+          }
+        }
+        if (raw.supportsAudio !== undefined) {
+          if (raw.supportsAudio === null || typeof raw.supportsAudio === "boolean") {
+            patch.supportsAudio = raw.supportsAudio;
+          }
+        }
+        if (raw.supportsVideo !== undefined) {
+          if (raw.supportsVideo === null || typeof raw.supportsVideo === "boolean") {
+            patch.supportsVideo = raw.supportsVideo;
+          }
+        }
         if (typeof raw.hidden === "boolean") patch.hidden = raw.hidden;
         const model = updateModel(db, id, patch);
         if (model === undefined) {
@@ -1495,6 +1617,107 @@ export function buildServer(options: ServerOptions): FastifyInstance {
         return reply.code(204).send();
       });
 
+      // ROUND-82 (R82, owner: "a test button on the models page … check if
+      // the model is working properly or not"): the PER-MODEL test — a real
+      // 64-token completion against the row's provider, graded (http / auth /
+      // modelAccepted / nonEmptyContent) with the reply preview and raw
+      // provider error bodies (the EOL'd-NIM 410 case shows verbatim). The
+      // same key-pool slot contract as POST /providers/:id/test (R47-b);
+      // a probe that RAN and got a NO is HTTP 200 {ok:false} — a successful
+      // test call, not a server error.
+      scope.post("/models/:id/test", async (request, reply) => {
+        const { id } = request.params as Record<string, string>;
+        const modelRow = getModel(db, id);
+        if (modelRow === undefined) {
+          return reply.code(404).send(errorBody("NOT_FOUND", `no model with id ${id}`));
+        }
+        const provider = resolveProvider(db, modelRow.providerId);
+        if (provider === undefined) {
+          return reply.code(409).send(
+            errorBody(
+              "CONFLICT",
+              `model '${modelRow.modelId}' references provider '${modelRow.providerId}' which no longer exists — remove or re-add the model`,
+              { providerId: modelRow.providerId, modelId: modelRow.modelId },
+            ),
+          );
+        }
+        if (provider.baseUrl === null) {
+          return reply.code(409).send(
+            errorBody(
+              "CONFLICT",
+              `provider '${provider.id}' has no baseUrl configured — set one before testing`,
+              { providerId: provider.id },
+            ),
+          );
+        }
+        // Body: optional { slot } — the R47-b key-pool contract verbatim.
+        let slot: number | undefined;
+        const body: unknown = request.body;
+        if (body !== undefined && body !== null) {
+          if (typeof body !== "object" || Array.isArray(body)) {
+            return reply
+              .code(400)
+              .send(errorBody("VALIDATION", "body must be a JSON object", { field: "body" }));
+          }
+          const raw = body as Record<string, unknown>;
+          const rawSlot = raw.slot;
+          if (rawSlot !== undefined) {
+            if (
+              typeof rawSlot !== "number" ||
+              !Number.isInteger(rawSlot) ||
+              rawSlot < 0 ||
+              rawSlot > 31
+            ) {
+              return reply.code(400).send(
+                errorBody("VALIDATION", "slot must be an integer between 0 and 31", {
+                  field: "body.slot",
+                }),
+              );
+            }
+            slot = rawSlot;
+          }
+        }
+        let keyOverride: string | undefined;
+        if (slot === undefined) {
+          if (!keyring.has(provider.id)) {
+            return reply.code(409).send(
+              errorBody(
+                "CONFLICT",
+                `no API key stored for provider '${provider.id}' — save one in Settings → Models & Providers before testing`,
+                { providerId: provider.id },
+              ),
+            );
+          }
+        } else {
+          keyOverride = keyring.getSlot(provider.id, slot);
+          if (keyOverride === undefined) {
+            return reply.code(409).send(
+              errorBody(
+                "CONFLICT",
+                `no API key stored for provider '${provider.id}' slot ${slot} — save one in Settings → Models & Providers`,
+                { providerId: provider.id, slot },
+              ),
+            );
+          }
+        }
+        try {
+          return await testModelResponse(keyring, provider, modelRow.modelId, keyOverride);
+        } catch (error) {
+          if (error instanceof ProviderTestError) {
+            // Standalone-safety no-key guard — the route pre-checked, so
+            // this is belt-and-suspenders; same 409 shape.
+            return reply.code(409).send(
+              errorBody("CONFLICT", error.message, { providerId: provider.id }),
+            );
+          }
+          const message =
+            error instanceof Error ? error.message : `model '${id}' test failed`;
+          return reply
+            .code(502)
+            .send(errorBody("PROVIDER_ERROR", message, { providerId: provider.id, modelId: modelRow.modelId }));
+        }
+      });
+
       // ROUND-47 (R47-b): the STATIC model catalog for every picker. The
       // frontend hand-copied this 47-entry list into two components — a
       // guaranteed drift trap (SubAgentsTab already diverged). One route,
@@ -1507,6 +1730,15 @@ export function buildServer(options: ServerOptions): FastifyInstance {
           subagentDefaultModelId: SUBAGENT_DEFAULT_MODEL_ID,
           recommendedModelIds: RECOMMENDED_MODEL_IDS,
         };
+      });
+
+      // ROUND-82 (R82, §2.4.5 — the NVIDIA sub-agent gap): every CONFIGURED
+      // model row across all providers. The Sub-agents picker pairs this
+      // with the static catalog so a NIM/custom row can be picked as the
+      // sub-agent model (previously impossible — the picker was
+      // catalog-only, and catalog validation rejected non-catalog ids).
+      scope.get("/models/configured", async () => {
+        return { models: listAllModels(db) };
       });
 
       // ROUND-47 (R47-b): the old GET /providers/:id/key (round-19 "view/copy")
@@ -2711,7 +2943,16 @@ export function buildServer(options: ServerOptions): FastifyInstance {
             }),
           );
         }
-        const providerId = agent.providerId;
+        // ROUND-82: the meter honors the composer's per-send provider too —
+        // ?providerId= (the picker's provider) overrides the agent's, so the
+        // window/pricing lookups key on the provider that will actually
+        // serve the next send. Unknown ids fall back to the agent's (the
+        // meter never 400s; a bad id simply meters the default).
+        const queryProviderId =
+          typeof query.providerId === "string" && query.providerId.trim() !== ""
+            ? query.providerId.trim()
+            : undefined;
+        const providerId = queryProviderId ?? agent.providerId;
         const model =
           typeof query.model === "string" && query.model.trim() !== ""
             ? query.model.trim()
@@ -3548,8 +3789,15 @@ export function buildServer(options: ServerOptions): FastifyInstance {
             ...(typeof raw.perKeyLimit === "number" ? { perKeyLimit: raw.perKeyLimit } : {}),
             // ROUND-43 (R43-5): temporary sub-agent model override — string id
             // (catalog-validated in settings.ts) or null to re-inherit.
+            // ROUND-82 (R82, §2.4.5): the provider-scoped {providerId,
+            // modelId} object form — a NIM/custom configured row can be the
+            // sub-agent model (validated in settings.ts: provider exists,
+            // explicit tools=false rejects).
             ...(typeof raw.subagentModel === "string" ? { subagentModel: raw.subagentModel } : {}),
             ...(raw.subagentModel === null ? { subagentModel: null } : {}),
+            ...(isSubagentModelRefBody(raw.subagentModel)
+              ? { subagentModel: normalizeSubagentModelRef(raw.subagentModel) }
+              : {}),
             // ROUND-52 (R52-b): the child-supervisor knobs (heartbeat cadence
             // + stall threshold) — validated + clamped in settings.ts.
             ...(typeof raw.childWatchdogMs === "number" ? { childWatchdogMs: raw.childWatchdogMs } : {}),
@@ -3822,6 +4070,22 @@ export function buildServer(options: ServerOptions): FastifyInstance {
         }
         const modelOverride =
           typeof raw.model === "string" && raw.model.trim() !== "" ? raw.model : undefined;
+        // ROUND-82 (R82, the owner's custom-provider routing fix): the send's
+        // PROVIDER — the composer's picker is provider-grouped, so the
+        // override carries the provider the model was picked under. Absent
+        // (old clients, no override) → the agent's provider, exactly the
+        // pre-R82 behavior. Unknown ids get the honest early 400 (the same
+        // providerExists validation agent edits use).
+        const overrideProviderId = readOverrideProviderId(db, raw);
+        if (overrideProviderId.error !== undefined) {
+          return reply
+            .code(400)
+            .send(errorBody("VALIDATION", overrideProviderId.error, { field: "body.providerId" }));
+        }
+        const turnModelOverride =
+          modelOverride === undefined
+            ? undefined
+            : { model: modelOverride, ...(overrideProviderId.value !== undefined ? { providerId: overrideProviderId.value } : {}) };
         // ROUND-50 (R50-c1): the composer's per-send fields — thinking level
         // (reasoning.effort, not persisted) and attachments (persisted on the
         // message.user payload). Validation is shared with the streamed route.
@@ -3832,7 +4096,7 @@ export function buildServer(options: ServerOptions): FastifyInstance {
           { db, keyring, chat },
           id,
           content,
-          modelOverride,
+          turnModelOverride,
           undefined,
           undefined,
           composer.value.thinkingLevel,
@@ -3883,6 +4147,28 @@ export function buildServer(options: ServerOptions): FastifyInstance {
         }
         const modelOverride =
           typeof raw.model === "string" && raw.model.trim() !== "" ? raw.model : undefined;
+        // ROUND-82: the send's provider (see the sync route's comment — the
+        // same validation, shared by both routes).
+        const overrideProviderId = readOverrideProviderId(db, raw);
+        if (overrideProviderId.error !== undefined) {
+          return reply
+            .code(400)
+            .send(errorBody("VALIDATION", overrideProviderId.error, { field: "body.providerId" }));
+        }
+        const turnModelOverride =
+          modelOverride === undefined
+            ? undefined
+            : { model: modelOverride, ...(overrideProviderId.value !== undefined ? { providerId: overrideProviderId.value } : {}) };
+        // ROUND-82 (R82): the CURRENT turn's override for the queue-
+        // continuation loop — starts as the original send's; each
+        // continuation adopts the consumed queued message's OWN override
+        // (the picker state when it was queued) when it carries one, else
+        // keeps the running override (the pre-R82 behavior was to drop the
+        // override entirely and fall back to the agent default). Declared
+        // OUTSIDE the try so the debug-analyst phase below reads the LAST
+        // turn's override (it mirrors the provider that actually served the
+        // stream's final turn).
+        let currentModelOverride: TurnModelOverride | undefined = turnModelOverride;
         // ROUND-50 (R50-c1): the composer's per-send fields (same validation
         // as the sync route — see the comment there).
         const composer = readComposerSendFields(raw, reply);
@@ -3972,12 +4258,20 @@ export function buildServer(options: ServerOptions): FastifyInstance {
               });
               return;
             }
-            const provider = resolveProvider(db, agent.providerId);
+            // ROUND-82: the debug run mirrors the LAST turn's provider too —
+            // an override that named a provider (the custom-model case)
+            // debugs against THAT provider, not the agent's
+            // (currentModelOverride tracks the queue-continuation loop).
+            const debugProviderId =
+              typeof currentModelOverride === "object" && currentModelOverride.providerId !== undefined
+                ? currentModelOverride.providerId
+                : agent.providerId;
+            const provider = resolveProvider(db, debugProviderId);
             if (provider === undefined || provider.baseUrl === null) {
               send({
                 type: "debug-error",
                 sessionId: id,
-                message: `debug analyst: provider '${agent.providerId}' is not resolvable`,
+                message: `debug analyst: provider '${debugProviderId}' is not resolvable`,
               });
               return;
             }
@@ -3990,8 +4284,15 @@ export function buildServer(options: ServerOptions): FastifyInstance {
               });
               return;
             }
-            const model =
-              modelOverride && modelOverride.trim() !== "" ? modelOverride.trim() : agent.model;
+            // ROUND-82: narrow the union (string | {model, providerId}) —
+            // a bare-string override means the model alone (pre-R82 wire).
+            const debugOverrideModel =
+              typeof currentModelOverride === "object"
+                ? currentModelOverride.model
+                : typeof currentModelOverride === "string"
+                  ? currentModelOverride
+                  : undefined;
+            const model = debugOverrideModel ?? agent.model;
             // (d) The live marker — the frontend opens the dedicated
             // streaming section (loading animation while the analyst works).
             send({ type: "debug-start", sessionId: id });
@@ -4060,6 +4361,8 @@ export function buildServer(options: ServerOptions): FastifyInstance {
           let continuations = 0;
           let currentContent = content;
           let currentAttachments = composer.value.attachments;
+          // ROUND-82: currentModelOverride is declared above the try (the
+          // debug-analyst phase reads the LAST turn's override through it).
           // (while(true) — the loop's exits are the outcome branches below;
           // the queue-continue `continue` is the only loop-around.)
           while (true) {
@@ -4068,7 +4371,7 @@ export function buildServer(options: ServerOptions): FastifyInstance {
               id,
               currentContent,
               send,
-              modelOverride,
+              currentModelOverride,
               abort.signal,
               composer.value.thinkingLevel,
               currentAttachments,
@@ -4119,6 +4422,25 @@ export function buildServer(options: ServerOptions): FastifyInstance {
                   firstPayload !== null && Array.isArray(firstPayload.attachments)
                     ? (firstPayload.attachments as MessageAttachment[])
                     : undefined;
+                // ROUND-82 (R82): the consumed entry's OWN override wins for
+                // its continuation turn (the user's picker state when the
+                // message was queued — fresher intent than the original
+                // send's); absent → the running override stays (the original
+                // send's).
+                const queuedOverrideModel =
+                  firstPayload !== null && typeof firstPayload.model === "string"
+                    ? firstPayload.model.trim()
+                    : "";
+                if (queuedOverrideModel !== "") {
+                  const queuedOverrideProviderId =
+                    firstPayload !== null && typeof firstPayload.providerId === "string"
+                      ? firstPayload.providerId.trim()
+                      : "";
+                  currentModelOverride =
+                    queuedOverrideProviderId !== ""
+                      ? { model: queuedOverrideModel, providerId: queuedOverrideProviderId }
+                      : { model: queuedOverrideModel };
+                }
                 continue;
               }
               // R66-2-c: the debug analyst runs AFTER the outcome handling
@@ -4321,9 +4643,28 @@ export function buildServer(options: ServerOptions): FastifyInstance {
           );
         }
 
+        // ROUND-82 (R82): the queue entry's OWN override — the picker state
+        // at queue time. Same validation as the send routes (unknown
+        // provider → honest 400; the queued follow-up must not silently
+        // route to the agent default the way it did pre-R82).
+        const queuedModelOverride =
+          typeof raw.model === "string" && raw.model.trim() !== ""
+            ? raw.model.trim()
+            : undefined;
+        const queuedOverrideProviderId = readOverrideProviderId(db, raw);
+        if (queuedOverrideProviderId.error !== undefined) {
+          return reply.code(400).send(
+            errorBody("VALIDATION", queuedOverrideProviderId.error, { field: "body.providerId" }),
+          );
+        }
+
         const queued = appendQueuedMessage(db, id, {
           content,
           ...(composer.value.attachments !== undefined ? { attachments: composer.value.attachments } : {}),
+          ...(queuedModelOverride !== undefined ? { model: queuedModelOverride } : {}),
+          ...(queuedOverrideProviderId.value !== undefined
+            ? { providerId: queuedOverrideProviderId.value }
+            : {}),
         });
         // The live stream's chip: the queued frame rides the registered
         // notify (the SSE send captured at registerTurn). False = no live

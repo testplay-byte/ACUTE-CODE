@@ -461,6 +461,10 @@ export function Composer({
   };
 
   const effectiveModel = modelOverride?.model ?? agent?.model ?? null;
+  // ROUND-82 (R82): the override's provider — the donut's meter keys its
+  // window/pricing lookups on the provider that will serve the next send
+  // (override ?? the agent's).
+  const effectiveProviderId = modelOverride?.providerId ?? agent?.providerId ?? null;
 
   return (
     <div
@@ -590,6 +594,7 @@ export function Composer({
           <ContextDonut
             sessionId={sessionId}
             model={effectiveModel}
+            providerId={effectiveProviderId}
             transcriptLength={transcriptLength}
             liveTick={liveTick}
             streaming={streaming}

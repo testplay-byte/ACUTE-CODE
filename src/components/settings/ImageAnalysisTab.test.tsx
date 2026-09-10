@@ -138,6 +138,10 @@ function modelRowFactory(m: {
     outputPricePerMtok: 0,
     supportsThinking: false,
     supportsVision: m.supportsVision,
+    // ROUND-82: the tri-state capability flags (null = unknown).
+    supportsTools: true,
+    supportsAudio: null,
+    supportsVideo: null,
     hidden: false,
     sortOrder: 0,
     createdAt: "2026-01-01T00:00:00.000Z",

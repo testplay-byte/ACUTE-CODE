@@ -2,7 +2,8 @@ import { randomUUID } from "node:crypto";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterAll, beforeEach, describe, expect, it } from "vitest";
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { FastifyInstance, LightMyRequestResponse } from "fastify";
 
 /**
  * ROUND-45 security round (audit Track 1, the three owner-deferred holes):
@@ -25,6 +26,10 @@ import {
 } from "../src/approvals";
 import { scrubSearchQuery } from "../src/tools/web";
 import { openDatabase, type SqliteDatabase } from "../src/storage/db";
+import { ProviderKeyring } from "../src/providers/registry";
+import { createProviderRecord } from "../src/storage/providers";
+import { upsertModel } from "../src/storage/models";
+import { buildServer } from "../src/server";
 
 let tempDir = "";
 let db: SqliteDatabase;
@@ -301,5 +306,118 @@ describe("P0-5: scrubSearchQuery (the query never exfiltrates keys)", () => {
     const out = scrubSearchQuery("is github_pat_TESTFIXTURE-PURGED still active");
     expect(out).toContain("[redacted]");
     expect(out).not.toContain("github_pat_");
+  });
+});
+
+/* ── ROUND-82 (R82): the per-model test probe's no-key-leak invariant ─────── */
+
+describe("R82: POST /models/:id/test never leaks key material (any path, any shape)", () => {
+  // The security-file pin for the R82 model-test route: whatever the probe
+  // surfaces — a transport 502, a provider error body that ECHOES the key,
+  // or the model's reply content quoting a foreign key — the raw secret
+  // never reaches the response. (Route-contract coverage lives in
+  // r82-model-test.test.ts; this block pins the INVARIANT.)
+  const TOKEN = "test-token-r45-r82";
+  // Full sk-/nvapi-/github_pat_ shapes (≥16 chars past the prefix) so both
+  // the exact-value scrub and the shape regexes are exercised.
+  const KEY = "sk-or-vtest-r45sec-2468101214";
+  const GW_ID = "prv_gw";
+  const GW_BASE = "https://gw.example.test/v1";
+  let app: FastifyInstance;
+
+  beforeEach(() => {
+    createProviderRecord(db, { id: GW_ID, name: "Test Gateway", baseUrl: GW_BASE });
+    app = buildServer({
+      token: TOKEN,
+      db,
+      keyring: new ProviderKeyring({ ACUTE_PROVIDER_PRV_GW: KEY }),
+    });
+  });
+
+  afterEach(async () => {
+    vi.unstubAllGlobals();
+    await app.close();
+  });
+
+  async function authInject(options: {
+    method: "POST";
+    url: string;
+    payload?: Record<string, unknown>;
+  }): Promise<LightMyRequestResponse> {
+    return (await app.inject({
+      ...options,
+      headers: { authorization: `Bearer ${TOKEN}` },
+    })) as LightMyRequestResponse;
+  }
+
+  it("a transport failure whose message QUOTES the key maps to a scrubbed 502", async () => {
+    const rowId = upsertModel(db, GW_ID, { modelId: "test/gw-model" }).id;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => {
+        throw new Error(`connect ECONNREFUSED ${KEY}`);
+      }),
+    );
+    const response = await authInject({
+      method: "POST",
+      url: `/api/v1/models/${rowId}/test`,
+      payload: {},
+    });
+    expect(response.statusCode).toBe(502);
+    expect(response.body).not.toContain(KEY);
+    expect(response.body).toContain("***");
+  });
+
+  it("a provider error body that ECHOES the key is masked in the ok:false reason", async () => {
+    const rowId = upsertModel(db, GW_ID, { modelId: "test/gw-model" }).id;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(
+        async () =>
+          new Response(
+            JSON.stringify({ error: { message: `unauthorized: key ${KEY} rejected` } }),
+            { status: 401 },
+          ),
+      ),
+    );
+    const response = await authInject({
+      method: "POST",
+      url: `/api/v1/models/${rowId}/test`,
+      payload: {},
+    });
+    expect(response.statusCode).toBe(200);
+    expect(response.json().ok).toBe(false);
+    expect(response.json().reason).toContain("***");
+    expect(response.body).not.toContain(KEY);
+  });
+
+  it("the reply content preview masks foreign key SHAPES (nvapi-/github_pat_)", async () => {
+    const rowId = upsertModel(db, GW_ID, { modelId: "test/gw-model" }).id;
+    const nvapi = "nvapi-foreign-secret-135791113";
+    const pat = "github_pat_foreign-secret-13579";
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(
+        async () =>
+          new Response(
+            JSON.stringify({
+              choices: [{ message: { content: `secrets: ${nvapi} and ${pat}` } }],
+            }),
+            { status: 200 },
+          ),
+      ),
+    );
+    const response = await authInject({
+      method: "POST",
+      url: `/api/v1/models/${rowId}/test`,
+      payload: {},
+    });
+    expect(response.statusCode).toBe(200);
+    expect(response.json().ok).toBe(true);
+    // Neither foreign shape survives; the masked forms do.
+    expect(response.body).not.toContain(nvapi);
+    expect(response.body).not.toContain(pat);
+    expect(response.json().contentPreview).toContain("nvapi-***");
+    expect(response.json().contentPreview).toContain("github_pat_***");
   });
 });

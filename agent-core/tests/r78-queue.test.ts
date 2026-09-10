@@ -46,6 +46,21 @@ vi.mock("ai", () => ({
   stepCountIs: (count: number) => ({ type: "stepCount", count }),
   jsonSchema: <T>(schema: T) => schema,
 }));
+// ROUND-82 (R82): the chat-completions client factory is ALSO mocked (the
+// chat-format.test.ts pattern) so the LanguageModel handed to the mocked
+// streamText is a plain object — the queue-continuation provider-routing
+// pins below assert WHICH provider row each turn's client was built from
+// (name + baseURL) instead of SDK internals.
+const createOpenAICompatibleMock = vi.hoisted(() =>
+  // Typed with the provider-row argument so mock.calls[0][0] is indexable
+  // (the routing pins below assert WHICH row built each turn's client).
+  vi.fn((_row: { name: string; baseURL: string }) => ({
+    chatModel: (model: string) => ({ kind: "openai-compatible", model }),
+  })),
+);
+vi.mock("@ai-sdk/openai-compatible", () => ({
+  createOpenAICompatible: createOpenAICompatibleMock,
+}));
 
 import {
   assembleHistory,
@@ -63,6 +78,7 @@ import {
   listUndeliveredQueuedMessages,
 } from "../src/storage/sessions";
 import { createAgent } from "../src/storage/agents";
+import { createProviderRecord } from "../src/storage/providers";
 import { createProject } from "../src/storage/projects";
 import {
   getTurnController,
@@ -76,6 +92,12 @@ import { buildServer } from "../src/server";
 
 const TOKEN = "test-token-r78q";
 const KEY = "sk-or-vtest-r78q";
+// ROUND-82 (R82): a second provider + key so the queued-override tests can
+// route a continuation turn somewhere OTHER than the agent's openrouter.
+const GW_KEY = "sk-gw-vtest-r78q";
+const GW_ID = "prv_gw";
+const GW_BASE = "https://gw.example.test/v1";
+const GW_MODEL = "test/gw-model";
 
 let tempDir = "";
 let db: SqliteDatabase;
@@ -84,13 +106,20 @@ let app: FastifyInstance;
 beforeEach(() => {
   if (tempDir === "") tempDir = mkdtempSync(join(tmpdir(), "acute-r78q-"));
   db = openDatabase(join(tempDir, `${randomUUID()}.db`));
+  // ROUND-82: the custom provider the queued override names (the Settings
+  // "Add provider" shape — a real row with a real baseUrl).
+  createProviderRecord(db, { id: GW_ID, name: "Queue Gateway", baseUrl: GW_BASE });
   app = buildServer({
     token: TOKEN,
     db,
-    keyring: new ProviderKeyring({ ACUTE_PROVIDER_OPENROUTER: KEY }),
+    keyring: new ProviderKeyring({
+      ACUTE_PROVIDER_OPENROUTER: KEY,
+      ACUTE_PROVIDER_PRV_GW: GW_KEY,
+    }),
   });
   streamTextMock.mockReset();
   generateTextMock.mockReset();
+  createOpenAICompatibleMock.mockClear();
 });
 
 afterEach(async () => {
@@ -712,5 +741,176 @@ describe("R78: turn-end continuation on the streamed route", () => {
       "message.user",
       "message.assistant",
     ]);
+  });
+});
+
+/* ── ROUND-82 (R82): queued messages carry their OWN model/providerId ────── */
+
+describe("R78 + R82: queued messages carry their own per-send override", () => {
+  it("appendQueuedMessage stores the override pair in the payload — blank values are omitted", () => {
+    const { sessionId } = makeSession("R82-Queue-Shape");
+    const queued = appendQueuedMessage(db, sessionId, {
+      content: "queue me on the gateway",
+      model: GW_MODEL,
+      providerId: GW_ID,
+    });
+    expect(queued.type).toBe("message.queued");
+    const payload = queued.payload as Record<string, unknown>;
+    expect(payload.content).toBe("queue me on the gateway");
+    // ROUND-82: the picker state at queue time rides the payload (the
+    // queue-continuation loop reads it when the entry is consumed).
+    expect(payload.model).toBe(GW_MODEL);
+    expect(payload.providerId).toBe(GW_ID);
+
+    // A plain queue entry (no override) carries NEITHER field — the
+    // continuation then falls back to the running override.
+    const plain = appendQueuedMessage(db, sessionId, {
+      content: "queue me plainly",
+      model: "   ",
+      providerId: "",
+    });
+    const plainPayload = plain.payload as Record<string, unknown>;
+    expect(plainPayload.model).toBeUndefined();
+    expect(plainPayload.providerId).toBeUndefined();
+  });
+
+  it("the queue POST accepts {model, providerId} — the payload event carries them; an unknown provider 400s", async () => {
+    const sessionId = await makeSessionViaApi();
+    const controller = new AbortController();
+    registerTurn(sessionId, controller, () => undefined);
+    try {
+      const response = await authInject({
+        method: "POST",
+        url: `/api/v1/sessions/${sessionId}/queue`,
+        payload: { content: "while you work, use the gateway", model: GW_MODEL, providerId: GW_ID },
+      });
+      expect(response.statusCode).toBe(200);
+      const body = response.json() as { ok: boolean; seq: number };
+      expect(body.ok).toBe(true);
+      const queued = listSessionEvents(db, sessionId).find((e) => e.seq === body.seq)!;
+      expect(queued.type).toBe("message.queued");
+      const payload = queued.payload as Record<string, unknown>;
+      expect(payload.model).toBe(GW_MODEL);
+      expect(payload.providerId).toBe(GW_ID);
+
+      // Same validation as the send routes: an unknown provider is an
+      // honest 400 — a queued follow-up must not silently route to the
+      // agent default the way it did pre-R82.
+      const bad = await authInject({
+        method: "POST",
+        url: `/api/v1/sessions/${sessionId}/queue`,
+        payload: { content: "bad provider", model: GW_MODEL, providerId: "prv_not-here" },
+      });
+      expect(bad.statusCode).toBe(400);
+      expect(bad.json().error.code).toBe("VALIDATION");
+      expect(bad.json().error.details.field).toBe("body.providerId");
+    } finally {
+      unregisterTurn(sessionId, controller);
+    }
+  });
+
+  it("the continuation turn routes to the QUEUED override's provider (the picker state when it was queued)", async () => {
+    const sessionId = await makeSessionViaApi();
+    const calls: Array<Record<string, unknown>> = [];
+    streamTextMock.mockImplementation((input: Record<string, unknown>) => {
+      calls.push(input);
+      if (calls.length === 1) {
+        // The user typed during turn 1 — the queue POST carries the gateway
+        // pair (exactly what the composer sends when the picker names a
+        // custom provider's model).
+        return {
+          fullStream: (async function* () {
+            await authInject({
+              method: "POST",
+              url: `/api/v1/sessions/${sessionId}/queue`,
+              payload: { content: "and route the follow-up via the gateway", model: GW_MODEL, providerId: GW_ID },
+            });
+            yield { type: "text-delta", text: "Task completed." };
+            yield { type: "finish-step", usage: { inputTokens: 5, outputTokens: 5 } };
+          })(),
+          totalUsage: Promise.resolve({ inputTokens: 5, outputTokens: 5, totalTokens: 10 }),
+          usage: Promise.resolve({ inputTokens: 5, outputTokens: 5, totalTokens: 10 }),
+        };
+      }
+      return sdkStream([{ type: "text-delta", text: "Follow-up on the gateway." }]);
+    });
+
+    const response = await authInject({
+      method: "POST",
+      url: `/api/v1/sessions/${sessionId}/messages/stream`,
+      payload: { content: "start on openrouter" },
+    });
+    expect(response.statusCode).toBe(200);
+    const frames = parseSse(response.body as string);
+
+    // TWO full turns ran on one stream.
+    expect(calls).toHaveLength(2);
+    expect(frames.filter((f) => f.type === "meta.queue_continue")).toEqual([
+      { type: "meta.queue_continue", count: 1 },
+    ]);
+    expect(frames[frames.length - 1]?.type).toBe("done");
+
+    // THE routing pin: turn 1's client was the AGENT's openrouter; the
+    // CONTINUATION turn's client was built from the QUEUED entry's override —
+    // the gateway row (name + baseUrl), not the agent's.
+    expect(createOpenAICompatibleMock).toHaveBeenCalledTimes(2);
+    expect(createOpenAICompatibleMock.mock.calls[0][0]).toEqual(
+      expect.objectContaining({ name: "openrouter", baseURL: "https://openrouter.ai/api/v1" }),
+    );
+    expect(createOpenAICompatibleMock.mock.calls[1][0]).toEqual(
+      expect.objectContaining({ name: GW_ID, baseURL: GW_BASE }),
+    );
+    // …and the continuation's model is the queued override's model.
+    const secondCall = calls[1] as { model?: { model?: string } };
+    expect(secondCall.model?.model).toBe(GW_MODEL);
+    // The usage row attributes the continuation to the gateway.
+    const continuationUsage = db
+      .prepare("SELECT * FROM usage_events WHERE session_id = ? AND provider = ?")
+      .get(sessionId, GW_ID) as { model: string } | undefined;
+    expect(continuationUsage).toMatchObject({ model: GW_MODEL });
+  });
+
+  it("a queued message WITHOUT its own override keeps the RUNNING override for the continuation (the fallback)", async () => {
+    const sessionId = await makeSessionViaApi();
+    const calls: Array<Record<string, unknown>> = [];
+    streamTextMock.mockImplementation((input: Record<string, unknown>) => {
+      calls.push(input);
+      if (calls.length === 1) {
+        return {
+          fullStream: (async function* () {
+            // Queued mid-turn with NO override — the continuation must keep
+            // the original send's pair (pre-R82 dropped it entirely).
+            await authInject({
+              method: "POST",
+              url: `/api/v1/sessions/${sessionId}/queue`,
+              payload: { content: "and keep the gateway" },
+            });
+            yield { type: "text-delta", text: "Task completed." };
+            yield { type: "finish-step", usage: { inputTokens: 5, outputTokens: 5 } };
+          })(),
+          totalUsage: Promise.resolve({ inputTokens: 5, outputTokens: 5, totalTokens: 10 }),
+          usage: Promise.resolve({ inputTokens: 5, outputTokens: 5, totalTokens: 10 }),
+        };
+      }
+      return sdkStream([{ type: "text-delta", text: "Still on the gateway." }]);
+    });
+
+    // The original send names the gateway.
+    const response = await authInject({
+      method: "POST",
+      url: `/api/v1/sessions/${sessionId}/messages/stream`,
+      payload: { content: "start on the gateway", model: GW_MODEL, providerId: GW_ID },
+    });
+    expect(response.statusCode).toBe(200);
+    expect(calls).toHaveLength(2);
+    // BOTH turns ran on the gateway: the original override (turn 1) and the
+    // running override the override-less queue entry inherited (turn 2).
+    expect(createOpenAICompatibleMock).toHaveBeenCalledTimes(2);
+    expect(createOpenAICompatibleMock.mock.calls[0][0]).toEqual(
+      expect.objectContaining({ name: GW_ID, baseURL: GW_BASE }),
+    );
+    expect(createOpenAICompatibleMock.mock.calls[1][0]).toEqual(
+      expect.objectContaining({ name: GW_ID, baseURL: GW_BASE }),
+    );
   });
 });

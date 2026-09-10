@@ -484,8 +484,14 @@ fn spawn_and_handshake(app: &AppHandle) -> Result<RunningSidecar, String> {
     // a legacy fallback, replacing the keyring crate whose `{user}.{service}`
     // TargetName never matched what the launcher stored.
     let mut injected_keys = Vec::new();
+    // ROUND-82 (R82-B): the injection list is now DYNAMIC — the hardcoded
+    // builtins plus every NOTED custom provider (keys.rs reads
+    // ~/.acute/custom-providers.txt, ids only, never secrets) — so a key
+    // saved for a provider created in Settings survives app restarts
+    // instead of dying with `409 no API key` on the next spawn. The list is
+    // owned String pairs now; the loop shape mirrors the vision loop below.
     for (env_name, provider_id) in crate::keys::provider_key_env_targets() {
-        if let Some(key) = crate::keys::read_provider_key_lossy(provider_id) {
+        if let Some(key) = crate::keys::read_provider_key_lossy(&provider_id) {
             // Length only — same convention as the launcher's own output; the
             // VALUE never appears anywhere. This line is what makes "keys not
             // loaded" debuggable from sidecar.log on the owner's machine.

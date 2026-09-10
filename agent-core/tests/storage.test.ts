@@ -182,6 +182,13 @@ describe("openDatabase", () => {
       // read-only R75 postures (active_mode plan/review/explore) →
       // permission 'plan'; active_mode kept as the posture pointer.
       { version: 29, name: "0029_unified_modes.sql" },
+      // ROUND-82 (R82, the model-edit dialog's proper capability options):
+      // NULLABLE tri-state columns supports_tools/supports_audio/
+      // supports_video on models (NULL = unknown, 0 = off, 1 = on — the
+      // 0004 NOT NULL DEFAULT 0 columns conflated "false" with "unknown").
+      // The catalog backfill is code-side (db.ts →
+      // backfillModelCapabilities, openrouter-scoped).
+      { version: 30, name: "0030_model_capabilities.sql" },
     ]);
     expect(appliedSecond).toEqual(appliedFirst);
   });

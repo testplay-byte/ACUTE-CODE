@@ -609,6 +609,10 @@ describe("provider management (ROUND-47 R47-c1)", () => {
     outputPricePerMtok: 0,
     supportsThinking: false,
     supportsVision: false,
+    // ROUND-82: the tri-state capability flags (null = unknown).
+    supportsTools: true,
+    supportsAudio: null,
+    supportsVideo: null,
     hidden: false,
     sortOrder: 0,
     createdAt: "2026-08-22T09:00:00Z",
@@ -1090,27 +1094,30 @@ describe("orchestration settings (subagentModel, ROUND-47 R47-c1)", () => {
     });
   });
 
-  it("updateOrchestrationSettings sends subagentModel through (string or null)", async () => {
+  it("updateOrchestrationSettings sends subagentModel through (R82 provider-scoped ref or null)", async () => {
     const fetchMock = vi.fn().mockResolvedValue(
       jsonResponse(200, {
         maxParallel: 5,
         perKeyLimit: 3,
-        subagentModel: "nvidia/nemotron-3.5-lightning:free",
+        subagentModel: { providerId: "openrouter", modelId: "nvidia/nemotron-3.5-lightning:free" },
       }),
     );
     vi.stubGlobal("fetch", fetchMock);
 
     const updated = await updateOrchestrationSettings({
-      subagentModel: "nvidia/nemotron-3.5-lightning:free",
+      subagentModel: { providerId: "openrouter", modelId: "nvidia/nemotron-3.5-lightning:free" },
     });
 
-    expect(updated.subagentModel).toBe("nvidia/nemotron-3.5-lightning:free");
+    expect(updated.subagentModel).toEqual({
+      providerId: "openrouter",
+      modelId: "nvidia/nemotron-3.5-lightning:free",
+    });
     expect(fetchMock).toHaveBeenCalledTimes(1);
     const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
     expect(url).toBe("http://sidecar.test/api/v1/settings/orchestration");
     expect(init.method).toBe("PUT");
     expect(JSON.parse(init.body as string)).toEqual({
-      subagentModel: "nvidia/nemotron-3.5-lightning:free",
+      subagentModel: { providerId: "openrouter", modelId: "nvidia/nemotron-3.5-lightning:free" },
     });
   });
 });

@@ -223,6 +223,11 @@ function modelRow(overrides: Partial<ProviderModelConfig> & { modelId: string })
     outputPricePerMtok: null,
     supportsThinking: false,
     supportsVision: false,
+    // ROUND-82: the tri-state capability flags (null = unknown) — tests
+    // that care override them per-row.
+    supportsTools: true,
+    supportsAudio: null,
+    supportsVideo: null,
     hidden: false,
     sortOrder: 0,
     createdAt: "2026-08-30T09:00:00Z",
@@ -824,6 +829,11 @@ describe("Configure model dialog — pricing round-trip (ROUND-50 R50-d)", () =>
         outputPricePerMtok: 0.6,
         supportsThinking: true,
         supportsVision: false, // R62-2b: the dialog now PATCHes the vision flag too
+        // ROUND-82: the capability card PATCHes the tri-state flags too
+        // (boolean = set; null = unknown — the fixtures carry them).
+        supportsTools: true,
+        supportsAudio: null,
+        supportsVideo: null,
         hidden: false,
       });
     });
@@ -913,7 +923,7 @@ describe("Configure model dialog — per-1M pricing + vision (R62-2b)", () => {
     });
   });
 
-  it("the NEW Supports vision toggle PATCHes supportsVision (the last uneditable row field)", async () => {
+  it("the Vision toggle PATCHes supportsVision (R82 dialog: the capabilities card)", async () => {
     const dialog = await openDialog(
       modelRow({
         id: "mdl_priced",
@@ -923,8 +933,10 @@ describe("Configure model dialog — per-1M pricing + vision (R62-2b)", () => {
       }),
     );
 
-    // The toggle group renders beside thinking/hidden…
-    const visionGroup = within(dialog).getByRole("group", { name: "Supports vision" });
+    // ROUND-82: the capabilities card renders Vision/Reasoning as On/Off
+    // Toggles (renamed from the old "Supports vision" group) beside the
+    // tri-state Tool use / Audio input / Video rows…
+    const visionGroup = within(dialog).getByRole("group", { name: "Vision" });
     // …flip it On.
     fireEvent.click(within(visionGroup).getByRole("button", { name: "On" }));
     fireEvent.click(within(dialog).getByRole("button", { name: "Save configuration" }));
@@ -1449,25 +1461,39 @@ describe("Add models picker — Free only ↔ All models toggle (R60-B)", () => 
     );
     expect(within(dialog).getByTestId("picker-all-models-toggle").getAttribute("aria-pressed")).toBe("true");
     expect(within(dialog).getByTestId("picker-free-only-toggle").getAttribute("aria-pressed")).toBe("false");
-    // The choice rides the SHARED persisted store (the round-43 design —
-    // the chat composer's model picker honors the same pref).
-    expect(useSettingsStore.getState().modelsFreeOnly).toBe(false);
+    // ROUND-82: the toggle is dialog-LOCAL scope — the shared persisted pref
+    // the chat composer's picker honors is INITIALIZED FROM, never written to
+    // (flipping the catalog picker no longer surprises the chat picker —
+    // the pre-R82 shared-store write was the removed behavior).
+    expect(useSettingsStore.getState().modelsFreeOnly).toBe(true);
 
     // …and flipping back re-hides the paid row.
     fireEvent.click(within(dialog).getByTestId("picker-free-only-toggle"));
     await waitFor(() =>
       expect(within(dialog).queryByLabelText("Select model openai/gpt-4o")).toBeNull(),
     );
+    // Still never written: the shared pref carries the pre-dialog value.
     expect(useSettingsStore.getState().modelsFreeOnly).toBe(true);
   });
 
-  it("free-only scope with NO free entries → the honest empty note (not a false 'no match')", async () => {
+  it("free-only scope with NO free entries → R82 auto-switches to All (never the confusing empty state)", async () => {
     liveCatalog = [{ id: "openai/gpt-4o", name: "GPT-4o" }];
     await openPicker();
 
+    // ROUND-82 (§2.4.6, the NVIDIA gap): a provider whose catalog has ZERO
+    // free-classified entries auto-switches the LOCAL scope to All — the
+    // pre-R82 "No free models match — switch to All models" empty state read
+    // as broken (every NIM catalog would show it on open). The paid row is
+    // visible instead…
     await waitFor(() =>
-      expect(screen.getByText(/No free models match — switch to “All models”/)).toBeTruthy(),
+      expect(screen.getByLabelText("Select model openai/gpt-4o")).toBeTruthy(),
     );
+    // …the All segment is pressed…
+    expect(screen.getByTestId("picker-all-models-toggle").getAttribute("aria-pressed")).toBe("true");
+    expect(screen.getByTestId("picker-free-only-toggle").getAttribute("aria-pressed")).toBe("false");
+    // …and the SHARED pref is untouched by the auto-switch (the composer's
+    // picker keeps its own control — the spec's risk-#8 rule).
+    expect(useSettingsStore.getState().modelsFreeOnly).toBe(true);
   });
 });
 

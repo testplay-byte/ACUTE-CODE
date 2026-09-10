@@ -1632,6 +1632,14 @@ export function AgentChatPanel({
     () => session?.permissionMode ?? "ask",
   );
   const effectiveModel = modelOverride?.model ?? agent?.model ?? null;
+  // ROUND-82 (R82, the owner's custom-provider routing fix): the override's
+  // PROVIDER rides the send wire with its model (see the startStream call —
+  // send carries modelOverride?.providerId only, so a no-override send keeps
+  // the pre-R82 agent-provider behavior exactly). The picker is
+  // provider-grouped (R64-d) and ModelOverride has carried the providerId
+  // since then — it was captured in the UI and dropped at send time, so a
+  // custom-provider model went verbatim to the AGENT's provider (default
+  // agent = openrouter → "unknown model" with the wrong provider named).
 
   // Session switch → reload each session's own persisted composer state
   // (runTurn saves the fresh session's values at creation, so a first send
@@ -1795,9 +1803,16 @@ export function AgentChatPanel({
     if (busy && liveMode && streamBusy && liveSid !== undefined) {
       const queueAttachments = composerAttachments.map(toMessageAttachment);
       try {
+        // ROUND-82 (R82): the queue entry carries the picker state at queue
+        // time — the follow-up's continuation turn routes to the provider
+        // the user picked HERE (not the agent default, the pre-R82 drop).
         const queued = await queueSessionMessage(liveSid, {
           content: text,
           ...(queueAttachments.length > 0 ? { attachments: queueAttachments } : {}),
+          ...(modelOverride?.model !== undefined ? { model: modelOverride.model } : {}),
+          ...(modelOverride?.providerId !== undefined
+            ? { providerId: modelOverride.providerId }
+            : {}),
         });
         // Optimistic chip (the frame owns it normally; pushQueuedMessage
         // dedupes by seq so this never doubles).
@@ -1935,6 +1950,8 @@ export function AgentChatPanel({
         useStreamStore.getState().setPendingEcho(sid, text);
         await useStreamStore.getState().startStream(sid, text, {
           model: effectiveModel ?? undefined,
+          // ROUND-82: the override's provider — see effectiveProviderId.
+          providerId: modelOverride?.providerId ?? undefined,
           // ROUND-65 (R65): scopes the agent-browser auto-open signal to
           // THIS project's right sidebar (review fix #2).
           projectId,

@@ -148,6 +148,10 @@ function modelConfigRow(
     outputPricePerMtok: null,
     supportsThinking: false,
     supportsVision: false,
+    // ROUND-82: the tri-state capability flags (null = unknown).
+    supportsTools: true,
+    supportsAudio: null,
+    supportsVideo: null,
     hidden: false,
     sortOrder: 0,
     createdAt: "2026-08-30T09:00:00Z",
@@ -1679,7 +1683,10 @@ describe("Composer: context donut (owner spec G)", () => {
     expect(donut.textContent?.trim()).toBe("");
     expect(donut.querySelector("svg")).toBeTruthy();
     expect(donut.getAttribute("title")).toContain("42% used");
-    expect(fetchSessionContext).toHaveBeenCalledWith(SESSION_ID, "openrouter/ox-alpha");
+    // ROUND-82: the meter now carries the EFFECTIVE provider as a third arg —
+    // the report keys its window/pricing lookups on the provider that will
+    // serve the next send (override ?? agent.providerId; here the agent's).
+    expect(fetchSessionContext).toHaveBeenCalledWith(SESSION_ID, "openrouter/ox-alpha", "openrouter");
   });
 
   it("popover shows the big donut, breakdown mini-bars, cache line, and session totals", async () => {

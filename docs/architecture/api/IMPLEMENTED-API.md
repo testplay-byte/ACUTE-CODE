@@ -2234,3 +2234,90 @@ ADR-0029. The value-set changes (all fail-closed, all migrated by
   tools (the retired review/explore read-only extras: `git_status`,
   `git_diff`, `git_log`, `analyze_image`, `job_status`); the R75 task-mode
   policy tier, debug command tier, and switch_mode owner-pin are removed.
+
+## ROUND-82 additions (models & providers hardening)
+
+The owner's field-report round 2 (custom models misroute, NVIDIA workflow,
+the per-model test button, the model edit dialog). Spec:
+`agent-ctx/research/models-providers-fixes.md`.
+
+### The custom-provider routing fix (the headline)
+
+- `POST /sessions/:id/messages` and `POST /sessions/:id/messages/stream`
+  accept `providerId` alongside `model` in the body — the per-send override
+  is now a provider-scoped pair. `prepareTurn` resolves the EFFECTIVE
+  provider from the override (custom gateways, NIM) instead of always the
+  agent's provider; the misroute ("custom model id sent verbatim to
+  OpenRouter → 'No endpoints found'") is gone. Unknown ids → early
+  `400 VALIDATION` (`body.providerId`); absent → the agent's provider
+  (pre-R82 behavior). The queued-message carry (`POST /queue`), the vision
+  relay, the context meter (`GET /sessions/:id/context?model=&providerId=`),
+  and the debug analyst all key on the same effective pair.
+- Orchestrator children: `orchestration.subagentModel` is now the
+  provider-scoped ref `{providerId, modelId}` (a legacy plain string reads
+  as openrouter-scoped — the honest backfill; corrupt JSON degrades to
+  null). `PUT /settings/orchestration` validates the ref (provider must
+  exist, modelId non-blank, the configured row must be tool-capable or
+  unknown — `supportsTools:false` 400s with the reason). `runChildTurn`/
+  `retryChild` provision the child's keyring VIEW from the EFFECTIVE
+  provider (the override's, not the parent agent's) — a provider-scoped
+  sub-agent ref can now actually serve a child turn.
+
+### The per-model test button
+
+- `POST /models/:id/test` `{slot?}` → `ModelTestResult` (HTTP 200 either
+  way — a probe that RAN and got a NO is a successful test call):
+  `{ok, latencyMs, providerId, model, checks:{http, auth, modelAccepted,
+  nonEmptyContent}, contentPreview? (≤200 chars, scrubbed), usage?
+  {inputTokens, outputTokens}, reason? (ok:false only, scrubbed)}`.
+  The probe is a REAL minimal completion (max_tokens 16, 30s timeout),
+  apiFormat-branched (chat-completions / anthropic-messages / responses),
+  key-slot-aware, 409 when no key is held, 404/409 for unknown
+  model/provider rows. Secrets are double-scrubbed (exact key + shape
+  prefixes via the shared `lib/secret-shapes.ts`).
+- `GET /models/configured` → `{models:[ProviderModelConfig]}` — every
+  provider's configured rows, ordered provider-then-model (the sub-agent
+  picker's "your configured models" feed and the composer picker's
+  provider-grouped rows).
+
+### Tri-state capability columns (migration 0030)
+
+- `models.supports_tools / supports_audio / supports_video` are NULLABLE
+  tri-states: NULL = unknown (the honest default for NIM/custom rows with
+  no catalog source), 0 = explicitly off, 1 = explicitly on. Migration
+  `0030_model_capabilities.sql` + a code-side openrouter-scoped backfill
+  (never over a user-set value; same-id rows on other providers are never
+  touched — a NIM row sharing the model_id string must not inherit
+  OpenRouter's metadata).
+- `POST /providers/:id/models` + `PATCH /models/:id` accept
+  `supportsTools/supportsAudio/supportsVideo: boolean | null` — `null`
+  records UNKNOWN (the INSERT path's old two-way ternary folded null→0;
+  found by the R82-TESTS mandate and fixed in the close-out), absent
+  KEEPS (PATCH) / catalog-prefills-or-unknown (INSERT). Wrong type →
+  `400 VALIDATION` with the "a boolean or null (unknown)" contract text.
+
+### The model edit dialog + picker hardening (frontend)
+
+- The Configure-model dialog renders a capabilities card: Reasoning/Vision
+  (On/Off toggles, the 0004-era boolean columns) + Tool use / Audio input /
+  Video (On/Off/? tri-states — "?" = unknown), each with a
+  "consumed by" micro-hint; a Test button runs `POST /models/:id/test`
+  in-dialog and shows latency + checks + preview or the honest reason.
+- The Add-models picker's Free only ↔ All models toggle is now
+  dialog-LOCAL scope: it initializes from the shared persisted pref but
+  never writes it, and AUTO-SWITCHES to All when the catalog has zero
+  free-classified entries (every NIM catalog — none of the 81 ids end
+  ":free" — previously opened on the "No free models match" empty state,
+  which read as broken).
+- The SubAgentsTab model card renders the running override's provider
+  chip (`providerId · modelId`) and a "your configured models" section
+  (per-provider rows from `GET /models/configured`, deduped against the
+  OpenRouter catalog).
+
+### Custom-provider keys survive restarts (R82-B, the Rust side)
+
+- `keys.rs` notes non-builtin provider ids in
+  `~/.acute/custom-providers.txt` at key-save time and re-injects
+  `ACUTE_PROVIDER_<ID>` into every sidecar spawn (the note-file pattern
+  from the ROUND-61 vision key) — the "409 no API key for provider
+  'prv_…'" restart cliff is gone. `cargo check` green.

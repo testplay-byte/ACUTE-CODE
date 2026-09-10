@@ -35,12 +35,29 @@
  *                    re-enable untouched.
  */
 import type { SqliteDatabase } from "./db.js";
-import { getCatalogModel, isKnownCatalogModelId } from "./models.js";
+import { getCatalogModel, isKnownCatalogModelId, listModels } from "./models.js";
+import { providerExists } from "./providers.js";
+
+/**
+ * ROUND-82 (R82, §2.4.5 — the NVIDIA sub-agent gap): the sub-agent model as
+ * a PROVIDER-SCOPED reference. Historically a bare OpenRouter-catalog id —
+ * NIM/custom rows could never be sub-agent models (the validation was
+ * catalog-only). Stored values keep BOTH shapes: a legacy plain string
+ * reads as {providerId: "openrouter", modelId: <string>} (every historical
+ * value was a catalog id); the object form is the R82 wire shape.
+ */
+export interface SubagentModelRef {
+  providerId: string;
+  modelId: string;
+}
 
 export interface OrchestrationSettings {
   maxParallel: number;
   perKeyLimit: number;
-  subagentModel: string | null;
+  /** ROUND-82: normalized to the provider-scoped ref (legacy plain-string
+   * values read as openrouter-scoped); null = inherit the parent agent's
+   * model (the pre-R43 behavior). */
+  subagentModel: SubagentModelRef | null;
   childWatchdogMs: number;
   childStallTimeoutMs: number;
 }
@@ -78,11 +95,43 @@ function readNullableString(db: SqliteDatabase, key: string): string | null {
   return row.value;
 }
 
+/**
+ * ROUND-82 (R82): parse the stored subagentModel value into the normalized
+ * ref. A plain string is a legacy OpenRouter-catalog id → openrouter-scoped
+ * (the honest backfill — every pre-R82 value passed catalog validation). A
+ * JSON object {providerId, modelId} is the R82 shape. Anything else
+ * (corrupt JSON, wrong shape, empty fields) degrades to null — never a
+ * crash, never a silent wrong provider.
+ */
+function readSubagentModel(db: SqliteDatabase): SubagentModelRef | null {
+  const stored = readNullableString(db, SUBAGENT_MODEL_KEY);
+  if (stored === null) return null;
+  // R82 JSON object form.
+  if (stored.startsWith("{")) {
+    try {
+      const parsed = JSON.parse(stored) as { providerId?: unknown; modelId?: unknown };
+      if (
+        typeof parsed.providerId === "string" &&
+        parsed.providerId.trim() !== "" &&
+        typeof parsed.modelId === "string" &&
+        parsed.modelId.trim() !== ""
+      ) {
+        return { providerId: parsed.providerId.trim(), modelId: parsed.modelId.trim() };
+      }
+    } catch {
+      // Corrupt JSON — degrade to null below.
+    }
+    return null;
+  }
+  // Legacy plain-string form — OpenRouter catalog ids by construction.
+  return { providerId: "openrouter", modelId: stored };
+}
+
 export function getOrchestrationSettings(db: SqliteDatabase): OrchestrationSettings {
   return {
     maxParallel: readNumber(db, MAX_PARALLEL_KEY, ORCHESTRATION_DEFAULTS.maxParallel, 1, 50),
     perKeyLimit: readNumber(db, PER_KEY_LIMIT_KEY, ORCHESTRATION_DEFAULTS.perKeyLimit, 1, 20),
-    subagentModel: readNullableString(db, SUBAGENT_MODEL_KEY),
+    subagentModel: readSubagentModel(db),
     childWatchdogMs: readNumber(
       db,
       CHILD_WATCHDOG_MS_KEY,
@@ -100,9 +149,17 @@ export function getOrchestrationSettings(db: SqliteDatabase): OrchestrationSetti
   };
 }
 
+/** ROUND-82 (R82): the PATCH input — subagentModel accepts the provider-
+ * scoped ref, the legacy plain catalog id, or null (clear). Reads always
+ * return the normalized ref shape. */
+export interface OrchestrationSettingsPatch
+  extends Partial<Omit<OrchestrationSettings, "subagentModel">> {
+  subagentModel?: SubagentModelRef | string | null;
+}
+
 export function setOrchestrationSettings(
   db: SqliteDatabase,
-  patch: Partial<OrchestrationSettings>,
+  patch: OrchestrationSettingsPatch,
 ): OrchestrationSettings {
   const upsert = db.prepare(
     "INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
@@ -123,11 +180,14 @@ export function setOrchestrationSettings(
     if (patch.subagentModel === null) {
       // Clear = remove the row entirely (absent key reads back as null).
       db.prepare("DELETE FROM settings WHERE key = ?").run(SUBAGENT_MODEL_KEY);
-    } else {
+    } else if (typeof patch.subagentModel === "string") {
+      // Legacy wire form (a catalog id) — kept working for old callers and
+      // the openrouter-scoped fast path. Stored verbatim; reads normalize
+      // to {providerId: "openrouter", modelId}.
       const id = patch.subagentModel;
       if (!isKnownCatalogModelId(id)) {
         throw new Error(
-          `subagentModel must be a known catalog model id (got '${id}')`,
+          `subagentModel must be a known catalog model id (got '${id}') — for a custom provider use the {providerId, modelId} form`,
         );
       }
       if (getCatalogModel(id)?.supportsTools === false) {
@@ -136,6 +196,31 @@ export function setOrchestrationSettings(
         );
       }
       upsert.run(SUBAGENT_MODEL_KEY, id);
+    } else {
+      // ROUND-82 (R82, §2.4.5): the provider-scoped ref — a NIM/custom row
+      // can be the sub-agent model. Validation: the provider must EXIST;
+      // the model id must be non-empty; tool-capability is enforced where
+      // KNOWABLE (an explicit false on the configured row rejects; null
+      // (unknown) and absent rows pass — the honest tri-state, never the
+      // 0004-era "unknown means off" lie).
+      const ref = patch.subagentModel;
+      if (!providerExists(db, ref.providerId)) {
+        throw new Error(
+          `subagentModel provider '${ref.providerId}' does not exist`,
+        );
+      }
+      if (ref.modelId.trim() === "") {
+        throw new Error("subagentModel modelId must be a non-empty string");
+      }
+      const configuredRow = listModels(db, ref.providerId).find(
+        (m) => m.modelId === ref.modelId,
+      );
+      if (configuredRow?.supportsTools === false) {
+        throw new Error(
+          `subagentModel '${ref.modelId}' is marked as NOT tool-capable on '${ref.providerId}' — sub-agents are mandated tool users`,
+        );
+      }
+      upsert.run(SUBAGENT_MODEL_KEY, JSON.stringify(ref));
     }
   }
   // ROUND-52 (R52-b): the supervisor cadence + stall threshold.

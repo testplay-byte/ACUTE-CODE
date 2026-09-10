@@ -245,6 +245,7 @@ function UsageGroup({
 export function ContextDonut({
   sessionId,
   model,
+  providerId,
   transcriptLength,
   liveTick = 0,
   streaming = false,
@@ -253,6 +254,11 @@ export function ContextDonut({
   sessionId: string | null;
   /** Effective model (override ?? agent.model) — the report's ?model= param. */
   model: string | null;
+  /** ROUND-82 (R82, the owner's custom-provider routing fix): the override's
+   * provider (override ?? agent.providerId) — the report's ?providerId= param,
+   * so the meter reads the window/pricing rows of the provider that will
+   * actually serve the next send. */
+  providerId: string | null;
   transcriptLength: number;
   /** ROUND-64 (R64-c): the active live turn's working-entry count — rides
    * the query key so the report refreshes as tool calls land (owner: "The
@@ -358,8 +364,11 @@ export function ContextDonut({
   }, [open, measurePos]);
 
   const report = useQuery<SessionContextReport>({
-    queryKey: ["session-context", sessionId, model, transcriptLength, liveTick],
-    queryFn: () => fetchSessionContext(sessionId as string, model ?? undefined),
+    // ROUND-82: providerId joins the key — a provider switch with the same
+    // model string (custom gateways share ids) re-fetches the meter.
+    queryKey: ["session-context", sessionId, model, providerId, transcriptLength, liveTick],
+    queryFn: () =>
+      fetchSessionContext(sessionId as string, model ?? undefined, providerId ?? undefined),
     enabled: sessionId !== null && liveMode,
     // ROUND-64 (R64-c): live while a turn streams — zero staleTime + a
     // 2.5s poll floor; idle keeps the 30s staleness gate.

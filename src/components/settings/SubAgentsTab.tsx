@@ -7,6 +7,7 @@ import { withAlpha } from "../dashboard/helpers";
 import { isTauri } from "../../lib/sidecar";
 import { filterModelsForPicker, useSettingsStore } from "../../lib/settings-store";
 import {
+  fetchConfiguredModels,
   fetchKeyPool,
   fetchModelsCatalog,
   fetchOrchestrationSettings,
@@ -15,6 +16,8 @@ import {
   updateOrchestrationSettings,
   type KeyPoolSlot,
   type OrchestrationSettings,
+  type ProviderModelConfig,
+  type SubagentModelRef,
 } from "../../lib/api";
 
 /**
@@ -77,7 +80,9 @@ async function fetchSubagentSettings(): Promise<OrchestrationSettings> {
 async function saveSubagentSettings(patch: {
   maxParallel?: number;
   perKeyLimit?: number;
-  subagentModel?: string | null;
+  /** ROUND-82 (R82): the provider-scoped ref (a bare catalog id no longer
+   * reaches here — the picker builds the {providerId, modelId} pair). */
+  subagentModel?: SubagentModelRef | null;
   childWatchdogMs?: number;
   childStallTimeoutMs?: number;
 }): Promise<OrchestrationSettings> {
@@ -328,13 +333,29 @@ function SubAgentModelCard() {
   const setModelsFreeOnly = useSettingsStore((s) => s.setModelsFreeOnly);
 
   const saveModel = useMutation({
-    mutationFn: (modelId: string | null) => saveSubagentSettings({ subagentModel: modelId }),
-    onSuccess: (_data, modelId) => {
-      setMsg(modelId === null ? "Cleared — inherits main model." : "Saved.");
+    mutationFn: (ref: SubagentModelRef | null) => saveSubagentSettings({ subagentModel: ref }),
+    onSuccess: (_data, ref) => {
+      setMsg(ref === null ? "Cleared — inherits main model." : "Saved.");
       resetAfter(() => setMsg(null), 1500);
       void queryClient.invalidateQueries({ queryKey: ["orchestration-settings"] });
     },
     onError: (err: Error) => setMsg(err.message),
+  });
+
+  // ROUND-82 (R82, §2.4.5 — the NVIDIA sub-agent gap): the CONFIGURED model
+  // rows across all providers (GET /models/configured). Non-fatal: an error
+  // hides this section only (the catalog section below keeps working — the
+  // endpoint is additive). StaleTime 60s: rows change only through the
+  // Models & Providers page, whose mutations invalidate the family.
+  // NOTE (R82 close-out): declared BEFORE the early returns below — ALL
+  // hooks must run on every render (the Rules of Hooks; the interrupted
+  // R82 session had it after the returns, which crashed the card with a
+  // hook-order error as soon as a query state changed between renders).
+  const configuredQuery = useQuery({
+    queryKey: ["models-configured"],
+    queryFn: fetchConfiguredModels,
+    staleTime: 60 * 1000,
+    retry: false,
   });
 
   const settingsPending = settingsQuery.isLoading || settingsQuery.data === undefined;
@@ -401,7 +422,14 @@ function SubAgentModelCard() {
   }
 
   const selected = settings.subagentModel;
-  const selectedEntry = catalog.models.find((m) => m.modelId === selected);
+  const selectedEntry = catalog.models.find((m) => m.modelId === selected?.modelId);
+  // ROUND-82: the configured-section rows — every provider's rows EXCEPT
+  // openrouter ids the catalog above already lists (they would duplicate;
+  // picking either lands on the same {providerId, modelId} key).
+  const catalogIds = new Set(catalog.models.map((m) => m.modelId));
+  const configuredRows: ProviderModelConfig[] = (configuredQuery.data ?? []).filter(
+    (m) => !(m.providerId === "openrouter" && catalogIds.has(m.modelId)),
+  );
 
   // CatalogModel → the picker row shape the shared free-only filter expects.
   // The `free` flag drives the filter (identical to the old local catalog's
@@ -460,9 +488,12 @@ function SubAgentModelCard() {
           </span>
         ) : (
           <span className="text-[12px] font-bold min-w-0 truncate" style={{ color: styles.text }}>
-            {selectedEntry?.displayName ?? selected}
+            {selectedEntry?.displayName ?? selected.modelId}
             <span className="font-mono text-[11px] ml-1.5" style={{ color: styles.textTertiary }}>
-              {selected}
+              {/* ROUND-82: the provider chip — the child turns route to THIS
+                  provider (the R82 override wire); the old bare id left the
+                  routing target invisible. */}
+              {selected.providerId} · {selected.modelId}
             </span>
           </span>
         )}
@@ -519,12 +550,17 @@ function SubAgentModelCard() {
         <div className="max-h-64 overflow-y-auto">
           {rows.map((m) => {
             const disabled = !m.supportsTools;
-            const isSelected = selected === m.modelId;
+            // ROUND-82: openrouter-scoped selection key (the catalog is
+            // OpenRouter's — picking a row writes the explicit pair).
+            const isSelected =
+              selected !== null && selected.providerId === "openrouter" && selected.modelId === m.modelId;
             const recommended = m.modelId === recommendedId;
             return (
               <button
                 key={m.modelId}
-                onClick={() => !disabled && saveModel.mutate(m.modelId)}
+                onClick={() =>
+                  !disabled && saveModel.mutate({ providerId: "openrouter", modelId: m.modelId })
+                }
                 disabled={disabled}
                 aria-label={disabled ? `${m.modelId} (unavailable)` : `Use ${m.modelId} for sub-agents`}
                 title={disabled ? "tool calling required" : m.modelId}
@@ -577,6 +613,85 @@ function SubAgentModelCard() {
           })}
         </div>
       </div>
+
+      {/* ROUND-82 (R82, §2.4.5 — the NVIDIA sub-agent gap): YOUR CONFIGURED
+          MODELS, per provider. The section above lists the OpenRouter
+          catalog only — a NIM (nvidia) or custom-gateway row could never be
+          the sub-agent model. Each row here writes the provider-scoped
+          {providerId, modelId} pair, and the R82 orchestrator override
+          routes the child turns to THAT provider. Hidden entirely when the
+          query fails or no non-catalog rows exist (nothing to show — the
+          catalog above is the complete picker in that case). */}
+      {configuredRows.length > 0 && (
+        <div className="flex flex-col gap-2">
+          <span className="text-[11px] font-bold" style={{ color: styles.textSecondary }}>
+            Your configured models
+          </span>
+          <div
+            className="rounded-[10px] border-[1.5px] overflow-hidden"
+            style={{ borderColor: styles.border }}
+            data-testid="subagent-configured-models"
+          >
+            <div className="max-h-40 overflow-y-auto">
+              {configuredRows.map((m) => {
+                const isSelected =
+                  selected !== null && selected.providerId === m.providerId && selected.modelId === m.modelId;
+                // Tri-state tools: explicit false disables (the honest gate);
+                // null (unknown) stays pickable — the row's own Test button
+                // (Models & Providers) is the ground truth.
+                const disabled = m.supportsTools === false;
+                return (
+                  <button
+                    key={`${m.providerId}:${m.modelId}`}
+                    onClick={() =>
+                      !disabled && saveModel.mutate({ providerId: m.providerId, modelId: m.modelId })
+                    }
+                    disabled={disabled}
+                    aria-label={`Use ${m.modelId} on ${m.providerId} for sub-agents`}
+                    title={disabled ? "marked as not tool-capable" : `${m.providerId} · ${m.modelId}`}
+                    className="w-full flex items-center gap-2 px-3 py-2 border-b last:border-b-0 text-left disabled:cursor-not-allowed"
+                    style={{
+                      borderColor: styles.borderSubtle,
+                      background: isSelected ? withAlpha(styles.accent, 0.07) : "transparent",
+                      opacity: disabled ? 0.55 : 1,
+                    }}
+                  >
+                    <span className="min-w-0 flex-1 flex items-center gap-1.5 flex-wrap">
+                      <span
+                        className="text-[12px] font-bold truncate"
+                        style={{ color: disabled ? styles.textTertiary : styles.text }}
+                      >
+                        {m.displayName || m.modelId}
+                      </span>
+                      <span
+                        className="shrink-0 px-1.5 py-0.5 rounded-full font-mono text-[9.5px] font-bold"
+                        style={{ background: styles.subtle, color: styles.textTertiary }}
+                        title="The provider the child turns route to"
+                      >
+                        {m.providerId}
+                      </span>
+                    </span>
+                    <span className="font-mono text-[10px] shrink-0 truncate max-w-[45%]" style={{ color: styles.textTertiary }}>
+                      {m.modelId}
+                    </span>
+                    {disabled ? (
+                      <span className="text-[9.5px] font-bold shrink-0" style={{ color: "#D64545" }}>
+                        no tool calling
+                      </span>
+                    ) : isSelected ? (
+                      <Check size={12} style={{ color: styles.accent }} />
+                    ) : null}
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+          <span className="text-[10.5px]" style={{ color: styles.textTertiary }}>
+            Rows added in Models &amp; Providers (NVIDIA NIM, custom gateways) — sub-agent turns route to the
+            row&apos;s provider.
+          </span>
+        </div>
+      )}
       <p className="text-[10.5px]" style={{ color: styles.textTertiary }}>
         Applies to every delegated sub-agent turn (delegate_task + retries). Parallelism and
         supervision live in the cards below — same page now.

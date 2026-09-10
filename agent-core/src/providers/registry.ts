@@ -8,6 +8,7 @@
  * booleans — and error messages are scrubbed of key material before surfacing.
  */
 import type Database from "better-sqlite3";
+import { scrubSecretShapes } from "../lib/secret-shapes.js";
 import {
   getProviderRecord,
   listProviderRecords,
@@ -397,4 +398,378 @@ async function upstreamErrorDetail(response: Response, apiKey: string): Promise<
     // Non-JSON body — no extra detail.
   }
   return "";
+}
+
+// ── ROUND-82 (R82, owner: "a test button … check if the model is working
+//    properly or not" + "not only check for a response, but also check if
+//    the response is reasonable"): the PER-MODEL test probe. ────────────────
+//
+// The provider-level probe above (testProviderConnection) validates the KEY
+// and the provider; its model branch spends ONE token and never reads the
+// body. This probe validates the MODEL ROW: a real 64-token completion whose
+// CONTENT is checked (non-empty, shown to the owner as a preview), with the
+// verdict broken into named checks (http / auth / modelAccepted /
+// nonEmptyContent) and the provider's raw error body surfaced verbatim (the
+// R80 raw-messages discipline) — so "NVIDIA model X is EOL'd" shows the real
+// 410 body instead of a generic failure.
+
+/** 30 s — reasoning models are slow to first token; the provider-level 15 s
+ * probe stays as-is (it spends 1 token and drains). */
+const MODEL_TEST_TIMEOUT_MS = 30_000;
+
+const MODEL_TEST_PROMPT = "Reply with exactly one word: pong";
+
+/** The checks the probe runs, in order — surfaced individually so the UI can
+ * show exactly WHICH stage failed (e.g. auth ok, model id rejected). */
+export interface ModelTestChecks {
+  /** The HTTP round-trip completed (DNS/TLS/route ok, any status). */
+  http: boolean;
+  /** The key was accepted (non-401/403). */
+  auth: boolean;
+  /** The provider accepted the model id (non-400/404/410/422, no
+   * error object in a 200 body — some OpenAI-compatible gateways do that). */
+  modelAccepted: boolean;
+  /** The parsed reply had non-blank text. */
+  nonEmptyContent: boolean;
+}
+
+/** POST /models/:id/test result. ok:true means every check passed; ok:false
+ * carries the first failing check's reason (HTTP 200 either way — a probe
+ * that RAN and got a NO is a successful test call, the same semantics as
+ * the provider test above). */
+export interface ModelTestResult {
+  ok: boolean;
+  latencyMs: number;
+  providerId: string;
+  model: string;
+  checks: ModelTestChecks;
+  /** First ≤200 chars of the reply, scrubbed — the owner's eyeball-judge of
+   * "is the response reasonable" (deliberately NOT LLM-graded; see the
+   * spec: a second model call adds cost + a second failure mode). */
+  contentPreview?: string;
+  /** Provider-reported usage when present (chat-completions usage /
+   * anthropic usage / responses usage). */
+  usage?: { inputTokens: number; outputTokens: number };
+  /** Present on ok:false — the reason the probe failed, scrubbed. */
+  reason?: string;
+}
+
+/** Parse the reply text + usage from a chat-completions body. */
+function parseChatCompletionsBody(
+  body: unknown,
+): { text: string; usage: { inputTokens: number; outputTokens: number } | undefined } {
+  if (typeof body !== "object" || body === null) return { text: "", usage: undefined };
+  const record = body as Record<string, unknown>;
+  const choices = Array.isArray(record.choices) ? record.choices : [];
+  const first = choices[0];
+  const message =
+    typeof first === "object" && first !== null
+      ? (first as { message?: { content?: unknown } }).message
+      : undefined;
+  const content = message?.content;
+  const text =
+    typeof content === "string"
+      ? content
+      : Array.isArray(content)
+        ? content
+            .map((c) =>
+              typeof c === "object" && c !== null && "text" in (c as Record<string, unknown>)
+                ? String((c as { text?: unknown }).text ?? "")
+                : "",
+            )
+            .join("")
+        : "";
+  const usageRecord =
+    typeof record.usage === "object" && record.usage !== null
+      ? (record.usage as { prompt_tokens?: unknown; completion_tokens?: unknown })
+      : undefined;
+  const usage =
+    usageRecord !== undefined &&
+    typeof usageRecord.prompt_tokens === "number" &&
+    typeof usageRecord.completion_tokens === "number"
+      ? { inputTokens: usageRecord.prompt_tokens, outputTokens: usageRecord.completion_tokens }
+      : undefined;
+  return { text: text.trim(), usage };
+}
+
+/** Parse the reply text + usage from an anthropic-messages body. */
+function parseAnthropicBody(
+  body: unknown,
+): { text: string; usage: { inputTokens: number; outputTokens: number } | undefined } {
+  if (typeof body !== "object" || body === null) return { text: "", usage: undefined };
+  const record = body as Record<string, unknown>;
+  const content = Array.isArray(record.content) ? record.content : [];
+  const text = content
+    .map((c) => {
+      if (typeof c === "object" && c !== null && (c as { type?: unknown }).type === "text") {
+        return String((c as { text?: unknown }).text ?? "");
+      }
+      return "";
+    })
+    .join("")
+    .trim();
+  const usageRecord =
+    typeof record.usage === "object" && record.usage !== null
+      ? (record.usage as { input_tokens?: unknown; output_tokens?: unknown })
+      : undefined;
+  const usage =
+    usageRecord !== undefined &&
+    typeof usageRecord.input_tokens === "number" &&
+    typeof usageRecord.output_tokens === "number"
+      ? { inputTokens: usageRecord.input_tokens, outputTokens: usageRecord.output_tokens }
+      : undefined;
+  return { text, usage };
+}
+
+/**
+ * The per-model probe behind POST /models/:id/test. Sends a REAL one-word
+ * completion request and grades the response:
+ *   1. http — the round-trip completed;
+ *   2. auth — 401/403 means the key was rejected;
+ *   3. modelAccepted — 400/404/410/422 (or an error object in a 200 body)
+ *      means the model id is wrong/EOL'd for this provider;
+ *   4. nonEmptyContent — the parsed reply is non-blank.
+ *
+ * Branches on provider.apiFormat (the provider-level probe's gap — it
+ * hardcodes /chat/completions): chat-completions, anthropic-messages (the
+ * exact header/body pattern the vision relay uses — x-api-key +
+ * anthropic-version), and responses (implemented: POST /responses with the
+ * OpenAI Responses shape; honest ok:false when the provider's dialect
+ * differs — surfaced verbatim).
+ *
+ * Scrubbing: the resolved key value (exact-match) PLUS the shared
+ * secret-shape prefixes (sk-…/nvapi-…/github_pat_… — lib/secret-shapes.ts,
+ * the R82 consolidation). Content previews cap at 200 chars.
+ *
+ * The caller (the route) has already 404'd unknown model rows and 409'd
+ * missing keys — this function still guards both for standalone safety
+ * (ProviderTestError/ProviderFetchError, same mapping as above).
+ */
+export async function testModelResponse(
+  keyring: ProviderKeyring,
+  provider: ProviderRecord,
+  modelId: string,
+  keyOverride?: string,
+): Promise<ModelTestResult> {
+  if (provider.baseUrl === null) {
+    throw new ProviderFetchError(`provider '${provider.id}' has no baseUrl to test`);
+  }
+  const apiKey = keyOverride ?? keyring.get(provider.id);
+  if (apiKey === undefined) {
+    throw new ProviderTestError(`no API key held for provider '${provider.id}'`);
+  }
+  const base = provider.baseUrl.replace(/\/+$/, "");
+  const apiFormat = provider.apiFormat ?? "chat-completions";
+  const startedAt = Date.now();
+
+  /** All-scrub: exact key + shape prefixes. */
+  const clean = (text: string): string => scrubSecretShapes(scrub(text, apiKey));
+
+  let response: Response;
+  try {
+    if (apiFormat === "anthropic-messages") {
+      response = await fetch(`${base}/messages`, {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          "x-api-key": apiKey,
+          "anthropic-version": "2023-06-01",
+        },
+        body: JSON.stringify({
+          model: modelId,
+          max_tokens: 64,
+          messages: [{ role: "user", content: MODEL_TEST_PROMPT }],
+        }),
+        signal: AbortSignal.timeout(MODEL_TEST_TIMEOUT_MS),
+      });
+    } else if (apiFormat === "responses") {
+      response = await fetch(`${base}/responses`, {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          authorization: `Bearer ${apiKey}`,
+        },
+        body: JSON.stringify({
+          model: modelId,
+          input: MODEL_TEST_PROMPT,
+          max_output_tokens: 64,
+        }),
+        signal: AbortSignal.timeout(MODEL_TEST_TIMEOUT_MS),
+      });
+    } else {
+      response = await fetch(`${base}/chat/completions`, {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          authorization: `Bearer ${apiKey}`,
+        },
+        body: JSON.stringify({
+          model: modelId,
+          messages: [{ role: "user", content: MODEL_TEST_PROMPT }],
+          max_tokens: 64,
+          temperature: 0,
+          stream: false,
+        }),
+        signal: AbortSignal.timeout(MODEL_TEST_TIMEOUT_MS),
+      });
+    }
+  } catch (error) {
+    // Transport failure (timeout/DNS/refused) — http itself failed.
+    throw new ProviderFetchError(
+      clean(`POST ${base} model test failed: ${errorMessage(error)}`),
+    );
+  }
+  const latencyMs = Date.now() - startedAt;
+  const checks: ModelTestChecks = {
+    http: true,
+    auth: response.status !== 401 && response.status !== 403,
+    modelAccepted: true,
+    nonEmptyContent: false,
+  };
+
+  if (response.status === 401 || response.status === 403) {
+    const detail = await upstreamErrorDetail(response, apiKey);
+    return {
+      ok: false,
+      latencyMs,
+      providerId: provider.id,
+      model: modelId,
+      checks: { ...checks, auth: false },
+      reason: `key rejected by provider (HTTP ${response.status})${detail}`,
+    };
+  }
+  if (
+    response.status === 400 ||
+    response.status === 404 ||
+    response.status === 410 ||
+    response.status === 422
+  ) {
+    const detail = await upstreamErrorDetail(response, apiKey);
+    return {
+      ok: false,
+      latencyMs,
+      providerId: provider.id,
+      model: modelId,
+      checks: { ...checks, modelAccepted: false },
+      reason: `provider rejected the request (HTTP ${response.status})${detail} — check the model id`,
+    };
+  }
+  if (!response.ok) {
+    const detail = await upstreamErrorDetail(response, apiKey);
+    return {
+      ok: false,
+      latencyMs,
+      providerId: provider.id,
+      model: modelId,
+      checks,
+      reason: `provider answered HTTP ${response.status}${detail}`,
+    };
+  }
+
+  // HTTP 200 — parse the body per format; a 200-with-error-body (some
+  // OpenAI-compatible gateways) fails modelAccepted.
+  let body: unknown;
+  try {
+    body = await response.json();
+  } catch (error) {
+    return {
+      ok: false,
+      latencyMs,
+      providerId: provider.id,
+      model: modelId,
+      checks: { ...checks, modelAccepted: false },
+      reason: clean(`provider returned a non-JSON 200 body: ${errorMessage(error)}`),
+    };
+  }
+  const errorInBody = readErrorFromOkBody(body);
+  if (errorInBody !== null) {
+    return {
+      ok: false,
+      latencyMs,
+      providerId: provider.id,
+      model: modelId,
+      checks: { ...checks, modelAccepted: false },
+      reason: clean(`provider returned HTTP 200 with an error body: ${errorInBody}`),
+    };
+  }
+
+  const parsed =
+    apiFormat === "anthropic-messages"
+      ? parseAnthropicBody(body)
+      : apiFormat === "responses"
+        ? parseResponsesBody(body)
+        : parseChatCompletionsBody(body);
+  if (parsed.text === "") {
+    return {
+      ok: false,
+      latencyMs,
+      providerId: provider.id,
+      model: modelId,
+      checks,
+      reason: "model returned an empty response (HTTP 200, no content)",
+    };
+  }
+  return {
+    ok: true,
+    latencyMs,
+    providerId: provider.id,
+    model: modelId,
+    checks: { ...checks, nonEmptyContent: true },
+    contentPreview: clean(parsed.text.slice(0, 200)),
+    ...(parsed.usage !== undefined ? { usage: parsed.usage } : {}),
+  };
+}
+
+/** Some OpenAI-compatible gateways answer 200 with `{"error": …}` — read the
+ * message when present (the modelAccepted failure class). */
+function readErrorFromOkBody(body: unknown): string | null {
+  if (typeof body !== "object" || body === null) return null;
+  const record = body as { error?: unknown };
+  if (record.error === undefined || record.error === null) return null;
+  if (typeof record.error === "string") return record.error;
+  if (typeof record.error === "object") {
+    const message = (record.error as { message?: unknown }).message;
+    if (typeof message === "string") return message;
+  }
+  return "unrecognized error object in a 200 body";
+}
+
+/** Parse the reply text + usage from an OpenAI Responses-format body. */
+function parseResponsesBody(
+  body: unknown,
+): { text: string; usage: { inputTokens: number; outputTokens: number } | undefined } {
+  if (typeof body !== "object" || body === null) return { text: "", usage: undefined };
+  const record = body as Record<string, unknown>;
+  // output_text convenience field first (OpenAI), then the output array.
+  const outputText =
+    typeof record.output_text === "string"
+      ? record.output_text
+      : Array.isArray(record.output)
+        ? (record.output as unknown[])
+            .map((item) => {
+              if (typeof item !== "object" || item === null) return "";
+              const itemRecord = item as { type?: unknown; content?: unknown };
+              if (itemRecord.type !== "message") return "";
+              const parts = Array.isArray(itemRecord.content) ? itemRecord.content : [];
+              return parts
+                .map((p) =>
+                  typeof p === "object" && p !== null && "text" in (p as Record<string, unknown>)
+                    ? String((p as { text?: unknown }).text ?? "")
+                    : "",
+                )
+                .join("");
+            })
+            .join("")
+        : "";
+  const usageRecord =
+    typeof record.usage === "object" && record.usage !== null
+      ? (record.usage as { input_tokens?: unknown; output_tokens?: unknown })
+      : undefined;
+  const usage =
+    usageRecord !== undefined &&
+    typeof usageRecord.input_tokens === "number" &&
+    typeof usageRecord.output_tokens === "number"
+      ? { inputTokens: usageRecord.input_tokens, outputTokens: usageRecord.output_tokens }
+      : undefined;
+  return { text: outputText.trim(), usage };
 }

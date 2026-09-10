@@ -98,9 +98,19 @@ describe("R43-5: orchestration.subagentModel storage", () => {
   });
 
   it("round-trips a valid tool-capable catalog id and clears back to null", () => {
+    // ROUND-82 (R82, §2.4.5): subagentModel is the provider-scoped ref
+    // {providerId, modelId} — the LEGACY bare-string WRITE form (kept for
+    // old callers) reads back openrouter-scoped (every pre-R82 value was
+    // an OpenRouter catalog id).
     const set = setOrchestrationSettings(db, { subagentModel: SUBAGENT_DEFAULT_MODEL_ID });
-    expect(set.subagentModel).toBe(SUBAGENT_DEFAULT_MODEL_ID);
-    expect(getOrchestrationSettings(db).subagentModel).toBe(SUBAGENT_DEFAULT_MODEL_ID);
+    expect(set.subagentModel).toEqual({
+      providerId: "openrouter",
+      modelId: SUBAGENT_DEFAULT_MODEL_ID,
+    });
+    expect(getOrchestrationSettings(db).subagentModel).toEqual({
+      providerId: "openrouter",
+      modelId: SUBAGENT_DEFAULT_MODEL_ID,
+    });
 
     const cleared = setOrchestrationSettings(db, { subagentModel: null });
     expect(cleared.subagentModel).toBeNull();
@@ -195,16 +205,24 @@ describe("R43-5: orchestrator child-model override wiring", () => {
 
 describe("R43-5: PUT /settings/orchestration subagentModel route contract", () => {
   it("accepts a valid catalog id, reflects it on GET, and clears via null", async () => {
+    // ROUND-82 (R82, §2.4.5): the wire keeps the legacy string WRITE form —
+    // reads normalize to the openrouter-scoped ref.
     const put = await authInject({
       method: "PUT",
       url: "/api/v1/settings/orchestration",
       payload: { subagentModel: SUBAGENT_DEFAULT_MODEL_ID },
     });
     expect(put.statusCode).toBe(200);
-    expect(put.json().subagentModel).toBe(SUBAGENT_DEFAULT_MODEL_ID);
+    expect(put.json().subagentModel).toEqual({
+      providerId: "openrouter",
+      modelId: SUBAGENT_DEFAULT_MODEL_ID,
+    });
 
     const get = await authInject({ method: "GET", url: "/api/v1/settings/orchestration" });
-    expect(get.json().subagentModel).toBe(SUBAGENT_DEFAULT_MODEL_ID);
+    expect(get.json().subagentModel).toEqual({
+      providerId: "openrouter",
+      modelId: SUBAGENT_DEFAULT_MODEL_ID,
+    });
 
     const cleared = await authInject({
       method: "PUT",

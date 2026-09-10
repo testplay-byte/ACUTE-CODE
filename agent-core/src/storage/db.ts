@@ -11,6 +11,9 @@ import Database from "better-sqlite3";
 import { TOOL_NAMES, type Agent } from "./agents.js";
 import { ensureDefaultAgent } from "./agents.js";
 import { seedBuiltinProviders } from "./providers.js";
+// ROUND-82 (R82): the 0030 capability backfill — catalog tools bits onto
+// openrouter rows still NULL (unknown). Idempotent; runs after migrations.
+import { backfillModelCapabilities } from "./models.js";
 import { seedBuiltinSkills } from "./skills.js";
 
 export type SqliteDatabase = Database.Database;
@@ -158,6 +161,10 @@ export function openDatabase(path: string): SqliteDatabase {
   applyMigrations(db);
   seedTemplates(db);
   seedBuiltinProviders(db);
+  // ROUND-82 (R82): the 0030 model-capability backfill — catalog
+  // supportsTools bits onto openrouter-scoped rows whose columns are still
+  // NULL. Idempotent (NULL-guarded WHERE): a second open is a no-op.
+  backfillModelCapabilities(db);
   // ROUND-61: built-in skills seed once per open (INSERT OR IGNORE — user
   // edits persist; deletion of built-ins is refused in skills.ts).
   seedBuiltinSkills(db);

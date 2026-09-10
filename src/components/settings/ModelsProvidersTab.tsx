@@ -37,6 +37,7 @@ import {
   removeKeyPoolSlot,
   setKeyPoolSlot,
   storeProviderKey,
+  testModelConnection,
   testProviderConnection,
   updateProvider,
   updateProviderModelConfig,
@@ -1755,6 +1756,147 @@ interface ProviderCatalogState {
   isError: boolean;
 }
 
+// ── ROUND-82 (R82, owner: "a test button … check if the model is working
+//    properly or not … not only check for a response, but also check if the
+//    response is reasonable"): the PER-MODEL test button. Local state only
+//    (a running test never re-renders the whole list); one test at a time
+//    per row (the probe spends ~64 output tokens on paid models — the cap
+//    the spec chose over a server-side rate limit for a single-user desktop
+//    app). The result line wraps BELOW the row (the row gained flex-wrap)
+//    so the full raw reason (the R77-style expand toggle) never squeezes
+//    the columns. ──────────────────────────────────────────────────────────
+function ModelTestButton({ model }: { model: ProviderModelConfig }) {
+  const styles = useThemeStyles();
+  type TestState =
+    | { kind: "idle" }
+    | { kind: "testing" }
+    | { kind: "pass"; latencyMs: number; preview?: string; usage?: { inputTokens: number; outputTokens: number } }
+    | { kind: "fail"; reason: string };
+  const [state, setState] = useState<TestState>({ kind: "idle" });
+  const [showFull, setShowFull] = useState(false);
+  const [showReply, setShowReply] = useState(false);
+
+  const run = (): void => {
+    setState({ kind: "testing" });
+    setShowFull(false);
+    setShowReply(false);
+    testModelConnection(model.id)
+      .then((result) => {
+        if (result.ok) {
+          setState({
+            kind: "pass",
+            latencyMs: result.latencyMs,
+            ...(result.contentPreview !== undefined ? { preview: result.contentPreview } : {}),
+            ...(result.usage !== undefined ? { usage: result.usage } : {}),
+          });
+        } else {
+          setState({
+            kind: "fail",
+            reason: result.reason ?? "the probe failed without a reason",
+          });
+        }
+      })
+      .catch((err: unknown) => {
+        // ApiError — 409 (no key / provider gone) or 502 (transport). The
+        // message is the honest envelope text (R77 discipline).
+        setState({
+          kind: "fail",
+          reason: err instanceof Error ? err.message : String(err),
+        });
+      });
+  };
+
+  return (
+    <>
+      <button
+        onClick={run}
+        disabled={state.kind === "testing"}
+        aria-label={`Test model ${model.displayName || model.modelId}`}
+        title="Send a real test request to this model — checks the key, the model id, and the reply"
+        data-testid="model-test-button"
+        data-model-row={model.id}
+        className="h-7 px-2 grid place-items-center rounded-[8px] shrink-0 text-[11px] font-bold"
+        style={{
+          color: state.kind === "pass" ? "#22c55e" : state.kind === "fail" ? "#ef4444" : styles.textSecondary,
+        }}
+        onMouseEnter={(e) => (e.currentTarget.style.background = withAlpha(styles.accent, 0.1))}
+        onMouseLeave={(e) => (e.currentTarget.style.background = "transparent")}
+      >
+        {state.kind === "testing" ? (
+          <RefreshCw size={12} className="animate-spin" />
+        ) : state.kind === "pass" ? (
+          <Check size={12} strokeWidth={2.5} />
+        ) : state.kind === "fail" ? (
+          <AlertTriangle size={12} />
+        ) : (
+          <Zap size={12} />
+        )}
+      </button>
+      {/* The result line — wraps below the row (w-full in the wrapped flex row). */}
+      {state.kind !== "idle" && state.kind !== "testing" && (
+        <div
+          className="w-full min-w-0 px-1 pb-1"
+          data-testid="model-test-result"
+          data-model-test={state.kind}
+        >
+          {state.kind === "pass" ? (
+            <div className="flex flex-col gap-0.5 min-w-0">
+              <div className="flex items-center gap-2 flex-wrap text-[10.5px]">
+                <span className="font-bold" style={{ color: "#22c55e" }}>
+                  ✓ responded in {state.latencyMs}ms
+                </span>
+                {state.usage !== undefined && (
+                  <span className="font-mono" style={{ color: styles.textTertiary }}>
+                    {state.usage.inputTokens} in / {state.usage.outputTokens} out
+                  </span>
+                )}
+                {state.preview !== undefined && (
+                  <button
+                    onClick={() => setShowReply(!showReply)}
+                    className="font-bold underline underline-offset-2"
+                    style={{ color: styles.textTertiary }}
+                    data-testid="model-test-show-reply"
+                  >
+                    {showReply ? "Hide reply" : "Show reply"}
+                  </button>
+                )}
+              </div>
+              {showReply && state.preview !== undefined && (
+                <div
+                  className="font-mono text-[10.5px] break-all rounded-[6px] px-2 py-1 max-h-24 overflow-y-auto"
+                  style={{ background: styles.subtle, color: styles.textSecondary }}
+                >
+                  {state.preview}
+                </div>
+              )}
+            </div>
+          ) : (
+            <div className="flex flex-col gap-0.5 min-w-0">
+              <div
+                className="text-[10.5px] break-all"
+                style={{ color: "#ef4444" }}
+                data-testid="model-test-reason"
+              >
+                {showFull ? state.reason : `${state.reason.slice(0, 240)}${state.reason.length > 240 ? "…" : ""}`}
+              </div>
+              {state.reason.length > 240 && (
+                <button
+                  onClick={() => setShowFull(!showFull)}
+                  className="text-[10.5px] font-bold underline underline-offset-2 self-start"
+                  style={{ color: styles.textTertiary }}
+                  data-testid="model-test-show-full"
+                >
+                  {showFull ? "Show less" : "Show full error"}
+                </button>
+              )}
+            </div>
+          )}
+        </div>
+      )}
+    </>
+  );
+}
+
 function ModelListSection({
   providerId,
   models,
@@ -1848,7 +1990,9 @@ function ModelListSection({
           {merged.map((m) => (
             <div
               key={m.rowId ?? `cat:${m.modelId}`}
-              className="flex items-center gap-3 px-4 py-2.5 border-b last:border-b-0"
+              // ROUND-82: flex-wrap — the model-test result line (w-full)
+              // wraps below the row instead of squeezing the columns.
+              className="flex flex-wrap items-center gap-3 px-4 py-2.5 border-b last:border-b-0"
               style={{ borderColor: styles.borderSubtle }}
             >
               {/* left: name + badges / id + pricing summary (R50-d) */}
@@ -1919,6 +2063,9 @@ function ModelListSection({
               </div>
               {m.configured && m.rowId !== null && (
                 <div className="flex items-center gap-1 shrink-0">
+                  {/* ROUND-82 (R82): the per-model TEST — Zap between the
+                      config pencil and the delete trash. */}
+                  <ModelTestButton model={models.find((row) => row.id === m.rowId)!} />
                   {/* ROUND-50 (R50-d): the full configuration dialog — pricing,
                       context window, max output, thinking, hidden. */}
                   <button
@@ -2010,11 +2157,16 @@ function AddModelsDialog({
   // ROUND-60 (R60-B): the Free only ↔ All models scope toggle — moved INTO
   // the picker from the models list header (the owner: "in the add model for
   // the open router, there should be an option to switch between free only
-  // and all models properly"). It rides the SHARED persisted pref
-  // (useSettingsStore.modelsFreeOnly — the round-43 design) so the chat
-  // composer's model picker honors the same choice; free is the default.
-  const modelsFreeOnly = useSettingsStore((s) => s.modelsFreeOnly);
-  const setModelsFreeOnly = useSettingsStore((s) => s.setModelsFreeOnly);
+  // and all models properly").
+  // ROUND-82 (R82, §2.4.6 — the NVIDIA gap): the scope is now LOCAL to the
+  // dialog (initialized from the shared pref). Two reasons: (a) a provider
+  // whose catalog has ZERO free-classified entries (NIM: none of the 81 ids
+  // end ":free") rendered the "No free models match" empty state on open —
+  // functional but reads as broken; the local scope AUTO-SWITCHES to All
+  // when the free filter would hide everything. (b) The shared pref the
+  // composer flyout reads is never silently flipped by that auto-switch
+  // (the spec's risk-#8 rule) — the composer keeps its own control.
+  const [freeOnly, setFreeOnly] = useState(useSettingsStore.getState().modelsFreeOnly);
 
   const staticById = useMemo(
     () => new Map(staticCatalog.map((m) => [m.modelId, m])),
@@ -2022,6 +2174,15 @@ function AddModelsDialog({
   );
 
   const q = query.trim().toLowerCase();
+  // ROUND-82: the free-entry count for the auto-switch (pre-search — the
+  // catalog's classification, not the query's filter).
+  const catalogFreeCount = catalog.entries.filter((entry) => {
+    const meta = staticById.get(entry.id);
+    return meta ? meta.free : isFreeModelEntry({ modelId: entry.id });
+  }).length;
+  useEffect(() => {
+    if (freeOnly && catalogFreeCount === 0) setFreeOnly(false);
+  }, [freeOnly, catalogFreeCount]);
   // ROUND-60: free-only filters BEFORE the 300-row sanity cap — `free`
   // prefers the served catalog's flag, falling back to the id heuristic.
   const rows = catalog.entries
@@ -2032,7 +2193,7 @@ function AddModelsDialog({
         entry.name.toLowerCase().includes(q),
     )
     .filter((entry) => {
-      if (!modelsFreeOnly) return true;
+      if (!freeOnly) return true;
       const meta = staticById.get(entry.id);
       return meta ? meta.free : isFreeModelEntry({ modelId: entry.id });
     })
@@ -2181,8 +2342,9 @@ function AddModelsDialog({
             />
           </div>
           {/* Same segmented visual language the rest of the app uses
-              (SubAgentsTab / ModelSelector) — the toggle rides the shared
-              persisted modelsFreeOnly pref. */}
+              (SubAgentsTab / ModelSelector) — ROUND-82: the toggle rides the
+              dialog-LOCAL scope (auto-switches to All for zero-free catalogs;
+              the shared pref is initialized from, never written to). */}
           <div
             role="group"
             aria-label="Catalog filter"
@@ -2190,8 +2352,8 @@ function AddModelsDialog({
             style={{ borderColor: styles.border }}
           >
             {([
-              { id: "free", label: "Free only", active: modelsFreeOnly, pick: () => setModelsFreeOnly(true) },
-              { id: "all", label: "All models", active: !modelsFreeOnly, pick: () => setModelsFreeOnly(false) },
+              { id: "free", label: "Free only", active: freeOnly, pick: () => setFreeOnly(true) },
+              { id: "all", label: "All models", active: !freeOnly, pick: () => setFreeOnly(false) },
             ] as const).map((seg) => (
               <button
                 key={seg.id}
@@ -2300,7 +2462,7 @@ function AddModelsDialog({
             <div className="px-2 py-4 text-[11.5px]" style={{ color: styles.textTertiary }}>
               {/* ROUND-60: honest about BOTH filters — the free-only scope or
                   the search text may each have emptied the list. */}
-              {modelsFreeOnly
+              {freeOnly
                 ? "No free models match — switch to “All models” or refine the search."
                 : `No catalog model matches “${query.trim()}” — add it by id below.`}
             </div>
@@ -2378,6 +2540,13 @@ interface ModelConfigDraft {
   // and the POST prefill could set it), so a row could never be fully
   // configured from this page.
   supportsVision: boolean;
+  // ROUND-82 (R82, owner: "proper options … vision, audio, video" + tool
+  // use): the tri-state capability flags — null = unknown (never set, no
+  // catalog source — the honest default for NIM/custom rows), false =
+  // explicitly off, true = explicitly on. On/Off/Unknown segments below.
+  supportsTools: boolean | null;
+  supportsAudio: boolean | null;
+  supportsVideo: boolean | null;
   hidden: boolean;
 }
 
@@ -2392,6 +2561,9 @@ function draftFromModel(model: ProviderModelConfig): ModelConfigDraft {
     cachePrice: num(model.inputPriceCachedPerMtok),
     supportsThinking: model.supportsThinking,
     supportsVision: model.supportsVision,
+    supportsTools: model.supportsTools,
+    supportsAudio: model.supportsAudio,
+    supportsVideo: model.supportsVideo,
     hidden: model.hidden,
   };
 }
@@ -2454,6 +2626,11 @@ function ModelConfigDialog({
       inputPriceCachedPerMtok: parsed.cachePrice,
       supportsThinking: draft.supportsThinking,
       supportsVision: draft.supportsVision,
+      // ROUND-82 (R82): the tri-state capability flags ride the PATCH —
+      // null is a legitimate value (reset to unknown), sent as-is.
+      supportsTools: draft.supportsTools,
+      supportsAudio: draft.supportsAudio,
+      supportsVideo: draft.supportsVideo,
       hidden: draft.hidden,
     });
   };
@@ -2512,6 +2689,63 @@ function ModelConfigDialog({
     </div>
   );
 
+  /** ROUND-82 (R82, owner: "proper options" — the capability card's
+   * tri-state segmented control): On / Off / Unknown. Unknown (null) is the
+   * honest default for rows with no catalog source (NIM/custom) — the
+   * 0004-era NOT NULL columns could only lie "off"; migration 0030's
+   * nullable columns make "unknown" a real state. Mirrors the Toggle's
+   * exact styling rhythm (h-7 segments, accent-tinted active). */
+  const TriStateToggle = ({
+    label,
+    value,
+    onChange,
+    hint,
+    testId,
+  }: {
+    label: string;
+    value: boolean | null;
+    onChange: (v: boolean | null) => void;
+    hint: string;
+    testId: string;
+  }) => (
+    <div className="flex items-center gap-3" data-testid={testId}>
+      <div className="min-w-0 flex-1">
+        <span className="block text-[12px] font-bold" style={{ color: styles.textSecondary }}>
+          {label}
+        </span>
+        <span className="block text-[10.5px]" style={{ color: styles.textTertiary }}>
+          {hint}
+        </span>
+      </div>
+      <div
+        role="group"
+        aria-label={label}
+        className="flex items-center rounded-[10px] border-[1.5px] overflow-hidden shrink-0"
+        style={{ borderColor: styles.border }}
+      >
+        {([
+          { id: "on", label: "On", active: value === true, pick: () => onChange(true) },
+          { id: "off", label: "Off", active: value === false, pick: () => onChange(false) },
+          { id: "unknown", label: "?", active: value === null, pick: () => onChange(null) },
+        ] as const).map((seg) => (
+          <button
+            key={seg.id}
+            onClick={seg.pick}
+            aria-pressed={seg.active}
+            title={seg.id === "unknown" ? "Unknown — never set or no catalog source for this provider" : undefined}
+            className="h-7 px-3 text-[11px] font-bold transition-colors"
+            style={{
+              background: seg.active ? withAlpha(styles.accent, 0.12) : "transparent",
+              color: seg.active ? styles.accent : styles.textTertiary,
+            }}
+          >
+            {seg.label}
+          </button>
+        ))}
+      </div>
+    </div>
+  );
+
   const preview = formatPricingSummary({
     inputPricePerMtok: parseNumericField(draft.inputPrice) === "invalid" ? null : (parseNumericField(draft.inputPrice) as number | null),
     outputPricePerMtok: parseNumericField(draft.outputPrice) === "invalid" ? null : (parseNumericField(draft.outputPrice) as number | null),
@@ -2530,13 +2764,25 @@ function ModelConfigDialog({
       }}
     >
       <div
-        className="w-full max-w-[520px] max-h-[86vh] overflow-y-auto auto-scroll rounded-[20px] border-[1.5px] p-5 flex flex-col gap-4"
+        className="w-full max-w-[680px] max-h-[86vh] overflow-y-auto auto-scroll rounded-[20px] border-[1.5px] p-5 flex flex-col gap-4"
         style={{ background: styles.card, borderColor: styles.border, boxShadow: styles.bentoShadow }}
       >
-        {/* header */}
-        <div className="flex items-center gap-2">
+        {/* header — ROUND-82 (R82, owner: "the model editing options …
+            properly laid out"): the dialog reorganized into a two-column
+            layout (≥560px): Identity + Capabilities left, Sizing + Pricing
+            right; single column below. The provider chip names the routing
+            target (R82: the send wire carries providerId — the chip is the
+            row's ACTUAL endpoint, not a decoration). */}
+        <div className="flex items-center gap-2 flex-wrap">
           <span className="text-[15px] font-black" style={{ color: styles.text }}>
             Configure model
+          </span>
+          <span
+            className="px-1.5 py-0.5 rounded-full font-mono text-[10px] font-bold"
+            style={{ background: styles.subtle, color: styles.textTertiary }}
+            title="The provider that serves this model (the send wire routes here since R82)"
+          >
+            {model.providerId}
           </span>
           <span className="flex-1" />
           <button
@@ -2548,151 +2794,198 @@ function ModelConfigDialog({
             <X size={14} />
           </button>
         </div>
-        <p className="-mt-2 font-mono text-[11px] break-all" style={{ color: styles.textTertiary }}>
-          {model.modelId}
-        </p>
 
-        {/* display name */}
-        <div>
-          <label className="mb-1.5 block text-[11px] font-bold" style={{ color: styles.textSecondary }}>
-            Display name
-          </label>
-          <input
-            value={draft.displayName}
-            onChange={(e) => set("displayName", e.target.value)}
-            placeholder={model.modelId}
-            aria-label="Display name"
-            className="h-10 w-full rounded-[10px] border-[1.5px] px-3 text-[13px] outline-none"
-            style={inputStyle}
-          />
-        </div>
+        {/* ROUND-82: the two-column body — Identity + Capabilities (left)
+            and Sizing + Pricing (right) at ≥560px; single column below
+            (small windows / narrow settings panes). */}
+        <div className="grid grid-cols-1 min-[560px]:grid-cols-2 gap-4 items-start">
+          {/* ── LEFT: Identity + Capabilities ── */}
+          <div className="flex flex-col gap-4 min-w-0">
+            <div className="flex flex-col gap-2">
+              <SectionLabel>Identity</SectionLabel>
+              <div>
+                <label className="mb-1.5 block text-[11px] font-bold" style={{ color: styles.textSecondary }}>
+                  Display name
+                </label>
+                <input
+                  value={draft.displayName}
+                  onChange={(e) => set("displayName", e.target.value)}
+                  placeholder={model.modelId}
+                  aria-label="Display name"
+                  className="h-10 w-full rounded-[10px] border-[1.5px] px-3 text-[13px] outline-none"
+                  style={inputStyle}
+                />
+              </div>
+              <div>
+                <label className="mb-1.5 block text-[11px] font-bold" style={{ color: styles.textSecondary }}>
+                  Model id
+                </label>
+                <p
+                  className="h-10 flex items-center w-full rounded-[10px] border-[1.5px] px-3 font-mono text-[11px] break-all overflow-hidden"
+                  style={{ borderColor: styles.border, background: styles.subtle, color: styles.textTertiary }}
+                  aria-label="Model id (read-only)"
+                >
+                  {model.modelId}
+                </p>
+              </div>
+              <Toggle
+                label="Hide from chat picker"
+                value={draft.hidden}
+                onChange={(v) => set("hidden", v)}
+                hint="Kept here in Settings, but not offered in the chat model selector."
+              />
+            </div>
 
-        {/* sizing */}
-        <div className="flex flex-col gap-2">
-          <SectionLabel>Sizing</SectionLabel>
-          <div className="grid grid-cols-2 gap-2">
-            <div>
-              <label className="mb-1 block text-[10.5px] font-bold" style={{ color: styles.textTertiary }}>
-                Context window (tokens)
-              </label>
-              <input
-                value={draft.contextWindow}
-                onChange={(e) => set("contextWindow", e.target.value)}
-                placeholder="unknown"
-                aria-label="Context window (tokens)"
-                className="h-10 w-full rounded-[10px] border-[1.5px] px-3 font-mono text-[12px] outline-none"
-                style={inputStyle}
+            <div className="flex flex-col gap-3">
+              <SectionLabel>Capabilities</SectionLabel>
+              {/* ROUND-82 (R82, owner: "there should be proper options …
+                  like vision, audio, video" — "consumed by" micro-hints on
+                  every row, the R62-2b pattern): the first two are the
+                  0004-era boolean columns (On/Off only — the wire contract
+                  is unchanged); the last three are migration 0030's
+                  tri-state flags (On/Off/Unknown — Unknown is the honest
+                  default for NIM/custom rows with no catalog source). */}
+              <Toggle
+                label="Reasoning"
+                value={draft.supportsThinking}
+                onChange={(v) => set("supportsThinking", v)}
+                hint="Emits thinking tokens — enables the composer's thinking-level control."
               />
-            </div>
-            <div>
-              <label className="mb-1 block text-[10.5px] font-bold" style={{ color: styles.textTertiary }}>
-                Max output tokens
-              </label>
-              <input
-                value={draft.maxOutputTokens}
-                onChange={(e) => set("maxOutputTokens", e.target.value)}
-                placeholder="unknown"
-                aria-label="Max output tokens"
-                className="h-10 w-full rounded-[10px] border-[1.5px] px-3 font-mono text-[12px] outline-none"
-                style={inputStyle}
+              <Toggle
+                label="Vision"
+                value={draft.supportsVision}
+                onChange={(v) => set("supportsVision", v)}
+                hint="Accepts image inputs — gates the main-mode vision relay."
               />
-            </div>
-          </div>
-        </div>
-
-        {/* pricing */}
-        <div className="flex flex-col gap-2">
-          {/* ROUND-62 (R62-2b): the unit is now IN each label ("$ per 1M
-              tokens"), not only the section header — the owner's "unable to
-              configure the per million input and output token price
-              properly" complaint; the old "Input"/"Output" one-worders +
-              the jargon aria-label "($/Mtok)" left the unit ambiguous.
-              Decimal inputMode + the string-draft parser keep 0.075-style
-              values first-class ("" still means unknown → null). */}
-          <SectionLabel>Pricing — USD per 1M tokens</SectionLabel>
-          <div className="grid grid-cols-3 gap-2">
-            <div>
-              <label className="mb-1 block text-[10.5px] font-bold" style={{ color: styles.textTertiary }}>
-                Input price
-              </label>
-              <input
-                value={draft.inputPrice}
-                onChange={(e) => set("inputPrice", e.target.value)}
-                inputMode="decimal"
-                placeholder="unknown"
-                aria-label="Input price ($ per 1M tokens)"
-                className="h-10 w-full rounded-[10px] border-[1.5px] px-3 font-mono text-[12px] outline-none"
-                style={inputStyle}
+              <TriStateToggle
+                label="Tool use"
+                value={draft.supportsTools}
+                onChange={(v) => set("supportsTools", v)}
+                hint="Can call the app's tools — required for agentic turns."
+                testId="model-cap-tools"
               />
-            </div>
-            <div>
-              <label className="mb-1 block text-[10.5px] font-bold" style={{ color: styles.textTertiary }}>
-                Output price
-              </label>
-              <input
-                value={draft.outputPrice}
-                onChange={(e) => set("outputPrice", e.target.value)}
-                inputMode="decimal"
-                placeholder="unknown"
-                aria-label="Output price ($ per 1M tokens)"
-                className="h-10 w-full rounded-[10px] border-[1.5px] px-3 font-mono text-[12px] outline-none"
-                style={inputStyle}
+              <TriStateToggle
+                label="Audio input"
+                value={draft.supportsAudio}
+                onChange={(v) => set("supportsAudio", v)}
+                hint="Accepts audio attachments."
+                testId="model-cap-audio"
               />
-            </div>
-            <div>
-              <label className="mb-1 block text-[10.5px] font-bold" style={{ color: styles.textTertiary }}>
-                Cache read price
-              </label>
-              <input
-                value={draft.cachePrice}
-                onChange={(e) => set("cachePrice", e.target.value)}
-                inputMode="decimal"
-                placeholder="unknown"
-                aria-label="Cache read price ($ per 1M tokens)"
-                className="h-10 w-full rounded-[10px] border-[1.5px] px-3 font-mono text-[12px] outline-none"
-                style={inputStyle}
+              <TriStateToggle
+                label="Video input"
+                value={draft.supportsVideo}
+                onChange={(v) => set("supportsVideo", v)}
+                hint="Accepts video inputs."
+                testId="model-cap-video"
               />
             </div>
           </div>
-          <p className="text-[10.5px]" style={{ color: styles.textTertiary }}>
-            Each field is US dollars per 1 million tokens — leave empty for unknown (an empty price is never treated as $0).
-          </p>
-        </div>
 
-        {/* behavior */}
-        <div className="flex flex-col gap-3">
-          <SectionLabel>Behavior</SectionLabel>
-          <Toggle
-            label="Supports thinking"
-            value={draft.supportsThinking}
-            onChange={(v) => set("supportsThinking", v)}
-            hint="The model can emit reasoning output."
-          />
-          {/* ROUND-62 (R62-2b): the missing vision toggle — same PATCH field
-              the R61 vision relay gates on (main-mode image inputs). */}
-          <Toggle
-            label="Supports vision"
-            value={draft.supportsVision}
-            onChange={(v) => set("supportsVision", v)}
-            hint="Accepts image inputs (required for main-mode vision relay)."
-          />
-          <Toggle
-            label="Hidden from chat picker"
-            value={draft.hidden}
-            onChange={(v) => set("hidden", v)}
-            hint="Kept here in Settings, but not offered in the chat model selector."
-          />
-        </div>
+          {/* ── RIGHT: Sizing + Pricing ── */}
+          <div className="flex flex-col gap-4 min-w-0">
+            {/* sizing */}
+            <div className="flex flex-col gap-2">
+              <SectionLabel>Sizing</SectionLabel>
+              <div className="grid grid-cols-2 gap-2">
+                <div>
+                  <label className="mb-1 block text-[10.5px] font-bold" style={{ color: styles.textTertiary }}>
+                    Context window (tokens)
+                  </label>
+                  <input
+                    value={draft.contextWindow}
+                    onChange={(e) => set("contextWindow", e.target.value)}
+                    placeholder="unknown"
+                    aria-label="Context window (tokens)"
+                    className="h-10 w-full rounded-[10px] border-[1.5px] px-3 font-mono text-[12px] outline-none"
+                    style={inputStyle}
+                  />
+                </div>
+                <div>
+                  <label className="mb-1 block text-[10.5px] font-bold" style={{ color: styles.textTertiary }}>
+                    Max output tokens
+                  </label>
+                  <input
+                    value={draft.maxOutputTokens}
+                    onChange={(e) => set("maxOutputTokens", e.target.value)}
+                    placeholder="unknown"
+                    aria-label="Max output tokens"
+                    className="h-10 w-full rounded-[10px] border-[1.5px] px-3 font-mono text-[12px] outline-none"
+                    style={inputStyle}
+                  />
+                </div>
+              </div>
+            </div>
 
-        {/* live preview */}
-        <div
-          className="rounded-[10px] px-3 py-2 font-mono text-[10.5px]"
-          style={{ background: styles.subtle, color: styles.textTertiary }}
-        >
-          {preview ?? "pricing not set"}
-          {parseNumericField(draft.contextWindow) !== null &&
-            parseNumericField(draft.contextWindow) !== "invalid" &&
-            ` · ${formatContextWindow(parseNumericField(draft.contextWindow) as number)}`}
+            {/* pricing */}
+            <div className="flex flex-col gap-2">
+              {/* ROUND-62 (R62-2b): the unit is now IN each label ("$ per 1M
+                  tokens"), not only the section header — the owner's "unable to
+                  configure the per million input and output token price
+                  properly" complaint; the old "Input"/"Output" one-worders +
+                  the jargon aria-label "($/Mtok)" left the unit ambiguous.
+                  Decimal inputMode + the string-draft parser keep 0.075-style
+                  values first-class ("" still means unknown → null). */}
+              <SectionLabel>Pricing — USD per 1M tokens</SectionLabel>
+              <div className="grid grid-cols-1 gap-2">
+                <div>
+                  <label className="mb-1 block text-[10.5px] font-bold" style={{ color: styles.textTertiary }}>
+                    Input price
+                  </label>
+                  <input
+                    value={draft.inputPrice}
+                    onChange={(e) => set("inputPrice", e.target.value)}
+                    inputMode="decimal"
+                    placeholder="unknown"
+                    aria-label="Input price ($ per 1M tokens)"
+                    className="h-10 w-full rounded-[10px] border-[1.5px] px-3 font-mono text-[12px] outline-none"
+                    style={inputStyle}
+                  />
+                </div>
+                <div>
+                  <label className="mb-1 block text-[10.5px] font-bold" style={{ color: styles.textTertiary }}>
+                    Output price
+                  </label>
+                  <input
+                    value={draft.outputPrice}
+                    onChange={(e) => set("outputPrice", e.target.value)}
+                    inputMode="decimal"
+                    placeholder="unknown"
+                    aria-label="Output price ($ per 1M tokens)"
+                    className="h-10 w-full rounded-[10px] border-[1.5px] px-3 font-mono text-[12px] outline-none"
+                    style={inputStyle}
+                  />
+                </div>
+                <div>
+                  <label className="mb-1 block text-[10.5px] font-bold" style={{ color: styles.textTertiary }}>
+                    Cache read price
+                  </label>
+                  <input
+                    value={draft.cachePrice}
+                    onChange={(e) => set("cachePrice", e.target.value)}
+                    inputMode="decimal"
+                    placeholder="unknown"
+                    aria-label="Cache read price ($ per 1M tokens)"
+                    className="h-10 w-full rounded-[10px] border-[1.5px] px-3 font-mono text-[12px] outline-none"
+                    style={inputStyle}
+                  />
+                </div>
+              </div>
+              <p className="text-[10.5px]" style={{ color: styles.textTertiary }}>
+                Each field is US dollars per 1 million tokens — leave empty for unknown (an empty price is never treated as $0).
+              </p>
+            </div>
+
+            {/* live preview */}
+            <div
+              className="rounded-[10px] px-3 py-2 font-mono text-[10.5px]"
+              style={{ background: styles.subtle, color: styles.textTertiary }}
+            >
+              {preview ?? "pricing not set"}
+              {parseNumericField(draft.contextWindow) !== null &&
+                parseNumericField(draft.contextWindow) !== "invalid" &&
+                ` · ${formatContextWindow(parseNumericField(draft.contextWindow) as number)}`}
+            </div>
+          </div>
         </div>
 
         {error && (
@@ -2701,7 +2994,9 @@ function ModelConfigDialog({
           </p>
         )}
 
-        <div className="flex items-center gap-2">
+        {/* ROUND-82 (R82): flex-wrap — the footer now hosts the per-model
+            test result line (w-full) below the buttons when one runs. */}
+        <div className="flex flex-wrap items-center gap-2">
           <button
             onClick={onClose}
             className="h-10 px-4 rounded-[10px] border-[1.5px] text-[12px] font-bold"
@@ -2709,6 +3004,9 @@ function ModelConfigDialog({
           >
             Cancel
           </button>
+          {/* ROUND-82 (R82, owner: the model edit dialog gets the test too —
+              the natural pairing with Save: configure, test, save). */}
+          <ModelTestButton model={model} />
           <span className="flex-1" />
           <button
             onClick={submit}
