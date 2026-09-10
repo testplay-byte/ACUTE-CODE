@@ -241,7 +241,7 @@
     }
   ],
   "quality": {
-    "ci": "GREEN — R84 push 8ce6e08 → CI run 34484344162 SUCCESS (the modularity round: lint, typechecks, the 2,825-test root suite in 155 files, build, license audit). Wave 2 shipped behavior-identical: the SCC break (also green: the 8845069 push → run 34475792238) + the 57% server.ts split.",
+    "ci": "GREEN — R85 push f253788 → CI run 34505690618 SUCCESS (the docs-only structure re-assessment: lint, typechecks, the 2,825-test root suite in 155 files, build, license audit, docs check). The R84 modularity round underneath: push 8ce6e08 → run 34484344162 also green.",
     "suites": [
       {
         "name": "frontend",
