@@ -1,4 +1,4 @@
-<!-- last-reviewed: 2026-09-10 round-83 -->
+<!-- last-reviewed: 2026-09-10 round-84 -->
 # Changelog
 
 All notable changes to ACUTE-CODE are documented here. Entries are written for
@@ -11,11 +11,34 @@ version number is single-sourced from the root `package.json`
 
 ## [Unreleased]
 
-Planned next: the modularity roadmap's Wave 2 (the server.ts route split,
-the turn-loop harness, the ToolDeps cycle break), external plugin ctx
+Planned next: the modularity roadmap's continuation (the remaining server.ts
+domains — terminal, MCP, computer-use, diagnostics, approvals, the streamed
+SSE route; the turn-loop harness extraction), external plugin ctx
 enrichment, the lessons-ledger affordance, ratings-driven prompt tuning, and
 the standing items (edit-linting, installer code-signing, the Files-tab
 polish, agent web-app-testing tools).
+
+## [0.83.0] - 2026-09-10
+
+### Changed — the modularity round (Wave 2 of the R80.5 audit; behavior-identical, test-guarded)
+- **The 25-file agents↔tools import cycle is DEAD** — the static import
+  graph is now a clean DAG. Root cause: the delegation plugin statically
+  imported the orchestrator (tools → orchestration → runtime → tools). The
+  sub-role vocabulary moved to a leaf module; the orchestrator now arrives
+  through the ToolDeps seam (the chat/chatStream pattern) with a lazy
+  fallback — a Tarjan check over the runtime import graph reports zero
+  cycles.
+- **server.ts is no longer a 5,719-line monolith** — 71 routes (the
+  sessions/chat, agents, projects, models, providers, attachments, memory,
+  skills, modes, ratings, usage, and settings domains) now live in 14
+  `routes/<domain>.ts` modules, each registering onto the shared
+  `RouteContext` exactly like the proven `registerBrowserRoutes` pattern;
+  `buildServer` is the assembler. **5,719 → 2,439 lines (−57%)** with zero
+  behavior change: every move was verbatim (comments and history intact),
+  phase-committed, and guarded by the full suite after each phase.
+- The remaining domains (terminal, MCP, computer-use, diagnostics,
+  approvals, and the streamed SSE route — the hardest concurrency logic)
+  are documented as the next phases on the same pattern.
 
 ## [0.82.0] - 2026-09-10
 

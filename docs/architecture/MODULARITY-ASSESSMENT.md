@@ -1,13 +1,29 @@
-<!-- last-reviewed: 2026-09-09 round-80 -->
+<!-- last-reviewed: 2026-09-10 round-84 -->
 # MODULARITY ASSESSMENT — the structure audit for the extension-based vision
 
-**Status:** reference · **Established:** round-80 (docs-only analysis round, owner-directed)
+**Status:** reference · **Established:** round-80 (docs-only analysis round, owner-directed) · **Updated:** round-84 (Wave 2 shipped — see below)
 **Audience:** the owner deciding the R81+ direction; any agent planning structural work
 **Method:** three parallel analysis sweeps (backend architecture / extension surfaces +
 frontend / docs-vs-code truth verification), every claim backed by file:line evidence
 read directly from the tree at commit `6f512aa`. Cross-checked against PILLARS.md,
 ADR-0025, ADR-0028, and the deepseek-harness study. Companion rules doc:
 [MODULE-BOUNDARIES](../runbooks/MODULE-BOUNDARIES.md).
+
+## R84 progress (Wave 2, shipped behavior-identical + test-guarded)
+
+- **Wave 2-c (the SCC break): DONE.** The 25-file cycle is dead — the
+  delegation plugin's static orchestrator import (the audit's root cause)
+  replaced by the `agents/sub-roles.ts` leaf + the `ToolDeps.orchestrator`
+  seam + a lazy dynamic-import fallback. A Tarjan check over the runtime
+  value-import graph (90 files) reports **zero cyclic SCCs**.
+- **Wave 2-a (the server.ts split): 57% done.** 71 routes moved verbatim
+  into 14 `agent-core/src/routes/<domain>.ts` modules on the
+  `registerBrowserRoutes` pattern; `buildServer` is the assembler;
+  **server.ts: 5,719 → 2,439 lines**. Remaining: the terminal, MCP,
+  computer-use, diagnostics, approvals, vision domains + the 392-line
+  streamed SSE route (marked final-phase) — the pattern is established.
+- **Wave 2-b (the turn-loop harness): NOT STARTED** — the ~1,700-line
+  sync/streamed duplication is the next structural round.
 
 ---
 

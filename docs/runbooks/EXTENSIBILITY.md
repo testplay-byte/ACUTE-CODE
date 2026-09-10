@@ -1,4 +1,4 @@
-<!-- last-reviewed: 2026-09-09 round-80 -->
+<!-- last-reviewed: 2026-09-10 round-84 -->
 # EXTENSIBILITY — plugins, skills, modes, MCP servers (owner's guide)
 
 **Status:** normative · **Established:** round-61 (owner directive: "the

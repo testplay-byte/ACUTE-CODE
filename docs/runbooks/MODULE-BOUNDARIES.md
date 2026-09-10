@@ -1,4 +1,4 @@
-<!-- last-reviewed: 2026-09-09 round-80 -->
+<!-- last-reviewed: 2026-09-10 round-84 -->
 # MODULE-BOUNDARIES — the contract for editing this repo with small context
 
 **Status:** normative · **Established:** round-80 (owner directive: low-context agents

@@ -3,7 +3,7 @@
   "product": {
     "name": "Acute",
     "tagline": "Local-first multi-agent engineering workbench",
-    "version": "0.82.0",
+    "version": "0.83.0",
     "availability": "Private build — not yet distributed",
     "chips": [
       "Windows desktop",
@@ -226,10 +226,16 @@
       "title": "R83 — honest token & context metering",
       "date": "2026-09-10",
       "summary": "The owner's 'highly misleading' round: ONE budget (resolveTurnBudget — window WITH source label, the owner's max_output_tokens finally honored, available = window − output − margin) drives the meter, the compaction trigger, and the context guard; the donut shows the provider's OWN number for the last request (actual block from the stats carriers) beside the labeled ~projected estimate, applies the newest compaction (the ring drops instead of lying high), renders the budget tick + window provenance; schema-measured tool tokens replace the 350/tool guess; the meter's prompt sections match the real turn's (skills/task-modes/active-mode/background/environment); migration 0031's provider_calls + origin make 'N turns · M provider calls' honest and the hidden compaction/debug calls billed; cached-null hit rates ('— not reported'), (unpriced) cost markers, the real POST /sessions/:id/compact (the 800K guard's phantom /compact finally exists), the model-relative guard with honest numbers. Live battery 5/5 on real keys (actual=61 tokens measured end-to-end)."
+    },
+    {
+      "id": 44,
+      "title": "R84 — the modularity round (Wave 2: the SCC break + the server.ts route split)",
+      "date": "2026-09-10",
+      "summary": "Wave 2 of the R80.5 audit, behavior-identical and test-guarded: the 25-file agents↔tools SCC is DEAD (the delegation plugin's static orchestrator import — the root cause — replaced by the agents/sub-roles.ts leaf + the ToolDeps.orchestrator seam + a lazy fallback; a Tarjan check over the runtime import graph reports zero cycles), and server.ts shrank 5,719 → 2,439 lines (−57%) as 71 routes moved verbatim into 14 routes/<domain>.ts modules (sessions, agents, projects, models, providers, attachments, memory, skills, modes, ratings, usage, settings) on the proven registerBrowserRoutes pattern with buildServer as the assembler — each phase a separate green commit. The remaining domains (terminal, MCP, computer-use, diagnostics, approvals, the SSE route) are the documented next phases."
     }
   ],
   "quality": {
-    "ci": "GREEN — R83 push 8920c0e → CI run 34473548501 SUCCESS on the FIRST try (verify: lint, typechecks, the 2,825-test root suite in 155 files, build, license audit 134 CLEAN). The R82 push (1932a9e) had FAILED CI — the 9 no-unused-expressions/no-unused-vars errors in scripts/battery-r82.mjs the R82 session left in the tree while claiming 'lint clean' (run 34459797061, the verify step); R83 fixed all 9 (ternary-statements → if/else + honest status checks on the previously-unused results) and the run is green again. No tag for v0.82.0 yet — the release-tag decision is queued with v0.80.0/v0.81.0.",
+    "ci": "PENDING — R84 push not yet made (this field is synced from the Actions API at close-out per the documented convention)",
     "suites": [
       {
         "name": "frontend",
@@ -262,14 +268,14 @@
   ],
   "plan": {
     "current": {
-      "title": "R83 — honest token & context metering (the 'highly misleading' round)",
-      "detail": "Shipped per the token-counting-robustness spec: (1) ONE budget — resolveTurnBudget (models row → catalog → defaults, contextWindowSource labeled, the owner's max_output_tokens honored for the first time, available = window − output − 8,000) shared by the meter route, both turn runners, the compaction trigger, the guard, and the new compact route. (2) The honest donut — the actual block (the provider's OWN prompt tokens for the last request, from the newest stats carrier; null before the first reply), usedTokensBasis 'estimated', the compaction APPLIED to the messages estimate + badge, the budget tick + window provenance, schema-measured tool tokens (measureToolSchemaTokens), the full PromptContext sections (skills/task-modes/active-mode/background/environment). (3) Truth hygiene — migration 0031 (provider_calls + origin, table rebuild relaxing agent_id for the hidden-call rows), cached-NULL hit rates, (unpriced) markers, 'turns · provider calls' relabel, the compaction summarizer + debug analyst usage rows. (4) POST /sessions/:id/compact (force compaction, honest gates) + the model-relative guard (available-based, no phantom /compact). (5) The stream-store renders meta.compaction/context_limit + invalidates session-context on done. Docs: the CONTEXT-METER runbook, IMPLEMENTED-API, CHANGELOG 0.82.0. Verified: root 155 files/2,825 tests, e2e 12/12, lint + typechecks clean, license 134 CLEAN, docs:check 187/0/0, live battery 5/5 (scripts/battery-r83.mjs — actual=61 tokens measured on a real OpenRouter turn)."
+      "title": "R84 — the modularity round (Wave 2: the SCC break + the server.ts route split)",
+      "detail": "Shipped on work/r84-modularity in 10 phase commits, merged to main: (1) Wave 2-c — the 25-file SCC broken at the delegation edge (agents/sub-roles.ts leaf + ToolDeps.orchestrator seam + the lazy dynamic-import fallback; Tarjan: 0 cyclic SCCs over 90 files). (2) Wave 2-a — 71 routes / 14 domain modules extracted verbatim (programmatic block moves with independent round-trip verifiers; registration order preserved; every ROUND-N history comment intact; server.ts 5,719→2,439). Verified: agent-core 92/1,867 after EVERY phase, root 155/2,825, lint + typechecks clean. The SSE route + terminal/mcp/computer/diagnostics/approvals domains + the turn-loop harness (2-b) remain — the pattern is established for the next session."
     },
     "upcoming": [
       {
-        "phase": "Wave 2 of the modularity roadmap (the R80.5 audit)",
+        "phase": "Wave 2 continuation (the modularity roadmap)",
         "status": "next",
-        "note": "Split server.ts (5,5xx lines) into routes/<domain>.ts modules with ctx = {db, keyring, chat, ring}; extract the shared turn-loop harness (retry ladder / loop guard / overflow recovery — ~1,700 duplicated lines); break the 25-file agents↔tools SCC at the delegation edge (inject the orchestrator via ToolDeps)."
+        "note": "The remaining server.ts domains (terminal, MCP, computer-use, diagnostics, approvals, vision, and the 392-line streamed SSE route — the hardest concurrency logic, marked final-phase) + the turn-loop harness extraction (retry ladder / loop guard / overflow recovery — ~1,700 duplicated lines across the sync/streamed runners) + Wave 3 (the api.ts split, the frontend stream-event handler registry, AgentChatPanel decomposition)."
       },
       {
         "phase": "Standing R81-queue items",
@@ -279,7 +285,7 @@
       {
         "phase": "DeepSeek-harness adaptation candidates (the round-2 study)",
         "status": "queued",
-        "note": "agent-ctx/research/deepseek-harness-round2.md's top-3: C2 per-tool declared timeoutMs with structured TOOL_TIMEOUT results (R51's own next-study candidate); C3 mode/permission policy as folded session events + policy sentence AFTER retained history (fixes revert semantics + stops prompt-cache invalidation on mode switches); C4 tool-result spill (oversized outputs to session-scoped files + locators)."
+        "note": "agent-ctx/research/deepseek-harness-round2.md's top-3: C2 per-tool declared timeoutMs with structured TOOL_TIMEOUT results; C3 mode/permission policy as folded session events + cache-stable narration; C4 tool-result spill."
       }
     ],
     "principles": [
@@ -288,5 +294,5 @@
       "Quality over speed — every round verified before push"
     ]
   },
-  "round": 83
+  "round": 84
 }

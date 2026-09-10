@@ -2365,3 +2365,18 @@ Work Log:
 Stage Summary:
 - R83 COMPLETE: v0.82.0 — ONE budget everywhere, the provider's own number on the donut (labeled), compaction-aware metering, the real /compact route, the model-relative guard, turns-vs-provider-calls honesty, cached-null + (unpriced) + hidden-call billing. Root 155/2,825, live battery 5/5 (actual=61 measured end-to-end).
 - Next: Wave 2 modularity (server.ts route split, turn-loop harness, ToolDeps SCC break), then the standing R81-queue items + the deepseek-harness round-2 candidates.
+
+---
+Task ID: R84 (the modularity round — Wave 2)
+Agent: main-orchestrator (Z.ai Code — the resumed session) + the route-extract subagents (R84-A phases 1-4f, R84-A4 phase 4g)
+Task: Wave 2 of the R80.5 modularity audit — the SCC break (2-c) + the server.ts route split (2-a), behavior-identical and test-guarded.
+
+Work Log:
+- Wave 2-c (SCC break, by the orchestrator): agents/sub-roles.ts (the NEW leaf — SUB_ROLES/SubRole, imports nothing); orchestrator.ts re-imports + re-exports (byte-identical compat for every pre-R84 importer); delegation.ts drops the static orchestrator import — the orchestrator arrives via the NEW ToolDeps.orchestrator seam (type-only, erased at runtime) with a lazy dynamic-import singleton fallback at EXECUTION time; ToolDeps documents the seam + why prepareTurn cannot inject statically (the runtime↔orchestrator 2-cycle). VERIFIED: a Tarjan SCC check over the runtime value-import graph (90 files, type-only edges excluded) — ZERO cyclic SCCs (the 25-file SCC is dead); agent-core 92/1,867 green (delegation/orchestrator suites 73/73); typecheck clean. Commit 8845069 (merged to main + the branch).
+- Wave 2-a (the split, phased on work/r84-modularity, ~one commit per domain): phase 1 sessions+chat (4ff8a80, 1,243 lines/16 routes), phase 2 agents+projects (a9a106f), phase 3 models+providers (51100ae — committed by the orchestrator after the first subagent hit a context deadline mid-phase; its uncommitted work verified green first), phases 4a-4f (ef98dd5 modes, 38613cb memory, 2a75633 ratings, 17709b0 skills, 996f236 usage, ff77ada attachments — the first subagent completed them locally but never pushed or reported; the R84-A4 subagent found them, validated line-by-line, and pushed), phase 4g settings (497a3ff — programmatic block move with an independent round-trip verifier; the subagent's own splice-bug lesson recorded: caught by reading the diff BEFORE any gate, tree never red).
+- RouteContext (routes/context.ts) = {db, keyring, chat, token, + the genuinely-shared surfaces}; helpers.ts the shared gates; buildServer the assembler in the ORIGINAL registration order (Fastify wildcard precedence preserved); every ROUND-N history comment moved intact.
+- VERIFIED at the end: agent-core 92/1,867 green, root 155/2,825 green, lint + typechecks clean ×2, docs:check 188/0/0 (19 round-80 stamps refreshed per the convention). server.ts: 5,719 → 2,439 lines (−57%); 71 routes in 14 domain modules.
+- Docs: CHANGELOG 0.83.0, status.json (round 84, milestone 44, ci PENDING per convention), MODULARITY-ASSESSMENT's R84 progress section, HANDOFF header, version 0.83.0 ×4.
+
+Stage Summary:
+- R84 COMPLETE: v0.83.0 — the import graph is a DAG (Tarjan-verified) and server.ts is 57% smaller with zero behavior change. Wave 2-b (the turn-loop harness) + the remaining route domains (terminal/MCP/computer/diagnostics/approvals/vision + the SSE route) are the documented next phases on the established pattern.
