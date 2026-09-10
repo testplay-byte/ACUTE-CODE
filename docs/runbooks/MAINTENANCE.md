@@ -1,4 +1,4 @@
-<!-- last-reviewed: 2026-09-10 round-84 -->
+<!-- last-reviewed: 2026-09-10 round-85 -->
 # MAINTENANCE — how to find things and change things safely
 
 **Status:** normative · **Established:** round-44 (owner directive: "complete the
@@ -47,9 +47,12 @@ launcher/            owner's one-click entry (ACUTE.bat → acute_launcher.py:
      |               context donut; per-session localStorage persistence for
      |               the model + thinking choices.
   └─ agent-core/     Node/TS Fastify sidecar (dev 127.0.0.1:5178) — the ONLY
-     |               process that touches SQLite; routes in src/server.ts
-     |               (incl. the terminal routes: one-shot stream + the
-     |               persistent terminal-session family backed by
+     |               process that touches SQLite; routes in src/routes/<domain>.ts
+     |               modules (71 of 131 since R84; the rest still in src/server.ts:
+     |               terminal, MCP, computer-use, diagnostics, approvals, vision,
+     |               the SSE stream + the notifications/jobs/checkpoints/dialogs/
+     |               plugins groups, incl. the terminal routes: one-shot stream +
+     |               the persistent terminal-session family backed by
      |               src/terminal-sessions.ts), tools in src/tools/, SQL in
      |               src/storage/ (incl. the browser cookie jar,
      |               storage/browser-cookies.ts, since R46), turn runtime +
@@ -224,13 +227,18 @@ wiring end-to-end) and Memory (R44).
 
 ### e) A new API route
 
-Example: `agent-core/src/server.ts` ROUND-44 blocks (memory, fork/revert,
-terminal stream).
+Example: `agent-core/src/routes/memory.ts` (memory, R84-extracted),
+`routes/sessions.ts` ROUND-44 blocks (fork/revert, terminal stream).
 
-1. Add inside the single `/api/v1` scope plugin in `server.ts`, in the matching
-   resource section (projects / sessions / providers / agents), with a
-   `── ROUND-NN (why): ──` comment header — the file is organized by scope
-   sections; keep neighbors together.
+1. Add the handler in the owning `agent-core/src/routes/<domain>.ts` module
+   (memory → routes/memory.ts; sessions/chat → routes/sessions.ts; providers
+   → routes/providers.ts; agents → routes/agents.ts …), with a
+   `── ROUND-NN (why): ──` comment header — keep neighbors together. For a
+   NEW domain: create `routes/<domain>.ts` exporting
+   `register<Domain>(scope, ctx)` and add ONE call in `server.ts`'s
+   buildServer assembler at a position that preserves registration order
+   (Fastify wildcard precedence — a wildcard registered first shadows literal
+   paths).
 2. Validate inputs → `errorBody("CODE", message, {field})` with the right
    status (400 VALIDATION / 404 NOT_FOUND / 409 CONFLICT); the bearer wall at
    app level covers auth automatically (nested scopes need their own

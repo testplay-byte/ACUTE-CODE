@@ -1,13 +1,44 @@
-<!-- last-reviewed: 2026-09-10 round-84 -->
+<!-- last-reviewed: 2026-09-10 round-85 -->
 # MODULARITY ASSESSMENT — the structure audit for the extension-based vision
 
-**Status:** reference · **Established:** round-80 (docs-only analysis round, owner-directed) · **Updated:** round-84 (Wave 2 shipped — see below)
-**Audience:** the owner deciding the R81+ direction; any agent planning structural work
-**Method:** three parallel analysis sweeps (backend architecture / extension surfaces +
-frontend / docs-vs-code truth verification), every claim backed by file:line evidence
-read directly from the tree at commit `6f512aa`. Cross-checked against PILLARS.md,
-ADR-0025, ADR-0028, and the deepseek-harness study. Companion rules doc:
+**Status:** reference · **Established:** round-80 (docs-only analysis round, owner-directed) · **Updated:** round-85 (the post-R84 re-assessment — see below) · **Audience:** the owner deciding the R86+ direction; any agent planning structural work
+**Method (R85):** three parallel analysis sweeps (backend import-graph + sizes · frontend anatomy + coupling · docs-truth audit), every claim re-verified at HEAD `c38bc8b` with file:line evidence; spot-checked by the orchestrator before writing. Full evidence + method: [round-85](../ui-iterations/round-85.md). Companion rules doc:
 [MODULE-BOUNDARIES](../runbooks/MODULE-BOUNDARIES.md).
+
+## R85 re-assessment (the post-R84 state, 2026-09-10)
+
+**Verdict in one paragraph:** R84's two structural wins are REAL and verified
+(server.ts 5,719→2,439 lines across 14 `routes/<domain>.ts` modules; the
+25-file agents↔tools SCC dead — the delegation plugin imports only the
+`agents/sub-roles.ts` leaf). But the re-assessment found: (1) R84's "zero
+cyclic SCCs" is overstated — one benign value-import 2-cycle remains
+(`tools/registry.ts:53` ↔ `tools/plugins/mcp.ts:20`, the TOOL_NAME_RE edge
+since R61); (2) the remaining server.ts work is undercounted — **52 routes**
+remain (not ~31; 21 routes in ~9 groups were never on the plan: notifications
+×7, jobs ×4, checkpoints/snapshots ×3, internal dialogs ×2, plus
+browser-checkpoints, projects/:id/index, GET /plugins, internal/providers/keys,
+/health); (3) the SSE route is 476 lines (the 392 figure is the stale R80.5
+measure); (4) the turn-loop debt GREW — runtime.ts 3,192→3,369 with the
+sync/streamed runners sharing 378 byte-identical lines (78% of the sync
+runner); (5) the frontend god files grew (api.ts 3,821→3,959,
+stream-store.ts 1,891→1,936, ModelsProvidersTab 3,006→3,304) — Wave 3 is
+untouched and the trend is negative; (6) SQL confinement regressed in
+visibility terms (22 statements outside storage/ vs the documented ~12 —
+approvals.ts alone holds 11 that were never counted, and the R84 split
+RELOCATED the usage SUMs to routes/sessions.ts instead of fixing them);
+(7) the normative docs drifted hardest where agents trust them most —
+MODULE-BOUNDARIES still described the dead cycle as current and the
+route-add recipe pointed at server.ts ("do not preemptively create routes/")
+— **all fixed this round** (see §13).
+
+**Scores (R80.5 → R85):** built-properly 7→7.5 (SCC dead + split real, but
+turn-loop debt grew and `computer/dispatch.ts` 2,447 is a never-flagged
+largest-file) · backend agent-editability 6.5→7 (routes now a proven 5-step
+pattern; turn behavior still 3/10 until Wave 2-b) · frontend
+agent-editability 4→3.5 (god files grew, 559 lines of dead code,
+zero seams — unchanged D) · doc-truth 7→6 at audit time (the R84
+stamp-cohort refresh was stamp-only on ~12 docs, over-claiming freshness) →
+~8 after this round's fixes.
 
 ## R84 progress (Wave 2, shipped behavior-identical + test-guarded)
 
@@ -15,15 +46,19 @@ ADR-0025, ADR-0028, and the deepseek-harness study. Companion rules doc:
   delegation plugin's static orchestrator import (the audit's root cause)
   replaced by the `agents/sub-roles.ts` leaf + the `ToolDeps.orchestrator`
   seam + a lazy dynamic-import fallback. A Tarjan check over the runtime
-  value-import graph (90 files) reports **zero cyclic SCCs**.
+  value-import graph reports zero cyclic SCCs **at the >2-file threshold —
+  R85 correction: one benign 2-cycle remains (registry ↔ plugins/mcp,
+  TOOL_NAME_RE, present since R61; see R85 section above)**.
 - **Wave 2-a (the server.ts split): 57% done.** 71 routes moved verbatim
   into 14 `agent-core/src/routes/<domain>.ts` modules on the
   `registerBrowserRoutes` pattern; `buildServer` is the assembler;
-  **server.ts: 5,719 → 2,439 lines**. Remaining: the terminal, MCP,
-  computer-use, diagnostics, approvals, vision domains + the 392-line
-  streamed SSE route (marked final-phase) — the pattern is established.
+  **server.ts: 5,719 → 2,439 lines**. Remaining: **52 routes** (R85 count —
+  terminal, MCP, computer-use, diagnostics, approvals, vision, the
+  notifications/jobs/checkpoints/dialogs/plugins groups, and the 476-line
+  streamed SSE route marked final-phase) — the pattern is established.
 - **Wave 2-b (the turn-loop harness): NOT STARTED** — the ~1,700-line
-  sync/streamed duplication is the next structural round.
+  sync/streamed duplication is the next structural round (R85 measured it
+  precisely: 378 byte-identical lines, 78% of the sync runner).
 
 ---
 
@@ -42,80 +77,111 @@ context (3/10). The fix patterns already exist inside the repo itself
 (`registerBrowserRoutes`, `ToolDeps` injection, the settings-tab switch) — the gap is
 execution, not invention.
 
-## 2. What the system is today (the numbers)
+## 2. What the system is today (the numbers — R85 re-measure)
 
-| Layer | Size | Shape |
+| Layer | Size (R80.5 → R85) | Shape |
 |---|---|---|
-| `agent-core/` (Node sidecar) | 88 TS files, ~42.5K LOC | Fastify server + agents runtime + 16 internal tool plugins + storage (28 migrations) + computer-use + browser proxy + MCP |
-| `src/` (React frontend) | 156 files, ~50.5K LOC | Shell + project-chat + 8 settings tabs + 5 right-sidebar panels + 10 global Zustand stores + popout/mini apps |
+| `agent-core/` (Node sidecar) | 88→**104 TS files, ~44.6K LOC** | Fastify server (routes/ split 57%) + agents runtime + 14 internal tool plugins (26-tool base vocabulary) + storage (31 migrations) + computer-use + browser proxy + MCP |
+| `src/` (React frontend) | 156→**217 files, ~76K LOC** | Shell + project-chat + 8 settings tabs + right-sidebar panels + 13 Zustand stores + popout/mini apps; 60 test files (946 tests) |
 | `src-tauri/` (Rust shell) | small | sidecar lifecycle, key injection, dialogs, wincred, browser |
-| `shared/` | 1 file, 123 lines | canonical domain types (honored: 9 imports, no local redefinitions found) |
-| Tests | 149 files (exact), 2,772 claimed (static floor ~2,675 = 96.5%) | agent-core 85 / frontend 61 / e2e 2 / shared 1 / launcher 1 |
-| Docs | 181 docs, 28 ADRs, 80 round files | stamped, path-checked, CI-warned |
+| `shared/` | 1 file, 123 lines | canonical domain types (honored; new cross-process contracts should start here) |
+| Tests | 149→**155 files, 2,825 tests** | agent-core 92/1,867 · frontend 60/946 · e2e 12 · shared 1/4 · launcher 10 |
+| Docs | 181→**188 docs, 29 ADRs, 83 round files** | stamped, path-checked, CI-advisory (R85: still `continue-on-error` — see §10) |
+
+Top backend files (R85): runtime.ts **3,369** · computer/dispatch.ts **2,447** ·
+server.ts **2,439** · windows.ts 1,855 · browser-proxy.ts 1,738 · orchestrator.ts
+1,436 · routes/sessions.ts 1,243 · prompts.ts 1,243. Top frontend files (R85):
+api.ts **3,959** · ModelsProvidersTab.tsx **3,304** · AgentChatPanel.tsx **2,757** ·
+stream-store.ts **1,936** · WorkingSection.tsx 1,888 (the unnamed fifth god
+component — the shared turn renderer, cross-imported by SubAgentPanel).
 
 Process discipline is the strongest asset: 80 owner-gated rounds, ADR trail, honest
 error surfacing, fail-soft loading everywhere, drift tests (tool catalog, prompt
 registry), and verification culture. The round system itself is a working template for
 how low-context agents already operate on this repo.
 
-## 3. The dependency map and its cycles
+## 3. The dependency map and its cycles (R85 re-measure)
 
 Clean one-way flow overall: `server.ts` is the outermost layer (only `main.ts` +
 tests import it); subsystem fences HOLD — `browser-proxy` never imports `computer`,
 `computer` never imports `tools/agents/server`, `approvals`/`mcp`/`terminal-sessions`/
-`providers` are tightly fenced, `shared` is honored. Three cycles found (Tarjan):
+`providers` are tightly fenced, `shared` is honored. Cycle status (Tarjan, R85):
 
-1. **SCC(25) — the big one**: `agents/runtime` ↔ `agents/orchestrator` ↔
-   `agents/mode-policy` ↔ `tools/index` ↔ `tools/registry` ↔ all 16 `tools/plugins/*`.
-   Root cause: `tools/plugins/delegation.ts` imports `agents/orchestrator` statically,
-   which imports `agents/runtime`, which imports `tools/index` (the tool builder).
-   ESM-legal but no layer boundary exists between runtime, orchestration, and tools.
-2. SCC(4): `storage/db` ↔ `storage/agents` ↔ `storage/models` ↔ `storage/skills` —
-   boot-time seeding only, benign.
-3. SCC(2): `agents/prompts` ↔ `agents/prompt-registry` — type-only back-edge,
-   documented as deliberate in the file header.
+1. **SCC(25) — the big one: DEAD (R84).** The delegation plugin's static
+   orchestrator import was replaced by the `agents/sub-roles.ts` leaf + the
+   `ToolDeps.orchestrator` seam + a lazy dynamic-import fallback
+   (delegation.ts:101-102). agents→tools is now exactly ONE value edge
+   (runtime.ts:20 → tools/index.js); the all-import SCC is now 22 files,
+   entirely inside tools/.
+2. **SCC(2) — R85 find:** `tools/registry.ts:53` ↔ `tools/plugins/mcp.ts:20`
+   (mcpPlugin and TOOL_NAME_RE, both used at call time — benign, present since
+   R61, missed by the R84 "zero cycles" check's 90-file scope). Fix when
+   convenient: move TOOL_NAME_RE to a `tools/names.ts` leaf.
+3. SCC(4): `storage/db` ↔ `storage/agents` ↔ `storage/models` ↔ `storage/skills`
+   (boot-time seeding, type-only back-edges, benign — unchanged).
+4. SCC(2): `agents/prompts` ↔ `agents/prompt-registry` — type-only back-edge,
+   documented as deliberate (unchanged).
+5. **R85: three unsanctioned tools→agents leaf edges** — `tools/plugins/modes.ts`
+   (→ agents/modes, agents/system-reminders) and `tools/plugins/dir-conventions.ts`
+   (→ agents/system-reminders). Leaf-targeted, cycle-free, but they are the edge
+   class the boundaries doc prohibits; either sanction them in MODULE-BOUNDARIES
+   or reroute through ToolDeps.
 
-**SQL confinement is ~95% true, not 100%**: ~12 statements live outside `storage/`
-(`server.ts:1587/2770-2814`, `runtime.ts:3189`, `orchestrator.ts:1330`,
-`tools/registry.ts:441-453`, `lib/web-push.ts:82-104`) — contradicting db.ts's own
-"only code that issues SQL" claim and the docs' binding rule #1.
+**SQL confinement is WORSE than the R80.5 audit said**: **22 statements** live
+outside `storage/` in 7 files (the audit counted ~12): `approvals.ts` ×11
+(an entire inline persistence layer never counted — :382-477, :760-777),
+`routes/sessions.ts` ×2 (:714, :753 — the usage SUMs RELOCATED by the R84 split,
+not fixed), `agents/runtime.ts` ×2 (:3308, :3350), `server.ts` ×2 (:632, :642),
+`agents/orchestrator.ts` ×1 (:1382), `tools/registry.ts` ×1 (:446),
+`lib/web-push.ts` ×3 (:82-104). `storage/db.ts:4`'s "only code that issues SQL"
+claim remains false.
 
-## 4. The god files (responsibility inventories)
+## 4. The god files (responsibility inventories — R85 re-measure)
 
-**`agent-core/src/server.ts` (5,086 lines)** — L239-703 module helpers; L705-954
-bootstrap/hooks; L956-5037 ONE `app.register` closure holding **all 116 scoped routes
-across ~24 domain groups**; the 392-line SSE route (L3860-4251) owns queue-continuation,
-debug-analyst, and crash recovery — the hardest concurrency logic sits in the HTTP
-layer. Verdict: disciplined (uniform patterns, ~17% comment density) but a
-conflict-prone monolith; the in-repo fix pattern (`registerBrowserRoutes`) is proven.
+**`agent-core/src/agents/runtime.ts` (3,369 lines, GREW +177 since the audit)** —
+completion heuristics, delegation-depth guard, allowlist narrowing (4 stacked
+intersections), loop guard, turn types, message shaping, history assembly, error
+persistence, env probing, `prepareTurn` (447 lines, **10 positional args**), then
+`runSingleAgentTurn` (781 lines) and `runStreamedAgentTurn` (1,018 lines) — with
+**378 comment-stripped lines byte-identical between the two runners (78% of the
+sync runner's body)**: the retry ladder (:1511 vs :2291), loop guard (:1646 vs
+:2404), retry-class gates (:1804 vs :2839) all duplicated. There is still no seam
+to add a new turn concern; every addition is edited twice. Wave 2-b (the harness
+extraction) is the fix and is the top structural candidate for R86.
 
-**`agent-core/src/agents/runtime.ts` (3,192 lines)** — completion heuristics,
-delegation-depth guard, allowlist narrowing (4 stacked intersections), loop guard,
-turn types, message shaping, history assembly, error persistence, env probing,
-`prepareTurn` (437 lines, **10 positional args**), then `runSingleAgentTurn` (754
-lines) and `runStreamedAgentTurn` (982 lines) — a near-duplicate pair, ~16 concerns
-each, with the retry ladder, loop guard, and error classification **duplicated in
-both** (L1743 vs L2734; L1588 vs L2325). There is no seam to add a new turn concern
-today; every addition is edited twice inside the 25-file cycle.
+**`agent-core/src/computer/dispatch.ts` (2,447 lines)** — now the LARGEST backend
+file, never on any god-file register (the R80.5 audit's blind spot: it only
+inventoried the files the rounds kept touching). Disciplined internally (command
+dispatch tables) but a single-file subsystem surface.
 
-**`src/lib/api.ts` (3,821 lines, 86 importers)** — one flat module mixing transport,
-ALL domain types, view-models, inline SSE readers, and the hand-maintained
-`TOOL_CATALOG` mirror. Changing one domain forces navigating the whole file; merge
-conflicts concentrate. It IS typed and heavily tested (api.test.ts, 1,914 lines).
+**`agent-core/src/server.ts` (2,439 lines, was 5,719)** — the R84 split moved 71
+routes into 14 domain modules; 52 routes remain (terminal 8, MCP 6, computer-use
+9, diagnostics 2, approvals 2, vision 3, SSE 1, + the 21-route unnamed tail:
+notifications/jobs/checkpoints/dialogs/plugins/index/keys/health). The 476-line
+SSE route (:1348-1823) owns queue-continuation, debug-analyst, and crash
+recovery — the hardest concurrency logic still sits in the HTTP layer.
 
-**`src/lib/stream-store.ts` (1,891 lines)** — `handleStreamEvent` (~650-line if-chain
-at :1211) interprets ~30 event types AND hardcodes side-effects into 4 other stores
-(browser, computer-monitor, right-sidebar, toasts). No event-handler registry — the
-opposite of the backend's tool registry.
+**`src/lib/api.ts` (3,959 lines, GREW +138, 72 importers)** — still one flat
+module mixing transport, ALL domain types (~90 interfaces), view-models,
+inline SSE readers, and the hand-maintained `TOOL_CATALOG` mirror.
 
-**`src/components/project-chat/AgentChatPanel.tsx` (2,932 lines)** — 53 hook calls,
-7 store imports; orchestrates streaming, ratings, todos, browser binding, mode picker,
-and renders chat itself. Not restylable without whole-file context.
-`src/components/settings/ModelsProvidersTab.tsx` (3,006) is the settings exception
-(providers CRUD + keys + catalog + tests + key pool in one file).
+**`src/lib/stream-store.ts` (1,936 lines, GREW +45)** — `handleStreamEvent`
+is a **687-line function (:1229-1915)**: 42 `event.type` comparisons over 34
+event types, firing **17 cross-store side-effects into 5 stores + the query
+client**. No event-handler registry — the opposite of the backend's tool
+registry.
 
-**Duplication tax**: `sessions/ChatView.tsx` is a second chat renderer kept in visual
-sync by copy; the sync/streamed turn runners duplicate ~1,700 lines of loop machinery.
+**`src/components/settings/ModelsProvidersTab.tsx` (3,304 lines, GREW +298 —
+now the largest component)** — providers CRUD + keys + catalog + tests + key
+pool + 4 full dialogs + 40 hook calls in one file.
+`src/components/project-chat/AgentChatPanel.tsx` (2,757, shrank −175 via R81)
+still orchestrates streaming, ratings, todos, browser binding, mode picker
+with 64 hook calls and 8 store imports.
+
+**Duplication tax (R85)**: `sessions/ChatView.tsx` is now **DEAD CODE** (559
+lines incl. its test — zero importers since R49 removed the /sessions route);
+the sync/streamed turn runners duplicate 378 lines exactly; `WorkingSection.tsx`
+(1,888) renders every turn row and is imported cross-feature by SubAgentPanel.
 
 ## 5. Extension surface audit (the owner's core question)
 
@@ -140,7 +206,7 @@ sync by copy; the sync/streamed turn runners duplicate ~1,700 lines of loop mach
   shipped event is `delegation.collected`.
 - **§7-3 WS push channel**: NOT BUILT (no WebSocket anywhere; SSE remains the only
   push). Approval engine: DONE (ADR-0024).
-- **§7-4/5/6 workflows, scheduler, canvas**: NOT BUILT — last migration is 0028; no
+- **§7-4/5/6 workflows, scheduler, canvas**: NOT BUILT — last migration is 0031; no
   workflows/executions/schedulers tables; canvas exists only as 4 hardcoded
   FreeformPanel ids.
 - **Typed event log**: PARTIAL — ADR-0010 append-only log is real, but
@@ -171,66 +237,77 @@ Drift found (all small, all fixable):
 6. Cosmetic: ADR-0028 filename zero-pads to 6 digits (`000028-…`) vs the 4-digit
    convention of 0001-0027.
 
-## 8. Scores (for the owner's three questions)
+## 8. Scores (for the owner's three questions — R85)
 
-| Question | Score | Justification |
-|---|---|---|
-| "Is everything built properly, well-structured?" | **7/10** | Discipline and contracts are top-decile; two monoliths + one import cycle are the structural debt |
-| "Easy for AI agents to edit without affecting other parts?" (backend) | **6.5/10** | tools/prompts/skills/modes/storage = 9/10; routes = 5/10 (uniform patterns, giant file); turn behavior = 3/10 (duplicated runners, cycle) |
-| "Easy for AI agents to edit" (frontend) | **4/10** | api.ts + stream-store + god components; zero extension seams; duplicated chat renderer |
-| "Is the doc truth trustworthy?" | **7/10** | Real machinery + honest culture, with the specific drifts in §7 |
+| Question | R80.5 | R85 | What moved |
+|---|---|---|---|
+| "Is everything built properly, well-structured?" | 7/10 | **7.5/10** | +SCC dead, +routes split; −runtime grew, −computer/dispatch.ts never flagged, −SQL leaks grew |
+| "Easy for AI agents to edit without affecting other parts?" (backend) | 6.5/10 | **7/10** | routes now a proven 5-file pattern (was 5/10); tools/skills/modes/storage still 9/10; turn behavior still 3/10 (Wave 2-b unstarted, 378 duplicated lines measured) |
+| "Easy for AI agents to edit" (frontend) | 4/10 | **3.5/10** | god files GREW (+138/+45/+298), 559 lines dead code, zero seams, zero code-splitting — trend negative until Wave 3 |
+| "Is the doc truth trustworthy?" | 7/10 | **6→8/10** | 6 at audit time (R84 stamp-only cohort refresh over-claimed; MODULE-BOUNDARIES §3/§4 actively misrouted agents) — 8 after this round's fixes; structural gap remains: docs:check is content-blind (backticked paths unchecked) and CI-advisory |
 
-## 9. Risk register (top 6, ranked)
+## 9. Risk register (top 8, ranked — R85)
 
-1. **server.ts monolith** — highest merge-conflict + navigation cost; every REST-facing
-   feature lands here.
-2. **runtime.ts sync/streamed duplication** — every cross-cutting concern edited
-   twice; 10-positional-arg `prepareTurn` invites silent mis-ordering.
-3. **The 25-file agents↔tools cycle** — no enforced layer boundary; changes ripple
-   invisibly between runtime, orchestrator, and tool layer.
-4. **Frontend hot-file concentration** — every future pillar (image gen, automations,
-   schedules) lands in the same 4-5 files unless seams are introduced first.
+1. **runtime.ts sync/streamed duplication** (PROMOTED to #1) — 378 byte-identical
+   lines, 78% of the sync runner; every cross-cutting turn concern edited twice;
+   10-positional-arg `prepareTurn` invites silent mis-ordering; the file GREW +177
+   since the audit. Wave 2-b is the fix.
+2. **Frontend hot-file concentration** (PROMOTED to #2) — api.ts/stream-store/
+   AgentChatPanel/ModelsProvidersTab all grew or sat; every future pillar (image gen,
+   automations, schedules) lands in the same 4-5 files unless Wave 3 lands first.
+   Plus 559 lines of dead code no round ever deleted.
+3. **The remaining server.ts 52 routes** — the named domains (terminal/MCP/computer/
+   diagnostics/approvals/vision/SSE) PLUS the 21-route unnamed tail (notifications,
+   jobs, checkpoints, dialogs, plugins) the R84 plan never listed.
+4. **SQL confinement honesty** — 22 statements outside storage/ and GROWING per round
+   (approvals.ts ×11 never counted; the R84 split relocated 2 instead of fixing);
+   db.ts's own header claim remains false.
 5. **Stringly-typed session events + unfixed seams** — the event-sourcing backbone
    PILLARS §2 depends on has no typed contract in code; ToolDeps is a de-facto seam
-   nobody documented as THE seam.
-6. **IMPLEMENTED-API blind spot** — the designated truth doc can silently under-report
-   (no automated check catches undocumented routes, unlike the computed tool catalog).
+   (now documented as such in MODULE-BOUNDARIES) but still missing `runId` and an ADR.
+6. **External plugin trust model** — in-process full trust, no execute-time
+   wrapper/timeout; a hanging or hostile `execute` blocks a turn (the documented
+   Wave-3 item, unchanged).
+7. **docs:check blind spots** — backticked path refs are stripped before checking
+   (deleted-file references pass), CI is advisory (`continue-on-error`), sub-package
+   READMEs are outside the walk entirely.
+8. **IMPLEMENTED-API blind spot** — still no automated check for undocumented routes
+   (unlike the computed tool catalog); R85 found 1 more (`GET /providers/:id/models-config`).
 
-## 10. Improvement roadmap (prioritized; S < 1 day, M 1-3 days, L > 3 days)
+## 10. Improvement roadmap (prioritized; S < 1 day, M 1-3 days, L > 3 days — R85 refresh)
 
 Wave 1 — cheap, immediate (S, docs + tiny code):
-- **Formalize the seams** (this round, done in docs): MODULE-BOUNDARIES.md is the
-  normative contract; IMPLEMENTED-API backfilled; HANDOFF §3 fixed; status.json
-  synced. Proposed follow-ups: rename/export `ToolDeps` as the documented seam, add
-  `runId`, one ADR addendum (owner-gated).
-- Fix dead seam: `ReminderBudget` (`system-reminders.ts:109`) is exported but never
-  constructed — wire it or delete it.
-- Move the ~12 leaked SQL statements into `storage/` (makes the binding rule true).
-- Make docs:check blocking in CI (remove `continue-on-error`) once the stamp ceremony
-  is retired or automated better.
+- ~~Formalize the seams in docs~~ (DONE R80.5; re-done R85 where it re-drifted).
+- Fix dead seam: `ReminderBudget` (`system-reminders.ts:109`) — STILL dead (R85).
+- Move the 22 leaked SQL statements into `storage/` (approvals.ts ×11 is the big
+  batch; make db.ts's claim true).
+- Kill the benign registry↔mcp 2-cycle (move TOOL_NAME_RE to a `tools/names.ts`
+  leaf) + sanction-or-reroute the 3 unsanctioned tools→agents leaf edges.
+- Delete the 559-line dead `src/components/sessions/` directory.
+- Make docs:check blocking in CI (remove `continue-on-error`) once the stamp
+  ceremony is automated (R85 candidate: check backticked paths too).
 
-Wave 2 — the structural two (M, the R81 candidates):
-- **Split server.ts by domain** into `routes/<domain>.ts` modules each exporting
-  `registerX(scope, ctx)` with `ctx = {db, keyring, chat, ring}` — the
-  `registerBrowserRoutes` pattern already proves it. buildServer becomes a ~150-line
-  assembler. Behavior-identical, test-guarded.
-- **Extract the turn-loop harness** — shared retry ladder / loop guard / overflow
-  recovery / error classification helpers used by BOTH runners, killing the ~1,700-line
-  duplication. Optionally fold `prepareTurn`'s 10 positional args into an options
-  object.
-- **Break the 25-file SCC** at the delegation edge: inject the orchestrator (or a
-  `DelegateTask` fn) through `ToolDeps` like `chat`/`chatStream` already are — converts
-  the cycle into a clean DAG.
+Wave 2 — the structural continuation (M, the R86 candidates):
+- **Finish the server.ts split** — 52 routes remain (the named domains + the
+  21-route unnamed tail + the 476-line SSE route, final-phase). The pattern is
+  proven; it is mechanical, test-guarded work.
+- **Extract the turn-loop harness (2-b, now the #1 risk)** — shared retry ladder /
+  loop guard / overflow recovery / error classification helpers used by BOTH
+  runners, killing the 378-line exact duplication (and the ~1,700-line
+  near-duplication). Fold `prepareTurn`'s 10 positional args into an options object.
+- **Split computer/dispatch.ts** (2,447 lines — now the largest backend file) into
+  per-family command modules on the routes/ pattern.
 
 Wave 3 — frontend seams (M/L, unlocks everything the owner sees):
 - **Split api.ts** into `transport.ts`, `types/*.ts` (domain modules), `sse.ts`,
   `view-models.ts`, `terminal.ts` with a barrel re-export — mechanical,
   test-covered, unlocks parallel UI work immediately.
 - **Frontend stream-event handler registry** — map event-type → handler registered by
-  the owning store/panel, so computer-use/browser/toast side-effects stop being
-  hardcoded in `handleStreamEvent`.
+  the owning store/panel, so the 17 cross-store side-effects stop being hardcoded in
+  the 687-line `handleStreamEvent`.
 - Decompose AgentChatPanel into a headless `useChatSession` controller + dumb
-  sections; retire ChatView's duplicate renderer.
+  sections; split ModelsProvidersTab's 4 dialogs into files; delete the dead
+  sessions/ renderer (Wave-1 item above).
 - Execute-time wrapper for external plugins (try/catch + timeout — parity with the
   load-time fail-soft); optional minimal ctx for trusted plugins
   `{emit, appendEvent, approvals}`.
@@ -252,7 +329,7 @@ Wave 4 — the vision pillars (L, owner-gated per PILLARS):
   detached child supervision) + `schedulers` table + the existing notification-bus.
   Never reuse `sessions.mode` (CHECK-constraint trap, PILLARS §3).
 
-## 12. DeepSeek-harness alignment check
+## 12. DeepSeek-harness alignment check (R85)
 
 The R51 study's honest verdict survives R80: Cordis-style everything-is-a-plugin
 machinery remains NOT adopted (right call at this scale — ADR-0025 scoped adoption to
@@ -261,12 +338,50 @@ repeat-tool-reminder guard (R51-f, with the owner's hard-stop divergence), the p
 registry + computed catalog (R52). The three "top future candidates" from the study —
 compaction pressure-trigger + overflow-retry, continuable sub-agent children, skill
 catalog progressive disclosure — are now ALL SHIPPED (R46/R71 context-overflow
-recovery, R79 addressable delegation with resume, R70/R72 skills). The next study
-candidates worth an owner look: `guard/timeout-policy` (per-tool declared timeoutMs
-with structured TOOL_TIMEOUT results) and the interaction/user-approval
-"policy-as-folded-log" shape.
+recovery, R79 addressable delegation with resume, R70/R72 skills).
 
-## 13. What this analysis changed (docs-only, no code)
+The **round-2 deep study** (`agent-ctx/research/deepseek-harness-round2.md`, post-R81)
+verified the repo first-hand (public, MIT, 267 leaf packages, the Cordis paper) and
+ranked five adaptation candidates: C1 compaction pressure+KV-preserving summarizer
+(partially shipped by R83's honest metering), **C2 per-tool declared `timeoutMs` with
+structured TOOL_TIMEOUT results** (top pick — the hang modes we actually hit), C3
+mode/permission policy as folded session events + cache-stable policy narration,
+C4 tool-result spill (full artifact to disk, locator to the model), C5 the
+workflow/goal shape for PILLARS. These queue behind the Wave 2-b/3 structural work —
+C2 is the best first pick (S-M, low risk, high value).
+
+## 13. What this analysis changed
+
+### R85 (docs-only, no code)
+
+- THIS document — R85 re-assessment section, all numbers re-measured at `c38bc8b`,
+  R84's overstated claims corrected (zero-SCCs → one benign 2-cycle; ~31 remaining
+  routes → 52; SSE 392 → 476), scores/risk register/roadmap refreshed.
+- [MODULE-BOUNDARIES](../runbooks/MODULE-BOUNDARIES.md) — REWRITTEN to the post-R84
+  reality (the #1 drift: §3's route recipe pointed at server.ts with "do not
+  preemptively create routes/"; §4 described the dead cycle as current).
+- [round-84](../ui-iterations/round-84.md) backfilled (the R84 round file was never
+  written); [round-85](../ui-iterations/round-85.md) written (this round's evidence).
+- [HANDOFF](../../HANDOFF.md) §1/§3/§4/§6/§9 — verify-from `c38bc8b`, repo map gains
+  routes//tools//computer//mcp/, next-queue refreshed.
+- [MAINTENANCE](../runbooks/MAINTENANCE.md) §e recipe + map → routes/ pattern.
+- [IMPLEMENTED-API](api/IMPLEMENTED-API.md) — `GET /providers/:id/models-config`
+  backfilled; anchor updated to routes/.
+- [docs/README](../README.md) — round 82-85 entries, CONTEXT-METER indexed,
+  surface-count unified.
+- [TESTING](../TESTING.md) counts → R84 (2,825/155); [EXTENSIBILITY](../EXTENSIBILITY.md)
+  deleted-file refs fixed; [ROADMAP](../ROADMAP.md) unfrozen from round-75;
+  [status.json](../status.json) round 85 + the 16→26 tools fix + milestone 45;
+  ORCHESTRATION-WORKLOG R76-R81 gap backfilled + R85 entry; CHANGELOG entry;
+  [AGENT-MEMORY](../AGENT-MEMORY.md) lessons #84 (stamp-only refreshes over-claim
+  freshness) + #85 (verification claims must be exact-scoped and re-runnable).
+- Sub-package READMEs flagged for regeneration (agent-core/tests/src-tauri/scripts —
+  outside docs:check's walk; left as the documented Wave-1 follow-up, not silently
+  bumped).
+- No code, no version bump, no release — analysis round only. All findings are the
+  input for the owner's R86 scoping decision.
+
+### R80.5 (the original analysis round)
 
 - THIS document + [MODULE-BOUNDARIES](../runbooks/MODULE-BOUNDARIES.md) (new).
 - [HANDOFF](../../HANDOFF.md) §3 rewritten to committed reality (verify-from is now

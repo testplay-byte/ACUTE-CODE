@@ -1,4 +1,4 @@
-<!-- last-reviewed: 2026-09-10 round-84 -->
+<!-- last-reviewed: 2026-09-10 round-85 -->
 # Changelog
 
 All notable changes to ACUTE-CODE are documented here. Entries are written for
@@ -11,12 +11,47 @@ version number is single-sourced from the root `package.json`
 
 ## [Unreleased]
 
-Planned next: the modularity roadmap's continuation (the remaining server.ts
-domains — terminal, MCP, computer-use, diagnostics, approvals, the streamed
-SSE route; the turn-loop harness extraction), external plugin ctx
-enrichment, the lessons-ledger affordance, ratings-driven prompt tuning, and
-the standing items (edit-linting, installer code-signing, the Files-tab
-polish, agent web-app-testing tools).
+Planned next: the modularity roadmap's continuation (Wave 2-b the turn-loop
+harness extraction — risk #1 per the R85 audit; the remaining server.ts domains —
+52 routes: terminal, MCP, computer-use, diagnostics, approvals, the streamed SSE
+route + the notifications/jobs/checkpoints/dialogs/plugins tail; then Wave 3 the
+frontend seams), external plugin ctx enrichment, the lessons-ledger affordance,
+ratings-driven prompt tuning, and the standing items (edit-linting, installer
+code-signing, the Files-tab polish, agent web-app-testing tools).
+
+## [0.83.1-docs] - 2026-09-10 — the R85 structure re-assessment (docs-only)
+
+### Changed — the post-R84 audit + documentation truth round (no code, no behavior change)
+- **R84's claims verified and corrected** (the audit's evidence file:
+  `docs/ui-iterations/round-85.md`): the 25-file agents↔tools SCC is confirmed
+  DEAD and server.ts is exactly 2,439 lines (71 routes in 14 domain modules) —
+  but the "zero cyclic SCCs" claim is corrected (one benign 2-cycle remains:
+  `tools/registry.ts` ↔ `tools/plugins/mcp.ts`, the TOOL_NAME_RE edge since
+  R61), the remaining server.ts routes are 52 (not ~31 — the
+  notifications/jobs/checkpoints/dialogs/plugins tail was never on the plan),
+  and the SSE route is 476 lines (the 392 figure was stale).
+- **The structural debt re-measured**: the sync/streamed turn runners share 378
+  byte-identical lines (78% of the sync runner; runtime.ts grew to 3,369);
+  `prepareTurn` is 447 lines with 10 positional args; the frontend god files
+  grew since R80.5 (api.ts 3,959 / stream-store.ts 1,936 / ModelsProvidersTab
+  3,304); 22 SQL statements live outside storage/ (approvals.ts alone holds 11);
+  `src/components/sessions/` is 559 lines of dead code.
+- **Documentation truth-sync**: MODULE-BOUNDARIES rewritten to the post-R84
+  reality (the route-add recipe now points at `routes/<domain>.ts`; the
+  import-cycle section converted to keep-it-a-DAG rules), MAINTENANCE §e + the
+  architecture map, HANDOFF §1/§3/§4/§6/§9, round-84.md backfilled (the R84
+  session never wrote it), round-85.md written, the board + the docs index
+  (rounds 82-85 + CONTEXT-METER indexed + the extension-surface count unified),
+  TESTING counts (2,825/155), IMPLEMENTED-API (the previously-undocumented
+  `GET /providers/:id/models-config` + the routes/ anchor), EXTENSIBILITY
+  (deleted-file references fixed), ROADMAP unfrozen from round-75, README,
+  SPEC status line, status.json (the 16→26 tools fix + round 85 + milestone
+  45), ORCHESTRATION-WORKLOG's R76-R81 gap backfilled, and AGENT-MEMORY
+  lessons #84 (stamp-only refreshes over-claim freshness) + #85 (verification
+  claims must be exact-scoped and re-runnable) added.
+- Scores: built-properly 7→7.5 · backend agent-editability 6.5→7 · frontend
+  agent-editability 4→3.5 (until Wave 3) · doc-trust 6 at audit → ~8 after the
+  fixes. The R86 scoping input: Wave 2-b first.
 
 ## [0.83.0] - 2026-09-10
 

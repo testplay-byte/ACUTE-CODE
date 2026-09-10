@@ -2323,6 +2323,23 @@ Stage Summary:
 - R75 CLOSED END-TO-END: the four asks implemented, tested (2623 total — root vitest 2613 + the 10 launcher tests), released (v0.75.0, release 384282923, CI 34154269987 + Release 34154773400 both green, first-push-green), and dashboard-synced (Pages live at c1e7039) — every feature browser-verified live before shipping (the plan-mode e2e with a real model, the mock-429 ladder on the wire, the composer at 5 widths, the textarea growth matrix).
 - The interrupted-session recovery pattern, recorded for successors: full local re-verification (never trust the prior session's claims) surfaced exactly one real gap — the stamp-cohort aging — fixed before the commit; nothing else from the uncommitted tree needed repair.
 - Next: the owner's R75 live gates (plan mode refusing real write requests, the retry card on a real rate limit, the one-row toolbar at narrow widths, the 5-line textarea) then the R76 queue (delegate_task task_id/background/resume — the standing R73 deferral, external plugin ctx enrichment, lessons-ledger as the reminder injector's third consumer, ratings-driven prompt tuning, the optional v0.68.0 backfill tag).
+
+---
+Task ID: R76-R81 (BACKFILL, recorded by R85)
+Agent: orchestrator (main) — six rounds whose worklog entries were never written (the gap R85's docs-truth audit found); reconstructed from round files, CHANGELOG, status.json, and the git trail. Full evidence in each round file.
+Task: Rounds 76-81 — documentation round / field-report / honest-errors+queue / orchestrator / reliability / unified modes.
+
+Work Log (one line each — see the round files):
+- R76 (docs-only): the truth docs caught up with the code (WORKLOG backfilled R68-R75, AGENT-MEMORY #72-76, ADRs 0026/0027 written, ARCHITECTURE/IMPLEMENTED-API/EXTENSIBILITY/DESIGN-SYSTEM/ROADMAP/SECURITY/HANDOFF corrected, 5 runbooks indexed). round-76.md.
+- R77 (0.76.0): the field-report round — composer split L/R, RetryStatusCard redesign, the vanish-on-failure fix (freezeFailedTurn), envelope-intact errors, revert-as-edit-and-resend, the live 429-storm battery. round-77.md.
+- R78 (0.77.0): honest errors (RetryError unwrapped, real provider text everywhere) + the never-wrapping composer action anchor + the retry settings card + the message queue. round-78.md; lessons #79-#80.
+- R79 (0.78.0): the orchestrator round — delegate_task task_id/background/resume (ADR-0028), the BACKGROUND TASKS reminder section, migration 0028; lessons #81-#82. round-79.md.
+- R80 (0.79.0): the reliability round — silent stops fixed at three root causes, raw error caps raised, the customizable retry schedule, NVIDIA NIM; the R80.5 modularity audit followed docs-only. round-80.md; lesson #83.
+- R81 (0.80.0): the unified operating modes (ADR-0029) — ONE picker of three modes replacing both switchers; TaskModePicker deleted. round-81.md.
+
+Stage Summary:
+- Six shipped rounds (v0.76.0→v0.80.0), each with its round file + CHANGELOG entry + status.json milestone; only the WORKLOG entries were missing — this backfill closes the gap. (R82 onward resumes live entries.)
+
 ---
 Task ID: R82-CLOSEOUT
 Agent: orchestrator (main, resumed session)
@@ -2380,3 +2397,20 @@ Work Log:
 
 Stage Summary:
 - R84 COMPLETE: v0.83.0 — the import graph is a DAG (Tarjan-verified) and server.ts is 57% smaller with zero behavior change. Wave 2-b (the turn-loop harness) + the remaining route domains (terminal/MCP/computer/diagnostics/approvals/vision + the SSE route) are the documented next phases on the established pattern.
+
+---
+Task ID: R85 (the structure re-assessment round)
+Agent: main-orchestrator (Z.ai Code) + three parallel research sub-agents (2-a backend / 2-b frontend / 2-c docs-truth)
+Task: The owner's post-R84 directive: analyze the whole structure properly, give a complete overview, verify the modularity/extension claims through the low-context-agent lens, check the DeepSeek-harness reference, update ALL the documentation + the current standing, create rules if needed, push to GitHub as backup, notify via ntfy.sh (topic NTFY-TOPIC-REDACTED).
+
+Work Log:
+- Fresh clone at c38bc8b (R84 close-out, v0.83.0); read-first per HANDOFF §1 (HANDOFF/AGENTS/WORKFLOW/MODULE-BOUNDARIES/MODULARITY-ASSESSMENT/PILLARS/EXTENSIBILITY/status.json/deepseek-harness notes + the round-2 study).
+- Three parallel analysis sweeps dispatched (the sanctioned pattern for parallel research): backend (import-graph Tarjan, sizes, routes/ split state, SQL confinement, tools/plugins, storage, extension surfaces), frontend (god-file anatomy, stores, seams, dead code, coverage), docs-truth (stamps, HANDOFF, status.json, IMPLEMENTED-API, MODULE-BOUNDARIES, board/round files, ADRs, worklog, other truth docs, docs:check tooling).
+- The orchestrator spot-checked every load-bearing claim with its own eyes before writing: server.ts 2,439 exact, runtime.ts 3,369, computer/dispatch.ts 2,447, api.ts 3,959, stream-store 1,936, AgentChatPanel 2,757, ModelsProvidersTab 3,304, routes/ 14 files/3,694 lines, migrations at 0031, ADRs at 0029, round-84.md MISSING, delegation.ts imports (sub-roles leaf only), the registry↔plugins/mcp 2-cycle in both files, the dead sessions/ directory's zero importers, TOOL_NAMES=26.
+- Findings written into the docs (all P0/P1 fixed this round): MODULARITY-ASSESSMENT R85 section + §2/§3/§4/§8/§9/§10/§12/§13 refreshed; MODULE-BOUNDARIES REWRITTEN to the post-R84 reality; MAINTENANCE §e + map; HANDOFF §1/§3/§4/§6/§9 + header; round-84.md backfilled + round-85.md written; the board + docs index (rounds 82-85, CONTEXT-METER indexed, surfaces count unified); TESTING counts; IMPLEMENTED-API (models-config + anchor); EXTENSIBILITY (deleted-file refs); ROADMAP unfrozen; ARCHITECTURE reconciliation note; README; SPEC status line; status.json (16→26 tools, round 85, milestone 45, plan.current); CHANGELOG 0.83.1-docs; AGENT-MEMORY lessons #84-#85; WORKLOG R76-R81 backfill (above).
+- Verified: docs-only round (no code, no version bump — v0.83.0 stands); JSON validity checked; the stamp cohort bumped per DOC-STANDARDS §8 where content was refreshed (round-81 cohort was aging out at round 85).
+- Delivery: work/r85-reassessment branch → merged to main → pushed (the repo is the owner's backup); ntfy.sh notification to the owner's topic NTFY-TOPIC-REDACTED at close. No DASHBOARD publish (v0.83.0 unchanged — the DASHBOARD's R84 sync remains the next session's documented task).
+
+Stage Summary:
+- R85 COMPLETE (docs-only): the audit's verdict — R84's wins are real (SCC dead, split exact), with three overstatements corrected (the benign 2-cycle, 52-not-31 remaining routes, the 476-line SSE route); the top structural risk is now Wave 2-b (the turn-loop harness: 378 byte-identical lines between the runners; runtime.ts grew to 3,369); the frontend remains the weak half (god files grew, zero seams, 559 dead lines) until Wave 3; the normative docs now match the code again (doc-trust 6→~8).
+- The R86 scoping input for the owner: Wave 2-b first, then finish the split (52 routes), then Wave 3 (frontend seams), plus the Wave-1 leftovers (22 SQL leaks, the 2-cycle, the dead code, docs:check gating) and the DeepSeek round-2 candidates (C2 timeoutMs top pick).

@@ -1,10 +1,10 @@
-<!-- last-reviewed: 2026-09-10 round-84 -->
+<!-- last-reviewed: 2026-09-10 round-85 -->
 # ROADMAP — milestones per pillar
 
 Statuses: `done` · `in-flight` · `queued` · `owner-gated` (do not start
 without an explicit owner verdict). Refreshed every round; HANDOFF §9 points
-here. Last refreshed: round-75 (2026-09-07) — this file had been frozen at
-round-17; the per-round truth lives in `CHANGELOG.md` +
+here. Last refreshed: round-85 (2026-09-10, the structure re-assessment —
+unfrozen from a round-75 freeze); the per-round truth lives in `CHANGELOG.md` +
 `ui-iterations/README.md`.
 
 ## Phase ladder
@@ -24,39 +24,51 @@ round-17; the per-round truth lives in `CHANGELOG.md` +
   data (R9) · 7 sandboxed file tools + demo-parity UI (R14) · fullscreen chat
   + OS folder dialog + plug-and-play agent (R15) · **SSE live streaming,
   per-reply stats, ctx meter + model picker, borderless redesign** (R16) ·
-  design system (R16) · tool-name truth + allowlist enforcement (R17)
-- in-flight: owner Windows re-test of R16 (Browse dialog presentation,
-  streaming feel, drag direction, stats/pickers)
-- queued: sessions-per-project list/switcher · streamed-finish live chips ·
-  code panel syntax themes
+  design system (R16) · tool-name truth + allowlist enforcement (R17) ·
+  model management (R19-R20) · Kilo-parity toolset (R24-R27) · the R70-R73
+  agent brain + skills + modes stack · the R77-R80 field-report + reliability
+  rounds · the R81 unified operating modes · the R82 models/providers
+  hardening · the R83 honest token/context metering
+- queued (structural, per the R85 audit): the frontend seams (Wave 3 — the
+  api.ts split, the stream-event handler registry, the god-component
+  decompositions) · sessions-per-project list/switcher · code panel syntax
+  themes
 - **owner-gated**: dashboard/home redo (owner verdict: "way too simple / rigid")
 
 ## Pillar 2 — Agentic system (multi-agent orchestration)
 
 - done: design groundwork (`PILLARS.md`, `research/` synthesis, ADR-0001/0011);
   delegation-as-tool + child sessions + approval round-trip + 5-slot
-  semaphore (R36–R52); R71–R75 reliability layers (error classification,
-  overflow recovery, the retry ladder, task-mode enforcement)
-- queued: delegate_task task_id/background/resume (the R76 head); SSE push
-  (WS never shipped)
+  semaphore (R36–R52); the R71–R75 reliability layers (error classification,
+  overflow recovery, the retry ladder, mode enforcement); **delegate_task
+  task_id/background/resume SHIPPED (R79, ADR-0028)**; the unified modes
+  (R81, ADR-0029); the R84 modularity round (the 25-file SCC dead + the
+  server.ts split, 57%)
+- queued: Wave 2-b the turn-loop harness extraction (risk #1 per R85) ·
+  finishing the server.ts split (52 routes) · the R86+ scoping decision ·
+  SSE push (WS never shipped)
 
 ## Pillar 3 — Automation platform (n8n class)
 
-- done: n8n research trio (`research/n8n/`)
-- in-flight: blueprint (`PILLARS.md` §7 build order steps ④–⑦)
-- queued (after P3): workflows table + manual runs → data nodes → agent
-  nodes → schedule trigger → canvas UI
+- done: n8n research trio (`research/n8n/`) · blueprint (`PILLARS.md` §7)
+- queued (owner-gated): workflows table + manual runs → data nodes → agent
+  nodes → schedule trigger → canvas UI (PILLARS §7 steps ④–⑦; zero code yet)
 
 ## Cross-cutting
 
 - done (R19): model management (providers, models, pricing, keys, testing, hiding) + dashboard v2 (light, multi-file, GH Pages) + folder dialog .ps1 fix
-
 - done (R17): governance docs (WORKFLOW/ROADMAP/TESTING/SECURITY/docs index),
   ADR backfill 0014–0021, IMPLEMENTED-API, PILLARS.md, public dashboard
+- done (R85): the structure re-assessment — the R80.5/R85 modularity audits
+  + all normative docs re-synced to the post-R84 reality
 - queued: Phase-2 ADR ratifications · cargo-deny for Rust deps in CI ·
   native provider adapters stay fixture-only until keys · approval-decision
   metadata wrapper · `UsageRecord.costSource` · API.md reconciliation to
-  planned-vs-implemented split (started; finish when touching routes)
+  planned-vs-implemented split (started; finish when touching routes) ·
+  the Wave-1 leftovers (22 SQL leaks into storage/, the benign registry↔mcp
+  2-cycle, the 559-line dead sessions/ directory, ReminderBudget,
+  docs:check gating) · the DeepSeek round-2 candidates (C2 per-tool timeoutMs
+  the top pick)
 
 ## Changelog (one line per round, newest first)
 

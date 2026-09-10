@@ -1,9 +1,9 @@
-<!-- last-reviewed: 2026-09-10 round-84 -->
+<!-- last-reviewed: 2026-09-10 round-85 -->
 # ACUTE-CODE — Master Specification
 
 | | |
 |---|---|
-| **Status** | DRAFT v1.0 — Phase 0, awaiting product-owner approval |
+| **Status** | APPROVED v1.0 — owner-approved at Phase 0 close (2026-08-21; the docs index and phase ladder record the approval) |
 | **Date** | 2026-08-21 |
 | **Product** | ACUTE-CODE — local-first multi-agent engineering workbench (Windows) |
 | **Derivation** | Product-owner brief (2026-08-21) + owner decisions recorded 2026-08-21 (see ADRs 0001–0004) |

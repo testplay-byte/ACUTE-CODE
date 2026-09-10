@@ -1,7 +1,7 @@
-<!-- last-reviewed: 2026-09-10 round-84 -->
+<!-- last-reviewed: 2026-09-10 round-85 -->
 # ACUTE-CODE — Agent Handoff Document
 
-**Last updated:** 2026-09-10 (round-84 DELIVERED, v0.83.0: THE MODULARITY ROUND — Wave 2 of the R80.5 audit, behavior-identical and test-guarded: (1) the 25-file agents↔tools SCC is DEAD — the delegation plugin's static orchestrator import (the audit's root-cause find) replaced by the agents/sub-roles.ts LEAF (SUB_ROLES/SubRole, imports nothing) + the ToolDeps.orchestrator seam (the chat/chatStream injection pattern) + a lazy dynamic-import singleton fallback at execution time; a Tarjan SCC check over the runtime value-import graph (90 files) reports ZERO cyclic SCCs. (2) server.ts shrank 5,719 → 2,439 lines (−57%): 71 routes moved VERBATIM into 14 routes/<domain>.ts modules (sessions+chat 16, providers 13, sessions-adjacent, projects 8, settings 8, agents 6, models 5, ratings 4, skills 4, attachments 2, memory 2, usage 2, modes 1 — plus routes/context.ts RouteContext + helpers.ts) on the proven registerBrowserRoutes pattern; buildServer is the assembler calling each register function in the ORIGINAL registration order; every move phase-committed with the full suite green (programmatic block moves with independent round-trip verifiers — zero transcription risk; all ROUND-N history comments intact). The remaining domains (terminal, MCP, computer-use, diagnostics, approvals, vision + the 392-line streamed SSE route, marked final-phase) and Wave 2-b (the turn-loop harness extraction) are the documented next phases. Verified: agent-core 92 files/1,867 tests green after EVERY phase, root 155/2,825, e2e 12/12, lint + typechecks clean, docs:check 188/0/0. · **What's next:** the Wave 2 continuation (the remaining route domains + the SSE route + the turn-loop harness), then Wave 3 (the api.ts split + the frontend stream-event handler registry) + the standing R81-queue items · **Maintained by:** the orchestrator agent · **Audience:** any AI agent (or human) taking over development
+**Last updated:** 2026-09-10 (round-85 DELIVERED: the structure re-assessment round — the owner-directed post-R84 audit, docs-only (no code, no version change, v0.83.0 unchanged): three parallel analysis sweeps (backend import-graph/sizes · frontend anatomy/coupling · docs-truth) re-verified at HEAD `c38bc8b` with the orchestrator spot-checking every load-bearing claim. R84's two structural wins CONFIRMED REAL (server.ts 5,719→2,439 across 14 routes/<domain>.ts modules; the 25-file SCC dead — delegation imports only the sub-roles leaf). Corrections recorded: one benign 2-cycle remains (registry↔plugins/mcp, TOOL_NAME_RE, since R61), 52 routes remain in server.ts (not ~31 — the notifications/jobs/checkpoints/dialogs/plugins tail was never on the plan), the SSE route is 476 lines (392 was the stale R80.5 figure), the sync/streamed runner duplication is 378 byte-identical lines (78% of the sync runner) with runtime.ts GREW to 3,369, and the frontend god files all GREW (api 3,959 / stream-store 1,936 / ModelsProvidersTab 3,304) — Wave 3 untouched. All P0 doc drift FIXED this round: MODULE-BOUNDARIES REWRITTEN to the post-R84 reality (the route recipe pointed at server.ts; §4 described the dead cycle as current), MAINTENANCE §e re-pointed at routes/, round-84.md backfilled + round-85.md written, the board/index/TESTING/IMPLEMENTED-API/status.json/ROADMAP/EXTENSIBILITY synced, ORCHESTRATION-WORKLOG's R76-R81 gap backfilled, AGENT-MEMORY lessons #84-#85 added. Full evidence: `docs/ui-iterations/round-85.md` + `docs/architecture/MODULARITY-ASSESSMENT.md` (R85 section). · **What's next:** the owner's R86 scoping decision — Wave 2-b (the turn-loop harness, now risk #1) + finishing the server.ts split (52 routes), then Wave 3 (the frontend seams) · **Maintained by:** the orchestrator agent · **Audience:** any AI agent (or human) taking over development
 
 You are picking up **ACUTE-CODE**, a local-first, closed-source multi-agent engineering workbench for Windows. This file gives you everything needed to continue: state, rules, environment, gotchas, and next steps. It contains **no secrets** — secrets live only in Windows Credential Manager (§7).
 
@@ -17,18 +17,18 @@ You are picking up **ACUTE-CODE**, a local-first, closed-source multi-agent engi
 4. `docs/agent/ORCHESTRATION-WORKLOG.md` — session-by-session history; where the last session ended. Sandbox wiped? `docs/runbooks/SANDBOX-RESTORE.md` is the zero-to-resumed procedure.
 5. `docs/specs/SPEC.md` — master requirements (owner-approved).
 6. `docs/architecture/ARCHITECTURE.md` + `docs/architecture/api/API.md` — the design truth (52 API operations).
-7. `docs/decisions/` — ADRs 0001–0028 (never renumber; continue at 0029+).
+7. `docs/decisions/` — ADRs 0001–0029 (never renumber; continue at 0030+).
 8. `docs/runbooks/plan-phase-2.md` (what just finished) and `docs/research/README.md` (nine reference-project analyses + synthesis).
 
 ## 2. Product in one paragraph
 
 ACUTE-CODE (NOT "Forge" — the brief's old codename) is a Windows desktop app: **Tauri 2 (Rust) shell + React 18/TS frontend + Node/TS sidecar ("agent-core") that exclusively owns SQLite (WAL) and serves localhost REST+SSE (the WS gateway of the Phase-1 design was never built — SSE per-turn streams are the shipped surface)**. "Local-first" = all processing on-device; LLMs are cloud APIs only. It orchestrates up to 5 concurrent agents (templates: Planner, Researcher, Coder, Reviewer, Tester) in three run modes — **single-agent (default)**, **auto-team** (cheap orchestrator model delegates to a powerful worker), **manual** (advanced). No sandbox in v1, so the **human-approval engine is the security boundary**. Providers: Anthropic/OpenAI/Google (fixture-tested only — no keys) + OpenRouter (live) + custom OpenAI-compatible. Owner runs it as a portable folder with an exe (ADR-0003). Budget: <700 MB idle, <2.5 GB with 5 agents, cold start <5 s.
 
-## 3. Exact current state (2026-09-09, round-80 DELIVERED + CLOSED — v0.79.0 published; R80.5 docs-only modularity audit on top)
+## 3. Exact current state (2026-09-10, round-85 DELIVERED — the structure re-assessment, docs-only; v0.83.0 = the R84 modularity round underneath)
 
-**R80 is DELIVERED AND CLOSED: the reliability round — the owner's four-clause field report (silent stops / raw errors / retry customization / NVIDIA) — shipped, unit-tested (2772 in 149 files: agent-core 1796 incl. four new r80 suites + frontend 964 + e2e 12), live-verified on the real keys, committed (`4a9828e`, tag `v0.79.0`), and closed out (`6f512aa` — the docs-only status.json ci-field sync: push 4a9828e → CI run 34317366484 SUCCESS on the first try → release 385274188 PUBLISHED with both assets → DASHBOARD truth-synced at `f69a05c`).** **The minimum commit to verify from is `6f512aa` (= HEAD at this writing; `git describe` = v0.79.0-1).** A follow-up docs-only analysis pass landed on top of it: the R80.5 modularity audit (`docs/architecture/MODULARITY-ASSESSMENT.md` + the `docs/runbooks/MODULE-BOUNDARIES.md` contract + the IMPLEMENTED-API backfill of 11 routes + this §3 correction) — no code, no version change. The round-28-era table below is kept as the ARCHIVED historical record — the live state is what this paragraph says.
+**R85 is DELIVERED: the post-R84 structure re-assessment** (the owner's directive: analyze the whole structure, verify the modularity claims, fix the documentation, push as backup). Docs-only — no code, no version change. The audit CONFIRMED R84's headline wins (the 25-file SCC is dead: delegation.ts imports only the sub-roles leaf + the ToolDeps.orchestrator seam + the lazy fallback; server.ts is exactly 2,439 lines with 71 routes in 14 modules; agent-core 92/1,867, root 155/2,825, e2e 12/12 all green per CI run 34484344162) and CORRECTED its overstatements: one benign value-import 2-cycle remains (tools/registry.ts ↔ tools/plugins/mcp.ts, the TOOL_NAME_RE edge since R61); 52 routes remain in server.ts (the R84 plan named ~31 — the notifications/jobs/checkpoints/dialogs/plugins tail was never listed); the SSE route is 476 lines (not 392); the turn-loop duplication is precisely 378 byte-identical lines with runtime.ts grown to 3,369; SQL leaks number 22 (approvals.ts alone holds 11); the frontend god files grew since the R80.5 audit. **The minimum commit to verify from is `c38bc8b`** (= R84 close-out; the R85 docs commit lands on top). The full evidence lives in `docs/ui-iterations/round-85.md` + `docs/architecture/MODULARITY-ASSESSMENT.md` §R85; the roadmap waves are refreshed in its §10.
 
-**The next queue (R81+):** the owner's modularity decision first (the R80.5 audit's waves in `docs/architecture/MODULARITY-ASSESSMENT.md` §10 — the server.ts route split, the turn-loop harness extraction, the ToolDeps cycle break are the Wave-2 structural candidates; the api.ts split + the frontend stream-event handler registry are Wave-3), then the R81 items: external plugin ctx enrichment (cline's appendContext seam), the lessons-ledger affordance as the reminder injector's third consumer, ratings-driven prompt tuning, the optional v0.68.0 backfill tag, and the standing items (edit-linting, installer code-signing, the Files-tab polish, agent web-app-testing tools). Known R80 residuals for the next agent: the NVIDIA account's NIM model functions are EOL'd server-side (nothing code-side can do — the raw 410 bodies surface honestly; pick models as NVIDIA re-provisions), and the sync-path child `turn.error` text stays the generic provider line (pre-existing, out of scope).
+**The next queue (R86+):** the owner's scoping decision — (a) Wave 2-b, the turn-loop harness extraction (now risk #1: the 378-line sync/streamed duplication + prepareTurn's 10 positional args), (b) finishing the server.ts split (the 52 remaining routes incl. the 476-line SSE route, final-phase), (c) Wave 3, the frontend seams (the api.ts split, the stream-event handler registry, the AgentChatPanel/ModelsProvidersTab decompositions, deleting the 559-line dead sessions/ directory), then the standing items (external plugin ctx enrichment, ratings-driven prompt tuning, edit-linting, installer code-signing, the Files-tab polish, agent web-app-testing tools) and the DeepSeek round-2 candidates (C2 per-tool timeoutMs is the top pick). Known R80 residuals that remain: the NVIDIA account's NIM model functions are EOL'd server-side (nothing code-side can do — the raw 410 bodies surface honestly), and the sync-path child `turn.error` text stays the generic provider line (pre-existing, out of scope).
 
 | Item | State |
 |---|---|
@@ -51,32 +51,35 @@ ACUTE-CODE (NOT "Forge" — the brief's old codename) is a Windows desktop app: 
 ```
 acute-code/
 ├── HANDOFF.md              ← this file
-├── AGENTS.md (workspace, ../)  operating rules — phase gates, question protocol, hard rules
+├── AGENTS.md               operating rules (repo copy; the workspace original sits one level above) — phase gates, question protocol, hard rules
 ├── launcher/               owner's one-click local-PC entry (round-11): ACUTE.bat (CRLF coordinator) + acute.sh + acute_launcher.py (rich-UI workhorse: auto-install, credentials.txt, update+restart, self-update) + credentials.example.txt — see docs/runbooks/LOCAL-PC-RUNNER.md
 ├── docs/
-│   ├── agent/ORCHESTRATION-WORKLOG.md   session history snapshot (sandbox-resilience backup, refreshed each session)
+│   ├── agent/ORCHESTRATION-WORKLOG.md   session history snapshot (sandbox-resilience backup, refreshed each session; R76-R81 backfilled R85)
 │   ├── specs/SPEC.md           master requirements (F1–F11 features)
-│   ├── architecture/ARCHITECTURE.md + api/API.md   design truth
-│   ├── decisions/0001–0028 + TEMPLATE.md          ADRs (sequential, never reused)
-│   ├── research/<9 projects>/  verified reference analyses + README synthesis
+│   ├── architecture/ARCHITECTURE.md + api/API.md   design truth · MODULARITY-ASSESSMENT.md (the R80.5/R85 structure audits)
+│   ├── decisions/0001–0029 + TEMPLATE.md          ADRs (sequential, never reused; next = 0030)
+│   ├── research/<9 projects>/  verified reference analyses + README synthesis + deepseek-harness-notes (R51) — the round-2 deep study lives in agent-ctx/research/
 │   ├── design/ui-direction.md  owner's design language from his demos
-│   ├── runbooks/SETUP.md, plan-phase-{0,1,2}.md, plan-ui-fidelity.md, review-phase-1.md, DEMO.md (later) · LOCAL-PC-RUNNER.md (one-click launcher) · AGENT-MEMORY.md (lessons) · SANDBOX-RESTORE.md (resume-after-wipe)
+│   ├── runbooks/  SETUP, WORKFLOW (the session spine), MAINTENANCE (recipes), MODULE-BOUNDARIES (the editing contract), EXTENSIBILITY, TESTING, SECURITY, AGENT-MEMORY (lessons), SANDBOX-RESTORE, ROADMAP, CONTEXT-METER + the phase plans
+│   ├── ui-iterations/round-NN.md  per-round evidence files (1–85) + README board
 │   └── compliance/dependency-licenses.md  generated by the audit — do not hand-edit
-├── agent-core/             Node sidecar — owns SQLite; Fastify 5; the ONLY SQL lives in src/storage/
+├── agent-core/             Node sidecar — owns SQLite; Fastify 5; the ONLY SQL lives in src/storage/ (known legacy exceptions documented in MODULE-BOUNDARIES §2)
 │   ├── src/main.ts         entry: reads ACUTE_TOKEN + ACUTE_DB_PATH env → startServer
-│   ├── src/server.ts       routes (health, agents, providers, sessions), bearer auth, error envelope
-│   ├── src/storage/        better-sqlite3 (WAL), numbered migrations in src/storage/migrations/
+│   ├── src/server.ts       the ASSEMBLER (buildServer) + the 52 not-yet-extracted routes (terminal, MCP, computer-use, diagnostics, approvals, vision, SSE + the notifications/jobs/checkpoints/dialogs/plugins groups)
+│   ├── src/routes/         14 domain route modules (R84) — register<Domain>(scope, ctx) each; sessions/providers/agents/projects/models/settings/attachments/memory/skills/modes/ratings/usage
+│   ├── src/storage/        better-sqlite3 (WAL), 31 numbered migrations in src/storage/migrations/ (next = 0032+)
 │   ├── src/providers/      keyring (env ACUTE_PROVIDER_<ID>), model listing w/ cache
-│   ├── src/agents/         chat seam (aiSdkChat) + single-agent turn runtime
-│   ├── src/approvals.ts    fail-closed categorize() (denylist → destructive → safelist → confirm)
+│   ├── src/agents/         chat seam (aiSdkChat) + the turn runtime (runtime.ts — the Wave-2b target) + orchestrator + sub-roles leaf + prompts/prompt-registry + modes + skills glue
+│   ├── src/tools/          ADR-0025 plugin registry: plugins/*.ts (14 registered) + registry.ts (loader/catalog incl. external .mjs) + index.ts (ToolDeps — the sanctioned seam)
+│   ├── src/computer/       desktop automation (dispatch.ts 2,447 — the largest backend file)
+│   ├── src/mcp/            MCP client manager (stdio JSON-RPC)
+│   ├── src/browser-proxy.ts browser subsystem (fenced)
 │   └── tests/              vitest; AI SDK mocked — NEVER live calls in tests
 ├── shared/                 canonical domain types (RunMode "single"|"auto-team"|"manual", AgentRecord, …) — code conforms to these
-├── src/                    React 18 frontend (root package). Shell + Agents registry + Sessions chat, theme system, demo-data fixture mode
+├── src/                    React 18 frontend (root package). Shell + Agents registry + project-chat + settings + right-sidebar + 13 Zustand stores, theme system, demo-data fixture mode
 ├── src-tauri/              Rust shell. src/sidecar.rs = lifecycle: token mint, spawn, ready-line, health poll, shutdown (taskkill fallback), Credential-Manager key injection
-├── scripts/license-audit.mjs  fails on GPL/unknown; walks ALL workspace packages (root+agent-core+shared); parses SPDX OR expressions
-├── scripts/acute-desktop.mjs  local-PC runner used by ACUTE.bat/acute.sh: toolchain, update+restart, installs, key setup, launch
-├── scripts/credential.ps1  read/write Windows Credential Manager entries (no secrets inside)
-├── tests/e2e/              sidecar black-box E2E suite (6 tests vs built dist; skips when dist absent)
+├── scripts/               license-audit (fails on GPL), acute.mjs dev CLI, docs/ (check-stale + stamp-all), battery scripts, dashboard publish
+├── tests/e2e/              sidecar black-box E2E suite (12 tests vs built dist; skips when dist absent)
 └── .github/workflows/ci.yml  windows-latest: pnpm verify + cargo check (heavy builds belong HERE, not the owner's PC — ADR-0012)
 ```
 
@@ -92,7 +95,7 @@ acute-code/
 
 ## 6. First tasks for you, in order
 
-1. **Confirm you have current code**: `git log --oneline -1` → must be `66e949a` (v0.75.0) or newer (pull if behind). If your machine lacks push credentials, follow `docs/runbooks/SANDBOX-RESTORE.md` (round-28 layout: `/home/z/PROJECT/ACUTECODE` + per-repo credential helpers + token-in-URL clone per lesson #24).
+1. **Confirm you have current code**: `git log --oneline -1` → must be `c38bc8b` (R84 close-out, v0.83.0) or the R85 docs commit on top of it (pull if behind). If your machine lacks push credentials, follow `docs/runbooks/SANDBOX-RESTORE.md` (round-28 layout: `/home/z/PROJECT/ACUTECODE` + per-repo credential helpers + token-in-URL clone per lesson #24).
    ```bash
    git config --global credential.https://github.com.helper ""          # clear inherited GCM for this host
    git config --global credential.https://github.com.helper wincred     # GCM itself special-cases github.com to OAuth and silently discards PATs — wincred works
@@ -137,26 +140,38 @@ The Rust shell reads provider keys from Credential Manager at spawn and injects 
 - Tauri on Windows needs `src-tauri/icons/icon.ico` even with bundling disabled.
 - Git Bash kills don't always take node children down — check `tasklist` for orphans after sidecar tests (`taskkill //F //PID <pid>`).
 
-## 9. What's next: owner verdict on R28 (J2 closed) — then Phase 3 — Orchestration engine (after owner approval)
+## 9. What's next: the owner's R86 scoping decision — the modularity roadmap (post-R85)
 
-**Round-28 (2026-08-24, DELIVERED):** the full plan was at `docs/ROUND-28-MASTER-PLAN.md` (1123 lines, v2 with 30 sub-agent review fixes applied). All 5 milestones delivered; see `docs/ui-iterations/round-28.md` for the complete evidence. The 13 workstreams A-M across 5 milestones were:
-- **MS-1**: A1+A2 (governance + docs sync) + B (sidebar redesign — remove brand block) + C (settings appearance contrast fix)
-- **MS-2**: D1+D2+D3 (chat screen complete redesign — chatFocusMode + ChatFocusLayout + AgentChatPanel modernization + streaming hook merged with E + composer wiring + DiffCard real diff + delete orphaned TopBar)
-- **MS-3**: F (multi-turn agentic continuation — AGENTIC LOOP prompt section + inverted continueIfUnfinished + maxOuterLoops 5 + context/request guards)
-- **MS-4**: G1+G2 (project indexing — 0007 codebase_index migration + index_project 16th tool + frontend CodebasePanel) + H (grep integration — search_code schema extension + CommandPalette ⌘K popover)
-- **MS-5**: I (in-app demo viewer) + J1+J2 (docs management CI gate) + K1+K2 (dashboard screenshot zip uploads to DASHBOARD repo) + L (verify-round.mjs one-shot battery) + M (review cadence doc)
+The R80.5 audit's roadmap was refreshed by R85 (`docs/architecture/MODULARITY-ASSESSMENT.md` §10). In priority order:
 
-6 parallel sub-agents ran (6-a/6-b/6-c research + 6-d/6-e/6-f review); 30 fixes applied. See plan §0.1 v2 changelog for every fix. Owner verdicts gate each MS.
+- **Wave 2-b — the turn-loop harness extraction (risk #1)**: the sync/streamed
+  runners share 378 byte-identical lines (78% of the sync runner); shared retry
+  ladder / loop guard / overflow recovery / error classification helpers used by
+  BOTH runners, plus `prepareTurn`'s 10 positional args → an options object.
+- **Finish the server.ts split**: 52 routes remain (terminal 8, MCP 6, computer-use
+  9, diagnostics 2, approvals 2, vision 3, SSE 1 + the 21-route unnamed tail —
+  notifications ×7, jobs ×4, checkpoints/snapshots ×3, dialogs ×2, plugins, index,
+  keys, health), the 476-line SSE route marked final-phase. The pattern is proven.
+- **Wave 3 — the frontend seams**: the api.ts split (3,959 lines/72 importers →
+  transport/types/sse/view-models with a barrel), the stream-event handler registry
+  (the 687-line handleStreamEvent → event-type → handler map), the
+  AgentChatPanel/ModelsProvidersTab decompositions, deleting the 559-line dead
+  sessions/ directory, the external-plugin execute-time wrapper.
+- **Wave 1 leftovers**: move the 22 leaked SQL statements into storage/ (approvals ×11),
+  kill the benign registry↔mcp 2-cycle, delete the dead sessions/ code, wire-or-delete
+  ReminderBudget, make docs:check blocking once the stamp ceremony is automated.
+- **The DeepSeek round-2 candidates** (agent-ctx/research/deepseek-harness-round2.md):
+  C2 per-tool declared timeoutMs with structured TOOL_TIMEOUT results (top pick),
+  C3 mode-policy-as-folded-events + cache-stable narration, C4 tool-result spill.
+- **The standing queue**: external plugin ctx enrichment, ratings-driven prompt
+  tuning, edit-linting, installer code-signing, the Files-tab polish, agent
+  web-app-testing tools.
 
-**Round-27 delivery (2026-08-24, owner-directed):** web tools (web_fetch + web_search) + critical deps-wiring fix (todo_write + checkpoints were silently dead in real turns — now live) + 14 web-tools unit tests + L4 live battery + L5 browser verification (19 screenshots) + demo project (YouTube-like app, 545 lines) built BY the agent + zip uploaded to GitHub release `round-27-testing`. Kilo Code parity achieved (15 tools, Cline-grade prompt, cost tracking, context-window management, checkpoint/revert, todo tracking).
-
-**Round-14 delivery (2026-08-23, owner-directed):** the agentic coding system works for real — `/internal/dialog/folder` (sidecar opens the REAL OS folder dialog), tools `create_dir`/`delete_file`/`search_files`, demo-parity chat UI (TopBar with live AGENT picker + ⌘K file search + theme grid + Experimental freeform layout + To-Do). Live P1 proof: 6-tool turn + read-back + deletion-refusal. Three-pillar planning: `docs/research/n8n/` (automation pillar, additive).
-
-**Round-11 delivery (2026-08-23, owner-directed redesign):** the round-10 `.bat` failed on the owner's PC (LF line endings — cmd.exe disintegration; lesson #16 in AGENT-MEMORY). Replaced per owner direction with `launcher/`: `ACUTE.bat` (tiny CRLF-verified coordinator — finds/installs Python) + `acute_launcher.py` (rich-terminal workhorse: toolchain auto-install via winget, `credentials.txt` local secrets file, clean-folder layout `ACUTE-CODE/` + `.acute/`, update-with-server-restart, OpenRouter key → Credential Manager, launcher SELF-UPDATE, boxed copyable errors, plain-text fallback). Fully tested on Linux incl. first-run, behind-update, status, live start (key `●` end-to-end) and failure paths; docs in `docs/runbooks/LOCAL-PC-RUNNER.md` + `launcher/README.md`. `scripts/acute-desktop.mjs` (round-10 node runner) remains as the advanced headless path. The owner runs the app on his PC with the launcher; M4 can be re-confirmed there. The full owner vision (three products) is recorded in `docs/architecture/PROJECT-MAP.md` §1/§6.
-
-Phase 3 scope per SPEC §F3 + ADR-0001 (read `docs/research/README.md` synthesis §4 first — delegation-as-task-tool is the proven pattern): multi-agent run loop; shared message bus (typed pub/sub, MetaGPT pattern); Kanban task board events; **approval-gate engine live** (modal round-trip, audit log, denylist-supreme, 15-min deny-on-expiry default, remembered grants for non-destructive); the three run modes with auto-team composition; WS streaming (`@fastify/websocket` — first-message auth frame per ADR-0008; replaces today's refetch-after-turn). Exit demo (owner watches live): 3-agent coding task (Planner→Coder→Reviewer) + 2-agent research task.
-
-**Also queued:** ratify Phase 2 assumptions (ADR list in the Phase 2 report — SPDX OR-expression audit parsing, failed-turn session semantics); `cargo-deny` license audit for Rust deps in CI; native provider adapters remain fixture-only until keys exist; approval-decision metadata wrapper type; `UsageRecord.costSource` provenance field.
+Historical context: the Phase-3 orchestration engine (SPEC §F3 + ADR-0001) largely
+SHIPPED across R36–R79 (delegation with task_id/background/resume, semaphores, the
+approval engine ADR-0024, the three run modes); the PILLARS §7-4/5/6 pillars
+(workflows/scheduler/canvas) remain unbuilt and owner-gated. The full owner vision
+(three products) is recorded in `docs/architecture/PROJECT-MAP.md` §1/§6.
 
 ## 10. Quick reference
 

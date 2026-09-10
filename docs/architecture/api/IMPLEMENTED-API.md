@@ -1,9 +1,13 @@
-<!-- last-reviewed: 2026-09-10 round-84 -->
+<!-- last-reviewed: 2026-09-10 round-85 -->
 # IMPLEMENTED API — the shipped surface
 
-**Truth = this file.** Verified against `agent-core/src/server.ts` at
-round-17 (2026-08-23), refreshed R37→R80 (+ the R80.5 backfill of 11
-previously-undocumented routes — see the ROUND-80.5 section at the end). The
+**Truth = this file.** Verified against `agent-core/src/server.ts` +
+`agent-core/src/routes/<domain>.ts` (the R84 split moved 71 of 131 routes
+into 14 domain modules) + `browser-proxy.ts`; established round-17
+(2026-08-23), refreshed continuously since (R37→R85; the R80.5 backfill of
+11 previously-undocumented routes + the R85 backfill of
+`GET /providers/:id/models-config` — see the ROUND-80.5 section at the end).
+The
 aspirational full contract (52
 operations, WS gateway, planned routes) lives in
 [`API.md`](API.md) — anything there and
@@ -39,6 +43,9 @@ vite dev origins.
 `GET /providers` → `{providers:[{id,name,kind,baseUrl,enabled,hasKey}]}` ·
 `POST /providers` (custom openai-compatible) ·
 `GET /providers/:id/models` (5-min cache) ·
+`GET /providers/:id/models-config` (round-19, backfilled R85 — the per-provider
+saved model rows incl. hidden ones; the admin/models-config listing the
+frontend quartet reads; 404 unknown provider) ·
 `POST /providers/:id/test` `{model?, slot?}` (slot-scoped since ROUND-47)
 → `{ok, latencyMs}` or `{ok:false,message}` (HTTP 200) / `502` on transport
 failure.
@@ -2251,7 +2258,7 @@ the per-model test button, the model edit dialog). Spec:
   agent's provider; the misroute ("custom model id sent verbatim to
   OpenRouter → 'No endpoints found'") is gone. Unknown ids → early
   `400 VALIDATION` (`body.providerId`); absent → the agent's provider
-  (pre-R82 behavior). The queued-message carry (`POST /queue`), the vision
+  (pre-R82 behavior). The queued-message carry (`POST /sessions/:id/queue`), the vision
   relay, the context meter (`GET /sessions/:id/context?model=&providerId=`),
   and the debug analyst all key on the same effective pair.
 - Orchestrator children: `orchestration.subagentModel` is now the

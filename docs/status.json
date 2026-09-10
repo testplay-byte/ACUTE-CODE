@@ -20,7 +20,7 @@
       "title": "Coding",
       "state": "usable",
       "progress": 89,
-      "summary": "Projects, 16 sandboxed tools, streaming chat, multi-turn continuation, codebase indexing, grep search, demo viewer"
+      "summary": "Projects, 26 base tools (15 plugin files incl. the 30-tool computer-use family) + skills/MCP/plugins, streaming chat, multi-turn continuation, codebase indexing, grep search, demo viewer"
     },
     {
       "id": "agentic",
@@ -232,6 +232,12 @@
       "title": "R84 — the modularity round (Wave 2: the SCC break + the server.ts route split)",
       "date": "2026-09-10",
       "summary": "Wave 2 of the R80.5 audit, behavior-identical and test-guarded: the 25-file agents↔tools SCC is DEAD (the delegation plugin's static orchestrator import — the root cause — replaced by the agents/sub-roles.ts leaf + the ToolDeps.orchestrator seam + a lazy fallback; a Tarjan check over the runtime import graph reports zero cycles), and server.ts shrank 5,719 → 2,439 lines (−57%) as 71 routes moved verbatim into 14 routes/<domain>.ts modules (sessions, agents, projects, models, providers, attachments, memory, skills, modes, ratings, usage, settings) on the proven registerBrowserRoutes pattern with buildServer as the assembler — each phase a separate green commit. The remaining domains (terminal, MCP, computer-use, diagnostics, approvals, the SSE route) are the documented next phases."
+    },
+    {
+      "id": 45,
+      "title": "R85 — the structure re-assessment",
+      "date": "2026-09-10",
+      "summary": "The owner-directed post-R84 audit, docs-only: three parallel analysis sweeps re-verified at c38bc8b — R84's wins CONFIRMED (the SCC dead, server.ts 5,719→2,439 exact) with three overstatements corrected (one benign 2-cycle remains: registry↔plugins/mcp TOOL_NAME_RE since R61; 52 routes remain in server.ts, not ~31 — the notifications/jobs/checkpoints/dialogs/plugins tail was never on the plan; the SSE route is 476 lines); the turn-loop duplication measured (378 byte-identical lines; runtime.ts grew to 3,369; prepareTurn 447 lines/10 positional args); the frontend god files all grew since R80.5 (api 3,959 / stream-store 1,936 / ModelsProvidersTab 3,304; 559 lines of dead sessions/ code; zero extension seams); SQL leaks counted at 22 (approvals.ts ×11); every P0 doc drift fixed (MODULE-BOUNDARIES rewritten to the post-R84 reality, MAINTENANCE §e, HANDOFF, round-84.md backfilled, the board/index/TESTING/IMPLEMENTED-API/ROADMAP/EXTENSIBILITY synced, WORKLOG R76-R81 backfill, lessons #84-#85). v0.83.0 unchanged."
     }
   ],
   "quality": {
@@ -268,8 +274,8 @@
   ],
   "plan": {
     "current": {
-      "title": "R84 — the modularity round (Wave 2: the SCC break + the server.ts route split)",
-      "detail": "Shipped on work/r84-modularity in 10 phase commits, merged to main: (1) Wave 2-c — the 25-file SCC broken at the delegation edge (agents/sub-roles.ts leaf + ToolDeps.orchestrator seam + the lazy dynamic-import fallback; Tarjan: 0 cyclic SCCs over 90 files). (2) Wave 2-a — 71 routes / 14 domain modules extracted verbatim (programmatic block moves with independent round-trip verifiers; registration order preserved; every ROUND-N history comment intact; server.ts 5,719→2,439). Verified: agent-core 92/1,867 after EVERY phase, root 155/2,825, lint + typechecks clean. The SSE route + terminal/mcp/computer/diagnostics/approvals domains + the turn-loop harness (2-b) remain — the pattern is established for the next session."
+      "title": "R85 — the structure re-assessment (the post-R84 audit + documentation truth round)",
+      "detail": "Docs-only, v0.83.0 unchanged. Three parallel analysis sweeps (backend import-graph / frontend anatomy / docs truth) re-verified at c38bc8b with every load-bearing claim spot-checked: R84's structural wins are real (the 25-file SCC dead — delegation imports only the sub-roles leaf; server.ts 5,719→2,439 across 14 routes/<domain>.ts modules); the corrections are recorded (one benign 2-cycle remains — registry↔plugins/mcp TOOL_NAME_RE since R61; 52 routes remain in server.ts, not ~31; the SSE route is 476 lines; runtime.ts grew to 3,369 with the sync/streamed runners sharing 378 byte-identical lines; the frontend god files grew — api 3,959 / stream-store 1,936 / ModelsProvidersTab 3,304; 22 SQL statements outside storage/; 559 lines of dead frontend code). All P0/P1 documentation drift fixed (MODULE-BOUNDARIES rewritten to the post-R84 reality, MAINTENANCE §e, HANDOFF §3/§4/§6/§9, round-84.md backfilled + round-85.md written, the board + index + TESTING + IMPLEMENTED-API + ROADMAP + EXTENSIBILITY + status synced, ORCHESTRATION-WORKLOG's R76-R81 gap backfilled, AGENT-MEMORY lessons #84-#85). Full evidence: docs/ui-iterations/round-85.md + docs/architecture/MODULARITY-ASSESSMENT.md (the R85 section)."
     },
     "upcoming": [
       {
@@ -294,5 +300,5 @@
       "Quality over speed — every round verified before push"
     ]
   },
-  "round": 84
+  "round": 85
 }
