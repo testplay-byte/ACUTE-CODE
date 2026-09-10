@@ -907,3 +907,39 @@ Format per entry: `N. TITLE (date, source)` → mistake → root cause → rule.
     retry logic, suspect a RETRY WAIT (the ladder's long rung), not a
     deadlock — read which class the new error maps to before touching
     the loop code.
+
+84. **A stamp-only cohort refresh over-claims freshness — when the round
+    changed the world a doc describes, the stamp bump must come with a
+    content check.** (2026-09-10, round-85; the docs-truth audit.) The
+    R84 close-out bumped ~12 docs' `last-reviewed` stamps to round-84 as
+    first-line-only diffs (legal per DOC-STANDARDS §8's cohort rule) —
+    but R84 had SPLIT server.ts and KILLED the import cycle, and the
+    stamped docs still described the pre-split world: MODULE-BOUNDARIES
+    §3 told agents to add routes in server.ts ("do not preemptively
+    create routes/"), §4 presented the dead cycle as current, MAINTENANCE
+    §e carried the same wrong recipe, and the stamp made them look
+    fresh. A low-context agent following the normative contract would
+    have edited the wrong file. RULE: the stamp ceremony has two cases —
+    (a) pure aging (content still true): bump freely; (b) the round
+    changed the structures the doc describes: the stamp bump REQUIRES a
+    content verification pass over the affected sections in the same
+    commit. When a structural round lands, list every doc that names the
+    changed files/structures and check those references before stamping.
+
+85. **A verification claim is only as good as its scope — state the
+    scope IN the claim, and make the check re-runnable.** (2026-09-10,
+    round-85; the "zero cyclic SCCs" correction.) R84 claimed "a Tarjan
+    check over the runtime import graph reports ZERO cyclic SCCs" — but
+    the check ran over 90 files while the tree had 104, and it excluded
+    the one edge class that mattered (the value-import `TOOL_NAME_RE`
+    edge `tools/registry.ts` ↔ `tools/plugins/mcp.ts`, present since
+    R61). The claim survived its own round's review because the scope
+    was implicit; the R85 re-run with full scope found the counter-
+    example in minutes. The same round's "392-line SSE route" and
+    "~31 remaining routes" figures were stale counts nobody re-measured.
+    RULE: verification claims name their exact scope (file count,
+    inclusion/exclusion rules, the command) so a successor can re-run
+    them verbatim; a "zero X" claim is a prediction about the FULL
+    scope, not the tested one. Cheap corollary: re-measure line/route
+    counts at commit time instead of carrying forward figures from
+    earlier rounds.

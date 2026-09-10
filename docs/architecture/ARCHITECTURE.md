@@ -1,4 +1,4 @@
-<!-- last-reviewed: 2026-09-10 round-83 -->
+<!-- last-reviewed: 2026-09-10 round-85 -->
 # ACUTE-CODE — System Architecture
 
 | | |
@@ -119,7 +119,7 @@ Exactly two processes in steady state: `acute-code.exe` (shell + WebView2 render
 
 Anti-drift rule: **every future file must map to a purpose declared here.** A new file that does not fit one of these modules — or a new module — requires editing this section (and an ADR if the change is non-trivial) in the same commit. This is the defense against the monolithic-core and storage-sprawl anti-patterns the research flagged (hermes' 560 KB `run_agent.py`; opencode's pre-migration format sprawl — synthesis §8).
 
-> **Shipped-surface truth = `api/IMPLEMENTED-API.md`.** This module map is the Phase-1 design shape; R75 added `agents/mode-policy.ts` (task-mode enforcement), `agents/error-classification.ts` (provider-error classes), and `lib/retry.ts` (the transient-API ladder) to the sidecar's agents/lib layers. The WS gateway of the Phase-1 design was never built — SSE per-turn streams are the shipped surface.
+> **Shipped-surface truth = `api/IMPLEMENTED-API.md`.** This module map is the Phase-1 design shape; the reconciliation trail: R75 added `agents/mode-policy.ts`, `agents/error-classification.ts`, `lib/retry.ts`; **R84 added `agent-core/src/routes/` (14 domain route modules — sessions/providers/agents/projects/models/settings/attachments/memory/skills/modes/ratings/usage — with `server.ts` as the buildServer assembler; 52 routes still live there pending their move) and `agents/sub-roles.ts` (the cycle-breaking leaf)**; the tools/computer/mcp/browser-proxy subsystems live under `agent-core/src/` as fenced modules (see MODULE-BOUNDARIES §1 for the live map). The WS gateway of the Phase-1 design was never built — SSE per-turn streams are the shipped surface.
 
 ```
 acute-code/

@@ -1,4 +1,4 @@
-<!-- last-reviewed: 2026-09-10 round-83 -->
+<!-- last-reviewed: 2026-09-10 round-85 -->
 # ACUTE-CODE — Round 28 Master Plan
 
 **Status:** PROPOSED v2 — sub-agent review complete (6-d architecture, 6-e UX, 6-f risk); critical+high flaws applied (see §0.1 changelog below); ready for execution

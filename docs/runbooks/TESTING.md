@@ -1,4 +1,4 @@
-<!-- last-reviewed: 2026-09-10 round-83 -->
+<!-- last-reviewed: 2026-09-10 round-85 -->
 # TESTING — the verification ladder
 
 Five layers; each has a defined "when mandatory". Rules here are binding
@@ -13,15 +13,13 @@ Five layers; each has a defined "when mandatory". Rules here are binding
 | L4 live battery | real provider turn(s), real disk, fresh DB | sandbox, single invocation | anything touching agents, projects, tools, streaming |
 | L5 browser verification | real UI against the live stack; screenshots machine-verified | sandbox, single invocation | any UI-affecting round |
 
-**Current counts (R75, verified 2026-09-07 by re-running the suites):**
-the root `pnpm test` = **2613 tests in 140 files, all green** (measured
-without a fresh `agent-core/dist` — the 12 sidecar-e2e report as
-env-gated skips; with the dist present they run in-suite). agent-core
-alone = **1685/1685 in 76 files** (+48 over R74's 1637: two NEW suites),
-frontend alone = **916/916 in 62 files** (+7 over R74's 909: the picker
-badge/hover contracts, the single-row toolbar contract, the retry-card
-suite, the stream-store meta.retry frames). The arithmetic reconciles
-exactly: 1,685 + 916 + 12 = 2,613 (76 + 62 + 2 = 140 files).
+**Current counts (R84, per CI run 34484344162 + status.json; R85 re-verified the
+file-level counts):**
+the root `pnpm test` = **2,825 tests in 155 files, all green** (agent-core
+**1,867/1,867 in 92 files** + frontend **946/946 in 60 files** + shared 4 in 1
++ e2e 12 — the sidecar-e2e run when a fresh `agent-core/dist` is present).
+The arithmetic reconciles: 1,867 + 946 + 12 = 2,825 (92 + 60 + 1 + 2 = 155
+files).
 **Plus a NEW fourth suite surface (R74): the launcher's Python unittest
 — `launcher/tests/test_pick_latest_release.py`, 10/10, stdlib-only,
 run via `python launcher/tests/test_pick_latest_release.py` (or

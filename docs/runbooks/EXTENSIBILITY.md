@@ -1,4 +1,4 @@
-<!-- last-reviewed: 2026-09-10 round-84 -->
+<!-- last-reviewed: 2026-09-10 round-85 -->
 # EXTENSIBILITY — plugins, skills, modes, MCP servers (owner's guide)
 
 **Status:** normative · **Established:** round-61 (owner directive: "the
@@ -603,7 +603,11 @@ and ADR-0029 (the R81 decision).
   the task-hints matcher
   `agent-core/src/agents/task-hints.ts` (skills + modes), MCP storage
   `agent-core/src/storage/mcp.ts` + client `agent-core/src/mcp/manager.ts`,
-  routes in `agent-core/src/server.ts` (ROUND-61 + ROUND-73 sections),
+  routes in `agent-core/src/routes/skills.ts` (the skills CRUD, R84-extracted
+  from server.ts) + the MCP/plugin routes still in `agent-core/src/server.ts`
+  (ROUND-61 sections),
   settings UI in
-  `src/components/settings/{SkillsTab,McpTab}.tsx` + the mode picker
-  `src/components/project-chat/composer/TaskModePicker.tsx`.
+  `src/components/settings/{SkillsTab,McpTab}.tsx` + the operating-mode
+  picker in the composer (R81: the one-picker of three modes — the old
+  TaskModePicker was DELETED with the /mode slash and the modes API client;
+  posture switching is the agent's `switch_mode` tool).
