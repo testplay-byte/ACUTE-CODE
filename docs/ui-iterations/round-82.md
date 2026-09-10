@@ -1,4 +1,5 @@
-<!-- last-reviewed: 2026-09-09 round-82 -->
+<!-- last-reviewed: 2026-09-10 round-86 -->
+<!-- the R82 history still tells the truth -->
 # Round 82 — Models & Providers Hardening (the owner's field report round 2)
 
 **Provenance:** the owner's verbatim field report (the R82 research session,

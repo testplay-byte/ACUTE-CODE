@@ -1,9 +1,31 @@
-<!-- last-reviewed: 2026-09-10 round-85 -->
+<!-- last-reviewed: 2026-09-10 round-86 -->
 # MODULARITY ASSESSMENT — the structure audit for the extension-based vision
 
-**Status:** reference · **Established:** round-80 (docs-only analysis round, owner-directed) · **Updated:** round-85 (the post-R84 re-assessment — see below) · **Audience:** the owner deciding the R86+ direction; any agent planning structural work
-**Method (R85):** three parallel analysis sweeps (backend import-graph + sizes · frontend anatomy + coupling · docs-truth audit), every claim re-verified at HEAD `c38bc8b` with file:line evidence; spot-checked by the orchestrator before writing. Full evidence + method: [round-85](../ui-iterations/round-85.md). Companion rules doc:
+**Status:** reference · **Established:** round-80 (docs-only analysis round, owner-directed) · **Updated:** round-85 (the post-R84 re-assessment) · **Advanced:** round-86 (the R85 claims re-verified + the SSE domain extracted) · **Audience:** the owner deciding the R87+ direction; any agent planning structural work
+**Method (R86):** three parallel verification sweeps re-checking every R85 claim with file:line evidence (backend 7/8 exact · frontend ~95% with four numbers corrected · docs-truth) + the final-phase SSE route extraction shipped behavior-identical with a byte-identical round-trip verifier. Full evidence + method: [round-86](../ui-iterations/round-86.md). Companion rules doc:
 [MODULE-BOUNDARIES](../runbooks/MODULE-BOUNDARIES.md).
+
+## R86 progress (the verification + SSE-extraction round, 2026-09-10)
+
+**Verdict in one paragraph:** the R85 audit verified ~95% exact — every backend
+number reproduced (the 52-route inventory, the 22 SQL leaks, the benign
+registry↔mcp 2-cycle, the 378-line sync/streamed duplication, ToolDeps'
+missing runId), with four frontend numbers corrected (api.ts **85** importing
+files, not 72; ModelsProvidersTab **60** hook call-sites / **3** dialogs, not
+40/4; **14** Zustand stores; StreamTurnEvent **37** member types) and two
+new finds (the dead sessions/ dir received an R83 edit — dead code being
+maintained; three narrow frontend seams the "zero" claim missed: error-bus,
+the browser-bridge handler registry, right-sidebar-events). **The SSE route
+— the final-phase domain of the R84 split — is EXTRACTED** (routes/sse.ts,
+the 476-line streamed turn route moved verbatim; server.ts 2,439 → 1,913;
+eleven single-consumer imports pruned; registration order preserved; the
+full pipeline green with a byte-identical 2,825-test baseline + e2e 12/12 on
+the built dist + a live boot smoke). Ops: six stale branches deleted (only
+main remains), the stuck v0.83.0 draft release published, the DASHBOARD's
+plan section truth-synced. **The remaining server.ts split is now purely
+mechanical**: 51 routes (terminal, MCP, computer-use, diagnostics, approvals,
+vision + the 21-route unnamed tail) on the proven pattern — Wave 2-b (the
+turn-loop harness) is now the clear #1 structural risk.
 
 ## R85 re-assessment (the post-R84 state, 2026-09-10)
 
@@ -49,13 +71,14 @@ stamp-cohort refresh was stamp-only on ~12 docs, over-claiming freshness) →
   value-import graph reports zero cyclic SCCs **at the >2-file threshold —
   R85 correction: one benign 2-cycle remains (registry ↔ plugins/mcp,
   TOOL_NAME_RE, present since R61; see R85 section above)**.
-- **Wave 2-a (the server.ts split): 57% done.** 71 routes moved verbatim
-  into 14 `agent-core/src/routes/<domain>.ts` modules on the
-  `registerBrowserRoutes` pattern; `buildServer` is the assembler;
-  **server.ts: 5,719 → 2,439 lines**. Remaining: **52 routes** (R85 count —
-  terminal, MCP, computer-use, diagnostics, approvals, vision, the
-  notifications/jobs/checkpoints/dialogs/plugins groups, and the 476-line
-  streamed SSE route marked final-phase) — the pattern is established.
+- **Wave 2-a (the server.ts split): 67% done.** 72 routes moved verbatim
+  into `agent-core/src/routes/` (12 R84 domain modules + **sse.ts, the R86
+  final-phase extraction**); `buildServer` is the assembler;
+  **server.ts: 5,719 → 1,913 lines**. Remaining: **51 routes** (terminal 8,
+  MCP 6, computer-use 9, diagnostics 2, approvals 2, vision 3 + the 21-route
+  unnamed tail: notifications ×7, jobs ×4, checkpoints/snapshots ×4, dialogs
+  ×2, plugins, index, keys, health) — all mechanical on the proven pattern;
+  the SSE domain (the hardest, 476 lines) shipped in R86.
 - **Wave 2-b (the turn-loop harness): NOT STARTED** — the ~1,700-line
   sync/streamed duplication is the next structural round (R85 measured it
   precisely: 378 byte-identical lines, 78% of the sync runner).

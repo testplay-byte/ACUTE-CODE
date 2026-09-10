@@ -13,11 +13,55 @@ version number is single-sourced from the root `package.json`
 
 Planned next: the modularity roadmap's continuation (Wave 2-b the turn-loop
 harness extraction — risk #1 per the R85 audit; the remaining server.ts domains —
-52 routes: terminal, MCP, computer-use, diagnostics, approvals, the streamed SSE
-route + the notifications/jobs/checkpoints/dialogs/plugins tail; then Wave 3 the
-frontend seams), external plugin ctx enrichment, the lessons-ledger affordance,
+51 routes: terminal, MCP, computer-use, diagnostics, approvals, vision + the
+notifications/jobs/checkpoints/dialogs/plugins tail; then Wave 3 the frontend
+seams), external plugin ctx enrichment, the lessons-ledger affordance,
 ratings-driven prompt tuning, and the standing items (edit-linting, installer
 code-signing, the Files-tab polish, agent web-app-testing tools).
+
+## [0.84.0] - 2026-09-10 — the R86 SSE-route extraction round
+
+### Changed — the final-phase domain of the R84 server.ts split (behavior-identical, test-guarded)
+- **The streamed SSE route lives in `routes/sse.ts`** (NEW — 562 lines incl.
+  provenance header + imports): `registerSseRoutes(scope, ctx)` carries the
+  one streamed-turn route (POST `/sessions/:id/messages/stream`) verbatim —
+  the hardest concurrency logic in the HTTP layer: the R42 client-gone
+  semantics (a closed window does not abort the turn; only the Stop route
+  does), the R78 queue-continuation loop (25-cap, R82 override adoption per
+  consumed queued message), the R66-2-c post-turn debug-analyst phase (R83
+  usage metering, own provider resolution), and the R43+R80 crash recovery
+  (persist + notify + the honest terminal frame). Extracted programmatically
+  with a byte-identical round-trip verifier against `git show HEAD`.
+- **server.ts: 2,439 → 1,913 lines** (−526: the 476-line route + its
+  provenance comment + the eleven now-single-consumer imports pruned;
+  `getSession`/`getProject`/`getNotificationBus`/approvals stay — they serve
+  the 51 routes that remain). Registration order preserved — the register
+  call sits exactly where the route lived, between `registerSettingsRoutes`
+  and the computer-use routes (Fastify wildcard precedence untouched).
+- **The R85 verification round's corrections are recorded** (the evidence
+  file: `docs/ui-iterations/round-86.md`): every R85 backend number
+  re-verified exact (52 routes with the full inventory, 22 SQL leaks, the
+  registry↔mcp 2-cycle, the 378-line duplication, ToolDeps' missing runId);
+  the frontend numbers corrected (api.ts 85 importing files not 72;
+  ModelsProvidersTab 60 hook call-sites / 3 dialogs; 14 Zustand stores;
+  StreamTurnEvent 37 members); the dead sessions/ dir provably maintained
+  while dead (an R83 edit landed on it); three narrow frontend seams the
+  audit's "zero" missed (error-bus, browser-bridge registry,
+  right-sidebar-events).
+- **Ops (owner-directed)**: branch cleanup — the six stale branches deleted
+  (backup/pre-r79, pre-r80, pre-r81-session, work/r82-models-providers,
+  work/r84-modularity — all fully merged — and work/round-61-computer-use,
+  the superseded cua-helper Rust line; tips recorded in round-86.md for
+  recoverability); `main` is the only branch. **The v0.83.0 release
+  PUBLISHED** (it had sat as a never-published draft — the R74 lesson's
+  exact failure class; both assets verified). The DASHBOARD truth-sync:
+  the plan section the previous sync missed is now current (R86 story,
+  post-extraction queue).
+- Verified: lint clean · typechecks clean ×2 · root suite **2,825 GREEN**
+  (byte-identical to the pre-move baseline) · build green · **e2e 12/12
+  against the built dist** · license audit 134 CLEAN · live boot smoke
+  (ACUTE_READY + the extracted route answering through hijack→writeHead→
+  SSE-frame).
 
 ## [0.83.1-docs] - 2026-09-10 — the R85 structure re-assessment (docs-only)
 

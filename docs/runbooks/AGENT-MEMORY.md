@@ -943,3 +943,17 @@ Format per entry: `N. TITLE (date, source)` → mistake → root cause → rule.
     scope, not the tested one. Cheap corollary: re-measure line/route
     counts at commit time instead of carrying forward figures from
     earlier rounds.
+
+86. **After a verbatim block move, prune imports from a USAGE COUNT,
+    never from the moved block's dependency list.** (2026-09-10, round-86;
+    the approvals.js near-miss.) The R86 SSE-route extraction pruned
+    server.ts's imports by walking the moved route's dependencies — and the
+    first pass deleted `./approvals.js` on the false memory that the
+    approvals routes belonged to the moved block (they are 51 routes that
+    REMAIN in server.ts). The diff was read BEFORE any gate ran, the import
+    restored, and nothing ever went red. RULE: after any extraction, for
+    each import in the source file run a use-count over the file EXCLUDING
+    the moved lines (`awk` range + `grep -c`), and prune only the symbols
+    whose count drops to their import statement. A moved block tells you
+    what it NEEDS — it tells you nothing about what the REMAINDER still
+    needs.

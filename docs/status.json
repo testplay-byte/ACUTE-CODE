@@ -3,7 +3,7 @@
   "product": {
     "name": "Acute",
     "tagline": "Local-first multi-agent engineering workbench",
-    "version": "0.83.0",
+    "version": "0.84.0",
     "availability": "Private build — not yet distributed",
     "chips": [
       "Windows desktop",
@@ -238,10 +238,16 @@
       "title": "R85 — the structure re-assessment",
       "date": "2026-09-10",
       "summary": "The owner-directed post-R84 audit, docs-only: three parallel analysis sweeps re-verified at c38bc8b — R84's wins CONFIRMED (the SCC dead, server.ts 5,719→2,439 exact) with three overstatements corrected (one benign 2-cycle remains: registry↔plugins/mcp TOOL_NAME_RE since R61; 52 routes remain in server.ts, not ~31 — the notifications/jobs/checkpoints/dialogs/plugins tail was never on the plan; the SSE route is 476 lines); the turn-loop duplication measured (378 byte-identical lines; runtime.ts grew to 3,369; prepareTurn 447 lines/10 positional args); the frontend god files all grew since R80.5 (api 3,959 / stream-store 1,936 / ModelsProvidersTab 3,304; 559 lines of dead sessions/ code; zero extension seams); SQL leaks counted at 22 (approvals.ts ×11); every P0 doc drift fixed (MODULE-BOUNDARIES rewritten to the post-R84 reality, MAINTENANCE §e, HANDOFF, round-84.md backfilled, the board/index/TESTING/IMPLEMENTED-API/ROADMAP/EXTENSIBILITY synced, WORKLOG R76-R81 backfill, lessons #84-#85). v0.83.0 unchanged."
+    },
+    {
+      "id": 46,
+      "title": "R86 — the verification + SSE-extraction round",
+      "date": "2026-09-10",
+      "summary": "The owner's task-list session: (1) the R85 claims re-verified with three parallel sweeps — backend exact (52-route inventory, 22 SQL leaks, the 2-cycle, the 378-line duplication, ToolDeps missing runId), four frontend numbers corrected (api.ts 85 importers not 72; ModelsProvidersTab 60 hooks/3 dialogs; 14 stores; StreamTurnEvent 37 members), the dead sessions/ dir caught receiving an R83 edit, three narrow frontend seams the 'zero' claim missed. (2) THE SSE ROUTE EXTRACTED — routes/sse.ts (the final-phase domain of the R84 split): the 476-line streamed turn route moved verbatim (byte-identical round-trip verifier), server.ts 2,439→1,913, eleven single-consumer imports pruned, registration order preserved; full pipeline green (2,825 tests byte-identical to baseline, e2e 12/12 on the built dist, live boot smoke). v0.84.0. (3) Ops: six stale branches deleted (only main remains — the r61 branch's superseded cua-helper line documented with recoverable tips), the stuck v0.83.0 DRAFT release PUBLISHED (both assets verified), the DASHBOARD's stale plan section truth-synced."
     }
   ],
   "quality": {
-    "ci": "GREEN — R85 push f253788 → CI run 34505690618 SUCCESS (the docs-only structure re-assessment: lint, typechecks, the 2,825-test root suite in 155 files, build, license audit, docs check). The R84 modularity round underneath: push 8ce6e08 → run 34484344162 also green.",
+    "ci": "PENDING — R86 push not yet made (this field is synced from the Actions API at close-out per the documented convention; the R85 verdict: push f253788 → run 34505690618 SUCCESS).",
     "suites": [
       {
         "name": "frontend",
@@ -274,14 +280,14 @@
   ],
   "plan": {
     "current": {
-      "title": "R85 — the structure re-assessment (the post-R84 audit + documentation truth round)",
-      "detail": "Docs-only, v0.83.0 unchanged. Three parallel analysis sweeps (backend import-graph / frontend anatomy / docs truth) re-verified at c38bc8b with every load-bearing claim spot-checked: R84's structural wins are real (the 25-file SCC dead — delegation imports only the sub-roles leaf; server.ts 5,719→2,439 across 14 routes/<domain>.ts modules); the corrections are recorded (one benign 2-cycle remains — registry↔plugins/mcp TOOL_NAME_RE since R61; 52 routes remain in server.ts, not ~31; the SSE route is 476 lines; runtime.ts grew to 3,369 with the sync/streamed runners sharing 378 byte-identical lines; the frontend god files grew — api 3,959 / stream-store 1,936 / ModelsProvidersTab 3,304; 22 SQL statements outside storage/; 559 lines of dead frontend code). All P0/P1 documentation drift fixed (MODULE-BOUNDARIES rewritten to the post-R84 reality, MAINTENANCE §e, HANDOFF §3/§4/§6/§9, round-84.md backfilled + round-85.md written, the board + index + TESTING + IMPLEMENTED-API + ROADMAP + EXTENSIBILITY + status synced, ORCHESTRATION-WORKLOG's R76-R81 gap backfilled, AGENT-MEMORY lessons #84-#85). Full evidence: docs/ui-iterations/round-85.md + docs/architecture/MODULARITY-ASSESSMENT.md (the R85 section)."
+      "title": "R86 — the verification + SSE-extraction round",
+      "detail": "The owner's task-list session, delivered as v0.84.0: (1) the R85 structure claims re-verified with three parallel sweeps — every backend number exact (the 52-route inventory, 22 SQL leaks, the benign registry↔mcp 2-cycle, the 378-line sync/streamed duplication, ToolDeps missing runId), four frontend numbers corrected (api.ts 85 importing files not 72; ModelsProvidersTab 60 hook call-sites / 3 dialogs not 4; 14 Zustand stores; StreamTurnEvent 37 member types), the dead sessions/ dir caught receiving an R83 maintenance edit, and three narrow frontend seams the 'zero' claim missed (error-bus, browser-bridge handler registry, right-sidebar-events). (2) THE SSE ROUTE EXTRACTED — routes/sse.ts, the final-phase domain of the R84 split: the 476-line streamed turn route (R42 client-gone semantics, the R78 queue-continuation loop, the R66-2-c debug analyst, the R43+R80 crash recovery) moved verbatim with a byte-identical round-trip verifier; server.ts 2,439→1,913; eleven single-consumer imports pruned; registration order preserved; the full pipeline green (2,825 tests byte-identical to the pre-move baseline, e2e 12/12 against the built dist, live boot smoke proving the route answers through hijack→writeHead→SSE-frame). (3) Ops: six stale branches deleted (backup/pre-r79, pre-r80, pre-r81-session, work/r82-models-providers, work/r84-modularity — all fully merged — and work/round-61-computer-use, the superseded cua-helper Rust line with tips recorded in round-86.md); the v0.83.0 release PUBLISHED from its never-published draft state (both assets verified — the R74 lesson's failure class); the DASHBOARD's plan section (two rounds stale, live on the public Pages) truth-synced."
     },
     "upcoming": [
       {
         "phase": "Wave 2 continuation (the modularity roadmap)",
         "status": "next",
-        "note": "The remaining server.ts domains (terminal, MCP, computer-use, diagnostics, approvals, vision, and the 392-line streamed SSE route — the hardest concurrency logic, marked final-phase) + the turn-loop harness extraction (retry ladder / loop guard / overflow recovery — ~1,700 duplicated lines across the sync/streamed runners) + Wave 3 (the api.ts split, the frontend stream-event handler registry, AgentChatPanel decomposition)."
+        "note": "Wave 2-b the turn-loop harness extraction (risk #1: 378 byte-identical lines between the sync/streamed runners; prepareTurn's 10 positional args → an options object) + the remaining server.ts domains — 51 routes (terminal 8, MCP 6, computer-use 9, diagnostics 2, approvals 2, vision 3 + the 21-route unnamed tail: notifications/jobs/checkpoints/dialogs/plugins/index/keys/health; the SSE domain, the hardest, shipped in R86)."
       },
       {
         "phase": "Standing R81-queue items",
@@ -300,5 +306,5 @@
       "Quality over speed — every round verified before push"
     ]
   },
-  "round": 85
+  "round": 86
 }

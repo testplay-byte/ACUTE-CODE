@@ -1,5 +1,5 @@
-<!-- last-reviewed: 2026-09-09 round-82 -->
-# Round 74 — the updater-freeze round: the launcher now picks releases by MAX VERSION, not list order (the draft-order root cause; ten regression tests; five stale drafts published)
+<!-- last-reviewed: 2026-09-10 round-86 -->
+<!-- the R74 history still tells the truth; the draft-not-published class this round documents recurred once more with v0.83.0, caught + published in R86 -->
 
 **Date:** 2026-09-07 · **Branch:** `main` · **Version:** 0.74.0 ·
 **Provenance:** the owner's round-74 field report, verbatim: *"I launched

@@ -1,4 +1,4 @@
-<!-- last-reviewed: 2026-09-10 round-85 -->
+<!-- last-reviewed: 2026-09-10 round-86 -->
 # MODULE-BOUNDARIES — the contract for editing this repo with small context
 
 **Status:** normative · **Established:** round-80 (owner directive: low-context agents
@@ -25,17 +25,19 @@ points between modules.
 ```
 agent-core/src/
   server.ts          HTTP surface (Fastify) — the ASSEMBLER. Routes live in
-                     routes/<domain>.ts modules (71 of 131 routes, R84+); server.ts
-                     keeps 52 (terminal, MCP, computer-use, diagnostics, approvals,
-                     vision, SSE + the notifications/jobs/checkpoints/dialogs/
-                     plugins groups) pending their move. Nothing imports server.ts
-                     except main.ts + tests.
+                     routes/<domain>.ts modules (72 of 131 routes, R84+R86 — the
+                     SSE domain shipped in R86); server.ts keeps 51 (terminal, MCP,
+                     computer-use, diagnostics, approvals, vision + the
+                     notifications/jobs/checkpoints/dialogs/plugins groups) pending
+                     their move. Nothing imports server.ts except main.ts + tests.
   routes/            domain route modules — each exports register<Domain>(scope, ctx);
                      RouteContext (context.ts) carries {db, keyring, chat, token};
                      server.ts's buildServer calls them in the ORIGINAL registration
                      order (Fastify wildcard precedence). Import only downward
                      (storage/agents/tools/lib/shared) — never each other's internals
-                     (helpers.ts/context.ts excepted).
+                     (helpers.ts/context.ts excepted; sse.ts imports the sync route's
+                     field gates from sessions.ts — the documented shared-validation
+                     exception).
   agents/            the turn runtime + orchestrator + prompt/mode/skill glue.
                      runtime.ts (3,369) + orchestrator.ts (1,436) are the known
                      god files — the sync/streamed runner duplication is the
@@ -52,7 +54,8 @@ agent-core/src/
   mcp/               MCP client manager — fenced.
   shared/            (workspace pkg) canonical domain types — code conforms, never
                      redefines locally.
-src/                 React frontend. api.ts = typed API client (72 importers — the
+src/                 React frontend. api.ts = typed API client (85 importing files
+                     — the
                      documented Wave-3 split target); lib/stream-store.ts = the
                      live-turn state machine (687-line handleStreamEvent — the
                      documented handler-registry target); components/ are feature
@@ -190,7 +193,7 @@ engagement going forward:
 `pnpm verify` (lint + typecheck + test + build + e2e + license audit) — the local
 pre-push gate; `pnpm docs:check` (stamps + path refs + URL HEADs) — currently CI
 warn-only but expected green; every doc you touch gets its first-line stamp bumped
-(`<!-- last-reviewed: 2026-09-10 round-85 -->` style, round from docs/status.json).
+(`<!-- last-reviewed: 2026-09-10 round-86 -->` style, round from docs/status.json).
 See [WORKFLOW](WORKFLOW.md) for the full session spine and [TESTING](TESTING.md) for
 the suite map.
 
