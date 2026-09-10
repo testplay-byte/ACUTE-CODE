@@ -54,7 +54,6 @@ import {
   setApprovalStatus,
   sweepStaleApprovals,
 } from "./approvals.js";
-import { getDetailedUsage, getUsageSummary } from "./storage/usage.js";
 import { log } from "./lib/log.js";
 // ROUND-45 (audit P0-3): every spawned child gets a scrubbed environment.
 import { buildChildEnv } from "./lib/child-env.js";
@@ -160,6 +159,7 @@ import { registerModeRoutes } from "./routes/modes.js";
 import { registerMemoryRoutes } from "./routes/memory.js";
 import { registerRatingRoutes } from "./routes/ratings.js";
 import { registerSkillRoutes } from "./routes/skills.js";
+import { registerUsageRoutes } from "./routes/usage.js";
 
 /**
  * ROUND-63: the app version GET /health reports — read at BOOT from the
@@ -2831,49 +2831,9 @@ export function buildServer(options: ServerOptions): FastifyInstance {
         return result;
       });
 
-      // ---- Usage summary (SPEC §F7 dashboard chart) ----
-
-      scope.get("/usage/summary", async (request, reply) => {
-        const query = request.query as Record<string, string | undefined>;
-        let days = 14;
-        if (query.days !== undefined) {
-          const parsed = Number(query.days);
-          if (!Number.isInteger(parsed) || parsed < 1 || parsed > 90) {
-            return reply.code(400).send(
-              errorBody("VALIDATION", "days must be an integer between 1 and 90", {
-                field: "query.days",
-              }),
-            );
-          }
-          days = parsed;
-        }
-        return getUsageSummary(db, { days });
-      });
-
-      // ---- ROUND-52 (R52-b): detailed usage analytics — the in-app /usage
-      // screen (owner: "Usage screen section 2 … you apparently did not
-      // implement the usage properly"). Same aggregation the PUBLIC
-      // usage.json export runs (scripts/export-usage.mjs) minus its
-      // redaction: this link is the private bearer-token loopback, so real
-      // ids/titles/roles are the point. `days` scopes only the zero-filled
-      // activity series; totals/tools/models/projects are whole-history. ----
-
-      scope.get("/usage/detailed", async (request, reply) => {
-        const query = request.query as Record<string, string | undefined>;
-        let days = 30;
-        if (query.days !== undefined) {
-          const parsed = Number(query.days);
-          if (!Number.isInteger(parsed) || parsed < 1 || parsed > 90) {
-            return reply.code(400).send(
-              errorBody("VALIDATION", "days must be an integer between 1 and 90", {
-                field: "query.days",
-              }),
-            );
-          }
-          days = parsed;
-        }
-        return getDetailedUsage(db, { days });
-      });
+      // R84 (Wave 2-a): the usage-analytics routes (§F7 + R52-b) —
+      // extracted verbatim to routes/usage.ts; registration order preserved.
+      registerUsageRoutes(scope, ctx);
 
       // ---- ROUND-40: notifications (task complete/failed, permission
       // requests, sub-agent transitions). The owner: "add notification
