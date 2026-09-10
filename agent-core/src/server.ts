@@ -80,10 +80,6 @@ import {
   listSessionRatings,
   rateReply,
 } from "./storage/ratings.js";
-// ROUND-44 (R44-a): the agent memory system — per-project persistent
-// knowledge (facts/decisions/preferences) with REST read/delete for the
-// right-sidebar Memory tab. Saves happen via the memory_save tool.
-import { deleteMemory, listMemories } from "./storage/memory.js";
 // ROUND-61 (R61): computer use, skills, MCP — the extension surface.
 import {
   getComputerUseSettings,
@@ -178,6 +174,7 @@ import { registerProviderRoutes } from "./routes/providers.js";
 import { registerModelRoutes } from "./routes/models.js";
 // R84 (Wave 2-a, phase 4): the small CRUD domains continue the split.
 import { registerModeRoutes } from "./routes/modes.js";
+import { registerMemoryRoutes } from "./routes/memory.js";
 
 /**
  * ROUND-63: the app version GET /health reports — read at BOOT from the
@@ -1326,32 +1323,9 @@ export function buildServer(options: ServerOptions): FastifyInstance {
         return reply.code(204).send();
       });
 
-      // ROUND-44 (R44-a): project memory — the right-sidebar Memory tab reads
-      // everything the agent saved via memory_save (newest first); DELETE
-      // removes one item (the owner pruning stale knowledge). Saves go
-      // through the agent's memory_save tool, not a REST POST — memory is
-      // the AGENT's channel by design.
-      scope.get("/projects/:id/memory", async (request, reply) => {
-        const { id } = request.params as Record<string, string>;
-        const project = getProject(db, id);
-        if (project === undefined) {
-          return reply.code(404).send(errorBody("NOT_FOUND", `no project with id ${id}`));
-        }
-        return { memories: listMemories(db, id, 100) };
-      });
-
-      scope.delete("/projects/:id/memory/:memoryId", async (request, reply) => {
-        const { id, memoryId } = request.params as Record<string, string>;
-        const project = getProject(db, id);
-        if (project === undefined) {
-          return reply.code(404).send(errorBody("NOT_FOUND", `no project with id ${id}`));
-        }
-        const result = deleteMemory(db, memoryId);
-        if (!result.ok) {
-          return reply.code(404).send(errorBody("NOT_FOUND", result.error));
-        }
-        return { ok: true };
-      });
+      // R84 (Wave 2-a): the project-memory read/prune routes (R44-a) —
+      // extracted verbatim to routes/memory.ts; registration order preserved.
+      registerMemoryRoutes(scope, ctx);
 
       // R84 (Wave 2-a): sessions + single-agent chat (API.md §5) — extracted
       // verbatim to routes/sessions.ts; registration order preserved. The
