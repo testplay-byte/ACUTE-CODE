@@ -1,0 +1,328 @@
+// ─────────────────────────────────────────────────────────────────────────────
+// R84 (Wave 2-a): the models domain (round-19 per-provider model metadata
+// + pricing; R82's per-model test button).
+//
+// Registers, in the original server.ts registration order: PATCH
+// /models/:id, DELETE /models/:id, POST /models/:id/test (the real
+// completion probe), GET /models/catalog (the R47-b static catalog), and
+// GET /models/configured (the R82 configured-rows listing).
+//
+// Provenance: extracted verbatim from server.ts in R84 (Wave 2-a) —
+// behavior-identical, test-guarded. This module also owns the R50-d
+// model-config field gate (readModelNumericFields / readModelScalarFields
+// / readTriStateField), exported for routes/providers.ts' upsert route —
+// both files validate identically by construction.
+// ─────────────────────────────────────────────────────────────────────────────
+import type { FastifyInstance } from "fastify";
+import type { RouteContext } from "./context.js";
+import {
+  ProviderTestError,
+  resolveProvider,
+  testModelResponse,
+} from "../providers/registry.js";
+import {
+  DEFAULT_MODEL_ID,
+  MODEL_CATALOG,
+  RECOMMENDED_MODEL_IDS,
+  SUBAGENT_DEFAULT_MODEL_ID,
+  deleteModel,
+  getModel,
+  listAllModels,
+  updateModel,
+} from "../storage/models.js";
+import { errorBody } from "./helpers.js";
+
+/* ── ROUND-50 (R50-d): model-config field gate ────────────────────────────────
+ *
+ * The owner now edits per-model pricing/context/limits through the Settings
+ * → Models & Providers config dialog (POST /providers/:id/models upsert +
+ * PATCH /models/:id). Both routes previously WHITELISTED the fields but
+ * silently DROPPED any value of the wrong type — a patch that "saved" while
+ * discarding the pricing the user typed. Every whitelisted field is now
+ * validated strictly: a malformed value is a 400 VALIDATION naming the field.
+ *
+ * Nullability contract (mirrored by storage/models.ts upsertModel):
+ *   number        → set the field
+ *   null          → clear it back to "unknown" (NULL in the DB)
+ *   absent        → leave the stored value untouched (upsert semantics)
+ */
+const MODEL_NUMERIC_FIELDS = [
+  "contextWindow",
+  "maxOutputTokens",
+  "inputPricePerMtok",
+  "inputPriceCachedPerMtok",
+  "outputPricePerMtok",
+] as const;
+
+type ModelNumericValues = Partial<
+  Record<(typeof MODEL_NUMERIC_FIELDS)[number], number | null>
+>;
+
+/** Reads the whitelisted numeric model fields off a raw JSON body.
+ * Returns the values that are present, or the first offending field name
+ * (mapped by the routes to 400 VALIDATION). */
+export function readModelNumericFields(
+  raw: Record<string, unknown>,
+): { ok: true; values: ModelNumericValues } | { ok: false; field: string } {
+  const values: ModelNumericValues = {};
+  for (const field of MODEL_NUMERIC_FIELDS) {
+    const value = raw[field];
+    if (value === undefined) continue;
+    if (value === null || typeof value === "number") {
+      values[field] = value;
+      continue;
+    }
+    return { ok: false, field };
+  }
+  return { ok: true, values };
+}
+
+/** Strict gate for the non-numeric model-config fields: displayName must be a
+ * string, the toggles booleans. Returns the offending field name for 400s. */
+export function readModelScalarFields(
+  raw: Record<string, unknown>,
+): { ok: true } | { ok: false; field: string } {
+  if (raw.displayName !== undefined && typeof raw.displayName !== "string") {
+    return { ok: false, field: "displayName" };
+  }
+  if (raw.supportsThinking !== undefined && typeof raw.supportsThinking !== "boolean") {
+    return { ok: false, field: "supportsThinking" };
+  }
+  if (raw.hidden !== undefined && typeof raw.hidden !== "boolean") {
+    return { ok: false, field: "hidden" };
+  }
+  // ROUND-61 (R61): the vision flag — same boolean gate as thinking.
+  if (raw.supportsVision !== undefined && typeof raw.supportsVision !== "boolean") {
+    return { ok: false, field: "supportsVision" };
+  }
+  // ROUND-82 (R82): the tri-state capability flags — boolean OR null
+  // (null = reset to unknown, the numeric fields' null-clearing contract).
+  // A non-boolean-non-null type 400s (never a silent drop).
+  for (const field of ["supportsTools", "supportsAudio", "supportsVideo"] as const) {
+    if (
+      raw[field] !== undefined &&
+      raw[field] !== null &&
+      typeof raw[field] !== "boolean"
+    ) {
+      return { ok: false, field };
+    }
+  }
+  return { ok: true };
+}
+
+/** ROUND-82 (R82): read a tri-state capability field — boolean sets, null
+ * clears to unknown, anything else (incl. absent) → undefined (keep). The
+ * scalar gate above has already 400'd wrong types, so this is a pure
+ * passthrough filter. */
+export function readTriStateField(
+  value: unknown,
+): boolean | null | undefined {
+  if (value === null) return null;
+  if (typeof value === "boolean") return value;
+  return undefined;
+}
+
+export function registerModelRoutes(scope: FastifyInstance, ctx: RouteContext): void {
+  const { db, keyring } = ctx;
+  scope.patch("/models/:id", async (request, reply) => {
+    const { id } = request.params as Record<string, string>;
+    const body: unknown = request.body;
+    if (typeof body !== "object" || body === null || Array.isArray(body)) {
+      return reply
+        .code(400)
+        .send(errorBody("VALIDATION", "body must be a JSON object", { field: "body" }));
+    }
+    const raw = body as Record<string, unknown>;
+    // ROUND-50 (R50-d): same strict gate as the POST route — number sets,
+    // null clears to "unknown", absent leaves the stored value; a wrong
+    // type is a 400 VALIDATION naming the field (never a silent drop).
+    const numerics = readModelNumericFields(raw);
+    if (!numerics.ok) {
+      return reply.code(400).send(
+        errorBody("VALIDATION", `${numerics.field} must be a number or null`, {
+          field: `body.${numerics.field}`,
+        }),
+      );
+    }
+    const scalars = readModelScalarFields(raw);
+    if (!scalars.ok) {
+      const triState =
+        scalars.field === "supportsTools" ||
+        scalars.field === "supportsAudio" ||
+        scalars.field === "supportsVideo";
+      return reply.code(400).send(
+        errorBody(
+          "VALIDATION",
+          `${scalars.field} must be ${
+            triState
+              ? "a boolean or null (unknown)"
+              : scalars.field === "displayName"
+                ? "a string"
+                : "a boolean"
+          }`,
+          { field: `body.${scalars.field}` },
+        ),
+      );
+    }
+    const patch: Record<string, unknown> = {};
+    if (typeof raw.displayName === "string") patch.displayName = raw.displayName;
+    Object.assign(patch, numerics.values);
+    if (typeof raw.supportsThinking === "boolean") patch.supportsThinking = raw.supportsThinking;
+    if (typeof raw.supportsVision === "boolean") patch.supportsVision = raw.supportsVision;
+    // ROUND-82 (R82): tri-state PATCH — boolean sets, null clears to
+    // unknown, absent keeps.
+    if (raw.supportsTools !== undefined) {
+      if (raw.supportsTools === null || typeof raw.supportsTools === "boolean") {
+        patch.supportsTools = raw.supportsTools;
+      }
+    }
+    if (raw.supportsAudio !== undefined) {
+      if (raw.supportsAudio === null || typeof raw.supportsAudio === "boolean") {
+        patch.supportsAudio = raw.supportsAudio;
+      }
+    }
+    if (raw.supportsVideo !== undefined) {
+      if (raw.supportsVideo === null || typeof raw.supportsVideo === "boolean") {
+        patch.supportsVideo = raw.supportsVideo;
+      }
+    }
+    if (typeof raw.hidden === "boolean") patch.hidden = raw.hidden;
+    const model = updateModel(db, id, patch);
+    if (model === undefined) {
+      return reply.code(404).send(errorBody("NOT_FOUND", `no model with id ${id}`));
+    }
+    return model;
+  });
+
+  scope.delete("/models/:id", async (request, reply) => {
+    const { id } = request.params as Record<string, string>;
+    if (!deleteModel(db, id)) {
+      return reply.code(404).send(errorBody("NOT_FOUND", `no model with id ${id}`));
+    }
+    return reply.code(204).send();
+  });
+
+  // ROUND-82 (R82, owner: "a test button on the models page … check if
+  // the model is working properly or not"): the PER-MODEL test — a real
+  // 64-token completion against the row's provider, graded (http / auth /
+  // modelAccepted / nonEmptyContent) with the reply preview and raw
+  // provider error bodies (the EOL'd-NIM 410 case shows verbatim). The
+  // same key-pool slot contract as POST /providers/:id/test (R47-b);
+  // a probe that RAN and got a NO is HTTP 200 {ok:false} — a successful
+  // test call, not a server error.
+  scope.post("/models/:id/test", async (request, reply) => {
+    const { id } = request.params as Record<string, string>;
+    const modelRow = getModel(db, id);
+    if (modelRow === undefined) {
+      return reply.code(404).send(errorBody("NOT_FOUND", `no model with id ${id}`));
+    }
+    const provider = resolveProvider(db, modelRow.providerId);
+    if (provider === undefined) {
+      return reply.code(409).send(
+        errorBody(
+          "CONFLICT",
+          `model '${modelRow.modelId}' references provider '${modelRow.providerId}' which no longer exists — remove or re-add the model`,
+          { providerId: modelRow.providerId, modelId: modelRow.modelId },
+        ),
+      );
+    }
+    if (provider.baseUrl === null) {
+      return reply.code(409).send(
+        errorBody(
+          "CONFLICT",
+          `provider '${provider.id}' has no baseUrl configured — set one before testing`,
+          { providerId: provider.id },
+        ),
+      );
+    }
+    // Body: optional { slot } — the R47-b key-pool contract verbatim.
+    let slot: number | undefined;
+    const body: unknown = request.body;
+    if (body !== undefined && body !== null) {
+      if (typeof body !== "object" || Array.isArray(body)) {
+        return reply
+          .code(400)
+          .send(errorBody("VALIDATION", "body must be a JSON object", { field: "body" }));
+      }
+      const raw = body as Record<string, unknown>;
+      const rawSlot = raw.slot;
+      if (rawSlot !== undefined) {
+        if (
+          typeof rawSlot !== "number" ||
+          !Number.isInteger(rawSlot) ||
+          rawSlot < 0 ||
+          rawSlot > 31
+        ) {
+          return reply.code(400).send(
+            errorBody("VALIDATION", "slot must be an integer between 0 and 31", {
+              field: "body.slot",
+            }),
+          );
+        }
+        slot = rawSlot;
+      }
+    }
+    let keyOverride: string | undefined;
+    if (slot === undefined) {
+      if (!keyring.has(provider.id)) {
+        return reply.code(409).send(
+          errorBody(
+            "CONFLICT",
+            `no API key stored for provider '${provider.id}' — save one in Settings → Models & Providers before testing`,
+            { providerId: provider.id },
+          ),
+        );
+      }
+    } else {
+      keyOverride = keyring.getSlot(provider.id, slot);
+      if (keyOverride === undefined) {
+        return reply.code(409).send(
+          errorBody(
+            "CONFLICT",
+            `no API key stored for provider '${provider.id}' slot ${slot} — save one in Settings → Models & Providers`,
+            { providerId: provider.id, slot },
+          ),
+        );
+      }
+    }
+    try {
+      return await testModelResponse(keyring, provider, modelRow.modelId, keyOverride);
+    } catch (error) {
+      if (error instanceof ProviderTestError) {
+        // Standalone-safety no-key guard — the route pre-checked, so
+        // this is belt-and-suspenders; same 409 shape.
+        return reply.code(409).send(
+          errorBody("CONFLICT", error.message, { providerId: provider.id }),
+        );
+      }
+      const message =
+        error instanceof Error ? error.message : `model '${id}' test failed`;
+      return reply
+        .code(502)
+        .send(errorBody("PROVIDER_ERROR", message, { providerId: provider.id, modelId: modelRow.modelId }));
+    }
+  });
+
+  // ROUND-47 (R47-b): the STATIC model catalog for every picker. The
+  // frontend hand-copied this 47-entry list into two components — a
+  // guaranteed drift trap (SubAgentsTab already diverged). One route,
+  // sourced from the constants themselves: no cache, no DB rows, nothing
+  // stale. Same authenticated scope as the provider routes above.
+  scope.get("/models/catalog", async () => {
+    return {
+      models: MODEL_CATALOG,
+      defaultModelId: DEFAULT_MODEL_ID,
+      subagentDefaultModelId: SUBAGENT_DEFAULT_MODEL_ID,
+      recommendedModelIds: RECOMMENDED_MODEL_IDS,
+    };
+  });
+
+  // ROUND-82 (R82, §2.4.5 — the NVIDIA sub-agent gap): every CONFIGURED
+  // model row across all providers. The Sub-agents picker pairs this
+  // with the static catalog so a NIM/custom row can be picked as the
+  // sub-agent model (previously impossible — the picker was
+  // catalog-only, and catalog validation rejected non-catalog ids).
+  scope.get("/models/configured", async () => {
+    return { models: listAllModels(db) };
+  });
+}
