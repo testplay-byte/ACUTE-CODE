@@ -5,13 +5,10 @@
  * later waves.
  */
 import { randomUUID, timingSafeEqual } from "node:crypto";
-import { copyFileSync, existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
+import { copyFileSync, existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import Fastify, { type FastifyError, type FastifyInstance, type FastifyRequest } from "fastify";
-import type {
-  MemoryPolicy,
-  MessageAttachment,
-} from "shared";
+import type { MessageAttachment } from "shared";
 import { aiSdkChat, streamAiSdkChat, type ChatFn } from "./agents/chat.js";
 import {
   persistTurnError,
@@ -24,7 +21,7 @@ import {
 // still-open SSE before the turn's terminal frame.
 import { runDebugAnalyst } from "./agents/debug-analyst.js";
 import { pickFiles, pickFolder } from "./dialogs.js";
-import { projectTree, readFile, resolveInsideRoot, searchCode, searchFiles } from "./tools/index.js";
+import { resolveInsideRoot } from "./tools/index.js";
 import {
   ProviderKeyring,
   ProviderTestError,
@@ -39,18 +36,11 @@ import {
   clearProviderTombstone,
   createProviderRecord,
   deleteProviderRecord,
-  providerExists,
   providerRecordIdExists,
   slugifyProviderId,
   updateProviderRecord,
 } from "./storage/providers.js";
-import {
-  createProject,
-  deleteProject,
-  getProject,
-  listProjects,
-  projectRootPathExists,
-} from "./storage/projects.js";
+import { getProject } from "./storage/projects.js";
 import {
   appendSessionEvent,
   deleteQueuedMessage,
@@ -155,22 +145,15 @@ import {
   stopServer,
 } from "./mcp/manager.js";
 import { builtInToolCatalog, BUILT_IN_PLUGINS, externalPluginFileReport } from "./tools/registry.js";
-import { getIndexSummary, searchIndexSymbols } from "./storage/index.js";
+import { getIndexSummary } from "./storage/index.js";
 // ROUND-73 (R73-b): the task-modes resolver — the project-scoped /modes
 // listing and the PATCH /sessions/:id activeMode validation both sit on the
 // SAME resolveEffectiveModes prepareTurn + switch_mode use.
 import { resolveEffectiveModes } from "./agents/modes.js";
 import { openDatabase, type SqliteDatabase } from "./storage/db.js";
 import {
-  TOOL_NAMES,
-  createAgent,
-  deleteAgent,
-  duplicateAgent,
   getAgent,
   listAgents,
-  updateAgent,
-  type Agent,
-  type AgentInput,
 } from "./storage/agents.js";
 // ROUND-40: notifications (task complete/failed, permission requests,
 // sub-agent transitions). The bus is the in-process pub/sub; the storage
@@ -214,7 +197,6 @@ import {
   registerTurn,
   unregisterTurn,
 } from "./lib/turn-registry.js";
-
 import { errorBody } from "./routes/helpers.js";
 import { DIAGNOSTICS_RING_CAP, type RouteContext, type SidecarDiagnosticError } from "./routes/context.js";
 // ROUND-84 (R84, Wave 2-a): the domain route modules — server.ts is now
@@ -222,6 +204,9 @@ import { DIAGNOSTICS_RING_CAP, type RouteContext, type SidecarDiagnosticError } 
 // order preserved; the shared context lives in routes/context.ts).
 import { registerSessionRoutes } from "./routes/sessions.js";
 import { readComposerSendFields, readOverrideProviderId } from "./routes/sessions.js";
+
+import { registerAgentRoutes } from "./routes/agents.js";
+import { registerProjectRoutes } from "./routes/projects.js";
 
 /**
  * ROUND-63: the app version GET /health reports — read at BOOT from the
@@ -295,132 +280,6 @@ function isAuthorized(header: unknown, token: string): boolean {
 
 function isHealthRequest(method: string, url: string): boolean {
   return method === "GET" && url.split("?")[0] === "/health";
-}
-
-interface FieldIssue {
-  field: string;
-  message: string;
-}
-
-const MEMORY_POLICIES: readonly MemoryPolicy[] = ["none", "on-start", "every-turn"];
-const KNOWN_TOOLS: readonly string[] = TOOL_NAMES;
-
-/**
- * Hand-rolled validation (no schema dependency in Wave 1): validates an agent
- * body for create (`partial: false`, name required) or patch (`partial: true`).
- * Unknown keys are ignored; absent keys stay undefined in the returned input.
- */
-function validateAgentInput(
-  body: unknown,
-  options: { partial: boolean; db: SqliteDatabase },
-): { issues: FieldIssue[]; input: AgentInput } {
-  const issues: FieldIssue[] = [];
-  const input: AgentInput = {};
-  if (typeof body !== "object" || body === null || Array.isArray(body)) {
-    return { issues: [{ field: "body", message: "body must be a JSON object" }], input };
-  }
-  const raw = body as Record<string, unknown>;
-  const present = (key: string): boolean => raw[key] !== undefined;
-
-  if (present("name")) {
-    if (typeof raw.name !== "string" || raw.name.trim() === "") {
-      issues.push({ field: "body.name", message: "name must be a non-empty string" });
-    } else {
-      input.name = raw.name;
-    }
-  } else if (!options.partial) {
-    issues.push({ field: "body.name", message: "name is required" });
-  }
-
-  for (const key of ["role", "systemPrompt"] as const) {
-    if (!present(key)) continue;
-    if (typeof raw[key] !== "string") {
-      issues.push({ field: `body.${key}`, message: `${key} must be a string` });
-    } else {
-      input[key] = raw[key];
-    }
-  }
-
-  for (const key of ["providerId", "model", "visionModel"] as const) {
-    if (!present(key)) continue;
-    const value = raw[key];
-    if (value === null) {
-      input[key] = null;
-    } else if (typeof value !== "string") {
-      issues.push({ field: `body.${key}`, message: `${key} must be a string or null` });
-    } else if (key === "providerId" && !providerExists(options.db, value)) {
-      issues.push({ field: "body.providerId", message: `unknown providerId: ${value}` });
-    } else {
-      input[key] = value;
-    }
-  }
-
-  if (present("allowedTools")) {
-    const value = raw.allowedTools;
-    if (!Array.isArray(value) || value.some((tool) => typeof tool !== "string")) {
-      issues.push({
-        field: "body.allowedTools",
-        message: `allowedTools must be an array of tool names (${KNOWN_TOOLS.join(", ")})`,
-      });
-    } else {
-      const unknown = (value as string[]).filter((tool) => !KNOWN_TOOLS.includes(tool));
-      if (unknown.length > 0) {
-        issues.push({
-          field: "body.allowedTools",
-          message: `unknown tool names: ${unknown.join(", ")}`,
-        });
-      } else {
-        input.allowedTools = value as string[];
-      }
-    }
-  }
-
-  if (present("skills")) {
-    const value = raw.skills;
-    if (!Array.isArray(value) || value.some((skill) => typeof skill !== "string")) {
-      issues.push({ field: "body.skills", message: "skills must be an array of strings" });
-    } else {
-      input.skills = value as string[];
-    }
-  }
-
-  if (present("memoryPolicy")) {
-    const value = raw.memoryPolicy;
-    if (typeof value !== "string" || !MEMORY_POLICIES.includes(value as MemoryPolicy)) {
-      issues.push({
-        field: "body.memoryPolicy",
-        message: `body.memoryPolicy must be one of: ${MEMORY_POLICIES.join(", ")}`,
-      });
-    } else {
-      input.memoryPolicy = value as MemoryPolicy;
-    }
-  }
-
-  if (present("maxTurns")) {
-    const value = raw.maxTurns;
-    if (typeof value !== "number" || !Number.isInteger(value) || value < 0) {
-      issues.push({
-        field: "body.maxTurns",
-        message: "maxTurns must be a non-negative integer",
-      });
-    } else {
-      input.maxTurns = value;
-    }
-  }
-
-  if (present("temperature")) {
-    const value = raw.temperature;
-    if (typeof value !== "number" || !Number.isFinite(value) || value < 0 || value > 2) {
-      issues.push({
-        field: "body.temperature",
-        message: "temperature must be a number between 0 and 2",
-      });
-    } else {
-      input.temperature = value;
-    }
-  }
-
-  return { issues, input };
 }
 
 /* ── ROUND-50 (R50-d): model-config field gate ────────────────────────────────
@@ -907,95 +766,9 @@ export function buildServer(options: ServerOptions): FastifyInstance {
         return { ok: true };
       });
 
-      scope.get("/agents", async (request) => {
-        const query = request.query as Record<string, string | undefined>;
-        const includeTemplates = (query.includeTemplates ?? "true").toLowerCase() !== "false";
-        return { agents: listAgents(db, includeTemplates) };
-      });
-
-      scope.post("/agents", async (request, reply) => {
-        const { issues, input } = validateAgentInput(request.body, {
-          partial: false,
-          db,
-        });
-        const firstIssue = issues[0];
-        if (firstIssue !== undefined || input.name === undefined) {
-          const issue =
-            firstIssue ?? { field: "body.name", message: "name is required" };
-          return reply
-            .code(400)
-            .send(errorBody("VALIDATION", issue.message, { field: issue.field }));
-        }
-        const agent = createAgent(db, { ...input, name: input.name });
-        return reply.code(201).send(agent);
-      });
-
-      scope.get("/agents/:id", async (request, reply) => {
-        const { id } = request.params as Record<string, string>;
-        const agent: Agent | undefined = getAgent(db, id);
-        if (agent === undefined) {
-          return reply.code(404).send(errorBody("NOT_FOUND", `no agent with id ${id}`));
-        }
-        return agent;
-      });
-
-      scope.patch("/agents/:id", async (request, reply) => {
-        const { id } = request.params as Record<string, string>;
-        if (getAgent(db, id) === undefined) {
-          return reply.code(404).send(errorBody("NOT_FOUND", `no agent with id ${id}`));
-        }
-        const { issues, input } = validateAgentInput(request.body, { partial: true, db });
-        if (issues.length > 0) {
-          return reply
-            .code(400)
-            .send(errorBody("VALIDATION", issues[0].message, { field: issues[0].field }));
-        }
-        return updateAgent(db, id, input) as Agent;
-      });
-
-      scope.delete("/agents/:id", async (request, reply) => {
-        const { id } = request.params as Record<string, string>;
-        const result = deleteAgent(db, id);
-        if (result === "missing") {
-          return reply.code(404).send(errorBody("NOT_FOUND", `no agent with id ${id}`));
-        }
-        if (result === "template") {
-          return reply
-            .code(409)
-            .send(
-              errorBody("CONFLICT", "template agents cannot be deleted", { reason: "template" }),
-            );
-        }
-        return reply.code(204).send();
-      });
-
-      scope.post("/agents/:id/duplicate", async (request, reply) => {
-        const { id } = request.params as Record<string, string>;
-        if (getAgent(db, id) === undefined) {
-          return reply.code(404).send(errorBody("NOT_FOUND", `no agent with id ${id}`));
-        }
-        let name: string | undefined;
-        const body: unknown = request.body;
-        if (body !== undefined && body !== null) {
-          if (typeof body !== "object" || Array.isArray(body)) {
-            return reply
-              .code(400)
-              .send(errorBody("VALIDATION", "body must be a JSON object", { field: "body" }));
-          }
-          const rawName = (body as Record<string, unknown>).name;
-          if (rawName !== undefined) {
-            if (typeof rawName !== "string" || rawName.trim() === "") {
-              return reply.code(400).send(
-                errorBody("VALIDATION", "name must be a non-empty string", {
-                  field: "body.name",
-                }),
-              );
-            }
-            name = rawName;
-          }
-        }
-        return reply.code(201).send(duplicateAgent(db, id, name));
-      });
+      // R84 (Wave 2-a): agent registry CRUD (API.md §3) — extracted verbatim
+      // to routes/agents.ts; registration order preserved.
+      registerAgentRoutes(scope, ctx);
 
       // ---- Providers (API.md §8) ---- keys never appear in any response.
 
@@ -1645,98 +1418,10 @@ export function buildServer(options: ServerOptions): FastifyInstance {
         return { restored: true, message: result.message };
       });
 
-      // ---- Projects (Agentic Coding MVP, API.md §4a) ----
-
-      scope.get("/projects", async () => ({ projects: listProjects(db) }));
-
-      scope.post("/projects", async (request, reply) => {
-        const body = request.body;
-        if (typeof body !== "object" || body === null || Array.isArray(body)) {
-          return reply
-            .code(400)
-            .send(errorBody("VALIDATION", "body must be a JSON object", { field: "body" }));
-        }
-        const raw = body as Record<string, unknown>;
-        const issues: { field: string; message: string }[] = [];
-        const name = typeof raw.name === "string" ? raw.name.trim() : "";
-        if (name === "") {
-          issues.push({ field: "body.name", message: "name is required" });
-        }
-        let rootPath = typeof raw.rootPath === "string" ? raw.rootPath.trim() : "";
-        if (rootPath === "") {
-          issues.push({ field: "body.rootPath", message: "rootPath must be an absolute folder path" });
-        }
-        // Normalize Windows separators; require an EXISTING directory on disk.
-        rootPath = rootPath.replace(/[\\/]+$/, "");
-        if (rootPath !== "") {
-          try {
-            if (!statSync(rootPath).isDirectory()) {
-              issues.push({ field: "body.rootPath", message: "rootPath is not a directory" });
-            }
-          } catch {
-            issues.push({ field: "body.rootPath", message: `folder does not exist: ${rootPath}` });
-          }
-        }
-        if (rootPath !== "" && projectRootPathExists(db, rootPath)) {
-          return reply.code(409).send(
-            errorBody("CONFLICT", `a project already uses the folder ${rootPath}`, {
-              field: "body.rootPath",
-            }),
-          );
-        }
-        if (issues.length > 0) {
-          return reply.code(400).send(
-            errorBody("VALIDATION", issues[0].message, { field: issues[0].field }),
-          );
-        }
-        const color = typeof raw.color === "string" && /^#[0-9a-fA-F]{6}$/.test(raw.color) ? raw.color : undefined;
-        return reply.code(201).send(createProject(db, { name, rootPath, ...(color !== undefined ? { color } : {}) }));
-      });
-
-      scope.get("/projects/:id", async (request, reply) => {
-        const { id } = request.params as Record<string, string>;
-        const project = getProject(db, id);
-        if (project === undefined) {
-          return reply.code(404).send(errorBody("NOT_FOUND", `no project with id ${id}`));
-        }
-        return project;
-      });
-
-      scope.delete("/projects/:id", async (request, reply) => {
-        const { id } = request.params as Record<string, string>;
-        if (!deleteProject(db, id)) {
-          return reply.code(404).send(errorBody("NOT_FOUND", `no project with id ${id}`));
-        }
-        return reply.code(204).send();
-      });
-
-      scope.get("/projects/:id/tree", async (request, reply) => {
-        const { id } = request.params as Record<string, string>;
-        const project = getProject(db, id);
-        if (project === undefined) {
-          return reply.code(404).send(errorBody("NOT_FOUND", `no project with id ${id}`));
-        }
-        return { tree: projectTree(project.rootPath), rootPath: project.rootPath };
-      });
-
-      scope.get("/projects/:id/file", async (request, reply) => {
-        const { id } = request.params as Record<string, string>;
-        const query = request.query as Record<string, string | undefined>;
-        const project = getProject(db, id);
-        if (project === undefined) {
-          return reply.code(404).send(errorBody("NOT_FOUND", `no project with id ${id}`));
-        }
-        if (query.path === undefined || query.path === "") {
-          return reply
-            .code(400)
-            .send(errorBody("VALIDATION", "path query parameter is required", { field: "query.path" }));
-        }
-        const result = readFile(project.rootPath, query.path);
-        if (!result.ok) {
-          return reply.code(404).send(errorBody("NOT_FOUND", result.output));
-        }
-        return { path: query.path, content: result.output };
-      });
+      // R84 (Wave 2-a): the projects domain (API.md §4a) + the WS-H unified
+      // search + the WS-I demo viewer — extracted verbatim to
+      // routes/projects.ts; registration order preserved.
+      registerProjectRoutes(scope, ctx);
 
       // Round-28 WS-G2: codebase index summary for the frontend CodebasePanel.
       scope.get("/projects/:id/index", async (request, reply) => {
@@ -2381,89 +2066,6 @@ export function buildServer(options: ServerOptions): FastifyInstance {
           return reply.code(404).send(errorBody("NOT_FOUND", result.error));
         }
         return { ok: true };
-      });
-
-      // Round-28 WS-H: unified search (files + symbols + content) for the
-      // CommandPalette. Reuses search_files + search_code + the codebase index.
-      scope.post("/projects/:id/search", async (request, reply) => {
-        const { id } = request.params as Record<string, string>;
-        const body = request.body as Record<string, unknown> | null;
-        if (body === null || typeof body !== "object" || Array.isArray(body)) {
-          return reply.code(400).send(errorBody("VALIDATION", "body must be a JSON object", { field: "body" }));
-        }
-        const project = getProject(db, id);
-        if (project === undefined) {
-          return reply.code(404).send(errorBody("NOT_FOUND", `no project with id ${id}`));
-        }
-        const query = typeof body.query === "string" ? body.query : "";
-        const kind = body.kind === "symbols" || body.kind === "content" ? body.kind : "files";
-        if (query.trim() === "") {
-          return reply.code(400).send(errorBody("VALIDATION", "query is required", { field: "body.query" }));
-        }
-        if (kind === "symbols") {
-          const symbols = searchIndexSymbols(db, id, query, 50);
-          return { kind: "symbols", results: symbols };
-        }
-        if (kind === "content") {
-          const res = searchCode(project.rootPath, query, undefined, {
-            caseSensitive: body.case_sensitive === true,
-            wholeWord: body.whole_word === true,
-            fileGlob: typeof body.file_glob === "string" ? body.file_glob : undefined,
-            maxResults: typeof body.max_results === "number" ? body.max_results : 50,
-          });
-          return { kind: "content", results: res.ok ? res.output : "" };
-        }
-        // kind === "files"
-        const res = searchFiles(project.rootPath, query, undefined);
-        return { kind: "files", results: res.ok ? res.output : "" };
-      });
-
-      // Round-28 WS-I: in-app demo viewer. Walks <project>/demos/ for HTML
-      // files; each demo is viewable in a sandboxed iframe. The agent's
-      // write_file tool can create demos as part of a task.
-      scope.get("/projects/:id/demos", async (request, reply) => {
-        const { id } = request.params as Record<string, string>;
-        const project = getProject(db, id);
-        if (project === undefined) {
-          return reply.code(404).send(errorBody("NOT_FOUND", `no project with id ${id}`));
-        }
-        const demosDir = join(project.rootPath, "demos");
-        if (!existsSync(demosDir)) {
-          return { demos: [] };
-        }
-        const demos: Array<{ name: string; path: string; size: number; modifiedAt: string }> = [];
-        try {
-          for (const entry of readdirSync(demosDir)) {
-            const abs = join(demosDir, entry);
-            try {
-              const stats = statSync(abs);
-              if (stats.isDirectory()) {
-                // demo is a folder with index.html (or other .html)
-                const indexHtml = join(abs, "index.html");
-                if (existsSync(indexHtml)) {
-                  demos.push({
-                    name: entry,
-                    path: `demos/${entry}/index.html`,
-                    size: statSync(indexHtml).size,
-                    modifiedAt: stats.mtime.toISOString(),
-                  });
-                }
-              } else if (entry.endsWith(".html")) {
-                demos.push({
-                  name: entry.replace(/\.html$/, ""),
-                  path: `demos/${entry}`,
-                  size: stats.size,
-                  modifiedAt: stats.mtime.toISOString(),
-                });
-              }
-            } catch {
-              /* unreadable entry — skip */
-            }
-          }
-        } catch {
-          /* demos dir unreadable — return empty */
-        }
-        return { demos };
       });
 
       // R84 (Wave 2-a): sessions + single-agent chat (API.md §5) — extracted
@@ -4508,4 +4110,5 @@ export async function startServer(options: StartServerOptions): Promise<RunningS
   console.log(`ACUTE_READY ${JSON.stringify({ port: address.port })}`);
   return { server: app, port: address.port };
 }
+
 
