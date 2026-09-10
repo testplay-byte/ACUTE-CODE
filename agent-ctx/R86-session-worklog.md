@@ -80,9 +80,39 @@ Stage Summary:
 - The R85 audit's frontend structural claims are ~95% exact: every line count, the 687-line function range, the 42/34 comparison counts, 64 hooks, 8 store imports, 559 dead lines, TOOL_CATALOG 26=26 + drift test, frontend-only union — all reproduce exactly. Four numeric discrepancies to correct in the owner's structure overview: api.ts importers = 85 files (not 72; 58 non-test), ModelsProvidersTab hooks = 60 total (40 only when excluding react-query) + 3 named dialogs (not 4), Zustand stores = 14 create() calls (not 13), StreamTurnEvent at :2944 (not ~2825) with 37 members. New findings worth surfacing: src/README.md routes table lists /agents + /sessions/:id which don't exist in App.tsx; dead sessions/ dir still got R83 maintenance; the frontend's only real seams are error-bus + agent-browser-bridge registry + right-sidebar-events (all narrow).
 
 ---
-Task ID: R86-closeout
+Task ID: 3
 Agent: main-orchestrator (Z.ai Code)
-Task: Documentation + commit + push + tag + release + CI + dashboard sync + notifications (the close-out)
+Task: R86 code work (SSE extraction) + docs + ops + push
 
 Work Log:
-- (appended at close-out — see the repo's docs/agent/ORCHESTRATION-WORKLOG.md R86 entry for the curated version)
+- Baseline verified first: pnpm install + full suite green BEFORE any change (2,813 passed + 12 env-skipped = 2,825)
+- SSE route extracted: routes/sse.ts created via programmatic sed extraction (491-line block: 15-line comment + 476-line route), dedented 4, round-trip verified BYTE-IDENTICAL against git show HEAD before any gate
+- server.ts 2,439 → 1,913 lines; eleven single-consumer imports pruned; registerSseRoutes registered exactly where the route lived (order preserved)
+- One recovery: first import-prune wrongly deleted approvals.js import (still used by the 51 remaining routes) — caught by reading the diff before any gate; lesson #86 recorded
+- Full pipeline green: lint, typecheck ×2, 2,825 tests (byte-identical baseline), build, e2e 12/12 vs built dist, license audit 134 CLEAN, live boot smoke (ACUTE_READY + route answering)
+- Version 0.84.0 (×4 manifests); docs: round-86.md, CHANGELOG, status.json (round 86/milestone 46/PENDING ci), HANDOFF, MODULE-BOUNDARIES, MODULARITY-ASSESSMENT (R86 section), AGENT-MEMORY #86, ORCHESTRATION-WORKLOG R86, board + index, 3 stamp refreshes with content-check notes (docs:check 191/0/0)
+- Committed 38ffc83 + pushed to main + tagged v0.84.0
+- Branch cleanup: 6 branches deleted (tips recorded); v0.83.0 draft PUBLISHED (release 386366651)
+- Dashboard truth-sync: plan.current → R86, plan.upcoming → post-extraction queue (stale pre-R84 entry gone), version 0.84.0, milestone 67, rebuilt denylist-clean, pushed b057d52
+
+Stage Summary:
+- R86 pushed (38ffc83) + tagged v0.84.0; CI run 34515808594 + Release run 34515811591 in progress
+- Remaining: CI green verification → publish v0.84.0 release → status.json ci close-out sync → final commit → final notification + summary
+
+---
+Task ID: 4
+Agent: main-orchestrator (Z.ai Code)
+Task: Close-out — release publish, CI verification, dashboard final sync, final notification
+
+Work Log:
+- Release workflow 34515811591 SUCCESS: v0.84.0 installer (37.4 MB) + launcher kit (99.9 KB) built by CI
+- v0.84.0 release PUBLISHED (release 386543916, draft:false, make_latest:true) — zero drafts remain repo-wide; acute.bat picks 0.84.0 (max version)
+- CI run 34515808594 SUCCESS on the R86 push (full verify pipeline green on windows-latest)
+- status.json ci field synced with the real verdicts (close-out convention) → committed 4ff12b5 + pushed
+- DASHBOARD: ciNote synced with the real verdicts, rebuilt (denylist clean), merge over the Pages deploy rebuild resolved by rebuilding from final data.json, pushed d8c85a4
+- Live site verified: https://testplay-byte.github.io/DASHBOARD/ shows 0.84.0 + the R86 story
+- Final CI run for the docs-only close-out push observed to completion
+
+Stage Summary:
+- R86 COMPLETE AND CLOSED: v0.84.0 published + CI green + dashboard live-current + all worklogs appended + everything pushed to GitHub (the backup)
+- All owner tasks delivered: analysis overview (in the final report), documentation updated, branch cleanup (only main), version published for acute.bat, SSE route extraction, truth sync, worklog, notifications
