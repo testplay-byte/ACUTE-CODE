@@ -235,7 +235,7 @@
     }
   ],
   "quality": {
-    "ci": "PENDING — R84 push not yet made (this field is synced from the Actions API at close-out per the documented convention)",
+    "ci": "GREEN — R84 push 8ce6e08 → CI run 34484344162 SUCCESS (the modularity round: lint, typechecks, the 2,825-test root suite in 155 files, build, license audit). Wave 2 shipped behavior-identical: the SCC break (also green: the 8845069 push → run 34475792238) + the 57% server.ts split.",
     "suites": [
       {
         "name": "frontend",
