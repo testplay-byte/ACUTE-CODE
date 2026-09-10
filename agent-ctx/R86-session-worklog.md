@@ -116,3 +116,17 @@ Work Log:
 Stage Summary:
 - R86 COMPLETE AND CLOSED: v0.84.0 published + CI green + dashboard live-current + all worklogs appended + everything pushed to GitHub (the backup)
 - All owner tasks delivered: analysis overview (in the final report), documentation updated, branch cleanup (only main), version published for acute.bat, SSE route extraction, truth sync, worklog, notifications
+
+---
+Task ID: 5
+Agent: main-orchestrator (Z.ai Code)
+Task: CI flake handling + final verification
+
+Work Log:
+- The docs-only close-out push (4ff12b5) failed its first CI run on ONE flaky timeout (r52-supervision.test.ts background-launch test, 15s cap + a vitest worker RPC timeout on an overloaded runner — 540s suite vs 172s local)
+- Proven infra, not code: the code push (38ffc83) passed the same tests minutes earlier; the failing commit touched zero code paths; the test passed 14/14 locally in 21s; the next push's run (a content superset) was green
+- Re-run requested via the API → completed SUCCESS; all four runs green (34515808594, 34515811591, 34517577787-after-rerun, 34518629684)
+- The flake recorded honestly in ORCHESTRATION-WORKLOG's R86 entry (the R83 precedent)
+
+Stage Summary:
+- ALL CI GREEN. R86 fully closed: code + docs + release + dashboard + worklogs all pushed; v0.84.0 live for acute.bat.
