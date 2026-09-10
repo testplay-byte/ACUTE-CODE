@@ -120,10 +120,6 @@ import {
 } from "./mcp/manager.js";
 import { builtInToolCatalog, BUILT_IN_PLUGINS, externalPluginFileReport } from "./tools/registry.js";
 import { getIndexSummary } from "./storage/index.js";
-// ROUND-73 (R73-b): the task-modes resolver — the project-scoped /modes
-// listing and the PATCH /sessions/:id activeMode validation both sit on the
-// SAME resolveEffectiveModes prepareTurn + switch_mode use.
-import { resolveEffectiveModes } from "./agents/modes.js";
 import { openDatabase, type SqliteDatabase } from "./storage/db.js";
 import { getAgent } from "./storage/agents.js";
 // ROUND-40: notifications (task complete/failed, permission requests,
@@ -180,6 +176,8 @@ import { registerProjectRoutes } from "./routes/projects.js";
 
 import { registerProviderRoutes } from "./routes/providers.js";
 import { registerModelRoutes } from "./routes/models.js";
+// R84 (Wave 2-a, phase 4): the small CRUD domains continue the split.
+import { registerModeRoutes } from "./routes/modes.js";
 
 /**
  * ROUND-63: the app version GET /health reports — read at BOOT from the
@@ -749,37 +747,9 @@ export function buildServer(options: ServerOptions): FastifyInstance {
         return { index: summary };
       });
 
-      // ── ROUND-73 (R73-b): TASK MODES — the project-scoped mode listing ──
-      // GET /projects/:id/modes — the mode picker's data source (the
-      // composer's R73-c wave): the six builtins + the project's
-      // .acute/agents/*.md customs (shadowing included), resolved through
-      // the SAME resolveEffectiveModes prepareTurn and switch_mode use, so
-      // the picker, the prompt's TASK MODES index, and the tool can never
-      // disagree. METADATA ONLY (id/name/description/source) — bodies are
-      // PROMPT-SIDE and never served here (GET /skills' metadata-only
-      // honesty: the deep module rides the system prompt while active, and
-      // switch_mode returns it once on activation).
-      scope.get("/projects/:id/modes", async (request, reply) => {
-        const { id } = request.params as Record<string, string>;
-        const project = getProject(db, id);
-        if (project === undefined) {
-          return reply.code(404).send(errorBody("NOT_FOUND", `no project with id ${id}`));
-        }
-        const { modes } = resolveEffectiveModes(project.rootPath);
-        return {
-          modes: modes.map((mode) => ({
-            id: mode.id,
-            name: mode.name,
-            description: mode.description,
-            source: mode.source,
-            // ROUND-81 (R81, ADR-0029): readOnly is RETIRED — postures are
-            // non-enforcing guidance now (the unified mode picker carries
-            // the read-only badge on PLAN). Kept as always-false for wire
-            // compatibility with any cached client build reading this route.
-            readOnly: false,
-          })),
-        };
-      });
+      // R84 (Wave 2-a): the task-modes posture listing (R73-b) — extracted
+      // verbatim to routes/modes.ts; registration order preserved.
+      registerModeRoutes(scope, ctx);
 
       // ROUND-38 (owner: "I can see the terminal on the right sidebar"): a
       // USER-driven command runner for the right-sidebar Terminal tab. The
