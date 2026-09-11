@@ -110,6 +110,20 @@ SIDECAR_PORT = 5178
 NODE_MIN_MAJOR = 20
 STARTED = time.time()
 
+# ROUND-90 (R90-B1b): Windows consoles on legacy codepages (cp1252/cp437 —
+# the GitHub Actions pwsh default among them) raise UnicodeEncodeError the
+# moment panel() prints its box-drawing characters, crashing the launcher at
+# its FIRST message (found by the R90 CI run 34631535592: the fresh-machine
+# PAT prompt test died inside panel, not inside the prompt logic). Reconfigure
+# both streams to UTF-8 with replacement — a console that cannot SHOW a glyph
+# still shows something, and the launcher keeps working.
+for _stream in (sys.stdout, sys.stderr):
+    try:
+        _stream.reconfigure(encoding="utf-8", errors="replace")
+    except (AttributeError, OSError, ValueError):
+        # A replaced/captured stream (tests, pipes) keeps its own settings.
+        pass
+
 # R56: launch-mode commands + the remembered-choice file. The preference is
 # intentionally OUTSIDE .acute (which `status` describes as a cache) — it is
 # user settings, not a download, and must survive a cache wipe.
