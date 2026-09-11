@@ -32,6 +32,10 @@ pub fn run() {
             sidecar::sidecar_log_tail,
             keys::store_provider_key,
             keys::provider_key_status,
+            // ROUND-90 (R90-A5): the delete-provider flow's missing half —
+            // purges the OS-stored key + the custom-provider note line after
+            // the sidecar's DELETE /providers/:id succeeds.
+            keys::remove_provider_key,
             // ROUND-61 (R61): the separate vision-model key slot (Settings →
             // Computer Use): credential write + note + in-memory handoff.
             keys::store_vision_key,

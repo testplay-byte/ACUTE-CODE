@@ -2,6 +2,15 @@ import { useMemo, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useOnboardingStore } from "../onboarding-store";
 import { fetchProviders, isTauri, markSetupDone, storeProviderKey, withClientDefaults } from "../providers-api";
+import { getAgentsBackend, upsertProviderModelConfig } from "../../../lib/api";
+// R90-A3: the wizard's choices now outlive the wizard — the model row + the
+// global last-used default + the default agent's provider/model.
+import { saveLastUsedModel } from "../../project-chat/composer/composer-utils";
+import {
+  cleanModelName,
+  invalidateModelConfigEverywhere,
+  invalidateProvidersEverywhere,
+} from "../../settings/ModelsProvidersTab";
 import { CONTEXT_LABELS, estimateCost, formatContext, formatCost, REASONING_LEVELS } from "../onboarding-types";
 import { useThemeStyles } from "../../../lib/use-theme-styles";
 import { ActionButton } from "../ActionButton";
@@ -16,6 +25,22 @@ function formatContextLabel(val: number): string {
  * hands the key to the Tauri shell (Credential Manager) before advancing;
  * in a plain browser (dev) there is no keyring, so saving proceeds WITHOUT
  * storing any secret rather than falling back to REST/localStorage.
+ *
+ * ROUND-90 (R90-A3, the owner: after the wizard "the model was apparently
+ * not selected there… [I] selected the model manually"): "Save & Continue"
+ * now persists the WHOLE choice, not just the key. Pre-R90 handleSave wrote
+ * the key + the setup-done flag and nothing else — the picked provider/model,
+ * the tuning card's context/max-output/pricing values, all of it died with
+ * the wizard's memory store. Three persistence legs, each best-effort so a
+ * single failure never blocks completing setup:
+ *  1. the model row — POST /providers/:id/models (upsert): Settings → Models
+ *     shows it configured, the chat picker lists it, the tuning values land.
+ *  2. the global last-used model — the next chats default to the wizard's
+ *     pick (the R89-B4 localStorage key, same one a manual pick writes).
+ *  3. the default agent — PATCH agt_default_nova to the picked provider +
+ *     model, so the seeded "Acute" agent stops pointing at openrouter
+ *     (the owner: "the provider was OpenRouter, even though I did not have
+ *     OpenRouter added to it").
  */
 export function ModelSummary({ onBack, onSave }: { onBack: () => void; onSave: () => void }) {
   const s = useThemeStyles();
@@ -60,6 +85,50 @@ export function ModelSummary({ onBack, onSave }: { onBack: () => void; onSave: (
     try {
       if (isTauri()) {
         await storeProviderKey(providerId, apiKey);
+      }
+      // ── R90-A3: persist the CHOICE, not just the key ─────────────────────
+      // (each leg is best-effort — a failure logs to the console and setup
+      // still completes; the key was the only critical secret.)
+      try {
+        await upsertProviderModelConfig(providerId, {
+          modelId,
+          displayName: cleanModelName(modelId),
+          contextWindow,
+          maxOutputTokens: maxOutput,
+          inputPricePerMtok: inputCost,
+          outputPricePerMtok: outputCost,
+          // The reasoning pick translates to the row's thinking flag.
+          supportsThinking: reasoning !== "none",
+        });
+      } catch (err) {
+        console.warn("[setup] model row upsert failed (setup continues)", err);
+      }
+      try {
+        // The next chats' default = the wizard's pick (R89-B4's key, written
+        // by every manual pick since — the wizard is just the FIRST pick).
+        saveLastUsedModel({ model: modelId, providerId });
+      } catch (err) {
+        console.warn("[setup] last-used-model save failed (setup continues)", err);
+      }
+      try {
+        // The seeded default agent ("Acute", agt_default_nova — the id the
+        // sidecar's migrations seed) points at openrouter/z-ai/glm-5.2:free.
+        // Point it at the wizard's choice so the agent-side default matches
+        // what the owner just configured.
+        const backend = getAgentsBackend();
+        const agents = await backend.list(false);
+        const seeded = agents.find((a) => a.id === "agt_default_nova");
+        if (seeded !== undefined) {
+          await backend.update(seeded.id, { providerId, model: modelId });
+        }
+      } catch (err) {
+        console.warn("[setup] default-agent update failed (setup continues)", err);
+      }
+      // Everything the rest of the app reads must see the new state NOW.
+      invalidateProvidersEverywhere(queryClient);
+      invalidateModelConfigEverywhere(queryClient, providerId);
+      void queryClient.invalidateQueries({ queryKey: ["agents"] });
+      if (isTauri()) {
         // Refresh hasKey flags so the rest of the app sees the new key.
         void queryClient.invalidateQueries({ queryKey: ["onboarding.providers"] });
       }

@@ -174,6 +174,27 @@ export async function providerKeyStatus(providerId: string): Promise<boolean> {
   return tauriInvoke<boolean>("provider_key_status", { providerId });
 }
 
+/**
+ * ROUND-90 (R90-A5): purge the provider's key from the OS secure store
+ * (Windows Credential Manager, canonical + legacy targets) and drop its
+ * custom-provider note line. Called by Settings after a SUCCESSFUL
+ * DELETE /providers/:id — the sidecar's route only clears its in-memory
+ * keyring, so without this the stored key survived the delete and a
+ * re-added provider showed "key stored" on the OLD key after the next
+ * sidecar spawn. Best-effort by design: the row is already gone
+ * server-side, so a failure here is logged by the caller, never fatal.
+ * Browser dev (no shell) resolves to true — nothing to purge.
+ */
+export async function removeProviderKey(providerId: string): Promise<boolean> {
+  if (!isTauri()) return true;
+  try {
+    await tauriInvoke<void>("remove_provider_key", { providerId });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 // ---------------------------------------------------------------------------
 // First-run flag (plan-ui-fidelity.md wave 1 §2)
 // ---------------------------------------------------------------------------

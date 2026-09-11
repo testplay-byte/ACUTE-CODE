@@ -322,14 +322,8 @@ fn note_custom_provider(provider_id: &str) {
 /// pseudo-providers), and a stale line is avoidable noise. Missing or
 /// unreadable file = no-op; the rewrite happens only when the id was
 /// actually noted (keeps the file's mtime honest).
-// TODO(R82-follow-up): no call site exists yet — the Rust shell has no
-// key-removal or provider-delete Tauri command (store_provider_key rejects
-// empty keys, and deleting a provider flows through the sidecar's REST
-// route, DELETE /providers/:id in agent-core, which never touches Credential
-// Manager or this note file). Wire unnote_custom_provider into the
-// remove-key / delete-provider Tauri command when one lands; until then a
-// stale line only costs one skipped lookup at spawn.
-#[allow(dead_code)]
+/// ROUND-90 (R90-A5): now CALLED — by the remove_provider_key command (the
+/// delete-provider Tauri command the R82 TODO asked for).
 fn unnote_custom_provider(provider_id: &str) {
     let path = custom_provider_note_path();
     let Ok(text) = std::fs::read_to_string(&path) else {
@@ -464,6 +458,27 @@ pub fn provider_key_status(provider_id: String) -> Result<bool, String> {
     validate_provider_id(&provider_id)?;
     let key = read_provider_key(&provider_id)?;
     Ok(key.as_deref().map(|k| !k.is_empty()).unwrap_or(false))
+}
+
+/// ROUND-90 (R90-A5): delete ONE provider's stored key — the missing half of
+/// the Settings delete-provider flow. The sidecar's DELETE /providers/:id
+/// clears its IN-MEMORY keyring and the DB row, but never the OS store: the
+/// Windows Credential Manager entries (canonical `ACUTE-CODE/provider/<id>`
+/// plus the pre-R55 legacy target) and the `custom-providers.txt` note line
+/// survived, so deleting + re-adding a provider showed "key stored" on the
+/// OLD key after the next sidecar spawn. The webview calls this AFTER a
+/// successful DELETE; failures are best-effort (the row is already gone).
+/// No sidecar handoff is needed — the REST route already cleared the vault.
+#[tauri::command]
+pub fn remove_provider_key(provider_id: String) -> Result<(), String> {
+    validate_provider_id(&provider_id)?;
+    let _ = crate::wincred::delete(&canonical_target(&provider_id));
+    let _ = crate::wincred::delete(&legacy_target(&provider_id));
+    // Drop the custom-provider note line so the spawn loop stops hunting a
+    // credential that no longer exists (builtins are never noted — the
+    // no-op filter inside keeps the file's mtime honest).
+    unnote_custom_provider(&provider_id);
+    Ok(())
 }
 
 /// ROUND-87 (R87, the application-wide reset): delete EVERY provider

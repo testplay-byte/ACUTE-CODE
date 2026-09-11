@@ -1683,7 +1683,15 @@ export function AgentChatPanel({
   // (runTurn saves the fresh session's values at creation, so a first send
   // carries the choices made pre-session into the new session's keys).
   useEffect(() => {
-    setModelOverride(loadModelOverride(activeSessionId));
+    // R90-A4 (the owner: in a new chat "the provider was OpenRouter, even
+    // though I did not have OpenRouter added to it, and the model was not
+    // the previous one which I had selected"): the session-switch effect
+    // used to load ONLY the session's own override — a session with none
+    // fell straight to the agent template's default (openrouter/GLM, the
+    // ghost). The INITIAL useState below already fell back to the global
+    // last-used model (R89-B4); this effect now does the same, so a new
+    // chat keeps the last-used model instead of regressing to the seed.
+    setModelOverride(loadModelOverride(activeSessionId) ?? loadLastUsedModel());
   }, [activeSessionId]);
   useEffect(() => {
     setThinkingLevel(loadThinkingLevel(activeSessionId));

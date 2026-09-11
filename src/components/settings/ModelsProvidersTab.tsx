@@ -3,6 +3,8 @@ import { useMutation, useQuery, useQueryClient, type QueryClient } from "@tansta
 import {
   AlertTriangle,
   ArrowLeft,
+  // R90-A2: the inputs → outputs flow arrow on the model card.
+  ArrowRight,
   AudioLines,
   Check,
   Copy,
@@ -708,6 +710,14 @@ function ProviderDetailPane({
   const [nameDraft, setNameDraft] = useState(provider.name);
   const [baseUrlDraft, setBaseUrlDraft] = useState(provider.baseUrl ?? "");
   const [saveMsg, setSaveMsg] = useState<string | null>(null);
+  /** ROUND-90 (R90-A1, the owner: "I clicked the confirm delete but nothing
+   * was happening"): the DELETE failure now renders INLINE in the Danger
+   * zone — pre-R90 the mutation's error went to `saveMsg`, which lives in
+   * the HEADER card ~1500px ABOVE the Danger zone at the bottom of the
+   * scrollable pane, styled in the ACCENT color: a 409 ("1 agent still
+   * uses this provider") was literally invisible at the click site, the
+   * dead click the owner saw. Cleared when the confirm re-arms. */
+  const [deleteError, setDeleteError] = useState<string | null>(null);
   const [confirmDelete, setConfirmDelete] = useState(false);
   // ROUND-60 (R60-B): the paste-to-replace draft — null means "not editing"
   // (the field displays the STORED key, masked or revealed read-only);
@@ -841,11 +851,22 @@ function ProviderDetailPane({
       // ROUND-62 (R62-2b): the provider is GONE — its models-config rows went
       // with it (ON DELETE CASCADE), so the session picker's config family
       // is invalidated too (the settings-side prefix invalidation stays).
+      // ROUND-90 (R90-A5): the OS-STORED key must go too — the sidecar's
+      // DELETE route only clears its IN-MEMORY keyring; without this the
+      // Windows Credential Manager entry (ACUTE-CODE/provider/<id>) and the
+      // custom-provider note line survive, and re-adding the provider shows
+      // "key stored" on the OLD key after the next sidecar spawn (the
+      // keys.rs R82-follow-up TODO, now wired).
+      if (isTauri()) {
+        void import("../onboarding/providers-api").then((m) => m.removeProviderKey(provider.id));
+      }
       void queryClient.invalidateQueries({ queryKey: ["settings-provider-models"] });
       void queryClient.invalidateQueries({ queryKey: ["provider-models-config"] });
       onDeleted();
     },
-    onError: (err: Error) => setSaveMsg(err.message),
+    // R90-A1: the failure lands INLINE in the Danger zone (see deleteError)
+    // — never in the header card 1500px above the click.
+    onError: (err: Error) => setDeleteError(err.message),
   });
 
   const runTest = async () => {
@@ -1459,12 +1480,42 @@ function ProviderDetailPane({
             Deletes the provider, its stored key, and every model override. Agents still using
             it must be reassigned first.
           </p>
+          {/* R90-A1: PRE-ARMED honesty — the agents referencing this provider are
+              listed BEFORE the click (the data was already here for the
+              disable warning; the owner never saw WHY the confirm was a dead
+              click because the 409 only surfaced in the header). */}
+          {agentsUsingProvider.length > 0 ? (
+            <p
+              className="mt-1.5 text-[11px] font-medium"
+              style={{ color: "#ef4444" }}
+              data-testid="delete-used-by-warning"
+            >
+              In use by {agentsUsingProvider.length} agent{agentsUsingProvider.length === 1 ? "" : "s"}:{" "}
+              {agentsUsingProvider.map((a) => a.name).join(", ")} — reassign or delete them
+              first, or the delete will be refused.
+            </p>
+          ) : null}
+          {/* R90-A1: the inline failure — exactly at the click site, in the
+              danger color, announced to screen readers. */}
+          {deleteError !== null ? (
+            <p
+              className="mt-1.5 text-[11px] font-medium"
+              style={{ color: "#ef4444" }}
+              role="alert"
+              data-testid="delete-provider-error"
+            >
+              {deleteError}
+            </p>
+          ) : null}
         </div>
         <button
           onClick={() => {
             if (confirmDelete) {
+              // R90-A1: a fresh attempt clears the stale inline error first.
+              setDeleteError(null);
               removeProvider.mutate();
             } else {
+              setDeleteError(null);
               setConfirmDelete(true);
               resetAfter(() => setConfirmDelete(false), 3000);
             }
@@ -2196,15 +2247,24 @@ function ModelCard({
 
   return (
     <div className="flex flex-col">
-      {/* ── the CARD (the "top half" — stays exactly as it is when the test
-          section expands below) ── */}
+      {/* ── R90-A2: THE MODEL SECTION — ONE highlighted card. Pre-R90 the
+          details strip was its own bordered band floating 1.5px under the
+          main row (the owner: "there was clear separation between the two…
+          the model details should be in a single highlighted section").
+          Now ONE border, ONE background: the identity row on top, the stats
+          band fused underneath, separated only by a hairline. The test
+          section (below) stays a SIBLING of this merged section — it is a
+          transient result, not model identity. */}
       <div
-        className="rounded-[14px] border-[1.5px] px-4 py-3 flex flex-wrap items-center gap-3"
+        className="rounded-[14px] border-[1.5px] overflow-hidden"
         style={{
           borderColor: m.configured ? styles.border : withAlpha(styles.accent, 0.3),
           background: styles.isDark ? "rgba(255,255,255,0.015)" : "rgba(0,0,0,0.01)",
         }}
       >
+      {/* ── the identity row (the "top half" — stays exactly as it is when
+          the test section expands below) ── */}
+      <div className="px-4 py-3 flex flex-wrap items-center gap-3">
         {/* LEFT: identity — name, badges, capability ICON chips, the id */}
         <div className="min-w-0 flex-1 flex flex-col gap-1.5">
           <div className="flex items-center gap-1.5 min-w-0 flex-wrap">
@@ -2241,33 +2301,53 @@ function ModelCard({
               </span>
             )}
           </div>
-          {/* the capability ICON chips (R89-C3/C5: colored SVG chips instead
-              of text tags) — IN group, divider, OUT group. */}
+          {/* the capability ICON chips (R89-C3 → R90-A2: colored SVG badges,
+              ICON-ONLY — the owner: "I was hoping for them to only show the
+              images, the SVG logos"; the label survives as the tooltip +
+              aria-label), IN group, then the ARROW (the owner: "an arrow
+              going from the inputs to the outputs" — the transformation
+              reads visually), then the OUT group. */}
           {m.configured && (inChips.length > 0 || outChips.length > 0) && (
-            <div className="flex items-center gap-1.5 min-w-0 flex-wrap">
+            <div className="flex items-center gap-1 min-w-0 flex-wrap">
               {inChips.map((chip) => (
                 <span
                   key={`in:${chip.label}`}
-                  className="shrink-0 inline-flex items-center gap-1 px-1.5 py-0.5 rounded-full text-[10px] font-bold"
+                  className="shrink-0 inline-grid place-items-center h-[19px] w-[19px] rounded-[7px]"
                   style={{ background: withAlpha(chip.color, 0.13), color: chip.color }}
                   title={chip.title}
+                  role="img"
+                  aria-label={chip.title}
                 >
-                  <chip.Icon size={10} strokeWidth={2.25} aria-hidden />
-                  {chip.label}
+                  <chip.Icon size={11} strokeWidth={2.4} aria-hidden />
                 </span>
               ))}
               {outChips.length > 0 && (
-                <span className="shrink-0 w-[1px] h-3.5" style={{ background: styles.border }} aria-hidden />
+                <span
+                  className="shrink-0 mx-0.5 inline-grid place-items-center"
+                  title="inputs → outputs"
+                  aria-hidden
+                >
+                  <ArrowRight
+                    size={12}
+                    strokeWidth={2.5}
+                    style={{ color: withAlpha(styles.textSecondary, 0.65) }}
+                  />
+                </span>
               )}
               {outChips.map((chip) => (
                 <span
                   key={`out:${chip.label}`}
-                  className="shrink-0 inline-flex items-center gap-1 px-1.5 py-0.5 rounded-full text-[10px] font-bold"
-                  style={{ background: withAlpha(chip.color, 0.09), color: withAlpha(chip.color, 0.9), border: `1px solid ${withAlpha(chip.color, 0.3)}` }}
+                  className="shrink-0 inline-grid place-items-center h-[19px] w-[19px] rounded-[7px]"
+                  style={{
+                    background: withAlpha(chip.color, 0.09),
+                    color: withAlpha(chip.color, 0.95),
+                    boxShadow: `inset 0 0 0 1px ${withAlpha(chip.color, 0.3)}`,
+                  }}
                   title={chip.title}
+                  role="img"
+                  aria-label={chip.title}
                 >
-                  <chip.Icon size={10} strokeWidth={2.25} aria-hidden />
-                  {chip.label}
+                  <chip.Icon size={11} strokeWidth={2.4} aria-hidden />
                 </span>
               ))}
             </div>
@@ -2307,11 +2387,15 @@ function ModelCard({
         )}
       </div>
 
-      {/* ── the DETAILS STRIP — the dedicated sections (context / input /
-          output / cache read), its own bordered band under the main row. */}
+      {/* ── R90-A2: the DETAILS BAND — fused into the SAME section (no own
+          border, no margin: ONE hairline separates it from the identity row
+          above; the owner: "it should be a part of the model section itself").
+          Context / input / output / cache read, one grid, vertical hairlines
+          between the cells. */}
       <div
-        className="mt-1.5 mx-1 grid grid-cols-2 min-[420px]:grid-cols-4 rounded-[10px] border-[1.5px] overflow-hidden"
-        style={{ borderColor: withAlpha(styles.border, 0.6) }}
+        className="grid grid-cols-2 min-[420px]:grid-cols-4"
+        style={{ borderTop: `1px solid ${withAlpha(styles.border, 0.55)}` }}
+        data-testid="model-details-band"
       >
         {details.map(([label, value], i) => (
           <div
@@ -2334,6 +2418,8 @@ function ModelCard({
           </div>
         ))}
       </div>
+      </div>
+      {/* ── end of the merged model section (R90-A2) ── */}
 
       {/* ── the TEST SECTION (R89-C6) — the dedicated expansion below the
           card: the top half stays untouched, the details get their own
