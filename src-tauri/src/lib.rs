@@ -5,6 +5,9 @@ mod keys;
 // window (open/close_computer_mini — see src/mini for the page it hosts).
 mod mini;
 mod sidecar;
+// ROUND-91 (R91-E): the in-app updater's shell half — runs the installer
+// the sidecar downloaded + verified, then exits the app for the replace.
+mod update;
 // ROUND-55 (R55): direct Windows Credential Manager FFI — replaced the
 // keyring crate whose `{user}.{service}` TargetName never matched the
 // launcher's cmdkey targets (see src/wincred.rs for the post-mortem).
@@ -65,6 +68,7 @@ pub fn run() {
             // webview per browser tab inside the main window (Chromium/
             // WebView2 rendering, no proxy).
             browser::browser_tab_create,
+            browser::browser_tab_exists,
             browser::browser_tab_navigate,
             browser::browser_tab_set_bounds,
             browser::browser_tab_set_visible,
@@ -93,7 +97,11 @@ pub fn run() {
             // computer-use activity starts; the page (mini.html) closes
             // itself when the control session ends.
             mini::open_computer_mini,
-            mini::close_computer_mini
+            mini::close_computer_mini,
+            // ROUND-91 (R91-E): the in-app updater — the shell half (see
+            // src/update.rs; the download + sha256 verification live in the
+            // sidecar's /system/updates/download route).
+            update::run_update_installer
         ])
         .build(tauri::generate_context!())
         .expect("error while running the tauri application")

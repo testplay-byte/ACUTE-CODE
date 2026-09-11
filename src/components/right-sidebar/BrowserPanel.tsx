@@ -29,6 +29,7 @@ import {
   nativeInvoke,
   nativeTabClose,
   nativeTabCreate,
+  nativeTabExists,
   nativeTabGo,
   nativeTabNavigate,
   nativeTabSetBounds,
@@ -169,6 +170,46 @@ const RECOVERY_WINDOW_MS = 60_000;
  * other triggers so bursts collapse into one invoke).
  */
 const NATIVE_BOUNDS_INTERVAL_MS = 500;
+
+/**
+ * R91-B3: the VISIBILITY WATCHDOG's period. Every 2s the panel re-asserts
+ * the ACTIVE, unguarded tab's webview visibility + bounds, and recreates
+ * the webview outright when it discovers it never came to exist. This is
+ * the self-healing layer for the v0.88.0 field report class — a webview
+ * that is ALIVE (evals answer, the agent drives it) but INVISIBLE (a
+ * hide/show race, a lost bounds sync, a create that never landed) heals
+ * within one period, without the user ever knowing a race happened.
+ * Paused while the panel is inactive (keep-alive hidden) or suppressed
+ * (a popover legitimately owns the hidden webview) — those states WANT
+ * the webview hidden; the watchdog must never fight them.
+ */
+const NATIVE_WATCHDOG_INTERVAL_MS = 2000;
+
+/**
+ * R91-B3: how long an explicit affordance (pop-out, open-externally) waits
+ * for its invoke before declaring the shell wedged. A hung main thread
+ * never REJECTS an invoke — the promise just never settles — and the
+ * pre-R91 code let that silence read as "the button does nothing". The
+ * timeout converts the silence into the honest error card.
+ */
+const NATIVE_AFFORDANCE_TIMEOUT_MS = 6000;
+
+/** R91-B3: reject with a readable timeout error after `ms`. */
+function withTimeout<T>(p: Promise<T>, ms: number, what: string): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error(`${what} did not answer within ${Math.round(ms / 1000)}s — the desktop shell may be busy; try again`)), ms);
+    p.then(
+      (v) => {
+        clearTimeout(timer);
+        resolve(v);
+      },
+      (err) => {
+        clearTimeout(timer);
+        reject(err);
+      },
+    );
+  });
+}
 
 function normalizeUrl(raw: string): string {
   const trimmed = raw.trim();
@@ -892,6 +933,75 @@ export function BrowserPanel({
     };
   }, [nativeMode, scheduleBoundsSync, tabId, viewW, viewH, rotate, naturalSize]);
 
+  // ── R91-B3: the VISIBILITY WATCHDOG ───────────────────────────────────────
+  // The v0.88.0 field report: the agent's browser actions executed (the
+  // webview was alive — evals answered) but the page area showed NOTHING.
+  // Whatever the exact race — a show that never landed, a bounds sync lost
+  // to a state churn, a create swallowed mid-transition — the panel had NO
+  // self-healing layer: once the show was missed, nothing ever retried it.
+  // This watchdog closes the class: every 2s, for the ACTIVE, unguarded
+  // tab, it (1) verifies the webview still EXISTS (recreating it at the
+  // live URL when it vanished) and (2) re-asserts show + bounds. An invoke
+  // that never settles (a wedged shell) is caught by the timeout and
+  // surfaces the honest error card instead of a silent nothing. The R91-B1
+  // Rust fix (async menu-overlay commands) removes the deadlock class that
+  // could wedge the shell in the first place; this is the belt to that
+  // suspenders — a missed show can never persist past one period.
+  useEffect(() => {
+    if (!nativeMode) return;
+    let stopped = false;
+    const tick = (): void => {
+      if (stopped) return;
+      // The panel's own states first: an inactive (keep-alive hidden) tab
+      // and a guard-suppressed tab legitimately want the webview HIDDEN —
+      // re-asserting here would fight the panel's own lifecycle.
+      if (hiddenRef.current || !nativeReadyRef.current) return;
+      if (useWebviewGuardStore.getState().popoverTabId === tabId) return;
+      const el = placeholderRef.current;
+      if (el !== null && overlayCoversRect(el.getBoundingClientRect())) return;
+      const live = useBrowserTabStore.getState().tabs[tabId];
+      const url = live?.currentUrl ?? null;
+      void nativeTabExists(tabId)
+        .then((exists) => {
+          if (stopped) return;
+          if (!exists) {
+            // The webview never came to exist (or died): create it at the
+            // live URL — the same idempotent path a navigation takes. A
+            // missing URL means there is nothing to show yet (fresh tab —
+            // the first navigation creates it, by design).
+            if (url !== null) {
+              nativeReadyRef.current = false;
+              void nativeCreate(url).catch(nativeFail);
+            }
+            return;
+          }
+          // Exists: re-assert the show + bounds (idempotent, and the Rust
+          // side re-applies the remembered bounds with every show — R91-B2).
+          void withTimeout(nativeTabSetVisible(tabId, true), NATIVE_AFFORDANCE_TIMEOUT_MS, "showing the browser").catch(
+            (err: unknown) => {
+              useBrowserTabStore
+                .getState()
+                .setError(
+                  tabId,
+                  `The embedded browser stopped answering (${err instanceof Error ? err.message : String(err)}). The page session is preserved — try pop-out or reopen the tab.`,
+                );
+            },
+          );
+          syncBounds();
+        })
+        .catch(() => {
+          /* nativeTabExists never throws — outside Tauri it is false */
+        });
+    };
+    const interval = window.setInterval(tick, NATIVE_WATCHDOG_INTERVAL_MS);
+    return () => {
+      stopped = true;
+      window.clearInterval(interval);
+    };
+    // nativeCreate/syncBounds/nativeFail identities are stable per tab; the
+    // watchdog reads the live guard + store state at tick time on purpose.
+  }, [nativeMode, tabId, nativeCreate, syncBounds, nativeFail]);
+
   // ── native: user navigations INSIDE the webview ──────────────────────────
   useEffect(() => {
     if (!nativeMode) return;
@@ -1137,14 +1247,19 @@ export function BrowserPanel({
       // R58-b: inside the Tauri shell, window.open is silently swallowed by
       // WebView2/wry — hand the URL to the OS default browser on the Rust
       // side (tauri-plugin-shell's OS-level open).
-      void openExternalUrl(url).catch((err) => {
-        const message = err instanceof Error ? err.message : String(err);
-        useBrowserTabStore
-          .getState()
-          .setError(tabId, `Opening the page in your system browser failed (${message}). Retrying with a plain webview tab.`);
-        // Fallback: the Rust handoff failed — let the webview itself try.
-        window.open(url, "_blank", "noopener,noreferrer");
-      });
+      // R91-B3: the timeout — a wedged shell never settles the invoke, and
+      // the silence read as "the button does nothing" (the owner's v0.88.0
+      // report). Now it becomes the honest error card.
+      void withTimeout(openExternalUrl(url), NATIVE_AFFORDANCE_TIMEOUT_MS, "opening the page in your system browser").catch(
+        (err) => {
+          const message = err instanceof Error ? err.message : String(err);
+          useBrowserTabStore
+            .getState()
+            .setError(tabId, `Opening the page in your system browser failed (${message}). Retrying with a plain webview tab.`);
+          // Fallback: the Rust handoff failed — let the webview itself try.
+          window.open(url, "_blank", "noopener,noreferrer");
+        },
+      );
       return;
     }
     // Web mode: the ONLY unconditional window.open in the panel — an
@@ -1157,7 +1272,15 @@ export function BrowserPanel({
     const url = currentUrl;
     if (invoke === null || url === null) return;
     try {
-      await invoke("open_browser_window", { url });
+      // R91-B3: the timeout — a window creation that never lands leaves the
+      // user clicking a dead button ("not working at all", the v0.88.0
+      // report). A wedged shell now answers with the honest error card; a
+      // REJECTED command always did.
+      await withTimeout(
+        Promise.resolve(invoke("open_browser_window", { url })),
+        NATIVE_AFFORDANCE_TIMEOUT_MS,
+        "opening the pop-out window",
+      );
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       useBrowserTabStore

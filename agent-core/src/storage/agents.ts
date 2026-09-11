@@ -293,6 +293,28 @@ export function updateAgent(db: SqliteDatabase, id: string, patch: AgentInput): 
   return getAgent(db, id) as Agent;
 }
 
+/**
+ * R91-A: reset EVERY agent still pointing at `providerId` to the "no
+ * provider picked" state (provider_id = NULL, model = NULL, version
+ * bumped). The force-delete path (DELETE /providers/:id?force=1) uses
+ * this — `updateAgent`'s merge semantics treat `null` as "keep current",
+ * so nulling the reference needs this dedicated statement. Returns the
+ * number of agents reset. `vision_model` is deliberately KEPT: it is a
+ * free-text model id that may live on a DIFFERENT provider — deleting
+ * this provider says nothing about it, and an empty vision model is
+ * already the "inherit the global vision config" state.
+ */
+export function resetAgentsProvider(db: SqliteDatabase, providerId: string): number {
+  const info = db
+    .prepare(
+      `UPDATE agents SET
+         provider_id = NULL, model = NULL, version = version + 1, updated_at = ?
+       WHERE provider_id = ?`,
+    )
+    .run(new Date().toISOString(), providerId);
+  return info.changes;
+}
+
 export function deleteAgent(db: SqliteDatabase, id: string): DeleteAgentResult {
   const agent = getAgent(db, id);
   if (agent === undefined) return "missing";

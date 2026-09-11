@@ -999,3 +999,8 @@ NOT a substitute for closing: the handle is the cause, not the timing.
 (2026-09-11, round-87's close-out fix — diagnosed from run 34579011412's
 log: `EPERM, Permission denied` at the afterAll line, both new files, zero
 code-level test failures.)
+
+# 91
+- A compile-clean Rust command can still be a Windows deadlock: `WebviewWindowBuilder::build` inside a SYNC command is tauri's documented hang (the cargo check verifies types, never threading). Every new shell command that creates a window must be `async fn` — and the BrowserPanel now carries a watchdog so the browser's visibility is self-healing even if a new path slips through (R91-B).
+- A delete that "does nothing" may be an honest 409 the UI never taught you to read: before hunting a bug in the DELETE, check what references the row (the seeded default agent blocked OpenRouter deletes for three rounds of owner reports). Force-paths belong at the API with the plain-409 default kept for other callers (R91-A).
+- Tests that pin a UI's disabled-state often hide the real ask: the owner read the always-rendered disabled queue button as "a second send button doing nothing." Ask whether the affordance should EXIST in that state, not just whether it is enabled (R91-F).

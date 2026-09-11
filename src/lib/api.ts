@@ -2741,9 +2741,18 @@ export async function updateProvider(id: string, patch: ProviderPatch): Promise<
   });
 }
 
-/** DELETE /providers/:id → 204 (409 while agents still reference it). */
-export async function deleteProvider(id: string): Promise<void> {
-  await request<void>(`/providers/${encodeURIComponent(id)}`, { method: "DELETE" });
+/** DELETE /providers/:id → 204 (409 while agents still reference it).
+ * R91-A: `force` sends `?force=1` — the server then RESETS every referencing
+ * agent to the no-provider state (providerId/model NULL — the composer asks
+ * for a model on the next send) and deletes the provider anyway. The owner's
+ * v0.88.0 verdict: the OpenRouter delete "was not getting deleted" — the
+ * default agent's reference blocked every attempt with a 409 that read as
+ * "nothing happened". The settings confirm flow now tells the owner exactly
+ * what will be reset BEFORE the click, and sends force. */
+export async function deleteProvider(id: string, force = false): Promise<void> {
+  await request<void>(`/providers/${encodeURIComponent(id)}${force ? "?force=1" : ""}`, {
+    method: "DELETE",
+  });
 }
 
 /** PUT /providers/:id/key — the browser-dev path only; inside Tauri the key
@@ -4042,6 +4051,9 @@ export interface SystemUpdateCheck {
   latest?: string;
   updateAvailable?: boolean;
   releaseUrl?: string;
+  /** R91-E: the release's x64 setup.exe asset (present when the release has
+   * one) — feeds the in-app "Update now" download. */
+  asset?: { url: string; size: number; digest: string | null };
   /** Only meaningful when ok === false: */
   reason?: string;
   error?: string;
@@ -4049,6 +4061,32 @@ export interface SystemUpdateCheck {
 
 export async function fetchSystemUpdates(): Promise<SystemUpdateCheck> {
   return request<SystemUpdateCheck>("/system/updates");
+}
+
+/** R91-E: the in-app update download's LIVE state (single-flight, polled). */
+export interface SystemUpdateDownload {
+  status: "idle" | "downloading" | "verifying" | "ready" | "error";
+  received: number;
+  total: number;
+  path: string | null;
+  version: string | null;
+  error: string | null;
+}
+
+/** R91-E: start streaming the update installer to the sidecar's temp dir
+ * (sha256-verified against the release digest when present). Poll
+ * fetchUpdateDownloadProgress for the live state. */
+export async function startUpdateDownload(body: {
+  url: string;
+  digest?: string | null;
+  version?: string;
+}): Promise<{ ok: boolean; status: string; alreadyRunning?: boolean }> {
+  return request("/system/updates/download", { method: "POST", json: body });
+}
+
+/** R91-E: the live update-download state (the About tab's progress bar). */
+export async function fetchUpdateDownloadProgress(): Promise<SystemUpdateDownload> {
+  return request<SystemUpdateDownload>("/system/updates/download/progress");
 }
 
 /* ── ROUND-66 (R66, B3/B5): the DEDICATED image-analysis (vision) settings ── */

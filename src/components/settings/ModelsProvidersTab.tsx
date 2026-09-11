@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState, type ComponentType } from "react";
+import { useEffect, useMemo, useRef, useState, type ComponentType, type CSSProperties } from "react";
 import { useMutation, useQuery, useQueryClient, type QueryClient } from "@tanstack/react-query";
 import {
   AlertTriangle,
@@ -296,7 +296,14 @@ export interface CapabilityMeta {
   key: string;
   label: string;
   color: string;
-  Icon: ComponentType<{ size?: number | string; className?: string; strokeWidth?: number | string }>;
+  // R91-D: `style` joins the accepted props — the OFF-state icon tints
+  // toward its modality color while the pill itself stays neutral.
+  Icon: ComponentType<{
+    size?: number | string;
+    className?: string;
+    strokeWidth?: number | string;
+    style?: CSSProperties;
+  }>;
   inTitle: string;
   outTitle: string;
 }
@@ -846,7 +853,7 @@ function ProviderDetailPane({
   });
 
   const removeProvider = useMutation({
-    mutationFn: () => deleteProvider(provider.id),
+    mutationFn: () => deleteProvider(provider.id, true),
     onSuccess: () => {
       // ROUND-62 (R62-2b): the provider is GONE — its models-config rows went
       // with it (ON DELETE CASCADE), so the session picker's config family
@@ -857,11 +864,17 @@ function ProviderDetailPane({
       // custom-provider note line survive, and re-adding the provider shows
       // "key stored" on the OLD key after the next sidecar spawn (the
       // keys.rs R82-follow-up TODO, now wired).
+      // R91-A: the delete is FORCED — agents that referenced the provider
+      // were reset server-side to the no-provider state, so the agents cache
+      // is invalidated too (the composer needs to see the null provider to
+      // surface the model picker honestly).
       if (isTauri()) {
         void import("../onboarding/providers-api").then((m) => m.removeProviderKey(provider.id));
       }
       void queryClient.invalidateQueries({ queryKey: ["settings-provider-models"] });
       void queryClient.invalidateQueries({ queryKey: ["provider-models-config"] });
+      void queryClient.invalidateQueries({ queryKey: ["agents"] });
+      void queryClient.invalidateQueries({ queryKey: ["session"] });
       onDeleted();
     },
     // R90-A1: the failure lands INLINE in the Danger zone (see deleteError)
@@ -1491,8 +1504,9 @@ function ProviderDetailPane({
               data-testid="delete-used-by-warning"
             >
               In use by {agentsUsingProvider.length} agent{agentsUsingProvider.length === 1 ? "" : "s"}:{" "}
-              {agentsUsingProvider.map((a) => a.name).join(", ")} — reassign or delete them
-              first, or the delete will be refused.
+              {agentsUsingProvider.map((a) => a.name).join(", ")} — confirming the delete resets
+              {" "}{agentsUsingProvider.length === 1 ? "it" : "them"} to pick a new model (the chat's model picker
+              will ask on the next send).
             </p>
           ) : null}
           {/* R90-A1: the inline failure — exactly at the click site, in the
@@ -1535,7 +1549,12 @@ function ProviderDetailPane({
             if (!confirmDelete) e.currentTarget.style.background = "transparent";
           }}
         >
-          <Trash2 size={12} /> {confirmDelete ? "Confirm delete" : "Delete provider"}
+          <Trash2 size={12} />{" "}
+          {confirmDelete
+            ? agentsUsingProvider.length > 0
+              ? `Confirm delete (reset ${agentsUsingProvider.length})`
+              : "Confirm delete"
+            : "Delete provider"}
         </button>
       </div>
     </div>
@@ -2238,12 +2257,25 @@ function ModelCard({
 
   const inChips = row !== null ? capabilityChips(row, "in") : [];
   const outChips = row !== null ? capabilityChips(row, "out") : [];
-  const details: Array<[string, string]> = [
-    ["Context", m.contextWindow !== null ? formatTokenCount(m.contextWindow) : "—"],
-    ["Input", m.inputPricePerMtok !== null ? `$${m.inputPricePerMtok}/M` : "—"],
-    ["Output", m.outputPricePerMtok !== null ? `$${m.outputPricePerMtok}/M` : "—"],
-    ["Cache read", m.inputPriceCachedPerMtok !== null ? `$${m.inputPriceCachedPerMtok}/M` : "—"],
-  ];
+  // R91-C: the STAT FACTS — only the CONFIGURED ones (null = unknown =
+  // absent). The section's shape follows the count (the owner: "If nothing
+  // is added … it would not show the whole complete section at all. If only
+  // a few things are added … the context would show on the right side of
+  // the model ID itself"): 0 → nothing; a few → compact chips beside the
+  // model id; most → the full details band.
+  const statFacts: Array<{ label: string; value: string; short: string }> = [];
+  if (m.contextWindow !== null) {
+    statFacts.push({ label: "Context", value: formatTokenCount(m.contextWindow), short: `${formatTokenCount(m.contextWindow)} ctx` });
+  }
+  if (m.inputPricePerMtok !== null) {
+    statFacts.push({ label: "Input", value: `$${m.inputPricePerMtok}/M`, short: `$${m.inputPricePerMtok} in` });
+  }
+  if (m.outputPricePerMtok !== null) {
+    statFacts.push({ label: "Output", value: `$${m.outputPricePerMtok}/M`, short: `$${m.outputPricePerMtok} out` });
+  }
+  if (m.inputPriceCachedPerMtok !== null) {
+    statFacts.push({ label: "Cache read", value: `$${m.inputPriceCachedPerMtok}/M`, short: `$${m.inputPriceCachedPerMtok} cache` });
+  }
 
   return (
     <div className="flex flex-col">
@@ -2263,9 +2295,15 @@ function ModelCard({
         }}
       >
       {/* ── the identity row (the "top half" — stays exactly as it is when
-          the test section expands below) ── */}
+          the test section expands below). R91-C (the owner: "The inputs
+          which the model supports should be shown on the right side of the
+          model name"): the capability ICON chips moved from their own row
+          BELOW the name to INLINE on the name's RIGHT — one glance row:
+          name · badges · [in] → [out]. At tight widths the flex-wrap keeps
+          the chips on their own line automatically. ── */}
       <div className="px-4 py-3 flex flex-wrap items-center gap-3">
-        {/* LEFT: identity — name, badges, capability ICON chips, the id */}
+        {/* LEFT: identity — name, badges, capability ICON chips (right of
+            the name), the id + the FEW-STATS chips on its row */}
         <div className="min-w-0 flex-1 flex flex-col gap-1.5">
           <div className="flex items-center gap-1.5 min-w-0 flex-wrap">
             <span
@@ -2300,28 +2338,25 @@ function ModelCard({
                 {m.sizeLabel}
               </span>
             )}
-          </div>
-          {/* the capability ICON chips (R89-C3 → R90-A2: colored SVG badges,
-              ICON-ONLY — the owner: "I was hoping for them to only show the
-              images, the SVG logos"; the label survives as the tooltip +
-              aria-label), IN group, then the ARROW (the owner: "an arrow
-              going from the inputs to the outputs" — the transformation
-              reads visually), then the OUT group. */}
-          {m.configured && (inChips.length > 0 || outChips.length > 0) && (
-            <div className="flex items-center gap-1 min-w-0 flex-wrap">
-              {inChips.map((chip) => (
-                <span
-                  key={`in:${chip.label}`}
-                  className="shrink-0 inline-grid place-items-center h-[19px] w-[19px] rounded-[7px]"
-                  style={{ background: withAlpha(chip.color, 0.13), color: chip.color }}
-                  title={chip.title}
-                  role="img"
-                  aria-label={chip.title}
-                >
-                  <chip.Icon size={11} strokeWidth={2.4} aria-hidden />
-                </span>
-              ))}
-              {outChips.length > 0 && (
+            {/* the capability ICON chips (R89-C3 → R90-A2 → R91-C: colored SVG
+                badges, ICON-ONLY, INLINE on the name's right — the owner:
+                "only show the images, the SVG logos"; the label survives as
+                the tooltip + aria-label), IN group, then the ARROW (the
+                transformation reads visually), then the OUT group. */}
+            {m.configured && inChips.length > 0 && outChips.length > 0 && (
+              <span className="shrink-0 inline-flex items-center gap-1 min-w-0 flex-wrap" aria-label="Input capabilities">
+                {inChips.map((chip) => (
+                  <span
+                    key={`in:${chip.label}`}
+                    className="shrink-0 inline-grid place-items-center h-[19px] w-[19px] rounded-[7px]"
+                    style={{ background: withAlpha(chip.color, 0.13), color: chip.color }}
+                    title={chip.title}
+                    role="img"
+                    aria-label={chip.title}
+                  >
+                    <chip.Icon size={11} strokeWidth={2.4} aria-hidden />
+                  </span>
+                ))}
                 <span
                   className="shrink-0 mx-0.5 inline-grid place-items-center"
                   title="inputs → outputs"
@@ -2333,28 +2368,47 @@ function ModelCard({
                     style={{ color: withAlpha(styles.textSecondary, 0.65) }}
                   />
                 </span>
-              )}
-              {outChips.map((chip) => (
-                <span
-                  key={`out:${chip.label}`}
-                  className="shrink-0 inline-grid place-items-center h-[19px] w-[19px] rounded-[7px]"
-                  style={{
-                    background: withAlpha(chip.color, 0.09),
-                    color: withAlpha(chip.color, 0.95),
-                    boxShadow: `inset 0 0 0 1px ${withAlpha(chip.color, 0.3)}`,
-                  }}
-                  title={chip.title}
-                  role="img"
-                  aria-label={chip.title}
-                >
-                  <chip.Icon size={11} strokeWidth={2.4} aria-hidden />
-                </span>
-              ))}
-            </div>
-          )}
-          <span className="truncate font-mono text-[10px]" style={{ color: styles.textTertiary }} title={m.modelId}>
-            {m.modelId}
-          </span>
+                {outChips.map((chip) => (
+                  <span
+                    key={`out:${chip.label}`}
+                    className="shrink-0 inline-grid place-items-center h-[19px] w-[19px] rounded-[7px]"
+                    style={{
+                      background: withAlpha(chip.color, 0.09),
+                      color: withAlpha(chip.color, 0.95),
+                      boxShadow: `inset 0 0 0 1px ${withAlpha(chip.color, 0.3)}`,
+                    }}
+                    title={chip.title}
+                    role="img"
+                    aria-label={chip.title}
+                  >
+                    <chip.Icon size={11} strokeWidth={2.4} aria-hidden />
+                  </span>
+                ))}
+              </span>
+            )}
+          </div>
+          {/* the model id + (R91-C) the FEW-STATS chips on its right — when
+              only one or two stats are configured they ride INLINE here
+              (compact mono chips) instead of the full details band below. */}
+          <div className="flex items-center gap-2 min-w-0 flex-wrap">
+            <span className="truncate font-mono text-[10px]" style={{ color: styles.textTertiary }} title={m.modelId}>
+              {m.modelId}
+            </span>
+            {m.configured && statFacts.length > 0 && statFacts.length <= 2 && (
+              <span className="flex items-center gap-1.5 min-w-0 flex-wrap" data-testid="model-inline-stats">
+                {statFacts.map((fact) => (
+                  <span
+                    key={fact.label}
+                    className="shrink-0 px-1.5 py-0.5 rounded-full font-mono text-[9.5px] font-bold"
+                    style={{ background: styles.subtle, color: styles.textSecondary }}
+                    title={`${fact.label}: ${fact.value}`}
+                  >
+                    {fact.short}
+                  </span>
+                ))}
+              </span>
+            )}
+          </div>
         </div>
 
         {/* RIGHT: the actions (R87's uniform icon trio) */}
@@ -2387,37 +2441,40 @@ function ModelCard({
         )}
       </div>
 
-      {/* ── R90-A2: the DETAILS BAND — fused into the SAME section (no own
-          border, no margin: ONE hairline separates it from the identity row
-          above; the owner: "it should be a part of the model section itself").
-          Context / input / output / cache read, one grid, vertical hairlines
-          between the cells. */}
-      <div
-        className="grid grid-cols-2 min-[420px]:grid-cols-4"
-        style={{ borderTop: `1px solid ${withAlpha(styles.border, 0.55)}` }}
-        data-testid="model-details-band"
-      >
-        {details.map(([label, value], i) => (
-          <div
-            key={label}
-            className="px-3 py-1.5 flex flex-col gap-0"
-            style={{
-              background: styles.isDark ? "rgba(255,255,255,0.012)" : "rgba(0,0,0,0.006)",
-              ...(i > 0 ? { borderLeft: `1px solid ${withAlpha(styles.border, 0.5)}` } : {}),
-            }}
-          >
-            <span className="text-[8.5px] font-bold uppercase tracking-widest" style={{ color: styles.textTertiary }}>
-              {label}
-            </span>
-            <span
-              className="font-mono text-[11px] font-bold"
-              style={{ color: value === "—" ? styles.textTertiary : styles.text }}
+      {/* ── R91-C: the DETAILS BAND — conditional. The owner: "If nothing is
+          added (for example, no context is added, no input prices are added,
+          no output is added, or no cache is routed), then it would not show
+          the whole complete section at all." statFacts counts the CONFIGURED
+          values: 0 → no band; 1–2 → the compact chips beside the model id
+          (rendered in the identity row above) and NO band; 3+ → the full
+          fused band (only the CONFIGURED cells — no "—" placeholders, the
+          honest "what is set is what you see"). One border, one background
+          with the identity row; a hairline separates them (R90-A2). */}
+      {statFacts.length >= 3 ? (
+        <div
+          className="grid grid-cols-2 min-[420px]:grid-cols-4"
+          style={{ borderTop: `1px solid ${withAlpha(styles.border, 0.55)}` }}
+          data-testid="model-details-band"
+        >
+          {statFacts.map((fact, i) => (
+            <div
+              key={fact.label}
+              className="px-3 py-1.5 flex flex-col gap-0"
+              style={{
+                background: styles.isDark ? "rgba(255,255,255,0.012)" : "rgba(0,0,0,0.006)",
+                ...(i > 0 ? { borderLeft: `1px solid ${withAlpha(styles.border, 0.5)}` } : {}),
+              }}
             >
-              {value}
-            </span>
-          </div>
-        ))}
-      </div>
+              <span className="text-[8.5px] font-bold uppercase tracking-widest" style={{ color: styles.textTertiary }}>
+                {fact.label}
+              </span>
+              <span className="font-mono text-[11px] font-bold" style={{ color: styles.text }}>
+                {fact.value}
+              </span>
+            </div>
+          ))}
+        </div>
+      ) : null}
       </div>
       {/* ── end of the merged model section (R90-A2) ── */}
 
@@ -3083,10 +3140,17 @@ function draftFromPrefill(prefill: ModelAddPrefill): ModelConfigDraft {
   };
 }
 
-/** ROUND-87 (R87) → R89-C3: the CAPABILITY CHIP — a clean on/off pill with
- * the modality's OWN theme color + SVG icon (accent-filled when on, bordered
- * when off). Module level, NOT inside the dialog — a component defined in
- * render remounts its subtree on every keystroke (the classic anti-pattern). */
+/** ROUND-87 (R87) → R89-C3 → R91-D: the CAPABILITY CHIP — an on/off pill
+ * with the modality's OWN theme color + SVG icon. R91-D (the owner: "the
+ * option to add the input capabilities was not highlighted properly. They
+ * were not as good as they could be"): the states now read at a glance —
+ * ON is a FILLED, saturated pill in the modality's color with a check
+ * badge; OFF is a NEUTRAL interactive pill (the old off-state kept a faded
+ * tint of the modality color, which read as a DISABLED ghost —
+ * indistinguishable from un-clickable). Hover + cursor make every chip's
+ * clickability explicit. Module level, NOT inside the dialog — a component
+ * defined in render remounts its subtree on every keystroke (the classic
+ * anti-pattern). */
 function CapChip({
   meta,
   on,
@@ -3103,6 +3167,8 @@ function CapChip({
   testId: string;
 }) {
   const { color, Icon, label } = meta;
+  const styles = useThemeStyles();
+  const [hover, setHover] = useState(false);
   return (
     <button
       type="button"
@@ -3111,16 +3177,34 @@ function CapChip({
       disabled={locked}
       title={title}
       data-testid={testId}
-      className="h-8 px-3 rounded-full text-[11.5px] font-bold border-[1.5px] transition-all shrink-0 disabled:cursor-default flex items-center gap-1.5"
-      style={{
-        borderColor: on ? color : withAlpha(color, 0.35),
-        background: on ? withAlpha(color, 0.16) : "transparent",
-        color: on ? color : withAlpha(color, 0.65),
-        opacity: locked ? 0.85 : 1,
-      }}
+      onMouseEnter={() => setHover(true)}
+      onMouseLeave={() => setHover(false)}
+      className="h-8 px-3 rounded-full text-[11.5px] font-bold border-[1.5px] transition-all shrink-0 disabled:cursor-default flex items-center gap-1.5 cursor-pointer"
+      style={
+        on
+          ? {
+              // ON — the modality's color, fully expressed: saturated fill,
+              // solid color border, white icon+label.
+              borderColor: color,
+              background: color,
+              color: "#ffffff",
+              boxShadow: `0 2px 8px ${withAlpha(color, 0.35)}`,
+              opacity: locked ? 0.85 : 1,
+            }
+          : {
+              // OFF — NEUTRAL (the interactive idle): theme border + text so
+              // it never reads as a disabled ghost, the modality's color
+              // arriving on HOVER as the promise of the click.
+              borderColor: hover ? withAlpha(color, 0.55) : styles.border,
+              background: hover ? withAlpha(color, 0.1) : "transparent",
+              color: styles.textSecondary,
+              opacity: locked ? 0.85 : 1,
+            }
+      }
     >
-      <Icon size={12} strokeWidth={2.25} aria-hidden />
+      <Icon size={12} strokeWidth={2.25} aria-hidden style={on ? undefined : { color: withAlpha(color, 0.8) }} />
       {label}
+      {on ? <Check size={10} strokeWidth={3} aria-hidden style={{ marginLeft: -2 }} /> : null}
     </button>
   );
 }

@@ -633,13 +633,23 @@ export function Composer({
               aria-label="Continue from where you left off"
               title="Send another message to resume the stopped response"
               data-continue-button
-              className="h-8 px-3 rounded-xl flex items-center gap-1.5 shrink-0 border text-[11.5px] font-semibold transition-colors"
+              // R91-F (the owner: "The continue button could be minimized
+              // too. It could be made smaller to adjust for the screen
+              // size"): at narrow container widths the LABEL collapses
+              // (max-width + opacity, animated like the model pill's tiers)
+              // and the button becomes ICON-ONLY — the tooltip keeps the
+              // full meaning; below that even the horizontal padding
+              // shrinks a notch so the actions row never crowds the
+              // selectors.
+              className="h-8 px-3 @max-[460px]:px-2 rounded-xl flex items-center gap-1.5 shrink-0 border text-[11.5px] font-semibold transition-colors"
               style={{ borderColor: styles.border, background: styles.subtle, color: styles.textSecondary }}
               onMouseEnter={(e) => (e.currentTarget.style.background = styles.subtleHover)}
               onMouseLeave={(e) => (e.currentTarget.style.background = styles.subtle)}
             >
-              <Play size={11} />
-              Continue
+              <Play size={11} className="shrink-0" />
+              <span className="max-w-[120px] @max-[460px]:max-w-0 @max-[460px]:opacity-0 @max-[460px]:-ml-0.5 overflow-hidden whitespace-nowrap transition-all duration-200">
+                Continue
+              </span>
             </button>
           ) : null}
           {busy ? (
@@ -664,8 +674,13 @@ export function Composer({
                   above); the message POSTs to /sessions/:id/queue and
                   auto-delivers right after the current step. Only rendered
                   when the panel wired onQueue (live mode) — fixture mode
-                  keeps the busy composer Stop-only exactly as before. */}
-              {onQueue !== undefined ? (
+                  keeps the busy composer Stop-only exactly as before.
+                  R91-F (the owner: "That send message button should only
+                  appear when I have typed some message in the search bar"):
+                  the button is GONE until there is text — the pre-R91
+                  disabled-but-visible ghost next to Stop read as a second
+                  send button doing nothing. */}
+              {onQueue !== undefined && input.trim() !== "" ? (
                 <button
                   type="button"
                   onClick={queueSend}

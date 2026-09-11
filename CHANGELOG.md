@@ -19,6 +19,58 @@ seams), external plugin ctx enrichment, the lessons-ledger affordance,
 ratings-driven prompt tuning, and the standing items (edit-linting, installer
 code-signing, the Files-tab polish, agent web-app-testing tools).
 
+## [0.89.0] - 2026-09-11 — the R91 third-walkthrough round
+
+The owner's third end-to-end walkthrough, answered: the in-app updater, the
+OpenRouter delete unblock, the browser's blank-render deep fix, and the
+long-tail UI polish.
+
+### Added — update from within the app (the headline)
+- **"Update now" in Settings → About**: when a newer release is published,
+the app downloads the verified installer itself (a live MB progress bar),
+checks it against GitHub's sha256 digest, launches it, and closes — the
+setup wizard takes over from there. No browser, no launcher run, no
+downloading by hand. (The launcher's `ACUTE.bat update` and the Releases
+page remain as the alternative paths.)
+
+### Fixed — the OpenRouter delete refusal
+- Deleting a provider that agents still reference no longer bounces
+silently: the confirm flow now says exactly what will happen ("In use by N
+agents — confirming the delete resets them to pick a new model") and the
+delete resets those agents to the model picker state. The seeded default
+agent referencing OpenRouter was why that provider alone "was not getting
+deleted" while NVIDIA and custom gateways deleted fine.
+
+### Fixed — the embedded browser's blank render (defense in depth)
+- The menu-overlay windows are created off the main thread now (the exact
+sync-command window-creation pattern tauri documents as the Windows
+deadlock — the class that could wedge the browser invisible while the UI
+kept working).
+- A webview shown is always shown AT its intended rectangle (the last
+commanded bounds re-assert with every show).
+- A visibility watchdog re-asserts (or recreates) the active tab's webview
+every 2 seconds — a missed show heals inside one period, forever.
+- The pop-out and open-in-system-browser buttons answer honestly when the
+shell is busy (a 6-second timeout with the error card, never a dead click).
+
+### Changed — the model card's honest shape
+- The capability icons (inputs → outputs) ride on the model NAME's right —
+one glance row.
+- The details section is conditional: nothing configured → no section at
+all; one or two values → compact chips beside the model ID; three or more
+→ the full band with only the configured cells (no placeholder dashes).
+
+### Changed — the composer + the to-do float under squeeze
+- The queue-send affordance appears only once text is typed (Stop stays
+alone on an empty composer); Continue collapses to its icon below 460px.
+- The floating to-do list measures the CHAT column (never the viewport),
+and its task text wraps to two lines on narrow columns instead of being
+cut off.
+- The add-model dialog's capability pills read at a glance: ON is a filled
+pill with a check; OFF is a clearly clickable neutral pill.
+- Token totals render in millions (300M, 1.5M) on the dashboard, the usage
+page, and everywhere the shared formatters feed.
+
 ## [0.88.0] - 2026-09-11 — the R90 browser-native round
 
 The owner's second end-to-end walkthrough, answered: menus finally float ON

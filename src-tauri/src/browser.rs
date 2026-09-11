@@ -113,6 +113,37 @@ fn tab_label(tab_id: &str) -> String {
     format!("{TAB_LABEL_PREFIX}{tab_id}")
 }
 
+/// R91-B2: the LAST BOUNDS every tab's webview was told to occupy. A
+/// webview is BORN at 1×1 logical px, HIDDEN — the frontend's bounds sync
+/// is what positions it over the panel's page area. If that sync ever
+/// races a hide/show transition (a guard flap, an activation churn, a
+/// wedged invoke), the webview can end up SHOWN at its degenerate 1×1
+/// birth bounds — alive (evals answer) but invisible (the owner's v0.88.0
+/// field report: "nothing was being shown at all"). `browser_tab_set_bounds`
+/// records every commanded geometry here, and `browser_tab_set_visible
+/// (true)` RE-ASSERTS the recorded bounds in the same breath as the show,
+/// so a show can never land without its geometry. Cleared when the tab
+/// closes. (The map lives only in memory — a fresh app boot re-creates
+/// every webview at 1×1 anyway, and the panel's first sync re-positions.)
+static TAB_LAST_BOUNDS: std::sync::LazyLock<std::sync::Mutex<std::collections::HashMap<String, (f64, f64, f64, f64)>>> =
+    std::sync::LazyLock::new(|| std::sync::Mutex::new(std::collections::HashMap::new()));
+
+/// Records `tab_id`'s commanded bounds (clamped to sane positives — the
+/// same floor `browser_tab_set_bounds` itself applies).
+fn remember_tab_bounds(tab_id: &str, x: f64, y: f64, w: f64, h: f64) {
+    if let Ok(mut map) = TAB_LAST_BOUNDS.lock() {
+        map.insert(
+            tab_id.to_string(),
+            (
+                x,
+                y,
+                if w.is_finite() && w >= 1.0 { w } else { 1.0 },
+                if h.is_finite() && h >= 1.0 { h } else { 1.0 },
+            ),
+        );
+    }
+}
+
 /// Parses and validates a URL for the native tabs: http/https only. The
 /// child webviews render arbitrary remote pages; other schemes (file:, data:,
 /// tauri:) would escape that contract and are rejected with a message the
@@ -531,8 +562,20 @@ fn menu_overlay_create(
 /// risk on the very first + click would have reinforced exactly the
 /// "overlay, not part of the app" feel this round retires). Failure is the
 /// caller's problem to ignore — the sidebar falls back to the DOM popover.
+///
+/// R91-B1: THIS COMMAND IS `async` — the R90-C2 version was sync, and a SYNC
+/// command runs on the MAIN THREAD where `WebviewWindowBuilder::build` is the
+/// DOCUMENTED Windows deadlock (tauri's own WebviewWindowBuilder docs: "On
+/// Windows, this function deadlocks when used in a synchronous command…
+/// You should use async commands and separate threads when creating
+/// windows" — the same lesson browser.rs already learned for
+/// `open_browser_window` in R58-b and `browser_tab_create` in R50-a).
+/// v0.88.0 shipped the sync version; on the owner's machine the browser
+/// panel rendered nothing while the UI kept working — the exact partial
+/// wedge this deadlock class produces. Async commands run on the tokio
+/// runtime, off the main thread: the documented, safe path.
 #[tauri::command]
-pub fn menu_overlay_prewarm(app: AppHandle) -> Result<(), String> {
+pub async fn menu_overlay_prewarm(app: AppHandle) -> Result<(), String> {
     if app.get_webview_window(MENU_OVERLAY_LABEL).is_some() {
         return Ok(());
     }
@@ -548,8 +591,12 @@ pub fn menu_overlay_prewarm(app: AppHandle) -> Result<(), String> {
 /// (first-call fallback). The payload is a JSON string the page renders;
 /// it is BOTH stashed (a page still mounting reads the stash) and emitted
 /// (a live page re-renders in place).
+///
+/// R91-B1: `async` for the same deadlock reason as `menu_overlay_prewarm`
+/// above — the create-on-first-call branch builds a window, and a sync
+/// command doing that on the main thread is the documented Windows hang.
 #[tauri::command]
-pub fn menu_overlay_show(
+pub async fn menu_overlay_show(
     app: AppHandle,
     x: f64,
     y: f64,
@@ -584,7 +631,10 @@ pub fn menu_overlay_show(
 }
 
 /// `menu_overlay_hide()` — hide the menu overlay window (it stays alive for
-/// the next open). Not-found is Ok (idempotent).
+/// the next open). Not-found is Ok (idempotent). Stays sync by necessity —
+/// hide() only ever dispatches a fire-and-forget window message, never a
+/// build (see the R91-B1 notes on its siblings for why that distinction
+/// matters).
 #[tauri::command]
 pub fn menu_overlay_hide(app: AppHandle) -> Result<(), String> {
     if let Some(existing) = app.get_webview_window(MENU_OVERLAY_LABEL) {
@@ -838,6 +888,16 @@ pub async fn browser_tab_create(
     Ok(())
 }
 
+/// `browser_tab_exists(tab_id)` — does this tab's native webview exist
+/// RIGHT NOW? An in-memory manager lookup only (no dispatcher round-trip,
+/// no main-thread work) — the R91-B3 frontend watchdog can poll this cheaply
+/// to distinguish "webview never got created" (→ recreate it) from "webview
+/// created but wedged" (→ the re-assert heals it / the timeout surfaces it).
+#[tauri::command]
+pub fn browser_tab_exists(app: AppHandle, tab_id: String) -> bool {
+    find_tab_webview(&app, &tab_id).is_some()
+}
+
 /// `browser_tab_navigate(tab_id, url)` — navigate the tab's existing webview.
 /// Unlike `browser_tab_create` this is NOT idempotent-create: it errors when
 /// the tab has no webview yet (the frontend uses create for that).
@@ -856,6 +916,10 @@ pub fn browser_tab_navigate(app: AppHandle, tab_id: String, url: String) -> Resu
 /// of the main webview (getBoundingClientRect), because the main webview fills
 /// the whole window at scale factor 1. Width/height are clamped to ≥ 1 so a
 /// zero-sized measurement can never create a degenerate webview.
+///
+/// R91-B2: every commanded geometry is recorded (see `TAB_LAST_BOUNDS`)
+/// so a later `browser_tab_set_visible(true)` can re-assert it — a show
+/// without geometry is how a webview ends up visible-but-1×1.
 #[tauri::command]
 pub fn browser_tab_set_bounds(
     app: AppHandle,
@@ -867,12 +931,15 @@ pub fn browser_tab_set_bounds(
 ) -> Result<(), String> {
     let webview = find_tab_webview(&app, &tab_id)
         .ok_or_else(|| format!("no native webview for tab \"{tab_id}\""))?;
+    let safe_w = w.max(1.0);
+    let safe_h = h.max(1.0);
     webview
         .set_position(LogicalPosition::new(x, y))
         .map_err(|e| format!("set_position tab \"{tab_id}\" failed: {e}"))?;
     webview
-        .set_size(LogicalSize::new(w.max(1.0), h.max(1.0)))
+        .set_size(LogicalSize::new(safe_w, safe_h))
         .map_err(|e| format!("set_size tab \"{tab_id}\" failed: {e}"))?;
+    remember_tab_bounds(&tab_id, x, y, safe_w, safe_h);
     Ok(())
 }
 
@@ -881,6 +948,15 @@ pub fn browser_tab_set_bounds(
 /// sidebar collapsed): the webview and its session STAY ALIVE. Not-found is
 /// Ok (idempotent) — hiding a tab that never created its webview is a no-op,
 /// and the unmount cleanup must never crash on a fresh tab.
+///
+/// R91-B2: a SHOW re-asserts the tab's LAST COMMANDED BOUNDS immediately
+/// after the visible flag lands. A webview born at 1×1 that gets shown
+/// before (or without) its bounds sync renders nothing — alive but
+/// invisible. Re-applying the remembered geometry with the show closes
+/// that window entirely: whenever the webview is visible, it is visible
+/// AT its intended rectangle. (Position/size dispatchers are fire-and-forget
+/// window messages — safe to call from this sync command without touching
+/// the main thread's build path.)
 #[tauri::command]
 pub fn browser_tab_set_visible(
     app: AppHandle,
@@ -895,7 +971,16 @@ pub fn browser_tab_set_visible(
     } else {
         webview.hide()
     };
-    res.map_err(|e| format!("set_visible({visible}) tab \"{tab_id}\" failed: {e}"))
+    res.map_err(|e| format!("set_visible({visible}) tab \"{tab_id}\" failed: {e}"))?;
+    if visible {
+        if let Ok(map) = TAB_LAST_BOUNDS.lock() {
+            if let Some(&(x, y, w, h)) = map.get(&tab_id) {
+                let _ = webview.set_position(LogicalPosition::new(x, y));
+                let _ = webview.set_size(LogicalSize::new(w, h));
+            }
+        }
+    }
+    Ok(())
 }
 
 /// `browser_tab_go(tab_id, direction)` — back / forward / reload through the
@@ -1068,9 +1153,14 @@ pub fn browser_tab_url(app: AppHandle, tab_id: String) -> Result<String, String>
 /// `browser_tab_close(tab_id)` — destroy the tab's webview. The shared profile
 /// (cookies, logins) survives on disk; only the live tab session is dropped.
 /// Not-found is Ok — closing twice must be a no-op, and the tab-close reaper
-/// on the frontend races panel unmounts.
+/// on the frontend races panel unmounts. R91-B2: the remembered bounds go
+/// with it (a re-created webview starts at 1×1 and gets fresh bounds from
+/// the panel's sync anyway — keeping a stale rectangle around buys nothing).
 #[tauri::command]
 pub fn browser_tab_close(app: AppHandle, tab_id: String) -> Result<(), String> {
+    if let Ok(mut map) = TAB_LAST_BOUNDS.lock() {
+        map.remove(&tab_id);
+    }
     if let Some(webview) = find_tab_webview(&app, &tab_id) {
         webview
             .close()

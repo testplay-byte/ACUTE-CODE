@@ -3,7 +3,7 @@
   "product": {
     "name": "Acute",
     "tagline": "Local-first multi-agent engineering workbench",
-    "version": "0.87.0",
+    "version": "0.89.0",
     "availability": "Private build — not yet distributed",
     "chips": [
       "Windows desktop",
@@ -263,18 +263,23 @@
       "date": "2026-09-11",
       "label": "R90 — the browser-native round: the owner's second walkthrough answered, shipped as v0.88.0. The MENU OVERLAY WINDOW (menus float on top of the LIVE browser — the headline verdict), the agent hands v2 (always-visible cursor, human path planner, real event trail, visible press pulse, tap→1s→type→~1s→Enter), the delete-provider honesty (inline 409 + the OS-key purge — the R82 TODO closed), the wizard's persistence (model row + last-used default + the seeded agent re-pointed), the model card (icon badges + the arrow + one merged section), the launcher PAT home-path fix (the update check works after acute.bat), and the floating-webview race fix. The full pipeline green: lint, both typechecks, 2,888 frontend + 1,894 agent-core tests, the 4-page build (menu-overlay.html rides as the 4th vite entry), 12/12 e2e, the license audit, 16/16 launcher python tests.",
       "state": "done"
+    },
+    {
+      "date": "2026-09-11",
+      "label": "R91 — the third-walkthrough round, shipped as v0.89.0. The IN-APP UPDATER (Update now downloads the sha256-verified installer in-app, launches it, and closes — the owner's headline ask), the OpenRouter delete unblock (the default agent's reference was the silent 409 — force now resets the referencing agents to the model-picker state), the browser blank-render deep fix (async menu-overlay window creation killing tauri's documented sync-command deadlock class + show re-asserts bounds + a 2s visibility watchdog that recreates or re-asserts the webview + honest 6s affordance timeouts), the model card's right-side identity (capability icons inline on the name; the details section conditional on what is actually configured — none/compact-chips/full-band), the CapChip on/off states, the queue-send gating (only with text), the minimized Continue, the TodoFloat column-relative cap + two-line wrap, and the token million tier (300M). Full pipeline green: lint, both typechecks, the 2,899-test root suite, 12/12 e2e, license audit, windows-target cargo check.",
+      "state": "done"
     }
   ],
   "quality": {
-    "ci": "GREEN — R90 push 5e4c21a → CI run 34634030474 SUCCESS (the browser-native round: lint, typechecks, the 2,888-test root suite, the 4-page build, e2e, license audit, cargo check, docs check, the 16 launcher python tests) + the Release run 34634033426 SUCCESS; v0.88.0 tagged, built, and PUBLISHED (both assets verified: ACUTE-CODE_0.88.0_x64-setup.exe + acute-launcher-kit-v0.88.0.zip; the release marked latest; zero drafts remain). The three intermediate red runs are recorded honestly: the tagged 912e0b4 + the docs-only 3971ed2 failed CI on (1) the launcher's panel() crashing on the runner's cp1252 console — a REAL legacy-codepage bug fixed in eafd91b (stdout/stderr reconfigured to UTF-8/replace) — and (2) two Rust compile slips in the menu-overlay code the sandbox's tool-less state could not catch (a doc-comment on a fn parameter + the WebviewWindowBuilder generics/arity) fixed in 5e4c21a, which ALSO brings the local windows-target cargo check (rustup + an llvm-rc shim) into the sandbox so Rust is verifiable before push from now on.",
+    "ci": "PENDING — R91 (the third-walkthrough round) pushed; the close-out convention fills this from the Actions API once the run settles.",
     "suites": [
       {
         "name": "frontend",
-        "tests": 946
+        "tests": 994
       },
       {
         "name": "agent-core",
-        "tests": 1867
+        "tests": 1901
       },
       {
         "name": "sidecar e2e",
@@ -299,8 +304,8 @@
   ],
   "plan": {
     "current": {
-      "title": "R90 — the browser-native round",
-      "detail": "The owner's second end-to-end walkthrough, shipped as v0.88.0. (A) The settings cluster: the delete-provider refusal now renders INLINE in the Danger zone (the old dead-click) with a pre-armed 'in use by N agents' warning + the OS-stored key purged on delete; the model card is icon-only capability badges with an inputs→outputs ARROW and ONE merged highlighted section; the setup wizard persists the MODEL (context/max-output/pricing), the global last-used default, and re-points the seeded agent; new chats keep the last-used model. (B) The launcher's GitHub token lives in the USER HOME (migrated from the kit folder) and reaches the app through the environment — the update check finally works after acute.bat. (C) The browser's native feel: the sidebar's quick menu + sub-agent picker render in an OWNED transparent OS window ABOVE the live browser (the 'browser paused while the menu is open' retirement — the R60-D hide stays only as the web-mode fallback), and the create-after-unmount race that floated the old chat's webview is closed. (D) The agent hands v2: the cursor is ALWAYS visible (the webview's initialization script paints it at every page load), moves with overshoot-and-return + hesitation + a real pointermove/hover trail (dropdowns open), clicks visibly (a press pulse + a held duration), and types at a human pace (tap → ~1s → 150 WPM word-by-word → ~1s → Enter)."
+      "title": "R91 — the third-walkthrough round",
+      "detail": "The owner's third end-to-end walkthrough, shipped as v0.89.0. (A) THE IN-APP UPDATER: Settings → About → Update now downloads the release's setup.exe inside the app (streamed with a live progress bar, sha256-verified against GitHub's own digest, host-gated so the PAT-bearing fetch can never proxy anything else), then hands the verified file to the Rust shell's run_update_installer which launches it and closes the app — the setup wizard takes over, no browser, no launcher run. (B) The OpenRouter delete unblock: the default agent's providerId reference was the silent 409 behind 'it apparently was not getting deleted' — the confirm flow now explains the reset and force=1 deletes anyway, resetting referencing agents to the model-picker state. (C) The browser blank-render deep fix, defense in depth: the menu-overlay window creation moved off the main thread (tauri's documented sync-command deadlock class — the v0.88.0 wedge), a show now re-asserts the last commanded bounds, a 2s visibility watchdog recreates or re-asserts the active webview, and the pop-out/open-external affordances carry honest 6s timeouts. (D) The model card's right-side identity (capability icons inline with the name; the details section conditional — none / compact chips / full band) + the dialog's CapChip on/off states. (E) The composer's queue-send gating (only with text) + the minimized Continue, the TodoFloat's column-relative cap + two-line wrap, and the token million tier (300M)."
     },
     "upcoming": [
       {
@@ -325,6 +330,6 @@
       "Quality over speed — every round verified before push"
     ]
   },
-  "round": "90",
+  "round": "91",
   "ci": null
 }

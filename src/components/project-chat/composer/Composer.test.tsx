@@ -1834,7 +1834,8 @@ describe("Composer: context donut (owner spec G)", () => {
     // Big donut summary (ROUND-83): "~% projected" + used / window tokens
     // · estimated + the MEASURED line + the model.
     expect(popover.textContent).toContain("~42% projected");
-    expect(popover.textContent).toContain("420k / 1000k tokens · estimated");
+    // R91-H: the million tier — a 1,000,000-token window renders as 1m.
+    expect(popover.textContent).toContain("420k / 1m tokens · estimated");
     expect(popover.textContent).toContain("390k measured at last request");
     expect(popover.textContent).toContain("openrouter/ox-alpha");
     // The budget line (the compaction-line tick + the output reserve) and
@@ -2347,7 +2348,10 @@ describe("Composer: the action anchor + queue-send (ROUND-78 R78-B/R78-D)", () =
     await renderBusyComposer();
 
     const stop = screen.getByRole("button", { name: "Stop generation" }) as HTMLElement;
-    const queue = screen.getByRole("button", { name: "Queue message" }) as HTMLElement;
+    // R91-F: the queue affordance appears only once text is typed — stage
+    // text first so BOTH buttons are live for the anchor-structure checks.
+    fireEvent.change(textarea(), { target: { value: "queued follow-up" } });
+    const queue = (await screen.findByRole("button", { name: "Queue message" })) as HTMLElement;
     const actions = document.querySelector("[data-composer-actions]") as HTMLElement;
     const toolbar = document.querySelector("[data-composer-toolbar]") as HTMLElement;
     expect(actions).toBeTruthy();
@@ -2369,17 +2373,20 @@ describe("Composer: the action anchor + queue-send (ROUND-78 R78-B/R78-D)", () =
     expect(screen.queryByRole("button", { name: "Send message" })).toBeNull();
   });
 
-  it("the queue-send button is disabled while the input is empty, enabled with text (the title teaches the affordance)", async () => {
+  it("the queue-send button is GONE while the input is empty and appears with text (R91-F — the owner: only when a message is typed)", async () => {
     await renderBusyComposer();
 
-    const queue = screen.getByRole("button", { name: "Queue message" }) as HTMLButtonElement;
-    expect(queue.disabled).toBe(true);
+    // Empty composer: NO queue button at all (the pre-R91 disabled ghost
+    // read as a second send button doing nothing).
+    expect(screen.queryByRole("button", { name: "Queue message" })).toBeNull();
+
+    // Text lands → the affordance appears, immediately usable.
+    fireEvent.change(textarea(), { target: { value: "and also add tests" } });
+    const queue = await screen.findByRole("button", { name: "Queue message" });
+    expect((queue as HTMLButtonElement).disabled).toBe(false);
     expect(queue.getAttribute("title")).toBe(
       "Queues right after the agent finishes the current step",
     );
-
-    fireEvent.change(textarea(), { target: { value: "and also add tests" } });
-    await waitFor(() => expect(queue.disabled).toBe(false));
   });
 
   it("clicking Queue-send POSTs the QUEUE (not the send) and clears the composer", async () => {

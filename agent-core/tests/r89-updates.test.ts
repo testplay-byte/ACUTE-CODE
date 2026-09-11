@@ -224,3 +224,153 @@ describe("GET /system/updates (R89-A2)", () => {
     vi.unstubAllGlobals();
   });
 });
+
+// ── R91-E: the IN-APP UPDATE DOWNLOAD (POST /system/updates/download +
+// GET /system/updates/download/progress). The repo is private, so the
+// download needs the PAT; the URL gate must never turn that into an open
+// proxy; the stream is verified (sha256 + size floor) before "ready"
+// carries the path the Rust shell will execute.
+describe("R91-E: the in-app update download", () => {
+  it("409s without the launcher's token (the check's honest no-token twin)", async () => {
+    const home = mkdtempSync(join(tempDir, "home-"));
+    useFakeHome(home);
+    plantPat(home, null);
+    const res = await app.inject({
+      method: "POST",
+      url: "/api/v1/system/updates/download",
+      payload: { url: "https://api.github.com/repos/testplay-byte/ACUTE-CODE/releases/assets/1" },
+      ...authed(),
+    });
+    expect(res.statusCode).toBe(409);
+    expect(res.json().error.code).toBe("NO_TOKEN");
+  });
+
+  it("400s a non-GitHub or non-https asset URL — never an open proxy for the PAT", async () => {
+    const home = mkdtempSync(join(tempDir, "home-"));
+    useFakeHome(home);
+    plantPat(home, "github_pat_test");
+    for (const url of [
+      "https://evil.example/setup.exe",
+      "http://api.github.com/repos/testplay-byte/ACUTE-CODE/releases/assets/1",
+      "https://api.github.com/repos/OTHER/repo/releases/assets/1",
+      "not-a-url",
+    ]) {
+      const res = await app.inject({
+        method: "POST",
+        url: "/api/v1/system/updates/download",
+        payload: { url },
+        ...authed(),
+      });
+      expect(res.statusCode).toBe(400);
+      expect(res.json().error.code).toBe("VALIDATION");
+    }
+  });
+
+  it("streams a real asset to disk with live progress, verifies the sha256, and lands ready", async () => {
+    const home = mkdtempSync(join(tempDir, "home-"));
+    useFakeHome(home);
+    plantPat(home, "github_pat_test");
+
+    // A >10MB asset (the installer floor) built in-memory: 11 MiB of a
+    // repeating pattern, hashed for the digest the route must verify.
+    const chunk = new Uint8Array(1024 * 1024).fill(0x61);
+    const parts: Uint8Array[] = [];
+    for (let i = 0; i < 11; i += 1) parts.push(chunk);
+    const bytes = Buffer.concat(parts.map((p) => Buffer.from(p)));
+    const { createHash } = await import("node:crypto");
+    const digest = `sha256:${createHash("sha256").update(bytes).digest("hex")}`;
+    const stream = new ReadableStream<Uint8Array>({
+      start(controller) {
+        for (const part of parts) controller.enqueue(part);
+        controller.close();
+      },
+    });
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(stream, {
+        status: 200,
+        headers: { "content-length": String(bytes.byteLength) },
+      }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const start = await app.inject({
+      method: "POST",
+      url: "/api/v1/system/updates/download",
+      payload: {
+        url: "https://api.github.com/repos/testplay-byte/ACUTE-CODE/releases/assets/42",
+        digest,
+        version: "v9.9.9",
+      },
+      ...authed(),
+    });
+    expect(start.statusCode).toBe(200);
+    expect(start.json()).toMatchObject({ ok: true, status: "downloading" });
+
+    // Poll the progress until it settles (ready | error) — max ~5s.
+    let settled: { status: string; path: string | null; error: string | null; version: string | null } | null = null;
+    for (let i = 0; i < 50 && settled === null; i += 1) {
+      await new Promise((r) => setTimeout(r, 100));
+      const res = await app.inject({ method: "GET", url: "/api/v1/system/updates/download/progress", ...authed() });
+      const body = res.json() as { status: string; path: string | null; error: string | null; version: string | null };
+      if (body.status === "ready" || body.status === "error") settled = body;
+    }
+    expect(settled).not.toBeNull();
+    expect(settled!.status).toBe("ready");
+    expect(settled!.path).not.toBeNull();
+    expect(settled!.path!.endsWith("ACUTE-CODE-9.9.9-x64-setup.exe")).toBe(true);
+    expect(settled!.version).toBe("9.9.9");
+
+    // The Authorization header carried the PAT (the private-repo asset).
+    const [, init] = fetchMock.mock.calls[0] as [unknown, { headers: Record<string, string> }];
+    expect(init.headers.Authorization).toBe("Bearer github_pat_test");
+    // The downloaded installer file is THIS test's litter — remove it (the
+    // route keeps it around by design: the shell runs it).
+    rmSync(settled!.path!, { force: true });
+    vi.unstubAllGlobals();
+  });
+
+  it("an MISMATCHED digest lands status error with the honest message (the file is removed)", async () => {
+    const home = mkdtempSync(join(tempDir, "home-"));
+    useFakeHome(home);
+    plantPat(home, "github_pat_test");
+    const chunk = new Uint8Array(1024 * 1024).fill(0x62);
+    const parts: Uint8Array[] = [];
+    for (let i = 0; i < 11; i += 1) parts.push(chunk);
+    const stream = new ReadableStream<Uint8Array>({
+      start(controller) {
+        for (const part of parts) controller.enqueue(part);
+        controller.close();
+      },
+    });
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        new Response(stream, { status: 200, headers: { "content-length": String(11 * 1024 * 1024) } }),
+      ),
+    );
+
+    const start = await app.inject({
+      method: "POST",
+      url: "/api/v1/system/updates/download",
+      payload: {
+        url: "https://objects.githubusercontent.com/some-asset",
+        digest: "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+        version: "9.9.9",
+      },
+      ...authed(),
+    });
+    expect(start.statusCode).toBe(200);
+
+    let settled: { status: string; error: string | null } | null = null;
+    for (let i = 0; i < 50 && settled === null; i += 1) {
+      await new Promise((r) => setTimeout(r, 100));
+      const res = await app.inject({ method: "GET", url: "/api/v1/system/updates/download/progress", ...authed() });
+      const body = res.json() as { status: string; error: string | null };
+      if (body.status === "ready" || body.status === "error") settled = body;
+    }
+    expect(settled).not.toBeNull();
+    expect(settled!.status).toBe("error");
+    expect(settled!.error).toContain("sha256");
+    vi.unstubAllGlobals();
+  });
+});

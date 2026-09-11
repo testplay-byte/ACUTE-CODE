@@ -104,6 +104,23 @@ export function nativeTabCreate(tabId: string, url: string, handsInitScript?: st
 }
 
 /**
+ * R91-B3: does this tab's native webview exist RIGHT NOW? A cheap,
+ * in-memory Rust lookup (no dispatcher round-trip — it answers even while
+ * the main thread is busy). The BrowserPanel's visibility watchdog polls
+ * it to heal the "webview never got created" case by recreating the tab.
+ * False outside Tauri (the watchdog is native-mode-only by construction).
+ */
+export async function nativeTabExists(tabId: string): Promise<boolean> {
+  const tauri = tauriGlobal();
+  if (tauri === null) return false;
+  try {
+    return (await tauri.core.invoke("browser_tab_exists", { tabId })) === true;
+  } catch {
+    return false;
+  }
+}
+
+/**
  * Navigate the tab's EXISTING webview (errors if it was never created —
  * unlike `nativeTabCreate`, which creates on demand).
  */

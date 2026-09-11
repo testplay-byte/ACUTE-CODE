@@ -272,7 +272,9 @@ const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => 
     return jsonResponse({ providers: providersList });
   }
   // ROUND-58 (R58-d): PATCH /providers/:id — the enable/disable toggle.
-  const providerPatchMatch = url.match(/\/api\/v1\/providers\/([^/]+)$/);
+  // R91-A: the query suffix (force=1 — the delete resets referencing
+  // agents instead of 409ing) is tolerated by the id capture.
+  const providerPatchMatch = url.match(/\/api\/v1\/providers\/([^/?]+)(?:\?.*)?$/);
   if (providerPatchMatch !== null && method === "PATCH") {
     const id = providerPatchMatch[1];
     const patch = (body ?? {}) as Record<string, unknown>;
@@ -1849,7 +1851,7 @@ describe("Settings mutations refresh the SESSION page's model caches (R62-2b)", 
     fireEvent.click(screen.getByRole("button", { name: "Delete provider OpenRouter" }));
 
     await waitFor(() =>
-      expect(calls.some((c) => c.method === "DELETE" && c.url.endsWith("/providers/openrouter"))).toBe(true),
+      expect(calls.some((c) => c.method === "DELETE" && /\/providers\/openrouter(\?|$)/.test(c.url))).toBe(true),
     );
     await waitFor(() => expect(isInvalidated(client, ["provider-models-config", "openrouter"])).toBe(true));
   });

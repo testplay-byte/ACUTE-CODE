@@ -67,6 +67,9 @@ vi.mock("../../lib/native-browser", () => ({
   isNativeBrowserAvailable: () => nativeState.available,
   nativeInvoke: () => null,
   nativeTabCreate: vi.fn(() => Promise.resolve()),
+  // R91-B3: the watchdog's existence probe (mocks as TRUE — the mock
+  // webview "exists" so the watchdog re-asserts instead of recreating).
+  nativeTabExists: vi.fn(() => Promise.resolve(true)),
   nativeTabNavigate: vi.fn(() => Promise.resolve()),
   nativeTabSetBounds: vi.fn(() => Promise.resolve()),
   nativeTabSetVisible: vi.fn(() => Promise.resolve()),

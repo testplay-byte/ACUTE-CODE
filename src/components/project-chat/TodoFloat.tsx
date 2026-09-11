@@ -195,7 +195,15 @@ export function TodoFloat({ sessionId }: { sessionId: string | null }) {
   return (
     <div
       ref={containerRef}
-      className="absolute top-3 right-4 z-20 flex flex-col items-end gap-2 max-w-[min(92vw,380px)]"
+      // R91-G (the owner: "If I made the chat window way too small, then it
+      // would apparently have some issues with the top to-do list. The
+      // to-do list will get cut off so the text inside the to-do list does
+      // not adapt properly"): the width cap is now relative to the CHAT
+      // COLUMN (calc(100% - padding)), never the VIEWPORT — the old
+      // min(92vw,380px) measured the WINDOW, so a squeezed chat column
+      // (left sidebar open + right sidebar wide) clipped the float at the
+      // column's overflow-hidden edge. 380px stays the wide-screen cap.
+      className="absolute top-3 right-4 z-20 flex flex-col items-end gap-2 max-w-[min(calc(100%-1.5rem),380px)]"
       data-testid="todo-float"
     >
       {expanded ? (
@@ -447,7 +455,7 @@ export function TodoFloat({ sessionId }: { sessionId: string | null }) {
         onClick={() => setExpanded((v) => !v)}
         aria-expanded={expanded}
         aria-label={expanded ? "Collapse the to-do list" : "Expand the to-do list"}
-        className="group flex items-center gap-2 rounded-full border-[1.5px] pl-2.5 pr-2 py-1.5 shadow-sm transition-all hover:shadow-md max-w-full"
+        className="group flex items-center gap-2 rounded-full @max-[520px]:rounded-[16px] border-[1.5px] pl-2.5 pr-2 py-1.5 shadow-sm transition-all hover:shadow-md max-w-full text-left"
         style={{
           borderColor: complete ? withAlpha("#22c55e", 0.45) : cardBorder,
           // R89-F1: the same frosted treatment on the pill.
@@ -472,7 +480,13 @@ export function TodoFloat({ sessionId }: { sessionId: string | null }) {
           ) : null}
         </span>
         <span
-          className="text-[11px] font-semibold truncate min-w-0"
+          // R91-G: on WIDE chat columns the task text truncates to one line
+          // (the classic pill); on a squeezed column (@max-[520px]) it
+          // WRAPS — up to 2 lines with an ellipsis — so the task at hand
+          // stays READABLE instead of being cut to a couple of characters
+          // (the owner: "the text inside the to-do list does not adapt
+          // properly").
+          className="text-[11px] font-semibold min-w-0 whitespace-nowrap overflow-hidden text-ellipsis @max-[520px]:whitespace-normal @max-[520px]:line-clamp-2"
           style={{ color: styles.text }}
           title={current !== null ? current.content : "All tasks done"}
         >

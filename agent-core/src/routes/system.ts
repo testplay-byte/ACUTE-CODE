@@ -33,11 +33,14 @@
 // The frontend then clears its localStorage stores + react-query cache and
 // reloads — the full journey back to first-run.
 // ─────────────────────────────────────────────────────────────────────────────
-import { rmSync, readdirSync, statSync, existsSync, unlinkSync, readFileSync } from "node:fs";
-import { homedir } from "node:os";
+import { rmSync, readdirSync, statSync, existsSync, unlinkSync, readFileSync, createWriteStream } from "node:fs";
+import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
+import { pipeline } from "node:stream/promises";
+import { createHash } from "node:crypto";
 import type { FastifyInstance } from "fastify";
 import type { RouteContext } from "./context.js";
+import { errorBody } from "./helpers.js";
 import { reseedFactoryData, type SqliteDatabase } from "../storage/db.js";
 import { abortTurn, liveTurnIds } from "../lib/turn-registry.js";
 import { terminalSessionsDisposeAll } from "../terminal-sessions.js";
@@ -45,6 +48,82 @@ import { terminalSessionsDisposeAll } from "../terminal-sessions.js";
 const GITHUB_REPO = "testplay-byte/ACUTE-CODE";
 const GITHUB_LATEST_RELEASE_URL = `https://api.github.com/repos/${GITHUB_REPO}/releases/latest`;
 const GITHUB_RELEASES_PAGE = `https://github.com/${GITHUB_REPO}/releases`;
+
+// ── R91-E: the IN-APP UPDATER's download state ─────────────────────────────
+// The owner: "there was no inbuilt update system… I can update the application
+// from within the app itself rather than going anywhere." The download
+// streams HERE (the sidecar holds the PAT the private repo's assets demand),
+// the progress is polled by the About tab, and the verified installer path
+// is handed to the Rust shell's `run_update_installer` command at the end.
+// Single-flight by construction: ONE download at a time, module state.
+interface UpdateDownloadState {
+  status: "idle" | "downloading" | "verifying" | "ready" | "error";
+  /** Bytes received so far (0 until the stream starts). */
+  received: number;
+  /** The asset's advertised total (Content-Length; 0 when unknown). */
+  total: number;
+  /** The ABSOLUTE path of the finished, VERIFIED installer (status ready). */
+  path: string | null;
+  /** The version the downloaded installer installs. */
+  version: string | null;
+  /** Human-readable reason (status error). */
+  error: string | null;
+}
+const updateDownload: UpdateDownloadState = {
+  status: "idle",
+  received: 0,
+  total: 0,
+  path: null,
+  version: null,
+  error: null,
+};
+
+/** Resets + claims the download slot. Returns false when a download is
+ * already in flight (the UI keeps polling the live one). */
+function claimUpdateDownload(): boolean {
+  if (updateDownload.status === "downloading" || updateDownload.status === "verifying") {
+    return false;
+  }
+  updateDownload.status = "downloading";
+  updateDownload.received = 0;
+  updateDownload.total = 0;
+  updateDownload.path = null;
+  updateDownload.version = null;
+  updateDownload.error = null;
+  return true;
+}
+
+/** The GitHub release JSON shape the updater cares about (tag + assets). */
+interface GithubRelease {
+  tag_name?: unknown;
+  html_url?: unknown;
+  assets?: Array<{
+    name?: unknown;
+    browser_download_url?: unknown;
+    size?: unknown;
+    digest?: unknown;
+  }>;
+}
+
+/** Finds the x64 setup.exe asset of a release (the NSIS installer the
+ * launcher-kit job uploads — `ACUTE-CODE_<v>_x64-setup.exe`). */
+function findInstallerAsset(release: GithubRelease): {
+  url: string;
+  size: number;
+  digest: string | null;
+} | null {
+  for (const asset of release.assets ?? []) {
+    const name = typeof asset.name === "string" ? asset.name : "";
+    if (name.endsWith("_x64-setup.exe")) {
+      return {
+        url: typeof asset.browser_download_url === "string" ? asset.browser_download_url : "",
+        size: typeof asset.size === "number" ? asset.size : 0,
+        digest: typeof asset.digest === "string" ? asset.digest : null,
+      };
+    }
+  }
+  return null;
+}
 
 /** R89-A2: the app's own version, from the package.json that ships with the
  * staged engine (dist/routes/… → ../../package.json = agent-core's manifest;
@@ -211,7 +290,7 @@ export function registerSystemRoutes(scope: FastifyInstance, ctx: RouteContext):
             error: `GitHub answered HTTP ${response.status}`,
           };
         }
-        const release = (await response.json()) as { tag_name?: unknown; html_url?: unknown };
+        const release = (await response.json()) as GithubRelease;
         const latest = typeof release.tag_name === "string" ? release.tag_name.replace(/^v/, "") : "";
         if (latest === "") {
           return { ...base, ok: false, reason: "bad-payload", error: "the release payload had no tag_name" };
@@ -220,6 +299,11 @@ export function registerSystemRoutes(scope: FastifyInstance, ctx: RouteContext):
         const newest = versionTuple(latest);
         const updateAvailable =
           newest.length > 0 && now.some((part, i) => part < (newest[i] ?? 0));
+        // R91-E: the INSTALLER ASSET — the About tab's in-app "Update now"
+        // hands this URL + digest to POST /system/updates/download below.
+        // (The digest is GitHub's own server-side sha256 of the uploaded
+        // asset — the same value the launcher verifies against.)
+        const asset = findInstallerAsset(release);
         return {
           ...base,
           ok: true,
@@ -227,6 +311,9 @@ export function registerSystemRoutes(scope: FastifyInstance, ctx: RouteContext):
           updateAvailable,
           releaseUrl:
             typeof release.html_url === "string" ? release.html_url : GITHUB_RELEASES_PAGE,
+          ...(asset !== null
+            ? { asset: { url: asset.url, size: asset.size, digest: asset.digest } }
+            : {}),
         };
       } finally {
         clearTimeout(timeout);
@@ -240,6 +327,120 @@ export function registerSystemRoutes(scope: FastifyInstance, ctx: RouteContext):
       };
     }
   });
+
+  // ── R91-E: the in-app update DOWNLOAD ──────────────────────────────────────
+  // POST /system/updates/download {url, digest?} — stream the setup.exe to a
+  // temp file, then sha256-verify it against the release's digest. The
+  // caller polls GET /system/updates/download/progress for the live byte
+  // count; status "ready" carries the absolute path that the Rust shell's
+  // run_update_installer command executes. The URL must belong to THIS
+  // repo's release assets (the PAT-bearing fetch would otherwise be an
+  // open proxy) — enforced below.
+  scope.post("/system/updates/download", async (request, reply) => {
+    const pat = readLauncherGithubPat();
+    if (pat === null) {
+      return reply.code(409).send(
+        errorBody("NO_TOKEN", "the launcher's GitHub token is not saved on this machine", {}),
+      );
+    }
+    const body = request.body as { url?: unknown; digest?: unknown; version?: unknown } | null;
+    const url = typeof body?.url === "string" ? body.url : "";
+    const digest = typeof body?.digest === "string" && body.digest.startsWith("sha256:") ? body.digest : null;
+    const version = typeof body?.version === "string" ? body.version.replace(/^v/, "") : "";
+    if (url === "") {
+      return reply.code(400).send(errorBody("VALIDATION", "body.url must be the release asset URL", { field: "body.url" }));
+    }
+    // The URL must be THIS repo's release asset download (api.github.com or
+    // objects.githubusercontent.com hosts, /testplay-byte/ACUTE-CODE path) —
+    // never an open proxy for arbitrary URLs with the PAT attached.
+    let parsed: URL;
+    try {
+      parsed = new URL(url);
+    } catch {
+      return reply.code(400).send(errorBody("VALIDATION", "body.url is not a valid URL", { field: "body.url" }));
+    }
+    const hostOk =
+      (parsed.host === "api.github.com" && parsed.pathname.startsWith("/repos/testplay-byte/ACUTE-CODE/releases")) ||
+      parsed.host === "objects.githubusercontent.com" ||
+      parsed.host === "release-assets.githubusercontent.com";
+    if (!hostOk || parsed.protocol !== "https:") {
+      return reply.code(400).send(
+        errorBody("VALIDATION", "body.url must be a GitHub release asset of this repository", { field: "body.url" }),
+      );
+    }
+    if (!claimUpdateDownload()) {
+      // Already in flight — not an error; the UI keeps polling the live one.
+      return reply.code(200).send({ ok: true, status: updateDownload.status, alreadyRunning: true });
+    }
+    // Fire-and-forget: the POST answers immediately; the progress route
+    // carries the live state (the About tab's progress bar).
+    void (async () => {
+      const dest = join(tmpdir(), `ACUTE-CODE-${version || "update"}-x64-setup.exe`);
+      try {
+        const response = await fetch(url, {
+          headers: {
+            Authorization: `Bearer ${pat}`,
+            "User-Agent": "ACUTE-CODE-in-app-updater",
+            Accept: "application/octet-stream",
+          },
+          redirect: "follow",
+        });
+        if (!response.ok || response.body === null) {
+          throw new Error(`the asset download answered HTTP ${response.status}`);
+        }
+        const total = Number(response.headers.get("content-length") ?? "0") || 0;
+        updateDownload.total = total;
+        const hasher = createHash("sha256");
+        let received = 0;
+        // Node's fetch body is a web stream; count + hash as it flows through
+        // the pipeline into the file.
+        const counted = response.body.pipeThrough(
+          new TransformStream<Uint8Array, Uint8Array>({
+            transform(chunk, controller) {
+              received += chunk.byteLength;
+              hasher.update(chunk);
+              updateDownload.received = received;
+              controller.enqueue(chunk);
+            },
+          }),
+        );
+        await pipeline(counted as unknown as NodeJS.ReadableStream, createWriteStream(dest));
+        updateDownload.status = "verifying";
+        if (total > 0 && received !== total) {
+          throw new Error(`the download was truncated (${received} of ${total} bytes)`);
+        }
+        if (digest !== null) {
+          const actual = `sha256:${hasher.digest("hex")}`;
+          if (actual !== digest.toLowerCase()) {
+            throw new Error("the installer failed its sha256 integrity check");
+          }
+        }
+        const size = statSync(dest).size;
+        if (size < 10 * 1024 * 1024) {
+          throw new Error(`the downloaded file is only ${size} bytes — not a real installer`);
+        }
+        updateDownload.path = dest;
+        updateDownload.version = version || null;
+        updateDownload.status = "ready";
+      } catch (err) {
+        updateDownload.status = "error";
+        updateDownload.error = err instanceof Error ? err.message : String(err);
+        try {
+          if (existsSync(dest)) unlinkSync(dest);
+        } catch {
+          // best-effort cleanup
+        }
+      }
+    })();
+    return reply.code(200).send({ ok: true, status: "downloading" });
+  });
+
+  // ── R91-E: the in-app update download PROGRESS ───────────────────────────
+  // GET /system/updates/download/progress — the live single-flight state the
+  // About tab polls while the bar fills. Read-only, no body needed.
+  scope.get("/system/updates/download/progress", async () => ({
+    ...updateDownload,
+  }));
 
   scope.post("/system/reset", async () => {
     // 1. Abort every live turn (main sessions + sub-agent children) so no

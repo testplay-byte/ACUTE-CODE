@@ -1096,3 +1096,66 @@ describe("POST /api/v1/providers/:id/models + PATCH /api/v1/models/:id (ROUND-50
     expect(patch.statusCode).toBe(401);
   });
 });
+
+// ── R91-A: the FORCE-DELETE (the owner's v0.88.0 report: "when I tried to
+// delete an OpenRouter provider, it apparently was not getting deleted" —
+// the default agent's openrouter reference 409'd every attempt). The three
+// contracts: the unforced 409 still exists (with the force hint in the
+// message), ?force=1 RESETS the referencing agents to the no-provider state
+// and deletes anyway, and the reset is visible through GET /agents.
+describe("R91-A: DELETE /providers/:id force (the agent-reference unblock)", () => {
+  it("the unforced delete of a referenced provider still 409s — now with the force hint in the message", async () => {
+    // The seeded default agent (Acute) references openrouter.
+    const del = await authInject({ method: "DELETE", url: "/api/v1/providers/openrouter" });
+    expect(del.statusCode).toBe(409);
+    expect(del.json().error.code).toBe("CONFLICT");
+    expect(del.json().error.message).toContain("force=1");
+    // The provider is still there (the refusal is honest, not a delete).
+    const list = await authInject({ method: "GET", url: "/api/v1/providers" });
+    expect((list.json().providers as Array<{ id: string }>).some((p) => p.id === "openrouter")).toBe(true);
+  });
+
+  it("?force=1 deletes the referenced provider AND resets the agents to the no-provider state", async () => {
+    // Before: the default agent carries providerId openrouter + a model.
+    const before = await authInject({ method: "GET", url: "/api/v1/agents?includeTemplates=false" });
+    const acute = (before.json().agents as Array<{ id: string; providerId: string | null; model: string | null }>).find(
+      (a) => a.id === "agt_default_nova",
+    );
+    expect(acute).toBeDefined();
+    expect(acute!.providerId).toBe("openrouter");
+
+    const del = await authInject({ method: "DELETE", url: "/api/v1/providers/openrouter?force=1" });
+    expect(del.statusCode).toBe(204);
+
+    // The provider is gone.
+    const list = await authInject({ method: "GET", url: "/api/v1/providers" });
+    expect((list.json().providers as Array<{ id: string }>).some((p) => p.id === "openrouter")).toBe(false);
+
+    // The agent was RESET — no provider, no model (the composer's picker
+    // asks for a model on the next send, exactly like a fresh agent).
+    const after = await authInject({ method: "GET", url: "/api/v1/agents?includeTemplates=false" });
+    const reset = (after.json().agents as Array<{ id: string; providerId: string | null; model: string | null }>).find(
+      (a) => a.id === "agt_default_nova",
+    );
+    expect(reset!.providerId).toBeNull();
+    expect(reset!.model).toBeNull();
+
+    // The built-in's tombstone holds: the boot seed will not resurrect it
+    // (the re-add is a FRESH create at the reserved id — 201, the same R37
+    // contract as the unforced delete's re-claim).
+    const resurrected = await authInject({
+      method: "POST",
+      url: "/api/v1/providers",
+      payload: { id: "openrouter", name: "OpenRouter", baseUrl: "https://openrouter.ai/api/v1" },
+    });
+    expect(resurrected.statusCode).toBe(201);
+    expect(resurrected.json()).toMatchObject({ id: "openrouter" });
+  });
+
+  it("an UNREFERENCED provider deletes identically with and without force (the R37 contract kept)", async () => {
+    const plain = await authInject({ method: "DELETE", url: "/api/v1/providers/anthropic" });
+    expect(plain.statusCode).toBe(204);
+    const forced = await authInject({ method: "DELETE", url: "/api/v1/providers/google?force=1" });
+    expect(forced.statusCode).toBe(204);
+  });
+});

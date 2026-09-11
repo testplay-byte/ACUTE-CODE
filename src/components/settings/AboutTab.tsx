@@ -18,10 +18,16 @@
  */
 import { useMemo, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
-import { CheckCircle2, Download, ExternalLink, Info, ShieldAlert } from "lucide-react";
+import { CheckCircle2, Download, ExternalLink, Info, PackageOpen, ShieldAlert } from "lucide-react";
 import { APP_NAME, APP_VERSION, PHASE } from "../../lib/version";
 import { isTauri } from "../../lib/sidecar";
-import { fetchSystemUpdates, resetApplication, type SystemUpdateCheck } from "../../lib/api";
+import {
+  fetchSystemUpdates,
+  fetchUpdateDownloadProgress,
+  resetApplication,
+  startUpdateDownload,
+  type SystemUpdateCheck,
+} from "../../lib/api";
 import { useThemeStyles } from "../../lib/use-theme-styles";
 import { bdr, withAlpha } from "../dashboard/helpers";
 
@@ -88,12 +94,31 @@ type UpdateState =
   | { kind: "idle" }
   | { kind: "checking" }
   | { kind: "current"; latest: string }
-  | { kind: "available"; latest: string }
+  | { kind: "available"; latest: string; asset?: SystemUpdateCheck["asset"] }
   | { kind: "error"; message: string };
+
+/** R91-E: the IN-APP UPDATE flow's UI state (on top of UpdateState's check
+ * results). Downloading → the progress bar; ready → the "run it" step;
+ * launched → the installer took over (the app exits on its own). */
+type InstallState =
+  | { kind: "idle" }
+  | { kind: "downloading"; received: number; total: number }
+  | { kind: "verifying" }
+  | { kind: "ready"; path: string }
+  | { kind: "launched"; version: string }
+  | { kind: "error"; message: string };
+
+/** R91-E: human byte count for the download readout ("35.4 MB of 35.4 MB"). */
+function fmtMB(bytes: number): string {
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+}
 
 function VersionCard() {
   const styles = useThemeStyles();
   const [update, setUpdate] = useState<UpdateState>({ kind: "idle" });
+  // R91-E: the in-app update flow's state (null until the owner clicks
+  // "Update now" on an available release).
+  const [install, setInstall] = useState<InstallState>({ kind: "idle" });
 
   // R89-A2: the check runs SERVER-SIDE (GET /system/updates — the sidecar
   // reads the launcher's ~/.acute/github.pat; the repo is PRIVATE so the
@@ -101,6 +126,7 @@ function VersionCard() {
   // verdict). The version comparison is the same tuple walk as before.
   const checkForUpdates = async () => {
     setUpdate({ kind: "checking" });
+    setInstall({ kind: "idle" });
     try {
       const result: SystemUpdateCheck = await fetchSystemUpdates();
       if (!result.ok) {
@@ -108,12 +134,87 @@ function VersionCard() {
       }
       const latest = result.latest ?? "";
       if (latest === "") throw new Error("no published release found");
-      setUpdate(result.updateAvailable ? { kind: "available", latest } : { kind: "current", latest });
+      setUpdate(
+        result.updateAvailable
+          ? { kind: "available", latest, asset: result.asset }
+          : { kind: "current", latest },
+      );
     } catch (err) {
       setUpdate({
         kind: "error",
         message: err instanceof Error ? err.message : String(err),
       });
+    }
+  };
+
+  // R91-E: THE IN-APP UPDATE — "Update now" downloads the verified installer
+  // (the sidecar streams it + sha256-checks it), then hands the path to the
+  // Rust shell's run_update_installer, which launches the NSIS setup and
+  // closes the app. Only offered inside the desktop shell (a browser has no
+  // installer to run) and only when the release carried a setup.exe asset.
+  const updateNow = async () => {
+    if (update.kind !== "available") return;
+    if (update.asset === undefined) {
+      setInstall({
+        kind: "error",
+        message: "this release has no downloadable installer asset — use the Releases page",
+      });
+      return;
+    }
+    try {
+      await startUpdateDownload({
+        url: update.asset.url,
+        digest: update.asset.digest,
+        version: update.latest,
+      });
+      setInstall({ kind: "downloading", received: 0, total: update.asset.size });
+      // Poll the live state until it settles (ready | error).
+      for (;;) {
+        await new Promise((r) => setTimeout(r, 700));
+        const state = await fetchUpdateDownloadProgress();
+        if (state.status === "downloading") {
+          setInstall({ kind: "downloading", received: state.received, total: state.total });
+          continue;
+        }
+        if (state.status === "verifying") {
+          setInstall({ kind: "verifying" });
+          continue;
+        }
+        if (state.status === "ready" && state.path !== null) {
+          setInstall({ kind: "ready", path: state.path });
+          // The shell half: validate + launch the installer (it closes the
+          // app 1.5s later — the reply lands first so this message shows).
+          const tauri = (window as { __TAURI__?: { core: { invoke: (command: string, args?: Record<string, unknown>) => Promise<unknown> } } })
+            .__TAURI__;
+          if (tauri === undefined) {
+            setInstall({
+              kind: "error",
+              message: "the desktop shell is unavailable — the installer is downloaded but must be run by hand",
+            });
+            return;
+          }
+          try {
+            await tauri.core.invoke("run_update_installer", { path: state.path });
+            setInstall({ kind: "launched", version: update.latest });
+          } catch (err) {
+            setInstall({
+              kind: "error",
+              message: err instanceof Error ? err.message : String(err),
+            });
+          }
+          return;
+        }
+        if (state.status === "error") {
+          setInstall({ kind: "error", message: state.error ?? "the download failed" });
+          return;
+        }
+        // idle (a fresh sidecar restarted mid-download): restart the loop's
+        // expectation honestly.
+        setInstall({ kind: "error", message: "the download stopped — the engine restarted; try again" });
+        return;
+      }
+    } catch (err) {
+      setInstall({ kind: "error", message: err instanceof Error ? err.message : String(err) });
     }
   };
 
@@ -170,14 +271,74 @@ function VersionCard() {
             <CheckCircle2 size={13} /> Up to date — v{APP_VERSION} is the latest published release
           </span>
         ) : update.kind === "available" ? (
-          <span
-            className="text-[11.5px] font-semibold flex items-center gap-1.5"
-            style={{ color: styles.accent }}
-            data-testid="update-state"
-          >
-            <Download size={13} /> Update available — v{update.latest} is published. The launcher installs
-            it on the next run (or download it from Releases).
-          </span>
+          <div className="flex flex-col gap-2" data-testid="update-state">
+            <span className="text-[11.5px] font-semibold flex items-center gap-1.5" style={{ color: styles.accent }}>
+              <Download size={13} /> Update available — v{update.latest} is published.
+            </span>
+            {/* R91-E: the in-app action — download + run the installer without
+                leaving the app (the desktop shell only; web dev shows the
+                Releases link instead). */}
+            {isTauri() ? (
+              install.kind === "idle" ? (
+                <button
+                  type="button"
+                  onClick={() => void updateNow()}
+                  disabled={update.asset === undefined}
+                  title={
+                    update.asset === undefined
+                      ? "This release has no installer asset — use the Releases page"
+                      : "Downloads the verified installer and runs it — the app closes and the setup wizard takes over"
+                  }
+                  className="h-9 px-4 rounded-full text-[11.5px] font-bold transition-all hover:scale-[1.02] active:scale-95 disabled:opacity-50 disabled:hover:scale-100 inline-flex items-center gap-1.5 self-start"
+                  style={{ background: styles.accent, color: styles.accentText }}
+                  data-testid="update-now-button"
+                >
+                  <PackageOpen size={13} /> Update now
+                </button>
+              ) : install.kind === "downloading" ? (
+                <div className="flex items-center gap-3 max-w-[420px]" data-testid="update-progress">
+                  <div
+                    className="flex-1 h-2 rounded-full overflow-hidden"
+                    style={{ background: styles.isDark ? "rgba(255,255,255,0.08)" : "rgba(0,0,0,0.06)" }}
+                  >
+                    <div
+                      className="h-full rounded-full transition-[width] duration-300"
+                      style={{
+                        width: install.total > 0 ? `${Math.min(100, (install.received / install.total) * 100)}%` : "30%",
+                        background: styles.accent,
+                      }}
+                    />
+                  </div>
+                  <span className="font-mono text-[10.5px] shrink-0" style={{ color: styles.textTertiary }}>
+                    {fmtMB(install.received)}
+                    {install.total > 0 ? ` / ${fmtMB(install.total)}` : ""}
+                  </span>
+                </div>
+              ) : install.kind === "verifying" ? (
+                <span className="text-[11.5px] font-semibold" style={{ color: styles.textSecondary }} data-testid="update-verifying">
+                  Verifying the installer's checksum…
+                </span>
+              ) : install.kind === "ready" ? (
+                <span className="text-[11.5px] font-semibold" style={{ color: styles.textSecondary }}>
+                  Installer verified — launching…
+                </span>
+              ) : install.kind === "launched" ? (
+                <span className="text-[11.5px] font-semibold" style={{ color: "#22c55e" }} data-testid="update-launched">
+                  Installer launched — the setup wizard will close this app and install v{install.version}. Your data
+                  is kept.
+                </span>
+              ) : (
+                <span className="text-[11.5px]" style={{ color: SEMANTIC_DANGER }} role="alert">
+                  The in-app update failed ({install.message}). The launcher's ACUTE.bat update still works, and the
+                  Releases page always has the latest.
+                </span>
+              )
+            ) : (
+              <span className="text-[11.5px]" style={{ color: styles.textSecondary }}>
+                Web mode — use ACUTE.bat or the Releases page to install v{update.latest}.
+              </span>
+            )}
+          </div>
         ) : update.kind === "error" ? (
           <span className="text-[11.5px]" style={{ color: SEMANTIC_DANGER }} data-testid="update-state">
             Could not check for updates ({update.message}) — the Releases page always has the latest.

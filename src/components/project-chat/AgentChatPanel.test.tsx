@@ -1516,11 +1516,13 @@ describe("AgentChatPanel ROUND-78 message queue + honest retry card", () => {
     armLiveStream();
     await waitFor(() => expect(screen.getByRole("button", { name: "Stop generation" })).toBeTruthy(), SLOW);
 
-    // The queue-send button rides the anchor next to Stop (the panel wired
-    // onQueue because liveMode is on).
-    expect(screen.getByRole("button", { name: "Queue message" })).toBeTruthy();
+    // R91-F (the owner: "That send message button should only appear when
+    // I have typed some message"): the queue affordance is GONE while the
+    // composer is empty — it appears the moment text lands.
+    expect(screen.queryByRole("button", { name: "Queue message" })).toBeNull();
 
     fireEvent.change(screen.getByLabelText("Message composer"), { target: { value: "also add tests" } });
+    await waitFor(() => expect(screen.getByRole("button", { name: "Queue message" })).toBeTruthy());
     fireEvent.keyDown(screen.getByLabelText("Message composer"), { key: "Enter" });
 
     // The queue POST carried the session + the typed text; the normal send

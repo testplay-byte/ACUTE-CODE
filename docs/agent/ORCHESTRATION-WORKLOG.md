@@ -2504,3 +2504,23 @@ Work Log:
 
 Stage Summary:
 - v0.88.0 delivered: menus float ON TOP of the live browser (the headline), the agent's hands look and pace like a person's, the settings cluster honest, the wizard's choices persist, and the update check finally works after acute.bat.
+
+---
+
+## R91 — the third-walkthrough round (v0.89.0)
+
+**Task ID: R91 (single-orchestrator round, no subagents needed — the fixes were surgical and the round was owner-directed end-to-end).**
+
+### Work Log
+- The owner's third walkthrough on v0.88.0: the update check, wizard persistence, model card icons, and chat picker confirmed GOOD; seven fix areas filed (the OpenRouter delete, the blank browser + dead pop-out/external, the model card layout, the capability-chip highlight, the in-app update system, the composer/to-do/continue squeeze polish, the token millions).
+- **The browser root-cause hunt** (the round's deep work): traced the v0.88.0-only blank render through the R90 delta — the menu-overlay prewarm/show were SYNC commands calling `WebviewWindowBuilder::build`, which tauri's own docs name as the Windows deadlock pattern (the same lesson browser.rs carries for open_browser_window R58-b and browser_tab_create R50-a); read the actual tauri 2.11.5 + tauri-runtime-wry 2.11.4 + wry 0.55.1 + webview2-com sources in the cargo cache to confirm the threading model (sync commands on the main thread; `send_user_message`'s inline path; `wait_with_pump`'s nested pump hazard inside the WebMessageReceived callback). The fix is deliberately defense-in-depth since the exact field wedge cannot be reproduced off Windows: async menu-overlay commands (B1), the show re-asserts the remembered bounds (B2 — the TAB_LAST_BOUNDS map), the 2s visibility watchdog with browser_tab_exists (B3), and the 6s affordance timeouts.
+- **The OpenRouter delete**: found the 409-by-referencing-agents contract blocking every delete of the provider the seeded default agent references; force=1 + resetAgentsProvider (a proper storage function — updateAgent's merge semantics cannot null) + the confirm-flow copy that explains the reset before the click.
+- **The in-app updater**: the sidecar download routes (host-gated, sha256-verified against GitHub's own digest, single-flight with live progress), the Rust update.rs module (validate + launch + the 1.5s delayed exit), and the About tab's Update-now flow with the progress bar.
+- The model card layout (chips inline with the name; statFacts 0/1-2/3+ tiers), the CapChip states, the queue gating, the Continue minimize, the TodoFloat column-relative cap + two-line wrap, the token million tier.
+- Test fallout: 7 re-pinned (the queue-button contract ×3, the donut's 1m window, the delete mock's query-tolerant regex + the force URL assertion), the nativeTabExists mock, +11 new tests (3 force-delete, 4 updater, 5 format). One mid-run disk-full incident (10,855 stale /tmp/acute-* dirs from prior sessions eating 3.7GB) cleaned and the new updater test made to remove its own 11MB litter.
+- Full pipeline green: lint, typechecks ×2, root 2,899/2,899 (162 files), e2e 12/12, license audit 134 CLEAN, windows-target cargo check clean (now covering update.rs), docs:check 196/0/0.
+- Version 0.89.0 ×4 manifests; round-91.md + CHANGELOG + status.json (round 91, plan.current, the R91 milestone, suites 994/1901/12/10) written.
+
+### Stage Summary
+- v0.89.0 delivered: the in-app updater (the headline), the OpenRouter delete unblocked with the agent reset, the browser blank-render class closed at four independent layers, the model card's right-side identity, and the long-tail UI polish.
+- The R91 lesson for the ledger: v0.88.0's Rust compile-check gate verified TYPES, not THREADING — a sync command that builds a window compiles clean and deadlocks on Windows. The cargo check stays; the doc-comment contract in browser.rs now names the pattern, and the watchdog makes the failure class self-healing regardless.

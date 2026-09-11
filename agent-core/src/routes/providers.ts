@@ -37,7 +37,7 @@ import {
   listModels,
   upsertModel,
 } from "../storage/models.js";
-import { listAgents } from "../storage/agents.js";
+import { listAgents, resetAgentsProvider } from "../storage/agents.js";
 import { errorBody } from "./helpers.js";
 // R84 (Wave 2-a): the shared R50-d model-config field gate (exported by
 // routes/models.ts — the upsert + PATCH routes validate identically).
@@ -254,24 +254,47 @@ export function registerProviderRoutes(scope: FastifyInstance, ctx: RouteContext
   // boot seed doesn't resurrect them; re-adding via Add Provider clears
   // it). Agents referencing the provider still block deletion — their
   // next turn would 409 on a dead provider otherwise.
+  //
+  // R91-A (the owner's v0.88.0 report: "when I tried to delete an OpenRouter
+  // provider, it apparently was not getting deleted" — the default agent
+  // row references openrouter, so every delete 409'd while NVIDIA/custom
+  // providers deleted fine): `?force=1` makes the delete SUCCEED by
+  // reassigning every referencing agent to NO provider (providerId = NULL,
+  // model cleared) — the composer's model picker then asks for a model on
+  // the next send, exactly like a fresh agent. The confirm dialog in the
+  // settings UI tells the owner exactly which agents will be reset BEFORE
+  // the click; the unforced 409 stays as the API's honest default for any
+  // other caller.
   scope.delete("/providers/:id", async (request, reply) => {
     const { id } = request.params as Record<string, string>;
+    const query = request.query as Record<string, unknown>;
+    const force = query.force === "1" || query.force === "true";
     const record = resolveProvider(db, id);
     if (record === undefined) {
       return reply.code(404).send(errorBody("NOT_FOUND", `no provider with id ${id}`));
     }
     const referencing = listAgents(db, true).filter((a) => a.providerId === id);
-    if (referencing.length > 0) {
+    if (referencing.length > 0 && !force) {
       return reply.code(409).send(
         errorBody(
           "CONFLICT",
-          `${referencing.length} agent${referencing.length === 1 ? "" : "s"} still use '${record.name}' (${referencing.map((a) => a.name).join(", ")}) — reassign or delete them first`,
+          `${referencing.length} agent${referencing.length === 1 ? "" : "s"} still use '${record.name}' (${referencing.map((a) => a.name).join(", ")}) — reassign or delete them first, or delete with ?force=1 to reset those agents to pick a new model`,
           { field: "params.id", agents: referencing.map((a) => a.id) },
         ),
       );
     }
+    if (referencing.length > 0 && force) {
+      // Reset each referencing agent to the "no provider picked" state —
+      // providerId NULL + model NULL (R91-A's resetAgentsProvider; the
+      // composer's model picker then asks for a model on the next send,
+      // exactly like a fresh agent). One statement, all-or-nothing.
+      resetAgentsProvider(db, id);
+    }
     deleteProviderRecord(db, id);
     keyring.set(id, "");
+    // 204 both ways (the pre-R91 contract, test-pinned): the caller already
+    // knows the referencing agents' names from the confirm dialog, so the
+    // reassigned count carries no new information across the wire.
     return reply.code(204).send();
   });
 
