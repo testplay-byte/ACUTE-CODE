@@ -213,6 +213,38 @@ export function saveModelOverride(sessionId: string | null, v: ModelOverride | n
   }
 }
 
+// ── ROUND-89 (R89-B4): the LAST-USED model — the owner's directive: "it
+// should remember the last used model and that model should be the default
+// one for the next chats". A single GLOBAL key (not per-session): every
+// model pick AND every send updates it; a NEW chat (no session override
+// yet) starts from it. Validity (the provider still configured, the model
+// still exists) is checked by the CALLER against the live config — a stale
+// entry simply falls through to the agent default.
+const LAST_USED_MODEL_KEY = "acute.lastModel";
+
+/** The globally remembered last-used model (null when absent/malformed). */
+export function loadLastUsedModel(): ModelOverride | null {
+  try {
+    const raw = window.localStorage.getItem(LAST_USED_MODEL_KEY);
+    if (raw === null) return null;
+    const parsed = JSON.parse(raw) as { model?: unknown; providerId?: unknown };
+    if (typeof parsed.model !== "string" || parsed.model === "") return null;
+    if (typeof parsed.providerId !== "string" || parsed.providerId === "") return null;
+    return { model: parsed.model, providerId: parsed.providerId };
+  } catch {
+    return null;
+  }
+}
+
+/** Remember the last-used model globally (the next chat's default). */
+export function saveLastUsedModel(v: ModelOverride): void {
+  try {
+    window.localStorage.setItem(LAST_USED_MODEL_KEY, JSON.stringify(v));
+  } catch {
+    /* storage unavailable — the in-session value still works */
+  }
+}
+
 // ── Project file flattening (@ quick-picker + Add Context → project files) ──
 
 /** Flatten a project tree to its FILE paths (DFS, folders skipped). */

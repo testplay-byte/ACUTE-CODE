@@ -111,8 +111,10 @@ import { useThemeStyles } from "../../lib/use-theme-styles";
 import { useScrollFade } from "../../lib/useScrollFade";
 import { Composer } from "./composer/Composer";
 import {
+  loadLastUsedModel,
   loadModelOverride,
   loadThinkingLevel,
+  saveLastUsedModel,
   saveModelOverride,
   saveThinkingLevel,
   toMessageAttachment,
@@ -1639,8 +1641,15 @@ export function AgentChatPanel({
   // acute-model:<id> / acute-thinking:<id>) and ride every send; the
   // permission mode starts from the session's own permissionMode ("ask"
   // before the session exists) and PATCHes the backend on change.
+  //
+  // ROUND-89 (R89-B4, the owner: "it should remember the last used model
+  // and that model should be the default one for the next chats"): a
+  // session with NO persisted override of its own starts from the GLOBAL
+  // last-used model (saved by every pick + every send) instead of the
+  // agent template's default — no more GLM-by-default once another model
+  // has actually been used.
   const [modelOverride, setModelOverride] = useState<ModelOverride | null>(() =>
-    loadModelOverride(session?.id ?? null),
+    loadModelOverride(session?.id ?? null) ?? loadLastUsedModel(),
   );
   const [thinkingLevel, setThinkingLevel] = useState<ThinkingLevel>(() =>
     loadThinkingLevel(session?.id ?? null),
@@ -1673,6 +1682,11 @@ export function AgentChatPanel({
   const onModelChange = (v: ModelOverride | null): void => {
     setModelOverride(v);
     saveModelOverride(activeSessionId, v);
+    // R89-B4: every explicit pick is also the new GLOBAL default for the
+    // next chats (clearing the override back to the agent default does not
+    // un-remember it — the agent default becomes what's sent, and the send
+    // path re-saves the EFFECTIVE pair there).
+    if (v !== null) saveLastUsedModel(v);
   };
   const onThinkingLevelChange = (level: ThinkingLevel): void => {
     setThinkingLevel(level);
@@ -1977,6 +1991,20 @@ export function AgentChatPanel({
           thinkingLevel,
           ...(messageAttachments.length > 0 ? { attachments: messageAttachments } : {}),
         });
+        // R89-B4: the turn actually ran with the EFFECTIVE pair — remember
+        // it as the next chats' default (the owner's "remember the last
+        // used model"; a no-override turn remembers the agent's own
+        // provider+model, which is what was really used).
+        if (
+          effectiveModel !== null &&
+          (modelOverride?.providerId ?? agent?.providerId) !== undefined &&
+          (modelOverride?.providerId ?? agent?.providerId) !== null
+        ) {
+          saveLastUsedModel({
+            model: effectiveModel,
+            providerId: (modelOverride?.providerId ?? agent?.providerId) as string,
+          });
+        }
         // The store's startStream resolved — the stream ended (or errored).
         // Invalidate so the canonical folded turn renders from the event log.
         await queryClient.invalidateQueries({ queryKey: ["session"] });

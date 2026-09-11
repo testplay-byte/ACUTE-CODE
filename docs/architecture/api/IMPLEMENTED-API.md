@@ -2402,3 +2402,18 @@ the per-model test button, the model edit dialog). Spec:
   404; `github` — other HTTP status; `network`) and an `error` string the
   About tab renders honestly. The version walk is the tuple compare
   (`0.86.0` vs `0.87.0` → per-segment), computed where the check runs.
+
+### POST /api/v1/providers — the R89 identity rules (BREAKING behavior change)
+
+- The owner's verbatim rule: "the user can add as many providers as needed…
+  only the provider name should be different." The NAME is now the
+  uniqueness key (409 `field: body.name` — was the id). The wanted id's
+  row, when KEYLESS (an invisible seeded built-in), is ADOPTED in place
+  (200 `{…record, hasKey:false, adopted:true}` — the request's
+  name/baseUrl/apiFormat update the row; this is the fix for the owner's
+  "provider NVIDIA already exists" on a fresh reset: `reseedFactoryData`
+  re-creates the five keyless built-in rows the R58 list renders as
+  absent). A CONFIGURED row at the wanted id (a second same-type provider)
+  derives a fresh id from the requested NAME (`prv_<slug>`, walking `-2`
+  `-3…` suffixes; 201 as a create). PATCH /providers/:id enforces the same
+  name-uniqueness on renames (409 body.name).

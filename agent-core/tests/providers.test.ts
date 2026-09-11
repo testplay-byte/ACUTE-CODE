@@ -293,17 +293,101 @@ describe("POST /api/v1/providers", () => {
     });
   }
 
-  it("ROUND-37: a reserved id with an EXISTING row is 409; an absent one is claimable (deleted-built-in resurrection)", async () => {
-    // anthropic is seeded → its row exists → conflict.
+  it("R89-B1: a KEYLESS reserved row is ADOPTED in place (the owner's 'already exists' bug)", async () => {
+    // anthropic is seeded but has NO key → invisible in the UI. Adding the
+    // preset with a fresh name configures THAT row (200 adopted), never 409.
     const seeded = await authInject({
       method: "POST",
       url: "/api/v1/providers",
       payload: { id: "anthropic", name: "Fake Anthropic", baseUrl: "https://x.test/v1" },
     });
-    expect(seeded.statusCode).toBe(409);
-    expect(seeded.json().error.code).toBe("CONFLICT");
+    expect(seeded.statusCode).toBe(200);
+    expect(seeded.json()).toMatchObject({
+      id: "anthropic",
+      name: "Fake Anthropic",
+      adopted: true,
+      hasKey: false,
+    });
 
-    // A reserved id whose row was deleted (tombstoned) can be re-claimed.
+    // The adoption is a real row update: the list shows the new name once a
+    // key lands (hasKey true).
+    const key = await authInject({
+      method: "PUT",
+      url: "/api/v1/providers/anthropic/key",
+      payload: { value: "sk-test-adopt" },
+    });
+    expect(key.statusCode).toBe(204);
+    const adopted = await authInject({ method: "GET", url: "/api/v1/providers" });
+    const row = (adopted.json().providers as Array<{ id: string; name: string; hasKey: boolean }>).find(
+      (p) => p.id === "anthropic",
+    );
+    expect(row).toMatchObject({ name: "Fake Anthropic", hasKey: true });
+  });
+
+  it("R89-B1: a CONFIGURED row at the wanted id derives a fresh id from the NAME (same-type adds)", async () => {
+    // Configure the nvidia seed first (adopt + key).
+    const adopt = await authInject({
+      method: "POST",
+      url: "/api/v1/providers",
+      payload: { id: "nvidia", name: "NVIDIA", baseUrl: "https://integrate.api.nvidia.com/v1" },
+    });
+    expect(adopt.statusCode).toBe(200);
+    await authInject({
+      method: "PUT",
+      url: "/api/v1/providers/nvidia/key",
+      payload: { value: "nvapi-test-1" },
+    });
+
+    // A SECOND NVIDIA under a different name: id nvidia is taken + has a key
+    // → the request derives prv_<name-slug> and creates it (the owner's
+    // "10 OpenRouter providers" rule).
+    const second = await authInject({
+      method: "POST",
+      url: "/api/v1/providers",
+      payload: { id: "nvidia", name: "NVIDIA Work", baseUrl: "https://integrate.api.nvidia.com/v1" },
+    });
+    expect(second.statusCode).toBe(201);
+    expect(second.json()).toMatchObject({ id: "prv_nvidia-work", name: "NVIDIA Work" });
+
+    // And a third with the same derived slug → walks the -2 suffix.
+    const third = await authInject({
+      method: "POST",
+      url: "/api/v1/providers",
+      payload: { id: "nvidia", name: "NVIDIA Work", baseUrl: "https://integrate.api.nvidia.com/v1" },
+    });
+    expect(third.statusCode).toBe(409); // same NAME — the real rule
+    expect(third.json().error.details.field).toBe("body.name");
+  });
+
+  it("R89-B1: the NAME is the uniqueness key — a duplicate name 409s with field body.name", async () => {
+    const first = await authInject({
+      method: "POST",
+      url: "/api/v1/providers",
+      payload: { id: "edge", name: "Edge", baseUrl: "https://edge.test/v1" },
+    });
+    expect(first.statusCode).toBe(201);
+    // The row is keyless → ADOPTABLE under the SAME name (re-add the preset
+    // = configure it): not a name conflict with itself.
+    const again = await authInject({
+      method: "POST",
+      url: "/api/v1/providers",
+      payload: { id: "edge", name: "Edge", baseUrl: "https://edge-2.test/v1" },
+    });
+    expect(again.statusCode).toBe(200);
+    expect(again.json()).toMatchObject({ adopted: true, baseUrl: "https://edge-2.test/v1" });
+
+    // A DIFFERENT provider under the name "Edge" → 409 body.name.
+    const clash = await authInject({
+      method: "POST",
+      url: "/api/v1/providers",
+      payload: { name: "Edge", baseUrl: "https://elsewhere.test/v1" },
+    });
+    expect(clash.statusCode).toBe(409);
+    expect(clash.json().error.code).toBe("CONFLICT");
+    expect(clash.json().error.details.field).toBe("body.name");
+  });
+
+  it("ROUND-37 (kept): a reserved id whose row was deleted can be re-claimed (tombstone cleared)", async () => {
     const del = await authInject({ method: "DELETE", url: "/api/v1/providers/anthropic" });
     expect(del.statusCode).toBe(204);
     const resurrected = await authInject({
@@ -313,20 +397,6 @@ describe("POST /api/v1/providers", () => {
     });
     expect(resurrected.statusCode).toBe(201);
     expect(resurrected.json()).toMatchObject({ id: "anthropic", apiFormat: "anthropic-messages" });
-
-    const first = await authInject({
-      method: "POST",
-      url: "/api/v1/providers",
-      payload: { id: "edge", name: "Edge", baseUrl: "https://edge.test/v1" },
-    });
-    expect(first.statusCode).toBe(201);
-    const duplicate = await authInject({
-      method: "POST",
-      url: "/api/v1/providers",
-      payload: { id: "edge", name: "Edge Again", baseUrl: "https://edge.test/v1" },
-    });
-    expect(duplicate.statusCode).toBe(409);
-    expect(duplicate.json().error.code).toBe("CONFLICT");
   });
 });
 

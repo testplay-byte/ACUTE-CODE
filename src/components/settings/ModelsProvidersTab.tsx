@@ -502,15 +502,17 @@ export function ModelsProvidersTab() {
       </div>
 
       {/* Add Provider DIALOG (preset choice → fields)
-          ROUND-87 (R87, the NVIDIA phantom-add fix): the "already added"
-          set is now the CONFIGURED list — keyless seeded presets (nvidia
-          today) show as ADDABLE instead of a disabled "added" pill, matching
-          the left list's R59-C filter exactly (the bug: the dialog checked
-          the unfiltered rows while the list hid keyless presets, so a preset
-          the owner never added claimed to already be there). */}
+          R89-B1: the owner's identity rules — the NAME is the uniqueness
+          key (live feedback from the configured names), presets stay
+          addable forever (a "configured" chip, never a disable — as many
+          same-type providers as needed under distinct names), and a preset
+          pick ADOPTS its keyless seeded row server-side (the "NVIDIA
+          already exists" bug on a fresh reset: the boot seed's keyless
+          rows are invisible in this list but USED to 409 the create). */}
       {adding && (
         <AddProviderDialog
-          existingIds={new Set(configuredProviders.map((p) => p.id))}
+          existingNames={new Set(configuredProviders.map((p) => p.name))}
+          configuredPresetIds={new Set(configuredProviders.map((p) => p.id))}
           onClose={() => setAdding(false)}
           onCreated={(id) => {
             setAdding(false);
@@ -1417,11 +1419,18 @@ function ProviderDetailPane({
 /* ── Add Provider DIALOG (ROUND-37: preset choice → fields) ───────────────── */
 
 function AddProviderDialog({
-  existingIds,
+  existingNames,
+  configuredPresetIds,
   onClose,
   onCreated,
 }: {
-  existingIds: Set<string>;
+  /** R89-B1: the CONFIGURED providers' display names — the uniqueness key
+   * (the owner's rule: "only the provider name should be different"). */
+  existingNames: Set<string>;
+  /** R89-B1: which presets already have a configured row — an info chip
+   * only, never a disable: the owner may add as many same-type providers
+   * as he needs ("10 OpenRouter providers") under distinct names. */
+  configuredPresetIds: Set<string>;
   onClose: () => void;
   onCreated: (id: string) => void;
 }) {
@@ -1445,9 +1454,13 @@ function AddProviderDialog({
     setError(null);
   };
 
+  const isPreset = presetId !== null && presetId !== "custom";
+  // R89-B1: the name is the identity — live feedback the moment it collides
+  // with a configured provider (the backend 409s on body.name as backstop).
+  const nameTaken = name.trim().length > 0 && existingNames.has(name.trim());
+
   const create = useMutation({
     mutationFn: async (): Promise<{ id: string; keyError?: string }> => {
-      const isPreset = presetId !== null && presetId !== "custom";
       // ROUND-47 (R47-c1): the canonical api.ts fn — same wire shape the
       // dialog always sent (name / baseUrl / apiFormat / preset id; the key
       // NEVER rides in the create body — it goes to the dedicated key route
@@ -1456,7 +1469,9 @@ function AddProviderDialog({
         name: name.trim(),
         baseUrl: baseUrl.trim(),
         apiFormat,
-        // Presets re-claim their reserved id (resurrects a deleted built-in).
+        // Presets carry their reserved id — a KEYLESS row at that id is
+        // ADOPTED server-side (R89-B1); a configured one derives a fresh
+        // id from the name (same-type adds).
         ...(isPreset ? { id: presetId } : {}),
       });
       if (key.trim()) {
@@ -1495,7 +1510,7 @@ function AddProviderDialog({
     borderColor: styles.border,
     color: styles.text,
   } as const;
-  const valid = name.trim().length > 0 && /^https?:\/\/.+/.test(baseUrl.trim());
+  const valid = name.trim().length > 0 && !nameTaken && /^https?:\/\/.+/.test(baseUrl.trim());
 
   return (
     <div
@@ -1535,16 +1550,15 @@ function AddProviderDialog({
             </p>
             <div className="flex flex-col gap-2">
               {PRESETS.map((p) => {
-                const alreadyAdded = p.id !== "custom" && existingIds.has(p.id);
+                const configured = p.id !== "custom" && configuredPresetIds.has(p.id);
                 return (
                   <button
                     key={p.id}
-                    onClick={() => !alreadyAdded && choosePreset(p.id)}
-                    disabled={alreadyAdded}
-                    className="h-12 px-4 rounded-[12px] border-[1.5px] flex items-center gap-3 text-left transition-colors disabled:opacity-55"
+                    onClick={() => choosePreset(p.id)}
+                    className="h-12 px-4 rounded-[12px] border-[1.5px] flex items-center gap-3 text-left transition-colors"
                     style={{ borderColor: styles.border, background: styles.bg, color: styles.text }}
                     onMouseEnter={(e) => {
-                      if (!alreadyAdded) e.currentTarget.style.borderColor = withAlpha(styles.accent, 0.5);
+                      e.currentTarget.style.borderColor = withAlpha(styles.accent, 0.5);
                     }}
                     onMouseLeave={(e) => (e.currentTarget.style.borderColor = styles.border)}
                   >
@@ -1561,18 +1575,18 @@ function AddProviderDialog({
                         {p.blurb}
                       </span>
                     </span>
-                    {alreadyAdded ? (
+                    {configured ? (
                       <span
                         className="shrink-0 text-[10px] font-bold px-2 py-0.5 rounded-full"
                         style={{ background: withAlpha("#22c55e", 0.12), color: "#22c55e" }}
+                        title="Already configured — you can still add another one under a different name"
                       >
-                        added
+                        configured
                       </span>
-                    ) : (
-                      <span className="shrink-0 text-[11px] font-bold" style={{ color: styles.accent }}>
-                        Add →
-                      </span>
-                    )}
+                    ) : null}
+                    <span className="shrink-0 text-[11px] font-bold" style={{ color: styles.accent }}>
+                      Add →
+                    </span>
                   </button>
                 );
               })}
@@ -1614,12 +1628,28 @@ function AddProviderDialog({
               <input
                 autoFocus
                 value={name}
-                onChange={(e) => setName(e.target.value)}
-                placeholder="My Gateway"
+                onChange={(e) => {
+                  setName(e.target.value);
+                  setError(null);
+                }}
+                placeholder={presetId !== null && presetId !== "custom" ? `${preset?.name} 2` : "My Gateway"}
                 aria-label="Provider name"
+                aria-invalid={nameTaken}
                 className="h-10 w-full rounded-[10px] border-[1.5px] px-3 text-[13px] outline-none"
-                style={inputStyle}
+                style={{
+                  ...inputStyle,
+                  ...(nameTaken ? { borderColor: "#ef4444" } : {}),
+                }}
               />
+              {nameTaken ? (
+                <p className="mt-1.5 text-[10.5px]" style={{ color: "#ef4444" }} role="alert">
+                  That name is already in use — every provider needs a distinct display name.
+                </p>
+              ) : (
+                <p className="mt-1.5 text-[10.5px]" style={{ color: styles.textTertiary }}>
+                  The display name is the only thing that must be unique.
+                </p>
+              )}
             </div>
             <div>
               <label className="mb-1.5 block text-[11px] font-bold" style={{ color: styles.textSecondary }}>
@@ -1634,35 +1664,57 @@ function AddProviderDialog({
                 style={inputStyle}
               />
             </div>
-            <div>
-              <label className="mb-1.5 block text-[11px] font-bold" style={{ color: styles.textSecondary }}>
-                API format
-              </label>
-              <div className="grid grid-cols-3 gap-2">
-                {API_FORMATS.map((f) => {
-                  const active = apiFormat === f.id;
-                  return (
-                    <button
-                      key={f.id}
-                      onClick={() => setApiFormat(f.id)}
-                      aria-pressed={active}
-                      title={f.hint}
-                      className="h-9 rounded-[10px] border-[1.5px] text-[11.5px] font-bold transition-colors"
-                      style={{
-                        borderColor: active ? withAlpha(styles.accent, 0.55) : styles.border,
-                        background: active ? withAlpha(styles.accent, 0.09) : styles.bg,
-                        color: active ? styles.accent : styles.textSecondary,
-                      }}
-                    >
-                      {f.label}
-                    </button>
-                  );
-                })}
+            {isPreset ? (
+              /* R89-B2 (the owner's verdict: "it was asking me for the API
+               * Format — it should already know which API format the NVIDIA
+               * provider requires and it should have it preset"): presets
+               * carry a FIXED wire format — show it as a read-only summary,
+               * never a choice. */
+              <div className="flex items-center gap-2">
+                <span
+                  className="text-[10.5px] font-bold uppercase tracking-wider px-2.5 py-1 rounded-full"
+                  style={{
+                    background: withAlpha(styles.accent, 0.08),
+                    color: styles.textSecondary,
+                  }}
+                >
+                  {formatLabel(apiFormat)}
+                </span>
+                <span className="text-[10.5px]" style={{ color: styles.textTertiary }}>
+                  preset for {preset?.name} — nothing to pick
+                </span>
               </div>
-              <p className="mt-1.5 text-[10.5px]" style={{ color: styles.textTertiary }}>
-                {API_FORMATS.find((f) => f.id === apiFormat)?.hint}
-              </p>
-            </div>
+            ) : (
+              <div>
+                <label className="mb-1.5 block text-[11px] font-bold" style={{ color: styles.textSecondary }}>
+                  API format
+                </label>
+                <div className="grid grid-cols-3 gap-2">
+                  {API_FORMATS.map((f) => {
+                    const active = apiFormat === f.id;
+                    return (
+                      <button
+                        key={f.id}
+                        onClick={() => setApiFormat(f.id)}
+                        aria-pressed={active}
+                        title={f.hint}
+                        className="h-9 rounded-[10px] border-[1.5px] text-[11.5px] font-bold transition-colors"
+                        style={{
+                          borderColor: active ? withAlpha(styles.accent, 0.55) : styles.border,
+                          background: active ? withAlpha(styles.accent, 0.09) : styles.bg,
+                          color: active ? styles.accent : styles.textSecondary,
+                        }}
+                      >
+                        {f.label}
+                      </button>
+                    );
+                  })}
+                </div>
+                <p className="mt-1.5 text-[10.5px]" style={{ color: styles.textTertiary }}>
+                  {API_FORMATS.find((f) => f.id === apiFormat)?.hint}
+                </p>
+              </div>
+            )}
             <div>
               <label className="mb-1.5 block text-[11px] font-bold" style={{ color: styles.textSecondary }}>
                 API key <span style={{ color: styles.textTertiary }}>(optional — can be added later)</span>

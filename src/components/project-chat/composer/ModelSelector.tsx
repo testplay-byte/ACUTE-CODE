@@ -239,8 +239,15 @@ export function ModelSelector({
   // turned off in Settings stayed fully selectable on the session page.
   // The BUTTON's label lookup keeps the unfiltered list (the agent's own
   // provider may be disabled and must still resolve its display name).
+  //
+  // ROUND-89 (R89-B3, the owner's verdict): keyless providers leave the
+  // popover too — the seeded built-ins (Anthropic/OpenAI/Google/NVIDIA…)
+  // render "no models configured" dead rows when the owner never added
+  // them. `hasKey` is the configured signal (same filter the Settings
+  // provider list uses); the BUTTON's label lookup stays unfiltered so an
+  // agent wired to a since-de-keyed provider still resolves its name.
   const enabledProviders = useMemo(
-    () => providers.filter((p) => p.enabled),
+    () => providers.filter((p) => p.enabled && p.hasKey !== false),
     [providers],
   );
 

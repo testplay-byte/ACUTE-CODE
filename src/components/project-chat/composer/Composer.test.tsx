@@ -1741,6 +1741,63 @@ describe("Composer: model picker reflects Models & Providers edits (R62-2b / R64
   });
 });
 
+// ── ROUND-89 (R89-B3/B4): keyless providers leave the picker; the
+// last-used model becomes the next chats' default. ────────────────────────
+describe("Composer: model picker — the R89 provider filter + last-used memory", () => {
+  it("B3: a KEYLESS provider (never added) is absent from the popover — no dead 'no models' rows", async () => {
+    // A seeded built-in the owner never configured rides the providers
+    // list (hasKey false) — the owner's verdict: those rows showed
+    // "no models configured" in chat despite never being added.
+    vi.mocked(fetchProviders).mockResolvedValue([
+      ...PROVIDERS,
+      {
+        id: "anthropic",
+        name: "Anthropic",
+        kind: "anthropic",
+        baseUrl: "https://api.anthropic.com/v1",
+        enabled: true,
+        createdAt: "2026-08-20T09:02:00Z",
+        hasKey: false,
+      },
+    ]);
+    await renderPanelWithConversation();
+    expect(await screen.findByText("first question", {}, { timeout: 5000 })).toBeTruthy();
+
+    fireEvent.click(screen.getByRole("button", { name: "Choose model" }));
+    const menu = await screen.findByRole("menu", { name: "Choose model" });
+    await waitFor(() =>
+      expect(within(menu).getByRole("menuitem", { name: "Models of OpenRouter" })).toBeTruthy(),
+    );
+    expect(within(menu).queryByRole("menuitem", { name: "Models of Anthropic" })).toBeNull();
+  });
+
+  it("B4: picking a model remembers it GLOBALLY (acute.lastModel) — the next chats' default", async () => {
+    await renderPanelWithConversation();
+    expect(await screen.findByText("first question", {}, { timeout: 5000 })).toBeTruthy();
+
+    fireEvent.click(screen.getByRole("button", { name: "Choose model" }));
+    await screen.findByRole("menu", { name: "Choose model" });
+    fireEvent.mouseEnter(screen.getByRole("menuitem", { name: "Models of OpenRouter" }));
+    await screen.findByRole("listbox", { name: "Models of OpenRouter" });
+    await waitFor(() =>
+      expect(screen.getAllByRole("option").map((o) => o.textContent)).toEqual(["z-ai/glm-5.2:free"]),
+    );
+    fireEvent.click(screen.getByRole("option", { name: "z-ai/glm-5.2:free" }));
+
+    await waitFor(() =>
+      expect(screen.getByRole("button", { name: "Choose model" }).textContent).toContain(
+        "z-ai/glm-5.2:free",
+      ),
+    );
+    // THE R89-B4 ASSERTION: the pick landed in the GLOBAL key too (the
+    // per-session key was already asserted by the ROUND-50 test above).
+    expect(JSON.parse(window.localStorage.getItem("acute.lastModel") ?? "null")).toEqual({
+      model: "z-ai/glm-5.2:free",
+      providerId: "openrouter",
+    });
+  });
+});
+
 // ── G. Context donut ────────────────────────────────────────────────────────
 describe("Composer: context donut (owner spec G)", () => {
   it("renders the ring from GET /sessions/:id/context — ICON-ONLY, no inline % label (R51-c)", async () => {

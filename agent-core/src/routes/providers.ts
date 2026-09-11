@@ -28,6 +28,7 @@ import {
   clearProviderTombstone,
   createProviderRecord,
   deleteProviderRecord,
+  getProviderRecord,
   providerRecordIdExists,
   slugifyProviderId,
   updateProviderRecord,
@@ -99,27 +100,89 @@ export function registerProviderRoutes(scope: FastifyInstance, ctx: RouteContext
         errorBody("VALIDATION", `id is reserved or unusable: ${id}`, { field: "body.id" }),
       );
     }
-    // ROUND-37 (owner: "Add Provider" offers the built-in presets): a
-    // RESERVED id is now claimable when its row is ABSENT — that's a
-    // deleted built-in being re-added (re-adding clears the tombstone
-    // below so the boot seed leaves it alone). An existing row —
-    // reserved or not — is still a 409.
-    if (providerRecordIdExists(db, id)) {
-      return reply
-        .code(409)
-        .send(errorBody("CONFLICT", `provider '${id}' already exists`, { field: "body.id" }));
-    }
-
     const apiFormat =
       raw.apiFormat === "anthropic-messages" || raw.apiFormat === "responses"
         ? (raw.apiFormat as string)
         : "chat-completions";
+
+    // ── R89-B1: the owner's identity rules ─────────────────────────────────
+    // Verbatim: "the user can add as many providers as needed… The only
+    // thing you need to keep in mind is the provider name. Only the
+    // provider name should be different. It should not be already
+    // available." Two consequences:
+    //
+    //   1. NAME is the uniqueness key — a 409 with field body.name, not
+    //      the old id-collision the owner hit ("provider NVIDIA already
+    //      exists" on a FRESH reset — the boot seed re-creates the five
+    //      keyless built-in rows, which the R58 list renders as absent).
+    //   2. A keyless row at the wanted id is ADOPTED in place (configure
+    //      the built-in) instead of 409ing — the row is invisible in the
+    //      UI until it has a key, so adoption can never surprise anyone.
+    // A CONFIGURED row at the wanted id (a second NVIDIA preset while the
+    // first is live) derives a fresh id from the requested NAME — the
+    // user keeps adding same-type providers under different names.
+    const wantedName = raw.name.trim();
+    const existingRow = getProviderRecord(db, id);
+    const adoptable = existingRow !== undefined && !keyring.has(id);
+    const nameCollision = adoptable
+      ? (db.prepare("SELECT 1 FROM providers WHERE name = ? AND id != ?").get(wantedName, id) as
+          | { 1: number }
+          | undefined)
+      : (db.prepare("SELECT 1 FROM providers WHERE name = ?").get(wantedName) as
+          | { 1: number }
+          | undefined);
+    if (nameCollision !== undefined) {
+      return reply.code(409).send(
+        errorBody("CONFLICT", `provider name '${wantedName}' is already in use — pick a different display name`, {
+          field: "body.name",
+        }),
+      );
+    }
+    if (adoptable && existingRow !== undefined) {
+      // Adopt the invisible keyless row: same id (the key the dialog is
+      // about to store lands on it), the request's name/baseUrl/apiFormat.
+      const adopted = updateProviderRecord(db, {
+        ...existingRow,
+        name: wantedName,
+        baseUrl: baseUrl.toString(),
+        apiFormat,
+      });
+      return reply.code(200).send({ ...adopted, hasKey: false, adopted: true });
+    }
+    if (providerRecordIdExists(db, id)) {
+      // Configured row at the wanted id — derive a fresh one from the NAME
+      // (the preset's second instance: "NVIDIA Work" → prv_nvidia-work).
+      const derived = slugifyProviderId(wantedName);
+      if (derived === "" || providerRecordIdExists(db, derived)) {
+        // Either the name cannot slugify or even the derived id is taken —
+        // walk the -2/-3 suffixes; give up honestly after 16 tries.
+        const base = derived === "" ? "prv_provider" : derived;
+        let candidate = "";
+        for (let n = 2; n <= 17; n += 1) {
+          const probe = `${base}-${n}`;
+          if (!providerRecordIdExists(db, probe)) {
+            candidate = probe;
+            break;
+          }
+        }
+        if (candidate === "") {
+          return reply.code(409).send(
+            errorBody("CONFLICT", "no free provider id — remove one of the same-name providers first", {
+              field: "body.id",
+            }),
+          );
+        }
+        id = candidate;
+      } else {
+        id = derived;
+      }
+    }
     if (RESERVED_PROVIDER_IDS.includes(id)) {
       clearProviderTombstone(db, id);
     }
     const record = createProviderRecord(db, {
       id,
-      name: raw.name.trim(),
+      name: wantedName,
       baseUrl: baseUrl.toString(),
       apiFormat,
     });
@@ -163,6 +226,21 @@ export function registerProviderRoutes(scope: FastifyInstance, ctx: RouteContext
     }
     const name =
       typeof raw.name === "string" && raw.name.trim() !== "" ? raw.name.trim() : record.name;
+    // R89-B1: the name is the uniqueness key on PATCH too — renaming into
+    // another provider's name 409s (field body.name), same rule as POST.
+    if (name !== record.name) {
+      const collision = db.prepare("SELECT 1 FROM providers WHERE name = ? AND id != ?").get(
+        name,
+        record.id,
+      ) as { 1: number } | undefined;
+      if (collision !== undefined) {
+        return reply.code(409).send(
+          errorBody("CONFLICT", `provider name '${name}' is already in use — pick a different display name`, {
+            field: "body.name",
+          }),
+        );
+      }
+    }
     const apiFormat =
       raw.apiFormat === "anthropic-messages" || raw.apiFormat === "responses" || raw.apiFormat === "chat-completions"
         ? raw.apiFormat

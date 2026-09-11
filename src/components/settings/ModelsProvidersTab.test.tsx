@@ -1838,3 +1838,77 @@ describe("Honest load states (R62-2b)", () => {
     expect(screen.queryByText(/No models yet/)).toBeNull();
   });
 });
+
+/* ── ROUND-89 (R89-B1/B2): the provider identity rules + the preset
+ * experience, regressed here.
+ *  · The preset picker stays ADDABLE even when the preset is configured
+ *    (the "configured" info chip, never a disabled "added" pill) — the
+ *    owner may add as many same-type providers as needed.
+ *  · The NAME is the identity: typing a name a configured provider already
+ *    has shows the inline "already in use" feedback and disables Add
+ *    until it differs.
+ *  · The API format for a preset is a read-only summary (the owner: "it
+ *    should already know which API format the NVIDIA provider requires").
+ *  · The wire body carries the preset id (server-side adoption). */
+describe("Add provider dialog — the R89 identity rules", () => {
+  it("presets render addable with a configured chip (never disabled)", async () => {
+    providersList = [PROVIDER]; // openrouter configured
+    renderWithProviders(<ModelsProvidersTab />);
+    await waitFor(() => expect(screen.getByRole("button", { name: /add provider/i })).toBeTruthy());
+    fireEvent.click(screen.getByRole("button", { name: /add provider/i }));
+
+    const dlg = screen.getByRole("dialog");
+    const row = within(dlg).getByRole("button", { name: /openrouter/i });
+    expect(row).toBeTruthy();
+    expect((row as HTMLButtonElement).disabled).toBe(false); // still addable
+    expect(within(dlg).getByText("configured")).toBeTruthy();
+  });
+
+  it("a preset shows the read-only format summary, not the format picker; the name colliding disables Add", async () => {
+    providersList = [PROVIDER];
+    renderWithProviders(<ModelsProvidersTab />);
+    await waitFor(() => expect(screen.getByRole("button", { name: /add provider/i })).toBeTruthy());
+    fireEvent.click(screen.getByRole("button", { name: /add provider/i }));
+    // Pick NVIDIA (not configured in this fixture).
+    const dlg = screen.getByRole("dialog");
+    fireEvent.click(within(dlg).getByRole("button", { name: /nvidia/i }));
+
+    // The preset's format is preset — no selector row at all.
+    expect(within(dlg).queryByText("API format")).toBeNull();
+    expect(within(dlg).getByText(/preset for NVIDIA — nothing to pick/i)).toBeTruthy();
+
+    // Type a name the configured provider already has → the inline
+    // feedback + a disabled Add.
+    const nameInput = within(dlg).getByLabelText("Provider name");
+    fireEvent.change(nameInput, { target: { value: "OpenRouter" } });
+    expect(within(dlg).getByText(/already in use/i)).toBeTruthy();
+    expect((within(dlg).getByRole("button", { name: "Add provider" }) as HTMLButtonElement).disabled).toBe(true);
+
+    // A distinct name re-arms it.
+    fireEvent.change(nameInput, { target: { value: "OpenRouter Nightly" } });
+    expect(within(dlg).queryByText(/already in use/i)).toBeNull();
+    expect((within(dlg).getByRole("button", { name: "Add provider" }) as HTMLButtonElement).disabled).toBe(false);
+  });
+
+  it("Add provider sends the preset id on the wire (the server adopts the keyless row)", async () => {
+    providersList = [PROVIDER];
+    renderWithProviders(<ModelsProvidersTab />);
+    await waitFor(() => expect(screen.getByRole("button", { name: /add provider/i })).toBeTruthy());
+    fireEvent.click(screen.getByRole("button", { name: /add provider/i }));
+    const dlg = screen.getByRole("dialog");
+    fireEvent.click(within(dlg).getByRole("button", { name: /nvidia/i }));
+    fireEvent.change(within(dlg).getByLabelText("API key"), { target: { value: "nvapi-test" } });
+    fireEvent.click(within(dlg).getByRole("button", { name: "Add provider" }));
+
+    await waitFor(() => {
+      const created = calls.find((c) => c.method === "POST" && c.url === `${BASE}/api/v1/providers`);
+      expect(created).toBeTruthy();
+      expect(created?.body).toMatchObject({
+        id: "nvidia", // ← the adoption signal
+        name: "NVIDIA",
+        baseUrl: "https://integrate.api.nvidia.com/v1",
+        apiFormat: "chat-completions", // preset, never asked
+      });
+    });
+  });
+});
