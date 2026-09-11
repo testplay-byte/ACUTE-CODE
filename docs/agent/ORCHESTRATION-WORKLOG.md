@@ -2524,3 +2524,22 @@ Stage Summary:
 ### Stage Summary
 - v0.89.0 delivered: the in-app updater (the headline), the OpenRouter delete unblocked with the agent reset, the browser blank-render class closed at four independent layers, the model card's right-side identity, and the long-tail UI polish.
 - The R91 lesson for the ledger: v0.88.0's Rust compile-check gate verified TYPES, not THREADING — a sync command that builds a window compiles clean and deadlocks on Windows. The cargo check stays; the doc-comment contract in browser.rs now names the pattern, and the watchdog makes the failure class self-healing regardless.
+
+---
+
+## R92 — the fourth-walkthrough round (v0.90.0)
+
+**Task ID: R92 (orchestrator + five subagent tasks: 1-a browser, 1-b resolution/editing, 1-c Rust keys, 2-a juggling engine, 2-b multi-key UI).**
+
+### Work Log
+- The owner's fourth walkthrough on v0.89.0: the R91 wins confirmed (the OpenRouter force-delete, the model card, the browser rendering + menus on top); four new work areas filed (the mode-option browser clearing, the "agent acute has no provider ID/model configured" dead end, the un-editable agents, the subagent multi-key rework).
+- Three parallel research agents mapped the root causes with file:line evidence BEFORE any code: the composer's un-migrated selector family + the scrim's `.fixed.inset-0` guard match; the R91-A reset's NULL agent meeting prepareTurn's pre-override gate + the localStorage-only picker; the AgentFormDialog null `.trim()` crash; the key-pool architecture (no failover, non-persistent slots, the R47 Tauri overwrite, the subagent-only slot UI).
+- Wave 1 (parallel): 1-a the browser-embedding package (useNativeOptionsMenu + the "options" overlay payload + backdrop exemption + guard self-heal + caption honesty + the watchdog fresh sweep); 1-b the override-first gate + the picker self-heal + null-safe agents form + the shared-type truth; 1-c the Rust slot-aware key persistence (store/remove_provider_key_slot + the note file + the generalized targets — the R47 bug + restart survival).
+- Wave 2 (parallel): 2-a the juggling engine (resolveKeyPool dedupe, the immediate swap on auth/rate-limit in BOTH runners with the streamed flush, meta.key, the orchestrator de-special-casing, the internal-route slot contract, keyCount); 2-b the unified API-keys card + the SubAgentsTab rework + the key-pool floor 1.
+- Both waves' dispatches hit the orchestrator's context deadline on their FINAL REPORTS — the work itself completed; the orchestrator verified every diff personally, finished the interrupted test re-pins (SubAgentsTab, key-pool, the empty-pool ProviderKeysCard case, the AgentsScreen teardown-drain flake), wired the frontend meta.key rendering the interrupted agents had left un-typed, and committed in five logical commits.
+- Full pipeline green: lint, both typechecks, root 2,953/2,953 (165 files), e2e 12/12, build green, license audit 134 clean, windows-target cargo check green (the llvm-rc shim had to be re-created — the sandbox refresh lost ~/.cargo/bin from PATH), docs:check 196/0/0 after the stamps.
+- Docs: round-92.md (the verdict map + §8 the owner's test checklist), CHANGELOG 0.90.0, status.json (round 92, plan.current, the R92 milestone, suites 1024/1929/12/16), AGENT-MEMORY #92. Version 0.90.0 ×4.
+
+### Stage Summary
+- v0.90.0 delivered: the multi-key pool with automatic juggling (the headline — keys live in one place, sub-agents ride them, the shell persists them, the R47 overwrite bug dead), the browser-embedding finish (composer menus above the browser, backdrops exempt, the guard self-healing), the generation dead end closed at both ends, and editable agents.
+- The R92 lesson for the ledger: the R91-A reset CREATED a state no mainstream flow had ever produced (a NULL agent) — and the system had two latent gates (the pre-override 409, the form's `.trim()`) that both failed on it. Every new writer of a state must be checked against every reader of it.

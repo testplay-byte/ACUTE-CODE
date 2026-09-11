@@ -1,4 +1,4 @@
-<!-- last-reviewed: 2026-09-11 round-88 -->
+<!-- last-reviewed: 2026-09-11 round-92 -->
 # Changelog
 
 All notable changes to ACUTE-CODE are documented here. Entries are written for
@@ -18,6 +18,52 @@ notifications/jobs/checkpoints/dialogs/plugins tail; then Wave 3 the frontend
 seams), external plugin ctx enrichment, the lessons-ledger affordance,
 ratings-driven prompt tuning, and the standing items (edit-linting, installer
 code-signing, the Files-tab polish, agent web-app-testing tools).
+
+## [0.90.0] - 2026-09-11 — the R92 fourth-walkthrough round
+
+The owner's fourth end-to-end walkthrough, answered: the multi-key pool with
+automatic juggling, the browser-embedding finish, the generation dead end, and
+editable agents.
+
+### Added — multiple API keys per provider, juggled automatically (the headline)
+- **The "API keys" card** (Models & Providers → a provider): Key 1 (the
+  primary) plus Key 2, 3, … — paste, reveal, copy, test, remove; the count
+  rides the provider rows. Keys live in exactly one place.
+- **Automatic key juggling**: when a key is rejected (auth) or its rate limit
+  is spent, the very next untried key is used and the SAME call retries
+  immediately — no waiting. The live chat shows "switching to API key 2 of
+  3…". When the pool is exhausted the existing retry ladder takes over.
+- **Sub-agents use the same pool** — the separate sub-agent key setup is
+  gone (the sub-agents tab keeps the model picker, parallelism, and
+  supervision, and links to the keys' one home).
+- **Keys survive restarts for every provider** (previously only three
+  launcher-seeded OpenRouter slots persisted); adding a pool key in the
+  packaged app no longer overwrites the primary (the R47 bug).
+
+### Fixed — the browser is part of the application
+- The model picker's full-screen dim no longer blanks the embedded browser
+  (backdrops render beneath the OS webview and are now exempt from the
+  hide-guard).
+- The mode / thinking-level / add-context menus now float ON TOP of the
+  live browser (the same overlay window the sidebar menus use) instead of
+  hiding it when they overlap.
+- The webview guard self-heals: stale or unmeasurable overlays can no
+  longer pin the browser hidden, and any deliberate pause says so with a
+  caption instead of a blank.
+
+### Fixed — the "no provider ID/model configured" dead end
+- A send that carries a picked provider + model now works even while the
+  agent row is still unconfigured (the gate checks the EFFECTIVE pair) —
+  the exact failure from the walkthrough. The context meter and compaction
+  follow the same rule.
+- The first chat pick on an unconfigured agent ARMS the agent row itself,
+  so the 409 cannot re-appear.
+
+### Fixed — agents are editable again
+- Editing any agent (including the seeded templates, which carry no
+  provider/model) no longer crashes the screen: the model and provider are
+  optional ("leave empty to pick the model in chat"), round-trip honestly,
+  and `PATCH` can clear them back to not-configured.
 
 ## [0.89.0] - 2026-09-11 — the R91 third-walkthrough round
 
