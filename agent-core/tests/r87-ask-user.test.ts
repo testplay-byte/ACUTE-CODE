@@ -16,7 +16,7 @@ import { randomUUID } from "node:crypto";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { FastifyInstance, LightMyRequestResponse } from "fastify";
 import { openDatabase, type SqliteDatabase } from "../src/storage/db";
 import {
@@ -42,8 +42,19 @@ beforeEach(() => {
   resetAgentQuestionsForTest();
 });
 
+// R87 close-out fix (the Windows CI lesson): each test's SQLite handle stays
+// open on Windows and blocks the afterAll rmSync with EPERM (Linux tolerates
+// deleting open files). Close BOTH the fastify app and the db after every
+// test — the repo's standing pattern (approval-flow / browser-tool).
+afterEach(async () => {
+  await app.close();
+  db.close();
+});
+
 afterAll(() => {
-  if (tempDir !== "") rmSync(tempDir, { recursive: true, force: true });
+  // maxRetries/retryDelay: EPERM-style ephemeral locks on Windows — the
+  // default 0 retries fails fast on the very first locked file.
+  if (tempDir !== "") rmSync(tempDir, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
 });
 
 function req(

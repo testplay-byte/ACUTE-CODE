@@ -3,7 +3,9 @@ name: Release
 # ROUND-45 (packaging v1): assembles the launcher kit — the owner-facing
 # distribution artifact — and opens a DRAFT GitHub release for it. The kit is
 # pure scripts (no build): ACUTE.bat + acute.sh + acute_launcher.py +
-# credentials.example.txt + launcher README + CHANGELOG + VERSION.
+# launcher README + CHANGELOG + VERSION. (R87: credentials.example.txt is
+# GONE from the kit — the launcher takes the GitHub token interactively once
+# or from ACUTE_GITHUB_PAT; provider keys are saved in-app only.)
 #
 # ROUND-51 (R51-a): `desktop-installer` builds the real thing — the Windows
 # NSIS installer with the bundled sidecar (pinned node.exe + the staged
@@ -88,7 +90,6 @@ jobs:
           cp launcher/ACUTE.bat "$kit/"
           cp launcher/acute.sh "$kit/"
           cp launcher/acute_launcher.py "$kit/"
-          cp launcher/credentials.example.txt "$kit/"
           cp launcher/README.md "$kit/README.md"
           cp CHANGELOG.md "$kit/"
           printf '%s\n' "$version" > "$kit/VERSION"

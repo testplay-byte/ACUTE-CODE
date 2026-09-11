@@ -53,7 +53,7 @@ ACUTE-CODE (NOT "Forge" — the brief's old codename) is a Windows desktop app: 
 acute-code/
 ├── HANDOFF.md              ← this file
 ├── AGENTS.md               operating rules (repo copy; the workspace original sits one level above) — phase gates, question protocol, hard rules
-├── launcher/               owner's one-click local-PC entry (round-11): ACUTE.bat (CRLF coordinator) + acute.sh + acute_launcher.py (rich-UI workhorse: auto-install, credentials.txt, update+restart, self-update) + credentials.example.txt — see docs/runbooks/LOCAL-PC-RUNNER.md
+├── launcher/               owner's one-click local-PC entry (round-11): ACUTE.bat (CRLF coordinator) + acute.sh + acute_launcher.py (rich-UI workhorse: auto-install, update+restart, self-update; R87: the GitHub token is asked once + saved at .acute/github.pat, provider keys are saved in-app only — credentials.txt is GONE) — see docs/runbooks/LOCAL-PC-RUNNER.md
 ├── docs/
 │   ├── agent/ORCHESTRATION-WORKLOG.md   session history snapshot (sandbox-resilience backup, refreshed each session; R76-R81 backfilled R85)
 │   ├── specs/SPEC.md           master requirements (F1–F11 features)

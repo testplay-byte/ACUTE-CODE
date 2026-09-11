@@ -21,7 +21,7 @@ import { randomUUID } from "node:crypto";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterAll, beforeEach, describe, expect, it } from "vitest";
+import { afterAll, afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { FastifyInstance, LightMyRequestResponse } from "fastify";
 import { ProviderKeyring } from "../src/providers/registry";
 import { openDatabase, type SqliteDatabase } from "../src/storage/db";
@@ -43,8 +43,19 @@ beforeEach(() => {
   app = buildServer({ token: TOKEN, db, keyring: new ProviderKeyring({}) });
 });
 
+// R87 close-out fix (the Windows CI lesson): each test's SQLite handle stays
+// open on Windows and blocks the afterAll rmSync with EPERM (Linux tolerates
+// deleting open files). Close BOTH the fastify app and the db after every
+// test — the repo's standing pattern (approval-flow / browser-tool).
+afterEach(async () => {
+  await app.close();
+  db.close();
+});
+
 afterAll(() => {
-  if (tempDir !== "") rmSync(tempDir, { recursive: true, force: true });
+  // maxRetries/retryDelay: EPERM-style ephemeral locks on Windows — the
+  // default 0 retries fails fast on the very first locked file.
+  if (tempDir !== "") rmSync(tempDir, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
 });
 
 function req(
@@ -149,6 +160,10 @@ describe("R87 POST /system/reset", () => {
     // Arrange: custom provider + model rows + a project + a session + a key
     // in the running keyring (as the spawn env would have injected).
     const keyring = new ProviderKeyring({ ACUTE_PROVIDER_OPENROUTER: "sk-or-v1-live" });
+    // Close the beforeEach app first — reassigning without closing would
+    // orphan it (its handles would keep the temp dir locked on Windows even
+    // with the afterEach close below).
+    await app.close();
     app = buildServer({ token: TOKEN, db, keyring });
     await req("POST", "/api/v1/providers/prv_gw/models", { modelId: "test/model-x" });
     const project = await req("POST", "/api/v1/projects", { name: "Reset Me", rootPath: tempDir });

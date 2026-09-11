@@ -9,8 +9,9 @@
 #  Files that belong in THIS folder:
 #      acute.sh                <- you are here
 #      acute_launcher.py       <- the workhorse (never needs editing)
-#      credentials.txt         <- your secrets (rename from
-#                                 credentials.example.txt and fill it in)
+#  No secrets live here (R87): the GitHub token is asked once on first
+#  run and saved at .acute/github.pat (or set ACUTE_GITHUB_PAT); provider
+#  API keys are saved inside the app (Settings -> Models & Providers).
 #
 #  Useful commands:   bash acute.sh status    read-only health report
 #                     bash acute.sh update    update everything, don't start
