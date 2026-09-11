@@ -17,6 +17,25 @@
 //! instead of dying on the first restart (the pre-R82 hardcoded injection
 //! list never knew them).
 //!
+//! ROUND-92 (R92-D) — the multi-key POOL, made persistent and general.
+//! The owner's directive: "In Models & Providers … add more than one API
+//! key for a specific provider. Those API keys will be juggled between
+//! each other. If one API key fails, it will automatically try the next
+//! API key in line." A pool slot N ≥ 1 for provider <id> rides the
+//! GENERALIZED form of the ROUND-51 openrouter convention: credential
+//! target `ACUTE-CODE/provider/<id>-slot<N>` (the launcher-seeded
+//! `openrouter-slot{2,3,4}` targets are exactly this pattern), sidecar
+//! env `ACUTE_PROVIDER_<ID_UPPER>_SLOT<N>` (the keyring's slotEnvVarName
+//! derivation). The (id, slot) pairs ride a THIRD note file
+//! (`~/.acute/provider-pool-slots.txt`, `<providerId>:<slot>` — ids and
+//! slot numbers only, NEVER secrets, same standing as the other two) so
+//! pool keys survive restarts for ANY provider, not just the three
+//! hardcoded openrouter slots; and the Settings add-slot flow gets real
+//! slot-aware commands (store/remove_provider_key_slot), retiring the R47
+//! bug where the slot-less store_provider_key OVERWROTE the primary key.
+//! The juggling itself (failover to the next key) is the sidecar's task —
+//! this file only makes every key durable and spawn-injected.
+//!
 //! Keys cross this boundary only through these Tauri commands: never REST
 //! bodies, never localStorage, never logs or error strings.
 
@@ -68,6 +87,15 @@ fn legacy_target(provider_id: &str) -> String {
 // a builtin's. The builtins stay hardcoded verbatim (the launcher's seeded
 // targets) and are deliberately NOT noted — noting them would duplicate
 // entries.
+// ROUND-92 (R92-D): the same union now extends to NOTED POOL SLOTS —
+// one entry per (providerId, slot) pair in
+// ~/.acute/provider-pool-slots.txt, so a second/third API key saved for
+// ANY provider (the multi-key pool the owner asked for) is re-injected at
+// every spawn instead of dying on restart like custom keys once did.
+// Slot 2 for openrouter is covered by the hardcoded half above; every
+// other pair (nvidia slots, custom-provider slots, openrouter 5+) rides
+// the note file. Dedup is by ENV NAME — a stale note line for a pair the
+// hardcoded half already covers cannot duplicate an entry.
 pub(crate) fn provider_key_env_targets() -> Vec<(String, String)> {
     // The 5 builtins verbatim (ROUND-51 pool slots + ROUND-80 nvidia).
     let mut targets: Vec<(String, String)> = vec![
@@ -93,6 +121,18 @@ pub(crate) fn provider_key_env_targets() -> Vec<(String, String)> {
     for id in custom_provider_ids() {
         targets.push((custom_provider_env_name(&id), id));
     }
+    // ROUND-92 (R92-D): one entry per NOTED pool slot — the env name from
+    // the keyring's own slot derivation + the pseudo-id the credential
+    // lives under (ACUTE-CODE/provider/<id>-slot<N>). A stale note line
+    // whose key is absent is skipped silently by the consumer loop, same
+    // as custom providers; the env-name dedup keeps the hardcoded half
+    // authoritative for the pairs it already covers.
+    for (id, slot) in noted_pool_slots() {
+        let env_name = pool_slot_env_name(&id, slot);
+        if !targets.iter().any(|(existing, _)| *existing == env_name) {
+            targets.push((env_name, pool_slot_slug(&id, slot)));
+        }
+    }
     targets
 }
 
@@ -108,6 +148,16 @@ const BUILTIN_PROVIDER_IDS: [&str; 5] = [
     "openrouter-slot3",
     "openrouter-slot4",
 ];
+
+/// ROUND-92 (R92-D): the (providerId, slot) pairs the hardcoded half of
+/// provider_key_env_targets already covers — the launcher-seeded
+/// openrouter pool slots 2/3/4. store_provider_key_slot skips NOTING
+/// these (a note line would only duplicate the injection entry; the
+/// union's env-name dedup makes even a hand-added line harmless). Keep in
+/// sync with the array above; the derivation test pins the equivalence
+/// from both sides, exactly like BUILTIN_PROVIDER_IDS.
+const BUILTIN_POOL_SLOTS: [(&str, u32); 3] =
+    [("openrouter", 2), ("openrouter", 3), ("openrouter", 4)];
 
 /// ROUND-61 (R61): the SEPARATE VISION-MODEL key — the owner's directive:
 /// "for the vision we are utilizing a separate model… configure the API for
@@ -358,6 +408,165 @@ fn custom_provider_env_name(provider_id: &str) -> String {
     format!("ACUTE_PROVIDER_{upper}")
 }
 
+// ── ROUND-92 (R92-D) — the multi-key pool's slot derivations ────────────
+//
+// The sidecar keyring (agent-core/src/providers/registry.ts) addresses a
+// provider's key pool as slot 0 = primary (`ACUTE_PROVIDER_<ID>`) and
+// slot N = `ACUTE_PROVIDER_<ID>_SLOT<N>` (slotEnvVarName). The shell's
+// durable half mirrors that: slot N's key lives at the credential target
+// `ACUTE-CODE/provider/<id>-slot<N>` — the exact form the ROUND-51
+// launcher convention already seeds for openrouter 2/3/4, generalized to
+// every provider and slot so the owner's "more than one API key per
+// provider, juggled between each other" directive survives restarts.
+
+/// The pool-slot pseudo-provider id: `<providerId>-slot<N>` — the id the
+/// credential lives under and the spawn-injection list carries. openrouter
+/// slot 2 → "openrouter-slot2", byte-identical to the launcher-seeded
+/// convention. (A provider whose own id ends in "-slot<N>" would collide
+/// with this form — a pre-existing namespace fact since ROUND-36, not one
+/// this round introduces.)
+fn pool_slot_slug(provider_id: &str, slot: u32) -> String {
+    format!("{provider_id}-slot{slot}")
+}
+
+/// The credential target a pool slot N ≥ 1 lives at:
+/// `ACUTE-CODE/provider/<id>-slot<N>` — generalizes the launcher-seeded
+/// `ACUTE-CODE/provider/openrouter-slot{2,3,4}` targets.
+fn pool_slot_credential_target(provider_id: &str, slot: u32) -> String {
+    canonical_target(&pool_slot_slug(provider_id, slot))
+}
+
+/// The env var the spawn loop injects for a pool slot:
+/// `ACUTE_PROVIDER_<ID_UPPER>_SLOT<N>` — byte-identical to the sidecar
+/// keyring's slotEnvVarName (`${envVarName(providerId)}_SLOT${slot}`),
+/// which is also exactly what custom_provider_env_name derives for the
+/// pseudo-id "<id>-slot<N>" (every non-alphanumeric folds to '_', so the
+/// two derivations agree for every id shape). The existing hardcoded
+/// ACUTE_PROVIDER_OPENROUTER_SLOT2 entry proves the form; the test pins
+/// the equivalence from both sides.
+fn pool_slot_env_name(provider_id: &str, slot: u32) -> String {
+    format!("{}_SLOT{slot}", custom_provider_env_name(provider_id))
+}
+
+/// Pool slots are 1..=31: slot 0 is the PRIMARY key (store_provider_key's
+/// job — never a pool note), and the sidecar keyring scans the pool 0..32
+/// (registry.ts getPool), so 31 is the highest addressable slot.
+fn validate_pool_slot(slot: u32) -> Result<(), String> {
+    if !(1..=31).contains(&slot) {
+        return Err("pool slot must be between 1 and 31".into());
+    }
+    Ok(())
+}
+
+// ── ROUND-92 (R92-D) — the pool-slot NOTE file ──────────────────────────
+//
+// The third note file, the exact pattern of the ROUND-61 vision and
+// ROUND-82 custom notes: ids + slot numbers ONLY, never secrets. Without
+// it, a pool key saved in Settings died on the next restart unless it
+// happened to be one of the three hardcoded openrouter slots — the same
+// defect class R82-B cured for custom providers.
+
+/// ROUND-92 (R92-D): `~/.acute/provider-pool-slots.txt` — lines of
+/// `<providerId>:<slot>` (ids + slot numbers only, NEVER secrets; same
+/// standing as custom-providers.txt / vision-providers.txt).
+fn pool_slot_note_path() -> std::path::PathBuf {
+    dirs_or_home().join(".acute").join("provider-pool-slots.txt")
+}
+
+/// Pure parser for the note file's text — one `(providerId, slot)` pair
+/// per non-empty line, so the tests never touch the real ~/.acute.
+/// Corrupt lines (bad id slug, missing/extra colon, unparsable or
+/// out-of-range slot) are SKIPPED, never fatal: a hand-edited file must
+/// not fail the spawn. Duplicates (including "openrouter:02" vs
+/// "openrouter:2") collapse to the first occurrence.
+fn parse_pool_slot_note_text(text: &str) -> Vec<(String, u32)> {
+    let mut pairs: Vec<(String, u32)> = Vec::new();
+    for line in text.lines() {
+        let line = line.trim();
+        if line.is_empty() {
+            continue;
+        }
+        let mut parts = line.split(':');
+        // Exactly two colon-separated fields — anything else is corrupt.
+        let (Some(id), Some(slot_text), None) =
+            (parts.next(), parts.next(), parts.next())
+        else {
+            continue; // corrupt line — skip, never fail the spawn
+        };
+        if let Err(_) = validate_provider_id(id) {
+            continue; // corrupt line — skip, never fail the spawn
+        }
+        let Ok(slot) = slot_text.parse::<u32>() else {
+            continue; // corrupt line — skip, never fail the spawn
+        };
+        if let Err(_) = validate_pool_slot(slot) {
+            continue; // corrupt line — skip, never fail the spawn
+        }
+        if !pairs.iter().any(|(x, s)| x == id && *s == slot) {
+            pairs.push((id.to_string(), slot));
+        }
+    }
+    pairs
+}
+
+/// ROUND-92 (R92-D): the noted (providerId, slot) pairs — deduped,
+/// slug-validated, junk lines skipped, never a failed spawn (the same
+/// hardening as custom_provider_ids / vision_provider_ids).
+pub(crate) fn noted_pool_slots() -> Vec<(String, u32)> {
+    let Ok(text) = std::fs::read_to_string(pool_slot_note_path()) else {
+        return Vec::new();
+    };
+    parse_pool_slot_note_text(&text)
+}
+
+/// ROUND-92 (R92-D): idempotent append — the pool twin of
+/// note_custom_provider, called by store_provider_key_slot for pairs NOT
+/// already covered by the hardcoded builtin half of the injection list
+/// (BUILTIN_POOL_SLOTS). Best-effort like every note write: the credential
+/// itself is already durable, and the spawn loop skips absent keys
+/// silently, so a failed note costs nothing but a restart re-injection.
+fn note_pool_slot(provider_id: &str, slot: u32) {
+    let path = pool_slot_note_path();
+    if let Some(parent) = path.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    let mut pairs = noted_pool_slots();
+    if !pairs.iter().any(|(id, s)| id == provider_id && *s == slot) {
+        pairs.push((provider_id.to_string(), slot));
+        let rendered = pairs
+            .iter()
+            .map(|(id, s)| format!("{id}:{s}"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        let _ = std::fs::write(&path, rendered);
+    }
+}
+
+/// ROUND-92 (R92-D): drop ONE pair's note line when its key is removed, so
+/// the spawn loop stops hunting a credential that no longer exists (the
+/// miss itself is harmless — injection skips absent keys silently — but
+/// the line is avoidable noise). Removing a provider's PRIMARY key never
+/// cascades here, and this never touches the primary's own notes: pool
+/// slots are independent keys (R92-D decision). Missing file or missing
+/// pair = no-op; the rewrite happens only when the pair was actually
+/// noted (keeps the file's mtime honest).
+fn unnote_pool_slot(provider_id: &str, slot: u32) {
+    let path = pool_slot_note_path();
+    let Ok(text) = std::fs::read_to_string(&path) else {
+        return; // missing file — nothing to unnote
+    };
+    let wanted = format!("{provider_id}:{slot}");
+    if !text.lines().any(|line| line.trim() == wanted) {
+        return; // not in the file — no rewrite
+    }
+    let kept: Vec<String> = text
+        .lines()
+        .map(|line| line.trim().to_string())
+        .filter(|line| !line.is_empty() && *line != wanted)
+        .collect();
+    let _ = std::fs::write(&path, kept.join("\n"));
+}
+
 /// Provider ids are slugs everywhere in the system (API.md §8.2); enforce that
 /// here so the credential target can't be gamed with odd characters.
 fn validate_provider_id(provider_id: &str) -> Result<(), String> {
@@ -469,6 +678,9 @@ pub fn provider_key_status(provider_id: String) -> Result<bool, String> {
 /// OLD key after the next sidecar spawn. The webview calls this AFTER a
 /// successful DELETE; failures are best-effort (the row is already gone).
 /// No sidecar handoff is needed — the REST route already cleared the vault.
+/// ROUND-92 (R92-D): deliberately NO cascade to pool slots — they are
+/// independent keys and keep their credentials + note lines; the frontend
+/// removes the slots it wants gone via remove_provider_key_slot.
 #[tauri::command]
 pub fn remove_provider_key(provider_id: String) -> Result<(), String> {
     validate_provider_id(&provider_id)?;
@@ -481,13 +693,110 @@ pub fn remove_provider_key(provider_id: String) -> Result<(), String> {
     Ok(())
 }
 
+/// ROUND-92 (R92-D): store ONE POOL-SLOT key — the multi-key pool's shell
+/// half (the owner's directive: several API keys per provider, juggled with
+/// automatic failover — the juggling itself is the sidecar's round). This
+/// is the slot-aware store the R47 bug never had: the Settings add-slot
+/// flow used to invoke the slot-less store_provider_key, which OVERWROTE
+/// the primary key. The credential lands at
+/// `ACUTE-CODE/provider/<id>-slot<N>` (generalizing the openrouter-slot2/3/4
+/// convention), the pair is noted in ~/.acute/provider-pool-slots.txt so
+/// the NEXT spawn re-injects it, and the running sidecar gets the same hot
+/// handoff store_provider_key performs — now carrying the slot. Slot 0 is
+/// not a pool slot: the primary key stays store_provider_key's job.
+#[tauri::command]
+pub fn store_provider_key_slot(
+    app: AppHandle,
+    provider_id: String,
+    slot: u32,
+    key: String,
+) -> Result<(), String> {
+    validate_provider_id(&provider_id)?;
+    validate_pool_slot(slot)?;
+    if key.trim().is_empty() {
+        return Err("key must not be empty".into());
+    }
+
+    // Deliberately NOT logged; the error carries no key material.
+    crate::wincred::write(
+        &pool_slot_credential_target(&provider_id, slot),
+        TARGET_USER,
+        &key,
+    )
+    .map_err(|e| format!("storing pool-slot credential: {e}"))?;
+    // Best-effort retirement of the pre-R55 form, same as the primary.
+    let _ = crate::wincred::delete(&legacy_target(&pool_slot_slug(&provider_id, slot)));
+    // Note the pair so the NEXT spawn re-injects this key — except the
+    // three launcher-seeded openrouter slots the hardcoded half of the
+    // injection list already covers (a note line would only duplicate
+    // the entry; BUILTIN_POOL_SLOTS mirrors the BUILTIN_PROVIDER_IDS skip
+    // pattern in store_provider_key). Best-effort like the retirement
+    // above — the credential itself is already durable.
+    if !BUILTIN_POOL_SLOTS.contains(&(provider_id.as_str(), slot)) {
+        note_pool_slot(&provider_id, slot);
+    }
+
+    // The same hot handoff store_provider_key performs, now carrying the
+    // slot as a separate JSON field. Today's route (agent-core server.ts)
+    // validates providerId/value/action and IGNORES unknown fields —
+    // verified against the source — so the payload is accepted as-is and
+    // the value lands in the provider's PRIMARY env var until the R92-D
+    // wave-2 route learns `slot` and routes it into
+    // keyring.setSlot(providerId, slot, value) instead. The durable
+    // credential is slot-scoped either way, and the next spawn injects
+    // the correct ACUTE_PROVIDER_<ID>_SLOT<N> from it. The key VALUE
+    // never appears in any log.
+    if let Some((port, token)) = sidecar::endpoint(&app) {
+        let body = serde_json::json!({
+            "providerId": provider_id,
+            "slot": slot,
+            "keyName": "pool",
+            "value": key,
+            "action": "set",
+        })
+        .to_string();
+        if let Err(e) = sidecar::http_status(
+            "POST",
+            port,
+            "/internal/providers/keys",
+            Some(&token),
+            Some(&body),
+        ) {
+            // Route may not exist yet (sidecar workstream in flight); the
+            // credential is safely stored either way.
+            eprintln!("[keys] sidecar vault handoff skipped: {e}");
+        }
+    }
+    Ok(())
+}
+
+/// ROUND-92 (R92-D): remove ONE pool-slot key — its credential (canonical
+/// + legacy targets) and its note line. Mirrors remove_provider_key's
+/// best-effort shape; no sidecar handoff (the caller's REST route clears
+/// the sidecar's in-memory pool slot it knows about, and a respawn reads
+/// only what still exists in Credential Manager anyway).
+#[tauri::command]
+pub fn remove_provider_key_slot(provider_id: String, slot: u32) -> Result<(), String> {
+    validate_provider_id(&provider_id)?;
+    validate_pool_slot(slot)?;
+    let slug = pool_slot_slug(&provider_id, slot);
+    let _ = crate::wincred::delete(&canonical_target(&slug));
+    let _ = crate::wincred::delete(&legacy_target(&slug));
+    // Drop the pair's note line so the spawn loop stops hunting a
+    // credential that no longer exists (launcher-seeded pairs are never
+    // noted — the no-op filter inside keeps the file's mtime honest).
+    unnote_pool_slot(&provider_id, slot);
+    Ok(())
+}
+
 /// ROUND-87 (R87, the application-wide reset): delete EVERY provider
 /// credential this app owns from the OS store. Enumerates the full target
 /// set — the five builtins (openrouter + nvidia + the three pool slots),
-/// every noted custom provider, every noted vision pseudo-provider — in both
-/// namespaces (the canonical `ACUTE-CODE/provider/<id>` targets AND the
-/// pre-R55 `api-key.…` legacy forms), then clears both note files so the
-/// NEXT spawn's injection list is empty too.
+/// every noted custom provider, every noted vision pseudo-provider, every
+/// NOTED pool slot (ROUND-92) — in both namespaces (the canonical
+/// `ACUTE-CODE/provider/<id>` targets AND the pre-R55 `api-key.…` legacy
+/// forms), then clears all three note files so the NEXT spawn's injection
+/// list is empty too.
 ///
 /// The webview calls this BEFORE POST /system/reset: the sidecar's purge
 /// removes the note FILES themselves, so reading them here first is the only
@@ -503,6 +812,16 @@ pub fn purge_provider_keys() -> Result<u32, String> {
     ids.extend(custom_provider_ids());
     // Vision pseudo-providers ride the `<id>-vision` slug targets.
     ids.extend(vision_provider_ids().into_iter().map(|id| vision_slug(&id)));
+    // ROUND-92 (R92-D): the noted pool slots' pseudo-id targets —
+    // `ACUTE-CODE/provider/<id>-slot<N>` (the launcher-seeded
+    // openrouter-slot{2,3,4} are already among the builtins above; the
+    // note file carries every pair no fixed list knows — nvidia slots,
+    // custom-provider slots, openrouter 5+).
+    ids.extend(
+        noted_pool_slots()
+            .into_iter()
+            .map(|(id, slot)| pool_slot_slug(&id, slot)),
+    );
 
     let mut deleted: u32 = 0;
     for id in &ids {
@@ -518,9 +837,16 @@ pub fn purge_provider_keys() -> Result<u32, String> {
             }
         }
     }
-    // Clear both note files (ids only, never secrets). Missing files are a
-    // no-op; the sidecar's file purge would remove them anyway.
-    for path in [custom_provider_note_path(), vision_provider_note_path()] {
+    // Clear all three note files (ids only, never secrets). Missing files
+    // are a no-op; the sidecar's file purge would remove them anyway.
+    // ROUND-92 (R92-D): provider-pool-slots.txt joins the list — a stale
+    // pool note would re-arm nothing (its credential is gone) but the
+    // reset's contract is an EMPTY injection list.
+    for path in [
+        custom_provider_note_path(),
+        vision_provider_note_path(),
+        pool_slot_note_path(),
+    ] {
         let _ = std::fs::remove_file(&path);
     }
     Ok(deleted)
@@ -529,8 +855,9 @@ pub fn purge_provider_keys() -> Result<u32, String> {
 #[cfg(test)]
 mod tests {
     use super::{
-        canonical_target, custom_provider_env_name, legacy_target, validate_provider_id,
-        BUILTIN_PROVIDER_IDS,
+        canonical_target, custom_provider_env_name, legacy_target, parse_pool_slot_note_text,
+        pool_slot_credential_target, pool_slot_env_name, pool_slot_slug, validate_pool_slot,
+        validate_provider_id, BUILTIN_POOL_SLOTS, BUILTIN_PROVIDER_IDS,
     };
 
     /// The R55 contract: reads/writes target the launcher's cmdkey form,
@@ -588,5 +915,105 @@ mod tests {
             assert_eq!(custom_provider_env_name(id), env_name);
             assert!(BUILTIN_PROVIDER_IDS.contains(&id));
         }
+    }
+
+    /// ROUND-92 (R92-D): the pool-slot derivations must be byte-identical
+    /// to what already ships — the launcher-seeded openrouter-slot2
+    /// credential target and the hardcoded ACUTE_PROVIDER_OPENROUTER_SLOT2
+    /// injection entry — because the generalized slots ride the very same
+    /// convention. The two env derivations (slot-suffix form and pseudo-id
+    /// form) must agree for every id shape: non-alphanumerics fold to '_'
+    /// either way. BUILTIN_POOL_SLOTS rows pin the skip list to the
+    /// hardcoded half of provider_key_env_targets, exactly like
+    /// BUILTIN_PROVIDER_IDS above.
+    #[test]
+    fn pool_slot_derivations_match_the_shipped_convention() {
+        assert_eq!(pool_slot_slug("openrouter", 2), "openrouter-slot2");
+        assert_eq!(
+            pool_slot_credential_target("openrouter", 2),
+            "ACUTE-CODE/provider/openrouter-slot2"
+        );
+        for (id, slot, env_name) in [
+            ("openrouter", 2u32, "ACUTE_PROVIDER_OPENROUTER_SLOT2"),
+            ("openrouter", 5, "ACUTE_PROVIDER_OPENROUTER_SLOT5"),
+            ("nvidia", 3, "ACUTE_PROVIDER_NVIDIA_SLOT3"),
+            ("prv_my-gateway", 7, "ACUTE_PROVIDER_PRV_MY_GATEWAY_SLOT7"),
+        ] {
+            assert_eq!(pool_slot_env_name(id, slot), env_name);
+            // The slot-suffix form is the same math as deriving the env
+            // name of the pseudo-id "<id>-slot<N>" (registry.ts
+            // slotEnvVarName vs envVarName on the slug).
+            assert_eq!(
+                pool_slot_env_name(id, slot),
+                custom_provider_env_name(&pool_slot_slug(id, slot))
+            );
+        }
+        for (id, slot) in BUILTIN_POOL_SLOTS {
+            assert_eq!(
+                pool_slot_env_name(id, slot),
+                custom_provider_env_name(&pool_slot_slug(id, slot))
+            );
+            // The pseudo-id of every hardcoded builtin pool pair IS one of
+            // the builtin provider ids — the two skip lists describe the
+            // same hardcoded half.
+            assert!(BUILTIN_PROVIDER_IDS.contains(&pool_slot_slug(id, slot).as_str()));
+        }
+    }
+
+    /// ROUND-92 (R92-D): pool slots are 1..=31 — slot 0 is the primary
+    /// (store_provider_key's job), and the sidecar keyring scans the pool
+    /// 0..32 (registry.ts getPool), so 31 is the highest addressable slot.
+    #[test]
+    fn pool_slots_are_validated() {
+        assert!(validate_pool_slot(1).is_ok());
+        assert!(validate_pool_slot(31).is_ok());
+        assert!(validate_pool_slot(0).is_err());
+        assert!(validate_pool_slot(32).is_err());
+        assert!(validate_pool_slot(u32::MAX).is_err());
+    }
+
+    /// ROUND-92 (R92-D): the note-file parser — dedup, corrupt-line skip,
+    /// range enforcement. Pure (text in, pairs out) so the test never
+    /// touches the real ~/.acute. Every line between the good ones is a
+    /// distinct corruption class the spawn must survive.
+    #[test]
+    fn pool_slot_note_text_parses_and_hardens() {
+        let text = "\
+openrouter:2
+openrouter:2
+
+bogus line: no wait
+prv_my-gateway:5
+nvidia:0
+openrouter:99
+openrouter:three
+:7
+prv_ok-slot3
+PRV_UPPER:2
+openrouter:02
+openrouter:
+:2
+two:colons:3
+prv_my-gateway:5
+";
+        let pairs = parse_pool_slot_note_text(text);
+        assert_eq!(
+            pairs,
+            vec![
+                ("openrouter".to_string(), 2u32),
+                ("prv_my-gateway".to_string(), 5),
+            ]
+        );
+        // Empty and missing files parse to nothing — never an error.
+        assert!(parse_pool_slot_note_text("").is_empty());
+        assert!(parse_pool_slot_note_text("\n \n\t\n").is_empty());
+        // The canonical render of the accepted pairs round-trips.
+        let rendered = pairs
+            .iter()
+            .map(|(id, s)| format!("{id}:{s}"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert_eq!(rendered, "openrouter:2\nprv_my-gateway:5");
+        assert_eq!(parse_pool_slot_note_text(&rendered), pairs);
     }
 }

@@ -39,6 +39,14 @@ pub fn run() {
             // purges the OS-stored key + the custom-provider note line after
             // the sidecar's DELETE /providers/:id succeeds.
             keys::remove_provider_key,
+            // ROUND-92 (R92-D): the multi-key pool's slot-aware halves —
+            // store/remove ONE pool slot's key (credential target
+            // ACUTE-CODE/provider/<id>-slot<N> + the provider-pool-slots
+            // note file), so extra API keys per provider survive restarts
+            // and the add-slot flow stops overwriting the primary key
+            // (the R47 bug). The frontend wiring is this round's wave 2.
+            keys::store_provider_key_slot,
+            keys::remove_provider_key_slot,
             // ROUND-61 (R61): the separate vision-model key slot (Settings →
             // Computer Use): credential write + note + in-memory handoff.
             keys::store_vision_key,
