@@ -237,25 +237,33 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
-describe("SubAgentsTab — rendering (ROUND-43 R43-5 + ROUND-58 R58-d)", () => {
-  it("renders the page header + the keys, model, parallelism, and supervision cards", async () => {
+describe("SubAgentsTab — rendering (ROUND-43 R43-5 + ROUND-58 R58-d, re-pinned ROUND-92 R92-D3)", () => {
+  it("renders the page header + the keys note, model, parallelism, and supervision cards", async () => {
     renderWithProviders(<SubAgentsTab />);
 
-    await waitFor(() => expect(screen.getByText("Sub-agent OpenRouter keys")).toBeTruthy());
+    // ROUND-92 (R92-D3): the old hardcoded "Sub-agent OpenRouter keys"
+    // paste-slot card is DELETED — sub-agents ride the provider key pools
+    // (juggled automatically). In its place: the compact informational note.
+    await waitFor(() => expect(screen.getByTestId("subagent-keys-note")).toBeTruthy());
+    expect(
+      screen.getByText(/Sub-agents use the API key pool of each provider/),
+    ).toBeTruthy();
+    expect(screen.getByRole("link", { name: "Open Models and Providers to manage API keys" })).toBeTruthy();
+    // The paste-slot UI is gone entirely — no key inputs live on this page.
+    expect(screen.queryByLabelText(/Sub-agent key for pool slot/)).toBeNull();
     // ROUND-58 (R58-d): clean page header — the stale "Temporary setup"
     // banner is GONE.
     expect(screen.getByRole("heading", { level: 2, name: "Sub-agents" })).toBeTruthy();
     expect(screen.queryByText("Temporary setup.")).toBeNull();
-    expect(screen.getByText(/everything sub-agent lives on this one page/)).toBeTruthy();
-    // The owner-directed context copy.
+    // ROUND-92 (R92-D3): the header copy now states the new truth — sub-agents
+    // share each provider's API key pool.
     expect(
-      screen.getByText(/Sub-agent traffic prefers these keys so parallel agents don't compete/),
+      screen.getByText(/they share each provider's API key pool/),
     ).toBeTruthy();
     await waitFor(() => expect(screen.getByText("Sub-agent model")).toBeTruthy());
     // ROUND-58 (R58-d): the stale "(temporary)" card labels are retired too
     // (this page is now the PERMANENT sub-agent home, not a stopgap).
     expect(screen.queryByText("(temporary)")).toBeNull();
-    expect(screen.getByText(/permanent home for sub-agent configuration/)).toBeTruthy();
     // ROUND-58 (R58-d): the parallelism card MOVED here from Advanced.
     await waitFor(() => expect(screen.getByText("Sub-agent parallelism")).toBeTruthy());
     expect(screen.getByText("Max parallel sub-agents")).toBeTruthy();
@@ -276,16 +284,13 @@ describe("SubAgentsTab — rendering (ROUND-43 R43-5 + ROUND-58 R58-d)", () => {
     await waitFor(() =>
       expect(screen.getAllByText(/Inherits main model/).length).toBeGreaterThanOrEqual(2),
     );
-    // The three dedicated paste slots render as empty inputs.
-    expect(screen.getByLabelText("Sub-agent key for pool slot 2")).toBeTruthy();
-    expect(screen.getByLabelText("Sub-agent key for pool slot 3")).toBeTruthy();
-    expect(screen.getByLabelText("Sub-agent key for pool slot 4")).toBeTruthy();
   });
 
   it("is reachable via ?tab=subagents; Advanced NO LONGER duplicates the section (R58-d)", async () => {
     renderWithProviders(<SettingsPage />, { route: "/settings?tab=subagents" });
     await waitFor(() => expect(screen.getByRole("heading", { level: 1, name: "Sub-agents" })).toBeTruthy());
-    expect(screen.getByText("Sub-agent OpenRouter keys")).toBeTruthy();
+    // ROUND-92 (R92-D3): the keys presence on this page is the NOTE now.
+    expect(screen.getByTestId("subagent-keys-note")).toBeTruthy();
     await waitFor(() => expect(screen.getByText("Sub-agent parallelism")).toBeTruthy());
 
     // ROUND-58 (R58-d): the owner's "subagent and advanced options are
@@ -308,53 +313,31 @@ describe("SubAgentsTab — rendering (ROUND-43 R43-5 + ROUND-58 R58-d)", () => {
   });
 });
 
-describe("SubAgentsTab — key paste slots", () => {
-  it("saving a pasted key PUTs pool slot 2 — and slot 0 is never touched", async () => {
+// ── ROUND-92 (R92-D3): the separate sub-agent API keys are GONE. The owner's
+// rework: "completely remove the separate API keys for the subagents… those
+// API keys will be used for the subagents too" — sub-agents ride each
+// provider's key pool, juggled automatically on failure. What remains on this
+// page: the informational note + its deep link, and NOTHING that writes keys.
+describe("SubAgentsTab — the keys note (ROUND-92 R92-D3)", () => {
+  it("renders the note with the Models & Providers deep link — and never writes a key from this page", async () => {
     renderWithProviders(<SubAgentsSection />);
 
-    const input = await screen.findByLabelText("Sub-agent key for pool slot 2");
-    fireEvent.change(input, { target: { value: "sk-or-v1-testkey-0001" } });
-    fireEvent.click(screen.getByRole("button", { name: "Save key to pool slot 2" }));
+    await waitFor(() => expect(screen.getByTestId("subagent-keys-note")).toBeTruthy());
+    // The deep link targets the Models & Providers tab (tab=api).
+    const link = screen.getByRole("link", { name: "Open Models and Providers to manage API keys" });
+    expect(link.getAttribute("href")).toBe("/settings?tab=api");
 
+    // NO key input, NO save/remove button, NO pool mutation ever fires from
+    // this page (the old paste-slot card is deleted — keys live in exactly
+    // ONE place: Models & Providers → the provider → API keys).
+    expect(screen.queryByLabelText(/Sub-agent key for pool slot/)).toBeNull();
+    expect(screen.queryByRole("button", { name: /save key/i })).toBeNull();
+    expect(screen.queryByRole("button", { name: /remove pool slot/i })).toBeNull();
+    await waitFor(() => expect(screen.getByText("Sub-agent model")).toBeTruthy());
     await waitFor(() => {
-      const put = calls.find((c) => c.method === "PUT" && c.url.endsWith("/keys/2"));
-      expect(put).toBeDefined();
-      expect(put?.body).toEqual({ value: "sk-or-v1-testkey-0001" });
-    });
-    // NEVER the owner's primary key slot.
-    expect(calls.every((c) => !c.url.includes("/keys/0"))).toBe(true);
-    // The saved state re-renders masked.
-    await waitFor(() => expect(screen.getByText("sk-or…0001")).toBeTruthy());
-  });
-
-  it("shows the masked saved state and DELETEs the slot on remove", async () => {
-    pool = [{ slot: 2, hasKey: true, masked: "sk-o…wxyz" }];
-    renderWithProviders(<SubAgentsSection />);
-
-    await waitFor(() => expect(screen.getByText("sk-o…wxyz")).toBeTruthy());
-    fireEvent.click(screen.getByRole("button", { name: "Remove pool slot 2 key" }));
-
-    await waitFor(() => {
-      const del = calls.find((c) => c.method === "DELETE" && c.url.endsWith("/keys/2"));
-      expect(del).toBeDefined();
-    });
-    expect(calls.every((c) => !c.url.includes("/keys/0"))).toBe(true);
-  });
-
-  it("offers the next free pool slot for extra keys", async () => {
-    pool = [
-      { slot: 2, hasKey: true, masked: "sk-o…aaaa" },
-      { slot: 3, hasKey: true, masked: "sk-o…bbbb" },
-      { slot: 4, hasKey: true, masked: "sk-o…cccc" },
-    ];
-    renderWithProviders(<SubAgentsSection />);
-
-    // All three dedicated slots full → the add row targets slot 5.
-    const extra = await screen.findByLabelText("Sub-agent key for pool slot 5");
-    fireEvent.change(extra, { target: { value: "sk-or-v1-testkey-0042" } });
-    fireEvent.click(screen.getByRole("button", { name: "Save key to pool slot 5" }));
-    await waitFor(() => {
-      expect(calls.find((c) => c.method === "PUT" && c.url.endsWith("/keys/5"))).toBeDefined();
+      expect(
+        calls.every((c) => !(c.method === "PUT" || c.method === "DELETE") || !c.url.includes("/keys/")),
+      ).toBe(true);
     });
   });
 });

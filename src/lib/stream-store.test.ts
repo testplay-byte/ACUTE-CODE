@@ -1665,6 +1665,36 @@ describe("stream store ROUND-75 retry ladder frames", () => {
     await promise;
   });
 
+  // ── ROUND-92 (R92-D): the key-pool juggling frame renders as the transient
+  // note — the owner sees "switching to API key 2 of 3" while the swap retries
+  // immediately, and the first content frame clears it (the shared effect).
+  it("ROUND-92: a meta.key frame sets the transient juggling note; the first content frame clears it", async () => {
+    const sse = manualSseResponse();
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(sse.response));
+
+    const promise = useStreamStore.getState().startStream(PARENT, "work");
+    sse.emit({
+      type: "meta.key",
+      key: { attempt: 2, totalKeys: 3, reason: "rate_limit" },
+      message: "Rate limited — switching to API key 2 of 3, retrying immediately",
+    });
+
+    await vi.waitFor(() => {
+      expect(useStreamStore.getState().bySession[PARENT]?.liveTurn?.note).toContain(
+        "switching to API key 2 of 3",
+      );
+    });
+
+    sse.emit({ type: "text-delta", delta: "the fresh key worked" });
+    await vi.waitFor(() => {
+      expect(useStreamStore.getState().bySession[PARENT]?.liveTurn?.note).toBeNull();
+    });
+
+    sse.emit({ type: "stopped" });
+    sse.close();
+    await promise;
+  });
+
   // ── ROUND-83 (R83): the compaction + context-limit frames finally RENDER ──
   it("ROUND-83: a meta.compaction frame sets the honest note AND invalidates the context meter (the ring drops)", async () => {
     const sse = manualSseResponse();

@@ -1429,6 +1429,15 @@ function handleStreamEvent(
     patchSession(sessionId, { liveTurn: { ...liveTurn, note: event.message } });
     return;
   }
+  // ROUND-92 (R92-D): the key-pool juggling line — the backend swapped the
+  // turn onto the next untried pool key (auth / rate_limit) and is retrying
+  // the SAME call immediately. Rides liveTurn.note exactly like the overflow
+  // line above: transient, honest, and cleared by the first content frame
+  // (the shared clearing effect below covers both).
+  if (event.type === "meta.key") {
+    patchSession(sessionId, { liveTurn: { ...liveTurn, note: event.message } });
+    return;
+  }
   // ROUND-83 (R83) §3.4: the compaction + context-limit meta frames finally
   // RENDER (the pre-R83 store ignored them — the user was told nothing while
   // the donut contradicted reality). Both ride liveTurn.note (the R71

@@ -13,28 +13,32 @@ import {
 // (gaps, full pool, empty pool, bounds). The component-level regression test
 // (slots 2 & 4 held → the next add writes slot 3) lives in
 // ModelsProvidersTab.test.tsx.
-describe("nextFreeSlot (ROUND-47 R47-c1)", () => {
-  it("empty pool → the first pool slot (2)", () => {
-    expect(nextFreeSlot([])).toBe(2);
+// ROUND-92 (R92-D3): re-pinned to the new pool floor — slot 1 is a first-class
+// pool slot now (the subagent-only slot range is gone; every key joggles),
+// so the scan starts at 1 where it used to start at 2.
+describe("nextFreeSlot (ROUND-47 R47-c1, re-pinned ROUND-92 R92-D3)", () => {
+  it("empty pool → the first pool slot (1, the R92 floor)", () => {
+    expect(nextFreeSlot([])).toBe(1);
   });
 
   it("contiguous held slots → one past the last", () => {
-    expect(nextFreeSlot([2, 3, 4])).toBe(5);
+    expect(nextFreeSlot([1, 2, 3])).toBe(4);
   });
 
   it("GAP (the old `slots.length + 2` collision): slots 2 & 4 held → 3, never 4", () => {
     // The old code computed 2 + 2 = 4 and overwrote the held slot-4 key.
-    expect(nextFreeSlot([2, 4])).toBe(3);
-    expect(nextFreeSlot([3, 5, 7])).toBe(2);
+    expect(nextFreeSlot([2, 4])).toBe(1);
+    expect(nextFreeSlot([3, 5, 7])).toBe(1);
+    expect(nextFreeSlot([1, 3, 5])).toBe(2);
   });
 
   it("ignores ordering, duplicates and out-of-range held slots", () => {
-    expect(nextFreeSlot([4, 2, 4])).toBe(3);
-    // Slots outside [2, 31] never block the scan (slot 0 is the primary key).
-    expect(nextFreeSlot([0, 1, 32, 99])).toBe(2);
+    expect(nextFreeSlot([2, 1, 2])).toBe(3);
+    // Slots outside [1, 31] never block the scan (slot 0 is the primary key).
+    expect(nextFreeSlot([0, 32, 99])).toBe(1);
   });
 
-  it("full pool (every slot 2–31 held) → -1", () => {
+  it("full pool (every slot 1–31 held) → -1", () => {
     const all = Array.from({ length: MAX_POOL_SLOT - MIN_POOL_SLOT + 1 }, (_, i) => MIN_POOL_SLOT + i);
     expect(nextFreeSlot(all)).toBe(-1);
   });

@@ -5,8 +5,12 @@
  * `slots.length + 2` — which COLLIDES whenever the pool has a gap (slots 2
  * and 4 held → length 2 → the next add silently OVERWRITES slot 4's key).
  * This helper is the fix: the first slot in [min, max] that is not held.
- * SubAgentsTab's add-row does the same scan inline; this is the shared,
- * unit-tested version.
+ *
+ * ROUND-92 (R92-D3): the pool floor moved 2 → 1. The owner's multi-key
+ * rework made slot 1 a first-class pool slot (the Tauri shell validates
+ * 1..=31, and every key joggles — there is no “sub-agent-only” slot range
+ * anymore), and the old hardcoded SubAgentsTab paste-slot UI that started
+ * at 2 is deleted. `nextFreeSlot` now defaults to [1, 31].
  *
  * ROUND-58 (R58-d): also home to the key-REVEAL client fn (the owner's
  * explicit "every single one of the API keys, without any issues" demand —
@@ -18,15 +22,16 @@
 import { ApiError } from "./api";
 import { useConfigStore } from "./config-store";
 
-/** Pool slots are addressable 0–31 (slot 0 = the primary key, never written
- * from the pool UI; the pool convention starts at 2 — see SubAgentsTab). */
-export const MIN_POOL_SLOT = 2;
+/** Pool slots are addressable 1–31 (slot 0 = the PRIMARY key — its editor
+ * writes it through the primary store path, never through the pool math). */
+export const MIN_POOL_SLOT = 1;
 export const MAX_POOL_SLOT = 31;
 
 /**
  * The first free slot in [min, max] not present in `heldSlots`, or -1 when
  * the whole range is held (the caller surfaces "pool is full"). Pure: no
- * mutation, order/duplicates/out-of-range entries in `heldSlots` are fine.
+ * mutation, order/duplicates/out-of-range entries in `heldSlots` are fine —
+ * a held slot 0 (the primary) never blocks the scan, which starts at 1.
  */
 export function nextFreeSlot(heldSlots: number[], min = MIN_POOL_SLOT, max = MAX_POOL_SLOT): number {
   const held = new Set(heldSlots);

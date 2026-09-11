@@ -169,6 +169,42 @@ export async function storeProviderKey(providerId: string, key: string): Promise
   return true;
 }
 
+/**
+ * ROUND-92 (R92-D3): store ONE POOL SLOT's key via the slot-aware shell
+ * command — Credential Manager target `ACUTE-CODE/provider/<providerId>-slot<N>`
+ * (slot 1–31; slot 0 is the primary and belongs to storeProviderKey), the
+ * provider-pool-slots note line so it survives restarts, and the hot handoff
+ * POST to the sidecar's internal route from the Rust side. This is THE fix
+ * for the R47 bug where the pool UI's add invoked the slot-less
+ * store_provider_key and OVERWROTE the primary key. Browser dev (no shell)
+ * resolves to false — the REST pool routes (PUT /providers/:id/keys/:slot)
+ * are the browser path.
+ */
+export async function storeProviderKeySlot(
+  providerId: string,
+  slot: number,
+  key: string,
+): Promise<boolean> {
+  if (!isTauri()) return false;
+  await tauriInvoke<void>("store_provider_key_slot", { providerId, slot, key });
+  return true;
+}
+
+/**
+ * ROUND-92 (R92-D3): remove ONE POOL SLOT's durable credential via the
+ * slot-aware shell command (canonical + legacy Credential Manager targets +
+ * the note line). Unlike the store command there is no Rust-side handoff,
+ * so the caller follows up with the REST pool DELETE to clear the RUNNING
+ * sidecar's in-memory keyring (the listing refetch then shows the truth
+ * without a restart). Browser dev (no shell) resolves to false — the REST
+ * DELETE alone is the browser path.
+ */
+export async function removeProviderKeySlot(providerId: string, slot: number): Promise<boolean> {
+  if (!isTauri()) return false;
+  await tauriInvoke<void>("remove_provider_key_slot", { providerId, slot });
+  return true;
+}
+
 export async function providerKeyStatus(providerId: string): Promise<boolean> {
   if (!isTauri()) return false;
   return tauriInvoke<boolean>("provider_key_status", { providerId });

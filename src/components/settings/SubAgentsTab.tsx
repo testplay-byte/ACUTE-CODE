@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Activity, Check, Cpu, KeyRound, Plus, Trash2, Workflow } from "lucide-react";
+import { Link } from "react-router";
+import { Activity, Check, Cpu, KeyRound, Workflow } from "lucide-react";
 import { useTimeoutClear } from "../../hooks/use-timeout-clear";
 import { useThemeStyles } from "../../lib/use-theme-styles";
 import { withAlpha } from "../dashboard/helpers";
@@ -8,13 +9,9 @@ import { isTauri } from "../../lib/sidecar";
 import { filterModelsForPicker, useSettingsStore } from "../../lib/settings-store";
 import {
   fetchConfiguredModels,
-  fetchKeyPool,
   fetchModelsCatalog,
   fetchOrchestrationSettings,
-  removeKeyPoolSlot,
-  setKeyPoolSlot,
   updateOrchestrationSettings,
-  type KeyPoolSlot,
   type OrchestrationSettings,
   type ProviderModelConfig,
   type SubagentModelRef,
@@ -26,25 +23,19 @@ import {
  *
  * ROUND-58 (R58-d) RESTRUCTURE (owner: "the subagent and advanced options
  * are apparently mixed up… recreate these two pages properly"): this tab is
- * now the SINGLE home for everything sub-agent —
- *  1. Sub-agent OpenRouter keys — paste slots writing the EXISTING
- *     /providers/openrouter/keys/N pool routes. Slot 0 (the owner's primary
- *     key) is NEVER touched; the orchestrator already prefers pool slots for
- *     sub-agent traffic so parallel children don't compete with main chats.
- *  2. Sub-agent model — picker over the SERVED model catalog (GET
- *     /models/catalog — ROUND-47 R47-c2), honoring the shared modelsFreeOnly
- *     pref, persisted as orchestration.subagentModel (null = "Inherits main
- *     model"). Only tool-capable models are selectable (ROUND-39).
- *  3. Sub-agent parallelism — the maxParallel + perKeyLimit steppers MOVED
- *     here from the old Advanced tab's OrchestrationCard (they are sub-agent
- *     limits, not advanced ones).
- *  4. Sub-agent supervision — the R52-b supervisor knobs (heartbeat + stall).
+ * the SINGLE home for everything sub-agent — model, parallelism, and
+ * supervision.
  *
- * The old duplication — this whole section ALSO rendering inside the Advanced
- * tab — is gone; Advanced keeps only the connection + memory cards.
+ * ROUND-92 (R92-D3, owner directive): sub-agents DO NOT have their own API
+ * keys anymore — they use each provider's key pool (the multi-key juggling
+ * the orchestrator now does: a rejected/rate-limited key fails over to the
+ * next one automatically). The old hardcoded "Sub-agent OpenRouter keys"
+ * paste-slot card (openrouter slots 2/3/4) is DELETED; in its place sits a
+ * compact note pointing at the one true key manager, Models & Providers →
+ * API keys. The sub-agent MODEL selection stays exactly as it was
+ * (inherit row + served catalog picker + configured rows, R82), as do the
+ * parallelism and supervision cards.
  */
-
-const SUBAGENT_PROVIDER_ID = "openrouter";
 
 /**
  * ROUND-53: the old copy told the PACKAGED app's owner to run `pnpm dev:full`
@@ -54,17 +45,6 @@ const SUBAGENT_PROVIDER_ID = "openrouter";
 const coreUnreachableHint = isTauri()
   ? "agent-core is not responding — if the connection banner is showing, use its Restart engine button, then reopen this tab."
   : "Agent core unreachable — start the app (or pnpm dev:full).";
-
-/**
- * The three paste slots target pool slots 2, 3, 4 (slot 0 = the owner's
- * primary key is NEVER written from here). NOTE on numbering: pool slot 1
- * exists in the keyring's env-var space, but poolInfo's high-water mark only
- * tracks slots ≥ 2 — a slot-1-only pool row would be invisible to the masked
- * listing — so this UI follows the established pool convention of starting at
- * slot 2 (the same slots shown under Models & Providers → key pool).
- */
-const SUBAGENT_KEY_SLOTS = [2, 3, 4] as const;
-const MAX_POOL_SLOT = 31;
 
 function formatCtx(ctx: number): string {
   return ctx >= 1_000_000 ? `${Math.round(ctx / 1_048_576)}M` : `${Math.round(ctx / 1000)}K`;
@@ -89,214 +69,43 @@ async function saveSubagentSettings(patch: {
   return updateOrchestrationSettings(patch);
 }
 
-/* ── Card 1: sub-agent API key paste slots ────────────────────────────────── */
+/* ── Card 1 (R92-D3): sub-agents use the provider key pools ─────────────── */
 
-function SubAgentKeysCard() {
+/**
+ * The compact informational note that replaced the old hardcoded
+ * "Sub-agent OpenRouter keys" paste-slot card. The owner's rework: sub-agents
+ * do NOT have separate keys — they ride each provider's key pool (juggled
+ * automatically on rate limits / auth failures). Keys are added and managed
+ * in exactly ONE place: Models & Providers → the provider → API keys.
+ */
+function SubAgentKeysNote() {
   const styles = useThemeStyles();
-  const queryClient = useQueryClient();
-  const resetAfter = useTimeoutClear();
-  const [drafts, setDrafts] = useState<Record<number, string>>({});
-  const [extraDraft, setExtraDraft] = useState("");
-  const [msg, setMsg] = useState<string | null>(null);
-
-  const poolQuery = useQuery({
-    queryKey: ["key-pool", SUBAGENT_PROVIDER_ID],
-    queryFn: () => fetchKeyPool(SUBAGENT_PROVIDER_ID),
-  });
-  const pool = poolQuery.data ?? [];
-  const bySlot = new Map(pool.map((k) => [k.slot, k]));
-  // Pool slots outside the three dedicated ones (e.g. keys added under
-  // Models & Providers) still show here — same underlying pool.
-  const extraSlots = pool
-    .map((k) => k.slot)
-    // ROUND-44 (VLM pass): start at 2 — slot 1 is the keyring's legacy
-    // env-var slot and shows up in the pool listing as a keyless row; rendering
-    // it as an add-row here produced the confusing 2,3,4,1,5 ordering.
-    .filter((s) => s >= 2 && !(SUBAGENT_KEY_SLOTS as readonly number[]).includes(s))
-    .sort((a, b) => a - b);
-  const nextSlot = (() => {
-    for (let s = 2; s <= MAX_POOL_SLOT; s++) {
-      if (!bySlot.get(s)?.hasKey) return s;
-    }
-    return null;
-  })();
-  // The add-row only offers slots BEYOND the three dedicated paste slots —
-  // rendering it for slot 2/3/4 would duplicate their aria-labels.
-  const addableSlot =
-    nextSlot !== null && !(SUBAGENT_KEY_SLOTS as readonly number[]).includes(nextSlot)
-      ? nextSlot
-      : null;
-
-  const invalidate = () => {
-    void queryClient.invalidateQueries({ queryKey: ["key-pool", SUBAGENT_PROVIDER_ID] });
-    void queryClient.invalidateQueries({ queryKey: ["settings-providers"] });
-  };
-
-  const saveSlot = useMutation({
-    mutationFn: ({ slot, value }: { slot: number; value: string }) =>
-      setKeyPoolSlot(SUBAGENT_PROVIDER_ID, slot, value),
-    onSuccess: (_data, vars) => {
-      setDrafts((d) => ({ ...d, [vars.slot]: "" }));
-      if (vars.slot === addableSlot) setExtraDraft("");
-      setMsg(`Saved to pool slot ${vars.slot}.`);
-      resetAfter(() => setMsg(null), 1500);
-      invalidate();
-    },
-    onError: (err: Error) => setMsg(err.message),
-  });
-
-  const removeSlot = useMutation({
-    mutationFn: (slot: number) => removeKeyPoolSlot(SUBAGENT_PROVIDER_ID, slot),
-    onSuccess: (_data, slot) => {
-      setMsg(`Removed pool slot ${slot}.`);
-      resetAfter(() => setMsg(null), 1500);
-      invalidate();
-    },
-    onError: (err: Error) => setMsg(err.message),
-  });
-
-  const slotRow = (slot: number) => {
-    const info: KeyPoolSlot | undefined = bySlot.get(slot);
-    const saved = info?.hasKey === true;
-    const draft = drafts[slot] ?? "";
-    return (
-      <div
-        key={slot}
-        className="flex items-center gap-2 px-3 py-2 border-b last:border-b-0"
-        style={{ borderColor: styles.borderSubtle }}
-        data-subagent-key-slot={slot}
-      >
-        <span
-          className="text-[11px] font-mono font-bold shrink-0"
-          style={{ color: saved ? styles.text : styles.textTertiary }}
-        >
-          KEY SLOT {slot}
-        </span>
-        {saved ? (
-          <>
-            <span
-              className="font-mono text-[11px] flex-1 min-w-0 truncate"
-              style={{ color: styles.textSecondary }}
-              title={`Pool slot ${slot} key stored (masked)`}
-            >
-              {info?.masked ?? "—"}
-            </span>
-            <button
-              onClick={() => {
-                if (window.confirm(`Remove the sub-agent key in pool slot ${slot}?`)) {
-                  removeSlot.mutate(slot);
-                }
-              }}
-              aria-label={`Remove pool slot ${slot} key`}
-              title="Remove key"
-              className="w-6 h-6 grid place-items-center rounded-md shrink-0"
-              style={{ color: styles.textTertiary }}
-              onMouseEnter={(e) => (e.currentTarget.style.background = withAlpha("#ef4444", 0.12))}
-              onMouseLeave={(e) => (e.currentTarget.style.background = "transparent")}
-            >
-              <Trash2 size={11} />
-            </button>
-          </>
-        ) : (
-          <>
-            <input
-              type="password"
-              autoComplete="off"
-              value={draft}
-              onChange={(e) => setDrafts((d) => ({ ...d, [slot]: e.target.value }))}
-              placeholder="paste an OpenRouter key (sk-or-…)"
-              aria-label={`Sub-agent key for pool slot ${slot}`}
-              className="h-8 flex-1 min-w-0 rounded-[8px] border-[1.5px] px-2.5 font-mono text-[11px] outline-none"
-              style={{ background: styles.bg, borderColor: styles.border, color: styles.text }}
-            />
-            <button
-              onClick={() => draft.trim() && saveSlot.mutate({ slot, value: draft.trim() })}
-              disabled={!draft.trim() || saveSlot.isPending}
-              aria-label={`Save key to pool slot ${slot}`}
-              className="h-8 px-3 rounded-[8px] text-[11px] font-bold shrink-0 disabled:opacity-50"
-              style={{ background: withAlpha(styles.accent, 0.12), color: styles.accent }}
-            >
-              Save
-            </button>
-          </>
-        )}
-      </div>
-    );
-  };
-
   return (
     <section
-      className="rounded-[16px] border-[1.5px] p-4 flex flex-col gap-2.5"
+      className="rounded-[16px] border-[1.5px] p-4 flex items-center gap-3 flex-wrap"
       style={{ background: styles.card, borderColor: styles.border }}
-      aria-label="Sub-agent OpenRouter keys"
+      aria-label="Sub-agent API keys"
+      data-testid="subagent-keys-note"
     >
-      <div className="flex items-center gap-2 flex-wrap">
-        <KeyRound size={13} style={{ color: styles.accent, opacity: 0.8 }} />
-        <span className="text-[13px] font-bold" style={{ color: styles.text }}>
-          Sub-agent OpenRouter keys
-        </span>
-        <span className="flex-1" />
-        {msg && (
-          <span
-            className="text-[11px] font-bold"
-            style={{ color: saveSlot.isError || removeSlot.isError ? "#ef4444" : "#22c55e" }}
-          >
-            {msg}
-          </span>
-        )}
-      </div>
-      <p className="text-[11px] leading-relaxed" style={{ color: styles.textSecondary }}>
-        Sub-agent traffic prefers these keys so parallel agents don't compete with your main chats.
-        Paste up to three OpenRouter keys — they go to the provider's dedicated pool slots (never
-        your primary key, slot&nbsp;0). Paste them here or use the app's provider key fields —
-        the desktop app stores everything in its OS secure store.
+      <span
+        className="w-9 h-9 shrink-0 rounded-[10px] grid place-items-center"
+        style={{ background: withAlpha(styles.accent, 0.1), color: styles.accent }}
+        aria-hidden
+      >
+        <KeyRound size={15} />
+      </span>
+      <p className="min-w-0 flex-1 text-[12px]" style={{ color: styles.textSecondary }}>
+        Sub-agents use the API key pool of each provider — add and manage keys under
+        Models &amp; Providers.
       </p>
-      {poolQuery.isError ? (
-        <p className="text-[11px]" style={{ color: "#ef4444" }} role="alert">
-          {coreUnreachableHint} to manage sub-agent keys.
-        </p>
-      ) : (
-        <div className="rounded-[10px] border-[1.5px] overflow-hidden" style={{ borderColor: styles.border }}>
-          {SUBAGENT_KEY_SLOTS.map(slotRow)}
-          {extraSlots.map(slotRow)}
-          {addableSlot !== null && (
-            <div
-              className="flex items-center gap-2 px-3 py-2 border-t"
-              style={{ borderColor: styles.borderSubtle, background: withAlpha(styles.accent, 0.03) }}
-            >
-              <span className="text-[11px] font-mono font-bold shrink-0" style={{ color: styles.textTertiary }}>
-                KEY SLOT {addableSlot}
-              </span>
-              <input
-                type="password"
-                autoComplete="off"
-                value={extraDraft}
-                onChange={(e) => setExtraDraft(e.target.value)}
-                placeholder="another OpenRouter key (optional)"
-                aria-label={`Sub-agent key for pool slot ${addableSlot}`}
-                className="h-8 flex-1 min-w-0 rounded-[8px] border-[1.5px] px-2.5 font-mono text-[11px] outline-none"
-                style={{ background: styles.bg, borderColor: styles.border, color: styles.text }}
-              />
-              <button
-                onClick={() =>
-                  extraDraft.trim() && saveSlot.mutate({ slot: addableSlot, value: extraDraft.trim() })
-                }
-                disabled={!extraDraft.trim() || saveSlot.isPending}
-                aria-label={`Save key to pool slot ${addableSlot}`}
-                className="h-8 px-3 rounded-[8px] text-[11px] font-bold flex items-center gap-1 shrink-0 disabled:opacity-50"
-                style={{ background: withAlpha(styles.accent, 0.12), color: styles.accent }}
-              >
-                <Plus size={11} strokeWidth={2.5} /> Add slot
-              </button>
-            </div>
-          )}
-        </div>
-      )}
-      <p className="text-[10.5px]" style={{ color: styles.textTertiary }}>
-        Same pool as Models&nbsp;&amp;&nbsp;Providers → key pool; slot&nbsp;0 (your primary key) is
-        never written here. ROUND-58 (R58-d): this page is the permanent home for sub-agent
-        configuration — the old “temporary” framing is retired.
-      </p>
+      <Link
+        to="/settings?tab=api"
+        aria-label="Open Models and Providers to manage API keys"
+        className="h-8 px-3 rounded-[8px] text-[11px] font-bold flex items-center gap-1.5 shrink-0"
+        style={{ background: withAlpha(styles.accent, 0.12), color: styles.accent }}
+      >
+        <KeyRound size={11} /> Manage keys
+      </Link>
     </section>
   );
 }
@@ -814,8 +623,8 @@ function SubAgentParallelismCard() {
         )}
       </div>
       <p className="text-[11px] leading-relaxed" style={{ color: styles.textSecondary }}>
-        How hard the orchestrator may run delegated children at once — across the whole turn and per
-        API key (the per-key limit protects provider rate limits).
+        How hard the orchestrator may run delegated children at once — across the whole turn and
+        per API key (the per-key cap spreads the load over the provider&apos;s key pool).
       </p>
       <div className="flex flex-col gap-2">
         {stepper(
@@ -829,7 +638,7 @@ function SubAgentParallelismCard() {
         )}
         {stepper(
           "Per API-key limit",
-          "Concurrent sub-agents per API key — protects rate limits (1–20)",
+          "Concurrent sub-agents per key — spreads load over the key pool (1–20)",
           "perKeyLimit",
           1,
           20,
@@ -839,7 +648,7 @@ function SubAgentParallelismCard() {
       </div>
       <div className="flex items-center gap-3">
         <p className="text-[10.5px] flex-1" style={{ color: styles.textTertiary }}>
-          Sub-agents prefer dedicated key-pool slots (the keys card above) over the primary key.
+          Each key carries at most this many children at once; extra pool keys raise the ceiling.
         </p>
         <button
           onClick={() => update.mutate(draft)}
@@ -1096,13 +905,16 @@ function SubAgentSupervisionCard() {
 /* ── Composition ──────────────────────────────────────────────────────────── */
 
 /**
- * The four sub-agent cards, in reading order (R58-d). Kept as a named export
- * so tests (and any future embedding) can mount the card stack directly.
+ * The sub-agent cards, in reading order (R58-d; R92-D3: the keys CARD
+ * became the keys NOTE). Kept as a named export so tests (and any future
+ * embedding) can mount the card stack directly.
  */
 export function SubAgentsSection() {
   return (
     <div className="flex flex-col gap-4" data-subagents-section>
-      <SubAgentKeysCard />
+      {/* R92-D3: sub-agents ride the provider key pools — this note points
+          at the one true key manager (the old paste-slot card is gone). */}
+      <SubAgentKeysNote />
       <SubAgentModelCard />
       {/* ROUND-58 (R58-d): the parallelism limits MOVED here from the old
           Advanced tab — they govern exactly the children the cards above
@@ -1122,14 +934,14 @@ export function SubAgentsTab() {
   return (
     <div className="mx-auto flex max-w-2xl flex-col gap-4">
       {/* Clean page header — the cards below are the whole sub-agent story:
-          keys, model, parallelism, supervision. */}
+          keys (via the providers&apos; pools), model, parallelism, supervision. */}
       <div className="pb-1">
         <h2 className="text-[16px] font-black" style={{ color: styles.text }}>
           Sub-agents
         </h2>
         <p className="mt-1 text-[12px]" style={{ color: styles.textSecondary }}>
-          Keys, model, parallelism, and supervision for the agents your main agent delegates to —
-          everything sub-agent lives on this one page.
+          Model, parallelism, and supervision for the agents your main agent delegates to — they
+          share each provider&apos;s API key pool.
         </p>
       </div>
       <SubAgentsSection />

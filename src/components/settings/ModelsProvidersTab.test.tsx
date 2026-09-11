@@ -2,29 +2,32 @@
 /**
  * ROUND-47 (R47-c1) — provider-management consolidation regression tests:
  *
- *  1. KeyPoolSection slot-collision fix: slots 2 & 4 held → the next add
- *     writes slot 3 (the old `slots.length + 2` computed 4 and OVERWROTE
- *     the held slot-4 key).
- *  2. Full pool (slots 2–31) → honest error, no PUT.
- *  3. The connection card's new test surface: key selector (primary + held
- *     pool slots) + model selector (reachability default) → POST
- *     /providers/:id/test carries {slot, model}; ok:false at HTTP 200
- *     renders the honest red message; reachability-only surfaces the
- *     backend's own note.
- *  4. Browser-dev ephemeral-key notes render (isTauri() is false in tests).
+ *  1. ProviderKeysCard first-free-slot: the add row appends at the lowest
+ *     free slot ≥ 1 (the R92-D3 floor; a gap is filled, never a held slot
+ *     overwritten — the old `slots.length + 2` collision class).
+ *  2. THE R92-D3 / R47 TAURI FIX: in Tauri mode adding a key invokes
+ *     store_provider_key_slot with slot ≥ 1 — NEVER the slot-less
+ *     store_provider_key (which overwrote the PRIMARY).
+ *  3. Full pool (slots 1–31) → the honest note, no PUT.
+ *  4. The connection card's test surface: key selector (Key 1 primary +
+ *     held pool slots, as ordinals) + model selector (reachability
+ *     default) → POST /providers/:id/test carries {slot, model};
+ *     ok:false at HTTP 200 renders the honest red message.
+ *  5. Browser-dev ephemeral-key notes render (isTauri() is false in tests).
  *
  * ROUND-50 (R50-d) — the models/providers page rebuild:
- *  5. Independent scrolling: the provider list (left) and the detail pane
+ *  6. Independent scrolling: the provider list (left) and the detail pane
  *     (right) are TWO separate .overflow-y-auto.auto-scroll columns — no
  *     shared page scroll.
- *  6. The detail pane's sectioned cards (Connection / API key pool /
- *     Models / Danger zone).
- *  7. The catalog-driven "Add models" picker: search, free/paid badges,
+ *  7. The detail pane's sectioned cards (Connection / API keys / Models /
+ *     Danger zone) — R92-D3 merged the key field + the pool into ONE
+ *     "API keys — N" card (Key 1 = primary, Key 2..N = the pool).
+ *  8. The catalog-driven "Add models" picker: search, free/paid badges,
  *     multi-select bulk add → ONE upsert per selected model with the served
  *     catalog's pricing pre-filled; already-added rows disabled.
- *  8. The per-model configuration dialog round-trips pricing fields through
+ *  9. The per-model configuration dialog round-trips pricing fields through
  *     PATCH /models/:id (empty price → null = unknown, never 0).
- *  9. The manual add-by-id fallback when the live catalog is unreachable.
+ * 10. The manual add-by-id fallback when the live catalog is unreachable.
  *
  * The api-level fns themselves are covered exhaustively in
  * src/lib/api.test.ts; this file covers the WIRING.
@@ -73,7 +76,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { QueryClient, QueryClientProvider, type QueryKey } from "@tanstack/react-query";
 import { MemoryRouter } from "react-router";
-import { KeyPoolSection, ModelsProvidersTab } from "./ModelsProvidersTab";
+import { ModelsProvidersTab, ProviderKeysCard } from "./ModelsProvidersTab";
 import { resetTestState, renderWithProviders } from "../../test-utils";
 import { useSettingsStore } from "../../lib/settings-store";
 import type { CatalogModel, KeyPoolSlot, ProviderModelConfig, ProviderView } from "../../lib/api";
@@ -492,6 +495,9 @@ beforeEach(() => {
     value: { writeText: clipboardWriteText },
     configurable: true,
   });
+  // R92-D3: the pool remove confirm — default true (the confirm CONTENT is
+  // not under test here; SubAgentsTab.test.tsx has the same stub).
+  vi.stubGlobal("confirm", vi.fn(() => true));
   vi.stubGlobal("fetch", fetchMock);
   fetchMock.mockClear();
 });
@@ -503,72 +509,240 @@ afterEach(() => {
 
 /* ── KeyPoolSection: the slot-collision fix (the round's bug) ─────────────── */
 
-describe("KeyPoolSection — next-free-slot (ROUND-47 R47-c1)", () => {
-  it("slots 2 & 4 held → the next add PUTs slot 3 (the old code overwrote 4)", async () => {
+describe("ProviderKeysCard — first-free-slot + the R92-D3/R47 Tauri fix", () => {
+  it("labels are ORDINALS, not slots: primary + slots 2 & 5 held → KEY 1 / KEY 2 / KEY 3 and the header counts all three", async () => {
     pool = [
+      { slot: 0, hasKey: true, masked: "sk-o…b4af" },
       { slot: 2, hasKey: true, masked: "sk-o…aaaa" },
-      { slot: 4, hasKey: true, masked: "sk-o…cccc" },
+      { slot: 5, hasKey: true, masked: "sk-o…eeee" },
     ];
-    renderWithProviders(<KeyPoolSection providerId="openrouter" />);
+    renderWithProviders(<ProviderKeysCard provider={PROVIDER} />);
 
-    fireEvent.change(await screen.findByLabelText("New pool key"), {
+    // The header count = primary + every held pool slot.
+    await waitFor(() => expect(screen.getByText("API keys — 3")).toBeTruthy());
+    // Key 1 is the primary row (slot 0)…
+    expect(document.querySelector('[data-pool-slot="0"][data-key-ordinal="1"]')).not.toBeNull();
+    // …Key 2 is slot 2, Key 3 is slot 5 — the GAPS never surface.
+    expect(document.querySelector('[data-pool-slot="2"][data-key-ordinal="2"]')).not.toBeNull();
+    expect(document.querySelector('[data-pool-slot="5"][data-key-ordinal="3"]')).not.toBeNull();
+    expect(screen.getByText("KEY 2")).toBeTruthy();
+    expect(screen.getByText("KEY 3")).toBeTruthy();
+    expect(screen.queryByText("SLOT 2")).toBeNull();
+    expect(screen.queryByText("SLOT 5")).toBeNull();
+    // The primary chip rides Key 1's row.
+    expect(screen.getByText("primary")).toBeTruthy();
+    // The juggling help line (the owner's contract, stated plainly).
+    expect(
+      screen.getByText(/If a key hits a rate limit or is rejected, the next key is tried automatically/),
+    ).toBeTruthy();
+    // The add row offers the NEXT ordinal (Key 4).
+    expect(screen.getByText("KEY 4")).toBeTruthy();
+  });
+
+  it("a gap is filled first: only slot 2 held (plus the primary) → the next add PUTs slot 1", async () => {
+    pool = [
+      { slot: 0, hasKey: true, masked: "sk-o…b4af" },
+      { slot: 2, hasKey: true, masked: "sk-o…aaaa" },
+    ];
+    renderWithProviders(<ProviderKeysCard provider={PROVIDER} />);
+    await waitFor(() => expect(screen.getByText("sk-o…aaaa")).toBeTruthy());
+
+    fireEvent.change(await screen.findByLabelText("New API key"), {
+      target: { value: "sk-or-v1-pool-key-001" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: /add key/i }));
+
+    await waitFor(() => {
+      const put = calls.find((c) => c.method === "PUT" && c.url.endsWith("/keys/1"));
+      expect(put).toBeDefined();
+      expect(put?.body).toEqual({ value: "sk-or-v1-pool-key-001" });
+    });
+    // The held slot-2 key is NEVER written.
+    expect(calls.some((c) => c.method === "PUT" && c.url.endsWith("/keys/2"))).toBe(false);
+    // The saved slot re-renders masked.
+    await waitFor(() => expect(screen.getByText("sk-or…-001")).toBeTruthy());
+  });
+
+  it("GAP above: slots 1, 2 & 4 held → the next add PUTs slot 3 (never overwriting the held 4)", async () => {
+    pool = [
+      { slot: 1, hasKey: true, masked: "sk-o…aaaa" },
+      { slot: 2, hasKey: true, masked: "sk-o…bbbb" },
+      { slot: 4, hasKey: true, masked: "sk-o…dddd" },
+    ];
+    renderWithProviders(<ProviderKeysCard provider={PROVIDER} />);
+    await waitFor(() => expect(screen.getByText("sk-o…dddd")).toBeTruthy());
+
+    fireEvent.change(await screen.findByLabelText("New API key"), {
       target: { value: "sk-or-v1-pool-key-003" },
     });
-    fireEvent.click(screen.getByRole("button", { name: /add slot/i }));
+    fireEvent.click(screen.getByRole("button", { name: /add key/i }));
 
     await waitFor(() => {
-      const put = calls.find((c) => c.method === "PUT" && c.url.endsWith("/keys/3"));
-      expect(put).toBeDefined();
-      expect(put?.body).toEqual({ value: "sk-or-v1-pool-key-003" });
+      expect(calls.find((c) => c.method === "PUT" && c.url.endsWith("/keys/3"))).toBeDefined();
     });
-    // The held slot-4 key is NEVER written.
     expect(calls.some((c) => c.method === "PUT" && c.url.endsWith("/keys/4"))).toBe(false);
-    // The saved slot re-renders masked.
-    await waitFor(() => expect(screen.getByText("sk-or…-003")).toBeTruthy());
   });
 
-  it("contiguous pool → one past the last (2,3,4 held → slot 5)", async () => {
+  it("contiguous pool (1,2,3 held) → one past the last (slot 4)", async () => {
     pool = [
-      { slot: 2, hasKey: true, masked: "sk-o…aaaa" },
-      { slot: 3, hasKey: true, masked: "sk-o…bbbb" },
-      { slot: 4, hasKey: true, masked: "sk-o…cccc" },
+      { slot: 1, hasKey: true, masked: "sk-o…aaaa" },
+      { slot: 2, hasKey: true, masked: "sk-o…bbbb" },
+      { slot: 3, hasKey: true, masked: "sk-o…cccc" },
     ];
-    renderWithProviders(<KeyPoolSection providerId="openrouter" />);
+    renderWithProviders(<ProviderKeysCard provider={PROVIDER} />);
+    await waitFor(() => expect(screen.getByText("sk-o…cccc")).toBeTruthy());
 
-    fireEvent.change(await screen.findByLabelText("New pool key"), {
-      target: { value: "sk-or-v1-pool-key-005" },
+    fireEvent.change(await screen.findByLabelText("New API key"), {
+      target: { value: "sk-or-v1-pool-key-004" },
     });
-    fireEvent.click(screen.getByRole("button", { name: /add slot/i }));
+    fireEvent.click(screen.getByRole("button", { name: /add key/i }));
 
     await waitFor(() => {
-      expect(calls.find((c) => c.method === "PUT" && c.url.endsWith("/keys/5"))).toBeDefined();
+      expect(calls.find((c) => c.method === "PUT" && c.url.endsWith("/keys/4"))).toBeDefined();
     });
   });
 
-  it("full pool (slots 2–31) → honest error, no PUT at all", async () => {
-    pool = Array.from({ length: 30 }, (_, i) => ({
-      slot: i + 2,
+  it("full pool (slots 1–31) → the honest note replaces the add row, no PUT at all", async () => {
+    pool = Array.from({ length: 31 }, (_, i) => ({
+      slot: i + 1,
       hasKey: true,
       masked: `sk-o…${String(i).padStart(2, "0")}`,
     }));
-    renderWithProviders(<KeyPoolSection providerId="openrouter" />);
+    renderWithProviders(<ProviderKeysCard provider={PROVIDER} />);
 
-    fireEvent.change(await screen.findByLabelText("New pool key"), {
-      target: { value: "sk-or-v1-overflow" },
-    });
-    fireEvent.click(screen.getByRole("button", { name: /add slot/i }));
-
-    await waitFor(() =>
-      expect(screen.getByText("the key pool is full (slots 2–31)")).toBeTruthy(),
-    );
+    await waitFor(() => expect(screen.getByTestId("pool-full-note")).toBeTruthy());
+    expect(screen.getByText(/the key pool is full \(31 keys\)/i)).toBeTruthy();
+    // No add input, no add button — nothing to click into.
+    expect(screen.queryByLabelText("New API key")).toBeNull();
     expect(calls.every((c) => c.method !== "PUT")).toBe(true);
   });
 
+  it("removing a pool row DELETEs its slot (browser-dev REST path)", async () => {
+    pool = [
+      { slot: 0, hasKey: true, masked: "sk-o…b4af" },
+      { slot: 2, hasKey: true, masked: "sk-o…aaaa" },
+    ];
+    renderWithProviders(<ProviderKeysCard provider={PROVIDER} />);
+
+    // The MASK is the data-landed anchor (the pre-data add row also reads
+    // "KEY 2", so the label alone is ambiguous).
+    await waitFor(() => expect(screen.getByText("sk-o…aaaa")).toBeTruthy());
+    expect(screen.getByText("KEY 2")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Remove key 2" }));
+
+    await waitFor(() => {
+      expect(calls.find((c) => c.method === "DELETE" && c.url.endsWith("/keys/2"))).toBeDefined();
+    });
+    // The primary key is never the target of the pool remove.
+    expect(calls.every((c) => !(c.method === "DELETE" && c.url.endsWith("/keys/0")))).toBe(true);
+  });
+
   it("shows the browser-dev ephemeral-key note (isTauri() false)", async () => {
-    renderWithProviders(<KeyPoolSection providerId="openrouter" />);
+    renderWithProviders(<ProviderKeysCard provider={PROVIDER} />);
     await waitFor(() =>
       expect(screen.getByText(/Browser-dev keys live in server memory only/)).toBeTruthy(),
     );
+  });
+});
+
+describe("ProviderKeysCard — the R47 TAURI FIX (R92-D3)", () => {
+  /** The Tauri global stub — records every shell invoke. */
+  let shellInvoke: ReturnType<typeof vi.fn>;
+  const tauriCalls = () => shellInvoke.mock.calls as Array<[string, Record<string, unknown>]>;
+
+  beforeEach(() => {
+    shellInvoke = vi.fn(async () => undefined);
+    // The sidecar helper + the providers-api wrapper both read window.__TAURI__.
+    vi.stubGlobal("__TAURI__", { core: { invoke: shellInvoke } });
+  });
+
+  it("adding a key invokes store_provider_key_slot with the first free slot ≥ 1 — NEVER the slot-less store_provider_key (the R47 overwrite bug)", async () => {
+    pool = [
+      { slot: 0, hasKey: true, masked: "sk-o…b4af" },
+      { slot: 1, hasKey: true, masked: "sk-o…aaaa" },
+      { slot: 2, hasKey: true, masked: "sk-o…bbbb" },
+    ];
+    renderWithProviders(<ProviderKeysCard provider={PROVIDER} />);
+    await waitFor(() => expect(screen.getByText("sk-o…bbbb")).toBeTruthy());
+
+    fireEvent.change(await screen.findByLabelText("New API key"), {
+      target: { value: "sk-or-v1-shell-key-003" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: /add key/i }));
+
+    // THE R47 FIX: the slot-aware shell command, slot ≥ 1 (3 = first free)…
+    await waitFor(() => {
+      const call = tauriCalls().find(([cmd]) => cmd === "store_provider_key_slot");
+      expect(call).toBeDefined();
+      expect(call?.[1]).toEqual({ providerId: "openrouter", slot: 3, key: "sk-or-v1-shell-key-003" });
+    });
+    // …and NEVER the slot-less store_provider_key (the pre-R92 bug: it
+    // stored the PRIMARY — adding a pool key silently overwrote Key 1).
+    expect(tauriCalls().some(([cmd]) => cmd === "store_provider_key")).toBe(false);
+    // The REST pool PUT never fires inside the shell — the durable store is
+    // the shell's business (the Rust side does its own hot handoff).
+    expect(calls.every((c) => c.method !== "PUT")).toBe(true);
+  });
+
+  it("first free slot ≥ 1: an empty pool adds at slot 1 (the R92 floor)", async () => {
+    pool = [{ slot: 0, hasKey: true, masked: "sk-o…b4af" }];
+    renderWithProviders(<ProviderKeysCard provider={PROVIDER} />);
+    // The primary's mask renders as the Key 1 field's DISPLAY VALUE (the
+    // R60-B stored view), not a text node — read the input by its testid.
+    await waitFor(() =>
+      expect((screen.getByTestId("stored-key-masked") as HTMLInputElement).value).toBe("sk-o…b4af"),
+    );
+
+    fireEvent.change(await screen.findByLabelText("New API key"), {
+      target: { value: "sk-or-v1-shell-key-001" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: /add key/i }));
+
+    await waitFor(() => {
+      const call = tauriCalls().find(([cmd]) => cmd === "store_provider_key_slot");
+      expect(call?.[1]).toEqual({ providerId: "openrouter", slot: 1, key: "sk-or-v1-shell-key-001" });
+    });
+    expect(tauriCalls().some(([cmd]) => cmd === "store_provider_key")).toBe(false);
+  });
+
+  it("removing a pool row invokes remove_provider_key_slot AND the REST DELETE (durable + in-memory)", async () => {
+    pool = [
+      { slot: 0, hasKey: true, masked: "sk-o…b4af" },
+      { slot: 2, hasKey: true, masked: "sk-o…aaaa" },
+    ];
+    renderWithProviders(<ProviderKeysCard provider={PROVIDER} />);
+
+    await waitFor(() => expect(screen.getByText("sk-o…aaaa")).toBeTruthy());
+    fireEvent.click(screen.getByRole("button", { name: "Remove key 2" }));
+
+    await waitFor(() => {
+      const call = tauriCalls().find(([cmd]) => cmd === "remove_provider_key_slot");
+      expect(call?.[1]).toEqual({ providerId: "openrouter", slot: 2 });
+    });
+    // The REST leg follows the shell leg — the running sidecar's in-memory
+    // keyring clears so the listing refetch shows the truth without a restart.
+    await waitFor(() => {
+      expect(calls.find((c) => c.method === "DELETE" && c.url.endsWith("/keys/2"))).toBeDefined();
+    });
+    // The slot-less primary remove command is never invoked from the pool UI.
+    expect(tauriCalls().some(([cmd]) => cmd === "remove_provider_key")).toBe(false);
+  });
+
+  it("editing Key 1 (the primary) still rides the slot-less store_provider_key — the slot 0 path is unchanged", async () => {
+    pool = [{ slot: 0, hasKey: true, masked: "sk-o…b4af" }];
+    renderWithProviders(<ProviderKeysCard provider={PROVIDER} />);
+
+    const masked = (await screen.findByTestId("stored-key-masked")) as HTMLInputElement;
+    fireEvent.change(masked, { target: { value: "sk-or-v1-rotated" } });
+    fireEvent.click(screen.getByTestId("save-key-button"));
+
+    await waitFor(() => {
+      const call = tauriCalls().find(([cmd]) => cmd === "store_provider_key");
+      expect(call).toBeDefined();
+      expect(call?.[1]).toEqual({ providerId: "openrouter", key: "sk-or-v1-rotated" });
+    });
+    // The slot-aware command is NOT part of the primary edit.
+    expect(tauriCalls().some(([cmd]) => cmd === "store_provider_key_slot")).toBe(false);
   });
 });
 
@@ -582,7 +756,7 @@ describe("Connection card — key + model scoped test (ROUND-47 R47-c1)", () => 
     await waitFor(() => expect(screen.getByLabelText("Test key")).toBeTruthy());
   }
 
-  it("key selector offers the primary + every HELD pool slot (shared key-pool cache)", async () => {
+  it("key selector offers the primary + every HELD pool slot, as ordinals (shared key-pool cache)", async () => {
     pool = [
       { slot: 2, hasKey: true, masked: "sk-o…aaaa" },
       { slot: 3, hasKey: false, masked: null }, // keyless rows are NOT offered
@@ -592,11 +766,13 @@ describe("Connection card — key + model scoped test (ROUND-47 R47-c1)", () => 
 
     // The pool query lands async — wait for its options before asserting.
     await waitFor(() =>
-      expect(screen.getByRole("option", { name: "Pool slot 2" })).toBeTruthy(),
+      expect(screen.getByRole("option", { name: "Key 2" })).toBeTruthy(),
     );
-    expect(screen.getByRole("option", { name: "Primary key" })).toBeTruthy();
-    expect(screen.getByRole("option", { name: "Pool slot 4" })).toBeTruthy();
-    expect(screen.queryByRole("option", { name: "Pool slot 3" })).toBeNull();
+    expect(screen.getByRole("option", { name: "Key 1 (primary)" })).toBeTruthy();
+    expect(screen.getByRole("option", { name: "Key 3" })).toBeTruthy();
+    // Exactly THREE key options — the keyless slot 3 adds no row (it would
+    // have duplicated an ordinal).
+    expect(screen.getByLabelText("Test key").children.length).toBe(3);
     // Model selector: the honest reachability default + the live catalog.
     await waitFor(() =>
       expect(screen.getByRole("option", { name: "z-ai/glm-5.2:free" })).toBeTruthy(),
@@ -629,7 +805,7 @@ describe("Connection card — key + model scoped test (ROUND-47 R47-c1)", () => 
 
     // The slot option must exist before the select can take its value.
     await waitFor(() =>
-      expect(screen.getByRole("option", { name: "Pool slot 2" })).toBeTruthy(),
+      expect(screen.getByRole("option", { name: "Key 2" })).toBeTruthy(),
     );
     fireEvent.change(screen.getByLabelText("Test key"), { target: { value: "2" } });
     fireEvent.change(screen.getByLabelText("Test model"), {
@@ -681,12 +857,13 @@ describe("Independent scroll columns + sectioned detail pane (ROUND-50 R50-d)", 
     expect(right).not.toBeNull();
   });
 
-  it("sections the detail pane into labeled cards: Connection / API key pool / Models / Danger zone", async () => {
+  it("sections the detail pane into labeled cards: Connection / API keys / Models / Danger zone", async () => {
     renderWithProviders(<ModelsProvidersTab />);
     await waitFor(() => expect(screen.getByLabelText("Test key")).toBeTruthy());
 
     expect(screen.getByText("Connection")).toBeTruthy();
-    expect(screen.getByText("API key pool")).toBeTruthy();
+    // R92-D3: ONE unified keys card — the header carries the count.
+    expect(screen.getByText(/^API keys — \d+$/)).toBeTruthy();
     expect(screen.getByText("Models")).toBeTruthy();
     expect(screen.getByText("Danger zone")).toBeTruthy();
     // The delete affordance moved into the danger zone (confirm flow intact).
@@ -1366,6 +1543,7 @@ describe("Key field — unified eye + paste-to-replace (R60-B)", () => {
 describe("Key reveal (ROUND-58 R58-d)", () => {
   it("pool rows reveal their full value — ONE fetch, per-row toggle, copy, re-mask", async () => {
     pool = [
+      { slot: 0, hasKey: true, masked: "sk-o…b4af" },
       { slot: 2, hasKey: true, masked: "sk-o…aaaa" },
       { slot: 4, hasKey: true, masked: "sk-o…cccc" },
     ];
@@ -1375,64 +1553,78 @@ describe("Key reveal (ROUND-58 R58-d)", () => {
     ];
     // R59-C: pre-select opens the first provider — no click needed.
     renderWithProviders(<ModelsProvidersTab />);
-    await waitFor(() => expect(screen.getByText("SLOT 2")).toBeTruthy());
+    // R92-D3: ordinals — slot 2 is Key 2, slot 4 is Key 3. The MASK is the
+    // data-landed anchor (the pre-data add row also reads "KEY 2").
+    await waitFor(() => expect(screen.getByText("sk-o…aaaa")).toBeTruthy());
+    expect(screen.getByText("KEY 2")).toBeTruthy();
+    expect(screen.getByText("KEY 3")).toBeTruthy();
 
     // Masked by default; still no auto-fetch.
     expect(screen.getByText("sk-o…aaaa")).toBeTruthy();
     expect(calls.every((c) => !c.url.includes("/keys/reveal"))).toBe(true);
 
-    fireEvent.click(screen.getByRole("button", { name: "Reveal slot 2 key" }));
+    fireEvent.click(screen.getByRole("button", { name: "Reveal key 2" }));
     await waitFor(() => expect(screen.getByText("sk-or-v1-pool-2-full")).toBeTruthy());
     // Slot 4 stays masked (per-row toggle)…
     expect(screen.getByText("sk-o…cccc")).toBeTruthy();
     // …and reveals from the SAME cached fetch — no second reveal call.
-    fireEvent.click(screen.getByRole("button", { name: "Reveal slot 4 key" }));
+    fireEvent.click(screen.getByRole("button", { name: "Reveal key 3" }));
     await waitFor(() => expect(screen.getByText("sk-or-v1-pool-4-full")).toBeTruthy());
     expect(calls.filter((c) => c.url.includes("/keys/reveal"))).toHaveLength(1);
 
     // Copy rides the row.
-    fireEvent.click(screen.getByRole("button", { name: "Copy slot 4 key" }));
+    fireEvent.click(screen.getByRole("button", { name: "Copy key 3" }));
     await waitFor(() => expect(clipboardWriteText).toHaveBeenCalledWith("sk-or-v1-pool-4-full"));
 
     // Toggle back to masked.
-    fireEvent.click(screen.getByRole("button", { name: "Hide slot 4 key" }));
+    fireEvent.click(screen.getByRole("button", { name: "Hide key 3" }));
     await waitFor(() => expect(screen.getByText("sk-o…cccc")).toBeTruthy());
     expect(screen.queryByText("sk-or-v1-pool-4-full")).toBeNull();
   });
 
-  it("pool mutations invalidate the reveal cache — a slot added AFTER a reveal re-fetches (never a stale value or a false 'No key stored')", async () => {
-    pool = [{ slot: 2, hasKey: true, masked: "sk-o…aaaa" }];
+  it("pool mutations invalidate the reveal cache — a key added AFTER a reveal re-fetches (never a stale value or a false 'no stored key')", async () => {
+    pool = [
+      { slot: 0, hasKey: true, masked: "sk-o…b4af" },
+      { slot: 2, hasKey: true, masked: "sk-o…aaaa" },
+    ];
     revealKeys = [{ slot: 2, value: "sk-or-v1-pool-2-full" }];
     // R59-C: pre-select opens the first provider — no click needed.
     renderWithProviders(<ModelsProvidersTab />);
-    await waitFor(() => expect(screen.getByText("SLOT 2")).toBeTruthy());
+    await waitFor(() => expect(screen.getByText("sk-o…aaaa")).toBeTruthy());
 
     // First reveal — one fetch, cache populated.
-    fireEvent.click(screen.getByRole("button", { name: "Reveal slot 2 key" }));
+    fireEvent.click(screen.getByRole("button", { name: "Reveal key 2" }));
     await waitFor(() => expect(screen.getByText("sk-or-v1-pool-2-full")).toBeTruthy());
     expect(calls.filter((c) => c.url.includes("/keys/reveal"))).toHaveLength(1);
 
-    // Add slot 3 through the pool UI (the stateful mock PUTs it) and make the
-    // server's reveal answer grow with it.
-    fireEvent.change(await screen.findByLabelText("New pool key"), {
-      target: { value: "sk-or-v1-pool-3-new" },
+    // Add another key through the pool UI (the stateful mock PUTs it at the
+    // first free slot — 1 here, since only slot 2 is held) and make the
+    // server's reveal answer grow with it. NOTE: slot 1 sorts BEFORE slot 2,
+    // so the new row re-numbers the ordinals (Key 2 = slot 1 now).
+    fireEvent.change(await screen.findByLabelText("New API key"), {
+      target: { value: "sk-or-v1-pool-1-new" },
     });
-    fireEvent.click(screen.getByRole("button", { name: /add slot/i }));
-    await waitFor(() => expect(screen.getByText("SLOT 3")).toBeTruthy());
+    fireEvent.click(screen.getByRole("button", { name: /add key/i }));
+    await waitFor(() => expect(calls.some((c) => c.method === "PUT" && c.url.endsWith("/keys/1"))).toBe(true));
+    // Wait for the REFETCHED listing to render the new row (masked
+    // "sk-or…-new" at Key 2 — slot 1 sorts before slot 2, so the ordinals
+    // re-number) before clicking anything.
+    await waitFor(() => expect(screen.getByText("sk-or…-new")).toBeTruthy());
     revealKeys = [
+      { slot: 1, value: "sk-or-v1-pool-1-new" },
       { slot: 2, value: "sk-or-v1-pool-2-full" },
-      { slot: 3, value: "sk-or-v1-pool-3-new" },
     ];
-    // The pool mutation ALSO reset the reveal state — slot 2 masks again
-    // (its cached value predates the mutation; never risk a stale reveal).
+    // The pool mutation ALSO reset the reveal state — the old slot-2 row
+    // masks again (its cached value predates the mutation; never risk a
+    // stale reveal).
     await waitFor(() => expect(screen.getByText("sk-o…aaaa")).toBeTruthy());
     expect(screen.queryByText("sk-or-v1-pool-2-full")).toBeNull();
 
-    // Revealing the NEW slot re-fetches (cache-miss, listing says held) and
-    // shows its value — the pre-fix bug here was the false "No key stored in
-    // slot 3." from the stale first-reveal cache.
-    fireEvent.click(screen.getByRole("button", { name: "Reveal slot 3 key" }));
-    await waitFor(() => expect(screen.getByText("sk-or-v1-pool-3-new")).toBeTruthy());
+    // Revealing the NEW key re-fetches (cache-miss, listing says held) and
+    // shows its value — the pre-fix bug here was the false "no stored key"
+    // from the stale first-reveal cache.
+    fireEvent.click(screen.getByRole("button", { name: "Reveal key 2" }));
+    await waitFor(() => expect(screen.getByText("sk-or-v1-pool-1-new")).toBeTruthy());
     expect(calls.filter((c) => c.url.includes("/keys/reveal"))).toHaveLength(2);
   });
 });

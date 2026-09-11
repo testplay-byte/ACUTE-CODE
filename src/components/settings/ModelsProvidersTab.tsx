@@ -52,6 +52,7 @@ import {
   updateProviderModelConfig,
   upsertProviderModelConfig,
   type CatalogModel,
+  type KeyPoolSlot,
   type ProviderModelCatalogEntry,
   type ProviderModelConfig,
   type ProviderModelConfigPatch,
@@ -635,6 +636,11 @@ function ProviderListRow({
   onClick: () => void;
 }) {
   const styles = useThemeStyles();
+  // R92-D3: how many keys the provider holds — the primary (slot 0) plus the
+  // pool. `keyCount` rides the same backend wave as the key-juggling work
+  // (Task 2-a), so until every sidecar serves it the honest local default is
+  // hasKey ? 1 : 0 — never a guess, never a hidden pool.
+  const keyCount = provider.keyCount ?? (provider.hasKey ? 1 : 0);
   return (
     <button
       onClick={onClick}
@@ -678,6 +684,23 @@ function ProviderListRow({
           {provider.baseUrl ? new URL(provider.baseUrl).host : "no url"} · {formatLabel(provider.apiFormat)}
         </span>
       </span>
+      {/* R92-D3: the multi-key count chip — shown once the provider holds at
+          least one key; the pool itself is managed (and juggled) in the
+          detail pane's API keys card. */}
+      {keyCount >= 1 && (
+        <span
+          data-testid={`provider-key-count-${provider.id}`}
+          className="shrink-0 px-1.5 py-0.5 rounded-full text-[9.5px] font-bold tabular-nums"
+          style={{ background: styles.subtle, color: styles.textSecondary }}
+          title={
+            keyCount === 1
+              ? "1 API key stored"
+              : `${keyCount} API keys stored — if one fails, the next is tried automatically`
+          }
+        >
+          {keyCount} {keyCount === 1 ? "key" : "keys"}
+        </span>
+      )}
       {/* Status dot: green = key stored; grey = no key. */}
       <span
         className="w-2 h-2 shrink-0 rounded-full"
@@ -692,9 +715,12 @@ function ProviderListRow({
 
 /* ── Right detail pane (ROUND-37: EVERY provider fully editable) ────────────
  * ROUND-50 (R50-d): re-sectioned into clearly-labeled cards — Header →
- * Connection → API Key Pool → Models → Danger zone — with one consistent
+ * Connection → API keys → Models → Danger zone — with one consistent
  * spacing rhythm (p-4/p-5 cards, gap-5 between them, uppercase micro-labels
- * matching the rest of the app). */
+ * matching the rest of the app). R92-D3: "API keys" is ONE unified card
+ * (ProviderKeysCard) — the primary editor that used to sit inside Connection
+ * and the pool rows that used to be their own card are a single Key 1..N
+ * list now. */
 
 function ProviderDetailPane({
   provider,
@@ -712,7 +738,6 @@ function ProviderDetailPane({
   // failed CI with "window is not defined" (run 33411797885).
   const resetAfter = useTimeoutClear();
 
-  const [keyStatus, setKeyStatus] = useState<string | null>(null);
   const [editingName, setEditingName] = useState(false);
   const [nameDraft, setNameDraft] = useState(provider.name);
   const [baseUrlDraft, setBaseUrlDraft] = useState(provider.baseUrl ?? "");
@@ -726,28 +751,11 @@ function ProviderDetailPane({
    * dead click the owner saw. Cleared when the confirm re-arms. */
   const [deleteError, setDeleteError] = useState<string | null>(null);
   const [confirmDelete, setConfirmDelete] = useState(false);
-  // ROUND-60 (R60-B): the paste-to-replace draft — null means "not editing"
-  // (the field displays the STORED key, masked or revealed read-only);
-  // any non-null string is the user's typed/pasted NEW key awaiting Save.
-  // The R59 rotate button + rotatingKey flag are gone: the owner pastes the
-  // new key straight into the field ("There is actually no need to give the
-  // rotate key option at all… The user can directly paste in the new key").
-  const [keyDraft, setKeyDraft] = useState<string | null>(null);
-  // ROUND-58 (R58-d): the primary-key reveal state — NEVER auto-fetched;
-  // fetched only on the explicit "Show" click, then rendered read-only
-  // with Copy + Hide (masks again).
-  const [revealState, setRevealState] = useState<
-    | { kind: "idle" }
-    | { kind: "loading" }
-    | { kind: "shown"; value: string }
-    | { kind: "error"; message: string }
-  >({ kind: "idle" });
-  // ROUND-59 (R59-C): copy confirmations/errors color themselves (a copy
-  // failure must not inherit the save-mutation's green styling).
-  const [keyStatusIsError, setKeyStatusIsError] = useState(false);
   // ROUND-47 (R47-c1): the test surface got explicit selectors — WHICH key
   // (primary or a held pool slot) and WHICH model (or reachability-only) —
-  // instead of an invisible "primary key, no model" default.
+  // instead of an invisible "primary key, no model" default. R92-D3: the
+  // key editor itself (primary + pool rows) now lives in ProviderKeysCard
+  // below — this pane keeps only the CONNECTION test surface.
   const [testKeyChoice, setTestKeyChoice] = useState<"primary" | number>("primary");
   const [testModel, setTestModel] = useState<string>(""); // "" = reachability only
   const [testState, setTestState] = useState<
@@ -777,19 +785,18 @@ function ProviderDetailPane({
   const isPreset = PRESET_PROVIDER_IDS.has(provider.id);
 
   // ROUND-47 (R47-c1): the key-pool listing feeds the test key selector.
-  // SAME query key as KeyPoolSection's — one shared cache entry per provider.
+  // SAME query key as ProviderKeysCard's — one shared cache entry per provider.
   const poolQuery = useQuery({
     queryKey: ["key-pool", provider.id],
     queryFn: () => fetchKeyPool(provider.id),
   });
   const heldPoolSlots = (poolQuery.data ?? [])
     .filter((k) => k.slot > 0 && k.hasKey)
-    .map((k) => k.slot);
-  // ROUND-59 (R59-C): the masked slot-0 (primary) value — from the SAME
-  // key-pool listing the test-key selector already rides (no extra fetch);
-  // dots while it loads or if the listing omits slot 0.
-  const maskedStoredKey =
-    poolQuery.data?.find((k) => k.slot === 0 && k.hasKey)?.masked ?? "•••••••••••";
+    .map((k) => k.slot)
+    .sort((a, b) => a - b);
+  // ROUND-59 (R59-C): the masked slot-0 (primary) value lived here — R92-D3
+  // moved it (and the whole primary-key editor) into ProviderKeysCard, which
+  // reads the SAME shared key-pool query.
 
   // ROUND-50 (R50-d): the provider's LIVE catalog WITH names — feeds the test
   // model selector AND the "Add models" picker (ids alone can't power a
@@ -812,35 +819,6 @@ function ProviderDetailPane({
     retry: false,
   });
   const staticCatalog = staticCatalogQuery.data?.models ?? [];
-
-  const saveKey = useMutation({
-    mutationFn: async (value: string) => {
-      // Tauri: keys route through the shell into the OS secure store
-      // (ADR-0012). Browser dev: the sidecar keyring endpoint.
-      if (isTauri()) {
-        const { storeProviderKey: storeViaShell } = await import("../onboarding/providers-api");
-        const ok = await storeViaShell(provider.id, value);
-        if (!ok) throw new Error("the shell refused the key store request");
-        return;
-      }
-      await storeProviderKey(provider.id, value);
-    },
-    onSuccess: () => {
-      // ROUND-60 (R60-B): a saved key exits edit mode (the masked
-      // stored-key view returns — a stale revealed OLD value is dropped
-      // too) and refreshes the pool listing so the masked slot-0 value is
-      // the NEW key's, never the stale one.
-      setKeyDraft(null);
-      setRevealState({ kind: "idle" });
-      setKeyStatus("Key saved to the secure store.");
-      // ROUND-62 (R62-2b): hasKey flips — the picker's provider cache sees
-      // it (the session page doesn't list keyless presets differently, but
-      // one cache, one truth).
-      invalidateProvidersEverywhere(queryClient);
-      void queryClient.invalidateQueries({ queryKey: ["key-pool", provider.id] });
-    },
-    onError: (err: Error) => setKeyStatus(err.message),
-  });
 
   const saveDetails = useMutation({
     mutationFn: (patch: ProviderPatch) => updateProvider(provider.id, patch),
@@ -907,53 +885,11 @@ function ProviderDetailPane({
     }
   };
 
-  // ROUND-58 (R58-d) / R59-C: fetch + display the ACTUAL stored primary key
-  // (the owner's reveal demand — "when I tap on the show button then it
-  // will show up"). Only ever invoked from the explicit Show click — never
-  // on mount. A missing slot-0 answer is surfaced honestly.
-  const revealStoredKey = async () => {
-    setRevealState({ kind: "loading" });
-    try {
-      const keys = await revealProviderKeys(provider.id);
-      const primary = keys.find((k) => k.slot === 0);
-      if (primary === undefined) {
-        setRevealState({ kind: "error", message: "No key stored for this provider." });
-        return;
-      }
-      setRevealState({ kind: "shown", value: primary.value });
-    } catch (err) {
-      setRevealState({ kind: "error", message: err instanceof Error ? err.message : String(err) });
-    }
-  };
-
-  // ROUND-58 (R58-d): clipboard helper for revealed keys — the transient
-  // confirmation rides the leak-safe scheduler (no bare setTimeout).
-  const copyToClipboard = async (value: string, confirmation: string) => {
-    try {
-      await navigator.clipboard.writeText(value);
-      setKeyStatusIsError(false);
-      setKeyStatus(confirmation);
-      resetAfter(() => setKeyStatus(null), 1500);
-    } catch {
-      setKeyStatusIsError(true);
-      setKeyStatus("Copy failed — the clipboard is unavailable in this context.");
-      resetAfter(() => setKeyStatus(null), 1500);
-    }
-  };
-
   const inputStyle = {
     background: styles.bg,
     borderColor: styles.border,
     color: styles.text,
   } as const;
-
-  // ROUND-60 (R60-B): the two display values the unified key field rides —
-  // storedDisplay is what the input shows while NOT editing (the masked
-  // slot-0 value, or the revealed full key); revealedValue is non-null only
-  // while revealed (captured per render, so the fading-out Copy button can
-  // never copy a stale value).
-  const storedDisplay = revealState.kind === "shown" ? revealState.value : maskedStoredKey;
-  const revealedValue = revealState.kind === "shown" ? revealState.value : null;
 
   return (
     <div className="flex flex-col gap-5">
@@ -1160,207 +1096,13 @@ function ProviderDetailPane({
             </div>
           </>
         )}
-        {/* API key — ROUND-60 (R60-B): ONE unified layout that never
-            reflows: [value input][eye toggle][context action]. The eye sits
-            in the EXACT same slot in every state (Show while masked at
-            rest, a spinner while loading, Hide while revealed — the owner:
-            "the show and hide button should be in the exact same place").
-            Rotation is GONE (the owner: "There is actually no need to give
-            the rotate key option at all… The user can directly paste in the
-            new key"): typing or pasting into the field swaps it to edit
-            mode, the context slot shows Save key (+ Cancel X, Escape also
-            restores), and Copy fades in with a width+opacity transition
-            only while the stored key is revealed (the owner: "the copy
-            button should appear smoothly and not in a bad way"). */}
-        <div>
-          <label className="mb-1.5 block text-[11px] font-bold" style={{ color: styles.textSecondary }}>
-            API key {provider.hasKey && <span style={{ color: "#22c55e" }}>· stored</span>}
-          </label>
-          <div className="flex gap-2 items-stretch">
-            <input
-              // Cleartext on purpose — the ONE eye in this block belongs to
-              // the STORED key; masking the user's own draft is what bred
-              // the R58 two-eye ambiguity.
-              type="text"
-              value={provider.hasKey && keyDraft === null ? storedDisplay : keyDraft ?? ""}
-              placeholder={provider.hasKey ? undefined : "sk-…"}
-              aria-label={
-                provider.hasKey && keyDraft === null
-                  ? revealState.kind === "shown"
-                    ? "Stored API key (revealed)"
-                    : "Stored API key (masked)"
-                  : "API key"
-              }
-              data-testid={
-                provider.hasKey && keyDraft === null
-                  ? revealState.kind === "shown"
-                    ? "stored-key-revealed"
-                    : "stored-key-masked"
-                  : "new-key-input"
-              }
-              title={
-                provider.hasKey
-                  ? keyDraft === null
-                    ? "The stored key — paste a new key to replace it"
-                    : "The new key — Save key replaces the stored one"
-                  : "Paste the provider's API key"
-              }
-              // Whole-value select on focus while at rest: click + paste
-              // replaces the stored key in ONE gesture (paste-to-replace).
-              onFocus={(e) => {
-                if (provider.hasKey && keyDraft === null) e.currentTarget.select();
-              }}
-              onKeyDown={(e) => {
-                if (e.key === "Escape" && keyDraft !== null) {
-                  setKeyDraft(null);
-                }
-                if (
-                  e.key === "Enter" &&
-                  keyDraft !== null &&
-                  keyDraft.trim() !== "" &&
-                  !saveKey.isPending
-                ) {
-                  saveKey.mutate(keyDraft.trim());
-                }
-              }}
-              // ROUND-60: any typed/pasted change while at rest IS the
-              // paste-to-replace gesture — the draft takes over (edit mode).
-              onChange={(e) => setKeyDraft(e.target.value)}
-              className="h-10 flex-1 min-w-0 rounded-[10px] border-[1.5px] px-3 font-mono text-[12px] outline-none"
-              style={{
-                ...inputStyle,
-                borderColor:
-                  keyDraft !== null
-                    ? withAlpha(styles.accent, 0.55)
-                    : revealState.kind === "shown"
-                      ? withAlpha(styles.accent, 0.45)
-                      : styles.border,
-              }}
-            />
-            {/* THE eye toggle — the exact same slot in every state: masked
-                rest → Eye (reveal), loading → spinner, revealed → EyeOff
-                (mask again). Disabled while editing (the draft is the
-                truth now — Cancel restores the stored display first) and
-                keyless (nothing to reveal). */}
-            <button
-              type="button"
-              onClick={() => {
-                if (revealState.kind === "shown") setRevealState({ kind: "idle" });
-                else void revealStoredKey();
-              }}
-              disabled={!provider.hasKey || keyDraft !== null || revealState.kind === "loading"}
-              aria-label={revealState.kind === "shown" ? "Hide stored key" : "Show stored key"}
-              data-testid={revealState.kind === "shown" ? "hide-stored-key-button" : "show-stored-key-button"}
-              title={
-                !provider.hasKey
-                  ? "No stored key to reveal yet"
-                  : revealState.kind === "shown"
-                    ? "Mask the stored key again"
-                    : "Show the stored key"
-              }
-              className="h-10 w-10 grid place-items-center rounded-[10px] border-[1.5px] shrink-0 disabled:opacity-40"
-              style={{
-                background: styles.bg,
-                borderColor: styles.border,
-                color: revealState.kind === "shown" ? styles.accent : styles.textTertiary,
-              }}
-            >
-              {revealState.kind === "loading" ? (
-                <RefreshCw size={13} className="animate-spin" />
-              ) : revealState.kind === "shown" ? (
-                <EyeOff size={13} />
-              ) : (
-                <Eye size={13} />
-              )}
-            </button>
-            {/* Context action slot: Save key (+ Cancel X) while editing or
-                keyless; otherwise Copy, which fades/slides in ONLY while
-                the stored key is revealed. */}
-            {keyDraft !== null || !provider.hasKey ? (
-              <>
-                <button
-                  type="button"
-                  onClick={() => {
-                    if (keyDraft !== null && keyDraft.trim() !== "") saveKey.mutate(keyDraft.trim());
-                  }}
-                  disabled={keyDraft === null || keyDraft.trim() === "" || saveKey.isPending}
-                  aria-label="Save key"
-                  data-testid="save-key-button"
-                  className="h-10 px-4 rounded-[10px] text-[12px] font-bold disabled:opacity-50 shrink-0"
-                  style={{ background: styles.accent, color: styles.accentText }}
-                >
-                  {saveKey.isPending ? "Saving…" : "Save key"}
-                </button>
-                {provider.hasKey && (
-                  <button
-                    type="button"
-                    onClick={() => setKeyDraft(null)}
-                    aria-label="Cancel key edit"
-                    data-testid="cancel-key-edit-button"
-                    title="Restore the stored key display"
-                    className="h-10 w-10 grid place-items-center rounded-[10px] border-[1.5px] shrink-0"
-                    style={{ borderColor: styles.border, color: styles.textTertiary }}
-                  >
-                    <X size={13} />
-                  </button>
-                )}
-              </>
-            ) : (
-              <AnimatePresence initial={false}>
-                {revealedValue !== null && (
-                  <motion.div
-                    key="copy-stored-key"
-                    initial={{ opacity: 0, width: 0 }}
-                    animate={{ opacity: 1, width: "auto" }}
-                    exit={{ opacity: 0, width: 0 }}
-                    transition={{ duration: 0.2, ease: "easeOut" }}
-                    className="overflow-hidden shrink-0"
-                  >
-                    <button
-                      type="button"
-                      onClick={() => void copyToClipboard(revealedValue, "Key copied to clipboard.")}
-                      aria-label="Copy stored key"
-                      data-testid="copy-stored-key-button"
-                      title="Copy the stored key"
-                      className="h-10 px-3.5 rounded-[10px] border-[1.5px] text-[12px] font-bold flex items-center gap-1.5 shrink-0 whitespace-nowrap"
-                      style={{ borderColor: styles.border, color: styles.textSecondary }}
-                    >
-                      <Copy size={12} /> Copy
-                    </button>
-                  </motion.div>
-                )}
-              </AnimatePresence>
-            )}
-          </div>
-          {revealState.kind === "error" && (
-            <p className="mt-1.5 text-[11px] break-all" style={{ color: "#ef4444" }} role="alert">
-              {revealState.message}
-            </p>
-          )}
-          {keyStatus && (
-            <p
-              className="mt-1.5 text-[11px]"
-              style={{ color: saveKey.isError || keyStatusIsError ? "#ef4444" : "#22c55e" }}
-            >
-              {keyStatus}
-            </p>
-          )}
-          <p className="mt-1 text-[10.5px]" style={{ color: styles.textTertiary }}>
-            Stored in the OS secure store — never in the database or logs; Show fetches the full
-            value only on your explicit click.
-          </p>
-          {/* ROUND-47 (R47-c1): browser-dev honesty — the sidecar keyring is
-              in-memory, so browser-stored keys do not survive a restart. */}
-          {!isTauri() && (
-            <p className="mt-1 text-[10.5px]" style={{ color: styles.textTertiary, opacity: 0.75 }}>
-              {EPHEMERAL_KEY_NOTE}
-            </p>
-          )}
-        </div>
         {/* Test connection — ROUND-47 (R47-c1): WHICH key + WHICH model are
             explicit now (key selector over the primary + held pool slots,
             model selector over the live catalog; "(reachability only)" is
-            the honest default — a cheap ping that does NOT prove the key). */}
+            the honest default — a cheap ping that does NOT prove the key).
+            R92-D3: the key options carry the same DISPLAY ordinals as the
+            API keys card (Key 1 = primary, Key 2..N = the pool in order) —
+            the raw slot number stays the wire's internal detail. */}
         <div className="flex items-center gap-2.5 flex-wrap pt-1">
           <select
             aria-label="Test key"
@@ -1372,10 +1114,10 @@ function ProviderDetailPane({
             className="h-9 rounded-[10px] border-[1.5px] px-2 text-[11.5px] font-bold outline-none cursor-pointer"
             style={{ background: styles.bg, borderColor: styles.border, color: styles.textSecondary }}
           >
-            <option value="primary">Primary key</option>
+            <option value="primary">Key 1 (primary)</option>
             {heldPoolSlots.map((slot) => (
               <option key={slot} value={String(slot)}>
-                Pool slot {slot}
+                Key {keyOrdinal(slot, provider.hasKey, heldPoolSlots)}
               </option>
             ))}
           </select>
@@ -1434,20 +1176,11 @@ function ProviderDetailPane({
         </div>
       </div>
 
-      {/* ── API key pool (its own section now — R50-d) ─────────────────── */}
-      <div
-        className="rounded-[16px] border-[1.5px] p-4 md:p-5 flex flex-col gap-3"
-        style={{ background: styles.card, borderColor: styles.border }}
-      >
-        <div>
-          <SectionLabel>API key pool</SectionLabel>
-          <p className="mt-1 text-[11px]" style={{ color: styles.textTertiary }}>
-            Dedicated keys for sub-agents — the primary stays free for your main chats.
-          </p>
-        </div>
-        {/* ROUND-36 (ADR-0022): the per-provider API key pool */}
-        <KeyPoolSection providerId={provider.id} hideLabel />
-      </div>
+      {/* ── API keys (R92-D3: ONE unified card — Key 1 = the primary editor,
+          Key 2..N = the pool rows, then the always-on add row. The old
+          split — a key field inside Connection + a separate "API key pool"
+          card — is retired; the primary and the pool are ONE list now. */}
+      <ProviderKeysCard provider={provider} />
 
       {/* ── Models (the reworked ModelListSection — R50-d) ─────────────── */}
       <ModelListSection
@@ -3691,22 +3424,70 @@ function ModelConfigDialog({
   );
 }
 
-/* ── ROUND-36 (ADR-0022): the per-provider API key pool ───────────────────── */
-
-/** Exported for the ROUND-47 (R47-c1) regression test — the slot-collision
- * fix lives in the add-slot mutation below.
+/* ── R92-D3: the unified per-provider API keys card ──────────────────────────
+ * The owner's multi-key rework: "In Models and Providers, the user can add
+ * more than one API key for a specific provider. Those API keys will be
+ * juggled between each other. If one API key fails, it will automatically
+ * try the next API key in line and so forth."
  *
- * ROUND-50 (R50-d): `hideLabel` — the detail pane now renders this section
- * inside its own labeled card ("API KEY POOL"); the built-in field label is
- * suppressed there to avoid a doubled title (default keeps the old look for
- * any other caller). */
-export function KeyPoolSection({ providerId, hideLabel = false }: { providerId: string; hideLabel?: boolean }) {
+ * ONE card, ONE list:
+ *  - Key 1 — the PRIMARY key editor (R60-B semantics, moved here verbatim
+ *    from the Connection card: paste-to-replace, ONE eye slot, Copy while
+ *    revealed; slot 0 on the wire).
+ *  - Key 2..N — the pool rows (masked by default, per-row reveal + copy +
+ *    remove; the R58-d security semantics hold — full values are NEVER
+ *    auto-fetched and never render by default).
+ *  - The always-on add row — appends to the FIRST FREE slot ≥ 1 through the
+ *    slot-aware path in BOTH modes:
+ *      · Tauri  → store_provider_key_slot (the R92-D1 shell command) — the
+ *        R47 FIX: the pre-R92 bug invoked the slot-less store_provider_key
+ *        here, which OVERWROTE the primary key.
+ *      · web    → PUT /providers/:id/keys/:slot.
+ *  - Labels are ORDINALS, not slot numbers: Key 1 (slot 0), then the 1-based
+ *    index in the sorted list of held slots. A pool holding slots 2 and 5
+ *    renders Key 2 / Key 3 — the ordinal is positional, the slot internal.
+ * Sub-agents share this pool (their own key card is gone — see SubAgentsTab);
+ * the orchestrator juggles keys on rate limits / auth failures. */
+
+/** R92-D3: the DISPLAY ordinal of a held key — its 1-based position in the
+ * sorted list of held slots (Key 1 = the primary at slot 0, then ascending).
+ * The raw slot number stays an internal detail: gaps never surface. */
+function keyOrdinal(slot: number, primaryHeld: boolean, heldPoolSlotsAsc: readonly number[]): number {
+  const held = [...(primaryHeld ? [0] : []), ...heldPoolSlotsAsc].sort((a, b) => a - b);
+  const index = held.indexOf(slot);
+  return index < 0 ? held.length + 1 : index + 1;
+}
+
+/** Exported for the regression tests — the slot-aware add-key path and the
+ * Key-N ordinals live here. */
+export function ProviderKeysCard({ provider }: { provider: ProviderView }) {
   const styles = useThemeStyles();
   const queryClient = useQueryClient();
   const resetAfter = useTimeoutClear();
+
+  // ── Key 1 (the primary) — the R60-B editor state, moved verbatim ────────
+  // ROUND-60 (R60-B): the paste-to-replace draft — null means "not editing"
+  // (the field displays the STORED key, masked or revealed read-only);
+  // any non-null string is the user's typed/pasted NEW key awaiting Save.
+  const [keyDraft, setKeyDraft] = useState<string | null>(null);
+  // ROUND-58 (R58-d): the primary-key reveal state — NEVER auto-fetched;
+  // fetched only on the explicit "Show" click, then rendered read-only
+  // with Copy + Hide (masks again).
+  const [revealState, setRevealState] = useState<
+    | { kind: "idle" }
+    | { kind: "loading" }
+    | { kind: "shown"; value: string }
+    | { kind: "error"; message: string }
+  >({ kind: "idle" });
+  const [keyStatus, setKeyStatus] = useState<string | null>(null);
+  // ROUND-59 (R59-C): copy confirmations/errors color themselves (a copy
+  // failure must not inherit the save-mutation's green styling).
+  const [keyStatusIsError, setKeyStatusIsError] = useState(false);
+
+  // ── Key 2..N (the pool) + the add row ────────────────────────────────────
   const [newKey, setNewKey] = useState("");
   const [showNew, setShowNew] = useState(false);
-  const [msg, setMsg] = useState<string | null>(null);
+  const [poolMsg, setPoolMsg] = useState<string | null>(null);
   // ROUND-58 (R58-d): per-row revealed pool values — masked by default; the
   // reveal fetch is ONE call per provider (the route returns every slot) and
   // its result is CACHED here, while the SHOWING state is a per-row toggle.
@@ -3718,14 +3499,24 @@ export function KeyPoolSection({ providerId, hideLabel = false }: { providerId: 
 
   // Same query key the detail pane's test-key selector uses — one cache.
   const poolQuery = useQuery({
-    queryKey: ["key-pool", providerId],
-    queryFn: () => fetchKeyPool(providerId),
+    queryKey: ["key-pool", provider.id],
+    queryFn: () => fetchKeyPool(provider.id),
   });
   const pool = poolQuery.data ?? [];
-  const slots = pool.filter((k) => k.slot > 0);
+  // R92-D3: the pool rows — HELD slots > 0, ascending (the ordinals are
+  // positional). Keyless rows never render; Key 1 above is the primary.
+  const heldSlots = pool
+    .filter((k) => k.slot > 0 && k.hasKey)
+    .sort((a, b) => a.slot - b.slot);
+  const heldSlotNumbers = heldSlots.map((k) => k.slot);
+  const primaryHeld = provider.hasKey;
+  const keyCount = heldSlots.length + (primaryHeld ? 1 : 0);
+  // ROUND-59 (R59-C): the masked slot-0 (primary) value — from the same
+  // shared key-pool listing; dots while it loads or if it omits slot 0.
+  const maskedStoredKey = pool.find((k) => k.slot === 0 && k.hasKey)?.masked ?? "•••••••••••";
 
   const invalidate = () => {
-    void queryClient.invalidateQueries({ queryKey: ["key-pool", providerId] });
+    void queryClient.invalidateQueries({ queryKey: ["key-pool", provider.id] });
     // ROUND-62 (R62-2b): the fan-out form — pool changes flip nothing the
     // session picker renders, but one cache entry per resource keeps the
     // pages from diverging.
@@ -3741,48 +3532,128 @@ export function KeyPoolSection({ providerId, hideLabel = false }: { providerId: 
     setRevealedRows(new Set());
   };
 
-  const addSlot = useMutation({
+  // ── Key 1 saves through the PRIMARY path (slot 0) in both modes ──────────
+  const saveKey = useMutation({
     mutationFn: async (value: string) => {
-      // ROUND-47 (R47-c1) FIX: the old `slots.length + 2` collided whenever
-      // the pool had a gap (slots 2 & 4 held → the next add OVERWROTE slot
-      // 4's key). The next FREE slot 2..31 — exactly like SubAgentsTab.
-      const slot = nextFreeSlot(slots.filter((k) => k.hasKey).map((k) => k.slot));
-      if (slot < 0) throw new Error("the key pool is full (slots 2–31)");
+      // Tauri: keys route through the shell into the OS secure store
+      // (ADR-0012). Browser dev: the sidecar keyring endpoint.
       if (isTauri()) {
-        // NOTE (pre-existing, unchanged R47-c1 behavior): the shell's
-        // store_provider_key command has no slot parameter — it stores the
-        // PRIMARY key. Slot-aware Tauri pool keys need a shell change
-        // (src-tauri is out of scope this round; flagged in the handoff).
         const { storeProviderKey: storeViaShell } = await import("../onboarding/providers-api");
-        const ok = await storeViaShell(providerId, value);
+        const ok = await storeViaShell(provider.id, value);
         if (!ok) throw new Error("the shell refused the key store request");
         return;
       }
-      await setKeyPoolSlot(providerId, slot, value);
+      await storeProviderKey(provider.id, value);
+    },
+    onSuccess: () => {
+      // ROUND-60 (R60-B): a saved key exits edit mode (the masked
+      // stored-key view returns — a stale revealed OLD value is dropped
+      // too) and refreshes the pool listing so the masked slot-0 value is
+      // the NEW key's, never the stale one.
+      setKeyDraft(null);
+      setRevealState({ kind: "idle" });
+      setKeyStatus("Key saved to the secure store.");
+      // ROUND-62 (R62-2b): hasKey flips — the picker's provider cache sees
+      // it (the session page doesn't list keyless presets differently, but
+      // one cache, one truth).
+      invalidateProvidersEverywhere(queryClient);
+      void queryClient.invalidateQueries({ queryKey: ["key-pool", provider.id] });
+    },
+    onError: (err: Error) => setKeyStatus(err.message),
+  });
+
+  // ── The add row — THE R92-D3 / R47 FIX ────────────────────────────────────
+  // The first FREE slot ≥ 1 (a gap is filled, never a held slot overwritten —
+  // the R47-c1 collision fix, now floor 1) through the SLOT-AWARE path in
+  // BOTH modes. The pre-R92 Tauri bug: this invoked the slot-less
+  // store_provider_key, which stored the PRIMARY — adding "another key"
+  // silently replaced Key 1.
+  const addKey = useMutation({
+    mutationFn: async (value: string) => {
+      // The LIVE listing at click time (the render closure could be one
+      // refetch behind a pool another surface just changed).
+      const poolNow =
+        queryClient.getQueryData<KeyPoolSlot[]>(["key-pool", provider.id]) ?? pool;
+      const slot = nextFreeSlot(poolNow.filter((k) => k.hasKey).map((k) => k.slot));
+      if (slot < 0) throw new Error("the key pool is full (31 keys)");
+      if (isTauri()) {
+        const { storeProviderKeySlot: storeViaShell } = await import("../onboarding/providers-api");
+        const ok = await storeViaShell(provider.id, slot, value);
+        if (!ok) throw new Error("the shell refused the key store request");
+        return;
+      }
+      await setKeyPoolSlot(provider.id, slot, value);
     },
     onSuccess: () => {
       setNewKey("");
-      setMsg("Slot added.");
-      resetAfter(() => setMsg(null), 1500);
+      setPoolMsg("Key added.");
+      resetAfter(() => setPoolMsg(null), 1500);
       resetRevealCache();
       invalidate();
     },
-    onError: (err: Error) => setMsg(err.message),
+    onError: (err: Error) => setPoolMsg(err.message),
   });
 
-  const removeSlot = useMutation({
-    mutationFn: (slot: number) => removeKeyPoolSlot(providerId, slot),
+  // ── Pool-row removal — slot-aware in both modes ───────────────────────────
+  // Tauri: the shell command retires the DURABLE credential (canonical +
+  // legacy targets + the note line); the REST DELETE that follows clears the
+  // RUNNING sidecar's in-memory keyring so the listing refetch shows the
+  // truth without a restart (the shell command has no handoff — R92-D1).
+  // Browser dev: the REST DELETE alone.
+  const removeKey = useMutation({
+    mutationFn: async (slot: number) => {
+      if (isTauri()) {
+        const { removeProviderKeySlot: removeViaShell } = await import("../onboarding/providers-api");
+        const ok = await removeViaShell(provider.id, slot);
+        if (!ok) throw new Error("the shell refused the key removal request");
+      }
+      await removeKeyPoolSlot(provider.id, slot);
+    },
     onSuccess: () => {
       resetRevealCache();
       invalidate();
     },
-    onError: (err: Error) => setMsg(err.message),
+    onError: (err: Error) => setPoolMsg(err.message),
   });
 
-  // ROUND-58 (R58-d): reveal one row's FULL value. The reveal route returns
-  // every held slot in ONE response — the FIRST reveal fetches it and caches
-  // the map (zero extra calls afterwards); each row's showing state is its
-  // own toggle. Never called on mount.
+  // ROUND-58 (R58-d) / R59-C: fetch + display the ACTUAL stored primary key
+  // (the owner's reveal demand — "when I tap on the show button then it
+  // will show up"). Only ever invoked from the explicit Show click — never
+  // on mount. A missing slot-0 answer is surfaced honestly.
+  const revealStoredKey = async () => {
+    setRevealState({ kind: "loading" });
+    try {
+      const keys = await revealProviderKeys(provider.id);
+      const primary = keys.find((k) => k.slot === 0);
+      if (primary === undefined) {
+        setRevealState({ kind: "error", message: "No key stored for this provider." });
+        return;
+      }
+      setRevealState({ kind: "shown", value: primary.value });
+    } catch (err) {
+      setRevealState({ kind: "error", message: err instanceof Error ? err.message : String(err) });
+    }
+  };
+
+  // ROUND-58 (R58-d): clipboard helper for revealed keys — the transient
+  // confirmation rides the leak-safe scheduler (no bare setTimeout).
+  const copyToClipboard = async (value: string, confirmation: string) => {
+    try {
+      await navigator.clipboard.writeText(value);
+      setKeyStatusIsError(false);
+      setKeyStatus(confirmation);
+      resetAfter(() => setKeyStatus(null), 1500);
+    } catch {
+      setKeyStatusIsError(true);
+      setKeyStatus("Copy failed — the clipboard is unavailable in this context.");
+      resetAfter(() => setKeyStatus(null), 1500);
+    }
+  };
+
+  // ROUND-58 (R58-d): reveal one pool row's FULL value. The reveal route
+  // returns every held slot in ONE response — the FIRST reveal fetches it and
+  // caches the map (zero extra calls afterwards); each row's showing state is
+  // its own toggle. Never called on mount.
   const revealSlot = async (slot: number) => {
     if (revealedRows.has(slot)) {
       // Toggle off — mask again.
@@ -3800,13 +3671,13 @@ export function KeyPoolSection({ providerId, hideLabel = false }: { providerId: 
     // Re-fetch when the cache is empty OR stale for THIS slot: the masked
     // listing says the slot HOLDS a key but the cached reveal predates it
     // (a slot added after the first reveal — cache-miss, not "no key").
-    const listingSaysHeld = slots.find((k) => k.slot === slot)?.hasKey === true;
+    const listingSaysHeld = pool.find((k) => k.slot === slot)?.hasKey === true;
     if (Object.keys(map).length === 0 || (map[slot] === undefined && listingSaysHeld)) {
       // First reveal this mount (or a cache-miss) — one fetch fills it.
       setRevealError(null);
       setRevealLoading(true);
       try {
-        const keys = await revealProviderKeys(providerId);
+        const keys = await revealProviderKeys(provider.id);
         map = {};
         for (const k of keys) map[k.slot] = k.value;
         setRevealedValues(map);
@@ -3819,7 +3690,7 @@ export function KeyPoolSection({ providerId, hideLabel = false }: { providerId: 
     }
     if (map[slot] === undefined) {
       // Fetched/cached, but this slot holds no key — honest.
-      setRevealError(`No key stored in slot ${slot}.`);
+      setRevealError(`Key ${keyOrdinal(slot, primaryHeld, heldSlotNumbers)} has no stored key.`);
       return;
     }
     setRevealedRows((prev) => new Set(prev).add(slot));
@@ -3828,33 +3699,228 @@ export function KeyPoolSection({ providerId, hideLabel = false }: { providerId: 
   const copySlotValue = async (value: string) => {
     try {
       await navigator.clipboard.writeText(value);
-      setMsg("Key copied to clipboard.");
-      resetAfter(() => setMsg(null), 1500);
+      setPoolMsg("Key copied to clipboard.");
+      resetAfter(() => setPoolMsg(null), 1500);
     } catch {
-      setMsg("Copy failed — the clipboard is unavailable in this context.");
-      resetAfter(() => setMsg(null), 1500);
+      setPoolMsg("Copy failed — the clipboard is unavailable in this context.");
+      resetAfter(() => setPoolMsg(null), 1500);
     }
   };
 
+  // ROUND-60 (R60-B): the two display values the unified key field rides —
+  // storedDisplay is what the input shows while NOT editing (the masked
+  // slot-0 value, or the revealed full key); revealedValue is non-null only
+  // while revealed (captured per render, so the fading-out Copy button can
+  // never copy a stale value).
+  const storedDisplay = revealState.kind === "shown" ? revealState.value : maskedStoredKey;
+  const revealedValue = revealState.kind === "shown" ? revealState.value : null;
+
   return (
-    <div>
-      {!hideLabel && (
-        <label className="mb-1.5 block text-[11px] font-bold" style={{ color: styles.textSecondary }}>
-          API key pool <span style={{ color: styles.textTertiary }}>— dedicated keys for sub-agents (primary stays free)</span>
-        </label>
-      )}
+    <section
+      className="rounded-[16px] border-[1.5px] p-4 md:p-5 flex flex-col gap-3"
+      style={{ background: styles.card, borderColor: styles.border }}
+      aria-label="API keys"
+    >
+      <div>
+        <SectionLabel>{`API keys — ${keyCount}`}</SectionLabel>
+        {/* R92-D3: the juggling contract, stated plainly. */}
+        <p className="mt-1 text-[11px]" style={{ color: styles.textTertiary }}>
+          If a key hits a rate limit or is rejected, the next key is tried automatically —
+          sub-agents use the same pool.
+        </p>
+      </div>
       <div className="rounded-[10px] border-[1.5px] overflow-hidden" style={{ borderColor: styles.border }}>
-        {slots.length === 0 && (
-          <div className="px-3 py-2.5 text-[11px]" style={{ color: styles.textTertiary }}>
-            No pool slots — sub-agents share the primary key (rate-limited by the per-key setting).
+        {/* ── Key 1 — the primary (R60-B editor, verbatim semantics) ─────── */}
+        <div
+          data-pool-slot={0}
+          data-key-ordinal={1}
+          className="flex items-center gap-2.5 px-3 py-2.5 border-b"
+          style={{ borderColor: styles.borderSubtle, background: withAlpha(styles.accent, 0.02) }}
+        >
+          <span className="flex items-center gap-1.5 shrink-0">
+            <span className="text-[11px] font-mono font-bold" style={{ color: styles.textSecondary }}>
+              KEY 1
+            </span>
+            <span
+              className="text-[9px] font-black uppercase tracking-wider rounded-full px-1.5 py-0.5"
+              style={{ background: withAlpha(styles.accent, 0.14), color: styles.accent }}
+              title="The provider's first key — stored at slot 0 and tried first"
+            >
+              primary
+            </span>
+          </span>
+          <div className="flex gap-2 items-stretch flex-1 min-w-0">
+            <input
+              // Cleartext on purpose — the ONE eye in this row belongs to
+              // the STORED key; masking the user's own draft is what bred
+              // the R58 two-eye ambiguity.
+              type="text"
+              value={primaryHeld && keyDraft === null ? storedDisplay : keyDraft ?? ""}
+              placeholder={primaryHeld ? undefined : "sk-…"}
+              aria-label={
+                primaryHeld && keyDraft === null
+                  ? revealState.kind === "shown"
+                    ? "Stored API key (revealed)"
+                    : "Stored API key (masked)"
+                  : "API key"
+              }
+              data-testid={
+                primaryHeld && keyDraft === null
+                  ? revealState.kind === "shown"
+                    ? "stored-key-revealed"
+                    : "stored-key-masked"
+                  : "new-key-input"
+              }
+              title={
+                primaryHeld
+                  ? keyDraft === null
+                    ? "The stored key — paste a new key to replace it"
+                    : "The new key — Save key replaces the stored one"
+                  : "Paste the provider's API key"
+              }
+              // Whole-value select on focus while at rest: click + paste
+              // replaces the stored key in ONE gesture (paste-to-replace).
+              onFocus={(e) => {
+                if (primaryHeld && keyDraft === null) e.currentTarget.select();
+              }}
+              onKeyDown={(e) => {
+                if (e.key === "Escape" && keyDraft !== null) {
+                  setKeyDraft(null);
+                }
+                if (
+                  e.key === "Enter" &&
+                  keyDraft !== null &&
+                  keyDraft.trim() !== "" &&
+                  !saveKey.isPending
+                ) {
+                  saveKey.mutate(keyDraft.trim());
+                }
+              }}
+              // ROUND-60: any typed/pasted change while at rest IS the
+              // paste-to-replace gesture — the draft takes over (edit mode).
+              onChange={(e) => setKeyDraft(e.target.value)}
+              className="h-10 flex-1 min-w-0 rounded-[10px] border-[1.5px] px-3 font-mono text-[12px] outline-none"
+              style={{
+                background: styles.bg,
+                color: styles.text,
+                borderColor:
+                  keyDraft !== null
+                    ? withAlpha(styles.accent, 0.55)
+                    : revealState.kind === "shown"
+                      ? withAlpha(styles.accent, 0.45)
+                      : styles.border,
+              }}
+            />
+            {/* THE eye toggle — the exact same slot in every state: masked
+                rest → Eye (reveal), loading → spinner, revealed → EyeOff
+                (mask again). Disabled while editing (the draft is the
+                truth now — Cancel restores the stored display first) and
+                keyless (nothing to reveal). */}
+            <button
+              type="button"
+              onClick={() => {
+                if (revealState.kind === "shown") setRevealState({ kind: "idle" });
+                else void revealStoredKey();
+              }}
+              disabled={!primaryHeld || keyDraft !== null || revealState.kind === "loading"}
+              aria-label={revealState.kind === "shown" ? "Hide stored key" : "Show stored key"}
+              data-testid={revealState.kind === "shown" ? "hide-stored-key-button" : "show-stored-key-button"}
+              title={
+                !primaryHeld
+                  ? "No stored key to reveal yet"
+                  : revealState.kind === "shown"
+                    ? "Mask the stored key again"
+                    : "Show the stored key"
+              }
+              className="h-10 w-10 grid place-items-center rounded-[10px] border-[1.5px] shrink-0 disabled:opacity-40"
+              style={{
+                background: styles.bg,
+                borderColor: styles.border,
+                color: revealState.kind === "shown" ? styles.accent : styles.textTertiary,
+              }}
+            >
+              {revealState.kind === "loading" ? (
+                <RefreshCw size={13} className="animate-spin" />
+              ) : revealState.kind === "shown" ? (
+                <EyeOff size={13} />
+              ) : (
+                <Eye size={13} />
+              )}
+            </button>
+            {/* Context action slot: Save key (+ Cancel X) while editing or
+                keyless; otherwise Copy, which fades/slides in ONLY while
+                the stored key is revealed. */}
+            {keyDraft !== null || !primaryHeld ? (
+              <>
+                <button
+                  type="button"
+                  onClick={() => {
+                    if (keyDraft !== null && keyDraft.trim() !== "") saveKey.mutate(keyDraft.trim());
+                  }}
+                  disabled={keyDraft === null || keyDraft.trim() === "" || saveKey.isPending}
+                  aria-label="Save key"
+                  data-testid="save-key-button"
+                  className="h-10 px-4 rounded-[10px] text-[12px] font-bold disabled:opacity-50 shrink-0"
+                  style={{ background: styles.accent, color: styles.accentText }}
+                >
+                  {saveKey.isPending ? "Saving…" : "Save key"}
+                </button>
+                {primaryHeld && (
+                  <button
+                    type="button"
+                    onClick={() => setKeyDraft(null)}
+                    aria-label="Cancel key edit"
+                    data-testid="cancel-key-edit-button"
+                    title="Restore the stored key display"
+                    className="h-10 w-10 grid place-items-center rounded-[10px] border-[1.5px] shrink-0"
+                    style={{ borderColor: styles.border, color: styles.textTertiary }}
+                  >
+                    <X size={13} />
+                  </button>
+                )}
+              </>
+            ) : (
+              <AnimatePresence initial={false}>
+                {revealedValue !== null && (
+                  <motion.div
+                    key="copy-stored-key"
+                    initial={{ opacity: 0, width: 0 }}
+                    animate={{ opacity: 1, width: "auto" }}
+                    exit={{ opacity: 0, width: 0 }}
+                    transition={{ duration: 0.2, ease: "easeOut" }}
+                    className="overflow-hidden shrink-0"
+                  >
+                    <button
+                      type="button"
+                      onClick={() => void copyToClipboard(revealedValue, "Key copied to clipboard.")}
+                      aria-label="Copy stored key"
+                      data-testid="copy-stored-key-button"
+                      title="Copy the stored key"
+                      className="h-10 px-3.5 rounded-[10px] border-[1.5px] text-[12px] font-bold flex items-center gap-1.5 shrink-0 whitespace-nowrap"
+                      style={{ borderColor: styles.border, color: styles.textSecondary }}
+                    >
+                      <Copy size={12} /> Copy
+                    </button>
+                  </motion.div>
+                )}
+              </AnimatePresence>
+            )}
           </div>
-        )}
-        {slots.map((k) => {
+        </div>
+        {/* ── Key 2..N — the pool rows (ordinals, masked + reveal/copy/remove) */}
+        {heldSlots.map((k) => {
+          const ordinal = keyOrdinal(k.slot, primaryHeld, heldSlotNumbers);
           const revealed = revealedRows.has(k.slot) ? revealedValues[k.slot] : undefined;
           return (
-            <div key={k.slot} data-pool-slot={k.slot} className="flex items-center gap-2 px-3 py-2 border-b last:border-b-0" style={{ borderColor: styles.borderSubtle }}>
+            <div
+              key={k.slot}
+              data-pool-slot={k.slot}
+              data-key-ordinal={ordinal}
+              className="flex items-center gap-2 px-3 py-2 border-b last:border-b-0"
+              style={{ borderColor: styles.borderSubtle }}
+            >
               <span className="text-[11px] font-mono font-bold shrink-0" style={{ color: styles.textSecondary }}>
-                SLOT {k.slot}
+                KEY {ordinal}
               </span>
               {revealed !== undefined ? (
                 // ROUND-58 (R58-d): the revealed full value — mono, break-all,
@@ -3873,31 +3939,29 @@ export function KeyPoolSection({ providerId, hideLabel = false }: { providerId: 
               )}
               {/* ROUND-58 (R58-d): the reveal eye — only rows that HOLD a key
                   get it (a keyless row has nothing to reveal). */}
-              {k.hasKey && (
-                <button
-                  onClick={() => void revealSlot(k.slot)}
-                  // ROUND-58 (R58-d): disabled during ANY reveal fetch (the
-                  // first reveal AND a cache-miss re-fetch) — no double-click
-                  // can fire two concurrent fetches.
-                  disabled={revealLoading}
-                  aria-label={revealed !== undefined ? `Hide slot ${k.slot} key` : `Reveal slot ${k.slot} key`}
-                  title={revealed !== undefined ? "Mask again" : "Show the full key"}
-                  className="w-6 h-6 grid place-items-center rounded-md shrink-0 disabled:opacity-50"
-                  style={{ color: styles.textTertiary }}
-                >
-                  {revealLoading ? (
-                    <RefreshCw size={11} className="animate-spin" />
-                  ) : revealed !== undefined ? (
-                    <EyeOff size={11} />
-                  ) : (
-                    <Eye size={11} />
-                  )}
-                </button>
-              )}
+              <button
+                onClick={() => void revealSlot(k.slot)}
+                // ROUND-58 (R58-d): disabled during ANY reveal fetch (the
+                // first reveal AND a cache-miss re-fetch) — no double-click
+                // can fire two concurrent fetches.
+                disabled={revealLoading}
+                aria-label={revealed !== undefined ? `Hide key ${ordinal}` : `Reveal key ${ordinal}`}
+                title={revealed !== undefined ? "Mask again" : "Show the full key"}
+                className="w-6 h-6 grid place-items-center rounded-md shrink-0 disabled:opacity-50"
+                style={{ color: styles.textTertiary }}
+              >
+                {revealLoading ? (
+                  <RefreshCw size={11} className="animate-spin" />
+                ) : revealed !== undefined ? (
+                  <EyeOff size={11} />
+                ) : (
+                  <Eye size={11} />
+                )}
+              </button>
               {revealed !== undefined && (
                 <button
                   onClick={() => void copySlotValue(revealed)}
-                  aria-label={`Copy slot ${k.slot} key`}
+                  aria-label={`Copy key ${ordinal}`}
                   title="Copy the full key"
                   className="w-6 h-6 grid place-items-center rounded-md shrink-0"
                   style={{ color: styles.textTertiary }}
@@ -3907,10 +3971,10 @@ export function KeyPoolSection({ providerId, hideLabel = false }: { providerId: 
               )}
               <button
                 onClick={() => {
-                  if (window.confirm(`Remove pool slot ${k.slot}?`)) removeSlot.mutate(k.slot);
+                  if (window.confirm(`Remove key ${ordinal}?`)) removeKey.mutate(k.slot);
                 }}
-                aria-label={`Remove slot ${k.slot}`}
-                title="Remove slot"
+                aria-label={`Remove key ${ordinal}`}
+                title="Remove key"
                 className="w-6 h-6 grid place-items-center rounded-md shrink-0"
                 style={{ color: styles.textTertiary }}
                 onMouseEnter={(e) => (e.currentTarget.style.background = withAlpha("#ef4444", 0.12))}
@@ -3921,53 +3985,104 @@ export function KeyPoolSection({ providerId, hideLabel = false }: { providerId: 
             </div>
           );
         })}
-        {/* Add slot row */}
-        <div className="flex items-center gap-2 px-3 py-2 border-t" style={{ borderColor: styles.borderSubtle, background: withAlpha(styles.accent, 0.03) }}>
-          <div className="relative flex-1 min-w-0">
-            <input
-              type={showNew ? "text" : "password"}
-              value={newKey}
-              onChange={(e) => setNewKey(e.target.value)}
-              placeholder="new pool key (sk-…)"
-              aria-label="New pool key"
-              className="h-8 w-full rounded-[8px] border-[1.5px] px-2.5 pr-8 font-mono text-[11px] outline-none"
-              style={{ background: styles.bg, borderColor: styles.border, color: styles.text }}
-            />
+        {/* ── The add row — always appends to the first free slot ≥ 1 ──────
+            (R92-D3; the R47 Tauri overwrite fix rides the mutation above).
+            A full pool replaces it with the honest note. */}
+        {nextFreeSlot(pool.filter((k) => k.hasKey).map((k) => k.slot)) < 0 ? (
+          <div
+            className="px-3 py-2.5 text-[11px] border-t"
+            style={{ borderColor: styles.borderSubtle, color: styles.textTertiary }}
+            data-testid="pool-full-note"
+          >
+            The key pool is full (31 keys) — remove one to add another.
+          </div>
+        ) : (
+          <div
+            className="flex items-center gap-2 px-3 py-2 border-t"
+            style={{ borderColor: styles.borderSubtle, background: withAlpha(styles.accent, 0.03) }}
+          >
+            <span className="text-[11px] font-mono font-bold shrink-0" style={{ color: styles.textTertiary }}>
+              KEY {keyCount + 1}
+            </span>
+            <div className="relative flex-1 min-w-0">
+              <input
+                type={showNew ? "text" : "password"}
+                value={newKey}
+                onChange={(e) => setNewKey(e.target.value)}
+                placeholder="another key for this provider (sk-…)"
+                aria-label="New API key"
+                data-testid="add-key-input"
+                className="h-8 w-full rounded-[8px] border-[1.5px] px-2.5 pr-8 font-mono text-[11px] outline-none"
+                style={{ background: styles.bg, borderColor: styles.border, color: styles.text }}
+              />
+              <button
+                onClick={() => setShowNew((v) => !v)}
+                aria-label={showNew ? "Hide key" : "Show key"}
+                className="absolute right-1.5 top-1/2 -translate-y-1/2 w-5 h-5 grid place-items-center rounded-md"
+                style={{ color: styles.textTertiary }}
+              >
+                {showNew ? <EyeOff size={11} /> : <Eye size={11} />}
+              </button>
+            </div>
             <button
-              onClick={() => setShowNew((v) => !v)}
-              aria-label={showNew ? "Hide key" : "Show key"}
-              className="absolute right-1.5 top-1/2 -translate-y-1/2 w-5 h-5 grid place-items-center rounded-md"
-              style={{ color: styles.textTertiary }}
+              onClick={() => newKey.trim() && addKey.mutate(newKey.trim())}
+              disabled={!newKey.trim() || addKey.isPending}
+              aria-label="Add key"
+              className="h-8 px-3 rounded-[8px] text-[11px] font-bold flex items-center gap-1 disabled:opacity-50"
+              style={{ background: withAlpha(styles.accent, 0.12), color: styles.accent }}
             >
-              {showNew ? <EyeOff size={11} /> : <Eye size={11} />}
+              <Plus size={11} strokeWidth={2.5} /> {addKey.isPending ? "Adding…" : "Add key"}
             </button>
           </div>
-          <button
-            onClick={() => newKey.trim() && addSlot.mutate(newKey.trim())}
-            disabled={!newKey.trim() || addSlot.isPending}
-            className="h-8 px-3 rounded-[8px] text-[11px] font-bold flex items-center gap-1 disabled:opacity-50"
-            style={{ background: withAlpha(styles.accent, 0.12), color: styles.accent }}
-          >
-            <Plus size={11} strokeWidth={2.5} /> {addSlot.isPending ? "Adding…" : "Add slot"}
-          </button>
-        </div>
+        )}
       </div>
-      {msg && <p className="mt-1.5 text-[11px]" style={{ color: addSlot.isError || removeSlot.isError ? "#ef4444" : "#22c55e" }}>{msg}</p>}
+      {/* Primary-editor status (save/copy confirmations + reveal failures). */}
+      {revealState.kind === "error" && (
+        <p className="text-[11px] break-all" style={{ color: "#ef4444" }} role="alert">
+          {revealState.message}
+        </p>
+      )}
+      {keyStatus && (
+        <p
+          className="text-[11px]"
+          style={{ color: saveKey.isError || keyStatusIsError ? "#ef4444" : "#22c55e" }}
+        >
+          {keyStatus}
+        </p>
+      )}
+      {/* Pool add/remove status + reveal failures. */}
+      {poolMsg && (
+        <p
+          className="text-[11px]"
+          style={{ color: addKey.isError || removeKey.isError ? "#ef4444" : "#22c55e" }}
+        >
+          {poolMsg}
+        </p>
+      )}
       {revealError && (
-        <p className="mt-1.5 text-[11px] break-all" style={{ color: "#ef4444" }} role="alert">
+        <p className="text-[11px] break-all" style={{ color: "#ef4444" }} role="alert">
           {revealError}
         </p>
       )}
-      <p className="mt-1 text-[10.5px]" style={{ color: styles.textTertiary }}>
-        Sub-agents prefer pool slots (least-loaded first) so the primary key serves your main chats.
+      {/* A failed pool listing is honest — the primary editor still works,
+          but Key 2..N cannot render from a lie. */}
+      {poolQuery.isError && (
+        <p className="text-[11px]" style={{ color: "#ef4444" }} role="alert">
+          Key pool listing unavailable —{" "}
+          {poolQuery.error instanceof Error ? poolQuery.error.message : String(poolQuery.error)}
+        </p>
+      )}
+      <p className="text-[10.5px]" style={{ color: styles.textTertiary }}>
+        Stored in the OS secure store — never in the database or logs; Show fetches the full
+        value only on your explicit click.
       </p>
-      {/* ROUND-47 (R47-c1): browser-dev honesty — pool keys share the
-          sidecar's in-memory keyring (same ephemerality as the primary). */}
+      {/* ROUND-47 (R47-c1): browser-dev honesty — the sidecar keyring is
+          in-memory, so browser-stored keys do not survive a restart. */}
       {!isTauri() && (
-        <p className="mt-1 text-[10.5px]" style={{ color: styles.textTertiary, opacity: 0.75 }}>
+        <p className="text-[10.5px]" style={{ color: styles.textTertiary, opacity: 0.75 }}>
           {EPHEMERAL_KEY_NOTE}
         </p>
       )}
-    </div>
+    </section>
   );
 }

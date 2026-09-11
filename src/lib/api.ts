@@ -2703,6 +2703,12 @@ export interface ProviderView {
   enabled: boolean;
   createdAt: string;
   hasKey: boolean;
+  /** ROUND-92 (R92-D, Task 2-a): how many keys the provider holds in total —
+   * the primary (slot 0) plus every held pool slot (1–31), straight from the
+   * keyring's pool scan. Optional because the field rides the same wave as
+   * the backend's key-juggling work: consumers must default defensively
+   * (`p.keyCount ?? (p.hasKey ? 1 : 0)`) until every sidecar serves it. */
+  keyCount?: number;
 }
 
 export async function fetchProviders(): Promise<ProviderView[]> {
@@ -3156,6 +3162,18 @@ export type StreamTurnEvent =
    * delivered/flipped events own the render); reserved for a future
    * "continuing with your queued message" status line. */
   | { type: "meta.queue_continue"; count: number }
+  /** ROUND-92 (R92-D): the key-pool JUGGLING frame — a key-attributable
+   * failure (auth: the key was rejected; rate_limit: that key's quota is
+   * spent) swapped the turn onto the next untried key of the provider's
+   * pool and the SAME call retries immediately (no ladder wait — a fresh
+   * key has fresh quota). Rendered as a transient status note (the
+   * overflow-recovery pattern); any content frame clears it. Carries pool
+   * INDEXES and the reason only — never a key value. */
+  | {
+      type: "meta.key";
+      key: { attempt: number; totalKeys: number; reason: string };
+      message: string;
+    }
   /** ROUND-75 (R75): the R71 overflow-recovery line, finally typed — a
    * context overflow was auto-compacted and the turn is retrying (rendered
    * as a transient status note, not an error). */
