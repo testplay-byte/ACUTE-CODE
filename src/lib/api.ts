@@ -4030,6 +4030,27 @@ export async function resetApplication(): Promise<SystemResetResult> {
   return request<SystemResetResult>("/system/reset", { method: "POST" });
 }
 
+/* ── ROUND-89 (R89-A2): the server-side update check (GET /system/updates) ──
+ * The repo is PRIVATE — the webview's anonymous api.github.com fetch answered
+ * 404 (the owner's verdict). The sidecar runs the check with the launcher's
+ * saved token; the PAT never crosses this boundary. */
+export interface SystemUpdateCheck {
+  current: string;
+  releasesUrl: string;
+  ok: boolean;
+  /** Only meaningful when ok === true: */
+  latest?: string;
+  updateAvailable?: boolean;
+  releaseUrl?: string;
+  /** Only meaningful when ok === false: */
+  reason?: string;
+  error?: string;
+}
+
+export async function fetchSystemUpdates(): Promise<SystemUpdateCheck> {
+  return request<SystemUpdateCheck>("/system/updates");
+}
+
 /* ── ROUND-66 (R66, B3/B5): the DEDICATED image-analysis (vision) settings ── */
 
 /** The global vision configuration (moved OUT of computer use per the

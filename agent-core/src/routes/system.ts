@@ -33,7 +33,7 @@
 // The frontend then clears its localStorage stores + react-query cache and
 // reloads — the full journey back to first-run.
 // ─────────────────────────────────────────────────────────────────────────────
-import { rmSync, readdirSync, statSync, existsSync, unlinkSync } from "node:fs";
+import { rmSync, readdirSync, statSync, existsSync, unlinkSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import type { FastifyInstance } from "fastify";
@@ -41,6 +41,48 @@ import type { RouteContext } from "./context.js";
 import { reseedFactoryData, type SqliteDatabase } from "../storage/db.js";
 import { abortTurn, liveTurnIds } from "../lib/turn-registry.js";
 import { terminalSessionsDisposeAll } from "../terminal-sessions.js";
+
+const GITHUB_REPO = "testplay-byte/ACUTE-CODE";
+const GITHUB_LATEST_RELEASE_URL = `https://api.github.com/repos/${GITHUB_REPO}/releases/latest`;
+const GITHUB_RELEASES_PAGE = `https://github.com/${GITHUB_REPO}/releases`;
+
+/** R89-A2: the app's own version, from the package.json that ships with the
+ * staged engine (dist/routes/… → ../../package.json = agent-core's manifest;
+ * scripts/release/version.mjs keeps it identical to the root's). */
+function appVersion(): string {
+  try {
+    const manifest = JSON.parse(
+      readFileSync(join(import.meta.dirname, "..", "..", "package.json"), "utf8"),
+    ) as { version?: string };
+    return typeof manifest.version === "string" && manifest.version !== "" ? manifest.version : "0.0.0";
+  } catch {
+    return "0.0.0";
+  }
+}
+
+/** "0.86.0" vs "0.87.0" → [0,86,0] (tolerant of leading v and short forms). */
+function versionTuple(v: string): number[] {
+  return v
+    .replace(/^v/, "")
+    .split(".")
+    .map((part) => Number.parseInt(part, 10))
+    .map((part) => (Number.isNaN(part) ? 0 : part));
+}
+
+/** R89-A2: the launcher's saved GitHub token (~/.acute/github.pat — written
+ * by acute_launcher.py's first-run prompt). The repo is PRIVATE, so the
+ * releases API answers 404 to anonymous callers. Never logged, never
+ * returned — read once per /system/updates call and used in the Authorization
+ * header only. Returns null when absent/unreadable. */
+function readLauncherGithubPat(): string | null {
+  try {
+    const pat = readFileSync(join(homedir(), ".acute", "github.pat"), "utf8").trim();
+    if (!pat.startsWith("github_pat_")) return null;
+    return pat;
+  } catch {
+    return null;
+  }
+}
 
 /** Every user-data table in the database — derived from sqlite_master at
  * reset time (never a hand-maintained list to drift), minus the migration
@@ -104,6 +146,84 @@ function purgeAcuteDir(): string[] {
 
 export function registerSystemRoutes(scope: FastifyInstance, ctx: RouteContext): void {
   const { db, keyring } = ctx;
+
+  // ── R89-A2: the update check ──────────────────────────────────────────────
+  // The About tab's "Check for updates" used to call api.github.com from the
+  // webview — the repo is PRIVATE, so GitHub answered 404 to the anonymous
+  // browser fetch (the owner's verdict). The check now runs HERE, server-side,
+  // with the launcher's saved token — the PAT never crosses the REST boundary.
+  // The fetch is short-lived (8s) so the button can answer honestly fast.
+  scope.get("/system/updates", async () => {
+    const current = appVersion();
+    const base = { current, releasesUrl: GITHUB_RELEASES_PAGE };
+    const pat = readLauncherGithubPat();
+    if (pat === null) {
+      return {
+        ...base,
+        ok: false,
+        reason: "no-token",
+        error:
+          "the launcher's GitHub token is not saved on this machine (start the app once via ACUTE.bat and let it save it)",
+      };
+    }
+    try {
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), 8_000);
+      try {
+        const response = await fetch(GITHUB_LATEST_RELEASE_URL, {
+          headers: {
+            Accept: "application/vnd.github+json",
+            Authorization: `Bearer ${pat}`,
+            "X-GitHub-Api-Version": "2022-11-28",
+            "User-Agent": "ACUTE-CODE-update-check",
+          },
+          signal: controller.signal,
+        });
+        if (response.status === 404) {
+          return {
+            ...base,
+            ok: false,
+            reason: "no-release",
+            error: "no published release is visible to this token yet",
+          };
+        }
+        if (!response.ok) {
+          return {
+            ...base,
+            ok: false,
+            reason: "github",
+            error: `GitHub answered HTTP ${response.status}`,
+          };
+        }
+        const release = (await response.json()) as { tag_name?: unknown; html_url?: unknown };
+        const latest = typeof release.tag_name === "string" ? release.tag_name.replace(/^v/, "") : "";
+        if (latest === "") {
+          return { ...base, ok: false, reason: "bad-payload", error: "the release payload had no tag_name" };
+        }
+        const now = versionTuple(current);
+        const newest = versionTuple(latest);
+        const updateAvailable =
+          newest.length > 0 && now.some((part, i) => part < (newest[i] ?? 0));
+        return {
+          ...base,
+          ok: true,
+          latest,
+          updateAvailable,
+          releaseUrl:
+            typeof release.html_url === "string" ? release.html_url : GITHUB_RELEASES_PAGE,
+        };
+      } finally {
+        clearTimeout(timeout);
+      }
+    } catch (err) {
+      return {
+        ...base,
+        ok: false,
+        reason: "network",
+        error: err instanceof Error ? err.message : String(err),
+      };
+    }
+  });
 
   scope.post("/system/reset", async () => {
     // 1. Abort every live turn (main sessions + sub-agent children) so no

@@ -2384,3 +2384,21 @@ the per-model test button, the model edit dialog). Spec:
   pills + custom-text answers, a 10-minute timeout, abort-cancellation, and
   `agent-question.requested`/`agent-question.resolved` session events (the
   approvals' fold contract). Plan mode keeps it (pure clarification).
+
+## R89 additions (2026-09-11) — the owner's hands-on verdict round
+
+### GET /api/v1/system/updates — the server-side update check (NEW, `routes/system.ts`)
+
+- The repo is PRIVATE: the About tab's old anonymous webview fetch to
+  `api.github.com` answered HTTP 404 (the owner's verdict). The check runs
+  in the SIDECAR now — it reads the launcher's saved
+  `~/.acute/github.pat` (written by `acute_launcher.py`'s first-run
+  prompt; never returned over REST) and queries
+  `repos/testplay-byte/ACUTE-CODE/releases/latest` with it (8s abort
+  budget, `X-GitHub-Api-Version: 2022-11-28`). 200 `{current (the
+  engine's own package.json version), releasesUrl, ok:true, latest,
+  updateAvailable, releaseUrl}` — or `ok:false` with a `reason`
+  (`no-token` — the launcher never saved a PAT; `no-release` — GitHub's
+  404; `github` — other HTTP status; `network`) and an `error` string the
+  About tab renders honestly. The version walk is the tuple compare
+  (`0.86.0` vs `0.87.0` → per-segment), computed where the check runs.

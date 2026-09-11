@@ -21,16 +21,42 @@ import { useQueryClient } from "@tanstack/react-query";
 import { CheckCircle2, Download, ExternalLink, Info, ShieldAlert } from "lucide-react";
 import { APP_NAME, APP_VERSION, PHASE } from "../../lib/version";
 import { isTauri } from "../../lib/sidecar";
-import { resetApplication } from "../../lib/api";
+import { fetchSystemUpdates, resetApplication, type SystemUpdateCheck } from "../../lib/api";
 import { useThemeStyles } from "../../lib/use-theme-styles";
 import { bdr, withAlpha } from "../dashboard/helpers";
 
 const RELEASES_URL = "https://github.com/testplay-byte/ACUTE-CODE/releases";
-const LATEST_RELEASE_API = "https://api.github.com/repos/testplay-byte/ACUTE-CODE/releases/latest";
+
+/** R89-A3: the Releases link must reach the OS browser. Inside Tauri a
+ * plain <a target="_blank"> is silently swallowed by WebView2 (wry) — the
+ * R58-b Rust command `open_external_url` (tauri-plugin-shell's OS-level
+ * open, http/https validated in Rust) is the sanctioned handoff; the web
+ * dev server falls back to window.open. */
+async function openReleasesPage(url: string): Promise<void> {
+  if (isTauri()) {
+    try {
+      const tauri = (window as { __TAURI__?: { core: { invoke: (command: string, args?: Record<string, unknown>) => Promise<unknown> } } })
+        .__TAURI__;
+      if (tauri !== undefined) {
+        await tauri.core.invoke("open_external_url", { url });
+        return;
+      }
+    } catch (err) {
+      console.error("[about] open_external_url failed:", err);
+    }
+  }
+  window.open(url, "_blank", "noreferrer");
+}
 
 /** Every localStorage store the app persists (the reset flow clears them
- * all — the keys mirror the stores' persist configs). */
+ * all — the keys mirror the stores' persist configs). R89-A1: the
+ * first-run gate key `acute.setupDone` is in the list too — the owner's
+ * verdict: after "Reset everything" the app restarted on the DASHBOARD
+ * instead of the setup wizard, even across a full close+reopen, because
+ * this one key survived the sweep. It gates App.tsx's /setup redirect
+ * (shouldRunSetup → localStorage "acute.setupDone"). */
 const LOCAL_STORAGE_KEYS = [
+  "acute.setupDone",
   "acute-code.theme",
   "acute-code.config",
   "acute-code.settings",
@@ -58,14 +84,6 @@ async function purgeDesktopKeys(): Promise<void> {
   }
 }
 
-function versionTuple(v: string): number[] {
-  return v
-    .replace(/^v/, "")
-    .split(".")
-    .map((part) => Number.parseInt(part, 10))
-    .map((part) => (Number.isNaN(part) ? 0 : part));
-}
-
 type UpdateState =
   | { kind: "idle" }
   | { kind: "checking" }
@@ -77,20 +95,20 @@ function VersionCard() {
   const styles = useThemeStyles();
   const [update, setUpdate] = useState<UpdateState>({ kind: "idle" });
 
+  // R89-A2: the check runs SERVER-SIDE (GET /system/updates — the sidecar
+  // reads the launcher's ~/.acute/github.pat; the repo is PRIVATE so the
+  // old anonymous webview fetch to api.github.com answered 404, the owner's
+  // verdict). The version comparison is the same tuple walk as before.
   const checkForUpdates = async () => {
     setUpdate({ kind: "checking" });
     try {
-      const response = await fetch(LATEST_RELEASE_API, {
-        headers: { Accept: "application/vnd.github+json" },
-      });
-      if (!response.ok) throw new Error(`GitHub answered HTTP ${response.status}`);
-      const release = (await response.json()) as { tag_name?: string; html_url?: string };
-      const latest = (release.tag_name ?? "").replace(/^v/, "");
+      const result: SystemUpdateCheck = await fetchSystemUpdates();
+      if (!result.ok) {
+        throw new Error(result.error ?? result.reason ?? "the update check failed");
+      }
+      const latest = result.latest ?? "";
       if (latest === "") throw new Error("no published release found");
-      const current = versionTuple(APP_VERSION);
-      const newest = versionTuple(latest);
-      const available = newest.length > 0 && current.some((part, i) => part < (newest[i] ?? 0));
-      setUpdate(available ? { kind: "available", latest } : { kind: "current", latest });
+      setUpdate(result.updateAvailable ? { kind: "available", latest } : { kind: "current", latest });
     } catch (err) {
       setUpdate({
         kind: "error",
@@ -130,16 +148,16 @@ function VersionCard() {
           >
             {update.kind === "checking" ? "Checking…" : "Check for updates"}
           </button>
-          <a
-            href={RELEASES_URL}
-            target="_blank"
-            rel="noreferrer"
-            className="h-9 px-3.5 rounded-full text-[11.5px] font-bold border-[1.5px] flex items-center gap-1.5 transition-colors"
+          <button
+            type="button"
+            onClick={() => void openReleasesPage(RELEASES_URL)}
+            className="h-9 px-3.5 rounded-full text-[11.5px] font-bold border-[1.5px] flex items-center gap-1.5 transition-colors hover:opacity-80"
             style={{ borderColor: bdr("1.5px", styles.border), color: styles.textSecondary }}
+            aria-label="Open the releases page in your browser"
           >
             Releases
             <ExternalLink size={11} />
-          </a>
+          </button>
         </div>
       </div>
       <div className="mt-3 min-h-[18px]">
