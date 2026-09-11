@@ -261,7 +261,7 @@
     }
   ],
   "quality": {
-    "ci": "GREEN (pre-push) — R89: lint, typechecks, the 2,885-test root suite, the 1,892-test agent-core suite, build, e2e 12/12, license audit all green locally; the v0.87.0 tag + CI + release follow this commit.",
+    "ci": "GREEN — R89 push 1ad6bf4 → CI run 34607758325 SUCCESS (the owner's-verdict round: lint, typechecks, the 2,885-test root suite, build, e2e, license audit, cargo check, docs check) + the Release run 34607775963 SUCCESS; v0.87.0 tagged, built, and PUBLISHED (both assets verified: ACUTE-CODE_0.87.0_x64-setup.exe + acute-launcher-kit-v0.87.0.zip; zero drafts remain). The three intermediate phase pushes (5f47b3d/e4f5376/7f28ea3) ran red on the SAME known cause (the r80-nvidia reserved-id test still asserting the pre-R89 409 — fixed in 09efdfd which ran GREEN before the tag).",
     "suites": [
       {
         "name": "frontend",
