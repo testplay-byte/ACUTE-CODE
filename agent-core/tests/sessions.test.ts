@@ -637,7 +637,7 @@ describe("POST /api/v1/sessions/:id/messages", () => {
     expect(generateTextMock).not.toHaveBeenCalled();
   });
 
-  it("409 CONFLICT when the provider has no key, naming the env var", async () => {
+  it("409 CONFLICT when the provider has no key, pointing at the Settings UI", async () => {
     const agent = await createAgent();
     const session = await createSession(agent.id);
     // Same database, but this app's keyring has no ACUTE_PROVIDER_OPENROUTER.
@@ -651,7 +651,16 @@ describe("POST /api/v1/sessions/:id/messages", () => {
       });
       expect(response.statusCode).toBe(409);
       expect(response.json().error.code).toBe("CONFLICT");
-      expect(response.json().error.message).toContain("ACUTE_PROVIDER_OPENROUTER");
+      // ROUND-92 (R92-D): the message now points at the UI where keys are
+      // added (Settings → Models & Providers) instead of the pre-R92 env-var
+      // name — the shell persists keys via Credential Manager; the env var is
+      // spawn-injection plumbing the owner should never hand-set. Pinned
+      // here because the pool changed the wording (a pool of ANY size ≥ 1
+      // passes this gate).
+      expect(response.json().error.message).toContain("no API key for provider 'openrouter'");
+      expect(response.json().error.message).toContain(
+        "add one or more keys in Settings → Models & Providers",
+      );
       expect(generateTextMock).not.toHaveBeenCalled();
     } finally {
       await keyless.close();
@@ -718,7 +727,9 @@ describe("POST /api/v1/sessions/:id/messages", () => {
       });
       expect(retried.statusCode).toBe(409);
       expect(retried.json().error.code).toBe("CONFLICT");
-      expect(retried.json().error.message).toContain("ACUTE_PROVIDER_OPENROUTER");
+      // ROUND-92 (R92-D): the re-pinned no-key wording (see the test above).
+      expect(retried.json().error.message).toContain("no API key for provider 'openrouter'");
+      expect(retried.json().error.message).toContain("Settings → Models & Providers");
       expect(generateTextMock).not.toHaveBeenCalled();
     } finally {
       // Leave the shared db in the seeded state for any later test.

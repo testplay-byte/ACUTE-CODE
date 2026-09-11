@@ -15,6 +15,7 @@ import { getProject } from "../storage/projects.js";
 import type Database from "better-sqlite3";
 import {
   ProviderKeyring,
+  resolveKeyPool,
   resolveProvider,
 } from "../providers/registry.js";
 import { buildProjectTools, NO_TOOLS } from "../tools/index.js";
@@ -530,11 +531,16 @@ export interface TurnDeps {
   /**
    * ROUND-64 (R64-e, owner: per-API-key usage stats): the key-pool slot this
    * turn's provider key comes from — set by the orchestrator on a CHILD's
-   * deps from the slot it acquired (ADR-0022: children prefer pool slots).
+   * deps from the slot it acquired (load-spreading; ADR-0022 heritage).
+   * ROUND-92 (R92-D): the slot is now the turn's STARTING key, not a
+   * constraint — children receive the PARENT keyring unchanged (the full
+   * pool) and the runner begins from this slot's entry, juggling to the
+   * next untried key on key-attributable failures (auth / rate_limit).
    * Omitted (main-session turns, HTTP retry routes) = slot 0, the PRIMARY
-   * key — the honest default: those turns resolve keyring.get(provider.id),
-   * which IS the primary. Flows into recordUsage's third parameter so the
-   * usage_events row attributes its tokens/cost to the key that paid them.
+   * key — the honest default: those turns historically resolved
+   * keyring.get(provider.id), which IS the primary. Flows into recordUsage's
+   * third parameter (via the runner's activeKeySlot) so the usage_events row
+   * attributes its tokens/cost to the key that paid them.
    */
   keySlot?: number;
 }
@@ -868,13 +874,36 @@ interface PreparedTurn {
   session: NonNullable<ReturnType<typeof getSession>>;
   agent: NonNullable<ReturnType<typeof getAgent>>;
   provider: { id: string; baseUrl: string; apiFormat?: string };
+  /** ROUND-92 (R92-D): the FIRST key of the resolved pool (pool[0] — the
+   * primary when one exists). Kept as a field for every pre-R92 consumer
+   * of the prepared pair; the turn runners now read the STARTING key from
+   * keyPool below (the orchestrator's reserved slot for children). */
   apiKey: string;
+  /** ROUND-92 (R92-D): the provider's DEDUPED key pool (resolveKeyPool —
+   * slot order, same-value slots collapsed, empties dropped). Non-empty by
+   * the gate below; the turn runners juggle through it on key-attributable
+   * failures. Never logged, never emitted. */
+  keyPool: Array<{ slot: number; key: string }>;
   model: string;
   tools: Awaited<ReturnType<typeof buildProjectTools>> | undefined;
   system: string;
   /** ROUND-50 (R50-c1): the per-send thinking level, threaded to the chat
    * adapters (chat.ts buildModel). Not persisted. */
   thinkingLevel?: ThinkingLevel;
+}
+
+/**
+ * ROUND-92 (R92-D): the pool entry a turn STARTS from — the orchestrator's
+ * RESERVED slot when that slot still holds a key in the (deduped) pool
+ * (children: load-spreading; the reservation ran over the same pool), else
+ * pool[0] (the primary, or the first pool key when no primary exists — a
+ * pool made only of _SLOT entries is a valid provider configuration).
+ */
+function initialKeyPoolEntry(
+  keyPool: Array<{ slot: number; key: string }>,
+  reservedSlot: number,
+): { slot: number; key: string } {
+  return keyPool.find((entry) => entry.slot === reservedSlot) ?? keyPool[0]!;
 }
 
 /* ── ROUND-70 (R70-c, D1): per-turn environment grounding ────────────────────
@@ -1152,16 +1181,24 @@ async function prepareTurn(
       },
     };
   }
-  const apiKey = keyring.get(provider.id);
-  if (apiKey === undefined) {
+  // ROUND-92 (R92-D, the owner's multi-key pool): resolve the provider's
+  // DEDUPED key pool — the primary (slot 0) plus every ACUTE_PROVIDER_<ID>_SLOT<N>
+  // the shell injected, with duplicate VALUES collapsed (the same key saved
+  // into two slots is ONE key). A turn is only keyless when the pool is
+  // EMPTY. The pre-R92 message named the env var; the owner-facing fix
+  // points at the UI where keys are added now (the shell persists them via
+  // Credential Manager — the env var is an implementation detail of the
+  // spawn injection, not something the owner should hand-set).
+  const keyPool = resolveKeyPool(keyring, provider.id);
+  if (keyPool.length === 0) {
     return {
       error: {
         ok: false,
         status: 409,
         code: "CONFLICT",
         message:
-          `no API key for provider '${provider.id}' — set ${ProviderKeyring.envVarName(provider.id)} ` +
-          "in the sidecar environment",
+          `no API key for provider '${provider.id}' — ` +
+          "add one or more keys in Settings → Models & Providers",
         details: { providerId: provider.id },
       },
     };
@@ -1487,7 +1524,10 @@ async function prepareTurn(
     // ROUND-37: apiFormat rides along so chat.ts can branch per provider
     // (chat-completions | anthropic-messages | responses).
     provider: { id: provider.id, baseUrl: provider.baseUrl, apiFormat: provider.apiFormat },
-    apiKey,
+    // ROUND-92 (R92-D): the first pool key (compat field — see PreparedTurn)
+    // and the full pool for the runners' juggling.
+    apiKey: keyPool[0]!.key,
+    keyPool,
     // ROUND-92 (R92-B): the EFFECTIVE model — the override's when the send
     // carried one, the agent's otherwise; non-null by the override-first gate
     // (an override model on a NULL agent flows to the chat adapters exactly
@@ -1526,10 +1566,6 @@ export async function runSingleAgentTurn(
   attachments?: MessageAttachment[],
 ): Promise<TurnOutcome> {
   const { db, keyring, chat } = deps;
-  // ROUND-64 (R64-e): the key-pool slot this turn's usage rows attribute
-  // their spend to (children: the orchestrator's acquired slot; main turns:
-  // 0 = the primary key). Same value for every recordUsage below.
-  const keySlot = deps.keySlot ?? 0;
   // ROUND-78 (R78, owner: "General Settings 重试配置"): the per-class
   // auto-retry switches, read ONCE per turn (the ladder gate below consults
   // the cache — no per-rung DB reads while a 30-minute rung waits). A
@@ -1577,7 +1613,23 @@ export async function runSingleAgentTurn(
     content,
   );
   if ("error" in prepared) return prepared.error;
-  const { session, agent, provider, apiKey, model, tools, system } = prepared;
+  const { session, agent, provider, model, tools, system } = prepared;
+  // ROUND-92 (R92-D, the owner's multi-key pool with automatic juggling):
+  // the turn's key state. The turn STARTS from the orchestrator-reserved
+  // slot's entry (children — load-spreading) or the primary (main turns),
+  // and on a key-ATTRIBUTABLE failure (auth / rate_limit) with an UNTRIED
+  // key remaining, the catch below swaps apiKey/activeKeySlot forward and
+  // retries the SAME call immediately (a fresh key has fresh quota — no
+  // ladder wait). activeKeySlot always names the key the CURRENT attempt
+  // uses, so every recordUsage below attributes the spend to the key that
+  // actually paid it (successful attempt — or the last attempted key when
+  // the turn fails). One key in the pool (the common case) is byte-identical
+  // to the pre-R92 single-key world: nothing to swap to.
+  const startEntry = initialKeyPoolEntry(prepared.keyPool, deps.keySlot ?? 0);
+  const startPoolIndex = prepared.keyPool.indexOf(startEntry);
+  let apiKey = startEntry.key;
+  let activeKeySlot = startEntry.slot;
+  let keyRotationIndex = startPoolIndex;
   const syncStartedAt = Date.now();
   logTurnStart(session.id, agent.id, model, false);
 
@@ -1796,6 +1848,53 @@ export async function runSingleAgentTurn(
       // line (the same rule providerError already follows; a raw provider
       // body quoting the key must never reach a frame or an envelope).
       const classMessage = scrubSecrets(classified.userMessage, keySecrets);
+      // ROUND-92 (R92-D, the owner's spec: "If one API key fails, then it
+      // will automatically try the next API key in line and so forth"): the
+      // API-key POOL JUGGLING. A key-ATTRIBUTABLE failure (auth — the key
+      // was rejected; rate_limit — THIS key's quota is spent) with an
+      // UNTRIED key left in the pool swaps apiKey/activeKeySlot forward
+      // and retries the SAME call IMMEDIATELY, with NO ladder wait — a
+      // fresh key has fresh quota. The compensation mirrors the ladder's
+      // continue (outerIter -= 1), just with delay 0. Network / timeout /
+      // context / unknown failures are NOT key-attributable: they skip this
+      // branch and keep the existing overflow/ladder/terminal paths.
+      // The meta.key frame (SSE) mirrors meta.retry's shape — it carries
+      // pool INDEXES and the reason only, never a key value. On the plain
+      // sync route emit is undefined (no SSE — nothing is emitted); an
+      // emitted sub-agent child forwards the frame to the parent's stream.
+      if (
+        (classified.class === "auth" || classified.class === "rate_limit") &&
+        keyRotationIndex + 1 < prepared.keyPool.length
+      ) {
+        keyRotationIndex += 1;
+        apiKey = prepared.keyPool[keyRotationIndex]!.key;
+        activeKeySlot = prepared.keyPool[keyRotationIndex]!.slot;
+        emit?.({
+          type: "meta.key",
+          sessionId: session.id,
+          key: {
+            attempt: keyRotationIndex + 1,
+            totalKeys: prepared.keyPool.length,
+            reason: classified.class,
+          },
+          message:
+            `${classMessage} — switching to API key ${keyRotationIndex + 1} of ${prepared.keyPool.length} ` +
+            `(${classified.class === "auth" ? "key rejected" : "key rate limited"}), retrying immediately`,
+        });
+        log("warn", "provider.key_swap", {
+          sessionId: session.id,
+          agentId: agent.id,
+          providerId: provider.id,
+          model,
+          keyIndex: keyRotationIndex + 1,
+          totalKeys: prepared.keyPool.length,
+          reason: classified.class,
+        });
+        // The immediate retry re-runs THIS iteration (the ladder's
+        // compensation pattern, delay 0 — bounded by the pool size).
+        outerIter -= 1;
+        continue;
+      }
       if (
         classified.class === "context_window_exceeded" &&
         !overflowRecovered &&
@@ -1854,7 +1953,9 @@ export async function runSingleAgentTurn(
             // R78: the provider's REAL scrubbed error text (unwrapped from
             // any RetryError by providerErrorDetail) — the live retry card
             // shows what the API actually said, not a generic class line.
-            providerError: providerErrorDetail(normalized, apiKey),
+            // R92-D: scrubbed against EVERY keyring-held key (multi-key:
+            // the failing attempt's key may differ from the swap target).
+            providerError: scrubSecrets(providerErrorDetail(normalized, apiKey), keySecrets),
             message: `${classMessage} — retrying (attempt ${attempt} of ${retrySchedule.totalAttempts}) in ${formatRetryWaitMs(remainingMs)}`,
           });
         };
@@ -1879,6 +1980,15 @@ export async function runSingleAgentTurn(
         });
         const waitOutcome = await waitForRetry({ waitMs, signal, onTick: emitRetry });
         clearActiveRetryWait(session.id);
+        // ROUND-92 (R92-D): the ladder retry starts a FRESH pool rotation
+        // from the ORIGINAL key (the documented choice: the wait may
+        // outlive the quota window, and the original key is the preferred
+        // one — children: the reserved slot; main turns: the primary). If
+        // the retried call fails key-attributably again, the rotation
+        // re-engages from scratch (each rung may burn the whole pool once).
+        apiKey = prepared.keyPool[startPoolIndex]!.key;
+        activeKeySlot = prepared.keyPool[startPoolIndex]!.slot;
+        keyRotationIndex = startPoolIndex;
         if (waitOutcome === "completed") {
           // The retry re-runs THIS iteration — compensate the for-increment
           // so the ladder never spends the outer-loop budget (bounded by
@@ -1901,7 +2011,8 @@ export async function runSingleAgentTurn(
         // envelope additively (existing readers only look at providerError).
         // R75: attempts (ladder rungs used + the initial call) — additive.
         details: {
-          providerError: providerErrorDetail(normalized, apiKey),
+          // R92-D: scrubbed against every keyring-held key (multi-key world).
+          providerError: scrubSecrets(providerErrorDetail(normalized, apiKey), keySecrets),
           errorClass: classified.class,
           // R78: the scrubbed real text (the catch's classMessage const).
           classMessage,
@@ -2070,8 +2181,9 @@ export async function runSingleAgentTurn(
           costUsd: computeCost(db, provider.id, model, totalInputTokens, totalOutputTokens),
           ts: lastAssistantEvent.ts,
         },
-        // ROUND-64 (R64-e): attribute the partial spend to the serving key.
-        keySlot,
+        // ROUND-64 (R64-e) → ROUND-92 (R92-D): attribute the partial spend
+        // to the key serving the CURRENT attempt (the swap keeps it honest).
+        activeKeySlot,
         // ROUND-83 (R83): the turn's real SDK-call count rides the row.
         { providerCalls: totalRequests, origin: "turn" },
       );
@@ -2123,7 +2235,7 @@ export async function runSingleAgentTurn(
     // ROUND-64 (R64-e): keySlot rides the guard-stop row too — the burn was
     // real and the serving key deserves the attribution.
     // ROUND-83 (R83): the real SDK-call count rides the row.
-    recordUsage(db, usage, keySlot, { providerCalls: totalRequests, origin: "turn" });
+    recordUsage(db, usage, activeKeySlot, { providerCalls: totalRequests, origin: "turn" });
     touchSession(db, session.id);
     logTurnEnd(session.id, false, Date.now() - syncStartedAt, totalInputTokens, totalOutputTokens);
     return {
@@ -2197,7 +2309,8 @@ export async function runSingleAgentTurn(
           costUsd: computeCost(db, provider.id, model, totalInputTokens, totalOutputTokens),
           ts: lastAssistantEvent.ts,
         },
-        keySlot,
+        // R92-D: the LAST attempted key (the swap kept it current).
+        activeKeySlot,
         // ROUND-83 (R83): the turn's real SDK-call count rides the row.
         { providerCalls: totalRequests, origin: "turn" },
       );
@@ -2250,7 +2363,7 @@ export async function runSingleAgentTurn(
   // ROUND-64 (R64-e): keySlot attributes the successful turn's spend.
   // ROUND-83 (R83): providerCalls rides the row (the usage screens' honest
   // "N turns · M provider calls" line).
-  recordUsage(db, usage, keySlot, { providerCalls: totalRequests, origin: "turn" });
+  recordUsage(db, usage, activeKeySlot, { providerCalls: totalRequests, origin: "turn" });
   touchSession(db, session.id);
   // ROUND-44 (live-battery find): a SUCCESSFUL turn used to leave the session
   // in "running" forever (only the error path reset it) — sessions then read
@@ -2306,10 +2419,6 @@ export async function runStreamedAgentTurn(
   attachments?: MessageAttachment[],
 ): Promise<StreamedTurnOutcome> {
   const { db, keyring, chat, chatStream } = deps;
-  // ROUND-64 (R64-e): the key-pool slot this turn's usage rows attribute
-  // their spend to (children: the orchestrator's acquired slot; main turns:
-  // 0 = the primary key). Same value for every recordUsage below.
-  const keySlot = deps.keySlot ?? 0;
   // ROUND-78 (R78, owner: "General Settings 重试配置"): the per-class
   // auto-retry switches, read ONCE per turn (the ladder gate below consults
   // the cache — no per-rung DB reads while a 30-minute rung waits). A
@@ -2363,7 +2472,18 @@ export async function runStreamedAgentTurn(
     content,
   );
   if ("error" in prepared) return prepared.error;
-  const { session, agent, provider, apiKey, model, tools, system } = prepared;
+  const { session, agent, provider, model, tools, system } = prepared;
+  // ROUND-92 (R92-D, the owner's multi-key pool with automatic juggling):
+  // the turn's key state — identical contract to the sync runner above (see
+  // the twin comment there). The STREAMED twist: the swap branch in the
+  // catch below flushes the in-flight partial segment BEFORE the retry, so
+  // the re-assembled history includes everything the model already said
+  // (the R75 ladder's flush precedent — no silent loss on a key swap).
+  const startEntry = initialKeyPoolEntry(prepared.keyPool, deps.keySlot ?? 0);
+  const startPoolIndex = prepared.keyPool.indexOf(startEntry);
+  let apiKey = startEntry.key;
+  let activeKeySlot = startEntry.slot;
+  let keyRotationIndex = startPoolIndex;
 
   if (session.status === "queued") setSessionStatus(db, session.id, "running");
 
@@ -2795,8 +2915,9 @@ export async function runStreamedAgentTurn(
               costUsd: computeCost(db, provider.id, model, totalInputTokens, totalOutputTokens),
               ts: lastAssistantEvent.ts,
             },
-            // ROUND-64 (R64-e): attribute the partial spend to the serving key.
-            keySlot,
+            // ROUND-64 (R64-e) → ROUND-92 (R92-D): attribute the partial spend
+            // to the key serving the CURRENT attempt (the swap keeps it honest).
+            activeKeySlot,
             // ROUND-83 (R83): the turn's real SDK-call count rides the row.
             { providerCalls: totalRequests, origin: "turn" },
           );
@@ -2829,6 +2950,55 @@ export async function runStreamedAgentTurn(
       // line (the same rule providerError already follows; a raw provider
       // body quoting the key must never reach a frame or an envelope).
       const classMessage = scrubSecrets(classified.userMessage, keySecrets);
+      // ROUND-92 (R92-D, the owner's multi-key pool with automatic
+      // juggling): the STREAMED twin of the sync runner's swap branch —
+      // auth / rate_limit with an UNTRIED key left → swap apiKey/
+      // activeKeySlot forward and retry the SAME call IMMEDIATELY (no
+      // ladder wait; a fresh key has fresh quota). The partial streamed
+      // segment is FLUSHED first (the R75 ladder's flush precedent) so the
+      // retry's re-assembled history keeps everything the model already
+      // said — no silent loss on a key swap. Network / timeout / context /
+      // unknown failures are NOT key-attributable: they keep the existing
+      // overflow/ladder/terminal paths below. The meta.key frame mirrors
+      // meta.retry's shape (indexes + reason only — NEVER a key value), so
+      // the live chat can show "switching to API key 2 of 3…".
+      if (
+        (classified.class === "auth" || classified.class === "rate_limit") &&
+        keyRotationIndex + 1 < prepared.keyPool.length
+      ) {
+        keyRotationIndex += 1;
+        apiKey = prepared.keyPool[keyRotationIndex]!.key;
+        activeKeySlot = prepared.keyPool[keyRotationIndex]!.slot;
+        emit({
+          type: "meta.key",
+          sessionId: session.id,
+          key: {
+            attempt: keyRotationIndex + 1,
+            totalKeys: prepared.keyPool.length,
+            reason: classified.class,
+          },
+          message:
+            `${classMessage} — switching to API key ${keyRotationIndex + 1} of ${prepared.keyPool.length} ` +
+            `(${classified.class === "auth" ? "key rejected" : "key rate limited"}), retrying immediately`,
+        });
+        log("warn", "provider.key_swap", {
+          sessionId: session.id,
+          agentId: agent.id,
+          providerId: provider.id,
+          model,
+          keyIndex: keyRotationIndex + 1,
+          totalKeys: prepared.keyPool.length,
+          reason: classified.class,
+        });
+        // The partial text/thinking persists now (stats unknown — the
+        // finish frame never arrived); the immediate retry re-assembles
+        // history from the log and CONTINUES from it, exactly like the
+        // ladder's re-run (outerIter compensated — delay 0, bounded by the
+        // pool size).
+        flushSegment(true);
+        outerIter -= 1;
+        continue;
+      }
       if (
         classified.class === "context_window_exceeded" &&
         !overflowRecovered &&
@@ -2889,7 +3059,9 @@ export async function runStreamedAgentTurn(
             // R78: the provider's REAL scrubbed error text (unwrapped from
             // any RetryError by providerErrorDetail) — the live retry card
             // shows what the API actually said, not a generic class line.
-            providerError: providerErrorDetail(normalized, apiKey),
+            // R92-D: scrubbed against EVERY keyring-held key (multi-key:
+            // the failing attempt's key may differ from the swap target).
+            providerError: scrubSecrets(providerErrorDetail(normalized, apiKey), keySecrets),
             message: `${classMessage} — retrying (attempt ${attempt} of ${retrySchedule.totalAttempts}) in ${formatRetryWaitMs(remainingMs)}`,
           });
         };
@@ -2914,6 +3086,15 @@ export async function runStreamedAgentTurn(
         });
         const waitOutcome = await waitForRetry({ waitMs, signal, onTick: emitRetry });
         clearActiveRetryWait(session.id);
+        // ROUND-92 (R92-D): the ladder retry starts a FRESH pool rotation
+        // from the ORIGINAL key (the documented choice: the wait may
+        // outlive the quota window, and the original key is the preferred
+        // one — children: the reserved slot; main turns: the primary). If
+        // the retried call fails key-attributably again, the rotation
+        // re-engages from scratch (each rung may burn the whole pool once).
+        apiKey = prepared.keyPool[startPoolIndex]!.key;
+        activeKeySlot = prepared.keyPool[startPoolIndex]!.slot;
+        keyRotationIndex = startPoolIndex;
         // The partial text/thinking persists now (stats unknown — the
         // finish frame never arrived); the retry iteration re-assembles
         // history from the log and CONTINUES from it. (In the aborted case
@@ -2964,7 +3145,7 @@ export async function runStreamedAgentTurn(
             costUsd: computeCost(db, provider.id, model, totalInputTokens, totalOutputTokens),
             ts: lastAssistantForUsage.ts,
           },
-          keySlot,
+          activeKeySlot,
           // ROUND-83 (R83): the turn's real SDK-call count rides the row.
           { providerCalls: totalRequests, origin: "turn" },
         );
@@ -2975,7 +3156,9 @@ export async function runStreamedAgentTurn(
       // ends at his message with no error and no retry (the silent-death
       // bug). The error event lands right after the user message, so the UI
       // renders the error card directly below it.
-      const providerErrorText = providerErrorDetail(normalized, apiKey);
+      // R92-D: scrubbed against every keyring-held key (multi-key world);
+      // persistTurnError re-scrubs on its own side too (belt + braces).
+      const providerErrorText = scrubSecrets(providerErrorDetail(normalized, apiKey), keySecrets);
       // R71-e2 D4: the class rides the message (the pinned prefix is kept)
       // and the envelope; D5's terminal line names the twice-overflow case.
       // R75: the attempts count (ladder rungs used + the initial call)
@@ -3144,7 +3327,7 @@ export async function runStreamedAgentTurn(
       costUsd: computeCost(db, provider.id, model, totalInputTokens, totalOutputTokens),
       ts: lastAssistantEvent.ts,
     };
-    recordUsage(db, guardUsage, keySlot, { providerCalls: totalRequests, origin: "turn" });
+    recordUsage(db, guardUsage, activeKeySlot, { providerCalls: totalRequests, origin: "turn" });
     touchSession(db, session.id);
     logTurnEnd(session.id, false, ms, totalInputTokens, totalOutputTokens);
     log("warn", "turn.guard_stop", {
@@ -3194,7 +3377,7 @@ export async function runStreamedAgentTurn(
     // ROUND-64 (R64-e): keySlot rides the guard-stop row too — the burn was
     // real and the serving key deserves the attribution.
     // ROUND-83 (R83): the real SDK-call count rides the row.
-    recordUsage(db, usage, keySlot, { providerCalls: totalRequests, origin: "turn" });
+    recordUsage(db, usage, activeKeySlot, { providerCalls: totalRequests, origin: "turn" });
     touchSession(db, session.id);
     logTurnEnd(session.id, false, ms, totalInputTokens, totalOutputTokens);
     return {
@@ -3244,7 +3427,7 @@ export async function runStreamedAgentTurn(
       costUsd: computeCost(db, provider.id, model, totalInputTokens, totalOutputTokens),
       ts: lastAssistantEvent.ts,
     };
-    recordUsage(db, blankUsage, keySlot, { providerCalls: totalRequests, origin: "turn" });
+    recordUsage(db, blankUsage, activeKeySlot, { providerCalls: totalRequests, origin: "turn" });
     touchSession(db, session.id);
     logTurnEnd(session.id, false, ms, totalInputTokens, totalOutputTokens);
     log("warn", "turn.blank_output", {
@@ -3280,7 +3463,7 @@ export async function runStreamedAgentTurn(
   // ROUND-64 (R64-e): keySlot attributes the successful turn's spend.
   // ROUND-83 (R83): providerCalls rides the row (the usage screens' honest
   // "N turns · M provider calls" line).
-  recordUsage(db, usage, keySlot, { providerCalls: totalRequests, origin: "turn" });
+  recordUsage(db, usage, activeKeySlot, { providerCalls: totalRequests, origin: "turn" });
   touchSession(db, session.id);
   // ROUND-44 (live-battery find): same reset as the sync path — a finished
   // streamed turn must not leave the session stuck in "running".

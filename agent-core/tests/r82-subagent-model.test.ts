@@ -229,28 +229,24 @@ describe("R82: PUT /settings/orchestration subagentModel object-form route contr
   });
 });
 
-/* ── REAL BUG (R82, found by R82-TESTS — src frozen, left FAILING per the
- * test mandate, both tests below) ──────────────────────────────────────────
+/* ── The R82 close-out bug (found by R82-TESTS, fixed same round) ────────────
  *
  * The orchestrator passes the provider-scoped ref down as the child's
- * TurnModelOverride (orchestrator.ts:791-794 / 1224-1227 — that half of R82
- * §2.4.5 IS implemented), and prepareTurn then resolves the child's
- * EFFECTIVE provider from it… but runChildTurn (orchestrator.ts:958-975) and
- * retryChild (orchestrator.ts:1257-1265) provision the child's keyring VIEW
- * from the PARENT AGENT's provider: acquireSlot polls the agent's pool and
- * the view carries only slotEnvVarName(agentProvider, slot/0). The child's
- * prepareTurn therefore finds NO key for the override's provider → the turn
- * 409s "no API key for provider 'prv_…'" — a provider-scoped sub-agent ref
- * (the round's headline NIM capability) can never serve a child turn, no
- * matter which keys are present. (Symptom chain: with no key for the AGENT's
- * provider either, acquireSlot polls an EMPTY pool forever — these tests
- * originally hung at 30s; they now seed BOTH keys so the 409 is
- * deterministic.)
+ * TurnModelOverride, and prepareTurn then resolved the child's EFFECTIVE
+ * provider from it… but runChildTurn and retryChild used to provision a
+ * per-child keyring VIEW keyed on the PARENT AGENT's provider (acquireSlot
+ * polled the agent's pool and the view carried only
+ * slotEnvVarName(agentProvider, slot/0)). The child's prepareTurn therefore
+ * found NO key for the override's provider → the turn 409'd "no API key for
+ * provider 'prv_…'" before any chat call. The R82 close-out keyed the
+ * view/slot on the EFFECTIVE provider.
  *
- * Fix shape for the R82 close-out: resolve the EFFECTIVE child provider
- * (override.providerId ?? agent.providerId) BEFORE the slot acquisition and
- * build both the pool lookup and the childKeyring view from it (plus the
- * keySlot attribution dimension). */
+ * ROUND-92 (R92-D): the per-child keyring VIEW is GONE ENTIRELY — children
+ * receive the PARENT keyring unchanged (the full deduped pool), so the
+ * override's provider resolves its key through the same pool a main turn
+ * uses, and a key-attributable failure juggles to the next pool key inside
+ * the child's own turn (r92-key-pool.test.ts). These pins stay: the ref's
+ * provider + model serve the child turns, the agent row is untouched. */
 describe("R82: orchestrator child routing — the ref's PROVIDER serves the child turns", () => {
   it("delegateTask routes the child to the ref's provider + model (not the parent agent's)", async () => {
     // The configured NIM-style row: unknown tools (null) — accepted above.
@@ -279,12 +275,12 @@ describe("R82: orchestrator child routing — the ref's PROVIDER serves the chil
       "researcher",
     );
 
-    expect(result.ok, `REAL BUG (R82) — the child turn failed: ${result.output}`).toBe(true);
+    expect(result.ok, `the child turn failed: ${result.output}`).toBe(true);
     // THE routing pin: the child's chat input carried the REF's pair — the
     // custom provider id + the ref's model id (the pre-R82 code sent the
     // model string to the PARENT's openrouter, the §1 misroute's sub-agent
-    // twin). Fails today: the child keyring view has no GW key, so the turn
-    // 409s before any chat call (seen stays empty).
+    // twin). Since R92-D the child resolves the ref's provider through the
+    // shared parent pool — no per-child view to starve it.
     expect(seen).toEqual([{ providerId: GW_ID, model: GW_MODEL }]);
   });
 
@@ -315,7 +311,7 @@ describe("R82: orchestrator child routing — the ref's PROVIDER serves the chil
     upsertModel(db, GW_ID, { modelId: GW_MODEL });
     setOrchestrationSettings(db, { subagentModel: { providerId: GW_ID, modelId: GW_MODEL } });
     const retried = await new Orchestrator().retryChild(deps, parent.id, first.sessionId!);
-    expect(retried.ok, `REAL BUG (R82) — the retried child failed: ${retried.message}`).toBe(true);
+    expect(retried.ok, `the retried child failed: ${retried.message}`).toBe(true);
     expect(seen[seen.length - 1]).toEqual({ providerId: GW_ID, model: GW_MODEL });
   });
 });

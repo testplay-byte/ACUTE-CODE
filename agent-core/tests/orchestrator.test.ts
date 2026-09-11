@@ -108,11 +108,15 @@ describe("ROUND-36: sub-agent orchestration (ADR-0022)", () => {
   });
 
   // ROUND-64 (R64-e, owner: per-API-key usage stats): the child's usage row
-  // lands on the POOL SLOT the orchestrator acquired for it — not the
-  // primary. ADR-0022's "children prefer pool slots" becomes observable in
+  // lands on the POOL SLOT the orchestrator reserved for it — observable in
   // usage_events.key_slot (migration 0024), which is exactly what the
   // /usage screen's per-key cards group by.
-  it("ROUND-64: a pooled child's usage row records the acquired slot; a pool-less child records slot 0", async () => {
+  // ROUND-92 (R92-D, re-pin): the ROUND-36 "children prefer non-primary
+  // slots so the primary isn't burdened" bias is GONE — one pool serves
+  // everyone (main agent included), so a lone child starts on the PRIMARY
+  // (least-loaded, lowest slot). The load-spreading is still observable
+  // when perKeyLimit forces a second concurrent child onto the next slot.
+  it("ROUND-64: a pooled child's usage row records the reserved slot; a pool-less child records slot 0", async () => {
     const agent = createAgent(db, {
       name: "Orchestrator",
       providerId: "openrouter",
@@ -121,13 +125,24 @@ describe("ROUND-36: sub-agent orchestration (ADR-0022)", () => {
     const parent = createSession(db, { agentId: agent.id, mode: "single" });
     const orchestrator = getOrchestrator();
 
-    // Pool: primary + SLOT2 → the child prefers the non-primary slot 2.
+    // A lone pooled child: both slots idle → the primary (slot 0) — the
+    // pre-R92 code would have picked slot 2 here (the removed bias).
     const pooled = await orchestrator.delegateTask(
       { db, keyring: new ProviderKeyring({ ACUTE_PROVIDER_OPENROUTER: KEY, ACUTE_PROVIDER_OPENROUTER_SLOT2: KEY2 }), chat: aiSdkChat },
       parent.id,
       "pooled task",
       "researcher",
     );
+    expect(pooled.ok).toBe(true);
+    const pooledSlot = pooled.sessionId === undefined
+      ? undefined
+      : (
+          db
+            .prepare("SELECT key_slot FROM usage_events WHERE session_id = ?")
+            .get(pooled.sessionId) as { key_slot: number } | undefined
+        )?.key_slot;
+    expect(pooledSlot).toBe(0); // R92-D: the primary — no non-primary bias
+
     // No pool → the child shares the primary under the per-key limit.
     const poolless = await orchestrator.delegateTask(
       { db, keyring: new ProviderKeyring({ ACUTE_PROVIDER_OPENROUTER: KEY }), chat: aiSdkChat },
@@ -135,9 +150,38 @@ describe("ROUND-36: sub-agent orchestration (ADR-0022)", () => {
       "pool-less task",
       "researcher",
     );
-    expect(pooled.ok).toBe(true);
     expect(poolless.ok).toBe(true);
+    const poollessSlot = poolless.sessionId === undefined
+      ? undefined
+      : (
+          db
+            .prepare("SELECT key_slot FROM usage_events WHERE session_id = ?")
+            .get(poolless.sessionId) as { key_slot: number } | undefined
+        )?.key_slot;
+    expect(poollessSlot).toBe(0); // honest: the primary key
 
+    // Load-spreading STILL works: with perKeyLimit=1 a second CONCURRENT
+    // child cannot take slot 0 → it reserves slot 2. (The reservations are
+    // synchronous at call time, so the two un-awaited calls order
+    // deterministically: child A → slot 0, child B → slot 2.)
+    setOrchestrationSettings(db, { perKeyLimit: 1 });
+    const spreadParent = createSession(db, { agentId: agent.id, mode: "single" });
+    const pool = { ACUTE_PROVIDER_OPENROUTER: KEY, ACUTE_PROVIDER_OPENROUTER_SLOT2: KEY2 };
+    const childA = orchestrator.delegateTask(
+      { db, keyring: new ProviderKeyring(pool), chat: aiSdkChat },
+      spreadParent.id,
+      "spread task A",
+      "researcher",
+    );
+    const childB = orchestrator.delegateTask(
+      { db, keyring: new ProviderKeyring(pool), chat: aiSdkChat },
+      spreadParent.id,
+      "spread task B",
+      "researcher",
+    );
+    const [a, b] = await Promise.all([childA, childB]);
+    expect(a.ok).toBe(true);
+    expect(b.ok).toBe(true);
     const slotOf = (sessionId: string | undefined): number | undefined =>
       sessionId === undefined
         ? undefined
@@ -146,8 +190,8 @@ describe("ROUND-36: sub-agent orchestration (ADR-0022)", () => {
               .prepare("SELECT key_slot FROM usage_events WHERE session_id = ?")
               .get(sessionId) as { key_slot: number } | undefined
           )?.key_slot;
-    expect(slotOf(pooled.sessionId)).toBe(2); // the pool slot that served it
-    expect(slotOf(poolless.sessionId)).toBe(0); // honest: the primary key
+    expect(slotOf(a.sessionId)).toBe(0);
+    expect(slotOf(b.sessionId)).toBe(2);
   });
 
   it("lists children with computed status/progress via GET /sessions/:id/subagents", async () => {

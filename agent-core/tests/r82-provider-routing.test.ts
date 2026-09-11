@@ -250,9 +250,13 @@ describe("R82: POST /sessions/:id/messages with body.providerId", () => {
       });
       expect(response.statusCode).toBe(409);
       expect(response.json().error.code).toBe("CONFLICT");
+      // ROUND-92 (R92-D, re-pin): prepareTurn now resolves the provider's
+      // key POOL (any size ≥ 1 passes) and the no-pool 409 points at the
+      // Settings UI instead of the env-var name (spawn-injection plumbing).
       expect(response.json().error.message).toContain("no API key for provider 'prv_gw'");
-      // The env-var name is the sidecar's injection contract.
-      expect(response.json().error.message).toContain("ACUTE_PROVIDER_PRV_GW");
+      expect(response.json().error.message).toContain(
+        "add one or more keys in Settings → Models & Providers",
+      );
       expect(spy.seen).toHaveLength(0);
     } finally {
       await keyless.close();

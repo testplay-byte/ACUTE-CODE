@@ -21,7 +21,7 @@ const MODEL_CACHE_TTL_MS = 5 * 60 * 1000;
 const MODEL_FETCH_TIMEOUT_MS = 10_000;
 const TEST_TIMEOUT_MS = 15_000;
 
-/** Provider JSON as served by the API: the row plus a key-presence flag, never the key. */
+/** Provider JSON as served by the API: the row plus key-presence flags, never the key. */
 export interface ProviderView {
   id: string;
   name: string;
@@ -33,6 +33,11 @@ export interface ProviderView {
   enabled: boolean;
   createdAt: string;
   hasKey: boolean;
+  /** ROUND-92 (R92-D): the size of the provider's DEDUPED key pool — how
+   * many distinct key VALUES the turn runners will juggle (same value in
+   * two slots counts once). 0 = no key at all; 1 = the pre-R92 single-key
+   * world; ≥ 2 = the owner's multi-key pool. Never the key itself. */
+  keyCount: number;
 }
 
 /** In-memory map of provider id -> API key, snapshotted from the spawn environment. */
@@ -70,7 +75,10 @@ export class ProviderKeyring {
 
   // ── ROUND-36 (ADR-0022): the API key POOL ──────────────────────────────
   // Primary = ACUTE_PROVIDER_<ID>; pool slots = ACUTE_PROVIDER_<ID>_SLOT<N>
-  // (N ≥ 2). Sub-agents prefer pool slots so the primary key isn't burdened.
+  // (N ≥ 1). ROUND-92 (R92-D) supersedes ROUND-36's "sub-agents prefer pool
+  // slots so the primary isn't burdened" split: ONE pool now serves the main
+  // agent AND sub-agents alike (load-spreading by reservation, juggling on
+  // failure — see resolveKeyPool below and runtime.ts's turn runners).
 
   static slotEnvVarName(providerId: string, slot: number): string {
     return slot === 0
@@ -163,8 +171,53 @@ export class ProviderKeyring {
   }
 }
 
+/* ── ROUND-92 (R92-D): the pool RESOLUTION policy ────────────────────────── */
+
+/** One entry of a provider's RESOLVED key pool (R92-D). */
+export interface ResolvedPoolKey {
+  slot: number;
+  key: string;
+}
+
+/**
+ * ROUND-92 (R92-D, the owner's multi-key pool with automatic juggling):
+ * resolve a provider's key pool for TURN USE — `keyring.getPool`'s raw
+ * slot list, DEDUPED by key VALUE (the same key saved into two slots is
+ * ONE key: swapping to it would "retry" the identical credentials),
+ * slot-order preserved (slot 0 = the primary first), empty entries
+ * dropped.
+ *
+ * WHY this lives in registry.ts (and not next to prepareTurn, the other
+ * candidate): the derivation is provider-keyring POLICY with THREE
+ * consumers that must never disagree — prepareTurn (the turn's juggling
+ * pool), the orchestrator's tryReserveSlot (load-spreading + perKeyLimit
+ * must count per distinct KEY, not per slot label), and toView's
+ * keyCount (what the Settings UI shows). Keeping it beside the keyring it
+ * reads gives all three ONE truth without importing runtime.ts (which
+ * would cycle: runtime → registry is already an edge).
+ *
+ * Never logs; returns key VALUES only to in-process callers (the turn
+ * runners), never through an HTTP response.
+ */
+export function resolveKeyPool(keyring: ProviderKeyring, providerId: string): ResolvedPoolKey[] {
+  const seen = new Set<string>();
+  const pool: ResolvedPoolKey[] = [];
+  for (const entry of keyring.getPool(providerId)) {
+    if (entry.key === "" || seen.has(entry.key)) continue;
+    seen.add(entry.key);
+    pool.push({ slot: entry.slot, key: entry.key });
+  }
+  return pool;
+}
+
 function toView(record: ProviderRecord, keyring: ProviderKeyring): ProviderView {
-  return { ...record, hasKey: keyring.has(record.id) };
+  return {
+    ...record,
+    hasKey: keyring.has(record.id),
+    // R92-D: the deduped pool size — the number of keys the turn runners
+    // would actually juggle for this provider.
+    keyCount: resolveKeyPool(keyring, record.id).length,
+  };
 }
 
 /** The openrouter row is seeded by openDatabase (storage/providers.ts), so this is a plain read. */

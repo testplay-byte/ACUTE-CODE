@@ -8,6 +8,12 @@
  *     override when set and on the agent's model when null — the override
  *     never rewrites the seeded agent records (children only).
  *  3. PUT /settings/orchestration accepts string ids + null and 400s bad ones.
+ *
+ * ROUND-92 (R92-D): the per-child single-key keyring VIEW this suite used to
+ * exercise implicitly is GONE — children receive the PARENT keyring (the
+ * full pool) and start from their reserved slot's key; the juggling tests
+ * live in r92-key-pool.test.ts. These pins still hold: children inherit the
+ * agent's model / the override, and the agent row is never rewritten.
  */
 import { randomUUID } from "node:crypto";
 import { mkdtempSync, rmSync } from "node:fs";

@@ -9,9 +9,12 @@
  *   §1), and return the child's final report.
  * - Concurrency: total semaphore (orchestration.maxParallel) + per-key
  *   semaphore (orchestration.perKeyLimit); excess children stay queued.
- * - Key assignment: the LEAST-LOADED pool slot, preferring non-primary slots
- *   (the owner: pool keys serve sub-agents; the primary serves the main
- *   agent). No pool → the primary under the per-key limit.
+ * - Key assignment: the LEAST-LOADED pool slot (ROUND-92/R92-D: no primary
+ *   bias — all keys serve everyone now; the primary is simply slot 0).
+ *   The slot RESERVATION is load-spreading + concurrency-capping only —
+ *   the child receives the PARENT keyring unchanged (the full pool) and
+ *   starts from the reserved slot's key, juggling to the next key on
+ *   key-attributable failures (runtime.ts's turn runners).
  * - ROUND-43 (R43-5, owner directive): orchestration.subagentModel — when
  *   set, EVERY child turn runs on that model id (passed as runSingleAgentTurn's
  *   modelOverride); when null (default) children inherit the seeded agent's
@@ -52,7 +55,7 @@ import { getActiveRetryWait } from "../lib/retry.js";
 import { registerTurn, unregisterTurn, getTurnStopReason, abortTurn } from "../lib/turn-registry.js";
 import { getAgent } from "../storage/agents.js";
 import { getOrchestrationSettings } from "../storage/settings.js";
-import { ProviderKeyring } from "../providers/registry.js";
+import { resolveKeyPool, type ProviderKeyring } from "../providers/registry.js";
 import { runSingleAgentTurn, runStreamedAgentTurn, type TurnModelOverride } from "./runtime.js";
 import type { TurnDeps } from "./runtime.js";
 // ROUND-40: sub-agent transitions publish app-level notifications so the user
@@ -66,8 +69,8 @@ export type SqliteDatabase = Database.Database;
 
 /** ROUND-82: the override's provider when it carries one (the provider-scoped
  * subagentModel ref {providerId, modelId}) — undefined for bare string
- * overrides and blank providerIds. Used to key the child's slot pool and
- * keyring VIEW on the EFFECTIVE provider (see runChildTurn). */
+ * overrides and blank providerIds. Used to key the child's slot reservation
+ * (and its usage attribution) on the EFFECTIVE provider (see runChildTurn). */
 function overrideProviderId(
   override: TurnModelOverride | undefined,
 ): string | undefined {
@@ -295,6 +298,15 @@ class Orchestrator {
    * assignment in one synchronous step — a check-then-increment race let two
    * children through on one permit; reservation must be indivisible).
    * Returns the slot, or null when no capacity is free right now.
+   *
+   * ROUND-92 (R92-D): the pool is the DEDUPED one (resolveKeyPool — the same
+   * derivation prepareTurn uses), so perKeyLimit caps per distinct KEY
+   * VALUE, and the ROUND-36 "prefer non-primary slots so the primary isn't
+   * burdened" bias is GONE: one pool serves everyone (main agent included).
+   * Ordering is least-loaded, then lowest slot number — the reservation
+   * itself is load-spreading + concurrency-capping; which key a child
+   * actually runs on (and what it swaps to on failure) is the turn runner's
+   * juggling, seeded from this slot via TurnDeps.keySlot.
    */
   private tryReserveSlot(
     db: SqliteDatabase,
@@ -304,16 +316,12 @@ class Orchestrator {
   ): number | null {
     const { maxParallel, perKeyLimit } = getOrchestrationSettings(db);
     if (this.active.size >= maxParallel) return null;
-    const pool = keyring.getPool(providerId);
-    // Prefer non-primary slots (owner: pool keys are for sub-agents), then
-    // least-loaded, then lowest slot number.
+    const pool = resolveKeyPool(keyring, providerId);
+    // Least-loaded first, then lowest slot number (R92-D: no primary bias).
     const candidates = [...pool]
       .map((c) => ({ ...c, load: this.keyActive.get(this.keyId(providerId, c.slot)) ?? 0 }))
       .filter((c) => c.load < perKeyLimit)
       .sort((a, b) => {
-        const aPrimary = a.slot === 0 ? 1 : 0;
-        const bPrimary = b.slot === 0 ? 1 : 0;
-        if (aPrimary !== bPrimary) return aPrimary - bPrimary;
         if (a.load !== b.load) return a.load - b.load;
         return a.slot - b.slot;
       });
@@ -973,34 +981,26 @@ class Orchestrator {
     // ROUND-82 close-out: the child's EFFECTIVE provider — the provider-scoped
     // subagentModel override (R82 §2.4.5) can route the child turns to a
     // provider OTHER than the parent agent's (NIM/custom gateway). The slot
-    // pool, the keyring VIEW, the keySlot attribution, and the release below
-    // all key on it, so the child's prepareTurn finds the override
-    // provider's key (the pre-close-out defect, found by R82-TESTS: the view
-    // carried only the AGENT provider's slot env vars → the child 409'd
-    // "no API key for provider 'prv_…'" before any chat call, no matter
-    // which keys were present).
+    // reservation and the release below key on it, so the load-spreading
+    // counts against the provider that actually serves the child turns.
     const effectiveProviderId = overrideProviderId(ctx.modelOverride) ?? providerId;
     const slot = await this.acquireSlot(db, keyring, effectiveProviderId, child.id);
     this.runs = this.runs.map((r) =>
       r.childId === child.id ? { ...r, parentSessionId } : r,
     );
 
-    // The child runs with a keyring VIEW of just its assigned slot — the
-    // per-child key never leaks into other turns' scrubbing or lookups.
-    // ROUND-64 (R64-e): keySlot rides the same deps object — the child's
-    // runSingleAgentTurn/runStreamedAgentTurn read it and attribute every
-    // usage_events row to THIS slot (per-key stats on the /usage screen).
-    // The keyring VIEW already aliases slot 0 to the slot key, so
-    // prepareTurn's keyring.get(provider.id) resolves the child's key with
-    // no signature change — keySlot is purely the billing dimension.
-    // ROUND-82: the view (and the slot above) key on the EFFECTIVE provider,
-    // so slot 0 aliases ACUTE_PROVIDER_<OVERRIDE_ID> — the env var
-    // prepareTurn resolves for the routed provider.
-    const slotKey = keyring.getPool(effectiveProviderId).find((p) => p.slot === slot)?.key ?? "";
-    const childKeyring = new ProviderKeyring({
-      [ProviderKeyring.slotEnvVarName(effectiveProviderId, slot)]: slotKey,
-      [ProviderKeyring.slotEnvVarName(effectiveProviderId, 0)]: slotKey,
-    });
+    // ROUND-92 (R92-D, the owner's explicit requirement: "These API keys will
+    // be used for the subagents too"): the ROUND-36/64 per-child keyring VIEW
+    // (one slot's key aliased into slot 0) is GONE — the child receives the
+    // PARENT keyring unchanged, so prepareTurn resolves the FULL deduped pool
+    // for it exactly like a main turn. The reserved slot still matters, twice:
+    //   · TurnDeps.keySlot seeds the runner's STARTING key (load-spreading —
+    //     initialKeyPoolEntry picks the reserved slot's entry);
+    //   · usage attribution starts on the reserved slot and follows every
+    //     juggling swap (the runner's activeKeySlot).
+    // A child whose reserved key fails (auth / rate_limit) now JUGGLES to the
+    // next pool key inside its own turn instead of dying (the pre-R92 view
+    // made every other key invisible to the child's prepareTurn).
 
     // ── ROUND-52 (R52-b): the CHILD SUPERVISOR ────────────────────────────
     // The owner: "if the subagent or agents are taking up way too much time
@@ -1127,10 +1127,11 @@ class Orchestrator {
       // fail-fast ask semantics (ROUND-48) — the streamed path REQUIRES an
       // emit, so no emit + chatStream still means sync (runStreamedAgentTurn
       // takes emit as a required argument).
-      // ROUND-64 (R64-e): keySlot = the acquired slot — the child's usage rows
-      // land on the key that actually served them (0 only when the pool was
-      // empty and the child shares the primary).
-      const childDeps: TurnDeps = { db, keyring: childKeyring, chat, keySlot: slot };
+      // ROUND-64 (R64-e) → ROUND-92 (R92-D): keySlot = the acquired slot —
+      // the child's STARTING key + usage attribution (see the comment above
+      // the run). The keyring is the PARENT'S (full pool — one pool serves
+      // everyone now).
+      const childDeps: TurnDeps = { db, keyring, chat, keySlot: slot };
       const outcome =
         chatStream !== undefined && wrappedEmit !== undefined
           ? await runStreamedAgentTurn(
@@ -1293,15 +1294,10 @@ class Orchestrator {
     this.runs = this.runs.map((r) =>
       r.childId === childId ? { ...r, parentSessionId } : r,
     );
-    // ROUND-82: same EFFECTIVE-provider keyring view as runChildTurn — the
-    // retried child's override provider serves the attempt (the pre-close-out
-    // defect: this view keyed on the AGENT provider, so a provider-scoped
-    // retry 409'd before any chat call).
-    const slotKey = keyring.getPool(effectiveProviderId).find((p) => p.slot === slot)?.key ?? "";
-    const childKeyring = new ProviderKeyring({
-      [ProviderKeyring.slotEnvVarName(effectiveProviderId, slot)]: slotKey,
-      [ProviderKeyring.slotEnvVarName(effectiveProviderId, 0)]: slotKey,
-    });
+    // ROUND-92 (R92-D): the retried child shares the PARENT keyring too (the
+    // per-child view is gone — see runChildTurn); the re-acquired slot seeds
+    // its starting key + usage attribution, and the runner juggles the pool
+    // on key-attributable failures.
 
     status("running");
     setSessionStatus(db, childId, "running");
@@ -1322,9 +1318,10 @@ class Orchestrator {
       // to stream on) → the sync fallback, exactly as before R50-b. A future
       // channel-backed retry (or a retried child inside a live streamed
       // parent turn) streams the retried attempt live instead.
-      // ROUND-64 (R64-e): keySlot = the re-acquired slot — retried children
-      // attribute their (resumed) spend to the key serving THIS attempt.
-      const childDeps: TurnDeps = { db, keyring: childKeyring, chat, keySlot: slot };
+      // ROUND-64 (R64-e) → ROUND-92 (R92-D): keySlot = the re-acquired slot —
+      // the retried child's starting key + usage attribution; the keyring is
+      // the PARENT'S (full pool, juggling on failure).
+      const childDeps: TurnDeps = { db, keyring, chat, keySlot: slot };
       const outcome =
         chatStream !== undefined && wrappedEmit !== undefined
           ? await runStreamedAgentTurn(

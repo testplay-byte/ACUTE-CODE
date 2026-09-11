@@ -109,6 +109,8 @@ describe("GET /api/v1/providers", () => {
         headers: { authorization: `Bearer ${TOKEN}` },
       });
       expect(response.statusCode).toBe(200);
+      // ROUND-92 (R92-D): keyCount joins the ProviderView — the DEDUPED pool
+      // size (0 for every unconfigured seed here).
       expect(response.json()).toEqual({
         providers: [
           {
@@ -122,6 +124,7 @@ describe("GET /api/v1/providers", () => {
             enabled: true,
             createdAt: expect.any(String),
             hasKey: false,
+            keyCount: 0,
           },
           {
             id: "google",
@@ -132,6 +135,7 @@ describe("GET /api/v1/providers", () => {
             enabled: true,
             createdAt: expect.any(String),
             hasKey: false,
+            keyCount: 0,
           },
           {
             id: "nvidia",
@@ -142,6 +146,7 @@ describe("GET /api/v1/providers", () => {
             enabled: true,
             createdAt: expect.any(String),
             hasKey: false,
+            keyCount: 0,
           },
           {
             id: "openai",
@@ -152,6 +157,7 @@ describe("GET /api/v1/providers", () => {
             enabled: true,
             createdAt: expect.any(String),
             hasKey: false,
+            keyCount: 0,
           },
           {
             id: "openrouter",
@@ -162,6 +168,7 @@ describe("GET /api/v1/providers", () => {
             enabled: true,
             createdAt: expect.any(String),
             hasKey: false,
+            keyCount: 0,
           },
         ],
       });

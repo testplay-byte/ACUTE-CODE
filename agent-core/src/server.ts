@@ -433,9 +433,26 @@ export function buildServer(options: ServerOptions): FastifyInstance {
         .code(400)
         .send(errorBody("VALIDATION", "body.action must be 'set' or 'delete'", { field: "body.action" }));
     }
-    // 'delete' uses the same shape with a sentinel value; the shell only
-    // sends 'set' today.
-    keyring.set(providerId, action === "delete" ? "" : value);
+    // ROUND-92 (R92-D, the 1-c Rust contract — store_provider_key_slot's hot
+    // handoff): the optional `slot` field routes the value to a POOL slot
+    // (ACUTE_PROVIDER_<ID>_SLOT<N>) instead of the primary. Absent / 0 keeps
+    // the legacy primary path (store_provider_key's payload carries no slot;
+    // setSlot(id, 0, …) IS set()). 'delete' clears the named slot
+    // symmetrically (the sentinel-value route). The bounds mirror the
+    // PUT /providers/:id/keys/:slot route (the keyring scans slots 0..31).
+    // `keyName` ("pool") rides along unvalidated — informational only.
+    let slot = 0;
+    if (raw.slot !== undefined) {
+      if (typeof raw.slot !== "number" || !Number.isInteger(raw.slot) || raw.slot < 0 || raw.slot > 31) {
+        return reply.code(400).send(
+          errorBody("VALIDATION", "slot must be an integer between 0 and 31", {
+            field: "body.slot",
+          }),
+        );
+      }
+      slot = raw.slot;
+    }
+    keyring.setSlot(providerId, slot, action === "delete" ? "" : value);
     return reply.code(204).send();
   });
 
