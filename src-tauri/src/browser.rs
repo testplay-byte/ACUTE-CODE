@@ -430,6 +430,170 @@ pub fn is_browser_window_open(app: AppHandle) -> bool {
     app.get_webview_window(BROWSER_WINDOW_LABEL).is_some()
 }
 
+// ── ROUND-90 (R90-C2): THE MENU OVERLAY WINDOW ─────────────────────────────
+//
+// The owner's verdict on the R62/R89 popover guard: "Whenever a page was
+// open in the browser and I clicked on any of the elements (like the new
+// tab button), the browser window would close, and it would show 'Browser
+// paused while the menu is open'… This is not supposed to happen. The menu
+// was supposed to be shown on top of the browser window itself."
+//
+// WHY that was structurally impossible in-window: the sidebar's popovers
+// render in the MAIN webview, and a browser tab's page is an OS-level CHILD
+// WEBVIEW of the main window that floats above ALL app HTML — no DOM menu
+// can ever paint over it. Hiding the webview while a popover covers it
+// (R62's guard, R89's geometric refinement) was the only in-window answer,
+// and to the owner it read as the browser "closing".
+//
+// THE R90 ANSWER: the right sidebar's two popovers (the quick menu + the
+// sub-agent picker) render in their OWN tiny OS window — transparent,
+// borderless, shadowless, never in the taskbar, not focusable — OWNED by
+// the main window. Win32 owned windows are ALWAYS above their owner (and
+// everything inside it, the browser child webviews included), so the menu
+// genuinely floats ON TOP of the LIVE browser: the browser never pauses,
+// the menu never hides. The window hosts menu-overlay.html (the 4th vite
+// entry — popout.html's exact pattern), reads its payload from the pending
+// stash on mount (the popout pending-URL pattern) or from the
+// "menu-overlay-data" event on reuse, and reports interactions through the
+// "menu-overlay-pick" / "menu-overlay-close" events that the main window's
+// bridge (src/lib/menu-overlay.ts) subscribes to.
+//
+// Lifecycle: ONE window, created hidden at sidebar mount (`menu_overlay_
+// prewarm`), repositioned + shown per popover (`menu_overlay_show`), hidden
+// on pick/close/outside-click (`menu_overlay_hide`). It is never destroyed
+// until the app exits (an owned window dies with its owner).
+
+/// The menu overlay window's label (capabilities/default.json lists it).
+const MENU_OVERLAY_LABEL: &str = "acute-menu-overlay";
+
+/// The pending menu payload — the stash the window's page reads on mount so
+/// the create race can never lose data (the POPOUT_PENDING_URL pattern).
+static MENU_PENDING_PAYLOAD: Mutex<Option<String>> = Mutex::new(None);
+
+/// The shared builder config for the menu overlay window (created hidden by
+/// the prewarm, shown by `menu_overlay_show`). `focusable(false)` = the menu
+/// never steals keyboard focus from the main window (menus are click
+/// surfaces; Escape keeps working in the main window, which owns closing).
+fn menu_overlay_builder(app: &AppHandle, visible: bool, x: f64, y: f64, w: f64, h: f64) -> Result<WebviewWindowBuilder<tauri::Wry>, String> {
+    let builder = WebviewWindowBuilder::new(
+        app,
+        MENU_OVERLAY_LABEL,
+        WebviewUrl::App("menu-overlay.html".into()),
+    )
+    .title("Acute menu")
+    .decorations(false)
+    .transparent(true)
+    .shadow(false)
+    .resizable(false)
+    .skip_taskbar(true)
+    .focused(false)
+    .focusable(false)
+    .visible(visible)
+    .position(x, y)
+    .inner_size(w, h);
+    // OWNERSHIP is the whole trick: an owned window rides above the owner
+    // (and its child webviews). Windows: `.owner`; Linux: `transient_for`;
+    // macOS: `parent` (adds it as a child window — fine for a menu).
+    let main = app
+        .get_webview_window(MAIN_WINDOW_LABEL)
+        .ok_or_else(|| "main window not found".to_string())?;
+    #[cfg(windows)]
+    let builder = builder.owner(&main).map_err(|e| format!("owner failed: {e}"))?;
+    #[cfg(all(unix, not(target_os = "macos")))]
+    let builder = builder
+        .transient_for(&main)
+        .map_err(|e| format!("transient_for failed: {e}"))?;
+    #[cfg(target_os = "macos")]
+    let builder = builder.parent(&main).map_err(|e| format!("parent failed: {e}"))?;
+    Ok(builder)
+}
+
+/// `menu_overlay_prewarm()` — create the menu overlay window HIDDEN at the
+/// app's idle spot (off-stage). The first real menu open is then a cheap
+/// set_position + show instead of a webview spawn (a ~200ms blank-window
+/// risk on the very first + click would have reinforced exactly the
+/// "overlay, not part of the app" feel this round retires). Failure is the
+/// caller's problem to ignore — the sidebar falls back to the DOM popover.
+#[tauri::command]
+pub fn menu_overlay_prewarm(app: AppHandle) -> Result<(), String> {
+    if app.get_webview_window(MENU_OVERLAY_LABEL).is_some() {
+        return Ok(());
+    }
+    // Off-stage: a 1×1 window parked at the screen origin, invisible until
+    // a real show positions it. `prevent_overflow` would fight the off-stage
+    // position, so it is deliberately absent.
+    let builder = menu_overlay_builder(&app, false, 0.0, 0.0, 1.0, 1.0)?;
+    builder
+        .build()
+        .map_err(|e| format!("prewarm menu overlay failed: {e}"))?;
+    Ok(())
+}
+
+/// `menu_overlay_show(x, y, w, h, payload)` — position + show the menu
+/// overlay window at LOGICAL SCREEN coordinates and deliver its payload.
+/// Reuses the prewarmed window when present; creates it visible otherwise
+/// (first-call fallback). The payload is a JSON string the page renders;
+/// it is BOTH stashed (a page still mounting reads the stash) and emitted
+/// (a live page re-renders in place).
+#[tauri::command]
+pub fn menu_overlay_show(
+    app: AppHandle,
+    x: f64,
+    y: f64,
+    w: f64,
+    h: f64,
+    payload: String,
+) -> Result<(), String> {
+    let trimmed = payload.trim();
+    if !trimmed.starts_with('{') || !trimmed.ends_with('}') {
+        return Err("menu payload must be a JSON object string".into());
+    }
+    // Sanitize the geometry: a menu is a small thing, and a bad measurement
+    // must never spawn a giant transparent window eating clicks.
+    let w = w.clamp(120.0, 800.0);
+    let h = h.clamp(40.0, 900.0);
+    let x = x.clamp(-4096.0, 16384.0);
+    let y = y.clamp(-4096.0, 16384.0);
+
+    *MENU_PENDING_PAYLOAD
+        .lock()
+        .map_err(|_| "menu pending payload lock poisoned".to_string())? = Some(trimmed.to_string());
+
+    if let Some(existing) = app.get_webview_window(MENU_OVERLAY_LABEL) {
+        let _ = existing.set_position(LogicalPosition::new(x, y));
+        let _ = existing.set_size(LogicalSize::new(w, h));
+        let _ = existing.show();
+    } else {
+        let builder = menu_overlay_builder(&app, true, x, y, w, h)?;
+        builder
+            .build()
+            .map_err(|e| format!("create menu overlay failed: {e}"))?;
+    }
+    let _ = app.emit("menu-overlay-data", trimmed.to_string());
+    Ok(())
+}
+
+/// `menu_overlay_hide()` — hide the menu overlay window (it stays alive for
+/// the next open). Not-found is Ok (idempotent).
+#[tauri::command]
+pub fn menu_overlay_hide(app: AppHandle) -> Result<(), String> {
+    if let Some(existing) = app.get_webview_window(MENU_OVERLAY_LABEL) {
+        let _ = existing.hide();
+    }
+    Ok(())
+}
+
+/// `menu_overlay_pending()` — the stashed payload for a page that is still
+/// mounting (None until the first show; kept, not cleared, so a reload
+/// re-renders the last menu instead of a blank window).
+#[tauri::command]
+pub fn menu_overlay_pending() -> Result<Option<String>, String> {
+    MENU_PENDING_PAYLOAD
+        .lock()
+        .map(|guard| guard.clone())
+        .map_err(|_| "menu pending payload lock poisoned".to_string())
+}
+
 /// `open_external_url(url)` — open `url` in the OPERATING SYSTEM's default
 /// browser via tauri-plugin-shell's OS-level open (NOT the embedded
 /// WebView2: `window.open` from inside a webview is silently swallowed by

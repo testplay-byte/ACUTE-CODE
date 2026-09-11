@@ -45,7 +45,21 @@ import { fetchSubAgents, type SubAgentStatus } from "../../lib/api";
 // ABOVE all app HTML, so a popover that overlaps the page area renders
 // BEHIND it otherwise (the owner: "the options get hidden behind the actual
 // browser window itself").
-import { nativeTabSetVisible } from "../../lib/native-browser";
+import { nativeTabSetVisible, isNativeBrowserAvailable } from "../../lib/native-browser";
+// R90-C2: the menu overlay bridge — the sidebar's popovers can render in an
+// OWNED transparent OS window that rides ABOVE the live browser webview
+// (the "browser paused while the menu is open" retirement).
+import {
+  hideMenuOverlay,
+  onMenuOverlayClose,
+  onMenuOverlayPick,
+  prewarmMenuOverlay,
+  showMenuOverlay,
+  type MenuPayload,
+  type MenuPick,
+  type QuickMenuItemPayload,
+  type SubAgentItemPayload,
+} from "../../lib/menu-overlay";
 // R60-D: the shared suppression flag the BrowserPanel consults before
 // showing a webview (closes the created-while-popover-open ordering race).
 import { setPopoverWebviewSuppression } from "./popover-webview-guard";
@@ -193,6 +207,94 @@ export function RightSidebar({
   const [quickMenuOpen, setQuickMenuOpen] = useState(false);
   const [subAgentPickerFor, setSubAgentPickerFor] = useState<RightSidebarTabType | null>(null);
 
+  // ── R90-C2: the MENU OVERLAY state ────────────────────────────────────────
+  // `menuOverlayActive` — the owned OS window is the visible menu (the DOM
+  // popovers do NOT render); `menuOverlayFailed` — the overlay path was tried
+  // and refused (web mode, a rejected command), so the R60-D suppression
+  // fallback owns the rest of THIS popover's lifetime (the honest fallback —
+  // the DOM popover + the hidden webview). Reset when no popover is open.
+  const [menuOverlayActive, setMenuOverlayActive] = useState(false);
+  const [menuOverlayFailed, setMenuOverlayFailed] = useState(false);
+  // The R60-D suppression bookkeeping (kept for the fallback path only).
+  const popoverHiddenTabRef = useRef<string | null>(null);
+
+  // R90-C2: prewarm the overlay window at sidebar mount (native shell only —
+  // a no-op in web mode) so the FIRST + click repositions a live window
+  // instead of spawning one (~200ms). Failure is silent: the first show
+  // falls back to create-then-show, and a failure there falls back to the
+  // DOM popover path.
+  useEffect(() => {
+    if (isNativeBrowserAvailable()) prewarmMenuOverlay();
+  }, []);
+
+  // R90-C2: the pick/close subscriptions (mount-once — the handler reads a
+  // ref so it always runs the LATEST actions without resubscribing).
+  const overlayPickRef = useRef<(pick: MenuPick) => void>(() => {});
+  useEffect(() => {
+    overlayPickRef.current = (pick) => {
+      if (pick.kind === "quick") {
+        setQuickMenuOpen(false);
+        const type = pick.item.kind === "quick" ? pick.item.type : "";
+        if (type === "files") {
+          openFiles(projectId);
+        } else if (type === "browser") {
+          openBrowser(projectId, null);
+        } else if (type === "terminal") {
+          openTerminal(projectId);
+        } else if (type === "memory") {
+          openMemory(projectId);
+        } else if (type === "console") {
+          openConsole(projectId);
+        } else if (type === "subagent") {
+          setSubAgentPickerFor("subagent");
+        }
+        return;
+      }
+      // The sub-agent picker's pick — the same action the DOM version runs.
+      setSubAgentPickerFor(null);
+      if (pick.item.kind === "sub" && sessionId !== null) {
+        openSubAgent(
+          projectId,
+          sessionId,
+          pick.item.id,
+          `${pick.item.code} · ${pick.item.title || "Sub-agent"}`,
+          pick.item.subRole ?? undefined,
+        );
+      }
+    };
+  });
+  useEffect(() => onMenuOverlayPick((pick) => overlayPickRef.current(pick)), []);
+  useEffect(
+    () =>
+      onMenuOverlayClose(() => {
+        setQuickMenuOpen(false);
+        setSubAgentPickerFor(null);
+      }),
+    [],
+  );
+
+  // R90-C2: while the OVERLAY window is the menu, the DOM popovers are not
+  // mounted — so THIS window needs the outside-click (any mousedown in the
+  // main window is by definition outside the menu's own OS window) and the
+  // Escape handling the DOM popovers usually own.
+  useEffect(() => {
+    if (!menuOverlayActive) return;
+    const closeAll = (): void => {
+      setQuickMenuOpen(false);
+      setSubAgentPickerFor(null);
+    };
+    const onDown = (): void => closeAll();
+    const onKey = (e: KeyboardEvent): void => {
+      if (e.key === "Escape") closeAll();
+    };
+    window.addEventListener("mousedown", onDown);
+    window.addEventListener("keydown", onKey);
+    return () => {
+      window.removeEventListener("mousedown", onDown);
+      window.removeEventListener("keydown", onKey);
+    };
+  }, [menuOverlayActive]);
+
   // The active tab, hoisted ABOVE the collapsed-rail early return so the
   // R60-D popover-hide effect below (a hook — it must run on every render,
   // rail included) can see it.
@@ -263,60 +365,177 @@ export function RightSidebar({
     setQuickMenuOpen(true);
   }, []);
 
-  // ── R60-D: popover-over-webview z-index fix ─────────────────────────────
+  // ── R60-D → R90-C2: popover-over-webview z-index fix ────────────────────
   // The QuickMenu / SubAgentPicker popovers are portaled to document.body
   // with position:fixed — in WEB mode that is enough to sit above the panel.
   // In TAURI mode the browser panel's page renderer is a NATIVE CHILD
   // WEBVIEW: an OS-level layer that floats above ALL app HTML, so wherever
   // the popover overlaps the page area it renders BEHIND the webview (the
   // owner: "when I click the new tab option then the options get hidden
-  // behind the actual browser window itself"). Fix: while either popover is
-  // open AND the active right-sidebar tab is a browser tab, HIDE that tab's
-  // webview (browser_tab_set_visible false — the same background-tab
-  // mechanism the panel itself uses; the session STAYS ALIVE); restore it
-  // when the popover closes. The restore is GUARDED: it fires only when the
-  // popover closes with that SAME browser tab still active and the sidebar
-  // still open — every other path (tab switched away, sidebar collapsed,
-  // tab closed) leaves the webview hidden, which is exactly what the
-  // panel's own mount/unmount lifecycle wants. In web mode
-  // nativeTabSetVisible degrades to a resolved no-op, so this is
-  // Tauri-only by construction.
-  const popoverHiddenTabRef = useRef<string | null>(null);
+  // behind the actual browser window itself").
+  //
+  // R90-C2 — THE OVERLAY-FIRST LADDER (the owner: "the menu was supposed
+  // to be shown on top of the browser window itself"): when a popover opens
+  // over the LIVE browser tab, we FIRST show the MENU OVERLAY WINDOW — an
+  // OWNED transparent OS window that rides above the browser webview
+  // (menu-overlay.html). The browser NEVER pauses; the menu floats on top
+  // of the live page. Only when that path is unavailable (web mode, a
+  // rejected command) does the R60-D fallback hide the tab's webview for
+  // the popover's lifetime (browser_tab_set_visible false — the same
+  // background-tab mechanism the panel itself uses; the session STAYS
+  // ALIVE); restoring when the popover closes. The restore is GUARDED: it
+  // fires only when the popover closes with that SAME browser tab still
+  // active and the sidebar still open — every other path (tab switched
+  // away, sidebar collapsed, tab closed) leaves the webview hidden, which
+  // is exactly what the panel's own mount/unmount lifecycle wants. In web
+  // mode nativeTabSetVisible degrades to a resolved no-op, so the fallback
+  // is Tauri-only by construction.
+  const buildMenuPayload = useCallback((): MenuPayload | null => {
+    if (quickMenuOpen) {
+      // The QuickMenu's items — the exact list the DOM component renders.
+      const items: QuickMenuItemPayload[] = [
+        { kind: "quick", type: "files", label: "Files", desc: "Browse the project's files", icon: "folder-tree" },
+        { kind: "quick", type: "browser", label: "Browser", desc: "Browse the web in-app", icon: "globe" },
+        { kind: "quick", type: "terminal", label: "Terminal", desc: "Run a shell command", icon: "terminal" },
+        { kind: "quick", type: "memory", label: "Memory", desc: "Saved project knowledge", icon: "brain" },
+        { kind: "quick", type: "console", label: "Console", desc: "Error monitoring — frontend + engine", icon: "activity" },
+      ];
+      if (hasSubs) {
+        items.push({ kind: "quick", type: "subagent", label: "Sub-agents", desc: "Inspect a child sub-agent", icon: "bot" });
+      }
+      return {
+        kind: "quick",
+        title: "New tab",
+        width: 220,
+        items,
+        theme: {
+          card: styles.card,
+          border: styles.border,
+          softShadow: styles.softShadow,
+          text: styles.text,
+          textSecondary: styles.textSecondary,
+          textTertiary: styles.textTertiary,
+          accent: styles.accent,
+          subtleHover: styles.subtleHover,
+          isDark: styles.isDark,
+        },
+      };
+    }
+    if (subAgentPickerFor !== null) {
+      const items: SubAgentItemPayload[] = subs.map((sub) => {
+        const role = sub.subRole ?? "agent";
+        return {
+          kind: "sub" as const,
+          id: sub.id,
+          code: sub.code,
+          role,
+          roleColor: ROLE_COLORS[role] ?? styles.textTertiary,
+          title: sub.title ?? "Untitled",
+          status: sub.status,
+          subRole: sub.subRole ?? null,
+        };
+      });
+      return {
+        kind: "subagents",
+        title: "Sub-agents",
+        width: 260,
+        items,
+        theme: {
+          card: styles.card,
+          border: styles.border,
+          softShadow: styles.softShadow,
+          text: styles.text,
+          textSecondary: styles.textSecondary,
+          textTertiary: styles.textTertiary,
+          accent: styles.accent,
+          subtleHover: styles.subtleHover,
+          isDark: styles.isDark,
+        },
+      };
+    }
+    return null;
+  }, [quickMenuOpen, subAgentPickerFor, hasSubs, subs, styles]);
+
   useEffect(() => {
     const popoverOpen = quickMenuOpen || subAgentPickerFor !== null;
     const activeBrowserTabId =
       open && activeTab !== null && activeTab.type === "browser" ? activeTab.id : null;
     const warn = (err: unknown) => console.warn("[native-browser]", err);
-    if (popoverOpen) {
-      if (activeBrowserTabId !== null && popoverHiddenTabRef.current !== activeBrowserTabId) {
-        popoverHiddenTabRef.current = activeBrowserTabId;
-        // The module flag is what the BrowserPanel's nativeCreate consults —
-        // a webview created while this popover is open must not show itself.
-        setPopoverWebviewSuppression(activeBrowserTabId);
-        void nativeTabSetVisible(activeBrowserTabId, false).catch(warn);
+
+    // R90-C2: no popover (or not over the browser) → the overlay window goes
+    // away and any hidden webview gets its guarded restore (R60-D below).
+    if (!popoverOpen || activeBrowserTabId === null) {
+      if (menuOverlayActive) {
+        hideMenuOverlay();
+        setMenuOverlayActive(false);
+        setMenuOverlayFailed(false);
+      }
+      const hidden = popoverHiddenTabRef.current;
+      if (hidden === null) return;
+      popoverHiddenTabRef.current = null;
+      setPopoverWebviewSuppression(null);
+      // Restore ONLY when the hidden tab is still the ACTIVE browser tab with
+      // the sidebar open (its BrowserPanel is mounted and owns the webview).
+      if (activeBrowserTabId === hidden) {
+        void nativeTabSetVisible(hidden, true).catch(warn);
       }
       return;
     }
-    const hidden = popoverHiddenTabRef.current;
-    if (hidden === null) return;
-    popoverHiddenTabRef.current = null;
-    setPopoverWebviewSuppression(null);
-    // Restore ONLY when the hidden tab is still the ACTIVE browser tab with
-    // the sidebar open (its BrowserPanel is mounted and owns the webview).
-    if (activeBrowserTabId === hidden) {
-      void nativeTabSetVisible(hidden, true).catch(warn);
+
+    // A popover is open OVER the live browser tab — the overlay-first ladder.
+    if (isNativeBrowserAvailable() && !menuOverlayFailed) {
+      const payload = buildMenuPayload();
+      // The overlay window's size: the payload's own width + the measured
+      // row heights of the DOM twins (quick rows ~41px with desc, sub rows
+      // ~31px, title 18px, padding 12px, capped like the DOM picker's 300px
+      // scroll cap).
+      const rows = payload?.items.length ?? 0;
+      const rowH = payload?.kind === "quick" ? 41 : 31;
+      const h = payload !== null ? Math.min(330, 6 + 20 + rows * rowH + 10) : 200;
+      const w = payload?.kind === "quick" ? 232 : 272;
+      if (payload !== null && popoverPos !== null) {
+        let cancelled = false;
+        void showMenuOverlay({ left: popoverPos.left, top: popoverPos.top, width: w, height: h }, payload).then(
+          (ok) => {
+            if (cancelled) {
+              if (ok) hideMenuOverlay();
+              return;
+            }
+            if (ok) setMenuOverlayActive(true);
+            else setMenuOverlayFailed(true);
+          },
+        );
+        return () => {
+          cancelled = true;
+        };
+      }
+      // No anchor/payload (a render before the anchor computed) — the retry
+      // rides the next effect run when popoverPos lands.
+      return;
     }
-  }, [quickMenuOpen, subAgentPickerFor, open, activeTab]);
+
+    // THE R60-D FALLBACK (overlay refused): hide the tab's webview so the
+    // DOM popover is visible; the "paused" caption the owner disliked only
+    // ever appears on this degraded path now (open a browser tab first —
+    // the degraded-but-honest path).
+    if (popoverHiddenTabRef.current !== activeBrowserTabId) {
+      popoverHiddenTabRef.current = activeBrowserTabId;
+      // The module flag is what the BrowserPanel's nativeCreate consults —
+      // a webview created while this popover is open must not show itself.
+      setPopoverWebviewSuppression(activeBrowserTabId);
+      void nativeTabSetVisible(activeBrowserTabId, false).catch(warn);
+    }
+  }, [quickMenuOpen, subAgentPickerFor, open, activeTab, popoverPos, menuOverlayActive, menuOverlayFailed, buildMenuPayload]);
 
   // R60-D: unmount-only cleanup — if the whole sidebar goes away while a
   // popover is open (project/session switch), clear the module suppression
   // so no webview stays hidden forever; every panel's own mount/unmount
-  // lifecycle re-owns visibility from there. (Separate empty-deps effect:
-  // the hide/restore effect above must NOT re-run its cleanup per change.)
+  // lifecycle re-owns visibility from there. R90-C2: the overlay window too.
   useEffect(() => {
     return () => {
       popoverHiddenTabRef.current = null;
       setPopoverWebviewSuppression(null);
+      hideMenuOverlay();
     };
   }, []);
 
@@ -519,8 +738,11 @@ export function RightSidebar({
             (overflow-x-auto on the tab strip + overflow-hidden on the sidebar
             shell). Anchored below the "+" button via its bounding rect;
             LEFT is clamped so the menu never spills past the viewport's
-            right edge (ROUND-41). */}
-        {popoverPos !== null && typeof document !== "undefined"
+            right edge (ROUND-41). R90-C2: while the MENU OVERLAY window is
+            the visible menu (over the live browser webview), the DOM
+            popovers do NOT render — the overlay window owns the visuals and
+            this window's outside-click/Escape listeners own closing. */}
+        {popoverPos !== null && !menuOverlayActive && typeof document !== "undefined"
           ? createPortal(
               <>
                 <AnimatePresence>

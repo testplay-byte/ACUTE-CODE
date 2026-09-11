@@ -80,6 +80,14 @@ pub fn run() {
             browser::browser_tab_scroll_to,
             browser::browser_tab_set_zoom,
             browser::browser_tab_eval,
+            // ROUND-90 (R90-C2): the menu overlay window — the sidebar's
+            // popovers render in an OWNED transparent OS window so they
+            // float ON TOP of the live browser webview (the "browser paused
+            // while the menu is open" retirement).
+            browser::menu_overlay_prewarm,
+            browser::menu_overlay_show,
+            browser::menu_overlay_hide,
+            browser::menu_overlay_pending,
             // ROUND-64 (R64-b): the always-on-top floating computer-use
             // monitor — auto-opened by the main app the moment live
             // computer-use activity starts; the page (mini.html) closes

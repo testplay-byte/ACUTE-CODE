@@ -21,6 +21,10 @@ const popoutEntry = fileURLToPath(new URL("./popout.html", import.meta.url));
 // entry, same rules (build must land it in dist/ for WebviewUrl::App
 // ("mini.html") to resolve).
 const miniEntry = fileURLToPath(new URL("./mini.html", import.meta.url));
+// ROUND-90 (R90-C2): the menu overlay window's page — a FOURTH entry, same
+// rules (the sidebar's popovers render in an owned OS window above the
+// live browser webview; see src/menu-overlay + browser.rs's menu_overlay_*).
+const menuOverlayEntry = fileURLToPath(new URL("./menu-overlay.html", import.meta.url));
 
 export default defineConfig({
   plugins: [react(), tailwindcss()],
@@ -35,8 +39,8 @@ export default defineConfig({
     outDir: "dist",
     rollupOptions: {
       // Multi-page: the main app + the pop-out browser window's chrome page
-      // + the floating computer-use mini monitor page.
-      input: { index: indexEntry, popout: popoutEntry, mini: miniEntry },
+      // + the floating computer-use mini monitor page + the menu overlay.
+      input: { index: indexEntry, popout: popoutEntry, mini: miniEntry, menu: menuOverlayEntry },
     },
   },
   // Vitest runs every workspace's tests from this config. Default environment is

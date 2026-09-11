@@ -444,6 +444,23 @@ export function BrowserPanel({
     },
     [tabId],
   );
+  // R90-C1: the unmount latch — true while THIS panel is mounted. The
+  // nativeCreate .then() reads it so a create that resolves AFTER the panel
+  // unmounted (the owner's "the old browser window was floating in the new
+  // chat" glitch) HIDES the webview instead of showing it: pre-R90 the
+  // stale closure's hiddenRef (last-render value — false for an ACTIVE tab)
+  // plus the detached placeholder's 0×0 rect (never "covered" by any overlay)
+  // made isWebviewHiddenNow() false → nativeTabSetVisible(true) re-SHOWED a
+  // webview over the new chat at its stale last bounds. The unmount cleanup's
+  // hide had already fired — this show was the race's losing leg.
+  const mountedRef = useRef(true);
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+    };
+  }, []);
+
   const agentViewportSeq = state?.agentViewportSeq ?? 0;
   const agentViewportSeqRef = useRef(agentViewportSeq);
   useEffect(() => {
@@ -651,6 +668,13 @@ export function BrowserPanel({
       lastCommandedUrlRef.current = url;
       return nativeTabCreate(tabId, url)
         .then(() => {
+          // R90-C1: the panel went away while the create was in flight
+          // (project switch / sidebar close racing the agent's navigation
+          // frame). Keep the webview ALIVE (the background-tab contract)
+          // but HIDDEN — never float it over whatever replaced this panel.
+          if (!mountedRef.current) {
+            return nativeTabSetVisible(tabId, false).catch(() => {});
+          }
           nativeReadyRef.current = true;
           scheduleBoundsSync();
           const factor = useBrowserTabStore.getState().tabs[tabId]?.viewport.zoom ?? 1;

@@ -161,6 +161,10 @@ let providersFail = false;
 /** R62-2b: when true, GET /providers/openrouter/models-config answers
  * HTTP 500 (the models-load-error path). */
 let modelsConfigFail = false;
+/** R90-A1: when non-null, DELETE /providers/:id answers THIS status + the
+ * conflict body (the real backend's 409 — "agents still use this
+ * provider" — that pre-R90 rendered invisibly in the header card). */
+let deleteProviderConflict: string | null = null;
 
 let pool: KeyPoolSlot[] = [];
 /** What POST /providers/:id/test answers this test (ok:true / ok:false). */
@@ -287,6 +291,21 @@ const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => 
   // R59-C: DELETE /providers/:id — the delete-selected-falls-to-next flow.
   if (providerPatchMatch !== null && method === "DELETE") {
     const id = providerPatchMatch[1];
+    // R90-A1: the knob that simulates the REAL backend's 409 (a provider
+    // still referenced by an agent — the owner's dead-click scenario).
+    if (deleteProviderConflict !== null) {
+      return {
+        status: 409,
+        ok: false,
+        text: async () =>
+          JSON.stringify({
+            error: {
+              code: "CONFLICT",
+              message: `1 agent still use '${deleteProviderConflict}' (Acute) — reassign or delete them first`,
+            },
+          }),
+      } as unknown as Response;
+    }
     const before = providersList.length;
     providersList = providersList.filter((p) => p.id !== id);
     if (providersList.length === before) {
@@ -460,6 +479,7 @@ beforeEach(() => {
   modelTestAnswer = null;
   providersFail = false;
   modelsConfigFail = false;
+  deleteProviderConflict = null;
   pool = [];
   configured = [];
   customConfigured = [];
@@ -1833,6 +1853,29 @@ describe("Settings mutations refresh the SESSION page's model caches (R62-2b)", 
     );
     await waitFor(() => expect(isInvalidated(client, ["provider-models-config", "openrouter"])).toBe(true));
   });
+
+  // R90-A1 (the owner: "I clicked the confirm delete but nothing was
+  // happening"): the real backend 409s a provider that agents still use —
+  // and pre-R90 that error rendered in the HEADER card 1500px above the
+  // Danger zone in the accent color (a dead click). Now it lands INLINE in
+  // the Danger zone, as an alert, in the danger color.
+  it("a REFUSED delete (the backend's 409) renders the error INLINE in the Danger zone", async () => {
+    deleteProviderConflict = "OpenRouter";
+    renderWithProviders(<ModelsProvidersTab />);
+    await waitFor(() =>
+      expect(screen.getByRole("button", { name: "Delete provider OpenRouter" })).toBeTruthy(),
+    );
+    // The two-click confirm — the request goes out and comes back 409.
+    fireEvent.click(screen.getByRole("button", { name: "Delete provider OpenRouter" }));
+    fireEvent.click(screen.getByRole("button", { name: "Delete provider OpenRouter" }));
+
+    const inlineError = await screen.findByTestId("delete-provider-error");
+    expect(inlineError.getAttribute("role")).toBe("alert");
+    expect(inlineError.textContent).toContain("1 agent still use 'OpenRouter'");
+    // The provider row is STILL THERE (the delete was refused) — the pane's
+    // header still shows the provider name.
+    await waitFor(() => expect(screen.getByText("OpenRouter", { selector: "span.text-\\[16px\\]" })).toBeTruthy());
+  });
 });
 
 /* ── ROUND-62 (R62-2b): honest load states (the "page is not proper" part) ── */
@@ -2004,12 +2047,17 @@ describe("Models UI — the R89 overhaul", () => {
     expect(screen.getAllByText("$0.6/M").length).toBeGreaterThan(0);
     expect(screen.getAllByText("$0.02/M").length).toBeGreaterThan(0);
 
-    // The capability ICON chips: a lucide <svg> inside each chip + the label.
+    // The capability ICON badges (R90-A2: icon-ONLY — the label lives in the
+    // tooltip/aria-label, never as text): a lucide <svg> inside each badge.
     const imagesChip = screen.getByTitle("Accepts image inputs");
     expect(imagesChip.querySelector("svg")).toBeTruthy();
-    expect(imagesChip.textContent).toBe("Images");
+    expect(imagesChip.textContent).toBe(""); // icon-only — no text label
     const pdfChip = screen.getByTitle("Accepts PDF documents");
     expect(pdfChip.querySelector("svg")).toBeTruthy();
+    // The inputs → outputs ARROW (R90-A2: the transformation reads visually).
+    expect(screen.getByTitle("inputs → outputs")).toBeTruthy();
+    // The details band is FUSED into the model section (R90-A2: one border).
+    expect(screen.getByTestId("model-details-band")).toBeTruthy();
 
     // The size badge rides the identity row.
     expect(screen.getByText("70B")).toBeTruthy();

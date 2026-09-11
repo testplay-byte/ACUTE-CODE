@@ -1,0 +1,53 @@
+<!doctype html>
+<!--
+  ROUND-90 (R90-C2): the menu overlay window's page. browser.rs's
+  menu_overlay_show builds the window (transparent, borderless, owned by the
+  main window) hosting THIS file via WebviewUrl::App("menu-overlay.html") —
+  a fourth vite entry (see vite.config.ts rollupOptions.input). The page is
+  a minimal standalone React app that renders the right sidebar's popovers
+  (the quick menu / the sub-agent picker) INSIDE that OS window, so they
+  float ON TOP of the live embedded-browser webview instead of pausing it.
+
+  Data flow: the payload (kind/title/items/theme) arrives either from the
+  menu_overlay_pending stash on mount or the "menu-overlay-data" event on
+  reuse; picks report back via the "menu-overlay-pick" event, Escape via
+  "menu-overlay-close". The main window's bridge (src/lib/menu-overlay.ts)
+  owns both ends.
+-->
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Acute menu</title>
+    <style>
+      /* The window is transparent: the page paints nothing outside the
+         menu card. The card's own entrance mirrors the DOM popover's
+         framer-motion pop (opacity + y + scale, ~140ms). */
+      html,
+      body {
+        margin: 0;
+        padding: 0;
+        background: transparent;
+        overflow: hidden;
+        font-family: inherit;
+      }
+      @keyframes acute-menu-in {
+        from {
+          opacity: 0;
+          transform: translateY(-4px) scale(0.97);
+        }
+        to {
+          opacity: 1;
+          transform: translateY(0) scale(1);
+        }
+      }
+      .acute-menu-card {
+        animation: acute-menu-in 0.14s ease-out;
+      }
+    </style>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/menu-overlay/main.tsx"></script>
+  </body>
+</html>
