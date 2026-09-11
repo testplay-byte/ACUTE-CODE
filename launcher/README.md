@@ -22,9 +22,14 @@ click into `launcher/` → click each file → **Raw** button → right-click �
 
 The launcher needs a **GitHub token** (starts with `github_pat_`, read
 access to the private repo) to download the app. On the first run it asks
-for it interactively and saves it locally at `.acute/github.pat`
-(chmod 600 where supported) — later runs reuse it silently. Prefer the
-environment? Set `ACUTE_GITHUB_PAT` (or `GITHUB_PAT`) instead of the file.
+for it interactively and saves it in your **USER HOME** at
+`~/.acute/github.pat` (chmod 600 where supported) — later runs reuse it
+silently. That is exactly where the app's *Check for updates* looks
+(round-90 fix: it used to be saved next to the launcher, where the app
+never found it; a pre-round-90 copy there is moved over automatically).
+Prefer the environment? Set `ACUTE_GITHUB_PAT` (or `GITHUB_PAT`) instead
+of the file — the launcher also hands the token to the app it starts,
+so the in-app update check works even without the file.
 
 **AI provider keys (OpenRouter, NVIDIA, …) are no longer read from any
 file** — save them inside the app itself: **Settings → Models & Providers**.
@@ -45,7 +50,8 @@ What you'll see, in order:
    ├── acute_launcher.py      ← the workhorse
    ├── .acute-launch-pref.json ← your remembered launch choice (round 56)
    ├── ACUTE-CODE\            ← the app (downloaded, self-updating)
-   └── .acute\                ← helper data (logs, github.pat, downloads)
+   └── .acute\                ← helper data (logs, downloads — R90-B1: the
+                                token now lives in your home at ~\.acute\github.pat)
    ```
 3. **The launch question (round 56)** — every run asks how you want to work:
    - **[1] Desktop app** (recommended): the packaged window with the embedded
@@ -173,10 +179,12 @@ while it runs), so if the launcher prints
 > from credential helpers (they failed on Git-for-Windows) — the token goes
 > into the one-off clone/fetch URL and is never stored in git config.
 > Round-87 removed `credentials.txt` entirely: the launcher's only
-> credential is the GitHub token (asked once interactively, saved at
-> `.acute/github.pat`, or read from `ACUTE_GITHUB_PAT`), and every AI
-> provider key is saved inside the app itself (Settings → Models &
-> Providers → the desktop app writes Windows Credential Manager).
+> credential is the GitHub token (asked once interactively, saved in your
+> user home at `~/.acute/github.pat` — round-90, with a pre-round-90 copy
+> next to the launcher migrated automatically — or read from
+> `ACUTE_GITHUB_PAT`, which is also passed to the app it starts), and
+> every AI provider key is saved inside the app itself (Settings → Models
+> & Providers → the desktop app writes Windows Credential Manager).
 
 ## Notes
 

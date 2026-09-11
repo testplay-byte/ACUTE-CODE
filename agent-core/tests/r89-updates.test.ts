@@ -4,9 +4,18 @@
  * api.github.com answered HTTP 404 (the owner's verdict); the sidecar now
  * reads the launcher's saved ~/.acute/github.pat and queries GitHub itself.
  *
+ * ROUND-90 (R90-B1) — the token-source layers: the launcher saves the PAT in
+ * the USER HOME (migrated from the kit-relative .acute/github.pat, which the
+ * app could never find) AND hands it to the app it starts via the
+ * ACUTE_GITHUB_PAT environment variable. readLauncherGithubPat honors the
+ * env var FIRST — the tests below pin both layers.
+ *
  * Coverage (global fetch mocked — NEVER a live call in tests):
- *  · no ~/.acute/github.pat → ok:false reason "no-token" (the honest error
- *    the About tab renders; the button stays useful).
+ *  · no env var + no ~/.acute/github.pat → ok:false reason "no-token" (the
+ *    honest error the About tab renders; the button stays useful).
+ *  · ACUTE_GITHUB_PAT set → it WINS over a planted home file (the launcher
+ *    only ever exports a resolved token; a whitespace-only export falls
+ *    through to the file instead of shadowing it).
  *  · a valid answer → ok:true with the tag compared against the engine's
  *    own package.json version (updateAvailable true + false branches).
  *  · GitHub's 404 (a token that cannot see the repo) → ok:false "no-release".
@@ -55,12 +64,19 @@ function plantPat(home: string, pat: string | null): void {
 
 beforeEach(() => {
   if (tempDir === "") tempDir = mkdtempSync(join(tmpdir(), "acute-r89-upd-"));
+  // R90-B1: the env layer must start ABSENT so each test controls it — a
+  // developer/CI machine that happens to export ACUTE_GITHUB_PAT would
+  // otherwise flip every file-based expectation in this suite.
+  delete process.env.ACUTE_GITHUB_PAT;
   db = openDatabase(join(tempDir, `${randomUUID()}.db`));
   app = buildServer({ token: TOKEN, db, keyring: new ProviderKeyring({}) });
 });
 
 afterEach(async () => {
   vi.restoreAllMocks();
+  // R90-B1: the same hermeticity guarantee on the way out (a test that sets
+  // the env var must never leak it into the next one).
+  delete process.env.ACUTE_GITHUB_PAT;
   fakeHome.dir = tmpdir();
   await app.close();
   db.close();
@@ -78,6 +94,8 @@ describe("GET /system/updates (R89-A2)", () => {
   it("answers ok:false reason no-token when the launcher never saved a PAT", async () => {
     const home = mkdtempSync(join(tempDir, "home-"));
     useFakeHome(home);
+    // R90-B1: no env var (deleted in beforeEach) AND no home file — BOTH
+    // token sources missing is what the honest no-token answer means now.
     plantPat(home, null);
 
     const res = await app.inject({ method: "GET", url: "/api/v1/system/updates", ...authed() });
@@ -87,6 +105,54 @@ describe("GET /system/updates (R89-A2)", () => {
     expect(body.reason).toBe("no-token");
     // The current version always rides along (the About tab renders it).
     expect(typeof body.current).toBe("string");
+  });
+
+  it("R90-B1: the ACUTE_GITHUB_PAT env var wins over the planted home file", async () => {
+    const home = mkdtempSync(join(tempDir, "home-"));
+    useFakeHome(home);
+    // The file holds a DIFFERENT token than the env — the Authorization
+    // header must carry the env one: the launcher always exports the token
+    // it resolved (file, env, or fresh prompt), so the env layer can never
+    // be stale relative to the file.
+    plantPat(home, "github_pat_from_the_file");
+    process.env.ACUTE_GITHUB_PAT = "github_pat_from_the_env";
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify({ tag_name: "v0.99.0" }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const res = await app.inject({ method: "GET", url: "/api/v1/system/updates", ...authed() });
+    expect(res.statusCode).toBe(200);
+    expect((res.json() as { ok: boolean }).ok).toBe(true);
+    const [, init] = fetchMock.mock.calls[0] as [unknown, { headers: Record<string, string> }];
+    expect(init.headers.Authorization).toBe("Bearer github_pat_from_the_env");
+    vi.unstubAllGlobals();
+  });
+
+  it("R90-B1: a whitespace-only env var falls through to the home file (never shadows it with nothing)", async () => {
+    const home = mkdtempSync(join(tempDir, "home-"));
+    useFakeHome(home);
+    plantPat(home, "github_pat_from_the_file");
+    // A blank export must count as absent — otherwise an accidentally-empty
+    // ACUTE_GITHUB_PAT would brick the check even with a valid saved file.
+    process.env.ACUTE_GITHUB_PAT = "   \n\t ";
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify({ tag_name: "v0.99.0" }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const res = await app.inject({ method: "GET", url: "/api/v1/system/updates", ...authed() });
+    expect(res.statusCode).toBe(200);
+    expect((res.json() as { ok: boolean }).ok).toBe(true);
+    const [, init] = fetchMock.mock.calls[0] as [unknown, { headers: Record<string, string> }];
+    expect(init.headers.Authorization).toBe("Bearer github_pat_from_the_file");
+    vi.unstubAllGlobals();
   });
 
   it("compares the engine's package.json version against the tag (both branches)", async () => {

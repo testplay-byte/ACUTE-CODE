@@ -32,11 +32,13 @@ jobs:
       - name: Version consistency
         run: pnpm version:check
 
-      # R74: the launcher's release-picker unit tests — the drafts-first
-      # API-order freeze (owner stuck on 0.67.0 while 0.73.0 was live)
-      # must never regress.
+      # R74 + R90-B1: the launcher's unit tests — the R74 drafts-first
+      # API-order freeze (owner stuck on 0.67.0 while 0.73.0 was live) and
+      # the R90-B1 GitHub-token path/migration contract. Discovery runs every
+      # launcher/tests/test_*.py file (the run command each suite's
+      # docstring advertises).
       - name: Launcher unit tests
-        run: python launcher/tests/test_pick_latest_release.py
+        run: python -m unittest discover -s launcher/tests -v
 
       - name: Docs check (freshness + drift — round 28 WS-J1)
         run: pnpm docs:check

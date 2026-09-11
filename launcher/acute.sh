@@ -10,7 +10,9 @@
 #      acute.sh                <- you are here
 #      acute_launcher.py       <- the workhorse (never needs editing)
 #  No secrets live here (R87): the GitHub token is asked once on first
-#  run and saved at .acute/github.pat (or set ACUTE_GITHUB_PAT); provider
+#  run and saved in your user home at ~/.acute/github.pat (R90-B1 — the
+#  app's update check reads it there; a pre-round-90 copy in this folder
+#  is moved over automatically), or set ACUTE_GITHUB_PAT; provider
 #  API keys are saved inside the app (Settings -> Models & Providers).
 #
 #  Useful commands:   bash acute.sh status    read-only health report

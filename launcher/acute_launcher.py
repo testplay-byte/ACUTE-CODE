@@ -12,16 +12,18 @@
 # double-clickable coordinator; THIS Python program does the real work with a
 # rich, beautiful terminal UI (panels, spinners, progress, tables). It:
 #
-#   • asks for your GitHub token ONCE on first run (saved locally in
-#     .acute/github.pat — it downloads the private repo; R87: the old
-#     credentials.txt file is GONE and provider API keys are saved IN THE
-#     APP, Settings → Models & Providers)
+#   • asks for your GitHub token ONCE on first run (saved in your USER
+#     HOME at ~/.acute/github.pat — it downloads the private repo; R87: the
+#     old credentials.txt file is GONE and provider API keys are saved IN
+#     THE APP, Settings → Models & Providers; R90-B1: the token moved out
+#     of the kit folder so the app's update check finds it)
 #   • checks the toolchain and AUTO-INSTALLS what is missing
 #     (git / Node.js via winget on Windows, with your confirmation;
 #      pnpm is activated through corepack — no global installs)
 #   • keeps your folder clean: launcher files stay at the top level, and
 #     everything downloaded lives inside ./ACUTE-CODE (the app) and
-#     ./.acute (credentials cache + logs) in the SAME directory
+#     ./.acute (downloads cache + logs) in the SAME directory (R90-B1: the
+#     GitHub token itself lives in the USER HOME — ~/.acute/github.pat)
 #   • on every run: checks GitHub for updates → stops the live servers →
 #     pulls → reinstalls → rebuilds → relaunches (your data persists)
 #   • self-updates: if the repo ships a newer launcher, it copies it over
@@ -433,7 +435,20 @@ API keys for AI providers (OpenRouter, NVIDIA, …) are NO LONGER read from
 any file — save them inside the app:  Settings → Models & Providers.
 """
 
-PAT_PATH = DOT_DIR / "github.pat"
+# R90-B1: the token is saved in the USER HOME, not next to the launcher.
+# The app's sidecar (agent-core/src/routes/system.ts readLauncherGithubPat)
+# reads  <home>/.acute/github.pat; the pre-R90 kit-relative location below
+# could never be found there, so the app's "Check for updates" answered
+# "token not saved" forever even after the owner let acute.bat save it.
+# DOT_DIR keeps ONLY the logs + download cache — nothing else moves.
+# The launcher also hands the resolved token to the app it starts via the
+# ACUTE_GITHUB_PAT environment variable (the env layer the sidecar honors
+# FIRST), so the update check works even before/independent of the file.
+PAT_PATH = Path.home() / ".acute" / "github.pat"
+# The pre-R90 location — kept ONLY as the one-time migration source plus
+# the fallback read when the home copy cannot be written/read (a locked or
+# portable home must never lock the owner out of their own token).
+LEGACY_PAT_PATH = DOT_DIR / "github.pat"
 
 
 def _no_interactive_github_pat():
@@ -453,10 +468,38 @@ def resolve_github_pat():
     """The ONE credential the launcher still needs: the GitHub token that
     downloads the private repo. R87 (credentials.txt removed): resolved from
     (1) the ACUTE_GITHUB_PAT / GITHUB_PAT environment variable, (2) the
-    locally saved  .acute/github.pat  (written by the first-run prompt),
-    (3) an interactive prompt on first run — the answer is saved so later
-    runs never ask again. Never logged, never echoed (input is masked).
+    locally saved  ~/.acute/github.pat  in the USER HOME (R90-B1: moved out
+    of the kit folder — the app's update check reads exactly this path, and
+    a pre-R90  <kit>/.acute/github.pat  is migrated below), (3) an
+    interactive prompt on first run — the answer is saved so later runs
+    never ask again. Never logged, never echoed (input is masked).
     """
+    # R90-B1 one-time migration: a token saved by a pre-R90 launcher sits at
+    # <kit>/.acute/github.pat — move it into the USER HOME so the app (whose
+    # sidecar reads ~/.acute/github.pat) finally finds it. This runs BEFORE
+    # the env-var short-circuit: even a launcher run that authenticates via
+    # ACUTE_GITHUB_PAT should carry the owner's already-saved token over, so
+    # an app started WITHOUT this launcher (Start Menu / desktop shortcut,
+    # no env) still finds the file. The legacy file is only deleted AFTER the
+    # home copy is safely written, and a failed migration never locks the
+    # owner out — the legacy read below stays as the fallback.
+    try:
+        if LEGACY_PAT_PATH.is_file() and not PAT_PATH.is_file():
+            legacy = LEGACY_PAT_PATH.read_text(encoding="utf-8", errors="replace").strip()
+            if legacy.startswith(("github_pat_", "ghp_", "gho_")):
+                PAT_PATH.parent.mkdir(parents=True, exist_ok=True)
+                PAT_PATH.write_text(legacy + "\n", encoding="utf-8")
+                try:
+                    os.chmod(PAT_PATH, 0o600)
+                except OSError:
+                    pass
+                LEGACY_PAT_PATH.unlink()
+                log("GitHub token: migrated the saved token from the launcher folder to the user home")
+    except OSError:
+        # Unwritable/locked home, half-copied file, … — keep going: the
+        # legacy copy is still on disk and the fallback read below finds it.
+        log("GitHub token: home migration failed — keeping the launcher-folder copy")
+
     env_pat = (os.environ.get("ACUTE_GITHUB_PAT") or os.environ.get("GITHUB_PAT") or "").strip()
     if env_pat:
         log("GitHub token: environment variable")
@@ -466,6 +509,15 @@ def resolve_github_pat():
         saved = PAT_PATH.read_text(encoding="utf-8", errors="replace").strip()
     except OSError:
         saved = ""
+    if not saved.startswith(("github_pat_", "ghp_", "gho_")) and LEGACY_PAT_PATH.is_file():
+        # R90-B1 fallback: the home read failed or held nothing usable — a
+        # token still sitting at the legacy kit path keeps working (this is
+        # the branch a FAILED migration lands in, and also covers a manual
+        # pre-R90-style file the owner dropped next to the launcher).
+        try:
+            saved = LEGACY_PAT_PATH.read_text(encoding="utf-8", errors="replace").strip()
+        except OSError:
+            saved = ""
     if saved.startswith(("github_pat_", "ghp_", "gho_")):
         log("GitHub token: saved from an earlier run")
         return saved
@@ -651,7 +703,7 @@ def explain_git_failure(proc, cmd_display=""):
             or "access denied or repository not enrolled" in low):
         head += [
             "Diagnosis: GitHub rejected the download — almost always the token.",
-            "Fix: delete .acute/github.pat (or set ACUTE_GITHUB_PAT), rerun, and paste",
+            "Fix: delete ~/.acute/github.pat (or set ACUTE_GITHUB_PAT), rerun, and paste",
             "token (github.com → Settings → Developer settings → Personal access",
             "tokens → it needs read access to the private repo), save, re-run.",
         ]
@@ -1979,8 +2031,20 @@ def desktop_flow(pat, force_reinstall=False):
                 # survives this launcher window; we keep a handle to report
                 # when it closes.
                 creationflags = 0x00000008 if IS_WIN else 0  # DETACHED_PROCESS
+                # R90-B1: hand the resolved token to the app via the
+                # environment — the sidecar's update check (GET
+                # /system/updates → readLauncherGithubPat) honors
+                # ACUTE_GITHUB_PAT FIRST, so "Check for updates" works even
+                # when the home file is missing or unreadable (the env layer
+                # is the belt to the home-file suspenders; the Tauri shell
+                # passes its environment down to the agent-core sidecar it
+                # spawns). Only set when a token exists: env=None inherits
+                # ours unchanged, and an EMPTY export would shadow a valid
+                # saved file with nothing.
+                launch_env = {**os.environ, "ACUTE_GITHUB_PAT": pat} if pat else None
                 proc = subprocess.Popen(
-                    [str(exe)], cwd=str(installed["location"]), creationflags=creationflags
+                    [str(exe)], cwd=str(installed["location"]), creationflags=creationflags,
+                    env=launch_env,
                 )
             except OSError as exc:
                 warn(f"could not start the desktop app ({exc.__class__.__name__}) — using the dev-servers flow")

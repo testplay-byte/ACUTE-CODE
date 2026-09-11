@@ -69,12 +69,28 @@ function versionTuple(v: string): number[] {
     .map((part) => (Number.isNaN(part) ? 0 : part));
 }
 
-/** R89-A2: the launcher's saved GitHub token (~/.acute/github.pat — written
- * by acute_launcher.py's first-run prompt). The repo is PRIVATE, so the
- * releases API answers 404 to anonymous callers. Never logged, never
- * returned — read once per /system/updates call and used in the Authorization
- * header only. Returns null when absent/unreadable. */
+/** R89-A2 + R90-B1: the launcher's GitHub token, in two layers:
+ *  (1) the ACUTE_GITHUB_PAT environment variable — set by the launcher
+ *      itself on the Popen that starts the desktop app, so the token rides
+ *      along no matter where the file landed (the belt);
+ *  (2) ~/.acute/github.pat in the USER HOME — written by acute_launcher.py's
+ *      first-run prompt (R90-B1 moved the save from the kit-relative
+ *      .acute/github.pat into the home: the pre-R90 mismatch meant the app
+ *      looked in the home while the launcher saved in the kit, so "Check
+ *      for updates" answered no-token forever; the launcher migrates the
+ *      legacy file automatically).
+ * The repo is PRIVATE, so the releases API answers 404 to anonymous
+ * callers. Never logged, never returned — read once per /system/updates
+ * call and used in the Authorization header only. Returns null when
+ * absent/unreadable. */
 function readLauncherGithubPat(): string | null {
+  // R90-B1: the env var wins FIRST — the launcher only ever exports a token
+  // it has already resolved (file, env, or fresh prompt), so this path cannot
+  // miss on a path/home mismatch. Whitespace-only counts as absent: a blank
+  // export must fall through to the file instead of shadowing it with
+  // nothing.
+  const envPat = (process.env.ACUTE_GITHUB_PAT ?? "").trim();
+  if (envPat !== "") return envPat;
   try {
     const pat = readFileSync(join(homedir(), ".acute", "github.pat"), "utf8").trim();
     if (!pat.startsWith("github_pat_")) return null;

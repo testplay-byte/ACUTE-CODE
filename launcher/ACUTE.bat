@@ -29,7 +29,9 @@ rem  Files that belong in THIS folder:
 rem      ACUTE.bat              <- you are here (double-click me)
 rem      acute_launcher.py      <- the workhorse (self-updates from the repo)
 rem  No secrets live here (R87): the GitHub token is asked once on first
-rem  run and saved at .acute/github.pat (or set ACUTE_GITHUB_PAT); provider
+rem  run and saved in your USER HOME at ~\.acute\github.pat (R90-B1 — the
+rem  app's update check reads it there; a pre-round-90 copy in this folder
+rem  is moved over automatically), or set ACUTE_GITHUB_PAT; provider
 rem  API keys are saved inside the app (Settings -> Models & Providers).
 rem
 rem  Useful commands:   ACUTE.bat status   read-only health report
