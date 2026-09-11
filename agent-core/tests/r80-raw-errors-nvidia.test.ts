@@ -131,15 +131,23 @@ describe("R80: the NVIDIA built-in provider (the nvapi- support)", () => {
     expect(nvidia?.enabled).toBe(true);
   });
 
-  it("the nvidia id is RESERVED (custom rows may never claim it)", async () => {
+  it("the nvidia id is RESERVED (R89-B1: a keyless row is ADOPTED in place, never duplicated)", async () => {
     expect(RESERVED_PROVIDER_IDS).toContain("nvidia");
-    // The route side of the same rule: creating a custom "nvidia" row 409s.
+    // R89-B1: POSTing the nvidia id while its seeded row is KEYLESS now
+    // ADOPTS that row (200 adopted:true — the owner's preset-configure
+    // flow). The row stays THE one reserved nvidia row — no duplicate id
+    // can ever exist (providers.id is the PK), and the request's fields
+    // land on it.
     const response = await authInject({
       method: "POST",
       url: "/api/v1/providers",
       payload: { id: "nvidia", name: "Fake NVIDIA", baseUrl: "https://evil.example/v1" },
     });
-    expect(response.statusCode).toBe(409);
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toMatchObject({ id: "nvidia", adopted: true, name: "Fake NVIDIA" });
+    // Still EXACTLY ONE nvidia row — the reserved id was not duplicated.
+    const rows = listProviderRecords(db).filter((r) => r.id === "nvidia");
+    expect(rows).toHaveLength(1);
   });
 
   it("the keyring reads ACUTE_PROVIDER_NVIDIA (the env-injection contract — keys.rs + dev.mjs)", async () => {

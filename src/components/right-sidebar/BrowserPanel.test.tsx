@@ -57,6 +57,9 @@ const nativeState = vi.hoisted(() => ({
   // R62 (D8): the agent-browser command handler's Rust side fakes.
   evalResult: null as { ok: boolean; value?: unknown; error?: string } | null,
   evalScripts: [] as string[],
+  // R89-E: a scripted SEQUENTIAL reply queue (the evalJob protocol needs
+  // start → poll → poll-done). When non-empty it takes precedence.
+  evalQueue: [] as Array<{ ok: boolean; value?: unknown; error?: string }>,
   windowMetrics: null as { x: number; y: number; scaleFactor: number } | null,
 }));
 
@@ -77,6 +80,7 @@ vi.mock("../../lib/native-browser", () => ({
   // R62 (D8): eval + screenshot geometry (the panel's bridge handler).
   nativeTabEval: vi.fn((_tabId: string, script: string) => {
     nativeState.evalScripts.push(script);
+    if (nativeState.evalQueue.length > 0) return Promise.resolve(nativeState.evalQueue.shift()!);
     return Promise.resolve(nativeState.evalResult);
   }),
   nativeWindowMetrics: vi.fn(() => Promise.resolve(nativeState.windowMetrics)),
@@ -724,6 +728,7 @@ describe("BrowserPanel native mode (R50-a child webviews over the panel)", () =>
     // command fns to the healthy default before every native test.
     nativeState.evalResult = null;
     nativeState.evalScripts = [];
+    nativeState.evalQueue = [];
     nativeState.windowMetrics = null;
     create().mockReset();
     create().mockImplementation(() => Promise.resolve());
@@ -781,7 +786,7 @@ describe("BrowserPanel native mode (R50-a child webviews over the panel)", () =>
     expect(nativeClose()).not.toHaveBeenCalledWith("tab-test-1");
   });
 
-  it("bounds sync pushes the placeholder's measured rect (natural mode = fill)", async () => {
+  it("bounds sync pushes the ASPECT-FIT preset rect (R89-E4: the stored 1440×900 default ACTUALLY applies on mount)", async () => {
     const rectSpy = vi
       .spyOn(HTMLElement.prototype, "getBoundingClientRect")
       .mockReturnValue({
@@ -801,10 +806,12 @@ describe("BrowserPanel native mode (R50-a child webviews over the panel)", () =>
       renderWithProviders(<BrowserPanel projectId="prj_test" tab={tab} />);
       await waitFor(() => expect(create()).toHaveBeenCalledWith("tab-test-1", "https://example.com"));
 
-      // After the webview exists, the rAF-debounced sync positions it exactly
-      // over the (mocked) placeholder rect — natural mode fills it.
+      // R89-E4: the default is PRESET mode now — the stored desktop
+      // 1440×900 viewport aspect-fits into the mocked 400×500 area
+      // (scale 0.278 → 400×250, centered vertically): the dimensions the
+      // readout shows are the dimensions the page actually renders at.
       await waitFor(
-        () => expect(setBounds()).toHaveBeenCalledWith("tab-test-1", 80, 120, 400, 500),
+        () => expect(setBounds()).toHaveBeenCalledWith("tab-test-1", 80, 245, 400, 250),
         { timeout: 2500 },
       );
     } finally {
@@ -976,10 +983,11 @@ describe("BrowserPanel native mode (R50-a child webviews over the panel)", () =>
       seedRightSidebar(tab);
       renderWithProviders(<BrowserPanel projectId="prj_test" tab={tab} />);
       await waitFor(() => expect(create()).toHaveBeenCalledWith("tab-test-1", "https://example.com"));
-      // Natural mode first: the bounds sync lands (rAF), the readout has a
-      // rendered size to be honest about.
+      // R89-E4: the default is the stored 1440×900 preset aspect-fit into
+      // the 400×900 area (scale 0.278 → 400×250, centered) — the readout has
+      // a rendered size to be honest about.
       await waitFor(
-        () => expect(setBounds()).toHaveBeenCalledWith("tab-test-1", 80, 120, 400, 900),
+        () => expect(setBounds()).toHaveBeenCalledWith("tab-test-1", 80, 445, 400, 250),
         { timeout: 2500 },
       );
 
@@ -1117,8 +1125,9 @@ describe("BrowserPanel native mode (R50-a child webviews over the panel)", () =>
         await vi.advanceTimersByTimeAsync(20);
       });
       expect(create()).toHaveBeenCalledWith("tab-test-1", "https://example.com");
-      // Natural mode: the webview fills the area exactly.
-      expect(setBounds()).toHaveBeenLastCalledWith("tab-test-1", 80, 120, 400, 900);
+      // R89-E4: the default is the stored 1440×900 preset, aspect-fit into
+      // the 400×900 area (scale 0.278 → 400×250, centered).
+      expect(setBounds()).toHaveBeenLastCalledWith("tab-test-1", 80, 445, 400, 250);
 
       // Preset mobile-md (390×844) fits → centered in the area.
       fireEvent.change(screen.getByTestId("browser-preset-select"), { target: { value: "mobile-md" } });
@@ -1244,6 +1253,49 @@ describe("BrowserPanel native mode (R50-a child webviews over the panel)", () =>
     expect((reply.data as { error: string }).error).toContain("SyntaxError");
   });
 
+  it("R89-E: evalJob runs the hands script, POLLS the page job, and answers with the final result", async () => {
+    // The job protocol: the start eval returns {started:true}; the poll
+    // evals read window.__acuteJob until done; the handler answers the
+    // tool with the job's result envelope.
+    nativeState.evalQueue = [
+      { ok: true, value: { started: true } },
+      { ok: true, value: { done: false, error: null, result: null } },
+      { ok: true, value: { done: true, error: null, result: { clicked: { tag: "a", text: "Next" } } } },
+    ];
+    const tab = makeTab({ browserUrl: "https://example.com" });
+    seedRightSidebar(tab);
+    renderWithProviders(<BrowserPanel projectId="prj_test" tab={tab} />);
+    await waitFor(() => expect(hasBrowserCommandHandler("tab-test-1")).toBe(true));
+
+    const reply = await getBrowserCommandHandlerForTest("tab-test-1")!("evalJob", {
+      script: "(function(){ ... the hands driver ... })()",
+    });
+    expect(reply.ok).toBe(true);
+    expect(reply.data).toEqual({ ok: true, value: { clicked: { tag: "a", text: "Next" } } });
+    // Three evals: the start + two polls, and the polls read __acuteJob.
+    expect(nativeState.evalScripts.length).toBe(3);
+    expect(nativeState.evalScripts[0]).toContain("the hands driver");
+    expect(nativeState.evalScripts[1]).toContain("__acuteJob");
+    expect(nativeState.evalScripts[2]).toContain("__acuteJob");
+  });
+
+  it("R89-E: evalJob surfaces the page job's honest failure (done with error)", async () => {
+    nativeState.evalQueue = [
+      { ok: true, value: { started: true } },
+      { ok: true, value: { done: true, error: "no element matches the CSS selector", result: null } },
+    ];
+    const tab = makeTab({ browserUrl: "https://example.com" });
+    seedRightSidebar(tab);
+    renderWithProviders(<BrowserPanel projectId="prj_test" tab={tab} />);
+    await waitFor(() => expect(hasBrowserCommandHandler("tab-test-1")).toBe(true));
+
+    const reply = await getBrowserCommandHandlerForTest("tab-test-1")!("evalJob", {
+      script: "(function(){ ... })()",
+    });
+    expect(reply.ok).toBe(false);
+    expect(reply.error).toContain("no element matches the CSS selector");
+  });
+
   it("R62: screenshot_meta reports the panel's PHYSICAL-px region (rect × scale + window origin)", async () => {
     const rectSpy = mockAreaRect(); // 80,120 → 480,1020 (400×900 logical)
     nativeState.windowMetrics = { x: 1920, y: 0, scaleFactor: 2 };
@@ -1302,6 +1354,7 @@ describe("BrowserPanel R67 — agent navigation frames (E1: instant + create-on-
     nativeState.available = true;
     nativeState.evalResult = null;
     nativeState.evalScripts = [];
+    nativeState.evalQueue = [];
     nativeState.windowMetrics = null;
     create().mockReset();
     create().mockImplementation(() => Promise.resolve());

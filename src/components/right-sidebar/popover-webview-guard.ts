@@ -1,54 +1,66 @@
 /**
  * R60-D — the popover-over-webview suppression guard.
  * R62 (D9) — generalized into the WEBVIEW OVERLAY GUARD.
+ * R89 (R89-E5) — the guard became GEOMETRIC.
  *
  * The RightSidebar's QuickMenu / SubAgentPicker popovers are portaled to
  * document.body with position:fixed — in WEB mode that is enough to render
  * above the panel. In TAURI mode the browser panel's page renderer is a
  * NATIVE CHILD WEBVIEW: an OS-level layer that floats above ALL app HTML,
- * so ANY app overlay that opens over the page area (popovers, dropdown
- * menus, dialogs, selects, the command palette) renders BEHIND the webview
- * (the owner, R62: "the browser content was showing as an overlay on top of
- * everything so if a menu opened up then it would show under the browser").
+ * so any app overlay that opens over the page area (popovers, dropdown
+ * menus, dialogs, selects, the command palette) renders BEHIND the webview.
  *
- * The R60 fix only covered the sidebar's two popovers. The R62 fix watches
- * the DOM for ANY open overlay (role=menu / role=dialog / Radix popper
- * content / explicit [data-overlay]) and hides every native webview while
- * one is open — the webview session stays alive (same background-tab
- * mechanism the panel itself uses; `browser_tab_set_visible` false).
+ * The R62 answer hid EVERY webview while ANY overlay was open — the owner's
+ * R89 verdict: "When I click on any kind of menu… the browser shows
+ * 'paused' while the menu is open… it does not seem like the browser is
+ * part of our application." The R89 answer keeps the browser LIVE unless
+ * the open overlay GEOMETRICALLY INTERSECTS the panel's page area: the
+ * watcher now records each overlay's viewport rect, and the BrowserPanel
+ * hides its webview only when one actually covers it (a menu opening in
+ * the top bar or the left rail never pauses the browser again).
  *
- * Architecture (unchanged from R60 for the popover part, extended for the
- * general part): this module is the SHARED TRUTH both sides consult —
- *  · `setPopoverWebviewSuppression(tabId|null)` — the sidebar's R60 popover
- *    flow (tab-scoped: the popover covers the ACTIVE browser tab's area).
+ * Architecture (the R60 popover part unchanged):
+ *  · `setPopoverWebviewSuppression(tabId|null)` — the sidebar's tab-scoped
+ *    popover flow (the popover covers the ACTIVE browser tab's area).
  *  · `installOverlayWebviewWatcher()` — a MutationObserver over
- *    document.body (installed once by the AppShell) that flips the store's
- *    `overlayOpen` flag while any overlay is present. Tooltips are excluded
- *    (tiny, transient — hiding the page under every hover tooltip would
- *    flash constantly).
- *  · The BrowserPanel subscribes to the store and hides/shows its webview;
- *    `nativeCreate` consults the CURRENT state at show-time (the
- *    created-while-popover-open race the R60 module fixed stays fixed).
+ *    document.body (installed once by the AppShell) that records the open
+ *    overlays' RECTS (plus a bump counter) while any is present. Tooltips
+ *    are excluded (tiny, transient).
+ *  · The BrowserPanel subscribes to the bump counter and re-evaluates
+ *    `overlayCoversRect(placeholder.getBoundingClientRect())`; the
+ *    `nativeCreate` path consults the same geometry at show-time.
  *
- * Backed by a zustand store now (plain module state before) because the
- * panel must REACT to overlay changes, not just poll them. Nothing here
- * persists — a transient UI overlay must never survive a reload.
+ * Backed by a zustand store (the panel must REACT to overlay changes).
+ * Nothing here persists — a transient UI overlay must never survive a
+ * reload.
  */
 import { create } from "zustand";
 
+/** One open overlay's viewport rect (CSS px). */
+export interface OverlayRect {
+  left: number;
+  top: number;
+  right: number;
+  bottom: number;
+}
+
 interface WebviewGuardState {
-  /** R62-D9: any app overlay (menu/dialog/popover/listbox) is open. */
-  overlayOpen: boolean;
+  /** R89-E5: the open overlays' rects (empty when none). */
+  overlayRects: OverlayRect[];
+  /** Bumped whenever overlayRects changes — the panel's re-eval trigger. */
+  overlaySeq: number;
   /** R60-D: the tab id whose webview is hidden under the sidebar popover. */
   popoverTabId: string | null;
-  setOverlayOpen: (open: boolean) => void;
+  setOverlayRects: (rects: OverlayRect[]) => void;
   setPopoverTabId: (tabId: string | null) => void;
 }
 
 export const useWebviewGuardStore = create<WebviewGuardState>()((set) => ({
-  overlayOpen: false,
+  overlayRects: [],
+  overlaySeq: 0,
   popoverTabId: null,
-  setOverlayOpen: (overlayOpen) => set({ overlayOpen }),
+  setOverlayRects: (overlayRects) =>
+    set((s) => ({ overlayRects, overlaySeq: s.overlaySeq + 1 })),
   setPopoverTabId: (popoverTabId) => set({ popoverTabId }),
 }));
 
@@ -65,31 +77,69 @@ export function isPopoverWebviewSuppressed(tabId: string): boolean {
   return useWebviewGuardStore.getState().popoverTabId === tabId;
 }
 
-/**
- * Whether `tabId`'s webview must be hidden right now for EITHER reason —
- * the tab-scoped popover guard or a global overlay (R62). This is the
- * single show/hide predicate the BrowserPanel's create path consults.
- */
-export function isWebviewHiddenNow(tabId: string): boolean {
-  const s = useWebviewGuardStore.getState();
-  return s.overlayOpen || s.popoverTabId === tabId;
+/** R89-E5: does any open overlay rect INTERSECT the given viewport rect? */
+export function overlayCoversRect(rect: {
+  left: number;
+  top: number;
+  right: number;
+  bottom: number;
+}): boolean {
+  const rects = useWebviewGuardStore.getState().overlayRects;
+  for (const o of rects) {
+    if (rect.left < o.right && o.left < rect.right && rect.top < o.bottom && o.top < rect.bottom) {
+      return true;
+    }
+  }
+  return false;
 }
 
-// ── R62-D9: the DOM overlay watcher ────────────────────────────────────────
+/**
+ * Whether `tabId`'s webview must be hidden right now for EITHER reason —
+ * the tab-scoped popover guard or a covering overlay. R89-E5: pass the
+ * panel area's rect for the GEOMETRIC overlay test; without one, ANY open
+ * overlay hides (the conservative default for call sites without geometry,
+ * e.g. the create-while-overlay-open race).
+ */
+export function isWebviewHiddenNow(
+  tabId: string,
+  area?: { left: number; top: number; right: number; bottom: number } | null,
+): boolean {
+  if (useWebviewGuardStore.getState().popoverTabId === tabId) return true;
+  if (area === undefined || area === null) {
+    return useWebviewGuardStore.getState().overlayRects.length > 0;
+  }
+  return overlayCoversRect(area);
+}
+
+// ── R62-D9 → R89-E5: the DOM overlay watcher ────────────────────────────────
 
 /** What counts as an overlay: Radix/shadcn portals + explicit markers.
  * (role="listbox" rides inside a popper wrapper for Select; tooltips are
- * filtered out below — they are too transient to blank the page for.) */
+ * filtered out below — they are too transient to blank the page for.
+ * R89-E5 adds the full-screen dialog SCRIMS — `.fixed.inset-0` — because a
+ * modal's dim layer genuinely covers the whole viewport.) */
 const OVERLAY_SELECTOR =
-  '[role="menu"], [role="dialog"], [data-radix-popper-content-wrapper], [data-overlay]';
+  '[role="menu"], [role="dialog"], [data-radix-popper-content-wrapper], [data-overlay], .fixed.inset-0';
 
-/** Is at least one non-tooltip overlay present in the DOM right now? */
-function overlayPresent(): boolean {
+/** The rects of every non-tooltip overlay present in the DOM right now.
+ * An overlay that cannot be MEASURED (zero rect — detached, or a test DOM
+ * without layout) is recorded as the FULL viewport: conservatively
+ * covering, exactly the pre-R89 behavior for the unmeasurable case. */
+function overlayRectsPresent(): OverlayRect[] {
   const nodes = document.querySelectorAll(OVERLAY_SELECTOR);
+  const rects: OverlayRect[] = [];
   for (const el of nodes) {
-    if (el.closest('[role="tooltip"]') === null) return true;
+    if (el.closest('[role="tooltip"]') !== null) continue;
+    const r = el.getBoundingClientRect();
+    if (r.width > 0 && r.height > 0) {
+      rects.push({ left: r.left, top: r.top, right: r.right, bottom: r.bottom });
+    } else {
+      const w = typeof window === "undefined" ? 0 : window.innerWidth || 1280;
+      const h = typeof window === "undefined" ? 0 : window.innerHeight || 800;
+      rects.push({ left: 0, top: 0, right: w, bottom: h });
+    }
   }
-  return false;
+  return rects;
 }
 
 let watcherInstalled = false;
@@ -100,12 +150,12 @@ let watcherObserver: MutationObserver | null = null;
 
 /**
  * Install the overlay watcher (ONCE per app — the AppShell calls this on
- * mount). A MutationObserver over document.body re-checks overlay presence
- * only when nodes are ADDED/REMOVED (attribute-only mutations can never
- * open or close a portal) and debounced 80ms so bursts (chat streaming,
- * list updates) collapse into one check. Happy-dom safe: MutationObserver
- * exists there too, and the store flip is a no-op for web mode (panels
- * only act on it in native mode).
+ * mount). A MutationObserver over document.body re-records the overlay
+ * rects only when nodes are ADDED/REMOVED (attribute-only mutations can
+ * never open or close a portal) and debounced 80ms so bursts (chat
+ * streaming, list updates) collapse into one check. Happy-dom safe:
+ * MutationObserver exists there too, and the store flip is a no-op for web
+ * mode (panels only act on it in native mode).
  */
 export function installOverlayWebviewWatcher(): void {
   if (watcherInstalled || typeof document === "undefined") return;
@@ -113,12 +163,10 @@ export function installOverlayWebviewWatcher(): void {
   const check = () => {
     watcherTimer = null;
     // CI-stability guard (the e9848a6 flake): a pending 80ms debounce can
-    // fire AFTER a test file's environment tore down (an AppShell-rendering
-    // suite finishing with a mutation in flight) — `document` is gone by
-    // then, and touching it crashed the run as an unhandled error. In the
-    // real app document always exists; this guard is inert there.
+    // fire AFTER a test file's environment tore down — `document` is gone
+    // by then. In the real app document always exists; inert there.
     if (typeof document === "undefined") return;
-    useWebviewGuardStore.getState().setOverlayOpen(overlayPresent());
+    useWebviewGuardStore.getState().setOverlayRects(overlayRectsPresent());
   };
   const observer = new MutationObserver((mutations) => {
     let structural = false;
@@ -135,7 +183,7 @@ export function installOverlayWebviewWatcher(): void {
   observer.observe(document.body, { childList: true, subtree: true });
   watcherObserver = observer;
   // Baseline state (an overlay could already be open at install time).
-  useWebviewGuardStore.getState().setOverlayOpen(overlayPresent());
+  useWebviewGuardStore.getState().setOverlayRects(overlayRectsPresent());
 }
 
 /** Test hook: reset the module-level install guard between suites. */
@@ -147,5 +195,5 @@ export function resetOverlayWatcherForTests(): void {
     window.clearTimeout(watcherTimer);
   }
   watcherTimer = null;
-  useWebviewGuardStore.setState({ overlayOpen: false, popoverTabId: null });
+  useWebviewGuardStore.setState({ overlayRects: [], overlaySeq: 0, popoverTabId: null });
 }

@@ -64,6 +64,14 @@ import {
   browserViewportCommand,
 } from "../../browser-proxy.js";
 import { sendBrowserCommand } from "../../browser-command.js";
+// ROUND-89 (R89-E): the AGENT HANDS — the visible, human-like input engine
+// (browser-hands.ts: the in-page cursor/typing/scroll runtime + drivers).
+import {
+  buildHandsClickScript,
+  buildHandsTypeScript,
+  buildHandsPressKeyScript,
+  buildHandsMouseScript,
+} from "./browser-hands.js";
 import { detectVerificationWall, openBrowserCheckpoint } from "../../browser-checkpoint.js";
 import type { VerificationWallHit } from "../../browser-checkpoint.js";
 import { requestWebFetchApproval } from "../../approvals.js";
@@ -84,135 +92,6 @@ import type { PluginDefinition, ToolDefinition } from "../registry.js";
 // USER INPUT is embedded ONLY via JSON.stringify — never string-concatenated
 // into the script (injection safety; a selector or text containing quotes
 // becomes a safely-escaped JS string literal).
-
-/** click: one element by CSS selector, or by a text-substring label match. */
-function buildClickScript(selector: string, text: string, nth: number): string {
-  return `const selector = ${JSON.stringify(selector)};
-const text = ${JSON.stringify(text)};
-const nth = ${JSON.stringify(nth)};
-let el = null;
-let matched = 0;
-if (selector !== "") {
-  el = document.querySelector(selector);
-} else {
-  const needle = text.toLowerCase();
-  const nodes = document.querySelectorAll('a, button, input[type=submit], input[type=button], [role="button"], [onclick]');
-  const found = [];
-  for (const node of nodes) {
-    const label = (
-      (node.textContent || "") + " " +
-      (node.getAttribute("aria-label") || "") + " " +
-      (node.getAttribute("name") || "") + " " +
-      (node.getAttribute("title") || "") + " " +
-      (node.value !== undefined ? String(node.value || "") : "")
-    ).toLowerCase();
-    if (label.includes(needle)) found.push(node);
-  }
-  matched = found.length;
-  el = found[nth - 1] || null;
-}
-if (el === null) {
-  return { error: selector !== "" ? "no element matches the CSS selector" : "no clickable element's label contains the text (" + matched + " matched)" };
-}
-el.scrollIntoView({ block: "center", behavior: "instant" });
-el.click();
-return { clicked: {
-  tag: el.tagName.toLowerCase(),
-  text: String(el.textContent || "").trim().slice(0, 80),
-  href: el.getAttribute("href") || undefined,
-  id: el.id || undefined,
-}};`;
-}
-
-/**
- * type: set an input's value the way FRAMEWORKS notice — the NATIVE value
- * setter (HTMLInputElement/HTMLTextAreaElement prototype descriptor) plus
- * dispatched input/change events (React/Vue override the value property, so
- * `el.value = x` alone is invisible to them). submit:true → the form's
- * requestSubmit() (native submission incl. handlers) or, without a form, a
- * synthetic Enter keydown (best effort — a JS key listener may submit).
- */
-function buildTypeScript(selector: string, text: string, submit: boolean): string {
-  return `const selector = ${JSON.stringify(selector)};
-const text = ${JSON.stringify(text)};
-const submit = ${JSON.stringify(submit)};
-let el = document.querySelector(selector);
-if (el === null) {
-  const needle = selector.toLowerCase();
-  const fields = document.querySelectorAll('input, textarea, select, [contenteditable="true"], [contenteditable=""]');
-  for (const node of fields) {
-    const label = (
-      (node.getAttribute("aria-label") || "") + " " +
-      (node.getAttribute("name") || "") + " " +
-      (node.getAttribute("placeholder") || "") + " " +
-      (node.getAttribute("id") || "") + " " +
-      (node.getAttribute("title") || "")
-    ).toLowerCase();
-    if (label.includes(needle)) { el = node; break; }
-  }
-}
-if (el === null) return { error: "no element matches the selector (CSS, or an input matching it by aria-label/name/placeholder/id substring)" };
-el.focus();
-const proto = el instanceof HTMLTextAreaElement ? HTMLTextAreaElement.prototype : (el instanceof HTMLInputElement ? HTMLInputElement.prototype : null);
-if (proto !== null) {
-  const desc = Object.getOwnPropertyDescriptor(proto, "value");
-  if (desc !== undefined && desc.set !== undefined) desc.set.call(el, text);
-  else el.value = text;
-} else if (el.isContentEditable === true) {
-  el.textContent = text;
-} else {
-  el.value = text;
-}
-el.dispatchEvent(new Event("input", { bubbles: true }));
-el.dispatchEvent(new Event("change", { bubbles: true }));
-let submitted = false;
-let submitHow = "";
-if (submit === true) {
-  const form = el.form || null;
-  if (form !== null && typeof form.requestSubmit === "function") {
-    form.requestSubmit();
-    submitted = true;
-    submitHow = "form.requestSubmit()";
-  } else {
-    el.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", code: "Enter", keyCode: 13, which: 13, bubbles: true, cancelable: true }));
-    submitHow = "synthetic Enter keydown (no form found — a page key listener may still submit)";
-  }
-}
-return { typed: selector, submitted, submitHow };`;
-}
-
-/**
- * press_key: dispatch keydown/keypress/keyup to the selector's element (or
- * the focused one). SPECIAL RULE — key "Enter" on an element inside a form
- * ALSO calls form.requestSubmit(): synthetic KeyboardEvents NEVER trigger
- * native form submission (the browser only submits on REAL trusted keys), so
- * without this the Enter key would be a no-op on a search box — THE Google
- * search bug (A3).
- */
-function buildPressKeyScript(key: string, selector: string): string {
-  return `const key = ${JSON.stringify(key)};
-const selector = ${JSON.stringify(selector)};
-const keyMap = { enter: 13, tab: 9, escape: 27, esc: 27, backspace: 8, delete: 46, arrowleft: 37, arrowup: 38, arrowright: 39, arrowdown: 40, space: 32 };
-const lower = key.toLowerCase();
-const keyCode = keyMap[lower] !== undefined ? keyMap[lower] : (key.length === 1 ? key.toUpperCase().charCodeAt(0) : 0);
-if (selector !== "") {
-  const target = document.querySelector(selector);
-  if (target === null) return { error: "no element matches the selector" };
-  if (typeof target.focus === "function") target.focus();
-}
-const el = document.activeElement || document.body;
-const code = key.length === 1 ? (lower === " " ? "Space" : "Key" + key.toUpperCase()) : key;
-const init = { key: key, code: code, keyCode: keyCode, which: keyCode, bubbles: true, cancelable: true };
-el.dispatchEvent(new KeyboardEvent("keydown", init));
-el.dispatchEvent(new KeyboardEvent("keypress", init));
-el.dispatchEvent(new KeyboardEvent("keyup", init));
-let submitted = false;
-if (key === "Enter" && el.form && typeof el.form.requestSubmit === "function") {
-  el.form.requestSubmit();
-  submitted = true;
-}
-return { pressed: key, submitted };`;
-}
 
 /** source: the page's html (outerHTML), css (stylesheets + computed style),
  * or scripts (src list + inline bodies). The total is capped INSIDE the
@@ -395,14 +274,14 @@ export const browserPlugin: PluginDefinition = {
       {
         name: "browser_control",
         description:
-          "Control the user's EMBEDDED BROWSER PANEL — a real in-app web browser the user watches live. Actions: navigate (open/change the page; absolute http(s) URL — documentation/source hosts like github.com navigate freely, other hosts ask the owner for permission first), back | forward | reload (walk that tab's history), set_viewport (change the display size the user sees — test responsive layouts; presets mobile-sm 375×667, mobile-md 390×844, tablet 768×1024, laptop 1280×800, desktop 1440×900, full-hd 1920×1080, or custom width 200-3840 × height 200-4320, zoom 0.25-3, rotate swaps w/h), read (the CURRENT page's text content, fetched fresh server-side — works in every mode), read_dom (a STRUCTURED outline of the live page as JSON — title, headings, every visible interactive element with a short CSS selector + its text/label/value + its x/y/w/h position on the page, forms with field names; include 'all' adds the text paragraphs — THE way to know the page content without screenshots — call it FIRST and click/type the exact selector paths it returns; native desktop mode only), source (the live page's raw material: html (outerHTML of the page or one selector), css (stylesheets, plus the computed style of a selector), or scripts (src list + inline bodies); native desktop mode only), click (click an element — by CSS selector, or by a case-insensitive substring of a clickable's visible text/aria-label/name/value/title, e.g. a button's label; native desktop mode only), type (set an input's value with the native value setter + input/change events so React/Vue pages register it, then optionally submit), press_key (dispatch a key to an element or the focused element — Enter inside a form triggers REAL native form submission), eval (run JavaScript INSIDE the live page and get the value back — click links with `return document.querySelector('a').click()`, fill inputs, read the DOM; the page's own state (logins, JS) is live; native desktop mode only), screenshot (capture EXACTLY what the browser panel shows + a vision-model description — panel region only, NEVER the full screen; requires Computer Use enabled in Settings and the browser tab to be open in the app; prefer read/read_dom — screenshot only when pixels are genuinely the question), get_state (currentUrl, title, viewport, canBack/canForward + this chat session's tab), wait_for_verification (the page is blocked by a bot wall — captcha/Cloudflare/age gate: opens a countdown card in the OWNER's chat and waits — default 15s, up to 60s — while the owner solves it, then re-checks the page and reports honestly). To submit a search box / form: type with submit:true, or press_key key Enter (it triggers native form submission), or click the submit button. When a tool result warns '⚠ A verification wall', call wait_for_verification — the owner gets a live countdown card in chat to solve it. sessionId optional — omit it to drive THIS chat session's own tab (auto-opened for you; never another chat session's tab). click/type/press_key/read_dom/source/eval run through the desktop app's native bridge — in web dev mode they fail fast with an honest error (read works in every mode). Viewport/page changes appear LIVE in the user's panel; announce them in one line. The page the panel shows may differ from a fresh fetch (logins, JS) — read for text, eval for the live DOM, screenshot for what the user actually sees.",
+          "Control the user's EMBEDDED BROWSER PANEL — a real in-app web browser the user watches live, driven with VISIBLE HUMAN-LIKE INPUT: a custom agent cursor moves smoothly to every target (with slight natural randomness), clicks land as real pointer events, and typing is word-by-word at a human pace (~150 WPM). HOW TO WORK: (1) SEARCH FIRST — if the task is to find/search/look something up, navigate to a search engine (https://duckduckgo.com or https://www.bing.com), TYPE the query into its search box, then submit — do NOT guess direct URLs unless the task explicitly gives one. (2) read_dom FIRST on every new page — it returns each interactive element's exact selector + x/y/w/h position, which feed the mouse ops. (3) Interact like a person: type into fields (word-by-word), click (the cursor visibly moves), press_key Enter to submit forms, mouse scroll to browse results. Actions: navigate (absolute http(s) URL; documentation/source hosts like github.com navigate freely, other hosts ask the owner for permission first), back | forward | reload (walk that tab's history), set_viewport (change the display size the user sees — test responsive layouts; presets mobile-sm 375×667, mobile-md 390×844, tablet 768×1024, laptop 1280×800, desktop 1440×900, full-hd 1920×1080, or custom width 200-3840 × height 200-4320, zoom 0.25-3, rotate swaps w/h), read (the CURRENT page's text content, fetched fresh server-side — works in every mode), read_dom (a STRUCTURED outline of the live page as JSON — title, headings, every visible interactive element with a short CSS selector + its text/label/value + its x/y/w/h position, forms with field names; include 'all' adds the text paragraphs — THE way to know the page content without screenshots — call it FIRST), source (the live page's raw material: html (outerHTML of the page or one selector), css (stylesheets, plus the computed style of a selector), or scripts (src list + inline bodies); native desktop mode only), click (click an element — by CSS selector, or a case-insensitive substring of a clickable's visible text/aria-label/name/value/title; the cursor VISIBLY moves to it and a real click fires at that exact spot; native desktop mode only), type (the cursor moves to the field, then the text is typed WORD BY WORD at ~150 WPM with real per-character events so React/Vue pages register it; newlines in the text become REAL newlines (Shift+Enter formatting — the form is NEVER submitted implicitly); pass submit:true to submit after typing; capped at 600 chars per call — split longer texts), press_key (dispatch a key to an element or the focused element — Enter inside a form triggers REAL native form submission), mouse (FULL pointer control at exact page coordinates from read_dom: op move (hover), click (left), double, right (context menu), drag (x,y → toX,toY), scroll (dx/dy pixels, optional x/y hover point) — the custom cursor visibly travels every path), eval (run JavaScript INSIDE the live page and get the value back — click links with `return document.querySelector('a').click()`, fill inputs, read the DOM; the page's own state (logins, JS) is live; native desktop mode only), screenshot (capture EXACTLY what the browser panel shows + a vision-model description — panel region only, NEVER the full screen; requires Computer Use enabled in Settings and the browser tab to be open in the app; prefer read/read_dom — screenshot only when pixels are genuinely the question), get_state (currentUrl, title, viewport, canBack/canForward + this chat session's tab), wait_for_verification (the page is blocked by a bot wall — captcha/Cloudflare/age gate: opens a countdown card in the OWNER's chat and waits — default 15s, up to 60s — while the owner solves it, then re-checks the page and reports honestly). To submit a search box / form: type with submit:true, or press_key key Enter (it triggers native form submission), or click the submit button. When a tool result warns '⚠ A verification wall', call wait_for_verification — the owner gets a live countdown card in chat to solve it. sessionId optional — omit it to drive THIS chat session's own tab (auto-opened for you; never another chat session's tab). click/type/press_key/mouse/read_dom/source/eval run through the desktop app's native bridge — in web dev mode they fail fast with an honest error (read works in every mode). Viewport/page changes appear LIVE in the user's panel; announce them in one line. The page the panel shows may differ from a fresh fetch (logins, JS) — read for text, eval for the live DOM, screenshot for what the user actually sees.",
         inputSchema: jsonSchema({
           type: "object",
           properties: {
             action: {
               type: "string",
               description:
-                "navigate | back | forward | reload | set_viewport | read | read_dom | source | click | type | press_key | eval | screenshot | get_state | wait_for_verification",
+                "navigate | back | forward | reload | set_viewport | read | read_dom | source | click | type | press_key | mouse | eval | screenshot | get_state | wait_for_verification",
               enum: [
                 "navigate",
                 "back",
@@ -415,12 +294,24 @@ export const browserPlugin: PluginDefinition = {
                 "click",
                 "type",
                 "press_key",
+                "mouse",
                 "eval",
                 "screenshot",
                 "get_state",
                 "wait_for_verification",
               ],
             },
+            op: {
+              type: "string",
+              description: "action=mouse: the pointer operation — move (hover), click (left), double, right, drag, scroll",
+              enum: ["move", "click", "double", "right", "drag", "scroll"],
+            },
+            x: { type: "number", description: "action=mouse: x in page CSS px (read_dom reports per-element x/y/w/h); scroll: optional hover point" },
+            y: { type: "number", description: "action=mouse: y in page CSS px" },
+            toX: { type: "number", description: "action=mouse op=drag: the end x" },
+            toY: { type: "number", description: "action=mouse op=drag: the end y" },
+            dx: { type: "number", description: "action=mouse op=scroll: horizontal scroll pixels (positive = right)" },
+            dy: { type: "number", description: "action=mouse op=scroll: vertical scroll pixels (positive = down)" },
             url: { type: "string", description: "Absolute http(s) URL to open (action=navigate)" },
             preset: {
               type: "string",
@@ -597,6 +488,39 @@ export const browserPlugin: PluginDefinition = {
           const pageError = (actionName: string, value: unknown): string | null => {
             const err = (value ?? {}) as { error?: unknown };
             return typeof err.error === "string" && err.error !== "" ? `browser_control: ${actionName} — ${err.error}` : null;
+          };
+
+          /** R89-E: run one AGENT-HANDS job — the script installs the cursor
+           * runtime, starts the async job, and returns {started:true} at
+           * once; the evalJob BRIDGE action (BrowserPanel) then polls the
+           * page's job state every 120ms and answers with the final result.
+           * The 30s round-trip budget covers the human-paced typing (~150
+           * WPM ≈ 12.5 chars/s — a 120-char message takes ~10s). */
+          const runPageJob = async (
+            actionName: string,
+            script: string,
+          ): Promise<{ ok: true; value: unknown } | { ok: false; output: string }> => {
+            if (toolDeps === undefined || typeof toolDeps.emit !== "function") {
+              return {
+                ok: false,
+                output: `browser_control: ${actionName} unavailable — no live stream channel in this context (${actionName} needs the app UI to drive the page)`,
+              };
+            }
+            let data: unknown;
+            try {
+              data = await sendBrowserCommand(toolDeps.emit, sessionId, "evalJob", { script }, 30_000);
+            } catch (error) {
+              return {
+                ok: false,
+                output: `browser_control: ${actionName} failed — ${error instanceof Error ? error.message : String(error)}`,
+              };
+            }
+            const result = (data ?? {}) as { ok?: unknown; value?: unknown; error?: unknown };
+            if (result.ok !== true) {
+              const message = typeof result.error === "string" ? result.error : "the page rejected the script";
+              return { ok: false, output: `browser_control: ${actionName} — page error: ${message}` };
+            }
+            return { ok: true, value: result.value ?? null };
           };
 
           // ── R66 (A4): the wall probe ───────────────────────────────────
@@ -873,7 +797,7 @@ export const browserPlugin: PluginDefinition = {
                 output: "browser_control: click requires 'selector' (CSS) or 'text' (a substring of the clickable element's label)",
               };
             }
-            const page = await runPageScript("click", buildClickScript(selector, text, nth));
+            const page = await runPageJob("click", buildHandsClickScript(selector, text, nth));
             if (!page.ok) return { ok: false, output: page.output };
             const miss = pageError("click", page.value);
             if (miss !== null) return { ok: false, output: miss };
@@ -890,8 +814,14 @@ export const browserPlugin: PluginDefinition = {
             if (selector === "" || typeof input.text !== "string") {
               return { ok: false, output: "browser_control: type requires 'selector' and 'text'" };
             }
+            if (text.length > 600) {
+              return {
+                ok: false,
+                output: `browser_control: type — the text is ${text.length} chars; the human-paced typing (150 WPM) is capped at 600 chars per call. Split the text and type it in parts.`,
+              };
+            }
             const submit = input.submit === true;
-            const page = await runPageScript("type", buildTypeScript(selector, text, submit));
+            const page = await runPageJob("type", buildHandsTypeScript(selector, text, submit));
             if (!page.ok) return { ok: false, output: page.output };
             const miss = pageError("type", page.value);
             if (miss !== null) return { ok: false, output: miss };
@@ -918,7 +848,7 @@ export const browserPlugin: PluginDefinition = {
               return { ok: false, output: "browser_control: press_key — key must be a single key name, not a long string" };
             }
             const selector = typeof input.selector === "string" ? input.selector.trim() : "";
-            const page = await runPageScript("press_key", buildPressKeyScript(key, selector));
+            const page = await runPageJob("press_key", buildHandsPressKeyScript(key, selector));
             if (!page.ok) return { ok: false, output: page.output };
             const miss = pageError("press_key", page.value);
             if (miss !== null) return { ok: false, output: miss };
@@ -926,6 +856,51 @@ export const browserPlugin: PluginDefinition = {
             return {
               ok: true,
               output: `pressed ${key} (tab '${sessionId}') → ${JSON.stringify(page.value)}${value.submitted === true ? " — the focused element's form was submitted natively (requestSubmit)." : ""}`,
+            };
+          }
+
+          // ── R89-E: mouse — the full-fledged pointer control ──────────────
+          // The owner's directive: "give it full-fledged capabilities… its
+          // own custom mouse pointer… the mouse pointer will actually be
+          // shown moving… left click or right click… the scroll
+          // functionality will work properly too." Coordinates are PAGE CSS
+          // pixels — exactly what read_dom reports per element.
+          if (action === "mouse") {
+            const opInput = input.op;
+            const op =
+              opInput === "move" || opInput === "click" || opInput === "double" || opInput === "right" || opInput === "drag" || opInput === "scroll"
+                ? opInput
+                : "";
+            if (op === "") {
+              return {
+                ok: false,
+                output: "browser_control: mouse requires 'op' — move | click | double | right | drag | scroll",
+              };
+            }
+            const numOrNull = (v: unknown): number | null =>
+              typeof v === "number" && Number.isFinite(v) ? v : null;
+            const x = numOrNull(input.x);
+            const y = numOrNull(input.y);
+            const toX = numOrNull(input.toX);
+            const toY = numOrNull(input.toY);
+            const dx = numOrNull(input.dx);
+            const dy = numOrNull(input.dy);
+            if (op === "drag" && (x === null || y === null || toX === null || toY === null)) {
+              return { ok: false, output: "browser_control: mouse drag requires x, y (start) AND toX, toY (end)" };
+            }
+            if ((op === "move" || op === "click" || op === "double" || op === "right") && (x === null || y === null)) {
+              return { ok: false, output: `browser_control: mouse ${op} requires x and y (page CSS px — read_dom reports them per element)` };
+            }
+            if (op === "scroll" && dx === null && dy === null) {
+              return { ok: false, output: "browser_control: mouse scroll requires dx and/or dy (pixels; positive = down/right)" };
+            }
+            const page = await runPageJob("mouse", buildHandsMouseScript(op, x, y, toX, toY, dx, dy));
+            if (!page.ok) return { ok: false, output: page.output };
+            const miss = pageError("mouse", page.value);
+            if (miss !== null) return { ok: false, output: miss };
+            return {
+              ok: true,
+              output: `mouse ${op} (tab '${sessionId}', the visible agent cursor performed it) → ${JSON.stringify(page.value)}`,
             };
           }
 

@@ -765,11 +765,17 @@ describe("browser_control — click (R66: element interaction via the eval bridg
     expect(result.output).toContain("button");
     expect(result.output).toContain("Search");
     expect(commands).toHaveLength(1);
-    expect(commands[0].action).toBe("eval");
+    // R89-E: click rides the evalJob bridge (the visible-cursor engine —
+    // the job protocol), not the raw eval.
+    expect(commands[0].action).toBe("evalJob");
     // Injection safety: the selector rides as a JSON string literal, never
     // concatenated raw into the script.
     expect(commands[0].script).toContain(JSON.stringify('button[type="submit"]'));
     expect(commands[0].script).toContain("scrollIntoView");
+    // The agent-hands engine markers: the cursor install + the real-click.
+    expect(commands[0].script).toContain("__acuteHands");
+    expect(commands[0].script).toContain("__acute-agent-cursor");
+    expect(commands[0].script).toContain("realClick");
   });
 
   it("click by text embeds the text + nth and scans the clickable set", async () => {
@@ -1273,9 +1279,13 @@ describe("browser_control — the R67-E description contract (read_dom-first, pe
     const bc = (tools as unknown as Record<string, { description?: string }>)["browser_control"];
     expect(bc?.description).toBeDefined();
     const description = bc?.description ?? "";
-    // read_dom FIRST, then act on the returned selector paths.
+    // read_dom FIRST, then act on the returned selectors + positions.
     expect(description).toContain("call it FIRST");
-    expect(description).toContain("selector paths it returns");
+    expect(description).toContain("x/y/w/h position");
+    // R89-E: the visible human-like input contract.
+    expect(description).toContain("SEARCH FIRST");
+    expect(description).toContain("word-by-word");
+    expect(description).toContain("~150 WPM");
     // Per-session tabs: omit sessionId → THIS chat session's own tab.
     expect(description).toContain("THIS chat session's own tab");
     expect(description).not.toContain("defaults to the tab the user is currently viewing");
@@ -1288,5 +1298,61 @@ describe("browser_control — the R67-E description contract (read_dom-first, pe
     // The R66 form-submission teaching stays (submit:true / Enter).
     expect(description).toContain("type with submit:true");
     expect(description).toContain("native form submission");
+  });
+});
+
+// ── ROUND-89 (R89-E): the AGENT HANDS — the mouse action + the job bridge ──
+
+describe("browser_control — mouse (R89-E: the full-fledged pointer control)", () => {
+  it("mouse click sends the evalJob command carrying the cursor engine + the exact coordinates", async () => {
+    const commands: Array<{ action: string; script: string }> = [];
+    const emit = (event: unknown) => {
+      const frame = event as { type: string; commandId: string; action: string; payload: { script?: string } };
+      commands.push({ action: frame.action, script: String(frame.payload.script ?? "") });
+      queueMicrotask(() =>
+        resolveBrowserCommand(frame.commandId, { ok: true, data: { ok: true, value: { clicked: { tag: "a", text: "Next" } } } }),
+      );
+    };
+    const tools = await buildTools(tempDir, { emit });
+    const bc = tool(tools, "browser_control");
+
+    const result = await bc.execute({ action: "mouse", op: "click", x: 341, y: 262, sessionId: "tab-mouse" });
+    expect(result.ok).toBe(true);
+    expect(commands).toHaveLength(1);
+    expect(commands[0].action).toBe("evalJob");
+    // The coordinates ride as literals; the engine + the click kind are in.
+    expect(commands[0].script).toContain("341");
+    expect(commands[0].script).toContain("262");
+    expect(commands[0].script).toContain('"click"');
+    expect(commands[0].script).toContain("moveCursor");
+    expect(commands[0].script).toContain("realClick");
+    // The job protocol: the driver pends on window.__acuteJob.
+    expect(commands[0].script).toContain("startJob");
+    expect(() => new Function(commands[0].script)).not.toThrow();
+  });
+
+  it("validates the op + the required coordinates per op", async () => {
+    const tools = await buildTools(tempDir);
+    const bc = tool(tools, "browser_control");
+    const badOp = await bc.execute({ action: "mouse", op: "wiggle", sessionId: "tab-mouse" });
+    expect(badOp.ok).toBe(false);
+    expect(badOp.output).toContain("requires 'op'");
+    const noXY = await bc.execute({ action: "mouse", op: "click", sessionId: "tab-mouse" });
+    expect(noXY.ok).toBe(false);
+    expect(noXY.output).toContain("requires x and y");
+    const noDxDy = await bc.execute({ action: "mouse", op: "scroll", sessionId: "tab-mouse" });
+    expect(noDxDy.ok).toBe(false);
+    expect(noDxDy.output).toContain("dx and/or dy");
+    const dragMissing = await bc.execute({ action: "mouse", op: "drag", x: 1, y: 2, sessionId: "tab-mouse" });
+    expect(dragMissing.ok).toBe(false);
+    expect(dragMissing.output).toContain("toX, toY");
+  });
+
+  it("type rides the evalJob engine and caps the human-paced text at 600 chars", async () => {
+    const tools = await buildTools(tempDir);
+    const bc = tool(tools, "browser_control");
+    const tooLong = await bc.execute({ action: "type", selector: "#q", text: "x".repeat(601), sessionId: "tab-mouse" });
+    expect(tooLong.ok).toBe(false);
+    expect(tooLong.output).toContain("capped at 600");
   });
 });

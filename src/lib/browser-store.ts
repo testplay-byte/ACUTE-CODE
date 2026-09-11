@@ -86,6 +86,15 @@ export interface BrowserTabUiState {
   error: string | null;
   /** Increments on every intent to (re)load the iframe. */
   navSeq: number;
+  /** ROUND-89 (R89-E4, the owner: "I told you to keep the dimensions as I
+   * told you, but they were not being applied properly. Even though it was
+   * showing that these dimensions are being used by default, those
+   * dimensions were not being used"): FALSE by default — the stored viewport
+   * (desktop 1440×900) ACTUALLY applies on mount, aspect-fit scaled into
+   * the panel. TRUE only when the user picks "Natural (fill panel)" —
+   * persisted per tab so the choice survives remounts (the pre-R89
+   * panel-local `useState(true)` silently ignored the default preset). */
+  natural: boolean;
   /** ROUND-66 (R66, A5): increments whenever an AGENT-side display-size
    * change lands (the instant browser-viewport SSE frame, or a poll that
    * sees a server viewport DIFFER from the local one on a SIZE field). The
@@ -272,6 +281,9 @@ interface BrowserTabStoreState {
   ) => Promise<void>;
   /** Toggle the panel-only fit preference. */
   setFit: (tabId: string, fit: boolean) => void;
+  /** R89-E4: set the per-tab NATURAL-fill flag (true = the webview fills the
+   * panel area, ignoring the viewport preset; persisted per tab). */
+  setNatural: (tabId: string, natural: boolean) => void;
   /** Poll merge (history + viewport); follows agent-driven changes. */
   refresh: (tabId: string) => Promise<void>;
   /** ROUND-66 (R66, A5): apply an AGENT-side viewport change instantly (the
@@ -316,6 +328,7 @@ function freshTab(sessionId: string): BrowserTabUiState {
     canForward: false,
     viewport: { ...BROWSER_VIEWPORT_DEFAULT },
     fit: true,
+    natural: false,
     loading: false,
     error: null,
     navSeq: 0,
@@ -472,6 +485,7 @@ export const useBrowserTabStore = create<BrowserTabStoreState>()((set, get) => (
     }
   },
   setFit: (tabId, fit) => set((s) => patchTabState(s, tabId, { fit })),
+  setNatural: (tabId, natural) => set((s) => patchTabState(s, tabId, { natural })),
   refresh: async (tabId) => {
     const tab = get().tabs[tabId];
     if (tab === undefined || tab.ticket === null) return;

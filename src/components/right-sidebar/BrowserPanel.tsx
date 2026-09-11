@@ -45,7 +45,7 @@ import { isTauri } from "../../lib/sidecar";
 // itself while a RightSidebar popover covers the page area. R62: the guard
 // module is now store-backed + also carries the GLOBAL overlay flag (any
 // open menu/dialog/popover hides every webview — the owner's z-order fix).
-import { isWebviewHiddenNow, useWebviewGuardStore } from "./popover-webview-guard";
+import { isWebviewHiddenNow, overlayCoversRect, useWebviewGuardStore } from "./popover-webview-guard";
 // R62 (D8): the agent-browser command bridge — this panel is the handler:
 // eval runs in THIS tab's webview; screenshot_meta reports this panel's
 // on-screen rect + window metrics for the computer-use region capture.
@@ -421,29 +421,36 @@ export function BrowserPanel({
   /** Latest render's effective viewport dims (read inside sync callbacks). */
   const effectiveViewportRef = useRef<{ width: number; height: number } | null>(null);
   /**
-   * Natural mode: the webview fills the page area (no preset). The DEFAULT in
-   * native mode — a real browser panel just fills — while presets remain one
-   * click away for responsive testing (the agent's display-size feature).
+   * Natural mode (the webview fills the page area, no preset). R89-E4: this
+   * now reads the STORE's per-tab `natural` flag (persisted, default FALSE
+   * — the stored desktop 1440×900 preset applies on mount, exactly as the
+   * owner directed: "keep the dimensions as I told you"). The pre-R89
+   * panel-local `useState(true)` silently ignored the default preset —
+   * the readout said 1440×900 while the page rendered at the panel's
+   * natural size (the owner's "dimensions were not being applied"
+   * verdict).
    *
-   * ROUND-66 (R66, A5 — the owner's "the agent changed the view to a wider
-   * aspect ratio… the improvements were not applied, I had to manually
-   * change one number"): agent-side viewport changes (browser_control
-   * set_viewport) used to update the STORE but this panel-local gate kept
-   * effectiveViewport null, so nothing rendered differently until a manual
-   * number edit flipped it. The store now bumps agentViewportSeq on every
-   * agent-side change (the instant browser-viewport SSE frame + the 4s
-   * poll's size-field diff), and THIS effect exits natural mode in response
-   * — the agent's display-size change applies live, exactly like the owner
-   * manually picking the preset.
+   * ROUND-66 (A5 — the owner's "the agent changed the view… the improvements
+   * were not applied, I had to manually change one number"): agent-side
+   * viewport changes (browser_control set_viewport) bump agentViewportSeq,
+   * and THIS effect clears the natural flag in response — the agent's
+   * display-size change applies live, exactly like the owner manually
+   * picking the preset.
    */
-  const [naturalSize, setNaturalSize] = useState(true);
+  const naturalSize = state?.natural ?? false;
+  const setNaturalSize = useCallback(
+    (value: boolean) => {
+      useBrowserTabStore.getState().setNatural(tabId, value);
+    },
+    [tabId],
+  );
   const agentViewportSeq = state?.agentViewportSeq ?? 0;
   const agentViewportSeqRef = useRef(agentViewportSeq);
   useEffect(() => {
     if (agentViewportSeq === agentViewportSeqRef.current) return;
     agentViewportSeqRef.current = agentViewportSeq;
     if (agentViewportSeq > 0) setNaturalSize(false);
-  }, [agentViewportSeq]);
+  }, [agentViewportSeq, setNaturalSize]);
 
   /**
    * ROUND-67 (R67, E1): the agent-navigation driver. The store bumps
@@ -652,7 +659,7 @@ export function BrowserPanel({
           // NOT show its webview at create time — it would float above the
           // active tab's content (OS-level webviews sit above all HTML).
           // The hidden-prop effect below owns its reveal on activation.
-          if (hiddenRef.current || isWebviewHiddenNow(tabId)) {
+          if (hiddenRef.current || isWebviewHiddenNow(tabId, placeholderRef.current?.getBoundingClientRect() ?? null)) {
             // Created hidden (Rust builds webviews hidden until the first
             // bounds sync) — keep it that way; the guard subscription's
             // restore owns the first show.
@@ -707,18 +714,24 @@ export function BrowserPanel({
     // the webview on each URL change. nativeCreate's identity covers tabId.
   }, [tabId, nativeMode, nativeCreate]);
 
-  // ── native: R62 overlay-hide subscription (replaces the standalone zoom
-  // effect — the zoom now rides syncBounds, composed with the fit scale) ──
-  // R62-D9: hide/show the webview whenever the overlay guard flips. The
-  // guard (popover-webview-guard.ts) is store-backed now: the sidebar's
-  // popover flow flips `popoverTabId`, and the AppShell's DOM watcher flips
-  // `overlayOpen` while ANY menu/dialog/popover is open (OS-level webviews
-  // float above all app HTML — the owner's "menus show under the browser"
-  // fix). This panel is the single visibility writer for ITS tab; the
-  // sidebar's own guarded-restore calls agree with it (same state).
-  const overlayOpen = useWebviewGuardStore((s) => s.overlayOpen);
+  // ── native: the overlay-hide subscription (R62 → R89-E5 GEOMETRIC) ──
+  // hide/show the webview whenever the overlay guard changes. The guard
+  // (popover-webview-guard.ts) is store-backed: the sidebar's popover flow
+  // flips `popoverTabId`, and the AppShell's DOM watcher records the open
+  // overlays' RECTS. R89-E5 (the owner: "When I click on any kind of menu…
+  // the browser shows 'paused'… it does not seem like the browser is part
+  // of our application"): the webview hides only when an overlay actually
+  // INTERSECTS this panel's page area — a menu opening in the top bar or
+  // the left rail keeps the browser LIVE. This panel stays the single
+  // visibility writer for ITS tab.
+  const overlaySeq = useWebviewGuardStore((s) => s.overlaySeq);
   const popoverTabId = useWebviewGuardStore((s) => s.popoverTabId);
-  const webviewHidden = overlayOpen || popoverTabId === tabId || hidden;
+  const [overlayCoversPanel, setOverlayCoversPanel] = useState(false);
+  useEffect(() => {
+    const el = placeholderRef.current;
+    setOverlayCoversPanel(el !== null && overlayCoversRect(el.getBoundingClientRect()));
+  }, [overlaySeq]);
+  const webviewHidden = overlayCoversPanel || popoverTabId === tabId || hidden;
   useEffect(() => {
     if (!nativeMode || !nativeReadyRef.current) return;
     void nativeTabSetVisible(tabId, !webviewHidden).catch(nativeWarn);
@@ -744,6 +757,57 @@ export function BrowserPanel({
         // data IS the Rust command's {ok, value|error} envelope — the tool
         // reads data.ok/data.value directly.
         return { ok: true, data: result };
+      }
+      // ── R89-E: the AGENT-HANDS job protocol ─────────────────────────────
+      // The hands script installs the cursor runtime, starts the async job
+      // (window.__acuteJob — the human-paced animation runs in the page
+      // BEYOND the Rust eval's 3s callback budget), and returns
+      // {started:true} at once. THIS handler then polls the job's state
+      // every 120ms and answers with the final result — each poll is its
+      // own short eval, so no Rust changes were needed.
+      if (action === "evalJob") {
+        const script = typeof payload.script === "string" ? payload.script : "";
+        if (script === "") return { ok: false, error: "evalJob: empty script" };
+        const start = await nativeTabEval(tabId, script);
+        if (start === null) {
+          return { ok: false, error: "evalJob unavailable — the native browser bridge is not present" };
+        }
+        if (!start.ok) {
+          return { ok: false, error: start.error ?? "the page rejected the hands script" };
+        }
+        const started = (start.value ?? {}) as { started?: unknown; error?: unknown };
+        if (typeof started.error === "string" && started.error !== "") {
+          return { ok: false, error: started.error };
+        }
+        if (started.started !== true) {
+          return { ok: false, error: "evalJob: unexpected start payload (no job started)" };
+        }
+        const POLL_MS = 120;
+        const JOB_BUDGET_MS = 25_000;
+        const deadline = Date.now() + JOB_BUDGET_MS;
+        for (;;) {
+          await new Promise((r) => setTimeout(r, POLL_MS));
+          const poll = await nativeTabEval(
+            tabId,
+            "return window.__acuteJob ? {done: window.__acuteJob.done, error: (window.__acuteJob.error || null), result: (window.__acuteJob.result === undefined ? null : window.__acuteJob.result)} : {done: true, error: 'the job vanished (the page navigated away)'};",
+          );
+          if (poll === null) {
+            return { ok: false, error: "evalJob poll unavailable — the native browser bridge is not present" };
+          }
+          if (!poll.ok) {
+            return { ok: false, error: poll.error ?? "the job state poll failed" };
+          }
+          const state = (poll.value ?? {}) as { done?: unknown; error?: unknown; result?: unknown };
+          if (typeof state.error === "string" && state.error !== "") {
+            return { ok: false, error: `the page job failed: ${state.error}` };
+          }
+          if (state.done === true) {
+            return { ok: true, data: { ok: true, value: state.result ?? null } };
+          }
+          if (Date.now() > deadline) {
+            return { ok: false, error: "the page job timed out (25s — the page may be wedged)" };
+          }
+        }
       }
       if (action === "screenshot_meta") {
         const el = placeholderRef.current;
