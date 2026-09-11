@@ -1,4 +1,4 @@
-<!-- last-reviewed: 2026-09-11 round-87 -->
+<!-- last-reviewed: 2026-09-11 round-90 -->
 # Round 68 — the computer-use overhaul: screenshots land INLINE at the capture moment, the monitor vanishes from captures, Windows input rides raw SendInput, and Edge's web tree becomes searchable
 
 **Date:** 2026-09-06 · **Branch:** `main` · **Version:** 0.68.0 · **Owner

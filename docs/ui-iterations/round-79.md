@@ -1,4 +1,4 @@
-<!-- last-reviewed: 2026-09-11 round-87 -->
+<!-- last-reviewed: 2026-09-11 round-90 -->
 # Round 79 — The Orchestrator Round (delegate_task task_id / background / resume)
 
 **Provenance:** the standing **R73 deferral** — "delegate_task

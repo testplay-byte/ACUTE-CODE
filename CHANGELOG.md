@@ -19,6 +19,70 @@ seams), external plugin ctx enrichment, the lessons-ledger affordance,
 ratings-driven prompt tuning, and the standing items (edit-linting, installer
 code-signing, the Files-tab polish, agent web-app-testing tools).
 
+## [0.88.0] - 2026-09-11 — the R90 browser-native round
+
+The owner's second end-to-end walkthrough, answered: menus finally float ON
+TOP of the live embedded browser, the agent's hands look and pace like a
+person's, deleting a provider explains itself, and the setup wizard's choices
+finally outlive the wizard.
+
+### Added — the browser feels native (the headline)
+- **Menus render ON TOP of the live browser**: the right sidebar's quick
+  menu and sub-agent picker now open in their own small always-above
+  window (transparent, borderless, owned by the app window) — clicking
+  "+" with a page open keeps the page LIVE underneath. The old behavior
+  (the page hiding behind a "browser paused while the menu is open"
+  caption) only survives as the degraded fallback (plain browser-dev
+  mode), where it is honest.
+
+### Added — the agent's hands, v2 (watch it work)
+- **The cursor is ALWAYS on the page**: every page load paints the agent's
+  cursor from its first frame, parked at a natural resting spot between
+  actions — it never "disappears" after a navigation anymore.
+- **Human movement**: the cursor overshoots slightly and returns (or
+  hesitates mid-flight), travels curved paths with micro-jitter, and
+  settles on arrival — no more straight-line precision.
+- **A real event trail**: as the cursor travels, real hover/mouse-move
+  events fire at its exact position — hover-driven dropdown menus and
+  nav bars actually open when the agent's pointer crosses them.
+- **Visible, human-paced input**: a click is a visible press (the cursor
+  squashes and springs back); typing TAPS the field first, waits ~1s,
+  then types word-by-word at ~150 WPM; the Enter key lands ~1s after the
+  typing finishes — exactly the beats a person has.
+
+### Fixed — settings & providers
+- **Deleting a provider explains itself**: a provider that agents still
+  use is refused with a RED message right in the Danger zone (and an
+  "in use by …" warning before the click) — the old flow showed the
+  refusal ~1500px above the click, in the accent color, which read as a
+  dead button. The OS-stored key is also purged on a successful delete
+  (re-adding the provider no longer shows "key stored" on the old key).
+- **The setup wizard's choices persist**: "Save & Continue" now saves the
+  model you picked (with the context/max-output/pricing you set), makes
+  it the default for new chats, and points the default agent at it —
+  previously only the API key survived the wizard.
+- **New chats keep the last-used model** (and its provider): the composer
+  no longer regresses to the seeded OpenRouter/GLM default when a session
+  has no override of its own.
+
+### Fixed — the model card
+- Capabilities are ICONS ONLY (colored SVG badges; hover for the tooltip)
+  with an ARROW flowing from the input badges to the output badges, and
+  the stats band (context / input / output / cache read) is fused into
+  ONE highlighted card under the name.
+
+### Fixed — the launcher's update token
+- **"Check for updates" works after acute.bat**: the launcher now saves
+  the GitHub token in your USER HOME (`~/.acute/github.pat`) — migrating
+  any token the old launcher left in the kit folder — and hands it to the
+  app through the environment, so the private-repo update check finds it
+  on every run.
+
+### Fixed — the browser panel
+- **No more floating webview when switching chats**: a page that was
+  still loading when you opened a new chat no longer leaves the old
+  browser window floating over the new chat area.
+
 ## [0.87.0] - 2026-09-11 — the R89 owner's-verdict round
 
 The full walkthrough of v0.86.0, answered item by item: the About/reset

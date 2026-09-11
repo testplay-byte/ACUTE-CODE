@@ -1,4 +1,4 @@
-<!-- last-reviewed: 2026-09-11 round-87 -->
+<!-- last-reviewed: 2026-09-11 round-90 -->
 
 # Round 33 — Behavioral Fixes + Sidebar System + Settings Design Prompt
 

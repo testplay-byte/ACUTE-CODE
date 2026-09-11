@@ -1,4 +1,4 @@
-<!-- last-reviewed: 2026-09-11 round-87 -->
+<!-- last-reviewed: 2026-09-11 round-90 -->
 # Round 42 — Desktop notifications with the window CLOSED (Web Push) · Launcher auto-open · Browser fallback · Sidebar/layout polish
 
 **Date:** 2026-08-26 · **Branch:** `main` · **Owner directives:** the round-42

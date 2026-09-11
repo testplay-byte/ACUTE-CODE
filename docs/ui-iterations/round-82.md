@@ -1,4 +1,4 @@
-<!-- last-reviewed: 2026-09-10 round-86 -->
+<!-- last-reviewed: 2026-09-11 round-90 -->
 <!-- the R82 history still tells the truth -->
 # Round 82 — Models & Providers Hardening (the owner's field report round 2)
 

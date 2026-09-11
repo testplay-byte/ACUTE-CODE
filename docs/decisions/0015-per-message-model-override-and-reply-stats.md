@@ -1,4 +1,4 @@
-<!-- last-reviewed: 2026-09-11 round-87 -->
+<!-- last-reviewed: 2026-09-11 round-90 -->
 # ADR-0015: Per-message model override + per-reply stats on assistant events
 
 - **Status:** ACCEPTED (backfilled round-17; decided in round-16)

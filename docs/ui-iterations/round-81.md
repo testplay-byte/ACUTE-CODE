@@ -1,4 +1,4 @@
-<!-- last-reviewed: 2026-09-10 round-85 -->
+<!-- last-reviewed: 2026-09-11 round-90 -->
 # Round 81 — The Unified Operating Modes (one picker, three modes)
 
 **Provenance:** the owner's verbatim directive (the R81 session):

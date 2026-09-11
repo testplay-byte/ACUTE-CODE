@@ -1,4 +1,4 @@
-<!-- last-reviewed: 2026-09-11 round-87 -->
+<!-- last-reviewed: 2026-09-11 round-90 -->
 # MODULARITY ASSESSMENT — the structure audit for the extension-based vision
 
 **Status:** reference · **Established:** round-80 (docs-only analysis round, owner-directed) · **Updated:** round-85 (the post-R84 re-assessment) · **Advanced:** round-86 (the R85 claims re-verified + the SSE domain extracted) · **Advanced:** round-87 (the UX + capability round — feature work, not structural; the boundary effects recorded below) · **Audience:** the owner deciding the R88+ direction; any agent planning structural work

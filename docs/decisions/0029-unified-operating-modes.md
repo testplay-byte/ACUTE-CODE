@@ -1,4 +1,4 @@
-<!-- last-reviewed: 2026-09-10 round-85 -->
+<!-- last-reviewed: 2026-09-11 round-90 -->
 # ADR-0029: Unified operating modes — one picker, three modes
 
 - **Status:** ACCEPTED

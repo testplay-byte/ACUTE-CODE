@@ -1,4 +1,4 @@
-<!-- last-reviewed: 2026-09-11 round-87 -->
+<!-- last-reviewed: 2026-09-11 round-90 -->
 # n8n → ACUTE-CODE: Adoption Patterns (no-rewrite plan)
 
 How the automation pillar lands on TODAY's codebase additively — the owner's

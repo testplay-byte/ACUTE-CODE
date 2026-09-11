@@ -1,4 +1,4 @@
-<!-- last-reviewed: 2026-09-11 round-87 -->
+<!-- last-reviewed: 2026-09-11 round-90 -->
 # ADR-0009: [ASSUMPTION] Sidecar packaging — bundled Node runtime + esbuild single-file bundle
 
 - **Status:** ACCEPTED (assumption — smaller option chosen without owner input; surfaced for ratification)

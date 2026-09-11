@@ -1,4 +1,4 @@
-<!-- last-reviewed: 2026-09-11 round-87 -->
+<!-- last-reviewed: 2026-09-11 round-90 -->
 # DEMO — Phase 2: Core Skeleton (≤2 minutes)
 
 **Goal:** create an agent in the UI and complete one real conversation with it. This is the Phase 2 exit criterion.

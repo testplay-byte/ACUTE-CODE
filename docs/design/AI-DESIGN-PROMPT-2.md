@@ -1,4 +1,4 @@
-<!-- last-reviewed: 2026-09-11 round-87 -->
+<!-- last-reviewed: 2026-09-11 round-90 -->
 # ACUTE-CODE — Design Prompt 2: Chat Window Refinements (Round 32)
 
 **Purpose:** the owner's R32 directive — the chat window's bottom area (how the

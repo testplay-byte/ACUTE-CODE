@@ -258,10 +258,15 @@
     {
       "date": "2026-09-11",
       "label": "R89 — the owner's-verdict round: the full v0.86.0 walkthrough answered, shipped as v0.87.0. (A) The update check runs SERVER-SIDE with the launcher's saved PAT (the private-repo HTTP 404 fixed), the Releases button opens the OS browser, and the reset now clears the first-run gate (the app boots the SETUP WIZARD after 'Reset everything'). (B) Provider identity: the NAME is the uniqueness key, keyless preset rows are ADOPTED in place (the 'NVIDIA already exists' fresh-reset bug), same-type adds derive fresh ids (as many OpenRouters as needed), presets carry their API format (never asked), the chat picker lists only ADDED providers, and the last-used model becomes the next chats' default. (C) Models UI: clean human model names (Llama 3.3 70b Instruct), themed SVG capability chips, 1M/131K token formatting, the dedicated details strip (Context/Input/Output/Cache read), and the test result expanding its own section below the card. (D) Layout honesty: the dynamic sidebar cap (the chat reaches its floor at ANY window width), the logo-only model pill at minimum, padding tiers, overflow guards. (E) THE AGENT HANDS: a visible branded cursor traveling human bezier paths, real left/right/double clicks + drags at exact page coordinates, word-by-word typing at ~150 WPM with Shift+Enter newline semantics, smooth scrolling, the 1440×900 default viewport actually applying, and the GEOMETRIC overlay guard (the browser stays live when menus open away from it). (F) The TodoFloat frosted-glass blur. Full pipeline green: frontend 2,885 + agent-core 1,892 tests, e2e 12/12, license audit clean."
+    },
+    {
+      "date": "2026-09-11",
+      "label": "R90 — the browser-native round: the owner's second walkthrough answered, shipped as v0.88.0. The MENU OVERLAY WINDOW (menus float on top of the LIVE browser — the headline verdict), the agent hands v2 (always-visible cursor, human path planner, real event trail, visible press pulse, tap→1s→type→~1s→Enter), the delete-provider honesty (inline 409 + the OS-key purge — the R82 TODO closed), the wizard's persistence (model row + last-used default + the seeded agent re-pointed), the model card (icon badges + the arrow + one merged section), the launcher PAT home-path fix (the update check works after acute.bat), and the floating-webview race fix. The full pipeline green: lint, both typechecks, 2,888 frontend + 1,894 agent-core tests, the 4-page build (menu-overlay.html rides as the 4th vite entry), 12/12 e2e, the license audit, 16/16 launcher python tests.",
+      "state": "done"
     }
   ],
   "quality": {
-    "ci": "GREEN — R89 push 1ad6bf4 → CI run 34607758325 SUCCESS (the owner's-verdict round: lint, typechecks, the 2,885-test root suite, build, e2e, license audit, cargo check, docs check) + the Release run 34607775963 SUCCESS; v0.87.0 tagged, built, and PUBLISHED (both assets verified: ACUTE-CODE_0.87.0_x64-setup.exe + acute-launcher-kit-v0.87.0.zip; zero drafts remain). The three intermediate phase pushes (5f47b3d/e4f5376/7f28ea3) ran red on the SAME known cause (the r80-nvidia reserved-id test still asserting the pre-R89 409 — fixed in 09efdfd which ran GREEN before the tag).",
+    "ci": "PENDING — R90: local pipeline fully green (eslint, both typechecks, 2,888 frontend + 1,894 agent-core tests, the 4-page build, 12/12 e2e, license audit clean, 16/16 launcher tests); the tag push + the CI/Release verdicts sync here at close-out.",
     "suites": [
       {
         "name": "frontend",
@@ -294,8 +299,8 @@
   ],
   "plan": {
     "current": {
-      "title": "R87 — the UX + capability round",
-      "detail": "The owner's improvement list: the About section + the full application reset; credentials.txt removed from the launcher; ask_user (the mid-task question card with options + custom answers) + the todo list visible in chat; the Models & Providers redesign (configure-before-add, the input/output capability chips, the animated self-dismissing test button, the NVIDIA phantom-add fix); the embedded browser (1440×900 default, keep-alive tabs, read_dom positions, panel-only screenshots); the chat/shell layout batch (adaptive scrollbars, halved chat min width, graduated composer shrink, the selector hover-path fix + frosted glass, the sidebar expand-on-click). v0.85.0."
+      "title": "R90 — the browser-native round",
+      "detail": "The owner's second end-to-end walkthrough, shipped as v0.88.0. (A) The settings cluster: the delete-provider refusal now renders INLINE in the Danger zone (the old dead-click) with a pre-armed 'in use by N agents' warning + the OS-stored key purged on delete; the model card is icon-only capability badges with an inputs→outputs ARROW and ONE merged highlighted section; the setup wizard persists the MODEL (context/max-output/pricing), the global last-used default, and re-points the seeded agent; new chats keep the last-used model. (B) The launcher's GitHub token lives in the USER HOME (migrated from the kit folder) and reaches the app through the environment — the update check finally works after acute.bat. (C) The browser's native feel: the sidebar's quick menu + sub-agent picker render in an OWNED transparent OS window ABOVE the live browser (the 'browser paused while the menu is open' retirement — the R60-D hide stays only as the web-mode fallback), and the create-after-unmount race that floated the old chat's webview is closed. (D) The agent hands v2: the cursor is ALWAYS visible (the webview's initialization script paints it at every page load), moves with overshoot-and-return + hesitation + a real pointermove/hover trail (dropdowns open), clicks visibly (a press pulse + a held duration), and types at a human pace (tap → ~1s → 150 WPM word-by-word → ~1s → Enter)."
     },
     "upcoming": [
       {
@@ -320,6 +325,6 @@
       "Quality over speed — every round verified before push"
     ]
   },
-  "round": 88,
+  "round": "90",
   "ci": null
 }
