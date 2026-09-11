@@ -92,6 +92,21 @@ the new one.
 | e2e (Playwright smoke) | 12 / 12 |
 | License audit | clean (134 deps) |
 | Launcher python tests | 16 / 16 (10 R74 + 6 new) |
+| **CI (windows-latest)** | **run 34634030474 SUCCESS** (push 5e4c21a — the full verify pipeline) |
+| **Release** | **run 34634033426 SUCCESS → v0.88.0 PUBLISHED (both assets, latest, zero drafts)** |
+
+The honest failure record: the first tagging (912e0b4) ran CI RED twice and
+Release RED once before 5e4c21a ran green. (1) The launcher's `panel()`
+crashed on the runner's cp1252 console — a real legacy-codepage Windows bug
+(box-drawing characters at the very first print), fixed by reconfiguring
+stdout/stderr to UTF-8 with replacement (eafd91b). (2) Two Rust compile
+slips in the menu-overlay code (a doc comment on a fn parameter — illegal
+Rust; and the `WebviewWindowBuilder` generics/arity) — the sandbox had no
+Rust toolchain, so CI was the first compiler that saw them (fixed in
+5e4c21a). That gap is now closed permanently: the sandbox runs a
+**windows-target cargo check** (rustup + an llvm-rc shim — the .res embed
+is link-time only) that reproduces the CI's exact typecheck before any
+push.
 
 ## 5. What did NOT change (the owner confirmed it good)
 
