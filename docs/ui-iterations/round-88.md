@@ -85,6 +85,8 @@ R87 follow-through the owner re-specified)
 | Typecheck (tsc) | CLEAN |
 | Build (shared + agent-core + vite) | SUCCESS |
 | e2e (vs built dist) | 12/12 GREEN |
+| CI (windows-latest) | **run 34588692731 SUCCESS** on the R88 push 3864f7b — the full verify pipeline green |
+| Release workflow | **run 34588694409 SUCCESS** — v0.86.0 installer (36.6 MB) + kit (96 KB) built, PUBLISHED at close-out (both assets verified, zero drafts remain) |
 | Registry pins | prompt-registry + r73-modes-backend updated 24 → 25 (versioned-by-design); MODES_CTX completeness gate opened for todo-list; the BYTE-IDENTITY golden unchanged (strict gating proof) |
 
 New tests: the route contract (200 + normalization + source event, 404/409/

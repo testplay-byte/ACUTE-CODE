@@ -257,7 +257,7 @@
     }
   ],
   "quality": {
-    "ci": "GREEN — R87 push 7b6e47e (the close-out fix over the initial 3735f93 failures: the two new suites left their SQLite handles open → Windows-only EPERM on the afterAll temp-dir removal, now closed per-test per the repo's standing pattern; the kit assembly still copied the deleted credentials.example.txt) → CI run 34584230413 SUCCESS (lint, typechecks, the 2,839-test root suite in 157 files, build, e2e, license audit, cargo check, docs check) + the Release run 34584240071 SUCCESS; v0.85.0 tagged, built, and PUBLISHED (both assets verified, zero drafts remain). The R86 verdict underneath: push 38ffc83 → run 34515808594 SUCCESS.",
+    "ci": "GREEN — R88 push 3864f7b → CI run 34588692731 SUCCESS (the floating to-do list round: lint, typechecks, the 2,842-test root suite in 157 files, build, e2e, license audit, cargo check, docs check) + the Release run 34588694409 SUCCESS; v0.86.0 tagged, built, and PUBLISHED (both assets verified, zero drafts remain). The R87 verdict underneath (the close-out fix 7b6e47e): CI run 34584230413 + Release run 34584240071 both SUCCESS; v0.85.0 published.",
     "suites": [
       {
         "name": "frontend",
@@ -317,5 +317,5 @@
     ]
   },
   "round": 88,
-  "ci": "PENDING (R88 push — this entry is synced at close-out per the convention)"
+  "ci": null
 }
