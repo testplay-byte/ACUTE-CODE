@@ -113,6 +113,15 @@ export interface PromptContext {
    * mutation; the delegation.collected events on the session log own the
    * durable collected state the builder consults. */
   backgroundTasks?: import("../storage/sessions.js").BackgroundTasksPayload;
+  /** ROUND-88 (R88, owner: the floating to-do widget): the session's CURRENT
+   * todo-list snapshot (latestTodoSnapshot in storage/sessions.ts; prepareTurn
+   * reads it fresh every turn). Non-empty → a "## CURRENT TODO LIST" section
+   * renders the items with their statuses so the agent always knows its
+   * plan state — and when `source` is "user" the section emphasizes that
+   * the OWNER edited the list (the widget's manual-edit route) and the agent
+   * must work with the changes. Absent or empty → NO section, byte-identical
+   * composition. EPHEMERAL: the event log owns the durable state. */
+  todoList?: { todos: Array<{ content: string; status: "pending" | "in_progress" | "completed" }>; source: "agent" | "user" };
   /** ROUND-61 (R61): computer-use availability + posture. When enabled, a
    * "## COMPUTER USE" section carries the operating discipline (the
    * extended skill body loads via read_skill("computer-use")). Absent →
@@ -611,6 +620,32 @@ export function buildTaggedPromptLines(ctx: PromptContext): TaggedLine[] {
     }
     if (ctx.backgroundTasks.more > 0) {
       ident(`…and ${ctx.backgroundTasks.more} more`);
+    }
+    ident("");
+  }
+
+  // ── Current todo list (ROUND-88, R88): the floating widget's companion ─
+  // The agent's own todo_write snapshots AND the owner's manual edits (the
+  // widget's route, source:"user") land in the same event log; this section
+  // surfaces the LATEST snapshot every turn so the model starts each turn
+  // knowing its plan state (Kilo/Cline keep todos in context — this is the
+  // ACUTE form). The user-source variant carries the emphasis line: the
+  // owner changed the plan and the agent follows their changes.
+  if (ctx.todoList !== undefined && ctx.todoList.todos.length > 0) {
+    beginSection("todo-list");
+    ident("## CURRENT TODO LIST");
+    if (ctx.todoList.source === "user") {
+      ident(
+        "The OWNER edited this list from the chat (the floating to-do widget) — their changes are the plan now. Follow the list as written; do not revert their edits without a reason you can state.",
+      );
+    } else {
+      ident(
+        "The plan's current state (your own todo_write history). Keep it current: update via todo_write after each sub-task — never batch completions.",
+      );
+    }
+    for (const item of ctx.todoList.todos) {
+      const mark = item.status === "completed" ? "[x]" : item.status === "in_progress" ? "[~]" : "[ ]";
+      ident(`- ${mark} ${item.content}`);
     }
     ident("");
   }

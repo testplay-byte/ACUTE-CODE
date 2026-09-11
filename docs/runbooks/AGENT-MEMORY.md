@@ -1,4 +1,4 @@
-<!-- last-reviewed: 2026-09-10 round-84 -->
+<!-- last-reviewed: 2026-09-11 round-88 -->
 # AGENT MEMORY — lessons learned, rules going forward
 
 **Owner directive (2026-08-23):** "learn from the mistakes you made, document
@@ -401,7 +401,7 @@ Format per entry: `N. TITLE (date, source)` → mistake → root cause → rule.
 
 46. **Doc-stamp CI gate (WS-J1) is warn-only until the stamp backfill
     (WS-J2) lands.** `scripts/docs/check-stale.mjs` fails on docs missing
-    the `<!-- last-reviewed: YYYY-MM-DD round-NN -->` stamp. Existing docs
+    the `<!-- last-reviewed: 2026-09-11 round-88 -->` stamp. Existing docs
     (21 ADRs, ~20 runbooks, ~10 research notes) don't have it yet. CI is
     `continue-on-error: true` for now (R28 shipped the infra + the
     contract; J2 will bulk-add stamps via `scripts/docs/stamp-all.mjs`
@@ -979,3 +979,23 @@ have "fixed" it by reverting the fixture). RULE: when a test pin is updated
 for a behavior that is being implemented in the SAME round by another
 workstream, the fixture change and the behavior change must land in the
 SAME commit — or the fixture change waits. (2026-09-11, round-87.)
+
+### Lesson #88 — every DB-opening test closes its handles per test (the Windows EPERM)
+
+The R87 suites opened a fresh SQLite db + fastify app per `beforeEach` and
+never closed either — every test PASSED, and on Linux the suite was green
+(all the way through the R87 local verification). On windows-latest the
+afterAll `rmSync(tempDir, {recursive, force})` hit EPERM: Windows refuses to
+delete a directory containing an OPEN file, and SQLite keeps the .db open
+until `db.close()`. The CI failure surfaced as 2 file-level failures AFTER
+2,803 passing tests — the worst kind of signal (green tests, red suite, and
+only on the OTHER platform). The rule: any test that calls `openDatabase`
+follows the standing pattern (approval-flow / browser-tool) — `afterEach`:
+`await app.close(); db.close();` — and a test that REASSIGNS the app
+mid-test closes the old instance first (an orphaned app holds the same
+handles even though nothing references it). The rmSync's own
+`maxRetries`/`retryDelay` covers the residual ephemeral-lock class but is
+NOT a substitute for closing: the handle is the cause, not the timing.
+(2026-09-11, round-87's close-out fix — diagnosed from run 34579011412's
+log: `EPERM, Permission denied` at the afterAll line, both new files, zero
+code-level test failures.)

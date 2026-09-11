@@ -1047,9 +1047,14 @@ export interface TodoSnapshot {
   seq: number;
   todos: Array<{ content: string; status: "pending" | "in_progress" | "completed" }>;
   ts: string;
+  /** R88: WHO wrote this snapshot — "user" (the floating widget's manual
+   * edit) or "agent" (the todo_write tool; the default for unmarked
+   * pre-R88 events). */
+  source?: "agent" | "user";
 }
 
-/** Extract the LATEST todo snapshot from the session event log. */
+/** Extract the LATEST todo snapshot from the session event log. An empty
+ * todos array is the R88 "cleared" state — it IS the latest snapshot. */
 export function toLatestTodo(events: SessionEvent[]): TodoSnapshot | null {
   let latest: TodoSnapshot | null = null;
   for (const event of events) {
@@ -1063,6 +1068,7 @@ export function toLatestTodo(events: SessionEvent[]): TodoSnapshot | null {
       seq: event.seq,
       ts: event.ts,
       todos: payload.todos as TodoSnapshot["todos"],
+      ...(payload.source === "user" ? { source: "user" as const } : {}),
     };
   }
   return latest;
@@ -1289,11 +1295,13 @@ export type WorkingEntry =
     }
   /** ROUND-87 (R87): the turn's todo-list card — one entry per turn holding
    * the LATEST snapshot (the live `todo-updated` frame and the folded
-   * todo.update events both upsert it, keeping its position). */
+   * todo.update events both upsert it, keeping its position). R88: `source`
+   * badges the owner's manual edits. */
   | {
       type: "todo";
       items: TodoSnapshot["todos"];
       ts: string;
+      source?: "agent" | "user";
     };
 
 /** tool.use payload fields as agent-core's runtime writes them. */
@@ -1639,6 +1647,8 @@ export function toProjectChatItems(events: SessionEvent[]): ProjectChatItem[] {
 
       // ROUND-87 (R87): the turn's todo card — ONE entry per turn, upserted
       // with the LATEST snapshot (position = the FIRST todo.update event).
+      // R88: the payload's source ("user" = the widget's manual edit) rides
+      // through so the floating widget can badge folded owner edits.
       if (event.type === "todo.update") {
         const payload =
           event.payload && typeof event.payload === "object"
@@ -1646,6 +1656,7 @@ export function toProjectChatItems(events: SessionEvent[]): ProjectChatItem[] {
             : null;
         if (payload !== null && Array.isArray(payload.todos)) {
           const items = payload.todos as TodoSnapshot["todos"];
+          const source = payload.source === "user" ? ("user" as const) : undefined;
           // (findLastIndex needs es2023 — the tsconfig targets older lib;
           // a manual reverse scan is the compatible form.)
           let idx = -1;
@@ -1656,9 +1667,9 @@ export function toProjectChatItems(events: SessionEvent[]): ProjectChatItem[] {
             }
           }
           if (idx !== -1) {
-            working[idx] = { type: "todo", items, ts: event.ts };
+            working[idx] = { type: "todo", items, ts: event.ts, ...(source === "user" ? { source } : {}) };
           } else {
-            working.push({ type: "todo", items, ts: event.ts });
+            working.push({ type: "todo", items, ts: event.ts, ...(source === "user" ? { source } : {}) });
           }
         }
         continue;
@@ -3366,8 +3377,11 @@ export type StreamTurnEvent =
       sources?: Array<"option" | "custom">;
     }
   /** ROUND-87 (R87): the todo_write tool's live snapshot — one frame per
-   * write; the chat's todo card upserts in place (latest state). */
-  | { type: "todo-updated"; sessionId: string; todos: TodoSnapshot["todos"] }
+   * write; the chat's todo card upserts in place (latest state).
+   * R88: the frame carries `source` — "user" when the write came from the
+   * floating widget's manual-edit route (the live stream + the widget both
+   * badge owner edits); agent writes stay unmarked (pre-R88 compat). */
+  | { type: "todo-updated"; sessionId: string; todos: TodoSnapshot["todos"]; source?: "agent" | "user" }
   /** ROUND-66 (R66, C1): debug mode — the turn COMPLETED; the separate
    * context-free debug analyst is now starting. The chat swaps the
    * loading shimmer in under the turn's final answer. */
@@ -3978,6 +3992,24 @@ export async function resolveAgentQuestion(
   return request<{ ok: boolean }>(`/agent-questions/${encodeURIComponent(questionId)}/resolve`, {
     method: "POST",
     json: { answers, ...(sources !== undefined ? { sources } : {}) },
+  });
+}
+
+/* ── ROUND-88 (R88): the floating to-do widget's manual edit (POST
+ * /sessions/:id/todo) ── */
+
+/** The widget's edit payload — the FULL list snapshot (idempotent, the
+ * todo_write contract). An empty array is the owner's CLEAR affordance. */
+export async function saveSessionTodo(
+  sessionId: string,
+  todos: Array<{ content: string; status: "pending" | "in_progress" | "completed" }>,
+): Promise<{ ok: boolean; todos: Array<{ content: string; status: "pending" | "in_progress" | "completed" }> }> {
+  return request<{
+    ok: boolean;
+    todos: Array<{ content: string; status: "pending" | "in_progress" | "completed" }>;
+  }>(`/sessions/${encodeURIComponent(sessionId)}/todo`, {
+    method: "POST",
+    json: { todos },
   });
 }
 

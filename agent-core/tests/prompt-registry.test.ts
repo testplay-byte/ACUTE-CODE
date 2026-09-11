@@ -153,6 +153,19 @@ const MODES_CTX = {
     ],
     more: 0,
   },
+  // ROUND-88 (R88): the todo-list gate — same completeness pattern as the
+  // R79 background-tasks gate: opened HERE so the CURRENT TODO LIST section's
+  // id is covered by the composition pin, while the BYTE-IDENTITY golden
+  // stays on the bare FULL_CTX (strict gating → the fixture's md5 never
+  // moves).
+  todoList: {
+    todos: [
+      { content: "r88 golden task one", status: "completed" as const },
+      { content: "r88 golden task two", status: "in_progress" as const },
+      { content: "r88 golden task three", status: "pending" as const },
+    ],
+    source: "user" as const,
+  },
 };
 
 afterAll(() => {

@@ -115,6 +115,7 @@ import { registerUsageRoutes } from "./routes/usage.js";
 import { registerSystemRoutes } from "./routes/system.js";
 // R87: the agent-question domain (ask_user's REST resolve route).
 import { registerQuestionRoutes } from "./routes/questions.js";
+import { registerTodoRoutes } from "./routes/todo.js";
 import { registerAttachmentRoutes } from "./routes/attachments.js";
 import { registerSettingsRoutes } from "./routes/settings.js";
 // R86: the SSE domain — the streamed turn route (final-phase extraction).
@@ -1734,6 +1735,11 @@ export function buildServer(options: ServerOptions): FastifyInstance {
       // R87: the agent-question resolve route (the ask_user tool's REST
       // answer path — the browser-checkpoints contract shape).
       registerQuestionRoutes(scope, ctx);
+
+      // R88: the floating todo widget's manual-edit route (the owner's write
+      // path — POST /sessions/:id/todo persists a source:"user" snapshot the
+      // next turn's prompt emphasizes).
+      registerTodoRoutes(scope, ctx);
 
       // ---- ROUND-40: notifications (task complete/failed, permission
       // requests, sub-agent transitions). The owner: "add notification

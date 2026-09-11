@@ -29,6 +29,7 @@ import {
   deliverQueuedMessage,
   getSession,
   lastSessionSeq,
+  latestTodoSnapshot,
   listSessionEvents,
   listUndeliveredQueuedMessages,
   maybeAutoTitleSession,
@@ -1362,6 +1363,12 @@ async function prepareTurn(
   // live rows every turn, rendered into THIS turn's system prompt only,
   // never persisted (the event log owns the durable collected markers).
   const backgroundTasks = buildBackgroundTasksReminder(db, session.id);
+  // ROUND-88 (R88, owner: the floating to-do widget): the session's CURRENT
+  // todo snapshot — the agent's own todo_write history OR the owner's manual
+  // edit (the widget's route). Non-empty → the CURRENT TODO LIST prompt
+  // section (source:"user" emphasized). Cheap: one backward walk of the
+  // session's events (latestTodoSnapshot returns at the first hit).
+  const todoList = latestTodoSnapshot(db, session.id);
   const system = project
     ? buildProjectSystemPrompt({
         projectName: project.name,
@@ -1436,6 +1443,10 @@ async function prepareTurn(
         ...(backgroundTasks !== undefined && backgroundTasks.tasks.length > 0
           ? { backgroundTasks }
           : {}),
+        // ROUND-88 (R88): the CURRENT TODO LIST section's payload — the
+        // latest snapshot when one EXISTS and is non-empty (an empty array is
+        // the widget's "cleared" state → no section, byte-identical).
+        ...(todoList !== undefined && todoList.todos.length > 0 ? { todoList } : {}),
         ...(activeTaskMode !== undefined
           ? { activeTaskMode: { id: activeTaskMode.id, name: activeTaskMode.name, body: activeTaskMode.body } }
           : {}),

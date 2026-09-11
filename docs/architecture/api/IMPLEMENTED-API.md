@@ -1,4 +1,4 @@
-<!-- last-reviewed: 2026-09-10 round-85 -->
+<!-- last-reviewed: 2026-09-11 round-88 -->
 # IMPLEMENTED API — the shipped surface
 
 **Truth = this file.** Verified against `agent-core/src/server.ts` +
@@ -2363,6 +2363,20 @@ the per-model test button, the model edit dialog). Spec:
   (boolean sets, null clears, absent keeps); the INSERT default for text
   output is ON. Reasoning + tool use are no longer dialog-configured — the
   app detects them; the PATCH simply omits them (absent = keep stored).
+
+### POST /api/v1/sessions/:id/todo — the owner's manual to-do edit (NEW, `routes/todo.ts`)
+
+- Body `{todos: [{content, status}]}` — the FULL list snapshot (the
+  todo_write contract). The route reuses writeTodo's exact validation
+  ladder (max 30 items, 200-char content, status normalize) with ONE
+  widening: the EMPTY array is accepted (the floating widget's clear —
+  the tool keeps its ≥1 rule; the model has no business deleting its
+  plan, the owner does). Persists a `todo.update` event with
+  `source:"user"` and fans a `todo-updated` frame to any live turn's SSE
+  via the turn registry (the R78 user.queued pattern). The agent's NEXT
+  turn sees the list in its CURRENT TODO LIST prompt section (R88) with
+  the owner-edit emphasis. 200 `{ok, todos}` (normalized); 404 unknown
+  session; 409 agent-less; 400 malformed.
 
 ### TOOL_NAMES grows to 27 (ask_user, migration 0033)
 

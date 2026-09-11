@@ -354,6 +354,36 @@ export function childTodoProgress(
   return { todosDone, todosTotal };
 }
 
+/**
+ * ROUND-88 (R88, owner: the floating to-do widget + manual edits): the
+ * session's LATEST todo snapshot, walking the event log backwards (the same
+ * direction latestTodosAllDone walks, but returning the payload instead of a
+ * verdict). `source` rides along when the write marked it — "user" means the
+ * OWNER edited the list through the widget's route (prepareTurn's prompt
+ * section emphasizes those), "agent" (or absent — every pre-R88 event) is the
+ * todo_write tool's own snapshot.
+ */
+export function latestTodoSnapshot(
+  db: SqliteDatabase,
+  sessionId: string,
+): { todos: Array<{ content: string; status: "pending" | "in_progress" | "completed" }>; source: "agent" | "user" } | undefined {
+  const events = listSessionEvents(db, sessionId);
+  for (let i = events.length - 1; i >= 0; i--) {
+    const ev = events[i];
+    if (ev.type !== "todo.update") continue;
+    const payload = ev.payload as { todos?: unknown; source?: unknown };
+    if (!Array.isArray(payload.todos)) continue;
+    // An EMPTY array is the R88 "cleared" state (the widget's clear writes
+    // an empty snapshot) — it IS the latest snapshot, not a malformed one to
+    // skip past. Callers treat length 0 as "no list".
+    return {
+      todos: payload.todos as Array<{ content: string; status: "pending" | "in_progress" | "completed" }>,
+      source: payload.source === "user" ? "user" : "agent",
+    };
+  }
+  return undefined;
+}
+
 /** ROUND-79 (R79-a): a child's terminal texts — the FINAL REPORT (the last
  * non-empty message.assistant, the exact extraction listSubAgents always
  * ran) + the ERROR (the last turn.error message). resumeTask returns the

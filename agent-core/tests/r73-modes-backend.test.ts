@@ -121,13 +121,16 @@ const TWO_MODES = [
 // ─────────────────────────────────────────────────────────────────────────────
 
 describe("R73-b D1: the registry + the two composed sections", () => {
-  it("the registry pins 24 sections (21 pre-R73 + task-modes + active-mode + ROUND-79 background-tasks), the R73 pair sitting DIRECTLY after skills", () => {
+  it("the registry pins 25 sections (21 pre-R73 + task-modes + active-mode + ROUND-79 background-tasks + ROUND-88 todo-list), the R73 pair sitting DIRECTLY after skills", () => {
     // ROUND-79 (R79-a): 23 → 24 — the background-tasks section (the per-turn
     // uncollected-delegation reminder) joined the registry directly after
     // active-mode. The count pin is versioned by design: every section round
     // moves it (R73 moved it 21 → 23 the same way).
-    expect(PROMPT_SECTION_IDS.length).toBe(24);
-    expect(PROMPT_REGISTRY.length).toBe(24);
+    // ROUND-88 (R88): 24 → 25 — the todo-list section (the CURRENT TODO LIST
+    // snapshot the floating widget's manual edits feed) joined directly
+    // after background-tasks.
+    expect(PROMPT_SECTION_IDS.length).toBe(25);
+    expect(PROMPT_REGISTRY.length).toBe(25);
     expect(PROMPT_SECTION_IDS.indexOf("task-modes")).toBe(PROMPT_SECTION_IDS.indexOf("skills") + 1);
     expect(PROMPT_SECTION_IDS.indexOf("active-mode")).toBe(PROMPT_SECTION_IDS.indexOf("task-modes") + 1);
     expect(PROMPT_SECTION_IDS.indexOf("active-mode")).toBeLessThan(PROMPT_SECTION_IDS.indexOf("computer-use"));
@@ -135,6 +138,10 @@ describe("R73-b D1: the registry + the two composed sections", () => {
     // (the delegation reminder rides the posture pair, before computer-use).
     expect(PROMPT_SECTION_IDS.indexOf("background-tasks")).toBe(PROMPT_SECTION_IDS.indexOf("active-mode") + 1);
     expect(PROMPT_SECTION_IDS.indexOf("background-tasks")).toBeLessThan(PROMPT_SECTION_IDS.indexOf("computer-use"));
+    // ROUND-88 (R88): todo-list sits DIRECTLY after background-tasks (the
+    // plan-state section rides the reminder pair, before computer-use).
+    expect(PROMPT_SECTION_IDS.indexOf("todo-list")).toBe(PROMPT_SECTION_IDS.indexOf("background-tasks") + 1);
+    expect(PROMPT_SECTION_IDS.indexOf("todo-list")).toBeLessThan(PROMPT_SECTION_IDS.indexOf("computer-use"));
     // The pair is DYNAMIC + identity-bucket, like the design entry says.
     const taskModes = PROMPT_REGISTRY.find((s) => s.id === "task-modes");
     const activeMode = PROMPT_REGISTRY.find((s) => s.id === "active-mode");

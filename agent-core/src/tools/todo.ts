@@ -20,6 +20,12 @@ export interface TodoDeps {
    * also rides the live stream as a `todo-updated` frame so the chat's todo
    * card updates in real time (not only after the turn-end refetch). */
   emit?: (event: unknown) => void;
+  /** ROUND-88 (R88): WHO wrote this snapshot — "agent" (the todo_write tool,
+   * the default — pre-R88 events carry no marker and read as agent) or
+   * "user" (the floating widget's route). Rides the persisted payload +
+   * the live frame so the UI can badge user edits and prepareTurn can
+   * emphasize them in the CURRENT TODO LIST section. */
+  source?: "agent" | "user";
 }
 
 /**
@@ -31,6 +37,7 @@ export function writeTodo(
   deps: TodoDeps,
   items: TodoItem[],
 ): { ok: boolean; output: string } {
+  const source = deps.source === "user" ? "user" : "agent";
   if (!Array.isArray(items) || items.length === 0) {
     return { ok: false, output: "todo_write needs a non-empty 'todos' array" };
   }
@@ -55,14 +62,16 @@ export function writeTodo(
   appendSessionEvent(deps.db, deps.sessionId, {
     type: "todo.update",
     agentId: deps.agentId,
-    payload: { todos: valid },
+    payload: { todos: valid, ...(source === "user" ? { source } : {}) },
   });
 
   // ROUND-87 (R87): the live frame — the chat's todo card updates mid-turn
   // (best-effort; the persisted event above remains the source of truth).
+  // ROUND-88: the frame carries the source so the floating widget can badge
+  // user edits on the live path too.
   if (typeof deps.emit === "function") {
     try {
-      deps.emit({ type: "todo-updated", sessionId: deps.sessionId, todos: valid });
+      deps.emit({ type: "todo-updated", sessionId: deps.sessionId, todos: valid, ...(source === "user" ? { source } : {}) });
     } catch {
       // The stream may be gone — persistence above already won.
     }

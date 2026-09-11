@@ -158,6 +158,17 @@ export const PROMPT_REGISTRY: readonly PromptSectionSpec[] = Object.freeze([
     dynamic: true, // gated on ctx.backgroundTasks
     bucket: "identity",
   },
+  // ROUND-88 (R88, the floating to-do widget round): the session's CURRENT
+  // TODO LIST — the latest todo.update snapshot (the agent's own todo_write
+  // history OR the owner's manual edit via the widget's route, source:user
+  // emphasized) rendered every turn so the model starts with its plan
+  // state. Strictly gated on a non-empty ctx.todoList.
+  {
+    id: "todo-list",
+    description: "## CURRENT TODO LIST — the latest todo snapshot (agent todo_write or owner widget edit, source-emphasized; R88)",
+    dynamic: true, // gated on ctx.todoList.todos.length > 0
+    bucket: "identity",
+  },
   {
     id: "computer-use",
     description: "## COMPUTER USE (desktop control) — the always-on safety/posture discipline when the master switch is on (R61; trimmed R70-c, deep contract via read_skill)",

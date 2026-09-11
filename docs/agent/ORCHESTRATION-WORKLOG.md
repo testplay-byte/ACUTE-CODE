@@ -2450,3 +2450,36 @@ Work Log:
 
 Stage Summary:
 - R87 delivered as v0.85.0: the About/reset, credentials.txt removal, ask_user + the visible todo list, the models/providers redesign with configure-before-add, the embedded browser (keep-alive, 1440×900, positions, panel-only screenshots), the chat/shell layout batch
+
+---
+Task ID: R87-close-out (the resumed session)
+Agent: main-orchestrator (Z.ai Code)
+Task: The interrupted R87 session's close-out: verify the sandbox state, fix the CI + Release failures, publish v0.85.0, sync status.json + the DASHBOARD, restore the 15-min ntfy progress loop, append the worklog, send the final notification.
+
+Work Log:
+- Sandbox verified INTACT (the concern about lost progress was checked first): acute-code main @ 3735f93 (the R87 commit pushed + tag v0.85.0 pushed), dashboard synced at 9c8ab91, the worklog + progress files present — only the close-out was missing (the session cut short after the push).
+- Root-caused BOTH workflow failures: (1) CI run 34579011412 failed on windows-latest — the two NEW R87 suites left their SQLite handles + fastify apps open per test; on Linux rmSync deletes open files fine, on Windows it EPERMs (2,803 tests PASSED that run; the 2 FILE-level afterAll failures killed it). (2) Release run 34579018284 failed at "Assemble launcher kit" — the step still ran `cp launcher/credentials.example.txt`, the file R87 deleted.
+- Fix 7b6e47e: both suites gained the repo's standing afterEach pattern (await app.close(); db.close(); — the reset test's mid-test app replacement now closes the beforeEach instance first; the afterAll rmSync gained maxRetries:10/retryDelay:100); release.yml's stale copy removed (+ the header comment); ACUTE.bat + acute.sh header comments updated (CRLF preserved byte-exactly on the .bat); HANDOFF's launcher tree line updated. Local gates: 2 files 10/10 + agent-core 94/1,877 + launcher kit tests + YAML valid + version:check.
+- v0.85.0 tag re-pointed 3735f93 → 7b6e47e (delete + re-push; nothing referenced it — no release existed); CI run 34584230413 SUCCESS + Release run 34584240071 SUCCESS; v0.85.0 PUBLISHED (release 386922264, draft:false, make_latest:true — both assets verified, zero drafts remain; the kit 2 KB lighter without credentials.example.txt).
+- Close-out convention honored: status.json quality.ci synced (7b6e47e verdicts, the honest initial-failure record) + round-87.md's verification table extended with the two CI rows; docs-only push f094409 observed to a green CI (34585100702). DASHBOARD truth-synced (quality.ciNote + ciNote → the R88 verdicts; the Pages-rebuild merge conflict resolved the standing way — rebuild from the final data.json, denylist clean; e31c8ba); live site verified showing 0.85.0.
+- The 15-minute ntfy progress notifier restarted (it had died with the session) + progress.txt maintained; the final notification lands at close.
+
+Stage Summary:
+- R87 FULLY CLOSED: v0.85.0 published + CI green + dashboard current + the failure record honest (EPERM lesson: every new DB-opening test MUST close per-test — added to the pattern knowledge).
+- The resumed session then scoped R88 from the owner's re-specified to-do list directive (the entry below).
+
+---
+Task ID: R88 (the floating to-do list round)
+Agent: main-orchestrator (Z.ai Code) + one research sub-agent (the todo-list current-state sweep)
+Task: The owner's re-specification of the to-do list UX: a floating view at the top-right of the chat window showing ONLY the current task; click to expand showing all entries (top 10 visible, scroll for more) with done/processing/pending marks; MANUAL EDITING so the agent works with the owner's changes; plus verifying the in-chat questioning was done properly.
+
+Work Log:
+- Research sweep first (the sanctioned pattern): the R87 TodoCard renders INLINE in the (collapsed-by-default) working stream — NOT floating; NO frontend mutation path existed (no route; the only todo writer was the tool); the agent itself was BLIND to the list between turns (assembleHistory skips todo.update — the model literally forgot its own plan state on the next turn).
+- Backend: routes/todo.ts NEW (POST /sessions/:id/todo — writeTodo's exact validation ladder + the owner-only EMPTY clear; source:"user" events; frames fan to live turns via the R78 turn-registry pattern); latestTodoSnapshot in storage/sessions.ts (the backward walk; an EMPTY array IS the cleared state, not one to skip past); writeTodo carries deps.source; the "## CURRENT TODO LIST" prompt section (registry id todo-list after background-tasks, 24 → 25 — the versioned pins updated; MODES_CTX's completeness gate opened; the byte-identity golden untouched — strict gating) with the OWNER-edit emphasis line for user-source snapshots; prepareTurn reads the snapshot fresh every turn.
+- Frontend: TodoFloat.tsx NEW (the widget: collapsed pill = ONLY the task at hand + N/M; expand = the 393px ten-row scroll box + "scroll for N more"; the manual editor with content/status-cycle/reorder/delete/add; EDITED BY YOU badge; LIVE pill while streaming; honest save errors keep the draft; hidden when no list); useTodoFloatState (live-wins-over-folded, exactly the chat's own dual path); api.ts saveSessionTodo + source threading through the frame type, WorkingEntry, toLatestTodo, and the fold; stream-store handler threads source; mounted top-right in AgentChatPanel above the fade.
+- Verification: agent-core 95/1,882 GREEN (was 94/1,877; +r88-todo-edit ×5) · frontend 62/960 GREEN (+TodoFloat ×10) · lint CLEAN · tsc CLEAN · build SUCCESS · e2e 12/12 · version 0.86.0 ×4 · docs:check after stamps.
+- Docs: round-88.md (the spec→implementation map table), CHANGELOG 0.86.0 (including the honest v0.85.0 CI-failure record), status.json (round 88, milestone 48, ci PENDING per convention), HANDOFF header (the stacked stale R86 line the R87 commit left behind also cleaned), this entry.
+
+Stage Summary:
+- R88 delivered as v0.86.0: the owner's to-do list spec implemented exactly (floating top-right, current-task-only collapsed, ten-row scroll, done/processing/pending) + the manual-edit loop closed (the owner edits → the route persists source:"user" → the agent's NEXT turn sees the CURRENT TODO LIST section with the owner-edit emphasis) + the agent's plan-state blindness fixed as a side effect (every turn now carries the latest snapshot).
+- Known residual (documented in round-88.md): a LIVE turn's already-assembled context does not see a mid-stream edit (the section rides the next turn — the widget's footer note says exactly this).

@@ -1,4 +1,4 @@
-<!-- last-reviewed: 2026-09-10 round-84 -->
+<!-- last-reviewed: 2026-09-11 round-88 -->
 # WORKFLOW — the session spine
 
 **Normative.** `AGENTS.md` = the rules, `HANDOFF.md` = the state; this file

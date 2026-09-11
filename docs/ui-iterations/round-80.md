@@ -1,4 +1,4 @@
-<!-- last-reviewed: 2026-09-10 round-84 -->
+<!-- last-reviewed: 2026-09-11 round-88 -->
 # Round 80 — The Reliability Round (silent stops + raw errors + retry customization + NVIDIA)
 
 **Provenance:** the owner's verbatim field report, four clauses:

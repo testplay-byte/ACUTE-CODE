@@ -1,4 +1,4 @@
-<!-- last-reviewed: 2026-09-10 round-84 -->
+<!-- last-reviewed: 2026-09-11 round-88 -->
 <!-- Canonical copy of the workspace operating rules (backed up from ACUTE_CODE/AGENTS.md). When this repo is opened as a ZCode workspace, this file loads as instructions. Paths written as "acute-code/" refer to THIS repo's root. -->
 # ACUTE-CODE — Workspace Operating Rules
 

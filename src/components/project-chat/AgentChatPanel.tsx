@@ -56,6 +56,8 @@ import {
   type ApprovalDecisionChoice,
   type ApprovalRemember,
 } from "./WorkingSection";
+// R88 (owner: the floating to-do widget — top-right of the chat window).
+import { TodoFloat } from "./TodoFloat";
 import { AcuteLogo } from "../shell/Sidebar";
 import { ClampedText } from "../shared/ClampedText";
 import {
@@ -2404,6 +2406,15 @@ export function AgentChatPanel({
       />
       {/* Scroll body with top fade (demo structure) */}
       <div className="relative flex-1 min-h-0 overflow-hidden">
+        {/* R88 (owner: "it will show at the top-right corner of the chat
+            window, and it will be a floating view"): the FLOATING TODO
+            WIDGET — collapsed = the task at hand, one click = the full list
+            (10 rows visible, scroll for more), the pencil = the manual edit
+            whose saved snapshot the agent's next turn sees in its CURRENT
+            TODO LIST prompt section. Sits above the top fade (z-20) and is
+            position:fixed relative to THIS container — the transcript
+            scrolls under it. */}
+        <TodoFloat sessionId={activeSessionId} />
         <div
           className="absolute top-0 left-0 right-0 h-8 z-10 pointer-events-none"
           style={{ background: `linear-gradient(to bottom, ${styles.card}, transparent)` }}

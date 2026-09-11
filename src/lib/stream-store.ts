@@ -1543,17 +1543,26 @@ function handleStreamEvent(
   // ── ROUND-87 (R87): the todo-list card — UPSERT the live entry (one card
   // per turn holding the latest snapshot; first write creates it at its
   // position, later writes only refresh its items). Mirrors the fold's
-  // todo.update handling exactly.
+  // todo.update handling exactly. R88: `source` rides through so the
+  // floating widget can badge the owner's manual edits on the live path.
   if (event.type === "todo-updated") {
+    const userSource = event.source === "user" ? ("user" as const) : undefined;
     const existing = liveTurn.working.findIndex((entry) => entry.type === "todo");
     const next =
       existing === -1
         ? [
             ...liveTurn.working,
-            { type: "todo" as const, items: event.todos, ts: new Date().toISOString() },
+            {
+              type: "todo" as const,
+              items: event.todos,
+              ts: new Date().toISOString(),
+              ...(userSource !== undefined ? { source: userSource } : {}),
+            },
           ]
         : liveTurn.working.map((entry, index) =>
-            index === existing ? { ...entry, items: event.todos, ts: new Date().toISOString() } : entry,
+            index === existing
+              ? { ...entry, items: event.todos, ts: new Date().toISOString(), ...(userSource !== undefined ? { source: userSource } : {}) }
+              : entry,
           );
     patchSession(sessionId, { liveTurn: { ...liveTurn, working: next } });
     return;

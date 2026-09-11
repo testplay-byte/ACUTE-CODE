@@ -1,4 +1,4 @@
-<!-- last-reviewed: 2026-09-11 round-87 -->
+<!-- last-reviewed: 2026-09-11 round-88 -->
 # Changelog
 
 All notable changes to ACUTE-CODE are documented here. Entries are written for
@@ -18,6 +18,35 @@ notifications/jobs/checkpoints/dialogs/plugins tail; then Wave 3 the frontend
 seams), external plugin ctx enrichment, the lessons-ledger affordance,
 ratings-driven prompt tuning, and the standing items (edit-linting, installer
 code-signing, the Files-tab polish, agent web-app-testing tools).
+
+## [0.86.0] - 2026-09-11 — the R88 floating to-do list round
+
+### Added — the to-do list the owner specified
+- **The floating to-do widget**: the session's task list now lives at the
+  TOP-RIGHT corner of the chat window — a floating view that stays put while
+  the transcript scrolls under it. Collapsed it shows only the task at hand
+  (plus an N/M progress counter); one click expands the full list — exactly
+  ten rows visible, scroll for the rest. Completed tasks show as checked
+  off, the task being worked on pulses, pending ones wait quietly.
+- **Manual editing (you steer the plan)**: the pencil on the expanded panel
+  opens the editor — rename any task, cycle its status, reorder, delete, or
+  add new ones — and Save posts the whole edited list to the agent's plan.
+  The agent sees your list on its next message (its system prompt carries
+  the CURRENT TODO LIST section, with your edits marked as the owner's) and
+  works with them. An "EDITED BY YOU" badge marks the list until the agent
+  next updates it.
+- **The agent always knows its plan state**: every turn's prompt now carries
+  the latest to-do snapshot (previously the list lived only in the UI and
+  the event log — the model itself lost track between turns).
+
+### Fixed
+- **The v0.85.0 CI/Release failures** (the close-out fix shipped as
+  7b6e47e, recorded here for the changelog record): the two new R87 test
+  suites failed on Windows with EPERM (their SQLite handles stayed open
+  past the temp-dir cleanup — now closed per-test per the repo's standing
+  pattern), and the release kit assembly still copied the deleted
+  `credentials.example.txt` (removed from the workflow, the launcher
+  headers, and HANDOFF; ACUTE.bat kept its CRLF bytes exactly).
 
 ## [0.85.0] - 2026-09-11 — the R87 UX + capability round
 

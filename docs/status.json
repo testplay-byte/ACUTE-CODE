@@ -250,6 +250,10 @@
       "title": "R87 — the UX + capability round (About/reset, configure-before-add, ask_user, the embedded browser)",
       "date": "2026-09-11",
       "summary": "The owner's improvement list, delivered as v0.85.0: (1) Settings → About — the version card with the update check + the application-wide RESET (POST /system/reset: live-turn abort, keyring clear, terminal dispose, table wipe + factory reseed, VACUUM, ~/.acute purge; the Tauri purge_provider_keys command clears Credential Manager first). (2) credentials.txt REMOVED from the launcher (the GitHub token is asked once + saved at .acute/github.pat or ACUTE_GITHUB_PAT; provider keys are saved in-app only). (3) ask_user end-to-end — the mid-task question card (option pills + custom answer, batched questions, 10-min timeout) with agent-question.requested/resolved session events + the resolve route; migration 0033. (4) The todo list VISIBLE in chat (TodoCard in the working stream, live via todo-updated frames). (5) Models & Providers redesigned: bordered model cards + capability chips (migration 0032: PDF input + text/image/video/audio outputs + sizeLabel; reasoning + tool use REMOVED from the dialog — the app detects them), configure-before-add (the picker opens the config dialog instead of adding directly), the animated self-dismissing test button, the NVIDIA phantom-add fixed (hasKey-aware existingIds). (6) The embedded browser: default viewport 1440×900, KEEP-ALIVE browser panels (no reload/glitch on tab switch, survives the new-tab menu with a deliberate pause hint), read_dom now returns per-element x/y/w/h positions, screenshots are panel-only (the full-display fallback is GONE). (7) The chat/shell batch: viewport-adaptive scrollbars, the chat min width halved + wide padding, the composer's graduated shrink (model name first), the provider-selector trajectory gating + frosted-glass backdrop, the sidebar rail expanding on project click."
+    },
+    {
+      "date": "2026-09-11",
+      "label": "R88 — the floating to-do list round: the owner's spec + manual edits, shipped as v0.86.0. The floating widget (top-right of the chat window; collapsed = only the task at hand; expand = the ten-row scroll box with done/processing/pending glyphs) + the manual editor (rename/status-cycle/reorder/delete/add; Save posts the owner's snapshot through POST /sessions/:id/todo with source:\"user\") + the CURRENT TODO LIST prompt section (the agent sees the latest snapshot — and the owner's edits, emphasized — on every turn)."
     }
   ],
   "quality": {
@@ -312,6 +316,6 @@
       "Quality over speed — every round verified before push"
     ]
   },
-  "round": 87,
-  "ci": null
+  "round": 88,
+  "ci": "PENDING (R88 push — this entry is synced at close-out per the convention)"
 }

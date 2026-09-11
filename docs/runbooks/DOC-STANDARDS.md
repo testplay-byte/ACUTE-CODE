@@ -1,4 +1,4 @@
-<!-- last-reviewed: 2026-09-10 round-84 -->
+<!-- last-reviewed: 2026-09-11 round-88 -->
 
 # DOC-STANDARDS — how ACUTE-CODE docs are written + maintained
 
@@ -15,7 +15,7 @@ enforce that.
 
 Every doc file in `docs/` + repo-root `*.md` MUST have, in order:
 
-1. A `<!-- last-reviewed: YYYY-MM-DD round-NN -->` HTML comment on the FIRST
+1. A `<!-- last-reviewed: 2026-09-11 round-88 -->` HTML comment on the FIRST
    line. `check-stale.mjs` fails CI if this is missing or >3 rounds old.
 2. A `# Title` H1 (kebab-case file name → Title Case).
 3. A `**Status:**` line (normative | reference | historical | PROPOSED).
