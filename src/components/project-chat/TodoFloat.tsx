@@ -203,7 +203,14 @@ export function TodoFloat({ sessionId }: { sessionId: string | null }) {
           className="w-full rounded-[14px] border-[1.5px] shadow-lg overflow-hidden"
           style={{
             borderColor: cardBorder,
-            background: styles.card,
+            // R89-F1 (the owner: "there should be a blur around its corners so
+            // that the elements around it are blurred and the task list is a
+            // bit more highlighted"): a FROSTED card — translucent surface +
+            // backdrop blur, so the transcript scrolling under it blurs at
+            // the rounded corners and the list reads as HIGHLIGHTED glass.
+            background: styles.isDark ? "rgba(44,44,46,0.72)" : "rgba(255,255,255,0.72)",
+            backdropFilter: "blur(12px) saturate(1.15)",
+            WebkitBackdropFilter: "blur(12px) saturate(1.15)",
             boxShadow: `0 12px 32px ${withAlpha(styles.isDark ? "#000000" : "#24292f", 0.18)}`,
           }}
           role="dialog"
@@ -443,7 +450,10 @@ export function TodoFloat({ sessionId }: { sessionId: string | null }) {
         className="group flex items-center gap-2 rounded-full border-[1.5px] pl-2.5 pr-2 py-1.5 shadow-sm transition-all hover:shadow-md max-w-full"
         style={{
           borderColor: complete ? withAlpha("#22c55e", 0.45) : cardBorder,
-          background: styles.card,
+          // R89-F1: the same frosted treatment on the pill.
+          background: styles.isDark ? "rgba(44,44,46,0.72)" : "rgba(255,255,255,0.72)",
+          backdropFilter: "blur(12px) saturate(1.15)",
+          WebkitBackdropFilter: "blur(12px) saturate(1.15)",
         }}
         data-testid="todo-float-pill"
       >
