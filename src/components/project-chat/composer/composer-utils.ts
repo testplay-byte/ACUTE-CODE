@@ -213,6 +213,28 @@ export function saveModelOverride(sessionId: string | null, v: ModelOverride | n
   }
 }
 
+/**
+ * ROUND-92 (R92-B): the chat picker's SELF-HEAL decision — should THIS pick
+ * also PATCH the session agent's providerId/model row?
+ *
+ * The contract: an UNCONFIGURED agent (providerId or model null on the row —
+ * the R91-A force-delete reset state, or a template that never had one) arms
+ * itself from the first chat pick, closing the dead end at the SOURCE: the
+ * next send works even without an override, the Agents screen shows a real
+ * provider/model, and the wizard's agt_default_nova PATCH has its chat-side
+ * twin. A CONFIGURED agent keeps today's localStorage-only override semantics
+ * EXACTLY — the pick stays a per-send choice, never a row write (that would
+ * silently rebind an agent the owner deliberately configured).
+ */
+export function shouldArmAgentFromPick(
+  pick: ModelOverride | null,
+  agent: { providerId: string | null; model: string | null } | null,
+): pick is ModelOverride {
+  if (pick === null) return false;
+  if (agent === null) return false;
+  return agent.providerId === null || agent.model === null;
+}
+
 // ── ROUND-89 (R89-B4): the LAST-USED model — the owner's directive: "it
 // should remember the last used model and that model should be the default
 // one for the next chats". A single GLOBAL key (not per-session): every

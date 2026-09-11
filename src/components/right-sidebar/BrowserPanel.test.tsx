@@ -8,7 +8,7 @@ import { useBrowserTabStore } from "../../lib/browser-store";
 import { renderWithProviders, resetTestState } from "../../test-utils";
 import * as nativeBrowser from "../../lib/native-browser";
 // R60-D: the popover-suppression guard the nativeCreate show consults.
-import { setPopoverWebviewSuppression } from "./popover-webview-guard";
+import { setPopoverWebviewSuppression, useWebviewGuardStore } from "./popover-webview-guard";
 // R62 (D8): the agent-browser bridge registry — the panel registers its
 // handler; these helpers read/inspect it from the tests.
 import {
@@ -1106,6 +1106,45 @@ describe("BrowserPanel native mode (R50-a child webviews over the panel)", () =>
     fireEvent.change(screen.getByTestId("browser-address-input"), { target: { value: "https://example.com/two" } });
     fireEvent.submit((screen.getByTestId("browser-address-input") as HTMLInputElement).closest("form") as HTMLFormElement);
     await waitFor(() => expect(setVisible()).toHaveBeenCalledWith("tab-test-1", true));
+  });
+
+  it("R92-A: the GEOMETRIC overlay leg ALSO renders the pause caption — a residual hide is never a blank card", async () => {
+    // The owner's v0.89.0 verdict: opening a composer menu made the browser
+    // "get cleared out and disappear". The webview hide now has TWO guarded
+    // legs (popoverTabId fallback + the R89-E5 geometric overlay), and the
+    // deliberate-pause caption must render on BOTH — anything else reads as
+    // a blank cleared-out panel. This pins the GEOMETRIC leg (the caption
+    // previously rendered on the popoverTabId leg only).
+    const rectSpy = mockAreaRect();
+    try {
+      const tab = makeTab({ browserUrl: "https://example.com" });
+      seedRightSidebar(tab);
+      renderWithProviders(<BrowserPanel projectId="prj_test" tab={tab} />);
+      await waitFor(() => expect(create()).toHaveBeenCalledWith("tab-test-1", "https://example.com", expect.stringContaining("__acute-agent-cursor")));
+      await waitFor(() => expect(setVisible()).toHaveBeenCalledWith("tab-test-1", true));
+      // No overlay recorded yet → no caption, no hide.
+      expect(screen.queryByText("browser paused while the menu is open")).toBeNull();
+
+      // An overlay opens GEOMETRICALLY OVER the panel area (mockAreaRect's
+      // placeholder is (80,120)-(480,1020) — the R89-E5 composer-menu-at-
+      // squeezed-geometry scenario). The store flip re-runs the panel's
+      // overlaySeq effect → the webview hides AND the caption renders.
+      act(() => {
+        useWebviewGuardStore.getState().setOverlayRects([{ left: 100, top: 200, right: 400, bottom: 800 }]);
+      });
+      await waitFor(() => expect(setVisible()).toHaveBeenCalledWith("tab-test-1", false));
+      expect(screen.getByText("browser paused while the menu is open")).toBeTruthy();
+
+      // The overlay closes → the caption goes away and the webview returns.
+      act(() => {
+        useWebviewGuardStore.getState().setOverlayRects([]);
+      });
+      await waitFor(() => expect(setVisible()).toHaveBeenLastCalledWith("tab-test-1", true));
+      expect(screen.queryByText("browser paused while the menu is open")).toBeNull();
+    } finally {
+      useWebviewGuardStore.getState().setOverlayRects([]);
+      rectSpy.mockRestore();
+    }
   });
 
   it("R60: bounds re-sync IMMEDIATELY on preset changes and natural↔preset flips (deterministic sizing)", async () => {

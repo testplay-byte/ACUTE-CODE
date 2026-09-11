@@ -1,9 +1,9 @@
-import { useState } from "react";
 import { Check, ChevronDown, ClipboardList, ShieldCheck, Zap } from "lucide-react";
 import type { PermissionMode } from "shared";
 import { useThemeStyles } from "../../../lib/use-theme-styles";
 import { withAlpha } from "../../dashboard/helpers";
 import { MODE_OPTIONS, modeOption, useDismiss } from "./composer-utils";
+import { useNativeOptionsMenu } from "./useNativeOptionsMenu";
 
 const ICONS = {
   zap: Zap,
@@ -23,6 +23,14 @@ const ICONS = {
  * rides the row's native title tooltip. The PANEL performs the
  * patchSessionPermissions round-trip (optimistic + rollback) — this
  * component only reports the choice.
+ *
+ * ROUND-92 (R92-A — the owner: tapping "the plan mode, full access mode, or
+ * ask mode" cleared out the embedded browser): inside the Tauri shell the
+ * menu opens in the MENU OVERLAY WINDOW (useNativeOptionsMenu) so it rides
+ * ABOVE the OS-level browser webview and the browser never pauses; the DOM
+ * dropdown below is the web-mode / overlay-failed fallback, unchanged from
+ * before R92 (its w-64 geometry is what used to blank the browser at the
+ * squeezed chat-column floor — see the hook's header).
  */
 export function ModeSwitcher({
   mode,
@@ -34,8 +42,25 @@ export function ModeSwitcher({
   onChange: (mode: PermissionMode) => void;
 }) {
   const styles = useThemeStyles();
-  const [open, setOpen] = useState(false);
-  const menuRef = useDismiss(open, () => setOpen(false));
+  // R92-A: the overlay-first ladder — `open` is the DOM leg only.
+  const menu = useNativeOptionsMenu({
+    title: "Operating mode",
+    menuWidth: 256, // the DOM menu's w-64
+    align: "left", // the DOM menu's left-0
+    rowHeight: 30, // label-only rows (R75: no descriptions by default)
+    buildItems: () =>
+      MODE_OPTIONS.map((option) => ({
+        id: option.id,
+        label: option.label,
+        icon: option.icon,
+        selected: option.id === mode,
+      })),
+    onPick: (id) => {
+      const option = MODE_OPTIONS.find((o) => o.id === id);
+      if (option !== undefined && option.id !== mode) onChange(option.id);
+    },
+  });
+  const menuRef = useDismiss(menu.open, () => menu.closeAll());
   const current = modeOption(mode);
   const Icon = ICONS[current.icon];
 
@@ -43,10 +68,10 @@ export function ModeSwitcher({
     <div className="relative shrink-0" ref={menuRef}>
       <button
         type="button"
-        onClick={() => setOpen((v) => !v)}
+        onClick={() => menu.toggle(menuRef.current)}
         disabled={disabled}
         aria-haspopup="menu"
-        aria-expanded={open}
+        aria-expanded={menu.isOpen}
         aria-label={`Operating mode: ${current.label}`}
         title={
           disabled
@@ -81,7 +106,11 @@ export function ModeSwitcher({
         </span>
         <ChevronDown size={10} className="shrink-0" />
       </button>
-      {open ? (
+      {/* R92-A: the DOM dropdown renders ONLY on the web/fallback leg —
+          while the overlay window is the menu a hidden duplicate here would
+          fire the overlay guard and blank the browser (the bug this round
+          fixes). */}
+      {menu.open ? (
         <div
           role="menu"
           aria-label="Operating mode"
@@ -99,7 +128,7 @@ export function ModeSwitcher({
                 aria-checked={isSelected}
                 title={option.description}
                 onClick={() => {
-                  setOpen(false);
+                  menu.closeAll();
                   if (!isSelected) onChange(option.id);
                 }}
                 className="w-full flex items-start gap-2 text-left px-2 py-1.5 rounded-lg transition-colors"

@@ -251,6 +251,10 @@ export function RightSidebar({
         return;
       }
       // The sub-agent picker's pick — the same action the DOM version runs.
+      // R92-A: matched on kind "subagents" explicitly — the composer's option
+      // menus now share the overlay window and report kind "options"; a
+      // foreign pick must be a NO-OP here, not a stray sub-agent close.
+      if (pick.kind !== "subagents") return;
       setSubAgentPickerFor(null);
       if (pick.item.kind === "sub" && sessionId !== null) {
         openSubAgent(

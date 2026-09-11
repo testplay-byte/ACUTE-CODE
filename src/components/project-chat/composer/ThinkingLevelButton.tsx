@@ -1,9 +1,9 @@
-import { useState } from "react";
 import { Brain, Check, ChevronDown } from "lucide-react";
 import type { ThinkingLevel } from "shared";
 import { useThemeStyles } from "../../../lib/use-theme-styles";
 import { withAlpha } from "../../dashboard/helpers";
 import { THINKING_OPTIONS, thinkingOption, useDismiss } from "./composer-utils";
+import { useNativeOptionsMenu } from "./useNativeOptionsMenu";
 
 /**
  * ROUND-50 (R50-c2): the thinking-level button (owner: "Adjust the thinking
@@ -12,6 +12,13 @@ import { THINKING_OPTIONS, thinkingOption, useDismiss } from "./composer-utils";
  * four accepted levels. The selected level persists per session in
  * localStorage (acute-thinking:<sessionId> — handled by the panel) and rides
  * every send as thinkingLevel.
+ *
+ * ROUND-92 (R92-A): inside the Tauri shell the menu opens in the MENU
+ * OVERLAY WINDOW (useNativeOptionsMenu) — it rides ABOVE the OS-level
+ * browser webview, so picking a level never blanks the embedded browser
+ * (the DOM dropdown's w-56 right-aligned geometry used to cross into the
+ * browser panel at the squeezed chat-column floor). The DOM dropdown below
+ * is the web-mode / overlay-failed fallback, unchanged.
  */
 export function ThinkingLevelButton({
   level,
@@ -21,17 +28,34 @@ export function ThinkingLevelButton({
   onChange: (level: ThinkingLevel) => void;
 }) {
   const styles = useThemeStyles();
-  const [open, setOpen] = useState(false);
-  const menuRef = useDismiss(open, () => setOpen(false));
+  // R92-A: the overlay-first ladder — `open` is the DOM leg only.
+  const menu = useNativeOptionsMenu({
+    title: "Thinking level",
+    menuWidth: 224, // the DOM menu's w-56
+    align: "right", // the DOM menu's right-0
+    rowHeight: 42, // label + desc rows (quick-menu rhythm)
+    buildItems: () =>
+      THINKING_OPTIONS.map((option) => ({
+        id: option.id,
+        label: option.label,
+        desc: option.description,
+        selected: option.id === level,
+      })),
+    onPick: (id) => {
+      const option = THINKING_OPTIONS.find((o) => o.id === id);
+      if (option !== undefined && option.id !== level) onChange(option.id);
+    },
+  });
+  const menuRef = useDismiss(menu.open, () => menu.closeAll());
   const current = thinkingOption(level);
 
   return (
     <div className="relative shrink-0" ref={menuRef}>
       <button
         type="button"
-        onClick={() => setOpen((v) => !v)}
+        onClick={() => menu.toggle(menuRef.current)}
         aria-haspopup="menu"
-        aria-expanded={open}
+        aria-expanded={menu.isOpen}
         aria-label={`Thinking level: ${current.label}`}
         title={`Thinking level — ${current.description}`}
         className="flex items-center gap-1.5 h-7 px-2 rounded-[10px] text-[11px] font-semibold transition-colors"
@@ -57,7 +81,9 @@ export function ThinkingLevelButton({
         </span>
         <ChevronDown size={10} className="shrink-0" />
       </button>
-      {open ? (
+      {/* R92-A: the DOM dropdown renders ONLY on the web/fallback leg (see
+          ModeSwitcher's comment). */}
+      {menu.open ? (
         <div
           role="menu"
           aria-label="Thinking level"
@@ -73,7 +99,7 @@ export function ThinkingLevelButton({
                 role="menuitemradio"
                 aria-checked={isSelected}
                 onClick={() => {
-                  setOpen(false);
+                  menu.closeAll();
                   if (!isSelected) onChange(option.id);
                 }}
                 className="w-full flex items-center gap-2 text-left px-2 py-1.5 rounded-lg transition-colors"

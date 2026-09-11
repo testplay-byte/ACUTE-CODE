@@ -46,7 +46,7 @@ import { isTauri } from "../../lib/sidecar";
 // itself while a RightSidebar popover covers the page area. R62: the guard
 // module is now store-backed + also carries the GLOBAL overlay flag (any
 // open menu/dialog/popover hides every webview — the owner's z-order fix).
-import { isWebviewHiddenNow, overlayCoversRect, useWebviewGuardStore } from "./popover-webview-guard";
+import { isWebviewHiddenNow, overlayCoversRect, refreshOverlayRectsNow, useWebviewGuardStore } from "./popover-webview-guard";
 // R90-D1: the always-visible cursor's boot script (the webview's
 // initialization script — see src/lib/agent-hands-boot.ts).
 import { buildHandsBootScript } from "../../lib/agent-hands-boot";
@@ -947,6 +947,15 @@ export function BrowserPanel({
   // Rust fix (async menu-overlay commands) removes the deadlock class that
   // could wedge the shell in the first place; this is the belt to that
   // suspenders — a missed show can never persist past one period.
+  //
+  // R92-A (Part 5 — watchdog self-heal): BEFORE the geometric skip, force a
+  // FRESH guard evaluation (refreshOverlayRectsNow) and re-read the rects.
+  // The recorded rects only refresh on structural DOM mutations (plus the
+  // guard's own 600ms periodic re-check), so a STALE covering rect — an
+  // overlay that moved or shrank without DOM churn — used to pin this
+  // watchdog off forever; now the skip decision is always based on rects
+  // measured THIS instant, and the moment nothing truly covers the panel
+  // the watchdog resumes its show + bounds re-assert.
   useEffect(() => {
     if (!nativeMode) return;
     let stopped = false;
@@ -957,6 +966,10 @@ export function BrowserPanel({
       // re-asserting here would fight the panel's own lifecycle.
       if (hiddenRef.current || !nativeReadyRef.current) return;
       if (useWebviewGuardStore.getState().popoverTabId === tabId) return;
+      // R92-A: fresh guard evaluation BEFORE the geometric skip — see the
+      // watchdog's header comment above. Sync by design; cheap (one DOM
+      // sweep) at the 2s cadence.
+      refreshOverlayRectsNow();
       const el = placeholderRef.current;
       if (el !== null && overlayCoversRect(el.getBoundingClientRect())) return;
       const live = useBrowserTabStore.getState().tabs[tabId];
@@ -1699,7 +1712,14 @@ export function BrowserPanel({
              div only marks the rectangle + hosts the empty state.
              ROUND-87 (R87): while a POPOVER hides the webview (the quick
              menu / overlay guard), a dimmed hint makes the pause read as
-             DELIBERATE rather than the page vanishing. */
+             DELIBERATE rather than the page vanishing.
+             R92-A (owner: the browser "would apparently get cleared out and
+             would disappear"): the caption now renders on BOTH hide legs —
+             the popoverTabId fallback AND the GEOMETRIC overlay leg
+             (overlayCoversPanel) — so any residual webview hide reads as a
+             deliberate pause, NEVER a blank cleared-out card. The keep-alive
+             `hidden` leg (an inactive background tab) stays captionless: no
+             menu is open there, the panel itself is not the active surface. */
           <div
             ref={placeholderRef}
             data-testid="browser-native-placeholder"
@@ -1707,7 +1727,7 @@ export function BrowserPanel({
           >
             {!hasPage ? (
               emptyState
-            ) : popoverTabId === tabId ? (
+            ) : popoverTabId === tabId || overlayCoversPanel ? (
               <div
                 className="absolute inset-0 grid place-items-center rounded-[12px]"
                 style={{

@@ -16,10 +16,25 @@
  */
 
 import { useCallback, useEffect, useState } from "react";
-import { Activity, Bot, Brain, FolderTree, Globe, Terminal as TerminalIcon, type LucideIcon } from "lucide-react";
+import {
+  Activity,
+  Bot,
+  Brain,
+  Check,
+  ClipboardList,
+  FolderOpen,
+  FolderTree,
+  Globe,
+  HardDriveUpload,
+  ShieldCheck,
+  Terminal as TerminalIcon,
+  Zap,
+  type LucideIcon,
+} from "lucide-react";
 import type { MenuItemPayload, MenuPayload } from "../lib/menu-overlay";
 
-/** The lucide icons the payload addresses by name (the quick menu's set). */
+/** The lucide icons the payload addresses by name (the quick menu's set +
+ * R92-A: the composer option menus' rows). */
 const ICONS: Record<string, LucideIcon> = {
   "folder-tree": FolderTree,
   globe: Globe,
@@ -27,6 +42,11 @@ const ICONS: Record<string, LucideIcon> = {
   brain: Brain,
   activity: Activity,
   bot: Bot,
+  zap: Zap,
+  shield: ShieldCheck,
+  clipboard: ClipboardList,
+  "hard-drive-upload": HardDriveUpload,
+  "folder-open": FolderOpen,
 };
 
 type TauriInvokeFn = (command: string, args?: Record<string, unknown>) => Promise<unknown>;
@@ -122,9 +142,11 @@ export function MenuOverlayApp(): React.ReactElement {
   const pick = useCallback((item: MenuItemPayload) => {
     const sh = shell();
     if (sh === null) return;
-    void sh.event
-      .emit("menu-overlay-pick", { kind: item.kind === "quick" ? "quick" : "subagents", item })
-      .catch(() => {});
+    // R92-A: the item's own discriminated kind maps onto the MENU's pick
+    // kind ("sub" items belong to the "subagents" menu; "options" items to
+    // the composer's generic option menus).
+    const menuKind = item.kind === "quick" ? "quick" : item.kind === "sub" ? "subagents" : "options";
+    void sh.event.emit("menu-overlay-pick", { kind: menuKind, item }).catch(() => {});
   }, []);
 
   if (payload === null) {
@@ -209,7 +231,7 @@ export function MenuOverlayApp(): React.ReactElement {
                 </span>
               </span>
             </button>
-          ) : (
+          ) : item.kind === "sub" ? (
             <button
               key={item.id}
               onClick={() => pick(item)}
@@ -277,6 +299,65 @@ export function MenuOverlayApp(): React.ReactElement {
                 {item.title}
               </span>
               <span style={{ flexShrink: 0, fontSize: 10, color: t.textTertiary }}>{item.status}</span>
+            </button>
+          ) : (
+            /* R92-A: the OPTIONS kind — the composer's mode / thinking /
+             * add-context menus. The same visual language as the quick menu
+             * (icon + label + optional desc, hover tint, click → pick) PLUS
+             * the DOM menus' selected treatment: a checkmark on the selected
+             * row + its accent-tinted background + accent label (the twin
+             * of ModeSwitcher's role=menuitemradio rows). */
+            <button
+              key={item.id}
+              onClick={() => pick(item)}
+              title={item.desc ?? ""}
+              style={{
+                all: "unset",
+                display: "flex",
+                alignItems: "flex-start",
+                gap: 8,
+                width: "100%",
+                boxSizing: "border-box",
+                padding: "6px",
+                borderRadius: 8,
+                cursor: "pointer",
+                textAlign: "left",
+                background: item.selected === true ? withAlpha(t.accent, 0.09) : "transparent",
+              }}
+              onMouseEnter={(e) => {
+                if (item.selected !== true) e.currentTarget.style.background = t.subtleHover;
+              }}
+              onMouseLeave={(e) => {
+                if (item.selected !== true) e.currentTarget.style.background = "transparent";
+              }}
+            >
+              {(() => {
+                const Icon = item.icon !== undefined ? (ICONS[item.icon] ?? Globe) : null;
+                return Icon !== null ? (
+                  <Icon size={16} style={{ color: t.accent, flexShrink: 0, marginTop: 1 }} aria-hidden />
+                ) : null;
+              })()}
+              <span style={{ minWidth: 0, flex: 1 }}>
+                <span
+                  style={{
+                    display: "block",
+                    fontSize: 12,
+                    fontWeight: 600,
+                    lineHeight: 1.2,
+                    color: item.selected === true ? t.accent : t.text,
+                  }}
+                >
+                  {item.label}
+                </span>
+                {item.desc !== undefined ? (
+                  <span style={{ display: "block", fontSize: 10.5, lineHeight: 1.2, marginTop: 2, color: t.textTertiary }}>
+                    {item.desc}
+                  </span>
+                ) : null}
+              </span>
+              {item.selected === true ? (
+                <Check size={14} style={{ color: t.accent, flexShrink: 0, marginTop: 1 }} aria-hidden />
+              ) : null}
             </button>
           ),
         )}

@@ -20,7 +20,13 @@ export function DialogContent({
 }: ComponentProps<typeof DialogPrimitive.Content> & { children: ReactNode }) {
   return (
     <DialogPrimitive.Portal>
-      <DialogPrimitive.Overlay className="dialog-overlay fixed inset-0 z-40 bg-black/40" />
+      {/* R92-A: data-webview-backdrop — this overlay is a PURE DIM layer
+          (the content is the sibling DialogContent below), so it renders
+          BELOW the OS-level browser webview and must never be recorded as a
+          covering overlay (that blanked the embedded browser whenever any
+          dialog opened). The CONTENT panel keeps hiding the webview when it
+          geometrically covers it, exactly as before. */}
+      <DialogPrimitive.Overlay className="dialog-overlay fixed inset-0 z-40 bg-black/40" data-webview-backdrop />
       <DialogPrimitive.Content
         className={cn(
           "dialog-content fixed top-1/2 left-1/2 z-50 w-[min(560px,92vw)] max-h-[86vh]",

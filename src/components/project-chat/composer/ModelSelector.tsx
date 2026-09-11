@@ -546,11 +546,19 @@ export function ModelSelector({
           to it"): a fixed scrim BEHIND the popover (z-40 vs the popover's
           z-50) — 25% black + a 3px blur, fading in over 150ms via the shared
           overlay-in keyframes. Clicking it dismisses (the useDismiss
-          mousedown path fires too — both land on the same close). */}
+          mousedown path fires too — both land on the same close).
+          R92-A (owner: opening the model menu "cleared out" the embedded
+          browser): data-webview-backdrop marks this as a PURE DIM LAYER —
+          it renders BELOW the OS-level browser webview, so the overlay
+          guard no longer records its full-viewport rect as covering the
+          browser (which blanked the page for a dim the webview never
+          showed). The popover CONTENT below is untouched — it still hides
+          the webview whenever it geometrically covers it. */}
       {open ? (
         <div
           aria-hidden
           data-model-backdrop
+          data-webview-backdrop
           className="fixed inset-0 z-40"
           style={{
             background: "rgba(0,0,0,0.25)",

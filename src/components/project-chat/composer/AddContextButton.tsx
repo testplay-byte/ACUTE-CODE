@@ -5,6 +5,7 @@ import { pushLocalToast } from "../../../hooks/use-notifications";
 import { useThemeStyles } from "../../../lib/use-theme-styles";
 import { ProjectFilePicker } from "./ProjectFilePicker";
 import { useDismiss } from "./composer-utils";
+import { useNativeOptionsMenu } from "./useNativeOptionsMenu";
 import { useProjectFilePaths } from "./useProjectFiles";
 
 /**
@@ -24,6 +25,17 @@ import { useProjectFilePaths } from "./useProjectFiles";
  *  2. "Add project files…" → the searchable multi-select ProjectFilePicker
  *     over the project tree (same list as the @ quick-picker).
  *  3. Hint line: "type @ to mention a project file".
+ *
+ * ROUND-92 (R92-A — the owner: opening the add-context menu cleared out the
+ * embedded browser): inside the Tauri shell the TOP-LEVEL menu opens in the
+ * MENU OVERLAY WINDOW (useNativeOptionsMenu) so it rides ABOVE the OS-level
+ * browser webview and the browser never pauses. The nested ProjectFilePicker
+ * (a rich searchable multi-select — NOT a simple options menu) stays a DOM
+ * popover: picking "Add project files…" closes the overlay and re-enters the
+ * DOM dropdown at the picker stage, exactly as before R92. That picker's
+ * geometry can still cover the browser panel, but the R92-A caption-honesty
+ * change makes the hide read as deliberate ("browser paused while the menu
+ * is open") instead of a cleared-out blank.
  */
 export function AddContextButton({
   projectId,
@@ -36,12 +48,43 @@ export function AddContextButton({
   onAttachPaths: (paths: string[], source: "picker" | "project") => void | Promise<void>;
 }) {
   const styles = useThemeStyles();
-  const [open, setOpen] = useState(false);
   const [pickerOpen, setPickerOpen] = useState(false);
   const [busy, setBusy] = useState(false);
+  // R92-A: the overlay-first ladder — `menu.open` is the DOM leg. The local
+  // `open` below covers ONLY the nested-picker re-entry (an overlay pick of
+  // "project-files" re-enters the DOM dropdown at the picker stage).
+  const menu = useNativeOptionsMenu({
+    title: "Add context",
+    menuWidth: 256, // the DOM menu's w-64
+    align: "left", // the DOM menu's left-0
+    rowHeight: 30, // label-only rows (the hint rides its own row)
+    buildItems: () => [
+      { id: "attach-files", label: "Attach files…", icon: "hard-drive-upload" as const },
+      { id: "project-files", label: "Add project files…", icon: "folder-open" as const },
+      // The hint line, carried as a non-selected informational row (the
+      // only affordance the DOM menu had beyond the two actions).
+      { id: "at-hint", label: "type @ to mention a project file" },
+    ],
+    onPick: (id) => {
+      if (id === "attach-files") {
+        void attachFromOsPicker();
+      } else if (id === "project-files") {
+        // The nested picker is DOM-only (see the header) — reopen the DOM
+        // dropdown straight at its stage.
+        setPickerOpen(true);
+        setDomOpen(true);
+      }
+      // "at-hint" is informational — the pick just closes the menu.
+    },
+  });
+  const [domOpen, setDomOpen] = useState(false);
+  // The DOM dropdown's render truth: the hook's DOM leg (web / overlay
+  // failed) OR the local nested-picker re-entry.
+  const open = menu.open || domOpen;
   const menuRef = useDismiss(open, () => {
-    setOpen(false);
+    setDomOpen(false);
     setPickerOpen(false);
+    menu.closeAll();
   });
   const { files, isLoading } = useProjectFilePaths(projectId);
 
@@ -51,7 +94,7 @@ export function AddContextButton({
       const paths = await pickFilesViaBackend();
       // [] = the user cancelled (or no dialog backend) — never an error.
       if (paths.length > 0) {
-        setOpen(false);
+        setDomOpen(false);
         await onAttachPaths(paths, "picker");
       }
     } catch (err) {
@@ -70,12 +113,13 @@ export function AddContextButton({
       <button
         type="button"
         onClick={() => {
-          setOpen((v) => !v);
           setPickerOpen(false);
+          setDomOpen(false);
+          menu.toggle(menuRef.current);
         }}
         disabled={disabled}
         aria-haspopup="menu"
-        aria-expanded={open}
+        aria-expanded={menu.isOpen || domOpen}
         aria-label="Add context"
         title={disabled ? "Attachments need the app backend" : "Attach files or project files"}
         className="flex items-center justify-center h-7 w-7 rounded-[10px] text-[11px] font-semibold transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
@@ -93,6 +137,10 @@ export function AddContextButton({
             tooltip. The menu behavior below is untouched. */}
         <Paperclip size={12} className="shrink-0" />
       </button>
+      {/* R92-A: the DOM dropdown renders ONLY on the web/fallback leg (and
+          for the nested project-file picker) — while the overlay window is
+          the menu a hidden duplicate here would fire the overlay guard and
+          blank the browser (the bug this round fixes). */}
       {open ? (
         <div
           role="menu"
@@ -106,7 +154,7 @@ export function AddContextButton({
               isLoading={isLoading}
               onConfirm={(paths) => {
                 setPickerOpen(false);
-                setOpen(false);
+                setDomOpen(false);
                 void onAttachPaths(paths, "project");
               }}
               onCancel={() => setPickerOpen(false)}

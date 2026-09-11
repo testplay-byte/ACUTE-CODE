@@ -73,6 +73,9 @@ import { MemoryRouter, Route, Routes, useLocation, useSearchParams } from "react
 import type { ReactNode } from "react";
 import { AgentChatPanel } from "../AgentChatPanel";
 import { getFixtureProjects } from "../../../lib/project-fixtures";
+// ROUND-92 (R92-B): the picker self-heal tests plant a NULL/NULL session
+// agent through an isolated fixture backend (the customAgentsBackend holder).
+import { createFixtureAgents } from "../../../lib/agent-fixtures";
 import { createFixtureSessions } from "../../../lib/session-fixtures";
 import {
   dequeueSessionMessage,
@@ -94,6 +97,7 @@ import {
   type SessionEvent,
   type SessionsBackend,
   type ProviderView,
+  type AgentsBackend,
 } from "../../../lib/api";
 import { SEMANTIC_COLORS } from "../../../lib/semantics";
 import { useConfigStore } from "../../../lib/config-store";
@@ -105,6 +109,8 @@ import {
   computeFlyoutGeometry,
   flyoutRetargetIntent,
   FLYOUT_MARGIN,
+  shouldArmAgentFromPick,
+  type ModelOverride,
   type PlainRect,
 } from "./composer-utils";
 import {
@@ -246,6 +252,13 @@ const customBackend = vi.hoisted((): { backend: SessionsBackend | null } => ({
   backend: null,
 }));
 
+/** ROUND-92 (R92-B): per-test override for getAgentsBackend() — the picker
+ * self-heal tests plant a session agent at NULL/NULL (the R91-A reset state)
+ * and spy the PATCH. */
+const customAgentsBackend = vi.hoisted((): { backend: AgentsBackend | null } => ({
+  backend: null,
+}));
+
 vi.mock("../../../lib/api", async () => {
   const mod = await import("../../../lib/api");
   const agentsFx = await import("../../../lib/agent-fixtures");
@@ -253,7 +266,7 @@ vi.mock("../../../lib/api", async () => {
   const sessionsFx = await import("../../../lib/session-fixtures");
   return {
     ...mod,
-    getAgentsBackend: () => agentsFx.getFixtureAgents(),
+    getAgentsBackend: () => customAgentsBackend.backend ?? agentsFx.getFixtureAgents(),
     getProjectsBackend: () => projectsFx.getFixtureProjects(),
     getSessionsBackend: () => customBackend.backend ?? sessionsFx.getFixtureSessions(),
     fetchProviderModels: vi.fn(async () => [...MODELS]),
@@ -287,6 +300,7 @@ beforeEach(() => {
   useConfigStore.setState({ demoData: false }); // live mode: composer controls enabled
   useSettingsStore.setState({ modelsFreeOnly: true });
   customBackend.backend = null;
+  customAgentsBackend.backend = null;
   useNotificationStreamStore.getState().reset();
   useStreamStore.setState({ bySession: {}, subagentsLive: {} });
   vi.mocked(fetchProviderModels).mockReset().mockResolvedValue([...MODELS]);
@@ -2443,5 +2457,168 @@ describe("Composer: the action anchor + queue-send (ROUND-78 R78-B/R78-D)", () =
     expect(streamSessionMessage).not.toHaveBeenCalled();
     // The text stays (the send was refused, not queued).
     expect(textarea().value).toBe("no queue in demo mode");
+  });
+});
+
+/* ── ROUND-92 (R92-B): the picker's SELF-HEAL — an unconfigured agent arms
+ * itself from the first chat pick. The decision helper (pure), then the flow
+ * through the panel: a NULL/NULL session agent (the R91-A force-delete reset
+ * state) + a picker pick → PATCH /agents/:id with the picked pair, while a
+ * CONFIGURED agent keeps today's localStorage-only override semantics. ───── */
+describe("shouldArmAgentFromPick (ROUND-92 R92-B) — pure unit tests", () => {
+  const pair: ModelOverride = { model: "z-ai/glm-5.2:free", providerId: "openrouter" };
+
+  it("arms ONLY an unconfigured agent — either side null qualifies", () => {
+    expect(shouldArmAgentFromPick(pair, { providerId: null, model: null })).toBe(true);
+    expect(shouldArmAgentFromPick(pair, { providerId: "openrouter", model: null })).toBe(true);
+    expect(shouldArmAgentFromPick(pair, { providerId: null, model: "z-ai/glm-5.2:free" })).toBe(true);
+  });
+
+  it("a CONFIGURED agent NEVER arms from a pick (the override stays per-send)", () => {
+    expect(
+      shouldArmAgentFromPick(pair, { providerId: "openrouter", model: "openrouter/ox-alpha" }),
+    ).toBe(false);
+  });
+
+  it("no pick (the override cleared) or no agent → never arms", () => {
+    expect(shouldArmAgentFromPick(null, { providerId: null, model: null })).toBe(false);
+    expect(shouldArmAgentFromPick(pair, null)).toBe(false);
+    expect(shouldArmAgentFromPick(null, null)).toBe(false);
+  });
+});
+
+describe("Composer: the picker self-heal (ROUND-92 R92-B)", () => {
+  /** The R91-A end-state as a fixture agent: NULL/NULL, non-template. */
+  function unconfiguredAgent() {
+    return {
+      id: "agt_reset_probe",
+      name: "Reset Probe",
+      role: "implementer",
+      systemPrompt: "You do the work.",
+      providerId: null,
+      model: null,
+      visionModel: null,
+      allowedTools: [],
+      memoryPolicy: "every-turn" as const,
+      skills: [],
+      maxTurns: 40,
+      temperature: 0.2,
+      isTemplate: false,
+      version: 4,
+      createdAt: "2026-09-11T09:00:00Z",
+      updatedAt: "2026-09-11T09:00:00Z",
+    };
+  }
+
+  /** A session bound to the unconfigured agent, with one persisted turn. */
+  async function renderPanelWithUnconfiguredAgent(): Promise<void> {
+    const projects = await getFixtureProjects().list();
+    const backend = createFixtureAgents([unconfiguredAgent()]);
+    customAgentsBackend.backend = backend;
+    customBackend.backend = createFixtureSessions([
+      {
+        session: {
+          id: SESSION_ID,
+          projectId: projects[0].id,
+          agentId: "agt_reset_probe",
+          mode: "single",
+          status: "completed",
+          title: "Self-heal probe",
+          createdAt: "2026-09-11T10:00:00Z",
+          updatedAt: "2026-09-11T10:05:00Z",
+        },
+        events: [
+          {
+            seq: 1,
+            type: "message.user",
+            agentId: "agt_reset_probe",
+            payload: { role: "user", content: "first question", agentId: "agt_reset_probe", ts: "2026-09-11T10:00:10Z" },
+            ts: "2026-09-11T10:00:10Z",
+          },
+          {
+            seq: 2,
+            type: "message.assistant",
+            agentId: "agt_reset_probe",
+            payload: { role: "assistant", content: "first answer", agentId: "agt_reset_probe", ts: "2026-09-11T10:00:20Z" },
+            ts: "2026-09-11T10:00:20Z",
+          },
+        ],
+      },
+    ]);
+    renderWithProviders(<AgentChatPanel projectId={projects[0].id} project={projects[0]} />);
+  }
+
+  it("picking a model on the UNCONFIGURED agent PATCHes the agent row with the picked pair", async () => {
+    await renderPanelWithUnconfiguredAgent();
+    expect(await screen.findByText("first question", {}, { timeout: 5000 })).toBeTruthy();
+
+    const updateSpy = vi.spyOn(customAgentsBackend.backend!, "update");
+    try {
+      // The button honestly shows the unconfigured state.
+      await waitFor(() =>
+        expect(screen.getByRole("button", { name: "Choose model" }).textContent).toBe("no model"),
+      );
+
+      // Open the picker → hover the provider → pick the free model (the
+      // same interaction the R50-c2 suite drives).
+      fireEvent.click(screen.getByRole("button", { name: "Choose model" }));
+      const popover = await screen.findByRole("menu", { name: "Choose model" });
+      await waitFor(() => expect(popover.textContent).toContain("OpenRouter"));
+      fireEvent.mouseEnter(screen.getByRole("menuitem", { name: "Models of OpenRouter" }));
+      await screen.findByRole("listbox", { name: "Models of OpenRouter" });
+      await waitFor(() =>
+        expect(screen.getAllByRole("option").map((o) => o.textContent)).toEqual(["z-ai/glm-5.2:free"]),
+      );
+      fireEvent.click(screen.getByRole("option", { name: "z-ai/glm-5.2:free" }));
+
+      // THE self-heal pin: the pick armed the agent row.
+      await waitFor(() => expect(updateSpy).toHaveBeenCalledTimes(1));
+      expect(updateSpy.mock.calls[0]).toEqual([
+        "agt_reset_probe",
+        { providerId: "openrouter", model: "z-ai/glm-5.2:free" },
+      ]);
+
+      // The per-send override semantics are UNCHANGED — the pick still
+      // persists to localStorage and the button shows it.
+      expect(
+        JSON.parse(window.localStorage.getItem(`acute-model:${SESSION_ID}`) ?? "null"),
+      ).toEqual({ model: "z-ai/glm-5.2:free", providerId: "openrouter" });
+      await waitFor(() =>
+        expect(screen.getByRole("button", { name: "Choose model" }).textContent).toBe(
+          "z-ai/glm-5.2:free",
+        ),
+      );
+    } finally {
+      updateSpy.mockRestore();
+    }
+  });
+
+  it("picking a model on a CONFIGURED agent NEVER writes the row (localStorage only, exactly as before R92)", async () => {
+    await renderPanelWithConversation();
+    expect(await screen.findByText("first question", {}, { timeout: 5000 })).toBeTruthy();
+
+    const { getFixtureAgents } = await import("../../../lib/agent-fixtures");
+    const updateSpy = vi.spyOn(getFixtureAgents(), "update");
+    try {
+      fireEvent.click(screen.getByRole("button", { name: "Choose model" }));
+      const popover = await screen.findByRole("menu", { name: "Choose model" });
+      await waitFor(() => expect(popover.textContent).toContain("OpenRouter"));
+      fireEvent.mouseEnter(screen.getByRole("menuitem", { name: "Models of OpenRouter" }));
+      await screen.findByRole("listbox", { name: "Models of OpenRouter" });
+      await waitFor(() =>
+        expect(screen.getAllByRole("option").map((o) => o.textContent)).toEqual(["z-ai/glm-5.2:free"]),
+      );
+      fireEvent.click(screen.getByRole("option", { name: "z-ai/glm-5.2:free" }));
+
+      // The override lands; the row is NEVER written.
+      await waitFor(() =>
+        expect(screen.getByRole("button", { name: "Choose model" }).textContent).toBe(
+          "z-ai/glm-5.2:free",
+        ),
+      );
+      expect(updateSpy).not.toHaveBeenCalled();
+    } finally {
+      updateSpy.mockRestore();
+    }
   });
 });

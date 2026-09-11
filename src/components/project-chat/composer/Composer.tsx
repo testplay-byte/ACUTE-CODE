@@ -18,6 +18,7 @@ import {
 } from "../../../lib/api";
 import { pushLocalToast } from "../../../hooks/use-notifications";
 import { SEMANTIC_COLORS } from "../../../lib/semantics";
+import { prewarmMenuOverlay } from "../../../lib/menu-overlay";
 import { useThemeStyles } from "../../../lib/use-theme-styles";
 import { withAlpha } from "../../dashboard/helpers";
 import { AddContextButton } from "./AddContextButton";
@@ -160,6 +161,16 @@ export function Composer({
 
   const { files: projectFiles } = useProjectFilePaths(projectId);
   const atMatches = atToken !== null ? filterProjectFiles(projectFiles, atToken.query) : [];
+
+  // R92-A: prewarm the MENU OVERLAY WINDOW once at the composer's mount —
+  // the mode / thinking / add-context menus (useNativeOptionsMenu) open in
+  // it inside the Tauri shell, so the FIRST open must be an instant
+  // reposition, not a webview spawn. Idempotent by design (the RightSidebar
+  // prewarms the same window too; the Rust side no-ops when it exists) and
+  // a silent no-op in web mode.
+  useEffect(() => {
+    prewarmMenuOverlay();
+  }, []);
 
   // ROUND-50 (R50-c2): staged chips are PER-SESSION — switching sessions
   // (sidebar row click, first send creating the session) drops them so a file

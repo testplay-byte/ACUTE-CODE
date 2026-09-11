@@ -44,8 +44,21 @@ export interface MenuTheme {
   isDark: boolean;
 }
 
-/** The lucide icons the overlay page knows by name (quick-menu items). */
-export type MenuIconName = "folder-tree" | "globe" | "terminal" | "brain" | "activity" | "bot";
+/** The lucide icons the overlay page knows by name (quick-menu items +
+ * R92-A: the composer option menus' rows — mode zap/shield/clipboard,
+ * add-context hard-drive-upload/folder-open). */
+export type MenuIconName =
+  | "folder-tree"
+  | "globe"
+  | "terminal"
+  | "brain"
+  | "activity"
+  | "bot"
+  | "zap"
+  | "shield"
+  | "clipboard"
+  | "hard-drive-upload"
+  | "folder-open";
 
 /** One quick-menu item (Files / Browser / Terminal / Memory / Console /
  * Sub-agents — the RightSidebar's QuickMenu content). */
@@ -71,13 +84,28 @@ export interface SubAgentItemPayload {
   subRole: string | null;
 }
 
-export type MenuItemPayload = QuickMenuItemPayload | SubAgentItemPayload;
+/** R92-A: one generic option row (the composer's mode / thinking-level /
+ * add-context menus). `selected` drives the checkmark + the accent-tinted
+ * row the DOM menus show (ModeSwitcher's role=menuitemradio twin). */
+export interface OptionsItemPayload {
+  kind: "options";
+  id: string;
+  label: string;
+  /** Optional one-line description (a second row, quick-menu style). */
+  desc?: string;
+  icon?: MenuIconName;
+  selected?: boolean;
+}
 
-/** The whole payload the overlay page renders. */
+export type MenuItemPayload = QuickMenuItemPayload | SubAgentItemPayload | OptionsItemPayload;
+
+/** The whole payload the overlay page renders. R92-A adds the generic
+ * "options" kind (the composer's three simple menus ride the same window). */
 export interface MenuPayload {
-  kind: "quick" | "subagents";
+  kind: "quick" | "subagents" | "options";
   title: string;
-  /** The menu card's intended CSS width (220 quick / 260 sub-agents). */
+  /** The menu card's intended CSS width (220 quick / 260 sub-agents / the
+   * DOM menu's width for options — 256 for w-64, 224 for w-56). */
   width: number;
   items: MenuItemPayload[];
   theme: MenuTheme;
@@ -85,7 +113,7 @@ export interface MenuPayload {
 
 /** A picked item as reported back (kind + the discriminated item). */
 export interface MenuPick {
-  kind: "quick" | "subagents";
+  kind: "quick" | "subagents" | "options";
   item: MenuItemPayload;
 }
 
