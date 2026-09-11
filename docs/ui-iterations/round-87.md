@@ -219,6 +219,8 @@ on Linux.
 | License audit | 134 CLEAN |
 | Live boot smoke | GREEN |
 | Launcher status-mode smoke (Linux, env PAT) | GREEN |
+| CI (windows-latest) | **run 34584230413 SUCCESS** on the close-out-fix push 7b6e47e — the full verify pipeline green. (The initial push 3735f93 FAILED honestly: the two new suites left their SQLite handles open → Windows-only EPERM blocking the afterAll temp-dir removal, though every test in them passed — 2,803 green that run. Fixed per the repo's standing afterEach pattern: `await app.close(); db.close();` + retried rmSync; the reset test's mid-test app replacement now closes the beforeEach instance first.) |
+| Release workflow | **run 34584240071 SUCCESS** — v0.85.0 installer (36.6 MB) + kit (95 KB, credentials.example.txt gone) built, PUBLISHED at close-out (both assets verified, zero drafts remain). (The initial run 34579018284 failed at "Assemble launcher kit": the step still copied the R87-deleted credentials.example.txt — removed from the workflow + the launcher headers + HANDOFF's tree, ACUTE.bat CRLF preserved byte-exactly.) |
 
 New tests: the reset route's full contract (wipe + reseed + keyring clear +
 409-after), the ask_user round trip (frames + events + resolve shapes), the
