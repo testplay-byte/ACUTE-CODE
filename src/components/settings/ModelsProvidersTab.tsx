@@ -1,18 +1,23 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState, type ComponentType } from "react";
 import { useMutation, useQuery, useQueryClient, type QueryClient } from "@tanstack/react-query";
 import {
   AlertTriangle,
   ArrowLeft,
+  AudioLines,
   Check,
   Copy,
   Eye,
   EyeOff,
+  FileText,
   Globe,
+  Image as ImageIcon,
   Pencil,
   Plus,
   RefreshCw,
   Search,
   Trash2,
+  Type,
+  Video,
   X,
   Zap,
 } from "lucide-react";
@@ -242,12 +247,65 @@ const PRESET_PROVIDER_IDS: ReadonlySet<string> = new Set([
 
 /* ── ROUND-50 (R50-d) shared micro-formatting ─────────────────────────────── */
 
-/** 256000 → "256k ctx", 1048576 → "1.048M ctx" (mono micro-badges). */
-function formatContextWindow(tokens: number | null): string | null {
-  if (tokens === null) return null;
-  if (tokens >= 1_000_000) return `${Number((tokens / 1_000_000).toFixed(2))}M ctx`;
-  return `${Math.round(tokens / 1000)}k ctx`;
+/** R89-C4: the plain compact token count — 1000000 → "1M", 131072 → "131K",
+ * 8000 → "8K" (labels like "ctx" live with the caller; unset renders as
+ * "—"). Used by the sizing hints + the model card's details strip. */
+export function formatTokenCount(tokens: number | null): string {
+  if (tokens === null || !Number.isFinite(tokens)) return "—";
+  if (tokens >= 1_000_000) {
+    const m = tokens / 1_000_000;
+    return `${m >= 10 ? Math.round(m) : Number(m.toFixed(1))}M`;
+  }
+  if (tokens >= 1000) return `${Math.round(tokens / 1000)}K`;
+  return String(tokens);
 }
+
+/** R89-C1: the clean HUMAN name derived from a model id — the LAST path
+ * segment, ":free"-style suffixes stripped, separators humanized, acronymish
+ * tokens cased. "meta-llama/llama-3.3-70b-instruct:free" → "Llama 3.3 70b
+ * Instruct"; "openai/gpt-4o-mini" → "GPT 4o Mini". Falls back to the whole
+ * id when nothing sane remains. */
+export function cleanModelName(modelId: string): string {
+  const tail = modelId.split("/").pop() ?? modelId;
+  const stripped = tail.replace(/:[a-z0-9-]+$/i, "");
+  const base = stripped.trim() !== "" ? stripped : tail;
+  const tokens = base
+    .replace(/[-_]+/g, " ")
+    .split(/\s+/)
+    .filter((t) => t !== "");
+  if (tokens.length === 0) return modelId;
+  const pretty = tokens.map((t) => {
+    // tokens with digits keep their shape ("3.3", "70b", "4o")
+    if (/\d/.test(t)) return t;
+    // vowel-less short tokens read as acronyms (gpt, glm, sdxl, t5) —
+    // word-like ones (mini, nano, flash) stay words.
+    if (t.length <= 5 && !/[aeiou]/.test(t)) return t.toUpperCase();
+    return t.charAt(0).toUpperCase() + t.slice(1).toLowerCase();
+  });
+  return pretty.join(" ");
+}
+
+/** R89-C3: the capability META — one icon + one theme color per MODALITY,
+ * shared by the config dialog's toggles and the model card's chips (the
+ * owner: "each input capability a different theme color and also showing
+ * SVG icons alongside the text, the image, the video, the PDF, and the
+ * audio. Same goes for the output capabilities too"). */
+export interface CapabilityMeta {
+  key: string;
+  label: string;
+  color: string;
+  Icon: ComponentType<{ size?: number | string; className?: string; strokeWidth?: number | string }>;
+  inTitle: string;
+  outTitle: string;
+}
+
+const CAPABILITY_META: readonly CapabilityMeta[] = [
+  { key: "text", label: "Text", color: "#64748b", Icon: Type, inTitle: "Accepts text input", outTitle: "Produces text output" },
+  { key: "images", label: "Images", color: "#8b5cf6", Icon: ImageIcon, inTitle: "Accepts image inputs", outTitle: "Produces image output" },
+  { key: "video", label: "Video", color: "#ec4899", Icon: Video, inTitle: "Accepts video inputs", outTitle: "Produces video output" },
+  { key: "pdf", label: "PDF", color: "#f97316", Icon: FileText, inTitle: "Accepts PDF documents", outTitle: "Produces PDF output" },
+  { key: "audio", label: "Audio", color: "#22c55e", Icon: AudioLines, inTitle: "Accepts audio inputs", outTitle: "Produces audio output" },
+];
 
 /** Compact per-Mtok pricing summary, e.g. "$0.15 in / $0.60 out / $0.02 cache".
  * Parts that are unknown (null) are simply omitted — never rendered as $0. */
@@ -273,23 +331,40 @@ function parseNumericField(raw: string): number | null | "invalid" {
   return value;
 }
 
-/** ROUND-87 (R87): the model card's capability chips — the honest, user-set
- * INPUT/OUTPUT flags. Inputs: images (vision), videos, PDFs, audio. Outputs:
- * text, images, video, audio. Reasoning + tool use are deliberately NOT
- * here (the app detects those at runtime — the owner's directive). */
+/** ROUND-87 (R87) → R89-C3/C5: the model card's capability chips — the
+ * honest, user-set INPUT/OUTPUT flags rendered as COLORED ICON CHIPS (one
+ * theme color + one SVG icon per modality, the owner's directive). Inputs:
+ * images (vision), videos, PDFs, audio. Outputs: text, images, video,
+ * audio. Reasoning + tool use are deliberately NOT here (the app detects
+ * those at runtime — the owner's directive). */
 function capabilityChips(
   model: ProviderModelConfig | undefined,
-): Array<{ label: string; color: string; title: string }> {
+  direction: "in" | "out",
+): Array<{ label: string; color: string; title: string; Icon: CapabilityMeta["Icon"] }> {
   if (model === undefined) return [];
-  const chips: Array<{ label: string; color: string; title: string }> = [];
-  if (model.supportsVision) chips.push({ label: "IMG IN", color: "#8b5cf6", title: "Accepts image inputs" });
-  if (model.supportsVideo === true) chips.push({ label: "VID IN", color: "#8b5cf6", title: "Accepts video inputs" });
-  if (model.supportsPdf === true) chips.push({ label: "PDF IN", color: "#8b5cf6", title: "Accepts PDF documents" });
-  if (model.supportsAudio === true) chips.push({ label: "AUD IN", color: "#8b5cf6", title: "Accepts audio inputs" });
-  if (model.supportsTextOutput === true) chips.push({ label: "TEXT OUT", color: "#0ea5e9", title: "Produces text output" });
-  if (model.supportsImageOutput === true) chips.push({ label: "IMG OUT", color: "#0ea5e9", title: "Produces image output" });
-  if (model.supportsVideoOutput === true) chips.push({ label: "VID OUT", color: "#0ea5e9", title: "Produces video output" });
-  if (model.supportsAudioOutput === true) chips.push({ label: "AUD OUT", color: "#0ea5e9", title: "Produces audio output" });
+  const chips: Array<{ label: string; color: string; title: string; Icon: CapabilityMeta["Icon"] }> = [];
+  const push = (meta: CapabilityMeta, on: boolean | null | undefined): void => {
+    if (on === true) {
+      chips.push({
+        label: meta.label,
+        color: meta.color,
+        title: direction === "in" ? meta.inTitle : meta.outTitle,
+        Icon: meta.Icon,
+      });
+    }
+  };
+  if (direction === "in") {
+    push(CAPABILITY_META[0], true); // text input — always true for chat models
+    push(CAPABILITY_META[1], model.supportsVision);
+    push(CAPABILITY_META[2], model.supportsVideo);
+    push(CAPABILITY_META[3], model.supportsPdf);
+    push(CAPABILITY_META[4], model.supportsAudio);
+  } else {
+    push(CAPABILITY_META[0], model.supportsTextOutput === null ? true : model.supportsTextOutput);
+    push(CAPABILITY_META[1], model.supportsImageOutput);
+    push(CAPABILITY_META[2], model.supportsVideoOutput);
+    push(CAPABILITY_META[4], model.supportsAudioOutput);
+  }
   return chips;
 }
 
@@ -1772,6 +1847,8 @@ interface MergedModel {
   rowId: string | null;
   modelId: string;
   displayName: string;
+  /** R89-C5: the human parameter size ("70B") for the card's badge. */
+  sizeLabel: string | null;
   contextWindow: number | null;
   maxOutputTokens: number | null;
   inputPricePerMtok: number | null;
@@ -1797,6 +1874,7 @@ function mergeCatalogIntoModels(
     rowId: m.id,
     modelId: m.modelId,
     displayName: m.displayName || m.modelId,
+    sizeLabel: m.sizeLabel ?? null,
     contextWindow: m.contextWindow,
     maxOutputTokens: m.maxOutputTokens,
     inputPricePerMtok: m.inputPricePerMtok,
@@ -1814,6 +1892,7 @@ function mergeCatalogIntoModels(
       rowId: null,
       modelId: id,
       displayName: meta?.displayName ?? id,
+      sizeLabel: null,
       contextWindow: meta?.contextWindow ?? null,
       maxOutputTokens: meta?.maxOutputTokens ?? null,
       inputPricePerMtok: meta?.inputPricePerMtok ?? null,
@@ -1845,44 +1924,25 @@ interface ProviderCatalogState {
 //    app). The result line wraps BELOW the row (the row gained flex-wrap)
 //    so the full raw reason (the R77-style expand toggle) never squeezes
 //    the columns. ──────────────────────────────────────────────────────────
-function ModelTestButton({ model }: { model: ProviderModelConfig }) {
-  const styles = useThemeStyles();
-  type TestState =
-    | { kind: "idle" }
-    | { kind: "testing" }
-    | { kind: "pass"; latencyMs: number; preview?: string; usage?: { inputTokens: number; outputTokens: number } }
-    | { kind: "fail"; reason: string };
-  const [state, setState] = useState<TestState>({ kind: "idle" });
-  const [showFull, setShowFull] = useState(false);
-  const [showReply, setShowReply] = useState(false);
+// ── R89-C6: the model TEST machinery, split into a shared hook + two views ──
+//
+// The owner's verdict: the old inline result "was taking up way too much
+// space and it was looking ugly… the whole layout broke". The test state now
+// lives in `useModelTest` (one definition); the LIST renders it as a
+// DEDICATED SECTION that expands below the model card (top half unchanged);
+// the config dialog keeps the compact inline line (its footer row).
 
-  // ROUND-87 (R87, owner: "when I click the test button it should show an
-  // animation. After testing it, it should show the results … the results
-  // should disappear automatically after 5 seconds … After 5 seconds the
-  // test button's color will be changed slightly green or slightly red
-  // depending on whether it was successful or not"): the RESULT LINE and
-  // the button TINT both fade away after 5s (a fresh test re-arms both —
-  // clicking again resets the timer). The tint rides the button's own
-  // background with a 300ms transition.
-  const [showResult, setShowResult] = useState(false);
-  const [tinted, setTinted] = useState(false);
-  useEffect(() => {
-    if (state.kind !== "pass" && state.kind !== "fail") return;
-    setShowResult(true);
-    setTinted(true);
-    const hide = setTimeout(() => {
-      setShowResult(false);
-      setTinted(false);
-    }, 5_000);
-    return () => clearTimeout(hide);
-  }, [state]);
+export type ModelTestState =
+  | { kind: "idle" }
+  | { kind: "testing" }
+  | { kind: "pass"; latencyMs: number; preview?: string; usage?: { inputTokens: number; outputTokens: number } }
+  | { kind: "fail"; reason: string };
 
+function useModelTest(model: ProviderModelConfig | null): { state: ModelTestState; run: () => void } {
+  const [state, setState] = useState<ModelTestState>({ kind: "idle" });
   const run = (): void => {
+    if (model === null) return;
     setState({ kind: "testing" });
-    setShowFull(false);
-    setShowReply(false);
-    setShowResult(false);
-    setTinted(false);
     testModelConnection(model.id)
       .then((result) => {
         if (result.ok) {
@@ -1908,50 +1968,100 @@ function ModelTestButton({ model }: { model: ProviderModelConfig }) {
         });
       });
   };
+  return { state, run };
+}
 
-  const testing = state.kind === "testing";
+/** The R87 animation/tint contract: the button spins while testing, then
+ * tints light green/red for 5s (a fresh test re-arms it; the 300ms
+ * transition rides the button's own background). */
+function useTestTint(state: ModelTestState): { tinted: boolean; outcome: "pass" | "fail" | null } {
+  const [tinted, setTinted] = useState(false);
+  useEffect(() => {
+    if (state.kind !== "pass" && state.kind !== "fail") return;
+    setTinted(true);
+    const hide = setTimeout(() => setTinted(false), 5_000);
+    return () => clearTimeout(hide);
+  }, [state]);
   const outcome = state.kind === "pass" ? "pass" : state.kind === "fail" ? "fail" : null;
+  return { tinted, outcome };
+}
+
+/** The presentational TEST button (both views share it). */
+function TestIconButton({
+  model,
+  state,
+  run,
+  label,
+}: {
+  model: ProviderModelConfig;
+  state: ModelTestState;
+  run: () => void;
+  label?: string;
+}) {
+  const styles = useThemeStyles();
+  const { tinted, outcome } = useTestTint(state);
+  const testing = state.kind === "testing";
+  return (
+    <button
+      onClick={run}
+      disabled={testing}
+      aria-label={`Test model ${model.displayName || model.modelId}`}
+      title="Send a real test request to this model — checks the key, the model id, and the reply"
+      data-testid="model-test-button"
+      data-model-row={model.id}
+      className="h-8 rounded-[10px] shrink-0 text-[11px] font-bold transition-colors duration-300 flex items-center justify-center gap-1.5 px-2.5"
+      style={{
+        width: label === undefined ? 32 : undefined,
+        color: outcome === "pass" ? "#16a34a" : outcome === "fail" ? "#ef4444" : styles.textSecondary,
+        background: tinted
+          ? outcome === "pass"
+            ? withAlpha("#22c55e", 0.14)
+            : withAlpha("#ef4444", 0.12)
+          : "transparent",
+        borderColor: "transparent",
+      }}
+      onMouseEnter={(e) => {
+        if (!tinted) e.currentTarget.style.background = withAlpha(styles.accent, 0.1);
+      }}
+      onMouseLeave={(e) => {
+        if (!tinted) e.currentTarget.style.background = "transparent";
+      }}
+    >
+      {testing ? (
+        <span className="grid place-items-center ac-pulse" aria-hidden>
+          <RefreshCw size={12} className="animate-spin" />
+        </span>
+      ) : tinted && outcome === "pass" ? (
+        <Check size={12} strokeWidth={2.5} />
+      ) : tinted && outcome === "fail" ? (
+        <AlertTriangle size={12} />
+      ) : (
+        <Zap size={12} />
+      )}
+      {label !== undefined && <span className="text-[11px] font-bold">{label}</span>}
+    </button>
+  );
+}
+
+/** The config dialog's footer test button — the compact inline result line
+ * (kept from R87; the dialog's footer row is the right home for it). */
+function ModelTestButton({ model }: { model: ProviderModelConfig }) {
+  const styles = useThemeStyles();
+  const { state, run } = useModelTest(model);
+  const [showReply, setShowReply] = useState(false);
+  const [showFull, setShowFull] = useState(false);
+  // The inline line auto-dismisses after 5s (the R87 contract).
+  const [showResult, setShowResult] = useState(false);
+  useEffect(() => {
+    if (state.kind !== "pass" && state.kind !== "fail") return;
+    setShowResult(true);
+    const hide = setTimeout(() => setShowResult(false), 5_000);
+    return () => clearTimeout(hide);
+  }, [state]);
 
   return (
     <>
-      <button
-        onClick={run}
-        disabled={testing}
-        aria-label={`Test model ${model.displayName || model.modelId}`}
-        title="Send a real test request to this model — checks the key, the model id, and the reply"
-        data-testid="model-test-button"
-        data-model-row={model.id}
-        className="h-8 w-8 grid place-items-center rounded-[10px] shrink-0 text-[11px] font-bold transition-colors duration-300"
-        style={{
-          color: outcome === "pass" ? "#16a34a" : outcome === "fail" ? "#ef4444" : styles.textSecondary,
-          background: tinted
-            ? outcome === "pass"
-              ? withAlpha("#22c55e", 0.14)
-              : withAlpha("#ef4444", 0.12)
-            : "transparent",
-          borderColor: "transparent",
-        }}
-        onMouseEnter={(e) => {
-          if (!tinted) e.currentTarget.style.background = withAlpha(styles.accent, 0.1);
-        }}
-        onMouseLeave={(e) => {
-          if (!tinted) e.currentTarget.style.background = "transparent";
-        }}
-      >
-        {testing ? (
-          <span className="grid place-items-center ac-pulse" aria-hidden>
-            <RefreshCw size={12} className="animate-spin" />
-          </span>
-        ) : tinted && outcome === "pass" ? (
-          <Check size={12} strokeWidth={2.5} />
-        ) : tinted && outcome === "fail" ? (
-          <AlertTriangle size={12} />
-        ) : (
-          <Zap size={12} />
-        )}
-      </button>
-      {/* ROUND-87 (R87): the result line — now ANIMATED (AnimatePresence
-       * slide-down) and AUTO-DISMISSING (5s; a fresh test re-arms it). */}
+      <TestIconButton model={model} state={state} run={run} />
       <AnimatePresence>
         {showResult && state.kind !== "idle" && state.kind !== "testing" && (
           <motion.div
@@ -2019,6 +2129,298 @@ function ModelTestButton({ model }: { model: ProviderModelConfig }) {
         )}
       </AnimatePresence>
     </>
+  );
+}
+
+// ── R89-C5/C6: the MODEL CARD — the bordered card with DEDICATED SECTIONS ──
+//
+// The owner's directive: "the details should be shown in the dedicated
+// sections and should be handled properly. The left section and the right
+// section should be separate from each other. Also in the left section where
+// it shows the details, the details should be formatted into dedicated
+// sections and areas properly, like: the total in context, the input price,
+// output price, the cache read, all the capabilities." And for the test
+// result: "the size of the model should expand: the top half should remain
+// exactly as it was. At the bottom a new dedicated section should appear
+// just below that model and there the details should be shown."
+function ModelCard({
+  m,
+  row,
+  onEdit,
+  onDelete,
+}: {
+  m: MergedModel;
+  row: ProviderModelConfig | null;
+  onEdit: () => void;
+  onDelete: () => void;
+}) {
+  const styles = useThemeStyles();
+  const { state, run } = useModelTest(row);
+  const [showReply, setShowReply] = useState(false);
+  const [showFull, setShowFull] = useState(false);
+  const [showResult, setShowResult] = useState(false);
+  const hideTimerRef = useRef<number | null>(null);
+
+  // The section appears on completion and auto-collapses after 5s UNLESS the
+  // owner interacts with it (Show reply / Show full cancels the timer — the
+  // reader keeps the section as long as they are reading).
+  useEffect(() => {
+    if (state.kind !== "pass" && state.kind !== "fail") return;
+    setShowResult(true);
+    hideTimerRef.current = window.setTimeout(() => {
+      setShowResult(false);
+      hideTimerRef.current = null;
+    }, 5_000);
+    return () => {
+      if (hideTimerRef.current !== null) {
+        window.clearTimeout(hideTimerRef.current);
+        hideTimerRef.current = null;
+      }
+    };
+  }, [state]);
+  const keepOpen = (): void => {
+    if (hideTimerRef.current !== null) {
+      window.clearTimeout(hideTimerRef.current);
+      hideTimerRef.current = null;
+    }
+  };
+
+  const inChips = row !== null ? capabilityChips(row, "in") : [];
+  const outChips = row !== null ? capabilityChips(row, "out") : [];
+  const details: Array<[string, string]> = [
+    ["Context", m.contextWindow !== null ? formatTokenCount(m.contextWindow) : "—"],
+    ["Input", m.inputPricePerMtok !== null ? `$${m.inputPricePerMtok}/M` : "—"],
+    ["Output", m.outputPricePerMtok !== null ? `$${m.outputPricePerMtok}/M` : "—"],
+    ["Cache read", m.inputPriceCachedPerMtok !== null ? `$${m.inputPriceCachedPerMtok}/M` : "—"],
+  ];
+
+  return (
+    <div className="flex flex-col">
+      {/* ── the CARD (the "top half" — stays exactly as it is when the test
+          section expands below) ── */}
+      <div
+        className="rounded-[14px] border-[1.5px] px-4 py-3 flex flex-wrap items-center gap-3"
+        style={{
+          borderColor: m.configured ? styles.border : withAlpha(styles.accent, 0.3),
+          background: styles.isDark ? "rgba(255,255,255,0.015)" : "rgba(0,0,0,0.01)",
+        }}
+      >
+        {/* LEFT: identity — name, badges, capability ICON chips, the id */}
+        <div className="min-w-0 flex-1 flex flex-col gap-1.5">
+          <div className="flex items-center gap-1.5 min-w-0 flex-wrap">
+            <span
+              className="truncate text-[13.5px] font-bold"
+              style={{ color: m.configured ? styles.text : styles.textSecondary }}
+              title={m.modelId}
+            >
+              {m.displayName || cleanModelName(m.modelId)}
+            </span>
+            {isFreeModelEntry(m) && (
+              <span
+                className="shrink-0 px-1.5 py-0.5 rounded-full text-[10px] font-bold"
+                style={{ background: withAlpha("#22c55e", 0.12), color: "#22c55e" }}
+              >
+                FREE
+              </span>
+            )}
+            {m.hidden && (
+              <span
+                className="shrink-0 px-1.5 py-0.5 rounded-full text-[10px] font-bold"
+                style={{ background: styles.subtle, color: styles.textTertiary }}
+                title="Hidden from the chat model picker (still visible here)"
+              >
+                HIDDEN
+              </span>
+            )}
+            {m.configured && m.sizeLabel !== null && m.sizeLabel !== "" && (
+              <span
+                className="shrink-0 px-1.5 py-0.5 rounded-full text-[10px] font-bold font-mono"
+                style={{ background: withAlpha(styles.accent, 0.1), color: styles.accent }}
+              >
+                {m.sizeLabel}
+              </span>
+            )}
+          </div>
+          {/* the capability ICON chips (R89-C3/C5: colored SVG chips instead
+              of text tags) — IN group, divider, OUT group. */}
+          {m.configured && (inChips.length > 0 || outChips.length > 0) && (
+            <div className="flex items-center gap-1.5 min-w-0 flex-wrap">
+              {inChips.map((chip) => (
+                <span
+                  key={`in:${chip.label}`}
+                  className="shrink-0 inline-flex items-center gap-1 px-1.5 py-0.5 rounded-full text-[10px] font-bold"
+                  style={{ background: withAlpha(chip.color, 0.13), color: chip.color }}
+                  title={chip.title}
+                >
+                  <chip.Icon size={10} strokeWidth={2.25} aria-hidden />
+                  {chip.label}
+                </span>
+              ))}
+              {outChips.length > 0 && (
+                <span className="shrink-0 w-[1px] h-3.5" style={{ background: styles.border }} aria-hidden />
+              )}
+              {outChips.map((chip) => (
+                <span
+                  key={`out:${chip.label}`}
+                  className="shrink-0 inline-flex items-center gap-1 px-1.5 py-0.5 rounded-full text-[10px] font-bold"
+                  style={{ background: withAlpha(chip.color, 0.09), color: withAlpha(chip.color, 0.9), border: `1px solid ${withAlpha(chip.color, 0.3)}` }}
+                  title={chip.title}
+                >
+                  <chip.Icon size={10} strokeWidth={2.25} aria-hidden />
+                  {chip.label}
+                </span>
+              ))}
+            </div>
+          )}
+          <span className="truncate font-mono text-[10px]" style={{ color: styles.textTertiary }} title={m.modelId}>
+            {m.modelId}
+          </span>
+        </div>
+
+        {/* RIGHT: the actions (R87's uniform icon trio) */}
+        {m.configured && row !== null && (
+          <div className="flex items-center gap-1 shrink-0">
+            <TestIconButton model={row} state={state} run={run} />
+            <button
+              onClick={onEdit}
+              aria-label={`Configure model ${m.displayName || m.modelId}`}
+              title="Configure — display name, capabilities, pricing, limits"
+              className="h-8 w-8 grid place-items-center rounded-[10px] shrink-0 transition-colors"
+              style={{ color: styles.textSecondary }}
+              onMouseEnter={(e) => (e.currentTarget.style.background = withAlpha(styles.accent, 0.1))}
+              onMouseLeave={(e) => (e.currentTarget.style.background = "transparent")}
+            >
+              <Pencil size={13} />
+            </button>
+            <button
+              onClick={onDelete}
+              aria-label={`Delete model ${m.displayName || m.modelId}`}
+              title="Delete this model"
+              className="h-8 w-8 grid place-items-center rounded-[10px] shrink-0 transition-colors"
+              style={{ color: styles.textTertiary }}
+              onMouseEnter={(e) => (e.currentTarget.style.background = withAlpha("#ef4444", 0.12))}
+              onMouseLeave={(e) => (e.currentTarget.style.background = "transparent")}
+            >
+              <Trash2 size={13} />
+            </button>
+          </div>
+        )}
+      </div>
+
+      {/* ── the DETAILS STRIP — the dedicated sections (context / input /
+          output / cache read), its own bordered band under the main row. */}
+      <div
+        className="mt-1.5 mx-1 grid grid-cols-2 min-[420px]:grid-cols-4 rounded-[10px] border-[1.5px] overflow-hidden"
+        style={{ borderColor: withAlpha(styles.border, 0.6) }}
+      >
+        {details.map(([label, value], i) => (
+          <div
+            key={label}
+            className="px-3 py-1.5 flex flex-col gap-0"
+            style={{
+              background: styles.isDark ? "rgba(255,255,255,0.012)" : "rgba(0,0,0,0.006)",
+              ...(i > 0 ? { borderLeft: `1px solid ${withAlpha(styles.border, 0.5)}` } : {}),
+            }}
+          >
+            <span className="text-[8.5px] font-bold uppercase tracking-widest" style={{ color: styles.textTertiary }}>
+              {label}
+            </span>
+            <span
+              className="font-mono text-[11px] font-bold"
+              style={{ color: value === "—" ? styles.textTertiary : styles.text }}
+            >
+              {value}
+            </span>
+          </div>
+        ))}
+      </div>
+
+      {/* ── the TEST SECTION (R89-C6) — the dedicated expansion below the
+          card: the top half stays untouched, the details get their own
+          bordered band. Auto-collapses after 5s; interacting keeps it. */}
+      <AnimatePresence>
+        {showResult && state.kind !== "idle" && state.kind !== "testing" && (
+          <motion.div
+            initial={{ opacity: 0, height: 0 }}
+            animate={{ opacity: 1, height: "auto" }}
+            exit={{ opacity: 0, height: 0 }}
+            transition={{ duration: 0.22, ease }}
+            className="overflow-hidden"
+            data-testid="model-test-result"
+            data-model-test={state.kind}
+          >
+            {state.kind === "pass" ? (
+              <div
+                className="mt-1.5 rounded-[12px] border-[1.5px] px-3.5 py-2.5 flex flex-col gap-1.5"
+                style={{ borderColor: withAlpha("#22c55e", 0.45), background: withAlpha("#22c55e", 0.05) }}
+              >
+                <div className="flex items-center gap-2.5 flex-wrap text-[11px]">
+                  <span
+                    className="inline-flex items-center gap-1.5 font-bold"
+                    style={{ color: "#22c55e" }}
+                  >
+                    <Check size={12} strokeWidth={2.5} /> responded in {state.latencyMs}ms
+                  </span>
+                  {state.usage !== undefined && (
+                    <span className="font-mono text-[10.5px]" style={{ color: styles.textTertiary }}>
+                      {state.usage.inputTokens} tokens in / {state.usage.outputTokens} out
+                    </span>
+                  )}
+                  <span className="flex-1" />
+                  {state.preview !== undefined && (
+                    <button
+                      onClick={() => {
+                        keepOpen();
+                        setShowReply(!showReply);
+                      }}
+                      className="text-[10.5px] font-bold underline underline-offset-2"
+                      style={{ color: styles.textSecondary }}
+                      data-testid="model-test-show-reply"
+                    >
+                      {showReply ? "Hide reply" : "Show reply"}
+                    </button>
+                  )}
+                </div>
+                {showReply && state.preview !== undefined && (
+                  <div
+                    className="font-mono text-[10.5px] break-all rounded-[8px] px-2.5 py-1.5 max-h-28 overflow-y-auto auto-scroll"
+                    style={{ background: styles.isDark ? "rgba(0,0,0,0.25)" : "rgba(0,0,0,0.04)", color: styles.textSecondary }}
+                    data-testid="model-test-reply-body"
+                  >
+                    {state.preview}
+                  </div>
+                )}
+              </div>
+            ) : (
+              <div
+                className="mt-1.5 rounded-[12px] border-[1.5px] px-3.5 py-2.5 flex flex-col gap-1.5"
+                style={{ borderColor: withAlpha("#ef4444", 0.45), background: withAlpha("#ef4444", 0.05) }}
+              >
+                <div className="flex items-center gap-1.5 text-[11px] font-bold" style={{ color: "#ef4444" }}>
+                  <AlertTriangle size={12} /> the test request failed
+                </div>
+                <div className="text-[10.5px] break-all" style={{ color: styles.textSecondary }} data-testid="model-test-reason">
+                  {showFull ? state.reason : `${state.reason.slice(0, 300)}${state.reason.length > 300 ? "…" : ""}`}
+                </div>
+                {state.reason.length > 300 && (
+                  <button
+                    onClick={() => {
+                      keepOpen();
+                      setShowFull(!showFull);
+                    }}
+                    className="text-[10.5px] font-bold underline underline-offset-2 self-start"
+                    style={{ color: styles.textTertiary }}
+                    data-testid="model-test-show-full"
+                  >
+                    {showFull ? "Show less" : "Show full error"}
+                  </button>
+                )}
+              </div>
+            )}
+          </motion.div>
+        )}
+      </AnimatePresence>
+    </div>
   );
 }
 
@@ -2115,130 +2517,24 @@ function ModelListSection({
         </div>
       ) : (
         <div className="flex flex-col gap-2.5 p-3">
+          {/* R89-C5/C6: every model renders through the ModelCard — the
+              bordered card with the LEFT identity / RIGHT actions split,
+              the DEDICATED details strip (context / input / output / cache
+              read), the colored capability ICON chips, and the expanding
+              TEST section below the card. */}
           {merged.map((m) => (
-            <div
+            <ModelCard
               key={m.rowId ?? `cat:${m.modelId}`}
-              // ROUND-87 (R87, owner: "the models should be shown properly. The
-              // display name should be shown properly for the model and it
-              // should be given in a dedicated section with borders around
-              // it"): every model is now its own BORDERED CARD (rounded-14,
-              // 1.5px border, generous padding) instead of a cramped list
-              // row — and the three right-side actions are uniform 8×8
-              // rounded icon buttons. The test result line still wraps BELOW
-              // (flex-wrap) inside the card.
-              className="flex flex-wrap items-center gap-3 rounded-[14px] border-[1.5px] px-4 py-3"
-              style={{
-                borderColor: m.configured ? styles.border : withAlpha(styles.accent, 0.3),
-                background: styles.isDark ? "rgba(255,255,255,0.015)" : "rgba(0,0,0,0.01)",
+              m={m}
+              row={models.find((r) => r.id === m.rowId) ?? null}
+              onEdit={() => {
+                const row = models.find((r) => r.id === m.rowId);
+                if (row) setConfiguring(row);
               }}
-            >
-              {/* left: name + badges / id + pricing summary (R50-d) */}
-              <div className="min-w-0 flex-1 flex flex-col gap-1">
-                <div className="flex items-center gap-1.5 min-w-0 flex-wrap">
-                  <span
-                    className="truncate text-[13.5px] font-bold"
-                    style={{ color: m.configured ? styles.text : styles.textSecondary }}
-                    title={m.modelId}
-                  >
-                    {m.displayName || m.modelId}
-                  </span>
-                  {isFreeModelEntry(m) && (
-                    <span
-                      className="shrink-0 px-1.5 py-0.5 rounded-full text-[10px] font-bold"
-                      style={{ background: withAlpha("#22c55e", 0.12), color: "#22c55e" }}
-                    >
-                      FREE
-                    </span>
-                  )}
-                  {/* ROUND-87 (R87): the capability chips — the honest,
-                      user-set input/output flags (the THINKING badge is gone
-                      with the dialog's reasoning toggle: the app DETECTS
-                      reasoning, the user never configures it). */}
-                  {m.configured && capabilityChips(models.find((row) => row.id === m.rowId)).map((chip) => (
-                    <span
-                      key={chip.label}
-                      className="shrink-0 px-1.5 py-0.5 rounded-full text-[10px] font-bold"
-                      style={{ background: withAlpha(chip.color, 0.12), color: chip.color }}
-                      title={chip.title}
-                    >
-                      {chip.label}
-                    </span>
-                  ))}
-                  {m.hidden && (
-                    <span
-                      className="shrink-0 px-1.5 py-0.5 rounded-full text-[10px] font-bold"
-                      style={{ background: styles.subtle, color: styles.textTertiary }}
-                      title="Hidden from the chat model picker (still visible here)"
-                    >
-                      HIDDEN
-                    </span>
-                  )}
-                </div>
-                <div className="flex items-center gap-2 min-w-0 flex-wrap">
-                  <span
-                    className="truncate font-mono text-[10px]"
-                    style={{ color: styles.textTertiary }}
-                    title={m.modelId}
-                  >
-                    {m.modelId}
-                  </span>
-                  {m.contextWindow !== null && (
-                    <span
-                      className="shrink-0 px-1.5 py-0.5 rounded-full font-mono text-[10px]"
-                      style={{ background: styles.subtle, color: styles.textTertiary }}
-                    >
-                      {formatContextWindow(m.contextWindow)}
-                    </span>
-                  )}
-                  {/* compact pricing summary — mono micro-type (R50-d) */}
-                  {formatPricingSummary(m) !== null ? (
-                    <span className="shrink-0 font-mono text-[10px]" style={{ color: styles.textTertiary }}>
-                      {formatPricingSummary(m)}
-                    </span>
-                  ) : (
-                    <span className="shrink-0 font-mono text-[10px] italic" style={{ color: styles.textTertiary, opacity: 0.7 }}>
-                      pricing not set
-                    </span>
-                  )}
-                </div>
-              </div>
-              {m.configured && m.rowId !== null && (
-                <div className="flex items-center gap-1 shrink-0">
-                  {/* ROUND-87 (R87, owner: "the three buttons on the right side
-                      should be handled much more properly"): uniform 8×8
-                      rounded-[10px] icon buttons — TEST (animated, 5s tint),
-                      EDIT, DELETE (danger-tinted hover), consistent titles. */}
-                  <ModelTestButton model={models.find((row) => row.id === m.rowId)!} />
-                  <button
-                    onClick={() => {
-                      const row = models.find((row) => row.id === m.rowId);
-                      if (row) setConfiguring(row);
-                    }}
-                    aria-label={`Configure model ${m.displayName || m.modelId}`}
-                    title="Configure — display name, capabilities, pricing, limits"
-                    className="h-8 w-8 grid place-items-center rounded-[10px] shrink-0 transition-colors"
-                    style={{ color: styles.textSecondary }}
-                    onMouseEnter={(e) => (e.currentTarget.style.background = withAlpha(styles.accent, 0.1))}
-                    onMouseLeave={(e) => (e.currentTarget.style.background = "transparent")}
-                  >
-                    <Pencil size={13} />
-                  </button>
-                  <button
-                    onClick={() => {
-                      if (window.confirm(`Delete model "${m.displayName || m.modelId}"?`)) deleteModel.mutate(m.rowId!);
-                    }}
-                    aria-label={`Delete model ${m.displayName || m.modelId}`}
-                    title="Delete this model"
-                    className="h-8 w-8 grid place-items-center rounded-[10px] shrink-0 transition-colors"
-                    style={{ color: styles.textTertiary }}
-                    onMouseEnter={(e) => (e.currentTarget.style.background = withAlpha("#ef4444", 0.12))}
-                    onMouseLeave={(e) => (e.currentTarget.style.background = "transparent")}
-                  >
-                    <Trash2 size={13} />
-                  </button>
-                </div>
-              )}
-            </div>
+              onDelete={() => {
+                if (window.confirm(`Delete model "${m.displayName || m.modelId}"?`)) deleteModel.mutate(m.rowId!);
+              }}
+            />
           ))}
         </div>
       )}
@@ -2354,9 +2650,11 @@ function AddModelsDialog({
     })
     .slice(0, 300); // sanity cap — the live OpenRouter catalog is huge
 
-  /** ROUND-87 (R87): the prefill a picked model hands to the config dialog —
-   * the provider's own display name first, then the static catalog's
-   * pricing/context/vision knowledge. */
+  /** ROUND-87 (R87) → R89-C2: the prefill a picked model hands to the config
+   * dialog — a CLEAN human display name FIRST (the live entry's name, then
+   * the served catalog's, then the last path segment humanized — the owner:
+   * "the last part of the model ID was supposed to be shown as the name"),
+   * then the static catalog's pricing/context/vision knowledge. */
   const prefillFor = (id: string): ModelAddPrefill => {
     const meta = staticById.get(id);
     const entry = catalog.entries.find((e) => e.id === id);
@@ -2365,7 +2663,7 @@ function AddModelsDialog({
       displayName:
         entry && entry.name !== "" && entry.name !== id
           ? entry.name
-          : meta?.displayName,
+          : meta?.displayName ?? cleanModelName(id),
       ...(meta
         ? {
             contextWindow: meta.contextWindow,
@@ -2491,6 +2789,12 @@ function AddModelsDialog({
             const meta = staticById.get(entry.id);
             const alreadyAdded = configuredIds.has(entry.id);
             const free = meta ? meta.free : isFreeModelEntry({ modelId: entry.id });
+            // R89-C1 (the owner: "it should only show the model ID, the NAME
+            // of the model [at the top] and below it the model ID"): the
+            // title is the clean human NAME — the live entry's name, else
+            // the last path segment humanized — NEVER the full id twice.
+            const cleanName =
+              entry.name !== "" && entry.name !== entry.id ? entry.name : cleanModelName(entry.id);
             return (
               <button
                 type="button"
@@ -2515,7 +2819,7 @@ function AddModelsDialog({
                       className="truncate text-[12.5px] font-bold"
                       style={{ color: styles.text }}
                     >
-                      {entry.name !== "" && entry.name !== entry.id ? entry.name : entry.id}
+                      {cleanName}
                     </span>
                     {free ? (
                       <span
@@ -2539,14 +2843,7 @@ function AddModelsDialog({
                       >
                         ADDED
                       </span>
-                    ) : (
-                      <span
-                        className="shrink-0 text-[10px] font-bold"
-                        style={{ color: styles.textTertiary }}
-                      >
-                        CONFIGURE →
-                      </span>
-                    )}
+                    ) : null}
                   </span>
                   <span className="flex items-center gap-2 min-w-0 flex-wrap">
                     <span className="truncate font-mono text-[10px]" style={{ color: styles.textTertiary }}>
@@ -2555,7 +2852,7 @@ function AddModelsDialog({
                     {meta && (
                       <span className="shrink-0 font-mono text-[10px]" style={{ color: styles.textTertiary }}>
                         {formatPricingSummary(meta) ?? "pricing unknown"}
-                        {meta.contextWindow > 0 ? ` · ${formatContextWindow(meta.contextWindow)}` : ""}
+                        {meta.contextWindow > 0 ? ` · ${formatTokenCount(meta.contextWindow)}` : ""}
                       </span>
                     )}
                   </span>
@@ -2677,7 +2974,10 @@ function draftFromPrefill(prefill: ModelAddPrefill): ModelConfigDraft {
   const num = (v: number | null | undefined): string => (v === null || v === undefined ? "" : String(v));
   return {
     modelId: prefill.modelId,
-    displayName: prefill.displayName ?? "",
+    // R89-C2: the default display NAME is the humanized last segment (the
+    // owner: "the last part of the model ID was supposed to be shown as the
+    // name") — the prefill's explicit name wins when present.
+    displayName: prefill.displayName ?? cleanModelName(prefill.modelId),
     sizeLabel: "",
     contextWindow: num(prefill.contextWindow),
     maxOutputTokens: num(prefill.maxOutputTokens),
@@ -2697,30 +2997,26 @@ function draftFromPrefill(prefill: ModelAddPrefill): ModelConfigDraft {
   };
 }
 
-/** ROUND-87 (R87, owner: "the option for selecting the models … configure
- * which kinds of inputs this model accepts, like whether it accepts text
- * (all the models accept text), and configure whether it accepts images,
- * videos, and PDFs. The user can select those options on or off, not just
- * in the toggle format but in a cleaner way"): the CAPABILITY CHIP — a
- * clean on/off pill (accent-filled when on, bordered when off). Module
- * level, NOT inside the dialog — a component defined in render remounts
- * its subtree on every keystroke (the classic anti-pattern). */
+/** ROUND-87 (R87) → R89-C3: the CAPABILITY CHIP — a clean on/off pill with
+ * the modality's OWN theme color + SVG icon (accent-filled when on, bordered
+ * when off). Module level, NOT inside the dialog — a component defined in
+ * render remounts its subtree on every keystroke (the classic anti-pattern). */
 function CapChip({
-  label,
+  meta,
   on,
   onClick,
   locked = false,
   title,
   testId,
 }: {
-  label: string;
+  meta: CapabilityMeta;
   on: boolean;
   onClick?: () => void;
   locked?: boolean;
   title: string;
   testId: string;
 }) {
-  const styles = useThemeStyles();
+  const { color, Icon, label } = meta;
   return (
     <button
       type="button"
@@ -2729,16 +3025,42 @@ function CapChip({
       disabled={locked}
       title={title}
       data-testid={testId}
-      className="h-8 px-3.5 rounded-full text-[11.5px] font-bold border-[1.5px] transition-all shrink-0 disabled:cursor-default"
+      className="h-8 px-3 rounded-full text-[11.5px] font-bold border-[1.5px] transition-all shrink-0 disabled:cursor-default flex items-center gap-1.5"
       style={{
-        borderColor: on ? styles.accent : styles.border,
-        background: on ? styles.accent : "transparent",
-        color: on ? styles.accentText : styles.textTertiary,
+        borderColor: on ? color : withAlpha(color, 0.35),
+        background: on ? withAlpha(color, 0.16) : "transparent",
+        color: on ? color : withAlpha(color, 0.65),
         opacity: locked ? 0.85 : 1,
       }}
     >
+      <Icon size={12} strokeWidth={2.25} aria-hidden />
       {label}
     </button>
+  );
+}
+
+/** R89-C4 helpers for the sizing/preview formatting: parse once, share
+ * everywhere (numOrNull for tokens; priceOrNull for $/1M with 3-decimals
+ * trimmed; TokenHint = the compact form rendered under the input). */
+function numOrNull(raw: string): number | null {
+  const parsed = parseNumericField(raw);
+  return parsed === "invalid" ? null : parsed;
+}
+
+function priceOrNull(raw: string): string {
+  const parsed = parseNumericField(raw);
+  if (parsed === "invalid" || parsed === null) return "—";
+  return `$${parsed}`;
+}
+
+function TokenHint({ raw }: { raw: string }): JSX.Element | null {
+  const styles = useThemeStyles();
+  const parsed = numOrNull(raw);
+  if (parsed === null || parsed < 1000) return null;
+  return (
+    <span className="block mt-0.5 font-mono text-[9.5px]" style={{ color: styles.textTertiary }} aria-hidden>
+      ≈ {formatTokenCount(parsed)}
+    </span>
   );
 }
 
@@ -2842,11 +3164,8 @@ function ModelConfigDialog({
     color: styles.text,
   } as const;
 
-  const preview = formatPricingSummary({
-    inputPricePerMtok: parseNumericField(draft.inputPrice) === "invalid" ? null : (parseNumericField(draft.inputPrice) as number | null),
-    outputPricePerMtok: parseNumericField(draft.outputPrice) === "invalid" ? null : (parseNumericField(draft.outputPrice) as number | null),
-    inputPriceCachedPerMtok: parseNumericField(draft.cachePrice) === "invalid" ? null : (parseNumericField(draft.cachePrice) as number | null),
-  });
+  // R89-C4: the preview line's per-field compact formatting (unused parts
+  // of the old single-string preview were retired with it).
 
   return (
     <div
@@ -2950,11 +3269,13 @@ function ModelConfigDialog({
               </div>
               <div className="flex items-center gap-3">
                 <div className="min-w-0 flex-1">
-                  <span className="block text-[12px] font-bold" style={{ color: styles.textSecondary }}>
+                  <span className="block text-[11.5px] font-bold" style={{ color: styles.textSecondary }}>
                     Hide from chat picker
                   </span>
-                  <span className="block text-[10.5px]" style={{ color: styles.textTertiary }}>
-                    Kept here in Settings, but not offered in the chat model selector.
+                  {/* R89-C2 (the owner: "the description could be made
+                      smaller"): one compact line instead of the sentence. */}
+                  <span className="block text-[9.5px]" style={{ color: styles.textTertiary }}>
+                    Stays in Settings — hidden from chat.
                   </span>
                 </div>
                 <div
@@ -2994,30 +3315,30 @@ function ModelConfigDialog({
             <div className="flex flex-col gap-3">
               <SectionLabel>Input capabilities</SectionLabel>
               <div className="flex flex-wrap gap-1.5">
-                <CapChip label="Text" on locked title="Every chat model accepts text input" testId="model-cap-text-in" />
+                <CapChip meta={CAPABILITY_META[0]} on locked title="Every chat model accepts text input" testId="model-cap-text-in" />
                 <CapChip
-                  label="Images"
+                  meta={CAPABILITY_META[1]}
                   on={draft.supportsVision}
                   onClick={() => set("supportsVision", !draft.supportsVision)}
                   title="Accepts image inputs — gates the main-mode vision relay"
                   testId="model-cap-images-in"
                 />
                 <CapChip
-                  label="Video"
+                  meta={CAPABILITY_META[2]}
                   on={draft.supportsVideo === true}
                   onClick={() => set("supportsVideo", draft.supportsVideo === true ? false : true)}
                   title="Accepts video inputs"
                   testId="model-cap-video-in"
                 />
                 <CapChip
-                  label="PDF"
+                  meta={CAPABILITY_META[3]}
                   on={draft.supportsPdf === true}
                   onClick={() => set("supportsPdf", draft.supportsPdf === true ? false : true)}
                   title="Accepts PDF documents"
                   testId="model-cap-pdf-in"
                 />
                 <CapChip
-                  label="Audio"
+                  meta={CAPABILITY_META[4]}
                   on={draft.supportsAudio === true}
                   onClick={() => set("supportsAudio", draft.supportsAudio === true ? false : true)}
                   title="Accepts audio inputs"
@@ -3027,35 +3348,35 @@ function ModelConfigDialog({
               <SectionLabel>Output capabilities</SectionLabel>
               <div className="flex flex-wrap gap-1.5">
                 <CapChip
-                  label="Text"
+                  meta={CAPABILITY_META[0]}
                   on={draft.supportsTextOutput !== false}
                   onClick={() => set("supportsTextOutput", draft.supportsTextOutput !== false ? false : true)}
                   title="Produces text output — on by default for chat models"
                   testId="model-cap-text-out"
                 />
                 <CapChip
-                  label="Images"
+                  meta={CAPABILITY_META[1]}
                   on={draft.supportsImageOutput === true}
                   onClick={() => set("supportsImageOutput", draft.supportsImageOutput === true ? false : true)}
                   title="Produces image output"
                   testId="model-cap-images-out"
                 />
                 <CapChip
-                  label="Video"
+                  meta={CAPABILITY_META[2]}
                   on={draft.supportsVideoOutput === true}
                   onClick={() => set("supportsVideoOutput", draft.supportsVideoOutput === true ? false : true)}
                   title="Produces video output"
                   testId="model-cap-video-out"
                 />
                 <CapChip
-                  label="Audio"
+                  meta={CAPABILITY_META[4]}
                   on={draft.supportsAudioOutput === true}
                   onClick={() => set("supportsAudioOutput", draft.supportsAudioOutput === true ? false : true)}
                   title="Produces audio output"
                   testId="model-cap-audio-out"
                 />
               </div>
-              <p className="text-[10.5px]" style={{ color: styles.textTertiary }}>
+              <p className="text-[9.5px]" style={{ color: styles.textTertiary }}>
                 Reasoning and tool use are detected automatically — never configured here.
               </p>
             </div>
@@ -3063,7 +3384,10 @@ function ModelConfigDialog({
 
           {/* ── RIGHT: Sizing + Pricing ── */}
           <div className="flex flex-col gap-4 min-w-0">
-            {/* sizing */}
+            {/* sizing — R89-C4 (the owner: "if I enter 1 million context
+                then it should show the formatted version there, like 1M"):
+                every numeric field carries a live compact-form hint under
+                the input (1000000 → ≈ 1M; unset renders nothing). */}
             <div className="flex flex-col gap-2">
               <SectionLabel>Sizing</SectionLabel>
               <div className="grid grid-cols-2 gap-2">
@@ -3079,6 +3403,7 @@ function ModelConfigDialog({
                     className="h-10 w-full rounded-[10px] border-[1.5px] px-3 font-mono text-[12px] outline-none"
                     style={inputStyle}
                   />
+                  <TokenHint raw={draft.contextWindow} />
                 </div>
                 <div>
                   <label className="mb-1 block text-[10.5px] font-bold" style={{ color: styles.textTertiary }}>
@@ -3092,6 +3417,7 @@ function ModelConfigDialog({
                     className="h-10 w-full rounded-[10px] border-[1.5px] px-3 font-mono text-[12px] outline-none"
                     style={inputStyle}
                   />
+                  <TokenHint raw={draft.maxOutputTokens} />
                 </div>
               </div>
             </div>
@@ -3148,15 +3474,18 @@ function ModelConfigDialog({
               </p>
             </div>
 
-            {/* live preview */}
+            {/* live preview — R89-C4: the formatted summary (context +
+                max output in compact form + the pricing trio, unset → —). */}
             <div
-              className="rounded-[10px] px-3 py-2 font-mono text-[10.5px]"
+              className="rounded-[10px] px-3 py-2 font-mono text-[10.5px] flex flex-wrap gap-x-3 gap-y-0.5"
               style={{ background: styles.subtle, color: styles.textTertiary }}
+              data-testid="model-config-preview"
             >
-              {preview ?? "pricing not set"}
-              {parseNumericField(draft.contextWindow) !== null &&
-                parseNumericField(draft.contextWindow) !== "invalid" &&
-                ` · ${formatContextWindow(parseNumericField(draft.contextWindow) as number)}`}
+              <span>{`ctx ${formatTokenCount(numOrNull(draft.contextWindow))}`}</span>
+              <span>{`max out ${formatTokenCount(numOrNull(draft.maxOutputTokens))}`}</span>
+              <span>{`in ${priceOrNull(draft.inputPrice)}`}</span>
+              <span>{`out ${priceOrNull(draft.outputPrice)}`}</span>
+              <span>{`cache ${priceOrNull(draft.cachePrice)}`}</span>
             </div>
           </div>
         </div>

@@ -151,6 +151,9 @@ let providersList: ProviderView[] = [];
 let patchResponses: Array<{ id: string; body: Record<string, unknown> }> = [];
 /** POST /providers/:id/keys/reveal response. */
 let revealKeys: Array<{ slot: number; value: string }> = [];
+/** R89-C6: what POST /models/:rowId/test answers (null = the route 404s —
+ * most tests never click the model test button). */
+let modelTestAnswer: unknown = null;
 /** R59-C: when true, the reveal route answers HTTP 500 (the error path). */
 let revealFails = false;
 /** R62-2b: when true, GET /providers answers HTTP 500 (the load-error path). */
@@ -294,6 +297,18 @@ const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => 
       } as unknown as Response;
     }
     return { status: 204, ok: true, text: async () => "" } as unknown as Response;
+  }
+  // R89-C6: POST /models/:rowId/test — the model card's test button.
+  const modelTestMatch = url.match(/\/api\/v1\/models\/([^/]+)\/test$/);
+  if (modelTestMatch !== null && method === "POST") {
+    if (modelTestAnswer === null) {
+      return {
+        status: 404,
+        ok: false,
+        text: async () => JSON.stringify({ error: { code: "NOT_FOUND", message: "no such model row" } }),
+      } as unknown as Response;
+    }
+    return jsonResponse(modelTestAnswer);
   }
   // ROUND-58 (R58-d): POST /providers/:id/keys/reveal — the full values.
   const revealMatch = url.match(/\/api\/v1\/providers\/([^/]+)\/keys\/reveal$/);
@@ -442,6 +457,7 @@ beforeEach(() => {
   patchResponses = [];
   revealKeys = [];
   revealFails = false;
+  modelTestAnswer = null;
   providersFail = false;
   modelsConfigFail = false;
   pool = [];
@@ -688,10 +704,13 @@ describe("Add models — catalog picker (ROUND-50 R50-d)", () => {
     expect(within(dialog).getByText("ADDED")).toBeTruthy();
     expect(within(dialog).getAllByText("FREE").length).toBeGreaterThan(0);
     expect(within(dialog).getByText("PAID")).toBeTruthy();
-    // The pickable row is enabled and carries the configure affordance.
+    // The pickable row is enabled; R89-C1: the "CONFIGURE →" label is GONE —
+    // the row's title is the clean NAME with the full id below it.
     const pickable = within(dialog).getByLabelText("Configure and add openai/gpt-4o") as HTMLButtonElement;
     expect(pickable.disabled).toBe(false);
-    expect(within(dialog).getByText("CONFIGURE →")).toBeTruthy();
+    expect(within(dialog).queryByText("CONFIGURE →")).toBeNull();
+    expect(within(pickable).getByText("GPT-4o")).toBeTruthy();
+    expect(within(pickable).getByText("openai/gpt-4o")).toBeTruthy();
   });
 
   it("ROUND-87: clicking a model OPENS THE CONFIGURE DIALOG (never a direct add) — the prefill arrives pre-filled and the save upserts once", async () => {
@@ -825,7 +844,8 @@ describe("Configure model dialog — pricing round-trip (ROUND-50 R50-d)", () =>
     ];
     renderWithProviders(<ModelsProvidersTab />);
     // R59-C: pre-select opens the first provider — no click needed.
-    await waitFor(() => expect(screen.getByText("$0.15 in / $0.6 out / $0.02 cache")).toBeTruthy());
+    // R89-C5: the details strip renders the pricing in dedicated cells.
+    await waitFor(() => expect(screen.getByText("$0.15/M")).toBeTruthy());
 
     fireEvent.click(
       await screen.findByRole("button", { name: "Configure model Z.ai: GLM 5.2" }),
@@ -1910,5 +1930,119 @@ describe("Add provider dialog — the R89 identity rules", () => {
         apiFormat: "chat-completions", // preset, never asked
       });
     });
+  });
+});
+
+/* ── ROUND-89 (R89-C): the models UI overhaul, regressed here.
+ *  · cleanModelName: the human title from the id's last segment.
+ *  · formatTokenCount: 1M / 131K compact forms.
+ *  · The add-model dialog defaults the DISPLAY NAME to that clean name.
+ *  · The model card: the capability ICON chips (lucide svg inside), the
+ *    details strip's dedicated cells (Context/Input/Output/Cache read).
+ *  · The test result expands a DEDICATED SECTION below the card with a
+ *    working Show reply. */
+describe("Models UI — the R89 overhaul", () => {
+  it("cleanModelName + formatTokenCount (the shared helpers)", async () => {
+    const mod = await import("./ModelsProvidersTab");
+    expect(mod.cleanModelName("meta-llama/llama-3.3-70b-instruct:free")).toBe("Llama 3.3 70b Instruct");
+    expect(mod.cleanModelName("openai/gpt-4o-mini")).toBe("GPT 4o Mini");
+    expect(mod.cleanModelName("z-ai/glm-5.2:free")).toBe("GLM 5.2");
+    expect(mod.cleanModelName("plain-model")).toBe("Plain Model");
+    expect(mod.formatTokenCount(1_000_000)).toBe("1M");
+    expect(mod.formatTokenCount(1_048_576)).toBe("1M");
+    expect(mod.formatTokenCount(131_072)).toBe("131K");
+    expect(mod.formatTokenCount(8000)).toBe("8K");
+    expect(mod.formatTokenCount(null)).toBe("—");
+  });
+
+  it("the add-model dialog defaults the display name to the id's last segment (humanized)", async () => {
+    useSettingsStore.setState({ modelsFreeOnly: false });
+    liveCatalog = [{ id: "meta-llama/llama-3.3-70b-instruct:free", name: "" }];
+    configured = [];
+    renderWithProviders(<ModelsProvidersTab />);
+    await waitFor(() => expect(screen.getByLabelText("Test key")).toBeTruthy());
+    fireEvent.click(await screen.findByRole("button", { name: /add models/i }));
+    const dialog = await screen.findByRole("dialog", { name: "Add models" });
+
+    // R89-C1: the title is the CLEAN NAME (not the full id twice)…
+    const row = within(dialog).getByLabelText("Configure and add meta-llama/llama-3.3-70b-instruct:free");
+    expect(within(row).getByText("Llama 3.3 70b Instruct")).toBeTruthy();
+    // …the full id rides below as the subtitle.
+    expect(within(row).getByText("meta-llama/llama-3.3-70b-instruct:free")).toBeTruthy();
+
+    // Picking it opens the config dialog with the display name defaulted.
+    fireEvent.click(row);
+    const config = await screen.findByRole("dialog", { name: "Add model" });
+    expect((within(config).getByLabelText("Display name") as HTMLInputElement).value).toBe(
+      "Llama 3.3 70b Instruct",
+    );
+  });
+
+  it("the model card renders the capability ICON chips + the details strip cells", async () => {
+    providersList = [PROVIDER];
+    configured = [
+      modelRow({
+        modelId: "z-ai/glm-5.2:free",
+        displayName: "GLM 5.2",
+        contextWindow: 1_000_000,
+        maxOutputTokens: 100_000,
+        inputPricePerMtok: 0.15,
+        inputPriceCachedPerMtok: 0.02,
+        outputPricePerMtok: 0.6,
+        supportsVision: true,
+        supportsPdf: true,
+        sizeLabel: "70B",
+      }),
+    ];
+    renderWithProviders(<ModelsProvidersTab />);
+    await waitFor(() => expect(screen.getByText("GLM 5.2")).toBeTruthy());
+
+    // The details strip's dedicated cells (R89-C5): compact context + the
+    // three pricing cells.
+    expect(screen.getByText("1M", { exact: false }).textContent).toBeTruthy();
+    expect(screen.getAllByText("$0.15/M").length).toBeGreaterThan(0);
+    expect(screen.getAllByText("$0.6/M").length).toBeGreaterThan(0);
+    expect(screen.getAllByText("$0.02/M").length).toBeGreaterThan(0);
+
+    // The capability ICON chips: a lucide <svg> inside each chip + the label.
+    const imagesChip = screen.getByTitle("Accepts image inputs");
+    expect(imagesChip.querySelector("svg")).toBeTruthy();
+    expect(imagesChip.textContent).toBe("Images");
+    const pdfChip = screen.getByTitle("Accepts PDF documents");
+    expect(pdfChip.querySelector("svg")).toBeTruthy();
+
+    // The size badge rides the identity row.
+    expect(screen.getByText("70B")).toBeTruthy();
+  });
+
+  it("the test result expands the DEDICATED SECTION below the card; Show reply works and keeps it open", async () => {
+    providersList = [PROVIDER];
+    const row = modelRow({
+      modelId: "z-ai/glm-5.2:free",
+      displayName: "GLM 5.2",
+    });
+    configured = [row];
+    // The test rides the fetch mock (same wire the real button uses):
+    // POST /models/:rowId/test → ok:true with a reply preview + usage.
+    modelTestAnswer = {
+      ok: true,
+      latencyMs: 432,
+      contentPreview: "Hello from the model",
+      usage: { inputTokens: 3, outputTokens: 5 },
+    };
+
+    renderWithProviders(<ModelsProvidersTab />);
+    await waitFor(() => expect(screen.getByText("GLM 5.2")).toBeTruthy());
+    fireEvent.click(screen.getByTestId("model-test-button"));
+
+    // The dedicated section appears below the card with the response time…
+    const section = await screen.findByTestId("model-test-result");
+    expect(section.getAttribute("data-model-test")).toBe("pass");
+    expect(section.textContent).toContain("432ms");
+    expect(section.textContent).toContain("3 tokens in / 5 out");
+
+    // …Show reply expands the FULL reply inside the section.
+    fireEvent.click(within(section).getByTestId("model-test-show-reply"));
+    expect(screen.getByTestId("model-test-reply-body").textContent).toContain("Hello from the model");
   });
 });
