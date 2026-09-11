@@ -470,11 +470,20 @@ const MENU_OVERLAY_LABEL: &str = "acute-menu-overlay";
 /// the create race can never lose data (the POPOUT_PENDING_URL pattern).
 static MENU_PENDING_PAYLOAD: Mutex<Option<String>> = Mutex::new(None);
 
-/// The shared builder config for the menu overlay window (created hidden by
-/// the prewarm, shown by `menu_overlay_show`). `focusable(false)` = the menu
-/// never steals keyboard focus from the main window (menus are click
+/// The shared creation path for the menu overlay window (created hidden by
+/// the prewarm, visible by `menu_overlay_show`). `focusable(false)` = the
+/// menu never steals keyboard focus from the main window (menus are click
 /// surfaces; Escape keeps working in the main window, which owns closing).
-fn menu_overlay_builder(app: &AppHandle, visible: bool, x: f64, y: f64, w: f64, h: f64) -> Result<WebviewWindowBuilder<tauri::Wry>, String> {
+/// Returns the BUILT window (the builder borrows the app handle with a
+/// lifetime — returning the window itself keeps the signature clean).
+fn menu_overlay_create(
+    app: &AppHandle,
+    visible: bool,
+    x: f64,
+    y: f64,
+    w: f64,
+    h: f64,
+) -> Result<tauri::WebviewWindow, String> {
     let builder = WebviewWindowBuilder::new(
         app,
         MENU_OVERLAY_LABEL,
@@ -489,8 +498,10 @@ fn menu_overlay_builder(app: &AppHandle, visible: bool, x: f64, y: f64, w: f64, 
     .focused(false)
     .focusable(false)
     .visible(visible)
+    // LOGICAL units — the builder's position/inner_size take (f64, f64)
+    // pairs directly (verified against tauri 2.11.5's signatures).
     .position(x, y)
-    .inner_size(w, h);
+    .inner_size(w.max(1.0), h.max(1.0));
     // OWNERSHIP is the whole trick: an owned window rides above the owner
     // (and its child webviews). Windows: `.owner`; Linux: `transient_for`;
     // macOS: `parent` (adds it as a child window — fine for a menu).
@@ -498,14 +509,20 @@ fn menu_overlay_builder(app: &AppHandle, visible: bool, x: f64, y: f64, w: f64, 
         .get_webview_window(MAIN_WINDOW_LABEL)
         .ok_or_else(|| "main window not found".to_string())?;
     #[cfg(windows)]
-    let builder = builder.owner(&main).map_err(|e| format!("owner failed: {e}"))?;
+    let builder = builder
+        .owner(&main)
+        .map_err(|e| format!("owner failed: {e}"))?;
     #[cfg(all(unix, not(target_os = "macos")))]
     let builder = builder
         .transient_for(&main)
         .map_err(|e| format!("transient_for failed: {e}"))?;
     #[cfg(target_os = "macos")]
-    let builder = builder.parent(&main).map_err(|e| format!("parent failed: {e}"))?;
-    Ok(builder)
+    let builder = builder
+        .parent(&main)
+        .map_err(|e| format!("parent failed: {e}"))?;
+    builder
+        .build()
+        .map_err(|e| format!("create menu overlay failed: {e}"))
 }
 
 /// `menu_overlay_prewarm()` — create the menu overlay window HIDDEN at the
@@ -522,11 +539,7 @@ pub fn menu_overlay_prewarm(app: AppHandle) -> Result<(), String> {
     // Off-stage: a 1×1 window parked at the screen origin, invisible until
     // a real show positions it. `prevent_overflow` would fight the off-stage
     // position, so it is deliberately absent.
-    let builder = menu_overlay_builder(&app, false, 0.0, 0.0, 1.0, 1.0)?;
-    builder
-        .build()
-        .map_err(|e| format!("prewarm menu overlay failed: {e}"))?;
-    Ok(())
+    menu_overlay_create(&app, false, 0.0, 0.0, 1.0, 1.0).map(|_| ())
 }
 
 /// `menu_overlay_show(x, y, w, h, payload)` — position + show the menu
@@ -564,10 +577,7 @@ pub fn menu_overlay_show(
         let _ = existing.set_size(LogicalSize::new(w, h));
         let _ = existing.show();
     } else {
-        let builder = menu_overlay_builder(&app, true, x, y, w, h)?;
-        builder
-            .build()
-            .map_err(|e| format!("create menu overlay failed: {e}"))?;
+        menu_overlay_create(&app, true, x, y, w, h).map(|_| ())?;
     }
     let _ = app.emit("menu-overlay-data", trimmed.to_string());
     Ok(())
@@ -737,15 +747,15 @@ pub async fn browser_tab_create(
     url: String,
     window_label: Option<String>,
     hide_viewport_scrollbar: Option<bool>,
-    /// ROUND-90 (R90-D1): the ALWAYS-VISIBLE CURSOR's boot script — chained
-    /// after the scrollbar script as ONE initialization script (the
-    /// hands-boot the main app builds in src/lib/agent-hands-boot.ts). It
-    /// runs at DOCUMENT CREATION on EVERY navigation of this webview, so
-    /// the agent's cursor is painted from the first frame of every page at
-    /// a natural resting spot — never "disappearing" between actions. The
-    /// script is idempotent and CSP-tolerant; the agent-hands runtime
-    /// (installed by the first action's eval) ADOPTS the boot's cursor via
-    /// `window.__acuteHandsRest`.
+    // R90-D1: the ALWAYS-VISIBLE CURSOR's boot script — chained after the
+    // scrollbar script as ONE initialization script (the hands-boot the main
+    // app builds in src/lib/agent-hands-boot.ts). It runs at DOCUMENT
+    // CREATION on EVERY navigation of this webview, so the agent's cursor is
+    // painted from the first frame of every page at a natural resting spot —
+    // never "disappearing" between actions. The script is idempotent and
+    // CSP-tolerant; the agent-hands runtime (installed by the first action's
+    // eval) ADOPTS the boot's cursor via `window.__acuteHandsRest`.
+    // (Plain `//` — doc comments are not legal on fn parameters in Rust.)
     hands_init_script: Option<String>,
 ) -> Result<(), String> {
     let label = tab_label(&tab_id);
