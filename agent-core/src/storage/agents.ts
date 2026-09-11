@@ -264,9 +264,17 @@ export function updateAgent(db: SqliteDatabase, id: string, patch: AgentInput): 
     name: patch.name ?? current.name,
     role: patch.role ?? current.role,
     systemPrompt: patch.systemPrompt ?? current.systemPrompt,
-    providerId: patch.providerId ?? current.providerId,
-    model: patch.model ?? current.model,
-    visionModel: patch.visionModel ?? current.visionModel,
+    // ROUND-92 (R92-C): explicit-null PATCH semantics for the three nullable
+    // fields — `undefined` (absent) keeps the current value, `null` SETS the
+    // column to NULL. The old `patch.x ?? current.x` merge swallowed an
+    // explicit null into "keep current", so an agent could never be cleared
+    // back to the not-configured state through PATCH /agents/:id (R91-A needed
+    // the dedicated resetAgentsProvider bulk statement for the force-delete;
+    // the AgentFormDialog's "leave empty to pick in chat" (R92) needed it at
+    // the row level too — null → empty → null round-trips now).
+    providerId: patch.providerId !== undefined ? patch.providerId : current.providerId,
+    model: patch.model !== undefined ? patch.model : current.model,
+    visionModel: patch.visionModel !== undefined ? patch.visionModel : current.visionModel,
     allowedTools: patch.allowedTools ?? current.allowedTools,
     memoryPolicy: patch.memoryPolicy ?? current.memoryPolicy,
     skills: patch.skills ?? current.skills,
@@ -297,12 +305,13 @@ export function updateAgent(db: SqliteDatabase, id: string, patch: AgentInput): 
  * R91-A: reset EVERY agent still pointing at `providerId` to the "no
  * provider picked" state (provider_id = NULL, model = NULL, version
  * bumped). The force-delete path (DELETE /providers/:id?force=1) uses
- * this — `updateAgent`'s merge semantics treat `null` as "keep current",
- * so nulling the reference needs this dedicated statement. Returns the
- * number of agents reset. `vision_model` is deliberately KEPT: it is a
- * free-text model id that may live on a DIFFERENT provider — deleting
- * this provider says nothing about it, and an empty vision model is
- * already the "inherit the global vision config" state.
+ * this — a BULK one-statement reset over every referencing row (since
+ * ROUND-92 a single-row PATCH can null providerId/model too, but the
+ * delete still needs the set operation). Returns the number of agents
+ * reset. `vision_model` is deliberately KEPT: it is a free-text model id
+ * that may live on a DIFFERENT provider — deleting this provider says
+ * nothing about it, and an empty vision model is already the "inherit
+ * the global vision config" state.
  */
 export function resetAgentsProvider(db: SqliteDatabase, providerId: string): number {
   const info = db

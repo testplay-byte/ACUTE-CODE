@@ -66,8 +66,13 @@ export function NewSessionDialog({
                     <span className="truncate text-[13px] font-bold tracking-tight">{agent.name}</span>
                     <Badge>{agent.role}</Badge>
                   </div>
+                  {/* ROUND-92 (R92-C): null-safe display — an unconfigured
+                      agent (R91-A's reset state / a fresh template) gets the
+                      honest pick-in-chat note, not a dangling " · ". */}
                   <div className="mt-0.5 truncate font-mono text-[11px] text-muted">
-                    {agent.providerId} · {agent.model}
+                    {agent.providerId !== null && agent.model !== null
+                      ? `${agent.providerId} · ${agent.model}`
+                      : "not configured — pick the model in chat"}
                   </div>
                 </div>
               </button>

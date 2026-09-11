@@ -69,6 +69,31 @@ const SEED: Agent[] = [
     updatedAt: "2026-08-20T09:10:00Z",
   },
   {
+    // ROUND-92 (R92-C): the NULL/NULL template — the seeded templates the
+    // sidecar ACTUALLY serves carry no provider/model (they arm themselves
+    // from the first chat pick since R92-B; before that the AgentFormDialog
+    // crashed on them — the owner's "agents were not editable"). This fixture
+    // covers the case in every fixture-driven surface (Agents screen, edit
+    // dialog, session picker).
+    id: "agt_tpl_blank",
+    name: "Blank Slate",
+    role: "generalist",
+    systemPrompt:
+      "You are a fresh start: no provider or model bound yet — the first chat pick arms you. Follow the workspace AGENTS.md rules at all times.",
+    providerId: null,
+    model: null,
+    visionModel: null,
+    allowedTools: [],
+    memoryPolicy: "every-turn",
+    skills: [],
+    maxTurns: 40,
+    temperature: 0.2,
+    isTemplate: true,
+    version: 1,
+    createdAt: "2026-08-20T09:15:00Z",
+    updatedAt: "2026-08-20T09:15:00Z",
+  },
+  {
     id: "agt_scribe",
     name: "Scribe",
     role: "scribe",

@@ -98,8 +98,13 @@ export interface AgentRecord {
   /** Free-form job title, e.g. "implementer", "reviewer" — used during team assembly. */
   role: string;
   systemPrompt: string;
-  providerId: string;
-  model: string;
+  /** ROUND-92 (R92-C): the truth the sidecar has ALWAYS served
+   * (storage/agents.ts serves provider_id/model as string | null — the
+   * seeded templates since round 1, and since R91-A every force-deleted
+   * provider's referencing agents, carry NULL) — the agent is simply NOT
+   * CONFIGURED yet and arms itself from the first chat pick (R92-B). */
+  providerId: string | null;
+  model: string | null;
   /** Secondary model used for vision-capable calls, or null when unset. */
   visionModel: string | null;
   allowedTools: string[];

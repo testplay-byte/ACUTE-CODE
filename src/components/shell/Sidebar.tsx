@@ -296,12 +296,17 @@ export function Sidebar() {
 
   return (
     <>
-      {/* ROUND-45: mobile backdrop — click to close; md+ unaffected. */}
+      {/* ROUND-45: mobile backdrop — click to close; md+ unaffected.
+          R92-A: data-webview-backdrop — a pure dim scrim (the drawer itself
+          is the content), so on a narrow Tauri window it must not be
+          recorded as covering the embedded browser (which blanked the page
+          for a dim the OS webview never showed). */}
       {mobileOpen && (
         <button
           type="button"
           aria-label="Close menu"
           onClick={() => setMobileOpen(false)}
+          data-webview-backdrop
           className="fixed inset-0 z-40 cursor-default bg-black/40 md:hidden"
         />
       )}

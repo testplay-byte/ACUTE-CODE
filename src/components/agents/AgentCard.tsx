@@ -39,8 +39,14 @@ export function AgentCard({
               </Badge>
             ) : null}
           </div>
+          {/* ROUND-92 (R92-C): an unconfigured agent (the R91-A force-delete
+              reset state, or a template that never had a pair) renders an
+              honest note instead of a dangling " · " — the agent arms itself
+              from the first chat pick. */}
           <div className="mt-1 truncate font-mono text-[11px] text-muted">
-            {agent.providerId} · {agent.model}
+            {agent.providerId !== null && agent.model !== null
+              ? `${agent.providerId} · ${agent.model}`
+              : "not configured — the first chat pick arms it"}
             {agent.visionModel ? ` · vision: ${agent.visionModel}` : ""}
           </div>
           <div className="mt-1.5 flex flex-wrap items-center gap-1.5 text-[10px] text-muted">

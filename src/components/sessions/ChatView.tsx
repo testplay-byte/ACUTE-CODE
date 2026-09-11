@@ -106,7 +106,10 @@ export function ChatView({ session, agent }: { session: Session; agent: Agent | 
               color: styles.textSecondary,
             }}
           >
-            {agent.model}
+            {/* ROUND-92 (R92-C): an unconfigured agent (null model since the
+                R91-A reset / seeded templates) renders an honest chip instead
+                of an empty one. */}
+            {agent.model ?? "no model"}
           </span>
         ) : null}
         <span
@@ -178,7 +181,7 @@ export function ChatView({ session, agent }: { session: Session; agent: Agent | 
             )}
 
             {send.isPending ? (
-              <ThinkingRow agentName={agentName} model={agent?.model} styles={styles} />
+              <ThinkingRow agentName={agentName} model={agent?.model ?? undefined} styles={styles} />
             ) : null}
           </div>
         </div>
@@ -270,7 +273,7 @@ export function ChatView({ session, agent }: { session: Session; agent: Agent | 
             Enter to send · Shift+Enter for a newline
           </span>
           <span className="font-mono text-[10px]" style={{ color: styles.textSecondary }}>
-            {agent ? agent.model : "no agent"}
+            {agent ? (agent.model ?? "no model") : "no agent"}
           </span>
         </div>
       </form>

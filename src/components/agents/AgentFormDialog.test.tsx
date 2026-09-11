@@ -19,7 +19,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { cleanup, fireEvent, screen, waitFor } from "@testing-library/react";
 import { AgentFormDialog } from "./AgentFormDialog";
 import { resetTestState, renderWithProviders } from "../../test-utils";
-import type { ProviderView, ModelsCatalog } from "../../lib/api";
+import type { AgentDraft, ProviderView, ModelsCatalog } from "../../lib/api";
 
 /* ── Stateful fetch mock (the two endpoints the dialog now touches) ───────── */
 
@@ -284,5 +284,115 @@ describe("AgentFormDialog — catalog-fed model suggestions (ROUND-47 R47-c2)", 
     // Custom models remain enterable — plain free-text, nothing coerced.
     fireEvent.change(modelInput, { target: { value: "acme/rocket-1" } });
     expect(modelInput.value).toBe("acme/rocket-1");
+  });
+});
+
+/* ── ROUND-92 (R92-C): the NULL-model agent — the owner's "agents were not
+ * editable" report. Every seeded template (and since R91-A every force-deleted
+ * provider's referencing agents) carries providerId/model = null; the old
+ * toFormState copied null into the string-typed FormState and validate's
+ * form.model.trim() threw DURING RENDER — the app ErrorBoundary replaced the
+ * screen. The dialog must open, show the not-configured state, and save the
+ * null round-trip (null → empty → null). ──────────────────────────────────── */
+describe("AgentFormDialog — the unconfigured agent (ROUND-92 R92-C)", () => {
+  /** The R91-A reset state, verbatim (providerId/model null on the row). */
+  const NULL_AGENT = {
+    id: "agt_reset",
+    name: "Acute",
+    role: "implementer",
+    systemPrompt: "You do the work.",
+    providerId: null,
+    model: null,
+    visionModel: null,
+    allowedTools: [],
+    memoryPolicy: "every-turn" as const,
+    skills: [],
+    maxTurns: 40,
+    temperature: 0.2,
+    isTemplate: false,
+    version: 4,
+    createdAt: "2026-08-22T09:00:00Z",
+    updatedAt: "2026-08-22T09:00:00Z",
+  };
+
+  it("opens on a NULL-model agent without crashing — empty fields, the — none — provider, the pick-in-chat hint", async () => {
+    renderWithProviders(
+      <AgentFormDialog
+        agent={NULL_AGENT}
+        open
+        onOpenChange={() => {}}
+        onSubmit={async () => {}}
+      />,
+    );
+
+    // The dialog is alive (no ErrorBoundary takeover) and the null pair maps
+    // to the form's not-configured state.
+    await waitFor(() =>
+      expect(screen.getByRole("option", { name: "OpenRouter (openrouter)" })).toBeTruthy(),
+    );
+    const provider = screen.getByLabelText("Provider") as HTMLSelectElement;
+    expect(provider.value).toBe("");
+    // The "— none —" option exists and is the current selection.
+    expect(screen.getByRole("option", { name: "— none —" })).toBeTruthy();
+    const modelInput = screen.getByLabelText("Model") as HTMLInputElement;
+    expect(modelInput.value).toBe("");
+    // The R92-C hint instead of the retired "Model is required" error.
+    expect(screen.getByText("Leave empty to pick the model in chat")).toBeTruthy();
+    // The dialog's own title names the agent being edited.
+    expect(screen.getByText("Edit Acute")).toBeTruthy();
+  });
+
+  it("saves the null round-trip: an untouched unconfigured agent submits with providerId/model null", async () => {
+    const onSubmit = vi.fn(async (_draft: AgentDraft) => {});
+    renderWithProviders(
+      <AgentFormDialog agent={NULL_AGENT} open onOpenChange={() => {}} onSubmit={onSubmit} />,
+    );
+    await waitFor(() =>
+      expect(screen.getByRole("option", { name: "OpenRouter (openrouter)" })).toBeTruthy(),
+    );
+
+    // Nothing required is missing (name/role present) — model is OPTIONAL now.
+    fireEvent.click(screen.getByRole("button", { name: "Save changes" }));
+
+    await waitFor(() => expect(onSubmit).toHaveBeenCalledTimes(1));
+    const draft = onSubmit.mock.calls[0][0];
+    // THE round-trip pin: null → empty form → null on the wire.
+    expect(draft.providerId).toBeNull();
+    expect(draft.model).toBeNull();
+    expect(draft.name).toBe("Acute");
+  });
+
+  it("a CONFIGURED agent can be cleared back to the not-configured state (— none — + empty model)", async () => {
+    const onSubmit = vi.fn(async (_draft: AgentDraft) => {});
+    renderWithProviders(
+      <AgentFormDialog
+        agent={{
+          ...NULL_AGENT,
+          id: "agt_configured",
+          name: "Scout",
+          providerId: "acme",
+          model: "acme/rocket-1",
+        }}
+        open
+        onOpenChange={() => {}}
+        onSubmit={onSubmit}
+      />,
+    );
+    await waitFor(() =>
+      expect(screen.getByRole("option", { name: "OpenRouter (openrouter)" })).toBeTruthy(),
+    );
+    // The configured pair renders as the current state.
+    expect((screen.getByLabelText("Provider") as HTMLSelectElement).value).toBe("acme");
+    expect((screen.getByLabelText("Model") as HTMLInputElement).value).toBe("acme/rocket-1");
+
+    // Clear both — the deliberate "pick in chat" choice.
+    fireEvent.change(screen.getByLabelText("Provider"), { target: { value: "" } });
+    fireEvent.change(screen.getByLabelText("Model"), { target: { value: "" } });
+    fireEvent.click(screen.getByRole("button", { name: "Save changes" }));
+
+    await waitFor(() => expect(onSubmit).toHaveBeenCalledTimes(1));
+    const draft = onSubmit.mock.calls[0][0];
+    expect(draft.providerId).toBeNull();
+    expect(draft.model).toBeNull();
   });
 });

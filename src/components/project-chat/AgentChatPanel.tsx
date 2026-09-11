@@ -80,6 +80,9 @@ import {
   deleteRating,
   dequeueSessionMessage,
   fetchDebugSettings,
+  // ROUND-92 (R92-B): the picker's self-heal PATCH (an unconfigured agent
+  // arms itself from the first chat pick — see onModelChange).
+  getAgentsBackend,
   listSessionRatings,
   patchSessionPermissions,
   queueSessionMessage,
@@ -117,6 +120,7 @@ import {
   saveLastUsedModel,
   saveModelOverride,
   saveThinkingLevel,
+  shouldArmAgentFromPick,
   toMessageAttachment,
   type ComposerAttachment,
   type ModelOverride,
@@ -1707,6 +1711,36 @@ export function AgentChatPanel({
     // un-remember it — the agent default becomes what's sent, and the send
     // path re-saves the EFFECTIVE pair there).
     if (v !== null) saveLastUsedModel(v);
+    // ROUND-92 (R92-B): the picker's SELF-HEAL — an UNCONFIGURED agent
+    // (providerId/model null on the row: the R91-A force-delete reset
+    // state, or a template that never had one) arms itself from the first
+    // chat pick. The R91-A force-delete promise finally kept: the owner
+    // deletes the provider, picks a new provider's model in chat, and the
+    // AGENT ROW follows (not just the per-send override) — the Agents
+    // screen shows a real pair, the next no-override send works, and the
+    // 409 dead end cannot re-appear. A CONFIGURED agent keeps today's
+    // localStorage-only override semantics EXACTLY (shouldArmAgentFromPick
+    // is the one decision — tested in composer-utils/Composer suites).
+    // Fire-and-forget (the wizard's ModelSummary precedent): the send
+    // itself carries the override regardless (the backend's override-first
+    // gate, R92-B), so a failed PATCH degrades to today's behavior, never
+    // a broken pick.
+    if (liveMode && shouldArmAgentFromPick(v, agent)) {
+      const agentId = agent.id;
+      const picked = v;
+      void getAgentsBackend()
+        .update(agentId, { providerId: picked.providerId, model: picked.model })
+        .then(() => {
+          // The agents react-query cache invalidation covers every list
+          // variant (["agents", source, includeTemplates]) — the Agents
+          // screen, the sidebar picker, and this panel's own agent row all
+          // refetch and see the armed pair.
+          void queryClient.invalidateQueries({ queryKey: ["agents"] });
+        })
+        .catch((err: unknown) => {
+          console.warn("[chat] agent self-heal PATCH failed (the pick still rides the send)", err);
+        });
+    }
   };
   const onThinkingLevelChange = (level: ThinkingLevel): void => {
     setThinkingLevel(level);

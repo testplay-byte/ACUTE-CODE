@@ -1085,7 +1085,25 @@ async function prepareTurn(
       },
     };
   }
-  if (agent.providerId === null || agent.model === null) {
+  // ROUND-92 (R92-B, the owner's v0.89.0 dead-end report: "Generation failed:
+  // agent acute has no provider ID/model configured" even after picking the
+  // new provider's model in the composer): the OVERRIDE-FIRST gate. R91-A's
+  // force-delete resets referencing agents to provider_id = NULL, model =
+  // NULL (resetAgentsProvider) — a state no mainstream flow produced before.
+  // The old gate checked the AGENT ROW here, BEFORE the per-send override was
+  // normalized below, so a send that carried a complete {model, providerId}
+  // pair (the picker writes it on EVERY send since R82) could never satisfy
+  // it: the dead end. The normalization now runs FIRST and the gate fires only
+  // when the EFFECTIVE pair is incomplete — the send's pair when present, the
+  // agent's otherwise. A half-pair override (model without providerId, or
+  // vice versa) still 409s with the same message: "agent 'X' has no
+  // providerId/model configured" remains TRUE then — the send didn't carry a
+  // complete pair either. A CONFIGURED agent + no override is byte-for-byte
+  // the old behavior (overrideNorm undefined → the agent row decides).
+  const modelOverrideNorm = normalizeModelOverride(modelOverride);
+  const effectiveProviderId = modelOverrideNorm?.providerId ?? agent.providerId;
+  const effectiveModelId = modelOverrideNorm?.model ?? agent.model;
+  if (effectiveProviderId === null || effectiveModelId === null) {
     return {
       error: {
         ok: false,
@@ -1100,8 +1118,6 @@ async function prepareTurn(
   // send carried one (the composer's provider-grouped picker), else the
   // agent's. Every guard below runs against this, so a custom provider is
   // resolved, enabled-checked, and key-checked exactly like the agent's own.
-  const modelOverrideNorm = normalizeModelOverride(modelOverride);
-  const effectiveProviderId = modelOverrideNorm?.providerId ?? agent.providerId;
   const overrideNamesProvider = modelOverrideNorm?.providerId !== undefined;
   const provider = resolveProvider(db, effectiveProviderId);
   if (provider === undefined || provider.baseUrl === null) {
@@ -1251,11 +1267,12 @@ async function prepareTurn(
     permissionMode,
     // ROUND-61 (R61): the turn's main model for the computer-use vision
     // relay ("main" mode = describe screenshots with THIS model when its
-    // row supports vision). providerId/model are resolved above (override
-    // or agent defaults) — both non-null by the gate earlier in prepareTurn.
+    // row supports vision). providerId/model are the EFFECTIVE pair resolved
+    // above (override or agent defaults — non-null by the override-first
+    // gate; an override on a NULL agent flows through here too, ROUND-92).
     mainModel: {
       providerId: effectiveProviderId,
-      modelId: modelOverrideNorm?.model ?? agent.model,
+      modelId: effectiveModelId,
     },
   };
   // ROUND-40 → ROUND-49 (owner: "sub-agents … exactly like how the main agent
@@ -1471,7 +1488,11 @@ async function prepareTurn(
     // (chat-completions | anthropic-messages | responses).
     provider: { id: provider.id, baseUrl: provider.baseUrl, apiFormat: provider.apiFormat },
     apiKey,
-    model: modelOverrideNorm?.model ?? agent.model,
+    // ROUND-92 (R92-B): the EFFECTIVE model — the override's when the send
+    // carried one, the agent's otherwise; non-null by the override-first gate
+    // (an override model on a NULL agent flows to the chat adapters exactly
+    // like a configured agent's default does).
+    model: effectiveModelId,
     tools,
     system,
     ...(thinkingLevel !== undefined ? { thinkingLevel } : {}),

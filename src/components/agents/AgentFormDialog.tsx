@@ -48,8 +48,14 @@ function toFormState(agent: Agent | null): FormState {
     name: agent.name,
     role: agent.role,
     systemPrompt: agent.systemPrompt,
-    providerId: agent.providerId,
-    model: agent.model,
+    // ROUND-92 (R92-C): null-safe — the seeded templates have been NULL/NULL
+    // since round 1, and since R91-A every force-deleted provider's referencing
+    // agents are too. The old copy crashed validate's form.model.trim() during
+    // render (the app ErrorBoundary replaced the whole Agents screen — the
+    // owner's "agents were not editable"). Empty string is the form's
+    // "not configured" state; toDraft maps it back to null.
+    providerId: agent.providerId ?? "",
+    model: agent.model ?? "",
     visionModel: agent.visionModel ?? "",
     memoryPolicy: agent.memoryPolicy,
     allowedTools: [...agent.allowedTools],
@@ -59,14 +65,17 @@ function toFormState(agent: Agent | null): FormState {
   };
 }
 
-/** Convert loose form state into the strict AgentDraft (API.md §4.2 payload). */
+/** Convert loose form state into the strict AgentDraft (API.md §4.2 payload).
+ * ROUND-92 (R92-C): providerId/model are OPTIONAL — an empty trim sends
+ * null ("not configured — pick in chat"), which the backend stores verbatim
+ * (PATCH/POST accept string | null; updateAgent honors an explicit null). */
 function toDraft(s: FormState): AgentDraft {
   return {
     name: s.name.trim(),
     role: s.role.trim(),
     systemPrompt: s.systemPrompt,
-    providerId: s.providerId,
-    model: s.model.trim(),
+    providerId: s.providerId.trim() || null,
+    model: s.model.trim() || null,
     visionModel: s.visionModel.trim() || null,
     allowedTools: s.allowedTools,
     memoryPolicy: s.memoryPolicy,
@@ -115,7 +124,10 @@ export function AgentFormDialog({
   }, [providersQuery.data]);
   // Never strand the current selection (an agent can outlive its provider —
   // keep its id visible instead of silently blanking the select).
-  const selectionVisible = providerOptions.some((o) => o.id === form.providerId);
+  // ROUND-92 (R92-C): the "— none —" selection ("") is a REAL option below —
+  // it never needs the keep-visible fallback row.
+  const selectionVisible =
+    form.providerId === "" || providerOptions.some((o) => o.id === form.providerId);
 
   // ROUND-47 (R47-c2): the model inputs stay FREE-TEXT (custom models must
   // remain enterable) but gain <datalist> suggestions fed by the served
@@ -181,7 +193,11 @@ export function AgentFormDialog({
     const errs: Partial<Record<keyof FormState, string>> = {};
     if (!form.name.trim()) errs.name = "Name is required";
     if (!form.role.trim()) errs.role = "Role is required";
-    if (!form.model.trim()) errs.model = "Model is required";
+    // ROUND-92 (R92-C): model/provider are OPTIONAL now — "not configured"
+    // is a legitimate saved state (the R92 contract: an unconfigured agent
+    // arms itself from the first chat pick; the backend's override-first gate
+    // lets the send carry the pair). The old "Model is required" error is
+    // gone — the Model field carries the "pick in chat" hint instead.
     const turns = Number(form.maxTurns);
     if (!Number.isInteger(turns) || turns < 1) errs.maxTurns = "Must be an integer ≥ 1";
     const temp = Number(form.temperature);
@@ -257,6 +273,11 @@ export function AgentFormDialog({
                 value={form.providerId}
                 onChange={(e) => set("providerId", e.target.value)}
               >
+                {/* ROUND-92 (R92-C): the "not configured" choice — null on
+                    the wire. An agent saved this way arms itself from the
+                    first chat pick (the R92 contract), exactly like the
+                    R91-A force-delete reset state. */}
+                <option value="">— none —</option>
                 {providerOptions.map((p) => (
                   <option key={p.id} value={p.id}>
                     {p.name === p.id ? p.id : `${p.name} (${p.id})`}
@@ -265,7 +286,7 @@ export function AgentFormDialog({
                 {!selectionVisible && <option value={form.providerId}>{form.providerId}</option>}
               </select>
             </Field>
-            <Field label="Model" hint={fieldErrors.model}>
+            <Field label="Model" hint="Leave empty to pick the model in chat">
               <input
                 className={`${inputClass} font-mono text-xs`}
                 value={form.model}

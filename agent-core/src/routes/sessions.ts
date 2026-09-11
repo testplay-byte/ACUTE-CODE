@@ -517,14 +517,6 @@ export function registerSessionRoutes(scope: FastifyInstance, ctx: RouteContext)
         errorBody("CONFLICT", `session agent ${session.agentId} no longer exists`),
       );
     }
-    if (agent.providerId === null || agent.model === null) {
-      return reply.code(409).send(
-        errorBody("CONFLICT", `agent '${agent.name}' has no providerId/model configured`, {
-          agentId: agent.id,
-          field: "providerId",
-        }),
-      );
-    }
     // ROUND-82: the meter honors the composer's per-send provider too —
     // ?providerId= (the picker's provider) overrides the agent's, so the
     // window/pricing lookups key on the provider that will actually
@@ -539,6 +531,22 @@ export function registerSessionRoutes(scope: FastifyInstance, ctx: RouteContext)
       typeof query.model === "string" && query.model.trim() !== ""
         ? query.model.trim()
         : agent.model;
+    // ROUND-92 (R92-B): the EFFECTIVE-PAIR gate — the same reorder prepareTurn
+    // got. The old gate checked the AGENT ROW before the ?providerId/?model
+    // params were read, so a session whose agent was reset to NULL/NULL
+    // (R91-A's force-delete) 409'd even while the composer's per-send pair
+    // sat unused on the query string. The params now satisfy the gate: only
+    // an INCOMPLETE effective pair (either side missing from BOTH the params
+    // and the agent row) 409s — the same message, still true (no complete
+    // pair exists to meter).
+    if (providerId === null || model === null) {
+      return reply.code(409).send(
+        errorBody("CONFLICT", `agent '${agent.name}' has no providerId/model configured`, {
+          agentId: agent.id,
+          field: "providerId",
+        }),
+      );
+    }
     const project =
       session.projectId !== null ? getProject(db, session.projectId) : undefined;
 
@@ -866,7 +874,9 @@ export function registerSessionRoutes(scope: FastifyInstance, ctx: RouteContext)
   // context.compact event, keep the newest messages). Body {} (no
   // options yet). Honest gates: 404 unknown session, 409 no agent /
   // vanished agent / unconfigured model / missing key / disabled
-  // provider — never a 500. The response:
+  // provider — never a 500. ROUND-92 (R92-B): optional ?providerId=/
+  // ?model= query params satisfy the unconfigured-model gate (the
+  // effective-pair contract — see the inline comment below). The response:
   //   200 { compacted: true,  throughSeq, droppedMessages, tokensSaved }
   //   200 { compacted: false, reason } — nothing to summarize (a short
   //        session has no over-budget head; force skips the under-budget
@@ -889,7 +899,29 @@ export function registerSessionRoutes(scope: FastifyInstance, ctx: RouteContext)
         errorBody("CONFLICT", `session agent ${session.agentId} no longer exists`),
       );
     }
-    if (agent.providerId === null || agent.model === null) {
+    // ROUND-92 (R92-B): optional ?providerId=/?model= query params — the same
+    // effective-pair contract the send routes (R82) and the context meter
+    // (R92) got. A session whose agent was reset to NULL/NULL by R91-A's
+    // force-delete can still compact: the pair on the query string (the
+    // composer's live pick) resolves the provider/model the compaction call
+    // runs with, exactly like a send. Params are read the meter's way (blank
+    // → undefined → the agent's row decides); an unknown provider id is
+    // refused by the resolveProvider gate below — never a 500.
+    const query = request.query as Record<string, string | undefined>;
+    const queryProviderId =
+      typeof query.providerId === "string" && query.providerId.trim() !== ""
+        ? query.providerId.trim()
+        : undefined;
+    const queryModel =
+      typeof query.model === "string" && query.model.trim() !== ""
+        ? query.model.trim()
+        : undefined;
+    const effectiveProviderId = queryProviderId ?? agent.providerId;
+    const effectiveModel = queryModel ?? agent.model;
+    // The EFFECTIVE-PAIR gate (prepareTurn's ROUND-92 reorder): only an
+    // incomplete pair (both the params and the agent row missing a side)
+    // 409s — the message stays the agent's own truth.
+    if (effectiveProviderId === null || effectiveModel === null) {
       return reply.code(409).send(
         errorBody("CONFLICT", `agent '${agent.name}' has no providerId/model configured`, {
           agentId: agent.id,
@@ -897,10 +929,15 @@ export function registerSessionRoutes(scope: FastifyInstance, ctx: RouteContext)
         }),
       );
     }
-    const provider = resolveProvider(db, agent.providerId);
+    const provider = resolveProvider(db, effectiveProviderId);
     if (provider === undefined) {
       return reply.code(409).send(
-        errorBody("CONFLICT", `agent '${agent.name}' references missing provider '${agent.providerId}'`),
+        errorBody(
+          "CONFLICT",
+          queryProviderId !== undefined
+            ? `providerId '${queryProviderId}' does not exist`
+            : `agent '${agent.name}' references missing provider '${agent.providerId}'`,
+        ),
       );
     }
     if (provider.baseUrl === null) {
@@ -919,7 +956,7 @@ export function registerSessionRoutes(scope: FastifyInstance, ctx: RouteContext)
         errorBody("CONFLICT", `no API key for provider '${provider.id}' — set it in Settings → Models & Providers`),
       );
     }
-    const budget = resolveTurnBudget(db, provider.id, agent.model);
+    const budget = resolveTurnBudget(db, provider.id, effectiveModel);
     const outcome = await assembleWithCompaction(assembleHistory(db, id), budget, {
       db,
       sessionId: id,
@@ -928,7 +965,10 @@ export function registerSessionRoutes(scope: FastifyInstance, ctx: RouteContext)
       chat,
       provider: { id: provider.id, baseUrl: provider.baseUrl, apiFormat: provider.apiFormat },
       apiKey,
-      model: agent.model,
+      // ROUND-92 (R92-B): the EFFECTIVE model (the query pair's when present,
+      // the agent's otherwise) — the compaction call runs with the same
+      // model a send would.
+      model: effectiveModel,
     }, { force: true });
     if (!outcome.compacted || outcome.detail === undefined) {
       return reply.code(200).send({
