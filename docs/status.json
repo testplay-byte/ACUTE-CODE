@@ -271,7 +271,7 @@
     }
   ],
   "quality": {
-    "ci": "PENDING — R91 (the third-walkthrough round) pushed; the close-out convention fills this from the Actions API once the run settles.",
+    "ci": "GREEN — R91 push b0ca2b6 → CI run 34646260159 SUCCESS on the FIRST try (the third-walkthrough round: lint, typechecks, the 2,899-test root suite in 162 files, the 4-page build, e2e 12/12, license audit 134 CLEAN, cargo check, docs check 196/0/0) + the Release run 34646261861 SUCCESS; v0.89.0 tagged, built, and PUBLISHED (both assets verified: ACUTE-CODE_0.89.0_x64-setup.exe 37,544,084 B + acute-launcher-kit-v0.89.0.zip 104,977 B, both carrying GitHub's sha256 digests the new in-app updater verifies against; the release marked latest; zero drafts remain).",
     "suites": [
       {
         "name": "frontend",

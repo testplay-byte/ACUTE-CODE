@@ -204,3 +204,74 @@ sub-million tiers are byte-identical (test-pinned). New suite
   r89-updates.test.ts` (+4), `src/lib/format.test.ts` (NEW, 5), plus the
   re-pinned expectations in Composer/AgentChatPanel/ModelsProvidersTab/
   BrowserPanel test files for the new affordance contracts.
+
+## 12. The CI verdict (the close-out)
+
+R91 push b0ca2b6 → **CI run 34646260159 SUCCESS on the first try** (lint,
+typechecks, the 2,899-test root suite, the 4-page build, e2e 12/12, license
+audit, cargo check, docs check) + **Release run 34646261861 SUCCESS**.
+**v0.89.0 PUBLISHED** (release 387334140, marked latest, zero drafts):
+`ACUTE-CODE_0.89.0_x64-setup.exe` 37,544,084 B (sha256
+631df87c…) + `acute-launcher-kit-v0.89.0.zip` 104,977 B (sha256
+c66ac302…) — the same digests the new in-app updater verifies against.
+The DASHBOARD was truth-synced the same hour (30a9c39).
+
+## 13. The owner's TEST CHECKLIST for v0.89.0
+
+**A. The in-app update system (the headline)**
+1. Update to v0.89.0 however you did before (ACUTE.bat update — the
+   launcher still works exactly as before). Open Settings → About → Check
+   for updates: expect "Up to date — v0.89.0 is the latest".
+2. THE REAL TEST comes next round: when v0.90.0 ships, Check for updates
+   → "Update available" → the **Update now** button → a progress bar
+   (MB counting up) → "Verifying the installer's checksum…" → "Installer
+   launched — the setup wizard will close this app and install v0.90.0.
+   Your data is kept." The NSIS wizard takes over; let it finish; reopen
+   the app — expect the new version in About. No browser, no ACUTE.bat.
+3. If the download ever fails, expect an honest red reason (the checksum
+   line, the truncation line) — never a silent dead button.
+
+**B. The provider delete (the OpenRouter one)**
+4. Settings → Models & Providers → OpenRouter → Danger zone: expect the
+   "In use by 1 agent: Acute — confirming the delete resets it to pick a
+   new model" note ABOVE the button.
+5. Click Delete provider → the button flips to "Confirm delete (reset 1)"
+   in red → click it → the provider is GONE. Verify: the left list no
+   longer has OpenRouter; re-add it if you want it back (Add Provider →
+   OpenRouter — the key is stored again cleanly).
+6. In the chat: send a message → the composer's model picker now asks
+   for a model (the reset agent has none) → pick one → the send works.
+
+**C. The browser (the blank-render fixes)**
+7. Give the agent a browsing task ("open github.com and find the Rust
+   book"). Expect: the browser tab opens, the page RENDERS in the right
+   sidebar, the agent's cursor moves naturally, the address bar tracks.
+8. Resize the window, change resolutions/zoom/mobile presets — the page
+   follows live (as before).
+9. The pop-out button (top-right of the browser bar): expect the Acute
+   Browser window to open (shared profile). Close it → the panel is
+   untouched.
+10. The open-externally button: expect your system browser at the current
+    page. If the shell is ever wedged, expect an honest error card within
+    6 seconds — never a dead click.
+11. The + menu over a LIVE page: the menu floats on top of the browser
+    (the v0.88.0 feature, now built on the fixed async path).
+
+**D. The model card**
+12. Models list: the capability icons ride on the model NAME's right;
+    the details band below shows ONLY what you configured — add a model
+    with NOTHING set → no details section at all; with only the context
+    set → a compact "128K ctx" chip beside the model ID; with 3+ values
+    → the full band.
+13. The add-model dialog: the Input/Output capability pills — ON is a
+    filled colored pill with a check; OFF is a clean neutral outline
+    (clickable-looking, hover colors it).
+
+**E. The composer + the to-do float**
+14. While the agent works: type nothing → only the Stop button. Type text
+    → the queue-send button appears next to Stop. Enter still queues.
+15. Narrow the chat way down: the to-do pill's text wraps to two lines
+    (never cut off), the float never spills past the chat column, and the
+    Continue button collapses to its icon.
+16. The dashboard + usage pages: token totals in the millions render as
+    "12.4M" / "300M" (not thousands of K).
