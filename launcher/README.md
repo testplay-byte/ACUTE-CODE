@@ -3,9 +3,9 @@
 You want ACUTE-CODE running on your PC by double-clicking ONE file. Here is
 exactly how, start to finish.
 
-## What you need (3 files, ~2 minutes)
+## What you need (2 files, ~2 minutes)
 
-Create a folder anywhere — e.g. `C:\ACUTE`. In it, put these three files
+Create a folder anywhere — e.g. `C:\ACUTE`. In it, put these two files
 from **this GitHub repo, folder `launcher/`** (open the repo in your browser →
 click into `launcher/` → click each file → **Raw** button → right-click →
 *Save page as…* into your folder):
@@ -14,30 +14,21 @@ click into `launcher/` → click each file → **Raw** button → right-click �
 |---|---|
 | `ACUTE.bat` | the file you double-click (tiny coordinator) |
 | `acute_launcher.py` | the program that does all the work (rich terminal UI) |
-| `credentials.example.txt` | template for your credentials |
 
-> **Yes, all three come from GitHub** — nothing is created by hand except your
-> credentials file (next step). Nothing in them needs editing.
+> **Yes, both come from GitHub** — nothing is created by hand. Nothing in
+> them needs editing.
 
-## Set up your credentials (once)
+## Your GitHub token (asked once, on first run)
 
-1. Rename `credentials.example.txt` → **`credentials.txt`**
-2. Open it in any text editor and paste your values on the marked lines in
-   the **PASTE ZONE**:
-   - `GITHUB_PAT=` your GitHub token (starts with `github_pat_`) — needed to
-     download the private repository. **Required.**
-   - `OPENROUTER_KEY=` your OpenRouter key (starts with `sk-or-v1-`) — needed
-     for live model chats. **Required.**
-   - `OPENROUTER_SUB1..3_KEY=` optional extra OpenRouter keys for the
-     sub-agent pool — sub-agents use these first so your main key is not
-     burdened. Leave the placeholders to opt out.
-3. Save and close.
+The launcher needs a **GitHub token** (starts with `github_pat_`, read
+access to the private repo) to download the app. On the first run it asks
+for it interactively and saves it locally at `.acute/github.pat`
+(chmod 600 where supported) — later runs reuse it silently. Prefer the
+environment? Set `ACUTE_GITHUB_PAT` (or `GITHUB_PAT`) instead of the file.
 
-That file stays on your PC only — it is never uploaded, committed, or sent
-anywhere except directly to GitHub (clone/pull auth) and, locally, into the
-app's secure key store. **No keys ship inside the launcher or the template**
-— every value comes from you, and only you. Rotate or clear the values
-whenever you like.
+**AI provider keys (OpenRouter, NVIDIA, …) are no longer read from any
+file** — save them inside the app itself: **Settings → Models & Providers**.
+The desktop app stores them in Windows Credential Manager.
 
 ## Double-click `ACUTE.bat`
 
@@ -52,10 +43,9 @@ What you'll see, in order:
    C:\ACUTE\
    ├── ACUTE.bat              ← you double-click this
    ├── acute_launcher.py      ← the workhorse
-   ├── credentials.txt        ← your secrets (local only)
    ├── .acute-launch-pref.json ← your remembered launch choice (round 56)
    ├── ACUTE-CODE\            ← the app (downloaded, self-updating)
-   └── .acute\                ← helper data (logs, installer downloads)
+   └── .acute\                ← helper data (logs, github.pat, downloads)
    ```
 3. **The launch question (round 56)** — every run asks how you want to work:
    - **[1] Desktop app** (recommended): the packaged window with the embedded
@@ -70,11 +60,12 @@ What you'll see, in order:
    launcher checks GitHub for the latest `ACUTE-CODE_x64-setup.exe`,
    downloads it (with a progress bar), installs it **silently — no admin
    prompt, no dialogs** (it lands in
-   `C:\Users\<you>\AppData\Local\ACUTE-CODE`), stores your OpenRouter keys
-   in **Windows Credential Manager** so the app boots with them, and starts
+   `C:\Users\<you>\AppData\Local\ACUTE-CODE`), and starts
    **`ACUTE-CODE.exe`** — a real app window with the embedded Chromium
    browser and the agent backend bundled inside. No browser tab, no servers
-   to manage, nothing to type.
+   to manage, nothing to type. Save your AI provider keys once in the app
+   (**Settings → Models & Providers**) — the desktop app stores them in
+   **Windows Credential Manager** and boots with them from then on.
 5. Keep the launcher window open while using the app (Ctrl+C there just
    closes that window — the app keeps running in its own window).
 
@@ -88,10 +79,10 @@ What you'll see, in order:
 ### The site/browser flow (a choice, not a fallback)
 
 Choose **[2] Site** at the launch question (or run **`ACUTE.bat site`** / add
-`--web` / `--no-desktop`): dependencies install, the backend builds, your
-   OpenRouter key is stored in **Windows Credential Manager**, the servers
-   start, and **http://localhost:5173** opens in your browser (it opens by
-   itself). Keep the window open while using the app; **Ctrl+C** in the
+`--web` / `--no-desktop`): dependencies install, the backend builds, the
+   servers start, and **http://localhost:5173** opens in your browser (it
+   opens by itself). Save your AI keys in the app (**Settings → Models &
+   Providers**). Keep the window open while using the app; **Ctrl+C** in the
    window stops the servers cleanly. This is also the automatic fallback
    path when the desktop flow fails.
 
@@ -156,7 +147,7 @@ Extra commands when you want to drive it yourself:
   - `ACUTE.bat site` — the site in your browser, no question
   - `ACUTE.bat status` — read-only health report (versions, update state,
     installed desktop app, launch preference, engine last-boot line,
-    servers, credential lengths, log path)
+    servers, token length, log path)
   - `ACUTE.bat update` — update everything but don't start the app
   - `ACUTE.bat start` — start without the update check (still asks)
   - `ACUTE.bat desktop` — same as `app` (install/launch ONLY the packaged
@@ -179,14 +170,13 @@ while it runs), so if the launcher prints
 2. Double-click again.
 
 > **History note:** round-13 (2026-08-23) switched git authentication away
-> from credential helpers (they failed on Git-for-Windows) — the token now
-> goes into the one-off clone/fetch URL and is never stored anywhere.
-> Round-47 (2026-08-29) removed the sub-agent key defaults that used to be
-> baked into the launcher: all five credential lines are now yours to fill,
-> the launcher never writes key values, and the template ships placeholders
-> only. If your `credentials.txt` predates round-47, missing sub-key lines
-> are appended as placeholders automatically on the next run — fill them or
-> ignore them.
+> from credential helpers (they failed on Git-for-Windows) — the token goes
+> into the one-off clone/fetch URL and is never stored in git config.
+> Round-87 removed `credentials.txt` entirely: the launcher's only
+> credential is the GitHub token (asked once interactively, saved at
+> `.acute/github.pat`, or read from `ACUTE_GITHUB_PAT`), and every AI
+> provider key is saved inside the app itself (Settings → Models &
+> Providers → the desktop app writes Windows Credential Manager).
 
 ## Notes
 

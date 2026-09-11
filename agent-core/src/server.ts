@@ -111,6 +111,10 @@ import { registerMemoryRoutes } from "./routes/memory.js";
 import { registerRatingRoutes } from "./routes/ratings.js";
 import { registerSkillRoutes } from "./routes/skills.js";
 import { registerUsageRoutes } from "./routes/usage.js";
+// R87: the system domain (POST /system/reset — the application-wide reset).
+import { registerSystemRoutes } from "./routes/system.js";
+// R87: the agent-question domain (ask_user's REST resolve route).
+import { registerQuestionRoutes } from "./routes/questions.js";
 import { registerAttachmentRoutes } from "./routes/attachments.js";
 import { registerSettingsRoutes } from "./routes/settings.js";
 // R86: the SSE domain — the streamed turn route (final-phase extraction).
@@ -378,7 +382,15 @@ export function buildServer(options: ServerOptions): FastifyInstance {
   // R84 (Wave 2-a): the shared per-server context handed to every domain
   // route module below (routes/context.ts). Each register function
   // destructures only what its domain uses.
-  const ctx: RouteContext = { token, db, keyring, chat, corsHeadersFor, diagnosticsRing };
+  const ctx: RouteContext = {
+    token,
+    db,
+    keyring,
+    chat,
+    corsHeadersFor,
+    diagnosticsRing,
+    ...(options.dataDir !== undefined ? { dataDir: options.dataDir } : {}),
+  };
 
 
   app.get("/health", async () => ({
@@ -1713,6 +1725,15 @@ export function buildServer(options: ServerOptions): FastifyInstance {
       // R84 (Wave 2-a): the usage-analytics routes (§F7 + R52-b) —
       // extracted verbatim to routes/usage.ts; registration order preserved.
       registerUsageRoutes(scope, ctx);
+
+      // R87: the system routes (POST /system/reset — the application-wide
+      // reset). Registered last: no wildcard overlaps, and the wipe wants
+      // every other route's in-flight work to have landed first.
+      registerSystemRoutes(scope, ctx);
+
+      // R87: the agent-question resolve route (the ask_user tool's REST
+      // answer path — the browser-checkpoints contract shape).
+      registerQuestionRoutes(scope, ctx);
 
       // ---- ROUND-40: notifications (task complete/failed, permission
       // requests, sub-agent transitions). The owner: "add notification

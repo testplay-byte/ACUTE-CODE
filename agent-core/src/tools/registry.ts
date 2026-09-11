@@ -46,6 +46,8 @@ import { webPlugin } from "./plugins/web.js";
 import { browserPlugin } from "./plugins/browser.js";
 import { memoryPlugin } from "./plugins/memory.js";
 import { todoPlugin } from "./plugins/todo.js";
+// ROUND-87 (R87): the mid-task interactive question tool (ask_user).
+import { askUserPlugin } from "./plugins/ask-user.js";
 import { delegationPlugin } from "./plugins/delegation.js";
 // ROUND-61 (R61): computer use, skills, MCP — the extension surface.
 import { computerUsePlugin } from "./plugins/computer-use.js";
@@ -116,6 +118,10 @@ export const BUILT_IN_PLUGINS: readonly PluginDefinition[] = [
   browserPlugin,
   memoryPlugin,
   todoPlugin,
+  // ROUND-87 (R87): the mid-task interactive question tool — the chat card
+  // + resolve route make it a live-stream capability; createTools gates on
+  // toolDeps (bare declaration/test builds see nothing).
+  askUserPlugin,
   delegationPlugin,
   // ROUND-61 (R61): the computer-use surface is SETTINGS-GATED (default
   // OFF — createTools returns [] until the owner flips the master switch);

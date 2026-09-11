@@ -44,7 +44,17 @@ export const todoPlugin: PluginDefinition = {
         execute: async (input) => {
           if (!toolDeps) return { ok: false, output: "todo tracking unavailable in this context" };
           const todos = Array.isArray(input.todos) ? (input.todos as TodoItem[]) : [];
-          return writeTodo(toolDeps, todos);
+          return writeTodo(
+            {
+              db: toolDeps.db,
+              sessionId: toolDeps.sessionId,
+              agentId: toolDeps.agentId,
+              ...(typeof toolDeps.emit === "function"
+                ? { emit: (event: unknown) => toolDeps.emit!(event) }
+                : {}),
+            },
+            todos,
+          );
         },
       },
     ];

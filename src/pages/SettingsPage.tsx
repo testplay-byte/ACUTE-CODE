@@ -10,7 +10,7 @@ import {
   updateRetrySettings,
   type RetrySettings,
 } from "../lib/api";
-import { ArrowLeft, Bot, Brain, Minus, Monitor, Moon, Palette, Plus, PlugZap, RefreshCw, RotateCcw, ScanEye, Server, SlidersHorizontal, Sparkles, Sun, Timer, Users } from "lucide-react";
+import { ArrowLeft, Bot, Brain, Info, Minus, Monitor, Moon, Palette, Plus, PlugZap, RefreshCw, RotateCcw, ScanEye, Server, SlidersHorizontal, Sparkles, Sun, Timer, Users } from "lucide-react";
 import { useThemeStore } from "../lib/theme-store";
 import { THEMES, getContrastText } from "../lib/themes";
 import { useThemeStyles } from "../lib/use-theme-styles";
@@ -22,6 +22,8 @@ import { SubAgentsTab } from "../components/settings/SubAgentsTab";
 // computer use (the desktop-control master switch + the SEPARATE vision
 // model). Deep-links: ?tab=skills / ?tab=mcp / ?tab=computeruse.
 import { SkillsTab } from "../components/settings/SkillsTab";
+// ROUND-87 (R87): the About tab — version, updates, and the reset.
+import { AboutTab } from "../components/settings/AboutTab";
 import { McpTab } from "../components/settings/McpTab";
 import { ComputerUseTab } from "../components/settings/ComputerUseTab";
 // ROUND-66 (R66, B3/B5, owner directive): the DEDICATED image-analysis
@@ -53,6 +55,10 @@ const TABS = [
   // "advanced" (every existing ?tab=advanced link + doc keeps working;
   // the URL contract is load-bearing — changing it would break deep links).
   { id: "advanced", label: "General", icon: SlidersHorizontal },
+  // ROUND-87 (R87, owner directive): the dedicated ABOUT section — the app
+  // version, the update check (GitHub releases), and the application-wide
+  // reset. Deep-link ?tab=about.
+  { id: "about", label: "About", icon: Info },
 ] as const;
 
 type TabId = (typeof TABS)[number]["id"];
@@ -133,6 +139,7 @@ export function SettingsPage() {
         {tab === "computeruse" && <ComputerUseTab />}
         {tab === "vision" && <ImageAnalysisTab />}
         {tab === "advanced" && <AdvancedTab />}
+        {tab === "about" && <AboutTab />}
       </div>
     </div>
   );

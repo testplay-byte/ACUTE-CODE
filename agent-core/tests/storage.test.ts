@@ -194,6 +194,12 @@ describe("openDatabase", () => {
       // pre-R83 row exactly true) + origin (turn | compaction | debug —
       // the hidden-call rows) + the origin index.
       { version: 31, name: "0031_usage_calls_origin.sql" },
+      // ROUND-87 (R87): the model input/output capability columns
+      // (supports_pdf + the four *_output flags + size_label).
+      { version: 32, name: "0032_model_io_capabilities.sql" },
+      // ROUND-87 (R87): ask_user joins the allowlist vocabulary —
+      // appended to template/default rows by the companion rule.
+      { version: 33, name: "0033_ask_user_tool.sql" },
     ]);
     expect(appliedSecond).toEqual(appliedFirst);
   });
@@ -254,6 +260,9 @@ describe("template seeding", () => {
           // ROUND-73 (R73-b): the task-mode posture switch — seeded via
           // TOOL_NAMES (existing DBs get it appended by migration 0027).
           "switch_mode",
+          // ROUND-87 (R87): the mid-task interactive question tool — seeded
+          // via TOOL_NAMES (existing DBs get it appended by migration 0033).
+          "ask_user",
         ]);
         expect(row.memory_policy).toBe("on-start");
         expect(row.max_turns).toBe(40);

@@ -40,7 +40,7 @@ import { listAgents } from "../storage/agents.js";
 import { errorBody } from "./helpers.js";
 // R84 (Wave 2-a): the shared R50-d model-config field gate (exported by
 // routes/models.ts — the upsert + PATCH routes validate identically).
-import { readModelNumericFields, readModelScalarFields, readTriStateField } from "./models.js";
+import { readModelNumericFields, readModelScalarFields, readTriStateField, isModelTriStateField } from "./models.js";
 
 export function registerProviderRoutes(scope: FastifyInstance, ctx: RouteContext): void {
   const { db, keyring } = ctx;
@@ -354,19 +354,17 @@ export function registerProviderRoutes(scope: FastifyInstance, ctx: RouteContext
     }
     const scalars = readModelScalarFields(raw);
     if (!scalars.ok) {
-      // ROUND-82: the tri-state capability fields accept boolean OR null
-      // (null = reset to unknown); the legacy fields stay boolean-only.
-      const triState =
-        scalars.field === "supportsTools" ||
-        scalars.field === "supportsAudio" ||
-        scalars.field === "supportsVideo";
+      // ROUND-82 + ROUND-87: the tri-state capability fields accept boolean
+      // OR null (null = reset to unknown); the legacy fields stay
+      // boolean-only, the string fields string-or-null.
+      const triState = isModelTriStateField(scalars.field);
       return reply.code(400).send(
         errorBody(
           "VALIDATION",
           `${scalars.field} must be ${
             triState
               ? "a boolean or null (unknown)"
-              : scalars.field === "displayName"
+              : scalars.field === "displayName" || scalars.field === "sizeLabel"
                 ? "a string"
                 : "a boolean"
           }`,
@@ -389,6 +387,20 @@ export function registerProviderRoutes(scope: FastifyInstance, ctx: RouteContext
       supportsTools: readTriStateField(raw.supportsTools),
       supportsAudio: readTriStateField(raw.supportsAudio),
       supportsVideo: readTriStateField(raw.supportsVideo),
+      // ROUND-87 (R87): the input/output capability columns + size label —
+      // same tri-state contract (boolean sets, null clears to unknown,
+      // absent keeps); sizeLabel is string-or-null.
+      supportsPdf: readTriStateField(raw.supportsPdf),
+      supportsTextOutput: readTriStateField(raw.supportsTextOutput),
+      supportsImageOutput: readTriStateField(raw.supportsImageOutput),
+      supportsVideoOutput: readTriStateField(raw.supportsVideoOutput),
+      supportsAudioOutput: readTriStateField(raw.supportsAudioOutput),
+      sizeLabel:
+        raw.sizeLabel === undefined
+          ? undefined
+          : raw.sizeLabel === null || typeof raw.sizeLabel === "string"
+            ? raw.sizeLabel
+            : undefined,
       hidden: typeof raw.hidden === "boolean" ? raw.hidden : undefined,
     });
     return reply.code(201).send(model);

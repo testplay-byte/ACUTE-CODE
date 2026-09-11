@@ -63,11 +63,12 @@ import { useProjectFilePaths } from "./useProjectFiles";
  *   position is stable at every width and state (the R78 fix for the
  *   owner's drifting action buttons). See the toolbar comment below.
  *
- *   The box is a CSS CONTAINER (@container) and the selector pills' text
- *   labels hide below a 560px container (icon-only pills — the row keeps
- *   fitting at the 480px chat floor; the title tooltips carry the hidden
- *   labels). flex-wrap stays as the never-overlap emergency fallback
- *   (R51-c) for absurd widths (the freeform mini windows).
+ *   The box is a CSS CONTAINER (@container) whose selector pills collapse
+ *   in STAGGERED tiers (R87-A1 — see the toolbar comment below): the model
+ *   label shrinks first (graduated max-width), the mode label folds at the
+ *   560px floor, the thinking label at 500px; all animated. flex-wrap stays
+ *   as the never-overlap emergency fallback (R51-c) for absurd widths (the
+ *   freeform mini windows).
  *
  * The panel (AgentChatPanel) owns the input text, the send path, the model
  * override + thinking level persistence, and the permission-mode PATCH;
@@ -563,11 +564,16 @@ export function Composer({
           the actions to the right edge and items-end aligns them to the
           toolbar's LAST line, so the action button's position is STABLE at
           every width and every state — exactly the owner's ask.
-          The box is a CSS @container: below 560px the selector pills' TEXT
-          LABELS hide (icon-only — the row fits at the 480px chat floor; the
-          pills' title tooltips carry the hidden labels). flex-wrap on the
-          wrapping area stays as the R51-c never-overlap emergency fallback
-          (absurd widths — the freeform mini windows). */}
+          The box is a CSS @container and R87-A1 (owner: "when I make it
+          smaller, at a point every single thing becomes minimized… it should
+          smoothly be handled") made the collapse STAGGERED instead of the old
+          single 560px cliff where every label vanished at once: the MODEL
+          label shrinks FIRST (graduated max-width 240 → 170 → 90px, animated
+          — it never hides), the MODE label collapses at the 560px floor, the
+          THINKING label at 500px (both animate max-width + opacity rather
+          than hard-hiding). The pills' title tooltips carry the full labels.
+          flex-wrap on the wrapping area stays as the R51-c never-overlap
+          emergency fallback (absurd widths — the freeform mini windows). */}
       <div
         role="toolbar"
         aria-label="Composer tools"

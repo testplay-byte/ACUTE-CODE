@@ -355,7 +355,26 @@ function ViewportNumberInput({
   );
 }
 
-export function BrowserPanel({ projectId, tab }: { projectId: string; tab: RightSidebarTab }) {
+export function BrowserPanel({
+  projectId,
+  tab,
+  hidden = false,
+}: {
+  projectId: string;
+  tab: RightSidebarTab;
+  /** ROUND-87 (R87, owner: "Make sure to properly embed the browser window
+   * as a complete part of the application itself … If I click on the new
+   * tab button, the whole browser window apparently disappears … the
+   * browser itself apparently closes in the background … If I try to
+   * switch the tabs, then the previous tab apparently gets somewhat
+   * glitched out"): KEEP-ALIVE — the RightSidebar now keeps every browser
+   * tab's panel MOUNTED (display:none when inactive) so the page never
+   * reloads, the webview never re-creates, and tab switches are instant.
+   * `hidden` folds into the webview-visibility math (the native webview
+   * hides but STAYS ALIVE) and pauses the bounds sync (a display:none
+   * rect is 0×0 — never write that to a live webview). */
+  hidden?: boolean;
+}) {
   const styles = useThemeStyles();
   const tabId = tab.id;
   const patchTab = useRightSidebarStore((s) => s.patchTab);
@@ -552,6 +571,9 @@ export function BrowserPanel({ projectId, tab }: { projectId: string; tab: Right
   // the webview; re-applying per sync is idempotent and change-guarded.
   const syncBounds = useCallback(() => {
     if (!nativeMode || !nativeReadyRef.current) return;
+    // R87: a hidden (keep-alive) panel has a 0×0 rect — never write those
+    // bounds to the live webview; the ResizeObserver re-fires on reveal.
+    if (hiddenRef.current) return;
     const el = placeholderRef.current;
     if (el === null) return;
     const rect = el.getBoundingClientRect();
@@ -588,6 +610,13 @@ export function BrowserPanel({ projectId, tab }: { projectId: string; tab: Right
   }, [syncBounds]);
 
   const zoomRef = useRef(zoom);
+  // R87: the keep-alive hidden flag as a REF (syncBounds + the 500ms safety
+  // interval read it without re-subscribing; the prop drives the reactive
+  // webview-visibility effect directly).
+  const hiddenRef = useRef(hidden);
+  useEffect(() => {
+    hiddenRef.current = hidden;
+  }, [hidden]);
   useEffect(() => {
     zoomRef.current = zoom;
     // A user-zoom change must reach the webview immediately: reset the
@@ -619,7 +648,11 @@ export function BrowserPanel({ projectId, tab }: { projectId: string; tab: Right
           scheduleBoundsSync();
           const factor = useBrowserTabStore.getState().tabs[tabId]?.viewport.zoom ?? 1;
           void nativeTabSetZoom(tabId, factor).catch(nativeWarn);
-          if (isWebviewHiddenNow(tabId)) {
+          // R87: a KEEP-ALIVE-hidden panel (an inactive browser tab) must
+          // NOT show its webview at create time — it would float above the
+          // active tab's content (OS-level webviews sit above all HTML).
+          // The hidden-prop effect below owns its reveal on activation.
+          if (hiddenRef.current || isWebviewHiddenNow(tabId)) {
             // Created hidden (Rust builds webviews hidden until the first
             // bounds sync) — keep it that way; the guard subscription's
             // restore owns the first show.
@@ -685,7 +718,7 @@ export function BrowserPanel({ projectId, tab }: { projectId: string; tab: Right
   // sidebar's own guarded-restore calls agree with it (same state).
   const overlayOpen = useWebviewGuardStore((s) => s.overlayOpen);
   const popoverTabId = useWebviewGuardStore((s) => s.popoverTabId);
-  const webviewHidden = overlayOpen || popoverTabId === tabId;
+  const webviewHidden = overlayOpen || popoverTabId === tabId || hidden;
   useEffect(() => {
     if (!nativeMode || !nativeReadyRef.current) return;
     void nativeTabSetVisible(tabId, !webviewHidden).catch(nativeWarn);
@@ -1440,13 +1473,34 @@ export function BrowserPanel({ projectId, tab }: { projectId: string; tab: Right
              webview is NOT a DOM child — it is an OS-level child of the
              window floating ABOVE the web UI, positioned over this div by
              the bounds sync above. It renders the page (full CSS/JS); this
-             div only marks the rectangle + hosts the empty state. */
+             div only marks the rectangle + hosts the empty state.
+             ROUND-87 (R87): while a POPOVER hides the webview (the quick
+             menu / overlay guard), a dimmed hint makes the pause read as
+             DELIBERATE rather than the page vanishing. */
           <div
             ref={placeholderRef}
             data-testid="browser-native-placeholder"
-            className="absolute inset-[4px]"
+            className="absolute inset-[4px] rounded-[12px]"
           >
-            {!hasPage ? emptyState : null}
+            {!hasPage ? (
+              emptyState
+            ) : popoverTabId === tabId ? (
+              <div
+                className="absolute inset-0 grid place-items-center rounded-[12px]"
+                style={{
+                  background: styles.isDark ? "rgba(0,0,0,0.45)" : "rgba(0,0,0,0.25)",
+                  backdropFilter: "blur(2px)",
+                }}
+                aria-hidden
+              >
+                <span
+                  className="text-[11px] font-bold tracking-widest uppercase"
+                  style={{ color: "rgba(255,255,255,0.75)" }}
+                >
+                  browser paused while the menu is open
+                </span>
+              </div>
+            ) : null}
           </div>
         ) : !hasPage ? (
           emptyState

@@ -1,4 +1,4 @@
-<!-- last-reviewed: 2026-09-10 round-83 -->
+<!-- last-reviewed: 2026-09-11 round-87 -->
 # ADR-0010: Session transcripts — append-only event log, not in-place message mutation
 
 - **Status:** ACCEPTED (implementation-detail decision under the smaller-scope rule; surfaced per protocol)

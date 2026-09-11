@@ -317,7 +317,7 @@ The embedded browser panel (browser_control) — a real webview the user watches
 
 ## Core loop
 1. navigate to the absolute http(s) URL. Omit sessionId → it drives THIS session's own tab (auto-opened in the panel).
-2. read_dom — the structured page outline (headings, links, buttons, inputs, forms with short selectors). This is how you know the page; screenshots only for layout/visual questions.
+2. read_dom — the structured page outline (headings, links, buttons, inputs, forms with short selectors + each element's x/y/w/h position). This is how you know the page — it gives you the full content and spatial layout; screenshots only for visual questions pixels alone can answer.
 3. Act on DOM IDENTITY, never pixel coordinates: click by the returned selector or visible text; type into the returned selector.
 4. VERIFY with get_state (currentUrl, title, canBack/canForward) — the navigation you expected, not the one you hoped for; read (fresh server text) or read_dom when the check must be about content.
 
@@ -333,7 +333,7 @@ The embedded browser panel (browser_control) — a real webview the user watches
 - read = fresh server-side text; read_dom/click/type/eval = the LIVE page. They can disagree (logins, JS) — say which you used.
 - eval runs as a function body in the page — end with return; use it only when read_dom/read/source cannot answer.
 - Announce viewport changes (set_viewport) in one line — the user sees the panel live.
-- source for the page's html/css/js; screenshot only when pixels are the question.`;
+- source for the page's html/css/js; screenshot only when pixels are the question — and screenshots are ALWAYS panel-only (they fail honestly when the browser tab is closed; never use computer-use screenshot for the panel).`;
 
 /* ── ROUND-71 (R71-e3, D2): the FOUR new built-ins ───────────────────────────
  *

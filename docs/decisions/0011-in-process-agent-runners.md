@@ -1,4 +1,4 @@
-<!-- last-reviewed: 2026-09-10 round-83 -->
+<!-- last-reviewed: 2026-09-11 round-87 -->
 # ADR-0011: Agent execution — in-process runners with a global 5-slot semaphore
 
 - **Status:** ACCEPTED (implementation-detail decision under the smaller-scope rule; surfaced per protocol)

@@ -350,8 +350,10 @@ describe("migration 0014 (delegate_task + browser_control allowlist repair)", ()
     // (the skills loader is a global capability) → 24; ROUND-66 (R66):
     // 0026 appends analyze_image (the seed list includes web_fetch) → 25;
     // ROUND-73 (R73-b): 0027 appends switch_mode (the read_skill companion
-    // rule — the list has read_skill by then) → 26.
-    expect(row("agt_tpl_coder")).toHaveLength(26);
+    // rule — the list has read_skill by then) → 26; ROUND-87 (R87): 0033
+    // appends ask_user (the todo_write companion rule — the list has
+    // todo_write by then) → 27.
+    expect(row("agt_tpl_coder")).toHaveLength(27);
     expect(row("agt_tpl_coder")).toContain("analyze_image");
     expect(row("agt_default_nova")).toContain("delegate_task");
     expect(row("agt_default_nova")).toContain("browser_control");
@@ -382,7 +384,7 @@ describe("migration 0014 (delegate_task + browser_control allowlist repair)", ()
       JSON.parse(
         (again.prepare("SELECT allowed_tools FROM agents WHERE id = 'agt_tpl_coder'").get() as { allowed_tools: string }).allowed_tools,
       ),
-    ).toHaveLength(26);
+    ).toHaveLength(27);
     again.close();
   });
 });

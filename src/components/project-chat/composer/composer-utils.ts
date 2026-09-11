@@ -339,6 +339,57 @@ export function computeFlyoutGeometry(
   return { side, left, top: viewportTop - rowRect.top, viewportTop, maxHeight };
 }
 
+// ── Provider-flyout re-target intent (R87-A1: trajectory gating) ─────────────
+
+/**
+ * R87-A1 (owner: moving the mouse toward the model flyout crossed OTHER
+ * provider rows and each one's hover re-targeted the flyout mid-transit —
+ * "it switches providers while I'm just trying to get into the list").
+ * The simplified Amazon-dropdown "safe corridor": when a flyout is already
+ * open, the pointer's movement VECTOR decides whether entering a DIFFERENT
+ * provider row is a genuine hover or just a row crossed on the way to the
+ * flyout.
+ *
+ *  - "retarget": behave like the old instant open. Chosen when there is no
+ *    movement sample to reason about (jsdom/keyboard/touch), the pointer is
+ *    stationary-ish (< 3px — also the list-scrolled-under-a-resting-pointer
+ *    case), or no flyout rect is known yet (first hover / inline mode).
+ *  - "corridor": the movement is mostly horizontal AND heading toward the
+ *    flyout's x-range — the pointer is in transit INTO the flyout and the
+ *    entered row is merely in the way. The caller keeps the CURRENT provider
+ *    open and does NOT promote the new row (crossing rows toward the flyout
+ *    never re-targets); the existing FLYOUT_CLOSE_DELAY_MS grace timer still
+ *    guards a genuine leave.
+ *  - "scan": everything else — mostly vertical (browsing/scrolling the list)
+ *    or heading away from the flyout. The caller also holds the current
+ *    provider for the moment, but promotes the entered row after a short
+ *    dwell (the pointer coming to REST on a row is a genuine hover).
+ *
+ * Pure: plain numbers in, one of three verdicts out.
+ */
+export type FlyoutRetargetIntent = "retarget" | "corridor" | "scan";
+
+export function flyoutRetargetIntent(
+  /** Pointer movement delta between the last two pointermove samples
+   * (null = no samples yet — treat as intentional). */
+  delta: { dx: number; dy: number } | null,
+  /** The pointer's current x (viewport space). */
+  pointerX: number,
+  /** The open flyout's rect (null = not measured / inline). */
+  flyout: PlainRect | null,
+): FlyoutRetargetIntent {
+  if (delta === null) return "retarget";
+  // Stationary-ish (or the list moved under a resting pointer): a genuine
+  // hover on the entered row.
+  if (Math.abs(delta.dx) + Math.abs(delta.dy) < 3) return "retarget";
+  if (flyout === null) return "retarget";
+  // Mostly-horizontal movement whose x-direction points at the flyout's
+  // x-range = the transit corridor.
+  const towardFlyoutX =
+    (flyout.left > pointerX && delta.dx > 0) || (flyout.right < pointerX && delta.dx < 0);
+  return towardFlyoutX && Math.abs(delta.dx) > Math.abs(delta.dy) ? "corridor" : "scan";
+}
+
 // ── Dismissal (click-outside + Escape) shared by every popover/menu ─────────
 
 /**

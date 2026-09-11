@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState, type MouseEvent as ReactMouseEvent } from "react";
 import { useNavigate } from "react-router";
 import { useQuery } from "@tanstack/react-query";
 import { Check, ChevronDown, ChevronRight, Cpu, Settings } from "lucide-react";
@@ -12,6 +12,7 @@ import { useThemeStyles } from "../../../lib/use-theme-styles";
 import { withAlpha } from "../../dashboard/helpers";
 import {
   computeFlyoutGeometry,
+  flyoutRetargetIntent,
   useDismiss,
   type FlyoutSide,
   type ModelOverride,
@@ -34,6 +35,12 @@ const FLYOUT_MODEL_CAP = 200;
  * the pointer could ever arrive. Same bridge ContextDonut shipped (R51-c).
  */
 const FLYOUT_CLOSE_DELAY_MS = 220;
+
+/** R87-A1: how long the pointer must REST on a provider row whose hover was
+ * held back by the trajectory gate (a vertical scan of the list) before the
+ * flyout promotes it — the “stationary-ish” dwell. Same 220ms beat as the
+ * close grace period, so the two feel like one clock. */
+const RETARGET_DWELL_MS = 220;
 
 /** Geometry used when the popover can't be measured / the touch path. */
 const INLINE_GEO = { side: "inline" as FlyoutSide, left: null, top: 0, viewportTop: 0, maxHeight: 280 };
@@ -162,14 +169,54 @@ export function ModelSelector({
       setHoveredProvider(null);
     }, FLYOUT_CLOSE_DELAY_MS);
   };
-  // Never leak a pending close across an unmount.
-  useEffect(() => clearCloseTimer, []);
+  // R87-A1: the held-back hover's dwell timer (see flyoutRetargetIntent) —
+  // fires only while the pointer stays on the entered row.
+  const retargetTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const cancelRetarget = (): void => {
+    if (retargetTimerRef.current !== null) {
+      clearTimeout(retargetTimerRef.current);
+      retargetTimerRef.current = null;
+    }
+  };
+  // Never leak a pending close (or dwell) across an unmount.
+  useEffect(
+    () => () => {
+      clearCloseTimer();
+      cancelRetarget();
+    },
+    [],
+  );
   const close = (): void => {
     clearCloseTimer(); // ROUND-52 (R52-a): no pending close outlives the popover
+    cancelRetarget(); // R87-A1: …and no pending dwell either
     setOpen(false);
     setHoveredProvider(null);
   };
   const popoverRef = useDismiss(open, close);
+
+  // ── R87-A1: trajectory-intent state ─────────────────────────────────────
+  // The open flyout's viewport rect (captured by the flyout's ref callback)
+  // feeds the corridor check; the double-buffered pointer trail yields the
+  // movement VECTOR of the crossing (a single buffer would only ever see
+  // the sample that ALSO triggered the row's mouseenter — a zero delta).
+  const flyoutRectRef = useRef<PlainRect | null>(null);
+  const pointerPrevRef = useRef<{ x: number; y: number } | null>(null);
+  const pointerCurRef = useRef<{ x: number; y: number } | null>(null);
+  useEffect(() => {
+    if (!open) return;
+    const onMove = (e: PointerEvent): void => {
+      pointerPrevRef.current = pointerCurRef.current;
+      pointerCurRef.current = { x: e.clientX, y: e.clientY };
+    };
+    // capture: pointermove must land BEFORE the row's mouseenter of the
+    // same physical movement, so the delta reflects the crossing itself.
+    document.addEventListener("pointermove", onMove, { capture: true, passive: true });
+    return () => {
+      document.removeEventListener("pointermove", onMove);
+      pointerPrevRef.current = null;
+      pointerCurRef.current = null;
+    };
+  }, [open]);
 
   // Providers (added list) — fetched up-front so the BUTTON's label can show
   // the provider display name before the popover is ever opened.
@@ -246,9 +293,10 @@ export function ModelSelector({
   const buttonTitle = effective !== null ? `${providerLabel || "model"} · ${effective}` : "no model";
 
   /** Measure row + popover + viewport and compute the flyout geometry
-   * (side by space, vertical clamp, capped height — pure helper). */
-  const openFlyout = (providerId: string, row: HTMLElement): void => {
-    clearCloseTimer(); // ROUND-52 (R52-a): hovering cancels any pending close
+   * (side by space, vertical clamp, capped height — pure helper). R87-A1:
+   * extracted from openFlyout so the trajectory gate can call it on a
+   * dwell without re-measuring anything else. */
+  const applyFlyout = (providerId: string, row: HTMLElement): void => {
     setHoveredProvider(providerId);
     const popover = row.closest("[data-model-popover]") as HTMLElement | null;
     if (popover === null) {
@@ -263,6 +311,42 @@ export function ModelSelector({
         FLYOUT_WIDTH,
       ),
     );
+  };
+
+  /**
+   * R87-A1: the trajectory-gated hover entry (the owner's mid-transit
+   * re-target bug — see flyoutRetargetIntent for the full rules). Same-row
+   * re-enters and un-gated intents behave exactly like the old instant
+   * open; a corridor crossing holds the CURRENT provider (no dwell — the
+   * pointer is heading INTO the flyout, whose enter cancels everything); a
+   * vertical scan holds it for RETARGET_DWELL_MS and then promotes the
+   * rested-on row. In every held case the pending close stays cancelled
+   * (the pointer is still inside the provider list — menu semantics), and
+   * the row's mouseleave / the flyout's enter cancel the dwell again. */
+  const openFlyout = (providerId: string, row: HTMLElement, ev: ReactMouseEvent<HTMLElement>): void => {
+    clearCloseTimer(); // ROUND-52 (R52-a): hovering cancels any pending close
+    if (providerId === hoveredProvider) {
+      cancelRetarget();
+      applyFlyout(providerId, row);
+      return;
+    }
+    const prev = pointerPrevRef.current;
+    const cur = pointerCurRef.current;
+    const delta =
+      prev !== null && cur !== null ? { dx: cur.x - prev.x, dy: cur.y - prev.y } : null;
+    const intent = flyoutRetargetIntent(delta, ev.clientX, flyoutRectRef.current);
+    if (intent === "retarget") {
+      cancelRetarget();
+      applyFlyout(providerId, row);
+      return;
+    }
+    cancelRetarget();
+    if (intent === "scan") {
+      retargetTimerRef.current = setTimeout(() => {
+        retargetTimerRef.current = null;
+        if (row.isConnected) applyFlyout(providerId, row);
+      }, RETARGET_DWELL_MS);
+    }
   };
 
   const pickModel = (model: string, providerId: string): void => {
@@ -290,12 +374,24 @@ export function ModelSelector({
       aria-label={`Models of ${hoveredName}`}
       data-model-flyout
       data-flyout-side={flyoutSide}
+      ref={(el) => {
+        // R87-A1: remember the open flyout's viewport rect for the
+        // trajectory gate (cleared when it unmounts). Inline mode never
+        // positions itself beside the rows — no rect, no gating.
+        flyoutRectRef.current =
+          el !== null && flyoutSide !== "inline" ? plainRect(el) : null;
+      }}
       // ROUND-52 (R52-a): the flyout's side of the hover bridge — entering it
-      // cancels the close the row's mouseleave scheduled; leaving it schedules
-      // the close again. Handlers live here on the SHARED root (both render
-      // sites get them); inline mode doesn't need the bridge, but a 220ms
-      // leave delay there is harmless (Back + click paths are unaffected).
-      onMouseEnter={clearCloseTimer}
+      // cancels the close the row's mouseleave scheduled (and, R87-A1, any
+      // pending dwell promotion — the pointer arrived where it was headed);
+      // leaving it schedules the close again. Handlers live here on the
+      // SHARED root (both render sites get them); inline mode doesn't need
+      // the bridge, but a 220ms leave delay there is harmless (Back + click
+      // paths are unaffected).
+      onMouseEnter={() => {
+        clearCloseTimer();
+        cancelRetarget();
+      }}
       onMouseLeave={scheduleClose}
       className={
         flyoutSide === "inline"
@@ -438,6 +534,26 @@ export function ModelSelector({
 
   return (
     <div className="relative shrink-0" ref={popoverRef}>
+      {/* R87-A1 (owner: "When the option is opened up, the background will be
+          slightly darkened and a slight frosted glass effect will be applied
+          to it"): a fixed scrim BEHIND the popover (z-40 vs the popover's
+          z-50) — 25% black + a 3px blur, fading in over 150ms via the shared
+          overlay-in keyframes. Clicking it dismisses (the useDismiss
+          mousedown path fires too — both land on the same close). */}
+      {open ? (
+        <div
+          aria-hidden
+          data-model-backdrop
+          className="fixed inset-0 z-40"
+          style={{
+            background: "rgba(0,0,0,0.25)",
+            backdropFilter: "blur(3px)",
+            WebkitBackdropFilter: "blur(3px)",
+            animation: "overlay-in 0.15s ease",
+          }}
+          onClick={close}
+        />
+      ) : null}
       <button
         type="button"
         onClick={() => setOpen((v) => !v)}
@@ -458,9 +574,14 @@ export function ModelSelector({
         {/* R77 (owner: "For the model selection, there was no proper icon,
             so you might need to add a proper icon"): the Cpu badge — every
             other toolbar pill leads with an icon (Paperclip / Shield / Compass
-            / Brain); the model pill was the lone icon-less text button. The
-            icon STAYS visible below the 560px @container floor (only the text
-            label hides), so the pill stays identifiable when icon-only. */}
+            / Brain); the model pill was the lone icon-less text button.
+            R87-A1 (owner: "The first thing which should be shrunk in its
+            width (meaning the name of the model, the model sector)"): the
+            label NEVER hides — it SHRINKS FIRST, in graduated @container
+            tiers (240 → 170px below 520 → 90px below 420), animated via
+            max-width so the model name stays identifiable (truncated) while
+            the mode/thinking pills still show their full labels. The icon
+            stays visible at every width. */}
         <Cpu
           size={12}
           className="shrink-0"
@@ -468,7 +589,10 @@ export function ModelSelector({
           aria-hidden
           data-model-icon
         />
-        <span className="truncate @max-[560px]:hidden" data-model-label>
+        <span
+          className="max-w-[240px] @max-[520px]:max-w-[170px] @max-[420px]:max-w-[90px] truncate transition-[max-width] duration-200"
+          data-model-label
+        >
           {buttonLabel}
         </span>
         <ChevronDown size={10} className="shrink-0" />
@@ -552,12 +676,17 @@ export function ModelSelector({
                     style={{
                       background: hoveredProvider === p.id ? withAlpha(styles.accent, 0.08) : "transparent",
                     }}
-                    onMouseEnter={(e) => openFlyout(p.id, e.currentTarget)}
+                    onMouseEnter={(e) => openFlyout(p.id, e.currentTarget, e)}
                     // ROUND-52 (R52-a): don't close instantly — start the grace
                     // timer so the pointer can cross the popover padding +
                     // FLYOUT_MARGIN gap into the flyout (entering the flyout,
-                    // or this row again, cancels it).
-                    onMouseLeave={scheduleClose}
+                    // or this row again, cancels it). R87-A1: leaving also
+                    // cancels any dwell promotion pending for this row (the
+                    // pointer moved on — the dwell only fires while it rests).
+                    onMouseLeave={() => {
+                      cancelRetarget();
+                      scheduleClose();
+                    }}
                   >
                     <button
                       type="button"

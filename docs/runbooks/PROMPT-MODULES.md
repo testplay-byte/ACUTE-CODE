@@ -1,4 +1,4 @@
-<!-- last-reviewed: 2026-09-10 round-83 -->
+<!-- last-reviewed: 2026-09-11 round-87 -->
 # PROMPT-MODULES — the per-section system-prompt override system (R59-F)
 
 **Status:** reference (implemented) · **Established:** round-59 · **Audience:**

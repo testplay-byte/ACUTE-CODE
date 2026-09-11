@@ -1,4 +1,4 @@
-<!-- last-reviewed: 2026-09-10 round-83 -->
+<!-- last-reviewed: 2026-09-11 round-87 -->
 # CONTEXT METER — estimate vs measured, one budget
 
 **Status:** normative · **Established:** round-83 (the "highly misleading"

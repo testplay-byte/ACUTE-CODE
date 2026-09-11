@@ -34,7 +34,7 @@ vite dev origins.
 | Route | Notes |
 |---|---|
 | `GET /agents?includeTemplates=` | list; `false` excludes the 5 templates (default agent "Acute" remains — seeded at DB open, fixed id `agt_default_nova`, provider openrouter / model `z-ai/glm-5.2:free` since R43/migration-0013; was the dead `stealth/ox-alpha`) |
-| `POST /agents` | `AgentDraft` → `201`. `allowedTools` validated against the REAL tool list (`TOOL_NAMES`, **26 tools** — incl. `delegate_task` + `browser_control` since R43, `memory_save`/`memory_recall`/`memory_list` since R44, `job_status`/`job_stop` since R52, `read_skill` since R61, `analyze_image` since R66, and `switch_mode` since R73) — SPEC-era names 400 (ADR-0019). Empty list = ALL tools. The 31 computer-use tools are deliberately NOT allowlist vocabulary (settings-gated, default OFF); `mcp__<server>__<tool>` names are dynamic (server-config-derived). |
+| `POST /agents` | `AgentDraft` → `201`. `allowedTools` validated against the REAL tool list (`TOOL_NAMES`, **26 tools** — incl. `delegate_task` + `browser_control` since R43, `memory_save`/`memory_recall`/`memory_list` since R44, `job_status`/`job_stop` since R52, `read_skill` since R61, `analyze_image` since R66, `switch_mode` since R73, and `ask_user` since R87) — SPEC-era names 400 (ADR-0019). Empty list = ALL tools. The 31 computer-use tools are deliberately NOT allowlist vocabulary (settings-gated, default OFF); `mcp__<server>__<tool>` names are dynamic (server-config-derived). |
 | `GET/PATCH/DELETE /agents/:id` | PATCH bumps version; DELETE 409 `{reason:"template"}` for templates |
 | `POST /agents/:id/duplicate` | `{name?}` → `201` |
 
@@ -2329,3 +2329,44 @@ the per-model test button, the model edit dialog). Spec:
   `ACUTE_PROVIDER_<ID>` into every sidecar spawn (the note-file pattern
   from the ROUND-61 vision key) — the "409 no API key for provider
   'prv_…'" restart cliff is gone. `cargo check` green.
+
+## R87 additions (2026-09-11) — the UX + capability round
+
+### POST /api/v1/system/reset — the application-wide reset (NEW, `routes/system.ts`)
+
+- Wipes EVERY user table (derived from sqlite_master at reset time — never a
+  hand list) with FKs off, re-runs the factory seeds (templates, builtin
+  provider rows, builtin skills, the default agent — `reseedFactoryData`,
+  the same definition `openDatabase` calls), VACUUMs, aborts every live turn
+  first, clears the in-memory keyring, disposes every terminal session, and
+  purges the machine files best-effort (`~/.acute` notes + key files +
+  external plugins; the dataDir's vapid.json). 200 `{ok, abortedTurns,
+  wipedTables, purgedFiles}`. The webview clears its own localStorage +
+  query cache and reloads to onboarding; the desktop app's Tauri
+  `purge_provider_keys` command runs BEFORE this route (it reads the note
+  files the route then deletes).
+
+### POST /api/v1/agent-questions/:id/resolve — the ask_user answer path (NEW, `routes/questions.ts`)
+
+- Body `{answers: string[] (one per question, in order), sources?: ("option"|
+  "custom")[]}`. 200 `{ok:true}` settles the pending ask (the tool's promise
+  resolves; the `agent-question.resolved` SSE frame collapses the card);
+  404 for an unknown/expired id (the card's own timeout is the fallback);
+  400 for malformed bodies.
+
+### Model rows carry the R87 input/output capabilities (migration 0032)
+
+- `supports_pdf`, `supports_text_output`, `supports_image_output`,
+  `supports_video_output`, `supports_audio_output` (tri-state — same
+  contract as the R82 columns) + `size_label` (text, e.g. "70B"). The POST
+  `/providers/:id/models` upsert + PATCH `/models/:id` gates accept them
+  (boolean sets, null clears, absent keeps); the INSERT default for text
+  output is ON. Reasoning + tool use are no longer dialog-configured — the
+  app detects them; the PATCH simply omits them (absent = keep stored).
+
+### TOOL_NAMES grows to 27 (ask_user, migration 0033)
+
+- The mid-task interactive question tool: batched questions with option
+  pills + custom-text answers, a 10-minute timeout, abort-cancellation, and
+  `agent-question.requested`/`agent-question.resolved` session events (the
+  approvals' fold contract). Plan mode keeps it (pure clarification).

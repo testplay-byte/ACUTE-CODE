@@ -1,4 +1,4 @@
-<!-- last-reviewed: 2026-09-10 round-83 -->
+<!-- last-reviewed: 2026-09-11 round-87 -->
 # Round 07 — Full model list on expand + unified PlugBrain scroll (2026-08-22)
 
 ## Owner report

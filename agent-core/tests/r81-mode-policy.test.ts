@@ -109,6 +109,9 @@ describe("R81: PLAN_MODE_TOOLS — the unified read-only vocabulary", () => {
         // session-state change — the agent in PLAN mode still picks its
         // posture discipline (the D4 honesty rule).
         "switch_mode",
+        // ROUND-87 (R87): asking the owner questions is the planning tool
+        // par excellence — pure clarification, no side effects.
+        "ask_user",
         // ROUND-81: the retired review/explore extras — a reviewer reads
         // history, analyze_image reads screenshots, job_status watches a
         // running build.

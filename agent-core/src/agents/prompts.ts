@@ -325,8 +325,15 @@ export function buildTaggedPromptLines(ctx: PromptContext): TaggedLine[] {
   // The PLAN phase keeps the old todo-tracking gate (todo_write in vocab)
   // and absorbs the R70-a todo_write tool-description discipline (≥2 items,
   // in_progress before starting, update after EACH sub-task, snapshot).
+  // ROUND-87 (R87): with ask_user in vocab, the clarifying question is the
+  // INTERACTIVE ask_user tool (the owner answers option pills / custom text
+  // mid-task) — the old "ask in prose" fallback stays for bare builds.
   if (ctx.toolNames.includes("todo_write")) {
-    ident("1. PLAN — if the request is unclear, ask ONE clarifying question. Tasks with 3+ steps get a todo_write list UP FRONT (≥2 items or it is not a plan; trivial tasks skip it). Mark ONE item in_progress before starting it, update after EACH sub-task (never batch completions), and write the FULL list every time — a snapshot, not a delta.");
+    ident(
+      ctx.toolNames.includes("ask_user")
+        ? "1. PLAN — if the request is unclear or a decision belongs to the user, call ask_user EARLY with the batched questions (options where enumerable); proceed on stated assumptions only when unanswered. Tasks with 3+ steps get a todo_write list UP FRONT (≥2 items or it is not a plan; trivial tasks skip it). Mark ONE item in_progress before starting it, update after EACH sub-task (never batch completions), and write the FULL list every time — a snapshot, not a delta."
+        : "1. PLAN — if the request is unclear, ask ONE clarifying question. Tasks with 3+ steps get a todo_write list UP FRONT (≥2 items or it is not a plan; trivial tasks skip it). Mark ONE item in_progress before starting it, update after EACH sub-task (never batch completions), and write the FULL list every time — a snapshot, not a delta.",
+    );
   } else {
     ident("1. PLAN — if the request is unclear, ask ONE clarifying question; otherwise form the plan before executing.");
   }

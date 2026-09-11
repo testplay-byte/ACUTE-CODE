@@ -40,6 +40,9 @@ import { SubAgentCard } from "./SubAgentCard";
 // ROUND-68 (R68-A): the INLINE screenshot row — one per `screenshot`
 // WorkingEntry, rendered at its capture moment between the tool rows.
 import { ScreenshotRow } from "./ScreenshotRow";
+// ROUND-87 (R87): the ask_user question card + the turn's todo-list card.
+import { QuestionCard } from "./QuestionCard";
+import { TodoCard } from "./TodoCard";
 import { extractStringArg } from "./streaming-args";
 import { SEMANTIC_COLORS } from "../../lib/semantics";
 import { useThemeStyles } from "../../lib/use-theme-styles";
@@ -1624,6 +1627,7 @@ export function WorkingSection({
   liveEntryIndex,
   defaultOpen,
   onApprovalDecision,
+  onQuestionAnswer,
 }: {
   entries: WorkingEntry[];
   sessionId: string | null;
@@ -1652,6 +1656,10 @@ export function WorkingSection({
    * design), live turns start expanded. */
   defaultOpen?: boolean;
   onApprovalDecision?: (approvalId: string, decision: ApprovalDecisionChoice, remember: ApprovalRemember) => void;
+  /** ROUND-87 (R87): resolve a pending ask_user card (answers aligned per
+   * question, sources = option-pick vs custom-typed). Wired on LIVE sections
+   * only — a folded card is already settled. */
+  onQuestionAnswer?: (questionId: string, answers: string[], sources: Array<"option" | "custom">) => void;
 }) {
   const styles = useThemeStyles();
   // ROUND-38: no more activityMode toggle — folded turns collapse by default,
@@ -1829,6 +1837,21 @@ export function WorkingSection({
                     />
                   );
                 }
+                // ROUND-87 (R87): the ask_user card (option pills + custom
+                // input while pending; the answered/timeout states collapse
+                // honestly) and the turn's todo-list card.
+                if (entry.type === "question") {
+                  return (
+                    <QuestionCard
+                      key={`q-${entry.questionId}-${entry.ts}`}
+                      entry={entry}
+                      onAnswer={live ? onQuestionAnswer : undefined}
+                    />
+                  );
+                }
+                if (entry.type === "todo") {
+                  return <TodoCard key={`todo-${entry.ts}`} entry={entry} />;
+                }
                 return <ApprovalRow key={`t-${i}`} entry={entry} sessionId={sessionId} onDecision={onApprovalDecision} />;
               })}
               {live && entries.length === 0 && pendingWriteInputs.length === 0 ? (
@@ -1873,6 +1896,14 @@ export function BareWorkingEntries({
         }
         if (entry.type === "approval") {
           return <ApprovalRow key={`b-${i}`} entry={entry} onDecision={onApprovalDecision} />;
+        }
+        // ROUND-87 (R87): the question + todo cards ride bare blocks too
+        // (a tools-free turn can still ask or track todos).
+        if (entry.type === "question") {
+          return <QuestionCard key={`bq-${i}`} entry={entry} onAnswer={undefined} />;
+        }
+        if (entry.type === "todo") {
+          return <TodoCard key={`bt-${i}`} entry={entry} />;
         }
         // ROUND-68 (R68-A): screenshots are LIVE-ONLY entries and a bare
         // (tools-free) block has no section to anchor an inline row — skip

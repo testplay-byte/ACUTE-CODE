@@ -146,6 +146,21 @@ export class ProviderKeyring {
     else this.#env[name] = key;
     modelCache.delete(providerId);
   }
+
+  /**
+   * ROUND-87 (R87, POST /system/reset): drop EVERY ACUTE_PROVIDER_* entry
+   * from the in-memory snapshot. The running sidecar outlives the webview
+   * reload, so without this the reset would leave the spawn-time env keys
+   * (Credential Manager values injected at boot) alive in memory — a
+   * provider test right after reset would still succeed on a key the owner
+   * just erased. Never logged, never returned.
+   */
+  clear(): void {
+    for (const name of Object.keys(this.#env)) {
+      if (name.startsWith("ACUTE_PROVIDER_")) delete this.#env[name];
+    }
+    modelCache.clear();
+  }
 }
 
 function toView(record: ProviderRecord, keyring: ProviderKeyring): ProviderView {

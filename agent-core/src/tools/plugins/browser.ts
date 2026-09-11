@@ -326,7 +326,7 @@ for (const el of nodes) {
     value: (el.value !== undefined ? clip(el.value, 60) : undefined) || undefined,
     placeholder: clip(el.getAttribute("placeholder"), 60) || undefined,
     selector: shortPath(el),
-    rect: { w: Math.round(r.width), h: Math.round(r.height) },
+    rect: { x: Math.round(r.x), y: Math.round(r.y), w: Math.round(r.width), h: Math.round(r.height) },
   });
   if (interactive.length >= 120) break;
 }
@@ -395,7 +395,7 @@ export const browserPlugin: PluginDefinition = {
       {
         name: "browser_control",
         description:
-          "Control the user's EMBEDDED BROWSER PANEL — a real in-app web browser the user watches live. Actions: navigate (open/change the page; absolute http(s) URL — documentation/source hosts like github.com navigate freely, other hosts ask the owner for permission first), back | forward | reload (walk that tab's history), set_viewport (change the display size the user sees — test responsive layouts; presets mobile-sm 375×667, mobile-md 390×844, tablet 768×1024, laptop 1280×800, desktop 1440×900, full-hd 1920×1080, or custom width 200-3840 × height 200-4320, zoom 0.25-3, rotate swaps w/h), read (the CURRENT page's text content, fetched fresh server-side — works in every mode), read_dom (a STRUCTURED outline of the live page as JSON — title, headings, every visible interactive element with a short CSS selector + its text/label/value, forms with field names; include 'all' adds the text paragraphs — THE way to know the page content without screenshots — call it FIRST and click/type the exact selector paths it returns; native desktop mode only), source (the live page's raw material: html (outerHTML of the page or one selector), css (stylesheets, plus the computed style of a selector), or scripts (src list + inline bodies); native desktop mode only), click (click an element — by CSS selector, or by a case-insensitive substring of a clickable's visible text/aria-label/name/value/title, e.g. a button's label; native desktop mode only), type (set an input's value with the native value setter + input/change events so React/Vue pages register it, then optionally submit), press_key (dispatch a key to an element or the focused element — Enter inside a form triggers REAL native form submission), eval (run JavaScript INSIDE the live page and get the value back — click links with `return document.querySelector('a').click()`, fill inputs, read the DOM; the page's own state (logins, JS) is live; native desktop mode only), screenshot (capture what the panel shows + a vision-model description — requires Computer Use enabled in Settings), get_state (currentUrl, title, viewport, canBack/canForward + this chat session's tab), wait_for_verification (the page is blocked by a bot wall — captcha/Cloudflare/age gate: opens a countdown card in the OWNER's chat and waits — default 15s, up to 60s — while the owner solves it, then re-checks the page and reports honestly). To submit a search box / form: type with submit:true, or press_key key Enter (it triggers native form submission), or click the submit button. When a tool result warns '⚠ A verification wall', call wait_for_verification — the owner gets a live countdown card in chat to solve it. sessionId optional — omit it to drive THIS chat session's own tab (auto-opened for you; never another chat session's tab). click/type/press_key/read_dom/source/eval run through the desktop app's native bridge — in web dev mode they fail fast with an honest error (read works in every mode). Viewport/page changes appear LIVE in the user's panel; announce them in one line. The page the panel shows may differ from a fresh fetch (logins, JS) — read for text, eval for the live DOM, screenshot for what the user actually sees.",
+          "Control the user's EMBEDDED BROWSER PANEL — a real in-app web browser the user watches live. Actions: navigate (open/change the page; absolute http(s) URL — documentation/source hosts like github.com navigate freely, other hosts ask the owner for permission first), back | forward | reload (walk that tab's history), set_viewport (change the display size the user sees — test responsive layouts; presets mobile-sm 375×667, mobile-md 390×844, tablet 768×1024, laptop 1280×800, desktop 1440×900, full-hd 1920×1080, or custom width 200-3840 × height 200-4320, zoom 0.25-3, rotate swaps w/h), read (the CURRENT page's text content, fetched fresh server-side — works in every mode), read_dom (a STRUCTURED outline of the live page as JSON — title, headings, every visible interactive element with a short CSS selector + its text/label/value + its x/y/w/h position on the page, forms with field names; include 'all' adds the text paragraphs — THE way to know the page content without screenshots — call it FIRST and click/type the exact selector paths it returns; native desktop mode only), source (the live page's raw material: html (outerHTML of the page or one selector), css (stylesheets, plus the computed style of a selector), or scripts (src list + inline bodies); native desktop mode only), click (click an element — by CSS selector, or by a case-insensitive substring of a clickable's visible text/aria-label/name/value/title, e.g. a button's label; native desktop mode only), type (set an input's value with the native value setter + input/change events so React/Vue pages register it, then optionally submit), press_key (dispatch a key to an element or the focused element — Enter inside a form triggers REAL native form submission), eval (run JavaScript INSIDE the live page and get the value back — click links with `return document.querySelector('a').click()`, fill inputs, read the DOM; the page's own state (logins, JS) is live; native desktop mode only), screenshot (capture EXACTLY what the browser panel shows + a vision-model description — panel region only, NEVER the full screen; requires Computer Use enabled in Settings and the browser tab to be open in the app; prefer read/read_dom — screenshot only when pixels are genuinely the question), get_state (currentUrl, title, viewport, canBack/canForward + this chat session's tab), wait_for_verification (the page is blocked by a bot wall — captcha/Cloudflare/age gate: opens a countdown card in the OWNER's chat and waits — default 15s, up to 60s — while the owner solves it, then re-checks the page and reports honestly). To submit a search box / form: type with submit:true, or press_key key Enter (it triggers native form submission), or click the submit button. When a tool result warns '⚠ A verification wall', call wait_for_verification — the owner gets a live countdown card in chat to solve it. sessionId optional — omit it to drive THIS chat session's own tab (auto-opened for you; never another chat session's tab). click/type/press_key/read_dom/source/eval run through the desktop app's native bridge — in web dev mode they fail fast with an honest error (read works in every mode). Viewport/page changes appear LIVE in the user's panel; announce them in one line. The page the panel shows may differ from a fresh fetch (logins, JS) — read for text, eval for the live DOM, screenshot for what the user actually sees.",
         inputSchema: jsonSchema({
           type: "object",
           properties: {
@@ -1086,9 +1086,11 @@ export const browserPlugin: PluginDefinition = {
               return { ok: false, output: "browser_control: screenshot unavailable — no database in this context" };
             }
             // Ask the live UI for the panel's on-screen region (physical px).
-            // No answer / web mode → capture the whole display instead.
+            // R87 (the owner: screenshots must be the PANEL ONLY — never the
+            // whole display): no answer / web mode → an HONEST ERROR steering
+            // to read/read_dom, never a full-display capture (the old fallback
+            // leaked the owner's entire screen into the agent's context).
             let region: { x: number; y: number; w: number; h: number } | null = null;
-            let regionNote = "full display capture";
             if (typeof toolDeps.emit === "function") {
               try {
                 const meta = (await sendBrowserCommand(toolDeps.emit, sessionId, "screenshot_meta", {}, 5000)) as {
@@ -1112,17 +1114,20 @@ export const browserPlugin: PluginDefinition = {
                     w: Math.round(meta.region.w),
                     h: Math.round(meta.region.h),
                   };
-                  regionNote = `panel region ${region.w}×${region.h}`;
                 }
               } catch {
                 // The UI didn't answer (no panel mounted / web dev mode) —
-                // the full-display fallback below stays.
+                // region stays null and the honest error below fires.
               }
             }
-            const raster =
-              region !== null
-                ? await relay.backend.captureRegion(relay.run, region)
-                : await relay.backend.captureDisplay(relay.run, 1);
+            if (region === null) {
+              return {
+                ok: false,
+                output:
+                  "browser_control: screenshot — the browser panel is not mounted in the app right now (web dev mode, or the browser tab is closed), so there is no panel region to capture. The panel-only capture NEVER falls back to a full-screen shot. Use action 'read' for the page text or 'read_dom' for the structured content (they work everywhere), or re-open the browser tab and retry.",
+              };
+            }
+            const raster = await relay.backend.captureRegion(relay.run, region);
             if ("error" in raster) {
               return {
                 ok: false,
@@ -1166,12 +1171,12 @@ export const browserPlugin: PluginDefinition = {
             if (vision.ok) {
               return {
                 ok: true,
-                output: `Browser panel screenshot (${regionNote}, ${raster.width}×${raster.height}px, page ${state.currentUrl}) — vision (${vision.model}) says:\n${vision.text}`,
+                output: `Browser panel screenshot (panel region ${region.w}×${region.h}, ${raster.width}×${raster.height}px, page ${state.currentUrl}) — vision (${vision.model}) says:\n${vision.text}`,
               };
             }
             return {
               ok: true,
-              output: `Browser panel screenshot captured (${regionNote}, ${raster.width}×${raster.height}px, page ${state.currentUrl}), but the vision description is unavailable: ${vision.error}`,
+              output: `Browser panel screenshot captured (panel region ${region.w}×${region.h}, ${raster.width}×${raster.height}px, page ${state.currentUrl}), but the vision description is unavailable: ${vision.error}`,
             };
           }
 

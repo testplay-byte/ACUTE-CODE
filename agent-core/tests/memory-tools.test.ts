@@ -517,7 +517,9 @@ describe("migration 0015 (memory table + tool allowlist append)", () => {
     // ROUND-66 (R66), analyze_image (migration 0026 appends it to rows whose
     // list includes web_fetch — this seed list does) — and, since ROUND-73
     // (R73-b), switch_mode (migration 0027 appends the task-mode posture
-    // switch to rows whose list includes read_skill — it does by then).
+    // switch to rows whose list includes read_skill — it does by then) —
+    // and, since ROUND-87 (R87), ask_user (migration 0033 appends the
+    // interactive question tool to rows whose list includes todo_write).
     expect(row("agt_tpl_coder")).toEqual([
       ...JSON.parse(seedTools) as string[],
       "memory_save",
@@ -528,9 +530,10 @@ describe("migration 0015 (memory table + tool allowlist append)", () => {
       "read_skill",
       "analyze_image",
       "switch_mode",
+      "ask_user",
     ]);
     expect(row("agt_default_nova")).toContain("memory_save");
-    expect(row("agt_default_nova")).toHaveLength(26);
+    expect(row("agt_default_nova")).toHaveLength(27);
     // User-created agents keep their deliberately-authored lists.
     expect(row("agt_mine")).toEqual(JSON.parse(seedTools));
 
@@ -558,7 +561,7 @@ describe("migration 0015 (memory table + tool allowlist append)", () => {
       JSON.parse(
         (again.prepare("SELECT allowed_tools FROM agents WHERE id = 'agt_tpl_coder'").get() as { allowed_tools: string }).allowed_tools,
       ) as string[],
-    ).toHaveLength(26);
+    ).toHaveLength(27);
     again.close();
   });
 

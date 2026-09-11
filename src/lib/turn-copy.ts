@@ -98,6 +98,22 @@ export function buildFullTurnText(input: FullTurnTextInput): string {
       // export carries the honest one-line fact, not an image. Still does
       // NOT bump toolCount (a capture is not a tool call).
       blocks.push(`[screenshot captured by ${entry.tool}]`);
+    } else if (entry.type === "question") {
+      // ROUND-87 (R87): the ask_user card — the questions + the answers (or
+      // the honest unresolved state).
+      blocks.push("", `--- QUESTION CARD (${entry.status}) ---`);
+      entry.questions.forEach((q, i) => {
+        blocks.push(`Q${i + 1}: ${q.question}`);
+        if (entry.answers?.[i] !== undefined) blocks.push(`A${i + 1}: ${entry.answers[i]}`);
+      });
+    } else if (entry.type === "todo") {
+      // ROUND-87 (R87): the turn's todo-list card — one line per item with
+      // its status marker.
+      blocks.push("", `--- TODO LIST (${entry.items.filter((x) => x.status === "completed").length}/${entry.items.length} done) ---`);
+      for (const item of entry.items) {
+        const mark = item.status === "completed" ? "[x]" : item.status === "in_progress" ? "[~]" : "[ ]";
+        blocks.push(`${mark} ${item.content}`);
+      }
     } else {
       // approval: the human-in-the-loop checkpoint, with its own fields.
       blocks.push("", `--- APPROVAL: ${entry.toolName} (${entry.status}) ---`);

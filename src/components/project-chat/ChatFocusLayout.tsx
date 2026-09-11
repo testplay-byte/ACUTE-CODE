@@ -49,8 +49,13 @@ import type { Project } from "../../lib/api";
  *         1781px card at a 2560px window) — fixed there.
  */
 
-/** The chat window's floor. Below this the RIGHT SIDEBAR gives way instead. */
-const CHAT_MIN_WIDTH = 480;
+/** The chat window's floor. Below this the RIGHT SIDEBAR gives way instead.
+ * R87-A1 (owner: the chat column should be able to shrink much further
+ * before the layout has to give anything up): halved from the ROUND-42
+ * 480px floor to 240px — the composer's selector pills collapse in
+ * graduated @container tiers well before this, so a half-width chat is
+ * still a fully usable chat. */
+const CHAT_MIN_WIDTH = 240;
 /** The resize handle's footprint. */
 const HANDLE_WIDTH = 5;
 /** The gap between the chat card and the sidebar card. */
@@ -72,11 +77,12 @@ export function sidebarWidthCap(containerWidth: number): number {
   return Math.max(0, containerWidth - CHAT_MIN_WIDTH - CHROME_WIDTH);
 }
 
-/** ROUND-43: the chat column's min-width. Hard 480px whenever that fits at
- * all (the sidebar yields first — R42). It softens ONLY when the container
- * is so narrow that even 480 + chrome + the sidebar's collapse sliver cannot
- * fit (≲527px container ≈ ≲830px window with the app sidebar open): physics
- * wins rather than forcing a horizontal overflow. Never drops below 160px.
+/** ROUND-43: the chat column's min-width. Hard CHAT_MIN_WIDTH whenever that
+ * fits at all (the sidebar yields first — R42). It softens ONLY when the
+ * container is so narrow that even floor + chrome + the sidebar's collapse
+ * sliver cannot fit (≲287px container with the R87-A1 240px floor — was
+ * ≲527px at 480): physics wins rather than forcing a horizontal overflow.
+ * Never drops below 160px.
  * Invariant: chatMinWidthFor(w) + CHROME_WIDTH + SIDEBAR_SLIVER_WIDTH ≤ w. */
 export function chatMinWidthFor(containerWidth: number | null): number {
   if (containerWidth === null) return CHAT_MIN_WIDTH;

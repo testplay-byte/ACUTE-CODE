@@ -1,4 +1,4 @@
-<!-- last-reviewed: 2026-09-10 round-83 -->
+<!-- last-reviewed: 2026-09-11 round-87 -->
 
 # Round 35 — Thinking + Interleaved Tool Calls + Chat Centering + Settings Polish
 

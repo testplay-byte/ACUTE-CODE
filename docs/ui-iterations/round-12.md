@@ -1,4 +1,4 @@
-<!-- last-reviewed: 2026-09-10 round-83 -->
+<!-- last-reviewed: 2026-09-11 round-87 -->
 # Round 12 — Live streaming, chat UI polish, per-reply stats, plug-and-play rename, sandbox wipe recovery (2026-08-23)
 
 **Owner direction:** (1) remove the visible borders boxing the chat elements

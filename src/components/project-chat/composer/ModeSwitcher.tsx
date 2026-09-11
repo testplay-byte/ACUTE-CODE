@@ -63,7 +63,20 @@ export function ModeSwitcher({
         }}
       >
         <Icon size={12} className="shrink-0" style={{ color: styles.accent }} />
-        <span data-mode-label className="@max-[560px]:hidden">
+        {/* R87-A1 (owner: "when I make it smaller, at a point every single
+            thing becomes minimized… it should smoothly be handled"): the
+            label COLLAPSES (animated max-width + fade) instead of hard-
+            hiding. Tier 1 of the staggered composer shrink — the mode label
+            is the widest text, so it goes FIRST at the 560px @container
+            floor; thinking follows at 500px; the model label never hides,
+            it just narrows (240 → 170 → 90px). The collapsed tier also
+            pulls the span's own gap-1.5 slot shut (-mr-1.5) so the
+            icon-only pill doesn't keep a dead 12px gap where the label
+            used to sit. */}
+        <span
+          data-mode-label
+          className="max-w-[240px] overflow-hidden whitespace-nowrap transition-all duration-200 @max-[560px]:max-w-0 @max-[560px]:opacity-0 @max-[560px]:-mr-1.5"
+        >
           {current.label}
         </span>
         <ChevronDown size={10} className="shrink-0" />

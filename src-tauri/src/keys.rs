@@ -466,6 +466,51 @@ pub fn provider_key_status(provider_id: String) -> Result<bool, String> {
     Ok(key.as_deref().map(|k| !k.is_empty()).unwrap_or(false))
 }
 
+/// ROUND-87 (R87, the application-wide reset): delete EVERY provider
+/// credential this app owns from the OS store. Enumerates the full target
+/// set — the five builtins (openrouter + nvidia + the three pool slots),
+/// every noted custom provider, every noted vision pseudo-provider — in both
+/// namespaces (the canonical `ACUTE-CODE/provider/<id>` targets AND the
+/// pre-R55 `api-key.…` legacy forms), then clears both note files so the
+/// NEXT spawn's injection list is empty too.
+///
+/// The webview calls this BEFORE POST /system/reset: the sidecar's purge
+/// removes the note FILES themselves, so reading them here first is the only
+/// chance to know which custom targets to erase. Returns the number of
+/// credential entries actually deleted (misses are fine — a dev machine has
+/// none). Never logged, never echoes values.
+#[tauri::command]
+pub fn purge_provider_keys() -> Result<u32, String> {
+    let mut ids: Vec<String> = BUILTIN_PROVIDER_IDS
+        .iter()
+        .map(|id| id.to_string())
+        .collect();
+    ids.extend(custom_provider_ids());
+    // Vision pseudo-providers ride the `<id>-vision` slug targets.
+    ids.extend(vision_provider_ids().into_iter().map(|id| vision_slug(&id)));
+
+    let mut deleted: u32 = 0;
+    for id in &ids {
+        for target in [canonical_target(id), legacy_target(id)] {
+            match crate::wincred::delete(&target) {
+                Ok(true) => deleted += 1,
+                Ok(false) => {}
+                Err(_) => {
+                    // Best-effort — a locked store entry never fails the
+                    // reset; the credential stays and the owner can clear
+                    // it by hand from the Windows credential UI.
+                }
+            }
+        }
+    }
+    // Clear both note files (ids only, never secrets). Missing files are a
+    // no-op; the sidecar's file purge would remove them anyway.
+    for path in [custom_provider_note_path(), vision_provider_note_path()] {
+        let _ = std::fs::remove_file(&path);
+    }
+    Ok(deleted)
+}
+
 #[cfg(test)]
 mod tests {
     use super::{

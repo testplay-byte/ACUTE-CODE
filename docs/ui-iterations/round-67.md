@@ -1,4 +1,4 @@
-<!-- last-reviewed: 2026-09-10 round-83 -->
+<!-- last-reviewed: 2026-09-11 round-87 -->
 # Round 67 — The bridge round: the embedded browser actually works on Windows, sessions own their tabs, chat images become files, the key tool presses keys, and screenshots show live
 
 **Date:** 2026-09-05 · **Branch:** `main` · **Version:** 0.67.0 · **Owner

@@ -74,6 +74,11 @@ export const TOOL_NAMES = [
   // 0027 repairs template/default rows that list read_skill (a mode-capable
   // agent is one that can read skills); user curation is never widened.
   "switch_mode",
+  // ROUND-87 (R87): the mid-task interactive question tool (ask_user) — the
+  // chat renders a question card (options + custom answer) and the turn
+  // waits. A global session capability like todo_write; migration 0033
+  // appends it to template/default allowlists (the planning companion).
+  "ask_user",
 ] as const;
 
 /** Agent JSON as served by the API: AgentRecord plus bookkeeping columns. */

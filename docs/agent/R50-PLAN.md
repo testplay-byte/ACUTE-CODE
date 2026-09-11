@@ -1,4 +1,4 @@
-<!-- last-reviewed: 2026-09-10 round-83 -->
+<!-- last-reviewed: 2026-09-11 round-87 -->
 # ROUND-50 PLAN — the owner's third Windows test round
 
 Owner feedback (2026-08-30, verbatim goals extracted):

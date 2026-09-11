@@ -17,6 +17,8 @@ import {
   Zap,
 } from "lucide-react";
 import { AnimatePresence, motion } from "framer-motion";
+// ROUND-87 (R87): the shared ease curve for the dialog/entrance animations.
+import { ease } from "../../lib/motion";
 import { useTimeoutClear } from "../../hooks/use-timeout-clear";
 import { useAgents } from "../../hooks/use-agents";
 import { useThemeStyles } from "../../lib/use-theme-styles";
@@ -123,7 +125,7 @@ import {
  * in-memory, so keys stored through the browser dev UI do not survive a
  * restart (the desktop app's OS secure store is the durable path). */
 const EPHEMERAL_KEY_NOTE =
-  "Browser-dev keys live in server memory only — they reset on restart; use credentials.txt (launcher) for durable keys.";
+  "Browser-dev keys live in server memory only — they reset on restart; use the desktop app (its OS secure store is the durable path).";
 
 /* ── ROUND-62 (R62-2b): cross-page cache invalidation ─────────────────────────
  * The agent session page's model picker (composer/ModelSelector.tsx) reads
@@ -269,6 +271,26 @@ function parseNumericField(raw: string): number | null | "invalid" {
   const value = Number(trimmed);
   if (!Number.isFinite(value) || value < 0) return "invalid";
   return value;
+}
+
+/** ROUND-87 (R87): the model card's capability chips — the honest, user-set
+ * INPUT/OUTPUT flags. Inputs: images (vision), videos, PDFs, audio. Outputs:
+ * text, images, video, audio. Reasoning + tool use are deliberately NOT
+ * here (the app detects those at runtime — the owner's directive). */
+function capabilityChips(
+  model: ProviderModelConfig | undefined,
+): Array<{ label: string; color: string; title: string }> {
+  if (model === undefined) return [];
+  const chips: Array<{ label: string; color: string; title: string }> = [];
+  if (model.supportsVision) chips.push({ label: "IMG IN", color: "#8b5cf6", title: "Accepts image inputs" });
+  if (model.supportsVideo === true) chips.push({ label: "VID IN", color: "#8b5cf6", title: "Accepts video inputs" });
+  if (model.supportsPdf === true) chips.push({ label: "PDF IN", color: "#8b5cf6", title: "Accepts PDF documents" });
+  if (model.supportsAudio === true) chips.push({ label: "AUD IN", color: "#8b5cf6", title: "Accepts audio inputs" });
+  if (model.supportsTextOutput === true) chips.push({ label: "TEXT OUT", color: "#0ea5e9", title: "Produces text output" });
+  if (model.supportsImageOutput === true) chips.push({ label: "IMG OUT", color: "#0ea5e9", title: "Produces image output" });
+  if (model.supportsVideoOutput === true) chips.push({ label: "VID OUT", color: "#0ea5e9", title: "Produces video output" });
+  if (model.supportsAudioOutput === true) chips.push({ label: "AUD OUT", color: "#0ea5e9", title: "Produces audio output" });
+  return chips;
 }
 
 /** The section micro-label the rest of the app uses (uppercase, tracked). */
@@ -479,10 +501,16 @@ export function ModelsProvidersTab() {
         )}
       </div>
 
-      {/* Add Provider DIALOG (preset choice → fields) */}
+      {/* Add Provider DIALOG (preset choice → fields)
+          ROUND-87 (R87, the NVIDIA phantom-add fix): the "already added"
+          set is now the CONFIGURED list — keyless seeded presets (nvidia
+          today) show as ADDABLE instead of a disabled "added" pill, matching
+          the left list's R59-C filter exactly (the bug: the dialog checked
+          the unfiltered rows while the list hid keyless presets, so a preset
+          the owner never added claimed to already be there). */}
       {adding && (
         <AddProviderDialog
-          existingIds={new Set(providers.map((p) => p.id))}
+          existingIds={new Set(configuredProviders.map((p) => p.id))}
           onClose={() => setAdding(false)}
           onCreated={(id) => {
             setAdding(false);
@@ -1776,10 +1804,33 @@ function ModelTestButton({ model }: { model: ProviderModelConfig }) {
   const [showFull, setShowFull] = useState(false);
   const [showReply, setShowReply] = useState(false);
 
+  // ROUND-87 (R87, owner: "when I click the test button it should show an
+  // animation. After testing it, it should show the results … the results
+  // should disappear automatically after 5 seconds … After 5 seconds the
+  // test button's color will be changed slightly green or slightly red
+  // depending on whether it was successful or not"): the RESULT LINE and
+  // the button TINT both fade away after 5s (a fresh test re-arms both —
+  // clicking again resets the timer). The tint rides the button's own
+  // background with a 300ms transition.
+  const [showResult, setShowResult] = useState(false);
+  const [tinted, setTinted] = useState(false);
+  useEffect(() => {
+    if (state.kind !== "pass" && state.kind !== "fail") return;
+    setShowResult(true);
+    setTinted(true);
+    const hide = setTimeout(() => {
+      setShowResult(false);
+      setTinted(false);
+    }, 5_000);
+    return () => clearTimeout(hide);
+  }, [state]);
+
   const run = (): void => {
     setState({ kind: "testing" });
     setShowFull(false);
     setShowReply(false);
+    setShowResult(false);
+    setTinted(false);
     testModelConnection(model.id)
       .then((result) => {
         if (result.ok) {
@@ -1806,93 +1857,115 @@ function ModelTestButton({ model }: { model: ProviderModelConfig }) {
       });
   };
 
+  const testing = state.kind === "testing";
+  const outcome = state.kind === "pass" ? "pass" : state.kind === "fail" ? "fail" : null;
+
   return (
     <>
       <button
         onClick={run}
-        disabled={state.kind === "testing"}
+        disabled={testing}
         aria-label={`Test model ${model.displayName || model.modelId}`}
         title="Send a real test request to this model — checks the key, the model id, and the reply"
         data-testid="model-test-button"
         data-model-row={model.id}
-        className="h-7 px-2 grid place-items-center rounded-[8px] shrink-0 text-[11px] font-bold"
+        className="h-8 w-8 grid place-items-center rounded-[10px] shrink-0 text-[11px] font-bold transition-colors duration-300"
         style={{
-          color: state.kind === "pass" ? "#22c55e" : state.kind === "fail" ? "#ef4444" : styles.textSecondary,
+          color: outcome === "pass" ? "#16a34a" : outcome === "fail" ? "#ef4444" : styles.textSecondary,
+          background: tinted
+            ? outcome === "pass"
+              ? withAlpha("#22c55e", 0.14)
+              : withAlpha("#ef4444", 0.12)
+            : "transparent",
+          borderColor: "transparent",
         }}
-        onMouseEnter={(e) => (e.currentTarget.style.background = withAlpha(styles.accent, 0.1))}
-        onMouseLeave={(e) => (e.currentTarget.style.background = "transparent")}
+        onMouseEnter={(e) => {
+          if (!tinted) e.currentTarget.style.background = withAlpha(styles.accent, 0.1);
+        }}
+        onMouseLeave={(e) => {
+          if (!tinted) e.currentTarget.style.background = "transparent";
+        }}
       >
-        {state.kind === "testing" ? (
-          <RefreshCw size={12} className="animate-spin" />
-        ) : state.kind === "pass" ? (
+        {testing ? (
+          <span className="grid place-items-center ac-pulse" aria-hidden>
+            <RefreshCw size={12} className="animate-spin" />
+          </span>
+        ) : tinted && outcome === "pass" ? (
           <Check size={12} strokeWidth={2.5} />
-        ) : state.kind === "fail" ? (
+        ) : tinted && outcome === "fail" ? (
           <AlertTriangle size={12} />
         ) : (
           <Zap size={12} />
         )}
       </button>
-      {/* The result line — wraps below the row (w-full in the wrapped flex row). */}
-      {state.kind !== "idle" && state.kind !== "testing" && (
-        <div
-          className="w-full min-w-0 px-1 pb-1"
-          data-testid="model-test-result"
-          data-model-test={state.kind}
-        >
-          {state.kind === "pass" ? (
-            <div className="flex flex-col gap-0.5 min-w-0">
-              <div className="flex items-center gap-2 flex-wrap text-[10.5px]">
-                <span className="font-bold" style={{ color: "#22c55e" }}>
-                  ✓ responded in {state.latencyMs}ms
-                </span>
-                {state.usage !== undefined && (
-                  <span className="font-mono" style={{ color: styles.textTertiary }}>
-                    {state.usage.inputTokens} in / {state.usage.outputTokens} out
+      {/* ROUND-87 (R87): the result line — now ANIMATED (AnimatePresence
+       * slide-down) and AUTO-DISMISSING (5s; a fresh test re-arms it). */}
+      <AnimatePresence>
+        {showResult && state.kind !== "idle" && state.kind !== "testing" && (
+          <motion.div
+            initial={{ opacity: 0, height: 0 }}
+            animate={{ opacity: 1, height: "auto" }}
+            exit={{ opacity: 0, height: 0 }}
+            transition={{ duration: 0.22, ease }}
+            className="w-full min-w-0 px-1 pb-1 overflow-hidden"
+            data-testid="model-test-result"
+            data-model-test={state.kind}
+          >
+            {state.kind === "pass" ? (
+              <div className="flex flex-col gap-0.5 min-w-0">
+                <div className="flex items-center gap-2 flex-wrap text-[10.5px]">
+                  <span className="font-bold" style={{ color: "#22c55e" }}>
+                    ✓ responded in {state.latencyMs}ms
                   </span>
-                )}
-                {state.preview !== undefined && (
-                  <button
-                    onClick={() => setShowReply(!showReply)}
-                    className="font-bold underline underline-offset-2"
-                    style={{ color: styles.textTertiary }}
-                    data-testid="model-test-show-reply"
+                  {state.usage !== undefined && (
+                    <span className="font-mono" style={{ color: styles.textTertiary }}>
+                      {state.usage.inputTokens} in / {state.usage.outputTokens} out
+                    </span>
+                  )}
+                  {state.preview !== undefined && (
+                    <button
+                      onClick={() => setShowReply(!showReply)}
+                      className="font-bold underline underline-offset-2"
+                      style={{ color: styles.textTertiary }}
+                      data-testid="model-test-show-reply"
+                    >
+                      {showReply ? "Hide reply" : "Show reply"}
+                    </button>
+                  )}
+                </div>
+                {showReply && state.preview !== undefined && (
+                  <div
+                    className="font-mono text-[10.5px] break-all rounded-[6px] px-2 py-1 max-h-24 overflow-y-auto"
+                    style={{ background: styles.subtle, color: styles.textSecondary }}
                   >
-                    {showReply ? "Hide reply" : "Show reply"}
+                    {state.preview}
+                  </div>
+                )}
+              </div>
+            ) : (
+              <div className="flex flex-col gap-0.5 min-w-0">
+                <div
+                  className="text-[10.5px] break-all"
+                  style={{ color: "#ef4444" }}
+                  data-testid="model-test-reason"
+                >
+                  {showFull ? state.reason : `${state.reason.slice(0, 240)}${state.reason.length > 240 ? "…" : ""}`}
+                </div>
+                {state.reason.length > 240 && (
+                  <button
+                    onClick={() => setShowFull(!showFull)}
+                    className="text-[10.5px] font-bold underline underline-offset-2 self-start"
+                    style={{ color: styles.textTertiary }}
+                    data-testid="model-test-show-full"
+                  >
+                    {showFull ? "Show less" : "Show full error"}
                   </button>
                 )}
               </div>
-              {showReply && state.preview !== undefined && (
-                <div
-                  className="font-mono text-[10.5px] break-all rounded-[6px] px-2 py-1 max-h-24 overflow-y-auto"
-                  style={{ background: styles.subtle, color: styles.textSecondary }}
-                >
-                  {state.preview}
-                </div>
-              )}
-            </div>
-          ) : (
-            <div className="flex flex-col gap-0.5 min-w-0">
-              <div
-                className="text-[10.5px] break-all"
-                style={{ color: "#ef4444" }}
-                data-testid="model-test-reason"
-              >
-                {showFull ? state.reason : `${state.reason.slice(0, 240)}${state.reason.length > 240 ? "…" : ""}`}
-              </div>
-              {state.reason.length > 240 && (
-                <button
-                  onClick={() => setShowFull(!showFull)}
-                  className="text-[10.5px] font-bold underline underline-offset-2 self-start"
-                  style={{ color: styles.textTertiary }}
-                  data-testid="model-test-show-full"
-                >
-                  {showFull ? "Show less" : "Show full error"}
-                </button>
-              )}
-            </div>
-          )}
-        </div>
-      )}
+            )}
+          </motion.div>
+        )}
+      </AnimatePresence>
     </>
   );
 }
@@ -1916,8 +1989,11 @@ function ModelListSection({
   const queryClient = useQueryClient();
   // ROUND-50 (R50-d): the "Add models" picker dialog + the per-model
   // configuration dialog (replaces the inline type-an-id row editor).
+  // ROUND-87 (R87): `adding` — the ADD-mode config dialog opened by picking
+  // a model in the picker (configure BEFORE the upsert, per the owner).
   const [pickerOpen, setPickerOpen] = useState(false);
   const [configuring, setConfiguring] = useState<ProviderModelConfig | null>(null);
+  const [adding, setAdding] = useState<ModelAddPrefill | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   // ROUND-60 (R60-B): the list shows CONFIGURED (stored) rows ONLY — the
@@ -1986,20 +2062,29 @@ function ModelListSection({
           No models yet — use “Add models” to pick from the provider's catalog.
         </div>
       ) : (
-        <div>
+        <div className="flex flex-col gap-2.5 p-3">
           {merged.map((m) => (
             <div
               key={m.rowId ?? `cat:${m.modelId}`}
-              // ROUND-82: flex-wrap — the model-test result line (w-full)
-              // wraps below the row instead of squeezing the columns.
-              className="flex flex-wrap items-center gap-3 px-4 py-2.5 border-b last:border-b-0"
-              style={{ borderColor: styles.borderSubtle }}
+              // ROUND-87 (R87, owner: "the models should be shown properly. The
+              // display name should be shown properly for the model and it
+              // should be given in a dedicated section with borders around
+              // it"): every model is now its own BORDERED CARD (rounded-14,
+              // 1.5px border, generous padding) instead of a cramped list
+              // row — and the three right-side actions are uniform 8×8
+              // rounded icon buttons. The test result line still wraps BELOW
+              // (flex-wrap) inside the card.
+              className="flex flex-wrap items-center gap-3 rounded-[14px] border-[1.5px] px-4 py-3"
+              style={{
+                borderColor: m.configured ? styles.border : withAlpha(styles.accent, 0.3),
+                background: styles.isDark ? "rgba(255,255,255,0.015)" : "rgba(0,0,0,0.01)",
+              }}
             >
               {/* left: name + badges / id + pricing summary (R50-d) */}
-              <div className="min-w-0 flex-1 flex flex-col gap-0.5">
+              <div className="min-w-0 flex-1 flex flex-col gap-1">
                 <div className="flex items-center gap-1.5 min-w-0 flex-wrap">
                   <span
-                    className="truncate text-[12.5px] font-semibold"
+                    className="truncate text-[13.5px] font-bold"
                     style={{ color: m.configured ? styles.text : styles.textSecondary }}
                     title={m.modelId}
                   >
@@ -2013,15 +2098,20 @@ function ModelListSection({
                       FREE
                     </span>
                   )}
-                  {m.supportsThinking && (
+                  {/* ROUND-87 (R87): the capability chips — the honest,
+                      user-set input/output flags (the THINKING badge is gone
+                      with the dialog's reasoning toggle: the app DETECTS
+                      reasoning, the user never configures it). */}
+                  {m.configured && capabilityChips(models.find((row) => row.id === m.rowId)).map((chip) => (
                     <span
+                      key={chip.label}
                       className="shrink-0 px-1.5 py-0.5 rounded-full text-[10px] font-bold"
-                      style={{ background: styles.subtle, color: styles.textTertiary }}
-                      title="Supports thinking / reasoning output"
+                      style={{ background: withAlpha(chip.color, 0.12), color: chip.color }}
+                      title={chip.title}
                     >
-                      THINKING
+                      {chip.label}
                     </span>
-                  )}
+                  ))}
                   {m.hidden && (
                     <span
                       className="shrink-0 px-1.5 py-0.5 rounded-full text-[10px] font-bold"
@@ -2031,13 +2121,12 @@ function ModelListSection({
                       HIDDEN
                     </span>
                   )}
-                  {/* ROUND-60 (R60-B): the "catalog" badge is gone with the
-                      catalog→list merge — every row here is a STORED row. */}
                 </div>
                 <div className="flex items-center gap-2 min-w-0 flex-wrap">
                   <span
                     className="truncate font-mono text-[10px]"
                     style={{ color: styles.textTertiary }}
+                    title={m.modelId}
                   >
                     {m.modelId}
                   </span>
@@ -2063,37 +2152,37 @@ function ModelListSection({
               </div>
               {m.configured && m.rowId !== null && (
                 <div className="flex items-center gap-1 shrink-0">
-                  {/* ROUND-82 (R82): the per-model TEST — Zap between the
-                      config pencil and the delete trash. */}
+                  {/* ROUND-87 (R87, owner: "the three buttons on the right side
+                      should be handled much more properly"): uniform 8×8
+                      rounded-[10px] icon buttons — TEST (animated, 5s tint),
+                      EDIT, DELETE (danger-tinted hover), consistent titles. */}
                   <ModelTestButton model={models.find((row) => row.id === m.rowId)!} />
-                  {/* ROUND-50 (R50-d): the full configuration dialog — pricing,
-                      context window, max output, thinking, hidden. */}
                   <button
                     onClick={() => {
                       const row = models.find((row) => row.id === m.rowId);
                       if (row) setConfiguring(row);
                     }}
                     aria-label={`Configure model ${m.displayName || m.modelId}`}
-                    title="Configure — pricing, context window, limits"
-                    className="h-7 px-2 grid place-items-center rounded-[8px] shrink-0 text-[11px] font-bold"
+                    title="Configure — display name, capabilities, pricing, limits"
+                    className="h-8 w-8 grid place-items-center rounded-[10px] shrink-0 transition-colors"
                     style={{ color: styles.textSecondary }}
                     onMouseEnter={(e) => (e.currentTarget.style.background = withAlpha(styles.accent, 0.1))}
                     onMouseLeave={(e) => (e.currentTarget.style.background = "transparent")}
                   >
-                    <Pencil size={12} />
+                    <Pencil size={13} />
                   </button>
                   <button
                     onClick={() => {
                       if (window.confirm(`Delete model "${m.displayName || m.modelId}"?`)) deleteModel.mutate(m.rowId!);
                     }}
                     aria-label={`Delete model ${m.displayName || m.modelId}`}
-                    title="Delete"
-                    className="w-7 h-7 grid place-items-center rounded-[8px] shrink-0"
+                    title="Delete this model"
+                    className="h-8 w-8 grid place-items-center rounded-[10px] shrink-0 transition-colors"
                     style={{ color: styles.textTertiary }}
                     onMouseEnter={(e) => (e.currentTarget.style.background = withAlpha("#ef4444", 0.12))}
                     onMouseLeave={(e) => (e.currentTarget.style.background = "transparent")}
                   >
-                    <Trash2 size={12} />
+                    <Trash2 size={13} />
                   </button>
                 </div>
               )}
@@ -2103,27 +2192,43 @@ function ModelListSection({
       )}
 
       {/* ROUND-50 (R50-d): the catalog-driven picker + the per-model config
-          dialog. Both invalidate THIS provider's models query on change. */}
+          dialog. Both invalidate THIS provider's models query on change.
+          ROUND-87 (R87): clicking a model in the picker now opens the
+          CONFIG dialog (add mode) instead of adding directly. */}
       {pickerOpen && (
         <AddModelsDialog
           providerId={providerId}
           catalog={catalog}
           staticCatalog={staticCatalog}
           configuredIds={new Set(models.map((m) => m.modelId))}
-          onClose={() => setPickerOpen(false)}
-          onChanged={() => {
-            invalidate();
-            setError(null);
+          onPick={(prefill) => {
+            setPickerOpen(false);
+            setAdding(prefill);
           }}
+          onClose={() => setPickerOpen(false)}
         />
       )}
       {configuring && (
         <ModelConfigDialog
+          providerId={providerId}
           model={configuring}
+          prefill={null}
           onClose={() => setConfiguring(null)}
           onSaved={() => {
             invalidate();
             setConfiguring(null);
+          }}
+        />
+      )}
+      {adding !== null && (
+        <ModelConfigDialog
+          providerId={providerId}
+          model={null}
+          prefill={adding}
+          onClose={() => setAdding(null)}
+          onSaved={() => {
+            invalidate();
+            setAdding(null);
           }}
         />
       )}
@@ -2134,38 +2239,36 @@ function ModelListSection({
 /* ── ROUND-50 (R50-d): the "Add models" catalog picker dialog ─────────────── */
 
 function AddModelsDialog({
-  providerId,
   catalog,
   staticCatalog,
   configuredIds,
+  onPick,
   onClose,
-  onChanged,
 }: {
+  /** The provider being picked for (kept in the call-site shape for
+   * symmetry with the sibling dialogs; the picker itself routes through
+   * the parent’s onPick). */
   providerId: string;
   catalog: ProviderCatalogState;
   staticCatalog: CatalogModel[];
   configuredIds: Set<string>;
+  /** ROUND-87 (R87, owner: "when I click on any of the models … it should
+   * show me the options to configure that model"): picking a model hands the
+   * catalog prefill to the parent, which opens the ADD-mode config dialog. */
+  onPick: (prefill: ModelAddPrefill) => void;
   onClose: () => void;
-  onChanged: () => void;
 }) {
   const styles = useThemeStyles();
   const [query, setQuery] = useState("");
-  const [selected, setSelected] = useState<Set<string>>(new Set());
   const [manualId, setManualId] = useState("");
-  const [error, setError] = useState<string | null>(null);
-  const [notice, setNotice] = useState<string | null>(null);
   // ROUND-60 (R60-B): the Free only ↔ All models scope toggle — moved INTO
   // the picker from the models list header (the owner: "in the add model for
   // the open router, there should be an option to switch between free only
   // and all models properly").
   // ROUND-82 (R82, §2.4.6 — the NVIDIA gap): the scope is now LOCAL to the
-  // dialog (initialized from the shared pref). Two reasons: (a) a provider
-  // whose catalog has ZERO free-classified entries (NIM: none of the 81 ids
-  // end ":free") rendered the "No free models match" empty state on open —
-  // functional but reads as broken; the local scope AUTO-SWITCHES to All
-  // when the free filter would hide everything. (b) The shared pref the
-  // composer flyout reads is never silently flipped by that auto-switch
-  // (the spec's risk-#8 rule) — the composer keeps its own control.
+  // dialog (initialized from the shared pref) — a provider whose catalog has
+  // ZERO free-classified entries (NIM) auto-switches to All; the shared pref
+  // the composer flyout reads is never silently flipped by that auto-switch.
   const [freeOnly, setFreeOnly] = useState(useSettingsStore.getState().modelsFreeOnly);
 
   const staticById = useMemo(
@@ -2199,87 +2302,30 @@ function AddModelsDialog({
     })
     .slice(0, 300); // sanity cap — the live OpenRouter catalog is huge
 
-  const toggle = (id: string) => {
-    setSelected((prev) => {
-      const next = new Set(prev);
-      if (next.has(id)) next.delete(id);
-      else next.add(id);
-      return next;
-    });
+  /** ROUND-87 (R87): the prefill a picked model hands to the config dialog —
+   * the provider's own display name first, then the static catalog's
+   * pricing/context/vision knowledge. */
+  const prefillFor = (id: string): ModelAddPrefill => {
+    const meta = staticById.get(id);
+    const entry = catalog.entries.find((e) => e.id === id);
+    return {
+      modelId: id,
+      displayName:
+        entry && entry.name !== "" && entry.name !== id
+          ? entry.name
+          : meta?.displayName,
+      ...(meta
+        ? {
+            contextWindow: meta.contextWindow,
+            maxOutputTokens: meta.maxOutputTokens,
+            inputPricePerMtok: meta.inputPricePerMtok,
+            inputPriceCachedPerMtok: meta.inputPriceCachedPerMtok,
+            outputPricePerMtok: meta.outputPricePerMtok,
+            supportsVision: meta.supportsVision,
+          }
+        : {}),
+    };
   };
-
-  /** One upsert per selected model — known pricing/context is pre-filled
-   * from the served catalog so the row lands fully configured. Failures are
-   * collected (allSettled) and surfaced honestly; ONE invalidation after. */
-  const addSelected = useMutation({
-    mutationFn: async (): Promise<{ added: number; failed: number; firstError?: string }> => {
-      const ids = [...selected];
-      const results = await Promise.allSettled(
-        ids.map((id) => {
-          const meta = staticById.get(id);
-          const entry = catalog.entries.find((e) => e.id === id);
-          return upsertProviderModelConfig(providerId, {
-            modelId: id,
-            // Prefer the provider's OWN name; fall back to the catalog's.
-            displayName:
-              entry && entry.name !== "" && entry.name !== id
-                ? entry.name
-                : meta?.displayName,
-            ...(meta
-              ? {
-                  contextWindow: meta.contextWindow,
-                  maxOutputTokens: meta.maxOutputTokens,
-                  inputPricePerMtok: meta.inputPricePerMtok,
-                  inputPriceCachedPerMtok: meta.inputPriceCachedPerMtok,
-                  outputPricePerMtok: meta.outputPricePerMtok,
-                }
-              : {}),
-          });
-        }),
-      );
-      const failures = results.filter(
-        (r): r is PromiseRejectedResult => r.status === "rejected",
-      );
-      return {
-        added: ids.length - failures.length,
-        failed: failures.length,
-        firstError:
-          failures.length > 0
-            ? failures[0].reason instanceof Error
-              ? failures[0].reason.message
-              : String(failures[0].reason)
-            : undefined,
-      };
-    },
-    onSuccess: ({ added, failed, firstError }) => {
-      setSelected(new Set());
-      onChanged();
-      if (failed === 0) {
-        onClose();
-        return;
-      }
-      setError(
-        `Added ${added}, failed ${failed} — ${firstError ?? "unknown error"}`,
-      );
-    },
-    onError: (err: Error) => setError(err.message),
-  });
-
-  /** The manual path (owner: ids not in the catalog) — one upsert by id. */
-  const addManual = useMutation({
-    mutationFn: () =>
-      upsertProviderModelConfig(providerId, { modelId: manualId.trim() }),
-    onSuccess: (model) => {
-      setManualId("");
-      setNotice(`Added ${model.modelId}.`);
-      setError(null);
-      onChanged();
-    },
-    onError: (err: Error) => {
-      setNotice(null);
-      setError(err.message);
-    },
-  });
 
   const inputStyle = {
     background: styles.bg,
@@ -2318,8 +2364,8 @@ function AddModelsDialog({
           </button>
         </div>
         <p className="px-5 pb-3 text-[11.5px] shrink-0" style={{ color: styles.textSecondary }}>
-          Pick from this provider&apos;s live catalog — known pricing, context windows, and limits are
-          pre-filled from the served catalog and stay editable after adding.
+          Pick a model to configure — known pricing, context windows, and limits arrive pre-filled and stay
+          editable before it&apos;s added.
         </p>
 
         {/* search + the ROUND-60 (R60-B) Free only ↔ All models scope toggle */}
@@ -2337,7 +2383,7 @@ function AddModelsDialog({
               onChange={(e) => setQuery(e.target.value)}
               placeholder="Search by model id or name…"
               aria-label="Search catalog models"
-              className="h-9 w-full rounded-[10px] border-[1.5px] pl-8 pr-3 text-[12px] outline-none"
+              className="h-10 w-full rounded-[14px] border-[1.5px] pl-9 pr-3 text-[12.5px] outline-none"
               style={inputStyle}
             />
           </div>
@@ -2348,7 +2394,7 @@ function AddModelsDialog({
           <div
             role="group"
             aria-label="Catalog filter"
-            className="flex items-center rounded-[10px] border-[1.5px] overflow-hidden shrink-0"
+            className="flex items-center rounded-[14px] border-[1.5px] overflow-hidden shrink-0"
             style={{ borderColor: styles.border }}
           >
             {([
@@ -2360,7 +2406,7 @@ function AddModelsDialog({
                 onClick={seg.pick}
                 aria-pressed={seg.active}
                 data-testid={seg.id === "free" ? "picker-free-only-toggle" : "picker-all-models-toggle"}
-                className="h-9 px-2.5 text-[11px] font-bold transition-colors whitespace-nowrap"
+                className="h-10 px-2.5 text-[11px] font-bold transition-colors whitespace-nowrap"
                 style={{
                   background: seg.active ? withAlpha(styles.accent, 0.12) : "transparent",
                   color: seg.active ? styles.accent : styles.textTertiary,
@@ -2372,8 +2418,11 @@ function AddModelsDialog({
           </div>
         </div>
 
-        {/* the catalog rows */}
-        <div className="flex-1 min-h-0 overflow-y-auto auto-scroll px-3 pb-2">
+        {/* the catalog rows — ROUND-87 (R87): every row is a CLEAN clickable
+            card (rounded-12, hover accent tint) that hands the prefill to the
+            parent's ADD-mode config dialog. The multi-select checkboxes are
+            GONE: every add goes through configuration, exactly as asked. */}
+        <div className="flex-1 min-h-0 overflow-y-auto auto-scroll px-3 pb-3 flex flex-col gap-1">
           {catalog.isFetching && catalog.entries.length === 0 && (
             <div className="px-2 py-4 text-[11.5px] flex items-center gap-2" style={{ color: styles.textTertiary }}>
               <RefreshCw size={12} className="animate-spin" /> Fetching the provider catalog…
@@ -2382,39 +2431,36 @@ function AddModelsDialog({
           {!catalog.isFetching && catalog.entries.length === 0 && (
             <div className="px-2 py-4 text-[11.5px]" style={{ color: styles.textTertiary }}>
               {catalog.isError
-                ? "The live catalog is unreachable for this provider — add models by id below."
-                : "This provider serves no catalog — add models by id below."}
+                ? "The live catalog is unreachable for this provider — add a model by id below."
+                : "This provider serves no catalog — add a model by id below."}
             </div>
           )}
           {rows.map((entry) => {
             const meta = staticById.get(entry.id);
             const alreadyAdded = configuredIds.has(entry.id);
-            const isSelected = selected.has(entry.id);
             const free = meta ? meta.free : isFreeModelEntry({ modelId: entry.id });
             return (
-              <label
+              <button
+                type="button"
                 key={entry.id}
-                className="flex items-center gap-3 px-2.5 py-2 rounded-[10px] cursor-pointer transition-colors"
+                disabled={alreadyAdded}
+                onClick={() => onPick(prefillFor(entry.id))}
+                aria-label={`Configure and add ${entry.id}`}
+                data-testid="picker-model-row"
+                data-model-id={entry.id}
+                className="flex items-center gap-3 px-3 py-2.5 rounded-[12px] border-[1.5px] text-left transition-all enabled:hover:scale-[1.01] enabled:active:scale-[0.99]"
                 style={{
-                  background: isSelected ? withAlpha(styles.accent, 0.07) : "transparent",
+                  borderColor: alreadyAdded ? styles.border : withAlpha(styles.accent, alreadyAdded ? 0 : 0.28),
+                  background: alreadyAdded ? "transparent" : styles.isDark ? "rgba(255,255,255,0.015)" : "rgba(0,0,0,0.008)",
                   opacity: alreadyAdded ? 0.55 : 1,
                   cursor: alreadyAdded ? "default" : "pointer",
                 }}
-                title={entry.id}
+                title={alreadyAdded ? "Already added" : entry.id}
               >
-                <input
-                  type="checkbox"
-                  checked={alreadyAdded || isSelected}
-                  disabled={alreadyAdded}
-                  onChange={() => !alreadyAdded && toggle(entry.id)}
-                  aria-label={`Select model ${entry.id}`}
-                  className="w-4 h-4 shrink-0 cursor-pointer"
-                  style={{ accentColor: styles.accent }}
-                />
-                <span className="min-w-0 flex-1 flex flex-col">
+                <span className="min-w-0 flex-1 flex flex-col gap-0.5">
                   <span className="flex items-center gap-1.5 min-w-0 flex-wrap">
                     <span
-                      className="truncate text-[12px] font-semibold"
+                      className="truncate text-[12.5px] font-bold"
                       style={{ color: styles.text }}
                     >
                       {entry.name !== "" && entry.name !== entry.id ? entry.name : entry.id}
@@ -2434,12 +2480,19 @@ function AddModelsDialog({
                         PAID
                       </span>
                     ) : null}
-                    {alreadyAdded && (
+                    {alreadyAdded ? (
                       <span
                         className="shrink-0 px-1.5 py-0.5 rounded-full text-[10px] font-bold"
                         style={{ background: withAlpha("#22c55e", 0.12), color: "#22c55e" }}
                       >
                         ADDED
+                      </span>
+                    ) : (
+                      <span
+                        className="shrink-0 text-[10px] font-bold"
+                        style={{ color: styles.textTertiary }}
+                      >
+                        CONFIGURE →
                       </span>
                     )}
                   </span>
@@ -2455,7 +2508,7 @@ function AddModelsDialog({
                     )}
                   </span>
                 </span>
-              </label>
+              </button>
             );
           })}
           {rows.length === 0 && catalog.entries.length > 0 && (
@@ -2464,58 +2517,35 @@ function AddModelsDialog({
                   the search text may each have emptied the list. */}
               {freeOnly
                 ? "No free models match — switch to “All models” or refine the search."
-                : `No catalog model matches “${query.trim()}” — add it by id below.`}
+                : `No catalog model matches “${query.trim()}” — add one by id below.`}
             </div>
           )}
         </div>
 
-        {/* footer: manual add-by-id (secondary) + bulk action */}
+        {/* footer: manual add-by-id (also rides the configure flow — the
+            ROUND-87 contract: no add without configuration). */}
         <div
-          className="shrink-0 border-t px-5 py-3.5 flex flex-col gap-3"
+          className="shrink-0 border-t px-5 py-3.5 flex items-center gap-2"
           style={{ borderColor: styles.border, background: withAlpha(styles.accent, 0.02) }}
         >
-          <div className="flex items-center gap-2">
-            <input
-              value={manualId}
-              onChange={(e) => setManualId(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === "Enter" && manualId.trim()) addManual.mutate();
-              }}
-              placeholder="…or add an id not in the list"
-              aria-label="Model id"
-              className="h-9 flex-1 min-w-0 rounded-[10px] border-[1.5px] px-3 font-mono text-[12px] outline-none"
-              style={inputStyle}
-            />
-            <button
-              onClick={() => addManual.mutate()}
-              disabled={!manualId.trim() || addManual.isPending}
-              className="h-9 px-3.5 rounded-[10px] border-[1.5px] text-[12px] font-bold disabled:opacity-50 shrink-0"
-              style={{ borderColor: styles.border, color: styles.textSecondary }}
-            >
-              {addManual.isPending ? "Adding…" : "Add by id"}
-            </button>
-          </div>
-          {error && (
-            <p className="text-[11px]" style={{ color: "#ef4444" }}>
-              {error}
-            </p>
-          )}
-          {notice && (
-            <p className="text-[11px]" style={{ color: "#22c55e" }}>
-              {notice}
-            </p>
-          )}
+          <input
+            value={manualId}
+            onChange={(e) => setManualId(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter" && manualId.trim()) onPick(prefillFor(manualId.trim()));
+            }}
+            placeholder="…or enter a model id not in the list"
+            aria-label="Model id"
+            className="h-10 flex-1 min-w-0 rounded-[14px] border-[1.5px] px-3.5 font-mono text-[12px] outline-none"
+            style={inputStyle}
+          />
           <button
-            onClick={() => addSelected.mutate()}
-            disabled={selected.size === 0 || addSelected.isPending}
-            className="h-10 rounded-full text-[13px] font-bold disabled:opacity-50 transition-transform hover:scale-[1.01] active:scale-[0.99]"
+            onClick={() => onPick(prefillFor(manualId.trim()))}
+            disabled={!manualId.trim()}
+            className="h-10 px-4 rounded-full text-[12px] font-bold disabled:opacity-50 shrink-0"
             style={{ background: styles.accent, color: styles.accentText }}
           >
-            {addSelected.isPending
-              ? "Adding…"
-              : selected.size === 0
-                ? "Add models"
-                : `Add ${selected.size} model${selected.size === 1 ? "" : "s"}`}
+            Configure & add
           </button>
         </div>
       </div>
@@ -2525,73 +2555,187 @@ function AddModelsDialog({
 
 /* ── ROUND-50 (R50-d): the per-model configuration dialog ─────────────────── */
 
+/** ROUND-87 (R87): the catalog prefill an ADD-mode dialog opens with — the
+ * fields the served catalog knows (pricing, context window, display name
+ * + the input modality bits), so the configure-before-add flow starts
+ * from the truth instead of blank inputs. */
+export interface ModelAddPrefill {
+  modelId: string;
+  displayName?: string;
+  contextWindow?: number | null;
+  maxOutputTokens?: number | null;
+  inputPricePerMtok?: number | null;
+  inputPriceCachedPerMtok?: number | null;
+  outputPricePerMtok?: number | null;
+  supportsVision?: boolean;
+}
+
 /** Draft state for the config dialog — numerics live as STRINGS so an empty
  * input can mean "unknown" (null) rather than 0. */
 interface ModelConfigDraft {
+  modelId: string;
   displayName: string;
+  sizeLabel: string;
   contextWindow: string;
   maxOutputTokens: string;
   inputPrice: string;
   outputPrice: string;
   cachePrice: string;
-  supportsThinking: boolean;
-  // ROUND-62 (R62-2b): the vision flag joins the dialog — it was the ONE
-  // editable row field without a toggle here (only the R61 Computer-Use tab
-  // and the POST prefill could set it), so a row could never be fully
-  // configured from this page.
+  // ROUND-62 (R62-2b): the vision flag (image INPUT — one of the input
+  // capability chips in R87's dialog).
   supportsVision: boolean;
-  // ROUND-82 (R82, owner: "proper options … vision, audio, video" + tool
-  // use): the tri-state capability flags — null = unknown (never set, no
-  // catalog source — the honest default for NIM/custom rows), false =
-  // explicitly off, true = explicitly on. On/Off/Unknown segments below.
-  supportsTools: boolean | null;
+  // ROUND-82 (R82): the tri-state capability flags — null = unknown, false
+  // = explicitly off, true = explicitly on. The R87 dialog renders them as
+  // the INPUT (video/audio/pdf) and OUTPUT (text/image/video/audio) chips.
   supportsAudio: boolean | null;
   supportsVideo: boolean | null;
+  supportsPdf: boolean | null;
+  supportsTextOutput: boolean | null;
+  supportsImageOutput: boolean | null;
+  supportsVideoOutput: boolean | null;
+  supportsAudioOutput: boolean | null;
   hidden: boolean;
 }
 
 function draftFromModel(model: ProviderModelConfig): ModelConfigDraft {
   const num = (v: number | null): string => (v === null ? "" : String(v));
   return {
+    modelId: model.modelId,
     displayName: model.displayName || "",
+    sizeLabel: model.sizeLabel ?? "",
     contextWindow: num(model.contextWindow),
     maxOutputTokens: num(model.maxOutputTokens),
     inputPrice: num(model.inputPricePerMtok),
     outputPrice: num(model.outputPricePerMtok),
     cachePrice: num(model.inputPriceCachedPerMtok),
-    supportsThinking: model.supportsThinking,
     supportsVision: model.supportsVision,
-    supportsTools: model.supportsTools,
     supportsAudio: model.supportsAudio,
     supportsVideo: model.supportsVideo,
+    supportsPdf: model.supportsPdf,
+    // Unknown text output renders ON (the chat-completions default).
+    supportsTextOutput: model.supportsTextOutput === null ? true : model.supportsTextOutput,
+    supportsImageOutput: model.supportsImageOutput,
+    supportsVideoOutput: model.supportsVideoOutput,
+    supportsAudioOutput: model.supportsAudioOutput,
     hidden: model.hidden,
   };
 }
 
+function draftFromPrefill(prefill: ModelAddPrefill): ModelConfigDraft {
+  const num = (v: number | null | undefined): string => (v === null || v === undefined ? "" : String(v));
+  return {
+    modelId: prefill.modelId,
+    displayName: prefill.displayName ?? "",
+    sizeLabel: "",
+    contextWindow: num(prefill.contextWindow),
+    maxOutputTokens: num(prefill.maxOutputTokens),
+    inputPrice: num(prefill.inputPricePerMtok),
+    outputPrice: num(prefill.outputPricePerMtok),
+    cachePrice: num(prefill.inputPriceCachedPerMtok),
+    supportsVision: prefill.supportsVision ?? false,
+    supportsAudio: null,
+    supportsVideo: null,
+    supportsPdf: null,
+    // Text output defaults ON (the chat-completions contract).
+    supportsTextOutput: true,
+    supportsImageOutput: null,
+    supportsVideoOutput: null,
+    supportsAudioOutput: null,
+    hidden: false,
+  };
+}
+
+/** ROUND-87 (R87, owner: "the option for selecting the models … configure
+ * which kinds of inputs this model accepts, like whether it accepts text
+ * (all the models accept text), and configure whether it accepts images,
+ * videos, and PDFs. The user can select those options on or off, not just
+ * in the toggle format but in a cleaner way"): the CAPABILITY CHIP — a
+ * clean on/off pill (accent-filled when on, bordered when off). Module
+ * level, NOT inside the dialog — a component defined in render remounts
+ * its subtree on every keystroke (the classic anti-pattern). */
+function CapChip({
+  label,
+  on,
+  onClick,
+  locked = false,
+  title,
+  testId,
+}: {
+  label: string;
+  on: boolean;
+  onClick?: () => void;
+  locked?: boolean;
+  title: string;
+  testId: string;
+}) {
+  const styles = useThemeStyles();
+  return (
+    <button
+      type="button"
+      onClick={locked ? undefined : onClick}
+      aria-pressed={on}
+      disabled={locked}
+      title={title}
+      data-testid={testId}
+      className="h-8 px-3.5 rounded-full text-[11.5px] font-bold border-[1.5px] transition-all shrink-0 disabled:cursor-default"
+      style={{
+        borderColor: on ? styles.accent : styles.border,
+        background: on ? styles.accent : "transparent",
+        color: on ? styles.accentText : styles.textTertiary,
+        opacity: locked ? 0.85 : 1,
+      }}
+    >
+      {label}
+    </button>
+  );
+}
+
 function ModelConfigDialog({
+  providerId,
   model,
+  prefill,
   onClose,
   onSaved,
 }: {
-  model: ProviderModelConfig;
+  providerId: string;
+  /** EDIT mode: the stored row being configured (null in add mode). */
+  model: ProviderModelConfig | null;
+  /** ROUND-87 (R87) ADD mode: the catalog prefill (clicking a model in the
+   * picker opens this dialog INSTEAD of adding directly — the owner: "It
+   * should give the user the option to set them up"). */
+  prefill: ModelAddPrefill | null;
   onClose: () => void;
   onSaved: () => void;
 }) {
   const styles = useThemeStyles();
-  const [draft, setDraft] = useState<ModelConfigDraft>(() => draftFromModel(model));
+  const addMode = model === null && prefill !== null;
+  const [draft, setDraft] = useState<ModelConfigDraft>(() =>
+    model !== null ? draftFromModel(model) : draftFromPrefill(prefill ?? { modelId: "" }),
+  );
   const [error, setError] = useState<string | null>(null);
 
   const set = <K extends keyof ModelConfigDraft>(key: K, value: ModelConfigDraft[K]) =>
     setDraft((d) => ({ ...d, [key]: value }));
 
+  // ADD mode: POST the upsert (configuring BEFORE the row exists); EDIT
+  // mode: PATCH the stored row. Both ride the same parsed draft.
   const save = useMutation({
-    mutationFn: (patch: ProviderModelConfigPatch) =>
-      updateProviderModelConfig(model.id, patch),
+    mutationFn: (payload: ProviderModelConfigPatch) =>
+      addMode
+        ? upsertProviderModelConfig(providerId, {
+            modelId: draft.modelId.trim(),
+            ...payload,
+          })
+        : updateProviderModelConfig((model as ProviderModelConfig).id, payload),
     onSuccess: onSaved,
     onError: (err: Error) => setError(err.message),
   });
 
   const submit = () => {
+    if (addMode && draft.modelId.trim() === "") {
+      setError("Model id is required.");
+      return;
+    }
     // Parse every numeric: "" → null (unknown), junk → inline error naming
     // the field (the server 400s the same shapes — R50-d contract).
     type NumericDraftKey =
@@ -2618,19 +2762,24 @@ function ModelConfigDialog({
     }
     setError(null);
     save.mutate({
-      displayName: draft.displayName.trim() || model.modelId,
+      displayName: draft.displayName.trim() || draft.modelId.trim(),
+      sizeLabel: draft.sizeLabel.trim() === "" ? null : draft.sizeLabel.trim(),
       contextWindow: parsed.contextWindow,
       maxOutputTokens: parsed.maxOutputTokens,
       inputPricePerMtok: parsed.inputPrice,
       outputPricePerMtok: parsed.outputPrice,
       inputPriceCachedPerMtok: parsed.cachePrice,
-      supportsThinking: draft.supportsThinking,
+      // ROUND-87 (R87): the input/output capability chips. Reasoning and
+      // tool use are NOT sent — the app DETECTS those (the owner's
+      // directive); absent keeps the stored/backend-prefilled values.
       supportsVision: draft.supportsVision,
-      // ROUND-82 (R82): the tri-state capability flags ride the PATCH —
-      // null is a legitimate value (reset to unknown), sent as-is.
-      supportsTools: draft.supportsTools,
       supportsAudio: draft.supportsAudio,
       supportsVideo: draft.supportsVideo,
+      supportsPdf: draft.supportsPdf,
+      supportsTextOutput: draft.supportsTextOutput,
+      supportsImageOutput: draft.supportsImageOutput,
+      supportsVideoOutput: draft.supportsVideoOutput,
+      supportsAudioOutput: draft.supportsAudioOutput,
       hidden: draft.hidden,
     });
   };
@@ -2640,111 +2789,6 @@ function ModelConfigDialog({
     borderColor: styles.border,
     color: styles.text,
   } as const;
-
-  /** The On/Off mini-toggle used for the boolean fields. */
-  const Toggle = ({
-    label,
-    value,
-    onChange,
-    hint,
-  }: {
-    label: string;
-    value: boolean;
-    onChange: (next: boolean) => void;
-    hint: string;
-  }) => (
-    <div className="flex items-center gap-3">
-      <div className="min-w-0 flex-1">
-        <span className="block text-[12px] font-bold" style={{ color: styles.textSecondary }}>
-          {label}
-        </span>
-        <span className="block text-[10.5px]" style={{ color: styles.textTertiary }}>
-          {hint}
-        </span>
-      </div>
-      <div
-        role="group"
-        aria-label={label}
-        className="flex items-center rounded-[10px] border-[1.5px] overflow-hidden shrink-0"
-        style={{ borderColor: styles.border }}
-      >
-        {([
-          { id: "on", label: "On", active: value, pick: () => onChange(true) },
-          { id: "off", label: "Off", active: !value, pick: () => onChange(false) },
-        ] as const).map((seg) => (
-          <button
-            key={seg.id}
-            onClick={seg.pick}
-            aria-pressed={seg.active}
-            className="h-7 px-3 text-[11px] font-bold transition-colors"
-            style={{
-              background: seg.active ? withAlpha(styles.accent, 0.12) : "transparent",
-              color: seg.active ? styles.accent : styles.textTertiary,
-            }}
-          >
-            {seg.label}
-          </button>
-        ))}
-      </div>
-    </div>
-  );
-
-  /** ROUND-82 (R82, owner: "proper options" — the capability card's
-   * tri-state segmented control): On / Off / Unknown. Unknown (null) is the
-   * honest default for rows with no catalog source (NIM/custom) — the
-   * 0004-era NOT NULL columns could only lie "off"; migration 0030's
-   * nullable columns make "unknown" a real state. Mirrors the Toggle's
-   * exact styling rhythm (h-7 segments, accent-tinted active). */
-  const TriStateToggle = ({
-    label,
-    value,
-    onChange,
-    hint,
-    testId,
-  }: {
-    label: string;
-    value: boolean | null;
-    onChange: (v: boolean | null) => void;
-    hint: string;
-    testId: string;
-  }) => (
-    <div className="flex items-center gap-3" data-testid={testId}>
-      <div className="min-w-0 flex-1">
-        <span className="block text-[12px] font-bold" style={{ color: styles.textSecondary }}>
-          {label}
-        </span>
-        <span className="block text-[10.5px]" style={{ color: styles.textTertiary }}>
-          {hint}
-        </span>
-      </div>
-      <div
-        role="group"
-        aria-label={label}
-        className="flex items-center rounded-[10px] border-[1.5px] overflow-hidden shrink-0"
-        style={{ borderColor: styles.border }}
-      >
-        {([
-          { id: "on", label: "On", active: value === true, pick: () => onChange(true) },
-          { id: "off", label: "Off", active: value === false, pick: () => onChange(false) },
-          { id: "unknown", label: "?", active: value === null, pick: () => onChange(null) },
-        ] as const).map((seg) => (
-          <button
-            key={seg.id}
-            onClick={seg.pick}
-            aria-pressed={seg.active}
-            title={seg.id === "unknown" ? "Unknown — never set or no catalog source for this provider" : undefined}
-            className="h-7 px-3 text-[11px] font-bold transition-colors"
-            style={{
-              background: seg.active ? withAlpha(styles.accent, 0.12) : "transparent",
-              color: seg.active ? styles.accent : styles.textTertiary,
-            }}
-          >
-            {seg.label}
-          </button>
-        ))}
-      </div>
-    </div>
-  );
 
   const preview = formatPricingSummary({
     inputPricePerMtok: parseNumericField(draft.inputPrice) === "invalid" ? null : (parseNumericField(draft.inputPrice) as number | null),
@@ -2758,7 +2802,7 @@ function ModelConfigDialog({
       style={{ background: "rgba(0,0,0,0.35)", backdropFilter: "blur(4px)" }}
       role="dialog"
       aria-modal="true"
-      aria-label="Configure model"
+      aria-label={addMode ? "Add model" : "Configure model"}
       onClick={(e) => {
         if (e.target === e.currentTarget) onClose();
       }}
@@ -2767,22 +2811,18 @@ function ModelConfigDialog({
         className="w-full max-w-[680px] max-h-[86vh] overflow-y-auto auto-scroll rounded-[20px] border-[1.5px] p-5 flex flex-col gap-4"
         style={{ background: styles.card, borderColor: styles.border, boxShadow: styles.bentoShadow }}
       >
-        {/* header — ROUND-82 (R82, owner: "the model editing options …
-            properly laid out"): the dialog reorganized into a two-column
-            layout (≥560px): Identity + Capabilities left, Sizing + Pricing
-            right; single column below. The provider chip names the routing
-            target (R82: the send wire carries providerId — the chip is the
-            row's ACTUAL endpoint, not a decoration). */}
+        {/* header — ROUND-87 (R87): ADD vs CONFIGURE + the provider chip
+            (the send wire's actual routing target). */}
         <div className="flex items-center gap-2 flex-wrap">
           <span className="text-[15px] font-black" style={{ color: styles.text }}>
-            Configure model
+            {addMode ? "Add model" : "Configure model"}
           </span>
           <span
             className="px-1.5 py-0.5 rounded-full font-mono text-[10px] font-bold"
             style={{ background: styles.subtle, color: styles.textTertiary }}
             title="The provider that serves this model (the send wire routes here since R82)"
           >
-            {model.providerId}
+            {providerId}
           </span>
           <span className="flex-1" />
           <button
@@ -2810,7 +2850,7 @@ function ModelConfigDialog({
                 <input
                   value={draft.displayName}
                   onChange={(e) => set("displayName", e.target.value)}
-                  placeholder={model.modelId}
+                  placeholder={draft.modelId || "the friendly name shown in pickers"}
                   aria-label="Display name"
                   className="h-10 w-full rounded-[10px] border-[1.5px] px-3 text-[13px] outline-none"
                   style={inputStyle}
@@ -2820,64 +2860,152 @@ function ModelConfigDialog({
                 <label className="mb-1.5 block text-[11px] font-bold" style={{ color: styles.textSecondary }}>
                   Model id
                 </label>
-                <p
-                  className="h-10 flex items-center w-full rounded-[10px] border-[1.5px] px-3 font-mono text-[11px] break-all overflow-hidden"
-                  style={{ borderColor: styles.border, background: styles.subtle, color: styles.textTertiary }}
-                  aria-label="Model id (read-only)"
-                >
-                  {model.modelId}
-                </p>
+                {addMode ? (
+                  <input
+                    value={draft.modelId}
+                    onChange={(e) => set("modelId", e.target.value)}
+                    placeholder="provider/model-name"
+                    aria-label="Model id"
+                    className="h-10 w-full rounded-[10px] border-[1.5px] px-3 font-mono text-[11.5px] outline-none"
+                    style={inputStyle}
+                    data-testid="model-config-id-input"
+                  />
+                ) : (
+                  <p
+                    className="h-10 flex items-center w-full rounded-[10px] border-[1.5px] px-3 font-mono text-[11px] break-all overflow-hidden"
+                    style={{ borderColor: styles.border, background: styles.subtle, color: styles.textTertiary }}
+                    aria-label="Model id (read-only)"
+                  >
+                    {draft.modelId}
+                  </p>
+                )}
               </div>
-              <Toggle
-                label="Hide from chat picker"
-                value={draft.hidden}
-                onChange={(v) => set("hidden", v)}
-                hint="Kept here in Settings, but not offered in the chat model selector."
-              />
+              {/* ROUND-87 (R87): the SIZE label — a human-facing parameter
+                  size ("70B", "405B MoE") for the detail row. */}
+              <div>
+                <label className="mb-1.5 block text-[11px] font-bold" style={{ color: styles.textSecondary }}>
+                  Size <span className="font-normal" style={{ color: styles.textTertiary }}>(e.g. 70B — display only)</span>
+                </label>
+                <input
+                  value={draft.sizeLabel}
+                  onChange={(e) => set("sizeLabel", e.target.value)}
+                  placeholder="unknown"
+                  aria-label="Size label"
+                  className="h-10 w-full rounded-[10px] border-[1.5px] px-3 text-[13px] outline-none"
+                  style={inputStyle}
+                  data-testid="model-config-size-input"
+                />
+              </div>
+              <div className="flex items-center gap-3">
+                <div className="min-w-0 flex-1">
+                  <span className="block text-[12px] font-bold" style={{ color: styles.textSecondary }}>
+                    Hide from chat picker
+                  </span>
+                  <span className="block text-[10.5px]" style={{ color: styles.textTertiary }}>
+                    Kept here in Settings, but not offered in the chat model selector.
+                  </span>
+                </div>
+                <div
+                  role="group"
+                  aria-label="Hide from chat picker"
+                  className="flex items-center rounded-[10px] border-[1.5px] overflow-hidden shrink-0"
+                  style={{ borderColor: styles.border }}
+                >
+                  {([
+                    { id: "on", label: "On", active: draft.hidden, pick: () => set("hidden", true) },
+                    { id: "off", label: "Off", active: !draft.hidden, pick: () => set("hidden", false) },
+                  ] as const).map((seg) => (
+                    <button
+                      key={seg.id}
+                      onClick={seg.pick}
+                      aria-pressed={seg.active}
+                      className="h-7 px-3 text-[11px] font-bold transition-colors"
+                      style={{
+                        background: seg.active ? withAlpha(styles.accent, 0.12) : "transparent",
+                        color: seg.active ? styles.accent : styles.textTertiary,
+                      }}
+                    >
+                      {seg.label}
+                    </button>
+                  ))}
+                </div>
+              </div>
             </div>
 
+            {/* ROUND-87 (R87, owner: "configure which kinds of inputs this
+                model accepts … and configure which kinds of outputs this
+                model can provide"): the INPUT and OUTPUT capability CHIP
+                GROUPS — clean on/off pills (text input is locked ON — all
+                models accept text; text output defaults ON but can be
+                turned off). Reasoning + tool use are deliberately ABSENT:
+                the app detects those at runtime. */}
             <div className="flex flex-col gap-3">
-              <SectionLabel>Capabilities</SectionLabel>
-              {/* ROUND-82 (R82, owner: "there should be proper options …
-                  like vision, audio, video" — "consumed by" micro-hints on
-                  every row, the R62-2b pattern): the first two are the
-                  0004-era boolean columns (On/Off only — the wire contract
-                  is unchanged); the last three are migration 0030's
-                  tri-state flags (On/Off/Unknown — Unknown is the honest
-                  default for NIM/custom rows with no catalog source). */}
-              <Toggle
-                label="Reasoning"
-                value={draft.supportsThinking}
-                onChange={(v) => set("supportsThinking", v)}
-                hint="Emits thinking tokens — enables the composer's thinking-level control."
-              />
-              <Toggle
-                label="Vision"
-                value={draft.supportsVision}
-                onChange={(v) => set("supportsVision", v)}
-                hint="Accepts image inputs — gates the main-mode vision relay."
-              />
-              <TriStateToggle
-                label="Tool use"
-                value={draft.supportsTools}
-                onChange={(v) => set("supportsTools", v)}
-                hint="Can call the app's tools — required for agentic turns."
-                testId="model-cap-tools"
-              />
-              <TriStateToggle
-                label="Audio input"
-                value={draft.supportsAudio}
-                onChange={(v) => set("supportsAudio", v)}
-                hint="Accepts audio attachments."
-                testId="model-cap-audio"
-              />
-              <TriStateToggle
-                label="Video input"
-                value={draft.supportsVideo}
-                onChange={(v) => set("supportsVideo", v)}
-                hint="Accepts video inputs."
-                testId="model-cap-video"
-              />
+              <SectionLabel>Input capabilities</SectionLabel>
+              <div className="flex flex-wrap gap-1.5">
+                <CapChip label="Text" on locked title="Every chat model accepts text input" testId="model-cap-text-in" />
+                <CapChip
+                  label="Images"
+                  on={draft.supportsVision}
+                  onClick={() => set("supportsVision", !draft.supportsVision)}
+                  title="Accepts image inputs — gates the main-mode vision relay"
+                  testId="model-cap-images-in"
+                />
+                <CapChip
+                  label="Video"
+                  on={draft.supportsVideo === true}
+                  onClick={() => set("supportsVideo", draft.supportsVideo === true ? false : true)}
+                  title="Accepts video inputs"
+                  testId="model-cap-video-in"
+                />
+                <CapChip
+                  label="PDF"
+                  on={draft.supportsPdf === true}
+                  onClick={() => set("supportsPdf", draft.supportsPdf === true ? false : true)}
+                  title="Accepts PDF documents"
+                  testId="model-cap-pdf-in"
+                />
+                <CapChip
+                  label="Audio"
+                  on={draft.supportsAudio === true}
+                  onClick={() => set("supportsAudio", draft.supportsAudio === true ? false : true)}
+                  title="Accepts audio inputs"
+                  testId="model-cap-audio-in"
+                />
+              </div>
+              <SectionLabel>Output capabilities</SectionLabel>
+              <div className="flex flex-wrap gap-1.5">
+                <CapChip
+                  label="Text"
+                  on={draft.supportsTextOutput !== false}
+                  onClick={() => set("supportsTextOutput", draft.supportsTextOutput !== false ? false : true)}
+                  title="Produces text output — on by default for chat models"
+                  testId="model-cap-text-out"
+                />
+                <CapChip
+                  label="Images"
+                  on={draft.supportsImageOutput === true}
+                  onClick={() => set("supportsImageOutput", draft.supportsImageOutput === true ? false : true)}
+                  title="Produces image output"
+                  testId="model-cap-images-out"
+                />
+                <CapChip
+                  label="Video"
+                  on={draft.supportsVideoOutput === true}
+                  onClick={() => set("supportsVideoOutput", draft.supportsVideoOutput === true ? false : true)}
+                  title="Produces video output"
+                  testId="model-cap-video-out"
+                />
+                <CapChip
+                  label="Audio"
+                  on={draft.supportsAudioOutput === true}
+                  onClick={() => set("supportsAudioOutput", draft.supportsAudioOutput === true ? false : true)}
+                  title="Produces audio output"
+                  testId="model-cap-audio-out"
+                />
+              </div>
+              <p className="text-[10.5px]" style={{ color: styles.textTertiary }}>
+                Reasoning and tool use are detected automatically — never configured here.
+              </p>
             </div>
           </div>
 
@@ -2918,13 +3046,6 @@ function ModelConfigDialog({
 
             {/* pricing */}
             <div className="flex flex-col gap-2">
-              {/* ROUND-62 (R62-2b): the unit is now IN each label ("$ per 1M
-                  tokens"), not only the section header — the owner's "unable to
-                  configure the per million input and output token price
-                  properly" complaint; the old "Input"/"Output" one-worders +
-                  the jargon aria-label "($/Mtok)" left the unit ambiguous.
-                  Decimal inputMode + the string-draft parser keep 0.075-style
-                  values first-class ("" still means unknown → null). */}
               <SectionLabel>Pricing — USD per 1M tokens</SectionLabel>
               <div className="grid grid-cols-1 gap-2">
                 <div>
@@ -2994,8 +3115,6 @@ function ModelConfigDialog({
           </p>
         )}
 
-        {/* ROUND-82 (R82): flex-wrap — the footer now hosts the per-model
-            test result line (w-full) below the buttons when one runs. */}
         <div className="flex flex-wrap items-center gap-2">
           <button
             onClick={onClose}
@@ -3004,17 +3123,16 @@ function ModelConfigDialog({
           >
             Cancel
           </button>
-          {/* ROUND-82 (R82, owner: the model edit dialog gets the test too —
-              the natural pairing with Save: configure, test, save). */}
-          <ModelTestButton model={model} />
+          {model !== null && <ModelTestButton model={model} />}
           <span className="flex-1" />
           <button
             onClick={submit}
             disabled={save.isPending}
             className="h-10 px-5 rounded-full text-[12.5px] font-bold disabled:opacity-50"
             style={{ background: styles.accent, color: styles.accentText }}
+            data-testid="model-config-save"
           >
-            {save.isPending ? "Saving…" : "Save configuration"}
+            {save.isPending ? "Saving…" : addMode ? "Add model" : "Save configuration"}
           </button>
         </div>
       </div>

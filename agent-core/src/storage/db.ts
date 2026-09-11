@@ -148,6 +148,25 @@ function seedTemplates(db: SqliteDatabase): void {
 }
 
 /**
+ * The post-migration seed pass — the factory data a FRESH database starts
+ * with. ROUND-87 (R87, POST /system/reset): exported so the reset route can
+ * restore exactly this state after wiping every table (openDatabase itself
+ * calls it on every open; both paths share one definition by construction).
+ */
+export function reseedFactoryData(db: SqliteDatabase): void {
+  seedTemplates(db);
+  seedBuiltinProviders(db);
+  // ROUND-82 (R82): the 0030 model-capability backfill — catalog
+  // supportsTools bits onto openrouter-scoped rows whose columns are still
+  // NULL. Idempotent (NULL-guarded WHERE): a second open is a no-op.
+  backfillModelCapabilities(db);
+  // ROUND-61: built-in skills seed once per open (INSERT OR IGNORE — user
+  // edits persist; deletion of built-ins is refused in skills.ts).
+  seedBuiltinSkills(db);
+  ensureDefaultAgent(db);
+}
+
+/**
  * Opens (creating if needed) the database, applies pending migrations, seeds
  * templates and the built-in provider rows (openrouter, SPEC §F4) once.
  */
@@ -159,15 +178,6 @@ export function openDatabase(path: string): SqliteDatabase {
   db.pragma("synchronous = NORMAL");
   db.pragma("foreign_keys = ON");
   applyMigrations(db);
-  seedTemplates(db);
-  seedBuiltinProviders(db);
-  // ROUND-82 (R82): the 0030 model-capability backfill — catalog
-  // supportsTools bits onto openrouter-scoped rows whose columns are still
-  // NULL. Idempotent (NULL-guarded WHERE): a second open is a no-op.
-  backfillModelCapabilities(db);
-  // ROUND-61: built-in skills seed once per open (INSERT OR IGNORE — user
-  // edits persist; deletion of built-ins is refused in skills.ts).
-  seedBuiltinSkills(db);
-  ensureDefaultAgent(db);
+  reseedFactoryData(db);
   return db;
 }

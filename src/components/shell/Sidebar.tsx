@@ -6,6 +6,7 @@ import {
   Bot,
   CircleAlert,
   FolderOpen,
+  Info,
   LayoutDashboard,
   LoaderCircle,
   MessageSquare,
@@ -256,6 +257,10 @@ const SETTINGS_SECTIONS = [
   // unreachable-tab lesson applied at birth).
   { id: "vision", label: "Image Analysis", icon: ScanEye },
   { id: "advanced", label: "Advanced", icon: SlidersHorizontal },
+  // ROUND-87 (R87, owner directive): the About section — version, update
+  // check, and the application-wide reset. Same id as SettingsPage TABS
+  // so the ?tab=about deep link lines up.
+  { id: "about", label: "About", icon: Info },
 ] as const;
 
 export function Sidebar() {
@@ -652,7 +657,12 @@ function MinimizedRail({
 
       {/* PROJECT TILES — click opens the project's chat; the tile is the
           project's own gradient mark (ProjectTile), so color identity
-          survives minimization; running projects get the live dot. */}
+          survives minimization; running projects get the live dot.
+          R87-A1 (owner: "if I click on any one of the projects, then the
+          left sidebar should apparently expand fully"): the click EXPANDS
+          the sidebar first (the same onExpand the rail's top restore button
+          uses), then navigates — a rail tile is a shortcut INTO the project
+          world, and the projects list lives in the full panel. */}
       <div className="flex flex-col items-center gap-1.5 py-0.5" data-testid="rail-projects">
         {projects.slice(0, 10).map((project) => {
           const active = activeProjectId === project.id;
@@ -660,7 +670,10 @@ function MinimizedRail({
           return (
             <button
               key={project.id}
-              onClick={() => navigate(`/project/${project.id}/chat`)}
+              onClick={() => {
+                onExpand();
+                navigate(`/project/${project.id}/chat`);
+              }}
               aria-label={`Open ${project.name}`}
               title={project.name}
               aria-current={active ? "page" : undefined}

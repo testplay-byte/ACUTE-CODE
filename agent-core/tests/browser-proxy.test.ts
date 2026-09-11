@@ -535,7 +535,7 @@ describe("browser session tickets", () => {
     expect(firstBody.ticket).toMatch(/^[a-f0-9]{48}$/);
     expect(firstBody.expiresAt).toBeGreaterThan(Date.now());
     expect(firstBody.history.entries).toEqual([]);
-    expect(firstBody.viewport.width).toBe(1280);
+    expect(firstBody.viewport.width).toBe(1440);
 
     const second = await inject({ method: "POST", url: "/api/v1/browser/session", payload: { sessionId: SESSION } });
     const secondTicket = (second.json() as { ticket: string }).ticket;
@@ -915,7 +915,7 @@ describe("POST /browser/navigate + GET /browser/history", () => {
 describe("GET/PUT /browser/viewport", () => {
   it("returns defaults for unknown sessions and validates bounds/preset/zoom", async () => {
     const initial = (await inject({ method: "GET", url: `/api/v1/browser/viewport?sessionId=${SESSION}` })).json() as { viewport: { width: number; height: number; preset: string; zoom: number; rotate: boolean } };
-    expect(initial.viewport).toEqual({ width: 1280, height: 800, preset: "laptop", zoom: 1, rotate: false });
+    expect(initial.viewport).toEqual({ width: 1440, height: 900, preset: "desktop", zoom: 1, rotate: false });
 
     expect((await inject({ method: "PUT", url: "/api/v1/browser/viewport", payload: { sessionId: SESSION, width: 150 } })).statusCode).toBe(400);
     expect((await inject({ method: "PUT", url: "/api/v1/browser/viewport", payload: { sessionId: SESSION, width: 5000 } })).statusCode).toBe(400);
@@ -937,6 +937,6 @@ describe("GET/PUT /browser/viewport", () => {
 
     // Sessions are isolated.
     const other = (await inject({ method: "GET", url: "/api/v1/browser/viewport?sessionId=tab-two" })).json() as { viewport: { width: number } };
-    expect(other.viewport.width).toBe(1280);
+    expect(other.viewport.width).toBe(1440);
   });
 });

@@ -1,9 +1,31 @@
-<!-- last-reviewed: 2026-09-10 round-86 -->
+<!-- last-reviewed: 2026-09-11 round-87 -->
 # MODULARITY ASSESSMENT — the structure audit for the extension-based vision
 
-**Status:** reference · **Established:** round-80 (docs-only analysis round, owner-directed) · **Updated:** round-85 (the post-R84 re-assessment) · **Advanced:** round-86 (the R85 claims re-verified + the SSE domain extracted) · **Audience:** the owner deciding the R87+ direction; any agent planning structural work
+**Status:** reference · **Established:** round-80 (docs-only analysis round, owner-directed) · **Updated:** round-85 (the post-R84 re-assessment) · **Advanced:** round-86 (the R85 claims re-verified + the SSE domain extracted) · **Advanced:** round-87 (the UX + capability round — feature work, not structural; the boundary effects recorded below) · **Audience:** the owner deciding the R88+ direction; any agent planning structural work
 **Method (R86):** three parallel verification sweeps re-checking every R85 claim with file:line evidence (backend 7/8 exact · frontend ~95% with four numbers corrected · docs-truth) + the final-phase SSE route extraction shipped behavior-identical with a byte-identical round-trip verifier. Full evidence + method: [round-86](../ui-iterations/round-86.md). Companion rules doc:
 [MODULE-BOUNDARIES](../runbooks/MODULE-BOUNDARIES.md).
+
+## R87 progress (the UX + capability round, 2026-09-11 — boundary effects)
+
+**Verdict in one paragraph:** R87 was the owner's FEATURE round, not a
+modularity round — Wave 2-b/3 are untouched and remain the queue. But four
+changes touch the structure's edges and are recorded here for the next
+planner: (1) **two NEW route modules joined `routes/`** on the R84 pattern —
+`routes/system.ts` (POST /system/reset: the turn-abort + keyring-clear +
+wipe/reseed/VACUUM/purge domain) and `routes/questions.ts` (the ask_user
+resolve route) — the routes/ tree is now 12 R84 domain modules + sse.ts +
+system.ts + questions.ts = **15 domain modules + context.ts + helpers.ts**;
+server.ts hosts the registrations, unchanged in shape (register calls at
+the original positions). (2) **`agent-question.ts` joins the
+browser-checkpoint.ts lineage** — the second in-repo instance of the
+pending-registry + SSE-frame-pair + REST-resolve interactive pattern; a
+third instance would justify extracting the shared harness (a small,
+behavior-identical Wave-2b-adjacent candidate). (3) **TOOL_NAMES is now
+27** (ask_user; migration 0033 repairs existing allowlists; the
+TOOL_CATALOG mirror + drift test updated in lockstep). (4) The
+`ModelConfigDialog`/`AddModelsDialog` pair now shares the add-mode prefill
+(`ModelAddPrefill`) — the first dialogs/ module seam in the settings tree
+(a future decomposition candidate, noted for Wave 3).
 
 ## R86 progress (the verification + SSE-extraction round, 2026-09-10)
 

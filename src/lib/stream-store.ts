@@ -1498,6 +1498,67 @@ function handleStreamEvent(
     return;
   }
 
+  // ── ROUND-87 (R87): the ask_user question cards ──────────────────────────
+  // Same working-entry pattern as the screenshot sideband: the open frame
+  // appends a pending question entry (option pills + custom input render
+  // inline); the resolved frame patches it in place (answered/timeout/
+  // cancelled). The persisted events fold the same shape on reload.
+  if (event.type === "agent-question") {
+    patchSession(sessionId, {
+      liveTurn: {
+        ...liveTurn,
+        working: [
+          ...liveTurn.working,
+          {
+            type: "question",
+            questionId: event.questionId,
+            questions: event.questions,
+            status: "pending",
+            ts: new Date().toISOString(),
+          },
+        ],
+      },
+    });
+    return;
+  }
+  if (event.type === "agent-question.resolved") {
+    const working = liveTurn.working.map((entry) =>
+      entry.type === "question" && entry.questionId === event.questionId
+        ? {
+            ...entry,
+            status: event.resolution,
+            ...(event.resolution === "answered" && event.answers !== undefined
+              ? { answers: event.answers }
+              : {}),
+            ...(event.resolution === "answered" && event.sources !== undefined
+              ? { sources: event.sources }
+              : {}),
+          }
+        : entry,
+    );
+    patchSession(sessionId, { liveTurn: { ...liveTurn, working } });
+    return;
+  }
+
+  // ── ROUND-87 (R87): the todo-list card — UPSERT the live entry (one card
+  // per turn holding the latest snapshot; first write creates it at its
+  // position, later writes only refresh its items). Mirrors the fold's
+  // todo.update handling exactly.
+  if (event.type === "todo-updated") {
+    const existing = liveTurn.working.findIndex((entry) => entry.type === "todo");
+    const next =
+      existing === -1
+        ? [
+            ...liveTurn.working,
+            { type: "todo" as const, items: event.todos, ts: new Date().toISOString() },
+          ]
+        : liveTurn.working.map((entry, index) =>
+            index === existing ? { ...entry, items: event.todos, ts: new Date().toISOString() } : entry,
+          );
+    patchSession(sessionId, { liveTurn: { ...liveTurn, working: next } });
+    return;
+  }
+
   // ── ROUND-66 (R66, C1): the debug analyst's live stream ──────────────────
   // Frames arrive AFTER the turn's final text (the analyst runs post-turn,
   // BEFORE the done frame) — the liveTurn is still open, so the dedicated

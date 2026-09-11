@@ -2434,3 +2434,19 @@ Work Log:
 Stage Summary:
 - CI post-script (the honest record): the docs-only close-out push (4ff12b5) FAILED its first CI run (34517577787) on ONE flaky timeout — r52-supervision.test.ts's background-launch test hit the 15s cap plus a vitest worker RPC timeout ("onTaskUpdate") on an overloaded windows runner (the suite took 540s there vs 172s local); the SAME tests had passed on the code push (34515808594) minutes earlier, the failing commit touched zero code paths (one JSON field + one markdown table), the test passed 14/14 locally in 21s, and the very next push's run (34518629684, a superset of the same content) was green — the re-run of 34517577787 then completed SUCCESS. Recorded as an infra flake, not a code failure; no test changes made (lesson #83's rule: never weaken a guard for a runner slowness class).
 - R86 COMPLETE: v0.84.0 — the SSE route (the hardest remaining route, the final-phase domain of the R84 split) lives in routes/sse.ts, verbatim, test-guarded, live-smoke-verified; server.ts is 1,913 lines; the split is now 72/131 with the remainder purely mechanical (51 routes). Every R85 claim re-verified (backend exact; four frontend numbers corrected; two new drift finds). Ops delivered: only-main branch state, the v0.83.0 release actually published, the DASHBOARD plan section current. Wave 2-b (the turn-loop harness) is now the clear #1 structural risk; the R87 scoping input: Wave 2-b → the 51-route finish → Wave 3.
+
+---
+Task ID: R87
+Agent: orchestrator (Z.ai Code) + sub-agent R87-A1 (chat/shell layout)
+Task: R87 — the UX + capability round (the owner's improvement list)
+
+Work Log:
+- Six parallel research sweeps mapped every touched surface (the map: agent-ctx/research/r87-implementation-map.md); baseline suites green before any change
+- Backend: migrations 0032 (model IO capabilities) + 0033 (ask_user allowlist); routes/system.ts POST /system/reset; routes/questions.ts resolve; ProviderKeyring.clear(); the Tauri purge_provider_keys command; agent-question.ts + the ask_user plugin; read_dom x/y; the screenshot full-display fallback removed; todo_write emits todo-updated; PLAN prompt + browser-use skill updated
+- Launcher: credentials.txt removed entirely (read_credentials/ensure_subagent_keys/distribute_key/_desktop_seed_keys deleted; resolve_github_pat: env var → saved .acute/github.pat → first-run prompt; EOF-hardened; README + plan panels + status mode updated; example file deleted)
+- Frontend: AboutTab (version + update check + typed-confirmation reset with the Tauri purge + localStorage/queryClient clear + reload); Models & Providers redesigned (NVIDIA fix, bordered cards, capability chips, configure-before-add AddModelsDialog, chip-based ModelConfigDialog with add mode, the animated 5s self-dismissing test button); browser embedding (1440×900 default both sides, keep-alive panels with the hidden prop + bounds-sync pause + popover pause hint); QuestionCard + TodoCard + their stream-store handlers + session-event folds
+- Sub-agent R87-A1: adaptive scrollbars (clamp), chat min 240/160 + wide padding, the composer's graduated shrink (model name first), the selector trajectory gating + frosted-glass backdrop, the sidebar rail expand-on-click — with tests
+- Verification: frontend 157/2,839 GREEN; agent-core 94/1,877 GREEN; eslint + tsc ×2 clean; build SUCCESS; e2e 12/12; license audit 134 CLEAN; live boot smoke GREEN; launcher status smoke GREEN
+
+Stage Summary:
+- R87 delivered as v0.85.0: the About/reset, credentials.txt removal, ask_user + the visible todo list, the models/providers redesign with configure-before-add, the embedded browser (keep-alive, 1440×900, positions, panel-only screenshots), the chat/shell layout batch

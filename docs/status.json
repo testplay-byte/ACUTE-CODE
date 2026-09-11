@@ -3,7 +3,7 @@
   "product": {
     "name": "Acute",
     "tagline": "Local-first multi-agent engineering workbench",
-    "version": "0.84.0",
+    "version": "0.85.0",
     "availability": "Private build — not yet distributed",
     "chips": [
       "Windows desktop",
@@ -20,14 +20,14 @@
       "title": "Coding",
       "state": "usable",
       "progress": 89,
-      "summary": "Projects, 26 base tools (15 plugin files incl. the 30-tool computer-use family) + skills/MCP/plugins, streaming chat, multi-turn continuation, codebase indexing, grep search, demo viewer"
+      "summary": "Projects, 27 base tools (ask_user joined in R87) (15 plugin files incl. the 30-tool computer-use family) + skills/MCP/plugins, streaming chat, multi-turn continuation, codebase indexing, grep search, demo viewer"
     },
     {
       "id": "agentic",
       "title": "Agentic system",
       "state": "building",
-      "progress": 74,
-      "summary": "Multi-turn agentic continuation with the R70 agent brain (env grounding, AGENTS.md conventions, one five-phase loop, verification discipline) + the R71 discipline & reliability layer (engineering-discipline prompt section, edit-failure escalation, provider-error classification + overflow recovery) + the R72 adaptive capability layer (deterministic task→skill hints, 18→20 builtin skills, references/ depth, per-directory conventions) + the R73 task-modes posture layer (six builtin posture modules + .acute/agents/*.md customs with shadowing + tool narrowing, the switch_mode tool, the composer picker + /mode slash, sessions.active_mode, the mode Task signal line, the generalized system-reminder renderer) + the R79 addressable-delegation tier (delegate_task task_id/background/resume: background children with the immediate receipt + the per-turn BACKGROUND TASKS reminder, resume wait/collect/retry, migration 0028); multi-agent orchestration owner-gated; computer use (desktop observation+actuation, separate vision model, kill switch) owner-gated"
+      "progress": 77,
+      "summary": "Multi-turn agentic continuation with the R70 agent brain (env grounding, AGENTS.md conventions, one five-phase loop, verification discipline) + the R71 discipline & reliability layer (engineering-discipline prompt section, edit-failure escalation, provider-error classification + overflow recovery) + the R72 adaptive capability layer (deterministic task→skill hints, 18→20 builtin skills, references/ depth, per-directory conventions) + the R73 task-modes posture layer (six builtin posture modules + .acute/agents/*.md customs with shadowing + tool narrowing, the switch_mode tool, the composer picker + /mode slash, sessions.active_mode, the mode Task signal line, the generalized system-reminder renderer) + the R79 addressable-delegation tier (delegate_task task_id/background/resume: background children with the immediate receipt + the per-turn BACKGROUND TASKS reminder, resume wait/collect/retry, migration 0028); multi-agent orchestration owner-gated; computer use (desktop observation+actuation, separate vision model, kill switch) owner-gated + the R87 interactive tier (ask_user — the mid-task question card with options + custom answers, batched, 10-min timeout; the todo list rendered live in chat via todo-updated frames; the browser agent's read_dom per-element positions + panel-only screenshots)"
     },
     {
       "id": "automation",
@@ -244,6 +244,12 @@
       "title": "R86 — the verification + SSE-extraction round",
       "date": "2026-09-10",
       "summary": "The owner's task-list session: (1) the R85 claims re-verified with three parallel sweeps — backend exact (52-route inventory, 22 SQL leaks, the 2-cycle, the 378-line duplication, ToolDeps missing runId), four frontend numbers corrected (api.ts 85 importers not 72; ModelsProvidersTab 60 hooks/3 dialogs; 14 stores; StreamTurnEvent 37 members), the dead sessions/ dir caught receiving an R83 edit, three narrow frontend seams the 'zero' claim missed. (2) THE SSE ROUTE EXTRACTED — routes/sse.ts (the final-phase domain of the R84 split): the 476-line streamed turn route moved verbatim (byte-identical round-trip verifier), server.ts 2,439→1,913, eleven single-consumer imports pruned, registration order preserved; full pipeline green (2,825 tests byte-identical to baseline, e2e 12/12 on the built dist, live boot smoke). v0.84.0. (3) Ops: six stale branches deleted (only main remains — the r61 branch's superseded cua-helper line documented with recoverable tips), the stuck v0.83.0 DRAFT release PUBLISHED (both assets verified), the DASHBOARD's stale plan section truth-synced."
+    },
+    {
+      "id": 47,
+      "title": "R87 — the UX + capability round (About/reset, configure-before-add, ask_user, the embedded browser)",
+      "date": "2026-09-11",
+      "summary": "The owner's improvement list, delivered as v0.85.0: (1) Settings → About — the version card with the update check + the application-wide RESET (POST /system/reset: live-turn abort, keyring clear, terminal dispose, table wipe + factory reseed, VACUUM, ~/.acute purge; the Tauri purge_provider_keys command clears Credential Manager first). (2) credentials.txt REMOVED from the launcher (the GitHub token is asked once + saved at .acute/github.pat or ACUTE_GITHUB_PAT; provider keys are saved in-app only). (3) ask_user end-to-end — the mid-task question card (option pills + custom answer, batched questions, 10-min timeout) with agent-question.requested/resolved session events + the resolve route; migration 0033. (4) The todo list VISIBLE in chat (TodoCard in the working stream, live via todo-updated frames). (5) Models & Providers redesigned: bordered model cards + capability chips (migration 0032: PDF input + text/image/video/audio outputs + sizeLabel; reasoning + tool use REMOVED from the dialog — the app detects them), configure-before-add (the picker opens the config dialog instead of adding directly), the animated self-dismissing test button, the NVIDIA phantom-add fixed (hasKey-aware existingIds). (6) The embedded browser: default viewport 1440×900, KEEP-ALIVE browser panels (no reload/glitch on tab switch, survives the new-tab menu with a deliberate pause hint), read_dom now returns per-element x/y/w/h positions, screenshots are panel-only (the full-display fallback is GONE). (7) The chat/shell batch: viewport-adaptive scrollbars, the chat min width halved + wide padding, the composer's graduated shrink (model name first), the provider-selector trajectory gating + frosted-glass backdrop, the sidebar rail expanding on project click."
     }
   ],
   "quality": {
@@ -280,8 +286,8 @@
   ],
   "plan": {
     "current": {
-      "title": "R86 — the verification + SSE-extraction round",
-      "detail": "The owner's task-list session, delivered as v0.84.0: (1) the R85 structure claims re-verified with three parallel sweeps — every backend number exact (the 52-route inventory, 22 SQL leaks, the benign registry↔mcp 2-cycle, the 378-line sync/streamed duplication, ToolDeps missing runId), four frontend numbers corrected (api.ts 85 importing files not 72; ModelsProvidersTab 60 hook call-sites / 3 dialogs not 4; 14 Zustand stores; StreamTurnEvent 37 member types), the dead sessions/ dir caught receiving an R83 maintenance edit, and three narrow frontend seams the 'zero' claim missed (error-bus, browser-bridge handler registry, right-sidebar-events). (2) THE SSE ROUTE EXTRACTED — routes/sse.ts, the final-phase domain of the R84 split: the 476-line streamed turn route (R42 client-gone semantics, the R78 queue-continuation loop, the R66-2-c debug analyst, the R43+R80 crash recovery) moved verbatim with a byte-identical round-trip verifier; server.ts 2,439→1,913; eleven single-consumer imports pruned; registration order preserved; the full pipeline green (2,825 tests byte-identical to the pre-move baseline, e2e 12/12 against the built dist, live boot smoke proving the route answers through hijack→writeHead→SSE-frame). (3) Ops: six stale branches deleted (backup/pre-r79, pre-r80, pre-r81-session, work/r82-models-providers, work/r84-modularity — all fully merged — and work/round-61-computer-use, the superseded cua-helper Rust line with tips recorded in round-86.md); the v0.83.0 release PUBLISHED from its never-published draft state (both assets verified — the R74 lesson's failure class); the DASHBOARD's plan section (two rounds stale, live on the public Pages) truth-synced."
+      "title": "R87 — the UX + capability round",
+      "detail": "The owner's improvement list: the About section + the full application reset; credentials.txt removed from the launcher; ask_user (the mid-task question card with options + custom answers) + the todo list visible in chat; the Models & Providers redesign (configure-before-add, the input/output capability chips, the animated self-dismissing test button, the NVIDIA phantom-add fix); the embedded browser (1440×900 default, keep-alive tabs, read_dom positions, panel-only screenshots); the chat/shell layout batch (adaptive scrollbars, halved chat min width, graduated composer shrink, the selector hover-path fix + frosted glass, the sidebar expand-on-click). v0.85.0."
     },
     "upcoming": [
       {
@@ -292,12 +298,12 @@
       {
         "phase": "Standing R81-queue items",
         "status": "queued",
-        "note": "External plugin ctx enrichment (cline's appendContext seam), the lessons-ledger affordance as the reminder injector's third consumer, ratings-driven prompt tuning, and the standing items (edit-linting, installer code-signing, the Files-tab polish, agent web-app-testing tools)."
+        "note": "See status at R81: the edit-linting gate, installer code-signing, the Files-tab polish, agent web-app-testing tools, external plugin ctx enrichment, ratings-driven prompt tuning."
       },
       {
-        "phase": "DeepSeek-harness adaptation candidates (the round-2 study)",
-        "status": "queued",
-        "note": "agent-ctx/research/deepseek-harness-round2.md's top-3: C2 per-tool declared timeoutMs with structured TOOL_TIMEOUT results; C3 mode/permission policy as folded session events + cache-stable narration; C4 tool-result spill."
+        "phase": "DeepSeek round-2 candidates",
+        "status": "researched",
+        "note": "C2 per-tool timeoutMs/TOOL_TIMEOUT is the top pick (S-M, queued behind Wave 2-b/3); C1 compaction partially shipped (R83); C3/C4/C5 follow."
       }
     ],
     "principles": [
@@ -306,5 +312,6 @@
       "Quality over speed — every round verified before push"
     ]
   },
-  "round": 86
+  "round": 87,
+  "ci": "PENDING (R87 push — this entry is synced at close-out per the convention)"
 }

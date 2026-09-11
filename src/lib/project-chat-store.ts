@@ -14,10 +14,13 @@ import { persist } from "zustand/middleware";
  * via partialize).
  */
 
-/** Panel resize bounds, mirrored from the demo's ProjectChatView. */
+/** Panel resize bounds, mirrored from the demo's ProjectChatView.
+ * R87-A1: MIN halved (320 → 160) in step with ChatFocusLayout's chat floor
+ * halving — the 3-panel layout's chat column can shrink twice as far before
+ * its resize clamp stops it. */
 export const MIN_SIDEBAR_WIDTH = 180;
 export const MAX_SIDEBAR_WIDTH = 400;
-export const MIN_CHAT_WIDTH = 320;
+export const MIN_CHAT_WIDTH = 160;
 export const MAX_CHAT_WIDTH = 800;
 
 /** Freeform (experimental) layout panel descriptor — demo port. */

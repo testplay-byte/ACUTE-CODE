@@ -103,6 +103,7 @@ import { useStreamStore } from "../../../lib/stream-store";
 import { renderWithProviders, resetTestState } from "../../../test-utils";
 import {
   computeFlyoutGeometry,
+  flyoutRetargetIntent,
   FLYOUT_MARGIN,
   type PlainRect,
 } from "./composer-utils";
@@ -152,6 +153,12 @@ function modelConfigRow(
     supportsTools: true,
     supportsAudio: null,
     supportsVideo: null,
+    supportsPdf: null,
+    supportsTextOutput: true,
+    supportsImageOutput: null,
+    supportsVideoOutput: null,
+    supportsAudioOutput: null,
+    sizeLabel: null,
     hidden: false,
     sortOrder: 0,
     createdAt: "2026-08-30T09:00:00Z",
@@ -540,17 +547,39 @@ describe("Composer: toolbar inside the box (owner spec B)", () => {
     ).toBeTruthy();
   });
 
-  it("ROUND-77 (R77): the model pill leads with a Cpu icon — the icon survives the 560px label hide", async () => {
+  it("ROUND-77 (R77) + R87-A1: the model pill leads with a Cpu icon and its label SHRINKS in graduated tiers instead of hiding", async () => {
     await renderEmptyPanel();
     const modelBtn = screen.getByRole("button", { name: "Choose model" }) as HTMLElement;
     const icon = modelBtn.querySelector("[data-model-icon]") as HTMLElement;
     expect(icon).toBeTruthy();
     expect(icon.tagName.toLowerCase()).toBe("svg");
-    // The label span keeps its @container hide rule; the icon does NOT
-    // carry it (icon-only pill below 560px).
+    // R87-A1: the label NEVER hides — it narrows first (240 → 170px below a
+    // 520px @container → 90px below 420), animated via max-width, so the
+    // model name stays identifiable while the other pills still show full
+    // labels. The icon carries no tier classes at any width.
     const label = modelBtn.querySelector("[data-model-label]") as HTMLElement;
-    expect(label.className).toContain("@max-[560px]:hidden");
-    expect(icon.getAttribute("class") ?? "").not.toContain("@max-[560px]:hidden");
+    expect(label.className).toContain("max-w-[240px]");
+    expect(label.className).toContain("@max-[520px]:max-w-[170px]");
+    expect(label.className).toContain("@max-[420px]:max-w-[90px]");
+    expect(label.className).toContain("transition-[max-width]");
+    expect(label.className).toContain("truncate");
+    expect(label.className).not.toContain(":hidden");
+    expect(icon.getAttribute("class") ?? "").not.toContain("@max-");
+    // The OTHER pills fold in staggered tiers around it: the MODE label
+    // (widest text) first at 560px, THINKING one step later at 500px — both
+    // COLLAPSE (animated max-width + fade), never hard-hide.
+    const modeLabel = document.querySelector("[data-mode-label]") as HTMLElement;
+    expect(modeLabel.className).toContain("@max-[560px]:max-w-0");
+    expect(modeLabel.className).toContain("@max-[560px]:opacity-0");
+    // The collapsed tier shuts the span's gap slot too — the icon-only
+    // pill keeps its normal icon↔chevron spacing, no dead 12px hole.
+    expect(modeLabel.className).toContain("@max-[560px]:-mr-1.5");
+    expect(modeLabel.className).not.toContain(":hidden");
+    const thinkingLabel = document.querySelector("[data-thinking-label]") as HTMLElement;
+    expect(thinkingLabel.className).toContain("@max-[500px]:max-w-0");
+    expect(thinkingLabel.className).toContain("@max-[500px]:opacity-0");
+    expect(thinkingLabel.className).toContain("@max-[500px]:-mr-1.5");
+    expect(thinkingLabel.className).not.toContain(":hidden");
   });
 });
 
@@ -1414,6 +1443,35 @@ describe("Composer: model selector (owner spec F)", () => {
     expect(flyoutEl()).toBeNull();
     vi.useRealTimers();
   });
+
+  // R87-A1: the frosted-glass backdrop — renders with the popover, sits
+  // BELOW it (z-40 vs z-50), and clicking it dismisses the popover.
+  it("R87-A1: opening the popover renders the frosted backdrop; clicking it closes (owner spec F)", async () => {
+    await renderPanelWithConversation();
+    expect(await screen.findByText("first question", {}, { timeout: 5000 })).toBeTruthy();
+
+    const backdrop = (): HTMLElement | null => document.querySelector("[data-model-backdrop]");
+    expect(backdrop()).toBeNull(); // closed → no scrim
+
+    fireEvent.click(screen.getByRole("button", { name: "Choose model" }));
+    const popover = await screen.findByRole("menu", { name: "Choose model" });
+    const scrim = backdrop();
+    expect(scrim).toBeTruthy();
+    // The scrim sits BELOW the popover (z-40 vs its z-50) and covers the
+    // viewport — fixed inset-0 with the blur + dim the owner asked for.
+    expect(scrim?.className).toContain("fixed");
+    expect(scrim?.className).toContain("inset-0");
+    expect(scrim?.className).toContain("z-40");
+    expect(scrim?.style.backdropFilter).toBe("blur(3px)");
+    // happy-dom normalizes the rgba() spacing.
+    expect(scrim?.style.background).toBe("rgba(0, 0, 0, 0.25)");
+    expect(popover.className).toContain("z-50");
+
+    // Clicking the backdrop dismisses the whole thing (popover + scrim).
+    fireEvent.click(scrim as HTMLElement);
+    await waitFor(() => expect(backdrop()).toBeNull());
+    expect(screen.queryByRole("menu", { name: "Choose model" })).toBeNull();
+  });
 });
 
 // ── F2. Model selector × models config (ROUND-58 R58-d → ROUND-64 R64-d) ───
@@ -2039,6 +2097,41 @@ describe("computeFlyoutGeometry (ROUND-51 R51-c) — pure unit tests", () => {
     // maxHeight = 76 → clamp(rowTop=50, 12, 100-12-76=12) = 12.
     const geo = computeFlyoutGeometry(row(50), popover(700, 940), { width: 1280, height: 100 }, 280);
     expect(geo.viewportTop).toBe(FLYOUT_MARGIN);
+  });
+});
+
+// ── R87-A1: flyoutRetargetIntent — pure trajectory math ─────────────────────
+describe("flyoutRetargetIntent (R87-A1) — pure unit tests", () => {
+  // A flyout sitting to the RIGHT of the provider rows (the usual side).
+  const rightFlyout: PlainRect = { top: 100, bottom: 380, left: 960, right: 1240 };
+  // …and one to the LEFT (the narrow-viewport side).
+  const leftFlyout: PlainRect = { top: 100, bottom: 380, left: 20, right: 300 };
+
+  it("no movement sample (keyboard/touch/jsdom), stationary-ish pointer, or unknown flyout rect → instant retarget (old behavior)", () => {
+    expect(flyoutRetargetIntent(null, 500, rightFlyout)).toBe("retarget");
+    expect(flyoutRetargetIntent({ dx: 1, dy: 1 }, 500, rightFlyout)).toBe("retarget"); // < 3px jitter
+    expect(flyoutRetargetIntent({ dx: 40, dy: 0 }, 500, null)).toBe("retarget"); // nothing to aim at yet
+  });
+
+  it("mostly-horizontal movement toward the flyout's x-range → CORRIDOR (never re-target mid-transit)", () => {
+    // Pointer left of a right-side flyout, moving right (and even a bit down
+    // — diagonals toward a vertically-clamped flyout).
+    expect(flyoutRetargetIntent({ dx: 24, dy: 8 }, 400, rightFlyout)).toBe("corridor");
+    expect(flyoutRetargetIntent({ dx: 15, dy: 12 }, 400, rightFlyout)).toBe("corridor");
+    // Pointer right of a left-side flyout, moving left.
+    expect(flyoutRetargetIntent({ dx: -24, dy: 8 }, 700, leftFlyout)).toBe("corridor");
+  });
+
+  it("mostly-vertical movement or heading AWAY from the flyout → SCAN (hold, promote after the dwell)", () => {
+    // Scanning down the provider list (the rows are the only thing under
+    // the pointer) — even with a horizontal drift.
+    expect(flyoutRetargetIntent({ dx: 4, dy: 28 }, 400, rightFlyout)).toBe("scan");
+    expect(flyoutRetargetIntent({ dx: 0, dy: -28 }, 400, rightFlyout)).toBe("scan");
+    // Horizontal but AWAY from the flyout's x-range.
+    expect(flyoutRetargetIntent({ dx: -30, dy: 0 }, 400, rightFlyout)).toBe("scan");
+    // Moving right while ALREADY inside the flyout's x-range (beside it,
+    // not toward it).
+    expect(flyoutRetargetIntent({ dx: 30, dy: 0 }, 1000, rightFlyout)).toBe("scan");
   });
 });
 

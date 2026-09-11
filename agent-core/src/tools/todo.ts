@@ -5,7 +5,7 @@
  * snapshot from the event log.
  */
 import { appendSessionEvent } from "../storage/sessions.js";
-import type Database from "better-sqlite3";
+import type { SqliteDatabase } from "../storage/db.js";
 
 export interface TodoItem {
   content: string;
@@ -13,9 +13,13 @@ export interface TodoItem {
 }
 
 export interface TodoDeps {
-  db: Database.Database;
+  db: SqliteDatabase;
   sessionId: string;
   agentId: string;
+  /** ROUND-87 (R87): the turn's SSE emitter — when present, every snapshot
+   * also rides the live stream as a `todo-updated` frame so the chat's todo
+   * card updates in real time (not only after the turn-end refetch). */
+  emit?: (event: unknown) => void;
 }
 
 /**
@@ -53,6 +57,16 @@ export function writeTodo(
     agentId: deps.agentId,
     payload: { todos: valid },
   });
+
+  // ROUND-87 (R87): the live frame — the chat's todo card updates mid-turn
+  // (best-effort; the persisted event above remains the source of truth).
+  if (typeof deps.emit === "function") {
+    try {
+      deps.emit({ type: "todo-updated", sessionId: deps.sessionId, todos: valid });
+    } catch {
+      // The stream may be gone — persistence above already won.
+    }
+  }
 
   const done = valid.filter((t) => t.status === "completed").length;
   return {

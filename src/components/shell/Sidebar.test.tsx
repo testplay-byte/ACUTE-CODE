@@ -1,6 +1,6 @@
 // @vitest-environment happy-dom
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { cleanup, fireEvent, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, screen, waitFor } from "@testing-library/react";
 import { Route, Routes } from "react-router";
 import { deriveSessionRowState, Sidebar } from "./Sidebar";
 import { ProjectView } from "../projects/ProjectView";
@@ -159,7 +159,7 @@ describe("Sidebar projects section (fixture ProjectsBackend)", () => {
     expect(useProjectChatStore.getState().appSidebarMinimized).toBe(false);
   });
 
-  it("R62: the minimized rail navigates — project tiles open that project's chat, gear opens settings", async () => {
+  it("R62 + R87-A1: the minimized rail navigates — a project tile EXPANDS the sidebar first, then opens its chat; gear opens settings", async () => {
     // Seed a minimized store BEFORE mount (the persisted-restart path).
     useProjectChatStore.setState({ appSidebarMinimized: true });
     renderWithProviders(
@@ -178,7 +178,14 @@ describe("Sidebar projects section (fixture ProjectsBackend)", () => {
     const tile = await screen.findByRole("button", { name: /^open marketing-site$/i, hidden: true });
     fireEvent.click(tile);
     expect(await screen.findByText("chat stub")).toBeTruthy();
-    // Reset for the next assertion path: gear → settings route.
+    // R87-A1 (owner: "if I click on any one of the projects, then the left
+    // sidebar should apparently expand fully"): the tile click flipped the
+    // persisted minimize flag — the rail is gone, the full panel is back.
+    expect(useProjectChatStore.getState().appSidebarMinimized).toBe(false);
+    expect(screen.queryByTestId("sidebar-rail")).toBeNull();
+    // Reset for the next assertion path: re-minimize, then gear → settings.
+    act(() => useProjectChatStore.setState({ appSidebarMinimized: true }));
+    expect(await screen.findByTestId("sidebar-rail")).toBeTruthy();
     fireEvent.click(screen.getByTestId("rail-settings"));
     expect(await screen.findByText("settings stub")).toBeTruthy();
   });

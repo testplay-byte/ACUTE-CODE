@@ -143,6 +143,9 @@ describe("modeAllowList / sessionToolAllowList (ROUND-50 R50-c1 / ROUND-81)", ()
         // its task-signal line) is advertised in plan mode, so the switch
         // must not be dark there either.
         "switch_mode",
+        // ROUND-87 (R87): asking the owner questions is pure clarification —
+        // the planning tool par excellence, kept in the read-only tier.
+        "ask_user",
         // ROUND-81: the retired review/explore READ_ONLY_EXTRAS folded in —
         // the unified PLAN mode is the sole read-only tier, so it carries
         // the full read-only vocabulary (git inspectors, analyze_image,

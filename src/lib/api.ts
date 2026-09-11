@@ -89,6 +89,10 @@ export const TOOL_CATALOG = [
   // project .acute/agents/*.md customs). Always registered like read_skill
   // (agent-core tools/plugins/modes.ts), so it is allowlist vocabulary.
   "switch_mode",
+  // ROUND-87 (R87): the mid-task interactive question tool — the chat
+  // renders a question card (option pills + custom answer) and the turn
+  // waits for the owner. A global session capability like todo_write.
+  "ask_user",
 ] as const;
 
 export const PROVIDER_IDS = ["openrouter", "openai", "anthropic", "google"] as const;
@@ -1269,6 +1273,27 @@ export type WorkingEntry =
       /** The tool that captured it (screenshot / zoom / get_app_state / browser_control). */
       tool: string;
       ts: string;
+    }
+  /** ROUND-87 (R87): the ask_user tool's interactive question card — the
+   * live entry pushed at frame arrival (agent-question SSE) and the folded
+   * entry built from the persisted agent-question.requested session event
+   * (the answered state patches in from agent-question.resolved). */
+  | {
+      type: "question";
+      questionId: string;
+      questions: AgentQuestionPrompt[];
+      status: "pending" | "answered" | "timeout" | "cancelled";
+      answers?: string[];
+      sources?: Array<"option" | "custom">;
+      ts: string;
+    }
+  /** ROUND-87 (R87): the turn's todo-list card — one entry per turn holding
+   * the LATEST snapshot (the live `todo-updated` frame and the folded
+   * todo.update events both upsert it, keeping its position). */
+  | {
+      type: "todo";
+      items: TodoSnapshot["todos"];
+      ts: string;
     };
 
 /** tool.use payload fields as agent-core's runtime writes them. */
@@ -1460,6 +1485,9 @@ export function toProjectChatItems(events: SessionEvent[]): ProjectChatItem[] {
 
     const working: WorkingEntry[] = [];
     const approvalIndex = new Map<string, number>();
+    // ROUND-87 (R87): the ask_user cards' positions (the resolved event
+    // patches the entry the requested event created).
+    const questionIndex = new Map<string, number>();
     let usage: { inputTokens: number; outputTokens: number } | undefined;
     let ms: number | undefined;
     let model: string | undefined;
@@ -1556,6 +1584,81 @@ export function toProjectChatItems(events: SessionEvent[]): ProjectChatItem[] {
               ...(remember !== undefined ? { remember } : {}),
               ts: event.ts,
             });
+          }
+        }
+        continue;
+      }
+
+      // ROUND-87 (R87): the ask_user cards fold from their persisted events
+      // (same shape as the approvals above).
+      if (event.type === "agent-question.requested" || event.type === "agent-question.resolved") {
+        const payload =
+          event.payload && typeof event.payload === "object"
+            ? (event.payload as Record<string, unknown>)
+            : {};
+        const questionId = typeof payload.questionId === "string" ? payload.questionId : "";
+        if (event.type === "agent-question.requested") {
+          const questions = Array.isArray(payload.questions)
+            ? (payload.questions as AgentQuestionPrompt[])
+            : [];
+          questionIndex.set(questionId, working.length);
+          working.push({ type: "question", questionId, questions, status: "pending", ts: event.ts });
+        } else {
+          const status =
+            payload.resolution === "answered"
+              ? "answered"
+              : payload.resolution === "cancelled"
+                ? "cancelled"
+                : "timeout";
+          const answers = Array.isArray(payload.answers) ? (payload.answers as string[]) : undefined;
+          const sources = Array.isArray(payload.sources)
+            ? (payload.sources as Array<"option" | "custom">)
+            : undefined;
+          const idx = questionIndex.get(questionId);
+          if (idx !== undefined && working[idx]?.type === "question") {
+            working[idx] = {
+              ...(working[idx] as Extract<WorkingEntry, { type: "question" }>),
+              status,
+              ...(answers !== undefined ? { answers } : {}),
+              ...(sources !== undefined ? { sources } : {}),
+            };
+          } else {
+            working.push({
+              type: "question",
+              questionId,
+              questions: [],
+              status,
+              ...(answers !== undefined ? { answers } : {}),
+              ...(sources !== undefined ? { sources } : {}),
+              ts: event.ts,
+            });
+          }
+        }
+        continue;
+      }
+
+      // ROUND-87 (R87): the turn's todo card — ONE entry per turn, upserted
+      // with the LATEST snapshot (position = the FIRST todo.update event).
+      if (event.type === "todo.update") {
+        const payload =
+          event.payload && typeof event.payload === "object"
+            ? (event.payload as Record<string, unknown>)
+            : null;
+        if (payload !== null && Array.isArray(payload.todos)) {
+          const items = payload.todos as TodoSnapshot["todos"];
+          // (findLastIndex needs es2023 — the tsconfig targets older lib;
+          // a manual reverse scan is the compatible form.)
+          let idx = -1;
+          for (let i = working.length - 1; i >= 0; i -= 1) {
+            if (working[i].type === "todo") {
+              idx = i;
+              break;
+            }
+          }
+          if (idx !== -1) {
+            working[idx] = { type: "todo", items, ts: event.ts };
+          } else {
+            working.push({ type: "todo", items, ts: event.ts });
           }
         }
         continue;
@@ -2743,6 +2846,17 @@ export interface ProviderModelConfig {
   supportsTools: boolean | null;
   supportsAudio: boolean | null;
   supportsVideo: boolean | null;
+  /** ROUND-87 (R87): the INPUT/OUTPUT capability columns — same tri-state
+   * contract. supportsPdf is the PDF-document INPUT (text is always on;
+   * images ride supportsVision, videos ride supportsVideo). The four
+   * *_output flags describe what the model PRODUCES. sizeLabel is a
+   * human-facing parameter-size string ("70B") — null = unspecified. */
+  supportsPdf: boolean | null;
+  supportsTextOutput: boolean | null;
+  supportsImageOutput: boolean | null;
+  supportsVideoOutput: boolean | null;
+  supportsAudioOutput: boolean | null;
+  sizeLabel: string | null;
   hidden: boolean;
   sortOrder: number;
   createdAt: string;
@@ -2781,6 +2895,15 @@ export interface ProviderModelConfigInput {
   supportsTools?: boolean | null;
   supportsAudio?: boolean | null;
   supportsVideo?: boolean | null;
+  /** ROUND-87 (R87): the input/output capability columns on add — same
+   * tri-state contract (absent lets the backend default: text output ON,
+   * the rest unknown). sizeLabel is a display string (null = unspecified). */
+  supportsPdf?: boolean | null;
+  supportsTextOutput?: boolean | null;
+  supportsImageOutput?: boolean | null;
+  supportsVideoOutput?: boolean | null;
+  supportsAudioOutput?: boolean | null;
+  sizeLabel?: string | null;
   hidden?: boolean;
 }
 
@@ -2814,6 +2937,14 @@ export interface ProviderModelConfigPatch {
   supportsTools?: boolean | null;
   supportsAudio?: boolean | null;
   supportsVideo?: boolean | null;
+  /** ROUND-87 (R87): the input/output capability columns on PATCH — same
+   * tri-state contract; sizeLabel null clears the label. */
+  supportsPdf?: boolean | null;
+  supportsTextOutput?: boolean | null;
+  supportsImageOutput?: boolean | null;
+  supportsVideoOutput?: boolean | null;
+  supportsAudioOutput?: boolean | null;
+  sizeLabel?: string | null;
   hidden?: boolean;
 }
 
@@ -3212,6 +3343,31 @@ export type StreamTurnEvent =
       checkpointId: string;
       resolution: "done" | "stop" | "timeout";
     }
+  /** ROUND-87 (R87): the ask_user tool opened an interactive question —
+   * the chat renders the question card(s) (option pills + custom input per
+   * question); the owner's answers POST to /agent-questions/:id/resolve,
+   * which resolves the tool's pending promise and settles the turn. */
+  | {
+      type: "agent-question";
+      sessionId: string;
+      questionId: string;
+      questions: AgentQuestionPrompt[];
+    }
+  /** ROUND-87 (R87): the ask settled — "answered" (the owner answered;
+   * answers/sources aligned per question), "timeout" (10 minutes),
+   * "cancelled" (the turn was stopped). The card collapses to its
+   * answered state. */
+  | {
+      type: "agent-question.resolved";
+      sessionId: string;
+      questionId: string;
+      resolution: "answered" | "timeout" | "cancelled";
+      answers?: string[];
+      sources?: Array<"option" | "custom">;
+    }
+  /** ROUND-87 (R87): the todo_write tool's live snapshot — one frame per
+   * write; the chat's todo card upserts in place (latest state). */
+  | { type: "todo-updated"; sessionId: string; todos: TodoSnapshot["todos"] }
   /** ROUND-66 (R66, C1): debug mode — the turn COMPLETED; the separate
    * context-free debug analyst is now starting. The chat swaps the
    * loading shimmer in under the turn's final answer. */
@@ -3798,6 +3954,48 @@ export async function resolveBrowserCheckpoint(
     method: "POST",
     json: { action },
   });
+}
+
+/* ── ROUND-87 (R87): the mid-task interactive agent question (ask_user) ── */
+
+/** One question the agent asks: option pills + an optional custom-text
+ * answer (allowCustom defaults true). Mirrors agent-question.ts's
+ * AgentQuestion. */
+export interface AgentQuestionPrompt {
+  question: string;
+  options?: string[];
+  allowCustom?: boolean;
+  placeholder?: string;
+}
+
+/** Answer a pending ask — one answer per question, in order. sources
+ * records option-pick vs custom-typed per answer ("option" | "custom"). */
+export async function resolveAgentQuestion(
+  questionId: string,
+  answers: string[],
+  sources?: Array<"option" | "custom">,
+): Promise<{ ok: boolean }> {
+  return request<{ ok: boolean }>(`/agent-questions/${encodeURIComponent(questionId)}/resolve`, {
+    method: "POST",
+    json: { answers, ...(sources !== undefined ? { sources } : {}) },
+  });
+}
+
+/* ── ROUND-87 (R87): the application-wide reset (POST /system/reset) ── */
+
+export interface SystemResetResult {
+  ok: boolean;
+  abortedTurns: number;
+  wipedTables: number;
+  purgedFiles: number;
+}
+
+/** Wipe EVERYTHING server-side: projects, sessions, agents, providers,
+ * models, memory, settings — then reseed the factory state. The webview
+ * clears its own localStorage + query cache after this resolves and
+ * reloads (the About tab's reset flow). */
+export async function resetApplication(): Promise<SystemResetResult> {
+  return request<SystemResetResult>("/system/reset", { method: "POST" });
 }
 
 /* ── ROUND-66 (R66, B3/B5): the DEDICATED image-analysis (vision) settings ── */

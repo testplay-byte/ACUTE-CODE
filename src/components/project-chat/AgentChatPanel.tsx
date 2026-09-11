@@ -82,6 +82,7 @@ import {
   patchSessionPermissions,
   queueSessionMessage,
   rateReply,
+  resolveAgentQuestion,
   toProjectChatItems,
 } from "../../lib/api";
 import { useConfigStore } from "../../lib/config-store";
@@ -131,8 +132,22 @@ import {
  * (messages AND composer share it, centered). The PANEL itself always fills
  * its column edge-to-edge (owner R40 + R43: no dead right side at any window
  * size); beyond this width the reading column just centers — same rule at
- * 1200px and 2560px, so wide windows never stretch lines nor hug content. */
-const CONTENT_COL_CLASS = "mx-auto w-full max-w-[1080px]";
+ * 1200px and 2560px, so wide windows never stretch lines nor hug content.
+ * R87-A1 (owner: at the max chat width there should be comfortable padding
+ * on the left and right sides): the column now carries GRADUATED horizontal
+ * padding that grows with the panel width (24 → 48 → 64px) INSTEAD of the
+ * old density-driven px-5/md:px-10 on the message wrapper — one constant,
+ * so the message list, the empty-state composer and the docked composer all
+ * stay pixel-aligned at every width (the old dock also offset the composer
+ * 10px inward of the messages; that inconsistency is gone). Density now
+ * drives the VERTICAL rhythm only. */
+const CONTENT_COL_CLASS = "mx-auto w-full max-w-[1080px] px-6 md:px-12 xl:px-16";
+
+/** R87-A1: the column WITHOUT the graduated horizontal padding — for NESTED
+ * slots that already sit inside the padded column (the empty-state
+ * composer), so the inset is applied exactly once while the cap/centering
+ * (and the “shares the reading column” layout contract) still hold. */
+const CONTENT_COL_PADLESS_CLASS = "mx-auto w-full max-w-[1080px]";
 
 const msgVariants: Variants = {
   initial: { opacity: 0, y: 12 },
@@ -2061,6 +2076,23 @@ export function AgentChatPanel({
     }
   };
 
+  // ROUND-87 (R87): resolve a pending ask_user card — the answers POST to
+  // /agent-questions/:id/resolve and the tool's pending promise settles;
+  // the agent-question.resolved SSE frame patches the card to its answered
+  // state (a failed POST surfaces the honest error; a 404 means the ask
+  // already timed out — the frame/refetch will show it).
+  const onQuestionAnswer = async (
+    questionId: string,
+    answers: string[],
+    sources: Array<"option" | "custom">,
+  ) => {
+    try {
+      await resolveAgentQuestion(questionId, answers, sources);
+    } catch (err) {
+      setSendError(err instanceof Error ? err.message : String(err));
+    }
+  };
+
   // ── ROUND-78 (R78-D): the queued chips' affordances (live mode only —
   // fixture mode never queues: onQueue is undefined there) ────────────────
   /** The chip's X: optimistically remove the chip from the live store, then
@@ -2312,6 +2344,7 @@ export function AgentChatPanel({
             stopped={liveTurn.stopped}
             liveEntryIndex={segLiveIdx}
             onApprovalDecision={(id, decision, remember) => void onApprovalDecision(id, decision, remember)}
+            onQuestionAnswer={(id, answers, sources) => void onQuestionAnswer(id, answers, sources)}
           />
         );
       }
@@ -2382,19 +2415,22 @@ export function AgentChatPanel({
             wrap at the text level (break-words below); code blocks keep their
             OWN internal pre scroll. */}
         <div ref={scrollRef} className="absolute inset-0 overflow-y-auto overflow-x-hidden auto-scroll">
-          {/* ROUND-34: density (settings appearance) drives the column padding.
-              ROUND-37: the panel fills its width (owner: no dead right side).
-              ROUND-39: wrapper is min-h-full + flex-col so SHORT content
-              sticks to the bottom (just above the composer) — no dead
-              vertical gap below the last message (owner screenshot showed
-              big empty space). When content overflows, the spacer collapses
-              to 0 and natural scroll takes over.
+          {/* ROUND-34: density (settings appearance) drives the column's
+              VERTICAL rhythm. ROUND-37: the panel fills its width (owner: no
+              dead right side). ROUND-39: wrapper is min-h-full + flex-col so
+              SHORT content sticks to the bottom (just above the composer) —
+              no dead vertical gap below the last message (owner screenshot
+              showed big empty space). When content overflows, the spacer
+              collapses to 0 and natural scroll takes over.
               ROUND-43 (owner: dead space on the right at LARGE windows): the
               panel root now fills its column (w-full above) AND the reading
               column caps at CONTENT_MAX_WIDTH centered — wide windows get a
               symmetric readable column instead of either stretched lines or
-              content-hugging with a void on the right. */}
-          <div className={`${density === "compact" ? "px-4 py-4" : "px-5 md:px-10 py-5"} ${CONTENT_COL_CLASS} min-h-full flex flex-col gap-5`}>
+              content-hugging with a void on the right.
+              R87-A1: horizontal padding lives IN CONTENT_COL_CLASS now
+              (graduated px-6/md:px-12/xl:px-16 — see its doc note), so the
+              density classes here carry py only. */}
+          <div className={`${density === "compact" ? "py-4" : "py-5"} ${CONTENT_COL_CLASS} min-h-full flex flex-col gap-5`}>
             {/* ROUND-50 (R50-c2, owner: "When there is nothing, the very first
                 chat… almost centered but a bit more towards the bottom half of
                 the screen"): the greeting + suggestion chips sit ABOVE the
@@ -2459,8 +2495,11 @@ export function AgentChatPanel({
                   ) : null}
                 </div>
                 <div className="h-6 shrink-0" aria-hidden />
-                {/* The composer itself — centered, slightly below the middle. */}
-                <div className={CONTENT_COL_CLASS}>{renderComposer(true)}</div>
+                {/* The composer itself — centered, slightly below the middle.
+                    R87-A1: the wrapper above already carries the padded
+                    content column, so this nested slot uses the PADLESS
+                    variant — same cap/centering, no double horizontal inset. */}
+                <div className={CONTENT_COL_PADLESS_CLASS}>{renderComposer(true)}</div>
                 <div className="flex-[0.55] min-h-8" aria-hidden />
               </div>
             ) : null}
@@ -2713,10 +2752,13 @@ export function AgentChatPanel({
           timeline error card instead (they used to die silently with the
           banner's lastSent dependency lost on remount). */}
       {sendError && lastSent ? (
-        <div className="shrink-0 px-2.5">
+        <div className="shrink-0">
+          {/* R87-A1: the error banner rides the content column directly —
+              CONTENT_COL_CLASS now owns the horizontal inset, so no extra
+              px here (the alert box spans the reading column). */}
           <div
             role="alert"
-            className={`${CONTENT_COL_CLASS} mb-1.5 flex items-start gap-2 rounded-[12px] border px-3 py-2 text-[12px]`}
+            className={`${CONTENT_COL_CLASS} mb-1.5 flex items-start gap-2 rounded-[12px] border py-2 text-[12px]`}
             style={{
               borderColor: withAlpha(SEMANTIC_COLORS.danger, 0.4),
               color: SEMANTIC_COLORS.danger,
@@ -2741,10 +2783,14 @@ export function AgentChatPanel({
           vertical middle (flex spacers — reflow-safe, never absolutely
           positioned), with the greeting + suggestion chips ABOVE it. Once the
           conversation exists, the composer docks at the bottom edge (border-t
-          row, same capped reading column as the messages). */}
+          row, same capped reading column as the messages).
+          R87-A1: the dock keeps only VERTICAL padding — the column class on
+          the inner wrapper carries the same graduated horizontal padding as
+          the messages, so the docked composer aligns EXACTLY with the
+          reading column (the old p-2/p-2.5 also offset it 10px inward). */}
       {composerDocked ? (
         <div
-          className={`shrink-0 border-t ${compact ? "p-2" : "p-2.5"}`}
+          className={`shrink-0 border-t ${compact ? "py-2" : "py-2.5"}`}
           style={{ borderColor: styles.borderSubtle }}
         >
           <div className={CONTENT_COL_CLASS} data-composer-dock>

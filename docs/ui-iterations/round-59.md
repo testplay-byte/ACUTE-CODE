@@ -1,4 +1,4 @@
-<!-- last-reviewed: 2026-09-10 round-83 -->
+<!-- last-reviewed: 2026-09-11 round-87 -->
 # Round 59 — The owner-feedback round: window polish, settings honesty, the feedback loop, and modular prompts
 
 **Date:** 2026-09-01 · **Branch:** `main` · **Version:** 0.59.0 · **Owner directives:** the twelfth Windows test session (0.58.0) — the frameless title bar, the pop-out browser, the live file-write preview, the key pool, and the streaming stops all WORKED (*"There is now our own custom top navigation bar, which is perfect… I am quite happy with it"*) — followed by the polish list: rounded+inset title bar, custom chrome in the pop-out, minimal scrollbars, honest provider list, the API-key reveal, outright disable, pre-selection, **the response-rating loop with full context capture** (*"I think we should most definitely add this"*), console-like error monitoring, and the modular system prompts (*"built in multiple parts, modules, and such… everything is a module, everything is a plug-in"*).

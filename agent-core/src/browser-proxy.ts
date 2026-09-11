@@ -172,9 +172,12 @@ export interface BrowserViewport {
 }
 
 export const DEFAULT_VIEWPORT: BrowserViewport = {
-  width: VIEWPORT_PRESETS.laptop.width,
-  height: VIEWPORT_PRESETS.laptop.height,
-  preset: "laptop",
+  // ROUND-87 (R87, owner: "The default dimensions of the browser on the
+  // right sidebar will be set to 1440 by 900"): the desktop preset (the
+  // frontend's BROWSER_VIEWPORT_DEFAULT mirrors this exactly).
+  width: VIEWPORT_PRESETS.desktop.width,
+  height: VIEWPORT_PRESETS.desktop.height,
+  preset: "desktop",
   zoom: 1,
   rotate: false,
 };

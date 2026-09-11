@@ -33,6 +33,23 @@ export interface ModelRecord {
   supportsTools: boolean | null;
   supportsAudio: boolean | null;
   supportsVideo: boolean | null;
+  /** ROUND-87 (R87, owner: "configure which kinds of inputs this model
+   * accepts … configure which kinds of outputs"): the INPUT/OUTPUT
+   * capability columns — same tri-state contract as the R82 flags
+   * (null = unknown, false = off, true = on). supportsPdf is the only
+   * new INPUT column (text is always accepted and stays UI-locked;
+   * images ride supportsVision, videos ride supportsVideo). The four
+   * *_output flags describe what the model PRODUCES — text output is
+   * the chat-completions default (unknown renders ON in the dialog and
+   * the user can turn it off), image/video/audio render unknown as OFF. */
+  supportsPdf: boolean | null;
+  supportsTextOutput: boolean | null;
+  supportsImageOutput: boolean | null;
+  supportsVideoOutput: boolean | null;
+  supportsAudioOutput: boolean | null;
+  /** ROUND-87 (R87): a human-facing parameter-size label ("70B",
+   * "405B MoE") for the config dialog's detail row. null = unspecified. */
+  sizeLabel: string | null;
   hidden: boolean;
   sortOrder: number;
   createdAt: string;
@@ -55,6 +72,15 @@ export interface ModelInput {
   supportsTools?: boolean | null;
   supportsAudio?: boolean | null;
   supportsVideo?: boolean | null;
+  /** ROUND-87 (R87): the input/output capability columns — same tri-state
+   * contract (undefined keeps, null clears to unknown, boolean sets). */
+  supportsPdf?: boolean | null;
+  supportsTextOutput?: boolean | null;
+  supportsImageOutput?: boolean | null;
+  supportsVideoOutput?: boolean | null;
+  supportsAudioOutput?: boolean | null;
+  /** ROUND-87 (R87): null clears the size label, a string sets it. */
+  sizeLabel?: string | null;
   hidden?: boolean;
   sortOrder?: number;
 }
@@ -75,6 +101,13 @@ interface ModelRow {
   supports_tools: number | null;
   supports_audio: number | null;
   supports_video: number | null;
+  /** ROUND-87 (R87): the input/output capability columns — same mapping. */
+  supports_pdf: number | null;
+  supports_text_output: number | null;
+  supports_image_output: number | null;
+  supports_video_output: number | null;
+  supports_audio_output: number | null;
+  size_label: string | null;
   hidden: number;
   sort_order: number;
   created_at: string;
@@ -102,6 +135,13 @@ function toModel(row: ModelRow): ModelRecord {
     supportsTools: triState(row.supports_tools),
     supportsAudio: triState(row.supports_audio),
     supportsVideo: triState(row.supports_video),
+    // ROUND-87: the input/output capability columns + size label.
+    supportsPdf: triState(row.supports_pdf),
+    supportsTextOutput: triState(row.supports_text_output),
+    supportsImageOutput: triState(row.supports_image_output),
+    supportsVideoOutput: triState(row.supports_video_output),
+    supportsAudioOutput: triState(row.supports_audio_output),
+    sizeLabel: row.size_label ?? null,
     hidden: row.hidden === 1,
     sortOrder: row.sort_order,
     createdAt: row.created_at,
@@ -174,6 +214,10 @@ export function upsertModel(
         supports_thinking = @supportsThinking, supports_vision = @supportsVision,
         supports_tools = @supportsTools, supports_audio = @supportsAudio,
         supports_video = @supportsVideo,
+        supports_pdf = @supportsPdf, supports_text_output = @supportsTextOutput,
+        supports_image_output = @supportsImageOutput,
+        supports_video_output = @supportsVideoOutput,
+        supports_audio_output = @supportsAudioOutput, size_label = @sizeLabel,
         hidden = @hidden,
         sort_order = @sortOrder, updated_at = @updatedAt
       WHERE id = @id`,
@@ -191,6 +235,20 @@ export function upsertModel(
       supportsTools: keepTriState(input.supportsTools, existing.supports_tools),
       supportsAudio: keepTriState(input.supportsAudio, existing.supports_audio),
       supportsVideo: keepTriState(input.supportsVideo, existing.supports_video),
+      // ROUND-87: the input/output capability columns + size label — same
+      // tri-state / null-clearing contracts (sizeLabel keeps like the
+      // numeric fields: null clears, absent keeps).
+      supportsPdf: keepTriState(input.supportsPdf, existing.supports_pdf),
+      supportsTextOutput: keepTriState(input.supportsTextOutput, existing.supports_text_output),
+      supportsImageOutput: keepTriState(input.supportsImageOutput, existing.supports_image_output),
+      supportsVideoOutput: keepTriState(input.supportsVideoOutput, existing.supports_video_output),
+      supportsAudioOutput: keepTriState(input.supportsAudioOutput, existing.supports_audio_output),
+      // sizeLabel trims on BOTH paths (insert normalizes; update keeps the
+      // R50-d contract but a re-saved label with whitespace normalizes too).
+      sizeLabel:
+        typeof input.sizeLabel === "string"
+          ? input.sizeLabel.trim() === "" ? null : input.sizeLabel.trim()
+          : keep(input.sizeLabel, existing.size_label),
       hidden: (input.hidden ?? existing.hidden === 1) ? 1 : 0,
       sortOrder: keep(input.sortOrder, existing.sort_order),
       updatedAt: now,
@@ -205,12 +263,16 @@ export function upsertModel(
       id, provider_id, model_id, display_name, context_window, max_output_tokens,
       input_price_per_mtok, input_price_cached_per_mtok, output_price_per_mtok,
       supports_thinking, supports_vision, supports_tools, supports_audio,
-      supports_video, hidden, sort_order, created_at, updated_at
+      supports_video, supports_pdf, supports_text_output,
+      supports_image_output, supports_video_output, supports_audio_output,
+      size_label, hidden, sort_order, created_at, updated_at
     ) VALUES (
       @id, @providerId, @modelId, @displayName, @contextWindow, @maxOutputTokens,
       @inputPricePerMtok, @inputPriceCachedPerMtok, @outputPricePerMtok,
       @supportsThinking, @supportsVision, @supportsTools, @supportsAudio,
-      @supportsVideo, @hidden, @sortOrder, @createdAt, @updatedAt
+      @supportsVideo, @supportsPdf, @supportsTextOutput,
+      @supportsImageOutput, @supportsVideoOutput, @supportsAudioOutput,
+      @sizeLabel, @hidden, @sortOrder, @createdAt, @updatedAt
     )`,
   ).run({
     id,
@@ -243,6 +305,31 @@ export function upsertModel(
     supportsVideo: input.supportsVideo === undefined
       ? null
       : input.supportsVideo === null ? null : input.supportsVideo === true ? 1 : 0,
+    // ROUND-87 (R87): input/output capability columns. PDF input and the
+    // image/video/audio outputs default UNKNOWN (null — renders OFF in
+    // the dialog). TEXT OUTPUT defaults ON (1): it is the chat-completions
+    // contract itself (the owner: "text … on by default for most of them
+    // but the user can turn it off") — explicit boolean wins, explicit
+    // null is unknown, absent sets the 1 default.
+    supportsPdf: input.supportsPdf === undefined
+      ? null
+      : input.supportsPdf === null ? null : input.supportsPdf === true ? 1 : 0,
+    supportsTextOutput: input.supportsTextOutput === undefined
+      ? 1
+      : input.supportsTextOutput === null ? null : input.supportsTextOutput === true ? 1 : 0,
+    supportsImageOutput: input.supportsImageOutput === undefined
+      ? null
+      : input.supportsImageOutput === null ? null : input.supportsImageOutput === true ? 1 : 0,
+    supportsVideoOutput: input.supportsVideoOutput === undefined
+      ? null
+      : input.supportsVideoOutput === null ? null : input.supportsVideoOutput === true ? 1 : 0,
+    supportsAudioOutput: input.supportsAudioOutput === undefined
+      ? null
+      : input.supportsAudioOutput === null ? null : input.supportsAudioOutput === true ? 1 : 0,
+    sizeLabel: typeof input.sizeLabel === "string" && input.sizeLabel.trim() !== ""
+      ? input.sizeLabel.trim()
+      : input.sizeLabel === "" ? null
+      : null,
     hidden: (input.hidden ?? false) ? 1 : 0,
     sortOrder: input.sortOrder ?? 0,
     createdAt: now,

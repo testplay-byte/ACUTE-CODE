@@ -44,7 +44,15 @@ export function ThinkingLevelButton({
         }}
       >
         <Brain size={12} className="shrink-0" style={{ color: styles.accent }} />
-        <span data-thinking-label className="@max-[560px]:hidden">
+        {/* R87-A1 staggered composer shrink — tier 2: the thinking label
+            collapses (animated max-width + fade) one step AFTER the mode
+            label (560px) at the 500px @container floor, so the pills fold in
+            stages instead of all at once. -mr-1.5 on the collapsed tier
+            shuts the span's gap slot so the icon-only pill stays tight. */}
+        <span
+          data-thinking-label
+          className="max-w-[240px] overflow-hidden whitespace-nowrap transition-all duration-200 @max-[500px]:max-w-0 @max-[500px]:opacity-0 @max-[500px]:-mr-1.5"
+        >
           {current.label}
         </span>
         <ChevronDown size={10} className="shrink-0" />

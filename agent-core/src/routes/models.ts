@@ -54,6 +54,23 @@ const MODEL_NUMERIC_FIELDS = [
   "outputPricePerMtok",
 ] as const;
 
+/** ROUND-87 (R87): the full tri-state capability set — the R82 trio plus
+ * the R87 input/output columns. Shared by both routes' validation and
+ * error messages so the upsert + PATCH gates stay identical by
+ * construction (the module's own provenance contract). */
+const MODEL_TRISTATE_FIELDS = [
+  "supportsTools",
+  "supportsAudio",
+  "supportsVideo",
+  "supportsPdf",
+  "supportsTextOutput",
+  "supportsImageOutput",
+  "supportsVideoOutput",
+  "supportsAudioOutput",
+] as const;
+
+export type ModelTriStateField = (typeof MODEL_TRISTATE_FIELDS)[number];
+
 type ModelNumericValues = Partial<
   Record<(typeof MODEL_NUMERIC_FIELDS)[number], number | null>
 >;
@@ -95,10 +112,11 @@ export function readModelScalarFields(
   if (raw.supportsVision !== undefined && typeof raw.supportsVision !== "boolean") {
     return { ok: false, field: "supportsVision" };
   }
-  // ROUND-82 (R82): the tri-state capability flags — boolean OR null
-  // (null = reset to unknown, the numeric fields' null-clearing contract).
-  // A non-boolean-non-null type 400s (never a silent drop).
-  for (const field of ["supportsTools", "supportsAudio", "supportsVideo"] as const) {
+  // ROUND-82 (R82) + ROUND-87 (R87): the tri-state capability flags —
+  // boolean OR null (null = reset to unknown, the numeric fields'
+  // null-clearing contract). A non-boolean-non-null type 400s (never a
+  // silent drop).
+  for (const field of MODEL_TRISTATE_FIELDS) {
     if (
       raw[field] !== undefined &&
       raw[field] !== null &&
@@ -106,6 +124,14 @@ export function readModelScalarFields(
     ) {
       return { ok: false, field };
     }
+  }
+  // ROUND-87 (R87): the size label — string or null (null clears).
+  if (
+    raw.sizeLabel !== undefined &&
+    raw.sizeLabel !== null &&
+    typeof raw.sizeLabel !== "string"
+  ) {
+    return { ok: false, field: "sizeLabel" };
   }
   return { ok: true };
 }
@@ -120,6 +146,12 @@ export function readTriStateField(
   if (value === null) return null;
   if (typeof value === "boolean") return value;
   return undefined;
+}
+
+/** ROUND-87 (R87): true when the field rides the tri-state contract (for
+ * the 400 messages' "a boolean or null (unknown)" phrasing). */
+export function isModelTriStateField(field: string): boolean {
+  return (MODEL_TRISTATE_FIELDS as readonly string[]).includes(field);
 }
 
 export function registerModelRoutes(scope: FastifyInstance, ctx: RouteContext): void {
@@ -146,17 +178,14 @@ export function registerModelRoutes(scope: FastifyInstance, ctx: RouteContext): 
     }
     const scalars = readModelScalarFields(raw);
     if (!scalars.ok) {
-      const triState =
-        scalars.field === "supportsTools" ||
-        scalars.field === "supportsAudio" ||
-        scalars.field === "supportsVideo";
+      const triState = isModelTriStateField(scalars.field);
       return reply.code(400).send(
         errorBody(
           "VALIDATION",
           `${scalars.field} must be ${
             triState
               ? "a boolean or null (unknown)"
-              : scalars.field === "displayName"
+              : scalars.field === "displayName" || scalars.field === "sizeLabel"
                 ? "a string"
                 : "a boolean"
           }`,
@@ -184,6 +213,39 @@ export function registerModelRoutes(scope: FastifyInstance, ctx: RouteContext): 
     if (raw.supportsVideo !== undefined) {
       if (raw.supportsVideo === null || typeof raw.supportsVideo === "boolean") {
         patch.supportsVideo = raw.supportsVideo;
+      }
+    }
+    // ROUND-87 (R87): the input/output capability columns — same tri-state
+    // PATCH contract (boolean sets, null clears to unknown, absent keeps).
+    if (raw.supportsPdf !== undefined) {
+      if (raw.supportsPdf === null || typeof raw.supportsPdf === "boolean") {
+        patch.supportsPdf = raw.supportsPdf;
+      }
+    }
+    if (raw.supportsTextOutput !== undefined) {
+      if (raw.supportsTextOutput === null || typeof raw.supportsTextOutput === "boolean") {
+        patch.supportsTextOutput = raw.supportsTextOutput;
+      }
+    }
+    if (raw.supportsImageOutput !== undefined) {
+      if (raw.supportsImageOutput === null || typeof raw.supportsImageOutput === "boolean") {
+        patch.supportsImageOutput = raw.supportsImageOutput;
+      }
+    }
+    if (raw.supportsVideoOutput !== undefined) {
+      if (raw.supportsVideoOutput === null || typeof raw.supportsVideoOutput === "boolean") {
+        patch.supportsVideoOutput = raw.supportsVideoOutput;
+      }
+    }
+    if (raw.supportsAudioOutput !== undefined) {
+      if (raw.supportsAudioOutput === null || typeof raw.supportsAudioOutput === "boolean") {
+        patch.supportsAudioOutput = raw.supportsAudioOutput;
+      }
+    }
+    // ROUND-87 (R87): the size label — string sets, null clears, absent keeps.
+    if (raw.sizeLabel !== undefined) {
+      if (raw.sizeLabel === null || typeof raw.sizeLabel === "string") {
+        patch.sizeLabel = raw.sizeLabel;
       }
     }
     if (typeof raw.hidden === "boolean") patch.hidden = raw.hidden;

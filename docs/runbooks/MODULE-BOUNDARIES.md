@@ -25,19 +25,23 @@ points between modules.
 ```
 agent-core/src/
   server.ts          HTTP surface (Fastify) — the ASSEMBLER. Routes live in
-                     routes/<domain>.ts modules (72 of 131 routes, R84+R86 — the
-                     SSE domain shipped in R86); server.ts keeps 51 (terminal, MCP,
-                     computer-use, diagnostics, approvals, vision + the
-                     notifications/jobs/checkpoints/dialogs/plugins groups) pending
-                     their move. Nothing imports server.ts except main.ts + tests.
+                     routes/<domain>.ts modules (74 of 133 routes, R84+R86+R87 —
+                     the SSE domain shipped in R86; system.ts (the reset) +
+                     questions.ts (the ask_user resolve) joined in R87); server.ts
+                     keeps 51 (terminal, MCP, computer-use, diagnostics,
+                     approvals, vision + the notifications/jobs/checkpoints/
+                     dialogs/plugins groups) pending their move. Nothing imports
+                     server.ts except main.ts + tests.
   routes/            domain route modules — each exports register<Domain>(scope, ctx);
-                     RouteContext (context.ts) carries {db, keyring, chat, token};
-                     server.ts's buildServer calls them in the ORIGINAL registration
-                     order (Fastify wildcard precedence). Import only downward
+                     RouteContext (context.ts) carries {db, keyring, chat, token,
+                     dataDir (R87 — the reset's machine-file purge)}; server.ts's
+                     buildServer calls them in the ORIGINAL registration order
+                     (Fastify wildcard precedence). Import only downward
                      (storage/agents/tools/lib/shared) — never each other's internals
                      (helpers.ts/context.ts excepted; sse.ts imports the sync route's
                      field gates from sessions.ts — the documented shared-validation
-                     exception).
+                     exception; models.ts exports its field gates to providers.ts —
+                     the R50-d shared-validation exception).
   agents/            the turn runtime + orchestrator + prompt/mode/skill glue.
                      runtime.ts (3,369) + orchestrator.ts (1,436) are the known
                      god files — the sync/streamed runner duplication is the

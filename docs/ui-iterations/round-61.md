@@ -1,4 +1,4 @@
-<!-- last-reviewed: 2026-09-10 round-83 -->
+<!-- last-reviewed: 2026-09-11 round-87 -->
 # Round 61 — Computer use (the desktop-control system), the separate vision model, skills + MCP extensibility, and the monitor
 
 **Date:** 2026-09-02 · **Branch:** `main` · **Version:** 0.61.0 · **Owner directives:** the computer-use round — the agent observes and actuates the real desktop GUI ("give the user the option to turn on and off the computer use"); the vision model is configured COMPLETELY separately ("for the vision we are utilizing a separate model. The user can configure our model for the vision itself… the provider completely separately" + "if the main model supports vision then the user will be given an option to configure that too"); extensibility ("the ability to add multiple skills" + "the ability to add MCP servers too"); the monitor ("in a mini window it will show the details and their stats while the agent is using computers… what it's about to do, how it's thinking, the progress"); and the prompt upgrade ("improve its tool calling skill using"). Built to the uploaded 13-doc build-ready spec (`computer-use-docs/01..12`).

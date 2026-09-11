@@ -90,6 +90,9 @@ export const PLAN_MODE_TOOLS: readonly string[] = [
   // network) — the agent in PLAN mode still picks its posture
   // discipline; the D4 honesty rule keeps the tool advertised.
   "switch_mode",
+  // ROUND-87 (R87): asking the owner questions is the PLANNING tool par
+  // excellence — no side effects, pure clarification. Plan mode keeps it.
+  "ask_user",
   // ROUND-75 (R75, retired review/explore sets) / ROUND-81: read-only
   // observations a reviewer/explorer needs — the git inspectors read
   // history, analyze_image reads screenshots/diagrams, job_status

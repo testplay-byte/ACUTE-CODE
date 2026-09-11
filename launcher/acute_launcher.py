@@ -12,10 +12,10 @@
 # double-clickable coordinator; THIS Python program does the real work with a
 # rich, beautiful terminal UI (panels, spinners, progress, tables). It:
 #
-#   • reads credentials.txt next to itself (GITHUB_PAT + OPENROUTER_KEY, plus
-#     the optional OPENROUTER_SUB1..3_KEY sub-agent pool keys; you fill it
-#     once — the launcher never injects keys of its own — rotate/clear
-#     values whenever you like)
+#   • asks for your GitHub token ONCE on first run (saved locally in
+#     .acute/github.pat — it downloads the private repo; R87: the old
+#     credentials.txt file is GONE and provider API keys are saved IN THE
+#     APP, Settings → Models & Providers)
 #   • checks the toolchain and AUTO-INSTALLS what is missing
 #     (git / Node.js via winget on Windows, with your confirmation;
 #      pnpm is activated through corepack — no global installs)
@@ -100,7 +100,6 @@ APP_DIR = LAUNCHER_DIR / "ACUTE-CODE"
 DOT_DIR = LAUNCHER_DIR / ".acute"
 BIN_DIR = DOT_DIR / "bin"
 LOG_PATH = DOT_DIR / "launcher.log"
-CRED_PATH = LAUNCHER_DIR / "credentials.txt"
 ENV_PATH = APP_DIR / ".env.development"
 REPO_URL = "https://github.com/testplay-byte/ACUTE-CODE.git"
 GIT_USER = "testplay-byte"
@@ -410,165 +409,114 @@ def probe(cmd, timeout=20):
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# credentials
+# GitHub access token (R87: credentials.txt is GONE — provider API keys are
+# saved IN THE APP, Settings → Models & Providers; the launcher's only
+# credential is the GitHub token that downloads the private repo itself)
 # ─────────────────────────────────────────────────────────────────────────────
 
 SETUP_INSTRUCTIONS = """\
-FIRST-TIME SETUP — 4 steps, about 2 minutes:
+FIRST-TIME SETUP — 3 steps, about 2 minutes:
 
-  1.  Create a folder anywhere (e.g.  C:\\ACUTE  )  — done, you are here.
-  2.  Put exactly THREE files in it (from the private GitHub repo,
+  1.  Create a folder anywhere (e.g.  C:\\ACUTE  ) — done, you are here.
+  2.  Put exactly TWO files in it (from the private GitHub repo,
       folder  launcher/  → click each file → Raw → right-click → Save as):
         • ACUTE.bat            (the file you double-click)
         • acute_launcher.py    (the program doing all the work)
-        • credentials.example.txt
-  3.  Rename  credentials.example.txt  →  credentials.txt ,
-      open it in Notepad, and paste your two values on the marked lines:
-        GITHUB_PAT=...        (your GitHub token, starts with github_pat_)
-        OPENROUTER_KEY=...    (your OpenRouter key, starts with sk-or-)
-      Save. That file stays on YOUR PC only — never uploaded anywhere.
-  4.  Double-click  ACUTE.bat . Watch the pretty terminal do the rest.
+  3.  Double-click ACUTE.bat. When asked, paste your GitHub token
+      (starts with github_pat_ — it downloads the app and its updates).
+      It is saved on YOUR PC only (never uploaded anywhere).
 
 Later runs: just double-click ACUTE.bat — it checks GitHub for updates,
 restarts the servers, and keeps all your data (agents/sessions/projects).
+
+API keys for AI providers (OpenRouter, NVIDIA, …) are NO LONGER read from
+any file — save them inside the app:  Settings → Models & Providers.
 """
 
-
-# ─────────────────────────────────────────────────────────────────────────────
-# credentials.txt
-# ─────────────────────────────────────────────────────────────────────────────
-
-# ROUND-44 introduced the three OPTIONAL sub-agent pool keys,
-# OPENROUTER_SUB1_KEY / OPENROUTER_SUB2_KEY / OPENROUTER_SUB3_KEY. They map to
-# keyring pool slots 2/3/4 (ACUTE_PROVIDER_OPENROUTER_SLOT{2,3,4}) — the exact
-# slots Settings → Sub-agents shows and the orchestrator prefers for child
-# runs, so the owner never pastes them into the UI by hand.
-#
-# ROUND-47 (owner directive 2026-08-29: "It should not be for you to paste in
-# the Open Router API keys by default in it"): the R44 baked-in key defaults
-# were REMOVED — the launcher must never ship or write real key material.
-# ensure_subagent_keys() below now only keeps the three placeholder LINES
-# present in credentials.txt so there is always an obvious place to paste
-# pool keys; it never writes or rewrites values.
-SUB_KEY_NAMES = ["OPENROUTER_SUB1_KEY", "OPENROUTER_SUB2_KEY", "OPENROUTER_SUB3_KEY"]
-SUB_KEY_PLACEHOLDER = "sk-or-v1-PASTE_YOURS_HERE"
+PAT_PATH = DOT_DIR / "github.pat"
 
 
-def read_credentials():
-    """Parse credentials.txt → (github_pat, openrouter_key, sub_keys[3]).
-
-    The three OPENROUTER_SUBn_KEY lines are OPTIONAL: a missing or
-    placeholder-looking value becomes "" and the slot simply stays empty —
-    sub keys never block startup. A malformed main PAT/key still fails the
-    launch with precise instructions.
-    """
-    if not CRED_PATH.exists():
-        panel(SETUP_INSTRUCTIONS, style="yellow", title="credentials.txt not found yet")
-        log("no credentials.txt")
-        wait_close()
-        sys.exit(1)
-
-    values = {}
-    try:
-        for raw in CRED_PATH.read_text(encoding="utf-8", errors="replace").splitlines():
-            line = raw.strip()
-            if not line or line.startswith("#"):
-                continue
-            # ROUND-47 BUG FIX: the old pattern ^([A-Za-z_]+) could not match
-            # names containing digits — OPENROUTER_SUB1/2/3_KEY lines were
-            # silently NEVER parsed (the R44 pool keys only ever reached the
-            # app through the baked-in defaults, and the owner's own file
-            # values were ignored). Names: letter/underscore, then word chars.
-            m = re.match(r"^([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.+)$", line)
-            if m:
-                values[m.group(1).upper()] = m.group(2).strip().strip('"').strip("'")
-    except Exception as exc:
-        fail("reading credentials.txt", f"{exc}\nPath: {CRED_PATH}")
-
-    pat = values.get("GITHUB_PAT") or values.get("GITHUB_TOKEN") or ""
-    key = values.get("OPENROUTER_KEY") or values.get("OPENROUTER_API_KEY") or ""
-
-    def sub_value(name):
-        v = (values.get(name) or "").strip()
-        if not v or "PASTE_YOURS" in v.upper() or "YOUR_" in v.upper() or not v.startswith("sk-or-"):
-            return ""
-        return v
-
-    sub_keys = [sub_value(name) for name in SUB_KEY_NAMES]
-
-    def is_placeholder(v, kind):
-        v = v.strip()
-        if not v:
-            return True
-        if "PASTE_YOURS" in v.upper() or "YOUR_" in v.upper() or "XXX" in v.upper():
-            return True
-        return kind == "pat" and not v.startswith(("github_pat_", "ghp_", "gho_")) or \
-               kind == "key" and not v.startswith("sk-or-")
-
-    problems = []
-    if is_placeholder(pat, "pat"):
-        problems.append("GITHUB_PAT is missing/placeholder — paste your real token (starts with github_pat_).")
-    if is_placeholder(key, "key"):
-        problems.append("OPENROUTER_KEY is missing/placeholder — paste your real key (starts with sk-or-).")
-    if problems:
-        fail(
-            "credentials.txt is incomplete",
-            "\n".join(problems)
-            + f"\n\nFile: {CRED_PATH}\nOpen it in Notepad, fill both lines, save, run again.",
-        )
-
-    log("credentials loaded (values never logged)")
-    return pat, key, sub_keys
-
-
-def ensure_subagent_keys(sub_keys):
-    """ROUND-47: keep the three OPTIONAL sub-key lines present in the file.
-
-    The owner asked for the pool keys to live INSIDE credentials.txt so they
-    never paste them into the app — and (R47) for the launcher to never ship
-    or inject key values of its own. So this now only appends clearly-marked
-    placeholder lines when the file predates the sub-agent pool, giving the
-    owner an obvious place to paste pool keys. Existing lines are NEVER
-    touched — fill, rotate, or delete them at will. Returns sub_keys exactly
-    as parsed. Skipped entirely for read-only modes (status) — the caller
-    decides.
-    """
-    try:
-        current = CRED_PATH.read_text(encoding="utf-8", errors="replace")
-    except Exception as exc:
-        warn(f"could not read credentials.txt for sub-key check ({exc}) — skipping")
-        return sub_keys
-
-    missing = [
-        name for name in SUB_KEY_NAMES
-        if not re.search(rf"^{name}\s*=", current, re.MULTILINE)
-    ]
-    if not missing:
-        set_count = sum(1 for k in sub_keys if k)
-        ok(f"sub-agent key slots present in credentials.txt ({set_count}/3 set)")
-        return sub_keys
-
-    block = (
-        "\n"
-        "# ─── sub-agent pool keys (OPTIONAL — ROUND-47, safe to edit/remove) ───\n"
-        "# Sub-agents use these first so your main key is not burdened.\n"
-        "# Shown as pool slots 2/3/4 in Settings → Sub-agents.\n"
-        "# Leave the placeholders to opt out (children fall back to the main key).\n"
+def _no_interactive_github_pat():
+    """Non-interactive shell (stdin closed / CI): no prompt is possible —
+    show the honest setup panel and exit instead of a raw traceback."""
+    panel(
+        SETUP_INSTRUCTIONS,
+        style="yellow",
+        title="GitHub token needed — no interactive prompt available",
     )
-    block += "".join(f"{name}={SUB_KEY_PLACEHOLDER}\n" for name in missing)
+    log("no GitHub token and stdin is not interactive")
+    wait_close()
+    sys.exit(1)
+
+
+def resolve_github_pat():
+    """The ONE credential the launcher still needs: the GitHub token that
+    downloads the private repo. R87 (credentials.txt removed): resolved from
+    (1) the ACUTE_GITHUB_PAT / GITHUB_PAT environment variable, (2) the
+    locally saved  .acute/github.pat  (written by the first-run prompt),
+    (3) an interactive prompt on first run — the answer is saved so later
+    runs never ask again. Never logged, never echoed (input is masked).
+    """
+    env_pat = (os.environ.get("ACUTE_GITHUB_PAT") or os.environ.get("GITHUB_PAT") or "").strip()
+    if env_pat:
+        log("GitHub token: environment variable")
+        return env_pat
 
     try:
-        if current and not current.endswith("\n"):
-            current += "\n"
-        CRED_PATH.write_text(current + block, encoding="utf-8")
-        ok(
-            "sub-agent key slots added to credentials.txt "
-            f"({', '.join(missing)}) — fill them or leave the placeholders"
+        saved = PAT_PATH.read_text(encoding="utf-8", errors="replace").strip()
+    except OSError:
+        saved = ""
+    if saved.startswith(("github_pat_", "ghp_", "gho_")):
+        log("GitHub token: saved from an earlier run")
+        return saved
+
+    # First run — the prompt. The launcher is an interactive console program
+    # (it asks app-or-site later anyway), so asking here is the same UX.
+    panel(
+        "The launcher needs your GitHub token ONCE to download the app.\n"
+        "It is saved on this PC only (never uploaded, never logged).\n"
+        "Get one: github.com → Settings → Developer settings →\n"
+        "Personal access tokens → Generate new token (read access to the\n"
+        "private repo testplay-byte/ACUTE-CODE).",
+        title="GitHub token",
+    )
+    try:
+        import getpass
+
+        pat = getpass.getpass("Paste your GitHub token (input hidden): ").strip()
+    except EOFError:
+        _no_interactive_github_pat()
+    except Exception:
+        try:
+            pat = input("Paste your GitHub token: ").strip()
+        except EOFError:
+            _no_interactive_github_pat()
+
+    if not pat.startswith(("github_pat_", "ghp_", "gho_")):
+        fail(
+            "GitHub token not recognized",
+            "The token should start with  github_pat_  (or ghp_/gho_).\n\n"
+            "How to fix (2 minutes):\n"
+            "  1. Go to github.com → Settings → Developer settings →\n"
+            "     Personal access tokens → Generate new token\n"
+            "  2. Give it read access to the private repo testplay-byte/ACUTE-CODE\n"
+            "  3. Run the launcher again and paste the new token",
         )
-        note("placeholders are ignored — remove those lines any time")
+
+    try:
+        PAT_PATH.parent.mkdir(parents=True, exist_ok=True)
+        PAT_PATH.write_text(pat + "\n", encoding="utf-8")
+        try:
+            os.chmod(PAT_PATH, 0o600)
+        except OSError:
+            pass
+        ok(f"token saved at {PAT_PATH} (chmod 600 where supported)")
+        note("delete that file any time to re-enter it")
     except Exception as exc:
-        warn(f"could not add sub-key slots to credentials.txt ({exc})")
-    return sub_keys
+        warn(f"could not save the token locally ({exc}) — you will be asked again next run")
+
+    log("GitHub token: entered interactively (values never logged)")
+    return pat
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -615,14 +563,14 @@ def validate_github_access(pat):
         if exc.code in (401, 403):
             fail(
                 "GitHub token rejected",
-                f"GitHub answered HTTP {exc.code}: the GITHUB_PAT in credentials.txt is invalid,\n"
+                f"GitHub answered HTTP {exc.code}: the saved GitHub token is invalid,\n"
                 "expired, or revoked.\n\n"
                 "How to fix (2 minutes):\n"
                 "  1. Go to github.com → Settings → Developer settings →\n"
                 "     Personal access tokens → Generate new token\n"
                 "  2. Give it read access to the private repo testplay-byte/ACUTE-CODE\n"
-                f"  3. Paste the new token into {CRED_PATH}  (the GITHUB_PAT= line)\n"
-                "  4. Save and double-click the launcher again",
+                f"  3. Delete {PAT_PATH} (or set ACUTE_GITHUB_PAT), then run the\n"
+                "     launcher again and paste the new token when asked",
             )
         if exc.code == 404:
             fail(
@@ -703,7 +651,7 @@ def explain_git_failure(proc, cmd_display=""):
             or "access denied or repository not enrolled" in low):
         head += [
             "Diagnosis: GitHub rejected the download — almost always the token.",
-            "Fix: open credentials.txt, replace the GITHUB_PAT line with a fresh",
+            "Fix: delete .acute/github.pat (or set ACUTE_GITHUB_PAT), rerun, and paste",
             "token (github.com → Settings → Developer settings → Personal access",
             "tokens → it needs read access to the private repo), save, re-run.",
         ]
@@ -952,58 +900,6 @@ def write_env_file():
             encoding="utf-8",
         )
         ok("written (gitignored, survives updates)")
-
-
-def distribute_key(key, sub_keys=("", "", "")):
-    with step("OpenRouter key → secure store"):
-        shown = f"length {len(key)}"
-        if IS_WIN:
-            script = APP_DIR / "scripts" / "credential.ps1"
-            run(
-                ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File",
-                 str(script), "Write", "ACUTE-CODE/provider/openrouter", "api-key", key],
-                check=False, timeout=60,
-            )
-            ok(f"stored in Windows Credential Manager ({shown})")
-        else:
-            kf = Path.home() / ".acute" / "openrouter.key"
-            kf.parent.mkdir(parents=True, exist_ok=True)
-            kf.write_text(key + "\n", encoding="utf-8")
-            try:
-                os.chmod(kf, 0o600)
-            except OSError:
-                pass
-            ok(f"stored at {kf} ({shown}, chmod 600)")
-        note("the key is also injected directly into the servers at launch")
-
-    # ROUND-44 (R44-d): the three sub-agent pool keys ride along — same secure
-    # stores, slot-suffixed names. Absent keys are skipped silently (the pool
-    # simply stays smaller and children fall back to the main key).
-    if not any(sub_keys):
-        return
-    with step("Sub-agent keys → secure store (pool slots 2/3/4)"):
-        for i, sub in enumerate(sub_keys):
-            if not sub:
-                continue
-            slot = i + 2  # sub1 → slot 2, sub2 → slot 3, sub3 → slot 4
-            shown = f"length {len(sub)}"
-            if IS_WIN:
-                script = APP_DIR / "scripts" / "credential.ps1"
-                run(
-                    ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File",
-                     str(script), "Write", f"ACUTE-CODE/provider/openrouter-slot{slot}", "api-key", sub],
-                    check=False, timeout=60,
-                )
-                ok(f"slot {slot} → Windows Credential Manager ({shown})")
-            else:
-                kf = Path.home() / ".acute" / f"openrouter-slot{slot}.key"
-                kf.parent.mkdir(parents=True, exist_ok=True)
-                kf.write_text(sub + "\n", encoding="utf-8")
-                try:
-                    os.chmod(kf, 0o600)
-                except OSError:
-                    pass
-                ok(f"slot {slot} → {kf} ({shown}, chmod 600)")
 
 
 def self_update_check():
@@ -1860,33 +1756,7 @@ def _print_whats_new(version):
         panel("\n".join(keep), style="cyan", title=f"What's new in {version}")
 
 
-def _desktop_seed_keys(key, sub_keys):
-    """Push the launcher's keys into Windows Credential Manager via cmdkey.
-
-    The packaged app's Rust shell reads these EXACT generic-credential
-    targets (sidecar.rs provider_key_targets → keys.rs scheme
-    `ACUTE-CODE/provider/<id>`, user `api-key`) at every boot, so the owner
-    never pastes keys into the installed app by hand. Key VALUES never
-    appear in logs (run()'s log line goes through redact(), which has every
-    key registered; cmdkey's own output prints no material either).
-    """
-    with step("Keys → Windows Credential Manager (for the desktop app)"):
-        targets = [("ACUTE-CODE/provider/openrouter", key)]
-        for i, sub in enumerate(sub_keys):
-            if sub:
-                targets.append((f"ACUTE-CODE/provider/openrouter-slot{i + 2}", sub))
-        for target, value in targets:
-            if not value:
-                continue
-            run(
-                ["cmdkey", f"/generic:{target}", "/user:api-key", f"/pass:{value}"],
-                check=False,
-                timeout=30,
-            )
-            ok(f"stored {target} (length {len(value)})")
-
-
-def desktop_flow(pat, key, sub_keys, force_reinstall=False):
+def desktop_flow(pat, force_reinstall=False):
     """Install + launch the packaged desktop app. True = it is running.
 
     Any failure prints a warning and returns False — the caller falls back
@@ -2089,7 +1959,6 @@ def desktop_flow(pat, key, sub_keys, force_reinstall=False):
 
     # Credentials BEFORE launch: the app's Rust shell reads Credential
     # Manager at boot, so the keys must be in place before the exe starts.
-    _desktop_seed_keys(key, sub_keys)
 
     # R54: never launch a second instance on top of a live one.
     _desktop_stop_running(installed)
@@ -2187,7 +2056,7 @@ def desktop_flow(pat, key, sub_keys, force_reinstall=False):
 # modes
 # ─────────────────────────────────────────────────────────────────────────────
 
-def mode_status(pat, key, env, sub_keys=("", "", "")):
+def mode_status(pat, env):
     rule("status (read-only)")
     lines = []
     for name, cmd in (("git", ["git", "--version"]), ("Node.js", ["node", "--version"]),
@@ -2270,12 +2139,7 @@ def mode_status(pat, key, env, sub_keys=("", "", "")):
         else:
             lines.append("engine log   no sidecar.log yet (the packaged app has never run)")
     lines.append(f"GitHub PAT   length {len(pat)}")
-    lines.append(f"Router key   length {len(key)}")
-    # sub-agent pool presence (length only, never the value)
-    sub_desc = ", ".join(
-        f"slot {i + 2} {'set' if sub else '—'}" for i, sub in enumerate(sub_keys)
-    )
-    lines.append(f"Sub keys     {sub_desc}")
+    lines.append("AI keys      saved in the app (Settings → Models & Providers)")
 
     busy = []
     for port in (UI_PORT, SIDECAR_PORT):
@@ -2364,16 +2228,9 @@ def mode_uninstall():
     wait_close()
 
 
-def launch(env, key, sub_keys=("", "", "")):
+def launch(env):
     with step("Launching ACUTE-CODE (sidecar :5178 + UI :5173)"):
         stop_live_servers("clean restart")
-        if key:
-            env["ACUTE_PROVIDER_OPENROUTER"] = key
-        # ROUND-44 (R44-d): pool slots for sub-agents — the in-memory keyring
-        # picks these up and the orchestrator prefers them for child runs.
-        for i, sub in enumerate(sub_keys):
-            if sub:
-                env[f"ACUTE_PROVIDER_OPENROUTER_SLOT{i + 2}"] = sub
     panel(
         "Everything is ready. The servers are starting.\n\n"
         "  ➜  Your browser will OPEN http://localhost:5173 AUTOMATICALLY\n"
@@ -2406,7 +2263,7 @@ def launch(env, key, sub_keys=("", "", "")):
             f"servers exited with code {code}",
             "Common causes:\n"
             "  • a port is still occupied (the launcher clears it on the next run)\n"
-            "  • the OpenRouter key is missing/invalid (catalog and chats fail)\n"
+            "  • no AI provider key saved yet (Settings → Models & Providers in the app)\n"
             "  • a build step failed — see the log tail below",
         )
 
@@ -2470,23 +2327,18 @@ def main():
 
     # R63: `ACUTE.bat uninstall` removes the packaged desktop app — a purely
     # LOCAL operation. It needs NO credentials (nothing is downloaded), so
-    # it runs before read_credentials() can fail on a missing/empty file.
+    # it runs before the GitHub token is needed (nothing is downloaded).
     if cmd == "uninstall":
         mode_uninstall()
         return
 
-    pat, key, sub_keys = read_credentials()
-    register_secrets(pat, key, authed_url(pat), *[s for s in sub_keys if s])
+    pat = resolve_github_pat()
+    register_secrets(pat, authed_url(pat))
     env = dict(os.environ)
 
     if cmd == "status":
-        mode_status(pat, key, env, sub_keys)
+        mode_status(pat, env)
         return
-
-    # ROUND-47: keep the optional sub-agent key LINES present in
-    # credentials.txt (placeholder appends only — values are never written).
-    sub_keys = ensure_subagent_keys(sub_keys)
-    register_secrets(*[s for s in sub_keys if s])
 
     with step("Verifying GitHub access (token + private repository)"):
         validate_github_access(pat)
@@ -2543,8 +2395,10 @@ def main():
             "                                        match the release (sha256-checked\n"
             "                                        download; the engine's version is\n"
             "                                        checked after launch)\n"
-            "  6.  Store your keys                   Windows Credential Manager (once)\n"
-            "  7.  Start the app                     a real app window — no browser tab\n"
+            "  6.  Start the app                     a real app window — no browser tab\n"
+            "  7.  Save your AI keys                in the app: Settings → Models &\n"
+            "                                        Providers (once — the desktop app\n"
+            "                                        stores them in Credential Manager)\n"
             "\n"
             "If the desktop install fails for ANY reason the launcher falls back\n"
             "to the site flow automatically — you always end up with a running\n"
@@ -2562,8 +2416,8 @@ def main():
             "  2.  Check the toolchain               git · Node.js · pnpm — auto-installs when missing\n"
             "  3.  Download / update ACUTE-CODE      first run downloads it, later runs update it\n"
             "  4.  Install dependencies + build      skipped when already done\n"
-            "  5.  Store the OpenRouter key          Windows Credential Manager (once)\n"
-            "  6.  Start the site                    open http://localhost:5173 in your browser\n"
+            "  5.  Start the site                    open http://localhost:5173 in your browser\n"
+            "     (save your AI keys in the app:     Settings → Models & Providers)\n"
             "\n"
             "Every step prints its result. If anything fails you get a red panel\n"
             "with the exact cause and the fix — the window stays open for copying.\n"
@@ -2606,15 +2460,14 @@ def main():
     # R63: force_reinstall routes desktop_flow through its delete-completely
     # + fresh-install path (ACUTE.bat reinstall / repair / --reinstall).
     if IS_WIN and launch_mode == "desktop":
-        if desktop_flow(pat, key, sub_keys, force_reinstall=force_reinstall):
+        if desktop_flow(pat, force_reinstall=force_reinstall):
             return
         warn("falling back to the site flow (browser at http://localhost:5173)")
 
     install_and_build(env, updated)
     write_env_file()
-    distribute_key(key, sub_keys)
 
-    launch(env, key, sub_keys)
+    launch(env)
 
 
 if __name__ == "__main__":

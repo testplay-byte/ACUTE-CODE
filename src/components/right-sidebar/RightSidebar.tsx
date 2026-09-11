@@ -587,7 +587,38 @@ export function RightSidebar({
       </div>
 
       {/* ── Active panel ── */}
-      <div className="flex-1 min-h-0 overflow-hidden">
+      <div className="flex-1 min-h-0 overflow-hidden relative">
+        {/* ROUND-87 (R87, owner: "Make sure to properly embed the browser
+            window as a complete part of the application itself rather than
+            it being an overlay … If I click on the new tab button, the whole
+            browser window apparently disappears … the browser itself
+            apparently closes in the background … If I try to switch the
+            tabs, then the previous tab apparently gets somewhat glitched
+            out"): KEEP-ALIVE — every BROWSER tab's panel stays MOUNTED
+            for the sidebar's lifetime (display:none when inactive). The
+            native webview hides but never re-creates (no reload, no blank
+            frame, no glitch); the proxied iframe stays loaded (no FOUC,
+            no lost scroll); switching back is INSTANT. Non-browser panels
+            stay conditional (cheap mount/unmount). */}
+        {state.tabs
+          .filter((t) => t.type === "browser")
+          .map((browserTab) => (
+            <div
+              key={browserTab.id}
+              className="absolute inset-0"
+              style={{
+                display: activeTab?.id === browserTab.id ? "block" : "none",
+                zIndex: 0,
+              }}
+              aria-hidden={activeTab?.id !== browserTab.id}
+            >
+              <BrowserPanel
+                projectId={projectId}
+                tab={browserTab}
+                hidden={activeTab?.id !== browserTab.id}
+              />
+            </div>
+          ))}
         {activeTab === null ? (
           <EmptyState
             styles={styles}
@@ -603,16 +634,14 @@ export function RightSidebar({
           <FilesExplorerPanel projectId={projectId} tab={activeTab} />
         ) : activeTab.type === "terminal" ? (
           <TerminalPanel projectId={projectId} tab={activeTab} />
-        ) : activeTab.type === "browser" ? (
-          <BrowserPanel projectId={projectId} tab={activeTab} />
         ) : activeTab.type === "memory" ? (
           <MemoryPanel projectId={projectId} tab={activeTab} />
         ) : activeTab.type === "console" ? (
           // ROUND-59 (R59-E): the diagnostics console (error monitoring).
           <ConsolePanel projectId={projectId} tab={activeTab} />
-        ) : (
+        ) : activeTab.type === "subagent" ? (
           <SubAgentPanel tab={activeTab} />
-        )}
+        ) : null}
       </div>
     </motion.div>
   );

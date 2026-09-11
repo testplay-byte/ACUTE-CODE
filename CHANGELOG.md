@@ -1,4 +1,4 @@
-<!-- last-reviewed: 2026-09-10 round-85 -->
+<!-- last-reviewed: 2026-09-11 round-87 -->
 # Changelog
 
 All notable changes to ACUTE-CODE are documented here. Entries are written for
@@ -18,6 +18,79 @@ notifications/jobs/checkpoints/dialogs/plugins tail; then Wave 3 the frontend
 seams), external plugin ctx enrichment, the lessons-ledger affordance,
 ratings-driven prompt tuning, and the standing items (edit-linting, installer
 code-signing, the Files-tab polish, agent web-app-testing tools).
+
+## [0.85.0] - 2026-09-11 — the R87 UX + capability round
+
+### Added — the About section, the reset, and the agent's questions
+- **Settings → About** (NEW, `?tab=about`): the version card (the app
+  version + a check-for-updates button against the GitHub latest release +
+  the Releases link), the about card (phase, engine, storage), and the
+  danger zone.
+- **Reset the entire application** (the About tab): every project, session,
+  agent, usage row, memory, setting, provider, model, and key is removed and
+  the app returns to its first-run state — live turns abort, the SQLite
+  tables are wiped and re-seeded with factory data, the OS credential store
+  is purged (the desktop app), the `~/.acute` machine files go, the webview
+  clears its local stores, and the app reloads into onboarding. Files on
+  your disk are never touched.
+- **The agent can ask you questions mid-task** (`ask_user`): a question card
+  renders right in the chat — pick an option pill or type a custom answer,
+  answer multiple questions in one go — and the turn waits for you (up to
+  10 minutes, then the agent proceeds on a stated assumption). The cards
+  persist after reload like approvals do.
+- **The todo list is visible in chat**: the agent's `todo_write` snapshots
+  now render as a live task-list card in the working stream (progress meter
+  + per-item status) — updated in real time, not only after the turn ends.
+- **Model input/output capabilities**: every model row carries what it
+  accepts (text — always, images, videos, PDFs) and what it produces (text,
+  images, video, audio) plus a size label ("70B"). Shown as chips on the
+  model cards; configured in the dialog. Reasoning and tool use are no
+  longer user-configured — the app detects those.
+
+### Changed — configure before adding, the redesigned Models & Providers, the embedded browser
+- **Clicking a model now opens its configuration first** (never a direct
+  add): display name, model id, size, context window, max output, and
+  pricing arrive pre-filled from the catalog and stay editable — then one
+  save adds it. The add-by-id path rides the same flow.
+- **The Models & Providers page is redesigned**: every model is its own
+  bordered card (generous spacing, bold display names, capability chips),
+  and the three right-side actions (test / edit / delete) are uniform icon
+  buttons.
+- **The test button animates and self-dismisses**: a spinner + pulse while
+  testing; the result line slides in and disappears after 5 seconds; the
+  button itself is tinted green or red for those 5 seconds. Clicking again
+  re-tests.
+- **The embedded browser feels like part of the app**: the default viewport
+  is 1440×900; browser tabs stay alive when you switch tabs or open the
+  new-tab menu (no reload, no glitch, instant switch-back — a dimmed
+  "browser paused" hint shows while a menu covers it).
+- **The agent knows the browser page fully**: `read_dom` now reports every
+  clickable element's position (x/y/w/h) alongside its selector and text —
+  the agent has the complete page layout without screenshots. Screenshots
+  capture the browser panel only and never fall back to the whole screen.
+- **The composer's model selector shrinks gracefully**: the model name
+  narrows first (smoothly), then the other pills collapse in stages — never
+  everything at once. The provider flyout no longer switches providers when
+  your pointer crosses rows on the way to it, and the model popover dims +
+  frosts the background while open.
+- **The chat area** can go twice as narrow (for a wide right sidebar) and
+  pads its content at full width; scrollbars scale with the window size;
+  clicking a project in the minimized sidebar rail expands it first.
+
+### Fixed
+- **The NVIDIA phantom "added" pill**: the Add-Provider dialog checked the
+  raw provider rows while the left list hides keyless seeded presets — a
+  preset you never added claimed to already be there. The dialog now uses
+  the same hasKey-aware list: keyless presets show as addable.
+- **Browser screenshots never leak your screen**: the old full-display
+  fallback (when the panel wasn't mounted) is gone — an honest error
+  steers the agent to the content tools instead.
+- **credentials.txt is gone from the launcher**: the launcher no longer
+  reads any provider keys from any file — you save them in the app itself
+  (Settings → Models & Providers). The launcher asks for your GitHub token
+  once (masked, saved locally at `.acute/github.pat`, or the
+  `ACUTE_GITHUB_PAT` environment variable) and uses it only to download
+  the app.
 
 ## [0.84.0] - 2026-09-10 — the R86 SSE-route extraction round
 

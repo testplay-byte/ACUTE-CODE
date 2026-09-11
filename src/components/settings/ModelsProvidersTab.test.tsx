@@ -228,6 +228,12 @@ function modelRow(overrides: Partial<ProviderModelConfig> & { modelId: string })
     supportsTools: true,
     supportsAudio: null,
     supportsVideo: null,
+    supportsPdf: null,
+    supportsTextOutput: true,
+    supportsImageOutput: null,
+    supportsVideoOutput: null,
+    supportsAudioOutput: null,
+    sizeLabel: null,
     hidden: false,
     sortOrder: 0,
     createdAt: "2026-08-30T09:00:00Z",
@@ -673,43 +679,59 @@ describe("Add models — catalog picker (ROUND-50 R50-d)", () => {
     await openPicker();
 
     const dialog = screen.getByRole("dialog", { name: "Add models" });
-    const freeCheckbox = (await within(dialog).findByLabelText(
-      "Select model z-ai/glm-5.2:free",
-    )) as HTMLInputElement;
-    expect(freeCheckbox.disabled).toBe(true);
-    expect(freeCheckbox.checked).toBe(true);
+    // ROUND-87 (R87): rows are clean clickable cards — the already-configured
+    // one is a DISABLED button carrying the ADDED badge (no checkboxes).
+    const addedRow = (await within(dialog).findByLabelText(
+      "Configure and add z-ai/glm-5.2:free",
+    )) as HTMLButtonElement;
+    expect(addedRow.disabled).toBe(true);
     expect(within(dialog).getByText("ADDED")).toBeTruthy();
     expect(within(dialog).getAllByText("FREE").length).toBeGreaterThan(0);
     expect(within(dialog).getByText("PAID")).toBeTruthy();
+    // The pickable row is enabled and carries the configure affordance.
+    const pickable = within(dialog).getByLabelText("Configure and add openai/gpt-4o") as HTMLButtonElement;
+    expect(pickable.disabled).toBe(false);
+    expect(within(dialog).getByText("CONFIGURE →")).toBeTruthy();
   });
 
-  it("multi-select + bulk add: ONE upsert per selected model, pricing pre-filled from the served catalog", async () => {
-    // R60-B: the selection spans paid + unknown entries — All-models scope.
+  it("ROUND-87: clicking a model OPENS THE CONFIGURE DIALOG (never a direct add) — the prefill arrives pre-filled and the save upserts once", async () => {
+    // R60-B: All-models scope (the fixture mixes free + paid + unknown).
     useSettingsStore.setState({ modelsFreeOnly: false });
     liveCatalog = [
       { id: "z-ai/glm-5.2:free", name: "Z.ai: GLM 5.2" },
       { id: "openai/gpt-4o", name: "GPT-4o" },
-      { id: "custom/other", name: "Other" },
     ];
     await openPicker();
 
-    fireEvent.click(await screen.findByLabelText("Select model openai/gpt-4o"));
-    fireEvent.click(screen.getByLabelText("Select model custom/other"));
+    // Click the paid row — the picker closes and the ADD-mode config dialog
+    // opens with the catalog prefill (the owner: "it should give the user
+    // the option to set them up").
+    fireEvent.click(await screen.findByLabelText("Configure and add openai/gpt-4o"));
+    const dialog = await screen.findByRole("dialog", { name: "Add model" });
+    await waitFor(() =>
+      expect(screen.queryByRole("dialog", { name: "Add models" })).toBeNull(),
+    );
 
-    const bulk = screen.getByRole("button", { name: "Add 2 models" });
-    fireEvent.click(bulk);
+    // The prefill: the display name + the id (editable in add mode)…
+    expect((within(dialog).getByLabelText("Display name") as HTMLInputElement).value).toBe("GPT-4o");
+    expect((within(dialog).getByLabelText("Model id") as HTMLInputElement).value).toBe("openai/gpt-4o");
+    // …and the served catalog's full pricing + sizing.
+    expect((within(dialog).getByLabelText("Input price ($ per 1M tokens)") as HTMLInputElement).value).toBe("2.5");
+    expect((within(dialog).getByLabelText("Context window (tokens)") as HTMLInputElement).value).toBe("128000");
 
+    // Save → ONE upsert with the prefill + the R87 capability defaults
+    // (text output ON, the rest off — the chip group's honest defaults).
+    fireEvent.click(within(dialog).getByRole("button", { name: "Add model" }));
     await waitFor(() => {
       const posts = calls.filter(
         (c) => c.method === "POST" && c.url.endsWith("/providers/openrouter/models"),
       );
-      expect(posts).toHaveLength(2);
+      expect(posts).toHaveLength(1);
     });
-    const bodies = calls
-      .filter((c) => c.method === "POST" && c.url.endsWith("/providers/openrouter/models"))
-      .map((c) => c.body as Record<string, unknown>);
-    // gpt-4o: live-catalog display name + the served catalog's full pricing.
-    expect(bodies).toContainEqual({
+    const post = calls.find(
+      (c) => c.method === "POST" && c.url.endsWith("/providers/openrouter/models"),
+    );
+    expect(post?.body).toMatchObject({
       modelId: "openai/gpt-4o",
       displayName: "GPT-4o",
       contextWindow: 128000,
@@ -717,13 +739,16 @@ describe("Add models — catalog picker (ROUND-50 R50-d)", () => {
       inputPricePerMtok: 2.5,
       inputPriceCachedPerMtok: 1.25,
       outputPricePerMtok: 10,
+      supportsTextOutput: true,
+      // The served catalog's gpt-4o row carries supportsVision: true — the
+      // prefill honors it.
+      supportsVision: true,
+      hidden: false,
     });
-    // custom/other: no catalog metadata → the bare model id + live name.
-    expect(bodies).toContainEqual({ modelId: "custom/other", displayName: "Other" });
 
-    // The dialog closes on full success.
+    // The dialog closes on success.
     await waitFor(() =>
-      expect(screen.queryByRole("dialog", { name: "Add models" })).toBeNull(),
+      expect(screen.queryByRole("dialog", { name: "Add model" })).toBeNull(),
     );
   });
 
@@ -739,17 +764,17 @@ describe("Add models — catalog picker (ROUND-50 R50-d)", () => {
     fireEvent.change(await screen.findByLabelText("Search catalog models"), {
       target: { value: "gpt" },
     });
-    await waitFor(() => expect(screen.getByLabelText("Select model openai/gpt-4o")).toBeTruthy());
-    expect(screen.queryByLabelText("Select model z-ai/glm-5.2:free")).toBeNull();
+    await waitFor(() => expect(screen.getByLabelText("Configure and add openai/gpt-4o")).toBeTruthy());
+    expect(screen.queryByLabelText("Configure and add z-ai/glm-5.2:free")).toBeNull();
 
     // …and by display name ("Inkling" matches the name, not the id).
     fireEvent.change(screen.getByLabelText("Search catalog models"), {
       target: { value: "GLM" },
     });
     await waitFor(() =>
-      expect(screen.getByLabelText("Select model z-ai/glm-5.2:free")).toBeTruthy(),
+      expect(screen.getByLabelText("Configure and add z-ai/glm-5.2:free")).toBeTruthy(),
     );
-    expect(screen.queryByLabelText("Select model openai/gpt-4o")).toBeNull();
+    expect(screen.queryByLabelText("Configure and add openai/gpt-4o")).toBeNull();
   });
 
   it("manual add-by-id fallback: unreachable live catalog → the by-id form still adds the model", async () => {
@@ -763,16 +788,20 @@ describe("Add models — catalog picker (ROUND-50 R50-d)", () => {
     fireEvent.change(screen.getByLabelText("Model id"), {
       target: { value: "my/custom-model" },
     });
-    fireEvent.click(screen.getByRole("button", { name: /add by id/i }));
+    // ROUND-87 (R87): the by-id path rides the SAME configure flow — no add
+    // without configuration.
+    fireEvent.click(screen.getByRole("button", { name: /configure & add/i }));
+    const dialog = await screen.findByRole("dialog", { name: "Add model" });
+    expect((within(dialog).getByLabelText("Model id") as HTMLInputElement).value).toBe("my/custom-model");
+    fireEvent.click(within(dialog).getByRole("button", { name: "Add model" }));
 
     await waitFor(() => {
       const post = calls.find(
         (c) => c.method === "POST" && c.url.endsWith("/providers/openrouter/models"),
       );
       expect(post).toBeDefined();
-      expect(post?.body).toEqual({ modelId: "my/custom-model" });
+      expect(post?.body).toMatchObject({ modelId: "my/custom-model" });
     });
-    await waitFor(() => expect(screen.getByText("Added my/custom-model.")).toBeTruthy());
   });
 });
 
@@ -827,13 +856,19 @@ describe("Configure model dialog — pricing round-trip (ROUND-50 R50-d)", () =>
         inputPricePerMtok: 0.5,
         inputPriceCachedPerMtok: null, // cleared — unknown, NOT $0.02 and NOT 0
         outputPricePerMtok: 0.6,
-        supportsThinking: true,
-        supportsVision: false, // R62-2b: the dialog now PATCHes the vision flag too
-        // ROUND-82: the capability card PATCHes the tri-state flags too
-        // (boolean = set; null = unknown — the fixtures carry them).
-        supportsTools: true,
+        supportsVision: false, // R62-2b: the dialog PATCHes the vision flag (the Images chip)
+        // ROUND-87 (R87): the capability chips PATCH the R82 tri-state flags
+        // + the R87 input/output columns. supportsThinking + supportsTools
+        // are deliberately ABSENT — the app detects those (the owner's
+        // directive); absent = keep stored.
         supportsAudio: null,
         supportsVideo: null,
+        supportsPdf: null,
+        supportsTextOutput: true,
+        supportsImageOutput: null,
+        supportsVideoOutput: null,
+        supportsAudioOutput: null,
+        sizeLabel: null,
         hidden: false,
       });
     });
@@ -923,7 +958,7 @@ describe("Configure model dialog — per-1M pricing + vision (R62-2b)", () => {
     });
   });
 
-  it("the Vision toggle PATCHes supportsVision (R82 dialog: the capabilities card)", async () => {
+  it("the Images INPUT chip PATCHes supportsVision (R87 dialog: the capability chip groups)", async () => {
     const dialog = await openDialog(
       modelRow({
         id: "mdl_priced",
@@ -933,12 +968,13 @@ describe("Configure model dialog — per-1M pricing + vision (R62-2b)", () => {
       }),
     );
 
-    // ROUND-82: the capabilities card renders Vision/Reasoning as On/Off
-    // Toggles (renamed from the old "Supports vision" group) beside the
-    // tri-state Tool use / Audio input / Video rows…
-    const visionGroup = within(dialog).getByRole("group", { name: "Vision" });
-    // …flip it On.
-    fireEvent.click(within(visionGroup).getByRole("button", { name: "On" }));
+    // ROUND-87 (R87): the capabilities card is now the INPUT/OUTPUT chip
+    // groups — vision is the "Images" input chip (aria-pressed flips).
+    const imagesChip = within(dialog).getByTestId("model-cap-images-in");
+    expect(imagesChip.getAttribute("aria-pressed")).toBe("false");
+    // …flip it on.
+    fireEvent.click(imagesChip);
+    expect(imagesChip.getAttribute("aria-pressed")).toBe("true");
     fireEvent.click(within(dialog).getByRole("button", { name: "Save configuration" }));
 
     await waitFor(() => {
@@ -1447,9 +1483,9 @@ describe("Add models picker — Free only ↔ All models toggle (R60-B)", () => 
     const dialog = screen.getByRole("dialog", { name: "Add models" });
     // Free row visible; the PAID row is filtered by the free-only default.
     await waitFor(() =>
-      expect(within(dialog).getByLabelText("Select model z-ai/glm-5.2:free")).toBeTruthy(),
+      expect(within(dialog).getByLabelText("Configure and add z-ai/glm-5.2:free")).toBeTruthy(),
     );
-    expect(within(dialog).queryByLabelText("Select model openai/gpt-4o")).toBeNull();
+    expect(within(dialog).queryByLabelText("Configure and add openai/gpt-4o")).toBeNull();
     // The segmented toggle lives IN the picker now.
     expect(within(dialog).getByTestId("picker-free-only-toggle").getAttribute("aria-pressed")).toBe("true");
     expect(within(dialog).getByTestId("picker-all-models-toggle").getAttribute("aria-pressed")).toBe("false");
@@ -1457,7 +1493,7 @@ describe("Add models picker — Free only ↔ All models toggle (R60-B)", () => 
     // Flip to All models — the paid row appears.
     fireEvent.click(within(dialog).getByTestId("picker-all-models-toggle"));
     await waitFor(() =>
-      expect(within(dialog).getByLabelText("Select model openai/gpt-4o")).toBeTruthy(),
+      expect(within(dialog).getByLabelText("Configure and add openai/gpt-4o")).toBeTruthy(),
     );
     expect(within(dialog).getByTestId("picker-all-models-toggle").getAttribute("aria-pressed")).toBe("true");
     expect(within(dialog).getByTestId("picker-free-only-toggle").getAttribute("aria-pressed")).toBe("false");
@@ -1470,7 +1506,7 @@ describe("Add models picker — Free only ↔ All models toggle (R60-B)", () => 
     // …and flipping back re-hides the paid row.
     fireEvent.click(within(dialog).getByTestId("picker-free-only-toggle"));
     await waitFor(() =>
-      expect(within(dialog).queryByLabelText("Select model openai/gpt-4o")).toBeNull(),
+      expect(within(dialog).queryByLabelText("Configure and add openai/gpt-4o")).toBeNull(),
     );
     // Still never written: the shared pref carries the pre-dialog value.
     expect(useSettingsStore.getState().modelsFreeOnly).toBe(true);
@@ -1486,7 +1522,7 @@ describe("Add models picker — Free only ↔ All models toggle (R60-B)", () => 
     // as broken (every NIM catalog would show it on open). The paid row is
     // visible instead…
     await waitFor(() =>
-      expect(screen.getByLabelText("Select model openai/gpt-4o")).toBeTruthy(),
+      expect(screen.getByLabelText("Configure and add openai/gpt-4o")).toBeTruthy(),
     );
     // …the All segment is pressed…
     expect(screen.getByTestId("picker-all-models-toggle").getAttribute("aria-pressed")).toBe("true");
@@ -1526,7 +1562,7 @@ describe("Models list vs picker for custom providers (R60-B)", () => {
     fireEvent.click(screen.getByRole("button", { name: /add models/i }));
     const dialog = await screen.findByRole("dialog", { name: "Add models" });
     await waitFor(() =>
-      expect(within(dialog).getByLabelText("Select model z-ai/glm-5.2:free")).toBeTruthy(),
+      expect(within(dialog).getByLabelText("Configure and add z-ai/glm-5.2:free")).toBeTruthy(),
     );
   });
 });
@@ -1737,7 +1773,10 @@ describe("Settings mutations refresh the SESSION page's model caches (R62-2b)", 
     fireEvent.change(screen.getByLabelText("Model id"), {
       target: { value: "custom/manual-model" },
     });
-    fireEvent.click(screen.getByRole("button", { name: /add by id/i }));
+    // ROUND-87 (R87): the by-id path opens the configure dialog — save there.
+    fireEvent.click(screen.getByRole("button", { name: /configure & add/i }));
+    const dialog = await screen.findByRole("dialog", { name: "Add model" });
+    fireEvent.click(within(dialog).getByRole("button", { name: "Add model" }));
 
     await waitFor(() =>
       expect(

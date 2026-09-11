@@ -57,4 +57,10 @@ export interface RouteContext {
    * handler captures into it; routes/diagnostics.ts serves/clears it.
    */
   diagnosticsRing: SidecarDiagnosticError[];
+  /**
+   * ROUND-87 (R87): the machine-scoped data directory (the SQLite file's
+   * directory — where vapid.json lives). Optional + undefined in tests that
+   * stay hermetic; routes/system.ts uses it for the reset's file purge.
+   */
+  dataDir?: string;
 }

@@ -957,3 +957,25 @@ Format per entry: `N. TITLE (date, source)` → mistake → root cause → rule.
     whose count drops to their import statement. A moved block tells you
     what it NEEDS — it tells you nothing about what the REMAINDER still
     needs.
+
+### Lesson #87 — components defined inside render remount per keystroke; pins written before the behavior exists go stale silently
+**Two discipline notes from R87.** (1) `CapChip` was first defined INSIDE
+`ModelConfigDialog` (copying the old `Toggle`/`TriStateToggle` pattern) — a
+component function created during render is a NEW TYPE on every re-render,
+so React unmounts and remounts its whole subtree on every keystroke that
+touches the draft: test-held element references go stale (the chip's
+`aria-pressed` read `false` right after a click — the clicked DOM node was
+replaced), and real users lose focus/state on every draft change. RULE:
+interactive subcomponents always live at MODULE level (they can call
+`useThemeStyles()` themselves); defining them inside a component is reserved
+for truly static decoration. (2) A sub-agent had updated the
+`ModelsProvidersTab.test.tsx` fixture to expect the six NEW capability
+fields in the dialog's PATCH body while the dialog itself still sent the
+old shape — the test went red AFTER the fixture change but BEFORE the
+behavior change, and because the two landed in different workstreams the
+failure looked like a "pre-existing flake" to the layout sub-agent (it
+correctly quarantined it as out-of-scope, but a less careful agent would
+have "fixed" it by reverting the fixture). RULE: when a test pin is updated
+for a behavior that is being implemented in the SAME round by another
+workstream, the fixture change and the behavior change must land in the
+SAME commit — or the fixture change waits. (2026-09-11, round-87.)

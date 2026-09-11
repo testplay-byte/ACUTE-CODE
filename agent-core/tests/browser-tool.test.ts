@@ -583,7 +583,7 @@ describe("browser_control — screenshot (R62: computer-use capture + vision rel
     expect(relay.session.record).not.toHaveBeenCalled();
   });
 
-  it("no region answer → falls back to a full-display capture", async () => {
+  it("R87: no region answer → the HONEST ERROR (never a full-display capture — the owner's screen must not leak)", async () => {
     const displayCaptures: number[] = [];
     const relay = {
       backend: {
@@ -591,6 +591,7 @@ describe("browser_control — screenshot (R62: computer-use capture + vision rel
           displayCaptures.push(displayIndex);
           return { pngBase64: "aW1n", width: 1920, height: 1080, scale: 1, origin: { x: 0, y: 0 } };
         },
+        captureRegion: async () => ({ error: "unreachable" }),
       },
       run: vi.fn(),
       session: { record: vi.fn() },
@@ -600,21 +601,32 @@ describe("browser_control — screenshot (R62: computer-use capture + vision rel
     const bc = tool(tools, "browser_control");
     await bc.execute({ action: "navigate", url: "https://en.wikipedia.org/shot3", sessionId: "tool-tab-shot3" });
     const result = await bc.execute({ action: "screenshot", sessionId: "tool-tab-shot3" });
-    expect(result.ok).toBe(true);
-    expect(result.output).toContain("full display capture");
-    expect(displayCaptures).toEqual([1]);
+    expect(result.ok).toBe(false);
+    expect(result.output).toContain("no panel region to capture");
+    expect(result.output).toContain("NEVER falls back to a full-screen shot");
+    // R87: the full-display capture is GONE — the fallback was the leak.
+    expect(displayCaptures).toEqual([]);
   });
 
-  it("a failed capture surfaces the backend's error", async () => {
+  it("a failed REGION capture surfaces the backend's error", async () => {
+    const emit = (event: unknown) => {
+      const frame = event as { commandId: string };
+      queueMicrotask(() =>
+        resolveBrowserCommand(frame.commandId, {
+          ok: true,
+          data: { supported: true, region: { x: 0, y: 0, w: 800, h: 600 }, scaleFactor: 1, mode: "native" },
+        }),
+      );
+    };
     const relay = {
       backend: {
-        captureDisplay: async () => ({ error: "no scrot, no import" }),
+        captureRegion: async () => ({ error: "no scrot, no import" }),
       },
       run: vi.fn(),
       session: { record: vi.fn() },
     };
     setActiveComputerRelay(relay as never);
-    const tools = await buildTools(tempDir);
+    const tools = await buildTools(tempDir, { emit });
     const bc = tool(tools, "browser_control");
     await bc.execute({ action: "navigate", url: "https://en.wikipedia.org/shot4", sessionId: "tool-tab-shot4" });
     const result = await bc.execute({ action: "screenshot", sessionId: "tool-tab-shot4" });

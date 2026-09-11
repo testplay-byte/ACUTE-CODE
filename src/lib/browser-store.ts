@@ -55,9 +55,12 @@ export const BROWSER_VIEWPORT_PRESETS: ReadonlyArray<{ id: string; width: number
 ];
 
 export const BROWSER_VIEWPORT_DEFAULT: BrowserViewportState = {
-  width: 1280,
-  height: 800,
-  preset: "laptop",
+  // ROUND-87 (R87, owner: "The default dimensions of the browser on the
+  // right sidebar will be set to 1440 by 900"): the desktop preset is the
+  // default (was 1280×800 laptop).
+  width: 1440,
+  height: 900,
+  preset: "desktop",
   zoom: 1,
   rotate: false,
 };

@@ -1,4 +1,4 @@
-<!-- last-reviewed: 2026-09-10 round-83 -->
+<!-- last-reviewed: 2026-09-11 round-87 -->
 # Plan — Agentic Coding MVP (owner directive, 2026-08-22)
 
 The owner set the **first goal**: a full-fledged working agentic coding
