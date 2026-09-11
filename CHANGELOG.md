@@ -19,6 +19,99 @@ seams), external plugin ctx enrichment, the lessons-ledger affordance,
 ratings-driven prompt tuning, and the standing items (edit-linting, installer
 code-signing, the Files-tab polish, agent web-app-testing tools).
 
+## [0.87.0] - 2026-09-11 — the R89 owner's-verdict round
+
+The full walkthrough of v0.86.0, answered item by item: the About/reset
+fixes, the provider identity rules, the Models & Providers UI overhaul,
+the layout honesty, and the browser's human hands.
+
+### Fixed — About, reset, and updates
+- **The update check works on the private repo**: "Check for updates" now
+  runs server-side (the sidecar reads the launcher's saved GitHub token
+  from `~/.acute/github.pat` and asks GitHub itself) — the old anonymous
+  browser fetch answered HTTP 404 because the repository is private.
+  Failures are honest and reason-coded ("no token yet", "no release
+  visible", "network").
+- **The Releases button opens your browser**: inside the desktop app a
+  plain link was silently swallowed by the webview; the button now hands
+  the URL to the operating system's default browser.
+- **Reset returns to the setup wizard**: "Reset everything" now also
+  clears the first-run gate flag, so the app boots the setup wizard again
+  — not the dashboard — even after a full close and reopen.
+
+### Fixed — providers
+- **"Provider NVIDIA already exists" on a fresh reset is gone**: the
+  boot seed re-creates the five keyless built-in rows; adding a preset
+  whose row exists but holds no key now CONFIGURES that row in place
+  (adoption) instead of erroring.
+- **Add as many same-type providers as you need**: the display NAME is
+  the identity — the only thing that must differ. Ten OpenRouter
+  providers live side by side; the id is derived per add.
+- **Presets no longer ask for the API format**: the preset's wire format
+  arrives preset (a read-only summary — "it should already know which API
+  format the NVIDIA provider requires").
+- **The chat model picker lists only ADDED providers**: the never-added
+  seeded built-ins no longer render dead "no models configured" rows.
+- **The last-used model is remembered**: every model pick and every send
+  updates a global last-used model; a new chat starts from it instead of
+  the template default.
+
+### Changed — the Models & Providers page
+- **The Add-models picker** shows the clean model NAME (the id's last
+  segment, humanized — "Llama 3.3 70b Instruct") with the full id below
+  it — never the same id twice — and the stray "CONFIGURE" label is gone.
+- **The add-model dialog** defaults the display name to that clean name,
+  and the capability toggles are now themed — one color + one SVG icon
+  per modality (Text, Images, Video, PDF, Audio), for inputs and outputs.
+- **Token formatting everywhere**: 1000000 renders as 1M, 131072 as 131K;
+  the sizing inputs carry live compact hints; the summary line shows
+  `ctx 1M · max out 100K · in $0.15 · out $0.6 · cache $0.02`.
+- **Every model is a card with dedicated sections**: the identity and the
+  actions are separated left/right; a details strip renders Context /
+  Input / Output / Cache read as its own bordered band; capability chips
+  are colored icon chips.
+- **The test result expands a dedicated section below the model card**: the
+  card stays untouched; response time, tokens in/out, and the full reply
+  (Show reply) render in a bordered band that auto-collapses after 5s
+  unless you are reading it.
+
+### Fixed — layout honesty
+- **The chat shrinks to its floor at ANY window width**: the right
+  sidebar's hard 760px ceiling was silently raising the chat's minimum
+  as the window widened (the "left sidebar hidden → cannot shrink as
+  before" verdict); the drag now clamps against the live container.
+- **The squish tiers**: the model pill collapses to LOGO-ONLY at the
+  floor (never a half-cut name), the reading column's padding steps down
+  (24 → 16 → 10px), and message content can no longer escape the card.
+
+### Added — the browser's human hands
+- **A visible agent cursor**: a branded pointer that travels smooth
+  bezier paths (with natural micro-randomness) to every target, then
+  clicks with REAL pointer events at the exact spot — left, right, and
+  double clicks, plus drags.
+- **Human typing**: text is typed word by word at ~150 WPM with real
+  per-character events (React/Vue pages register it); newlines are real
+  newlines (Shift+Enter formatting — the form is never submitted
+  implicitly; submit stays an explicit act).
+- **Smooth scrolling**: eased, animated, at a position or the page.
+- **Full pointer control via the new `mouse` action**: move / click /
+  double / right / drag / scroll at exact page coordinates (read_dom
+  reports each element's x/y/w/h).
+- **The search-first workflow**: the browser tool now teaches SEARCH
+  FIRST — a search engine plus typing the query, never guessed direct
+  URLs — and read_dom-first for element positions.
+- **The 1440×900 default viewport actually applies**: the stored display
+  size is honored on mount (aspect-fitted into the panel); "Natural (fill
+  panel)" stays one click away and persists per tab.
+- **The browser no longer pauses when menus open elsewhere**: the overlay
+  guard is geometric — the webview hides only when an open menu or dialog
+  actually covers the page area.
+
+### Changed — the to-do list
+- **Frosted glass**: the floating to-do list (collapsed pill and expanded
+  panel) blurs the transcript behind it at its rounded corners — the
+  list reads as a highlighted floating layer.
+
 ## [0.86.0] - 2026-09-11 — the R88 floating to-do list round
 
 ### Added — the to-do list the owner specified

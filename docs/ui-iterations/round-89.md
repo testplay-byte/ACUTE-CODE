@@ -54,3 +54,130 @@ The owner ran v0.86.0 end-to-end and reported, in order:
   ntfy.
 
 (Sections 1-8 are filled as the work lands; §9 is the owner test checklist.)
+
+## 2. What shipped (the commit map)
+
+| Phase | Commit | The verdicts answered |
+|---|---|---|
+| A — About/Reset/Updates | `f7e00a4` | #1 #2 #3 (the 404 update check, the Releases button, the setup-gate key) |
+| B — Provider identity + picker | `5f47b3d` | #4–#8, #13–#14 (the "already exists" bug, same-type adds, the preset format, the chat picker, the last-used model) |
+| C — Models UI overhaul | `e4f5376` | #7–#12 (the clean names, the colored icon toggles, the token formatting, the dedicated sections, the test expansion) |
+| D — Layout honesty | `7f28ea3` | #15–#16 (the dynamic sidebar cap, the logo-only pill, the padding tiers, the overflow guards) |
+| E — The agent hands | `09efdfd` | #17–#22 (the cursor, the typing, the scroll, the viewport default, the geometric overlay guard, the search-first prompt) |
+| F — The TodoFloat frost | `5342917` | #23 (the backdrop blur) |
+
+## 3. Backend
+
+- **`routes/system.ts`**: `GET /system/updates` — the server-side update
+  check (reads `~/.acute/github.pat`; 8s abort budget; reason-coded honest
+  failures). The PAT never crosses REST.
+- **`routes/providers.ts`**: `POST /providers` — NAME-keyed uniqueness (409
+  `body.name`), keyless-row ADOPTION (200 `adopted:true`), same-type
+  derivation (`prv_<name-slug>`, `-2 -3…` suffixes). `PATCH /providers/:id`
+  enforces the same name rule on renames.
+- **`tools/plugins/browser-hands.ts` (NEW)**: the in-page agent-hands
+  runtime + the five drivers (click/type/press_key/mouse), the job
+  protocol (`window.__acuteJob`), all CSP-tolerant, all ≤ 20KB.
+- **`tools/plugins/browser.ts`**: the `mouse` action, the reworked
+  click/type/press_key on the hands engine, the 600-char human-pace cap,
+  the search-first + read_dom-first description.
+
+## 4. Frontend
+
+- `AboutTab` — the sidecar update check + `open_external_url` +
+  `acute.setupDone` in the reset sweep.
+- `ModelsProvidersTab` — `cleanModelName`/`formatTokenCount`/`CAPABILITY_META`
+  helpers, the reworked picker/config-dialog/model-card/test-section.
+- `ModelSelector` — the `hasKey` filter + the logo-only tier.
+- `composer-utils` — `loadLastUsedModel`/`saveLastUsedModel`; the send path
+  remembers the EFFECTIVE pair.
+- `ChatFocusLayout` + `right-sidebar-store` — the dynamic width cap.
+- `AgentChatPanel`/`Composer` — the `@container` squish tiers.
+- `BrowserPanel` — the `evalJob` handler (start + 120ms polling + ≤25s),
+  the geometric overlay subscription, the store-backed `natural` flag.
+- `browser-store` — the per-tab `natural` field (default FALSE: the stored
+  1440×900 preset applies on mount).
+- `popover-webview-guard` — rect-recorded overlays + `overlayCoversRect`
+  (unmeasurable overlays conservatively count as covering).
+- `TodoFloat` — the frosted-glass treatment.
+
+## 5. Verification
+
+| Gate | Result |
+|---|---|
+| `eslint .` (root, full) | CLEAN |
+| `tsc --noEmit` (root + agent-core) | CLEAN |
+| Frontend vitest (full) | **2,885 / 2,885 GREEN** |
+| agent-core vitest (full) | **1,892 / 1,892 GREEN** |
+| `vite build` + `tsc agent-core build` | GREEN (the dist boots) |
+| Sidecar E2E (12 black-box) | **12 / 12 GREEN** |
+| License audit (134 prod deps) | CLEAN |
+
+New/rewritten test surface: AboutTab (5), r89-updates (4), providers.test
+(4 rewritten), ModelsProvidersTab (7), Composer (2 + 1 updated),
+right-sidebar-store (3), popover-webview-guard (2 new + rewritten),
+BrowserPanel (2 + 3 updated), browser-tool (3 + 2 rewritten), r80-nvidia
+(1 rewritten for adoption).
+
+## 6. The owner's TEST CHECKLIST (§9 promised)
+
+**A. About / updates / reset**
+1. Settings → About → *Check for updates* — expect "Up to date — v0.87.0 is
+   the latest published release" (run via ACUTE.bat once so the launcher
+   has saved the GitHub token; before that the honest "token not saved"
+   error shows).
+2. *Releases* — your default browser opens the releases page.
+3. Type RESET → *Reset everything* — the app must land on the SETUP WIZARD
+   (not the dashboard), and stay there across a full close + reopen.
+
+**B. Providers**
+4. After a reset: Add Provider → NVIDIA → paste the key → Add — it must
+   SUCCEED (no "already exists"). Same for OpenRouter.
+5. Add a SECOND NVIDIA (rename to "NVIDIA 2" when the red hint appears) —
+   both live in the list side by side. Try a third.
+6. The preset flow never asks for the API format (a read-only chip shows
+   it). The CUSTOM flow still picks one.
+
+**C. Models & Providers UI**
+7. Add models — every row shows a clean NAME (e.g. "Llama 3.3 70b
+   Instruct") + the full id below; no "CONFIGURE" label anywhere.
+8. Click a model — the config dialog's Display name is pre-filled with
+   that clean name; the capability chips are colored and carry icons.
+9. Type 1000000 in Context window — a "≈ 1M" hint appears under the
+   input and the summary line reads `ctx 1M`.
+10. Every model card shows the details strip (Context | Input | Output |
+    Cache read). The capability chips are colored icons.
+11. Press TEST on a model — the card itself does NOT change shape; a
+    bordered section appears BELOW it with the response time; *Show
+    reply* reveals the full reply; it collapses after 5s (stays while you
+    read it).
+
+**D. Layout**
+12. Open both sidebars and drag the chat/sidebar divider LEFT as far as
+    it goes — the chat reaches its minimum; the model pill becomes
+    logo-only; nothing overflows.
+13. Hide the left sidebar completely — the chat must STILL shrink to the
+    same floor.
+
+**E. The browser hands**
+14. Give the agent a task that says "search the web for X, then open the
+    first result and look for Y" — the agent must go to a SEARCH ENGINE
+    first, and you must SEE the orange agent cursor travel to the search
+    box and the query typed word by word (~150 WPM), then submitted.
+15. Watch a click: the cursor visibly moves (with natural wobble) and
+    lands exactly on the element.
+16. Ask for a multi-line text typed into a textarea — newlines stay
+    newlines (no accidental submit).
+17. The viewport readout says desktop 1440×900 by default and the page
+    ACTUALLY renders at that size (aspect-fitted); "Natural (fill panel)"
+    is one click away.
+18. Open any top-bar menu — the browser KEEPS SHOWING the page (it only
+    pauses if the menu actually covers it, e.g. a centered dialog).
+
+**F. Misc**
+19. The chat's model picker lists ONLY the providers you added (with
+    keys) — no Anthropic/OpenAI dead rows.
+20. Pick a model, send a message, open a NEW chat — the model is
+    remembered as the default.
+21. The to-do list (top-right) now frosts/blurs the chat behind its
+    corners; everything else works as before (expand, edit, statuses).

@@ -3,7 +3,7 @@
   "product": {
     "name": "Acute",
     "tagline": "Local-first multi-agent engineering workbench",
-    "version": "0.85.0",
+    "version": "0.87.0",
     "availability": "Private build — not yet distributed",
     "chips": [
       "Windows desktop",
@@ -254,10 +254,14 @@
     {
       "date": "2026-09-11",
       "label": "R88 — the floating to-do list round: the owner's spec + manual edits, shipped as v0.86.0. The floating widget (top-right of the chat window; collapsed = only the task at hand; expand = the ten-row scroll box with done/processing/pending glyphs) + the manual editor (rename/status-cycle/reorder/delete/add; Save posts the owner's snapshot through POST /sessions/:id/todo with source:\"user\") + the CURRENT TODO LIST prompt section (the agent sees the latest snapshot — and the owner's edits, emphasized — on every turn)."
+    },
+    {
+      "date": "2026-09-11",
+      "label": "R89 — the owner's-verdict round: the full v0.86.0 walkthrough answered, shipped as v0.87.0. (A) The update check runs SERVER-SIDE with the launcher's saved PAT (the private-repo HTTP 404 fixed), the Releases button opens the OS browser, and the reset now clears the first-run gate (the app boots the SETUP WIZARD after 'Reset everything'). (B) Provider identity: the NAME is the uniqueness key, keyless preset rows are ADOPTED in place (the 'NVIDIA already exists' fresh-reset bug), same-type adds derive fresh ids (as many OpenRouters as needed), presets carry their API format (never asked), the chat picker lists only ADDED providers, and the last-used model becomes the next chats' default. (C) Models UI: clean human model names (Llama 3.3 70b Instruct), themed SVG capability chips, 1M/131K token formatting, the dedicated details strip (Context/Input/Output/Cache read), and the test result expanding its own section below the card. (D) Layout honesty: the dynamic sidebar cap (the chat reaches its floor at ANY window width), the logo-only model pill at minimum, padding tiers, overflow guards. (E) THE AGENT HANDS: a visible branded cursor traveling human bezier paths, real left/right/double clicks + drags at exact page coordinates, word-by-word typing at ~150 WPM with Shift+Enter newline semantics, smooth scrolling, the 1440×900 default viewport actually applying, and the GEOMETRIC overlay guard (the browser stays live when menus open away from it). (F) The TodoFloat frosted-glass blur. Full pipeline green: frontend 2,885 + agent-core 1,892 tests, e2e 12/12, license audit clean."
     }
   ],
   "quality": {
-    "ci": "GREEN — R88 push 3864f7b → CI run 34588692731 SUCCESS (the floating to-do list round: lint, typechecks, the 2,842-test root suite in 157 files, build, e2e, license audit, cargo check, docs check) + the Release run 34588694409 SUCCESS; v0.86.0 tagged, built, and PUBLISHED (both assets verified, zero drafts remain). The R87 verdict underneath (the close-out fix 7b6e47e): CI run 34584230413 + Release run 34584240071 both SUCCESS; v0.85.0 published.",
+    "ci": "GREEN (pre-push) — R89: lint, typechecks, the 2,885-test root suite, the 1,892-test agent-core suite, build, e2e 12/12, license audit all green locally; the v0.87.0 tag + CI + release follow this commit.",
     "suites": [
       {
         "name": "frontend",
