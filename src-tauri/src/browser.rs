@@ -737,6 +737,16 @@ pub async fn browser_tab_create(
     url: String,
     window_label: Option<String>,
     hide_viewport_scrollbar: Option<bool>,
+    /// ROUND-90 (R90-D1): the ALWAYS-VISIBLE CURSOR's boot script — chained
+    /// after the scrollbar script as ONE initialization script (the
+    /// hands-boot the main app builds in src/lib/agent-hands-boot.ts). It
+    /// runs at DOCUMENT CREATION on EVERY navigation of this webview, so
+    /// the agent's cursor is painted from the first frame of every page at
+    /// a natural resting spot — never "disappearing" between actions. The
+    /// script is idempotent and CSP-tolerant; the agent-hands runtime
+    /// (installed by the first action's eval) ADOPTS the boot's cursor via
+    /// `window.__acuteHandsRest`.
+    hands_init_script: Option<String>,
 ) -> Result<(), String> {
     let label = tab_label(&tab_id);
 
@@ -777,7 +787,16 @@ pub async fn browser_tab_create(
     // We never block a navigation — this is a browser, not a filter.
     let app_for_hook = app.clone();
     let hook_tab_id = tab_id.clone();
-    let init_script = tab_scrollbar_init_script(hide_viewport_scrollbar.unwrap_or(false));
+    // R90-D1: ONE combined initialization script — the scrollbar CSS plus
+    // (when provided) the hands boot (already a self-invoking, idempotent
+    // IIFE — appended as-is; a single initialization_script() call keeps the
+    // builder's accumulation semantics out of the question).
+    let init_script = match hands_init_script.as_deref() {
+        Some(hands) if !hands.trim().is_empty() => {
+            format!("{}\n{}\n", tab_scrollbar_init_script(hide_viewport_scrollbar.unwrap_or(false)), hands)
+        }
+        _ => tab_scrollbar_init_script(hide_viewport_scrollbar.unwrap_or(false)),
+    };
     let builder = WebviewBuilder::new(label, WebviewUrl::External(parsed))
         .data_directory(profile)
         .initialization_script(init_script)

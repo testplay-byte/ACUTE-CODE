@@ -46,6 +46,9 @@ import { isTauri } from "../../lib/sidecar";
 // module is now store-backed + also carries the GLOBAL overlay flag (any
 // open menu/dialog/popover hides every webview — the owner's z-order fix).
 import { isWebviewHiddenNow, overlayCoversRect, useWebviewGuardStore } from "./popover-webview-guard";
+// R90-D1: the always-visible cursor's boot script (the webview's
+// initialization script — see src/lib/agent-hands-boot.ts).
+import { buildHandsBootScript } from "../../lib/agent-hands-boot";
 // R62 (D8): the agent-browser command bridge — this panel is the handler:
 // eval runs in THIS tab's webview; screenshot_meta reports this panel's
 // on-screen rect + window metrics for the computer-use region capture.
@@ -666,7 +669,13 @@ export function BrowserPanel({
   const nativeCreate = useCallback(
     (url: string): Promise<void> => {
       lastCommandedUrlRef.current = url;
-      return nativeTabCreate(tabId, url)
+      // R90-D1: the ALWAYS-VISIBLE CURSOR — the webview is created with the
+      // hands boot as its initialization script, so every page paints the
+      // agent's resting cursor from document creation (the owner: "the mouse
+      // pointer should always be visible. It should not go away"). The
+      // script is idempotent + CSP-tolerant; the agent-hands runtime adopts
+      // the booted cursor via window.__acuteHandsRest.
+      return nativeTabCreate(tabId, url, buildHandsBootScript())
         .then(() => {
           // R90-C1: the panel went away while the create was in flight
           // (project switch / sidebar close racing the agent's navigation
@@ -807,7 +816,10 @@ export function BrowserPanel({
           return { ok: false, error: "evalJob: unexpected start payload (no job started)" };
         }
         const POLL_MS = 120;
-        const JOB_BUDGET_MS = 25_000;
+        // R90-D1: 60s — the human-paced jobs grew (tap → ~1s → typing at
+        // ~150 WPM → ~1s → Enter; a full 600-char type is ~48s of typing
+        // alone). The agent-core sidecar's outer round-trip budget is 75s.
+        const JOB_BUDGET_MS = 60_000;
         const deadline = Date.now() + JOB_BUDGET_MS;
         for (;;) {
           await new Promise((r) => setTimeout(r, POLL_MS));
@@ -829,7 +841,7 @@ export function BrowserPanel({
             return { ok: true, data: { ok: true, value: state.result ?? null } };
           }
           if (Date.now() > deadline) {
-            return { ok: false, error: "the page job timed out (25s — the page may be wedged)" };
+            return { ok: false, error: "the page job timed out (60s — the page may be wedged)" };
           }
         }
       }

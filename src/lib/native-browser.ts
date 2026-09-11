@@ -87,9 +87,20 @@ async function runCommand(command: string, args?: Record<string, unknown>): Prom
  * webview already exists this is just a navigation — the Rust side handles
  * both, which is why the panel calls this on every activation AND on every
  * address-bar navigation.
+ *
+ * R90-D1: the optional `handsInitScript` (the main app's
+ * buildHandsBootScript) becomes the webview's INITIALIZATION SCRIPT — it
+ * runs at document creation on EVERY navigation, painting the agent's
+ * cursor from the first frame of every page (the owner: "the mouse pointer
+ * should ALWAYS be visible"). Omitting it keeps the R60 scrollbar-only
+ * behavior (the popout's content tab, for instance, opts out).
  */
-export function nativeTabCreate(tabId: string, url: string): Promise<void> {
-  return runCommand("browser_tab_create", { tabId, url });
+export function nativeTabCreate(tabId: string, url: string, handsInitScript?: string): Promise<void> {
+  return runCommand("browser_tab_create", {
+    tabId,
+    url,
+    ...(handsInitScript !== undefined ? { handsInitScript } : {}),
+  });
 }
 
 /**

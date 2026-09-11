@@ -746,7 +746,7 @@ describe("BrowserPanel native mode (R50-a child webviews over the panel)", () =>
     await waitFor(() => expect(postCalls("/api/v1/browser/session")).toHaveLength(1));
 
     // The persisted URL drives BOTH the store and the native webview.
-    await waitFor(() => expect(create()).toHaveBeenCalledWith("tab-test-1", "https://github.com"));
+    await waitFor(() => expect(create()).toHaveBeenCalledWith("tab-test-1", "https://github.com", expect.stringContaining("__acute-agent-cursor")));
     await waitFor(() => expect(setVisible()).toHaveBeenCalledWith("tab-test-1", true));
 
     // Native mode renders the PLACEHOLDER (the OS webview floats above it),
@@ -770,7 +770,7 @@ describe("BrowserPanel native mode (R50-a child webviews over the panel)", () =>
       expect(postCalls("/api/v1/browser/navigate").some((c) => c.body?.url === "https://example.com")).toBe(true),
     );
     // Native: the child webview (create is create-OR-navigate in Rust).
-    await waitFor(() => expect(create()).toHaveBeenCalledWith("tab-test-1", "https://example.com"));
+    await waitFor(() => expect(create()).toHaveBeenCalledWith("tab-test-1", "https://example.com", expect.stringContaining("__acute-agent-cursor")));
     await waitFor(() => expect(setVisible()).toHaveBeenCalledWith("tab-test-1", true));
   });
 
@@ -778,7 +778,7 @@ describe("BrowserPanel native mode (R50-a child webviews over the panel)", () =>
     const tab = makeTab({ browserUrl: "https://github.com" });
     seedRightSidebar(tab);
     const { unmount } = renderWithProviders(<BrowserPanel projectId="prj_test" tab={tab} />);
-    await waitFor(() => expect(create()).toHaveBeenCalledWith("tab-test-1", "https://github.com"));
+    await waitFor(() => expect(create()).toHaveBeenCalledWith("tab-test-1", "https://github.com", expect.stringContaining("__acute-agent-cursor")));
 
     unmount();
     await waitFor(() => expect(setVisible()).toHaveBeenCalledWith("tab-test-1", false));
@@ -804,7 +804,7 @@ describe("BrowserPanel native mode (R50-a child webviews over the panel)", () =>
       const tab = makeTab({ browserUrl: "https://example.com" });
       seedRightSidebar(tab);
       renderWithProviders(<BrowserPanel projectId="prj_test" tab={tab} />);
-      await waitFor(() => expect(create()).toHaveBeenCalledWith("tab-test-1", "https://example.com"));
+      await waitFor(() => expect(create()).toHaveBeenCalledWith("tab-test-1", "https://example.com", expect.stringContaining("__acute-agent-cursor")));
 
       // R89-E4: the default is PRESET mode now — the stored desktop
       // 1440×900 viewport aspect-fits into the mocked 400×500 area
@@ -841,7 +841,7 @@ describe("BrowserPanel native mode (R50-a child webviews over the panel)", () =>
       await act(async () => {
         await vi.advanceTimersByTimeAsync(0);
       });
-      expect(create()).toHaveBeenCalledWith("tab-test-1", "https://a.example/one");
+      expect(create()).toHaveBeenCalledWith("tab-test-1", "https://a.example/one", expect.stringContaining("__acute-agent-cursor"));
 
       // The AGENT navigates the server-side session behind our back —
       // exactly what browser_control does. The next poll (POLL_MS=4000)
@@ -865,7 +865,7 @@ describe("BrowserPanel native mode (R50-a child webviews over the panel)", () =>
     const input = screen.getByTestId("browser-address-input") as HTMLInputElement;
     fireEvent.change(input, { target: { value: "https://example.com" } });
     fireEvent.submit(input.closest("form") as HTMLFormElement);
-    await waitFor(() => expect(create()).toHaveBeenCalledWith("tab-test-1", "https://example.com"));
+    await waitFor(() => expect(create()).toHaveBeenCalledWith("tab-test-1", "https://example.com", expect.stringContaining("__acute-agent-cursor")));
     await waitFor(() =>
       expect(postCalls("/api/v1/browser/navigate").filter((c) => c.body?.url === "https://example.com")).toHaveLength(1),
     );
@@ -901,7 +901,7 @@ describe("BrowserPanel native mode (R50-a child webviews over the panel)", () =>
     for (const url of ["https://a.example/one", "https://a.example/two"]) {
       fireEvent.change(input, { target: { value: url } });
       fireEvent.submit(input.closest("form") as HTMLFormElement);
-      await waitFor(() => expect(create()).toHaveBeenCalledWith("tab-test-1", url));
+      await waitFor(() => expect(create()).toHaveBeenCalledWith("tab-test-1", url, expect.stringContaining("__acute-agent-cursor")));
     }
     await waitFor(() => expect((screen.getByTestId("browser-back") as HTMLButtonElement).disabled).toBe(false));
 
@@ -923,7 +923,7 @@ describe("BrowserPanel native mode (R50-a child webviews over the panel)", () =>
       activeSessionByProject: {},
     });
     renderWithProviders(<BrowserPanel projectId="prj_test" tab={tabA} />);
-    await waitFor(() => expect(create()).toHaveBeenCalledWith("tab-a", "https://a.example"));
+    await waitFor(() => expect(create()).toHaveBeenCalledWith("tab-a", "https://a.example", expect.stringContaining("__acute-agent-cursor")));
 
     // The user closes tab A in the tab strip (the panel is mounted directly,
     // so only the reaper sees it).
@@ -956,7 +956,7 @@ describe("BrowserPanel native mode (R50-a child webviews over the panel)", () =>
     const tab = makeTab({ browserUrl: "https://github.com" });
     seedRightSidebar(tab);
     renderWithProviders(<BrowserPanel projectId="prj_test" tab={tab} />);
-    await waitFor(() => expect(create()).toHaveBeenCalledWith("tab-test-1", "https://github.com"));
+    await waitFor(() => expect(create()).toHaveBeenCalledWith("tab-test-1", "https://github.com", expect.stringContaining("__acute-agent-cursor")));
 
     expect(screen.queryByTestId("browser-engine-badge")).toBeNull();
     expect(screen.queryByText(/Rendered by the embedded Chromium engine/i)).toBeNull();
@@ -982,7 +982,7 @@ describe("BrowserPanel native mode (R50-a child webviews over the panel)", () =>
       const tab = makeTab({ browserUrl: "https://example.com" });
       seedRightSidebar(tab);
       renderWithProviders(<BrowserPanel projectId="prj_test" tab={tab} />);
-      await waitFor(() => expect(create()).toHaveBeenCalledWith("tab-test-1", "https://example.com"));
+      await waitFor(() => expect(create()).toHaveBeenCalledWith("tab-test-1", "https://example.com", expect.stringContaining("__acute-agent-cursor")));
       // R89-E4: the default is the stored 1440×900 preset aspect-fit into
       // the 400×900 area (scale 0.278 → 400×250, centered) — the readout has
       // a rendered size to be honest about.
@@ -1041,7 +1041,7 @@ describe("BrowserPanel native mode (R50-a child webviews over the panel)", () =>
       const tab = makeTab({ browserUrl: "https://example.com" });
       seedRightSidebar(tab);
       renderWithProviders(<BrowserPanel projectId="prj_test" tab={tab} />);
-      await waitFor(() => expect(create()).toHaveBeenCalledWith("tab-test-1", "https://example.com"));
+      await waitFor(() => expect(create()).toHaveBeenCalledWith("tab-test-1", "https://example.com", expect.stringContaining("__acute-agent-cursor")));
       // nativeCreate re-asserts the store's zoom (1× by default) right after
       // the webview exists — a re-created webview must be told the zoom.
       await waitFor(() => expect(setZoom()).toHaveBeenCalledWith("tab-test-1", 1));
@@ -1076,7 +1076,7 @@ describe("BrowserPanel native mode (R50-a child webviews over the panel)", () =>
     const tab = makeTab({ browserUrl: "https://example.com" });
     seedRightSidebar(tab);
     renderWithProviders(<BrowserPanel projectId="prj_test" tab={tab} />);
-    await waitFor(() => expect(create()).toHaveBeenCalledWith("tab-test-1", "https://example.com"));
+    await waitFor(() => expect(create()).toHaveBeenCalledWith("tab-test-1", "https://example.com", expect.stringContaining("__acute-agent-cursor")));
 
     const fit = screen.getByTestId("browser-fit") as HTMLButtonElement;
     expect(fit.disabled).toBe(true);
@@ -1093,7 +1093,7 @@ describe("BrowserPanel native mode (R50-a child webviews over the panel)", () =>
     const tab = makeTab({ browserUrl: "https://example.com" });
     seedRightSidebar(tab);
     renderWithProviders(<BrowserPanel projectId="prj_test" tab={tab} />);
-    await waitFor(() => expect(create()).toHaveBeenCalledWith("tab-test-1", "https://example.com"));
+    await waitFor(() => expect(create()).toHaveBeenCalledWith("tab-test-1", "https://example.com", expect.stringContaining("__acute-agent-cursor")));
     await waitFor(() => expect(setZoom()).toHaveBeenCalledWith("tab-test-1", 1));
     // Create resolved — but NO show over the popover.
     expect(setVisible()).not.toHaveBeenCalledWith("tab-test-1", true);
@@ -1124,7 +1124,7 @@ describe("BrowserPanel native mode (R50-a child webviews over the panel)", () =>
       await act(async () => {
         await vi.advanceTimersByTimeAsync(20);
       });
-      expect(create()).toHaveBeenCalledWith("tab-test-1", "https://example.com");
+      expect(create()).toHaveBeenCalledWith("tab-test-1", "https://example.com", expect.stringContaining("__acute-agent-cursor"));
       // R89-E4: the default is the stored 1440×900 preset, aspect-fit into
       // the 400×900 area (scale 0.278 → 400×250, centered).
       expect(setBounds()).toHaveBeenLastCalledWith("tab-test-1", 80, 445, 400, 250);
@@ -1220,7 +1220,7 @@ describe("BrowserPanel native mode (R50-a child webviews over the panel)", () =>
     const tab = makeTab({ browserUrl: "https://example.com" });
     seedRightSidebar(tab);
     renderWithProviders(<BrowserPanel projectId="prj_test" tab={tab} />);
-    await waitFor(() => expect(create()).toHaveBeenCalledWith("tab-test-1", "https://example.com"));
+    await waitFor(() => expect(create()).toHaveBeenCalledWith("tab-test-1", "https://example.com", expect.stringContaining("__acute-agent-cursor")));
     await waitFor(() => expect(hasBrowserCommandHandler("tab-test-1")).toBe(true));
 
     // The agent's eval dispatch: script in, {ok,value} envelope out (the
@@ -1244,7 +1244,7 @@ describe("BrowserPanel native mode (R50-a child webviews over the panel)", () =>
     const tab = makeTab({ browserUrl: "https://example.com" });
     seedRightSidebar(tab);
     renderWithProviders(<BrowserPanel projectId="prj_test" tab={tab} />);
-    await waitFor(() => expect(create()).toHaveBeenCalledWith("tab-test-1", "https://example.com"));
+    await waitFor(() => expect(create()).toHaveBeenCalledWith("tab-test-1", "https://example.com", expect.stringContaining("__acute-agent-cursor")));
     const reply = await getBrowserCommandHandlerForTest("tab-test-1")!("eval", {
       script: "return nope(",
     });
@@ -1303,7 +1303,7 @@ describe("BrowserPanel native mode (R50-a child webviews over the panel)", () =>
       const tab = makeTab({ browserUrl: "https://example.com" });
       seedRightSidebar(tab);
       renderWithProviders(<BrowserPanel projectId="prj_test" tab={tab} />);
-      await waitFor(() => expect(create()).toHaveBeenCalledWith("tab-test-1", "https://example.com"));
+      await waitFor(() => expect(create()).toHaveBeenCalledWith("tab-test-1", "https://example.com", expect.stringContaining("__acute-agent-cursor")));
 
       const reply = await getBrowserCommandHandlerForTest("tab-test-1")!("screenshot_meta", {});
       expect(reply.ok).toBe(true);
@@ -1325,7 +1325,7 @@ describe("BrowserPanel native mode (R50-a child webviews over the panel)", () =>
     const tab = makeTab({ browserUrl: "https://example.com" });
     seedRightSidebar(tab);
     renderWithProviders(<BrowserPanel projectId="prj_test" tab={tab} />);
-    await waitFor(() => expect(create()).toHaveBeenCalledWith("tab-test-1", "https://example.com"));
+    await waitFor(() => expect(create()).toHaveBeenCalledWith("tab-test-1", "https://example.com", expect.stringContaining("__acute-agent-cursor")));
     const reply = await getBrowserCommandHandlerForTest("tab-test-1")!("screenshot_meta", {});
     expect(reply.ok).toBe(true);
     expect((reply.data as { supported: boolean; region: unknown }).supported).toBe(true);
@@ -1371,7 +1371,7 @@ describe("BrowserPanel R67 — agent navigation frames (E1: instant + create-on-
     const input = screen.getByTestId("browser-address-input") as HTMLInputElement;
     fireEvent.change(input, { target: { value: "https://a.example/one" } });
     fireEvent.submit(input.closest("form") as HTMLFormElement);
-    await waitFor(() => expect(create()).toHaveBeenCalledWith("tab-test-1", "https://a.example/one"));
+    await waitFor(() => expect(create()).toHaveBeenCalledWith("tab-test-1", "https://a.example/one", expect.stringContaining("__acute-agent-cursor")));
 
     // The AGENT navigates: the stream-store frame handler calls the store's
     // applyAgentNavigation (agentNavSeq bump) — the panel must command the
@@ -1407,7 +1407,7 @@ describe("BrowserPanel R67 — agent navigation frames (E1: instant + create-on-
       await act(async () => {
         await vi.advanceTimersByTimeAsync(0);
       });
-      expect(create()).toHaveBeenCalledWith("tab-test-1", "https://b.example/late");
+      expect(create()).toHaveBeenCalledWith("tab-test-1", "https://b.example/late", expect.stringContaining("__acute-agent-cursor"));
     } finally {
       vi.useRealTimers();
     }
