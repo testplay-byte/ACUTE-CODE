@@ -130,6 +130,16 @@ export function ChatFocusLayout({ project }: { project: Project }) {
   }, [project.id, sessionId, setActiveSession]);
 
   // Resize handle for the right sidebar (drag left/right to grow/shrink).
+  // R89-D1: the drag clamps against the LIVE container cap — the sidebar
+  // may grow past the old absolute 760 ceiling while there is room, which
+  // is what lets the chat column reach its floor at ANY window width (the
+  // owner's "left sidebar hidden → cannot shrink as much as before"
+  // verdict: the absolute clamp rose the chat's minimum as the container
+  // widened). containerWidth is the layout's own ResizeObserver value — a
+  // ref read at drag time keeps every mousemove fresh without re-baselining
+  // this callback's identity.
+  const containerWidthRef = useRef<number | null>(null);
+  containerWidthRef.current = containerWidth;
   const isResizing = useRef(false);
   const startX = useRef(0);
   const onResize = useCallback((delta: number) => {
@@ -138,7 +148,11 @@ export function ChatFocusLayout({ project }: { project: Project }) {
     const cur = s.byProject[key]?.width ?? 440;
     // Dragging LEFT (negative delta) GROWS the sidebar (it's on the right edge
     // of the chat — moving the handle left eats into the chat).
-    s.setWidth(project.id, cur - delta);
+    const cap =
+      containerWidthRef.current !== null
+        ? sidebarWidthCap(containerWidthRef.current)
+        : undefined;
+    s.setWidth(project.id, cur - delta, cap);
   }, [project.id]);
   useEffect(() => {
     const handleMove = (e: MouseEvent) => {

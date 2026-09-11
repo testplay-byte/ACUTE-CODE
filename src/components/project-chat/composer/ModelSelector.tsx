@@ -588,7 +588,12 @@ export function ModelSelector({
             tiers (240 → 170px below 520 → 90px below 420), animated via
             max-width so the model name stays identifiable (truncated) while
             the mode/thinking pills still show their full labels. The icon
-            stays visible at every width. */}
+            stays visible at every width.
+            R89-D2 (owner: "the full model name was not showing, the half
+            model name was showing instead of being shrunk down to the only
+            logo"): below 350px the label collapses to NOTHING — the pill
+            becomes LOGO-ONLY (icon + chevron), never a half-cut name; the
+            title tooltip still carries the full label. */}
         <Cpu
           size={12}
           className="shrink-0"
@@ -597,7 +602,7 @@ export function ModelSelector({
           data-model-icon
         />
         <span
-          className="max-w-[240px] @max-[520px]:max-w-[170px] @max-[420px]:max-w-[90px] truncate transition-[max-width] duration-200"
+          className="max-w-[240px] @max-[520px]:max-w-[170px] @max-[420px]:max-w-[90px] @max-[350px]:max-w-0 @max-[350px]:opacity-0 @max-[350px]:-ml-1 truncate transition-all duration-200"
           data-model-label
         >
           {buttonLabel}

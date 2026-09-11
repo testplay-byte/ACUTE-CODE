@@ -561,7 +561,11 @@ describe("Composer: toolbar inside the box (owner spec B)", () => {
     expect(label.className).toContain("max-w-[240px]");
     expect(label.className).toContain("@max-[520px]:max-w-[170px]");
     expect(label.className).toContain("@max-[420px]:max-w-[90px]");
-    expect(label.className).toContain("transition-[max-width]");
+    expect(label.className).toContain("transition-all");
+    // R89-D2: the LOGO-ONLY tier — below 350px the label collapses fully
+    // (icon + chevron only), never a half-cut name.
+    expect(label.className).toContain("@max-[350px]:max-w-0");
+    expect(label.className).toContain("@max-[350px]:opacity-0");
     expect(label.className).toContain("truncate");
     expect(label.className).not.toContain(":hidden");
     expect(icon.getAttribute("class") ?? "").not.toContain("@max-");

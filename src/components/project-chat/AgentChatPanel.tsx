@@ -144,8 +144,15 @@ import {
  * so the message list, the empty-state composer and the docked composer all
  * stay pixel-aligned at every width (the old dock also offset the composer
  * 10px inward of the messages; that inconsistency is gone). Density now
- * drives the VERTICAL rhythm only. */
-const CONTENT_COL_CLASS = "mx-auto w-full max-w-[1080px] px-6 md:px-12 xl:px-16";
+ * drives the VERTICAL rhythm only.
+ * R89-D2 (owner: "the right and left sidebar padding should be reduced when
+ * it is squished"): the padding also SHRINKS when the chat column is
+ * squished — an @max-[560px] tier steps it down to 16px and @max-[420px] to
+ * 10px, so a half-width chat keeps its reading room instead of padding
+ * eating it (the min-width floor is 240px; at that width the panel is
+ * pill-first, not prose-first). */
+const CONTENT_COL_CLASS =
+  "mx-auto w-full max-w-[1080px] px-6 md:px-12 xl:px-16 @max-[560px]:px-4 @max-[420px]:px-2.5";
 
 /** R87-A1: the column WITHOUT the graduated horizontal padding — for NESTED
  * slots that already sit inside the padded column (the empty-state
@@ -619,8 +626,13 @@ function UserMessage({
       initial="initial"
       animate="animate"
     >
-      <div className="flex items-end gap-1 max-w-[82%]">
-        <div className="opacity-0 group-hover:opacity-100 transition-opacity pb-0.5">
+      {/* R89-D2: min-w-0 on the row + the bubble (flex children must be
+          clampable or long tokens mint width at the 240px chat floor —
+          "the content starts to show outside it"), and the bubble gets MORE
+          relative room when the panel is squished (82% → 92% below 420px:
+          the hover actions + the padding tiers already reclaimed the rest). */}
+      <div className="flex items-end gap-1 max-w-[82%] @max-[420px]:max-w-[92%] min-w-0">
+        <div className="opacity-0 group-hover:opacity-100 transition-opacity pb-0.5 shrink-0">
           <CopyButton text={content} />
           {onRevert !== undefined ? (
             <button
@@ -643,7 +655,7 @@ function UserMessage({
           ) : null}
         </div>
         <div
-          className="rounded-[16px] rounded-br-[5px] px-3.5 py-2.5 text-[13px] leading-[1.55] font-medium border"
+          className="rounded-[16px] rounded-br-[5px] px-3.5 py-2.5 text-[13px] leading-[1.55] font-medium border min-w-0"
           style={{
             background: bubbleBg,
             borderColor: bubbleBorder,
@@ -2405,7 +2417,7 @@ export function AgentChatPanel({
 
   return (
     <div
-      className="flex flex-col h-full w-full min-w-0 rounded-[16px] overflow-hidden"
+      className="flex flex-col h-full w-full min-w-0 rounded-[16px] overflow-hidden @container"
       style={{ backgroundColor: styles.card }}
     >
       {/* ⌘K / Ctrl+K CommandPalette (files/symbols/content search — WS-H) */}

@@ -535,7 +535,10 @@ export function Composer({
         autoFocus={autoFocus}
         aria-label="Message composer"
         placeholder={`Message ${agent?.name ?? "Acute"}…`}
-        className="w-full min-w-0 bg-transparent outline-none resize-none text-[13px] leading-[1.5] px-3.5 pt-2.5 pb-1"
+        // R89-D2: the input's horizontal padding shrinks with the box (the
+        // 240px chat floor gets 12px instead of 14 — every pixel of typing
+        // room counts down there).
+        className="w-full min-w-0 bg-transparent outline-none resize-none text-[13px] leading-[1.5] px-3.5 pt-2.5 pb-1 @max-[420px]:px-2.5"
         style={{ color: styles.text }}
       />
 

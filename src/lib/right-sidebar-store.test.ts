@@ -204,3 +204,29 @@ describe("right-sidebar store — openBrowserForChatSession (R67/E3 agent tab)",
     expect(s?.tabs[0]?.browserHistory).toContain("https://example.com/next");
   });
 });
+
+/* ── ROUND-89 (R89-D1): the dynamic width cap. The owner's verdict: with the
+ * left sidebar HIDDEN the chat could not shrink as far as before — the
+ * absolute RIGHT_SIDEBAR_MAX_WIDTH=760 clamp rose the chat's effective
+ * minimum as the container widened. setWidth now takes the layout's LIVE
+ * container cap; the sidebar may grow past 760 while there is room. */
+describe("setWidth — the R89-D1 dynamic cap", () => {
+  beforeEach(() => {
+    useRightSidebarStore.setState({ byProject: {}, activeSessionByProject: {} });
+  });
+
+  it("grows past the old 760 ceiling when the layout passes a live cap", () => {
+    useRightSidebarStore.getState().setWidth("prj_cap", 900, 1149);
+    expect(useRightSidebarStore.getState().byProject["prj_cap::default"]?.width).toBe(900);
+  });
+
+  it("still honors the cap (the chat floor is reachable, never crossed)", () => {
+    useRightSidebarStore.getState().setWidth("prj_cap", 2000, 1149);
+    expect(useRightSidebarStore.getState().byProject["prj_cap::default"]?.width).toBe(1149);
+  });
+
+  it("without a cap the legacy 760 ceiling holds (the default path)", () => {
+    useRightSidebarStore.getState().setWidth("prj_cap", 2000);
+    expect(useRightSidebarStore.getState().byProject["prj_cap::default"]?.width).toBe(760);
+  });
+});

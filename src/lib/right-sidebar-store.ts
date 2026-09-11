@@ -171,7 +171,7 @@ interface RightSidebarState {
   patch: (projectId: string, patch: Partial<ProjectRightState>) => void;
   setOpen: (projectId: string, open: boolean) => void;
   toggleOpen: (projectId: string) => void;
-  setWidth: (projectId: string, width: number) => void;
+  setWidth: (projectId: string, width: number, effectiveMax?: number) => void;
   /** Add a tab (or activate an existing tab of the same type+key). */
   addTab: (
     projectId: string,
@@ -305,9 +305,22 @@ export const useRightSidebarStore = create<RightSidebarState>()(
         const cur = get().byProject[key] ?? defaultProjectRightState();
         get().patch(projectId, { open: !cur.open });
       },
-      setWidth: (projectId, width) =>
+      setWidth: (projectId, width, effectiveMax) =>
         get().patch(projectId, {
-          width: clamp(width, RIGHT_SIDEBAR_MIN_WIDTH, RIGHT_SIDEBAR_MAX_WIDTH),
+          // R89-D1: the ABSOLUTE 760 ceiling is now only the DEFAULT — the
+          // layout passes the LIVE container cap (container − chat floor −
+          // chrome) so the sidebar can grow past 760 and the chat reaches
+          // its floor at ANY window width (the owner's verdict: with the
+          // left sidebar hidden the chat could not shrink as far as
+          // before — the absolute clamp silently rose the chat's minimum
+          // as the container widened). When the cap is narrower than the
+          // min, the render-time cap (RightSidebar's maxWidth) still does
+          // the honest clamping — the stored value just stays at the min.
+          width: clamp(
+            width,
+            RIGHT_SIDEBAR_MIN_WIDTH,
+            effectiveMax ?? RIGHT_SIDEBAR_MAX_WIDTH,
+          ),
         }),
       addTab: (projectId, tabInput) => {
         // Compute the id up front so we can return it (set() returns void).
