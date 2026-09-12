@@ -328,5 +328,5 @@
   ]
  },
  "round": 94,
- "ci": null
+ "ci": "GREEN — CI 34720217283 and Release 34720260234 both SUCCESS on 86044aa (the first push b873f81's Windows build caught one windows-sys type name — JOBOBJECT_EXTENDED_LIMIT_INFORMATION has no underscore — fixed and re-tagged within minutes). v0.92.0 PUBLISHED (release 387712322, latest, both assets downloaded + sha256-verified against GitHub's server-side digests, zero real-key bytes in the shipped kit + installer; the kit's github_pat_ occurrences are the launcher's own prefix literals in help/validation text). The R94 verification adds the Linux live-fire harness (scripts/r94-live-fire.mjs): real end-to-end turns through a local OpenAI-compatible SSE provider — the mid-turn queue injection, the 'unknown object' ladder recovery, and the honest headless browser/window paths all PASS on the wire."
 }
