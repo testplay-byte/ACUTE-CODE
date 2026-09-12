@@ -279,7 +279,7 @@
   }
  ],
  "quality": {
-  "ci": "IN FLIGHT — the private-repo Actions outage (bisected: public-repo probes got runners, identical private-repo probes got none — the account's monthly private-repo minutes were exhausted) is bypassed per the owner's directive: the repository switched PUBLIC (unlimited free Actions on standard runners). Before the flip the full history was secret-scanned and the three R44-era OpenRouter keys were PURGED via git-filter-repo (commit hashes from R44 onward rewritten; releases re-pointed). This field syncs to the run verdict after the CI + Release re-runs finish",
+  "ci": "GREEN — CI 34702407639 and Release 34702413888 both SUCCESS on the final tree d993e85 (the public-runner era: the account's private-repo Actions minutes were exhausted mid-close-out; the owner directed the repository PUBLIC — unlimited free minutes — and the full history was secret-scanned + purged before the flip, round-93.md §11). v0.91.0 PUBLISHED (release 387615887, latest, both assets verified with sha256 digests, zero real-key bytes in the shipped kit + installer)",
   "suites": [
    {
     "name": "frontend",
