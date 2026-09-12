@@ -303,7 +303,7 @@ describe("P0-5: scrubSearchQuery (the query never exfiltrates keys)", () => {
   });
 
   it("github PAT shape is caught", () => {
-    const out = scrubSearchQuery("is github_pat_TESTFIXTURE-PURGED still active");
+    const out = scrubSearchQuery("is github_pat_TESTFIXTURE0000000000000000000000 still active");
     expect(out).toContain("[redacted]");
     expect(out).not.toContain("github_pat_");
   });
