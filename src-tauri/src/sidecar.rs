@@ -982,7 +982,7 @@ mod sidecar_job {
     use windows_sys::Win32::Foundation::{GetLastError, HANDLE};
     use windows_sys::Win32::System::JobObjects::{
         AssignProcessToJobObject, CreateJobObjectW, JobObjectExtendedLimitInformation,
-        SetInformationJobObject, JOB_OBJECT_EXTENDED_LIMIT_INFORMATION,
+        SetInformationJobObject, JOBOBJECT_EXTENDED_LIMIT_INFORMATION,
         JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
     };
 
@@ -1058,14 +1058,14 @@ mod sidecar_job {
             }
             // Zeroed then filled: every limit besides the kill flag stays
             // 0 — no memory/CPU/process-count caps on the sidecar.
-            let mut info: JOB_OBJECT_EXTENDED_LIMIT_INFORMATION = std::mem::zeroed();
+            let mut info: JOBOBJECT_EXTENDED_LIMIT_INFORMATION = std::mem::zeroed();
             info.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
             let configured = SetInformationJobObject(
                 job,
                 JobObjectExtendedLimitInformation,
-                &info as *const JOB_OBJECT_EXTENDED_LIMIT_INFORMATION
+                &info as *const JOBOBJECT_EXTENDED_LIMIT_INFORMATION
                     as *const core::ffi::c_void,
-                std::mem::size_of::<JOB_OBJECT_EXTENDED_LIMIT_INFORMATION>() as u32,
+                std::mem::size_of::<JOBOBJECT_EXTENDED_LIMIT_INFORMATION>() as u32,
             );
             if configured == 0 {
                 let code = GetLastError();
