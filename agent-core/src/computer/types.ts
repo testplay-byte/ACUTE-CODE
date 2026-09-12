@@ -84,6 +84,53 @@ export type ElementKind =
 
 export type ElementFlag = "pressable" | "editable" | "has_menu" | "focused";
 
+/**
+ * R93 (the computer-use v2 rework): the 11 ClickScope-style CATEGORIES — a
+ * coarser, filter-friendly grouping than `kind` (one category per row in
+ * the agent-facing filters and the scan's byCategory counts). Derived from
+ * the kind by the walkers; "vision" is reserved for future CV detections.
+ */
+export type ElementCategory =
+  | "button"
+  | "link"
+  | "input"
+  | "menu"
+  | "tab"
+  | "list"
+  | "check"
+  | "slider"
+  | "text"
+  | "custom"
+  | "vision";
+
+/** R93: kind → category (the mapping the walkers and the store share). */
+export function categoryOfKind(kind: ElementKind): ElementCategory {
+  switch (kind) {
+    case "button":
+      return "button";
+    case "menuitem":
+      return "menu";
+    case "textfield":
+    case "combobox":
+      return "input";
+    case "checkbox":
+      return "check";
+    case "slider":
+    case "scrollbar":
+      return "slider";
+    case "tab":
+      return "tab";
+    case "row":
+      return "list";
+    case "text":
+    case "image":
+      return "text";
+    case "window":
+    case "pane":
+      return "custom";
+  }
+}
+
 export interface Element {
   /** Valid ONLY within this snapshot's stateId. */
   index: number;
@@ -95,6 +142,28 @@ export interface Element {
   bounds?: [number, number, number, number];
   /** detail:"full" only — valid names for perform_action. */
   actions?: string[];
+  /** ── R93 (computer-use v2): the hierarchy + identity fields — all
+   * OPTIONAL so pre-v2 snapshots and backends that cannot derive them stay
+   * valid. See docs/architecture/COMPUTER-USE-V2.md §2.1. ── */
+  /** Stable node key within this snapshot ("w7-412" — window ordinal + the
+   * walk counter). NEVER the index (indexes are positional; keys survive
+   * list edits within the same walk). */
+  key?: string;
+  /** The window root's key this element lives under. */
+  windowKey?: string;
+  /** The parent node's key; null on roots (the window). */
+  parentKey?: string | null;
+  /** ClickScope-style breadcrumb: "Settings › Advanced › Enable logging". */
+  path?: string;
+  /** Depth in the tree (window roots = 0). */
+  treeDepth?: number;
+  /** false = a structural container (never click it; walk its children). */
+  interactive?: boolean;
+  /** The coarse category (see ElementCategory). */
+  category?: ElementCategory;
+  /** WHICH clickability layer fired: "type" | "pattern" | "action" |
+   * "msaa" | "focusable" — the walker records it for the store's `via`. */
+  via?: string;
 }
 
 export type SurfaceKind =

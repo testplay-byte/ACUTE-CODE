@@ -252,6 +252,23 @@ export interface CuaBackend {
   activate(run: RunCommand, pid: number, windowId?: number): Promise<ActivationOutcome>;
   frontmostPid(run: RunCommand): Promise<number | null>;
 
+  // ── window placement (R93, the v2 surface — ClickScope parity) ─────────
+  /** Exact window placement (GLOBAL screen points, top-left). */
+  moveWindow(
+    run: RunCommand,
+    windowId: number,
+    x: number,
+    y: number,
+  ): Promise<{ ok: boolean; error?: string }>;
+  /** Maximize / restore / minimize by window id. */
+  setWindowState(
+    run: RunCommand,
+    windowId: number,
+    state: "maximize" | "restore" | "minimize",
+  ): Promise<{ ok: boolean; error?: string }>;
+  /** Bring a window to the foreground by id (without activating its app). */
+  focusWindow(run: RunCommand, windowId: number): Promise<{ ok: boolean; error?: string }>;
+
   // capture
   captureDisplay(run: RunCommand, displayIndex: number): Promise<Raster | { error: string }>;
   /** Region capture (GLOBAL screen points) — the zoom + window-screenshot
