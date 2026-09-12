@@ -173,6 +173,27 @@ export type SurfaceKind =
   | "save_panel"
   | "menu";
 
+/**
+ * R93 (the computer-use v2 rework): the element-map delta riding every
+ * registered observation — what changed in the app's UI since the last
+ * registered scan (the model SEES UI churn like ClickScope's panel
+ * subtitle "544 elements · +3/−1"). Defined here (the contract-types
+ * module) and re-exported by element-map.ts so both import paths work.
+ */
+export interface MapDelta {
+  /** Elements in this scan the registry had never seen (per app+window). */
+  newCount: number;
+  /** Registry rows for this app+window that this scan did NOT observe. */
+  lostCount: number;
+  /** The first N new element names (bounded — the model reads them). */
+  newNames: string[];
+  /** The registry's total for this app+window AFTER the fold (context). */
+  knownTotal: number;
+  /** R93 §2.4: ghost boxes dropped by verify-rects (bounds that were
+   * demonstrably empty against the live raster). */
+  droppedGhostCount?: number;
+}
+
 export interface Snapshot {
   stateId: string;
   app: { pid: number; name?: string; path?: string; bundleId?: string; title: string };
@@ -185,6 +206,10 @@ export interface Snapshot {
   elements: Element[];
   /** Present when include_screenshot was set. */
   raster?: RasterMeta;
+  /** R93: the element-map delta (only when the observation was registered
+   * against the element map — pre-v2 snapshots and db-less contexts are
+   * unaffected). */
+  mapDelta?: MapDelta;
   createdAt: number;
 }
 

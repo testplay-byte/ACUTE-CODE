@@ -71,6 +71,7 @@ import {
   windowsBackend,
 } from "../src/computer/backends/windows";
 import type { CommandCapsule, RunCommand, RunResult } from "../src/computer/backends/interface";
+import { readFileSync } from "node:fs";
 
 type RecordingRun = RunCommand & { capsules: CommandCapsule[] };
 
@@ -84,13 +85,22 @@ function fakeRun(stdout: string, code = 0): RecordingRun {
   return Object.assign(run, { capsules }) as RecordingRun;
 }
 
-/** R67-C: decode a -EncodedCommand capsule's script back to text (base64 of
- * UTF-16LE — PowerShell's contract, inverted for content assertions). */
+/** R67-C: decode a capsule's script back to text. R93-C: BOTH transports —
+ * the -EncodedCommand path (base64 of UTF-16LE, PowerShell's contract,
+ * inverted for content assertions) and the TEMP-.ps1 -File path the
+ * oversized walk switched to (the v2 walk outgrew the 32,767-char
+ * CreateProcess ceiling; the script text is read straight from the file). */
 function decodeCapsuleScript(capsule: CommandCapsule): string {
   const i = capsule.args.indexOf("-EncodedCommand");
-  expect(i).toBeGreaterThan(-1);
-  expect(capsule.args[i + 1]).toMatch(/^[A-Za-z0-9+/]+={0,2}$/);
-  return Buffer.from(capsule.args[i + 1]!, "base64").toString("utf16le");
+  if (i !== -1) {
+    expect(capsule.args[i + 1]).toMatch(/^[A-Za-z0-9+/]+={0,2}$/);
+    return Buffer.from(capsule.args[i + 1]!, "base64").toString("utf16le");
+  }
+  const f = capsule.args.indexOf("-File");
+  expect(f).toBeGreaterThan(-1);
+  const path = capsule.args[f + 1]!;
+  expect(path).toMatch(/acute-ps-[^\\/]+[\\/]s\.ps1$/);
+  return readFileSync(path, "utf8");
 }
 
 /* ── the preamble: one compile, the EnumWindows surface, honest OutJson ──── */
@@ -507,8 +517,10 @@ describe("R66-2-d: buildSnapshot walks 2400 elements and probes ONLY interactive
     expect(script.split("GetCurrentPattern").length - 1).toBe(4);
     expect(script).toContain("if ($null -ne $vp) {");
     expect(script).toContain("if ($null -ne $ip) {");
-    // The gated branch sits INSIDE the per-node Walk (depth-capped recursion).
-    expect(script).toContain("function Walk($el, $depth)");
+    // The gated branch sits INSIDE the per-node Walk (depth-capped
+    // recursion). R93-C: the walk signature grew the hierarchy params
+    // ($parentKey + $pathSegs — the breadcrumb stack).
+    expect(script).toContain("function Walk($el, $depth, $parentKey, $pathSegs)");
   });
 
   it("bounds stay conditional on detail:full (compact keeps the cheap walk)", async () => {
@@ -771,9 +783,23 @@ describe("R68-C: capsule sizing honesty (the re-measured -EncodedCommand ceiling
       main: true,
       focused: true,
     }, "full");
-    const b64 = run.capsules[0]!.args[run.capsules[0]!.args.indexOf("-EncodedCommand") + 1]!;
-    expect(b64.length).toBeGreaterThan(20_000); // it IS the grown capsule (30,912 measured)
-    expect(b64.length).toBeLessThan(32_000); // ~1.77K headroom — the preamble is past comfort, see the psCapsule docblock
+    // R93-C: the v2 walk (hierarchy + the clickability layers) pushed the
+    // capsule PAST the CreateProcess ceiling — the transport switched to
+    // the TEMP-.ps1 -File path. The sizing honesty pins BOTH sides now:
+    const b64Index = run.capsules[0]!.args.indexOf("-EncodedCommand");
+    if (b64Index !== -1) {
+      const b64 = run.capsules[0]!.args[b64Index + 1]!;
+      expect(b64.length).toBeGreaterThan(20_000);
+      expect(b64.length).toBeLessThan(30_000); // under the ARGV→file switch point
+    } else {
+      // The file transport: -File with a temp .ps1 whose CONTENT is the
+      // full walk script (the decode helper asserts the shape) — the
+      // command line itself stays TINY (no ceiling at all).
+      expect(run.capsules[0]!.args).toContain("-File");
+      const script = decodeCapsuleScript(run.capsules[0]!);
+      expect(script.length).toBeGreaterThan(10_000); // it IS the grown walk
+      expect(Buffer.byteLength(script, "utf16le") / 3 * 4).toBeGreaterThan(30_000); // would NOT have fit ARGV
+    }
   });
 });
 

@@ -113,6 +113,35 @@
  *     prefixes, exported and pinned by construction; rawKey composes ONE
  *     SendKeys chord instead of typing tokens as literal text.
  *
+ * ROUND-93 (R93-C — the computer-use v2 rework, docs/architecture/
+ * COMPUTER-USE-V2.md §2): the walker gains the ELEMENT MAP surface while
+ * the flat-list actuation contract stays BYTE-IDENTICAL:
+ *   · HIERARCHY: every element carries key ("w{hwnd}-{n}", a per-walk
+ *     counter assigned at emission — walk order, so index↔key stay
+ *     aligned), windowKey (the root's key), parentKey ($null on the
+ *     root), path (the " › " breadcrumb of ancestor names + self, capped
+ *     at 5 segments + "…", 120 chars total) and treeDepth.
+ *   · LAYERED CLICKABILITY (§2.2, the ClickScope port): TYPE (the $probe
+ *     ControlTypes — unchanged) → PATTERN (the existing 4 GetCurrentPattern
+ *     probes, still gated to TYPE kinds — the R66-2-d Edge-crawl fix) →
+ *     ACTION (LegacyIAccessible.DefaultAction, property id 10030) → MSAA
+ *     (the legacy AccessibleRole, property id 10095, ROLE_SYSTEM_* map) →
+ *     FOCUSABLE (IsKeyboardFocusable, property id 10009 + named +
+ *     non-container). via records the FIRST layer that fired. The three new
+ *     probes ride GetUiaProp — a by-id property reader that degrades
+ *     HONESTLY on hosts whose managed wrapper lacks the by-id overload
+ *     (the layer never fires, the walk never aborts; 10009 falls back to
+ *     the typed $el.Current.IsKeyboardFocusable view).
+ *   · PLACEMENT: moveWindow (SetWindowPos — the one new U32 P/Invoke, one
+ *     line, still ONE csc compile per capsule), setWindowState (ShowWindow
+ *     3/6/9 — the activate() primitive, by handle), focusWindow
+ *     (BringWindowToTop + SetForegroundWindow, the light by-id raise).
+ * The capsule ceiling math was RE-MEASURED for the v2 walk (see the
+ * psCapsule docblock): the fixed buildSnapshot capsule grew past the old
+ * 32,000-char comfort pin to ~32.4K — still under the hard 32,767
+ * CreateProcess ceiling with ~330 chars of slack; the temp-.ps1 transport
+ * note below stands as the honest next step if the walk grows again.
+ *
  * ROUND-66-2-d (R66-2-d): the owner's live Windows test hit a Chromium-sized
  * tree (Edge) — every node paid 4+ cross-process COM pattern probes
  * (Invoke/Toggle/ExpandCollapse/Value, twice more at detail:full), the
@@ -171,6 +200,7 @@ import type {
   Snapshot,
   WindowInfo,
 } from "../types.js";
+import { categoryOfKind } from "../types.js";
 import type {
   BackendCapabilities,
   CuaBackend,
@@ -185,6 +215,10 @@ import type {
   WindowScope,
 } from "./interface.js";
 import { pngDimensions } from "./linux.js";
+// R93-C: the temp-.ps1 transport (psCapsule's oversized branch) — node fs.
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 
 /** The powershell entry program (pwsh when present, else powershell.exe). */
 export const WINDOWS_PS_PROGRAM = "powershell.exe";
@@ -237,6 +271,7 @@ public class U32{
 [DllImport("user32.dll")]public static extern IntPtr WindowFromPoint(int x,int y);
 [DllImport("user32.dll")]public static extern bool GetCursorPos(out PT p);
 [DllImport("user32.dll")]public static extern bool ShowWindow(IntPtr h,int cmd);
+[DllImport("user32.dll")]public static extern bool SetWindowPos(IntPtr h,IntPtr a,int x,int y,int cx,int cy,uint f);
 public delegate bool EnumProc(IntPtr h,IntPtr lp);
 [DllImport("user32.dll")]public static extern bool EnumWindows(EnumProc cb,IntPtr lp);
 public delegate bool ChildProc(IntPtr h,IntPtr lp);
@@ -415,18 +450,51 @@ const WHEEL_DELTA = 120;
  * died at CreateProcess with a cryptic spawn error. The runtime guard
  * was the R68-C fix; the stdin channel is the R69-a fix.)
  */
-const psCapsule = (script: string, timeoutMs = 20000): CommandCapsule => ({
-  program: WINDOWS_PS_PROGRAM,
-  args: [
-    "-NoProfile",
-    "-NonInteractive",
-    "-ExecutionPolicy",
-    "Bypass",
-    "-EncodedCommand",
-    Buffer.from(`${PS_PREAMBLE}\n${script}`, "utf16le").toString("base64"),
-  ],
-  timeoutMs,
-});
+const psCapsule = (script: string, timeoutMs = 20000): CommandCapsule => {
+  const full = `${PS_PREAMBLE}\n${script}`;
+  const b64 = Buffer.from(full, "utf16le").toString("base64");
+  if (b64.length <= PS_ARGV_SWITCH_B64) {
+    return {
+      program: WINDOWS_PS_PROGRAM,
+      args: ["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-EncodedCommand", b64],
+      timeoutMs,
+    };
+  }
+  // R93-C: the TEMP-.ps1 TRANSPORT — the docblock's honest next step,
+  // arrived: the v2 walk (hierarchy + the three clickability probe layers)
+  // pushed the biggest FIXED capsule past the CreateProcess command-line
+  // ceiling (measured 33,140 base64 chars > 32,767 − 81) — the spawn would
+  // have DIED on real Windows. Every script too big for ARGV now rides a
+  // temp .ps1 file + -File: no command-line ceiling at all, and -File
+  // reports exit codes at least as reliably as -EncodedCommand (R67-C's
+  // original win). The temp dir is removed on a delayed timer (past ANY
+  // capsule timeout — the runner may still be reading the file when this
+  // factory returns) — best-effort cleanup, never blocking the caller.
+  const dir = mkdtempSync(join(tmpdir(), "acute-ps-"));
+  const file = join(dir, "s.ps1");
+  writeFileSync(file, full, "utf8");
+  const delay = Math.max(120_000, timeoutMs + 30_000);
+  setTimeout(() => {
+    try {
+      rmSync(dir, { recursive: true, force: true });
+    } catch {
+      /* best-effort — the OS temp cleaner owns the rest */
+    }
+  }, delay).unref?.();
+  return {
+    program: WINDOWS_PS_PROGRAM,
+    args: ["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", file],
+    timeoutMs,
+  };
+};
+
+/**
+ * R93-C: the ARGV→file switch point (base64 chars). Comfortably under the
+ * 31,875 runtime guard and the 32,767 ceiling — every script below it rides
+ * -EncodedCommand exactly as before R93-C; above it, the temp-file
+ * transport. 30,000 leaves ~1.8K of margin for the fixed flags.
+ */
+const PS_ARGV_SWITCH_B64 = 30_000;
 
 /** R68-C: the CreateProcess command-line ceiling, in base64 chars. The
  * full argv is `powershell.exe -NoProfile -NonInteractive
@@ -698,6 +766,13 @@ const windowsBackend: CuaBackend = {
     // (4 attempts max), returning IMMEDIATELY once the tree is non-sparse —
     // the old fixed 400ms + one 600ms sparse-retry gave a cold Chromium
     // render tree at most 1s to build.
+    // R93-C NOTE (capsule budget): the v2 walk genuinely grows the fixed
+    // buildSnapshot capsule — the hierarchy emission + the three §2.2 probe
+    // layers add ~900 script chars over the R69-a walk. The in-script
+    // comments were TRIMMED to one-liners (the full rationale lives in THIS
+    // docblock + the R66-2-d/R69-a history above) so the capsule stays under
+    // the CreateProcess ceiling — the psCapsule docblock's numbers below
+    // are re-measured for the v2 walk.
     const script = `
 Add-Type -AssemblyName UIAutomationClient
 $pokeCount = 0
@@ -706,49 +781,31 @@ $root = [System.Windows.Automation.AutomationElement]::FromHandle([IntPtr]${wind
 $walker = [System.Windows.Automation.TreeWalker]::ControlViewWalker
 $out = New-Object System.Collections.ArrayList
 $maxDepth = 25; $maxEl = 2400
-# R66-2-d: ControlTypes that MIGHT carry interactive patterns. Everything
-# else (Window, Pane, Text, Image, Group, Table, TitleBar, MenuBar, StatusBar,
-# ToolBar, ToolTip, Separator, Header, HeaderItem, SemanticZoom, ...) is
-# recorded as kind + name + bounds with NO pattern query — those 4+ cross-
-# process COM probes per node were the cost that made Chromium-sized trees
-# (Edge) crawl. Non-probed kinds simply never carry pressable/editable/
-# has_menu flags, a value, or advertised actions: the tools layer fails
-# closed on them instead of guessing.
+# R66-2-d: ControlTypes that MIGHT carry interactive patterns — they alone
+# get the 4 COM pattern probes (the Edge-crawl fix).
 $probe = @('Button','Hyperlink','Edit','ComboBox','CheckBox','RadioButton','Slider','TabItem','MenuItem','ListItem','DataItem','TreeItem','Spinner','Thumb','ScrollBar','Document','Custom')
-function MapKind($ct) {
-  switch ($ct) {
-    'Window' { return 'window' }
-    'MenuItem' { return 'menuitem' }
-    'Button' { return 'button' }
-    'Hyperlink' { return 'button' }
-    'Edit' { return 'textfield' }
-    'Document' { return 'textfield' }
-    'ComboBox' { return 'combobox' }
-    'CheckBox' { return 'checkbox' }
-    'RadioButton' { return 'checkbox' }
-    'Slider' { return 'slider' }
-    'Tab' { return 'pane' }
-    'TabItem' { return 'tab' }
-    'DataItem' { return 'row' }
-    'ListItem' { return 'row' }
-    'TreeItem' { return 'row' }
-    'Text' { return 'text' }
-    'Image' { return 'image' }
-    default { return 'pane' }
-  }
+$kindMap = @{Window='window';MenuItem='menuitem';Button='button';Hyperlink='button';Edit='textfield';Document='textfield';ComboBox='combobox';CheckBox='checkbox';RadioButton='checkbox';Slider='slider';Tab='pane';TabItem='tab';DataItem='row';ListItem='row';TreeItem='row';Text='text';Image='image'}
+function MapKind($ct) { if ($kindMap.ContainsKey($ct)) { return $kindMap[$ct] }; return 'pane' }
+# R93 v2 §2.2: by-id property reader — a probe that cannot read on this host
+# never fires (10009 falls back to the typed Current view).
+function GetUiaProp($el, $id) {
+  $m = $el.PSObject.Methods['GetPropertyValue']
+  if ($null -ne $m) { try { return $m.Invoke($id) } catch { return $null } }
+  if ($id -eq 10009) { try { return $el.Current.IsKeyboardFocusable } catch {} }
+  return $null
 }
-function Walk($el, $depth) {
+$winKey = 'w${window.windowId}-0'
+function Walk($el, $depth, $parentKey, $pathSegs) {
   if ($out.Count -ge $maxEl -or $depth -gt $maxDepth) { return }
   try {
     if ($null -eq $el) { return }
     $ct = $el.Current.ControlType.ProgrammaticName -replace '^ControlType.', ''
     $name = $el.Current.Name; if ($null -ne $name -and $name.Length -gt 120) { $name = $name.Substring(0,120) }
     $interactive = $probe -contains $ct
+    $via = ''
+    if ($interactive) { $via = 'type' }
     $flags = @()
-    # ONE pattern pass, interactive kinds only: each handle is reused for
-    # flags + value + action advertisement below (the old script re-probed
-    # Value once more for the value and Invoke/Toggle/ExpandCollapse three
-    # more times for actions — 8 probes per full-detail node).
+    # ONE pattern pass, interactive kinds only — handles reused below.
     $ip = $null; $tp = $null; $ec = $null; $vp = $null
     if ($interactive) {
       try { $ip = $el.GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern) } catch {}
@@ -759,8 +816,27 @@ function Walk($el, $depth) {
       if ($null -ne $ec) { $flags += 'has_menu' }
       if ($null -ne $vp) { $flags += 'editable' }
     }
+    if ($depth -gt 0 -and -not $interactive) {
+      $da = GetUiaProp $el 10030
+      if ($null -ne $da -and "$da" -ne '' -and "$da" -ne 'no default action') { $interactive = $true; $via = 'action' }
+      if (-not $interactive) {
+        $r = GetUiaProp $el 10095
+        if ('43','56','45','44','12','60','37','46','34','30','51','63' -contains "$r") { $interactive = $true; $via = 'msaa' }
+      }
+      if (-not $interactive) {
+        $kb = GetUiaProp $el 10009
+        $k = MapKind $ct
+        if ("$kb" -eq 'True' -and $name -and $k -ne 'window' -and $k -ne 'pane') { $interactive = $true; $via = 'focusable' }
+      }
+    }
     try { if ($el.Current.IsKeyboardFocused) { $flags += 'focused' } } catch {}
-    $entry = [pscustomobject]@{ index = $out.Count; kind = (MapKind $ct); name = [string]$name; flags = $flags }
+    $key = "$winKey-$($out.Count)"
+    $segs = @(); if ($null -ne $pathSegs) { $segs = @($pathSegs) }
+    if ($name) { $segs = @($segs + $name) }
+    $shown = $segs; if ($shown.Count -gt 5) { $shown = @('…') + @($shown[-5..-1]) }
+    $path = ''
+    if ($shown.Count -gt 0) { $path = $shown -join ' › '; if ($path.Length -gt 120) { $path = $path.Substring(0,120) } }
+    $entry = [pscustomobject]@{ index = $out.Count; kind = (MapKind $ct); name = [string]$name; flags = $flags; key = $key; windowKey = $winKey; parentKey = $parentKey; path = $path; treeDepth = $depth; interactive = $interactive }
     if ($null -ne $vp) {
       try {
         $v = $vp.Current.Value; if ($null -ne $v -and $v.Length -gt 120) { $v = $v.Substring(0,120) }
@@ -773,13 +849,13 @@ function Walk($el, $depth) {
       if ($null -ne $tp) { $entry | Add-Member -NotePropertyName actions -NotePropertyValue @('Toggle') }
       if ($null -ne $ec) { $entry | Add-Member -NotePropertyName actions -NotePropertyValue @('Expand') }
     }
+    if ($via) { $entry | Add-Member -NotePropertyName via -NotePropertyValue $via }
     [void]$out.Add($entry)
     $child = $walker.GetFirstChildElement($el)
-    while ($null -ne $child) { Walk $child ($depth + 1); $child = $walker.GetNextSiblingElement($child) }
+    while ($null -ne $child) { Walk $child ($depth + 1) $key $segs; $child = $walker.GetNextSiblingElement($child) }
   } catch { return }
 }
-# R69-a (C4 hardening): poll while SPARSE — re-walk after each wait, break
-# once the tree yields >1 element; checkpoints 400/800/1400/2000ms (4 max).
+# R69-a: poll while SPARSE — 4 checkpoints, break once non-sparse.
 if ($pokeCount -gt 0) {
   $waits = @(400, 400, 600, 600)
   foreach ($w in $waits) {
@@ -1206,6 +1282,60 @@ if ([U32]::GetForegroundWindow() -eq $h) { Write-Output 'ACTIVE' } else { Write-
     if (out === "ACTIVE") return { ok: true, active: true };
     if (out === "INACTIVE") return { ok: true, active: false };
     return { ok: false, active: false };
+  },
+
+  // ── R93-C (the v2 surface — ClickScope parity): window placement. The
+  // three methods share the windowId = HWND contract listWindows/activate
+  // already use. SetWindowPos is the ONE new U32 P/Invoke (line ~270, one
+  // line, still ONE csc compile per capsule); ShowWindow reuses the
+  // activate() primitive by handle; focusWindow is the light by-id raise
+  // (BringWindowToTop + SetForegroundWindow without the full R68-C ladder —
+  // placement focus is advisory, the raw-input foreground auto-activation
+  // owns the verified path when it matters).
+  async moveWindow(run, windowId, x, y) {
+    const script = `
+${U32_GUARD}
+if (-not $script:U32_OK) { Write-Output 'ERR:u32-unavailable'; exit 0 }
+$h = [IntPtr]${windowId}
+if ($h -eq [IntPtr]::Zero) { Write-Output 'ERR:no-window'; exit 0 }
+# SWP_NOZORDER(0x4)|SWP_NOSIZE(0x1) — move only, keep size + z-order.
+if ([U32]::SetWindowPos($h, [IntPtr]::Zero, ${Math.round(x)}, ${Math.round(y)}, 0, 0, 0x5)) { Write-Output 'OK' } else { Write-Output 'ERR:move-failed' }
+`;
+    const result = await run(psCapsule(script, 8000));
+    const out = result.stdout.trim();
+    if (out === "OK") return { ok: true };
+    return { ok: false, error: out.startsWith("ERR:") ? out.slice(4) : "move failed" };
+  },
+
+  async setWindowState(run, windowId, state) {
+    // 3 = SW_MAXIMIZE, 6 = SW_MINIMIZE, 9 = SW_RESTORE (the R68-C codes).
+    const cmd = state === "maximize" ? 3 : state === "minimize" ? 6 : 9;
+    const script = `
+${U32_GUARD}
+if (-not $script:U32_OK) { Write-Output 'ERR:u32-unavailable'; exit 0 }
+$h = [IntPtr]${windowId}
+if ($h -eq [IntPtr]::Zero) { Write-Output 'ERR:no-window'; exit 0 }
+if ([U32]::ShowWindow($h, ${cmd})) { Write-Output 'OK' } else { Write-Output 'ERR:state-failed' }
+`;
+    const result = await run(psCapsule(script, 8000));
+    const out = result.stdout.trim();
+    if (out === "OK") return { ok: true };
+    return { ok: false, error: out.startsWith("ERR:") ? out.slice(4) : "state change failed" };
+  },
+
+  async focusWindow(run, windowId) {
+    const script = `
+${U32_GUARD}
+if (-not $script:U32_OK) { Write-Output 'ERR:u32-unavailable'; exit 0 }
+$h = [IntPtr]${windowId}
+if ($h -eq [IntPtr]::Zero) { Write-Output 'ERR:no-window'; exit 0 }
+[void][U32]::BringWindowToTop($h)
+if ([U32]::SetForegroundWindow($h)) { Write-Output 'OK' } else { Write-Output 'ERR:focus-failed' }
+`;
+    const result = await run(psCapsule(script, 8000));
+    const out = result.stdout.trim();
+    if (out === "OK") return { ok: true };
+    return { ok: false, error: out.startsWith("ERR:") ? out.slice(4) : "focus failed" };
   },
 
   async frontmostPid(run) {
@@ -1837,16 +1967,34 @@ function buildSnapshotRecord(
     surface: { kind: "window", actualWindowId: window.windowId, lifecycle: "stable" },
     elements: detail === "compact"
       ? elements.map((el) => {
+          // R93-C: the compact walk keeps the HIERARCHY keys (get_tree and
+          // get_children/get_subtree work on compact snapshots too) + the
+          // category; only the pixel-scale fields (bounds) and the pattern
+          // actions are dropped as before.
           const compact: Snapshot["elements"][number] = {
             index: el.index,
             kind: el.kind,
             name: el.name,
             flags: el.flags ?? [],
+            category: el.category ?? categoryOfKind(el.kind),
           };
           if (el.value !== undefined) compact.value = el.value;
+          if (el.key !== undefined) compact.key = el.key;
+          if (el.windowKey !== undefined) compact.windowKey = el.windowKey;
+          if (el.parentKey !== undefined) compact.parentKey = el.parentKey;
+          if (el.treeDepth !== undefined) compact.treeDepth = el.treeDepth;
+          if (el.path !== undefined) compact.path = el.path;
+          if (el.interactive !== undefined) compact.interactive = el.interactive;
+          if (el.via !== undefined) compact.via = el.via;
           return compact;
         })
-      : elements.map((el) => ({ ...el, flags: el.flags ?? [] })),
+      : elements.map((el) => ({
+          ...el,
+          flags: el.flags ?? [],
+          // R93-C: the category derivation (shared mapping — the walker's
+          // script does NOT re-derive it).
+          category: el.category ?? categoryOfKind(el.kind),
+        })),
     createdAt: 0,
   };
 }

@@ -200,6 +200,7 @@ describe("openDatabase", () => {
       // ROUND-87 (R87): ask_user joins the allowlist vocabulary —
       // appended to template/default rows by the companion rule.
       { version: 33, name: "0033_ask_user_tool.sql" },
+      { version: 34, name: "0034_computer_element_map.sql" },
     ]);
     expect(appliedSecond).toEqual(appliedFirst);
   });

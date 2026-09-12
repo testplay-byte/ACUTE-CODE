@@ -77,13 +77,15 @@ describe("ROUND-61 (R61): the settings gates", () => {
     expect(tools).toHaveLength(0);
   });
 
-  it("ENABLED + act posture: exactly the 31 tools (30 doc-02 + find_elements)", async () => {
+  it("ENABLED + act posture: exactly the 41 tools (30 doc-02 + find_elements + the 10 R93 v2 tools)", async () => {
     setComputerUseSettings(db, { enabled: true, permission: "act" });
     const tools = await computerUsePlugin.createTools({ root: tempDir, toolDeps: makeDeps() });
     expect(tools.map((t) => t.name).sort()).toEqual([
       // observe & resolve
       "cursor_position", "find_elements", "get_app_state", "list_apps", "list_displays", "list_windows",
       "open_application", "request_access", "screenshot", "switch_display", "zoom",
+      // R93 (§2.5): tree / navigation / learning (read-only)
+      "app_profile", "element_at", "get_children", "get_parent", "get_subtree", "get_tree", "windows_overview",
       // pointer
       "double_click", "left_click", "left_click_drag", "left_mouse_down", "left_mouse_up",
       "middle_click", "mouse_move", "right_click", "scroll", "triple_click",
@@ -93,20 +95,27 @@ describe("ROUND-61 (R61): the settings gates", () => {
       "perform_action",
       // runtime
       "read_clipboard", "stop_computer_control", "wait", "write_clipboard",
+      // R93 (§2.5): window placement (act posture)
+      "focus_window", "move_window", "window_state",
     ].sort());
-    expect(tools).toHaveLength(31);
+    expect(tools).toHaveLength(41);
   });
 
-  it("observe posture: ONLY the read-only subset is offered (the model never sees mutating schemas)", async () => {
+  it("observe posture: ONLY the read-only subset is offered (the model never sees mutating schemas — placement included)", async () => {
     setComputerUseSettings(db, { enabled: true, permission: "observe" });
     const tools = await computerUsePlugin.createTools({ root: tempDir, toolDeps: makeDeps() });
     const names = tools.map((t) => t.name);
     expect(names.sort()).toEqual([
       "cursor_position", "find_elements", "get_app_state", "list_apps", "list_displays", "list_windows",
+      "app_profile", "element_at", "get_children", "get_parent", "get_subtree", "get_tree", "windows_overview",
       "read_clipboard", "request_access", "screenshot", "switch_display", "wait", "zoom",
     ].sort());
     expect(names).not.toContain("left_click");
     expect(names).not.toContain("type");
+    // R93: the placement trio is a MUTATION class — never offered in observe posture.
+    expect(names).not.toContain("move_window");
+    expect(names).not.toContain("window_state");
+    expect(names).not.toContain("focus_window");
   });
 
   it("R66-2-d: find_elements is registered with the search contract — present when enabled, ABSENT when off", async () => {
@@ -588,5 +597,128 @@ describe("ROUND-69 (4-c-2): observation + auto-refresh frames go inline", () => 
     const result = await click.execute({ target: { type: "coordinate", x: 1, y: 1 } }, { root: tempDir });
     expect(result.ok).toBe(true);
     expect(emitLog.some((e) => (e as Record<string, unknown>)["type"] === "screenshot")).toBe(false);
+  });
+});
+
+// ── ROUND-93 (R93-C, the computer-use v2 rework): the element-map surface ────
+// The 10 new tools' registration contracts (schemas + the teachings their
+// descriptions carry), the mapDelta passthrough on observations, the
+// placement tools' LOW-RISK classification (act posture, NO consent prompt),
+// and the seeded computer-use SKILL body's v2 loop (mapDelta reading,
+// relocation-first stale recovery, the tree descent, app_profile).
+
+describe("R93: the v2 tool surface — schemas + teachings", () => {
+  it("the tree/navigation tools are registered with their contracts (keys, stateId scope, honest truncation)", async () => {
+    setComputerUseSettings(db, { enabled: true, permission: "act" });
+    const tools = await computerUsePlugin.createTools({ root: tempDir, toolDeps: makeDeps() });
+    const tree = tools.find((t) => t.name === "get_tree")!;
+    expect(tree.description).toContain("TREE");
+    expect(tree.description).toContain("mapDelta");
+    expect(tree.description).toContain("get_children/get_subtree");
+    expect(JSON.stringify(tree.inputSchema)).toContain("maxDepth");
+    const children = tools.find((t) => t.name === "get_children")!;
+    expect(JSON.stringify(children.inputSchema)).toContain("key");
+    expect(children.description).toContain("REGISTERED snapshot");
+    const overview = tools.find((t) => t.name === "windows_overview")!;
+    expect(overview.description).toContain("EVERY window");
+    expect(overview.description).toContain("focused");
+    const elementAt = tools.find((t) => t.name === "element_at")!;
+    expect(elementAt.description).toContain("hit-test");
+    const profile = tools.find((t) => t.name === "app_profile")!;
+    expect(profile.description).toContain("RELIABILITY LEADERS");
+    expect(profile.description).toContain("Honest empty state");
+    // Required fields.
+    const required = (name: string): string[] => {
+      const t = tools.find((x) => x.name === name)!;
+      return ((t.inputSchema as { jsonSchema?: { required?: string[] } }).jsonSchema?.required ?? []);
+    };
+    expect([...required("get_children")].sort()).toEqual(["key", "stateId"]);
+    expect([...required("get_subtree")].sort()).toEqual(["key", "stateId"]);
+    expect([...required("element_at")].sort()).toEqual(["x", "y"]);
+    expect([...required("app_profile")].sort()).toEqual(["appName"]);
+  });
+
+  it("the placement tools are registered (windowId-scoped) and described as act-posture-only", async () => {
+    setComputerUseSettings(db, { enabled: true, permission: "act" });
+    const tools = await computerUsePlugin.createTools({ root: tempDir, toolDeps: makeDeps() });
+    const move = tools.find((t) => t.name === "move_window")!;
+    expect(move.description).toContain("windows_overview/list_windows");
+    expect([...((move.inputSchema as { jsonSchema?: { required?: string[] } }).jsonSchema?.required ?? [])].sort())
+      .toEqual(["windowId", "x", "y"]);
+    const state = tools.find((t) => t.name === "window_state")!;
+    expect(JSON.stringify(state.inputSchema)).toContain("maximize");
+    expect(JSON.stringify(state.inputSchema)).toContain("minimize");
+    const focus = tools.find((t) => t.name === "focus_window")!;
+    expect(focus.description).toContain("foreground");
+  });
+
+  it("get_app_state passes the dispatcher the element-map db (the result carries mapDelta — dispatch-spied)", async () => {
+    setComputerUseSettings(db, { enabled: true, permission: "observe" });
+    const spy = vi
+      .spyOn(ComputerDispatcher.prototype, "dispatch")
+      .mockResolvedValue({
+        kind: "data",
+        data: {
+          state: {
+            stateId: "s-1",
+            elements: [],
+            mapDelta: { newCount: 2, lostCount: 1, newNames: ["Save"], knownTotal: 5, droppedGhostCount: 0 },
+          },
+        },
+      });
+    try {
+      const tools = await computerUsePlugin.createTools({ root: tempDir, toolDeps: makeDeps() });
+      const getState = tools.find((t) => t.name === "get_app_state")!;
+      const result = await getState.execute({ appRef: { pid: 4242 } }, { root: tempDir });
+      expect(result.ok).toBe(true);
+      const parsed = JSON.parse(result.output) as { state: { mapDelta?: { newCount: number; lostCount: number } } };
+      expect(parsed.state.mapDelta).toMatchObject({ newCount: 2, lostCount: 1 });
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it("the placement tools are LOW RISK: act posture WITHOUT an approval channel runs them (no consent prompt)", async () => {
+    setComputerUseSettings(db, { enabled: true, permission: "act" });
+    const tools = await computerUsePlugin.createTools({ root: tempDir, toolDeps: makeDeps() });
+    const move = tools.find((t) => t.name === "move_window")!;
+    // Headless linux: the backend refuses honestly (no window to move) — the
+    // CONTRACT under test is that the consent gate (which would return
+    // host_policy_denied "owner declined") is NOT in the path.
+    const result = await move.execute({ windowId: 77, x: 0, y: 0 }, { root: tempDir });
+    expect(result.ok).toBe(false);
+    const parsed = JSON.parse(result.output) as { error: string; message: string };
+    expect(parsed.error).not.toBe("host_policy_denied");
+  });
+});
+
+describe("R93: the seeded computer-use skill teaches the v2 loop", () => {
+  it("the body carries the mapDelta reading + the relocation-first stale recovery + the tree descent + app_profile", async () => {
+    setComputerUseSettings(db, { enabled: true, permission: "act" });
+    const seeded = db
+      .prepare(`SELECT body FROM skills WHERE id = 'skill_builtin_computer_use'`)
+      .get() as { body: string };
+    // (e1) mapDelta: read it on every observation; lost elements → re-observe.
+    expect(seeded.body).toContain("READ mapDelta");
+    expect(seeded.body).toContain("lostCount > 0");
+    // (e2) element_stale → the relocation shortcut BEFORE re-observing.
+    expect(seeded.body).toContain("TRY THE RELOCATION FIRST");
+    expect(seeded.body).toContain("relocatedIndex");
+    expect(seeded.body).toContain("relocatedStateId");
+    // (e3) the tree tools for dense UIs.
+    expect(seeded.body).toContain("windows_overview");
+    expect(seeded.body).toContain("get_tree");
+    expect(seeded.body).toContain("get_children/get_subtree");
+    // (e4) app_profile + the reliability leaders.
+    expect(seeded.body).toContain("app_profile");
+    expect(seeded.body).toContain("RELIABILITY LEADERS");
+    // (e5) the element-first core + receipt verification (the v1 contract kept).
+    expect(seeded.body).toContain("Core loop (element-first)");
+    expect(seeded.body).toContain("VERIFY AFTER EVERY WRITE");
+    expect(seeded.body).toContain("READ the receipt");
+    // (e6) the safety/approval language is intact.
+    expect(seeded.body).toContain("NEVER type credentials");
+    expect(seeded.body).toContain("Outward-facing sends are publishing");
+    expect(seeded.body).toContain("explicit go-ahead");
   });
 });

@@ -95,6 +95,27 @@
  * model learns WHAT it clicked). wait() builds the same observation after
  * its sleep ("what changed while I waited"). Element targets now route for
  * middle_click and menu-less right_click (bounds → center → raw button).
+ *
+ * ROUND-93 (R93-C — the computer-use v2 element map): the observation side
+ * gains the LEARNING seam (docs/architecture/COMPUTER-USE-V2.md §2.3-2.5):
+ *   · Every registered observation (get_app_state / find_elements / get_tree)
+ *     is folded into the per-app element REGISTRY (element-map.ts) — the
+ *     +new/−lost delta rides the snapshot as `mapDelta` so the model SEES UI
+ *     churn; full-detail walks are first pixel-verified (verify-rects.ts —
+ *     demonstrably-empty ghost boxes are dropped, counted, and never enter
+ *     the registry). Both are OPTIONAL: a dispatcher constructed without a
+ *     `db` (tests, bare contexts) degrades honestly — no map, no delta.
+ *   · The STALE_ELEMENT refusal RELOCATES: a fresh re-walk is scored against
+ *     the stale element (ClickScope's weights) and the best candidate rides
+ *     the refusal payload as relocatedIndex/relocatedName (+ the fresh
+ *     stateId) — the model re-targets with ONE call instead of re-observing.
+ *   · Every mutating ELEMENT receipt feeds the reliability counters
+ *     (recordActionOutcome) — the app_profile tool surfaces the leaders.
+ *   · New routes: the tree/navigation surface (get_tree, get_children,
+ *     get_parent, get_subtree, windows_overview, element_at, app_profile)
+ *     and the window-placement trio (move_window, window_state, focus_window
+ *     — act-posture only; the backend implementations are the interface
+ *     contract, backends/interface.ts §window placement).
  */
 import type {
   ActionObservation,
@@ -126,6 +147,7 @@ import {
   refuse,
   screenUnchanged,
   targetlessInputRefused,
+  unsupportedOnBackend,
   invalidWindowId,
   type AppCandidate,
   type RefusalOutcome,
@@ -134,6 +156,15 @@ import { getComputerSession, MAX_FRAME_AGE_MS, type ComputerSession } from "./se
 import { hamming, hashFrame, hashRegion } from "./framehash.js";
 import { appendAudit } from "./audit.js";
 import type { CuaBackend, ElementDescriptor, EnumerationDiagnostics, RunCommand, WindowScope } from "./backends/interface.js";
+// R93-C: the element map (the observation-side memory) + ghost verification.
+import {
+  appProfile,
+  recordActionOutcome,
+  registerScan,
+  relocateElement,
+} from "./element-map.js";
+import { decodeGray, dropGhostElements } from "./verify-rects.js";
+import type { SqliteDatabase } from "../storage/db.js";
 
 export interface DispatcherOptions {
   backend: CuaBackend;
@@ -145,6 +176,14 @@ export interface DispatcherOptions {
   /** When false, mutating tools refuse with host_policy_denied (observe-only
    * posture). Defaults true (the tools layer enforces the settings gate). */
   allowMutations?: boolean;
+  /** R93: the element-map database (migration 0034) — threaded from the
+   * plugin's toolDeps.db. OPTIONAL on purpose: bare/test contexts construct
+   * the dispatcher without one and degrade honestly (no scan registration,
+   * no mapDelta, no reliability counters, no app_profile). */
+  db?: SqliteDatabase;
+  /** R93: the agent session id, labeling the computer_scan history rows
+   * (best-effort — the plugin passes toolDeps.sessionId). */
+  sessionId?: string;
 }
 
 export type DispatchResult =
@@ -157,6 +196,10 @@ const MUTATING_TOOLS = new Set([
   "mouse_move", "scroll", "left_click_drag", "left_mouse_down", "left_mouse_up",
   "type", "set_value", "select_text", "key", "hold_key", "perform_action",
   "write_clipboard", "open_application",
+  // R93 §2.5: window placement — act-posture only (they rearrange the
+  // user's screen; LOW risk class, so NO consent-gate entry — the plugin's
+  // CONSENT_TOOLS set intentionally excludes them).
+  "move_window", "window_state", "focus_window",
 ]);
 
 /** R69 (task 4-c-2): the tools whose SENT receipts automatically carry the
@@ -291,6 +334,10 @@ export class ComputerDispatcher {
   private readonly root: string;
   private readonly session: ComputerSession;
   private readonly allowMutations: boolean;
+  /** R93: the element-map db (optional — see DispatcherOptions). */
+  private readonly db: SqliteDatabase | undefined;
+  /** R93: the agent session id for the computer_scan history rows. */
+  private readonly sessionId: string;
   private selectedDisplay = 1;
   /** Latest raster PNGs by frameId (for zoom + vision; capped at 3). */
   private rasterCache = new Map<string, string>();
@@ -314,6 +361,8 @@ export class ComputerDispatcher {
     this.root = opts.root;
     this.session = opts.session ?? getComputerSession();
     this.allowMutations = opts.allowMutations ?? true;
+    this.db = opts.db;
+    this.sessionId = opts.sessionId ?? "";
   }
 
   /** The single entry point every tool call flows through (audit + gates). */
@@ -462,6 +511,21 @@ export class ComputerDispatcher {
       // R66-2-d: server-side tree SEARCH (the Edge fix — see toolFindElements).
       case "find_elements":
         return this.toolFindElements(args);
+      // ── R93 (§2.5): the tree/navigation surface (read-only) ──
+      case "get_tree":
+        return this.toolGetTree(args);
+      case "get_children":
+        return this.toolGetChildren(args);
+      case "get_parent":
+        return this.toolGetParent(args);
+      case "get_subtree":
+        return this.toolGetSubtree(args);
+      case "windows_overview":
+        return this.toolWindowsOverview();
+      case "element_at":
+        return this.toolElementAt(args);
+      case "app_profile":
+        return this.toolAppProfile(args);
       case "screenshot":
         return this.toolScreenshot(args);
       case "zoom":
@@ -528,6 +592,14 @@ export class ComputerDispatcher {
       // ── misc mutating ──
       case "write_clipboard":
         return this.toolWriteClipboard(args);
+
+      // ── R93 (§2.5): window placement (act posture) ──
+      case "move_window":
+        return this.toolMoveWindow(args);
+      case "window_state":
+        return this.toolSetWindowState(args);
+      case "focus_window":
+        return this.toolFocusWindow(args);
 
       default:
         return refuse(
@@ -659,7 +731,13 @@ export class ComputerDispatcher {
     };
   }
 
-  /** Element freshness gate (doc 03 §6) + scope/window extraction. */
+  /** Element freshness gate (doc 03 §6) + scope/window extraction.
+   *
+   * R93: the element is resolved by its `index` FIELD (the walk-order number
+   * the backends emit), falling back to array position for pre-v2 fixtures
+   * — ghost-dropped snapshots legitimately have GAPS in the array, and a
+   * positional lookup there would target the WRONG element (every survivor
+   * keeps its original index, so field lookup stays exact). */
   private resolveElementScope(
     target: { type: "element"; stateId: string; index: number },
   ): { ok: true; snapshot: Snapshot; element: Element; window: WindowScope } | { ok: false; refusal: DispatchResult } {
@@ -676,7 +754,7 @@ export class ComputerDispatcher {
         refusal: { kind: "refusal", refusal: elementStaleSuperseded(target.stateId).refusal },
       };
     }
-    const element = stored.snapshot.elements[target.index];
+    const element = stored.snapshot.elements.find((e) => e.index === target.index) ?? stored.snapshot.elements[target.index];
     if (element === undefined) {
       return { ok: false, refusal: { kind: "refusal", refusal: invalidTarget(`index ${target.index} is out of range in ${target.stateId}`).refusal } };
     }
@@ -1162,6 +1240,7 @@ export class ComputerDispatcher {
     const { app, window } = resolved;
     const detail = args["detail"] === "full" ? "full" : "compact";
     const includeScreenshot = args["includeScreenshot"] === true || args["include_screenshot"] === true;
+    const startedAt = Date.now();
 
     const built = await this.backend.buildSnapshot(this.run, app, window, detail);
     if ("error" in built) {
@@ -1210,6 +1289,11 @@ export class ComputerDispatcher {
       }
       // A failed window capture is NOT fatal — the tree is the observation.
     }
+
+    // R93: fold the observation into the element map (ghost filtering first
+    // — AFTER any includeScreenshot raster exists, so the window capture is
+    // the freshest candidate; the delta rides the snapshot as mapDelta).
+    this.registerObservation(snapshot, detail, startedAt);
 
     const data: Record<string, unknown> = { state: snapshot };
     if (snapshot.raster) data["raster"] = snapshot.raster;
@@ -1303,6 +1387,7 @@ export class ComputerDispatcher {
     const resolved = await this.resolveAppWindow(args);
     if (!resolved.ok) return resolved.refusal;
     const { app, window } = resolved;
+    const startedAt = Date.now();
 
     const built = await this.backend.buildSnapshot(this.run, app, window, "full");
     if ("error" in built) {
@@ -1319,6 +1404,10 @@ export class ComputerDispatcher {
       };
     }
     const snapshot = this.session.registerSnapshot(built);
+    // R93: full-detail walk → ghost filtering + the element-map fold (same
+    // seam as get_app_state; the delta rides the result top-level because
+    // the snapshot itself does not ride a find_elements result).
+    this.registerObservation(snapshot, "full", startedAt);
     const want = rawQuery.trim().toLowerCase();
     const matched = snapshot.elements.filter(
       (el) => el.name.toLowerCase().includes(want) && (kind === undefined || el.kind === kind),
@@ -1368,8 +1457,449 @@ export class ComputerDispatcher {
         app: { pid: app.pid, name: app.name },
         window: { title: snapshot.window.title, windowId: snapshot.window.windowId },
         note: "indexes are get_app_state/left_click element target indexes — use them directly",
+        ...(snapshot.mapDelta !== undefined ? { mapDelta: snapshot.mapDelta } : {}),
       },
     };
+  }
+
+  /* ── R93 (§2.3-2.4): the element-map seam — ghost filtering + registration ── */
+
+  /**
+   * R93: fold a freshly registered observation into the element map.
+   *
+   * (1) GHOST FILTERING — only for detail:"full" walks (compact has no
+   *     bounds): when a FRESH raster exists in the session (the model's own
+   *     includeScreenshot capture when one just ran, else the last fresh
+   *     registered frame — the rasterCache holds its bytes), every element
+   *     rect is pixel-verified (verify-rects.ts) and demonstrably-empty
+   *     boxes are DROPPED from the snapshot before anything reaches the
+   *     registry. Survivors KEEP their walk `index` fields — element
+   *     addressing is by index (resolveElementScope), so the gaps never
+   *     mis-target. Fail-open everywhere: no raster / stale / undecodable /
+   *     out-of-bounds rects pass untouched (verification never HIDES a real
+   *     element on a false positive).
+   * (2) SCAN REGISTRATION — registerScan folds the survivors into the
+   *     per-app registry (computer_element/computer_scan) and the +new/−lost
+   *     delta rides the snapshot as `mapDelta` (with droppedGhostCount).
+   *
+   * Both degrade honestly: no db → no map (the ghost pixel-check still runs
+   * when a raster exists); a thrown SQL error never fails the observation.
+   */
+  private registerObservation(snapshot: Snapshot, detail: "compact" | "full", startedAtMs: number): void {
+    let droppedGhostCount = 0;
+    if (detail === "full") {
+      const frame = this.session.latestFrame();
+      if (frame !== undefined && this.session.frameIsFresh(frame)) {
+        const png = this.rasterFor(frame.frameId);
+        const raster = png === undefined ? null : decodeGray(png);
+        if (raster !== null) {
+          // Shadow shapes carry the rect mapped into RASTER pixels (element
+          // bounds are GLOBAL screen points; the frame owns the transform).
+          const shadow = snapshot.elements.map((el) => ({
+            el,
+            bounds: el.bounds === undefined ? undefined : globalToRasterRect(frame, el.bounds),
+          }));
+          const kept = dropGhostElements(raster, shadow);
+          droppedGhostCount = kept.droppedGhostCount;
+          if (kept.droppedGhostCount > 0) {
+            snapshot.elements = kept.elements.map((s) => s.el);
+          }
+        }
+      }
+    }
+    if (this.db === undefined) return;
+    try {
+      const delta = registerScan(this.db, snapshot, this.sessionId, Date.now() - startedAtMs);
+      snapshot.mapDelta = { ...delta, droppedGhostCount };
+    } catch {
+      // The element map is a learning layer riding the observation — a
+      // storage failure never fails the tool the model asked for.
+    }
+  }
+
+  /* ── R93 (§2.5): the tree / navigation / placement surface ─────────────── */
+
+  /** get_tree: the window→group→element tree of a FRESH compact snapshot,
+   * rendered as text (paths + categories, depth- and line-capped). */
+  private async toolGetTree(args: Record<string, unknown>): Promise<DispatchResult> {
+    const rawDepth = Number(args["maxDepth"] ?? args["max_depth"]);
+    const maxDepth = Number.isInteger(rawDepth) && rawDepth >= 0 ? Math.min(rawDepth, 12) : 6;
+    const ref = args["appRef"] ?? args["app_ref"];
+    // appRef is OPTIONAL here: no ref → the FRONTMOST app (the "what am I
+    // looking at" default — windows_overview lists the rest).
+    const resolved =
+      ref === undefined ? await this.frontmostAppWindow() : await this.resolveAppWindow(args);
+    if (!resolved.ok) return resolved.refusal;
+    const { app, window } = resolved;
+    const startedAt = Date.now();
+    const built = await this.backend.buildSnapshot(this.run, app, window, "compact");
+    if ("error" in built) {
+      return {
+        kind: "refusal",
+        refusal: {
+          error: "capability_fail_closed",
+          message: built.error,
+          recovery: built.emptyTree
+            ? "Fall back to the visual pipeline: screenshot + frame-bound coordinate actions. Do not assume the tools are broken."
+            : "Read the message; retry observation only after the stated cause is addressed.",
+          payload: built.emptyTree ? { emptyTree: true } : undefined,
+        },
+      };
+    }
+    const snapshot = this.session.registerSnapshot(built);
+    // R93: the tree observation registers into the element map too (compact
+    // walk — no bounds, so no ghost judgment; the delta rides the result).
+    this.registerObservation(snapshot, "compact", startedAt);
+    const rendered = renderElementTree(snapshot, maxDepth);
+    this.session.record(
+      "observe",
+      `Tree of '${snapshot.window.title}' (${snapshot.elements.length} elements, depth ≤${maxDepth}${rendered.truncated ? ", truncated" : ""})`,
+      "get_tree",
+      { stateId: snapshot.stateId, lines: rendered.lines },
+    );
+    return {
+      kind: "data",
+      data: {
+        stateId: snapshot.stateId,
+        app: { pid: app.pid, ...(app.name !== undefined ? { name: app.name } : {}) },
+        window: { title: snapshot.window.title, windowId: snapshot.window.windowId },
+        total: snapshot.elements.length,
+        maxDepth,
+        truncated: rendered.truncated,
+        lines: rendered.lines,
+        tree: rendered.tree,
+        ...(snapshot.mapDelta !== undefined ? { mapDelta: snapshot.mapDelta } : {}),
+      },
+    };
+  }
+
+  /** The tree-navigation snapshot lookup: an UNKNOWN stateId refuses with
+   * the module's existing element_stale pattern (honest 404 — the state is
+   * gone from the session registry). */
+  private treeSnapshot(stateId: unknown): { ok: true; snapshot: Snapshot } | { ok: false; refusal: DispatchResult } {
+    if (typeof stateId !== "string" || stateId === "") {
+      return { ok: false, refusal: { kind: "refusal", refusal: invalidTarget("stateId must be the string a get_app_state/get_tree result returned").refusal } };
+    }
+    const stored = this.session.getSnapshot(stateId);
+    if (stored === undefined) {
+      return { ok: false, refusal: { kind: "refusal", refusal: elementStaleChanged(stateId).refusal } };
+    }
+    return { ok: true, snapshot: stored.snapshot };
+  }
+
+  /** get_children: the direct children of one node (by key) in a REGISTERED
+   * snapshot — descends without re-observing. */
+  private toolGetChildren(args: Record<string, unknown>): DispatchResult {
+    const key = typeof args["key"] === "string" ? (args["key"] as string) : "";
+    const snap = this.treeSnapshot(args["stateId"] ?? args["state_id"]);
+    if (!snap.ok) return snap.refusal;
+    if (key === "") {
+      return { kind: "refusal", refusal: invalidTarget("get_children needs a key (a node key from get_tree)").refusal };
+    }
+    const node = snap.snapshot.elements.find((e) => e.key === key);
+    if (node === undefined) {
+      return {
+        kind: "refusal",
+        refusal: invalidTarget(
+          `key '${key}' is not in snapshot ${snap.snapshot.stateId}${snap.snapshot.elements.some((e) => e.key !== undefined) ? "" : " (this snapshot carries no hierarchy keys — the backend predates v2; use get_app_state's flat indexes)"}`,
+        ).refusal,
+      };
+    }
+    const children = snap.snapshot.elements.filter((e) => e.parentKey === key);
+    return {
+      kind: "data",
+      data: {
+        stateId: snap.snapshot.stateId,
+        key,
+        node: elementBrief(node),
+        children: children.map(elementBrief),
+        count: children.length,
+        ...(children.length === 0 ? { note: "no children under this node (a leaf)" } : {}),
+      },
+    };
+  }
+
+  /** get_parent: the parent node of one key in a REGISTERED snapshot. */
+  private toolGetParent(args: Record<string, unknown>): DispatchResult {
+    const key = typeof args["key"] === "string" ? (args["key"] as string) : "";
+    const snap = this.treeSnapshot(args["stateId"] ?? args["state_id"]);
+    if (!snap.ok) return snap.refusal;
+    if (key === "") {
+      return { kind: "refusal", refusal: invalidTarget("get_parent needs a key (a node key from get_tree)").refusal };
+    }
+    const node = snap.snapshot.elements.find((e) => e.key === key);
+    if (node === undefined) {
+      return { kind: "refusal", refusal: invalidTarget(`key '${key}' is not in snapshot ${snap.snapshot.stateId}`).refusal };
+    }
+    if (node.parentKey === undefined || node.parentKey === null) {
+      return { kind: "data", data: { stateId: snap.snapshot.stateId, key, node: elementBrief(node), parent: null, note: "root node — no parent" } };
+    }
+    const parent = snap.snapshot.elements.find((e) => e.key === node.parentKey);
+    return {
+      kind: "data",
+      data: {
+        stateId: snap.snapshot.stateId,
+        key,
+        node: elementBrief(node),
+        parent: parent === undefined ? null : elementBrief(parent),
+        ...(parent === undefined ? { note: `parentKey '${node.parentKey}' did not resolve in this snapshot` } : {}),
+      },
+    };
+  }
+
+  /** get_subtree: one node plus its descendants (walked via a key→children
+   * Map built once per call), depth-capped. */
+  private toolGetSubtree(args: Record<string, unknown>): DispatchResult {
+    const key = typeof args["key"] === "string" ? (args["key"] as string) : "";
+    const rawDepth = Number(args["maxDepth"] ?? args["max_depth"]);
+    const maxDepth = Number.isInteger(rawDepth) && rawDepth >= 0 ? Math.min(rawDepth, 12) : 6;
+    const snap = this.treeSnapshot(args["stateId"] ?? args["state_id"]);
+    if (!snap.ok) return snap.refusal;
+    if (key === "") {
+      return { kind: "refusal", refusal: invalidTarget("get_subtree needs a key (a node key from get_tree)").refusal };
+    }
+    const node = snap.snapshot.elements.find((e) => e.key === key);
+    if (node === undefined) {
+      return { kind: "refusal", refusal: invalidTarget(`key '${key}' is not in snapshot ${snap.snapshot.stateId}`).refusal };
+    }
+    const childrenOf = new Map<string, Element[]>();
+    for (const el of snap.snapshot.elements) {
+      if (el.parentKey === undefined || el.parentKey === null) continue;
+      const list = childrenOf.get(el.parentKey);
+      if (list === undefined) childrenOf.set(el.parentKey, [el]);
+      else list.push(el);
+    }
+    const SUBTREE_CAP = 400;
+    const out: Array<Element & { depth: number }> = [];
+    let truncated = false;
+    const walk = (el: Element, depth: number): void => {
+      if (out.length >= SUBTREE_CAP) {
+        truncated = true;
+        return;
+      }
+      out.push({ ...el, depth });
+      if (depth >= maxDepth) return;
+      for (const child of childrenOf.get(el.key ?? "") ?? []) walk(child, depth + 1);
+    };
+    walk(node, 0);
+    return {
+      kind: "data",
+      data: {
+        stateId: snap.snapshot.stateId,
+        key,
+        maxDepth,
+        count: out.length,
+        truncated,
+        subtree: out.map((el) => ({ ...elementBrief(el), depth: el.depth })),
+      },
+    };
+  }
+
+  /** windows_overview: every window of every app — the "what's on screen"
+   * map (app, pid, title, windowId, bounds, focused per the frontmost pid). */
+  private async toolWindowsOverview(): Promise<DispatchResult> {
+    const { apps, diagnostics } = await this.backend.listApps(this.run);
+    const frontPid = await this.backend.frontmostPid(this.run);
+    const rows: Array<Record<string, unknown>> = [];
+    for (const app of apps) {
+      const { windows } = await this.backend.listWindows(this.run, { pid: app.pid });
+      for (const w of windows) {
+        rows.push({
+          app: app.name,
+          ...(app.processName !== undefined ? { processName: app.processName } : {}),
+          pid: app.pid,
+          title: w.title,
+          windowId: w.windowId,
+          bounds: w.bounds,
+          main: w.main,
+          focused: frontPid !== null && frontPid === app.pid,
+        });
+      }
+    }
+    this.session.record(
+      "observe",
+      `Windows overview: ${rows.length} window(s) across ${apps.length} app(s)`,
+      "windows_overview",
+      { windows: rows.length },
+    );
+    return {
+      kind: "data",
+      data:
+        rows.length === 0 && diagnostics !== undefined
+          ? { windows: rows, diagnostics }
+          : { windows: rows, ...(frontPid !== null ? { frontmostPid: frontPid } : {}) },
+    };
+  }
+
+  /** element_at: the hit-test exposed — what accessible element (if any)
+   * lives under an image-pixel point of the latest (or named) raster. */
+  private async toolElementAt(args: Record<string, unknown>): Promise<DispatchResult> {
+    const x = Number(args["x"]);
+    const y = Number(args["y"]);
+    if (!Number.isInteger(x) || !Number.isInteger(y)) {
+      return { kind: "refusal", refusal: invalidTarget("element_at needs integer x + y (image pixels of the latest raster, copied unchanged)").refusal };
+    }
+    const rawFrameId = args["frameId"] ?? args["frame_id"];
+    const frameId = typeof rawFrameId === "string" && rawFrameId !== "" ? rawFrameId : undefined;
+    // The coordinate actions' own resolver: frame binding + age (auto-refresh
+    // on stale) + bounds, image→global via the session's frame registry.
+    const resolved = await this.resolveCoordinateAction({ type: "coordinate", x, y, frameId });
+    if (!resolved.ok) return resolved.refusal;
+    const hit = await this.backend.hitTest(this.run, resolved.global);
+    this.session.record(
+      "observe",
+      `Element at (${x},${y}): ${hit === null ? "none" : `${hit.name || hit.kind}`}`,
+      "element_at",
+      { x, y },
+    );
+    return {
+      kind: "data",
+      data: {
+        point: resolved.global,
+        ...(hit !== null ? { element: hit } : { element: null, note: "no accessible element at that point (the desktop background, or the app exposes no tree there)" }),
+      },
+    };
+  }
+
+  /** app_profile: the LEARNED state of an app — windows seen, stable
+   * elements, reliability leaders. Honest empty state when never observed. */
+  private toolAppProfile(args: Record<string, unknown>): DispatchResult {
+    const rawName = args["appName"] ?? args["app_name"];
+    const appName = typeof rawName === "string" ? rawName.trim() : "";
+    if (appName === "") {
+      return { kind: "refusal", refusal: invalidTarget("app_profile needs appName (the window title or processName, e.g. 'notepad')").refusal };
+    }
+    if (this.db === undefined) {
+      return refuse(
+        "capability_fail_closed",
+        `app_profile is unavailable in this context (no element-map database).`,
+        "The profile is a learned layer — observe the app first (get_app_state / find_elements / get_tree) in a full session.",
+      );
+    }
+    let profile: ReturnType<typeof appProfile>;
+    try {
+      profile = appProfile(this.db, appName);
+    } catch (error) {
+      return refuse(
+        "capability_fail_closed",
+        `app_profile could not read the element map: ${error instanceof Error ? error.message : String(error)}`,
+        "The observation tools are unaffected — proceed with get_app_state/find_elements.",
+      );
+    }
+    return {
+      kind: "data",
+      data: {
+        ...profile,
+        observed: profile.scanCount > 0,
+        ...(profile.scanCount === 0
+          ? {
+              note: `no observation of '${appName}' has been registered yet — call get_app_state or find_elements on it first (names resolve like app refs: window title or processName)`,
+            }
+          : {}),
+      },
+    };
+  }
+
+  /* ── R93 (§2.5): window placement (act posture) ─────────────────────── */
+
+  private async toolMoveWindow(args: Record<string, unknown>): Promise<DispatchResult> {
+    const windowId = Number(args["windowId"] ?? args["window_id"]);
+    const x = Number(args["x"]);
+    const y = Number(args["y"]);
+    if (!Number.isInteger(windowId) || !Number.isInteger(x) || !Number.isInteger(y)) {
+      return { kind: "refusal", refusal: invalidTarget("move_window needs integer windowId + x + y (global screen points, the new top-left)").refusal };
+    }
+    // R93: the placement methods land in the backends' own workstream — guard
+    // the runtime presence honestly (a backend compiled before the v2
+    // surface refuses unsupported_on_backend, never crashes).
+    if (typeof this.backend.moveWindow !== "function") {
+      return unsupportedOnBackend("move_window", this.backend.kind);
+    }
+    this.session.record("intent", `Moving window ${windowId} to (${x},${y})`, "move_window");
+    const result = await this.backend.moveWindow(this.run, windowId, x, y);
+    if (!result.ok) {
+      return {
+        kind: "refusal",
+        refusal: {
+          error: "capability_fail_closed",
+          message: `move_window failed on window ${windowId}: ${result.error ?? "unknown error"}`,
+          recovery: "Use a real windowId from windows_overview/list_windows; the window may have closed or the backend cannot place it.",
+          payload: { windowId },
+        },
+      };
+    }
+    return { kind: "receipt", receipt: receipt(true, "accepted", false) };
+  }
+
+  private async toolSetWindowState(args: Record<string, unknown>): Promise<DispatchResult> {
+    const windowId = Number(args["windowId"] ?? args["window_id"]);
+    const rawState = args["state"];
+    if (
+      !Number.isInteger(windowId) ||
+      (rawState !== "maximize" && rawState !== "restore" && rawState !== "minimize")
+    ) {
+      return { kind: "refusal", refusal: invalidTarget("window_state needs integer windowId + state 'maximize' | 'restore' | 'minimize'").refusal };
+    }
+    const state = rawState;
+    if (typeof this.backend.setWindowState !== "function") {
+      return unsupportedOnBackend("window_state", this.backend.kind);
+    }
+    this.session.record("intent", `Setting window ${windowId} to ${state}`, "window_state");
+    const result = await this.backend.setWindowState(this.run, windowId, state);
+    if (!result.ok) {
+      return {
+        kind: "refusal",
+        refusal: {
+          error: "capability_fail_closed",
+          message: `window_state '${state}' failed on window ${windowId}: ${result.error ?? "unknown error"}`,
+          recovery: "Use a real windowId from windows_overview/list_windows; the window may have closed.",
+          payload: { windowId, state },
+        },
+      };
+    }
+    return { kind: "receipt", receipt: receipt(true, "accepted", false) };
+  }
+
+  private async toolFocusWindow(args: Record<string, unknown>): Promise<DispatchResult> {
+    const windowId = Number(args["windowId"] ?? args["window_id"]);
+    if (!Number.isInteger(windowId)) {
+      return { kind: "refusal", refusal: invalidTarget("focus_window needs an integer windowId (from windows_overview/list_windows)").refusal };
+    }
+    if (typeof this.backend.focusWindow !== "function") {
+      return unsupportedOnBackend("focus_window", this.backend.kind);
+    }
+    this.session.record("intent", `Focusing window ${windowId}`, "focus_window");
+    const result = await this.backend.focusWindow(this.run, windowId);
+    if (!result.ok) {
+      return {
+        kind: "refusal",
+        refusal: {
+          error: "capability_fail_closed",
+          message: `focus_window failed on window ${windowId}: ${result.error ?? "unknown error"}`,
+          recovery: "Use a real windowId from windows_overview/list_windows; the window may have closed.",
+          payload: { windowId },
+        },
+      };
+    }
+    return { kind: "receipt", receipt: receipt(true, "accepted", false) };
+  }
+
+  /** get_tree's default scope: the frontmost app's main window. */
+  private async frontmostAppWindow(): Promise<
+    { ok: true; app: { pid: number; name?: string; bundleId?: string }; window: WindowInfo } | { ok: false; refusal: DispatchResult }
+  > {
+    const { apps } = await this.backend.listApps(this.run);
+    const active = apps.find((a) => a.active);
+    if (active === undefined) {
+      return {
+        ok: false,
+        refusal: {
+          kind: "refusal",
+          refusal: appNotFound("(frontmost — no app_ref given and no active application)", apps).refusal,
+        },
+      };
+    }
+    return this.resolveAppWindow({ appRef: { pid: active.pid } });
   }
 
   private async toolScreenshot(_args: Record<string, unknown>): Promise<DispatchResult> {
@@ -1583,6 +2113,9 @@ export class ComputerDispatcher {
           if (center === null) {
             return { kind: "refusal", refusal: capabilityFailClosed("the element has no bounds in this snapshot; re-observe with detail:'full'").refusal };
           }
+          // R93: the element-routed raw click feeds the reliability counters
+          // ("unverified" — the raw click actuated the point, not the identity).
+          this.recordElementOutcome(scope, "unverified");
           return this.rawClickAt(center, scope.snapshot.app.pid, 1, modifiers, targetRes.target, scope.element, "middle");
         }
         return {
@@ -1604,6 +2137,8 @@ export class ComputerDispatcher {
         if (center === null) {
           return { kind: "refusal", refusal: capabilityFailClosed("the element has no bounds in this snapshot; re-observe with detail:'full'").refusal };
         }
+        // R93: element-routed raw click → the reliability fold (unverified).
+        this.recordElementOutcome(scope, "unverified");
         return this.rawClickAt(center, scope.snapshot.app.pid, 1, modifiers, targetRes.target, scope.element);
       }
       return this.semanticPress(targetRes.target);
@@ -1640,10 +2175,10 @@ export class ComputerDispatcher {
         );
         this.session.markConsumed(targetRes.target.stateId);
         if (!result.ok) {
-          if (result.stale) return { kind: "refusal", refusal: elementStaleChanged(targetRes.target.stateId).refusal };
+          if (result.stale) return await this.staleElementRefusal(scope, targetRes.target.stateId);
           return { kind: "refusal", refusal: capabilityFailClosed(result.error ?? "menu open failed").refusal };
         }
-        return { kind: "receipt", receipt: receipt(true, "accepted", false, "matched") };
+        return this.elementReceipt(scope, "matched");
       }
       // R69 (task 4-c-2, D5): NO menu advertised (or the event strategy
       // forces raw input — the old path oddly ran Expand even then): route
@@ -1654,6 +2189,8 @@ export class ComputerDispatcher {
       if (center === null) {
         return { kind: "refusal", refusal: capabilityFailClosed("the element has no bounds in this snapshot; re-observe with detail:'full'").refusal };
       }
+      // R93: element-routed raw click → the reliability fold (unverified).
+      this.recordElementOutcome(scope, "unverified");
       return this.rawClickAt(center, scope.snapshot.app.pid, 1, modifiers, targetRes.target, scope.element, "right");
     }
 
@@ -1909,10 +2446,10 @@ export class ComputerDispatcher {
       );
       this.session.markConsumed(targetRes.target.stateId);
       if (!result.ok) {
-        if (result.stale) return { kind: "refusal", refusal: elementStaleChanged(targetRes.target.stateId).refusal };
+        if (result.stale) return await this.staleElementRefusal(scope, targetRes.target.stateId);
         return { kind: "refusal", refusal: capabilityFailClosed(result.error ?? "value write failed").refusal };
       }
-      return { kind: "receipt", receipt: receipt(true, "accepted", false, "matched") };
+      return this.elementReceipt(scope, "matched");
     }
     // Mode 2: app-scoped typing — Win/Linux require frontmost.
     const appRef = args["appRef"] ?? args["app_ref"];
@@ -1991,10 +2528,10 @@ export class ComputerDispatcher {
     );
     this.session.markConsumed(targetRes.target.stateId);
     if (!result.ok) {
-      if (result.stale) return { kind: "refusal", refusal: elementStaleChanged(targetRes.target.stateId).refusal };
+      if (result.stale) return await this.staleElementRefusal(scope, targetRes.target.stateId);
       return { kind: "refusal", refusal: capabilityFailClosed(result.error ?? "set_value failed").refusal };
     }
-    return { kind: "receipt", receipt: receipt(true, "accepted", false, "matched") };
+    return this.elementReceipt(scope, "matched");
   }
 
   private async toolSelectText(args: Record<string, unknown>): Promise<DispatchResult> {
@@ -2029,10 +2566,10 @@ export class ComputerDispatcher {
     );
     this.session.markConsumed(targetRes.target.stateId);
     if (!result.ok) {
-      if (result.stale) return { kind: "refusal", refusal: elementStaleChanged(targetRes.target.stateId).refusal };
+      if (result.stale) return await this.staleElementRefusal(scope, targetRes.target.stateId);
       return { kind: "refusal", refusal: capabilityFailClosed(result.error ?? "select failed").refusal };
     }
-    return { kind: "receipt", receipt: receipt(true, "accepted", false, "matched") };
+    return this.elementReceipt(scope, "matched");
   }
 
   private async toolKey(args: Record<string, unknown>): Promise<DispatchResult> {
@@ -2166,10 +2703,10 @@ export class ComputerDispatcher {
     );
     this.session.markConsumed(targetRes.target.stateId);
     if (!result.ok) {
-      if (result.stale) return { kind: "refusal", refusal: elementStaleChanged(targetRes.target.stateId).refusal };
+      if (result.stale) return await this.staleElementRefusal(scope, targetRes.target.stateId);
       return { kind: "refusal", refusal: capabilityFailClosed(result.error ?? "action failed").refusal };
     }
-    return { kind: "receipt", receipt: receipt(true, "accepted", false, "matched") };
+    return this.elementReceipt(scope, "matched");
   }
 
   private async toolWriteClipboard(args: Record<string, unknown>): Promise<DispatchResult> {
@@ -2182,6 +2719,104 @@ export class ComputerDispatcher {
   }
 
   /* ── shared click paths ───────────────────────────────────────────────── */
+
+  /**
+   * R93: the element_stale refusal WITH RELOCATION. The backend's re-walk
+   * found a kind/name mismatch at the index (the UI moved under us) —
+   * instead of the old dead-end "re-observe", dispatch takes ONE fresh
+   * re-walk of the same app+window, scores it against the stale element
+   * (element-map.ts relocateElement — ClickScope's weights: name 4.0 /
+   * substring 2.0, kind 1.5, category 0.5, proximity ≤120px up to 2.0,
+   * threshold 3.0), registers the fresh snapshot, and rides the best
+   * candidate on the refusal payload: the model re-targets with ONE call
+   * ({stateId: relocatedStateId, index: relocatedIndex}) instead of
+   * re-observing. Best-effort end-to-end: any failure (backend re-walk
+   * error, no candidates above the threshold) keeps the plain refusal.
+   */
+  private async staleElementRefusal(
+    scope: { snapshot: Snapshot; element: Element; window: WindowScope },
+    stateId: string,
+  ): Promise<DispatchResult> {
+    const base = elementStaleChanged(stateId).refusal;
+    try {
+      const built = await this.backend.buildSnapshot(
+        this.run,
+        { pid: scope.snapshot.app.pid, name: scope.snapshot.app.name, bundleId: scope.snapshot.app.bundleId },
+        {
+          windowId: scope.window.windowId,
+          title: scope.window.title,
+          bounds: scope.snapshot.window.bounds,
+          main: true,
+          focused: true,
+        },
+        "full",
+      );
+      if (!("error" in built)) {
+        const fresh = this.session.registerSnapshot(built);
+        const candidates = relocateElement(scope.element, fresh.elements);
+        if (candidates.length > 0) {
+          const top = candidates[0];
+          return {
+            kind: "refusal",
+            refusal: {
+              ...base,
+              recovery: `The element may have moved — candidate: '${top.name}' at index ${top.index} in the fresh state ${fresh.stateId}; retry once with {type:"element", stateId:"${fresh.stateId}", index:${top.index}} if it is the same control, otherwise get_app_state and re-locate.`,
+              payload: {
+                ...(base.payload ?? {}),
+                relocatedIndex: top.index,
+                relocatedName: top.name,
+                relocatedScore: top.score,
+                relocatedBecause: top.because,
+                relocatedStateId: fresh.stateId,
+                relocatedCandidates: candidates.map((c) => ({
+                  index: c.index,
+                  name: c.name,
+                  kind: c.kind,
+                  score: c.score,
+                })),
+              },
+            },
+          };
+        }
+      }
+    } catch {
+      // Relocation is a best-effort enrichment on the refusal — never a
+      // failure channel for the refusal itself.
+    }
+    return { kind: "refusal", refusal: base };
+  }
+
+  /**
+   * R93: the element-action receipt + the reliability fold in one shape —
+   * every mutating element action's success path calls this so the acted-on
+   * element's click/verify counters advance (the receipt's
+   * targetVerificationStatus is the oracle: "matched" (semantic paths) or
+   * "unverified" (element-routed raw clicks — the click still counts).
+   */
+  private elementReceipt(
+    scope: { snapshot: Snapshot; element: Element; window: WindowScope },
+    status: Receipt["targetVerificationStatus"],
+  ): DispatchResult {
+    this.recordElementOutcome(scope, status);
+    return { kind: "receipt", receipt: receipt(true, "accepted", false, status) };
+  }
+
+  /** R93: recordActionOutcome's dispatcher wrapper (db-optional, throw-proof). */
+  private recordElementOutcome(
+    scope: { snapshot: Snapshot; element: Element; window: WindowScope },
+    verification: Receipt["targetVerificationStatus"],
+  ): void {
+    if (this.db === undefined) return;
+    try {
+      const appName =
+        scope.snapshot.app.name !== undefined && scope.snapshot.app.name !== ""
+          ? scope.snapshot.app.name
+          : scope.snapshot.app.title;
+      recordActionOutcome(this.db, appName, scope.window.title, scope.element, verification);
+    } catch {
+      // Learning never fails the action.
+    }
+  }
 
   /** Coordinate click: hit-test (auto) → semantic press; else raw.
    * R69: stale frames auto-refresh here (resolveCoordinateAction).
@@ -2313,10 +2948,10 @@ export class ComputerDispatcher {
     );
     this.session.markConsumed(target.stateId);
     if (!result.ok) {
-      if (result.stale) return { kind: "refusal", refusal: elementStaleChanged(target.stateId).refusal };
+      if (result.stale) return await this.staleElementRefusal(scope, target.stateId);
       return { kind: "refusal", refusal: capabilityFailClosed(result.error ?? "press failed").refusal };
     }
-    return { kind: "receipt", receipt: receipt(true, "accepted", false, "matched") };
+    return this.elementReceipt(scope, "matched");
   }
 
   /* ── raster cache (zoom + vision) ─────────────────────────────────────── */
@@ -2441,6 +3076,144 @@ function coverageWidth(frame: FrameInfo): number {
 /** R69: see coverageWidth. */
 function coverageHeight(frame: FrameInfo): number {
   return Math.max(1, Math.round(frame.size.h / frame.scale));
+}
+
+/* ── R93 helpers: the tree rendering + the rect transform ─────────────────── */
+
+/**
+ * R93: a GLOBAL screen-point rect mapped into the RASTER's pixel space
+ * (verify-rects judges raster pixels; element bounds are global points —
+ * the frame owns the origin + scale of the transform, the inverse of the
+ * session's imageToGlobal).
+ */
+function globalToRasterRect(
+  frame: FrameInfo,
+  bounds: [number, number, number, number],
+): [number, number, number, number] {
+  return [
+    (bounds[0] - frame.origin.x) * frame.scale,
+    (bounds[1] - frame.origin.y) * frame.scale,
+    bounds[2] * frame.scale,
+    bounds[3] * frame.scale,
+  ];
+}
+
+/** R93: the agent-facing element digest the tree tools return (everything
+ * optional that the backend could not derive — never fabricated). */
+function elementBrief(el: Element): Record<string, unknown> {
+  return {
+    index: el.index,
+    kind: el.kind,
+    name: el.name,
+    ...(el.key !== undefined ? { key: el.key } : {}),
+    ...(el.parentKey !== undefined || el.parentKey === null ? { parentKey: el.parentKey } : {}),
+    ...(el.category !== undefined ? { category: el.category } : {}),
+    ...(el.path !== undefined ? { path: el.path } : {}),
+    ...(el.interactive !== undefined ? { interactive: el.interactive } : {}),
+    ...(el.bounds !== undefined ? { bounds: el.bounds } : {}),
+    ...(el.value !== undefined && el.value !== "" ? { value: el.value.slice(0, 60) } : {}),
+    ...(el.actions !== undefined ? { actions: el.actions } : {}),
+  };
+}
+
+/** get_tree's line cap (the honest truncation note rides the result). */
+const TREE_LINE_CAP = 200;
+/** get_tree's indent per depth level. */
+const TREE_INDENT = "  ";
+
+/**
+ * R93: render a snapshot as a TEXT tree — window roots, grouped children
+ * (the v2 key/parentKey fields when the backend emits them), each line
+ * carrying the element's index + kind + category + name (+ the ClickScope
+ * breadcrumb path when present). Pre-v2 snapshots (no keys anywhere) get
+ * an honest FLAT listing under the window root with a note, never a
+ * fabricated hierarchy. Depth-capped (maxDepth) AND line-capped
+ * (TREE_LINE_CAP) with an explicit truncated flag.
+ */
+export function renderElementTree(
+  snapshot: Snapshot,
+  maxDepth: number,
+): { tree: string; truncated: boolean; lines: number } {
+  const elements = snapshot.elements;
+  const hasKeys = elements.some((e) => e.key !== undefined);
+  const lines: string[] = [];
+  let truncated = false;
+
+  const emit = (el: Element, depth: number, childCount: number): void => {
+    if (lines.length >= TREE_LINE_CAP) {
+      truncated = true;
+      return;
+    }
+    const indent = TREE_INDENT.repeat(depth);
+    const category = el.category ?? "";
+    const path = el.path !== undefined && el.path.length <= 80 ? ` — ${el.path}` : "";
+    const container = el.interactive === false ? " (container)" : "";
+    const key = el.key !== undefined ? ` #${el.key}` : "";
+    const below =
+      depth >= maxDepth && childCount > 0 ? ` …(+${childCount} below maxDepth)` : "";
+    lines.push(
+      `${indent}${el.index} ${el.kind}${category !== "" ? `/${category}` : ""} "${el.name}"${key}${container}${below}${path}`,
+    );
+  };
+
+  if (hasKeys) {
+    const childrenOf = new Map<string | null, Element[]>();
+    const keys = new Set(elements.map((e) => e.key).filter((k): k is string => k !== undefined));
+    const roots: Element[] = [];
+    for (const el of elements) {
+      const parent = el.parentKey === undefined ? null : el.parentKey;
+      if (parent === null || !keys.has(parent)) {
+        roots.push(el);
+        continue;
+      }
+      const list = childrenOf.get(parent);
+      if (list === undefined) childrenOf.set(parent, [el]);
+      else list.push(el);
+    }
+    const walk = (el: Element, depth: number): void => {
+      const children = childrenOf.get(el.key ?? "\u0000never") ?? [];
+      emit(el, depth, children.length);
+      if (depth >= maxDepth || lines.length >= TREE_LINE_CAP) {
+        if (lines.length >= TREE_LINE_CAP) truncated = true;
+        return;
+      }
+      for (const child of children) {
+        if (lines.length >= TREE_LINE_CAP) {
+          truncated = true;
+          return;
+        }
+        walk(child, depth + 1);
+      }
+    };
+    for (const root of roots) {
+      if (lines.length >= TREE_LINE_CAP) {
+        truncated = true;
+        break;
+      }
+      walk(root, 0);
+    }
+  } else {
+    // Pre-v2 snapshot: no hierarchy keys — an honest flat listing under the
+    // window root (never a fabricated tree).
+    lines.push(`(no hierarchy keys in this snapshot — pre-v2 backend; flat listing. get_children/get_subtree need keys)`);
+    const windowRoot = elements.find((e) => e.kind === "window") ?? elements[0];
+    const rest = elements.filter((e) => e !== windowRoot);
+    if (windowRoot !== undefined) emit(windowRoot, 0, rest.length);
+    for (const el of rest) {
+      if (lines.length >= TREE_LINE_CAP) {
+        truncated = true;
+        break;
+      }
+      emit(el, 1, 0);
+    }
+  }
+
+  if (truncated) {
+    lines.push(
+      `… tree truncated at ${TREE_LINE_CAP} lines (${elements.length} elements total) — descend with get_children/get_subtree {stateId, key}, or find_elements by name`,
+    );
+  }
+  return { tree: lines.join("\n"), truncated, lines: lines.length };
 }
 
 /** Type re-export for the tools layer. */

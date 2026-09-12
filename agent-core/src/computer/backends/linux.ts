@@ -453,6 +453,55 @@ export const linuxBackend: CuaBackend = {
     return { ok: active, active };
   },
 
+  // ── R93-C (the v2 surface — ClickScope parity): window placement via
+  // wmctrl -i (the X window id = the windowId listWindows -lGp already
+  // reports; the probes are tool-gated fail-closed like every Linux path).
+  async moveWindow(run, windowId, x, y) {
+    const haveWmctrl = await hasTool(run, "wmctrl", ["-m"]);
+    if (!haveWmctrl) return { ok: false, error: "wmctrl is not installed" };
+    // -e gravity,x,y,w,h with -1 = keep.
+    const result = await run({
+      program: "wmctrl",
+      args: [
+        "-i",
+        "-r",
+        String(windowId),
+        "-e",
+        `0,${Math.round(x)},${Math.round(y)},-1,-1`,
+      ],
+      timeoutMs: 5000,
+    });
+    if (result.code === 0) return { ok: true };
+    return { ok: false, error: `wmctrl move exited ${result.code}` };
+  },
+
+  async setWindowState(run, windowId, state) {
+    const haveWmctrl = await hasTool(run, "wmctrl", ["-m"]);
+    if (!haveWmctrl) return { ok: false, error: "wmctrl is not installed" };
+    // add/remove the EWMH hints; hidden is the minimize equivalent.
+    const args =
+      state === "maximize"
+        ? ["-i", "-r", String(windowId), "-b", "add,maximized_vert,maximized_horz"]
+        : state === "minimize"
+          ? ["-i", "-r", String(windowId), "-b", "add,hidden"]
+          : ["-i", "-r", String(windowId), "-b", "remove,maximized_vert,maximized_horz"];
+    const result = await run({ program: "wmctrl", args, timeoutMs: 5000 });
+    if (result.code === 0) return { ok: true };
+    return { ok: false, error: `wmctrl state exited ${result.code}` };
+  },
+
+  async focusWindow(run, windowId) {
+    const haveWmctrl = await hasTool(run, "wmctrl", ["-m"]);
+    if (!haveWmctrl) return { ok: false, error: "wmctrl is not installed" };
+    const result = await run({
+      program: "wmctrl",
+      args: ["-i", "-a", String(windowId)],
+      timeoutMs: 5000,
+    });
+    if (result.code === 0) return { ok: true };
+    return { ok: false, error: `wmctrl focus exited ${result.code}` };
+  },
+
   async frontmostPid(run) {
     const haveXdotool = await hasTool(run, "xdotool");
     if (!haveXdotool) return null;

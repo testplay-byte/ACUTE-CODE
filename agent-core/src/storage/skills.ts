@@ -130,27 +130,42 @@ export const COMPUTER_USE_SKILL_ID = "skill_builtin_computer_use";
  * screenshot/zoom after acting; unchanged → adjust strategy, element
  * first; wait() after navigation reports what changed; a screen_unchanged
  * refusal means act or change strategy — never re-capture.
+ *
+ * ROUND-93 (R93-C, the computer-use v2 rework): the body now teaches the
+ * element-map loop — mapDelta on every observation (+new/−lost = the UI
+ * changed; re-observe before acting when elements were lost), the
+ * element_stale relocation shortcut (retry the refusal's relocatedIndex
+ * BEFORE re-observing), the tree tools for dense UIs (windows_overview →
+ * get_tree → get_children/get_subtree beats a flat list on big apps), and
+ * app_profile's reliability leaders. The safety/approval language is
+ * unchanged.
  */
 export const COMPUTER_USE_SKILL_BODY = `# Skill: computer-use
 
 Main-agent only. Never delegate Computer Use to a subagent (subagents lack the session-bound snapshot/frame state). UIA/AT-SPI element actions are the PRIMARY path: they need no vision and never steal the user's focus.
 
-## Core loop
+## Core loop (element-first)
 1. If readiness is unknown, call request_access once.
-2. ALWAYS start with list_apps. name = the app's window TITLE ("Untitled - Notepad"); processName = the executable ("notepad"); both + pid are in every entry.
+2. ALWAYS start with list_apps (or windows_overview for the whole-screen map). name = the app's window TITLE ("Untitled - Notepad"); processName = the executable ("notepad"); both + pid are in every entry.
 3. get_app_state resolves app_ref by pid (best), window title, processName, or a unique substring. If it refuses app_not_found, the payload's runningApps lists what IS running — pick the correct pid and retry with {pid}; never guess a pid. Two matches → ambiguous_app_ref lists the candidates; scope with pid.
 4. If the user names an app that is absent, call open_application ONCE with the EXACT user-provided name — character-for-character (case, spaces, punctuation, suffixes like "app"). Never translate, normalize, shorten, retry spellings, or substitute a different running app.
 5. After open_application, wait 0.5-1s (the wait tool, or return_state) for the window to exist BEFORE get_app_state.
-6. If the target is in the tree, use an ELEMENT action ({type:"element", stateId, index}) — set_value / perform_action / left_click element. detail:"full" gives bounds + the element's advertised actions.
-7. Only when the tree cannot locate or express the target, take a screenshot and use frame-bound coordinates ({type:"coordinate", x, y} copied UNCHANGED from the latest returned image — never pre-scale, never attach appRef/stateId).
-8. VERIFY AFTER EVERY WRITE: the action receipt CARRIES a post-action observation (return_state defaults to "compact") — a fresh frame id, screenChanged, focusedElementName, the active app's title. READ the receipt; do NOT screenshot or zoom after acting. Only re-observe with get_app_state when the observation is missing or ambiguous.
-9. Actions return receipts. action_sent=true means it MAY have happened — never blindly replay. The receipt's observation is the FIRST verification read; an external oracle (file exists, process exit code) is the strong one. An UNCHANGED screen means the action may not have registered: check focusedElementName, adjust strategy, switch to element targeting.
+6. LOCATE, then ACT on the element: find_elements {appRef, query} (search by name) or get_tree (structure) → act with {type:"element", stateId, index} — set_value / perform_action / left_click element. detail:"full" gives bounds + the element's advertised actions.
+7. READ mapDelta on every observation: +newCount/−lostCount tell you what changed since the last look. lostCount > 0 means elements you knew are GONE — re-observe before acting on stale knowledge; newNames lists what appeared.
+8. On an element_stale refusal, TRY THE RELOCATION FIRST: the payload carries relocatedIndex/relocatedName (+ relocatedStateId) — the element may have MOVED, not vanished. Retry ONCE with {stateId: relocatedStateId, index: relocatedIndex}; only re-observe with get_app_state when there is no candidate or the retry misses.
+9. Only when the tree cannot locate or express the target, take a screenshot and use frame-bound coordinates ({type:"coordinate", x, y} copied UNCHANGED from the latest returned image — never pre-scale, never attach appRef/stateId).
+10. VERIFY AFTER EVERY WRITE: the action receipt CARRIES a post-action observation (return_state defaults to "compact") — a fresh frame id, screenChanged, focusedElementName, the active app's title. READ the receipt; do NOT screenshot or zoom after acting. Only re-observe with get_app_state when the observation is missing or ambiguous.
+11. Actions return receipts. action_sent=true means it MAY have happened — never blindly replay. The receipt's observation is the FIRST verification read; an external oracle (file exists, process exit code) is the strong one. An UNCHANGED screen means the action may not have registered: check focusedElementName, adjust strategy, switch to element targeting.
+
+## Dense UIs — the tree beats the flat list
+- windows_overview: every window of every app ({app, pid, title, windowId, bounds, focused}) — the what's-on-screen map before you commit to an app_ref.
+- get_tree {appRef, maxDepth}: the window → group → element tree as text (paths + categories, ~200-line cap with an honest truncated flag); its stateId + indexes act DIRECTLY. get_children/get_subtree {stateId, key} descend into one group without re-observing. get_parent walks up.
+- On big apps (browsers, IDEs) prefer windows_overview → get_tree → get_children over reading a flat element list; fall back to find_elements when you know the control's NAME but not its place.
+- app_profile {appName}: the learned map of an app you have worked before — window titles, stable elements, and RELIABILITY LEADERS (elements whose actions historically verified). Prefer a reliability leader when several candidates match; an empty profile means the app was never observed.
 
 ## Big apps (browsers, Edge, VS Code)
 - get_app_state on a browser/IDE window returns a HUGE tree (Chromium exposes thousands of elements). Do NOT read it whole — SEARCH it: find_elements {appRef, query:"Sign in", kind:"button"} returns just the matching elements with indexes + bounds, far cheaper than get_app_state detail:"full".
 - Browser pages (Edge/Chrome): the WEB accessibility tree IS searched — find_elements by name finds links, buttons, inputs (the tree is activated automatically). Element targets are the primary path for browser content; screenshots only when the tree genuinely misses.
-- Prefer find_elements + element clicks (left_click/set_value with the returned stateId + index) over screenshots in big apps.
-- Never loop screenshots when the tree can answer: find_elements by name first; screenshot/zoom only when names genuinely cannot identify the control. An empty result tells you the query and how many elements were searched — retry with a shorter substring or read the tree.
 - CHAIN DISCIPLINE: screenshot → act IMMEDIATELY (frames stay valid 30s) — never re-screenshot between observing and acting, and never re-capture after acting: the receipt's observation is the post-action read. After navigation (Enter, links), call wait() — its receipt reports what changed while you waited. A screen_unchanged refusal means act or change strategy, not re-capture. middle_click a link = open in new tab.
 
 ## Tab-walk discovery (R67)
@@ -163,6 +178,7 @@ Main-agent only. Never delegate Computer Use to a subagent (subagents lack the s
 - type REPLACES a field's contents (select first to insert). set_value is the preferred semantic write. Prefer set_value/perform_action over raw input.
 - Raw input (coordinate clicks, key chords, app-scoped typing) on Windows/Linux needs the target frontmost — the raw-input tools now ACTIVATE their target automatically (R68: verified activation + one retry). A frontmost_pid_mismatch refusal means that auto-activation failed: check the app still runs (list_apps), re-observe, retry ONCE.
 - scroll has no accessibility path — always coordinate. double/triple click are raw-only (coordinate). middle_click and right_click DO take element targets (R69): middle routes a raw click at the element's center; right clicks the center when the element has no menu.
+- move_window/window_state/focus_window place windows (real windowIds from windows_overview — never guesses).
 - Modifiers: macOS uses "cmd"; Windows/Linux use "ctrl".
 - Never send targetless type/key — scope with an element target or appRef.
 - An unexpected modal dialog may be intercepting your action: inspect its contents FIRST; dismiss (Escape / its Cancel) only when it is NOT the task.

@@ -472,6 +472,62 @@ end tell`;
     return { ok: false, active: false };
   },
 
+  // ── R93-C (the v2 surface — ClickScope parity): window placement via
+  // System Events. The windowId is the System Events window id listWindows
+  // reports. The "first process whose windows contains" lookup mirrors the
+  // macos.ts honesty patterns: a lookup miss returns a non-zero osascript
+  // exit → the honest {ok:false}.
+  async moveWindow(run, windowId, x, y) {
+    const source = `
+tell application "System Events"
+  set w to first window of (first process whose windows contains (first window of first process whose id of it is ${windowId}))
+  set position of w to {${Math.round(x)}, ${Math.round(y)}}
+  return "OK"
+end tell`;
+    const result = await run(osaCapsule(source, 8000));
+    if (result.code === 0 && result.stdout.trim() === "OK") return { ok: true };
+    return { ok: false, error: `osascript move exited ${result.code}` };
+  },
+
+  async setWindowState(run, windowId, state) {
+    // maximize = zoom (or fullscreen when zoom is unavailable — best-effort,
+    // the honest {ok:false} when neither applies); minimize = miniaturized.
+    const action =
+      state === "minimize"
+        ? `set miniaturized of w to true`
+        : state === "maximize"
+          ? `try
+  set zoomed of w to true
+on error
+  set full screen of w to true
+end try`
+          : `set miniaturized of w to false
+try
+  set zoomed of w to false
+end try`;
+    const source = `
+tell application "System Events"
+  set w to first window of (first process whose windows contains (first window of first process whose id of it is ${windowId}))
+  ${action}
+  return "OK"
+end tell`;
+    const result = await run(osaCapsule(source, 8000));
+    if (result.code === 0 && result.stdout.trim() === "OK") return { ok: true };
+    return { ok: false, error: `osascript state exited ${result.code}` };
+  },
+
+  async focusWindow(run, windowId) {
+    const source = `
+tell application "System Events"
+  set w to first window of (first process whose windows contains (first window of first process whose id of it is ${windowId}))
+  perform action "AXRaise" of w
+  return "OK"
+end tell`;
+    const result = await run(osaCapsule(source, 8000));
+    if (result.code === 0 && result.stdout.trim() === "OK") return { ok: true };
+    return { ok: false, error: `osascript focus exited ${result.code}` };
+  },
+
   async frontmostPid(run) {
     const source = `
 tell application "System Events"

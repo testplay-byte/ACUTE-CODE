@@ -16,6 +16,8 @@ import { resetFramehashCacheForTests } from "../src/computer/framehash";
 import type { CuaBackend, CommandCapsule, HitElement, ListAppsResult, ListWindowsResult, RunCommand, RunResult } from "../src/computer/backends/interface";
 import type { Receipt, Snapshot, WindowInfo, AppInfo } from "../src/computer/types";
 import { auditPath, resetAuditForTests } from "../src/computer/audit";
+// R93: the REAL migration-0034 schema for the element-map seam tests.
+import { openDatabase, type SqliteDatabase } from "../src/storage/db";
 
 let tempRoot: string;
 const capsules: CommandCapsule[] = [];
@@ -79,6 +81,9 @@ let fakeTitleFlipOnClick = false;
 /** R66-2-d: find_elements tests may swap the fake snapshot's element list
  * (makeDispatcher resets it to the default 5-element table). */
 let fakeElements: Snapshot["elements"] | null = null;
+/** R93: the fake element map's DATABASE (null = the db-less dispatcher —
+ * every pre-R93 test's default: no scan registration, no mapDelta). */
+let fakeMapDb: SqliteDatabase | null = null;
 
 /* ── R69 (task 4-c-1): REAL synthetic PNGs for the frame-intelligence paths
  * ── ──────────────────────────────────────────────────────────────────────────
@@ -244,9 +249,23 @@ const fakeBackend: CuaBackend = {
     return { ok: true };
   },
   probePermissions: async () => ({ accessibility: "granted", screenCapture: "granted", backendKind: "fake" }),
+  // R93 (§2.5): the window-placement contract (backends/interface.ts) —
+  // recorded like every other backend call for the placement-tool pins.
+  moveWindow: async (_run, windowId, x, y) => {
+    calls.push(`moveWindow:${windowId}@${x},${y}`);
+    return { ok: true };
+  },
+  setWindowState: async (_run, windowId, state) => {
+    calls.push(`setWindowState:${windowId}:${state}`);
+    return { ok: true };
+  },
+  focusWindow: async (_run, windowId) => {
+    calls.push(`focusWindow:${windowId}`);
+    return { ok: true };
+  },
 };
 
-function makeDispatcher(allowMutations = true): ComputerDispatcher {
+function makeDispatcher(allowMutations = true, mapDb?: SqliteDatabase): ComputerDispatcher {
   resetComputerSessionForTests();
   resetAuditForTests(tempRoot);
   capsules.length = 0;
@@ -256,6 +275,7 @@ function makeDispatcher(allowMutations = true): ComputerDispatcher {
   rawRequiresForeground = true;
   fakeApps = [{ name: "App", pid: 4242, active: true }];
   fakeElements = null;
+  fakeMapDb = mapDb ?? null;
   fakeListAppsQueue = [];
   listAppsCalls = 0;
   fakeWindows = [
@@ -275,7 +295,15 @@ function makeDispatcher(allowMutations = true): ComputerDispatcher {
   fakeCaptureQueue = [];
   fakeDisplaySize = { width: 1920, height: 1080 };
   resetFramehashCacheForTests();
-  const d = new ComputerDispatcher({ backend: fakeBackend, run: fakeRun, root: tempRoot, allowMutations });
+  const d = new ComputerDispatcher({
+    backend: fakeBackend,
+    run: fakeRun,
+    root: tempRoot,
+    allowMutations,
+    // R93: the element-map db rides the dispatcher when the test passes one
+    // (scan registration + mapDelta + relocation-DB + app_profile).
+    ...(fakeMapDb !== null ? { db: fakeMapDb, sessionId: "test-session" } : {}),
+  });
   // R69 (4-c-2): zero the post-action settle so hundreds of dispatches
   // don't each pay the real 600ms — the OBSERVATION_SETTLE_MS pin below
   // asserts the production default separately.
@@ -1914,5 +1942,329 @@ describe("R69 (4-c-2): the discarded hit-test now rides the receipt as hitElemen
     if (result.kind === "receipt") {
       expect(result.receipt.hitElementName).toBeUndefined();
     }
+  });
+});
+
+/* ── R93 (computer-use v2): the element-map seam — registration, delta, ghosts ── */
+
+describe("R93: the element-map seam — get_app_state registers the scan; mapDelta rides the result", () => {
+  it("a db-backed dispatcher: the FIRST observation counts everything new; the SECOND diffs (+new/−lost); the computer_scan history rows land with the session id", async () => {
+    const db = openDatabase(join(tempRoot, "map-basic.db"));
+    const d = makeDispatcher(true, db);
+    const first = await observe(d);
+    expect(first.mapDelta).toMatchObject({ newCount: 5, lostCount: 0, knownTotal: 5 });
+    expect(first.mapDelta?.newNames).toContain("Save");
+    // The scan history row (the queryable observation log).
+    const scans = db.prepare(`SELECT session_id, app_name, total, new_count, lost_count FROM computer_scan ORDER BY rowid`).all() as Array<Record<string, unknown>>;
+    expect(scans).toHaveLength(1);
+    expect(scans[0]).toMatchObject({ session_id: "test-session", app_name: "App Window", total: 5, new_count: 5, lost_count: 0 });
+
+    // The UI changed: "Bare" gone, "Cancel" appeared, the rest stable.
+    fakeElements = [
+      ...ELEMENTS.filter((e) => e.name !== "Bare"),
+      { index: 5, kind: "button", name: "Cancel", flags: ["pressable"], bounds: [500, 500, 90, 30] },
+    ];
+    const second = await observe(d);
+    expect(second.mapDelta).toMatchObject({ newCount: 1, lostCount: 1, knownTotal: 6 });
+    expect(second.mapDelta?.newNames).toEqual(["Cancel"]);
+
+    const rows = db.prepare(`SELECT app_name, window_title, COUNT(*) AS n FROM computer_element GROUP BY app_name, window_title`).all() as Array<Record<string, unknown>>;
+    expect(rows[0]).toMatchObject({ app_name: "App Window", window_title: "App Window", n: 6 });
+    // The LOST row is kept (history + click stats survive a disappearance).
+    const bare = db.prepare(`SELECT seen_count FROM computer_element WHERE name = 'Bare'`).get() as { seen_count: number };
+    expect(bare.seen_count).toBe(1);
+  });
+
+  it("a db-LESS dispatcher degrades honestly: the observation succeeds with NO mapDelta (pre-R93 shape)", async () => {
+    const d = makeDispatcher();
+    const snap = await observe(d);
+    expect(snap.mapDelta).toBeUndefined();
+    expect(snap.elements).toHaveLength(5);
+  });
+
+  it("GHOST FILTERING: a full-detail walk against a fresh raster DROPS demonstrably-empty boxes before the registry; survivors keep their walk indexes (gap-safe addressing)", async () => {
+    const db = openDatabase(join(tempRoot, "map-ghost.db"));
+    const d = makeDispatcher(true, db);
+    fakeDisplaySize = { width: 128, height: 128 };
+    fakeCaptureQueue = [PNG_BASE];
+    await screenshot(d); // the live raster the rects are judged against
+    // A ghost in the MIDDLE of the walk (its 2px-wide rect is FLAT on the
+    // horizontal gradient) + the normal table around it.
+    fakeElements = [
+      ELEMENTS[0]!,
+      ELEMENTS[1]!, // Save — bounds [100,200,80,30] fall OUTSIDE the 128px raster → fail-open, kept
+      { index: 2, kind: "button", name: "Ghost", flags: ["pressable"], bounds: [12, 30, 2, 20] },
+      ELEMENTS[3]!,
+      ELEMENTS[4]!,
+    ];
+    const result = await d.dispatch("get_app_state", { appRef: { pid: 4242 }, detail: "full" });
+    expect(result.kind).toBe("data");
+    if (result.kind === "data") {
+      const state = result.data["state"] as Snapshot;
+      expect(state.elements.map((e) => e.name)).toEqual(["App", "Save", "File", "Bare"]);
+      expect(state.mapDelta).toMatchObject({ droppedGhostCount: 1, newCount: 4 });
+      // The ghost never entered the registry.
+      const ghosts = db.prepare(`SELECT COUNT(*) AS n FROM computer_element WHERE name = 'Ghost'`).get() as { n: number };
+      expect(ghosts.n).toBe(0);
+      // The INDEX GAP is addressable: index 3 is still "File" (menuitem).
+      const file = await d.dispatch("left_click", { target: { type: "element", stateId: state.stateId, index: 3 } });
+      expect(file.kind).toBe("receipt");
+      expect(calls).toEqual(["press"]); // the semantic press ran (File has has_menu)
+    }
+  });
+
+  it("the reliability fold: a SENT element press advances click_count + verify_success_count (the receipt's targetVerificationStatus is the oracle)", async () => {
+    const db = openDatabase(join(tempRoot, "map-reliability.db"));
+    const d = makeDispatcher(true, db);
+    const snap = await observe(d);
+    const click = await d.dispatch("left_click", { target: { type: "element", stateId: snap.stateId, index: 1 } });
+    expect(click.kind).toBe("receipt");
+    const row = db.prepare(`SELECT click_count, verify_success_count FROM computer_element WHERE app_name = 'App Window' AND name = 'Save'`).get() as Record<string, number>;
+    expect(row).toEqual({ click_count: 1, verify_success_count: 1 });
+  });
+});
+
+/* ── R93 (§2.3): the STALE_ELEMENT relocation payload ─────────────────────── */
+
+describe("R93: element_stale refuses WITH a relocation candidate (the one-call recovery)", () => {
+  it("a MOVED element: the refusal carries relocatedIndex/relocatedName/relocatedStateId + the moved-candidate recovery text; the retry with the payload's target SUCCEEDS", async () => {
+    const d = makeDispatcher();
+    const snap = await observe(d);
+    // The UI shifted: Save moved 30px and the walk renumbered it (index 1 →
+    // 3) — exactly the case a positional retry would get wrong.
+    fakeElements = [
+      { ...ELEMENTS[0]!, index: 0 },
+      { ...ELEMENTS[2]!, index: 1 },
+      { ...ELEMENTS[3]!, index: 2 },
+      { ...ELEMENTS[1]!, index: 3, bounds: [130, 230, 80, 30] },
+      { ...ELEMENTS[4]!, index: 4 },
+    ];
+    mode = "press-stale";
+    const result = await d.dispatch("left_click", { target: { type: "element", stateId: snap.stateId, index: 1 } });
+    expect(result.kind).toBe("refusal");
+    if (result.kind === "refusal") {
+      expect(result.refusal.error).toBe("element_stale");
+      expect(result.refusal.payload).toMatchObject({ cause: "ui_changed", relocatedIndex: 3, relocatedName: "Save" });
+      expect(result.refusal.recovery).toContain("The element may have moved");
+      expect(result.refusal.recovery).toContain("Save");
+      const stateId = result.refusal.payload?.["relocatedStateId"] as string;
+      expect(typeof stateId).toBe("string");
+      expect(result.refusal.payload?.["relocatedBecause"]).toEqual(expect.arrayContaining(["exact name", "same kind", "same category"]));
+      // The one-call recovery: retry ONCE with the payload's target — no re-observe.
+      mode = "ok";
+      const retry = await d.dispatch("left_click", { target: { type: "element", stateId, index: 3 } });
+      expect(retry.kind).toBe("receipt");
+      if (retry.kind === "receipt") expect(retry.receipt.targetVerificationStatus).toBe("matched");
+      // Two presses total: the stale attempt + the successful relocated retry.
+      expect(calls).toEqual(["press", "press"]);
+    }
+  });
+
+  it("a db-less dispatcher relocates all the same (the scoring needs no registry); no candidate above the threshold keeps the plain refusal shape", async () => {
+    const d = makeDispatcher();
+    const snap = await observe(d);
+    // A completely different UI: nothing scores ≥ 3.0 against "Save".
+    fakeElements = [
+      ELEMENTS[0]!,
+      { index: 1, kind: "textfield", name: "Query", flags: ["editable"], bounds: [500, 500, 200, 24] },
+    ];
+    mode = "press-stale";
+    const result = await d.dispatch("left_click", { target: { type: "element", stateId: snap.stateId, index: 1 } });
+    expect(result.kind).toBe("refusal");
+    if (result.kind === "refusal") {
+      expect(result.refusal.error).toBe("element_stale");
+      expect(result.refusal.payload).toMatchObject({ cause: "ui_changed" });
+      expect(result.refusal.payload?.["relocatedIndex"]).toBeUndefined();
+      expect(result.refusal.recovery).toContain("get_app_state");
+    }
+  });
+});
+
+/* ── R93 (§2.5): the tree / navigation / placement surface ─────────────────── */
+
+/** A v2 (key-carrying) element table: window → Main group → buttons. */
+const KEYED_ELEMENTS: Snapshot["elements"] = [
+  { index: 0, kind: "window", name: "App", flags: [], key: "w1", parentKey: null, treeDepth: 0, category: "custom" },
+  { index: 1, kind: "pane", name: "Main", flags: [], key: "w1-1", parentKey: "w1", treeDepth: 1, category: "custom", interactive: false, path: "App › Main" },
+  { index: 2, kind: "button", name: "Save", flags: ["pressable"], key: "w1-2", parentKey: "w1-1", treeDepth: 2, category: "button", path: "App › Main › Save", bounds: [100, 200, 80, 30] },
+  { index: 3, kind: "button", name: "Cancel", flags: ["pressable"], key: "w1-3", parentKey: "w1-1", treeDepth: 2, category: "button", path: "App › Main › Cancel", bounds: [200, 200, 80, 30] },
+  { index: 4, kind: "textfield", name: "Search", flags: ["editable"], key: "w1-4", parentKey: "w1", treeDepth: 1, category: "input", path: "App › Search" },
+];
+
+describe("R93: get_tree + the tree navigation tools", () => {
+  it("get_tree renders the window→group→element tree (paths + categories + keys) and registers the observation (mapDelta)", async () => {
+    const db = openDatabase(join(tempRoot, "map-tree.db"));
+    const d = makeDispatcher(true, db);
+    fakeElements = KEYED_ELEMENTS;
+    const result = await d.dispatch("get_tree", { appRef: { pid: 4242 } });
+    expect(result.kind).toBe("data");
+    if (result.kind === "data") {
+      const tree = result.data["tree"] as string;
+      expect(result.data["truncated"]).toBe(false);
+      expect(result.data["total"]).toBe(5);
+      expect(tree).toContain('0 window/custom "App" #w1');
+      expect(tree).toContain('  1 pane/custom "Main" #w1-1 (container) — App › Main');
+      expect(tree).toContain('    2 button/button "Save" #w1-2 — App › Main › Save');
+      expect(tree).toContain('  4 textfield/input "Search" #w1-4 — App › Search');
+      expect(result.data["mapDelta"]).toMatchObject({ newCount: 5, knownTotal: 5 });
+    }
+  });
+
+  it("get_children / get_parent / get_subtree navigate a REGISTERED snapshot; unknown stateId and unknown key refuse honestly", async () => {
+    const d = makeDispatcher();
+    fakeElements = KEYED_ELEMENTS;
+    const tree = await d.dispatch("get_tree", { appRef: { pid: 4242 } });
+    expect(tree.kind).toBe("data");
+    const stateId = (tree.kind === "data" ? tree.data["stateId"] : "") as string;
+
+    // Children of the Main group.
+    const children = await d.dispatch("get_children", { stateId, key: "w1-1" });
+    expect(children.kind).toBe("data");
+    if (children.kind === "data") {
+      const kids = children.data["children"] as Array<{ index: number; name: string; key: string }>;
+      expect(kids.map((k) => k.name)).toEqual(["Save", "Cancel"]);
+      expect(children.data["count"]).toBe(2);
+    }
+    // The root's children.
+    const rootKids = await d.dispatch("get_children", { stateId, key: "w1" });
+    expect(rootKids.kind === "data" && (rootKids.data["children"] as Array<{ name: string }>).map((c) => c.name)).toEqual(["Main", "Search"]);
+    // A leaf honestly reports zero children.
+    const leaf = await d.dispatch("get_children", { stateId, key: "w1-2" });
+    expect(leaf.kind === "data" && leaf.data["count"]).toBe(0);
+
+    // The parent walk.
+    const parent = await d.dispatch("get_parent", { stateId, key: "w1-2" });
+    expect(parent.kind === "data" && (parent.data["parent"] as { name: string }).name).toBe("Main");
+    const rootParent = await d.dispatch("get_parent", { stateId, key: "w1" });
+    expect(rootParent.kind === "data" && rootParent.data["parent"]).toBeNull();
+
+    // The subtree walk (relative depths, walk order).
+    const subtree = await d.dispatch("get_subtree", { stateId, key: "w1-1", maxDepth: 2 });
+    expect(subtree.kind === "data");
+    if (subtree.kind === "data") {
+      const nodes = subtree.data["subtree"] as Array<{ name: string; depth: number }>;
+      expect(nodes.map((n) => [n.name, n.depth])).toEqual([["Main", 0], ["Save", 1], ["Cancel", 1]]);
+      expect(subtree.data["truncated"]).toBe(false);
+    }
+
+    // The honest 404s.
+    const unknownKey = await d.dispatch("get_children", { stateId, key: "w9-9" });
+    expect(unknownKey.kind === "refusal" && unknownKey.refusal.error).toBe("capability_fail_closed");
+    if (unknownKey.kind === "refusal") expect(unknownKey.refusal.message).toContain("w9-9");
+    const unknownState = await d.dispatch("get_children", { stateId: "s-nope", key: "w1" });
+    expect(unknownState.kind === "refusal" && unknownState.refusal.error).toBe("element_stale");
+  });
+
+  it("a PRE-v2 snapshot (no keys) renders an honest flat listing, never a fabricated tree; get_children then names the cause", async () => {
+    const d = makeDispatcher();
+    const result = await d.dispatch("get_tree", { appRef: { pid: 4242 } });
+    expect(result.kind === "data");
+    if (result.kind === "data") {
+      const tree = result.data["tree"] as string;
+      expect(tree).toContain("no hierarchy keys");
+      expect(tree).toContain('0 window "App"');
+      expect(tree).toContain('1 button "Save"');
+    }
+    const snap = await observe(d);
+    const noKey = await d.dispatch("get_children", { stateId: snap.stateId, key: "w1" });
+    expect(noKey.kind === "refusal" && noKey.refusal.message).toContain("no hierarchy keys");
+  });
+
+  it("get_tree without appRef defaults to the FRONTMOST app's window", async () => {
+    const d = makeDispatcher();
+    fakeElements = KEYED_ELEMENTS;
+    const result = await d.dispatch("get_tree", {});
+    expect(result.kind === "data" && result.data["window"]).toMatchObject({ title: "App Window", windowId: 77 });
+  });
+});
+
+describe("R93: windows_overview + element_at + app_profile", () => {
+  it("windows_overview lists every window with the frontmost-pid focused flag", async () => {
+    const d = makeDispatcher();
+    const result = await d.dispatch("windows_overview", {});
+    expect(result.kind === "data");
+    if (result.kind === "data") {
+      const windows = result.data["windows"] as Array<Record<string, unknown>>;
+      expect(windows).toHaveLength(1);
+      expect(windows[0]).toMatchObject({ app: "App", pid: 4242, title: "App Window", windowId: 77, focused: true });
+      expect(result.data["frontmostPid"]).toBe(4242);
+    }
+  });
+
+  it("element_at resolves image→global through the frame registry and hit-tests (hit + honest miss + no-frame refusal)", async () => {
+    const d = makeDispatcher();
+    // No frame yet → the coordinate gate refuses.
+    const noFrame = await d.dispatch("element_at", { x: 5, y: 5 });
+    expect(noFrame.kind === "refusal" && noFrame.refusal.error).toBe("frame_stale");
+    fakeDisplaySize = { width: 128, height: 128 };
+    fakeCaptureQueue = [PNG_BASE];
+    await screenshot(d);
+    fakeHit = { kind: "button", name: "Save", actionable: true, bounds: [100, 200, 80, 30] };
+    const hit = await d.dispatch("element_at", { x: 96, y: 96 });
+    expect(hit.kind === "data");
+    if (hit.kind === "data") {
+      expect(hit.data["element"]).toMatchObject({ kind: "button", name: "Save" });
+      expect(hit.data["point"]).toEqual({ x: 96, y: 96 });
+    }
+    fakeHit = null;
+    const miss = await d.dispatch("element_at", { x: 96, y: 96 });
+    expect(miss.kind === "data" && miss.data["element"]).toBeNull();
+    expect(miss.kind === "data" && typeof miss.data["note"]).toBe("string");
+  });
+
+  it("app_profile: the honest empty state when the app was never observed; the learned state after observations + verified actions", async () => {
+    const db = openDatabase(join(tempRoot, "map-profile.db"));
+    const d = makeDispatcher(true, db);
+    const empty = await d.dispatch("app_profile", { appName: "Never Seen" });
+    expect(empty.kind === "data");
+    if (empty.kind === "data") {
+      expect(empty.data).toMatchObject({ appName: "Never Seen", observed: false, scanCount: 0, elementCount: 0, mostReliable: [] });
+      expect(String(empty.data["note"])).toContain("no observation");
+    }
+    // Observe + act: the profile then carries the learned structure + the leader.
+    const snap = await observe(d);
+    await d.dispatch("left_click", { target: { type: "element", stateId: snap.stateId, index: 1 } });
+    const learned = await d.dispatch("app_profile", { appName: "App Window" });
+    expect(learned.kind === "data");
+    if (learned.kind === "data") {
+      expect(learned.data).toMatchObject({ observed: true, scanCount: 1, elementCount: 5, stableElementCount: 0 });
+      expect(learned.data["windowTitles"]).toEqual(["App Window"]);
+      const leaders = learned.data["mostReliable"] as Array<{ name: string; reliability: number }>;
+      expect(leaders[0]).toMatchObject({ name: "Save", reliability: 1 });
+    }
+  });
+
+  it("app_profile without a db: the honest capability refusal (the learning layer is unavailable, observation unaffected)", async () => {
+    const d = makeDispatcher();
+    const result = await d.dispatch("app_profile", { appName: "App" });
+    expect(result.kind === "refusal");
+    if (result.kind === "refusal") {
+      expect(result.refusal.error).toBe("capability_fail_closed");
+      expect(result.refusal.message).toContain("no element-map database");
+    }
+  });
+});
+
+describe("R93: window placement (move_window / window_state / focus_window)", () => {
+  it("act posture: the three tools dispatch to the backend with receipts; validation refuses honestly", async () => {
+    const d = makeDispatcher();
+    const move = await d.dispatch("move_window", { windowId: 77, x: 10, y: 20 });
+    expect(move.kind === "receipt" && move.receipt.actionSent).toBe(true);
+    const state = await d.dispatch("window_state", { windowId: 77, state: "maximize" });
+    expect(state.kind === "receipt" && state.receipt.dispatchStatus).toBe("accepted");
+    const focus = await d.dispatch("focus_window", { windowId: 77 });
+    expect(focus.kind === "receipt" && focus.receipt.actionSent).toBe(true);
+    expect(calls).toEqual(["moveWindow:77@10,20", "setWindowState:77:maximize", "focusWindow:77"]);
+    const badState = await d.dispatch("window_state", { windowId: 77, state: "tile" });
+    expect(badState.kind === "refusal" && badState.refusal.error).toBe("capability_fail_closed");
+  });
+
+  it("OBSERVE posture: the placement tools refuse host_policy_denied BEFORE any backend call (they are mutations)", async () => {
+    const d = makeDispatcher(false);
+    for (const tool of ["move_window", "window_state", "focus_window"]) {
+      const result = await d.dispatch(tool, tool === "window_state" ? { windowId: 77, state: "minimize" } : { windowId: 77, x: 0, y: 0 });
+      expect(result.kind === "refusal" && result.refusal.error).toBe("host_policy_denied");
+    }
+    expect(calls).toHaveLength(0);
   });
 });

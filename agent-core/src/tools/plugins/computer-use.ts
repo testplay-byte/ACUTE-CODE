@@ -186,6 +186,13 @@ export const computerUsePlugin: PluginDefinition = {
       root: ctx.root,
       session,
       allowMutations: settings.permission !== "observe",
+      // R93: the element-map db + the agent session id — the observation
+      // tools fold every registered scan into the per-app registry
+      // (mapDelta rides the results) and the element receipts feed the
+      // reliability counters. toolDeps.db is non-null here (the guard above
+      // returned early otherwise).
+      db: toolDeps.db,
+      sessionId: toolDeps.sessionId,
     });
     // R62 (D8): publish the live engine for the browser plugin's screenshot
     // action (fail-closed there when this never runs — Computer Use OFF).
@@ -391,6 +398,66 @@ export const computerUsePlugin: PluginDefinition = {
         },
         ["appRef", "query"],
       ),
+      // ── R93 (§2.5): the tree / navigation / learning surface (read-only) ──
+      tool(
+        "get_tree",
+        "The app window's element TREE (windows → groups → elements), rendered as text: each line = index + kind/category + name (+ the breadcrumb path), indented by depth. Better than flat find_elements when you need STRUCTURE (which group holds which controls, what the panes are). Returns a stateId (act on elements with {type:'element', stateId, index} directly) + mapDelta (+new/−lost since the last look) + each node's key for get_children/get_subtree. appRef optional — omitted = the frontmost app. maxDepth caps the walk (default 6; the result says truncated when the ~200-line cap hit).",
+        {
+          appRef: appRefSchema,
+          maxDepth: { type: "integer", description: "max tree depth rendered (default 6, hard max 12)" },
+        },
+      ),
+      tool(
+        "get_children",
+        "The direct children of one node in a REGISTERED snapshot (no re-observation) — descend into a group get_tree showed without paying for a fresh walk. Needs the snapshot's stateId + the node's key. Leaf nodes honestly report zero children.",
+        {
+          stateId: { type: "string", description: "the stateId from get_app_state/get_tree/find_elements" },
+          key: { type: "string", description: "the node's key (from get_tree's lines / a parent element's key)" },
+        },
+        ["stateId", "key"],
+      ),
+      tool(
+        "get_parent",
+        "The parent node of one key in a REGISTERED snapshot — walk UP the tree (which group does this control live in?). Root nodes honestly report parent:null.",
+        {
+          stateId: { type: "string", description: "the stateId from get_app_state/get_tree/find_elements" },
+          key: { type: "string", description: "the node's key" },
+        },
+        ["stateId", "key"],
+      ),
+      tool(
+        "get_subtree",
+        "One node plus ALL its descendants in a REGISTERED snapshot (walked to maxDepth, default 6) — the drill-down when get_tree truncated or a group is deep. Elements carry their index (act on them directly) + their relative depth.",
+        {
+          stateId: { type: "string", description: "the stateId from get_app_state/get_tree/find_elements" },
+          key: { type: "string", description: "the subtree root's key" },
+          maxDepth: { type: "integer", description: "max depth below the root (default 6, hard max 12)" },
+        },
+        ["stateId", "key"],
+      ),
+      tool(
+        "windows_overview",
+        "EVERY window of EVERY running app in one call: {app, processName, pid, title, windowId, bounds, focused (the frontmost app's windows)} — the what's-on-screen map. Use it to pick the right app/window before observing, or to find where a dialog went.",
+        {},
+      ),
+      tool(
+        "element_at",
+        "What accessible element (if any) is under an image-pixel point of the latest raster — the hit-test exposed. x/y are pixels from the LATEST returned image (copied unchanged, like a coordinate click); returns the element's kind/name/bounds or an honest null. Cheap 'what did I almost click' check.",
+        {
+          x: { type: "integer", description: "x in image pixels of the latest raster" },
+          y: { type: "integer", description: "y in image pixels of the latest raster" },
+          frameId: { type: "string", description: "optional — the raster to resolve against (default: the latest)" },
+        },
+        ["x", "y"],
+      ),
+      tool(
+        "app_profile",
+        "The LEARNED map of one app from every past observation: window titles seen, element counts, stable elements (seen ≥3 times), last scan's +new/−lost, and the RELIABILITY LEADERS (elements whose actions historically verified — prefer them when several match). Honest empty state when the app was never observed. appName resolves like an app ref (window title or processName, e.g. 'notepad').",
+        {
+          appName: { type: "string", description: "the app's window title or processName (e.g. 'Untitled - Notepad' or 'notepad')" },
+        },
+        ["appName"],
+      ),
       tool(
         "screenshot",
         "Full-display capture (the display chosen by switch_display). The FALLBACK observation — prefer get_app_state, and prefer find_elements for browser content (the web tree is searchable by name). Returns frame metadata (frameId, width, height, scale); frames stay valid for 30s — act on the pixels immediately, don't re-screenshot. describe:true additionally runs the VISION model over the image and returns its textual description (when vision is configured in Settings → Image Analysis).",
@@ -572,15 +639,47 @@ export const computerUsePlugin: PluginDefinition = {
         { text: { type: "string" } },
         ["text"],
       ),
+      // ── R93 (§2.5): window placement (act posture — LOW risk, no consent gate) ──
+      tool(
+        "move_window",
+        "Move a window's top-left to exact global screen points (x, y). Use a REAL windowId from windows_overview/list_windows — never a guess.",
+        {
+          windowId: { type: "integer", description: "from windows_overview / list_windows" },
+          x: { type: "integer", description: "new top-left x (global screen points)" },
+          y: { type: "integer", description: "new top-left y (global screen points)" },
+        },
+        ["windowId", "x", "y"],
+      ),
+      tool(
+        "window_state",
+        "Set a window's state: maximize | restore | minimize (by windowId).",
+        {
+          windowId: { type: "integer", description: "from windows_overview / list_windows" },
+          state: { type: "string", enum: ["maximize", "restore", "minimize"] },
+        },
+        ["windowId", "state"],
+      ),
+      tool(
+        "focus_window",
+        "Bring ONE window to the foreground by its id (without activating the whole app) — put the right window on top before observing or acting on it.",
+        {
+          windowId: { type: "integer", description: "from windows_overview / list_windows" },
+        },
+        ["windowId"],
+      ),
     ];
 
     // Observe posture: register only the read-only subset (the dispatcher
     // would refuse mutations anyway — this keeps the MODEL-side surface
-    // honest too: no mutating schemas offered).
+    // honest too: no mutating schemas offered). R93: the tree/navigation +
+    // learning reads join the read-only set (get_tree/get_children/
+    // get_parent/get_subtree/windows_overview/element_at/app_profile).
     if (settings.permission === "observe") {
       const readOnly = new Set([
         "list_apps", "list_windows", "list_displays", "switch_display", "get_app_state",
         "find_elements",
+        "get_tree", "get_children", "get_parent", "get_subtree",
+        "windows_overview", "element_at", "app_profile",
         "screenshot", "zoom", "cursor_position", "request_access", "read_clipboard",
         "wait",
       ]);

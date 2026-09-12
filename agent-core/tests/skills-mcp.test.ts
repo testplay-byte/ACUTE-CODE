@@ -86,7 +86,9 @@ describe("ROUND-61 (R61): skills storage", () => {
     // search) before screenshots in Chromium-sized windows (the Edge fix).
     expect(body).toContain("Big apps");
     expect(body).toContain("find_elements");
-    expect(body).toMatch(/never loop screenshots/i);
+    // R93-C: the v2 rewrite folded the screenshot-loop discipline into
+    // the CHAIN DISCIPLINE sentence ("never re-capture after acting").
+    expect(body).toMatch(/never re-capture after acting/i);
     // SKILL.md-shaped and tight (≤ ~60 content lines).
     expect(body.trim().split("\n").length).toBeLessThanOrEqual(60);
   });
